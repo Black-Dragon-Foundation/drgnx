@@ -574,7 +574,10 @@ How it works:
   A scene on the editor starts the scenes' hub first (the session starts none) and waits (20 s at most, else an error)
   for the Explorer's Files rows, which come from the hub: without it the section is empty.
   A scene that changes the theme waits (5 s at most, else an error) until no hub-fed view is drawn dimmed: its rows
-  wait for the hub's reset to the new theme, and a shot taken before would show the stale shade. `start-page` has no mockup: it is judged against the components' spec (buttons, keycaps, the shield). The
+  wait for the hub's reset to the new theme, and a shot taken before would show the stale shade. `window-dark`'s
+  status bar has the mockup's facts: the seeded plan run counted from the hub (`1 job`), and the gateway file's two
+  problems from a stand-in Flymake backend (`✕ 1 ⚠ 1`). The mock agent's hub seeds the plan run too, so a Work scene
+  after an agent scene finds it. `start-page` has no mockup: it is judged against the components' spec (buttons, keycaps, the shield). The
   three highlights scenes, `highlights-dark`, `highlights-light` and `highlights-hc`, have none either: each puts every highlight in one
   shot, judged against the mockups' tokens. The editor holds the current line, isearch's current and other matches,
   show-paren, eglot's symbol highlight, Flymake's marks, a rectangle and a region. A second group beside it holds a
@@ -588,9 +591,10 @@ How it works:
   none). `debugging` opens the debugging mockup's `inventory.py` at line 24 with its breakpoints (18, a condition on
   22, 24, a logpoint on 25, 30 disabled) in the breakpoint column; the hub's answer is given to the column directly,
   since no session runs. The scenes share that hub, started with `RATATOSKR_SEED_SCENE=1`: the hub writes one plan
-  run into its fresh store (`orch::scene`, test-hooks only). It is a paused job, `scene-run`, with a rule pack, tasks
+  run into its fresh store (`orch::scene`, test-hooks only). It is a running job, `scene-run`, that the runner leaves alone (no agent starts for it), with a rule pack, tasks
   in each gate state and their evidence, a held `gate` card, a batch of three with its affected groups' runs on two
-  machines, and the push tiers' runs at the line's head. `work-space-dark` and `work-flow` (mockup
+  machines, and the push tiers' runs at the line's head. Every map the hub opens also shows the held task's agent,
+  a seeded session that is not live ("Sonnet · search-quick", 41 min in its state, ≈$0.90, ctx 88%). `work-space-dark` and `work-flow` (mockup
   `hub-orchestration`) open the Work map on that hub, then the Flow lens beside it, in the dark theme; `work-flow`
   then selects the held task (its detail tile in the side panel) and opens the Rules tile below. Both need
   Nidhogg's view model (Sjá; the line, not the tarball). A map or Flow drawn without the hub's rows shows only its

@@ -307,7 +307,9 @@ open `gate` cards, and builds the model and the rows (`work::trail::flow`, pure)
   before then the run shows neither;
 - a row per task, a column per gate: Brief, Red first, Build, Author check, Merge batch, Review, each heading with its
   Lucide icon. Each cell is a chip in its state's face (`drgnx-work-flow-chip-ok` passed, `-run` running, `-held`
-  held, with a lock, `-err` failed, `-wait` waiting; drgnx-work-flow.el, the UI font over the theme's chips), an empty
+  held, with a lock, `-err` failed, `-wait` waiting; drgnx-work-flow.el, the UI font over the theme's chips; under
+  drgnx's themes, where boxes take Nidhogg's `:fit text`, a pill as the mockup's `.g`: padded 6 by 3 px in its own
+  colour, fully rounded and as tall as its text, the fill confined to it on the 30 px rows), an empty
   ring where a gate has nothing yet, and the label face where the pack has no such gate or a gate waits on another
   ("waits red"). Red first is the oldest red run's failing rows ("N failed · base"; "no red · held" at review
   without one), Build the newest run, the author check its checks green at their newest runs (a check when all are),
@@ -330,7 +332,9 @@ open `gate` cards, and builds the model and the rows (`work::trail::flow`, pure)
   `Seen`), so after a restart they show again once the gates run again;
 - the two cards side by side on shared rows (`cards:N`), the batch on the left half and the line gate on the right
   (the batch's across the table without a push gate), each row of a card filled to its edge in
-  `drgnx-work-flow-card`. The rings and the rows' rules are Glitnir blocks (Nidhogg's `glitnir-blocks`): the hub
+  `drgnx-work-flow-card`. A machine's line names each check in the code face (`drgnx-work-flow-code`) with its tick
+  after it; a member's line has its tip in the code face and what the queue said to it right-aligned; the batch ends
+  with what a red does (each tip reruns alone). The rings and the rows' rules are Glitnir blocks (Nidhogg's `glitnir-blocks`): the hub
   marks them on the rows with the text property `drgnx-work-flow-block` (`["ring" ID X0 X1]` on a card's span of each
   of its rows, `["rule" KEY X0 X1]` on the headings and each task row, device px; on a GUI the column heads are 24
   logical px high and each task row 30, as in the mockup, by a 1 px space that high first on the row), and drgnx-work-flow.el turns the
@@ -350,19 +354,31 @@ its pass count, a waiver's reason). The view is read again after every write.
 
 **The Rules tile.** `R` opens the run's rule pack in the bottom panel (pane kind `work-rules`): the Flow's `VIEW/rules`
 subscribed with `rules: true`, rows alone. A row per rule: its words, its kind as a chip (enforced in the ok face with
-a lock, checked and routing in the accent) and how the hub holds it.
+a lock, checked and routing in the accent) and how the hub holds it. With `detail: TASK` too it ends in an "Evidence · TASK" tab
+(the task's label), the selected task's evidence; the Flow subscribes it again when its selection moves. Both tiles
+title themselves (the detail tile's first row is "Detail · TASK" after the panel icon), so their buffers set
+`drgnx-area-own-title` and the area draws no tab row over them, however the tile reaches the window (the Flow
+puts it in an area's window with `drgnx-wb-area-put-buffer`, which redraws the row for the buffer). `R` shows the Flow's own tile, even
+where layout Work opened the pane's placeholder first. The detail head's agent is the map's agent on the task: its
+card's task, else its session's own (a run's tasks are the job's, which no plan on the map holds); a map opened gets
+the clock's minute at once, so the agent's minutes are right from the first draw. A long task title is cut before
+the time, spend and context.
 
 **The detail tile.** `work/flow/subscribe` with `detail: TASK` makes its view (the Flow's `VIEW/detail`) that task's
 detail tile: rows alone, no model, read again after every write like the Flow. The Flow subscribes it again each
 time its selection moves (`drgnx-view-selected-functions`, the Flow's own). Its head is the agent: an avatar (a 16
 px circle in the agent's colour, `agent-N` of the env's palette by its place among the run's agents, its initial cut
-out) and its name (`drgnx-work-flow-agent`), the held chip at the right; under it the task and its status
-(`-label`). Its section heads are muted and semibold (`drgnx-work-flow-section`), its text `-detail-text` (the
+out) and its name in bold (`drgnx-work-flow-agent`): the map's model, then the agent's own label on the map (its
+session, "Sonnet · search-quick"), the held chip at the right; under it the task and the map's minutes, spend and
+context of the agent ("41 min · ≈$0.90 · ctx 88%"), or the task's status when the map has no agent on it (`-label`). Its section heads are muted and semibold (`drgnx-work-flow-section`), its text `-detail-text` (the
 mockup's 12.5 px). It goes on: for a held task why it is held (the card's words and each held gate) and what clears it; the commits the merge
 checks (base .. tip, then each commit with its short sha, `tests` for red first's test commit or `code`, and its
 subject: the job data's `commits`, which `orch::gates::before_merge` records each time it looks, and `bases`); the
 evidence so far as a table, a label column (`brief`, `tests`, `green`, `red`, then any `waiver`) and each newest
-record's job, machine and counts, "none recorded" in the attention face where there is none; and the actions as buttons, each with its key as a keycap badge inside it (`drgnx-work-flow-key`). `r` (**Run the red** for a red-first hold, else **Check again**:
+record's job, machine and counts, "none recorded" in the attention face where there is none; and the actions as buttons (`drgnx-work-flow-button`, the controls' ring; the first `drgnx-work-flow-button-primary`,
+filled; where boxes fit their text, padded 4 px above and below it, `:fit (text . 4)`, else text-height), each with
+its key as a keycap inside it after a gap (`drgnx-work-flow-button-key`, the primary's `drgnx-work-flow-key-primary`: on
+the button's background, padded by a space each side and 2 px above and below). `r` (**Run the red** for a red-first hold, else **Check again**:
 the card's `merge`), `s` (**Tell the agent**: `retry`) and `w` (**Waive once**: `waive`, asking for the reason) answer
 the card with `job/card` as the user; the hub takes the waiver only from the user's connection. The tile shows in the
 right dock where the map's side panel was, and the panel comes back when the lens leaves the Flow.

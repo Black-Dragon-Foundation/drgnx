@@ -67,6 +67,35 @@ pub enum CoOut {
     Wake(u64),
 }
 
+/// An agent on the map that works on a task ([`Map::task_agents_of`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TaskAgent {
+    pub task: String,
+    pub label: String,
+    pub model: Option<String>,
+    pub minutes: Option<u64>,
+    pub spend: Option<String>,
+    pub context: Option<u8>,
+}
+
+impl TaskAgent {
+    /// Its model and its session, as the Flow names it: the map's label is "MODEL · SESSION" when it has a model;
+    /// without one the label is the agent's name and there is no session.
+    pub fn names(&self) -> (String, Option<String>) {
+        match &self.model {
+            Some(m) if *m != self.label => {
+                let session = self
+                    .label
+                    .strip_prefix(m.as_str())
+                    .and_then(|r| r.strip_prefix(" · "))
+                    .unwrap_or(&self.label);
+                (m.clone(), Some(session.to_owned()))
+            }
+            _ => (self.label.clone(), None),
+        }
+    }
+}
+
 /// One view's coalescing (see the module).
 #[derive(Clone, Debug, Default)]
 pub struct Coalescer {
@@ -468,6 +497,10 @@ struct Inner {
     open_cards: BTreeSet<String>,
     /// The open huddles' cards, by huddle id: a view opened later is seeded with them.
     huddles: BTreeMap<String, CardFact>,
+    /// The sessions a test hub's scene seeds (`orch::scene`), each with its minutes in its state: every map opened
+    /// shows them.
+    #[cfg(feature = "test-hooks")]
+    scene: Vec<(Snapshot, u64)>,
 }
 
 /// The hub's Work map (see the module).
@@ -684,6 +717,38 @@ impl Map {
     }
 
     // ---- the sources ----
+
+    /// A test hub's scene sessions (`orch::scene`): SESSIONS, each with its minutes in its state.
+    #[cfg(feature = "test-hooks")]
+    pub fn scene(&self, sessions: Vec<(Snapshot, u64)>) {
+        lock(&self.inner).scene = sessions;
+    }
+
+    /// What a map opening at NOW (the clock's minute) is fed after its sessions: the minute, so a card counts its
+    /// minutes at once rather than from the next tick, and on a test hub the scene's sessions.
+    fn opening(g: &mut Inner, now: u64) -> Vec<Event> {
+        #[cfg(not(feature = "test-hooks"))]
+        let _ = g;
+        #[allow(unused_mut)]
+        let mut out = vec![Event::Tick { minute: now }];
+        #[cfg(feature = "test-hooks")]
+        out.extend(Self::scene_events(g, now));
+        out
+    }
+
+    /// The scene's sessions noted, each in its state since its minutes before NOW (the clock's minute), as facts for
+    /// a map that opens: they work in no workspace's roots, so every map shows them.
+    #[cfg(feature = "test-hooks")]
+    fn scene_events(g: &mut Inner, now: u64) -> Vec<Event> {
+        let mut out = Vec::new();
+        for (snap, ago) in g.scene.clone() {
+            Self::note_session(g, &snap, &[]);
+            let s = g.sessions.get_mut(&snap.id).expect("just noted");
+            s.since = now.saturating_sub(ago);
+            out.extend(s.facts());
+        }
+        out
+    }
 
     /// A session's snapshot and its subagents, from its `agent` emit.
     pub fn session(self: &Arc<Self>, snap: &Snapshot, kids: &[crate::work::subagents::Child]) {
@@ -1287,6 +1352,50 @@ impl Map {
             .collect()
     }
 
+    /// The agents of connection CONN's map VIEW that work on a task, with what the map knows of each: its task's id,
+    /// label, model, minutes in its state, spend and context (the Flow's detail head).
+    pub fn task_agents_of(&self, conn: u64, view: &str) -> Vec<TaskAgent> {
+        Self::task_agents_in(&lock(&self.inner), conn, view)
+    }
+
+    /// [`Map::task_agents_of`] in G.  An agent's task is its card's, else its session's own: a plan run's tasks are
+    /// the job's, which no plan on the map holds.
+    fn task_agents_in(g: &Inner, conn: u64, view: &str) -> Vec<TaskAgent> {
+        let key = ViewKey {
+            conn,
+            view: view.to_owned(),
+        };
+        let Some(sp) = g.views.get(&key).and_then(|v| g.spaces.get(&v.space)) else {
+            return Vec::new();
+        };
+        let mut agents: Vec<(vegvisir::model::Item, String)> = sp
+            .core
+            .model()
+            .items()
+            .into_values()
+            .filter(|it| it.kind == Kind::Agent)
+            .filter_map(|it| {
+                let task = it.fields.task_id.clone().or_else(|| {
+                    let sid = it.id.0.strip_prefix("agent:")?;
+                    g.sessions.get(sid)?.snap.task.clone()
+                })?;
+                Some((it, task))
+            })
+            .collect();
+        agents.sort_by_key(|(it, _)| it.order);
+        agents
+            .into_iter()
+            .map(|(it, task)| TaskAgent {
+                task,
+                label: it.label,
+                model: it.fields.model,
+                minutes: it.fields.minutes,
+                spend: it.fields.spend,
+                context: it.fields.context,
+            })
+            .collect()
+    }
+
     /// The machines of connection CONN's map VIEW and their load: (label, slots used, slots), in the map's order.
     pub fn machines_of(&self, conn: u64, view: &str) -> Vec<(String, u32, u32)> {
         let g = lock(&self.inner);
@@ -1494,6 +1603,7 @@ pub async fn subscribe(f: &Front, c: &Caller, p: MapSubscribe) -> Result<MapRows
             seed.extend(evs);
         }
     }
+    seed.extend(Map::opening(&mut g, minute()));
     seed.extend(Map::presence_events(&mut g, &ws, &files));
     map.feed(&mut g, &ws, seed);
     let sp = g.spaces.get_mut(&ws).expect("the view's workspace");

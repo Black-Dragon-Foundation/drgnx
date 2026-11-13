@@ -102,17 +102,34 @@ model (`drgnx-view-patch-class-faces'), with the index of `dim' when it has a fa
 ;; lit list): it is drawn over runs of whole rows, one overlay for consecutive rows whose every node is dim, never one
 ;; per row.  A dim node in a row with other classes gets its spans' overlays as the other classes do.
 
-(defun drgnx-view-nav--spans (view id)
-  "The (BEG . END) spans of node ID in VIEW's drawn rows, by `drgnx-view-patch-id-prop'."
+(defun drgnx-view-nav--boxed-p (face)
+  "Whether the text property FACE (a face, a list of faces or a plist) draws a box: a chip, whose own background a
+class's overlay would hide."
+  (cond ((null face) nil)
+        ((symbolp face) (and (facep face) (not (memq (face-attribute face :box nil t) '(nil unspecified)))))
+        ((keywordp (car face)) (and (plist-get face :box) t))
+        (t (let (boxed)
+             (while (and face (not boxed))
+               (setq boxed (drgnx-view-nav--boxed-p (car face)) face (cdr face)))
+             boxed))))
+
+(defun drgnx-view-nav--spans (view id &optional whole)
+  "The (BEG . END) spans of node ID in VIEW's drawn rows, by `drgnx-view-patch-id-prop', less their boxed runs
+\(`drgnx-view-nav--boxed-p'): a chip keeps its own face under a class.  WHOLE: with their boxed runs."
   (let ((prop drgnx-view-patch-id-prop) spans)
     (dolist (key (gethash id (drgnx-view-patch-ids drgnx-view-patch)))
       (when-let* ((beg (drgnx-view-row-start view key)))
         (let ((end (save-excursion (goto-char beg) (line-end-position))) (pos beg))
           (while (and pos (< pos end))
             (if (equal (get-text-property pos prop) id)
-                (let ((stop (min end (next-single-property-change pos prop nil end))))
-                  (push (cons pos stop) spans)
-                  (setq pos stop))
+                (let ((stop (min end (next-single-property-change pos prop nil end))) (from pos))
+                  (while (< pos stop)
+                    (let ((next (next-single-property-change pos 'face nil stop)))
+                      (when (and (not whole) (drgnx-view-nav--boxed-p (get-text-property pos 'face)))
+                        (when (< from pos) (push (cons from pos) spans))
+                        (setq from next))
+                      (setq pos next)))
+                  (when (< from stop) (push (cons from stop) spans)))
               (setq pos (next-single-property-change pos prop nil end)))))))
     (nreverse spans)))
 
@@ -225,7 +242,7 @@ draw replaced), every node drawn in them gets its current class again and the ov
 
 (defun drgnx-view-nav--place-point (view id)
   "Point to the start of ID's first span, in every window that shows VIEW's buffer."
-  (when-let* ((span (car (drgnx-view-nav--spans view id))))
+  (when-let* ((span (car (drgnx-view-nav--spans view id t))))
     (goto-char (car span))
     (dolist (w (get-buffer-window-list (current-buffer) nil t))
       (set-window-point w (car span)))))

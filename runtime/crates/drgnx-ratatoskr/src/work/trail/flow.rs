@@ -54,11 +54,19 @@ const AGENT: &str = "drgnx-work-flow-agent";
 const HOVER: &str = "drgnx-hover";
 /// A key's badge (the keycap).
 const KEY: &str = "drgnx-work-flow-key";
+/// The detail's actions (`.btn`), the first one primary (`.btn.pri`) with its key in its colour.
+const BUTTON: &str = "drgnx-work-flow-button";
+const BUTTON_PRI: &str = "drgnx-work-flow-button-primary";
+const KEY_PRI: &str = "drgnx-work-flow-key-primary";
+const BUTTON_KEY: &str = "drgnx-work-flow-button-key";
 /// A card's fill (drgnx-work-flow.el: the panel's surface), and the text faces on it.
 const CARD: &str = "drgnx-work-flow-card";
 const CARD_TEXT: &str = "drgnx-work-flow-card-text";
 const CARD_LABEL: &str = "drgnx-work-flow-card-label";
 const CARD_HEAD: &str = "drgnx-work-flow-card-heading";
+/// Names in the code font (a check's selector, a tip), and its card twin.
+const CODE: &str = "drgnx-work-flow-code";
+const CARD_CODE: &str = "drgnx-work-flow-card-code";
 /// The text property that marks a block Glitnir draws over the rows (`glitnir-blocks`): `["ring", ID, X0, X1]` on a
 /// card's span of each of its rows, `["rule", KEY, X0, X1]` on a row with a hairline under it (device px).
 const BLOCK: &str = "drgnx-work-flow-block";
@@ -135,6 +143,12 @@ pub(crate) struct TaskFacts {
     pub base: Option<String>,
     /// Its commits after the base, oldest first.
     pub commits: Vec<CommitFact>,
+    /// Its agent's session on the map (its label there, when the model is the agent's name), minutes, spend and
+    /// context used (percent).
+    pub session: Option<String>,
+    pub minutes: Option<u64>,
+    pub spend: Option<String>,
+    pub context: Option<u8>,
 }
 
 /// One commit of a task's branch.
@@ -210,7 +224,8 @@ pub(crate) struct Flow {
 pub(crate) enum Part {
     Lens,
     Detail(String),
-    Rules,
+    /// The Rules tile, with the selected task its Evidence tab names.
+    Rules(Option<String>),
 }
 
 /// TASK's cells under PACK (none: the job runs no gates).
@@ -849,8 +864,8 @@ enum Piece {
     At(u32),
 }
 
-/// A line per machine that ran any of RUNS' checks at their tree: each check's newest run there, a tick in the ok
-/// face when it passed, a cross in the error face when it failed.
+/// A line per machine that ran any of RUNS' checks at their tree: each check's newest run there, its name in the code
+/// face, then a tick in the ok face when it passed, a cross in the error face when it failed.
 fn machine_lines(r: &Runs) -> Vec<Vec<Piece>> {
     let mut machines: Vec<&str> = Vec::new();
     for e in r.evidence.iter().filter(|e| e.facts.tree_key == r.at) {
@@ -872,12 +887,13 @@ fn machine_lines(r: &Runs) -> Vec<Vec<Piece>> {
             };
             let ok = failing(&e.rows).next().is_none();
             line.push(Piece::Text("  ".into(), LABEL));
+            line.push(Piece::Text(c.name.clone(), CODE));
+            line.push(Piece::Text(" ".into(), LABEL));
             line.push(if ok {
                 Piece::Icon("check", "✓", Chip::Ok.face())
             } else {
                 Piece::Icon("x", "✗", Chip::Err.face())
             });
-            line.push(Piece::Text(format!(" {}", c.name), TEXT));
         }
         out.push(line);
     }
@@ -913,8 +929,8 @@ pub fn note(
 }
 
 /// The merge batch card's lines, its content CW px wide (FONTS measure): its heading with the affected groups' chip
-/// (green of listed at the combined tree), a line per member (its label and title, its tip, what the queue said to
-/// it), and its groups' runs per machine.
+/// (green of listed at the combined tree), a line per member (its label and title, its tip in the code face, what the
+/// queue said to it right-aligned at the content's edge), its groups' runs per machine, and what a red does.
 fn batch_lines(flow: &Flow, cw: u32, fonts: &dyn Measure) -> Vec<Vec<Piece>> {
     let mut head = vec![
         Piece::Icon("git-merge", " ", LABEL),
@@ -942,6 +958,7 @@ fn batch_lines(flow: &Flow, cw: u32, fonts: &dyn Measure) -> Vec<Vec<Piece>> {
     let mut out = vec![head];
     let (tip_at, said_at) = (cw * 2 / 5, cw * 3 / 5);
     let fit = |s: &str, px: u32| drgnx_rows::fit::fit(fonts, ROLE, s, px as f32);
+    let tip_w = text_px(fonts, "tip 0000000  ");
     for m in &flow.batch {
         let label = format!("{}  ", m.label);
         let room = tip_at.saturating_sub(text_px(fonts, &label) + 8);
@@ -949,17 +966,21 @@ fn batch_lines(flow: &Flow, cw: u32, fonts: &dyn Measure) -> Vec<Vec<Piece>> {
             Piece::Text(label, TEXT),
             Piece::Text(fit(&m.title, room), LABEL),
             Piece::At(tip_at),
-            Piece::Text(format!("tip {}", m.tip), LABEL),
+            Piece::Text("tip ".into(), LABEL),
+            Piece::Text(m.tip.clone(), CODE),
         ];
         if let Some(said) = &m.said {
-            line.push(Piece::At(said_at));
-            line.push(Piece::Text(fit(said, cw.saturating_sub(said_at)), LABEL));
+            let said = fit(said, cw.saturating_sub(said_at.max(tip_at + tip_w)));
+            line.push(Piece::At(cw.saturating_sub(text_px(fonts, &said))));
+            line.push(Piece::Text(said, LABEL));
         }
         out.push(line);
     }
     if let Some(g) = &flow.groups {
         out.extend(machine_lines(g));
     }
+    let footer = "On a red: each tip reruns alone, in parallel; red tips go back to their tasks, the rest merge.";
+    out.push(vec![Piece::Text(fit(footer, cw), LABEL)]);
     out
 }
 
@@ -1002,6 +1023,7 @@ fn on_card(face: &'static str) -> &'static str {
     match face {
         TEXT => CARD_TEXT,
         LABEL => CARD_LABEL,
+        CODE => CARD_CODE,
         HEAD => CARD_HEAD,
         f => f,
     }
@@ -1103,9 +1125,13 @@ fn how(id: &str) -> &'static str {
     }
 }
 
-/// The Rules tile's rows for ENV and their icons: its heading, the columns (Rule, Kind, How the hub holds it), a row
+/// The Rules tile's rows for ENV and their icons: its heading (with TASK, the selected task, its Evidence tab), the columns (Rule, Kind, How the hub holds it), a row
 /// per rule with its kind as a chip (enforced with a lock, checked and routing in the accent).
-pub(crate) fn rules_rows(flow: &Flow, env: &ViewEnv) -> (Vec<Row>, Vec<(ImageId, String)>) {
+pub(crate) fn rules_rows(
+    flow: &Flow,
+    task: Option<&str>,
+    env: &ViewEnv,
+) -> (Vec<Row>, Vec<(ImageId, String)>) {
     let cell_w = env.cell.0.max(1);
     let mut pics = Pics::new(env);
     let (kind_at, how_at) = (env.width_px * 2 / 5, env.width_px * 2 / 5 + dpx(env, 100.0));
@@ -1118,6 +1144,11 @@ pub(crate) fn rules_rows(flow: &Flow, env: &ViewEnv) -> (Vec<Row>, Vec<(ImageId,
         return (vec![head.finish()], pics.out);
     };
     head.push(&format!("Rules · {} v{}", p.name, p.version), Some(HEAD));
+    // the tile's other tab: the selected task's evidence (`e')
+    if let Some(t) = task.and_then(|id| tasks(flow).into_iter().find(|t| t.id == id)) {
+        head.push("     ", None)
+            .push(&format!("Evidence · {}", t.label), Some(LABEL));
+    }
     let mut rows = vec![head.finish()];
     let mut cols = RowBuilder::new("rules-cols");
     cols.push("Rule", Some(LABEL))
@@ -1177,10 +1208,16 @@ fn wrap(text: &str, chars: usize) -> Vec<String> {
     out
 }
 
-/// A button in B: LABEL in FACE with its KEY as a keycap badge (the key face) inside it, as in the mockup.
-fn button(b: &mut RowBuilder, label: &str, key: &str, face: &str) {
+/// A button in B: LABEL with its KEY as a keycap badge inside it, as in the mockup; PRIMARY: the filled one.
+fn button(b: &mut RowBuilder, label: &str, key: &str, primary: bool) {
+    let (face, kface) = if primary {
+        (BUTTON_PRI, KEY_PRI)
+    } else {
+        (BUTTON, BUTTON_KEY)
+    };
+    // the label's last space is the gap before the key; the key's own spaces pad it inside its ring
     b.push(&format!(" {label} "), Some(face))
-        .push(key, Some(KEY))
+        .push(&format!(" {key} "), Some(kface))
         .push(" ", Some(face));
 }
 
@@ -1252,10 +1289,19 @@ fn avatar(env: &ViewEnv, initial: char, colour: &str) -> (ImageId, String) {
     (ImageId::of(svg.as_bytes(), env.epoch), svg)
 }
 
-/// The detail tile of task TASK of FLOW for ENV, one line per row, and its images: its head (the agent's avatar and
-/// name, the held chip; the task's id and its card's on it), the task under it, for a held task why it is held,
-/// what clears it, then the evidence so far and the actions with their keys (the waiver the user's alone).  A task
-/// FLOW does not have: one row saying to select one.
+/// The detail tile's title row: the panel icon and TEXT in the heading face (the tile's own; the dock draws none).
+fn tile_title(env: &ViewEnv, text: &str) -> (Row, Vec<(ImageId, String)>) {
+    let mut pics = Pics::new(env);
+    let mut b = RowBuilder::new("d:title");
+    pics.put(&mut b, "panel-right", " ");
+    b.push(" ", None).push(text, Some(HEAD));
+    (b.finish(), pics.out)
+}
+
+/// The detail tile of task TASK of FLOW for ENV, one line per row, and its images: its title ("Detail · T5"), its head
+/// (the agent's avatar and name, the held chip; the task's id and its card's on it), the task under it, for a held
+/// task why it is held, what clears it, then the evidence so far and the actions with their keys (the waiver the user's
+/// alone).  A task FLOW does not have: the title and one row saying to select one.
 pub(crate) fn detail_tile(
     flow: &Flow,
     task: &str,
@@ -1268,9 +1314,10 @@ pub(crate) fn detail_tile(
         .zip(tasks(flow))
         .find(|(f, _)| f.id == task)
     else {
+        let (title, images) = tile_title(env, "Detail");
         let mut b = RowBuilder::new("d:none");
         b.push("Select a task in the Flow.", Some(LABEL));
-        return (vec![b.finish()], Vec::new());
+        return (vec![title, b.finish()], images);
     };
     let mut rows = Vec::new();
     let mut line = |key: String, text: &str, face: Option<&str>| {
@@ -1284,8 +1331,9 @@ pub(crate) fn detail_tile(
             rows.push(b.finish());
         }
     };
-    // the head: who works on it (avatar, name) and the held chip at the right; the task and where it stands under it
-    let mut images = Vec::new();
+    // the title, then the head: who works on it (avatar, name) and the held chip at the right; the task and where it
+    // stands under it
+    let (title, mut images) = tile_title(env, &format!("Detail · {}", t.label));
     let mut head = RowBuilder::new("d:head");
     let start = head.pos();
     let agent = t.agent.as_deref().unwrap_or("no agent");
@@ -1310,7 +1358,11 @@ pub(crate) fn detail_tile(
         images.push((id, svg));
         head.push(" ", None);
     }
-    head.push(&fit(agent, chars.saturating_sub(10)), Some(AGENT));
+    let who = match &facts.session {
+        Some(session) if t.agent.is_some() => format!("{agent} · {session}"),
+        _ => agent.to_owned(),
+    };
+    head.push(&fit(&who, chars.saturating_sub(10)), Some(AGENT));
     if t.held.is_some() {
         head.stop(env.width_px.saturating_sub(env.cell.0 * 7));
         head.push(" held ", Some(Chip::Held.face()));
@@ -1320,15 +1372,29 @@ pub(crate) fn detail_tile(
     if let Some(card) = t.card {
         head.prop(start, end, "drgnx-work-card", json!(card));
     }
-    let mut out = vec![head.finish()];
+    let mut out = vec![title, head.finish()];
+    // under it the task and the agent's time, spend and context (the map's), else where the task stands
+    let mut said: Vec<String> = Vec::new();
+    if let Some(m) = facts.minutes {
+        said.push(format!("{m} min"));
+    }
+    if let Some(s) = &facts.spend {
+        said.push(format!("≈{s}"));
+    }
+    if let Some(c) = facts.context {
+        said.push(format!("ctx {c}%"));
+    }
+    if said.is_empty() {
+        said.push(facts.status.clone());
+    }
     let mut sub = RowBuilder::new("d:sub");
-    sub.push(
-        &fit(
-            &format!("{} {} · {}", t.label, t.title, facts.status),
-            chars,
-        ),
-        Some(LABEL),
+    // the task's words give way first: the time, spend and context stay whole
+    let said = format!(" · {}", said.join(" · "));
+    let task = fit(
+        &format!("{} {}", t.label, t.title),
+        chars.saturating_sub(said.chars().count()),
     );
+    sub.push(&fit(&format!("{task}{said}"), chars), Some(LABEL));
     out.push(sub.finish());
     let held_gates: Vec<(&str, &Cell)> = GATES
         .iter()
@@ -1446,17 +1512,17 @@ pub(crate) fn detail_tile(
             "Check again"
         };
         let mut act = RowBuilder::new("d:act");
-        button(&mut act, first, "r", Chip::Run.face());
+        button(&mut act, first, "r", true);
         act.push(" ", None);
-        button(&mut act, "Tell the agent", "s", Chip::Wait.face());
+        button(&mut act, "Tell the agent", "s", false);
         out.push(act.finish());
     }
     let mut act = RowBuilder::new("d:act2");
     if t.card.is_some() {
-        button(&mut act, "Waive once", "w", Chip::Wait.face());
+        button(&mut act, "Waive once", "w", false);
         act.push(" ", None);
     }
-    button(&mut act, "Evidence", "e", Chip::Wait.face());
+    button(&mut act, "Evidence", "e", false);
     out.push(act.finish());
     if t.card.is_some() {
         for (i, l) in wrap(
@@ -1894,8 +1960,12 @@ mod tests {
         let (rows, _) = flow_rows(&f, &e, &fonts());
         let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
         let tail: Vec<&str> = keys[keys.iter().position(|k| *k == "gap").unwrap() + 1..].to_vec();
-        // the two cards side by side: the batch's 4 lines (heading, a member, 2 machines), the line gate's 3
-        assert_eq!(tail, ["cards:0", "cards:1", "cards:2", "cards:3"]);
+        // the two cards side by side: the batch's 5 lines (heading, a member, 2 machines, what a red does), the line
+        // gate's 3
+        assert_eq!(
+            tail,
+            ["cards:0", "cards:1", "cards:2", "cards:3", "cards:4"]
+        );
         let row = |k: &str| rows.iter().find(|r| r.key == k).unwrap();
         let text: Vec<&str> = tail.iter().map(|k| row(k).text.as_str()).collect();
         assert!(text[0].contains("Merge batch") && text[0].contains("affected groups 1/2"));
@@ -1962,11 +2032,12 @@ mod tests {
                 row(k)
                     .runs
                     .iter()
-                    .any(|r| r.2 == CARD_TEXT || r.2 == CARD_HEAD)
+                    .any(|r| r.2 == CARD_TEXT || r.2 == CARD_HEAD || r.2 == CARD_CODE)
             );
         }
-        // the batch's 4th line: the line gate has none there, so only the batch's ring
+        // the batch's 4th and 5th lines: the line gate has none there, so only the batch's ring
         assert_eq!(blocks(row("cards:3")).len(), 1);
+        assert!(row("cards:4").text.contains("On a red"));
         // the headings and every task row carry a rule (a hairline under the row, across the table)
         for k in ["cols", "task:task:J#1", "task:task:J#5", "task:task:J#8"] {
             let b = blocks(row(k));
@@ -2066,6 +2137,7 @@ mod tests {
                     "gap",
                     "cards:0",
                     "cards:1",
+                    "cards:2",
                 ]
             );
             assert!(
@@ -2237,7 +2309,7 @@ mod tests {
     fn the_rules_tile_lists_the_pack() {
         let mut f = flow();
         f.pack.as_mut().unwrap().rules[2].kind = "routing".into();
-        let (rows, images) = rules_rows(&f, &env(1.0));
+        let (rows, images) = rules_rows(&f, None, &env(1.0));
         let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
         assert_eq!(
             keys,
@@ -2250,7 +2322,16 @@ mod tests {
             ]
         );
         assert!(rows[0].text.contains("Rules · drgnx-org v4"));
+        assert!(!rows[0].text.contains("Evidence"));
         assert!(rows[1].text.contains("How the hub holds it"));
+        // the tile's tabs as the mockup's: the Rules tab, then the selected task's Evidence, muted
+        let (rows, _) = rules_rows(&f, Some("task:J#5"), &env(1.0));
+        assert!(rows[0].text.ends_with("Evidence · T5"), "{}", rows[0].text);
+        assert!(
+            rows[0].runs.iter().any(|r| r.2 == LABEL),
+            "{:?}",
+            rows[0].runs
+        );
         let red = &rows[2];
         assert!(red.text.contains("red-first doc") && red.text.contains("enforced"));
         assert!(red.text.contains("checked at the merge"));
@@ -2263,7 +2344,7 @@ mod tests {
             pack: None,
             ..flow()
         };
-        let (rows, _) = rules_rows(&none, &env(1.0));
+        let (rows, _) = rules_rows(&none, None, &env(1.0));
         assert_eq!(rows.len(), 1);
         assert!(rows[0].text.contains("no rule pack"));
     }
@@ -2347,11 +2428,11 @@ mod tests {
         let text: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();
         let all = text.join("\n");
         assert!(
-            text[1].starts_with("T5") && text[1].contains("Task 5"),
+            text[2].starts_with("T5") && text[2].contains("Task 5"),
             "{all}"
         );
         assert!(
-            rows[0]
+            rows[1]
                 .props
                 .iter()
                 .any(|p| p.2 == "drgnx-work-card" && p.3 == json!(42))
@@ -2365,20 +2446,20 @@ mod tests {
             "Evidence so far",
             "green",
             "1 pass",
-            "Run the red r",
-            "Tell the agent s",
-            "Waive once w",
-            "Evidence e",
+            "Run the red  r",
+            "Tell the agent  s",
+            "Waive once  w",
+            "Evidence  e",
             "yours only",
         ] {
             assert!(all.contains(want), "no {want:?} in\n{all}");
         }
         // each button's key is a keycap badge (the key face) inside the button
         for button in [
-            "Run the red r",
-            "Tell the agent s",
-            "Waive once w",
-            "Evidence e",
+            "Run the red  r",
+            "Tell the agent  s",
+            "Waive once  w",
+            "Evidence  e",
         ] {
             let row = rows
                 .iter()
@@ -2391,7 +2472,9 @@ mod tests {
                 - 1;
             let at = at as u32;
             assert!(
-                row.runs.iter().any(|r| r.0 <= at && at < r.1 && r.2 == KEY),
+                row.runs
+                    .iter()
+                    .any(|r| r.0 <= at && at < r.1 && (r.2 == BUTTON_KEY || r.2 == KEY_PRI)),
                 "{button}: {:?}",
                 row.runs
             );
@@ -2405,10 +2488,90 @@ mod tests {
             !free_all.contains("Why it is held") && !free_all.contains("Waive"),
             "{free_all}"
         );
-        assert!(free_all.contains("Evidence e") && free_all.contains("none recorded"));
+        assert!(free_all.contains("Evidence  e") && free_all.contains("none recorded"));
         let none = detail_tile(&f, "task:J#99", &tile).0;
-        assert_eq!(none.len(), 1);
-        assert!(none[0].text.contains("Select a task"));
+        assert_eq!(none.len(), 2);
+        assert!(none[1].text.contains("Select a task"));
+    }
+
+    /// [D] hub-orchestration.html's detail head: "Sonnet · search-quick" (the model, then the agent's session), and
+    /// under it the task with the agent's time, spend and context; without them, the task's status.
+    #[test]
+    fn the_detail_head_names_the_session_and_the_sub_line_its_time_spend_and_context() {
+        let mut f = flow();
+        f.tasks[1].agent = Some("Sonnet".into());
+        f.tasks[1].session = Some("search-quick".into());
+        f.tasks[1].minutes = Some(41);
+        f.tasks[1].spend = Some("$0.90".into());
+        f.tasks[1].context = Some(88);
+        let (rows, _) = detail_tile(&f, "task:J#5", &env(1.0));
+        assert!(
+            rows[1].text.contains("Sonnet · search-quick"),
+            "{}",
+            rows[1].text
+        );
+        assert!(
+            rows[2].text.ends_with("· 41 min · ≈$0.90 · ctx 88%"),
+            "{}",
+            rows[2].text
+        );
+        let (rows, _) = detail_tile(&flow(), "task:J#5", &env(1.0));
+        assert!(rows[2].text.ends_with("· in-review"), "{}", rows[2].text);
+        // a title too long for the tile is cut, never the time, spend and context after it
+        f.tasks[1].title = "Git scopes and changed lines ".repeat(8);
+        let (rows, _) = detail_tile(&f, "task:J#5", &env(1.0));
+        assert!(
+            rows[2].text.ends_with("· 41 min · ≈$0.90 · ctx 88%"),
+            "{}",
+            rows[2].text
+        );
+    }
+
+    /// [D] The tile is titled as the mockup's (hub-orchestration.html `.tile-h`): the panel icon and "Detail · T5", the
+    /// task's id, in the heading face; with no task selected, "Detail" alone.
+    #[test]
+    fn the_detail_tile_is_titled_with_its_task() {
+        let (rows, images) = detail_tile(&flow(), "task:J#5", &env(2.0));
+        let title = &rows[0];
+        assert_eq!(title.key, "d:title");
+        assert!(title.text.ends_with("Detail · T5"), "{}", title.text);
+        assert_eq!(title.images.len(), 1);
+        assert!(images.iter().any(|(id, _)| *id == title.images[0].1));
+        assert!(title.runs.iter().any(|r| r.2 == HEAD), "{:?}", title.runs);
+        let (rows, _) = detail_tile(&flow(), "task:nope", &env(1.0));
+        assert!(rows[0].text.ends_with("Detail"), "{}", rows[0].text);
+    }
+
+    #[test]
+    fn the_detail_s_actions_are_buttons_the_first_one_primary() {
+        // hub-orchestration.html `.acts`: `.btn.pri` Run the red, then `.btn`s; the primary's key in its own colour
+        let (rows, _) = detail_tile(&flow(), "task:J#5", &env(1.0));
+        let faces = |key: &str| -> Vec<&str> {
+            let r = rows.iter().find(|r| r.key == key).expect(key);
+            r.runs.iter().map(|r| r.2.as_str()).collect()
+        };
+        let act = faces("d:act");
+        assert_eq!(act[..3], [BUTTON_PRI, KEY_PRI, BUTTON_PRI], "{act:?}");
+        assert!(
+            act[3..].iter().all(|f| [BUTTON, BUTTON_KEY].contains(f)),
+            "{act:?}"
+        );
+        let act2 = faces("d:act2");
+        assert!(
+            act2.iter().all(|f| [BUTTON, BUTTON_KEY].contains(f)) && act2.contains(&BUTTON),
+            "{act2:?}"
+        );
+        // the keycap (`.btn .k`): padded inside its ring, a gap before it in the button's face
+        let row = rows.iter().find(|r| r.key == "d:act").expect("d:act");
+        let key = row
+            .runs
+            .iter()
+            .find(|r| r.2 == KEY_PRI)
+            .expect("the primary's key");
+        let text: Vec<char> = row.text.chars().collect();
+        let at = |a: u32, b: u32| text[a as usize..b as usize].iter().collect::<String>();
+        assert_eq!(at(key.0, key.1), " r ");
+        assert_eq!(at(key.0 - 1, key.0), " ", "{}", row.text);
     }
 
     /// [D] The detail tile as the mockup (hub-orchestration.html `.detail`): the head is the agent's avatar (a 16 px
@@ -2422,7 +2585,7 @@ mod tests {
         let (rows, images) = detail_tile(&flow(), "task:J#5", &tile);
         let all: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();
         let all = all.join("\n");
-        let head = &rows[0];
+        let head = &rows[1];
         assert_eq!(head.images.len(), 1, "{all}");
         assert!(
             head.text.contains("Sonnet") && head.text.contains("held"),
@@ -2446,7 +2609,7 @@ mod tests {
             svg.contains("width=\"32\""),
             "16 logical px at scale 2: {svg}"
         );
-        let sub = &rows[1];
+        let sub = &rows[2];
         assert!(
             sub.text.starts_with("T5") && sub.text.contains("Task 5"),
             "{all}"
@@ -2461,6 +2624,57 @@ mod tests {
         }
         let why = rows.iter().find(|r| r.key == "d:why").expect("why");
         assert!(why.runs.iter().all(|x| x.2 == DTEXT), "{:?}", why.runs);
+    }
+
+    /// [D] The cards' lines as the mockup's `.bcard`: a machine's checks read "name ✓" (the name in the code face,
+    /// the tick after it); a member's tip is in the code face and its note right-aligned at the card's content edge;
+    /// the batch ends with what a red does.
+    #[test]
+    fn the_cards_name_their_checks_before_the_tick_and_right_align_the_notes() {
+        let mut f = flow();
+        let unit = check("unit");
+        f.groups = Some(Runs {
+            at: "B".into(),
+            checks: vec![unit.clone()],
+            evidence: vec![run_of(&unit, "B", "desktop", true)],
+        });
+        let m = machine_lines(f.groups.as_ref().unwrap());
+        let kinds: Vec<String> = m[0]
+            .iter()
+            .map(|p| match p {
+                Piece::Text(t, face) => format!("text {} {face}", t.trim()),
+                Piece::Icon(n, _, _) => format!("icon {n}"),
+                Piece::Chip(..) => "chip".into(),
+                Piece::At(_) => "at".into(),
+            })
+            .filter(|k| k != &format!("text  {LABEL}"))
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                format!("text desktop: {LABEL}"),
+                format!("text unit {CODE}"),
+                "icon check".into()
+            ]
+        );
+        let cw = 600;
+        let lines = batch_lines(&f, cw, &fonts());
+        let member = &lines[1];
+        assert!(
+            member
+                .iter()
+                .any(|p| matches!(p, Piece::Text(t, CODE) if t.contains("7d21c0e")))
+        );
+        let (at, said) = match &member[member.len() - 2..] {
+            [Piece::At(x), Piece::Text(t, LABEL)] => (*x, t.clone()),
+            _ => panic!("the note last, at a stop"),
+        };
+        assert_eq!(at + text_px(&fonts(), &said), cw, "right-aligned: {said}");
+        let last = lines.last().expect("a footer");
+        assert!(
+            last.iter()
+                .any(|p| matches!(p, Piece::Text(t, LABEL) if t.starts_with("On a red")))
+        );
     }
 
     /// [D] A task's row lights under the pointer (the mockup's `.row:hover`, `--hover`): `mouse-face` over its span.

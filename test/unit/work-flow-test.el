@@ -97,7 +97,32 @@ says its reason."
   (should (equal (drgnx-work-flow--rules-params "flow-1/rules" "map-1" nil)
                  '(:view "flow-1/rules" :map "map-1" :rules t)))
   (should (equal (drgnx-work-flow--rules-params "flow-1/rules" "map-1" "J")
-                 '(:view "flow-1/rules" :map "map-1" :rules t :job "J"))))
+                 '(:view "flow-1/rules" :map "map-1" :rules t :job "J")))
+  ;; with the Flow's selected task: the tile's Evidence tab names it
+  (should (equal (drgnx-work-flow--rules-params "flow-1/rules" "map-1" "J" "J#5")
+                 '(:view "flow-1/rules" :map "map-1" :rules t :job "J" :detail "J#5"))))
+
+(ert-deftest drgnx-work-flow/r-shows-the-rules-tile-in-the-panel ()
+  "`R' shows the Flow's own Rules tile in the bottom panel, even where the panel already shows the pane's placeholder
+(layout Work opened it before the Flow had a tile)."
+  (let ((tile (get-buffer-create " work-flow-test rules")) shown)
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-work-flow-rules-buffer) (lambda (_flow) tile))
+                  ((symbol-function 'drgnx-pane-show)
+                   (lambda (kind &rest args) (push (cons kind args) shown) (selected-window))))
+          (with-temp-buffer
+            (drgnx-work-flow-rules))
+          (should (equal shown `((work-rules :buffer ,tile)))))
+      (kill-buffer tile))))
+
+;; the tiles draw their own title rows (hub-orchestration.html's `.tile-h'): the docks draw no tab row over them
+(ert-deftest drgnx-work-flow/its-tiles-have-their-own-titles ()
+  (with-temp-buffer
+    (drgnx-work-flow-rules-mode)
+    (should drgnx-area-own-title))
+  (with-temp-buffer
+    (drgnx-work-flow-detail-mode)
+    (should drgnx-area-own-title)))
 
 (ert-deftest drgnx-work-flow/its-faces-are-the-ui-font-s-and-the-theme-s ()
   "The faces the hub's Flow rows name: the UI font (proportional), colours from the theme's chips and text, no
@@ -123,7 +148,10 @@ text role and its section heads the caption role, semibold and muted; the agent'
   (should (eq (face-attribute 'drgnx-work-flow-detail-text :inherit) 'drgnx-ui-text))
   (should (equal (face-attribute 'drgnx-work-flow-section :inherit) '(drgnx-ui-caption drgnx-text-muted)))
   (should (eq (face-attribute 'drgnx-work-flow-section :weight) 'semibold))
-  (should (eq (face-attribute 'drgnx-work-flow-agent :inherit) 'drgnx-ui-heading)))
+  (should (eq (face-attribute 'drgnx-work-flow-agent :inherit) 'drgnx-ui-heading))
+  (should (eq (face-attribute 'drgnx-work-flow-agent :weight) 'bold))      ; `<b>' on the head
+  ;; the cards' names (`.bcard .bl .code', 11.5 px in the code font, the text colour)
+  (should (eq (face-attribute 'drgnx-work-flow-code :inherit) 'drgnx-code-small)))
 
 (ert-deftest drgnx-work-flow/g-n-selects-the-nth-held-task ()
   "In the Flow, `g N' (the strip's badges) selects the Nth task a gate holds; on the map it stays the map's Nth thing

@@ -158,10 +158,11 @@ untracked, drgnx.lock.eld ignored."
   '((window-dark "the agent panel opens as a tab of the editor group, not the right island (look step 8)"
                  "the title row counts 1 agent, not 2: the scene starts one mock agent"
                  "no agent badges (C, R) in the Explorer: agent system part 3 (G9)"
-                 "the status bar has no `1 job' or `● Claude editing': no job or agent edit runs yet; its `1 waiting on you' is
-the mockup's `● 1 needs you'"
-                 "the status bar's problems are Flymake's real ones for the file (the mockup's `✕ 1' is made up), and
-no `● eglot': the session runs no language server")
+                 "the status bar has no `● Claude editing': the mock agent edits no file of the scene's project, and the
+`agents-here' segment shows an agent's mark, not its name and what it does; its `1 waiting on you' is the mockup's
+`● 1 needs you' (and counts the seeded run's held card too)"
+                 "the status bar's problems are the scene's stand-in Flymake backend's (the mockup's two), and no `● eglot':
+the session runs no language server")
     (agent-panel "the mockup is the Work space (mission strip, Board, Timeline: G9, other plans); compare its right-hand panel"
                  "the panel opens as a tab of the editor group, not the right island (look step 8)"
                  "the mock agent's panel shows no turn yet (replay idle): look step 8")
@@ -330,7 +331,9 @@ from 201."
                   "tool:edit src/main.el\\nsay Queue the reply when the client went away.\\n"
                   "tool:run sleep 2; echo 9 of 14 passed\\n"
                   "ask:tool {\"kind\": \"read\", \"title\": \"Read the gateway's log\"}\nsay done")))
-      (setq drgnx-look-scene--panel (drgnx-panel-replay-up bin))
+      ;; the replay's hub is the scenes' hub from here on: it seeds the plan run as `drgnx-look-scene--hub' does
+      (setq drgnx-look-scene--panel (let ((process-environment (cons "RATATOSKR_SEED_SCENE=1" process-environment)))
+                                      (drgnx-panel-replay-up bin)))
       ;; the turn runs on past the prefix to its ask: the scene shows every step's time and the open card
       (unless (drgnx-panel-replay--wait 30 (lambda () (with-current-buffer drgnx-look-scene--panel
                                                         (drgnx-agent-panel-cards--permissions))))
@@ -349,9 +352,42 @@ hub is started first and the shot waits for them (a session starts no hub: witho
                                         (with-current-buffer b
                                           (save-excursion (goto-char (point-min)) (search-forward "Makefile" nil t)))))))
 
+(declare-function drgnx-jobs--recount "drgnx-jobs")
+(declare-function flymake-start "flymake")
+(declare-function flymake-make-diagnostic "flymake")
+(defvar drgnx-jobs--running)
+
+(defun drgnx-look-scene--problems (report &rest _)
+  "window-dark.html's problems for the gateway file (the status bar's `✕ 1 ⚠ 1'), told to Flymake through REPORT: a
+stand-in backend, as the palette's commands are stand-ins, with the error and warning the highlights scene marks (the
+call on line 229, `old' on line 208)."
+  (let ((at (lambda (line text)
+              (save-excursion
+                (goto-char (point-min)) (forward-line (1- line))
+                (search-forward text (pos-eol))
+                (cons (- (point) (length text)) (point))))))
+    (funcall report
+             (list (let ((r (funcall at 229 "drgnx-gateway--log")))
+                     (flymake-make-diagnostic (current-buffer) (car r) (cdr r) :error
+                                              "Function not known to be defined"))
+                   (let ((r (funcall at 208 "old")))
+                     (flymake-make-diagnostic (current-buffer) (car r) (cdr r) :warning
+                                              "variable `old' is never used"))))))
+
 (defun drgnx-look-scene-window-dark ()
+  "The editor on the gateway file, with the status bar's facts of the mockup: the seeded plan run running (`1 job',
+counted from the hub) and the file's problems (`drgnx-look-scene--problems')."
   (drgnx-look-scene--theme 'drgnx-dark)
   (drgnx-look-scene--editor)
+  (drgnx-look-scene--try "problems"
+    (require 'flymake)
+    (with-current-buffer (get-file-buffer (expand-file-name "core/drgnx-gateway.el" drgnx-look-scene--project))
+      (setq-local flymake-diagnostic-functions (list #'drgnx-look-scene--problems))
+      (flymake-mode 1)
+      (flymake-start)))
+  (drgnx-look-scene--try "jobs"
+    (drgnx-jobs--recount)
+    (drgnx-look-scene--until 15 "the status bar's job (the seeded run)" (lambda () (eql drgnx-jobs--running 1))))
   (drgnx-look-scene--answer))
 
 (defun drgnx-look-scene-agent-panel ()

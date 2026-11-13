@@ -306,4 +306,48 @@ enabled: this Emacs may refuse the key."
                  (box (plist-get (cdar spec) :box)))
             (should (eq fit (eq 'text (plist-get box :fit))))))))))
 
+;; The Flow's gate pills and buttons (hub-orchestration.html `.g', `.acts .btn'): text-height on its 30 px rows, with
+;; Nidhogg's `:fit text' confining the fill to the box (coordinator, 2026-11-13)
+(ert-deftest drgnx-themes/the-flow-s-pills-and-buttons-fit-their-text-where-boxes-can ()
+  "Where boxes take `:fit text', a gate pill is padded in its own colour (a flat button, 6 by 3 px) and fully rounded,
+and the buttons keep the controls' rings, all fit to their text; where they cannot, a pill has no box (one would make
+its row taller) and nothing asks for the key."
+  (cl-letf (((symbol-function 'featurep) (let ((real (symbol-function 'featurep)))
+                                           (lambda (f &optional sub) (or (eq f 'glitnir) (funcall real f sub))))))
+    (dolist (fit '(t nil))
+      (let ((drgnx-theme--box-fit fit))
+        (dolist (variant '(dark light hc))
+          (let* ((specs (drgnx-theme--specs variant))
+                 (box (lambda (face) (plist-get (cdar (cadr (assq face specs))) :box))))
+            (dolist (chip '(drgnx-work-flow-chip-ok drgnx-work-flow-chip-run drgnx-work-flow-chip-held
+                                                    drgnx-work-flow-chip-err drgnx-work-flow-chip-wait))
+              (should (assq chip specs))
+              (if (not fit)
+                  (should-not (plist-get (funcall box chip) :fit))
+                (should (eq 'text (plist-get (funcall box chip) :fit)))
+                (should (eql 10 (plist-get (funcall box chip) :corner-radius)))
+                (unless (eq variant 'hc)
+                  (should (equal '(6 . 3) (plist-get (funcall box chip) :line-width)))
+                  (should (eq 'flat-button (plist-get (funcall box chip) :style))))))
+            (dolist (b '(drgnx-work-flow-button drgnx-work-flow-button-primary drgnx-work-flow-key-primary
+                                                drgnx-work-flow-button-key))
+              (should (assq b specs))
+              (should (eq fit (eq 'text (plist-get (funcall box b) :fit)))))))))))
+
+;; the buttons 24 px tall over 12 px text (`.detail .acts .btn'), the keys 2 px clear of theirs (`kbd', `.k'), where
+;; boxes take a pad (Nidhogg's `:fit (text . PAD)'); else as tall as their text
+(ert-deftest drgnx-themes/the-flow-s-buttons-are-padded-where-boxes-take-a-pad ()
+  "Where boxes take `:fit (text . PAD)', a button is padded 4 px above and below its text and its key 2 px; where they
+fit but take no pad, both are `:fit text'."
+  (cl-letf (((symbol-function 'featurep) (let ((real (symbol-function 'featurep)))
+                                           (lambda (f &optional sub) (or (eq f 'glitnir) (funcall real f sub))))))
+    (dolist (pad '(t nil))
+      (let ((drgnx-theme--box-fit t) (drgnx-theme--box-fit-pad pad))
+        (let* ((specs (drgnx-theme--specs 'dark))
+               (fit (lambda (face) (plist-get (plist-get (cdar (cadr (assq face specs))) :box) :fit))))
+          (dolist (b '(drgnx-work-flow-button drgnx-work-flow-button-primary))
+            (should (equal (funcall fit b) (if pad '(text . 4) 'text))))
+          (dolist (k '(drgnx-work-flow-button-key drgnx-work-flow-key-primary))
+            (should (equal (funcall fit k) (if pad '(text . 2) 'text)))))))))
+
 ;;; themes-test.el ends here

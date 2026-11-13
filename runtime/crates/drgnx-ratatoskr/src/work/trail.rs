@@ -162,7 +162,7 @@ impl Trails {
         // a tile of the Flow is rows alone, as the map's detail is
         if !matches!(
             *data,
-            Data::Flow(_, flow::Part::Detail(_) | flow::Part::Rules)
+            Data::Flow(_, flow::Part::Detail(_) | flow::Part::Rules(_))
         ) {
             f.core
                 .views
@@ -203,7 +203,7 @@ fn rows(
         Data::Board(cards) => only(board::board_rows(cards, env)),
         Data::Flow(flow, flow::Part::Lens) => flow::flow_rows(flow, env, fonts),
         Data::Flow(flow, flow::Part::Detail(task)) => flow::detail_tile(flow, task, env),
-        Data::Flow(flow, flow::Part::Rules) => flow::rules_rows(flow, env),
+        Data::Flow(flow, flow::Part::Rules(task)) => flow::rules_rows(flow, task.as_deref(), env),
     }
 }
 
@@ -348,6 +348,7 @@ async fn flow_facts(f: &Front, conn: u64, map: &str, job: Option<String>) -> flo
                     status: row.status.unwrap_or_default(),
                     agent: row.agent,
                     queue: flow::Queue::None,
+                    ..flow::TaskFacts::default()
                 });
             }
             Ok(Some((job, title, plan, pack, tasks, meta)))
@@ -358,15 +359,21 @@ async fn flow_facts(f: &Front, conn: u64, map: &str, job: Option<String>) -> flo
         return flow::Flow::default();
     };
     let (ready, batch) = (f.queue.ready(&job), f.queue.batch(&job));
-    let agents = f.core.map.agents_of(conn, map);
+    let agents = f.core.map.task_agents_of(conn, map);
     for t in &mut tasks {
         if batch.iter().any(|b| b.task == t.id) {
             t.queue = flow::Queue::Batch;
         } else if ready.iter().any(|b| b.task == t.id) {
             t.queue = flow::Queue::Ready;
         }
-        if let Some((_, _, label)) = agents.iter().find(|(task, ..)| *task == t.id) {
-            t.agent = Some(label.clone());
+        // the map's agent on it: the model names it in the table, its own label (the session) follows in the detail
+        if let Some(a) = agents.iter().find(|a| a.task == t.id) {
+            let (agent, session) = a.names();
+            t.agent = Some(agent);
+            t.session = session;
+            t.minutes = a.minutes;
+            t.spend = a.spend.clone();
+            t.context = a.context;
         }
     }
     let seen = f.queue.seen(&job);
@@ -591,7 +598,8 @@ pub async fn board_subscribe(
 
 /// `work/flow/subscribe`: VIEW of CALLER's connection shows the Flow lens of `job` (else the newest running job), with
 /// the agents of map view `map`; its model and rows go out as a Board's do, before the answer.  With `detail`, the
-/// view is that task's detail tile instead, with `rules` the Rules tile: rows alone, no model.
+/// view is that task's detail tile instead, with `rules` the Rules tile (`detail` with it: its Evidence tab's task):
+/// rows alone, no model.
 pub async fn flow_subscribe(
     f: &Front,
     c: &Caller,
@@ -599,8 +607,8 @@ pub async fn flow_subscribe(
 ) -> Result<TrailSubscribed, Error> {
     let key = (c.conn_id, p.view);
     let part = match (p.detail, p.rules) {
-        (Some(task), _) => flow::Part::Detail(task),
-        (None, true) => flow::Part::Rules,
+        (task, true) => flow::Part::Rules(task),
+        (Some(task), false) => flow::Part::Detail(task),
         (None, false) => flow::Part::Lens,
     };
     let lens = part == flow::Part::Lens;

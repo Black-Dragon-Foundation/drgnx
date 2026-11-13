@@ -181,13 +181,20 @@ and no other tab left one."
               (area (get-text-property (cdr s) 'drgnx-area (car s))))
     (drgnx-wb-area-hide area)))
 
+(defvar-local drgnx-area-own-title nil
+  "Non-nil in a buffer that draws its own title row (the Work space's tiles): an area shows no tab row over it.")
+
 (defun drgnx-area--tab-row (area)
   "AREA's tab row, ending in the ✕ that hides it; set as a window parameter, so it is built when the tab changes.
-`none' (no row) in an area defined with LONE while its shown tab is the only one with content."
+`none' (no row) in an area defined with LONE while its shown tab is the only one with content, and over a buffer with
+its own title (`drgnx-area-own-title')."
   (let* ((shown (drgnx-wb-area-tab area)) (tabs (plist-get (alist-get area drgnx-wb--areas) :tabs))
          (fn (plist-get (alist-get shown tabs) :actions))
-         (actions (and fn (funcall fn))))
-    (if (and (plist-get (alist-get area drgnx-wb--areas) :lone) (drgnx-area--lone-p area)) 'none
+         (actions (and fn (funcall fn)))
+         (w (drgnx-wb-area-window area)))
+    (if (or (and w (buffer-local-value 'drgnx-area-own-title (window-buffer w)))
+            (and (plist-get (alist-get area drgnx-wb--areas) :lone) (drgnx-area--lone-p area)))
+        'none
       (drgnx-wb-header-with-close
        (concat
         (mapconcat (lambda (tab)
@@ -250,6 +257,13 @@ the ✕'s columns, then the pieces."
     (when-let* ((area (window-parameter window 'drgnx-role)) ((alist-get area drgnx-wb--areas)))
       (window-preserve-size window (drgnx-area--horizontal-p area) t)))
   (set-window-dedicated-p window 'drgnx))
+
+(defun drgnx-wb-area-put-buffer (window buffer)
+  "Show BUFFER in WINDOW, an area's window, keeping the shown tab: its tab row follows the buffer (one with its own
+title has none)."
+  (drgnx-wb-set-area-buffer window buffer)
+  (when-let* ((area (window-parameter window 'drgnx-role)) ((alist-get area drgnx-wb--areas)))
+    (set-window-parameter window 'header-line-format (drgnx-area--tab-row area))))
 
 (defun drgnx-wb-area-show (area &optional tab buffer)
   "Show AREA's TAB (default: the shown one) with BUFFER (default: the tab's last); never select it.

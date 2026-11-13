@@ -44,12 +44,21 @@
 (defface drgnx-work-flow-section '((t :inherit (drgnx-ui-caption drgnx-text-muted) :weight semibold))
   "The detail tile's section heads: why it is held, what clears it, the evidence (the mockup's `h5')."
   :group 'drgnx-work-space)
-(defface drgnx-work-flow-agent '((t :inherit drgnx-ui-heading)) "The agent's name on the detail tile's head."
+(defface drgnx-work-flow-agent '((t :inherit drgnx-ui-heading :weight bold))
+  "The agent's name on the detail tile's head."
   :group 'drgnx-work-space)
 (defface drgnx-work-flow-label '((t :inherit (drgnx-ui-caption drgnx-text-muted)))
   "The Flow's labels: task ids, agents, column headings." :group 'drgnx-work-space)
 (defface drgnx-work-flow-key '((t :inherit (drgnx-ui-caption drgnx-keycap)))
   "A key's badge on the Flow's chips (`g 1' on a held task)." :group 'drgnx-work-space)
+(defface drgnx-work-flow-button '((t :inherit (drgnx-ui-caption drgnx-control)))
+  "An action of the Flow's detail tile (Tell the agent, Waive once, Evidence)." :group 'drgnx-work-space)
+(defface drgnx-work-flow-button-primary '((t :inherit (drgnx-ui-caption drgnx-control-primary)))
+  "The detail tile's first action, filled (Run the red, Check again)." :group 'drgnx-work-space)
+(defface drgnx-work-flow-key-primary '((t :inherit drgnx-work-flow-button-primary :height 0.9167))
+  "A key's badge on the primary action: on its fill, in its text colour." :group 'drgnx-work-space)
+(defface drgnx-work-flow-button-key '((t :inherit drgnx-work-flow-button :height 0.9167))
+  "A key's badge on an action: on the button's background." :group 'drgnx-work-space)
 (defface drgnx-work-flow-heading '((t :inherit drgnx-ui-heading)) "The Flow's headings: the run, the batch, a tile's."
   :group 'drgnx-work-space)
 (defface drgnx-work-flow-chip-ok '((t :inherit (drgnx-ui-caption drgnx-chip-ok) :height 0.9167)) "A gate that passed."
@@ -109,7 +118,8 @@ rows or its pass count; a waiver says its reason."
 
 (define-derived-mode drgnx-work-flow-mode special-mode "Work flow"
   "The Work space's Flow lens: a plan run's tasks by gate, its merge batch and its rule pack."
-  (setq-local truncate-lines t cursor-type nil drgnx-chrome-own-tab-line t
+  ;; no right fringe: nothing is drawn in it, and the selected row's colour reaches the card's edge
+  (setq-local truncate-lines t cursor-type nil drgnx-chrome-own-tab-line t right-fringe-width 0
               tab-line-format '("" drgnx-work-map--lens)))
 
 (defun drgnx-work-flow--twin (class)
@@ -166,6 +176,10 @@ rows or its pass count; a waiver says its reason."
   "The Flow's labels on a card." :group 'drgnx-work-space)
 (defface drgnx-work-flow-card-heading '((t :inherit (drgnx-work-flow-heading drgnx-work-flow-card)))
   "A card's heading." :group 'drgnx-work-space)
+(defface drgnx-work-flow-code '((t :inherit drgnx-code-small))
+  "Names in the code font on the Flow: a check's selector, a tip (the mockup's `.code')." :group 'drgnx-work-space)
+(defface drgnx-work-flow-card-code '((t :inherit (drgnx-work-flow-code drgnx-work-flow-card)))
+  "The code font on a card." :group 'drgnx-work-space)
 
 (defvar-local drgnx-work-flow--blocks nil "The Flow's blocks as last set (`glitnir-blocks'), with markers.")
 (defvar-local drgnx-work-flow--blocks-key nil
@@ -285,13 +299,17 @@ map without Sjá it says so instead."
 
 (defvar-local drgnx-work-flow--rules nil "In a Flow: its Rules tile.  In a tile: the Flow it belongs to.")
 
-(defun drgnx-work-flow--rules-params (view map job)
-  "The params that make VIEW the Rules tile beside map view MAP, of job JOB (nil: the hub's newest)."
-  (append (list :view view :map map :rules t) (and job (list :job job))))
+(defun drgnx-work-flow--rules-params (view map job &optional task)
+  "The params that make VIEW the Rules tile beside map view MAP, of job JOB (nil: the hub's newest); TASK, the Flow's
+selected task, is the one its Evidence tab names."
+  (append (list :view view :map map :rules t) (and job (list :job job)) (and task (list :detail task))))
+
+(defvar drgnx-area-own-title)
 
 (define-derived-mode drgnx-work-flow-rules-mode special-mode "Work rules"
-  "The Flow's Rules tile: the hub's rows of the run's rule pack, each rule's kind and how the hub holds it."
-  (setq-local truncate-lines t cursor-type nil))
+  "The Flow's Rules tile: the hub's rows of the run's rule pack, each rule's kind and how the hub holds it.  Its
+first row is its title and tabs, so the panel draws no tab row over it."
+  (setq-local truncate-lines t cursor-type nil drgnx-area-own-title t))
 
 (defun drgnx-work-flow--rules-twin (class)
   "The tile's buffer in display CLASS (`drgnx-view-patch-twin-function')."
@@ -311,7 +329,6 @@ path."
       (unless (buffer-live-p drgnx-work-flow--rules)
         (let ((view (concat (drgnx-view-patch-view drgnx-view-patch) "/rules"))
               (class (drgnx-view-patch-class drgnx-view-patch))
-              (map-view (drgnx-view-patch-view (buffer-local-value 'drgnx-view-patch drgnx-work-flow--map)))
               (buffer (get-buffer-create (format "*drgnx work rules: %s*"
                                                  (string-trim (buffer-name flow) "\\*drgnx work flow: " "\\*")))))
           (with-current-buffer buffer
@@ -322,11 +339,22 @@ path."
             (drgnx-view-env-register view buffer)
             (setq drgnx-work-flow--rules flow))
           (setq drgnx-work-flow--rules buffer)
-          (drgnx-work-client--call "work/flow/subscribe"
-                                   (drgnx-work-flow--rules-params view map-view drgnx-work-flow--job) #'ignore)))
+          (drgnx-work-flow--ask-rules flow)))
       drgnx-work-flow--rules)))
 
+(defun drgnx-work-flow--ask-rules (flow)
+  "Ask the hub for FLOW's Rules tile, its Evidence tab naming FLOW's selected task (nothing without a tile)."
+  (with-current-buffer flow
+    (when (and (buffer-live-p drgnx-work-flow--rules) (buffer-live-p drgnx-work-flow--map))
+      (drgnx-work-client--call "work/flow/subscribe"
+                               (drgnx-work-flow--rules-params
+                                (drgnx-view-patch-view (buffer-local-value 'drgnx-view-patch drgnx-work-flow--rules))
+                                (drgnx-view-patch-view (buffer-local-value 'drgnx-view-patch drgnx-work-flow--map))
+                                drgnx-work-flow--job drgnx-work-flow--selected)
+                               #'ignore))))
+
 (declare-function drgnx-pane-show "drgnx-panes")
+(declare-function drgnx-wb-area-put-buffer "drgnx-area")
 (defvar drgnx-work-flow--detail)
 
 (defun drgnx-work-flow-rules ()
@@ -336,7 +364,8 @@ path."
          (tile (and (buffer-live-p flow) (drgnx-work-flow-rules-buffer flow)))
          (win (selected-window)))
     (unless tile (user-error "Work: the Rules tile needs the Flow on the hub's rows"))
-    (drgnx-pane-show 'work-rules)
+    ;; this Flow's tile, not what the panel shows already (layout Work may have opened the pane's placeholder)
+    (drgnx-pane-show 'work-rules :buffer tile)
     (when (window-live-p win) (select-window win))))
 
 ;;;; The detail tile: the selected task's why, what clears it, its evidence and its actions
@@ -352,8 +381,9 @@ path."
   "Keys of the detail tile: the Flow's, so its actions answer from either.")
 
 (define-derived-mode drgnx-work-flow-detail-mode special-mode "Work flow detail"
-  "The Flow's detail tile: the hub's rows for the Flow's selected task, its actions on the Flow's keys."
-  (setq-local truncate-lines t cursor-type nil))
+  "The Flow's detail tile: the hub's rows for the Flow's selected task, its actions on the Flow's keys.  Its first row
+is its title, so the dock draws no tab row over it."
+  (setq-local truncate-lines t cursor-type nil drgnx-area-own-title t))
 
 (defun drgnx-work-flow--detail-twin (class)
   "The tile's buffer in display CLASS (`drgnx-view-patch-twin-function')."
@@ -405,12 +435,14 @@ task."
       (when (derived-mode-p 'drgnx-work-flow-mode)
         (setq drgnx-work-flow--selected id)
         (drgnx-work-flow--blocks)
-        (drgnx-work-flow--ask-detail buffer)))))
+        (drgnx-work-flow--ask-detail buffer)
+        (drgnx-work-flow--ask-rules buffer)))))
 
 (defun drgnx-work-flow--swap-window (from to)
   "The window of the selected frame that shows FROM shows TO instead (none: nothing changes)."
   (when-let* (((buffer-live-p to)) (w (and (buffer-live-p from) (get-buffer-window from))))
-    (set-window-buffer w to)))
+    ;; an area's window takes it as the area does (its tab row follows the buffer)
+    (if (window-parameter w 'drgnx-role) (drgnx-wb-area-put-buffer w to) (set-window-buffer w to))))
 
 (defun drgnx-work-flow-detail-show (flow)
   "FLOW's tile where its map's side panel shows: the right dock follows the lens."

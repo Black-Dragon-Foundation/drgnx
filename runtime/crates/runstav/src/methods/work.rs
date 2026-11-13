@@ -347,7 +347,8 @@ pub struct BoardSubscribe {
 /// `work/flow/subscribe`: view `view` shows the Flow lens of job `job` (else the newest running job), with the agents
 /// of map view `map` on its tasks.  With `detail` (a task id of that job), the view is the task's detail tile: why
 /// the gates hold it, what clears it, its evidence and its actions; with `rules`, the Rules tile (the run's rule pack:
-/// each rule, its kind, how the hub holds it). A tile is rows with no model.
+/// each rule, its kind, how the hub holds it), and `detail` with it names the selected task its Evidence tab shows. A
+/// tile is rows with no model.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FlowSubscribe {
@@ -523,12 +524,6 @@ fn check_flow_subscribe(p: &FlowSubscribe) -> Result<(), Error> {
         .is_some_and(|t| t.is_empty() || t.len() > NAME_MAX)
     {
         return Err(invalid("detail", "a task id"));
-    }
-    if p.rules && p.detail.is_some() {
-        return Err(invalid(
-            "rules",
-            "one tile: the Rules tile or a task's detail",
-        ));
     }
     Ok(())
 }
@@ -761,5 +756,18 @@ mod tests {
         ] {
             assert!(report(bad.clone()).is_err(), "{bad}");
         }
+    }
+
+    /// The Rules tile takes the selected task with it (its Evidence tab's); a task id is still checked.
+    #[test]
+    fn the_rules_tile_takes_the_selected_task() {
+        let flow = |v: serde_json::Value| {
+            let (p, _) = crate::registry::decode_params::<FlowSubscribe>(&v)?;
+            check_flow_subscribe(&p)
+        };
+        assert!(
+            flow(json!({"view": "v/rules", "map": "v", "rules": true, "detail": "J#5"})).is_ok()
+        );
+        assert!(flow(json!({"view": "v/rules", "map": "v", "rules": true, "detail": ""})).is_err());
     }
 }

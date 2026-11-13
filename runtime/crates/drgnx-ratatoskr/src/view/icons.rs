@@ -11,7 +11,7 @@ const FILES: &str = include_str!("../../../../../etc/icons/files.eld");
 
 /// The icons a row can show, by name: the Explorer's, the Work space's Flow (its columns and chips), the Extensions
 /// list's kinds.
-const SVGS: [(&str, &str); 26] = [
+const SVGS: [(&str, &str); 27] = [
     (
         "package",
         include_str!("../../../../../etc/icons/package.svg"),
@@ -51,6 +51,10 @@ const SVGS: [(&str, &str); 26] = [
         include_str!("../../../../../etc/icons/git-merge.svg"),
     ),
     ("eye", include_str!("../../../../../etc/icons/eye.svg")),
+    (
+        "panel-right",
+        include_str!("../../../../../etc/icons/panel-right.svg"),
+    ),
     ("lock", include_str!("../../../../../etc/icons/lock.svg")),
     ("check", include_str!("../../../../../etc/icons/check.svg")),
     (

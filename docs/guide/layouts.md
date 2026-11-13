@@ -1,7 +1,7 @@
 # Layouts
 
 A layout arranges the window you work in: which areas show (the sidebar, the bottom panel, the right dock) and how
-the editor area is shaped (module `tools/layouts`). drgnx has four, and you can save your own.
+the editor area is shaped (module `tools/layouts`). drgnx has five, and you can save your own.
 
 | Layout | Sidebar | Editor area | Right dock | Bottom panel |
 |---|---|---|---|---|
@@ -9,6 +9,7 @@ the editor area is shaped (module `tools/layouts`). drgnx has four, and you can 
 | **Editor** | Explorer | your editor groups | hidden | as it was |
 | **Zen** | hidden | one window, its text centred at 100 columns | hidden | hidden |
 | **Browser** | hidden | the editor and a web page beside it | hidden | hidden |
+| **Work** | hidden | the Work space's lens (map, Board, Timeline or Flow) alone | its detail tile | its Rules tile |
 
 **Agent** is the main workday, as in Zed: the file tree on the left, one file and one agent chat in the middle, and
 the list of agents narrow on the right, with each agent's state and how long ago it last acted (the **Last**
@@ -23,11 +24,16 @@ arrangement you had. Zen Mode (module `ui/look`) still works on its own.
 **Browser:** the editor with a web page beside it ([browser.md](browser.md)), every other area hidden. In an Emacs
 without WebKit the right half says so and pages open in your system browser.
 
+**Work:** the Work space ([work-space.md](work-space.md)) as its own card filling the window, the lens bar on top,
+the detail tile on the right and the Rules tile below. You don't pick it: showing a Work lens (opening the Work
+space, or the Flow) enters it, and once no Work lens is shown any more you are back where you came from, as when
+leaving Zen. Picked by hand (Next Layout), it opens the Work space.
+
 ## Switching
 
 | Command | VS Code | Emacs | Vim |
 |---|---|---|---|
-| View: Next Layout — Agent, Editor, Zen, Browser, then yours, and around | `C-k C-l` | the palette | `SPC l n` |
+| View: Next Layout — Agent, Editor, Zen, Browser, Work, then yours, and around | `C-k C-l` | the palette | `SPC l n` |
 | View: Layout… — pick one by name | the palette | the palette | `SPC l l` |
 | View: Layout Agent / Editor / Zen / Browser | the palette | the palette | the palette |
 | View: Save Layout As… | the palette | the palette | the palette |

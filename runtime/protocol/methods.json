@@ -40473,7 +40473,7 @@
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "description": "`work/flow/subscribe`: view `view` shows the Flow lens of job `job` (else the newest running job), with the agents\nof map view `map` on its tasks.  With `detail` (a task id of that job), the view is the task's detail tile: why\nthe gates hold it, what clears it, its evidence and its actions; with `rules`, the Rules tile (the run's rule pack:\neach rule, its kind, how the hub holds it). A tile is rows with no model.",
+        "description": "`work/flow/subscribe`: view `view` shows the Flow lens of job `job` (else the newest running job), with the agents\nof map view `map` on its tasks.  With `detail` (a task id of that job), the view is the task's detail tile: why\nthe gates hold it, what clears it, its evidence and its actions; with `rules`, the Rules tile (the run's rule pack:\neach rule, its kind, how the hub holds it), and `detail` with it names the selected task its Evidence tab shows. A\ntile is rows with no model.",
         "properties": {
           "detail": {
             "type": [

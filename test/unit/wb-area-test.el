@@ -335,6 +335,49 @@ of the panel's tab row, before its close, only while that tab is shown; `drgnx-w
            (should-not (string-search "chip two" (window-parameter (drgnx-wb-area-window 'panel) 'header-line-format))))
        (drgnx-wb-undefine-tab 'panel 'area-test-acts)))))
 
+;; the Work space's tiles draw their own title row (hub-orchestration.html's `.tile-h'): the area's row would be a second
+(ert-deftest drgnx-area/a-buffer-with-its-own-title-has-no-tab-row ()
+  "A buffer whose `drgnx-area-own-title' is set has no tab row over it, in the panel or the right dock even with other
+tabs holding content; another buffer in the same area gets the row again."
+  (drgnx-area-test--with
+   (drgnx-wb-define-tab 'right 'area-test-a :title "A")
+   (drgnx-wb-define-tab 'right 'area-test-b :title "B")
+   (unwind-protect
+       (let ((a (get-buffer-create "*notes*")) (b (get-buffer-create " area-test b")))
+         (unwind-protect
+             (progn
+               (with-current-buffer b (setq-local drgnx-area-own-title t))
+               (drgnx-wb-area-show 'right 'area-test-a a)
+               (should (eq 'none (window-parameter (drgnx-wb-area-show 'right 'area-test-b b) 'header-line-format)))
+               (should (stringp (window-parameter (drgnx-wb-area-show 'right 'area-test-a) 'header-line-format)))
+               (should (eq 'none (window-parameter (drgnx-wb-area-show 'panel 'output b) 'header-line-format))))
+           (kill-buffer b)))
+     (drgnx-wb-undefine-tab 'right 'area-test-a)
+     (drgnx-wb-undefine-tab 'right 'area-test-b))))
+
+(ert-deftest drgnx-area/a-buffer-with-its-own-title-put-in-an-area-window-drops-the-row ()
+  "A buffer with its own title put straight into an area's window (`drgnx-wb-area-put-buffer', as the Flow swaps its
+tile in for the map's side panel) drops the tab row too; putting another buffer back brings it back."
+  (drgnx-area-test--with
+   (drgnx-wb-define-tab 'right 'area-test-a :title "A")
+   (drgnx-wb-define-tab 'right 'area-test-b :title "B")
+   (unwind-protect
+       (let ((a (get-buffer-create "*notes*")) (b (get-buffer-create " area-test b")))
+         (unwind-protect
+             (let ((w (drgnx-wb-area-show 'right 'area-test-a a)))
+               (with-current-buffer b (setq-local drgnx-area-own-title t))
+               (drgnx-wb-area-show 'right 'area-test-b (get-buffer-create " area-test c"))
+               (drgnx-wb-area-show 'right 'area-test-a a)
+               (should (stringp (window-parameter w 'header-line-format)))
+               (drgnx-wb-area-put-buffer w b)
+               (should (eq 'none (window-parameter w 'header-line-format)))
+               (drgnx-wb-area-put-buffer w a)
+               (should (stringp (window-parameter w 'header-line-format))))
+           (kill-buffer b)
+           (kill-buffer " area-test c")))
+     (drgnx-wb-undefine-tab 'right 'area-test-a)
+     (drgnx-wb-undefine-tab 'right 'area-test-b))))
+
 (ert-deftest drgnx-area/the-right-area-has-no-tab-row-for-one-tab ()
   "agent-panel.html: the right area's tab row shows only while two of its tabs have content, so a lone pane's own
 header is the area's top row; showing a tab with nothing (its placeholder) keeps the row to switch back.  The bottom

@@ -18,6 +18,11 @@ it is drawn again when you show it.
 
 Outside a project (a scratch buffer, a folder that is not in git) the map is empty and says so.
 
+With layouts on (module `tools/layouts`), showing the map or another lens (Board, Timeline, Flow) puts the window in
+layout **Work** ([layouts.md](layouts.md)): the lens alone as a card filling the window, its detail tile on the right
+and its Rules tile below, the Explorer hidden. Once no lens is shown any more, you are back in the layout (or the
+exact arrangement) you came from. Another layout you pick while a lens is shown stays.
+
 The map and every Work view (its side panel, the Board, the Flow, a trail and the Timeline) need drgnx's own Emacs
 (Nidhogg, with its view model, Sjá): the hub draws them and Sjá answers their keys. In another Emacs each says so
 instead of drawing.

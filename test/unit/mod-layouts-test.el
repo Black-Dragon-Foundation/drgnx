@@ -11,6 +11,9 @@
 (load (expand-file-name "modules/tools/drgnx-agent-panel" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-layouts" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+(drgnx-test-modules-preload '(tools/work-space))     ; layout Work follows a shown Work lens
+(declare-function drgnx-work-space--follow-layout "drgnx-work-space" (frame))
+(declare-function drgnx-work-flow-mode "drgnx-work-flow")
 
 (defconst drgnx-layouts-test--buffers
   '("*drgnx-layouts-explorer*" "*drgnx-layouts-code*" "*drgnx-layouts-a*" "*drgnx-layouts-b*" "*drgnx-layouts-proc*"
@@ -248,6 +251,54 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
       (should (eq (drgnx-wb-area-tab 'panel) 'output))
       (should-not (drgnx-wb-sidebar-showing-p))
       (should-not (memq #'drgnx-layouts--zen-resize window-size-change-functions)))))
+
+(ert-deftest drgnx-layouts/work-shows-its-tiles-and-back-gives-everything-back ()
+  ;; Work (entered with no layout picked) hides the sidebar and shows its two tiles; going back puts the panel's own
+  ;; tab, the sidebar and the right dock back as they were, as leaving Zen does
+  (drgnx-layouts-test--with
+    (drgnx-wb-define-tab 'right 'work-detail :title "Detail" :placeholder (lambda () (get-buffer-create "*drgnx-layouts-a*")))
+    (drgnx-wb-define-tab 'panel 'work-rules :title "Rules" :placeholder (lambda () (get-buffer-create "*drgnx-layouts-b*")))
+    (drgnx-wb-show-sidebar)
+    (drgnx-wb-area-show 'panel 'output (drgnx-layouts-test--output))
+    (should-not (drgnx-layouts-current))
+    (drgnx-layouts-apply 'work)
+    (should (eq (drgnx-layouts-current) 'work))
+    (should-not (drgnx-wb-sidebar-showing-p))
+    (should (eq (drgnx-wb-area-tab 'right) 'work-detail))
+    (should (eq (drgnx-wb-area-tab 'panel) 'work-rules))
+    (drgnx-layouts-back)
+    (should-not (drgnx-layouts-current))
+    (should (drgnx-wb-sidebar-showing-p))
+    (should (eq (drgnx-wb-area-tab 'panel) 'output))
+    (should-not (drgnx-wb-area-window 'right))))
+
+(ert-deftest drgnx-layouts/a-shown-work-lens-enters-work-and-its-going-leaves-it ()
+  ;; tools/work-space: a Work lens shown in the editor enters Work (that lens still in front); once no lens is shown
+  ;; the frame goes back to where it came from; a layout picked while a lens is shown stays
+  (drgnx-layouts-test--with
+    (drgnx-wb-define-tab 'right 'work-detail :title "Detail" :placeholder (lambda () (get-buffer-create "*drgnx-layouts-a*")))
+    (drgnx-wb-define-tab 'panel 'work-rules :title "Rules" :placeholder (lambda () (get-buffer-create "*drgnx-layouts-b*")))
+    (drgnx-wb-show-sidebar)
+    (let ((lens (get-buffer-create "*drgnx-layouts-proc*")) (frame (selected-frame)))
+      (with-current-buffer lens (drgnx-work-flow-mode))
+      (unwind-protect
+          (cl-letf (((symbol-function 'drgnx-module-running-p) (lambda (m) (eq m 'tools/layouts))))
+            (drgnx-work-space--follow-layout frame)
+            (should-not (drgnx-layouts-current))
+            (set-window-buffer (drgnx-wb-editor-window) lens)
+            (drgnx-work-space--follow-layout frame)
+            (should (eq (drgnx-layouts-current) 'work))
+            (should-not (drgnx-wb-sidebar-showing-p))
+            (should (eq (window-buffer (drgnx-wb-editor-window)) lens))
+            (drgnx-layouts-apply 'editor)
+            (drgnx-work-space--follow-layout frame)
+            (should (eq (drgnx-layouts-current) 'editor))
+            (drgnx-layouts-apply 'work)
+            (set-window-buffer (drgnx-wb-editor-window) (drgnx-layouts-test--code))
+            (drgnx-work-space--follow-layout frame)
+            (should (eq (drgnx-layouts-current) 'editor))
+            (should (drgnx-wb-sidebar-showing-p)))
+        (set-frame-parameter frame 'drgnx-work-space-shown nil)))))
 
 (ert-deftest drgnx-layouts/agent-zen-editor-builds-editor-from-before-zen ()
   ;; Editor's first visit, just out of Zen: built from the arrangement Zen was entered from, not Zen's one window.

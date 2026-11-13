@@ -59,6 +59,11 @@ pub async fn once(front: &Arc<Front>) {
         }
     };
     for id in ids {
+        // a test hub's look scene: its run runs, and nothing moves it
+        #[cfg(feature = "test-hooks")]
+        if crate::orch::scene::holds(&id) {
+            continue;
+        }
         if let Err(e) = step(front, &id).await {
             tracing::warn!("plan run {id}: {}", e.message);
         }

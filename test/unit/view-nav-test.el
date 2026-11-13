@@ -152,6 +152,28 @@ an overlay of the view's buffer when its timer applies it; one applied after a c
       (should (equal '(drgnx-view-selected) (drgnx-view-nav-test--face-at (+ (point-min) 4))))
       (should (equal (nth 1 before) (buffer-chars-modified-tick))))))
 
+(defface drgnx-view-nav-test-pill '((t :background "gray30" :box (:line-width 1 :color "gray50")))
+  "A boxed face, as a row's chip has.")
+
+(defface drgnx-view-nav-test-text '((t :inherit bold))
+  "A face with no box of its own, as a row's text has.")
+
+;; the Flow's selected task row lost its chips: the selection's background, an overlay over the node's spans, hid each
+;; chip's own; a boxed run keeps its face and the selection lies around it
+(ert-deftest drgnx-view-nav/a-class-leaves-a-boxed-run-its-own-face ()
+  "Pattern D: b's span \"BB\", its first letter in a face with no box, its second in a boxed one: selecting b puts the
+selected face on the first letter only."
+  (drgnx-view-nav-test--with
+    (drgnx-view-apply-patch
+     (list :view view :class "c" :hub 7 :base 1 :version 2 :env_epoch 1 :model 1
+           :ops (list (list :replace (list (append (drgnx-view-nav-test--row "AA  BB")
+                                                   (list :runs (list (list 4 5 "drgnx-view-nav-test-text")
+                                                                     (list 5 6 "drgnx-view-nav-test-pill")))))))))
+    (drgnx-view-draw-now drgnx-view)
+    (should (equal "b" (drgnx-view-nav 'select "b")))
+    (should (equal '(drgnx-view-selected) (drgnx-view-nav-test--face-at (+ (point-min) 4))))
+    (should-not (drgnx-view-nav-test--face-at (+ (point-min) 5)))))
+
 (ert-deftest drgnx-view-nav/replaced-row-keeps-its-class ()
   "Pattern A: the row holding the selected card is replaced (rows naming the same model); in every order of the
 patch, the draw and the key, once all have run, a's span has the selected face and b's the dim one."
@@ -284,5 +306,22 @@ that comes applies at once; one that does not reach entry 8 asks again (from 6),
       (should (equal "m8" (drgnx-view-nav-selection)))
       (should-not (drgnx-view-nav-paging-p))
       (should (equal '(6 2) (funcall asks))))))
+
+;; the look's state ladder (the drgnx-look skill, rule 1): hover < selected.  The hub-fed views' selected node took
+;; `highlight', which the themes draw in the hover colour, so a selected row looked hovered (the Flow's T5 against
+;; hub-orchestration.html's `.sel', 2026-11-13)
+(ert-deftest drgnx-view-nav/the-selected-node-is-the-quiet-selection-not-the-hover ()
+  "Under the dark theme the selected node's background is the quiet selection's (`--sel-quiet'), not the hover's
+(`highlight'), and it still reaches the row's end."
+  (let ((was custom-enabled-themes))
+    (unwind-protect
+        (progn
+          (mapc #'disable-theme custom-enabled-themes)
+          (load-theme 'drgnx-dark t)
+          (should (equal (face-background 'drgnx-view-selected nil t) (face-background 'drgnx-selected-quiet nil t)))
+          (should-not (equal (face-background 'drgnx-view-selected nil t) (face-background 'highlight nil t)))
+          (should (face-attribute 'drgnx-view-selected :extend nil t)))
+      (mapc #'disable-theme custom-enabled-themes)
+      (dolist (th (reverse was)) (load-theme th t)))))
 
 ;;; view-nav-test.el ends here
