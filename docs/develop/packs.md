@@ -69,3 +69,26 @@ Reads `pack.eld`, every file it names, `queries/highlights.scm` (required for a 
 leaving the folder. `--builtin` runs only the schema rules; `--other` adds the packs whose claims count. Exit 0 when it
 passes, 1 with a line per problem, 2 for bad arguments. Fetching, building and loading grammars, and compiling the
 queries against them, belong to the pack job.
+
+## The pack job's grammar half
+
+`skald::job` builds what a manifest pins (the sync that drives it, the lock and `active.eld` come with the lock work):
+
+1. **Fetch** each grammar at its `:commit`: `git fetch --depth 1 REPO COMMIT`, else a full fetch, then a detached
+   checkout and a check that `HEAD` is the commit. Git runs with no user or system config, no prompts and no hooks.
+2. **Tree hash.** `:tree-sha256` is the sha256 over the sorted lines `MODE PATH sha256(blob)` (one per file, `MODE`
+   `100644` or `100755`, a top-level `.git` left out) of the tree. A symlink or any non-regular file is refused. It
+   depends on neither git's SHA-1 nor `git archive`.
+3. **Build** `parser.c` (plus `scanner.c` or `scanner.cc`) from the grammar's `:src` folder into
+   `libtree-sitter-LANG.so` (`.dylib` on macOS) with the `cc` crate, with target and host set explicitly because
+   there is no Cargo build-script environment at runtime.
+4. **Load check.** The library is opened, `tree_sitter_LANG` is found, and its ABI must be at least the floor
+   (`Options::min_abi`, the design's one ABI is 15). The library's sha256 is recorded as `:lib-sha256`, a local
+   integrity check (`verify_lib`) the hub and the editor's loader repeat; it is not reproducible across compilers.
+5. **Queries.** Every query file of the pack is compiled against its grammar, so a node the grammar lacks fails the
+   job, not a buffer.
+6. **Stage.** Work happens in a folder of the staging folder that is always removed. Only when every unit passed are
+   the libraries moved to `grammars/LANG/COMMIT/`, so any failure leaves staging as it was. Folders are
+   content-addressed and never rewritten.
+
+The test fixture is the vendored tree-sitter-json grammar (MIT) in a throwaway git repository.

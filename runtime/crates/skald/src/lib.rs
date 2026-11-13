@@ -10,11 +10,13 @@
 //! - `reserved`: the names only built-in packs may use.
 //! - `check`: the schema checks, the command rules and the claim rules.
 //! - `highlights`: the `highlights.scm` predicate subset.
+//! - `job`: the pack job's grammar half: fetch, hash, build, load check, query check, stage (Task 2a).
 //! - `dir`: a pack folder, checked (`ratatoskr packs check`).
 
 pub mod check;
 pub mod dir;
 pub mod highlights;
+pub mod job;
 pub mod manifest;
 pub mod reserved;
 

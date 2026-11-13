@@ -6003,12 +6003,17 @@ dependencies = [
 name = "skald"
 version = "0.1.0"
 dependencies = [
+ "cc",
  "huginn",
+ "libloading",
  "regex",
  "serde",
  "serde_json",
  "serde_path_to_error",
+ "sha2 0.11.1",
  "tempfile",
+ "tree-sitter",
+ "tree-sitter-language",
 ]
 
 [[package]]
