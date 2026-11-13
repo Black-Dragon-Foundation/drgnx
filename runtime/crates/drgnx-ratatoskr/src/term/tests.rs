@@ -325,6 +325,84 @@ async fn clean_exit_closes_at_once() {
 }
 
 #[tokio::test]
+async fn a_clipboard_read_reaches_the_owner_and_its_answer_the_worker() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    let rec = record(dir, "aa", "s1");
+    let l = UnixListener::bind(&rec.socket).unwrap();
+    let (heard_tx, mut heard) = mpsc::unbounded_channel();
+    let worker = tokio::spawn(async move {
+        let (s, _) = l.accept().await.unwrap();
+        let (r, mut w) = s.into_split();
+        for out in [
+            Out::Hello {
+                proto: PROTO,
+                pid: 1,
+                shell_pid: 4242,
+            },
+            Out::ClipboardRead {
+                req: 5,
+                primary: false,
+            },
+        ] {
+            w.write_all((serde_json::to_string(&out).unwrap() + "\n").as_bytes())
+                .await
+                .unwrap();
+            crate::clock::sleep(Duration::from_millis(100)).await;
+        }
+        let mut r = BufReader::new(r);
+        let mut line = String::new();
+        while r.read_line(&mut line).await.unwrap_or(0) > 0 {
+            if let Ok(m @ In::ClipboardReply { .. }) = serde_json::from_str::<In>(&line) {
+                let _ = heard_tx.send(m);
+            }
+            line.clear();
+        }
+    });
+    let (t, ev) = open(dir).await;
+    t.hello(3, "s1");
+    for _ in 0..100 {
+        if ev
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, e, _)| e == "term/clipboard-read")
+        {
+            break;
+        }
+        crate::clock::sleep(Duration::from_millis(20)).await;
+    }
+    let got = ev.0.lock().unwrap().clone();
+    assert!(
+        got.contains(&(
+            3,
+            "term/clipboard-read".into(),
+            json!({"id": "aa", "req": 5, "primary": false})
+        )),
+        "{got:?}"
+    );
+    assert!(t.send(
+        "aa",
+        &In::ClipboardReply {
+            req: 5,
+            text: Some("hi".into())
+        }
+    ));
+    let m = crate::clock::timeout(Duration::from_secs(5), heard.recv())
+        .await
+        .expect("the worker never heard the answer");
+    assert_eq!(
+        m,
+        Some(In::ClipboardReply {
+            req: 5,
+            text: Some("hi".into())
+        })
+    );
+    worker.abort();
+}
+
+#[tokio::test]
 async fn exit_reaches_the_owner_and_the_record_goes() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();

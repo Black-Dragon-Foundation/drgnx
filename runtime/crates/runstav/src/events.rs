@@ -428,6 +428,11 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             "a terminal's program wrote the clipboard (OSC 52; only when clipboard-write allows), to its editor session's connection"
         ),
         event!(
+            "term/clipboard-read",
+            crate::methods::term::TermClipboardRead,
+            "a terminal's program asked to read the clipboard (OSC 52 ?, with clipboard-read set to ask); answered with term/clipboard-reply, to its editor session's connection"
+        ),
+        event!(
             "term/prompt",
             crate::methods::term::TermPrompt,
             "a terminal's shell sent an OSC 133 mark (prompt, input, output, command end with its status), to its editor session's connection"
@@ -568,6 +573,7 @@ mod tests {
                     "term/notify",
                     "term/progress",
                     "term/clipboard-write",
+                    "term/clipboard-read",
                     "term/prompt",
                     // debugging
                     "debug-breakpoints",
@@ -590,7 +596,7 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(events().len(), 60);
+        assert_eq!(events().len(), 61);
         // names only: a value-shaped name is no key name, and nothing but `names` is taken
         let need = event("runners/need-keys").unwrap();
         assert_eq!(

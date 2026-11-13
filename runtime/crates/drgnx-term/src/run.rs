@@ -99,12 +99,14 @@ pub fn run(
     if let Some(c) = ctl.as_mut() {
         write_out(c, vec![hello()])?;
     }
+    worker.set_ask_stream(ctl.as_ref().and_then(|c| c.try_clone().ok()));
     if let Some(l) = &listener {
         l.set_nonblocking(true)?;
     }
     let mut pending: Vec<u8> = Vec::new();
     let mut buf = vec![0u8; 64 * 1024];
     let mut pty_open = true;
+    let mut stash_ready = false;
     loop {
         // when the next frame or chunk is due
         let wait = match worker.step(now()) {
@@ -118,6 +120,7 @@ pub fn run(
             tracing::info!("hub connection lost");
             ctl = None;
             inbuf.clear();
+            worker.set_ask_stream(None);
             worker.detach(now());
         }
         if !pty_open {
@@ -176,6 +179,7 @@ pub fn run(
             tracing::info!("hub connected");
             ctl = Some(c);
             inbuf.clear();
+            worker.set_ask_stream(ctl.as_ref().and_then(|c| c.try_clone().ok()));
             worker.detach(now());
             write_out(ctl.as_mut().expect("just set"), vec![hello()])?;
         }
@@ -189,6 +193,12 @@ pub fn run(
                     Ok(n) => {
                         tracing::trace!(bytes = n, "program output");
                         worker.output(&buf[..n], now());
+                        // lines from the hub that arrived while a clipboard read waited
+                        let stash = worker.take_ask_stash();
+                        if !stash.is_empty() {
+                            inbuf.extend_from_slice(&stash);
+                            stash_ready = true;
+                        }
                     }
                     Err(rustix::io::Errno::AGAIN) => break,
                     Err(rustix::io::Errno::INTR) => continue,
@@ -204,7 +214,7 @@ pub fn run(
                 worker.flush(now());
             }
         }
-        if ctl_ready.intersects(PollFlags::IN | PollFlags::HUP | PollFlags::ERR)
+        if (ctl_ready.intersects(PollFlags::IN | PollFlags::HUP | PollFlags::ERR) || stash_ready)
             && let Some(c) = ctl.as_ref()
         {
             // the socket stays blocking for writes; reads never wait
@@ -224,6 +234,7 @@ pub fn run(
                     }
                 }
             }
+            stash_ready = false;
             let mut used = 0;
             while let Some(nl) = inbuf[used..].iter().position(|b| *b == b'\n') {
                 match serde_json::from_slice::<In>(&inbuf[used..used + nl]) {
@@ -262,6 +273,7 @@ pub fn run(
                 tracing::info!("hub connection closed");
                 ctl = None;
                 inbuf.clear();
+                worker.set_ask_stream(None);
                 worker.detach(now());
             }
         }
