@@ -536,10 +536,23 @@ parts are `view/debug/model.rs` (the lines, the model, the requests that fill it
 Editor: `modules/extra/drgnx-debug-view.el`, the section `run-and-debug` of the sidebar view `debug`
 (`drgnx-debug-view`, also the status bar's debug segment's click).
 
+- **Header (debugging.html `.ph`, `.cfg`):** the sidebar's island header names the view "Run and Debug" with Open
+  launch.json and ⋯ (`drgnx-wb-island-views`, put by extra/debug's setup). The section is `:own-header`, so the
+  buffer's header line shows: Start (the play icon, ringed, `drgnx-debug-view-start`) and the picker
+  (`drgnx-debug-view-picker`: the configuration's name cut to its room, `launch.json` quiet and the chevron at the
+  right edge). It is made when the configuration, the theme or the window's width changes (`--header-cache`).
 - **Sections:** VARIABLES (the selected session's scopes: a cheap scope open with the variables its stop fetched, an
   `expensive` one closed and fetched when opened), WATCH, CALL STACK (sessions only when two or more → threads →
   frames), BREAKPOINTS (each adapter type's exception filters as tick boxes, function breakpoints, each file's source
-  breakpoints: tick = enabled, dim = unverified, the adapter's message as a field). Each header opens and closes.
+  breakpoints, the adapter's message as a field). Each header opens and closes; its title is quiet
+  (`drgnx-debug-view-section`, the sidebar's section face).
+- **Rows (`rows.rs`, debugging.html `.dv`):** a variable is `name: value` with no type, the value cut with `…` to the
+  row's room. A breakpoint is its dot as the gutter draws it (the line's `mark`: ● plain, ⊜ condition or hit count,
+  ◆ log, ○ disabled, grey ● not bound yet), its file, its condition or "log message" (`drgnx-debug-view-condition`) and
+  its line at the right edge. A frame's `file line:col` and a thread's state chip stand at the right edge too
+  (`drgnx-debug-view-place`, `-chip`, `-chip-quiet` for RUNNING). The room is the env's `width_px`, measured with the
+  class's fonts (`Room`: the `ui` role for the row, `caption` for the right-edge text; a column a char on a
+  terminal); text with no room at the edge follows after a gap.
 - **Node ids are paths, stable across stops:** `v:SESSION:SCOPE/NAME/…`, chunks `…/[100..199]`, watches `w:EXPR`,
   threads `t:SESSION:THREAD`, frames `f:SESSION:THREAD:N` (their place in the stack), hidden runs `h:…:N`, more frames
   `m:SESSION:THREAD`, filters `x:TYPE:FILTER`, `fn:NAME`, `b:ID`. A `/` or `%` in a name is escaped; a name seen twice

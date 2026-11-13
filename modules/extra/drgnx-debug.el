@@ -374,8 +374,14 @@ console's tab shows without taking the focus."
                                                           :map 'drgnx-debug-console-mode-map :when in-console))))
                               ;; Run and Debug: the sidebar view the hub builds (drgnx-debug-view.el); its row keys in
                               ;; its own map
+                              ;; the island header names the view (debugging.html `.ph'); the section shows the
+                              ;; view's own header: Start and the configuration (`.cfg')
+                              (drgnx-module-alist-put 'drgnx-wb-island-views 'debug
+                                                      '(:title "Run and Debug"
+                                                               :buttons ((file-cog "Open launch.json" run-and-debug
+                                                                                   . debug-open-launch-json))))
                               (drgnx-wb-define-section 'run-and-debug :view 'debug :slot 0 :title " RUN AND DEBUG"
-                                                       :buffer #'drgnx-debug-view--buffer)
+                                                       :own-header t :buffer #'drgnx-debug-view--buffer)
                               (let ((in-view (lambda () (derived-mode-p 'drgnx-debug-view-mode))))
                                 (pcase-dolist (`(,id ,title ,fn ,doc) drgnx-debug-view-commands)
                                   (if (memq id drgnx-debug-view-global-commands)

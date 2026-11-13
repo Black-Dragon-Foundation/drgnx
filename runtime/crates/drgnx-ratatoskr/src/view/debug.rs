@@ -450,13 +450,14 @@ impl DebugViews {
         }
         for class in views.classes(conn, view) {
             let key = (conn, view.to_owned(), class);
-            let spliced = views.publish_spliced(f, &key, |env, _| {
+            let spliced = views.publish_spliced(f, &key, |env, fonts| {
                 let look = RowLook::of(env, indent, 2);
+                let room = rows::Room::of(env, fonts);
                 let mut images = BTreeMap::new();
                 let rows = spans
                     .iter()
                     .map(|(i, end, ls)| {
-                        let (rs, imgs) = rows::rows(ls, &look);
+                        let (rs, imgs) = rows::rows(ls, &look, &room);
                         images.extend(imgs);
                         (*i, end - i, rs)
                     })
@@ -464,8 +465,12 @@ impl DebugViews {
                 (rows, images.into_iter().collect())
             });
             if !spliced {
-                views.publish_built(f, &key, |env, _| {
-                    rows::rows(&lines, &RowLook::of(env, indent, 2))
+                views.publish_built(f, &key, |env, fonts| {
+                    rows::rows(
+                        &lines,
+                        &RowLook::of(env, indent, 2),
+                        &rows::Room::of(env, fonts),
+                    )
                 });
             }
         }
@@ -483,8 +488,12 @@ impl DebugViews {
         f.core
             .views
             .publish_model(f, key.0, &key.1, model::doc(&lines));
-        f.core.views.publish_built(f, key, |env, _| {
-            rows::rows(&lines, &RowLook::of(env, indent, 2))
+        f.core.views.publish_built(f, key, |env, fonts| {
+            rows::rows(
+                &lines,
+                &RowLook::of(env, indent, 2),
+                &rows::Room::of(env, fonts),
+            )
         });
         true
     }
@@ -528,8 +537,12 @@ fn publish(f: &Front, conn: u64, view: &str, lines: &Arc<Vec<Line>>, indent: u32
     views.publish_model(f, conn, view, model::doc(lines));
     for class in views.classes(conn, view) {
         let key = (conn, view.to_owned(), class);
-        views.publish_built(f, &key, |env, _| {
-            rows::rows(lines, &RowLook::of(env, indent, 2))
+        views.publish_built(f, &key, |env, fonts| {
+            rows::rows(
+                lines,
+                &RowLook::of(env, indent, 2),
+                &rows::Room::of(env, fonts),
+            )
         });
     }
 }

@@ -12,6 +12,7 @@
 ;;; Code:
 
 (require 'drgnx-view-nav)
+(require 'drgnx-icons)
 (require 'drgnx-debug-launch (expand-file-name "drgnx-debug-launch" (file-name-directory (macroexp-file-name))))
 
 (declare-function nidhogg-view-get "nidhogg-views" (h what &optional arg arg2))
@@ -25,8 +26,10 @@
 
 (defgroup drgnx-debug-view nil "The Run and Debug view." :group 'drgnx)
 
-(defface drgnx-debug-view-section '((t :inherit bold)) "A section's title." :group 'drgnx-debug-view)
-(defface drgnx-debug-view-scope '((t :inherit bold)) "A scope (Locals, Globals)." :group 'drgnx-debug-view)
+(defface drgnx-debug-view-section '((t :inherit drgnx-wb-section))
+  "A section's title: quiet, as the sidebar's section headers (debugging.html `.sec')." :group 'drgnx-debug-view)
+(defface drgnx-debug-view-scope '((t :inherit drgnx-text-muted)) "A scope (Locals, Globals; `.vk')."
+  :group 'drgnx-debug-view)
 (defface drgnx-debug-view-name '((t :inherit font-lock-variable-name-face)) "A variable's name." :group 'drgnx-debug-view)
 (defface drgnx-debug-view-value '((t :inherit default)) "A value." :group 'drgnx-debug-view)
 (defface drgnx-debug-view-string '((t :inherit font-lock-string-face)) "A string value." :group 'drgnx-debug-view)
@@ -36,13 +39,22 @@
   "A value that changed since the last stop." :group 'drgnx-debug-view)
 (defface drgnx-debug-view-error '((t :inherit drgnx-status-fail)) "A watch that failed." :group 'drgnx-debug-view)
 (defface drgnx-debug-view-link '((t :inherit link)) "Something to click: `(…)', Load more frames." :group 'drgnx-debug-view)
-(defface drgnx-debug-view-chip '((t :inherit drgnx-chip-warn)) "A thread's state." :group 'drgnx-debug-view)
+(defface drgnx-debug-view-chip '((t :inherit (drgnx-ui-caption drgnx-chip-warn))) "A thread's state (`.st2')."
+  :group 'drgnx-debug-view)
+(defface drgnx-debug-view-chip-quiet '((t :inherit (drgnx-ui-caption drgnx-chip-quiet))) "A running thread's state (`.st2.run')."
+  :group 'drgnx-debug-view)
+(defface drgnx-debug-view-place '((t :inherit (drgnx-ui-caption drgnx-text-subtle)))
+  "A frame's place, a breakpoint's line: at the row's right edge (debugging.html `.loc', `.bpl')." :group 'drgnx-debug-view)
+(defface drgnx-debug-view-condition '((t :inherit (drgnx-code-small drgnx-text-muted)))
+  "A breakpoint's condition or log message (`.cond')." :group 'drgnx-debug-view)
 (defface drgnx-debug-view-current '((t :inherit (drgnx-debug-stopped bold))) "The selected frame." :group 'drgnx-debug-view)
 (defface drgnx-debug-view-tick '((t :inherit drgnx-text-muted)) "A tick box." :group 'drgnx-debug-view)
 (defface drgnx-debug-view-breakpoint '((t :inherit drgnx-debug-breakpoint)) "A breakpoint's dot." :group 'drgnx-debug-view)
+(defface drgnx-debug-view-breakpoint-off '((t :inherit drgnx-text-disabled))
+  "A disabled breakpoint's ring, an unbound one's dot (the gutter's grey)." :group 'drgnx-debug-view)
 (defface drgnx-debug-view-guide '((t :inherit drgnx-text-muted)) "The indent and chevrons." :group 'drgnx-debug-view)
 (defface drgnx-debug-view-dim '((t :inherit drgnx-text-disabled))
-  "An old stop's row, an unverified breakpoint, a hidden frame." :group 'drgnx-debug-view)
+  "An old stop's row, a disabled breakpoint, a hidden frame." :group 'drgnx-debug-view)
 
 (defconst drgnx-debug-view-id "debug" "The hub's view id of Run and Debug.")
 
@@ -68,15 +80,48 @@
 
 (defvar-local drgnx-debug-view--config nil "The configuration Start runs: (ID . NAME), or nil (pick one).")
 
+(defface drgnx-debug-view-start '((t :inherit drgnx-status-ok :box (:line-width (-1 . -1))))
+  "The header's Start button: the play icon in the ok colour, ringed (debugging.html `.cfg .go')."
+  :group 'drgnx-debug-view)
+(defface drgnx-debug-view-picker '((t :inherit drgnx-selected-quiet))
+  "The header's configuration picker, a field to the right edge (`.cfg .pick': a fill, as a ring breaks at each face
+change); the name in the UI font." :group 'drgnx-debug-view)
+
+(defvar-local drgnx-debug-view--header-cache nil "(KEY . HEADER): the header as last made (redisplay only reads it).")
+
 (defun drgnx-debug-view--header ()
-  "Start (▶) and the picked configuration (its name, a chevron): a click on either runs it or picks another."
-  (concat " "
-          (propertize "▶ Start" 'face 'drgnx-status-ok 'mouse-face 'highlight 'help-echo "Start Debugging"
-                      'keymap (drgnx-debug-view--click #'drgnx-debug-view-start))
-          "  "
-          (propertize (concat (or (cdr drgnx-debug-view--config) "No Configuration") " ▾")
-                      'mouse-face 'highlight 'help-echo "Select a launch configuration"
-                      'keymap (drgnx-debug-view--click #'drgnx-debug-view-pick))))
+  "Start (the play icon, ringed) and the picker (the configuration's name, its source quiet and the chevron at the
+right edge): a click on either runs it or picks another (debugging.html `.cfg')."
+  (let* ((w (get-buffer-window (current-buffer)))
+         (key (list drgnx-debug-view--config (display-graphic-p) (bound-and-true-p drgnx-look-icons)
+                    custom-enabled-themes (and w (window-body-width w t)))))
+    (cdr (if (equal (car drgnx-debug-view--header-cache) key)
+             drgnx-debug-view--header-cache
+           (setq drgnx-debug-view--header-cache (cons key (drgnx-debug-view--make-header w)))))))
+
+(defun drgnx-debug-view--make-header (w)
+  "The header `drgnx-debug-view--header' shows in window W (nil: none yet)."
+  (let* ((gui (display-graphic-p))
+         (px (lambda (s) (if gui (string-pixel-width s (current-buffer)) (string-width s))))
+         (pad (lambda (n) (if gui (propertize " " 'display `(space :width (,(drgnx-px n)))) " ")))
+         (start (propertize (concat (funcall pad 5) (drgnx-look-icon 'play) (funcall pad 5))
+                            'face 'drgnx-debug-view-start 'mouse-face 'drgnx-hover 'help-echo "Start Debugging"
+                            'keymap (drgnx-debug-view--click #'drgnx-debug-view-start)))
+         (tail (concat (if (car drgnx-debug-view--config) (propertize "launch.json" 'face 'drgnx-debug-view-place) "")
+                       " " (drgnx-look-icon 'chevron-down nil 14) (funcall pad 8)))
+         (lead (concat " " start (funcall pad 6) (funcall pad 8)))
+         (total (if w (window-body-width w gui) (if gui 400 40)))
+         (at (max (funcall px lead) (- total (funcall px tail))))
+         ;; the name cut to the room the button and the source leave (`…')
+         (name (propertize (or (cdr drgnx-debug-view--config) "No Configuration") 'face 'drgnx-ui-text))
+         (room (- at (funcall px lead) (if gui (drgnx-px 8) 1)))
+         (name (if gui (truncate-string-pixelwise name (max 0 room) (current-buffer) "…")
+                 (truncate-string-to-width name (max 1 room) nil nil "…")))
+         (picker (concat (funcall pad 8) name (propertize " " 'display `(space :align-to ,(if gui (list at) at))) tail)))
+    (add-face-text-property 0 (length picker) 'drgnx-debug-view-picker t picker)   ; under the source's face
+    (concat " " start (funcall pad 6)
+            (propertize picker 'mouse-face 'drgnx-hover 'help-echo "Select a launch configuration"
+                        'keymap (drgnx-debug-view--click #'drgnx-debug-view-pick)))))
 
 (defun drgnx-debug-view--click (fn)
   "A header-line keymap whose click runs FN."

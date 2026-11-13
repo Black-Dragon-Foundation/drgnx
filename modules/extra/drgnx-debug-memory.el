@@ -61,7 +61,9 @@ the keys as keycaps against the right edge (debugging-extras.html)."
             (propertize (format "Memory: %s" drgnx-debug-memory--name) 'face 'bold) "  "
             (propertize (format "%s · %d bytes" address bytes) 'face 'drgnx-text-subtle)
             (when caps
-              (concat (propertize " " 'display `(space :align-to (- right (,(+ (string-pixel-width caps) 16)))))
+              ;; in columns, as measured in this buffer: a pixel `(- right (PX))' overran the edge in a header line
+              (concat (propertize " " 'display `(space :align-to (- right ,(1+ (ceiling (string-pixel-width caps (current-buffer))
+                                                                                        (frame-char-width))))))
                       caps)))))
 
 (defun drgnx-debug-memory--ring ()

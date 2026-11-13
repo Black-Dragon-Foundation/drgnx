@@ -777,6 +777,7 @@ colour bar and the file's chip."
 (defvar drgnx-debug--sessions)
 (declare-function drgnx-debug-view "drgnx-debug-view")
 (declare-function drgnx-debug-view--buffer "drgnx-debug-view")
+(defvar drgnx-debug-view--config)
 (declare-function drgnx-debug-view--toggle "drgnx-debug-view")
 (declare-function drgnx-debug-console-show "drgnx-debug-console")
 (declare-function drgnx-debug-open-disassembly "drgnx-debug-disassembly")
@@ -815,7 +816,12 @@ top frame an instruction, `shortfall' a hover value)."
     (vconcat
      (list
       (list :expect "initialize" :ok (append (list :supportsConfigurationDoneRequest t :supportsRestartRequest t
-                                                   :supportsCompletionsRequest t)
+                                                   :supportsCompletionsRequest t
+                                                   ;; Breakpoints' first two rows (debugging.html)
+                                                   :exceptionBreakpointFilters
+                                                   (vector (list :filter "raised" :label "Raised Exceptions")
+                                                           (list :filter "uncaught" :label "Uncaught Exceptions"
+                                                                 :default t)))
                                              (and extras (list :supportsBreakpointLocationsRequest t
                                                                :supportsReadMemoryRequest t
                                                                :supportsDisassembleRequest t
@@ -826,6 +832,7 @@ top frame an instruction, `shortfall' a hover value)."
       (list :expect "setBreakpoints"
             :ok (list :breakpoints (vector (list :id 1 :verified t :line 18) (list :id 2 :verified t :line 22)
                                            (list :id 3 :verified t :line 24) (list :id 4 :verified t :line 25))))
+      (list :expect "setExceptionBreakpoints")
       (list :expect "configurationDone")
       (funcall out "console" "Launching app.py with debugpy 1.8 · cwd ~/src/stockroom\n"))
      (if (not extras)
@@ -950,6 +957,9 @@ runs that script, else a new one (an old one ended first).  The breakpoints and 
             (insert (decode-coding-string (json-serialize (drgnx-look-scene--debug-script extras)) 'utf-8))))
         ;; visited before the start: the stop's frame and inline values mark a buffer that visits the file
         (find-file-noselect inv)
+        ;; the view's picker shows what Start runs, as when the user picked it (debugging.html `.cfg')
+        (with-current-buffer (drgnx-debug-view--buffer)
+          (setq drgnx-debug-view--config (cons "launch:0" "Python: plan the week")))
         (drgnx-hub-call-sync
          "debug/start"
          (list :root root :config "launch:0"

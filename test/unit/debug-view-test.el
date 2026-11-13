@@ -219,10 +219,15 @@ first stays first; another row is not a watch."
         (should-error (drgnx-debug-watch-edit) :type 'user-error)))))
 
 (ert-deftest drgnx-debug-view/the-header-starts-the-picked-configuration ()
-  "The header holds Start and the picker; Start with nothing picked picks first, then starts that configuration."
+  "The header holds Start and the picker (debugging.html `.cfg': the ringed play button, the configuration's name,
+its source quiet and the chevron at the right edge); Start with nothing picked picks first, then starts that
+configuration."
   (debug-view-test--with
-    (should (string-match-p "▶ Start" (drgnx-debug-view--header)))
-    (should (string-match-p "No Configuration ▾" (drgnx-debug-view--header)))
+    (let ((h (drgnx-debug-view--header)))
+      (should (equal (get-text-property 1 'help-echo h) "Start Debugging"))
+      (should (string-match-p "No Configuration" h))
+      (should (seq-some (lambda (i) (plist-get (cdr-safe (get-text-property i 'display h)) :align-to))
+                        (number-sequence 0 (1- (length h))))))
     (let (started)
       (cl-letf (((symbol-function 'drgnx-debug-launch-read-config) (lambda (_root) "c1"))
                 ((symbol-function 'drgnx-debug-launch-configs)
@@ -230,7 +235,7 @@ first stays first; another row is not a watch."
                 ((symbol-function 'drgnx-debug-launch-start) (lambda (root id) (setq started (list root id)))))
         (drgnx-debug-view-start)
         (should (equal '("/p" "c1") started))
-        (should (string-match-p "Python: app ▾" (drgnx-debug-view--header)))))))
+        (should (string-match-p "Python: app.*launch\\.json" (drgnx-debug-view--header)))))))
 
 (ert-deftest drgnx-debug-view/a-step-patches-its-rows-in-place ()
   "A step's model diff and rows patch (the hub's `:replace' of the rows that changed) are drawn in place; a chunk
