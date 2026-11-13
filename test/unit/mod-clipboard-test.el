@@ -335,6 +335,19 @@ uninstalled afterwards."
 (defun drgnx-clip-test--wait (pred seconds)
   (drgnx-test-wait pred :secs (max 30 seconds) :what "the clipboard manager's answer"))
 
+(ert-deftest drgnx-clip/a-new-window-keeps-gpaste-found-while-it-asks-again ()
+  ;; each new graphical window checks again; the manager found before stays found until the new answer comes, so
+  ;; selections are not published for the second the ask takes (M12b-F-2)
+  (drgnx-clip-test--env nil
+    (drgnx-clip-test--gsettings "echo true")
+    (drgnx-clip-test--x11 '("bash")
+      (drgnx-clipboard-install)
+      (should (drgnx-clip-test--wait (lambda () (not select-active-regions)) 3))
+      (drgnx-clipboard-detect)
+      (should (eq (plist-get (drgnx-clipboard-doctor-facts) :manager) 'gpaste))   ; asked again, still found
+      (should-not select-active-regions)
+      (should (drgnx-clip-test--wait (lambda () (plist-get drgnx-clipboard--state :manager)) 3)))))
+
 (ert-deftest drgnx-clip/gpaste-syncing-is-found-without-blocking ()
   (drgnx-clip-test--env nil
     (drgnx-clip-test--gsettings "echo true")

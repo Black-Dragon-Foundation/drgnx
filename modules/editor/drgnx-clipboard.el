@@ -260,18 +260,19 @@ Either setting is enough: `primary-to-history' puts every selection (PRIMARY) in
   "Look for a clipboard manager that syncs the selection with the clipboard, on FRAME (default: the selected one;
 only X11 and Wayland frames are looked at).  Klipper and CopyQ are known at once; GPaste's answer comes within
 a second, and the setting follows it.  Never blocks, never prompts."
-  (let ((generation (cl-incf drgnx-clipboard--generation)))
+  (let ((generation (cl-incf drgnx-clipboard--generation))
+        (before (plist-get drgnx-clipboard--state :manager)))   ; GPaste, found before, stays found while it is asked again
     (setq drgnx-clipboard--state nil)
     (if (not (drgnx-clipboard--graphical-p frame))
         (drgnx-clipboard--found nil)
       (let ((procs (drgnx-clipboard--process-names)))
         (cond ((drgnx-clipboard--klipper-p procs) (drgnx-clipboard--found 'klipper))
               ((drgnx-clipboard--copyq-p procs) (drgnx-clipboard--found 'copyq))
-              (t (drgnx-clipboard--found nil)
+              (t (drgnx-clipboard--found (and (eq before 'gpaste) 'gpaste))
                  (drgnx-clipboard--gpaste-ask
                   (lambda (ok)
-                    (when (and ok (= generation drgnx-clipboard--generation))
-                      (drgnx-clipboard--found 'gpaste))))))))))
+                    (when (= generation drgnx-clipboard--generation)
+                      (when (or ok (eq before 'gpaste)) (drgnx-clipboard--found (and ok 'gpaste))))))))))))
 
 (defun drgnx-clipboard--frame-hook (frame)
   "`after-make-frame-functions': each new X11 or Wayland frame (a daemon has none at startup) checks again, so a
