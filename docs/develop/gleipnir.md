@@ -691,6 +691,12 @@ A tool that needs another family (AF_ALG crypto, Bluetooth) fails with EAFNOSUPP
 **Start time (GL-T15-5), measured.** A full-tier isolated start with the relay (release build, F44 VM, no perf lease) took
 a median of 21.8 ms, against bare bwrap's 4.0 ms.
 
+**The check's probe and the group kill (GL-T12-4, GL-T12-5, GL-T15-4).** `run_probe` reads the helper's status line on a
+blocking thread (`spawn_blocking`), so the runtime's thread stays free. `kill_group` counts a group in which only
+unreaped zombies are left (read from `/proc`; other systems wait as before) as gone, so a start that failed at once
+no longer waits out the grace and the kill period. After a refused start the `sandbox run` result file's `exit` is the
+helper's setup failure, 125, whichever of the helper and the group's kill came first.
+
 **Toolchain layouts (GL-T3-2).** The toolchain roots the profile reads are the ones `toolchain::roots` knows
 (mise, cargo, rustup, nvm, pyenv, and so on). A layout it does not know (Homebrew under the home, asdf, volta, fnm,
 sdkman, bun globals beyond `~/.bun/bin`) is added by the user through the `agents.eld` read list.

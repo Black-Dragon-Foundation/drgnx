@@ -302,8 +302,16 @@ pub async fn run_probe(prepared: Prepared, timeout: Duration) -> Ran {
         }
     };
     let report = match status {
-        // Blocking, on the thread that drives this future; the runtime's worker keeps reading the stderr tail.
-        Some(fd) => gleipnir::inner::read_status_for(fd, &|| child.stderr_tail(), left(), browser),
+        // A blocking poll, on a blocking thread: the runtime's thread stays free (GL-T12-4).
+        Some(fd) => {
+            let tail = child.stderr();
+            let within = left();
+            tokio::task::spawn_blocking(move || {
+                gleipnir::inner::read_status_for(fd, &|| tail.get(), within, browser)
+            })
+            .await
+            .unwrap_or_else(|e| Err(setup(format!("the status read failed: {e}"))))
+        }
         None => layers.ok_or_else(|| setup("no status line and no layers".into())),
     };
     let mut exit = None;
@@ -440,6 +448,12 @@ mod run {
         outcome.exit.unwrap_or(REFUSED)
     }
 
+    /// The `exit` a refused start reports: the helper's setup failure when there was a child, whether it exited first
+    /// (125) or the group's kill did (143).
+    pub(super) fn refused_start_exit(exit: Option<i32>) -> Option<i32> {
+        exit.map(|_| gleipnir::inner::EXIT_SETUP)
+    }
+
     async fn run_in(a: &SandboxRunArgs) -> Outcome {
         // `_hub`: the hub's end of a `--browser-probe` run's socketpair, held until the run is over.
         let (prepared, _hub) = match prepare(a) {
@@ -523,6 +537,9 @@ mod run {
             Ok(Some(s)) => Some(s.code().unwrap_or_else(|| 128 + s.signal().unwrap_or(0))),
             _ => None,
         };
+        if out.refused.is_some() {
+            out.exit = refused_start_exit(out.exit);
+        }
         let _ = crate::clock::timeout(Duration::from_secs(2), pump).await;
         let tail = child.stderr_tail();
         let _ = io::stderr().write_all(tail.as_bytes());
