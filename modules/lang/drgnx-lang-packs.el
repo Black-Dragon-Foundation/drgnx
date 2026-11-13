@@ -18,6 +18,9 @@
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-packs)
+;; the generic mode is this module's: its file sits beside this one
+(unless (featurep 'drgnx-pack-ts-mode)
+  (load (expand-file-name "drgnx-pack-ts-mode" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (defvar treesit-extra-load-path)
 (defvar treesit-auto-install-grammar)
 (defvar drgnx-lang-packs--pinned nil
@@ -59,13 +62,27 @@ folder in use stays first (the new one goes after it).  The older folder of the 
   (seq-every-p (lambda (g) (or (not (plist-get g :required)) (treesit-language-available-p (plist-get g :name))))
                (plist-get manifest :grammars)))
 
+(defun drgnx-lang-packs--file-regexp (manifest)
+  "The regexp of the files of MANIFEST's pack: its `:mode-regexp', else one made of its extensions."
+  (let ((files (plist-get manifest :files)))
+    (or (plist-get files :mode-regexp)
+        (and (plist-get files :extensions) (concat "\\." (regexp-opt (plist-get files :extensions) t) "\\'")))))
+
+(defun drgnx-lang-packs--file-of-pack-p (pack file)
+  "Whether FILE is a file of PACK, (NAME . MANIFEST): by its mode regexp or its extension."
+  (let ((re (drgnx-lang-packs--file-regexp (cdr pack))))
+    (and re (string-match-p re file))))
+
 (defun drgnx-lang-packs--apply-pack (info)
-  "Register one installed pack (INFO: its `active.eld' entry): its modes, once its required grammars load."
+  "Register one installed pack (INFO: its `active.eld' entry): its modes, once its required grammars load.  A
+generic pack needs its translated queries as well."
   (let* ((m (drgnx-packs-read-manifest (plist-get info :manifest)))
-         (mode (plist-get m :mode)) (ts (plist-get mode :ts)))
-    (when (and ts (fboundp ts) (fboundp 'treesit-language-available-p) (drgnx-lang-packs--grammars-load-p m))
+         (mode (plist-get m :mode)) (generic (plist-get mode :generic))
+         (ts (if generic 'drgnx-pack-ts-mode (plist-get mode :ts))))
+    (when (and ts (fboundp ts) (fboundp 'treesit-language-available-p) (drgnx-lang-packs--grammars-load-p m)
+               (or (not generic) (and (plist-get info :translated) (file-exists-p (plist-get info :translated)))))
       (when-let* ((classic (plist-get mode :classic))) (drgnx-module-alist-put 'major-mode-remap-alist classic ts))
-      (when-let* ((re (plist-get (plist-get m :files) :mode-regexp))) (add-to-list 'auto-mode-alist (cons re ts)))
+      (when-let* ((re (drgnx-lang-packs--file-regexp m))) (add-to-list 'auto-mode-alist (cons re ts)))
       ts)))
 
 (defun drgnx-lang-packs-apply ()
@@ -97,10 +114,8 @@ folder in use stays first (the new one goes after it).  The older folder of the 
 (defun drgnx-lang-packs-pack-for-file (file &optional mode)
   "The built-in pack that owns FILE (or MODE), as (NAME . MANIFEST), or nil."
   (seq-find (lambda (p)
-              (let* ((m (cdr p)) (files (plist-get m :files)) (md (plist-get m :mode)))
-                (or (and file (let ((ext (file-name-extension file)))
-                                (and ext (member ext (plist-get files :extensions)))))
-                    (and file (plist-get files :mode-regexp) (string-match-p (plist-get files :mode-regexp) file))
+              (let* ((m (cdr p)) (md (plist-get m :mode)))
+                (or (and file (drgnx-lang-packs--file-of-pack-p p file))
                     (and mode (or (provided-mode-derived-p mode (or (plist-get md :ts) 'ignore))
                                   (and (plist-get md :classic) (provided-mode-derived-p mode (plist-get md :classic))))))))
             (drgnx-packs-builtins)))
@@ -147,7 +162,7 @@ of those languages switch to their tree-sitter modes when it is done."
 (drgnx-module-define 'lang/packs
                      :doc "Language packs: tree-sitter grammars and modes of the installed packs, a hint when one is missing, installed in the background."
                      :stage 'startup
-                     :teardown (lambda () (setq drgnx-lang-packs--apply-owned nil))
+                     :teardown (lambda () (setq drgnx-lang-packs--apply-owned nil) (drgnx-pack-ts-forget-preds))
                      :setup
                      (lambda ()
                        (drgnx-module-set 'treesit-auto-install-grammar 'never)   ; no mode's `treesit-ensure-installed' asks

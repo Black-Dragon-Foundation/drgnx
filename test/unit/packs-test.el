@@ -42,6 +42,8 @@
            (drgnx-packs-job-function (drgnx-packs-test--job)))
        (drgnx-packs-test--pack drgnx-packs-dir "alpha" :grammars (list (drgnx-packs-test--grammar "alpha" t))
                                :mode '(:ts alpha-ts-mode :builtin t))
+       (make-directory (concat drgnx-packs-dir "alpha/queries") t)
+       (write-region "(function) @definition.function" nil (concat drgnx-packs-dir "alpha/queries/tags.scm") nil 'silent)
        (drgnx-packs-test--pack drgnx-packs-dir "beta"
                                :grammars (list (list :name 'alpha :from-pack "alpha" :required t)
                                                (drgnx-packs-test--grammar "beta")))
@@ -92,7 +94,10 @@
       (should (= 1 (length (cdr calls))))
       (let ((plan (cadr calls)))
         (should (= 14 (plist-get plan :min-abi)))
-        (should (equal (plist-get (car (plist-get plan :units)) :name) "alpha")))
+        (should (equal (plist-get (car (plist-get plan :units)) :name) "alpha"))
+        ;; the pack's own query files are compiled against its main grammar by the job
+        (should (equal (mapcar (lambda (q) (list (plist-get q :grammar) (plist-get q :file))) (plist-get plan :queries))
+                       '(("alpha" "queries/tags.scm")))))
       (let ((e (assq 'alpha (drgnx-packs-locked))))
         (should (eq (plist-get (cdr e) :wanted) 'user))
         (should (equal (plist-get (cdr e) :commit) (drgnx-packs-tree-hash (concat root "packs/alpha/")))))
@@ -161,6 +166,30 @@
       (should (equal (drgnx-packs-test--active-names) '(alpha)))
       ;; the generation before still names it, so the folder stays until that generation goes
       (should (file-directory-p beta)))))
+
+;;;; The generic mode's queries
+
+(ert-deftest drgnx-packs/a-generic-pack-gets-its-queries-translated-before-the-lock-is-written ()
+  (drgnx-packs-test--with root
+    (drgnx-packs-test--pack drgnx-packs-dir "gen" :grammars (list (drgnx-packs-test--grammar "gen" t)) :mode '(:generic t))
+    (let* ((calls nil)
+           (drgnx-packs-translate-function (lambda (dir out) (push (list dir out) calls) (write-region "(:version 1)" nil out nil 'silent))))
+      (drgnx-packs-sync :add '("alpha" "gen"))
+      (should (= 1 (length calls)))                                       ; alpha is not generic
+      (let ((entry (cdr (assq 'gen (plist-get (drgnx-packs-active) :packs)))))
+        (should (equal (plist-get entry :translated) (cadr (car calls))))
+        (should (file-exists-p (plist-get entry :translated))))
+      (should-not (plist-get (cdr (assq 'alpha (plist-get (drgnx-packs-active) :packs))) :translated))
+      ;; a refused predicate stops the sync before anything changes
+      (let ((lock-before (with-temp-buffer (insert-file-contents (drgnx-pkg-lock-file)) (buffer-string)))
+            (drgnx-packs-translate-function (lambda (_d _o) (drgnx-packs--error "queries/highlights.scm: #set! is not in the portable subset"))))
+        (drgnx-packs-sync :remove '("gen"))
+        (should-not (assq 'gen (drgnx-packs-locked)))
+        (drgnx-packs-test--pack drgnx-packs-dir "gen2" :grammars (list (drgnx-packs-test--grammar "gen2" t)) :mode '(:generic t))
+        (drgnx-packs-forget)
+        (should-error (drgnx-packs-sync :add '("gen2")) :type 'drgnx-packs-error)
+        (should-not (assq 'gen2 (drgnx-packs-locked)))
+        (should (equal lock-before lock-before))))))
 
 ;;;; The build before packs
 

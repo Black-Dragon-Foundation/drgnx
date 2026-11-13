@@ -36,6 +36,10 @@ read and cleared by `drgnx-packs-forget', so it holds a handful of small plists.
   "Runs the pack job: called with the plan (a plist), returns the job's answer plist `(:ok t :staged …)' or
 `(:ok nil :error TEXT)'.  Tests replace it.")
 
+(defvar drgnx-packs-translate-function #'drgnx-packs--run-translate
+  "Writes the generic mode's queries for a pack: called with the pack's folder and the file to write, signals
+`drgnx-packs-error' naming what is refused.  Tests replace it.")
+
 (defun drgnx-packs--error (fmt &rest args) (signal 'drgnx-packs-error (list (apply #'format fmt args))))
 
 ;;;; Where things are
@@ -156,6 +160,42 @@ top-level `.git' left out.  What `ratatoskr packs pin' prints, and a built-in pa
                   units)))))
     (mapcar #'cdr (nreverse units))))
 
+(defun drgnx-packs--queries (names units)
+  "The query files (`queries/*.scm') of the packs NAMES whose main grammar (the first one they pin themselves and
+require) is among UNITS: plists (:grammar :file :path), for the job to compile against the grammar it builds."
+  (let (out)
+    (dolist (n names)
+      (let* ((main (seq-find (lambda (g) (plist-get g :required)) (drgnx-packs--owned-grammars (drgnx-packs-manifest n))))
+             (dir (expand-file-name (format "%s/queries/" n) (drgnx-packs-builtin-dir))))
+        (when (and main (assoc (format "%s" (plist-get main :name)) (mapcar (lambda (u) (cons (plist-get u :name) u)) units))
+                   (file-directory-p dir))
+          (dolist (f (directory-files dir nil "\\.scm\\'"))
+            (push (list :grammar (format "%s" (plist-get main :name)) :file (concat "queries/" f) :path (expand-file-name f dir))
+                  out)))))
+    (nreverse out)))
+
+(defun drgnx-packs-translated-file (name commit)
+  "Where the generic mode's queries of the pack NAME at COMMIT (its tree hash) are kept."
+  (expand-file-name (format "packs/translated/%s-%s.eld" name (substring commit 0 12)) (drgnx-state-dir)))
+
+(defun drgnx-packs--run-translate (dir out)
+  "`ratatoskr packs translate DIR OUT'."
+  (let ((bin (or (progn (require 'drgnx-hub-client) (drgnx-hub-client-binary))
+                 (drgnx-packs--error "Ratatoskr is not built: run `drgnx runtime build'"))))
+    (make-directory (file-name-directory out) t)
+    (with-temp-buffer
+      (unless (eql 0 (call-process bin nil t nil "packs" "translate" (directory-file-name dir) out))
+        (drgnx-packs--error "%s" (string-trim (buffer-string)))))))
+
+(defun drgnx-packs--translate (names)
+  "Write the generic mode's queries of the generic packs among NAMES, before the lock is written."
+  (dolist (n names)
+    (when (plist-get (plist-get (drgnx-packs-manifest n) :mode) :generic)
+      (let* ((dir (expand-file-name (concat n "/") (drgnx-packs-builtin-dir)))
+             (out (drgnx-packs-translated-file n (drgnx-packs-tree-hash dir))))
+        (make-directory (file-name-directory out) t)
+        (funcall drgnx-packs-translate-function dir out)))))
+
 (defun drgnx-packs--run-job (plan)
   "Run `ratatoskr packs sync' on PLAN (a plist) and return its answer."
   (let* ((bin (or (progn (require 'drgnx-hub-client) (drgnx-hub-client-binary)) (drgnx-packs--error "Ratatoskr is not built: run `drgnx runtime build'")))
@@ -182,6 +222,8 @@ session activates; written only after the lock is (sync, rollback).  Returns its
                  (lambda (e)
                    (when-let* ((m (drgnx-packs-manifest (car e))))
                      (list (car e) :manifest (expand-file-name (format "%s/pack.eld" (car e)) (drgnx-packs-builtin-dir))
+                           :translated (and (plist-get (plist-get m :mode) :generic)
+                                            (drgnx-packs-translated-file (car e) (plist-get (cdr e) :commit)))
                            :grammars
                            (delq nil (mapcar (lambda (g)
                                                (let* ((lang (plist-get g :name))
@@ -226,10 +268,11 @@ everything as it was.  Returns (:ok t :packs NAMES :built LANGS :generation N)."
                           (make-directory staging t)
                           (setq answer (funcall drgnx-packs-job-function
                                                 (list :version 1 :staging staging :min-abi drgnx-packs-min-abi
-                                                      :units (mapcar (lambda (u) u) units))))
+                                                      :units units :queries (drgnx-packs--queries wanted units))))
                           (unless (plist-get answer :ok)
                             (when (file-exists-p staging) (delete-directory staging t))
                             (drgnx-packs--error "%s" (or (plist-get answer :error) "the pack job failed"))))
+                        (drgnx-packs--translate wanted)   ; the generic mode's queries, before anything is written
                         ;; the lock, then the generation
                         (let* ((staged (plist-get answer :staged))
                                (grammars (seq-filter (lambda (e) (seq-some (lambda (n) (seq-some (lambda (g) (eq (plist-get g :name) (car e)))
@@ -332,18 +375,13 @@ the build fails (no compiler, offline): the folder stays on the load path after 
 
 ;;;; What the formatting module reads
 
-(defconst drgnx-packs-format-standard-extra '(zig-mode elixir-mode elixir-ts-mode)
-  "Modes whose formatter is their community's standard but whose pack is not built in yet (Zig and Elixir arrive as
-packs with the grammar packs); this list goes when they do.")
-
-(defconst drgnx-packs-format-config-extra '(".php-cs-fixer.php" ".scalafmt.conf")
-  "Config files that mean \"this project formats its code\" for languages with no built-in pack yet (PHP arrives with
-its pack; Scala has none).")
+(defconst drgnx-packs-format-config-extra '(".scalafmt.conf")
+  "Config files that mean \"this project formats its code\" for languages with no built-in pack (Scala).")
 
 (defun drgnx-packs-format-modes ()
   "Every mode (a symbol) of a built-in pack whose `:format' is `:standard': formatted in any project.  Read from the
 manifests, installed or not: formatting needs no grammar."
-  (let ((out (copy-sequence drgnx-packs-format-standard-extra)))
+  (let (out)
     (dolist (p (drgnx-packs-builtins))
       (let ((mode (plist-get (cdr p) :mode)))
         (when (plist-get (plist-get (cdr p) :format) :standard)

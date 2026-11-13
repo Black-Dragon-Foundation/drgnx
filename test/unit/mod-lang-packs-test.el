@@ -135,6 +135,112 @@ go with its teardown)."
         (with-current-buffer b (set-buffer-modified-p nil))
         (kill-buffer b)))))
 
+;;;; The generic mode
+
+(defun drgnx-lang-packs-test--install-generic (root)
+  "A generic pack `gen' (files *.gen) installed with translated queries; its grammar `gen' built."
+  (make-directory (concat root "packs/gen") t)
+  (with-temp-file (concat root "packs/gen/pack.eld")
+    (prin1 (list :pack "gen" :schema 1 :version "1" :name "Gen" :summary "s" :license "MIT"
+                 :files '(:extensions ("gen"))
+                 :grammars (list (list :name 'gen :repo "https://example.org/g" :commit (make-string 40 ?a)
+                                       :tree-sha256 (make-string 64 ?b) :src "src" :required t))
+                 :mode '(:generic t :indent ((block . 2))))
+           (current-buffer)))
+  (let ((dir (drgnx-packs-grammar-dir 'gen (make-string 40 ?a))))
+    (make-directory dir t)
+    (write-region "x" nil (expand-file-name "libtree-sitter-gen.so" dir) nil 'silent))
+  (drgnx-packs--write-lock (list (list 'gen :commit (make-string 64 ?c) :wanted 'user))
+                           (list (list 'gen :commit (make-string 40 ?a) :owner "gen")))
+  (let ((translated (drgnx-packs-translated-file "gen" (make-string 64 ?c))))
+    (make-directory (file-name-directory translated) t)
+    (with-temp-file translated
+      (prin1 '(:version 1
+                        :rules ((:feature "keyword" :query "\"fn\" @font-lock-keyword-face"))
+                        :preds ((:name "drgnx-pack-pred--gen-1" :kind not-eq :arg "x"))
+                        :defuns ("function_declaration") :unmapped ())
+             (current-buffer))))
+  (drgnx-packs-forget)
+  (drgnx-packs-derive-active))
+
+(ert-deftest drgnx-lang-packs/a-generic-pack-with-queries-and-a-loading-grammar-gets-the-generic-mode ()
+  (drgnx-lang-packs-test--with root
+    (cl-letf (((symbol-function 'treesit-language-available-p) (lambda (lang &rest _) (eq lang 'gen))))
+      (drgnx-test-with-modules '(lang/packs) :strict t
+                               (drgnx-lang-packs-test--install-generic root)
+                               (drgnx-lang-packs-refresh)
+                               (should (eq (cdr (assoc (concat "\\." (regexp-opt '("gen") t) "\\'") auto-mode-alist)) 'drgnx-pack-ts-mode)))
+      (should-not (rassq 'drgnx-pack-ts-mode auto-mode-alist)))))
+
+(ert-deftest drgnx-lang-packs/a-generic-pack-without-queries-is-not-applied ()
+  (drgnx-lang-packs-test--with root
+    (cl-letf (((symbol-function 'treesit-language-available-p) (lambda (lang &rest _) (eq lang 'gen))))
+      (drgnx-test-with-modules '(lang/packs) :strict t
+                               (drgnx-lang-packs-test--install-generic root)
+                               (delete-file (drgnx-packs-translated-file "gen" (make-string 64 ?c)))
+                               (drgnx-lang-packs-refresh)
+                               (should-not (rassq 'drgnx-pack-ts-mode auto-mode-alist))))))
+
+(ert-deftest drgnx-lang-packs/the-generic-mode-without-a-ready-grammar-stays-plain-and-says-nothing ()
+  (drgnx-lang-packs-test--with root
+    (cl-letf (((symbol-function 'treesit-language-available-p) (lambda (lang &rest _) (eq lang 'gen))))
+      (drgnx-test-with-modules '(lang/packs) :strict t
+                               (drgnx-lang-packs-test--install-generic root)
+                               (drgnx-lang-packs-refresh)
+                               (let ((b (get-buffer-create "x.gen")))
+                                 (unwind-protect
+                                     (with-current-buffer b
+                                       (setq buffer-file-name (expand-file-name "x.gen" temporary-file-directory))
+                                       (cl-letf (((symbol-function 'treesit-ready-p) (lambda (&rest _) nil)))
+                                         (drgnx-pack-ts-mode))
+                                       (should (eq major-mode 'drgnx-pack-ts-mode))
+                                       (should-not drgnx-pack-ts-pack)
+                                       (should-not treesit-font-lock-settings))
+                                   (with-current-buffer b (set-buffer-modified-p nil))
+                                   (kill-buffer b)))))))
+
+(ert-deftest drgnx-lang-packs/the-generic-mode-takes-its-highlighting-navigation-and-indentation-from-the-pack ()
+  (drgnx-lang-packs-test--with root
+    (cl-letf (((symbol-function 'treesit-language-available-p) (lambda (lang &rest _) (eq lang 'gen))))
+      (drgnx-test-with-modules '(lang/packs) :strict t
+                               (drgnx-lang-packs-test--install-generic root)
+                               (drgnx-lang-packs-refresh)
+                               (let ((b (get-buffer-create "y.gen")) (made nil) (setup nil))
+                                 (unwind-protect
+                                     (with-current-buffer b
+                                       (setq buffer-file-name (expand-file-name "y.gen" temporary-file-directory))
+                                       (cl-letf (((symbol-function 'treesit-ready-p) (lambda (&rest _) t))
+                                                 ((symbol-function 'treesit-parser-create) (lambda (lang &rest _) (setq made lang)))
+                                                 ((symbol-function 'treesit-font-lock-rules) (lambda (&rest args) (list args)))
+                                                 ((symbol-function 'treesit-major-mode-setup) (lambda () (setq setup t))))
+                                         (drgnx-pack-ts-mode))
+                                       (should (equal drgnx-pack-ts-pack "gen"))
+                                       (should (eq made 'gen))
+                                       (should setup)
+                                       (should (equal (car treesit-font-lock-settings)
+                                                      '(:language gen :feature keyword "\"fn\" @font-lock-keyword-face")))
+                                       (should (equal treesit-font-lock-feature-list drgnx-pack-ts-feature-list))
+                                       (should (equal (cadr (assq 'gen treesit-simple-indent-rules)) '((parent-is "block") parent-bol 2)))
+                                       (should (equal (car (last (cdr (assq 'gen treesit-simple-indent-rules)))) '(catch-all prev-line 0)))
+                                       (should (string-match-p "function_declaration" treesit-defun-type-regexp)))
+                                   (with-current-buffer b (set-buffer-modified-p nil))
+                                   (kill-buffer b))
+                                 ;; the predicate the queries name is defined, and goes with the module
+                                 (should (fboundp 'drgnx-pack-pred--gen-1)))))
+    (should-not (fboundp 'drgnx-pack-pred--gen-1))))
+
+(ert-deftest drgnx-lang-packs/the-predicate-functions-answer-by-the-node-text ()
+  (cl-letf (((symbol-function 'treesit-node-text) (lambda (n &rest _) n)))
+    (unwind-protect
+        (progn
+          (drgnx-pack-ts--define-preds '((:name "zz-ne" :kind not-eq :arg "main") (:name "zz-nm" :kind not-match :arg "^_")
+                                         (:name "zz-nn" :kind not-eq-nodes :arg "")))
+          (should (funcall 'zz-ne "other")) (should-not (funcall 'zz-ne "main"))
+          (should (funcall 'zz-nm "name")) (should-not (funcall 'zz-nm "_name"))
+          (should (funcall 'zz-nn "a" "b")) (should-not (funcall 'zz-nn "a" "a")))
+      (drgnx-pack-ts-forget-preds))
+    (should-not (fboundp 'zz-ne))))
+
 ;;;; What the formatting module reads
 
 (ert-deftest drgnx-lang-packs/the-formatting-lists-come-from-the-packs ()
