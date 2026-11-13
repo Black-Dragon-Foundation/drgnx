@@ -16,22 +16,35 @@
     (redisplay t)
     other))
 
+(defmacro drgnx-attr--deftest (name args &rest body)
+  "`ert-deftest' NAME ARGS BODY for a row that splits the root window (`drgnx-attr--two-windows'): the layout, the
+selected window's `quit-restore' parameter (`switch-to-buffer' records one) and the buffers are put back after, so a
+later row (the look rows' clean-session check) finds the session as it was."
+  (declare (indent 2))
+  `(ert-deftest ,name ,args
+     (let ((config (current-window-configuration))
+           (quit (window-parameter nil 'quit-restore)))
+       (unwind-protect (progn ,@body)
+         (set-window-configuration config)
+         (set-window-parameter nil 'quit-restore quit)
+         (dolist (b '("*attr-a*" "*attr-b*")) (when (get-buffer b) (kill-buffer b)))))))
+
 (defun drgnx-attr--causes (report)
   (mapcar (lambda (step) (plist-get step :cause)) (append (plist-get report :trace) nil)))
 
-(ert-deftest drgnx-ui-attribution/command ()
+(drgnx-attr--deftest drgnx-ui-attribution/command ()
   (drgnx-attr--two-windows)
   (let ((r (drgnx-uitest-run (drgnx-uitest-key-events "C-n"))))
     (should (member "command:next-line" (drgnx-attr--causes r)))))
 
-(ert-deftest drgnx-ui-attribution/timer-scrolling-another-window ()
+(drgnx-attr--deftest drgnx-ui-attribution/timer-scrolling-another-window ()
   (let ((other (drgnx-attr--two-windows)))
     (run-with-timer 0.1 nil (lambda () (set-window-start other 500)))
     (let ((r (drgnx-uitest-run (drgnx-uitest-key-events "C-n"))))
       (should (seq-some (lambda (c) (string-prefix-p "timer:" c)) (drgnx-attr--causes r)))
       (should (>= (plist-get r :timer_moves) 1)))))
 
-(ert-deftest drgnx-ui-attribution/timer-moving-point-inside-with-selected-window ()
+(drgnx-attr--deftest drgnx-ui-attribution/timer-moving-point-inside-with-selected-window ()
   ;; The gryphn follow's shape: goto-char in another window, no set-window-point call.
   (let ((other (drgnx-attr--two-windows)))
     (run-with-timer 0.1 nil (lambda () (with-selected-window other (goto-char 700))))
@@ -50,7 +63,7 @@
     (run-with-timer 0.05 nil (lambda () (set-window-start drgnx-attr--other 900) (setq ran t)))
     (drgnx-test-wait (lambda () ran) :secs 5 :what "the timer inside the command")))
 
-(ert-deftest drgnx-ui-attribution/timer-during-a-command ()
+(drgnx-attr--deftest drgnx-ui-attribution/timer-during-a-command ()
   (let ((other (drgnx-attr--two-windows)))
     (setq drgnx-attr--other other)
     (keymap-global-set "C-c z" #'drgnx-attr--slow-command)
@@ -69,7 +82,7 @@
     (forward-line 3)
     (drgnx-test-wait (lambda () (> (length drgnx-uitest-record--log) seen)) :secs 5 :what "the recorder's poll")))
 
-(ert-deftest drgnx-ui-attribution/command-change-before-its-sit-for ()
+(drgnx-attr--deftest drgnx-ui-attribution/command-change-before-its-sit-for ()
   ;; The poll and other timers run inside the command's sit-for; the command's own change
   ;; must still be attributed to the command.
   (drgnx-attr--two-windows)
@@ -82,7 +95,7 @@
         (should (equal (plist-get mine :cause) "command:drgnx-attr--move-then-wait")))
     (keymap-global-unset "C-c y")))
 
-(ert-deftest drgnx-ui-attribution/nested-timers-keep-their-own-changes ()
+(drgnx-attr--deftest drgnx-ui-attribution/nested-timers-keep-their-own-changes ()
   ;; A timer that waits (sit-for) lets other timers run inside it; each keeps its own changes.
   (let ((other (drgnx-attr--two-windows)) (sel (selected-window)) (ran nil))
     (defun drgnx-attr--inner-timer () (set-window-start other 900) (setq ran t))
