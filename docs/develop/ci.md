@@ -238,6 +238,17 @@ which leaves about 35. The report showed two property tests holding most of thei
 hrafn's `overlay_matches_blob_diff_in_every_order` (70 s of `overlay`'s 87) and verdandi's
 `revert_props::keep_mine_equals_threeway_outside_hunks` (55 s); the hub's lib takes about 3 minutes.
 
+Round 8 was cut at the 45 minutes on a cold build of 32 (no registry, target or sccache entry for the pinned toolchain:
+the caches are saved on `main` only) and tests of 10. Since then the macOS tests and conformance jobs give the
+dependencies line tables only (`profile.dev.package."*"`, appended to cargo's config by a step): a backtrace still
+names files and lines, which the step "a backtrace names files and lines" checks on one panic (draugr's and tokio's
+frames), and the workspace's crates keep full debug info for a debugger. The tests step runs each test binary of
+`test-bins.json` itself, from its package's folder as cargo does, in a process group of its own bounded at 600 s: a
+binary that hangs is killed with its children and named in the summary, and the rest still run; the doc tests follow
+through cargo. The build step writes `--timings` (artifact `cargo-timings-macos`): the job is split further only on
+what that shows. Moving the hub's integration tests into the conformance jobs was measured and dropped: their build
+there turns on dev-dependency features (brokkr's `test-support`, …) and builds the hub's lib a second time.
+
 ## The tiers workflow
 
 `.github/workflows/drgnx-tiers.yml` is the one definition of drgnx's Emacs-side jobs (`workflow_call`). drgnx's
