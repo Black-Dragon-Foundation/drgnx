@@ -48,12 +48,18 @@ the files visited in between.")
 
 ;;;; Reading
 
+(declare-function drgnx-packs-project-index "drgnx-packs" ())
+
+(defun drgnx-extensions-project--read-index ()
+  "The modes index with the installed language packs' entries (`pack:NAME', see `drgnx-packs-project-index')."
+  (append (drgnx-extensions-index-read) (and (fboundp 'drgnx-packs-project-index) (drgnx-packs-project-index))))
+
 (defun drgnx-extensions-project--index ()
-  (or drgnx-extensions-project--index (drgnx-extensions-index-read)))
+  (or drgnx-extensions-project--index (drgnx-extensions-project--read-index)))
 
 (defun drgnx-extensions-project-scope (pkg)
   "PKG's scope by the modes index: `narrow', `global' or `none'; nil when the index does not know it."
-  (plist-get (alist-get pkg (drgnx-extensions-index-read)) :scope))
+  (plist-get (alist-get pkg (drgnx-extensions-project--read-index)) :scope))
 
 (defun drgnx-extensions-project--narrow (pkgs)
   "Those of PKGS (a value of the setting) that can be off in a project, by the index the last refresh read."
@@ -160,7 +166,10 @@ package of MODE is off, ORIG's answer for the mode the file gets without it.  Ev
             (pkg (alist-get mode drgnx-extensions-project--modes))
             (off (drgnx-extensions-project--off-at (drgnx-extensions-project--root buffer-file-name)))
             ((memq pkg off)))
-      (funcall orig (drgnx-extensions-project--fallback off))
+      ;; a language pack's remap (classic mode → its tree-sitter mode) is not applied to the fallback
+      (let* ((gone (seq-mapcat (lambda (p) (drgnx-extensions-index-modes (alist-get p drgnx-extensions-project--index))) off))
+             (major-mode-remap-alist (seq-remove (lambda (e) (memq (cdr-safe e) gone)) major-mode-remap-alist)))
+        (funcall orig (drgnx-extensions-project--fallback off)))
     (funcall orig mode)))
 
 (defun drgnx-extensions-project--minor-off ()
@@ -188,11 +197,12 @@ off in its project."
 and the hook while one is, else remove them.  Never prompts."
   (clrhash drgnx-extensions-project--roots)
   (clrhash drgnx-extensions-project--off)
-  (setq drgnx-extensions-project--index (drgnx-extensions-index-read))
+  (setq drgnx-extensions-project--index (drgnx-extensions-project--read-index))
   (let ((index drgnx-extensions-project--index) (off (drgnx-extensions-project--off-anywhere)) (modes nil) (minors nil))
     (dolist (p off)
       (let ((e (alist-get p index)))
         (dolist (m (drgnx-extensions-index-modes e)) (push (cons m p) modes))
+        (dolist (m (plist-get e :remap-from)) (push (cons m p) modes))
         (dolist (m (plist-get e :minor)) (push (cons m p) minors))))
     (setq drgnx-extensions-project--modes (nreverse modes) drgnx-extensions-project--minors (nreverse minors))
     (drgnx-extensions-project--install off)))

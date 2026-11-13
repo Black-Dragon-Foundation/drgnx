@@ -287,3 +287,19 @@
 
 (provide 'packs-test)
 ;;; packs-test.el ends here
+
+(ert-deftest drgnx-packs/an-installed-pack-with-its-own-mode-can-be-off-in-a-project ()
+  ;; the Extensions modes index gets pack:NAME for an installed pack with a tree-sitter mode and file names; a pack of
+  ;; the generic mode shares its one mode, so it gets none
+  (drgnx-packs-test--with root
+    (drgnx-packs-test--pack drgnx-packs-dir "gamma" :grammars (list (drgnx-packs-test--grammar "gamma" t))
+                            :mode '(:ts gamma-ts-mode :classic gamma-mode) :files '(:extensions ("gm")))
+    (drgnx-packs-test--pack drgnx-packs-dir "delta" :grammars (list (drgnx-packs-test--grammar "delta" t))
+                            :mode '(:generic t) :files '(:extensions ("dl")))
+    (drgnx-packs-forget)
+    (should-not (drgnx-packs-project-index))
+    (let ((drgnx-packs-translate-function (lambda (_dir out) (write-region "(:version 1)" nil out nil 'silent))))
+      (drgnx-packs-sync :add '("gamma" "delta")))
+    (should (equal (drgnx-packs-project-index)
+                   (list (list 'pack:gamma :scope 'narrow :auto (list (cons "\\.\\(gm\\)\\'" 'gamma-ts-mode))
+                               :remap-from '(gamma-mode)))))))

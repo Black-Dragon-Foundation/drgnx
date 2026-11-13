@@ -79,6 +79,14 @@ pub fn rows(locked: &[PackLock]) -> Vec<(w::Row, Vec<String>, Detail)> {
 mod tests {
     use super::*;
 
+    /// An agent never installs a language pack: `extensions_suggest` takes a package or a plugin only.
+    #[test]
+    fn an_agent_may_not_suggest_a_pack() {
+        use super::super::methods::suggestible;
+        assert!(!suggestible(w::Kind::Pack));
+        assert!(suggestible(w::Kind::Package) && suggestible(w::Kind::Plugin));
+    }
+
     fn lock(name: &str, user: bool) -> PackLock {
         PackLock {
             name: name.into(),
