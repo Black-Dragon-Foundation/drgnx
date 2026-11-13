@@ -538,7 +538,8 @@ The **panel** (Toggle Panel: `M-j` · palette · `SPC j`) sits under the editors
 profile, as in VS Code) shows its Terminal tab, starting a terminal when the tab has none, and hides the panel when that
 tab already shows; the **right dock** (Toggle
 Right Dock: `C-M-b` · palette · `SPC R`) runs the frame's full height, like the left one. Each is one window with a
-**tab row** at the top (click a tab to show it). The right dock shows its tab row only while two of its tabs have
+**tab row** at the top (click a tab to show it; the shown tab is a pill on the quiet selection, face
+`drgnx-wb-tab-current`, the others muted text, `drgnx-wb-tab`). The right dock shows its tab row only while two of its tabs have
 something to show: with one (an agent panel, say) that pane's own header is the top row, and `q` or `C-w l` then
 `C-x 0` hides the dock. Showing a buffer there never takes focus (Focus Panel does), and
 switching tabs swaps the buffer *in place*: the window stays, nothing around it moves, and each tab comes back

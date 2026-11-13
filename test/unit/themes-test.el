@@ -131,6 +131,17 @@ high contrast, where tints are black, they are ringed in their own colour."
                        (list face (drgnx-face-color face :foreground 'gui) (drgnx-face-color face :background 'gui))))
         (should (eq (eq variant 'hc) (and (plist-get (drgnx-faces--clause-plist face 'gui) :box) t)))))))
 
+(ert-deftest drgnx-themes/an-area-s-shown-tab-is-a-pill ()
+  "debugging.html `.pt.on': the shown tab of an area's tab row (the bottom panel's Debug Console) is a pill on the
+quiet selection in the text colour; the other tabs are muted text."
+  (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
+    (drgnx-themes-test--with theme
+      (should (equal (list (drgnx-look-token 'fg variant) (drgnx-look-token 'sel-quiet variant))
+                     (list (drgnx-face-color 'drgnx-wb-tab-current :foreground 'gui)
+                           (drgnx-face-color 'drgnx-wb-tab-current :background 'gui))))
+      (should (plist-get (drgnx-faces--clause-plist 'drgnx-wb-tab-current 'gui) :box))
+      (should (equal (drgnx-look-token 'muted variant) (drgnx-face-color 'drgnx-wb-tab :foreground 'gui))))))
+
 ;; The manager's ruling (look step 5b): the inactive selection is clearly visible
 (ert-deftest drgnx-themes/the-inactive-selection-stands-off-the-panel ()
   "The selected row of a list without the focus (`sel-inactive') is at least 1.25:1 against the panel, and above the
