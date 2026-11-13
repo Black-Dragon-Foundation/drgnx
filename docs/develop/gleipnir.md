@@ -424,7 +424,7 @@ Why each part:
   On a merged-/usr host `/bin` and friends are links into `/usr`, recreated as the same links inside.
 - **`--tmpfs /run`**: `/run/user` (the user's runtime dir: D-Bus, the ssh agent, the hub's sockets) is absent. The
   resolver's file is bound back on top of it alone, or `/etc/resolv.conf` (a link to systemd-resolved's stub on
-  Fedora and Ubuntu) would dangle. Only a file under `/run` outside `/run/user` and `/run/gleipnir` is bound.
+  Fedora and Ubuntu) would dangle. Only a file under `/run` outside `/run/user` and `/run/gleipnir` is bound, and only when root alone can change it (`eitri::root_only_file`: a regular file owned by uid 0, not group- or world-writable, in root-owned directories).
 - **Every source of the spec by fd** (`--bind-fd`, `--ro-bind-fd`; bwrap ≥ 0.10). A source given by path is resolved
   by bwrap later, when an agent may have swapped a link into it; an fd is what was checked. This is Flatpak's
   CVE-2024-42472 pattern, whose full fix needed exactly these flags.
@@ -1059,7 +1059,9 @@ it looks only at the request line, never at `Host:`:
 | a connection over `max_conns` (64, across all listeners) | 403 | — |
 | listed, but it does not resolve or no address connects (each attempt within `connect_timeout`, 10 s; a slower one counts as that address failing) | 502 | — |
 
-Each event is sent once per target per tag, before the client is answered; the tag tells the caller which session
+Each event is sent once per target per tag, before the client is answered (it never waits for the reader: when the
+events channel is full the event is dropped and counted, `ProxyHandle::dropped_events`, so a reader that stopped
+draining cannot hold refused clients and their places); the tag tells the caller which session
 asked. Only `Denied` may become a question to the user: a private address, a wildcard or a malformed request is never
 offered. A refused request's `target` is shown with every byte outside printable ASCII escaped.
 
@@ -1105,7 +1107,8 @@ Allowlist entries are exact `host:port` targets: `example.com:443` allows neithe
 **The addresses.** `net::host::is_public` decides what is public. Not public: IPv4 0/8, 10/8, 100.64/10, 127/8,
 169.254/16 (with the cloud metadata address), 172.16/12, 192.0.0/24, 192.0.2/24, 192.168/16, 198.18/15,
 198.51.100/24, 203.0.113/24, 224/4 and 240/4; IPv6 `::`, `::1`, `fc00::/7`, `fe80::/10`, `fec0::/10`, `ff00::/8`,
-`2001:db8::/32`, `2001::/32` (Teredo), `64:ff9b:1::/48` and `100::/64`. An IPv6 address that carries an IPv4 one is
+`2001:db8::/32`, `2001::/32` (Teredo), `64:ff9b:1::/48` and `100::/64`, and everything outside `2000::/3` (the only
+global unicast block: `4000::/2`, `fbff::`, `fe00::` and `::ffff:0:a.b.c.d` are unrouted or reserved). An IPv6 address that carries an IPv4 one is
 judged by that IPv4 address: `::ffff:0:0/96`, `::/96`, `64:ff9b::/96` and `2002::/16`. Where the proxy connects is
 decided once per request:
 - an address literal is the address itself, and only a public one gets this far;
@@ -1121,8 +1124,8 @@ that changes after the check (rebinding) cannot lead it anywhere else.
 - Once a target is allowed, the bytes are not inspected: TLS stays end to end, and the proxy cannot tell what is
   sent to an allowed host. A broad entry (a code host) can carry data out; entries should be as narrow as the work.
 - `deny` stops new connections only; a tunnel already spliced stays until either side closes.
-- There is no idle timeout on a spliced connection, and connecting upstream waits as long as the system's TCP
-  connect does. Both hold one of the `max_conns` places meanwhile.
+- A spliced connection that carries no byte in either direction for `idle_timeout` (15 min) is ended and its place
+  goes back; connecting upstream is bounded by `connect_timeout`.
 - The proxy speaks HTTP CONNECT, and plain-HTTP absolute-form under the web policy only; never SOCKS.
 
 ### The web policy

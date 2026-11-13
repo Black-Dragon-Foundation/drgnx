@@ -7,7 +7,8 @@
 //! - `read`: bounded reads of regular files only (a FIFO is never read).
 //! - `write`: writes by a temporary file and a rename, never through a link; a leaf removed or made a link at the
 //!   parent's held fd.
-//! - `trusted`: a program that only root can change, found by fixed candidates and never through `PATH`.
+//! - `trusted`: a program that only root can change, found by fixed candidates and never through `PATH`; and
+//!   `root_only_file`, the same checks for a data file without the execute bit.
 
 use std::fmt;
 use std::io;
@@ -20,7 +21,7 @@ mod write;
 
 pub use open::{Kind, Meta, Pinned, open_beneath, open_path, stat_beneath, stat_in};
 pub use read::read_regular;
-pub use trusted::{TrustedProgram, trusted_program};
+pub use trusted::{TrustedProgram, root_only_file, trusted_program};
 pub use write::{remove_beneath, symlink_beneath, write_regular};
 
 /// Why an eitri call refused or failed. Nothing here is ever retried by resolving the path another way.

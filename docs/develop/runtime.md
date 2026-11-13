@@ -249,6 +249,11 @@ cap }`, `Escapes`, `Untrusted { path, why }`, `Unsupported` or `Io`.
   path, dev, ino }`: an absolute path with no `.` or `..`, opened with `open_path`, a regular file with an execute
   bit, owned by uid 0 and not group- or world-writable, in directories up to `/` that are owned by uid 0 and not
   group- or world-writable (so never under `/tmp`). Otherwise the last candidate's `Untrusted { path, why }`.
+  POSIX ACLs need no check of their own: an ACL entry that grants write raises the ACL mask, and the mask is the
+  file's group bits in `st_mode`, so the group-writable test sees it (a test sets a real ACL and shows the refusal).
+  File capabilities are not examined: only root (`CAP_SETFCAP`) can set them, and root is who the program trusts.
+  `root_only_file(path)` is the same check without the execute bit, for data bound into a sandbox by path (the
+  resolver's file under `/run`).
   Callers pass fixed candidates (bwrap, `sandbox-exec`, git); `PATH` is never searched. A link in any component,
   the last one included, is refused even when root owns it: the candidates are the distributions' own regular files.
   Not every system program is one (Ubuntu 26.04's `coreutils-from-uutils` makes `/usr/bin/env` a link into

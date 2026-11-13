@@ -177,7 +177,8 @@ fn refused(key: &str, path: &Path, e: FsError) -> Refusal {
     }
 }
 
-/// Which of the host's `/bin`, `/lib`, `/lib64`, `/sbin` are links, and the resolver's file when bindable.
+/// Which of the host's `/bin`, `/lib`, `/lib64`, `/sbin` are links, and the resolver's file when bindable: under
+/// `/run`, a regular file only root can change, in root-owned directories (a file a user could swap is never bound, GL-T7-4).
 pub fn host_layout() -> HostLayout {
     let usr_links = USR_MERGED
         .iter()
@@ -186,7 +187,7 @@ pub fn host_layout() -> HostLayout {
         .collect();
     let resolver = fs::canonicalize("/etc/resolv.conf")
         .ok()
-        .filter(|r| resolver_bindable(r) && fs::metadata(r).is_ok_and(|m| m.is_file()));
+        .filter(|r| resolver_bindable(r) && eitri::root_only_file(r).is_ok());
     HostLayout {
         usr_links,
         resolver,
