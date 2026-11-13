@@ -61,8 +61,9 @@ palette. Its header starts the configuration picked there. While the program run
 dimmed. A big list keeps its last 64 opened pages open; opening another closes the oldest.
 
 **View Binary Data** (`m` in the Emacs and Vim profiles) shows a variable's bytes when its debugger can read memory
-(C, C++, Rust, Go): 16 to a line with the address and the text, PageDown / PageUp (`n` / `p`, C-f / C-b) for the next
-page, F2 (`e`, `c`) to write bytes typed in hex at point.
+(C, C++, Rust, Go): 16 to a line in two halves of 8, with the address and the text, PageDown / PageUp (`n` / `p`, C-f /
+C-b) for the next page, F2 (`e`, `c`) to write bytes typed in hex at point. Its header names the variable, the page's
+address and size, and those keys.
 
 **Open Disassembly View** (the palette) shows the machine instructions around the current frame when its debugger
 can disassemble (C, C++, Rust, Go). A stop in code with no source file opens it by itself. Each run of instructions

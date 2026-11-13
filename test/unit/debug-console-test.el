@@ -166,6 +166,8 @@ lines already there."
       (drgnx-debug-console--insert (list (list :text "no time" :category "console" :count 1)))
       (should (equal (car (last (debug-console-test--prefixes))) "             "))
       (should (equal (debug-console-test--text) "first\nlater\nno time\n"))
+      ;; a quiet column: the subtle text, as the mockup's
+      (should (eq (face-attribute 'drgnx-debug-console-time :inherit) 'drgnx-text-subtle))
       (customize-set-variable 'drgnx-debug-console-timestamps nil)
       (should (equal (debug-console-test--prefixes) '(nil nil nil))))))
 

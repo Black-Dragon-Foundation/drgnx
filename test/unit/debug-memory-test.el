@@ -29,7 +29,8 @@ after."
 
 (ert-deftest drgnx-debug-memory/reads-a-page-as-hex-and-text ()
   "A variable's memory: a page read from its reference (`debug/read-memory'), shown 16 bytes a line with the
-address, the bytes in hex and as text (`.' for the unprintable); bytes the program cannot give show as `??'."
+address, the bytes in hex in two halves of 8 and as text (`.' for the unprintable); bytes the program cannot give
+show as `??'.  The address is muted, `??' subtle (the mockup's)."
   (debug-memory-test--with
     (drgnx-debug-memory-open "s1" "0x1000" "buf")
     (should (equal (cadr (car calls)) (list :session "s1" :reference "0x1000" :offset 0
@@ -37,8 +38,25 @@ address, the bytes in hex and as text (`.' for the unprintable); bytes the progr
     (debug-memory-test--answer calls (concat "hello world!" (unibyte-string 0 1 2 3 255) "x") 2)
     (with-current-buffer "*Memory: buf*"
       (should (equal (buffer-substring-no-properties (point-min) (point-max))
-                     (concat "00001000  68 65 6c 6c 6f 20 77 6f 72 6c 64 21 00 01 02 03  hello world!....\n"
-                             "00001010  ff 78 ?? ??                                      .x  \n"))))))
+                     (concat "00001000  68 65 6c 6c 6f 20 77 6f  72 6c 64 21 00 01 02 03  hello world!....\n"
+                             "00001010  ff 78 ?? ??                                       .x  \n")))
+      (should (eq (face-attribute 'drgnx-debug-memory-address :inherit) 'drgnx-text-muted))
+      (should (eq (face-attribute 'drgnx-debug-memory-unreadable :inherit) 'drgnx-text-subtle)))))
+
+(ert-deftest drgnx-debug-memory/the-header-names-the-page ()
+  "The view's header: Memory and the variable's name, the page's address and size, and the paging and write keys
+as keycaps, drawn with the page (never computed in redisplay)."
+  (debug-memory-test--with
+    (cl-letf (((symbol-function 'drgnx-surfaces-key-label)
+               (lambda (id &rest _) (cdr (assq id '((debug-memory-previous . "<prior>") (debug-memory-next . "<next>")
+                                                    (debug-memory-write . "<f2>")))))))
+      (drgnx-debug-memory-open "s1" "0x1000" "order.buf")
+      (debug-memory-test--answer calls "abc" 5)
+      (with-current-buffer "*Memory: order.buf*"
+        (should (memq 'drgnx-debug-memory--header header-line-format))
+        (let ((h drgnx-debug-memory--header))
+          (should (string-match-p "Memory: order\\.buf +0x1000 · 8 bytes" h))
+          (should (string-match-p "PgUp.*PgDn.*F2" h)))))))
 
 (ert-deftest drgnx-debug-memory/pages-and-writes ()
   "The next and previous pages (never before the reference); a write at the byte under point sends the bytes typed

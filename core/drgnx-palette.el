@@ -39,7 +39,7 @@ the ring's colour), radius 4 where the compositor rounds."
 
 (defconst drgnx-palette--key-names
   '(("SPC" . "Space") ("RET" . "↵") ("TAB" . "Tab") ("ESC" . "Esc") ("DEL" . "Backspace")
-    ("<escape>" . "Esc") ("<return>" . "↵"))
+    ("<escape>" . "Esc") ("<return>" . "↵") ("<prior>" . "PgUp") ("<next>" . "PgDn"))
   "Emacs key names that read differently on a cap.")
 
 (defconst drgnx-palette--modifier-names

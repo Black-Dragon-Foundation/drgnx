@@ -18,12 +18,19 @@
   "How many bytes the memory view reads at a time (the hub refuses more than 64 KiB)."
   :type 'natnum :group 'drgnx-debug)
 
-(defface drgnx-debug-memory-address '((t :inherit shadow)) "A line's address in the memory view." :group 'drgnx-debug)
-(defface drgnx-debug-memory-unreadable '((t :inherit shadow)) "Bytes the program cannot give." :group 'drgnx-debug)
+(defface drgnx-debug-memory-address '((t :inherit drgnx-text-muted)) "A line's address in the memory view."
+  :group 'drgnx-debug)
+(defface drgnx-debug-memory-unreadable '((t :inherit drgnx-text-subtle)) "Bytes the program cannot give."
+  :group 'drgnx-debug)
 
 (defvar-local drgnx-debug-memory--session nil)
 (defvar-local drgnx-debug-memory--reference nil)
+(defvar-local drgnx-debug-memory--name nil "The variable whose memory this is.")
 (defvar-local drgnx-debug-memory--offset 0 "The page's first byte, from the reference.")
+(defvar-local drgnx-debug-memory--header "" "The header, made when a page is drawn (redisplay only reads it).")
+
+(declare-function drgnx-surfaces-key-label "drgnx-surfaces" (cmd-or-id &rest keys))
+(declare-function drgnx-palette-keycaps "drgnx-palette" (key))
 
 (defvar-keymap drgnx-debug-memory-mode-map
   :doc "The memory view's keys; the profiles add theirs (`debug-memory-*' in keys/*.eld).")
@@ -31,14 +38,25 @@
 (define-derived-mode drgnx-debug-memory-mode special-mode "Memory"
   "A variable's bytes: 16 to a line, the address, hex and text; the next and previous pages, and writes."
   (setq-local truncate-lines t)
+  (setq header-line-format '("" drgnx-debug-memory--header))
   (buffer-disable-undo))
+
+(defun drgnx-debug-memory--make-header (address bytes)
+  "The header for a page at ADDRESS (a string) of BYTES: Memory and the name, the address and size, the keys."
+  (let ((keys (delq nil (mapcar (lambda (id) (when-let* ((k (drgnx-surfaces-key-label id :short t)))
+                                               (if (fboundp 'drgnx-palette-keycaps) (drgnx-palette-keycaps k) k)))
+                                '(debug-memory-previous debug-memory-next debug-memory-write)))))
+    (concat " " (propertize (format "Memory: %s" drgnx-debug-memory--name) 'face 'bold) "  "
+            (propertize (format "%s · %d bytes" address bytes) 'face 'drgnx-text-subtle)
+            (when keys (concat "   " (string-join keys " "))))))
 
 (defun drgnx-debug-memory-open (session reference name)
   "Show the memory at REFERENCE in SESSION, as NAME's."
   (let ((b (get-buffer-create (format "*Memory: %s*" name))))
     (with-current-buffer b
       (drgnx-debug-memory-mode)
-      (setq drgnx-debug-memory--session session drgnx-debug-memory--reference reference drgnx-debug-memory--offset 0)
+      (setq drgnx-debug-memory--session session drgnx-debug-memory--reference reference drgnx-debug-memory--offset 0
+            drgnx-debug-memory--name name)
       (drgnx-debug-memory--read))
     (pop-to-buffer b)))
 
@@ -88,9 +106,14 @@
                    (push (propertize "??" 'face 'drgnx-debug-memory-unreadable) hex)
                    (push " " text))
                   (t (push "  " hex)))))
+        (setq hex (nreverse hex))
+        ;; two halves of 8, a wider gap between
         (push (concat (propertize (format "%08x" (+ base (* row 16))) 'face 'drgnx-debug-memory-address)
-                      "  " (mapconcat #'identity (nreverse hex) " ") "  " (apply #'concat (nreverse text)))
+                      "  " (string-join (seq-take hex 8) " ") "  " (string-join (seq-drop hex 8) " ")
+                      "  " (apply #'concat (nreverse text)))
               lines)))
+    (setq drgnx-debug-memory--header
+          (drgnx-debug-memory--make-header (if (stringp address) address (format "0x%x" base)) n))
     ;; only the lines that changed are replaced (a refresh after a write changes one)
     (save-excursion
       (goto-char (point-min))

@@ -495,7 +495,8 @@ The session's controls, drawn from `drgnx-debug--sessions` at each `debug-state`
 - **Where** (`drgnx-debug-toolbar`): `floating` puts a card in a child frame over each graphical root frame, centred at
   the top of its editor window under the tab row (over the breadcrumb). The card is made once per root frame
   (`drgnx-debug-toolbar--children`, weak) and hidden between sessions, never deleted; its text is drawn again only
-  when what it shows changed. It never takes the focus: a click runs the command in the parent's editor window, the
+  when what it shows changed, and it is sized to it pixelwise, down to its one row (else the frame keeps a default
+  minimum height of empty card under the buttons, test/ui/debug-toolbar-gui-test.el). It never takes the focus: a click runs the command in the parent's editor window, the
   registry's way. The grip drags it sideways (the mouse is tracked only while the button is down); the offset is kept
   per frame and the card stays inside the window. `docked` gives the same buttons to the editor window's tab row,
   before the split and more buttons, through `drgnx-chrome-tab-row-function`. `hidden`, and every terminal frame,
@@ -648,8 +649,10 @@ The panel's **Debug Console** tab. The hub makes the lines; the editor only inse
   opens `*Memory: NAME*` in the row's session (the `v:SESSION:` of its id; a watch's, the stopped one).
 - `debug/read-memory {session, reference, offset, count}` → `{address, data (base64), unreadable?}` reads a page of
   `drgnx-debug-memory-page-bytes` (256; the hub refuses more than 64 KiB), drawn 16 bytes a line: the address
-  (`%08x` from `address` when it is hex, else the offset), the bytes in hex (`??` for unreadable ones), the text
-  (`.` for the unprintable). A redraw replaces only the lines that changed.
+  (`%08x` from `address` when it is hex, else the offset), the bytes in hex in two halves of 8 (`??` for unreadable
+  ones), the text (`.` for the unprintable). A redraw replaces only the lines that changed. The header
+  (`drgnx-debug-memory--header`, made with the page; redisplay only reads it) names the variable, the address and size,
+  and the paging and write keys as keycaps from the registry.
 - Its keys: next and previous page (never before the reference), refresh, and write: hex typed at the byte under
   point goes as `debug/write-memory {session, reference, offset, data (base64)}`, then the page is read again.
 
