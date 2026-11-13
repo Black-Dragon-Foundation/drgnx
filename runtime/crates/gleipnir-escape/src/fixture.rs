@@ -139,6 +139,8 @@ pub struct Fixture {
     events: Arc<(Mutex<Vec<String>>, Condvar)>,
     /// Numbers the sentinel targets sent through the proxy (each is told about once per tag).
     asked: AtomicUsize,
+    /// The relay port the last spec built for a Linux row gave (`${RELAY_PORT}`); 0 before any (the control run).
+    relay_port: std::sync::atomic::AtomicU16,
     rt: Option<tokio::runtime::Runtime>,
     _proxy: proxy::ProxyHandle,
     /// The web proxy (`Policy::Web`) on `${RUN}/web.sock`, its state and its resolver, set per row
@@ -357,6 +359,7 @@ impl Fixture {
             sentinels,
             events,
             asked: AtomicUsize::new(0),
+            relay_port: std::sync::atomic::AtomicU16::new(0),
             rt: Some(rt),
             _proxy: handle,
             _web_proxy: web_handle,
@@ -538,6 +541,11 @@ impl Fixture {
             "GATEWAY_PORT" => a.gateway_tcp.port().to_string(),
             "TCP_LO_PORT" => a.tcp_lo.port().to_string(),
             "FREE_PORT" => a.free_port.to_string(),
+            "RELAY_PORT" => match self.relay_port.load(std::sync::atomic::Ordering::SeqCst) {
+                // the control run has no relay: a free port stands in
+                0 => a.free_port.to_string(),
+                p => p.to_string(),
+            },
             // The developer dir the hub gives the Seatbelt profile: the active one, by its true name (an Xcode too,
             // whose git draugr refuses).
             "DEVELOPER_DIR" => s(developer_dir()?),
@@ -551,6 +559,11 @@ impl Fixture {
             "PARENT" => "{agent-pid}".into(),
             other => return Err(format!("undefined placeholder ${{{other}}}")),
         })
+    }
+
+    /// Notes the relay port a row's spec was built with (`${RELAY_PORT}`).
+    pub fn set_relay_port(&self, port: u16) {
+        self.relay_port.store(port, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// `s` with every placeholder filled.

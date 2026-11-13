@@ -1470,6 +1470,7 @@ layer alone cap Landlock (`landlock_abi_cap: 3` takes its TCP rules away) or omi
 | `reduced-proc-environ-denied`, `pid-namespace-hides-others` | another process's `/proc/PID/environ` (the backend's secret lives there) is unreadable (reduced: EACCES) or absent (full: the pid namespace) |
 | `reduced-proc-cmdline-the-gap` | the accepted gap: the reduced tier reads other processes' command lines |
 | `reduced-tcp-only-to-the-relay`, `reduced-bind-refused` | the reduced tier connects over TCP only to its relay (and through it to the proxy), and binds no TCP port |
+| `reduced-relay-port-bind-refused` | the reduced tier's second Landlock layer (`forbid_tcp_bind`) refuses a bind even of the relay's own port (`${RELAY_PORT}`): EACCES, where without the layer the relay's hold on the port shows as EADDRINUSE (GL-T15-2) |
 | `reduced-udp-and-icmp-refused` | the reduced tier makes no UDP, ICMP or MPTCP socket (seccomp), so no DNS or datagram leaves past the proxy |
 | `reduced-no-pty` | the reduced tier opens no pty at all (Landlock: `/dev/ptmx` is not granted), so TIOCSTI never gets that far there |
 | `no-new-privs`, `no-new-privs-reduced` | `NoNewPrivs` 1 and seccomp mode 2 in the program |

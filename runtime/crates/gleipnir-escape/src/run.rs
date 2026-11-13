@@ -492,6 +492,7 @@ pub fn build_spec_for(fx: &Fixture, row: &Row, bin: &Path, linux: bool) -> Resul
             if linux {
                 let port = gleipnir::backend::relay_ports(tier, &[wanted])
                     .map_err(|e| format!("relay port: {e}"))?[0];
+                fx.set_relay_port(port);
                 m.insert(
                     "net".into(),
                     serde_json::json!({"isolated": {"relay": [{"port": port, "socket": socket}]}}),

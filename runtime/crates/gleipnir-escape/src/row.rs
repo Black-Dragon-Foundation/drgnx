@@ -49,6 +49,8 @@ pub const PLACEHOLDERS: &[&str] = &[
     "TCP_LO_PORT",
     // A debug session's own loopback port (`"net": "loopback"` rows).
     "FREE_PORT",
+    // The reduced or full tier's relay port in the row's default network (Linux rows).
+    "RELAY_PORT",
     // macOS: the active developer dir (xcode-select's link, by its true name), and where its LLDB.framework is
     // (an Xcode's `../SharedFrameworks`, the Command Line Tools' `Library/PrivateFrameworks`).
     "DEVELOPER_DIR",
