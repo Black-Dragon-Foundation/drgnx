@@ -363,6 +363,9 @@ hub is started first and the shot waits for them (a session starts no hub: witho
                                           (save-excursion (goto-char (point-min)) (search-forward "Makefile" nil t)))))))
 
 (declare-function drgnx-hub-call "drgnx-hub-client")
+;; tools/jobs's (modules/tools/drgnx-jobs.el); no file named: its feature is the name the deleted Lisp jobs runtime
+;; had, which the runtime lints refuse
+(declare-function drgnx-jobs-note-jobs nil (jobs))
 (declare-function flymake-start "flymake")
 (declare-function flymake-make-diagnostic "flymake")
 (defvar drgnx-jobs--running)
@@ -415,7 +418,7 @@ counted from the hub), the file's problems (`drgnx-look-scene--problems') and it
   ;; deleted Lisp jobs runtime had, so nothing here declares from it)
   (drgnx-look-scene--try "jobs"
     (drgnx-hub-call "job/status" nil
-                    (lambda (r e) (unless e (funcall 'drgnx-jobs-note-jobs (append (plist-get r :jobs) nil)))))
+                    (lambda (r e) (unless e (drgnx-jobs-note-jobs (append (plist-get r :jobs) nil)))))
     (drgnx-look-scene--until 15 "the status bar's job (the seeded run)" (lambda () (eql drgnx-jobs--running 1))))
   (drgnx-look-scene--answer))
 
