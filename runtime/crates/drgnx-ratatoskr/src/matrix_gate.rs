@@ -45,6 +45,15 @@ pub enum Gate {
     Never(String),
 }
 
+/// How an allowed action was allowed ([`MatrixGate::allowed_by`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AllowedBy {
+    /// The matrix's own cell, under this preset.
+    Preset(&'static str),
+    /// The matrix would have asked: the user's earlier yes covers it.
+    Grant,
+}
+
 /// What an action is about.  FACTS are the hub's own (never an agent's words); they are all a card shows.
 #[derive(Clone, Debug, Default)]
 pub struct ActionCtx {
@@ -456,6 +465,35 @@ impl MatrixGate {
             },
         };
         (v, why)
+    }
+
+    /// How an action the gate allowed WAS allowed: by the matrix itself (the preset in force, whatever layer set the
+    /// cell) or, when the matrix would have asked, by an earlier yes of the user's.
+    pub async fn allowed_by(
+        &self,
+        writer: &crate::coord::Writer,
+        who: Who,
+        a: Action,
+        ctx: ActionCtx,
+    ) -> AllowedBy {
+        let now = now_secs();
+        let g = self.clone();
+        let preset = self.active_preset(now);
+        writer
+            .db
+            .read(move |c| Ok(g.verdict(c, &who, a, &ctx, now).0 == Verdict::Allow))
+            .await
+            .map_or(AllowedBy::Grant, |cell| {
+                if cell {
+                    AllowedBy::Preset(match preset {
+                        Preset::Cautious => "cautious",
+                        Preset::Balanced => "balanced",
+                        Preset::Autonomous => "autonomous",
+                    })
+                } else {
+                    AllowedBy::Grant
+                }
+            })
     }
 
     /// What the matrix decides for WHO doing A, with no card (`matrix/check`).

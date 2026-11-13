@@ -45,6 +45,12 @@ matching request from then on. The agent keeps its own rule until it starts agai
 agent at its latest step (a new agent from there, which has no rule); the message after a revoke says when the rule is
 kept.
 
+A step the hub allowed without asking says how, in one quiet line under it: `auto-allowed: balanced · this chat` when
+the permission matrix's own cell allowed it (the preset in force, and the session's kind: "this chat" or "this task"),
+or `allowed by your earlier yes · this chat` when the matrix would have asked and an earlier answer of yours covers
+it. The hub writes the line when it decides, so the step shows the reason that applied then, even if you change the
+preset later.
+
 `i` on a chip (or anywhere, then pick one) opens its facts from the hub (`agents/explain`): the context breakdown with
 `[drop]` and `[pin]` only when the agent advertises them and `[What /compact keeps]` when it can say; the dearest
 steps and the cache hits; the mode, its lock and the row of the permissions matrix; what the agent waits for and the
