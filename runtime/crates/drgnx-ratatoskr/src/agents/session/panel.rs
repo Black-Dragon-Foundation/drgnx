@@ -297,14 +297,24 @@ pub(super) fn request(s: Arc<Session>, method: String, params: Value, resp: Resp
 
 /// The `before-tool` hooks on the adapter's step TOOL: `{outcome: "allow"}` unless one refuses, then
 /// `{outcome: "deny", reason}` in the hub's words. A change is not taken here, and with no matrix cell the hooks can
-/// only refuse. A hub tool's step is hooked at its server, not here.
+/// only refuse. A hub tool's step is hooked at its server, not here. A refused call is finished: its step ends before
+/// the answer goes ([`Session::refused_step_ends`]).
 async fn before_tool(s: &Arc<Session>, tool: Value) -> Value {
+    let answer = verdict(s, &tool).await;
+    if answer["outcome"] == "deny" {
+        s.refused_step_ends(Some(&tool));
+    }
+    answer
+}
+
+/// [`before_tool`]'s answer.
+async fn verdict(s: &Arc<Session>, tool: &Value) -> Value {
     use crate::hook_points::{self as points, At};
     let allow = json!({"outcome": "allow"});
     let Some(front) = s.front() else {
         return allow;
     };
-    let call = s.tool_call_info(Some(&tool));
+    let call = s.tool_call_info(Some(tool));
     if call.kind == "other" && points::hub_tool_name(call.name.as_deref()) {
         return allow;
     }

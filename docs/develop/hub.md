@@ -4203,6 +4203,10 @@ Every step of an agent's work is a row of the `step` table (`norn::write::steps`
 session's step writer (`agents/session.rs`) and announced as `agent-step`. The classifier sees the updates as they
 arrive: text between tool calls is `think`; a tool call is `tool` from `in_progress` to `completed`; a permission
 request is `user-wait` (the hub answers it, so it is the user's time, not the tool's); a paused session is `paused`.
+A refused call is finished: when the hub refuses it (a seam deny, the matrix's Never, a gate, a fork's
+`_drgnx/before_tool` deny) or the user does (a card, an answer, a cancel), its `tool` step ends before the answer goes
+back and the agent's time after it is `think` (`State::call_refused`); a step the wait had only just given back
+writes no row. So the timeline holds the refused call when the agent hears the refusal, not at its next update.
 `job-wait`, `machine-queue` and `stalled` are written by the tasks that own those events (exec, the supervisor).
 A step's `provider` is the profile's gateway provider environment (`:ai`) when it has one, else whose CLI it starts
 (`claude`, `codex`, `gemini`), so a subscription session's steps say where they ran (the matrix's `(:provider NAME)`
