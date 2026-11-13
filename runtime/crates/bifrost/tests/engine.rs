@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -176,6 +177,9 @@ impl Registry for Mem {
 struct Book {
     before: f64,
     rows: Mutex<Vec<SpendRow>>,
+    /// While set, a row's recording waits for `gate` (the commit that has not landed yet).
+    hold: std::sync::atomic::AtomicBool,
+    gate: tokio::sync::Notify,
 }
 
 impl Book {
@@ -197,8 +201,12 @@ impl Ledger for Book {
     }
 
     fn record(&self, row: SpendRow) -> BoxFuture<'_, ()> {
-        self.rows.lock().unwrap().push(row);
-        Box::pin(async {})
+        Box::pin(async move {
+            if self.hold.load(Ordering::SeqCst) {
+                self.gate.notified().await;
+            }
+            self.rows.lock().unwrap().push(row);
+        })
     }
 }
 
@@ -769,6 +777,51 @@ async fn budget_event_after_the_crossing_request() {
         _ => unreachable!(),
     }
     assert_eq!(gw.call(AGENT, "/v1/messages", "{}").await.status, 429);
+    assert_eq!(mock.requests().len(), 1);
+}
+
+/// The spend row is committed after the answer: a request that comes before that commit lands is judged against the
+/// budget with it (the check waits for the job's pending rows), so the budget is not exceeded by a request that raced the
+/// commit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_request_racing_the_spend_commit_sees_the_spend() {
+    let mock = Mock::start(json!([
+        {"path": "/a/", "body": "{\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"cost\":0.6}}"}
+    ]));
+    let gw = Gw::start(
+        vec![provider("a", Kind::Anthropic, &mock.url("/a"), Auth::None)],
+        vec![(AGENT, agent(&["a"], Some(1.0)))],
+        &[],
+        0.5,
+    )
+    .await;
+    gw.book.hold.store(true, Ordering::SeqCst);
+    assert_eq!(gw.call(AGENT, "/v1/messages", "{}").await.status, 200);
+    // the row of that request is not committed: a second request is asked now
+    let (port, token) = (gw.port, AGENT);
+    let second = tokio::spawn(async move {
+        let (mut sender, _conn) =
+            open(TcpStream::connect(("127.0.0.1", port)).await.unwrap()).await;
+        let request = Request::post("/v1/messages")
+            .header(HOST, format!("127.0.0.1:{port}"))
+            .header(AUTHORIZATION, format!("Bearer {token}"))
+            .header(CONTENT_TYPE, "application/json")
+            .body(Full::new(Bytes::from_static(b"{}")))
+            .unwrap();
+        let reply = read(sender.send_request(request).await.unwrap()).await;
+        (reply.status, reply.body)
+    });
+    // until it is answered, or it waits for the commit (which this test then lets land)
+    while !second.is_finished() && gw.gw.spend_waiting() == 0 {
+        tokio::task::yield_now().await;
+    }
+    gw.book.hold.store(false, Ordering::SeqCst);
+    gw.book.gate.notify_one();
+    let (status, body) = second.await.unwrap();
+    assert_eq!(
+        status, 429,
+        "the second request passed the budget before the first's row landed: {body}"
+    );
     assert_eq!(mock.requests().len(), 1);
 }
 
