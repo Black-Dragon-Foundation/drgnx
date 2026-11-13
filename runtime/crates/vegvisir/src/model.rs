@@ -716,7 +716,11 @@ impl Model {
             })?
             .1;
         let machine = owner.fact.machine.as_deref()?;
-        let short = if machine == "desktop" { "desk" } else { machine };
+        let short = if machine == "desktop" {
+            "desk"
+        } else {
+            machine
+        };
         Some(match owner.fact.slot {
             Some(n) => format!("{short} {n}"),
             None => short.to_owned(),

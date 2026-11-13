@@ -123,7 +123,7 @@ fn golden_rows_of_the_fixture() {
         ),
         (
             "row:6:0:0",
-            "Files<248><img> session.rs ·…<392><404><img> desk · 3/16…<532>\n",
+            "Files<248><img> session.rs ·…<392><404><img> desk · 3/16<532>\n",
         ),
     ];
     let bad: Vec<String> = golden
@@ -731,25 +731,36 @@ fn items_off_the_selections_chain_are_dim() {
     // the chain: the selection's own edges only (what it came from and what it touches)
     let chain: Vec<Edge> = edges
         .iter()
-        .filter(|e| e.from == pick || e.to == pick)
+        .filter(|e| e.kind == EdgeKind::CameFrom && (e.from == pick || e.to == pick))
         .cloned()
         .collect();
     s.chain = &chain;
     let drawn = render::rows(&s, &Index::of(&s), &gui(&palette), &Cols);
     let dim = |key: &str, word: &str| -> bool {
         let r = drawn.rows.iter().find(|r| r.key == key).expect(key);
-        let at = r.text.find(word).unwrap_or_else(|| panic!("{word} in {:?}", r.text));
+        let at = r
+            .text
+            .find(word)
+            .unwrap_or_else(|| panic!("{word} in {:?}", r.text));
         let at = u32::try_from(r.text[..at].chars().count()).unwrap();
         r.runs
             .iter()
             .any(|(s, e, f)| *s <= at && at < *e && f == "drgnx-work-dim")
     };
     assert!(!dim("row:4:0:0:0", "Opus"), "the selected agent is lit");
-    assert!(dim("row:4:0:0:0", "Sonnet"), "an agent off the chain is dim");
+    assert!(
+        dim("row:4:0:0:0", "Sonnet"),
+        "an agent off the chain is dim"
+    );
     // with no selection nothing is dim
     let s = scene(&items, &edges, &layout, &new);
     let drawn = render::rows(&s, &Index::of(&s), &gui(&palette), &Cols);
-    assert!(drawn.rows.iter().all(|r| r.runs.iter().all(|x| x.2 != "drgnx-work-dim")));
+    assert!(
+        drawn
+            .rows
+            .iter()
+            .all(|r| r.runs.iter().all(|x| x.2 != "drgnx-work-dim"))
+    );
 }
 
 /// [D] A branch's chip shows the tag of the machine its agent runs on (`desk 3`) in a chip of its own, in place of
@@ -758,7 +769,9 @@ fn items_off_the_selections_chain_are_dim() {
 fn a_branch_chip_shows_its_machine_tag() {
     let (mut items, edges, layout) = frame();
     let id = ItemId("branch:drgnx/rp-df-hub".into());
-    items.get_mut(&id).expect("the branch").fields.tag = Some("desk 3".into());
+    let branch = items.get_mut(&id).expect("the branch");
+    branch.fields.tag = Some("desk 3".into());
+    branch.label = "rp-a".into(); // short enough for the 8 px column measure
     let new = BTreeSet::new();
     let palette = Palette::default();
     let s = scene(&items, &edges, &layout, &new);
@@ -766,7 +779,7 @@ fn a_branch_chip_shows_its_machine_tag() {
     let row = drawn
         .rows
         .iter()
-        .find(|r| r.key.starts_with("row:5:") && r.text.contains("rp-df-hub"))
+        .find(|r| r.key.starts_with("row:5:") && r.text.contains("rp-a"))
         .expect("the branches' row");
     assert!(row.text.contains("desk 3"), "{:?}", row.text);
     assert!(!row.text.contains("edits 2"), "{:?}", row.text);

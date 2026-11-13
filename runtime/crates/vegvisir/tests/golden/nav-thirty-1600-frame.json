@@ -1372,7 +1372,8 @@
           574,
           1
         ],
-        "repo": "drgnx"
+        "repo": "drgnx",
+        "tag": "desk"
       },
       "id": "branch:drgnx/as2-core",
       "kind": "branch",
@@ -1392,7 +1393,8 @@
           322,
           17
         ],
-        "repo": "drgnx"
+        "repo": "drgnx",
+        "tag": "desk"
       },
       "id": "branch:drgnx/as2-data",
       "kind": "branch",
@@ -1412,7 +1414,8 @@
           390,
           10
         ],
-        "repo": "drgnx"
+        "repo": "drgnx",
+        "tag": "desk"
       },
       "id": "branch:drgnx/as2-edits",
       "kind": "branch",
@@ -1432,7 +1435,8 @@
           1532,
           0
         ],
-        "repo": "drgnx"
+        "repo": "drgnx",
+        "tag": "desk"
       },
       "id": "branch:drgnx/as2-map",
       "kind": "branch",
@@ -1452,7 +1456,8 @@
           302,
           8
         ],
-        "repo": "drgnx"
+        "repo": "drgnx",
+        "tag": "desk"
       },
       "id": "branch:drgnx/as2-s1",
       "kind": "branch",
@@ -1472,7 +1477,8 @@
           560,
           4
         ],
-        "repo": "drgnx"
+        "repo": "drgnx",
+        "tag": "desk"
       },
       "id": "branch:drgnx/as2-s4",
       "kind": "branch",
@@ -1492,7 +1498,8 @@
           822,
           3
         ],
-        "repo": "drgnx"
+        "repo": "drgnx",
+        "tag": "desk"
       },
       "id": "branch:drgnx/as2-sources",
       "kind": "branch",
@@ -1512,7 +1519,8 @@
           490,
           18
         ],
-        "repo": "drgnx"
+        "repo": "drgnx",
+        "tag": "desk"
       },
       "id": "branch:drgnx/as2-step",
       "kind": "branch",
@@ -1532,7 +1540,8 @@
           332,
           9
         ],
-        "repo": "drgnx"
+        "repo": "drgnx",
+        "tag": "desk"
       },
       "id": "branch:drgnx/as2-trace",
       "kind": "branch",
@@ -1552,7 +1561,8 @@
           118,
           20
         ],
-        "repo": "drgnx"
+        "repo": "drgnx",
+        "tag": "desk"
       },
       "id": "branch:drgnx/as2-wire",
       "kind": "branch",
@@ -1587,7 +1597,8 @@
           234,
           24
         ],
-        "repo": "drgnx"
+        "repo": "drgnx",
+        "tag": "local"
       },
       "id": "branch:drgnx/rp-core",
       "kind": "branch",
@@ -1607,7 +1618,8 @@
           184,
           21
         ],
-        "repo": "drgnx"
+        "repo": "drgnx",
+        "tag": "local"
       },
       "id": "branch:drgnx/rp-hub",
       "kind": "branch",
@@ -1647,7 +1659,8 @@
           52,
           8
         ],
-        "repo": "drgnx"
+        "repo": "drgnx",
+        "tag": "desk"
       },
       "id": "branch:drgnx/rp-mods",
       "kind": "branch",
@@ -1667,7 +1680,8 @@
           27,
           22
         ],
-        "repo": "drgnx"
+        "repo": "drgnx",
+        "tag": "desk"
       },
       "id": "branch:drgnx/rp-sweep",
       "kind": "branch",
@@ -1687,7 +1701,8 @@
           460,
           14
         ],
-        "repo": "nidhogg"
+        "repo": "nidhogg",
+        "tag": "desk"
       },
       "id": "branch:nidhogg/gl-cards",
       "kind": "branch",
@@ -1707,7 +1722,8 @@
           150,
           26
         ],
-        "repo": "nidhogg"
+        "repo": "nidhogg",
+        "tag": "desk"
       },
       "id": "branch:nidhogg/gl-fonts",
       "kind": "branch",
@@ -1727,7 +1743,8 @@
           532,
           19
         ],
-        "repo": "nidhogg"
+        "repo": "nidhogg",
+        "tag": "desk"
       },
       "id": "branch:nidhogg/gl-leg",
       "kind": "branch",
@@ -1747,7 +1764,8 @@
           560,
           27
         ],
-        "repo": "nidhogg"
+        "repo": "nidhogg",
+        "tag": "desk"
       },
       "id": "branch:nidhogg/gl-mask",
       "kind": "branch",
@@ -1767,7 +1785,8 @@
           276,
           31
         ],
-        "repo": "nidhogg"
+        "repo": "nidhogg",
+        "tag": "desk"
       },
       "id": "branch:nidhogg/gl-pacer",
       "kind": "branch",
@@ -1787,7 +1806,8 @@
           300,
           29
         ],
-        "repo": "nidhogg"
+        "repo": "nidhogg",
+        "tag": "desk"
       },
       "id": "branch:nidhogg/gl-scroll",
       "kind": "branch",
@@ -1807,7 +1827,8 @@
           330,
           56
         ],
-        "repo": "nidhogg"
+        "repo": "nidhogg",
+        "tag": "laptop"
       },
       "id": "branch:nidhogg/gl-shell",
       "kind": "branch",
@@ -1882,7 +1903,8 @@
           590,
           0
         ],
-        "repo": "org"
+        "repo": "org",
+        "tag": "local"
       },
       "id": "branch:org/jobq-plan",
       "kind": "branch",
@@ -1902,7 +1924,8 @@
           262,
           0
         ],
-        "repo": "org"
+        "repo": "org",
+        "tag": "local"
       },
       "id": "branch:org/jobq-report",
       "kind": "branch",

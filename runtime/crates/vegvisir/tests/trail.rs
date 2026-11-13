@@ -328,6 +328,14 @@ fn numbered_circles_and_the_new_tag() {
     // the room is the same, so the icons line up
     let icon_at = |r: &Row| r.images[0].0;
     assert_eq!(icon_at(row("step:1")), icon_at(row("step:2")));
-    assert!(row("conc:2:0").text.contains(" new "), "{:?}", row("conc:2:0"));
-    assert!(!row("conc:1:0").text.contains(" new "), "{:?}", row("conc:1:0"));
+    assert!(
+        row("conc:2:0").text.contains(" new "),
+        "{:?}",
+        row("conc:2:0")
+    );
+    assert!(
+        !row("conc:1:0").text.contains(" new "),
+        "{:?}",
+        row("conc:1:0")
+    );
 }
