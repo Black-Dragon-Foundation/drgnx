@@ -927,6 +927,49 @@ async fn a_refused_body_is_drained() {
     assert!(answer.contains("not a drgnx gateway token"), "{answer}");
 }
 
+/// A chunked body over the limit is answered 413 and the unread rest (up to the drain's 64 KiB) is read before the
+/// connection closes, so the client that is still sending is not reset under its answer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_chunked_body_over_the_limit_is_413_and_drained() {
+    let mock = Mock::start(json!([{"path": "/a/", "body": "{\"ok\":true}"}]));
+    let gw = Gw::start(
+        vec![provider("a", Kind::Anthropic, &mock.url("/a"), Auth::None)],
+        vec![(AGENT, agent(&["a"], None))],
+        &[],
+        0.0,
+    )
+    .await;
+    let s = TcpStream::connect(("127.0.0.1", gw.port)).await.unwrap();
+    let (mut rd, mut wr) = s.into_split();
+    let head = format!(
+        "POST /v1/messages HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAuthorization: Bearer {AGENT}\r\n\
+         Content-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n",
+        gw.port
+    );
+    wr.write_all(head.as_bytes()).await.unwrap();
+    // 32 MiB and 40 KiB over, in 8 KiB chunks: less than the drain's limit is left unread when the gateway answers
+    let writer = tokio::spawn(async move {
+        let chunk = [b"2000\r\n".as_slice(), &[b'x'; 8192], b"\r\n"].concat();
+        for _ in 0..(32 * 1024 / 8 + 5) {
+            if wr.write_all(&chunk).await.is_err() {
+                return;
+            }
+        }
+        let _ = wr.write_all(b"0\r\n\r\n").await;
+    });
+    let mut answer = Vec::new();
+    let read = tokio::time::timeout(Duration::from_secs(60), rd.read_to_end(&mut answer))
+        .await
+        .expect("the gateway closes within 60 s");
+    // a close with the body unread would reset the connection under the client
+    assert!(read.is_ok(), "{read:?}");
+    let answer = String::from_utf8_lossy(&answer);
+    assert!(answer.starts_with("HTTP/1.1 413"), "{answer}");
+    assert!(answer.contains("over 32 MiB"), "{answer}");
+    let _ = writer.await;
+    assert_eq!(mock.requests().len(), 0);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_session_token_is_401_on_tcp() {
     let mock = Mock::start(json!([{"path": "/a/", "body": "{\"ok\":true}"}]));

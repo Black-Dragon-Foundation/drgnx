@@ -364,22 +364,26 @@ impl Gateway {
             }
         }
 
-        let body = match Limited::new(incoming, MAX_BODY as usize).collect().await {
+        let mut incoming = incoming;
+        let body = match Limited::new(&mut incoming, MAX_BODY as usize)
+            .collect()
+            .await
+        {
             Ok(collected) => {
                 let body = collected.to_bytes();
                 self.bytes_in
                     .fetch_add(body.len() as u64, Ordering::Relaxed);
                 body
             }
+            // answered like every refusal: the unread rest (up to the drain's limit) is read before the connection
+            // closes, so a client still sending is not reset under its answer
             Err(e) if e.downcast_ref::<LengthLimitError>().is_some() => {
-                return answer(
-                    &Refusal::new(
-                        413,
-                        "invalid_request_error",
-                        "the request body is over 32 MiB",
-                    ),
-                    true,
+                let r = Refusal::new(
+                    413,
+                    "invalid_request_error",
+                    "the request body is over 32 MiB",
                 );
+                return refuse(&r, &parts, incoming);
             }
             Err(_) => {
                 return answer(
