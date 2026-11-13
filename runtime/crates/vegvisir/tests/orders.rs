@@ -179,6 +179,7 @@ fn session(id: &str, task: Option<&str>, branch: Option<&str>, base: Option<&str
         worktree: branch.map(|b| format!("wt/{b}")),
         base: base.map(str::to_string),
         machine: None,
+        slot: None,
         spend: None,
         context: None,
         progress: None,

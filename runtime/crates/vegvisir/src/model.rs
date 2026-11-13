@@ -89,6 +89,9 @@ pub struct SessionFact {
     /// The machine it holds a slot on, or waits for.
     #[serde(default)]
     pub machine: Option<String>,
+    /// The slot it holds on that machine (the mockup's "desk 3").
+    #[serde(default)]
+    pub slot: Option<u32>,
     /// Spend with its unit, as the card shows it (`$1.20`, `≈$1.20`, `2.1 % wk`).
     #[serde(default)]
     pub spend: Option<String>,
@@ -271,6 +274,9 @@ pub struct Fields {
     /// A branch's "edits N" chip: files, plus, minus.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub edits: Option<(u32, u32, u32)>,
+    /// A branch's tag: the machine its agent runs on, abbreviated, and the slot (`desk 3`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
     /// A file's `+/−` on the branch that changes it most.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub change: Option<(u32, u32)>,

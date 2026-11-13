@@ -84,7 +84,9 @@ fn a_conclusion_dirties_only_its_steps() {
         "{ops:?}"
     );
     let s2 = after.iter().find(|r| r.key == "step:2").unwrap();
-    assert!(s2.text.contains("src/a2.rs [1]"), "{}", s2.text);
+    // the step a conclusion rests on starts with its number in a circle (a badge), the others with room for one
+    assert!(s2.text.contains(" 1 "), "{}", s2.text);
+    assert!(s2.runs.iter().any(|r| r.2 == "drgnx-badge"), "{s2:?}");
 }
 
 /// [A] A step inside the Timeline's range redraws its own lane only; one past the range moves every lane's scale.
@@ -307,4 +309,25 @@ fn a_conclusion_card_runs_to_the_right_edge() {
             "{r:?}"
         );
     }
+}
+
+/// [D] A step that a conclusion rests on starts with the conclusion's number in a circle, the others with the same room
+/// empty; the newest conclusion's card says `new` while it rests on one of the last three steps
+/// (work-space-dark.html `.cc .new`).
+#[test]
+fn numbered_circles_and_the_new_tag() {
+    let p = Palette::default();
+    let steps: Vec<Step> = (1..=6).map(|i| step(i, 1000.0 + 10.0 * i as f64)).collect();
+    let concs = vec![conclusion(1, 2, &[2]), conclusion(2, 5, &[4, 5])];
+    let rows = trail::trail_rows(&steps, &concs, &env(&p), Zone(0));
+    let row = |k: &str| rows.iter().find(|r| r.key == k).expect(k);
+    let badged = |r: &Row| r.runs.iter().any(|x| x.2 == "drgnx-badge");
+    assert!(badged(row("step:2")) && row("step:2").text.contains(" 1 "));
+    assert!(badged(row("step:4")) && row("step:4").text.contains(" 2 "));
+    assert!(!badged(row("step:1")) && !badged(row("step:3")));
+    // the room is the same, so the icons line up
+    let icon_at = |r: &Row| r.images[0].0;
+    assert_eq!(icon_at(row("step:1")), icon_at(row("step:2")));
+    assert!(row("conc:2:0").text.contains(" new "), "{:?}", row("conc:2:0"));
+    assert!(!row("conc:1:0").text.contains(" new "), "{:?}", row("conc:1:0"));
 }

@@ -22,7 +22,7 @@
   ],
   "agents": [
     {"id": "a1", "name": "hub rows", "model": "Opus", "state": "running", "since": 8, "seq": 1, "task": "t1",
-     "branch": "drgnx/rp-df-hub", "worktree": "wt/rp-df-hub", "base": "c-i6", "machine": "desktop", "spend": "$1.20",
+     "branch": "drgnx/rp-df-hub", "worktree": "wt/rp-df-hub", "base": "c-i6", "machine": "desktop", "slot": 3, "spend": "$1.20",
      "class": "test", "conclusion": "turn_core drops the started flag",
      "files": {"drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs": [40, 3], "drgnx/runtime/crates/drgnx-ratatoskr/src/front.rs": [12, 1]}},
     {"id": "a2", "name": "fx-sess", "model": "Sonnet", "state": "review", "since": 26, "seq": 2, "task": "t2",
@@ -42,7 +42,7 @@
     {"name": "laptop", "slots": 2, "used": 1, "reported": true}
   ],
   "cards": [
-    {"id": "c-push", "kind": "push", "about": ["agent:a3"], "text": "push rp-i6 to ci/*?", "open": true},
-    {"id": "c-perm", "kind": "permission", "about": ["agent:a1"], "text": "Codex asks: cargo clippy", "open": true}
+    {"id": "0-a-push", "kind": "push", "about": ["agent:a3"], "text": "push rp-i6 to ci/*?", "open": true},
+    {"id": "0-b-perm", "kind": "permission", "about": ["agent:a1"], "text": "Codex asks: cargo clippy", "open": true}
   ]
 }

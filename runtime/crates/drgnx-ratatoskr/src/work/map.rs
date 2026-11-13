@@ -333,6 +333,7 @@ impl Sess {
             worktree,
             base: None,
             machine: self.job.as_ref().and_then(|j| j.runner.clone()),
+            slot: None,
             spend,
             context,
             progress: None,
@@ -348,6 +349,7 @@ impl Sess {
                 since: self.since,
                 seq: self.seq * 1000 + i as u64 + 1,
                 task: None,
+                slot: None,
                 manager: None,
                 branch: None,
                 worktree: None,
@@ -1371,7 +1373,7 @@ impl Map {
             }
             let k3 = (key.conn, view.clone(), c);
             f.core.views.publish_built(f, &k3, |env, _fonts| {
-                (detail::rows(&lines, env.scale), Vec::new())
+                (detail::rows(&lines, env.scale, env.width_px), Vec::new())
             });
         }
     }

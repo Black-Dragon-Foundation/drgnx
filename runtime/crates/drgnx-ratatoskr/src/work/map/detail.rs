@@ -257,7 +257,7 @@ const KEY_PX: f32 = 66.0;
 /// `KEY\tVALUE` line as a muted key and its value in a column (an agent's why-chain and a link in the accent, an
 /// overlap in the warning colour), an action as a button and its key. A job's line carries its id as
 /// `drgnx-work-job`.
-pub(crate) fn rows(lines: &[Line], scale: f32) -> Vec<Row> {
+pub(crate) fn rows(lines: &[Line], scale: f32, _width_px: u32) -> Vec<Row> {
     let key_px = (KEY_PX * scale).round() as u32;
     lines
         .iter()

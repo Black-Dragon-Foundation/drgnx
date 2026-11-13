@@ -694,7 +694,7 @@ fn detail_rows_say_the_edges() {
     let lines = detail::lines(m, Some(&agent.id), 0);
     let text: Vec<&str> = lines.iter().map(|(_, t, _)| t.as_str()).collect();
     assert!(
-        text[0].starts_with(&format!("{} · agent", agent.label)),
+        text[0].contains(&agent.label),
         "{text:?}"
     );
     for e in edges.iter().filter(|e| came(e) && e.from == agent.id) {
@@ -716,7 +716,7 @@ fn detail_rows_say_the_edges() {
         text.iter().any(|t| t.contains('\t') && t.contains(&pl)),
         "{pl} in {text:?}"
     );
-    let rows = detail::rows(&lines, 1.0);
+    let rows = detail::rows(&lines, 1.0, 340);
     assert_eq!(rows.len(), lines.len());
     assert_eq!(rows[0].key, "head/0");
     assert_eq!(detail::map_of(&detail::view_of("w-1")), Some("w-1"));
@@ -1143,6 +1143,13 @@ fn the_map_scene_has_every_layer_the_overlap_and_its_cards() {
         .into_iter()
         .map(|n| n.kind)
         .collect();
+    // the strip reads as the mockup's: the push first, then the permission
+    assert_eq!(kinds[..2], [CardKind::Push, CardKind::Permission], "{kinds:?}");
+    // the first agent's branch carries the machine and slot its agent runs on, as its chip's tag
+    let branch = items
+        .get(&ItemId("branch:drgnx/rp-df-hub".into()))
+        .expect("the first agent's branch");
+    assert_eq!(branch.fields.tag.as_deref(), Some("desk 3"), "{branch:?}");
     for k in [CardKind::Push, CardKind::Permission] {
         assert_eq!(
             kinds.iter().filter(|c| **c == k).count(),
@@ -1195,7 +1202,7 @@ fn detail_rows_are_the_mockups_tile() {
     }
     let m = core.model();
     let agent = ItemId("agent:a1".into());
-    let rows = detail::rows(&detail::lines(m, Some(&agent), 0), 1.0);
+    let rows = detail::rows(&detail::lines(m, Some(&agent), 0), 1.0, 340);
     fn faces_of(r: &Row) -> Vec<&str> {
         r.runs.iter().map(|x| x.2.as_str()).collect()
     }
@@ -1210,6 +1217,15 @@ fn detail_rows_are_the_mockups_tile() {
             .unwrap_or_else(|| panic!("a `{k}` row with a key column in {rows:?}"))
             .clone()
     };
+    // the head: the agent's badge, its name and its state as a chip at the right; then the subtitle
+    // (work-space-dark.html `.det .hd`)
+    assert!(rows[0].text.contains("Opus · hub rows"), "{:?}", rows[0]);
+    assert!(faces_of(&rows[0]).contains(&"drgnx-chip"), "{:?}", rows[0]);
+    assert!(faces_of(&rows[0]).contains(&"drgnx-work-agent-1"), "{:?}", rows[0]);
+    assert!(!rows[0].stops.is_empty(), "the chip is at the right edge: {:?}", rows[0]);
+    assert!(rows[1].text.contains("SESSION-END-LOSES-STARTED-1"), "{:?}", rows[1]);
+    assert!(rows[1].text.contains("API prices"), "{:?}", rows[1]);
+    assert!(faces_of(&rows[1]).contains(&"drgnx-text-muted"), "{:?}", rows[1]);
     for k in ["you", "spec", "plan", "task"] {
         let r = key(k);
         assert!(faces_of(&r).contains(&"drgnx-text-muted"), "{r:?}");
