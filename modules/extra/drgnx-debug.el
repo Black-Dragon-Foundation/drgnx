@@ -66,6 +66,7 @@ view follows `debug-frame' and a session's instruction breakpoints (`debug-break
     ("debug-heap" (drgnx-debug-heap-event data))
     ("debug-frame"
      (drgnx-debug-disassembly-frame data)
+     (drgnx-debug-heap-frame data)
      (drgnx-debug-gutter-show-frame data))
     ("debug-breakpoints"
      (when (and (plist-get data :session) (not (plist-get data :path)))

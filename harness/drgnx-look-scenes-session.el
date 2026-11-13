@@ -872,6 +872,9 @@ colour bar and the file's chip."
 (declare-function drgnx-debug-heap--faded "drgnx-debug-heap" ())
 (declare-function drgnx-wb-area-show "drgnx-area" (area &optional tab buffer))
 (defvar drgnx-debug-heap-buffer-name)
+(defvar drgnx-debug-heap--title)
+(defvar drgnx-debug-heap--pick)
+(declare-function drgnx-debug-heap-frame "drgnx-debug-heap" (data))
 (declare-function drgnx-quickhelp--request "drgnx-quickhelp")
 (declare-function drgnx-quickhelp-shown-p "drgnx-quickhelp")
 (defvar drgnx-debug-console-timestamps)
@@ -1208,45 +1211,55 @@ code and size the scene's own (the container has no keyring, so no run is record
                                  fields))))
 
 (defun drgnx-look-scene--heap-answer (second)
-  "The heap graph of `a' at the mockup's first stop, or (SECOND) its next: a, b and d, then the ring a → b → c → a
-with c's `prev' sharing b, b's qty changed, c new and d gone, and b's 40 tags cut by the limit (a stub at the end of a
-dashed edge); the cells laid out by the hub's rules (layers left to
-right, forward edges through the gap before the target, back edges in lanes above the cards)."
-  (let ((a (drgnx-look-scene--heap-node "a" "a" '("sku" "'nut-m6'") '("qty" "20") '("next" "<Node>" "b")
-                                        (if second '("spare" "None") '("spare" "<Node>" "d"))))
-        (b (drgnx-look-scene--heap-node "b" "a.next" '("sku" "'bolt-m4'") (list "qty" (if second "3" "5"))
-                                        (if second '("next" "<Node>" "c") '("next" "None")) '("tags" "list · 40" nil 40)))
-        (c (drgnx-look-scene--heap-node "c" "a.next.next" '("sku" "'washer-8'") '("qty" "0") '("next" "<Node>" "a")
-                                        '("prev" "<Node>" "b")))
-        (d (drgnx-look-scene--heap-node "d" "a.spare" '("sku" "'pin-2'") '("qty" "0") '("next" "None"))))
-    (list :graph "scene-heap" :session "scene" :expr "a" :node "a" :cut 40
-          :nodes (vconcat (if second (list a b c) (list a b d)))
-          :cards (vconcat (list (list :id "a" :col 3 :row 2 :width 18 :height 5)
-                                (list :id "b" :col 27 :row 2 :width 18 :height 5))
-                          (if second (list (list :id "c" :col 51 :row 2 :width 18 :height 5))
-                            (list (list :id "d" :col 27 :row 9 :width 18 :height 4))))
-          :cuts (vector (list :from "b" :field 3 :count 40 :col 51 :row 8 :width 15))
-          :edges (vconcat (list (list :from "a" :field 2 :to "b" :points [[21 5] [25 5] [25 2] [27 2]])
-                                (list :from "b" :field 3 :to "" :cut t :points [[45 6] [47 6] [47 8] [51 8]]))
+  "The graph of the stopped frame's locals at the mockup's first stop, or (SECOND) its next: the frame first (a,
+shared = b, threshold), then a → b → d, then the ring a → b → c → a with b's qty changed, c new and d gone, and b's
+40 tags cut by the limit (a stub at the end of a dashed edge); the cells laid out by the hub's rules (layers left to
+right, forward edges through the gap before the target, back edges in a lane above the cards)."
+  (let ((frame (list :id "frame" :type "frame" :path "Locals"
+                     :fields (vector (list :name "a" :value "<Node>" :to "a") (list :name "shared" :value "<Node>" :to "b")
+                                     (list :name "threshold" :value "10"))))
+        (a (drgnx-look-scene--heap-node "a" "a" '("sku" "'nut-m6'") '("qty" "20") '("next" "<Node>" "b")))
+        (b (drgnx-look-scene--heap-node "b" "b" '("sku" "'bolt-m4'") (list "qty" (if second "3" "5"))
+                                        (list "next" "<Node>" (if second "c" "d")) '("tags" "list · 40" nil 40)))
+        (c (drgnx-look-scene--heap-node "c" "c" '("sku" "'washer-8'") '("qty" "0") '("next" "<Node>" "a")))
+        (d (drgnx-look-scene--heap-node "d" "d" '("sku" "'pin-2'") '("qty" "0") '("next" "None"))))
+    (list :graph "scene-heap" :session "scene" :expr "" :locals t :node "frame" :cut 40
+          :nodes (vconcat (list frame a b (if second c d)))
+          :cards (vconcat (list (list :id "frame" :col 3 :row 2 :width 18 :height 4)
+                                (list :id "a" :col 27 :row 2 :width 18 :height 4)
+                                (list :id "b" :col 51 :row 2 :width 18 :height 5))
+                          (list (if second (list :id "c" :col 75 :row 2 :width 18 :height 4)
+                                  (list :id "d" :col 27 :row 9 :width 18 :height 4))))
+          :cuts (vector (list :from "b" :field 3 :count 40 :col 75 :row 8 :width 15))
+          :edges (vconcat (list (list :from "frame" :field 0 :to "a" :points [[21 3] [24 3] [24 2] [27 2]])
+                                (list :from "frame" :field 1 :to "b" :points [[21 4] [23 4] [23 7] [48 7] [48 2] [51 2]])
+                                (list :from "a" :field 2 :to "b" :points [[45 5] [48 5] [48 2] [51 2]])
+                                (list :from "b" :field 3 :to "" :cut t :points [[69 6] [72 6] [72 8] [75 8]]))
                           (if second
-                              (list (list :from "b" :field 2 :to "c" :points [[45 5] [49 5] [49 2] [51 2]])
-                                    (list :from "c" :field 2 :to "a" :points [[69 5] [71 5] [71 0] [1 0] [1 2] [3 2]])
-                                    (list :from "c" :field 3 :to "b" :points [[69 6] [71 6] [71 1] [25 1] [25 2] [27 2]]))
-                            (list (list :from "a" :field 3 :to "d" :points [[21 6] [25 6] [25 9] [27 9]]))))
-          :width 75 :height (if second 9 14)
+                              (list (list :from "b" :field 2 :to "c" :points [[69 5] [72 5] [72 2] [75 2]])
+                                    (list :from "c" :field 2 :to "a" :points [[93 5] [96 5] [96 0] [36 0] [36 2]]))
+                            (list (list :from "b" :field 2 :to "d" :points [[69 5] [70 5] [70 8] [25 8] [25 9] [27 9]]))))
+          :width 99 :height 13
           :added (if second ["c"] []) :changed (if second ["b"] []) :gone (if second ["d"] []))))
 
 (defun drgnx-look-scene--heap-graph (theme)
-  "The heap graph in THEME: the Graph tab after the second stop, a selected (the debugging-extras mockup's)."
+  "The heap graph in THEME: the Graph tab after the second stop, the frame's locals shown from `a' (the
+debugging-extras mockup's)."
   (drgnx-look-scene--theme theme)
   (drgnx-look-scene--try (if (eq theme 'drgnx-light) "heap-graph-light" "heap-graph")
+    ;; the Graph tab is extra/debug's: set it up when the session has not (its tab in the panel's strip)
+    (unless (drgnx-modules--ok-p 'extra/debug)
+      (drgnx-modules--run-one 'extra/debug (alist-get 'extra/debug drgnx-modules--table) 'idle))
     (drgnx-wb-focus-editor)
     (let ((f (expand-file-name "inventory.py" drgnx-look-scene--project)))
       (unless (file-exists-p f) (with-temp-file f (insert drgnx-look-scene--inventory)))
       (find-file f))
     (when-let* ((old (get-buffer drgnx-debug-heap-buffer-name))) (kill-buffer old))
+    (drgnx-debug-heap-frame (list :session "scene" :name "reorder_quantities" :epoch 2))
     (let ((b (get-buffer-create drgnx-debug-heap-buffer-name)))
-      (with-current-buffer b (drgnx-debug-heap-mode))
+      (with-current-buffer b
+        (drgnx-debug-heap-mode)
+        (setq drgnx-debug-heap--title "a" drgnx-debug-heap--pick "a"))
       (let ((w (drgnx-wb-area-show 'panel 'debug-graph b)))
         (with-current-buffer b
           (drgnx-debug-heap--show (drgnx-look-scene--heap-answer nil))
