@@ -353,7 +353,7 @@ argument): without moving focus."
 (defun drgnx-work-lens--controls ()
   "The tile's controls (work-space-dark.html): the grip (the tile layout's drag handle: not wired yet), maximise or
 restore, and the menu of keys."
-  (concat (propertize " " 'display '(space :align-to (- right 70)))
+  (concat (propertize " " 'display `(space :align-to (- right (,(drgnx-px 70)))))   ; a parenthesised size is pixels
           (drgnx-work-lens--control 'grip-vertical "⠿" "Move this tile") " "
           (drgnx-work-lens--control 'maximize-2 "⛶" "Maximise or restore this tile" #'drgnx-work-lens-maximize) " "
           (drgnx-work-lens--control 'ellipsis "⋯" "This view's keys" #'drgnx-work-keys-sheet)))

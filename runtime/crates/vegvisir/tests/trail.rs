@@ -338,4 +338,16 @@ fn numbered_circles_and_the_new_tag() {
         "{:?}",
         row("conc:1:0")
     );
+    // the tag is plain text in the card's ring: a box of its own would break the ring
+    assert!(
+        row("conc:2:0").runs.iter().all(|r| r.2 != "drgnx-chip"),
+        "{:?}",
+        row("conc:2:0")
+    );
+    // the icons start at one pixel column, whatever the circle before them says
+    assert!(!row("step:1").stops.is_empty());
+    assert_eq!(
+        row("step:1").stops.first().map(|s| s.1),
+        row("step:2").stops.first().map(|s| s.1)
+    );
 }

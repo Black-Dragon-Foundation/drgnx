@@ -459,3 +459,11 @@ asks the hub nothing and its keys say the same."
       (drgnx-work-lens-maximize)
       (should (member '(show right work-detail) calls))
       (should (member '(show panel work-trail) calls)))))
+
+(ert-deftest drgnx-work-map-rows/the-controls-sit-at-the-lens-bars-right-edge-in-pixels ()
+  ;; `:align-to' counts columns unless it is parenthesised: 70 columns put the controls mid-window (seen in the scene)
+  (let* ((s (drgnx-work-lens-string 'map "drgnx" drgnx-work-map--lens-keys))
+         (spacer (cl-some (lambda (i) (let ((d (get-text-property i 'display s))) (and (eq (car-safe d) 'space) d)))
+                          (number-sequence 0 (1- (length s))))))
+    (should spacer)
+    (should (equal (list (drgnx-px 70)) (nth 2 (plist-get (cdr spacer) :align-to))))))

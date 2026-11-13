@@ -240,7 +240,7 @@ fn build(
             Some(c) => b.push(&format!(" {} ", c.n), Some("drgnx-badge")),
             None => b.push("   ", None),
         };
-        b.push(" ", None);
+        b.stop((30.0 * env.scale) as u32);
         put_icon(&mut b, env, k, &mut images);
         b.push(&format!(" {}", title(s)), None);
         let from = b.pos();
@@ -319,12 +319,9 @@ fn conclusion_rows(
                     .push(&format!(" {} ", c.n), Some("drgnx-work-chip"))
                     .push(&format!(" {}", c.text), Some("drgnx-work-title"));
                 if new {
-                    // `new`, a chip at the card's right
+                    // `new`, plain text at the card's right: a box of its own would break the ring
                     b.stop(env.width_px.saturating_sub((64.0 * env.scale) as u32));
-                    let from = b.pos();
                     b.push(" new ", Some("drgnx-work-new"));
-                    let to = b.pos();
-                    b.face(from, to, "drgnx-chip");
                 }
             } else {
                 b.push(
