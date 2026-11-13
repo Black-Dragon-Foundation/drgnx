@@ -305,6 +305,33 @@ everything as it was.  Returns (:ok t :packs NAMES :built LANGS :generation N)."
                     (list :pid (emacs-pid) :start (float-time (alist-get 'start (process-attributes (emacs-pid))))
                           :grammars grammars)))
 
+;;;; What the formatting module reads
+
+(defconst drgnx-packs-format-standard-extra '(zig-mode elixir-mode elixir-ts-mode)
+  "Modes whose formatter is their community's standard but whose pack is not built in yet (Zig and Elixir arrive as
+packs with the grammar packs); this list goes when they do.")
+
+(defconst drgnx-packs-format-config-extra '(".php-cs-fixer.php" ".scalafmt.conf")
+  "Config files that mean \"this project formats its code\" for languages with no built-in pack yet (PHP arrives with
+its pack; Scala has none).")
+
+(defun drgnx-packs-format-modes ()
+  "Every mode (a symbol) of a built-in pack whose `:format' is `:standard': formatted in any project.  Read from the
+manifests, installed or not: formatting needs no grammar."
+  (let ((out (copy-sequence drgnx-packs-format-standard-extra)))
+    (dolist (p (drgnx-packs-builtins))
+      (let ((mode (plist-get (cdr p) :mode)))
+        (when (plist-get (plist-get (cdr p) :format) :standard)
+          (dolist (m (list (plist-get mode :ts) (plist-get mode :classic))) (when m (cl-pushnew m out))))))
+    out))
+
+(defun drgnx-packs-format-config-files ()
+  "The files that say a project formats its code: every built-in pack's `:config-files', and the extra list."
+  (let ((out (copy-sequence drgnx-packs-format-config-extra)))
+    (dolist (p (drgnx-packs-builtins))
+      (dolist (f (plist-get (plist-get (cdr p) :format) :config-files)) (cl-pushnew f out :test #'equal)))
+    (nreverse out)))
+
 ;;;; `drgnx packs …'
 
 (defun drgnx-packs-cli (args)

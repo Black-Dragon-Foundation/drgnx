@@ -8,16 +8,24 @@ In a large file, sticky scroll, guides, blame and the language server stay off.
 
 ## Language support (tree-sitter)
 
-Code buffers use a language's **tree-sitter mode** (faster, more precise highlighting and navigation) when its
-grammar is installed (`lang/eglot`, reading the language/mode table of `lang/grammars`, `drgnx-grammars-modes`). A file whose grammar is missing opens as usual, and the echo area says once per
-language, per session, that **Install Language Support** (in the palette) adds it — never a question.
+Every language is a **language pack** (`packs/` in drgnx: Python, JavaScript, TypeScript, TSX, Go, Rust, Java, C, C++,
+shell, Ruby, Lua, HTML, CSS, JSON, YAML and TOML, and the format-only Terraform and Dart). A pack names a language's
+tree-sitter grammar (pinned to the commit Emacs's own mode pins), its modes and its formatter; the manifest format is
+in `docs/develop/packs.md`.
 
-The command builds the grammar in the background (a durable job: Show Job Log → `grammars`; it needs `git` and a C
-compiler) into `~/.local/share/drgnx/tree-sitter/`; when it is done, open files of that language switch to its
-tree-sitter mode, and new ones open in it. A grammar counts as installed only when it was built and this Emacs can
-load it — otherwise the job says it failed (its log tells why: no `git`, no compiler, a grammar newer than this
-Emacs's tree-sitter). A tree-sitter mode that names its own grammar version is built at that version; otherwise each grammar is built at a pinned release tag whose parser is tree-sitter ABI 14. Emacs 30 always builds the pinned tags, whatever its tree-sitter library supports (a pinned parser loads in a newer library, and Emacs 30's tree-sitter modes were written against those grammar versions); Emacs 31 or later with an ABI 15 library (`treesit-library-abi-version`) builds the default branch instead. Languages: bash, c, cpp, css, go, html, java, javascript, json, lua,
-python, ruby, rust, toml, tsx, typescript, yaml (module `lang/grammars`, sources in `drgnx-grammars-sources`).
+Code buffers use a language's **tree-sitter mode** (faster, more precise highlighting and navigation) when its pack is
+installed and its grammar loads (module `lang/packs`). A file whose pack is not installed opens as usual, and the echo
+area says once per pack, per session, that **Install Language Support** (in the palette) adds it — never a question
+(Emacs's own "install this grammar?" prompt is turned off).
+
+The command runs `drgnx packs sync --add NAME` in the background (a durable job: Show Job Log → `packs`; it needs `git`
+and a C compiler): the grammar is fetched at its pinned commit, checked against the pinned tree hash, built, and loaded
+once in a separate process as a check (a grammar that crashes there fails the install and nothing else), then the lock,
+a generation (`drgnx rollback` brings the packs back too) and the grammar folder `~/.local/share/drgnx/grammars/LANG/COMMIT/`
+follow. When it is done, open files of that language switch to its tree-sitter mode, and new ones open in it. A grammar
+a parser was already made for in this session keeps its folder until you restart, so an update never mixes two builds.
+`drgnx packs list` shows the packs and which are installed. Format on save needs no install: a language whose formatter
+is its community's standard (Go, Rust, Terraform, Dart) is formatted in any project.
 
 ## Faster language servers
 
@@ -150,7 +158,7 @@ Module `editor/clipboard`. Tests: `test/unit/mod-clipboard-test.el`.
 ## Tests
 
 `test/unit/edit-clipboard-test.el` (the keys pressed through the command loop in each profile; the prefixes
-with and without a selection and the delay; the Explorer's own keys); `test/unit/mod-grammars-test.el` (the language of a buffer, the hint once and never a prompt, the install as a job
+with and without a selection and the delay; the Explorer's own keys); `test/unit/mod-lang-packs-test.el` (the packs applied, the hint once and never a prompt, the install as a job
 and its command, buffers switching after it); `test/unit/mod-amenities-test.el` (the modules wait without their
 package and run with it; the booster only with its program; a missing formatter still saves); `mod-sticky-test.el` (the scopes' names, outermost first, at most three, one line, the
 cost of a scroll step, never waiting for a parse that is not ready); `mod-markdown-test.el` (GFM for READMEs, the preview through pandoc or without a program,
