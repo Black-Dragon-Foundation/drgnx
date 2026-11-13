@@ -1,0 +1,59 @@
+# shapes.py python
+chunk 0 500 1 34 Some("area") true df3a52c27e1d8a10ad91da0fa166e66d04db279eb323a320767eb23a878bc354
+symbol area function 77 203 0 function_definition Some("Return the area of SHAPE.")
+symbol Circle class 206 407 0 class_definition Some("A circle of a given radius.")
+symbol __init__ method 263 304 0 class_definition Some("A circle of a given radius.")
+symbol area method 310 407 0 class_definition Some("The circle's area.")
+symbol Square class 410 499 0 decorated_definition None
+symbol area method 456 499 0 decorated_definition None
+# server.js javascript
+chunk 0 411 1 29 Some("start") true 285b3954500d31eacc627d24095dd8f51824d0ee5855064165685fbc9b5ef049
+symbol start function 84 157 0 function_declaration Some("Starts the server on PORT.")
+symbol handle function 159 215 0 lexical_declaration None
+symbol Router class 233 373 0 class_declaration None
+symbol constructor method 250 291 0 class_declaration None
+symbol add method 318 371 0 class_declaration Some("Adds a route.")
+# app.test.js javascript
+chunk 0 589 1 19 None true acde2a7e17fe77623601a425603b85c083ea31303101a022aa95cc2e640b2137
+# client.ts typescript
+chunk 0 832 1 51 Some("ClientOptions") true f9d0f5fdb767d8d4cc66afc5728ed44e14910092da724aecf60634bcde18bdec
+symbol ClientOptions interface 69 136 0 export_statement Some("The options a client takes.")
+symbol Handler type 138 182 0 export_statement None
+symbol State enum 184 221 0 export_statement None
+symbol open function 294 374 0 export_statement Some("Opens a client on HOST.")
+symbol close function 376 434 0 export_statement None
+symbol Client class 436 688 0 export_statement None
+symbol constructor method 491 534 0 export_statement None
+symbol send method 566 635 0 export_statement Some("Sends one message.")
+symbol stop method 639 686 0 export_statement None
+symbol Base class 690 744 0 export_statement None
+symbol run method 721 741 0 export_statement None
+symbol Util module 746 831 0 expression_statement None
+symbol pad function 765 829 0 expression_statement None
+# view.tsx tsx
+chunk 0 304 1 14 Some("Props") true c95407c82f1ebe20d5088b14103bb84f84aa22f4e448b20b321646de6fd51a9e
+symbol Props type 28 59 0 type_alias_declaration None
+symbol TitleBar function 83 174 0 export_statement Some("The title bar.")
+symbol Page class 176 303 0 export_statement None
+symbol render method 237 301 0 export_statement None
+# store.go go
+chunk 0 604 1 37 Some("MaxItems") true f0b521487bb80c632eb79bb51d8af3507e6f9c1b2b4a171843cc2b249aa4a90a
+symbol MaxItems constant 75 95 0 const_declaration Some("MaxItems is how many items a store holds.")
+symbol defaultStore variable 104 123 0 var_declaration None
+symbol hits variable 125 141 0 var_declaration None
+symbol Store struct 208 272 0 type_declaration Some("Store keeps items by key.")
+symbol Getter interface 274 331 0 type_declaration None
+symbol Key type 333 350 0 type_declaration None
+symbol New function 381 445 0 function_declaration Some("New makes an empty store.")
+symbol Get method 482 603 0 method_declaration Some("Get returns the item under KEY.")
+# Queue.java java
+chunk 0 564 1 40 Some("Queue") true 58aee37c1ba94b3f41c5260675120d1abe33df4f17ec1189d09acd2e36881eb2
+symbol Queue class 80 459 0 class_declaration Some("A bounded queue.")
+symbol Queue constructor 202 219 0 class_declaration Some("Makes an empty queue.")
+symbol push method 270 345 0 class_declaration Some("Adds ITEM at the end.")
+symbol pop method 351 407 0 class_declaration Some("A bounded queue.")
+symbol Node class 413 457 0 class_declaration Some("A bounded queue.")
+symbol Sized interface 461 496 0 interface_declaration None
+symbol size method 483 494 0 interface_declaration None
+symbol Color enum 498 532 0 enum_declaration None
+symbol Point record 534 563 0 record_declaration None

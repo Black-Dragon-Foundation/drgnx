@@ -108,6 +108,7 @@ hyper.workspace = true           # the CDP broker's HTTP/1.1 upgrade (already in
 hyper-util.workspace = true
 subtle.workspace = true          # the CDP secret, compared in constant time
 huginn = { path = "../huginn", version = "0.1.0", features = ["serde"] }  # settings.el and runtime-defaults.el, as data
+skald = { path = "../skald", version = "0.1.0" }  # `packs check`: the language pack format
 serde_path_to_error.workspace = true  # where in a setting's value a mistake is
 tokio = { workspace = true, features = ["io-std"] }  # mcp-bridge's stdio (a feature, no new crate)
 tokio-util.workspace = true
