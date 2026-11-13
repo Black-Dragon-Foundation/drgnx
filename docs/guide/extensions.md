@@ -12,7 +12,7 @@ it. `C-g` never stops a job; **Cancel** (`k`, Vim `x`) does.
 Each language pack (`pack:NAME`) is a row too: Python, Kotlin, Zig and the other built-in languages. A pack row carries
 chips for what it brings: grammar, mode, server, format, search and debug. The page has **Install**, which runs
 `drgnx packs sync --add NAME`, and **Remove**, which runs `drgnx packs sync --remove NAME`, as background jobs like any
-other. The filter `packs` shows only these rows. See [language packs](../develop/packs.md).
+other. A pack with a mode of its own (Python, Go, PHP, Elixir and most others) also has **Turn off in this project**: its files then open in the classic mode there. Kotlin, Swift, Zig and SQL share one mode and have no such toggle. The filter `packs` shows only these rows. See [language packs](../develop/packs.md).
 
 ## The list
 
