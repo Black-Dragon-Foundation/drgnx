@@ -54,15 +54,17 @@
 
 (defun look-follow-orders-test--check-pick (_st _order)
   (let* ((p look-follow-orders-test--portal)
-         (want (drgnx-look-follow-pick (plist-get p :scheme) (plist-get p :contrast) (plist-get p :answered))))
+         (want (drgnx-look-follow-pick (plist-get p :scheme) (plist-get p :contrast) (plist-get p :answered)
+                                       drgnx-look-follow-last)))
     (unless (equal custom-enabled-themes (list want))
       (format "themes are %S, wanted (%s)" custom-enabled-themes want))))
 
 (defmacro look-follow-orders-test--fake (&rest body)
   "BODY with the fake portal, the loader and the notices; the follower and the themes put back after."
   `(let ((drgnx-look-theme 'auto) (drgnx-look-accent 'system) (drgnx-look-follow--paused nil)
-         (nhwl-settings-changed-functions nil))
+         (nhwl-settings-changed-functions nil) (drgnx-look-follow-last 'drgnx-dark))
      (cl-letf (((symbol-function 'drgnx-look-follow--read) (lambda () look-follow-orders-test--portal))
+               ((symbol-function 'drgnx-look-follow--remember) (lambda (theme) (setq drgnx-look-follow-last theme)))
                ((symbol-function 'drgnx-look--load)
                 (lambda (theme) (mapc #'disable-theme custom-enabled-themes) (load-theme theme t)))
                ((symbol-function 'drgnx-notify) #'ignore)

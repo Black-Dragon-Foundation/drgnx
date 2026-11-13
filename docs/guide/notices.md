@@ -41,7 +41,7 @@ has an icon in the severity's colour, the text in bold, the detail below it, and
 command first (with its key), then Show Notices, then Dismiss. At most three show at once, newest on top; more wait
 and the status bar counts them (`+2`, the `toasts` segment, after drgnx's own problems; a click opens the Notices
 list). A toast never takes focus or asks anything, and goes by itself
-after about eight seconds. It fades in over 160 ms and out over 100 ms; with `drgnx-look-motion` `reduced` (or the
+about eight seconds after it showed (each toast has its own timer; a toast that shows later does not move an earlier one's). It fades in over 160 ms and out over 100 ms; with `drgnx-look-motion` `reduced` (or the
 desktop's reduced-motion preference) it just appears.
 
 `drgnx-notice-style` chooses: `auto` (the default) floats while Glitnir draws the frames, `float` always floats on a

@@ -50,6 +50,13 @@
   :scope 'global :agents 'never
   :schema 'boolean)
 
+(drgnx-defsetting drgnx-look-follow-last 'drgnx-dark
+  "The theme the follower last picked once the desktop answered: the one it shows at the next start until the desktop
+answers again.  drgnx sets it; there is no reason to."
+  :type '(choice (const drgnx-dark) (const drgnx-light) (const drgnx-high-contrast)) :group 'drgnx-look
+  :scope 'global :agents 'never
+  :schema '(enum drgnx-dark drgnx-light drgnx-high-contrast))
+
 (defconst drgnx-look-follow--own-themes '(drgnx-dark drgnx-light drgnx-high-contrast)
   "The themes the follower switches between.")
 
@@ -66,12 +73,14 @@ you chose.  Color Theme does not bind it: its pick is yours.")
 
 ;;;; The portal
 
-(defun drgnx-look-follow-pick (scheme contrast answered)
+(defun drgnx-look-follow-pick (scheme contrast answered &optional remembered)
   "The theme for the desktop's SCHEME (1 dark, 2 light, 0 none), CONTRAST (1 more) and ANSWERED (the portal spoke).
-Contrast 1 is High Contrast; scheme 1 is Dark; 0 or 2 is Light once the portal answered; no answer is Dark."
+Contrast 1 is High Contrast; scheme 1 is Dark; 0 or 2 is Light once the portal answered; no answer is the REMEMBERED
+theme (what the last answer picked), else Dark."
   (cond ((eql contrast 1) 'drgnx-high-contrast)
         ((eql scheme 1) 'drgnx-dark)
         ((and answered (memq scheme '(0 2))) 'drgnx-light)
+        ((memq remembered drgnx-look-follow--own-themes) remembered)
         (t 'drgnx-dark)))
 
 (defun drgnx-look-follow--read ()
@@ -112,7 +121,8 @@ whether the colour scheme was answered (0 is both GNOME's Light and the default)
         (drgnx-look-follow--pause foreign)
       (when-let* ((desktop (drgnx-look-follow--read)))
         (let ((want (drgnx-look-follow-pick (plist-get desktop :scheme) (plist-get desktop :contrast)
-                                            (plist-get desktop :answered))))
+                                            (plist-get desktop :answered) drgnx-look-follow-last)))
+          (when (plist-get desktop :answered) (drgnx-look-follow--remember want))
           (unless (equal (drgnx-look-follow--themes) (list want))
             (condition-case e (let ((drgnx-look-follow--loading t)) (drgnx-look--load want))
               (error (drgnx-notify 'config 'warn (format "the colour theme %s does not load (%s)" want
@@ -157,6 +167,14 @@ whether the colour scheme was answered (0 is both GNOME's Light and the default)
   (condition-case nil
       (drgnx-settings-area-update '(drgnx-look-themes-notice) (lambda (_) '((drgnx-look-themes-notice . t))))
     (error nil)))
+
+(defun drgnx-look-follow--remember (theme)
+  "Write THEME as the one the desktop last asked for (settings.el), when it differs from what is written."
+  (unless (eq theme drgnx-look-follow-last)
+    (setq-default drgnx-look-follow-last theme)
+    (condition-case nil
+        (drgnx-settings-area-update '(drgnx-look-follow-last) (lambda (_) `((drgnx-look-follow-last . ,theme))))
+      (error nil))))
 
 (defun drgnx-look-follow--migrate ()
   "A settings.el without a theme entry got `auto': say so once."

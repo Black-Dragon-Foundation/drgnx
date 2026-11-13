@@ -39,7 +39,7 @@
   (fg . "#1c1e23") (muted . "#545866") (subtle . "#656977") (disabled . "#a9adb8")
   (border . "#dcdee4") (border-subtle . "#e9eaee") (border-strong . "#c2c5ce")
   (accent . "#2c5fd4") (accent-fill . "#2c5fd4") (on-accent . "#ffffff") (focus . "#2c5fd4")
-  (ok . "#1b7f45") (warn . "#8a5d00") (error . "#c22f28") (info . "#0b6f99") (attention . "#b8461a")
+  (ok . "#1a7d44") (warn . "#8a5d00") (error . "#c22f28") (info . "#0b6f99") (attention . "#b8461a")
   (ok-tint tint ok . 0.10) (warn-tint tint "#c48c00" . 0.14) (error-tint tint error . 0.09)
   (stop-band . warn-tint)
   (info-tint tint info . 0.09) (attention-tint tint attention . 0.10) (accent-tint tint accent . 0.10)

@@ -24,9 +24,10 @@
   (declare (indent 1))
   `(let ((look-follow-test--portal ,portal) (look-follow-test--notices nil)
          (drgnx-look-theme 'auto) (drgnx-look-accent 'system)
-         (drgnx-look-follow--paused nil) (nhwl-settings-changed-functions nil))
+         (drgnx-look-follow--paused nil) (nhwl-settings-changed-functions nil) (drgnx-look-follow-last 'drgnx-dark))
      (unwind-protect
          (cl-letf (((symbol-function 'drgnx-look-follow--read) (lambda () look-follow-test--portal))
+                   ((symbol-function 'drgnx-look-follow--remember) (lambda (theme) (setq drgnx-look-follow-last theme)))
                    ((symbol-function 'drgnx-look--load)
                     (lambda (theme) (mapc #'disable-theme custom-enabled-themes) (load-theme theme t)))
                    ((symbol-function 'drgnx-look-follow--has-entry-p) (lambda () look-follow-test--entry))
@@ -47,6 +48,21 @@ is Dark."
                    (1 1 t drgnx-high-contrast) (2 1 t drgnx-high-contrast) (0 1 t drgnx-high-contrast)
                    (0 0 nil drgnx-dark) (2 0 nil drgnx-dark) (nil nil nil drgnx-dark)))
     (should (eq want (drgnx-look-follow-pick scheme contrast answered)))))
+
+(ert-deftest drgnx-look-follow/no-answer-means-the-remembered-theme-else-dark ()
+  "LOOK-REMEMBERED-VARIANT-1: before the portal answers the follower shows what the last answer picked; an answer is
+remembered; with nothing remembered it is Dark."
+  (should (eq 'drgnx-light (drgnx-look-follow-pick 0 0 nil 'drgnx-light)))
+  (should (eq 'drgnx-dark (drgnx-look-follow-pick 0 0 nil nil)))
+  (should (eq 'drgnx-dark (drgnx-look-follow-pick 1 0 t 'drgnx-light)))          ; an answer beats the memory
+  (look-follow-test--with '(:scheme 0 :contrast 0 :accent nil :answered t)
+    (drgnx-look-follow-on)
+    (should (eq drgnx-look-follow-last 'drgnx-light))                           ; the answer was remembered
+    (drgnx-look-follow-off)
+    (mapc #'disable-theme custom-enabled-themes)
+    (setq look-follow-test--portal '(:scheme 0 :contrast 0 :accent nil :answered nil))
+    (drgnx-look-follow-on)
+    (should (equal custom-enabled-themes '(drgnx-light)))))
 
 (ert-deftest drgnx-look-follow/no-answer-means-dark ()
   "Pattern D: a portal that never answers (the fake says so) leaves drgnx Dark on, and a late answer switches it."
