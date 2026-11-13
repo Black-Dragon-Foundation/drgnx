@@ -579,13 +579,14 @@ impl Engine {
     }
 
     /// The default colours a program reads back (OSC 10, 11, 12, 4): the editor's faces. FG, BG and CURSOR (none:
-    /// the built-in one) and, given all 16, the first 16 of the palette (the rest: the standard cube and greys).
+    /// the built-in one) and, given all 16 (or all 256), the first 16 (all) of the palette (the rest: the standard
+    /// cube and greys).
     pub fn set_colours(
         &mut self,
         fg: Option<[u8; 3]>,
         bg: Option<[u8; 3]>,
         cursor: Option<[u8; 3]>,
-        ansi: Option<&[[u8; 3]; 16]>,
+        ansi: Option<&[[u8; 3]]>,
     ) {
         let rgb = |c: [u8; 3]| GhosttyColorRgb {
             r: c[0],

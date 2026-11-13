@@ -416,7 +416,9 @@ image) is drawn by the next Emacs pixel for pixel as before, the cursor's row as
   one per session, built again when `process-environment` is set or bound to another list, a terminal setting it is
   made of changes, the terminfo entry appears or goes, or the server starts or stops; the epoch `term-env-set` watches
   `process-environment`, since `setenv` edits it in place), the `colours` of the config (`term-colours`, per frame
-  and weak on it, read again after a theme change: the epoch `term-theme`) and the word syntax table (`term-word-syntax`,
+  and weak on it, read again after a theme change or a change of `drgnx-term-palette-generate` / `-harmonious`: the epoch
+  `term-theme`; with the first on it carries 259 entries, the 240 colours above the 16 made in OKLab by
+  `drgnx-term--palette-extended`, which the worker takes whole) and the word syntax table (`term-word-syntax`,
   one for every terminal buffer, per value of `drgnx-term-selection-word-chars`). Together they were ~38 kB of an
   open's ~78 kB of allocation.
 - **The view type `drgnx-term-view`:** `:delay 0` (no throttle; the 4 ms slices stay), `:ack t`, `:epoch-reset nil`,

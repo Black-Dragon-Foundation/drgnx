@@ -527,18 +527,18 @@ impl Worker {
                 self.engine
                     .set_mode_default(2027, false, value.as_str() != Some("legacy"))
             }
-            // `[fg, bg, cursor]` then maybe `c0 … c15`, `#rrggbb` each ("": the built-in one; the palette only whole)
+            // `[fg, bg, cursor]` then maybe `c0 … c15` (and `c16 … c255`: the generated palette), `#rrggbb` each ("": the
+            // built-in one; the palette only whole)
             "colours" => {
                 let c: Vec<Option<[u8; 3]>> = value
                     .as_array()
                     .map(|a| a.iter().map(|v| v.as_str().and_then(hex)).collect())
                     .unwrap_or_default();
                 if c.len() >= 3 {
-                    let ansi: Option<[[u8; 3]; 16]> = (c.len() == 19)
+                    let ansi: Option<Vec<[u8; 3]>> = (c.len() == 19 || c.len() == 259)
                         .then(|| c[3..].iter().copied().collect::<Option<Vec<_>>>())
-                        .flatten()
-                        .and_then(|v| v.try_into().ok());
-                    self.engine.set_colours(c[0], c[1], c[2], ansi.as_ref());
+                        .flatten();
+                    self.engine.set_colours(c[0], c[1], c[2], ansi.as_deref());
                     self.reset_due = true;
                     self.clock.touch();
                 }

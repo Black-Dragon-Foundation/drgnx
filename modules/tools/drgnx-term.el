@@ -538,17 +538,45 @@ when it has none (a terminal frame's unspecified colour)."
                    :doc "The worker's `colours' for a frame (a text terminal's frame has other colours than a graphical
 one), read from the faces again only after a theme change or a change of a face they read.  Weak on the frame.")
 
+;; Colours 16-255, made from the base 16 (Ghostty's `palette-generate'): the cube's eight corners are the background
+;; (0,0,0), the faces' red, green, yellow, blue, magenta and cyan, and the foreground (1,1,1); each colour is mixed
+;; in OKLab along red, then green, then blue; the 24 greys are the steps between background and foreground.
+;; `palette-harmonious' goes the other way round (the cube mirrored through its centre, the greys reversed).
+
+(defun drgnx-term--palette-extended (ansi bg fg harmonious)
+  "The 240 colours (`#rrggbb') for indices 16 to 255 from ANSI (the 16 faces' hex), BG and FG, in OKLab; HARMONIOUS:
+in reverse order."
+  (let* ((corner (lambda (r g b)
+                   (pcase (list r g b)
+                     ('(0 0 0) bg) ('(1 0 0) (nth 1 ansi)) ('(0 1 0) (nth 2 ansi)) ('(1 1 0) (nth 3 ansi))
+                     ('(0 0 1) (nth 4 ansi)) ('(1 0 1) (nth 5 ansi)) ('(0 1 1) (nth 6 ansi)) (_ fg))))
+         (mix #'drgnx-color-mix)
+         (cube (cl-loop for r below 6 append
+                        (cl-loop for g below 6 append
+                                 (cl-loop for b below 6
+                                          collect (let* ((x (/ r 5.0)) (y (/ g 5.0)) (z (/ b 5.0))
+                                                         (edge (lambda (r2 g2)   ; along blue, between two corners
+                                                                 (funcall mix (funcall corner r2 g2 0) (funcall corner r2 g2 1) z))))
+                                                    (funcall mix
+                                                             (funcall mix (funcall edge 0 0) (funcall edge 1 0) x)
+                                                             (funcall mix (funcall edge 0 1) (funcall edge 1 1) x)
+                                                             y))))))
+         (greys (cl-loop for i below 24 collect (drgnx-color-mix bg fg (/ (1+ i) 25.0)))))
+    (append (if harmonious (reverse cube) cube) (if harmonious (reverse greys) greys))))
+
 (defun drgnx-term--colours ()
   "The `colours' entry's value: the faces' foreground, background and cursor, then `drgnx-term-color-0' to 15 when
 every one of them has a colour (else the worker keeps its palette).  The memo `term-colours' of the selected frame:
-read again only after a theme change.  Shared: never changed in place."
+read again only after a theme change.  Shared: never changed in place.  With `drgnx-term-palette-generate' on, the 240 colours above them follow."
   (drgnx-memo term-colours (selected-frame)
               (let ((ansi (mapcar (lambda (n) (drgnx-term--face-hex (intern (format "drgnx-term-color-%d" n)) :foreground))
                                   (number-sequence 0 15))))
-                (vconcat (list (drgnx-term--face-hex 'drgnx-term-default :foreground)
-                               (drgnx-term--face-hex 'drgnx-term-default :background)
-                               (drgnx-term--face-hex 'drgnx-term-cursor :background))
-                         (unless (member "" ansi) ansi)))))
+                (let ((fg (drgnx-term--face-hex 'drgnx-term-default :foreground))
+                      (bg (drgnx-term--face-hex 'drgnx-term-default :background)))
+                  (vconcat (list fg bg (drgnx-term--face-hex 'drgnx-term-cursor :background))
+                           (unless (member "" ansi) ansi)
+                           (when (and drgnx-term-palette-generate (not (member "" (cons fg (cons bg ansi)))))
+                             (drgnx-term--palette-extended ansi bg fg drgnx-term-palette-harmonious)))))))
 
 (defun drgnx-term--worker-config ()
   "Every live setting the worker reads, as `term/config' entries `[NAME VALUE]', for the current terminal (a remote

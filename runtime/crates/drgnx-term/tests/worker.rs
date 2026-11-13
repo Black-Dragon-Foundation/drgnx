@@ -859,6 +859,15 @@ fn settings_reach_the_engine() {
     w.output(b"\x1b]11;?\x07", 2000);
     let reply = String::from_utf8_lossy(&w.take_pty()).into_owned();
     assert!(reply.contains("4040/5050/6060"), "{reply:?}");
+    // a whole palette (the 16 faces and the 240 generated colours): a program reads colour 100 and colour 5 back
+    let mut all = vec!["#102030".to_string(), "#405060".to_string(), String::new()];
+    all.extend((0..256).map(|i| format!("#{:02x}{:02x}{:02x}", i, 255 - i, 7)));
+    w.handle(cfg("colours", serde_json::json!(all)), 2500);
+    w.take_pty();
+    w.output(b"\x1b]4;100;?\x07\x1b]4;5;?\x07", 2500);
+    let reply = String::from_utf8_lossy(&w.take_pty()).into_owned();
+    assert!(reply.contains("6464/9b9b/0707"), "{reply:?}");
+    assert!(reply.contains("0505/fafa/0707"), "{reply:?}");
     // the editor learns the program wants bracketed paste
     w.output(b"\x1b[?2004h", 3000);
     let ps = draw(&mut w, &mut m, 3000);

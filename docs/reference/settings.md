@@ -2433,6 +2433,45 @@ runs; a crash keeps them all.
 | `:agents` | `never` |
 | `:schema` | `(enum ask keep close)` |
 
+## drgnx-term-palette-generate
+
+Whether the 240 colours above the 16 faces (`drgnx-term-color-0' to 15) are made from them: the 6x6x6 cube between
+the background, the six colours and the foreground, the greys between background and foreground, mixed in OKLab,
+so a program that draws in 256 colours follows the theme.  Off: the standard cube and greys (legacy programs assume
+them).  Applies to every terminal at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-term--theme-changed` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `boolean` |
+
+## drgnx-term-palette-harmonious
+
+Whether the generated colours (`drgnx-term-palette-generate') go in reverse order, for a light theme whose 256-colour
+programs expect the dark theme's order.  No effect while `drgnx-term-palette-generate' is off.  Applies to every
+terminal at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-term--theme-changed` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `boolean` |
+
 ## drgnx-term-progress-style
 
 Whether a program's progress (OSC 9;4) shows on its terminal's tab.

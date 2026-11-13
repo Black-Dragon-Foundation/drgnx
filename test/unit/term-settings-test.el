@@ -200,5 +200,31 @@
       (should (equal (cdar sent) '(:key "b" :mods [] :action "release")))
       (should-not drgnx-term--held))))
 
+(ert-deftest drgnx-term-settings/the-generated-palette-runs-between-the-faces ()
+  ;; palette-generate: colours 16-255 from the 16 faces, the background and the foreground (OKLab); harmonious: reversed
+  (let* ((ansi (list "#000000" "#ff0000" "#00ff00" "#ffff00" "#0000ff" "#ff00ff" "#00ffff" "#cccccc"
+                     "#111111" "#ff1111" "#11ff11" "#ffff11" "#1111ff" "#ff11ff" "#11ffff" "#ffffff"))
+         (p (drgnx-term--palette-extended ansi "#101010" "#f0f0f0" nil))
+         (r (drgnx-term--palette-extended ansi "#101010" "#f0f0f0" t)))
+    (should (= (length p) 240))
+    (should (equal (nth 0 p) "#101010"))                   ; index 16: the cube's (0,0,0) corner is the background
+    (should (equal (nth 215 p) "#f0f0f0"))                 ; index 231: (5,5,5) is the foreground
+    (should (equal (nth 180 p) "#ff0000"))                 ; index 196: (5,0,0) is the face of red
+    (should (equal (nth 5 p) "#0000ff"))                   ; index 21: (0,0,5) is blue
+    (should (equal (nth 30 p) "#00ff00"))                  ; index 46: (0,5,0) is green
+    (should-not (equal (nth 216 p) (nth 239 p)))           ; the greys run from dark to light
+    (should (equal r (append (reverse (seq-take p 216)) (reverse (seq-drop p 216)))))))
+
+(ert-deftest drgnx-term-settings/the-worker-gets-the-generated-palette-only-when-asked ()
+  (drgnx-test-with-modules '(tools/term)
+    (cl-letf (((symbol-function 'drgnx-term--face-hex) (lambda (&rest _) "#336699")))
+      (let ((drgnx-term-palette-generate nil))
+        (drgnx-epoch-bump 'term-theme)
+        (should (= (length (drgnx-term--colours)) 19)))
+      (let ((drgnx-term-palette-generate t))
+        (drgnx-epoch-bump 'term-theme)
+        (should (= (length (drgnx-term--colours)) 259)))
+      (drgnx-epoch-bump 'term-theme))))
+
 (provide 'term-settings-test)
 ;;; term-settings-test.el ends here

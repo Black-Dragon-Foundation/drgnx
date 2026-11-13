@@ -21,6 +21,7 @@
 
 (declare-function drgnx-term--apply-config "drgnx-term" ())
 (declare-function drgnx-term--apply-local "drgnx-term" ())
+(declare-function drgnx-term--theme-changed "drgnx-term" (&optional theme))
 
 ;;;; Live: the worker's
 
@@ -51,6 +52,19 @@ says, one width for the cluster) or \"legacy\" (each code point its own width, a
 can still switch it (mode 2027).  Applies to every terminal at once."
   :type '(choice (const "unicode") (const "legacy"))
   :group 'drgnx :scope 'global :agents 'never :schema '(enum "unicode" "legacy") :apply #'drgnx-term--apply-config)
+
+(drgnx-defsetting drgnx-term-palette-generate nil
+  "Whether the 240 colours above the 16 faces (`drgnx-term-color-0' to 15) are made from them: the 6x6x6 cube between
+the background, the six colours and the foreground, the greys between background and foreground, mixed in OKLab,
+so a program that draws in 256 colours follows the theme.  Off: the standard cube and greys (legacy programs assume
+them).  Applies to every terminal at once."
+  :type 'boolean :group 'drgnx :scope 'global :agents 'never :schema 'boolean :apply #'drgnx-term--theme-changed)
+
+(drgnx-defsetting drgnx-term-palette-harmonious nil
+  "Whether the generated colours (`drgnx-term-palette-generate') go in reverse order, for a light theme whose 256-colour
+programs expect the dark theme's order.  No effect while `drgnx-term-palette-generate' is off.  Applies to every
+terminal at once."
+  :type 'boolean :group 'drgnx :scope 'global :agents 'never :schema 'boolean :apply #'drgnx-term--theme-changed)
 
 ;;;; Live: drgnx's
 
@@ -296,8 +310,8 @@ Applies to new terminals."
     ("grapheme-width-method" live drgnx-term-grapheme-width-method)
     ("clipboard-read" later "a program never reads the clipboard: every read is refused")
     ("clipboard-write" live drgnx-term-clipboard-write)
-    ("palette-generate" later "the 256 colours above the 16 faces stay the standard cube and greys")
-    ("palette-harmonious" later "the 256 colours above the 16 faces stay the standard cube and greys")
+    ("palette-generate" live drgnx-term-palette-generate)
+    ("palette-harmonious" live drgnx-term-palette-harmonious)
     ("minimum-contrast" later "a program's colours are drawn as it sets them")
     ;; drgnx's behaviour: live
     ("clipboard-paste-protection" live drgnx-term-clipboard-paste-protection)
