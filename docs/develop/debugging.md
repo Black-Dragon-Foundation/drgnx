@@ -598,7 +598,11 @@ Methods (runstav `methods::debug`, the user class; served by `view::debug::serve
   up after a second. extra/debug puts `drgnx-debug-hover-eldoc` on `eldoc-documentation-functions` (it never
   answers: the echo area evaluates nothing) and pairs it in `drgnx-quickhelp-fuller-functions` with
   `drgnx-debug-hover-doc`, which only the card asks: `debug/evaluate` (`hover`) of the expression there in the
-  project's stopped session, answered as `EXPR = VALUE  (TYPE)`.
+  project's stopped session, answered as `EXPR = VALUE  TYPE` with `:drgnx-data-tip t`: the expression in
+  `drgnx-debug-tip-name`, the value in `drgnx-debug-tip-string` / `-number` / `-value` by its look, the type in
+  `drgnx-debug-tip-type`. Quick help draws docs that are all data tips as their own small card
+  (`drgnx-quickhelp--render-tip`: the value alone, no links or ✕, `drgnx-quickhelp-data-tip`'s small code font on
+  the raised surface, its margins and border too, so it follows the theme; debugging-extras.html `.dtip`).
 - `debug/breakpoints`' ops `filter {adapter, name, enabled}` (kept per adapter type and sent to its sessions at once),
   `enable-all {enabled}`, `toggle-all` (all off when any is on, else all on: Toggle All Breakpoints) and `remove-all`
   (function breakpoints too).
@@ -667,8 +671,10 @@ The panel's **Debug Console** tab. The hub makes the lines; the editor only inse
   `drgnx-debug-memory-page-bytes` (256; the hub refuses more than 64 KiB), drawn 16 bytes a line: the address
   (`%08x` from `address` when it is hex, else the offset), the bytes in hex in two halves of 8 (`??` for unreadable
   ones), the text (`.` for the unprintable). A redraw replaces only the lines that changed. The header
-  (`drgnx-debug-memory--header`, made with the page; redisplay only reads it) names the variable, the address and size,
-  and the paging and write keys as keycaps from the registry.
+  (`drgnx-debug-memory--header`, made with the page; redisplay only reads it) has the braces icon, names the variable,
+  the address and size, and puts the paging and write keys as keycap images (`drgnx-palette-row-keycaps`) at the
+  right edge. The byte at point is ringed (`drgnx-debug-memory-cursor`, the selection with the focus ring; an overlay
+  moved by a local `post-command-hook`), the byte F2 writes from.
 - Its keys: next and previous page (never before the reference), refresh, and write: hex typed at the byte under
   point goes as `debug/write-memory {session, reference, offset, data (base64)}`, then the page is read again.
 
@@ -682,8 +688,9 @@ The panel's **Debug Console** tab. The hub makes the lines; the editor only inse
 - `debug/disassemble {session, reference, instruction_offset, count}` →
   `{instructions: [{address, bytes?, instruction, symbol?, path?, line?, end_line?}]}` reads
   `drgnx-debug-disassembly-count` (200; the hub caps it at 500) around the instruction, a quarter of them before
-  it. A source row (the file's line, trimmed, and `file:line`) goes above each change of place. The instruction rows
-  carry their address as the text property `drgnx-debug-disassembly-address`. Earlier and later page by a whole count.
+  it. A source row (the file's line, trimmed and italic, and `file:line` at the right edge) goes above each change of
+  place. An instruction's mnemonic, registers and symbols are coloured (`drgnx-debug-disassembly-mnemonic`,
+  `-register`, `-symbol`; numbers stay plain). The instruction rows carry their address as the text property `drgnx-debug-disassembly-address`. Earlier and later page by a whole count.
   A page is redrawn only on open, paging, or a stop off the page. A stop on the page only moves the marks.
 - The debug column (`drgnx-margins` owner `debug`, the gutter's glyphs) marks the current instruction (the stop, or a
   caller's frame) and the session's instruction breakpoints. The view asks
@@ -694,8 +701,8 @@ The panel's **Debug Console** tab. The hub makes the lines; the editor only inse
   hub's `debug-breakpoints` event with a `session` and no `path` redraws it; a newer `version` wins. Toggling needs
   `supportsInstructionBreakpoints`.
 - With the view focused, `drgnx-debug-control` sends `granularity: "instruction"` on `next`, `step-in` and `step-out`.
-  The header line shows an "instruction step" chip (`drgnx-debug-disassembly-step`) while the view's window is
-  selected.
+  The header line (the terminal icon, the frame and session) shows an "instruction step" chip
+  (`drgnx-debug-disassembly-step`) at its right edge while the view's window is selected.
 
 ## Live adapters: the image
 

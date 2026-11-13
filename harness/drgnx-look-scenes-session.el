@@ -791,6 +791,9 @@ colour bar and the file's chip."
 (defvar drgnx-debug-console-timestamps)
 (defvar drgnx-debug-gutter--candidates)
 (defvar drgnx-debug-disassembly-buffer-name)
+(defvar drgnx-debug-disassembly--bps)
+(declare-function drgnx-debug-disassembly--line-of "drgnx-debug-disassembly" (address))
+(declare-function drgnx-debug-disassembly-toggle-breakpoint "drgnx-debug-disassembly" ())
 
 (defun drgnx-look-scene--debug-script (&optional extras)
   "The mock adapter's script for the debugging mockup's stop: the program's output, a stop on line 24 in
@@ -1047,6 +1050,13 @@ with groups and timestamps.  VIEWS: the Disassembly in the editor and the memory
           (drgnx-look-scene--until 5 "the instructions"
                                    (lambda () (with-current-buffer drgnx-debug-disassembly-buffer-name
                                                 (string-search "pack_size" (buffer-string)))))
+          ;; the mockup's instruction breakpoint on the call (the session keeps it for the light scene)
+          (with-current-buffer drgnx-debug-disassembly-buffer-name
+            (unless drgnx-debug-disassembly--bps
+              (goto-char (drgnx-debug-disassembly--line-of #x40113a))
+              (drgnx-debug-disassembly-toggle-breakpoint)
+              (drgnx-look-scene--until 5 "the instruction breakpoint"
+                                       (lambda () drgnx-debug-disassembly--bps))))
           ;; the editor split: the Disassembly above, the memory below (the mockup shows both)
           (unless (get-buffer-window "*Memory: item*")
             (let* ((top (selected-window)) (below (split-window top nil 'below)))

@@ -596,6 +596,19 @@ idle for a while, a focused frame, and `drgnx-quickhelp--request' recording its 
           (funcall late "(LIST)" :thing 'car)
           (should (string-search "car: (LIST)" (funcall text))))))))
 
+(ert-deftest drgnx-quickhelp/a-data-tip-is-its-own-small-card ()
+  "Docs marked `:drgnx-data-tip' (a debugger's value) draw alone: their own faces kept, no name prefix, no links
+and no ✕, on the raised surface in the small code font (debugging-extras.html `.dtip'); other docs keep the card."
+  (let* ((tip (concat (propertize "shortfall" 'face 'font-lock-function-name-face) " = 8"))
+         (buf (drgnx-quickhelp--render (list (list tip :thing 'shortfall :drgnx-data-tip t)) 60 12 nil)))
+    (with-current-buffer buf
+      (should (equal (buffer-string) "shortfall = 8"))
+      (should (eq (get-text-property 1 'face) 'font-lock-function-name-face))
+      (should (equal (alist-get 'default face-remapping-alist) '(drgnx-quickhelp-data-tip)))))
+  (with-current-buffer (drgnx-quickhelp--render (list (list "(LIST)" :thing 'car)) 60 12 nil)
+    (should (string-search "car: (LIST)" (buffer-string)))
+    (should (string-search "Find References" (buffer-string)))))
+
 (ert-deftest drgnx-quickhelp/no-strip-in-a-window-too-small ()
   (drgnx-quickhelp-test--with
     (drgnx-quickhelp-test--elisp "(car x)\n"

@@ -228,6 +228,17 @@ as projects the user selected in, cleared by the module's teardown.")
                                             :op (list :op "add-function" :name (string-trim name)))
                   #'drgnx-debug--answered))
 
+(defface drgnx-debug-tip-name '((t :inherit font-lock-function-name-face))
+  "A data tip's expression (debugging-extras.html `.dtip .vn')." :group 'drgnx)
+(defface drgnx-debug-tip-number '((t :inherit font-lock-constant-face))
+  "A data tip's value that is a number (`.vc')." :group 'drgnx)
+(defface drgnx-debug-tip-string '((t :inherit font-lock-string-face))
+  "A data tip's value that is a string (`.vs')." :group 'drgnx)
+(defface drgnx-debug-tip-value '((t :inherit default))
+  "A data tip's other values." :group 'drgnx)
+(defface drgnx-debug-tip-type '((t :inherit (drgnx-ui-caption drgnx-text-subtle)))
+  "A data tip's type, after the value (`.ty')." :group 'drgnx)
+
 (defun drgnx-debug-hover-eldoc (_callback)
   "Nothing, for the echo area: an expression is evaluated only when the mouse rests on it (quick help's card asks
 `drgnx-debug-hover-doc' instead, `drgnx-quickhelp-fuller-functions')."
@@ -243,11 +254,21 @@ on an error.  Nil (nothing asked) without a stopped session or an expression."
                       (let ((mark-active nil)) (drgnx-debug--expression-at-point)))))
     (drgnx-hub-call "debug/evaluate" (list :session (plist-get s :id) :expr expr :context "hover")
                     (lambda (r error)
-                      (funcall callback
-                               (unless error
-                                 (format "%s = %s%s" expr (plist-get r :result)
-                                         (if-let* ((ty (plist-get r :type))) (format "  (%s)" ty) ""))))))
+                      (if error
+                          (funcall callback nil)
+                        (funcall callback (drgnx-debug--tip-text expr (plist-get r :result) (plist-get r :type))
+                                 :thing expr :drgnx-data-tip t))))
     t))
+
+(defun drgnx-debug--tip-text (expr value type)
+  "The data tip of EXPR: its name, VALUE coloured as what it is (a string, a number) and TYPE quiet after it
+\(debugging-extras.html `.dtip')."
+  (let ((value (format "%s" value)))
+    (concat (propertize expr 'face 'drgnx-debug-tip-name) " = "
+            (propertize value 'face (cond ((string-match-p "\\`[\"']" value) 'drgnx-debug-tip-string)
+                                          ((string-match-p "\\`-?[0-9][0-9._xXa-fA-FeE+-]*\\'" value) 'drgnx-debug-tip-number)
+                                          (t 'drgnx-debug-tip-value)))
+            (if (and type (not (equal type ""))) (concat "  " (propertize type 'face 'drgnx-debug-tip-type)) ""))))
 
 (defun drgnx-debug--expression-at-point ()
   "The active region's text, else the symbol at point with the member chain before it (`self.items'); nil if none."

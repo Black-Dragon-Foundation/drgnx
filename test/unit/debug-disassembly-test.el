@@ -53,16 +53,47 @@ where the place changes, then address, bytes and instruction, and marks the curr
     (debug-disassembly-test--answer calls "debug/disassemble" (list :instructions debug-disassembly-test--page))
     (with-current-buffer drgnx-debug-disassembly-buffer-name
       (should (equal (split-string (buffer-substring-no-properties (point-min) (point-max)) "\n")
-                     '("    pack.c:47"
+                     '("   pack.c:47"
                        "0x401136          48 8b 7d f8             mov rdi, [rbp-0x8]"
                        "0x40113a          e8 c1 ff ff ff          call pack_size"
                        "0x40113f          89 45 f4                mov [rbp-0xc], eax"
-                       "    pack.c:48"
+                       "   pack.c:48"
                        "0x401142          8b 45 f0                mov eax, [rbp-0x10]"
                        "")))
       (should (= (line-number-at-pos) 4))
       (should (string-search "pack · stockroom" (drgnx-debug-disassembly--header))))
     (should (equal (debug-disassembly-test--marks) '((4 . "The current instruction"))))))
+
+(ert-deftest drgnx-debug-disassembly/the-rows-look-like-the-mockup ()
+  "debugging-extras.html `.dis': the mnemonic, the registers and the symbols each in their face; a source row italic
+with its place pushed to the right edge; the header's instruction-step chip at the right edge."
+  (debug-disassembly-test--with
+    (drgnx-debug-disassembly-frame (list :session "s1" :top t :name "pack" :instruction_pointer "0x40113f"))
+    (drgnx-debug-open-disassembly)
+    (debug-disassembly-test--answer calls "debug/disassemble" (list :instructions debug-disassembly-test--page))
+    (with-current-buffer drgnx-debug-disassembly-buffer-name
+      (cl-flet ((face-of (word &optional n)
+                  (save-excursion
+                    (goto-char (point-min))
+                    (dotimes (_ (or n 1)) (search-forward word))
+                    (let ((f (get-text-property (match-beginning 0) 'face))) (if (listp f) f (list f))))))
+        (should (memq 'drgnx-debug-disassembly-mnemonic (face-of "mov")))
+        (should (memq 'drgnx-debug-disassembly-register (face-of "rdi")))
+        (should (memq 'drgnx-debug-disassembly-register (face-of "rbp")))
+        (should (memq 'drgnx-debug-disassembly-symbol (face-of "pack_size")))
+        (should-not (memq 'drgnx-debug-disassembly-register (face-of "0x8")))
+        (should (memq 'drgnx-debug-disassembly-place (face-of "pack.c:47"))))
+      (goto-char (point-min))
+      (search-forward "pack.c:47")
+      (let ((gap (get-text-property (- (match-beginning 0) 1) 'display)))
+        (should (eq (car-safe gap) 'space))
+        (should (eq (car-safe (plist-get (cdr gap) :align-to)) '-)))
+      (let ((head (save-window-excursion
+                    (select-window (display-buffer (current-buffer)))
+                    (drgnx-debug-disassembly--header))))
+        (should (string-match-p "instruction step" head))
+        (let ((pos (string-search "instruction step" head)))
+          (should (eq (car-safe (plist-get (cdr (get-text-property (- pos 2) 'display head)) :align-to)) '-)))))))
 
 (ert-deftest drgnx-debug-disassembly/instruction-breakpoints ()
   "The column toggles an instruction breakpoint (`add-instruction', `remove-instruction' by its number) and draws the

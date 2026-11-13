@@ -40,7 +40,7 @@
     (redo-dot "↷" . ">") (arrow-down-to-dot "↓" . "v") (arrow-up-from-dot "↑" . "^") (rotate-ccw "↺" . "r")
     (bug "✱" . "*") (unplug "⏏" . "x")
     ;; Send Run's card and a sent run's chip
-    (send "➤" . ">") (key "⚿" . "k") (inbox "⊔" . "u")
+    (send "➤" . ">") (key "⚿" . "k") (inbox "⊔" . "u") (braces "{}" . "{}")
     ;; the Search view's kind chips, as the hub's kind icons on definition rows
     (square-function "ƒ" . "f") (type "◇" . "T") (wand "#" . "#") (variable "≡" . "="))
   "The glyphs of the icons (NAME → (UNICODE . ASCII)), named after the icon files.  Several look alike on a terminal
