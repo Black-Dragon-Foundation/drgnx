@@ -106,7 +106,7 @@ model (`drgnx-view-patch-class-faces'), with the index of `dim' when it has a fa
   "Whether the text property FACE (a face, a list of faces or a plist) draws a box: a chip, whose own background a
 class's overlay would hide."
   (cond ((null face) nil)
-        ((symbolp face) (and (facep face) (face-attribute face :box nil t) t))
+        ((symbolp face) (and (facep face) (not (memq (face-attribute face :box nil t) '(nil unspecified)))))
         ((keywordp (car face)) (and (plist-get face :box) t))
         (t (let (boxed)
              (while (and face (not boxed))

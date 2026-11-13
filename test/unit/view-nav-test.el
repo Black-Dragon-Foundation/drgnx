@@ -155,16 +155,20 @@ an overlay of the view's buffer when its timer applies it; one applied after a c
 (defface drgnx-view-nav-test-pill '((t :background "gray30" :box (:line-width 1 :color "gray50")))
   "A boxed face, as a row's chip has.")
 
+(defface drgnx-view-nav-test-text '((t :inherit bold))
+  "A face with no box of its own, as a row's text has.")
+
 ;; the Flow's selected task row lost its chips: the selection's background, an overlay over the node's spans, hid each
 ;; chip's own; a boxed run keeps its face and the selection lies around it
 (ert-deftest drgnx-view-nav/a-class-leaves-a-boxed-run-its-own-face ()
-  "Pattern D: b's span \"BB\" with its second letter in a boxed face: selecting b puts the selected face on the first
-letter only."
+  "Pattern D: b's span \"BB\", its first letter in a face with no box, its second in a boxed one: selecting b puts the
+selected face on the first letter only."
   (drgnx-view-nav-test--with
     (drgnx-view-apply-patch
      (list :view view :class "c" :hub 7 :base 1 :version 2 :env_epoch 1 :model 1
            :ops (list (list :replace (list (append (drgnx-view-nav-test--row "AA  BB")
-                                                   (list :runs (list (list 5 6 "drgnx-view-nav-test-pill")))))))))
+                                                   (list :runs (list (list 4 5 "drgnx-view-nav-test-text")
+                                                                     (list 5 6 "drgnx-view-nav-test-pill")))))))))
     (drgnx-view-draw-now drgnx-view)
     (should (equal "b" (drgnx-view-nav 'select "b")))
     (should (equal '(drgnx-view-selected) (drgnx-view-nav-test--face-at (+ (point-min) 4))))
