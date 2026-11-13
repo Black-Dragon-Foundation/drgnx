@@ -230,8 +230,10 @@ inside the window."
             (erase-buffer)
             (insert (drgnx-debug-toolbar--text session sessions parent 'card))
             (goto-char (point-min))))
+        ;; pixelwise and down to one line, or the frame keeps its default minimum height under the buttons
         (let ((size (window-text-pixel-size win nil nil 10000 10000))
-              (border (* 2 (frame-parameter child 'internal-border-width))))
+              (border (* 2 (frame-parameter child 'internal-border-width)))
+              (frame-resize-pixelwise t) (window-min-height 1) (window-min-width 1))
           (set-frame-size child (+ (car size) border) (+ (cdr size) border) t)))
       (puthash child key drgnx-debug-toolbar--drawn))
     (drgnx-debug-toolbar--place parent child)

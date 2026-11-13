@@ -2409,7 +2409,7 @@ a :measure without :actions each have :timeout seconds to answer (120)."
        :teardown ,(concat "(progn " kill-fixture " (drgnx-perf--debug-stop) t)"))
       ;; the overview ruler: the fixture narrowed to its first 10,000 lines, 200 breakpoints (one every 50 lines) in the
       ;; column and so in the ruler, scrolled as debug-gutter-scroll; judged against debug-gutter-baseline as it is
-      ;; (each scroll moves the ruler's rows and re-strings the rows whose band changed)
+      ;; (Nidhogg draws it from the window's `glitnir-ruler': a scroll runs no Lisp of the ruler's)
       (debug-ruler-scroll
        :setup ,(drgnx-perf-run--debug-setup-form)
        :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " (goto-char (point-min))"
@@ -2417,10 +2417,10 @@ a :measure without :actions each have :timeout seconds to answer (120)."
                       " (setq drgnx-perf--debug-store (reverse"
                       "   (mapcar (lambda (i) (list :id i :line (* 50 i) :enabled (/= 0 (% i 5)) :verified t))"
                       "           (number-sequence 1 200))))"
-                      " (setq drgnx-debug-overview-ruler t) (drgnx-margins-claim 'hunks 1 :order 2) (drgnx-debug-gutter-mode 1) t)")
+                      " (drgnx-margins-claim 'hunks 1 :order 2) (drgnx-debug-gutter-mode 1) t)")
        :actions ,(append (funcall keys "<next>" 30) (funcall keys "<prior>" 30))
-       :check "(with-current-buffer (window-buffer) (and (= 200 (length drgnx-ruler--marks)) (= 10000 drgnx-ruler--lines) (cddr (assq (selected-window) drgnx-ruler--windows)) t))"   ; the ruler drew 200 marks of 10,000 lines
-       :teardown ,(concat "(progn (setq drgnx-debug-overview-ruler nil) (with-current-buffer (window-buffer) (widen)) (drgnx-debug-gutter-mode -1) " kill-fixture " (drgnx-perf--debug-stop) t)"))
+       :check "(and (featurep 'glitnir-ruler) (= 200 (length (plist-get (window-parameter nil 'glitnir-ruler) :marks))) t)"   ; Nidhogg has the ruler's 200 marks
+       :teardown ,(concat "(progn (with-current-buffer (window-buffer) (widen)) (drgnx-debug-gutter-mode -1) " kill-fixture " (drgnx-perf--debug-stop) t)"))
       ;; F9 on 20 lines in a row: each key a `debug/breakpoints' add, its answer and the column redrawn
       (debug-breakpoint-click
        :setup ,(drgnx-perf-run--debug-setup-form)

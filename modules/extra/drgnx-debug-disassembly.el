@@ -239,8 +239,9 @@
   "Send OP (nil: only ask) on the session's instruction breakpoints; mark the answer."
   (let ((b (current-buffer)))
     (drgnx-hub-call "debug/breakpoints"
-                    (append (list :root (drgnx-debug-launch-root) :session drgnx-debug-disassembly--session)
-                            (if op (list :op op) (list :kind "instruction")))
+                    (append (list :root (drgnx-debug-launch-root) :session drgnx-debug-disassembly--session
+                                  :kind "instruction")
+                            (and op (list :op op)))
                     (lambda (result error)
                       (if error (message "Disassembly: %s" error)
                         (when (and result (buffer-live-p b))
@@ -256,8 +257,8 @@
     (drgnx-debug-disassembly--ask
      (if-let* ((bp (seq-find (lambda (bp) (eql (drgnx-debug-disassembly--bp-address bp) addr))
                              drgnx-debug-disassembly--bps)))
-         (list :op "remove-instruction" :session drgnx-debug-disassembly--session :id (plist-get bp :n))
-       (list :op "add-instruction" :session drgnx-debug-disassembly--session :instruction (format "0x%x" addr))))))
+         (list :op "remove-instruction" :id (plist-get bp :n))
+       (list :op "add-instruction" :instruction (format "0x%x" addr))))))
 
 (defun drgnx-debug-disassembly-earlier ()
   "Read the instructions before this page."

@@ -125,6 +125,7 @@
   "drgnx-debug-hub/console-completes-from-the-adapter"
   "drgnx-debug-hub/memory-view-reads-and-writes"
   "drgnx-debug-hub/console-timestamps-are-the-hubs"
+  "drgnx-debug-hub/disassembly-and-an-instruction-breakpoint"
   "drgnx-extensions-hub/a-suggestion-card-opens-details-and-has-no-install"
   "drgnx-history/three-worktrees-keep-their-own-authors"
   "drgnx-history/a-removed-worktree-is-frozen-and-still-comparable"
