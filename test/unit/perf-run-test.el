@@ -432,3 +432,16 @@ its advice off `timer-event-handler' and the hub batch."
     (should-not (drgnx-perf-run--relative-fails '((debug-gutter-scroll :input (:p50 9.0)))))
     ;; the baseline is a workload of its own, with the column's setup
     (should (assq 'debug-gutter-baseline (drgnx-perf-run--workloads)))))
+
+(ert-deftest drgnx-perf-run/the-ruler-is-judged-against-the-same-scroll-without-it ()
+  ;; the ruler's row narrows the file and has the column on; its baseline differs from it only by the ruler, so neither
+  ;; the narrowing nor the column is counted against the ruler
+  (let ((fails (lambda (r rb gb)
+                 (seq-some (lambda (l) (string-search "debug-ruler-scroll input p50" l))
+                           (drgnx-perf-run--relative-fails
+                            `((debug-ruler-scroll :input (:p50 ,r)) (debug-ruler-baseline :input (:p50 ,rb))
+                              (debug-gutter-baseline :input (:p50 ,gb))))))))
+    (should-not (funcall fails 4.7 4.5 4.3))   ; 0.4 over the gutter's baseline, 0.2 over its own
+    (should (funcall fails 4.9 4.5 4.3))
+    (should-not (drgnx-perf-run--relative-fails '((debug-ruler-scroll :input (:p50 9.0)) (debug-gutter-baseline :input (:p50 4.0)))))
+    (should (assq 'debug-ruler-baseline (drgnx-perf-run--workloads)))))

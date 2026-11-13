@@ -2407,9 +2407,26 @@ a :measure without :actions each have :timeout seconds to answer (120)."
        :actions ,(append (funcall keys "<next>" 30) (funcall keys "<prior>" 30))
        :check "(with-current-buffer (window-buffer) (and (drgnx-margins-offset 'debug) (drgnx-margins-offset 'hunks) (not drgnx-debug-gutter-mode) t))"   ; both claimed, nothing drawn
        :teardown ,(concat "(progn " kill-fixture " (drgnx-perf--debug-stop) t)"))
+      ;; debug-ruler-scroll's baseline: the same narrowed file, breakpoints, column and keys with the ruler off
+      ;; (`drgnx-debug-overview-ruler'), so the ruler alone is judged (narrowing and the column each cost 0.1-0.2 ms of
+      ;; their own: docs/develop/perf.md, "The overview ruler")
+      (debug-ruler-baseline
+       :setup ,(drgnx-perf-run--debug-setup-form)
+       :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " (goto-char (point-min))"
+                      " (narrow-to-region (point-min) (progn (forward-line 10000) (point))) (goto-char (point-min))"
+                      " (setq drgnx-perf--debug-store (reverse"
+                      "   (mapcar (lambda (i) (list :id i :line (* 50 i) :enabled (/= 0 (% i 5)) :verified t))"
+                      "           (number-sequence 1 200))))"
+                      ;; (the module turned the column, and with it the ruler, on as the file was visited)
+                      " (drgnx-debug-gutter-mode -1) (setq drgnx-debug-overview-ruler nil)"
+                      " (drgnx-margins-claim 'hunks 1 :order 2) (drgnx-debug-gutter-mode 1) t)")
+       :actions ,(append (funcall keys "<next>" 30) (funcall keys "<prior>" 30))
+       :check "(with-current-buffer (window-buffer) (and drgnx-debug-gutter-mode drgnx-debug-gutter--overlays (null (window-parameter nil 'glitnir-ruler)) t))"   ; the column's marks, no ruler
+       :teardown ,(concat "(progn (setq drgnx-debug-overview-ruler t) (with-current-buffer (window-buffer) (widen))"
+                          " (drgnx-debug-gutter-mode -1) " kill-fixture " (drgnx-perf--debug-stop) t)"))
       ;; the overview ruler: the fixture narrowed to its first 10,000 lines, 200 breakpoints (one every 50 lines) in the
-      ;; column and so in the ruler, scrolled as debug-gutter-scroll; judged against debug-gutter-baseline as it is
-      ;; (Nidhogg draws it from the window's `glitnir-ruler': a scroll runs no Lisp of the ruler's)
+      ;; column and so in the ruler, scrolled as debug-gutter-scroll; judged against debug-ruler-baseline, which differs
+      ;; only by the ruler (Nidhogg draws it from the window's `glitnir-ruler': a scroll runs no Lisp of the ruler's)
       (debug-ruler-scroll
        :setup ,(drgnx-perf-run--debug-setup-form)
        :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " (goto-char (point-min))"
@@ -2990,6 +3007,7 @@ pairs below, each judged only when both sides were measured."
         (gutter (drgnx-perf--get results 'debug-gutter-scroll '(:input :p50)))
         (gutter-base (drgnx-perf--get results 'debug-gutter-baseline '(:input :p50)))
         (ruler (drgnx-perf--get results 'debug-ruler-scroll '(:input :p50)))
+        (ruler-base (drgnx-perf--get results 'debug-ruler-baseline '(:input :p50)))
         (edges (drgnx-perf--get results 'debug-edges-scroll '(:input :p50))))
     (append
      ;; the breakpoint column: at most the larger of 5 % and 0.3 ms over the same scroll with its margin (and hunks')
@@ -3001,12 +3019,12 @@ pairs below, each judged only when both sides were measured."
        (list (format "debug-gutter-scroll input p50 %s ms is %s%% (%s ms) over debug-gutter-baseline's %s ms (the column may add at most 5 %% or 0.3 ms)"
                      (drgnx-perf--round gutter) (round (* 100 (- (/ gutter gutter-base) 1)))
                      (drgnx-perf--round (- gutter gutter-base)) (drgnx-perf--round gutter-base))))
-     ;; the overview ruler, by the same rule
-     (when (and (numberp ruler) (numberp gutter-base)
-                (> ruler (+ (max (* 1.05 gutter-base) (+ gutter-base 0.3)) 1e-6)))
-       (list (format "debug-ruler-scroll input p50 %s ms is %s%% (%s ms) over debug-gutter-baseline's %s ms (the ruler may add at most 5 %% or 0.3 ms)"
-                     (drgnx-perf--round ruler) (round (* 100 (- (/ ruler gutter-base) 1)))
-                     (drgnx-perf--round (- ruler gutter-base)) (drgnx-perf--round gutter-base))))
+     ;; the overview ruler, by the same rule, against the same scroll without it
+     (when (and (numberp ruler) (numberp ruler-base)
+                (> ruler (+ (max (* 1.05 ruler-base) (+ ruler-base 0.3)) 1e-6)))
+       (list (format "debug-ruler-scroll input p50 %s ms is %s%% (%s ms) over debug-ruler-baseline's %s ms (the ruler may add at most 5 %% or 0.3 ms)"
+                     (drgnx-perf--round ruler) (round (* 100 (- (/ ruler ruler-base) 1)))
+                     (drgnx-perf--round (- ruler ruler-base)) (drgnx-perf--round ruler-base))))
      ;; Glitnir's edges, by the same rule
      (when (and (numberp edges) (numberp gutter-base)
                 (> edges (+ (max (* 1.05 gutter-base) (+ gutter-base 0.3)) 1e-6)))
@@ -3280,7 +3298,7 @@ version and the commit, as JSON in FILE."
                                 terminal-backfill terminal-flood))
     (memory . "its one key only opens the pause RSS is read after; RSS is its budget")
     ,@(mapcar (lambda (w) (cons w "graphical debugging: its allocation, CPU and rows are set from three pinned runs on the desktop island (the plan's perf step)"))
-              '(debug-gutter-scroll debug-gutter-baseline debug-ruler-scroll debug-edges-scroll debug-breakpoint-click debug-probe-flood debug-scrub
+              '(debug-gutter-scroll debug-gutter-baseline debug-ruler-baseline debug-ruler-scroll debug-edges-scroll debug-breakpoint-click debug-probe-flood debug-scrub
                                     debug-step-line debug-inline debug-toolbar-show debug-step-variables debug-expand-chunks
                                     debug-console-flood
                                     debug-bisect-typing view-remove-above view-select-dim))

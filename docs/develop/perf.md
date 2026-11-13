@@ -35,7 +35,8 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 | code-scrolling | `<next>`×30 then `<prior>`×30 through the 12k-line fixture with sticky scroll and indent guides (when installed) on — smooth scrolling is on but pixel scrolling is a wheel's, not `<next>`'s | input latency |
 | debug-gutter-scroll | as code-scrolling (without sticky scroll and guides), hunks' margin claimed (a file that shows hunks), with the breakpoint column on and 300 breakpoints of every kind and the hover pool laid out (the hub answered by a store in the session) | input latency; p50 at most the larger of 5 % and 0.3 ms over debug-gutter-baseline in the same run (`drgnx-perf-run--relative-fails`, judged when both ran) |
 | debug-gutter-baseline | the same file and keys with hunks' margin and the breakpoint column claimed and empty, the column off: what a user sees when a session starts in a file that shows hunks (see "The breakpoint column's margin" below) | — (the 5 % rule's base) |
-| debug-ruler-scroll | the fixture narrowed to its first 10,000 lines with 200 breakpoints (one every 50 lines) in the column and the overview ruler (Nidhogg's `glitnir-ruler`: its check needs the feature), scrolled as debug-gutter-scroll | input latency; p50 at most the larger of 5 % and 0.3 ms over debug-gutter-baseline in the same run |
+| debug-ruler-baseline | debug-ruler-scroll with the ruler off (`drgnx-debug-overview-ruler`): the same narrowing, breakpoints, column and keys (see "The overview ruler" below) | — (the ruler's rule's base) |
+| debug-ruler-scroll | the fixture narrowed to its first 10,000 lines with 200 breakpoints (one every 50 lines) in the column and the overview ruler (Nidhogg's `glitnir-ruler`: its check needs the feature), scrolled as debug-gutter-scroll | input latency; p50 at most the larger of 5 % and 0.3 ms over debug-ruler-baseline in the same run |
 | debug-edges-scroll | debug-gutter-baseline's file and keys with 200 edges in the window's `glitnir-edges` (Nidhogg's edges: one every 50 lines, three lines down with two bends and an arrow; its check needs Nidhogg's `glitnir--edges`) | input latency; p50 at most the larger of 5 % and 0.3 ms over debug-gutter-baseline in the same run |
 | debug-breakpoint-click | F9 then `<down>`, 20 times: each a `debug/breakpoints` add answered at once and the column redrawn | input latency |
 | debug-step-line | the 12k-line fixture, then F10 120 times: each one `debug-frame` (a step's stop, sent to the starting editor) for the next line, the arrow and band moved, point placed, the window scrolled only when the line left it | input latency; within 16 ms p95 (spec §5) |
@@ -223,6 +224,27 @@ an empty breakpoint column claimed: the cost of the column's contents, not of a 
 - The rule is the larger of 1.05× the baseline and the baseline + 0.3 ms. Times come in 0.1 ms steps and the frame is
   ~4.2 ms, so 5 % (0.2 ms) is two steps: a pure ratio there measures noise (the three runs above read 5 %, 5 % and
   7 % for the same build). On a slower machine (a ~9 ms frame) the ratio is the larger and rules.
+
+## The overview ruler
+
+`debug-ruler-scroll` is judged against `debug-ruler-baseline`, which differs from it only by the ruler. It used to be
+judged against `debug-gutter-baseline`, which counted two costs that are not the ruler's (2026-11-13, pinned runs on
+the desktop's perf island, p50 of 60 keys, two runs):
+
+| row | input p50 |
+|---|---|
+| debug-gutter-baseline | 4.3, 4.3 ms |
+| the same, narrowed to 10,000 lines | 4.4, 4.5 ms |
+| narrowed, the column's 200 marks on, no ruler (now debug-ruler-baseline) | 4.6, 4.5 ms |
+| debug-ruler-scroll | 4.6, 4.7 ms |
+
+- Narrowing alone costs 0.1–0.2 ms a scroll, and the column's marks another 0.1–0.2 ms (judged by their own row,
+  debug-gutter-scroll). The ruler itself costs 0.0–0.2 ms.
+- A profile shows the difference only in `redisplay_internal`; no Lisp of the column or the ruler is sampled. The
+  hover pool's settle timer plays no part: with it held off the row reads the same.
+- Against its own baseline (three pinned runs): debug-ruler-baseline 4.4, 4.4, 4.4 ms and debug-ruler-scroll 4.7, 4.5,
+  4.6 ms, so the ruler adds 0.1–0.3 ms, inside the rule. Nidhogg's `nhwl_ruler_add` lays the band and one bar a mark
+  at each publish; it is left as it is.
 
 ## Budgets
 
