@@ -59,6 +59,10 @@ neither the type nor the parameter.
 only ever adds rights, so a `hide` entry inside a root the reduced tier grants (a read, write or session root, a
 system root, the helper) is refused (`Malformed`), never left readable. A hide outside every granted root is
 unreachable anyway and passes.
+This stays a refusal (decided, GL-T13-1): honouring it would mean granting the root's children one by one, which
+works for a read root but leaves a write root (the worktree) unable to create a file at its top, and dropping the
+hide would leave `.env` readable. A task folder with a `.env` hide therefore runs in the full tier, or after the file
+is moved out of the folder.
 
 **Relay ports.** `backend::relay_ports(tier, wanted)` gives one session's ports. The full tier's network namespace
 is the session's own, so `wanted` (3128, 3129) is used as given. The reduced tier's relay binds on the host's
