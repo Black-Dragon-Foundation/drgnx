@@ -657,6 +657,23 @@ ptrace scoping denies other processes' `environ`, `mem` and `fd` (EACCES). It do
 (2026-10-21). It is recorded by the test `reduced_proc_other_cmdline_is_the_gap` and the escape row
 `reduced-proc-cmdline-the-gap`, and phase 6 names it in the reduced badge's text.
 
+**The reduced tier has no pty (decided, GL-T15-1).** Without a mount namespace `/dev/pts` is the host's devpts: a
+Landlock grant on it would let the sandboxed program read and write the user's other terminals (their input and
+output), a channel that blocking `TIOCSTI` does not close. So the reduced tier opens no pty (the escape row
+`reduced-no-pty` pins it) and tools that need one use the full tier. The reduced tier is opt-in.
+
+**Relay ports in the reduced tier (decided, GL-T13-2).** `relay_ports` frees its probe sockets before the relay
+binds, so a port another process takes in that window (milliseconds) fails the start with the bind error and nothing
+is shared; the caller may start the session again. A retry inside would need the spec, the Landlock rules and the
+proxy variables rebuilt around new ports, which is the whole launch.
+
+**The reduced tier's socket families (GL-T13-5).** UNIX, INET, INET6 and NETLINK only (NETLINK whole: it is local).
+A tool that needs another family (AF_ALG crypto, Bluetooth) fails with EAFNOSUPPORT there and runs in the full tier.
+
+**Toolchain layouts (GL-T3-2).** The toolchain roots the profile reads are the ones `toolchain::roots` knows
+(mise, cargo, rustup, nvm, pyenv, and so on). A layout it does not know (Homebrew under the home, asdf, volta, fnm,
+sdkman, bun globals beyond `~/.bun/bin`) is added by the user through the `agents.eld` read list.
+
 **The browser layer** (`landlock::browser_plan`). The agent browser's host and every Chromium process under it run
 in a second Landlock domain on top of the agent's. Landlock layers only narrow, so this layer can only take away.
 `browser_plan(&BrowserInputs { tier, program_dir, own_dir, helper, extra_read, web_port, local_ports })` is pure:
