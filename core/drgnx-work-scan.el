@@ -172,10 +172,24 @@ is none: the scan's own door, beside the hub's."
                             ;; a plan in docs/plans/x/ naming docs/… relative to its repository root
                             (let ((top (locate-dominating-file file "docs"))) (and top (list top)))))))
 
+(defconst drgnx-work--task-heading-re
+  "^### Task \\([0-9]+[a-z]?\\|[A-Z][0-9]*\\)\\(?:[:.]\\| \\|$\\) *\\(.*\\)$"
+  "A plan's task heading: \"### Task 14:\", \"### Task 14b.\" (a task between 14 and 15) or \"### Task A1 (now): …\".
+The id is group 1, the title group 2.")
+
+(defun drgnx-work--without-fences (text)
+  "TEXT with the lines inside ``` fences blanked: a heading in a code example is no task."
+  (let ((in nil))
+    (mapconcat (lambda (l)
+                 (cond ((string-match-p "\\`[ \t]*```" l) (setq in (not in)) "")
+                       (in "")
+                       (t l)))
+               (split-string text "\n") "\n")))
+
 (defun drgnx-work--parse-plan (file roots)
   "Nodes of plan FILE: the plan, its tasks, their steps; its spec (and the link to it)."
   (let* ((text (drgnx-work--text file)) (plan (concat "plan:" file)) (steps (make-hash-table :test #'equal)) tasks)
-    (when (string-match-p "^### Task [0-9]" text)     ; a markdown without tasks is not a plan
+    (when (string-match-p drgnx-work--task-heading-re (drgnx-work--without-fences text))     ; a markdown without tasks is not a plan
       (drgnx-work-scan--put plan :kind 'plan :title (drgnx-work--title text (file-name-base file)) :path file :line 1
                             :status "open" :source file)
       (when (string-match "^\\*\\*Spec:\\*\\* *`\\([^`]+\\)`" text)
@@ -185,11 +199,13 @@ is none: the scan's own door, beside the hub's."
       (with-temp-buffer
         (insert text)
         (goto-char (point-min))
-        (let (task)
+        (let (task (fence nil))
           (while (not (eobp))
             (cond
-             ((looking-at "^### Task \\([0-9]+\\)[:.]? *\\(.*\\)$")
-              (setq task (list (concat "task:" file "#" (match-string 1)) (string-to-number (match-string 1)) 0))
+             ((looking-at "[ \t]*```") (setq fence (not fence)))
+             (fence nil)
+             ((looking-at drgnx-work--task-heading-re)
+              (setq task (list (concat "task:" file "#" (match-string 1)) (string-to-number (match-string 1)) 0 (match-string 1)))
               (push (car task) tasks)
               (drgnx-work-scan--put (car task) :kind 'task :title (string-trim (match-string 2)) :path file
                                     :line (line-number-at-pos) :status "open" :parent plan :ord (cadr task) :source file))
@@ -197,7 +213,7 @@ is none: the scan's own door, beside the hub's."
              ((and task (looking-at "^[ \t]*[-*] \\[\\([ xX]\\)\\] \\(.+\\)$"))
               (setf (nth 2 task) (1+ (nth 2 task)))
               (push (if (equal (match-string 1) " ") "open" "done") (gethash (car task) steps))
-              (drgnx-work-scan--put (format "step:%s#%d.%d" file (cadr task) (nth 2 task)) :kind 'step
+              (drgnx-work-scan--put (format "step:%s#%s.%d" file (nth 3 task) (nth 2 task)) :kind 'step
                                     :title (string-trim (replace-regexp-in-string "\\*\\*" "" (match-string 2)))
                                     :path file :line (line-number-at-pos)
                                     :status (if (equal (match-string 1) " ") "open" "done")

@@ -190,6 +190,21 @@ keys); every binding is undone after."
               (should (eq (keymap-lookup global-map "C-o") #'ignore)))
      (keymap-set global-map "C-o" #'open-line))))
 
+(ert-deftest drgnx-keys/the-vscode-profile-indents-with-spaces ()
+  "VS Code's default is spaces (M12f-AF-3): the profile sets `indent-tabs-mode' nil, the other profiles leave it."
+  (drgnx-keys-test--live
+   (let ((orig (default-value 'indent-tabs-mode)))
+     (unwind-protect
+         (progn
+           (setq-default indent-tabs-mode t)
+           (drgnx-keys-use '((emacs app editing window)))
+           (should (default-value 'indent-tabs-mode))
+           (drgnx-keys-use '((vscode app editing window)))
+           (should-not (default-value 'indent-tabs-mode))
+           (drgnx-keys-use '((emacs app editing window)))
+           (should (default-value 'indent-tabs-mode)))
+       (setq-default indent-tabs-mode orig)))))
+
 (defvar drgnx-keys-test-late-map (make-sparse-keymap))
 
 (ert-deftest drgnx-keys/deferred-bindings-of-an-old-setup-never-apply ()

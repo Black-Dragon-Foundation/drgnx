@@ -3,6 +3,7 @@
 (:name "VS Code"
  :doc "Visual Studio Code's default keys"
  :mac-cmd t
+ :indent-tabs-mode nil   ; VS Code indents with spaces (the default Emacs would give Lisp files tabs of 8)
  :bind ((palette "C-S-p" "<f1>")
         (keys-sheet "C-k C-r")
         (keyboard-profile "C-k C-p")

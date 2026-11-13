@@ -78,4 +78,41 @@ prefix a column wide, on a graphical frame; a terminal gets no prefix.  Turning 
     (should-not line-prefix)
     (should-not wrap-prefix)))
 
+(ert-deftest drgnx-look-bridge/magit-labels-and-file-states-are-dressed ()
+  "LOOK-FIX-MAGIT-LABELS-1: `Head:' and its kin take the UI heading face, a file's `modified' / `new file' the warn
+and ok faces, as overlays made again on every refresh; text that merely looks alike is left alone."
+  (with-temp-buffer
+    (insert "Head:     main  init\nPush:     origin/main\nmodified   core/a.el\nnew file   core/b.el\n  modified in a hunk\n")
+    (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t)))
+      (drgnx-look-bridge--magit-label-overlays)
+      (drgnx-look-bridge--magit-label-overlays))            ; again: no second set
+    (let ((faces (mapcar (lambda (o) (cons (buffer-substring (overlay-start o) (overlay-end o)) (overlay-get o 'face)))
+                         (sort (overlays-in (point-min) (point-max))
+                               (lambda (a b) (< (overlay-start a) (overlay-start b)))))))
+      (should (equal faces '(("Head:" . drgnx-look-bridge-label) ("Push:" . drgnx-look-bridge-label)
+                             ("modified" . drgnx-look-bridge-file-modified)
+                             ("new file" . drgnx-look-bridge-file-new)))))))
+
+(ert-deftest drgnx-look-bridge/a-section-chevron-is-an-icon-that-follows-its-state ()
+  "LOOK-FIX-MAGIT-FOLD-1: the heading's chevron is right when the section is hidden and down when it shows."
+  (cl-letf (((symbol-function 'drgnx-look-icon) (lambda (name &rest _) (symbol-name name))))
+    (should (equal "chevron-right " (drgnx-look-bridge--chevron-string t)))
+    (should (equal "chevron-down " (drgnx-look-bridge--chevron-string nil)))))
+
+(ert-deftest drgnx-look-bridge/org-tags-are-aligned-by-pixel ()
+  "LOOK-FIX-ORG-TAGS-1: the blank before a headline's tags is a space that ends at the window's right edge (the tags'
+own pixel width and 8 logical px in), whatever the headline's font; headlines without tags are untouched."
+  (require 'org)
+  (with-temp-buffer
+    (insert "* Gateway   :core:agent:\n** Queue replies to a dead client  :test:\n* No tags here\n")
+    (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t))
+              ((symbol-function 'string-pixel-width) (lambda (s &rest _) (* 10 (length s)))))
+      (goto-char (point-min))
+      (drgnx-org--align-tags (point-max)))
+    (let ((first (get-text-property 10 'display))
+          (second (get-text-property (+ (string-search "dead client" (buffer-string)) 13) 'display)))
+      (should (equal first `(space :align-to (- right (,(+ 120 (drgnx-px 8)))))))
+      (should (equal second `(space :align-to (- right (,(+ 60 (drgnx-px 8))))))))
+    (should-not (text-property-not-all (1+ (string-search "No tags" (buffer-string))) (point-max) 'display nil))))
+
 ;;; look-bridge-test.el ends here

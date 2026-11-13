@@ -13,7 +13,8 @@ commits of the work drgnx starts. Commit messages are never changed.
 down (not into `.git`, `node_modules`, `eln-cache`, `elpa`, `target`, `dist`, `build`, `.claude/tmp`):
 
 - **specs:** Markdown under a `specs/` directory inside the root (directories above the root do not count); the title is the first `# ` heading.
-- **plans:** Markdown under a `plans/` directory inside the root, with `### Task N:` headings. Each task's `- [ ]` / `- [x]` lines
+- **plans:** Markdown under a `plans/` directory inside the root, with `### Task N:` headings (N is a number, a number and a letter as `14b` for a task added between 14 and 15, or a letter and
+  optional number as `A1`; headings inside a code fence are examples, not tasks). Each task's `- [ ]` / `- [x]` lines
   are its steps; a task with every step ticked is done. A `**Spec:** \`path\`` line links the plan to its spec
   (resolved against the plan's directory, the roots, the repositories under them and the nearest `docs/`); a spec
   outside `specs/` is read again when it changes and is kept only while a plan names it.

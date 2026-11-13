@@ -101,6 +101,15 @@ count."
       (put 'drgnx-surface-gap 'theme-face gap-entries)
       (put 'user 'theme-settings user-settings))))
 
+(ert-deftest drgnx-look-derive/the-doctor-names-the-underived-faces ()
+  "LOOK-DERIVE-GAPS-DOCTOR-1: the doctor's `look-derive' row warns with the faces derive could not work out, and says
+nothing when there are none."
+  (require 'drgnx-doctor)
+  (let ((r (drgnx-doctor-check 'look-derive '(:derive-gaps ((drgnx-accent . "no `link' colour: the body text's"))))))
+    (should (eq 'warn (car r)))
+    (should (string-match-p "1 face underived: drgnx-accent (no `link' colour" (cadr r))))
+  (should-not (drgnx-doctor-check 'look-derive '(:derive-gaps nil))))
+
 (ert-deftest drgnx-look-derive/agent-colours-distinct-or-tokens ()
   "Pattern D: an agent colour is its font-lock face's foreground when it is 30 degrees of hue and 15 of delta E from the
 others and from the cursor; the keyword and the builtin share a colour here, so the builtin's slot gets the token."

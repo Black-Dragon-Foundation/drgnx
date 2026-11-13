@@ -56,6 +56,10 @@
 (defconst drgnx-lint-contrast--status
   '(drgnx-status-ok drgnx-status-warn drgnx-status-fail drgnx-status-info drgnx-status-attention))
 
+(defconst drgnx-lint-contrast--chips
+  '(drgnx-chip-quiet drgnx-chip-attention drgnx-chip-accent drgnx-chip-ok drgnx-chip-warn drgnx-chip-error)
+  "The chips' faces: a status colour on its own tint (high contrast has no tints, so no chip fill to measure there).")
+
 (defconst drgnx-lint-contrast--agents
   '(drgnx-agent-1 drgnx-agent-2 drgnx-agent-3 drgnx-agent-4 drgnx-agent-5 drgnx-agent-6))
 
@@ -77,6 +81,11 @@
       (add (drgnx-lint-contrast--pairs text drgnx-lint-contrast--status
                                        '(default drgnx-surface-panel drgnx-surface-raised)))
       (add (drgnx-lint-contrast--pairs text drgnx-lint-contrast--agents '(default drgnx-surface-raised)))
+      ;; a chip's own colour on its tint, and the muted and subtle text that sits on a tint (a chip's detail)
+      (unless hc
+        (dolist (chip drgnx-lint-contrast--chips)
+          (add (drgnx-lint-contrast--pairs text (list chip) (list chip)))
+          (add (drgnx-lint-contrast--pairs text '(drgnx-text-muted) (list chip)))))
       ;; text over the tints: code under the selection and the matches keeps its colour and its bar; secondary text
       ;; on a selected row is `drgnx-selected-secondary' (subtle is under the bar there)
       (add (drgnx-lint-contrast--pairs text drgnx-lint-contrast--syntax '(region lazy-highlight isearch)))

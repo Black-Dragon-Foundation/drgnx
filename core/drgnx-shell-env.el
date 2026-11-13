@@ -207,7 +207,7 @@ a notice, said in the echo area when there is a CALLBACK (a command waits for it
 
 (defun drgnx-shell-env-register-commands ()
   "Shell: Reload Environment, in the registry."
-  (drgnx-command-define 'shell-reload-environment :category "Shell" :title "Reload Environment"
+  (drgnx-command-define 'shell-reload-environment :category "Shell" :title "Reload Environment" :icon 'refresh-cw
                         :command #'drgnx-shell-env-reload
                         :doc "Take PATH, MANPATH and INFOPATH from your login shell again (after you changed it)"))
 

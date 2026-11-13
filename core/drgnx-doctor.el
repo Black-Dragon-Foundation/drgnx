@@ -524,6 +524,7 @@ which runs `tmux'): for a caller that shows no check reading them, whose rows ar
            :font-fallbacks (or (and (fboundp 'drgnx-look-fonts-fallback-report) (drgnx-look-fonts-fallback-report))
                                (drgnx-doctor--state-file "fonts-report.eld"))   ; the CLI: the session's last check
            :agent-colours (and (fboundp 'drgnx-agent-identity-colour-count) (drgnx-agent-identity-colour-count))
+           :derive-gaps (and (boundp 'drgnx-look-derive-gaps) drgnx-look-derive-gaps)
            :work-plans (drgnx-doctor--work-plans)
            :ai-up (drgnx-doctor--ai-up)
            :search (drgnx-doctor--search)
@@ -764,6 +765,15 @@ severity, the fix the first `:fix'."
                      :check (lambda (f)
                               (when-let* ((n (plist-get f :agent-colours)))
                                 (list 'ok (format "%d agent colours, %d agents told apart by colour and mark" n (* 6 n)) nil))))
+
+(drgnx-doctor-define 'look-derive :group "Emacs" :doc "The theme gives the faces the look derives its colours from"
+                     :check (lambda (f)
+                              (when-let* ((gaps (plist-get f :derive-gaps)))
+                                (list 'warn
+                                      (format "the theme leaves %d face%s underived: %s" (length gaps)
+                                              (if (cdr gaps) "s" "")
+                                              (mapconcat (lambda (g) (format "%s (%s)" (car g) (cdr g))) gaps "; "))
+                                      "set those faces in the theme, or choose one of drgnx's own (Preferences: Color Theme)"))))
 
 (defun drgnx-doctor--security-issues (version &optional nidhogg)
   "The `drgnx-doctor-security-issues' that apply to Emacs VERSION, as \"ID\" or \"ID (partly fixed here)\" strings.

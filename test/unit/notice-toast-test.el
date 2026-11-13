@@ -82,5 +82,21 @@ native shell: the seam `drgnx-pixels-device-p') takes them unscaled."
     (cl-letf (((symbol-function 'drgnx-pixels-device-p) (lambda () nil)))
       (should (= (drgnx-notice-toast--px (selected-frame) 10) 10)))))
 
+(ert-deftest drgnx-notice-toast/each-toast-has-its-own-timer ()
+  "LOOK-TOAST-TIMER-PER-TOAST-1: a toast's timer starts when it shows and a later toast does not move it; one that goes
+loses its timer; a repeat that replaces a toast starts it again."
+  (let ((drgnx-notice-toast--visible nil) (drgnx-notice-toast--waiting nil) (drgnx-notice-toast--timed nil) started cancelled)
+    (cl-letf (((symbol-function 'drgnx-notice-toast--sync) (lambda () (drgnx-notice-toast--sync-timers)))
+              ((symbol-function 'drgnx-timer-start) (lambda (key &rest _) (push key started)))
+              ((symbol-function 'drgnx-timer-cancel) (lambda (key) (push key cancelled))))
+      (drgnx-notice-toast-admit (notice-toast-test--notice 1))
+      (drgnx-notice-toast-admit (notice-toast-test--notice 2))
+      (should (equal (length started) 2))                      ; one each, the first not started again
+      (drgnx-notice-toast-expire (car drgnx-notice-toast--visible))
+      (should (equal (length cancelled) 1))
+      (drgnx-notice-toast-admit (notice-toast-test--notice 2 :text "again"))   ; a repeat replaces toast 2
+      (should (equal (length started) 3))
+      (should (equal (length drgnx-notice-toast--timed) 1)))))
+
 (provide 'notice-toast-test)
 ;;; notice-toast-test.el ends here

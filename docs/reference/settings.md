@@ -1036,6 +1036,24 @@ once: each graphical frame is swapped for a new one with the same windows, buffe
 | `:agents` | `never` |
 | `:schema` | `(enum float classic)` |
 
+## drgnx-look-follow-last
+
+The theme the follower last picked once the desktop answered: the one it shows at the next start until the desktop
+answers again.  drgnx sets it; there is no reason to.
+
+| Key | Value |
+| --- | --- |
+| Default | `drgnx-dark` |
+| Type | `(choice (const drgnx-dark) (const drgnx-light) (const drgnx-high-contrast))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum drgnx-dark drgnx-light drgnx-high-contrast)` |
+
 ## drgnx-look-font-agent
 
 The font of the agent panel's prose.  `:family ui' is the UI font.  A change applies at once.

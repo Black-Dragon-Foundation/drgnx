@@ -278,15 +278,19 @@ one; mark it as the lane.  Under `drgnx-popup-style' `float', one child frame in
 
 (defun drgnx-popup--frame-replaced (old new)
   "`drgnx-frame-replaced-functions': a lane NEW took over goes back to NEW's window when it quits (its `quit-restore'
-named OLD's); a floating popup ends, as OLD's popup child frame goes with OLD."
+named OLD's); a floating popup is made again on NEW with its buffer (OLD's popup child frame goes with OLD)."
   (dolist (w (window-list new 'nomini))
     (when-let* (((window-parameter w 'drgnx-popup)) (qr (copy-sequence (window-parameter w 'quit-restore))))
       (setf (nth 2 qr) (or (drgnx-frame-replaced-window (nth 2 qr) new) (frame-selected-window new)))
       (set-window-parameter w 'quit-restore qr)))
   (set-frame-parameter new 'drgnx-popup-frame nil)
   (when-let* ((child (drgnx-popup--float-frame old)) (lane (frame-root-window child))
-              ((window-parameter lane 'drgnx-popup)))
-    (drgnx-popup--end lane)))
+              (saved (window-parameter lane 'drgnx-popup)))
+    (drgnx-popup--end lane)
+    (when (and (plist-get saved :float) (buffer-live-p (plist-get saved :popup)))
+      (with-selected-frame new
+        (drgnx-popup--show (plist-get saved :popup) nil
+                           (list :height (plist-get saved :fraction) :modal (plist-get saved :modal)))))))
 
 (defun drgnx-popup--check-window (window)
   "WINDOW's buffer changed: if it is a lane no longer showing its popup, the popup is over (a

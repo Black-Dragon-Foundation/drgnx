@@ -38,7 +38,7 @@ else `echo').  A terminal frame always echoes.  A change applies to the next not
 
 (defconst drgnx-notice-toast-max 3 "How many toasts show at once.")
 (defconst drgnx-notice-toast-width 360 "A toast's width, in logical pixels.")
-(defconst drgnx-notice-toast-seconds 8 "How long the oldest toast stays before it goes.")
+(defconst drgnx-notice-toast-seconds 8 "How long a toast stays, from the moment it shows, before it goes.")
 (defconst drgnx-notice-toast--waiting-max 50 "How many toasts may wait; past it the oldest go.")
 
 (defvar drgnx-notice-toast--visible nil "The notices shown as toasts, oldest (bottom) first.")
@@ -212,9 +212,24 @@ thing waiting on you)."
   (dolist (e drgnx-notice-toast--pool)
     (when (and (frame-live-p (car e)) (frame-visible-p (car e))) (make-frame-invisible (car e)))))
 
-(defun drgnx-notice-toast--expire-oldest ()
-  "The timer `notice-toast': the oldest toast goes."
-  (when drgnx-notice-toast--visible (drgnx-notice-toast-expire (car drgnx-notice-toast--visible))))
+(defvar drgnx-notice-toast--timed nil "Alist (TIMER-KEY . NOTICE): the toasts whose own timer runs.")
+
+(defun drgnx-notice-toast--expire-one (notice)
+  "The timer of NOTICE's toast: it goes, if it still shows."
+  (when (memq notice drgnx-notice-toast--visible) (drgnx-notice-toast-expire notice)))
+
+(defun drgnx-notice-toast--sync-timers ()
+  "One timer per toast shown, started when it first shows (a repeat that replaces it starts it again), cancelled when
+it goes by any way: a toast stays `drgnx-notice-toast-seconds', whatever shows after it."
+  (dolist (entry drgnx-notice-toast--timed)
+    (unless (memq (cdr entry) drgnx-notice-toast--visible)
+      (drgnx-timer-cancel (car entry))
+      (setq drgnx-notice-toast--timed (delq entry drgnx-notice-toast--timed))))
+  (dolist (n drgnx-notice-toast--visible)
+    (unless (rassq n drgnx-notice-toast--timed)
+      (let ((key (cons 'notice-toast (format "%S" (drgnx-notice-toast--key n)))))
+        (drgnx-timer-start key drgnx-notice-toast-seconds #'drgnx-notice-toast--expire-one :args (list n) :owner :core)
+        (push (cons key n) drgnx-notice-toast--timed)))))
 
 (defvar drgnx-notice-toast--counted 0 "The waiting count the status bars were last told of.")
 
@@ -227,7 +242,7 @@ When the count of those waiting changed, the status bars are drawn again (their 
   (let ((parent (drgnx-notice-toast--parent)))
     (cond
      ((or (null drgnx-notice-toast--visible) (null parent))
-      (drgnx-timer-cancel 'notice-toast)
+      (drgnx-notice-toast--sync-timers)
       (drgnx-notice-toast--hide-all))
      (t
       (let* ((anchor (drgnx-notice-toast--anchor parent)) (right (car anchor)) (bottom (cdr anchor))
@@ -248,12 +263,12 @@ When the count of those waiting changed, the status bars are drawn again (their 
             (setq i (1+ i))))
         (dolist (e (nthcdr i drgnx-notice-toast--pool))
           (when (and (frame-live-p (car e)) (frame-visible-p (car e))) (make-frame-invisible (car e)))))
-      (drgnx-timer-start 'notice-toast drgnx-notice-toast-seconds #'drgnx-notice-toast--expire-oldest :owner :core)))))
+      (drgnx-notice-toast--sync-timers)))))
 
 (defun drgnx-notice-toast-delete-all ()
   "Forget every toast and delete the pooled frames and their buffers (the echo mode going off)."
-  (drgnx-timer-cancel 'notice-toast)
   (setq drgnx-notice-toast--visible nil drgnx-notice-toast--waiting nil)
+  (drgnx-notice-toast--sync-timers)
   (dolist (e drgnx-notice-toast--pool)
     (when (frame-live-p (car e)) (delete-frame (car e) t))
     (when (buffer-live-p (cdr e)) (kill-buffer (cdr e))))

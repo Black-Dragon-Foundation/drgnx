@@ -186,6 +186,22 @@ changed, nothing refused; `drgnx-work-scan-test--refused' sets a refusal), no hu
       (should (seq-find (lambda (e) (equal (plist-get e :kind) "plan")) (drgnx-work-scan-test--entities params)))
       (should-not (string-search "org/x.md" (format "%S" params))))))
 
+(ert-deftest drgnx-work-scan/task-headings-14b-and-a1-are-tasks-and-fenced-ones-are-not ()
+  "M12f-C4-1: `### Task 14b:' is a task of its own, not Task 14; `### Task A1 (now): …' is one; a heading inside a code
+fence is none, and nor are the steps in it."
+  (drgnx-work-scan-test--with-org home root
+    (let ((plan (concat root "docs/plans/p.md")))
+      (write-region (concat "# Plan\n\n### Task 14: fourteen\n- [ ] a\n\n### Task 14b: between\n- [ ] b\n\n"
+                            "### Task A1 (now): lettered\n- [ ] c\n\n```\n### Task 99: only an example\n- [ ] x\n```\n")
+                    nil plan nil 'silent)
+      (drgnx-work-scan-test--recording (drgnx-work-scan (list root)))
+      (let* ((params (cdr (car (drgnx-work-scan-test--puts))))
+             (ids (mapcar (lambda (e) (plist-get e :id)) (drgnx-work-scan-test--entities params))))
+        (dolist (n '("14" "14b" "A1")) (should (member (format "task:%s#%s" plan n) ids)))
+        (should (member (format "step:%s#14b.1" plan) ids))
+        (should-not (member (format "task:%s#99" plan) ids))
+        (should-not (member (format "step:%s#A1.2" plan) ids))))))
+
 (ert-deftest drgnx-work-scan/a-spec-symlink-into-org-is-not-sent ()
   (drgnx-work-scan-test--with-org home root
     (make-symbolic-link (concat home "org/x.md") (concat root "docs/link.md"))

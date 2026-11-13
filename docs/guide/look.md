@@ -53,12 +53,17 @@ its own back. A package that loads later gets them when it loads.
 - **Magit.** Section headings in the UI heading role (not gold), the current section in the hover colour, hunk
   headers muted on the quiet selection, diff lines on the diff tints, hashes and dates subtle. Branches and tags are
   chips as tall as the text: a local branch in the accent, a remote one in ok, a tag in warn. Its text starts 16 px
-  into the card, past the section chevrons in the fringe (a column of `line-prefix` on a graphical frame).
+  into the card (a column of `line-prefix` on a graphical frame). Each section heading that folds starts with a
+  Lucide chevron, right when it is hidden and down when it shows (Magit's own fringe bitmaps are off on a graphical
+  frame: the card's fringe clips them; a terminal keeps Magit's ellipsis). Text Magit gives no face of its own is
+  dressed by overlays after each refresh: `Head:`, `Merge:`, `Push:` in the UI heading face, and a file's `modified`,
+  `new file` and `deleted` in the warn, ok and fail colours.
 - **The change gutter** (`extra/hunks`, not a package): a solid 3 px bar beside each added line (ok) and changed line (info), and a short mark where lines were deleted (error), in the status colours.
 - **Org** (module `org/org`). Headings in the UI font, 17 px at level 1 and 14.5 px at level 2 (over the editor's
   13.5), weight 600, on Org's own `org-level-*` faces, so the headings of `outline-minor-mode` in code keep the text's
   height. TODO is an attention chip, DONE an ok chip; source blocks are flat panels with their begin and end lines
-  subtle; tables are muted; links are in the accent.
+  subtle; tables are muted; links are in the accent. A headline's tags are right-aligned by pixel (8 px from the
+  window's edge), since proportional headings break Org's column-counted alignment; a terminal keeps Org's columns.
 
 ### The three variants
 
@@ -86,10 +91,10 @@ its settings portal; on macOS, the system appearance).
 | Contrast: more | High Contrast |
 | Dark | Dark |
 | Light, or no preference | Light |
-| Nothing (no portal, or it has not answered yet) | Dark |
+| Nothing (no portal, or it has not answered yet) | The theme the last answer picked (`drgnx-look-follow-last`, which drgnx writes), else Dark |
 
-The portal is read in the background and never waited for, so the first frame is drawn at once in Dark and the theme
-switches when the answer comes, and again whenever you change the desktop's setting. A theme you choose yourself
+The portal is read in the background and never waited for, so the first frame is drawn at once in the theme the desktop
+last asked for (Dark the first time) and the theme switches when the answer comes, if it differs, and again whenever you change the desktop's setting. A theme you choose yourself
 (Color Theme, `load-theme` in `config.el`, a package), drgnx's own three included, switches `auto` off for the
 session, and one notice says so ("Theme follows the desktop: paused while modus-vivendi is on"); drgnx never replaces
 it. To keep one theme, pick it with Color Theme; set `drgnx-look-theme` to `nil` to keep Emacs's own colours.
@@ -147,7 +152,7 @@ default) or `colour-first` (the six colours as circles, marks from the seventh a
 A face your theme or your Customize settings set is left as you set it; a theme that is loaded but not enabled does not
 count. Colours are worked out for a graphical display and a 256-colour terminal separately, so a terminal client of a
 daemon never reads a graphical frame's colours or the other way round. A colour the theme leaves unspecified falls back
-to the theme's default colours, and `drgnx-look-derive-gaps` lists the faces that could not be worked out. Turning ui/look
+to the theme's default colours, and `drgnx-look-derive-gaps` lists the faces that could not be worked out (`drgnx doctor` shows them, in its `look-derive` row, under a theme that leaves some). Turning ui/look
 off puts every face back as drgnx defines it.
 
 ## Fonts

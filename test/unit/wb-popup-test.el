@@ -233,3 +233,22 @@ are taken as asked."
          (quit-windows-on "*Calendar*")))
      (let ((drgnx-popup-style 'float)) (should (drgnx-popup--float-p)))
      (let ((drgnx-popup-style 'window)) (should-not (drgnx-popup--float-p))))))
+
+(ert-deftest drgnx-popup/a-frame-swap-keeps-a-floating-popup ()
+  "LOOK-FIX-SWAP-FLOAT-POPUP-1: the float lane open in the old frame is made again on the new frame, same buffer."
+  (let* ((buf (generate-new-buffer " *popup-swap*")) shown ended
+         (old (selected-frame)) (new (selected-frame))
+         (lane (selected-window)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-popup--float-frame) (lambda (&rest _) (selected-frame)))
+                  ((symbol-function 'drgnx-popup--end) (lambda (l) (push l ended)
+                                                         (set-window-parameter l 'drgnx-popup nil)))
+                  ((symbol-function 'drgnx-popup--show)
+                   (lambda (b _alist props) (push (list b (plist-get props :height) (plist-get props :modal)) shown)))
+                  ((symbol-function 'drgnx-popup--float-p) (lambda () t)))
+          (set-window-parameter lane 'drgnx-popup (list :float t :popup buf :modal t :fraction 0.4))
+          (drgnx-popup--frame-replaced old new)
+          (should ended)
+          (should (equal shown (list (list buf 0.4 t)))))
+      (set-window-parameter lane 'drgnx-popup nil)
+      (kill-buffer buf))))
