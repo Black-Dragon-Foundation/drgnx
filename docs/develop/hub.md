@@ -960,7 +960,9 @@ Gemini's admin policy, named by the first 16 hex digits of its content's SHA-256
 by file name, `Admin: <name>`, are drgnx's and no system policy's; `lock/dsh-overlay.yml`) is written there, and the agent reads that dir and never writes it on every target; one at a
 fixed path (`/etc/codex/requirements.toml`, `/etc/codex/config.toml`, Kimi Code's `config.toml` in its home) is
 written to the session's scratch and bound read-only at that path, which only the full tier can do: elsewhere the
-launch is refused (`Rule::Setup`). The user's own `/etc` is never touched. A gateway plan's `gateway_url_env` names the
+launch is refused (`Rule::Setup`). The user's own `/etc` is never touched. Kimi Code's and DeepSeek Harness's hub-owned homes (`<state>/agents/kimi-code`, `<state>/agents/dsh`) lie in the closed state
+folder: `sandbox::context` opens exactly those two inside it (`open_inside_closed`), never `<state>/agents` or a sibling, and
+the lock's files in a home are the read-only copies bound over empty files there. A gateway plan's `gateway_url_env` names the
 variables that get the relay's URL beside `ANTHROPIC_BASE_URL` (Kimi Code's, DeepSeek Harness's).
 
 **The `before_tool` tool** (`agents/before_tool_tool.rs`): a Codex session whose hooks subscribe to a kind other than

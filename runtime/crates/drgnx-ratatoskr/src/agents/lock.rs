@@ -96,8 +96,8 @@ const GEMINI_SHADOWED: &str =
 
 /// The hub-owned homes of Kimi Code (`KIMI_CODE_HOME`) and DeepSeek Harness (`DSH_HOME`), under the hub's state
 /// folder's `agents/`.
-const KIMI_HOME: &str = "kimi-code";
-const DSH_HOME: &str = "dsh";
+pub(crate) const KIMI_HOME: &str = "kimi-code";
+pub(crate) const DSH_HOME: &str = "dsh";
 
 /// The flags that put Kimi Code in a mode that does not ask.
 const KIMI_NO_ASK: [&str; 5] = ["--yolo", "-y", "--yes", "--auto-approve", "--auto"];

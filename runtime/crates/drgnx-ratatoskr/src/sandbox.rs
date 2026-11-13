@@ -40,7 +40,8 @@ pub const ENV_DENY: &[&str] = &[
 ///
 /// Each path is taken to its true name on disk: a link is resolved, and a path that does not exist keeps the true
 /// name of its deepest existing ancestor. One that cannot be named (not UTF-8, not absolute, a dangling link) is left
-/// out. `open_inside_closed` is [`runs_root`] alone, where workers' worktrees are (a job's own dir is phase 6's).
+/// out. `open_inside_closed` is [`runs_root`] (where workers' worktrees are; a job's own dir is phase 6's), the data
+/// dir's `browsers`, and the two hub-owned CLI homes (Kimi Code's, DeepSeek Harness's) of `<state>/agents`.
 pub fn context(env: &Env) -> Context {
     let exe = idle_exe();
     context_for(env, exe.as_deref())
@@ -103,12 +104,24 @@ pub fn context_for(env: &Env, helper: Option<&Path>) -> Context {
         home: true_name(&home).unwrap_or_else(|| PathBuf::from("/")),
         closed: true_names(closed),
         // the runs' worktrees, and the browsers `drgnx browser install` put in the data dir (a session reads its own)
-        open_inside_closed: true_names([runs_root(env), paths::data_dir(env).join("browsers")]),
+        open_inside_closed: true_names([
+            runs_root(env),
+            paths::data_dir(env).join("browsers"),
+            // the hub-owned homes of Kimi Code and DeepSeek Harness: drgnx's own sessions of those CLIs, and nothing
+            // else of `<state>/agents` (their lock files are bound read-only over empty files in it)
+            hub_cli_home(env, crate::agents::lock::KIMI_HOME),
+            hub_cli_home(env, crate::agents::lock::DSH_HOME),
+        ]),
         user_sockets: true_names(user_sockets),
         run_parents: true_names(paths::session_parents(env, &socket)),
         program_dirs: true_names(program_dirs),
         env_deny: ENV_DENY.iter().map(|s| s.to_string()).collect(),
     }
+}
+
+/// A hub-owned CLI home: `agents/NAME` in the hub's state folder.
+fn hub_cli_home(env: &Env, name: &str) -> PathBuf {
+    paths::state_dir(env).join("agents").join(name)
 }
 
 fn true_names(paths: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
