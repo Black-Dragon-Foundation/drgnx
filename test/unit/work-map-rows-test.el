@@ -389,7 +389,7 @@ asks the hub nothing and its keys say the same."
   (dolist (face '(drgnx-card-top drgnx-card-single drgnx-card-sel-top drgnx-card-sel-mid drgnx-card-sel-bottom
                                  drgnx-card-sel-single))
     (should (memq face drgnx-work-map--through-faces)))
-  (should (equal '(("selected") ("chain") ("dim" . drgnx-work-dim)) drgnx-work-map--nav-faces)))
+  (should (equal '(("selected") ("chain") ("dim")) drgnx-work-map--nav-faces)))
 
 (ert-deftest drgnx-work-map-rows/the-lens-bar-is-pills-and-keycaps ()
   ;; work-space-dark.html `.lens': the lens shown is a raised pill (the face inherits the pill that is on), the others

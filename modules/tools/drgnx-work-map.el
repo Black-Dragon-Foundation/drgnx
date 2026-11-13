@@ -133,9 +133,9 @@ key profiles bind them (`drgnx-command-define' with this map); each view's own k
                    drgnx-card-sel-top drgnx-card-sel-mid drgnx-card-sel-bottom drgnx-card-sel-single)
   "The faces of a card's rows, plain and selected: a class (the dimming) goes through their box, as for text.")
 
-(defconst drgnx-work-map--nav-faces '(("selected") ("chain") ("dim" . drgnx-work-dim))
-  "The map's class faces: the hub draws the selected card in its ring faces and the chain in its lanes, so only the
-cards off the chain are dimmed.")
+(defconst drgnx-work-map--nav-faces '(("selected") ("chain") ("dim"))
+  "The map's class faces: the hub draws the selected card in its ring faces, the chain in its lanes and what is off the
+chain dim (`drgnx-work-dim' in its rows), so no class has a face of the editor's.")
 
 (defvar drgnx-view-nav-through-faces)
 (defvar drgnx-view-nav-faces)
