@@ -347,7 +347,8 @@ pub struct BoardSubscribe {
 /// `work/flow/subscribe`: view `view` shows the Flow lens of job `job` (else the newest running job), with the agents
 /// of map view `map` on its tasks.  With `detail` (a task id of that job), the view is the task's detail tile: why
 /// the gates hold it, what clears it, its evidence and its actions; with `rules`, the Rules tile (the run's rule pack:
-/// each rule, its kind, how the hub holds it). A tile is rows with no model.
+/// each rule, its kind, how the hub holds it), and `detail` with it names the selected task its Evidence tab shows. A
+/// tile is rows with no model.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FlowSubscribe {

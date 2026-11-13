@@ -299,13 +299,17 @@ map without Sjá it says so instead."
 
 (defvar-local drgnx-work-flow--rules nil "In a Flow: its Rules tile.  In a tile: the Flow it belongs to.")
 
-(defun drgnx-work-flow--rules-params (view map job)
-  "The params that make VIEW the Rules tile beside map view MAP, of job JOB (nil: the hub's newest)."
-  (append (list :view view :map map :rules t) (and job (list :job job))))
+(defun drgnx-work-flow--rules-params (view map job &optional task)
+  "The params that make VIEW the Rules tile beside map view MAP, of job JOB (nil: the hub's newest); TASK, the Flow's
+selected task, is the one its Evidence tab names."
+  (append (list :view view :map map :rules t) (and job (list :job job)) (and task (list :detail task))))
+
+(defvar drgnx-area-own-title)
 
 (define-derived-mode drgnx-work-flow-rules-mode special-mode "Work rules"
-  "The Flow's Rules tile: the hub's rows of the run's rule pack, each rule's kind and how the hub holds it."
-  (setq-local truncate-lines t cursor-type nil))
+  "The Flow's Rules tile: the hub's rows of the run's rule pack, each rule's kind and how the hub holds it.  Its
+first row is its title and tabs, so the panel draws no tab row over it."
+  (setq-local truncate-lines t cursor-type nil drgnx-area-own-title t))
 
 (defun drgnx-work-flow--rules-twin (class)
   "The tile's buffer in display CLASS (`drgnx-view-patch-twin-function')."
@@ -325,7 +329,6 @@ path."
       (unless (buffer-live-p drgnx-work-flow--rules)
         (let ((view (concat (drgnx-view-patch-view drgnx-view-patch) "/rules"))
               (class (drgnx-view-patch-class drgnx-view-patch))
-              (map-view (drgnx-view-patch-view (buffer-local-value 'drgnx-view-patch drgnx-work-flow--map)))
               (buffer (get-buffer-create (format "*drgnx work rules: %s*"
                                                  (string-trim (buffer-name flow) "\\*drgnx work flow: " "\\*")))))
           (with-current-buffer buffer
@@ -336,9 +339,19 @@ path."
             (drgnx-view-env-register view buffer)
             (setq drgnx-work-flow--rules flow))
           (setq drgnx-work-flow--rules buffer)
-          (drgnx-work-client--call "work/flow/subscribe"
-                                   (drgnx-work-flow--rules-params view map-view drgnx-work-flow--job) #'ignore)))
+          (drgnx-work-flow--ask-rules flow)))
       drgnx-work-flow--rules)))
+
+(defun drgnx-work-flow--ask-rules (flow)
+  "Ask the hub for FLOW's Rules tile, its Evidence tab naming FLOW's selected task (nothing without a tile)."
+  (with-current-buffer flow
+    (when (and (buffer-live-p drgnx-work-flow--rules) (buffer-live-p drgnx-work-flow--map))
+      (drgnx-work-client--call "work/flow/subscribe"
+                               (drgnx-work-flow--rules-params
+                                (drgnx-view-patch-view (buffer-local-value 'drgnx-view-patch drgnx-work-flow--rules))
+                                (drgnx-view-patch-view (buffer-local-value 'drgnx-view-patch drgnx-work-flow--map))
+                                drgnx-work-flow--job drgnx-work-flow--selected)
+                               #'ignore))))
 
 (declare-function drgnx-pane-show "drgnx-panes")
 (defvar drgnx-work-flow--detail)
@@ -366,8 +379,9 @@ path."
   "Keys of the detail tile: the Flow's, so its actions answer from either.")
 
 (define-derived-mode drgnx-work-flow-detail-mode special-mode "Work flow detail"
-  "The Flow's detail tile: the hub's rows for the Flow's selected task, its actions on the Flow's keys."
-  (setq-local truncate-lines t cursor-type nil))
+  "The Flow's detail tile: the hub's rows for the Flow's selected task, its actions on the Flow's keys.  Its first row
+is its title, so the dock draws no tab row over it."
+  (setq-local truncate-lines t cursor-type nil drgnx-area-own-title t))
 
 (defun drgnx-work-flow--detail-twin (class)
   "The tile's buffer in display CLASS (`drgnx-view-patch-twin-function')."
@@ -419,7 +433,8 @@ task."
       (when (derived-mode-p 'drgnx-work-flow-mode)
         (setq drgnx-work-flow--selected id)
         (drgnx-work-flow--blocks)
-        (drgnx-work-flow--ask-detail buffer)))))
+        (drgnx-work-flow--ask-detail buffer)
+        (drgnx-work-flow--ask-rules buffer)))))
 
 (defun drgnx-work-flow--swap-window (from to)
   "The window of the selected frame that shows FROM shows TO instead (none: nothing changes)."

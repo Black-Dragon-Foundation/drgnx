@@ -97,7 +97,19 @@ says its reason."
   (should (equal (drgnx-work-flow--rules-params "flow-1/rules" "map-1" nil)
                  '(:view "flow-1/rules" :map "map-1" :rules t)))
   (should (equal (drgnx-work-flow--rules-params "flow-1/rules" "map-1" "J")
-                 '(:view "flow-1/rules" :map "map-1" :rules t :job "J"))))
+                 '(:view "flow-1/rules" :map "map-1" :rules t :job "J")))
+  ;; with the Flow's selected task: the tile's Evidence tab names it
+  (should (equal (drgnx-work-flow--rules-params "flow-1/rules" "map-1" "J" "J#5")
+                 '(:view "flow-1/rules" :map "map-1" :rules t :job "J" :detail "J#5"))))
+
+;; the tiles draw their own title rows (hub-orchestration.html's `.tile-h'): the docks draw no tab row over them
+(ert-deftest drgnx-work-flow/its-tiles-have-their-own-titles ()
+  (with-temp-buffer
+    (drgnx-work-flow-rules-mode)
+    (should drgnx-area-own-title))
+  (with-temp-buffer
+    (drgnx-work-flow-detail-mode)
+    (should drgnx-area-own-title)))
 
 (ert-deftest drgnx-work-flow/its-faces-are-the-ui-font-s-and-the-theme-s ()
   "The faces the hub's Flow rows name: the UI font (proportional), colours from the theme's chips and text, no

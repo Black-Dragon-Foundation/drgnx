@@ -354,7 +354,10 @@ its pass count, a waiver's reason). The view is read again after every write.
 
 **The Rules tile.** `R` opens the run's rule pack in the bottom panel (pane kind `work-rules`): the Flow's `VIEW/rules`
 subscribed with `rules: true`, rows alone. A row per rule: its words, its kind as a chip (enforced in the ok face with
-a lock, checked and routing in the accent) and how the hub holds it.
+a lock, checked and routing in the accent) and how the hub holds it. With `detail: TASK` too it ends in an "Evidence · TASK" tab
+(the task's label), the selected task's evidence; the Flow subscribes it again when its selection moves. Both tiles
+title themselves (the detail tile's first row is "Detail · TASK" after the panel icon), so their buffers set
+`drgnx-area-own-title` and the area draws no tab row over them.
 
 **The detail tile.** `work/flow/subscribe` with `detail: TASK` makes its view (the Flow's `VIEW/detail`) that task's
 detail tile: rows alone, no model, read again after every write like the Flow. The Flow subscribes it again each

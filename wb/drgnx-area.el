@@ -175,11 +175,17 @@ and no other tab left one."
               (area (get-text-property (cdr s) 'drgnx-area (car s))))
     (drgnx-wb-area-hide area)))
 
+(defvar-local drgnx-area-own-title nil
+  "Non-nil in a buffer that draws its own title row (the Work space's tiles): an area shows no tab row over it.")
+
 (defun drgnx-area--tab-row (area)
   "AREA's tab row, ending in the ✕ that hides it; set as a window parameter, so it is built when the tab changes.
-`none' (no row) in an area defined with LONE while its shown tab is the only one with content."
-  (let ((shown (drgnx-wb-area-tab area)))
-    (if (and (plist-get (alist-get area drgnx-wb--areas) :lone) (drgnx-area--lone-p area)) 'none
+`none' (no row) in an area defined with LONE while its shown tab is the only one with content, and over a buffer with
+its own title (`drgnx-area-own-title')."
+  (let ((shown (drgnx-wb-area-tab area)) (w (drgnx-wb-area-window area)))
+    (if (or (and w (buffer-local-value 'drgnx-area-own-title (window-buffer w)))
+            (and (plist-get (alist-get area drgnx-wb--areas) :lone) (drgnx-area--lone-p area)))
+        'none
       (drgnx-wb-header-with-close
        (mapconcat (lambda (tab)
                     (propertize (format " %s " (plist-get (cdr tab) :title))

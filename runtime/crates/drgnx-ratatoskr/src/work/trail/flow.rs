@@ -224,7 +224,8 @@ pub(crate) struct Flow {
 pub(crate) enum Part {
     Lens,
     Detail(String),
-    Rules,
+    /// The Rules tile, with the selected task its Evidence tab names.
+    Rules(Option<String>),
 }
 
 /// TASK's cells under PACK (none: the job runs no gates).
@@ -1124,9 +1125,13 @@ fn how(id: &str) -> &'static str {
     }
 }
 
-/// The Rules tile's rows for ENV and their icons: its heading, the columns (Rule, Kind, How the hub holds it), a row
+/// The Rules tile's rows for ENV and their icons: its heading (with TASK, the selected task, its Evidence tab), the columns (Rule, Kind, How the hub holds it), a row
 /// per rule with its kind as a chip (enforced with a lock, checked and routing in the accent).
-pub(crate) fn rules_rows(flow: &Flow, env: &ViewEnv) -> (Vec<Row>, Vec<(ImageId, String)>) {
+pub(crate) fn rules_rows(
+    flow: &Flow,
+    task: Option<&str>,
+    env: &ViewEnv,
+) -> (Vec<Row>, Vec<(ImageId, String)>) {
     let cell_w = env.cell.0.max(1);
     let mut pics = Pics::new(env);
     let (kind_at, how_at) = (env.width_px * 2 / 5, env.width_px * 2 / 5 + dpx(env, 100.0));
@@ -1139,6 +1144,11 @@ pub(crate) fn rules_rows(flow: &Flow, env: &ViewEnv) -> (Vec<Row>, Vec<(ImageId,
         return (vec![head.finish()], pics.out);
     };
     head.push(&format!("Rules · {} v{}", p.name, p.version), Some(HEAD));
+    // the tile's other tab: the selected task's evidence (`e')
+    if let Some(t) = task.and_then(|id| tasks(flow).into_iter().find(|t| t.id == id)) {
+        head.push("     ", None)
+            .push(&format!("Evidence · {}", t.label), Some(LABEL));
+    }
     let mut rows = vec![head.finish()];
     let mut cols = RowBuilder::new("rules-cols");
     cols.push("Rule", Some(LABEL))
@@ -1279,10 +1289,19 @@ fn avatar(env: &ViewEnv, initial: char, colour: &str) -> (ImageId, String) {
     (ImageId::of(svg.as_bytes(), env.epoch), svg)
 }
 
-/// The detail tile of task TASK of FLOW for ENV, one line per row, and its images: its head (the agent's avatar and
-/// name, the held chip; the task's id and its card's on it), the task under it, for a held task why it is held,
-/// what clears it, then the evidence so far and the actions with their keys (the waiver the user's alone).  A task
-/// FLOW does not have: one row saying to select one.
+/// The detail tile's title row: the panel icon and TEXT in the heading face (the tile's own; the dock draws none).
+fn tile_title(env: &ViewEnv, text: &str) -> (Row, Vec<(ImageId, String)>) {
+    let mut pics = Pics::new(env);
+    let mut b = RowBuilder::new("d:title");
+    pics.put(&mut b, "panel-right", " ");
+    b.push(" ", None).push(text, Some(HEAD));
+    (b.finish(), pics.out)
+}
+
+/// The detail tile of task TASK of FLOW for ENV, one line per row, and its images: its title ("Detail · T5"), its head
+/// (the agent's avatar and name, the held chip; the task's id and its card's on it), the task under it, for a held
+/// task why it is held, what clears it, then the evidence so far and the actions with their keys (the waiver the user's
+/// alone).  A task FLOW does not have: the title and one row saying to select one.
 pub(crate) fn detail_tile(
     flow: &Flow,
     task: &str,
@@ -1295,9 +1314,10 @@ pub(crate) fn detail_tile(
         .zip(tasks(flow))
         .find(|(f, _)| f.id == task)
     else {
+        let (title, images) = tile_title(env, "Detail");
         let mut b = RowBuilder::new("d:none");
         b.push("Select a task in the Flow.", Some(LABEL));
-        return (vec![b.finish()], Vec::new());
+        return (vec![title, b.finish()], images);
     };
     let mut rows = Vec::new();
     let mut line = |key: String, text: &str, face: Option<&str>| {
@@ -1311,8 +1331,9 @@ pub(crate) fn detail_tile(
             rows.push(b.finish());
         }
     };
-    // the head: who works on it (avatar, name) and the held chip at the right; the task and where it stands under it
-    let mut images = Vec::new();
+    // the title, then the head: who works on it (avatar, name) and the held chip at the right; the task and where it
+    // stands under it
+    let (title, mut images) = tile_title(env, &format!("Detail · {}", t.label));
     let mut head = RowBuilder::new("d:head");
     let start = head.pos();
     let agent = t.agent.as_deref().unwrap_or("no agent");
@@ -1351,7 +1372,7 @@ pub(crate) fn detail_tile(
     if let Some(card) = t.card {
         head.prop(start, end, "drgnx-work-card", json!(card));
     }
-    let mut out = vec![head.finish()];
+    let mut out = vec![title, head.finish()];
     // under it the task and the agent's time, spend and context (the map's), else where the task stands
     let mut said: Vec<String> = Vec::new();
     if let Some(m) = facts.minutes {
@@ -2288,7 +2309,7 @@ mod tests {
     fn the_rules_tile_lists_the_pack() {
         let mut f = flow();
         f.pack.as_mut().unwrap().rules[2].kind = "routing".into();
-        let (rows, images) = rules_rows(&f, &env(1.0));
+        let (rows, images) = rules_rows(&f, None, &env(1.0));
         let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
         assert_eq!(
             keys,
@@ -2301,7 +2322,16 @@ mod tests {
             ]
         );
         assert!(rows[0].text.contains("Rules · drgnx-org v4"));
+        assert!(!rows[0].text.contains("Evidence"));
         assert!(rows[1].text.contains("How the hub holds it"));
+        // the tile's tabs as the mockup's: the Rules tab, then the selected task's Evidence, muted
+        let (rows, _) = rules_rows(&f, Some("task:J#5"), &env(1.0));
+        assert!(rows[0].text.ends_with("Evidence · T5"), "{}", rows[0].text);
+        assert!(
+            rows[0].runs.iter().any(|r| r.2 == LABEL),
+            "{:?}",
+            rows[0].runs
+        );
         let red = &rows[2];
         assert!(red.text.contains("red-first doc") && red.text.contains("enforced"));
         assert!(red.text.contains("checked at the merge"));
@@ -2314,7 +2344,7 @@ mod tests {
             pack: None,
             ..flow()
         };
-        let (rows, _) = rules_rows(&none, &env(1.0));
+        let (rows, _) = rules_rows(&none, None, &env(1.0));
         assert_eq!(rows.len(), 1);
         assert!(rows[0].text.contains("no rule pack"));
     }
@@ -2398,11 +2428,11 @@ mod tests {
         let text: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();
         let all = text.join("\n");
         assert!(
-            text[1].starts_with("T5") && text[1].contains("Task 5"),
+            text[2].starts_with("T5") && text[2].contains("Task 5"),
             "{all}"
         );
         assert!(
-            rows[0]
+            rows[1]
                 .props
                 .iter()
                 .any(|p| p.2 == "drgnx-work-card" && p.3 == json!(42))
@@ -2460,8 +2490,8 @@ mod tests {
         );
         assert!(free_all.contains("Evidence  e") && free_all.contains("none recorded"));
         let none = detail_tile(&f, "task:J#99", &tile).0;
-        assert_eq!(none.len(), 1);
-        assert!(none[0].text.contains("Select a task"));
+        assert_eq!(none.len(), 2);
+        assert!(none[1].text.contains("Select a task"));
     }
 
     /// [D] hub-orchestration.html's detail head: "Sonnet · search-quick" (the model, then the agent's session), and
@@ -2476,17 +2506,32 @@ mod tests {
         f.tasks[1].context = Some(88);
         let (rows, _) = detail_tile(&f, "task:J#5", &env(1.0));
         assert!(
-            rows[0].text.contains("Sonnet · search-quick"),
-            "{}",
-            rows[0].text
-        );
-        assert!(
-            rows[1].text.ends_with("· 41 min · ≈$0.90 · ctx 88%"),
+            rows[1].text.contains("Sonnet · search-quick"),
             "{}",
             rows[1].text
         );
+        assert!(
+            rows[2].text.ends_with("· 41 min · ≈$0.90 · ctx 88%"),
+            "{}",
+            rows[2].text
+        );
         let (rows, _) = detail_tile(&flow(), "task:J#5", &env(1.0));
-        assert!(rows[1].text.ends_with("· in-review"), "{}", rows[1].text);
+        assert!(rows[2].text.ends_with("· in-review"), "{}", rows[2].text);
+    }
+
+    /// [D] The tile is titled as the mockup's (hub-orchestration.html `.tile-h`): the panel icon and "Detail · T5", the
+    /// task's id, in the heading face; with no task selected, "Detail" alone.
+    #[test]
+    fn the_detail_tile_is_titled_with_its_task() {
+        let (rows, images) = detail_tile(&flow(), "task:J#5", &env(2.0));
+        let title = &rows[0];
+        assert_eq!(title.key, "d:title");
+        assert!(title.text.ends_with("Detail · T5"), "{}", title.text);
+        assert_eq!(title.images.len(), 1);
+        assert!(images.iter().any(|(id, _)| *id == title.images[0].1));
+        assert!(title.runs.iter().any(|r| r.2 == HEAD), "{:?}", title.runs);
+        let (rows, _) = detail_tile(&flow(), "task:nope", &env(1.0));
+        assert!(rows[0].text.ends_with("Detail"), "{}", rows[0].text);
     }
 
     #[test]
@@ -2532,7 +2577,7 @@ mod tests {
         let (rows, images) = detail_tile(&flow(), "task:J#5", &tile);
         let all: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();
         let all = all.join("\n");
-        let head = &rows[0];
+        let head = &rows[1];
         assert_eq!(head.images.len(), 1, "{all}");
         assert!(
             head.text.contains("Sonnet") && head.text.contains("held"),
@@ -2556,7 +2601,7 @@ mod tests {
             svg.contains("width=\"32\""),
             "16 logical px at scale 2: {svg}"
         );
-        let sub = &rows[1];
+        let sub = &rows[2];
         assert!(
             sub.text.starts_with("T5") && sub.text.contains("Task 5"),
             "{all}"

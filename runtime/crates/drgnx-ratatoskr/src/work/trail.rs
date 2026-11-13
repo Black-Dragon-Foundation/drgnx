@@ -162,7 +162,7 @@ impl Trails {
         // a tile of the Flow is rows alone, as the map's detail is
         if !matches!(
             *data,
-            Data::Flow(_, flow::Part::Detail(_) | flow::Part::Rules)
+            Data::Flow(_, flow::Part::Detail(_) | flow::Part::Rules(_))
         ) {
             f.core
                 .views
@@ -203,7 +203,7 @@ fn rows(
         Data::Board(cards) => only(board::board_rows(cards, env)),
         Data::Flow(flow, flow::Part::Lens) => flow::flow_rows(flow, env, fonts),
         Data::Flow(flow, flow::Part::Detail(task)) => flow::detail_tile(flow, task, env),
-        Data::Flow(flow, flow::Part::Rules) => flow::rules_rows(flow, env),
+        Data::Flow(flow, flow::Part::Rules(task)) => flow::rules_rows(flow, task.as_deref(), env),
     }
 }
 
@@ -602,7 +602,8 @@ pub async fn board_subscribe(
 
 /// `work/flow/subscribe`: VIEW of CALLER's connection shows the Flow lens of `job` (else the newest running job), with
 /// the agents of map view `map`; its model and rows go out as a Board's do, before the answer.  With `detail`, the
-/// view is that task's detail tile instead, with `rules` the Rules tile: rows alone, no model.
+/// view is that task's detail tile instead, with `rules` the Rules tile (`detail` with it: its Evidence tab's task):
+/// rows alone, no model.
 pub async fn flow_subscribe(
     f: &Front,
     c: &Caller,
@@ -610,8 +611,8 @@ pub async fn flow_subscribe(
 ) -> Result<TrailSubscribed, Error> {
     let key = (c.conn_id, p.view);
     let part = match (p.detail, p.rules) {
-        (Some(task), _) => flow::Part::Detail(task),
-        (None, true) => flow::Part::Rules,
+        (task, true) => flow::Part::Rules(task),
+        (Some(task), false) => flow::Part::Detail(task),
         (None, false) => flow::Part::Lens,
     };
     let lens = part == flow::Part::Lens;
