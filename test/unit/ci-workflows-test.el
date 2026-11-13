@@ -68,7 +68,7 @@
     (drgnx-ci-test--has (drgnx-ci-test--job tiers "bins-linux")
                         "uses: ./drgnx/.github/actions/build-test-bins" "name: drgnx-test-bins-linux" "retention-days: 1")
     (drgnx-ci-test--has (drgnx-ci-test--job tiers "macos") "uses: ./drgnx/.github/actions/build-test-bins"
-                        "brew install ripgrep\n" "rustup toolchain install stable --profile minimal"
+                        "brew install ripgrep\n" "bash drgnx/.github/ci/rust.sh\n"
                         "test/container/nidhogg.sh macos")
     ;; neither macOS job installs Homebrew's rust (the image's rustup is quicker)
     (should-not (string-search "brew install ripgrep rust" tiers))
