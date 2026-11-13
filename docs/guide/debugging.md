@@ -220,11 +220,18 @@ another name, or in a file that is neither the stop's nor on its stack.
 
 ## The heap graph
 
+**Show as Graph** on a variable in Run and Debug (the palette) opens the panel's **Graph** tab. On a local, the graph
+is the whole frame's locals: the first card is the frame, titled Locals, with an arrow from each local that refers to an
+object, and the local you picked is selected. RET or a click on a card selects it: it is ringed, and its arrows take
+the accent colour. The strip at the top names the graph, the function and stop it was read at and how many objects
+it holds.
+
 The heap graph draws the objects reachable from a variable at a stop: each object is a card with its type and
 fields, and each reference is an arrow to another card. An object reached two ways is one card with two arrows, and a
 cycle closes on itself. At the next stop the graph is read again: the cards keep their places, and the objects added,
-changed and gone are marked. A graph holds up to 50 objects by default (200 at most); a reference left past that, or
-past two seconds of reading, is counted on the graph.
+changed and gone are marked (a changed value is tinted, a new card says new, and a gone one shows faded for that one
+stop). A graph holds up to 50 objects by default (200 at most); a reference left past that, or past two seconds of
+reading, ends at a dashed "+N not shown" stub beside its field and is counted on the graph.
 A recorded run keeps each graph read at a stop, so opening that past stop later (or in a sent run) shows it.
 A partner agent can read the same graph of an expression at a stop (`debug_read` with `heap`), only as the matrix's
 `debug.read` row lets it; the graph it reads is not kept.

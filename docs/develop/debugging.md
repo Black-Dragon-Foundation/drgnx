@@ -495,8 +495,9 @@ At each stop the hub sends `debug-inline` (`{session, epoch, path, lines: [{line
 `drgnx-debug-gutter-inline` draws them: one overlay per line at its end (`after-string` two spaces, then the text in
 `drgnx-debug-inline-value`, the changed ranges in `drgnx-debug-inline-value-changed`, the cursor kept before them),
 priority 90 so diagnostics (100) come after them. They are the session's stop marks with the role `inline`: a new
-stop's frame leaves them, its `debug-inline` updates the lines that keep values in the same overlays, adds the new and
-deletes the rest; they go 150 ms after the session runs and at once when it ends. A buffer modified since its save gets
+stop's frame leaves them, its `debug-inline` updates the lines that keep values in the same overlays (a line whose
+string is the same keeps it, so redisplay draws nothing of it again), adds the new and deletes the rest, walking the
+lines in order from one to the next; they go 150 ms after the session runs and at once when it ends. A buffer modified since its save gets
 none (the program runs the saved file) and the echo area says so. The overlays carry `drgnx-blame-yield`: the blame
 overlay on such a line goes, and `drgnx-blame--show` shows none on a line that has one. `drgnx-debug-inline-values`
 (`on`/`off`) turns them off at once.
@@ -1160,7 +1161,9 @@ The design is `docs/specs/drgnx/2026-11-13-heap-graph-design.md` in the org fold
 
 - **The walk** (`heap::walk`) goes breadth first from the roots. It expands each object once through the session's
   `variables` (`heap::SessionProbe`), and a reference to an object already seen is an edge to it. It stops at
-  `Limits::nodes` objects, at `Limits::depth` levels or at `Limits::within`, and counts the references left in `cut`.
+  `Limits::nodes` objects, at `Limits::depth` levels or at `Limits::within`, and counts the references left in `cut`;
+  each left field keeps its own `cut`: the elements a list or map reports (`indexedVariables` + `namedVariables`),
+  else 1.
   Skipped as fields: debugpy's groups (`special variables` …) and js-debug's internals (`[[Prototype]]` …). A delve
   pointer's one dereferenced child (evaluateName `(*E)`, name empty) is the object itself.
 - **Identity** (`heap::Ident`, by the adapter type) comes from an expression evaluated in the stopped frame,
@@ -1172,12 +1175,21 @@ The design is `docs/specs/drgnx/2026-11-13-heap-graph-design.md` in the org fold
     use. The session's stop sequence evaluates `heap::JS_FORGET` before a disconnect that leaves the program running.
   Anything else is named by its path, so the graph is a tree. DAP's `memoryReference` doesn't serve here: the hub
   sends `supportsMemoryReferences: false`, and delve has none.
+- **A frame's locals** (`heap::locals`): asked with `locals: true`, or a FRAME and no EXPR, the hub asks the frame's
+  `scopes`, takes the one hinted `locals` (else the first that is not expensive, `heap::locals_scope`) and walks its
+  variables as the roots. The frame is the first object, `{id: "frame", type: "frame", path: "Locals"}`, its fields
+  the locals; a reference local's field points at its object like any field, so a local that is the same object as
+  another's field (`shared` and `a.next`) is one card with two edges into it. The frame is the graph's one root, so
+  the layout puts it alone in the first layer. An open graph of locals is read again the same way, and a recorded
+  run keeps it as answered (`locals: true`).
 - **The layout** (`heap_layout::layout`) is in cells:
   - a card is a type row, then up to `FIELDS_SHOWN` field rows and a "+N more" row;
   - the layers go left to right by distance from the roots, each ordered by its sources (barycentre, two sweeps);
   - an edge is straight runs from its field's row into the target card's top row. An edge back, or within a layer,
     climbs into its own lane above the cards;
-  - given the last read's layout, the cards still there keep their cells.
+  - given the last read's layout, the cards still there keep their cells;
+  - a left field ends at a stub, "+N not shown" (`Stub`, one row right of its card, moved down to free cells), by
+    an edge marked `cut` with no target, which the editor draws dashed.
   The editor turns cells into buffer positions plus pixel offsets for Glitnir's edge primitive
   (`docs/specs/nidhogg/2026-11-13-glitnir-edges-case.md` in the org folder).
 - **Open graphs** (`heap_wire::Heaps`, on `Debug`) are kept by id with the editor connection that opened them and
@@ -1191,9 +1203,10 @@ The design is `docs/specs/drgnx/2026-11-13-heap-graph-design.md` in the org fold
   last read of each graph id, so a replay or a sent run shows them with no live program.
 
 Methods (runstav `methods::debug_heap`, the user class):
-- `debug/heap {session?, frame?, expr?, graph?, limit?, depth?}` returns `{graph, session, expr, node?, nodes, cut,
-  cards, edges, width, height, added, changed, gone}`. It takes either SESSION and EXPR (a variable's `evaluateName`)
-  or GRAPH. LIMIT is 1–200 (default 50), DEPTH 1–32 (default 8).
+- `debug/heap {session?, frame?, expr?, locals?, graph?, limit?, depth?}` returns `{graph, session, expr, locals?, node?, nodes, cut,
+  cards, edges, cuts, width, height, added, changed, gone}`: a field's `cut`, an edge's `cut: true` (its `to` empty),
+  each stub `{from, field, count, col, row, width}`. It takes SESSION and EXPR (a variable's `evaluateName`), SESSION
+  and LOCALS or a FRAME (the frame's locals; `expr` is then empty, `locals` true and `node` is `frame`), or GRAPH. LIMIT is 1–200 (default 50), DEPTH 1–32 (default 8).
 - `debug/heap/close {graph}` returns `{closed}`.
 - Event `debug-heap`: an open graph read again at a new stop, sent to the editor that opened it.
 
@@ -1206,3 +1219,30 @@ Tests:
   new object and a gone one, while a's card keeps its cell;
 - `js_debug_detach_leaves_no_hidden_map`: after a detach, the program's own `Object.getOwnPropertySymbols(globalThis)`
   no longer has the map.
+
+The editor half (`drgnx-debug-heap.el`): **Show as Graph** (`debug-show-as-graph`) on a Variables row asks
+`debug/heap {session, expr}` on the events connection, the one the hub sends `debug-heap` to, and shows the panel's
+**Graph** tab (`debug-graph`, buffer `*Debug Graph*`; one graph at a time, so opening another closes the last). On a
+local (a row under a scope named `Local…`, id `v:SESSION:Locals/NAME`) it asks `debug/heap {session, locals: true}`
+instead, and the first answer selects that local's card (the frame's field NAME's `to`). The buffer's first line is
+the header strip (a panel's header line is its tabs): the `workflow` icon, `Graph:` and the expression or the local,
+then the stopped frame's function and stop (kept per session from `debug-frame`) and the objects (a frame's locals'
+frame not counted), and against the right edge chips for the changed and new ones, `+N not shown` for `cut`, and a
+push's error, which keeps the last cards. Then one line per row of cells. Cells are columns of the code font, and the
+cards mix fonts as the mockup does: a title (the path that reached it in `drgnx-debug-heap-title`, the UI heading
+font, then its type in `drgnx-debug-heap-type`, UI and subtle), then ` name … value` (code font; a reference's value
+is its target's type in `drgnx-debug-heap-reference`, the UI caption font), then `+N more`. So every piece is placed
+by a stretch (`(space :align-to COL)`, the padding `(+ COL (PX))`, a value against the right edge `(- END (PX))`), and
+the `drgnx-debug-heap-card` property names the card. The cards are `glitnir-blocks` rings over their lines (`:x0` and
+`:x1` from the columns; radius 6,
+`drgnx-border`, the selected card's `drgnx-focus-line`: a ring takes a face's foreground, and `drgnx-focus` has only a box), and the references are `glitnir-edges` from the field's row to the
+target's title row through the hub's points, each a line's start plus the cell's pixels across and half a line down,
+with an arrowhead, in `drgnx-text-subtle`, or in
+`drgnx-accent` when they touch the selected card. A field the limit cut (`cut: N`, no target) shows its value as a
+reference; its stub (`cuts[{from, field, count, col, row, width}]`) is one row, `+N not shown` in
+`drgnx-debug-heap-cut` (the quiet chip), at the cells the hub gave it, and its edge (`cut: true`, `to: ""`) ends there,
+dashed, with no arrowhead. RET or a click selects a card (`debug-heap-select`). At a
+`debug-heap` push, the fields whose value changed since the last read take `drgnx-debug-heap-changed` (the warn tint),
+an added card's title says `new`, and a gone card is written once more at its old cells (where no card is now) in
+`drgnx-debug-heap-gone` (the disabled text) with a subtle ring and no edges; the next push drops it. Killing the
+buffer sends `debug/heap/close`. Tests: `test/unit/debug-heap-test.el`; scenes `heap-graph` and `heap-graph-light`.

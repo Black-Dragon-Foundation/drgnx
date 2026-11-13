@@ -9,7 +9,7 @@ use crate::dispatch::Caller;
 use crate::front::Front;
 use runstav::methods::Params;
 use runstav::methods::debug_heap::{
-    DebugHeap, DebugHeapClosed, DebugHeapGraph, HeapCard, HeapEdge, HeapField, HeapNode,
+    DebugHeap, DebugHeapClosed, DebugHeapGraph, HeapCard, HeapCut, HeapEdge, HeapField, HeapNode,
 };
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
@@ -24,7 +24,8 @@ struct Kept {
     conn: u64,
     /// The stop it was last read at.
     epoch: Option<u64>,
-    expr: String,
+    /// None: the frame's locals.
+    expr: Option<String>,
     limits: Limits,
     nodes: Vec<Node>,
     layout: Layout,
@@ -45,10 +46,12 @@ fn limits(p: &DebugHeap, base: Limits) -> Limits {
     }
 }
 
-fn wire(
+/// G (of EXPR, None: the frame's locals) laid out as L, against the last read by D: `debug/heap`'s answer and the
+/// `debug-heap` push.
+pub(super) fn wire(
     id: &str,
     session: &str,
-    expr: &str,
+    expr: Option<&str>,
     g: &Graph,
     l: &Layout,
     d: heap::Diff,
@@ -56,7 +59,8 @@ fn wire(
     DebugHeapGraph {
         graph: id.to_owned(),
         session: session.to_owned(),
-        expr: expr.to_owned(),
+        expr: expr.unwrap_or_default().to_owned(),
+        locals: expr.is_none(),
         node: g.roots.first().and_then(|(_, n)| n.clone()),
         nodes: g
             .nodes
@@ -72,6 +76,7 @@ fn wire(
                         name: f.name.clone(),
                         value: f.value.clone(),
                         to: f.to.clone(),
+                        cut: f.cut,
                     })
                     .collect(),
             })
@@ -96,6 +101,19 @@ fn wire(
                 field: e.field,
                 to: e.to.clone(),
                 points: e.points.iter().map(|&(c, r)| [c, r]).collect(),
+                cut: e.cut,
+            })
+            .collect(),
+        cuts: l
+            .cuts
+            .iter()
+            .map(|c| HeapCut {
+                from: c.from.clone(),
+                field: c.field,
+                count: c.count,
+                col: c.col,
+                row: c.row,
+                width: c.width,
             })
             .collect(),
         width: l.width,
@@ -128,19 +146,19 @@ impl Heaps {
                 (
                     format!("h{n}"),
                     p.session.clone().unwrap_or_default(),
-                    p.expr.clone().unwrap_or_default(),
+                    p.expr.clone().filter(|_| p.locals != Some(true)),
                     limits(&p, Limits::default()),
                     None,
                 )
             }
         };
         let epoch = d.stop_of(&session).map(|s| s.epoch);
-        let g = heap::read(d, &session, p.frame, &expr, lim).await?;
+        let g = heap::read(d, &session, p.frame, expr.as_deref(), lim).await?;
         let l = heap_layout::layout(&g, before.as_ref().map(|(_, l)| l));
         let diff = before
             .as_ref()
             .map_or_else(heap::Diff::default, |(n, _)| heap::diff(n, &g.nodes));
-        let out = wire(&id, &session, &expr, &g, &l, diff);
+        let out = wire(&id, &session, expr.as_deref(), &g, &l, diff);
         // the recorded run keeps it with the stop (sealed like the rest: spec §19.2)
         if let (Some(rec), Some(e)) = (d.records(), epoch) {
             rec.heap(&session, e, json!(out));
@@ -193,6 +211,7 @@ impl Heaps {
                 session: None,
                 frame: None,
                 expr: None,
+                locals: None,
                 graph: Some(id.clone()),
                 limit: None,
                 depth: None,

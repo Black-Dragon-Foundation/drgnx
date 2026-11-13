@@ -626,14 +626,57 @@ async fn an_unknown_run_is_refused() {
     assert!(rec.run("nope").is_none());
 }
 
-/// The FIFO's reader, at the end (or a failed assert): the write waiting on it goes on.
+/// The FIFO's reader, at the end (or a failed assert): the write waiting on it goes on, and every later one.
 struct ReadAtEnd(std::path::PathBuf);
 
 impl Drop for ReadAtEnd {
     fn drop(&mut self) {
+        // every writer from here on: each open of the run file is a writer of its own, and each close an end of
+        // file; the loop ends with the test's directory (the process ends with the test)
         let p = self.0.clone();
-        std::thread::spawn(move || std::fs::read(p));
+        std::thread::spawn(move || while std::fs::read(&p).is_ok() {});
     }
+}
+
+/// The FIFO's reader, once let go, reads every writer that opens it after, not only the first: a run file is opened
+/// again for each write, and a writer left without a reader would hold the blocking pool (and the runtime's
+/// shutdown) for good.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_fifos_reader_reads_every_writer() {
+    use std::io::Write;
+    let d = tempfile::tempdir().unwrap();
+    let fifo = d.path().join("run.drun");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .unwrap();
+    assert!(made.success());
+    drop(ReadAtEnd(fifo.clone()));
+    // writers on threads of their own: one left waiting for a reader holds nothing the test waits on
+    let write = |p: std::path::PathBuf| {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        std::thread::spawn(move || {
+            let mut f = std::fs::OpenOptions::new().append(true).open(&p).unwrap();
+            f.write_all(b"frame").unwrap();
+            let _ = tx.send(());
+        });
+        rx
+    };
+    let within = Duration::from_secs(5);
+    assert!(
+        crate::clock::timeout(within, write(fifo.clone()))
+            .await
+            .is_ok(),
+        "the first writer is read"
+    );
+    // the first writer's close is the reader's end of file; the next opens after it
+    crate::clock::sleep(Duration::from_millis(100)).await;
+    assert!(
+        crate::clock::timeout(within, write(fifo.clone()))
+            .await
+            .is_ok(),
+        "a writer that opens after the first is read too"
+    );
 }
 
 /// A stop's write that waits on the disk (here the run file swapped for a FIFO nobody reads) holds no async worker

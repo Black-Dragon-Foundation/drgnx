@@ -25,6 +25,7 @@
 (require 'drgnx-debug-view (expand-file-name "drgnx-debug-view" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-debug-console (expand-file-name "drgnx-debug-console" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-debug-memory (expand-file-name "drgnx-debug-memory" (file-name-directory (macroexp-file-name))))
+(require 'drgnx-debug-heap (expand-file-name "drgnx-debug-heap" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-debug-disassembly
          (expand-file-name "drgnx-debug-disassembly" (file-name-directory (macroexp-file-name))))
 (defvar drgnx-statusbar-left)
@@ -50,8 +51,8 @@ on it while it lives.")
   "`drgnx-hub-event-functions': `debug-state' gives the sessions (the session keys, the toolbar and the status bar
 follow them, a running session's stop marks go), `debug-frame' marks and opens a stop's line, `debug-inline' shows
 its values at line ends, `debug-ended' takes its marks away, `debug-output' goes to the debug console,
-`debug-terminal' shows a task's or the program's terminal; the disassembly view follows `debug-frame' and a
-session's instruction breakpoints (`debug-breakpoints' with a session and no path)."
+`debug-heap' to the open heap graph, `debug-terminal' shows a task's or the program's terminal; the disassembly
+view follows `debug-frame' and a session's instruction breakpoints (`debug-breakpoints' with a session and no path)."
   (pcase event
     ("debug-state"
      (setq drgnx-debug--sessions (append (plist-get data :sessions) nil))
@@ -62,8 +63,10 @@ session's instruction breakpoints (`debug-breakpoints' with a session and no pat
      (drgnx-debug-console-sessions drgnx-debug--sessions)
      (drgnx-debug-toolbar-sync))
     ("debug-output" (drgnx-debug-console-output data))
+    ("debug-heap" (drgnx-debug-heap-event data))
     ("debug-frame"
      (drgnx-debug-disassembly-frame data)
+     (drgnx-debug-heap-frame data)
      (drgnx-debug-gutter-show-frame data))
     ("debug-breakpoints"
      (when (and (plist-get data :session) (not (plist-get data :path)))
@@ -136,6 +139,7 @@ the toolbar's cards go too."
   (drgnx-debug-view--teardown)
   (drgnx-debug-console--teardown)
   (drgnx-debug-memory--teardown)
+  (drgnx-debug-heap--teardown)
   (drgnx-debug-disassembly--teardown)
   (drgnx-debug-session-mode -1)
   (drgnx-debug-timeline-mode -1)
@@ -389,6 +393,14 @@ console's tab shows without taking the focus."
                                       (drgnx-command-define id :category "Debug" :title title :command fn :doc doc)
                                     (drgnx-command-define id :category "Debug" :title title :command fn :doc doc
                                                           :map 'drgnx-debug-view-mode-map :when in-view))))
+                              ;; the heap graph (drgnx-debug-heap.el): the panel's Graph tab, its key in its own map
+                              (when (fboundp 'drgnx-wb-define-tab)
+                                (drgnx-wb-define-tab 'panel 'debug-graph :title "Graph"))
+                              (drgnx-command-define 'debug-heap-select :category "Debug" :title "Graph: Select Card"
+                                                    :command #'drgnx-debug-heap-select
+                                                    :doc "Ring the card at point and show its references"
+                                                    :map 'drgnx-debug-heap-mode-map
+                                                    :when (lambda () (derived-mode-p 'drgnx-debug-heap-mode)))
                               ;; the memory view (drgnx-debug-memory.el): its keys in its own map
                               (let ((in-memory (lambda () (derived-mode-p 'drgnx-debug-memory-mode))))
                                 (pcase-dolist (`(,id ,title ,fn ,doc) drgnx-debug-memory-commands)

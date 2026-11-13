@@ -66,6 +66,7 @@ would be bypassed by native code; the cost timed is the Lisp's, the C lights not
 `drgnx-perf--debug-stop' undoes it."
   (format "(progn (dolist (m '(\"drgnx-debug-launch\" \"drgnx-debug-gutter\")) (load (expand-file-name (concat \"modules/extra/\" m) %S) nil t))
      (defvar drgnx-perf--debug-store nil) (defvar drgnx-perf--debug-version 0)
+     (setq drgnx-perf--debug-store nil)   ; each row's own: no row inherits another's breakpoints
      (defun drgnx-perf--debug-hub (method params cb &rest _)
        (when (equal method \"debug/breakpoints\")
          (let ((op (plist-get params :op)))
@@ -2407,9 +2408,26 @@ a :measure without :actions each have :timeout seconds to answer (120)."
        :actions ,(append (funcall keys "<next>" 30) (funcall keys "<prior>" 30))
        :check "(with-current-buffer (window-buffer) (and (drgnx-margins-offset 'debug) (drgnx-margins-offset 'hunks) (not drgnx-debug-gutter-mode) t))"   ; both claimed, nothing drawn
        :teardown ,(concat "(progn " kill-fixture " (drgnx-perf--debug-stop) t)"))
+      ;; debug-ruler-scroll's baseline: the same narrowed file, breakpoints, column and keys with the ruler off
+      ;; (`drgnx-debug-overview-ruler'), so the ruler alone is judged (narrowing and the column each cost 0.1-0.2 ms of
+      ;; their own: docs/develop/perf.md, "The overview ruler")
+      (debug-ruler-baseline
+       :setup ,(drgnx-perf-run--debug-setup-form)
+       :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " (goto-char (point-min))"
+                      " (narrow-to-region (point-min) (progn (forward-line 10000) (point))) (goto-char (point-min))"
+                      " (setq drgnx-perf--debug-store (reverse"
+                      "   (mapcar (lambda (i) (list :id i :line (* 50 i) :enabled (/= 0 (% i 5)) :verified t))"
+                      "           (number-sequence 1 200))))"
+                      ;; (the module turned the column, and with it the ruler, on as the file was visited)
+                      " (drgnx-debug-gutter-mode -1) (setq drgnx-debug-overview-ruler nil)"
+                      " (drgnx-margins-claim 'hunks 1 :order 2) (drgnx-debug-gutter-mode 1) t)")
+       :actions ,(append (funcall keys "<next>" 30) (funcall keys "<prior>" 30))
+       :check "(with-current-buffer (window-buffer) (and drgnx-debug-gutter-mode drgnx-debug-gutter--overlays (null (window-parameter nil 'glitnir-ruler)) t))"   ; the column's marks, no ruler
+       :teardown ,(concat "(progn (setq drgnx-debug-overview-ruler t) (with-current-buffer (window-buffer) (widen))"
+                          " (drgnx-debug-gutter-mode -1) " kill-fixture " (drgnx-perf--debug-stop) t)"))
       ;; the overview ruler: the fixture narrowed to its first 10,000 lines, 200 breakpoints (one every 50 lines) in the
-      ;; column and so in the ruler, scrolled as debug-gutter-scroll; judged against debug-gutter-baseline as it is
-      ;; (Nidhogg draws it from the window's `glitnir-ruler': a scroll runs no Lisp of the ruler's)
+      ;; column and so in the ruler, scrolled as debug-gutter-scroll; judged against debug-ruler-baseline, which differs
+      ;; only by the ruler (Nidhogg draws it from the window's `glitnir-ruler': a scroll runs no Lisp of the ruler's)
       (debug-ruler-scroll
        :setup ,(drgnx-perf-run--debug-setup-form)
        :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " (goto-char (point-min))"
@@ -2467,8 +2485,9 @@ a :measure without :actions each have :timeout seconds to answer (120)."
        :check "(with-current-buffer (window-buffer) (and (= (line-number-at-pos) 220) (= 1 (length (drgnx-debug-gutter--stop-overlays \"perf\")))))"
        :teardown ,(concat "(progn (drgnx-debug-gutter-stop-clear-all) (drgnx-debug-gutter-mode -1) " kill-fixture
                           " (global-unset-key (kbd \"<f10>\")) (drgnx-perf--debug-stop) t)"))
-      ;; inline values (spec §8, §12): stopped at line 200, F10 is one `debug-inline' as the hub sends it for a step:
-      ;; twelve lines' values (two changed), the line that keeps values updated in place, the next added, the oldest gone
+      ;; inline values (spec §8, §12): stopped at line 200 of a file with five breakpoints (three on the lines shown), the
+      ;; column and the overview ruler on, F10 is one `debug-inline' as the hub sends it for a step: twelve lines' values
+      ;; (two changed), the line that keeps values updated in place, the next added, the oldest gone
       (debug-inline
        :setup ,(concat "(progn " (drgnx-perf-run--debug-setup-form)
                        (format " (load (expand-file-name \"modules/extra/drgnx-debug\" %S) nil t)" drgnx-ui-repo-dir)
@@ -2479,14 +2498,40 @@ a :measure without :actions each have :timeout seconds to answer (120)."
                        "       :lines (vconcat (mapcar (lambda (k) (list :line (+ 188 n k)"
                        "                                     :text (format \"total = %d  i = %d  name = 'row %d'\" (* n k) k n)"
                        "                                     :changed (if (< k 2) [[0 9]] [])))"
-                       "                              (number-sequence 0 11))))))))"
+                       "                              (number-sequence 0 11)))))))"
                        " (global-set-key (kbd \"<f10>\") #'drgnx-perf--inline) t)")
        :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form)
+                      " (setq drgnx-perf--debug-store (reverse (mapcar (lambda (l) (list :id l :line l :enabled t :verified t)) '(40 190 205 215 900))))"
+                      " (drgnx-debug-gutter-mode -1) (drgnx-debug-gutter-mode 1)"   ; the column and its ruler ask the store
                       " (goto-char (point-min)) (forward-line 199) (setq drgnx-perf--inline-n 0)"
                       " (drgnx-debug-gutter-show-frame (list :session \"perf\" :epoch 0 :thread 1 :path buffer-file-name"
                       "   :line 200 :col 1 :top t :reason \"step\" :open t :name \"main\")) t)")
        :actions ,(funcall keys "<f10>" 120)   ; p95 is judged from 100 samples
-       :check "(= 12 (length (drgnx-debug-gutter--stop-overlays \"perf\" 'inline)))"
+       :check "(with-current-buffer (window-buffer) (and (= 12 (length (drgnx-debug-gutter--stop-overlays \"perf\" 'inline))) (= 5 (length drgnx-debug-gutter--overlays)) (or (not (featurep 'glitnir-ruler)) (window-parameter nil 'glitnir-ruler)) t))"
+       :teardown ,(concat "(progn (drgnx-debug-gutter-stop-clear-all) " kill-fixture
+                          " (global-unset-key (kbd \"<f10>\")) (drgnx-perf--debug-stop) t)"))
+      ;; debug-inline in a file with 200 breakpoints (one every 60 lines): the column, its hover pool and the ruler's 200
+      ;; marks drawn again with each step (4 ms p95)
+      (debug-inline-heavy
+       :setup ,(concat "(progn " (drgnx-perf-run--debug-setup-form)
+                       (format " (load (expand-file-name \"modules/extra/drgnx-debug\" %S) nil t)" drgnx-ui-repo-dir)
+                       " (defvar drgnx-perf--inline-heavy-n 0)"
+                       " (defun drgnx-perf--inline-heavy () (interactive)"
+                       "   (let ((n (cl-incf drgnx-perf--inline-heavy-n)))"
+                       "     (drgnx-debug-gutter-inline (list :session \"perf\" :epoch n :path buffer-file-name"
+                       "       :lines (vconcat (mapcar (lambda (k) (list :line (+ 188 n k)"
+                       "                                     :text (format \"total = %d  i = %d  name = 'row %d'\" (* n k) k n)"
+                       "                                     :changed (if (< k 2) [[0 9]] [])))"
+                       "                              (number-sequence 0 11)))))))"
+                       " (global-set-key (kbd \"<f10>\") #'drgnx-perf--inline-heavy) t)")
+       :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form)
+                      " (setq drgnx-perf--debug-store (reverse (mapcar (lambda (i) (list :id i :line (* 60 i) :enabled (/= 0 (% i 5)) :verified t)) (number-sequence 1 200))))"
+                      " (drgnx-debug-gutter-mode -1) (drgnx-debug-gutter-mode 1)"   ; the column and its ruler ask the store
+                      " (goto-char (point-min)) (forward-line 199) (setq drgnx-perf--inline-heavy-n 0)"
+                      " (drgnx-debug-gutter-show-frame (list :session \"perf\" :epoch 0 :thread 1 :path buffer-file-name"
+                      "   :line 200 :col 1 :top t :reason \"step\" :open t :name \"main\")) t)")
+       :actions ,(funcall keys "<f10>" 120)   ; p95 is judged from 100 samples
+       :check "(with-current-buffer (window-buffer) (and (= 12 (length (drgnx-debug-gutter--stop-overlays \"perf\" 'inline))) (= 200 (length drgnx-debug-gutter--overlays)) (or (not (featurep 'glitnir-ruler)) (window-parameter nil 'glitnir-ruler)) t))"
        :teardown ,(concat "(progn (drgnx-debug-gutter-stop-clear-all) " kill-fixture
                           " (global-unset-key (kbd \"<f10>\")) (drgnx-perf--debug-stop) t)"))
       ;; the toolbar (spec §12): F8 alternates a stopped session and none, so each key shows or hides the card (the
@@ -2990,6 +3035,7 @@ pairs below, each judged only when both sides were measured."
         (gutter (drgnx-perf--get results 'debug-gutter-scroll '(:input :p50)))
         (gutter-base (drgnx-perf--get results 'debug-gutter-baseline '(:input :p50)))
         (ruler (drgnx-perf--get results 'debug-ruler-scroll '(:input :p50)))
+        (ruler-base (drgnx-perf--get results 'debug-ruler-baseline '(:input :p50)))
         (edges (drgnx-perf--get results 'debug-edges-scroll '(:input :p50))))
     (append
      ;; the breakpoint column: at most the larger of 5 % and 0.3 ms over the same scroll with its margin (and hunks')
@@ -3001,12 +3047,12 @@ pairs below, each judged only when both sides were measured."
        (list (format "debug-gutter-scroll input p50 %s ms is %s%% (%s ms) over debug-gutter-baseline's %s ms (the column may add at most 5 %% or 0.3 ms)"
                      (drgnx-perf--round gutter) (round (* 100 (- (/ gutter gutter-base) 1)))
                      (drgnx-perf--round (- gutter gutter-base)) (drgnx-perf--round gutter-base))))
-     ;; the overview ruler, by the same rule
-     (when (and (numberp ruler) (numberp gutter-base)
-                (> ruler (+ (max (* 1.05 gutter-base) (+ gutter-base 0.3)) 1e-6)))
-       (list (format "debug-ruler-scroll input p50 %s ms is %s%% (%s ms) over debug-gutter-baseline's %s ms (the ruler may add at most 5 %% or 0.3 ms)"
-                     (drgnx-perf--round ruler) (round (* 100 (- (/ ruler gutter-base) 1)))
-                     (drgnx-perf--round (- ruler gutter-base)) (drgnx-perf--round gutter-base))))
+     ;; the overview ruler, by the same rule, against the same scroll without it
+     (when (and (numberp ruler) (numberp ruler-base)
+                (> ruler (+ (max (* 1.05 ruler-base) (+ ruler-base 0.3)) 1e-6)))
+       (list (format "debug-ruler-scroll input p50 %s ms is %s%% (%s ms) over debug-ruler-baseline's %s ms (the ruler may add at most 5 %% or 0.3 ms)"
+                     (drgnx-perf--round ruler) (round (* 100 (- (/ ruler ruler-base) 1)))
+                     (drgnx-perf--round (- ruler ruler-base)) (drgnx-perf--round ruler-base))))
      ;; Glitnir's edges, by the same rule
      (when (and (numberp edges) (numberp gutter-base)
                 (> edges (+ (max (* 1.05 gutter-base) (+ gutter-base 0.3)) 1e-6)))
@@ -3280,8 +3326,8 @@ version and the commit, as JSON in FILE."
                                 terminal-backfill terminal-flood))
     (memory . "its one key only opens the pause RSS is read after; RSS is its budget")
     ,@(mapcar (lambda (w) (cons w "graphical debugging: its allocation, CPU and rows are set from three pinned runs on the desktop island (the plan's perf step)"))
-              '(debug-gutter-scroll debug-gutter-baseline debug-ruler-scroll debug-edges-scroll debug-breakpoint-click debug-probe-flood debug-scrub
-                                    debug-step-line debug-inline debug-toolbar-show debug-step-variables debug-expand-chunks
+              '(debug-gutter-scroll debug-gutter-baseline debug-ruler-baseline debug-ruler-scroll debug-edges-scroll debug-breakpoint-click debug-probe-flood debug-scrub
+                                    debug-step-line debug-inline debug-inline-heavy debug-toolbar-show debug-step-variables debug-expand-chunks
                                     debug-console-flood
                                     debug-bisect-typing view-remove-above view-select-dim))
     ,@(mapcar (lambda (w) (cons w "report-only until its step lands (§17.6); no allocation, CPU or rows budget: they follow the worker's design, not today's code"))

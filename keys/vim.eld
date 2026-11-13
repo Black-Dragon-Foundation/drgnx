@@ -170,6 +170,8 @@
         (debug-breakpoint-trigger :none "a breakpoint's right-click menu; the palette")
         (debug-add-to-watch "a")
         (debug-view-memory "m")
+        (debug-show-as-graph :none "the palette")
+        (debug-heap-select "RET")
         (debug-memory-next "C-f")
         (debug-memory-previous "C-b")
         (debug-memory-refresh "R")

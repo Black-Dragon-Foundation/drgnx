@@ -233,8 +233,14 @@ async fn read(f: &Front, args: &Value) -> Result<Value, String> {
             let session = arg(args, "debug_session")?;
             let epoch = d.stop_of(session).map(|s| s.epoch);
             let frame = args.get("frame").and_then(Value::as_i64);
-            let g = super::heap::read(d, session, frame, arg(args, "expr")?, Default::default())
-                .await?;
+            let g = super::heap::read(
+                d,
+                session,
+                frame,
+                Some(arg(args, "expr")?),
+                Default::default(),
+            )
+            .await?;
             Ok(json!({"debug_session": session, "epoch": epoch, "graph": g}))
         }
         w => Err(format!(

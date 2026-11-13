@@ -2,7 +2,8 @@
 //! out in layers left to right by distance from the roots, each layer's order following its references' sources;
 //! each reference an edge of straight runs from its field's row to the target card's top row (Glitnir rounds the
 //! bends). A reference back to an earlier layer goes round above the cards. Given the last stop's layout, cards that
-//! are still there keep their cells and new ones take free cells, so a step moves nothing that did not change.
+//! are still there keep their cells and new ones take free cells, so a step moves nothing that did not change. A
+//! field the walk left (at the limit, the depth or the time) ends at a stub, "+N not shown", by a dashed edge.
 
 use super::heap::Graph;
 use serde::Serialize;
@@ -24,6 +25,20 @@ pub struct Edge {
     pub field: u32,
     pub to: String,
     pub points: Vec<(u32, u32)>,
+    /// A cut field's edge: TO is empty and it ends at the field's stub (drawn dashed).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub cut: bool,
+}
+
+/// A cut field's stub ("+COUNT not shown"): one row at COL, ROW, WIDTH cells wide.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Stub {
+    pub from: String,
+    pub field: u32,
+    pub count: u32,
+    pub col: u32,
+    pub row: u32,
+    pub width: u32,
 }
 
 /// The graph laid out: WIDTH × HEIGHT cells.
@@ -31,6 +46,7 @@ pub struct Edge {
 pub struct Layout {
     pub cards: Vec<Card>,
     pub edges: Vec<Edge>,
+    pub cuts: Vec<Stub>,
     pub width: u32,
     pub height: u32,
 }
@@ -256,20 +272,72 @@ pub fn layout(g: &Graph, prev: Option<&Layout>) -> Layout {
                 field: as_u32(k.min(FIELDS_SHOWN)),
                 to: t.id.clone(),
                 points,
+                cut: false,
             });
+        }
+    }
+    // each cut field's stub: right of its card, from its field's row down to the first free cells; its edge dashed
+    let mut cuts: Vec<Stub> = vec![];
+    for n in &g.nodes {
+        let Some(s) = at(&n.id) else { continue };
+        for (k, f) in n.fields.iter().enumerate() {
+            let (Some(count), None) = (f.cut, &f.to) else {
+                continue;
+            };
+            let start = (s.col + s.width, s.row + field_row(k));
+            let mut stub = Stub {
+                from: n.id.clone(),
+                field: as_u32(k.min(FIELDS_SHOWN)),
+                count,
+                col: start.0 + GAP,
+                row: start.1,
+                width: as_u32(format!("+{count} not shown").chars().count() + 2),
+            };
+            let as_card = |t: &Stub| Card {
+                id: String::new(),
+                col: t.col,
+                row: t.row,
+                width: t.width,
+                height: 1,
+            };
+            while cards.iter().any(|o| !apart(o, &as_card(&stub)))
+                || cuts.iter().any(|o| !apart(&as_card(o), &as_card(&stub)))
+            {
+                stub.row += 1;
+            }
+            let end = (stub.col, stub.row);
+            let x = stub.col - 2;
+            let mut points = vec![start, (x, start.1), (x, end.1), end];
+            points.dedup();
+            edges.push(Edge {
+                from: n.id.clone(),
+                field: stub.field,
+                to: String::new(),
+                points,
+                cut: true,
+            });
+            cuts.push(stub);
         }
     }
     let width = cards
         .iter()
         .map(|c| c.col + c.width)
+        .chain(cuts.iter().map(|c| c.col + c.width))
         .chain(edges.iter().flat_map(|e| e.points.iter().map(|p| p.0)))
         .max()
         .unwrap_or(0)
         + LEFT;
-    let height = cards.iter().map(|c| c.row + c.height).max().unwrap_or(0) + 1;
+    let height = cards
+        .iter()
+        .map(|c| c.row + c.height)
+        .chain(cuts.iter().map(|c| c.row + 1))
+        .max()
+        .unwrap_or(0)
+        + 1;
     Layout {
         cards,
         edges,
+        cuts,
         width,
         height,
     }

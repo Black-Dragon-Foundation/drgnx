@@ -41,6 +41,8 @@
     (bug "✱" . "*") (unplug "⏏" . "x")
     ;; Send Run's card and a sent run's chip
     (send "➤" . ">") (key "⚿" . "k") (inbox "⊔" . "u") (braces "{}" . "{}")
+    ;; the heap graph's header
+    (workflow "⧉" . "#")
     ;; the Search view's kind chips, as the hub's kind icons on definition rows
     (square-function "ƒ" . "f") (type "◇" . "T") (wand "#" . "#") (variable "≡" . "=")
     ;; the Extensions list's kinds (a package's is `package''s, below)

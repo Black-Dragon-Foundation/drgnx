@@ -27,6 +27,8 @@
  ;; inline values (spec §8, §12): a step's `debug-inline' drawn, twelve lines replaced in place, within 2 ms p95 (the
  ;; hub's half, at most 8 ms, is the bench debug_inline)
  (debug-inline (:input :p95) 2) (debug-inline (:input :max) 50)
+ ;; the same in a file with 200 breakpoints: the column's hover pool and the ruler's marks drawn again (4 ms p95)
+ (debug-inline-heavy (:input :p95) 4) (debug-inline-heavy (:input :max) 50)
  ;; the toolbar shown or hidden with the session (spec §12: 5 ms, the child frame reused)
  (debug-toolbar-show (:input :p95) 5) (debug-toolbar-show (:input :max) 50)
  ;; the Run and Debug view (spec §7): a step's variables drawn (30 ms with the hub's half, the bench `debug_view'); a

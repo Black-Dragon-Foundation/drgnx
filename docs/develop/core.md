@@ -1551,7 +1551,8 @@ Nidhogg draws it: Glitnir's overview ruler, the window parameter `glitnir-ruler`
   place, centred.
 - **Where there is none.** No ruler without Nidhogg's feature `glitnir-ruler`, or in a terminal
   (`drgnx-ruler-available-p`).
-- **Perf.** `debug-ruler-scroll` (10,000 lines, 200 marks) against `debug-gutter-baseline`. The margin version this
+- **Perf.** `debug-ruler-scroll` (10,000 lines, 200 marks) against `debug-ruler-baseline`, the same scroll with the
+  ruler off (docs/develop/perf.md, "The overview ruler"). The margin version this
   replaced cost 0.4–1.1 ms a page, all of it in the margin's glyphs.
 
 ## Epochs, memos and caches (`drgnx-memo.el`)

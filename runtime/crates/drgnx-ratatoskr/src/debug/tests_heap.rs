@@ -275,6 +275,45 @@ async fn without_identity_the_walk_is_a_tree_cut_at_its_depth() {
     assert_eq!(g.cut, 1, "a.next.next's next is left: {g:#?}");
 }
 
+/// A reference left at the depth stays on its field with what is behind it: a list's elements as the adapter counts
+/// them, an object as one.
+#[tokio::test]
+async fn a_cut_field_says_how_much_it_left() {
+    let mut f = Fake::default();
+    let roots = vec![var("b", "Box", "Box", "b", 10)];
+    f.children.insert(
+        10,
+        vec![
+            var("v", "1", "int", "b.v", 0),
+            json!({"name": "tags", "value": "list[40]", "type": "list", "evaluateName": "b.tags",
+                   "variablesReference": 20, "indexedVariables": 40}),
+            var("owner", "User", "User", "b.owner", 30),
+        ],
+    );
+    let g = heap::walk(
+        &f,
+        Ident::Paths,
+        roots,
+        Limits {
+            depth: 1,
+            ..Limits::default()
+        },
+    )
+    .await;
+    assert_eq!(g.nodes.len(), 1, "{g:#?}");
+    let cut = |name: &str| {
+        g.nodes[0]
+            .fields
+            .iter()
+            .find(|f| f.name == name)
+            .and_then(|f| f.cut)
+    };
+    assert_eq!(cut("tags"), Some(40), "{g:#?}");
+    assert_eq!(cut("owner"), Some(1), "{g:#?}");
+    assert_eq!(cut("v"), None);
+    assert_eq!(g.cut, 2);
+}
+
 /// js-debug: every object and function gets the hidden map's tag; a primitive gets null and stays a field.
 #[tokio::test]
 async fn javascript_objects_are_named_by_the_hidden_maps_tag() {
@@ -359,11 +398,13 @@ fn the_next_stops_graph_says_what_was_added_changed_and_gone() {
                 name: "v".into(),
                 value: v.into(),
                 to: None,
+                cut: None,
             },
             heap::Field {
                 name: "next".into(),
                 value: "Node".into(),
                 to: to.map(str::to_owned),
+                cut: None,
             },
         ],
     };
@@ -385,4 +426,104 @@ fn the_next_stops_graph_says_what_was_added_changed_and_gone() {
         "A's reference, B's value"
     );
     assert_eq!(d.gone, vec!["C".to_owned()]);
+}
+
+#[tokio::test]
+async fn a_frames_locals_are_its_first_card_and_a_shared_local_is_one_object() {
+    let (mut f, _) = python();
+    // the Locals scope (reference 7): a, shared (= a.next, b) and a scalar
+    f.children.insert(
+        7,
+        vec![
+            json!({"name": "special variables", "value": "", "variablesReference": 999,
+                   "presentationHint": {"kind": "class"}}),
+            var("a", "<Node>", "Node", "a", 10),
+            var("shared", "<Node>", "Node", "shared", 20),
+            var("threshold", "40", "int", "threshold", 0),
+        ],
+    );
+    let g = heap::locals(&f, Ident::Python, 7, Limits::default()).await;
+    let fr = &g.nodes[0];
+    assert_eq!(
+        (fr.id.as_str(), fr.ty.as_str(), fr.path.as_str()),
+        ("frame", "frame", "Locals"),
+        "{g:#?}"
+    );
+    assert_eq!(
+        g.roots,
+        vec![("Locals".to_owned(), Some("frame".to_owned()))]
+    );
+    let names: Vec<&str> = fr.fields.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["a", "shared", "threshold"]);
+    assert_eq!(to(fr, "a").as_deref(), Some("1001"));
+    assert_eq!(to(fr, "shared").as_deref(), Some("1002"));
+    assert_eq!(
+        to(node(&g, "1001"), "next").as_deref(),
+        Some("1002"),
+        "shared is a.next: one card"
+    );
+    assert_eq!(
+        (to(fr, "threshold"), fr.fields[2].value.as_str()),
+        (None, "40")
+    );
+    assert_eq!(g.nodes.len(), 4, "the frame, a, b, c");
+    assert!(
+        !f.asked.lock().unwrap().iter().any(|a| a.contains("Locals")),
+        "the frame has no identity to ask for"
+    );
+    let l = super::heap_layout::layout(&g, None);
+    assert_eq!(l.cards[0].id, "frame");
+    let first = &l.cards[0];
+    assert!(
+        l.cards[1..].iter().all(|c| c.col > first.col),
+        "the frame is the first layer, alone: {l:#?}"
+    );
+    let from_frame: Vec<(u32, &str)> = l
+        .edges
+        .iter()
+        .filter(|e| e.from == "frame")
+        .map(|e| (e.field, e.to.as_str()))
+        .collect();
+    assert_eq!(from_frame, [(0, "1001"), (1, "1002")]);
+    // the answer, the push at the next stop and the recorded run's copy are this
+    let w = json!(super::heap_wire::wire(
+        "h1",
+        "d1",
+        None,
+        &g,
+        &l,
+        heap::diff(&[], &g.nodes)
+    ));
+    assert_eq!(
+        (&w["expr"], &w["locals"], &w["node"]),
+        (&json!(""), &json!(true), &json!("frame"))
+    );
+    assert_eq!(w["nodes"][0]["type"], "frame");
+    assert_eq!(w["cards"][0]["id"], "frame");
+}
+
+#[test]
+fn the_locals_scope_is_the_hinted_one_else_the_first_cheap_one() {
+    let s = |v: Value| v.as_array().unwrap().clone();
+    // debugpy, lldb-dap: hinted
+    assert_eq!(
+        heap::locals_scope(&s(json!([
+            {"name": "Globals", "variablesReference": 3},
+            {"name": "Locals", "presentationHint": "locals", "variablesReference": 4},
+        ]))),
+        Some(4)
+    );
+    // delve, js-debug: the first that is not expensive
+    assert_eq!(
+        heap::locals_scope(&s(json!([
+            {"name": "Registers", "variablesReference": 5, "expensive": true},
+            {"name": "Local", "variablesReference": 6},
+            {"name": "Global", "variablesReference": 7},
+        ]))),
+        Some(6)
+    );
+    assert_eq!(
+        heap::locals_scope(&s(json!([{"name": "Locals", "variablesReference": 0}]))),
+        None
+    );
 }

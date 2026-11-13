@@ -190,7 +190,13 @@ branch gateway-queue, staged file and history come with the Magit adapter (look 
     (send-run-code "the code and the size are the scene's own: the container has no keyring, so no run is recorded to export"
                    "a sent run on the strip is not shown: it needs a recorded run to import (its Sent line has unit tests)")
     (send-run-light "the card's run is the scene's record: the container has no keyring, so no run is recorded")
-    (send-run-code-light "the code and the size are the scene's own: the container has no keyring, so no run is recorded to export"))
+    (send-run-code-light "the code and the size are the scene's own: the container has no keyring, so no run is recorded to export")
+    (heap-graph "the graph is the scene's own two reads (an answer and the next stop's push, as debug/heap_wire.rs
+sends them): the mock adapter has no object ids to walk"
+                "no Locals card: the hub's graph starts at the variable shown")
+    (heap-graph-light "the graph is the scene's own two reads (an answer and the next stop's push, as
+debug/heap_wire.rs sends them): the mock adapter has no object ids to walk"
+                      "no Locals card: the hub's graph starts at the variable shown"))
   "What the line cannot show of each scene's mockup yet, written to the scene's facts (:limits).  A scene is never
 changed to hide a gap: the gap is named here instead.")
 
@@ -896,6 +902,15 @@ colour bar and the file's chip."
 (defvar drgnx-debug-share-buffer)
 (defvar drgnx-debug-share--card)
 (declare-function drgnx-debug-memory-open "drgnx-debug-memory")
+(declare-function drgnx-debug-heap-mode "drgnx-debug-heap" ())
+(declare-function drgnx-debug-heap--show "drgnx-debug-heap" (answer))
+(declare-function drgnx-debug-heap--decorate "drgnx-debug-heap" (&optional faded))
+(declare-function drgnx-debug-heap--faded "drgnx-debug-heap" ())
+(declare-function drgnx-wb-area-show "drgnx-area" (area &optional tab buffer))
+(defvar drgnx-debug-heap-buffer-name)
+(defvar drgnx-debug-heap--title)
+(defvar drgnx-debug-heap--pick)
+(declare-function drgnx-debug-heap-frame "drgnx-debug-heap" (data))
 (declare-function drgnx-quickhelp--request "drgnx-quickhelp")
 (declare-function drgnx-quickhelp-shown-p "drgnx-quickhelp")
 (defvar drgnx-debug-console-timestamps)
@@ -1223,6 +1238,76 @@ code and size the scene's own (the container has no keyring, so no run is record
 (defun drgnx-look-scene-debug-extras-light () "The debugging extras' editor, light." (drgnx-look-scene--debug-extras 'drgnx-light nil))
 (defun drgnx-look-scene-debug-extras-views () "The debugging extras' views, dark." (drgnx-look-scene--debug-extras 'drgnx-dark t))
 (defun drgnx-look-scene-debug-extras-views-light () "The debugging extras' views, light." (drgnx-look-scene--debug-extras 'drgnx-light t))
+
+(defun drgnx-look-scene--heap-node (id path &rest fields)
+  "A heap node as `debug/heap' sends it: ID of type Node at PATH with FIELDS, each (NAME VALUE TO? CUT?)."
+  (list :id id :type "Node" :path path
+        :fields (vconcat (mapcar (lambda (f) (append (list :name (nth 0 f) :value (nth 1 f)) (and (nth 2 f) (list :to (nth 2 f)))
+                                                     (and (nth 3 f) (list :cut (nth 3 f)))))
+                                 fields))))
+
+(defun drgnx-look-scene--heap-answer (second)
+  "The graph of the stopped frame's locals at the mockup's first stop, or (SECOND) its next: the frame first (a,
+shared = b, threshold), then a → b → d, then the ring a → b → c → a with b's qty changed, c new and d gone, and b's
+40 tags cut by the limit (a stub at the end of a dashed edge); the cells laid out by the hub's rules (layers left to
+right, forward edges through the gap before the target, back edges in a lane above the cards)."
+  (let ((frame (list :id "frame" :type "frame" :path "Locals"
+                     :fields (vector (list :name "a" :value "<Node>" :to "a") (list :name "shared" :value "<Node>" :to "b")
+                                     (list :name "threshold" :value "10"))))
+        (a (drgnx-look-scene--heap-node "a" "a" '("sku" "'nut-m6'") '("qty" "20") '("next" "<Node>" "b")))
+        (b (drgnx-look-scene--heap-node "b" "b" '("sku" "'bolt-m4'") (list "qty" (if second "3" "5"))
+                                        (list "next" "<Node>" (if second "c" "d")) '("tags" "list · 40" nil 40)))
+        (c (drgnx-look-scene--heap-node "c" "c" '("sku" "'washer-8'") '("qty" "0") '("next" "<Node>" "a")))
+        (d (drgnx-look-scene--heap-node "d" "d" '("sku" "'pin-2'") '("qty" "0") '("next" "None"))))
+    (list :graph "scene-heap" :session "scene" :expr "" :locals t :node "frame" :cut 40
+          :nodes (vconcat (list frame a b (if second c d)))
+          :cards (vconcat (list (list :id "frame" :col 3 :row 2 :width 18 :height 4)
+                                (list :id "a" :col 27 :row 2 :width 18 :height 4)
+                                (list :id "b" :col 51 :row 2 :width 18 :height 5))
+                          (list (if second (list :id "c" :col 75 :row 2 :width 18 :height 4)
+                                  (list :id "d" :col 27 :row 9 :width 18 :height 4))))
+          :cuts (vector (list :from "b" :field 3 :count 40 :col 75 :row 8 :width 15))
+          :edges (vconcat (list (list :from "frame" :field 0 :to "a" :points [[21 3] [24 3] [24 2] [27 2]])
+                                (list :from "frame" :field 1 :to "b" :points [[21 4] [23 4] [23 7] [48 7] [48 2] [51 2]])
+                                (list :from "a" :field 2 :to "b" :points [[45 5] [48 5] [48 2] [51 2]])
+                                (list :from "b" :field 3 :to "" :cut t :points [[69 6] [72 6] [72 8] [75 8]]))
+                          (if second
+                              (list (list :from "b" :field 2 :to "c" :points [[69 5] [72 5] [72 2] [75 2]])
+                                    (list :from "c" :field 2 :to "a" :points [[93 5] [96 5] [96 0] [36 0] [36 2]]))
+                            (list (list :from "b" :field 2 :to "d" :points [[69 5] [70 5] [70 8] [25 8] [25 9] [27 9]]))))
+          :width 99 :height 13
+          :added (if second ["c"] []) :changed (if second ["b"] []) :gone (if second ["d"] []))))
+
+(defun drgnx-look-scene--heap-graph (theme)
+  "The heap graph in THEME: the Graph tab after the second stop, the frame's locals shown from `a' (the
+debugging-extras mockup's)."
+  (drgnx-look-scene--theme theme)
+  (drgnx-look-scene--try (if (eq theme 'drgnx-light) "heap-graph-light" "heap-graph")
+    ;; the Graph tab is extra/debug's: set it up when the session has not (its tab in the panel's strip)
+    (unless (drgnx-modules--ok-p 'extra/debug)
+      (drgnx-modules--run-one 'extra/debug (alist-get 'extra/debug drgnx-modules--table) 'idle))
+    (drgnx-wb-focus-editor)
+    (let ((f (expand-file-name "inventory.py" drgnx-look-scene--project)))
+      (unless (file-exists-p f) (with-temp-file f (insert drgnx-look-scene--inventory)))
+      (find-file f))
+    (when-let* ((old (get-buffer drgnx-debug-heap-buffer-name))) (kill-buffer old))
+    (drgnx-debug-heap-frame (list :session "scene" :name "reorder_quantities" :epoch 2))
+    (let ((b (get-buffer-create drgnx-debug-heap-buffer-name)))
+      (with-current-buffer b
+        (drgnx-debug-heap-mode)
+        (setq drgnx-debug-heap--title "a" drgnx-debug-heap--pick "a"))
+      (let ((w (drgnx-wb-area-show 'panel 'debug-graph b)))
+        (with-current-buffer b
+          (drgnx-debug-heap--show (drgnx-look-scene--heap-answer nil))
+          (drgnx-debug-heap--show (drgnx-look-scene--heap-answer t))
+          (goto-char (point-min)))
+        (when (window-live-p w)
+          (ignore-errors (window-resize w (- 16 (window-total-height w)) nil t))
+          (with-current-buffer b (drgnx-debug-heap--decorate (drgnx-debug-heap--faded)))))))
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-heap-graph () "The heap graph, dark." (drgnx-look-scene--heap-graph 'drgnx-dark))
+(defun drgnx-look-scene-heap-graph-light () "The heap graph, light." (drgnx-look-scene--heap-graph 'drgnx-light))
 
 (defun drgnx-look-scene-start-page ()
   "The start page in the editor, dark (no mockup: its buttons, keycaps and shield are the components of design §3.5)."

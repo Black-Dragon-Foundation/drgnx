@@ -477,6 +477,7 @@ breakpoint picked.  \"(none)\" makes it a plain breakpoint again."
     (debug-copy-expression "Copy as Expression" drgnx-debug-copy-expression "Copy the expression that reads the variable")
     (debug-add-to-watch "Add to Watch" drgnx-debug-add-to-watch "Watch the variable's expression")
     (debug-view-memory "View Binary Data" drgnx-debug-view-memory "Show the variable's bytes in memory, and write them")
+    (debug-show-as-graph "Show as Graph" drgnx-debug-show-as-graph "Show the variable's objects as cards, with an edge for each reference")
     (debug-watch-add "Add Watch Expression…" drgnx-debug-watch-add "Watch an expression at every stop")
     (debug-watch-edit "Edit Watch Expression…" drgnx-debug-watch-edit "Change the watched expression")
     (debug-watch-remove "Remove Watch Expression" drgnx-debug-watch-remove "Stop watching the expression")
