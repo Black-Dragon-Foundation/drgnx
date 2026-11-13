@@ -713,7 +713,7 @@ fn detail_rows_say_the_edges() {
         text.iter().any(|t| t.contains('\t') && t.contains(&pl)),
         "{pl} in {text:?}"
     );
-    let rows = detail::rows(&lines, 1.0, 340);
+    let rows = detail::rows(&lines, 1.0, 340, &Cols);
     assert_eq!(rows.len(), lines.len());
     assert_eq!(rows[0].key, "head/0");
     assert_eq!(detail::map_of(&detail::view_of("w-1")), Some("w-1"));
@@ -1203,7 +1203,7 @@ fn detail_rows_are_the_mockups_tile() {
     }
     let m = core.model();
     let agent = ItemId("agent:a1".into());
-    let rows = detail::rows(&detail::lines(m, Some(&agent), 0), 1.0, 340);
+    let rows = detail::rows(&detail::lines(m, Some(&agent), 0), 1.0, 340, &Cols);
     fn faces_of(r: &Row) -> Vec<&str> {
         r.runs.iter().map(|x| x.2.as_str()).collect()
     }
@@ -1237,7 +1237,6 @@ fn detail_rows_are_the_mockups_tile() {
         "{:?}",
         rows[1]
     );
-    assert!(rows[1].text.contains("API prices"), "{:?}", rows[1]);
     assert!(
         faces_of(&rows[1]).contains(&"drgnx-text-muted"),
         "{:?}",
@@ -1273,4 +1272,28 @@ fn the_card_line_is_measured_in_the_text_role() {
     .expect("an env");
     let palette = Palette(Vec::new());
     assert_eq!(render_env(&env, &palette).line, (16, 75));
+}
+
+/// [D] The Detail head's subtitle never wraps at the island's width: parts go by priority ("(API prices)", then the cost,
+/// then the run's time) and what is left is cut with an ellipsis, so there is no continuation glyph at the window's edge.
+#[test]
+fn the_detail_subtitle_is_fitted_to_the_tile() {
+    let mut core = vegvisir::Core::new();
+    for e in vegvisir::fixture::scene() {
+        core.step(e);
+    }
+    let agent = ItemId("agent:a1".into());
+    let lines = detail::lines(core.model(), Some(&agent), 0);
+    for width in [340u32, 260, 140] {
+        let rows = detail::rows(&lines, 1.0, width, &Cols);
+        let sub = &rows[1];
+        // the fixed advance of the test measure is 8 px a column; the tile has 8 px of padding each side
+        let px = sub.text.chars().count() as u32 * 8;
+        assert!(px <= width - 16, "{width}: {px} px, {:?}", sub.text);
+    }
+    let wide = detail::rows(&lines, 1.0, 340, &Cols);
+    assert!(!wide[1].text.contains("API prices"), "{:?}", wide[1]);
+    // everything fits in the width, so nothing is dropped
+    let roomy = detail::rows(&lines, 1.0, 900, &Cols);
+    assert!(roomy[1].text.contains("API prices"), "{:?}", roomy[1]);
 }

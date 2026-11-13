@@ -1090,7 +1090,7 @@ pub fn strip(
     extra: &[String],
     env: &Env,
     m: &dyn Measure,
-) -> Row {
+) -> (Row, Vec<(ImageId, String)>) {
     let entries: Vec<String> = crate::nav::strip_entries(needs, s.items)
         .into_iter()
         .map(|e| e.text)
@@ -1115,9 +1115,11 @@ pub fn strip(
             Some("drgnx-work-needs-you"),
         );
     }
-    let chips: Vec<String> = extra
+    // a chip: its text and, for a machine, its Lucide icon (a monitor; a laptop for "laptop") before the text
+    let icon_px = (ICON_PX as f32 * env.scale).round() as u32;
+    let chips: Vec<(String, Option<&str>)> = extra
         .iter()
-        .map(|c| format!(" {c} "))
+        .map(|c| (format!(" {c} "), None))
         .chain(
             machines
                 .iter()
@@ -1130,25 +1132,52 @@ pub fn strip(
                         .as_ref()
                         .and_then(|r| r.cost.as_ref())
                         .map_or(String::new(), |c| format!(" · cloud {c}"));
-                    format!(" {} {used}/{total}{cost} ", short_machine(&it.label))
+                    let icon = if it.label == "laptop" {
+                        "laptop"
+                    } else {
+                        "monitor"
+                    };
+                    (
+                        format!(" {} {used}/{total}{cost} ", short_machine(&it.label)),
+                        Some(icon),
+                    )
                 }),
         )
         .collect();
-    let tail = chips.join(" ");
-    let w = fit::width(m, ROLE, &tail).ceil() as u32;
-    b.stop(env.width_px.saturating_sub(w));
-    for (i, c) in chips.iter().enumerate() {
+    let w: f32 = chips
+        .iter()
+        .map(|(c, i)| fit::width(m, ROLE, c) + if i.is_some() { icon_px as f32 } else { 0.0 })
+        .sum::<f32>()
+        + fit::width(m, ROLE, " ") * chips.len().saturating_sub(1) as f32;
+    b.stop(env.width_px.saturating_sub(w.ceil() as u32));
+    let mut images = BTreeMap::new();
+    for (i, (c, icon)) in chips.iter().enumerate() {
         if i > 0 {
             b.push(" ", None);
         }
         let start = b.pos();
-        b.push(c, Some("drgnx-work-chip"));
+        let drawn = icon.and_then(|n| {
+            let svg = crate::icons::svg(n, env.palette.colour("chip-fg"), icon_px)?;
+            Some((ImageId::of(svg.as_bytes(), env.epoch), svg))
+        });
+        match drawn {
+            Some((id, svg)) => {
+                b.push(" ", Some("drgnx-work-chip"));
+                b.image(id, "▣");
+                images.insert(id, svg);
+                b.push(c.trim_start_matches(' '), Some("drgnx-work-chip"));
+                // the leading room is the chip's own: the image replaces the first space's width
+            }
+            None => {
+                b.push(c, Some("drgnx-work-chip"));
+            }
+        }
         let end = b.pos();
         b.face(start, end, "drgnx-chip");
     }
     let end = b.pos();
     b.face(0, end, "drgnx-work-card");
-    b.finish()
+    (b.finish(), images.into_iter().collect())
 }
 
 // ---- the outline -------------------------------------------------------------------------------------------------

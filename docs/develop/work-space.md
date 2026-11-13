@@ -544,10 +544,14 @@ face under a class. The faces: `drgnx-work-band`, the decoration faces (`drgnx-c
   chain) carries `drgnx-work-dim` in the hub's rows; the editor's class step dims nothing on the map. A machine on a chip is
   its short name ("desk" for "desktop"); a branch's chip shows a tag, the machine its agent runs on and the slot it holds
   (`Fields::tag`, from `SessionFact::machine` and `::slot`: "desk 3"; a hub session has no slot yet, so its tag is the
-  machine alone), in place of its edits count.
+  machine alone), in place of its edits count. A machine's chip on the strip starts with its Lucide monitor
+  (a laptop for "laptop"), an image in the strip's row that `render::strip` returns beside the row.
 - **The Detail head and the trail's numbers.** An agent's Detail starts with its badge, its name and its state as a chip
   at the right edge, then the subtitle (task, "running N min", "≈$1.20 (API prices)"); `detail::rows` takes the tile's
-  width. A trail's step that a conclusion rests on starts with the conclusion's number in a circle (`drgnx-badge`), the
+  width and the UI font's measure, and the subtitle never wraps (a wrapped line shows a continuation glyph): it drops
+  "(API prices)", then its parts from the end, then is cut with an ellipsis. A trail's step that a conclusion rests on
+  starts with the conclusion's number in a filled accent circle (`drgnx-work-step-number`, the solid chip
+  `drgnx-chip-solid` in the badge's pill), the
   others keep the room; the newest conclusion's card says `new` while it is stamped on one of the last three steps.
 - **The lens bar's right** (`drgnx-work-lens--controls`): the grip (drawn; the tile layout's drag is not wired), maximise
   (`drgnx-work-lens-maximize`: hides the Detail island and the trail, again shows them) and ⋯ (the keys sheet). The lens

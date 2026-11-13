@@ -144,6 +144,8 @@ it (a notes repository with the code repositories inside it)."
   :group 'drgnx-work-space)
 (defface drgnx-work-lens-key '((t :inherit drgnx-keycap)) "A key's badge on the lens bar." :group 'drgnx-work-space)
 (defface drgnx-work-chip '((t :inherit drgnx-selected-quiet)) "A chip." :group 'drgnx-work-space)
+(defface drgnx-work-step-number '((t :inherit (drgnx-chip-solid drgnx-badge)))
+  "A trail step's number: a filled circle in the accent's blue (work-space-dark.html `.mk')." :group 'drgnx-work-space)
 (defface drgnx-work-new '((t :inherit success)) "The mark of a new conclusion." :group 'drgnx-work-space)
 (defface drgnx-work-agent-1 '((t :inherit drgnx-agent-1)) "The first agent colour." :group 'drgnx-work-space)
 (defface drgnx-work-agent-2 '((t :inherit drgnx-agent-2)) "The second agent colour." :group 'drgnx-work-space)

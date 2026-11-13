@@ -133,6 +133,13 @@ high contrast, where tints are black, they are ringed in their own colour."
                        (list face (drgnx-face-color face :foreground 'gui) (drgnx-face-color face :background 'gui))))
         (should (eq (eq variant 'hc) (and (plist-get (drgnx-faces--clause-plist face 'gui) :box) t)))))))
 
+(ert-deftest drgnx-themes/a-trail-step-number-is-a-filled-accent-circle ()
+  "work-space-dark.html `.mk': a step's number (`drgnx-work-step-number', on this solid chip and the badge's pill) is the accent's fill with its text colour."
+  (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
+    (drgnx-themes-test--with theme
+      (should (equal (drgnx-face-color 'drgnx-chip-solid :background 'gui) (drgnx-look-token 'accent-fill variant)))
+      (should (equal (drgnx-face-color 'drgnx-chip-solid :foreground 'gui) (drgnx-look-token 'on-accent variant))))))
+
 (ert-deftest drgnx-themes/an-area-s-shown-tab-is-a-pill ()
   "debugging.html `.pt.on': the shown tab of an area's tab row (the bottom panel's Debug Console) is a pill on the
 quiet selection in the text colour; the other tabs are muted text."

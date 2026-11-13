@@ -3,6 +3,7 @@
 //! model and sent as the rows of the view `VIEW/detail` beside the map's own. Pure: the model and the selection in,
 //! lines out; the rows are those lines, one per row.
 
+use drgnx_rows::fit::{self, Measure};
 use drgnx_rows::{Row, RowBuilder};
 use serde_json::Value;
 use vegvisir::{Item, ItemId, Model};
@@ -286,6 +287,29 @@ fn text_lines(m: &Model, it: &Item) -> Vec<Line> {
     out.into_iter().map(|(s, t)| (s, t, None)).collect()
 }
 
+/// The UI font role the Detail text is measured in.
+const ROLE: &str = "text";
+
+/// The subtitle TEXT (`PART · PART · …`, the most important first) in ROOM px: whole when it fits, else without
+/// "(API prices)", then the parts dropped from the end, and what is left of the first cut with an ellipsis. It
+/// never wraps (a wrapped line shows a continuation glyph at the window's edge).
+fn subtitle(text: &str, room: f32, m: &dyn Measure) -> String {
+    let fits = |t: &str| fit::width(m, ROLE, t) <= room - fit::SLACK;
+    if fits(text) {
+        return text.to_owned();
+    }
+    let mut parts: Vec<String> = text.split(" · ").map(str::to_owned).collect();
+    for p in &mut parts {
+        if let Some(cut) = p.strip_suffix(" (API prices)") {
+            *p = cut.to_owned();
+        }
+    }
+    while parts.len() > 1 && !fits(&parts.join(" · ")) {
+        parts.pop();
+    }
+    fit::fit(m, ROLE, &parts.join(" · "), room)
+}
+
 /// The width of the key column, logical px.
 const KEY_PX: f32 = 66.0;
 
@@ -294,7 +318,7 @@ const KEY_PX: f32 = 66.0;
 /// `KEY\tVALUE` line as a muted key and its value in a column (an agent's why-chain and a link in the accent, an
 /// overlap in the warning colour), an action as a button and its key. A job's line carries its id as
 /// `drgnx-work-job`.
-pub(crate) fn rows(lines: &[Line], scale: f32, width_px: u32) -> Vec<Row> {
+pub(crate) fn rows(lines: &[Line], scale: f32, width_px: u32, m: &dyn Measure) -> Vec<Row> {
     let key_px = (KEY_PX * scale).round() as u32;
     lines
         .iter()
@@ -353,7 +377,8 @@ pub(crate) fn rows(lines: &[Line], scale: f32, width_px: u32) -> Vec<Row> {
                     b.push(text, Some("drgnx-ui-heading"));
                 }
                 ("head", None) => {
-                    b.push(text, Some("drgnx-text-muted"));
+                    let room = width_px as f32 - 16.0 * scale;
+                    b.push(&subtitle(text, room, m), Some("drgnx-text-muted"));
                 }
                 (_, None) if !text.starts_with(' ') => {
                     b.push(text, Some("drgnx-ui-heading"));

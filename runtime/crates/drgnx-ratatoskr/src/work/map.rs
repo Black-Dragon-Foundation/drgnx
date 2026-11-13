@@ -666,16 +666,11 @@ fn view_rows(
         .into_values()
         .filter(|it| it.kind == Kind::Machine)
         .collect();
-    let mut rows = vec![render::strip(
-        &scene,
-        &m.needs_you(),
-        &machines,
-        extra,
-        &renv,
-        fonts,
-    )];
+    let (strip, mut images) = render::strip(&scene, &m.needs_you(), &machines, extra, &renv, fonts);
+    let mut rows = vec![strip];
     rows.extend(drawn.rows);
-    (rows, drawn.images)
+    images.extend(drawn.images);
+    (rows, images)
 }
 
 /// The renderer's view of ENV: a card line's height and ascent from the `ui` font (else the cell's, 80 % up).
@@ -1372,8 +1367,11 @@ impl Map {
                 continue;
             }
             let k3 = (key.conn, view.clone(), c);
-            f.core.views.publish_built(f, &k3, |env, _fonts| {
-                (detail::rows(&lines, env.scale, env.width_px), Vec::new())
+            f.core.views.publish_built(f, &k3, |env, fonts| {
+                (
+                    detail::rows(&lines, env.scale, env.width_px, fonts),
+                    Vec::new(),
+                )
             });
         }
     }

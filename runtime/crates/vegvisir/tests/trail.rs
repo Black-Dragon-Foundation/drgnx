@@ -86,7 +86,10 @@ fn a_conclusion_dirties_only_its_steps() {
     let s2 = after.iter().find(|r| r.key == "step:2").unwrap();
     // the step a conclusion rests on starts with its number in a circle (a badge), the others with room for one
     assert!(s2.text.contains(" 1 "), "{}", s2.text);
-    assert!(s2.runs.iter().any(|r| r.2 == "drgnx-badge"), "{s2:?}");
+    assert!(
+        s2.runs.iter().any(|r| r.2 == "drgnx-work-step-number"),
+        "{s2:?}"
+    );
 }
 
 /// [A] A step inside the Timeline's range redraws its own lane only; one past the range moves every lane's scale.
@@ -321,7 +324,7 @@ fn numbered_circles_and_the_new_tag() {
     let concs = vec![conclusion(1, 2, &[2]), conclusion(2, 5, &[4, 5])];
     let rows = trail::trail_rows(&steps, &concs, &env(&p), Zone(0));
     let row = |k: &str| rows.iter().find(|r| r.key == k).expect(k);
-    let badged = |r: &Row| r.runs.iter().any(|x| x.2 == "drgnx-badge");
+    let badged = |r: &Row| r.runs.iter().any(|x| x.2 == "drgnx-work-step-number");
     assert!(badged(row("step:2")) && row("step:2").text.contains(" 1 "));
     assert!(badged(row("step:4")) && row("step:4").text.contains(" 2 "));
     assert!(!badged(row("step:1")) && !badged(row("step:3")));

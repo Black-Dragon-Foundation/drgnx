@@ -237,7 +237,7 @@ fn build(
         let k = kind(s);
         // a step a conclusion rests on starts with its number in a circle; the others keep the room
         match concs.iter().find(|c| c.rests_on.contains(&s.id)) {
-            Some(c) => b.push(&format!(" {} ", c.n), Some("drgnx-badge")),
+            Some(c) => b.push(&format!(" {} ", c.n), Some("drgnx-work-step-number")),
             None => b.push("   ", None),
         };
         b.stop((30.0 * env.scale) as u32);

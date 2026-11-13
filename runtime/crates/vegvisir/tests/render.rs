@@ -431,7 +431,7 @@ fn strip_chips_rows() {
         .filter(|i| i.id.0.starts_with("machine:"))
         .cloned()
         .collect();
-    let row = render::strip(&s, &f.needs_you, &machines, &[], &gui(&pal), &Cols);
+    let row = render::strip(&s, &f.needs_you, &machines, &[], &gui(&pal), &Cols).0;
     assert_eq!(row.key, "strip");
     assert!(
         row.text.contains("⚑ Codex asks: cargo clippy  g1"),
@@ -445,7 +445,13 @@ fn strip_chips_rows() {
     // the machines' chips end at the right edge
     let (pos, px) = *row.stops.last().expect("a stop before the machines");
     let tail: String = row.text.chars().skip(pos as usize + 1).collect();
-    assert_eq!(px + 8 * tail.chars().count() as u32, 1000, "{tail:?}");
+    // each chip's icon is 16 px in the one character of its placeholder (8 px here)
+    let icons = row.images.iter().filter(|i| i.0 > pos).count() as u32;
+    assert_eq!(
+        px + 8 * tail.chars().count() as u32 + 8 * icons,
+        1000,
+        "{tail:?}"
+    );
     // more than nine: the first nine and +N
     let many: Vec<NeedsYou> = (0..12)
         .map(|i| NeedsYou {
@@ -454,7 +460,7 @@ fn strip_chips_rows() {
             ..f.needs_you[0].clone()
         })
         .collect();
-    let row = render::strip(&s, &many, &machines, &[], &gui(&pal), &Cols);
+    let row = render::strip(&s, &many, &machines, &[], &gui(&pal), &Cols).0;
     assert!(
         row.text.contains("g9") && !row.text.contains("g10") && row.text.contains("+4"),
         "{}",
@@ -617,7 +623,7 @@ fn a_long_strip_entry_is_cut_and_the_row_is_ui_text() {
             .into(),
         ..f.needs_you[0].clone()
     }];
-    let row = render::strip(&s, &long, &[], &[], &gui(&pal), &Cols);
+    let row = render::strip(&s, &long, &[], &[], &gui(&pal), &Cols).0;
     assert!(row.text.contains("…  g1"), "{:?}", row.text);
     assert!(!row.text.contains("some more words"), "{:?}", row.text);
     let end = u32::try_from(row.text.chars().count()).unwrap();
@@ -711,7 +717,7 @@ fn the_strip_has_the_forecast_and_cost_chips_before_the_machines() {
         .cloned()
         .collect();
     let extra = vec!["wk 41 % ▲ Thu".to_owned(), "$31 / $40".to_owned()];
-    let row = render::strip(&s, &[], &machines, &extra, &gui(&pal), &Cols);
+    let row = render::strip(&s, &[], &machines, &extra, &gui(&pal), &Cols).0;
     let wk = row.text.find("wk 41 % ▲ Thu").expect("the forecast chip");
     let cost = row.text.find("$31 / $40").expect("the cost chip");
     let desk = row.text.find("desk 3/16").expect("a machine");
@@ -784,4 +790,28 @@ fn a_branch_chip_shows_its_machine_tag() {
     assert!(row.text.contains("desk 3"), "{:?}", row.text);
     assert!(!row.text.contains("edits 2"), "{:?}", row.text);
     assert!(row.runs.iter().any(|r| r.2 == "drgnx-work-chip"), "{row:?}");
+}
+
+/// [D] A machine's chip on the strip starts with its Lucide icon (a monitor, a laptop for "laptop") in an image of its
+/// own, in the palette's colour, and the strip names the images it uses (work-space-dark.html: "desk 3/16").
+#[test]
+fn a_machine_chip_on_the_strip_has_its_icon() {
+    let (items, edges, layout) = frame();
+    let new = BTreeSet::new();
+    let pal = palette();
+    let s = scene(&items, &edges, &layout, &new);
+    let machines: Vec<Item> = items
+        .values()
+        .filter(|i| i.id.0.starts_with("machine:"))
+        .cloned()
+        .collect();
+    let (row, images) = render::strip(&s, &[], &machines, &[], &gui(&pal), &Cols);
+    assert_eq!(row.images.len(), machines.len(), "{row:?}");
+    assert!(!images.is_empty());
+    let svg = images
+        .iter()
+        .find(|(id, _)| *id == row.images[0].1)
+        .map(|(_, s)| s.as_str())
+        .expect("its image");
+    assert!(svg.contains("<svg") && svg.contains("stroke=\""), "{svg}");
 }

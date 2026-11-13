@@ -125,6 +125,8 @@ above and below, the face's background between (Nidhogg's compositor).  Asked on
          (drgnx-chip-attention :foreground ,(c 'attention) :background ,(c 'attention-tint)
                                ,@(and hc '(:box (:line-width (-1 . -1)))))
          (drgnx-chip-accent :foreground ,(c 'accent) :background ,(c 'accent-tint) ,@(and hc '(:box (:line-width (-1 . -1)))))
+         ;; the solid chip: the accent's fill with its text colour (design: a step's number in the trail's circle)
+         (drgnx-chip-solid :foreground ,(c 'on-accent) :background ,(c 'accent-fill))
          (drgnx-chip-ok :foreground ,(c 'ok) :background ,(c 'ok-tint) ,@(and hc '(:box (:line-width (-1 . -1)))))
          (drgnx-chip-warn :foreground ,(c 'warn) :background ,(c 'warn-tint) ,@(and hc '(:box (:line-width (-1 . -1)))))
          (drgnx-tint-warn :background ,(c 'warn-tint) ,@(and hc `(:box (:line-width (-1 . -1) :color ,(c 'warn)))))
