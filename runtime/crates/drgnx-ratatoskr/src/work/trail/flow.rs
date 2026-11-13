@@ -58,6 +58,7 @@ const KEY: &str = "drgnx-work-flow-key";
 const BUTTON: &str = "drgnx-work-flow-button";
 const BUTTON_PRI: &str = "drgnx-work-flow-button-primary";
 const KEY_PRI: &str = "drgnx-work-flow-key-primary";
+const BUTTON_KEY: &str = "drgnx-work-flow-button-key";
 /// A card's fill (drgnx-work-flow.el: the panel's surface), and the text faces on it.
 const CARD: &str = "drgnx-work-flow-card";
 const CARD_TEXT: &str = "drgnx-work-flow-card-text";
@@ -142,6 +143,12 @@ pub(crate) struct TaskFacts {
     pub base: Option<String>,
     /// Its commits after the base, oldest first.
     pub commits: Vec<CommitFact>,
+    /// Its agent's session on the map (its label there, when the model is the agent's name), minutes, spend and
+    /// context used (percent).
+    pub session: Option<String>,
+    pub minutes: Option<u64>,
+    pub spend: Option<String>,
+    pub context: Option<u8>,
 }
 
 /// One commit of a task's branch.
@@ -1196,10 +1203,11 @@ fn button(b: &mut RowBuilder, label: &str, key: &str, primary: bool) {
     let (face, kface) = if primary {
         (BUTTON_PRI, KEY_PRI)
     } else {
-        (BUTTON, KEY)
+        (BUTTON, BUTTON_KEY)
     };
+    // the label's last space is the gap before the key; the key's own spaces pad it inside its ring
     b.push(&format!(" {label} "), Some(face))
-        .push(key, Some(kface))
+        .push(&format!(" {key} "), Some(kface))
         .push(" ", Some(face));
 }
 
@@ -1329,7 +1337,11 @@ pub(crate) fn detail_tile(
         images.push((id, svg));
         head.push(" ", None);
     }
-    head.push(&fit(agent, chars.saturating_sub(10)), Some(AGENT));
+    let who = match &facts.session {
+        Some(session) if t.agent.is_some() => format!("{agent} · {session}"),
+        _ => agent.to_owned(),
+    };
+    head.push(&fit(&who, chars.saturating_sub(10)), Some(AGENT));
     if t.held.is_some() {
         head.stop(env.width_px.saturating_sub(env.cell.0 * 7));
         head.push(" held ", Some(Chip::Held.face()));
@@ -1340,10 +1352,24 @@ pub(crate) fn detail_tile(
         head.prop(start, end, "drgnx-work-card", json!(card));
     }
     let mut out = vec![head.finish()];
+    // under it the task and the agent's time, spend and context (the map's), else where the task stands
+    let mut said: Vec<String> = Vec::new();
+    if let Some(m) = facts.minutes {
+        said.push(format!("{m} min"));
+    }
+    if let Some(s) = &facts.spend {
+        said.push(format!("≈{s}"));
+    }
+    if let Some(c) = facts.context {
+        said.push(format!("ctx {c}%"));
+    }
+    if said.is_empty() {
+        said.push(facts.status.clone());
+    }
     let mut sub = RowBuilder::new("d:sub");
     sub.push(
         &fit(
-            &format!("{} {} · {}", t.label, t.title, facts.status),
+            &format!("{} {} · {}", t.label, t.title, said.join(" · ")),
             chars,
         ),
         Some(LABEL),
@@ -2390,20 +2416,20 @@ mod tests {
             "Evidence so far",
             "green",
             "1 pass",
-            "Run the red r",
-            "Tell the agent s",
-            "Waive once w",
-            "Evidence e",
+            "Run the red  r",
+            "Tell the agent  s",
+            "Waive once  w",
+            "Evidence  e",
             "yours only",
         ] {
             assert!(all.contains(want), "no {want:?} in\n{all}");
         }
         // each button's key is a keycap badge (the key face) inside the button
         for button in [
-            "Run the red r",
-            "Tell the agent s",
-            "Waive once w",
-            "Evidence e",
+            "Run the red  r",
+            "Tell the agent  s",
+            "Waive once  w",
+            "Evidence  e",
         ] {
             let row = rows
                 .iter()
@@ -2418,7 +2444,7 @@ mod tests {
             assert!(
                 row.runs
                     .iter()
-                    .any(|r| r.0 <= at && at < r.1 && (r.2 == KEY || r.2 == KEY_PRI)),
+                    .any(|r| r.0 <= at && at < r.1 && (r.2 == BUTTON_KEY || r.2 == KEY_PRI)),
                 "{button}: {:?}",
                 row.runs
             );
@@ -2432,10 +2458,35 @@ mod tests {
             !free_all.contains("Why it is held") && !free_all.contains("Waive"),
             "{free_all}"
         );
-        assert!(free_all.contains("Evidence e") && free_all.contains("none recorded"));
+        assert!(free_all.contains("Evidence  e") && free_all.contains("none recorded"));
         let none = detail_tile(&f, "task:J#99", &tile).0;
         assert_eq!(none.len(), 1);
         assert!(none[0].text.contains("Select a task"));
+    }
+
+    /// [D] hub-orchestration.html's detail head: "Sonnet · search-quick" (the model, then the agent's session), and
+    /// under it the task with the agent's time, spend and context; without them, the task's status.
+    #[test]
+    fn the_detail_head_names_the_session_and_the_sub_line_its_time_spend_and_context() {
+        let mut f = flow();
+        f.tasks[1].agent = Some("Sonnet".into());
+        f.tasks[1].session = Some("search-quick".into());
+        f.tasks[1].minutes = Some(41);
+        f.tasks[1].spend = Some("$0.90".into());
+        f.tasks[1].context = Some(88);
+        let (rows, _) = detail_tile(&f, "task:J#5", &env(1.0));
+        assert!(
+            rows[0].text.contains("Sonnet · search-quick"),
+            "{}",
+            rows[0].text
+        );
+        assert!(
+            rows[1].text.ends_with("· 41 min · ≈$0.90 · ctx 88%"),
+            "{}",
+            rows[1].text
+        );
+        let (rows, _) = detail_tile(&flow(), "task:J#5", &env(1.0));
+        assert!(rows[1].text.ends_with("· in-review"), "{}", rows[1].text);
     }
 
     #[test]
@@ -2449,14 +2500,25 @@ mod tests {
         let act = faces("d:act");
         assert_eq!(act[..3], [BUTTON_PRI, KEY_PRI, BUTTON_PRI], "{act:?}");
         assert!(
-            act[3..].iter().all(|f| [BUTTON, KEY].contains(f)),
+            act[3..].iter().all(|f| [BUTTON, BUTTON_KEY].contains(f)),
             "{act:?}"
         );
         let act2 = faces("d:act2");
         assert!(
-            act2.iter().all(|f| [BUTTON, KEY].contains(f)) && act2.contains(&BUTTON),
+            act2.iter().all(|f| [BUTTON, BUTTON_KEY].contains(f)) && act2.contains(&BUTTON),
             "{act2:?}"
         );
+        // the keycap (`.btn .k`): padded inside its ring, a gap before it in the button's face
+        let row = rows.iter().find(|r| r.key == "d:act").expect("d:act");
+        let key = row
+            .runs
+            .iter()
+            .find(|r| r.2 == KEY_PRI)
+            .expect("the primary's key");
+        let text: Vec<char> = row.text.chars().collect();
+        let at = |a: u32, b: u32| text[a as usize..b as usize].iter().collect::<String>();
+        assert_eq!(at(key.0, key.1), " r ");
+        assert_eq!(at(key.0 - 1, key.0), " ", "{}", row.text);
     }
 
     /// [D] The detail tile as the mockup (hub-orchestration.html `.detail`): the head is the agent's avatar (a 16 px

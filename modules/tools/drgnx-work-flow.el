@@ -44,7 +44,8 @@
 (defface drgnx-work-flow-section '((t :inherit (drgnx-ui-caption drgnx-text-muted) :weight semibold))
   "The detail tile's section heads: why it is held, what clears it, the evidence (the mockup's `h5')."
   :group 'drgnx-work-space)
-(defface drgnx-work-flow-agent '((t :inherit drgnx-ui-heading)) "The agent's name on the detail tile's head."
+(defface drgnx-work-flow-agent '((t :inherit drgnx-ui-heading :weight bold))
+  "The agent's name on the detail tile's head."
   :group 'drgnx-work-space)
 (defface drgnx-work-flow-label '((t :inherit (drgnx-ui-caption drgnx-text-muted)))
   "The Flow's labels: task ids, agents, column headings." :group 'drgnx-work-space)
@@ -54,8 +55,10 @@
   "An action of the Flow's detail tile (Tell the agent, Waive once, Evidence)." :group 'drgnx-work-space)
 (defface drgnx-work-flow-button-primary '((t :inherit (drgnx-ui-caption drgnx-control-primary)))
   "The detail tile's first action, filled (Run the red, Check again)." :group 'drgnx-work-space)
-(defface drgnx-work-flow-key-primary '((t :inherit drgnx-work-flow-key))
-  "A key's badge on the primary action: in the action's text colour." :group 'drgnx-work-space)
+(defface drgnx-work-flow-key-primary '((t :inherit drgnx-work-flow-button-primary :height 0.9167))
+  "A key's badge on the primary action: on its fill, in its text colour." :group 'drgnx-work-space)
+(defface drgnx-work-flow-button-key '((t :inherit drgnx-work-flow-button :height 0.9167))
+  "A key's badge on an action: on the button's background." :group 'drgnx-work-space)
 (defface drgnx-work-flow-heading '((t :inherit drgnx-ui-heading)) "The Flow's headings: the run, the batch, a tile's."
   :group 'drgnx-work-space)
 (defface drgnx-work-flow-chip-ok '((t :inherit (drgnx-ui-caption drgnx-chip-ok) :height 0.9167)) "A gate that passed."

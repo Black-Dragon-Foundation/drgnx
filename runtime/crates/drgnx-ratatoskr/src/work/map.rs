@@ -67,6 +67,17 @@ pub enum CoOut {
     Wake(u64),
 }
 
+/// An agent on the map that works on a task ([`Map::task_agents_of`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TaskAgent {
+    pub task: String,
+    pub label: String,
+    pub model: Option<String>,
+    pub minutes: Option<u64>,
+    pub spend: Option<String>,
+    pub context: Option<u8>,
+}
+
 /// One view's coalescing (see the module).
 #[derive(Clone, Debug, Default)]
 pub struct Coalescer {
@@ -1284,6 +1295,38 @@ impl Map {
         agents
             .into_iter()
             .map(|it| (it.fields.task_id.unwrap_or_default(), it.id.0, it.label))
+            .collect()
+    }
+
+    /// The agents of connection CONN's map VIEW that work on a task, with what the map knows of each: its task's id,
+    /// label, model, minutes in its state, spend and context (the Flow's detail head).
+    pub fn task_agents_of(&self, conn: u64, view: &str) -> Vec<TaskAgent> {
+        let g = lock(&self.inner);
+        let key = ViewKey {
+            conn,
+            view: view.to_owned(),
+        };
+        let Some(sp) = g.views.get(&key).and_then(|v| g.spaces.get(&v.space)) else {
+            return Vec::new();
+        };
+        let mut agents: Vec<vegvisir::model::Item> = sp
+            .core
+            .model()
+            .items()
+            .into_values()
+            .filter(|it| it.kind == Kind::Agent && it.fields.task_id.is_some())
+            .collect();
+        agents.sort_by_key(|it| it.order);
+        agents
+            .into_iter()
+            .map(|it| TaskAgent {
+                task: it.fields.task_id.unwrap_or_default(),
+                label: it.label,
+                model: it.fields.model,
+                minutes: it.fields.minutes,
+                spend: it.fields.spend,
+                context: it.fields.context,
+            })
             .collect()
     }
 

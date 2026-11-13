@@ -124,6 +124,7 @@ text role and its section heads the caption role, semibold and muted; the agent'
   (should (equal (face-attribute 'drgnx-work-flow-section :inherit) '(drgnx-ui-caption drgnx-text-muted)))
   (should (eq (face-attribute 'drgnx-work-flow-section :weight) 'semibold))
   (should (eq (face-attribute 'drgnx-work-flow-agent :inherit) 'drgnx-ui-heading))
+  (should (eq (face-attribute 'drgnx-work-flow-agent :weight) 'bold))      ; `<b>' on the head
   ;; the cards' names (`.bcard .bl .code', 11.5 px in the code font, the text colour)
   (should (eq (face-attribute 'drgnx-work-flow-code :inherit) 'drgnx-code-small)))
 

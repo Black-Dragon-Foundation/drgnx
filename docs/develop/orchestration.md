@@ -360,15 +360,17 @@ a lock, checked and routing in the accent) and how the hub holds it.
 detail tile: rows alone, no model, read again after every write like the Flow. The Flow subscribes it again each
 time its selection moves (`drgnx-view-selected-functions`, the Flow's own). Its head is the agent: an avatar (a 16
 px circle in the agent's colour, `agent-N` of the env's palette by its place among the run's agents, its initial cut
-out) and its name (`drgnx-work-flow-agent`), the held chip at the right; under it the task and its status
-(`-label`). Its section heads are muted and semibold (`drgnx-work-flow-section`), its text `-detail-text` (the
+out) and its name in bold (`drgnx-work-flow-agent`): the map's model, then the agent's own label on the map (its
+session, "Sonnet · search-quick"), the held chip at the right; under it the task and the map's minutes, spend and
+context of the agent ("41 min · ≈$0.90 · ctx 88%"), or the task's status when the map has no agent on it (`-label`). Its section heads are muted and semibold (`drgnx-work-flow-section`), its text `-detail-text` (the
 mockup's 12.5 px). It goes on: for a held task why it is held (the card's words and each held gate) and what clears it; the commits the merge
 checks (base .. tip, then each commit with its short sha, `tests` for red first's test commit or `code`, and its
 subject: the job data's `commits`, which `orch::gates::before_merge` records each time it looks, and `bases`); the
 evidence so far as a table, a label column (`brief`, `tests`, `green`, `red`, then any `waiver`) and each newest
 record's job, machine and counts, "none recorded" in the attention face where there is none; and the actions as buttons (`drgnx-work-flow-button`, the controls' ring; the first `drgnx-work-flow-button-primary`,
-filled, its key `drgnx-work-flow-key-primary`; text-height where boxes fit their text), each with its key as a keycap
-badge inside it (`drgnx-work-flow-key`). `r` (**Run the red** for a red-first hold, else **Check again**:
+filled; where boxes fit their text, padded 4 px above and below it, `:fit (text . 4)`, else text-height), each with
+its key as a keycap inside it after a gap (`drgnx-work-flow-button-key`, the primary's `drgnx-work-flow-key-primary`: on
+the button's background, padded by a space each side and 2 px above and below). `r` (**Run the red** for a red-first hold, else **Check again**:
 the card's `merge`), `s` (**Tell the agent**: `retry`) and `w` (**Waive once**: `waive`, asking for the reason) answer
 the card with `job/card` as the user; the hub takes the waiver only from the user's connection. The tile shows in the
 right dock where the map's side panel was, and the panel comes back when the lens leaves the Flow.

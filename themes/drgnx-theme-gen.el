@@ -66,6 +66,22 @@ taller (Nidhogg's compositor).  Asked once: a face that sets it is refused where
                    (error nil))))))
   drgnx-theme--box-fit)
 
+(defvar drgnx-theme--box-fit-pad :unknown
+  "Whether this Emacs's boxes take `:fit (text . PAD)' (`drgnx-theme--box-fit-pad-p').")
+
+(defun drgnx-theme--box-fit-pad-p ()
+  "Non-nil when this Emacs's boxes fit their text with a pad, `:fit (text . PAD)': a ring PAD px clear of its text
+above and below, the face's background between (Nidhogg's compositor).  Asked once, as `drgnx-theme--box-fit-p'."
+  (when (eq drgnx-theme--box-fit-pad :unknown)
+    (setq drgnx-theme--box-fit-pad
+          (and (drgnx-theme--box-fit-p)
+               (let ((face (make-symbol "drgnx-theme-box-fit-pad")))
+                 (custom-declare-face face nil "Probe.")
+                 (condition-case nil
+                     (progn (set-face-attribute face nil :box '(:line-width 1 :fit (text . 1))) t)
+                   (error nil))))))
+  drgnx-theme--box-fit-pad)
+
 (defconst drgnx-theme--ansi
   '((black . gap) (red . error) (green . ok) (yellow . warn) (blue . info) (magenta . kw) (cyan . ty) (white . fg))
   "Terminal colour → token.")
@@ -156,16 +172,32 @@ taller (Nidhogg's compositor).  Asked once: a face that sets it is refused where
                                  ,@(and (drgnx-theme--box-fit-p)
                                         `(:box (:line-width (1 . 1) :color ,(c 'border)
                                                             ,@(and (featurep 'glitnir) '(:corner-radius 6))
-                                                            :fit text))))
+                                                            :fit ,(if (drgnx-theme--box-fit-pad-p)
+                                                                      '(text . 4)
+                                                                    'text)))))
          (drgnx-work-flow-button-primary :inherit (drgnx-ui-caption drgnx-control-primary)
                                          ,@(and (drgnx-theme--box-fit-p)
                                                 `(:box (:line-width (1 . 1) :color ,(c 'accent-fill)
                                                                     ,@(and (featurep 'glitnir) '(:corner-radius 6))
-                                                                    :fit text))))
-         (drgnx-work-flow-key-primary :inherit drgnx-work-flow-key :foreground ,(c 'on-accent)
+                                                                    :fit ,(if (drgnx-theme--box-fit-pad-p)
+                                                                              '(text . 4)
+                                                                            'text)))))
+         ;; a key inside a button (`.btn .k'): 11 px on the button's own background, ringed in its text's colour
+         (drgnx-work-flow-button-key :inherit drgnx-work-flow-button :height 0.9167 :foreground ,(c 'muted)
+                                     :box (:line-width (1 . 1) :color ,(c 'muted)
+                                                       ,@(and (featurep 'glitnir) '(:corner-radius 4))
+                                                       ,@(and (drgnx-theme--box-fit-p)
+                                                              `(:fit ,(if (drgnx-theme--box-fit-pad-p)
+                                                                          '(text . 2)
+                                                                        'text)))))
+         (drgnx-work-flow-key-primary :inherit drgnx-work-flow-button-primary :height 0.9167
+                                      :foreground ,(c 'on-accent)
                                       :box (:line-width (1 . 1) :color ,(c 'on-accent)
                                                         ,@(and (featurep 'glitnir) '(:corner-radius 4))
-                                                        ,@(and (drgnx-theme--box-fit-p) '(:fit text)))))
+                                                        ,@(and (drgnx-theme--box-fit-p)
+                                                               `(:fit ,(if (drgnx-theme--box-fit-pad-p)
+                                                                           '(text . 2)
+                                                                         'text))))))
        ;; the editor and the standard faces
        `((default :foreground ,(c 'fg) :background ,(c 'editor))
          (cursor :background ,(c 'accent))

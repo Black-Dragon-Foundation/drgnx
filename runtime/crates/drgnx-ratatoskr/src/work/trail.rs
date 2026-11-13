@@ -348,6 +348,7 @@ async fn flow_facts(f: &Front, conn: u64, map: &str, job: Option<String>) -> flo
                     status: row.status.unwrap_or_default(),
                     agent: row.agent,
                     queue: flow::Queue::None,
+                    ..flow::TaskFacts::default()
                 });
             }
             Ok(Some((job, title, plan, pack, tasks, meta)))
@@ -358,15 +359,25 @@ async fn flow_facts(f: &Front, conn: u64, map: &str, job: Option<String>) -> flo
         return flow::Flow::default();
     };
     let (ready, batch) = (f.queue.ready(&job), f.queue.batch(&job));
-    let agents = f.core.map.agents_of(conn, map);
+    let agents = f.core.map.task_agents_of(conn, map);
     for t in &mut tasks {
         if batch.iter().any(|b| b.task == t.id) {
             t.queue = flow::Queue::Batch;
         } else if ready.iter().any(|b| b.task == t.id) {
             t.queue = flow::Queue::Ready;
         }
-        if let Some((_, _, label)) = agents.iter().find(|(task, ..)| *task == t.id) {
-            t.agent = Some(label.clone());
+        // the map's agent on it: the model names it in the table, its own label (the session) follows in the detail
+        if let Some(a) = agents.iter().find(|a| a.task == t.id) {
+            match &a.model {
+                Some(m) if *m != a.label => {
+                    t.agent = Some(m.clone());
+                    t.session = Some(a.label.clone());
+                }
+                _ => t.agent = Some(a.label.clone()),
+            }
+            t.minutes = a.minutes;
+            t.spend = a.spend.clone();
+            t.context = a.context;
         }
     }
     let seen = f.queue.seen(&job);
