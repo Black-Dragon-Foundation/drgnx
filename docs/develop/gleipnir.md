@@ -1028,7 +1028,8 @@ be a plain name. Removing it is the caller's job.
 `src/sbpl/base.sbpl` is the Seatbelt base policy of OpenAI's Codex, unchanged below its attribution header:
 [`codex-rs/sandboxing/src/seatbelt_base_policy.sbpl`](https://github.com/openai/codex/blob/8c076942cb70fba8e5c4732c23f1faabc4aed484/codex-rs/sandboxing/src/seatbelt_base_policy.sbpl)
 at commit `8c07694`, Copyright 2025 OpenAI, under the [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0),
-whose text is `LICENSES/Apache-2.0.txt`. It holds `(deny default)`, process exec and fork, the `hw.*`/`kern.*` sysctl
+whose text is `LICENSES/Apache-2.0.txt`. A weekly CI job (`sbpl-upstream.yml`, [ci.md](ci.md)) diffs the file against Codex's
+current one and opens an issue when upstream moved on (GL-T9-4). It holds `(deny default)`, process exec and fork, the `hw.*`/`kern.*` sysctl
 allowlist (zsh exits silently without it on macOS 26.5), user lookup, POSIX IPC and pseudo-terminals. The network mach
 services are Codex's `seatbelt_network_policy.sbpl` at the same commit, without `com.apple.SecurityServer`. Apache-2.0
 is compatible with GPL-3.0-or-later. Codex's base was chosen over sandbox-runtime's (also Apache-2.0) because it is a
