@@ -119,7 +119,7 @@ The built-in packs are the folders of `packs/`. What is installed is in the lock
 
 ```
 drgnx packs list
-drgnx packs sync [--add NAME…] [--remove NAME…]
+drgnx packs sync [--add NAME…] [--remove NAME…]   # also: drgnx packs install NAME… / remove NAME…
 ```
 
 `sync` computes the wanted packs (the locked ones, plus `--add`, minus `--remove`, plus the packs they reference),
@@ -225,7 +225,10 @@ text (no symbols, references or highlights), the first miss of each pack is one 
 doctor` prints `pack X not built (why)`. The registry looks again on the next use, so a grammar built after the hub
 started is found without a restart. `install.sh` and `drgnx update` run `drgnx packs migrate`, which installs the nine
 packs the hub parses with (`drgnx-packs-hub-defaults`: rust, c, shell, python, javascript, typescript, tsx, go, java);
-until that job finishes, code files read as text.
+until that job finishes, code files read as text. A pack you remove (`drgnx packs remove NAME`, the Remove button) is
+recorded in the lock's `:removed-packs`: `packs migrate` never installs it again, its files read as text, and `ratatoskr
+doctor` says `pack X removed by you; drgnx packs install X to get it back`. `drgnx packs install NAME` (or `sync --add`)
+forgets the record.
 
 **Tests** parse with the same loader. `test/packs/hub-grammars.sh CACHE` builds those nine packs' grammars with the pack
 job (`ratatoskr packs sync --builtin OUT [PACK...]`) into `CACHE/KEY` (KEY: a hash of their commits, tree hashes and

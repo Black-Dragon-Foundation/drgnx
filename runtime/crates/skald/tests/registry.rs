@@ -118,6 +118,13 @@ fn the_registry_loads_what_the_lock_names_and_says_why_it_cannot_otherwise() {
             .contains("does not exist")
     );
 
+    // the packs you removed
+    assert_eq!(
+        skald::registry::removed_from_lock(b"(:version 1 :packages nil :removed-packs (go java))"),
+        ["go", "java"]
+    );
+    assert!(skald::registry::removed_from_lock(lock.as_bytes()).is_empty());
+
     // a lock with no :grammars names none; a missing lock file too
     assert!(
         from_lock(b"(:version 1 :packages nil)", &grammars)

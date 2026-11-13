@@ -288,3 +288,4 @@ Java; Emacs Lisp, Org and Markdown need none). `install.sh` and `drgnx update` b
 which takes a few minutes and a C compiler. **Until that job has finished, those files are indexed as plain text**: no
 symbols, no references, no structural search or inline values for them. `ratatoskr doctor` says `pack X not built` for a
 pack whose library is missing; running `drgnx packs migrate` fixes it, with no restart.
+A pack you remove (`drgnx packs remove NAME`) stays removed through updates; `drgnx packs install NAME` brings it back.

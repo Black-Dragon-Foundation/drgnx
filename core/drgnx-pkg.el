@@ -97,6 +97,8 @@ still takes a lower priority archive's package when only it satisfies a requirem
                                      (:packs (list-of (pred drgnx-pkg--lock-entry-p
                                                             "(NAME :commit :tree-sha256 :source :wanted)"))
                                              "Language packs installed: one entry per pack (drgnx packs sync)")
+                                     (:removed-packs (list-of symbol)
+                                                     "Language packs you removed: an update never installs these again (drgnx packs install brings one back)")
                                      (:grammars (list-of (pred drgnx-pkg--lock-entry-p
                                                                "(LANG :commit :tree-sha256 :lib-sha256 :owner)"))
                                                 "Tree-sitter grammars built for the packs: one entry per language")

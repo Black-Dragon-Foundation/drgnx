@@ -118,17 +118,30 @@ top-level `.git' left out.  What `ratatoskr packs pin' prints, and a built-in pa
 
 (defun drgnx-packs-locked () "The lock's installed packs, ((NAME :commit … :wanted …)…) (names are symbols)."
        (plist-get (drgnx-pkg--config 'lock) :packs))
+(defun drgnx-packs-removed ()
+  "The packs the user removed (symbols): `drgnx packs migrate' (install, update) never installs these again."
+  (plist-get (drgnx-pkg--config 'lock) :removed-packs))
 (defun drgnx-packs-locked-grammars () "The lock's built grammars, ((LANG :commit … :lib-sha256 …)…)."
        (plist-get (drgnx-pkg--config 'lock) :grammars))
 
-(defun drgnx-packs--write-lock (packs grammars)
-  "Make PACKS and GRAMMARS the lock's `:packs' and `:grammars'; every other key and the comments stay."
+(defun drgnx-packs--write-lock (packs grammars removed)
+  "Make PACKS, GRAMMARS and REMOVED the lock's `:packs', `:grammars' and `:removed-packs'; every other key and the
+comments stay."
   (let ((sort-fn (lambda (es) (sort (copy-sequence es) (lambda (a b) (string< (symbol-name (car a)) (symbol-name (car b))))))))
     (drgnx-pkg--update-lock
      (lambda (data)
        (let ((data (copy-sequence (or data (list :packages nil)))))
          (setq data (plist-put data :packs (funcall sort-fn packs)))
-         (plist-put data :grammars (funcall sort-fn grammars)))))))
+         (setq data (plist-put data :grammars (funcall sort-fn grammars)))
+         (if removed (plist-put data :removed-packs removed) (drgnx-packs--plist-drop data :removed-packs)))))))
+
+(defun drgnx-packs--plist-drop (plist key)
+  "PLIST without KEY."
+  (let (out)
+    (while plist
+      (unless (eq (car plist) key) (setq out (cons (cadr plist) (cons (car plist) out))))
+      (setq plist (cddr plist)))
+    (nreverse out)))
 
 (defun drgnx-packs--built-p (lang commit)
   "Whether LANG's library from COMMIT is in its folder."
@@ -313,7 +326,10 @@ everything as it was.  Returns (:ok t :packs NAMES :built LANGS :generation N)."
                            (mapcar (lambda (n) (drgnx-packs--lock-entry n (assq (intern n) locked)
                                                                         (and (member n add) mark)))
                                    wanted)
-                           grammars)
+                           grammars
+                           ;; a removal is remembered; naming the pack again forgets it
+                           (seq-difference (delete-dups (append (drgnx-packs-removed) (mapcar #'intern remove)))
+                                           (mapcar #'intern add)))
                           (let ((generation (drgnx-pkg-snapshot (format "packs %s" (mapconcat #'identity (or add remove '("sync")) " ")))))
                             ;; only now do the built folders go in, and the session's file
                             (dolist (s staged)
@@ -354,7 +370,8 @@ the build fails (no compiler, offline): the folder stays on the load path after 
          (owner (lambda (lang) (car (seq-find (lambda (p) (seq-some (lambda (g) (eq (plist-get g :name) lang))
                                                                     (drgnx-packs--owned-grammars (cdr p))))
                                               (drgnx-packs-builtins)))))
-         (names (seq-filter (lambda (n) (not (assq (intern n) (drgnx-packs-locked))))
+         (removed (drgnx-packs-removed))
+         (names (seq-filter (lambda (n) (and (not (assq (intern n) (drgnx-packs-locked))) (not (memq (intern n) removed))))
                             (delete-dups (append (delq nil (mapcar owner langs))
                                                  (seq-filter #'drgnx-packs-manifest drgnx-packs-hub-defaults))))))
     (when names (drgnx-packs-sync :add names :mark 'default))
@@ -468,8 +485,12 @@ manifests, installed or not: formatting needs no grammar."
          (princ (format "packs: %s; built: %s; generation %d\n" (mapconcat #'identity (plist-get r :packs) " ")
                         (or (mapconcat #'identity (plist-get r :built) " ") "nothing") (plist-get r :generation)))
          0)))
+    (`("install" . ,names) (if names (drgnx-packs-cli (cons "sync" (cons "--add" names)))
+                             (drgnx-packs--error "usage: drgnx packs install NAME…")))
+    (`("remove" . ,names) (if names (drgnx-packs-cli (cons "sync" (cons "--remove" names)))
+                            (drgnx-packs--error "usage: drgnx packs remove NAME…")))
     (`("migrate") (princ (format "packs migrated: %s\n" (or (mapconcat #'identity (drgnx-packs-migrate) " ") "nothing to do"))) 0)
-    (_ (drgnx-packs--error "usage: drgnx packs list | sync [--add NAME…] [--remove NAME…] | migrate | check DIR | pin REPO COMMIT"))))
+    (_ (drgnx-packs--error "usage: drgnx packs list | install NAME… | remove NAME… | sync [--add NAME…] [--remove NAME…] | migrate | check DIR | pin REPO COMMIT"))))
 
 (declare-function drgnx-hub-client-binary "drgnx-hub-client" ())
 (declare-function drgnx-pkg--generation-dir "drgnx-pkg" (n))

@@ -137,6 +137,20 @@ pub fn from_lock(lock: &[u8], grammars: &Path) -> Result<Vec<Entry>, String> {
     Ok(out)
 }
 
+/// The packs the lock says the user removed (`:removed-packs`), which an update never installs again.
+pub fn removed_from_lock(lock: &[u8]) -> Vec<String> {
+    let Ok(forms) = read_all(lock, Limits::default()) else {
+        return Vec::new();
+    };
+    forms
+        .first()
+        .and_then(items)
+        .and_then(|root| plist_get(root, ":removed-packs"))
+        .and_then(items)
+        .map(|l| l.iter().filter_map(text).map(str::to_owned).collect())
+        .unwrap_or_default()
+}
+
 /// Install ENTRIES as the grammars the lock names. A grammar already loaded stays loaded (its library is never
 /// dropped); one whose entry changed is loaded again beside it on the next [`language`] call.
 pub fn install(entries: Vec<Entry>) {
