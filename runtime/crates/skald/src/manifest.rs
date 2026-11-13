@@ -88,7 +88,8 @@ pub struct Grammar {
     pub from_pack: Option<String>,
 }
 
-/// The Emacs side: `(:generic t)`, `(:ts MODE :builtin t [:classic MODE])` or `(:ts MODE :package PKG [:classic MODE])`.
+/// The Emacs side: `(:generic t)`, `(:ts MODE :builtin t [:classic MODE])`, `(:ts MODE :package PKG [:classic MODE])`,
+/// or `(:classic MODE)` alone for a language with no tree-sitter mode (a format-only pack: Terraform, Dart).
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Mode {
@@ -167,7 +168,10 @@ pub struct Platform {
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Format {
-    pub formatter: String,
+    /// The formatter's name; none for a pack that only says which config files mean "this project formats".
+    #[serde(default)]
+    pub formatter: Option<String>,
+    #[serde(default)]
     pub command: Vec<String>,
     /// On for every file of the pack's modes, not only under a project config.
     #[serde(default)]

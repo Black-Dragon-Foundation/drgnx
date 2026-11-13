@@ -420,11 +420,11 @@ pub fn check(m: &Manifest, source: Source, claims: &Claims) -> Vec<Problem> {
     // mode
     if let Some(mode) = &m.mode {
         let ts = mode.ts.is_some();
-        if mode.generic == ts {
+        if mode.generic == ts && (ts || mode.classic.is_none()) {
             out.push(p(
                 Schema,
                 "mode",
-                "a mode is either (:generic t) or (:ts MODE …)",
+                "a mode is (:generic t), (:ts MODE …) or (:classic MODE)",
             ));
         }
         if ts && mode.builtin == mode.package.is_some() {
@@ -434,12 +434,8 @@ pub fn check(m: &Manifest, source: Source, claims: &Claims) -> Vec<Problem> {
                 "a :ts mode is :builtin t or comes from a :package",
             ));
         }
-        if !ts && (mode.builtin || mode.package.is_some() || mode.classic.is_some()) {
-            out.push(p(
-                Schema,
-                "mode",
-                ":builtin, :package and :classic go with :ts",
-            ));
+        if !ts && (mode.builtin || mode.package.is_some()) {
+            out.push(p(Schema, "mode", ":builtin and :package go with :ts"));
         }
         if !mode.generic && !mode.indent.is_empty() {
             out.push(p(
@@ -479,9 +475,15 @@ pub fn check(m: &Manifest, source: Source, claims: &Claims) -> Vec<Problem> {
         }
     }
     if let Some(f) = &m.format {
-        if f.command.is_empty() {
+        if f.formatter.is_some() && f.command.is_empty() {
             out.push(p(Schema, "format.command", "a command names a program"));
-        } else if fetched {
+        } else if f.formatter.is_none() && (f.standard || !f.command.is_empty()) {
+            out.push(p(
+                Schema,
+                "format.formatter",
+                "a command or :standard needs a formatter",
+            ));
+        } else if fetched && !f.command.is_empty() {
             command_rules("format.command", &f.command, None, None, true, &mut out);
         }
     }
