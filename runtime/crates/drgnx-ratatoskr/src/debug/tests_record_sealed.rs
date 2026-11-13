@@ -90,6 +90,8 @@ async fn record_into(
         m.finish().await.unwrap();
     }
     let rec = dbg.records().unwrap();
+    // its stops and its end are recorded off the workers: all of them now
+    rec.written().await;
     let run = rec
         .list(&root)
         .first()

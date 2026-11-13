@@ -290,6 +290,8 @@ struct Data {
 /// A project's probes, saved in a file (none: memory only).
 pub struct Probes {
     file: Option<PathBuf>,
+    /// The file's writes, in order, off the hub's workers (with a file).
+    disk: Option<std::sync::Arc<crate::disk::Ordered>>,
     data: Data,
 }
 
@@ -300,18 +302,34 @@ impl Probes {
             .and_then(|f| std::fs::read_to_string(f).ok())
             .and_then(|t| serde_json::from_str(&t).ok())
             .unwrap_or_default();
-        Probes { file, data }
+        let disk = file.as_ref().map(|_| {
+            std::sync::Arc::new(crate::disk::Ordered::reporting(
+                "debug:probes",
+                |what, e| tracing::warn!(target: "drgnx::debug", "{what}: {e}"),
+            ))
+        });
+        Probes { file, disk, data }
     }
 
+    /// The probes as they are now, queued for their file: written in order off the hub's workers (`crate::disk`).
     fn save(&self) {
-        let Some(f) = &self.file else { return };
-        if let Some(dir) = f.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
+        let (Some(f), Some(disk)) = (&self.file, &self.disk) else {
+            return;
+        };
         let text = serde_json::to_string(&self.data).unwrap_or_default();
-        if let Err(e) = crate::records::write_atomic(f, &text) {
-            tracing::warn!(target: "drgnx::debug", "probes {}: {e}", f.display());
-        }
+        let f = f.clone();
+        disk.push(format!("probes {}", f.display()), move || {
+            if let Some(dir) = f.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            crate::records::write_atomic(&f, &text)
+        });
+    }
+
+    /// The file's writer: its `written` is every save so far landed (none: no file).
+    #[cfg(test)]
+    pub(crate) fn disk(&self) -> Option<std::sync::Arc<crate::disk::Ordered>> {
+        self.disk.clone()
     }
 
     /// Apply OP: the path whose probes changed and the probe it added, or why not.

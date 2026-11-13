@@ -250,6 +250,10 @@ fn answer<T: serde::Serialize>(r: Result<T, Error>) -> Result<Value, Error> {
 
 /// The fork methods' answers (the front hands only these here).
 pub async fn serve(front: &Front, params: Params) -> Result<Value, Error> {
+    // a fork is of the run as recorded so far
+    if let Some(r) = front.debug.debug(front).records() {
+        r.written().await;
+    }
     match params {
         Params::DebugFork(p) => answer(fork(front, p).await),
         Params::DebugForkRun(DebugForkId { fork }) => {

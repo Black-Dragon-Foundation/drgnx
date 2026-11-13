@@ -896,6 +896,15 @@ async fn reach_and_run(d: &Drive, t: &mut Tree) -> Result<Outcome, String> {
         let op = match step.as_str() {
             "in" => Op::StepIn { thread },
             "out" => Op::StepOut { thread },
+            "in-i" => Op::Instruction { thread, step: "in" },
+            "out-i" => Op::Instruction {
+                thread,
+                step: "out",
+            },
+            "next-i" => Op::Instruction {
+                thread,
+                step: "next",
+            },
             _ => Op::Next { thread },
         };
         t.sessions[si].handle.op(op).await?;

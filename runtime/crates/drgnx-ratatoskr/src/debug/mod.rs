@@ -437,6 +437,21 @@ impl Debug {
         f(s)
     }
 
+    /// Every breakpoint store's saves queued so far have landed (or failed).
+    pub async fn written(&self) {
+        let disks: Vec<_> = self
+            .inner
+            .stores
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values()
+            .filter_map(Store::disk)
+            .collect();
+        for d in disks {
+            d.written().await;
+        }
+    }
+
     /// The project session ID debugs.
     pub fn root_of(&self, id: &str) -> Option<String> {
         lock(&self.inner.state)
@@ -865,6 +880,53 @@ impl Debug {
         Ok(self.data_of(&root, id))
     }
 
+    /// OP on session ID's instruction breakpoints (refused when its adapter has none), the session's whole list sent
+    /// (`setInstructionBreakpoints`) and published (`debug-breakpoints` with the session, no path). The view.
+    pub async fn instruction_breakpoints(
+        &self,
+        id: &str,
+        op: Option<breakpoints::InstrOp>,
+    ) -> Result<Value, String> {
+        let root = self
+            .root_of(id)
+            .ok_or_else(|| format!("no debug session {id}"))?;
+        let Some(op) = op else {
+            return Ok(self.instr_view(&root, id));
+        };
+        let (h, caps) = self.handle_caps(id)?;
+        if caps
+            .get("supportsInstructionBreakpoints")
+            .and_then(Value::as_bool)
+            != Some(true)
+        {
+            return Err("this adapter has no instruction breakpoints".into());
+        }
+        self.store(&root, |s| s.instr_op(id, op))?;
+        let list = self.store(&root, |s| s.instr_list(id, &caps));
+        match h
+            .request("setInstructionBreakpoints", json!({ "breakpoints": list }))
+            .await
+        {
+            Ok(body) => {
+                let got = body["breakpoints"].as_array().cloned().unwrap_or_default();
+                self.store(&root, |s| s.instr_answer(id, &got));
+            }
+            Err(e) => tracing::debug!(target: "drgnx::debug", "setInstructionBreakpoints: {e}"),
+        }
+        let v = self.instr_view(&root, id);
+        self.inner
+            .sink
+            .broadcast("debug-breakpoints", v.clone(), None);
+        self.changed();
+        Ok(v)
+    }
+
+    fn instr_view(&self, root: &str, id: &str) -> Value {
+        let mut v = self.store(root, |s| s.instr_view(id));
+        v["root"] = json!(root);
+        v
+    }
+
     /// Session ID's data breakpoints as the view shows them.
     pub fn data_breakpoints(&self, id: &str) -> Result<Vec<Value>, String> {
         let root = self
@@ -1180,7 +1242,8 @@ impl Debug {
             .handle(id)
             .ok_or_else(|| format!("no debug session {id}"))?;
         if let Some(rec) = self.records() {
-            rec.op(id, &op);
+            let (id, op) = (id.to_owned(), op.clone());
+            rec.later("run step", move |r| r.op(&id, &op));
         }
         if matches!(op, Op::Stop { .. } | Op::Disconnect) {
             for child in self.children(id) {
@@ -1317,7 +1380,8 @@ impl Debug {
                     };
                     self.publish_state();
                     if let Some(rec) = self.records() {
-                        rec.stop(&id, &stop);
+                        let (id, stop) = (id.clone(), stop.clone());
+                        rec.later("run stop", move |r| r.stop(&id, &stop));
                     }
                     if let Some(conn) = conn {
                         self.publish_frame(&id, conn, &stop);
@@ -1463,7 +1527,8 @@ impl Debug {
 
     async fn ended(&self, id: &str, end: End) {
         if let Some(rec) = self.records() {
-            rec.end(id, &end);
+            let (id, end) = (id.to_owned(), end.clone());
+            rec.later("run end", move |r| r.end(&id, &end));
         }
         self.inner.inline.forget(id);
         let e = lock(&self.inner.state).sessions.remove(id);
@@ -1519,6 +1584,7 @@ impl Debug {
             "source_name": source.get("name"),
             "line": frame.get("line"),
             "col": frame.get("column"),
+            "instruction_pointer": frame.get("instructionPointerReference"),
             "top": top,
             "reason": stop.reason,
             "exception": (stop.reason == "exception").then(|| exception_card(stop)),

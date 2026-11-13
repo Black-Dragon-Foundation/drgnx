@@ -377,6 +377,9 @@ pub struct Records {
     snap: Arc<Mutex<()>>,
     /// The keyring's key, once read (none: the runs on disk cannot be read and nothing is recorded).
     key: Mutex<Option<runkey::Key>>,
+    /// What the sessions' events record (stops, steps, hits, ends), in order and off the hub's workers: those write
+    /// the run files.
+    disk: crate::disk::Ordered,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -401,7 +404,25 @@ impl Records {
             next: AtomicU64::new(0),
             snap: Arc::new(Mutex::new(())),
             key: Mutex::new(None),
+            disk: crate::disk::Ordered::reporting(
+                "debug:record",
+                |what, e| tracing::warn!(target: "drgnx::debug", "{what}: {e}"),
+            ),
         })
+    }
+
+    /// F on the recorder after everything queued before it, off the hub's workers (it may write the run files).
+    pub fn later(self: &Arc<Self>, what: &str, f: impl FnOnce(&Arc<Records>) + Send + 'static) {
+        let me = self.clone();
+        self.disk.push(what.to_owned(), move || {
+            f(&me);
+            Ok(())
+        });
+    }
+
+    /// Everything queued for the recorder so far is done: what reads the runs sees it.
+    pub async fn written(&self) {
+        self.disk.written().await;
     }
 
     fn file(&self, id: &str, ext: &str) -> PathBuf {
@@ -567,6 +588,9 @@ impl Records {
             Op::Next { .. } => "next",
             Op::StepIn { .. } => "in",
             Op::StepOut { .. } => "out",
+            Op::Instruction { step: "in", .. } => "in-i",
+            Op::Instruction { step: "out", .. } => "out-i",
+            Op::Instruction { .. } => "next-i",
             _ => return,
         };
         let Some(run) = self.run_of(session) else {
@@ -640,7 +664,7 @@ impl Records {
             return Some(body.clone());
         }
         if let Some(run) = self.run_of(session) {
-            self.hits(&run, hits);
+            self.later("probe hits", move |r| r.hits(&run, hits));
         }
         if rest.is_empty() {
             return None;

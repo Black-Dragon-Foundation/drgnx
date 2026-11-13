@@ -310,6 +310,7 @@ params! {
     DebugSource(debug::DebugSource),
     DebugBreakpointLocations(debug::DebugBreakpointLocations),
     DebugCompletions(debug::DebugCompletions),
+    DebugDisassemble(debug::DebugDisassemble),
     DebugReadMemory(debug::DebugReadMemory),
     DebugWriteMemory(debug::DebugWriteMemory),
     DebugBreakpoints(debug::DebugBreakpoints),

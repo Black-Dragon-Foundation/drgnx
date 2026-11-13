@@ -509,12 +509,11 @@ async fn gather(
     let (git_dir, common) = crate::history::wire::git_dirs(&rootp)
         .ok_or_else(|| invalid(format!("{root} is not a git worktree")))?;
     let (hub, tree) = front.core.history.of_tree(&dirs.hub, &rootp)?;
-    let runs: Vec<super::record::RunMeta> = front
-        .debug
-        .debug(front)
-        .records()
-        .map(|r| r.list(root))
-        .unwrap_or_default();
+    let rec = front.debug.debug(front).records();
+    if let Some(r) = &rec {
+        r.written().await;
+    }
+    let runs: Vec<super::record::RunMeta> = rec.map(|r| r.list(root)).unwrap_or_default();
     let cp = checkpoints(front);
     let good = good.cloned();
     let now = now.map(str::to_owned);

@@ -1397,13 +1397,14 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `debug/bisect/narrow` | user | `{bisect: string}` | `boolean` | no |
 | `debug/bisect/states` | user | `{good?: {id: string, kind: string}, root: string}` | `{states: [any]}` | no |
 | `debug/breakpoint-locations` | user | `{line: natnum, path: string, session: string}` | `{locations: [BreakpointLocation]}` | no |
-| `debug/breakpoints` | user | `{op?: {adapter?: string, column?: natnum, condition?: string, enabled?: boolean, hit?: string, id?: natnum, line?: natnum, log?: string, name?: string, op: string, path?: string, triggered_by?: natnum}, path?: string, root: string}` | `DebugBreakpointsView` | no |
+| `debug/breakpoints` | user | `{kind?: string, op?: {adapter?: string, column?: natnum, condition?: string, enabled?: boolean, hit?: string, id?: natnum, instruction?: string, line?: natnum, log?: string, name?: string, offset?: integer, op: string, path?: string, triggered_by?: natnum}, path?: string, root: string, session?: string}` | `DebugBreakpointsView` | no |
 | `debug/children` | user | `{epoch?: natnum, reference: integer, session: string}` | `{variables: [DebugChild]}` | no |
 | `debug/compare` | user | `{fork: string, run: string}` | `DebugForkView` | no |
 | `debug/completions` | user | `{column: natnum, frame?: integer, session: string, text: string}` | `{targets: [CompletionTarget]}` | no |
 | `debug/configs` | user | `{adapters?: [JsonObject], file?: string, language?: string, root: string, user?: [JsonObject]}` | `{configs: [DebugConfig], error?: DebugFileError, last?: string}` | no |
-| `debug/control` | user | `{op: string, session: string, thread?: integer}` | `boolean` | no |
+| `debug/control` | user | `{granularity?: string, op: string, session: string, thread?: integer}` | `boolean` | no |
 | `debug/data-breakpoint` | user | `{access_type?: string, data_id?: string, name?: string, node?: string, op: string, reference?: integer, session?: string, view?: string}` | `{breakpoints: [any], session: string}` | no |
+| `debug/disassemble` | user | `{count: natnum, instruction_offset?: integer, offset?: integer, reference: string, session: string}` | `{instructions: [DisassembledInstruction]}` | no |
 | `debug/evaluate` | user | `{context: string, expr: string, frame?: integer, session: string}` | `{epoch?: natnum, reference?: integer, result: string, type?: string}` | no |
 | `debug/expand` | user | `{node: string, open: boolean, view: string}` | `boolean` | no |
 | `debug/fork` | user | `{anyway?: boolean, at: {hit?: natnum, line?: natnum, path?: string, stop?: natnum}, change?: {code?: boolean, value?: {path: [string], text: string}}, confirm?: boolean, inputs?: [{id: string, value: string}], run: string, until?: DebugForkUntil}` | `{ask?: string, fork?: string, needs?: any}` | no |
