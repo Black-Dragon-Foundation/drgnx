@@ -23,6 +23,7 @@ pub mod fork_mux;
 pub mod fork_seal;
 pub mod fork_wire;
 pub mod heap;
+pub mod heap_layout;
 pub mod hot_reload;
 pub mod inline;
 pub mod install;
@@ -68,6 +69,8 @@ mod tests_fork_live;
 mod tests_fork_seal;
 #[cfg(test)]
 mod tests_heap;
+#[cfg(test)]
+mod tests_heap_layout;
 #[cfg(test)]
 mod tests_inline;
 #[cfg(test)]
