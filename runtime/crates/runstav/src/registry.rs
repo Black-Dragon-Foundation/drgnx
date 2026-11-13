@@ -660,6 +660,7 @@ mod tests {
             if [
                 "agents/presence/subscribe",
                 "coord/agent",
+                "debug/heap",
                 "graph/revert",
                 "graph/grants",
                 "graph/proposed",
@@ -688,7 +689,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(with, 251);
+        assert_eq!(with, 250);
     }
 
     #[test]

@@ -1343,6 +1343,7 @@ async fn debugpy_hot_reloads_a_saved_function() {
 /// The heap graph live (spec §19.7 D7): a ring of three nodes (a → b → c → a) and `shared` = b, stopped on LINE; the
 /// walk from every scope's variables with the adapter's identity must give three objects, `shared` as b, and the
 /// ring closed through the field NEXT. Prints a `HEAP-GRAPH` line.
+#[allow(clippy::too_many_arguments)]
 async fn heap_graph(
     id: &'static str,
     found: Found,
