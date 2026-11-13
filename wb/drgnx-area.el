@@ -32,8 +32,9 @@ row while the shown tab is the only one with content (`drgnx-area--lone-p')."
         (list :side side :size size :lone lone :tabs (plist-get (alist-get area drgnx-wb--areas) :tabs)))
   area)
 
-(cl-defun drgnx-wb-define-tab (area tab &key title placeholder actions)
-  "Add TAB to AREA, titled TITLE; PLACEHOLDER returns the buffer shown while the tab has none.
+(cl-defun drgnx-wb-define-tab (area tab &key title icon placeholder actions)
+  "Add TAB to AREA, titled TITLE; ICON (an icon name, `drgnx-look-icon') shows before the title; PLACEHOLDER returns
+the buffer shown while the tab has none.
 ACTIONS, a function of no arguments, returns the tab's own pieces (a string, or nil for none), drawn at the right of
 the tab row before its ✕ while the tab is shown; the tab's module calls `drgnx-wb-area-redraw' when they change.
 Called from a module's setup, the definition claims the tab and records its undo: the tab it
@@ -42,7 +43,8 @@ defined here.  Two modules defining the same tab may be torn down in either orde
   (let* ((rec (drgnx-modules--recording-p))
          (spec (alist-get area drgnx-wb--areas)) (tabs (copy-alist (plist-get spec :tabs)))
          (previous (cdr (assq tab tabs)))
-         (props (list :title (or title (capitalize (symbol-name tab))) :placeholder placeholder :actions actions)))
+         (props (list :title (or title (capitalize (symbol-name tab))) :icon icon :placeholder placeholder
+                      :actions actions)))
     (if (assq tab tabs) (setf (alist-get tab tabs) props)
       (setq tabs (append tabs (list (cons tab props)))))         ; in the order they are defined
     (setf (alist-get area drgnx-wb--areas) (plist-put spec :tabs tabs))
@@ -195,23 +197,58 @@ its own title (`drgnx-area-own-title')."
     (if (or (and w (buffer-local-value 'drgnx-area-own-title (window-buffer w)))
             (and (plist-get (alist-get area drgnx-wb--areas) :lone) (drgnx-area--lone-p area)))
         'none
-      (drgnx-wb-header-with-close
+      (drgnx-area--row-with-close
        (concat
         (mapconcat (lambda (tab)
-                     (propertize (format " %s " (plist-get (cdr tab) :title))
-                                 'face (if (eq (car tab) shown) 'drgnx-wb-tab-current 'drgnx-wb-tab)
-                                 'drgnx-tab (cons area (car tab)) 'mouse-face 'highlight
-                                 'local-map drgnx-area--tab-map 'help-echo "Show this tab"))
+                     (let ((face (if (eq (car tab) shown) 'drgnx-wb-tab-current 'drgnx-wb-tab))
+                           (icon (plist-get (cdr tab) :icon)))
+                       ;; debugging.html `.pt': the icon is `.i.sm', 14 px, coloured as the title
+                       (propertize (concat " " (if icon (concat (drgnx-look-icon icon face 14) " ") "")
+                                           (plist-get (cdr tab) :title) " ")
+                                   'face face 'drgnx-tab (cons area (car tab)) 'mouse-face 'highlight
+                                   'local-map drgnx-area--tab-map 'help-echo "Show this tab")))
                    tabs " ")
         (drgnx-area--actions actions area))
-       #'drgnx-area--close-click "Close (Esc, q)" 'drgnx-area area))))
+       area))))
+
+(defun drgnx-area--close (area)
+  "AREA's close on its tab row: the kit's close button (face, click, help), drawn as the Lucide x at 16 px
+\(debugging.html `.ptabs .ib') where icons are images."
+  (let ((b (drgnx-wb-close-button #'drgnx-area--close-click "Close (Esc, q)" 'drgnx-area area))
+        (icon (drgnx-look-icon 'x 'drgnx-ui-close 16)))
+    (if-let* ((img (get-text-property 0 'display icon))) (propertize b 'display img) b)))
+
+(defun drgnx-area--row-with-close (title area)
+  "TITLE, then AREA's close at the right edge, 8 px in (`.ptabs' padding), on the bar."
+  (let ((close (drgnx-area--close area)))
+    (drgnx-wb-bar (concat title (propertize " " 'display `(space :align-to (- right (,(drgnx-area--close-px close)))))
+                          ;; the pad is the button's too: a click at the row's edge closes
+                          close (apply #'propertize " " 'display `(space :width (,(drgnx-area--pad 8)))
+                                       (cl-loop for (k v) on (text-properties-at 0 close) by #'cddr
+                                                unless (eq k 'display) append (list k v))))
+                  t)))
+
+(defun drgnx-area--pad (px)
+  "PX logical pixels on a graphical frame, else one column."
+  (if (display-graphic-p) (drgnx-px px) (frame-char-width)))
+
+(defun drgnx-area--bar-px (string)
+  "STRING's width in pixels as the bar draws it: under `drgnx-wb-bar' (the UI font), not the buffer's default."
+  (let ((s (copy-sequence string)))
+    (add-face-text-property 0 (length s) 'drgnx-wb-bar t s)
+    (string-pixel-width s)))
+
+(defun drgnx-area--close-px (close)
+  "The pixels CLOSE and the row's right pad take."
+  (+ (drgnx-area--bar-px close) (drgnx-area--pad 8)))
 
 (defun drgnx-area--actions (actions area)
-  "ACTIONS (a string, or nil) right-aligned before AREA's ✕: a space to the right edge less their pixel width and
-the ✕'s columns, then the pieces."
+  "ACTIONS (a string, or nil) right-aligned before AREA's close: a space to the right edge less their pixel width and
+the close's, then the pieces."
   (if (or (null actions) (string-empty-p actions)) ""
-    (let ((close (drgnx-wb-close-button #'drgnx-area--close-click "Close (Esc, q)" 'drgnx-area area)))
-      (concat (propertize " " 'display `(space :align-to (- right (+ (,(string-pixel-width actions)) ,(+ 2 (string-width close))))))
+    (let ((close (drgnx-area--close area)))
+      (concat (propertize " " 'display `(space :align-to (- right (,(+ (drgnx-area--bar-px actions) (drgnx-area--close-px close)
+                                                                       (drgnx-area--pad 4))))))
               actions))))
 
 ;;;; Show, hide
