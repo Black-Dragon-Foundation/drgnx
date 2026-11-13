@@ -72,6 +72,24 @@ nearer than that is moved toward white or black until it reaches it.  1: colours
 1.1 keeps text from vanishing into its background.  Applies to every terminal at once."
   :type 'number :group 'drgnx :scope 'global :agents 'never :schema 'number :apply #'drgnx-term--theme-changed)
 
+(drgnx-defsetting drgnx-term-link-url t
+  "Whether an address in a terminal's plain output (http, https, ftp, file) is a link: a middle click opens it, as an
+OSC 8 link does.  Your own patterns (`drgnx-term-link') come first.  Applies to every terminal at once."
+  :type 'boolean :group 'drgnx :scope 'global :agents 'never :schema 'boolean :apply #'drgnx-term--theme-changed)
+
+(drgnx-defsetting drgnx-term-link nil
+  "Link patterns of your own: a list of (REGEXP TARGET).  Text in a terminal's output that REGEXP matches is a link
+to TARGET: a string, with `\\&' and `\\N' for the match and its groups (\"https://github.com/\\1\"), or a function of the
+matched text that returns the address (a file name works too).  Case counts.  Applies to every terminal at once."
+  :type '(repeat (list (regexp :tag "Matches") (choice :tag "Link to" string function)))
+  :group 'drgnx :scope 'global :agents 'never :schema '(list-of (list-of any)) :apply #'drgnx-term--theme-changed)
+
+(drgnx-defsetting drgnx-term-cursor-click-to-move t
+  "Whether a click at the shell's prompt, on the cursor's row, moves the cursor there (as Left or Right keys).  Needs
+the shell integration (it marks the prompt, OSC 133); nothing moves while a command runs, in a full-screen program
+or while the program tracks the mouse.  Applies at once."
+  :type 'boolean :group 'drgnx :scope 'global :agents 'never :schema 'boolean)
+
 ;;;; Live: drgnx's
 
 (drgnx-defsetting drgnx-term-desktop-notifications t
@@ -331,9 +349,9 @@ Applies to new terminals."
     ("mouse-reporting" live drgnx-term-mouse-reporting)
     ("mouse-shift-capture" live drgnx-term-mouse-shift-capture)
     ("mouse-scroll-multiplier" mapped "`mouse-wheel-scroll-amount'")
-    ("cursor-click-to-move" later "a click does not move the cursor at a prompt")
-    ("link" later "only OSC 8 links are links; there are no link patterns of your own")
-    ("link-url" later "an address in plain output is not a link (OSC 8 links are)")
+    ("cursor-click-to-move" live drgnx-term-cursor-click-to-move)
+    ("link" live drgnx-term-link)
+    ("link-url" live drgnx-term-link-url)
     ("link-previews" mapped "`help-echo'" "a link's target shows when the pointer rests on it")
     ("scroll-to-bottom" live drgnx-term-scroll-to-bottom)
     ("bell-features" mapped "`ring-bell-function', `visible-bell'" "the bell is Emacs's")

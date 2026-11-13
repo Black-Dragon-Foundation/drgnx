@@ -460,7 +460,8 @@ image) is drawn by the next Emacs pixel for pixel as before, the cursor's row as
 - **Links:** the worker sends an OSC 8 run as the row prop `drgnx-term-link`, on every row it sends: a screen cell's
   link is read through a viewport point, a row above the screen (scrolled off, a backfill, `term/fetch`) through a
   history point (row `scrollback rows - N` for viewport row `-N`: the engine's viewport never scrolls); PATCHED gives such runs `mouse-face` and a keymap, and `drgnx-term-open-link` opens a local `file://` URI with
-  `find-file-other-window`, anything else with `browse-url`.
+  `find-file-other-window`, anything else with `browse-url`. After it `drgnx-term--match-links` gives the same props to text with no
+  OSC 8 link that `drgnx-term-link` (your patterns, `(REGEXP TARGET)`) or, with `drgnx-term-link-url`, a plain URL matches, per patched row.
 - **Resize:** a window change (`drgnx-state` `windows-changed`) debounces 50 ms per buffer
   (`drgnx-timer-debounce`), then sends `term/resize` with the selected window's size.
 - **Events:** `term/cwd` sets `default-directory`, `term/title` renames the buffer, `term/progress` sets

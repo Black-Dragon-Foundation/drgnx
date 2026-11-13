@@ -226,5 +226,56 @@
         (should (= (length (drgnx-term--colours)) 259)))
       (drgnx-epoch-bump 'term-theme))))
 
+(ert-deftest drgnx-term-settings/plain-urls-and-your-patterns-become-links ()
+  ;; link-url: an address in plain output is a link (the sentence's full stop is not part of it); link: your patterns
+  ;; first, with a group in the target; an OSC 8 link keeps its own address
+  (with-temp-buffer
+    (insert "see https://example.org/a?b=1, or TICKET-42 and (http://x.y/z).\n")
+    (insert (propertize "https://osc8.example/" 'drgnx-term-link "https://real.example/") "\n")
+    (let ((drgnx-term-link-url t) (drgnx-term-link '(("TICKET-\\([0-9]+\\)" "https://tracker.example/\\1"))))
+      (drgnx-term--match-links (point-min) (line-end-position))
+      (goto-char (point-min))
+      (search-forward "https://example.org")
+      (should (equal (get-text-property (match-beginning 0) 'drgnx-term-link) "https://example.org/a?b=1"))
+      (search-forward "TICKET")
+      (should (equal (get-text-property (match-beginning 0) 'drgnx-term-link) "https://tracker.example/42"))
+      (search-forward "http://x.y")
+      (should (equal (get-text-property (match-beginning 0) 'drgnx-term-link) "http://x.y/z"))
+      (forward-line 1)
+      (drgnx-term--match-links (point) (line-end-position))
+      (should (equal (get-text-property (point) 'drgnx-term-link) "https://real.example/")))
+    (let ((drgnx-term-link-url nil) (drgnx-term-link nil))
+      (erase-buffer)
+      (insert "https://example.org/\n")
+      (drgnx-term--match-links (point-min) (line-end-position))
+      (should-not (get-text-property (point-min) 'drgnx-term-link)))))
+
+(ert-deftest drgnx-term-settings/a-click-at-the-prompt-moves-the-cursor ()
+  ;; cursor-click-to-move: at a prompt (OSC 133), a click on the cursor's row sends as many Left/Right keys as it is
+  ;; cells away; a command running, the main screen left or the setting off: Emacs's own click
+  (with-temp-buffer
+    (insert "$ ls -la\nout")
+    (let ((pos-end 9) (keys nil))
+      (setq-local drgnx-term--cursor-marker (copy-marker pos-end))
+      (setq-local drgnx-term--at-prompt t)
+      (let ((drgnx-term-cursor-click-to-move t) (drgnx-view-patch nil))
+        (should (eq (drgnx-term--click-filter #'ignore) #'drgnx-term-click-to-move))
+        (setq-local drgnx-term--at-prompt nil)
+        (should-not (drgnx-term--click-filter #'ignore))      ; a command runs
+        (setq-local drgnx-term--at-prompt t))
+      (let ((drgnx-term-cursor-click-to-move nil))
+        (should-not (drgnx-term--click-filter #'ignore)))
+      (cl-letf (((symbol-function 'drgnx-term-send-key) (lambda (key &rest _) (push key keys)))
+                ((symbol-function 'posn-point) (lambda (p) (car p)))
+                ((symbol-function 'posn-window) (lambda (_p) (selected-window)))
+                ((symbol-function 'event-start) (lambda (e) (cadr e)))
+                ((symbol-function 'window-buffer) (lambda (&optional _) (current-buffer)))
+                ((symbol-function 'mouse-set-point) (lambda (&rest _) (push 'own keys))))
+        (drgnx-term-click-to-move (list 'mouse-1 (list 5)))
+        (should (equal keys '("left" "left" "left" "left")))
+        (setq keys nil)
+        (drgnx-term-click-to-move (list 'mouse-1 (list 12)))     ; another row: Emacs's own
+        (should (equal keys '(own)))))))
+
 (provide 'term-settings-test)
 ;;; term-settings-test.el ends here

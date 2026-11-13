@@ -291,6 +291,7 @@ params! {
     TermText(term::TermText),
     TermPaste(term::TermText),
     TermFocus(term::TermFocus),
+    TermClipboardReply(term::TermClipboardReply),
     TermVisible(term::TermVisible),
     TermMouse(term::TermMouse),
     TermResize(term::TermResize),

@@ -49,6 +49,8 @@ pub struct Sink {
     pub effects: Vec<Effect>,
     /// Whether programs may write the clipboard (`drgnx-term-clipboard-write`).
     pub clipboard_write: bool,
+    /// The hub's socket for clipboard reads (`drgnx-term-clipboard-read` `ask`): none, or no hub, denies every read.
+    pub ask: Option<crate::ask::Asker>,
     pub size: GhosttySizeReportSize,
     /// The answer to ENQ (`drgnx-term-enquiry-response`; empty: none).
     pub enquiry: String,
@@ -180,6 +182,50 @@ unsafe extern "C" fn on_clipboard(
         };
         unsafe { reply(w, &r) };
     }
+}
+/// A program's clipboard read (installed only while `drgnx-term-clipboard-read` is `ask`): the editor is asked and the
+/// stream waits for it (`ask.rs`); text allowed is the reply, anything else a denial.
+unsafe extern "C" fn on_clipboard_read(
+    _: GhosttyTerminal,
+    u: *mut c_void,
+    r: *const GhosttyClipboardRead,
+) {
+    let s = unsafe { sink(u) };
+    let Some(r) = (unsafe { r.as_ref() }) else {
+        return;
+    };
+    let text = s
+        .ask
+        .as_mut()
+        .and_then(|a| a.ask(r.location != 0, crate::ask::WAIT));
+    let Some(reply) = r.reply else {
+        return;
+    };
+    let text_plain = b"text/plain";
+    let content = text.as_ref().map(|t| GhosttyClipboardContent {
+        mime: GhosttyString {
+            ptr: text_plain.as_ptr(),
+            len: text_plain.len(),
+        },
+        data: GhosttyString {
+            ptr: t.as_ptr(),
+            len: t.len(),
+        },
+    });
+    let rep = GhosttyClipboardReadReply {
+        size: size_of::<GhosttyClipboardReadReply>(),
+        result: if content.is_some() {
+            GHOSTTY_CLIPBOARD_READ_RESULT_SUCCESS
+        } else {
+            GHOSTTY_CLIPBOARD_READ_RESULT_DENIED
+        },
+        contents: content.as_ref().map_or(null(), |c| c as *const _),
+        contents_len: usize::from(content.is_some()),
+        available: null(),
+        available_len: 0,
+        remember: false,
+    };
+    unsafe { reply(r, &rep) };
 }
 unsafe extern "C" fn on_notify(
     _: GhosttyTerminal,
@@ -548,6 +594,18 @@ impl Engine {
             let reset = b"\x1b[0 q";
             ghostty_terminal_vt_write(self.term, reset.as_ptr(), reset.len());
         }
+    }
+
+    /// Whether a program's clipboard read is asked of the editor (`drgnx-term-clipboard-read` `ask`) or left unanswered
+    /// (an empty clipboard). The callback is installed only while asked: installing it also turns on kitty paste events.
+    pub fn set_clipboard_read(&mut self, ask: bool) {
+        let f: *const c_void = if ask {
+            on_clipboard_read as GhosttyTerminalClipboardReadFn as *const c_void
+        } else {
+            null()
+        };
+        // SAFETY: a GhosttyTerminalClipboardReadFn (NULL: unset); the userdata is this engine's sink.
+        unsafe { ghostty_terminal_set(self.term, GHOSTTY_TERMINAL_OPT_CLIPBOARD_READ, f) };
     }
 
     /// Whether a program may read the title back (CSI 21 t; off by default: a title can carry commands).

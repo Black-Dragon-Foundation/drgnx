@@ -742,7 +742,7 @@ asked."
 (defconst drgnx-tty-frames-state-faces
   '((git :faces (drgnx-git-modified drgnx-git-added drgnx-git-deleted drgnx-git-conflict drgnx-git-ignored)
          :attribute-faces (drgnx-git-ignored)
-         :cue letter :doc "The status letter (M, A, U, D, C) at the row's edge in the Explorer; ignored files, which have none, are italic")
+         :cue letter :doc "The status letter (M, A, U, D, C) at the row's edge in the Explorer; ignored files, which have none, are italic (an I on the Linux console)")
     (review :faces (drgnx-review-critical drgnx-review-important drgnx-review-minor)
             :cue word :doc "The severity word that starts a finding's line")
     (tabs :faces (drgnx-chrome-tab drgnx-chrome-tab-current)

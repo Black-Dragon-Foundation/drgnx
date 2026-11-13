@@ -115,6 +115,18 @@ build/ ignored (with build/out.o)."
           (kill-buffer b)
           (when (get-buffer drgnx-buffers-buffer-name) (kill-buffer drgnx-buffers-buffer-name)))))))
 
+(ert-deftest drgnx-git/an-ignored-file-has-a-letter-only-on-the-linux-console ()
+  ;; the console draws no italic, so the ignored cue there is a trailing I (M12b-7-2); elsewhere none
+  (should (equal (drgnx-git-letter 'modified) "M"))
+  (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) nil)))
+    (cl-letf (((symbol-function 'tty-type) (lambda (&rest _) "xterm-256color")))
+      (should-not (drgnx-git-letter 'ignored)))
+    (cl-letf (((symbol-function 'tty-type) (lambda (&rest _) "linux")))
+      (should (equal (drgnx-git-letter 'ignored) "I"))
+      (should (equal (drgnx-git-letter 'added) "A"))))
+  (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t)))
+    (should-not (drgnx-git-letter 'ignored))))
+
 (ert-deftest drgnx-git/huge-ignored-lists-are-skipped ()
   ;; Ignored files only dim rows; past the limit they are not parsed (a build tree inside tracked folders).
   (let ((drgnx-git-ignored-limit 3))

@@ -311,7 +311,7 @@ A row of a repository whose status is not read yet asks for it (`drgnx-explorer-
   (when (and drgnx-explorer-git (drgnx-git-unread-p path)) (drgnx-explorer--git-unread))
   (let* ((status (and drgnx-explorer-git (drgnx-git-status path)))
          (look (and status (drgnx-git-look status)))
-         (mark (and status (if (and dirp (not (memq status '(ignored untracked)))) "●" (car look)))))
+         (mark (and status (if (and dirp (not (memq status '(ignored untracked)))) "●" (drgnx-git-letter status)))))
     ;; the name keeps the text colour (window-dark.html `.row'): the state is the mark; an ignored file is dimmed
     (when (eq status 'ignored) (add-face-text-property name-start eol (cadr look)))
     ;; a terminal window has no fringe: the overlay's padding keeps the last column free for the truncation `$'
@@ -997,7 +997,7 @@ changes inside)."
          (status (and (assq status drgnx-git--looks) status))
          (mark (and status (if (and (not (memq status '(ignored untracked)))
                                     (eql 1 (drgnx-view-nav-field "dir" key)))
-                               "●" (car (drgnx-git-look status)))))
+                               "●" (drgnx-git-letter status))))
          (o (drgnx-wb-row-tail-overlay eol mark (and mark (drgnx-wb-git-mark-face status)) nil
                                        (gethash key drgnx-explorer--tails))))
     (overlay-put o 'evaporate t)
