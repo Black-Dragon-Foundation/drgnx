@@ -149,6 +149,11 @@ pub struct Filters {
     /// them).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ids: Option<Vec<String>>,
+    /// Only the rows of the Recommended set this connection sent with `extensions/recommended`, at this version (the
+    /// set stays in the hub, so an ask carries no ids); a version the hub does not hold is an error at
+    /// `filters/recommended`, and the editor sends its set again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommended: Option<u64>,
 }
 
 /// How the rows are ordered.
@@ -266,6 +271,17 @@ pub struct ModuleEntry {
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct ModulesParams {
     pub modules: Vec<ModuleEntry>,
+}
+
+/// The most ids one Recommended set holds.
+pub const RECOMMENDED_MAX: usize = 20_000;
+
+/// The editor's Recommended set: the ids, and the version a search names it by (`Filters::recommended`).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RecommendedParams {
+    pub ids: Vec<String>,
+    pub version: u64,
 }
 
 /// The most rows one section of `extensions/list` holds (the list's pages, all loaded).
@@ -411,6 +427,17 @@ pub(crate) fn methods() -> Vec<Method> {
             "extensions/modules", ExtensionsModules(ModulesParams) -> Empty,
             classes: [User], writes: false,
             doc: "the editor's module table (name, doc, packages, flags, state), held in memory so the list can show modules; replaces the last table",
+        ),
+        method!(
+            "extensions/recommended", ExtensionsRecommended(RecommendedParams) -> Empty,
+            classes: [User], writes: false,
+            doc: "the editor's Recommended set (ids) at a version, held in memory for this connection and replaced by each call; a search names it by its version (`filters.recommended`) instead of sending the ids",
+            check: |p| {
+                if p.ids.len() > RECOMMENDED_MAX {
+                    return Err(invalid("ids", "at most 20000 ids"));
+                }
+                Ok(())
+            },
         ),
     ]
 }

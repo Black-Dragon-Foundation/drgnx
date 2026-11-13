@@ -105,9 +105,46 @@ nothing."
     (nreverse out)))
 
 (defun drgnx-extensions-recommend-ids ()
-  "The ids the Recommended section lists: what `drgnx-extensions-recommend--root' recommends (each time the list is
-asked for, so no reason is made)."
+  "The ids the Recommended section lists: what `drgnx-extensions-recommend--root' recommends (no reason is made)."
   (drgnx-extensions-recommended drgnx-extensions-recommend--root t))
+
+;;;; The set the hub holds
+;; The Recommended section's search names the set by a version (`filters.recommended'); the ids go to the hub once per
+;; version (`extensions/recommended'), so opening the list makes no id string.  The set is made again only when what it
+;; is made from moved: the project, the modules' report (`drgnx-modules-report-tick'), a settings file, the global
+;; list.  Emacs's suggestions for the project's files are read then too (the Explorer's listing as it is at that time).
+
+(declare-function drgnx-hub-call "drgnx-hub-client" (method params callback &rest keys))
+
+(defvar drgnx-extensions-recommend--held nil
+  "The set as last made: [ROOT MODULES-TICK SETTINGS-TICK GLOBAL VERSION IDS], or nil.")
+(defvar drgnx-extensions-recommend--version 0 "The last version of the set made.")
+(defvar drgnx-extensions-recommend--settings-tick 0 "Counts the settings files' changes (`drgnx-settings-changed-functions').")
+
+(defun drgnx-extensions-recommend--settings-changed (&rest _)
+  "A settings file changed: the set is made again at its next use."
+  (cl-incf drgnx-extensions-recommend--settings-tick))
+
+(defun drgnx-extensions-recommend-send ()
+  "Send the hub the set as last made (a new connection holds none: the hub asks for it again)."
+  (when-let* ((h drgnx-extensions-recommend--held))
+    (condition-case nil
+        (drgnx-hub-call "extensions/recommended" (list :ids (vconcat (aref h 5)) :version (aref h 4)) #'ignore)
+      (error nil))))
+
+(defun drgnx-extensions-recommend-version ()
+  "The version of the Recommended set the hub holds: made again, and sent, only when what it is made from moved."
+  (let ((h drgnx-extensions-recommend--held) (root drgnx-extensions-recommend--root)
+        (mt drgnx-modules-report-tick) (st drgnx-extensions-recommend--settings-tick)
+        (g (bound-and-true-p drgnx-extensions-recommended)))
+    (unless (and h (equal (aref h 0) root) (eql (aref h 1) mt) (eql (aref h 2) st) (eq (aref h 3) g))
+      (let ((ids (drgnx-extensions-recommended root t)))
+        (if (and h (equal ids (aref h 5)))
+            (setq drgnx-extensions-recommend--held (vector root mt st g (aref h 4) (aref h 5)))
+          (setq drgnx-extensions-recommend--held
+                (vector root mt st g (cl-incf drgnx-extensions-recommend--version) ids))
+          (drgnx-extensions-recommend-send))))
+    (aref drgnx-extensions-recommend--held 4)))
 
 (defun drgnx-extensions-recommend-notice (root)
   "The first look at the project at ROOT this session: one notice when it recommends anything, with a command that
@@ -160,14 +197,18 @@ shows them.  Non-nil when it posted one.  Installs, queues and asks nothing."
 
 ;;;; Setup
 
+(defvar drgnx-settings-changed-functions)
+
 (defun drgnx-extensions-recommend-setup ()
-  (add-hook 'find-file-hook #'drgnx-extensions-recommend--visited))
+  (add-hook 'find-file-hook #'drgnx-extensions-recommend--visited)
+  (add-hook 'drgnx-settings-changed-functions #'drgnx-extensions-recommend--settings-changed))
 
 (defun drgnx-extensions-recommend-teardown ()
-  "Forget the projects and the database; let go of the hook."
+  "Forget the projects, the database and the set; let go of the hooks."
   (remove-hook 'find-file-hook #'drgnx-extensions-recommend--visited)
+  (remove-hook 'drgnx-settings-changed-functions #'drgnx-extensions-recommend--settings-changed)
   (setq drgnx-extensions-recommend--root nil drgnx-extensions-recommend--noticed nil
-        drgnx-extensions-recommend--database 'unread))
+        drgnx-extensions-recommend--database 'unread drgnx-extensions-recommend--held nil))
 
 (provide 'drgnx-extensions-recommend)
 ;;; drgnx-extensions-recommend.el ends here

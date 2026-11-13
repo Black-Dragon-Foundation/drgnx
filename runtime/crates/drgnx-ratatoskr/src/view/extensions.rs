@@ -312,8 +312,7 @@ pub fn doc(b: &Built) -> Doc {
                 break 'all;
             }
             let mut fields = vec![
-                json!(["label", r.name]),
-                json!(["name", r.name]),
+                json!(["label", r.name]), // the row's name (the editor reads it as `label`)
                 json!(["state", word(r.state)]),
                 json!(["signed", word(r.signed)]),
                 json!(["source", r.source]),

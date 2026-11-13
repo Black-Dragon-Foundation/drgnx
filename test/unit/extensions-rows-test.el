@@ -26,7 +26,7 @@
                               (list :id "section:updates" :kind "section" :flags 1
                                     :fields [["label" "Updates"] ["section" "updates"] ["count" 1]])
                               (list :id "pkg:a" :kind "package" :flags 0 :parent "section:updates"
-                                    :fields [["label" "a"] ["name" "a"] ["state" "update"] ["signed" "unsigned-archive"]
+                                    :fields [["label" "a"] ["state" "update"] ["signed" "unsigned-archive"]
                                              ["source" "melpa"] ["section" "updates"] ["version" "1.0"] ["latest" "1.1"]]))
                       :edges []
                       :lists (vector (list :name "order" :ids ["section:updates" "pkg:a"])))))))
@@ -46,7 +46,7 @@ Updates count."
         (drgnx-view-model--views (make-hash-table :test #'equal)) (drgnx-view-patch--hooked nil)
         (calls nil))
     (unwind-protect
-        (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (m p cb) (push (list m p cb) calls) 1))
+        (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (m p cb &rest _) (push (list m p cb) calls) 1))
                   ((symbol-function 'drgnx-view-env-register) #'ignore))
           (drgnx-extensions-list--reset)
           (with-current-buffer (drgnx-extensions-list--buffer)
@@ -66,6 +66,7 @@ Updates count."
             (should (string-match-p "update to 1\\.1" (buffer-string)))
             (should (eq 'update (plist-get (drgnx-extensions-list-row "pkg:a") :state)))
             (should (equal "1.1" (plist-get (drgnx-extensions-list-row "pkg:a") :latest)))
+            (should (equal "a" (plist-get (drgnx-extensions-list-row "pkg:a") :name)))   ; the model's label
             (should-not (drgnx-extensions-list-row "section:updates"))
             (goto-char (point-min))
             (search-forward "a 1.0")
@@ -207,7 +208,7 @@ selection.  Off a generation's row it asks."
                                                   (list :id "section:updates" :kind "section" :flags 1
                                                         :fields [["label" "Updates"] ["section" "updates"]])
                                                   (list :id "pkg:a" :kind "package" :flags 0 :parent "section:updates"
-                                                        :fields [["label" "a"] ["name" "a"] ["state" "update"]])
+                                                        :fields [["label" "a"] ["state" "update"]])
                                                   (list :id "section:generations" :kind "section" :flags 1
                                                         :fields [["label" "Generations"] ["section" "generations"]])
                                                   (list :id "gen:4" :kind "generation" :flags 0

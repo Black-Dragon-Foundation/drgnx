@@ -202,8 +202,11 @@ global `drgnx-extensions-recommended'."
 (defun drgnx-extensions-list-search-params (query &optional offset)
   "The params of `extensions/search' for the parsed QUERY: the words, the filters (the local words as `:ids'), the sort."
   (let* ((filters (copy-sequence (plist-get query :filters)))
-         (local (drgnx-extensions-list--local-ids (plist-get query :local))))
+         (held (and (memq 'recommended (plist-get query :local)) (fboundp 'drgnx-extensions-recommend-version)))
+         (local (drgnx-extensions-list--local-ids (if held (remq 'recommended (plist-get query :local))
+                                                    (plist-get query :local)))))
     (when (car local) (setq filters (plist-put filters :ids (vconcat (cdr local)))))
+    (when held (setq filters (plist-put filters :recommended (drgnx-extensions-recommend-version))))
     (append (list :query (plist-get query :text))
             (and filters (list :filters filters))
             (and (plist-get query :sort) (list :sort (plist-get query :sort)))
@@ -216,7 +219,9 @@ global `drgnx-extensions-recommended'."
                (list :filters
                      (pcase section
                        ('installed '(:installed t)) ('updates '(:updates t)) ('plugins '(:plugins t)) ('builtin '(:builtin t))
-                       ('recommended (list :ids (vconcat (drgnx-extensions-list--recommended-ids))))))
+                       ('recommended (if (fboundp 'drgnx-extensions-recommend-version) ; the hub holds the set
+                                         (list :recommended (drgnx-extensions-recommend-version))
+                                       (list :ids (vconcat (drgnx-extensions-list--recommended-ids)))))))
                (list :offset (or offset 0) :limit drgnx-extensions-list--page)))))
 
 (defun drgnx-extensions-list--fetch (section offset)
@@ -411,7 +416,8 @@ ticket (an integer) has no row, nil."
 ;;;; On the rows path: the hub builds the list, its model holds the rows (Sjá)
 ;; The list is the hub-fed view `extensions' (an Emacs without Sjá shows a notice): `extensions/list' names
 ;; the sections (each a search, as `drgnx-extensions-list--section-params' makes it) and the hub sends the model (a
-;; `tree': a node per header and per row, the row's name, kind, state, signed, source, version and latest as fields)
+;; `tree': a node per header and per row, the row's name (its `label'), kind, state, signed, source, version and latest
+;; as fields)
 ;; and the rows, headers and lines included.  The answer is each section's total.  A row's data is read from the model
 ;; (`drgnx-extensions-list-row'), point's row is the model's selection, and a job's chip is an overlay at the end of
 ;; the row's first line, put back after each draw: the busy tick moves overlays, never rows.
@@ -437,7 +443,7 @@ or nil when the list is not the hub-fed view or the model has no such row."
       (when-let* ((h (drgnx-view-patch-handle drgnx-view-patch)) (kind (nidhogg-view-get h 'kind id))
                   ((not (equal kind "section"))))
         (let ((f (lambda (name) (nidhogg-view-get h 'field name id))))
-          (list :id id :name (funcall f "name") :kind (intern kind) :state (intern (funcall f "state"))
+          (list :id id :name (funcall f "label") :kind (intern kind) :state (intern (funcall f "state"))
                 :signed (intern (funcall f "signed")) :source (funcall f "source")
                 :version (funcall f "version") :latest (funcall f "latest")))))))
 
@@ -484,20 +490,32 @@ typed, they are the list)."
                            (or (drgnx-extensions-list--generation-params) [])
                          []))))
 
-(defun drgnx-extensions-list--ask (&optional _view)
+(defun drgnx-extensions-list--resend-p (error)
+  "Non-nil when the hub's full ERROR says it holds no Recommended set at the version asked (a new connection)."
+  (and (consp error) (stringp (plist-get error :path)) (string-suffix-p "filters/recommended" (plist-get error :path))))
+
+(declare-function drgnx-extensions-recommend-send "drgnx-extensions-recommend" ())
+
+(defun drgnx-extensions-list--ask (&optional _view again)
   "Ask the hub for the list's rows, without waiting; the answer's totals go to `drgnx-extensions-list--listed'.  Also
-the env's resubscribe."
+the env's resubscribe.  A hub that holds no Recommended set at the version asked is sent the set, and asked AGAIN
+once."
   (unless (fboundp 'drgnx-hub-call) (require 'drgnx-hub-client))
   (let ((epoch drgnx-extensions-list--epoch))
     (condition-case err
         (drgnx-hub-call "extensions/list" (drgnx-extensions-list--list-params)
                         (lambda (result error)
                           (when (eql epoch drgnx-extensions-list--epoch)
-                            (if error
-                                (setq drgnx-extensions-list--error (format "%s" error))
-                              (setq drgnx-extensions-list--error nil)
-                              (drgnx-extensions-list--listed (plist-get result :sections)))
-                            (drgnx-extensions-list--changed))))
+                            (if (and error (not again) (drgnx-extensions-list--resend-p error)
+                                     (fboundp 'drgnx-extensions-recommend-send))
+                                (progn (drgnx-extensions-recommend-send) (drgnx-extensions-list--ask nil t))
+                              (if error
+                                  (setq drgnx-extensions-list--error
+                                        (format "%s" (if (consp error) (plist-get error :message) error)))
+                                (setq drgnx-extensions-list--error nil)
+                                (drgnx-extensions-list--listed (plist-get result :sections)))
+                              (drgnx-extensions-list--changed))))
+                        :full t)
       (error (setq drgnx-extensions-list--error (error-message-string err))
              (drgnx-extensions-list--changed)))))
 

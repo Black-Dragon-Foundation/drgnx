@@ -16456,6 +16456,15 @@
                 "default": false,
                 "type": "boolean"
               },
+              "recommended": {
+                "description": "Only the rows of the Recommended set this connection sent with `extensions/recommended`, at this version (the\nset stays in the hub, so an ask carries no ids); a version the hub does not hold is an error at\n`filters/recommended`, and the editor sends its set again.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "unsigned": {
                 "default": false,
                 "description": "Packages from an archive that does not sign.",
@@ -16834,6 +16843,44 @@
       "classes": [
         "user"
       ],
+      "doc": "the editor's Recommended set (ids) at a version, held in memory for this connection and replaced by each call; a search names it by its version (`filters.recommended`) instead of sending the ids",
+      "name": "extensions/recommended",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The editor's Recommended set: the ids, and the version a search names it by (`Filters::recommended`).",
+        "properties": {
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ids",
+          "version"
+        ],
+        "title": "RecommendedParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the rows of these ids, in their order; an unknown id is left out",
       "name": "extensions/rows",
       "params": {
@@ -17174,6 +17221,15 @@
               "plugins": {
                 "default": false,
                 "type": "boolean"
+              },
+              "recommended": {
+                "description": "Only the rows of the Recommended set this connection sent with `extensions/recommended`, at this version (the\nset stays in the hub, so an ask carries no ids); a version the hub does not hold is an error at\n`filters/recommended`, and the editor sends its set again.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
               },
               "unsigned": {
                 "default": false,

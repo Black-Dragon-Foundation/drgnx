@@ -134,6 +134,10 @@ fn extensions_rows_carry_every_list_column() {
             .to_string()
             .contains(r#"["state","update"]"#)
     );
+    // the row's name is its label, once: the model goes to the editor as one line, every byte of it a character there
+    let fields = d.nodes["pkg:b"]["fields"].to_string();
+    assert!(fields.contains(r#"["label","b"]"#), "{fields}");
+    assert!(!fields.contains(r#"["name","#), "{fields}");
 }
 
 /// The Generations section: the editor sends the generations (it reads them from disk), the hub ends the list with a

@@ -70,6 +70,16 @@ asks for a larger limit. What changes between answers without a new list — a j
 (`after-string`) on the row's line, redrawn on the jobs' changes and the elapsed-time tick; a change to the ids that
 need a restart asks again.
 
+The Recommended section names its set by a version (`filters.recommended`), not by its ids: the set (often a thousand
+packages modules wait for) goes to the hub once per version with `extensions/recommended`
+(`drgnx-extensions-recommend-version`), so an open makes no id string. It is made again only when what it is made from
+moved: the project (`drgnx-extensions-recommend--root`), the modules' report (`drgnx-modules-report-tick`), a settings
+file (`drgnx-settings-changed-functions`) or the global `drgnx-extensions-recommended`; Emacs's suggestions for the
+project's files are read from the Explorer's listing at that time. A hub that holds no set at that version (a new
+connection) answers `invalid-params` at `…filters/recommended`; the list sends its set again and asks once more.
+`@recommended` typed names the set the same way. Tests: `drgnx-extensions-recommend/the-hub-holds-the-set`, the scenario
+`extensions/the-recommended-set-is-the-connections`.
+
 ## Jobs
 
 Every install, update, removal, rollback and refresh the view asks for is a hub job

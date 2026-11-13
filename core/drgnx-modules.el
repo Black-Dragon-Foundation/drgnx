@@ -32,6 +32,9 @@
 
 (defvar drgnx-modules--table nil "Alist NAME → plist (:doc :stage … :file), in definition order.")
 (defvar drgnx-modules--report nil "Alist NAME → plist (:stage :ms :status :error :missing :problems :left).")
+(defvar drgnx-modules-report-tick 0
+  "Counts the changes to the modules' report (`drgnx-modules--record'): what is made from the report is made again only
+when this moved (the Extensions list's Recommended set).")
 (defconst drgnx-modules-stages '(startup idle first-frame first-file first-input))
 (defconst drgnx-modules-state-version 2
   "Format of modules.eld.  2: it holds `:enabled' (format 1 had no such field).  An older drgnx reads
@@ -225,6 +228,7 @@ in this session, or disabled in modules.eld though on by default (one that is of
   (setf (alist-get name drgnx-modules--report)
         (list :stage stage :ms ms :status status :error err :missing missing :problems problems
               :left (alist-get name drgnx-modules--left)))
+  (cl-incf drgnx-modules-report-tick)
   (drgnx-modules--notice name status err missing problems)
   (drgnx-modules--notice-off))
 

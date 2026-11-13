@@ -408,6 +408,7 @@ params! {
     ExtensionsRows(extensions::RowsParams),
     ExtensionsList(extensions::ListParams),
     ExtensionsModules(extensions::ModulesParams),
+    ExtensionsRecommended(extensions::RecommendedParams),
     PluginsList(Empty),
     PluginsApprove(plugins::ApproveParams),
     PluginsDisable(plugins::DisableParams),
