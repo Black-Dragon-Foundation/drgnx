@@ -267,7 +267,9 @@ error's, with `short' (the default) and `t'; nil underlines only."
 
 (ert-deftest drgnx-face/an-end-of-line-problem-opens-with-its-icon ()
   "window-dark.html `.diag': the chip opens with its kind's icon (`circle-x', `triangle-alert') in the chip's face, then
-the words; for Emacs's own Flymake (`:eol') and Flymake 1.4's (`:inline-…') alike; the echo area's text has none."
+the words; for Emacs's own Flymake (`:eol') and Flymake 1.4's (`:inline-…') alike; the echo area's text has none.
+The text is an overlay's `display' string, whose own display specs Emacs does not draw, so the icon is its glyph (text)
+on a graphical frame too, and nothing in it is a display spec."
   (require 'flymake)
   (drgnx-face-test--with
     (with-temp-buffer
@@ -275,12 +277,16 @@ the words; for Emacs's own Flymake (`:eol') and Flymake 1.4's (`:inline-…') al
       (pcase-dolist (`(,type ,icon) '((:error circle-x) (:warning triangle-alert)))
         (let* ((d (flymake-make-diagnostic (current-buffer) 1 4 type "the words"))
                (face (flymake--lookup-type-property type 'eol-face))
-               (cap (drgnx-look-icon icon face 14)))
+               cap)
           (dolist (dest '(:eol :inline-short :inline-eol))
-            (let ((s (flymake--format-diagnostic d dest 'eol-face)))
-              (should (string-prefix-p cap s))
+            (let ((s (cl-letf (((symbol-function 'display-graphic-p) #'always)
+                               ((symbol-function 'image-type-available-p) #'always))
+                       (setq cap (drgnx-face-glyph icon)) ; the graphical frame's glyph
+                       (flymake--format-diagnostic d dest 'eol-face))))
+              (should (string-prefix-p (concat cap " ") s))
               (should (string-suffix-p "the words" s))
-              (should (eq face (get-text-property 0 'face s)))))
+              (should (eq face (get-text-property 0 'face s)))
+              (should-not (text-property-not-all 0 (length s) 'display nil s))))
           (should-not (string-prefix-p cap (flymake--format-diagnostic d :help-echo 'echo-face))))))))
 
 (ert-deftest drgnx-face/line-spacing-follows-the-setting ()

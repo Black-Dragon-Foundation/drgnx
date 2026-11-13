@@ -17,7 +17,6 @@
 (require 'drgnx-registry)
 (require 'drgnx-face-state)
 (require 'drgnx-ui-kit)                     ; the glyph table and `drgnx-face-glyph' live in core
-(require 'drgnx-icons)                      ; `drgnx-look-icon', `drgnx-px'
 (require 'drgnx-frame-kind)
 (require 'drgnx-large-file)
 (defvar scroll-bar-mode)
@@ -463,18 +462,20 @@ the current line across the full width.  On `after-change-major-mode-hook'."
 (defun drgnx-face--eol-icon (format diag destination face-prop)
   "Flymake's text for DIAG at DESTINATION by FORMAT, its own function: at a line's end (`:eol', Flymake 1.4's
 `:inline-…') a chip as window-dark.html's `.diag', opening with its kind's icon (`circle-x' for an error,
-`triangle-alert' for a warning, `info' for a note) in the chip's face, then a 5 px gap; elsewhere as Flymake makes it."
+`triangle-alert' for a warning, `info' for a note) in the chip's face, then a space; elsewhere as Flymake makes it.
+The icon is its glyph (`drgnx-face-glyph'), text: Flymake puts this text in an overlay's `display' string, whose own
+display specs (an image, a pixel space) Emacs does not draw."
   (let ((text (funcall format diag destination face-prop)))
     (if (not (and face-prop (memq destination '(:eol :inline-eol :inline-short :inline-fancy))))
         text
       (let* ((type (flymake-diagnostic-type diag))
              (severity (flymake--severity type))
              (face (flymake--lookup-type-property type face-prop 'flymake-error)))
-        (concat (drgnx-look-icon (cond ((>= severity (flymake--severity :error)) 'circle-x)
-                                       ((>= severity (flymake--severity :warning)) 'triangle-alert)
-                                       (t 'info))
-                                 face 14)
-                (propertize " " 'face face 'display `(space :width (,(drgnx-px 5))))
+        (concat (propertize (drgnx-face-glyph (cond ((>= severity (flymake--severity :error)) 'circle-x)
+                                                    ((>= severity (flymake--severity :warning)) 'triangle-alert)
+                                                    (t 'info)))
+                            'face face)
+                (propertize " " 'face face)
                 text)))))
 
 (defvar drgnx-face--line-spacing-saved nil
