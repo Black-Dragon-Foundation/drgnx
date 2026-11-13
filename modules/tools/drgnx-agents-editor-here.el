@@ -106,14 +106,23 @@ module shows who is here)."
 (defun drgnx-agents-editor-here--initial (ordinal)
   (or (gethash ordinal drgnx-agents-editor-here--initials) ""))
 
-(defun drgnx-agents-editor-here--status-of (agents)
-  "The status segment's string for AGENTS ((SESSION . ORDINAL)...): their marks by ordinal, eight then \"+N\"; nil for
-none."
-  (when agents
-    (let* ((sorted (sort (copy-sequence agents) (lambda (a b) (< (cdr a) (cdr b)))))
-           (shown (seq-take sorted 8)) (more (- (length sorted) (length shown))))
-      (concat (mapconcat (lambda (a) (drgnx-agents-editor-here--mark (cdr a) (car a))) shown " ")
-              (if (> more 0) (format " +%d" more) "")))))
+(defconst drgnx-agents-editor-here--doing
+  '(("edit" . "editing") ("write" . "editing") ("read" . "reading") ("listed" . "searching"))
+  "What an agent here does, by the presence mode the hub names.")
+
+(defun drgnx-agents-editor-here--status-of (agents &optional modes)
+  "The status segment's string for AGENTS ((SESSION . ORDINAL)...): one agent's mark, then its name and what it does
+by its mode in MODES ((SESSION . MODE)...), as `● Claude editing'; several agents' marks by ordinal, eight then
+\"+N\"; nil for none."
+  (if (and agents (null (cdr agents)))
+      (let* ((a (car agents)) (doing (cdr (assoc (cdr (assoc (car a) modes)) drgnx-agents-editor-here--doing))))
+        (concat (drgnx-agents-editor-here--mark (cdr a) (car a)) " " (drgnx-agents-editor-here--name (car a))
+                (if doing (concat " " doing) "")))
+    (when agents
+      (let* ((sorted (sort (copy-sequence agents) (lambda (a b) (< (cdr a) (cdr b)))))
+             (shown (seq-take sorted 8)) (more (- (length sorted) (length shown))))
+        (concat (mapconcat (lambda (a) (drgnx-agents-editor-here--mark (cdr a) (car a))) shown " ")
+                (if (> more 0) (format " +%d" more) ""))))))
 
 ;;;; The Explorer badge and the status segment
 
@@ -318,18 +327,19 @@ first (the rows read none of it), then the subscription; quiet while that connec
 
 (defun drgnx-agents-editor-here--agents-from (h)
   "The agents of model H (its list `agents'): who is here's rows, the initials and the status segment."
-  (let (rows agents)
+  (let (rows agents modes)
     (seq-doseq (id (or (nidhogg-view-get h 'list "agents") []))
       (let ((sid (drgnx-agents-editor-here--field h id "session"))
             (ord (drgnx-agents-editor-here--field h id "ordinal")))
         (when (and sid ord)
           (puthash ord (upcase (substring (drgnx-agents-editor-here--name sid) 0 1)) drgnx-agents-editor-here--initials)
           (push (cons sid ord) agents)
+          (push (cons sid (drgnx-agents-editor-here--field h id "mode")) modes)
           (push (list sid ord (drgnx-agents-editor-here--field h id "mode") (drgnx-agents-editor-here--field h id "file")
                       (drgnx-agents-editor-here--field h id "line"))
                 rows))))
     (setq drgnx-agents-editor-here--rows (nreverse rows)
-          drgnx-agents-editor-here--status (drgnx-agents-editor-here--status-of agents))))
+          drgnx-agents-editor-here--status (drgnx-agents-editor-here--status-of agents modes))))
 
 (defun drgnx-agents-editor-here--apply (_state _view patch)
   "The apply step of the view's rows: the keys PATCH names are kept for `drgnx-agents-editor-here--take', which reads

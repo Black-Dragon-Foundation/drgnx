@@ -28,6 +28,7 @@
 (declare-function drgnx-statusbar-note-tests "drgnx-statusbar")
 (declare-function magit-status-setup-buffer "magit-status")
 (defvar drgnx-panel-replay-prefix)
+(defvar drgnx-panel-replay-project)
 (defvar package-directory-list)
 (defvar magit-save-repository-buffers)
 (declare-function drgnx-chrome--note "drgnx-chrome")
@@ -158,11 +159,12 @@ untracked, drgnx.lock.eld ignored."
   '((window-dark "the agent panel opens as a tab of the editor group, not the right island (look step 8)"
                  "the title row counts 1 agent, not 2: the scene starts one mock agent"
                  "no agent badges (C, R) in the Explorer: agent system part 3 (G9)"
-                 "the status bar has no `● Claude editing': the mock agent edits no file of the scene's project, and the
-`agents-here' segment shows an agent's mark, not its name and what it does; its `1 waiting on you' is the mockup's
-`● 1 needs you' (and counts the seeded run's held card too)"
-                 "the status bar's problems are the scene's stand-in Flymake backend's (the mockup's two), and no `● eglot':
-the session runs no language server")
+                 "the status bar's `2 waiting on you' is the mockup's `● 1 needs you': two real items wait (the mock
+agent's permission and the seeded run's held card), and drgnx words it so"
+                 "the status bar's problems and `● eglot' are the scene's stand-ins (a Flymake backend with the mockup's
+two problems, an eglot connection to no language server), drawn by the segments' own code"
+                 "the status bar's agent is `● replay-… editing', not `● Claude editing': the mock agent's session is
+named as drgnx names every session (its profile, `replay', and an id)")
     (agent-panel "the mockup is the Work space (mission strip, Board, Timeline: G9, other plans); compare its right-hand panel"
                  "the panel opens as a tab of the editor group, not the right island (look step 8)"
                  "the mock agent's panel shows no turn yet (replay idle): look step 8")
@@ -332,13 +334,15 @@ from 201."
           ;; the mockup's figures: a slow run (past `drgnx-agent-panel-slow-seconds'), a quick one, then a read
           ;; that asks and stays open, so the permission card shows.  The replay session is a chat: the matrix
           ;; answers a chat's edit or run Never (no card), and asks for its reads
-          (concat "tool:read src/main.el\\nsay Reading the gateway: replies to a closed client are lost.\\n"
+          (concat "tool:read core/drgnx-gateway.el\\nsay Reading the gateway: replies to a closed client are lost.\\n"
                   "tool:run sleep 11; echo 1 of 14 failed\\nsay 1 of 14 failed: gateway/reply-after-close.\\n"
-                  "tool:edit src/main.el\\nsay Queue the reply when the client went away.\\n"
+                  "tool:edit test/unit/gateway-test.el\\nsay Queue the reply when the client went away.\\n"
                   "tool:run sleep 2; echo 9 of 14 passed\\n"
                   "ask:tool {\"kind\": \"read\", \"title\": \"Read the gateway's log\"}\nsay done")))
       ;; the replay's hub is the scenes' hub from here on: it seeds the plan run as `drgnx-look-scene--hub' does
-      (setq drgnx-look-scene--panel (let ((process-environment (cons "RATATOSKR_SEED_SCENE=1" process-environment)))
+      ;; and the agent works in the scenes' project, so the status bar and the Explorer show it there
+      (setq drgnx-look-scene--panel (let ((process-environment (cons "RATATOSKR_SEED_SCENE=1" process-environment))
+                                          (drgnx-panel-replay-project drgnx-look-scene--project))
                                       (drgnx-panel-replay-up bin)))
       ;; the turn runs on past the prefix to its ask: the scene shows every step's time and the open card
       (unless (drgnx-panel-replay--wait 30 (lambda () (with-current-buffer drgnx-look-scene--panel
@@ -358,7 +362,7 @@ hub is started first and the shot waits for them (a session starts no hub: witho
                                         (with-current-buffer b
                                           (save-excursion (goto-char (point-min)) (search-forward "Makefile" nil t)))))))
 
-(declare-function drgnx-jobs--recount "drgnx-jobs")
+(declare-function drgnx-hub-call "drgnx-hub-client")
 (declare-function flymake-start "flymake")
 (declare-function flymake-make-diagnostic "flymake")
 (defvar drgnx-jobs--running)
@@ -380,9 +384,24 @@ call on line 229, `old' on line 208)."
                      (flymake-make-diagnostic (current-buffer) (car r) (cdr r) :warning
                                               "variable `old' is never used"))))))
 
+(defvar eglot--managed-mode)
+(defvar eglot--cached-server)
+
+(defun drgnx-look-scene--eglot ()
+  "The current buffer managed by a stand-in eglot (window-dark.html's `● eglot'): its server a JSON-RPC connection to
+`cat', no language server, so the status bar's `lsp' segment draws it by its own code."
+  (require 'eglot)
+  (setq-local eglot--managed-mode t
+              eglot--cached-server
+              (make-instance 'jsonrpc-process-connection :name "eglot"
+                             :process (make-process :name "look-scene-lsp" :command '("cat") :noquery t
+                                                    :connection-type 'pipe)))
+  (run-hooks 'eglot-managed-mode-hook))
+
 (defun drgnx-look-scene-window-dark ()
   "The editor on the gateway file, with the status bar's facts of the mockup: the seeded plan run running (`1 job',
-counted from the hub) and the file's problems (`drgnx-look-scene--problems')."
+counted from the hub), the file's problems (`drgnx-look-scene--problems') and its language server
+(`drgnx-look-scene--eglot')."
   (drgnx-look-scene--theme 'drgnx-dark)
   (drgnx-look-scene--editor)
   (drgnx-look-scene--try "problems"
@@ -390,9 +409,13 @@ counted from the hub) and the file's problems (`drgnx-look-scene--problems')."
     (with-current-buffer (get-file-buffer (expand-file-name "core/drgnx-gateway.el" drgnx-look-scene--project))
       (setq-local flymake-diagnostic-functions (list #'drgnx-look-scene--problems))
       (flymake-mode 1)
-      (flymake-start)))
+      (flymake-start)
+      (drgnx-look-scene--eglot)))
+  ;; the hub's `job/status', handed to tools/jobs as its own recount does (the module provides the feature name the
+  ;; deleted Lisp jobs runtime had, so nothing here declares from it)
   (drgnx-look-scene--try "jobs"
-    (drgnx-jobs--recount)
+    (drgnx-hub-call "job/status" nil
+                    (lambda (r e) (unless e (funcall 'drgnx-jobs-note-jobs (append (plist-get r :jobs) nil)))))
     (drgnx-look-scene--until 15 "the status bar's job (the seeded run)" (lambda () (eql drgnx-jobs--running 1))))
   (drgnx-look-scene--answer))
 

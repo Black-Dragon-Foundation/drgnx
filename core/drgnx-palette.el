@@ -104,11 +104,11 @@ size), `:weight' (a face weight) and `:ring' (a colour).  The name is in `curren
 (defvar drgnx-palette--keycap-images (make-hash-table :test 'equal)
   "(NAME . METRICS) → a keycap chip's image.  A finite set: the key names a shortcut shows, per font and ring.")
 
-(defun drgnx-palette--keycap-image (name)
-  "The image of a keycap chip showing NAME in `drgnx-keycap''s font and ring on the selected frame, as tall as its
-text and as wide as the text keycap; nil when the face has no font there."
-  (when-let* ((font (face-font 'drgnx-keycap)) (info (font-info font)))
-    (let* ((box (face-attribute 'drgnx-keycap :box nil t))
+(defun drgnx-palette--keycap-image (name &optional face)
+  "The image of a keycap chip showing NAME in FACE's font and ring (default `drgnx-keycap') on the selected frame, as
+tall as its text and as wide as the text keycap; nil when the face has no font there."
+  (when-let* ((face (or face 'drgnx-keycap)) (font (face-font face)) (info (font-info font)))
+    (let* ((box (face-attribute face :box nil t))
            (line (max 1 (let ((lw (and (consp box) (plist-get box :line-width))))
                           (if (consp lw) (car lw) (or lw 1)))))
            (pad (drgnx-px 4))
@@ -116,9 +116,9 @@ text and as wide as the text keycap; nil when the face has no font there."
            (m (list :width (+ (string-pixel-width (propertize name 'face 'drgnx-ui-caption)) pad pad line line)
                     :height (+ ascent (aref info 9) line line) :ascent ascent :pad pad :line line
                     :radius (or (and (consp box) (plist-get box :corner-radius)) 0)
-                    :family (face-attribute 'drgnx-keycap :family nil t) :px (aref info 2)
-                    :weight (face-attribute 'drgnx-keycap :weight nil t)
-                    :ring (or (and (consp box) (plist-get box :color)) (face-foreground 'drgnx-keycap nil t))))
+                    :family (face-attribute face :family nil t) :px (aref info 2)
+                    :weight (face-attribute face :weight nil t)
+                    :ring (or (and (consp box) (plist-get box :color)) (face-foreground face nil t))))
            (key (cons name m)))
       (or (gethash key drgnx-palette--keycap-images)
           (puthash key (create-image (drgnx-palette--keycap-svg name m) 'svg t :scale 1.0

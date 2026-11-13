@@ -50,7 +50,7 @@ part that exists so far: which buffers are watched.
   at the end of its row: up to three, then "+N". A folder shows one mark per agent with files under it. An agent
   working in its own worktree of your project lands on your tree's row for the same file.
 - **Status bar.** The segment `agents-here` (after `jobs`) shows one mark for each agent working in this project,
-  eight at most, then "+N". An agent that waits on you has its mark in the attention colour. Click it for who is here.
+  eight at most, then "+N". A lone agent shows its mark, its name and what it does ("● Claude editing"). An agent that waits on you has its mark in the attention colour. Click it for who is here.
 - **Who is here.** The command **Who Is Here** opens a small list window with one row per agent in the project (mark,
   name, what it does, file and line). On a row, RET opens the agent's file at its line and follows it, `o` opens the
   agent's panel, and `q` closes the list. (The keys are the profiles' rows for **Follow the Agent on the Row**, **Open

@@ -238,6 +238,57 @@ too, no stubs — and turned off after, strictly: the state after equals the sta
       (should (eq flymake-show-diagnostics-at-end-of-line t)))
     (should (eq flymake-show-diagnostics-at-end-of-line before))))   ; flymake's own again, with the module off
 
+(defun drgnx-face-test--eol-text ()
+  "The text flymake shows at the ends of this buffer's lines."
+  (mapconcat (lambda (o) (format "%s" (or (overlay-get o 'display) "")))
+             (seq-filter (lambda (o) (overlay-get o 'flymake--eol-overlay)) (overlays-in (point-min) (point-max)))
+             ""))
+
+(ert-deftest drgnx-face/inline-problems-show-every-problems-words ()
+  "window-dark.html: each problem's words at the end of its line, the warning's (`⚠ Unused lexical variable') as the
+error's, with `short' (the default) and `t'; nil underlines only."
+  (skip-unless (progn (require 'flymake) (boundp 'flymake-show-diagnostics-at-end-of-line)))
+  (drgnx-face-test--with
+    (dolist (setting '(short t nil))
+      (setopt drgnx-face-inline-problems setting)
+      (with-temp-buffer
+        (insert "one\ntwo\n")
+        (setq-local trusted-content :all)             ; Emacs 31 runs no backend in an untrusted buffer
+        (setq-local flymake-diagnostic-functions
+                    (list (lambda (report &rest _)
+                            (funcall report (list (flymake-make-diagnostic (current-buffer) 1 4 :warning "w-one")
+                                                  (flymake-make-diagnostic (current-buffer) 5 8 :error "e-two"))))))
+        (flymake-mode 1)
+        (flymake-start)
+        (let ((text (drgnx-face-test--eol-text)))
+          (should (eq (and (string-search "e-two" text) t) (and setting t)))
+          (should (eq (and (string-search "w-one" text) t) (and setting t))))
+        (flymake-mode -1)))))
+
+(ert-deftest drgnx-face/an-end-of-line-problem-opens-with-its-icon ()
+  "window-dark.html `.diag': the chip opens with its kind's icon (`circle-x', `triangle-alert') in the chip's face, then
+the words; for Emacs's own Flymake (`:eol') and Flymake 1.4's (`:inline-…') alike; the echo area's text has none.
+The text is an overlay's `display' string, whose own display specs Emacs does not draw, so the icon is its glyph (text)
+on a graphical frame too, and nothing in it is a display spec."
+  (require 'flymake)
+  (drgnx-face-test--with
+    (with-temp-buffer
+      (insert "one\ntwo\n")
+      (pcase-dolist (`(,type ,icon) '((:error circle-x) (:warning triangle-alert)))
+        (let* ((d (flymake-make-diagnostic (current-buffer) 1 4 type "the words"))
+               (face (flymake--lookup-type-property type 'eol-face))
+               cap)
+          (dolist (dest '(:eol :inline-short :inline-eol))
+            (let ((s (cl-letf (((symbol-function 'display-graphic-p) #'always)
+                               ((symbol-function 'image-type-available-p) #'always))
+                       (setq cap (drgnx-face-glyph icon)) ; the graphical frame's glyph
+                       (flymake--format-diagnostic d dest 'eol-face))))
+              (should (string-prefix-p (concat cap " ") s))
+              (should (string-suffix-p "the words" s))
+              (should (eq face (get-text-property 0 'face s)))
+              (should-not (text-property-not-all 0 (length s) 'display nil s))))
+          (should-not (string-prefix-p cap (flymake--format-diagnostic d :help-echo 'echo-face))))))))
+
 (ert-deftest drgnx-face/line-spacing-follows-the-setting ()
   (let ((line-spacing nil))
     (drgnx-face-test--with

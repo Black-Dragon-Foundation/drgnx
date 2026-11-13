@@ -576,8 +576,9 @@ How it works:
   A scene that changes the theme waits (5 s at most, else an error) until no hub-fed view is drawn dimmed: its rows
   wait for the hub's reset to the new theme, and a shot taken before would show the stale shade. `window-dark`'s
   status bar has the mockup's facts: the seeded plan run counted from the hub (`1 job`), and the gateway file's two
-  problems from a stand-in Flymake backend (`✕ 1 ⚠ 1`). The mock agent's hub seeds the plan run too, so a Work scene
-  after an agent scene finds it. `start-page` has no mockup: it is judged against the components' spec (buttons, keycaps, the shield). The
+  problems from a stand-in Flymake backend (`✕ 1 ⚠ 1`), a stand-in eglot connection (`● eglot`; no language server
+  runs) and the mock agent, which works in the scenes' project and edits a file there (`● replay-… editing`). The
+  mock agent's hub seeds the plan run too, so a Work scene after an agent scene finds it. `start-page` has no mockup: it is judged against the components' spec (buttons, keycaps, the shield). The
   three highlights scenes, `highlights-dark`, `highlights-light` and `highlights-hc`, have none either: each puts every highlight in one
   shot, judged against the mockups' tokens. The editor holds the current line, isearch's current and other matches,
   show-paren, eglot's symbol highlight, Flymake's marks, a rectangle and a region. A second group beside it holds a

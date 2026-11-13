@@ -85,6 +85,20 @@
                                                                   (string-search "+2" drgnx-agents-editor-here--status)))))
     (should (equal drgnx-agents-editor-here--status (drgnx-agents-editor-here--segment)))))
 
+(ert-deftest drgnx-agents-editor/one-agent-s-status-says-its-name-and-what-it-does ()
+  "window-dark.html's `● Claude editing': one agent here shows its mark, then its name and what it does; several show
+their marks alone."
+  (drgnx-agents-editor-here-test--with
+    (cl-letf (((symbol-function 'drgnx-agents-editor-here--name) (lambda (_sid) "Claude")))
+      (let ((s (drgnx-agents-editor-here--status-of '(("s1" . 1)) '(("s1" . "edit")))))
+        (should (= 1 (drgnx-agents-editor-here-test--marks s)))
+        (should (string-suffix-p " Claude editing" s)))
+      (should (string-suffix-p " Claude reading"
+                               (drgnx-agents-editor-here--status-of '(("s1" . 1)) '(("s1" . "read")))))
+      (should (string-suffix-p " Claude" (drgnx-agents-editor-here--status-of '(("s1" . 1)))))
+      (should-not (string-search "Claude" (drgnx-agents-editor-here--status-of '(("s1" . 1) ("s2" . 2))
+                                                                               '(("s1" . "edit") ("s2" . "read"))))))))
+
 (ert-deftest drgnx-agents-editor/who-is-here-row-follows-on-ret ()
   ;; who is here is a small list window, one row per agent; RET on a row follows that agent (no `completing-read')
   (drgnx-agents-editor-here-test--with
