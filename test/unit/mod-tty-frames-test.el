@@ -160,12 +160,16 @@ ui/terminal's teardown does, so no later test finds the prefix bound."
          (should (equal (car names) "kx-5"))
          (should (member "kx-3" names)))))))
 
-(ert-deftest drgnx-tty-frames/a-failed-infocmp-is-asked-again ()
-  ;; nothing printed (no infocmp, a timeout, a type it does not know) is not kept: the next frame asks again; an
-  ;; answer is kept
-  (let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)) (answer nil) (asked 0))
+(ert-deftest drgnx-tty-frames/a-failed-infocmp-is-asked-again-after-a-while ()
+  ;; nothing printed (no infocmp, a timeout, a type it does not know) is remembered for `--miss-ttl' seconds only
+  ;; (a hanging infocmp is not run at every new frame, M12b-F-4); then it is asked again; an answer is kept
+  (let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)) (drgnx-tty-frames--miss-cache (make-hash-table :test #'equal))
+        (answer nil) (asked 0))
     (cl-letf (((symbol-function 'drgnx-tty--command-lines) (lambda (&rest _) (cl-incf asked) answer)))
       (should-not (drgnx-tty-frames--terminfo-true-colour-p "xterm-direct"))
+      (should-not (drgnx-tty-frames--terminfo-true-colour-p "xterm-direct"))
+      (should (= asked 1))
+      (puthash "xterm-direct" (- (float-time) drgnx-tty-frames--miss-ttl 1) drgnx-tty-frames--miss-cache)
       (setq answer (list "xterm-direct|x," "\tRGB,"))
       (should (drgnx-tty-frames--terminfo-true-colour-p "xterm-direct"))
       (should (drgnx-tty-frames--terminfo-true-colour-p "xterm-direct"))
@@ -350,7 +354,7 @@ ui/terminal's teardown does, so no later test finds the prefix bound."
 COLORTERM unset and `drgnx-tty-true-colour' t (the terminal need not be a known one).  `asked' lists the
 types `infocmp' was asked about."
   (declare (indent 1))
-  `(let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal))
+  `(let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)) (drgnx-tty-frames--miss-cache (make-hash-table :test #'equal))
          (drgnx-tty-true-colour t)
          (process-environment (cons "COLORTERM" process-environment))
          (asked nil))
@@ -386,7 +390,7 @@ types `infocmp' was asked about."
 
 (ert-deftest drgnx-tty-frames/true-colour-means-what-emacs-means-by-it ()
   ;; term.c: the RGB flag, or setf24 and setb24 together; not Tc, not setrgbf, not a numeric RGB#
-  (let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)))
+  (let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)) (drgnx-tty-frames--miss-cache (make-hash-table :test #'equal)))
     (cl-letf (((symbol-function 'drgnx-tty--command-lines)
                (lambda (command &rest _)
                  (pcase (car (last command))
@@ -408,14 +412,14 @@ types `infocmp' was asked about."
     (should (equal (sort (copy-sequence asked) #'string<) '("xterm-256color" "xterm-direct")))))
 
 (ert-deftest drgnx-tty-frames/the-runner-is-given-a-timeout-and-the-bare-command ()
-  (let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)) seen)
+  (let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)) (drgnx-tty-frames--miss-cache (make-hash-table :test #'equal)) seen)
     (cl-letf (((symbol-function 'drgnx-tty--command-lines) (lambda (&rest args) (setq seen args) nil)))
       (drgnx-tty-frames--terminfo-true-colour-p "xterm-256color"))
     (should (equal (car seen) '("infocmp" "-x" "-1" "xterm-256color")))
     (should (numberp (cadr seen)))))
 
 (ert-deftest drgnx-tty-frames/no-infocmp-leaves-the-type ()
-  (let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)) (drgnx-tty-true-colour t))
+  (let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)) (drgnx-tty-frames--miss-cache (make-hash-table :test #'equal)) (drgnx-tty-true-colour t))
     (cl-letf (((symbol-function 'drgnx-tty--command-lines) (lambda (&rest _) nil)))
       (should (equal (drgnx-tty-frames--true-colour-type "xterm-256color" '("COLORTERM=truecolor")) "xterm-256color")))))
 

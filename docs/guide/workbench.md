@@ -405,7 +405,8 @@ saved and nothing is moved.
 
 ### Several windows
 
-Every frame (OS window) is its own workbench. The first one is the **main** window; windows opened later are
+Every frame (OS window) is its own workbench. The first one is the **main** window (when a terminal window held that
+role and every graphical window has closed, the next graphical window takes it back); windows opened later are
 **editor-only** (no sidebar until you toggle one there). Move Editor into New Window, Open Editor in New Window
 (``C-k o`` · palette · `SPC w o`; the file shows in both) and Move Editor Group into New Window (its tabs too) are in
 the palette (Vim `SPC w n` / `SPC w g`). Each window has its **own buffers** — the tabs of its groups; the main window

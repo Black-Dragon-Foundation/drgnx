@@ -184,6 +184,22 @@ only notes the frame in `drgnx-frames-test--synced' (the frames are symbols)."
                 (should (eq (gethash 'kx-gui params) 'main)))
             (drgnx-frames-mode -1)))))))
 
+(ert-deftest drgnx-frames/a-later-graphical-window-takes-main-from-a-terminal-one ()
+  ;; every graphical window is a frame-added event: when all graphical windows closed and a terminal window took
+  ;; main, the next graphical one becomes main again (M12b-F-3), not only the daemon's first
+  (let ((params (make-hash-table)))
+    (puthash 'kx-tty 'main params)
+    (cl-letf (((symbol-function 'frame-parameter) (lambda (f p) (and (eq p 'drgnx-frame-role) (gethash f params))))
+              ((symbol-function 'set-frame-parameter) (lambda (f p v) (when (eq p 'drgnx-frame-role) (puthash f v params)))))
+      (drgnx-frames-test--fake (list 'kx-gui 'kx-tty)
+        (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional f) (eq f 'kx-gui))))
+          (drgnx-frames--made 'kx-gui)
+          (should (eq (gethash 'kx-gui params) 'main))
+          (should-not (gethash 'kx-tty params))
+          ;; a graphical main window stays main when another graphical window opens
+          (drgnx-frames--made 'kx-gui)
+          (should (eq (gethash 'kx-gui params) 'main)))))))
+
 (ert-deftest drgnx-frames/an-editor-frame-is-never-main ()
   ;; an EDITOR frame (`emacsclient -t FILE', role `editor') is kept for one file: the next window is main
   (let ((params (make-hash-table)))

@@ -649,16 +649,28 @@ variant of its TERM, when that terminfo exists on the machine running the daemon
 (defvar drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)
   "Terminal type → whether its terminfo has true colour as Emacs reads it, from infocmp's answer.  Bounded by its
 keys, never evicted: the TERM types clients used and their `-direct' variants (a handful).  Only answers are kept:
-an infocmp that printed nothing (missing, timed out, an unknown type) is asked again at the next frame.")
+an infocmp that printed nothing (missing, timed out, an unknown type) is remembered only for
+`drgnx-tty-frames--miss-ttl' seconds (`drgnx-tty-frames--miss-cache'), so a hanging infocmp is not run, up to
+`drgnx-tty-frames--infocmp-timeout' seconds, at every new frame.")
+
+(defconst drgnx-tty-frames--miss-ttl 60 "Seconds an infocmp that printed nothing is not asked again.")
+
+(defvar drgnx-tty-frames--miss-cache (make-hash-table :test #'equal)
+  "Terminal type → `float-time' of its last infocmp that printed nothing.  Bounded like
+`drgnx-tty-frames--direct-cache' (its keys).")
 
 (defun drgnx-tty-frames--terminfo-true-colour-p (type)
   "Whether the terminfo of terminal type TYPE (on this machine) has true colour as Emacs's term.c reads it: the
 `RGB' flag, or `setf24' together with `setb24'.  Asked of `infocmp' (bounded: `drgnx-tty--command-lines'); its
-answer is kept per type.  Nil when there is no such terminfo or no infocmp, which is not kept."
-  (let ((hit (gethash type drgnx-tty-frames--direct-cache 'unknown)))
+answer is kept per type.  Nil when there is no such terminfo or no infocmp, which is asked again only after
+`drgnx-tty-frames--miss-ttl' seconds."
+  (let ((hit (gethash type drgnx-tty-frames--direct-cache 'unknown))
+        (missed (gethash type drgnx-tty-frames--miss-cache)))
     (if (not (eq hit 'unknown)) hit
       (when-let* (((and (stringp type) (not (string-empty-p type))))
-                  (lines (drgnx-tty--command-lines (list "infocmp" "-x" "-1" type) drgnx-tty-frames--infocmp-timeout)))
+                  ((not (and missed (< (- (float-time) missed) drgnx-tty-frames--miss-ttl))))
+                  (lines (or (drgnx-tty--command-lines (list "infocmp" "-x" "-1" type) drgnx-tty-frames--infocmp-timeout)
+                             (progn (puthash type (float-time) drgnx-tty-frames--miss-cache) nil))))
         (puthash type
                  (let ((has (lambda (re) (seq-some (lambda (l) (string-match-p re l)) lines))))
                    (and (or (funcall has "\\`[ \t]+RGB,")
