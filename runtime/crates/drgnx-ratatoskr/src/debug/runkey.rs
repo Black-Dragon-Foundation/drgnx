@@ -43,6 +43,15 @@ impl Unavailable {
             Unavailable::Missing(w) | Unavailable::Failed(w) => w.clone(),
         }
     }
+
+    /// The few words the status bar says (`why` is the whole reason, a keyring's own error among it).
+    pub fn short(&self) -> &'static str {
+        match self {
+            Unavailable::Locked => "keyring locked",
+            Unavailable::Missing(_) => "no keyring",
+            Unavailable::Failed(_) => "keyring error",
+        }
+    }
 }
 
 /// Where the key lives. `key` never prompts; CREATE makes the key when there is none, in an unlocked keyring only.

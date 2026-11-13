@@ -183,6 +183,8 @@ async fn a_locked_keyring_leaves_recording_off_and_says_why() {
         off[0]["why"].as_str().unwrap().contains("locked"),
         "{off:?}"
     );
+    // the status bar's few words; the whole reason stays in `why`
+    assert_eq!(off[0]["short"], "keyring locked", "{off:?}");
     assert_eq!(
         key.state.lock().unwrap().made,
         0,
@@ -204,6 +206,7 @@ async fn no_keyring_leaves_recording_off_and_says_why() {
         off[0]["why"].as_str().unwrap().contains("no keyring"),
         "{off:?}"
     );
+    assert_eq!(off[0]["short"], "no keyring", "{off:?}");
 }
 
 #[tokio::test(start_paused = true)]

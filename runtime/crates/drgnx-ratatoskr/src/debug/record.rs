@@ -476,7 +476,7 @@ impl Records {
                 tracing::info!(target: "drgnx::debug", "session {session} not recorded: {why}");
                 self.sink.broadcast(
                     "debug-recording-off",
-                    json!({"session": session, "root": root, "why": why}),
+                    json!({"session": session, "root": root, "why": why, "short": u.short()}),
                     None,
                 );
                 return id;

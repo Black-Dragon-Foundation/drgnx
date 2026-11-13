@@ -57,6 +57,8 @@
   "The runs `debug-run' told of, newest first: plists (:run :n :root :state …); at most 16.")
 (defvar drgnx-debug-timeline--off-said nil
   "Why the hub last said a session was not recorded (`debug-recording-off'): the same reason is said once.")
+(defvar drgnx-debug-timeline--unrecorded nil
+  "Alist SESSION → the whole reason it was not recorded (the status segment's tooltip); at most 16, newest first.")
 (defvar drgnx-debug-timeline--probes (make-hash-table :test 'equal)
   "ROOT → its probes (plists :id :path :line :expr :enabled), as `debug/probe/op' last said.")
 (defvar drgnx-debug-timeline--values (make-hash-table :test 'equal)
@@ -518,15 +520,22 @@ the editor does not know is dropped, never interned."
 
 ;;;; The hub's events
 
+(defun drgnx-debug-timeline-unrecorded (session)
+  "Why SESSION was not recorded (the hub's whole reason), or nil when it was."
+  (cdr (assoc session drgnx-debug-timeline--unrecorded)))
+
 (defun drgnx-debug-timeline--event (event data)
   "`drgnx-hub-event-functions': a run started, stopped or ended (`debug-run'); probe hits came (`debug-probe-hits');
 a session was not recorded (`debug-recording-off': the keyring is locked or absent)."
   (pcase event
     ("debug-recording-off"
-     (let ((why (plist-get data :why)))
-       (unless (equal why drgnx-debug-timeline--off-said)
-         (setq drgnx-debug-timeline--off-said why)
-         (message "Debug: this session is not recorded: %s" why))))
+     (let ((why (plist-get data :why)) (short (or (plist-get data :short) "no key")))
+       (setq drgnx-debug-timeline--unrecorded
+             (seq-take (cons (cons (plist-get data :session) why) drgnx-debug-timeline--unrecorded) 16))
+       ;; a few words: the whole reason (a keyring's raw error) is the status segment's tooltip
+       (unless (equal short drgnx-debug-timeline--off-said)
+         (setq drgnx-debug-timeline--off-said short)
+         (message "Debug: not recorded: %s" short))))
     ("debug-run"
      (let ((run (plist-get data :run)))
        (setq drgnx-debug-timeline--runs
@@ -588,6 +597,7 @@ a session was not recorded (`debug-recording-off': the keyring is locked or abse
     (clrhash drgnx-debug-timeline--values)
     (setq drgnx-debug-timeline--runs nil drgnx-debug-timeline--run nil drgnx-debug-timeline--stops nil
           drgnx-debug-timeline--current nil drgnx-debug-timeline--root-shown nil drgnx-debug-timeline--off-said nil
+          drgnx-debug-timeline--unrecorded nil
           drgnx-debug-timeline--meta nil)))
 
 (defconst drgnx-debug-timeline-commands

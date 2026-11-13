@@ -168,6 +168,11 @@
                    "Python: plan the week · paused on breakpoint"))
     (should (eq (get-text-property 3 'face (drgnx-debug-toolbar--segment)) 'drgnx-status-warn))
     (should (drgnx-debug-toolbar-paused-p))
+    ;; not recorded: a quiet word, the hub's whole reason in its tooltip
+    (let ((drgnx-debug-timeline--unrecorded '(("a" . "org.freedesktop.DBus.Error.ServiceUnknown: not activatable"))))
+      (let ((seg (drgnx-debug-toolbar--segment)))
+        (should (string-suffix-p " · not recorded" (substring-no-properties seg)))
+        (should (string-match-p "ServiceUnknown" (get-text-property (1- (length seg)) 'help-echo seg)))))
     (drgnx-debug--event "debug-state" (list :sessions (vector '(:id "a" :name "app" :root "/p" :state "running"))))
     (should (equal (substring-no-properties (drgnx-debug-toolbar--segment) 2) "app · running"))
     (should-not (drgnx-debug-toolbar-paused-p))

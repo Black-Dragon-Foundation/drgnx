@@ -860,7 +860,8 @@ Every session the hub starts is recorded (`debug/record.rs`, `Records`; the hub'
   random nonce in front and the piece's name as associated data. A rewrite under the cap keeps the salt (new nonces).
   `Records::unlock` reads the key at the hub's start and before each `debug/run*` call, never making one;
   `begin` makes it on the first recording, in an unlocked keyring only. No key: `begin` records nothing and
-  broadcasts `debug-recording-off {session, root, why}` (the timeline says it once per reason); reads answer "cannot
+  broadcasts `debug-recording-off {session, root, why, short}` (the timeline says `short` once per reason, "Debug:
+  not recorded: no keyring", and keeps `why`, the keyring's whole answer, for the status segment's tooltip); reads answer "cannot
   be read until the keyring unlocks"; a file under another key (the keyring lost its key) answers "cannot be read";
   `prune` needs no key. The key, derived keys, salts and nonces are never logged; key bytes are `Zeroizing`.
   - **Linux**: the Secret Service's calls are made one by one over zbus 6 (tokio, `default-features = false`,
