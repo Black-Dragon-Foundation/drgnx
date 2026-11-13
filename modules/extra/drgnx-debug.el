@@ -365,7 +365,8 @@ console's tab shows without taking the focus."
                               ;; own map.  The panel is the workbench's: without it (a bare Emacs) there is no tab
                               ;; to define, as for Review's
                               (when (fboundp 'drgnx-wb-define-tab)
-                                (drgnx-wb-define-tab 'panel 'debug-console :title "Debug Console"))
+                                (drgnx-wb-define-tab 'panel 'debug-console :title "Debug Console"
+                                                     :actions #'drgnx-debug-console-tab-actions))
                               (let ((in-console (lambda () (derived-mode-p 'drgnx-debug-console-mode))))
                                 (pcase-dolist (`(,id ,title ,fn ,doc) drgnx-debug-console-commands)
                                   (if (memq id '(debug-console debug-console-clear))

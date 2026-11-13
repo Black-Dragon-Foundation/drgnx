@@ -649,8 +649,9 @@ The panel's **Debug Console** tab. The hub makes the lines; the editor only inse
   `important` error, `console` dim, a logpoint's in its own face with its source after it), a count as ` ×N`, keeps
   the last `drgnx-debug-console-max-lines` (10,000) and scrolls the windows that showed the end. The input at the
   bottom: RET evaluates it in the selected frame of the console's session (`debug/evaluate`, context `repl`; the
-  header's chip picks the session), S-RET adds a line, history on the profile's keys (Up / Down in VS Code keys,
-  M-p / M-n in Emacs keys, C-p / C-n in Vim keys; in the output they move by line). A result or an output with
+  session chip on the panel's tab row picks the session, through the toolbar's picker; the bin beside it clears),
+  S-RET adds a line, history on the profile's keys (Up / Down in VS Code keys, M-p / M-n in Emacs keys, C-p / C-n
+  in Vim keys; in the output they move by line). A result or an output with
   children shows a chevron: RET or TAB opens it in place (`debug/children {session, reference, epoch}` →
   `{variables: [{name, value, type?, reference?}]}`; `debug/evaluate`'s answer names its stop as `epoch`); after a
   resume the stop is over, the hub says so, and the value turns stale (dim, no longer opens).
