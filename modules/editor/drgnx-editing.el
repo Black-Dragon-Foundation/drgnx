@@ -248,9 +248,13 @@ untouched.  Only runs as a typed command, and the wait ends at the delay."
         (if-let* ((event (condition-case nil        ; a keyboard macro that ends here has no next key
                              (with-timeout (drgnx-editing-prefix-delay nil) (read-key))
                            (args-out-of-range nil))))
-            (if (eq event ?\C-g)
-                (progn (deactivate-mark) (keyboard-quit))    ; C-x C-g would be undefined
-              (drgnx-editing--hand-back (append (listify-key-sequence keys) (list event))))
+            (cond ((eq event ?\C-g)
+                   (deactivate-mark) (keyboard-quit))    ; C-x C-g would be undefined
+                  ((and (consp event) (symbolp (car event)) (string-match-p "mouse" (symbol-name (car event))))
+                   ;; a click is no key of the prefix: the key acts, the click is its own event
+                   (funcall action)
+                   (setq unread-command-events (cons event unread-command-events)))
+                  (t (drgnx-editing--hand-back (append (listify-key-sequence keys) (list event)))))
           (funcall action))
       (funcall action))))
 
