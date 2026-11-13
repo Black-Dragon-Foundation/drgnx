@@ -345,6 +345,14 @@ one project, and only with a project.  BUF is the page."
        ('module (drgnx-extensions-details--button
                  (if (eq (plist-get row :state) 'off) "Turn on" "Turn off")
                  (lambda () (drgnx-extensions-details-toggle-module (drgnx-extensions-list--name id)))))
+       ('pack (let ((name (drgnx-extensions-list--name id)))
+                (if (eq (plist-get row :state) 'installed)
+                    (drgnx-extensions-details--button
+                     "Remove" (lambda () (drgnx-extensions-jobs-run 'pack-remove name))
+                     "Take this language pack out; its grammar and queries are removed")
+                  (drgnx-extensions-details--button
+                   "Install" (lambda () (drgnx-extensions-jobs-run 'pack-install name))
+                   "Add this language pack: its grammar, queries and modes"))))
        ('package (concat
                   (when (memq (plist-get row :state) '(available missing))
                     (drgnx-extensions-details--button "Install" (lambda () (drgnx-extensions-details-install-version* id nil))))

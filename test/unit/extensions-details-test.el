@@ -162,3 +162,26 @@ the clone was never fetched."
       (delete-directory dir t))))
 
 ;;; extensions-details-test.el ends here
+
+(ert-deftest drgnx-extensions/a-pack-page-offers-install-or-remove-as-pack-jobs ()
+  ;; a language pack's page: Install while available, Remove once installed; each runs `drgnx packs sync' with the pack
+  (load (expand-file-name "modules/tools/drgnx-extensions-jobs" drgnx-dir) nil t)
+  (should (equal (cdr (drgnx-extensions-jobs--command 'pack-install '("kotlin")))
+                 '(("packs" "sync" "--add" "kotlin") ("pack:kotlin") nil)))
+  (should (equal (cdr (drgnx-extensions-jobs--command 'pack-remove '("kotlin")))
+                 '(("packs" "sync" "--remove" "kotlin") ("pack:kotlin") nil)))
+  (let (runs (state 'available))
+    (with-temp-buffer
+      (setq-local drgnx-extensions-details--id "pack:kotlin")
+      (cl-letf (((symbol-function 'drgnx-extensions-details--row) (lambda () (list :kind 'pack :state state)))
+                ((symbol-function 'drgnx-extensions-jobs-run) (lambda (&rest a) (push a runs))))
+        (let* ((text (drgnx-extensions-details--render-actions))
+               (cmd (lookup-key (get-text-property (string-search "[Install]" text) 'keymap text) (kbd "RET"))))
+          (should-not (string-search "[Remove]" text))
+          (let ((this-command cmd)) (call-interactively cmd)))
+        (setq state 'installed)
+        (let* ((text (drgnx-extensions-details--render-actions))
+               (cmd (lookup-key (get-text-property (string-search "[Remove]" text) 'keymap text) (kbd "RET"))))
+          (should-not (string-search "[Install]" text))
+          (let ((this-command cmd)) (call-interactively cmd)))))
+    (should (equal (reverse runs) '((pack-install "kotlin") (pack-remove "kotlin"))))))
