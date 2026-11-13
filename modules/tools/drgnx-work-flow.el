@@ -118,7 +118,8 @@ rows or its pass count; a waiver says its reason."
 
 (define-derived-mode drgnx-work-flow-mode special-mode "Work flow"
   "The Work space's Flow lens: a plan run's tasks by gate, its merge batch and its rule pack."
-  (setq-local truncate-lines t cursor-type nil drgnx-chrome-own-tab-line t
+  ;; no right fringe: nothing is drawn in it, and the selected row's colour reaches the card's edge
+  (setq-local truncate-lines t cursor-type nil drgnx-chrome-own-tab-line t right-fringe-width 0
               tab-line-format '("" drgnx-work-map--lens)))
 
 (defun drgnx-work-flow--twin (class)

@@ -1,4 +1,4 @@
-;;; drgnx-layouts.el --- Module tools/layouts: Agent, Editor, Zen, Browser and your own; one key cycles -*- lexical-binding: t -*-
+;;; drgnx-layouts.el --- Module tools/layouts: Agent, Editor, Zen, Browser, Work and your own; one key cycles -*- lexical-binding: t -*-
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -8,7 +8,9 @@
 ;; main workday (Zed's arrangement): the Explorer, the editor beside the current agent's chat, the
 ;; Agents list narrow on the right, the panel when you open it.  Editor: the Explorer, the editor
 ;; groups, the panel as it was.  Zen: one window, its text centred.  Browser: the editor and a web
-;; page beside it (the page comes with the browser pane; until then the editor alone).
+;; page beside it (the page comes with the browser pane; until then the editor alone).  Work: the Work
+;; space's card filling the window, its detail tile on the right and its Rules tile below (the card and the
+;; tiles come with tools/work-space, which enters Work when a Work lens is shown and leaves it when none is).
 ;; Leaving a layout remembers its arrangement for this frame; coming back restores it, not a fresh
 ;; one.  A layout only moves, shows and hides: it never kills a buffer or a process, and touches
 ;; only the selected frame.  Save Layout As… keeps one of your own in layouts.eld.
@@ -52,10 +54,16 @@
   '((agent :left explorer :right agents :panel nil :editor editor+agent)
     (editor :left explorer :right nil :panel keep :editor one)
     (zen :left nil :right nil :panel nil :editor zen)
-    (browser :left nil :right nil :panel nil :editor editor+browser))
+    (browser :left nil :right nil :panel nil :editor editor+browser)
+    (work :left nil :right work-detail :panel work-rules :editor work))
   "The built-in layouts, in the order Next Layout cycles them: NAME → (:left VIEW :right TAB :panel TAB
 :editor SHAPE).  An area's value nil hides it and `keep' leaves it as it was; SHAPE is a key of
 `drgnx-layouts-shapes'.  Your own layouts (layouts.eld) follow them.")
+
+(defvar drgnx-layouts-returning '(zen work)
+  "The layouts that keep the arrangement they were entered from (frame parameter `drgnx-layouts-zen-return'):
+leaving one for a layout not used yet builds that layout from it, and `drgnx-layouts-back' with no layout picked
+before puts it back as it was.")
 
 (defvar drgnx-layouts-shapes
   '((one . drgnx-layouts--one) (editor+agent . drgnx-layouts--editor+agent) (zen . drgnx-layouts--zen))
@@ -391,18 +399,20 @@ without asking or visiting anything unsafe, marks and fills its pane, and return
   "Arrange the selected frame as layout NAME.
 The arrangement being left is remembered for its layout (frame parameter `drgnx-layouts-state'); NAME's
 remembered arrangement comes back, or NAME's definition builds one.  No buffer or process is killed.
-Entering Zen also keeps the arrangement it came from (frame parameter `drgnx-layouts-zen-return'):
-leaving Zen for a layout not used yet builds that layout from it, not from Zen's one window, and
-NAME nil (leaving Zen when no layout was picked before) puts it back as it was."
+Entering Zen (or another of `drgnx-layouts-returning') also keeps the arrangement it came from (frame
+parameter `drgnx-layouts-zen-return'): leaving it for a layout not used yet builds that layout from it, not
+from Zen's one window, and NAME nil (leaving it when no layout was picked before) puts it back as it was."
   (let* ((from (drgnx-layouts-current))
-         (back (and (eq from 'zen) (not (eq name 'zen)) (frame-parameter nil 'drgnx-layouts-zen-return)))
+         (back (and (memq from drgnx-layouts-returning) (not (eq name from))
+                    (frame-parameter nil 'drgnx-layouts-zen-return)))
          (def (cond (name (or (alist-get name (drgnx-layouts--all)) (user-error "No layout named %s" name)))
                     (back nil)
                     (t (user-error "No layout named")))))
     (drgnx-layouts--close-bars)
     (let ((snap (drgnx-layouts--snapshot)))
       (when from (drgnx-layouts--remember from snap))
-      (when (and (eq name 'zen) (not (eq from 'zen))) (set-frame-parameter nil 'drgnx-layouts-zen-return snap))
+      (when (and (memq name drgnx-layouts-returning) (not (memq from drgnx-layouts-returning)))
+        (set-frame-parameter nil 'drgnx-layouts-zen-return snap))
       (let ((memory (if name (alist-get name (frame-parameter nil 'drgnx-layouts-state)) back)))
         (drgnx-layouts--hide-all)
         (when (and memory (not (drgnx-layouts--put-main memory)))   ; damaged: build it as if never left
@@ -415,7 +425,8 @@ NAME nil (leaving Zen when no layout was picked before) puts it back as it was."
           (drgnx-layouts--show-left (plist-get target :left))
           (drgnx-layouts--show-area 'panel (plist-get target :panel))
           (drgnx-layouts--show-area 'right (plist-get target :right)))))
-    (when (and (eq from 'zen) (not (eq name 'zen))) (set-frame-parameter nil 'drgnx-layouts-zen-return nil))
+    (when (and (memq from drgnx-layouts-returning) (not (memq name drgnx-layouts-returning)))
+      (set-frame-parameter nil 'drgnx-layouts-zen-return nil))
     (unless (or (null from) (eq from name)) (set-frame-parameter nil 'drgnx-layouts-previous from))
     (set-frame-parameter nil 'drgnx-layouts-current name)
     (drgnx-layouts--zen-margins from name)
@@ -440,12 +451,15 @@ NAME nil (leaving Zen when no layout was picked before) puts it back as it was."
   "Layout Zen: only the file, its text centred; again to go back to the layout before (or, when none
 was picked yet, to the arrangement you had)."
   (interactive)
-  (if (eq (drgnx-layouts-current) 'zen)
-      (let ((back (frame-parameter nil 'drgnx-layouts-previous)))
-        (drgnx-layouts-apply (cond ((and back (not (eq back 'zen)) (memq back (drgnx-layouts-names))) back)
-                                   ((frame-parameter nil 'drgnx-layouts-zen-return) nil)
-                                   (t 'editor))))
-    (drgnx-layouts-apply 'zen)))
+  (if (eq (drgnx-layouts-current) 'zen) (drgnx-layouts-back) (drgnx-layouts-apply 'zen)))
+
+(defun drgnx-layouts-back ()
+  "Leave the current layout for the one before it; when none was picked before, the arrangement it was entered
+from (one of `drgnx-layouts-returning'), else Editor."
+  (let ((back (frame-parameter nil 'drgnx-layouts-previous)))
+    (drgnx-layouts-apply (cond ((and back (not (eq back (drgnx-layouts-current))) (memq back (drgnx-layouts-names))) back)
+                               ((frame-parameter nil 'drgnx-layouts-zen-return) nil)
+                               (t 'editor)))))
 
 (defun drgnx-layouts-browser ()
   "Layout Browser: the editor and a web page beside it (the page pane comes with the browser module)."
@@ -453,7 +467,7 @@ was picked yet, to the arrangement you had)."
   (drgnx-layouts-apply 'browser))
 
 (defun drgnx-layouts-next ()
-  "The next layout: Agent, Editor, Zen, Browser, yours, and around."
+  "The next layout: Agent, Editor, Zen, Browser, Work, yours, and around."
   (interactive)
   (let* ((names (drgnx-layouts-names))
          (name (or (cadr (memq (drgnx-layouts-current) names)) (car names))))
@@ -503,7 +517,7 @@ and `drgnx-config-refused' says where the mistake is."
                    (layout-editor "Layout Editor" drgnx-layouts-editor "The Explorer, the editor groups and the panel; the agent docks hidden")
                    (layout-zen "Layout Zen" drgnx-layouts-zen "Only the file, centred; again to go back")
                    (layout-browser "Layout Browser" drgnx-layouts-browser "The editor and a web page beside it")
-                   (layout-next "Next Layout" drgnx-layouts-next "Agent, Editor, Zen, Browser, yours, and around")
+                   (layout-next "Next Layout" drgnx-layouts-next "Agent, Editor, Zen, Browser, Work, yours, and around")
                    (layout-save "Save Layout As…" drgnx-layouts-save "This arrangement as a layout of your own")
                    (layout-pick "Layout…" drgnx-layouts-pick "Switch to a layout by name")))
     (drgnx-command-define id :category "View" :title title :command fn :doc doc :scope 'window)))
@@ -590,7 +604,7 @@ current layout, the remembered arrangements, the previous layout and Zen's way b
   (remove-hook 'window-size-change-functions #'drgnx-layouts--zen-resize))
 
 (drgnx-module-define 'tools/layouts
-                     :doc "Layouts: Agent, Editor, Zen, Browser and your own; one key cycles."
+                     :doc "Layouts: Agent, Editor, Zen, Browser, Work and your own; one key cycles."
                      :stage 'idle :requires '(core/workbench)
                      :teardown #'drgnx-layouts--teardown
                      :setup

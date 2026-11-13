@@ -84,6 +84,12 @@
 (declare-function drgnx-work-huddle-overlap "drgnx-work-detail")
 (declare-function drgnx-pane-define-kind "drgnx-panes")
 (declare-function drgnx-pane-show "drgnx-panes")
+(declare-function drgnx-layouts-apply "drgnx-layouts" (name))
+(declare-function drgnx-layouts-back "drgnx-layouts")
+(declare-function drgnx-layouts-current "drgnx-layouts" (&optional frame))
+(declare-function drgnx-layouts-define-shape "drgnx-layouts" (shape fn))
+(declare-function drgnx-signal-editor-window-p "drgnx-signal" (window))
+(declare-function drgnx-wb-editor-window "drgnx-wb")
 
 (declare-function drgnx-hub-ensure "drgnx-hub-client")
 (declare-function drgnx-wb-place "drgnx-rules")
@@ -319,9 +325,48 @@ workbench state store's window events (and by hand in tests); only calls the hub
         (unless (eq shown (drgnx-work-client-shown-p id))
           (drgnx-work-client-set id :shown (if shown t :false)))))))
 
-(defun drgnx-work-space--windows-changed (&optional _data)
-  "The state store's `windows-changed': maps that were shown or hidden tell the hub."
-  (drgnx-work-space-sync-shown))
+(defun drgnx-work-space--windows-changed (&optional data)
+  "The state store's `windows-changed': maps that were shown or hidden tell the hub; DATA's frame enters or leaves
+layout Work (`drgnx-work-space--follow-layout')."
+  (drgnx-work-space-sync-shown)
+  (drgnx-work-space--follow-layout (plist-get data :frame)))
+
+;;;; Layout Work: the Work space as its own card, its tiles beside and below it
+
+(defconst drgnx-work-space--lens-modes
+  '(drgnx-work-map-mode drgnx-work-board-mode drgnx-work-timeline-mode drgnx-work-flow-mode)
+  "The Work lenses' major modes: a buffer in one, in an editor window, is the Work space on screen.")
+
+(defun drgnx-work-space--lens-window (&optional frame)
+  "FRAME's (default: the selected one's) editor window that shows a Work lens, or nil."
+  (seq-find (lambda (w) (and (drgnx-signal-editor-window-p w)
+                             (memq (buffer-local-value 'major-mode (window-buffer w)) drgnx-work-space--lens-modes)))
+            (window-list frame 'nomini)))
+
+(defun drgnx-work-space--layout-shape (editor)
+  "Layout Work's editor shape: the window that shows a Work lens (else EDITOR, given the Work space's map) alone."
+  (let ((w (or (drgnx-work-space--lens-window) editor)))
+    (delete-other-windows w)
+    (unless (memq (buffer-local-value 'major-mode (window-buffer w)) drgnx-work-space--lens-modes)
+      (set-window-buffer w (drgnx-work-space-open nil t)))
+    (select-window w)))
+
+(defun drgnx-work-space--follow-layout (frame)
+  "With module tools/layouts on, FRAME enters layout Work when it starts showing a Work lens, and leaves it for where
+it came from (`drgnx-layouts-back') once it shows none.  Only a change of whether a lens is shown moves the layout, so
+another layout picked while a lens is shown stays."
+  (when (and (frame-live-p frame) (drgnx-module-running-p 'tools/layouts))
+    (let ((lens (drgnx-work-space--lens-window frame)))
+      (unless (eq (and lens t) (frame-parameter frame 'drgnx-work-space-shown))
+        (set-frame-parameter frame 'drgnx-work-space-shown (and lens t))
+        (with-selected-frame frame
+          (cond ((and lens (not (eq (drgnx-layouts-current) 'work)))
+                 (let ((buffer (window-buffer lens)))
+                   (drgnx-layouts-apply 'work)
+                   ;; the arrangement Work was left in may show another lens: the one just shown stays in front
+                   (unless (get-buffer-window buffer) (set-window-buffer (drgnx-wb-editor-window) buffer))))
+                ((and (not lens) (eq (drgnx-layouts-current) 'work))
+                 (drgnx-layouts-back))))))))
 
 (defun drgnx-work-space--show-status (view-id status)
   "`drgnx-work-client-status-functions': a view's status changed; the map says reconnecting in its mode line."
@@ -443,6 +488,9 @@ windows; the commands."
   (when (fboundp 'drgnx-pane-define-kind)
     (drgnx-pane-define-kind 'work-detail :title " WORK DETAIL" :home 'right :buffer #'drgnx-work-space--detail-buffer)
     (drgnx-pane-define-kind 'work-rules :title " RULES" :home 'bottom :buffer #'drgnx-work-space--rules-buffer))
+  ;; layout Work's editor shape: the lens alone (tools/layouts follows a shown lens: `drgnx-work-space--follow-layout')
+  (eval-after-load 'drgnx-layouts
+    (drgnx-modules-with-owner (drgnx-layouts-define-shape 'work #'drgnx-work-space--layout-shape)))
   (pcase-dolist (`(,id ,title ,fn ,doc)
                  '((work-left "Select the Previous Item" drgnx-work-map-left "Along the layer, to the left")
                    (work-right "Select the Next Item" drgnx-work-map-right "Along the layer, to the right")
@@ -564,7 +612,8 @@ windows lose the layout motion's parameters and the map buffers go."
   (drgnx-work-code-teardown)
   (dolist (b (buffer-list))
     (when (eq (buffer-local-value 'major-mode b) 'drgnx-work-files-mode) (kill-buffer b)))
-  (when-let* ((b (get-buffer "*drgnx work: none*"))) (kill-buffer b)))
+  (when-let* ((b (get-buffer "*drgnx work: none*"))) (kill-buffer b))
+  (dolist (f (frame-list)) (set-frame-parameter f 'drgnx-work-space-shown nil)))
 
 (drgnx-module-define 'tools/work-space
                      :doc "The Work space: one map of every live piece of agent work, in six layers, with the edges between them."
