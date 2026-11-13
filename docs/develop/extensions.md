@@ -223,7 +223,9 @@ User guide: [In one project](../guide/extensions.md#in-one-project).
 - **The hub:** `extensions::plugins::rows` turns the rows of the hub's last `plugins/list` look (`Plugins::last_rows`,
   memory only: no folder is read by a search) into rows `plugin:NAME`; `Cache::set_plugins` rebuilds the index only
   when they differ. State: the hub's `unapproved`, `changed`, `disabled`, `broken`; an approved plugin is `on` when
-  `drgnx-agents-plugins` (the global value) names it, else `off`. `signed` is `hash-approved` for those two.
+  `drgnx-agents-plugins` (the global value) names it, else `off`. `signed` is `hash-approved` for those two. The list's
+  Plugins section shows them by that id: the row's key and the id on its span are `plugin:NAME`
+  (`extensions/the-list-names-plugins-by-id`).
 - **The editor** (`modules/tools/drgnx-extensions-plugins.el`): the details body of a `plugin:` id is
   `drgnx-plugins-page-insert`'s text with its buttons, and the hash it displayed is kept in the page buffer for
   `extensions-plugin-approve`. On and Off write `drgnx-agents-plugins` through `drgnx-settings-editors-commit` (tab
