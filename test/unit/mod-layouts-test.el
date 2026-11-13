@@ -513,3 +513,11 @@ problems.  The shape and filler registries are restored afterwards."
     ;; the Detail island is the mockup's 340 px, so the map has the width for four agents in a row
     (should (equal '(logical 340) (plist-get (plist-get def :px) :right)))
     (should (eql (drgnx-px 340) (plist-get (plist-get (drgnx-layouts--target def nil) :right) :px)))))
+
+(ert-deftest drgnx-layouts/a-size-in-logical-pixels-is-scaled-to-the-frame ()
+  "A built-in layout may give an area's size as `(logical N)': it is N logical pixels, scaled to the frame
+\(`drgnx-px'); a plain number stays the device pixels it is."
+  (let* ((def '(:left nil :right some-tab :panel nil :px (:right (logical 100) :left 120)))
+         (target (drgnx-layouts--target def nil)))
+    (should (eql (drgnx-px 100) (plist-get (plist-get target :right) :px)))
+    (should (eql 120 (plist-get (plist-get target :left) :px)))))
