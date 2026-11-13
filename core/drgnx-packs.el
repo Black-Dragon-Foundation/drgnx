@@ -60,12 +60,11 @@ signals `drgnx-packs-error' and nothing of the packs changes.  Tests replace it.
 ;;;; Manifests
 
 (defun drgnx-packs-read-manifest (file)
-  "The manifest in FILE, read as data (nothing is evaluated): a plist with `:pack' and `:schema' 1."
-  (let ((data (with-temp-buffer
-                (insert-file-contents file)
-                (let ((read-circle nil) (read-eval nil))
-                  (condition-case err (read (current-buffer))
-                    (error (drgnx-packs--error "%s: %s" file (error-message-string err))))))))
+  "The manifest in FILE, read as data by `drgnx-file-read' (nothing is evaluated, no reader macro): a plist with
+`:pack' and `:schema' 1."
+  (let* ((r (drgnx-file-read file)) (data (plist-get r :data)))
+    (unless (eq (plist-get r :status) 'ok)
+      (drgnx-packs--error "%s: %s" file (or (plist-get (plist-get r :problem) :text) "not a manifest")))
     (unless (and (consp data) (keywordp (car data)) (stringp (plist-get data :pack)))
       (drgnx-packs--error "%s is not a pack manifest" file))
     (unless (eql (plist-get data :schema) 1)
@@ -226,7 +225,7 @@ Extensions card lists them)."
           (drgnx-file-write-text plan-file (prin1-to-string plan))
           (call-process bin nil nil nil "packs" "sync" "--plan" plan-file "--out" out)
           (if (file-exists-p out)
-              (with-temp-buffer (insert-file-contents out) (let ((read-eval nil)) (read (current-buffer))))
+              (or (plist-get (drgnx-file-read out) :data) (list :ok nil :error "the pack job's answer does not read"))
             (list :ok nil :error "the pack job gave no answer")))
       (delete-directory dir t))))
 

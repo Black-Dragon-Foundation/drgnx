@@ -89,7 +89,6 @@
  "test/unit/mod-blame-test.el"
  "test/unit/mod-clipboard-test.el"
  "test/unit/mod-diff-test.el"
- "test/unit/mod-grammars-test.el"
  "test/unit/mod-live-test.el"
  "test/unit/mod-remote-test.el"
  "test/unit/mod-replace-engine-test.el"

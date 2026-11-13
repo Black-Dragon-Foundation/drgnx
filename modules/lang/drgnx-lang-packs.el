@@ -174,5 +174,7 @@ of those languages switch to their tree-sitter modes when it is done."
                                              :command #'drgnx-lang-packs-install
                                              :doc "A language pack's tree-sitter grammar and modes (built in the background)")))
 
+(declare-function drgnx-pack-ts-forget-preds "drgnx-pack-ts-mode" ())
+
 (provide 'drgnx-lang-packs)
 ;;; drgnx-lang-packs.el ends here

@@ -16,6 +16,7 @@
 (require 'subr-x)
 (require 'prog-mode)
 (require 'drgnx-packs)
+(require 'drgnx-file)
 (require 'treesit)
 (declare-function treesit-ready-p "treesit")
 
@@ -60,7 +61,7 @@
                                                              (drgnx-packs-builtins)))))
               (entry (drgnx-pack-ts--active-entry (car p)))
               (file (plist-get (cdr entry) :translated))
-              (data (and (file-exists-p file) (with-temp-buffer (insert-file-contents file) (let ((read-eval nil)) (read (current-buffer)))))))
+              (data (and file (plist-get (drgnx-file-read file) :data))))
     (list (car p) (cdr p) data entry)))
 
 (defun drgnx-pack-ts--indent-rules (lang manifest)

@@ -1,5 +1,5 @@
 ;;; mod-lang-packs-test.el --- batch tests: the lang/packs module — active packs applied, nothing prompts, the hint once -*- lexical-binding: t -*-
-;; test-class: cond
+;; test-class: det
 (require 'ert)
 (require 'drgnx)
 (require 'drgnx-packs)
