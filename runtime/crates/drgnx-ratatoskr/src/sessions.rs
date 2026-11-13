@@ -1198,18 +1198,19 @@ impl Sessions {
         let Some(live) = live else {
             return false;
         };
-        remove_socket(&live.path);
-        if let Some(g) = &live.gateway {
-            remove_socket(g);
-        }
-        if let Some(s) = &live.search {
-            remove_socket(s);
-        }
-        if let Some(s) = &live.plugins {
-            remove_socket(s);
-        }
         self.whos.lock().expect("sessions").remove(sid);
-        remove_dir(&live.dir);
+        // its sockets and directory are removed off the hub's workers (a removal that waits on the disk holds none)
+        let socks: Vec<PathBuf> = std::iter::once(live.path.clone())
+            .chain(live.gateway.clone())
+            .chain(live.search.clone())
+            .chain(live.plugins.clone())
+            .collect();
+        let dir = live.dir.clone();
+        let _ = crate::clock::blocking(move || {
+            socks.iter().for_each(|s| remove_socket(s));
+            remove_dir(&dir);
+        })
+        .await;
         delete(&store.db, sid).await;
         tracing::info!(
             sid,
@@ -1225,14 +1226,22 @@ impl Sessions {
 
     /// Close the sessions whose owner is gone (each tick).
     pub async fn prune(&self) {
-        let gone: Vec<String> = self
+        // the owners are looked up in /proc off the hub's workers, and outside the lock
+        let rows: Vec<(String, Row)> = self
             .live
             .lock()
             .expect("sessions")
             .iter()
-            .filter(|(_, l)| !owner_alive(&l.row))
-            .map(|(sid, _)| sid.clone())
+            .map(|(sid, l)| (sid.clone(), l.row.clone()))
             .collect();
+        let gone: Vec<String> = crate::clock::blocking(move || {
+            rows.into_iter()
+                .filter(|(_, row)| !owner_alive(row))
+                .map(|(sid, _)| sid)
+                .collect()
+        })
+        .await
+        .unwrap_or_default();
         self.close_all(&gone, "its owner is gone").await;
     }
 

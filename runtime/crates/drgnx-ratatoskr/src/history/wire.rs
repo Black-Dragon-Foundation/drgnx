@@ -213,7 +213,12 @@ pub async fn register(f: &Front, _: &Caller, p: w::RegisterParams) -> Result<w::
 /// sandboxed agent touched (plain git never runs there; its steps' rescans record it).
 pub(crate) async fn watch_folder(f: &Front, root: &Path) {
     let Some(dirs) = f.dirs.get() else { return };
-    if git_dirs(root).is_none() || f.core.runs.git().is_touched(root).await.unwrap_or(true) {
+    // the folder is looked at off the hub's workers (a look that waits on the disk holds none: [`crate::disk`])
+    let r = root.to_path_buf();
+    let git = crate::clock::blocking(move || git_dirs(&r).is_some())
+        .await
+        .unwrap_or(false);
+    if !git || f.core.runs.git().is_touched(root).await.unwrap_or(true) {
         return;
     }
     let (hubs, state, r) = (f.core.history.clone(), dirs.hub.clone(), root.to_path_buf());
