@@ -160,6 +160,10 @@ SCRIPT (a list of steps, serialized to JSON), and the module set up.  `debug-hub
                                    (list :expect "scopes" :ok (list :scopes [])))))
           after))
 
+(defun debug-hub-test--session (session)
+  "SESSION's plist in the editor's last `debug-state'."
+  (seq-find (lambda (s) (equal (plist-get s :id) session)) drgnx-debug--sessions))
+
 (defun debug-hub-test--stopped (session &rest caps)
   "Wait until SESSION is stopped in the editor's `debug-state', with CAPS among its adapter's capabilities."
   (drgnx-test-wait (lambda () (when-let* ((s (seq-find (lambda (s) (equal (plist-get s :id) session))
@@ -237,5 +241,54 @@ through `debug/write-memory', then reads the page again; `debug-state' says the 
           (should (natnump ms))
           (should (equal (get-text-property (line-beginning-position) 'line-prefix)
                          (drgnx-debug-console--stamp ms))))))))
+
+(ert-deftest drgnx-debug-hub/disassembly-and-an-instruction-breakpoint ()
+  "Open Disassembly View reads around the stop's `instruction_pointer' (the adapter's `disassemble'), marks it, sets
+an instruction breakpoint from the column (`setInstructionBreakpoints'), and the step keys step one instruction
+while it has focus."
+  (debug-hub-test--with
+      (append (debug-hub-test--initialized :supportsDisassembleRequest t :supportsInstructionBreakpoints t
+                                           :supportsSteppingGranularity t)
+              (list (list :expect "configurationDone")
+                    (list :event "stopped" :body (list :reason "pause" :threadId 1 :allThreadsStopped t))
+                    (list :expect "threads" :ok (list :threads (vector (list :id 1 :name "main"))))
+                    (list :any (vector (list :expect "stackTrace"
+                                             :ok (list :stackFrames (vector (list :id 5 :name "f" :line 2 :column 1
+                                                                                  :source (list :path "/nowhere/app.c")
+                                                                                  :instructionPointerReference "0x1000"))
+                                                       :totalFrames 1))
+                                       (list :expect "scopes" :ok (list :scopes []))))
+                    (list :expect "disassemble"
+                          :args (list :memoryReference "0x1000" :instructionOffset -1 :instructionCount 4)
+                          :ok (list :instructions
+                                    (vector (list :address "0xff8" :instructionBytes "55" :instruction "push rbp")
+                                            (list :address "0x1000" :instructionBytes "89 e5" :instruction "mov ebp, esp")
+                                            (list :address "0x1004" :instruction "ret")
+                                            (list :address "0x1005" :instruction "nop"))))
+                    (list :expect "setInstructionBreakpoints"
+                          :args (list :breakpoints (vector (list :instructionReference "0x1004")))
+                          :ok (list :breakpoints (vector (list :verified t))))
+                    (list :expect "next" :args (list :threadId 1 :granularity "instruction"))
+                    (list :expect "disconnect") (list :die t)))
+    (let ((session (debug-hub-test--start proj)) (drgnx-debug-disassembly-count 4))
+      (debug-hub-test--stopped session :supportsDisassembleRequest)
+      (drgnx-test-wait (lambda () (alist-get session drgnx-debug-disassembly--frames nil nil #'equal))
+                       :what "the stop's instruction")
+      (unwind-protect
+          (save-window-excursion
+            (let ((default-directory (file-name-as-directory proj))) (drgnx-debug-open-disassembly))
+            (with-current-buffer drgnx-debug-disassembly-buffer-name
+              (drgnx-test-wait (lambda () (drgnx-debug-disassembly--line-of #x1004)) :what "the instructions")
+              (should (= (line-number-at-pos (drgnx-debug-disassembly--line-of #x1000)) 2))
+              (should (seq-find (lambda (o) (overlay-get o 'face)) drgnx-debug-disassembly--marks))
+              (goto-char (drgnx-debug-disassembly--line-of #x1004))
+              (drgnx-debug-disassembly-toggle-breakpoint)
+              (drgnx-test-wait (lambda () (= 2 (length drgnx-debug-disassembly--marks))) :what "the breakpoint's mark")
+              (should (equal (plist-get (car drgnx-debug-disassembly--bps) :instruction) "0x1004"))
+              (cl-letf (((symbol-function 'drgnx-debug--session) (lambda (&rest _) (debug-hub-test--session session))))
+                (drgnx-debug-step-over))
+              (drgnx-test-wait (lambda () (equal (plist-get (debug-hub-test--session session) :state) "running"))
+                               :what "the instruction step")))
+        (when (get-buffer drgnx-debug-disassembly-buffer-name) (kill-buffer drgnx-debug-disassembly-buffer-name))))))
 
 ;;; debug-hub-test.el ends here
