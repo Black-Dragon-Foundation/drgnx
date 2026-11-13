@@ -19,7 +19,8 @@
                ((symbol-function 'drgnx-hub-call) (lambda (method params cb &rest _) (push (list method params cb) calls))))
        (unwind-protect
            (progn (drgnx-debug--event "debug-state" (list :sessions (vector (list :id "s1" :name "Python: app" :root "/p"
-                                                                                  :state "stopped"))))
+                                                                                  :state "stopped"
+                                                                                  :caps (list :supportsCompletionsRequest t)))))
                   ,@body)
          (drgnx-debug-session-mode -1)
          (when (get-buffer drgnx-debug-console-buffer-name)
@@ -139,6 +140,35 @@ collapsed one (`:collapsed') starts folded; TAB or RET on it opens or closes it;
       (drgnx-debug-console-toggle)
       (should (equal (debug-console-test--shown) "▾ Group A\n  child\n  ▾ inner\n    deep\nout\n")))))
 
+(defun debug-console-test--prefixes ()
+  "Each output line's `line-prefix' (the timestamp), or nil."
+  (with-current-buffer drgnx-debug-console-buffer-name
+    (let (out)
+      (save-excursion
+        (goto-char (point-min))
+        (while (< (point) drgnx-debug-console--end)
+          (push (let ((p (get-text-property (point) 'line-prefix))) (and p (substring-no-properties p))) out)
+          (forward-line 1)))
+      (nreverse out))))
+
+(ert-deftest drgnx-debug-console/timestamps ()
+  "With `drgnx-debug-console-timestamps', each line shows the hub's time (`:time', ms) in a 12-character column
+before it, a line without one an empty column; the text itself stays the output.  Turning it off or on re-shows the
+lines already there."
+  (debug-console-test--with
+    (let ((drgnx-debug-console-timestamps nil)
+          (t0 (+ (* 1000 (float-time (encode-time (list 11 2 14 13 11 2026 nil -1 nil)))) 204)))
+      (debug-console-test--output (list :text "first" :category "stdout" :count 1 :time t0)
+                                  (list :text "later" :category "stdout" :count 1 :time (+ t0 1176)))
+      (should (equal (debug-console-test--prefixes) '(nil nil)))
+      (customize-set-variable 'drgnx-debug-console-timestamps t)
+      (should (equal (debug-console-test--prefixes) '("14:02:11.204 " "14:02:12.380 ")))
+      (drgnx-debug-console--insert (list (list :text "no time" :category "console" :count 1)))
+      (should (equal (car (last (debug-console-test--prefixes))) "             "))
+      (should (equal (debug-console-test--text) "first\nlater\nno time\n"))
+      (customize-set-variable 'drgnx-debug-console-timestamps nil)
+      (should (equal (debug-console-test--prefixes) '(nil nil nil))))))
+
 (ert-deftest drgnx-debug-console/evaluates-from-the-editor ()
   "`drgnx-debug-console-evaluate': EXPR evaluated as if typed (echoed, in the history, `repl'), what the input held
 kept; the tab shown without the focus, or selected with SELECT."
@@ -170,7 +200,8 @@ kept; the tab shown without the focus, or selected with SELECT."
 
 (ert-deftest drgnx-debug-console/completes-from-the-adapter ()
   "TAB-less completion at point in the input: the adapter's targets for the input and point (`debug/completions'),
-the span a target names replaced, else the word before point; their types as annotations; none outside the input."
+the span a target names replaced, else the word before point; their types as annotations; none outside the input,
+nor when the adapter has not said it completes (`debug-state' caps)."
   (debug-console-test--with
     (let ((asked nil)
           (answer (list :targets (vector (list :label "items" :type "variable") (list :label "iter" :type "function")))))
@@ -189,7 +220,13 @@ the span a target names replaced, else the word before point; their types as ann
           (pcase-let ((`(,beg ,end . ,_) (run-hook-with-args-until-success 'completion-at-point-functions)))
             (should (equal (buffer-substring-no-properties beg end) "len(it")))
           (goto-char (point-min))
-          (should-not (run-hook-with-args-until-success 'completion-at-point-functions)))))))
+          (should-not (run-hook-with-args-until-success 'completion-at-point-functions))
+          ;; an adapter without completions (or not said yet) is not asked
+          (goto-char (point-max))
+          (setq asked nil)
+          (let ((drgnx-debug--sessions (list (list :id "s1" :name "Python: app" :root "/p" :state "stopped"))))
+            (should-not (run-hook-with-args-until-success 'completion-at-point-functions)))
+          (should-not asked))))))
 
 (ert-deftest drgnx-debug-console/history-per-profile ()
   "The input's history: back and forth through what was evaluated; the keys in the three profiles."

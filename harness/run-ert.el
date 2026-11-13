@@ -269,7 +269,13 @@ as skipped (CI's shared runners)."
 \(:name :reason), when `drgnx-run-ert--no-timing-p'; else nil.  They are loaded, not run."
   (when (and (drgnx-run-ert--no-timing-p) (not drgnx-run-ert--order-in))
     (mapcar (lambda (tt) (list :name (symbol-name (ert-test-name tt)) :reason "wall clock: not run in CI"))
-            (ert-select-tests `(and ,(or selector t) (tag :timing)) t))))
+            (drgnx-run-ert--select-tagged selector :timing))))
+
+(defun drgnx-run-ert--select-tagged (selector tag)
+  "The tests SELECTOR (nil for every test) picks that carry TAG.  A test name no file defines picks none here (ERT
+signals `ert-test-unbound'); the run's summary says the selector matched 0 tests."
+  (condition-case nil (ert-select-tests `(and ,(or selector t) (tag ,tag)) t)
+    (ert-test-unbound nil)))
 
 ;; The one-writer gate (test/support/work-db-gate.el): with DRGNX_WORK_DB_GATE=1 opening work.db read-write signals,
 ;; and the tests tagged `:work-db-writer' (the `local' writer mode: Rust-bound Lisp) are left out and listed as skipped.
@@ -289,7 +295,7 @@ as skipped (CI's shared runners)."
 \(:name :reason), in gate mode; else nil.  They are loaded, not run."
   (when (and (drgnx-run-ert--gate-p) (not drgnx-run-ert--order-in))
     (mapcar (lambda (tt) (list :name (symbol-name (ert-test-name tt)) :reason "one-writer gate: a test of the local writer mode"))
-            (ert-select-tests `(and ,(or selector t) (tag :work-db-writer)) t))))
+            (drgnx-run-ert--select-tagged selector :work-db-writer))))
 
 (defun drgnx-run-ert--no-skip-file ()
   "The must-run list: DRGNX_TEST_NO_SKIP (a file), else test/no-skip.eld of this checkout."

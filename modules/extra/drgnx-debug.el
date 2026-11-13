@@ -24,6 +24,8 @@
 (require 'drgnx-debug-view (expand-file-name "drgnx-debug-view" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-debug-console (expand-file-name "drgnx-debug-console" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-debug-memory (expand-file-name "drgnx-debug-memory" (file-name-directory (macroexp-file-name))))
+(require 'drgnx-debug-disassembly
+         (expand-file-name "drgnx-debug-disassembly" (file-name-directory (macroexp-file-name))))
 (defvar drgnx-statusbar-left)
 (declare-function drgnx-wb-define-tab "drgnx-area")
 (declare-function drgnx-hub-call "drgnx-hub-client")
@@ -47,7 +49,8 @@ on it while it lives.")
   "`drgnx-hub-event-functions': `debug-state' gives the sessions (the session keys, the toolbar and the status bar
 follow them, a running session's stop marks go), `debug-frame' marks and opens a stop's line, `debug-inline' shows
 its values at line ends, `debug-ended' takes its marks away, `debug-output' goes to the debug console,
-`debug-terminal' shows a task's or the program's terminal."
+`debug-terminal' shows a task's or the program's terminal; the disassembly view follows `debug-frame' and a
+session's instruction breakpoints (`debug-breakpoints' with a session and no path)."
   (pcase event
     ("debug-state"
      (setq drgnx-debug--sessions (append (plist-get data :sessions) nil))
@@ -58,7 +61,12 @@ its values at line ends, `debug-ended' takes its marks away, `debug-output' goes
      (drgnx-debug-console-sessions drgnx-debug--sessions)
      (drgnx-debug-toolbar-sync))
     ("debug-output" (drgnx-debug-console-output data))
-    ("debug-frame" (drgnx-debug-gutter-show-frame data))
+    ("debug-frame"
+     (drgnx-debug-disassembly-frame data)
+     (drgnx-debug-gutter-show-frame data))
+    ("debug-breakpoints"
+     (when (and (plist-get data :session) (not (plist-get data :path)))
+       (drgnx-debug-disassembly-breakpoints data)))
     ("debug-inline" (drgnx-debug-gutter-inline data))
     ("debug-ended" (drgnx-debug-gutter-stop-clear (plist-get data :session)))
     ("debug-terminal" (drgnx-debug-launch-show-terminal data))))
@@ -81,7 +89,12 @@ this project's session in STATE, or (STATE nil) its stopped one, else its first;
   "OP (`next', `step-in', `step-out', `stop', …: `debug/control') on this project's session."
   (let ((s (drgnx-debug--session)))
     (unless s (user-error "No debug session in this project"))
-    (drgnx-hub-call "debug/control" (list :session (plist-get s :id) :op op) #'drgnx-debug--answered)))
+    (drgnx-hub-call "debug/control"
+                    (append (list :session (plist-get s :id) :op op)
+                            ;; the disassembly view has focus: one instruction a step
+                            (and (member op '("next" "step-in" "step-out")) (drgnx-debug-disassembly-instruction-step-p)
+                                 (list :granularity "instruction")))
+                    #'drgnx-debug--answered)))
 
 (defun drgnx-debug-step-over () "To the next line." (interactive) (drgnx-debug-control "next"))
 (defun drgnx-debug-step-in () "Into the call on this line." (interactive) (drgnx-debug-control "step-in"))
@@ -122,6 +135,7 @@ the toolbar's cards go too."
   (drgnx-debug-view--teardown)
   (drgnx-debug-console--teardown)
   (drgnx-debug-memory--teardown)
+  (drgnx-debug-disassembly--teardown)
   (drgnx-debug-session-mode -1)
   (drgnx-debug-timeline-mode -1)
   (drgnx-debug-bisect-events-mode -1)
@@ -350,6 +364,15 @@ console's tab shows without taking the focus."
                                 (pcase-dolist (`(,id ,title ,fn ,doc) drgnx-debug-memory-commands)
                                   (drgnx-command-define id :category "Debug" :title title :command fn :doc doc
                                                         :map 'drgnx-debug-memory-mode-map :when in-memory)))
+                              ;; the disassembly view (drgnx-debug-disassembly.el): Open Disassembly View, and its
+                              ;; keys in its own map
+                              (drgnx-command-define 'debug-open-disassembly :category "Debug"
+                                                    :title "Open Disassembly View" :command #'drgnx-debug-open-disassembly
+                                                    :doc "The instructions around the stopped session's current frame")
+                              (let ((in-dis (lambda () (derived-mode-p 'drgnx-debug-disassembly-mode))))
+                                (pcase-dolist (`(,id ,title ,fn ,doc) drgnx-debug-disassembly-commands)
+                                  (drgnx-command-define id :category "Debug" :title title :command fn :doc doc
+                                                        :map 'drgnx-debug-disassembly-mode-map :when in-dis)))
                               ;; recorded runs: probes, the stop timeline, past stops (drgnx-debug-timeline.el)
                               (drgnx-debug-timeline-mode 1)
                               (pcase-dolist (`(,id ,title ,fn ,doc) drgnx-debug-timeline-commands)

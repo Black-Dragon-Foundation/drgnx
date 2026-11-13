@@ -64,6 +64,12 @@ dimmed. A big list keeps its last 64 opened pages open; opening another closes t
 (C, C++, Rust, Go): 16 to a line with the address and the text, PageDown / PageUp (`n` / `p`, C-f / C-b) for the next
 page, F2 (`e`, `c`) to write bytes typed in hex at point.
 
+**Open Disassembly View** (the palette) shows the machine instructions around the current frame when its debugger
+can disassemble (C, C++, Rust, Go). A stop in code with no source file opens it by itself. Each run of instructions
+has the source line it came from above it, in a quiet row. The arrow marks the current instruction. F9 (`b`) sets an
+instruction breakpoint on the instruction at point. While the view has focus, the step keys step one instruction,
+and the header shows an "instruction step" chip. `<` / `>` (`[` / `]` in Vim) read earlier or later instructions.
+
 ## The Debug Console
 
 The **Debug Console** (the panel's tab; C-S-y in VS Code keys) shows the program's output, colours included, with
@@ -74,7 +80,8 @@ Console** sends the selection or the expression at point there from the editor. 
 place (RET or TAB on it); once the program runs on, it dims and no longer opens. Groups the program prints
 (`console.group` in JavaScript, for one) fold the same way, on their first line. The output stays after the session
 ends and is cleared when the same configuration starts again (`drgnx-debug-console-clear-on-restart`). A
-`postDebugTask` that fails says so there.
+`postDebugTask` that fails says so there. Turn on `drgnx-debug-console-timestamps` to see, before each line, the
+time its output came in (to the millisecond); turning it off or on re-shows the lines already there.
 
 ## Breakpoints
 
@@ -84,7 +91,11 @@ logpoint (a message printed instead of a stop; `{expression}` is replaced by its
 menu: a condition, a hit count, a log message, enable or disable, and Run to Cursor while a session runs. The dot is
 red when an adapter bound it, grey before, hollow when disabled; a dot with two bars has a condition, a diamond is a
 logpoint. A line you move by editing keeps its breakpoint, which takes the new line when you save.
-`drgnx-debug-gutter-show` chooses when the column shows (`auto`: while the file has breakpoints or a session runs).
+`drgnx-debug-gutter-show` chooses when the column shows (`auto`: while the file has breakpoints or a session runs). The
+**overview ruler** at the editor's right edge shows the whole file's breakpoints (red, grey when disabled or not
+bound yet) and the stopped line (amber, across it), scaled to the window's height, with the lines on screen as a
+soft band; click it to go there. It shows while the file has a breakpoint or a stop, once
+`drgnx-debug-overview-ruler` is on (off for now: its drawing still costs more than a scroll may).
 Keys: VS Code F9 and C-F10 (Run to Cursor); Emacs `C-x C-a` and `C-b` (toggle), `C-c` (condition), `C-l` (logpoint),
 `C-e` (enable), `C-u` (Run to Cursor), as GUD has them; Vim `SPC d` and `b`, `B`, `l`, `e`, `c`.
 
