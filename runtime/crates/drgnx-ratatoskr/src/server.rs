@@ -344,13 +344,23 @@ pub async fn run(args: ServeArgs) -> Exit {
             job: None,
             conn_id: 0,
         };
-        match front
+        // only when there is something to withdraw: a start with nothing left over writes nothing
+        let any = front
             .writer
-            .write(&caller, "cards/withdraw", move |tx| {
-                norn::write::cards::withdraw_orphaned_matrix_cards(tx, at)
-            })
+            .db
+            .read(|c| Ok(norn::write::cards::has_orphaned_matrix_cards(c).unwrap_or(false)))
             .await
-        {
+            .unwrap_or(false);
+        match if any {
+            front
+                .writer
+                .write(&caller, "cards/withdraw", move |tx| {
+                    norn::write::cards::withdraw_orphaned_matrix_cards(tx, at)
+                })
+                .await
+        } else {
+            Ok(0)
+        } {
             Ok(n) if n > 0 => {
                 tracing::info!("{n} matrix cards of an earlier hub's sessions withdrawn")
             }

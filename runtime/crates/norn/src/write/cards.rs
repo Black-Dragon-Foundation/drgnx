@@ -188,6 +188,17 @@ pub fn card_withdraw(tx: &mut WTx<'_>, id: i64, now: f64) -> Result<bool, CoordE
     Ok(true)
 }
 
+/// Whether [`withdraw_orphaned_matrix_cards`] has anything to withdraw (a read: a start with nothing left over writes
+/// nothing).
+pub fn has_orphaned_matrix_cards(conn: &urdr::Connection) -> Result<bool, CoordError> {
+    Ok(conn.query_row(
+        "select exists(select 1 from card where kind = 'matrix' and state = 'open' \
+         and json_extract(data, '$.session') is not null)",
+        [],
+        |r| r.get::<_, bool>(0),
+    )?)
+}
+
 /// The hub starts: every open `matrix` card a session's request waits on (`data.session` set) is withdrawn.  The hub
 /// that asked is gone with its sessions' agents, so nobody waits on the answer; a resumed session that asks again gets
 /// a new card.  A matrix card with no session (a job's spending limit) stays.  How many.
