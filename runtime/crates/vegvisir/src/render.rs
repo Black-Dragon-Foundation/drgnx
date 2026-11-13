@@ -670,6 +670,11 @@ fn compact_lines(s: &Scene, it: &Item) -> Vec<Line> {
     vec![who, going]
 }
 
+/// A machine's name on a chip: "desk" for "desktop" (work-space-dark.html), else its own.
+fn short_machine(label: &str) -> &str {
+    if label == "desktop" { "desk" } else { label }
+}
+
 /// Whether LABEL already begins with MODEL and its separator (the model's own label for a session with a model).
 fn names_model(label: &str, model: &str) -> bool {
     label
@@ -736,7 +741,12 @@ fn chip_line(it: &Item) -> Line {
             .collect(),
         _ => Vec::new(),
     };
-    l.push(format!(" {}", it.label), None);
+    let name = if it.kind == Kind::Machine {
+        short_machine(&it.label)
+    } else {
+        &it.label
+    };
+    l.push(format!(" {name}"), None);
     if runner.is_some_and(|r| r.mac) {
         l.push(" macOS", Some("drgnx-runners-os"));
     }
@@ -1103,7 +1113,7 @@ pub fn strip(
                         .as_ref()
                         .and_then(|r| r.cost.as_ref())
                         .map_or(String::new(), |c| format!(" · cloud {c}"));
-                    format!(" {} {used}/{total}{cost} ", it.label)
+                    format!(" {} {used}/{total}{cost} ", short_machine(&it.label))
                 }),
         )
         .collect();
