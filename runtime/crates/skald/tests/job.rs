@@ -70,10 +70,7 @@ fn unit(repo: &Path, commit: &str, tree: &str) -> Unit {
 }
 
 fn opts(root: &Path, min_abi: u32) -> Options {
-    Options {
-        staging: root.join("staging"),
-        min_abi,
-    }
+    Options::new(root.join("staging"), min_abi)
 }
 
 fn tags(text: &str) -> Vec<Query> {
@@ -229,4 +226,90 @@ fn a_source_folder_without_a_parser_is_refused() {
     u.src = "nowhere".into();
     let e = run(&[u], &[], &opts(d.path(), 14)).unwrap_err();
     assert!(matches!(e, JobError::Build(_)), "{e}");
+}
+
+/// A checker program that is a script: `PROG packs load-check …` runs BODY.
+fn checker(root: &Path, body: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let p = root.join("checker.sh");
+    std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    p
+}
+
+#[test]
+fn a_checker_that_crashes_fails_the_job_and_not_the_caller() {
+    let d = tempfile::tempdir().unwrap();
+    let (repo, commit, tree) = fixture_repo(d.path());
+    let mut o = opts(d.path(), 14);
+    o.checker = Some(checker(d.path(), "kill -SEGV $$"));
+    let e = run(&[unit(&repo, &commit, &tree)], &[], &o).unwrap_err();
+    match e {
+        JobError::Load(m) => assert!(m.contains("crashed") && m.contains("11"), "{m}"),
+        other => panic!("{other}"),
+    }
+    assert!(!d.path().join("staging/grammars").exists());
+}
+
+#[test]
+fn a_checker_that_never_returns_is_killed_at_the_deadline() {
+    let d = tempfile::tempdir().unwrap();
+    let (repo, commit, tree) = fixture_repo(d.path());
+    let mut o = opts(d.path(), 14);
+    o.checker = Some(checker(d.path(), "sleep 60"));
+    o.check_timeout = std::time::Duration::from_millis(300);
+    let started = std::time::Instant::now();
+    let e = run(&[unit(&repo, &commit, &tree)], &[], &o).unwrap_err();
+    assert!(
+        matches!(&e, JobError::Load(m) if m.contains("did not finish")),
+        "{e}"
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(30));
+}
+
+#[test]
+fn a_checker_that_reports_an_abi_is_believed_only_in_its_protocol() {
+    let d = tempfile::tempdir().unwrap();
+    let (repo, commit, tree) = fixture_repo(d.path());
+    let mut o = opts(d.path(), 14);
+    o.checker = Some(checker(d.path(), "echo ok 14"));
+    let staged = run(&[unit(&repo, &commit, &tree)], &[], &o).unwrap();
+    assert_eq!(staged[0].abi, 14);
+    let d = tempfile::tempdir().unwrap();
+    let (repo, commit, tree) = fixture_repo(d.path());
+    let mut o = opts(d.path(), 15);
+    o.checker = Some(checker(d.path(), "echo ok 14"));
+    assert!(matches!(
+        run(&[unit(&repo, &commit, &tree)], &[], &o),
+        Err(JobError::Abi { .. })
+    ));
+    let d = tempfile::tempdir().unwrap();
+    let (repo, commit, tree) = fixture_repo(d.path());
+    let mut o = opts(d.path(), 14);
+    o.checker = Some(checker(
+        d.path(),
+        "echo query queries/tags.scm Invalid node type x; exit 3",
+    ));
+    let e = run(&[unit(&repo, &commit, &tree)], &tags("(object) @x"), &o).unwrap_err();
+    assert!(
+        matches!(&e, JobError::Query { file, message } if file == "queries/tags.scm" && message.contains("Invalid node type")),
+        "{e}"
+    );
+}
+
+#[test]
+fn the_child_check_function_gives_the_same_answers_in_process() {
+    let d = tempfile::tempdir().unwrap();
+    let (repo, commit, tree) = fixture_repo(d.path());
+    let staged = run(&[unit(&repo, &commit, &tree)], &[], &opts(d.path(), 14)).unwrap();
+    let q = vec![("queries/tags.scm".to_string(), "(object) @x".to_string())];
+    assert_eq!(
+        skald::job::check_library(&staged[0].lib, "json", 14, &q).unwrap(),
+        14
+    );
+    let bad = vec![("queries/tags.scm".to_string(), "(nope) @x".to_string())];
+    assert!(matches!(
+        skald::job::check_library(&staged[0].lib, "json", 14, &bad),
+        Err(JobError::Query { .. })
+    ));
 }

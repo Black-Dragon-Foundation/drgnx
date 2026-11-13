@@ -92,3 +92,21 @@ queries against them, belong to the pack job.
    content-addressed and never rewritten.
 
 The test fixture is the vendored tree-sitter-json grammar (MIT) in a throwaway git repository.
+
+## `ratatoskr packs sync`, `load-check` and `pin`
+
+```
+ratatoskr packs sync --plan FILE [--out FILE]
+ratatoskr packs load-check LIB NAME MIN_ABI [FILE=PATH]…
+ratatoskr packs pin REPO COMMIT [--src DIR]
+```
+
+- `sync` is the job above, driven by a plan (a plist: `:version 1 :staging DIR :min-abi 15 :units ((:name :repo :commit
+  :tree-sha256 [:src])…) :queries ((:grammar :file :path)…)`). Its answer, on stdout or in `--out`, is
+  `(:ok t :staged ((:name :commit :tree-sha256 :lib :lib-sha256 :abi)…))` or `(:ok nil :error "…")`.
+- **Loading a grammar runs its code, so it never happens in the process that matters.** `sync` runs the load check, the
+  ABI check and the query compile for each library in a child of the same binary (`load-check`, one answer line, a
+  60 s deadline). A grammar that crashes or loops there fails the job with the signal or the deadline in the answer;
+  the hub, which runs `sync` as a separate process, is never involved.
+- `pin` fetches a grammar at a commit and prints its `:grammars` entry with the tree hash, and the ABI its `parser.c`
+  declares. A commit with no `src/parser.c` is refused (Swift's and SQL's `main` have none).

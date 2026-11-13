@@ -9,7 +9,8 @@
 
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
 use tree_sitter::Language;
@@ -48,6 +49,23 @@ pub struct Options {
     pub staging: PathBuf,
     /// The lowest tree-sitter ABI a grammar may report (the design's one ABI is 15).
     pub min_abi: u32,
+    /// A program to run as `CHECKER packs load-check LIB NAME MIN_ABI [QUERYFILE=PATH]…` (the same binary's
+    /// `check_library`), so loading a fetched grammar, which runs its initialisers, happens in a child that may crash
+    /// or loop without taking the caller down. `None` loads in this process.
+    pub checker: Option<PathBuf>,
+    /// How long the checker may take before it is killed.
+    pub check_timeout: Duration,
+}
+
+impl Options {
+    pub fn new(staging: PathBuf, min_abi: u32) -> Options {
+        Options {
+            staging,
+            min_abi,
+            checker: None,
+            check_timeout: Duration::from_secs(60),
+        }
+    }
 }
 
 /// A grammar that passed every check.
@@ -204,7 +222,7 @@ fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 /// REPO at COMMIT into DEST: a shallow fetch of the bare commit (GitHub and GitLab allow it), else a full fetch.
-fn fetch(repo: &str, commit: &str, dest: &Path) -> Result<(), JobError> {
+pub fn fetch(repo: &str, commit: &str, dest: &Path) -> Result<(), JobError> {
     std::fs::create_dir_all(dest).map_err(|e| io("work folder", e))?;
     let f = |m: String| JobError::Fetch(m);
     git(dest, &["init", "-q"]).map_err(f)?;
@@ -232,6 +250,31 @@ fn fetch(repo: &str, commit: &str, dest: &Path) -> Result<(), JobError> {
             "checked out {head}, wanted {commit}"
         )))
     }
+}
+
+/// What a pack author needs to pin a grammar: fetches REPO at COMMIT, and gives the tree hash, whether SRC has a
+/// `parser.c` and the language version it declares (`#define LANGUAGE_VERSION N`, the ABI), without building.
+pub fn pin(repo: &str, commit: &str, src: &str) -> Result<(String, Option<u32>), JobError> {
+    if !safe_rel(src) {
+        return Err(JobError::Build(format!(
+            "{src:?} is not a folder inside the repository"
+        )));
+    }
+    let tmp = std::env::temp_dir().join(format!("skald-pin-{}", std::process::id()));
+    let work = Work(tmp);
+    let _ = std::fs::remove_dir_all(&work.0);
+    fetch(repo, commit, &work.0)?;
+    let tree = tree_hash(&work.0)?;
+    let parser = std::fs::read_to_string(work.0.join(src).join("parser.c")).map_err(|_| {
+        JobError::Build(format!(
+            "no src/parser.c at {commit} in {src}: a commit with generated files is needed"
+        ))
+    })?;
+    let abi = parser
+        .lines()
+        .find_map(|l| l.strip_prefix("#define LANGUAGE_VERSION "))
+        .and_then(|n| n.trim().parse().ok());
+    Ok((tree, abi))
 }
 
 /// `parser.c` (and a scanner) of SRC into the shared library OUT.
@@ -343,6 +386,128 @@ pub fn verify_lib(
     Ok(abi)
 }
 
+/// Loads the library at PATH, checks its ABI against MIN_ABI and compiles QUERIES (file name, text) against it.
+/// Returns the ABI. This is what `ratatoskr packs load-check` runs in the child.
+pub fn check_library(
+    path: &Path,
+    name: &str,
+    min_abi: u32,
+    queries: &[(String, String)],
+) -> Result<u32, JobError> {
+    let (_library, language) = load(path, name)?;
+    let abi = language.abi_version() as u32;
+    if abi < min_abi {
+        return Err(JobError::Abi {
+            name: name.into(),
+            found: abi,
+            min: min_abi,
+        });
+    }
+    for (file, text) in queries {
+        tree_sitter::Query::new(&language, text).map_err(|e| JobError::Query {
+            file: file.clone(),
+            message: e.to_string(),
+        })?;
+    }
+    Ok(abi)
+}
+
+/// The child's answer on stdout, one line: `ok ABI`, `abi FOUND MIN`, `query FILE MESSAGE`, `load MESSAGE`.
+/// (`ratatoskr packs load-check` prints it and exits 0, or 2, 3, 4.)
+pub fn check_answer(r: &Result<u32, JobError>) -> String {
+    match r {
+        Ok(abi) => format!("ok {abi}"),
+        Err(JobError::Query { file, message }) => {
+            format!("query {file} {}", message.replace('\n', " "))
+        }
+        Err(JobError::Abi { found, min, .. }) => format!("abi {found} {min}"),
+        Err(e) => format!("load {}", e.to_string().replace('\n', " ")),
+    }
+}
+
+fn child_check(
+    prog: &Path,
+    lib: &Path,
+    name: &str,
+    opts: &Options,
+    queries: &[(String, String)],
+    work: &Path,
+) -> Result<u32, JobError> {
+    let l = |m: String| JobError::Load(format!("{name}: {m}"));
+    let mut cmd = Command::new(prog);
+    cmd.args(["packs", "load-check"])
+        .arg(lib)
+        .arg(name)
+        .arg(opts.min_abi.to_string());
+    for (i, (file, text)) in queries.iter().enumerate() {
+        let path = work.join(format!("query-{name}-{i}.scm"));
+        std::fs::write(&path, text).map_err(|e| io("query file", e))?;
+        cmd.arg(format!("{file}={}", path.display()));
+    }
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| l(format!("cannot start {}: {e}", prog.display())))?;
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait().map_err(|e| l(e.to_string()))? {
+            Some(s) => break s,
+            None if started.elapsed() > opts.check_timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(l(format!(
+                    "the load check did not finish in {} s and was killed",
+                    opts.check_timeout.as_secs_f32().ceil()
+                )));
+            }
+            None => std::thread::sleep(Duration::from_millis(20)),
+        }
+    };
+    use std::io::Read;
+    let mut out = String::new();
+    if let Some(mut so) = child.stdout.take() {
+        let _ = so.by_ref().take(64 * 1024).read_to_string(&mut out);
+    }
+    let first = out.lines().next().unwrap_or("");
+    if let Some(abi) = first
+        .strip_prefix("ok ")
+        .and_then(|n| n.trim().parse().ok())
+        && status.success()
+    {
+        return Ok(abi);
+    }
+    if let Some(rest) = first.strip_prefix("query ") {
+        let (file, message) = rest.split_once(' ').unwrap_or((rest, ""));
+        return Err(JobError::Query {
+            file: file.into(),
+            message: message.into(),
+        });
+    }
+    if let Some(rest) = first.strip_prefix("abi ") {
+        let mut n = rest.split_whitespace().filter_map(|n| n.parse().ok());
+        if let (Some(found), Some(min)) = (n.next(), n.next()) {
+            return Err(JobError::Abi {
+                name: name.into(),
+                found,
+                min,
+            });
+        }
+    }
+    if let Some(m) = first.strip_prefix("load ") {
+        return Err(l(m.into()));
+    }
+    use std::os::unix::process::ExitStatusExt;
+    match status.signal() {
+        Some(sig) => Err(l(format!("the load check crashed (signal {sig})"))),
+        None => Err(l(format!(
+            "the load check exited {} with no answer",
+            status.code().unwrap_or(-1)
+        ))),
+    }
+}
+
 /// Removes its folder when dropped, so a failed job leaves nothing in staging.
 struct Work(PathBuf);
 
@@ -392,8 +557,15 @@ pub fn run(units: &[Unit], queries: &[Query], opts: &Options) -> Result<Vec<Stag
             &lib,
         )?;
         let lib_sha256 = file_sha256(&lib)?;
-        let (library, language) = load(&lib, &u.name)?;
-        let abi = language.abi_version() as u32;
+        let unit_queries: Vec<(String, String)> = queries
+            .iter()
+            .filter(|q| q.grammar == u.name)
+            .map(|q| (q.file.clone(), q.text.clone()))
+            .collect();
+        let abi = match &opts.checker {
+            None => check_library(&lib, &u.name, opts.min_abi, &unit_queries)?,
+            Some(prog) => child_check(prog, &lib, &u.name, opts, &unit_queries, &work.0)?,
+        };
         if abi < opts.min_abi {
             return Err(JobError::Abi {
                 name: u.name.clone(),
@@ -401,14 +573,6 @@ pub fn run(units: &[Unit], queries: &[Query], opts: &Options) -> Result<Vec<Stag
                 min: opts.min_abi,
             });
         }
-        for q in queries.iter().filter(|q| q.grammar == u.name) {
-            tree_sitter::Query::new(&language, &q.text).map_err(|e| JobError::Query {
-                file: q.file.clone(),
-                message: e.to_string(),
-            })?;
-        }
-        drop(language);
-        drop(library);
         let dest = opts.staging.join("grammars").join(&u.name).join(&u.commit);
         let staged = Staged {
             name: u.name.clone(),
