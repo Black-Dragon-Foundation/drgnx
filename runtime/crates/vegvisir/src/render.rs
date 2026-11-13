@@ -445,8 +445,19 @@ fn segment(
         end,
         card_face(lines.len(), line, s.selected == Some(id)),
     );
+    // with a selection, what is off its chain is muted (the mockup's dimmed rest), under the text's own faces
+    if off_chain(s, id) {
+        b.face(start, end, "drgnx-work-dim");
+    }
     b.face(start, end, "drgnx-work-card");
     b.prop(start, end, "drgnx-work-id", Value::String(id.0.clone()));
+}
+
+/// Whether ID is off the selection's chain: there is a selection, and ID is neither it nor an end of an edge on its
+/// chain.
+fn off_chain(s: &Scene, id: &ItemId) -> bool {
+    s.selected
+        .is_some_and(|sel| sel != id && !s.chain.iter().any(|e| &e.from == id || &e.to == id))
 }
 
 /// The decoration face of line I of a card of N lines; the selected card's is the ring's (`drgnx-card-sel-*`).
