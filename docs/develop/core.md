@@ -575,6 +575,9 @@ child frame goes with OLD), the agent follow window (moved), the Work map's layo
 and the side-by-side diffs' saved layout (`drgnx-work-code--saved-windows`: a `window-state-get` state, which
 belongs to no frame, so it moves and closing the diffs puts the layout back on the new frame). A swap waits while the platform
 moves the frame (`drgnx-platform-moving`), since the window manager may still be looking for it by its title.
+A child frame that borrows its parent's minibuffer (a modal card, focused) uses its parent's box: `drgnx-look-echo-box`
+finds the box through the selected frame's minibuffer window, so a message sent while the card has focus goes to the
+status bar and the box stays hidden.
 
 ## No prompts in automatic paths (`drgnx-guard.el`)
 

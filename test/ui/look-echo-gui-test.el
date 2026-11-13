@@ -200,6 +200,28 @@ status bar's text."
       (should-not (frame-visible-p box))
       (should (equal (drgnx-look-echo-status-text) "C-x-")))))
 
+(drgnx-look-gui-deftest drgnx-ui-look-echo/a-message-under-a-modal-card-leaves-no-box ()
+  "With a modal card focused (a child frame that borrows its parent's minibuffer, as Send Run's), the card finds its
+parent's box, a plain message goes to the status bar and the box stays hidden: no empty box over the text."
+  (skip-unless (display-graphic-p))
+  (drgnx-look-echo-ui-test--with-frame f
+    (let* ((box (drgnx-look-echo-box f))
+           (card (make-frame `((parent-frame . ,f) (minibuffer . ,(minibuffer-window f)) (width . 40) (height . 6)
+                               (left . 100) (top . 100) (undecorated . t)))))
+      (unwind-protect
+          (progn
+            (select-frame-set-input-focus card)
+            (drgnx-test-wait-presented :frame f)
+            (should (eq (drgnx-look-echo-box) box))
+            (message "while the card has focus")
+            (drgnx-test-wait-presented :frame f)
+            (should-not (frame-visible-p box))
+            (should (equal (drgnx-look-echo-status-text) "while the card has focus"))
+            (drgnx-look-echo--hide)
+            (drgnx-test-wait-presented :frame f)
+            (should-not (frame-visible-p box)))
+        (when (frame-live-p card) (delete-frame card t))))))
+
 (drgnx-look-gui-deftest drgnx-ui-look-echo/swap-keeps-the-layout ()
   "Turning it on swaps a frame with a row for one with the box (and off, back): the window tree, each window's
 buffer and point, the selected window, the frame's size and its buffers survive."
