@@ -1,5 +1,9 @@
 ;;; debug-adapters.eld --- the debug adapters drgnx knows  -*- lisp-data -*-
 
+;; The adapters of a language live in that language's pack (`packs/NAME/pack.eld`, `:adapters`, the same schema): debugpy in
+;; python, js-debug in javascript, delve in go, bash-debug in shell, rdbg in ruby, cpptools in cpp, java, flutter in dart and
+;; xdebug in php. What stays here serves no single language: the C/C++/Rust debuggers, .NET, Godot and OCaml.
+;;
 ;; Read by the hub as data only (strings, numbers, symbols and lists; nothing is evaluated):
 ;; docs/develop/debugging.md, "Adapters". One entry per adapter:
 ;;
@@ -23,28 +27,7 @@
 ;; The commands of the untested entries come from dape (https://github.com/svaante/dape, GPL-3.0-or-later), whose
 ;; recipes list each adapter's plain command line; thanks to its authors.
 
-((:id "debugpy" :name "Python (debugpy)" :types ("debugpy" "python") :languages ("python") :tested t
-  :find (:python-module "debugpy")
-  :start (:stdio ("{python}" "-m" "debugpy.adapter"))
-  :defaults ((:name "Python: Current File" :type "debugpy" :request "launch" :program "${file}"
-              :console "integratedTerminal" :cwd "${workspaceFolder}"))
-  :install (:pip "debugpy==1.8.22"
-            :hash "sha256:a9e9d3550e15ca479c59333e90845029190531f0cacfedab3b815a57bd913947"))
- (:id "js-debug" :name "JavaScript (js-debug)" :types ("pwa-node" "node" "node-terminal")
-  :languages ("javascript" "typescript" "js" "ts") :tested t
-  :find (:tools "js-debug/src/dapDebugServer.js")
-  :start (:tcp ("node" "{program}" "{port}" "127.0.0.1"))
-  :defaults ((:name "Node: Launch File" :type "pwa-node" :request "launch" :program "${file}"
-              :cwd "${workspaceFolder}"))
-  :install (:url "https://github.com/microsoft/vscode-js-debug/releases/download/v1.140.1/js-debug-dap-v1.140.1.tar.gz"
-            :sha256 "c72fab31bcbfdce6ad1f42adfd28eff8d4681dd3b03b5e2e6f9e72e6f9927faf" :into "js-debug"
-            :root "js-debug"))
- (:id "delve" :name "Go (delve)" :types ("go") :languages ("go") :tested t
-  :find (:path "dlv")
-  :start (:tcp ("{program}" "dap" "--listen" "127.0.0.1:{port}"))
-  :defaults ((:name "Go: Launch Package" :type "go" :request "launch" :mode "debug" :program "${fileDirname}"))
-  :install (:system "dnf install delve"))
- (:id "lldb-dap" :name "C, C++, Rust (lldb-dap)" :types ("lldb-dap" "lldb-vscode") :languages ("c" "c++" "rust")
+((:id "lldb-dap" :name "C, C++, Rust (lldb-dap)" :types ("lldb-dap" "lldb-vscode") :languages ("c" "c++" "rust")
   :tested t
   :find (:path "lldb-dap")
   :start (:stdio ("{program}"))
@@ -55,16 +38,9 @@
   :find (:path "gdb")
   :start (:stdio ("{program}" "--interpreter=dap"))
   :install (:system "dnf install gdb"))
- (:id "bash-debug" :name "Bash (bash-debug)" :types ("bashdb") :languages () :tested nil
-  :find (:tools "bash-debug/extension/out/bashDebug.js")
-  :start (:stdio ("node" "{program}")))
- (:id "rdbg" :name "Ruby (rdbg)" :types ("rdbg") :languages () :tested nil
-  :find (:path "rdbg")
-  :start (:tcp ("{program}" "--open" "--host" "127.0.0.1" "--port" "{port}")))
  (:id "netcoredbg" :name ".NET (netcoredbg)" :types ("coreclr" "netcoredbg") :languages () :tested nil
   :find (:path "netcoredbg")
   :start (:stdio ("{program}" "--interpreter=vscode")))
- (:id "cpptools" :name "C, C++ (cpptools)" :types ("cppdbg" "cppvsdbg") :not-built-in t)
  (:id "codelldb" :name "C, C++, Rust (CodeLLDB)" :types ("lldb") :languages () :tested t
   :find (:tools "codelldb/extension/adapter/codelldb")
   :start (:tcp ("{program}" "--port" "{port}"))
@@ -78,8 +54,5 @@
               :sha256 "e25cc716b94c62c07fec268ff2785d2b797245b160502baef8b9c970a0c4d8e8")
              (:platform "darwin-arm64" :url "https://github.com/vadimcn/codelldb/releases/download/v1.12.3/codelldb-darwin-arm64.vsix"
               :sha256 "2f114a990e1b368dd1dbd33c80c0e719767af2d228391ec0df0571c957f9ac91"))))
- (:id "java" :name "Java (jdtls)" :types ("java") :not-built-in t)
- (:id "flutter" :name "Dart, Flutter" :types ("dart" "flutter") :not-built-in t)
  (:id "godot" :name "Godot" :types ("godot") :not-built-in t)
- (:id "xdebug" :name "PHP (xdebug)" :types ("php") :not-built-in t)
  (:id "ocamlearlybird" :name "OCaml (earlybird)" :types ("ocaml.earlybird") :not-built-in t))

@@ -306,8 +306,10 @@ result is saved in settings.el; the ones that cannot be are named."
 
 ;;;; Install
 
+(declare-function drgnx-packs-adapters "drgnx-packs" ())
 (defun drgnx-debug-launch-installable (&optional table)
-  "The built-in adapters of TABLE (default etc/debug-adapters.eld) drgnx can install, as (NAME . ID), read as data."
+  "The built-in adapters of TABLE (default etc/debug-adapters.eld and the built-in packs' `:adapters') drgnx can install,
+as (NAME . ID), read as data."
   (let ((r (drgnx-file-read (or table (expand-file-name "etc/debug-adapters.eld" drgnx-dir)))))
     (unless (eq (plist-get r :status) 'ok)
       (user-error "etc/debug-adapters.eld does not read: %s" (or (plist-get (plist-get r :problem) :text)
@@ -315,7 +317,7 @@ result is saved in settings.el; the ones that cannot be are named."
     (delq nil (mapcar (lambda (a)
                         (when (and (plist-get a :install) (not (plist-get a :not-built-in)))
                           (cons (plist-get a :name) (plist-get a :id))))
-                      (plist-get r :data)))))
+                      (append (plist-get r :data) (and (null table) (progn (require 'drgnx-packs) (drgnx-packs-adapters))))))))
 
 (defun drgnx-debug-install-adapter (id)
   "Install the debug adapter ID: its pinned download, checked against its sha256, into drgnx's tools folder

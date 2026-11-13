@@ -197,3 +197,15 @@ list); `@wrapper` with `@wrapped` for `export` and decorators; `@doc` with `@doc
 The engine was checked against the Rust walkers it replaced on the repository's own files (about 700 Rust files, plus
 the other languages' fixtures) before they were deleted; the byte-for-byte goldens (`chunk_golden.rs`) and the property
 tests (`chunk_langs.rs`) pass unchanged. References stay the grammar crates' tags queries until the packs carry theirs.
+
+## Inline values, origin trails and debug adapters from packs
+
+What the debugger and the trails knew per language is the pack's:
+- **`:inline (:functions … :loops … :names …)`**: the node kinds inline values look for (the union over the built-in packs
+  is what the hub's lists were).
+- **`:origin (:decls …)`**: the declaration templates (ast-grep, `{t}` the name) of the language's origin trails; a pack with an
+  `:origin` is a language trails work in, and its `:files :extensions` say which files (Python's `:decls ()` is empty).
+- **`:adapters`**: the debug adapters of the language, merged after `etc/debug-adapters.eld`'s (`skald::builtin`), and an
+  installed or fixture pack's through `Table::with_pack`; a launch type another entry already serves stays with the first.
+  The doctor and the installer (Lisp) read the same union (`drgnx-packs-adapters`).
+Probe families stay Rust, keyed by the adapter's id (design Q15).

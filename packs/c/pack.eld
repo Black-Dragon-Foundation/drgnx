@@ -6,4 +6,8 @@
  :mode (:ts c-ts-mode :builtin t :classic c-mode)
  :format (:config-files (".clang-format"))
  :hrafn (:lang "c" :chunks "queries/chunks.scm" :docs (:line "//") :helpers (c-declarator-name))
+ :inline (:functions ("function_definition")
+          :loops ("for_statement" "while_statement" "do_statement")
+          :names ("identifier"))
+ :origin (:decls ("$TY {t} = $V;"))
  :license "GPL-3.0-or-later" :maintainers ("drgnx"))

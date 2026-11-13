@@ -55,6 +55,30 @@ pub struct Adapter {
     pub not_built_in: bool,
 }
 
+impl From<&skald::manifest::Adapter> for Adapter {
+    fn from(a: &skald::manifest::Adapter) -> Adapter {
+        Adapter {
+            id: a.id.clone(),
+            name: a.name.clone(),
+            types: a.types.clone(),
+            languages: a.languages.clone(),
+            tested: a.tested,
+            find: a.find.as_ref().map(|f| Find {
+                path: f.path.clone(),
+                python_module: f.python_module.clone(),
+                tools: f.tools.clone(),
+            }),
+            start: a.start.as_ref().map(|s| StartHow {
+                stdio: s.stdio.clone(),
+                tcp: s.tcp.clone(),
+            }),
+            defaults: a.defaults.clone(),
+            install: a.install.as_ref().map(skald::manifest::Install::to_json),
+            not_built_in: a.not_built_in,
+        }
+    }
+}
+
 /// The table.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Table(pub Vec<Adapter>);
@@ -72,9 +96,30 @@ impl Table {
         Ok(Table(list))
     }
 
-    /// drgnx's own table.
+    /// drgnx's own table: the adapters of `etc/debug-adapters.eld` (the ones no pack owns), then those of the
+    /// built-in packs.
     pub fn builtin() -> Table {
-        Table::read(BUILTIN.as_bytes()).expect("etc/debug-adapters.eld reads")
+        let mut t = Table::read(BUILTIN.as_bytes()).expect("etc/debug-adapters.eld reads");
+        for m in skald::builtin::manifests() {
+            t = t.with_pack(m);
+        }
+        t
+    }
+
+    /// This table and the adapters PACK's manifest names (an installed pack's, or a fixture's): a launch type another
+    /// entry serves stays with the first.
+    pub fn with_pack(mut self, pack: &skald::Manifest) -> Table {
+        for a in &pack.adapters {
+            if !a
+                .types
+                .iter()
+                .any(|t| self.0.iter().any(|x| x.types.contains(t)))
+                && self.by_id(&a.id).is_none()
+            {
+                self.0.push(Adapter::from(a));
+            }
+        }
+        self
     }
 
     pub fn by_id(&self, id: &str) -> Option<&Adapter> {
@@ -214,4 +259,105 @@ pub fn free_port() -> std::io::Result<u16> {
     Ok(std::net::TcpListener::bind(("127.0.0.1", 0))?
         .local_addr()?
         .port())
+}
+
+#[cfg(test)]
+mod pack_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// The adapters the table had before the language ones moved into the packs.
+    const OLD_IDS: &[&str] = &[
+        "debugpy",
+        "js-debug",
+        "delve",
+        "lldb-dap",
+        "gdb",
+        "bash-debug",
+        "rdbg",
+        "netcoredbg",
+        "cpptools",
+        "codelldb",
+        "java",
+        "flutter",
+        "godot",
+        "xdebug",
+        "ocamlearlybird",
+    ];
+
+    #[test]
+    fn the_table_holds_every_adapter_it_held_before_the_packs() {
+        let table = Table::builtin();
+        let mut ids: Vec<&str> = table.0.iter().map(|a| a.id.as_str()).collect();
+        ids.sort_unstable();
+        let mut old = OLD_IDS.to_vec();
+        old.sort_unstable();
+        assert_eq!(ids, old);
+        // the language ones come from their packs, the rest from the file
+        for (id, pack) in [
+            ("debugpy", "python"),
+            ("js-debug", "javascript"),
+            ("delve", "go"),
+            ("xdebug", "php"),
+        ] {
+            let m = skald::builtin::get(pack).unwrap();
+            assert!(
+                m.adapters.iter().any(|a| a.id == id),
+                "{id} is in the {pack} pack"
+            );
+            assert!(
+                !BUILTIN.contains(&format!(":id \"{id}\"")),
+                "{id} left etc/debug-adapters.eld"
+            );
+        }
+        // what the picker and the installer read is unchanged
+        let debugpy = table.by_id("debugpy").unwrap();
+        assert_eq!(debugpy.types, ["debugpy", "python"]);
+        assert_eq!(debugpy.install.as_ref().unwrap()["pip"], "debugpy==1.8.22");
+        assert!(
+            debugpy.install.as_ref().unwrap()["hash"]
+                .as_str()
+                .unwrap()
+                .starts_with("sha256:")
+        );
+        let js = table.by_id("js-debug").unwrap();
+        assert_eq!(js.install.as_ref().unwrap()["root"], "js-debug");
+        assert_eq!(table.defaults_for("go").len(), 1);
+    }
+
+    const FIXTURE: &str = r#"(:pack "fixturelang" :schema 1 :version "1" :name "Fixture" :summary "s" :license "MIT"
+ :adapters ((:id "fixture-dap" :name "Fixture (dap)" :types ("fixturedbg") :languages ("fixturelang")
+             :find (:path "fixture-dap") :start (:stdio ("{program}" "--dap")))
+            (:id "stolen" :name "Stolen" :types ("python") :find (:path "x") :start (:stdio ("x")))))"#;
+
+    #[test]
+    fn an_adapter_only_in_a_fixture_pack_is_found_and_started() {
+        let pack = skald::read(FIXTURE.as_bytes()).unwrap();
+        let table = Table::builtin().with_pack(&pack);
+        // a launch type another entry serves stays with the first
+        assert!(table.by_id("stolen").is_none());
+        assert_eq!(table.for_type("python").unwrap().id, "debugpy");
+        let adapter = table.for_type("fixturedbg").unwrap();
+        assert_eq!(adapter.id, "fixture-dap");
+        let dir = std::env::temp_dir().join(format!("fixture-dap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let prog = dir.join("fixture-dap");
+        std::fs::write(&prog, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&prog, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let env = Env {
+            path: vec![dir.clone()],
+            tools: dir.join("tools"),
+        };
+        let found = find(adapter, &env).expect("found on PATH");
+        assert_eq!(found, Found::Program(prog.clone()));
+        let (how, argv) = command(adapter, &found, &env, None).unwrap();
+        assert_eq!(
+            (how, argv),
+            (
+                Transport::Stdio,
+                vec![prog.display().to_string(), "--dap".to_string()]
+            )
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

@@ -7,4 +7,13 @@
  :mode (:ts go-ts-mode :builtin t :classic go-mode)
  :format (:formatter gofmt :command ("gofmt") :standard t)
  :hrafn (:lang "go" :chunks "queries/chunks.scm" :docs (:line "//"))
+ :inline (:functions ("function_declaration" "method_declaration" "func_literal")
+          :loops ("for_statement")
+          :names ("identifier"))
+ :origin (:decls ("{t} := $V" "var {t} = $V" "var {t} $TY = $V"))
+ :adapters ((:id "delve" :name "Go (delve)" :types ("go") :languages ("go") :tested t
+   :find (:path "dlv")
+   :start (:tcp ("{program}" "dap" "--listen" "127.0.0.1:{port}"))
+   :defaults ((:name "Go: Launch Package" :type "go" :request "launch" :mode "debug" :program "${fileDirname}"))
+   :install (:system "dnf install delve")))
  :license "GPL-3.0-or-later" :maintainers ("drgnx"))

@@ -394,6 +394,13 @@ the build fails (no compiler, offline): the folder stays on the load path after 
                     (list :pid (emacs-pid) :start (float-time (alist-get 'start (process-attributes (emacs-pid))))
                           :grammars grammars)))
 
+;;;; Debug adapters
+
+(defun drgnx-packs-adapters ()
+  "The debug adapters the built-in packs name (`:adapters', the schema of `etc/debug-adapters.eld'), as plists, in
+pack order.  The adapter table is that file's entries and these."
+  (seq-mapcat (lambda (p) (plist-get (cdr p) :adapters)) (drgnx-packs-builtins)))
+
 ;;;; What the formatting module reads
 
 (defconst drgnx-packs-format-config-extra '(".scalafmt.conf")

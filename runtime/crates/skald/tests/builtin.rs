@@ -217,3 +217,21 @@ fn the_php_pack_names_the_grammars_its_mode_needs_and_owns_only_its_own() {
         }
     }
 }
+
+#[test]
+fn the_compiled_in_manifests_are_the_packs_folder() {
+    let mut folders: Vec<String> = std::fs::read_dir(packs_dir())
+        .unwrap()
+        .flatten()
+        .filter(|e| e.file_type().unwrap().is_dir())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    folders.sort();
+    let compiled: Vec<&str> = skald::builtin::SOURCES.iter().map(|s| s.0).collect();
+    assert_eq!(compiled, folders);
+    for (name, text) in skald::builtin::SOURCES {
+        let on_disk = std::fs::read_to_string(packs_dir().join(name).join("pack.eld")).unwrap();
+        assert_eq!(*text, on_disk, "{name}");
+        assert_eq!(skald::builtin::get(name).unwrap().pack, *name);
+    }
+}

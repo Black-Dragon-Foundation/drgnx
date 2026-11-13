@@ -7,4 +7,8 @@
  :mode (:ts rust-ts-mode :builtin t :classic rust-mode)
  :format (:formatter rustfmt :command ("rustfmt") :standard t)
  :hrafn (:lang "rust" :chunks "queries/chunks.scm" :docs (:line "///" :members (line) :top (line)))
+ :inline (:functions ("function_item" "closure_expression")
+          :loops ("for_expression" "while_expression" "loop_expression")
+          :names ("identifier"))
+ :origin (:decls ("let {t} = $V;" "let mut {t} = $V;" "let {t}: $TY = $V;"))
  :license "GPL-3.0-or-later" :maintainers ("drgnx"))

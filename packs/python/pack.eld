@@ -6,4 +6,15 @@
  :mode (:ts python-ts-mode :builtin t :classic python-mode)
  :format (:config-files ("ruff.toml" ".ruff.toml"))
  :hrafn (:lang "python" :chunks "queries/chunks.scm" :docs (:line "#" :members (docstring)))
+ :inline (:functions ("function_definition" "lambda")
+          :loops ("for_statement" "while_statement")
+          :names ("identifier"))
+ :origin (:decls ())
+ :adapters ((:id "debugpy" :name "Python (debugpy)" :types ("debugpy" "python") :languages ("python") :tested t
+   :find (:python-module "debugpy")
+   :start (:stdio ("{python}" "-m" "debugpy.adapter"))
+   :defaults ((:name "Python: Current File" :type "debugpy" :request "launch" :program "${file}"
+               :console "integratedTerminal" :cwd "${workspaceFolder}"))
+   :install (:pip "debugpy==1.8.22"
+             :hash "sha256:a9e9d3550e15ca479c59333e90845029190531f0cacfedab3b815a57bd913947")))
  :license "GPL-3.0-or-later" :maintainers ("drgnx"))
