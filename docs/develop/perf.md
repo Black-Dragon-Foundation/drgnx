@@ -1063,7 +1063,7 @@ that judges them. Run them pinned, alone on the perf island:
 The hub's side is a Rust bench, `runtime/crates/drgnx-ratatoskr/benches/extensions.rs`: `catalog-load` (parse and merge
 7,150 rows) at most 100 ms and 15 MB, and `extensions/search` at most 3 ms at the 95th percentile. The 15 MB is what
 the hub's cache keeps (the parsed file and the index): live bytes counted by the bench's own global allocator, not
-resident memory, which a warm process's arenas hide. It is `#[ignore]`d;
+resident memory, which a warm process's arenas hide. It is `#[ignore]`d, and a test whose budget is missed fails;
 run it once, optimized and alone on a pinned host:
 `perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --bench extensions -- --ignored --nocapture --test-threads 1`.
 
