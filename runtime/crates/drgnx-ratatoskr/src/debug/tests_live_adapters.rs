@@ -1339,3 +1339,169 @@ async fn debugpy_hot_reloads_a_saved_function() {
     ev.next(0, "debug-ended", |e| e["session"] == json!(sid))
         .await;
 }
+
+/// The heap graph live (spec §19.7 D7): a ring of three nodes (a → b → c → a) and `shared` = b, stopped on LINE; the
+/// walk from every scope's variables with the adapter's identity must give three objects, `shared` as b, and the
+/// ring closed through the field NEXT. Prints a `HEAP-GRAPH` line.
+async fn heap_graph(
+    id: &'static str,
+    found: Found,
+    dir: &Path,
+    config: Value,
+    env: &[(String, String)],
+    file: &Path,
+    line: u32,
+    next: &str,
+) {
+    let ev = Arc::new(Events::default());
+    let terms = Arc::new(Procs::default());
+    let d = Debug::new(ev.clone(), terms.clone());
+    let root = dir.display().to_string();
+    add(&d, &root, file, line, None, None, None).await;
+    let ty = config["type"].as_str().unwrap().to_owned();
+    let start = Start {
+        name: id.into(),
+        adapter_id: ty.clone(),
+        request: Request::Launch,
+        arguments: super::launch::adapter_arguments(&config),
+        breakpoints: vec![],
+        functions: vec![],
+        exception_filters: None,
+    };
+    d.start(1, &root, start, launcher(id, &found, dir, env))
+        .await
+        .unwrap();
+    let (_, f) = ev.stop(0).await;
+    let sid = f["session"].as_str().unwrap().to_owned();
+    let stop = d.stop_of(&sid).unwrap();
+    let probe = super::heap::SessionProbe {
+        handle: d.session(&sid).unwrap(),
+        epoch: stop.epoch,
+        frame: stop.frame,
+    };
+    // every scope's variables (js-debug's locals are in "Local: main", after none)
+    let roots: Vec<Value> = stop
+        .scopes
+        .iter()
+        .filter_map(|s| s.variables.clone())
+        .flatten()
+        .filter(|v| ["a", "b", "c", "shared"].contains(&v["name"].as_str().unwrap_or_default()))
+        .collect();
+    let ident = super::heap::Ident::of(&ty);
+    let t0 = crate::clock::now();
+    let g = super::heap::walk(&probe, ident, roots, super::heap::Limits::default()).await;
+    eprintln!(
+        "HEAP-GRAPH {}",
+        json!({"adapter": id, "ident": format!("{ident:?}"), "nodes": g.nodes.len(), "cut": g.cut,
+               "ms": t0.elapsed().as_millis(), "roots": g.roots})
+    );
+    d.shutdown().await;
+    let root_of = |n: &str| {
+        g.roots
+            .iter()
+            .find(|(r, _)| r == n)
+            .and_then(|(_, i)| i.clone())
+            .unwrap_or_else(|| panic!("{id}: no node for {n}: {g:#?}"))
+    };
+    let (a, b, c) = (root_of("a"), root_of("b"), root_of("c"));
+    assert!(a != b && b != c && a != c, "{id}: three objects: {g:#?}");
+    assert_eq!(root_of("shared"), b, "{id}: shared is b");
+    assert_eq!(g.nodes.len(), 3, "{id}: {g:#?}");
+    let to = |n: &str| {
+        g.nodes
+            .iter()
+            .find(|x| x.id == n)
+            .and_then(|x| x.fields.iter().find(|f| f.name == next))
+            .and_then(|f| f.to.clone())
+    };
+    assert_eq!(to(&a).as_ref(), Some(&b), "{id}: a.next is b");
+    assert_eq!(to(&c).as_ref(), Some(&a), "{id}: the ring closes");
+}
+
+const HEAP_PY: &str = "class Node:\n    def __init__(self, v):\n        self.v = v\n        self.next = None\n\n\ndef main():\n    a, b, c = Node(1), Node(2), Node(3)\n    a.next, b.next, c.next = b, c, a\n    shared = b\n    print(a.v, shared.v)\n\n\nmain()\n";
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "live: debugpy in the adapter image"]
+async fn heap_graph_debugpy() {
+    let dir = live_dir("heap-py");
+    let file = write(&dir, "heap.py", HEAP_PY);
+    let config = json!({"type": "debugpy", "request": "launch", "name": "hp", "program": file, "cwd": dir,
+                        "justMyCode": true});
+    heap_graph("debugpy", python(), &dir, config, &[], &file, 11, "next").await;
+}
+
+const HEAP_JS: &str = "class Node {\n  constructor(v) { this.v = v; this.next = null; }\n}\nfunction main() {\n  const a = new Node(1), b = new Node(2), c = new Node(3);\n  a.next = b; b.next = c; c.next = a;\n  const shared = b;\n  console.log(a.v, shared.v);\n}\nmain();\n";
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "live: js-debug in the adapter image"]
+async fn heap_graph_js_debug() {
+    let dir = live_dir("heap-js");
+    let file = write(&dir, "heap.js", HEAP_JS);
+    let config =
+        json!({"type": "pwa-node", "request": "launch", "name": "hj", "program": file, "cwd": dir});
+    heap_graph("js-debug", js_debug(), &dir, config, &[], &file, 8, "next").await;
+}
+
+const HEAP_GO: &str = "package main\n\nimport \"fmt\"\n\ntype Node struct {\n\tV    int\n\tNext *Node\n}\n\nfunc main() {\n\ta, b, c := &Node{V: 1}, &Node{V: 2}, &Node{V: 3}\n\ta.Next, b.Next, c.Next = b, c, a\n\tshared := b\n\tfmt.Println(a.V, shared.V)\n}\n";
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "live: delve in the adapter image, with ptrace"]
+async fn heap_graph_delve() {
+    let dir = live_dir("heap-go");
+    let file = write(&dir, "main.go", HEAP_GO);
+    let d = dir.display();
+    let env = vec![
+        ("GOCACHE".to_owned(), format!("{d}/gocache")),
+        ("GOPATH".to_owned(), format!("{d}/gopath")),
+        ("GOTOOLCHAIN".to_owned(), "local".to_owned()),
+        ("GOFLAGS".to_owned(), String::new()),
+        ("GO111MODULE".to_owned(), "off".to_owned()),
+    ];
+    let config = json!({"type": "go", "request": "launch", "name": "hg", "mode": "debug", "program": file,
+                        "cwd": dir, "output": dir.join("debug_bin")});
+    heap_graph(
+        "delve",
+        on_path("delve"),
+        &dir,
+        config,
+        &env,
+        &file,
+        14,
+        "Next",
+    )
+    .await;
+}
+
+const HEAP_CPP: &str = "#include <cstdio>\n\nstruct Node {\n  int v;\n  Node *next;\n};\n\nint main() {\n  Node *a = new Node{1, nullptr}, *b = new Node{2, nullptr}, *c = new Node{3, nullptr};\n  a->next = b; b->next = c; c->next = a;\n  Node *shared = b;\n  std::printf(\"%d %d\\n\", a->v, shared->v);\n  return 0;\n}\n";
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "live: lldb-dap and clang in the adapter image, with ptrace"]
+async fn heap_graph_lldb_dap() {
+    let dir = live_dir("heap-lldb");
+    let file = write(&dir, "heap.cpp", HEAP_CPP);
+    run(&dir, "clang++", &["-g", "-O0", "-o", "heap", "heap.cpp"]);
+    let config = json!({"type": "lldb-dap", "request": "launch", "name": "hl", "program": dir.join("heap"),
+                        "cwd": dir, "disableASLR": false});
+    heap_graph(
+        "lldb-dap",
+        on_path("lldb-dap"),
+        &dir,
+        config,
+        &[],
+        &file,
+        12,
+        "next",
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "live: CodeLLDB and clang in the adapter image, with ptrace"]
+async fn heap_graph_codelldb() {
+    let dir = live_dir("heap-codelldb");
+    let file = write(&dir, "heap.cpp", HEAP_CPP);
+    run(&dir, "clang++", &["-g", "-O0", "-o", "heap", "heap.cpp"]);
+    let config = json!({"type": "lldb", "request": "launch", "name": "hc", "program": dir.join("heap"),
+                        "cwd": dir});
+    heap_graph("codelldb", codelldb(), &dir, config, &[], &file, 12, "next").await;
+}
