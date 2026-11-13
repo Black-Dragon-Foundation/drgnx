@@ -245,6 +245,10 @@ pub fn rows(b: &Built, look: Look) -> (Vec<Row>, Vec<(ImageId, String)>) {
             if let Some((chip, face)) = state_chip(r) {
                 l.push("  ", None).push(&chip, Some(face));
             }
+            if !r.layers.is_empty() {
+                l.push("  ", None)
+                    .push(&r.layers.join(" · "), Some("shadow"));
+            }
             if b.restart.contains(&r.id) {
                 l.push("  ", None)
                     .push("restart to use", Some("drgnx-status-warn"));

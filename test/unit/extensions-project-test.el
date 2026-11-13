@@ -366,3 +366,31 @@ and the rows as the hub sends them."
         (should-not (buffer-local-value 'drgnx-ext-fx-lint-mode b))))))
 
 ;;; extensions-project-test.el ends here
+
+;;;; Language packs
+
+(define-derived-mode drgnx-ext-fx-py-mode prog-mode "FxPy" "A language pack's classic mode.")
+(define-derived-mode drgnx-ext-fx-py-ts-mode prog-mode "FxPyTS" "A language pack's tree-sitter mode.")
+
+(ert-deftest drgnx-extensions-project/a-language-pack-off-in-one-project-gives-the-classic-mode ()
+  ;; a pack is a row of its own (pack:NAME): off in P, its files get the classic mode the pack's remap replaces; in Q
+  ;; the tree-sitter mode; a pack with no mode of its own to fall back to (generic) has no toggle
+  (drgnx-ext-project-test--with
+    (cl-letf (((symbol-function 'drgnx-packs-project-index)
+               (lambda () '((pack:fxpy :scope narrow :auto (("\\.fxpy\\'" . drgnx-ext-fx-py-ts-mode))
+                                       :remap-from (drgnx-ext-fx-py-mode))))))
+      (let ((auto-mode-alist (append '(("\\.fxpy\\'" . drgnx-ext-fx-py-ts-mode) ("\\.fxpy\\'" . drgnx-ext-fx-py-mode))
+                                     auto-mode-alist))
+            (major-mode-remap-alist (list (cons 'drgnx-ext-fx-py-mode 'drgnx-ext-fx-py-ts-mode))))
+        (drgnx-extensions-project-setup)
+        (should (eq (drgnx-extensions-project-scope 'pack:fxpy) 'narrow))
+        (drgnx-extensions-project-set 'pack:fxpy drgnx-ext-project-test--p t)
+        (should (drgnx-extensions-project-off-p 'pack:fxpy drgnx-ext-project-test--p))
+        (should (eq (drgnx-ext-project-test--mode (drgnx-ext-project-test--open drgnx-ext-project-test--p "a.fxpy"))
+                    'drgnx-ext-fx-py-mode))
+        (should (eq (drgnx-ext-project-test--mode (drgnx-ext-project-test--open drgnx-ext-project-test--q "a.fxpy"))
+                    'drgnx-ext-fx-py-ts-mode))
+        (drgnx-extensions-project-set 'pack:fxpy drgnx-ext-project-test--p nil)
+        (should (eq (drgnx-ext-project-test--mode (drgnx-ext-project-test--open drgnx-ext-project-test--p "b.fxpy"))
+                    'drgnx-ext-fx-py-ts-mode))
+        (should-not (drgnx-extensions-project-scope 'pack:generic))))))

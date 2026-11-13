@@ -401,6 +401,25 @@ the build fails (no compiler, offline): the folder stays on the load path after 
 pack order.  The adapter table is that file's entries and these."
   (seq-mapcat (lambda (p) (plist-get (cdr p) :adapters)) (drgnx-packs-builtins)))
 
+;;;; Off in one project
+
+(defun drgnx-packs-project-index ()
+  "The installed packs as entries of the Extensions modes index, ((pack:NAME :scope narrow :auto ((REGEXP . TS-MODE))
+:remap-from (CLASSIC-MODE))…): the packs a project can turn off.  A pack of the generic mode shares its one mode with
+three others, so it has no entry (and no toggle)."
+  (let (out)
+    (dolist (l (drgnx-packs-locked))
+      (when-let* ((m (drgnx-packs-manifest (car l)))
+                  (mode (plist-get m :mode)) (ts (plist-get mode :ts))
+                  (files (plist-get m :files))
+                  (re (or (plist-get files :mode-regexp)
+                          (and (plist-get files :extensions)
+                               (concat "\\." (regexp-opt (plist-get files :extensions) t) "\\'")))))
+        (push (append (list (intern (format "pack:%s" (car l))) :scope 'narrow :auto (list (cons re ts)))
+                      (and (plist-get mode :classic) (list :remap-from (list (plist-get mode :classic)))))
+              out)))
+    (nreverse out)))
+
 ;;;; What the formatting module reads
 
 (defconst drgnx-packs-format-config-extra '(".scalafmt.conf")

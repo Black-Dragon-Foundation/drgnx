@@ -80,5 +80,33 @@
             (kill-buffer buf)
             (delete-directory dir t)))))))
 
+(ert-deftest drgnx-packs-gui/a-pack-page-shows-its-actions ()
+  ;; the page of a language pack (Extensions): its header and its Install, then its Remove, drawn in the real frame
+  (skip-unless (file-exists-p drgnx-packs-gui--marker))
+  (add-to-list 'load-path (expand-file-name "modules/tools" drgnx-packs-gui--root))
+  (require 'drgnx-extensions-details (expand-file-name "modules/tools/drgnx-extensions-details" drgnx-packs-gui--root))
+  (dolist (state '(available installed))
+    (let ((buf (generate-new-buffer (format "*pack page %s*" state))) (dir (make-temp-file "pack-page-" t)))
+      (unwind-protect
+          (progn
+            (set-window-buffer (selected-window) buf)
+            (with-current-buffer buf
+              (setq-local drgnx-extensions-details--id "pack:kotlin")
+              (cl-letf (((symbol-function 'drgnx-extensions-details--row)
+                         (lambda () (list :kind 'pack :state state :name "Kotlin" :summary "Kotlin language support"))))
+                (insert (propertize "Kotlin" 'face 'bold) "  grammar · mode · search\n\n"
+                        (drgnx-extensions-details--render-actions)))
+              (should (string-search (if (eq state 'installed) "[Remove]" "[Install]") (buffer-string))))
+            (redisplay t)
+            (drgnx-test-wait-presented)
+            (let ((root (plist-get (drgnx-uitest-capture dir) :root)))
+              (should (file-exists-p root))
+              (when (file-exists-p drgnx-packs-gui--evidence)
+                (let ((out (string-trim (with-temp-buffer (insert-file-contents drgnx-packs-gui--evidence) (buffer-string)))))
+                  (when (file-directory-p out)
+                    (copy-file root (expand-file-name (format "pack-page-%s.png" state) out) t))))))
+        (kill-buffer buf)
+        (delete-directory dir t)))))
+
 (provide 'packs-gui-test)
 ;;; packs-gui-test.el ends here
