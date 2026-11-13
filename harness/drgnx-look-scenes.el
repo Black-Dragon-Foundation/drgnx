@@ -51,9 +51,9 @@
     (search-kinds :mockup search-view)
     (debugging))
   "The scenes in the order they are drawn: (NAME . PLIST).  NAME is the mockup's (docs/specs, the-look/NAME.png; the
-start page, the highlights, the focused Explorer and the Extensions list have none: they are judged against the components' spec and
-the tokens) and the session's `drgnx-look-scene-NAME' sets it up.  :agent t starts the mock agent first; :keys and
-:type are typed after the setup and before the shot, :then after it.")
+start page, the highlights, the focused Explorer and the Extensions list have none: they are judged against the
+components' spec and the tokens) and the session's `drgnx-look-scene-NAME' sets it up.  :agent t starts the mock
+agent first; :keys and :type are typed after the setup and before the shot, :then after it.")
 
 (defun drgnx-look-scenes--only ()
   "The scenes to draw: those whose name matches $DRGNX_LOOK_ONLY (a regexp), or all of them."
