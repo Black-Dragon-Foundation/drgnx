@@ -13,7 +13,7 @@ case ${BASH_SOURCE[0]-} in
   */*) _drgnx_dir=$PWD/${BASH_SOURCE[0]%/*} ;;
   *) _drgnx_dir=$PWD ;;
 esac
-_drgnx_commands='open doctor build test ui macos-app sync upgrade rollback generations lock bisect service-unit onboard check lease fmt work hub runtime job runner search keys safe help shell secrets bootstrap update coord graph childframe-elpa browser plugins extensions record replay'
+_drgnx_commands='open doctor build test ui macos-app sync upgrade rollback generations lock bisect service-unit onboard check lease fmt work hub runtime job runner search keys safe help shell secrets bootstrap update coord graph childframe-elpa browser plugins packs extensions record replay'
 _drgnx_steps='environment look-and-keys projects ai search agents daemon portability finish'
 _drgnx_bootstrap_steps='preflight config keys sync onboard desktop shell doctor'
 _drgnx_presets='minimal ide full-ai'
@@ -102,6 +102,9 @@ _drgnx() {
           'secrets import') words='--identity --replace' ;;
           'plugins install') words='--replace' ;;
           'plugins list') words='--json' ;;
+          'packs sync') words='--add --remove' ;;
+          'packs check') words='--builtin --other' ;;
+          'packs pin') words='--src' ;;
           'secrets ls') words='--identity' ;;
           'bootstrap '*) words='--config --chezmoi --identity --step --dry-run --yes --replace' ;;
           'update '*) words='--quiet --back --restart --auto' ;;
@@ -115,6 +118,7 @@ _drgnx() {
           runtime) words='build install' ;;
           browser) words='install list' ;;
           plugins) words='install list remove' ;;
+          packs) words='list sync migrate check pin' ;;
           job) words='propose approve resume stop status' ;;
           runner) words='list add check bench trust unbench remove audit' ;;
           search) words='index query mcp' ;;
