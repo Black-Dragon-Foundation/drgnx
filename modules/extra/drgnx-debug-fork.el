@@ -18,6 +18,7 @@
 (require 'subr-x)
 (require 'drgnx-debug-launch (expand-file-name "drgnx-debug-launch" (file-name-directory (macroexp-file-name))))
 (declare-function drgnx-hub-call-sync "drgnx-hub-client")
+(declare-function drgnx-debug-timeline-sent-p "drgnx-debug-timeline" (run))
 (defvar drgnx-hub-event-functions)
 
 (defgroup drgnx-debug-fork nil "What-if forks." :group 'drgnx)
@@ -61,6 +62,12 @@
     ("a probe's next hit" (list :probe (read-string "Probe: ")))
     (_ "stop")))
 
+(defun drgnx-debug-fork--refuse-sent (run)
+  "Refuse RUN when someone sent it: its program and settings are the sender's, so it is never run here (the hub's
+`fork::check' refuses it too)."
+  (when (and (fboundp 'drgnx-debug-timeline-sent-p) (drgnx-debug-timeline-sent-p run))
+    (user-error "This run was sent to you: its program is the sender's, so it is never run here (no forks)")))
+
 (defun drgnx-debug-fork (run at &optional change until anyway)
   "Fork recorded RUN at AT (`drgnx-debug-fork-point-function''s form), with CHANGE, running UNTIL: its id.
 ANYWAY: fork at this pass even when a local differs from the run's that may come from a value the fork does not
@@ -69,7 +76,9 @@ asked."
   (interactive
    (let ((here (and drgnx-debug-fork-point-function (funcall drgnx-debug-fork-point-function))))
      (unless here (user-error "No recorded run is shown here: fork from a stop of a recorded run"))
+     (drgnx-debug-fork--refuse-sent (car here))
      (list (car here) (cdr here) (drgnx-debug-fork--read-change) (drgnx-debug-fork--read-until))))
+  (drgnx-debug-fork--refuse-sent run)
   (let ((inputs nil) (confirm nil) (result nil))
     (while (not result)
       (let ((r (drgnx-hub-call-sync "debug/fork"

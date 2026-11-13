@@ -60,17 +60,23 @@ UI scale, half up)."
   (let ((w (or (alist-get 'child-frame-border-width (drgnx-palette-frame--look)) 0)))
     (if (> w 0) (drgnx-px-line w frame) 0)))
 
+(defun drgnx-palette-frame-modal-chrome (parent)
+  "The chrome of a modal card's child frame under PARENT (the palette, Send Run): the look's table for the variant
+\(radius 12, the modal elevation), its ring (high contrast's 2 px, the `child-frame-border' face) in PARENT's pixels.
+A card pads its text inside the ring itself, never in the border, or high contrast loses the ring."
+  `((child-frame-border-width . ,(drgnx-palette-frame-ring parent))
+    ,@(assq-delete-all 'child-frame-border-width (copy-sequence (drgnx-palette-frame--look)))))
+
 (defun drgnx-palette-frame--params (parent)
   "The frame parameters of the palette's child frame under PARENT."
   `((parent-frame . ,parent) (minibuffer . nil) (name . "drgnx-palette") (drgnx-palette . t)
     (undecorated . t) (no-accept-focus . t) (no-focus-on-map . t) (no-other-frame . t)
     (skip-taskbar . t) (unsplittable . t) (no-special-glyphs . t) (desktop-dont-save . t)
     (internal-border-width . ,(drgnx-palette-frame--px parent 8)) (border-width . 0)
-    (child-frame-border-width . ,(drgnx-palette-frame-ring parent))
     (menu-bar-lines . 0) (tool-bar-lines . 0) (tab-bar-lines . 0) (tab-bar-lines-keep-state . t)
     (left-fringe . 0) (right-fringe . 0) (vertical-scroll-bars) (horizontal-scroll-bars)
     (visibility . nil)
-    ,@(assq-delete-all 'child-frame-border-width (copy-sequence (drgnx-palette-frame--look)))))
+    ,@(drgnx-palette-frame-modal-chrome parent)))
 
 (defun drgnx-palette-frame--look ()
   "The look's parameters for the palette's frame (the variant's table, or the user's `drgnx-look-palette')."

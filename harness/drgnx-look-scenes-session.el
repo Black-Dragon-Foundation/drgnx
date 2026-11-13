@@ -184,7 +184,12 @@ branch gateway-queue, staged file and history come with the Magit adapter (look 
     (debug-extras-light "the extras mockup's panels are cut from these windows (debugging-extras.png has no window)"
                         "a breakpoint being dragged is not shown: the drag lasts only while the mouse button is held")
     (debug-extras-views "the extras mockup's panels are cut from these windows (debugging-extras.png has no window)")
-    (debug-extras-views-light "the extras mockup's panels are cut from these windows (debugging-extras.png has no window)"))
+    (debug-extras-views-light "the extras mockup's panels are cut from these windows (debugging-extras.png has no window)")
+    (send-run "the card's run is the scene's record: the container has no keyring, so no run is recorded")
+    (send-run-code "the code and the size are the scene's own: the container has no keyring, so no run is recorded to export"
+                   "a sent run on the strip is not shown: it needs a recorded run to import (its Sent line has unit tests)")
+    (send-run-light "the card's run is the scene's record: the container has no keyring, so no run is recorded")
+    (send-run-code-light "the code and the size are the scene's own: the container has no keyring, so no run is recorded to export"))
   "What the line cannot show of each scene's mockup yet, written to the scene's facts (:limits).  A scene is never
 changed to hide a gap: the gap is named here instead.")
 
@@ -333,9 +338,16 @@ from 201."
   (drgnx-look-scene--answer :panel (if (buffer-live-p drgnx-look-scene--panel) (buffer-name drgnx-look-scene--panel) :null)))
 
 (defun drgnx-look-scene--editor ()
+  "The editor on the gateway file, with the Explorer's Files section drawn: its rows come from the hub, so the scenes'
+hub is started first and the shot waits for them (a session starts no hub: without one the section is empty)."
+  (drgnx-look-scene--try "hub" (drgnx-look-scene--hub))
   (drgnx-look-scene--try "editor"
     (drgnx-wb-focus-editor)
-    (drgnx-look-scene--goto "core/drgnx-gateway.el" 216 33 201)))
+    (drgnx-look-scene--goto "core/drgnx-gateway.el" 216 33 201))
+  (drgnx-look-scene--until 20 "explorer files rows"
+                           (lambda () (when-let* ((b (get-buffer drgnx-explorer-buffer-name)))
+                                        (with-current-buffer b
+                                          (save-excursion (goto-char (point-min)) (search-forward "Makefile" nil t)))))))
 
 (defun drgnx-look-scene-window-dark ()
   (drgnx-look-scene--theme 'drgnx-dark)
@@ -576,6 +588,72 @@ sections' with the inactive selection."
 (defun drgnx-look-scene-explorer-focused-light () (drgnx-look-scene--explorer-focused 'drgnx-light))
 (defun drgnx-look-scene-explorer-focused-hc () (drgnx-look-scene--explorer-focused 'drgnx-high-contrast))
 
+;;;; The Extensions list beside the Explorer: no mockup of its own; its kind icons are judged against the Explorer's rows
+
+(declare-function drgnx-extensions-open "drgnx-extensions-list")
+(declare-function drgnx-extensions-list--hub-fed-p "drgnx-extensions-list")
+(defvar drgnx-extensions-list-buffer-name)
+
+(defconst drgnx-look-scene--catalog
+  (concat "{\"version\":1,\"archives\":[{\"name\":\"gnu\",\"url\":\"https://elpa.gnu.org/packages/\",\"signed\":true}],"
+          "\"packages\":["
+          "{\"name\":\"dash\",\"summary\":\"A modern list API\",\"versions\":[{\"archive\":\"gnu\",\"version\":\"2.19\",\"reqs\":[]}],"
+          "\"candidate\":{\"archive\":\"gnu\",\"version\":\"2.19\"}},"
+          "{\"name\":\"magit\",\"summary\":\"A Git porcelain inside Emacs\",\"versions\":[{\"archive\":\"gnu\",\"version\":\"4.2\",\"reqs\":[]}],"
+          "\"candidate\":{\"archive\":\"gnu\",\"version\":\"4.2\"},\"update\":{\"from\":\"4.1\",\"to\":\"4.2\"}},"
+          "{\"name\":\"vertico\",\"summary\":\"VERTical Interactive COmpletion\",\"versions\":[{\"archive\":\"gnu\",\"version\":\"2.0\",\"reqs\":[]}],"
+          "\"candidate\":{\"archive\":\"gnu\",\"version\":\"2.0\"}}],"
+          "\"builtins\":[{\"name\":\"eglot\",\"version\":\"1.17\",\"summary\":\"The Emacs Client for LSP servers\"},"
+          "{\"name\":\"project\",\"version\":\"0.11\",\"summary\":\"Operations on the current project\"}]}")
+  "The scene's catalog: three installed packages (one with an update) and two built-ins.")
+
+(defconst drgnx-look-scene--lock
+  (concat "(:version 1 :packages ((dash :version \"2.19\" :archive \"gnu\" :kind tar :sha256 \"aa\" :requires nil :verified t)"
+          " (magit :version \"4.1\" :archive \"gnu\" :kind tar :sha256 \"bb\" :requires nil :wanted user)"
+          " (vertico :version \"2.0\" :archive \"gnu\" :kind tar :sha256 \"cc\" :requires nil :wanted user)))")
+  "The scene's lock: what the catalog's installed rows are.")
+
+(defun drgnx-look-scene--extensions-fixture ()
+  "The hub's Extensions sources in the session's temp HOME: the catalog, the lock (when the session has none), and a
+plugin installed through the hub (an unapproved plugin row)."
+  (let* ((xdg (lambda (var dot) (expand-file-name "drgnx" (or (getenv var) (expand-file-name dot "~")))))
+         (cache (expand-file-name "extensions" (funcall xdg "XDG_CACHE_HOME" ".cache")))
+         (config (or (getenv "DRGNX_CONFIG_DIR") (funcall xdg "XDG_CONFIG_HOME" ".config")))
+         (lock (expand-file-name "drgnx.lock.eld" config))
+         (plugin (expand-file-name "look-plugin" temporary-file-directory)))
+    (make-directory cache t)
+    (with-temp-file (expand-file-name "catalog.json" cache) (insert drgnx-look-scene--catalog))
+    (unless (file-exists-p lock)
+      (make-directory config t)
+      (with-temp-file lock (insert drgnx-look-scene--lock)))
+    (make-directory plugin t)
+    (with-temp-file (expand-file-name "plugin.json" plugin)
+      (insert "{\"name\": \"word-count\", \"version\": \"1.0.0\", \"hosts\": []}"))
+    (with-temp-file (expand-file-name "plugin.wasm" plugin) (insert "wasm-one"))
+    (call-process (getenv "DRGNX_RATATOSKR_BIN") nil nil nil "plugins" "install" plugin)))
+
+(defun drgnx-look-scene--extensions (theme)
+  "The window scene under THEME with the Extensions list (the hub's rows: package, plugin and module icons) in the
+editor, the Explorer's rows beside it."
+  (drgnx-look-scene--theme theme)
+  (drgnx-look-scene--editor)
+  (require 'drgnx-extensions-list)
+  (unless (get-buffer drgnx-extensions-list-buffer-name)   ; once: the scenes share a session
+    (drgnx-look-scene--try "fixture" (drgnx-look-scene--extensions-fixture)))
+  (drgnx-look-scene--try "extensions"
+    (drgnx-wb-focus-editor)
+    (drgnx-extensions-open)
+    (drgnx-look-scene--until 20 "extensions rows"
+                             (lambda () (and (drgnx-extensions-list--hub-fed-p)
+                                             (with-current-buffer drgnx-extensions-list-buffer-name
+                                               (> (buffer-size) 0)))))
+    (with-current-buffer drgnx-extensions-list-buffer-name (goto-char (point-min))))
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-extensions-dark () (drgnx-look-scene--extensions 'drgnx-dark))
+(defun drgnx-look-scene-extensions-light () (drgnx-look-scene--extensions 'drgnx-light))
+(defun drgnx-look-scene-extensions-hc () (drgnx-look-scene--extensions 'drgnx-high-contrast))
+
 ;;;; The Search view's preview tile and Replace All sheet (search-view.html)
 
 (defvar drgnx-replace-buffer-name)
@@ -772,15 +850,24 @@ colour bar and the file's chip."
 (defvar drgnx-debug--sessions)
 (declare-function drgnx-debug-view "drgnx-debug-view")
 (declare-function drgnx-debug-view--buffer "drgnx-debug-view")
+(defvar drgnx-debug-view--config)
 (declare-function drgnx-debug-view--toggle "drgnx-debug-view")
 (declare-function drgnx-debug-console-show "drgnx-debug-console")
 (declare-function drgnx-debug-open-disassembly "drgnx-debug-disassembly")
+(declare-function drgnx-debug-send-run "drgnx-debug-share" (run path))
+(declare-function drgnx-debug-share--close "drgnx-debug-share" ())
+(declare-function drgnx-debug-share--render "drgnx-debug-share" ())
+(defvar drgnx-debug-share-buffer)
+(defvar drgnx-debug-share--card)
 (declare-function drgnx-debug-memory-open "drgnx-debug-memory")
 (declare-function drgnx-quickhelp--request "drgnx-quickhelp")
 (declare-function drgnx-quickhelp-shown-p "drgnx-quickhelp")
 (defvar drgnx-debug-console-timestamps)
 (defvar drgnx-debug-gutter--candidates)
 (defvar drgnx-debug-disassembly-buffer-name)
+(defvar drgnx-debug-disassembly--bps)
+(declare-function drgnx-debug-disassembly--line-of "drgnx-debug-disassembly" (address))
+(declare-function drgnx-debug-disassembly-toggle-breakpoint "drgnx-debug-disassembly" ())
 
 (defun drgnx-look-scene--debug-script (&optional extras)
   "The mock adapter's script for the debugging mockup's stop: the program's output, a stop on line 24 in
@@ -802,7 +889,12 @@ top frame an instruction, `shortfall' a hover value)."
     (vconcat
      (list
       (list :expect "initialize" :ok (append (list :supportsConfigurationDoneRequest t :supportsRestartRequest t
-                                                   :supportsCompletionsRequest t)
+                                                   :supportsCompletionsRequest t
+                                                   ;; Breakpoints' first two rows (debugging.html)
+                                                   :exceptionBreakpointFilters
+                                                   (vector (list :filter "raised" :label "Raised Exceptions")
+                                                           (list :filter "uncaught" :label "Uncaught Exceptions"
+                                                                 :default t)))
                                              (and extras (list :supportsBreakpointLocationsRequest t
                                                                :supportsReadMemoryRequest t
                                                                :supportsDisassembleRequest t
@@ -813,6 +905,7 @@ top frame an instruction, `shortfall' a hover value)."
       (list :expect "setBreakpoints"
             :ok (list :breakpoints (vector (list :id 1 :verified t :line 18) (list :id 2 :verified t :line 22)
                                            (list :id 3 :verified t :line 24) (list :id 4 :verified t :line 25))))
+      (list :expect "setExceptionBreakpoints")
       (list :expect "configurationDone")
       (funcall out "console" "Launching app.py with debugpy 1.8 · cwd ~/src/stockroom\n"))
      (if (not extras)
@@ -937,6 +1030,9 @@ runs that script, else a new one (an old one ended first).  The breakpoints and 
             (insert (decode-coding-string (json-serialize (drgnx-look-scene--debug-script extras)) 'utf-8))))
         ;; visited before the start: the stop's frame and inline values mark a buffer that visits the file
         (find-file-noselect inv)
+        ;; the view's picker shows what Start runs, as when the user picked it (debugging.html `.cfg')
+        (with-current-buffer (drgnx-debug-view--buffer)
+          (setq drgnx-debug-view--config (cons "launch:0" "Python: plan the week")))
         (drgnx-hub-call-sync
          "debug/start"
          (list :root root :config "launch:0"
@@ -1037,6 +1133,13 @@ with groups and timestamps.  VIEWS: the Disassembly in the editor and the memory
           (drgnx-look-scene--until 5 "the instructions"
                                    (lambda () (with-current-buffer drgnx-debug-disassembly-buffer-name
                                                 (string-search "pack_size" (buffer-string)))))
+          ;; the mockup's instruction breakpoint on the call (the session keeps it for the light scene)
+          (with-current-buffer drgnx-debug-disassembly-buffer-name
+            (unless drgnx-debug-disassembly--bps
+              (goto-char (drgnx-debug-disassembly--line-of #x40113a))
+              (drgnx-debug-disassembly-toggle-breakpoint)
+              (drgnx-look-scene--until 5 "the instruction breakpoint"
+                                       (lambda () drgnx-debug-disassembly--bps))))
           ;; the editor split: the Disassembly above, the memory below (the mockup shows both)
           (unless (get-buffer-window "*Memory: item*")
             (let* ((top (selected-window)) (below (split-window top nil 'below)))
@@ -1048,6 +1151,37 @@ with groups and timestamps.  VIEWS: the Disassembly in the editor and the memory
                                    (lambda () (with-current-buffer "*Memory: item*"
                                                 (string-search "nut-m6" (buffer-string)))))))))
   (drgnx-look-scene--answer))
+
+(defconst drgnx-look-scene--send-run
+  '(:id "r-scene" :n 4 :name "Python: plan the week" :stops 3 :ended 1763038320.0 :probes [(:id "p1") (:id "p2")])
+  "The run the Send Run scenes offer: a record as `debug/runs/list' gives it.")
+
+(defun drgnx-look-scene--send-run (theme written)
+  "The Send Run card in THEME over inventory.py: the card before anything is written, or (WRITTEN) the code card, its
+code and size the scene's own (the container has no keyring, so no run is recorded to export)."
+  (drgnx-look-scene--theme theme)
+  (drgnx-look-scene--try (if written "send-run-code" "send-run")
+    (when-let* ((b (get-buffer drgnx-debug-share-buffer)))
+      (with-current-buffer b (drgnx-debug-share--close)))
+    (drgnx-wb-focus-editor)
+    (let ((f (expand-file-name "inventory.py" drgnx-look-scene--project)))
+      (unless (file-exists-p f) (with-temp-file f (insert drgnx-look-scene--inventory)))
+      (find-file f))
+    (drgnx-debug-send-run drgnx-look-scene--send-run "~/plan-the-week-run4.drgnx-run")
+    (when written
+      (with-current-buffer drgnx-debug-share-buffer
+        (setq drgnx-debug-share--card
+              (plist-put (plist-put (plist-put drgnx-debug-share--card :state 'written)
+                                    :code "K7QF-M2XD-9RTA-PL4W-ZB6N-C3HV-Y8EG-UJ5S-QW2M-R7DK-X4PA-N6TB-FHC2")
+                         :bytes 188416))
+        (drgnx-debug-share--render)))
+    (redisplay t))
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-send-run () "Send Run's card, dark." (drgnx-look-scene--send-run 'drgnx-dark nil))
+(defun drgnx-look-scene-send-run-code () "Send Run's code card, dark." (drgnx-look-scene--send-run 'drgnx-dark t))
+(defun drgnx-look-scene-send-run-light () "Send Run's card, light." (drgnx-look-scene--send-run 'drgnx-light nil))
+(defun drgnx-look-scene-send-run-code-light () "Send Run's code card, light." (drgnx-look-scene--send-run 'drgnx-light t))
 
 (defun drgnx-look-scene-debug-extras () "The debugging extras' editor, dark." (drgnx-look-scene--debug-extras 'drgnx-dark nil))
 (defun drgnx-look-scene-debug-extras-light () "The debugging extras' editor, light." (drgnx-look-scene--debug-extras 'drgnx-light nil))
@@ -1151,6 +1285,13 @@ chrome faces, frame metrics, windows, modules."
                                                      :mode (buffer-local-value 'major-mode (window-buffer w))))
                                    (window-list f 'no-mini))
                   :children (cl-count-if (lambda (c) (and (frame-visible-p c) (frame-parent c))) (frame-list))
+                  ;; each visible child frame: where it is and what it shows (a stray one reads as a band)
+                  :child-frames (mapcar (lambda (c)
+                                          (list (buffer-name (window-buffer (frame-root-window c)))
+                                                :pos (frame-position c) :px (list (frame-pixel-width c) (frame-pixel-height c))
+                                                :parent (and (frame-parent c) (frame-parameter (frame-parent c) 'name))))
+                                        (cl-remove-if-not (lambda (c) (and (frame-visible-p c) (frame-parent c)))
+                                                          (frame-list)))
                   ;; why the palette floats or not, while a minibuffer is open
                   :palette (when-let* ((w (active-minibuffer-window)))
                              (with-current-buffer (window-buffer w)

@@ -231,7 +231,7 @@ fn search() {
                     w::Sort::Relevance
                 };
                 let t = Instant::now();
-                let hits = rank::search(&index.entries, q, f, sort);
+                let hits = rank::search(&index.entries, q, f, None, sort);
                 times.push(t.elapsed().as_secs_f64() * 1000.0);
                 std::hint::black_box(hits);
             }

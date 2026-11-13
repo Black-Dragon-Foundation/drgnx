@@ -106,11 +106,21 @@ window selected.")
     ("Close All Editors" . close-all))
   "The island header's ⋯ menu: (LABEL . COMMAND), COMMAND a registry id.")
 
-(defun drgnx-wb--island-title ()
-  "The island's name: the Explorer's first folder, or Explorer."
-  (if-let* ((root (car (and (fboundp 'drgnx-explorer-roots) (drgnx-explorer-roots)))))
-      (file-name-nondirectory (directory-file-name root))
-    "Explorer"))
+(defvar drgnx-wb-island-views nil
+  "Alist VIEW → (:title STRING :buttons BUTTONS): the island header of a sidebar view other than the Explorer, its
+name and its buttons before the ⋯ (as `drgnx-wb-island-buttons').  A module puts its view's entry in its setup
+\(`drgnx-module-alist-put').")
+
+(defun drgnx-wb--island-view (&optional frame)
+  "The island entry of FRAME's sidebar view (`drgnx-wb-island-views'), or nil for the Explorer's."
+  (alist-get (drgnx-wb-sidebar-view frame) drgnx-wb-island-views))
+
+(defun drgnx-wb--island-title (&optional frame)
+  "The island's name: FRAME's sidebar view's, else the Explorer's first folder, or Explorer."
+  (or (plist-get (drgnx-wb--island-view frame) :title)
+      (if-let* ((root (car (and (fboundp 'drgnx-explorer-roots) (drgnx-explorer-roots)))))
+          (file-name-nondirectory (directory-file-name root))
+        "Explorer")))
 
 (defvar drgnx-wb--island-map
   (let ((m (make-sparse-keymap))) (define-key m [tab-line mouse-1] #'drgnx-wb-island-click) m)
@@ -130,12 +140,15 @@ File, Find and ⋯ at the right, 8 px from the edge.  Built when the sidebar sho
 drawing."
   (let* ((graphic (display-graphic-p frame))
          (gap (if graphic (propertize " " 'display `(space :width (,(drgnx-px 6 frame)))) " "))
+         (view (drgnx-wb--island-view frame))
+         (specs (if view (plist-get view :buttons) drgnx-wb-island-buttons))
          (buttons (mapconcat (lambda (b) (drgnx-wb--island-button (nth 0 b) (nth 1 b) (nthcdr 2 b) graphic))
-                             drgnx-wb-island-buttons gap))
-         (all (concat buttons gap (drgnx-wb--island-button 'ellipsis "More actions" 'menu graphic)))
+                             specs gap))
+         (all (concat buttons (and specs gap) (drgnx-wb--island-button 'ellipsis "More actions" 'menu graphic)))
          (end (if graphic (list (drgnx-px 8 frame)) 1))
          (width (if graphic
-                    (list (+ (* 3 (drgnx-px 24 frame)) (* 2 (drgnx-px 6 frame)) (car end)))
+                    (list (+ (* (1+ (length specs)) (drgnx-px 24 frame)) (* (length specs) (drgnx-px 6 frame))
+                             (car end)))
                   (+ (string-width all) 1)))
          (lead (if graphic
                    (let* ((height (drgnx-px 34 frame))
@@ -145,7 +158,7 @@ drawing."
                                                       ,@(and extent `(:height (,height)
                                                                               :ascent ,(min 100 (max 0 (ceiling (* 100.0 (- height below)) height))))))))
                  " ")))
-    (drgnx-wb-bar (concat lead (propertize (drgnx-wb--island-title) 'face 'drgnx-wb-island-title)
+    (drgnx-wb-bar (concat lead (propertize (drgnx-wb--island-title frame) 'face 'drgnx-wb-island-title)
                           (propertize " " 'display `(space :align-to (- right ,width)))
                           all
                           (propertize " " 'display `(space :align-to (- right ,end))))
@@ -580,7 +593,8 @@ them sets the line)."
 (defun drgnx-wb-define-section (name &rest spec)
   "Define dock section NAME: SPEC is (:slot N :title STRING-OR-FUNCTION-RETURNING-ONE
 :buffer FUNCTION-RETURNING-A-BUFFER :height FRACTION-OF-THE-DOCK :fit FRACTION: as tall as the buffer's
-lines, at most that fraction of the frame (`drgnx-wb-fit-sections') :on-show FUNCTION-OF-THE-WINDOW
+lines, at most that fraction of the frame (`drgnx-wb-fit-sections') :own-header t: no section header, the
+buffer's own header line shows :on-show FUNCTION-OF-THE-WINDOW
 :on-focus FUNCTION-OF-THE-WINDOW, run when `drgnx-wb-focus-section' focuses it,
 :view SYMBOL, the sidebar view the section belongs to, default `explorer').
 A function title is asked each time the dock shows (a panel's filter stays in its title).
@@ -653,9 +667,11 @@ It is `explorer' unless another view with sections was chosen (a stale choice fa
              (dedicated . t)
              (window-parameters . ((drgnx-role . dock) (drgnx-section . ,name) (no-delete-other-windows . t)
                                    (no-other-window . t)
-                                   (header-line-format . ,(let ((title (plist-get spec :title)))
-                                                            (drgnx-wb-section-header
-                                                             (if (functionp title) (funcall title) title))))))))))
+                                   ;; `:own-header': the buffer's own header line shows (a view's controls)
+                                   ,@(unless (plist-get spec :own-header)
+                                       `((header-line-format . ,(let ((title (plist-get spec :title)))
+                                                                  (drgnx-wb-section-header
+                                                                   (if (functionp title) (funcall title) title))))))))))))
       (when-let* ((px (frame-parameter nil 'drgnx-wb-dock-px)) (w (car (drgnx-wb--dock-windows))))
         (let ((window-resize-pixelwise t))              ; or the width is rounded to whole columns
           (ignore-errors (window-resize w (- px (window-pixel-width w)) t nil t))))

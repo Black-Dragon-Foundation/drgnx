@@ -39,8 +39,12 @@
     ;; the debug toolbar's (step over, into, out; restart; the session's bug; disconnect)
     (redo-dot "↷" . ">") (arrow-down-to-dot "↓" . "v") (arrow-up-from-dot "↑" . "^") (rotate-ccw "↺" . "r")
     (bug "✱" . "*") (unplug "⏏" . "x")
+    ;; Send Run's card and a sent run's chip
+    (send "➤" . ">") (key "⚿" . "k") (inbox "⊔" . "u") (braces "{}" . "{}")
     ;; the Search view's kind chips, as the hub's kind icons on definition rows
-    (square-function "ƒ" . "f") (type "◇" . "T") (wand "#" . "#") (variable "≡" . "="))
+    (square-function "ƒ" . "f") (type "◇" . "T") (wand "#" . "#") (variable "≡" . "=")
+    ;; the Extensions list's kinds (a package's is `package''s, below)
+    (plug "◆" . "&") (blocks "▣" . "M"))
   "The glyphs of the icons (NAME → (UNICODE . ASCII)), named after the icon files.  Several look alike on a terminal
 that is not UTF-8: an icon's glyph says less than its picture.  The icon names that exist as glyphs already
 \(`circle', `search', `info', `flag') are in the table below.")
@@ -147,18 +151,29 @@ a graphical frame as tall as `drgnx-ui-button-height', the text centred in it."
           `(space :width ,width :height (,height) :ascent ,(min 100 (ceiling (* 100.0 (- height below)) height))))
       `(space :width ,width))))
 
-(cl-defun drgnx-ui-button (label action &key help face (where 'text) props)
+(defun drgnx-ui-button-focus-box ()
+  "The box of a button that has the focus (look.css `.btn.focus'): the theme's `drgnx-focus' ring, 2 px inside, with
+the button's corners where Glitnir rounds them; nil when the theme gives no ring."
+  (let ((ring (face-attribute 'drgnx-focus :box nil t)) (w (- (drgnx-px-line 2))))
+    (when (stringp (plist-get ring :color))
+      `(:line-width (,w . ,w) :color ,(plist-get ring :color)
+                    ,@(and (fboundp 'glitnir-active-p) (glitnir-active-p) (list :corner-radius (drgnx-px 6)))))))
+
+(declare-function glitnir-active-p "glitnir")
+
+(cl-defun drgnx-ui-button (label action &key help face (where 'text) props focus)
   "LABEL as a button that runs ACTION: a registry id (run as from the palette, so its use is counted), a command, or
 a function of no arguments.  WHERE is `text' (`mouse-1' and RET), `header-line', `mode-line' or `tab-line' (`mouse-1'
 there).  FACE defaults to `drgnx-ui-button' (`drgnx-ui-button-primary' for a group's main action); HELP is the
-`help-echo'; PROPS are more text properties.  In text the label has room inside the button at either end
+`help-echo'; PROPS are more text properties.  FOCUS non-nil rings the button as the one RET presses (a card's
+default, `drgnx-ui-button-focus-box').  In text the label has room inside the button at either end
 \(`drgnx-ui-button-pad'); on a line (header, mode, tab) it is the label alone."
-  (let* ((face (or face 'drgnx-ui-button))
+  (let* ((face (or face 'drgnx-ui-button)) (box (and focus (drgnx-ui-button-focus-box)))
          (label (if (eq where 'text)
                     (let ((pad (propertize " " 'display (drgnx-ui-button-pad face))))
                       (concat pad label pad))
                   label)))
-    (apply #'propertize label 'face face 'mouse-face 'highlight 'help-echo help
+    (apply #'propertize label 'face (if box `(:inherit ,face :box ,box) face) 'mouse-face 'highlight 'help-echo help
            (if (eq where 'text) 'keymap 'local-map) (drgnx-ui--button-map action where)
            (append (and (eq where 'text) '(follow-link t)) props))))
 

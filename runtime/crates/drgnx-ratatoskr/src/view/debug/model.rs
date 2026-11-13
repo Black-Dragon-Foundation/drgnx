@@ -303,6 +303,8 @@ pub struct Line {
     pub capped: bool,
     /// A lazy value not fetched yet: `(…)`.
     pub lazy: bool,
+    /// A breakpoint's dot, as the gutter draws it: `plain`, `condition`, `log`, `off` (disabled), `unbound`.
+    pub mark: Option<&'static str>,
     /// What the editor's commands read of it (session, frame, evaluateName, path, line …).
     pub fields: Vec<(&'static str, Value)>,
     /// What drew a variable's or a chunk's line, so its subtree can be walked again alone ([`subtree`]); never sent.
@@ -1108,6 +1110,18 @@ impl<'a> Cx<'a> {
                 if let Some(t) = trigger {
                     fields.push(("triggered_by", json!(t)));
                 }
+                let enabled = b.get("enabled").and_then(Value::as_bool) != Some(false);
+                let mark = if !enabled {
+                    "off"
+                } else if !verified {
+                    "unbound"
+                } else if text("log").is_some() {
+                    "log"
+                } else if text("condition").is_some() || text("hit").is_some() || waits.is_some() {
+                    "condition"
+                } else {
+                    "plain"
+                };
                 self.push(Line {
                     id: format!("b:{bid}"),
                     parent: parent.clone(),
@@ -1118,9 +1132,11 @@ impl<'a> Cx<'a> {
                         .map(|t| format!("waits for {}", bp_name(&bps.files, t)))
                         .or(text("condition"))
                         .or(text("log"))
-                        .or(text("hit")),
-                    ticked: Some(b.get("enabled").and_then(Value::as_bool) != Some(false)),
-                    dim: !verified,
+                        .or(text("hit"))
+                        .or((enabled && !verified).then(|| "not bound yet".to_owned())),
+                    ticked: Some(enabled),
+                    mark: Some(mark),
+                    dim: !enabled,
                     fields,
                     ..Line::default()
                 });

@@ -10,8 +10,15 @@ use runstav::methods::extensions as w;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 
-/// The indexes of ENTRIES that match QUERY and FILTERS, in SORT's order.
-pub fn search(entries: &[Entry], query: &str, filters: &w::Filters, sort: w::Sort) -> Vec<usize> {
+/// The indexes of ENTRIES that match QUERY and FILTERS, in SORT's order; RECOMMENDED is the set FILTERS'
+/// `recommended` names (the connection's), which keeps only its rows.
+pub fn search(
+    entries: &[Entry],
+    query: &str,
+    filters: &w::Filters,
+    recommended: Option<&HashSet<String>>,
+    sort: w::Sort,
+) -> Vec<usize> {
     let lowered = query.to_lowercase();
     let tokens: Vec<&str> = lowered.split_whitespace().collect();
     let ids: Option<HashSet<&str>> = filters
@@ -22,6 +29,7 @@ pub fn search(entries: &[Entry], query: &str, filters: &w::Filters, sort: w::Sor
         .iter()
         .enumerate()
         .filter(|(_, e)| keeps(e, filters, ids.as_ref()))
+        .filter(|(_, e)| recommended.is_none_or(|set| set.contains(&e.row.id)))
         .filter_map(|(i, e)| rank_of(e, &tokens).map(|r| (i, r)))
         .collect();
     hits.sort_by(|&(a, ra), &(b, rb)| {
@@ -135,7 +143,7 @@ mod tests {
     fn run(entries: &[Entry], q: &str) -> Vec<String> {
         names(
             entries,
-            &search(entries, q, &w::Filters::default(), w::Sort::Relevance),
+            &search(entries, q, &w::Filters::default(), None, w::Sort::Relevance),
         )
     }
 
@@ -220,7 +228,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            names(&rows, &search(&rows, "", &f, w::Sort::Name)),
+            names(&rows, &search(&rows, "", &f, None, w::Sort::Name)),
             ["dash"]
         );
         let f = w::Filters {
@@ -228,7 +236,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            names(&rows, &search(&rows, "", &f, w::Sort::Name)),
+            names(&rows, &search(&rows, "", &f, None, w::Sort::Name)),
             ["magit"]
         );
         let f = w::Filters {
@@ -236,13 +244,32 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            names(&rows, &search(&rows, "", &f, w::Sort::Name)),
+            names(&rows, &search(&rows, "", &f, None, w::Sort::Name)),
             ["dash", "forge"]
         );
         let f = w::Filters::default();
         assert_eq!(
-            names(&rows, &search(&rows, "", &f, w::Sort::Downloads))[0],
+            names(&rows, &search(&rows, "", &f, None, w::Sort::Downloads))[0],
             "dash"
+        );
+        // the connection's Recommended set keeps its rows, with the other filters
+        let set: HashSet<String> = ["pkg:magit".to_string(), "pkg:dash".to_string()].into();
+        let f = w::Filters {
+            recommended: Some(3),
+            ..Default::default()
+        };
+        assert_eq!(
+            names(&rows, &search(&rows, "", &f, Some(&set), w::Sort::Name)),
+            ["dash", "magit"]
+        );
+        let f = w::Filters {
+            recommended: Some(3),
+            installed: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            names(&rows, &search(&rows, "", &f, Some(&set), w::Sort::Name)),
+            ["dash"]
         );
     }
 }

@@ -28,9 +28,13 @@
 (defvar-local drgnx-debug-memory--name nil "The variable whose memory this is.")
 (defvar-local drgnx-debug-memory--offset 0 "The page's first byte, from the reference.")
 (defvar-local drgnx-debug-memory--header "" "The header, made when a page is drawn (redisplay only reads it).")
+(defvar-local drgnx-debug-memory--cursor nil "The overlay ringing the byte at point (`drgnx-debug-memory--ring').")
+(defface drgnx-debug-memory-cursor '((t :inherit (drgnx-focus drgnx-selected)))
+  "The byte at point, which F2 writes from (debugging-extras.html `.mem .ed2')." :group 'drgnx-debug)
 
 (declare-function drgnx-surfaces-key-label "drgnx-surfaces" (cmd-or-id &rest keys))
-(declare-function drgnx-palette-keycaps "drgnx-palette" (key))
+(declare-function drgnx-palette-row-keycaps "drgnx-palette" (key))
+(require 'drgnx-icons)
 
 (defvar-keymap drgnx-debug-memory-mode-map
   :doc "The memory view's keys; the profiles add theirs (`debug-memory-*' in keys/*.eld).")
@@ -38,17 +42,38 @@
 (define-derived-mode drgnx-debug-memory-mode special-mode "Memory"
   "A variable's bytes: 16 to a line, the address, hex and text; the next and previous pages, and writes."
   (setq-local truncate-lines t)
-  (setq header-line-format '("" drgnx-debug-memory--header))
+  ;; `:eval' keeps the string's properties (the icon, keycaps, alignment); a bare symbol's string shows plain
+  (setq header-line-format '(:eval drgnx-debug-memory--header))
+  (setq drgnx-debug-memory--cursor (make-overlay 1 1))
+  (overlay-put drgnx-debug-memory--cursor 'face 'drgnx-debug-memory-cursor)
+  (delete-overlay drgnx-debug-memory--cursor)
+  (add-hook 'post-command-hook #'drgnx-debug-memory--ring nil t)
   (buffer-disable-undo))
 
 (defun drgnx-debug-memory--make-header (address bytes)
-  "The header for a page at ADDRESS (a string) of BYTES: Memory and the name, the address and size, the keys."
-  (let ((keys (delq nil (mapcar (lambda (id) (when-let* ((k (drgnx-surfaces-key-label id :short t)))
-                                               (if (fboundp 'drgnx-palette-keycaps) (drgnx-palette-keycaps k) k)))
-                                '(debug-memory-previous debug-memory-next debug-memory-write)))))
-    (concat " " (propertize (format "Memory: %s" drgnx-debug-memory--name) 'face 'bold) "  "
+  "The header for a page at ADDRESS (a string) of BYTES: the braces icon, Memory and the name, the address and size,
+the keys as keycaps against the right edge (debugging-extras.html)."
+  (let* ((keys (delq nil (mapcar (lambda (id) (when-let* ((k (drgnx-surfaces-key-label id :short t)))
+                                                (if (fboundp 'drgnx-palette-row-keycaps) (drgnx-palette-row-keycaps k) k)))
+                                 '(debug-memory-previous debug-memory-next debug-memory-write))))
+         (caps (and keys (string-join keys " "))))
+    (concat " " (drgnx-look-icon 'braces 'drgnx-text-muted 14) " "
+            (propertize (format "Memory: %s" drgnx-debug-memory--name) 'face 'bold) "  "
             (propertize (format "%s · %d bytes" address bytes) 'face 'drgnx-text-subtle)
-            (when keys (concat "   " (string-join keys " "))))))
+            (when caps
+              ;; in columns, as measured in this buffer: a pixel `(- right (PX))' overran the edge in a header line
+              (concat (propertize " " 'display `(space :align-to (- right ,(1+ (ceiling (string-pixel-width caps (current-buffer))
+                                                                                        (frame-char-width))))))
+                      caps)))))
+
+(defun drgnx-debug-memory--ring ()
+  "Ring the byte at point (`drgnx-debug-memory-cursor'), or none off a byte; on `post-command-hook', locally."
+  (let ((at (get-text-property (point) 'drgnx-debug-memory-offset)))
+    (if (not at)
+        (delete-overlay drgnx-debug-memory--cursor)
+      (let ((b (or (previous-single-property-change (1+ (point)) 'drgnx-debug-memory-offset nil (line-beginning-position))
+                   (point))))
+        (move-overlay drgnx-debug-memory--cursor b (+ b 2))))))
 
 (defun drgnx-debug-memory-open (session reference name)
   "Show the memory at REFERENCE in SESSION, as NAME's."

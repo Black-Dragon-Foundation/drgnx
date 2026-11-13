@@ -63,6 +63,10 @@
 takes a tint of the text colour instead (`drgnx-quickhelp-colors'), so it always stands out."
   :group 'drgnx-quickhelp)
 (defface drgnx-quickhelp-title '((t :inherit bold)) "The symbol's name on the quick help card." :group 'drgnx-quickhelp)
+(defface drgnx-quickhelp-data-tip '((t :inherit (drgnx-code-small drgnx-surface-raised)))
+  "A data tip's card (a debugger's value, docs marked `:drgnx-data-tip'): the small code font on the raised surface,
+in every theme (debugging-extras.html `.dtip')."
+  :group 'drgnx-quickhelp)
 
 ;;;; Colours (pure) and width (pure)
 
@@ -243,8 +247,38 @@ Close Quick Help).")
 
 (defconst drgnx-quickhelp--gap '(space :align-to (- right 2)) "The space before the ✕: up to the right edge.")
 
+(defun drgnx-quickhelp--data-tip-p (docs)
+  "Non-nil when every one of DOCS is a data tip (`:drgnx-data-tip' in its plist): a value, not documentation."
+  (and (consp docs) (seq-every-p (lambda (d) (plist-get (cdr d) :drgnx-data-tip)) docs)))
+
 (defun drgnx-quickhelp--render (docs width max strip)
-  "Fill the card's buffer: DOCS in WIDTH columns, at most MAX lines; STRIP: the buttons on top (a terminal)."
+  "Fill the card's buffer: DOCS in WIDTH columns, at most MAX lines; STRIP: the buttons on top (a terminal).
+Data tips (`drgnx-quickhelp--data-tip-p') draw alone in their own faces: no name, no buttons, no ✕."
+  (if (and (not strip) (drgnx-quickhelp--data-tip-p docs))
+      (drgnx-quickhelp--render-tip docs width max)
+    (drgnx-quickhelp--render-docs docs width max strip)))
+
+(defun drgnx-quickhelp--render-tip (docs width max)
+  "Fill the card's buffer with the data tips DOCS, in WIDTH columns, at most MAX lines."
+  (let ((buf (get-buffer-create drgnx-quickhelp--buffer-name))
+        (lines (seq-mapcat (lambda (d) (seq-mapcat (lambda (l) (drgnx-quickhelp--wrap l width)) (split-string (car d) "\n")))
+                           docs)))
+    (with-current-buffer buf
+      (buffer-disable-undo)
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (setq-local mode-line-format nil header-line-format nil tab-line-format nil
+                    cursor-type nil cursor-in-non-selected-windows nil truncate-lines t
+                    buffer-read-only t show-trailing-whitespace nil
+                    face-remapping-alist '((default drgnx-quickhelp-data-tip)))
+        (use-local-map drgnx-quickhelp-card-map)
+        (insert (string-join (if (<= (length lines) max) lines (append (seq-take lines (max 0 (1- max))) (list "…")))
+                             "\n"))
+        (goto-char (point-min))))
+    buf))
+
+(defun drgnx-quickhelp--render-docs (docs width max strip)
+  "Fill the card's buffer with documentation DOCS (`drgnx-quickhelp--render')."
   (let ((buf (get-buffer-create drgnx-quickhelp--buffer-name))
         (lines (cond ((eq docs :pending) (list "…"))         ; asked, not answered yet
                      (docs (drgnx-quickhelp--doc-lines docs (if strip width (max 10 (- width 3))) max))   ; room for the ✕
@@ -472,6 +506,11 @@ symbol's whole line or the line point is on."
                    (lines drgnx-quickhelp-max-lines)
                    (size nil))
         (drgnx-quickhelp--render docs cols lines nil)
+        ;; a data tip's card is the raised surface edge to edge, in every theme: its margins and border too
+        (when (drgnx-quickhelp--data-tip-p docs)
+          (when-let* ((bg (face-background 'drgnx-quickhelp-data-tip parent t)))
+            (set-frame-parameter frame 'background-color bg)
+            (set-face-background 'child-frame-border bg frame)))
         (setq size (drgnx-quickhelp--fit frame max-w))
         ;; too tall for either side of the line: fewer lines of docs
         (while (and (> (cdr size) room) (> lines 1))

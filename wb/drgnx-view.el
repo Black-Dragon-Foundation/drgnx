@@ -2012,17 +2012,17 @@ place, and the measure reported (`view/measured').  Returns the new text, or nil
   "RENDER of `drgnx-view-rows': KEY's stored row as text, in the current (the view's) buffer.  The guard
 (`drgnx-view-patch-guard-function') sees the text dressed (faces, properties, stops, images), as it is drawn; a text
 it changes is dressed again."
+  ;; the row's one copy holds its newline too (no second copy to add it); the row's runs and properties end before it
   (let* ((state drgnx-view-patch) (row (gethash key (drgnx-view-patch-rows state)))
          (stops (plist-get row :stops))
-         (text (drgnx-view-patch--dress state key row (copy-sequence (plist-get row :text)))))
+         (text (drgnx-view-patch--dress state key row (concat (plist-get row :text) "\n"))))
     (when-let* ((new (and stops (funcall drgnx-view-patch-guard-function state text stops))))
       (setq text (drgnx-view-patch--dress state key row new)))
-    (let ((h (plist-get row :height)) (nl (copy-sequence "\n")))
-      (when h
-        (put-text-property 0 1 'line-height
-                           (* (plist-get h :lines) (or drgnx-view--line-height (setq drgnx-view--line-height (default-line-height))))
-                           nl))
-      (concat text nl))))
+    (when-let* ((h (plist-get row :height)))
+      (put-text-property (1- (length text)) (length text) 'line-height
+                         (* (plist-get h :lines) (or drgnx-view--line-height (setq drgnx-view--line-height (default-line-height))))
+                         text))
+    text))
 
 (defun drgnx-view-patch--dress (state key row text)
   "TEXT (KEY's ROW's text, or the guard's change of it) with the row's faces, properties, stops, spaces and images

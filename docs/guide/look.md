@@ -354,7 +354,7 @@ frame keeps its row either way, and turning ui/look off gives every frame its ro
 ## Icons
 
 drgnx draws its marks with [Lucide](https://lucide.dev) line icons: tree rows, tab leading icons, panel headers, the
-status bar, the palette's rows, the agent panel's steps and notices (never inside code). About 60 SVG files sit in
+status bar, the palette's rows, the Extensions list's kinds, the agent panel's steps and notices (never inside code). About 60 SVG files sit in
 `etc/icons/`, each drawn with `currentColor`, so an icon takes the colour of the text around it: in a
 `drgnx-text-subtle` run it is subtle, in any theme, and no colour is written in the files. They are 16 px (14 px in
 dense rows) with Lucide's stroke of 1.6 in its 24-unit box, as the design draws them: about 1.07 px at 16 px. The sizes are logical pixels: an icon is drawn at

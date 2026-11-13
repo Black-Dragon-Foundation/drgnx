@@ -1449,10 +1449,11 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes |
 | `explorer/subscribe` | user | `{around?: AbsPath, compact?: boolean, exclude?: [string], expanded?: [AbsPath], indent?: natnum, only?: [AbsPath], roots: [AbsPath], view: string, window?: natnum}` | `{listing: natnum}` | no |
 | `extensions/details` | user, agent | `{id: string}` | `DetailsResult` | no |
-| `extensions/list` | user | `{dense?: boolean, generations?: [{copies?: string, current?: boolean, differs?: [string], in_use?: boolean, n: natnum, note?: string, size?: string, time?: string}], glyphs?: [{gui: string, kind: string, tty: string}], restart?: [string], sections: [{minus_updates?: boolean, name: string, search: {filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs", plugins?: boolean, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}, title: string}], view: string}` | `{sections: [ListTotal]}` | no |
+| `extensions/list` | user | `{dense?: boolean, generations?: [{copies?: string, current?: boolean, differs?: [string], in_use?: boolean, n: natnum, note?: string, size?: string, time?: string}], glyphs?: [{gui: string, kind: string, tty: string}], restart?: [string], sections: [{minus_updates?: boolean, name: string, search: {filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs", plugins?: boolean, recommended?: natnum, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}, title: string}], view: string}` | `{sections: [ListTotal]}` | no |
 | `extensions/modules` | user | `{modules: [{doc?: string, flags?: [string], name: string, packages?: [string], state: "on" \| "off" \| "needs-package" \| "failed"}]}` | `{}` | no |
+| `extensions/recommended` | user | `{ids: [string], version: natnum}` | `{}` | no |
 | `extensions/rows` | user | `{ids: [string]}` | `{rows: [Row]}` | no |
-| `extensions/search` | user, agent | `{filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs", plugins?: boolean, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}` | `{rows: [Row], total: natnum}` | no |
+| `extensions/search` | user, agent | `{filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs", plugins?: boolean, recommended?: natnum, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}` | `{rows: [Row], total: natnum}` | no |
 | `forecast/accuracy` | user | `{profile?: Text, role?: Text}` | `{rows?: [AccuracyRow]}` | no |
 | `forecast/get` | user | `{job: Id}` | `Forecast` | no |
 | `forecast/session` | user | `{profile?: string, session: Id}` | `Forecast` | no |
@@ -4097,7 +4098,8 @@ and never reaches the network here: the refresh job (`drgnx extensions refresh`)
   (`{kind, gui, tty}` each) and the ids that need a restart. The hub runs the searches, builds the rows (a bold header
   `Title (N)` per section, then a line per row with glyph, name, version, state chip and "restart to use", and unless
   `dense` a shadowed `ID/2` line with summary, source and trust) and the model (a tree: section nodes with `label`,
-  `section`, `count`; row nodes with `label`, `name`, `state`, `signed`, `source`, `section`, `version`, `latest`),
+  `section`, `count`; row nodes with `label` (the name, once: the model reaches the editor as one line), `state`,
+  `signed`, `source`, `section`, `version`, `latest`),
   publishes both to the `extensions` view of that connection, and answers each section's `{name, total, loaded}`. The
   editor also sends the package generations it reads from disk (`generations`, newest first, at most 256: `n`, `time`,
   `note`, `differs`, `in_use`, `current`, `size`, `copies`); they end the list as a Generations section (header
@@ -4105,8 +4107,14 @@ and never reaches the network here: the refresh job (`drgnx extensions refresh`)
   for what differs and `gen:N/3` for the copies note; model nodes of kind `generation` with `label` and `gen`).
   Roll Back Packages reads the selected row's `gen`. With `@generations` typed the editor sends no sections and the
   generations alone. The last list per connection is kept to rebuild on a resync, dropped when the connection goes.
+- **The Recommended set** (`extensions/recommended {ids, version}`): the editor sends its Recommended ids once per
+  version and the hub holds them per connection (replaced by each call, dropped when the connection goes); a search or
+  a list section names the set by its version (`filters.recommended`) and carries no ids. A version the connection
+  does not hold (a new connection, a hub restart) is `invalid-params` at `filters/recommended`
+  (`sections/N/search/filters/recommended` in a list), and the editor sends its set again and asks once more. At most
+  20,000 ids. Scenario `extensions/the-recommended-set-is-the-connections`.
 - **Classes:** `extensions/search` and `extensions/details` are open to agents; `extensions/rows`,
-  `extensions/list` and `extensions/modules` are the user's.
+  `extensions/list`, `extensions/modules` and `extensions/recommended` are the user's.
 
 Tests: `extensions::catalog::` [D, one every-order test A], `extensions::rank::` [D] and
 `view::extensions::` [D]; conformance `extensions/search-ranks-the-fixture`, `details-of-an-installed-package`,

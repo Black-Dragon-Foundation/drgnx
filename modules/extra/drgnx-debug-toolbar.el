@@ -28,6 +28,7 @@
 (require 'drgnx-faces)
 (declare-function drgnx-surfaces-key-label "drgnx-surfaces" (cmd-or-id &rest args))
 (declare-function drgnx-state-editor-window "drgnx-state" (&optional frame))
+(declare-function drgnx-debug-timeline-unrecorded "drgnx-debug-timeline" (session))
 (declare-function drgnx-look-chrome-current "drgnx-look" (&optional frame))
 (declare-function drgnx-chrome-apply "drgnx-chrome" (&optional frame note))
 (declare-function drgnx-debug--session "drgnx-debug" (&optional state))
@@ -320,8 +321,11 @@ window."
 (defun drgnx-debug-toolbar--segment ()
   "The status bar's `debug': \"<bug> NAME · STATE\" in the warn colour while a session runs; nothing otherwise."
   (when-let* ((s (drgnx-debug-toolbar--session)))
-    (concat (drgnx-look-icon 'bug 'drgnx-status-warn 14) " "
-            (propertize (format "%s · %s" (plist-get s :name) (drgnx-debug-toolbar--state-text s)) 'face 'drgnx-status-warn))))
+    (let ((off (and (fboundp 'drgnx-debug-timeline-unrecorded) (drgnx-debug-timeline-unrecorded (plist-get s :id)))))
+      (concat (drgnx-look-icon 'bug 'drgnx-status-warn 14) " "
+              (propertize (format "%s · %s" (plist-get s :name) (drgnx-debug-toolbar--state-text s)) 'face 'drgnx-status-warn)
+              ;; not recorded: a quiet word here, the whole reason in its tooltip
+              (and off (propertize " · not recorded" 'face 'drgnx-text-subtle 'help-echo (concat "Not recorded: " off)))))))
 
 (defun drgnx-debug-toolbar-paused-p ()
   "Non-nil while the session the controls act on is stopped (the title row's Paused chip).  Reads a variable."

@@ -1072,21 +1072,78 @@ jobs:
           persist-credentials: false
       - id: setup
         uses: ./.github/actions/macos-runtime
+      # The dependencies' debug info is line tables only: file and line in a backtrace, without each crate's full
+      # DWARF, which is a large part of a cold build's compile and link time. The workspace's crates keep full debug
+      # info, so a debugger session on a Mac still steps through drgnx's code (the test profile inherits the dev one's)
+      - name: dependencies' debug info is line tables only
+        run: |
+          mkdir -p "${CARGO_HOME:-$HOME/.cargo}"
+          printf '[profile.dev.package."*"]\ndebug = "line-tables-only"\n' >> "${CARGO_HOME:-$HOME/.cargo}/config.toml"
       # --no-fail-fast: every crate's failures in one run (no Mac to try them on before CI). No GPU adapter is named: the
       # GPU tests are ignored on macOS (the runner has no GPU; Metal parity is a real Mac's)
       # The build first, on its own: its time apart from the tests', and the list of test binaries (test-bins.json) the
       # later steps run as they are. Every step after it reuses this build: another feature set (`-p` alone resolves
-      # one) or another profile would rebuild the hub, four minutes a step on a cold runner
+      # one) or another profile would rebuild the hub, four minutes a step on a cold runner. --timings: where a cold
+      # build's time goes (the `cargo-timings` artifact), before the job is split any further
       - id: build
         run: |
           cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml --workspace --features drgnx-ratatoskr/test-hooks \
-            --no-run --message-format=json-render-diagnostics > "$RUNNER_TEMP/test-bins.json"
-      # its output kept (tests.log) for the step after it
+            --no-run --timings --message-format=json-render-diagnostics > "$RUNNER_TEMP/test-bins.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: cargo-timings-macos
+          path: runtime/target/cargo-timings/cargo-timing.html
+          if-no-files-found: warn
+      # Each test binary of the build, as cargo test runs them (from its package's folder, in the build's order, every
+      # one whatever the others said), each under its own bound: a binary that hangs is stopped and named, and the rest
+      # still run (the slowest, the hub's lib, takes about 3 minutes). The `Running` lines are cargo's, for the step
+      # after it (tests.log); the doc tests after them through cargo
       - id: test
+        env:
+          PER_BINARY_SECONDS: "600"
         run: |
-          set -o pipefail
-          cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml --workspace --features drgnx-ratatoskr/test-hooks 2>&1 |
-            tee "$RUNNER_TEMP/tests.log"
+          set +e -o pipefail
+          export CARGO; CARGO=$(command -v cargo)
+          (
+            rc=0
+            while IFS=$'\t' read -r src manifest bin; do
+              dir=$(dirname "$manifest")
+              echo "     Running ${src#"$dir"/} ($bin)"
+              # macOS has no timeout(1): perl runs the binary in a process group of its own and at the bound kills the
+              # group (exit 142), so a child the binary started cannot keep the log's pipe open
+              (cd "$dir" && perl -e '
+                my $t = shift; my $pid = fork // die "fork: $!";
+                if ($pid == 0) { setpgrp(0, 0); exec @ARGV or die "exec: $!" }
+                $SIG{ALRM} = sub { kill "KILL", -$pid; waitpid($pid, 0); exit 142 };
+                alarm $t; waitpid($pid, 0); alarm 0;
+                exit($? & 127 ? 128 + ($? & 127) : $? >> 8);' "$PER_BINARY_SECONDS" "$bin")
+              r=$?
+              if [ "$r" -eq 142 ]; then
+                echo "::error::${bin##*/} ran past its $PER_BINARY_SECONDS s and was stopped"
+                echo "- \`${bin##*/}\` ran past its $PER_BINARY_SECONDS s and was stopped" >> "$GITHUB_STEP_SUMMARY"
+              fi
+              [ "$r" -eq 0 ] || rc=1
+            done < <(jq -r 'select(.reason == "compiler-artifact" and .profile.test == true and .executable != null)
+                       | [.target.src_path, .manifest_path, .executable] | @tsv' "$RUNNER_TEMP/test-bins.json")
+            exit $rc
+          ) 2>&1 | tee "$RUNNER_TEMP/tests.log"
+          rc=$?
+          cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml --workspace --features drgnx-ratatoskr/test-hooks \
+            --doc 2>&1 | tee -a "$RUNNER_TEMP/tests.log" || rc=1
+          exit $rc
+      # A crash report from a macOS row reads the line tables: one panic's full backtrace names a file and a line in
+      # drgnx's frames (full debug info) and in a dependency's (tokio's, line tables only)
+      - name: a backtrace names files and lines
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          bin=$(jq -r 'select(.profile.test == true and .target.name == "draugr" and (.target.kind | index("lib"))) | .executable' \
+            "$RUNNER_TEMP/test-bins.json" | tail -n 1)
+          [ -x "$bin" ] || { echo "::error::no test binary for draugr's lib"; exit 1; }
+          out=$(cd runtime/crates/draugr && RUST_BACKTRACE=full "$bin" --exact spawn::tests::a_hubs_listening_socket_is_never_passed --nocapture 2>&1)
+          echo "$out" | tail -n 80
+          grep -qE 'at .*draugr/src/spawn\.rs:[0-9]+' <<< "$out" || { echo "::error::draugr's frames name no file and line"; exit 1; }
+          grep -qE 'at .*/tokio-[0-9][^/]*/src/.*\.rs:[0-9]+' <<< "$out" || { echo "::error::tokio's frames name no file and line"; exit 1; }
       # The hub's lib's failures, each run again alone with its output (--exact --nocapture): which fail only beside
       # the others, and each one's whole message, in the job's summary. Seconds, where running the whole lib one test at a
       # time again took six minutes and cut the job at its 45 (round 4). When the lib's binary died instead (no `test
@@ -1260,6 +1317,11 @@ jobs:
       - uses: ./.github/actions/macos-runtime
         with:
           nidhogg: "true"
+      # as the tests job: the dependencies' debug info is line tables only, the workspace's crates keep theirs
+      - name: dependencies' debug info is line tables only
+        run: |
+          mkdir -p "${CARGO_HOME:-$HOME/.cargo}"
+          printf '[profile.dev.package."*"]\ndebug = "line-tables-only"\n' >> "${CARGO_HOME:-$HOME/.cargo}/config.toml"
       # (+ gleipnir-probe and gleipnir-escape for the Seatbelt rows below). The tests job runs `eitri` and `draugr` on
       # macOS (their O_NOFOLLOW_ANY, xcode-select-link and CLOEXEC-loop paths). + drgnx-key beside the hub (keyed jobs).
       - id: build

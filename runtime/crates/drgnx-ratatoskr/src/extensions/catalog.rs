@@ -954,8 +954,13 @@ mod tests {
                 Ev::Publish(n) => self.files.put(Src::Catalog, &catalog_of(n)),
                 Ev::Call => {
                     let index = self.cache.refresh(&self.files);
-                    let hits =
-                        rank::search(&index.entries, "", &w::Filters::default(), w::Sort::Name);
+                    let hits = rank::search(
+                        &index.entries,
+                        "",
+                        &w::Filters::default(),
+                        None,
+                        w::Sort::Name,
+                    );
                     let summaries = hits
                         .iter()
                         .map(|&i| index.entries[i].row.summary.clone())

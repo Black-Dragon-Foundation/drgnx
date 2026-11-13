@@ -45,7 +45,13 @@ logpoint's source, a structured value's chevron; a line that continues the last 
                                 (list :text "inside" :category "stdout" :count 1 :depth 1)
                                 (list :text "hit 3" :category "console" :count 1 :source (list :path "/p/a.py" :line 12))
                                 (list :text "obj" :category "stdout" :count 1 :node (list :reference 9)))
-    (should (equal (debug-console-test--text) "plain\nred bold\noops ×3\n  inside\nhit 3  a.py:12\n▸ obj\n"))
+    (should (equal (debug-console-test--text) "plain\nred bold\noops ×3\n  inside\nhit 3 a.py:12\n▸ obj\n"))
+    ;; the place quiet at the right edge
+    (with-current-buffer drgnx-debug-console-buffer-name
+      (goto-char (point-min))
+      (search-forward "a.py:12")
+      (should (eq (car-safe (plist-get (cdr (get-text-property (1- (match-beginning 0)) 'display)) :align-to)) '-))
+      (should (eq (get-text-property (match-beginning 0) 'face) 'drgnx-debug-console-source)))
     (with-current-buffer drgnx-debug-console-buffer-name
       (goto-char (point-min))
       (search-forward "red")
@@ -167,7 +173,7 @@ lines already there."
       (should (equal (car (last (debug-console-test--prefixes))) "             "))
       (should (equal (debug-console-test--text) "first\nlater\nno time\n"))
       ;; a quiet column: the subtle text, as the mockup's
-      (should (eq (face-attribute 'drgnx-debug-console-time :inherit) 'drgnx-text-subtle))
+      (should (eq (face-attribute 'drgnx-debug-console-time :inherit) 'drgnx-text-disabled))   ; the mockup's --disabled
       (customize-set-variable 'drgnx-debug-console-timestamps nil)
       (should (equal (debug-console-test--prefixes) '(nil nil nil))))))
 

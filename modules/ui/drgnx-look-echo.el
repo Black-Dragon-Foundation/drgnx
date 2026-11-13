@@ -61,9 +61,10 @@ once: each graphical frame is swapped for a new one with the same windows, buffe
 ;;;; The box
 
 (defun drgnx-look-echo--root (&optional frame)
-  "FRAME (default the selected one), or its parent when it is a box."
-  (let ((f (or frame (selected-frame))))
-    (if (and (eq (frame-parameter f 'minibuffer) 'only) (frame-parent f)) (frame-parent f) f)))
+  "FRAME (default the selected one), or the frame whose box it uses: the box's parent, for the box itself and for a
+child frame that borrows its parent's minibuffer (a modal card)."
+  (let* ((f (or frame (selected-frame))) (m (window-frame (minibuffer-window f))))
+    (if (and (frame-parameter m 'drgnx-echo) (frame-parent m)) (frame-parent m) f)))
 
 (defun drgnx-look-echo-box (&optional frame)
   "FRAME's box: its minibuffer's frame when that is a child of FRAME; nil for a frame with a row of its own."

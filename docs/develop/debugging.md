@@ -537,10 +537,23 @@ parts are `view/debug/model.rs` (the lines, the model, the requests that fill it
 Editor: `modules/extra/drgnx-debug-view.el`, the section `run-and-debug` of the sidebar view `debug`
 (`drgnx-debug-view`, also the status bar's debug segment's click).
 
+- **Header (debugging.html `.ph`, `.cfg`):** the sidebar's island header names the view "Run and Debug" with Open
+  launch.json and ⋯ (`drgnx-wb-island-views`, put by extra/debug's setup). The section is `:own-header`, so the
+  buffer's header line shows: Start (the play icon, ringed, `drgnx-debug-view-start`) and the picker
+  (`drgnx-debug-view-picker`: the configuration's name cut to its room, `launch.json` quiet and the chevron at the
+  right edge). It is made when the configuration, the theme or the window's width changes (`--header-cache`).
 - **Sections:** VARIABLES (the selected session's scopes: a cheap scope open with the variables its stop fetched, an
   `expensive` one closed and fetched when opened), WATCH, CALL STACK (sessions only when two or more → threads →
   frames), BREAKPOINTS (each adapter type's exception filters as tick boxes, function breakpoints, each file's source
-  breakpoints: tick = enabled, dim = unverified, the adapter's message as a field). Each header opens and closes.
+  breakpoints, the adapter's message as a field). Each header opens and closes; its title is quiet
+  (`drgnx-debug-view-section`, the sidebar's section face).
+- **Rows (`rows.rs`, debugging.html `.dv`):** a variable is `name: value` with no type, the value cut with `…` to the
+  row's room. A breakpoint is its dot as the gutter draws it (the line's `mark`: ● plain, ⊜ condition or hit count,
+  ◆ log, ○ disabled, grey ● not bound yet), its file, its condition or "log message" (`drgnx-debug-view-condition`) and
+  its line at the right edge. A frame's `file line:col` and a thread's state chip stand at the right edge too
+  (`drgnx-debug-view-place`, `-chip`, `-chip-quiet` for RUNNING). The room is the env's `width_px`, measured with the
+  class's fonts (`Room`: the `ui` role for the row, `caption` for the right-edge text; a column a char on a
+  terminal); text with no room at the edge follows after a gap.
 - **Node ids are paths, stable across stops:** `v:SESSION:SCOPE/NAME/…`, chunks `…/[100..199]`, watches `w:EXPR`,
   threads `t:SESSION:THREAD`, frames `f:SESSION:THREAD:N` (their place in the stack), hidden runs `h:…:N`, more frames
   `m:SESSION:THREAD`, filters `x:TYPE:FILTER`, `fn:NAME`, `b:ID`. A `/` or `%` in a name is escaped; a name seen twice
@@ -599,7 +612,11 @@ Methods (runstav `methods::debug`, the user class; served by `view::debug::serve
   up after a second. extra/debug puts `drgnx-debug-hover-eldoc` on `eldoc-documentation-functions` (it never
   answers: the echo area evaluates nothing) and pairs it in `drgnx-quickhelp-fuller-functions` with
   `drgnx-debug-hover-doc`, which only the card asks: `debug/evaluate` (`hover`) of the expression there in the
-  project's stopped session, answered as `EXPR = VALUE  (TYPE)`.
+  project's stopped session, answered as `EXPR = VALUE  TYPE` with `:drgnx-data-tip t`: the expression in
+  `drgnx-debug-tip-name`, the value in `drgnx-debug-tip-string` / `-number` / `-value` by its look, the type in
+  `drgnx-debug-tip-type`. Quick help draws docs that are all data tips as their own small card
+  (`drgnx-quickhelp--render-tip`: the value alone, no links or ✕, `drgnx-quickhelp-data-tip`'s small code font on
+  the raised surface, its margins and border too, so it follows the theme; debugging-extras.html `.dtip`).
 - `debug/breakpoints`' ops `filter {adapter, name, enabled}` (kept per adapter type and sent to its sessions at once),
   `enable-all {enabled}`, `toggle-all` (all off when any is on, else all on: Toggle All Breakpoints) and `remove-all`
   (function breakpoints too).
@@ -668,8 +685,10 @@ The panel's **Debug Console** tab. The hub makes the lines; the editor only inse
   `drgnx-debug-memory-page-bytes` (256; the hub refuses more than 64 KiB), drawn 16 bytes a line: the address
   (`%08x` from `address` when it is hex, else the offset), the bytes in hex in two halves of 8 (`??` for unreadable
   ones), the text (`.` for the unprintable). A redraw replaces only the lines that changed. The header
-  (`drgnx-debug-memory--header`, made with the page; redisplay only reads it) names the variable, the address and size,
-  and the paging and write keys as keycaps from the registry.
+  (`drgnx-debug-memory--header`, made with the page; redisplay only reads it) has the braces icon, names the variable,
+  the address and size, and puts the paging and write keys as keycap images (`drgnx-palette-row-keycaps`) at the
+  right edge. The byte at point is ringed (`drgnx-debug-memory-cursor`, the selection with the focus ring; an overlay
+  moved by a local `post-command-hook`), the byte F2 writes from.
 - Its keys: next and previous page (never before the reference), refresh, and write: hex typed at the byte under
   point goes as `debug/write-memory {session, reference, offset, data (base64)}`, then the page is read again.
 
@@ -683,8 +702,9 @@ The panel's **Debug Console** tab. The hub makes the lines; the editor only inse
 - `debug/disassemble {session, reference, instruction_offset, count}` →
   `{instructions: [{address, bytes?, instruction, symbol?, path?, line?, end_line?}]}` reads
   `drgnx-debug-disassembly-count` (200; the hub caps it at 500) around the instruction, a quarter of them before
-  it. A source row (the file's line, trimmed, and `file:line`) goes above each change of place. The instruction rows
-  carry their address as the text property `drgnx-debug-disassembly-address`. Earlier and later page by a whole count.
+  it. A source row (the file's line, trimmed and italic, and `file:line` at the right edge) goes above each change of
+  place. An instruction's mnemonic, registers and symbols are coloured (`drgnx-debug-disassembly-mnemonic`,
+  `-register`, `-symbol`; numbers stay plain). The instruction rows carry their address as the text property `drgnx-debug-disassembly-address`. Earlier and later page by a whole count.
   A page is redrawn only on open, paging, or a stop off the page. A stop on the page only moves the marks.
 - The debug column (`drgnx-margins` owner `debug`, the gutter's glyphs) marks the current instruction (the stop, or a
   caller's frame) and the session's instruction breakpoints. The view asks
@@ -695,8 +715,8 @@ The panel's **Debug Console** tab. The hub makes the lines; the editor only inse
   hub's `debug-breakpoints` event with a `session` and no `path` redraws it; a newer `version` wins. Toggling needs
   `supportsInstructionBreakpoints`.
 - With the view focused, `drgnx-debug-control` sends `granularity: "instruction"` on `next`, `step-in` and `step-out`.
-  The header line shows an "instruction step" chip (`drgnx-debug-disassembly-step`) while the view's window is
-  selected.
+  The header line (the terminal icon, the frame and session) shows an "instruction step" chip
+  (`drgnx-debug-disassembly-step`) at its right edge while the view's window is selected.
 
 ## Live adapters: the image
 
@@ -841,7 +861,8 @@ Every session the hub starts is recorded (`debug/record.rs`, `Records`; the hub'
   random nonce in front and the piece's name as associated data. A rewrite under the cap keeps the salt (new nonces).
   `Records::unlock` reads the key at the hub's start and before each `debug/run*` call, never making one;
   `begin` makes it on the first recording, in an unlocked keyring only. No key: `begin` records nothing and
-  broadcasts `debug-recording-off {session, root, why}` (the timeline says it once per reason); reads answer "cannot
+  broadcasts `debug-recording-off {session, root, why, short}` (the timeline says `short` once per reason, "Debug:
+  not recorded: no keyring", and keeps `why`, the keyring's whole answer, for the status segment's tooltip); reads answer "cannot
   be read until the keyring unlocks"; a file under another key (the keyring lost its key) answers "cannot be read";
   `prune` needs no key. The key, derived keys, salts and nonces are never logged; key bytes are `Zeroizing`.
   - **Linux**: the Secret Service's calls are made one by one over zbus 6 (tokio, `default-features = false`,
@@ -890,6 +911,26 @@ keyring key. The run's record has `imported {at, n}`; it is kept 14 days from th
 `fork::check` refuses it, since its launch (program, arguments, environment) is the sender's and opening a file never
 runs it. Tests: `debug::tests_record_sealed` (sent and opened), `debug::record::share` (codes, paths),
 `debug::tests_fork` (refused).
+
+The editor's half is `modules/extra/drgnx-debug-share.el`. The card is a modal child frame (the palette's chrome:
+radius 12, the modal elevation; the-look/send-run.html), 480 px wide, and it takes the focus until it closes (a window
+of its own on a terminal). Its border is the modal frame's (`drgnx-palette-frame-modal-chrome`, shared with the
+palette: the high-contrast 2 px ring shows on every modal card); its 16 px padding is the left and right fringes in
+the card's surface and gap rows above and below (a newline whose font is small, raised by `line-height`). The
+warning tint and the code are Glitnir blocks (`glitnir-blocks`: rounded rings at the text area's width, the code's in
+the border colour), the footer's hairline a rule block; the warning's wrap is indented under its text by a
+`wrap-prefix`. The default button has the focus ring (`drgnx-ui-button`'s `:focus`, `drgnx-ui-button-focus-box`).
+Send Run… shows the card first and calls
+`debug/run/export` only on Write File; the answer's code is held only in the card's state and text
+(`drgnx-debug-share-mode`: undo off, `buffer-auto-save-file-name` and `desktop-save-buffer` nil,
+`filter-buffer-substring-function` gives nothing, the region commands remapped to a refusal), and both are wiped by
+`kill-buffer-hook` as the card closes. Copy Code sets only the CLIPBOARD selection and starts a core-owned timer that
+clears it after 60 s when the selection's sha256 is still the code's. Open Sent Run… reads the code with
+`read-passwd` and calls `debug/run/import`, then shows the strip. The strip keeps its run's record
+(`drgnx-debug-timeline--meta`); `drgnx-debug-timeline-sent-p` reads its `imported`, which draws the strip's Sent
+header line and the past stop's "Sent run" banner, and makes Fork from Here refuse in the editor before it asks
+anything. Tests: `test/unit/debug-share-test.el` (the card before any write, cancel, a refusal, the code left in no
+buffer, history or ring, closing before noting, the clipboard's 60 s, import, no fork of a sent run).
 
 ## What-if forks (spec §19.3)
 

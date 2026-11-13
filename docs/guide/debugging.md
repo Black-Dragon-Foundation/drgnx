@@ -54,8 +54,8 @@ stopped line.
 **Run and Debug** (C-S-d in VS Code keys; the status bar's debug segment) is a sidebar view with four sections:
 **Variables** (the stopped frame's scopes; values that changed since the last stop are highlighted, big arrays open in
 pages of 100), **Watch** (expressions kept per project, evaluated at every stop), **Call Stack** (threads and frames;
-pick a frame to move the editor and the variables to it) and **Breakpoints** (exception filters and every breakpoint,
-each with a tick box). Arrow keys move and open, RET acts on the row, typing after `C-M-f` (`/` in the Emacs and Vim
+pick a frame to move the editor and the variables to it) and **Breakpoints** (the exception filters, each with a tick
+box, then every breakpoint with its dot as the gutter shows it and its line at the right). Arrow keys move and open, RET acts on the row, typing after `C-M-f` (`/` in the Emacs and Vim
 profiles) filters it, F2 (`e`, `c`) sets a value; Copy Value, Copy as Expression and Add to Watch are in the
 palette. Its header starts the configuration picked there. While the program runs, the last stop's values stay,
 dimmed. A big list keeps its last 64 opened pages open; opening another closes the oldest.
@@ -149,8 +149,12 @@ runs use a new key.
 **Sending a run.** **Send Run…** writes an ended run, with the files as they were when it started, into one encrypted
 file, after a card reminds you that it holds your program's values unencrypted to whoever opens it. drgnx shows a
 share code once (52 letters and digits): the file opens only with it, and drgnx keeps no copy of it, so note it
-before you close the card. drgnx sends nothing itself: send the file however you like, and the code another way.
-**Open Sent Run…** adds a run someone sent you to your project's runs, encrypted under your own keyring's key, with its
+before you close the card with **I've Noted It** (closing it any other way asks first). The card's text cannot be copied
+with the region commands; **Copy Code** puts the code on the clipboard (never in the kill ring) and clears the
+clipboard 60 seconds later if it still holds the code. drgnx sends nothing itself: send the file (`.drgnx-run`)
+however you like, and the code another way.
+**Open Sent Run…** asks for the file and the code (hidden as you type it, and kept in no history), then adds the run
+someone sent you to your project's runs, encrypted under your own keyring's key, with its
 paths moved to your project. You can read its stops and timeline; it is never run on your machine (no forks), since
 its program and settings are the sender's. It is kept 14 days from when you opened it.
 

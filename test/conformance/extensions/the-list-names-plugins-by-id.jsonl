@@ -1,0 +1,17 @@
+{"scenario": "extensions/the-list-names-plugins-by-id", "requires": ["v1"], "doc": "[B] The Extensions list's Plugins section is the installed plugins as rows `plugin:NAME`: the row's key and the id on its span are the plugin's id, the plugin icon is its mark, and its state is the hub's own (unapproved after the install)."}
+{"do": "root"}
+{"do": "write_file", "path": "$ROOT/cache/drgnx/extensions/catalog.json", "text": "{\"version\":1,\"packages\":[{\"name\":\"alpha\",\"summary\":\"A package\"}],\"builtins\":[]}"}
+{"do": "write_file", "path": "$ROOT/src/plugin.json", "json": {"name": "alpha", "version": "1.0.0", "hosts": []}}
+{"do": "write_file", "path": "$ROOT/src/plugin.wasm", "text": "wasm-one"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "run", "args": ["plugins", "install", "$ROOT/src"], "expect_code": 0, "expect_stdout": "installed alpha 1.0.0"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "plugins/list", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"plugins": [{"name": "alpha", "state": "unapproved"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "view/env", "params": {"view": "extensions", "class": "g", "display": "gui", "scale": 1, "fonts": [], "cell": [8, 16], "width_px": 800, "palette": [], "epoch": 1}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "extensions/list", "params": {"view": "extensions", "dense": true, "glyphs": [{"kind": "plugin", "gui": "&", "tty": "&"}], "sections": [{"name": "plugins", "title": "Plugins", "search": {"filters": {"plugins": true}}}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"sections": [{"name": "plugins", "total": 1, "loaded": 1}]}}}
+{"do": "expect", "conn": "c", "json": {"event": "view-patch", "data": {"view": "extensions", "class": "g", "ops": [{"reset": [{"key": "section:plugins", "text": "Plugins (1)"}, {"key": "plugin:alpha", "text": "$string", "props": {"$contains": [[0, "$number", "drgnx-extensions-id", "plugin:alpha"]]}}]}]}}, "within_ms": 10000}
