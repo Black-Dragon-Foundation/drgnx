@@ -130,3 +130,16 @@ activates, derived from the lock) and sweeps. A failure before the lock write ch
 `active.eld` and the grammar folders alone. `drgnx rollback` brings the old lock back and derives `active.eld` from it.
 The sweep deletes grammar folders that no lock, no kept generation and no live session's claim
 (`<state>/packs-in-use/PID.eld`) names. A pack cannot be removed while another installed pack references its grammars.
+
+## Migrating the build before packs
+
+`drgnx update` ends with `drgnx packs migrate`: the grammars the old build left in `<data>/tree-sitter/` become the
+built-in packs that own them (`:wanted default`), built at their pins in one job. The old folder stays on the load path
+after the packs' folders until every language in it has a build of its own, and then goes. A failure (no compiler,
+offline) never rolls the update back: the old grammars keep highlighting, and `drgnx packs migrate` tries again.
+
+## The pin test
+
+`test/unit/packs-pins-test.el` loads each built-in pack's Emacs mode and compares its grammars' repository, commit and
+source folder with the mode's `treesit-language-source-alist` entry (under ABI 15, where Rust's and PHP's modes pin
+another commit than below it), so a Nidhogg rebase that moves a mode's pin fails a test, not a user's highlighting.

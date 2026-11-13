@@ -162,6 +162,36 @@
       ;; the generation before still names it, so the folder stays until that generation goes
       (should (file-directory-p beta)))))
 
+;;;; The build before packs
+
+(ert-deftest drgnx-packs/the-build-before-packs-becomes-packs-and-its-folder-goes ()
+  (drgnx-packs-test--with root
+    (let ((legacy (drgnx-packs--legacy-dir)))
+      (make-directory legacy t)
+      (write-region "x" nil (expand-file-name "libtree-sitter-alpha.so" legacy) nil 'silent)
+      (should (equal (drgnx-packs-migrate) '("alpha")))
+      (should (eq (plist-get (cdr (assq 'alpha (drgnx-packs-locked))) :wanted) 'default))
+      (should (equal (drgnx-packs-test--active-names) '(alpha)))
+      (should-not (file-exists-p legacy))
+      (should (null (drgnx-packs-migrate))))))                            ; nothing left to do
+
+(ert-deftest drgnx-packs/the-old-folder-stays-while-a-language-in-it-has-no-pack-build ()
+  (drgnx-packs-test--with root
+    (let ((legacy (drgnx-packs--legacy-dir)))
+      (make-directory legacy t)
+      (dolist (l '("alpha" "zzz")) (write-region "x" nil (expand-file-name (format "libtree-sitter-%s.so" l) legacy) nil 'silent))
+      (drgnx-packs-migrate)
+      (should (file-directory-p legacy)))))
+
+(ert-deftest drgnx-packs/a-failed-build-keeps-the-old-folder-and-says-so ()
+  (drgnx-packs-test--with root
+    (let ((legacy (drgnx-packs--legacy-dir)) (drgnx-packs-job-function (lambda (_) (list :ok nil :error "no compiler"))))
+      (make-directory legacy t)
+      (write-region "x" nil (expand-file-name "libtree-sitter-alpha.so" legacy) nil 'silent)
+      (should-error (drgnx-packs-migrate) :type 'drgnx-packs-error)
+      (should (file-directory-p legacy))
+      (should-not (drgnx-packs-locked)))))
+
 ;;;; Rollback
 
 (ert-deftest drgnx-packs/rollback-restores-the-active-packs ()

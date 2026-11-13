@@ -205,7 +205,7 @@ session activates; written only after the lock is (sync, rollback).  Returns its
   (let ((hash (drgnx-packs-tree-hash (expand-file-name (concat name "/") (drgnx-packs-builtin-dir)))))
     (list (intern name) :commit hash :tree-sha256 hash :source 'builtin :wanted (or wanted (plist-get (cdr old) :wanted) 'default))))
 
-(cl-defun drgnx-packs-sync (&key add remove)
+(cl-defun drgnx-packs-sync (&key add remove (mark 'user))
   "Install the built-in packs ADD and remove REMOVE (names), building the grammars the lock lacks.  The lock, a
 generation, the grammar folders and `active.eld' follow, in that order; a failure before the lock write leaves
 everything as it was.  Returns (:ok t :packs NAMES :built LANGS :generation N)."
@@ -247,7 +247,7 @@ everything as it was.  Returns (:ok t :packs NAMES :built LANGS :generation N)."
                               (push (plist-get s :name) built)))
                           (drgnx-packs--write-lock
                            (mapcar (lambda (n) (drgnx-packs--lock-entry n (assq (intern n) locked)
-                                                                        (and (member n add) 'user)))
+                                                                        (and (member n add) mark)))
                                    wanted)
                            grammars)
                           (let ((generation (drgnx-pkg-snapshot (format "packs %s" (mapconcat #'identity (or add remove '("sync")) " ")))))
@@ -268,6 +268,31 @@ everything as it was.  Returns (:ok t :packs NAMES :built LANGS :generation N)."
   "A rollback brought back an older lock: `active.eld' is derived from it, and folders nothing names go."
   (drgnx-packs-derive-active)
   (drgnx-packs-sweep))
+
+;;;; The build before packs
+
+(defun drgnx-packs--legacy-dir () (expand-file-name "tree-sitter/" (drgnx-data-dir)))
+
+(defun drgnx-packs-migrate ()
+  "The build before packs left grammars in `<data>/tree-sitter/': install the built-in packs that own them (as
+`:wanted default'), and drop that folder once every language it holds has a build of its own.  Nothing is lost when
+the build fails (no compiler, offline): the folder stays on the load path after the packs'.  Returns the names asked."
+  (let* ((dir (drgnx-packs--legacy-dir))
+         (langs (and (file-directory-p dir)
+                     (delete-dups (delq nil (mapcar (lambda (f) (and (string-match "\\`libtree-sitter-\\(.+\\)\\.[a-z]+\\'" f)
+                                                                     (intern (match-string 1 f))))
+                                                    (directory-files dir nil "\\`libtree-sitter-"))))))
+         (owner (lambda (lang) (car (seq-find (lambda (p) (seq-some (lambda (g) (eq (plist-get g :name) lang))
+                                                                    (drgnx-packs--owned-grammars (cdr p))))
+                                              (drgnx-packs-builtins)))))
+         (names (seq-filter (lambda (n) (not (assq (intern n) (drgnx-packs-locked))))
+                            (delete-dups (delq nil (mapcar owner langs))))))
+    (when names (drgnx-packs-sync :add names :mark 'default))
+    (when (and langs (seq-every-p (lambda (l) (let ((g (cdr (assq l (drgnx-packs-locked-grammars)))))
+                                                (and g (drgnx-packs--built-p l (plist-get g :commit)))))
+                                  langs))
+      (delete-directory dir t))
+    names))
 
 ;;;; Sweep
 
@@ -352,7 +377,8 @@ manifests, installed or not: formatting needs no grammar."
          (princ (format "packs: %s; built: %s; generation %d\n" (mapconcat #'identity (plist-get r :packs) " ")
                         (or (mapconcat #'identity (plist-get r :built) " ") "nothing") (plist-get r :generation)))
          0)))
-    (_ (drgnx-packs--error "usage: drgnx packs list | sync [--add NAME…] [--remove NAME…]"))))
+    (`("migrate") (princ (format "packs migrated: %s\n" (or (mapconcat #'identity (drgnx-packs-migrate) " ") "nothing to do"))) 0)
+    (_ (drgnx-packs--error "usage: drgnx packs list | sync [--add NAME…] [--remove NAME…] | migrate | check DIR | pin REPO COMMIT"))))
 
 (declare-function drgnx-hub-client-binary "drgnx-hub-client" ())
 (declare-function drgnx-pkg--generation-dir "drgnx-pkg" (n))
