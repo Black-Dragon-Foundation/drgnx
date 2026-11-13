@@ -84,24 +84,30 @@
           (when (symbolp pkg) (push (cons module pkg) out)))))
     (nreverse out)))
 
-(defun drgnx-extensions-recommended (root)
+(defun drgnx-extensions-recommended (root &optional ids-only)
   "What the project at ROOT recommends, as ((ID . WHY)…), in order and each once: its `drgnx-extensions-recommended',
 the packages Emacs suggests for the files the Explorer listed there, the packages a module waits for.  ROOT nil: the
-global list and the modules only.  Reads no folder and changes nothing."
-  (let (out)
-    (cl-flet ((add (pkg why) (let ((id (format "pkg:%s" pkg))) (unless (assoc id out) (push (cons id why) out)))))
+global list and the modules only.  IDS-ONLY: the ids alone, (ID…), no reason made.  Reads no folder and changes
+nothing."
+  (let ((seen (make-hash-table :test #'eq)) out)
+    (cl-flet ((add (pkg why &rest args)
+                (unless (gethash pkg seen)
+                  (puthash pkg t seen)
+                  (let ((id (concat "pkg:" (symbol-name pkg))))
+                    (push (if ids-only id (cons id (if args (apply #'format why args) why))) out)))))
       (dolist (pkg (ensure-list (if root (drgnx-setting-for-root 'drgnx-extensions-recommended root)
                                   (bound-and-true-p drgnx-extensions-recommended))))
         (when (and pkg (symbolp pkg)) (add pkg "this project recommends it")))
       (pcase-dolist (`(,file . ,pkg) (drgnx-extensions-recommend--by-files root))
-        (add pkg (format "Emacs suggests it for %s here" file)))
+        (add pkg "Emacs suggests it for %s here" file))
       (pcase-dolist (`(,module . ,pkg) (drgnx-extensions-recommend--waiting))
-        (add pkg (format "the module %s waits for it" module))))
+        (add pkg "the module %s waits for it" module)))
     (nreverse out)))
 
 (defun drgnx-extensions-recommend-ids ()
-  "The ids the Recommended section lists: what `drgnx-extensions-recommend--root' recommends."
-  (mapcar #'car (drgnx-extensions-recommended drgnx-extensions-recommend--root)))
+  "The ids the Recommended section lists: what `drgnx-extensions-recommend--root' recommends (each time the list is
+asked for, so no reason is made)."
+  (drgnx-extensions-recommended drgnx-extensions-recommend--root t))
 
 (defun drgnx-extensions-recommend-notice (root)
   "The first look at the project at ROOT this session: one notice when it recommends anything, with a command that

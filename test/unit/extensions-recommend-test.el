@@ -53,6 +53,21 @@ recommendations forgotten before and after."
           (should (string-search "data.csv" (cdr (assoc "pkg:csv-mode" rec))))
           (should (string-search "tools/fake" (cdr (assoc "pkg:vterm" rec)))))))))
 
+(ert-deftest drgnx-extensions-recommend/ids-make-no-reasons ()
+  "D: the Recommended section's ids (asked at each open of the list) are the same ids, and taking them makes no
+reason text: the characters allocated are the ids' own, with a path's worth of slack."
+  (drgnx-extensions-recommend-test--with '(magit)
+    (let* ((missing (mapcar (lambda (i) (intern (format "waiting-package-%d" i))) (number-sequence 1 50)))
+           (drgnx-modules--report `((tools/a-module-with-a-long-name :status missing-packages :missing ,missing)))
+           (drgnx-extensions-recommend--root project))
+      (cl-letf (((symbol-function 'drgnx-module-disabled-p) (lambda (&rest _) nil)))
+        (should (equal (drgnx-extensions-recommend-ids) (mapcar #'car (drgnx-extensions-recommended project))))
+        (let* ((before (nth 4 (memory-use-counts)))
+               (ids (drgnx-extensions-recommend-ids))
+               (chars (- (nth 4 (memory-use-counts)) before)))
+          (should (= (length ids) 51))
+          (should (<= chars (+ (apply #'+ (mapcar #'length ids)) 200))))))))
+
 (ert-deftest drgnx-extensions-recommend/no-scan-in-a-hook ()
   "D: with no listing in the Explorer's cache the autosuggest part is empty, and no folder is read."
   (drgnx-extensions-recommend-test--with nil

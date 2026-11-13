@@ -1041,7 +1041,7 @@ rows), written by `drgnx-perf-extensions-write-archives`; no network. To write t
 
 | Workload | What it measures | Budget (`:report-only ext-pass`) |
 |---|---|---|
-| `extensions-open` | `Open Extensions` to the painted sections (`:rows_drawn`); `:processes` counts processes started; `:alloc` the objects the open and paint allocated, the stub hub's own left out, on the hub's rows and model (`:rows` the patch's lines; needs Sjá) | `:open_ms` 100, `:processes` 0, `:alloc` 16751. Measured 2026-11-08, pinned: 119930 |
+| `extensions-open` | `Open Extensions` to the painted sections (`:rows_drawn`); `:processes` counts processes started; `:alloc` the objects the open and paint allocated, the stub hub's own left out, on the hub's rows and model (`:rows` the patch's lines; needs Sjá) | `:open_ms` 100, `:processes` 0, `:alloc` 16751. Measured 2026-11-08, pinned: 119930; 2026-11-13: 158062, of which the model's line (the 200 nodes' JSON as the hub client gets it) about 55,000 characters, the rows' text about 19,000 (each row copied once, its newline with it), the redisplay of the 404 lines about 28,000 and the Recommended section's ids about 27,000 (in the container every module that is on waits for its packages, about a thousand) |
 | `extensions-search` | each key of a search over 7,150 rows, to the painted results | `:key_p50_ms` 8, `:key_max_ms` 16 |
 | `extensions-scroll` | scrolling the whole catalog by name (`@sort:name`, pages of 200), per key: the command, the list's own `post-command-hook` and the redisplay; the slices that draw a next page are timed apart (`:slice_max_ms`) | `:key_max_ms` 16 |
 | `extensions-details` | opening a details page, to its painted rows | `:open_ms` 50 |

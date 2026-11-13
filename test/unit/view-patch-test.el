@@ -72,6 +72,24 @@
         (drgnx-view-patch-test--draw)
         (should (= calls 2))))))
 
+(ert-deftest drgnx-view-patch/a-row-is-copied-once ()
+  ;; a row's text is copied once to be drawn, its newline with it: the characters a render allocates are the line's
+  ;; own (the Extensions list's 404 lines were copied twice, the dressed text and then text plus newline)
+  (drgnx-view-patch-test--with
+    (let ((text (make-string 200 ?x)))
+      (drgnx-view-apply-patch
+       (drgnx-view-patch-test--patch
+        (list (list :reset (list (drgnx-view-patch-test--row "a" text :runs '((0 3 "bold"))
+                                                             :props '((0 200 "drgnx-work-id" "a"))))))))
+      (let* ((before (nth 4 (memory-use-counts)))
+             (line (drgnx-view-patch-render "a"))
+             (chars (- (nth 4 (memory-use-counts)) before)))
+        (should (equal (substring-no-properties line) (concat text "\n")))
+        (should (eq (get-text-property 0 'face line) 'bold))
+        (should (equal (get-text-property 199 'drgnx-work-id line) "a"))
+        (should-not (get-text-property 200 'drgnx-work-id line))
+        (should (<= chars 210))))))
+
 (ert-deftest drgnx-view-patch/unknown-face-is-dropped-not-interned ()
   (drgnx-view-patch-test--with
     (let ((name "drgnx-view-patch-test-no-such-face-4711"))
