@@ -912,9 +912,14 @@ runs it. Tests: `debug::tests_record_sealed` (sent and opened), `debug::record::
 `debug::tests_fork` (refused).
 
 The editor's half is `modules/extra/drgnx-debug-share.el`. The card is a modal child frame (the palette's chrome:
-radius 12, the modal elevation; the-look/send-run.html), 480 px wide, its 16 px padding the frame's
-`child-frame-border-width` drawn in the card's surface, and it takes the focus until it closes (a window of its own
-on a terminal). Send Run… shows the card first and calls
+radius 12, the modal elevation; the-look/send-run.html), 480 px wide, and it takes the focus until it closes (a window
+of its own on a terminal). Its border is the modal frame's (`drgnx-palette-frame-modal-chrome`, shared with the
+palette: the high-contrast 2 px ring shows on every modal card); its 16 px padding is the left and right fringes in
+the card's surface and gap rows above and below (a newline whose font is small, raised by `line-height`). The
+warning tint and the code are Glitnir blocks (`glitnir-blocks`: rounded rings at the text area's width, the code's in
+the border colour), the footer's hairline a rule block; the warning's wrap is indented under its text by a
+`wrap-prefix`. The default button has the focus ring (`drgnx-ui-button`'s `:focus`, `drgnx-ui-button-focus-box`).
+Send Run… shows the card first and calls
 `debug/run/export` only on Write File; the answer's code is held only in the card's state and text
 (`drgnx-debug-share-mode`: undo off, `buffer-auto-save-file-name` and `desktop-save-buffer` nil,
 `filter-buffer-substring-function` gives nothing, the region commands remapped to a refusal), and both are wiped by

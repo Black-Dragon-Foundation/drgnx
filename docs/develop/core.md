@@ -867,8 +867,9 @@ minibuffer window and focus stay in the editor frame. `vertico-buffer` restores 
 `minibuffer-exit-hook` runs `drgnx-palette-frame-hide` (hide the frame, clear the dedication and window parameters, show
 a plain buffer); the module's teardown deletes the frame. `vertico-count` follows the window's height, so the action
 gives the minibuffer buffer (not the stand-in buffer `vertico-buffer` passes it and kills) the palette's 32 px rows and
-makes the window `vertico-count` + 2 of the lines `vertico-buffer` counts there (`default-line-height`). See
-`docs/guide/palette.md`.
+makes the window `vertico-count` + 2 of the lines `vertico-buffer` counts there (`default-line-height`). The frame's
+modal chrome (its border, the ring a high-contrast theme draws 2 px, and the look's elevation) is
+`(drgnx-palette-frame-modal-chrome PARENT)`, which every modal card uses too. See `docs/guide/palette.md`.
 
 **One key label.** `(drgnx-surfaces-key-label CMD-OR-ID &key context any short)` is the only function that turns a
 command's key into text: the key sheet, the menus, the palette, the tips, the start page, the top line and the
@@ -3023,7 +3024,9 @@ surfaces (for buttons that run registry commands), so the status bar, the lists 
 - Faces `drgnx-status-ok`, `-info`, `-warn`, `-fail` and `-needs-you`. They inherit theme faces only.
 - `(drgnx-ui-status SEVERITY &optional TEXT)`: the glyph for `ok`, `info`, `warn`, `fail` or `needs-you` (glyph
   `waiting`), then a space and TEXT, in the status face. The module list and the onboarding steps use it.
-- `(drgnx-ui-button LABEL ACTION &key help face where props)`: LABEL as a button. ACTION is a registry id (run
+- `(drgnx-ui-button LABEL ACTION &key help face where props focus)`: LABEL as a button; FOCUS non-nil draws the
+  focus ring around it (`drgnx-ui-button-focus-box`: `drgnx-focus`'s colour, 2 px, rounded under Glitnir), for a
+  card's default button. ACTION is a registry id (run
   through `drgnx-surfaces-run`, so `drgnx-surfaces-run-functions` count its use and the key tip shows), else a
   command (`call-interactively`), else a function of no arguments. WHERE is `text` (the default: `mouse-1` and RET,
   `follow-link`), `header-line`, `mode-line` or `tab-line` (`mouse-1` there, through `local-map`). FACE defaults to

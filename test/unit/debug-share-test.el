@@ -156,3 +156,47 @@ the clipboard still holds it."
                             (substring-no-properties (drgnx-debug-timeline--sent-line))))))
 
 ;;; debug-share-test.el ends here
+
+(ert-deftest drgnx-debug-share/the-modal-ring-survives-the-padding ()
+  "The card's frame takes the modal chrome's ring (high contrast's 2 px) and pads in its fringes, not its border."
+  (cl-letf (((symbol-function 'drgnx-look-palette-current)
+             (lambda () '((corner-radius . 12) (alpha-background . 1.0) (child-frame-border-width . 2) (transition . pop)))))
+    (let ((params (drgnx-debug-share--params (selected-frame))))
+      (should (equal (alist-get 'child-frame-border-width params) (drgnx-px-line 2)))
+      (should (equal (alist-get 'left-fringe params) (drgnx-px 16)))
+      (should (equal (alist-get 'right-fringe params) (drgnx-px 16)))
+      (should (equal (alist-get 'corner-radius params) 12))
+      (should-not (assq 'transition params))
+      ;; the palette's frame takes the same ring
+      (should (equal (alist-get 'child-frame-border-width (drgnx-palette-frame--params (selected-frame)))
+                     (drgnx-px-line 2))))))
+
+(ert-deftest drgnx-debug-share/the-warning-the-code-and-the-footer-are-blocks ()
+  "The warning wraps under its text, not its icon; the warning and the code are rounded blocks (radius 6) across the
+card, the footer has a hairline; the default button is ringed."
+  (debug-share-test--with-hub `(("debug/run/export" ((:path "/tmp/x/run4.drgnx-run" :code ,debug-share-test--code
+                                                            :bytes 188416))))
+    (drgnx-debug-send-run debug-share-test--run "/tmp/x/run4.drgnx-run")
+    (with-current-buffer drgnx-debug-share-buffer
+      (goto-char (point-min))
+      (search-forward "real values")
+      (let ((wrap (get-text-property (point) 'wrap-prefix)))
+        (should (eq (car (get-text-property 0 'display wrap)) 'space))
+        (should (>= (car (plist-get (cdr (get-text-property 0 'display wrap)) :width)) (drgnx-px 18))))
+      (should (equal (mapcar #'car drgnx-debug-share--blocks) '(ring rule)))
+      (should (equal (plist-get (nthcdr 3 (car drgnx-debug-share--blocks)) :radius) (drgnx-px 6)))
+      (should (eq (plist-get (nthcdr 3 (cadr drgnx-debug-share--blocks)) :ring) 'drgnx-border-subtle))
+      (drgnx-debug-share-write)
+      (should (equal (mapcar #'car drgnx-debug-share--blocks) '(ring rule)))
+      (let ((code (car drgnx-debug-share--blocks)))
+        (should (eq (plist-get (nthcdr 3 code) :ring) 'drgnx-border))
+        (should (string-match-p (concat debug-share-test--needle " M2XD")
+                                (buffer-substring-no-properties (nth 1 code) (nth 2 code))))))))
+
+(ert-deftest drgnx-debug-share/the-default-button-has-the-focus-ring ()
+  (cl-letf (((symbol-function 'drgnx-ui-button-focus-box) (lambda () '(:line-width (-2 . -2) :color "red"))))
+    (let ((ringed (get-text-property 1 'face (drgnx-ui-button "Go" 'ignore :face 'drgnx-ui-button-primary :focus t))))
+      (should (equal (plist-get ringed :box) '(:line-width (-2 . -2) :color "red")))
+      (should (eq (plist-get ringed :inherit) 'drgnx-ui-button-primary))
+      (should (eq (get-text-property 1 'face (drgnx-ui-button "Go" 'ignore :face 'drgnx-ui-button-primary))
+                  'drgnx-ui-button-primary)))))
