@@ -130,3 +130,36 @@ activates, derived from the lock) and sweeps. A failure before the lock write ch
 `active.eld` and the grammar folders alone. `drgnx rollback` brings the old lock back and derives `active.eld` from it.
 The sweep deletes grammar folders that no lock, no kept generation and no live session's claim
 (`<state>/packs-in-use/PID.eld`) names. A pack cannot be removed while another installed pack references its grammars.
+
+## Migrating the build before packs
+
+`drgnx update` ends with `drgnx packs migrate`: the grammars the old build left in `<data>/tree-sitter/` become the
+built-in packs that own them (`:wanted default`), built at their pins in one job. The old folder stays on the load path
+after the packs' folders until every language in it has a build of its own, and then goes. A failure (no compiler,
+offline) never rolls the update back: the old grammars keep highlighting, and `drgnx packs migrate` tries again.
+
+## The pin test
+
+`test/unit/packs-pins-test.el` loads each built-in pack's Emacs mode and compares its grammars' repository, commit and
+source folder with the mode's `treesit-language-source-alist` entry (under ABI 15, where Rust's and PHP's modes pin
+another commit than below it), so a Nidhogg rebase that moves a mode's pin fails a test, not a user's highlighting.
+
+## The generic mode's queries (`ratatoskr packs translate`)
+
+A pack with `:mode (:generic t)` highlights with `drgnx-pack-ts-mode` from its `queries/highlights.scm`. Emacs names a
+capture by the face it applies and knows only `#eq?`, `#match?` and `#pred?`, so `ratatoskr packs translate PACKDIR OUT`
+(`skald::translate`) rewrites the file once: a capture becomes a face by a fixed table (`@keyword.return` →
+`font-lock-keyword-face`; a name the table lacks becomes an ignored `@_NAME`, a pattern with no known capture is dropped);
+`#match?` keeps its regexp, rewritten into Emacs's syntax; `#any-of?` becomes an anchored `#match?`; `#not-eq?` and
+`#not-match?` become `#pred?` on functions the editor defines (`:preds`). Patterns keep the file's order, consecutive ones of the same feature sharing a rule, and a later rule overrides an
+earlier one (Neovim's order, which these queries are written for); each rule has the feature of its first known capture (`comment`, `keyword`, `string`, `type`, `constant`, `number`, `function`, `variable`, `property`,
+`operator`, `delimiter`, `bracket`, `escape-sequence`, `attribute`), which the feature levels turn on and off. The node
+kinds of the `@definition.*` patterns of `tags.scm` become `:defuns`, what navigation treats as a definition.
+
+## The live test
+
+`test/packs/live.sh` (in a container: needs network, git and a C compiler) installs the new packs with `drgnx packs sync
+--add`: each grammar is fetched at its pin, built, load-checked in a child and its queries compiled. It then opens each
+pack's sample (`packs/NAME/test/samples/`) in a batch Emacs and checks the mode and the faces of chosen tokens
+(`test/packs/live-test.el`). The seven samples (PHP, Elixir, Kotlin, Swift, Zig, SQL and the Haskell grammar's build)
+pass on Emacs 31 with libtree-sitter 0.26.

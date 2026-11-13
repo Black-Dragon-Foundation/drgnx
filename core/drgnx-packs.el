@@ -36,6 +36,14 @@ read and cleared by `drgnx-packs-forget', so it holds a handful of small plists.
   "Runs the pack job: called with the plan (a plist), returns the job's answer plist `(:ok t :staged …)' or
 `(:ok nil :error TEXT)'.  Tests replace it.")
 
+(defvar drgnx-packs-translate-function #'drgnx-packs--run-translate
+  "Writes the generic mode's queries for a pack: called with the pack's folder and the file to write, signals
+`drgnx-packs-error' naming what is refused.  Tests replace it.")
+
+(defvar drgnx-packs-install-packages-function #'drgnx-packs--install-packages
+  "Installs the Emacs packages a pack requires: called with their names (symbols) before the pack job runs; a failure
+signals `drgnx-packs-error' and nothing of the packs changes.  Tests replace it.")
+
 (defun drgnx-packs--error (fmt &rest args) (signal 'drgnx-packs-error (list (apply #'format fmt args))))
 
 ;;;; Where things are
@@ -52,12 +60,11 @@ read and cleared by `drgnx-packs-forget', so it holds a handful of small plists.
 ;;;; Manifests
 
 (defun drgnx-packs-read-manifest (file)
-  "The manifest in FILE, read as data (nothing is evaluated): a plist with `:pack' and `:schema' 1."
-  (let ((data (with-temp-buffer
-                (insert-file-contents file)
-                (let ((read-circle nil) (read-eval nil))
-                  (condition-case err (read (current-buffer))
-                    (error (drgnx-packs--error "%s: %s" file (error-message-string err))))))))
+  "The manifest in FILE, read as data by `drgnx-file-read' (nothing is evaluated, no reader macro): a plist with
+`:pack' and `:schema' 1."
+  (let* ((r (drgnx-file-read file)) (data (plist-get r :data)))
+    (unless (eq (plist-get r :status) 'ok)
+      (drgnx-packs--error "%s: %s" file (or (plist-get (plist-get r :problem) :text) "not a manifest")))
     (unless (and (consp data) (keywordp (car data)) (stringp (plist-get data :pack)))
       (drgnx-packs--error "%s is not a pack manifest" file))
     (unless (eql (plist-get data :schema) 1)
@@ -156,6 +163,58 @@ top-level `.git' left out.  What `ratatoskr packs pin' prints, and a built-in pa
                   units)))))
     (mapcar #'cdr (nreverse units))))
 
+(defun drgnx-packs--queries (names units)
+  "The query files (`queries/*.scm') of the packs NAMES whose main grammar (the first one they pin themselves and
+require) is among UNITS: plists (:grammar :file :path), for the job to compile against the grammar it builds."
+  (let (out)
+    (dolist (n names)
+      (let* ((main (seq-find (lambda (g) (plist-get g :required)) (drgnx-packs--owned-grammars (drgnx-packs-manifest n))))
+             (dir (expand-file-name (format "%s/queries/" n) (drgnx-packs-builtin-dir))))
+        (when (and main (assoc (format "%s" (plist-get main :name)) (mapcar (lambda (u) (cons (plist-get u :name) u)) units))
+                   (file-directory-p dir))
+          (dolist (f (directory-files dir nil "\\.scm\\'"))
+            (push (list :grammar (format "%s" (plist-get main :name)) :file (concat "queries/" f) :path (expand-file-name f dir))
+                  out)))))
+    (nreverse out)))
+
+(defun drgnx-packs-translated-file (name commit)
+  "Where the generic mode's queries of the pack NAME at COMMIT (its tree hash) are kept."
+  (expand-file-name (format "packs/translated/%s-%s.eld" name (substring commit 0 12)) (drgnx-state-dir)))
+
+(defun drgnx-packs--install-packages (names)
+  "`drgnx sync --add NAMES': the packages the lock lacks, from the archives, as the user's (a pack names them and the
+Extensions card lists them)."
+  (let ((r (condition-case err (drgnx-pkg-sync :add (mapcar #'list names))
+             (drgnx-pkg-error (drgnx-packs--error "installing %s: %s" (mapconcat #'symbol-name names " ") (cadr err))))))
+    (unless (plist-get r :ok)
+      (drgnx-packs--error "could not install %s" (mapconcat #'symbol-name names " ")))))
+
+(defun drgnx-packs--missing-packages (names)
+  "The Emacs packages the packs NAMES require that the lock does not have yet."
+  (let (out)
+    (dolist (n names)
+      (dolist (p (plist-get (plist-get (drgnx-packs-manifest n) :requires) :packages))
+        (unless (or (assq p (drgnx-pkg-read-lock)) (memq p out)) (push p out))))
+    (nreverse out)))
+
+(defun drgnx-packs--run-translate (dir out)
+  "`ratatoskr packs translate DIR OUT'."
+  (let ((bin (or (progn (require 'drgnx-hub-client) (drgnx-hub-client-binary))
+                 (drgnx-packs--error "Ratatoskr is not built: run `drgnx runtime build'"))))
+    (make-directory (file-name-directory out) t)
+    (with-temp-buffer
+      (unless (eql 0 (call-process bin nil t nil "packs" "translate" (directory-file-name dir) out))
+        (drgnx-packs--error "%s" (string-trim (buffer-string)))))))
+
+(defun drgnx-packs--translate (names)
+  "Write the generic mode's queries of the generic packs among NAMES, before the lock is written."
+  (dolist (n names)
+    (when (plist-get (plist-get (drgnx-packs-manifest n) :mode) :generic)
+      (let* ((dir (expand-file-name (concat n "/") (drgnx-packs-builtin-dir)))
+             (out (drgnx-packs-translated-file n (drgnx-packs-tree-hash dir))))
+        (make-directory (file-name-directory out) t)
+        (funcall drgnx-packs-translate-function dir out)))))
+
 (defun drgnx-packs--run-job (plan)
   "Run `ratatoskr packs sync' on PLAN (a plist) and return its answer."
   (let* ((bin (or (progn (require 'drgnx-hub-client) (drgnx-hub-client-binary)) (drgnx-packs--error "Ratatoskr is not built: run `drgnx runtime build'")))
@@ -166,7 +225,7 @@ top-level `.git' left out.  What `ratatoskr packs pin' prints, and a built-in pa
           (drgnx-file-write-text plan-file (prin1-to-string plan))
           (call-process bin nil nil nil "packs" "sync" "--plan" plan-file "--out" out)
           (if (file-exists-p out)
-              (with-temp-buffer (insert-file-contents out) (let ((read-eval nil)) (read (current-buffer))))
+              (or (plist-get (drgnx-file-read out) :data) (list :ok nil :error "the pack job's answer does not read"))
             (list :ok nil :error "the pack job gave no answer")))
       (delete-directory dir t))))
 
@@ -182,6 +241,8 @@ session activates; written only after the lock is (sync, rollback).  Returns its
                  (lambda (e)
                    (when-let* ((m (drgnx-packs-manifest (car e))))
                      (list (car e) :manifest (expand-file-name (format "%s/pack.eld" (car e)) (drgnx-packs-builtin-dir))
+                           :translated (and (plist-get (plist-get m :mode) :generic)
+                                            (drgnx-packs-translated-file (car e) (plist-get (cdr e) :commit)))
                            :grammars
                            (delq nil (mapcar (lambda (g)
                                                (let* ((lang (plist-get g :name))
@@ -205,7 +266,7 @@ session activates; written only after the lock is (sync, rollback).  Returns its
   (let ((hash (drgnx-packs-tree-hash (expand-file-name (concat name "/") (drgnx-packs-builtin-dir)))))
     (list (intern name) :commit hash :tree-sha256 hash :source 'builtin :wanted (or wanted (plist-get (cdr old) :wanted) 'default))))
 
-(cl-defun drgnx-packs-sync (&key add remove)
+(cl-defun drgnx-packs-sync (&key add remove (mark 'user))
   "Install the built-in packs ADD and remove REMOVE (names), building the grammars the lock lacks.  The lock, a
 generation, the grammar folders and `active.eld' follow, in that order; a failure before the lock write leaves
 everything as it was.  Returns (:ok t :packs NAMES :built LANGS :generation N)."
@@ -221,15 +282,18 @@ everything as it was.  Returns (:ok t :packs NAMES :built LANGS :generation N)."
                           (dolist (n wanted)
                             (when (seq-some (lambda (g) (equal (plist-get g :from-pack) r)) (plist-get (drgnx-packs-manifest n) :grammars))
                               (drgnx-packs--error "%s is needed by %s" r n))))
+                        (when-let* ((pkgs (drgnx-packs--missing-packages wanted)))
+                          (funcall drgnx-packs-install-packages-function pkgs))
                         (when units
                           (when (file-exists-p staging) (delete-directory staging t))
                           (make-directory staging t)
                           (setq answer (funcall drgnx-packs-job-function
                                                 (list :version 1 :staging staging :min-abi drgnx-packs-min-abi
-                                                      :units (mapcar (lambda (u) u) units))))
+                                                      :units units :queries (drgnx-packs--queries wanted units))))
                           (unless (plist-get answer :ok)
                             (when (file-exists-p staging) (delete-directory staging t))
                             (drgnx-packs--error "%s" (or (plist-get answer :error) "the pack job failed"))))
+                        (drgnx-packs--translate wanted)   ; the generic mode's queries, before anything is written
                         ;; the lock, then the generation
                         (let* ((staged (plist-get answer :staged))
                                (grammars (seq-filter (lambda (e) (seq-some (lambda (n) (seq-some (lambda (g) (eq (plist-get g :name) (car e)))
@@ -247,7 +311,7 @@ everything as it was.  Returns (:ok t :packs NAMES :built LANGS :generation N)."
                               (push (plist-get s :name) built)))
                           (drgnx-packs--write-lock
                            (mapcar (lambda (n) (drgnx-packs--lock-entry n (assq (intern n) locked)
-                                                                        (and (member n add) 'user)))
+                                                                        (and (member n add) mark)))
                                    wanted)
                            grammars)
                           (let ((generation (drgnx-pkg-snapshot (format "packs %s" (mapconcat #'identity (or add remove '("sync")) " ")))))
@@ -268,6 +332,31 @@ everything as it was.  Returns (:ok t :packs NAMES :built LANGS :generation N)."
   "A rollback brought back an older lock: `active.eld' is derived from it, and folders nothing names go."
   (drgnx-packs-derive-active)
   (drgnx-packs-sweep))
+
+;;;; The build before packs
+
+(defun drgnx-packs--legacy-dir () (expand-file-name "tree-sitter/" (drgnx-data-dir)))
+
+(defun drgnx-packs-migrate ()
+  "The build before packs left grammars in `<data>/tree-sitter/': install the built-in packs that own them (as
+`:wanted default'), and drop that folder once every language it holds has a build of its own.  Nothing is lost when
+the build fails (no compiler, offline): the folder stays on the load path after the packs'.  Returns the names asked."
+  (let* ((dir (drgnx-packs--legacy-dir))
+         (langs (and (file-directory-p dir)
+                     (delete-dups (delq nil (mapcar (lambda (f) (and (string-match "\\`libtree-sitter-\\(.+\\)\\.[a-z]+\\'" f)
+                                                                     (intern (match-string 1 f))))
+                                                    (directory-files dir nil "\\`libtree-sitter-"))))))
+         (owner (lambda (lang) (car (seq-find (lambda (p) (seq-some (lambda (g) (eq (plist-get g :name) lang))
+                                                                    (drgnx-packs--owned-grammars (cdr p))))
+                                              (drgnx-packs-builtins)))))
+         (names (seq-filter (lambda (n) (not (assq (intern n) (drgnx-packs-locked))))
+                            (delete-dups (delq nil (mapcar owner langs))))))
+    (when names (drgnx-packs-sync :add names :mark 'default))
+    (when (and langs (seq-every-p (lambda (l) (let ((g (cdr (assq l (drgnx-packs-locked-grammars)))))
+                                                (and g (drgnx-packs--built-p l (plist-get g :commit)))))
+                                  langs))
+      (delete-directory dir t))
+    names))
 
 ;;;; Sweep
 
@@ -305,6 +394,28 @@ everything as it was.  Returns (:ok t :packs NAMES :built LANGS :generation N)."
                     (list :pid (emacs-pid) :start (float-time (alist-get 'start (process-attributes (emacs-pid))))
                           :grammars grammars)))
 
+;;;; What the formatting module reads
+
+(defconst drgnx-packs-format-config-extra '(".scalafmt.conf")
+  "Config files that mean \"this project formats its code\" for languages with no built-in pack (Scala).")
+
+(defun drgnx-packs-format-modes ()
+  "Every mode (a symbol) of a built-in pack whose `:format' is `:standard': formatted in any project.  Read from the
+manifests, installed or not: formatting needs no grammar."
+  (let (out)
+    (dolist (p (drgnx-packs-builtins))
+      (let ((mode (plist-get (cdr p) :mode)))
+        (when (plist-get (plist-get (cdr p) :format) :standard)
+          (dolist (m (list (plist-get mode :ts) (plist-get mode :classic))) (when m (cl-pushnew m out))))))
+    out))
+
+(defun drgnx-packs-format-config-files ()
+  "The files that say a project formats its code: every built-in pack's `:config-files', and the extra list."
+  (let ((out (copy-sequence drgnx-packs-format-config-extra)))
+    (dolist (p (drgnx-packs-builtins))
+      (dolist (f (plist-get (plist-get (cdr p) :format) :config-files)) (cl-pushnew f out :test #'equal)))
+    (nreverse out)))
+
 ;;;; `drgnx packs …'
 
 (defun drgnx-packs-cli (args)
@@ -325,7 +436,8 @@ everything as it was.  Returns (:ok t :packs NAMES :built LANGS :generation N)."
          (princ (format "packs: %s; built: %s; generation %d\n" (mapconcat #'identity (plist-get r :packs) " ")
                         (or (mapconcat #'identity (plist-get r :built) " ") "nothing") (plist-get r :generation)))
          0)))
-    (_ (drgnx-packs--error "usage: drgnx packs list | sync [--add NAME…] [--remove NAME…]"))))
+    (`("migrate") (princ (format "packs migrated: %s\n" (or (mapconcat #'identity (drgnx-packs-migrate) " ") "nothing to do"))) 0)
+    (_ (drgnx-packs--error "usage: drgnx packs list | sync [--add NAME…] [--remove NAME…] | migrate | check DIR | pin REPO COMMIT"))))
 
 (declare-function drgnx-hub-client-binary "drgnx-hub-client" ())
 (declare-function drgnx-pkg--generation-dir "drgnx-pkg" (n))

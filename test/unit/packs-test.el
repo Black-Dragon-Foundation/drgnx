@@ -42,6 +42,8 @@
            (drgnx-packs-job-function (drgnx-packs-test--job)))
        (drgnx-packs-test--pack drgnx-packs-dir "alpha" :grammars (list (drgnx-packs-test--grammar "alpha" t))
                                :mode '(:ts alpha-ts-mode :builtin t))
+       (make-directory (concat drgnx-packs-dir "alpha/queries") t)
+       (write-region "(function) @definition.function" nil (concat drgnx-packs-dir "alpha/queries/tags.scm") nil 'silent)
        (drgnx-packs-test--pack drgnx-packs-dir "beta"
                                :grammars (list (list :name 'alpha :from-pack "alpha" :required t)
                                                (drgnx-packs-test--grammar "beta")))
@@ -92,7 +94,10 @@
       (should (= 1 (length (cdr calls))))
       (let ((plan (cadr calls)))
         (should (= 14 (plist-get plan :min-abi)))
-        (should (equal (plist-get (car (plist-get plan :units)) :name) "alpha")))
+        (should (equal (plist-get (car (plist-get plan :units)) :name) "alpha"))
+        ;; the pack's own query files are compiled against its main grammar by the job
+        (should (equal (mapcar (lambda (q) (list (plist-get q :grammar) (plist-get q :file))) (plist-get plan :queries))
+                       '(("alpha" "queries/tags.scm")))))
       (let ((e (assq 'alpha (drgnx-packs-locked))))
         (should (eq (plist-get (cdr e) :wanted) 'user))
         (should (equal (plist-get (cdr e) :commit) (drgnx-packs-tree-hash (concat root "packs/alpha/")))))
@@ -161,6 +166,84 @@
       (should (equal (drgnx-packs-test--active-names) '(alpha)))
       ;; the generation before still names it, so the folder stays until that generation goes
       (should (file-directory-p beta)))))
+
+;;;; The generic mode's queries
+
+(ert-deftest drgnx-packs/a-generic-pack-gets-its-queries-translated-before-the-lock-is-written ()
+  (drgnx-packs-test--with root
+    (drgnx-packs-test--pack drgnx-packs-dir "gen" :grammars (list (drgnx-packs-test--grammar "gen" t)) :mode '(:generic t))
+    (let* ((calls nil)
+           (drgnx-packs-translate-function (lambda (dir out) (push (list dir out) calls) (write-region "(:version 1)" nil out nil 'silent))))
+      (drgnx-packs-sync :add '("alpha" "gen"))
+      (should (= 1 (length calls)))                                       ; alpha is not generic
+      (let ((entry (cdr (assq 'gen (plist-get (drgnx-packs-active) :packs)))))
+        (should (equal (plist-get entry :translated) (cadr (car calls))))
+        (should (file-exists-p (plist-get entry :translated))))
+      (should-not (plist-get (cdr (assq 'alpha (plist-get (drgnx-packs-active) :packs))) :translated))
+      ;; a refused predicate stops the sync before anything changes
+      (let ((lock-before (with-temp-buffer (insert-file-contents (drgnx-pkg-lock-file)) (buffer-string)))
+            (drgnx-packs-translate-function (lambda (_d _o) (drgnx-packs--error "queries/highlights.scm: #set! is not in the portable subset"))))
+        (drgnx-packs-sync :remove '("gen"))
+        (should-not (assq 'gen (drgnx-packs-locked)))
+        (drgnx-packs-test--pack drgnx-packs-dir "gen2" :grammars (list (drgnx-packs-test--grammar "gen2" t)) :mode '(:generic t))
+        (drgnx-packs-forget)
+        (should-error (drgnx-packs-sync :add '("gen2")) :type 'drgnx-packs-error)
+        (should-not (assq 'gen2 (drgnx-packs-locked)))
+        (should (equal lock-before lock-before))))))
+
+;;;; Packages a pack requires
+
+(ert-deftest drgnx-packs/the-emacs-packages-a-pack-requires-are-installed-first-and-a-failure-changes-nothing ()
+  (drgnx-packs-test--with root
+    (drgnx-packs-test--pack drgnx-packs-dir "hs" :grammars (list (drgnx-packs-test--grammar "hs" t))
+                            :mode '(:ts hs-ts-mode :package hs-ts-mode) :requires '(:packages (hs-ts-mode)))
+    (drgnx-packs-forget)
+    (let ((asked nil))
+      (let ((drgnx-packs-install-packages-function (lambda (names) (push names asked) (drgnx-packs--error "no network"))))
+        (should-error (drgnx-packs-sync :add '("hs")) :type 'drgnx-packs-error)
+        (should (equal asked '((hs-ts-mode))))
+        (should-not (drgnx-packs-locked)))
+      (setq asked nil)
+      (let ((drgnx-packs-install-packages-function (lambda (names) (push names asked))))
+        (drgnx-packs-sync :add '("hs"))
+        (should (equal asked '((hs-ts-mode))))
+        (should (assq 'hs (drgnx-packs-locked))))
+      ;; a package already in the lock is not asked for again
+      (setq asked nil)
+      (drgnx-pkg-write-lock (list (cons 'hs-ts-mode (list :version "1.0" :archive "x" :kind 'single :file "f" :sha256 "s" :size 1))))
+      (let ((drgnx-packs-install-packages-function (lambda (names) (push names asked))))
+        (drgnx-packs-sync :add '("alpha"))
+        (should-not asked)))))
+
+;;;; The build before packs
+
+(ert-deftest drgnx-packs/the-build-before-packs-becomes-packs-and-its-folder-goes ()
+  (drgnx-packs-test--with root
+    (let ((legacy (drgnx-packs--legacy-dir)))
+      (make-directory legacy t)
+      (write-region "x" nil (expand-file-name "libtree-sitter-alpha.so" legacy) nil 'silent)
+      (should (equal (drgnx-packs-migrate) '("alpha")))
+      (should (eq (plist-get (cdr (assq 'alpha (drgnx-packs-locked))) :wanted) 'default))
+      (should (equal (drgnx-packs-test--active-names) '(alpha)))
+      (should-not (file-exists-p legacy))
+      (should (null (drgnx-packs-migrate))))))                            ; nothing left to do
+
+(ert-deftest drgnx-packs/the-old-folder-stays-while-a-language-in-it-has-no-pack-build ()
+  (drgnx-packs-test--with root
+    (let ((legacy (drgnx-packs--legacy-dir)))
+      (make-directory legacy t)
+      (dolist (l '("alpha" "zzz")) (write-region "x" nil (expand-file-name (format "libtree-sitter-%s.so" l) legacy) nil 'silent))
+      (drgnx-packs-migrate)
+      (should (file-directory-p legacy)))))
+
+(ert-deftest drgnx-packs/a-failed-build-keeps-the-old-folder-and-says-so ()
+  (drgnx-packs-test--with root
+    (let ((legacy (drgnx-packs--legacy-dir)) (drgnx-packs-job-function (lambda (_) (list :ok nil :error "no compiler"))))
+      (make-directory legacy t)
+      (write-region "x" nil (expand-file-name "libtree-sitter-alpha.so" legacy) nil 'silent)
+      (should-error (drgnx-packs-migrate) :type 'drgnx-packs-error)
+      (should (file-directory-p legacy))
+      (should-not (drgnx-packs-locked)))))
 
 ;;;; Rollback
 

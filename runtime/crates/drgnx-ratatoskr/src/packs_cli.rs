@@ -5,7 +5,12 @@
 //! packs sync --plan FILE [--out FILE]
 //! packs load-check LIB NAME MIN_ABI [FILE=PATH]…
 //! packs pin REPO COMMIT [--src DIR]
+//! packs translate PACKDIR OUT
 //! ```
+//!
+//! `translate` writes the generic mode's queries for a pack (`skald::translate`): `OUT` is
+//! `(:version 1 :rules ((:feature F :query Q)…) :preds ((:name N :kind K :arg A)…) :defuns (KIND…) :unmapped (NAME…))`.
+//! Exit 1 names every predicate the portable subset refuses.
 //!
 //! `pin` fetches a grammar at a commit and prints the `:repo`, `:commit`, `:tree-sha256` and `:src` of its
 //! `:grammars` entry, with the ABI its `parser.c` declares (a comment line); it refuses a commit with no `parser.c`.
@@ -35,6 +40,10 @@ pub enum PacksCommand {
     Sync {
         plan: PathBuf,
         out: Option<PathBuf>,
+    },
+    Translate {
+        dir: PathBuf,
+        out: PathBuf,
     },
     Pin {
         repo: String,
@@ -72,6 +81,16 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<PacksCommand, S
             }
             let plan = plan.ok_or("usage: packs sync --plan FILE [--out FILE]")?;
             return Ok(PacksCommand::Sync { plan, out });
+        }
+        Some(Word(v)) if v == "translate" => {
+            let words: Vec<OsString> = p.raw_args().map_err(e)?.collect();
+            let [dir, out] = words.as_slice() else {
+                return Err("usage: packs translate PACKDIR OUT".into());
+            };
+            return Ok(PacksCommand::Translate {
+                dir: PathBuf::from(dir),
+                out: PathBuf::from(out),
+            });
         }
         Some(Word(v)) if v == "pin" => {
             let (mut words, mut src) = (Vec::new(), "src".to_string());
@@ -141,6 +160,7 @@ pub fn run(cmd: PacksCommand) -> i32 {
             others,
         } => (dir, builtin, others),
         PacksCommand::Sync { plan, out } => return sync(&plan, out.as_deref()),
+        PacksCommand::Translate { dir, out } => return translate(&dir, &out),
         PacksCommand::Pin { repo, commit, src } => {
             return match skald::job::pin(&repo, &commit, &src) {
                 Ok((tree, abi)) => {
@@ -193,6 +213,84 @@ pub fn run(cmd: PacksCommand) -> i32 {
         0
     } else {
         1
+    }
+}
+
+/// `packs translate`: the pack's `queries/highlights.scm` (and `tags.scm`) as the generic mode's data.
+fn translate(dir: &Path, out: &Path) -> i32 {
+    let read = |f: &str| std::fs::read_to_string(dir.join("queries").join(f));
+    let manifest = std::fs::read(dir.join("pack.eld"))
+        .ok()
+        .and_then(|b| skald::read(&b).ok());
+    let Some(m) = manifest else {
+        eprintln!("{}: not a readable pack", dir.display());
+        return 1;
+    };
+    let highlights = match read("highlights.scm") {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("queries/highlights.scm: {e}");
+            return 1;
+        }
+    };
+    let t = match skald::translate::translate(&m.pack, &highlights) {
+        Ok(t) => t,
+        Err(refused) => {
+            for r in refused {
+                eprintln!("queries/highlights.scm: {r}");
+            }
+            return 1;
+        }
+    };
+    let defuns = read("tags.scm")
+        .map(|t| skald::translate::definition_kinds(&t))
+        .unwrap_or_default();
+    let rules: Vec<String> = t
+        .rules
+        .iter()
+        .map(|r| {
+            format!(
+                "(:feature {} :query {})",
+                lisp_string(&r.feature),
+                lisp_string(&r.query)
+            )
+        })
+        .collect();
+    let preds: Vec<String> = t
+        .preds
+        .iter()
+        .map(|p| {
+            let kind = match p.kind {
+                skald::translate::PredKind::NotEq => "not-eq",
+                skald::translate::PredKind::NotMatch => "not-match",
+                skald::translate::PredKind::NotEqNodes => "not-eq-nodes",
+            };
+            format!(
+                "(:name {} :kind {kind} :arg {})",
+                lisp_string(&p.name),
+                lisp_string(&p.arg)
+            )
+        })
+        .collect();
+    let strings = |v: &[String]| {
+        v.iter()
+            .map(|s| lisp_string(s))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let text = format!(
+        "(:version 1\n :rules ({})\n :preds ({})\n :defuns ({})\n :unmapped ({}))\n",
+        rules.join("\n  "),
+        preds.join("\n  "),
+        strings(&defuns),
+        strings(&t.unmapped)
+    );
+    match std::fs::write(out, text) {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("{}: {e}", out.display());
+            1
+        }
     }
 }
 
@@ -385,6 +483,46 @@ mod tests {
             })
         );
         assert!(parse(args(&["load-check", "l.so", "json", "x"])).is_err());
+    }
+
+    #[test]
+    fn translate_writes_the_generic_modes_data_and_names_what_it_refuses() {
+        let d = std::env::temp_dir().join(format!("packs-tr-{}", std::process::id()));
+        std::fs::create_dir_all(d.join("queries")).unwrap();
+        std::fs::write(
+            d.join("pack.eld"),
+            r#"(:pack "scala" :schema 1 :version "1" :name "Scala" :summary "s" :license "MIT")"#,
+        )
+        .unwrap();
+        std::fs::write(
+            d.join("queries/highlights.scm"),
+            "(comment) @comment\n((a) @keyword (#not-eq? @keyword \"x\"))",
+        )
+        .unwrap();
+        std::fs::write(
+            d.join("queries/tags.scm"),
+            "(function_declaration) @definition.function",
+        )
+        .unwrap();
+        let out = d.join("out.eld");
+        assert_eq!(translate(&d, &out), 0);
+        let text = std::fs::read_to_string(&out).unwrap();
+        assert!(
+            text.contains("(:feature \"comment\" :query \"(comment) @font-lock-comment-face\")"),
+            "{text}"
+        );
+        assert!(text.contains(":kind not-eq :arg \"x\""), "{text}");
+        assert!(
+            text.contains(":defuns (\"function_declaration\")"),
+            "{text}"
+        );
+        std::fs::write(
+            d.join("queries/highlights.scm"),
+            "((a) @keyword (#set! priority 1))",
+        )
+        .unwrap();
+        assert_eq!(translate(&d, &out), 1);
+        std::fs::remove_dir_all(&d).unwrap();
     }
 
     #[test]

@@ -116,6 +116,8 @@ Every installed package, pinned by drgnx sync, and `:wanted user' on the package
 | Key | Type | Required | What |
 | --- | --- | --- | --- |
 | `:packages` | list of (NAME :version :archive :kind :file :sha256 :size :requires :summary [:verified t] [:wanted user]) | yes | What is installed: one entry per package |
+| `:packs` | list of (NAME :commit :tree-sha256 :source :wanted) | no | Language packs installed: one entry per pack (drgnx packs sync) |
+| `:grammars` | list of (LANG :commit :tree-sha256 :lib-sha256 :owner) | no | Tree-sitter grammars built for the packs: one entry per language |
 | `:from-shipped` | boolean | no | Copied from the lock drgnx ships; the first sync completes it |
 
 ## modules.eld

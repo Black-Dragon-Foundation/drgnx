@@ -18,6 +18,7 @@
                 (concat "DRGNX_UPDATE_SYNC_CMD=echo sync $* >> " dir "/hooks.log")
                 (concat "DRGNX_UPDATE_BUILD_CMD=echo build $* >> " dir "/hooks.log")
                 "DRGNX_UPDATE_RUNTIME_CMD=:"   ; never a real Rust build; the runtime tests set their own hook
+                "DRGNX_UPDATE_PACKS_CMD=:"     ; never a real pack migration (a grammar build); its tests set their own hook
                 (concat "DRGNX_DATA_DIR=" dir "/data") (concat "XDG_CACHE_HOME=" dir "/cache")
                 (concat "DRGNX_UPDATE_UNIT_CMD=echo unit $* >> " dir "/unit.log"))))   ; never the real service-unit
 
@@ -495,6 +496,23 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
         (should (string-match-p "failed: runtime build failed" (drgnx-update-test--slurp (expand-file-name "last-run" state))))
         (should (equal before (drgnx-update-test--slurp binary)))
         (should-not (file-exists-p (expand-file-name "previous" state)))))))
+
+(ert-deftest drgnx-update/the-language-packs-are-migrated-after-the-runtime-build ()
+  (drgnx-update-test--with-install
+    (drgnx-update-test--push dir "README" "two\n" "second")
+    (let ((r (drgnx-update-test--run dir (list (format "DRGNX_UPDATE_PACKS_CMD=echo packs $* >> %s/hooks.log" dir)) bin "update")))
+      (should (eq (car r) 0))
+      (should (equal "sync\nbuild\npacks migrate\n" (drgnx-update-test--hooks dir))))))
+
+(ert-deftest drgnx-update/a-failed-pack-migration-never-rolls-the-update-back ()
+  ;; no compiler, or offline: the old grammar folder stays on the load path, so the update stands
+  (drgnx-update-test--with-install
+    (let ((old (drgnx-update-test--head dir)))
+      (drgnx-update-test--push dir "README" "two\n" "second")
+      (let ((r (drgnx-update-test--run dir (list "DRGNX_UPDATE_PACKS_CMD=exit 3") bin "update")))
+        (should (eq (car r) 0))
+        (should-not (equal old (drgnx-update-test--head dir)))
+        (should (string-match-p "language packs were not migrated" (cdr r)))))))
 
 (ert-deftest drgnx-update/a-rollback-rebuilds-a-binary-of-another-commit ()
   (drgnx-update-test--with-install
