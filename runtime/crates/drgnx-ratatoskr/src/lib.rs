@@ -108,6 +108,7 @@ pub mod machines_cli;
 pub mod manager;
 pub mod matrix_gate;
 pub mod orch;
+pub mod packs_cli;
 pub mod pair;
 pub mod peer;
 pub mod plugins;
