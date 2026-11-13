@@ -340,8 +340,13 @@ tier needs it: its helper starts a session itself (GL-T8-1). Either way the chil
     A short letter is refused alone, with a value attached (`-Ovim`) or in a cluster (`-iO`).
   - **Refused after a subcommand:** `-u` after `clone`, `fetch`, `pull`, `ls-remote` or `archive`; `-x` after
     `rebase` or `difftool`.
-  - **The rule for callers:** values that came from an agent go after `--`, or are checked as hex object ids. Phase 6
-    may narrow this to an allowlist of the subcommands it uses.
+  - **The subcommand is on a list** (`SUBCOMMANDS`): the first argument that does not start with `-` must be a listed
+    git builtin, and a call with none is refused. An unknown name would run an alias from the repository's config or
+    a `git-NAME` program from git's exec path or `PATH`; `submodule`, `bisect`, `hook`, `filter-branch`,
+    `maintenance`, `difftool`, `mergetool`, `config`, `help` and `daemon` are not listed. The option deny-list above
+    stays as it is (an allowlist of options per subcommand was judged not worth its breakage: the deny-list is the
+    stricter side for every option that names a program, a file or a repository).
+  - **The rule for callers:** values that came from an agent go after `--`, or are checked as hex object ids.
 - `git::check_trusted_repo(repo, in_ledger)` refuses `InLedger { path }` when any of these lies in a folder for which
   `in_ledger` is true (it is asked about the path and every folder above it):
   - the git dir: `repo/.git` as a directory, or what a `.git` file's `gitdir:` line names (read with `read_regular`,
