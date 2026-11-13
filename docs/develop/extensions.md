@@ -62,7 +62,10 @@ the state `on` (ran), `failed`, `needs-package` (waits for its packages) or `off
 
 The list is the hub's rows and needs Sjá's view model (`nidhogg-view--call`, `drgnx-extensions-list-rows-p`); an Emacs
 without it shows a notice in the list's buffer and asks the hub nothing. With the hub down the ask fails at once and
-the header says why (`drgnx-extensions-list--error`). Each fetch is one `extensions/list` call with the sections, their searches and
+the header says why (`drgnx-extensions-list--error`). The list asks on the editor's subscribed connection
+(`drgnx-extensions-list-call`, `drgnx-hub--events`), the one its env goes on and its rows come back on, and the
+Recommended set is sent there too (the hub holds it per connection); on the call connection the rows went nowhere and
+the list stayed empty. Each fetch is one `extensions/list` call with the sections, their searches and
 limits, `dense`, the glyphs and the ids that need a restart; the hub publishes the rows and the model to the buffer's
 `extensions` view and answers each section's total and loaded count. The buffer keeps no row table and draws no row:
 `drgnx-extensions-list-row` reads a row's fields from the model, point's row is the model's selection, and "more"

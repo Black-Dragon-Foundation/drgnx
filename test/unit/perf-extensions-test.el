@@ -42,6 +42,7 @@
       (eval (read (plist-get spec :teardown)) t))
     (should (equal before (mapcar #'getenv '("DRGNX_DATA_DIR" "DRGNX_CONFIG_DIR" "XDG_STATE_HOME" "XDG_CACHE_HOME"))))
     (should-not (advice-member-p #'drgnx-perf-extensions--hub 'drgnx-hub-call))
+    (should-not (advice-member-p #'drgnx-perf-extensions--hub 'drgnx-extensions-list-call))
     (should-not (get-buffer "*Extensions*"))
     result))
 

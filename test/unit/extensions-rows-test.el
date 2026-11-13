@@ -14,6 +14,8 @@
 (load (expand-file-name "modules/tools/drgnx-extensions-list" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-extensions-jobs" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-extensions-details" drgnx-dir) nil t)
+(load (expand-file-name "modules/tools/drgnx-extensions-recommend" drgnx-dir) nil t)
+(require 'drgnx-hub-client)
 
 (defconst drgnx-extensions-rows-test--model
   (json-serialize
@@ -46,7 +48,7 @@ Updates count."
         (drgnx-view-model--views (make-hash-table :test #'equal)) (drgnx-view-patch--hooked nil)
         (calls nil))
     (unwind-protect
-        (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (m p cb &rest _) (push (list m p cb) calls) 1))
+        (cl-letf (((symbol-function 'drgnx-extensions-list-call) (lambda (m p cb &rest _) (push (list m p cb) calls) 1))
                   ((symbol-function 'drgnx-view-env-register) #'ignore))
           (drgnx-extensions-list--reset)
           (with-current-buffer (drgnx-extensions-list--buffer)
@@ -87,7 +89,7 @@ Updates count."
          (,calls nil))
      (ignore ,calls)
      (unwind-protect
-         (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (m p cb &rest _) (push (list m p cb) ,calls) 1))
+         (cl-letf (((symbol-function 'drgnx-extensions-list-call) (lambda (m p cb &rest _) (push (list m p cb) ,calls) 1))
                    ((symbol-function 'drgnx-view-env-register) #'ignore))
            (drgnx-extensions-list--reset)
            (with-current-buffer (drgnx-extensions-list--buffer)
@@ -251,7 +253,7 @@ selection.  Off a generation's row it asks."
   (let ((calls nil))
     (unwind-protect
         (cl-letf (((symbol-function 'drgnx-extensions-list-rows-p) (lambda () nil))
-                  ((symbol-function 'drgnx-hub-call) (lambda (m &rest _) (push m calls) 1)))
+                  ((symbol-function 'drgnx-extensions-list-call) (lambda (m &rest _) (push m calls) 1)))
           (drgnx-extensions-list--reset)
           (with-current-buffer (drgnx-extensions-list--buffer)
             (should (string-match-p "needs Sjá" (buffer-string)))
@@ -262,13 +264,30 @@ selection.  Off a generation's row it asks."
             (should-not calls)))
       (drgnx-extensions-list--teardown))))
 
+(ert-deftest drgnx-extensions-list/the-list-asks-on-the-subscribed-connection ()
+  "The hub sends a view's model and rows to the connection that asked, and holds the Recommended set per connection:
+`extensions/list' and `extensions/recommended' go on the subscribed connection, the one the env and the patches use,
+never on the call connection (there the rows went nowhere and the list stayed empty)."
+  (let* ((events (make-pipe-process :name "drgnx-test-events" :noquery t))
+         (client (make-pipe-process :name "drgnx-test-client" :noquery t))
+         (drgnx-hub--events events) (drgnx-hub--client client) (sent nil)
+         (drgnx-extensions-recommend--held (vector nil 0 0 nil 4 '("pkg:a"))))
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-hub--call-on)
+                   (lambda (conn method &rest _) (push (cons method conn) sent) 1)))
+          (drgnx-extensions-list--ask)
+          (drgnx-extensions-recommend-send)
+          (should (equal (reverse sent) `(("extensions/list" . ,events) ("extensions/recommended" . ,events)))))
+      (delete-process events)
+      (delete-process client))))
+
 (ert-deftest drgnx-extensions-list/with-the-hub-down-the-header-says-so ()
   "Sjá but no hub: asking fails at once, the list says why in its header, and nothing waits."
   (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
   (let ((drgnx-view-patch--buffers (make-hash-table :test #'equal))
         (drgnx-view-model--views (make-hash-table :test #'equal)) (drgnx-view-patch--hooked nil))
     (unwind-protect
-        (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (&rest _) (error "the hub is down")))
+        (cl-letf (((symbol-function 'drgnx-extensions-list-call) (lambda (&rest _) (error "the hub is down")))
                   ((symbol-function 'drgnx-view-env-register) #'ignore))
           (drgnx-extensions-list--reset)
           (with-current-buffer (drgnx-extensions-list--buffer)

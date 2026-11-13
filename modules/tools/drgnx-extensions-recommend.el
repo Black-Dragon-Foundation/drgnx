@@ -114,7 +114,7 @@ nothing."
 ;; is made from moved: the project, the modules' report (`drgnx-modules-report-tick'), a settings file, the global
 ;; list.  Emacs's suggestions for the project's files are read then too (the Explorer's listing as it is at that time).
 
-(declare-function drgnx-hub-call "drgnx-hub-client" (method params callback &rest keys))
+(declare-function drgnx-extensions-list-call "drgnx-extensions-list" (method params callback &rest keys))
 
 (defvar drgnx-extensions-recommend--held nil
   "The set as last made: [ROOT MODULES-TICK SETTINGS-TICK GLOBAL VERSION IDS], or nil.")
@@ -126,10 +126,12 @@ nothing."
   (cl-incf drgnx-extensions-recommend--settings-tick))
 
 (defun drgnx-extensions-recommend-send ()
-  "Send the hub the set as last made (a new connection holds none: the hub asks for it again)."
+  "Send the hub the set as last made, on the connection the list asks on (`drgnx-extensions-list-call': the set is
+that connection's; a new connection holds none, and the hub asks for it again)."
   (when-let* ((h drgnx-extensions-recommend--held))
     (condition-case nil
-        (drgnx-hub-call "extensions/recommended" (list :ids (vconcat (aref h 5)) :version (aref h 4)) #'ignore)
+        (drgnx-extensions-list-call "extensions/recommended" (list :ids (vconcat (aref h 5)) :version (aref h 4))
+                                    #'ignore)
       (error nil))))
 
 (defun drgnx-extensions-recommend-version ()

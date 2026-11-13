@@ -21,7 +21,6 @@
 (require 'drgnx-view-nav)
 (require 'drgnx-extensions-refresh)
 
-(declare-function drgnx-hub-call "drgnx-hub-client")
 (declare-function drgnx-hub-call-sync "drgnx-hub-client")
 (declare-function drgnx-exec-log "drgnx-exec")
 (declare-function drgnx-statusbar-refresh "drgnx-statusbar")
@@ -512,27 +511,37 @@ typed, they are the list)."
   (and (consp error) (stringp (plist-get error :path)) (string-suffix-p "filters/recommended" (plist-get error :path))))
 
 (declare-function drgnx-extensions-recommend-send "drgnx-extensions-recommend" ())
+(defvar drgnx-hub--events)
+(declare-function drgnx-hub--call-on "drgnx-hub-client")
+
+(defun drgnx-extensions-list-call (method params callback &rest keys)
+  "Ask the hub METHOD with PARAMS on this Emacs's subscribed connection, as `drgnx-hub-call' with KEYS: the hub sends
+the list's model and rows to the connection that asked, the one the view's env went on, and holds the Recommended set
+per connection.  Signals while that connection is down: the view asks again when it is up (its env's resubscribe)."
+  (unless (fboundp 'drgnx-hub--call-on) (require 'drgnx-hub-client))
+  (unless (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events))
+    (error "The drgnx hub is not connected"))
+  (apply #'drgnx-hub--call-on drgnx-hub--events method params callback keys))
 
 (defun drgnx-extensions-list--ask (&optional _view again)
   "Ask the hub for the list's rows, without waiting; the answer's totals go to `drgnx-extensions-list--listed'.  Also
 the env's resubscribe.  A hub that holds no Recommended set at the version asked is sent the set, and asked AGAIN
 once."
-  (unless (fboundp 'drgnx-hub-call) (require 'drgnx-hub-client))
   (let ((epoch drgnx-extensions-list--epoch))
     (condition-case err
-        (drgnx-hub-call "extensions/list" (drgnx-extensions-list--list-params)
-                        (lambda (result error)
-                          (when (eql epoch drgnx-extensions-list--epoch)
-                            (if (and error (not again) (drgnx-extensions-list--resend-p error)
-                                     (fboundp 'drgnx-extensions-recommend-send))
-                                (progn (drgnx-extensions-recommend-send) (drgnx-extensions-list--ask nil t))
-                              (if error
-                                  (setq drgnx-extensions-list--error
-                                        (format "%s" (if (consp error) (plist-get error :message) error)))
-                                (setq drgnx-extensions-list--error nil)
-                                (drgnx-extensions-list--listed (plist-get result :sections)))
-                              (drgnx-extensions-list--changed))))
-                        :full t)
+        (drgnx-extensions-list-call "extensions/list" (drgnx-extensions-list--list-params)
+                                    (lambda (result error)
+                                      (when (eql epoch drgnx-extensions-list--epoch)
+                                        (if (and error (not again) (drgnx-extensions-list--resend-p error)
+                                                 (fboundp 'drgnx-extensions-recommend-send))
+                                            (progn (drgnx-extensions-recommend-send) (drgnx-extensions-list--ask nil t))
+                                          (if error
+                                              (setq drgnx-extensions-list--error
+                                                    (format "%s" (if (consp error) (plist-get error :message) error)))
+                                            (setq drgnx-extensions-list--error nil)
+                                            (drgnx-extensions-list--listed (plist-get result :sections)))
+                                          (drgnx-extensions-list--changed))))
+                                    :full t)
       (error (setq drgnx-extensions-list--error (error-message-string err))
              (drgnx-extensions-list--changed)))))
 

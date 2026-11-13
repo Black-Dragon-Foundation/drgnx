@@ -241,7 +241,8 @@ kept once made."
          (funcall callback (list :sections (nth 0 built)) nil)))
 
      (defun drgnx-perf-extensions--hub (method params callback &rest _)
-       "Stands for `drgnx-hub-call': answers from memory at once (the draw is what these rows time)."
+       "Stands for `drgnx-hub-call' and `drgnx-extensions-list-call': answers from memory at once (the draw is what these
+rows time)."
        (pcase method
          ("extensions/list" (if drgnx-perf-extensions--answer-later
                                 ;; the hub answers on its own event, after the key that asked
@@ -268,11 +269,13 @@ kept once made."
      (defun drgnx-perf-extensions--install-stub ()
        (require 'drgnx-hub-client)
        (advice-add 'drgnx-hub-call :override #'drgnx-perf-extensions--hub)
+       (advice-add 'drgnx-extensions-list-call :override #'drgnx-perf-extensions--hub)
        (dolist (f '(make-process call-process start-process)) (advice-add f :before #'drgnx-perf-extensions--count))
        (setq drgnx-perf-extensions--saved (list (bound-and-true-p drgnx-extensions-check-updates)))
        (setq drgnx-extensions-check-updates 'manual))
      (defun drgnx-perf-extensions--remove-stub ()
        (advice-remove 'drgnx-hub-call #'drgnx-perf-extensions--hub)
+       (advice-remove 'drgnx-extensions-list-call #'drgnx-perf-extensions--hub)
        (dolist (f '(make-process call-process start-process)) (advice-remove f #'drgnx-perf-extensions--count))
        (when drgnx-perf-extensions--saved (setq drgnx-extensions-check-updates (car drgnx-perf-extensions--saved)))
        (setq drgnx-perf-extensions--saved nil))
