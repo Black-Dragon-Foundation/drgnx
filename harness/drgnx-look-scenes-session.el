@@ -1212,6 +1212,13 @@ chrome faces, frame metrics, windows, modules."
                                                      :mode (buffer-local-value 'major-mode (window-buffer w))))
                                    (window-list f 'no-mini))
                   :children (cl-count-if (lambda (c) (and (frame-visible-p c) (frame-parent c))) (frame-list))
+                  ;; each visible child frame: where it is and what it shows (a stray one reads as a band)
+                  :child-frames (mapcar (lambda (c)
+                                          (list (buffer-name (window-buffer (frame-root-window c)))
+                                                :pos (frame-position c) :px (list (frame-pixel-width c) (frame-pixel-height c))
+                                                :parent (and (frame-parent c) (frame-parameter (frame-parent c) 'name))))
+                                        (cl-remove-if-not (lambda (c) (and (frame-visible-p c) (frame-parent c)))
+                                                          (frame-list)))
                   ;; why the palette floats or not, while a minibuffer is open
                   :palette (when-let* ((w (active-minibuffer-window)))
                              (with-current-buffer (window-buffer w)

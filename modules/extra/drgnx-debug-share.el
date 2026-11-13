@@ -144,7 +144,7 @@ and its wrapped rows start under the text, not the icon.  The tint's corners are
     (propertize (concat (drgnx-debug-share--gap 8 face)
                         (propertize (concat (drgnx-debug-share--space 10) icon (drgnx-debug-share--space 8)) 'face face)
                         (propertize "This run holds your program's real values, unredacted." 'face `(bold ,face))
-                        (propertize " Every variable, argument and output it captured, and the files as they ran.  Whoever has the file and its code can read all of it."
+                        (propertize " Every variable, argument and output it captured, and the files as they ran. Whoever has the file and its code can read all of it."
                                     'face face)
                         (propertize "\n" 'face face)
                         (drgnx-debug-share--gap 8 face))
@@ -236,7 +236,7 @@ outside them) and the footer's hairline."
                                         (format "Run %s written · %s" n
                                                 (drgnx-debug-share--size (or (plist-get card :bytes) 0))))
                (drgnx-debug-share--gap 4)
-               (propertize "The file opens only with this code.  Note it now: it is not shown again, and drgnx keeps no copy."
+               (propertize "The file opens only with this code. Note it now: it is not shown again, and drgnx keeps no copy."
                            'face 'drgnx-debug-share-note)
                "\n" (drgnx-debug-share--gap 10)
                (drgnx-debug-share--code-rows (plist-get card :code))
