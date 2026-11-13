@@ -2,7 +2,8 @@
 //! tools (`norn::tools::debug`).  Each call is gated by the matrix's `debug.*` row for the calling session (an Ask is a
 //! card, and the call is refused until the user's answer; then it is made again) and then acts:
 //! - `debug_read` (`debug.read`): the live sessions and their stops, a project's recorded runs, a run's stops and
-//!   lanes, a past stop's values, a fork's view;
+//!   lanes, a past stop's values, a fork's view, a stopped session's heap graph from an expression (not kept: the
+//!   recorded runs keep the user's graphs only);
 //! - `debug_probe` (`debug.probe`): probes and breakpoints in the user's session, marked as the session's (the editor
 //!   rings them), and only its own removed;
 //! - `debug_fork` (`debug.fork`): a what-if fork, sealed (a slow replay needs the user's yes: the agent is told so);
@@ -228,8 +229,16 @@ async fn read(f: &Front, args: &Value) -> Result<Value, String> {
             .await
         }
         "fork" => forks(f).view(arg(args, "fork")?),
+        "heap" => {
+            let session = arg(args, "debug_session")?;
+            let epoch = d.stop_of(session).map(|s| s.epoch);
+            let frame = args.get("frame").and_then(Value::as_i64);
+            let g = super::heap::read(&d, session, frame, arg(args, "expr")?, Default::default())
+                .await?;
+            Ok(json!({"debug_session": session, "epoch": epoch, "graph": g}))
+        }
         w => Err(format!(
-            "debug_read reads sessions, runs, run, stop or fork, not {w}"
+            "debug_read reads sessions, runs, run, stop, fork or heap, not {w}"
         )),
     }
 }
