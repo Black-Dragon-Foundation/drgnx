@@ -284,6 +284,9 @@ pub const GHOSTTY_TERMINAL_OPT_DEFAULT_CURSOR_STYLE: i32 = 23; // GhosttyCursorS
 pub const GHOSTTY_TERMINAL_OPT_DEFAULT_CURSOR_BLINK: i32 = 24; // bool*
 pub const GHOSTTY_TERMINAL_OPT_PWD_CHANGED: i32 = 26;
 pub const GHOSTTY_TERMINAL_OPT_CLIPBOARD_WRITE: i32 = 27;
+/// The read callback (OSC 52 `?`, OSC 5522): synchronous, answered through the request's `reply` before it returns.
+/// Installing it also turns on kitty paste events (mode 5522), so it is installed only while reads are wanted.
+pub const GHOSTTY_TERMINAL_OPT_CLIPBOARD_READ: i32 = 39;
 pub const GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES: i32 = 28;
 pub const GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES: i32 = 29;
 pub const GHOSTTY_TERMINAL_OPT_DESKTOP_NOTIFICATION: i32 = 30;
@@ -341,6 +344,44 @@ pub struct GhosttyClipboardWriteReply {
 }
 pub const GHOSTTY_CLIPBOARD_WRITE_RESULT_SUCCESS: i32 = 0;
 pub const GHOSTTY_CLIPBOARD_WRITE_RESULT_DENIED: i32 = 1;
+
+/// `GhosttyClipboardReadResult`: the clipboard was read (the reply carries it), or the read was denied.
+pub const GHOSTTY_CLIPBOARD_READ_RESULT_SUCCESS: i32 = 0;
+pub const GHOSTTY_CLIPBOARD_READ_RESULT_DENIED: i32 = 1;
+
+/// The reply to a clipboard read (`GhosttyClipboardReadReply`, a sized struct: set `size`).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct GhosttyClipboardReadReply {
+    pub size: usize,
+    pub result: i32,
+    pub contents: *const GhosttyClipboardContent,
+    pub contents_len: usize,
+    pub available: *const GhosttyString,
+    pub available_len: usize,
+    pub remember: bool,
+}
+
+pub type GhosttyClipboardReadReplyFn = Option<
+    unsafe extern "C" fn(
+        read: *const GhosttyClipboardRead,
+        reply: *const GhosttyClipboardReadReply,
+    ),
+>;
+
+/// A synchronous clipboard read request (`GhosttyClipboardRead`), valid until the callback returns.
+#[repr(C)]
+pub struct GhosttyClipboardRead {
+    pub location: i32,
+    pub mimes: *const GhosttyString,
+    pub mimes_len: usize,
+    pub list: bool,
+    pub name: GhosttyString,
+    pub granted: bool,
+    pub can_remember: bool,
+    pub ctx: *const c_void,
+    pub reply: GhosttyClipboardReadReplyFn,
+}
 
 pub type GhosttyClipboardWriteReplyFn = Option<
     unsafe extern "C" fn(
@@ -412,6 +453,11 @@ pub type GhosttyTerminalSizeFn = unsafe extern "C" fn(
     userdata: *mut c_void,
     out: *mut GhosttySizeReportSize,
 ) -> bool;
+pub type GhosttyTerminalClipboardReadFn = unsafe extern "C" fn(
+    terminal: GhosttyTerminal,
+    userdata: *mut c_void,
+    read: *const GhosttyClipboardRead,
+);
 pub type GhosttyTerminalClipboardWriteFn = unsafe extern "C" fn(
     terminal: GhosttyTerminal,
     userdata: *mut c_void,

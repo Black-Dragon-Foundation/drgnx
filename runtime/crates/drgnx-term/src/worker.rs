@@ -149,6 +149,21 @@ impl Worker {
         self.shell_pid = pid;
     }
 
+    /// The hub's socket a program's clipboard read is asked on (a clone of the worker's); none: reads are denied.
+    pub fn set_ask_stream(&mut self, stream: Option<std::os::unix::net::UnixStream>) {
+        self.engine.sink().ask = stream.map(crate::ask::Asker::new);
+    }
+
+    /// The hub's lines read while a clipboard read waited, for the loop to handle (whole lines, in order).
+    pub fn take_ask_stash(&mut self) -> Vec<u8> {
+        self.engine
+            .sink()
+            .ask
+            .as_mut()
+            .map(|a| a.take_stash())
+            .unwrap_or_default()
+    }
+
     pub fn engine(&mut self) -> &mut Engine {
         &mut self.engine
     }
@@ -291,6 +306,8 @@ impl Worker {
                 let b = self.engine.encode_focus(gained);
                 self.pty.extend_from_slice(&b);
             }
+            // an answer to a read that was given up on (it timed out): nothing to do
+            In::ClipboardReply { .. } => {}
             In::Mouse {
                 kind,
                 button,
@@ -484,6 +501,10 @@ impl Worker {
             "clipboard-write" => {
                 self.engine.sink().clipboard_write = value.as_bool().unwrap_or(false)
             }
+            // `"ask"`: a program's read goes to the editor; anything else: unanswered, an empty clipboard
+            "clipboard-read" => self
+                .engine
+                .set_clipboard_read(value.as_str() == Some("ask")),
             "cursor-style" => {
                 self.engine.set_default_cursor(value.as_str(), None);
                 self.clock.touch();

@@ -3958,6 +3958,35 @@
       "data": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
+        "description": "`term/clipboard-read`: a program asked to read the clipboard (OSC 52 `?`, with `clipboard-read` set to `ask`); the\neditor answers with `term/clipboard-reply` within about 30 s, else the read is denied.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "primary": {
+            "type": "boolean"
+          },
+          "req": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "req",
+          "primary"
+        ],
+        "title": "TermClipboardRead",
+        "type": "object"
+      },
+      "doc": "a terminal's program asked to read the clipboard (OSC 52 ?, with clipboard-read set to ask); answered with term/clipboard-reply, to its editor session's connection",
+      "name": "term/clipboard-read"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "description": "`term/clipboard-write`: the program wrote the clipboard (OSC 52, when `clipboard-write` allows); DATA is the text.",
         "properties": {
           "data": {
@@ -38233,6 +38262,46 @@
         ],
         "title": "TermOpened",
         "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the editor's answer to a program's clipboard read (term/clipboard-read): the text it may read, or none to deny",
+      "name": "term/clipboard-reply",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`term/clipboard-reply`: the editor's answer to a `term/clipboard-read` event: TEXT is what the program may read\n(the kill ring's head); none: denied.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "req": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "req"
+        ],
+        "title": "TermClipboardReply",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
       },
       "writes": false
     },

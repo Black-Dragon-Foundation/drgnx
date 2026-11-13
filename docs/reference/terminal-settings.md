@@ -17,6 +17,7 @@ A change reaches every open terminal.
 \| `desktop-notifications` \| `drgnx-term-desktop-notifications` \| Whether a program's notification (OSC 9, OSC 777) becomes a drgnx notice \|
 \| `title-report` \| `drgnx-term-title-report` \| Whether a program may read a terminal's title back (CSI 21 t) \|
 \| `grapheme-width-method` \| `drgnx-term-grapheme-width-method` \| How wide a terminal counts a grapheme cluster (an emoji sequence, a letter with accents): "unicode" (as Unicode says, one width for the cluster) or "legacy" (each code point its own width, as older programs expect) \|
+\| `clipboard-read` \| `drgnx-term-clipboard-read` \| Whether a program in a terminal may read the clipboard (OSC 52 with `?'): `deny' (the default) answers with an empty clipboard; `ask' stops that terminal's output while a notice asks you, naming the terminal and whether it is remote: Allow gives it the kill ring's head, Deny, 30 s without an answer or a closed terminal an empty clipboard \|
 \| `clipboard-write` \| `drgnx-term-clipboard-write` \| Whether a program in a terminal may write the clipboard (OSC 52): what it writes goes to the kill ring \|
 \| `palette-generate` \| `drgnx-term-palette-generate` \| Whether the 240 colours above the 16 faces (`drgnx-term-color-0' to 15) are made from them: the 6x6x6 cube between the background, the six colours and the foreground, the greys between background and foreground, mixed in OKLab, so a program that draws in 256 colours follows the theme \|
 \| `palette-harmonious` \| `drgnx-term-palette-harmonious` \| Whether the generated colours (`drgnx-term-palette-generate') go in reverse order, for a light theme whose 256-colour programs expect the dark theme's order \|
@@ -31,6 +32,9 @@ A change reaches every open terminal.
 \| `selection-word-chars` \| `drgnx-term-selection-word-chars` \| The characters that end a word when a double click selects one in a terminal; every other character (a slash, a dot, a dash) is part of the word, so a path or an address is selected whole \|
 \| `mouse-reporting` \| `drgnx-term-mouse-reporting` \| Whether a program that asks for the mouse gets it \|
 \| `mouse-shift-capture` \| `drgnx-term-mouse-shift-capture` \| Whether a program that tracks the mouse also gets clicks with Shift held \|
+\| `cursor-click-to-move` \| `drgnx-term-cursor-click-to-move` \| Whether a click at the shell's prompt, on the cursor's row, moves the cursor there (as Left or Right keys) \|
+\| `link` \| `drgnx-term-link` \| Link patterns of your own: a list of (REGEXP TARGET) \|
+\| `link-url` \| `drgnx-term-link-url` \| Whether an address in a terminal's plain output (http, https, ftp, file) is a link: a middle click opens it, as an OSC 8 link does \|
 \| `scroll-to-bottom` \| `drgnx-term-scroll-to-bottom` \| When a terminal scrolled back to earlier output goes back to its cursor: on a keystroke (`keystroke'), on new output (`output'), both, or never (nil) \|
 \| `notify-on-command-finish` \| `drgnx-term-notify-on-command-finish` \| When a command that ran a long time ending in a terminal is told (`drgnx-term-notify-on-command-finish-action'): `never', `unfocused' (when its terminal is not the selected window) or `always' \|
 \| `notify-on-command-finish-action` \| `drgnx-term-notify-on-command-finish-action` \| How a finished command is told: `bell' rings the bell, `notify' adds a drgnx notice \|
@@ -133,10 +137,7 @@ A terminal's colours are faces, so the theme sets them; no setting holds a colou
 
 | Ghostty option | What drgnx does for now |
 |---|---|
-\| `clipboard-read` \| a program never reads the clipboard: every read is refused \|
-\| `cursor-click-to-move` \| a click does not move the cursor at a prompt \|
-\| `link` \| only OSC 8 links are links; there are no link patterns of your own \|
-\| `link-url` \| an address in plain output is not a link (OSC 8 links are) \|
+
 
 ## No place in drgnx
 

@@ -2001,6 +2001,26 @@ and the program did not ask for bracketed paste (or `drgnx-term-clipboard-paste-
 | `:agents` | `never` |
 | `:schema` | `boolean` |
 
+## drgnx-term-clipboard-read
+
+Whether a program in a terminal may read the clipboard (OSC 52 with `?'): `deny' (the default) answers with an empty
+clipboard; `ask' stops that terminal's output while a notice asks you, naming the terminal and whether it is remote:
+Allow gives it the kill ring's head, Deny, 30 s without an answer or a closed terminal an empty clipboard.  Any program
+can ask, over ssh too, so `deny' is the safe choice.  Applies to every terminal at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `deny` |
+| Type | `(choice (const :tag "Deny every read" deny) (const :tag "Ask each time" ask))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-term--apply-config` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum deny ask)` |
+
 ## drgnx-term-clipboard-trim-trailing-spaces
 
 Whether text copied from a terminal loses the spaces at the end of each line.
@@ -2086,6 +2106,25 @@ Applies to every terminal at once.
 | `:merge` | `replace` |
 | `:on-error` | `last-good` |
 | `:apply` | `drgnx-term--apply-local` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `boolean` |
+
+## drgnx-term-cursor-click-to-move
+
+Whether a click at the shell's prompt, on the cursor's row, moves the cursor there (as Left or Right keys).  Needs
+the shell integration (it marks the prompt, OSC 133); nothing moves while a command runs, in a full-screen program
+or while the program tracks the mouse.  Applies at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `t` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
 | `:runtime` | - |
 | `:agents` | `never` |
 | `:schema` | `boolean` |
@@ -2305,6 +2344,43 @@ terminals.
 | `:runtime` | - |
 | `:agents` | `never` |
 | `:schema` | `(or null string)` |
+
+## drgnx-term-link
+
+Link patterns of your own: a list of (REGEXP TARGET).  Text in a terminal's output that REGEXP matches is a link
+to TARGET: a string, with `\&' and `\N' for the match and its groups ("https://github.com/\1"), or a function of the
+matched text that returns the address (a file name works too).  Case counts.  Applies to every terminal at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(repeat (list (regexp :tag "Matches") (choice :tag "Link to" string function)))` |
+| `:scope` | `global` |
+| `:workspace` | `code` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-term--theme-changed` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(list-of (list-of any))` |
+
+## drgnx-term-link-url
+
+Whether an address in a terminal's plain output (http, https, ftp, file) is a link: a middle click opens it, as an
+OSC 8 link does.  Your own patterns (`drgnx-term-link') come first.  Applies to every terminal at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `t` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-term--theme-changed` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `boolean` |
 
 ## drgnx-term-linux-cgroup-memory-limit
 

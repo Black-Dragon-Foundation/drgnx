@@ -425,6 +425,7 @@
         (terminal-reattach :none "the palette, or the notice an earlier drgnx's terminals post")
         (terminal-reconnect :none "the Reconnect button of a remote terminal whose connection was lost")
         (terminal-clipboard-answer :none "the notice a remote program's clipboard request posts")
+        (terminal-clipboard-read-answer :none "the notice a program's clipboard read posts")
         (shell-reload-environment :none "in the palette")
         (go-quick-open "SPC f p")
         (search-project "SPC s p")

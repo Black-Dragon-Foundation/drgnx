@@ -382,6 +382,10 @@ impl Terms {
                 "term/clipboard-write",
                 json!({"primary": primary, "mime": mime, "data": data}),
             ),
+            Out::ClipboardRead { req, primary } => ev(
+                "term/clipboard-read",
+                json!({"req": req, "primary": primary}),
+            ),
             Out::Prompt { kind, exit } => {
                 // kind 4: a command ended (OSC 133 D)
                 if kind == 4 && exit.is_some() {

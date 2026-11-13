@@ -46,12 +46,14 @@ behaviour, every kill reaches it."
   '(kill-line kill-whole-line kill-word backward-kill-word kill-sexp backward-kill-sexp kill-backward-up-list
               kill-sentence backward-kill-sentence kill-paragraph backward-kill-paragraph zap-to-char zap-up-to-char
               kill-visual-line kill-rectangle kill-comment comment-kill kill-forward-chars kill-backward-chars
-              evil-delete-line evil-delete-char evil-delete-backward-char-and-join
+              evil-delete-line evil-delete-whole-line evil-delete-char evil-delete-backward-char-and-join
+              evil-delete-backward-word
               drgnx-editing-delete-word-back drgnx-editing-delete-line-back)
   "Commands whose kills stay in the kill ring when `drgnx-clipboard-kills' is `region'.
-The editing kills of Emacs (simple.el, lisp.el, paragraphs.el, newcomment.el, rect.el), evil's x, X-like and D
-deletes, and drgnx's own Delete Word Left and Delete to Line Start (they call `backward-kill-word' and `kill-line'
-but run as themselves).  A command not listed here, and a kill made with no command running, reaches the clipboard."
+The editing kills of Emacs (simple.el, lisp.el, paragraphs.el, newcomment.el, rect.el), evil's x, X-like, D, dd
+and C-w deletes, and drgnx's own Delete Word Left and Delete to Line Start (they call `backward-kill-word'
+and `kill-line' but run as themselves).  A command not listed here, and a kill made with no command running,
+reaches the clipboard."
   :type '(repeat symbol) :group 'drgnx)
 
 (defvar drgnx-clipboard-force nil
@@ -258,18 +260,19 @@ Either setting is enough: `primary-to-history' puts every selection (PRIMARY) in
   "Look for a clipboard manager that syncs the selection with the clipboard, on FRAME (default: the selected one;
 only X11 and Wayland frames are looked at).  Klipper and CopyQ are known at once; GPaste's answer comes within
 a second, and the setting follows it.  Never blocks, never prompts."
-  (let ((generation (cl-incf drgnx-clipboard--generation)))
+  (let ((generation (cl-incf drgnx-clipboard--generation))
+        (before (plist-get drgnx-clipboard--state :manager)))   ; GPaste, found before, stays found while it is asked again
     (setq drgnx-clipboard--state nil)
     (if (not (drgnx-clipboard--graphical-p frame))
         (drgnx-clipboard--found nil)
       (let ((procs (drgnx-clipboard--process-names)))
         (cond ((drgnx-clipboard--klipper-p procs) (drgnx-clipboard--found 'klipper))
               ((drgnx-clipboard--copyq-p procs) (drgnx-clipboard--found 'copyq))
-              (t (drgnx-clipboard--found nil)
+              (t (drgnx-clipboard--found (and (eq before 'gpaste) 'gpaste))
                  (drgnx-clipboard--gpaste-ask
                   (lambda (ok)
-                    (when (and ok (= generation drgnx-clipboard--generation))
-                      (drgnx-clipboard--found 'gpaste))))))))))
+                    (when (= generation drgnx-clipboard--generation)
+                      (when (or ok (eq before 'gpaste)) (drgnx-clipboard--found (and ok 'gpaste))))))))))))
 
 (defun drgnx-clipboard--frame-hook (frame)
   "`after-make-frame-functions': each new X11 or Wayland frame (a daemon has none at startup) checks again, so a
