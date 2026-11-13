@@ -231,13 +231,17 @@ cap }`, `Escapes`, `Untrusted { path, why }`, `Unsupported` or `Io`.
   `open_beneath`; macOS uses `open`/`openat` with `O_NOFOLLOW_ANY | O_NONBLOCK | O_NOCTTY`. A `rel` that is absolute
   or has a `..` component is `Escapes` before any syscall. A kernel without `openat2` (before 5.6, or one that
   refuses its flags) gives `Unsupported`: there is no fallback that resolves by path. Any other OS is `Unsupported`.
-- **`read_regular(dir, rel, cap)`** opens `O_RDONLY | O_NONBLOCK | O_NOCTTY` with the same resolution, refuses
-  anything but a regular file (a FIFO opens at once and is never read) and reads at most `cap + 1` bytes; one more
-  than `cap` is `TooLarge`.
+- **`read_regular(dir, rel, cap)`** pins the file with `O_PATH` and the same resolution (that opens nothing: a FIFO,
+  a socket or a device node is refused as `NotRegular` before any open side effect), then, a regular file only,
+  opens that same inode `O_RDONLY | O_NONBLOCK | O_NOCTTY` through `/proc/self/fd/N`; without `/proc`, and on macOS,
+  it opens directly and refuses after the open. It reads at most `cap + 1` bytes; one more than `cap` is `TooLarge`.
 - **`write_regular(dir, rel, bytes, mode)`** opens the parent with `open_beneath`, creates `.eitri-<16 hex>` in it
   with `O_CREAT | O_EXCL | O_NOFOLLOW` and `mode` (at most 0o777, less the umask), writes, `fsync`s and `renameat`s
   it over `rel`. A link at `rel` is replaced, never followed; anything else that is not a regular file is
-  `NotRegular`. The temporary file is removed on every error.
+  `NotRegular`. The temporary file is removed on every error. After the rename the parent directory is `fsync`ed
+  (opened again through the held fd, which may be `O_PATH`), so a crash cannot lose it. Between the kind check and
+  the rename a target swapped for a FIFO or a socket is replaced by the new file, a directory fails with `EISDIR`:
+  accepted, since the rename never writes through anything and the agent could delete that entry anyway.
 - **`remove_beneath(dir, rel)`** opens the parent with `open_beneath` (a link in any component before the leaf is
   refused) and `unlinkat`s the leaf at the parent's held fd: a leaf that is a link goes as a link, and what it names
   is never touched. A leaf already gone is done; a directory is `NotRegular`.
