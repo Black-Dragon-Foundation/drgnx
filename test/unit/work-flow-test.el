@@ -104,11 +104,26 @@ says its reason."
 literal colour."
   (dolist (f '(drgnx-work-flow-text drgnx-work-flow-label drgnx-work-flow-heading drgnx-work-flow-chip-ok
                                     drgnx-work-flow-chip-run drgnx-work-flow-chip-held drgnx-work-flow-chip-err
-                                    drgnx-work-flow-chip-wait drgnx-work-flow-key))
+                                    drgnx-work-flow-chip-wait drgnx-work-flow-key drgnx-work-flow-detail-text
+                                    drgnx-work-flow-section drgnx-work-flow-agent))
     (should (facep f))
     (let ((spec (face-default-spec f)))
       (should-not (string-match-p "#[0-9a-fA-F]\\{3\\}" (format "%S" spec)))
       (should (string-match-p "drgnx-ui-" (format "%S" spec))))))
+
+;; hub-orchestration.html: the table 12 px (`.flow`), the pills 11 px (`.g`), the detail 12.5 px with 12 px semibold
+;; muted heads (`.detail`, `.detail h5`)
+(ert-deftest drgnx-work-flow/its-sizes-are-the-mockup-s ()
+  "The table's text is the caption role (12 px), a chip a twelfth smaller (11 px); the detail tile's text the UI
+text role and its section heads the caption role, semibold and muted; the agent's name on its head the heading role."
+  (should (eq (face-attribute 'drgnx-work-flow-text :inherit) 'drgnx-ui-caption))
+  (dolist (f '(drgnx-work-flow-chip-ok drgnx-work-flow-chip-run drgnx-work-flow-chip-held drgnx-work-flow-chip-err
+                                       drgnx-work-flow-chip-wait))
+    (should (< (abs (- (face-attribute f :height) (/ 11.0 12))) 0.001)))
+  (should (eq (face-attribute 'drgnx-work-flow-detail-text :inherit) 'drgnx-ui-text))
+  (should (equal (face-attribute 'drgnx-work-flow-section :inherit) '(drgnx-ui-caption drgnx-text-muted)))
+  (should (eq (face-attribute 'drgnx-work-flow-section :weight) 'semibold))
+  (should (eq (face-attribute 'drgnx-work-flow-agent :inherit) 'drgnx-ui-heading)))
 
 (ert-deftest drgnx-work-flow/g-n-selects-the-nth-held-task ()
   "In the Flow, `g N' (the strip's badges) selects the Nth task a gate holds; on the map it stays the map's Nth thing
@@ -196,5 +211,48 @@ theme change).  The parameter is set when the blocks change, not per patch; a ki
           (kill-buffer buffer)
           (should-not (window-parameter (selected-window) 'glitnir-blocks)))
       (when (buffer-live-p buffer) (kill-buffer buffer)))))
+
+;; the mockup's selected task row (hub-orchestration.html `.sel.t`): `inset 2px 0 0 var(--focus)`
+(ert-deftest drgnx-work-flow/the-selected-task-has-the-focus-bar ()
+  "Pattern D: the selected task's row gets the mockup's accent, a 2 px bar at its left edge in the focus colour (a
+Glitnir `bar' block in `drgnx-focus-line'), from its row's start to its end: the task row, not the strip's chip that
+carries the same id.  A new selection moves it, and no selection draws none."
+  (let ((drgnx-view-patch--buffers (make-hash-table :test #'equal)) (drgnx-view-patch--hooked nil)
+        (drgnx-view-patch-send-function #'ignore)
+        (buffer (generate-new-buffer "*flow-bar*")))
+    (unwind-protect
+        (save-window-excursion
+          (switch-to-buffer buffer)
+          (drgnx-view-patch-attach "v" "c" :epoch 1)
+          (drgnx-view-apply-patch
+           (list :view "v" :class "c" :hub 7 :base 0 :version 1 :env_epoch 1 :images nil
+                 :ops (list (list :reset (list (list :key "needs" :text "T2 held g1"
+                                                     :props '((0 10 "drgnx-work-id" "task:2")))
+                                               (list :key "task:task:1" :text "T1 row"
+                                                     :props '((0 6 "drgnx-work-id" "task:1")))
+                                               (list :key "task:task:2" :text "T2 row"
+                                                     :props '((0 6 "drgnx-work-id" "task:2"))))))))
+          (drgnx-view-draw-now drgnx-view)
+          (let ((bar (lambda () (seq-find (lambda (b) (eq (car b) 'bar))
+                                          (window-parameter (selected-window) 'glitnir-blocks))))
+                (t2 (drgnx-view-row-start drgnx-view "task:task:2")))
+            (drgnx-work-flow--patched nil nil)
+            (should-not (funcall bar))
+            (setq drgnx-work-flow--selected "task:2")
+            (drgnx-work-flow--patched nil nil)
+            (let ((b (funcall bar)))
+              (should b)
+              (should (= (marker-position (nth 1 b)) t2))
+              (should (= (marker-position (nth 2 b)) (+ t2 6)))
+              (should (equal (plist-get (nthcdr 3 b) :x0) 0))
+              (should (equal (plist-get (nthcdr 3 b) :x1) (drgnx-px 2)))
+              (should (eq (plist-get (nthcdr 3 b) :ring) 'drgnx-focus-line)))
+            ;; a key moves the selection: the bar follows at once, before any patch
+            (setq major-mode 'drgnx-work-flow-mode)
+            (cl-letf (((symbol-function 'drgnx-work-flow--ask-detail) #'ignore))
+              (drgnx-work-flow--selected-moved buffer "task:1"))
+            (should (= (marker-position (nth 1 (funcall bar))) (drgnx-view-row-start drgnx-view "task:task:1")))))
+      (with-current-buffer buffer (drgnx-view-patch-teardown) (drgnx-timer-cancel (cons 'drgnx-view buffer)))
+      (kill-buffer buffer))))
 
 ;;; work-flow-test.el ends here
