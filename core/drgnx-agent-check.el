@@ -805,14 +805,12 @@ the SPEC of other agents as it is."
       (funcall callback (drgnx-agent-check--mask-result result secrets tool-secrets))
     (error (ignore-errors (message "Agent check: %s" (drgnx-agent-config-mask-text (error-message-string err) secrets))))))
 
-(defvar drgnx-agents-scrubbed-env)
-
 (defun drgnx-agent-check--scrub (env)
   "Bare names (each unsets the variable) for the vendor keys an agent does not inherit
-\(`drgnx-agents-scrubbed-env', else `drgnx-agent-config-vendor-env'), but those ENV (\"NAME=value\"…) sets itself."
+\(`drgnx-agent-config-vendor-env'), but those ENV (\"NAME=value\"…) sets itself."
   (let ((set (mapcar (lambda (e) (car (split-string e "="))) env)))
     (cl-remove-if (lambda (name) (member name set))
-                  (if (boundp 'drgnx-agents-scrubbed-env) drgnx-agents-scrubbed-env drgnx-agent-config-vendor-env))))
+                  drgnx-agent-config-vendor-env)))
 
 (cl-defun drgnx-agent-check--start (argv &key input dir env limit unit done)
   "Run ARGV (a list) with INPUT on its stdin, in DIR with ENV added, ended after LIMIT seconds (everything in the

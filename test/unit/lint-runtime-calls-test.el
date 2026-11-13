@@ -26,7 +26,7 @@
   "In `core/drgnx-agents.el', the line from which the forms are the runtime half unless kept.")
 
 (defconst drgnx-lint-runtime--agents-kept
-  '(drgnx-agents-get drgnx-agents--remote drgnx-agents-sessions drgnx-agents-scrubbed-env drgnx-agents-own-env
+  '(drgnx-agents-get drgnx-agents--remote drgnx-agents-sessions
                      drgnx-agents-use-gateway drgnx-agents-env-functions drgnx-agents-answer-permission drgnx-agents-finish-review
                      drgnx-agents-send drgnx-agents-deliver-queue drgnx-agents-unqueue drgnx-agents-requeue drgnx-agents-stop
                      drgnx-agents-kill drgnx-agents-free-p drgnx-agents-deliver drgnx-agents-steer)

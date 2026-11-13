@@ -151,7 +151,7 @@ again; the message after a write says so.
   event on its input. It asks "Run COMMAND for real?" first. The row shows its exit status.
 
 A tested server or hook gets Emacs's environment without the model vendors' keys and switches, the same list agents
-never inherit (`drgnx-agents-scrubbed-env`: `ANTHROPIC_*`, `OPENAI_*`, `OPENROUTER_API_KEY`, `MOONSHOT_API_KEY`,
+never inherit (`ANTHROPIC_*`, `OPENAI_*`, `OPENROUTER_API_KEY`, `MOONSHOT_API_KEY`,
 `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_API_KEY`, …), so a project's server never receives your provider keys.
 What the item sets itself (its `env`, `${VAR}` values, a bearer token from a variable) it gets; a hook also gets its
 project directory variables.
