@@ -236,6 +236,7 @@ fn agent(chain: &[&str], budget: Option<f64>) -> Registration {
 
 struct Gw {
     gw: Arc<Gateway>,
+    keys: Arc<RwLock<Keys>>,
     port: u16,
     book: Arc<Book>,
     events: mpsc::UnboundedReceiver<GatewayEvent>,
@@ -268,10 +269,11 @@ impl Gw {
         // an empty matcher: the environment's proxy settings must not matter here
         let upstream =
             Upstream::with_proxy(UpstreamOpts::default(), Matcher::builder().build()).unwrap();
+        let keys = Arc::new(RwLock::new(held));
         let gw = Gateway::new(
             registry,
             providers,
-            Arc::new(RwLock::new(held)),
+            keys.clone(),
             book.clone(),
             tx,
             upstream,
@@ -281,6 +283,7 @@ impl Gw {
         let listener = tokio::spawn(listen::serve_tcp(gw.clone(), listener, port));
         Self {
             gw,
+            keys,
             port,
             book,
             events,
@@ -1186,6 +1189,44 @@ async fn the_editor_route_records_a_spend_row_with_no_job() {
     let book = gw.book.clone();
     gw.settled().await;
     assert_eq!(book.rows(), vec![row]);
+}
+
+/// A key the hub forgot (`Keys::remove`, `gateway/revoke-key`) is no key for the next request, whoever sends it; another
+/// provider's key keeps working.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_request_after_a_revoke_is_refused_and_another_providers_key_works() {
+    let mock = Mock::start(json!([{"path": "/", "body": "{}"}]));
+    let mut providers = editor_gw_providers(&mock.url("/api/v1"));
+    providers.push(provider(
+        "other",
+        Kind::Openai,
+        &mock.url("/api/v1"),
+        Auth::Bearer,
+    ));
+    let gw = Gw::start(
+        providers,
+        vec![(EDITOR, Registration::editor())],
+        &[("or", "sk-or"), ("other", "sk-other")],
+        0.0,
+    )
+    .await;
+    assert_eq!(
+        gw.call(EDITOR, "/p/or/chat/completions", "{}").await.status,
+        200
+    );
+    assert!(gw.keys.write().unwrap().remove("or"));
+    let reply = gw.call(EDITOR, "/p/or/chat/completions", "{}").await;
+    assert_eq!(reply.status, 503);
+    assert_eq!(
+        reply.json()["error"]["message"],
+        "no key for or in the drgnx hub"
+    );
+    assert_eq!(
+        gw.call(EDITOR, "/p/other/chat/completions", "{}")
+            .await
+            .status,
+        200
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

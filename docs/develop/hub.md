@@ -1461,6 +1461,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `gateway/keys` | user | `{keys: ProviderKeys}` | `boolean` | no |
 | `gateway/keys-held` | user | `{}` | `{providers?: [Id]}` | no |
 | `gateway/register` | user | `{agent?: AgentName, budget?: Usd, chain: [[string \| null]], job?: Id, keys?: ProviderKeys, openrouter?: {data-collection?: "deny" \| "allow", ignore?: [string], only?: [string], zdr?: boolean}, owner?: natnum, sid?: SessionId, task?: TaskRef}` | `{openrouter?: any, socket?: string, token: string, url?: string}` | no |
+| `gateway/revoke-key` | user | `{provider: Id}` | `boolean` | no |
 | `gateway/set-budget` | user | `{budget: Usd, job: Id}` | `boolean` | no |
 | `gateway/unregister` | user | `{token: string}` | `boolean` | no |
 | `git/blame` | user | `{path: string, worktree_root: string}` | `{agents: [AgentLines], commits: [BlameCommit], head?: string, lines: [natnum]}` | no |
@@ -3278,6 +3279,14 @@ user subscribers get the event `gateway/keys-changed {providers}` whenever that 
 registration's `keys`; a key replaced for a provider already held changes nothing). Never a key. The editor judges a
 provider usable from these, not from a key of its own. A restarted hub holds none: a reconnecting editor asks
 `gateway/keys-held`, and hears `gateway/keys-changed` when its handover fills the set again.
+
+**Forgetting a key.** `gateway/revoke-key {provider}` (user) makes the hub forget that provider's key (zeroed) and
+answers whether it held one; a provider it never held is `false`, not an error. The next request for the provider finds
+no key (the editor's route answers 503 `no key for P in the drgnx hub`, an agent's chain moves on and the hub asks again
+with `gateway/need-keys` when an agent needs it); a request already sent upstream finishes with the key it used. The set
+changes, so `gateway/keys-changed` follows. The editor calls it when a key it stored replaces the old one
+(`drgnx-ai-store-key` → `drgnx-hub-revoke-key`; the new key goes with the next hand-over): a replaced key is revoke plus
+set. It only asks a connection that proved itself and starts nothing.
 
 ## Settings
 

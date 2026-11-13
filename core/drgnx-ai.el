@@ -315,6 +315,7 @@ auth-source's cache is emptied.  The environment is left as it is: keys the user
 (declare-function drgnx-hub-editor-token "drgnx-hub-client")
 (declare-function drgnx-hub-keys-held "drgnx-hub-client")
 (declare-function drgnx-hub-give-key "drgnx-hub-client")
+(declare-function drgnx-hub-revoke-key "drgnx-hub-client")
 
 (defun drgnx-ai--waits-p (interactive &optional waits)
   "Whether a request may wait for the hub: a command the user ran (INTERACTIVE, or WAITS: a caller that waits for
@@ -550,6 +551,8 @@ reads it back, and a Keychain item that does not match is deleted (`drgnx-ai--ke
         (unless (equal back key)
           (user-error "The key was stored, but the %s did not give it back. %s" store advice))))
     (puthash id key drgnx-ai--keys)
+    ;; the key the hub holds for ID is the old one now: the hub forgets it (the new one goes with the next hand-over)
+    (when (fboundp 'drgnx-hub-revoke-key) (drgnx-hub-revoke-key id))
     (if mac 'keychain 'keyring)))
 
 ;;;; Agent environments (agent profiles; M9b adds more kinds)

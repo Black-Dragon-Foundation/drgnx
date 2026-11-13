@@ -19363,6 +19363,41 @@
       "classes": [
         "user"
       ],
+      "doc": "the hub forgets one provider's key (true when it held one): the next request finds none, one already sent finishes",
+      "name": "gateway/revoke-key",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "The provider whose key the hub forgets (`gateway/revoke-key`).",
+        "properties": {
+          "provider": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "provider"
+        ],
+        "title": "RevokeKeyParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "seam: every registration of the job gets the budget (drgnx-gateway-set-budget)",
       "name": "gateway/set-budget",
       "params": {

@@ -1011,6 +1011,18 @@ drops it (`drgnx-hub--drop-keys')."
   (unless (eq drgnx-hub--keys-held :unknown)
     (cl-pushnew (symbol-name id) drgnx-hub--keys-held :test #'equal)))
 
+(defun drgnx-hub-revoke-key (id)
+  "Tell the hub to forget provider ID's key (`gateway/revoke-key'): a request after it finds no key, one already sent
+finishes.  Only a hub this Emacs is connected to and that proved itself, without waiting and without asking or starting
+anything (a daemon path may call it): the hub holds nothing else to forget.  A replaced key is this plus the hand-over
+\(`drgnx-hub-give-key', `drgnx-hub--send-keys').  Returns whether the call was made."
+  (when (and (processp drgnx-hub--events) (process-live-p drgnx-hub--events)
+             (process-get drgnx-hub--events :drgnx-proven))
+    (drgnx-hub-call "gateway/revoke-key" (list :provider (symbol-name id)) #'ignore)
+    (unless (eq drgnx-hub--keys-held :unknown)
+      (setq drgnx-hub--keys-held (delete (symbol-name id) drgnx-hub--keys-held)))
+    t))
+
 (defun drgnx-hub--hand-over ()
   "Hand the hub the runtime settings your Lisp holds (`drgnx-settings-runtime-send') and the keys this Emacs holds
 \(`drgnx-hub--send-keys'), and ask it for the editor token and the keys it holds (`drgnx-hub--fetch-editor'): the ids

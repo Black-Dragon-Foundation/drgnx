@@ -184,7 +184,8 @@ The hub holds your provider keys, in its memory only (above). What else gets nea
   and an agent of a keyed profile (OpenRouter, Anthropic, Kimi, DeepSeek) does not start without the hub: "the drgnx
   hub is not running; agents reach providers through it".
 - **Which keys the hub holds** is all anyone can ask of it: the provider names (`ratatoskr doctor`, and the hub's
-  `gateway/keys-held`), never a key. Your editor judges a provider usable from that list.
+  `gateway/keys-held`), never a key. Your editor judges a provider usable from that list. When you store a new key
+  for a provider, the hub forgets the old one at once (`gateway/revoke-key`).
 - **Keys in your environment** (`OPENROUTER_API_KEY` and the like) stay where you put them: drgnx never unsets them,
   so the programs your Emacs starts (shells, `compile`) still see them; agents do not (their environment drops every
   provider key) and use the copy the hub holds. `drgnx doctor` notes such a key ("OPENROUTER_API_KEY is set in this

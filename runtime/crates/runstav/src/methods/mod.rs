@@ -182,6 +182,7 @@ params! {
     GatewayRegister(gateway::RegisterParams),
     GatewayUnregister(gateway::UnregisterParams),
     GatewayKeys(gateway::KeysParams),
+    GatewayRevokeKey(gateway::RevokeKeyParams),
     GatewaySetBudget(gateway::SetBudgetParams),
     ConfigSettings(config::SettingsParams),
     ConfigChanged(Empty),
