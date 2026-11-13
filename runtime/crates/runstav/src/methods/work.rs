@@ -525,12 +525,6 @@ fn check_flow_subscribe(p: &FlowSubscribe) -> Result<(), Error> {
     {
         return Err(invalid("detail", "a task id"));
     }
-    if p.rules && p.detail.is_some() {
-        return Err(invalid(
-            "rules",
-            "one tile: the Rules tile or a task's detail",
-        ));
-    }
     Ok(())
 }
 
@@ -762,5 +756,18 @@ mod tests {
         ] {
             assert!(report(bad.clone()).is_err(), "{bad}");
         }
+    }
+
+    /// The Rules tile takes the selected task with it (its Evidence tab's); a task id is still checked.
+    #[test]
+    fn the_rules_tile_takes_the_selected_task() {
+        let flow = |v: serde_json::Value| {
+            let (p, _) = crate::registry::decode_params::<FlowSubscribe>(&v)?;
+            check_flow_subscribe(&p)
+        };
+        assert!(
+            flow(json!({"view": "v/rules", "map": "v", "rules": true, "detail": "J#5"})).is_ok()
+        );
+        assert!(flow(json!({"view": "v/rules", "map": "v", "rules": true, "detail": ""})).is_err());
     }
 }
