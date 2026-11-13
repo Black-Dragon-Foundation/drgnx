@@ -143,3 +143,15 @@ offline) never rolls the update back: the old grammars keep highlighting, and `d
 `test/unit/packs-pins-test.el` loads each built-in pack's Emacs mode and compares its grammars' repository, commit and
 source folder with the mode's `treesit-language-source-alist` entry (under ABI 15, where Rust's and PHP's modes pin
 another commit than below it), so a Nidhogg rebase that moves a mode's pin fails a test, not a user's highlighting.
+
+## The generic mode's queries (`ratatoskr packs translate`)
+
+A pack with `:mode (:generic t)` highlights with `drgnx-pack-ts-mode` from its `queries/highlights.scm`. Emacs names a
+capture by the face it applies and knows only `#eq?`, `#match?` and `#pred?`, so `ratatoskr packs translate PACKDIR OUT`
+(`skald::translate`) rewrites the file once: a capture becomes a face by a fixed table (`@keyword.return` →
+`font-lock-keyword-face`; a name the table lacks becomes an ignored `@_NAME`, a pattern with no known capture is dropped);
+`#match?` keeps its regexp, rewritten into Emacs's syntax; `#any-of?` becomes an anchored `#match?`; `#not-eq?` and
+`#not-match?` become `#pred?` on functions the editor defines (`:preds`). Patterns are grouped by the feature of their
+first known capture (`comment`, `keyword`, `string`, `type`, `constant`, `number`, `function`, `variable`, `property`,
+`operator`, `delimiter`, `bracket`, `escape-sequence`, `attribute`), which the feature levels turn on and off. The node
+kinds of the `@definition.*` patterns of `tags.scm` become `:defuns`, what navigation treats as a definition.

@@ -32,7 +32,7 @@ pub const USAGE: &str = "usage: ratatoskr serve [--foreground] [--parent-pid PID
     \x20      ratatoskr runner list [--json] | add HOST --trust T [--name N] [--profile P] [--accept A] [--root DIR] [--prefix P]\n\
     \x20          | check NAME | bench NAME | trust NAME T | unbench NAME | remove NAME [--yes] | audit   (the runners)\n\
     \x20      ratatoskr packs check DIR [--builtin] [--other DIR]...   (check a language pack)\n\
-    \x20      ratatoskr packs sync --plan FILE [--out FILE] | pin REPO COMMIT [--src DIR]   (the pack job; pin a grammar)\n\
+    \x20      ratatoskr packs sync --plan FILE [--out FILE] | pin REPO COMMIT [--src DIR] | translate PACKDIR OUT   (the pack job; pin a grammar; the generic mode's queries)\n\
     \x20      ratatoskr plugins install PATH [--replace] | list [--json] | remove NAME   (plugins; approve them in drgnx)\n\
     \x20      ratatoskr search index ROOT [--rebuild] [--now]   (build or rebuild a project's code index)\n\
     \x20      ratatoskr search query ROOT QUESTION... [-k N] [--scope code|tests|docs|all] [--json]\n\
