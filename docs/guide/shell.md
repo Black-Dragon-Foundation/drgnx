@@ -189,7 +189,9 @@ terminal (a function the line defines there only; `command ssh` skips it) does w
   -`, with your ssh options but not a command you gave, into the remote `~/.terminfo`) and records the outcome in `<state>/terminal-ssh-hosts`, one
   `USER@HOST:PORT TERM` line per host. Later ssh's to that host use what is recorded: `xterm-ghostty` when it worked,
   `xterm-256color` when it did not (no `tic` there, say). Delete the host's line to try again. That first ssh
-  connects twice, so you may be asked for a password twice.
+  makes one connection: the `tic` call opens it (`ControlMaster`, kept 10 seconds, its socket in
+  `/tmp/drgnx-ssh-USER/`) and your session joins it, so a password is asked once. If ssh cannot share a connection
+  (a host or a setup that refuses it), the session connects on its own.
 
 The host's name, user and port come from `ssh -G` with your arguments, so `~/.ssh/config` aliases count. A terminal
 opened in a remote folder follows the same setting with no shell file on either side (the same record file, the

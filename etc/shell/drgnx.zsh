@@ -38,9 +38,11 @@ if [[ -n ${DRGNX_TERMINAL-} ]]; then
   function ssh {
     emulate -L zsh
     if [[ ${TERM-} != xterm-ghostty ]]; then command ssh "$@"; return; fi
-    typeset -g _drgnx_term=xterm-256color
+    typeset -g _drgnx_term=xterm-256color _drgnx_cp=
     if [[ ${DRGNX_TERMINAL_SSH-fallback} == install ]]; then _drgnx_ssh_terminfo "$@"; fi
-    TERM=$_drgnx_term command ssh "$@"
+    # after the tic call, this ssh joins its connection (one password prompt, not two)
+    if [[ -n $_drgnx_cp ]]; then TERM=$_drgnx_term command ssh -o ControlMaster=no -o "ControlPath=$_drgnx_cp/%C" "$@"
+    else TERM=$_drgnx_term command ssh "$@"; fi
   }
   function _drgnx_ssh_terminfo { # sets _drgnx_term for this ssh's host
     emulate -L zsh
@@ -68,8 +70,12 @@ if [[ -n ${DRGNX_TERMINAL-} ]]; then
       esac
     done
     [[ -n $dest ]] || return 0
+    # the tic call's connection stays 10 s for this ssh to join (a short path: macOS caps a socket's at 104 bytes)
+    local cp=/tmp/drgnx-ssh-${USER:-user}
+    local -a cm
+    command mkdir -p -m 700 "$cp" && _drgnx_cp=$cp && cm=(-o ControlMaster=auto -o "ControlPath=$cp/%C" -o ControlPersist=10)
     if command infocmp -x xterm-ghostty 2>/dev/null |
-        TERM=xterm-256color command ssh "${opts[@]}" -- "$dest" 'tic -x -'; then
+        TERM=xterm-256color command ssh "${cm[@]}" "${opts[@]}" -- "$dest" 'tic -x -'; then
       _drgnx_term=xterm-ghostty
     fi
     command mkdir -p "${rec:h}" && print -r -- "$key $_drgnx_term" >> "$rec"

@@ -276,10 +276,16 @@ if not set -q _drgnx_sourced
                 return
             end
             set -g __drgnx_term xterm-256color
+            set -g __drgnx_cp
             if test "$DRGNX_TERMINAL_SSH" = install
                 __drgnx_ssh_terminfo $argv
             end
-            TERM=$__drgnx_term command ssh $argv
+            # after the tic call, this ssh joins its connection (one password prompt, not two)
+            if test -n "$__drgnx_cp"
+                TERM=$__drgnx_term command ssh -o ControlMaster=no -o ControlPath=$__drgnx_cp/%C $argv
+            else
+                TERM=$__drgnx_term command ssh $argv
+            end
         end
 
         function __drgnx_ssh_terminfo -d "sets __drgnx_term for this ssh's host"
@@ -329,7 +335,13 @@ if not set -q _drgnx_sourced
                 end
             end
             test -n "$dest"; or return 0
-            if command infocmp -x xterm-ghostty 2>/dev/null | TERM=xterm-256color command ssh $opts -- $dest 'tic -x -'
+            # the tic call's connection stays 10 s for this ssh to join (a short path: macOS caps a socket's at 104 bytes)
+            set -l cp /tmp/drgnx-ssh-user
+            test -n "$USER"; and set cp /tmp/drgnx-ssh-$USER
+            command mkdir -p -m 700 $cp; and set -g __drgnx_cp $cp
+            set -l cm
+            test -n "$__drgnx_cp"; and set cm -o ControlMaster=auto -o ControlPath=$cp/%C -o ControlPersist=10
+            if command infocmp -x xterm-ghostty 2>/dev/null | TERM=xterm-256color command ssh $cm $opts -- $dest 'tic -x -'
                 set -g __drgnx_term xterm-ghostty
             end
             string replace -r '/[^/]*$' '' -- $rec | read -l dir

@@ -16,11 +16,17 @@ term=
 if [ -n "$key" ] && [ -r "$rec" ]; then
   term=$(awk -v k="$key" '$1 == k { t = $2 } END { print t }' "$rec")
 fi
+cp=
 if [ -z "$term" ]; then
   term=xterm-256color
-  if infocmp -x xterm-ghostty 2>/dev/null | TERM=xterm-256color ssh "$@" 'tic -x -'; then
+  # the tic call's connection stays 10 s for the session below to join (one password prompt, not two); a short
+  # path: macOS caps a socket's at 104 bytes
+  cp=/tmp/drgnx-ssh-${USER:-user}
+  mkdir -p -m 700 "$cp" || cp=
+  if infocmp -x xterm-ghostty 2>/dev/null | TERM=xterm-256color ssh ${cp:+-o ControlMaster=auto -o "ControlPath=$cp/%C" -o ControlPersist=10} "$@" 'tic -x -'; then
     term=xterm-ghostty
   fi
   [ -z "$key" ] || { mkdir -p "${rec%/*}" && printf '%s %s\n' "$key" "$term" >> "$rec"; }
 fi
+if [ -n "$cp" ]; then TERM=$term exec ssh -o ControlMaster=no -o "ControlPath=$cp/%C" -t "$@" "$script"; fi
 TERM=$term exec ssh -t "$@" "$script"

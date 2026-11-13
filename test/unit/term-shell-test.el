@@ -141,7 +141,7 @@ case \"$*\" in *tic*) printf 'stdin=%%s\\n' \"$(cat)\" >> '%s' ;; esac" log log)
 \"host\") CALLS times against the stubs; returns (EXIT LOG RECORD)."
   (let ((stubs (make-temp-file "drgnx-term-ssh" t)))
     (unwind-protect
-        (let* ((env (list "DRGNX_TERMINAL=1" "TERM=xterm-ghostty" (concat "DRGNX_TERMINAL_SSH=" mode)))
+        (let* ((env (list "DRGNX_TERMINAL=1" "TERM=xterm-ghostty" "USER=kx" (concat "DRGNX_TERMINAL_SSH=" mode)))
                (script (format "source '%s'; %s" (drgnx-term-shell-test--file shell)
                                (string-join (make-list calls (concat "ssh " (or args "host"))) "; ")))
                (r (drgnx-term-shell-test--run shell (list "-c" script) env nil
@@ -161,12 +161,18 @@ case \"$*\" in *tic*) printf 'stdin=%%s\\n' \"$(cat)\" >> '%s' ;; esac" log log)
   ;; install: the first ssh to a host sends the entry to the host's tic and records it; later ones just connect
   (dolist (shell (drgnx-term-shell-test--shells))
     ;; the tic call keeps the options and drops the command: the host's tic runs instead of `uptime'
-    (pcase-let ((`(,exit ,log ,record) (drgnx-term-shell-test--ssh shell "install" 2 "-p 2222 -A host uptime")))
+    ;; the first ssh connects once: the tic call opens a connection (ControlMaster) that the session joins (a
+    ;; password asked once, TERM-SHELL-SSH-TWICE-1); later ones are plain
+    (pcase-let* ((`(,exit ,log ,record) (drgnx-term-shell-test--ssh shell "install" 2 "-p 2222 -A host uptime"))
+                 ;; fish sets USER itself
+                 (cp (concat "/tmp/drgnx-ssh-" (if (eq shell 'fish) (user-login-name) "kx") "/%C")))
       (should (equal (list shell exit) (list shell 0)))
       (should (equal (list shell log)
-                     (list shell (concat "TERM=xterm-256color args=-p 2222 -A -- host tic -x -\n"
+                     (list shell (concat "TERM=xterm-256color args=-o ControlMaster=auto -o ControlPath=" cp
+                                         " -o ControlPersist=10 -p 2222 -A -- host tic -x -\n"
                                          "stdin=xterm-ghostty|stub,\n"
-                                         "TERM=xterm-ghostty args=-p 2222 -A host uptime\n"
+                                         "TERM=xterm-ghostty args=-o ControlMaster=no -o ControlPath=" cp
+                                         " -p 2222 -A host uptime\n"
                                          "TERM=xterm-ghostty args=-p 2222 -A host uptime\n"))))
       (should (equal (list shell record) (list shell "me@example.org:2222 xterm-ghostty\n"))))))
 
