@@ -692,6 +692,11 @@ A tool that needs another family (AF_ALG crypto, Bluetooth) fails with EAFNOSUPP
 (mise, cargo, rustup, nvm, pyenv, and so on). A layout it does not know (Homebrew under the home, asdf, volta, fnm,
 sdkman, bun globals beyond `~/.bun/bin`) is added by the user through the `agents.eld` read list.
 
+**The reduced tier's gaps are named where it is named (GL-T8-2, GL-T5-3).** The note `sandbox check` and the doctor add
+for the reduced tier (`REDUCED_CANNOT_PIN`) says that it cannot pin `.dir-locals.el`, `.dir-locals-2.el` and `.drgnx/`,
+that its network is narrowed to the relay's ports and not isolated, and that other processes' command lines are
+readable.
+
 **The browser layer** (`landlock::browser_plan`). The agent browser's host and every Chromium process under it run
 in a second Landlock domain on top of the agent's. Landlock layers only narrow, so this layer can only take away.
 `browser_plan(&BrowserInputs { tier, program_dir, own_dir, helper, extra_read, web_port, local_ports })` is pure:
