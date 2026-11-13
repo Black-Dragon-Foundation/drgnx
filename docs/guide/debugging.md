@@ -144,6 +144,14 @@ is deleted, or the keyring is reset), the old runs cannot be read again: there i
 unencrypted copy of the runs. They are disposable, so this is fine: they are removed at their 14 days as usual, and new
 runs use a new key.
 
+**Sending a run.** **Send Run…** writes an ended run, with the files as they were when it started, into one encrypted
+file, after a card reminds you that it holds your program's values unencrypted to whoever opens it. drgnx shows a
+share code once (52 letters and digits): the file opens only with it, and drgnx keeps no copy of it, so note it
+before you close the card. drgnx sends nothing itself: send the file however you like, and the code another way.
+**Open Sent Run…** adds a run someone sent you to your project's runs, encrypted under your own keyring's key, with its
+paths moved to your project. You can read its stops and timeline; it is never run on your machine (no forks), since
+its program and settings are the sender's. It is kept 14 days from when you opened it.
+
 ## What-if forks
 
 On Linux, from a stop of a recorded run, **Fork from Here…** replays the run in a sealed copy of the project as it

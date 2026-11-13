@@ -180,6 +180,7 @@ fn fixture_at(
             expr: "shortfall".into(),
         }],
         hits,
+        imported: false,
     };
     let path_env = std::env::var("PATH").unwrap();
     let env = runstav::paths::Env::new(

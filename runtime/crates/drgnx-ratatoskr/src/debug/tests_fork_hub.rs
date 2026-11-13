@@ -216,6 +216,7 @@ fn run() -> RunInfo {
             expr: "shortfall".into(),
         }],
         hits: vec![hit("16", 3), hit("12", 6), hit("9", 7)],
+        imported: false,
     }
 }
 

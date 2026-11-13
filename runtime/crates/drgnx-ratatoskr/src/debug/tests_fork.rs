@@ -97,6 +97,7 @@ fn run() -> RunInfo {
         ],
         probes: vec![],
         hits: vec![],
+        imported: false,
     }
 }
 
@@ -123,6 +124,13 @@ fn stop(
 
 #[test]
 fn attach_runs_and_ptrace_adapters_are_refused_with_the_reason() {
+    // a run someone sent: its program is the sender's, and opening a file never runs it
+    let mut r = run();
+    r.imported = true;
+    assert!(
+        matches!(fork::check(&r, &At::Stop(3), true, true), Err(Refused::No(m)) if m.contains("sent")),
+        "a sent run forked"
+    );
     let mut r = run();
     r.request = "attach".into();
     assert!(
