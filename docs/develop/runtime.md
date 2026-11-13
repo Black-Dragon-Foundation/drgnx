@@ -289,9 +289,12 @@ child gets exactly 0–2 and the targets, in this order:
 2. Every free number from 3 to the highest target is held with a close-on-exec copy until the child is started.
    std reports a failed exec over a socket it opens just before the fork, at the lowest free number; on a target
    the child's `dup2` would close it, and a failed exec would look like a start. Another thread that closes a low
-   descriptor during the spawn can still free a number for it. A failed exec then shows as a child that exits 1 at
-   once, and std's 8 bytes go to the passed descriptor at that number. The callers fail closed on both (no status
-   line from the helper).
+   descriptor during the spawn can free a number for it. So the parent records, for each target, the file open on
+   that number (`Moved::expect`), and the child checks that no target holds another file before any `dup2`; if one
+   does it stops with `EBUSY` through std's intact report socket and the parent holds the numbers anew and spawns
+   again (four tries). The test `a_failed_exec_is_reported_when_a_held_number_was_closed` closes every held number
+   and shows the guard fire and the exec failure reported as it is. (The clobber itself could not be reproduced on
+   this toolchain, so this is a guard, not a measured fix.)
 3. In the child (`pre_exec`, no allocation): every descriptor from 3 up is marked close-on-exec, with
    `close_range(3, ~0, CLOSE_RANGE_CLOEXEC)` on Linux and Android. Before Linux 5.11, and on macOS, an
    `fcntl(F_SETFD, FD_CLOEXEC)` loop up to `RLIMIT_NOFILE` (at most 2^20) does it. Then each source is `dup2`'d to
