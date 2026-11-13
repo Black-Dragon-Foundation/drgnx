@@ -15,6 +15,7 @@
  (:file "modules/lang/drgnx-markdown.el" :in drgnx-markdown--insert-html :what erase-buffer :kind document :why "the html preview is built when the user opens it")
  (:file "modules/lang/drgnx-markdown.el" :in drgnx-markdown--render :what erase-buffer :kind document :why "the markdown view is built when the user opens it")
  (:file "modules/tools/drgnx-agent-settings.el" :in drgnx-agent-settings--render :what erase-buffer :kind document :why "the settings page is drawn on the user's action")
+ (:file "modules/extra/drgnx-debug-heap.el" :in drgnx-debug-heap--draw :what erase-buffer :kind document :why "the heap graph is drawn when the user opens it and once a stop (the hub lays its grid out again); point and the windows' starts are put back")
  (:file "modules/tools/drgnx-plugins-ui.el" :in drgnx-plugins--render :what erase-buffer :kind document :why "the plugins page is drawn on the user's action and when the hub says a plugin changed")
  (:file "modules/tools/drgnx-agents-editor-here.el" :in drgnx-agents-editor-here-show :what erase-buffer :kind document :why "the who-is-here list is drawn when the user asks for it, a handful of rows")
  (:file "modules/extra/drgnx-debug-fork.el" :in drgnx-debug-fork--render :what erase-buffer :kind document :why "the What-if tab is drawn when a fork changes state (a handful of times a fork) or the user shows it")

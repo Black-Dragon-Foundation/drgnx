@@ -1207,3 +1207,21 @@ Tests:
   new object and a gone one, while a's card keeps its cell;
 - `js_debug_detach_leaves_no_hidden_map`: after a detach, the program's own `Object.getOwnPropertySymbols(globalThis)`
   no longer has the map.
+
+The editor half (`drgnx-debug-heap.el`): **Show as Graph** (`debug-show-as-graph`) on a Variables row asks
+`debug/heap {session, expr}` on the events connection, the one the hub sends `debug-heap` to, and shows the panel's
+**Graph** tab (`debug-graph`, buffer `*Debug Graph*`; one graph at a time, so opening another closes the last). The
+first line is the header: the expression, the objects, chips for the changed and new ones, `+N not shown` for `cut`,
+and a push's error, which keeps the last cards. Then one line per row of cells: each card's rows are written at its
+cells (` TYPE path`, then ` name … value`, a reference's value its target's type, then `+N more`), with the
+`drgnx-debug-heap-card` property naming the card. The cards are `glitnir-blocks` rings over their cells (radius 6,
+`drgnx-border`, the selected card's `drgnx-focus-line`: a ring takes a face's foreground, and `drgnx-focus` has only a box), and the references are `glitnir-edges` from the field's row to the
+target's type row through the hub's points, half a line down, with an arrowhead, in `drgnx-text-subtle`, or in
+`drgnx-accent` when they touch the selected card. A field the limit cut (`cut: N`, no target) shows its value as a
+reference; its stub (`cuts[{from, field, count, col, row, width}]`) is one row, `+N not shown` in
+`drgnx-debug-heap-cut` (the quiet chip), at the cells the hub gave it, and its edge (`cut: true`, `to: ""`) ends there,
+dashed, with no arrowhead. RET or a click selects a card (`debug-heap-select`). At a
+`debug-heap` push, the fields whose value changed since the last read take `drgnx-debug-heap-changed` (the warn tint),
+an added card's type row says `new`, and a gone card is written once more at its old cells (where no card is now) in
+`drgnx-debug-heap-gone` (the disabled text) with a subtle ring and no edges; the next push drops it. Killing the
+buffer sends `debug/heap/close`. Tests: `test/unit/debug-heap-test.el`; scenes `heap-graph` and `heap-graph-light`.

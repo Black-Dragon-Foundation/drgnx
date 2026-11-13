@@ -57,7 +57,9 @@
     (send-run)
     (send-run-code :mockup send-run)
     (send-run-light :mockup send-run)
-    (send-run-code-light :mockup send-run))
+    (send-run-code-light :mockup send-run)
+    (heap-graph :mockup debugging-extras)
+    (heap-graph-light :mockup debugging-extras))
   "The scenes in the order they are drawn: (NAME . PLIST).  NAME is the mockup's (docs/specs, the-look/NAME.png; the
 start page, the highlights, the focused Explorer and the Extensions list have none: they are judged against the components' spec and
 the tokens) and the session's `drgnx-look-scene-NAME' sets it up.  :agent t starts the mock agent first; :keys and

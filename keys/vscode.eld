@@ -156,6 +156,8 @@
         (debug-breakpoint-trigger :none "a breakpoint's right-click menu; the palette")
         (debug-add-to-watch :none "a variable's right-click menu; the palette")
         (debug-view-memory :none "the palette")
+        (debug-show-as-graph :none "the palette")
+        (debug-heap-select "RET")
         (debug-memory-next "<next>")
         (debug-memory-previous "<prior>")
         (debug-memory-refresh :none "the palette")
