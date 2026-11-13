@@ -6,5 +6,5 @@
              :tree-sha256 "1baf03ad55207b699fbb21057e103a593afdebf0d117e728c1715a928eed379a" :src "src" :required t))
  :mode (:ts rust-ts-mode :builtin t :classic rust-mode)
  :format (:formatter rustfmt :command ("rustfmt") :standard t)
- :hrafn (:lang "rust")
+ :hrafn (:lang "rust" :chunks "queries/chunks.scm" :docs (:line "///" :members (line) :top (line)))
  :license "GPL-3.0-or-later" :maintainers ("drgnx"))

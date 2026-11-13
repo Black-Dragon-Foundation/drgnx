@@ -22,6 +22,7 @@ regex.workspace = true
 rusqlite.workspace = true
 sha2.workspace = true
 tree-sitter.workspace = true
+skald = { path = "../skald", version = "0.1.0" }  # the packs' manifests: the chunker's rules (chunk::registry)
 ast-grep-core.workspace = true
 tree-sitter-elisp.workspace = true
 tree-sitter-rust.workspace = true

@@ -6,5 +6,5 @@
              :tree-sha256 "3544dc70396b63e9c7cfa7629352999b3da677a4b297034993dce9e772e1d055" :src "src" :required t))
  :mode (:ts go-ts-mode :builtin t :classic go-mode)
  :format (:formatter gofmt :command ("gofmt") :standard t)
- :hrafn (:lang "go")
+ :hrafn (:lang "go" :chunks "queries/chunks.scm" :docs (:line "//"))
  :license "GPL-3.0-or-later" :maintainers ("drgnx"))

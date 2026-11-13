@@ -7,5 +7,5 @@
              :tree-sha256 "ee19cf9d9e5b767d8475af6ddcc024565fcf658682efb0a4ef01cd082f8bea2e" :src "src"))
  :mode (:ts js-ts-mode :builtin t :classic js-mode)
  :format (:config-files (".prettierrc" ".prettierrc.json" ".prettierrc.yaml" ".prettierrc.yml" ".prettierrc.js" ".prettierrc.cjs" ".prettierrc.mjs" ".prettierrc.toml" "prettier.config.js" "prettier.config.cjs" "prettier.config.mjs" "biome.json" "biome.jsonc" "deno.json" "deno.jsonc"))
- :hrafn (:lang "javascript")
+ :hrafn (:lang "javascript" :chunks "queries/chunks.scm" :docs (:line "//" :block "/**" :members (block)) :helpers (js-callback-body))
  :license "GPL-3.0-or-later" :maintainers ("drgnx"))

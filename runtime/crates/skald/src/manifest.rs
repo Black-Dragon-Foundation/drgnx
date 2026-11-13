@@ -206,6 +206,10 @@ pub struct Docs {
     pub line: Option<String>,
     #[serde(default)]
     pub block: Option<String>,
+    /// What documents a top-level definition itself (Rust: its `///` lines); the others take their form's doc.
+    #[serde(default)]
+    pub top: Vec<DocMember>,
+    /// What documents a member of a container.
     #[serde(default)]
     pub members: Vec<DocMember>,
 }

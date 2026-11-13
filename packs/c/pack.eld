@@ -5,5 +5,5 @@
              :tree-sha256 "14d5aa73d1066e821c9fd75ad63fdcf72c922c589f1311ed5672b84723add2cc" :src "src" :required t))
  :mode (:ts c-ts-mode :builtin t :classic c-mode)
  :format (:config-files (".clang-format"))
- :hrafn (:lang "c")
+ :hrafn (:lang "c" :chunks "queries/chunks.scm" :docs (:line "//") :helpers (c-declarator-name))
  :license "GPL-3.0-or-later" :maintainers ("drgnx"))
