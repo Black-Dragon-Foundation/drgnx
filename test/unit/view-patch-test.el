@@ -577,3 +577,14 @@ the patch shows on the rows already inserted, with no new patch."
         (should-not (equal fg "#777777"))
         (should (>= (drgnx-color-contrast fg "#7a7a7a") 4.5)))
       (should (equal (plist-get (drgnx-view-patch--style-attrs far) :foreground) "#ffffff")))))
+
+(ert-deftest drgnx-view-patch/overlapping-runs-stack-the-earlier-above ()
+  ;; a card's text carries its own faces (a state dot, an overlap mark) and the card's box face over the same range:
+  ;; the runs come in that order and each is appended below those before it, so neither hides the other
+  (drgnx-view-patch-test--with
+    (drgnx-view-apply-patch
+     (drgnx-view-patch-test--patch
+      (list (list :reset (list (drgnx-view-patch-test--row "a" "ab cd" :runs '((0 2 "bold") (0 5 "italic") (0 5 "drgnx-ui-text"))))))))
+    (let ((line (drgnx-view-patch-render "a")))
+      (should (equal (get-text-property 0 'face line) '(bold italic drgnx-ui-text)))
+      (should (equal (get-text-property 3 'face line) '(italic drgnx-ui-text))))))

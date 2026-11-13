@@ -128,6 +128,13 @@ key profiles bind them (`drgnx-command-define' with this map); each view's own k
 
 ;;;; The rows path: keys answer from the map's model in Sjá
 
+(defconst drgnx-work-map--through-faces
+  '(drgnx-card-top drgnx-card-mid drgnx-card-bottom drgnx-card-single)
+  "The faces of a card's rows: a class (the selection, the dimming) goes through their box, as for text.")
+
+(defvar drgnx-view-nav-through-faces)
+(defvar drgnx-view-nav-faces)
+
 (defun drgnx-work-map-rows-p ()
   "Whether this Emacs can show the hub's rows of a map: it has Sjá (the keys answer from its model)."
   (fboundp 'nidhogg-view--call))
@@ -136,7 +143,10 @@ key profiles bind them (`drgnx-command-define' with this map); each view's own k
   "Make the current map buffer the hub-fed view VIEW (the map view's id): its rows come as patches for the classes
 whose env this Emacs sends while a window shows it; the selection goes to the hub by the trailing notice."
   (drgnx-view-patch-attach view "unshown")
-  (setq-local drgnx-view-patch-twin-function #'drgnx-work-map--twin)
+  (setq-local drgnx-view-patch-twin-function #'drgnx-work-map--twin
+              drgnx-view-nav-through-faces drgnx-work-map--through-faces
+              ;; the selected card is tinted, the cards off its chain are dimmed; the chain is the lanes' (the hub draws it)
+              drgnx-view-nav-faces '(("selected" . drgnx-work-selected) ("chain") ("dim" . drgnx-work-dim)))
   (setq drgnx-work-map--lens (drgnx-work-map--lens-string))
   (require 'drgnx-view-env)
   (drgnx-view-env-register view (current-buffer)))

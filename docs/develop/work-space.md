@@ -508,7 +508,15 @@ and keeps no copy of the map. The map's rows come as `view-patch` events and its
 lays the map out and draws every row, the strip, the bands' edge tiles, the lanes and the outline ("The rows
 (`vegvisir::render`)", above), and sends the map's model to Sjá. The buffer is the hub-fed view of the map view's id
 (`drgnx-work-map-rows-attach`: `drgnx-view-patch-attach`, its env registered while a window shows it); the rows name
-faces only, so the editor keeps defining them: `drgnx-work-band`, the decoration faces (`drgnx-card-top`, `-mid`,
+faces only, so the editor keeps defining them. A card line's runs come in the order card box, then its text's own
+faces; each is appended below those before it (`drgnx-view-patch--dress`), so the text's faces (a state dot, an overlap
+mark) show and the card's box and `drgnx-work-card` (the UI font) are under them. The hub names `drgnx-work-title` on
+an agent's name (heading weight), `drgnx-work-meta` on its line of minutes and spend (the code font, no box: it
+would take the box off the run) and `drgnx-chip` under the strip's chips. The themes give the card faces a ring in the
+strong border with an explicit colour (a ring with none takes each run's foreground and the card breaks into boxes
+where the faces change). A class (the selection's tint, the dimming of the cards off its chain) goes through the
+cards' boxes (`drgnx-view-nav-through-faces`, set by `drgnx-work-map-rows-attach`); a chip elsewhere keeps its own
+face under a class. The faces: `drgnx-work-band`, the decoration faces (`drgnx-card-top`, `-mid`,
 `-bottom`, `-single`, loaded from `modules/ui/drgnx-decor.el`), `drgnx-runners-*`, `drgnx-work-seg-*`,
 `drgnx-work-agent-1` to `-6` and `drgnx-work-chain`, `-chip`, `-dim`, `-label`, `-needs-you`, `-new` and `-overlap`.
 
@@ -548,7 +556,12 @@ The selection, the keys and the commands are in `drgnx-work-map.el`; the side pa
   `work-detail` (home right) shows it. `drgnx-work-detail-buffer` attaches it as the hub-fed view `VIEW/detail` in the
   map view's class and registers its env. The hub (`work/map/detail.rs`) builds its rows from the map's model and the
   view's selection (head, why, touches, conclusions, a machine's queue, actions; one row per line, keyed `SECTION/N`, a
-  job's line carrying `drgnx-work-job` for `l`) whenever it publishes the map, and when the panel's env arrives; the
+  job's line carrying `drgnx-work-job` for `l`) whenever it publishes the map, and when the panel's env arrives. The
+  tile is the mockup's `.det`: the rows are in the UI font (`drgnx-work-card`), the head and the section names in the
+  heading face, a `KEY\tVALUE` line (the why-chain's you, spec, plan and task, a touch's branch, machine, edits, reads
+  and overlap) a muted key and its value in a column (`detail::rows` takes the display scale for the column), the
+  why-chain's values in the accent, an overlap in the warning colour, and the actions as buttons with their keycaps
+  (an agent's: Open, Files, Diffs, Trail, Steer, Pause, Review, in the default profile's keys); the
   selection reaches the hub as the map's `work/map/set`. Without Sjá the panel shows the map's notice. Tests:
   `detail_rows_say_the_edges` (Rust), `drgnx-work-detail/rows-follow-the-selection`.
 

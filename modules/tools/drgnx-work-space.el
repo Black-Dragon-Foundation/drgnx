@@ -126,14 +126,18 @@ it (a notes repository with the code repositories inside it)."
 ;;;; Faces: they inherit the look's semantic faces (core/drgnx-faces.el)
 
 (defface drgnx-work-dim '((t :inherit drgnx-text-muted)) "Items off the selection's chain." :group 'drgnx-work-space)
-(defface drgnx-work-card '((t :inherit default)) "A card's text." :group 'drgnx-work-space)
+(defface drgnx-work-card '((t :inherit drgnx-ui-text)) "A card's text: the UI font, under its box face and its runs' own faces."
+  :group 'drgnx-work-space)
+(defface drgnx-work-title '((t :inherit drgnx-ui-heading)) "An agent card's name line." :group 'drgnx-work-space)
+(defface drgnx-work-meta '((t :inherit drgnx-code-small)) "An agent card's line of minutes, spend and progress: the code font (it names no box: a card's box runs on)."
+  :group 'drgnx-work-space)
 (defface drgnx-work-selected '((t :inherit drgnx-selected)) "The selected item." :group 'drgnx-work-space)
 (defface drgnx-work-chain '((t :inherit drgnx-accent)) "Items on the selection's chain." :group 'drgnx-work-space)
 (defface drgnx-work-overlap '((t :inherit warning)) "An overlap's flag and its edge." :group 'drgnx-work-space)
 (defface drgnx-work-needs-you '((t :inherit drgnx-status-attention)) "A thing that needs you." :group 'drgnx-work-space)
 (defface drgnx-work-edge '((t :inherit drgnx-text-subtle)) "An edge." :group 'drgnx-work-space)
 (defface drgnx-work-edge-strong '((t :inherit drgnx-text-muted :weight bold)) "An edge that edits." :group 'drgnx-work-space)
-(defface drgnx-work-label '((t :inherit drgnx-text-muted)) "A layer's label." :group 'drgnx-work-space)
+(defface drgnx-work-label '((t :inherit (drgnx-text-muted drgnx-ui-caption))) "A layer's label." :group 'drgnx-work-space)
 (defface drgnx-work-lens-title '((t :inherit (drgnx-ui-heading tab-line-tab-current)))
   "The Work space's tab on its lens bar." :group 'drgnx-work-space)
 (defface drgnx-work-lens-current '((t :inherit (bold drgnx-selected-quiet))) "The lens shown, on the lens bar."

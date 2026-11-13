@@ -7,6 +7,8 @@
 (require 'drgnx-color)
 (require 'drgnx-faces)
 (load (expand-file-name "themes/drgnx-theme-gen" drgnx-dir) nil t)
+;; under --leaks the first test to load a theme would own its feature: load them here, not enabled
+(dolist (theme '(drgnx-dark drgnx-light drgnx-high-contrast)) (load-theme theme t t))
 
 (defconst drgnx-themes-test--themes
   '((dark . drgnx-dark) (light . drgnx-light) (hc . drgnx-high-contrast)))
@@ -369,3 +371,15 @@ fit but take no pad, both are `:fit text'."
             (should (equal (funcall fit k) (if pad '(text . 2) 'text)))))))))
 
 ;;; themes-test.el ends here
+
+(ert-deftest drgnx-themes/a-card-s-ring-has-a-colour-of-its-own ()
+  "work-space-dark.html `.card': a card's box is a 1 px ring in the strong border, in every theme.  A ring with no colour
+takes each text run's own foreground, so a card whose runs differ (a state dot, an overlap mark) breaks into boxes."
+  (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
+    (drgnx-themes-test--with theme
+      (dolist (face '(drgnx-card-top drgnx-card-mid drgnx-card-bottom drgnx-card-single))
+        (let ((box (plist-get (drgnx-faces--clause-plist face 'gui) :box)))
+          (should (equal (list face (drgnx-look-token 'border-strong variant) 1)
+                         (list face (plist-get box :color) (plist-get box :line-width))))
+          (should (memq 'secondary-selection
+                        (ensure-list (plist-get (drgnx-faces--clause-plist face 'gui) :inherit)))))))))

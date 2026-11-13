@@ -362,3 +362,23 @@ asks the hub nothing and its keys say the same."
             (dolist (b (cons buf others)) (when (buffer-live-p b) (kill-buffer b)))))))))
 
 ;;; work-map-rows-test.el ends here
+
+(ert-deftest drgnx-work-map-rows/card-text-is-the-ui-font-and-its-meta-line-the-code-font ()
+  ;; the hub names `drgnx-work-card' under every card line, `-title' on an agent's name and `-meta' on its minutes
+  ;; (vegvisir tests/render.rs); the editor defines them: the UI font under the box, the code font on the meta line
+  (let ((ui (face-attribute 'drgnx-ui-text :family nil t)))
+    (should (equal (face-attribute 'drgnx-work-card :family nil t) ui))
+    (should (equal (face-attribute 'drgnx-work-title :weight nil t) (face-attribute 'drgnx-ui-heading :weight nil t)))
+    (should-not (equal (face-attribute 'drgnx-work-meta :family nil t) ui))
+    (dolist (name '("drgnx-work-card" "drgnx-work-title" "drgnx-work-meta"))
+      (should (eq (drgnx-view-patch--face name) (intern name))))))
+
+(ert-deftest drgnx-work-map-rows/a-card-is-classed-through-its-box ()
+  ;; a chip keeps its own face under a class (its box would hide under the overlay), but a card's rows are boxed
+  ;; and must show the selection and the dimming: the map names its card faces as faces a class goes through
+  (let ((card '(drgnx-work-title drgnx-card-top drgnx-work-card)))
+    (should (drgnx-view-nav--boxed-p card))
+    (let ((drgnx-view-nav-through-faces drgnx-work-map--through-faces))
+      (should-not (drgnx-view-nav--boxed-p card))
+      (should-not (drgnx-view-nav--boxed-p 'drgnx-card-single))
+      (should (drgnx-view-nav--boxed-p 'drgnx-chip)))))   ; a strip chip is still a chip

@@ -516,10 +516,30 @@ a map off the rows path or without a hub draws a placeholder, and a shot of that
                                   (lambda () (with-current-buffer map (drgnx-look-scene--row-ids ""))))
          map)))
 
-(defun drgnx-look-scene-work-space-dark ()
-  (drgnx-look-scene--theme 'drgnx-dark)
-  (drgnx-look-scene--try "work space" (drgnx-look-scene--work-map))
+(declare-function drgnx-work-detail-buffer "drgnx-work-detail")
+
+(defun drgnx-look-scene--work-selected (theme)
+  "The Work map of work-space-*.html in THEME: the first agent selected, its chain lit and its detail in the side panel.
+Draw it without the other scenes (`DRGNX_LOOK_ONLY=work-space'): the hub then seeds the map's own graph
+(`drgnx-look-scene--seed')."
+  (drgnx-look-scene--theme theme)
+  (drgnx-look-scene--try "work space"
+    (when-let* ((map (drgnx-look-scene--work-map)))
+      (unless (drgnx-look-scene--until 15 "the map's seeded graph (the first agent, agent:a1)"
+                                       (lambda () (with-current-buffer map
+                                                    (member "agent:a1" (drgnx-look-scene--row-ids "agent:")))))
+        (error "The map has no seeded agent: is it the `map' seed (DRGNX_LOOK_ONLY=work-space)?"))
+      (let ((win (get-buffer-window map)))
+        (with-selected-window win (drgnx-view-nav 'select "agent:a1")))
+      (drgnx-look-scene--until 15 "the side panel of the selected agent (Why, Touches)"
+                               (lambda ()
+                                 (with-current-buffer (drgnx-work-detail-buffer map)
+                                   (save-excursion (goto-char (point-min)) (search-forward "Touches" nil t)))))))
   (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-work-space-dark () (drgnx-look-scene--work-selected 'drgnx-dark))
+(defun drgnx-look-scene-work-space-light () (drgnx-look-scene--work-selected 'drgnx-light))
+(defun drgnx-look-scene-work-space-hc () (drgnx-look-scene--work-selected 'drgnx-high-contrast))
 
 (declare-function drgnx-work-flow-open "drgnx-work-flow")
 (declare-function drgnx-work-flow-detail-show "drgnx-work-flow")
@@ -772,6 +792,12 @@ editor, the Explorer's rows beside it."
       (redisplay))
     (or (funcall pred) (progn (push (format "%s: not within %d s" what secs) drgnx-look-scene--errors) nil))))
 
+(defun drgnx-look-scene--seed ()
+  "What the scenes' hub seeds (`RATATOSKR_SEED_SCENE`): `map', the Work map's graph of work-space-dark.html, when only
+the Work space's scene is drawn (`DRGNX_LOOK_ONLY'), else `1', the plan run with the Flow's one agent: the two seeds
+put different agents on the map, so they cannot share a hub."
+  (if (string-match-p "\\`work-space" (or (getenv "DRGNX_LOOK_ONLY") "")) "map" "1"))
+
 (defun drgnx-look-scene--hub ()
   "The scenes' hub, started once and connected.  A session starts no hub (DRGNX_NO_HUB_START): the scenes run the
 worktree's own ($DRGNX_RATATOSKR_BIN, a test-hooks build) in the foreground, as the perf workloads do, ended with the
@@ -779,7 +805,9 @@ session, with one plan run seeded into its fresh store (RATATOSKR_SEED_SCENE, th
 space's scenes."
   (unless (drgnx-hub-running-p)
     (let ((bin (getenv "DRGNX_RATATOSKR_BIN"))
-          (process-environment (append '("RATATOSKR_SUPERVISOR=none" "RATATOSKR_SEED_SCENE=1") process-environment)))
+          (process-environment (append (list "RATATOSKR_SUPERVISOR=none"
+                                             (concat "RATATOSKR_SEED_SCENE=" (drgnx-look-scene--seed)))
+                                       process-environment)))
       (unless (and bin (file-executable-p bin)) (error "No ratatoskr binary (DRGNX_RATATOSKR_BIN)"))
       (make-process :name "ratatoskr" :noquery t :connection-type 'pipe
                     :buffer (generate-new-buffer " *ratatoskr*")
@@ -1377,6 +1405,7 @@ chrome faces, frame metrics, windows, modules."
                                 (list :text (buffer-substring-no-properties (point-min) (min (point-max) 600))
                                       :rows (and (fboundp 'drgnx-work-map-rows-p) (drgnx-work-map-rows-p))
                                       :hub (and (fboundp 'drgnx-hub-running-p) (drgnx-hub-running-p))
+                                      :line-spacing (list line-spacing (frame-parameter nil 'line-spacing) (default-line-height))
                                       :view (bound-and-true-p drgnx-work-space--view)
                                       :message (bound-and-true-p drgnx-work-space--message))))
                   ;; the Flow, where one is open: its first lines, with the text properties that hide or replace text

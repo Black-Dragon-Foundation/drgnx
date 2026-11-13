@@ -207,6 +207,14 @@ above and below, the face's background between (Nidhogg's compositor).  Asked on
          (region :background ,(c 'sel) ,@(and hc `(:foreground ,(c 'sel-fg))) :extend nil
                  :box (:line-width (-1 . -1) :style flat-button ,@(and (featurep 'glitnir) '(:corner-radius 3))))
          (secondary-selection :background ,(c 'sel-quiet))
+         ;; a card's rows (work-space-dark.html `.card'): a 1 px ring in the strong border.  A ring with no colour takes
+         ;; each text run's own foreground, so a card whose runs differ (a state dot, an overlap mark) breaks into boxes
+         ,@(mapcar (lambda (row)
+                     `(,(car row) :inherit secondary-selection
+                       :box (:line-width 1 :color ,(c 'border-strong)
+                                         ,@(and (featurep 'glitnir) `(:corner-radius 8 ,@(cdr row))))))
+                   '((drgnx-card-top :open (bottom)) (drgnx-card-mid :open (top bottom))
+                     (drgnx-card-bottom :open (top)) (drgnx-card-single)))
          (highlight :background ,(c 'hover))
          (hl-line :background ,(c 'current-line) :extend t)
          (fringe :foreground ,(c 'subtle) :background ,(c 'editor))

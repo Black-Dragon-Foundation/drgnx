@@ -102,11 +102,16 @@ model (`drgnx-view-patch-class-faces'), with the index of `dim' when it has a fa
 ;; lit list): it is drawn over runs of whole rows, one overlay for consecutive rows whose every node is dim, never one
 ;; per row.  A dim node in a row with other classes gets its spans' overlays as the other classes do.
 
+(defvar-local drgnx-view-nav-through-faces nil
+  "Boxed faces a class goes through: a run in one of them is classed like text (a card's rows, whose selection and dimming
+must show), not kept as a chip.")
+
 (defun drgnx-view-nav--boxed-p (face)
   "Whether the text property FACE (a face, a list of faces or a plist) draws a box: a chip, whose own background a
 class's overlay would hide."
   (cond ((null face) nil)
-        ((symbolp face) (and (facep face) (not (memq (face-attribute face :box nil t) '(nil unspecified)))))
+        ((symbolp face) (and (facep face) (not (memq face drgnx-view-nav-through-faces))
+                             (not (memq (face-attribute face :box nil t) '(nil unspecified)))))
         ((keywordp (car face)) (and (plist-get face :box) t))
         (t (let (boxed)
              (while (and face (not boxed))
