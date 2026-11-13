@@ -54,6 +54,10 @@ const AGENT: &str = "drgnx-work-flow-agent";
 const HOVER: &str = "drgnx-hover";
 /// A key's badge (the keycap).
 const KEY: &str = "drgnx-work-flow-key";
+/// The detail's actions (`.btn`), the first one primary (`.btn.pri`) with its key in its colour.
+const BUTTON: &str = "drgnx-work-flow-button";
+const BUTTON_PRI: &str = "drgnx-work-flow-button-primary";
+const KEY_PRI: &str = "drgnx-work-flow-key-primary";
 /// A card's fill (drgnx-work-flow.el: the panel's surface), and the text faces on it.
 const CARD: &str = "drgnx-work-flow-card";
 const CARD_TEXT: &str = "drgnx-work-flow-card-text";
@@ -1187,10 +1191,15 @@ fn wrap(text: &str, chars: usize) -> Vec<String> {
     out
 }
 
-/// A button in B: LABEL in FACE with its KEY as a keycap badge (the key face) inside it, as in the mockup.
-fn button(b: &mut RowBuilder, label: &str, key: &str, face: &str) {
+/// A button in B: LABEL with its KEY as a keycap badge inside it, as in the mockup; PRIMARY: the filled one.
+fn button(b: &mut RowBuilder, label: &str, key: &str, primary: bool) {
+    let (face, kface) = if primary {
+        (BUTTON_PRI, KEY_PRI)
+    } else {
+        (BUTTON, KEY)
+    };
     b.push(&format!(" {label} "), Some(face))
-        .push(key, Some(KEY))
+        .push(key, Some(kface))
         .push(" ", Some(face));
 }
 
@@ -1456,17 +1465,17 @@ pub(crate) fn detail_tile(
             "Check again"
         };
         let mut act = RowBuilder::new("d:act");
-        button(&mut act, first, "r", Chip::Run.face());
+        button(&mut act, first, "r", true);
         act.push(" ", None);
-        button(&mut act, "Tell the agent", "s", Chip::Wait.face());
+        button(&mut act, "Tell the agent", "s", false);
         out.push(act.finish());
     }
     let mut act = RowBuilder::new("d:act2");
     if t.card.is_some() {
-        button(&mut act, "Waive once", "w", Chip::Wait.face());
+        button(&mut act, "Waive once", "w", false);
         act.push(" ", None);
     }
-    button(&mut act, "Evidence", "e", Chip::Wait.face());
+    button(&mut act, "Evidence", "e", false);
     out.push(act.finish());
     if t.card.is_some() {
         for (i, l) in wrap(
@@ -2407,7 +2416,9 @@ mod tests {
                 - 1;
             let at = at as u32;
             assert!(
-                row.runs.iter().any(|r| r.0 <= at && at < r.1 && r.2 == KEY),
+                row.runs
+                    .iter()
+                    .any(|r| r.0 <= at && at < r.1 && (r.2 == KEY || r.2 == KEY_PRI)),
                 "{button}: {:?}",
                 row.runs
             );
@@ -2425,6 +2436,27 @@ mod tests {
         let none = detail_tile(&f, "task:J#99", &tile).0;
         assert_eq!(none.len(), 1);
         assert!(none[0].text.contains("Select a task"));
+    }
+
+    #[test]
+    fn the_detail_s_actions_are_buttons_the_first_one_primary() {
+        // hub-orchestration.html `.acts`: `.btn.pri` Run the red, then `.btn`s; the primary's key in its own colour
+        let (rows, _) = detail_tile(&flow(), "task:J#5", &env(1.0));
+        let faces = |key: &str| -> Vec<&str> {
+            let r = rows.iter().find(|r| r.key == key).expect(key);
+            r.runs.iter().map(|r| r.2.as_str()).collect()
+        };
+        let act = faces("d:act");
+        assert_eq!(act[..3], [BUTTON_PRI, KEY_PRI, BUTTON_PRI], "{act:?}");
+        assert!(
+            act[3..].iter().all(|f| [BUTTON, KEY].contains(f)),
+            "{act:?}"
+        );
+        let act2 = faces("d:act2");
+        assert!(
+            act2.iter().all(|f| [BUTTON, KEY].contains(f)) && act2.contains(&BUTTON),
+            "{act2:?}"
+        );
     }
 
     /// [D] The detail tile as the mockup (hub-orchestration.html `.detail`): the head is the agent's avatar (a 16 px

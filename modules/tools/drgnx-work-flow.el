@@ -50,6 +50,12 @@
   "The Flow's labels: task ids, agents, column headings." :group 'drgnx-work-space)
 (defface drgnx-work-flow-key '((t :inherit (drgnx-ui-caption drgnx-keycap)))
   "A key's badge on the Flow's chips (`g 1' on a held task)." :group 'drgnx-work-space)
+(defface drgnx-work-flow-button '((t :inherit (drgnx-ui-caption drgnx-control)))
+  "An action of the Flow's detail tile (Tell the agent, Waive once, Evidence)." :group 'drgnx-work-space)
+(defface drgnx-work-flow-button-primary '((t :inherit (drgnx-ui-caption drgnx-control-primary)))
+  "The detail tile's first action, filled (Run the red, Check again)." :group 'drgnx-work-space)
+(defface drgnx-work-flow-key-primary '((t :inherit drgnx-work-flow-key))
+  "A key's badge on the primary action: in the action's text colour." :group 'drgnx-work-space)
 (defface drgnx-work-flow-heading '((t :inherit drgnx-ui-heading)) "The Flow's headings: the run, the batch, a tile's."
   :group 'drgnx-work-space)
 (defface drgnx-work-flow-chip-ok '((t :inherit (drgnx-ui-caption drgnx-chip-ok) :height 0.9167)) "A gate that passed."

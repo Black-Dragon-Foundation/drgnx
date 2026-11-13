@@ -139,7 +139,33 @@ taller (Nidhogg's compositor).  Asked once: a face that sets it is refused where
          ;; a keycap is as tall as its text, also on a list row made taller by `line-spacing' (the palette's)
          (drgnx-keycap :inherit drgnx-ui-caption :foreground ,(c 'subtle)
                        :box (:line-width (1 . 1) :color ,(c 'border-strong) ,@(and (featurep 'glitnir) '(:corner-radius 4))
-                                         ,@(and (drgnx-theme--box-fit-p) '(:fit text)))))
+                                         ,@(and (drgnx-theme--box-fit-p) '(:fit text))))
+         ;; the Flow's gate pills (hub-orchestration.html `.g', 20 px, radius 10) and buttons (`.acts .btn', `.btn.pri'
+         ;; and its key): text-height on its 30 px rows where boxes fit their text, the fill then confined to the box;
+         ;; a pill is padded in its own colour (a flat button), the buttons keep the controls' rings.  Where boxes
+         ;; cannot fit, a pill has no box (one would make its row taller) and the buttons are the controls
+         ,@(mapcar (lambda (chip)
+                     `(,(intern (format "drgnx-work-flow-chip-%s" (car chip)))
+                       :inherit (drgnx-ui-caption ,(cdr chip)) :height 0.9167
+                       ,@(and (drgnx-theme--box-fit-p)
+                              `(:box (,@(if hc '(:line-width (1 . 1)) '(:line-width (6 . 3) :style flat-button))
+                                      ,@(and (featurep 'glitnir) '(:corner-radius 10)) :fit text)))))
+                   '((ok . drgnx-chip-ok) (run . drgnx-chip-accent) (held . drgnx-chip-attention)
+                     (err . drgnx-chip-error) (wait . drgnx-chip-quiet)))
+         (drgnx-work-flow-button :inherit (drgnx-ui-caption drgnx-control)
+                                 ,@(and (drgnx-theme--box-fit-p)
+                                        `(:box (:line-width (1 . 1) :color ,(c 'border)
+                                                            ,@(and (featurep 'glitnir) '(:corner-radius 6))
+                                                            :fit text))))
+         (drgnx-work-flow-button-primary :inherit (drgnx-ui-caption drgnx-control-primary)
+                                         ,@(and (drgnx-theme--box-fit-p)
+                                                `(:box (:line-width (1 . 1) :color ,(c 'accent-fill)
+                                                                    ,@(and (featurep 'glitnir) '(:corner-radius 6))
+                                                                    :fit text))))
+         (drgnx-work-flow-key-primary :inherit drgnx-work-flow-key :foreground ,(c 'on-accent)
+                                      :box (:line-width (1 . 1) :color ,(c 'on-accent)
+                                                        ,@(and (featurep 'glitnir) '(:corner-radius 4))
+                                                        ,@(and (drgnx-theme--box-fit-p) '(:fit text)))))
        ;; the editor and the standard faces
        `((default :foreground ,(c 'fg) :background ,(c 'editor))
          (cursor :background ,(c 'accent))

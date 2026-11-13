@@ -306,4 +306,31 @@ enabled: this Emacs may refuse the key."
                  (box (plist-get (cdar spec) :box)))
             (should (eq fit (eq 'text (plist-get box :fit))))))))))
 
+;; The Flow's gate pills and buttons (hub-orchestration.html `.g', `.acts .btn'): text-height on its 30 px rows, with
+;; Nidhogg's `:fit text' confining the fill to the box (coordinator, 2026-11-13)
+(ert-deftest drgnx-themes/the-flow-s-pills-and-buttons-fit-their-text-where-boxes-can ()
+  "Where boxes take `:fit text', a gate pill is padded in its own colour (a flat button, 6 by 3 px) and fully rounded,
+and the buttons keep the controls' rings, all fit to their text; where they cannot, a pill has no box (one would make
+its row taller) and nothing asks for the key."
+  (cl-letf (((symbol-function 'featurep) (let ((real (symbol-function 'featurep)))
+                                           (lambda (f &optional sub) (or (eq f 'glitnir) (funcall real f sub))))))
+    (dolist (fit '(t nil))
+      (let ((drgnx-theme--box-fit fit))
+        (dolist (variant '(dark light hc))
+          (let* ((specs (drgnx-theme--specs variant))
+                 (box (lambda (face) (plist-get (cdar (cadr (assq face specs))) :box))))
+            (dolist (chip '(drgnx-work-flow-chip-ok drgnx-work-flow-chip-run drgnx-work-flow-chip-held
+                                                    drgnx-work-flow-chip-err drgnx-work-flow-chip-wait))
+              (should (assq chip specs))
+              (if (not fit)
+                  (should-not (plist-get (funcall box chip) :fit))
+                (should (eq 'text (plist-get (funcall box chip) :fit)))
+                (should (eql 10 (plist-get (funcall box chip) :corner-radius)))
+                (unless (eq variant 'hc)
+                  (should (equal '(6 . 3) (plist-get (funcall box chip) :line-width)))
+                  (should (eq 'flat-button (plist-get (funcall box chip) :style))))))
+            (dolist (b '(drgnx-work-flow-button drgnx-work-flow-button-primary drgnx-work-flow-key-primary))
+              (should (assq b specs))
+              (should (eq fit (eq 'text (plist-get (funcall box b) :fit)))))))))))
+
 ;;; themes-test.el ends here
