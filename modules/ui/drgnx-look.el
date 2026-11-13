@@ -250,12 +250,22 @@ one editor group, window-dark.html, no card is)."
          (dolist (w (window-list (window-frame window) 'nomini) (> n 1))
            (when (eq (drgnx-state-window-role w) 'editor) (setq n (1+ n)))))))
 
+(defvar drgnx-work-space--lens-modes)
+
+(defun drgnx-look--card-ringed-p (window)
+  "Non-nil when WINDOW's card is ringed in the accent while it is selected: one of several editor groups
+\(`drgnx-look--card-tiled-p'), or the Work space's lens, which is its own card (work-space-dark.html)."
+  (or (drgnx-look--card-tiled-p window)
+      (and (bound-and-true-p drgnx-work-space--lens-modes)
+           (memq (buffer-local-value 'major-mode (window-buffer window)) drgnx-work-space--lens-modes)
+           t)))
+
 (defun drgnx-look--card-set (window)
   "Give WINDOW the card parameters, only those that differ (a setting of one reruns the hooks).  The selected
 window's ring is the accent when it is one of several editor groups (`drgnx-look--card-tiled-p')."
   (dolist (p drgnx-look--card-parameters)
     (let ((v (if (and (eq p 'ring) (drgnx-look--card-value 'ring) (drgnx-look--card-focused-p window)
-                      (drgnx-look--card-tiled-p window))
+                      (drgnx-look--card-ringed-p window))
                  '(drgnx-accent . 1.0)
                (drgnx-look--card-value p))))
       (unless (equal (window-parameter window p) v) (set-window-parameter window p v))))
