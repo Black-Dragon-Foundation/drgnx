@@ -332,6 +332,8 @@ params! {
     DebugRunGet(debug_runs::DebugRunGet),
     DebugRunStop(debug_runs::DebugRunStop),
     DebugRunPin(debug_runs::DebugRunPin),
+    DebugRunExport(debug_runs::DebugRunExport),
+    DebugRunImport(debug_runs::DebugRunImport),
     DebugBisect(debug_bisect::DebugBisect),
     DebugBisectCancel(debug_bisect::DebugBisectId),
     DebugBisectNarrow(debug_bisect::DebugBisectId),

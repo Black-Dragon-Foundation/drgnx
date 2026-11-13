@@ -1416,7 +1416,9 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `debug/probe/op` | user | `{op?: {enabled?: boolean, expr?: string, id?: string, language?: string, line?: natnum, op: string, path?: string, text?: string}, root: string}` | `{added?: string, path?: string, probes: [any], root: string}` | no |
 | `debug/read-memory` | user | `{count: natnum, offset?: integer, reference: string, session: string}` | `{address: string, data: string, unreadable?: natnum}` | no |
 | `debug/run-to-cursor` | user | `{line: natnum, path: string, session: string}` | `boolean` | no |
+| `debug/run/export` | user | `{path: string, run: string}` | `{bytes: natnum, code: string, path: string}` | no |
 | `debug/run/get` | user | `{count?: natnum, current?: natnum, from?: natnum, run: string}` | `DebugRunView` | no |
+| `debug/run/import` | user | `{code: string, path: string, root: string}` | `{run: string}` | no |
 | `debug/run/pin` | user | `{pinned: boolean, run: string}` | `boolean` | no |
 | `debug/run/stop` | user | `{file?: string, run: string, stop: natnum}` | `{capture: any, run: string, snapshot?: string, source: any, stop: any}` | no |
 | `debug/runs/list` | user | `{root: string}` | `{runs: [any]}` | no |

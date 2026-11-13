@@ -9,8 +9,9 @@ use crate::dispatch::Caller;
 use crate::front::Front;
 use runstav::methods::Params;
 use runstav::methods::debug_runs::{
-    DebugPastStop, DebugProbeOp, DebugProbes, DebugRunGet, DebugRunPin, DebugRunStop, DebugRunView,
-    DebugRuns, DebugRunsList,
+    DebugPastStop, DebugProbeOp, DebugProbes, DebugRunExport, DebugRunExported, DebugRunGet,
+    DebugRunImport, DebugRunImported, DebugRunPin, DebugRunStop, DebugRunView, DebugRuns,
+    DebugRunsList,
 };
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
@@ -217,6 +218,25 @@ fn pin(front: &Front, p: DebugRunPin) -> Result<bool, Error> {
     Ok(true)
 }
 
+async fn export(front: &Front, p: DebugRunExport) -> Result<DebugRunExported, Error> {
+    let to = std::path::PathBuf::from(&p.path);
+    let made = records(front)?.export_run(&p.run, &to).await.map_err(err)?;
+    Ok(DebugRunExported {
+        path: p.path,
+        code: made.code,
+        bytes: made.bytes,
+    })
+}
+
+async fn import(front: &Front, p: DebugRunImport) -> Result<DebugRunImported, Error> {
+    let from = std::path::PathBuf::from(&p.path);
+    let run = records(front)?
+        .import_run(&p.root, &from, &p.code)
+        .await
+        .map_err(err)?;
+    Ok(DebugRunImported { run })
+}
+
 fn answer<T: serde::Serialize>(r: Result<T, Error>) -> Result<Value, Error> {
     r.map(|v| json!(v))
 }
@@ -233,6 +253,8 @@ pub async fn serve(
             | Params::DebugRunGet(_)
             | Params::DebugRunStop(_)
             | Params::DebugRunPin(_)
+            | Params::DebugRunExport(_)
+            | Params::DebugRunImport(_)
     ) && let Ok(r) = records(front)
     {
         // a keyring unlocked since the hub started: the runs read from now on
@@ -246,6 +268,8 @@ pub async fn serve(
         Params::DebugRunGet(p) => answer(get(front, p)),
         Params::DebugRunStop(p) => answer(past(front, p)),
         Params::DebugRunPin(p) => answer(pin(front, p)),
+        Params::DebugRunExport(p) => answer(export(front, p).await),
+        Params::DebugRunImport(p) => answer(import(front, p).await),
         other => return Err(Box::new(other)),
     })
 }

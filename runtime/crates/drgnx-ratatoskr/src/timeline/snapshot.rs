@@ -336,6 +336,13 @@ fn write_tree_in(
     git(repo, Some(worktree), Some(&index), &["write-tree"])
 }
 
+/// WORKTREE's shadow repository under ROOT, made when it is missing: its path (a sent debug run's files go in).
+pub fn ensure_repo(root: &Path, worktree: &Path) -> Result<PathBuf, String> {
+    let repo = repo_of(root, worktree);
+    made(&repo)?;
+    Ok(repo)
+}
+
 /// The shadow repository REPO, made when it is missing: `git init` in a folder of its own beside it, then renamed into
 /// place, so snapshots taken at once (a turn's and a base's, a session's first two) never init the same folder, where
 /// one's template copy fails on the other's files.  A rename that loses to another's leaves that one.

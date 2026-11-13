@@ -818,7 +818,8 @@ Methods (runstav `methods::debug_runs`, the user class only: agents are refused,
 `debug/run/get {run, from?, count?, current?}` → a page of stops, each probe's lane (at most 2000 hits) and `strip`,
 the timeline's rows (`debug/strip.rs`, the hub's rows: a head, the stops, a lane per probe with a sparkline);
 `debug/run/stop {run, stop, file?}` → the capture and the file's text from the snapshot (`not_what_ran` when it was
-unsaved at the start); `debug/run/pin {run, pinned}`. Events: `debug-run {run, n, root, session, name, state, stops, hits,
+unsaved at the start); `debug/run/pin {run, pinned}`; `debug/run/export {run, path}` → `{path, code, bytes}` and
+`debug/run/import {root, path, code}` → `{run}` (sending a run, below). Events: `debug-run {run, n, root, session, name, state, stops, hits,
 thinned, dropped, stops_to_probe, outcome, stop}` at the start, each stop and the end; `debug-probe-hits {run, hits}`, batched every 50 ms.
 
 The editor's half, `drgnx-debug-timeline.el`: the probe column (`drgnx-margins-claim 'debug-probe … :order 1`, after
@@ -826,6 +827,21 @@ the breakpoint column; an SVG ring with a dot, `◉` or `o` on a terminal), the 
 a second), the strip buffer (it only inserts the hub's rows: a face or property the editor does not know is dropped),
 and past stops (`drgnx-debug-past-mode`'s keys, the past buffer with the snapshot's text and the banner, the variables
 buffer). Tests: `debug::tests_probes`, `debug::tests_record`, `test/unit/debug-timeline-test.el`.
+
+### Sending a run (spec §19.7 D9)
+
+`debug/record/share.rs`. An ended run and the files that ran (its launch snapshot's tree, as a git pack) go into one file
+sealed under a key made for it: `DRSHARE1\n`, a salt, then the zstd stream in pieces of at most 1 MiB, each sealed with
+ChaCha20-Poly1305 bound to its number and whether it is the last (so a piece cannot be dropped, moved or cut off). The
+stream's records are a kind byte and a length: the run's record (its start opened), each frame of its file, the pack;
+at most 512 MB before compression. The answer's `code` is the key in base32 (52 letters, groups of four): it is shown
+once and stored nowhere, and the hub sends nothing. Import opens the pieces, puts the pack into the recipient's shadow
+repository through `git index-pack --strict` (git's fsck of every object), keeps the tree as the run's ref, moves the
+paths under the sender's project to the recipient's, and writes the frames into a new run file under the recipient's
+keyring key. The run's record has `imported {at, n}`; it is kept 14 days from the import, and it is read-only:
+`fork::check` refuses it, since its launch (program, arguments, environment) is the sender's and opening a file never
+runs it. Tests: `debug::tests_record_sealed` (sent and opened), `debug::record::share` (codes, paths),
+`debug::tests_fork` (refused).
 
 ## What-if forks (spec §19.3)
 

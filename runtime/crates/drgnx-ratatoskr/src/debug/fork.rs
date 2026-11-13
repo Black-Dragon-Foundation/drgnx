@@ -178,6 +178,12 @@ pub const SEALS_HERE: bool = cfg!(any(target_os = "linux", target_os = "macos"))
 /// RUN forked at AT on this machine (SEALED: this system seals forks, [`SEALS_HERE`]); CONFIRMED: the user said yes
 /// to a slow replay.
 pub fn check(run: &RunInfo, at: &At, sealed: bool, confirmed: bool) -> Result<Target, Refused> {
+    if run.imported {
+        return Err(Refused::No(
+            "a sent run is read-only here: its program is the sender's, so it is not run (read its stops instead)"
+                .into(),
+        ));
+    }
     if run.request == "attach" {
         return Err(Refused::No(
             "an attach session cannot be replayed: the hub did not start its program".into(),
