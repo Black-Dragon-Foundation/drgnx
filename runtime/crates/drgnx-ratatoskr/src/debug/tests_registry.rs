@@ -556,9 +556,23 @@ async fn a_breakpoint_reaches_a_running_session_at_once_and_its_answer_is_shown(
     let view = d
         .breakpoints("/p", Some(add_bp("/p/app.js", 4, None)), None)
         .await;
-    assert_eq!(view["version"], 1);
+    assert!(view["version"].as_u64() >= Some(1), "{view}");
     until(|| last_bps(&ev, "/p/app.js").is_some_and(|v| v["breakpoints"][0]["verified"] == true))
         .await;
+    // the call's answer can reach the editor after this event: when it was taken before the adapter verified it, its
+    // version is lower, so the editor passes over it and the dot stays verified
+    let shown = last_bps(&ev, "/p/app.js").unwrap();
+    if view["breakpoints"][0]["verified"] == true {
+        assert!(
+            shown["version"].as_u64() >= view["version"].as_u64(),
+            "{view} {shown}"
+        );
+    } else {
+        assert!(
+            shown["version"].as_u64() > view["version"].as_u64(),
+            "{view} {shown}"
+        );
+    }
     assert_eq!(
         last_bps(&ev, "/p/app.js").unwrap()["breakpoints"][0]["bound_line"],
         5

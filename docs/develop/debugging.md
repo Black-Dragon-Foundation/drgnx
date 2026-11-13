@@ -219,7 +219,11 @@ probes are saved the same way. If the file is damaged, it is moved aside to `…
 - **Operations by id** (`Op`): add, remove, edit, move, add or remove a function breakpoint.
   - Adding a line that already has a breakpoint gives that one. Removing or editing one that is gone is no change.
     So two editors toggling one file never undo each other.
-  - Every change raises the file's version.
+  - Every change raises the file's version: an operation, and whatever changes what the file's view shows without
+    one (an adapter's `setBreakpoints` answer or `breakpoint` event, what was sent to a session, a hit arming a
+    triggered breakpoint, a session's end). The call's answer and the `debug-breakpoints` event travel on different
+    connections and the editor takes the newer version, so a view taken before verification never greys out the dots
+    after it (`what_the_adapter_makes_of_a_breakpoint_raises_its_files_version`).
   - The line held is the saved line: the editor keeps a moved line as a draft and sends `move` on save.
   - **Inline breakpoints** have a `column` (1-based, in characters on the wire; `add` and `move` take one, a `move`
     without one keeps the breakpoint's). One at another column of a line, or one without a column on the same line,

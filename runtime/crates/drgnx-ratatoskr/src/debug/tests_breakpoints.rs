@@ -171,6 +171,51 @@ fn verified_if_any_session_verified_and_the_adapter_moved_line() {
     assert_eq!(bp(&s, "/p/a.py", 1)["verified"], false);
 }
 
+/// The editor applies a file's view when its version is at least the one it has; the `debug/breakpoints` answer (the
+/// call connection) and the `debug-breakpoints` event (the events connection) can arrive in either order. So whatever
+/// changes what `view` returns raises the version: a view taken before the change, arriving after the newer one, is
+/// passed over instead of putting the grey (unverified) dots back.
+#[test]
+fn what_the_adapter_makes_of_a_breakpoint_raises_its_files_version() {
+    fn shown(gutter: &mut Value, view: &Value) {
+        if view["version"].as_u64() >= gutter["version"].as_u64() {
+            *gutter = view.clone();
+        }
+    }
+    let p = "/p/a.py";
+    let mut s = Store::open(None);
+    s.apply(add(p, 5));
+    let mut gutter = s.view(p);
+    // the answer to setBreakpoints verifies it; a view taken before arrives after the event's
+    s.send_list("d1", p);
+    let stale = s.view(p);
+    s.answer("d1", p, &[json!({"id": 7, "verified": true})]);
+    shown(&mut gutter, &s.view(p));
+    shown(&mut gutter, &stale);
+    assert_eq!(
+        gutter["breakpoints"][0]["verified"], true,
+        "answer: {gutter}"
+    );
+    // the adapter's breakpoint event moves it
+    let stale = s.view(p);
+    s.event(
+        "d1",
+        &json!({"reason": "changed", "breakpoint": {"id": 7, "verified": true, "line": 6}}),
+    );
+    shown(&mut gutter, &s.view(p));
+    shown(&mut gutter, &stale);
+    assert_eq!(gutter["breakpoints"][0]["bound_line"], 6, "event: {gutter}");
+    // the session ends: nothing verifies it any more
+    let stale = s.view(p);
+    s.ended("d1");
+    shown(&mut gutter, &s.view(p));
+    shown(&mut gutter, &stale);
+    assert_eq!(
+        gutter["breakpoints"][0]["verified"], false,
+        "ended: {gutter}"
+    );
+}
+
 #[test]
 fn conditions_hits_and_logs_go_only_to_adapters_that_take_them() {
     let all = vec![json!({"line": 3, "condition": "x", "hitCondition": "2", "logMessage": "m"})];
