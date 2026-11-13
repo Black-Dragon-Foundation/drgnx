@@ -203,3 +203,26 @@ fn a_listener_is_the_sessions_only_when_its_process_group_is() {
     assert!(e.contains(&p.to_string()), "{e}");
     drop(held);
 }
+
+/// A port check never outlasts its deadline: a command that does not exit is killed and the check fails, saying so
+/// (the macOS check's lsof, the fork row's sweep).
+#[test]
+fn a_command_that_does_not_answer_is_killed_at_its_deadline() {
+    let t = std::time::Instant::now();
+    let mut c = Command::new("sleep");
+    c.arg("30");
+    let r = ports::output_within(c, std::time::Duration::from_millis(300));
+    assert!(
+        t.elapsed() < std::time::Duration::from_secs(5),
+        "{:?}",
+        t.elapsed()
+    );
+    assert!(
+        r.as_ref().is_err_and(|e| e.contains("did not answer")),
+        "{r:?}"
+    );
+    let mut c = Command::new("echo");
+    c.arg("hi");
+    let r = ports::output_within(c, std::time::Duration::from_secs(5)).unwrap();
+    assert_eq!(r.stdout, b"hi\n");
+}

@@ -185,7 +185,8 @@ js-debug, delve, lldb-dap), how to find it and how to start it:
   TCP adapter gets a free port on 127.0.0.1 picked by the hub (`adapters::free_port`). The hub frees it for the adapter
   to bind, so another local process could take it first, and DAP has no authentication (spec §9.5): the hub connects
   only once the port's listener is in the adapter's process group (`blocked::wait_owned`, `ports::owned`: /proc on
-  Linux, lsof on macOS), and a stranger's listener ends the start at once, never connected to.
+  Linux, lsof on macOS, run with `-b -w` and killed past `ports::LSOF_WITHIN`, 5 s, so a blocked lsof cannot hold the
+  start past its own deadline), and a stranger's listener ends the start at once, never connected to.
 
 - `:install` (Debug: Install Adapter, `debug/install`, `debug/install.rs`): `(:url U :sha256 H :into DIR [:root R])`
   or `(:into DIR :platforms ((:platform "linux-x64" :url U :sha256 H) …))` (the platform keys are `linux-x64`,

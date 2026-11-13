@@ -1162,6 +1162,8 @@ jobs:
       # binary from the build above, the hub beside it as the sandbox's helper
       - name: debug forks keep to their port block (Seatbelt, lsof)
         if: ${{ !cancelled() }}
+        # two forks of seconds each; a stuck one prints its processes, sockets and stacks at 90 s (FORK_WITHIN)
+        timeout-minutes: 5
         run: |
           set -euo pipefail
           a="$RUNNER_TEMP/debug-adapters"

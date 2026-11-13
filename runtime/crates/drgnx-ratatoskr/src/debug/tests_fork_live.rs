@@ -956,10 +956,15 @@ fn sockets_of(groups: &[i32]) -> Vec<(u16, Option<u16>)> {
         .map(i32::to_string)
         .collect::<Vec<_>>()
         .join(",");
-    let out = std::process::Command::new("lsof")
-        .args(["-nP", "-a", "-iTCP", "-g", &list, "-Fn"])
-        .output()
-        .unwrap();
+    let mut cmd = std::process::Command::new("/usr/sbin/lsof");
+    cmd.args(["-b", "-w", "-nP", "-a", "-iTCP", "-g", &list, "-Fn"]);
+    let out = match super::ports::output_within(cmd, super::ports::LSOF_WITHIN) {
+        Ok(o) => o,
+        Err(e) => {
+            println!("lsof sweep: {e}");
+            return vec![];
+        }
+    };
     let port = |s: &str| s.rsplit(':').next().and_then(|p| p.parse::<u16>().ok());
     String::from_utf8_lossy(&out.stdout)
         .lines()
@@ -970,6 +975,50 @@ fn sockets_of(groups: &[i32]) -> Vec<(u16, Option<u16>)> {
             Some((local, ends.next().and_then(port)))
         })
         .collect()
+}
+
+/// How long the macOS row gives one fork (each takes seconds; the step has its own 5-minute limit).
+#[cfg(target_os = "macos")]
+const FORK_WITHIN: Duration = Duration::from_secs(90);
+
+/// What the process groups GROUPS were doing when their fork was stuck: their processes (state, wait channel,
+/// command), their sockets (lsof, bounded) and a short stack sample of each.
+#[cfg(target_os = "macos")]
+fn stuck(groups: &[i32]) {
+    println!("stuck fork: process groups {groups:?}");
+    let run = |name: &str, args: &[&str]| {
+        let mut cmd = std::process::Command::new(name);
+        cmd.args(args);
+        match super::ports::output_within(cmd, Duration::from_secs(10)) {
+            Ok(o) => {
+                println!("$ {name} {}", args.join(" "));
+                for l in String::from_utf8_lossy(&o.stdout).lines().take(80) {
+                    println!("  {l}");
+                }
+            }
+            Err(e) => println!("{name}: {e}"),
+        }
+    };
+    let list = groups
+        .iter()
+        .map(i32::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    run(
+        "/bin/ps",
+        &["-o", "pid,pgid,stat,wchan,etime,command", "-g", &list],
+    );
+    run("/usr/sbin/lsof", &["-b", "-w", "-nP", "-a", "-g", &list]);
+    let out = std::process::Command::new("/bin/ps")
+        .args(["-o", "pid=", "-g", &list])
+        .output();
+    for pid in out
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default()
+        .split_whitespace()
+    {
+        run("/usr/bin/sample", &[pid, "1", "-mayDie"]);
+    }
 }
 
 /// The system log's Seatbelt refusals of the last 3 minutes (their last 60 lines), for a failed fork's report.
@@ -1037,7 +1086,25 @@ async fn mac_forks_keep_to_their_port_block() {
                 seen
             })
         };
-        let v = f.fork(f.ask(Until::NextStop, f.resolved.clone())).await;
+        // a fork replays in seconds: one still running at FORK_WITHIN says what its processes were doing, then fails
+        let v = match crate::clock::timeout(
+            FORK_WITHIN,
+            f.fork(f.ask(Until::NextStop, f.resolved.clone())),
+        )
+        .await
+        {
+            Ok(v) => v,
+            Err(_) => {
+                done.store(true, Ordering::Relaxed);
+                let groups = super::blocked::GROUPS.lock().unwrap().clone();
+                stuck(&groups);
+                sandbox_denials();
+                panic!(
+                    "js {js}: the fork did not end within {} s",
+                    FORK_WITHIN.as_secs()
+                );
+            }
+        };
         done.store(true, Ordering::Relaxed);
         let seen = sweep.await.unwrap();
         if v["state"] != json!("done") {
