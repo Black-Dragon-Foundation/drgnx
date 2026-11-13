@@ -323,6 +323,7 @@ impl Front {
         self.core.views.gone(conn);
         self.core.buffers.gone(conn);
         self.core.terms.gone(conn);
+        self.extensions.gone(conn);
     }
 
     /// EVENT with DATA to every subscribed connection: queued for each before any is written (a queue never waits),
@@ -1000,9 +1001,12 @@ impl Front {
             | Params::ExtensionsDetails(_)
             | Params::ExtensionsRows(_)
             | Params::ExtensionsList(_)
-            | Params::ExtensionsModules(_)) => crate::extensions::methods::serve(self, &caller, p)
-                .await
-                .unwrap_or_else(|_| unserved(method)),
+            | Params::ExtensionsModules(_)
+            | Params::ExtensionsRecommended(_)) => {
+                crate::extensions::methods::serve(self, &caller, p)
+                    .await
+                    .unwrap_or_else(|_| unserved(method))
+            }
             // the graph store's (`graph/*`, `tasks/*`); a settled card too (an access card becomes a grant)
             p @ (Params::GraphPutParsed(_)
             | Params::GraphRecord(_)

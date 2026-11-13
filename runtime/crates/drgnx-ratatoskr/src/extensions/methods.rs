@@ -13,9 +13,10 @@ use runstav::methods::extensions as w;
 use runstav::paths::{self, Env};
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Read};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::UNIX_EPOCH;
 
 /// The most of a readme a details page carries.
@@ -107,6 +108,24 @@ impl Files for RealFiles {
 pub struct Hub {
     cache: Arc<Mutex<Cache>>,
     files: OnceLock<Arc<RealFiles>>,
+    /// Each connection's Recommended set (`extensions/recommended`): its version and ids, until the connection goes.
+    recommended: Mutex<HashMap<u64, (u64, Ids)>>,
+}
+
+/// A Recommended set's ids.
+type Ids = Arc<HashSet<String>>;
+
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// A search's filters named a Recommended version this connection's set is not at.
+fn not_held(path: &str, version: u64) -> Error {
+    Error {
+        code: ErrorCode::InvalidParams,
+        message: format!("the Recommended set {version} is not held here: send it again"),
+        path: Some(path.into()),
+    }
 }
 
 fn internal(message: impl ToString) -> Error {
@@ -161,16 +180,47 @@ impl Hub {
         .map_err(internal)
     }
 
+    /// CONN's Recommended set is VERSION's now.
+    fn set_recommended(&self, conn: u64, p: w::RecommendedParams) {
+        let set = Arc::new(p.ids.into_iter().collect());
+        lock(&self.recommended).insert(conn, (p.version, set));
+    }
+
+    /// The connection CONN is gone: its Recommended set with it.
+    pub fn gone(&self, conn: u64) {
+        lock(&self.recommended).remove(&conn);
+    }
+
+    /// The set FILTERS name for CONN (none when they name none), or the error at PATH when CONN's set is not at that
+    /// version.
+    fn recommended_of(
+        &self,
+        conn: u64,
+        filters: &w::Filters,
+        path: &str,
+    ) -> Result<Option<Ids>, Error> {
+        let Some(version) = filters.recommended else {
+            return Ok(None);
+        };
+        match lock(&self.recommended).get(&conn) {
+            Some((v, set)) if *v == version => Ok(Some(set.clone())),
+            _ => Err(not_held(path, version)),
+        }
+    }
+
     async fn search(
         &self,
+        conn: u64,
         p: w::SearchParams,
         plugins: Vec<w::Row>,
     ) -> Result<w::SearchResult, Error> {
+        let recommended = self.recommended_of(conn, &p.filters, "filters/recommended")?;
         let index = self.index_with(Some(plugins)).await?;
         let hits = rank::search(
             &index.entries,
             &p.query,
             &p.filters,
+            recommended.as_deref(),
             p.sort.unwrap_or(w::Sort::Relevance),
         );
         let offset = p.offset.unwrap_or(0) as usize;
@@ -189,18 +239,32 @@ impl Hub {
     /// Each section's search, as `extensions/list` asks it: (its total, its rows from its offset, up to its limit).
     pub async fn sections(
         &self,
+        conn: u64,
         sections: &[w::ListSection],
         plugins: Vec<w::Row>,
     ) -> Result<Vec<(u32, Vec<w::Row>)>, Error> {
+        let sets = sections
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                self.recommended_of(
+                    conn,
+                    &s.search.filters,
+                    &format!("sections/{i}/search/filters/recommended"),
+                )
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
         let index = self.index_with(Some(plugins)).await?;
         Ok(sections
             .iter()
-            .map(|s| {
+            .zip(sets)
+            .map(|(s, recommended)| {
                 let p = &s.search;
                 let hits = rank::search(
                     &index.entries,
                     &p.query,
                     &p.filters,
+                    recommended.as_deref(),
                     p.sort.unwrap_or(w::Sort::Relevance),
                 );
                 let offset = p.offset.unwrap_or(0) as usize;
@@ -278,10 +342,14 @@ pub async fn serve(
     let (list, on) = front.core.plugins.last_rows();
     let plugins = super::plugins::rows(&list, &on);
     Ok(match p {
-        Params::ExtensionsSearch(q) => hub.search(q, plugins).await.map(|r| json!(r)),
+        Params::ExtensionsSearch(q) => hub
+            .search(caller.conn_id, q, plugins)
+            .await
+            .map(|r| json!(r)),
         Params::ExtensionsDetails(d) => hub.details(&d.id, plugins).await.map(|r| json!(r)),
         Params::ExtensionsRows(r) => hub.rows(&r.ids, plugins).await.map(|r| json!(r)),
-        Params::ExtensionsList(l) => match hub.sections(&l.sections, plugins).await {
+        Params::ExtensionsList(l) => match hub.sections(caller.conn_id, &l.sections, plugins).await
+        {
             Ok(found) => Ok(json!(crate::view::extensions::list(
                 front,
                 caller.conn_id,
@@ -291,6 +359,10 @@ pub async fn serve(
             Err(e) => Err(e),
         },
         Params::ExtensionsModules(m) => hub.set_modules(m.modules).await.map(|()| json!({})),
+        Params::ExtensionsRecommended(r) => {
+            hub.set_recommended(caller.conn_id, r);
+            Ok(json!({}))
+        }
         other => return Err(Box::new(other)),
     })
 }
