@@ -17,7 +17,7 @@
 (require 'drgnx-modules-record)
 
 (cl-defstruct (drgnx-cmd (:constructor drgnx-cmd--make) (:copier nil))
-  id title category command map menu context context-first doc when scope
+  id title category command map menu context context-first doc when scope icon
   (bound nil :documentation "Active keys, a list of (KEY . MAP-SPEC); set by `drgnx-keys'."))
 
 (defvar drgnx-commands--table (make-hash-table :test #'eq) "ID → `drgnx-cmd'.")
@@ -34,7 +34,7 @@
         ((symbolp map) (cons nil map))
         (t map)))
 
-(cl-defun drgnx-command-define (id &key title category command map menu context context-first doc when scope
+(cl-defun drgnx-command-define (id &key title category command map menu context context-first doc when scope icon
                                    (key nil key-p) (native nil native-p))
   "Register command ID (a symbol).  Returns ID.
 TITLE, CATEGORY and COMMAND are required.  MAP: the keymap its keys belong in by default — nil
@@ -42,7 +42,8 @@ TITLE, CATEGORY and COMMAND are required.  MAP: the keymap its keys belong in by
 (\"View\").  CONTEXT: symbol or list of right-click contexts (`drgnx-surfaces-define-context');
 CONTEXT-FIRST puts the item at the top of the context menu.  WHEN: a predicate; the command is
 offered only while it returns non-nil.  SCOPE: `app' (default), `editing' or `window' — which
-key-profile layers key it.  Keys are not given here: profiles bind them (docs/guide/keys.md).
+key-profile layers key it.  ICON: an icon name (etc/icons) for the command's palette row, in place of its
+category's.  Keys are not given here: profiles bind them (docs/guide/keys.md).
 Defined by a module's setup, the definition is undone with the module (`drgnx-commands--retire')."
   (ignore key native)
   (when (or key-p native-p)
@@ -54,7 +55,7 @@ Defined by a module's setup, the definition is undone with the module (`drgnx-co
   (let* ((old (gethash id drgnx-commands--table))
          (cmd (drgnx-cmd--make :id id :title title :category category :command command
                                :map map :menu menu :context (ensure-list context)
-                               :context-first context-first :doc doc :when when :scope (or scope 'app)
+                               :context-first context-first :doc doc :when when :scope (or scope 'app) :icon icon
                                :bound (and old (drgnx-cmd-bound old)))))
     (if old
         (puthash cmd old drgnx-commands--previous)

@@ -23,6 +23,9 @@ The last preset puts Vim **last**: it is the later layer for editing, so Vim kee
 insert state, in panels and, on a Mac, as Cmd keys. `keys.eld` flips any single key. The `SPC` leader keys stay in
 this stack for every command, next to VS Code's own keys (see Leader keys below).
 
+A stack with the VS Code profile also indents with spaces, as VS Code does (`indent-tabs-mode` defaults to nil; a file's own
+indentation and `.editorconfig` still win). The Emacs and Vim profiles leave Emacs's default.
+
 Onboarding's Look and Keys step asks which one you want (VS Code preselected; [onboarding.md](onboarding.md)).
 
 **A Vim stack needs its engine.** Vim keys run on evil, which the `editor/evil` module provides; it is off, and

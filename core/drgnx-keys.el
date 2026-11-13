@@ -25,7 +25,7 @@
 (require 'drgnx-keys-modal)
 
 (defvar drgnx-keys-profiles nil
-  "Alist PROFILE → plist (:name :doc :bind :claims :map :mac-cmd :claims-defaults :modal).")
+  "Alist PROFILE → plist (:name :doc :bind :claims :map :mac-cmd :claims-defaults :modal :indent-tabs-mode).")
 
 (defvar drgnx-keys-problems nil "Problems found while loading profiles or keys.eld.")
 
@@ -642,7 +642,25 @@ was lifted, \"COMMAND (PREFIX)\", or nil."
     (drgnx-keys--set aux key prev))
   (setq drgnx-keys--evil-aux nil)
   (drgnx-keys--set-everywhere nil)
+  (drgnx-keys--profile-indent nil)
   (setq drgnx-keys--applied nil))
+
+(defvar drgnx-keys--indent-orig 'unset
+  "The default `indent-tabs-mode' before a profile set it (`unset': none did).")
+
+(defun drgnx-keys--profile-indent (layers)
+  "Give `indent-tabs-mode' the default a profile in LAYERS asks for (`:indent-tabs-mode' in its spec, VS Code's nil);
+with none, put back what it was before."
+  (let ((want (cl-some (lambda (l)
+                         (let ((spec (alist-get (car l) drgnx-keys-profiles)))
+                           (and (plist-member spec :indent-tabs-mode) (list (plist-get spec :indent-tabs-mode)))))
+                       layers)))
+    (cond (want (when (eq drgnx-keys--indent-orig 'unset)
+                  (setq drgnx-keys--indent-orig (default-value 'indent-tabs-mode)))
+                (setq-default indent-tabs-mode (car want)))
+          ((not (eq drgnx-keys--indent-orig 'unset))
+           (setq-default indent-tabs-mode drgnx-keys--indent-orig
+                         drgnx-keys--indent-orig 'unset)))))
 
 (defvar drgnx-keys--everywhere-map (make-sparse-keymap)
   "The keys of `:everywhere' entries; above every major and minor mode map, so a profile's key works in any mode.")
@@ -770,6 +788,7 @@ Never prompts: problems are collected in `drgnx-keys-last'.  Returns the resolut
                                                           (drgnx-keys-modal-read-snapshots 'evil drgnx-keys-profiles))
                                                      drgnx-keys-modal-snapshots))))
           (drgnx-keys--set-mac-modifiers layers (plist-get user :mac-option))
+          (drgnx-keys--profile-indent layers)
           (dolist (c (drgnx-commands-all)) (setf (drgnx-cmd-bound c) nil))
           (dolist (b (plist-get r :bindings))
             (let ((cmd (drgnx-commands-get (plist-get b :id))))

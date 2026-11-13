@@ -299,5 +299,14 @@ a group's title is the group's name in its own face (no count, no rule line)."
     (should (seq-some (lambda (i) (eq :align-to (car-safe (cdr-safe (get-text-property i 'display note)))))
                       (number-sequence 0 (1- (length note)))))))
 
+(ert-deftest drgnx-look-palette/a-command-can-name-its-own-row-icon ()
+  "LOOK-FIX-PALETTE-CMD-ICONS-1: `:icon' beats the category's icon; without one the category's stands."
+  (let ((drgnx-palette--cands '(("Settings: Undo" . ic-a) ("Settings: Other" . ic-b))))
+    (cl-letf (((symbol-function 'drgnx-look-icon) (lambda (name &rest _) (format "<%s>" name)))
+              ((symbol-function 'drgnx-commands-get)
+               (lambda (id) (drgnx-cmd--make :id id :icon (and (eq id 'ic-a) 'rotate-ccw)))))
+      (should (string-prefix-p "<rotate-ccw>" (drgnx-palette--command-shown "Settings: Undo")))
+      (should (string-prefix-p "<settings>" (drgnx-palette--command-shown "Settings: Other"))))))
+
 (provide 'look-palette-test)
 ;;; look-palette-test.el ends here

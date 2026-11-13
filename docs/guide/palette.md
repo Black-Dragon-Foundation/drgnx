@@ -61,7 +61,7 @@ takes that scale's sizes.
 ## Rows
 
 Rows are in the UI font, 32 logical pixels high in the floating palette and 24 in the minibuffer. A row shows its
-category's icon and the command's title, then the category and, for a command you ran lately, when ("Tests · used 2
+own icon (a command may name one, as Undo's arrow) or else its category's, and the command's title, then the category and, for a command you ran lately, when ("Tests · used 2
 min ago") in the faint secondary colour, and its key as keycaps at the right edge. Each group (Commands, Files, Agents)
 has its name above its rows, with no count. The letters you
 typed are in the accent colour, semibold; the current row is the selection colour, one rounded fill 6 pixels in from the list's sides, its text 8 more inside the fill (as the sidebar's rows; every row and group title keeps the same left inset, lined up with the input row's icon, so nothing moves as the selection does). The keycaps

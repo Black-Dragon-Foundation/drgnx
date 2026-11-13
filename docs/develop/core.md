@@ -570,8 +570,8 @@ graphical frame with one like it: the same windows, buffers, points, window and 
 or a window in a variable moves it there (`drgnx-frame-replaced-window` finds a window's counterpart in NEW) or lets
 it go, from its module's setup through `drgnx-module-hook`, so the teardown removes it. The main window stays main
 (the swap clears OLD's role first, so `drgnx-frames--deleted` hands it to no other window). Today's owners: the panes'
-last buffers (`drgnx-pane--last`, moved), the popup lanes (their `quit-restore` moved; a floating popup ends, as its
-child frame goes with OLD), the agent follow window (moved), the Work map's layout motion (stopped on both frames)
+last buffers (`drgnx-pane--last`, moved), the popup lanes (their `quit-restore` moved; a floating popup is made again on NEW
+with its buffer, as its child frame goes with OLD), the agent follow window (moved), the Work map's layout motion (stopped on both frames)
 and the side-by-side diffs' saved layout (`drgnx-work-code--saved-windows`: a `window-state-get` state, which
 belongs to no frame, so it moves and closing the diffs puts the layout back on the new frame). A swap waits while the platform
 moves the frame (`drgnx-platform-moving`), since the window manager may still be looking for it by its title.
@@ -833,7 +833,7 @@ Every command is registered once, without keys:
 Keys: `:title`, `:category`, `:command` (required), `:scope` (`app` default, `editing` or `window` — which key-profile
 layers key it), `:map` (the keymap its keys go into by default: nil for global, a keymap symbol, or
 `(FEATURE . KEYMAP)` for a keymap that exists once FEATURE loads), `:menu` (menu-bar path), `:context` (right-click
-contexts), `:context-first`, `:doc` and `:when` (a predicate: the command is offered only while it holds).
+contexts), `:context-first`, `:icon` (an icon name from `etc/icons` for the palette row, in place of its category's), `:doc` and `:when` (a predicate: the command is offered only while it holds).
 Redefining an id replaces it. **Keys come from key profiles** ([keys.md](../guide/keys.md)); the active keys of a command
 are in its `bound` slot, which every surface reads. The entries keep the ids of the gryphn layer's registry, which
 this is ported from.

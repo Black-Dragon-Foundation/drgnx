@@ -519,7 +519,7 @@ windows; the commands."
   (drgnx-command-define 'work-flow-rules :category "Work" :title "Show the Rule Pack"
                         :command #'drgnx-work-flow-rules :map 'drgnx-work-flow-mode-map
                         :doc "The run's rule pack in the bottom panel: each rule, its kind, how the hub holds it")
-  (drgnx-command-define 'work-flow-run-red :category "Work" :title "Run the Held Task's Gates Again"
+  (drgnx-command-define 'work-flow-run-red :category "Work" :title "Run the Held Task's Gates Again" :icon 'rotate-ccw
                         :command #'drgnx-work-flow-run-red :map 'drgnx-work-flow-mode-map
                         :doc "The hub runs what the held task's gates miss (its red, its author check) and merges when they pass")
   (drgnx-command-define 'work-flow-tell-agent :category "Work" :title "Tell the Held Task's Agent"

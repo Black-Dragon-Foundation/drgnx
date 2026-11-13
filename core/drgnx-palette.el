@@ -190,10 +190,16 @@ bot and the typed text in the accent colour for the row that asks an agent."
                         'face 'drgnx-palette-asked)))
    (t (drgnx-palette--command-shown label))))
 
+(defvar drgnx-palette--cands nil
+  "While the palette is up: its (LABEL . ID) candidates, for a row's own icon (`drgnx-command-define' `:icon').")
+
 (defun drgnx-palette--command-shown (label)
-  "A command's row for LABEL: the category's icon and the title."
-  (concat (drgnx-look-icon (alist-get (drgnx-palette--category label) drgnx-palette--category-icons
-                                      'chevron-right nil #'equal)
+  "A command's row for LABEL: its own icon, else its category's, and the title."
+  (concat (drgnx-look-icon (or (when-let* ((id (cdr (assoc label drgnx-palette--cands)))
+                                           (c (drgnx-commands-get id)))
+                                 (drgnx-cmd-icon c))
+                               (alist-get (drgnx-palette--category label) drgnx-palette--category-icons
+                                          'chevron-right nil #'equal))
                            'drgnx-text-muted)
           " " (drgnx-palette--title label)))
 
@@ -485,6 +491,7 @@ runs it; several is an \"Ambiguous\" error naming up to three; none is \"No comm
          (ids (drgnx-palette--ids cands))
          (file-rows (drgnx-palette-files))
          (drgnx-palette--file-rows (drgnx-palette--file-table file-rows))
+         (drgnx-palette--cands cands)
          (drgnx-palette--ask-now nil)
          (rows (append cands file-rows))
          ;; the keys are the ones this terminal can send, asked from the buffer the command would run in
