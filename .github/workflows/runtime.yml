@@ -557,11 +557,12 @@ jobs:
 
   # The agent core's container rows (agent system part 1, Tasks 11b/11c): a container job runs only an allowed image,
   # with only its worktree mounted, inside its caps, and every escape row is refused. GitHub's Ubuntu runners ship
-  # podman; the rows pull busybox (digest-pinned at run time) and skip without podman.
+  # podman; the rows pull busybox (digest-pinned at run time) and skip without podman. 26.04, not 24.04: the hub needs
+  # podman 5 (`podman pull --policy`, networked jobs), and 24.04's is 4.9.
   agent-containers:
     name: agent core container rows (podman)
     if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-containers ')) }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

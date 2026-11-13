@@ -369,6 +369,8 @@ Returns (EXIT . OUTPUT)."
                         "--target aarch64-linux-android -p sleipnir --no-default-features --features proto,sync\n"
                         "--all-targets -p runstav -p draugr -p eitri -p gleipnir -p mimir -p bifrost -p huginn -p heimdall -p forseti -- -D warnings\n"
                         "--all-targets -p sleipnir --no-default-features --features proto,sync -- -D warnings\n")
+    ;; the hub needs podman 5 (`podman pull --policy`, networked jobs); 24.04's apt podman is 4.9
+    (drgnx-ci-test--has containers "runs-on: ubuntu-26.04\n")
     (drgnx-ci-test--has containers
                         "-p sleipnir --no-default-features --features linux,sync --target x86_64-unknown-linux-musl --target-dir runtime/target/fwd\n")
     ;; deny reads the whole workspace (every crate under crates/) for every target the crates ship to
