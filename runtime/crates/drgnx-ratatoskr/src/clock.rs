@@ -427,6 +427,12 @@ pub(crate) fn on_virtual<F: Future>(f: F) -> F::Output {
     out
 }
 
+/// A task counted as spawned that no worker has run yet (unit tests).
+#[cfg(all(test, feature = "test-hooks"))]
+pub(crate) fn spawn_unrun(origin: impl Into<Origin>) {
+    virt::spawn_unrun(origin.into());
+}
+
 /// How many sleepers wait on the virtual clock now; 0 on the real clock (unit tests).
 #[cfg(all(test, feature = "test-hooks"))]
 pub(crate) fn sleepers() -> usize {
@@ -1011,15 +1017,25 @@ mod virt {
                     let outside = st.outside.iter().any(|(_, pending)| pending() > 0);
                     st.live.retain(|t| !t.flags().ended);
                     let mine = |t: &&Arc<Task>| !ok.iter().any(|o| o == t.origin.as_str());
-                    let waited = st.live.iter().filter(mine).any(|t| !t.settled());
+                    // a task spawned that no worker has run yet looks parked (it holds no flag) while its worker is
+                    // still on its way to it: waited for, and named once the limit passes
+                    st.fresh.retain(|t| !t.started());
+                    let unrun: Vec<String> = st
+                        .fresh
+                        .iter()
+                        .filter(mine)
+                        .map(|t| t.origin.as_str().to_string())
+                        .collect();
+                    let waited =
+                        !unrun.is_empty() || st.live.iter().filter(mine).any(|t| !t.settled());
                     let held = hold && st.live.iter().filter(mine).any(|t| t.flags().real > 0);
                     let running: Vec<String> = moving(&st.live, &mut polls)
                         .iter()
                         .filter(mine)
                         .map(|t| t.origin.as_str().to_string())
                         .collect();
-                    if !running.is_empty() {
-                        last = running;
+                    if !running.is_empty() || !unrun.is_empty() {
+                        last = running.into_iter().chain(unrun).collect();
                     }
                     (outside, waited, held)
                 };
@@ -1086,6 +1102,21 @@ mod virt {
             out.sites.sort();
             out
         }
+    }
+
+    /// A task registered as spawned that no worker has run yet (what a loaded host's starved worker leaves for a
+    /// moment): its future is never given to the runtime.
+    #[cfg(test)]
+    pub(super) fn spawn_unrun(origin: Origin) {
+        let Some(clock) = current() else { return };
+        let task = Arc::new(Task {
+            origin,
+            ordinal: ORDINALS.fetch_add(1, Ordering::SeqCst),
+            flags: Mutex::default(),
+        });
+        let mut st = clock.state();
+        st.fresh.push(task.clone());
+        st.live.push(task);
     }
 
     pub(super) fn spawn<F>(origin: Origin, f: F) -> tokio::task::JoinHandle<F::Output>
