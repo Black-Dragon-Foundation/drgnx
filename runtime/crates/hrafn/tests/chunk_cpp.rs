@@ -77,6 +77,14 @@ fn cpp_symbols_classes_templates_namespaces_methods_and_macros() {
 }
 
 #[test]
+fn a_template_specializations_name_is_the_templates() {
+    let text = "template <typename T>\nstruct Hash {};\n\ntemplate <>\nstruct Hash<int*> {\n  int v;\n};\n\ntemplate <typename P, typename D>\nclass Random<Ptr<P>*, D> {};\n";
+    let (_, symbols) = chunk_file("a.cc", Lang::Cpp, false, text, BUDGET);
+    let got: Vec<(&str, &str)> = symbols.iter().map(|s| (s.name.as_str(), s.kind.as_str())).collect();
+    assert_eq!(got, [("Hash", "struct"), ("Hash", "struct"), ("Random", "class")]);
+}
+
+#[test]
 fn cpp_references_are_calls_constructions_and_bases() {
     let text = "struct B : Base {\n  void f() {\n    bee(1);\n    obj.cee();\n    ns::dee();\n    new Eff(2);\n    gee<int>(3);\n  }\n};\n";
     let (_, _, refs) = chunk_file_refs("a.cpp", Lang::Cpp, false, text, BUDGET);

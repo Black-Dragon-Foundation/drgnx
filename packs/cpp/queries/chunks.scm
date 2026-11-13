@@ -10,9 +10,10 @@
  (#set! drgnx.name "c-declarator"))
 ((function_definition) @definition.function
  (#set! drgnx.name "c-declarator"))
-(class_specifier name: (_) @name body: (_)) @definition.class
-(struct_specifier name: (_) @name body: (_)) @definition.struct
-(union_specifier name: (_) @name body: (_)) @definition.union
+; a specialization's name is the template's (`Hash<Foo*>` is `Hash`)
+(class_specifier name: [(type_identifier) @name (template_type name: (_) @name)] body: (_)) @definition.class
+(struct_specifier name: [(type_identifier) @name (template_type name: (_) @name)] body: (_)) @definition.struct
+(union_specifier name: [(type_identifier) @name (template_type name: (_) @name)] body: (_)) @definition.union
 (enum_specifier name: (_) @name body: (_)) @definition.enum
 (namespace_definition name: (_) @name) @definition.namespace
 (alias_declaration name: (_) @name) @definition.type
