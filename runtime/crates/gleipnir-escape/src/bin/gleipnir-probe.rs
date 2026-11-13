@@ -901,6 +901,9 @@ const SYSCALLS: &[&str] = &[
     "mount-missing",
     "tiocsti-own-pty",
     "tiocsti-high-own-pty",
+    "ioctl-tioclinux",
+    "ioctl-sg-io",
+    "pty-session",
     "ptrace-own-child",
     "x32-getpid",
     "i386-int80",
@@ -1004,6 +1007,11 @@ fn attempt(name: &str) -> i32 {
                 );
                 ret(r.into())
             }
+            // An ioctl no program here needs, on /dev/null: ENOTTY unfiltered, EPERM from the filter's allowlist (GL-T5-1).
+            "ioctl-tioclinux" => ioctl_on_null(0x541C),
+            "ioctl-sg-io" => ioctl_on_null(0x2285),
+            // What a terminal session does: open a pty, set its size and its modes (raw, cooked), read them back.
+            "pty-session" => pty_session(),
             "tiocsti-own-pty" => tiocsti(false),
             "tiocsti-high-own-pty" => tiocsti(true),
             "ptrace-own-child" => {
@@ -1095,6 +1103,73 @@ unsafe fn tiocsti(high: bool) -> i32 {
         let req = libc::TIOCSTI as libc::c_ulong | if high { 1 << 32 } else { 0 };
         let r = libc::syscall(libc::SYS_ioctl, s as libc::c_long, req, &raw const byte);
         if r >= 0 { 0 } else { *libc::__errno_location() }
+    }
+}
+
+/// `ioctl(/dev/null, request, 0)`: its errno (0: it worked).
+#[cfg(target_os = "linux")]
+unsafe fn ioctl_on_null(request: libc::c_ulong) -> i32 {
+    // SAFETY: the caller is a throwaway child; every call has valid arguments.
+    unsafe {
+        let fd = libc::open(c"/dev/null".as_ptr(), libc::O_RDWR);
+        if fd < 0 {
+            return *libc::__errno_location();
+        }
+        let r = libc::syscall(libc::SYS_ioctl, fd as libc::c_long, request, 0usize);
+        if r >= 0 { 0 } else { *libc::__errno_location() }
+    }
+}
+
+/// A terminal session on a pty of its own: open it (TIOCGPTN, TIOCSPTLCK), set the window size, make the modes raw
+/// and cooked again with every `tcsetattr` flavour, drain and flush, read the size back. The errno of the first thing
+/// that fails (0: all worked).
+#[cfg(target_os = "linux")]
+unsafe fn pty_session() -> i32 {
+    // SAFETY: the caller is a throwaway child; every call has valid arguments.
+    unsafe {
+        let m = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+        if m < 0 || libc::grantpt(m) != 0 || libc::unlockpt(m) != 0 {
+            return *libc::__errno_location();
+        }
+        let mut name = [0 as libc::c_char; 64];
+        if libc::ptsname_r(m, name.as_mut_ptr(), name.len()) != 0 {
+            return libc::EIO;
+        }
+        let s = libc::open(name.as_ptr(), libc::O_RDWR | libc::O_NOCTTY);
+        if s < 0 {
+            return *libc::__errno_location();
+        }
+        let ws = libc::winsize {
+            ws_row: 24,
+            ws_col: 80,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        if libc::ioctl(s, libc::TIOCSWINSZ, &raw const ws) != 0 {
+            return *libc::__errno_location();
+        }
+        let mut t: libc::termios = std::mem::zeroed();
+        if libc::tcgetattr(s, &raw mut t) != 0 {
+            return *libc::__errno_location();
+        }
+        let cooked = t;
+        libc::cfmakeraw(&raw mut t);
+        for when in [libc::TCSANOW, libc::TCSADRAIN, libc::TCSAFLUSH] {
+            if libc::tcsetattr(s, when, &raw const t) != 0 {
+                return *libc::__errno_location();
+            }
+        }
+        if libc::tcsetattr(s, libc::TCSANOW, &raw const cooked) != 0
+            || libc::tcdrain(s) != 0
+            || libc::tcflush(s, libc::TCIOFLUSH) != 0
+        {
+            return *libc::__errno_location();
+        }
+        let mut back: libc::winsize = std::mem::zeroed();
+        if libc::ioctl(s, libc::TIOCGWINSZ, &raw mut back) != 0 || back.ws_col != 80 {
+            return *libc::__errno_location();
+        }
+        0
     }
 }
 

@@ -222,6 +222,58 @@ const CLONE_NEW: [u32; 7] = [
 
 const TIOCSTI: u32 = 0x5412;
 const TIOCLINUX: u32 = 0x541C;
+
+/// The `ioctl` requests a program may make (GL-T5-1); any other fails with `EPERM`. The numbers are asm-generic, the
+/// same on x86_64 and aarch64; the filter compares a request's low 32 bits, as the kernel reads it. `TIOCSTI` and
+/// `TIOCLINUX` stay refused by their own rules above it.
+///
+/// "measured": seen from a program of the 2026-11-14 measurement (a ptrace tracer on x86_64 over shells, a pty session,
+/// python's termios and pty, git, cargo/rustc, curl, coreutils, node's copyFile, spawn and setRawMode, the stock Claude
+/// Code binary against ratatoskr-mock, the hub and the mock agent). Anything else carries the caller that needs it; a
+/// request nobody here can name is not on the list, and is added when a real program shows it.
+const IOCTL_ALLOWED: &[u32] = &[
+    // terminal, measured: TCGETS2 (this glibc's isatty and tcgetattr), TCSETS2/TCSETSW2/TCSETSF2 (tcsetattr with
+    // TCSANOW, TCSADRAIN, TCSAFLUSH: raw mode in python's tty, stty, node, Claude Code), window size, foreground
+    // group, controlling tty, pty open (TIOCGPTN, TIOCSPTLCK, TIOCGPTPEER), TCSBRK, TCXONC, TCFLSH (tcdrain,
+    // tcflow, tcflush), TIOCOUTQ
+    0x802C_542A,
+    0x402C_542B,
+    0x402C_542C,
+    0x402C_542D,
+    0x5413,
+    0x5414,
+    0x540F,
+    0x5410,
+    0x540E,
+    0x8004_5430,
+    0x4004_5431,
+    0x5441,
+    0x5409,
+    0x540A,
+    0x540B,
+    0x5411,
+    // terminal, the older termios requests: musl's tcgetattr/tcsetattr, Go's x/sys/unix IoctlGetTermios and x/term,
+    // busybox stty
+    0x5401,
+    0x5402,
+    0x5403,
+    0x5404,
+    // any fd, measured: FIONREAD, FIONBIO (libuv, Bun, rustc), FIOCLEX (libuv, python)
+    0x541B,
+    0x5421,
+    0x5451,
+    // any fd: FIONCLEX, libuv's uv__cloexec_ioctl
+    0x5450,
+    // files, measured: FICLONE (node's copyFile with COPYFILE_FICLONE, Bun's copy)
+    0x4004_9409,
+    // files: FS_IOC_FIEMAP (coreutils cp's sparse-file extent scan), FS_IOC_GETFLAGS (e2fsprogs lsattr)
+    0xC020_660B,
+    0x8008_6601,
+    // network, read-only: SIOCGIFINDEX and SIOCGIFNAME (glibc if_nametoindex and if_indextoname, which getaddrinfo
+    // and curl's --interface use)
+    0x8933,
+    0x8910,
+];
 const AF_VSOCK: u32 = 40;
 
 // The reduced tier's socket rules (Linux's numbers, whatever the host).
@@ -265,6 +317,15 @@ pub fn rules() -> Vec<DenyRule> {
     for value in [TIOCSTI, TIOCLINUX] {
         rules.push(deny("ioctl", EPERM, vec![ArgMatch::Eq { index: 1, value }]));
     }
+    // everything but the allowlist: the request is none of its values
+    rules.push(deny(
+        "ioctl",
+        EPERM,
+        IOCTL_ALLOWED
+            .iter()
+            .map(|&value| ArgMatch::Ne { index: 1, value })
+            .collect(),
+    ));
     rules.push(deny(
         "socket",
         EPERM,
@@ -659,6 +720,46 @@ mod tests {
                 args,
             });
         }
+        // GL-T5-1: any other request fails with EPERM (written out here, not taken from IOCTL_ALLOWED)
+        let allowed: [u32; 29] = [
+            0x802C_542A,
+            0x402C_542B,
+            0x402C_542C,
+            0x402C_542D,
+            0x5413,
+            0x5414,
+            0x540F,
+            0x5410,
+            0x540E,
+            0x8004_5430,
+            0x4004_5431,
+            0x5441,
+            0x5409,
+            0x540A,
+            0x540B,
+            0x5411, // terminal, measured
+            0x5401,
+            0x5402,
+            0x5403,
+            0x5404, // the older termios requests
+            0x541B,
+            0x5421,
+            0x5451,
+            0x5450, // any fd
+            0x4004_9409,
+            0xC020_660B,
+            0x8008_6601, // files
+            0x8933,
+            0x8910, // network, read-only
+        ];
+        want.push(DenyRule {
+            syscall: "ioctl",
+            errno: EPERM_,
+            args: allowed
+                .iter()
+                .map(|&value| ArgMatch::Ne { index: 1, value })
+                .collect(),
+        });
         let args = vec![ArgMatch::Eq {
             index: 0,
             value: 40,
@@ -979,6 +1080,8 @@ mod tests {
                 let want = match name {
                     Some(_) => Act::Errno(EPERM_),
                     None if n == nr(arch, "clone3") => Act::Errno(ENOSYS_),
+                    // request 0 is on no allowlist
+                    None if n == nr(arch, "ioctl") => Act::Errno(EPERM_),
                     None => Act::Allow,
                 };
                 add(
@@ -1060,10 +1163,10 @@ mod tests {
                 );
             }
             add(
-                "ioctl TIOCSTI as the fd".into(),
+                "ioctl TIOCSTI as the fd, request 0".into(),
                 arch,
                 Data::call(arch, ioctl, &[TIOCSTI, 0]),
-                Act::Allow,
+                Act::Errno(EPERM_),
             );
             let socket = nr(arch, "socket");
             for (domain, want) in [
@@ -1141,7 +1244,11 @@ mod tests {
             .into_iter()
             .filter(|r| r.syscall == "ioctl")
             .collect();
-        assert_eq!(ioctls.len(), 2);
+        assert_eq!(
+            ioctls.len(),
+            3,
+            "TIOCSTI, TIOCLINUX, and everything off the allowlist"
+        );
         for arch in ARCHES {
             let prog = compile(arch).unwrap();
             let ioctl = nr(arch, "ioctl");
@@ -1154,6 +1261,109 @@ mod tests {
                         "{arch:?} {req:#x} high {high:#x}"
                     );
                 }
+            }
+        }
+    }
+
+    /// GL-T5-1: an ioctl request off the allowlist fails with EPERM, whatever the high half; the terminal, pty, fd and
+    /// file requests that terminals and common tools use are allowed.
+    /// The requests the list names by libc's constants are those constants (the numbers are asm-generic).
+    #[test]
+    fn ioctl_allowlist_matches_libc() {
+        for (name, v) in [
+            ("TCGETS", libc::TCGETS),
+            ("TCSETS", libc::TCSETS),
+            ("TCSETSW", libc::TCSETSW),
+            ("TCSETSF", libc::TCSETSF),
+            ("TIOCGWINSZ", libc::TIOCGWINSZ),
+            ("TIOCSWINSZ", libc::TIOCSWINSZ),
+            ("TIOCGPGRP", libc::TIOCGPGRP),
+            ("TIOCSPGRP", libc::TIOCSPGRP),
+            ("TIOCSCTTY", libc::TIOCSCTTY),
+            ("TIOCOUTQ", libc::TIOCOUTQ),
+            ("TCSBRK", libc::TCSBRK),
+            ("TCXONC", libc::TCXONC),
+            ("TCFLSH", libc::TCFLSH),
+            ("FIONREAD", libc::FIONREAD),
+            ("FIONBIO", libc::FIONBIO),
+            ("FIOCLEX", libc::FIOCLEX),
+            ("FIONCLEX", libc::FIONCLEX),
+            ("SIOCGIFINDEX", libc::SIOCGIFINDEX as _),
+            ("SIOCGIFNAME", libc::SIOCGIFNAME as _),
+        ] {
+            assert!(
+                IOCTL_ALLOWED.contains(&(v as u32)),
+                "{name} {v:#x} is on the list"
+            );
+        }
+        for (name, v) in [
+            ("TIOCSTI", libc::TIOCSTI),
+            ("TIOCLINUX", libc::TIOCLINUX),
+            ("TIOCCONS", libc::TIOCCONS),
+        ] {
+            assert!(!IOCTL_ALLOWED.contains(&(v as u32)), "{name} is not");
+        }
+        let mut seen = std::collections::HashSet::new();
+        assert!(
+            IOCTL_ALLOWED.iter().all(|r| seen.insert(r)),
+            "no request twice"
+        );
+    }
+
+    #[test]
+    fn ioctl_is_an_allowlist() {
+        for arch in ARCHES {
+            let prog = compile(arch).unwrap();
+            let ioctl = nr(arch, "ioctl");
+            let at = |req: u64| run(&prog, &Data::call(arch, ioctl, &[3, req]));
+            // refused: the two always-refused, a console redirect, line discipline, a SCSI generic, a block device,
+            // a loop device, KVM, DRM, a tun device, an interface setter, an unknown number
+            for req in [
+                0x5412u64,
+                0x8912, // SIOCGIFCONF and the other interface queries, until a program needs one
+                0x5429, // TIOCGSID
+                0x5420, // TIOCPKT
+                0x5452, // FIOASYNC
+                0x4020_940D, // FICLONERANGE
+                0x541C,
+                0x541D,
+                0x5423,
+                0x2285,
+                0x125D,
+                0x4C00,
+                0xAE01,
+                0x6440,
+                0x4004_54CA,
+                0x8914,
+                0xDEAD_BEEF,
+            ] {
+                for high in [0u64, 1, 0xFFFF_FFFF] {
+                    assert_eq!(
+                        at(req | high << 32),
+                        Act::Errno(EPERM_),
+                        "{arch:?} {req:#x} high {high:#x}"
+                    );
+                }
+            }
+            // allowed, also with the high half set (the kernel reads a 32-bit request)
+            for req in [
+                0x5401u64,
+                0x5402,
+                0x5413,
+                0x5414,
+                0x540E,
+                0x541B,
+                0x5421,
+                0x5451,
+                0x802C_542A,
+                0x402C_542B,
+                0x8004_5430,
+                0x4004_5431,
+                0x5441,
+                0x8933,
+            ] {
+                assert_eq!(at(req), Act::Allow, "{arch:?} {req:#x}");
+                assert_eq!(at(req | 1 << 32), Act::Allow, "{arch:?} {req:#x} high");
             }
         }
     }

@@ -1403,8 +1403,11 @@ ENOENT. Steps that belong to the sandboxed run (`swap-to-link`, `canary-fd`, the
 
 **Skips.** Only these reasons skip a row: "inside a container" (`/run/.containerenv`; for `bwrap` and `netns`; not
 with `--bwrap-in-container`),
-"needs macos", "needs linux", "needs x86_64", "x32 is off", "needs root" (uid 0 or `sudo -n true`), and "Landlock ABI
-N below M" (from the probe's `landlock-abi`). Any other cause is a **fail**, a sandbox refusal among them, so a
+"needs macos", "needs linux", "needs x86_64", "x32 is off", "the host blocks io_uring, the keyring calls or vsock" (a row with `needs: host_open`: the unfiltered probes of
+`io_uring_setup`, `keyctl`, `add_key` or `socket(AF_VSOCK)` fail, as they do in a podman container, whose own seccomp answers ENOSYS, so
+our filter's EPERM could not be told from it; only `seccomp-denies-host-open` carries it, the rest of
+`seccomp-denies` runs), "needs root" (uid 0 or `sudo -n true`), and "Landlock ABI N below M" (from the probe's
+`landlock-abi`). Any other cause is a **fail**, a sandbox refusal among them, so a
 regression that refuses every spec cannot look green.
 
 **What a run checks, in order:** no canary text in stdout, stderr or the result file; the sandbox's outcome from the

@@ -77,6 +77,10 @@ fn an_unlisted_skip_reason_is_a_fail() {
         (Skip::NeedsLinux, "needs linux"),
         (Skip::NeedsX86_64, "needs x86_64"),
         (Skip::X32Off, "x32 is off"),
+        (
+            Skip::HostFilterBlocks,
+            "the host blocks io_uring, the keyring calls or vsock",
+        ),
         (Skip::NeedsRoot, "needs root"),
         (
             Skip::LandlockBelow { have: 7, need: 9 },
@@ -99,6 +103,7 @@ fn an_unlisted_skip_reason_is_a_fail() {
         root: true,
         landlock_abi: 9,
         x32: true,
+        host_open: true,
     };
     let needy = row(
         json!({"row": "r", "needs": ["bwrap", "reduced", "root"], "probes": [["fds"]], "expect": [{"result": "reached"}]}),
@@ -548,6 +553,7 @@ fn macos_rows_cover_mac_sb_10_and_skip_elsewhere() {
         root: false,
         landlock_abi: 0,
         x32: false,
+        host_open: false,
     };
     for r in &rows {
         assert_eq!(r.platform(), Platform::Macos, "{}", r.row);
@@ -583,6 +589,7 @@ fn any_rows_run_on_macos() {
         Need::Seccomp,
         Need::Netns,
         Need::X32,
+        Need::HostOpen,
     ];
     for r in &rows {
         assert_eq!(r.platform(), Platform::Any, "{}", r.row);
@@ -678,6 +685,7 @@ fn browser_rows_cover_the_table_and_skip_below_abi_9() {
         root: false,
         landlock_abi: 8,
         x32: false,
+        host_open: false,
     };
     for r in &rows {
         let skip = skip_reason(r, &host);
@@ -771,4 +779,25 @@ fn browser_layer_argv_puts_the_probes_in_the_browser_or_the_agent() {
     let (b, a) = browser_layer_argv(&fx, probe, probes, true).unwrap();
     assert_eq!(b.len(), 3);
     assert_eq!(&a[5..], ["fds", "--and", "fds"]);
+}
+
+/// A row that needs `io_uring` is skipped, for that reason alone, where the host (a container's own seccomp, say)
+/// refuses `io_uring_setup` to an unfiltered process: our filter's refusal there could not be told from it.
+#[test]
+fn a_host_open_row_skips_only_where_the_host_filter_blocks() {
+    let r = row(
+        json!({"row": "r", "needs": ["bwrap", "host_open"], "control": true, "probes": [["syscall", "io-uring"]], "expect": [{"result": "blocked", "errno": ["EPERM"]}]}),
+    );
+    let mut host = Host {
+        in_container: false,
+        root: true,
+        landlock_abi: 9,
+        x32: true,
+        host_open: false,
+    };
+    if cfg!(target_os = "linux") {
+        assert_eq!(skip_reason(&r, &host), Some(Skip::HostFilterBlocks));
+        host.host_open = true;
+        assert_eq!(skip_reason(&r, &host), None);
+    }
 }
