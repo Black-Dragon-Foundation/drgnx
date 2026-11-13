@@ -135,7 +135,16 @@ async fn a_ring_and_a_shared_reference_are_three_objects() {
 #[tokio::test]
 async fn the_limit_cuts_and_counts_what_it_left() {
     let (f, roots) = python();
-    let g = heap::walk(&f, Ident::Python, roots, Limits { nodes: 2, depth: 8 }).await;
+    let g = heap::walk(
+        &f,
+        Ident::Python,
+        roots,
+        Limits {
+            nodes: 2,
+            ..Limits::default()
+        },
+    )
+    .await;
     assert_eq!(g.nodes.len(), 2, "{g:#?}");
     assert!(
         g.cut >= 1,
@@ -251,8 +260,8 @@ async fn without_identity_the_walk_is_a_tree_cut_at_its_depth() {
         Ident::Paths,
         roots,
         Limits {
-            nodes: 50,
             depth: 3,
+            ..Limits::default()
         },
     )
     .await;
@@ -309,4 +318,71 @@ async fn javascript_objects_are_named_by_the_hidden_maps_tag() {
         "the ring closes"
     );
     assert_eq!(g.roots[1].1.as_deref(), Some("js:2"), "shared is a.next");
+}
+
+/// An adapter that takes a second for each object's children.
+struct Slow(Fake);
+
+impl Probe for Slow {
+    fn variables(&self, reference: i64) -> BoxFut<'_, Result<Vec<Value>, String>> {
+        Box::pin(async move {
+            crate::clock::sleep(std::time::Duration::from_secs(1)).await;
+            self.0.variables(reference).await
+        })
+    }
+    fn evaluate(&self, expression: String) -> BoxFut<'_, Result<String, String>> {
+        self.0.evaluate(expression)
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_slow_adapter_gets_a_partial_graph_at_the_time_limit() {
+    let (f, roots) = python();
+    let limits = Limits {
+        within: std::time::Duration::from_millis(1500),
+        ..Limits::default()
+    };
+    let g = heap::walk(&Slow(f), Ident::Python, roots, limits).await;
+    // a at 1 s, b at 2 s: then the time is up, and what was left is counted
+    assert_eq!(g.nodes.len(), 2, "{g:#?}");
+    assert!(g.cut >= 2, "{g:#?}");
+}
+
+#[test]
+fn the_next_stops_graph_says_what_was_added_changed_and_gone() {
+    let node = |id: &str, v: &str, to: Option<&str>| heap::Node {
+        id: id.into(),
+        ty: "Node".into(),
+        path: id.into(),
+        fields: vec![
+            heap::Field {
+                name: "v".into(),
+                value: v.into(),
+                to: None,
+            },
+            heap::Field {
+                name: "next".into(),
+                value: "Node".into(),
+                to: to.map(str::to_owned),
+            },
+        ],
+    };
+    let before = vec![
+        node("A", "1", Some("B")),
+        node("B", "2", None),
+        node("C", "3", None),
+    ];
+    let after = vec![
+        node("A", "1", Some("D")),
+        node("B", "20", None),
+        node("D", "4", None),
+    ];
+    let d = heap::diff(&before, &after);
+    assert_eq!(d.added, vec!["D".to_owned()]);
+    assert_eq!(
+        d.changed,
+        vec!["A".to_owned(), "B".to_owned()],
+        "A's reference, B's value"
+    );
+    assert_eq!(d.gone, vec!["C".to_owned()]);
 }

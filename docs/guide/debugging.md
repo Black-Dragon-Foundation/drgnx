@@ -212,3 +212,18 @@ JavaScript, TypeScript, Go, C, Rust and Java programs get the same card, traced 
 logpoint on every line that sets the name, so the chain shows which of those ran last and what it read. A value is
 shown only when reading it again runs nothing (no call). The card says what this cannot see: a value set through
 another name, or in a file that is neither the stop's nor on its stack.
+
+## The heap graph
+
+The heap graph draws the objects reachable from a variable at a stop: each object is a card with its type and
+fields, and each reference is an arrow to another card. An object reached two ways is one card with two arrows, and a
+cycle closes on itself. At the next stop the graph is read again: the cards keep their places, and the objects added,
+changed and gone are marked. A graph holds up to 50 objects by default (200 at most); a reference left past that, or
+past two seconds of reading, is counted on the graph.
+
+To tell objects apart, drgnx asks the program in the stopped frame: Python's `id()`, the address of a Go, C, C++ or
+Rust pointer. **JavaScript has no such id, so drgnx writes into your program:** while a session is attached, one hidden
+`WeakMap` lives on the global object under `Symbol.for('drgnx.ids')`, and the graph adds your objects to it as keys
+(a weak map keeps nothing alive and changes nothing in the objects). Your program sees it only if it lists the symbol
+keys of `globalThis`. drgnx deletes it before it detaches from a program that runs on; a program that ends takes it
+with it.

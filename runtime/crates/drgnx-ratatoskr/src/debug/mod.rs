@@ -24,6 +24,7 @@ pub mod fork_seal;
 pub mod fork_wire;
 pub mod heap;
 pub mod heap_layout;
+pub mod heap_wire;
 pub mod hot_reload;
 pub mod inline;
 pub mod install;

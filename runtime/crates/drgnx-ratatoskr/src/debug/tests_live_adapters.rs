@@ -1395,7 +1395,20 @@ async fn heap_graph(
         json!({"adapter": id, "ident": format!("{ident:?}"), "nodes": g.nodes.len(), "cut": g.cut,
                "ms": t0.elapsed().as_millis(), "roots": g.roots})
     );
+    // `debug/heap`'s read: the root by expression, evaluated in the frame
+    let from_a = super::heap::read(&d, &sid, None, "a", super::heap::Limits::default())
+        .await
+        .unwrap();
     d.shutdown().await;
+    assert_eq!(from_a.nodes.len(), 3, "{id}: from a: {from_a:#?}");
+    assert_eq!(
+        from_a.roots[0].1,
+        g.roots
+            .iter()
+            .find(|(r, _)| r == "a")
+            .and_then(|(_, n)| n.clone()),
+        "{id}: the root evaluated is a's object"
+    );
     let root_of = |n: &str| {
         g.roots
             .iter()
@@ -1504,4 +1517,104 @@ async fn heap_graph_codelldb() {
     let config = json!({"type": "lldb", "request": "launch", "name": "hc", "program": dir.join("heap"),
                         "cwd": dir});
     heap_graph("codelldb", codelldb(), &dir, config, &[], &file, 12, "next").await;
+}
+
+/// The heap graph's hidden map in JavaScript (the user's ruling, 2026-11-13): there while attached, gone after a
+/// detach that leaves the program running, as the program itself sees it (`Object.getOwnPropertySymbols`).
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "live: js-debug and node in the adapter image"]
+async fn js_debug_detach_leaves_no_hidden_map() {
+    let dir = live_dir("heap-js-detach");
+    let out = dir.join("symbols.txt");
+    let file = write(
+        &dir,
+        "tick.js",
+        "const fs = require('fs');\nconst out = process.argv[2];\nclass Node { constructor(v) { this.v = v; this.next = null; } }\nlet n = 0;\nfunction tick() {\n  const a = new Node(1), b = new Node(2);\n  a.next = b; b.next = a;\n  n += 1;\n  fs.writeFileSync(out, n + ' ' + Object.getOwnPropertySymbols(globalThis).map(String).join(','));\n}\nsetInterval(tick, 50);\n",
+    );
+    let port = adapters::free_port().unwrap();
+    let mut prog = std::process::Command::new("node")
+        .arg(format!("--inspect=127.0.0.1:{port}"))
+        .arg(&file)
+        .arg(&out)
+        .current_dir(&dir)
+        .spawn()
+        .unwrap();
+    crate::clock::sleep(Duration::from_millis(800)).await;
+    let ev = Arc::new(Events::default());
+    let d = Debug::new(ev.clone(), Arc::new(Procs::default()));
+    let root = dir.display().to_string();
+    let bp = add(&d, &root, &file, 8, None, None, None).await;
+    let config = json!({"type": "pwa-node", "request": "attach", "name": "ja", "port": port,
+                        "address": "127.0.0.1"});
+    let start = Start {
+        name: "js-debug".into(),
+        adapter_id: "pwa-node".into(),
+        request: Request::Attach,
+        arguments: super::launch::adapter_arguments(&config),
+        breakpoints: vec![],
+        functions: vec![],
+        exception_filters: None,
+    };
+    let sid = d
+        .start(
+            1,
+            &root,
+            start,
+            launcher("js-debug", &js_debug(), &dir, &[]),
+        )
+        .await
+        .unwrap();
+    let (_, f) = ev.stop(0).await;
+    let sid = f["session"].as_str().map_or(sid, str::to_owned);
+    let g = super::heap::read(&d, &sid, None, "a", super::heap::Limits::default())
+        .await
+        .unwrap();
+    assert_eq!(g.nodes.len(), 2, "{g:#?}");
+    let stop = d.stop_of(&sid).unwrap();
+    let seen = d
+        .session(&sid)
+        .unwrap()
+        .request(
+            "evaluate",
+            json!({"expression": "Object.getOwnPropertySymbols(globalThis).map(String).join(',')",
+                   "frameId": stop.frame, "context": "watch"}),
+        )
+        .await
+        .unwrap();
+    assert!(
+        seen["result"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("drgnx.ids"),
+        "the map is there while attached: {seen}"
+    );
+    let at_stop = std::fs::read_to_string(&out).unwrap_or_default();
+    remove(&d, &root, bp).await;
+    d.control(
+        &sid,
+        Op::Stop {
+            kill_debuggee: None,
+        },
+    )
+    .await
+    .unwrap();
+    d.shutdown().await;
+    crate::clock::sleep(Duration::from_millis(600)).await;
+    let after = std::fs::read_to_string(&out).unwrap_or_default();
+    let _ = prog.kill();
+    let _ = prog.wait();
+    let n = |s: &str| {
+        s.split(' ')
+            .next()
+            .and_then(|n| n.parse::<u64>().ok())
+            .unwrap_or(0)
+    };
+    assert!(
+        n(&after) > n(&at_stop),
+        "it ran on after the detach: {at_stop:?} then {after:?}"
+    );
+    assert!(
+        !after.contains("drgnx.ids"),
+        "the program still sees the map: {after:?}"
+    );
 }

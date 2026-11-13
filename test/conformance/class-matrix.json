@@ -70,6 +70,8 @@
   "debug/disassemble": ["user"],
   "debug/evaluate": ["user"],
   "debug/expand": ["user"],
+  "debug/heap": ["user"],
+  "debug/heap/close": ["user"],
   "debug/hot-reload": ["user"],
   "debug/origin": ["user"],
   "debug/fork": ["user"],

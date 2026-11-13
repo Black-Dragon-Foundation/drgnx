@@ -46,6 +46,8 @@ pub struct Hub {
     pub(super) bisects: super::bisect_wire::Bisects,
     /// The origin trails (`debug/origin`).
     pub(super) origins: super::origin_wire::Origins,
+    /// The open heap graphs (`debug/heap`).
+    pub(super) heaps: super::heap_wire::Heaps,
 }
 
 impl Hub {

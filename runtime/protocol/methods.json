@@ -12981,6 +12981,310 @@
       "classes": [
         "user"
       ],
+      "doc": "the objects reachable from an expression at the current stop as cards and edges laid out in cells (each adapter's object identity: a shared object is one card, a cycle closes); with an open graph, it read again at the current stop with what was added, changed and gone",
+      "name": "debug/heap",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/heap`: the graph of EXPR (a variable's `evaluateName`) in SESSION's FRAME (the selected one when none), at\nmost LIMIT objects (default 50) and DEPTH levels (default 8); or, with GRAPH, that open graph read again at the\nsession's current stop.",
+        "properties": {
+          "depth": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "expr": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "frame": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "graph": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "DebugHeap",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "HeapCard": {
+            "description": "An object's card: COL, ROW, WIDTH and HEIGHT in cells.",
+            "properties": {
+              "col": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "height": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "id": {
+                "type": "string"
+              },
+              "row": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "width": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "col",
+              "row",
+              "width",
+              "height"
+            ],
+            "type": "object"
+          },
+          "HeapEdge": {
+            "description": "A reference: from field FIELD's row of card FROM into card TO's top row, through POINTS ([col, row] cells,\nstraight runs).",
+            "properties": {
+              "field": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "from": {
+                "type": "string"
+              },
+              "points": {
+                "items": {
+                  "items": {
+                    "format": "uint32",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "to": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "from",
+              "field",
+              "to",
+              "points"
+            ],
+            "type": "object"
+          },
+          "HeapField": {
+            "description": "A field of an object: its NAME and VALUE text, and the object it refers to (TO).",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "to": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "value"
+            ],
+            "type": "object"
+          },
+          "HeapNode": {
+            "description": "An object: its ID (the adapter's identity, or its path), TYPE, the PATH that reached it first, its FIELDS.",
+            "properties": {
+              "fields": {
+                "items": {
+                  "$ref": "#/$defs/HeapField"
+                },
+                "type": "array"
+              },
+              "id": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "type",
+              "path",
+              "fields"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/heap`'s answer: the GRAPH's id; the root's NODE (none: a scalar); the objects, CUT (references left at the\nlimit, the depth or the time), the layout (CARDS, EDGES, WIDTH × HEIGHT cells); against the graph's last read, the\nobjects ADDED, CHANGED (a field's value or reference) and GONE.",
+        "properties": {
+          "added": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "cards": {
+            "items": {
+              "$ref": "#/$defs/HeapCard"
+            },
+            "type": "array"
+          },
+          "changed": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "cut": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/$defs/HeapEdge"
+            },
+            "type": "array"
+          },
+          "expr": {
+            "type": "string"
+          },
+          "gone": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "graph": {
+            "type": "string"
+          },
+          "height": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "node": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/$defs/HeapNode"
+            },
+            "type": "array"
+          },
+          "session": {
+            "type": "string"
+          },
+          "width": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "graph",
+          "session",
+          "expr",
+          "nodes",
+          "cut",
+          "cards",
+          "edges",
+          "width",
+          "height",
+          "added",
+          "changed",
+          "gone"
+        ],
+        "title": "DebugHeapGraph",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "forget an open heap graph",
+      "name": "debug/heap/close",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/heap/close`: forget GRAPH.",
+        "properties": {
+          "graph": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "graph"
+        ],
+        "title": "DebugHeapClose",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/heap/close`'s answer: whether there was such a graph.",
+        "properties": {
+          "closed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "closed"
+        ],
+        "title": "DebugHeapClosed",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the stopped Python program takes a saved file's changed function bodies (frames running keep their old code unless the adapter restarts the frame)",
       "name": "debug/hot-reload",
       "params": {

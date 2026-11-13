@@ -88,6 +88,8 @@ pub struct Graph {
 pub struct Limits {
     pub nodes: usize,
     pub depth: usize,
+    /// The walk's time: past it, the graph so far comes back with what was left counted in `cut`.
+    pub within: std::time::Duration,
 }
 
 impl Default for Limits {
@@ -95,6 +97,7 @@ impl Default for Limits {
         Limits {
             nodes: 50,
             depth: 8,
+            within: std::time::Duration::from_secs(2),
         }
     }
 }
@@ -196,7 +199,13 @@ pub async fn walk(probe: &dyn Probe, ident: Ident, roots: Vec<Value>, limits: Li
             todo.push_back((v, 0, Slot::Root(i)));
         }
     }
+    let t0 = crate::clock::now();
     while let Some((v, depth, slot)) = todo.pop_front() {
+        if t0.elapsed() >= limits.within {
+            // the time is up: this reference and every one still waiting are left
+            g.cut += 1 + u32::try_from(todo.len()).unwrap_or(u32::MAX);
+            break;
+        }
         let id = identity(probe, ident, &v).await;
         let at = match by_id.get(&id) {
             Some(&n) => Some(n),
@@ -265,4 +274,68 @@ impl Probe for SessionProbe {
             Ok(text(&body, "result").to_owned())
         })
     }
+}
+
+/// What a graph's next read changed: objects ADDED, CHANGED (a field's value or reference) and GONE, in id order.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Diff {
+    pub added: Vec<String>,
+    pub changed: Vec<String>,
+    pub gone: Vec<String>,
+}
+
+/// AFTER against BEFORE.
+pub fn diff(before: &[Node], after: &[Node]) -> Diff {
+    let was: BTreeMap<&str, &Node> = before.iter().map(|n| (n.id.as_str(), n)).collect();
+    let now: BTreeMap<&str, &Node> = after.iter().map(|n| (n.id.as_str(), n)).collect();
+    let mut d = Diff::default();
+    for (id, n) in &now {
+        match was.get(id) {
+            None => d.added.push((*id).to_owned()),
+            Some(b) if b.fields != n.fields => d.changed.push((*id).to_owned()),
+            Some(_) => {}
+        }
+    }
+    d.gone = was
+        .keys()
+        .filter(|id| !now.contains_key(*id))
+        .map(|id| (*id).to_owned())
+        .collect();
+    d
+}
+
+/// The graph of EXPR (a variable's `evaluateName`) in SESSION's FRAME (the selected one when none) at its current
+/// stop, within LIMITS.
+pub async fn read(
+    d: &super::Debug,
+    session: &str,
+    frame: Option<i64>,
+    expr: &str,
+    limits: Limits,
+) -> Result<Graph, String> {
+    let stop = d
+        .stop_of(session)
+        .ok_or_else(|| format!("debug session {session} is not stopped"))?;
+    let (handle, _) = d.handle_caps(session)?;
+    let frame = frame.unwrap_or(stop.frame);
+    let ident = Ident::of(&d.adapter_of(session).unwrap_or_default());
+    let body = handle
+        .request(
+            "evaluate",
+            serde_json::json!({"expression": expr, "frameId": frame, "context": "watch"}),
+        )
+        .await?;
+    let root = serde_json::json!({
+        "name": expr,
+        "value": body["result"],
+        "type": body["type"],
+        "evaluateName": expr,
+        "variablesReference": body["variablesReference"],
+    });
+    let probe = SessionProbe {
+        handle,
+        epoch: stop.epoch,
+        frame,
+    };
+    Ok(walk(&probe, ident, vec![root], limits).await)
 }

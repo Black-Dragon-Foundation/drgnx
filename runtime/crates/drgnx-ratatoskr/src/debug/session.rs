@@ -1036,6 +1036,17 @@ impl Session {
             let _ = clock::timeout(POLITE, wait).await;
             drop(t);
         }
+        // a JavaScript program that runs on: the heap graph's hidden map goes first (the user's ruling, 2026-11-13)
+        if !terminate_debuggee
+            && !self.client.is_closed()
+            && super::heap::Ident::of(&self.start.adapter_id) == super::heap::Ident::Js
+        {
+            let forget = self.client.request(
+                "evaluate",
+                json!({"expression": super::heap::JS_FORGET, "context": "repl"}),
+            );
+            let _ = clock::timeout(POLITE, forget).await;
+        }
         // disconnect, and 2 s for its answer and the process's exit; then SIGTERM, 1 s, SIGKILL
         let d = (!self.client.is_closed()).then(|| {
             self.client.request(
