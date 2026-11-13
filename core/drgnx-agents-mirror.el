@@ -118,7 +118,7 @@ with no busy status in between."
 (defvar drgnx-agents-mirror--hub-turns (make-hash-table :test #'equal)
   "Hub id → the turn count (the snapshot's `turns') of the last snapshot applied.")
 (defvar drgnx-agents-mirror--hub-entries (make-hash-table :test #'equal)
-  "Hub id → how many entries the transcript had at the last snapshot applied (its `entries_count'): where a fetched
+  "Hub id → how many entries the transcript had at the last snapshot applied (its `entries-count'): where a fetched
 transcript's new turns begin.")
 
 (defun drgnx-agents-mirror--transitions (m new prev &optional turned)
@@ -157,7 +157,7 @@ turn begins and ends, and the one open now begins."
         (drgnx-notify 'agents 'warn (format "%s: %s" (plist-get snap :name) (format "not enforced: %s" (plist-get snap :enforced_why)))
                       :id (intern (concat "lock-" id)) :life 'event)))
     ;; a session whose transcript is shown has its turns told by its entries too; one nobody shows, by the count alone
-    (when-let* ((count (plist-get snap :entries_count))) (puthash id count drgnx-agents-mirror--hub-entries))
+    (when-let* ((count (plist-get snap :entries-count))) (puthash id count drgnx-agents-mirror--hub-entries))
     (let* ((turns (plist-get snap :turns)) (last (gethash id drgnx-agents-mirror--hub-turns)))
       (when turns (puthash id turns drgnx-agents-mirror--hub-turns))
       (drgnx-agents-mirror--transitions

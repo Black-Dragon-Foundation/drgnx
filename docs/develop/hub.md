@@ -1872,7 +1872,7 @@ and name. The session is recorded in `runtime.db` (`asession`, migration 5) and 
   arrives, whichever the mirror sees first: the hub sends a session's state at most every 50 ms, so a short turn can
   go by with no `busy` snapshot. Each turn runs its hooks once (the mirror counts turns per session), a snapshot or
   entries sent again run nothing, and a fetched transcript's turns that had ended when the editor last heard of the
-  session (within the `entries_count` of the last snapshot it applied) run none. A turn that ended after that runs
+  session (within the `entries-count` of the last snapshot it applied) run none. A turn that ended after that runs
   its hooks once, even when it ended before the fetch's answer and its own events were dropped as older than it. The
   work tracker records a task's commits from `turn-end`.
 
