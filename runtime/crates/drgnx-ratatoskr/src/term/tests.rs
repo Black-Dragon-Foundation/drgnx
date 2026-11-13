@@ -179,21 +179,25 @@ async fn orphaned_at_once_detached_after_the_grace() {
     t.hello(9, "s2");
     let s = listed(&t, "aa", Some("s1")).await;
     assert!(s.mine && !s.orphaned && s.detached_at.is_none(), "{s:?}");
-    t.gone_at(3, 1_000);
+    // times on the hub's clock, the one its session watcher ticks on: a made-up one would be long past the grace late
+    // in a run of many tests in one process, and the watcher would detach early
+    let at = mono_ms();
+    t.gone_at(3, at);
     assert!(
         matches!(next(&mut rx).await, In::Detach),
         "no client: the worker stops drawing"
     );
     let s = listed(&t, "aa", Some("s2")).await;
     assert!(s.orphaned && !s.mine, "offered at once: {s:?}");
-    t.tick(1_000 + life::GRACE_MS - 1);
+    t.tick(at + life::GRACE_MS - 1);
     // a reconnect within the grace keeps it
     t.hello(4, "s1");
     assert!(matches!(next(&mut rx).await, In::Attach { .. }));
     assert!(!listed(&t, "aa", Some("s2")).await.orphaned);
-    t.gone_at(4, 100_000);
+    let at = mono_ms();
+    t.gone_at(4, at);
     assert!(matches!(next(&mut rx).await, In::Detach));
-    t.tick(100_000 + life::GRACE_MS);
+    t.tick(at + life::GRACE_MS);
     let s = listed(&t, "aa", Some("s2")).await;
     assert!(s.detached_at.is_some(), "detached: {s:?}");
     assert!(
@@ -224,7 +228,9 @@ async fn an_attached_terminal_is_not_offered() {
         t.attach_to(9, "aa", 80, 24, (8, 16)).is_err(),
         "no stealing from a live Emacs"
     );
-    t.gone_at(3, 1_000);
+    // the hub's clock, as above
+    let at = mono_ms();
+    t.gone_at(3, at);
     assert!(matches!(next(&mut rx).await, In::Detach));
     let rec = t.attach_to(9, "aa", 80, 24, (8, 16)).unwrap();
     assert_eq!(
@@ -245,7 +251,7 @@ async fn an_attached_terminal_is_not_offered() {
     let s = listed(&t, "aa", Some("s2")).await;
     assert!(s.mine && !s.orphaned && s.detached_at.is_none(), "{s:?}");
     // the old session's grace no longer reaches it
-    t.tick(1_000 + life::GRACE_MS);
+    t.tick(at + life::GRACE_MS);
     assert!(listed(&t, "aa", Some("s2")).await.detached_at.is_none());
 }
 
