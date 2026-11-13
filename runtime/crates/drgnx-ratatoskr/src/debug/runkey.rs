@@ -351,6 +351,24 @@ pub mod secret {
     }
 }
 
+/// Whether a Keychain status code (`OSStatus`) says the keychain is locked and would need the user: with user interaction
+/// off, a locked keychain answers errSecInteractionNotAllowed (-25308) on some systems and errSecAuthFailed (-25293,
+/// "The user name or passphrase you entered is not correct") on others, a throwaway keychain on macOS 27's runners among
+/// them; neither is a failure of the key, both mean "locked, and no dialog".  Not macOS-only: the table is tested
+/// everywhere.
+#[cfg_attr(
+    not(target_os = "macos"),
+    allow(
+        dead_code,
+        reason = "macOS's keychain uses it; the tests read it everywhere"
+    )
+)]
+pub(crate) fn locked_status(code: i32) -> bool {
+    const NO_INTERACTION: i32 = -25308;
+    const AUTH_FAILED: i32 = -25293;
+    code == NO_INTERACTION || code == AUTH_FAILED
+}
+
 #[cfg(target_os = "macos")]
 pub mod keychain {
     //! The login Keychain, with user interaction off around each call: a locked keychain, or an item another program
@@ -361,14 +379,13 @@ pub mod keychain {
 
     pub struct Keychain;
 
-    // errSecItemNotFound, errSecInteractionNotAllowed, errSecNoDefaultKeychain
+    // errSecItemNotFound, errSecNoDefaultKeychain
     const NOT_FOUND: i32 = -25300;
-    const NO_INTERACTION: i32 = -25308;
     const NO_KEYCHAIN: i32 = -25307;
 
     fn failed(e: security_framework::base::Error) -> Unavailable {
         match e.code() {
-            NO_INTERACTION => Unavailable::Locked,
+            c if super::locked_status(c) => Unavailable::Locked,
             NO_KEYCHAIN => Unavailable::Missing("there is no login keychain".into()),
             _ => Unavailable::Failed(format!("the keychain: {e}")),
         }

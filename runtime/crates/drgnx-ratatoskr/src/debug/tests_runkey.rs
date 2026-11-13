@@ -216,3 +216,15 @@ async fn a_prompt_handed_back_is_dismissed_never_shown() {
     assert_eq!(asked(&s), Vec::<String>::new());
     assert!(s.lock().unwrap().calls.contains(&"Dismiss".into()));
 }
+
+/// A locked keychain with user interaction off answers errSecInteractionNotAllowed or errSecAuthFailed (macOS 27's
+/// runners: "The user name or passphrase you entered is not correct"): both are Locked; a missing item or default
+/// keychain is not.
+#[test]
+fn a_locked_keychain_status_is_locked_whichever_code_says_so() {
+    assert!(super::runkey::locked_status(-25308));
+    assert!(super::runkey::locked_status(-25293));
+    for other in [0, -25300, -25307, -25299, -67671] {
+        assert!(!super::runkey::locked_status(other), "{other}");
+    }
+}
