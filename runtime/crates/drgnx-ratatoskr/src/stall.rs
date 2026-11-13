@@ -232,13 +232,50 @@ impl Beat {
     }
 }
 
+/// The running watchdog, held by the server's run: dropped (or [`Watchdog::stop`]ped) as the run returns, it ends its
+/// thread before the runtime ends, whose shutdown stops the heartbeat (the thread reported that as a stall that never
+/// ended, the hub's exit).
+pub struct Watchdog {
+    #[cfg_attr(not(test), allow(dead_code))]
+    beat: Arc<Beat>,
+    stopped: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Watchdog {
+    /// The checking thread ends; it has reported its last line when this returns.
+    pub fn stop(self) {}
+}
+
+impl Drop for Watchdog {
+    fn drop(&mut self) {
+        self.stopped.store(true, Ordering::Relaxed);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
 /// Start the heartbeat on the current runtime and the checking thread, with THRESHOLD.  Each stall is logged once,
 /// when it is found, and its end with how long it lasted.
-pub fn start(threshold: Duration) {
+pub fn start(threshold: Duration) -> Watchdog {
+    start_to(threshold, None)
+}
+
+/// [`start`], each line also pushed to SEEN (tests).
+fn start_to(threshold: Duration, seen: Option<Arc<Mutex<Vec<String>>>>) -> Watchdog {
     let beat = Arc::new(Beat {
         start: crate::clock::real_now(),
         last: AtomicU64::new(0),
     });
+    let stopped = Arc::new(AtomicBool::new(false));
+    let (dog_beat, stop) = (beat.clone(), stopped.clone());
+    let tell = move |line: String| {
+        also_to(&line);
+        if let Some(s) = &seen {
+            lock(s).push(line);
+        }
+    };
     let b = beat.clone();
     // a plain tokio task (not named, not on the virtual clock): its lateness is the stall
     tokio::spawn(async move {
@@ -256,6 +293,9 @@ pub fn start(threshold: Duration) {
             let mut stalled: Option<u64> = None;
             loop {
                 std::thread::sleep(TICK);
+                if stop.load(Ordering::Relaxed) {
+                    return;
+                }
                 let now = beat.ms();
                 let late = now.saturating_sub(beat.last.load(Ordering::Relaxed));
                 // a poll held past the threshold is a held worker even while the other one keeps the beat
@@ -270,20 +310,25 @@ pub fn start(threshold: Duration) {
                             .unwrap_or_default();
                         stalled = Some(now);
                         tracing::warn!(late_ms = late, held = line, "the runtime stalled");
-                        also_to(&format!("stalled: late {late} ms; {line}"));
+                        tell(format!("stalled: late {late} ms; {line}"));
                     }
                     (Some(since), None) => {
                         let lasted = now.saturating_sub(since);
                         tracing::warn!(lasted_ms = lasted, "the runtime stall ended");
-                        also_to(&format!("ended after {lasted} ms"));
+                        tell(format!("ended after {lasted} ms"));
                         stalled = None;
                     }
                     _ => {}
                 }
             }
         });
-    if let Err(e) = spawned {
-        tracing::warn!("the stall watchdog did not start: {e}");
+    let thread = spawned
+        .inspect_err(|e| tracing::warn!("the stall watchdog did not start: {e}"))
+        .ok();
+    Watchdog {
+        beat: dog_beat,
+        stopped,
+        thread,
     }
 }
 
