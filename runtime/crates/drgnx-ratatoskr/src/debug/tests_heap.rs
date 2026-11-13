@@ -275,6 +275,45 @@ async fn without_identity_the_walk_is_a_tree_cut_at_its_depth() {
     assert_eq!(g.cut, 1, "a.next.next's next is left: {g:#?}");
 }
 
+/// A reference left at the depth stays on its field with what is behind it: a list's elements as the adapter counts
+/// them, an object as one.
+#[tokio::test]
+async fn a_cut_field_says_how_much_it_left() {
+    let mut f = Fake::default();
+    let roots = vec![var("b", "Box", "Box", "b", 10)];
+    f.children.insert(
+        10,
+        vec![
+            var("v", "1", "int", "b.v", 0),
+            json!({"name": "tags", "value": "list[40]", "type": "list", "evaluateName": "b.tags",
+                   "variablesReference": 20, "indexedVariables": 40}),
+            var("owner", "User", "User", "b.owner", 30),
+        ],
+    );
+    let g = heap::walk(
+        &f,
+        Ident::Paths,
+        roots,
+        Limits {
+            depth: 1,
+            ..Limits::default()
+        },
+    )
+    .await;
+    assert_eq!(g.nodes.len(), 1, "{g:#?}");
+    let cut = |name: &str| {
+        g.nodes[0]
+            .fields
+            .iter()
+            .find(|f| f.name == name)
+            .and_then(|f| f.cut)
+    };
+    assert_eq!(cut("tags"), Some(40), "{g:#?}");
+    assert_eq!(cut("owner"), Some(1), "{g:#?}");
+    assert_eq!(cut("v"), None);
+    assert_eq!(g.cut, 2);
+}
+
 /// js-debug: every object and function gets the hidden map's tag; a primitive gets null and stays a field.
 #[tokio::test]
 async fn javascript_objects_are_named_by_the_hidden_maps_tag() {
@@ -359,11 +398,13 @@ fn the_next_stops_graph_says_what_was_added_changed_and_gone() {
                 name: "v".into(),
                 value: v.into(),
                 to: None,
+                cut: None,
             },
             heap::Field {
                 name: "next".into(),
                 value: "Node".into(),
                 to: to.map(str::to_owned),
+                cut: None,
             },
         ],
     };

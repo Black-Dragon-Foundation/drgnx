@@ -13,6 +13,7 @@ fn n(id: &str, ty: &str, fields: &[(&str, &str, Option<&str>)]) -> Node {
                 name: (*name).into(),
                 value: (*value).into(),
                 to: to.map(str::to_owned),
+                cut: None,
             })
             .collect(),
     }
@@ -146,6 +147,7 @@ fn cards_keep_their_cells_across_stops_and_new_ones_take_free_cells() {
         name: "extra".into(),
         value: "Node".into(),
         to: Some("D".into()),
+        cut: None,
     });
     g.nodes.push(n("D", "Node", &[("v", "4", None)]));
     let next = heap_layout::layout(&g, Some(&first));
@@ -192,4 +194,94 @@ fn a_wide_fan_out_keeps_crossings_down() {
         assert!(row(&names[i]) < row(&names[i + 1]), "x in field order");
         assert!(row(&ys[5 - i]) < row(&ys[4 - i]), "y follows x: {l:#?}");
     }
+}
+
+/// A cut field's edge ends at a stub ("+40 not shown") right of its card, marked cut (drawn dashed).
+#[test]
+fn a_cut_field_ends_at_a_stub() {
+    let mut a = n("A", "Box", &[("v", "1", None), ("tags", "list[40]", None)]);
+    a.fields[1].cut = Some(40);
+    let g = Graph {
+        roots: vec![("b".into(), Some("A".into()))],
+        nodes: vec![a],
+        cut: 1,
+    };
+    let l = heap_layout::layout(&g, None);
+    let card = l.card("A").unwrap().clone();
+    assert_eq!(l.cuts.len(), 1, "{l:#?}");
+    let s = &l.cuts[0];
+    assert_eq!((s.from.as_str(), s.field, s.count), ("A", 1, 40));
+    assert!(s.col > card.col + card.width, "right of its card: {l:#?}");
+    assert_eq!(s.width as usize, "+40 not shown".len() + 2);
+    let e = l
+        .edges
+        .iter()
+        .find(|e| e.cut)
+        .unwrap_or_else(|| panic!("no cut edge: {l:#?}"));
+    assert_eq!((e.from.as_str(), e.field, e.to.as_str()), ("A", 1, ""));
+    assert_eq!(
+        e.points.first(),
+        Some(&(card.col + card.width, card.row + 2))
+    );
+    assert_eq!(e.points.last(), Some(&(s.col, s.row)));
+    assert!(l.width >= s.col + s.width, "{l:#?}");
+    assert!(l.height > s.row, "{l:#?}");
+}
+
+/// Stubs never sit on a card or on each other.
+#[test]
+fn stubs_take_free_cells() {
+    let mut a = n(
+        "A",
+        "Box",
+        &[
+            ("x", "X", Some("B")),
+            ("y", "list", None),
+            ("z", "list", None),
+        ],
+    );
+    a.fields[1].cut = Some(3);
+    a.fields[2].cut = Some(7);
+    let g = Graph {
+        roots: vec![("a".into(), Some("A".into()))],
+        nodes: vec![a, n("B", "X", &[("v", "1", None)])],
+        cut: 2,
+    };
+    let l = heap_layout::layout(&g, None);
+    assert_eq!(l.cuts.len(), 2, "{l:#?}");
+    let boxes: Vec<(u32, u32, u32, u32)> = l
+        .cards
+        .iter()
+        .map(|c| (c.col, c.row, c.width, c.height))
+        .chain(l.cuts.iter().map(|s| (s.col, s.row, s.width, 1)))
+        .collect();
+    for (i, a) in boxes.iter().enumerate() {
+        for b in &boxes[i + 1..] {
+            let apart = a.0 + a.2 < b.0 || b.0 + b.2 < a.0 || a.1 + a.3 < b.1 || b.1 + b.3 < a.1;
+            assert!(apart, "{a:?} and {b:?} touch: {l:#?}");
+        }
+    }
+}
+
+/// `debug/heap`'s answer and the `debug-heap` push carry the stubs and the cut edges.
+#[test]
+fn the_answer_carries_the_stubs() {
+    let mut a = n("A", "Box", &[("v", "1", None), ("tags", "list[40]", None)]);
+    a.fields[1].cut = Some(40);
+    let g = Graph {
+        roots: vec![("b".into(), Some("A".into()))],
+        nodes: vec![a],
+        cut: 1,
+    };
+    let l = heap_layout::layout(&g, None);
+    let w = super::heap_wire::wire("h1", "d1", "b", &g, &l, super::heap::diff(&[], &g.nodes));
+    let v = serde_json::to_value(&w).unwrap();
+    assert_eq!(v["nodes"][0]["fields"][1]["cut"], 40);
+    assert_eq!(v["cuts"][0]["count"], 40);
+    assert_eq!(v["cuts"][0]["from"], "A");
+    let e = &v["edges"][0];
+    assert_eq!(
+        (e["cut"].clone(), e["to"].clone()),
+        (serde_json::json!(true), serde_json::json!(""))
+    );
 }

@@ -59,6 +59,10 @@ pub struct Field {
     pub value: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub to: Option<String>,
+    /// A reference left at the limit, the depth or the time: the objects behind it not shown (the elements a list or
+    /// map says it holds, else one).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cut: Option<u32>,
 }
 
 /// An object.
@@ -204,6 +208,9 @@ pub async fn walk(probe: &dyn Probe, ident: Ident, roots: Vec<Value>, limits: Li
         if t0.elapsed() >= limits.within {
             // the time is up: this reference and every one still waiting are left
             g.cut += 1 + u32::try_from(todo.len()).unwrap_or(u32::MAX);
+            for (v, _, slot) in std::iter::once((v, depth, slot)).chain(todo.drain(..)) {
+                left(&mut g, slot, &v);
+            }
             break;
         }
         let id = identity(probe, ident, &v).await;
@@ -211,6 +218,7 @@ pub async fn walk(probe: &dyn Probe, ident: Ident, roots: Vec<Value>, limits: Li
             Some(&n) => Some(n),
             None if g.nodes.len() >= limits.nodes || depth >= limits.depth => {
                 g.cut += 1;
+                left(&mut g, slot, &v);
                 None
             }
             None => {
@@ -222,6 +230,7 @@ pub async fn walk(probe: &dyn Probe, ident: Ident, roots: Vec<Value>, limits: Li
                         name: text(&k, "name").to_owned(),
                         value: text(&k, "value").to_owned(),
                         to: None,
+                        cut: None,
                     });
                     if reference(&k) > 0 {
                         todo.push_back((k, depth + 1, Slot::Field(n, f)));
@@ -249,6 +258,16 @@ pub async fn walk(probe: &dyn Probe, ident: Ident, roots: Vec<Value>, limits: Li
         }
     }
     g
+}
+
+/// V's reference, at SLOT, left by the walk: a field's stub counts what is behind it (a list's or map's elements as
+/// the adapter counts them, else the one object).
+fn left(g: &mut Graph, slot: Slot, v: &Value) {
+    if let Slot::Field(o, f) = slot {
+        let n = |k: &str| v.get(k).and_then(Value::as_u64).unwrap_or(0);
+        let count = u32::try_from(n("indexedVariables") + n("namedVariables")).unwrap_or(u32::MAX);
+        g.nodes[o].fields[f].cut = Some(count.max(1));
+    }
 }
 
 /// A stopped session as the walk's [`Probe`]: stop EPOCH, its frame FRAME.

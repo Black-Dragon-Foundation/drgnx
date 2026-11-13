@@ -1159,7 +1159,9 @@ The design is `docs/specs/drgnx/2026-11-13-heap-graph-design.md` in the org fold
 
 - **The walk** (`heap::walk`) goes breadth first from the roots. It expands each object once through the session's
   `variables` (`heap::SessionProbe`), and a reference to an object already seen is an edge to it. It stops at
-  `Limits::nodes` objects, at `Limits::depth` levels or at `Limits::within`, and counts the references left in `cut`.
+  `Limits::nodes` objects, at `Limits::depth` levels or at `Limits::within`, and counts the references left in `cut`;
+  each left field keeps its own `cut`: the elements a list or map reports (`indexedVariables` + `namedVariables`),
+  else 1.
   Skipped as fields: debugpy's groups (`special variables` …) and js-debug's internals (`[[Prototype]]` …). A delve
   pointer's one dereferenced child (evaluateName `(*E)`, name empty) is the object itself.
 - **Identity** (`heap::Ident`, by the adapter type) comes from an expression evaluated in the stopped frame,
@@ -1176,7 +1178,9 @@ The design is `docs/specs/drgnx/2026-11-13-heap-graph-design.md` in the org fold
   - the layers go left to right by distance from the roots, each ordered by its sources (barycentre, two sweeps);
   - an edge is straight runs from its field's row into the target card's top row. An edge back, or within a layer,
     climbs into its own lane above the cards;
-  - given the last read's layout, the cards still there keep their cells.
+  - given the last read's layout, the cards still there keep their cells;
+  - a left field ends at a stub, "+N not shown" (`Stub`, one row right of its card, moved down to free cells), by
+    an edge marked `cut` with no target, which the editor draws dashed.
   The editor turns cells into buffer positions plus pixel offsets for Glitnir's edge primitive
   (`docs/specs/nidhogg/2026-11-13-glitnir-edges-case.md` in the org folder).
 - **Open graphs** (`heap_wire::Heaps`, on `Debug`) are kept by id with the editor connection that opened them and
@@ -1191,7 +1195,8 @@ The design is `docs/specs/drgnx/2026-11-13-heap-graph-design.md` in the org fold
 
 Methods (runstav `methods::debug_heap`, the user class):
 - `debug/heap {session?, frame?, expr?, graph?, limit?, depth?}` returns `{graph, session, expr, node?, nodes, cut,
-  cards, edges, width, height, added, changed, gone}`. It takes either SESSION and EXPR (a variable's `evaluateName`)
+  cards, edges, cuts, width, height, added, changed, gone}`: a field's `cut`, an edge's `cut: true` (its `to` empty),
+  each stub `{from, field, count, col, row, width}`. It takes either SESSION and EXPR (a variable's `evaluateName`)
   or GRAPH. LIMIT is 1–200 (default 50), DEPTH 1–32 (default 8).
 - `debug/heap/close {graph}` returns `{closed}`.
 - Event `debug-heap`: an open graph read again at a new stop, sent to the editor that opened it.

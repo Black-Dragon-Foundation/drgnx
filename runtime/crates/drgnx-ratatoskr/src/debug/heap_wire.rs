@@ -9,7 +9,7 @@ use crate::dispatch::Caller;
 use crate::front::Front;
 use runstav::methods::Params;
 use runstav::methods::debug_heap::{
-    DebugHeap, DebugHeapClosed, DebugHeapGraph, HeapCard, HeapEdge, HeapField, HeapNode,
+    DebugHeap, DebugHeapClosed, DebugHeapGraph, HeapCard, HeapCut, HeapEdge, HeapField, HeapNode,
 };
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
@@ -45,7 +45,8 @@ fn limits(p: &DebugHeap, base: Limits) -> Limits {
     }
 }
 
-fn wire(
+/// G laid out as L, against the last read by D: `debug/heap`'s answer and the `debug-heap` push.
+pub(super) fn wire(
     id: &str,
     session: &str,
     expr: &str,
@@ -72,6 +73,7 @@ fn wire(
                         name: f.name.clone(),
                         value: f.value.clone(),
                         to: f.to.clone(),
+                        cut: f.cut,
                     })
                     .collect(),
             })
@@ -96,6 +98,19 @@ fn wire(
                 field: e.field,
                 to: e.to.clone(),
                 points: e.points.iter().map(|&(c, r)| [c, r]).collect(),
+                cut: e.cut,
+            })
+            .collect(),
+        cuts: l
+            .cuts
+            .iter()
+            .map(|c| HeapCut {
+                from: c.from.clone(),
+                field: c.field,
+                count: c.count,
+                col: c.col,
+                row: c.row,
+                width: c.width,
             })
             .collect(),
         width: l.width,
