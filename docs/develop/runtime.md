@@ -1356,7 +1356,7 @@ the grammar's top-level spans to them.
 `hrafn::structural` matches a code pattern with metavariables (ast-grep's syntax) in a file's syntax tree, for the
 Search view's Pattern toggle. The engine is `ast-grep-core` (pinned exactly, its one feature `tree-sitter`), fed
 Hrafn's own grammars through its `Language` trait: `Grammar::of(Lang)` gives each grammar and the character a
-metavariable's `$` becomes before the pattern is parsed (`µ` where `$` cannot start a name: Rust, C, shell, Python,
+metavariable's `$` becomes before the pattern is parsed (`µ` where `$` cannot start a name: Rust, C, C++, shell, Python,
 Go). The engine stays behind the module, so a bump or a swap touches nothing else.
 
 - `Pattern::new(lang, pattern, rewrite)` parses the pattern once per language. An error node inside the pattern's own

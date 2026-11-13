@@ -804,6 +804,9 @@ mod pack_tests {
             ("a.go", Lang::Go),
             ("a.c", Lang::C),
             ("a.h", Lang::C),
+            ("a.cc", Lang::Cpp),
+            ("a.cpp", Lang::Cpp),
+            ("a.hpp", Lang::Cpp),
             ("a.rs", Lang::Rust),
             ("a.java", Lang::Java),
         ] {
@@ -822,6 +825,7 @@ mod pack_tests {
             ["let {t} = $V;", "let mut {t} = $V;", "let {t}: $TY = $V;"]
         );
         assert_eq!(decls_of(Lang::C), ["$TY {t} = $V;"]);
+        assert_eq!(decls_of(Lang::Cpp), ["$TY {t} = $V;"]);
         assert_eq!(decls_of(Lang::Java), ["$TY {t} = $V;"]);
         assert_eq!(
             decls_of(Lang::TypeScript),

@@ -57,7 +57,7 @@ const LISP_SKIP: &[&str] = &[
 ];
 
 /// KIND's pack's `queries/tags.scm`, compiled into the hub.
-fn source(kind: Kind) -> &'static str {
+pub(super) fn tags_source(kind: Kind) -> &'static str {
     macro_rules! tags {
         ($p:literal) => {
             include_str!(concat!("../../../../../packs/", $p, "/queries/tags.scm"))
@@ -66,6 +66,7 @@ fn source(kind: Kind) -> &'static str {
     match kind {
         Kind::Rust => tags!("rust"),
         Kind::C => tags!("c"),
+        Kind::Cpp => tags!("cpp"),
         Kind::Shell => tags!("shell"),
         Kind::Python => tags!("python"),
         Kind::JavaScript => tags!("javascript"),
@@ -79,7 +80,7 @@ fn source(kind: Kind) -> &'static str {
 /// KIND's reference query on its pack's grammar, compiled on first use; none while the grammar is not built or when
 /// the query does not compile against it (a test pins that each one does). Only a built one is kept.
 fn compile(kind: Kind) -> Option<Query> {
-    let mut q = Query::new(&super::registry::language(kind)?, source(kind)).ok()?;
+    let mut q = Query::new(&super::registry::language(kind)?, tags_source(kind)).ok()?;
     // the tags queries also match definitions (some with doc predicates): only references run
     let refs: Vec<usize> = q
         .capture_names()

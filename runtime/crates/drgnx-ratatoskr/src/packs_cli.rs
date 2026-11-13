@@ -452,9 +452,10 @@ fn sync(plan_path: &Path, out: Option<&Path>) -> i32 {
 }
 
 /// The packs whose grammars the hub parses with.
-const HUB_PACKS: [&str; 9] = [
+const HUB_PACKS: [&str; 10] = [
     "rust",
     "c",
+    "cpp",
     "shell",
     "python",
     "javascript",
@@ -464,7 +465,7 @@ const HUB_PACKS: [&str; 9] = [
     "java",
 ];
 
-/// `packs sync --builtin OUT [PACK…]`: builds the owned grammars of the built-in packs PACKS (the hub's nine when none
+/// `packs sync --builtin OUT [PACK…]`: builds the owned grammars of the built-in packs PACKS (the hub's ten when none
 /// is named) with the pack job, lays them out as `OUT/grammars/NAME/COMMIT/` and writes `OUT/drgnx.lock.eld`, a lock
 /// whose `:grammars` are what the hub's registry reads (`skald::registry`). The tests of every crate that parses
 /// code run against this; its key is the packs' pins (`test/packs/hub-grammars.sh`).

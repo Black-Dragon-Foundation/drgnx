@@ -11,6 +11,7 @@ use tree_sitter::Node;
 pub(super) enum Kind {
     Rust,
     C,
+    Cpp,
     Shell,
     Python,
     JavaScript,
@@ -21,9 +22,10 @@ pub(super) enum Kind {
 }
 
 impl Kind {
-    pub(super) const ALL: [Kind; 9] = [
+    pub(super) const ALL: [Kind; 10] = [
         Kind::Rust,
         Kind::C,
+        Kind::Cpp,
         Kind::Shell,
         Kind::Python,
         Kind::JavaScript,
@@ -75,7 +77,14 @@ pub(super) fn doc_before(text: &str, start: usize, marker: &str) -> Option<(Stri
         if !line.starts_with(marker) || line.starts_with("#!") {
             break;
         }
-        lines.push(line.trim_start_matches(marker).trim());
+        let body = line.trim_start_matches(marker);
+        // `///` and `//!` are doc comments of the `//` languages (C, C++, Go, Java, JavaScript, Rust's own marker is `///`)
+        let body = if marker == "//" {
+            body.strip_prefix(['/', '!']).unwrap_or(body)
+        } else {
+            body
+        };
+        lines.push(body.trim());
         if ls == 0 {
             break;
         }
@@ -87,17 +96,21 @@ pub(super) fn doc_before(text: &str, start: usize, marker: &str) -> Option<(Stri
     Some((first, full))
 }
 
-/// The name a C declarator ends in.
-pub(super) fn c_declarator_name<'a>(n: Node, text: &'a str) -> Option<&'a str> {
-    let mut n = n.child_by_field_name("declarator")?;
+/// The name a C or C++ declarator ends in: an identifier, a destructor's `~Name`, an `operator+`, the last part of a
+/// `Class::member`. A reference declarator (`T& f()`) has no `declarator` field: its first named child is the next.
+pub(super) fn c_declarator_name<'a>(n: Node<'a>, text: &'a str) -> Option<&'a str> {
+    let next = |n: Node<'a>| {
+        n.child_by_field_name("declarator")
+            .or_else(|| n.named_child(0))
+    };
+    let mut n = next(n)?;
     loop {
-        if matches!(
-            n.kind(),
-            "identifier" | "field_identifier" | "type_identifier"
-        ) {
-            return Some(text_of(n, text));
+        match n.kind() {
+            "identifier" | "field_identifier" | "type_identifier" | "destructor_name"
+            | "operator_name" => return Some(text_of(n, text)),
+            "qualified_identifier" | "template_function" => n = n.child_by_field_name("name")?,
+            _ => n = next(n)?,
         }
-        n = n.child_by_field_name("declarator")?;
     }
 }
 

@@ -29,6 +29,7 @@ pub enum Lang {
     Elisp,
     Rust,
     C,
+    Cpp,
     Shell,
     Python,
     JavaScript,
@@ -57,6 +58,7 @@ impl Lang {
             Lang::Elisp => "elisp",
             Lang::Rust => "rust",
             Lang::C => "c",
+            Lang::Cpp => "cpp",
             Lang::Shell => "shell",
             Lang::Python => "python",
             Lang::JavaScript => "javascript",
@@ -72,10 +74,11 @@ impl Lang {
 
     /// The language a stored name (`as_str`) names; anything else is text.
     pub fn parse(name: &str) -> Lang {
-        const ALL: [Lang; 13] = [
+        const ALL: [Lang; 14] = [
             Lang::Elisp,
             Lang::Rust,
             Lang::C,
+            Lang::Cpp,
             Lang::Shell,
             Lang::Python,
             Lang::JavaScript,
@@ -593,6 +596,7 @@ fn lang_of(path: &str, head: &[u8]) -> Lang {
         Some("el") => Lang::Elisp,
         Some("rs") => Lang::Rust,
         Some("c" | "h") => Lang::C,
+        Some("cc" | "cpp" | "cxx" | "hpp" | "hh" | "h++") => Lang::Cpp,
         Some("sh" | "bash" | "zsh") => Lang::Shell,
         Some("py" | "pyi") => Lang::Python,
         Some("js" | "mjs" | "cjs" | "jsx") => Lang::JavaScript,

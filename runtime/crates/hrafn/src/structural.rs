@@ -36,6 +36,7 @@ impl Grammar {
             }
             Lang::Rust => ("rust", 'µ'),
             Lang::C => ("c", 'µ'),
+            Lang::Cpp => ("cpp", 'µ'),
             Lang::Shell => ("bash", 'µ'),
             Lang::Python => ("python", 'µ'),
             Lang::JavaScript => ("javascript", '$'),
@@ -131,6 +132,7 @@ pub fn lang_name(lang: Lang) -> &'static str {
         Lang::Elisp => "Emacs Lisp",
         Lang::Rust => "Rust",
         Lang::C => "C",
+        Lang::Cpp => "C++",
         Lang::Shell => "shell",
         Lang::Python => "Python",
         Lang::JavaScript => "JavaScript",
