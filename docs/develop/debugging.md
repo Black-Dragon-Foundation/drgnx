@@ -495,8 +495,9 @@ At each stop the hub sends `debug-inline` (`{session, epoch, path, lines: [{line
 `drgnx-debug-gutter-inline` draws them: one overlay per line at its end (`after-string` two spaces, then the text in
 `drgnx-debug-inline-value`, the changed ranges in `drgnx-debug-inline-value-changed`, the cursor kept before them),
 priority 90 so diagnostics (100) come after them. They are the session's stop marks with the role `inline`: a new
-stop's frame leaves them, its `debug-inline` updates the lines that keep values in the same overlays, adds the new and
-deletes the rest; they go 150 ms after the session runs and at once when it ends. A buffer modified since its save gets
+stop's frame leaves them, its `debug-inline` updates the lines that keep values in the same overlays (a line whose
+string is the same keeps it, so redisplay draws nothing of it again), adds the new and deletes the rest, walking the
+lines in order from one to the next; they go 150 ms after the session runs and at once when it ends. A buffer modified since its save gets
 none (the program runs the saved file) and the echo area says so. The overlays carry `drgnx-blame-yield`: the blame
 overlay on such a line goes, and `drgnx-blame--show` shows none on a line that has one. `drgnx-debug-inline-values`
 (`on`/`off`) turns them off at once.

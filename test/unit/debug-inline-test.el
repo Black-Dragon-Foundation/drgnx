@@ -102,6 +102,18 @@ adds new lines and takes away the others."
       (debug-inline-test--send 3)
       (should-not (debug-inline-test--overlays buf)))))
 
+(ert-deftest drgnx-debug-inline/a-line-whose-values-are-the-same-is-left-alone ()
+  "A step that leaves a line's values as they were keeps its string itself, so redisplay has nothing of it to draw again;
+a line in any order of the event, and one whose changed marks differ, is still replaced."
+  (debug-inline-test--with
+    (debug-inline-test--send 1 '(6 "c = 1" nil) '(2 "a = 1" nil) '(4 "b = 2" nil))
+    (let ((s2 (overlay-get (debug-inline-test--at buf 2) 'after-string))
+          (s4 (overlay-get (debug-inline-test--at buf 4) 'after-string)))
+      (debug-inline-test--send 2 '(4 "b = 2" ((0 5))) '(2 "a = 1" nil) '(6 "c = 2" nil))
+      (should (eq (overlay-get (debug-inline-test--at buf 2) 'after-string) s2))
+      (should-not (eq (overlay-get (debug-inline-test--at buf 4) 'after-string) s4))
+      (should (equal (debug-inline-test--shown buf) '((2 . "a = 1") (4 . "b = 2") (6 . "c = 2")))))))
+
 (ert-deftest drgnx-debug-inline/gone-150-ms-after-running-and-at-the-end ()
   (debug-inline-test--with
     (debug-inline-test--send 1 '(4 "b = 2" nil))

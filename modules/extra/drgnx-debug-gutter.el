@@ -1006,8 +1006,8 @@ after the line when given."
 
 (defun drgnx-debug-gutter--inline-string (text changed)
   "TEXT after a line: in the value face, the CHANGED ranges ([START END] each) in the changed face."
-  (let ((s (concat "  " (copy-sequence text))))
-    (add-face-text-property 0 (length s) 'drgnx-debug-inline-value t s)
+  (let ((s (concat "  " text)))           ; a new string; the hub's TEXT has no properties of its own
+    (put-text-property 0 (length s) 'face 'drgnx-debug-inline-value s)
     (seq-doseq (r changed)
       (let ((b (+ 2 (elt r 0))) (e (+ 2 (elt r 1))))
         (when (<= b e (length s))
@@ -1030,19 +1030,25 @@ buffer, replacing the session's last ones in place."
      (t
       (with-current-buffer buf
         (save-excursion
-          (let ((keep nil))
-            (dolist (l lines)
-              (goto-char (point-min))
-              (when (zerop (forward-line (1- (plist-get l :line))))
+          (let ((keep nil)
+                ;; the old values by their place, and the lines in order, so each is reached from the one before
+                (at (mapcar (lambda (o) (cons (overlay-start o) o)) (seq-filter (lambda (o) (eq (overlay-buffer o) buf)) old)))
+                (line 1))
+            (goto-char (point-min))
+            (dolist (l (sort lines (lambda (a b) (< (plist-get a :line) (plist-get b :line)))))
+              (when (zerop (forward-line (- (plist-get l :line) line)))
+                (setq line (plist-get l :line))
                 (let* ((eol (line-end-position))
-                       (o (or (seq-find (lambda (o) (and (eq (overlay-buffer o) buf) (= (overlay-start o) eol))) old)
+                       (o (or (cdr (assq eol at))
                               (let ((n (make-overlay eol eol nil t nil)))
                                 (overlay-put n 'drgnx-debug-stop 'inline)
                                 (overlay-put n 'drgnx-blame-yield t)
                                 (overlay-put n 'priority drgnx-debug-gutter--inline-priority)
-                                n))))
-                  (overlay-put o 'after-string
-                               (drgnx-debug-gutter--inline-string (plist-get l :text) (plist-get l :changed)))
+                                n)))
+                       (s (drgnx-debug-gutter--inline-string (plist-get l :text) (plist-get l :changed))))
+                  ;; the same values as before: the string stays, and redisplay has nothing of this line to draw again
+                  (unless (equal-including-properties s (overlay-get o 'after-string))
+                    (overlay-put o 'after-string s))
                   (push o keep)
                   ;; blame on this line yields (`drgnx-blame--show' checks `drgnx-blame-yield' before it shows again)
                   (when (and (bound-and-true-p drgnx-blame--overlay) (overlay-buffer drgnx-blame--overlay)
