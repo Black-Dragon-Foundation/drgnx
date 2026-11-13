@@ -324,9 +324,16 @@ from 201."
   (drgnx-look-scene--answer :panel (if (buffer-live-p drgnx-look-scene--panel) (buffer-name drgnx-look-scene--panel) :null)))
 
 (defun drgnx-look-scene--editor ()
+  "The editor on the gateway file, with the Explorer's Files section drawn: its rows come from the hub, so the scenes'
+hub is started first and the shot waits for them (a session starts no hub: without one the section is empty)."
+  (drgnx-look-scene--try "hub" (drgnx-look-scene--hub))
   (drgnx-look-scene--try "editor"
     (drgnx-wb-focus-editor)
-    (drgnx-look-scene--goto "core/drgnx-gateway.el" 216 33 201)))
+    (drgnx-look-scene--goto "core/drgnx-gateway.el" 216 33 201))
+  (drgnx-look-scene--until 20 "explorer files rows"
+                           (lambda () (when-let* ((b (get-buffer drgnx-explorer-buffer-name)))
+                                        (with-current-buffer b
+                                          (save-excursion (goto-char (point-min)) (search-forward "Makefile" nil t)))))))
 
 (defun drgnx-look-scene-window-dark ()
   (drgnx-look-scene--theme 'drgnx-dark)
