@@ -41,6 +41,12 @@ pub enum PacksCommand {
         plan: PathBuf,
         out: Option<PathBuf>,
     },
+    /// `sync --builtin OUT [PACK…]`: the grammars of the built-in packs (default: those the hub parses with), built
+    /// by the same job into OUT/grammars with their lock in OUT/drgnx.lock.eld.
+    SyncBuiltin {
+        out: PathBuf,
+        packs: Vec<String>,
+    },
     Translate {
         dir: PathBuf,
         out: PathBuf,
@@ -71,15 +77,21 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<PacksCommand, S
     match p.next().map_err(e)? {
         Some(Word(v)) if v == "check" => {}
         Some(Word(v)) if v == "sync" => {
-            let (mut plan, mut out) = (None, None);
+            let (mut plan, mut out, mut builtin, mut packs) = (None, None, None, Vec::new());
             while let Some(arg) = p.next().map_err(e)? {
                 match arg {
                     Long("plan") => plan = Some(PathBuf::from(p.value().map_err(e)?)),
                     Long("out") => out = Some(PathBuf::from(p.value().map_err(e)?)),
+                    Long("builtin") => builtin = Some(PathBuf::from(p.value().map_err(e)?)),
+                    Word(v) if builtin.is_some() => packs.push(v.to_string_lossy().into_owned()),
                     other => return Err(other.unexpected().to_string()),
                 }
             }
-            let plan = plan.ok_or("usage: packs sync --plan FILE [--out FILE]")?;
+            if let Some(out) = builtin {
+                return Ok(PacksCommand::SyncBuiltin { out, packs });
+            }
+            let plan =
+                plan.ok_or("usage: packs sync --plan FILE [--out FILE] | --builtin OUT [PACK…]")?;
             return Ok(PacksCommand::Sync { plan, out });
         }
         Some(Word(v)) if v == "translate" => {
@@ -160,6 +172,7 @@ pub fn run(cmd: PacksCommand) -> i32 {
             others,
         } => (dir, builtin, others),
         PacksCommand::Sync { plan, out } => return sync(&plan, out.as_deref()),
+        PacksCommand::SyncBuiltin { out, packs } => return sync_builtin(&out, &packs),
         PacksCommand::Translate { dir, out } => return translate(&dir, &out),
         PacksCommand::Pin { repo, commit, src } => {
             return match skald::job::pin(&repo, &commit, &src) {
@@ -436,6 +449,88 @@ fn sync(plan_path: &Path, out: Option<&Path>) -> i32 {
         None => print!("{text}"),
     }
     code
+}
+
+/// The packs whose grammars the hub parses with.
+const HUB_PACKS: [&str; 9] = [
+    "rust",
+    "c",
+    "shell",
+    "python",
+    "javascript",
+    "typescript",
+    "tsx",
+    "go",
+    "java",
+];
+
+/// `packs sync --builtin OUT [PACK…]`: builds the owned grammars of the built-in packs PACKS (the hub's nine when none
+/// is named) with the pack job, lays them out as `OUT/grammars/NAME/COMMIT/` and writes `OUT/drgnx.lock.eld`, a lock
+/// whose `:grammars` are what the hub's registry reads (`skald::registry`). The tests of every crate that parses
+/// code run against this; its key is the packs' pins (`test/packs/hub-grammars.sh`).
+fn sync_builtin(out: &Path, packs: &[String]) -> i32 {
+    let run = || -> Result<(), String> {
+        let names: Vec<String> = if packs.is_empty() {
+            HUB_PACKS.iter().map(|s| (*s).to_owned()).collect()
+        } else {
+            packs.to_vec()
+        };
+        let mut units: Vec<skald::job::Unit> = Vec::new();
+        for n in &names {
+            let m = skald::builtin::get(n).ok_or(format!("{n} is not a built-in pack"))?;
+            for g in &m.grammars {
+                let (Some(repo), Some(commit), Some(tree)) = (&g.repo, &g.commit, &g.tree_sha256)
+                else {
+                    continue;
+                };
+                if units.iter().any(|u| u.name == g.name) {
+                    continue;
+                }
+                units.push(skald::job::Unit {
+                    name: g.name.clone(),
+                    repo: repo.clone(),
+                    commit: commit.clone(),
+                    tree_sha256: tree.clone(),
+                    src: g.src.clone().unwrap_or_else(|| "src".into()),
+                });
+            }
+        }
+        let staging = out.join("staging");
+        let mut opts = skald::job::Options::new(staging.clone(), 14);
+        opts.checker = Some(std::env::current_exe().map_err(|e| e.to_string())?);
+        let staged = skald::job::run(&units, &[], &opts).map_err(|e| e.to_string())?;
+        let mut rows = Vec::new();
+        for s in &staged {
+            let dir = out.join("grammars").join(&s.name).join(&s.commit);
+            std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            let name = s.lib.file_name().ok_or("a library with no name")?;
+            std::fs::copy(&s.lib, dir.join(name))
+                .map_err(|e| format!("{}: {e}", s.lib.display()))?;
+            rows.push(format!(
+                "({} :commit {} :lib-sha256 {})",
+                s.name,
+                lisp_string(&s.commit),
+                lisp_string(&s.lib_sha256)
+            ));
+        }
+        std::fs::write(
+            out.join("drgnx.lock.eld"),
+            format!(
+                "(:version 1 :packages nil :grammars ({}))\n",
+                rows.join("\n  ")
+            ),
+        )
+        .map_err(|e| e.to_string())?;
+        std::fs::remove_dir_all(&staging).ok();
+        Ok(())
+    };
+    match run() {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("packs sync --builtin: {e}");
+            1
+        }
+    }
 }
 
 #[cfg(test)]

@@ -123,7 +123,7 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n '__fish_seen_subcommand_from plugins' -a 'install list remove'
     complete -c drgnx -n '__fish_seen_subcommand_from plugins' -l replace -d 'Replace an installed plugin'
     complete -c drgnx -n '__fish_seen_subcommand_from plugins' -l json -d 'The list as JSON'
-    complete -c drgnx -n '__fish_seen_subcommand_from packs' -f -a 'list sync migrate check pin'
+    complete -c drgnx -n '__fish_seen_subcommand_from packs' -f -a 'list install remove sync migrate check pin'
     complete -c drgnx -n '__fish_seen_subcommand_from packs' -l add -x -d 'Install these packs'
     complete -c drgnx -n '__fish_seen_subcommand_from packs' -l remove -x -d 'Remove these packs'
     complete -c drgnx -n '__fish_seen_subcommand_from packs' -l builtin -d 'Check a built-in pack'

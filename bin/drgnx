@@ -2313,7 +2313,7 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
                                the machines that run jobs: list, add, check, bench, trust, unbench, remove (docs/guide/runners.md)
        drgnx plugins install PATH [--replace] | list [--json] | remove NAME
                                the plugins drgnx runs (installing never approves one) (docs/guide/plugins.md)
-       drgnx packs list | sync [--add NAME…] [--remove NAME…] | migrate | check DIR | pin REPO COMMIT
+       drgnx packs list | install NAME… | remove NAME… | sync [--add NAME…] [--remove NAME…] | migrate | check DIR | pin REPO COMMIT
                                language packs: what is installed, their grammars (built and checked), the pre-pack build
                                migrated; check and pin are for pack authors
        drgnx browser install [--version V] [--json] | list [--json]
@@ -2376,10 +2376,10 @@ case "${1:-help}" in
             if [[ "$rtsk" != /* || ! -f "$rtsk" || ! -x "$rtsk" ]]; then rtsk="$(drgnx_dir data)/bin/ratatoskr"; fi
             if [[ ! -f "$rtsk" || ! -x "$rtsk" ]]; then echo "drgnx: Ratatoskr is not built: run \`drgnx runtime build'" >&2; exit 1; fi
             exec "$rtsk" packs "$@" ;;
-          list|sync|migrate)
+          list|install|remove|sync|migrate)
             "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
                   -l drgnx-pkg -f drgnx-pkg-cli -- packs "$@" ;;
-          *) echo "usage: drgnx packs list | sync [--add NAME…] [--remove NAME…] | migrate | check DIR [--builtin] | pin REPO COMMIT [--src DIR]" >&2; exit 2 ;;
+          *) echo "usage: drgnx packs list | install NAME… | remove NAME… | sync [--add NAME…] [--remove NAME…] | migrate | check DIR [--builtin] | pin REPO COMMIT [--src DIR]" >&2; exit 2 ;;
         esac ;;
   extensions) shift
         "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \

@@ -1,11 +1,11 @@
 //! The chunker's rules of each tree-sitter language, from its pack (language packs Task 5): the manifest's docs rules
-//! and `queries/chunks.scm`, compiled into the hub and built once. The grammars are still the crates' (Task 6a moves
-//! them to the packs' own builds).
+//! and `queries/chunks.scm`, compiled into the hub and built once. The grammars come from the pack registry
+//! (`skald::registry`): the libraries the pack job built, never a crate linked into the hub.
 
 use super::engine::{DocKind, Spec};
 use super::ts::Kind;
 use skald::manifest::DocMember;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock, PoisonError};
 
 /// (pack.eld, queries/chunks.scm) of each kind's pack.
 fn source(kind: Kind) -> (&'static str, &'static str) {
@@ -44,8 +44,9 @@ fn build(kind: Kind) -> Result<Spec, String> {
     let docs = m.hrafn.and_then(|h| h.docs).unwrap_or_default();
     let members: Vec<DocKind> = docs.members.iter().map(doc_kind).collect();
     let top: Vec<DocKind> = docs.top.iter().map(doc_kind).collect();
+    let language = language(kind).ok_or("its grammar is not built")?;
     Spec::new(
-        &kind.language(),
+        &language,
         scm,
         docs.line.as_deref(),
         docs.block.is_some(),
@@ -54,24 +55,22 @@ fn build(kind: Kind) -> Result<Spec, String> {
     )
 }
 
-/// KIND's chunking rules, built once. A pack that does not compile against its grammar is a bug a test pins.
-pub(super) fn spec(kind: Kind) -> &'static Spec {
-    static SPECS: OnceLock<Vec<Result<Spec, String>>> = OnceLock::new();
-    let all = SPECS.get_or_init(|| Kind::ALL.iter().map(|k| build(*k)).collect());
-    let i = Kind::ALL
-        .iter()
-        .position(|k| *k == kind)
-        .expect("a listed kind");
-    match &all[i] {
-        Ok(s) => s,
-        Err(e) => panic!(
-            "the {} pack's chunks.scm does not build: {e}",
-            pack_name(kind)
-        ),
+/// The name of the grammar KIND's pack owns (its first `:grammars` entry; a test pins it).
+pub(super) fn grammar_name(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Rust => "rust",
+        Kind::C => "c",
+        Kind::Shell => "bash",
+        Kind::Python => "python",
+        Kind::JavaScript => "javascript",
+        Kind::TypeScript => "typescript",
+        Kind::Tsx => "tsx",
+        Kind::Go => "go",
+        Kind::Java => "java",
     }
 }
 
-fn pack_name(kind: Kind) -> &'static str {
+pub(super) fn pack_name(kind: Kind) -> &'static str {
     match kind {
         Kind::Rust => "rust",
         Kind::C => "c",
@@ -85,11 +84,74 @@ fn pack_name(kind: Kind) -> &'static str {
     }
 }
 
+/// Called once for each pack whose grammar is not available: the pack and why. The hub logs the line.
+pub type MissingHook = fn(pack: &str, reason: &str);
+
+static HOOK: OnceLock<MissingHook> = OnceLock::new();
+static SAID: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+
+/// Install the function that says a pack's grammar is not built (the hub's log). Only the first call counts.
+pub fn on_missing(hook: MissingHook) {
+    let _ = HOOK.set(hook);
+}
+
+fn say_missing(kind: Kind, reason: &str) {
+    let pack = pack_name(kind);
+    let mut said = SAID.lock().unwrap_or_else(PoisonError::into_inner);
+    if !said.contains(&pack) {
+        said.push(pack);
+        if let Some(h) = HOOK.get() {
+            h(pack, reason);
+        }
+    }
+}
+
+/// KIND's grammar from the pack registry, or none: the file then reads as text. The first miss of a pack is said.
+pub(super) fn language(kind: Kind) -> Option<tree_sitter::Language> {
+    match skald::registry::language(grammar_name(kind)) {
+        Ok(l) => Some(l),
+        Err(e) => {
+            say_missing(kind, &e.reason);
+            None
+        }
+    }
+}
+
+/// KIND's chunking rules, built on first use once its grammar is there; none while it is not (nothing is cached
+/// then, so a grammar built later is found). A pack that does not compile against its grammar is a bug a test pins.
+pub(super) fn spec(kind: Kind) -> Option<&'static Spec> {
+    static SPECS: Mutex<Vec<(Kind, &'static Spec)>> = Mutex::new(Vec::new());
+    let mut specs = SPECS.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((_, s)) = specs.iter().find(|(k, _)| *k == kind) {
+        return Some(s);
+    }
+    language(kind)?;
+    match build(kind) {
+        Ok(s) => {
+            let s: &'static Spec = Box::leak(Box::new(s));
+            specs.push((kind, s));
+            Some(s)
+        }
+        Err(e) => {
+            say_missing(kind, &format!("its chunks.scm does not build: {e}"));
+            None
+        }
+    }
+}
+
 /// Every kind's build result (a test checks each compiles).
 #[cfg(test)]
 pub(super) fn build_all() -> Vec<(Kind, Result<(), String>)> {
     Kind::ALL
         .iter()
         .map(|k| (*k, build(*k).map(|_| ())))
+        .collect()
+}
+
+/// The packs whose grammar the hub parses with, as (pack, grammar): what the doctor checks is built.
+pub fn hub_grammars() -> Vec<(&'static str, &'static str)> {
+    Kind::ALL
+        .iter()
+        .map(|k| (pack_name(*k), grammar_name(*k)))
         .collect()
 }

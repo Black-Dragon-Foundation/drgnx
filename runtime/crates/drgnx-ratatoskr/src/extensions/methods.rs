@@ -11,6 +11,7 @@ use crate::front::Front;
 use runstav::methods::Params;
 use runstav::methods::extensions as w;
 use runstav::paths::{self, Env};
+use runstav::registry::Class;
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
@@ -209,11 +210,14 @@ impl Hub {
         }
     }
 
+    /// AGENT: an agent's search never returns a language pack: packs are the user's to install (`extensions_suggest`
+    /// names packages and plugins only).
     async fn search(
         &self,
         conn: u64,
         p: w::SearchParams,
         plugins: Vec<w::Row>,
+        agent: bool,
     ) -> Result<w::SearchResult, Error> {
         let recommended = self.recommended_of(conn, &p.filters, "filters/recommended")?;
         let index = self.index_with(Some(plugins)).await?;
@@ -223,7 +227,10 @@ impl Hub {
             &p.filters,
             recommended.as_deref(),
             p.sort.unwrap_or(w::Sort::Relevance),
-        );
+        )
+        .into_iter()
+        .filter(|&i| !(agent && index.entries[i].row.kind == w::Kind::Pack))
+        .collect::<Vec<_>>();
         let offset = p.offset.unwrap_or(0) as usize;
         let limit = p.limit.unwrap_or(w::LIMIT_DEFAULT).min(w::LIMIT_MAX) as usize;
         Ok(w::SearchResult {
@@ -348,7 +355,7 @@ pub async fn serve(
     let plugins = super::plugins::rows(&list, &on);
     Ok(match p {
         Params::ExtensionsSearch(q) => hub
-            .search(caller.conn_id, q, plugins)
+            .search(caller.conn_id, q, plugins, caller.class == Class::Agent)
             .await
             .map(|r| json!(r)),
         Params::ExtensionsDetails(d) => hub.details(&d.id, plugins).await.map(|r| json!(r)),

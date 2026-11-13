@@ -21,6 +21,7 @@ pub mod dir;
 pub mod highlights;
 pub mod job;
 pub mod manifest;
+pub mod registry;
 pub mod reserved;
 pub mod translate;
 

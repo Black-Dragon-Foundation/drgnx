@@ -91,7 +91,7 @@ case $cmd in
   plugins)
     _arguments '1:action:(install list remove)' '--replace[replace an installed plugin]' '--json[the list as JSON]' '2:path:_files' ;;
   packs)
-    _arguments '1:action:(list sync migrate check pin)' '*--add[install these packs]:pack:' '*--remove[remove these packs]:pack:' \
+    _arguments '1:action:(list install remove sync migrate check pin)' '*--add[install these packs]:pack:' '*--remove[remove these packs]:pack:' \
       '--builtin[check a built-in pack]' '*--other[a pack whose claims count]:directory:_files -/' '--src[the grammar'"'"'s source folder]:directory:' '*:path:_files' ;;
   extensions)
     _arguments '1:action:(refresh fetch-readme)' '--progress[JSON steps for the editor]:file:_files' ;;
