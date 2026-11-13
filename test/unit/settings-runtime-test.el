@@ -84,12 +84,12 @@
       (should-not calls))))
 
 ;; Pattern D.  A runtime setting with no encoder never reaches the hub when only your Lisp or Customize sets it: every
-;; one has one but the matrix itself, whose plist the hub reads from settings.el alone.
-(ert-deftest drgnx-settings-runtime/every-runtime-setting-but-the-matrix-has-an-encoder ()
+;; one has one, the permissions matrix included.
+(ert-deftest drgnx-settings-runtime/every-runtime-setting-has-an-encoder ()
   (require 'drgnx-agents-matrix)
   (let (missing)
     (dolist (var (drgnx-setting-names))
-      (when (and (plist-get (drgnx-setting-meta var) :runtime) (not (eq var 'drgnx-agents-matrix))
+      (when (and (plist-get (drgnx-setting-meta var) :runtime)
                  (not (assq var drgnx-settings-runtime--encoders)))
         (push var missing)))
     (should-not missing)))
@@ -133,6 +133,19 @@
                            "\"command\":\"^rm \",\"verdict\":\"deny\",\"reason\":\"no rm\"},"
                            "{\"point\":\"after-edit\",\"paths\":[\"**/*.lock\"],\"verdict\":\"annotate\","
                            "\"reason\":\"a lock\"}]")))
+    ;; the permissions matrix, in the wire's own words (symbols as strings, `between' as an object)
+    (should (equal (funcall enc 'drgnx-agents-matrix nil) "null"))
+    (should (equal (funcall enc 'drgnx-agents-matrix
+                            '(:preset balanced
+                                      :time ((:when away :preset cautious) (:when (between 1320 420) :preset autonomous))
+                                      :cells ((:action push.main :column (:role worker) :verdict never)
+                                              (:action spend :column (:agent "claude") :verdict ask
+                                                       :limit (:amount 2 :unit usd)))))
+                   (concat "{\"preset\":\"balanced\",\"time\":[{\"when\":\"away\",\"preset\":\"cautious\"},"
+                           "{\"when\":{\"between\":[1320,420]},\"preset\":\"autonomous\"}],"
+                           "\"cells\":[{\"action\":\"push.main\",\"column\":{\"role\":\"worker\"},\"verdict\":\"never\"},"
+                           "{\"action\":\"spend\",\"column\":{\"agent\":\"claude\"},\"verdict\":\"ask\","
+                           "\"limit\":{\"amount\":2,\"unit\":\"usd\"}}]}")))
     ;; the agent browser's settings
     (should (equal (funcall enc 'drgnx-agents-browser-program nil) "null"))
     (should (equal (funcall enc 'drgnx-agents-browser-program "/usr/bin/chromium") "\"/usr/bin/chromium\""))

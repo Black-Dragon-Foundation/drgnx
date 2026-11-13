@@ -169,6 +169,38 @@ the index does; \"real\" lists them, leaving out only what .gitignore files and 
          (cons :verdict (drgnx-settings-runtime--str (plist-get r :verdict)))
          (cons :reason (plist-get r :reason)))))
 
+;; The permissions matrix, in the wire's own words (`runstav::methods::matrix'; the hub's `settings::matrix::decode').
+(defun drgnx-settings-runtime--matrix-limit (l)
+  "A cell's limit plist L (:amount :unit) as `Limit' takes it."
+  (list :amount (plist-get l :amount) :unit (drgnx-settings-runtime--str (plist-get l :unit))))
+
+(defun drgnx-settings-runtime--matrix-cell (c)
+  "A matrix cell's plist C (:action :column :verdict :limit) as `CellRow' takes it.
+The column is `{role|agent|provider: X}'."
+  (let ((col (plist-get c :column)))
+    (drgnx-settings-runtime--plist
+     (list (cons :action (drgnx-settings-runtime--str (plist-get c :action)))
+           (cons :column (list (drgnx-settings-runtime--key (substring (symbol-name (car col)) 1))
+                               (drgnx-settings-runtime--str (cadr col))))
+           (cons :verdict (drgnx-settings-runtime--str (plist-get c :verdict)))
+           (cons :limit (and (plist-get c :limit) (drgnx-settings-runtime--matrix-limit (plist-get c :limit))))))))
+
+(defun drgnx-settings-runtime--matrix-time (r)
+  "A time preset's plist R (:when :preset) as `TimePreset' takes it.
+`away' stays itself, (between FROM TO) is `{between: [FROM, TO]}'."
+  (let ((w (plist-get r :when)))
+    (list :when (if (consp w) (list :between (vconcat (cdr w))) (drgnx-settings-runtime--str w))
+          :preset (drgnx-settings-runtime--str (plist-get r :preset)))))
+
+(defun drgnx-settings-runtime--matrix (m)
+  "The matrix plist M (:preset :time :cells) as the JSON object the hub reads; nil is null (the shipped default)."
+  (if (null m)
+      :null
+    (drgnx-settings-runtime--plist
+     (list (cons :preset (drgnx-settings-runtime--str (plist-get m :preset)))
+           (cons :time (and (plist-get m :time) (vconcat (mapcar #'drgnx-settings-runtime--matrix-time (plist-get m :time)))))
+           (cons :cells (and (plist-get m :cells) (vconcat (mapcar #'drgnx-settings-runtime--matrix-cell (plist-get m :cells)))))))))
+
 (defun drgnx-settings-runtime--alist (alist fn)
   "ALIST (KEY . VALUE)… as an object: KEY → (FN VALUE), in order."
   (cl-loop for (k . v) in alist append (list (drgnx-settings-runtime--key k) (funcall fn v))))
@@ -210,7 +242,8 @@ the index does; \"real\" lists them, leaving out only what .gitignore files and 
     (drgnx-search-ignore-rules . drgnx-settings-runtime--str)
     (drgnx-agents-start-env-names . drgnx-settings-runtime--strings)
     (drgnx-agents-trace-opens . drgnx-settings-runtime--strings)
-    ;; the agent limits (`drgnx-agents-matrix.el'); the matrix itself is read from settings.el alone
+    ;; the permissions matrix and the agent limits (`drgnx-agents-matrix.el')
+    (drgnx-agents-matrix . drgnx-settings-runtime--matrix)
     (drgnx-agents-away-after . identity)
     (drgnx-agents-wait-refusals . identity)
     (drgnx-agents-close-idle-after . identity)
@@ -250,8 +283,7 @@ the index does; \"real\" lists them, leaving out only what .gitignore files and 
     (drgnx-agents-hook-rules-off . drgnx-settings-runtime--strings)
     (drgnx-search-model-mirror . ,(lambda (v) (or (drgnx-settings-runtime--str v) :null)))
     (drgnx-sandbox-proxy-pinned-addresses . ,(lambda (v) (drgnx-settings-runtime--alist v #'identity))))
-  "Runtime setting → the function that turns its Lisp value into the JSON of its runtime type.  `drgnx-agents-matrix'
-has none: the hub reads its plist from settings.el alone.")
+  "Runtime setting → the function that turns its Lisp value into the JSON of its runtime type.")
 
 (defun drgnx-settings-runtime--vars ()
   "The settings declared `:runtime' that this editor can encode."
