@@ -14,12 +14,25 @@ fn tool(rest: Value) -> Entry {
 
 /// The rows of tool entry E (index 3) under LOOK and FACTS, ALWAYS saying whether a grant covers it.
 fn rows_of(e: &Entry, look: &Look, facts: &BTreeMap<u64, Facts>, always: bool) -> Vec<Row> {
+    rows_with(e, look, facts, always, None)
+}
+
+/// [`rows_of`] with PROV, the line the hub cached for how the step was allowed.
+fn rows_with(
+    e: &Entry,
+    look: &Look,
+    facts: &BTreeMap<u64, Facts>,
+    always: bool,
+    prov: Option<&str>,
+) -> Vec<Row> {
     let always = move |_: &Entry| always;
+    let prov = move |_: &Entry| prov.map(str::to_owned);
     let right = |_: &str| 300;
     let cx = Cx {
         look,
         facts,
         always: &always,
+        prov: &prov,
         right: &right,
     };
     group_rows(3, e, &[], None, &cx)
@@ -347,4 +360,30 @@ fn a_shell_step_shows_its_command_in_code() {
         .map(|(s, e, _)| chars[*s as usize..*e as usize].iter().collect())
         .collect();
     assert_eq!(code, ["bin/drgnx test gateway"], "{:?}", r.runs);
+}
+
+/// How an allowed step was allowed is one subtle line under it, read from what the hub cached (the cell's preset and
+/// the session's scope, or an earlier yes); an Always grant says its own line instead, and no cached line adds none.
+#[test]
+fn an_allowed_step_says_how_it_was_allowed() {
+    let look = Look::default();
+    let facts = BTreeMap::new();
+    let under = |rows: &[Row]| -> Vec<String> {
+        rows.iter()
+            .filter(|r| r.key.starts_with("e:3/p:"))
+            .map(|r| r.text.clone())
+            .collect()
+    };
+    let line = "auto-allowed: balanced \u{b7} this chat";
+    let rows = rows_with(&stepped("completed"), &look, &facts, false, Some(line));
+    assert_eq!(under(&rows), [format!("    {line}")]);
+    let row = rows.iter().find(|r| r.key == "e:3/p:0").unwrap();
+    assert_eq!(faces(row), ["drgnx-agent-panel-subtle"]);
+    let rows = rows_with(&stepped("completed"), &look, &facts, true, Some(line));
+    assert_eq!(
+        under(&rows),
+        ["    allowed by your Always \u{b7} V revokes"]
+    );
+    let rows = rows_with(&stepped("completed"), &look, &facts, false, None);
+    assert!(under(&rows).is_empty());
 }

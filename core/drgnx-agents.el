@@ -519,29 +519,6 @@ keys, so they always go through its gateway (a token, never a key).")
 (the Live browser's endpoint, docs/guide/live.md).  One that fails is reported and skipped, and so is anything
 returned that is not a string.  Only names on `drgnx-agents-start-env-names' reach the agent.")
 
-(drgnx-defsetting drgnx-agents-scrubbed-env (copy-sequence drgnx-agent-config-vendor-env)
-  "Keys never inherited by agents: variables of Emacs's environment that an agent does not get.
-MCP Test and Hook Test on the Agent Settings page unset the same list (drgnx-agent-check.el).
-An agent gets the variables of its own route (the provider key or the gateway token, the model names) and
-nothing else from this list, so a Kimi agent never sees your DeepSeek or OpenRouter key.  A profile without a
-route (`:ai') is the user's own login and also keeps its own vendor's names (`drgnx-agents-own-env').  To pass
-another one on, remove it from this list (or set it in the profile's `:env')."
-  :type '(repeat string) :group 'drgnx :scope 'global :workspace 'never :agents 'never)
-
-(drgnx-defsetting drgnx-agents-own-env
-  '((claude "ANTHROPIC_API_KEY" "ANTHROPIC_AUTH_TOKEN" "ANTHROPIC_BASE_URL" "ANTHROPIC_MODEL"
-            "ANTHROPIC_SMALL_FAST_MODEL" "ANTHROPIC_DEFAULT_HAIKU_MODEL" "ANTHROPIC_DEFAULT_SONNET_MODEL"
-            "ANTHROPIC_DEFAULT_OPUS_MODEL" "ANTHROPIC_DEFAULT_FABLE_MODEL" "CLAUDE_CODE_SUBAGENT_MODEL"
-            "CLAUDE_CODE_OAUTH_TOKEN" "CLAUDE_CODE_USE_BEDROCK" "CLAUDE_CODE_USE_VERTEX")
-    (codex "OPENAI_API_KEY" "OPENAI_BASE_URL")
-    (gemini "GEMINI_API_KEY" "GOOGLE_API_KEY"))
-  "Each agent's own credentials and switches: (AGENT NAME…).  A profile without an `:ai' route runs on the user's
-own login, so the names of its agent (by its command: claude, codex, gemini) are exempt from
-`drgnx-agents-scrubbed-env' for it, and only for it.  `AWS_*' and `GOOGLE_APPLICATION_CREDENTIALS' are not scrubbed
-at all."
-  :type '(alist :key-type symbol :value-type (repeat string)) :group 'drgnx
-  :scope 'global :workspace 'never :agents 'never)
-
 (defun drgnx-agents-get (id) (seq-find (lambda (s) (equal (drgnx-agent-session-id s) id)) drgnx-agents--sessions))
 
 (declare-function drgnx-hub-call "drgnx-hub-client")

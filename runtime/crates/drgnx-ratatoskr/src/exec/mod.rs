@@ -729,6 +729,11 @@ fn refusal(message: impl Into<String>) -> Refusal {
     }
 }
 
+/// PID's start time, or the refusal of the job: without it the restart path cannot tell the job from a reused pid.
+fn start_time_or_refuse(read: std::io::Result<u64>, pid: i32) -> Result<u64, Refusal> {
+    read.map_err(|e| setup(format!("reading the start time of process {pid}: {e}")))
+}
+
 fn setup(message: impl Into<String>) -> Refusal {
     Refusal {
         rule: Rule::Setup,
@@ -1936,6 +1941,14 @@ impl Inner {
                 return Err(e);
             }
         }
+        let start_time = match start_time_or_refuse(draugr::start_time(pid), pid) {
+            Ok(t) => t,
+            Err(e) => {
+                let _ =
+                    draugr::kill_group(pid, Duration::from_secs(1), &draugr::RealSignaller).await;
+                return Err(e);
+            }
+        };
         let started = now();
         let mut meta = Meta {
             id: id.to_string(),
@@ -1948,7 +1961,7 @@ impl Inner {
             deadline: spec.time_box().map(|t| started + t.as_secs_f64()),
             unit: name,
             pid: Some(pid),
-            start_time: draugr::start_time(pid).ok(),
+            start_time: Some(start_time),
             entity: None,
             image: spec.container.as_ref().map(|c| c.image.clone()),
             name: spec.user.name.clone(),

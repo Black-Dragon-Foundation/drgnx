@@ -1873,7 +1873,7 @@ and name. The session is recorded in `runtime.db` (`asession`, migration 5) and 
   arrives, whichever the mirror sees first: the hub sends a session's state at most every 50 ms, so a short turn can
   go by with no `busy` snapshot. Each turn runs its hooks once (the mirror counts turns per session), a snapshot or
   entries sent again run nothing, and a fetched transcript's turns that had ended when the editor last heard of the
-  session (within the `entries_count` of the last snapshot it applied) run none. A turn that ended after that runs
+  session (within the `entries-count` of the last snapshot it applied) run none. A turn that ended after that runs
   its hooks once, even when it ended before the fetch's answer and its own events were dropped as older than it. The
   work tracker records a task's commits from `turn-end`.
 
@@ -1960,7 +1960,10 @@ What the core keeps:
   the card before the exit. A request the matrix decides on after its turn was cancelled or ended is answered
   cancelled at once: the agent no longer waits on it. A matrix card that no request waits on any more after such a
   cancel is withdrawn (`Withdraw`: `norn::write::cards::card_withdraw`, state `withdrawn` with a `card` event), so it
-  leaves the open cards and the needs-you lists; a card the user settled first stays settled.
+  leaves the open cards and the needs-you lists; a card the user settled first stays settled. A hub that crashed took
+  its sessions' agents with it, so at the next start, before any session resumes, every open matrix card with a
+  session (`norn::write::cards::withdraw_orphaned_matrix_cards`) is withdrawn the same way; a resumed session that
+  asks again gets a new card, and a matrix card with no session (a job's spending limit) stays.
 - One event pair is armed at a time; the timer's tick sends it. While the hub ends none is armed or sent: the shell
   reads the snapshot when it sends a pair, so one sent then could show the session's own exit, and an editor that read
   it before its connection's end of file would keep that reason instead of the hub's.

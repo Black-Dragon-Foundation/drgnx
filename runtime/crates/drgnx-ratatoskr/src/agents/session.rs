@@ -23,7 +23,7 @@ use super::transcript;
 use super::wheel::{self, Wheel};
 use crate::dispatch::Caller;
 use crate::front::Front;
-use crate::matrix_gate::{ActionCtx, Gate, MatrixGate};
+use crate::matrix_gate::{ActionCtx, AllowedBy, Gate, MatrixGate};
 use crate::settings::AgentProfile;
 use crate::settings::profiles::Mode as ProfileMode;
 use hermod::schema::v1::{ReadTextFileResponse, RequestPermissionResponse, WriteTextFileResponse};
@@ -42,7 +42,7 @@ use runstav::registry::Class;
 use runstav::types::RequestId;
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Map, Value, json};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -1067,6 +1067,9 @@ pub struct Session {
     closed: AtomicBool,
     /// The decision-log version the freshness gate last told this session of (Task 24).
     gated: AtomicU64,
+    /// How each allowed tool call was allowed, by `toolCallId`: the line its step's row shows ([`Session::allowed_how`]).
+    /// One short line per call, so it grows with the transcript and no faster.
+    allowed: Mutex<BTreeMap<String, String>>,
     state: Mutex<State>,
     /// Transcripts and the held queue on disk (none in unit tests).
     store: Option<transcript::Store>,
@@ -2152,11 +2155,32 @@ async fn launch(
     sid: &str,
     cwd: &Path,
     attach: &Attach,
+    plan: (Option<&str>, Option<&str>, &[(String, String)]),
+) -> Result<(Launched, tokio::sync::mpsc::Receiver<Event>), Error> {
+    // the session's MCP session is opened first (below); a launch that fails after that, at any step, closes the one
+    // it opened: its socket and dir go with it, not only when `prepare` fails
+    let opened = front.mcp.socket_of(sid).is_none();
+    let out = launch_steps(front, profile, role, sid, cwd, attach, plan, opened).await;
+    if out.is_err() && opened {
+        let _ = front.mcp.close(sid).await;
+    }
+    out
+}
+
+/// [`launch`]'s steps; OPENED: this launch opens the session's MCP session.
+#[allow(clippy::too_many_arguments)]
+async fn launch_steps(
+    front: &Front,
+    profile: &AgentProfile,
+    role: Role,
+    sid: &str,
+    cwd: &Path,
+    attach: &Attach,
     (task, job, module_env): (Option<&str>, Option<&str>, &[(String, String)]),
+    opened: bool,
 ) -> Result<(Launched, tokio::sync::mpsc::Receiver<Event>), Error> {
     // the session's MCP session first: a sandboxed gateway profile's token is registered on its gateway.sock, which
-    // needs it.  A launch refused before the spawn closes the one it opened (its socket and dir go with it)
-    let opened = front.mcp.socket_of(sid).is_none();
+    // needs it
     // a Codex session whose hooks subscribe to a kind: its socket serves `before_tool`, which its lock's managed hook
     // calls
     if opened && profile.provider() == Some(crate::settings::profiles::Provider::Codex) {
@@ -2176,12 +2200,7 @@ async fn launch(
     let mcp = bridge(front, profile, who_of(role, profile), sid, cwd, task, job).await;
     let prep = match prepare(front, profile, role, sid, cwd, job, module_env).await {
         Ok(p) => p,
-        Err(e) => {
-            if opened && !mcp.is_empty() {
-                let _ = front.mcp.close(sid).await;
-            }
-            return Err(e);
-        }
+        Err(e) => return Err(e),
     };
     // the provider proxy the spec's relay reaches, bound before the spawn; a start that fails below drops it, and its
     // socket with it.  So are the browser's web proxy and CDP broker, for a session with the browser
@@ -2488,6 +2507,7 @@ fn assemble(
         wait_refusals: AtomicU32::new(0),
         closed: AtomicBool::new(false),
         gated: AtomicU64::new(0),
+        allowed: Mutex::new(BTreeMap::new()),
         state: Mutex::new(State::new()),
         store: front.dirs.get().map(|d| transcript::Store::new(&d.hub)),
         disk: crate::disk::Ordered::new("session:disk"),
@@ -2731,6 +2751,37 @@ impl Session {
             .iter()
             .copied()
             .find(|&i| st.entries.get(i).is_some_and(|e| e.kind == EntryType::Tool))
+    }
+
+    /// The line for how tool call TOOL was allowed, kept for its step's row: `auto-allowed: <preset> · <scope>`
+    /// (the matrix's own cell) or `allowed by your earlier yes · <scope>`; the scope is the session's kind.
+    async fn note_allowed(&self, tool: Option<&Value>, action: Action, ctx: ActionCtx) {
+        let Some(id) = tool
+            .and_then(|t| t.get("toolCallId"))
+            .and_then(Value::as_str)
+        else {
+            return;
+        };
+        let scope = if self.role == Role::Chat {
+            "this chat"
+        } else {
+            "this task"
+        };
+        let how = match self
+            .gate
+            .allowed_by(&self.writer, self.who(), action, ctx)
+            .await
+        {
+            AllowedBy::Preset(p) => format!("auto-allowed: {p} \u{b7} {scope}"),
+            AllowedBy::Grant => format!("allowed by your earlier yes \u{b7} {scope}"),
+        };
+        lock(&self.allowed).insert(id.to_owned(), how);
+    }
+
+    /// The cached line for how tool entry E was allowed (read at render: no lookup beyond this map).
+    pub(crate) fn allowed_how(&self, e: &Entry) -> Option<String> {
+        let id = e.rest.get("id").and_then(Value::as_str)?;
+        lock(&self.allowed).get(id).cloned()
     }
 
     /// Whether a live Always grant of this session covers tool entry E (its kind, when both name one, and its title).
@@ -4712,6 +4763,7 @@ impl Session {
                 facts,
                 ..ActionCtx::of_session(&s.scopes, &s.id)
             };
+            let why_ctx = ctx.clone();
             let gate = s
                 .gate
                 .decide(&s.settings, &s.writer, s.who(), action, ctx)
@@ -4732,6 +4784,7 @@ impl Session {
                     if pick_allow(&options).is_some()
                         && !s.grants.revoked_covers(req.get("toolCall")) =>
                 {
+                    s.note_allowed(req.get("toolCall"), action, why_ctx).await;
                     reply(resp, pick_allow(&options))
                 }
                 gate => {

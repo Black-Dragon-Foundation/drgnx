@@ -117,6 +117,8 @@ struct Source<'a> {
     n: usize,
     groups: &'a GroupsFn<'a>,
     always: &'a dyn Fn(&runstav::methods::agents::Entry) -> bool,
+    /// How the hub cached that a tool entry was allowed.
+    prov: &'a dyn Fn(&runstav::methods::agents::Entry) -> Option<String>,
 }
 
 /// What one (connection, view, class) was built from, and each group's rows.
@@ -419,6 +421,7 @@ impl Panels {
             n: s.entry_count(),
             groups: &|from: usize, only: Option<&BTreeSet<usize>>| s.panel_groups(from, only),
             always: &|e: &runstav::methods::agents::Entry| s.always_covers(e),
+            prov: &|e: &runstav::methods::agents::Entry| s.allowed_how(e),
         };
         self.rows_of(&src, key, env, fonts, dirty)
     }
@@ -466,6 +469,7 @@ impl Panels {
             look: &look,
             facts,
             always: src.always,
+            prov: src.prov,
             right: &right,
         };
         for g in (src.groups)(from, only) {

@@ -211,7 +211,7 @@ call to the hub (`job/propose`, `job/approve`, `job/status`, `job/stop`, `job/re
 no editor, and the hub's own checks apply:
 
 ```
-ratatoskr job propose PLAN [--repo DIR] [--budget USD] [--auto] [--json]
+ratatoskr job propose PLAN [--repo DIR] [--budget USD] [--auto] [--gate review|review+accept] [--json]
 ratatoskr job approve ID [--budget USD] [--json]
 ratatoskr job status [ID] [--json]
 ratatoskr job stop ID [--json]
@@ -402,7 +402,7 @@ The details:
   card (Retry the merge, Dismiss and carry on, Stop the job). `at-review` hooks are asked before the reviewer starts.
 
 A job keeps the gate it was proposed with: the hub runs it, and it does not read your `config.el`. **Start Job from
-Plan…** and **Start as Job** take your option with them. `drgnx job propose` gives the hub's default, `review`.
+Plan…** and **Start as Job** take your option with them. `drgnx job propose` gives the hub's default, `review`, unless you pass `--gate review+accept`.
 
 ## Your first real job
 

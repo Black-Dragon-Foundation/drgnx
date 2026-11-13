@@ -38,7 +38,8 @@
     "CLAUDE_CODE_USE_VERTEX" "OPENAI_API_KEY" "OPENAI_BASE_URL" "OPENROUTER_API_KEY" "MOONSHOT_API_KEY"
     "DEEPSEEK_API_KEY" "GEMINI_API_KEY" "GOOGLE_API_KEY")
   "The model vendors' keys and switches in Emacs's environment that what drgnx starts for an agent never inherits:
-the default of `drgnx-agents-scrubbed-env' (agents), and what MCP Test and Hook Test unset (drgnx-agent-check.el).")
+what MCP Test and Hook Test unset (drgnx-agent-check.el).  The hub builds an agent's environment from an allowlist, so
+agents never see them.")
 
 ;;;; Kinds and homes
 
