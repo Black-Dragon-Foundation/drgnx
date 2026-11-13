@@ -2172,8 +2172,9 @@ no hub call: `(drgnx-view-nav 'follow "up")`, `(drgnx-view-nav 'walk "team" 1)`,
 class step, and when the selection moved arms the trailing notice and runs `drgnx-view-selected-functions` (BUFFER
 ID). `drgnx-view-nav-selection` and `drgnx-view-nav-field NAME &optional ID` read the model.
 - **Classes on the card:** Sjá answers the nodes whose class changed; each class is a face by the descriptor's class
-  name (`drgnx-view-nav-faces`, then `drgnx-view-nav-default-faces`: `drgnx-view-selected`, `drgnx-view-match`,
-  `drgnx-view-chain`, `drgnx-view-lit`, `shadow` for dim), put as an overlay on the node's span (the text whose
+  name (`drgnx-view-nav-faces`, then `drgnx-view-nav-default-faces`: `drgnx-view-selected`, the quiet selection
+  `drgnx-selected-quiet` a step above the hover, `drgnx-view-match`, `drgnx-view-chain`, `drgnx-view-lit`, `shadow`
+  for dim), put as an overlay on the node's span (the text whose
   `drgnx-view-patch-id-prop`, `drgnx-work-id` by default, is its id), never on the whole line. Rendering a row notes
   which rows hold which node (`drgnx-view-patch-ids`) and which nodes each row holds (`drgnx-view-patch-keys`, the
   index the class step reads, so a draw costs the rows it replaced, never a walk of every node drawn); after a draw,

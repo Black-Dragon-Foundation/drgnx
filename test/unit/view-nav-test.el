@@ -285,4 +285,21 @@ that comes applies at once; one that does not reach entry 8 asks again (from 6),
       (should-not (drgnx-view-nav-paging-p))
       (should (equal '(6 2) (funcall asks))))))
 
+;; the look's state ladder (the drgnx-look skill, rule 1): hover < selected.  The hub-fed views' selected node took
+;; `highlight', which the themes draw in the hover colour, so a selected row looked hovered (the Flow's T5 against
+;; hub-orchestration.html's `.sel', 2026-11-13)
+(ert-deftest drgnx-view-nav/the-selected-node-is-the-quiet-selection-not-the-hover ()
+  "Under the dark theme the selected node's background is the quiet selection's (`--sel-quiet'), not the hover's
+(`highlight'), and it still reaches the row's end."
+  (let ((was custom-enabled-themes))
+    (unwind-protect
+        (progn
+          (mapc #'disable-theme custom-enabled-themes)
+          (load-theme 'drgnx-dark t)
+          (should (equal (face-background 'drgnx-view-selected nil t) (face-background 'drgnx-selected-quiet nil t)))
+          (should-not (equal (face-background 'drgnx-view-selected nil t) (face-background 'highlight nil t)))
+          (should (face-attribute 'drgnx-view-selected :extend nil t)))
+      (mapc #'disable-theme custom-enabled-themes)
+      (dolist (th (reverse was)) (load-theme th t)))))
+
 ;;; view-nav-test.el ends here

@@ -1279,8 +1279,9 @@ terminal, 8 per column)."
   "A hub-fed view whose rows may be out of date: the hub went away, or its rows are for an older look."
   :group 'drgnx)
 
-(defface drgnx-view-selected '((t :inherit highlight :extend t))
-  "The selected node of a hub-fed view, over its span."
+(defface drgnx-view-selected '((t :inherit drgnx-selected-quiet :extend t))
+  "The selected node of a hub-fed view, over its span: the quiet selection (the mockups' `.sel', `--sel-quiet'), a
+step above the hover (`highlight')."
   :group 'drgnx)
 
 ;; The terminal's 16 colours.  Each inherits its `ansi-color-' face for the foreground and resets the background to
