@@ -323,13 +323,13 @@ pub fn diff(before: &[Node], after: &[Node]) -> Diff {
     d
 }
 
-/// The graph of EXPR (a variable's `evaluateName`) in SESSION's FRAME (the selected one when none) at its current
-/// stop, within LIMITS.
+/// The graph of EXPR (a variable's `evaluateName`), or with none of the frame's locals ([`locals`]), in SESSION's
+/// FRAME (the selected one when none) at its current stop, within LIMITS.
 pub async fn read(
     d: &super::Debug,
     session: &str,
     frame: Option<i64>,
-    expr: &str,
+    expr: Option<&str>,
     limits: Limits,
 ) -> Result<Graph, String> {
     let stop = d
@@ -338,7 +338,22 @@ pub async fn read(
     let (handle, _) = d.handle_caps(session)?;
     let frame = frame.unwrap_or(stop.frame);
     let ident = Ident::of(&d.adapter_of(session).unwrap_or_default());
-    let body = handle
+    let probe = SessionProbe {
+        handle,
+        epoch: stop.epoch,
+        frame,
+    };
+    let Some(expr) = expr else {
+        let body = probe
+            .handle
+            .request("scopes", serde_json::json!({"frameId": frame}))
+            .await?;
+        let scopes = body["scopes"].as_array().cloned().unwrap_or_default();
+        let scope = locals_scope(&scopes).ok_or("the frame has no locals")?;
+        return Ok(locals(&probe, ident, scope, limits).await);
+    };
+    let body = probe
+        .handle
         .request(
             "evaluate",
             serde_json::json!({"expression": expr, "frameId": frame, "context": "watch"}),
@@ -351,10 +366,69 @@ pub async fn read(
         "evaluateName": expr,
         "variablesReference": body["variablesReference"],
     });
-    let probe = SessionProbe {
-        handle,
-        epoch: stop.epoch,
-        frame,
-    };
     Ok(walk(&probe, ident, vec![root], limits).await)
+}
+
+/// The graph of a frame's locals (the scope SCOPE's variables): the frame first, as node `frame` (type `frame`, path
+/// `Locals`) whose fields are the locals, each reference one an edge like any field's; the root is the frame.
+pub async fn locals(probe: &dyn Probe, ident: Ident, scope: i64, limits: Limits) -> Graph {
+    let mut vars = probe.variables(scope).await.unwrap_or_default();
+    vars.retain(|v| !internal(text(v, "name")));
+    let mut fields: Vec<Field> = vars
+        .iter()
+        .map(|v| Field {
+            name: text(v, "name").to_owned(),
+            value: text(v, "value").to_owned(),
+            to: None,
+            cut: None,
+        })
+        .collect();
+    let mut g = walk(probe, ident, vars, limits).await;
+    // a local whose identity is its path `frame` (no identity) gives way to the frame
+    if g.nodes.iter().any(|n| n.id == FRAME) {
+        let moved = format!("{FRAME}'");
+        for n in &mut g.nodes {
+            if n.id == FRAME {
+                n.id.clone_from(&moved);
+            }
+            for f in &mut n.fields {
+                if f.to.as_deref() == Some(FRAME) {
+                    f.to = Some(moved.clone());
+                }
+            }
+        }
+        for (_, r) in &mut g.roots {
+            if r.as_deref() == Some(FRAME) {
+                *r = Some(moved.clone());
+            }
+        }
+    }
+    for (f, (_, to)) in fields.iter_mut().zip(&g.roots) {
+        f.to.clone_from(to);
+    }
+    g.nodes.insert(
+        0,
+        Node {
+            id: FRAME.to_owned(),
+            ty: "frame".to_owned(),
+            path: "Locals".to_owned(),
+            fields,
+        },
+    );
+    g.roots = vec![("Locals".to_owned(), Some(FRAME.to_owned()))];
+    g
+}
+
+/// The frame's node id in a graph of locals.
+pub const FRAME: &str = "frame";
+
+/// The locals scope among a frame's SCOPES: the one hinted `locals`, else the first that is not expensive.
+pub fn locals_scope(scopes: &[Value]) -> Option<i64> {
+    let cheap = |s: &&Value| !s["expensive"].as_bool().unwrap_or(false) && reference(s) > 0;
+    scopes
+        .iter()
+        .filter(cheap)
+        .find(|s| text(s, "presentationHint") == "locals")
+        .or_else(|| scopes.iter().find(cheap))
+        .map(reference)
 }

@@ -1397,7 +1397,7 @@ async fn heap_graph(
                "ms": t0.elapsed().as_millis(), "roots": g.roots})
     );
     // `debug/heap`'s read: the root by expression, evaluated in the frame
-    let from_a = super::heap::read(&d, &sid, None, "a", super::heap::Limits::default())
+    let from_a = super::heap::read(&d, &sid, None, Some("a"), super::heap::Limits::default())
         .await
         .unwrap();
     d.shutdown().await;
@@ -1567,7 +1567,7 @@ async fn js_debug_detach_leaves_no_hidden_map() {
         .unwrap();
     let (_, f) = ev.stop(0).await;
     let sid = f["session"].as_str().map_or(sid, str::to_owned);
-    let g = super::heap::read(&d, &sid, None, "a", super::heap::Limits::default())
+    let g = super::heap::read(&d, &sid, None, Some("a"), super::heap::Limits::default())
         .await
         .unwrap();
     assert_eq!(g.nodes.len(), 2, "{g:#?}");
@@ -1660,6 +1660,7 @@ async fn an_open_heap_graph_follows_the_stops() {
                 session: Some(sid.clone()),
                 frame: None,
                 expr: Some("a".into()),
+                locals: None,
                 graph: None,
                 limit: None,
                 depth: None,
@@ -1707,5 +1708,91 @@ async fn an_open_heap_graph_follows_the_stops() {
     );
     assert_eq!(cell(&third), first_cell, "a's card stays");
     assert!(d.heaps().close(&first.graph));
+    d.shutdown().await;
+}
+
+/// A frame's locals as a graph: the frame first, its locals its fields, `shared` (= a.next) one object with two edges
+/// into it; the push at the next stop is the locals again.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "live: debugpy in the adapter image"]
+async fn a_frames_locals_are_a_heap_graph() {
+    let dir = live_dir("heap-py-locals");
+    let file = write(
+        &dir,
+        "locals.py",
+        "class Node:\n    def __init__(self, v):\n        self.v = v\n        self.next = None\n\n\ndef main():\n    a = Node(1)\n    a.next = Node(2)\n    shared = a.next\n    threshold = 40\n    for i in range(2):\n        a.v = i\n\n\nmain()\n",
+    );
+    let ev = Arc::new(Events::default());
+    let d = Debug::new(ev.clone(), Arc::new(Procs::default()));
+    let root = dir.display().to_string();
+    add(&d, &root, &file, 13, None, None, None).await;
+    let config = json!({"type": "debugpy", "request": "launch", "name": "hl", "program": file, "cwd": dir,
+                        "justMyCode": true});
+    let start = Start {
+        name: "debugpy".into(),
+        adapter_id: "debugpy".into(),
+        request: Request::Launch,
+        arguments: super::launch::adapter_arguments(&config),
+        breakpoints: vec![],
+        functions: vec![],
+        exception_filters: None,
+    };
+    d.start(1, &root, start, launcher("debugpy", &python(), &dir, &[]))
+        .await
+        .unwrap();
+    let (c, f) = ev.stop(0).await;
+    let sid = f["session"].as_str().unwrap().to_owned();
+    let g = d
+        .heaps()
+        .read(
+            &d,
+            7,
+            runstav::methods::debug_heap::DebugHeap {
+                session: Some(sid.clone()),
+                frame: None,
+                expr: None,
+                locals: Some(true),
+                graph: None,
+                limit: None,
+                depth: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(g.locals && g.node.as_deref() == Some("frame"), "{g:#?}");
+    let fr = &g.nodes[0];
+    assert_eq!((fr.id.as_str(), fr.ty.as_str()), ("frame", "frame"));
+    let field = |n: &runstav::methods::debug_heap::HeapNode, name: &str| {
+        n.fields.iter().find(|f| f.name == name).cloned()
+    };
+    let a = field(fr, "a").and_then(|f| f.to).expect("a is an object");
+    let shared = field(fr, "shared")
+        .and_then(|f| f.to)
+        .expect("shared is an object");
+    let a_node = g.nodes.iter().find(|n| n.id == a).unwrap();
+    assert_eq!(
+        field(a_node, "next").and_then(|f| f.to),
+        Some(shared),
+        "{g:#?}"
+    );
+    assert_eq!(field(fr, "threshold").map(|f| f.value), Some("40".into()));
+    assert_eq!(g.cards[0].id, "frame");
+    d.control(&sid, Op::Continue { thread: None })
+        .await
+        .unwrap();
+    ev.stop(c).await;
+    let (_, next) = ev
+        .next(0, "debug-heap", |v| v["graph"] == json!(g.graph))
+        .await;
+    assert_eq!(
+        (&next["locals"], &next["node"]),
+        (&json!(true), &json!("frame")),
+        "{next}"
+    );
+    assert_eq!(
+        next["changed"],
+        json!([a, "frame"]),
+        "a.v and the frame's i changed: {next}"
+    );
     d.shutdown().await;
 }

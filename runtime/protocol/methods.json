@@ -12981,11 +12981,11 @@
       "classes": [
         "user"
       ],
-      "doc": "the objects reachable from an expression at the current stop as cards and edges laid out in cells (each adapter's object identity: a shared object is one card, a cycle closes); with an open graph, it read again at the current stop with what was added, changed and gone",
+      "doc": "the objects reachable from an expression, or from a frame's locals (the frame the first card), at the current stop as cards and edges laid out in cells (each adapter's object identity: a shared object is one card, a cycle closes); with an open graph, it read again at the current stop with what was added, changed and gone",
       "name": "debug/heap",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "description": "`debug/heap`: the graph of EXPR (a variable's `evaluateName`) in SESSION's FRAME (the selected one when none), at\nmost LIMIT objects (default 50) and DEPTH levels (default 8); or, with GRAPH, that open graph read again at the\nsession's current stop.",
+        "description": "`debug/heap`: the graph of EXPR (a variable's `evaluateName`) in SESSION's FRAME (the selected one when none), at\nmost LIMIT objects (default 50) and DEPTH levels (default 8); with LOCALS, or a FRAME and no EXPR, the graph of\nthat frame's locals, whose first object is the frame (id `frame`, type `frame`, path `Locals`) with the locals as\nits fields; or, with GRAPH, that open graph read again at the session's current stop.",
         "properties": {
           "depth": {
             "format": "uint32",
@@ -13019,6 +13019,12 @@
             "minimum": 0,
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "locals": {
+            "type": [
+              "boolean",
               "null"
             ]
           },
@@ -13211,7 +13217,7 @@
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "description": "`debug/heap`'s answer: the GRAPH's id; the root's NODE (none: a scalar); the objects, CUT (references left at the\nlimit, the depth or the time), the layout (CARDS, EDGES, the cut fields' stubs CUTS, WIDTH × HEIGHT cells); against the graph's last read, the\nobjects ADDED, CHANGED (a field's value or reference) and GONE.",
+        "description": "`debug/heap`'s answer: the GRAPH's id; EXPR, or LOCALS for a frame's locals; the root's NODE (none: a scalar); the objects, CUT (references left at the\nlimit, the depth or the time), the layout (CARDS, EDGES, the cut fields' stubs CUTS, WIDTH × HEIGHT cells); against the graph's last read, the\nobjects ADDED, CHANGED (a field's value or reference) and GONE.",
         "properties": {
           "added": {
             "items": {
@@ -13265,6 +13271,9 @@
             "format": "uint32",
             "minimum": 0,
             "type": "integer"
+          },
+          "locals": {
+            "type": "boolean"
           },
           "node": {
             "type": [

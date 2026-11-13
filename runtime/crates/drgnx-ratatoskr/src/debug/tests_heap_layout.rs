@@ -274,7 +274,14 @@ fn the_answer_carries_the_stubs() {
         cut: 1,
     };
     let l = heap_layout::layout(&g, None);
-    let w = super::heap_wire::wire("h1", "d1", "b", &g, &l, super::heap::diff(&[], &g.nodes));
+    let w = super::heap_wire::wire(
+        "h1",
+        "d1",
+        Some("b"),
+        &g,
+        &l,
+        super::heap::diff(&[], &g.nodes),
+    );
     let v = serde_json::to_value(&w).unwrap();
     assert_eq!(v["nodes"][0]["fields"][1]["cut"], 40);
     assert_eq!(v["cuts"][0]["count"], 40);

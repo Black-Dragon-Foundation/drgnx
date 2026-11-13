@@ -1175,6 +1175,13 @@ The design is `docs/specs/drgnx/2026-11-13-heap-graph-design.md` in the org fold
     use. The session's stop sequence evaluates `heap::JS_FORGET` before a disconnect that leaves the program running.
   Anything else is named by its path, so the graph is a tree. DAP's `memoryReference` doesn't serve here: the hub
   sends `supportsMemoryReferences: false`, and delve has none.
+- **A frame's locals** (`heap::locals`): asked with `locals: true`, or a FRAME and no EXPR, the hub asks the frame's
+  `scopes`, takes the one hinted `locals` (else the first that is not expensive, `heap::locals_scope`) and walks its
+  variables as the roots. The frame is the first object, `{id: "frame", type: "frame", path: "Locals"}`, its fields
+  the locals; a reference local's field points at its object like any field, so a local that is the same object as
+  another's field (`shared` and `a.next`) is one card with two edges into it. The frame is the graph's one root, so
+  the layout puts it alone in the first layer. An open graph of locals is read again the same way, and a recorded
+  run keeps it as answered (`locals: true`).
 - **The layout** (`heap_layout::layout`) is in cells:
   - a card is a type row, then up to `FIELDS_SHOWN` field rows and a "+N more" row;
   - the layers go left to right by distance from the roots, each ordered by its sources (barycentre, two sweeps);
@@ -1196,10 +1203,10 @@ The design is `docs/specs/drgnx/2026-11-13-heap-graph-design.md` in the org fold
   last read of each graph id, so a replay or a sent run shows them with no live program.
 
 Methods (runstav `methods::debug_heap`, the user class):
-- `debug/heap {session?, frame?, expr?, graph?, limit?, depth?}` returns `{graph, session, expr, node?, nodes, cut,
+- `debug/heap {session?, frame?, expr?, locals?, graph?, limit?, depth?}` returns `{graph, session, expr, locals?, node?, nodes, cut,
   cards, edges, cuts, width, height, added, changed, gone}`: a field's `cut`, an edge's `cut: true` (its `to` empty),
-  each stub `{from, field, count, col, row, width}`. It takes either SESSION and EXPR (a variable's `evaluateName`)
-  or GRAPH. LIMIT is 1–200 (default 50), DEPTH 1–32 (default 8).
+  each stub `{from, field, count, col, row, width}`. It takes SESSION and EXPR (a variable's `evaluateName`), SESSION
+  and LOCALS or a FRAME (the frame's locals; `expr` is then empty, `locals` true and `node` is `frame`), or GRAPH. LIMIT is 1–200 (default 50), DEPTH 1–32 (default 8).
 - `debug/heap/close {graph}` returns `{closed}`.
 - Event `debug-heap`: an open graph read again at a new stop, sent to the editor that opened it.
 
