@@ -27,6 +27,15 @@ marked, then the lens's own keys as chips with their key badges."
     (should (string-match-p "Work .*Map" s))
     (should-not (string-match-p "evidence" s))))
 
+(ert-deftest drgnx-work-flow/the-lens-bar-has-a-hover-revealed-menu ()
+  "LOOK-FIX-WORK-LENS-BAR-1: the bar ends in a ⋯ control (hidden until the bar is hovered, `mouse-face' on the whole
+bar) that opens the tile menu: the four lenses, registered commands."
+  (let ((s (drgnx-work-lens-string 'map "drgnx")))
+    (should (eq (get-text-property 0 'mouse-face s) 'drgnx-hover-row))
+    (should (text-property-any 0 (length s) 'drgnx-lens-menu t s)))
+  (should (equal (mapcar #'cdr (drgnx-work-lens-menu-items))
+                 '(work-view-map work-view-board work-view-timeline work-view-flow))))
+
 (ert-deftest drgnx-work-flow/its-window-shows-the-lens-bar ()
   "The Flow's window shows the lens bar as its tab line (the chrome keeps a buffer's own) and no header: its strip
 (what needs you, the machines' load) is the hub's, in its rows."

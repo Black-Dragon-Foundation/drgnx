@@ -458,6 +458,20 @@ look-scenes' types them)."
   (drgnx-look-scene--palette-commands)
   (drgnx-look-scene--answer))
 
+(defun drgnx-look-scene-palette-light ()
+  "The palette under the light theme (palette.html is dark only: no mockup, the picture is the evidence)."
+  (drgnx-look-scene--theme 'drgnx-light)
+  (drgnx-look-scene--editor)
+  (drgnx-look-scene--palette-commands)
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-palette-hc ()
+  "The palette under the high-contrast theme (palette.html is dark only: no mockup, the picture is the evidence)."
+  (drgnx-look-scene--theme 'drgnx-high-contrast)
+  (drgnx-look-scene--editor)
+  (drgnx-look-scene--palette-commands)
+  (drgnx-look-scene--answer))
+
 (defun drgnx-look-scene-window-light ()
   (drgnx-look-scene--theme 'drgnx-light)
   (drgnx-look-scene--editor)

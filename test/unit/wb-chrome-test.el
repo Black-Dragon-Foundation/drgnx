@@ -507,6 +507,20 @@ D."
         (drgnx-look--card-set other)
         (should (equal (window-parameter other 'ring) (drgnx-look--card-value 'ring)))))))
 
+(defvar drgnx-work-space--lens-modes)
+
+(ert-deftest drgnx-wb-chrome/a-focused-work-lens-card-has-the-accent-ring ()
+  "LOOK-FIX-WORK-LENS-BAR-1: work-space-dark.html and hub-orchestration.html ring the Work card: a selected window
+showing a Work lens has the accent ring even as the only editor group; one that does not show a lens has none."
+  (drgnx-chrome-test--with _dir
+    (let ((editor (selected-window)))
+      (drgnx-look--card-set editor)
+      (should (equal (window-parameter editor 'ring) (drgnx-look--card-value 'ring)))
+      (with-current-buffer (window-buffer editor)
+        (let ((drgnx-work-space--lens-modes (list major-mode)))
+          (drgnx-look--card-set editor)
+          (should (equal (window-parameter editor 'ring) '(drgnx-accent . 1.0))))))))
+
 (ert-deftest drgnx-wb-chrome/the-sidebar-is-one-card-group ()
   "window-dark.html `.card.ex': the sidebar's sections are one island, so every dock window names the same card group
 \(Glitnir draws one card around windows of a group that tile a rectangle), filled with the panel surface; an editor
