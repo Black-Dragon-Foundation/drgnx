@@ -152,6 +152,24 @@ an overlay of the view's buffer when its timer applies it; one applied after a c
       (should (equal '(drgnx-view-selected) (drgnx-view-nav-test--face-at (+ (point-min) 4))))
       (should (equal (nth 1 before) (buffer-chars-modified-tick))))))
 
+(defface drgnx-view-nav-test-pill '((t :background "gray30" :box (:line-width 1 :color "gray50")))
+  "A boxed face, as a row's chip has.")
+
+;; the Flow's selected task row lost its chips: the selection's background, an overlay over the node's spans, hid each
+;; chip's own; a boxed run keeps its face and the selection lies around it
+(ert-deftest drgnx-view-nav/a-class-leaves-a-boxed-run-its-own-face ()
+  "Pattern D: b's span \"BB\" with its second letter in a boxed face: selecting b puts the selected face on the first
+letter only."
+  (drgnx-view-nav-test--with
+    (drgnx-view-apply-patch
+     (list :view view :class "c" :hub 7 :base 1 :version 2 :env_epoch 1 :model 1
+           :ops (list (list :replace (list (append (drgnx-view-nav-test--row "AA  BB")
+                                                   (list :runs (list (list 5 6 "drgnx-view-nav-test-pill")))))))))
+    (drgnx-view-draw-now drgnx-view)
+    (should (equal "b" (drgnx-view-nav 'select "b")))
+    (should (equal '(drgnx-view-selected) (drgnx-view-nav-test--face-at (+ (point-min) 4))))
+    (should-not (drgnx-view-nav-test--face-at (+ (point-min) 5)))))
+
 (ert-deftest drgnx-view-nav/replaced-row-keeps-its-class ()
   "Pattern A: the row holding the selected card is replaced (rows naming the same model); in every order of the
 patch, the draw and the key, once all have run, a's span has the selected face and b's the dim one."
