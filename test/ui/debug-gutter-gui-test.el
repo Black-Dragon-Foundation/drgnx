@@ -120,7 +120,10 @@ middle."
         (with-current-buffer buf (hl-line-mode -1) (drgnx-debug-gutter-mode -1) (set-buffer-modified-p nil))
         (kill-buffer buf))
       (mapc #'disable-theme custom-enabled-themes)
-      (with-selected-frame root (set-window-configuration config))
+      (with-selected-frame root
+        (set-window-configuration config)
+        ;; the region drawn on line 7 left its (deleted) overlay on the window
+        (set-window-parameter nil 'internal-region-overlay nil))
       (delete-directory dir t))))
 
 (provide 'debug-gutter-gui-test)
