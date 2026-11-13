@@ -652,7 +652,8 @@ The panel's **Debug Console** tab. The hub makes the lines; the editor only inse
   caller's frame) and the session's instruction breakpoints. The view asks
   `debug/breakpoints {root, session, kind: "instruction"}`, which answers the session's instruction view
   `{session, version, breakpoints: [{id: "i:S:N", n, instruction, offset?, verified, enabled, condition?, hit?}]}`.
-  The ops `add-instruction {session, instruction}` and `remove-instruction {session, id: N}` answer the same view. The
+  With `op` (`add-instruction {instruction}`, `remove-instruction {id: N}`, N the entry's `n`) the same call answers
+  the same view; instruction breakpoints are never saved and go with the session. The
   hub's `debug-breakpoints` event with a `session` and no `path` redraws it; a newer `version` wins. Toggling needs
   `supportsInstructionBreakpoints`.
 - With the view focused, `drgnx-debug-control` sends `granularity: "instruction"` on `next`, `step-in` and `step-out`.
