@@ -2072,6 +2072,25 @@ Applies to every terminal at once.
 | `:agents` | `never` |
 | `:schema` | `boolean` |
 
+## drgnx-term-cursor-click-to-move
+
+Whether a click at the shell's prompt, on the cursor's row, moves the cursor there (as Left or Right keys).  Needs
+the shell integration (it marks the prompt, OSC 133); nothing moves while a command runs, in a full-screen program
+or while the program tracks the mouse.  Applies at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `t` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `boolean` |
+
 ## drgnx-term-cursor-style
 
 The cursor a terminal shows until its program chooses one: "block", "block_hollow", "bar" or "underline".

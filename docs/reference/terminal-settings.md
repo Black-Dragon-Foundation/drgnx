@@ -31,6 +31,7 @@ A change reaches every open terminal.
 \| `selection-word-chars` \| `drgnx-term-selection-word-chars` \| The characters that end a word when a double click selects one in a terminal; every other character (a slash, a dot, a dash) is part of the word, so a path or an address is selected whole \|
 \| `mouse-reporting` \| `drgnx-term-mouse-reporting` \| Whether a program that asks for the mouse gets it \|
 \| `mouse-shift-capture` \| `drgnx-term-mouse-shift-capture` \| Whether a program that tracks the mouse also gets clicks with Shift held \|
+\| `cursor-click-to-move` \| `drgnx-term-cursor-click-to-move` \| Whether a click at the shell's prompt, on the cursor's row, moves the cursor there (as Left or Right keys) \|
 \| `link` \| `drgnx-term-link` \| Link patterns of your own: a list of (REGEXP TARGET) \|
 \| `link-url` \| `drgnx-term-link-url` \| Whether an address in a terminal's plain output (http, https, ftp, file) is a link: a middle click opens it, as an OSC 8 link does \|
 \| `scroll-to-bottom` \| `drgnx-term-scroll-to-bottom` \| When a terminal scrolled back to earlier output goes back to its cursor: on a keystroke (`keystroke'), on new output (`output'), both, or never (nil) \|
@@ -136,7 +137,6 @@ A terminal's colours are faces, so the theme sets them; no setting holds a colou
 | Ghostty option | What drgnx does for now |
 |---|---|
 \| `clipboard-read` \| a program never reads the clipboard: every read is refused \|
-\| `cursor-click-to-move` \| a click does not move the cursor at a prompt \|
 
 ## No place in drgnx
 
