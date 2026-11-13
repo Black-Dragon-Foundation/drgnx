@@ -672,8 +672,35 @@ window scrolled away from the cursor stays where it is unless ALL or `drgnx-term
     m)
   "The keymap on an OSC 8 link's text: a click opens it.")
 
+(defconst drgnx-term--url-regexp
+  "\\(?:https?\\|ftps?\\|file\\)://[^][ \t\n\"'<>(){}`]*[^][ \t\n\"'<>(){}`.,;:!?]"
+  "An address in plain output: a URL up to its first space or bracket, without the punctuation that ends a sentence.")
+
+(defun drgnx-term--link-props (uri)
+  "The text properties of a link to URI: a click opens it."
+  (list 'drgnx-term-link uri 'mouse-face 'highlight 'keymap drgnx-term-link-map 'follow-link t 'help-echo uri))
+
+(defun drgnx-term--match-links (beg end)
+  "Between BEG and END (one row), text with no OSC 8 link of its own that `drgnx-term-link' (your patterns, first)
+or, with `drgnx-term-link-url', a plain URL matches becomes a link, as an OSC 8 one."
+  (dolist (rule (append drgnx-term-link (and drgnx-term-link-url (list (list drgnx-term--url-regexp #'identity)))))
+    (save-excursion
+      (goto-char beg)
+      (let ((case-fold-search nil))
+        (while (re-search-forward (car rule) end t)
+          (let ((mb (match-beginning 0)) (me (match-end 0)))
+            (if (= mb me)
+                (forward-char 1)
+              (unless (text-property-not-all mb me 'drgnx-term-link nil)
+                (let ((uri (if (functionp (cadr rule)) (funcall (cadr rule) (match-string 0))
+                             (replace-regexp-in-string (car rule) (cadr rule) (match-string 0) t))))
+                  (when (stringp uri)
+                    (with-silent-modifications (add-text-properties mb me (drgnx-term--link-props uri))))))))))))
+  nil)
+
 (defun drgnx-term--buttons (view keys)
-  "The OSC 8 links of VIEW's rows KEYS (their `drgnx-term-link' text) become buttons."
+  "The OSC 8 links of VIEW's rows KEYS (their `drgnx-term-link' text) become buttons, and the text your link
+patterns and plain URLs match (`drgnx-term--match-links') becomes links."
   (dolist (key keys)
     (when-let* ((beg (drgnx-view-row-start view key)))
       (let ((end (save-excursion (goto-char beg) (line-end-position))) (pos beg))
@@ -683,7 +710,8 @@ window scrolled away from the cursor stays where it is unless ALL or `drgnx-term
               (with-silent-modifications
                 (add-text-properties pos next (list 'mouse-face 'highlight 'keymap drgnx-term-link-map 'follow-link t
                                                     'help-echo (get-text-property pos 'drgnx-term-link)))))
-            (setq pos next)))))))
+            (setq pos next)))
+        (drgnx-term--match-links beg end)))))
 
 (defconst drgnx-term--images-max 64 "The most images a terminal's buffer keeps made (an LRU).")
 

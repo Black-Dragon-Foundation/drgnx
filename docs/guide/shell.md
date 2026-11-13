@@ -47,6 +47,9 @@ the terminal says why in the echo area. So:
 - **Mouse** clicks and the wheel go to the program only while it asks for the mouse; otherwise they select text.
 - **Links** a program prints (OSC 8, `ls --hyperlink`) open on a click: a file in the other window, a URL in the
   browser, on the screen and in the rows scrolled off it alike.
+  An address in plain output (`https://…`, `file://…`) is a link too (`drgnx-term-link-url`, on by default), and
+  `drgnx-term-link` takes patterns of your own: `(("TICKET-\\([0-9]+\\)" "https://tracker.example/\\1"))` makes `TICKET-42` a link.
+  Your patterns come first; an OSC 8 link keeps its own address.
 - **Images** a program shows (`kitten icat`, `chafa`, `img2sixel`, `imgcat`, yazi's previews; the kitty graphics
   protocol, sixel and iTerm2 inline images) are drawn in the terminal, sharp at any scale, and scroll with the text;
   kitty animations play while a window shows the terminal (at most `drgnx-term-image-fps` frames a second). In a text

@@ -31,6 +31,8 @@ A change reaches every open terminal.
 \| `selection-word-chars` \| `drgnx-term-selection-word-chars` \| The characters that end a word when a double click selects one in a terminal; every other character (a slash, a dot, a dash) is part of the word, so a path or an address is selected whole \|
 \| `mouse-reporting` \| `drgnx-term-mouse-reporting` \| Whether a program that asks for the mouse gets it \|
 \| `mouse-shift-capture` \| `drgnx-term-mouse-shift-capture` \| Whether a program that tracks the mouse also gets clicks with Shift held \|
+\| `link` \| `drgnx-term-link` \| Link patterns of your own: a list of (REGEXP TARGET) \|
+\| `link-url` \| `drgnx-term-link-url` \| Whether an address in a terminal's plain output (http, https, ftp, file) is a link: a middle click opens it, as an OSC 8 link does \|
 \| `scroll-to-bottom` \| `drgnx-term-scroll-to-bottom` \| When a terminal scrolled back to earlier output goes back to its cursor: on a keystroke (`keystroke'), on new output (`output'), both, or never (nil) \|
 \| `notify-on-command-finish` \| `drgnx-term-notify-on-command-finish` \| When a command that ran a long time ending in a terminal is told (`drgnx-term-notify-on-command-finish-action'): `never', `unfocused' (when its terminal is not the selected window) or `always' \|
 \| `notify-on-command-finish-action` \| `drgnx-term-notify-on-command-finish-action` \| How a finished command is told: `bell' rings the bell, `notify' adds a drgnx notice \|
@@ -135,8 +137,6 @@ A terminal's colours are faces, so the theme sets them; no setting holds a colou
 |---|---|
 \| `clipboard-read` \| a program never reads the clipboard: every read is refused \|
 \| `cursor-click-to-move` \| a click does not move the cursor at a prompt \|
-\| `link` \| only OSC 8 links are links; there are no link patterns of your own \|
-\| `link-url` \| an address in plain output is not a link (OSC 8 links are) \|
 
 ## No place in drgnx
 

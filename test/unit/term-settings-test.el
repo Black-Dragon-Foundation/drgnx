@@ -226,5 +226,29 @@
         (should (= (length (drgnx-term--colours)) 259)))
       (drgnx-epoch-bump 'term-theme))))
 
+(ert-deftest drgnx-term-settings/plain-urls-and-your-patterns-become-links ()
+  ;; link-url: an address in plain output is a link (the sentence's full stop is not part of it); link: your patterns
+  ;; first, with a group in the target; an OSC 8 link keeps its own address
+  (with-temp-buffer
+    (insert "see https://example.org/a?b=1, or TICKET-42 and (http://x.y/z).\n")
+    (insert (propertize "https://osc8.example/" 'drgnx-term-link "https://real.example/") "\n")
+    (let ((drgnx-term-link-url t) (drgnx-term-link '(("TICKET-\\([0-9]+\\)" "https://tracker.example/\\1"))))
+      (drgnx-term--match-links (point-min) (line-end-position))
+      (goto-char (point-min))
+      (search-forward "https://example.org")
+      (should (equal (get-text-property (match-beginning 0) 'drgnx-term-link) "https://example.org/a?b=1"))
+      (search-forward "TICKET")
+      (should (equal (get-text-property (match-beginning 0) 'drgnx-term-link) "https://tracker.example/42"))
+      (search-forward "http://x.y")
+      (should (equal (get-text-property (match-beginning 0) 'drgnx-term-link) "http://x.y/z"))
+      (forward-line 1)
+      (drgnx-term--match-links (point) (line-end-position))
+      (should (equal (get-text-property (point) 'drgnx-term-link) "https://real.example/")))
+    (let ((drgnx-term-link-url nil) (drgnx-term-link nil))
+      (erase-buffer)
+      (insert "https://example.org/\n")
+      (drgnx-term--match-links (point-min) (line-end-position))
+      (should-not (get-text-property (point-min) 'drgnx-term-link)))))
+
 (provide 'term-settings-test)
 ;;; term-settings-test.el ends here

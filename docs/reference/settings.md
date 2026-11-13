@@ -2288,6 +2288,43 @@ terminals.
 | `:agents` | `never` |
 | `:schema` | `(or null string)` |
 
+## drgnx-term-link
+
+Link patterns of your own: a list of (REGEXP TARGET).  Text in a terminal's output that REGEXP matches is a link
+to TARGET: a string, with `\&' and `\N' for the match and its groups ("https://github.com/\1"), or a function of the
+matched text that returns the address (a file name works too).  Case counts.  Applies to every terminal at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(repeat (list (regexp :tag "Matches") (choice :tag "Link to" string function)))` |
+| `:scope` | `global` |
+| `:workspace` | `code` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-term--theme-changed` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(list-of (list-of any))` |
+
+## drgnx-term-link-url
+
+Whether an address in a terminal's plain output (http, https, ftp, file) is a link: a middle click opens it, as an
+OSC 8 link does.  Your own patterns (`drgnx-term-link') come first.  Applies to every terminal at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `t` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-term--theme-changed` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `boolean` |
+
 ## drgnx-term-linux-cgroup-memory-limit
 
 The most memory a new terminal (its program and all it starts) may use, in systemd's form ("4G", "512M"); nil:
