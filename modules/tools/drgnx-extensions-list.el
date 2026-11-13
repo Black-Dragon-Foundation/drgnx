@@ -405,6 +405,8 @@ once a step, so it is one `format' (no copies)."
   "The Extensions list: packages, plugins and modules in one place."
   (setq-local truncate-lines t cursor-type nil
               revert-buffer-function (lambda (&rest _) (drgnx-extensions-list-refresh)))
+  ;; the rows in the UI font, as the Explorer's: names are the buffer's text, the hub's faces only add tone
+  (face-remap-add-relative 'default 'drgnx-ui-text)
   (buffer-disable-undo)
   (add-hook 'post-command-hook #'drgnx-extensions-list--post-command nil t))
 

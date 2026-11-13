@@ -139,6 +139,52 @@ fn extensions_kinds_are_lucide_icons_on_a_graphical_display() {
     assert_eq!(text(&tty, "plugin:p"), "t-plugin plugin:p 1.2  on");
 }
 
+/// [D] The rows take the Explorer's faces: a header is a dock section's title (`drgnx-wb-section`), a name is the
+/// buffer's UI text (no face of its own), the version and the summary line muted.  A row with nothing to say under it
+/// (a missing package: no summary, source or trust word) is one line, and "missing" is a neutral warning, not a
+/// failure: the error colour stays for what failed or needs the user (a failed install, a plugin not approved).
+#[test]
+fn extensions_rows_follow_the_explorer_and_say_missing_neutrally() {
+    let mut missing = row("pkg:m", w::State::Missing);
+    missing.summary = String::new();
+    missing.source = String::new();
+    missing.signed = w::Signed::None;
+    missing.version = None;
+    let (b, _) = build(
+        &params(false),
+        vec![
+            (2, vec![row("pkg:a", w::State::Installed), missing]),
+            (0, vec![]),
+        ],
+    );
+    let (rows, _) = rows(&b, GUI);
+    let get = |k: &str| rows.iter().find(|r| r.key == k).unwrap();
+    assert_eq!(
+        get("section:installed").runs,
+        vec![(0, 13, "drgnx-wb-section".to_owned())]
+    );
+    let a = get("pkg:a");
+    assert!(!a.runs.iter().any(|r| r.2 == "bold"), "{:?}", a.runs);
+    assert!(
+        a.runs.contains(&(3, 7, "shadow".to_owned())),
+        "{:?}",
+        a.runs
+    );
+    assert_eq!(get("pkg:a/2").runs, vec![(0, 43, "shadow".to_owned())]);
+    let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
+    assert_eq!(keys, ["section:installed", "pkg:a", "pkg:a/2", "pkg:m"]);
+    assert_eq!(
+        text(&rows, "pkg:m"),
+        "  m  missing: no archive you use has it"
+    );
+    assert!(
+        get("pkg:m").runs.iter().any(|r| r.2 == "drgnx-status-warn"),
+        "{:?}",
+        get("pkg:m").runs
+    );
+    assert!(!get("pkg:m").runs.iter().any(|r| r.2 == "drgnx-status-fail"));
+}
+
 /// Every column the list shows is in the hub's rows: the header's title and count, the glyph (the terminal's ASCII in
 /// a tty class), the name, the version, the state's chip (the update's target), "restart to use", and the summary line
 /// (summary, source, trust word) unless dense; each row's span names its id for the model and the commands. A row
@@ -200,7 +246,7 @@ fn extensions_rows_carry_every_list_column() {
     );
     let runs = serde_json::to_value(b_row).unwrap()["runs"].to_string();
     assert!(
-        runs.contains("drgnx-status-warn") && runs.contains("bold") && runs.contains("shadow"),
+        runs.contains("drgnx-status-warn") && runs.contains("shadow"),
         "{runs}"
     );
     // a terminal class: the glyph's ASCII form; dense: no summary lines

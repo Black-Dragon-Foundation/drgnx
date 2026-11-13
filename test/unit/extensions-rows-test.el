@@ -264,6 +264,12 @@ selection.  Off a generation's row it asks."
             (should-not calls)))
       (drgnx-extensions-list--teardown))))
 
+(ert-deftest drgnx-extensions-list/the-rows-are-in-the-ui-font ()
+  "The list's buffer draws in the UI font, as the Explorer's rows: `default' is remapped to `drgnx-ui-text'."
+  (with-temp-buffer
+    (drgnx-extensions-mode)
+    (should (memq 'drgnx-ui-text (flatten-tree (alist-get 'default face-remapping-alist))))))
+
 (ert-deftest drgnx-extensions-list/the-list-asks-on-the-subscribed-connection ()
   "The hub sends a view's model and rows to the connection that asked, and holds the Recommended set per connection:
 `extensions/list' and `extensions/recommended' go on the subscribed connection, the one the env and the patches use,

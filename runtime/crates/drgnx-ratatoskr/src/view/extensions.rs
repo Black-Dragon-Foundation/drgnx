@@ -128,9 +128,10 @@ fn state_chip(r: &w::Row) -> Option<(String, &'static str)> {
         ),
         S::Held => ("held".into(), "drgnx-status-warn"),
         S::Incompat => ("needs a newer Emacs".into(), "drgnx-status-warn"),
+        // a row the user did not ask for: a neutral warning, not a failure
         S::Missing => (
             "missing: no archive you use has it".into(),
-            "drgnx-status-fail",
+            "drgnx-status-warn",
         ),
         S::Failed => ("failed".into(), "drgnx-status-fail"),
         S::NeedsPackage => ("waits for a package".into(), "drgnx-status-warn"),
@@ -218,22 +219,26 @@ fn spans(mut row: RowBuilder, id: &str) -> Row {
     row.finish()
 }
 
-/// BUILT's rows in LOOK: each header, then each row's line and (unless dense) its summary line; and the icons they
-/// name, each once.
+/// A header's face: a dock section's title, as the Explorer's (window-dark.html `.sec`).
+const HEADER: &str = "drgnx-wb-section";
+
+/// BUILT's rows in LOOK: each header, then each row's line and (unless dense, and when it has one) its summary line;
+/// and the icons they name, each once.  The faces are the Explorer's: the name is the buffer's UI text, the version and
+/// the summary muted.
 pub fn rows(b: &Built, look: Look) -> (Vec<Row>, Vec<(ImageId, String)>) {
     let mut out = Vec::new();
     let mut images = BTreeMap::new();
     for s in &b.sections {
         let key = format!("section:{}", s.name);
         let mut h = RowBuilder::new(key.clone());
-        h.push(&format!("{} ({})", s.title, s.count), Some("bold"));
+        h.push(&format!("{} ({})", s.title, s.count), Some(HEADER));
         let end = h.pos();
         h.prop(0, end, "drgnx-work-id", json!(key)); // a header is no row a command acts on
         out.push(h.finish());
         for r in &s.rows {
             let mut l = RowBuilder::new(r.id.clone());
             mark(b, &mut l, kind_of(r), look, &mut images);
-            l.push(&r.name, Some("bold"));
+            l.push(&r.name, None);
             if let Some(v) = &r.version {
                 l.push(&format!(" {v}"), Some("shadow"));
             }
@@ -245,13 +250,12 @@ pub fn rows(b: &Built, look: Look) -> (Vec<Row>, Vec<(ImageId, String)>) {
                     .push("restart to use", Some("drgnx-status-warn"));
             }
             out.push(spans(l, &r.id));
-            if !b.dense {
-                let words: Vec<&str> =
-                    [Some(r.summary.as_str()), Some(r.source.as_str()), trust(r)]
-                        .into_iter()
-                        .flatten()
-                        .filter(|w| !w.is_empty())
-                        .collect();
+            let words: Vec<&str> = [Some(r.summary.as_str()), Some(r.source.as_str()), trust(r)]
+                .into_iter()
+                .flatten()
+                .filter(|w| !w.is_empty())
+                .collect();
+            if !b.dense && !words.is_empty() {
                 let mut d = RowBuilder::new(format!("{}/2", r.id));
                 d.push(&format!("    {}", words.join(" · ")), Some("shadow"));
                 out.push(spans(d, &r.id));
@@ -277,7 +281,7 @@ fn generation_rows(
     let mut h = RowBuilder::new("section:generations");
     h.push(
         &format!("Generations ({})", b.generations.len()),
-        Some("bold"),
+        Some(HEADER),
     );
     let end = h.pos();
     h.prop(0, end, "drgnx-work-id", json!("section:generations"));
@@ -293,7 +297,7 @@ fn generation_rows(
         let id = format!("gen:{}", g.n);
         let mut l = RowBuilder::new(id.clone());
         mark(b, &mut l, ("package", "package"), look, images);
-        l.push(&format!("#{}", g.n), Some("bold"));
+        l.push(&format!("#{}", g.n), None);
         if !g.time.is_empty() {
             l.push(&format!("  {}", g.time), None);
         }
