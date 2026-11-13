@@ -233,8 +233,12 @@ it goes by any way: a toast stays `drgnx-notice-toast-seconds', whatever shows a
 
 (defvar drgnx-notice-toast--counted 0 "The waiting count the status bars were last told of.")
 
+(defvar drgnx-notice-toast--settling nil "Non-nil during the second layout of `drgnx-notice-toast--sync'.")
+
 (defun drgnx-notice-toast--sync ()
   "Draw the model: one pooled frame per visible notice, stacked upward from the corner; the rest out of sight.
+The toolkit settles a frame's size (to whole lines) after `set-frame-size', so the stack is laid out a second time,
+after a redisplay, from the sizes the frames have then (else it sits on the first, smaller size).
 When the count of those waiting changed, the status bars are drawn again (their `toasts' segment)."
   (unless (= drgnx-notice-toast--counted (length drgnx-notice-toast--waiting))
     (setq drgnx-notice-toast--counted (length drgnx-notice-toast--waiting))
@@ -256,14 +260,18 @@ When the count of those waiting changed, the status bars are drawn again (their 
             (let* ((h (+ (cdr (window-text-pixel-size win nil nil width 2000))
                          (* 2 (drgnx-notice-toast--px parent 10)))))
               (set-frame-size frame width h t)
-              (setq bottom (- bottom h))
+              (setq bottom (- bottom (frame-pixel-height frame)))   ; the frame's own height, as the toolkit has it
               (set-frame-position frame (- right (frame-pixel-width frame)) bottom)
               (setq bottom (- bottom gap)))
             (unless (frame-visible-p frame) (make-frame-visible frame))
             (setq i (1+ i))))
         (dolist (e (nthcdr i drgnx-notice-toast--pool))
           (when (and (frame-live-p (car e)) (frame-visible-p (car e))) (make-frame-invisible (car e)))))
-      (drgnx-notice-toast--sync-timers)))))
+      (drgnx-notice-toast--sync-timers)
+      (unless drgnx-notice-toast--settling
+        (let ((drgnx-notice-toast--settling t))
+          (redisplay t)
+          (drgnx-notice-toast--sync)))))))
 
 (defun drgnx-notice-toast-delete-all ()
   "Forget every toast and delete the pooled frames and their buffers (the echo mode going off)."
