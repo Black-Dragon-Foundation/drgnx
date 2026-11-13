@@ -263,6 +263,31 @@ async fn pgid_one_and_own_group_are_refused() {
     assert!(g.leader_alive());
 }
 
+/// GL-T12-5: a group whose only member left is its leader, unreaped (a zombie), is gone: `kill(-pgid, 0)` still
+/// succeeds for it, and waiting for the group to vanish would wait out the grace and the kill period for nothing.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_group_with_only_an_unreaped_zombie_leader_is_gone() {
+    let mut g = Group::start("exit 0").await;
+    let stat = format!("/proc/{}/stat", g.pgid);
+    skuld::wait_until("the leader is a zombie", 10, || {
+        std::fs::read_to_string(&stat).ok().filter(|s| {
+            s.rsplit(')')
+                .next()
+                .is_some_and(|r| r.trim_start().starts_with('Z'))
+        })
+    });
+    assert!(g.exists(), "the zombie still answers kill(-pgid, 0)");
+    let out = timeout(
+        LIMIT,
+        kill_group(g.pgid, Duration::from_millis(100), &Spy::real()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out, ReapOutcome::Killed);
+    assert!(g.child.wait().await.unwrap().is_some());
+}
+
 #[tokio::test]
 async fn a_dead_leaders_live_group_is_killed() {
     let mut g = Group::start("sleep 60 & read x; exit").await;

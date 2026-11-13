@@ -688,9 +688,41 @@ proxy variables rebuilt around new ports, which is the whole launch.
 **The reduced tier's socket families (GL-T13-5).** UNIX, INET, INET6 and NETLINK only (NETLINK whole: it is local).
 A tool that needs another family (AF_ALG crypto, Bluetooth) fails with EAFNOSUPPORT there and runs in the full tier.
 
+**Start time (GL-T15-5), measured.** A full-tier isolated start with the relay (release build, F44 VM, no perf lease) took
+a median of 21.8 ms, against bare bwrap's 4.0 ms.
+
+**The check's probe and the group kill (GL-T12-4, GL-T12-5, GL-T15-4).** `run_probe` reads the helper's status line on a
+blocking thread (`spawn_blocking`), so the runtime's thread stays free. `kill_group` counts a group in which only
+unreaped zombies are left (read from `/proc`; other systems wait as before) as gone, so a start that failed at once
+no longer waits out the grace and the kill period. After a refused start the `sandbox run` result file's `exit` is the
+helper's setup failure, 125, whichever of the helper and the group's kill came first.
+
+**Accepted by the manager, 2026-11-13.** None of these is a security limit, or each fails closed:
+- `sandbox run` gives the child stdin `/dev/null` and its stderr only as an 8000-character tail after the exit; no
+  draugr stdio option is added until a caller needs one (GL-T13-4).
+- The escape harness waits at most 60 s per run and skips only for listed reasons (GL-T14-3). Its probe and harness
+  are glibc builds, which run on the Fedora 45 images; there is no musl build (GL-T14-4).
+- The Seatbelt profile travels in argv up to 256 KiB and is refused above it; the limit is tested (GL-T9-2).
+- A hide is a path of the host (it is also covered under every bind's dest that holds it). A path that exists only
+  inside cannot be named, and no caller needs one (GL-T7-2).
+
+**Accepted by the user, 2026-11-14 (GL-T5-2/4).** The reduced tier's network stays as the plan note says: Landlock's TCP
+rules are per port, so a connect to a relay port number can reach any host; binds are refused; UDP and raw sockets
+are refused by seccomp; DNS goes through the proxy. The tier is opt-in and its note says "not isolated".
+
+**Intended, ruled by the manager 2026-11-14.** The private `/etc` (a bind under a system root at a path the host lacks)
+shows the host's entries as they were when the session started: an entry the host adds afterwards is not seen. The
+host's own `/etc/codex`, if there is one, is replaced inside the session by the lock's two files; that is the point of
+the lock.
+
 **Toolchain layouts (GL-T3-2).** The toolchain roots the profile reads are the ones `toolchain::roots` knows
 (mise, cargo, rustup, nvm, pyenv, and so on). A layout it does not know (Homebrew under the home, asdf, volta, fnm,
 sdkman, bun globals beyond `~/.bun/bin`) is added by the user through the `agents.eld` read list.
+
+**The reduced tier's gaps are named where it is named (GL-T8-2, GL-T5-3).** The note `sandbox check` and the doctor add
+for the reduced tier (`REDUCED_CANNOT_PIN`) says that it cannot pin `.dir-locals.el`, `.dir-locals-2.el` and `.drgnx/`,
+that its network is narrowed to the relay's ports and not isolated, and that other processes' command lines are
+readable.
 
 **The browser layer** (`landlock::browser_plan`). The agent browser's host and every Chromium process under it run
 in a second Landlock domain on top of the agent's. Landlock layers only narrow, so this layer can only take away.
@@ -1470,6 +1502,7 @@ layer alone cap Landlock (`landlock_abi_cap: 3` takes its TCP rules away) or omi
 | `reduced-proc-environ-denied`, `pid-namespace-hides-others` | another process's `/proc/PID/environ` (the backend's secret lives there) is unreadable (reduced: EACCES) or absent (full: the pid namespace) |
 | `reduced-proc-cmdline-the-gap` | the accepted gap: the reduced tier reads other processes' command lines |
 | `reduced-tcp-only-to-the-relay`, `reduced-bind-refused` | the reduced tier connects over TCP only to its relay (and through it to the proxy), and binds no TCP port |
+| `reduced-relay-port-bind-refused` | the reduced tier's second Landlock layer (`forbid_tcp_bind`) refuses a bind even of the relay's own port (`${RELAY_PORT}`): EACCES, where without the layer the relay's hold on the port shows as EADDRINUSE (GL-T15-2) |
 | `reduced-udp-and-icmp-refused` | the reduced tier makes no UDP, ICMP or MPTCP socket (seccomp), so no DNS or datagram leaves past the proxy |
 | `reduced-no-pty` | the reduced tier opens no pty at all (Landlock: `/dev/ptmx` is not granted), so TIOCSTI never gets that far there |
 | `no-new-privs`, `no-new-privs-reduced` | `NoNewPrivs` 1 and seccomp mode 2 in the program |
