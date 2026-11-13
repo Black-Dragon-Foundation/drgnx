@@ -1148,7 +1148,9 @@ bin/drgnx logs its arguments.  Return (ENV . COMMIT): the environment of a real 
 
 (defun drgnx-install-test--zig-run (tmp &rest env)
   "Run the Zig step with ENV on a Linux x86_64 machine, a stub minisign (exit 0 unless ENV says MINISIGN_EXIT=n) in a
-PATH of its own; return (EXIT . OUTPUT).  The data dir is TMP/data."
+PATH of its own; return (EXIT . OUTPUT).  The data dir is TMP/data.  The host's directories that hold a `zig' are
+left out of PATH (the Rust test image has Zig 0.17 for the terminal's engine, which the step would take and so fetch
+nothing): the only Zig on PATH is a stub a test put in TMP/bin."
   (let* ((bin (expand-file-name "bin" tmp))
          (ms (expand-file-name "minisign" bin))
          (exit (or (cl-some (lambda (e) (and (string-prefix-p "MINISIGN_EXIT=" e) (substring e 14))) env) "0")))
@@ -1159,7 +1161,11 @@ PATH of its own; return (EXIT . OUTPUT).  The data dir is TMP/data."
            (append (list (concat "DRGNX_INSTALL_OS_RELEASE=" (drgnx-install-test--os "fedora-45"))
                          "DRGNX_INSTALL_UNAME=Linux" "DRGNX_INSTALL_ARCH=x86_64" "DRGNX_INSTALL_ZIG_ONLY=1"
                          (concat "DRGNX_DATA_DIR=" tmp "/data")
-                         (concat "PATH=" bin ":" (getenv "PATH")))
+                         (concat "PATH=" bin ":"
+                                 (mapconcat #'identity
+                                            (cl-remove-if (lambda (d) (file-executable-p (expand-file-name "zig" d)))
+                                                          (split-string (or (getenv "PATH") "") ":" t))
+                                            ":")))
                    (cl-remove-if (lambda (e) (string-prefix-p "MINISIGN_EXIT=" e)) env))
            nil)))
 
