@@ -195,10 +195,12 @@ close-on-exec, so the new image takes the lock at the exec).
 at start names the file on disk; macOS `_NSGetExecutablePath` and `realpath`) and records that path's device, inode
 and mtime. Every 2 s it `stat`s **that path**, never `/proc/self/exe`: the link follows the running inode, which a
 rename-replace (an update) leaves alone, so it would never change. A changed stamp runs `<path> version --json` with a
-5 s deadline; only an answer with another `commit` counts, and a missing, half-written or failing file is logged and
-looked at again at the next tick (the same commit under a new stamp becomes the baseline, so a rebuild that says the
-same commit — `unknown`, a build without `DRGNX_BUILD_COMMIT`, the same `HEAD-dirty` while developing — is never
-picked up: `drgnx hub stop` by hand, and the next start runs the new build). Once another build is confirmed, the `notice` event
+5 s deadline; only an answer with another `commit` or another `build_id` counts (`build_id` is the unix second build.rs
+ran, which it does again whenever a source file of the crate changes, so a rebuild that says the same commit —
+`unknown`, a build without `DRGNX_BUILD_COMMIT`, the same `HEAD-dirty` while developing — is another build; a file with
+no `build_id` is from before it and counts as another build too), and a missing, half-written or failing file is logged
+and looked at again at the next tick (the same commit and build id under a new stamp, a touch or a re-install of the same
+build, becomes the baseline). Once another build is confirmed, the `notice` event
 `{source: "hub", severity: "warn", id: "restart-when-idle", life: "condition", text: "drgnx was updated; the hub
 restarts when its N running turns finish", command: "hub-restart-now"}` is sent (again when N changes), and the hub
 exits 75 the first time nothing is busy: **idle** is none of the hub's own sessions running a turn (an idle chat does
