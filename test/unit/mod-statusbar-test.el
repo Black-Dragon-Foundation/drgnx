@@ -385,9 +385,12 @@ follow it when the fonts change."
 (ert-deftest drgnx-statusbar/only-files-code-and-text-get-the-bar ()
   (drgnx-statusbar-test--with
     (let ((stock (default-value 'mode-line-format)))
-      ;; a special buffer (Magit, help...) gets the bar of `drgnx-statusbar-other', not the stock mode line; any other
-      ;; buffer that is not a file (Dired, Info, the agent pane...) keeps it
+      ;; a special buffer (Magit, help...) and a Dired buffer get the bar of `drgnx-statusbar-other', not the stock
+      ;; mode line (M12f-AF-2); any other buffer that is not a file (Info, the agent pane...) keeps it
       (drgnx-statusbar-test--in-buffer #'special-mode
+        (should-not (equal (drgnx-statusbar-mode-line) stock)))
+      (require 'dired)
+      (drgnx-statusbar-test--in-buffer #'dired-mode
         (should-not (equal (drgnx-statusbar-mode-line) stock)))
       ;; code and text get the bar; so does any buffer that visits a file
       (dolist (mode '(emacs-lisp-mode text-mode conf-mode))

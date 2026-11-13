@@ -216,7 +216,7 @@ error and warning counts (in `drgnx-status-fail` and `drgnx-status-warn`; a zero
 (`drgnx-status-attention`, through `drgnx-statusbar-waiting`); the others use the ok, warn and fail faces.
 
 Windows that are not editors get the bar too: a buffer in a mode derived from one of `drgnx-statusbar-other-modes`
-(`special-mode`: Magit, Help, `*Messages*`) shows the segments of `drgnx-statusbar-other` (`mode`, the buffer's
+(`special-mode`: Magit, Help, `*Messages*`; `dired-mode`) shows the segments of `drgnx-statusbar-other` (`mode`, the buffer's
 `mode-name`, then `misc`) on the left and no line and column.
 
 The most recently used editor window shows the whole bar; the other editor groups show `drgnx-statusbar-compact`

@@ -482,7 +482,7 @@ again whenever a theme is enabled or disabled, and after a zoom."
           (let* ((base (if (drgnx-look-fonts--own-face-p face) '(desktop) '(default desktop)))
                  (override (drgnx-look-fonts--plist-for role face res
                                                         (append (unless (drgnx-look-fonts--owned-p face) '(setting))
-                                                                (when (drgnx-look-fonts--themed-p face) base))))
+                                                                (when (drgnx-look-fonts--themed-p face) '(default desktop)))))   ; its defface spec is hidden: the defaults go here
                  (defface (drgnx-look-fonts--plist-for role face res base)))
             (if (and (memq role drgnx-look-fonts--absolute-roles) (eq face (car (drgnx-look-fonts--faces role))))
                 (push (list face res override defface) later)
@@ -508,7 +508,7 @@ again whenever a theme is enabled or disabled, and after a zoom."
   "The `:apply' of every role setting: write the faces while ui/look runs.  A change redraws every frame, so the
 settings page's size slider and typed digits are debounced: 300 ms after the last change, once."
   (when (drgnx-module-running-p 'ui/look)
-    (drgnx-timer-debounce 'look-fonts-preview 0.3 #'drgnx-look-fonts--preview :owner :core)))
+    (drgnx-timer-debounce 'look-fonts-preview 0.3 #'drgnx-look-fonts--preview :owner 'ui/look)))
 
 ;;;; Per-mode overrides: buffer-local remaps
 

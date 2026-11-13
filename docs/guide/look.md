@@ -153,7 +153,7 @@ A face your theme or your Customize settings set is left as you set it; a theme 
 count. Colours are worked out for a graphical display and a 256-colour terminal separately, so a terminal client of a
 daemon never reads a graphical frame's colours or the other way round. A colour the theme leaves unspecified falls back
 to the theme's default colours, and `drgnx-look-derive-gaps` lists the faces that could not be worked out (`drgnx doctor` shows them, in its `look-derive` row, under a theme that leaves some). Turning ui/look
-off puts every face back as drgnx defines it.
+off puts every face back as drgnx defines it. A face set only by `set-face-attribute` (not a theme or Customize) is a frame's state, not a theme's, and derive does not read it.
 
 ## Fonts
 
