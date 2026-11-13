@@ -484,6 +484,10 @@ jobs:
       # The agent core's sandbox lane (agent system part 1): the tests marked #[ignore] because they need the real
       # bubblewrap (exec runs in the starter's sandbox). The provider and gateway rows of tests/launch_sandboxed.rs
       # run domr's ratatoskr-mock (the mock LLM), which they find beside the ratatoskr binary: built first.
+      # The debug adapters the ignored debug rows (tests_blocked_live, tests_fork_live) run against, at the hub's pins:
+      # the lane runs every ignored test of the crate, so it has them (a lane without them reads red on them)
+      - name: debug adapters (debugpy and js-debug at the hub's pins)
+        run: bash .github/ci/debug-adapters.sh "$RUNNER_TEMP/debug-adapters" >> "$GITHUB_ENV"
       - name: build the agent core's tests (test hooks)
         id: core-build
         if: ${{ !cancelled() }}
@@ -1225,20 +1229,14 @@ jobs:
         timeout-minutes: 5
         run: |
           set -euo pipefail
-          a="$RUNNER_TEMP/debug-adapters"
-          mkdir -p "$a"
-          python3 -m venv "$a/venv"
-          printf 'debugpy==1.8.22 --hash=sha256:a9e9d3550e15ca479c59333e90845029190531f0cacfedab3b815a57bd913947\n' > "$a/req.txt"
-          "$a/venv/bin/pip" install --quiet --require-hashes -r "$a/req.txt"
-          curl -sSfL -o "$a/js.tgz" https://github.com/microsoft/vscode-js-debug/releases/download/v1.140.1/js-debug-dap-v1.140.1.tar.gz
-          echo "c72fab31bcbfdce6ad1f42adfd28eff8d4681dd3b03b5e2e6f9e72e6f9927faf  $a/js.tgz" | shasum -a 256 -c -
-          tar -xzf "$a/js.tgz" -C "$a"
+          set -a
+          eval "$(bash .github/ci/debug-adapters.sh "$RUNNER_TEMP/debug-adapters" | tee -a "$GITHUB_ENV")"
+          set +a
           bin=$(jq -r 'select(.profile.test == true and .target.name == "drgnx_ratatoskr" and (.target.kind | index("lib"))) | .executable' \
             "$RUNNER_TEMP/test-bins.json" | tail -n 1)
           [ -x "$bin" ] || { echo "::error::no test binary for the hub's lib"; exit 1; }
           cd runtime/crates/drgnx-ratatoskr
-          DRGNX_DEBUG_LIVE_PYTHON="$a/venv/bin/python3" DRGNX_DEBUG_LIVE_JS_DEBUG="$a/js-debug/src/dapDebugServer.js" \
-            "$bin" --ignored --exact debug::tests_fork_live::mac_forks_keep_to_their_port_block --nocapture --test-threads 1
+          "$bin" --ignored --exact debug::tests_fork_live::mac_forks_keep_to_their_port_block --nocapture --test-threads 1
       # recorded runs' key (spec §19.2): a throwaway keychain, the only one searched and the default, unlocked then
       # locked; the runner's own keychains are put back after, whatever happened
       - name: debug runs' key in the Keychain (made, read back, locked without a dialog)

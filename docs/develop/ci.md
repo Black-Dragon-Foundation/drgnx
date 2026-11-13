@@ -601,6 +601,15 @@ architectures, so the x64 VM covers it.
 To bump the image, change its name and sha256 (the `CHECKSUM` file beside the image, signed by Fedora's key);
 `drgnx-ci/the-escape-legs-run-the-browser-rows-in-a-vm` holds the pin, the step order and the arm64 skip.
 
+### The debug adapters
+
+The ignored debug rows (`debug::tests_blocked_live`, `tests_fork_live`, `tests_live_adapters`) run against real adapters.
+`.github/ci/debug-adapters.sh DIR` installs them at the hub's pins (`etc/debug-adapters.eld`): debugpy as a hash-pinned
+wheel in a venv, js-debug as the release tarball with its sha256 checked, and prints `DRGNX_DEBUG_LIVE_PYTHON` and
+`DRGNX_DEBUG_LIVE_JS_DEBUG` for `$GITHUB_ENV`. A lane that runs every ignored test of the hub's crate (the escape legs'
+sandbox lane) or one of those rows by name (the macOS fork row) runs the script first; the ci-workflows test
+`a-lane-that-runs-the-ignored-debug-rows-installs-the-adapters` holds that.
+
 ## What is cached
 
 Measured on the runs of 2026-10-19/20 (`gh run view ID --json jobs`): the unit suite is 3.5–4 min on Linux and about

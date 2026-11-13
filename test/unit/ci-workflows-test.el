@@ -419,6 +419,32 @@ Returns (EXIT . OUTPUT)."
     (drgnx-ci-test--has (drgnx-ci-test--job rt "escape-host")
                         "skips=$(sed 's/#.*//' test/timing-rust.txt | awk '$1 == \"drgnx-ratatoskr\" { printf \" --skip %s\", $3 }')\n")))
 
+;; The ignored debug rows (`debug::tests_blocked_live`, `tests_fork_live`) need the adapters: a lane that runs every ignored
+;; test of the hub's crate, or one of those rows by name, installs them first (`.github/ci/debug-adapters.sh`, the hub's pins),
+;; or it reads red on them ("Cannot find module '/opt/js-debug/...'", "No module named 'debugpy'").
+(ert-deftest drgnx-ci/a-lane-that-runs-the-ignored-debug-rows-installs-the-adapters ()
+  (let ((rt (drgnx-ci-test--yml "runtime.yml")) (checked 0))
+    (skip-unless rt)
+    (should (file-exists-p (expand-file-name ".github/ci/debug-adapters.sh" drgnx-ci-test--root)))
+    (let ((pos 0))
+      (while (string-match "\n  \\([a-z0-9-]+\\):\n" rt pos)
+        (let* ((id (match-string 1 rt)) (start (match-end 0))
+               (end (or (string-match "\n  [a-z0-9-]+:\n" rt start) (length rt)))
+               (job (substring rt start end)) (line-at 0))
+          (dolist (line (split-string job "\n"))
+            (when (and (string-search "--ignored" line)
+                       (not (string-search "--list" line))
+                       (or (string-search "debug::tests_" line)
+                           (and (string-match-p "cargo test .*-p drgnx-ratatoskr" line)
+                                (not (string-match-p " --test " line)))))
+              (setq checked (1+ checked))
+              (should (string-search "debug-adapters.sh" (substring job 0 line-at))))
+            (setq line-at (+ line-at (length line) 1)))
+          (ignore id)
+          (setq pos end))))
+    ;; the escape-host's sandbox lane and the macos fork row both run them
+    (should (>= checked 2))))
+
 (ert-deftest drgnx-ci/the-timing-job-runs-the-rust-timing-tests-report-only ()
   (let* ((tiers (drgnx-ci-test--yml "drgnx-tiers.yml")) (script (expand-file-name "test/timing-rust.sh" drgnx-ci-test--root)))
     (skip-unless (and tiers (file-exists-p script)))
