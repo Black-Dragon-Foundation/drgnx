@@ -688,6 +688,9 @@ proxy variables rebuilt around new ports, which is the whole launch.
 **The reduced tier's socket families (GL-T13-5).** UNIX, INET, INET6 and NETLINK only (NETLINK whole: it is local).
 A tool that needs another family (AF_ALG crypto, Bluetooth) fails with EAFNOSUPPORT there and runs in the full tier.
 
+**Start time (GL-T15-5), measured.** A full-tier isolated start with the relay (release build, F44 VM, no perf lease) took
+a median of 21.8 ms, against bare bwrap's 4.0 ms.
+
 **Toolchain layouts (GL-T3-2).** The toolchain roots the profile reads are the ones `toolchain::roots` knows
 (mise, cargo, rustup, nvm, pyenv, and so on). A layout it does not know (Homebrew under the home, asdf, volta, fnm,
 sdkman, bun globals beyond `~/.bun/bin`) is added by the user through the `agents.eld` read list.
