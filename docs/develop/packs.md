@@ -172,3 +172,40 @@ unless `test/ui/.packs-live-data` names the folder of a `drgnx packs sync` (the 
 own, so a file carries it). The run that makes the pictures is local tooling: build the grammars once in a container
 with `test/packs/live.sh` (`DRGNX_PACKS_LIVE_KEEP=DIR` keeps the data), then run the GUI suite with that folder mounted at
 the same path and `DRGNX_TEST_SELECTOR='"drgnx-packs-gui"'`.
+
+## The chunker's rules: `queries/chunks.scm`
+
+Hrafn's chunker takes what a top-level form defines from the pack's `queries/chunks.scm` (compiled into the hub with the
+manifest, `hrafn::chunk::registry`), under rules fixed in `hrafn::chunk::engine`, in place of a Rust walker per language
+(Rust, C, shell, Python, JavaScript, TypeScript, TSX, Go and Java; Emacs Lisp, Org and Markdown keep their chunkers).
+A pattern captures `@definition.KIND` (the node that defines; the kind is the suffix) with `@name`; `@container` on a node
+whose `body` field holds members; `@transparent` on a node a definition may sit inside that is itself the member (a `const`
+statement, a C `declaration`, a Go `var` declaration); `@skip` on a go-between (a Java enum's declarations, Go's `var (...)`
+list); `@wrapper` with `@wrapped` for `export` and decorators; `@doc` with `@docowner` for a docstring.
+
+1. A top-level form's definitions have no span of their own.
+2. A definition counts when every node between it and the form is a wrapper, a transparent node, a skip node or a
+   container's body, at most four containers deep: nested functions and closures are not symbols.
+3. A member's span and doc anchor are the child of the container's body that holds it.
+4. `(#set! drgnx.split)` gives each definition its own span, only when the form holds more than one such definition (Go).
+5. Of the patterns that capture one node as a definition, the first in the file decides (a method pattern before a
+   function pattern); `(#set! drgnx.name "c-declarator")` has the named helper find the name.
+6. `:docs (:line "///" :block "/**" :members (...) :top (...))`: members take a line comment run, a `/** */` block or
+   a docstring; Rust's top-level items take line comments too; a form's own doc is its docstring, then its block, then
+   its line comments.
+
+The engine was checked against the Rust walkers it replaced on the repository's own files (about 700 Rust files, plus
+the other languages' fixtures) before they were deleted; the byte-for-byte goldens (`chunk_golden.rs`) and the property
+tests (`chunk_langs.rs`) pass unchanged. References stay the grammar crates' tags queries until the packs carry theirs.
+
+## Inline values, origin trails and debug adapters from packs
+
+What the debugger and the trails knew per language is the pack's:
+- **`:inline (:functions … :loops … :names …)`**: the node kinds inline values look for (the union over the built-in packs
+  is what the hub's lists were).
+- **`:origin (:decls …)`**: the declaration templates (ast-grep, `{t}` the name) of the language's origin trails; a pack with an
+  `:origin` is a language trails work in, and its `:files :extensions` say which files (Python's `:decls ()` is empty).
+- **`:adapters`**: the debug adapters of the language, merged after `etc/debug-adapters.eld`'s (`skald::builtin`), and an
+  installed or fixture pack's through `Table::with_pack`; a launch type another entry already serves stays with the first.
+  The doctor and the installer (Lisp) read the same union (`drgnx-packs-adapters`).
+Probe families stay Rust, keyed by the adapter's id (design Q15).

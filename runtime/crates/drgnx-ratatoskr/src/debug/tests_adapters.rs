@@ -13,14 +13,16 @@ fn exe(p: &Path) {
 #[test]
 fn the_built_in_table_reads_and_marks_the_five_tested_adapters() {
     let t = Table::builtin();
-    let tested: Vec<&str> =
+    let mut tested: Vec<&str> =
         t.0.iter()
             .filter(|a| a.tested)
             .map(|a| a.id.as_str())
             .collect();
+    // the language adapters now come from their packs, so the table's order is no longer the file's
+    tested.sort_unstable();
     assert_eq!(
         tested,
-        ["debugpy", "js-debug", "delve", "lldb-dap", "codelldb"]
+        ["codelldb", "debugpy", "delve", "js-debug", "lldb-dap"]
     );
     assert!(
         t.0.iter()
