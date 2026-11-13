@@ -159,7 +159,8 @@ kept once made."
               (section (cond ((plist-get f :installed) 'installed) ((plist-get f :updates) 'updates)
                              ((plist-get f :plugins) 'plugins) ((plist-get f :builtin) 'builtin))))
          (cond (section (let ((rows (cdr (assq section drgnx-perf-extensions--sections)))) (cons rows (length rows))))
-               ((plist-get f :ids) (cons nil 0))
+               ;; the fixture's Recommended packages are all missing: the hub's catalog has none of them
+               ((or (plist-get f :ids) (plist-get f :recommended)) (cons nil 0))
                (t (drgnx-perf-extensions--answer (downcase (or (plist-get params :query) "")))))))
 
      ;; `extensions/list' on the rows path: the hub's work (its rows and model, in its shape) is done here, and what
@@ -204,7 +205,7 @@ kept once made."
                                                            id (list :runs (list (list 0 4 "shadow"))))
                            rows))
                    (push (list :id id :kind "package" :flags 0 :parent hid
-                               :fields (vector (vector "label" (plist-get r :name)) (vector "name" (plist-get r :name))
+                               :fields (vector (vector "label" (plist-get r :name))
                                                (vector "state" (plist-get r :state)) (vector "signed" (plist-get r :signed))
                                                (vector "source" (plist-get r :source)) (vector "section" name)))
                          nodes)
@@ -239,6 +240,7 @@ kept once made."
        "Stands for `drgnx-hub-call': answers from memory at once (the draw is what these rows time)."
        (pcase method
          ("extensions/list" (drgnx-perf-extensions--hub-answer-list params callback))
+         ("extensions/recommended" (funcall callback nil nil)) ; the hub holds the set
          ("extensions/search"
           (let* ((answer (drgnx-perf-extensions--search params))
                  (off (or (plist-get params :offset) 0)))

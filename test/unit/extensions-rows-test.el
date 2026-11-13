@@ -116,6 +116,20 @@ Updates count."
       (should (string-match-p "native 14/37" text))
       (should (string-match-p "12s" text)))))
 
+(ert-deftest drgnx-extensions-list/a-job-step-reads-no-row-and-keeps-the-header ()
+  ;; a step only moves the chip: no row is read out of the model, the header is set again only when the restart note moves
+  (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
+  (drgnx-extensions-rows-test--with-list calls
+    (drgnx-test-with-clock (:allow-pending t)
+      (let ((headers 0))
+        (cl-letf (((symbol-function 'drgnx-extensions-list-row) (lambda (&rest _) (error "A row was read")))
+                  ((symbol-function 'drgnx-extensions-list--header) (lambda () (cl-incf headers))))
+          (dotimes (i 3)
+            (drgnx-extensions-jobs--put '(a) (list :status 'busy :step 'native :i i :n 3 :since (float-time)))
+            (drgnx-extensions-list--jobs-changed '(a)))
+          (should (string-match-p "native 2/3" (drgnx-extensions-rows-test--chips)))
+          (should (= headers 0)))))))
+
 (ert-deftest drgnx-extensions-list/the-second-tick-moves-busy-chips-only ()
   (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
   (drgnx-extensions-rows-test--with-list calls

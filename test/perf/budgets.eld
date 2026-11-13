@@ -288,7 +288,11 @@
  (extensions-details (:open_ms) 50 :report-only ext-pass)
  ;; The list on the rows path (the hub's rows and model), 2026-11-08, pinned to 4 CPUs.
  ;; Measured: 119930 objects on open (404 lines: the rows and their summaries), 2073 per job step (the event's).
- (extensions-open (:alloc) 16751 :report-only ext-pass) (extensions-progress (:alloc_event_step) 262 :report-only ext-pass)
+ ;; 2026-11-13: 124036 on open, the floor while the hub client is a Lisp process filter: the model's line (the 200
+ ;; nodes' JSON taken in) about 49,000, the rows' text one copy each with its newline about 30,000 and their insert
+ ;; about 29,000, the redisplay of the 404 lines about 29,500, the rest (class step, timers, params) about 10,000; the
+ ;; Recommended set is the hub's (no ids in Lisp).  Budget: the floor plus 10%.  A job step 243: its chip, made once.
+ (extensions-open (:alloc) 136400 :report-only ext-pass) (extensions-progress (:alloc_event_step) 262 :report-only ext-pass)
  (activate-live (:activate_ms) 20 :report-only ext-pass)   ; the plan step's repoint of 40 packages
  (activate-live-new (:activate_ms) 20 :report-only ext-pass)   ; a job's end that added a package: it is activated
  (install-overhead (:overhead_ms) 3000 :report-only ext-pass)
