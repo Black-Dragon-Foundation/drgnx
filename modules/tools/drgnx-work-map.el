@@ -333,11 +333,11 @@ switch), then KEYS, the lens's own keys ((LABEL . KEY) …), as chips with their
             "  "
             (mapconcat (lambda (v)
                          (propertize (format " %s " (cdr v))
-                                     'face (if (eq (car v) current) '(bold drgnx-pill-on) 'drgnx-work-label)))
+                                     'face (if (eq (car v) current) 'drgnx-work-lens-current 'drgnx-work-label)))
                        '((map . "Map") (board . "Board") (timeline . "Timeline") (flow . "Flow")) " ")
             (mapconcat (lambda (k)
-                         (concat "  " (propertize (format " %s " (car k)) 'face 'drgnx-pill)
-                                 (propertize (format " %s " (cdr k)) 'face 'drgnx-keycap)))
+                         (concat "  " (propertize (format " %s " (car k)) 'face 'drgnx-work-chip)
+                                 (propertize (format " %s " (cdr k)) 'face 'drgnx-work-lens-key)))
                        keys ""))))
 
 (defun drgnx-work-lens-name (&optional map)

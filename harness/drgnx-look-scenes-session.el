@@ -21,6 +21,7 @@
 (declare-function drgnx-trust-folder "drgnx-trust")
 (declare-function drgnx-wb-view-explorer "drgnx-wb")
 (declare-function drgnx-wb-focus-editor "drgnx-wb")
+(declare-function drgnx-wb-editor-window "drgnx-wb")
 (declare-function drgnx-modules-retry-waiting "drgnx-modules")
 (declare-function drgnx-modules-report "drgnx-modules")
 (declare-function drgnx-panel-replay-up "panel-replay-fixture")

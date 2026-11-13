@@ -392,14 +392,15 @@ asks the hub nothing and its keys say the same."
   (should (equal '(("selected") ("chain") ("dim" . drgnx-work-dim)) drgnx-work-map--nav-faces)))
 
 (ert-deftest drgnx-work-map-rows/the-lens-bar-is-pills-and-keycaps ()
-  ;; work-space-dark.html `.lens': the lens shown is a raised pill, the others quiet, and the map's own keys (focus f,
-  ;; overlaps o) are pills with a keycap each
+  ;; work-space-dark.html `.lens': the lens shown is a raised pill (the face inherits the pill that is on), the others
+  ;; quiet, and the map's own keys (focus f, overlaps o) chips with a keycap each
   (let* ((s (drgnx-work-lens-string 'map "drgnx" drgnx-work-map--lens-keys))
          (face-at (lambda (word) (get-text-property (string-match word s) 'face s))))
-    (should (memq 'drgnx-pill-on (ensure-list (funcall face-at "Map"))))
-    (should-not (memq 'drgnx-pill-on (ensure-list (funcall face-at "Board"))))
-    (should (memq 'drgnx-pill (ensure-list (funcall face-at "focus"))))
-    (should (memq 'drgnx-keycap (ensure-list (get-text-property (1+ (string-match " f " s)) 'face s))))
+    (should (eq 'drgnx-work-lens-current (funcall face-at "Map")))
+    (should (memq 'drgnx-pill-on (ensure-list (face-attribute 'drgnx-work-lens-current :inherit))))
+    (should-not (eq 'drgnx-work-lens-current (funcall face-at "Board")))
+    (should (eq 'drgnx-work-chip (funcall face-at "focus")))
+    (should (eq 'drgnx-work-lens-key (get-text-property (1+ (string-match " f " s)) 'face s)))
     (should (string-match-p "overlaps" s))))
 
 (ert-deftest drgnx-work-map-rows/the-trail-tile-has-its-tabs ()

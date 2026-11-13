@@ -140,7 +140,7 @@ it (a notes repository with the code repositories inside it)."
 (defface drgnx-work-label '((t :inherit (drgnx-text-muted drgnx-ui-caption))) "A layer's label." :group 'drgnx-work-space)
 (defface drgnx-work-lens-title '((t :inherit (drgnx-ui-heading tab-line-tab-current)))
   "The Work space's tab on its lens bar." :group 'drgnx-work-space)
-(defface drgnx-work-lens-current '((t :inherit (bold drgnx-selected-quiet))) "The lens shown, on the lens bar."
+(defface drgnx-work-lens-current '((t :inherit (bold drgnx-pill-on))) "The lens shown, on the lens bar: a raised pill."
   :group 'drgnx-work-space)
 (defface drgnx-work-lens-key '((t :inherit drgnx-keycap)) "A key's badge on the lens bar." :group 'drgnx-work-space)
 (defface drgnx-work-chip '((t :inherit drgnx-selected-quiet)) "A chip." :group 'drgnx-work-space)
@@ -326,6 +326,8 @@ selects; nothing is approved, pushed, merged or answered."
       (current-buffer))))
 
 (declare-function drgnx-work-trail-open "drgnx-work-trail")
+(declare-function drgnx-wb-area-redraw "drgnx-area")
+(declare-function drgnx-work-map--sja "drgnx-work-map")
 (declare-function drgnx-work-trail--sid "drgnx-work-trail")
 (declare-function drgnx-work-trail-panel-title "drgnx-work-trail")
 (declare-function drgnx-layouts-current "drgnx-layouts")
