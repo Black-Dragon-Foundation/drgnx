@@ -95,7 +95,7 @@ once; on Wayland restart the daemon, and write the service unit again if you ins
 | Setting | Default | What it does |
 |---|---|---|
 | `drgnx-face-line-numbers-modes` | `(prog-mode conf-mode yaml-mode yaml-ts-mode)` | Files in these modes (or modes derived from them) show line numbers. Prose, `*scratch*` and buffers without a file do not, except an editor made with **New Untitled** (`Untitled-1` …), which has them in any language, as in VS Code. |
-| `drgnx-face-inline-problems` | `short` | Problems from the language server or flymake at the end of their line: `nil` (only underlined), `short` (an error's words, shortened; a warning or note is underlined only) or `t` (all of them). Needs an Emacs whose flymake has `flymake-show-diagnostics-at-end-of-line` (30.1 and later). |
+| `drgnx-face-inline-problems` | `short` | Problems from the language server or flymake at the end of their line: `nil` (only underlined), `short` (the first problem, shortened) or `t` (all of them). Needs an Emacs whose flymake has `flymake-show-diagnostics-at-end-of-line` (30.1 and later). |
 
 The number column is as wide as the file needs when it opens; it never narrows, and widens only when the file needs
 another digit, so the text does not shift sideways while you type. **Toggle Line Numbers** (palette, View menu) still

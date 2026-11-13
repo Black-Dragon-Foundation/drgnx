@@ -38,8 +38,8 @@ setup.
 - **Native title strip.** `nidhogg-title-bar` and `nidhogg-title-bar-inactive` follow the theme.
 - **Shell scripts.** A here-document is in the string colour (sh-script's own is bold yellow), a command substitution
   in the function colour.
-- **Problems at a line's end.** A diagnostic flymake shows after the line (`drgnx-face-inline-problems`; by default an
-  error's, a warning being underlined only) is a chip of its kind: the error, warning or note colour on its tint, in the caption size, as tall as the text. High contrast
+- **Problems at a line's end.** A diagnostic flymake shows after the line (`drgnx-face-inline-problems`) is a chip of
+  its kind: the error, warning or note colour on its tint, in the caption size, as tall as the text. High contrast
   rings it instead. The chips of the look come in six kinds: `drgnx-chip-quiet`, `-accent`, `-attention`, `-ok`,
   `-warn` and `-error`.
 
