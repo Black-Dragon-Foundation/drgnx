@@ -1,7 +1,7 @@
 //! One plan run seeded into a test hub (test-hooks; `RATATOSKR_SEED_SCENE=1` at `serve`), for the look scenes of the
-//! Work space (docs/develop/harness.md, "Look scenes"): a paused job with a rule pack, tasks in each gate state, their
-//! evidence, a held `gate` card and a merge batch.  The job is paused, so the runner starts no agent for it.  The run
-//! is described here as data ([`run`]) and written through the store's own writers ([`seed`]).
+//! Work space (docs/develop/harness.md, "Look scenes"): a running job with a rule pack, tasks in each gate state, their
+//! evidence, a held `gate` card and a merge batch.  The runner leaves it alone ([`holds`]), so no agent starts for it.
+//! The run is described here as data ([`run`]) and written through the store's own writers ([`seed`]).
 
 use crate::front::Front;
 use serde_json::json;
@@ -12,6 +12,19 @@ use vordr::pack::{Check, Pack, Rule};
 
 /// The seeded job's id.
 pub const JOB: &str = "scene-run";
+
+/// Whether this hub seeded the run (the runner's passes skip it then).
+static HELD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The seeded run is held from the runner from now on.
+fn hold() {
+    HELD.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether the runner leaves job ID alone: the run this hub seeded.
+pub fn holds(id: &str) -> bool {
+    id == JOB && HELD.load(std::sync::atomic::Ordering::Relaxed)
+}
 /// Its plan.
 const PLAN: &str = "docs/plans/search-view.md";
 
@@ -283,6 +296,8 @@ pub async fn seed(front: &Front) -> Result<(), String> {
     let batch: Vec<i64> = r.tasks.iter().filter(|t| t.batch).map(|t| t.n).collect();
     let (groups, gate_ev) = gate_runs();
     let Run { pack, tasks, held } = r;
+    // held before it is written as running, so no runner pass sees it
+    hold();
     front
         .writer
         .db
@@ -321,7 +336,7 @@ pub async fn seed(front: &Front) -> Result<(), String> {
                 },
                 now,
             )?;
-            job_set(tx, JOB, Some("paused"), None, now)?;
+            job_set(tx, JOB, Some("running"), None, now)?;
             norn::write::evidence::rule_pack(tx, JOB, &pack, None)?;
             for t in &tasks {
                 let id = format!("{JOB}#{}", t.n);
@@ -430,5 +445,13 @@ mod tests {
         assert!(batch.iter().any(|e| e.kind == "red"));
         let push = ev.iter().filter(|e| e.task.starts_with("push:")).count();
         assert_eq!(push, r.pack.push_tiers.len());
+    }
+
+    /// [D] Once seeded, the run is held from the runner: it runs (the status bar's job) and no agent starts for it.
+    #[test]
+    fn the_runner_leaves_the_seeded_run_alone() {
+        hold();
+        assert!(holds(JOB));
+        assert!(!holds("another-run"));
     }
 }
