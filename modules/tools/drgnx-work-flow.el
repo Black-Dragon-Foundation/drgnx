@@ -383,7 +383,36 @@ path."
 (define-derived-mode drgnx-work-flow-detail-mode special-mode "Work flow detail"
   "The Flow's detail tile: the hub's rows for the Flow's selected task, its actions on the Flow's keys.  Its first row
 is its title, so the dock draws no tab row over it."
-  (setq-local truncate-lines t cursor-type nil drgnx-area-own-title t))
+  (setq-local truncate-lines t cursor-type nil drgnx-area-own-title t)
+  ;; the buttons' keys as keycaps inside the buttons' rings, after every patch
+  (add-hook 'drgnx-view-patch-patched-functions #'drgnx-work-flow--keycaps nil t))
+
+(defconst drgnx-work-flow--key-faces
+  '((drgnx-work-flow-key-primary . drgnx-work-flow-button-primary) (drgnx-work-flow-button-key . drgnx-work-flow-button))
+  "A button's key face (the hub's) → the face of its button.")
+
+(declare-function drgnx-palette--keycap-image "drgnx-palette")
+
+(defun drgnx-work-flow--keycaps (_view _keys)
+  "`drgnx-view-patch-patched-functions' in a detail tile: on a graphical frame with SVG each button's key (a run in a
+key face, ` r ') is a keycap image in the key face's font and ring (`drgnx-palette--keycap-image'), and the run takes
+its button's face, so the button's ring runs around the key as one box (hub-orchestration.html `.btn .k'); a key with
+a box of its own broke the ring in two.  Elsewhere the keys keep their faces."
+  (when (and (display-graphic-p) (image-type-available-p 'svg))
+    (require 'drgnx-palette)
+    (with-silent-modifications
+      (let ((pos (point-min)))
+        (while (< pos (point-max))
+          (let ((next (next-single-property-change pos 'face nil (point-max)))
+                (pair (assq (get-text-property pos 'face) drgnx-work-flow--key-faces)))
+            (when-let* ((pair)
+                        (beg (save-excursion (goto-char pos) (skip-chars-forward " " next) (point)))
+                        (end (save-excursion (goto-char next) (skip-chars-backward " " beg) (point)))
+                        ((< beg end))
+                        (img (drgnx-palette--keycap-image (buffer-substring-no-properties beg end) (car pair))))
+              (put-text-property pos next 'face (cdr pair))
+              (put-text-property beg end 'display img))
+            (setq pos next)))))))
 
 (defun drgnx-work-flow--detail-twin (class)
   "The tile's buffer in display CLASS (`drgnx-view-patch-twin-function')."

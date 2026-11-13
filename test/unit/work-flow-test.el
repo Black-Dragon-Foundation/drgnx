@@ -283,4 +283,44 @@ carries the same id.  A new selection moves it, and no selection draws none."
       (with-current-buffer buffer (drgnx-view-patch-teardown) (drgnx-timer-cancel (cons 'drgnx-view buffer)))
       (kill-buffer buffer))))
 
+(ert-deftest drgnx-work-flow/a-button-s-key-is-a-keycap-inside-one-ring ()
+  "hub-orchestration.html `.btn .k': the button's ring runs around its key.  A key with its own face box broke the
+ring in two (a tail after the key), so on a graphical frame the detail tile draws each key as a keycap image in the
+key's ring colour while its text takes the button's face: one box run.  Elsewhere the keys keep their faces."
+  (declare-function drgnx-work-flow--keycaps "drgnx-work-flow")
+  (defvar drgnx-view-patch-patched-functions)
+  (require 'drgnx-palette)                            ; loaded first, so its keycap stays stubbed
+  (let ((inhibit-read-only t)                         ; the tile is a special-mode buffer
+        (fill (lambda ()
+                (erase-buffer)
+                (insert (propertize " Run the red " 'face 'drgnx-work-flow-button-primary)
+                        (propertize " r " 'face 'drgnx-work-flow-key-primary)
+                        (propertize " " 'face 'drgnx-work-flow-button-primary) " "
+                        (propertize " Evidence " 'face 'drgnx-work-flow-button)
+                        (propertize " e " 'face 'drgnx-work-flow-button-key)
+                        (propertize " " 'face 'drgnx-work-flow-button) "\n"))))
+    (with-temp-buffer
+      (drgnx-work-flow-detail-mode)
+      (should (memq #'drgnx-work-flow--keycaps drgnx-view-patch-patched-functions))
+      (cl-letf (((symbol-function 'display-graphic-p) #'always)
+                ((symbol-function 'image-type-available-p) #'always)
+                ((symbol-function 'drgnx-palette--keycap-image)
+                 (lambda (name face) (list 'image :type 'svg :name name :face face))))
+        (funcall fill)
+        (drgnx-work-flow--keycaps nil nil)
+        (pcase-dolist (`(,key ,button ,key-face) '(("r" drgnx-work-flow-button-primary drgnx-work-flow-key-primary)
+                                                   ("e" drgnx-work-flow-button drgnx-work-flow-button-key)))
+          (let ((at (1- (string-search (format " %s " key) (buffer-string)))))
+            ;; the key and the spaces round it in the button's face, the key itself the keycap image
+            (dotimes (i 3) (should (eq button (get-text-property (+ (point-min) at 1 i) 'face))))
+            (should (equal (list 'image :type 'svg :name key :face key-face)
+                           (get-text-property (+ (point-min) at 2) 'display)))))
+        (should-not (text-property-any (point-min) (point-max) 'face 'drgnx-work-flow-button-key)))
+      ;; a terminal: the keys as they came
+      (cl-letf (((symbol-function 'display-graphic-p) #'ignore))
+        (funcall fill)
+        (drgnx-work-flow--keycaps nil nil)
+        (should (text-property-any (point-min) (point-max) 'face 'drgnx-work-flow-key-primary))
+        (should-not (text-property-not-all (point-min) (point-max) 'display nil))))))
+
 ;;; work-flow-test.el ends here
