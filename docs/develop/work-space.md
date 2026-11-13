@@ -540,6 +540,18 @@ face under a class. The faces: `drgnx-work-band`, the decoration faces (`drgnx-c
   two cards, not an overlay; the class step only dims the cards off the chain. The strip carries, left of the machines',
   the forecast and cost chips (`wk 41 % ▲ Thu`, `$31 / $40`); only a test hub's scene gives them yet
   (`Map::scene_strip`; the real feed is DEFERRED MAP-STRIP-WK-COST-1).
+- **What is lit and what is dim.** With a selection, every item off its chain (neither it nor an end of an edge on its
+  chain) carries `drgnx-work-dim` in the hub's rows; the editor's class step dims nothing on the map. A machine on a chip is
+  its short name ("desk" for "desktop"); a branch's chip shows a tag, the machine its agent runs on and the slot it holds
+  (`Fields::tag`, from `SessionFact::machine` and `::slot`: "desk 3"; a hub session has no slot yet, so its tag is the
+  machine alone), in place of its edits count.
+- **The Detail head and the trail's numbers.** An agent's Detail starts with its badge, its name and its state as a chip
+  at the right edge, then the subtitle (task, "running N min", "≈$1.20 (API prices)"); `detail::rows` takes the tile's
+  width. A trail's step that a conclusion rests on starts with the conclusion's number in a circle (`drgnx-badge`), the
+  others keep the room; the newest conclusion's card says `new` while it is stamped on one of the last three steps.
+- **The lens bar's right** (`drgnx-work-lens--controls`): the grip (drawn; the tile layout's drag is not wired), maximise
+  (`drgnx-work-lens-maximize`: hides the Detail island and the trail, again shows them) and ⋯ (the keys sheet). The lens
+  shown is a pill in a ring (the themes give `drgnx-work-lens-current` its box).
 - **The Work layout** (`drgnx-layouts`' `work`): the map full width, the Detail island at its right (340 logical px) and
   the trail under the map. The Detail tile and the trail tile draw their own title row in the area's row
   (`drgnx-area-own-title` as a string, with the area's close): "Detail", and "Trail · AGENT | Agent · AGENT | following ▾".
