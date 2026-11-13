@@ -32,7 +32,10 @@ the selected window (a GUI class) and torn down after."
          (buf (generate-new-buffer " *view-env-test*")))
      (cl-letf (((symbol-function 'drgnx-view-env--window-facts) #'drgnx-view-env-test--facts)
                ((symbol-function 'drgnx-view-env--palette) (lambda () drgnx-view-env-test--palette))
-               ((symbol-function 'drgnx-view-env--windows) (lambda (b) (get-buffer-window-list b nil t))))
+               ((symbol-function 'drgnx-view-env--windows) (lambda (b) (get-buffer-window-list b nil t)))
+               ;; a batch frame has no fringes: a GUI's 8 px, unless the buffer asks for none
+               ((symbol-function 'drgnx-view-env--right-fringe)
+                (lambda (w) (if (eql (buffer-local-value 'right-fringe-width (window-buffer w)) 0) 0 8))))
        (save-window-excursion
          (delete-other-windows)
          (switch-to-buffer buf)
@@ -164,6 +167,15 @@ state (the locals of the prefixes, a marker left out) as made and again before e
         (should (= (min (window-body-width (selected-window) t) (window-body-width other t))
                    (plist-get (car envs) :width_px)))
         (should (/= (window-body-width (selected-window) t) (window-body-width other t)))))))
+
+;; the Flow has no right fringe: Emacs keeps a window's last column for its truncation glyph then, and rows as wide as
+;; the body showed a `$' at their end
+(ert-deftest drgnx-view-env/a-window-with-no-right-fringe-gives-its-last-column-to-emacs ()
+  (drgnx-view-env-test--with
+    (setq-local right-fringe-width 0)
+    (set-window-buffer (selected-window) buf)
+    (drgnx-view-env-register "v" buf)
+    (should (= (- (window-body-width (selected-window) t) 8) (plist-get (car (drgnx-view-env-test--envs)) :width_px)))))
 
 (ert-deftest drgnx-view-env/env-change-bumps-the-epoch ()
   (drgnx-view-env-test--with

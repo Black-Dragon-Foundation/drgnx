@@ -213,6 +213,18 @@ class no window shows goes.  When no window shows the buffer's class, the buffer
     (dolist (tw twins)
       (unless (member (car tw) classes) (kill-buffer (cdr tw))))))
 
+(defun drgnx-view-env--right-fringe (window)
+  "WINDOW's right fringe, in pixels."
+  (or (cadr (window-fringes window)) 0))
+
+(defun drgnx-view-env--width (window facts)
+  "The pixels WINDOW (with FACTS) gives a row: its body, less a column when a GUI window has no right fringe (Emacs
+keeps that column for its truncation glyph, and a row as wide as the body would end in a `$')."
+  (let ((px (window-body-width window t)))
+    (if (and (equal (plist-get facts :display) "gui") (zerop (drgnx-view-env--right-fringe window)))
+        (- px (or (car (plist-get facts :cell)) 0))
+      px)))
+
 (defun drgnx-view-env--envs (view &optional wins)
   "VIEW's env per display class it shows in now: a list of (CLASS . PARAMS), PARAMS without the epoch.  WIDTH_PX is
 the narrowest window of the class (Call 2: one buffer per class, which holds one fit).  WINS: VIEW's windows with
@@ -220,7 +232,7 @@ their facts (`drgnx-view-env--window-classes'), read again when not given."
   (let ((classes nil))
     (dolist (wf (or wins (drgnx-view-env--window-classes view)))
       (let* ((w (car wf)) (facts (cdr wf)) (class (drgnx-view-env--class facts))
-             (width (window-body-width w t)) (have (assoc class classes)))
+             (width (drgnx-view-env--width w facts)) (have (assoc class classes)))
         (if have
             (setf (plist-get (cdr have) :width_px) (min width (plist-get (cdr have) :width_px)))
           (push (cons class (list :view view :class class :display (plist-get facts :display)

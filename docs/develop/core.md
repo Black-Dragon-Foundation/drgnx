@@ -2033,7 +2033,8 @@ A view whose rows the hub builds (docs/develop/hub.md, "Rows") registers its buf
 connection, what it needs to fit and colour the rows: per display class the buffer shows in (display kind, scale and
 the buffer's effective fonts, measured in the view's buffer after `text-scale` and face remapping), the fonts per role
 (`ui`, `code`, `card`: file, size, ascent, descent, average and space widths), the cell, `width_px` (the narrowest
-live window of the class: one buffer holds one fit), the palette roles the SVG writer colours from (read from faces,
+live window of the class: one buffer holds one fit; a GUI window with no right fringe gives a column less, which
+Emacs keeps for its truncation glyph), the palette roles the SVG writer colours from (read from faces,
 through `core/drgnx-color.el`), the terminal's width table, the time zone and reduced motion.
 
 - **The epoch is the editor's:** one counter per (view, class), one more for every env whose look changed. A width
