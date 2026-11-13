@@ -111,8 +111,12 @@ drgnx would leave: ssh features and a bin dir.")
 
 (ert-deftest drgnx-term-shell/bash-3-2-gets-cwd-and-title ()
   ;; macOS's /bin/bash is 3.2: Ghostty's file then uses bash-preexec.  Only where a 3.2 binary is installed
-  (let ((bash32 (seq-find #'executable-find '("bash-3.2" "bash32"))))
-    (unless bash32 (ert-skip "no bash 3.2 here (macOS CI has it as /bin/bash)"))
+  (let ((bash32 (or (seq-find #'executable-find '("bash-3.2" "bash32"))
+                    ;; macOS's own (the macOS lane runs this: TERM-SHELL-BASH32-1)
+                    (and (eq system-type 'darwin) (executable-find "/bin/bash")
+                         (string-match-p "version 3\\.2" (shell-command-to-string "/bin/bash --version"))
+                         "/bin/bash"))))
+    (unless bash32 (ert-skip "no bash 3.2 here (the macOS lane has it as /bin/bash)"))
     (let* ((home (make-temp-file "drgnx-term-shell" t))
            (process-environment (append drgnx-term-shell-test--inside (list (concat "HOME=" home)) process-environment)))
       (unwind-protect
