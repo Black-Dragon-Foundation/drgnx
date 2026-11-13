@@ -39,6 +39,7 @@
 (require 'drgnx-modules)
 (require 'drgnx-paths)
 (require 'drgnx-registry)
+(require 'drgnx-timer)
 (require 'drgnx-tty)
 (require 'drgnx-wb)
 (require 'drgnx-tty-fallback)
@@ -96,6 +97,25 @@ without asking)."
     (when (eq chr ?\e) (xterm--read-event-for-query))   ; the final backslash
     (set-terminal-parameter nil 'drgnx-tty-xtversion (concat "\eP>|" text "\e\\"))))
 
+(defconst drgnx-tty-frames--xtversion-keys "\eP>|" "What an XTVERSION answer starts with.")
+
+(defvar drgnx-tty-frames-xtversion-expiry 5
+  "Seconds after XTVERSION was asked that its answer may still arrive; then the pending handler goes.")
+
+(defun drgnx-tty-frames--drop-xtversion-handler (&optional frame)
+  "Take the pending XTVERSION handler out of FRAME's terminal's `input-decode-map' (xterm.el's asynchronous query
+registers it and removes it only when the answer comes), with the prefix maps it made that are empty now: left,
+`ESC P' stays a prefix key, so M-P waits for a key (M12b-5b-1).  A late answer is typed as text after that."
+  (with-selected-frame (if (frame-live-p frame) frame (selected-frame))
+    (let ((keys drgnx-tty-frames--xtversion-keys))
+      (when (functionp (lookup-key input-decode-map keys))
+        (define-key input-decode-map keys nil t))
+      (cl-loop for n from (1- (length keys)) downto 1
+               for prefix = (substring keys 0 n)
+               for map = (lookup-key input-decode-map prefix)
+               when (and (keymapp map) (not (let (any) (map-keymap (lambda (&rest _) (setq any t)) map) any)))
+               do (define-key input-decode-map prefix nil t)))))
+
 (defun drgnx-tty-frames--ask (frame)
   "FRAME's terminal's answer to XTVERSION, or nil: asked once, waiting `drgnx-tty-frames-query-timeout'
 seconds at most; a later answer is taken off the input by Emacs's xterm.el.  Not on the Linux console."
@@ -103,7 +123,10 @@ seconds at most; a later answer is taken off the input by Emacs's xterm.el.  Not
     (require 'term/xterm)
     (with-selected-frame frame
       (let ((xterm-query-timeout drgnx-tty-frames-query-timeout))
-        (xterm--query "\e[>0q" '(("\eP>|" . drgnx-tty-frames--xtversion-handler))))
+        (xterm--query "\e[>0q" `((,drgnx-tty-frames--xtversion-keys . drgnx-tty-frames--xtversion-handler))))
+      (unless (terminal-parameter nil 'drgnx-tty-xtversion)
+        (drgnx-timer-start (cons 'xtversion-expiry frame) drgnx-tty-frames-xtversion-expiry
+                           #'drgnx-tty-frames--drop-xtversion-handler :args (list frame) :owner 'ui/terminal))
       (terminal-parameter nil 'drgnx-tty-xtversion))))
 
 (defun drgnx-tty-frames-mok-trusted-p (id)

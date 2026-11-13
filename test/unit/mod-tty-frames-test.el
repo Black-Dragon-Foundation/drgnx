@@ -175,6 +175,24 @@ ui/terminal's teardown does, so no later test finds the prefix bound."
       (should (drgnx-tty-frames--terminfo-true-colour-p "xterm-direct"))
       (should (= asked 2)))))
 
+(ert-deftest drgnx-tty-frames/an-unanswered-xtversion-leaves-no-prefix-key ()
+  ;; xterm.el's asynchronous query leaves `ESC P > |' bound until an answer comes: ESC P stays a prefix (M-P waits
+  ;; for a key). The pending handler goes after `drgnx-tty-frames-xtversion-expiry' s, with its empty prefix maps; a
+  ;; neighbour in the same maps stays (M12b-5b-1)
+  (let ((input-decode-map (make-sparse-keymap)))
+    (define-key input-decode-map "\e[1;2A" 'kx-neighbour)
+    (define-key input-decode-map "\eP>|" #'ignore)
+    (should (keymapp (lookup-key input-decode-map "\eP")))
+    (drgnx-tty-frames--drop-xtversion-handler)
+    (should-not (lookup-key input-decode-map "\eP"))
+    (should (eq (lookup-key input-decode-map "\e[1;2A") 'kx-neighbour))
+    ;; a binding next to it in the prefix map keeps the prefix
+    (define-key input-decode-map "\eP>|" #'ignore)
+    (define-key input-decode-map "\ePx" 'kx-other)
+    (drgnx-tty-frames--drop-xtversion-handler)
+    (should (eq (lookup-key input-decode-map "\ePx") 'kx-other))
+    (should-not (lookup-key input-decode-map "\eP>"))))
+
 (ert-deftest drgnx-tty-frames/kkp-later-rewrites-the-report ()
   ;; Task 5 turns kkp on after the terminal's setup: refreshing the report says so, and C-S-p is sendable then
   (drgnx-tty-frames-test--state
