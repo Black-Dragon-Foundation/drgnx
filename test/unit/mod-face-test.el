@@ -238,6 +238,33 @@ too, no stubs — and turned off after, strictly: the state after equals the sta
       (should (eq flymake-show-diagnostics-at-end-of-line t)))
     (should (eq flymake-show-diagnostics-at-end-of-line before))))   ; flymake's own again, with the module off
 
+(defun drgnx-face-test--eol-text ()
+  "The text flymake shows at the ends of this buffer's lines."
+  (mapconcat (lambda (o) (format "%s" (or (overlay-get o 'display) "")))
+             (seq-filter (lambda (o) (overlay-get o 'flymake--eol-overlay)) (overlays-in (point-min) (point-max)))
+             ""))
+
+(ert-deftest drgnx-face/inline-problems-show-errors-and-underline-warnings ()
+  "window-dark.html: an error's words at the end of its line, a warning underlined only (`short', the default); with
+`t' every problem's words show."
+  (skip-unless (progn (require 'flymake) (boundp 'flymake-show-diagnostics-at-end-of-line)))
+  (drgnx-face-test--with
+    (dolist (setting '(short t))
+      (setopt drgnx-face-inline-problems setting)
+      (with-temp-buffer
+        (insert "one\ntwo\n")
+        (setq-local trusted-content :all)             ; Emacs 31 runs no backend in an untrusted buffer
+        (setq-local flymake-diagnostic-functions
+                    (list (lambda (report &rest _)
+                            (funcall report (list (flymake-make-diagnostic (current-buffer) 1 4 :warning "w-one")
+                                                  (flymake-make-diagnostic (current-buffer) 5 8 :error "e-two"))))))
+        (flymake-mode 1)
+        (flymake-start)
+        (let ((text (drgnx-face-test--eol-text)))
+          (should (string-search "e-two" text))
+          (should (eq (and (string-search "w-one" text) t) (eq setting t))))
+        (flymake-mode -1)))))
+
 (ert-deftest drgnx-face/line-spacing-follows-the-setting ()
   (let ((line-spacing nil))
     (drgnx-face-test--with

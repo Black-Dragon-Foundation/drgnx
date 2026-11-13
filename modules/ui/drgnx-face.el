@@ -117,7 +117,8 @@ Toggle for this session with the command Toggle Menu Bar."
   :type '(repeat symbol) :set #'drgnx-face--set :group 'drgnx-face)
 
 (defcustom drgnx-face-inline-problems 'short
-  "Problems (flymake) at the end of their line: nil (only underlined), `short' (the first one, shortened) or t (all)."
+  "Problems (flymake) at the end of their line: nil (only underlined), `short' (an error's words, shortened, the
+look's way: a warning or note is underlined only) or t (all)."
   :type '(choice (const :tag "Only underlined" nil) (const :tag "Short" short) (const :tag "In full" t))
   :set #'drgnx-face--set :group 'drgnx-face)
 
@@ -455,6 +456,20 @@ the current line across the full width.  On `after-change-major-mode-hook'."
              (setq drgnx-face--flymake-waiting nil)
              (when (drgnx-face--flymake-ready-p) (drgnx-face--apply-inline-problems)))))))
 
+(declare-function flymake-diagnostic-type "flymake")
+(declare-function flymake--severity "flymake")
+
+(defun drgnx-face--eol-errors-only (summary src-ovs)
+  "Flymake's end-of-line text for SRC-OVS (its overlays on one line) by SUMMARY, its own function: with the `short'
+setting only the errors' words, so a line with only warnings or notes is underlined and nothing more."
+  (if (not (eq (bound-and-true-p flymake-show-diagnostics-at-end-of-line) 'short))
+      (funcall summary src-ovs)
+    (let ((errors (seq-filter (lambda (o)
+                                (when-let* ((d (overlay-get o 'flymake-diagnostic)))
+                                  (>= (flymake--severity (flymake-diagnostic-type d)) (flymake--severity :error))))
+                              src-ovs)))
+      (if errors (funcall summary errors) (propertize "\n" 'cursor t)))))
+
 (defvar drgnx-face--line-spacing-saved nil
   "(VALUE) the default `line-spacing' this module replaced, to give back when the setting returns to nil.")
 
@@ -575,6 +590,8 @@ F10's `menu-bar-open' has no menu to open on a toolkit frame whose bar is hidden
                         :command #'drgnx-face-preferences
                         :doc "How drgnx looks: the frame, status bar, top line, quick help, start page (Customize)")
   (drgnx-module-define-key 'global-map [remap menu-bar-open] #'drgnx-face-menu)   ; F10: the menu as text while the bar is hidden
+  ;; window-dark.html: an error's words at the end of its line, a warning underlined only
+  (advice-add 'flymake--eol-overlay-summary :around #'drgnx-face--eol-errors-only)
   (drgnx-close-setup)                   ; Esc and q close panes (drgnx-close.el)
   (drgnx-statusbar-setup)               ; the status bar (drgnx-statusbar.el)
   (drgnx-quickhelp-setup)               ; quick help (drgnx-quickhelp.el)
