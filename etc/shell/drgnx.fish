@@ -181,6 +181,7 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n '__fish_seen_subcommand_from job; and __fish_seen_subcommand_from propose' -l repo -r -d 'Repository'
     complete -c drgnx -n '__fish_seen_subcommand_from job; and __fish_seen_subcommand_from propose approve resume' -l budget -x -d 'Budget in USD'
     complete -c drgnx -n '__fish_seen_subcommand_from job; and __fish_seen_subcommand_from propose' -l auto -d 'Approve at once'
+    complete -c drgnx -n '__fish_seen_subcommand_from job; and __fish_seen_subcommand_from propose' -l gate -x -a 'review review+accept' -d 'Merge gate'
     complete -c drgnx -n '__fish_seen_subcommand_from job; and __fish_seen_subcommand_from status' -l json -d 'Machine-readable'
     set -l _drgnx_runner_subs list add check bench trust unbench remove audit
     for sub in $_drgnx_runner_subs

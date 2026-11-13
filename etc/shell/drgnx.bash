@@ -84,7 +84,7 @@ _drgnx() {
           'runtime install') words='--prefix' ;;
           'browser install') words='--version --json' ;;
           'browser list') words='--json' ;;
-          'job propose') words='--repo --budget --auto' ;;
+          'job propose') words='--repo --budget --auto --gate' ;;
           'job approve' | 'job resume') words='--budget' ;;
           'job status') words='--json' ;;
           'runner list') words='--json' ;;

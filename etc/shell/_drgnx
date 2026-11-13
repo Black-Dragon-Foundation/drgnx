@@ -169,7 +169,7 @@ case $cmd in
       shift words; (( CURRENT-- ))
       case $sub in
         propose) _arguments '--repo[repository]:directory:_files -/' '--budget[budget in USD]:budget:' \
-                   '--auto[approve at once]' '*:plan:_files' ;;
+                   '--auto[approve at once]' '--gate[merge gate]:gate:(review review+accept)' '*:plan:_files' ;;
         approve|resume) _arguments '--budget[budget in USD]:budget:' ;;
         status) _arguments '--json[machine-readable]' ;;
       esac
