@@ -37,6 +37,7 @@
 (declare-function drgnx-extensions-trust-update "drgnx-extensions-trust")
 (declare-function drgnx-extensions-trust-review-p "drgnx-extensions-trust")
 (declare-function drgnx-extensions-recommend-ids "drgnx-extensions-recommend")
+(declare-function drgnx-extensions-recommend-version "drgnx-extensions-recommend" ())
 (defvar drgnx-extensions-review)
 (declare-function drgnx-extensions-details-open "drgnx-extensions-details")
 (declare-function drgnx-extensions-details-forget-generations "drgnx-extensions-details")
