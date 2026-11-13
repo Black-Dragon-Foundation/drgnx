@@ -475,7 +475,18 @@ test that found a sibling binary two folders up failed in one round. `test/conta
 the one place it is written. The rustup jobs install it with `.github/ci/rust.sh` (directly, or through the
 `macos-runtime` and `build-test-bins` actions), which makes it the default and sets `RUSTUP_TOOLCHAIN` for the job's
 later steps. The Fedora job's image installs Fedora's packages of that version (`rust-packages.sh`), and fails to
-build when Fedora no longer has them. The MSRV job (1.95.0) and the fuzz nightly name their own pinned versions.
+build when Fedora no longer has them.
+
+That is the one place where a distribution's update forces the bump: Fedora's updates repository keeps only the newest
+build of a package, so once Fedora 45 ships a newer Rust and the pinned version is in neither its release nor its
+updates repository, a rebuild of the image (a change to anything it is built from, `rust-version` included) fails in
+`rust-packages.sh`, naming the version. The prebuilt image already
+published keeps working until then; nothing floats silently. What to do then: move `rust-version` to the version
+Fedora ships (the rustup jobs follow, as the same file names it), fix what the new compiler finds (clippy's new lints,
+a changed cargo layout like 1.100's), and land it as any change, through the checks. Never pin an older Fedora build
+or install Rust from elsewhere in that image to dodge it: the two would drift apart.
+
+The MSRV job (1.95.0) and the fuzz nightly name their own pinned versions.
 `drgnx-ci/the-rust-toolchain-is-one-pinned-version` (test/unit/ci-workflows-test.el) fails on a workflow that names
 `stable` or installs another toolchain. Moving to a newer Rust is an edit of `rust-version`, checked like any change.
 
