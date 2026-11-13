@@ -306,7 +306,7 @@ pub async fn run_probe(prepared: Prepared, timeout: Duration) -> Ran {
         Some(fd) => {
             let tail = child.stderr();
             let within = left();
-            tokio::task::spawn_blocking(move || {
+            crate::clock::blocking(move || {
                 gleipnir::inner::read_status_for(fd, &|| tail.get(), within, browser)
             })
             .await
