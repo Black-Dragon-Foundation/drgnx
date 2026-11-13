@@ -706,6 +706,15 @@ helper's setup failure, 125, whichever of the helper and the group's kill came f
 - A hide is a path of the host (it is also covered under every bind's dest that holds it). A path that exists only
   inside cannot be named, and no caller needs one (GL-T7-2).
 
+**Accepted by the user, 2026-11-14 (GL-T5-2/4).** The reduced tier's network stays as the plan note says: Landlock's TCP
+rules are per port, so a connect to a relay port number can reach any host; binds are refused; UDP and raw sockets
+are refused by seccomp; DNS goes through the proxy. The tier is opt-in and its note says "not isolated".
+
+**Intended, ruled by the manager 2026-11-14.** The private `/etc` (a bind under a system root at a path the host lacks)
+shows the host's entries as they were when the session started: an entry the host adds afterwards is not seen. The
+host's own `/etc/codex`, if there is one, is replaced inside the session by the lock's two files; that is the point of
+the lock.
+
 **Toolchain layouts (GL-T3-2).** The toolchain roots the profile reads are the ones `toolchain::roots` knows
 (mise, cargo, rustup, nvm, pyenv, and so on). A layout it does not know (Homebrew under the home, asdf, volta, fnm,
 sdkman, bun globals beyond `~/.bun/bin`) is added by the user through the `agents.eld` read list.
