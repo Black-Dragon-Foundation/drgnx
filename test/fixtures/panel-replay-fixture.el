@@ -22,6 +22,8 @@
 (defconst drgnx-panel-replay-measured 400 "Updates the measure waits for (at most 40 s).")
 
 (defvar drgnx-panel-replay--dir nil "The temp directory: the project and the hub's settings.")
+(defvar drgnx-panel-replay-project nil
+  "A git repository the agent works in instead of the temp one (the look scenes give theirs, so the agent is here).")
 (defvar drgnx-panel-replay--hub nil "The hub process.")
 (defvar drgnx-panel-replay--mirror nil "The session's mirror.")
 (defvar drgnx-panel-replay--panel nil "The panel's buffer.")
@@ -102,15 +104,16 @@ The panel inserts the rows the hub builds."
       (unless (eq 'ok (plist-get r :status))
         (error "The module tools/agent-panel is not running: %S" r)))
     (setq drgnx-panel-replay--dir (make-temp-file "drgnx-panel-replay" t))
-    (let* ((dir drgnx-panel-replay--dir) (project (expand-file-name "project" dir)) (config (expand-file-name "config" dir))
-           (script (expand-file-name "replay.txt" config)))
-      (make-directory (expand-file-name "src" project) t)
-      (with-temp-file (expand-file-name "src/main.el" project) (insert ";; the file the agent reads\n"))
-      (let ((default-directory (file-name-as-directory project)))
-        (dolist (args '(("init" "-q" "-b" "main") ("add" "src") ("commit" "-q" "-m" "init")))
-          (unless (zerop (apply #'call-process "git" nil nil nil "-c" "user.name=perf" "-c" "user.email=perf@localhost"
-                                "-c" "commit.gpgsign=false" args))
-            (error "git %S failed" args))))
+    (let* ((dir drgnx-panel-replay--dir) (project (or drgnx-panel-replay-project (expand-file-name "project" dir)))
+           (config (expand-file-name "config" dir)) (script (expand-file-name "replay.txt" config)))
+      (unless drgnx-panel-replay-project
+        (make-directory (expand-file-name "src" project) t)
+        (with-temp-file (expand-file-name "src/main.el" project) (insert ";; the file the agent reads\n"))
+        (let ((default-directory (file-name-as-directory project)))
+          (dolist (args '(("init" "-q" "-b" "main") ("add" "src") ("commit" "-q" "-m" "init")))
+            (unless (zerop (apply #'call-process "git" nil nil nil "-c" "user.name=perf" "-c" "user.email=perf@localhost"
+                                  "-c" "commit.gpgsign=false" args))
+              (error "git %S failed" args)))))
       (make-directory config t)
       (with-temp-file script (insert (drgnx-panel-replay-program) "\n"))
       (with-temp-file (expand-file-name "settings.el" config)
