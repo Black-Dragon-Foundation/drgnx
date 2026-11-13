@@ -325,14 +325,18 @@ modus's grey, would stripe the gap).  Non-nil when a face changed."
 (defun drgnx-look-edge-drag (event)
   "A press on a card's side edge (the fringe beside the gap between two cards) drags that gap, as a press on the gap
 (the divider) does.  A fringe with no window beyond it is left alone, and so is the inner half of a fringe whose click
-a mode binds (diff-hl's hunk, a breakpoint): its click still comes."
+a mode binds (diff-hl's hunk, a breakpoint, the overview ruler's strip): its click still comes.  The outer half is
+of the fringe's own width, without the ruler's strip."
   (interactive "e")
   (let* ((posn (event-start event)) (w (posn-window posn)) (area (posn-area posn))
          (edges (and (window-live-p w) (window-pixel-edges w)))
          (fx (and edges (+ (car edges) (car (posn-x-y posn)))))
          (fy (and edges (+ (cadr edges) (cdr (posn-x-y posn)))))
          (right (eq area 'right-fringe))
-         (half (and edges (/ (if right (cadr (window-fringes w)) (car (window-fringes w))) 2)))
+         ;; the fringe's own width: the overview ruler's strip, which widens it, sits inside it (drgnx-ruler.el)
+         (half (and edges (/ (if right (or (window-parameter w 'drgnx-ruler-fringe) (cadr (window-fringes w)))
+                               (car (window-fringes w)))
+                             2)))
          (outer (and edges (if right (>= fx (- (nth 2 edges) (window-right-divider-width w) half))
                              (< fx (+ (car edges) half)))))
          ;; the window whose right edge is the gap: W itself, or the one left of W's left edge
