@@ -29,7 +29,14 @@ fn a_capture_becomes_the_face_it_names() {
 }
 
 #[test]
-fn the_feature_is_the_first_known_capture_and_patterns_group_by_it() {
+fn rules_keep_the_files_order_so_a_later_pattern_can_override_an_earlier_one() {
+    let t = translate("p", "(identifier) @variable\n(function_declaration name: (identifier) @function)\n(identifier) @variable\n").unwrap();
+    let f: Vec<&str> = t.rules.iter().map(|r| r.feature.as_str()).collect();
+    assert_eq!(f, ["variable", "function", "variable"]);
+}
+
+#[test]
+fn the_feature_is_the_first_known_capture_and_consecutive_patterns_share_a_rule() {
     let t = translate(
         "p",
         "(comment) @comment\n\"fn\" @keyword\n\"let\" @keyword\n(number) @number\n",

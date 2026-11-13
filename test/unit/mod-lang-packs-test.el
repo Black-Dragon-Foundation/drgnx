@@ -218,7 +218,7 @@ go with its teardown)."
                                        (should (eq made 'gen))
                                        (should setup)
                                        (should (equal (car treesit-font-lock-settings)
-                                                      '(:language gen :feature keyword "\"fn\" @font-lock-keyword-face")))
+                                                      '(:language gen :override t :feature keyword "\"fn\" @font-lock-keyword-face")))
                                        (should (equal treesit-font-lock-feature-list drgnx-pack-ts-feature-list))
                                        (should (equal (cadr (assq 'gen treesit-simple-indent-rules)) '((parent-is "block") parent-bol 2)))
                                        (should (equal (car (last (cdr (assq 'gen treesit-simple-indent-rules)))) '(catch-all prev-line 0)))

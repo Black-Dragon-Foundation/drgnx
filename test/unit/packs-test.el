@@ -191,6 +191,30 @@
         (should-not (assq 'gen2 (drgnx-packs-locked)))
         (should (equal lock-before lock-before))))))
 
+;;;; Packages a pack requires
+
+(ert-deftest drgnx-packs/the-emacs-packages-a-pack-requires-are-installed-first-and-a-failure-changes-nothing ()
+  (drgnx-packs-test--with root
+    (drgnx-packs-test--pack drgnx-packs-dir "hs" :grammars (list (drgnx-packs-test--grammar "hs" t))
+                            :mode '(:ts hs-ts-mode :package hs-ts-mode) :requires '(:packages (hs-ts-mode)))
+    (drgnx-packs-forget)
+    (let ((asked nil))
+      (let ((drgnx-packs-install-packages-function (lambda (names) (push names asked) (drgnx-packs--error "no network"))))
+        (should-error (drgnx-packs-sync :add '("hs")) :type 'drgnx-packs-error)
+        (should (equal asked '((hs-ts-mode))))
+        (should-not (drgnx-packs-locked)))
+      (setq asked nil)
+      (let ((drgnx-packs-install-packages-function (lambda (names) (push names asked))))
+        (drgnx-packs-sync :add '("hs"))
+        (should (equal asked '((hs-ts-mode))))
+        (should (assq 'hs (drgnx-packs-locked))))
+      ;; a package already in the lock is not asked for again
+      (setq asked nil)
+      (drgnx-pkg-write-lock (list (cons 'hs-ts-mode (list :version "1.0" :archive "x" :kind 'single :file "f" :sha256 "s" :size 1))))
+      (let ((drgnx-packs-install-packages-function (lambda (names) (push names asked))))
+        (drgnx-packs-sync :add '("alpha"))
+        (should-not asked)))))
+
 ;;;; The build before packs
 
 (ert-deftest drgnx-packs/the-build-before-packs-becomes-packs-and-its-folder-goes ()

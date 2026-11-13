@@ -9,7 +9,10 @@ In a large file, sticky scroll, guides, blame and the language server stay off.
 ## Language support (tree-sitter)
 
 Every language is a **language pack** (`packs/` in drgnx: Python, JavaScript, TypeScript, TSX, Go, Rust, Java, C, C++,
-shell, Ruby, Lua, HTML, CSS, JSON, YAML and TOML, and the format-only Terraform and Dart). A pack names a language's
+shell, Ruby, Lua, HTML, CSS, JSON, YAML, TOML, PHP, Elixir, Haskell, Kotlin, Swift, Zig and SQL, and the format-only Terraform and
+Dart). PHP and Elixir use Emacs's own tree-sitter modes, Haskell the `haskell-ts-mode` package (installed with the pack),
+and Kotlin, Swift, Zig and SQL drgnx's shared tree-sitter mode (`drgnx-pack-ts-mode`): highlighting from the pack's
+queries, navigation to its definitions, indentation from the previous line and the pack's rules. A pack names a language's
 tree-sitter grammar (pinned to the commit Emacs's own mode pins), its modes and its formatter; the manifest format is
 in `docs/develop/packs.md`.
 

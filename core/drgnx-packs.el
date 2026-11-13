@@ -40,6 +40,10 @@ read and cleared by `drgnx-packs-forget', so it holds a handful of small plists.
   "Writes the generic mode's queries for a pack: called with the pack's folder and the file to write, signals
 `drgnx-packs-error' naming what is refused.  Tests replace it.")
 
+(defvar drgnx-packs-install-packages-function #'drgnx-packs--install-packages
+  "Installs the Emacs packages a pack requires: called with their names (symbols) before the pack job runs; a failure
+signals `drgnx-packs-error' and nothing of the packs changes.  Tests replace it.")
+
 (defun drgnx-packs--error (fmt &rest args) (signal 'drgnx-packs-error (list (apply #'format fmt args))))
 
 ;;;; Where things are
@@ -178,6 +182,22 @@ require) is among UNITS: plists (:grammar :file :path), for the job to compile a
   "Where the generic mode's queries of the pack NAME at COMMIT (its tree hash) are kept."
   (expand-file-name (format "packs/translated/%s-%s.eld" name (substring commit 0 12)) (drgnx-state-dir)))
 
+(defun drgnx-packs--install-packages (names)
+  "`drgnx sync --add NAMES': the packages the lock lacks, from the archives, as the user's (a pack names them and the
+Extensions card lists them)."
+  (let ((r (condition-case err (drgnx-pkg-sync :add (mapcar #'list names))
+             (drgnx-pkg-error (drgnx-packs--error "installing %s: %s" (mapconcat #'symbol-name names " ") (cadr err))))))
+    (unless (plist-get r :ok)
+      (drgnx-packs--error "could not install %s" (mapconcat #'symbol-name names " ")))))
+
+(defun drgnx-packs--missing-packages (names)
+  "The Emacs packages the packs NAMES require that the lock does not have yet."
+  (let (out)
+    (dolist (n names)
+      (dolist (p (plist-get (plist-get (drgnx-packs-manifest n) :requires) :packages))
+        (unless (or (assq p (drgnx-pkg-read-lock)) (memq p out)) (push p out))))
+    (nreverse out)))
+
 (defun drgnx-packs--run-translate (dir out)
   "`ratatoskr packs translate DIR OUT'."
   (let ((bin (or (progn (require 'drgnx-hub-client) (drgnx-hub-client-binary))
@@ -263,6 +283,8 @@ everything as it was.  Returns (:ok t :packs NAMES :built LANGS :generation N)."
                           (dolist (n wanted)
                             (when (seq-some (lambda (g) (equal (plist-get g :from-pack) r)) (plist-get (drgnx-packs-manifest n) :grammars))
                               (drgnx-packs--error "%s is needed by %s" r n))))
+                        (when-let* ((pkgs (drgnx-packs--missing-packages wanted)))
+                          (funcall drgnx-packs-install-packages-function pkgs))
                         (when units
                           (when (file-exists-p staging) (delete-directory staging t))
                           (make-directory staging t)

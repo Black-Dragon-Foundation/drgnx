@@ -9,7 +9,10 @@
 //! - `#not-eq?` and `#not-match?` become `#pred?` on a named function, which the editor defines (`Pred`).
 //!
 //! Each top-level pattern goes to the feature of its first known capture, so a level (`treesit-font-lock-feature-list`)
-//! turns whole kinds of highlighting on and off.
+//! turns whole kinds of highlighting on and off. The rules stay in the file's order (consecutive patterns of one feature
+//! share a rule) and the editor lets a later rule override an earlier one: highlight queries written for Neovim let a
+//! later, more specific pattern win over a general one (`(identifier) @variable`, then `(function_declaration name:
+//! (identifier) @function)`), and grouping by feature would turn that around.
 
 use std::fmt::Write as _;
 
@@ -456,7 +459,7 @@ pub fn translate(pack: &str, text: &str) -> Result<Translated, Vec<String>> {
         let Some(feature) = feature else {
             continue;
         };
-        match rules.iter_mut().find(|r| r.feature == feature) {
+        match rules.last_mut().filter(|r| r.feature == feature) {
             Some(r) => {
                 r.query.push('\n');
                 r.query.push_str(&q);

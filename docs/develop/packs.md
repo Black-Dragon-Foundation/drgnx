@@ -151,7 +151,15 @@ capture by the face it applies and knows only `#eq?`, `#match?` and `#pred?`, so
 (`skald::translate`) rewrites the file once: a capture becomes a face by a fixed table (`@keyword.return` →
 `font-lock-keyword-face`; a name the table lacks becomes an ignored `@_NAME`, a pattern with no known capture is dropped);
 `#match?` keeps its regexp, rewritten into Emacs's syntax; `#any-of?` becomes an anchored `#match?`; `#not-eq?` and
-`#not-match?` become `#pred?` on functions the editor defines (`:preds`). Patterns are grouped by the feature of their
-first known capture (`comment`, `keyword`, `string`, `type`, `constant`, `number`, `function`, `variable`, `property`,
+`#not-match?` become `#pred?` on functions the editor defines (`:preds`). Patterns keep the file's order, consecutive ones of the same feature sharing a rule, and a later rule overrides an
+earlier one (Neovim's order, which these queries are written for); each rule has the feature of its first known capture (`comment`, `keyword`, `string`, `type`, `constant`, `number`, `function`, `variable`, `property`,
 `operator`, `delimiter`, `bracket`, `escape-sequence`, `attribute`), which the feature levels turn on and off. The node
 kinds of the `@definition.*` patterns of `tags.scm` become `:defuns`, what navigation treats as a definition.
+
+## The live test
+
+`test/packs/live.sh` (in a container: needs network, git and a C compiler) installs the new packs with `drgnx packs sync
+--add`: each grammar is fetched at its pin, built, load-checked in a child and its queries compiled. It then opens each
+pack's sample (`packs/NAME/test/samples/`) in a batch Emacs and checks the mode and the faces of chosen tokens
+(`test/packs/live-test.el`). The seven samples (PHP, Elixir, Kotlin, Swift, Zig, SQL and the Haskell grammar's build)
+pass on Emacs 31 with libtree-sitter 0.26.

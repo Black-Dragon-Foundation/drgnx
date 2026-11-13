@@ -81,7 +81,7 @@ indentation from the pack of the file (Kotlin, Swift, Zig, SQL)."
       (drgnx-pack-ts--define-preds (plist-get data :preds))
       (treesit-parser-create lang)
       (setq-local treesit-font-lock-settings
-                  (apply #'append (mapcar (lambda (r) (treesit-font-lock-rules :language lang :feature (intern (plist-get r :feature))
+                  (apply #'append (mapcar (lambda (r) (treesit-font-lock-rules :language lang :override t :feature (intern (plist-get r :feature))
                                                                                (plist-get r :query)))
                                           (plist-get data :rules))))
       (setq-local treesit-font-lock-feature-list drgnx-pack-ts-feature-list)
