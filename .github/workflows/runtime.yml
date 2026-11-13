@@ -824,8 +824,9 @@ jobs:
           fetch-depth: 0          # the whole history, for commit-times.sh
           filter: blob:none       # without old file contents
           persist-credentials: false
-      - uses: ./.github/actions/sccache
-      - run: bash .github/ci/rust.sh --target aarch64-linux-android
+      # No sccache here: cc-rs runs the fake C compiler above through rustc's wrapper, and sccache refuses `true` as a
+      # compiler ("failed to execute compile"); the target cache below already keeps the type-check short
+      - run: bash .github/ci/rust.sh --target aarch64-linux-android --component clippy
       - id: rv
         run: echo "v=$(rustc -V | tr -cs 'A-Za-z0-9.' '-')" >> "$GITHUB_OUTPUT"
       - id: registry

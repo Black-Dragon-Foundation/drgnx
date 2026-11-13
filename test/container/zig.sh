@@ -32,7 +32,9 @@ trap 'rm -r "$work"' EXIT
 
 if ! command -v minisign >/dev/null 2>&1; then
   case "$os" in
-    linux) dnf -y install minisign ;;
+    # Fedora images (dnf) and GitHub's Ubuntu runners (apt-get)
+    linux) if command -v dnf >/dev/null 2>&1; then dnf -y install minisign
+           else apt-get update -qq && apt-get install -y -qq minisign; fi ;;
     macos) brew install minisign ;;
   esac
 fi
