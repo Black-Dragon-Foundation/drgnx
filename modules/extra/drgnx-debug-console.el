@@ -13,6 +13,7 @@
 (declare-function drgnx-hub-call-sync "drgnx-hub-client" (method params &optional timeout))
 (declare-function drgnx-wb-area-show "drgnx-area" (area &optional tab buffer))
 (declare-function drgnx-debug--session "drgnx-debug" (&optional state))
+(declare-function drgnx-debug-can-p "drgnx-debug-launch" (session cap))
 (defvar drgnx-debug--sessions)
 
 (defgroup drgnx-debug-console nil "The debug console." :group 'drgnx)
@@ -20,6 +21,14 @@
 (defcustom drgnx-debug-console-max-lines 10000
   "The most lines the debug console keeps; older ones go (VS Code's `debug.console.maximumLines')."
   :type 'natnum :group 'drgnx-debug-console)
+
+(defcustom drgnx-debug-console-timestamps nil
+  "Non-nil: each console line shows the time its output reached the hub, in a column before it.  Changing it re-shows
+the lines already there."
+  :type 'boolean :group 'drgnx-debug-console
+  :set (lambda (sym value)
+         (set-default sym value)
+         (when (fboundp 'drgnx-debug-console--restamp) (drgnx-debug-console--restamp))))
 
 (defcustom drgnx-debug-console-clear-on-restart t
   "Non-nil: starting a configuration again clears what its last run printed (once that run has ended)."
@@ -32,6 +41,7 @@
 (defface drgnx-debug-console-result '((t :inherit default)) "An evaluation's result." :group 'drgnx-debug-console)
 (defface drgnx-debug-console-logpoint '((t :inherit success)) "A logpoint's message." :group 'drgnx-debug-console)
 (defface drgnx-debug-console-source '((t :inherit shadow)) "Where a logpoint's message came from." :group 'drgnx-debug-console)
+(defface drgnx-debug-console-time '((t :inherit shadow)) "A line's timestamp." :group 'drgnx-debug-console)
 (defface drgnx-debug-console-count '((t :inherit drgnx-chip-quiet)) "How many times a line came in a row." :group 'drgnx-debug-console)
 (defface drgnx-debug-console-stale '((t :inherit shadow)) "A result whose stop is over." :group 'drgnx-debug-console)
 (defface drgnx-debug-console-prompt '((t :inherit minibuffer-prompt)) "The input's prompt." :group 'drgnx-debug-console)
@@ -138,6 +148,27 @@ selected frame, S-RET adds a line)."
                             'face 'drgnx-debug-console-source)
               ""))))
 
+(defun drgnx-debug-console--stamp (ms)
+  "The timestamp column for a line the hub stamped MS (milliseconds since the epoch), or blank for none."
+  (propertize (if ms (format "%s.%03d " (format-time-string "%H:%M:%S" (/ ms 1000)) (% (truncate ms) 1000))
+                (make-string 13 ?\s))
+              'face 'drgnx-debug-console-time))
+
+(defun drgnx-debug-console--restamp ()
+  "Show or hide every line's timestamp, as `drgnx-debug-console-timestamps' says."
+  (when-let* ((b (get-buffer drgnx-debug-console-buffer-name)))
+    (with-current-buffer b
+      (with-silent-modifications
+        (save-excursion
+          (goto-char (point-min))
+          (while (< (point) drgnx-debug-console--end)
+            (let ((eol (min (1+ (line-end-position)) drgnx-debug-console--end)))
+              (if drgnx-debug-console-timestamps
+                  (put-text-property (point) eol 'line-prefix
+                                     (drgnx-debug-console--stamp (get-text-property (point) 'drgnx-debug-console-time)))
+                (remove-text-properties (point) eol '(line-prefix nil))))
+            (forward-line 1)))))))
+
 (defun drgnx-debug-console--count-text (n)
   (if (> n 1) (propertize (format " ×%d" n) 'face 'drgnx-debug-console-count 'drgnx-debug-console-count t) ""))
 
@@ -164,6 +195,9 @@ selected frame, S-RET adds a line)."
   (let ((start (point)) (n (or (plist-get line :count) 1)))
     (insert (drgnx-debug-console--text line) (drgnx-debug-console--count-text n) "\n")
     (put-text-property start (point) 'read-only t)
+    (when-let* ((ms (plist-get line :time))) (put-text-property start (point) 'drgnx-debug-console-time ms))
+    (when drgnx-debug-console-timestamps
+      (put-text-property start (point) 'line-prefix (drgnx-debug-console--stamp (plist-get line :time))))
     (when-let* ((g (plist-get line :group))) (put-text-property start (point) 'drgnx-debug-console-group g))
     (when-let* ((in (plist-get line :within)))
       (put-text-property start (point) 'drgnx-debug-console-within in)
@@ -275,9 +309,10 @@ taking the focus, or selected with SELECT."
 
 (defun drgnx-debug-console-complete-at-point ()
   "Completion in the input from the session's adapter (`debug/completions'): the span a target names, else the
-word before point; nil outside the input, with no session, or when the adapter has none."
+word before point; nil outside the input, with no session, or when the adapter has none (or has not said yet)."
   (when-let* (((>= (point) (drgnx-debug-console--input-start)))
               (s (drgnx-debug--session))
+              ((drgnx-debug-can-p s :supportsCompletionsRequest))
               (start (drgnx-debug-console--input-start))
               (r (condition-case nil
                      (drgnx-hub-call-sync "debug/completions"
@@ -402,6 +437,8 @@ stays folded."
                          "\n")
                 (put-text-property start (point) 'read-only t)
                 (put-text-property start (point) 'drgnx-debug-console-child depth)
+                (when drgnx-debug-console-timestamps
+                  (put-text-property start (point) 'line-prefix (drgnx-debug-console--stamp nil)))
                 (cl-incf drgnx-debug-console--lines))))))
       (set-marker bol nil) (set-marker eol nil))))
 

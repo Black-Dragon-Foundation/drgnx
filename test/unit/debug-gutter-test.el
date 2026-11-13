@@ -195,8 +195,12 @@ inline breakpoint there.  None with the setting off, or once the session runs."
                                     #'<))))
         (drgnx-debug-gutter-toggle 2)
         (should-not (funcall cands))
+        ;; a session still starting (no caps yet) is not asked
         (drgnx-debug-gutter--event "debug-state" (list :sessions (vector (list :id "s1" :root (drgnx-debug-launch-root)
                                                                                :state "stopped"))))
+        (should-not (assoc "debug/breakpoint-locations" debug-gutter-test--calls))
+        (drgnx-debug-gutter--event "debug-state" (list :sessions (vector (list :id "s1" :root (drgnx-debug-launch-root)
+                                                                               :state "stopped" :caps (list :supportsBreakpointLocationsRequest t)))))
         (should (equal (cdr (assoc "debug/breakpoint-locations" debug-gutter-test--calls))
                        (list :session "s1" :path buffer-file-name :line 2)))
         (should (equal (funcall cands) '(3 6)))
@@ -207,10 +211,10 @@ inline breakpoint there.  None with the setting off, or once the session runs."
         (should (equal (funcall cands) '(6)))
         (let ((drgnx-debug-inline-breakpoint-candidates nil))
           (drgnx-debug-gutter--event "debug-state" (list :sessions (vector (list :id "s1" :root (drgnx-debug-launch-root)
-                                                                                 :state "stopped"))))
+                                                                                 :state "stopped" :caps (list :supportsBreakpointLocationsRequest t)))))
           (should-not (funcall cands)))
         (drgnx-debug-gutter--event "debug-state" (list :sessions (vector (list :id "s1" :root (drgnx-debug-launch-root)
-                                                                               :state "stopped"))))
+                                                                               :state "stopped" :caps (list :supportsBreakpointLocationsRequest t)))))
         (should (funcall cands))
         (drgnx-debug-gutter--event "debug-state" (list :sessions (vector (list :id "s1" :root (drgnx-debug-launch-root)
                                                                                :state "running"))))
@@ -263,6 +267,22 @@ inline breakpoint there.  None with the setting off, or once the session runs."
       (should (equal (debug-gutter-test--marks) '((6 . bp))))
       (revert-buffer t t t)                 ; auto-revert's way: the modes stay
       (should (equal (debug-gutter-test--marks) '((5 . bp)))))))
+
+(ert-deftest drgnx-debug-gutter/breakpoints-and-the-stop-in-the-overview-ruler ()
+  "The column hands the overview ruler its marks: a breakpoint in the middle lane (grey while disabled), the stopped
+line across it; the stop's mark goes with the stop, the ruler with the column."
+  (let ((debug-gutter-test--store nil) (debug-gutter-test--next 0) (drgnx-debug-overview-ruler t))
+    (debug-gutter-test--with 10
+      (let ((ruler (lambda () (mapcar (lambda (m) (list (car m) (nth 1 m) (nth 2 m))) drgnx-ruler--marks))))
+        (drgnx-debug-gutter-toggle 5)
+        (should drgnx-ruler-mode)
+        (should (equal (funcall ruler) '((5 middle drgnx-debug-ruler-breakpoint))))
+        (drgnx-debug-gutter--mark-stop "s1" 'top 'stop 'drgnx-debug-stopped-line 7 nil)
+        (should (equal (funcall ruler) '((5 middle drgnx-debug-ruler-breakpoint) (7 full drgnx-debug-ruler-stop))))
+        (drgnx-debug-gutter-stop-clear "s1")
+        (should (equal (funcall ruler) '((5 middle drgnx-debug-ruler-breakpoint))))
+        (drgnx-debug-gutter-mode -1)
+        (should-not drgnx-ruler-mode)))))
 
 (ert-deftest drgnx-debug-gutter/a-killed-buffer-releases-the-hooks ()
   "Killing a file's buffer with the column on turns the column off first: the margin's window hooks and the column's

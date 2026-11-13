@@ -2407,6 +2407,20 @@ a :measure without :actions each have :timeout seconds to answer (120)."
        :actions ,(append (funcall keys "<next>" 30) (funcall keys "<prior>" 30))
        :check "(with-current-buffer (window-buffer) (and (drgnx-margins-offset 'debug) (drgnx-margins-offset 'hunks) (not drgnx-debug-gutter-mode) t))"   ; both claimed, nothing drawn
        :teardown ,(concat "(progn " kill-fixture " (drgnx-perf--debug-stop) t)"))
+      ;; the overview ruler: the fixture narrowed to its first 10,000 lines, 200 breakpoints (one every 50 lines) in the
+      ;; column and so in the ruler, scrolled as debug-gutter-scroll; judged against debug-gutter-baseline as it is
+      ;; (each scroll moves the ruler's rows and re-strings the rows whose band changed)
+      (debug-ruler-scroll
+       :setup ,(drgnx-perf-run--debug-setup-form)
+       :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " (goto-char (point-min))"
+                      " (narrow-to-region (point-min) (progn (forward-line 10000) (point))) (goto-char (point-min))"
+                      " (setq drgnx-perf--debug-store (reverse"
+                      "   (mapcar (lambda (i) (list :id i :line (* 50 i) :enabled (/= 0 (% i 5)) :verified t))"
+                      "           (number-sequence 1 200))))"
+                      " (setq drgnx-debug-overview-ruler t) (drgnx-margins-claim 'hunks 1 :order 2) (drgnx-debug-gutter-mode 1) t)")
+       :actions ,(append (funcall keys "<next>" 30) (funcall keys "<prior>" 30))
+       :check "(with-current-buffer (window-buffer) (and (= 200 (length drgnx-ruler--marks)) (= 10000 drgnx-ruler--lines) (cddr (assq (selected-window) drgnx-ruler--windows)) t))"   ; the ruler drew 200 marks of 10,000 lines
+       :teardown ,(concat "(progn (setq drgnx-debug-overview-ruler nil) (with-current-buffer (window-buffer) (widen)) (drgnx-debug-gutter-mode -1) " kill-fixture " (drgnx-perf--debug-stop) t)"))
       ;; F9 on 20 lines in a row: each key a `debug/breakpoints' add, its answer and the column redrawn
       (debug-breakpoint-click
        :setup ,(drgnx-perf-run--debug-setup-form)
@@ -2954,7 +2968,8 @@ pairs below, each judged only when both sides were measured."
         (agents-none (drgnx-perf--get results 'agents-typing-none '(:input :p95)))
         (ratio (drgnx-perf--get results 'pair-typing '(:pair_applied_ratio)))
         (gutter (drgnx-perf--get results 'debug-gutter-scroll '(:input :p50)))
-        (gutter-base (drgnx-perf--get results 'debug-gutter-baseline '(:input :p50))))
+        (gutter-base (drgnx-perf--get results 'debug-gutter-baseline '(:input :p50)))
+        (ruler (drgnx-perf--get results 'debug-ruler-scroll '(:input :p50))))
     (append
      ;; the breakpoint column: at most the larger of 5 % and 0.3 ms over the same scroll with its margin (and hunks')
      ;; claimed and empty (p50s: 60 keys are too few for a steady p95).  Times come in 0.1 ms steps and the frame is
@@ -2965,6 +2980,12 @@ pairs below, each judged only when both sides were measured."
        (list (format "debug-gutter-scroll input p50 %s ms is %s%% (%s ms) over debug-gutter-baseline's %s ms (the column may add at most 5 %% or 0.3 ms)"
                      (drgnx-perf--round gutter) (round (* 100 (- (/ gutter gutter-base) 1)))
                      (drgnx-perf--round (- gutter gutter-base)) (drgnx-perf--round gutter-base))))
+     ;; the overview ruler, by the same rule
+     (when (and (numberp ruler) (numberp gutter-base)
+                (> ruler (+ (max (* 1.05 gutter-base) (+ gutter-base 0.3)) 1e-6)))
+       (list (format "debug-ruler-scroll input p50 %s ms is %s%% (%s ms) over debug-gutter-baseline's %s ms (the ruler may add at most 5 %% or 0.3 ms)"
+                     (drgnx-perf--round ruler) (round (* 100 (- (/ ruler gutter-base) 1)))
+                     (drgnx-perf--round (- ruler gutter-base)) (drgnx-perf--round gutter-base))))
      ;; the agents in the editor: at most 1 ms over the same five agents with the module off; of the paired chat's writes at
      ;; least 80 % were applied by the editor
      (when (and (numberp agents) (numberp agents-none) (> (- agents agents-none) 1.0))
@@ -3232,7 +3253,7 @@ version and the commit, as JSON in FILE."
                                 terminal-backfill terminal-flood))
     (memory . "its one key only opens the pause RSS is read after; RSS is its budget")
     ,@(mapcar (lambda (w) (cons w "graphical debugging: its allocation, CPU and rows are set from three pinned runs on the desktop island (the plan's perf step)"))
-              '(debug-gutter-scroll debug-gutter-baseline debug-breakpoint-click debug-probe-flood debug-scrub
+              '(debug-gutter-scroll debug-gutter-baseline debug-ruler-scroll debug-breakpoint-click debug-probe-flood debug-scrub
                                     debug-step-line debug-inline debug-toolbar-show debug-step-variables debug-expand-chunks
                                     debug-console-flood
                                     debug-bisect-typing view-remove-above view-select-dim))

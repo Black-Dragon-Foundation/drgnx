@@ -318,6 +318,10 @@ roots `debug/trust` called trusted and each root's last started configuration.
   `debugpy_hot_reloads_a_saved_function`.
 - These and `debug/breakpoint-locations` read the session's capabilities: asked before the adapter has given them
   (the session is starting) they are refused, so the editors offer them once `debug-state` shows the capability.
+  In Lisp, `drgnx-debug-can-p (SESSION CAP)` (drgnx-debug-launch.el) reads a `debug-state` session's `caps`: the
+  console completes only on `:supportsCompletionsRequest`, inline candidates are asked only on
+  `:supportsBreakpointLocationsRequest`, and View Binary Data / Write Bytes say so instead of asking without
+  `:supportsReadMemoryRequest` / `:supportsWriteMemoryRequest`.
 - `debug/install {adapter, adapters?}`: the adapter's `:install` entry carried out (see Adapters); the answer says what
   was installed. A system package's, an adapter without an entry and an unknown id are errors (conformance
   `debug/install-refusals`; the downloads are the unit tests' `debug::tests_install`, from local files).
@@ -388,6 +392,12 @@ only).
   leaves it where the text put it; on save each moved mark sends `move` (the store's line plus how far it moved), each
   mark whose line was deleted sends `remove`; a revert puts the marks back on the store's lines. A breakpoint the
   adapter bound elsewhere (`bound_line`) sits on that line.
+- The overview ruler (`core/drgnx-ruler.el`, docs/develop/core.md): the column is a producer
+  (`drgnx-debug-gutter--ruler-marks`): each mark's line from its overlay (so a draft move shows), breakpoints in the
+  middle lane (`drgnx-debug-ruler-breakpoint`, `-unverified` when disabled or unbound), the top stop across
+  (`drgnx-debug-ruler-stop`); it asks the ruler again after each draw and each stop mark or clear.
+  Only with `drgnx-debug-overview-ruler` (off): the ruler's margin costs a scroll 0.7–1.1 ms, over the column's
+  0.3 ms rule, so it stays out of `debug-gutter-scroll` until its drawing is chosen again.
 - `drgnx-debug-gutter-show`: `auto` (while the file has breakpoints or a session runs in its project, from
   `debug-state`), `always` or `never`.
 - A new major mode (`normal-mode` in a revert that does not keep the modes), or killing the buffer, would drop the
@@ -627,6 +637,11 @@ The panel's **Debug Console** tab. The hub makes the lines; the editor only inse
   editor keys them (SESSION . N), keeps the folded ones in `drgnx-debug-console--closed` (emptied with the output),
   draws a chevron on the opening line and hides a line (`invisible`) while any group it is in is folded, also as
   lines arrive. TAB or RET on the opening line folds or opens it; a group inside stays as it was.
+- Timestamps: the hub stamps each line with `time` (ms since the epoch, from its clock, when the output event came;
+  a counted repeat keeps the first, `more` lines have none). The editor keeps it as the line's
+  `drgnx-debug-console-time` property and, with `drgnx-debug-console-timestamps`, shows it as the line's
+  `line-prefix` (`HH:MM:SS.mmm`, face `drgnx-debug-console-time`; a blank column for a line without one), so the
+  text stays the output and the setting's `:set` re-shows the lines in place without asking the hub.
 - The console stays after its session ends; starting a configuration of the same name again clears it once no
   session of the last run is left (`drgnx-debug-console-clear-on-restart`, on by default).
 - Completion in the input: `drgnx-debug-console-complete-at-point` is the console's only `completion-at-point`
@@ -649,6 +664,30 @@ The panel's **Debug Console** tab. The hub makes the lines; the editor only inse
   (`.` for the unprintable). A redraw replaces only the lines that changed.
 - Its keys: next and previous page (never before the reference), refresh, and write: hex typed at the byte under
   point goes as `debug/write-memory {session, reference, offset, data (base64)}`, then the page is read again.
+
+## The disassembly view: `drgnx-debug-disassembly.el`
+
+- `debug-frame` events that carry `instruction_pointer` are remembered per session
+  (`drgnx-debug-disassembly--frames`). **Open Disassembly View** (`debug-open-disassembly`) opens `*Disassembly*` at
+  the stopped session's last frame. It is offered only when the session's `caps` has `supportsDisassembleRequest`
+  (`drgnx-debug-can-p`). A stop the editor opens with no path and no source reference opens the view instead of
+  "No source" (`drgnx-debug-disassembly-show`, from the gutter's `drgnx-debug-gutter-show-frame`).
+- `debug/disassemble {session, reference, instruction_offset, count}` →
+  `{instructions: [{address, bytes?, instruction, symbol?, path?, line?, end_line?}]}` reads
+  `drgnx-debug-disassembly-count` (200; the hub caps it at 500) around the instruction, a quarter of them before
+  it. A source row (the file's line, trimmed, and `file:line`) goes above each change of place. The instruction rows
+  carry their address as the text property `drgnx-debug-disassembly-address`. Earlier and later page by a whole count.
+  A page is redrawn only on open, paging, or a stop off the page. A stop on the page only moves the marks.
+- The debug column (`drgnx-margins` owner `debug`, the gutter's glyphs) marks the current instruction (the stop, or a
+  caller's frame) and the session's instruction breakpoints. The view asks
+  `debug/breakpoints {root, session, kind: "instruction"}`, which answers the session's instruction view
+  `{session, version, breakpoints: [{id: "i:S:N", n, instruction, offset?, verified, enabled, condition?, hit?}]}`.
+  The ops `add-instruction {session, instruction}` and `remove-instruction {session, id: N}` answer the same view. The
+  hub's `debug-breakpoints` event with a `session` and no `path` redraws it; a newer `version` wins. Toggling needs
+  `supportsInstructionBreakpoints`.
+- With the view focused, `drgnx-debug-control` sends `granularity: "instruction"` on `next`, `step-in` and `step-out`.
+  The header line shows an "instruction step" chip (`drgnx-debug-disassembly-step`) while the view's window is
+  selected.
 
 ## Live adapters: the image
 
