@@ -31,6 +31,7 @@
     (window-light)
     (window-hc)
     (magit)
+    (org :mockup magit)
     (shell-heredoc)
     (work-space-dark)
     (work-flow :mockup hub-orchestration)
