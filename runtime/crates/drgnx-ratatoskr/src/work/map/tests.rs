@@ -1002,3 +1002,50 @@ fn a_new_conclusion_is_marked_for_four_seconds() {
         "a first conclusion is new"
     );
 }
+
+/// [D] An agent on a task names itself in the Flow by its model, then its session: the map's label ("Sonnet ·
+/// search-quick") gives the session alone after the model; without a model the label is the agent's name.
+#[test]
+fn a_task_agent_names_its_model_then_its_session() {
+    let a = TaskAgent {
+        label: "Sonnet · search-quick".into(),
+        model: Some("Sonnet".into()),
+        ..TaskAgent::default()
+    };
+    assert_eq!(
+        a.names(),
+        ("Sonnet".to_owned(), Some("search-quick".to_owned()))
+    );
+    let a = TaskAgent {
+        label: "search-quick".into(),
+        ..TaskAgent::default()
+    };
+    assert_eq!(a.names(), ("search-quick".to_owned(), None));
+}
+
+/// [D] A test hub's scene seeds its agent sessions into every map it opens, each in its state for the minutes the
+/// scene gives it: the held task's agent of hub-orchestration.html, 41 min, ≈$0.90, ctx 88%.
+#[cfg(feature = "test-hooks")]
+#[test]
+fn the_scenes_sessions_are_on_every_map_for_their_minutes() {
+    let map = Map::default();
+    map.scene(crate::orch::scene::sessions());
+    let mut g = lock(&map.inner);
+    let evs = Map::scene_events(&mut g, 1_000);
+    let facts: Vec<&SessionFact> = evs
+        .iter()
+        .filter_map(|e| match e {
+            Event::Session(s) => Some(s),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(facts.len(), 1, "{evs:?}");
+    let s = facts[0];
+    assert_eq!(
+        (s.name.as_str(), s.model.as_str(), s.task.as_deref()),
+        ("search-quick", "Sonnet", Some("scene-run#5"))
+    );
+    assert_eq!(s.since, 959);
+    assert_eq!(s.spend.as_deref(), Some("$0.90"));
+    assert_eq!(s.context, Some(88));
+}

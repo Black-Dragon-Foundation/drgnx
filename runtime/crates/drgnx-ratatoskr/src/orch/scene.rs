@@ -259,6 +259,22 @@ pub(crate) fn run() -> Run {
     }
 }
 
+/// The agent on the held task (hub-orchestration.html's detail head: "Sonnet · search-quick", 41 min, ≈$0.90, ctx
+/// 88%): its snapshot and its minutes in its state.  It is no live session: the map shows it ([`crate::work::map::Map::scene`]).
+pub(crate) fn sessions() -> Vec<(runstav::methods::agents::Snapshot, u64)> {
+    let snap = serde_json::from_value(json!({
+        "id": "scene-agent-5",
+        "name": "search-quick",
+        "profile": "Sonnet",
+        "job": JOB,
+        "task": format!("{JOB}#5"),
+        "status": "busy",
+        "usage": {"used": 176_000.0, "size": 200_000.0, "cost": 0.9},
+    }))
+    .expect("the scene's snapshot");
+    vec![(snap, 41)]
+}
+
 /// Write the run into FRONT's store and its merge queue.  Each write is the hub's (class system), as the gates' are.
 pub async fn seed(front: &Front) -> Result<(), String> {
     let r = run();
@@ -370,6 +386,7 @@ pub async fn seed(front: &Front) -> Result<(), String> {
         );
         front.core.budgets.spend(&scope, Unit::Usd, 6.2);
     }
+    front.core.map.scene(sessions());
     front.writer.signals.wrote();
     Ok(())
 }

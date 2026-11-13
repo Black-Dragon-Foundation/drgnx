@@ -78,6 +78,24 @@ pub struct TaskAgent {
     pub context: Option<u8>,
 }
 
+impl TaskAgent {
+    /// Its model and its session, as the Flow names it: the map's label is "MODEL · SESSION" when it has a model;
+    /// without one the label is the agent's name and there is no session.
+    pub fn names(&self) -> (String, Option<String>) {
+        match &self.model {
+            Some(m) if *m != self.label => {
+                let session = self
+                    .label
+                    .strip_prefix(m.as_str())
+                    .and_then(|r| r.strip_prefix(" · "))
+                    .unwrap_or(&self.label);
+                (m.clone(), Some(session.to_owned()))
+            }
+            _ => (self.label.clone(), None),
+        }
+    }
+}
+
 /// One view's coalescing (see the module).
 #[derive(Clone, Debug, Default)]
 pub struct Coalescer {
@@ -479,6 +497,10 @@ struct Inner {
     open_cards: BTreeSet<String>,
     /// The open huddles' cards, by huddle id: a view opened later is seeded with them.
     huddles: BTreeMap<String, CardFact>,
+    /// The sessions a test hub's scene seeds (`orch::scene`), each with its minutes in its state: every map opened
+    /// shows them.
+    #[cfg(feature = "test-hooks")]
+    scene: Vec<(Snapshot, u64)>,
 }
 
 /// The hub's Work map (see the module).
@@ -695,6 +717,26 @@ impl Map {
     }
 
     // ---- the sources ----
+
+    /// A test hub's scene sessions (`orch::scene`): SESSIONS, each with its minutes in its state.
+    #[cfg(feature = "test-hooks")]
+    pub fn scene(&self, sessions: Vec<(Snapshot, u64)>) {
+        lock(&self.inner).scene = sessions;
+    }
+
+    /// The scene's sessions noted, each in its state since its minutes before NOW (the clock's minute), as facts for
+    /// a map that opens: they work in no workspace's roots, so every map shows them.
+    #[cfg(feature = "test-hooks")]
+    fn scene_events(g: &mut Inner, now: u64) -> Vec<Event> {
+        let mut out = Vec::new();
+        for (snap, ago) in g.scene.clone() {
+            Self::note_session(g, &snap, &[]);
+            let s = g.sessions.get_mut(&snap.id).expect("just noted");
+            s.since = now.saturating_sub(ago);
+            out.extend(s.facts());
+        }
+        out
+    }
 
     /// A session's snapshot and its subagents, from its `agent` emit.
     pub fn session(self: &Arc<Self>, snap: &Snapshot, kids: &[crate::work::subagents::Child]) {
@@ -1537,6 +1579,8 @@ pub async fn subscribe(f: &Front, c: &Caller, p: MapSubscribe) -> Result<MapRows
             seed.extend(evs);
         }
     }
+    #[cfg(feature = "test-hooks")]
+    seed.extend(Map::scene_events(&mut g, minute()));
     seed.extend(Map::presence_events(&mut g, &ws, &files));
     map.feed(&mut g, &ws, seed);
     let sp = g.spaces.get_mut(&ws).expect("the view's workspace");

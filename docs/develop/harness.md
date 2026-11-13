@@ -590,7 +590,8 @@ How it works:
   since no session runs. The scenes share that hub, started with `RATATOSKR_SEED_SCENE=1`: the hub writes one plan
   run into its fresh store (`orch::scene`, test-hooks only). It is a paused job, `scene-run`, with a rule pack, tasks
   in each gate state and their evidence, a held `gate` card, a batch of three with its affected groups' runs on two
-  machines, and the push tiers' runs at the line's head. `work-space-dark` and `work-flow` (mockup
+  machines, and the push tiers' runs at the line's head. Every map the hub opens also shows the held task's agent,
+  a seeded session that is not live ("Sonnet · search-quick", 41 min in its state, ≈$0.90, ctx 88%). `work-space-dark` and `work-flow` (mockup
   `hub-orchestration`) open the Work map on that hub, then the Flow lens beside it, in the dark theme; `work-flow`
   then selects the held task (its detail tile in the side panel) and opens the Rules tile below. Both need
   Nidhogg's view model (Sjá; the line, not the tarball). A map or Flow drawn without the hub's rows shows only its

@@ -368,13 +368,9 @@ async fn flow_facts(f: &Front, conn: u64, map: &str, job: Option<String>) -> flo
         }
         // the map's agent on it: the model names it in the table, its own label (the session) follows in the detail
         if let Some(a) = agents.iter().find(|a| a.task == t.id) {
-            match &a.model {
-                Some(m) if *m != a.label => {
-                    t.agent = Some(m.clone());
-                    t.session = Some(a.label.clone());
-                }
-                _ => t.agent = Some(a.label.clone()),
-            }
+            let (agent, session) = a.names();
+            t.agent = Some(agent);
+            t.session = session;
             t.minutes = a.minutes;
             t.spend = a.spend.clone();
             t.context = a.context;
