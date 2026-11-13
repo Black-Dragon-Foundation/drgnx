@@ -477,6 +477,42 @@ Returns (EXIT . OUTPUT)."
         (should tests)
         (should (< select tests))))))
 
+;; drgnx-term's engine (ghostty-vt-sys) is built with Zig, and its build script fails without one ("no zig"): a job
+;; that may build it installs the pinned Zig (test/container/zig.sh, in its own steps or an action's). It may build it
+;; when a cargo command takes the whole workspace or drgnx-term with its default features, when build-test-bins builds
+;; drgnx-term (`term: "true"'), or when it runs `bin/drgnx test --ui', which builds the test hub unless a fetched one
+;; is there (docs/develop/harness.md, "The test hub").
+(defun drgnx-ci-test--builds-the-term-engine-p (job)
+  "Whether JOB's text (its local actions inlined) has a command that may build drgnx-term's engine."
+  (cl-some (lambda (line)
+             (or (and (string-match-p "^ *\\(?:run: \\)?cargo \\(?:build\\|test\\|check\\|clippy\\|run\\) " line)
+                      (or (string-search "--workspace" line)
+                          (and (string-match-p "-p drgnx-term\\b" line)
+                               (not (string-search "--no-default-features" line)))))
+                 (string-match-p "^ *term: \"true\"" line)
+                 (string-match-p "bin/drgnx test .*--ui\\b" line)))
+           (split-string job "\n")))
+
+(ert-deftest drgnx-ci/every-job-that-builds-the-terminal-engine-has-zig ()
+  (let (seen)
+    (skip-unless (file-directory-p (expand-file-name ".github/workflows" drgnx-ci-test--root)))
+    (dolist (file (directory-files (expand-file-name ".github/workflows" drgnx-ci-test--root) nil "\\.yml\\'"))
+      (let ((yml (drgnx-ci-test--yml file)))
+        (when (string-search "\njobs:\n" yml)
+          (dolist (id (drgnx-ci-test--job-ids yml))
+            (let ((job (drgnx-ci-test--job-run yml id)))
+              (when (drgnx-ci-test--builds-the-term-engine-p job)
+                (push (format "%s:%s" file id) seen)
+                (should (equal (list file id (and (string-search "test/container/zig.sh" job) t))
+                               (list file id t)))))))))
+    ;; the check finds the jobs it is about: the tiers' test binaries, the GUI tier, the remote-terminal rows and the
+    ;; runtime's Linux and macOS workspace runs
+    (dolist (job '("drgnx-tiers.yml:bins-linux" "drgnx-tiers.yml:ui" "drgnx-tiers.yml:ssh"
+                   "runtime.yml:linux" "runtime.yml:macos"))
+      (should (member job seen)))
+    ;; and leaves out what builds no engine: the Android check builds drgnx-term without it
+    (should-not (member "runtime.yml:android" seen))))
+
 (defun drgnx-ci-test--workflows-and-actions (workflows)
   "The text of each of WORKFLOWS and of every local action."
   (append (mapcar #'drgnx-ci-test--yml workflows) (mapcar #'drgnx-ci-test--action drgnx-ci-test--actions)))

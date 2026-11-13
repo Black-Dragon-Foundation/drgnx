@@ -279,7 +279,11 @@ commit (`github.sha`), never for a `drgnx_ref` another repository's run names:
   through sccache). `bins-linux` runs it once, for `unit`, `no-lisp-writes`, `hub-chaos`, `ui` and `perf` (whose agent workloads start a hub with
   `ratatoskr-mock` beside it), and uploads the binaries (`drgnx-test-bins-linux`, kept a day); `macos` runs it itself (one macOS job, so no second macOS runner for it: GitHub's free plan runs 5 at once).
 - `fetch-test-bins`: puts them back under the checkout's `runtime/target/debug` (so `bin/drgnx test --container` sees
-  them at `/src`, `ratatoskr-mock` beside Ratatoskr) and sets `DRGNX_RATATOSKR_BIN` and `DRGNX_HUGINN_DUMP`.
+  them at `/src`, `ratatoskr-mock` beside Ratatoskr) and sets `DRGNX_RATATOSKR_BIN` and `DRGNX_HUGINN_DUMP`. A
+  missing binary fails it, and the job's steps after it still run: `ui` then builds the test hub itself, so it installs
+  Zig too. Every job that may build `drgnx-term`'s engine (a cargo command over the workspace or `-p drgnx-term` with
+  its default features, `term: "true"`, `bin/drgnx test --ui`) installs Zig (`test/container/zig.sh`); the unit test
+  `drgnx-ci/every-job-that-builds-the-terminal-engine-has-zig` checks it.
 - `test-image`: pulls the prebuilt image for its Containerfile ([Prebuilt images](#prebuilt-images-the-cache)); with
   `nidhogg-artifact` it then installs the run's tarball on top — a thin image `FROM` it that runs
   `test/container/nidhogg.sh fedora-45 TARBALL` after removing the base's `/opt/nidhogg/*` (an unreleased build still

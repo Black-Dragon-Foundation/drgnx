@@ -406,6 +406,12 @@ jobs:
           image: drgnx-test-gui
           variable: DRGNX_TEST_GUI_IMAGE
           nidhogg-artifact: ${{ (inputs.nidhogg == 'artifact' || inputs.nidhogg == 'line') && 'tarball-fedora-45' || '' }}
+      # `bin/drgnx test --ui` builds the test hub when bins-linux's is missing (fetch-test-bins fails then, and the
+      # tier still runs): drgnx-term's engine needs Zig; libghostty-vt's tarballs it fetches itself
+      - name: Zig (drgnx-term's engine, for a test hub built here)
+        if: ${{ !cancelled() }}
+        working-directory: drgnx
+        run: sudo bash test/container/zig.sh linux
       # the pinned child-frame packages (test/container/childframe-packages.eld) are baked into this image, so the tier
       # reaches no archive; a row that finds them missing fails (bin/drgnx sets DRGNX_CHILDFRAME_REQUIRED)
       - name: The pinned evil and kkp, for the live tier's Vim-key tests (they skip without them)
