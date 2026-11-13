@@ -2300,7 +2300,7 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
                                the hub: the durable process behind agents and their gateway (docs/guide/agents.md)
        drgnx graph export|import|backup|revert|excise|scrub|grants|sql|compact|proposed …
                                the work store from the command line (docs/guide/work.md, "The graph from the command line")
-       drgnx job propose PLAN [--repo DIR] [--budget USD] [--auto]
+       drgnx job propose PLAN [--repo DIR] [--budget USD] [--auto] [--gate review|review+accept]
                                a job from a plan: tasks, routes, estimate; nothing starts before approve
        drgnx job approve|resume ID [--budget USD] | stop ID | status [ID] [--json]
                                run, pause and inspect jobs in the hub (docs/guide/jobs.md)
