@@ -697,6 +697,15 @@ unreaped zombies are left (read from `/proc`; other systems wait as before) as g
 no longer waits out the grace and the kill period. After a refused start the `sandbox run` result file's `exit` is the
 helper's setup failure, 125, whichever of the helper and the group's kill came first.
 
+**Accepted by the manager, 2026-11-13.** None of these is a security limit, or each fails closed:
+- `sandbox run` gives the child stdin `/dev/null` and its stderr only as an 8000-character tail after the exit; no
+  draugr stdio option is added until a caller needs one (GL-T13-4).
+- The escape harness waits at most 60 s per run and skips only for listed reasons (GL-T14-3). Its probe and harness
+  are glibc builds, which run on the Fedora 45 images; there is no musl build (GL-T14-4).
+- The Seatbelt profile travels in argv up to 256 KiB and is refused above it; the limit is tested (GL-T9-2).
+- A hide is a path of the host (it is also covered under every bind's dest that holds it). A path that exists only
+  inside cannot be named, and no caller needs one (GL-T7-2).
+
 **Toolchain layouts (GL-T3-2).** The toolchain roots the profile reads are the ones `toolchain::roots` knows
 (mise, cargo, rustup, nvm, pyenv, and so on). A layout it does not know (Homebrew under the home, asdf, volta, fnm,
 sdkman, bun globals beyond `~/.bun/bin`) is added by the user through the `agents.eld` read list.
