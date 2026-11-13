@@ -567,7 +567,8 @@ in reverse order."
 (defun drgnx-term--colours ()
   "The `colours' entry's value: the faces' foreground, background and cursor, then `drgnx-term-color-0' to 15 when
 every one of them has a colour (else the worker keeps its palette).  The memo `term-colours' of the selected frame:
-read again only after a theme change.  Shared: never changed in place.  With `drgnx-term-palette-generate' on, the 240 colours above them follow."
+read again only after a theme change.  Shared: never changed in place.  With `drgnx-term-palette-generate' on,
+the 240 colours above them follow."
   (drgnx-memo term-colours (selected-frame)
               (let ((ansi (mapcar (lambda (n) (drgnx-term--face-hex (intern (format "drgnx-term-color-%d" n)) :foreground))
                                   (number-sequence 0 15))))

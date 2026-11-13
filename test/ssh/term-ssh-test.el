@@ -191,7 +191,8 @@ chmod +x bin/ssh
         (drgnx-term-ssh-test--close b)))))
 
 (ert-deftest drgnx-term-ssh/install-sends-terminfo-after-a-password-in-the-terminal ()
-  ;; both ssh's password prompts show in the terminal; the host's tic gets the entry, the record says so, TERM follows
+  ;; the password prompt shows in the terminal once (the tic call's connection is the session's: TERM-SHELL-SSH-TWICE-1);
+  ;; the host's tic gets the entry, the record says so, TERM follows
   (drgnx-term-ssh-test--with
     (let* ((d drgnx-term-ssh-test--dir) (ti (expand-file-name "terminfo" d))
            (drgnx-term-ssh-terminfo 'install) (drgnx-term-term "xterm-ghostty") b)
@@ -205,14 +206,13 @@ chmod +x bin/ssh
               (setq b (drgnx-term-ssh-test--open "/ssh:pwbox:/tmp/"))
               (drgnx-term-test--settle (lambda () (>= (prompts) 1)) "tic's ssh asks")
               (drgnx-term-test--run b "drgnx-pw-1")
-              (drgnx-term-test--settle (lambda () (>= (prompts) 2)) "the shell's ssh asks")
-              (drgnx-term-test--run b "drgnx-pw-1")
               ;; ssh flushes what was typed ahead when it leaves the password (TCSAFLUSH): type once bash's prompt shows
               (drgnx-term-test--settle
                (lambda () (seq-some (lambda (l) (string-match-p "pwuser@.*\\$ *\\'" l)) (drgnx-term-test--lines b)))
                "the host's prompt")
               (drgnx-term-test--run b "echo term-$TERM")
               (drgnx-term-test--until-line b "term-xterm-ghostty" "TERM on the host")
+              (should (= (prompts) 1))
               (should (file-exists-p (expand-file-name ".terminfo/x/xterm-ghostty" "~pwuser")))
               (should (string-search "pwuser@127.0.0.1:2222 xterm-ghostty"
                                      (with-temp-buffer

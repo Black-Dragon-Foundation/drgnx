@@ -21,6 +21,7 @@
 (require 'ansi-color)                   ; the terminal colours' parents
 (require 'drgnx-modules-record)
 (require 'drgnx-timer)
+(require 'drgnx-color)
 (require 'drgnx-wb)
 (require 'drgnx-state)                  ; whether a view shows: the workbench state store
 
@@ -1373,6 +1374,11 @@ dropped.")
 (defconst drgnx-view-patch-image-max 256
   "The most images a hub-fed view holds; past that the ids no live row names are evicted.")
 
+;; A style's foreground is moved toward white or black until its contrast with the style's background reaches
+;; `drgnx-term-minimum-contrast' (1..21, the terminal's setting, unbound without the terminal module); 1: styles
+;; are drawn as set.  The default background is the face `drgnx-term-default''s.
+(defvar drgnx-term-minimum-contrast)
+
 (defvar drgnx-view-patch-style-face-max 4096
   "The most style faces a hub-fed view keeps (an LRU keyed by the style: its colours and attributes); past it the
 least recently used quarter goes.")
@@ -1931,6 +1937,22 @@ drawn."
          (let ((n (plist-get c :ansi)))
            (and (< n 16) (face-foreground (aref drgnx-view-patch-ansi-faces n) nil t))))))
 
+(defun drgnx-view-patch--contrast-foreground (style)
+  "The foreground STYLE needs to reach `drgnx-term-minimum-contrast' against its background, as \"#rrggbb\",
+or nil when it needs none (no minimum, a colour missing, contrast met already).  An inverse style swaps the two."
+  (when (and (boundp 'drgnx-term-minimum-contrast) (numberp drgnx-term-minimum-contrast)
+             (> drgnx-term-minimum-contrast 1))
+    (let* ((has (facep 'drgnx-term-default))
+           (default (and has (face-background 'drgnx-term-default nil t)))
+           (fg (or (drgnx-view-patch--colour (plist-get style :fg)) (and has (face-foreground 'drgnx-term-default nil t))))
+           (bg (or (drgnx-view-patch--colour (plist-get style :bg)) default))
+           (inverse (drgnx-view-patch--on (plist-get style :inverse))))
+      (when (and fg bg (not inverse) (drgnx-color-rgb fg) (drgnx-color-rgb bg))
+        (let ((fixed (drgnx-color-solve
+                      fg (if (>= (drgnx-color-contrast "white" bg) (drgnx-color-contrast "black" bg)) "white" "black")
+                      bg drgnx-term-minimum-contrast)))
+          (and fixed (not (equal fixed (drgnx-color-hex (drgnx-color-rgb fg)))) fixed))))))
+
 (defun drgnx-view-patch--style-attrs (style)
   "STYLE's face attributes besides an ansi foreground (which is a face of its own): a plist, nil for none."
   (let* ((fg (plist-get style :fg)) (bg (drgnx-view-patch--colour (plist-get style :bg)))
@@ -1945,6 +1967,8 @@ drawn."
           ((drgnx-view-patch--on (plist-get style :faint)) (setq attrs (append (list :weight 'light) attrs))))
     (when bg (setq attrs (append (list :background bg) attrs)))
     (when (plist-get fg :rgb) (setq attrs (append (list :foreground (plist-get fg :rgb)) attrs)))
+    (when-let* ((fixed (drgnx-view-patch--contrast-foreground style)))   ; the terminal's minimum-contrast
+      (setq attrs (plist-put (copy-sequence attrs) :foreground fixed)))
     attrs))
 
 (defun drgnx-view-patch--style-face (state id)
