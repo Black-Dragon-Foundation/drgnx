@@ -236,6 +236,8 @@ its own title (`drgnx-area-own-title')."
     (set-window-buffer window buffer)
     ;; Emacs preserves a size only for the buffer it was set with: set it again for this one (I11)
     (when-let* ((area (window-parameter window 'drgnx-role)) ((alist-get area drgnx-wb--areas)))
+      ;; the row depends on the buffer (one with its own title has none)
+      (set-window-parameter window 'header-line-format (drgnx-area--tab-row area))
       (window-preserve-size window (drgnx-area--horizontal-p area) t)))
   (set-window-dedicated-p window 'drgnx))
 

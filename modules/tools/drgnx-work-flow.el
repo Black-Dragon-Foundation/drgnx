@@ -354,6 +354,7 @@ path."
                                #'ignore))))
 
 (declare-function drgnx-pane-show "drgnx-panes")
+(declare-function drgnx-wb-set-area-buffer "drgnx-area")
 (defvar drgnx-work-flow--detail)
 
 (defun drgnx-work-flow-rules ()
@@ -363,7 +364,8 @@ path."
          (tile (and (buffer-live-p flow) (drgnx-work-flow-rules-buffer flow)))
          (win (selected-window)))
     (unless tile (user-error "Work: the Rules tile needs the Flow on the hub's rows"))
-    (drgnx-pane-show 'work-rules)
+    ;; this Flow's tile, not what the panel shows already (layout Work may have opened the pane's placeholder)
+    (drgnx-pane-show 'work-rules :buffer tile)
     (when (window-live-p win) (select-window win))))
 
 ;;;; The detail tile: the selected task's why, what clears it, its evidence and its actions
@@ -439,7 +441,8 @@ task."
 (defun drgnx-work-flow--swap-window (from to)
   "The window of the selected frame that shows FROM shows TO instead (none: nothing changes)."
   (when-let* (((buffer-live-p to)) (w (and (buffer-live-p from) (get-buffer-window from))))
-    (set-window-buffer w to)))
+    ;; an area's window takes it as the area does (its tab row follows the buffer)
+    (if (window-parameter w 'drgnx-role) (drgnx-wb-set-area-buffer w to) (set-window-buffer w to))))
 
 (defun drgnx-work-flow-detail-show (flow)
   "FLOW's tile where its map's side panel shows: the right dock follows the lens."

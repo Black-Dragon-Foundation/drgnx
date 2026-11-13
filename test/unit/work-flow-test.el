@@ -102,6 +102,19 @@ says its reason."
   (should (equal (drgnx-work-flow--rules-params "flow-1/rules" "map-1" "J" "J#5")
                  '(:view "flow-1/rules" :map "map-1" :rules t :job "J" :detail "J#5"))))
 
+(ert-deftest drgnx-work-flow/r-shows-the-rules-tile-in-the-panel ()
+  "`R' shows the Flow's own Rules tile in the bottom panel, even where the panel already shows the pane's placeholder
+(layout Work opened it before the Flow had a tile)."
+  (let ((tile (get-buffer-create " work-flow-test rules")) shown)
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-work-flow-rules-buffer) (lambda (_flow) tile))
+                  ((symbol-function 'drgnx-pane-show)
+                   (lambda (kind &rest args) (push (cons kind args) shown) (selected-window))))
+          (with-temp-buffer
+            (drgnx-work-flow-rules))
+          (should (equal shown `((work-rules :buffer ,tile)))))
+      (kill-buffer tile))))
+
 ;; the tiles draw their own title rows (hub-orchestration.html's `.tile-h'): the docks draw no tab row over them
 (ert-deftest drgnx-work-flow/its-tiles-have-their-own-titles ()
   (with-temp-buffer
