@@ -21,6 +21,7 @@
 (require 'drgnx-margins)
 (require 'drgnx-pixels)
 (require 'drgnx-ui-kit)
+(require 'drgnx-icons)
 (require 'drgnx-faces)
 (require 'drgnx-timer)
 (require 'drgnx-debug-gutter (expand-file-name "drgnx-debug-gutter" (file-name-directory (macroexp-file-name))))
@@ -270,11 +271,12 @@ replaces that one's."
   "The strip's header line for a sent run: the Sent chip, its number where it was recorded, until when it is kept."
   (let ((imported (plist-get drgnx-debug-timeline--meta :imported)))
     (concat " " (propertize (format "Run %s" (plist-get drgnx-debug-timeline--meta :n)) 'face 'bold)
-            " " (propertize " Sent " 'face 'drgnx-chip-accent)
+            " " (propertize (concat " " (drgnx-look-icon 'inbox nil 14) " Sent ") 'face 'drgnx-chip-accent)
             (propertize (format " run %s where it was recorded · read-only" (plist-get imported :n))
                         'face 'drgnx-text-muted)
             (if (numberp (plist-get imported :at))
-                (propertize (format-time-string " · kept until %-d %b" (+ (plist-get imported :at) (* 14 86400)))
+                (propertize (concat " · kept until "
+                                    (format-time-string "%-d %b" (+ (plist-get imported :at) (* 14 86400))))
                             'face 'drgnx-text-subtle)
               ""))))
 

@@ -184,7 +184,12 @@ branch gateway-queue, staged file and history come with the Magit adapter (look 
     (debug-extras-light "the extras mockup's panels are cut from these windows (debugging-extras.png has no window)"
                         "a breakpoint being dragged is not shown: the drag lasts only while the mouse button is held")
     (debug-extras-views "the extras mockup's panels are cut from these windows (debugging-extras.png has no window)")
-    (debug-extras-views-light "the extras mockup's panels are cut from these windows (debugging-extras.png has no window)"))
+    (debug-extras-views-light "the extras mockup's panels are cut from these windows (debugging-extras.png has no window)")
+    (send-run "the card's run is the scene's record: the container has no keyring, so no run is recorded")
+    (send-run-code "the code and the size are the scene's own: the container has no keyring, so no run is recorded to export"
+                   "a sent run on the strip is not shown: it needs a recorded run to import (its Sent line has unit tests)")
+    (send-run-light "the card's run is the scene's record: the container has no keyring, so no run is recorded")
+    (send-run-code-light "the code and the size are the scene's own: the container has no keyring, so no run is recorded to export"))
   "What the line cannot show of each scene's mockup yet, written to the scene's facts (:limits).  A scene is never
 changed to hide a gap: the gap is named here instead.")
 
@@ -775,6 +780,11 @@ colour bar and the file's chip."
 (declare-function drgnx-debug-view--toggle "drgnx-debug-view")
 (declare-function drgnx-debug-console-show "drgnx-debug-console")
 (declare-function drgnx-debug-open-disassembly "drgnx-debug-disassembly")
+(declare-function drgnx-debug-send-run "drgnx-debug-share" (run path))
+(declare-function drgnx-debug-share--close "drgnx-debug-share" ())
+(declare-function drgnx-debug-share--render "drgnx-debug-share" ())
+(defvar drgnx-debug-share-buffer)
+(defvar drgnx-debug-share--card)
 (declare-function drgnx-debug-memory-open "drgnx-debug-memory")
 (declare-function drgnx-quickhelp--request "drgnx-quickhelp")
 (declare-function drgnx-quickhelp-shown-p "drgnx-quickhelp")
@@ -1048,6 +1058,37 @@ with groups and timestamps.  VIEWS: the Disassembly in the editor and the memory
                                    (lambda () (with-current-buffer "*Memory: item*"
                                                 (string-search "nut-m6" (buffer-string)))))))))
   (drgnx-look-scene--answer))
+
+(defconst drgnx-look-scene--send-run
+  '(:id "r-scene" :n 4 :name "Python: plan the week" :stops 3 :ended 1763038320.0 :probes [(:id "p1") (:id "p2")])
+  "The run the Send Run scenes offer: a record as `debug/runs/list' gives it.")
+
+(defun drgnx-look-scene--send-run (theme written)
+  "The Send Run card in THEME over inventory.py: the card before anything is written, or (WRITTEN) the code card, its
+code and size the scene's own (the container has no keyring, so no run is recorded to export)."
+  (drgnx-look-scene--theme theme)
+  (drgnx-look-scene--try (if written "send-run-code" "send-run")
+    (when-let* ((b (get-buffer drgnx-debug-share-buffer)))
+      (with-current-buffer b (drgnx-debug-share--close)))
+    (drgnx-wb-focus-editor)
+    (let ((f (expand-file-name "inventory.py" drgnx-look-scene--project)))
+      (unless (file-exists-p f) (with-temp-file f (insert drgnx-look-scene--inventory)))
+      (find-file f))
+    (drgnx-debug-send-run drgnx-look-scene--send-run "~/plan-the-week-run4.drgnx-run")
+    (when written
+      (with-current-buffer drgnx-debug-share-buffer
+        (setq drgnx-debug-share--card
+              (plist-put (plist-put (plist-put drgnx-debug-share--card :state 'written)
+                                    :code "K7QF-M2XD-9RTA-PL4W-ZB6N-C3HV-Y8EG-UJ5S-QW2M-R7DK-X4PA-N6TB-FHC2")
+                         :bytes 188416))
+        (drgnx-debug-share--render)))
+    (redisplay t))
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-send-run () "Send Run's card, dark." (drgnx-look-scene--send-run 'drgnx-dark nil))
+(defun drgnx-look-scene-send-run-code () "Send Run's code card, dark." (drgnx-look-scene--send-run 'drgnx-dark t))
+(defun drgnx-look-scene-send-run-light () "Send Run's card, light." (drgnx-look-scene--send-run 'drgnx-light nil))
+(defun drgnx-look-scene-send-run-code-light () "Send Run's code card, light." (drgnx-look-scene--send-run 'drgnx-light t))
 
 (defun drgnx-look-scene-debug-extras () "The debugging extras' editor, dark." (drgnx-look-scene--debug-extras 'drgnx-dark nil))
 (defun drgnx-look-scene-debug-extras-light () "The debugging extras' editor, light." (drgnx-look-scene--debug-extras 'drgnx-light nil))

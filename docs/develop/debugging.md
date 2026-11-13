@@ -890,7 +890,10 @@ keyring key. The run's record has `imported {at, n}`; it is kept 14 days from th
 runs it. Tests: `debug::tests_record_sealed` (sent and opened), `debug::record::share` (codes, paths),
 `debug::tests_fork` (refused).
 
-The editor's half is `modules/extra/drgnx-debug-share.el`. Send Run… shows the card first and calls
+The editor's half is `modules/extra/drgnx-debug-share.el`. The card is a modal child frame (the palette's chrome:
+radius 12, the modal elevation; the-look/send-run.html), 480 px wide, its 16 px padding the frame's
+`child-frame-border-width` drawn in the card's surface, and it takes the focus until it closes (a window of its own
+on a terminal). Send Run… shows the card first and calls
 `debug/run/export` only on Write File; the answer's code is held only in the card's state and text
 (`drgnx-debug-share-mode`: undo off, `buffer-auto-save-file-name` and `desktop-save-buffer` nil,
 `filter-buffer-substring-function` gives nothing, the region commands remapped to a refusal), and both are wiped by

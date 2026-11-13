@@ -19,25 +19,37 @@
 (require 'seq)
 (require 'subr-x)
 (require 'drgnx-ui-kit)
+(require 'drgnx-icons)
+(require 'drgnx-pixels)
 (require 'drgnx-timer)
+(declare-function drgnx-look-palette-current "drgnx-look" ())
 (require 'drgnx-debug-timeline (expand-file-name "drgnx-debug-timeline" (file-name-directory (macroexp-file-name))))
 (declare-function drgnx-hub-call "drgnx-hub-client")
 (declare-function drgnx-hub-call-sync "drgnx-hub-client")
 (defvar desktop-save-buffer)
 
-(defface drgnx-debug-share-warning '((t :inherit drgnx-chip-warn))
-  "The card's warning that a sent run holds the program's real values." :group 'drgnx)
-(defface drgnx-debug-share-code '((t :inherit (bold fixed-pitch)))
-  "The share code on the card." :group 'drgnx)
+(defface drgnx-debug-share-warning '((t :inherit drgnx-tint-warn :extend t))
+  "The card's warning that a sent run holds the program's real values: the text on the warning tint." :group 'drgnx)
+(defface drgnx-debug-share-warning-icon '((t :inherit warning))
+  "The warning's icon." :group 'drgnx)
+(defface drgnx-debug-share-code '((t :inherit (drgnx-code-small drgnx-surface-panel) :height 1.25 :weight semibold))
+  "The share code on the card, on the inset surface." :group 'drgnx)
 (defface drgnx-debug-share-label '((t :inherit drgnx-text-subtle))
-  "A fact's name on the card (Run, Files, To)." :group 'drgnx)
+  "A fact's name on the card (Run, Files, To) and the footer's hint." :group 'drgnx)
+(defface drgnx-debug-share-path '((t :inherit (drgnx-code-small drgnx-text-muted)))
+  "A file's path on the card." :group 'drgnx)
+(defface drgnx-debug-share-note '((t :inherit drgnx-text-muted))
+  "The card's notes about the code." :group 'drgnx)
 
 (defconst drgnx-debug-share-buffer "*Send Run*" "The Send Run card.")
+(defconst drgnx-debug-share-width 480 "The card's width in logical pixels (send-run.html `.sr').")
 (defconst drgnx-debug-share-clipboard-secs 60 "Seconds after Copy Code that the clipboard is cleared (if it still holds the code).")
 
 (defvar-local drgnx-debug-share--card nil
   "The card's state: (:run META :path FILE :state S :code CODE :bytes N :error TEXT), S `ask', `writing', `written' or
 `failed'.  The code is held only here.")
+
+(defvar drgnx-debug-share--frame nil "The card's child frame while it shows, else nil.")
 
 ;;;; The card
 
@@ -68,8 +80,10 @@
   (add-hook 'kill-buffer-hook #'drgnx-debug-share--forget nil t))
 
 (defun drgnx-debug-share--forget ()
-  "Drop the code from the card's state and its text (the buffer is going)."
-  (setq drgnx-debug-share--card nil)
+  "Drop the code from the card's state and its text (the buffer is going), and the card's frame if it still shows."
+  (when (and drgnx-debug-share--frame (frame-live-p drgnx-debug-share--frame))
+    (delete-frame drgnx-debug-share--frame))
+  (setq drgnx-debug-share--frame nil drgnx-debug-share--card nil)
   (let ((inhibit-read-only t)) (erase-buffer)))
 
 (defun drgnx-debug-share--size (bytes)
@@ -79,15 +93,55 @@
         (t (format "%.1f MB" (/ bytes 1048576.0)))))
 
 (defun drgnx-debug-share--facts (pairs)
-  "Insert PAIRS ((LABEL . TEXT) …) as the card's facts."
-  (pcase-dolist (`(,label . ,text) pairs)
-    (insert (propertize (string-pad label 7) 'face 'drgnx-debug-share-label) text "\n")))
+  "Insert PAIRS ((LABEL TEXT FACE) …) as the card's facts: the values start 72 px in (send-run.html `.facts')."
+  (pcase-dolist (`(,label ,text ,face) pairs)
+    (insert (propertize label 'face 'drgnx-debug-share-label)
+            (propertize " " 'display `(space :align-to (,(drgnx-px 72))))
+            (if face (propertize text 'face face) text)
+            "\n")))
+
+(defun drgnx-debug-share--gap (px)
+  "A blank row PX logical pixels tall."
+  (propertize "\n" 'line-height (drgnx-px px)))
+
+(defun drgnx-debug-share--text-width ()
+  "The card's text width in device pixels: its width less the padding at either side."
+  (drgnx-px (- drgnx-debug-share-width 32)))
+
+(defun drgnx-debug-share--at-right (s)
+  "A space that puts S (measured in this buffer's faces) against the card's right edge, then S."
+  (concat (propertize " " 'display `(space :align-to (,(- (drgnx-debug-share--text-width)
+                                                          (string-pixel-width s (current-buffer))
+                                                          ;; a pixel's slack, or rounding wraps S to a row of its own
+                                                          (drgnx-px 2)))))
+          s))
+
+(defun drgnx-debug-share--head (icon icon-face title &optional close)
+  "The card's head row: ICON in ICON-FACE, the bold TITLE, and CLOSE (a close button) at the right."
+  (concat (drgnx-look-icon icon icon-face) "  " (propertize title 'face 'drgnx-ui-heading)
+          (when close
+            (drgnx-debug-share--at-right (drgnx-ui-close-button 'drgnx-debug-share-cancel "Close the card" :where 'text)))
+          "\n"))
+
+(defun drgnx-debug-share--code-rows (code)
+  "CODE (groups of four joined by dashes) as two rows on the inset surface, eight groups then the rest."
+  (let* ((groups (split-string code "-" t)) (first (seq-take groups 8)) (rest (seq-drop groups 8))
+         (face '(:inherit drgnx-debug-share-code :box (:line-width (12 . 4) :style flat-button))))
+    (concat (propertize (string-join first " ") 'face face) "\n"
+            ;; the second row padded to the first's length (one code font), so the two read as one block
+            (if rest
+                (concat (propertize (string-pad (string-join rest " ") (length (string-join first " "))) 'face face) "\n")
+              ""))))
+
+(defun drgnx-debug-share--footer (left &rest buttons)
+  "The footer row: LEFT (a hint or a button) at the left, BUTTONS at the right."
+  (concat left (drgnx-debug-share--at-right (string-join buttons " ")) "\n"))
 
 (defun drgnx-debug-share--run-line (run)
   "RUN's line on the card: its name, when it ended, its stops and probes."
   (let ((probes (length (plist-get run :probes))))
     (concat (or (plist-get run :name) "the run")
-            (and (numberp (plist-get run :ended)) (format-time-string " · ended %H:%M" (plist-get run :ended)))
+            (and (numberp (plist-get run :ended)) (concat " · ended " (format-time-string "%H:%M" (plist-get run :ended))))
             (format " · %d stop%s" (or (plist-get run :stops) 0) (if (eql (plist-get run :stops) 1) "" "s"))
             (if (> probes 0) (format " · %d probe%s" probes (if (= probes 1) "" "s")) ""))))
 
@@ -98,46 +152,101 @@
     (erase-buffer)
     (pcase (plist-get card :state)
       ((or 'ask 'writing 'failed)
-       (insert (propertize (format "Send Run %s" n) 'face 'bold) "\n\n")
-       (insert (propertize "This run holds your program's real values, unredacted." 'face '(bold drgnx-debug-share-warning))
-               (propertize " Every variable, argument and output it captured, and the files as they ran.  Whoever has the file and its code can read all of it."
+       (insert (drgnx-debug-share--head 'send 'drgnx-accent (format "Send Run %s" n) t)
+               (drgnx-debug-share--gap 4)
+               (propertize (concat " " (drgnx-look-icon 'triangle-alert 'drgnx-debug-share-warning-icon) "  ")
                            'face 'drgnx-debug-share-warning)
-               "\n\n")
-       (drgnx-debug-share--facts `(("Run" . ,(drgnx-debug-share--run-line run))
-                                   ("Files" . "as they ran (the launch snapshot)")
-                                   ("To" . ,path)))
-       (insert "\n")
+               (propertize "This run holds your program's real values, unredacted." 'face '(bold drgnx-debug-share-warning))
+               (propertize " Every variable, argument and output it captured, and the files as they ran.  Whoever has the file and its code can read all of it. "
+                           'face 'drgnx-debug-share-warning)
+               ;; the tint reaches the card's right edge (the face extends past the newline)
+               (propertize "\n" 'face 'drgnx-debug-share-warning) (drgnx-debug-share--gap 10))
+       (drgnx-debug-share--facts `(("Run" ,(drgnx-debug-share--run-line run) nil)
+                                   ("Files" "as they ran (the launch snapshot)" nil)
+                                   ("To" ,path drgnx-debug-share-path)))
+       (insert (drgnx-debug-share--gap 12))
        (pcase (plist-get card :state)
-         ('writing (insert (propertize "Writing…" 'face 'drgnx-text-muted) "\n"))
-         ('failed (insert (propertize (format "Not written: %s" (plist-get card :error)) 'face 'drgnx-status-warn) "\n\n")))
+         ('writing (insert (propertize "Writing…" 'face 'drgnx-debug-share-note) "\n"))
+         ('failed (insert (propertize (format "Not written: %s" (plist-get card :error)) 'face 'drgnx-status-warn)
+                          "\n" (drgnx-debug-share--gap 8))))
        (unless (eq (plist-get card :state) 'writing)
-         (insert (propertize "drgnx sends nothing itself  " 'face 'drgnx-text-subtle)
-                 (drgnx-ui-button "Cancel" 'debug-share-cancel :help "Close the card; nothing is written")
-                 " "
-                 (drgnx-ui-button "Write File" 'debug-share-write :face 'drgnx-ui-button-primary
-                                  :help "Seal the run into the file and show its share code")
-                 "\n")))
+         (insert (drgnx-debug-share--footer
+                  (propertize "drgnx sends nothing itself" 'face 'drgnx-debug-share-label)
+                  (drgnx-ui-button "Cancel" 'debug-share-cancel :help "Close the card; nothing is written")
+                  (drgnx-ui-button "Write File" 'debug-share-write :face 'drgnx-ui-button-primary
+                                   :help "Seal the run into the file and show its share code")))))
       ('written
-       (insert (propertize (format "Run %s written · %s" n (drgnx-debug-share--size (or (plist-get card :bytes) 0)))
-                           'face 'bold)
-               "\n\n"
-               "The file opens only with this code.  Note it now: it is not shown again, and drgnx keeps no copy.\n\n"
-               (propertize (string-replace "-" " " (plist-get card :code)) 'face 'drgnx-debug-share-code)
-               "\n\n")
-       (drgnx-debug-share--facts `(("File" . ,path)))
-       (insert "\nSend the file however you like, and the code another way.\n\n"
-               (drgnx-ui-button "Copy Code" 'debug-share-copy
-                                :help (format "Copies the code; cleared from the clipboard in %d s"
-                                              drgnx-debug-share-clipboard-secs))
-               "  "
-               (drgnx-ui-button "I've Noted It" 'debug-share-noted :face 'drgnx-ui-button-primary
-                                :help "Close the card: the code is not shown again")
-               "\n")))
-    (goto-char (point-min))))
+       (insert (drgnx-debug-share--head 'key 'success
+                                        (format "Run %s written · %s" n
+                                                (drgnx-debug-share--size (or (plist-get card :bytes) 0))))
+               (drgnx-debug-share--gap 4)
+               (propertize "The file opens only with this code.  Note it now: it is not shown again, and drgnx keeps no copy."
+                           'face 'drgnx-debug-share-note)
+               "\n" (drgnx-debug-share--gap 10)
+               (drgnx-debug-share--code-rows (plist-get card :code))
+               (drgnx-debug-share--gap 10))
+       (drgnx-debug-share--facts `(("File" ,path drgnx-debug-share-path)))
+       (insert (drgnx-debug-share--gap 6)
+               (propertize "Send the file however you like, and the code another way." 'face 'drgnx-debug-share-note)
+               "\n" (drgnx-debug-share--gap 12)
+               (drgnx-debug-share--footer
+                (drgnx-ui-button (concat (drgnx-look-icon 'copy nil 14) " Copy Code") 'debug-share-copy
+                                 :help (format "Copies the code; cleared from the clipboard in %d s"
+                                               drgnx-debug-share-clipboard-secs))
+                (drgnx-ui-button "I've Noted It" 'debug-share-noted :face 'drgnx-ui-button-primary
+                                 :help "Close the card: the code is not shown again")))))
+    (goto-char (point-min)))
+  (drgnx-debug-share--fit))
 
 (defun drgnx-debug-share--require-card ()
   (unless (derived-mode-p 'drgnx-debug-share-mode) (user-error "Not the Send Run card"))
   drgnx-debug-share--card)
+
+;;;; The card's frame: a modal card over the editor
+
+
+
+(defun drgnx-debug-share--params (parent)
+  "The card's frame parameters under PARENT: it takes the focus; the modal chrome (the palette's: radius 12, the
+modal elevation).  A child frame's border is its `child-frame-border-width' (its internal border is unused), so the
+card's 16 px padding is that border, drawn in the card's surface (`drgnx-debug-share--display')."
+  (let ((chrome (and (featurep 'glitnir) (fboundp 'drgnx-look-palette-current) (drgnx-look-palette-current))))
+    `((parent-frame . ,parent) (minibuffer . nil) (name . "drgnx-send-run")
+      (undecorated . t) (no-other-frame . t) (skip-taskbar . t) (unsplittable . t) (no-special-glyphs . t)
+      (desktop-dont-save . t) (border-width . 0) (child-frame-border-width . ,(drgnx-px 16 parent))
+      (menu-bar-lines . 0) (tool-bar-lines . 0) (tab-bar-lines . 0) (left-fringe . 0) (right-fringe . 0)
+      (vertical-scroll-bars) (horizontal-scroll-bars) (visibility . nil)
+      ,@(seq-remove (lambda (p) (memq (car p) '(child-frame-border-width transition))) chrome))))
+
+(defun drgnx-debug-share--fit ()
+  "Size the card's frame to its text, centred over its parent's upper third."
+  (when-let* ((frame drgnx-debug-share--frame) ((frame-live-p frame)) (win (frame-root-window frame))
+              ((eq (window-buffer win) (current-buffer))) (parent (frame-parent frame)))
+    (let* ((width (drgnx-debug-share--text-width))
+           (frame-resize-pixelwise t) (window-min-height 1) (window-min-width 1))
+      (set-frame-size frame width 100 t)
+      (set-frame-size frame width (cdr (window-text-pixel-size win nil nil width 10000)) t)
+      (set-frame-position frame (max 0 (/ (- (frame-pixel-width parent) (frame-pixel-width frame)) 2))
+                          (max 0 (round (* 0.18 (frame-pixel-height parent))))))))
+
+(defun drgnx-debug-share--display (buffer)
+  "Show BUFFER as the modal card over the selected frame (a window of its own on a terminal), and give it the focus."
+  (if (not (display-graphic-p))
+      (pop-to-buffer buffer)
+    (let* ((parent (selected-frame))
+           (frame (let ((after-make-frame-functions nil) (before-make-frame-hook nil))
+                    (make-frame (drgnx-debug-share--params parent)))))
+      (setq drgnx-debug-share--frame frame)
+      ;; the padding (the border) in the card's surface: this frame's own `child-frame-border' face
+      (set-face-attribute 'child-frame-border frame :background (face-background 'drgnx-surface-raised nil t))
+      (with-current-buffer buffer
+        (setq-local mode-line-format nil header-line-format nil tab-line-format nil word-wrap t)
+        (face-remap-add-relative 'default 'drgnx-ui-text 'drgnx-surface-raised))
+      (set-window-buffer (frame-root-window frame) buffer)
+      (set-window-dedicated-p (frame-root-window frame) t)
+      (with-current-buffer buffer (drgnx-debug-share--fit))
+      (make-frame-visible frame)
+      (select-frame-set-input-focus frame))))
 
 ;;;; Commands
 
@@ -172,7 +281,7 @@ Interactively RUN is the strip's run, else the project's newest ended run, and P
       (drgnx-debug-share-mode)
       (setq drgnx-debug-share--card (list :run run :path path :state 'ask))
       (drgnx-debug-share--render))
-    (pop-to-buffer buffer)
+    (drgnx-debug-share--display buffer)
     buffer))
 
 (defun drgnx-debug-share-write ()
@@ -196,8 +305,14 @@ Interactively RUN is the strip's run, else the project's newest ended run, and P
                           (drgnx-debug-share--render)))))))
 
 (defun drgnx-debug-share--close ()
-  (let ((buffer (current-buffer)))
-    (when-let* ((w (get-buffer-window buffer))) (ignore-errors (quit-window nil w)))
+  "Close the card: its frame goes (the focus back to the editor's frame), then its buffer, with the code."
+  (let ((buffer (current-buffer)) (frame drgnx-debug-share--frame))
+    (setq drgnx-debug-share--frame nil)
+    (if (and frame (frame-live-p frame))
+        (let ((parent (frame-parent frame)))
+          (delete-frame frame)
+          (when (frame-live-p parent) (select-frame-set-input-focus parent)))
+      (when-let* ((w (get-buffer-window buffer))) (ignore-errors (quit-window nil w))))
     (kill-buffer buffer)))
 
 (defun drgnx-debug-share-cancel ()

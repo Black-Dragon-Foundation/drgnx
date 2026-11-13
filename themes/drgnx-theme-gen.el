@@ -111,6 +111,7 @@ taller (Nidhogg's compositor).  Asked once: a face that sets it is refused where
          (drgnx-chip-accent :foreground ,(c 'accent) :background ,(c 'accent-tint) ,@(and hc '(:box (:line-width (-1 . -1)))))
          (drgnx-chip-ok :foreground ,(c 'ok) :background ,(c 'ok-tint) ,@(and hc '(:box (:line-width (-1 . -1)))))
          (drgnx-chip-warn :foreground ,(c 'warn) :background ,(c 'warn-tint) ,@(and hc '(:box (:line-width (-1 . -1)))))
+         (drgnx-tint-warn :background ,(c 'warn-tint) ,@(and hc `(:box (:line-width (-1 . -1) :color ,(c 'warn)))))
          (drgnx-chip-error :foreground ,(c 'error) :background ,(c 'error-tint) ,@(and hc '(:box (:line-width (-1 . -1)))))
          ;; the in-text chips (modules/ui/drgnx-decor.el) carry their own box, the room inside them: high contrast
          ;; makes it the 1 px ring instead (look.css `.t-hc .chip'; the room is the chip's stretches)
