@@ -104,6 +104,8 @@ text scale or a font change never re-pairs the buffer.")
 followed.")
 (defvar-local drgnx-term--host-name nil "A remote terminal's host, as its name shows it (from its TRAMP folder).")
 (defvar-local drgnx-term--clipboard nil "The text a remote program last asked to put on the clipboard, while asked.")
+(defvar-local drgnx-term--read-req nil
+  "The id of the clipboard read this terminal's program waits on (`term/clipboard-read'), or nil.")
 
 (defun drgnx-term--up-p ()
   "Non-nil while this Emacs's subscribed connection to the hub is up."
@@ -628,6 +630,7 @@ one's images come only as direct data)."
           (vector "enquiry-response" drgnx-term-enquiry-response)
           (vector "title-report" (if drgnx-term-title-report t :false))
           (vector "grapheme-width-method" drgnx-term-grapheme-width-method)
+          (vector "clipboard-read" (symbol-name drgnx-term-clipboard-read))
           (vector "detached-keep" drgnx-term-detached-keep)
           (vector "colours" (drgnx-term--colours))))
 
@@ -1212,6 +1215,7 @@ drgnx left running) asks what is offered now."
                            (drgnx-term--notify (plist-get data :title) (plist-get data :body))))
           ("term/bell" (ding t))
           ("term/prompt" (drgnx-term--prompt (plist-get data :kind)))
+          ("term/clipboard-read" (drgnx-term--read-asked (plist-get data :req)))
           ("term/clipboard-write"
            (when drgnx-term-clipboard-write
              (if drgnx-term--remote
@@ -1269,6 +1273,64 @@ dropped; `always' adds the host to `drgnx-term-remote-clipboard-hosts' (written 
                (answer (car (read-multiple-choice (format "%s wants to set the clipboard: " host)
                                                   `((?a "allow") (?l ,(format "always for %s" host)) (?d "deny"))))))
           (drgnx-term--clipboard-answered (current-buffer) (pcase answer (?a 'allow) (?l 'always) (_ 'deny))))))))
+
+;; A program reads the clipboard (OSC 52 `?'): with `drgnx-term-clipboard-read' `ask' the worker stops that terminal's output
+;; and asks (`term/clipboard-read'); a notice names the terminal and whether it is remote, and its command asks Allow
+;; or Deny.  Allow answers with the kill ring's head, Deny, 30 s without an answer, or a closed terminal, with a denial
+;; (the worker's own wait ends the same way).  Never a prompt of its own: the question is the user's command.
+
+(defconst drgnx-term--read-wait 30 "Seconds a program's clipboard read waits for the answer (the worker's wait).")
+
+(defun drgnx-term--read-name ()
+  "This terminal as the clipboard read's notice names it: its buffer, and local or remote (with its host)."
+  (if drgnx-term--remote
+      (format "%s (remote, on %s)" (buffer-name) (drgnx-term--clipboard-host))
+    (format "%s (local)" (buffer-name))))
+
+(defun drgnx-term--read-asked (req)
+  "The program asked to read the clipboard (request REQ): a notice, and the worker's own wait ends it after
+`drgnx-term--read-wait' seconds."
+  (setq drgnx-term--read-req req)
+  (setf (alist-get (concat "read:" drgnx-term--id) drgnx-term--notices nil nil #'equal)
+        (list :id (concat "term:read:" drgnx-term--id) :command 'terminal-clipboard-read-answer
+              :text (format "%s wants to read the clipboard" (drgnx-term--read-name))))
+  (drgnx-term--post-notices)
+  (drgnx-timer-start (cons 'drgnx-term-read (current-buffer)) drgnx-term--read-wait #'drgnx-term--read-expired
+                     :args (list (current-buffer) req) :owner (current-buffer)))
+
+(defun drgnx-term--read-done (buffer)
+  "BUFFER's clipboard read is over: its notice and timer go."
+  (with-current-buffer buffer
+    (setq drgnx-term--read-req nil
+          drgnx-term--notices (cl-remove (concat "read:" drgnx-term--id) drgnx-term--notices :key #'car :test #'equal))
+    (drgnx-timer-cancel (cons 'drgnx-term-read buffer))
+    (drgnx-term--post-notices)))
+
+(defun drgnx-term--read-expired (buffer req)
+  "The worker gave up on request REQ (it denied it after `drgnx-term--read-wait' seconds): the notice goes."
+  (when (and (buffer-live-p buffer) (eql (buffer-local-value 'drgnx-term--read-req buffer) req))
+    (drgnx-term--read-done buffer)))
+
+(defun drgnx-term--read-answered (buffer allow)
+  "ALLOW (non-nil) or deny BUFFER's program's clipboard read: Allow answers with the kill ring's head (empty when the
+ring is), Deny with none; either way the question is over."
+  (when-let* (((buffer-live-p buffer)) (req (buffer-local-value 'drgnx-term--read-req buffer)))
+    (with-current-buffer buffer
+      (drgnx-term--send "term/clipboard-reply"
+                        (list :req req :text (and allow (if kill-ring (substring-no-properties (car kill-ring)) ""))))
+      (drgnx-term--read-done buffer))))
+
+(defun drgnx-term-clipboard-read-answer ()
+  "Answer a program that asked to read the clipboard: Allow (it reads the kill ring's head) or Deny."
+  (interactive)
+  (let ((asking (seq-filter (lambda (b) (buffer-local-value 'drgnx-term--read-req b)) (drgnx-term-buffers))))
+    (if (null asking)
+        (message "No program is waiting to read the clipboard")
+      (with-current-buffer (car asking)
+        (let* ((use-dialog-box nil)
+               (answer (car (read-multiple-choice (format "%s wants to read the clipboard: " (drgnx-term--read-name))
+                                                  '((?a "allow") (?d "deny"))))))
+          (drgnx-term--read-answered (current-buffer) (eq answer ?a)))))))
 
 (defun drgnx-term--remote-cwd (cwd)
   "A remote terminal's CWD (as `drgnx-term--cwd' takes it) as a TRAMP folder on its host, or nil: the first host an
@@ -1796,6 +1858,9 @@ them all here, choose some, or close them.  A terminal another running drgnx sho
                        (drgnx-command-define 'terminal-reconnect :category "Terminal" :title "Reconnect Terminal"
                                              :command #'drgnx-term-reconnect :scope 'editing
                                              :doc "Run a remote terminal's command again after its connection was lost")
+                       (drgnx-command-define 'terminal-clipboard-read-answer :category "Terminal"
+                                             :title "Answer Clipboard Read" :command #'drgnx-term-clipboard-read-answer
+                                             :doc "Allow or deny a program that asked to read the clipboard")
                        (drgnx-command-define 'terminal-clipboard-answer :category "Terminal"
                                              :title "Answer Clipboard Request" :command #'drgnx-term-clipboard-answer
                                              :doc "Allow or deny a remote program that asked to set the clipboard")

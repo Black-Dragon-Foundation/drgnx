@@ -1983,6 +1983,26 @@ and the program did not ask for bracketed paste (or `drgnx-term-clipboard-paste-
 | `:agents` | `never` |
 | `:schema` | `boolean` |
 
+## drgnx-term-clipboard-read
+
+Whether a program in a terminal may read the clipboard (OSC 52 with `?'): `deny' (the default) answers with an empty
+clipboard; `ask' stops that terminal's output while a notice asks you, naming the terminal and whether it is remote:
+Allow gives it the kill ring's head, Deny, 30 s without an answer or a closed terminal an empty clipboard.  Any program
+can ask, over ssh too, so `deny' is the safe choice.  Applies to every terminal at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `deny` |
+| Type | `(choice (const :tag "Deny every read" deny) (const :tag "Ask each time" ask))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-term--apply-config` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum deny ask)` |
+
 ## drgnx-term-clipboard-trim-trailing-spaces
 
 Whether text copied from a terminal loses the spaces at the end of each line.

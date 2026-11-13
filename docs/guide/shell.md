@@ -61,7 +61,9 @@ the terminal says why in the echo area. So:
   and `-image-file-medium` bound them. A program in a remote terminal can only send an image's data: it can never make
   drgnx read a file on your machine; one that saves a file (`inline=0`) is refused.
 - **Programs can copy to the clipboard** (OSC 52, as tmux and neovim over ssh do): the text lands in the kill ring.
-  The setting `drgnx-term-clipboard-write` turns that off. Reading the clipboard is always refused.
+  The setting `drgnx-term-clipboard-write` turns that off. A program that **reads** the clipboard gets an empty one
+  (`drgnx-term-clipboard-read` is `deny`); set it to `ask` and the terminal's output stops while a notice asks you, naming
+  the terminal and whether it is remote: Allow (it reads the newest kill) or Deny; with no answer in 30 seconds it is denied.
 - **The shell's directory** (OSC 7) is the buffer's directory, so `C-x C-f` starts where the shell is; the program's
   title names the buffer, a progress report (OSC 9;4) shows in the mode line, and a notification (OSC 9 / 777) is a
   drgnx notice.

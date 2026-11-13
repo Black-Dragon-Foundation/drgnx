@@ -90,6 +90,14 @@ the shell integration (it marks the prompt, OSC 133); nothing moves while a comm
 or while the program tracks the mouse.  Applies at once."
   :type 'boolean :group 'drgnx :scope 'global :agents 'never :schema 'boolean)
 
+(drgnx-defsetting drgnx-term-clipboard-read 'deny
+  "Whether a program in a terminal may read the clipboard (OSC 52 with `?'): `deny' (the default) answers with an empty
+clipboard; `ask' stops that terminal's output while a notice asks you, naming the terminal and whether it is remote:
+Allow gives it the kill ring's head, Deny, 30 s without an answer or a closed terminal an empty clipboard.  Any program
+can ask, over ssh too, so `deny' is the safe choice.  Applies to every terminal at once."
+  :type '(choice (const :tag "Deny every read" deny) (const :tag "Ask each time" ask))
+  :group 'drgnx :scope 'global :agents 'never :schema '(enum deny ask) :apply #'drgnx-term--apply-config)
+
 ;;;; Live: drgnx's
 
 (drgnx-defsetting drgnx-term-desktop-notifications t
@@ -332,7 +340,7 @@ Applies to new terminals."
     ("osc-color-report-format" none no-switch)
     ("vt-kam-allowed" none no-switch)
     ("grapheme-width-method" live drgnx-term-grapheme-width-method)
-    ("clipboard-read" later "a program never reads the clipboard: every read is refused")
+    ("clipboard-read" live drgnx-term-clipboard-read)
     ("clipboard-write" live drgnx-term-clipboard-write)
     ("palette-generate" live drgnx-term-palette-generate)
     ("palette-harmonious" live drgnx-term-palette-harmonious)
