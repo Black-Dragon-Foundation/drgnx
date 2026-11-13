@@ -123,7 +123,9 @@ text role and its section heads the caption role, semibold and muted; the agent'
   (should (eq (face-attribute 'drgnx-work-flow-detail-text :inherit) 'drgnx-ui-text))
   (should (equal (face-attribute 'drgnx-work-flow-section :inherit) '(drgnx-ui-caption drgnx-text-muted)))
   (should (eq (face-attribute 'drgnx-work-flow-section :weight) 'semibold))
-  (should (eq (face-attribute 'drgnx-work-flow-agent :inherit) 'drgnx-ui-heading)))
+  (should (eq (face-attribute 'drgnx-work-flow-agent :inherit) 'drgnx-ui-heading))
+  ;; the cards' names (`.bcard .bl .code', 11.5 px in the code font, the text colour)
+  (should (eq (face-attribute 'drgnx-work-flow-code :inherit) 'drgnx-code-small)))
 
 (ert-deftest drgnx-work-flow/g-n-selects-the-nth-held-task ()
   "In the Flow, `g N' (the strip's badges) selects the Nth task a gate holds; on the map it stays the map's Nth thing

@@ -59,6 +59,9 @@ const CARD: &str = "drgnx-work-flow-card";
 const CARD_TEXT: &str = "drgnx-work-flow-card-text";
 const CARD_LABEL: &str = "drgnx-work-flow-card-label";
 const CARD_HEAD: &str = "drgnx-work-flow-card-heading";
+/// Names in the code font (a check's selector, a tip), and its card twin.
+const CODE: &str = "drgnx-work-flow-code";
+const CARD_CODE: &str = "drgnx-work-flow-card-code";
 /// The text property that marks a block Glitnir draws over the rows (`glitnir-blocks`): `["ring", ID, X0, X1]` on a
 /// card's span of each of its rows, `["rule", KEY, X0, X1]` on a row with a hairline under it (device px).
 const BLOCK: &str = "drgnx-work-flow-block";
@@ -849,8 +852,8 @@ enum Piece {
     At(u32),
 }
 
-/// A line per machine that ran any of RUNS' checks at their tree: each check's newest run there, a tick in the ok
-/// face when it passed, a cross in the error face when it failed.
+/// A line per machine that ran any of RUNS' checks at their tree: each check's newest run there, its name in the code
+/// face, then a tick in the ok face when it passed, a cross in the error face when it failed.
 fn machine_lines(r: &Runs) -> Vec<Vec<Piece>> {
     let mut machines: Vec<&str> = Vec::new();
     for e in r.evidence.iter().filter(|e| e.facts.tree_key == r.at) {
@@ -872,12 +875,13 @@ fn machine_lines(r: &Runs) -> Vec<Vec<Piece>> {
             };
             let ok = failing(&e.rows).next().is_none();
             line.push(Piece::Text("  ".into(), LABEL));
+            line.push(Piece::Text(c.name.clone(), CODE));
+            line.push(Piece::Text(" ".into(), LABEL));
             line.push(if ok {
                 Piece::Icon("check", "✓", Chip::Ok.face())
             } else {
                 Piece::Icon("x", "✗", Chip::Err.face())
             });
-            line.push(Piece::Text(format!(" {}", c.name), TEXT));
         }
         out.push(line);
     }
@@ -913,8 +917,8 @@ pub fn note(
 }
 
 /// The merge batch card's lines, its content CW px wide (FONTS measure): its heading with the affected groups' chip
-/// (green of listed at the combined tree), a line per member (its label and title, its tip, what the queue said to
-/// it), and its groups' runs per machine.
+/// (green of listed at the combined tree), a line per member (its label and title, its tip in the code face, what the
+/// queue said to it right-aligned at the content's edge), its groups' runs per machine, and what a red does.
 fn batch_lines(flow: &Flow, cw: u32, fonts: &dyn Measure) -> Vec<Vec<Piece>> {
     let mut head = vec![
         Piece::Icon("git-merge", " ", LABEL),
@@ -942,6 +946,7 @@ fn batch_lines(flow: &Flow, cw: u32, fonts: &dyn Measure) -> Vec<Vec<Piece>> {
     let mut out = vec![head];
     let (tip_at, said_at) = (cw * 2 / 5, cw * 3 / 5);
     let fit = |s: &str, px: u32| drgnx_rows::fit::fit(fonts, ROLE, s, px as f32);
+    let tip_w = text_px(fonts, "tip 0000000  ");
     for m in &flow.batch {
         let label = format!("{}  ", m.label);
         let room = tip_at.saturating_sub(text_px(fonts, &label) + 8);
@@ -949,17 +954,21 @@ fn batch_lines(flow: &Flow, cw: u32, fonts: &dyn Measure) -> Vec<Vec<Piece>> {
             Piece::Text(label, TEXT),
             Piece::Text(fit(&m.title, room), LABEL),
             Piece::At(tip_at),
-            Piece::Text(format!("tip {}", m.tip), LABEL),
+            Piece::Text("tip ".into(), LABEL),
+            Piece::Text(m.tip.clone(), CODE),
         ];
         if let Some(said) = &m.said {
-            line.push(Piece::At(said_at));
-            line.push(Piece::Text(fit(said, cw.saturating_sub(said_at)), LABEL));
+            let said = fit(said, cw.saturating_sub(said_at.max(tip_at + tip_w)));
+            line.push(Piece::At(cw.saturating_sub(text_px(fonts, &said))));
+            line.push(Piece::Text(said, LABEL));
         }
         out.push(line);
     }
     if let Some(g) = &flow.groups {
         out.extend(machine_lines(g));
     }
+    let footer = "On a red: each tip reruns alone, in parallel; red tips go back to their tasks, the rest merge.";
+    out.push(vec![Piece::Text(fit(footer, cw), LABEL)]);
     out
 }
 
@@ -1002,6 +1011,7 @@ fn on_card(face: &'static str) -> &'static str {
     match face {
         TEXT => CARD_TEXT,
         LABEL => CARD_LABEL,
+        CODE => CARD_CODE,
         HEAD => CARD_HEAD,
         f => f,
     }
@@ -1894,8 +1904,12 @@ mod tests {
         let (rows, _) = flow_rows(&f, &e, &fonts());
         let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
         let tail: Vec<&str> = keys[keys.iter().position(|k| *k == "gap").unwrap() + 1..].to_vec();
-        // the two cards side by side: the batch's 4 lines (heading, a member, 2 machines), the line gate's 3
-        assert_eq!(tail, ["cards:0", "cards:1", "cards:2", "cards:3"]);
+        // the two cards side by side: the batch's 5 lines (heading, a member, 2 machines, what a red does), the line
+        // gate's 3
+        assert_eq!(
+            tail,
+            ["cards:0", "cards:1", "cards:2", "cards:3", "cards:4"]
+        );
         let row = |k: &str| rows.iter().find(|r| r.key == k).unwrap();
         let text: Vec<&str> = tail.iter().map(|k| row(k).text.as_str()).collect();
         assert!(text[0].contains("Merge batch") && text[0].contains("affected groups 1/2"));
@@ -1962,11 +1976,12 @@ mod tests {
                 row(k)
                     .runs
                     .iter()
-                    .any(|r| r.2 == CARD_TEXT || r.2 == CARD_HEAD)
+                    .any(|r| r.2 == CARD_TEXT || r.2 == CARD_HEAD || r.2 == CARD_CODE)
             );
         }
-        // the batch's 4th line: the line gate has none there, so only the batch's ring
+        // the batch's 4th and 5th lines: the line gate has none there, so only the batch's ring
         assert_eq!(blocks(row("cards:3")).len(), 1);
+        assert!(row("cards:4").text.contains("On a red"));
         // the headings and every task row carry a rule (a hairline under the row, across the table)
         for k in ["cols", "task:task:J#1", "task:task:J#5", "task:task:J#8"] {
             let b = blocks(row(k));
@@ -2066,6 +2081,7 @@ mod tests {
                     "gap",
                     "cards:0",
                     "cards:1",
+                    "cards:2",
                 ]
             );
             assert!(
@@ -2461,6 +2477,57 @@ mod tests {
         }
         let why = rows.iter().find(|r| r.key == "d:why").expect("why");
         assert!(why.runs.iter().all(|x| x.2 == DTEXT), "{:?}", why.runs);
+    }
+
+    /// [D] The cards' lines as the mockup's `.bcard`: a machine's checks read "name ✓" (the name in the code face,
+    /// the tick after it); a member's tip is in the code face and its note right-aligned at the card's content edge;
+    /// the batch ends with what a red does.
+    #[test]
+    fn the_cards_name_their_checks_before_the_tick_and_right_align_the_notes() {
+        let mut f = flow();
+        let unit = check("unit");
+        f.groups = Some(Runs {
+            at: "B".into(),
+            checks: vec![unit.clone()],
+            evidence: vec![run_of(&unit, "B", "desktop", true)],
+        });
+        let m = machine_lines(f.groups.as_ref().unwrap());
+        let kinds: Vec<String> = m[0]
+            .iter()
+            .map(|p| match p {
+                Piece::Text(t, face) => format!("text {} {face}", t.trim()),
+                Piece::Icon(n, _, _) => format!("icon {n}"),
+                Piece::Chip(..) => "chip".into(),
+                Piece::At(_) => "at".into(),
+            })
+            .filter(|k| k != &format!("text  {LABEL}"))
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                format!("text desktop: {LABEL}"),
+                format!("text unit {CODE}"),
+                "icon check".into()
+            ]
+        );
+        let cw = 600;
+        let lines = batch_lines(&f, cw, &fonts());
+        let member = &lines[1];
+        assert!(
+            member
+                .iter()
+                .any(|p| matches!(p, Piece::Text(t, CODE) if t.contains("7d21c0e")))
+        );
+        let (at, said) = match &member[member.len() - 2..] {
+            [Piece::At(x), Piece::Text(t, LABEL)] => (*x, t.clone()),
+            _ => panic!("the note last, at a stop"),
+        };
+        assert_eq!(at + text_px(&fonts(), &said), cw, "right-aligned: {said}");
+        let last = lines.last().expect("a footer");
+        assert!(
+            last.iter()
+                .any(|p| matches!(p, Piece::Text(t, LABEL) if t.starts_with("On a red")))
+        );
     }
 
     /// [D] A task's row lights under the pointer (the mockup's `.row:hover`, `--hover`): `mouse-face` over its span.

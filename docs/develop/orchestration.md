@@ -330,7 +330,9 @@ open `gate` cards, and builds the model and the rows (`work::trail::flow`, pure)
   `Seen`), so after a restart they show again once the gates run again;
 - the two cards side by side on shared rows (`cards:N`), the batch on the left half and the line gate on the right
   (the batch's across the table without a push gate), each row of a card filled to its edge in
-  `drgnx-work-flow-card`. The rings and the rows' rules are Glitnir blocks (Nidhogg's `glitnir-blocks`): the hub
+  `drgnx-work-flow-card`. A machine's line names each check in the code face (`drgnx-work-flow-code`) with its tick
+  after it; a member's line has its tip in the code face and what the queue said to it right-aligned; the batch ends
+  with what a red does (each tip reruns alone). The rings and the rows' rules are Glitnir blocks (Nidhogg's `glitnir-blocks`): the hub
   marks them on the rows with the text property `drgnx-work-flow-block` (`["ring" ID X0 X1]` on a card's span of each
   of its rows, `["rule" KEY X0 X1]` on the headings and each task row, device px; on a GUI the column heads are 24
   logical px high and each task row 30, as in the mockup, by a 1 px space that high first on the row), and drgnx-work-flow.el turns the

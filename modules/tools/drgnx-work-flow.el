@@ -166,6 +166,10 @@ rows or its pass count; a waiver says its reason."
   "The Flow's labels on a card." :group 'drgnx-work-space)
 (defface drgnx-work-flow-card-heading '((t :inherit (drgnx-work-flow-heading drgnx-work-flow-card)))
   "A card's heading." :group 'drgnx-work-space)
+(defface drgnx-work-flow-code '((t :inherit drgnx-code-small))
+  "Names in the code font on the Flow: a check's selector, a tip (the mockup's `.code')." :group 'drgnx-work-space)
+(defface drgnx-work-flow-card-code '((t :inherit (drgnx-work-flow-code drgnx-work-flow-card)))
+  "The code font on a card." :group 'drgnx-work-space)
 
 (defvar-local drgnx-work-flow--blocks nil "The Flow's blocks as last set (`glitnir-blocks'), with markers.")
 (defvar-local drgnx-work-flow--blocks-key nil
