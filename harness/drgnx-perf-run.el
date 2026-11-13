@@ -2479,7 +2479,7 @@ a :measure without :actions each have :timeout seconds to answer (120)."
                        "       :lines (vconcat (mapcar (lambda (k) (list :line (+ 188 n k)"
                        "                                     :text (format \"total = %d  i = %d  name = 'row %d'\" (* n k) k n)"
                        "                                     :changed (if (< k 2) [[0 9]] [])))"
-                       "                              (number-sequence 0 11))))))))"
+                       "                              (number-sequence 0 11)))))))"
                        " (global-set-key (kbd \"<f10>\") #'drgnx-perf--inline) t)")
        :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form)
                       " (goto-char (point-min)) (forward-line 199) (setq drgnx-perf--inline-n 0)"
