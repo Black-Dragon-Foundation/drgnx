@@ -563,7 +563,8 @@ impl Fixture {
 
     /// Notes the relay port a row's spec was built with (`${RELAY_PORT}`).
     pub fn set_relay_port(&self, port: u16) {
-        self.relay_port.store(port, std::sync::atomic::Ordering::SeqCst);
+        self.relay_port
+            .store(port, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// `s` with every placeholder filled.
