@@ -155,6 +155,17 @@
     (should (equal (funcall enc 'drgnx-agents-browser-idle 600) "600"))
     (should (equal (funcall enc 'drgnx-agents-session-memory "4G") "\"4G\""))))
 
+;; The hub's refusal of a set (a project override it does not take, a matrix that does not read) is one notice, not silence.
+(ert-deftest drgnx-settings-runtime/a-refused-set-raises-one-notice ()
+  (let (notes)
+    (cl-letf (((symbol-function 'drgnx-notify) (lambda (&rest args) (push args notes))))
+      (drgnx-settings-runtime--answered nil "no project override of drgnx-agents-default")
+      (should (equal (mapcar #'car notes) '(hub)))
+      (should (string-search "refused: no project override" (nth 2 (car notes))))
+      (setq notes nil)
+      (drgnx-settings-runtime--answered t nil)
+      (should-not notes))))
+
 (ert-deftest drgnx-settings-runtime/the-old-sender-is-gone ()
   (dolist (f '(drgnx-hub--send-providers drgnx-hub--providers-table drgnx-hub--provider-json drgnx-hub-resend-providers
                                          drgnx-ai--settings-changed drgnx-ai--config-changed))
