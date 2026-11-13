@@ -565,11 +565,12 @@ Returns (EXIT . OUTPUT)."
   (dolist (yml (drgnx-ci-test--workflows-and-actions
                 '("ci.yml" "macos.yml" "gui.yml" "drgnx-tiers.yml" "tty.yml" "images.yml" "bootstrap.yml" "runtime.yml")))
     (skip-unless yml)
-    ;; every cargo test runs every crate's tests, every matrix every row, and no job's failure is let off
-    (dolist (line (drgnx-ci-test--matches "^\\(.*cargo[^\n]* test .*\\)$" yml))
+    ;; every cargo test runs every crate's tests, every matrix every row, and no job's failure is let off (a line
+    ;; whose `#' comes before cargo is a comment, which runs nothing)
+    (dolist (line (drgnx-ci-test--matches "^\\([^#\n]*cargo[^\n]* test .*\\)$" yml))
       (should (string-search "--no-fail-fast" line)))
     ;; and every nextest run, with no retries (a retried test that passed hides a race)
-    (dolist (line (drgnx-ci-test--matches "^\\(.*cargo nextest run.*\\)$" yml))
+    (dolist (line (drgnx-ci-test--matches "^\\([^#\n]*cargo nextest run.*\\)$" yml))
       (should (string-search "--no-fail-fast" line))
       (should (string-search "--retries 0" line)))
     (should (= (length (drgnx-ci-test--matches "\\(strategy:\\)" yml))

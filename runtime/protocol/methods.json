@@ -13070,9 +13070,54 @@
             ],
             "type": "object"
           },
-          "HeapEdge": {
-            "description": "A reference: from field FIELD's row of card FROM into card TO's top row, through POINTS ([col, row] cells,\nstraight runs).",
+          "HeapCut": {
+            "description": "A cut field's stub, \"+COUNT not shown\": card FROM's field FIELD, one row at COL, ROW, WIDTH cells wide.",
             "properties": {
+              "col": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "count": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "field": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "from": {
+                "type": "string"
+              },
+              "row": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "width": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "from",
+              "field",
+              "count",
+              "col",
+              "row",
+              "width"
+            ],
+            "type": "object"
+          },
+          "HeapEdge": {
+            "description": "A reference: from field FIELD's row of card FROM into card TO's top row, through POINTS ([col, row] cells,\nstraight runs).  A CUT one (drawn dashed) has no TO: it ends at the stub of its FROM and FIELD.",
+            "properties": {
+              "cut": {
+                "type": "boolean"
+              },
               "field": {
                 "format": "uint32",
                 "minimum": 0,
@@ -13109,6 +13154,15 @@
           "HeapField": {
             "description": "A field of an object: its NAME and VALUE text, and the object it refers to (TO).",
             "properties": {
+              "cut": {
+                "description": "A reference the walk left (the limit, the depth or the time): the objects behind it not shown.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "name": {
                 "type": "string"
               },
@@ -13157,7 +13211,7 @@
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "description": "`debug/heap`'s answer: the GRAPH's id; the root's NODE (none: a scalar); the objects, CUT (references left at the\nlimit, the depth or the time), the layout (CARDS, EDGES, WIDTH × HEIGHT cells); against the graph's last read, the\nobjects ADDED, CHANGED (a field's value or reference) and GONE.",
+        "description": "`debug/heap`'s answer: the GRAPH's id; the root's NODE (none: a scalar); the objects, CUT (references left at the\nlimit, the depth or the time), the layout (CARDS, EDGES, the cut fields' stubs CUTS, WIDTH × HEIGHT cells); against the graph's last read, the\nobjects ADDED, CHANGED (a field's value or reference) and GONE.",
         "properties": {
           "added": {
             "items": {
@@ -13181,6 +13235,13 @@
             "format": "uint32",
             "minimum": 0,
             "type": "integer"
+          },
+          "cuts": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/HeapCut"
+            },
+            "type": "array"
           },
           "edges": {
             "items": {

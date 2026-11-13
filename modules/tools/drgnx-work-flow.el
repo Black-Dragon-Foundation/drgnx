@@ -36,7 +36,15 @@
 
 ;;;; The faces the hub's Flow rows name: the UI font, the theme's chips and text
 
-(defface drgnx-work-flow-text '((t :inherit drgnx-ui-text)) "The Flow's text: a task's title, the tiles' lines."
+(defface drgnx-work-flow-text '((t :inherit drgnx-ui-caption))
+  "The Flow's text: a task's title, the cards' and the Rules tile's lines (the mockup's table, 12 px)."
+  :group 'drgnx-work-space)
+(defface drgnx-work-flow-detail-text '((t :inherit drgnx-ui-text)) "The detail tile's text (12.5 px in the mockup)."
+  :group 'drgnx-work-space)
+(defface drgnx-work-flow-section '((t :inherit (drgnx-ui-caption drgnx-text-muted) :weight semibold))
+  "The detail tile's section heads: why it is held, what clears it, the evidence (the mockup's `h5')."
+  :group 'drgnx-work-space)
+(defface drgnx-work-flow-agent '((t :inherit drgnx-ui-heading)) "The agent's name on the detail tile's head."
   :group 'drgnx-work-space)
 (defface drgnx-work-flow-label '((t :inherit (drgnx-ui-caption drgnx-text-muted)))
   "The Flow's labels: task ids, agents, column headings." :group 'drgnx-work-space)
@@ -44,15 +52,18 @@
   "A key's badge on the Flow's chips (`g 1' on a held task)." :group 'drgnx-work-space)
 (defface drgnx-work-flow-heading '((t :inherit drgnx-ui-heading)) "The Flow's headings: the run, the batch, a tile's."
   :group 'drgnx-work-space)
-(defface drgnx-work-flow-chip-ok '((t :inherit (drgnx-ui-caption drgnx-chip-ok))) "A gate that passed."
+(defface drgnx-work-flow-chip-ok '((t :inherit (drgnx-ui-caption drgnx-chip-ok) :height 0.9167)) "A gate that passed."
   :group 'drgnx-work-space)
-(defface drgnx-work-flow-chip-run '((t :inherit (drgnx-ui-caption drgnx-chip-accent))) "A gate that runs."
+(defface drgnx-work-flow-chip-run '((t :inherit (drgnx-ui-caption drgnx-chip-accent) :height 0.9167))
+  "A gate that runs."
   :group 'drgnx-work-space)
-(defface drgnx-work-flow-chip-held '((t :inherit (drgnx-ui-caption drgnx-chip-attention)))
+(defface drgnx-work-flow-chip-held '((t :inherit (drgnx-ui-caption drgnx-chip-attention) :height 0.9167))
   "A gate that holds the task: it needs you." :group 'drgnx-work-space)
-(defface drgnx-work-flow-chip-err '((t :inherit (drgnx-ui-caption drgnx-chip-error))) "A gate that failed."
+(defface drgnx-work-flow-chip-err '((t :inherit (drgnx-ui-caption drgnx-chip-error) :height 0.9167))
+  "A gate that failed."
   :group 'drgnx-work-space)
-(defface drgnx-work-flow-chip-wait '((t :inherit (drgnx-ui-caption drgnx-chip-quiet))) "A gate not reached yet."
+(defface drgnx-work-flow-chip-wait '((t :inherit (drgnx-ui-caption drgnx-chip-quiet) :height 0.9167))
+  "A gate not reached yet."
   :group 'drgnx-work-space)
 
 ;;;; What the Flow asks and shows: pure
@@ -160,10 +171,14 @@ rows or its pass count; a waiver says its reason."
 (defvar-local drgnx-work-flow--blocks-key nil
   "`drgnx-work-flow--blocks' with positions for its markers, as last computed: what a patch compares.")
 
+(defvar-local drgnx-work-flow--selected nil "The task the Flow's detail tile shows (the Flow's selection).")
+
 (defun drgnx-work-flow--block-spec ()
   "The Flow's blocks from its rows' `drgnx-work-flow-block' marks: a `glitnir-blocks' value with positions, one block
 per mark from the first row it is on to the end of the last (a ring: radius 8 px in `drgnx-border', its corners in
-the colour of `default' beneath; a rule: a hairline in `drgnx-border-subtle')."
+the colour of `default' beneath; a rule: a hairline in `drgnx-border-subtle'); then the selected task's accent, a 2 px
+bar at the left edge of its task row (the row `task:ID', not the strip's chip) in the focus colour
+(hub-orchestration.html `.sel.t')."
   (let ((pos (point-min)) (spans (make-hash-table :test 'equal)) order)
     (while (< pos (point-max))
       (let ((v (get-text-property pos 'drgnx-work-flow-block))
@@ -172,12 +187,17 @@ the colour of `default' beneath; a rule: a hairline in `drgnx-border-subtle')."
           (let ((span (gethash v spans)))
             (if span (setcdr span next) (puthash v (cons pos next) spans) (push v order))))
         (setq pos next)))
-    (mapcar (lambda (v)
-              (let ((span (gethash v spans)) (ring (equal (elt v 0) "ring")))
-                `(,(if ring 'ring 'rule) ,(car span) ,(cdr span) :x0 ,(elt v 2) :x1 ,(elt v 3)
-                  ,@(if ring `(:radius ,(drgnx-px 8) :ring drgnx-border :beneath default)
-                      '(:ring drgnx-border-subtle)))))
-            (nreverse order))))
+    (nconc
+     (mapcar (lambda (v)
+               (let ((span (gethash v spans)) (ring (equal (elt v 0) "ring")))
+                 `(,(if ring 'ring 'rule) ,(car span) ,(cdr span) :x0 ,(elt v 2) :x1 ,(elt v 3)
+                   ,@(if ring `(:radius ,(drgnx-px 8) :ring drgnx-border :beneath default)
+                       '(:ring drgnx-border-subtle)))))
+             (nreverse order))
+     (when-let* ((id drgnx-work-flow--selected) ((drgnx-view-p drgnx-view))
+                 (at (drgnx-view-row-start drgnx-view (concat "task:" id))))
+       (list `(bar ,at ,(1- (drgnx-view-row-end drgnx-view (concat "task:" id)))
+                   :x0 0 :x1 ,(drgnx-px 2) :ring drgnx-focus-line))))))
 
 (defun drgnx-work-flow--blocks ()
   "Give the windows showing this Flow its blocks, when they changed.  A patch that gives the same blocks only puts
@@ -321,7 +341,6 @@ path."
 
 ;;;; The detail tile: the selected task's why, what clears it, its evidence and its actions
 
-(defvar-local drgnx-work-flow--selected nil "The task the Flow's detail tile shows (the Flow's selection).")
 (defvar-local drgnx-work-flow--detail nil "In a Flow: its detail tile.  In a tile: the Flow it details.")
 
 (defun drgnx-work-flow--detail-params (view map job task)
@@ -379,11 +398,13 @@ without Sjá."
                                #'ignore))))
 
 (defun drgnx-work-flow--selected-moved (buffer id)
-  "`drgnx-view-selected-functions' in a Flow: BUFFER's selection is ID now, and its tile shows that task."
+  "`drgnx-view-selected-functions' in a Flow: BUFFER's selection is ID now, its row has the bar and its tile shows that
+task."
   (when (and id (buffer-live-p buffer))
     (with-current-buffer buffer
       (when (derived-mode-p 'drgnx-work-flow-mode)
         (setq drgnx-work-flow--selected id)
+        (drgnx-work-flow--blocks)
         (drgnx-work-flow--ask-detail buffer)))))
 
 (defun drgnx-work-flow--swap-window (from to)

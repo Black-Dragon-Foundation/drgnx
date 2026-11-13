@@ -41,10 +41,17 @@ pub(crate) enum Chip {
     Na,
 }
 
-/// The Flow's text faces (drgnx-work-flow.el: the UI font, the theme's tokens).
+/// The Flow's text faces (drgnx-work-flow.el: the UI font, the theme's tokens): the table's and cards' text (12 px),
+/// labels, headings.
 const TEXT: &str = "drgnx-work-flow-text";
 const LABEL: &str = "drgnx-work-flow-label";
 const HEAD: &str = "drgnx-work-flow-heading";
+/// The detail tile's text (12.5 px), its section heads (muted, semibold) and the agent's name on its head.
+const DTEXT: &str = "drgnx-work-flow-detail-text";
+const SECTION: &str = "drgnx-work-flow-section";
+const AGENT: &str = "drgnx-work-flow-agent";
+/// A row's light under the pointer (the mockup's `--hover`).
+const HOVER: &str = "drgnx-hover";
 /// A key's badge (the keycap).
 const KEY: &str = "drgnx-work-flow-key";
 /// A card's fill (drgnx-work-flow.el: the panel's surface), and the text faces on it.
@@ -55,8 +62,8 @@ const CARD_HEAD: &str = "drgnx-work-flow-card-heading";
 /// The text property that marks a block Glitnir draws over the rows (`glitnir-blocks`): `["ring", ID, X0, X1]` on a
 /// card's span of each of its rows, `["rule", KEY, X0, X1]` on a row with a hairline under it (device px).
 const BLOCK: &str = "drgnx-work-flow-block";
-/// The font role the Flow's text is measured in (the UI font: `drgnx-view-env-roles`).
-const ROLE: &str = "card";
+/// The font role the Flow's text is measured in (`drgnx-ui-caption`, the table's 12 px: `drgnx-view-env-roles`).
+const ROLE: &str = "caption";
 
 impl Chip {
     /// The chip's face.
@@ -781,6 +788,7 @@ pub(crate) fn flow_rows(
         }
         let end = b.pos();
         b.prop(start, end, "drgnx-work-id", json!(t.id));
+        b.prop(start, end, "mouse-face", json!(HOVER));
         if let Some(card) = t.card {
             b.prop(start, end, "drgnx-work-card", json!(card));
         }
@@ -1228,10 +1236,31 @@ fn commits_lines(facts: &TaskFacts, chars: usize) -> Vec<String> {
     out
 }
 
-/// The detail tile of task TASK of FLOW for ENV, one line per row: its head (the task's id and its card's on it),
-/// for a held task why it is held, what clears it, then the evidence so far and the actions with their keys (the
-/// waiver the user's alone).  A task FLOW does not have: one row saying to select one.
-pub(crate) fn detail_rows(flow: &Flow, task: &str, env: &ViewEnv) -> Vec<Row> {
+/// The agent's avatar (hub-orchestration.html `.who`): a 16 logical px circle in COLOUR with INITIAL cut out of it,
+/// so the tile's own colour shows through, as the mockup's letter in `--editor`.
+fn avatar(env: &ViewEnv, initial: char, colour: &str) -> (ImageId, String) {
+    let px = dpx(env, 16.0);
+    let r = f64::from(px) / 2.0;
+    let svg = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{px}\" height=\"{px}\" viewBox=\"0 0 {px} {px}\">\
+         <mask id=\"m\"><rect width=\"{px}\" height=\"{px}\" fill=\"white\"/>\
+         <text x=\"{r}\" y=\"{r}\" dy=\"0.35em\" text-anchor=\"middle\" font-family=\"sans-serif\" \
+         font-weight=\"700\" font-size=\"{fs}\" fill=\"black\">{initial}</text></mask>\
+         <circle cx=\"{r}\" cy=\"{r}\" r=\"{r}\" fill=\"{colour}\" mask=\"url(#m)\"/></svg>",
+        fs = dpx(env, 9.0)
+    );
+    (ImageId::of(svg.as_bytes(), env.epoch), svg)
+}
+
+/// The detail tile of task TASK of FLOW for ENV, one line per row, and its images: its head (the agent's avatar and
+/// name, the held chip; the task's id and its card's on it), the task under it, for a held task why it is held,
+/// what clears it, then the evidence so far and the actions with their keys (the waiver the user's alone).  A task
+/// FLOW does not have: one row saying to select one.
+pub(crate) fn detail_tile(
+    flow: &Flow,
+    task: &str,
+    env: &ViewEnv,
+) -> (Vec<Row>, Vec<(ImageId, String)>) {
     let chars = (env.width_px / env.cell.0.max(1)) as usize;
     let Some((facts, t)) = flow
         .tasks
@@ -1241,7 +1270,7 @@ pub(crate) fn detail_rows(flow: &Flow, task: &str, env: &ViewEnv) -> Vec<Row> {
     else {
         let mut b = RowBuilder::new("d:none");
         b.push("Select a task in the Flow.", Some(LABEL));
-        return vec![b.finish()];
+        return (vec![b.finish()], Vec::new());
     };
     let mut rows = Vec::new();
     let mut line = |key: String, text: &str, face: Option<&str>| {
@@ -1255,13 +1284,37 @@ pub(crate) fn detail_rows(flow: &Flow, task: &str, env: &ViewEnv) -> Vec<Row> {
             rows.push(b.finish());
         }
     };
-    // the head: what it is, who works on it, where it stands
+    // the head: who works on it (avatar, name) and the held chip at the right; the task and where it stands under it
+    let mut images = Vec::new();
     let mut head = RowBuilder::new("d:head");
     let start = head.pos();
-    head.push(
-        &fit(&format!("{} · {}", t.label, t.title), chars),
-        Some(HEAD),
-    );
+    let agent = t.agent.as_deref().unwrap_or("no agent");
+    if let Some(name) = &t.agent {
+        // the agent's colour: its place among the run's agents, as the map's
+        let mut seen: Vec<&str> = Vec::new();
+        for a in flow.tasks.iter().filter_map(|f| f.agent.as_deref()) {
+            if !seen.contains(&a) {
+                seen.push(a);
+            }
+        }
+        let n = seen.iter().position(|a| a == name).unwrap_or(0) % 6 + 1;
+        let role = format!("agent-{n}");
+        let colour = env
+            .palette
+            .iter()
+            .find(|(r, _)| *r == role)
+            .map_or("currentColor", |(_, c)| c.as_str());
+        let initial = name.chars().next().unwrap_or('?').to_ascii_uppercase();
+        let (id, svg) = avatar(env, initial, colour);
+        head.image(id, &initial.to_string());
+        images.push((id, svg));
+        head.push(" ", None);
+    }
+    head.push(&fit(agent, chars.saturating_sub(10)), Some(AGENT));
+    if t.held.is_some() {
+        head.stop(env.width_px.saturating_sub(env.cell.0 * 7));
+        head.push(" held ", Some(Chip::Held.face()));
+    }
     let end = head.pos();
     head.prop(start, end, "drgnx-work-id", json!(t.id));
     if let Some(card) = t.card {
@@ -1271,18 +1324,11 @@ pub(crate) fn detail_rows(flow: &Flow, task: &str, env: &ViewEnv) -> Vec<Row> {
     let mut sub = RowBuilder::new("d:sub");
     sub.push(
         &fit(
-            &format!(
-                "{} · {}",
-                t.agent.as_deref().unwrap_or("no agent"),
-                facts.status
-            ),
-            chars.saturating_sub(7),
+            &format!("{} {} · {}", t.label, t.title, facts.status),
+            chars,
         ),
         Some(LABEL),
     );
-    if t.held.is_some() {
-        sub.push(" ", None).push(" held ", Some(Chip::Held.face()));
-    }
     out.push(sub.finish());
     let held_gates: Vec<(&str, &Cell)> = GATES
         .iter()
@@ -1293,13 +1339,13 @@ pub(crate) fn detail_rows(flow: &Flow, task: &str, env: &ViewEnv) -> Vec<Row> {
     let commits = commits_lines(facts, chars);
     if let Some(why) = &t.held {
         line("d:gap1".into(), " ", None);
-        line("d:why-h".into(), "Why it is held", Some(HEAD));
-        line("d:why".into(), why, Some(TEXT));
+        line("d:why-h".into(), "Why it is held", Some(SECTION));
+        line("d:why".into(), why, Some(DTEXT));
         for (g, c) in &held_gates {
             line(
                 format!("d:why:{g}"),
                 &format!("{g}: {}", c.text),
-                Some(TEXT),
+                Some(DTEXT),
             );
         }
         // the commits the merge checks, under why (the mockup)
@@ -1307,7 +1353,7 @@ pub(crate) fn detail_rows(flow: &Flow, task: &str, env: &ViewEnv) -> Vec<Row> {
             line(format!("d:commits:{i}"), l, Some(LABEL));
         }
         line("d:gap2".into(), " ", None);
-        line("d:clear-h".into(), "What clears it", Some(HEAD));
+        line("d:clear-h".into(), "What clears it", Some(SECTION));
         let gates: Vec<&str> = match held_gates
             .iter()
             .map(|(g, _)| *g)
@@ -1317,7 +1363,7 @@ pub(crate) fn detail_rows(flow: &Flow, task: &str, env: &ViewEnv) -> Vec<Row> {
             None => vec!["Merge batch"],
         };
         for g in gates {
-            line(format!("d:clear:{g}"), clears(g), Some(TEXT));
+            line(format!("d:clear:{g}"), clears(g), Some(DTEXT));
         }
     }
     if t.held.is_none() && !commits.is_empty() {
@@ -1330,7 +1376,7 @@ pub(crate) fn detail_rows(flow: &Flow, task: &str, env: &ViewEnv) -> Vec<Row> {
     // the evidence table: a label column, then the newest of each (brief, tests, green, red); waivers after
     out.push(RowBuilder::new("d:gap3").finish());
     let mut h = RowBuilder::new("d:ev-h");
-    h.push("Evidence so far", Some(HEAD));
+    h.push("Evidence so far", Some(SECTION));
     out.push(h.finish());
     let newest = |kind: &str| facts.evidence.iter().rev().find(|e| e.kind == kind);
     let runs = facts.evidence.iter().rev().find(|e| e.kind != "waiver");
@@ -1344,14 +1390,14 @@ pub(crate) fn detail_rows(flow: &Flow, task: &str, env: &ViewEnv) -> Vec<Row> {
             "brief",
             (
                 format!("{} · plan §{} · rules {pack}", t.label, t.label),
-                TEXT,
+                DTEXT,
             ),
         ),
         (
             "tests",
             runs.map_or_else(none, |e| {
                 let sel = e.facts.selector.lines().last().unwrap_or_default();
-                (format!("{sel} · {} rows", e.rows.len()), TEXT)
+                (format!("{sel} · {} rows", e.rows.len()), DTEXT)
             }),
         ),
         (
@@ -1360,14 +1406,14 @@ pub(crate) fn detail_rows(flow: &Flow, task: &str, env: &ViewEnv) -> Vec<Row> {
                 let face = if failing(&e.rows).next().is_some() {
                     Chip::Err.face()
                 } else {
-                    TEXT
+                    DTEXT
                 };
                 (run_cell(e), face)
             }),
         ),
         (
             "red",
-            newest("red").map_or_else(none, |e| (run_cell(e), TEXT)),
+            newest("red").map_or_else(none, |e| (run_cell(e), DTEXT)),
         ),
     ];
     let col = env.cell.0 * 7;
@@ -1387,7 +1433,7 @@ pub(crate) fn detail_rows(flow: &Flow, task: &str, env: &ViewEnv) -> Vec<Row> {
         b.push("waiver", Some(LABEL)).stop(col);
         b.push(
             &fit(e.note.as_deref().unwrap_or(""), chars.saturating_sub(7)),
-            Some(TEXT),
+            Some(DTEXT),
         );
         out.push(b.finish());
     }
@@ -1425,7 +1471,7 @@ pub(crate) fn detail_rows(flow: &Flow, task: &str, env: &ViewEnv) -> Vec<Row> {
             out.push(b.finish());
         }
     }
-    out
+    (out, images)
 }
 
 #[cfg(test)]
@@ -2253,7 +2299,7 @@ mod tests {
         f.tasks[1].evidence = vec![green];
         let mut tile = env(1.0);
         tile.width_px = 400;
-        let rows = detail_rows(&f, "task:J#5", &tile);
+        let rows = detail_tile(&f, "task:J#5", &tile).0;
         let all: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();
         let all = all.join("\n");
         assert!(
@@ -2297,11 +2343,11 @@ mod tests {
         // the tile's width: 50 cells
         let mut tile = env(1.0);
         tile.width_px = 400;
-        let rows = detail_rows(&f, "task:J#5", &tile);
+        let rows = detail_tile(&f, "task:J#5", &tile).0;
         let text: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();
         let all = text.join("\n");
         assert!(
-            text[0].starts_with("T5") && text[0].contains("Task 5"),
+            text[1].starts_with("T5") && text[1].contains("Task 5"),
             "{all}"
         );
         assert!(
@@ -2352,7 +2398,7 @@ mod tests {
         }
         // the lines fit the tile: none longer than its width in cells
         assert!(text.iter().all(|t| t.chars().count() <= 50), "{all}");
-        let free = detail_rows(&f, "task:J#1", &tile);
+        let free = detail_tile(&f, "task:J#1", &tile).0;
         let free_all: Vec<&str> = free.iter().map(|r| r.text.as_str()).collect();
         let free_all = free_all.join("\n");
         assert!(
@@ -2360,8 +2406,77 @@ mod tests {
             "{free_all}"
         );
         assert!(free_all.contains("Evidence e") && free_all.contains("none recorded"));
-        let none = detail_rows(&f, "task:J#99", &tile);
+        let none = detail_tile(&f, "task:J#99", &tile).0;
         assert_eq!(none.len(), 1);
         assert!(none[0].text.contains("Select a task"));
+    }
+
+    /// [D] The detail tile as the mockup (hub-orchestration.html `.detail`): the head is the agent's avatar (a 16 px
+    /// circle in its colour, its initial cut out) and name, with the held chip; the task under it in the muted face;
+    /// the section heads (`h5`) muted and semibold, the text in the detail's own face (12.5 px, not the table's 12).
+    #[test]
+    fn the_detail_tile_opens_with_the_agent_s_avatar_and_muted_section_heads() {
+        let mut tile = env(2.0);
+        tile.width_px = 800;
+        tile.palette = vec![("agent-1".into(), "#c6a0ff".into())];
+        let (rows, images) = detail_tile(&flow(), "task:J#5", &tile);
+        let all: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();
+        let all = all.join("\n");
+        let head = &rows[0];
+        assert_eq!(head.images.len(), 1, "{all}");
+        assert!(
+            head.text.contains("Sonnet") && head.text.contains("held"),
+            "{all}"
+        );
+        assert!(head.runs.iter().any(|r| r.2 == AGENT), "{:?}", head.runs);
+        assert!(
+            head.props
+                .iter()
+                .any(|p| p.2 == "drgnx-work-card" && p.3 == json!(42))
+        );
+        let (_, svg) = images
+            .iter()
+            .find(|(id, _)| *id == head.images[0].1)
+            .expect("the avatar's image");
+        assert!(
+            svg.contains("<circle") && svg.contains("#c6a0ff") && svg.contains(">S<"),
+            "{svg}"
+        );
+        assert!(
+            svg.contains("width=\"32\""),
+            "16 logical px at scale 2: {svg}"
+        );
+        let sub = &rows[1];
+        assert!(
+            sub.text.starts_with("T5") && sub.text.contains("Task 5"),
+            "{all}"
+        );
+        assert!(sub.runs.iter().all(|r| r.2 == LABEL), "{:?}", sub.runs);
+        for key in ["d:why-h", "d:clear-h", "d:ev-h"] {
+            let r = rows
+                .iter()
+                .find(|r| r.key == key)
+                .unwrap_or_else(|| panic!("no {key} in\n{all}"));
+            assert!(r.runs.iter().all(|x| x.2 == SECTION), "{key}: {:?}", r.runs);
+        }
+        let why = rows.iter().find(|r| r.key == "d:why").expect("why");
+        assert!(why.runs.iter().all(|x| x.2 == DTEXT), "{:?}", why.runs);
+    }
+
+    /// [D] A task's row lights under the pointer (the mockup's `.row:hover`, `--hover`): `mouse-face` over its span.
+    #[test]
+    fn a_task_row_lights_under_the_pointer() {
+        let (rows, _) = flow_rows(&flow(), &env(1.0), &fonts());
+        let row = rows
+            .iter()
+            .find(|r| r.key == "task:task:J#5")
+            .expect("T5's row");
+        assert!(
+            row.props
+                .iter()
+                .any(|p| p.2 == "mouse-face" && p.3 == json!(HOVER)),
+            "{:?}",
+            row.props
+        );
     }
 }

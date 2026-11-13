@@ -42,6 +42,9 @@ pub struct HeapField {
     pub value: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub to: Option<String>,
+    /// A reference the walk left (the limit, the depth or the time): the objects behind it not shown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cut: Option<u32>,
 }
 
 /// An object: its ID (the adapter's identity, or its path), TYPE, the PATH that reached it first, its FIELDS.
@@ -65,17 +68,30 @@ pub struct HeapCard {
 }
 
 /// A reference: from field FIELD's row of card FROM into card TO's top row, through POINTS ([col, row] cells,
-/// straight runs).
+/// straight runs).  A CUT one (drawn dashed) has no TO: it ends at the stub of its FROM and FIELD.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct HeapEdge {
     pub from: String,
     pub field: u32,
     pub to: String,
     pub points: Vec<[u32; 2]>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cut: bool,
+}
+
+/// A cut field's stub, "+COUNT not shown": card FROM's field FIELD, one row at COL, ROW, WIDTH cells wide.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct HeapCut {
+    pub from: String,
+    pub field: u32,
+    pub count: u32,
+    pub col: u32,
+    pub row: u32,
+    pub width: u32,
 }
 
 /// `debug/heap`'s answer: the GRAPH's id; the root's NODE (none: a scalar); the objects, CUT (references left at the
-/// limit, the depth or the time), the layout (CARDS, EDGES, WIDTH × HEIGHT cells); against the graph's last read, the
+/// limit, the depth or the time), the layout (CARDS, EDGES, the cut fields' stubs CUTS, WIDTH × HEIGHT cells); against the graph's last read, the
 /// objects ADDED, CHANGED (a field's value or reference) and GONE.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct DebugHeapGraph {
@@ -88,6 +104,8 @@ pub struct DebugHeapGraph {
     pub cut: u32,
     pub cards: Vec<HeapCard>,
     pub edges: Vec<HeapEdge>,
+    #[serde(default)]
+    pub cuts: Vec<HeapCut>,
     pub width: u32,
     pub height: u32,
     pub added: Vec<String>,

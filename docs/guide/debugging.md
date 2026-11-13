@@ -227,9 +227,8 @@ The heap graph draws the objects reachable from a variable at a stop: each objec
 fields, and each reference is an arrow to another card. An object reached two ways is one card with two arrows, and a
 cycle closes on itself. At the next stop the graph is read again: the cards keep their places, and the objects added,
 changed and gone are marked (a changed value is tinted, a new card says new, and a gone one shows faded for that one
-stop). A graph holds up to 50 objects by default (200 at most); a reference left past that, or
-past two seconds of reading, is counted on the graph, and a field whose objects were left out ends in a dashed line
-to a "+N not shown" mark.
+stop). A graph holds up to 50 objects by default (200 at most); a reference left past that, or past two seconds of
+reading, ends at a dashed "+N not shown" stub beside its field and is counted on the graph.
 A recorded run keeps each graph read at a stop, so opening that past stop later (or in a sent run) shows it.
 A partner agent can read the same graph of an expression at a stop (`debug_read` with `heap`), only as the matrix's
 `debug.read` row lets it; the graph it reads is not kept.
