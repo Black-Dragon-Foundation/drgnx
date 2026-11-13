@@ -18,6 +18,7 @@ commands=(
   'generations:list the package generations'
   'lock:the package lock'
   'plugins:the plugins drgnx runs'
+  'packs:language packs: installed, synced, checked'
   'extensions:the catalog of the archives'"'"' packages'
   'record:record the outside ends of a run'
   'replay:run drgnx with a recording backing the outside ends'
@@ -89,6 +90,9 @@ case $cmd in
     _arguments '--progress[JSON steps for the editor]:file:_files' '1:generation:' ;;
   plugins)
     _arguments '1:action:(install list remove)' '--replace[replace an installed plugin]' '--json[the list as JSON]' '2:path:_files' ;;
+  packs)
+    _arguments '1:action:(list sync migrate check pin)' '*--add[install these packs]:pack:' '*--remove[remove these packs]:pack:' \
+      '--builtin[check a built-in pack]' '*--other[a pack whose claims count]:directory:_files -/' '--src[the grammar'"'"'s source folder]:directory:' '*:path:_files' ;;
   extensions)
     _arguments '1:action:(refresh fetch-readme)' '--progress[JSON steps for the editor]:file:_files' ;;
   record)

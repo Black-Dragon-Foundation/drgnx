@@ -163,3 +163,12 @@ kinds of the `@definition.*` patterns of `tags.scm` become `:defuns`, what navig
 pack's sample (`packs/NAME/test/samples/`) in a batch Emacs and checks the mode and the faces of chosen tokens
 (`test/packs/live-test.el`). The seven samples (PHP, Elixir, Kotlin, Swift, Zig, SQL and the Haskell grammar's build)
 pass on Emacs 31 with libtree-sitter 0.26.
+
+## Screenshots
+
+`test/ui/packs-gui-test.el` opens each new pack's sample in the GUI harness, once in the light theme and once in the dark
+one, checks that it is highlighted and takes a picture (`PACK-THEME.png`). It needs grammars the pack job built: it skips
+unless `test/ui/.packs-live-data` names the folder of a `drgnx packs sync` (the harness session has no environment of its
+own, so a file carries it). The run that makes the pictures is local tooling: build the grammars once in a container
+with `test/packs/live.sh` (`DRGNX_PACKS_LIVE_KEEP=DIR` keeps the data), then run the GUI suite with that folder mounted at
+the same path and `DRGNX_TEST_SELECTOR='"drgnx-packs-gui"'`.

@@ -33,6 +33,7 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n __fish_use_subcommand -a generations -d 'List the package generations'
     complete -c drgnx -n __fish_use_subcommand -a lock -d 'The package lock'
     complete -c drgnx -n __fish_use_subcommand -a plugins -d 'The plugins drgnx runs'
+    complete -c drgnx -n __fish_use_subcommand -a packs -d 'Language packs: installed, synced, checked'
     complete -c drgnx -n __fish_use_subcommand -a extensions -d "The catalog of the archives' packages"
     complete -c drgnx -n __fish_use_subcommand -a record -d 'Record the outside ends of a run'
     complete -c drgnx -n __fish_use_subcommand -a replay -d 'Run drgnx with a recording backing the outside ends'
@@ -122,6 +123,12 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n '__fish_seen_subcommand_from plugins' -a 'install list remove'
     complete -c drgnx -n '__fish_seen_subcommand_from plugins' -l replace -d 'Replace an installed plugin'
     complete -c drgnx -n '__fish_seen_subcommand_from plugins' -l json -d 'The list as JSON'
+    complete -c drgnx -n '__fish_seen_subcommand_from packs' -f -a 'list sync migrate check pin'
+    complete -c drgnx -n '__fish_seen_subcommand_from packs' -l add -x -d 'Install these packs'
+    complete -c drgnx -n '__fish_seen_subcommand_from packs' -l remove -x -d 'Remove these packs'
+    complete -c drgnx -n '__fish_seen_subcommand_from packs' -l builtin -d 'Check a built-in pack'
+    complete -c drgnx -n '__fish_seen_subcommand_from packs' -l other -r -d 'A pack whose claims count'
+    complete -c drgnx -n '__fish_seen_subcommand_from packs' -l src -x -d "The grammar's source folder"
     complete -c drgnx -n '__fish_seen_subcommand_from record' -f -a 'start stop lint export'
     complete -c drgnx -n '__fish_seen_subcommand_from record' -l cap-usd -x -d 'Spending cap'
     complete -c drgnx -n '__fish_seen_subcommand_from record' -l cap-weekly -x -d 'Weekly cap'
