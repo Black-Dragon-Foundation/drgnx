@@ -459,16 +459,24 @@ the current line across the full width.  On `after-change-major-mode-hook'."
 (declare-function flymake-diagnostic-type "flymake")
 (declare-function flymake--severity "flymake")
 
-(defun drgnx-face--eol-errors-only (summary src-ovs)
-  "Flymake's end-of-line text for SRC-OVS (its overlays on one line) by SUMMARY, its own function: with the `short'
-setting only the errors' words, so a line with only warnings or notes is underlined and nothing more."
-  (if (not (eq (bound-and-true-p flymake-show-diagnostics-at-end-of-line) 'short))
-      (funcall summary src-ovs)
-    (let ((errors (seq-filter (lambda (o)
-                                (when-let* ((d (overlay-get o 'flymake-diagnostic)))
-                                  (>= (flymake--severity (flymake-diagnostic-type d)) (flymake--severity :error))))
-                              src-ovs)))
-      (if errors (funcall summary errors) (propertize "\n" 'cursor t)))))
+(defun drgnx-face--eol-errors-only (summary on &rest more)
+  "Flymake's end-of-line text by SUMMARY, its own function, for ON and MORE: with the `short' setting only the
+errors' words, so a line with only warnings or notes is underlined and nothing more.  ON is the line's problems'
+overlays (Emacs's own Flymake) or, from Flymake 1.4 (ELPA), the end-of-line overlay holding them."
+  (let* ((eol-ov (and (overlayp on) on))
+         (src-ovs (if eol-ov (overlay-get eol-ov 'flymake-eol-source-overlays) on))
+         (errors (seq-filter (lambda (o)
+                               (when-let* ((d (overlay-get o 'flymake-diagnostic)))
+                                 (>= (flymake--severity (flymake-diagnostic-type d)) (flymake--severity :error))))
+                             src-ovs)))
+    (cond ((not (eq (bound-and-true-p flymake-show-diagnostics-at-end-of-line) 'short))
+           (apply summary on more))
+          ((not eol-ov) (if errors (funcall summary errors) (propertize "\n" 'cursor t)))
+          ((not errors) nil)                          ; 1.4: no text, no display
+          (t (unwind-protect
+                 (progn (overlay-put eol-ov 'flymake-eol-source-overlays errors)
+                        (apply summary eol-ov more))
+               (overlay-put eol-ov 'flymake-eol-source-overlays src-ovs))))))
 
 (defvar drgnx-face--line-spacing-saved nil
   "(VALUE) the default `line-spacing' this module replaced, to give back when the setting returns to nil.")

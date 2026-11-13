@@ -265,6 +265,32 @@ too, no stubs — and turned off after, strictly: the state after equals the sta
           (should (eq (and (string-search "w-one" text) t) (eq setting t))))
         (flymake-mode -1)))))
 
+(ert-deftest drgnx-face/inline-problems-errors-only-with-flymake-1-4 ()
+  "Flymake 1.4 from ELPA (what drgnx installs) hands its end-of-line text function the end-of-line overlay, its
+problems' overlays on it: the errors' words show and a line with only a warning shows nothing."
+  (require 'flymake)
+  (drgnx-face-test--with
+    (setopt drgnx-face-inline-problems 'short)
+    (with-temp-buffer
+      (insert "one\ntwo\n")
+      (let* ((src (lambda (beg end type text)
+                    (let ((o (make-overlay beg end)))
+                      (overlay-put o 'flymake-diagnostic (flymake-make-diagnostic (current-buffer) beg end type text))
+                      o)))
+             (eol (lambda (srcs) (let ((o (make-overlay 4 5))) (overlay-put o 'flymake-eol-source-overlays srcs) o)))
+             ;; 1.4's own shape: (EOL-OV &optional STYLE), the text of the overlay's problems
+             (summary (lambda (eol-ov &optional _style)
+                        (mapconcat (lambda (o) (flymake-diagnostic-text (overlay-get o 'flymake-diagnostic)))
+                                   (overlay-get eol-ov 'flymake-eol-source-overlays) " ")))
+             (warning (funcall src 1 4 :warning "w-one"))
+             (error (funcall src 5 8 :error "e-two"))
+             (both (funcall eol (list warning error))))
+        (let ((text (drgnx-face--eol-errors-only summary both)))
+          (should (string-search "e-two" text))
+          (should-not (string-search "w-one" text)))
+        (should (equal (list warning error) (overlay-get both 'flymake-eol-source-overlays))) ; given back
+        (should-not (drgnx-face--eol-errors-only summary (funcall eol (list warning))))))))
+
 (ert-deftest drgnx-face/line-spacing-follows-the-setting ()
   (let ((line-spacing nil))
     (drgnx-face-test--with
