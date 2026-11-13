@@ -120,7 +120,15 @@ pub async fn run(args: ServeArgs) -> Exit {
     // held until the run returns: dropped then, before `main` shuts the runtime down (`stall::Watchdog`)
     let _watchdog = stall.map(crate::stall::start);
     let lock_path = paths::lock_path(&socket);
-    let lock = match lock::acquire(&lock_path, &lock::System) {
+    // a hub a restart re-executed waits up to a second for the lock its predecessor's exec let go of
+    let tries = if std::env::var_os(lock::RESTARTED).is_some() {
+        20
+    } else {
+        0
+    };
+    let lock = match lock::acquire_retrying(&lock_path, &lock::System, tries, || {
+        std::thread::sleep(Duration::from_millis(50));
+    }) {
         Ok(l) => l,
         Err(LockError::LispHub { pid }) => {
             tracing::error!(pid, "{}", lock::LISP_HUB_SERVES);

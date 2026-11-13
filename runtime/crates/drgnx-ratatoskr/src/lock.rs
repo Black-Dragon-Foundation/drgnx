@@ -66,6 +66,9 @@ impl Procs for System {
     }
 }
 
+/// Set (to `1`) by a hub that re-executes itself for a restart, so the new image retries the lock it finds held.
+pub const RESTARTED: &str = "RATATOSKR_RESTARTED";
+
 /// What to do with a Lisp hub's lock directory.
 #[derive(Debug, PartialEq, Eq)]
 pub enum LispLock {
@@ -83,6 +86,27 @@ pub fn judge_lisp_lock(pid: Option<u32>, age: Duration, procs: &impl Procs) -> L
         // between the Lisp hub's mkdir and its pid write
         None if age < LISP_LOCK_GRACE => LispLock::Respect,
         None => LispLock::TakeOver,
+    }
+}
+
+/// [`acquire`], trying again up to TRIES times (calling PAUSE before each) while another process holds the lock: a hub
+/// started by a restart (`RATATOSKR_RESTARTED`) waits for the lock its predecessor let go of with its exec.  Any other
+/// answer comes at once.
+pub fn acquire_retrying(
+    path: &Path,
+    procs: &impl Procs,
+    tries: u32,
+    mut pause: impl FnMut(),
+) -> Result<Lock, LockError> {
+    let mut left = tries;
+    loop {
+        match acquire(path, procs) {
+            Err(LockError::Held) if left > 0 => {
+                left -= 1;
+                pause();
+            }
+            other => return other,
+        }
     }
 }
 
@@ -555,6 +579,35 @@ mod tests {
             holder(&root.path().join("gone/hub-x.sock.lock"), &Fake(vec![])).unwrap(),
             Holder::Nobody
         );
+    }
+
+    /// A hub started by a restart waits a little for the lock its predecessor's exec released: the predecessor's
+    /// descriptor goes with the exec, an instant after which an `ensure` could take the lock first.
+    #[test]
+    fn a_restarted_hub_retries_a_held_lock_and_an_ordinary_start_does_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hub-r.sock.lock");
+        let mut held = Some(acquire(&path, &Fake(vec![])).unwrap());
+        // no retries: held at once
+        assert!(matches!(
+            acquire_retrying(&path, &Fake(vec![]), 0, || panic!("no retry asked")),
+            Err(LockError::Held)
+        ));
+        // retries: the holder lets go during the first pause (its exec), and the second try holds the lock
+        let mut pauses = 0;
+        let got = acquire_retrying(&path, &Fake(vec![]), 5, || {
+            pauses += 1;
+            held.take();
+        });
+        assert!(got.is_ok(), "the second try holds the lock");
+        assert_eq!(pauses, 1);
+        drop(got);
+        // a lock that stays held: the tries run out, and the error is the same
+        let _again = acquire(&path, &Fake(vec![])).unwrap();
+        let mut pauses = 0;
+        let got = acquire_retrying(&path, &Fake(vec![]), 3, || pauses += 1);
+        assert!(matches!(got, Err(LockError::Held)));
+        assert_eq!(pauses, 3);
     }
 
     #[test]

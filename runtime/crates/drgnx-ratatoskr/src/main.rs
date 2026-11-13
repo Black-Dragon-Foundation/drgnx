@@ -139,6 +139,7 @@ fn reexec() -> ExitCode {
     };
     let err = std::process::Command::new(exe)
         .args(std::env::args_os().skip(1))
+        .env(drgnx_ratatoskr::lock::RESTARTED, "1")
         .exec();
     eprintln!("ratatoskr: cannot execute {} again: {err}", exe.display());
     ExitCode::from(Exit::CannotStart as u8)

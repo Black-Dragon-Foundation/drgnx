@@ -114,6 +114,11 @@ log when the wait timed out, and the log's directory); **3** when a Lisp hub fro
 | macOS with a `gui/UID` domain | `<state>/hub/launchd.plist` (0600; label `org.blackdragonfoundation.ratatoskr.HASH`; `KeepAlive {SuccessfulExit: false}`, `ProcessType Background`; `serve --supervisor launchd`), then `launchctl bootstrap gui/UID <plist>`, or `kickstart` when `launchctl print gui/UID/LABEL` finds it loaded (a second `bootstrap` fails); a loaded label whose plist text changed (a new `DRGNX_EMACS`, a new `SSH_AUTH_SOCK`) gets `bootout`, then `bootstrap`, since `kickstart` would keep the old arguments and environment until logout. No domain (an SSH session): the self-detach row, with a line on stderr saying why | on a crash and on 75; `serve --supervisor launchd` maps exits 1, 2 and 3 to 0 after logging the real code, because launchd restarts on every non-zero exit |
 | none (`RATATOSKR_SUPERVISOR=none`, containers, no user manager) | the binary starts itself: `serve --supervisor self` in a session of its own (`setsid`), stdio on `/dev/null`; every descriptor is close-on-exec | no: a `restart` re-executes the binary instead |
 
+A hub that re-executes itself for a restart sets `RATATOSKR_RESTARTED=1` for the new image, which then tries the lock
+again for up to a second (20 × 50 ms) if it finds it held: the exec lets go of the predecessor's descriptor an instant
+before the image takes it, and an `ensure` landing in that instant could take it first (the loser exits 3, one hub
+serves). A start without it never waits.
+
 Only variable *names* go to a supervisor (`--setenv=NAME`, the plist's environment from the same names), each only
 when set: `DRGNX_DATA_DIR DRGNX_CONFIG_DIR XDG_RUNTIME_DIR XDG_STATE_HOME XDG_DATA_HOME XDG_CONFIG_HOME XDG_CACHE_HOME
 HOME TMPDIR TMP TEMP DRGNX_DIR DRGNX_RATATOSKR_LOG` (`DRGNX_DIR`, the checkout, is a path the sandbox closes to agents)
