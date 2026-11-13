@@ -74,6 +74,26 @@ pub struct Hidden {
 pub struct HostLayout {
     pub usr_links: Vec<&'static str>,
     pub resolver: Option<PathBuf>,
+    /// The system roots built as private tmpfs (empty for every spec whose binds all land on existing paths).
+    pub private_roots: Vec<PrivateRoot>,
+}
+
+/// One top-level entry of a system root that is rebuilt as a private tmpfs (see [`PrivateRoot`]): a link, recreated as
+/// the same link with the same target (never followed), or a file or directory bound read-only at its own path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RootEntry {
+    Link { name: OsString, target: PathBuf },
+    Bind { name: OsString },
+}
+
+/// A system root (`/etc`) that a bind lands under at a path the host does not have: bwrap cannot make the missing
+/// parents inside a read-only bind of the host's directory, so the session gets an empty tmpfs there with each
+/// top-level host entry put back (read-only binds and links), and the bind's parents are made on that tmpfs. Entries
+/// the host adds to the root after the launch are not in the session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrivateRoot {
+    pub root: PathBuf,
+    pub entries: Vec<RootEntry>,
 }
 
 /// The pinned sources of one spec, in argv order (home, reads, writes, run, binds), the hides, and the helper.
@@ -248,7 +268,28 @@ pub fn argv(
     // 2. The system's reads, by path: root-owned.
     push(&[&"--ro-bind", &"/usr", &"/usr"]);
     for d in SYSTEM_READS {
-        push(&[&"--ro-bind-try", d, d]);
+        match opened
+            .host
+            .private_roots
+            .iter()
+            .find(|p| p.root == Path::new(d))
+        {
+            Some(private) => {
+                push(&[&"--tmpfs", d]);
+                for e in &private.entries {
+                    match e {
+                        RootEntry::Link { name, target } => {
+                            push(&[&"--symlink", target, &private.root.join(name)]);
+                        }
+                        RootEntry::Bind { name } => {
+                            let at = private.root.join(name);
+                            push(&[&"--ro-bind", &at, &at]);
+                        }
+                    }
+                }
+            }
+            None => push(&[&"--ro-bind-try", d, d]),
+        }
     }
     for x in USR_MERGED {
         let top = format!("/{x}");
@@ -423,6 +464,7 @@ mod tests {
         HostLayout {
             usr_links: USR_MERGED.to_vec(),
             resolver: Some("/run/systemd/resolve/stub-resolv.conf".into()),
+            ..HostLayout::default()
         }
     }
 
@@ -455,6 +497,42 @@ mod tests {
         }
         let fds: Vec<String> = fds.iter().map(|n| n.to_string()).collect();
         format!("{out}\n\nfds passed: {}\n", fds.join(" "))
+    }
+
+    /// A bind under `/etc` at a path the host lacks: `/etc` is a tmpfs with the host's top-level entries put back, in
+    /// place of the read-only bind of the whole directory; every other system root is as it was.
+    #[test]
+    fn a_private_system_root_is_a_tmpfs_of_its_entries() {
+        let host = HostLayout {
+            private_roots: vec![PrivateRoot {
+                root: "/etc".into(),
+                entries: vec![
+                    RootEntry::Bind { name: "ssl".into() },
+                    RootEntry::Link {
+                        name: "resolv.conf".into(),
+                        target: "../run/systemd/resolve/stub-resolv.conf".into(),
+                    },
+                ],
+            }],
+            ..merged()
+        };
+        let (argv, _) = run(spec(Net::Shared), host, &["/bin/true"]);
+        let o = options(&argv).join(" ");
+        assert!(
+            o.contains(
+                "--tmpfs /etc --ro-bind /etc/ssl /etc/ssl \
+                 --symlink ../run/systemd/resolve/stub-resolv.conf /etc/resolv.conf --ro-bind-try /opt /opt"
+            ),
+            "{o}"
+        );
+        assert!(!o.contains("--ro-bind-try /etc /etc"), "{o}");
+        // and a spec without such a bind keeps the plain read-only bind, whatever else the host has
+        let (argv, _) = run(spec(Net::Shared), merged(), &["/bin/true"]);
+        let o = options(&argv).join(" ");
+        assert!(
+            o.contains("--ro-bind-try /etc /etc") && !o.contains("--tmpfs /etc"),
+            "{o}"
+        );
     }
 
     #[test]

@@ -615,6 +615,9 @@ and locks.
 The files a lock binds at a fixed path (Codex's `/etc/codex` pair, Kimi Code's `config.toml`) need the sandbox's
 full tier: on another, such a session is not started. The files drgnx writes for one session (Gemini's admin policy,
 DeepSeek's overlay) live in that session's own folder, which its agent reads and never writes.
+For Codex's `/etc/codex` pair the session sees the host's `/etc` as it was when the session started: the sandbox builds
+it from the host's top-level entries, so a file the host adds to `/etc` while the session runs is not visible in it, and
+the host's own `/etc/codex` (if there is one) is replaced by the lock's two files.
 
 **A hook never misses a step it subscribes to.** When a before-tool hook or rule subscribes to a kind, the lock makes
 the agent ask about it, or the agent's own hook calls drgnx (Codex's managed hook, which fails open on a timeout:

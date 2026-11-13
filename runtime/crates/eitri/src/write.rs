@@ -53,8 +53,27 @@ pub fn write_regular(
         .and_then(|()| renameat(parent, &tmp, parent, name).map_err(FsError::from));
     if done.is_err() {
         let _ = unlinkat(parent, &tmp, AtFlags::empty());
+        return done;
     }
-    done
+    sync_dir(parent)
+}
+
+/// `fsync` of the directory itself, so a crash cannot lose the rename (GL-T1-3). The held parent may be an `O_PATH`
+/// fd, which cannot `fsync`: the directory is opened again through it. A filesystem with no directory sync
+/// (`EINVAL`, `ENOTSUP`) is fine.
+fn sync_dir(parent: BorrowedFd<'_>) -> Result<(), FsError> {
+    #[cfg(test)]
+    tests::DIR_SYNCS.with(|c| c.set(c.get() + 1));
+    let dir = openat(
+        parent,
+        ".",
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?;
+    match fsync(&dir) {
+        Ok(()) | Err(Errno::INVAL | Errno::NOTSUP) => Ok(()),
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// The parent of `rel`, opened beneath `dir` with `open_beneath` (a link in it is refused), and `rel`'s last name.
@@ -189,10 +208,28 @@ mod tests {
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::{FileTypeExt, PermissionsExt, symlink};
 
+    thread_local! {
+        /// How many times this thread synced a directory after a rename.
+        pub(super) static DIR_SYNCS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+
     fn root() -> (tempfile::TempDir, OwnedFd) {
         let root = tempfile::tempdir().unwrap();
         let fd = fs::File::open(root.path()).unwrap().into();
         (root, fd)
+    }
+
+    #[test]
+    fn a_write_syncs_the_parent_directory() {
+        let (root, fd) = root();
+        fs::create_dir(root.path().join("d")).unwrap();
+        let before = DIR_SYNCS.with(std::cell::Cell::get);
+        write_regular(fd.as_fd(), Path::new("d/f"), b"one", 0o600).unwrap();
+        assert_eq!(DIR_SYNCS.with(std::cell::Cell::get), before + 1);
+        // a refused write syncs nothing
+        let r = write_regular(fd.as_fd(), Path::new("d"), b"x", 0o600);
+        assert!(matches!(r, Err(FsError::NotRegular)), "{r:?}");
+        assert_eq!(DIR_SYNCS.with(std::cell::Cell::get), before + 1);
     }
 
     /// The names in `dir` that look like eitri's temporary files.

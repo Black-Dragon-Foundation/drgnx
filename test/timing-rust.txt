@@ -37,3 +37,6 @@ verdandi timing undone_by_scan_cost_by_later_deletes
 vegvisir timing core_step_within_50_us release
 vegvisir timing layout_200_items_within_2_ms release
 drgnx-ratatoskr fleet_drills a_set_spreads_over_two_runners_within_its_bound fleet
+gleipnir lib an_idle_tunnel_is_ended_and_an_active_one_is_not
+drgnx-ratatoskr lib a_slow_check_is_a_failed_one_at_the_bound
+eitri lib a_refused_fifo_is_never_opened

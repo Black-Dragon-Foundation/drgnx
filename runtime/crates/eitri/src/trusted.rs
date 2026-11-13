@@ -38,7 +38,7 @@ const WHY_NO_CANDIDATE: &str = "no candidate given";
 pub fn trusted_program(candidates: &[&Path]) -> Result<TrustedProgram, FsError> {
     let mut last = (PathBuf::new(), WHY_NO_CANDIDATE);
     for path in candidates {
-        match check(path) {
+        match check(path, true) {
             Ok(t) => return Ok(t),
             Err(Why::Unsupported(w)) => return Err(FsError::Unsupported(w)),
             Err(Why::Untrusted(why)) => last = (path.to_path_buf(), why),
@@ -50,6 +50,20 @@ pub fn trusted_program(candidates: &[&Path]) -> Result<TrustedProgram, FsError> 
     })
 }
 
+/// A file only root can change, with no execute bit asked: the same checks as [`trusted_program`] (an absolute path
+/// with no link, a regular file owned by uid 0 and not group- or world-writable, root-owned directories up to `/`).
+/// For data bound into a sandbox by path, such as the resolver's file (GL-T7-4).
+pub fn root_only_file(path: &Path) -> Result<(), FsError> {
+    match check(path, false) {
+        Ok(_) => Ok(()),
+        Err(Why::Unsupported(w)) => Err(FsError::Unsupported(w)),
+        Err(Why::Untrusted(why)) => Err(FsError::Untrusted {
+            path: path.to_path_buf(),
+            why,
+        }),
+    }
+}
+
 /// Why one candidate failed: a refusal, or `Unsupported`, which ends the search (no candidate can pass).
 #[derive(Debug, PartialEq, Eq)]
 enum Why {
@@ -57,7 +71,7 @@ enum Why {
     Unsupported(&'static str),
 }
 
-fn check(path: &Path) -> Result<TrustedProgram, Why> {
+fn check(path: &Path, need_exec: bool) -> Result<TrustedProgram, Why> {
     // Compared as bytes: `Path`'s own equality ignores `.` components, repeated and trailing slashes.
     let plain = path.components().collect::<PathBuf>();
     if !path.is_absolute()
@@ -75,7 +89,7 @@ fn check(path: &Path) -> Result<TrustedProgram, Why> {
     })?;
     let st = fstat(&pinned.fd).map_err(|_| Why::Untrusted(WHY_CANNOT_OPEN))?;
     let mode = Mode::from_raw_mode(st.st_mode);
-    if !mode.intersects(Mode::XUSR | Mode::XGRP | Mode::XOTH) {
+    if need_exec && !mode.intersects(Mode::XUSR | Mode::XGRP | Mode::XOTH) {
         return Err(Why::Untrusted(WHY_NOT_EXECUTABLE));
     }
     if st.st_uid != 0 {
@@ -275,6 +289,76 @@ mod tests {
         assert_eq!(why(trusted_program(&[&prog])), WHY_WRITABLE);
         chmod(&prog, 0o757);
         assert_eq!(why(trusted_program(&[&prog])), WHY_WRITABLE);
+    }
+
+    /// Sets `system.posix_acl_access` to: owner rwx, user `uid` rwx, group r-x, mask `mask`, other r-x. False when the
+    /// filesystem takes no ACLs (the test is skipped, never passed).
+    fn set_acl(p: &Path, uid: u32, mask: u16) -> bool {
+        use std::os::unix::ffi::OsStrExt;
+        let mut v = 2u32.to_le_bytes().to_vec(); // POSIX_ACL_XATTR_VERSION
+        for (tag, perm, id) in [
+            (0x01u16, 7u16, u32::MAX), // USER_OBJ
+            (0x02, 7, uid),            // USER
+            (0x04, 5, u32::MAX),       // GROUP_OBJ
+            (0x10, mask, u32::MAX),    // MASK
+            (0x20, 5, u32::MAX),       // OTHER
+        ] {
+            v.extend_from_slice(&tag.to_le_bytes());
+            v.extend_from_slice(&perm.to_le_bytes());
+            v.extend_from_slice(&id.to_le_bytes());
+        }
+        let c = std::ffi::CString::new(p.as_os_str().as_bytes()).unwrap();
+        let name = c"system.posix_acl_access";
+        // SAFETY: valid NUL-terminated strings and a buffer of the stated length.
+        unsafe { libc::setxattr(c.as_ptr(), name.as_ptr(), v.as_ptr().cast(), v.len(), 0) == 0 }
+    }
+
+    #[test]
+    fn a_file_or_parent_whose_acl_grants_write_is_refused() {
+        if !uid0("a_file_or_parent_whose_acl_grants_write_is_refused") {
+            return;
+        }
+        let (_top, prog) = root_owned_fixture();
+        assert_eq!(trusted_program(&[&prog]).unwrap().path, prog);
+        // GL-T1-4: a named-user ACL entry with write raises the mask, and the mask is the file's group bits, so the
+        // mode check sees it. An ACL that only reads or executes (mask r-x) stays trusted.
+        if !set_acl(&prog, 65534, 0o7) {
+            eprintln!("a_file_or_parent_whose_acl_grants_write_is_refused: no ACLs here; skipped");
+            return;
+        }
+        assert_eq!(why(trusted_program(&[&prog])), WHY_WRITABLE);
+        assert!(set_acl(&prog, 65534, 0o5));
+        assert_eq!(trusted_program(&[&prog]).unwrap().path, prog);
+        let sub = prog.parent().unwrap();
+        assert!(set_acl(sub, 65534, 0o7));
+        assert_eq!(why(trusted_program(&[&prog])), WHY_PARENT_WRITABLE);
+    }
+
+    #[test]
+    fn root_only_file_needs_no_execute_bit_but_the_same_ownership() {
+        if !uid0("root_only_file_needs_no_execute_bit_but_the_same_ownership") {
+            return;
+        }
+        let (_top, prog) = root_owned_fixture();
+        chmod(&prog, 0o644);
+        root_only_file(&prog).unwrap();
+        chmod(&prog, 0o664);
+        assert!(matches!(
+            root_only_file(&prog),
+            Err(FsError::Untrusted {
+                why: WHY_WRITABLE,
+                ..
+            })
+        ));
+        chmod(&prog, 0o644);
+        chown(prog.parent().unwrap(), Some(65534), None).unwrap();
+        assert!(matches!(
+            root_only_file(&prog),
+            Err(FsError::Untrusted {
+                why: WHY_PARENT_NOT_ROOT,
+                ..
+            })
+        ));
     }
 
     #[test]
