@@ -1205,7 +1205,7 @@ in_use}`. `in_use` is true: every session starts in the sandbox (`agents/launch.
 **The probe is the real invocation.** `check(helper, tier, bwrap_override, timeout, run)` detects the backend, makes a
 temp dir, and builds a spec as hard as a job's: the isolated network with one relay port to a real Unix socket in a
 session dir (Linux), the tier's Landlock floor, seccomp. It validates the spec, prepares it, and `run` (Ratatoskr:
-`sandbox::run_probe`, through `draugr::spawn_pinned`, the way jobs start) spawns it within 5 s (1.4 s in the doctor).
+`sandbox::run_probe`, through `draugr::spawn_pinned`, the way jobs start) spawns it within 5 s (1.4 s in the doctor, and that bound covers the host facts it gathers first, `bwrap --version` included: a check that has not answered by then is a failed one, "did not answer within 1400 ms").
 The command is `/bin/sh -c 'cat "$1" >/dev/null 2>&1 && exit 9; exit 0' sh CANARY`, where CANARY is a file the spec
 does not grant. Exit 0 means the read was blocked. Exit 9 means "the sandbox ran but did not block a read", which
 fails the check; this is what makes it prove the sandbox, and on macOS that the profile enforces something. A relay
@@ -1219,7 +1219,7 @@ namespace switches under `/proc/sys`, a root-owned bwrap and its version, the La
 
 | When | Reason | Fix |
 |---|---|---|
-| a container | inside a container: bubblewrap needs user namespaces the container does not give | none |
+| a container | inside a container: bubblewrap needs user namespaces the container does not give, then ` (it said: FIRST LINE)` of what the start printed, when it printed any | none |
 | macOS, no trusted `sandbox-exec` | sandbox-exec was not found where only root can change it | it ships with macOS at `/usr/bin/sandbox-exec` |
 | full tier, no trusted bwrap | bubblewrap (bwrap) is not installed where only root can change it | the distribution's install command (`dnf`, `apt`, `pacman`, `zypper`; else "install bubblewrap 0.12.0 or newer with your package manager") |
 | full tier, bwrap below 0.12.0 | bubblewrap X is older than 0.12.0, which fixes a sandbox escape (CVE-2026-87766) | install 0.12.0 or newer; no older version is accepted, even with a distribution's backport. On Ubuntu 26.04 it adds that the update removed the fix again (0.11.1-1ubuntu0.3) and 26.10 ships 0.12.0 |

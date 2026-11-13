@@ -126,6 +126,10 @@ struct Job {
 
 static SPAWNER: Mutex<Option<mpsc::Sender<Job>>> = Mutex::new(None);
 
+/// Held by a test to stall the spawner thread before it starts the next job.
+#[cfg(test)]
+static SPAWNER_STALL: Mutex<()> = Mutex::new(());
+
 /// The `draugr-spawner` thread's queue, starting the thread on first use. The thread never exits.
 fn spawner() -> io::Result<mpsc::Sender<Job>> {
     let mut slot = SPAWNER.lock().unwrap_or_else(|e| e.into_inner());
@@ -137,17 +141,35 @@ fn spawner() -> io::Result<mpsc::Sender<Job>> {
         .name("draugr-spawner".into())
         .spawn(move || {
             for job in rx {
+                // a test holds this to keep the spawner from starting a job it has queued
+                #[cfg(test)]
+                drop(SPAWNER_STALL.lock().unwrap_or_else(|e| e.into_inner()));
                 let _rt = job.runtime.enter();
                 if let Err(Ok(child)) = job.reply.send(start(job.spec)) {
                     // The caller stopped waiting: nobody owns this child, so its group ends now.
-                    // SAFETY: kill(2) on the child's own process group (its pid; `start` made it a leader).
-                    unsafe { libc::kill(-child.pid, libc::SIGKILL) };
+                    kill_cancelled(-child.pid);
                 }
             }
         })?;
     *slot = Some(tx.clone());
     Ok(tx)
 }
+
+/// SIGKILL to `target`, the process group of a child whose caller stopped waiting (`start` made the child a group
+/// leader, so its pid names the group: a negative `target`).
+fn kill_cancelled(target: i32) {
+    #[cfg(test)]
+    CANCELLED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(target);
+    // SAFETY: kill(2) has no memory effects; `target` is a child this thread just started.
+    unsafe { libc::kill(target, libc::SIGKILL) };
+}
+
+/// The targets `kill_cancelled` was given, for the test.
+#[cfg(test)]
+static CANCELLED: Mutex<Vec<i32>> = Mutex::new(Vec::new());
 
 fn start(spec: Spec) -> io::Result<Child> {
     start_with(spec, |_| {})
@@ -717,6 +739,39 @@ mod tests {
             );
             assert!(child.wait().await.unwrap().unwrap().success());
         });
+    }
+
+    /// GL-T6-3: a caller that stopped waiting leaves a child nobody owns; the spawner kills its whole group (a
+    /// negative target), not only its leader.
+    #[tokio::test]
+    async fn a_cancelled_pinned_spawn_kills_the_group() {
+        use std::future::Future;
+        let stall = SPAWNER_STALL.lock().unwrap();
+        let before = CANCELLED.lock().unwrap().len();
+        // queue the job, then drop the caller before the spawner may start it
+        let mut fut = Box::pin(spawn_pinned(sh("sleep 30", true)));
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(
+            fut.as_mut().poll(&mut cx).is_pending(),
+            "the spawner was stalled"
+        );
+        drop(fut);
+        drop(stall);
+        let sent = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let fresh: Vec<i32> = CANCELLED.lock().unwrap()[before..].to_vec();
+                if !fresh.is_empty() {
+                    break fresh;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("the spawner killed the cancelled child");
+        assert!(
+            sent.iter().all(|&t| t < -1),
+            "the group is killed (a negative pid), not the leader alone: {sent:?}"
+        );
     }
 
     #[tokio::test]

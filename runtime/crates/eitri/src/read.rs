@@ -156,7 +156,12 @@ mod tests {
             "the refusal opened the FIFO and released its writer"
         );
         // let the writer go
-        drop(fs::OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open(&fifo));
+        drop(
+            fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&fifo),
+        );
         writer.join().unwrap();
     }
 

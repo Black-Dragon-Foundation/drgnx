@@ -216,6 +216,37 @@ mod tests {
         rustix::process::geteuid().is_root()
     }
 
+    /// An executable shell script `body` in a fresh dir (kept alive by the returned guard).
+    fn script(body: &str) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::Builder::new().prefix("glp-").tempdir().unwrap();
+        let p = dir.path().join("prog");
+        fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+        (dir, p)
+    }
+
+    /// GL-T7-3: a program that exits while a child of its own still holds its stdout open reads as empty output (the
+    /// pipe is read without blocking), never as a hang or a read error; ordinary output and a hang are as before.
+    #[test]
+    fn version_output_never_blocks_on_a_pipe_a_child_holds() {
+        let (_d, p) = script("sleep 5 &\nexit 0");
+        let began = Instant::now();
+        let out =
+            version_output(&p, Duration::from_secs(10)).expect("an empty answer, not an error");
+        assert_eq!(out, "");
+        assert!(
+            began.elapsed() < Duration::from_secs(4),
+            "it waited for the child"
+        );
+        let (_d, p) = script("echo bubblewrap 0.12.0");
+        assert_eq!(
+            version_output(&p, Duration::from_secs(10)).unwrap(),
+            "bubblewrap 0.12.0\n"
+        );
+        let (_d, p) = script("exec sleep 5");
+        assert!(version_output(&p, Duration::from_millis(200)).is_err());
+    }
+
     /// A tree under /tmp/glp-XXXXXX: `home/u` (the user's home) with `proj` (the task folder: `.env`, `cache/`) and
     /// `tools`; `state` (closed) with `J1` (this job's, open) holding `home-1` and `out`; `rt/s/S1` (the session
     /// dir); `bin/ratatoskr` (the helper).
