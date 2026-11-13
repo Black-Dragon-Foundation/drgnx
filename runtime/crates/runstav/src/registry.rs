@@ -369,7 +369,7 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 299, "{names:?}");
+        assert_eq!(names.len(), 301, "{names:?}");
         assert!(find("job/start-task").is_some_and(|m| m.writes));
         assert!(find("job/status").is_some_and(|m| !m.writes));
         assert!(find("sandbox/global").is_none());
@@ -660,6 +660,7 @@ mod tests {
             if [
                 "agents/presence/subscribe",
                 "coord/agent",
+                "debug/heap",
                 "graph/revert",
                 "graph/grants",
                 "graph/proposed",
@@ -688,7 +689,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(with, 249);
+        assert_eq!(with, 250);
     }
 
     #[test]

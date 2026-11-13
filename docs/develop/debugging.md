@@ -185,7 +185,8 @@ js-debug, delve, lldb-dap), how to find it and how to start it:
   TCP adapter gets a free port on 127.0.0.1 picked by the hub (`adapters::free_port`). The hub frees it for the adapter
   to bind, so another local process could take it first, and DAP has no authentication (spec §9.5): the hub connects
   only once the port's listener is in the adapter's process group (`blocked::wait_owned`, `ports::owned`: /proc on
-  Linux, lsof on macOS), and a stranger's listener ends the start at once, never connected to.
+  Linux, lsof on macOS, run with `-b -w` and killed past `ports::LSOF_WITHIN`, 5 s, so a blocked lsof cannot hold the
+  start past its own deadline), and a stranger's listener ends the start at once, never connected to.
 
 - `:install` (Debug: Install Adapter, `debug/install`, `debug/install.rs`): `(:url U :sha256 H :into DIR [:root R])`
   or `(:into DIR :platforms ((:platform "linux-x64" :url U :sha256 H) …))` (the platform keys are `linux-x64`,
@@ -1108,3 +1109,56 @@ past stop's buffer) asks for the name at point, the card inserts the hub's rows,
 `a_js_trail_is_traced_by_logpoints_in_sealed_replays` (live: js-debug, `tests/fixtures/origin/stock.js`), the
 stores' unit tests (JavaScript, Go),
 `test/unit/debug-origin-test.el`.
+
+## The heap graph (spec §19.7 D7)
+
+The design is `docs/specs/drgnx/2026-11-13-heap-graph-design.md` in the org folder. The hub half:
+
+- **The walk** (`heap::walk`) goes breadth first from the roots. It expands each object once through the session's
+  `variables` (`heap::SessionProbe`), and a reference to an object already seen is an edge to it. It stops at
+  `Limits::nodes` objects, at `Limits::depth` levels or at `Limits::within`, and counts the references left in `cut`.
+  Skipped as fields: debugpy's groups (`special variables` …) and js-debug's internals (`[[Prototype]]` …). A delve
+  pointer's one dereferenced child (evaluateName `(*E)`, name empty) is the object itself.
+- **Identity** (`heap::Ident`, by the adapter type) comes from an expression evaluated in the stopped frame,
+  `context: watch`:
+  - debugpy: `id(E)`;
+  - delve: `uintptr(E)` of a pointer, which needs no `unsafe` import in the program;
+  - lldb-dap and CodeLLDB: `(void *)(E)` of a pointer;
+  - js-debug: `heap::JS_TAG`, a tag from a hidden `WeakMap` under `Symbol.for('drgnx.ids')`. It is created on first
+    use. The session's stop sequence evaluates `heap::JS_FORGET` before a disconnect that leaves the program running.
+  Anything else is named by its path, so the graph is a tree. DAP's `memoryReference` doesn't serve here: the hub
+  sends `supportsMemoryReferences: false`, and delve has none.
+- **The layout** (`heap_layout::layout`) is in cells:
+  - a card is a type row, then up to `FIELDS_SHOWN` field rows and a "+N more" row;
+  - the layers go left to right by distance from the roots, each ordered by its sources (barycentre, two sweeps);
+  - an edge is straight runs from its field's row into the target card's top row. An edge back, or within a layer,
+    climbs into its own lane above the cards;
+  - given the last read's layout, the cards still there keep their cells.
+  The editor turns cells into buffer positions plus pixel offsets for Glitnir's edge primitive
+  (`docs/specs/nidhogg/2026-11-13-glitnir-edges-case.md` in the org folder).
+- **Open graphs** (`heap_wire::Heaps`, on `Debug`) are kept by id with the editor connection that opened them and
+  the stop they were read at. A graph read again (`debug/heap {graph}`) keeps its cells and returns `heap::diff`: the
+  objects added, changed and gone. At each new stop of its session (`Update::Stopped`), an open graph not yet read
+  at that epoch is read again in the selected frame and sent to that editor as `debug-heap`: the same shape as the
+  answer, or `{graph, session, error}`. The graphs of an ended session go at the next read.
+- **Recorded runs** keep every graph read at a stop: `Records::heap` appends a `Frame::Heap {seq, stop, graph}` to
+  the run file once the session's last stop matches the read's epoch. The block's index lists the frame
+  (`BlockMeta::heaps`), and making room drops hits but keeps it. `debug/run/stop` returns the graphs as `heaps`, the
+  last read of each graph id, so a replay or a sent run shows them with no live program.
+
+Methods (runstav `methods::debug_heap`, the user class):
+- `debug/heap {session?, frame?, expr?, graph?, limit?, depth?}` returns `{graph, session, expr, node?, nodes, cut,
+  cards, edges, width, height, added, changed, gone}`. It takes either SESSION and EXPR (a variable's `evaluateName`)
+  or GRAPH. LIMIT is 1–200 (default 50), DEPTH 1–32 (default 8).
+- `debug/heap/close {graph}` returns `{closed}`.
+- Event `debug-heap`: an open graph read again at a new stop, sent to the editor that opened it.
+
+Tests:
+- `debug::tests_heap`: fakes shaped like each adapter as measured, plus the time limit and the diff;
+- `debug::tests_heap_layout`;
+- `debug::tests_live_adapters`'s `heap_graph_*`: a ring and a shared reference on all five adapters, through the walk
+  and through `heap::read`;
+- `an_open_heap_graph_follows_the_stops` (debugpy): `debug-heap` at the next stops, with a changed value, then a
+  new object and a gone one, while a's card keeps its cell;
+- `js_debug_detach_leaves_no_hidden_map`: after a detach, the program's own `Object.getOwnPropertySymbols(globalThis)`
+  no longer has the map.

@@ -989,6 +989,12 @@ impl Front {
             p @ Params::DebugOrigin(_) => crate::debug::origin_wire::serve(self, &caller, p)
                 .await
                 .unwrap_or_else(|_| unserved(method)),
+            // the heap graph (`debug/heap`, `debug/heap/close`)
+            p @ (Params::DebugHeap(_) | Params::DebugHeapClose(_)) => {
+                crate::debug::heap_wire::serve(self, &caller, p)
+                    .await
+                    .unwrap_or_else(|_| unserved(method))
+            }
             // the Extensions view's catalog (`extensions/*`)
             p @ (Params::ExtensionsSearch(_)
             | Params::ExtensionsDetails(_)
