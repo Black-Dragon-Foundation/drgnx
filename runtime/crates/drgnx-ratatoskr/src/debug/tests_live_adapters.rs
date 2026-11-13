@@ -1619,3 +1619,93 @@ async fn js_debug_detach_leaves_no_hidden_map() {
         "the program still sees the map: {after:?}"
     );
 }
+
+/// An open heap graph is read again at each new stop and sent as `debug-heap` to the editor that opened it: a's value
+/// changes at the second stop, its `next` is a new object at the third; a's card stays where it was.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "live: debugpy in the adapter image"]
+async fn an_open_heap_graph_follows_the_stops() {
+    let dir = live_dir("heap-py-stops");
+    let file = write(
+        &dir,
+        "steps.py",
+        "class Node:\n    def __init__(self, v):\n        self.v = v\n        self.next = None\n\n\ndef main():\n    a = Node(1)\n    a.next = Node(2)\n    for i in range(3):\n        a.v = i\n        if i == 1:\n            a.next = Node(9)\n\n\nmain()\n",
+    );
+    let ev = Arc::new(Events::default());
+    let d = Debug::new(ev.clone(), Arc::new(Procs::default()));
+    let root = dir.display().to_string();
+    add(&d, &root, &file, 11, None, None, None).await;
+    let config = json!({"type": "debugpy", "request": "launch", "name": "hs", "program": file, "cwd": dir,
+                        "justMyCode": true});
+    let start = Start {
+        name: "debugpy".into(),
+        adapter_id: "debugpy".into(),
+        request: Request::Launch,
+        arguments: super::launch::adapter_arguments(&config),
+        breakpoints: vec![],
+        functions: vec![],
+        exception_filters: None,
+    };
+    d.start(1, &root, start, launcher("debugpy", &python(), &dir, &[]))
+        .await
+        .unwrap();
+    let (c, f) = ev.stop(0).await;
+    let sid = f["session"].as_str().unwrap().to_owned();
+    let first = d
+        .heaps()
+        .read(
+            &d,
+            7,
+            runstav::methods::debug_heap::DebugHeap {
+                session: Some(sid.clone()),
+                frame: None,
+                expr: Some("a".into()),
+                graph: None,
+                limit: None,
+                depth: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.nodes.len(), 2, "{first:#?}");
+    let a = first.node.clone().unwrap();
+    let cell = |g: &Value| {
+        g["cards"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == json!(a))
+            .map(|c| (c["col"].clone(), c["row"].clone()))
+    };
+    let first_cell = cell(&json!(first));
+    let mine = |v: &Value| v["graph"] == json!(first.graph);
+    d.control(&sid, Op::Continue { thread: None })
+        .await
+        .unwrap();
+    let (c, _) = ev.stop(c).await;
+    let (_, second) = ev
+        .next(0, "debug-heap", |v| mine(v) && v["changed"] != json!([]))
+        .await;
+    assert_eq!(second["changed"], json!([a]), "a.v changed: {second}");
+    assert_eq!(cell(&second), first_cell, "a's card stays");
+    d.control(&sid, Op::Continue { thread: None })
+        .await
+        .unwrap();
+    ev.stop(c).await;
+    let (_, third) = ev
+        .next(0, "debug-heap", |v| mine(v) && v["added"] != json!([]))
+        .await;
+    assert_eq!(
+        third["added"].as_array().unwrap().len(),
+        1,
+        "the new next: {third}"
+    );
+    assert_eq!(
+        third["gone"].as_array().unwrap().len(),
+        1,
+        "the old next: {third}"
+    );
+    assert_eq!(cell(&third), first_cell, "a's card stays");
+    assert!(d.heaps().close(&first.graph));
+    d.shutdown().await;
+}

@@ -286,6 +286,8 @@ struct Inner {
     on_state: OnceLock<StateHook>,
     /// The inline values' parse cache and each session's last values.
     inline: inline::Inline,
+    /// The open heap graphs (`debug/heap`), read again at each new stop of their session.
+    heaps: heap_wire::Heaps,
     /// Told of every change of a session's state or stop, or of breakpoints (the Run and Debug views).
     listeners: Mutex<Vec<Listener>>,
     /// Each session's console output waiting to be sent (`debug-output`), and the sessions whose batch is due.
@@ -341,6 +343,7 @@ impl Debug {
                 rec: OnceLock::new(),
                 on_state: OnceLock::new(),
                 inline: inline::Inline::new(),
+                heaps: heap_wire::Heaps::default(),
                 listeners: Mutex::new(Vec::new()),
                 consoles: Mutex::new(HashMap::new()),
                 armed: Mutex::new(HashSet::new()),
@@ -374,6 +377,16 @@ impl Debug {
             .rec
             .get_or_init(|| record::Records::new(opts, self.inner.sink.clone()))
             .clone()
+    }
+
+    /// The open heap graphs.
+    pub fn heaps(&self) -> &heap_wire::Heaps {
+        &self.inner.heaps
+    }
+
+    /// EVENT with DATA to the editor on connection CONN.
+    pub fn send_to(&self, conn: u64, event: &str, data: Value) {
+        self.inner.sink.send(conn, event, data);
     }
 
     /// The recorded runs, when sessions are recorded.
@@ -1403,6 +1416,13 @@ impl Debug {
                         self.publish_frame(&id, conn, &stop);
                         let values = self.inner.inline.at_stop(&id, &stop);
                         self.inner.sink.broadcast("debug-inline", values, None);
+                    }
+                    // the open heap graphs of this session are read again at the new stop
+                    if self.inner.heaps.any_of(&id) {
+                        let (me, id, epoch) = (self.clone(), id.clone(), stop.epoch);
+                        crate::clock::spawn("debug:heap-at-stop", async move {
+                            me.inner.heaps.at_stop(&me, &id, epoch).await;
+                        });
                     }
                     // Run to Cursor's breakpoint goes at the next stop; the breakpoints the ones hit trigger are
                     // sent from now on

@@ -1136,20 +1136,25 @@ The design is `docs/specs/drgnx/2026-11-13-heap-graph-design.md` in the org fold
   - given the last read's layout, the cards still there keep their cells.
   The editor turns cells into buffer positions plus pixel offsets for Glitnir's edge primitive
   (`docs/specs/nidhogg/2026-11-13-glitnir-edges-case.md` in the org folder).
-- **Open graphs** (`heap_wire::Heaps`) are kept by id with their last read. A graph read again (`debug/heap {graph}`)
-  keeps its cells and returns `heap::diff`: the objects added, changed and gone. The graphs of an ended session go
-  at the next read.
+- **Open graphs** (`heap_wire::Heaps`, on `Debug`) are kept by id with the editor connection that opened them and
+  the stop they were read at. A graph read again (`debug/heap {graph}`) keeps its cells and returns `heap::diff`: the
+  objects added, changed and gone. At each new stop of its session (`Update::Stopped`), an open graph not yet read
+  at that epoch is read again in the selected frame and sent to that editor as `debug-heap`: the same shape as the
+  answer, or `{graph, session, error}`. The graphs of an ended session go at the next read.
 
 Methods (runstav `methods::debug_heap`, the user class):
 - `debug/heap {session?, frame?, expr?, graph?, limit?, depth?}` returns `{graph, session, expr, node?, nodes, cut,
   cards, edges, width, height, added, changed, gone}`. It takes either SESSION and EXPR (a variable's `evaluateName`)
   or GRAPH. LIMIT is 1–200 (default 50), DEPTH 1–32 (default 8).
 - `debug/heap/close {graph}` returns `{closed}`.
+- Event `debug-heap`: an open graph read again at a new stop, sent to the editor that opened it.
 
 Tests:
 - `debug::tests_heap`: fakes shaped like each adapter as measured, plus the time limit and the diff;
 - `debug::tests_heap_layout`;
 - `debug::tests_live_adapters`'s `heap_graph_*`: a ring and a shared reference on all five adapters, through the walk
   and through `heap::read`;
+- `an_open_heap_graph_follows_the_stops` (debugpy): `debug-heap` at the next stops, with a changed value, then a
+  new object and a gone one, while a's card keeps its cell;
 - `js_debug_detach_leaves_no_hidden_map`: after a detach, the program's own `Object.getOwnPropertySymbols(globalThis)`
   no longer has the map.

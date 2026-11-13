@@ -1,6 +1,7 @@
 //! The heap graph (docs/develop/debugging.md, spec §19.7 D7): `debug/heap` reads the objects reachable from an
 //! expression at the current stop as cards and edges laid out in cells, and reads an open graph again at a later stop
-//! with what changed; `debug/heap/close` forgets it.  The user's (the values are the program's).
+//! with what changed; `debug/heap/close` forgets it. Event `debug-heap`: an open graph read again at a new stop of
+//! its session (a `DebugHeapGraph`), sent to the editor that opened it.  The user's (the values are the program's).
 
 use super::{invalid, method};
 use crate::registry::Method;
