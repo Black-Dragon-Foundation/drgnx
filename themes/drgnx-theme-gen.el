@@ -227,6 +227,10 @@ above and below, the face's background between (Nidhogg's compositor).  Asked on
          (drgnx-agent-panel-perm-head :inherit (drgnx-ui-text drgnx-chip-attention) :weight bold
                                       :box (:line-width 1 :color ,(c 'attention)
                                                         ,@(and (featurep 'glitnir) '(:corner-radius 8))))
+         ;; work-space-dark.html `.lens .on': the lens shown is a raised pill in a 1 px ring in the strong border
+         (drgnx-work-lens-current :inherit (bold drgnx-pill-on)
+                                  :box (:line-width 1 :color ,(c 'border-strong)
+                                                    ,@(and (featurep 'glitnir) '(:corner-radius 6))))
          (highlight :background ,(c 'hover))
          (hl-line :background ,(c 'current-line) :extend t)
          (fringe :foreground ,(c 'subtle) :background ,(c 'editor))

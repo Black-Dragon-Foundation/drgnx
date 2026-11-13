@@ -432,3 +432,30 @@ asks the hub nothing and its keys say the same."
   (require 'drgnx-view-env)
   (should (eq (cdr (assq 'text drgnx-view-env-roles)) 'drgnx-ui-text))
   (should (eq (cdr (assq 'ui drgnx-view-env-roles)) 'default)))
+
+(defun drgnx-work-map-rows-test--echoes (s)
+  "The distinct `help-echo' texts in string S."
+  (let (acc)
+    (dotimes (i (length s)) (when-let* ((h (get-text-property i 'help-echo s))) (cl-pushnew h acc :test #'equal)))
+    (nreverse acc)))
+
+(ert-deftest drgnx-work-map-rows/the-lens-bar-ends-in-the-tiles-controls ()
+  ;; work-space-dark.html: the grip, the maximise and the ⋯ at the lens bar's right
+  (let ((echoes (drgnx-work-map-rows-test--echoes (drgnx-work-lens-string 'map "drgnx" drgnx-work-map--lens-keys))))
+    (should (member "Move this tile" echoes))
+    (should (member "Maximise or restore this tile" echoes))
+    (should (member "This view's keys" echoes))))
+
+(ert-deftest drgnx-work-map-rows/maximise-hides-the-islands-and-restore-shows-them ()
+  ;; the maximise control hides the Detail island and the trail under the map; asked again it shows them
+  (let (calls)
+    (cl-letf (((symbol-function 'drgnx-wb-area-hide) (lambda (area &rest _) (push (list 'hide area) calls)))
+              ((symbol-function 'drgnx-wb-area-show) (lambda (area tab &rest _) (push (list 'show area tab) calls)))
+              (drgnx-work-lens--maximized nil))
+      (drgnx-work-lens-maximize)
+      (should (member '(hide right) calls))
+      (should (member '(hide panel) calls))
+      (setq calls nil)
+      (drgnx-work-lens-maximize)
+      (should (member '(show right work-detail) calls))
+      (should (member '(show panel work-trail) calls)))))

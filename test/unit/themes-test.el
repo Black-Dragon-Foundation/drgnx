@@ -403,3 +403,12 @@ in every theme, on the same fill as the others."
       (let ((box (plist-get (drgnx-faces--clause-plist 'drgnx-agent-panel-perm-head 'gui) :box)))
         (should (equal (list (drgnx-look-token 'attention variant) 1)
                        (list (plist-get box :color) (plist-get box :line-width))))))))
+
+(ert-deftest drgnx-themes/the-lens-shown-has-a-ring ()
+  "work-space-dark.html `.lens .on': the lens shown is a raised pill with a 1 px ring in the strong border, in every theme."
+  (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
+    (drgnx-themes-test--with theme
+      (let* ((spec (drgnx-faces--clause-plist 'drgnx-work-lens-current 'gui)) (box (plist-get spec :box)))
+        (should (equal (list (drgnx-look-token 'border-strong variant) 1)
+                       (list (plist-get box :color) (plist-get box :line-width))))
+        (should (memq 'drgnx-pill-on (ensure-list (plist-get spec :inherit))))))))

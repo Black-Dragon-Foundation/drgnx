@@ -323,6 +323,41 @@ argument): without moving focus."
 
 ;;;; The lens: the tab line
 
+(defvar drgnx-work-lens--maximized nil
+  "Non-nil while the Work space's tile is maximised: the Detail island and the trail under the map are hidden.")
+
+(declare-function drgnx-wb-area-hide "drgnx-area")
+(declare-function drgnx-wb-area-show "drgnx-area")
+(declare-function drgnx-look-icon "drgnx-icons")
+(declare-function drgnx-work-keys-sheet "drgnx-work-trail")
+
+(defun drgnx-work-lens-maximize ()
+  "Maximise the Work tile: hide the Detail island and the trail under it; asked again, show them."
+  (interactive)
+  (if drgnx-work-lens--maximized
+      (progn (drgnx-wb-area-show 'right 'work-detail)
+             (drgnx-wb-area-show 'panel 'work-trail)
+             (setq drgnx-work-lens--maximized nil))
+    (drgnx-wb-area-hide 'right)
+    (drgnx-wb-area-hide 'panel)
+    (setq drgnx-work-lens--maximized t)))
+
+(defun drgnx-work-lens--control (icon fallback help &optional command)
+  "A control at the lens bar's right: ICON (its glyph FALLBACK where there is none), HELP on hover, a click runs COMMAND."
+  (let* ((s (drgnx-look-icon icon))
+         (s (if (string-empty-p s) fallback s)))
+    (apply #'propertize s 'help-echo help 'mouse-face 'highlight
+           (and command
+                (list 'keymap (let ((m (make-sparse-keymap))) (define-key m [tab-line mouse-1] command) m))))))
+
+(defun drgnx-work-lens--controls ()
+  "The tile's controls (work-space-dark.html): the grip (the tile layout's drag handle: not wired yet), maximise or
+restore, and the menu of keys."
+  (concat (propertize " " 'display '(space :align-to (- right 70)))
+          (drgnx-work-lens--control 'grip-vertical "⠿" "Move this tile") " "
+          (drgnx-work-lens--control 'maximize-2 "⛶" "Maximise or restore this tile" #'drgnx-work-lens-maximize) " "
+          (drgnx-work-lens--control 'ellipsis "⋯" "This view's keys" #'drgnx-work-keys-sheet)))
+
 (defun drgnx-work-lens-string (&optional current name keys)
   "The lens bar: the Work space's tab (Work · NAME, the workspace's name), then Map · Board · Timeline · Flow with
 CURRENT (`map', `board', `timeline' or `flow'; default `map') marked and the others in the label face (`m' `b' `t' `F'
@@ -338,7 +373,8 @@ switch), then KEYS, the lens's own keys ((LABEL . KEY) …), as chips with their
             (mapconcat (lambda (k)
                          (concat "  " (propertize (format " %s " (car k)) 'face 'drgnx-work-chip)
                                  (propertize (format " %s " (cdr k)) 'face 'drgnx-work-lens-key)))
-                       keys ""))))
+                       keys "")
+            (drgnx-work-lens--controls))))
 
 (defun drgnx-work-lens-name (&optional map)
   "The workspace's name on the lens bar: the folder name of MAP's (default: the current buffer's) first root."
