@@ -3,11 +3,14 @@
 # `Debug: Install Adapter` checks them: debugpy as a hash-pinned wheel in a venv, js-debug as the DAP release tarball with
 # its sha256 verified.  Prints the two variables the live tests read (`debug::tests_fork_live`, `tests_blocked_live`,
 # `tests_live_adapters`) as NAME=VALUE lines, for `>> "$GITHUB_ENV"`.
+# DRGNX_ADAPTER_PYTHON (default python3) makes the venv: the macOS row names /usr/bin/python3, because the Seatbelt
+# profile of a fork refuses to exec a python that lives in the runner's tool cache
+# ("sandbox-exec: execvp() of '.../tools/venv/bin/python3' failed: Operation not permitted").
 # Usage: debug-adapters.sh DIR
 set -euo pipefail
 dir=${1:?usage: debug-adapters.sh DIR}
 mkdir -p "$dir"
-python3 -m venv "$dir/venv"
+"${DRGNX_ADAPTER_PYTHON:-python3}" -m venv "$dir/venv"
 printf 'debugpy==1.8.22 --hash=sha256:a9e9d3550e15ca479c59333e90845029190531f0cacfedab3b815a57bd913947\n' > "$dir/req.txt"
 "$dir/venv/bin/pip" install --quiet --require-hashes -r "$dir/req.txt" >&2
 curl -sSfL -o "$dir/js.tgz" https://github.com/microsoft/vscode-js-debug/releases/download/v1.140.1/js-debug-dap-v1.140.1.tar.gz

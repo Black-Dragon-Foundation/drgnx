@@ -1230,7 +1230,8 @@ jobs:
         run: |
           set -euo pipefail
           set -a
-          eval "$(bash .github/ci/debug-adapters.sh "$RUNNER_TEMP/debug-adapters" | tee -a "$GITHUB_ENV")"
+          # the system python: a venv on the runner's tool-cache python is one the fork's Seatbelt profile cannot exec
+          eval "$(DRGNX_ADAPTER_PYTHON=/usr/bin/python3 bash .github/ci/debug-adapters.sh "$RUNNER_TEMP/debug-adapters" | tee -a "$GITHUB_ENV")"
           set +a
           bin=$(jq -r 'select(.profile.test == true and .target.name == "drgnx_ratatoskr" and (.target.kind | index("lib"))) | .executable' \
             "$RUNNER_TEMP/test-bins.json" | tail -n 1)
