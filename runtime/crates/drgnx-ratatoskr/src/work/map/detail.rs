@@ -179,10 +179,47 @@ pub(crate) fn lines(m: &Model, sel: Option<&ItemId>, now: u64) -> Vec<Line> {
     out
 }
 
+/// An agent's head (work-space-dark.html `.det .hd`): its badge (its initial and its number), its name and its state
+/// tab-separated, then its task, how long it has run and what it cost.
+fn agent_head(it: &Item) -> Vec<(&'static str, String)> {
+    let f = &it.fields;
+    let letter = f
+        .model
+        .as_deref()
+        .and_then(|m| m.chars().next())
+        .map_or('?', |c| c.to_ascii_uppercase());
+    let number = vegvisir::render::agent_number(it);
+    let chip = f
+        .activity
+        .clone()
+        .or_else(|| state_word(it))
+        .unwrap_or_default();
+    let mut sub: Vec<String> = f.task.clone().into_iter().collect();
+    let run = [state_word(it), f.minutes.map(|n| format!("{n} min"))]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if !run.is_empty() {
+        sub.push(run);
+    }
+    if let Some(spend) = &f.spend {
+        sub.push(format!("≈{} (API prices)", spend.trim_start_matches('≈')));
+    }
+    vec![
+        ("head", format!("{letter}{number}\t{}\t{chip}", it.label)),
+        ("head", sub.join(" · ")),
+    ]
+}
+
 /// The lines of IT every kind has: head, why, touches, conclusions, actions.
 fn text_lines(m: &Model, it: &Item) -> Vec<Line> {
     let f = &it.fields;
-    let mut out = vec![("head", format!("{} · {}", it.label, word(&it.kind)))];
+    let mut out = if word(&it.kind) == "agent" {
+        agent_head(it)
+    } else {
+        vec![("head", format!("{} · {}", it.label, word(&it.kind)))]
+    };
     let bits: Vec<String> = [
         state_word(it),
         f.minutes.map(|n| format!("{n} min")),
@@ -193,7 +230,7 @@ fn text_lines(m: &Model, it: &Item) -> Vec<Line> {
     .into_iter()
     .flatten()
     .collect();
-    if !bits.is_empty() {
+    if !bits.is_empty() && word(&it.kind) != "agent" {
         out.push(("head", bits.join(" · ")));
     }
     out.push(("why", "why ↑".into()));
@@ -257,7 +294,7 @@ const KEY_PX: f32 = 66.0;
 /// `KEY\tVALUE` line as a muted key and its value in a column (an agent's why-chain and a link in the accent, an
 /// overlap in the warning colour), an action as a button and its key. A job's line carries its id as
 /// `drgnx-work-job`.
-pub(crate) fn rows(lines: &[Line], scale: f32, _width_px: u32) -> Vec<Row> {
+pub(crate) fn rows(lines: &[Line], scale: f32, width_px: u32) -> Vec<Row> {
     let key_px = (KEY_PX * scale).round() as u32;
     lines
         .iter()
@@ -265,6 +302,30 @@ pub(crate) fn rows(lines: &[Line], scale: f32, _width_px: u32) -> Vec<Row> {
         .map(|(i, (section, text, job))| {
             let mut b = RowBuilder::new(format!("{section}/{i}"));
             match (*section, text.split_once('\t')) {
+                // an agent's head: its badge, its name and its state as a chip at the right edge
+                ("head", Some(_)) if i == 0 => {
+                    let parts: Vec<&str> = text.split('\t').collect();
+                    let badge = parts[0];
+                    let letter = badge.chars().next().unwrap_or('?');
+                    let number = badge.chars().last().unwrap_or('1');
+                    let from = b.pos();
+                    b.push(
+                        &format!(" {letter} "),
+                        Some(&format!("drgnx-work-agent-{number}")),
+                    );
+                    let to = b.pos();
+                    b.face(from, to, "drgnx-badge");
+                    b.push(" ", None)
+                        .push(parts.get(1).unwrap_or(&""), Some("drgnx-ui-heading"));
+                    if let Some(chip) = parts.get(2).filter(|c| !c.is_empty()) {
+                        let width = (chip.chars().count() as f32 * 7.0 + 28.0) * scale;
+                        b.stop(width_px.saturating_sub(width as u32));
+                        let from = b.pos();
+                        b.push(&format!(" {chip} "), None);
+                        let to = b.pos();
+                        b.face(from, to, "drgnx-chip");
+                    }
+                }
                 ("actions", Some(_)) => {
                     let parts: Vec<&str> = text.split('\t').collect();
                     for (n, pair) in parts.chunks(2).enumerate() {
