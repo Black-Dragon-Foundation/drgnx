@@ -94,6 +94,12 @@ still takes a lower priority archive's package when only it satisfies a requirem
                      :schema '(plist (:packages (list-of (pred drgnx-pkg--lock-entry-p
                                                                "(NAME :version :archive :kind :file :sha256 :size :requires :summary [:verified t] [:wanted user])"))
                                                 "What is installed: one entry per package" :required t)
+                                     (:packs (list-of (pred drgnx-pkg--lock-entry-p
+                                                            "(NAME :commit :tree-sha256 :source :wanted)"))
+                                             "Language packs installed: one entry per pack (drgnx packs sync)")
+                                     (:grammars (list-of (pred drgnx-pkg--lock-entry-p
+                                                               "(LANG :commit :tree-sha256 :lib-sha256 :owner)"))
+                                                "Tree-sitter grammars built for the packs: one entry per language")
                                      (:from-shipped boolean "Copied from the lock drgnx ships; the first sync completes it"))
                      :default '(:packages nil)
                      :on-mistake "drgnx sync stops until it is fixed; nothing is changed"
@@ -587,6 +593,9 @@ that are gone are deleted here).  Returns N."
           (delete-directory (drgnx-pkg--generation-dir (car g)) t))))
     n))
 
+(declare-function drgnx-packs-after-rollback "drgnx-packs" ())
+(declare-function drgnx-packs-cli "drgnx-packs" (args))
+
 (defun drgnx-pkg-rollback (&optional n)
   "Make generation N (default: the one before the current one) the packages directory again, with its
 lock.  Files come back at the same path, so their native code stays valid.  Returns N."
@@ -610,6 +619,7 @@ lock.  Files come back at the same path, so their native code stays valid.  Retu
             (when (file-exists-p (drgnx-pkg-lock-file)) (delete-file (drgnx-pkg-lock-file))))
           (drgnx-pkg-progress 'lock))
         (drgnx-pkg--set-current n)
+        (when (require 'drgnx-packs nil t) (drgnx-packs-after-rollback))   ; the packs' active.eld follows the lock
         n))))
 
 ;;;; Installing
@@ -1970,6 +1980,10 @@ FILE (`drgnx-pkg-progress'), from start to done."
                                         "nothing to stage")))
              (when (and (plist-get r :ok) (not stage)) (drgnx-pkg--after-change))
              (if (plist-get r :ok) 0 1))))
+        (`("packs" . ,flags)
+         (require 'drgnx-packs)
+         (condition-case err (drgnx-packs-cli flags)
+           (drgnx-packs-error (drgnx-pkg--print "%s" (cadr err)) 1)))
         (`("rollback" . ,n)
          (drgnx-pkg--print "generation %d restored" (drgnx-pkg-rollback (and n (string-to-number (car n)))))
          (drgnx-pkg--print "%s" drgnx-pkg--restart-note)

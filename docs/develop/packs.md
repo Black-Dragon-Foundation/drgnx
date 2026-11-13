@@ -110,3 +110,23 @@ ratatoskr packs pin REPO COMMIT [--src DIR]
   the hub, which runs `sync` as a separate process, is never involved.
 - `pin` fetches a grammar at a commit and prints its `:grammars` entry with the tree hash, and the ABI its `parser.c`
   declares. A commit with no `src/parser.c` is refused (Swift's and SQL's `main` have none).
+
+## Installed packs: the lock, `active.eld` and `drgnx packs`
+
+The built-in packs are the folders of `packs/`. What is installed is in the lock (`drgnx.lock.eld`): `:packs`
+(`NAME :commit :tree-sha256 :source :wanted`, a built-in pack's commit being the tree hash of its folder) and
+`:grammars` (`LANG :commit :tree-sha256 :lib-sha256 :owner`). `core/drgnx-packs.el` owns them.
+
+```
+drgnx packs list
+drgnx packs sync [--add NAME…] [--remove NAME…]
+```
+
+`sync` computes the wanted packs (the locked ones, plus `--add`, minus `--remove`, plus the packs they reference),
+hands the grammars the lock lacks to `ratatoskr packs sync --plan` (minimum ABI 14: Emacs 31's modes pin ABI 14
+parsers, Rust's is 15, and every libtree-sitter from 0.22 loads both), and then, in this order: writes the lock, makes a
+generation, moves the built folders to `<data>/grammars/LANG/COMMIT/`, writes `<state>/packs/active.eld` (what a session
+activates, derived from the lock) and sweeps. A failure before the lock write changes nothing; one after it leaves
+`active.eld` and the grammar folders alone. `drgnx rollback` brings the old lock back and derives `active.eld` from it.
+The sweep deletes grammar folders that no lock, no kept generation and no live session's claim
+(`<state>/packs-in-use/PID.eld`) names. A pack cannot be removed while another installed pack references its grammars.
