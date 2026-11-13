@@ -298,7 +298,8 @@ has none; pressed again while it shows, the panel hides; from another tab it swi
    (let* ((w (drgnx-wb-area-show 'panel 'results (drgnx-area-test--results)))
           (row (window-parameter w 'header-line-format)) (i (1- (length row)))
           (h (window-pixel-height w)))
-     (should (string-suffix-p (concat " " (drgnx-wb-close-glyph)) row))   ; ends with the ✕
+     ;; ends with the ✕ and its 8 px pad, which is part of the button
+     (should (equal (substring-no-properties row -2 -1) (drgnx-wb-close-glyph)))
      (should (equal (get-text-property i 'help-echo row) "Close (Esc, q)"))
      (should (eq (get-text-property i 'mouse-face row) 'highlight))
      (should (eq (lookup-key (get-text-property i 'local-map row) [header-line mouse-1]) #'drgnx-area--close-click))
@@ -334,6 +335,34 @@ of the panel's tab row, before its close, only while that tab is shown; `drgnx-w
            (drgnx-wb-area-show 'panel 'output)
            (should-not (string-search "chip two" (window-parameter (drgnx-wb-area-window 'panel) 'header-line-format))))
        (drgnx-wb-undefine-tab 'panel 'area-test-acts)))))
+
+(ert-deftest drgnx-area/a-tab-s-icon-and-the-close-are-the-mockup-s-icons ()
+  "the-look/debugging.html `.ptabs': a tab defined with an icon (the Debug Console's terminal) shows it, 14 px, before
+its title; the row's close is the Lucide x at 16 px, still the kit's close button (its face, click and help)."
+  (drgnx-area-test--with
+   (cl-letf (((symbol-function 'drgnx-look-icon)
+              (lambda (name &optional face size) (propertize " " 'display (list 'area-test-icon name size) 'face face))))
+     (drgnx-wb-define-tab 'panel 'area-test-icon :title "Iconed" :icon 'terminal)
+     (unwind-protect
+         (let* ((w (drgnx-wb-area-show 'panel 'area-test-icon))
+                (row (window-parameter w 'header-line-format))
+                (title (string-search "Iconed" row))
+                (at (lambda (spec row) (cl-loop for i below (length row)
+                                                when (equal (get-text-property i 'display row) spec) return i)))
+                (icon (funcall at '(area-test-icon terminal 14) row))
+                (close (funcall at '(area-test-icon x 16) row)))
+           (should (and icon title (< icon title)))
+           (should close)
+           (should (< title close))
+           (should (eq (get-text-property close 'drgnx-area row) 'panel))
+           (should (memq 'drgnx-ui-close (ensure-list (get-text-property close 'face row))))
+           (should (equal (get-text-property close 'help-echo row) "Close (Esc, q)"))
+           ;; the tab keeps it, once, while another tab is shown; the others have none
+           (drgnx-wb-area-show 'panel 'output)
+           (let ((r (window-parameter w 'header-line-format)))
+             (should (= 1 (cl-loop for i below (length r)
+                                   count (equal (get-text-property i 'display r) '(area-test-icon terminal 14)))))))
+       (drgnx-wb-undefine-tab 'panel 'area-test-icon)))))
 
 (ert-deftest drgnx-area/the-right-area-has-no-tab-row-for-one-tab ()
   "agent-panel.html: the right area's tab row shows only while two of its tabs have content, so a lone pane's own

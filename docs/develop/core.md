@@ -2966,7 +2966,9 @@ a `left` kind to `drgnx-wb-define-section`, a `bottom` or `right` kind to `drgnx
 `right`), an `editor` kind (its `:buffer` a name) to a `drgnx-wb-place` rule, and `:fill` to
 `drgnx-layouts-define-pane`. A tab defined with `:actions` (a function returning a string, or nil) has its own pieces at
 the right of its area's tab row, before the ✕, while it is shown (the Debug Console's session chip and clear); the
-row is a string built when it is drawn, so the tab's module calls `drgnx-wb-area-redraw` when they change. A backend is an entry in `drgnx-pane--backends` (the functions for `:define`, `:show`,
+row is a string built when it is drawn, so the tab's module calls `drgnx-wb-area-redraw` when they change. A tab
+defined with `:icon` (a `drgnx-look-icon` name) shows it at 14 px before its title (the Debug Console's terminal);
+the row's close is the kit's close button drawn as the Lucide x at 16 px, 8 px from the edge. A backend is an entry in `drgnx-pane--backends` (the functions for `:define`, `:show`,
 `:hide`, `:window`, `:focus`, `:resize`, `:move`, `:stack`); the tiled grid registers `grid` there.
 
 **Ownership.** `drgnx-pane-define-kind` records the module whose setup runs as the kind's owner
