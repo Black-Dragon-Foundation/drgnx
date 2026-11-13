@@ -368,6 +368,56 @@ fn test_clock_emits_on_advance_only() {
     );
 }
 
+/// What a live hub answers `agents/list` and `agents/get` with passes the registry's own check of those results
+/// (R-FIX-M3: the hub builds its snapshots typed and in-process, so one session can never make the whole answer fail the
+/// check; a drift between a snapshot and the registry's type fails here).
+#[cfg(feature = "test-hooks")]
+#[test]
+fn every_snapshot_the_hub_builds_passes_the_registry_check() {
+    let root = Root::new();
+    let socket = root.socket();
+    let config = root.dir.path().join("h/c");
+    std::fs::create_dir_all(&config).unwrap();
+    let settings = config.join("settings.el");
+    std::fs::write(
+        &settings,
+        format!(
+            "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock\" :command ({:?} \"acp\" \"--as\" \"claude\")))))\n",
+            mock_binary().display().to_string()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&settings, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let mut hub = Hub::start(&root, 1);
+    hub.wait_ready(&socket);
+    let mut c = Client::open(&socket);
+    c.hello(&socket);
+    let mut sids = Vec::new();
+    for n in 1..=2u64 {
+        c.send(json!({"id": n, "method": "agents/start",
+            "params": {"profile": "mock", "cwd": root.dir.path().join("h")}}));
+        let (started, _) = c.answer(n);
+        sids.push(
+            started["result"]["id"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{started}: {}", hub.stderr_text()))
+                .to_string(),
+        );
+    }
+    c.send(json!({"id": 10, "method": "agents/list"}));
+    let list = c.answer(10).0["result"].clone();
+    assert_eq!(list["sessions"].as_array().map(Vec::len), Some(2), "{list}");
+    let m = runstav::registry::find("agents/list").unwrap();
+    assert!((m.check_result)(&list).is_ok(), "{list}");
+    for (i, sid) in sids.iter().enumerate() {
+        let id = 20 + i as u64;
+        c.send(json!({"id": id, "method": "agents/get", "params": {"id": sid}}));
+        let got = c.answer(id).0["result"].clone();
+        let m = runstav::registry::find("agents/get").unwrap();
+        assert!((m.check_result)(&got).is_ok(), "{got}");
+    }
+}
+
 #[cfg(feature = "test-hooks")]
 #[test]
 fn the_lines_a_client_sent_before_it_left_are_served() {
