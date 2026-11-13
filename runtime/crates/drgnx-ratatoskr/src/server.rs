@@ -285,12 +285,15 @@ pub async fn run(args: ServeArgs) -> Exit {
         "orch:evidence",
         crate::orch::evidence::run(front.clone(), front.core.exec.subscribe()),
     );
-    // `RATATOSKR_SEED_SCENE=1` (test-hooks): one plan run for the look scenes, once, into a fresh store
+    // `RATATOSKR_SEED_SCENE=1` (test-hooks): one plan run for the look scenes, once, into a fresh store; `map` seeds
+    // the same run with the Work map's graph (the mockup's) in place of the Flow's one agent
     #[cfg(feature = "test-hooks")]
-    if std::env::var_os("RATATOSKR_SEED_SCENE").is_some_and(|v| v == "1") {
+    if let Some(mode) = std::env::var_os("RATATOSKR_SEED_SCENE").filter(|v| v == "1" || v == "map")
+    {
         let f = front.clone();
+        let map = mode == "map";
         crate::clock::spawn("orch:scene", async move {
-            if let Err(e) = crate::orch::scene::seed(&f).await {
+            if let Err(e) = crate::orch::scene::seed(&f, map).await {
                 tracing::warn!("the scene's plan run was not seeded: {e}");
             }
         });

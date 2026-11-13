@@ -210,3 +210,11 @@ pub fn from_json(text: &str) -> Vec<Event> {
     }
     out
 }
+
+/// The look scene's description (`test/fixtures/work-space/scene.json`): the prototype's data and the mockup's three
+/// open cards (work-space-dark.html).
+pub fn scene() -> Vec<Event> {
+    from_json(include_str!(
+        "../../../../test/fixtures/work-space/scene.json"
+    ))
+}

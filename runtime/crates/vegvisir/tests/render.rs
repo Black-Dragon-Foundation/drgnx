@@ -512,3 +512,112 @@ fn svg_has_no_colour_outside_the_palette() {
     assert!(seen.contains("#000200"), "the chain's accent: {seen:?}");
     assert!(seen.len() >= 3, "{seen:?}");
 }
+
+/// [D] A card's text is drawn in the UI font, its meta line in the code font (work-space-dark.html: the title, task
+/// and conclusion in Inter, "testing · 32 min · $1.20" in mono): every card line carries `drgnx-work-card` under the
+/// card's box face, the agent's name `drgnx-work-title` and the line of its minutes and spend `drgnx-work-meta`.
+#[test]
+fn card_text_names_the_ui_font_the_title_and_the_meta_line() {
+    let (items, edges, layout) = frame();
+    let new = BTreeSet::new();
+    let palette = Palette::default();
+    let s = scene(&items, &edges, &layout, &new);
+    let drawn = render::rows(&s, &Index::of(&s), &gui(&palette), &Cols);
+    let faces_at = |key: &str, word: &str| -> Vec<String> {
+        let r = drawn.rows.iter().find(|r| r.key == key).expect(key);
+        let at = r
+            .text
+            .find(word)
+            .unwrap_or_else(|| panic!("{word} in {:?}", r.text));
+        let at = u32::try_from(r.text[..at].chars().count()).unwrap();
+        r.runs
+            .iter()
+            .filter(|(s, e, _)| *s <= at && at < *e)
+            .map(|(_, _, f)| f.clone())
+            .collect()
+    };
+    for (key, word) in [
+        ("row:4:0:0:0", "Opus"),
+        ("row:4:0:0:1", "SESSION"),
+        ("row:4:0:0:2", "testing"),
+        ("row:4:0:0:3", "turn_core"),
+        ("row:3:0:0:0", "deferred"),
+    ] {
+        let faces = faces_at(key, word);
+        assert!(
+            faces.iter().any(|f| f == "drgnx-work-card"),
+            "{key}: {faces:?}"
+        );
+    }
+    assert!(
+        faces_at("row:4:0:0:0", "Opus")
+            .iter()
+            .any(|f| f == "drgnx-work-title")
+    );
+    assert!(
+        faces_at("row:4:0:0:2", "testing")
+            .iter()
+            .any(|f| f == "drgnx-work-meta")
+    );
+}
+
+/// [D] An agent whose label already names its model ("Opus · hub rows": the model's own label for a session with a
+/// model) is drawn with the model once, not "Opus · Opus · hub rows".
+#[test]
+fn a_label_that_names_the_model_is_not_prefixed_with_it_again() {
+    let (mut items, edges, layout) = frame();
+    let id = ItemId("agent:a1".into());
+    let a = items.get_mut(&id).expect("the first agent");
+    let model = a.fields.model.clone().expect("it has a model");
+    a.label = format!("{model} · hub rows");
+    let new = BTreeSet::new();
+    let palette = Palette::default();
+    let s = scene(&items, &edges, &layout, &new);
+    let drawn = render::rows(&s, &Index::of(&s), &gui(&palette), &Cols);
+    let line = drawn
+        .rows
+        .iter()
+        .find(|r| r.key == "row:4:0:0:0")
+        .expect("the agents' first line");
+    assert!(
+        line.text.contains(&format!("{model} · hub")),
+        "{:?}",
+        line.text
+    );
+    assert!(
+        !line.text.contains(&format!("{model} · {model}")),
+        "{:?}",
+        line.text
+    );
+}
+
+/// [D] The strip is drawn in the UI font, and a long entry is cut with an ellipsis at a chip's own width (260 px), so
+/// the entries after it and the machines' load at the right edge stay on the line (work-space-dark.html).
+#[test]
+fn a_long_strip_entry_is_cut_and_the_row_is_ui_text() {
+    let f: Frame = serde_json::from_str(include_str!(
+        "../../../../test/fixtures/work-space/frame.json"
+    ))
+    .unwrap();
+    let (items, edges, layout) = frame();
+    let new = BTreeSet::new();
+    let pal = palette();
+    let s = scene(&items, &edges, &layout, &new);
+    let long: Vec<NeedsYou> = vec![NeedsYou {
+        about: vec![],
+        text: "the gates hold the merge: no red for its test commit, and then some more words"
+            .into(),
+        ..f.needs_you[0].clone()
+    }];
+    let row = render::strip(&s, &long, &[], &gui(&pal), &Cols);
+    assert!(row.text.contains("…  g1"), "{:?}", row.text);
+    assert!(!row.text.contains("some more words"), "{:?}", row.text);
+    let end = u32::try_from(row.text.chars().count()).unwrap();
+    assert!(
+        row.runs
+            .iter()
+            .any(|r| r.0 == 0 && r.1 >= end - 1 && r.2 == "drgnx-work-card"),
+        "{:?}",
+        row.runs
+    );
+}

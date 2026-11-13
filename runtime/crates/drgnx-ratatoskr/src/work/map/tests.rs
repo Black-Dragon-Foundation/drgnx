@@ -700,7 +700,8 @@ fn detail_rows_say_the_edges() {
     for e in edges.iter().filter(|e| came(e) && e.from == agent.id) {
         let to = m.item(&e.to).expect("its target").label;
         assert!(
-            text.contains(&format!("  {to} — came from this").as_str()),
+            text.iter()
+                .any(|t| t.ends_with(&format!("\t{to} — came from this"))),
             "{to} in {text:?}"
         );
     }
@@ -712,11 +713,10 @@ fn detail_rows_say_the_edges() {
         .expect("a parent");
     let pl = m.item(&parent).expect("the parent").label;
     assert!(
-        text.iter()
-            .any(|t| t.starts_with("  › ") && t.contains(&pl)),
+        text.iter().any(|t| t.contains('\t') && t.contains(&pl)),
         "{pl} in {text:?}"
     );
-    let rows = detail::rows(&lines);
+    let rows = detail::rows(&lines, 1.0);
     assert_eq!(rows.len(), lines.len());
     assert_eq!(rows[0].key, "head/0");
     assert_eq!(detail::map_of(&detail::view_of("w-1")), Some("w-1"));
@@ -1094,4 +1094,126 @@ fn a_task_agent_is_on_its_sessions_task_without_a_plan() {
         agents[0].names(),
         ("Sonnet".to_owned(), Some("search-quick".to_owned()))
     );
+}
+
+/// [D] A test hub's map scene (`RATATOSKR_SEED_SCENE=map`) puts the mockup's whole graph on every map it opens: asks,
+/// specs, plans, four agents, their branches, files and machines, two open cards (a push and a
+/// permission; the hub scene's held gate is the third), and an overlap between two agents on one file (work-space-dark.html).
+#[cfg(feature = "test-hooks")]
+#[test]
+fn the_map_scene_has_every_layer_the_overlap_and_its_cards() {
+    let map = Map::default();
+    map.scene_graph(crate::orch::scene::map_events());
+    let mut g = lock(&map.inner);
+    let mut core = Core::new();
+    for ev in Map::opening(&mut g, 40) {
+        core.step(ev);
+    }
+    let items = core.model().items();
+    for (kind, at_least) in [
+        (Kind::Ask, 3),
+        (Kind::Spec, 2),
+        (Kind::Plan, 3),
+        (Kind::Agent, 4),
+        (Kind::Branch, 4),
+        (Kind::File, 2),
+        (Kind::Machine, 2),
+    ] {
+        let n = items.values().filter(|i| i.kind == kind).count();
+        assert!(n >= at_least, "{kind:?}: {n} < {at_least}");
+    }
+    // the model keeps a pair of agents and a pair of their branches: one overlap on the map, session.rs of two agents
+    let pairs = core.model().overlaps();
+    let agents = pairs
+        .iter()
+        .filter(|o| o.a.as_str().starts_with("agent:"))
+        .count();
+    assert_eq!(agents, 1, "{pairs:?}");
+    let kinds: Vec<CardKind> = core
+        .model()
+        .needs_you()
+        .into_iter()
+        .map(|n| n.kind)
+        .collect();
+    for k in [CardKind::Push, CardKind::Permission] {
+        assert_eq!(
+            kinds.iter().filter(|c| **c == k).count(),
+            1,
+            "{k:?} in {kinds:?}"
+        );
+    }
+}
+
+/// [D] The map scene's agents run for the minutes the fixture gives them before its own clock (minute 40), counted
+/// from the hub's clock when a map opens: "testing · 32 min", not the minutes since the epoch.
+#[cfg(feature = "test-hooks")]
+#[test]
+fn the_map_scenes_agents_run_for_their_fixture_minutes() {
+    let map = Map::default();
+    map.scene_graph(crate::orch::scene::map_events());
+    let mut g = lock(&map.inner);
+    let mut core = Core::new();
+    for ev in Map::opening(&mut g, 29_909_760) {
+        core.step(ev);
+    }
+    let mut minutes: Vec<(String, Option<u64>)> = core
+        .model()
+        .items()
+        .into_values()
+        .filter(|it| it.kind == Kind::Agent)
+        .map(|it| (it.label, it.fields.minutes))
+        .collect();
+    minutes.sort();
+    assert_eq!(
+        minutes,
+        [
+            ("Opus · I6".to_owned(), Some(12)),
+            ("Opus · hub rows".to_owned(), Some(32)),
+            ("Opus · jobq plan".to_owned(), Some(9)),
+            ("Sonnet · fx-sess".to_owned(), Some(14)),
+        ],
+        "the minutes of the agents the mockup shows"
+    );
+}
+
+/// [D] The Detail tile is the mockup's (work-space-dark.html `.det`): the head in the heading face, the sections' keys
+/// ("you", "spec", "plan", "task") muted in a column and their values in the accent, the actions as buttons with their
+/// keys, and every row in the card's UI font.
+#[test]
+fn detail_rows_are_the_mockups_tile() {
+    let mut core = vegvisir::Core::new();
+    for e in vegvisir::fixture::scene() {
+        core.step(e);
+    }
+    let m = core.model();
+    let agent = ItemId("agent:a1".into());
+    let rows = detail::rows(&detail::lines(m, Some(&agent), 0), 1.0);
+    fn faces_of(r: &Row) -> Vec<&str> {
+        r.runs.iter().map(|x| x.2.as_str()).collect()
+    }
+    assert!(
+        faces_of(&rows[0]).contains(&"drgnx-ui-heading"),
+        "{:?}",
+        rows[0]
+    );
+    let key = |k: &str| -> Row {
+        rows.iter()
+            .find(|r| r.text.trim_start().starts_with(k) && !r.stops.is_empty())
+            .unwrap_or_else(|| panic!("a `{k}` row with a key column in {rows:?}"))
+            .clone()
+    };
+    for k in ["you", "spec", "plan", "task"] {
+        let r = key(k);
+        assert!(faces_of(&r).contains(&"drgnx-text-muted"), "{r:?}");
+        assert!(faces_of(&r).contains(&"drgnx-accent"), "{r:?}");
+    }
+    let open = rows
+        .iter()
+        .find(|r| r.text.contains("Open"))
+        .expect("the Open action");
+    assert!(faces_of(open).contains(&"drgnx-button"), "{open:?}");
+    assert!(faces_of(open).contains(&"drgnx-keycap"), "{open:?}");
+    for r in &rows {
+        assert!(faces_of(r).contains(&"drgnx-work-card"), "{r:?}");
+    }
 }

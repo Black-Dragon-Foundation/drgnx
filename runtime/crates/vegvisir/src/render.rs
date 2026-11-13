@@ -350,6 +350,13 @@ impl Line {
         l
     }
 
+    /// A line of numbers and times: the code font.
+    fn meta(text: impl Into<String>) -> Line {
+        let mut l = Line::default();
+        l.push(text, Some("drgnx-work-meta"));
+        l
+    }
+
     fn text(&self) -> String {
         self.0.iter().map(|(t, _)| t.as_str()).collect()
     }
@@ -405,6 +412,7 @@ fn segment(
     b.stop(right);
     let end = b.pos();
     b.face(start, end, card_face(lines.len(), line));
+    b.face(start, end, "drgnx-work-card");
     b.prop(start, end, "drgnx-work-id", Value::String(id.0.clone()));
 }
 
@@ -559,10 +567,10 @@ fn rich_lines(s: &Scene, it: &Item) -> Vec<Line> {
         .push(" ", None)
         .push(bdg, Some(bface))
         .push("  ", None);
-    if let Some(m) = &f.model {
-        who.push(format!("{m} · "), None);
+    if let Some(m) = f.model.as_ref().filter(|m| !names_model(&it.label, m)) {
+        who.push(format!("{m} · "), Some("drgnx-work-title"));
     }
-    who.push(it.label.clone(), None);
+    who.push(it.label.clone(), Some("drgnx-work-title"));
     new_chip(s, it, &mut who);
     let mut going = vec![activity(f)];
     going.extend(f.minutes.map(|m| format!("{m} min")));
@@ -587,7 +595,7 @@ fn rich_lines(s: &Scene, it: &Item) -> Vec<Line> {
     vec![
         who,
         Line::plain(f.task.clone().unwrap_or_default()),
-        Line::plain(going.join(" · ")),
+        Line::meta(going.join(" · ")),
         Line::plain(
             f.conclusion
                 .as_ref()
@@ -607,10 +615,13 @@ fn compact_lines(s: &Scene, it: &Item) -> Vec<Line> {
         .push(" ", None)
         .push(bdg, Some(bface))
         .push(" ", None);
-    if let (Some(m), Kind::Agent) = (&f.model, it.kind) {
-        who.push(format!("{m} · "), None);
+    if let (Some(m), Kind::Agent) = (
+        f.model.as_ref().filter(|m| !names_model(&it.label, m)),
+        it.kind,
+    ) {
+        who.push(format!("{m} · "), Some("drgnx-work-title"));
     }
-    who.push(it.label.clone(), None);
+    who.push(it.label.clone(), Some("drgnx-work-title"));
     new_chip(s, it, &mut who);
     let mut bits = vec![activity(f)];
     bits.extend(f.minutes.map(|m| format!("{m}m")));
@@ -620,6 +631,13 @@ fn compact_lines(s: &Scene, it: &Item) -> Vec<Line> {
         going.push(" ⚠", Some("drgnx-work-overlap"));
     }
     vec![who, going]
+}
+
+/// Whether LABEL already begins with MODEL and its separator (the model's own label for a session with a model).
+fn names_model(label: &str, model: &str) -> bool {
+    label
+        .strip_prefix(model)
+        .is_some_and(|r| r.starts_with(" · "))
 }
 
 /// A runner's icon by its kind (the default glyphs of `drgnx-face-glyphs`).
@@ -986,6 +1004,9 @@ impl<'a> Edges<'a> {
 
 // ---- the strip ---------------------------------------------------------------------------------------------------
 
+/// The widest a strip chip's text is, logical px.
+const CHIP_MAX: u32 = 260;
+
 /// The needs-you strip (the header line), one row `strip`: a chip with its jump key for each of the first nine
 /// entries (`nav::strip_entries`: the cards, the agents that need you with no card, the open huddles), +N for the
 /// rest, and the MACHINES' load at the right edge of the view's width.
@@ -1005,10 +1026,14 @@ pub fn strip(
         if i > 0 {
             b.push(" ", None);
         }
+        let e = fit_px(m, e, (CHIP_MAX as f32 * env.scale).round() as u32);
+        let start = b.pos();
         b.push(
             &format!(" ⚑ {e}  g{} ", i + 1),
             Some("drgnx-work-needs-you"),
         );
+        let end = b.pos();
+        b.face(start, end, "drgnx-chip");
     }
     if entries.len() > 9 {
         b.push(
@@ -1037,8 +1062,13 @@ pub fn strip(
         if i > 0 {
             b.push(" ", None);
         }
+        let start = b.pos();
         b.push(c, Some("drgnx-work-chip"));
+        let end = b.pos();
+        b.face(start, end, "drgnx-chip");
     }
+    let end = b.pos();
+    b.face(0, end, "drgnx-work-card");
     b.finish()
 }
 
@@ -1164,7 +1194,7 @@ fn outline_block(s: &Scene, id: &ItemId, cols: usize, env: &Env) -> Vec<Line> {
     let (d, dface) = dot(it);
     let mut head = Line::default();
     head.push(d, Some(dface)).push(" ", None);
-    if let Some(m) = &f.model {
+    if let Some(m) = f.model.as_ref().filter(|m| !names_model(&it.label, m)) {
         head.push(format!("{m} · "), None);
     }
     let mut bits = vec![activity(f)];

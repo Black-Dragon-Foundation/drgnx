@@ -501,6 +501,9 @@ struct Inner {
     /// shows them.
     #[cfg(feature = "test-hooks")]
     scene: Vec<(Snapshot, u64)>,
+    /// The facts a test hub's map scene seeds (`orch::scene::map_events`): every map opened is fed them.
+    #[cfg(feature = "test-hooks")]
+    scene_graph: Vec<Event>,
 }
 
 /// The hub's Work map (see the module).
@@ -724,6 +727,12 @@ impl Map {
         lock(&self.inner).scene = sessions;
     }
 
+    /// A test hub's scene graph (`orch::scene::map_events`): EVENTS, fed to every map opened.
+    #[cfg(feature = "test-hooks")]
+    pub fn scene_graph(&self, events: Vec<Event>) {
+        lock(&self.inner).scene_graph = events;
+    }
+
     /// What a map opening at NOW (the clock's minute) is fed after its sessions: the minute, so a card counts its
     /// minutes at once rather than from the next tick, and on a test hub the scene's sessions.
     fn opening(g: &mut Inner, now: u64) -> Vec<Event> {
@@ -746,6 +755,23 @@ impl Map {
             let s = g.sessions.get_mut(&snap.id).expect("just noted");
             s.since = now.saturating_sub(ago);
             out.extend(s.facts());
+        }
+        // the fixture counts minutes on its own clock (its `Tick`): a session began that many minutes before it, and
+        // began as many before NOW; the fixture's tick is dropped, the map's own was fed already
+        let fixture_now = g.scene_graph.iter().find_map(|e| match e {
+            Event::Tick { minute } => Some(*minute),
+            _ => None,
+        });
+        for ev in g.scene_graph.clone() {
+            match ev {
+                Event::Tick { .. } => {}
+                Event::Session(mut s) => {
+                    s.since =
+                        now.saturating_sub(fixture_now.unwrap_or(s.since).saturating_sub(s.since));
+                    out.push(Event::Session(s));
+                }
+                ev => out.push(ev),
+            }
         }
         out
     }
@@ -1319,9 +1345,9 @@ impl Map {
                 continue;
             }
             let k3 = (key.conn, view.clone(), c);
-            f.core
-                .views
-                .publish_built(f, &k3, |_env, _fonts| (detail::rows(&lines), Vec::new()));
+            f.core.views.publish_built(f, &k3, |env, _fonts| {
+                (detail::rows(&lines, env.scale), Vec::new())
+            });
         }
     }
 
