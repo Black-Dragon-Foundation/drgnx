@@ -800,8 +800,9 @@ jobs:
           fetch-depth: 0          # the whole history, for commit-times.sh
           filter: blob:none       # without old file contents
           persist-credentials: false
-      # the image's rustup (as the Linux runner jobs), not Homebrew's rust: no formula download and install per run
-      - run: rustup toolchain install stable --profile minimal --component clippy
+      # the image's rustup (as the Linux runner jobs), not Homebrew's rust: no formula download and install per run; the
+      # pinned version (.github/ci/rust.sh), never the runner's moving `stable`: the key names it
+      - run: bash .github/ci/rust.sh --component clippy
       - id: rv
         run: echo "v=$(rustc -V | tr -cs 'A-Za-z0-9.' '-')" >> "$GITHUB_OUTPUT"
       - id: registry
