@@ -327,6 +327,9 @@ notice, answer it with ANSWER (?a allow, ?d deny) through its command, and retur
       (drgnx-term-test--until-line b "during-copy" "the kept output drawn on leaving"))))
 
 (ert-deftest drgnx-term/find-in-terminal-jumps ()
+  ;; Find's matches are the view's model, which needs Sjá's queue (a Nidhogg with `nidhogg-view-push'): an Emacs without
+  ;; it never gets them, and the row would wait out its deadline
+  (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
   (drgnx-term-test--with
     (let ((b (drgnx-term-test--start)))
       (drgnx-term-test--run b "echo find-me-here")
