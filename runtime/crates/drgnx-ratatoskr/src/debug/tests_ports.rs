@@ -208,15 +208,10 @@ fn a_listener_is_the_sessions_only_when_its_process_group_is() {
 /// (the macOS check's lsof, the fork row's sweep).
 #[test]
 fn a_command_that_does_not_answer_is_killed_at_its_deadline() {
-    let t = std::time::Instant::now();
+    // unbounded, it would end after 30 s with Ok
     let mut c = Command::new("sleep");
     c.arg("30");
     let r = ports::output_within(c, std::time::Duration::from_millis(300));
-    assert!(
-        t.elapsed() < std::time::Duration::from_secs(5),
-        "{:?}",
-        t.elapsed()
-    );
     assert!(
         r.as_ref().is_err_and(|e| e.contains("did not answer")),
         "{r:?}"

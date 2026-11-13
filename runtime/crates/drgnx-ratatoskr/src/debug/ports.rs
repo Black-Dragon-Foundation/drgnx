@@ -267,7 +267,7 @@ pub fn output_within(
             .take()
             .map(|p| Box::new(p) as Box<dyn Read + Send>),
     );
-    let start = std::time::Instant::now();
+    let start = crate::clock::real_now();
     let status = loop {
         match child.try_wait() {
             Ok(Some(s)) => break s,
