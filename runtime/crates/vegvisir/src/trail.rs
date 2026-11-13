@@ -224,15 +224,25 @@ fn build(
     let mut concs: Vec<&Conclusion> = concs.iter().collect();
     concs.sort_by_key(|c| c.n);
     let right = env.width_px.saturating_sub(14 * env.cell.0.max(1));
+    // the newest conclusion is `new` while it is stamped on one of the last three steps
+    let last: Vec<i64> = steps.iter().rev().take(3).map(|s| s.id).collect();
+    let newest = concs
+        .iter()
+        .filter(|c| c.step.is_some_and(|id| last.contains(&id)))
+        .map(|c| c.n)
+        .max();
     let mut out = Vec::new();
     for s in &steps {
         let mut b = RowBuilder::new(format!("step:{}", s.id));
         let k = kind(s);
+        // a step a conclusion rests on starts with its number in a circle; the others keep the room
+        match concs.iter().find(|c| c.rests_on.contains(&s.id)) {
+            Some(c) => b.push(&format!(" {} ", c.n), Some("drgnx-badge")),
+            None => b.push("   ", None),
+        };
+        b.push(" ", None);
         put_icon(&mut b, env, k, &mut images);
         b.push(&format!(" {}", title(s)), None);
-        for c in concs.iter().filter(|c| c.rests_on.contains(&s.id)) {
-            b.push(&format!(" [{}]", c.n), Some("drgnx-work-chip"));
-        }
         let from = b.pos();
         b.stop(right).push(&zone.time(s.start), None);
         if let Some(d) = duration(s) {
@@ -249,7 +259,7 @@ fn build(
         );
         out.push(b.finish());
         for c in concs.iter().filter(|c| c.step == Some(s.id)) {
-            out.extend(conclusion_rows(c, env, &mut images));
+            out.extend(conclusion_rows(c, env, &mut images, newest == Some(c.n)));
         }
         // a pause that ended: the agent was resumed then (a note, no node)
         if let (true, Some(end)) = (s.class == "paused", s.end) {
@@ -267,7 +277,7 @@ fn build(
         .iter()
         .filter(|c| !c.step.is_some_and(|id| steps.iter().any(|s| s.id == id)))
     {
-        out.extend(conclusion_rows(c, env, &mut images));
+        out.extend(conclusion_rows(c, env, &mut images, newest == Some(c.n)));
     }
     (out, images)
 }
@@ -277,6 +287,7 @@ fn conclusion_rows(
     c: &Conclusion,
     env: &Env,
     images: &mut std::collections::BTreeMap<drgnx_rows::ImageId, String>,
+    new: bool,
 ) -> Vec<Row> {
     let n = c.rests_on.len();
     let based = match n {
@@ -307,6 +318,14 @@ fn conclusion_rows(
                 b.push(&format!(" {name} "), Some("drgnx-work-title"))
                     .push(&format!(" {} ", c.n), Some("drgnx-work-chip"))
                     .push(&format!(" {}", c.text), Some("drgnx-work-title"));
+                if new {
+                    // `new`, a chip at the card's right
+                    b.stop(env.width_px.saturating_sub((64.0 * env.scale) as u32));
+                    let from = b.pos();
+                    b.push(" new ", Some("drgnx-work-new"));
+                    let to = b.pos();
+                    b.face(from, to, "drgnx-chip");
+                }
             } else {
                 b.push(
                     &format!("   based on {based}{unmatched}"),
