@@ -36,7 +36,15 @@
 
 ;;;; The faces the hub's Flow rows name: the UI font, the theme's chips and text
 
-(defface drgnx-work-flow-text '((t :inherit drgnx-ui-text)) "The Flow's text: a task's title, the tiles' lines."
+(defface drgnx-work-flow-text '((t :inherit drgnx-ui-caption))
+  "The Flow's text: a task's title, the cards' and the Rules tile's lines (the mockup's table, 12 px)."
+  :group 'drgnx-work-space)
+(defface drgnx-work-flow-detail-text '((t :inherit drgnx-ui-text)) "The detail tile's text (12.5 px in the mockup)."
+  :group 'drgnx-work-space)
+(defface drgnx-work-flow-section '((t :inherit (drgnx-ui-caption drgnx-text-muted) :weight semibold))
+  "The detail tile's section heads: why it is held, what clears it, the evidence (the mockup's `h5')."
+  :group 'drgnx-work-space)
+(defface drgnx-work-flow-agent '((t :inherit drgnx-ui-heading)) "The agent's name on the detail tile's head."
   :group 'drgnx-work-space)
 (defface drgnx-work-flow-label '((t :inherit (drgnx-ui-caption drgnx-text-muted)))
   "The Flow's labels: task ids, agents, column headings." :group 'drgnx-work-space)
@@ -44,15 +52,18 @@
   "A key's badge on the Flow's chips (`g 1' on a held task)." :group 'drgnx-work-space)
 (defface drgnx-work-flow-heading '((t :inherit drgnx-ui-heading)) "The Flow's headings: the run, the batch, a tile's."
   :group 'drgnx-work-space)
-(defface drgnx-work-flow-chip-ok '((t :inherit (drgnx-ui-caption drgnx-chip-ok))) "A gate that passed."
+(defface drgnx-work-flow-chip-ok '((t :inherit (drgnx-ui-caption drgnx-chip-ok) :height 0.9167)) "A gate that passed."
   :group 'drgnx-work-space)
-(defface drgnx-work-flow-chip-run '((t :inherit (drgnx-ui-caption drgnx-chip-accent))) "A gate that runs."
+(defface drgnx-work-flow-chip-run '((t :inherit (drgnx-ui-caption drgnx-chip-accent) :height 0.9167))
+  "A gate that runs."
   :group 'drgnx-work-space)
-(defface drgnx-work-flow-chip-held '((t :inherit (drgnx-ui-caption drgnx-chip-attention)))
+(defface drgnx-work-flow-chip-held '((t :inherit (drgnx-ui-caption drgnx-chip-attention) :height 0.9167))
   "A gate that holds the task: it needs you." :group 'drgnx-work-space)
-(defface drgnx-work-flow-chip-err '((t :inherit (drgnx-ui-caption drgnx-chip-error))) "A gate that failed."
+(defface drgnx-work-flow-chip-err '((t :inherit (drgnx-ui-caption drgnx-chip-error) :height 0.9167))
+  "A gate that failed."
   :group 'drgnx-work-space)
-(defface drgnx-work-flow-chip-wait '((t :inherit (drgnx-ui-caption drgnx-chip-quiet))) "A gate not reached yet."
+(defface drgnx-work-flow-chip-wait '((t :inherit (drgnx-ui-caption drgnx-chip-quiet) :height 0.9167))
+  "A gate not reached yet."
   :group 'drgnx-work-space)
 
 ;;;; What the Flow asks and shows: pure

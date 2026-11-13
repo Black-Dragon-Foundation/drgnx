@@ -104,11 +104,26 @@ says its reason."
 literal colour."
   (dolist (f '(drgnx-work-flow-text drgnx-work-flow-label drgnx-work-flow-heading drgnx-work-flow-chip-ok
                                     drgnx-work-flow-chip-run drgnx-work-flow-chip-held drgnx-work-flow-chip-err
-                                    drgnx-work-flow-chip-wait drgnx-work-flow-key))
+                                    drgnx-work-flow-chip-wait drgnx-work-flow-key drgnx-work-flow-detail-text
+                                    drgnx-work-flow-section drgnx-work-flow-agent))
     (should (facep f))
     (let ((spec (face-default-spec f)))
       (should-not (string-match-p "#[0-9a-fA-F]\\{3\\}" (format "%S" spec)))
       (should (string-match-p "drgnx-ui-" (format "%S" spec))))))
+
+;; hub-orchestration.html: the table 12 px (`.flow`), the pills 11 px (`.g`), the detail 12.5 px with 12 px semibold
+;; muted heads (`.detail`, `.detail h5`)
+(ert-deftest drgnx-work-flow/its-sizes-are-the-mockup-s ()
+  "The table's text is the caption role (12 px), a chip a twelfth smaller (11 px); the detail tile's text the UI
+text role and its section heads the caption role, semibold and muted; the agent's name on its head the heading role."
+  (should (eq (face-attribute 'drgnx-work-flow-text :inherit) 'drgnx-ui-caption))
+  (dolist (f '(drgnx-work-flow-chip-ok drgnx-work-flow-chip-run drgnx-work-flow-chip-held drgnx-work-flow-chip-err
+                                       drgnx-work-flow-chip-wait))
+    (should (< (abs (- (face-attribute f :height) (/ 11.0 12))) 0.001)))
+  (should (eq (face-attribute 'drgnx-work-flow-detail-text :inherit) 'drgnx-ui-text))
+  (should (equal (face-attribute 'drgnx-work-flow-section :inherit) '(drgnx-ui-caption drgnx-text-muted)))
+  (should (eq (face-attribute 'drgnx-work-flow-section :weight) 'semibold))
+  (should (eq (face-attribute 'drgnx-work-flow-agent :inherit) 'drgnx-ui-heading)))
 
 (ert-deftest drgnx-work-flow/g-n-selects-the-nth-held-task ()
   "In the Flow, `g N' (the strip's badges) selects the Nth task a gate holds; on the map it stays the map's Nth thing
