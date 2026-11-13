@@ -357,8 +357,8 @@ subscribed with `rules: true`, rows alone. A row per rule: its words, its kind a
 a lock, checked and routing in the accent) and how the hub holds it. With `detail: TASK` too it ends in an "Evidence · TASK" tab
 (the task's label), the selected task's evidence; the Flow subscribes it again when its selection moves. Both tiles
 title themselves (the detail tile's first row is "Detail · TASK" after the panel icon), so their buffers set
-`drgnx-area-own-title` and the area draws no tab row over them, however the tile reaches the window (an area's
-window redraws its row whenever `drgnx-wb-set-area-buffer` changes its buffer). `R` shows the Flow's own tile, even
+`drgnx-area-own-title` and the area draws no tab row over them, however the tile reaches the window (the Flow
+puts it in an area's window with `drgnx-wb-area-put-buffer`, which redraws the row for the buffer). `R` shows the Flow's own tile, even
 where layout Work opened the pane's placeholder first. The detail head's agent is the map's agent on the task: its
 card's task, else its session's own (a run's tasks are the job's, which no plan on the map holds); a map opened gets
 the clock's minute at once, so the agent's minutes are right from the first draw. A long task title is cut before

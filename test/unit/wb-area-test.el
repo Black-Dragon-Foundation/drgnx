@@ -336,7 +336,7 @@ tabs holding content; another buffer in the same area gets the row again."
      (drgnx-wb-undefine-tab 'right 'area-test-b))))
 
 (ert-deftest drgnx-area/a-buffer-with-its-own-title-put-in-an-area-window-drops-the-row ()
-  "A buffer with its own title put straight into an area's window (`drgnx-wb-set-area-buffer', as the Flow swaps its
+  "A buffer with its own title put straight into an area's window (`drgnx-wb-area-put-buffer', as the Flow swaps its
 tile in for the map's side panel) drops the tab row too; putting another buffer back brings it back."
   (drgnx-area-test--with
    (drgnx-wb-define-tab 'right 'area-test-a :title "A")
@@ -349,9 +349,9 @@ tile in for the map's side panel) drops the tab row too; putting another buffer 
                (drgnx-wb-area-show 'right 'area-test-b (get-buffer-create " area-test c"))
                (drgnx-wb-area-show 'right 'area-test-a a)
                (should (stringp (window-parameter w 'header-line-format)))
-               (drgnx-wb-set-area-buffer w b)
+               (drgnx-wb-area-put-buffer w b)
                (should (eq 'none (window-parameter w 'header-line-format)))
-               (drgnx-wb-set-area-buffer w a)
+               (drgnx-wb-area-put-buffer w a)
                (should (stringp (window-parameter w 'header-line-format))))
            (kill-buffer b)
            (kill-buffer " area-test c")))

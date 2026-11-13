@@ -354,7 +354,7 @@ path."
                                #'ignore))))
 
 (declare-function drgnx-pane-show "drgnx-panes")
-(declare-function drgnx-wb-set-area-buffer "drgnx-area")
+(declare-function drgnx-wb-area-put-buffer "drgnx-area")
 (defvar drgnx-work-flow--detail)
 
 (defun drgnx-work-flow-rules ()
@@ -442,7 +442,7 @@ task."
   "The window of the selected frame that shows FROM shows TO instead (none: nothing changes)."
   (when-let* (((buffer-live-p to)) (w (and (buffer-live-p from) (get-buffer-window from))))
     ;; an area's window takes it as the area does (its tab row follows the buffer)
-    (if (window-parameter w 'drgnx-role) (drgnx-wb-set-area-buffer w to) (set-window-buffer w to))))
+    (if (window-parameter w 'drgnx-role) (drgnx-wb-area-put-buffer w to) (set-window-buffer w to))))
 
 (defun drgnx-work-flow-detail-show (flow)
   "FLOW's tile where its map's side panel shows: the right dock follows the lens."
