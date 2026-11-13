@@ -40,7 +40,9 @@
     (redo-dot "↷" . ">") (arrow-down-to-dot "↓" . "v") (arrow-up-from-dot "↑" . "^") (rotate-ccw "↺" . "r")
     (bug "✱" . "*") (unplug "⏏" . "x")
     ;; the Search view's kind chips, as the hub's kind icons on definition rows
-    (square-function "ƒ" . "f") (type "◇" . "T") (wand "#" . "#") (variable "≡" . "="))
+    (square-function "ƒ" . "f") (type "◇" . "T") (wand "#" . "#") (variable "≡" . "=")
+    ;; the Extensions list's kinds (a package's is `package''s, below)
+    (plug "◆" . "&") (blocks "▣" . "M"))
   "The glyphs of the icons (NAME → (UNICODE . ASCII)), named after the icon files.  Several look alike on a terminal
 that is not UTF-8: an icon's glyph says less than its picture.  The icon names that exist as glyphs already
 \(`circle', `search', `info', `flag') are in the table below.")

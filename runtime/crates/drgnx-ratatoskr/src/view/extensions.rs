@@ -5,14 +5,15 @@
 //! generations the editor sends end the list as a Generations section (rows `gen:N`, the model's `gen` field). The
 //! model (a `tree`: a `section` node per header, a node per row under it, the list `order`) goes first, then the rows
 //! to every class of the view; a class that gets its env later is built from the request kept per (connection,
-//! view). Only the glyphs depend on the class (a terminal's ASCII form).
+//! view). Only a row's kind mark depends on the class: a Lucide icon on a graphical display (`package`, `plug`,
+//! `blocks`, sized as the Explorer's), the kind's ASCII glyph on a terminal.
 
 use super::model::Doc;
-use super::{Key, Views, lock};
+use super::{Key, Views, icons, lock};
 use crate::front::Front;
-use drgnx_rows::{Row, RowBuilder};
+use drgnx_rows::{ImageId, Row, RowBuilder};
 use runstav::methods::extensions as w;
-use runstav::methods::view::Display;
+use runstav::methods::view::{Display, ViewEnv};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -154,22 +155,60 @@ fn trust(r: &w::Row) -> Option<&'static str> {
     }
 }
 
-fn glyph<'a>(b: &'a Built, r: &w::Row, display: Display) -> Option<&'a str> {
-    let kind = match r.kind {
-        w::Kind::Plugin => "plugin",
-        w::Kind::Module => "module",
-        _ => "package",
-    };
-    kind_glyph(b, kind, display)
+/// How a class draws a row's kind: on a graphical display a Lucide icon and the gap after it, in device px (the
+/// Explorer's row: 16 px icons, 6 px gaps, window-dark.html `.row`); on a terminal the kind's ASCII glyph.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Look {
+    pub gui: Option<(u32, u32)>,
 }
 
-fn kind_glyph<'a>(b: &'a Built, kind: &str, display: Display) -> Option<&'a str> {
-    let g = b.glyphs.iter().find(|g| g.kind == kind)?;
-    Some(if display == Display::Tty {
-        &g.tty
-    } else {
-        &g.gui
-    })
+impl Look {
+    pub const TTY: Look = Look { gui: None };
+
+    /// ENV's look: the sizes at its scale, rounded half up (`drgnx-px`).
+    pub fn of(env: &ViewEnv) -> Self {
+        let px = |v: f32| (f64::from(v) * f64::from(env.scale) + 0.5 + 1e-9).floor() as u32;
+        match env.display {
+            Display::Gui => Look {
+                gui: Some((px(icons::SIZE), px(6.0))),
+            },
+            Display::Tty => Look::TTY,
+        }
+    }
+}
+
+/// The glyph kind of ROW (the editor's glyph table) and its icon.
+fn kind_of(r: &w::Row) -> (&'static str, &'static str) {
+    match r.kind {
+        w::Kind::Plugin => ("plugin", "plug"),
+        w::Kind::Module => ("module", "blocks"),
+        _ => ("package", "package"),
+    }
+}
+
+/// The mark of KIND at the start of L: in LOOK's graphical form ICON (the kind's glyph its alt text) and the gap, in
+/// `shadow`, the icon put into IMAGES; else the glyph and a space.
+fn mark(
+    b: &Built,
+    l: &mut RowBuilder,
+    (kind, icon): (&str, &str),
+    look: Look,
+    images: &mut BTreeMap<ImageId, String>,
+) {
+    let g = b.glyphs.iter().find(|g| g.kind == kind);
+    if let Some((size, gap)) = look.gui
+        && let Some((id, svg)) = icons::svg(icon, size)
+    {
+        let at = l.pos();
+        images.insert(id, svg);
+        l.image(id, g.map_or("", |g| g.gui.as_str()))
+            .space(gap, size, "shadow");
+        let end = l.pos();
+        l.face(at, end, "shadow");
+    } else if let Some(g) = g {
+        let glyph = if look.gui.is_some() { &g.gui } else { &g.tty };
+        l.push(glyph, None).push(" ", None);
+    }
 }
 
 fn spans(mut row: RowBuilder, id: &str) -> Row {
@@ -179,9 +218,11 @@ fn spans(mut row: RowBuilder, id: &str) -> Row {
     row.finish()
 }
 
-/// BUILT's rows in DISPLAY's class: each header, then each row's line and (unless dense) its summary line.
-pub fn rows(b: &Built, display: Display) -> Vec<Row> {
+/// BUILT's rows in LOOK: each header, then each row's line and (unless dense) its summary line; and the icons they
+/// name, each once.
+pub fn rows(b: &Built, look: Look) -> (Vec<Row>, Vec<(ImageId, String)>) {
     let mut out = Vec::new();
+    let mut images = BTreeMap::new();
     for s in &b.sections {
         let key = format!("section:{}", s.name);
         let mut h = RowBuilder::new(key.clone());
@@ -191,9 +232,7 @@ pub fn rows(b: &Built, display: Display) -> Vec<Row> {
         out.push(h.finish());
         for r in &s.rows {
             let mut l = RowBuilder::new(r.id.clone());
-            if let Some(g) = glyph(b, r, display) {
-                l.push(g, None).push(" ", None);
-            }
+            mark(b, &mut l, kind_of(r), look, &mut images);
             l.push(&r.name, Some("bold"));
             if let Some(v) = &r.version {
                 l.push(&format!(" {v}"), Some("shadow"));
@@ -219,14 +258,19 @@ pub fn rows(b: &Built, display: Display) -> Vec<Row> {
             }
         }
     }
-    generation_rows(b, display, &mut out);
-    out
+    generation_rows(b, look, &mut out, &mut images);
+    (out, images.into_iter().collect())
 }
 
 /// The Generations section: its header, then per generation its line (number, time, note, in use or current, size),
 /// what differs from the one before it and the copies note, as lines under it.  A span names `gen:N` (no extension
 /// id: the extension commands act on none of these).
-fn generation_rows(b: &Built, display: Display, out: &mut Vec<Row>) {
+fn generation_rows(
+    b: &Built,
+    look: Look,
+    out: &mut Vec<Row>,
+    images: &mut BTreeMap<ImageId, String>,
+) {
     if b.generations.is_empty() {
         return;
     }
@@ -248,9 +292,7 @@ fn generation_rows(b: &Built, display: Display, out: &mut Vec<Row>) {
     for g in &b.generations {
         let id = format!("gen:{}", g.n);
         let mut l = RowBuilder::new(id.clone());
-        if let Some(glyph) = kind_glyph(b, "package", display) {
-            l.push(glyph, None).push(" ", None);
-        }
+        mark(b, &mut l, ("package", "package"), look, images);
         l.push(&format!("#{}", g.n), Some("bold"));
         if !g.time.is_empty() {
             l.push(&format!("  {}", g.time), None);
@@ -369,11 +411,12 @@ impl Views {
             return false;
         };
         self.publish_model(f, key.0, &key.1, doc(&b));
-        let display = lock(&self.store).env_of(key).map(|e| e.display);
-        if let Some(display) = display
-            && let Some(p) = lock(&self.store).publish(key, rows(&b, display), &[])
-        {
-            f.send_to(key.0, "view-patch", json!(p));
+        let look = lock(&self.store).env_of(key).map(Look::of);
+        if let Some(look) = look {
+            let (rows, images) = rows(&b, look);
+            if let Some(p) = lock(&self.store).publish(key, rows, &images) {
+                f.send_to(key.0, "view-patch", json!(p));
+            }
         }
         true
     }
@@ -395,10 +438,11 @@ pub fn list(
     let mut store = lock(&views.store);
     for class in store.classes(conn, &p.view) {
         let key = (conn, p.view.clone(), class);
-        let Some(display) = store.env_of(&key).map(|e| e.display) else {
+        let Some(look) = store.env_of(&key).map(Look::of) else {
             continue;
         };
-        if let Some(patch) = store.publish(&key, rows(&built, display), &[]) {
+        let (rows, images) = rows(&built, look);
+        if let Some(patch) = store.publish(&key, rows, &images) {
             f.send_to(conn, "view-patch", json!(patch));
         }
     }

@@ -41,6 +41,9 @@
     (explorer-focused-dark)
     (explorer-focused-light)
     (explorer-focused-hc)
+    (extensions-dark)
+    (extensions-light)
+    (extensions-hc)
     (search-preview :mockup search-view)
     (search-sheet :mockup search-view :then "C-g")
     (search-ask :mockup search-view :then "C-g")
@@ -48,7 +51,7 @@
     (search-kinds :mockup search-view)
     (debugging))
   "The scenes in the order they are drawn: (NAME . PLIST).  NAME is the mockup's (docs/specs, the-look/NAME.png; the
-start page, the highlights and the focused Explorer have none: they are judged against the components' spec and
+start page, the highlights, the focused Explorer and the Extensions list have none: they are judged against the components' spec and
 the tokens) and the session's `drgnx-look-scene-NAME' sets it up.  :agent t starts the mock agent first; :keys and
 :type are typed after the setup and before the shot, :then after it.")
 

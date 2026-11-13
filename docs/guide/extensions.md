@@ -9,8 +9,9 @@ it. `C-g` never stops a job; **Cancel** (`k`, Vim `x`) does.
 
 ## The list
 
-Rows are grouped in sections: **Installed**, **Updates**, **Recommended** (below), **Plugins**, **Built-in** and **Generations**. Each row has the kind's mark
-(`⬡` package, `◆` plugin, `▣` module), the name, the version, a chip for its state, and on a second line the summary,
+Rows are grouped in sections: **Installed**, **Updates**, **Recommended** (below), **Plugins**, **Built-in** and **Generations**. Each row has the kind's mark,
+the Explorer's Lucide icons on a graphical display (`package` for packages and generations, `plug` for plugins,
+`blocks` for modules) and `P`, `&` or `M` in a terminal, then the name, the version, a chip for its state, and on a second line the summary,
 the archive it comes from and how far you can trust that (signed, unsigned archive, local, Git commit, hash approved).
 `drgnx-extensions-list-density` set to `dense` keeps one line a row. The next 200 rows load as you near the end.
 

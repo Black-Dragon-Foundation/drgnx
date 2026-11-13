@@ -574,6 +574,72 @@ sections' with the inactive selection."
 (defun drgnx-look-scene-explorer-focused-light () (drgnx-look-scene--explorer-focused 'drgnx-light))
 (defun drgnx-look-scene-explorer-focused-hc () (drgnx-look-scene--explorer-focused 'drgnx-high-contrast))
 
+;;;; The Extensions list beside the Explorer: no mockup of its own; its kind icons are judged against the Explorer's rows
+
+(declare-function drgnx-extensions-open "drgnx-extensions-list")
+(declare-function drgnx-extensions-list--hub-fed-p "drgnx-extensions-list")
+(defvar drgnx-extensions-list-buffer-name)
+
+(defconst drgnx-look-scene--catalog
+  (concat "{\"version\":1,\"archives\":[{\"name\":\"gnu\",\"url\":\"https://elpa.gnu.org/packages/\",\"signed\":true}],"
+          "\"packages\":["
+          "{\"name\":\"dash\",\"summary\":\"A modern list API\",\"versions\":[{\"archive\":\"gnu\",\"version\":\"2.19\",\"reqs\":[]}],"
+          "\"candidate\":{\"archive\":\"gnu\",\"version\":\"2.19\"}},"
+          "{\"name\":\"magit\",\"summary\":\"A Git porcelain inside Emacs\",\"versions\":[{\"archive\":\"gnu\",\"version\":\"4.2\",\"reqs\":[]}],"
+          "\"candidate\":{\"archive\":\"gnu\",\"version\":\"4.2\"},\"update\":{\"from\":\"4.1\",\"to\":\"4.2\"}},"
+          "{\"name\":\"vertico\",\"summary\":\"VERTical Interactive COmpletion\",\"versions\":[{\"archive\":\"gnu\",\"version\":\"2.0\",\"reqs\":[]}],"
+          "\"candidate\":{\"archive\":\"gnu\",\"version\":\"2.0\"}}],"
+          "\"builtins\":[{\"name\":\"eglot\",\"version\":\"1.17\",\"summary\":\"The Emacs Client for LSP servers\"},"
+          "{\"name\":\"project\",\"version\":\"0.11\",\"summary\":\"Operations on the current project\"}]}")
+  "The scene's catalog: three installed packages (one with an update) and two built-ins.")
+
+(defconst drgnx-look-scene--lock
+  (concat "(:version 1 :packages ((dash :version \"2.19\" :archive \"gnu\" :kind tar :sha256 \"aa\" :requires nil :verified t)"
+          " (magit :version \"4.1\" :archive \"gnu\" :kind tar :sha256 \"bb\" :requires nil :wanted user)"
+          " (vertico :version \"2.0\" :archive \"gnu\" :kind tar :sha256 \"cc\" :requires nil :wanted user)))")
+  "The scene's lock: what the catalog's installed rows are.")
+
+(defun drgnx-look-scene--extensions-fixture ()
+  "The hub's Extensions sources in the session's temp HOME: the catalog, the lock (when the session has none), and a
+plugin installed through the hub (an unapproved plugin row)."
+  (let* ((xdg (lambda (var dot) (expand-file-name "drgnx" (or (getenv var) (expand-file-name dot "~")))))
+         (cache (expand-file-name "extensions" (funcall xdg "XDG_CACHE_HOME" ".cache")))
+         (config (or (getenv "DRGNX_CONFIG_DIR") (funcall xdg "XDG_CONFIG_HOME" ".config")))
+         (lock (expand-file-name "drgnx.lock.eld" config))
+         (plugin (expand-file-name "look-plugin" temporary-file-directory)))
+    (make-directory cache t)
+    (with-temp-file (expand-file-name "catalog.json" cache) (insert drgnx-look-scene--catalog))
+    (unless (file-exists-p lock)
+      (make-directory config t)
+      (with-temp-file lock (insert drgnx-look-scene--lock)))
+    (make-directory plugin t)
+    (with-temp-file (expand-file-name "plugin.json" plugin)
+      (insert "{\"name\": \"word-count\", \"version\": \"1.0.0\", \"hosts\": []}"))
+    (with-temp-file (expand-file-name "plugin.wasm" plugin) (insert "wasm-one"))
+    (call-process (getenv "DRGNX_RATATOSKR_BIN") nil nil nil "plugins" "install" plugin)))
+
+(defun drgnx-look-scene--extensions (theme)
+  "The window scene under THEME with the Extensions list (the hub's rows: package, plugin and module icons) in the
+editor, the Explorer's rows beside it."
+  (drgnx-look-scene--theme theme)
+  (drgnx-look-scene--editor)
+  (require 'drgnx-extensions-list)
+  (unless (get-buffer drgnx-extensions-list-buffer-name)   ; once: the scenes share a session
+    (drgnx-look-scene--try "fixture" (drgnx-look-scene--extensions-fixture)))
+  (drgnx-look-scene--try "extensions"
+    (drgnx-wb-focus-editor)
+    (drgnx-extensions-open)
+    (drgnx-look-scene--until 20 "extensions rows"
+                             (lambda () (and (drgnx-extensions-list--hub-fed-p)
+                                             (with-current-buffer drgnx-extensions-list-buffer-name
+                                               (> (buffer-size) 0)))))
+    (with-current-buffer drgnx-extensions-list-buffer-name (goto-char (point-min))))
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-extensions-dark () (drgnx-look-scene--extensions 'drgnx-dark))
+(defun drgnx-look-scene-extensions-light () (drgnx-look-scene--extensions 'drgnx-light))
+(defun drgnx-look-scene-extensions-hc () (drgnx-look-scene--extensions 'drgnx-high-contrast))
+
 ;;;; The Search view's preview tile and Replace All sheet (search-view.html)
 
 (defvar drgnx-replace-buffer-name)
