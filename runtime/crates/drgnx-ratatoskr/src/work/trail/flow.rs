@@ -1388,13 +1388,13 @@ pub(crate) fn detail_tile(
         said.push(facts.status.clone());
     }
     let mut sub = RowBuilder::new("d:sub");
-    sub.push(
-        &fit(
-            &format!("{} {} · {}", t.label, t.title, said.join(" · ")),
-            chars,
-        ),
-        Some(LABEL),
+    // the task's words give way first: the time, spend and context stay whole
+    let said = format!(" · {}", said.join(" · "));
+    let task = fit(
+        &format!("{} {}", t.label, t.title),
+        chars.saturating_sub(said.chars().count()),
     );
+    sub.push(&fit(&format!("{task}{said}"), chars), Some(LABEL));
     out.push(sub.finish());
     let held_gates: Vec<(&str, &Cell)> = GATES
         .iter()
@@ -2517,6 +2517,14 @@ mod tests {
         );
         let (rows, _) = detail_tile(&flow(), "task:J#5", &env(1.0));
         assert!(rows[2].text.ends_with("· in-review"), "{}", rows[2].text);
+        // a title too long for the tile is cut, never the time, spend and context after it
+        f.tasks[1].title = "Git scopes and changed lines ".repeat(8);
+        let (rows, _) = detail_tile(&f, "task:J#5", &env(1.0));
+        assert!(
+            rows[2].text.ends_with("· 41 min · ≈$0.90 · ctx 88%"),
+            "{}",
+            rows[2].text
+        );
     }
 
     /// [D] The tile is titled as the mockup's (hub-orchestration.html `.tile-h`): the panel icon and "Detail · T5", the
