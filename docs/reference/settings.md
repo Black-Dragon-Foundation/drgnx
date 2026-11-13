@@ -2324,6 +2324,25 @@ Applies to new terminals.
 | `:agents` | `never` |
 | `:schema` | `(or null natnum)` |
 
+## drgnx-term-minimum-contrast
+
+The least contrast ratio (1 to 21, WCAG's) a terminal's text keeps against its background: a program's colour
+nearer than that is moved toward white or black until it reaches it.  1: colours are drawn as the program sets them;
+1.1 keeps text from vanishing into its background.  Applies to every terminal at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `1` |
+| Type | `number` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-term--theme-changed` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `number` |
+
 ## drgnx-term-mouse-reporting
 
 Whether a program that asks for the mouse gets it.  Off: clicks and the wheel in a terminal are always drgnx's.

@@ -563,3 +563,17 @@ the patch shows on the rows already inserted, with no new patch."
     (should (eq 'drgnx-term-color-1 (get-text-property (point-min) 'face)))
     (should (assq 'drgnx-term-color-1 face-remapping-alist))
     (should (equal "hello\n" (buffer-substring-no-properties (point-min) (point-max))))))
+
+(defvar drgnx-term-minimum-contrast)
+
+(ert-deftest drgnx-view-patch/minimum-contrast-moves-a-near-colour-and-leaves-the-rest ()
+  ;; the terminal's `minimum-contrast': a foreground too near its background is moved until it reaches the ratio
+  (let ((near (list :fg (list :rgb "#777777") :bg (list :rgb "#7a7a7a")))
+        (far (list :fg (list :rgb "#ffffff") :bg (list :rgb "#000000"))))
+    (let ((drgnx-term-minimum-contrast 1))
+      (should (equal (plist-get (drgnx-view-patch--style-attrs near) :foreground) "#777777")))
+    (let ((drgnx-term-minimum-contrast 4.5))
+      (let ((fg (plist-get (drgnx-view-patch--style-attrs near) :foreground)))
+        (should-not (equal fg "#777777"))
+        (should (>= (drgnx-color-contrast fg "#7a7a7a") 4.5)))
+      (should (equal (plist-get (drgnx-view-patch--style-attrs far) :foreground) "#ffffff")))))

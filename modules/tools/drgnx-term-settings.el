@@ -66,6 +66,12 @@ programs expect the dark theme's order.  No effect while `drgnx-term-palette-gen
 terminal at once."
   :type 'boolean :group 'drgnx :scope 'global :agents 'never :schema 'boolean :apply #'drgnx-term--theme-changed)
 
+(drgnx-defsetting drgnx-term-minimum-contrast 1
+  "The least contrast ratio (1 to 21, WCAG's) a terminal's text keeps against its background: a program's colour
+nearer than that is moved toward white or black until it reaches it.  1: colours are drawn as the program sets them;
+1.1 keeps text from vanishing into its background.  Applies to every terminal at once."
+  :type 'number :group 'drgnx :scope 'global :agents 'never :schema 'number :apply #'drgnx-term--theme-changed)
+
 ;;;; Live: drgnx's
 
 (drgnx-defsetting drgnx-term-desktop-notifications t
@@ -312,7 +318,7 @@ Applies to new terminals."
     ("clipboard-write" live drgnx-term-clipboard-write)
     ("palette-generate" live drgnx-term-palette-generate)
     ("palette-harmonious" live drgnx-term-palette-harmonious)
-    ("minimum-contrast" later "a program's colours are drawn as it sets them")
+    ("minimum-contrast" live drgnx-term-minimum-contrast)
     ;; drgnx's behaviour: live
     ("clipboard-paste-protection" live drgnx-term-clipboard-paste-protection)
     ("clipboard-paste-bracketed-safe" live drgnx-term-clipboard-paste-bracketed-safe)
