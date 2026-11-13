@@ -141,6 +141,10 @@ impl Heaps {
             .as_ref()
             .map_or_else(heap::Diff::default, |(n, _)| heap::diff(n, &g.nodes));
         let out = wire(&id, &session, &expr, &g, &l, diff);
+        // the recorded run keeps it with the stop (sealed like the rest: spec §19.2)
+        if let (Some(rec), Some(e)) = (d.records(), epoch) {
+            rec.heap(&session, e, json!(out));
+        }
         let mut open = self.open.lock().expect("heaps");
         // graphs of sessions that have ended go with them
         open.retain(|_, k| d.session(&k.session).is_some_and(|h| !h.is_ended()));

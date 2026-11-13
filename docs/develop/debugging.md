@@ -1141,6 +1141,10 @@ The design is `docs/specs/drgnx/2026-11-13-heap-graph-design.md` in the org fold
   objects added, changed and gone. At each new stop of its session (`Update::Stopped`), an open graph not yet read
   at that epoch is read again in the selected frame and sent to that editor as `debug-heap`: the same shape as the
   answer, or `{graph, session, error}`. The graphs of an ended session go at the next read.
+- **Recorded runs** keep every graph read at a stop: `Records::heap` appends a `Frame::Heap {seq, stop, graph}` to
+  the run file once the session's last stop matches the read's epoch. The block's index lists the frame
+  (`BlockMeta::heaps`), and making room drops hits but keeps it. `debug/run/stop` returns the graphs as `heaps`, the
+  last read of each graph id, so a replay or a sent run shows them with no live program.
 
 Methods (runstav `methods::debug_heap`, the user class):
 - `debug/heap {session?, frame?, expr?, graph?, limit?, depth?}` returns `{graph, session, expr, node?, nodes, cut,

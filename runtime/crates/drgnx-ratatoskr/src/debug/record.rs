@@ -367,6 +367,8 @@ struct Live {
     steps: Vec<String>,
     /// (session, epoch) already recorded: a stop published again (a frame selected) is not a new stop.
     seen: BTreeSet<(String, u64)>,
+    /// Each session's last stop: its epoch and its index (a heap graph read at it goes with it).
+    last_stop: BTreeMap<String, (u64, u64)>,
 }
 
 impl Live {
@@ -548,6 +550,7 @@ impl Records {
                 bp_hits: BTreeMap::new(),
                 steps: vec![],
                 seen: BTreeSet::new(),
+                last_stop: BTreeMap::new(),
             },
         );
         lock(&self.sessions).insert(session.to_owned(), id.clone());
@@ -655,6 +658,7 @@ impl Records {
                 l.meta.to_stop_ms = Some(t_ms);
             }
             l.meta.stops += 1;
+            l.last_stop.insert(session.to_owned(), (stop.epoch, l.seq));
             l.file.append(Frame::Stop {
                 stop: rs.clone(),
                 capture: capture(stop),
@@ -664,6 +668,31 @@ impl Records {
             rs
         };
         self.publish(&run, Some(&rs));
+    }
+
+    /// A heap graph (`debug/heap`'s answer) read at SESSION's stop EPOCH: kept with that stop, so a past stop shows it.
+    pub fn heap(self: &Arc<Self>, session: &str, epoch: u64, graph: Value) {
+        let Some(run) = self.run_of(session) else {
+            return;
+        };
+        let session = session.to_owned();
+        self.later("heap graph", move |r| {
+            let mut live = lock(&r.live);
+            let Some(l) = live.get_mut(&run) else { return };
+            let Some(&(e, stop)) = l.last_stop.get(&session) else {
+                return;
+            };
+            // read at a stop the run has moved past: it is not that stop's
+            if e != epoch {
+                return;
+            }
+            l.file.append(Frame::Heap {
+                seq: l.seq,
+                stop,
+                graph,
+            });
+            l.file.flush();
+        });
     }
 
     /// SESSION's `output` event BODY: its probe hits are recorded; the event as the console should see it (none when
@@ -988,6 +1017,7 @@ impl Records {
             "run": id,
             "stop": stop,
             "capture": capture,
+            "heaps": r.heaps(index),
             "snapshot": meta.snapshot.as_ref().map(|s| &s.tree),
             "source": {"path": path, "text": source, "not_what_ran": meta.unsaved.contains(&path)},
         }))
@@ -1068,7 +1098,7 @@ impl Runs for Records {
             .into_iter()
             .filter_map(|f| match f {
                 Frame::Hit(h) => Some(h),
-                Frame::Stop { .. } => None,
+                _ => None,
             })
             .collect();
         Some(RunInfo {

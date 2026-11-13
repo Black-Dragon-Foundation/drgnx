@@ -220,6 +220,7 @@ fields, and each reference is an arrow to another card. An object reached two wa
 cycle closes on itself. At the next stop the graph is read again: the cards keep their places, and the objects added,
 changed and gone are marked. A graph holds up to 50 objects by default (200 at most); a reference left past that, or
 past two seconds of reading, is counted on the graph.
+A recorded run keeps each graph read at a stop, so opening that past stop later (or in a sent run) shows it.
 
 To tell objects apart, drgnx asks the program in the stopped frame: Python's `id()`, the address of a Go, C, C++ or
 Rust pointer. **JavaScript has no such id, so drgnx writes into your program:** while a session is attached, one hidden

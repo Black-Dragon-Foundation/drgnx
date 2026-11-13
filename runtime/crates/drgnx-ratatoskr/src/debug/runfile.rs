@@ -71,8 +71,18 @@ pub struct RunHit {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "k", rename_all = "lowercase")]
 pub enum Frame {
-    Stop { stop: RunStop, capture: Value },
+    Stop {
+        stop: RunStop,
+        capture: Value,
+    },
     Hit(RunHit),
+    /// A heap graph (`debug/heap`'s answer) read at stop STOP; SEQ is the run's counter when it was read (it takes no
+    /// number of its own, so the blocks' ranges stay in order).
+    Heap {
+        seq: u64,
+        stop: u64,
+        graph: Value,
+    },
 }
 
 impl Frame {
@@ -80,6 +90,7 @@ impl Frame {
         match self {
             Frame::Stop { stop, .. } => stop.index,
             Frame::Hit(h) => h.seq,
+            Frame::Heap { seq, .. } => *seq,
         }
     }
 }
@@ -95,6 +106,9 @@ pub struct BlockMeta {
     pub hits: u32,
     /// The `index` of each stop in it.
     pub stops: Vec<u64>,
+    /// The stop of each heap graph in it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub heaps: Vec<u64>,
 }
 
 /// The index: the blocks, the stops (in order), and what was dropped.
@@ -192,6 +206,7 @@ impl RunFile {
                 *self.index.hits.entry(h.probe.clone()).or_default() += 1;
             }
             Frame::Stop { stop, .. } => self.index.stops.push(stop.clone()),
+            Frame::Heap { .. } => {}
         }
         self.pending_raw += serde_json::to_vec(&frame).map(|v| v.len() + 1).unwrap_or(0);
         self.pending.push(frame);
@@ -261,7 +276,8 @@ impl RunFile {
                 break;
             }
             let before = blocks[i].len();
-            blocks[i].retain(|f| matches!(f, Frame::Stop { .. }));
+            // the hits go; stops and the graphs read at them stay
+            blocks[i].retain(|f| !matches!(f, Frame::Hit(_)));
             let gone = before - blocks[i].len();
             if gone == 0 {
                 continue;
@@ -346,7 +362,14 @@ fn block(key: &FileKey, frames: &[Frame], off: u64) -> (BlockMeta, Vec<u8>) {
             .iter()
             .filter_map(|f| match f {
                 Frame::Stop { stop, .. } => Some(stop.index),
-                Frame::Hit(_) => None,
+                _ => None,
+            })
+            .collect(),
+        heaps: frames
+            .iter()
+            .filter_map(|f| match f {
+                Frame::Heap { stop, .. } => Some(*stop),
+                _ => None,
             })
             .collect(),
     };
@@ -428,6 +451,30 @@ impl Reader {
             .filter_map(|i| self.block(i))
             .flatten()
             .collect()
+    }
+
+    /// The heap graphs read at stop INDEX, the last read of each graph (by its `graph` id), in the order first read.
+    pub fn heaps(&self, index: u64) -> Vec<Value> {
+        let mut out: Vec<Value> = vec![];
+        for (i, _) in self
+            .index
+            .blocks
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.heaps.contains(&index))
+        {
+            for f in self.block(i).unwrap_or_default() {
+                if let Frame::Heap { stop, graph, .. } = f
+                    && stop == index
+                {
+                    match out.iter_mut().find(|g| g["graph"] == graph["graph"]) {
+                        Some(g) => *g = graph,
+                        None => out.push(graph),
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// The stop numbered INDEX with its capture, from its block alone.
