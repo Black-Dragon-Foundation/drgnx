@@ -2784,6 +2784,26 @@ impl Session {
         lock(&self.allowed).get(id).cloned()
     }
 
+    /// Whether the session's folder is one the user trusted (`trusted-folders.eld`, [`super::trust`]): fail closed.  A
+    /// problem with the file is said once per change to every editor.
+    fn cwd_trusted(&self) -> bool {
+        let env = runstav::paths::Env::process();
+        let Some(home) = env.vars.get("HOME") else {
+            return false;
+        };
+        let file = runstav::paths::state_dir(&env).join("trusted-folders.eld");
+        let answer = super::trust::trusts(&file, Path::new(home), &self.cwd);
+        if let (Some(problem), Some(front)) = (answer.problem, self.tool_hub.front()) {
+            tracing::warn!("{problem}");
+            front.broadcast(
+                "notice",
+                json!({"source": "hub", "severity": "warn", "id": "trusted-folders", "life": "event",
+                       "text": format!("no folder you trusted counts for git reads: {problem}")}),
+            );
+        }
+        answer.trusted
+    }
+
     /// Whether a live Always grant of this session covers tool entry E (its kind, when both name one, and its title).
     pub(crate) fn always_covers(&self, e: &Entry) -> bool {
         let title = e.rest.get("title").and_then(Value::as_str);
@@ -4722,7 +4742,7 @@ impl Session {
                 s.refuse_call(resp, pick_reject(&options), req.get("toolCall"));
                 return;
             }
-            let (action, facts) = classify(req.get("toolCall"));
+            let (action, facts) = classify(req.get("toolCall"), s.cwd_trusted());
             // the push gate: a job's push waits for one full run on each commit it sends (the matrix still decides
             // after)
             if matches!(action, Action::PushCi | Action::PushMain)
@@ -6453,9 +6473,11 @@ fn pick_allow(options: &[(String, String)]) -> Option<String> {
 /// Whether COMMAND is one plain read: a single command from a short list (`ls`, `cat`, `head`, `tail`, `wc`, `rg`,
 /// `grep`), with no shell syntax that could chain, redirect or substitute (`; | & ` $ ( ) < >`, a backslash or a line
 /// break) and no option that runs something (`--exec…`; rg's `--pre…`, `--search-zip` and `-z`).  Anything else is an
-/// edit, git too: git runs what the repository's own config names (`core.fsmonitor` on `git status`, `diff.external`,
-/// textconv drivers, the pager), and the hub does not know which folders the user trusts.
-fn is_plain_read(command: &str) -> bool {
+/// edit.  Git too, unless GIT_OK (the session's folder is one the user trusted, [`super::trust`]) and it is one of
+/// `status`, `log`, `diff`, `show` or `blame` straight after `git` (no global option such as `-c` or `--exec-path`) and
+/// with no option that writes or runs something (`-c`, `--output…`, `--ext-diff`, `--textconv`): git runs what the
+/// repository's own config names (`core.fsmonitor` on `git status`, `diff.external`, textconv drivers, the pager).
+fn is_plain_read(command: &str, git_ok: bool) -> bool {
     const SHELL: &[char] = &[
         ';', '|', '&', '`', '$', '(', ')', '<', '>', '\\', '\n', '\r',
     ];
@@ -6477,12 +6499,25 @@ fn is_plain_read(command: &str) -> bool {
         "rg" => !args
             .iter()
             .any(|a| a.starts_with("--pre") || a.starts_with("--search-zip") || short(a, 'z')),
+        "git" => {
+            git_ok
+                && args
+                    .first()
+                    .is_some_and(|s| matches!(*s, "status" | "log" | "diff" | "show" | "blame"))
+                && !args.iter().any(|a| {
+                    short(a, 'c')
+                        || a.starts_with("--output")
+                        || a.starts_with("--ext-diff")
+                        || a.starts_with("--textconv")
+                        || a.starts_with("--open-files-in-pager")
+                })
+        }
         _ => false,
     }
 }
 
 /// What a tool call is in the matrix's words, and the facts a card shows (the hub's own reading of it).
-fn classify(tool: Option<&Value>) -> (Action, runstav::methods::matrix::Facts) {
+fn classify(tool: Option<&Value>, git_ok: bool) -> (Action, runstav::methods::matrix::Facts) {
     let kind = tool
         .and_then(|t| t.get("kind"))
         .and_then(Value::as_str)
@@ -6515,7 +6550,7 @@ fn classify(tool: Option<&Value>) -> (Action, runstav::methods::matrix::Facts) {
                 }
             } else if c.contains("git commit") {
                 Action::Commit
-            } else if is_plain_read(c) {
+            } else if is_plain_read(c, git_ok) {
                 Action::CodeRead
             } else {
                 Action::CodeEdit
@@ -8358,7 +8393,7 @@ mod wait_tests {
             "rg -n foo src",
             "grep -rn foo src",
         ] {
-            assert_eq!(classify(Some(&exec(c))).0, Action::CodeRead, "{c}");
+            assert_eq!(classify(Some(&exec(c)), false).0, Action::CodeRead, "{c}");
         }
         // every way around the list stays an edit: chained, piped, substituted or redirected commands, rg's
         // preprocessor and decompression, anything not on the list; git always (a repository's core.fsmonitor runs on
@@ -8398,7 +8433,42 @@ mod wait_tests {
             "FOO=1 ls",
             "",
         ] {
-            assert_ne!(classify(Some(&exec(c))).0, Action::CodeRead, "{c:?}");
+            assert_ne!(classify(Some(&exec(c)), false).0, Action::CodeRead, "{c:?}");
+        }
+    }
+
+    /// In a folder the user trusted a chat's git status, log, diff, show and blame are reads; every other git
+    /// command, a global option and an option that writes or runs something stay edits, and so does every git
+    /// command elsewhere.
+    #[test]
+    fn git_reads_count_only_in_a_trusted_folder() {
+        for c in [
+            "git status",
+            "git log --oneline -5",
+            "git diff HEAD~1",
+            "git show abc123",
+            "git blame a.rs",
+        ] {
+            assert_eq!(classify(Some(&exec(c)), true).0, Action::CodeRead, "{c}");
+            assert_ne!(classify(Some(&exec(c)), false).0, Action::CodeRead, "{c}");
+        }
+        for c in [
+            "git -c core.pager=sh log",
+            "git --exec-path=/tmp log",
+            "git -C /x status",
+            "git log -c",
+            "git log -ic",
+            "git diff --output=x",
+            "git diff --ext-diff",
+            "git log --textconv",
+            "git show --open-files-in-pager",
+            "git commit -m x",
+            "git checkout .",
+            "git status; rm x",
+            "git log | sh",
+            "git",
+        ] {
+            assert_ne!(classify(Some(&exec(c)), true).0, Action::CodeRead, "{c:?}");
         }
     }
 }

@@ -161,6 +161,46 @@ fn context_closes_data_state_config_and_sockets() {
     assert_eq!(r.rule, Rule::ProgramDir, "{}", r.message);
 }
 
+/// The hub counts a chat's git reads by `trusted-folders.eld` (`agents::trust`): the file lives in the state dir, which
+/// is closed, so no spec of an agent or a job can write it, nor read it, nor bind its folder.
+#[test]
+fn an_agent_cannot_write_the_trusted_folders_file() {
+    let fx = Fx::new();
+    let ctx = context_for(&fx.env(), Some(&fx.p("bin/ratatoskr")));
+    let file = fx.p("home/.local/state/drgnx/trusted-folders.eld");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, "(:version 2 :folders ())\n").unwrap();
+    let spec = |write: PathBuf, chdir: PathBuf| Spec {
+        read: vec![],
+        write: vec![write],
+        hide: vec![],
+        sockets: vec![],
+        binds: vec![],
+        home: None,
+        run: None,
+        env: vec![],
+        chdir,
+        net: Net::Shared,
+        tmp: None,
+        layers: Layers::for_target(Target::LinuxBwrap),
+        extra_tcp_ports: vec![],
+        trace: Default::default(),
+        browser: None,
+    };
+    for write in [file.clone(), file.parent().unwrap().to_path_buf()] {
+        let r = validate(
+            spec(write.clone(), fx.p("home/proj")),
+            &ctx,
+            Target::LinuxBwrap,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(r.rule, Rule::Closed | Rule::ExposesUser),
+            "{write:?}: {r:?}"
+        );
+    }
+}
+
 /// Review M10: what an agent session is given is its session dir (`s/SID`, from `paths::make_session_dir`), which
 /// Gleipnir takes as a run source; another directory beside the hub's socket (an older hub's `hub-HASH.d/`, say) is
 /// never one, nor can any other source reach it.
