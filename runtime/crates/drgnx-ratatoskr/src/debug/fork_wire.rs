@@ -194,14 +194,15 @@ pub(super) fn resolved_for(front: &Front, run: &RunInfo) -> Result<Value, String
 }
 
 /// Run RUN replayed to its stop STOP in a tree of its own and ended there (D3's origin trail): FILES (relative path,
-/// bytes) written into the tree and ENV(the tree's absolute path) added to the environment before the launch. The tree
-/// goes when the [`TraceTree`] does.
+/// bytes) written into the tree, ENV(the tree's absolute path) added to the environment before the launch, PROBES set
+/// (their hits in [`TraceTree::hits`]). The tree goes when the [`TraceTree`] does.
 pub async fn trace<F>(
     front: Arc<Front>,
     run: String,
     stop: u64,
     env: F,
     files: Vec<(String, Vec<u8>)>,
+    probes: Vec<super::record::RunProbe>,
 ) -> Result<TraceTree, String>
 where
     F: FnOnce(&Path) -> Vec<(String, String)> + Send + 'static,
@@ -211,7 +212,7 @@ where
         .recorded(&run)
         .ok_or_else(|| format!("no recorded run {run}"))?;
     let resolved = resolved_for(&front, &info)?;
-    f.trace(&run, stop, resolved, env, files).await
+    f.trace(&run, stop, resolved, env, files, probes).await
 }
 
 /// Run RUN's configuration in TREE (one of D5's bisect slots: strictly under [`slots_root`], links resolved) to the
@@ -250,6 +251,10 @@ fn answer<T: serde::Serialize>(r: Result<T, Error>) -> Result<Value, Error> {
 
 /// The fork methods' answers (the front hands only these here).
 pub async fn serve(front: &Front, params: Params) -> Result<Value, Error> {
+    // a fork is of the run as recorded so far
+    if let Some(r) = front.debug.debug(front).records() {
+        r.written().await;
+    }
     match params {
         Params::DebugFork(p) => answer(fork(front, p).await),
         Params::DebugForkRun(DebugForkId { fork }) => {

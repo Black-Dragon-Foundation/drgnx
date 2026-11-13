@@ -689,6 +689,7 @@ async fn the_store_is_kept_per_project_in_the_state_directory() {
         .await;
     d.breakpoints("/q", Some(add_bp("/q/b.js", 8, None)), None)
         .await;
+    d.written().await;
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
     let again = Debug::with_store(ev, terms, Some(dir.path().to_owned()));
     assert_eq!(

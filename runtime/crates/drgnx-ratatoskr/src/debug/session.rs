@@ -146,6 +146,11 @@ pub enum Op {
     StepOut {
         thread: Option<i64>,
     },
+    /// One instruction: STEP is `next`, `in` or `out` (the adapter's `granularity: instruction`).
+    Instruction {
+        thread: Option<i64>,
+        step: &'static str,
+    },
     Restart,
     /// Stop: the stop sequence. `kill_debuggee`: an attach session's **Stop and Kill Debuggee** (`Some(true)`).
     Stop {
@@ -929,6 +934,16 @@ impl Session {
             Op::Next { thread: t } => step("next", thread(t, self)),
             Op::StepIn { thread: t } => step("stepIn", thread(t, self)),
             Op::StepOut { thread: t } => step("stepOut", thread(t, self)),
+            Op::Instruction { thread: t, step: s } => {
+                let command = match s {
+                    "in" => "stepIn",
+                    "out" => "stepOut",
+                    _ => "next",
+                };
+                let (c, mut args) = step(command, thread(t, self));
+                args["granularity"] = json!("instruction");
+                (c, args)
+            }
             Op::Restart => {
                 if self.cap("supportsRestartRequest") {
                     let r = self

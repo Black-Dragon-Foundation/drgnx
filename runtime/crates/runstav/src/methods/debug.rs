@@ -150,6 +150,10 @@ pub struct DebugControl {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread: Option<i64>,
     pub op: String,
+    /// `instruction`: `next`, `step-in` and `step-out` step one instruction (the adapter's
+    /// `supportsSteppingGranularity`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub granularity: Option<String>,
 }
 
 /// The controls `debug/control` knows.
@@ -206,6 +210,148 @@ pub struct BreakpointLocation {
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct DebugBreakpointLocationsList {
     pub locations: Vec<BreakpointLocation>,
+}
+
+/// `debug/disassemble`: COUNT instructions (at most [`DISASSEMBLE_MAX`]) from INSTRUCTION_OFFSET instructions after
+/// the one at OFFSET bytes from SESSION's memory REFERENCE (a frame's `instruction_pointer`).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugDisassemble {
+    pub session: String,
+    pub reference: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instruction_offset: Option<i64>,
+    pub count: u32,
+}
+
+/// The most instructions one `debug/disassemble` reads.
+pub const DISASSEMBLE_MAX: u32 = 500;
+
+/// One instruction: its ADDRESS, BYTES, text, SYMBOL, and the source PATH and LINE(s) it comes from.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DisassembledInstruction {
+    pub address: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<String>,
+    pub instruction: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_line: Option<u32>,
+}
+
+/// `debug/disassemble`'s answer: the INSTRUCTIONS in address order.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugDisassembly {
+    pub instructions: Vec<DisassembledInstruction>,
+}
+
+/// `debug/hot-reload`: SESSION's stopped Python program takes PATH's changed function bodies as saved (D8).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugHotReload {
+    pub session: String,
+    pub path: String,
+}
+
+/// What a hot reload could not take, and why.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct HotReloadSkip {
+    pub name: String,
+    pub why: String,
+}
+
+/// `debug/hot-reload`'s answer: the functions PATCHED (qualified names), those SKIPPED, and whether the selected
+/// frame RESTARTED with the new code (else running frames keep the old code until their next call).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugHotReloaded {
+    pub patched: Vec<String>,
+    pub skipped: Vec<HotReloadSkip>,
+    pub restarted: bool,
+}
+
+/// `debug/completions`: the Debug Console's completions for TEXT with point at COLUMN (0-based, in characters), in
+/// FRAME (the stopped one when none).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugCompletions {
+    pub session: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame: Option<i64>,
+    pub text: String,
+    pub column: u32,
+}
+
+/// One completion: LABEL, the TEXT it inserts when not the label, its TYPE, and the span of the text it replaces
+/// (START and LENGTH, 0-based characters) when the adapter gave one.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct CompletionTarget {
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub ty: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length: Option<u32>,
+}
+
+/// `debug/completions`' answer: the TARGETS in the adapter's order; none when it has no completions
+/// (`supportsCompletionsRequest`).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugCompletionList {
+    pub targets: Vec<CompletionTarget>,
+}
+
+/// `debug/read-memory`: COUNT bytes (at most [`READ_MEMORY_MAX`]) at OFFSET from SESSION's memory REFERENCE (a
+/// variable's `memoryReference`).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugReadMemory {
+    pub session: String,
+    pub reference: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<i64>,
+    pub count: u32,
+}
+
+/// The most bytes one `debug/read-memory` reads.
+pub const READ_MEMORY_MAX: u32 = 64 * 1024;
+
+/// `debug/read-memory`'s answer: the first byte's ADDRESS, the DATA read (base64; empty when none could be), and how
+/// many bytes after it could not be read.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugMemory {
+    pub address: String,
+    pub data: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unreadable: Option<u64>,
+}
+
+/// `debug/write-memory`: DATA (base64) written at OFFSET from SESSION's memory REFERENCE; ALLOW_PARTIAL lets the
+/// adapter write what it can.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugWriteMemory {
+    pub session: String,
+    pub reference: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<i64>,
+    pub data: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_partial: Option<bool>,
+}
+
+/// `debug/write-memory`'s answer, as the adapter gave it: where the write began (OFFSET from the reference) and how
+/// many bytes it WROTE.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct DebugMemoryWritten {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub written: Option<u64>,
 }
 
 /// `debug/source`: the text of SESSION's source REF (a frame whose source has no file: `sourceReference`).
@@ -291,6 +437,12 @@ pub struct DebugBreakpoints {
     pub path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub op: Option<DebugBreakpointOp>,
+    /// With KIND `instruction`: SESSION's instruction breakpoints (they are the session's, never kept), their view
+    /// and their ops (`add-instruction`, `remove-instruction`, `edit-instruction`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 }
 
 /// One change to the breakpoint store, by id: `add` (PATH, LINE; the breakpoint already on that line if any),
@@ -322,6 +474,12 @@ pub struct DebugBreakpointOp {
     /// `trigger`'s triggering breakpoint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub triggered_by: Option<u64>,
+    /// `add-instruction`'s instruction (a memory reference: a frame's `instruction_pointer`, a disassembled
+    /// address) and its OFFSET in bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instruction: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<i64>,
     /// `add`'s and `move`'s column (1-based, in characters): an inline breakpoint. `move` without one keeps the
     /// breakpoint's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -343,6 +501,9 @@ pub const BP_OPS: &[&str] = &[
     "enable-all",
     "toggle-all",
     "remove-all",
+    "add-instruction",
+    "remove-instruction",
+    "edit-instruction",
 ];
 
 /// `debug/view`: VIEW is the Run and Debug view of ROOT's sessions, its Variables and Watch of SESSION (none: the
@@ -460,7 +621,11 @@ pub struct DebugChild {
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct DebugBreakpointsView {
     pub root: String,
-    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// The session of an instruction view (no path).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
     pub version: u64,
     pub breakpoints: Vec<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -593,7 +758,14 @@ fn check_control(p: &DebugControl) -> Result<(), Error> {
             "one of continue, pause, next, step-in, step-out, restart, stop, stop-and-kill, disconnect",
         ));
     }
-    Ok(())
+    match p.granularity.as_deref() {
+        None => Ok(()),
+        Some("instruction") if matches!(p.op.as_str(), "next" | "step-in" | "step-out") => Ok(()),
+        Some(_) => Err(invalid(
+            "granularity",
+            "instruction, with next, step-in or step-out",
+        )),
+    }
 }
 
 fn check_select(p: &DebugSelect) -> Result<(), Error> {
@@ -617,6 +789,47 @@ fn check_breakpoint_locations(p: &DebugBreakpointLocations) -> Result<(), Error>
     Ok(())
 }
 
+fn check_hot_reload(p: &DebugHotReload) -> Result<(), Error> {
+    check_text("session", &p.session)?;
+    check_path("path", &p.path)
+}
+
+fn check_disassemble(p: &DebugDisassemble) -> Result<(), Error> {
+    check_text("session", &p.session)?;
+    check_text("reference", &p.reference)?;
+    if p.count == 0 || p.count > DISASSEMBLE_MAX {
+        return Err(invalid("count", "1 to 500 instructions"));
+    }
+    Ok(())
+}
+
+fn check_completions(p: &DebugCompletions) -> Result<(), Error> {
+    check_text("session", &p.session)?;
+    if p.column as usize > p.text.chars().count() {
+        return Err(invalid("column", "a position in text"));
+    }
+    Ok(())
+}
+
+fn check_read_memory(p: &DebugReadMemory) -> Result<(), Error> {
+    check_text("session", &p.session)?;
+    check_text("reference", &p.reference)?;
+    if p.count == 0 || p.count > READ_MEMORY_MAX {
+        return Err(invalid("count", "1 to 65536 bytes"));
+    }
+    Ok(())
+}
+
+fn check_write_memory(p: &DebugWriteMemory) -> Result<(), Error> {
+    check_text("session", &p.session)?;
+    check_text("reference", &p.reference)?;
+    let b64 = |c: char| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=');
+    if p.data.is_empty() || !p.data.len().is_multiple_of(4) || !p.data.chars().all(b64) {
+        return Err(invalid("data", "base64 bytes"));
+    }
+    Ok(())
+}
+
 fn check_install(p: &DebugInstall) -> Result<(), Error> {
     check_text("adapter", &p.adapter)
 }
@@ -635,6 +848,11 @@ fn check_path(path: &str, s: &str) -> Result<(), Error> {
 
 fn check_breakpoints(p: &DebugBreakpoints) -> Result<(), Error> {
     check_root(&p.root)?;
+    match p.kind.as_deref() {
+        None => {}
+        Some("instruction") => check_text("session", p.session.as_deref().unwrap_or_default())?,
+        Some(_) => return Err(invalid("kind", "instruction or none")),
+    }
     if let Some(path) = &p.path {
         check_path("path", path)?;
     }
@@ -642,7 +860,14 @@ fn check_breakpoints(p: &DebugBreakpoints) -> Result<(), Error> {
     if !BP_OPS.contains(&op.op.as_str()) {
         return Err(invalid(
             "op.op",
-            "one of add, remove, edit, move, add-function, remove-function, trigger, filter, enable-all, toggle-all, remove-all",
+            "one of add, remove, edit, move, add-function, remove-function, trigger, filter, enable-all, toggle-all, remove-all, add-instruction, remove-instruction, edit-instruction",
+        ));
+    }
+    let instruction_op = op.op.ends_with("-instruction");
+    if instruction_op != (p.kind.as_deref() == Some("instruction")) {
+        return Err(invalid(
+            "kind",
+            "instruction with an instruction op, none otherwise",
         ));
     }
     for (k, v) in [
@@ -666,7 +891,13 @@ fn check_breakpoints(p: &DebugBreakpoints) -> Result<(), Error> {
             check_path("op.path", op.path.as_deref().unwrap_or_default())?;
             need("op.line", op.line.is_some_and(|l| l > 0))
         }
-        "remove" | "edit" | "trigger" => need("op.id", op.id.is_some()),
+        "remove" | "edit" | "trigger" | "remove-instruction" | "edit-instruction" => {
+            need("op.id", op.id.is_some())
+        }
+        "add-instruction" => check_text(
+            "op.instruction",
+            op.instruction.as_deref().unwrap_or_default(),
+        ),
         "filter" => {
             check_text("op.adapter", op.adapter.as_deref().unwrap_or_default())?;
             check_text("op.name", op.name.as_deref().unwrap_or_default())?;
@@ -839,6 +1070,36 @@ pub(crate) fn methods() -> Vec<Method> {
             classes: [User], writes: false,
             doc: "a project's trust changed: a project never told trusted runs no configuration, and revoking trust stops its sessions",
             check: check_trust,
+        ),
+        method!(
+            "debug/hot-reload", DebugHotReload(DebugHotReload) -> DebugHotReloaded,
+            classes: [User], writes: false,
+            doc: "the stopped Python program takes a saved file's changed function bodies (frames running keep their old code unless the adapter restarts the frame)",
+            check: check_hot_reload,
+        ),
+        method!(
+            "debug/disassemble", DebugDisassemble(DebugDisassemble) -> DebugDisassembly,
+            classes: [User], writes: false,
+            doc: "the debugged program's instructions around a memory reference (a frame's instruction pointer), at most 500, for the disassembly view",
+            check: check_disassemble,
+        ),
+        method!(
+            "debug/completions", DebugCompletions(DebugCompletions) -> DebugCompletionList,
+            classes: [User], writes: false,
+            doc: "the Debug Console's completions for its text at point, from the adapter; none when it has none",
+            check: check_completions,
+        ),
+        method!(
+            "debug/read-memory", DebugReadMemory(DebugReadMemory) -> DebugMemory,
+            classes: [User], writes: false,
+            doc: "bytes of the debugged program's memory at a variable's memory reference (at most 64 KiB), for the memory view",
+            check: check_read_memory,
+        ),
+        method!(
+            "debug/write-memory", DebugWriteMemory(DebugWriteMemory) -> DebugMemoryWritten,
+            classes: [User], writes: false,
+            doc: "write bytes into the debugged program's memory at a variable's memory reference, from the memory view",
+            check: check_write_memory,
         ),
         method!(
             "debug/breakpoint-locations", DebugBreakpointLocations(DebugBreakpointLocations) -> DebugBreakpointLocationsList,

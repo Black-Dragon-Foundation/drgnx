@@ -108,6 +108,46 @@ pub struct DataBp {
     pub access_type: Option<String>,
 }
 
+/// An instruction breakpoint: the session's own, at memory reference INSTRUCTION plus OFFSET bytes, numbered N in
+/// its session.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InstrBp {
+    pub n: u64,
+    pub instruction: String,
+    pub offset: Option<i64>,
+    pub condition: Option<String>,
+    pub hit: Option<String>,
+    pub enabled: bool,
+}
+
+/// A change to a session's instruction breakpoints: an empty text clears a condition or hit count.
+#[derive(Clone, Debug, PartialEq)]
+pub enum InstrOp {
+    Add {
+        instruction: String,
+        offset: Option<i64>,
+        condition: Option<String>,
+        hit: Option<String>,
+    },
+    Remove {
+        n: u64,
+    },
+    Edit {
+        n: u64,
+        enabled: Option<bool>,
+        condition: Option<String>,
+        hit: Option<String>,
+    },
+}
+
+/// A session's instruction breakpoints: the last number given, the view's version, the list in the order sent.
+#[derive(Default)]
+struct Instrs {
+    last: u64,
+    version: u64,
+    list: Vec<(InstrBp, Bound)>,
+}
+
 /// What an operation changed: PATH's new VERSION (an empty path for function breakpoints), and the breakpoint's ID
 /// when it added one.
 #[derive(Clone, Debug, PartialEq)]
@@ -196,6 +236,8 @@ struct Temp {
 /// One project's breakpoints.
 pub struct Store {
     file: Option<PathBuf>,
+    /// The file's writes, in order, off the hub's workers (with a file).
+    disk: Option<std::sync::Arc<crate::disk::Ordered>>,
     data: Data,
     /// (session, path) → the ids last sent, in the order sent (`answer` reads the adapter's answer in that order).
     sent: BTreeMap<(String, String), Vec<u64>>,
@@ -208,6 +250,8 @@ pub struct Store {
     touched: BTreeSet<String>,
     /// Each session's data breakpoints, in the order sent, with what its adapter made of them.
     datas: BTreeMap<String, Vec<(DataBp, Bound)>>,
+    /// Each session's instruction breakpoints: in memory only, gone with the session.
+    instrs: BTreeMap<String, Instrs>,
 }
 
 /// BPS (`SourceBreakpoint`s) as an adapter with CAPS takes them: without the fields it does not support. A probe
@@ -305,6 +349,12 @@ impl Store {
             None => Data::default(),
         };
         Store {
+            disk: file.as_ref().map(|_| {
+                std::sync::Arc::new(crate::disk::Ordered::reporting(
+                    "debug:breakpoints",
+                    |what, e| tracing::warn!(target: "drgnx::debug", "{what}: {e}"),
+                ))
+            }),
             file,
             data,
             sent: BTreeMap::new(),
@@ -314,18 +364,28 @@ impl Store {
             armed: BTreeSet::new(),
             touched: BTreeSet::new(),
             datas: BTreeMap::new(),
+            instrs: BTreeMap::new(),
         }
     }
 
+    /// The store as it is now, queued for its file: written in order off the hub's workers (`crate::disk`).
     fn save(&self) {
-        let Some(f) = &self.file else { return };
-        if let Some(dir) = f.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
+        let (Some(f), Some(disk)) = (&self.file, &self.disk) else {
+            return;
+        };
         let text = serde_json::to_string(&self.data).unwrap_or_default();
-        if let Err(e) = crate::records::write_atomic(f, &text) {
-            tracing::warn!(target: "drgnx::debug", "breakpoints {}: {e}", f.display());
-        }
+        let f = f.clone();
+        disk.push(format!("breakpoints {}", f.display()), move || {
+            if let Some(dir) = f.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            crate::records::write_atomic(&f, &text)
+        });
+    }
+
+    /// The file's writer: its `written` is every save so far landed (none: no file).
+    pub(crate) fn disk(&self) -> Option<std::sync::Arc<crate::disk::Ordered>> {
+        self.disk.clone()
     }
 
     /// Breakpoint ID is agent session AGENT's (D4): its path, when there is one.
@@ -575,6 +635,143 @@ impl Store {
         before != list.len()
     }
 
+    /// OP on SESSION's instruction breakpoints; refused for a number it does not have.
+    pub fn instr_op(&mut self, session: &str, op: InstrOp) -> Result<(), String> {
+        let set = self.instrs.entry(session.to_owned()).or_default();
+        let text = |t: Option<String>| t.filter(|t| !t.is_empty());
+        match op {
+            InstrOp::Add {
+                instruction,
+                offset,
+                condition,
+                hit,
+            } => {
+                set.last += 1;
+                let bp = InstrBp {
+                    n: set.last,
+                    instruction,
+                    offset: offset.filter(|o| *o != 0),
+                    condition: text(condition),
+                    hit: text(hit),
+                    enabled: true,
+                };
+                set.list.push((bp, Bound::default()));
+            }
+            InstrOp::Remove { n } => {
+                let before = set.list.len();
+                set.list.retain(|(b, _)| b.n != n);
+                if before == set.list.len() {
+                    return Err(format!("no instruction breakpoint {n}"));
+                }
+            }
+            InstrOp::Edit {
+                n,
+                enabled,
+                condition,
+                hit,
+            } => {
+                let (b, _) = set
+                    .list
+                    .iter_mut()
+                    .find(|(b, _)| b.n == n)
+                    .ok_or_else(|| format!("no instruction breakpoint {n}"))?;
+                if let Some(e) = enabled {
+                    b.enabled = e;
+                }
+                if condition.is_some() {
+                    b.condition = text(condition);
+                }
+                if hit.is_some() {
+                    b.hit = text(hit);
+                }
+            }
+        }
+        set.version += 1;
+        Ok(())
+    }
+
+    /// What `setInstructionBreakpoints` sends SESSION (its enabled ones, in order) for an adapter with CAPS.
+    pub fn instr_list(&self, session: &str, caps: &Value) -> Vec<Value> {
+        let list: Vec<Value> = self
+            .instrs
+            .get(session)
+            .into_iter()
+            .flat_map(|s| &s.list)
+            .filter(|(b, _)| b.enabled)
+            .map(|(b, _)| {
+                let mut o = json!({"instructionReference": b.instruction});
+                if let Some(off) = b.offset {
+                    o["offset"] = json!(off);
+                }
+                if let Some(c) = &b.condition {
+                    o["condition"] = json!(c);
+                }
+                if let Some(h) = &b.hit {
+                    o["hitCondition"] = json!(h);
+                }
+                o
+            })
+            .collect();
+        fit(&list, caps)
+    }
+
+    /// SESSION's adapter answered `setInstructionBreakpoints` with BPS, in the order sent; a disabled one is unbound.
+    pub fn instr_answer(&mut self, session: &str, bps: &[Value]) {
+        let Some(set) = self.instrs.get_mut(session) else {
+            return;
+        };
+        let mut got = bps.iter();
+        for (b, bound) in &mut set.list {
+            *bound = Bound::default();
+            if !b.enabled {
+                continue;
+            }
+            if let Some(a) = got.next() {
+                bound.verified = a.get("verified").and_then(Value::as_bool).unwrap_or(false);
+                bound.message = a.get("message").and_then(Value::as_str).map(str::to_owned);
+            }
+        }
+        set.version += 1;
+    }
+
+    /// SESSION's instruction breakpoints as the editor shows them: `{session, version, breakpoints: [{id: "i:S:N", n,
+    /// kind: "instruction", instruction, offset?, verified, enabled, condition?, hit?, message?}]}`.
+    pub fn instr_view(&self, session: &str) -> Value {
+        let set = self.instrs.get(session);
+        let bps: Vec<Value> = set
+            .into_iter()
+            .flat_map(|s| &s.list)
+            .map(|(b, bound)| {
+                let mut o = json!({
+                    "id": format!("i:{session}:{}", b.n),
+                    "n": b.n,
+                    "kind": "instruction",
+                    "instruction": b.instruction,
+                    "verified": bound.verified,
+                    "enabled": b.enabled,
+                });
+                for (k, v) in [
+                    ("condition", &b.condition),
+                    ("hit", &b.hit),
+                    ("message", &bound.message),
+                ] {
+                    if let Some(v) = v {
+                        o[k] = json!(v);
+                    }
+                }
+                if let Some(off) = b.offset {
+                    o["offset"] = json!(off);
+                }
+                o
+            })
+            .collect();
+        json!({
+            "session": session,
+            "version": set.map_or(0, |s| s.version),
+            "breakpoints": bps,
+        })
+    }
+
     /// What `setDataBreakpoints` sends SESSION, in order.
     pub fn data_list(&self, session: &str) -> Vec<Value> {
         self.datas
@@ -776,6 +973,7 @@ impl Store {
         self.caps.remove(session);
         self.armed.retain(|(s, _)| s != session);
         self.datas.remove(session);
+        self.instrs.remove(session);
         self.drop_temps(session)
     }
 

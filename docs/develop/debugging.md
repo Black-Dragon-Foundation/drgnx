@@ -212,7 +212,9 @@ the known ones.
 ## Breakpoints: the store (`debug/breakpoints.rs`)
 
 Each project (by root) has one store, saved in the hub's state directory as `debug-breakpoints/<hash of the
-root>.json`, written atomically. If the file is damaged, it is moved aside to `….damaged` and the store starts empty.
+root>.json`, written atomically, in order and off the hub's async workers (`crate::disk::Ordered`, one per
+project: the operation answers at once and the save lands after it; `Debug::written` waits for them). A project's
+probes are saved the same way. If the file is damaged, it is moved aside to `….damaged` and the store starts empty.
 
 - **Operations by id** (`Op`): add, remove, edit, move, add or remove a function breakpoint.
   - Adding a line that already has a breakpoint gives that one. Removing or editing one that is gone is no change.
@@ -247,6 +249,15 @@ root>.json`, written atomically. If the file is damaged, it is moved aside to `�
   as VS Code's Break on Value Change sends it: lldb-dap's own default also stops on reads, before the value changes. They live in the store per session
   (`data_add`, `data_answer`, `data_view`), never saved, and go when it ends; the Run and Debug view lists them under
   Breakpoints (`kind: "data"`). Adapters without `supportsDataBreakpoints` are refused.
+- **Instruction breakpoints** (`debug/breakpoints {root, session, kind: "instruction", op?}` with the ops
+  `add-instruction {instruction, offset?, condition?, hit?}`, `remove-instruction {id: N}` and `edit-instruction {id:
+  N, enabled?, condition?, hit?}`): a session's own, at a memory reference (a frame's `instruction_pointer`, a
+  disassembled address). They live in the store per session (`instr_op`, `instr_list`, `instr_answer`, `instr_view`),
+  never saved, and go when it ends; each op sends the session's enabled ones in `setInstructionBreakpoints` (fitted to
+  the adapter's fields like source breakpoints). The view, and the `debug-breakpoints` event it is published as, is
+  `{root, session, version, breakpoints: [{id: "i:SESSION:N", n, kind: "instruction", instruction, offset?, verified,
+  enabled, condition?, hit?, message?}]}`, with no path; a newer version wins. Adapters without
+  `supportsInstructionBreakpoints` are refused.
 
 The registry starts each session with the store's breakpoints, and sends a changed file to every session of the
 root at once. It tells the editors with the `debug-breakpoints` event: the file's view, with its root. The editors use `debug/breakpoints` (`{root, path?, op?}`: an operation by id, answered with the file's view) and
@@ -270,13 +281,43 @@ roots `debug/trust` called trusted and each root's last started configuration.
   `invalid-params` at `inputs`. With every answer: the platform section, the variables, the type's adapter (the user's
   `adapters`, from the setting `debug.adapters` in the table's fields, before `etc/debug-adapters.eld`'s), and
   `{session}`.
-- `debug/control {session, thread?, op}` (`continue`, `pause`, `next`, `step-in`, `step-out`, `restart`, `stop`,
-  `stop-and-kill`, `disconnect`), `debug/select {session, thread?, frame}`, and `debug/trust {root, trusted}`, whose
+- `debug/control {session, thread?, op, granularity?}` (`continue`, `pause`, `next`, `step-in`, `step-out`, `restart`,
+  `stop`, `stop-and-kill`, `disconnect`; `granularity: "instruction"` steps `next`, `step-in` and `step-out` one
+  instruction, for the disassembly view, and a recorded run keeps it as `next-i`, `in-i`, `out-i` for its forks),
+  `debug/select {session, thread?, frame}`, and `debug/trust {root, trusted}`, whose
   revocation stops the root's sessions.
 - `debug/source {session, ref}`: the adapter's `source` request for a frame with no file, answered `{text, mime?}`.
 - `debug/breakpoint-locations {session, path, line}`: the adapter's `breakpointLocations` for the line, answered
   `{locations: [{line, column, end_line?, end_column?}]}` with columns turned back into characters from the file's
   lines (`breakpoints::chars_of`); empty when the adapter lacks `supportsBreakpointLocationsRequest`.
+- `debug/completions {session, frame?, text, column}`: the Debug Console's completions. `column` is point's 0-based
+  character offset in `text`, sent as the adapter's 1-based UTF-16 column, in `frame` or the stopped one; answered
+  `{targets: [{label, text?, type?, start?, length?}]}` with the replaced span in 0-based characters; empty without
+  `supportsCompletionsRequest`.
+- `debug/read-memory {session, reference, offset?, count}` and `debug/write-memory {session, reference, offset?,
+  data, allow_partial?}`: the memory view's `readMemory` / `writeMemory` at a variable's `memoryReference`, data in
+  base64. A read is at most 64 KiB (`READ_MEMORY_MAX`; more is `invalid-params` before the adapter) and answers
+  `{address, data, unreadable?}`; a write answers `{offset?, written?}`. Refused with words when the adapter lacks
+  `supportsReadMemoryRequest` / `supportsWriteMemoryRequest`.
+- `debug/disassemble {session, reference, offset?, instruction_offset?, count}`: the adapter's `disassemble` (symbols
+  resolved) around a memory reference, most often the `instruction_pointer` that `debug-frame` carries from the frame's
+  `instructionPointerReference`. At most 500 instructions (`DISASSEMBLE_MAX`; more is `invalid-params`); answered
+  `{instructions: [{address, bytes?, instruction, symbol?, path?, line?, end_line?}]}`. Refused with words without
+  `supportsDisassembleRequest`; `debug-state`'s caps carry it and `supportsInstructionBreakpoints`.
+- `debug/hot-reload {session, path}` (`debug/hot_reload.rs`, spec §19.7 D8, Python first): the stopped program takes
+  the saved file's changed function bodies. DAP has no code-replace request, so it is for debugpy sessions only (the
+  adapter type `debugpy` or `python`; others are refused with words). One `evaluate` (context `clipboard`, so nothing
+  is truncated) in the selected frame runs `etc/debug-hot-reload.py` with `exec` in a namespace of its own (the frame's
+  locals untouched): it compiles the file, walks its code objects by qualified name, and sets `__code__` on each live
+  function of that module (module level, classes, static and class methods) whose code changed and whose free
+  variables match; nothing at module level runs again. Its answer comes back as JSON hex-encoded in a string, so no
+  repr quoting reaches the hub: `{patched: [qualname], skipped: [{name, why}], restarted}`. `why` is `its closure
+  changed` or `new: it exists from the next run`. Frames already running keep their old code (jurigged's limit): where
+  the adapter has `supportsRestartFrame` the selected frame restarts (`restarted: true`), else the change applies from
+  the next call (debugpy today). Refused while the program runs. Tests: row `debug/hot-reload` (mock), live
+  `debugpy_hot_reloads_a_saved_function`.
+- These and `debug/breakpoint-locations` read the session's capabilities: asked before the adapter has given them
+  (the session is starting) they are refused, so the editors offer them once `debug-state` shows the capability.
 - `debug/install {adapter, adapters?}`: the adapter's `:install` entry carried out (see Adapters); the answer says what
   was installed. A system package's, an adapter without an entry and an unknown id are errors (conformance
   `debug/install-refusals`; the downloads are the unit tests' `debug::tests_install`, from local files).
@@ -564,9 +605,11 @@ The panel's **Debug Console** tab. The hub makes the lines; the editor only inse
   batch before says `more`), `group` start / end indenting the lines between (`depth`), the line that opens one naming it (`group`, numbered per
   session; `collapsed` for `startCollapsed`) and every line the groups around it, outermost first (`within`), so the
   editor folds a group with one invisible list per line (an `end` with no group open changes nothing),
+  each line's `time` (ms since the epoch, from the hub's clock when its output event arrived; a counted repeat keeps
+  the first's, a `more` line has none),
   a logpoint's `source {path, line}` and an output's structured value (`node {reference}`) kept, `telemetry` left
   out. The lines wait in a batch the session's loop sends 50 ms after the first (`BATCH`) or at once past 64 KiB
-  (`BATCH_BYTES`), as the event `debug-output {session, lines: [{text, category, count, runs?, depth?, group?, collapsed?, within?, source?,
+  (`BATCH_BYTES`), as the event `debug-output {session, lines: [{text, category, count, time?, runs?, depth?, group?, collapsed?, within?, source?,
   node?, more?}], skipped?}` to every editor. A batch keeps at most 4 MB (`QUEUE_CAP`); past it the oldest lines
   go and `skipped` counts them. At a session's end its last batch goes with it.
 - A `postDebugTask` that fails says so in the console (`important`), after the session's own lines.
@@ -732,6 +775,10 @@ Every session the hub starts is recorded (`debug/record.rs`, `Records`; the hub'
   the run says so); the rest are thinned and counted; a fork's run keeps every hit. "Probe the Result"
   (`probes::next_line`) places the probe on the next line that runs, past continuation lines, blanks and comments. A
   project's probes are kept in `<state>/debug-probes/<xxh3 of root>.json`.
+- **Off the workers:** what a session's events record (its stops, steps, probe hits and end) runs on one
+  `crate::disk::Ordered` of the recorder, in the events' order on the blocking pool, since it writes the run files;
+  the session's own events (its frame, the views) never wait for it. What reads the runs (`debug/runs/list`,
+  `debug/run/*`, forks, bisect) first waits for what is queued (`Records::written`).
 - **The run file** (`debug/runfile.rs`): `<state>/debug/runs/<run>.drun`, `DRUN2\n` and a 32-byte salt, then blocks
   (u32 raw length, u32 sealed length, the sealed zstd bytes) of JSON-lines frames, 64 KB raw each; `<run>.drun.idx`
   (sealed JSON) indexes blocks, stops and each probe's hits. Each stop's capture (threads, the stack, the selected frame's scopes and variables) is cut to 64 KB:
@@ -968,6 +1015,17 @@ as trees, a slot moved between them, hunks, the card), `verdandi`'s `tests/mater
 - **Python older than 3.12** (the records file names the version and holds nothing else): the static candidates, the
   assignments to the name in the files of the stop and its stack as they ran (the launch snapshot), found with
   Hrafn's grammar (`$O.attr = $V`, `name = $V` and the augmented forms), labelled "candidates, not traced".
+- **Other languages** (JavaScript, TypeScript, Go, C, Rust, Java, by the stop's file: `origin::lang_of`) have no
+  tracer; their trail is traced by logpoints (`origin::probed_trail`). Per level, `origin::stores` finds the lines that
+  store to each question in the stop's and its stack's files with Hrafn's grammar for the language: assignments
+  (plain and compound), `$O.attr = $V` for a dotted question, and the language's declarations (`const`/`let`/`var`,
+  `:=` and `var`, `let`/`let mut`, `TYPE name = …`). Each line gets one logpoint (a line takes one breakpoint) in a
+  replay to the stop (`Replay::probe`, the trace with probes: `fork_hub::Forks::trace`'s PROBES go before the run's
+  own, and `TraceTree::hits` holds theirs), logging what the line reads (`origin::reads`: the names and member paths
+  not called) and, when what it stores is a pure read of a plain store (`origin::is_pure`: no call, `new`, increment
+  or assignment), that value too, joined by the unit separator. Values are never logged by running a call again. The
+  last line to log before the stop is the link, its reads the next level's questions. The card's note says what it
+  cannot see (`origin::PROBED`): a store through another name, or in a file off the stop's stack.
 - **The replay** is the `origin::Replay` trait, set when the hub binds (`origin_wire::ForkReplay`): a sealed trace
   of the run (`fork_wire::trace`, spec §19.3), ended at the stop, with the tracer's files written into the trace's
   tree (`origin::trace_files`) and its environment (`origin::trace_env`); the records are read back with their files
@@ -983,5 +1041,7 @@ past stop's buffer) asks for the name at point, the card inserts the hub's rows,
 (`debug-origin-open`) opens it as a past stop. Tests: `debug::tests_origin` (golden trails on
 `tests/fixtures/origin/stock.py` run by python3 under the tracer: three levels with attribute stores, a change inside
 `list.append`, the 3.11 candidates, lenient parsing, the card), `debug::tests_fork_live`'s
-`a_python_trail_is_traced_in_sealed_replays` (live: debugpy in Gleipnir, three levels through real traces),
+`a_python_trail_is_traced_in_sealed_replays` (live: debugpy in Gleipnir, three levels through real traces) and
+`a_js_trail_is_traced_by_logpoints_in_sealed_replays` (live: js-debug, `tests/fixtures/origin/stock.js`), the
+stores' unit tests (JavaScript, Go),
 `test/unit/debug-origin-test.el`.

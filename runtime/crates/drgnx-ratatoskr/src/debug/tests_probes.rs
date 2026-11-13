@@ -93,8 +93,8 @@ fn the_rate_cap_thins_per_second_and_a_fork_keeps_every_hit() {
     assert_eq!(fork.thinned, 0);
 }
 
-#[test]
-fn the_table_adds_places_edits_and_saves_probes() {
+#[tokio::test]
+async fn the_table_adds_places_edits_and_saves_probes() {
     let d = tempfile::tempdir().unwrap();
     let f = d.path().join("p.json");
     let mut p = Probes::open(Some(f.clone()));
@@ -123,6 +123,7 @@ fn the_table_adds_places_edits_and_saves_probes() {
     })
     .unwrap();
     assert!(p.apply(Op::Remove { id: "p9".into() }).is_err());
+    p.disk().unwrap().written().await;
     // saved: the next open has them
     let again = Probes::open(Some(f));
     assert_eq!(again.list().len(), 2);

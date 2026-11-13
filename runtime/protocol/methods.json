@@ -1870,10 +1870,20 @@
             ]
           },
           "path": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "root": {
             "type": "string"
+          },
+          "session": {
+            "description": "The session of an instruction view (no path).",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "version": {
             "format": "uint64",
@@ -1883,7 +1893,6 @@
         },
         "required": [
           "root",
-          "path",
           "version",
           "breakpoints"
         ],
@@ -11759,6 +11768,13 @@
                   "null"
                 ]
               },
+              "instruction": {
+                "description": "`add-instruction`'s instruction (a memory reference: a frame's `instruction_pointer`, a disassembled\naddress) and its OFFSET in bytes.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "line": {
                 "format": "uint32",
                 "minimum": 0,
@@ -11776,6 +11792,13 @@
               "name": {
                 "type": [
                   "string",
+                  "null"
+                ]
+              },
+              "offset": {
+                "format": "int64",
+                "type": [
+                  "integer",
                   "null"
                 ]
               },
@@ -11807,6 +11830,12 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "description": "`debug/breakpoints`: ROOT's breakpoints. OP changes them (it reaches ROOT's sessions at once); the answer is the\nview of the file OP changed, else of PATH.",
         "properties": {
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "op": {
             "anyOf": [
               {
@@ -11825,6 +11854,13 @@
           },
           "root": {
             "type": "string"
+          },
+          "session": {
+            "description": "With KIND `instruction`: SESSION's instruction breakpoints (they are the session's, never kept), their view\nand their ops (`add-instruction`, `remove-instruction`, `edit-instruction`).",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -11857,10 +11893,20 @@
             ]
           },
           "path": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "root": {
             "type": "string"
+          },
+          "session": {
+            "description": "The session of an instruction view (no path).",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "version": {
             "format": "uint64",
@@ -11870,7 +11916,6 @@
         },
         "required": [
           "root",
-          "path",
           "version",
           "breakpoints"
         ],
@@ -12039,6 +12084,104 @@
           "state"
         ],
         "title": "DebugForkView",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the Debug Console's completions for its text at point, from the adapter; none when it has none",
+      "name": "debug/completions",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/completions`: the Debug Console's completions for TEXT with point at COLUMN (0-based, in characters), in\nFRAME (the stopped one when none).",
+        "properties": {
+          "column": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "frame": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "session": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "text",
+          "column"
+        ],
+        "title": "DebugCompletions",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "CompletionTarget": {
+            "description": "One completion: LABEL, the TEXT it inserts when not the label, its TYPE, and the span of the text it replaces\n(START and LENGTH, 0-based characters) when the adapter gave one.",
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "length": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "start": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "text": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "label"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/completions`' answer: the TARGETS in the adapter's order; none when it has no completions\n(`supportsCompletionsRequest`).",
+        "properties": {
+          "targets": {
+            "items": {
+              "$ref": "#/$defs/CompletionTarget"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "targets"
+        ],
+        "title": "DebugCompletionList",
         "type": "object"
       },
       "writes": false
@@ -12243,6 +12386,13 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "description": "`debug/control`: OP on SESSION (on THREAD, else the stopped one): `continue`, `pause`, `next`, `step-in`,\n`step-out`, `restart`, `stop`, `stop-and-kill` (an attach session's debuggee too) or `disconnect`.",
         "properties": {
+          "granularity": {
+            "description": "`instruction`: `next`, `step-in` and `step-out` step one instruction (the adapter's\n`supportsSteppingGranularity`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "op": {
             "type": "string"
           },
@@ -12351,6 +12501,121 @@
           "breakpoints"
         ],
         "title": "DebugDataBreakpoints",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the debugged program's instructions around a memory reference (a frame's instruction pointer), at most 500, for the disassembly view",
+      "name": "debug/disassemble",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/disassemble`: COUNT instructions (at most [`DISASSEMBLE_MAX`]) from INSTRUCTION_OFFSET instructions after\nthe one at OFFSET bytes from SESSION's memory REFERENCE (a frame's `instruction_pointer`).",
+        "properties": {
+          "count": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "instruction_offset": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "offset": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "reference": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "reference",
+          "count"
+        ],
+        "title": "DebugDisassemble",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "DisassembledInstruction": {
+            "description": "One instruction: its ADDRESS, BYTES, text, SYMBOL, and the source PATH and LINE(s) it comes from.",
+            "properties": {
+              "address": {
+                "type": "string"
+              },
+              "bytes": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "end_line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "instruction": {
+                "type": "string"
+              },
+              "line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "symbol": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "address",
+              "instruction"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/disassemble`'s answer: the INSTRUCTIONS in address order.",
+        "properties": {
+          "instructions": {
+            "items": {
+              "$ref": "#/$defs/DisassembledInstruction"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "instructions"
+        ],
+        "title": "DebugDisassembly",
         "type": "object"
       },
       "writes": false
@@ -12716,6 +12981,78 @@
       "classes": [
         "user"
       ],
+      "doc": "the stopped Python program takes a saved file's changed function bodies (frames running keep their old code unless the adapter restarts the frame)",
+      "name": "debug/hot-reload",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/hot-reload`: SESSION's stopped Python program takes PATH's changed function bodies as saved (D8).",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "path"
+        ],
+        "title": "DebugHotReload",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "HotReloadSkip": {
+            "description": "What a hot reload could not take, and why.",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "why": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "why"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/hot-reload`'s answer: the functions PATCHED (qualified names), those SKIPPED, and whether the selected\nframe RESTARTED with the new code (else running frames keep the old code until their next call).",
+        "properties": {
+          "patched": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "restarted": {
+            "type": "boolean"
+          },
+          "skipped": {
+            "items": {
+              "$ref": "#/$defs/HotReloadSkip"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "patched",
+          "skipped",
+          "restarted"
+        ],
+        "title": "DebugHotReloaded",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "install an adapter from its pinned download (checked against its sha256) or into the tools venv with its hash required; a system package's command is named, never run: what was installed",
       "name": "debug/install",
       "params": {
@@ -12923,6 +13260,71 @@
           "probes"
         ],
         "title": "DebugProbes",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "bytes of the debugged program's memory at a variable's memory reference (at most 64 KiB), for the memory view",
+      "name": "debug/read-memory",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/read-memory`: COUNT bytes (at most [`READ_MEMORY_MAX`]) at OFFSET from SESSION's memory REFERENCE (a\nvariable's `memoryReference`).",
+        "properties": {
+          "count": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "offset": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "reference": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "reference",
+          "count"
+        ],
+        "title": "DebugReadMemory",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/read-memory`'s answer: the first byte's ADDRESS, the DATA read (base64; empty when none could be), and how\nmany bytes after it could not be read.",
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "data": {
+            "type": "string"
+          },
+          "unreadable": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "address",
+          "data"
+        ],
+        "title": "DebugMemory",
         "type": "object"
       },
       "writes": false
@@ -13576,6 +13978,72 @@
         },
         "title": "Array_of_string",
         "type": "array"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "write bytes into the debugged program's memory at a variable's memory reference, from the memory view",
+      "name": "debug/write-memory",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/write-memory`: DATA (base64) written at OFFSET from SESSION's memory REFERENCE; ALLOW_PARTIAL lets the\nadapter write what it can.",
+        "properties": {
+          "allow_partial": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "data": {
+            "type": "string"
+          },
+          "offset": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "reference": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "reference",
+          "data"
+        ],
+        "title": "DebugWriteMemory",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`debug/write-memory`'s answer, as the adapter gave it: where the write began (OFFSET from the reference) and how\nmany bytes it WROTE.",
+        "properties": {
+          "offset": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "written": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "title": "DebugMemoryWritten",
+        "type": "object"
       },
       "writes": false
     },

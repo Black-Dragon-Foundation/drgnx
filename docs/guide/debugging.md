@@ -186,3 +186,8 @@ those came from, up to three levels. The hub replays the recorded run to that st
 a level, so the chain is exact; a change made inside a call (`items.append(x)`) shows as "changed inside
 `list.append`". `RET` on a link opens it as a past stop. Python older than 3.12 has no tracing hook: the card then
 lists the assignments to the name in the files that ran, labelled "candidates, not traced".
+
+JavaScript, TypeScript, Go, C, Rust and Java programs get the same card, traced another way: the replay puts a
+logpoint on every line that sets the name, so the chain shows which of those ran last and what it read. A value is
+shown only when reading it again runs nothing (no call). The card says what this cannot see: a value set through
+another name, or in a file that is neither the stop's nor on its stack.

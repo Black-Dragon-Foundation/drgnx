@@ -1277,3 +1277,65 @@ async fn codelldb_breaks_on_value_change() {
 async fn lldb_dap_breaks_on_value_change() {
     breaks_on_value_change("lldb-dap", on_path("lldb-dap"), "lldb-dap").await;
 }
+
+/// Hot reload (D8): stopped in the loop, `lib.val` is saved returning 2 and reloaded; the next call returns it.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "live: debugpy in the adapter image (see the module's doc)"]
+async fn debugpy_hot_reloads_a_saved_function() {
+    let dir = live_dir("py-reload");
+    let lib = write(&dir, "lib.py", "def val():\n    return 1\n");
+    let file = write(
+        &dir,
+        "prog.py",
+        "import lib\nx = 0\nfor i in range(3):\n    x = lib.val()\n    print(x)\n",
+    );
+    let config = json!({"type": "debugpy", "request": "launch", "name": "pyr", "program": file, "cwd": dir,
+                        "justMyCode": true});
+    let ev = Arc::new(Events::default());
+    let d = Debug::new(ev.clone(), Arc::new(Procs::default()));
+    let root = dir.display().to_string();
+    let bp = add(&d, &root, &file, 4, None, None, None).await;
+    let start = Start {
+        name: "debugpy".into(),
+        adapter_id: "debugpy".into(),
+        request: Request::Launch,
+        arguments: super::launch::adapter_arguments(&config),
+        breakpoints: vec![],
+        functions: vec![],
+        exception_filters: None,
+    };
+    d.start(1, &root, start, launcher("debugpy", &python(), &dir, &[]))
+        .await
+        .unwrap();
+    let (c, f) = ev.stop(0).await;
+    assert_eq!(line_of(&f), 4, "{f}");
+    let sid = f["session"].as_str().unwrap().to_owned();
+    // the first call ran with the old code: stop on the loop's second turn
+    d.control(&sid, Op::Continue { thread: None })
+        .await
+        .unwrap();
+    let (c, _) = ev.stop(c).await;
+    let x = local(&d.stop_of(&sid).unwrap(), "x").0;
+    assert_eq!(int_of(&x), 1);
+    std::fs::write(&lib, "def val():\n    return 2\n").unwrap();
+    let out = super::hot_reload::hot_reload(&d, &sid, &lib.display().to_string())
+        .await
+        .unwrap();
+    assert_eq!(out["patched"], json!(["val"]), "{out}");
+    remove(&d, &root, bp).await;
+    d.control(&sid, Op::Next { thread: None }).await.unwrap();
+    let (_, f) = ev.stop(c).await;
+    let x = local(&d.stop_of(&sid).unwrap(), "x").0;
+    assert_eq!(int_of(&x), 2, "the call after the reload: {f}");
+    println!("T-HOT-RELOAD-REPORT {out}");
+    d.control(
+        &sid,
+        Op::Stop {
+            kill_debuggee: None,
+        },
+    )
+    .await
+    .unwrap();
+    ev.next(0, "debug-ended", |e| e["session"] == json!(sid))
+        .await;
+}

@@ -16,7 +16,7 @@
 
 use super::compare::{self, Matched};
 use super::fork::{self, At, Change, Drive, End, Outcome, Refused, RunEnd, Until, Watch, Watched};
-use super::record::{RunInfo, Runs, config_hash};
+use super::record::{RunHit, RunInfo, RunProbe, Runs, config_hash};
 use super::session::{Request, Start};
 use super::{BoxFut, Launcher, Sink};
 use serde_json::{Value, json};
@@ -88,6 +88,8 @@ fn same_config(run: &RunInfo, resolved: &Value) -> Result<(), String> {
 /// A replay's tree (D3's trace): removed when this goes, never anything outside the forks' root.
 pub struct TraceTree {
     pub path: PathBuf,
+    /// The hits of the probes the trace was asked for, in the order they came, up to the stop.
+    pub hits: Vec<RunHit>,
     trees: Arc<dyn Trees>,
 }
 
@@ -225,7 +227,8 @@ impl Forks {
     }
 
     /// Run RUN replayed to its stop STOP and ended there (D3's trace): FILES (relative path, bytes) written into the
-    /// tree and ENV(the tree's path) added to RESOLVED's environment before the launch. No fork entry, no events.
+    /// tree, ENV(the tree's path) added to RESOLVED's environment before the launch, PROBES (paths in the project) set
+    /// beside the run's own. No fork entry, no events.
     pub fn trace<F>(
         &self,
         run: &str,
@@ -233,6 +236,7 @@ impl Forks {
         resolved: Value,
         env: F,
         files: Vec<(String, Vec<u8>)>,
+        probes: Vec<RunProbe>,
     ) -> BoxFut<'static, Result<TraceTree, String>>
     where
         F: FnOnce(&Path) -> Vec<(String, String)> + Send + 'static,
@@ -260,8 +264,9 @@ impl Forks {
                 .make(&run, &id)
                 .await
                 .map_err(|e| format!("the trace's tree: {e}"))?;
-            let guard = TraceTree {
+            let mut guard = TraceTree {
                 path: tree.clone(),
+                hits: vec![],
                 trees: me.inner.trees.clone(),
             };
             for (rel, bytes) in files {
@@ -281,7 +286,11 @@ impl Forks {
                 anyway: false,
                 resolved,
             };
-            me.drive(&run, &ask, &tree, &extra).await?;
+            let (_, hits) = me.drive(&run, &ask, &tree, &extra, &probes).await?;
+            guard.hits = hits
+                .into_iter()
+                .filter(|h| probes.iter().any(|p| p.id == h.probe))
+                .collect();
             Ok(guard)
         })
     }
@@ -558,8 +567,8 @@ impl Forks {
             id,
             json!({"state": "running", "tree": tree.display().to_string()}),
         );
-        match self.drive(&run, &ask, &tree, &[]).await {
-            Ok(view) => self.publish(id, view),
+        match self.drive(&run, &ask, &tree, &[], &[]).await {
+            Ok((view, _)) => self.publish(id, view),
             Err(e) => self.failed(id, e),
         }
     }
@@ -570,7 +579,8 @@ impl Forks {
         ask: &Ask,
         tree: &Path,
         extra_env: &[(String, String)],
-    ) -> Result<Value, String> {
+        extra_probes: &[RunProbe],
+    ) -> Result<(Value, Vec<RunHit>), String> {
         let target = match fork::check(run, &ask.at, self.inner.sealed, true) {
             Ok(t) => t,
             Err(Refused::No(w) | Refused::Ask(w)) => return Err(w),
@@ -611,9 +621,11 @@ impl Forks {
             .collect();
         target_t.varying = fork::varying(&passes);
         target_t.anyway = ask.anyway;
-        let probes: Vec<_> = run
-            .probes
+        // a trace's probes first: a line takes one breakpoint, and on a line the run also probes, the trace's is the one
+        // asked for
+        let probes: Vec<_> = extra_probes
             .iter()
+            .chain(&run.probes)
             .map(|p| {
                 let mut p = p.clone();
                 p.path = into(&p.path);
@@ -652,7 +664,7 @@ impl Forks {
             later,
         })
         .await?;
-        Ok(self.render(run, &target, &out, root, tree))
+        Ok((self.render(run, &target, &out, root, tree), out.before))
     }
 
     /// The What-if tab's view of OUT, paths shown in the user's project.

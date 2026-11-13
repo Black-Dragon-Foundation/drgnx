@@ -22,6 +22,7 @@ pub mod fork_hub;
 pub mod fork_mux;
 pub mod fork_seal;
 pub mod fork_wire;
+pub mod hot_reload;
 pub mod inline;
 pub mod install;
 pub mod launch;
@@ -437,6 +438,21 @@ impl Debug {
         f(s)
     }
 
+    /// Every breakpoint store's saves queued so far have landed (or failed).
+    pub async fn written(&self) {
+        let disks: Vec<_> = self
+            .inner
+            .stores
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values()
+            .filter_map(Store::disk)
+            .collect();
+        for d in disks {
+            d.written().await;
+        }
+    }
+
     /// The project session ID debugs.
     pub fn root_of(&self, id: &str) -> Option<String> {
         lock(&self.inner.state)
@@ -466,6 +482,7 @@ impl Debug {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             let con = c.entry(id.to_owned()).or_default();
+            con.set_time(wall_ms());
             con.output(body, ansi);
             con.full()
         };
@@ -517,6 +534,7 @@ impl Debug {
     pub fn console_say(&self, id: &str, text: &str, category: &str) {
         let batch = {
             let mut con = console::Console::default();
+            con.set_time(wall_ms());
             con.say(text, category, None);
             con.take(true)
         };
@@ -863,6 +881,53 @@ impl Debug {
         Ok(self.data_of(&root, id))
     }
 
+    /// OP on session ID's instruction breakpoints (refused when its adapter has none), the session's whole list sent
+    /// (`setInstructionBreakpoints`) and published (`debug-breakpoints` with the session, no path). The view.
+    pub async fn instruction_breakpoints(
+        &self,
+        id: &str,
+        op: Option<breakpoints::InstrOp>,
+    ) -> Result<Value, String> {
+        let root = self
+            .root_of(id)
+            .ok_or_else(|| format!("no debug session {id}"))?;
+        let Some(op) = op else {
+            return Ok(self.instr_view(&root, id));
+        };
+        let (h, caps) = self.handle_caps(id)?;
+        if caps
+            .get("supportsInstructionBreakpoints")
+            .and_then(Value::as_bool)
+            != Some(true)
+        {
+            return Err("this adapter has no instruction breakpoints".into());
+        }
+        self.store(&root, |s| s.instr_op(id, op))?;
+        let list = self.store(&root, |s| s.instr_list(id, &caps));
+        match h
+            .request("setInstructionBreakpoints", json!({ "breakpoints": list }))
+            .await
+        {
+            Ok(body) => {
+                let got = body["breakpoints"].as_array().cloned().unwrap_or_default();
+                self.store(&root, |s| s.instr_answer(id, &got));
+            }
+            Err(e) => tracing::debug!(target: "drgnx::debug", "setInstructionBreakpoints: {e}"),
+        }
+        let v = self.instr_view(&root, id);
+        self.inner
+            .sink
+            .broadcast("debug-breakpoints", v.clone(), None);
+        self.changed();
+        Ok(v)
+    }
+
+    fn instr_view(&self, root: &str, id: &str) -> Value {
+        let mut v = self.store(root, |s| s.instr_view(id));
+        v["root"] = json!(root);
+        v
+    }
+
     /// Session ID's data breakpoints as the view shows them.
     pub fn data_breakpoints(&self, id: &str) -> Result<Vec<Value>, String> {
         let root = self
@@ -1107,6 +1172,14 @@ impl Debug {
             .and_then(|e| e.stop.clone())
     }
 
+    /// Session ID's adapter type (`initialize`'s `adapterID`).
+    pub fn adapter_of(&self, id: &str) -> Option<String> {
+        lock(&self.inner.state)
+            .sessions
+            .get(id)
+            .map(|e| e.start.adapter_id.clone())
+    }
+
     /// The handle of session ID, for the views' requests (variables, evaluate …).
     pub fn session(&self, id: &str) -> Option<Handle> {
         self.handle(id)
@@ -1114,6 +1187,20 @@ impl Debug {
 
     /// OP on session ID. A stop or disconnect stops its children first and resolves once all have ended.
     /// The text of SESSION's source REFERENCE (a frame with no file): `{text, mime?}`.
+    /// Session ID's handle and its adapter's capabilities; refused while the adapter has not given them (the
+    /// session is starting: the editors offer what needs them once `debug-state` shows them).
+    pub fn handle_caps(&self, id: &str) -> Result<(Handle, Value), String> {
+        let (h, caps) = lock(&self.inner.state)
+            .sessions
+            .get(id)
+            .map(|e| (e.handle.clone(), e.caps.clone()))
+            .ok_or_else(|| format!("no debug session {id}"))?;
+        if caps.is_null() {
+            return Err(format!("debug session {id} is still starting"));
+        }
+        Ok((h, caps))
+    }
+
     /// Where on PATH's LINE session ID's adapter can stop, as `breakpointLocations` gives it (UTF-16 columns); none
     /// when the adapter cannot say.
     pub async fn breakpoint_locations(
@@ -1122,11 +1209,7 @@ impl Debug {
         path: &str,
         line: u32,
     ) -> Result<Vec<Value>, String> {
-        let (h, caps) = lock(&self.inner.state)
-            .sessions
-            .get(id)
-            .map(|e| (e.handle.clone(), e.caps.clone()))
-            .ok_or_else(|| format!("no debug session {id}"))?;
+        let (h, caps) = self.handle_caps(id)?;
         if caps
             .get("supportsBreakpointLocationsRequest")
             .and_then(Value::as_bool)
@@ -1168,7 +1251,8 @@ impl Debug {
             .handle(id)
             .ok_or_else(|| format!("no debug session {id}"))?;
         if let Some(rec) = self.records() {
-            rec.op(id, &op);
+            let (id, op) = (id.to_owned(), op.clone());
+            rec.later("run step", move |r| r.op(&id, &op));
         }
         if matches!(op, Op::Stop { .. } | Op::Disconnect) {
             for child in self.children(id) {
@@ -1305,7 +1389,8 @@ impl Debug {
                     };
                     self.publish_state();
                     if let Some(rec) = self.records() {
-                        rec.stop(&id, &stop);
+                        let (id, stop) = (id.clone(), stop.clone());
+                        rec.later("run stop", move |r| r.stop(&id, &stop));
                     }
                     if let Some(conn) = conn {
                         self.publish_frame(&id, conn, &stop);
@@ -1451,7 +1536,8 @@ impl Debug {
 
     async fn ended(&self, id: &str, end: End) {
         if let Some(rec) = self.records() {
-            rec.end(id, &end);
+            let (id, end) = (id.to_owned(), end.clone());
+            rec.later("run end", move |r| r.end(&id, &end));
         }
         self.inner.inline.forget(id);
         let e = lock(&self.inner.state).sessions.remove(id);
@@ -1507,6 +1593,7 @@ impl Debug {
             "source_name": source.get("name"),
             "line": frame.get("line"),
             "col": frame.get("column"),
+            "instruction_pointer": frame.get("instructionPointerReference"),
             "top": top,
             "reason": stop.reason,
             "exception": (stop.reason == "exception").then(|| exception_card(stop)),
@@ -1571,4 +1658,11 @@ fn terminal_args(a: &Value) -> (String, Vec<String>, Vec<(String, String)>) {
         })
         .unwrap_or_default();
     (cwd, args, env)
+}
+
+/// The hub's time of day in ms since the epoch (the console lines' `time`).
+fn wall_ms() -> u64 {
+    crate::clock::wall()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
 }
