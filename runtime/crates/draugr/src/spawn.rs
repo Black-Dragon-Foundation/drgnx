@@ -757,17 +757,12 @@ mod tests {
         );
         drop(fut);
         drop(stall);
-        let sent = tokio::time::timeout(Duration::from_secs(10), async {
-            loop {
+        let sent =
+            skuld::wait_until_async("the spawner killed the cancelled child", 10, || async {
                 let fresh: Vec<i32> = CANCELLED.lock().unwrap()[before..].to_vec();
-                if !fresh.is_empty() {
-                    break fresh;
-                }
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-        })
-        .await
-        .expect("the spawner killed the cancelled child");
+                (!fresh.is_empty()).then_some(fresh)
+            })
+            .await;
         assert!(
             sent.iter().all(|&t| t < -1),
             "the group is killed (a negative pid), not the leader alone: {sent:?}"

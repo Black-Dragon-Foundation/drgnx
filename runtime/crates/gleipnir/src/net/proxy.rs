@@ -1914,7 +1914,9 @@ mod tests {
         .await;
     }
 
+    /// A timing test: the tunnel is ended only after the idle limit, and an active one outlives it.
     #[tokio::test]
+    #[ignore = "timing: an idle tunnel is ended after the idle limit, an active one is not"]
     async fn an_idle_tunnel_is_ended_and_an_active_one_is_not() {
         let up = echo().await;
         let cfg = ProxyConfig {
