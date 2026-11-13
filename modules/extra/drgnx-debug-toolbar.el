@@ -26,6 +26,7 @@
 (require 'drgnx-ui-kit)
 (require 'drgnx-icons)
 (require 'drgnx-faces)
+(declare-function drgnx-debug-console-redraw "drgnx-debug-console" ())
 (declare-function drgnx-surfaces-key-label "drgnx-surfaces" (cmd-or-id &rest args))
 (declare-function drgnx-state-editor-window "drgnx-state" (&optional frame))
 (declare-function drgnx-debug-timeline-unrecorded "drgnx-debug-timeline" (session))
@@ -162,7 +163,8 @@ have no project), the registry's way (`drgnx-ui-kit-run': its use counted)."
          (pick (and names (completing-read "Session: " names nil t))))
     (when pick
       (setq drgnx-debug--focus (cdr (assoc pick names)))
-      (drgnx-debug-toolbar-sync))))
+      (drgnx-debug-toolbar-sync)
+      (drgnx-debug-console-redraw))))
 
 ;;;; The card (a child frame)
 

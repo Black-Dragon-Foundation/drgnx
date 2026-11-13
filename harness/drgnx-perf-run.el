@@ -2421,6 +2421,26 @@ a :measure without :actions each have :timeout seconds to answer (120)."
        :actions ,(append (funcall keys "<next>" 30) (funcall keys "<prior>" 30))
        :check "(and (featurep 'glitnir-ruler) (= 200 (length (plist-get (window-parameter nil 'glitnir-ruler) :marks))) t)"   ; Nidhogg has the ruler's 200 marks
        :teardown ,(concat "(progn (with-current-buffer (window-buffer) (widen)) (drgnx-debug-gutter-mode -1) " kill-fixture " (drgnx-perf--debug-stop) t)"))
+      ;; Glitnir's edges (the heap graph's references): debug-gutter-baseline's file and keys with 200 edges in the
+      ;; window's `glitnir-edges', one every 50 lines, each from a line's 10th column down three lines with two bends
+      ;; and an arrow; judged against debug-gutter-baseline as it is (Nidhogg resolves the points at each publish: a
+      ;; scroll runs no Lisp of the edges')
+      (debug-edges-scroll
+       :setup ,(drgnx-perf-run--debug-setup-form)
+       :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " (goto-char (point-min))"
+                      " (drgnx-debug-gutter-mode -1)"
+                      " (drgnx-margins-claim 'hunks 1 :order 2)"
+                      " (drgnx-margins-claim 'debug (drgnx-debug-gutter--columns) :order 0)"
+                      " (set-window-parameter nil 'glitnir-edges"
+                      "   (mapcar (lambda (i) (let ((a (progn (goto-char (point-min)) (forward-line (* 50 i)) (+ (point) 10)))"
+                      "                             (b (progn (forward-line 3) (+ (point) 10))))"
+                      "                         (list (list a 0 8) (list b 0 8) '(\"#808080\" . 1)"
+                      "                               :points (list (list a 40 8) (list b 40 8)) :arrow t)))"
+                      "           (number-sequence 0 199)))"
+                      " (goto-char (point-min)) t)")
+       :actions ,(append (funcall keys "<next>" 30) (funcall keys "<prior>" 30))
+       :check "(and (= 200 (length (window-parameter nil 'glitnir--edges))) t)"   ; Nidhogg has the 200 edges resolved
+       :teardown ,(concat "(progn (set-window-parameter nil 'glitnir-edges nil) " kill-fixture " (drgnx-perf--debug-stop) t)"))
       ;; F9 on 20 lines in a row: each key a `debug/breakpoints' add, its answer and the column redrawn
       (debug-breakpoint-click
        :setup ,(drgnx-perf-run--debug-setup-form)
@@ -2969,7 +2989,8 @@ pairs below, each judged only when both sides were measured."
         (ratio (drgnx-perf--get results 'pair-typing '(:pair_applied_ratio)))
         (gutter (drgnx-perf--get results 'debug-gutter-scroll '(:input :p50)))
         (gutter-base (drgnx-perf--get results 'debug-gutter-baseline '(:input :p50)))
-        (ruler (drgnx-perf--get results 'debug-ruler-scroll '(:input :p50))))
+        (ruler (drgnx-perf--get results 'debug-ruler-scroll '(:input :p50)))
+        (edges (drgnx-perf--get results 'debug-edges-scroll '(:input :p50))))
     (append
      ;; the breakpoint column: at most the larger of 5 % and 0.3 ms over the same scroll with its margin (and hunks')
      ;; claimed and empty (p50s: 60 keys are too few for a steady p95).  Times come in 0.1 ms steps and the frame is
@@ -2986,6 +3007,12 @@ pairs below, each judged only when both sides were measured."
        (list (format "debug-ruler-scroll input p50 %s ms is %s%% (%s ms) over debug-gutter-baseline's %s ms (the ruler may add at most 5 %% or 0.3 ms)"
                      (drgnx-perf--round ruler) (round (* 100 (- (/ ruler gutter-base) 1)))
                      (drgnx-perf--round (- ruler gutter-base)) (drgnx-perf--round gutter-base))))
+     ;; Glitnir's edges, by the same rule
+     (when (and (numberp edges) (numberp gutter-base)
+                (> edges (+ (max (* 1.05 gutter-base) (+ gutter-base 0.3)) 1e-6)))
+       (list (format "debug-edges-scroll input p50 %s ms is %s%% (%s ms) over debug-gutter-baseline's %s ms (200 edges may add at most 5 %% or 0.3 ms)"
+                     (drgnx-perf--round edges) (round (* 100 (- (/ edges gutter-base) 1)))
+                     (drgnx-perf--round (- edges gutter-base)) (drgnx-perf--round gutter-base))))
      ;; the agents in the editor: at most 1 ms over the same five agents with the module off; of the paired chat's writes at
      ;; least 80 % were applied by the editor
      (when (and (numberp agents) (numberp agents-none) (> (- agents agents-none) 1.0))
@@ -3253,7 +3280,7 @@ version and the commit, as JSON in FILE."
                                 terminal-backfill terminal-flood))
     (memory . "its one key only opens the pause RSS is read after; RSS is its budget")
     ,@(mapcar (lambda (w) (cons w "graphical debugging: its allocation, CPU and rows are set from three pinned runs on the desktop island (the plan's perf step)"))
-              '(debug-gutter-scroll debug-gutter-baseline debug-ruler-scroll debug-breakpoint-click debug-probe-flood debug-scrub
+              '(debug-gutter-scroll debug-gutter-baseline debug-ruler-scroll debug-edges-scroll debug-breakpoint-click debug-probe-flood debug-scrub
                                     debug-step-line debug-inline debug-toolbar-show debug-step-variables debug-expand-chunks
                                     debug-console-flood
                                     debug-bisect-typing view-remove-above view-select-dim))

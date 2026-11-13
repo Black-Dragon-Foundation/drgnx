@@ -2963,7 +2963,9 @@ or section API directly: `drgnx-pane-show` (`:buffer`, `:select`), `drgnx-pane-h
 the selected window unless `:select` is given. `drgnx-pane-backend` (`areas`) says where kinds live; `areas` forwards
 a `left` kind to `drgnx-wb-define-section`, a `bottom` or `right` kind to `drgnx-wb-define-tab` (areas `panel` and
 `right`), an `editor` kind (its `:buffer` a name) to a `drgnx-wb-place` rule, and `:fill` to
-`drgnx-layouts-define-pane`. A backend is an entry in `drgnx-pane--backends` (the functions for `:define`, `:show`,
+`drgnx-layouts-define-pane`. A tab defined with `:actions` (a function returning a string, or nil) has its own pieces at
+the right of its area's tab row, before the ✕, while it is shown (the Debug Console's session chip and clear); the
+row is a string built when it is drawn, so the tab's module calls `drgnx-wb-area-redraw` when they change. A backend is an entry in `drgnx-pane--backends` (the functions for `:define`, `:show`,
 `:hide`, `:window`, `:focus`, `:resize`, `:move`, `:stack`); the tiled grid registers `grid` there.
 
 **Ownership.** `drgnx-pane-define-kind` records the module whose setup runs as the kind's owner

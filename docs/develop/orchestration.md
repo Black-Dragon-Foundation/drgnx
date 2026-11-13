@@ -283,7 +283,9 @@ when the session's hooks subscribe, which fails open on a timeout) gets a soft d
 while the task has no red evidence and the commit changes code: tracked changes against `HEAD` outside the pack's
 test globs, under a pack that gates on `red-first` (`orch::advice`). The deny's words say the merge will hold it and to
 commit and run the failing tests first; a commit of tests alone, a task with a red, or a pack without the rule pass.
-It runs before the hooks, and anything it can't read lets the step through. It is advice that saves wasted work: the
+It runs before the hooks, and anything it can't read lets the step through. The advised commit counts toward no
+`repeat` in that turn, nor do its retries (`State::call_advised`): trying it again once the red is in is not a loop.
+It is advice that saves wasted work: the
 gate at the merge is the same for every provider, and a provider without hooks meets it there.
 
 ## Policy from the base
@@ -310,10 +312,11 @@ open `gate` cards, and builds the model and the rows (`work::trail::flow`, pure)
   ("waits red"). Red first is the oldest red run's failing rows ("N failed · base"; "no red · held" at review
   without one), Build the newest run, the author check its checks green at their newest runs (a check when all are),
   the merge column the queue's place or the open `gate` card's words, Review "at plan end" when the pack has a
-  `review` rule that gates or routes (an `advice` one shows none). Text is in `drgnx-work-flow-text`, ids and
-  agents in `-label`, headings in `-heading`;
-- the columns fit the window, titles before chips: each gate column wants its widest cell or heading in the UI font
-  (the hub measures with the env's fonts), the agent's is its widest agent, and the task column wants its widest
+  `review` rule that gates or routes (an `advice` one shows none). Text is in `drgnx-work-flow-text` (the caption
+  role, the mockup's 12 px table), ids and agents in `-label`, headings in `-heading`, the chips a twelfth smaller
+  (11 px). A task's row lights under the pointer (`mouse-face` `drgnx-hover`);
+- the columns fit the window, titles before chips: each gate column wants its widest cell or heading in the table's
+  font (the hub measures with the env's `caption` role), the agent's is its widest agent, and the task column wants its widest
   title, up to a third of the window. When both don't fit, the widest gate columns give way first (their cells and
   headings cut with an ellipsis, down to 44 px a column), and only then the titles (down to 96 px);
 - under them the batch being checked: its heading with an "affected groups g/n" chip (the groups the groups gate
@@ -332,7 +335,9 @@ open `gate` cards, and builds the model and the rows (`work::trail::flow`, pure)
   of its rows, `["rule" KEY X0 X1]` on the headings and each task row, device px; on a GUI the column heads are 24
   logical px high and each task row 30, as in the mockup, by a 1 px space that high first on the row), and drgnx-work-flow.el turns the
   marks into the window parameter after each patch, only when they changed (ring radius 8 in `drgnx-border` over
-  `default`, rules in `drgnx-border-subtle`; faces, so a theme change recolours them). A killed Flow takes its
+  `default`, rules in `drgnx-border-subtle`; faces, so a theme change recolours them). The selected task's row (the
+  row `task:ID`, not its chip in the strip) gets the mockup's accent, a `bar` block 2 logical px wide at its left edge
+  in `drgnx-focus-line`, redrawn when a key moves the selection. A killed Flow takes its
   blocks off every window;
 - the model: a `task` node per task with the `flow` form's links up and down and the gates' states as fields, the
   lists `tasks` and `held` (the needs-you chips; `Tab` walks them).
@@ -349,8 +354,11 @@ a lock, checked and routing in the accent) and how the hub holds it.
 
 **The detail tile.** `work/flow/subscribe` with `detail: TASK` makes its view (the Flow's `VIEW/detail`) that task's
 detail tile: rows alone, no model, read again after every write like the Flow. The Flow subscribes it again each
-time its selection moves (`drgnx-view-selected-functions`, the Flow's own). It says what the task is and who works on
-it; for a held task why it is held (the card's words and each held gate) and what clears it; the commits the merge
+time its selection moves (`drgnx-view-selected-functions`, the Flow's own). Its head is the agent: an avatar (a 16
+px circle in the agent's colour, `agent-N` of the env's palette by its place among the run's agents, its initial cut
+out) and its name (`drgnx-work-flow-agent`), the held chip at the right; under it the task and its status
+(`-label`). Its section heads are muted and semibold (`drgnx-work-flow-section`), its text `-detail-text` (the
+mockup's 12.5 px). It goes on: for a held task why it is held (the card's words and each held gate) and what clears it; the commits the merge
 checks (base .. tip, then each commit with its short sha, `tests` for red first's test commit or `code`, and its
 subject: the job data's `commits`, which `orch::gates::before_merge` records each time it looks, and `bases`); the
 evidence so far as a table, a label column (`brief`, `tests`, `green`, `red`, then any `waiver`) and each newest

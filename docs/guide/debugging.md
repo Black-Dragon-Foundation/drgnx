@@ -76,7 +76,8 @@ and the header shows an "instruction step" chip. `<` / `>` (`[` / `]` in Vim) re
 The **Debug Console** (the panel's tab; C-S-y in VS Code keys) shows the program's output, colours included, with
 repeated lines counted (`×3`) and logpoints' messages with their file and line. Type an expression at the bottom and
 press RET to evaluate it in the selected frame (S-RET adds a line; Up / Down, M-p / M-n or C-p / C-n go through what
-you typed before; C-M-i completes from the debugger, when it offers completions). **Debug: Evaluate in Debug
+you typed before; C-M-i completes from the debugger, when it offers completions). The chip at the right of the
+panel's tabs names the session it evaluates in (click it for another); the bin beside it clears the console. **Debug: Evaluate in Debug
 Console** sends the selection or the expression at point there from the editor. A result with children opens in
 place (RET or TAB on it); once the program runs on, it dims and no longer opens. Groups the program prints
 (`console.group` in JavaScript, for one) fold the same way, on their first line. The output stays after the session

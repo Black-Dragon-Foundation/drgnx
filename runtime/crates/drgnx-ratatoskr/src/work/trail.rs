@@ -202,7 +202,7 @@ fn rows(
         Data::Timeline(lanes) => only(trail::timeline_rows(lanes, &renv, fonts, zone)),
         Data::Board(cards) => only(board::board_rows(cards, env)),
         Data::Flow(flow, flow::Part::Lens) => flow::flow_rows(flow, env, fonts),
-        Data::Flow(flow, flow::Part::Detail(task)) => only(flow::detail_rows(flow, task, env)),
+        Data::Flow(flow, flow::Part::Detail(task)) => flow::detail_tile(flow, task, env),
         Data::Flow(flow, flow::Part::Rules) => flow::rules_rows(flow, env),
     }
 }

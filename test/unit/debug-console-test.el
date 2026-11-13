@@ -272,3 +272,30 @@ nor when the adapter has not said it completes (`debug-state' caps)."
       (drgnx-debug--event "debug-state" (list :sessions (vector (list :id "s4" :name "Python: app" :root "/p"
                                                                       :state "running"))))
       (should (equal (debug-console-test--text) "second run\n")))))
+
+(ert-deftest drgnx-debug-console/the-tab-row-shows-the-session-chip-and-clear ()
+  "the-look/debugging.html `.ptabs': the console's session chip and clear are the panel tab's actions, drawn again
+when the session they name changes; the chip picks through the toolbar's picker, the clear clears."
+  (let ((redraws 0) (picked 0))
+    (cl-letf (((symbol-function 'drgnx-wb-area-redraw) (lambda (area) (should (eq area 'panel)) (cl-incf redraws)))
+              ((symbol-function 'drgnx-debug-toolbar-pick-session) (lambda () (cl-incf picked))))
+      (let ((drgnx-debug-console--shown-name 'unset))
+        (debug-console-test--with
+          (should (= redraws 1))
+          (let ((row (drgnx-debug-console-tab-actions)))
+            (should (string-search "Python: app" row))
+            (should (eq (lookup-key (get-text-property (string-search "Python" row) 'local-map row)
+                                    [header-line mouse-1])
+                        #'drgnx-debug-console-pick-session))
+            (should (eq (lookup-key (get-text-property (1- (length (string-trim-right row))) 'local-map row)
+                                    [header-line mouse-1])
+                        #'drgnx-debug-console-clear)))
+          (drgnx-debug-console-pick-session)
+          (should (= picked 1))
+          ;; the same session again: nothing to draw
+          (drgnx-debug--event "debug-state" (list :sessions (vector (list :id "s1" :name "Python: app" :root "/p"
+                                                                          :state "running"))))
+          (should (= redraws 1))
+          (drgnx-debug--event "debug-state" (list :sessions []))
+          (should (= redraws 2))
+          (should-not (string-search "Python" (drgnx-debug-console-tab-actions))))))))

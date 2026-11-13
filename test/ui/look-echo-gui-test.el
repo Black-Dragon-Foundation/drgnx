@@ -151,8 +151,13 @@ bottom edge."
 
 (drgnx-look-gui-deftest drgnx-ui-look-echo/every-prompt-shows-in-the-box ()
   "read-key, read-char, read-char-exclusive, y-or-n-p, yes-or-no-p, a password, query-replace, `interactive' \"c\"
-and \"k\" (C's own reads): the box shows the prompt while it waits, top-centre in the frame, and hides once answered."
+and \"k\" (C's own reads): the box shows the prompt while it waits, top-centre in the frame, and hides once answered.
+C's reads are told apart only by Nidhogg's `nidhogg-echo-prompt': an Emacs without it would leave the box hidden
+and the row waiting for it until the session's own timeout, so it fails at once instead."
   (skip-unless (display-graphic-p))
+  (unless (boundp 'nidhogg-echo-prompt)
+    (ert-fail (list :emacs emacs-version :unbound 'nidhogg-echo-prompt
+                    :why "C's prompts (interactive \"c\" and \"k\") need Nidhogg's prompt marking (2026-11-10)")))
   (drgnx-look-echo-ui-test--with-frame f
     (let (fails)
       (pcase-dolist (`(,name ,form ,keys ,want ,command)

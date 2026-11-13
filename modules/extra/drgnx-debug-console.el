@@ -14,6 +14,9 @@
 (declare-function drgnx-wb-area-show "drgnx-area" (area &optional tab buffer))
 (declare-function drgnx-debug--session "drgnx-debug" (&optional state))
 (declare-function drgnx-debug-can-p "drgnx-debug-launch" (session cap))
+(declare-function drgnx-debug-toolbar-pick-session "drgnx-debug-toolbar" ())
+(declare-function drgnx-wb-area-redraw "drgnx-area" (area))
+(declare-function drgnx-look-icon "drgnx-icons" (name &optional face size))
 (defvar drgnx-debug--sessions)
 
 (defgroup drgnx-debug-console nil "The debug console." :group 'drgnx)
@@ -80,25 +83,45 @@ the lines already there."
   "The debug console: the program's and the adapter's output, and an input at the bottom (RET evaluates it in the
 selected frame, S-RET adds a line)."
   (setq-local truncate-lines nil)
-  (setq-local header-line-format '(:eval (drgnx-debug-console--header)))
   (setq-local completion-at-point-functions (list #'drgnx-debug-console-complete-at-point))
   (buffer-disable-undo))
 
-(defun drgnx-debug-console--header ()
-  "The header: the session the input evaluates in (a click picks another)."
+(defvar drgnx-debug-console--pick-map
+  (let ((m (make-sparse-keymap))) (define-key m [header-line mouse-1] #'drgnx-debug-console-pick-session) m)
+  "The session chip's click, on the panel's tab row.")
+
+(defvar drgnx-debug-console--clear-map
+  (let ((m (make-sparse-keymap))) (define-key m [header-line mouse-1] #'drgnx-debug-console-clear) m)
+  "The clear button's click, on the panel's tab row.")
+
+(defvar drgnx-debug-console--shown-name 'unset
+  "The session name the panel's tab row last drew (nil: none), so a `debug-state' that keeps it draws nothing.")
+
+(defun drgnx-debug-console-tab-actions ()
+  "The Debug Console tab's own pieces at the right of the panel's tab row (the-look/debugging.html `.ptabs'): the
+chip of the session the input evaluates in (a click picks another; none without a session) and the clear button."
   (let ((s (and (fboundp 'drgnx-debug--session) (drgnx-debug--session))))
-    (concat " "
-            (if s
-                (propertize (format " %s ▾ " (plist-get s :name)) 'face 'drgnx-chip-quiet 'mouse-face 'highlight
-                            'help-echo "Pick the session the console evaluates in"
-                            'keymap (let ((m (make-sparse-keymap)))
-                                      (define-key m [header-line mouse-1] #'drgnx-debug-console-pick-session) m))
-              (propertize "No debug session" 'face 'shadow)))))
+    (concat (when s
+              (propertize (concat " " (plist-get s :name) " " (drgnx-look-icon 'chevron-down nil 14) " ")
+                          'face 'drgnx-chip-quiet 'mouse-face 'highlight
+                          'help-echo "The session the console evaluates in: click for another"
+                          'local-map drgnx-debug-console--pick-map))
+            " "
+            (propertize (drgnx-look-icon 'trash-2 'drgnx-text-muted) 'mouse-face 'highlight
+                        'help-echo "Clear the console" 'local-map drgnx-debug-console--clear-map)
+            " ")))
+
+(defun drgnx-debug-console-redraw ()
+  "Draw the panel's tab row again when the session its chip names changed."
+  (let ((name (and (fboundp 'drgnx-debug--session) (plist-get (drgnx-debug--session) :name))))
+    (unless (equal name drgnx-debug-console--shown-name)
+      (setq drgnx-debug-console--shown-name name)
+      (when (fboundp 'drgnx-wb-area-redraw) (drgnx-wb-area-redraw 'panel)))))
 
 (defun drgnx-debug-console-pick-session ()
   "Pick the session the console (and the toolbar) acts on."
   (interactive)
-  (when (fboundp 'drgnx-debug-pick-session) (call-interactively #'drgnx-debug-pick-session)))
+  (drgnx-debug-toolbar-pick-session))
 
 (defun drgnx-debug-console--buffer ()
   "The console's buffer, made the first time with its prompt."
@@ -268,7 +291,8 @@ selected frame, S-RET adds a line)."
         (drgnx-debug-console-clear)
         (setq drgnx-debug-console--names nil))
       (dolist (s fresh)
-        (push (cons (plist-get s :id) (plist-get s :name)) drgnx-debug-console--names)))))
+        (push (cons (plist-get s :id) (plist-get s :name)) drgnx-debug-console--names))))
+  (drgnx-debug-console-redraw))
 
 (defun drgnx-debug-console--input ()
   (buffer-substring-no-properties (drgnx-debug-console--input-start) (point-max)))

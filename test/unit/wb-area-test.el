@@ -315,6 +315,26 @@ has none; pressed again while it shows, the panel hides; from another tab it swi
      (should (stringp row))
      (should (eq (get-text-property (1- (length row)) 'drgnx-area row) 'panel)))))
 
+(ert-deftest drgnx-area/a-tab-s-actions-sit-before-the-close-while-it-is-shown ()
+  "the-look/debugging.html `.ptabs': a tab's own pieces (the Debug Console's session chip and clear) sit at the right
+of the panel's tab row, before its close, only while that tab is shown; `drgnx-wb-area-redraw' draws them again."
+  (drgnx-area-test--with
+   (let ((label "chip one"))
+     (drgnx-wb-define-tab 'panel 'area-test-acts :title "Acts" :actions (lambda () (propertize label 'drgnx-area-test t)))
+     (unwind-protect
+         (let* ((w (drgnx-wb-area-show 'panel 'area-test-acts))
+                (row (window-parameter w 'header-line-format))
+                (at (string-search "chip one" row)))
+           (should at)
+           (should (< (string-search " Acts " row) at))
+           (should (< at (next-single-property-change 0 'drgnx-area row)))
+           (setq label "chip two")
+           (drgnx-wb-area-redraw 'panel)
+           (should (string-search "chip two" (window-parameter w 'header-line-format)))
+           (drgnx-wb-area-show 'panel 'output)
+           (should-not (string-search "chip two" (window-parameter (drgnx-wb-area-window 'panel) 'header-line-format))))
+       (drgnx-wb-undefine-tab 'panel 'area-test-acts)))))
+
 (ert-deftest drgnx-area/the-right-area-has-no-tab-row-for-one-tab ()
   "agent-panel.html: the right area's tab row shows only while two of its tabs have content, so a lone pane's own
 header is the area's top row; showing a tab with nothing (its placeholder) keeps the row to switch back.  The bottom
