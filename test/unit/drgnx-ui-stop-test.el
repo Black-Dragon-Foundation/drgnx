@@ -12,7 +12,10 @@
 (ert-deftest drgnx-ui/stopping-a-group-waits-for-every-member ()
   "A session's group holds processes whose command lines do not name its run directory (Emacs under the compositor,
 saving its state into it on TERM).  Stopping the group waits for all of them, not only for those naming the run: the
-caller deletes the run directory next (latency-includes-redisplay-work failed \"Directory not empty\")."
+caller deletes the run directory next (latency-includes-redisplay-work failed \"Directory not empty\").
+drgnx-ui's sessions run under a Linux compositor; macOS has no setsid(1) to make the group with."
+  (unless (executable-find "setsid")
+    (ert-skip "no setsid(1): drgnx-ui's sessions run under a Linux compositor"))
   (let* ((run (directory-file-name (make-temp-file "drgnx-ui-run" t))) (aside (make-temp-file "drgnx-ui-pgid" t))
          (pgid-file (expand-file-name "pgid" aside)) (ready (expand-file-name "ready" aside)) pgid)
     (unwind-protect

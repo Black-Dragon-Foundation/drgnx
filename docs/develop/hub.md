@@ -79,7 +79,8 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   syscall from `/proc`. `DRGNX_RATATOSKR_STALL_MS` sets the threshold; without it the watchdog runs at 250 ms in a
   `test-hooks` build (conformance, the perf and UI runs) and is off in the installed hub, whose idle wakeups it would
   multiply; it is always off on the virtual clock. `DRGNX_RATATOSKR_STALL_FILE` also appends each report to that
-  file. A file read or written on a task's path never runs on a worker, since a slow disk (or a stderr nobody reads)
+  file. The watchdog stops as the server's run returns, before the runtime shuts down (whose end stops the heartbeat:
+  it was reported as a stall that never ended). A file read or written on a task's path never runs on a worker, since a slow disk (or a stderr nobody reads)
   would hold it: a session's files are written in order by `disk::Ordered` on the blocking pool (a failed write is
   logged), a resume reads the session's meta, transcript, queue and wheel there, a folder an agent works in is looked
   at there, an MCP session's owner is looked up in `/proc` and its sockets and directory removed there, and stderr's warnings go through a queue of their own that drops lines when full and says how many. The
@@ -1414,6 +1415,8 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `debug/fork` | user | `{anyway?: boolean, at: {hit?: natnum, line?: natnum, path?: string, stop?: natnum}, change?: {code?: boolean, value?: {path: [string], text: string}}, confirm?: boolean, inputs?: [{id: string, value: string}], run: string, until?: DebugForkUntil}` | `{ask?: string, fork?: string, needs?: any}` | no |
 | `debug/fork/drop` | user | `{fork: string}` | `boolean` | no |
 | `debug/fork/run` | user | `{fork: string}` | `boolean` | no |
+| `debug/heap` | user | `{depth?: natnum, expr?: string, frame?: integer, graph?: string, limit?: natnum, session?: string}` | `DebugHeapGraph` | no |
+| `debug/heap/close` | user | `{graph: string}` | `{closed: boolean}` | no |
 | `debug/hot-reload` | user | `{path: string, session: string}` | `{patched: [string], restarted: boolean, skipped: [HotReloadSkip]}` | no |
 | `debug/install` | user | `{adapter: string, adapters?: [JsonObject]}` | `string` | no |
 | `debug/origin` | user | `{depth?: natnum, expr: string, run: string, stop: natnum}` | `{origin: string}` | no |
@@ -1446,10 +1449,11 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes |
 | `explorer/subscribe` | user | `{around?: AbsPath, compact?: boolean, exclude?: [string], expanded?: [AbsPath], indent?: natnum, only?: [AbsPath], roots: [AbsPath], view: string, window?: natnum}` | `{listing: natnum}` | no |
 | `extensions/details` | user, agent | `{id: string}` | `DetailsResult` | no |
-| `extensions/list` | user | `{dense?: boolean, generations?: [{copies?: string, current?: boolean, differs?: [string], in_use?: boolean, n: natnum, note?: string, size?: string, time?: string}], glyphs?: [{gui: string, kind: string, tty: string}], restart?: [string], sections: [{minus_updates?: boolean, name: string, search: {filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs", plugins?: boolean, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}, title: string}], view: string}` | `{sections: [ListTotal]}` | no |
+| `extensions/list` | user | `{dense?: boolean, generations?: [{copies?: string, current?: boolean, differs?: [string], in_use?: boolean, n: natnum, note?: string, size?: string, time?: string}], glyphs?: [{gui: string, kind: string, tty: string}], restart?: [string], sections: [{minus_updates?: boolean, name: string, search: {filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs", plugins?: boolean, recommended?: natnum, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}, title: string}], view: string}` | `{sections: [ListTotal]}` | no |
 | `extensions/modules` | user | `{modules: [{doc?: string, flags?: [string], name: string, packages?: [string], state: "on" \| "off" \| "needs-package" \| "failed"}]}` | `{}` | no |
+| `extensions/recommended` | user | `{ids: [string], version: natnum}` | `{}` | no |
 | `extensions/rows` | user | `{ids: [string]}` | `{rows: [Row]}` | no |
-| `extensions/search` | user, agent | `{filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs", plugins?: boolean, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}` | `{rows: [Row], total: natnum}` | no |
+| `extensions/search` | user, agent | `{filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs", plugins?: boolean, recommended?: natnum, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}` | `{rows: [Row], total: natnum}` | no |
 | `forecast/accuracy` | user | `{profile?: Text, role?: Text}` | `{rows?: [AccuracyRow]}` | no |
 | `forecast/get` | user | `{job: Id}` | `Forecast` | no |
 | `forecast/session` | user | `{profile?: string, session: Id}` | `Forecast` | no |
@@ -4094,7 +4098,8 @@ and never reaches the network here: the refresh job (`drgnx extensions refresh`)
   (`{kind, gui, tty}` each) and the ids that need a restart. The hub runs the searches, builds the rows (a bold header
   `Title (N)` per section, then a line per row with glyph, name, version, state chip and "restart to use", and unless
   `dense` a shadowed `ID/2` line with summary, source and trust) and the model (a tree: section nodes with `label`,
-  `section`, `count`; row nodes with `label`, `name`, `state`, `signed`, `source`, `section`, `version`, `latest`),
+  `section`, `count`; row nodes with `label` (the name, once: the model reaches the editor as one line), `state`,
+  `signed`, `source`, `section`, `version`, `latest`),
   publishes both to the `extensions` view of that connection, and answers each section's `{name, total, loaded}`. The
   editor also sends the package generations it reads from disk (`generations`, newest first, at most 256: `n`, `time`,
   `note`, `differs`, `in_use`, `current`, `size`, `copies`); they end the list as a Generations section (header
@@ -4102,8 +4107,14 @@ and never reaches the network here: the refresh job (`drgnx extensions refresh`)
   for what differs and `gen:N/3` for the copies note; model nodes of kind `generation` with `label` and `gen`).
   Roll Back Packages reads the selected row's `gen`. With `@generations` typed the editor sends no sections and the
   generations alone. The last list per connection is kept to rebuild on a resync, dropped when the connection goes.
+- **The Recommended set** (`extensions/recommended {ids, version}`): the editor sends its Recommended ids once per
+  version and the hub holds them per connection (replaced by each call, dropped when the connection goes); a search or
+  a list section names the set by its version (`filters.recommended`) and carries no ids. A version the connection
+  does not hold (a new connection, a hub restart) is `invalid-params` at `filters/recommended`
+  (`sections/N/search/filters/recommended` in a list), and the editor sends its set again and asks once more. At most
+  20,000 ids. Scenario `extensions/the-recommended-set-is-the-connections`.
 - **Classes:** `extensions/search` and `extensions/details` are open to agents; `extensions/rows`,
-  `extensions/list` and `extensions/modules` are the user's.
+  `extensions/list`, `extensions/modules` and `extensions/recommended` are the user's.
 
 Tests: `extensions::catalog::` [D, one every-order test A], `extensions::rank::` [D] and
 `view::extensions::` [D]; conformance `extensions/search-ranks-the-fixture`, `details-of-an-installed-package`,
@@ -4204,6 +4215,10 @@ Every step of an agent's work is a row of the `step` table (`norn::write::steps`
 session's step writer (`agents/session.rs`) and announced as `agent-step`. The classifier sees the updates as they
 arrive: text between tool calls is `think`; a tool call is `tool` from `in_progress` to `completed`; a permission
 request is `user-wait` (the hub answers it, so it is the user's time, not the tool's); a paused session is `paused`.
+A refused call is finished: when the hub refuses it (a seam deny, the matrix's Never, a gate, a fork's
+`_drgnx/before_tool` deny) or the user does (a card, an answer, a cancel), its `tool` step ends before the answer goes
+back and the agent's time after it is `think` (`State::call_refused`); a step the wait had only just given back
+writes no row. So the timeline holds the refused call when the agent hears the refusal, not at its next update.
 `job-wait`, `machine-queue` and `stalled` are written by the tasks that own those events (exec, the supervisor).
 A step's `provider` is the profile's gateway provider environment (`:ai`) when it has one, else whose CLI it starts
 (`claude`, `codex`, `gemini`), so a subscription session's steps say where they ran (the matrix's `(:provider NAME)`

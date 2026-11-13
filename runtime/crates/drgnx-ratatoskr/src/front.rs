@@ -323,6 +323,7 @@ impl Front {
         self.core.views.gone(conn);
         self.core.buffers.gone(conn);
         self.core.terms.gone(conn);
+        self.extensions.gone(conn);
     }
 
     /// EVENT with DATA to every subscribed connection: queued for each before any is written (a queue never waits),
@@ -989,14 +990,23 @@ impl Front {
             p @ Params::DebugOrigin(_) => crate::debug::origin_wire::serve(self, &caller, p)
                 .await
                 .unwrap_or_else(|_| unserved(method)),
+            // the heap graph (`debug/heap`, `debug/heap/close`)
+            p @ (Params::DebugHeap(_) | Params::DebugHeapClose(_)) => {
+                crate::debug::heap_wire::serve(self, &caller, p)
+                    .await
+                    .unwrap_or_else(|_| unserved(method))
+            }
             // the Extensions view's catalog (`extensions/*`)
             p @ (Params::ExtensionsSearch(_)
             | Params::ExtensionsDetails(_)
             | Params::ExtensionsRows(_)
             | Params::ExtensionsList(_)
-            | Params::ExtensionsModules(_)) => crate::extensions::methods::serve(self, &caller, p)
-                .await
-                .unwrap_or_else(|_| unserved(method)),
+            | Params::ExtensionsModules(_)
+            | Params::ExtensionsRecommended(_)) => {
+                crate::extensions::methods::serve(self, &caller, p)
+                    .await
+                    .unwrap_or_else(|_| unserved(method))
+            }
             // the graph store's (`graph/*`, `tasks/*`); a settled card too (an access card becomes a grant)
             p @ (Params::GraphPutParsed(_)
             | Params::GraphRecord(_)

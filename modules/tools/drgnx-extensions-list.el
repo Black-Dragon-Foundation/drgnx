@@ -21,7 +21,6 @@
 (require 'drgnx-view-nav)
 (require 'drgnx-extensions-refresh)
 
-(declare-function drgnx-hub-call "drgnx-hub-client")
 (declare-function drgnx-hub-call-sync "drgnx-hub-client")
 (declare-function drgnx-exec-log "drgnx-exec")
 (declare-function drgnx-statusbar-refresh "drgnx-statusbar")
@@ -202,8 +201,11 @@ global `drgnx-extensions-recommended'."
 (defun drgnx-extensions-list-search-params (query &optional offset)
   "The params of `extensions/search' for the parsed QUERY: the words, the filters (the local words as `:ids'), the sort."
   (let* ((filters (copy-sequence (plist-get query :filters)))
-         (local (drgnx-extensions-list--local-ids (plist-get query :local))))
+         (held (and (memq 'recommended (plist-get query :local)) (fboundp 'drgnx-extensions-recommend-version)))
+         (local (drgnx-extensions-list--local-ids (if held (remq 'recommended (plist-get query :local))
+                                                    (plist-get query :local)))))
     (when (car local) (setq filters (plist-put filters :ids (vconcat (cdr local)))))
+    (when held (setq filters (plist-put filters :recommended (drgnx-extensions-recommend-version))))
     (append (list :query (plist-get query :text))
             (and filters (list :filters filters))
             (and (plist-get query :sort) (list :sort (plist-get query :sort)))
@@ -216,7 +218,9 @@ global `drgnx-extensions-recommended'."
                (list :filters
                      (pcase section
                        ('installed '(:installed t)) ('updates '(:updates t)) ('plugins '(:plugins t)) ('builtin '(:builtin t))
-                       ('recommended (list :ids (vconcat (drgnx-extensions-list--recommended-ids))))))
+                       ('recommended (if (fboundp 'drgnx-extensions-recommend-version) ; the hub holds the set
+                                         (list :recommended (drgnx-extensions-recommend-version))
+                                       (list :ids (vconcat (drgnx-extensions-list--recommended-ids)))))))
                (list :offset (or offset 0) :limit drgnx-extensions-list--page)))))
 
 (defun drgnx-extensions-list--fetch (section offset)
@@ -259,10 +263,15 @@ must be the hub-fed view (a Emacs without Sjá shows the notice and asks nothing
 
 ;;;; The job layer's state: busy rows, drawn once a second
 
+(defun drgnx-extensions-list--holds-p (id)
+  "Non-nil when the list's view holds a row ID (its rows, not its model: nothing is read out of Sjá, so a job's step
+makes no row data)."
+  (when-let* ((v (drgnx-extensions-list--view))) (drgnx-view-row-start v id)))
+
 (defun drgnx-extensions-list--busy-ids ()
   "The ids of the rows in the list whose job is busy."
   (let (out)
-    (maphash (lambda (id st) (when (and (eq (plist-get st :status) 'busy) (drgnx-extensions-list-row id))
+    (maphash (lambda (id st) (when (and (eq (plist-get st :status) 'busy) (drgnx-extensions-list--holds-p id))
                                (push id out)))
              drgnx-extensions-list--jobs)
     (sort out #'string<)))
@@ -300,7 +309,7 @@ must be the hub-fed view (a Emacs without Sjá shows the notice and asks nothing
 ticket (an integer) has no row, nil."
   (cond ((integerp x) nil)
         ((and (stringp x) (string-search ":" x)) x)
-        (t (concat "pkg:" (format "%s" x)))))
+        (t (concat "pkg:" (if (symbolp x) (symbol-name x) x)))))
 
 (defun drgnx-extensions-list--jobs-changed (ids)
   "`drgnx-extensions-jobs-changed-functions': read the state of IDS, draw their rows, start or stop the timer."
@@ -310,14 +319,14 @@ ticket (an integer) has no row, nil."
              (st (and id (fboundp 'drgnx-extensions-jobs-state) (drgnx-extensions-jobs-state name))))
         (when id
           (if st (puthash id st drgnx-extensions-list--jobs) (remhash id drgnx-extensions-list--jobs))
-          (when (drgnx-extensions-list-row id) (push id shown)))))
+          (when (drgnx-extensions-list--holds-p id) (push id shown)))))
     (let ((restart drgnx-extensions-list--restart))
       (drgnx-extensions-list--note-restart)
       (when (drgnx-extensions-list--hub-fed-p)
         (drgnx-extensions-list--rows-chips shown)
         (unless (equal restart drgnx-extensions-list--restart)
-          (drgnx-extensions-list--ask))                  ; "restart to use" is the hub's
-        (drgnx-extensions-list--header)))
+          (drgnx-extensions-list--ask)                   ; "restart to use" is the hub's
+          (drgnx-extensions-list--header))))             ; a step alone leaves the header as it is
     (drgnx-extensions-list--tick-update)))
 
 ;;;; Drawing
@@ -328,22 +337,34 @@ ticket (an integer) has no row, nil."
     ('signed "signed") ('signing-archive "signed archive") ('unsigned-archive "unsigned archive") ('local "local") ('git-commit "Git commit")
     ('hash-approved "hash approved") (_ nil)))
 
+(defconst drgnx-extensions-list--busy-of (concat "  " (propertize "%s %s %d/%d · %ds" 'face 'drgnx-status-info))
+  "A busy chip with its step's count; `format' keeps the face, so a step makes one string.")
+
+(defconst drgnx-extensions-list--busy (concat "  " (propertize "%s %s · %ds" 'face 'drgnx-status-info))
+  "A busy chip without a count.")
+
 (defun drgnx-extensions-list--job-chip (st)
-  "The chip the job layer's state ST gives a row, or nil."
-  (let ((warnings (plist-get st :warnings)))
-    (concat
-     (pcase (plist-get st :status)
-       ('busy (propertize (format "%s %s%s · %ds" (drgnx-face-glyph 'busy) (or (plist-get st :step) "working")
-                                  (if (and (plist-get st :i) (plist-get st :n)) (format " %d/%d" (plist-get st :i) (plist-get st :n)) "")
-                                  (if (plist-get st :since) (max 0 (floor (- (float-time) (float-time (plist-get st :since))))) 0))
-                          'face 'drgnx-status-info))
-       ('queued (propertize "queued" 'face 'shadow))
-       ('refused (propertize (or (plist-get st :error) "busy, try again") 'face 'drgnx-status-warn))
-       ('failed (propertize (format "%s %s" (drgnx-face-glyph 'fail) (or (plist-get st :error) "failed with the batch"))
-                            'face 'drgnx-status-fail))
-       ('stopped (propertize "stopped" 'face 'shadow))
-       (_ nil))
-     (when warnings
+  "The text the job layer's state ST puts after a row (two spaces, then the chip), or nil.  A busy row's chip is made
+once a step, so it is one `format' (no copies)."
+  (let* ((warnings (plist-get st :warnings))
+         (chip
+          (pcase (plist-get st :status)
+            ('busy (let ((i (plist-get st :i)) (n (plist-get st :n)) (since (plist-get st :since))
+                         (step (or (plist-get st :step) "working")))
+                     (setq since (if since (max 0 (floor (- (float-time) (float-time since)))) 0))
+                     (if (and i n)
+                         (format drgnx-extensions-list--busy-of (drgnx-face-glyph 'busy) step i n since)
+                       (format drgnx-extensions-list--busy (drgnx-face-glyph 'busy) step since))))
+            ('queued (concat "  " (propertize "queued" 'face 'shadow)))
+            ('refused (concat "  " (propertize (or (plist-get st :error) "busy, try again") 'face 'drgnx-status-warn)))
+            ('failed (concat "  " (propertize (format "%s %s" (drgnx-face-glyph 'fail) (or (plist-get st :error) "failed with the batch"))
+                                              'face 'drgnx-status-fail)))
+            ('stopped (concat "  " (propertize "stopped" 'face 'shadow)))
+            (_ nil))))
+    (if (not warnings)
+        chip
+      (concat
+       (or chip "  ")
        (propertize (format "%spartly compiled: %s" (if (plist-get st :status) " " "") (string-join (mapcar (lambda (w) (format "%s" w)) warnings) ", "))
                    'face 'drgnx-status-warn)))))
 
@@ -384,6 +405,8 @@ ticket (an integer) has no row, nil."
   "The Extensions list: packages, plugins and modules in one place."
   (setq-local truncate-lines t cursor-type nil
               revert-buffer-function (lambda (&rest _) (drgnx-extensions-list-refresh)))
+  ;; the rows in the UI font, as the Explorer's: names are the buffer's text, the hub's faces only add tone
+  (face-remap-add-relative 'default 'drgnx-ui-text)
   (buffer-disable-undo)
   (add-hook 'post-command-hook #'drgnx-extensions-list--post-command nil t))
 
@@ -411,7 +434,8 @@ ticket (an integer) has no row, nil."
 ;;;; On the rows path: the hub builds the list, its model holds the rows (Sjá)
 ;; The list is the hub-fed view `extensions' (an Emacs without Sjá shows a notice): `extensions/list' names
 ;; the sections (each a search, as `drgnx-extensions-list--section-params' makes it) and the hub sends the model (a
-;; `tree': a node per header and per row, the row's name, kind, state, signed, source, version and latest as fields)
+;; `tree': a node per header and per row, the row's name (its `label'), kind, state, signed, source, version and latest
+;; as fields)
 ;; and the rows, headers and lines included.  The answer is each section's total.  A row's data is read from the model
 ;; (`drgnx-extensions-list-row'), point's row is the model's selection, and a job's chip is an overlay at the end of
 ;; the row's first line, put back after each draw: the busy tick moves overlays, never rows.
@@ -437,7 +461,7 @@ or nil when the list is not the hub-fed view or the model has no such row."
       (when-let* ((h (drgnx-view-patch-handle drgnx-view-patch)) (kind (nidhogg-view-get h 'kind id))
                   ((not (equal kind "section"))))
         (let ((f (lambda (name) (nidhogg-view-get h 'field name id))))
-          (list :id id :name (funcall f "name") :kind (intern kind) :state (intern (funcall f "state"))
+          (list :id id :name (funcall f "label") :kind (intern kind) :state (intern (funcall f "state"))
                 :signed (intern (funcall f "signed")) :source (funcall f "source")
                 :version (funcall f "version") :latest (funcall f "latest")))))))
 
@@ -484,20 +508,42 @@ typed, they are the list)."
                            (or (drgnx-extensions-list--generation-params) [])
                          []))))
 
-(defun drgnx-extensions-list--ask (&optional _view)
+(defun drgnx-extensions-list--resend-p (error)
+  "Non-nil when the hub's full ERROR says it holds no Recommended set at the version asked (a new connection)."
+  (and (consp error) (stringp (plist-get error :path)) (string-suffix-p "filters/recommended" (plist-get error :path))))
+
+(declare-function drgnx-extensions-recommend-send "drgnx-extensions-recommend" ())
+(defvar drgnx-hub--events)
+(declare-function drgnx-hub--call-on "drgnx-hub-client")
+
+(defun drgnx-extensions-list-call (method params callback &rest keys)
+  "Ask the hub METHOD with PARAMS on this Emacs's subscribed connection, as `drgnx-hub-call' with KEYS: the hub sends
+the list's model and rows to the connection that asked, the one the view's env went on, and holds the Recommended set
+per connection.  Signals while that connection is down: the view asks again when it is up (its env's resubscribe)."
+  (unless (fboundp 'drgnx-hub--call-on) (require 'drgnx-hub-client))
+  (unless (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events))
+    (error "The drgnx hub is not connected"))
+  (apply #'drgnx-hub--call-on drgnx-hub--events method params callback keys))
+
+(defun drgnx-extensions-list--ask (&optional _view again)
   "Ask the hub for the list's rows, without waiting; the answer's totals go to `drgnx-extensions-list--listed'.  Also
-the env's resubscribe."
-  (unless (fboundp 'drgnx-hub-call) (require 'drgnx-hub-client))
+the env's resubscribe.  A hub that holds no Recommended set at the version asked is sent the set, and asked AGAIN
+once."
   (let ((epoch drgnx-extensions-list--epoch))
     (condition-case err
-        (drgnx-hub-call "extensions/list" (drgnx-extensions-list--list-params)
-                        (lambda (result error)
-                          (when (eql epoch drgnx-extensions-list--epoch)
-                            (if error
-                                (setq drgnx-extensions-list--error (format "%s" error))
-                              (setq drgnx-extensions-list--error nil)
-                              (drgnx-extensions-list--listed (plist-get result :sections)))
-                            (drgnx-extensions-list--changed))))
+        (drgnx-extensions-list-call "extensions/list" (drgnx-extensions-list--list-params)
+                                    (lambda (result error)
+                                      (when (eql epoch drgnx-extensions-list--epoch)
+                                        (if (and error (not again) (drgnx-extensions-list--resend-p error)
+                                                 (fboundp 'drgnx-extensions-recommend-send))
+                                            (progn (drgnx-extensions-recommend-send) (drgnx-extensions-list--ask nil t))
+                                          (if error
+                                              (setq drgnx-extensions-list--error
+                                                    (format "%s" (if (consp error) (plist-get error :message) error)))
+                                            (setq drgnx-extensions-list--error nil)
+                                            (drgnx-extensions-list--listed (plist-get result :sections)))
+                                          (drgnx-extensions-list--changed))))
+                                    :full t)
       (error (setq drgnx-extensions-list--error (error-message-string err))
              (drgnx-extensions-list--changed)))))
 
@@ -542,7 +588,7 @@ the env's resubscribe."
               (when ov (delete-overlay ov) (remhash id drgnx-extensions-list--chips))
             (let ((end (save-excursion (goto-char beg) (line-end-position))))
               (if ov (move-overlay ov end end) (setq ov (make-overlay end end)) (puthash id ov drgnx-extensions-list--chips))
-              (overlay-put ov 'after-string (concat "  " chip)))))))))
+              (overlay-put ov 'after-string chip))))))))
 
 (defun drgnx-extensions-list--rows-patched (_view keys)
   "`drgnx-view-patch-patched-functions' of the list: the chips of the rows KEYS that were drawn go back on."

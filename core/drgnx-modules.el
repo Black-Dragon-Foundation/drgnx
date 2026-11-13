@@ -32,6 +32,9 @@
 
 (defvar drgnx-modules--table nil "Alist NAME → plist (:doc :stage … :file), in definition order.")
 (defvar drgnx-modules--report nil "Alist NAME → plist (:stage :ms :status :error :missing :problems :left).")
+(defvar drgnx-modules-report-tick 0
+  "Counts the changes to the modules' report (`drgnx-modules--record'): what is made from the report is made again only
+when this moved (the Extensions list's Recommended set).")
 (defconst drgnx-modules-stages '(startup idle first-frame first-file first-input))
 (defconst drgnx-modules-state-version 2
   "Format of modules.eld.  2: it holds `:enabled' (format 1 had no such field).  An older drgnx reads
@@ -225,6 +228,7 @@ in this session, or disabled in modules.eld though on by default (one that is of
   (setf (alist-get name drgnx-modules--report)
         (list :stage stage :ms ms :status status :error err :missing missing :problems problems
               :left (alist-get name drgnx-modules--left)))
+  (cl-incf drgnx-modules-report-tick)
   (drgnx-modules--notice name status err missing problems)
   (drgnx-modules--notice-off))
 
@@ -250,10 +254,36 @@ order (a cycle keeps it, and is reported waiting)."
               todo (seq-remove (lambda (m) (memq m ready)) todo))))
     done))
 
+(defvar drgnx-modules--libraries nil
+  "Within `drgnx-modules-retry-waiting': (PATH LENGTH . TABLE), the libraries of `load-path' PATH (of LENGTH entries)
+as one listing of each directory made them, TABLE their names; nil elsewhere (`locate-library' is asked).")
+
+(defun drgnx-modules--library-names ()
+  "A table of the library names one listing of each `load-path' directory finds (NAME.el, NAME.elc, a compressed or
+module file), made again when `load-path' gains or loses an entry."
+  (let ((c drgnx-modules--libraries))
+    (if (and c (eq (car c) load-path) (= (cadr c) (length load-path)))
+        (cddr c)
+      (let ((table (make-hash-table :test #'equal))
+            (re (concat "\\`\\(.+?\\)\\(?:\\.elc\\|\\.el\\|" (regexp-quote (or module-file-suffix ".so")) "\\)"
+                        "\\(?:\\.gz\\)?\\'")))
+        (dolist (dir load-path)
+          (when (and (stringp dir) (file-directory-p dir))
+            (dolist (f (directory-files dir nil re t))
+              (when (string-match re f) (puthash (match-string 1 f) t table)))))
+        (setq drgnx-modules--libraries (cons load-path (cons (length load-path) table)))
+        table))))
+
+(defun drgnx-modules--package-p (p)
+  "Whether package P is loaded or its library is on `load-path'."
+  (or (featurep p)
+      (if drgnx-modules--libraries
+          (gethash (symbol-name p) (drgnx-modules--library-names))
+        (locate-library (symbol-name p)))))
+
 (defun drgnx-modules--run-one (name spec stage)
   "Run module NAME (SPEC) of STAGE, isolated and timed, and record it.  Non-nil if its setup ran."
-  (let ((missing (seq-remove (lambda (p) (or (featurep p) (locate-library (symbol-name p))))
-                             (plist-get spec :packages)))
+  (let ((missing (seq-remove #'drgnx-modules--package-p (plist-get spec :packages)))
         (unmet (seq-remove #'drgnx-modules--ok-p (plist-get spec :requires))))
     (cond
      ((drgnx-module-disabled-p name) (drgnx-modules--record name stage 0 'disabled) nil)
@@ -279,11 +309,12 @@ order (a cycle keeps it, and is reported waiting)."
 (defun drgnx-modules-retry-waiting ()
   "Run the setup of every module that waits for packages (status missing-packages) whose packages now load: they
 were just installed.  The registry follows (keys, menus) when one ran.  Never prompts.  The modules that ran."
-  (let ((ran nil))
+  ;; the packages of every waiting module are looked for in one listing of each `load-path' directory
+  (let ((ran nil) (drgnx-modules--libraries (list nil -1)))
     (dolist (m drgnx-modules--table)
       (let ((r (alist-get (car m) drgnx-modules--report)))
         (when (and (eq (plist-get r :status) 'missing-packages)
-                   (seq-every-p (lambda (p) (or (featurep p) (locate-library (symbol-name p)))) (plist-get (cdr m) :packages))
+                   (seq-every-p #'drgnx-modules--package-p (plist-get (cdr m) :packages))
                    (drgnx-modules--run-one (car m) (cdr m) (or (plist-get (cdr m) :stage) (plist-get r :stage))))
           (push (car m) ran))))
     (when ran

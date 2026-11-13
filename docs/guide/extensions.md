@@ -9,13 +9,16 @@ it. `C-g` never stops a job; **Cancel** (`k`, Vim `x`) does.
 
 ## The list
 
-Rows are grouped in sections: **Installed**, **Updates**, **Recommended** (below), **Plugins**, **Built-in** and **Generations**. Each row has the kind's mark
-(`⬡` package, `◆` plugin, `▣` module), the name, the version, a chip for its state, and on a second line the summary,
-the archive it comes from and how far you can trust that (signed, unsigned archive, local, Git commit, hash approved).
+Rows are grouped in sections: **Installed**, **Updates**, **Recommended** (below), **Plugins**, **Built-in** and **Generations**. Each row has the kind's mark,
+the Explorer's Lucide icons on a graphical display (`package` for packages and generations, `plug` for plugins,
+`blocks` for modules) and `P`, `&` or `M` in a terminal, then the name, the version, a chip for its state, and on a second line the summary,
+the archive it comes from and how far you can trust that (signed, unsigned archive, local, Git commit, hash approved);
+a row with none of those (a missing package) is one line. The rows are in the UI font, as the Explorer's: the section
+titles as its section titles, the versions and summaries muted.
 `drgnx-extensions-list-density` set to `dense` keeps one line a row. The next 200 rows load as you near the end.
 
 Chips: *update to X*, *held* (a newer version exists that the update plan does not take), *missing: no archive you use
-has it*, *failed*, *queued*, *stopped*, *partly compiled: a.el, b.el* (the package works; those files did not
+has it* (a warning, in the colour of *update to X*: the error colour is for what failed or needs you), *failed*, *queued*, *stopped*, *partly compiled: a.el, b.el* (the package works; those files did not
 byte-compile), *restart to use* (an update that a running session cannot load yet). When updates wait for a restart the
 header says so and has a **Restart drgnx** button.
 

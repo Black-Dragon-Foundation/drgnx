@@ -141,7 +141,9 @@ asks no matrix cell (the gate's run is the hub's decision). Other hub runs of un
 predicate) use the same starter. Unit test `a_sealed_job_names_no_session_and_stays_sealed_in_the_queue`. Row `runner/a-gate-run-keeps-the-agents-sandbox`. The job's end is the task's
 evidence like any other; the next tick looks again. A hold is a `gate` card on the task (key `gates`, `tip` its tree
 key) saying what is wrong; a red-first wait with no run of the task's tests to repeat is a hold too, but not while a
-run in the task's tree has no result yet (a session's `exec/start` on its way, `exec::Runner::busy_in`, a job there
+run in the task's tree has no result yet (a session's `exec/start` on its way, `exec::Runner::busy_in_tree`, which
+looks the tree up by its true name as the jobs' folders are recorded, so a tree named through a link (macOS's `/var`
+is `/private/var`) still matches; a job there
 queued or running, or one that ended whose end the evidence watcher has not recorded yet, so a tick between a run's
 end and its evidence never holds): red first then waits, and the next tick judges it with that run (a start that answered later
 than the review came, as on the macOS lane; row `runner/a-gate-waits-for-a-run-still-starting`, whose hub answers

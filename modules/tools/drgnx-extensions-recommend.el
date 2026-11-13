@@ -84,24 +84,69 @@
           (when (symbolp pkg) (push (cons module pkg) out)))))
     (nreverse out)))
 
-(defun drgnx-extensions-recommended (root)
+(defun drgnx-extensions-recommended (root &optional ids-only)
   "What the project at ROOT recommends, as ((ID . WHY)…), in order and each once: its `drgnx-extensions-recommended',
 the packages Emacs suggests for the files the Explorer listed there, the packages a module waits for.  ROOT nil: the
-global list and the modules only.  Reads no folder and changes nothing."
-  (let (out)
-    (cl-flet ((add (pkg why) (let ((id (format "pkg:%s" pkg))) (unless (assoc id out) (push (cons id why) out)))))
+global list and the modules only.  IDS-ONLY: the ids alone, (ID…), no reason made.  Reads no folder and changes
+nothing."
+  (let ((seen (make-hash-table :test #'eq)) out)
+    (cl-flet ((add (pkg why &rest args)
+                (unless (gethash pkg seen)
+                  (puthash pkg t seen)
+                  (let ((id (concat "pkg:" (symbol-name pkg))))
+                    (push (if ids-only id (cons id (if args (apply #'format why args) why))) out)))))
       (dolist (pkg (ensure-list (if root (drgnx-setting-for-root 'drgnx-extensions-recommended root)
                                   (bound-and-true-p drgnx-extensions-recommended))))
         (when (and pkg (symbolp pkg)) (add pkg "this project recommends it")))
       (pcase-dolist (`(,file . ,pkg) (drgnx-extensions-recommend--by-files root))
-        (add pkg (format "Emacs suggests it for %s here" file)))
+        (add pkg "Emacs suggests it for %s here" file))
       (pcase-dolist (`(,module . ,pkg) (drgnx-extensions-recommend--waiting))
-        (add pkg (format "the module %s waits for it" module))))
+        (add pkg "the module %s waits for it" module)))
     (nreverse out)))
 
 (defun drgnx-extensions-recommend-ids ()
-  "The ids the Recommended section lists: what `drgnx-extensions-recommend--root' recommends."
-  (mapcar #'car (drgnx-extensions-recommended drgnx-extensions-recommend--root)))
+  "The ids the Recommended section lists: what `drgnx-extensions-recommend--root' recommends (no reason is made)."
+  (drgnx-extensions-recommended drgnx-extensions-recommend--root t))
+
+;;;; The set the hub holds
+;; The Recommended section's search names the set by a version (`filters.recommended'); the ids go to the hub once per
+;; version (`extensions/recommended'), so opening the list makes no id string.  The set is made again only when what it
+;; is made from moved: the project, the modules' report (`drgnx-modules-report-tick'), a settings file, the global
+;; list.  Emacs's suggestions for the project's files are read then too (the Explorer's listing as it is at that time).
+
+(declare-function drgnx-extensions-list-call "drgnx-extensions-list" (method params callback &rest keys))
+
+(defvar drgnx-extensions-recommend--held nil
+  "The set as last made: [ROOT MODULES-TICK SETTINGS-TICK GLOBAL VERSION IDS], or nil.")
+(defvar drgnx-extensions-recommend--version 0 "The last version of the set made.")
+(defvar drgnx-extensions-recommend--settings-tick 0 "Counts the settings files' changes (`drgnx-settings-changed-functions').")
+
+(defun drgnx-extensions-recommend--settings-changed (&rest _)
+  "A settings file changed: the set is made again at its next use."
+  (cl-incf drgnx-extensions-recommend--settings-tick))
+
+(defun drgnx-extensions-recommend-send ()
+  "Send the hub the set as last made, on the connection the list asks on (`drgnx-extensions-list-call': the set is
+that connection's; a new connection holds none, and the hub asks for it again)."
+  (when-let* ((h drgnx-extensions-recommend--held))
+    (condition-case nil
+        (drgnx-extensions-list-call "extensions/recommended" (list :ids (vconcat (aref h 5)) :version (aref h 4))
+                                    #'ignore)
+      (error nil))))
+
+(defun drgnx-extensions-recommend-version ()
+  "The version of the Recommended set the hub holds: made again, and sent, only when what it is made from moved."
+  (let ((h drgnx-extensions-recommend--held) (root drgnx-extensions-recommend--root)
+        (mt drgnx-modules-report-tick) (st drgnx-extensions-recommend--settings-tick)
+        (g (bound-and-true-p drgnx-extensions-recommended)))
+    (unless (and h (equal (aref h 0) root) (eql (aref h 1) mt) (eql (aref h 2) st) (eq (aref h 3) g))
+      (let ((ids (drgnx-extensions-recommended root t)))
+        (if (and h (equal ids (aref h 5)))
+            (setq drgnx-extensions-recommend--held (vector root mt st g (aref h 4) (aref h 5)))
+          (setq drgnx-extensions-recommend--held
+                (vector root mt st g (cl-incf drgnx-extensions-recommend--version) ids))
+          (drgnx-extensions-recommend-send))))
+    (aref drgnx-extensions-recommend--held 4)))
 
 (defun drgnx-extensions-recommend-notice (root)
   "The first look at the project at ROOT this session: one notice when it recommends anything, with a command that
@@ -154,14 +199,18 @@ shows them.  Non-nil when it posted one.  Installs, queues and asks nothing."
 
 ;;;; Setup
 
+(defvar drgnx-settings-changed-functions)
+
 (defun drgnx-extensions-recommend-setup ()
-  (add-hook 'find-file-hook #'drgnx-extensions-recommend--visited))
+  (add-hook 'find-file-hook #'drgnx-extensions-recommend--visited)
+  (add-hook 'drgnx-settings-changed-functions #'drgnx-extensions-recommend--settings-changed))
 
 (defun drgnx-extensions-recommend-teardown ()
-  "Forget the projects and the database; let go of the hook."
+  "Forget the projects, the database and the set; let go of the hooks."
   (remove-hook 'find-file-hook #'drgnx-extensions-recommend--visited)
+  (remove-hook 'drgnx-settings-changed-functions #'drgnx-extensions-recommend--settings-changed)
   (setq drgnx-extensions-recommend--root nil drgnx-extensions-recommend--noticed nil
-        drgnx-extensions-recommend--database 'unread))
+        drgnx-extensions-recommend--database 'unread drgnx-extensions-recommend--held nil))
 
 (provide 'drgnx-extensions-recommend)
 ;;; drgnx-extensions-recommend.el ends here

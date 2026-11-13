@@ -227,15 +227,86 @@ pub fn owned(port: u16, groups: &[i32]) -> Result<bool, String> {
     Ok(true)
 }
 
+/// How long a port check's `lsof` may take: past it the process is killed and the check fails, so a session's start
+/// (which waits on the check, [`super::blocked::wait_owned`]) keeps its own deadline.
+pub const LSOF_WITHIN: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// CMD's output (stdin closed), or an error once it has run WITHIN without exiting (it is killed then).
+pub fn output_within(
+    mut cmd: std::process::Command,
+    within: std::time::Duration,
+) -> Result<std::process::Output, String> {
+    use std::io::Read;
+    use std::process::Stdio;
+    let name = cmd.get_program().to_string_lossy().into_owned();
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("{name}: {e}"))?;
+    // read both pipes as it runs: a full pipe would stop it before it exits
+    let drain = |p: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut p) = p {
+                let _ = p.read_to_end(&mut buf);
+            }
+            buf
+        })
+    };
+    let out = drain(
+        child
+            .stdout
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
+    let err = drain(
+        child
+            .stderr
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
+    let start = crate::clock::real_now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None) if start.elapsed() < within => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "{name} did not answer within {} ms (killed)",
+                    within.as_millis()
+                ));
+            }
+            Err(e) => return Err(format!("{name}: {e}")),
+        }
+    };
+    Ok(std::process::Output {
+        status,
+        stdout: out.join().unwrap_or_default(),
+        stderr: err.join().unwrap_or_default(),
+    })
+}
+
 /// The process of each listener on PORT; `None` where it cannot be seen.
 #[cfg(target_os = "macos")]
 fn listener_pids(port: u16) -> Result<Vec<Option<i32>>, String> {
-    let out = std::process::Command::new("/usr/sbin/lsof")
-        .args(["-nP", "-a", &format!("-iTCP:{port}"), "-sTCP:LISTEN", "-Fp"])
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .map_err(|e| format!("lsof: {e}"))?;
+    let mut cmd = std::process::Command::new("/usr/sbin/lsof");
+    // -b -w: no kernel call that can block (a stat of a hung mount); the deadline covers the rest
+    cmd.args([
+        "-b",
+        "-w",
+        "-nP",
+        "-a",
+        &format!("-iTCP:{port}"),
+        "-sTCP:LISTEN",
+        "-Fp",
+    ]);
+    let out = output_within(cmd, LSOF_WITHIN)?;
     // exit 1 with no output: nothing listens
     Ok(String::from_utf8_lossy(&out.stdout)
         .lines()

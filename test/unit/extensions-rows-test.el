@@ -14,6 +14,8 @@
 (load (expand-file-name "modules/tools/drgnx-extensions-list" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-extensions-jobs" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-extensions-details" drgnx-dir) nil t)
+(load (expand-file-name "modules/tools/drgnx-extensions-recommend" drgnx-dir) nil t)
+(require 'drgnx-hub-client)
 
 (defconst drgnx-extensions-rows-test--model
   (json-serialize
@@ -26,7 +28,7 @@
                               (list :id "section:updates" :kind "section" :flags 1
                                     :fields [["label" "Updates"] ["section" "updates"] ["count" 1]])
                               (list :id "pkg:a" :kind "package" :flags 0 :parent "section:updates"
-                                    :fields [["label" "a"] ["name" "a"] ["state" "update"] ["signed" "unsigned-archive"]
+                                    :fields [["label" "a"] ["state" "update"] ["signed" "unsigned-archive"]
                                              ["source" "melpa"] ["section" "updates"] ["version" "1.0"] ["latest" "1.1"]]))
                       :edges []
                       :lists (vector (list :name "order" :ids ["section:updates" "pkg:a"])))))))
@@ -46,7 +48,7 @@ Updates count."
         (drgnx-view-model--views (make-hash-table :test #'equal)) (drgnx-view-patch--hooked nil)
         (calls nil))
     (unwind-protect
-        (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (m p cb) (push (list m p cb) calls) 1))
+        (cl-letf (((symbol-function 'drgnx-extensions-list-call) (lambda (m p cb &rest _) (push (list m p cb) calls) 1))
                   ((symbol-function 'drgnx-view-env-register) #'ignore))
           (drgnx-extensions-list--reset)
           (with-current-buffer (drgnx-extensions-list--buffer)
@@ -66,6 +68,7 @@ Updates count."
             (should (string-match-p "update to 1\\.1" (buffer-string)))
             (should (eq 'update (plist-get (drgnx-extensions-list-row "pkg:a") :state)))
             (should (equal "1.1" (plist-get (drgnx-extensions-list-row "pkg:a") :latest)))
+            (should (equal "a" (plist-get (drgnx-extensions-list-row "pkg:a") :name)))   ; the model's label
             (should-not (drgnx-extensions-list-row "section:updates"))
             (goto-char (point-min))
             (search-forward "a 1.0")
@@ -86,7 +89,7 @@ Updates count."
          (,calls nil))
      (ignore ,calls)
      (unwind-protect
-         (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (m p cb &rest _) (push (list m p cb) ,calls) 1))
+         (cl-letf (((symbol-function 'drgnx-extensions-list-call) (lambda (m p cb &rest _) (push (list m p cb) ,calls) 1))
                    ((symbol-function 'drgnx-view-env-register) #'ignore))
            (drgnx-extensions-list--reset)
            (with-current-buffer (drgnx-extensions-list--buffer)
@@ -114,6 +117,20 @@ Updates count."
     (let ((text (drgnx-extensions-rows-test--chips)))
       (should (string-match-p "native 14/37" text))
       (should (string-match-p "12s" text)))))
+
+(ert-deftest drgnx-extensions-list/a-job-step-reads-no-row-and-keeps-the-header ()
+  ;; a step only moves the chip: no row is read out of the model, the header is set again only when the restart note moves
+  (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
+  (drgnx-extensions-rows-test--with-list calls
+    (drgnx-test-with-clock (:allow-pending t)
+      (let ((headers 0))
+        (cl-letf (((symbol-function 'drgnx-extensions-list-row) (lambda (&rest _) (error "A row was read")))
+                  ((symbol-function 'drgnx-extensions-list--header) (lambda () (cl-incf headers))))
+          (dotimes (i 3)
+            (drgnx-extensions-jobs--put '(a) (list :status 'busy :step 'native :i i :n 3 :since (float-time)))
+            (drgnx-extensions-list--jobs-changed '(a)))
+          (should (string-match-p "native 2/3" (drgnx-extensions-rows-test--chips)))
+          (should (= headers 0)))))))
 
 (ert-deftest drgnx-extensions-list/the-second-tick-moves-busy-chips-only ()
   (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
@@ -207,7 +224,7 @@ selection.  Off a generation's row it asks."
                                                   (list :id "section:updates" :kind "section" :flags 1
                                                         :fields [["label" "Updates"] ["section" "updates"]])
                                                   (list :id "pkg:a" :kind "package" :flags 0 :parent "section:updates"
-                                                        :fields [["label" "a"] ["name" "a"] ["state" "update"]])
+                                                        :fields [["label" "a"] ["state" "update"]])
                                                   (list :id "section:generations" :kind "section" :flags 1
                                                         :fields [["label" "Generations"] ["section" "generations"]])
                                                   (list :id "gen:4" :kind "generation" :flags 0
@@ -236,7 +253,7 @@ selection.  Off a generation's row it asks."
   (let ((calls nil))
     (unwind-protect
         (cl-letf (((symbol-function 'drgnx-extensions-list-rows-p) (lambda () nil))
-                  ((symbol-function 'drgnx-hub-call) (lambda (m &rest _) (push m calls) 1)))
+                  ((symbol-function 'drgnx-extensions-list-call) (lambda (m &rest _) (push m calls) 1)))
           (drgnx-extensions-list--reset)
           (with-current-buffer (drgnx-extensions-list--buffer)
             (should (string-match-p "needs Sjá" (buffer-string)))
@@ -247,13 +264,36 @@ selection.  Off a generation's row it asks."
             (should-not calls)))
       (drgnx-extensions-list--teardown))))
 
+(ert-deftest drgnx-extensions-list/the-rows-are-in-the-ui-font ()
+  "The list's buffer draws in the UI font, as the Explorer's rows: `default' is remapped to `drgnx-ui-text'."
+  (with-temp-buffer
+    (drgnx-extensions-mode)
+    (should (memq 'drgnx-ui-text (flatten-tree (alist-get 'default face-remapping-alist))))))
+
+(ert-deftest drgnx-extensions-list/the-list-asks-on-the-subscribed-connection ()
+  "The hub sends a view's model and rows to the connection that asked, and holds the Recommended set per connection:
+`extensions/list' and `extensions/recommended' go on the subscribed connection, the one the env and the patches use,
+never on the call connection (there the rows went nowhere and the list stayed empty)."
+  (let* ((events (make-pipe-process :name "drgnx-test-events" :noquery t))
+         (client (make-pipe-process :name "drgnx-test-client" :noquery t))
+         (drgnx-hub--events events) (drgnx-hub--client client) (sent nil)
+         (drgnx-extensions-recommend--held (vector nil 0 0 nil 4 '("pkg:a"))))
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-hub--call-on)
+                   (lambda (conn method &rest _) (push (cons method conn) sent) 1)))
+          (drgnx-extensions-list--ask)
+          (drgnx-extensions-recommend-send)
+          (should (equal (reverse sent) `(("extensions/list" . ,events) ("extensions/recommended" . ,events)))))
+      (delete-process events)
+      (delete-process client))))
+
 (ert-deftest drgnx-extensions-list/with-the-hub-down-the-header-says-so ()
   "Sjá but no hub: asking fails at once, the list says why in its header, and nothing waits."
   (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
   (let ((drgnx-view-patch--buffers (make-hash-table :test #'equal))
         (drgnx-view-model--views (make-hash-table :test #'equal)) (drgnx-view-patch--hooked nil))
     (unwind-protect
-        (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (&rest _) (error "the hub is down")))
+        (cl-letf (((symbol-function 'drgnx-extensions-list-call) (lambda (&rest _) (error "the hub is down")))
                   ((symbol-function 'drgnx-view-env-register) #'ignore))
           (drgnx-extensions-list--reset)
           (with-current-buffer (drgnx-extensions-list--buffer)

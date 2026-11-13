@@ -2,8 +2,8 @@
 //! into the index) and `search` (a ranked query over the rows).  Budgets (design §13): load at most 100 ms and 15 MB
 //! kept (live bytes of the parsed file and the index, as the hub's cache holds them, counted by the bench's
 //! allocator), a search at most 3 ms at the 95th percentile.  Ignored in normal runs; the combined gate pass runs it under
-//! the perf lock: `cargo test -p drgnx-ratatoskr --bench extensions -- --ignored --nocapture`.  It measures and prints;
-//! the pass judges.  The catalog is made here from fixed arithmetic (no network, no random numbers), in the shape
+//! the perf lock: `cargo test -p drgnx-ratatoskr --bench extensions -- --ignored --nocapture`.  It measures, prints,
+//! and fails a test whose budget is missed (run it optimized and pinned: a debug build or a loaded host misses them).  The catalog is made here from fixed arithmetic (no network, no random numbers), in the shape
 //! `drgnx extensions refresh` writes.
 
 use std::alloc::{GlobalAlloc, Layout, System};
@@ -183,6 +183,11 @@ fn catalog_load() {
         kept / 1024,
         index_only / 1024
     );
+    assert!(
+        percentile(&times, 0.95) <= 100.0,
+        "catalog-load p95 over its 100 ms budget"
+    );
+    assert!(kept <= 15 * 1024 * 1024, "catalog-load keeps over 15 MB");
 }
 
 #[test]
@@ -226,7 +231,7 @@ fn search() {
                     w::Sort::Relevance
                 };
                 let t = Instant::now();
-                let hits = rank::search(&index.entries, q, f, sort);
+                let hits = rank::search(&index.entries, q, f, None, sort);
                 times.push(t.elapsed().as_secs_f64() * 1000.0);
                 std::hint::black_box(hits);
             }
@@ -240,5 +245,9 @@ fn search() {
         percentile(&times, 0.5),
         percentile(&times, 0.95),
         times.last().unwrap()
+    );
+    assert!(
+        percentile(&times, 0.95) <= 3.0,
+        "search p95 over its 3 ms budget"
     );
 }

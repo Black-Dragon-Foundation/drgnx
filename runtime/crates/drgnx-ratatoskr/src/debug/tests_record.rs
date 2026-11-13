@@ -514,6 +514,11 @@ async fn a_run_is_recorded_against_the_files_that_ran() {
         .await
         .unwrap();
     until("the first stop", || dbg.stop_of(&id).is_some()).await;
+    // a heap graph read at this stop goes with it, the last read of each graph kept
+    let epoch = dbg.stop_of(&id).unwrap().epoch;
+    rec.heap(&id, epoch, json!({"graph": "h1", "nodes": [], "n": 1}));
+    rec.heap(&id, epoch, json!({"graph": "h1", "nodes": [], "n": 2}));
+    rec.heap(&id, epoch, json!({"graph": "h2", "nodes": []}));
     // the file changes on disk after the launch: the run keeps the launch's text
     std::fs::write(&file, "changed\n").unwrap();
     dbg.control(&id, Op::Next { thread: None }).await.unwrap();
@@ -588,6 +593,12 @@ async fn a_run_is_recorded_against_the_files_that_ran() {
         "shortfall = 16\nprint(shortfall)\nprint('done')\n"
     );
     assert_eq!(past["source"]["not_what_ran"], false);
+    assert_eq!(
+        past["heaps"],
+        json!([{"graph": "h1", "nodes": [], "n": 2}, {"graph": "h2", "nodes": []}]),
+        "the graphs read at the stop"
+    );
+    assert_eq!(rec.past_stop(&run, 4, None).unwrap()["heaps"], json!([]));
     let other_past = rec
         .past_stop(&run, 3, Some(&other.to_string_lossy()))
         .unwrap();

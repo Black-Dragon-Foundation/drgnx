@@ -19,8 +19,15 @@ use super::{Coord, Ctx, Identity};
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ReadArgs {
-    /// sessions, runs (ROOT's), run (RUN's stops, hits), stop (RUN's STOP: frames, values), fork (FORK)
+    /// sessions, runs (ROOT's), run (RUN's stops, hits), stop (RUN's STOP: frames, values), fork (FORK), heap (the
+    /// objects reached from EXPR in DEBUG_SESSION's FRAME, the selected one by default, at its stop)
     pub what: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub debug_session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expr: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -269,6 +276,11 @@ mod tests {
             home: None,
         };
         let read = all.iter().find(|t| t.name() == "debug_read").unwrap();
+        // a heap graph: an expression in a stopped session's frame
+        read.check(&serde_json::json!({
+            "what": "heap", "debug_session": "d1", "expr": "ring", "frame": 1000
+        }))
+        .unwrap();
         match read
             .call(&(coord, outside), serde_json::json!({"what": "sessions"}))
             .await

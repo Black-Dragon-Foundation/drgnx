@@ -2301,18 +2301,45 @@ async fn an_ended_job_is_busy_in_its_tree_until_its_end_is_taken() {
     let tree = d.path().join("tree");
     std::fs::create_dir_all(tree.join("sub")).unwrap();
     let id = run_to_done(&r, &tree.join("sub"), "exit 1").await;
-    assert!(r.busy_in(&tree), "its end not taken yet: still busy");
     assert!(
-        !r.busy_in(&d.path().join("other")),
+        r.busy_in_tree(&tree).await,
+        "its end not taken yet: still busy"
+    );
+    assert!(
+        !r.busy_in_tree(&d.path().join("other")).await,
         "busy only in its own tree"
     );
     r.settled(&id);
-    assert!(!r.busy_in(&tree), "its end taken");
+    assert!(!r.busy_in_tree(&tree).await, "its end taken");
     // ends dropped (the reader lagged) are all taken at once
     run_to_done(&r, &tree, "exit 0").await;
-    assert!(r.busy_in(&tree));
+    assert!(r.busy_in_tree(&tree).await);
     r.settled_all();
-    assert!(!r.busy_in(&tree));
+    assert!(!r.busy_in_tree(&tree).await);
+}
+
+/// A tree named through a link is the tree its jobs ran in: a job's folder is recorded by its true name, and a tree
+/// asked about by another (macOS's temporary folders are under `/var`, a link to `/private/var`: the test above was
+/// red there) is the same tree.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_tree_named_through_a_link_is_busy_with_its_jobs() {
+    let d = tempfile::tempdir().unwrap();
+    let r = open(d.path());
+    r.settling();
+    std::fs::create_dir_all(d.path().join("real/tree")).unwrap();
+    std::os::unix::fs::symlink(d.path().join("real"), d.path().join("link")).unwrap();
+    let id = run_to_done(&r, &d.path().join("link/tree"), "exit 1").await;
+    assert!(
+        r.busy_in_tree(&d.path().join("link/tree")).await,
+        "by the link's name"
+    );
+    assert!(
+        r.busy_in_tree(&d.path().join("real/tree")).await,
+        "by its true name"
+    );
+    r.settled(&id);
+    assert!(!r.busy_in_tree(&d.path().join("link/tree")).await);
 }
 
 /// Without a reader of the ends ([`Runner::settling`] never called) an ended job is busy nowhere.

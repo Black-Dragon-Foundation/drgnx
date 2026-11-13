@@ -571,6 +571,8 @@ How it works:
   heredoc. It opens what the mockups have open: `drgnx-gateway.el` at line 216, `gateway-test.el` with unsaved text,
   `drgnx-job.el`, Magit's status and the Explorer.
 - It calls each scene's `drgnx-look-scene-NAME`. The scenes, in order, are listed in `drgnx-look-scenes`.
+  A scene on the editor starts the scenes' hub first (the session starts none) and waits (20 s at most, else an error)
+  for the Explorer's Files rows, which come from the hub: without it the section is empty.
   A scene that changes the theme waits (5 s at most, else an error) until no hub-fed view is drawn dimmed: its rows
   wait for the hub's reset to the new theme, and a shot taken before would show the stale shade. `start-page` has no mockup: it is judged against the components' spec (buttons, keycaps, the shield). The
   three highlights scenes, `highlights-dark`, `highlights-light` and `highlights-hc`, have none either: each puts every highlight in one

@@ -183,7 +183,10 @@ mod on {
     pub fn start(f: &Arc<Front>) {
         let f = f.clone();
         crate::clock::spawn("runners:connect", async move {
-            let Ok(reg) = f.core.runners.get(&f) else {
+            // the registry's first making reads the disk (the link folder made and checked, the boot id, the
+            // executable's path): off the hub's workers, before any method asks for it
+            let g = f.clone();
+            let Ok(Ok(reg)) = crate::clock::blocking(move || g.core.runners.get(&g)).await else {
                 return;
             };
             reg.connect_all().await;

@@ -1,0 +1,20 @@
+{"scenario": "extensions/the-recommended-set-is-the-connections", "requires": ["v1"], "doc": "[B] The editor sends its Recommended set once (extensions/recommended, ids at a version) and a search names it by that version, carrying no ids: it keeps the set's rows. A version the connection does not hold, or another connection's set, is invalid-params at filters/recommended (the editor sends its set again); a list section names it the same way."}
+{"do": "root"}
+{"do": "write_file", "path": "$ROOT/cache/drgnx/extensions/catalog.json", "text": "{\"version\":1,\"archives\":[{\"name\":\"melpa\",\"url\":\"https://melpa.org/packages/\",\"signed\":false}],\"packages\":[{\"name\":\"forge\",\"summary\":\"Access Git forges from Magit\",\"versions\":[{\"archive\":\"melpa\",\"version\":\"1\",\"reqs\":[]}],\"candidate\":{\"archive\":\"melpa\",\"version\":\"1\"}},{\"name\":\"magit-todos\",\"summary\":\"TODOs in Magit\",\"versions\":[{\"archive\":\"melpa\",\"version\":\"1\",\"reqs\":[]}],\"candidate\":{\"archive\":\"melpa\",\"version\":\"1\"}},{\"name\":\"magit\",\"summary\":\"A Git porcelain inside Emacs\",\"keywords\":[\"git\"],\"versions\":[{\"archive\":\"melpa\",\"version\":\"2\",\"reqs\":[]}],\"candidate\":{\"archive\":\"melpa\",\"version\":\"2\"},\"downloads\":10}]}"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "d", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "extensions/search", "params": {"filters": {"recommended": 1}}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "error": {"code": "invalid-params", "path": "filters/recommended"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "extensions/recommended", "params": {"ids": ["pkg:forge", "pkg:magit"], "version": 1}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "extensions/search", "params": {"filters": {"recommended": 1}, "sort": "name"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"total": 2, "rows": [{"id": "pkg:forge"}, {"id": "pkg:magit"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "extensions/search", "params": {"filters": {"recommended": 2}}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "error": {"code": "invalid-params", "path": "filters/recommended"}}, "within_ms": 10000}
+{"do": "send", "conn": "d", "json": {"id": 5, "method": "extensions/search", "params": {"filters": {"recommended": 1}}}}
+{"do": "expect", "conn": "d", "json": {"id": 5, "error": {"code": "invalid-params", "path": "filters/recommended"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "extensions/list", "params": {"view": "extensions", "sections": [{"name": "installed", "title": "Installed", "search": {"query": "", "filters": {"installed": true}}}, {"name": "recommended", "title": "Recommended", "search": {"query": "", "filters": {"recommended": 2}}}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "error": {"code": "invalid-params", "path": "sections/1/search/filters/recommended"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "extensions/list", "params": {"view": "extensions", "sections": [{"name": "recommended", "title": "Recommended", "search": {"query": "", "filters": {"recommended": 1}}}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "result": {"sections": [{"name": "recommended", "total": 2, "loaded": 2}]}}, "within_ms": 10000}

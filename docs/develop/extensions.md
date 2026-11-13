@@ -62,13 +62,26 @@ the state `on` (ran), `failed`, `needs-package` (waits for its packages) or `off
 
 The list is the hub's rows and needs Sjá's view model (`nidhogg-view--call`, `drgnx-extensions-list-rows-p`); an Emacs
 without it shows a notice in the list's buffer and asks the hub nothing. With the hub down the ask fails at once and
-the header says why (`drgnx-extensions-list--error`). Each fetch is one `extensions/list` call with the sections, their searches and
+the header says why (`drgnx-extensions-list--error`). The list asks on the editor's subscribed connection
+(`drgnx-extensions-list-call`, `drgnx-hub--events`), the one its env goes on and its rows come back on, and the
+Recommended set is sent there too (the hub holds it per connection); on the call connection the rows went nowhere and
+the list stayed empty. Each fetch is one `extensions/list` call with the sections, their searches and
 limits, `dense`, the glyphs and the ids that need a restart; the hub publishes the rows and the model to the buffer's
 `extensions` view and answers each section's total and loaded count. The buffer keeps no row table and draws no row:
 `drgnx-extensions-list-row` reads a row's fields from the model, point's row is the model's selection, and "more"
 asks for a larger limit. What changes between answers without a new list — a job's state chip — is an overlay
 (`after-string`) on the row's line, redrawn on the jobs' changes and the elapsed-time tick; a change to the ids that
 need a restart asks again.
+
+The Recommended section names its set by a version (`filters.recommended`), not by its ids: the set (often a thousand
+packages modules wait for) goes to the hub once per version with `extensions/recommended`
+(`drgnx-extensions-recommend-version`), so an open makes no id string. It is made again only when what it is made from
+moved: the project (`drgnx-extensions-recommend--root`), the modules' report (`drgnx-modules-report-tick`), a settings
+file (`drgnx-settings-changed-functions`) or the global `drgnx-extensions-recommended`; Emacs's suggestions for the
+project's files are read from the Explorer's listing at that time. A hub that holds no set at that version (a new
+connection) answers `invalid-params` at `…filters/recommended`; the list sends its set again and asks once more.
+`@recommended` typed names the set the same way. Tests: `drgnx-extensions-recommend/the-hub-holds-the-set`, the scenario
+`extensions/the-recommended-set-is-the-connections`.
 
 ## Jobs
 
@@ -210,7 +223,9 @@ User guide: [In one project](../guide/extensions.md#in-one-project).
 - **The hub:** `extensions::plugins::rows` turns the rows of the hub's last `plugins/list` look (`Plugins::last_rows`,
   memory only: no folder is read by a search) into rows `plugin:NAME`; `Cache::set_plugins` rebuilds the index only
   when they differ. State: the hub's `unapproved`, `changed`, `disabled`, `broken`; an approved plugin is `on` when
-  `drgnx-agents-plugins` (the global value) names it, else `off`. `signed` is `hash-approved` for those two.
+  `drgnx-agents-plugins` (the global value) names it, else `off`. `signed` is `hash-approved` for those two. The list's
+  Plugins section shows them by that id: the row's key and the id on its span are `plugin:NAME`
+  (`extensions/the-list-names-plugins-by-id`).
 - **The editor** (`modules/tools/drgnx-extensions-plugins.el`): the details body of a `plugin:` id is
   `drgnx-plugins-page-insert`'s text with its buttons, and the hash it displayed is kept in the page buffer for
   `extensions-plugin-approve`. On and Off write `drgnx-agents-plugins` through `drgnx-settings-editors-commit` (tab

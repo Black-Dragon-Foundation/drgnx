@@ -954,8 +954,19 @@ impl Runner {
         self.unsettled.jobs.lock().unwrap().clear();
     }
 
+    /// [`Runner::busy_in`] of the tree TOP names, by its true name (read off the hub's workers): a job's folder is
+    /// recorded by its true name, and a tree may be named through a link (macOS's `/var` is `/private/var`).
+    pub async fn busy_in_tree(&self, top: &Path) -> bool {
+        let t = top.to_path_buf();
+        let real = crate::clock::blocking(move || std::fs::canonicalize(&t).unwrap_or(t))
+            .await
+            .unwrap_or_else(|_| top.to_path_buf());
+        self.busy_in(&real)
+    }
+
     /// Whether a run in TOP (or a folder inside it) has no result yet: a session's `exec/start` there on its way, a
-    /// job there queued or running, or one that ended whose end the reader of the ends has not taken yet.
+    /// job there queued or running, or one that ended whose end the reader of the ends has not taken yet.  TOP is a
+    /// true name (no link on the way), as the jobs' folders are recorded: [`Runner::busy_in_tree`] finds it.
     pub fn busy_in(&self, top: &Path) -> bool {
         self.starting
             .lock()

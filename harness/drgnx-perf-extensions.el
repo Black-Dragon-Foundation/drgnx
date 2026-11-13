@@ -159,7 +159,8 @@ kept once made."
               (section (cond ((plist-get f :installed) 'installed) ((plist-get f :updates) 'updates)
                              ((plist-get f :plugins) 'plugins) ((plist-get f :builtin) 'builtin))))
          (cond (section (let ((rows (cdr (assq section drgnx-perf-extensions--sections)))) (cons rows (length rows))))
-               ((plist-get f :ids) (cons nil 0))
+               ;; the fixture's Recommended packages are all missing: the hub's catalog has none of them
+               ((or (plist-get f :ids) (plist-get f :recommended)) (cons nil 0))
                (t (drgnx-perf-extensions--answer (downcase (or (plist-get params :query) "")))))))
 
      ;; `extensions/list' on the rows path: the hub's work (its rows and model, in its shape) is done here, and what
@@ -204,7 +205,7 @@ kept once made."
                                                            id (list :runs (list (list 0 4 "shadow"))))
                            rows))
                    (push (list :id id :kind "package" :flags 0 :parent hid
-                               :fields (vector (vector "label" (plist-get r :name)) (vector "name" (plist-get r :name))
+                               :fields (vector (vector "label" (plist-get r :name))
                                                (vector "state" (plist-get r :state)) (vector "signed" (plist-get r :signed))
                                                (vector "source" (plist-get r :source)) (vector "section" name)))
                          nodes)
@@ -216,6 +217,10 @@ kept once made."
                                                                         :flags ["expanded"] :forms [] :start "order")
                                                       :nodes (vconcat (nreverse nodes)) :edges []
                                                       :lists (vector (list :name "order" :ids (vconcat (nreverse order))))))))))))
+
+     (defvar drgnx-perf-extensions--answer-later nil
+       "Non-nil while a key is timed: `extensions/list' is answered after it, as the hub's answer is its own event.")
+     (defvar drgnx-perf-extensions--asked nil "The (PARAMS CALLBACK) of the lists asked while answers wait, newest first.")
 
      (defun drgnx-perf-extensions--hub-answer-list (params callback)
        "Answer `extensions/list' as the hub would: the model, then a rows reset to the list's class, then the totals."
@@ -236,9 +241,14 @@ kept once made."
          (funcall callback (list :sections (nth 0 built)) nil)))
 
      (defun drgnx-perf-extensions--hub (method params callback &rest _)
-       "Stands for `drgnx-hub-call': answers from memory at once (the draw is what these rows time)."
+       "Stands for `drgnx-hub-call' and `drgnx-extensions-list-call': answers from memory at once (the draw is what these
+rows time)."
        (pcase method
-         ("extensions/list" (drgnx-perf-extensions--hub-answer-list params callback))
+         ("extensions/list" (if drgnx-perf-extensions--answer-later
+                                ;; the hub answers on its own event, after the key that asked
+                                (push (list params callback) drgnx-perf-extensions--asked)
+                              (drgnx-perf-extensions--hub-answer-list params callback)))
+         ("extensions/recommended" (funcall callback nil nil)) ; the hub holds the set
          ("extensions/search"
           (let* ((answer (drgnx-perf-extensions--search params))
                  (off (or (plist-get params :offset) 0)))
@@ -259,11 +269,13 @@ kept once made."
      (defun drgnx-perf-extensions--install-stub ()
        (require 'drgnx-hub-client)
        (advice-add 'drgnx-hub-call :override #'drgnx-perf-extensions--hub)
+       (advice-add 'drgnx-extensions-list-call :override #'drgnx-perf-extensions--hub)
        (dolist (f '(make-process call-process start-process)) (advice-add f :before #'drgnx-perf-extensions--count))
        (setq drgnx-perf-extensions--saved (list (bound-and-true-p drgnx-extensions-check-updates)))
        (setq drgnx-extensions-check-updates 'manual))
      (defun drgnx-perf-extensions--remove-stub ()
        (advice-remove 'drgnx-hub-call #'drgnx-perf-extensions--hub)
+       (advice-remove 'drgnx-extensions-list-call #'drgnx-perf-extensions--hub)
        (dolist (f '(make-process call-process start-process)) (advice-remove f #'drgnx-perf-extensions--count))
        (when drgnx-perf-extensions--saved (setq drgnx-extensions-check-updates (car drgnx-perf-extensions--saved)))
        (setq drgnx-perf-extensions--saved nil))
@@ -352,21 +364,31 @@ same for the view and for the package menu."
 
      (defun drgnx-perf-extensions--scroll-ms (n)
        "Scroll the list N pages down and N up: each key's milliseconds (the command, the list's own `post-command-hook'
-and the redisplay; a next page it asks for is drawn after, in slices timed apart).  (KEYS . SLICES)."
+and the redisplay).  A next page a key asks for is answered after the key, as the hub's answer is its own event; its
+apply (the stub's build left out) and the draws it arms are timed apart, as slices.  (KEYS . SLICES)."
        (let ((buf (drgnx-perf-extensions--list)) times)
-         (setq drgnx-perf-extensions--slices nil)
+         (setq drgnx-perf-extensions--slices nil drgnx-perf-extensions--asked nil)
          (with-current-buffer buf (goto-char (point-min)))
          (advice-add 'drgnx-view--draw-buffer :around #'drgnx-perf-extensions--time-slice)
          (unwind-protect
              (dotimes (i (* 2 n))
-               (push (drgnx-perf-extensions--ms
-                      (lambda ()
-                        (with-current-buffer buf
-                          (condition-case nil (if (< i n) (scroll-up-command) (scroll-down-command)) (error nil))
-                          (drgnx-perf-extensions--local-post-command))
-                        (redisplay t)))
+               (setq drgnx-perf-extensions--answer-later t)
+               (push (unwind-protect
+                         (drgnx-perf-extensions--ms
+                          (lambda ()
+                            (with-current-buffer buf
+                              (condition-case nil (if (< i n) (scroll-up-command) (scroll-down-command)) (error nil))
+                              (drgnx-perf-extensions--local-post-command))
+                            (redisplay t)))
+                       (setq drgnx-perf-extensions--answer-later nil))
                      times)
+               (dolist (a (nreverse (prog1 drgnx-perf-extensions--asked (setq drgnx-perf-extensions--asked nil))))
+                 (setq drgnx-perf-extensions--hub-ms 0)
+                 (let ((t0 (float-time)))
+                   (apply #'drgnx-perf-extensions--hub-answer-list a)
+                   (push (- (* 1000 (- (float-time) t0)) drgnx-perf-extensions--hub-ms) drgnx-perf-extensions--slices)))
                (drgnx-perf-extensions--settle buf))
+           (setq drgnx-perf-extensions--answer-later nil drgnx-perf-extensions--asked nil)
            (advice-remove 'drgnx-view--draw-buffer #'drgnx-perf-extensions--time-slice))
          (cons (nreverse times) drgnx-perf-extensions--slices)))
 
@@ -626,8 +648,10 @@ and the redisplay; a next page it asks for is drawn after, in slices timed apart
                         (let ((text (substring drgnx-perf-extensions--word 0 (1+ k))))
                           (push (drgnx-perf-extensions--ms (lambda () (with-current-buffer "*Packages*" (package-menu-filter-by-name text)) (redisplay t))) times)))
                       times))
+              ;; the same rows as the view's scroll ("e"), not the few the typed word left
               (scroll (let ((times nil) (n (drgnx-perf-extensions--size 'scroll)))
-                        (with-current-buffer "*Packages*" (goto-char (point-min)))
+                        (with-current-buffer "*Packages*" (package-menu-filter-by-name "e") (goto-char (point-min)))
+                        (redisplay t)
                         (dotimes (i (* 2 n))
                           (push (drgnx-perf-extensions--ms (lambda () (with-current-buffer "*Packages*" (condition-case nil (if (< i n) (scroll-up-command) (scroll-down-command)) (error nil)) (drgnx-perf-extensions--local-post-command)) (redisplay t))) times))
                         times)))

@@ -183,6 +183,8 @@ struct State {
     /// The step running, and the steps closed since the last drain.
     cur: Option<OpenStep>,
     stash: Option<OpenStep>,
+    /// The step running is one a wait just gave back: nothing has run in it since.
+    given_back: bool,
     closed: Vec<ClosedStep>,
     /// The tree taken before the running turn's prompt went: the next step that closes (the turn's first) carries it.
     before: Option<String>,
@@ -351,6 +353,7 @@ impl State {
             unsent_at: None,
             cur: None,
             stash: None,
+            given_back: false,
             last_mid: None,
             minted: 0,
             last_update: now(),
@@ -514,6 +517,7 @@ impl State {
         let at = now();
         self.step_close(at, None);
         self.steps_begun += 1;
+        self.given_back = false;
         self.cur = Some(OpenStep {
             class,
             start: at,
@@ -556,6 +560,20 @@ impl State {
         self.step_begin(class, None);
     }
 
+    /// Tool call ID is finished, refused by the hub or the user: its step ends now and thinking begins (true).  The
+    /// step a wait just gave back has had nothing run in it, so it goes without a row: its time before the wait is the
+    /// row it already has.
+    fn call_refused(&mut self, id: &str) -> bool {
+        if self.cur.as_ref().and_then(|c| c.tool_id.as_deref()) != Some(id) {
+            return false;
+        }
+        if self.given_back {
+            self.cur = None;
+        }
+        self.step_begin(StepClass::Think, None);
+        true
+    }
+
     fn wait_end(&mut self) {
         if !self.permissions.is_empty() {
             return;
@@ -565,6 +583,7 @@ impl State {
         if let Some(mut prev) = self.stash.take() {
             prev.start = at;
             self.cur = Some(prev);
+            self.given_back = true;
         }
     }
 
@@ -4523,6 +4542,10 @@ impl Session {
             .and_then(|t| t.get("toolCallId"))
             .and_then(Value::as_str)
             .map(str::to_string);
+        // refused (or cancelled), the call is finished: its step ends before the answer goes; the caller drains it
+        if !allowed && let Some(id) = &call {
+            lock(&self.state).call_refused(id);
+        }
         reply(p.resp, answer);
         let Some(call) = call else { return };
         let changed = if !allowed {
@@ -4538,6 +4561,30 @@ impl Session {
     }
 
     /// The agent's permission request, received during TURN.
+    /// The hub refuses the request for TOOL with OPTION (its reject, or none: cancelled).  A refused call is finished:
+    /// the step its `tool_call` opened ends before the answer goes, as a failed call's does, so the timeline holds it
+    /// when the agent hears the refusal (not only at the agent's next update).
+    fn refuse_call(
+        self: &Arc<Self>,
+        resp: hermod::Responder<RequestPermissionResponse>,
+        option: Option<String>,
+        tool: Option<&Value>,
+    ) {
+        self.refused_step_ends(tool);
+        reply(resp, option);
+    }
+
+    /// TOOL's call was refused by the hub (at the seam, or at the adapter's `_drgnx/before_tool`): the step its
+    /// `tool_call` opened ends now.
+    pub(crate) fn refused_step_ends(self: &Arc<Self>, tool: Option<&Value>) {
+        let id = tool
+            .and_then(|t| t.get("toolCallId"))
+            .and_then(Value::as_str);
+        if id.is_some_and(|id| lock(&self.state).call_refused(id)) {
+            self.changed();
+        }
+    }
+
     fn permission_request(
         self: &Arc<Self>,
         req: Value,
@@ -4575,11 +4622,11 @@ impl Session {
                 }
                 s.changed();
                 tracing::debug!(session = s.id, refusals = n, "a wait loop refused");
-                reply(resp, pick_reject(&options));
+                s.refuse_call(resp, pick_reject(&options), req.get("toolCall"));
                 return;
             }
             if super::deliver::gate(&s, req.get("toolCall")).await {
-                reply(resp, pick_reject(&options));
+                s.refuse_call(resp, pick_reject(&options), req.get("toolCall"));
                 return;
             }
             // Codex's read-only mode asks before an apply_patch; in a project chat an approved patch would run
@@ -4595,7 +4642,7 @@ impl Session {
                     st.push(EntryType::Error, rest);
                 }
                 s.changed();
-                reply(resp, pick_reject(&options));
+                s.refuse_call(resp, pick_reject(&options), req.get("toolCall"));
                 return;
             }
             let (action, facts) = classify(req.get("toolCall"));
@@ -4617,15 +4664,20 @@ impl Session {
                 .await
             {
                 s.refused(req.get("toolCall"), &why);
-                reply(resp, pick_reject(&options));
+                s.refuse_call(resp, pick_reject(&options), req.get("toolCall"));
                 return;
             }
             match s
                 .seam_hooks(req.get("toolCall"), action, &facts, &options, turn)
                 .await
             {
-                SeamHooks::Answer(option) => {
+                SeamHooks::Answer(option) if option.is_some() && option == pick_allow(&options) => {
                     reply(resp, option);
+                    return;
+                }
+                // a deny (or a turn no longer asking): the call is refused
+                SeamHooks::Answer(option) => {
+                    s.refuse_call(resp, option, req.get("toolCall"));
                     return;
                 }
                 SeamHooks::Today | SeamHooks::Decide => {}
@@ -4647,7 +4699,7 @@ impl Session {
                 }
                 Gate::Never(why) => {
                     s.refused(req.get("toolCall"), &why);
-                    reply(resp, pick_reject(&options))
+                    s.refuse_call(resp, pick_reject(&options), req.get("toolCall"))
                 }
                 // a revoked Always makes the hub ask again, whatever the matrix says
                 Gate::Allow
@@ -7071,6 +7123,66 @@ mod tests {
         ));
         assert_eq!(st.entries[0].rest["step"], json!(2));
         assert_eq!(st.entries[1].rest["step"], json!(3));
+    }
+
+    /// A call the user refused (or the hub) is finished: no tool step after the wait, the agent's time after the
+    /// refusal is thinking.  An allowed one goes on in its tool step.
+    #[test]
+    fn a_refused_call_ends_its_step_and_an_allowed_one_goes_on() {
+        let classes =
+            |st: &State| -> Vec<StepClass> { st.closed.iter().map(|c| c.open.class).collect() };
+        let mut st = State::new();
+        st.step_begin(StepClass::Think, None);
+        st.apply(&upd(
+            json!({"sessionUpdate": "tool_call", "toolCallId": "t1",
+            "title": "Edit x", "kind": "edit", "status": "pending"}),
+        ));
+        st.wait_begin();
+        st.wait_end();
+        assert!(st.call_refused("t1"));
+        assert!(!st.call_refused("t1"), "once");
+        // the agent's text after the refusal
+        st.apply(&upd(
+            json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "refused"}}),
+        ));
+        st.step_close(now(), None);
+        assert_eq!(
+            classes(&st),
+            [
+                StepClass::Think,
+                StepClass::Tool,
+                StepClass::UserWait,
+                StepClass::Think
+            ],
+            "the refused call's step ended at the refusal, with no row for the moment the wait gave it back"
+        );
+        // allowed: the stashed step comes back and runs on, as before
+        let mut st = State::new();
+        st.step_begin(StepClass::Think, None);
+        st.apply(&upd(
+            json!({"sessionUpdate": "tool_call", "toolCallId": "t1",
+            "title": "Edit x", "kind": "edit", "status": "pending"}),
+        ));
+        st.wait_begin();
+        st.wait_end();
+        assert_eq!(
+            st.cur.as_ref().and_then(|c| c.tool_id.as_deref()),
+            Some("t1")
+        );
+        st.apply(&upd(
+            json!({"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed"}),
+        ));
+        st.step_close(now(), None);
+        assert_eq!(
+            classes(&st),
+            [
+                StepClass::Think,
+                StepClass::Tool,
+                StepClass::UserWait,
+                StepClass::Tool,
+                StepClass::Think
+            ]
+        );
     }
 
     #[test]

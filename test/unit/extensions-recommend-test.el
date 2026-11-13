@@ -53,6 +53,48 @@ recommendations forgotten before and after."
           (should (string-search "data.csv" (cdr (assoc "pkg:csv-mode" rec))))
           (should (string-search "tools/fake" (cdr (assoc "pkg:vterm" rec)))))))))
 
+(ert-deftest drgnx-extensions-recommend/ids-make-no-reasons ()
+  "D: the Recommended section's ids (asked at each open of the list) are the same ids, and taking them makes no
+reason text: the characters allocated are the ids' own, with a path's worth of slack."
+  (drgnx-extensions-recommend-test--with '(magit)
+    (let* ((missing (mapcar (lambda (i) (intern (format "waiting-package-%d" i))) (number-sequence 1 50)))
+           (drgnx-modules--report `((tools/a-module-with-a-long-name :status missing-packages :missing ,missing)))
+           (drgnx-extensions-recommend--root project))
+      (cl-letf (((symbol-function 'drgnx-module-disabled-p) (lambda (&rest _) nil)))
+        (should (equal (drgnx-extensions-recommend-ids) (mapcar #'car (drgnx-extensions-recommended project))))
+        (let* ((before (nth 4 (memory-use-counts)))
+               (ids (drgnx-extensions-recommend-ids))
+               (chars (- (nth 4 (memory-use-counts)) before)))
+          (should (= (length ids) 51))
+          (should (<= chars (+ (apply #'+ (mapcar #'length ids)) 200))))))))
+
+(ert-deftest drgnx-extensions-recommend/the-hub-holds-the-set ()
+  "D: the Recommended set (1,000 packages modules wait for) goes to the hub once, at a version; an open after it names
+that version and makes no id string; a change to what it is made from (a module's report) sends the next version."
+  (drgnx-extensions-recommend-test--with nil
+    (let* ((missing (mapcar (lambda (i) (intern (format "waiting-package-%d" i))) (number-sequence 1 1000)))
+           (drgnx-modules--report `((tools/many :status missing-packages :missing ,missing)))
+           (drgnx-extensions-recommend--root project) (sent nil))
+      (cl-letf (((symbol-function 'drgnx-module-disabled-p) (lambda (&rest _) nil))
+                ((symbol-function 'drgnx-extensions-list-call) (lambda (method params &rest _) (push (cons method params) sent))))
+        (let ((v1 (plist-get (plist-get (drgnx-extensions-list--section-params 'recommended) :filters) :recommended)))
+          (should (integerp v1))
+          (should (equal (mapcar #'car sent) '("extensions/recommended")))
+          (should (= (length (plist-get (cdar sent) :ids)) 1000))
+          (should (eql (plist-get (cdar sent) :version) v1))
+          (let* ((before (nth 4 (memory-use-counts)))
+                 (params (drgnx-extensions-list--section-params 'recommended))
+                 (chars (- (nth 4 (memory-use-counts)) before)))
+            (should (eql (plist-get (plist-get params :filters) :recommended) v1))
+            (should-not (plist-get (plist-get params :filters) :ids))
+            (should (< chars 100))
+            (should (= (length sent) 1)))
+          (drgnx-modules--record 'tools/other 'setup 1 'missing-packages nil '(one-more))
+          (let ((v2 (plist-get (plist-get (drgnx-extensions-list--section-params 'recommended) :filters) :recommended)))
+            (should (> v2 v1))
+            (should (= (length sent) 2))
+            (should (= (length (plist-get (cdar sent) :ids)) 1001))))))))
+
 (ert-deftest drgnx-extensions-recommend/no-scan-in-a-hook ()
   "D: with no listing in the Explorer's cache the autosuggest part is empty, and no folder is read."
   (drgnx-extensions-recommend-test--with nil
@@ -87,9 +129,10 @@ queue nothing and start no job; x is only a row with your Install button."
                 ((symbol-function 'drgnx-notify) #'ignore))
         (should (equal (mapcar #'car (drgnx-extensions-recommended project)) '("pkg:x")))
         (drgnx-extensions-recommend-notice project)
-        (let ((drgnx-extensions-recommend--root project))
-          (should (equal (plist-get (plist-get (drgnx-extensions-list--section-params 'recommended) :filters) :ids)
-                         ["pkg:x"]))))
+        (let ((drgnx-extensions-recommend--root project) (sent nil))
+          (cl-letf (((symbol-function 'drgnx-extensions-list-call) (lambda (method params &rest _) (push (cons method params) sent))))
+            (should (plist-get (plist-get (drgnx-extensions-list--section-params 'recommended) :filters) :recommended)))
+          (should (equal (plist-get (cdr (assoc "extensions/recommended" sent)) :ids) ["pkg:x"]))))
       (should-not calls)
       (should-not (file-exists-p (expand-file-name "extensions/pending.eld" (drgnx-state-dir)))))))
 

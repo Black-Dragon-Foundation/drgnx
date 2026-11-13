@@ -117,9 +117,8 @@ pub async fn run(args: ServeArgs) -> Exit {
             return Exit::CannotStart;
         }
     };
-    if let Some(t) = stall {
-        crate::stall::start(t);
-    }
+    // held until the run returns: dropped then, before `main` shuts the runtime down (`stall::Watchdog`)
+    let _watchdog = stall.map(crate::stall::start);
     let lock_path = paths::lock_path(&socket);
     let lock = match lock::acquire(&lock_path, &lock::System) {
         Ok(l) => l,
