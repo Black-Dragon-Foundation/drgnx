@@ -46,12 +46,14 @@ behaviour, every kill reaches it."
   '(kill-line kill-whole-line kill-word backward-kill-word kill-sexp backward-kill-sexp kill-backward-up-list
               kill-sentence backward-kill-sentence kill-paragraph backward-kill-paragraph zap-to-char zap-up-to-char
               kill-visual-line kill-rectangle kill-comment comment-kill kill-forward-chars kill-backward-chars
-              evil-delete-line evil-delete-char evil-delete-backward-char-and-join
+              evil-delete-line evil-delete-whole-line evil-delete-char evil-delete-backward-char-and-join
+              evil-delete-backward-word
               drgnx-editing-delete-word-back drgnx-editing-delete-line-back)
   "Commands whose kills stay in the kill ring when `drgnx-clipboard-kills' is `region'.
-The editing kills of Emacs (simple.el, lisp.el, paragraphs.el, newcomment.el, rect.el), evil's x, X-like and D
-deletes, and drgnx's own Delete Word Left and Delete to Line Start (they call `backward-kill-word' and `kill-line'
-but run as themselves).  A command not listed here, and a kill made with no command running, reaches the clipboard."
+The editing kills of Emacs (simple.el, lisp.el, paragraphs.el, newcomment.el, rect.el), evil's x, X-like, D, dd
+and C-w deletes, and drgnx's own Delete Word Left and Delete to Line Start (they call `backward-kill-word'
+and `kill-line' but run as themselves).  A command not listed here, and a kill made with no command running,
+reaches the clipboard."
   :type '(repeat symbol) :group 'drgnx)
 
 (defvar drgnx-clipboard-force nil

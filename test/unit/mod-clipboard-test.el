@@ -132,7 +132,10 @@ uninstalled afterwards."
           (kill-buffer buf))))))
 
 (ert-deftest drgnx-clip/every-drgnx-kill-command-is-in-the-denylist ()
-  ;; found by grepping core, wb and modules for kill-* called on text deleted as editing
+  ;; found by grepping core, wb and modules for kill-* called on text deleted as editing; evil's whole-line and
+  ;; backward-word deletes are editing kills too (M12b-14b-2)
+  (dolist (command '(evil-delete-whole-line evil-delete-backward-word))
+    (should (memq command drgnx-clipboard-local-kills)))
   (dolist (command '(drgnx-editing-delete-word-back drgnx-editing-delete-line-back))
     (should (memq command drgnx-clipboard-local-kills))))
 
