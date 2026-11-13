@@ -97,17 +97,21 @@ labels' margin; a 1000 px tile is 226 units (1000 − 84 − 12 px of padding).
 
 | Thing | Units | px |
 |---|---|---|
-| rich agent card | 58 × 25 (5 lines) | 232 × 100 |
+| rich agent card | 54 × 25 (5 lines) | 216 × 100 |
 | compact agent card | 42 × 10 (2 lines) | 168 × 40 |
 | chip row (asks, specs, plans, branches, files, machines) | 7 high | 28 |
-| chip widths: ask, spec, plan, branch, file, machine | 48, 44, 44, 40, 36, 32 | 192 … 128 |
+| chip widths: ask, spec, plan, branch, file, machine | 58, 44, 54, 42, 52, 36 | 232 … 144 |
 | gap between cards | 3 | 12 |
 | band between rows | 8 | 32 |
 | band between an agent sub-row and its branches' sub-row | 3 | 12 |
 | gap between blocks | 6 | 24 |
 | a collapsed layer's row | 5 | 20 |
 
-The look's 19 px card lines round to 20 px on the grid. Compact and roomy densities scale these (`Metrics::of`).
+The look's 19 px card lines round to 20 px on the grid. Compact and roomy densities scale these (`Metrics::of`). The
+chips are as wide as the mockup's text needs in the UI font (an ask holds "fix deferred testing rows", a plan its title
+and its "3/6"), at most 58 units, so two fit at the narrowest width the map fits (120 units); a branch is at most as
+wide as a compact agent card (42), since a branch sits under its agent and the sub-row packs at the card's pitch. Four
+rich cards and their gaps fit a 1000 px tile in one row.
 
 ### The steps
 
@@ -159,7 +163,9 @@ leaves its gap or shares a slot with another bundle. Single cases pin the rules:
 the focused chain, a block compacting before its second sub-row, and the fit rule (width and lanes, never the
 height). Three goldens (`tests/golden/`) hold the prototype's data at
 226 units and the 30-agent fixture at 226 and 576 units (2400 px); `UPDATE_VEGVISIR_GOLDEN=1` rewrites them, and
-refuses one whose crossings are above the golden it replaces. `tests/timing.rs` holds `layout_200_items_within_2_ms`.
+refuses one whose crossings are above the golden it replaces (`UPDATE_VEGVISIR_GOLDEN=metrics` does not: a card or chip
+width moved on purpose; the 2026-11-13 widths moved the 1000 px golden from 393 to 412 crossings and the two larger ones
+down, 169 to 157 and 129 to 126). `tests/timing.rs` holds `layout_200_items_within_2_ms`.
 
 ### The 30-agent fixture
 
@@ -238,8 +244,8 @@ Nidhogg image, selects each item in Sjá and checks that the nodes it classes `c
 
 An item without a place has no arrows. `tests/nav.rs` checks every link of the 30-agent fixture at 1600 px against
 `tests/golden/nav-thirty-1600.json`, recorded once from the editor's navigation (now frozen) over the frame in
-`tests/golden/nav-thirty-1600-frame.json`; `UPDATE_VEGVISIR_GOLDEN=1` writes the frame again, and a frame that moved
-fails until the golden is recorded again.
+`tests/golden/nav-thirty-1600-frame.json`; `UPDATE_VEGVISIR_GOLDEN=1` writes the frame again and, since the editor's
+navigation is gone, the links from this crate (a layout metric moved); a frame that moved fails until they are written.
 
 ## The hub's facts
 
@@ -525,6 +531,22 @@ face under a class. The faces: `drgnx-work-band`, the decoration faces (`drgnx-c
   side panel, Board, Flow, trails and Timeline show the same notice, and a key that needs the model says it
   (`drgnx-work-map--require-sja`). The old Lisp drawing of the map, its edge tiles and its client-side frame went with
   render offload Task 34; there is no switch back to it.
+- **Text and icons.** The cards' text is the UI font, so the hub measures and fits it in the font role `text` (the face
+  `drgnx-ui-text`; `drgnx-view-env-roles`), not `ui` (the buffer's default, the code font). A chip's glyph is a Lucide
+  icon (`etc/icons`, read into `vegvisir::icons`, drawn at 1.6 stroke in the palette's `chip-fg`) in an image of its own,
+  one placeholder character at the line's start (its glyph on a terminal), 16 px; the trail's step kinds and its
+  conclusion cards use the same. The selected card is the hub's: `Scene::selected` draws its lines in
+  `drgnx-card-sel-top/-mid/-bottom/-single` (a 2 px accent ring, the themes give it), so a selection move is a redraw of
+  two cards, not an overlay; the class step only dims the cards off the chain. The strip carries, left of the machines',
+  the forecast and cost chips (`wk 41 % ▲ Thu`, `$31 / $40`); only a test hub's scene gives them yet
+  (`Map::scene_strip`; the real feed is DEFERRED MAP-STRIP-WK-COST-1).
+- **The Work layout** (`drgnx-layouts`' `work`): the map full width, the Detail island at its right (340 logical px) and
+  the trail under the map. The Detail tile and the trail tile draw their own title row in the area's row
+  (`drgnx-area-own-title` as a string, with the area's close): "Detail", and "Trail · AGENT | Agent · AGENT | following ▾".
+  The trail follows the map's selection (`drgnx-work-space--follow-trail`: the trail of the selected agent, made when
+  there is none, shown in the panel under layout Work); the Flow still shows its Rules tile on demand. The lens bar is
+  pills and keycaps: the lens shown is `drgnx-pill-on`, the map's own keys (focus f, overlaps o) are `drgnx-pill` with a
+  `drgnx-keycap`.
 - **A hub restart:** the patches dim the view, the client subscribes again on the new connection, and the new hub's
   reset redraws it.
 - Tests: `test/unit/work-map-rows-test.el`, `test/unit/work-space-test.el`; the view rules on the 30-agent map and a

@@ -383,3 +383,23 @@ takes each text run's own foreground, so a card whose runs differ (a state dot, 
                          (list face (plist-get box :color) (plist-get box :line-width))))
           (should (memq 'secondary-selection
                         (ensure-list (plist-get (drgnx-faces--clause-plist face 'gui) :inherit)))))))))
+
+(ert-deftest drgnx-themes/the-selected-card-s-ring-is-the-accent ()
+  "work-space-dark.html `.card.sel': the hub draws the selected card in `drgnx-card-sel-*': a 2 px ring in the accent,
+in every theme, on the same fill as the others."
+  (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
+    (drgnx-themes-test--with theme
+      (dolist (face '(drgnx-card-sel-top drgnx-card-sel-mid drgnx-card-sel-bottom drgnx-card-sel-single))
+        (let* ((spec (drgnx-faces--clause-plist face 'gui)) (box (plist-get spec :box)))
+          (should (equal (list face (drgnx-look-token 'accent variant) 2)
+                         (list face (plist-get box :color) (plist-get box :line-width))))
+          (should (memq 'secondary-selection (ensure-list (plist-get spec :inherit)))))))))
+
+(ert-deftest drgnx-themes/the-permission-card-keeps-its-attention-ring ()
+  "agent-panel.html: the permission card is ringed in the attention colour.  A card's ring has a colour of its own now
+\(`drgnx-card-single'), so the permission card's head names its own, in every theme."
+  (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
+    (drgnx-themes-test--with theme
+      (let ((box (plist-get (drgnx-faces--clause-plist 'drgnx-agent-panel-perm-head 'gui) :box)))
+        (should (equal (list (drgnx-look-token 'attention variant) 1)
+                       (list (plist-get box :color) (plist-get box :line-width))))))))

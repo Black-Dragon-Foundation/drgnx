@@ -215,6 +215,18 @@ above and below, the face's background between (Nidhogg's compositor).  Asked on
                                          ,@(and (featurep 'glitnir) `(:corner-radius 8 ,@(cdr row))))))
                    '((drgnx-card-top :open (bottom)) (drgnx-card-mid :open (top bottom))
                      (drgnx-card-bottom :open (top)) (drgnx-card-single)))
+         ;; the selected card (`.card.sel'): the hub draws it in these, a 2 px ring in the accent
+         ,@(mapcar (lambda (row)
+                     `(,(car row) :inherit secondary-selection
+                       :box (:line-width 2 :color ,(c 'accent)
+                                         ,@(and (featurep 'glitnir) `(:corner-radius 8 ,@(cdr row))))))
+                   '((drgnx-card-sel-top :open (bottom)) (drgnx-card-sel-mid :open (top bottom))
+                     (drgnx-card-sel-bottom :open (top)) (drgnx-card-sel-single)))
+         ;; agent-panel.html: the permission card is ringed in the attention colour (a ring with no colour took the head's
+         ;; foreground, which the card faces' own explicit colour above now hides)
+         (drgnx-agent-panel-perm-head :inherit (drgnx-ui-text drgnx-chip-attention) :weight bold
+                                      :box (:line-width 1 :color ,(c 'attention)
+                                                        ,@(and (featurep 'glitnir) '(:corner-radius 8))))
          (highlight :background ,(c 'hover))
          (hl-line :background ,(c 'current-line) :extend t)
          (fringe :foreground ,(c 'subtle) :background ,(c 'editor))

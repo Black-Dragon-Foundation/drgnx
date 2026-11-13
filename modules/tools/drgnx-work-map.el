@@ -129,8 +129,13 @@ key profiles bind them (`drgnx-command-define' with this map); each view's own k
 ;;;; The rows path: keys answer from the map's model in Sjá
 
 (defconst drgnx-work-map--through-faces
-  '(drgnx-card-top drgnx-card-mid drgnx-card-bottom drgnx-card-single)
-  "The faces of a card's rows: a class (the selection, the dimming) goes through their box, as for text.")
+  '(drgnx-card-top drgnx-card-mid drgnx-card-bottom drgnx-card-single
+                   drgnx-card-sel-top drgnx-card-sel-mid drgnx-card-sel-bottom drgnx-card-sel-single)
+  "The faces of a card's rows, plain and selected: a class (the dimming) goes through their box, as for text.")
+
+(defconst drgnx-work-map--nav-faces '(("selected") ("chain") ("dim" . drgnx-work-dim))
+  "The map's class faces: the hub draws the selected card in its ring faces and the chain in its lanes, so only the
+cards off the chain are dimmed.")
 
 (defvar drgnx-view-nav-through-faces)
 (defvar drgnx-view-nav-faces)
@@ -145,8 +150,7 @@ whose env this Emacs sends while a window shows it; the selection goes to the hu
   (drgnx-view-patch-attach view "unshown")
   (setq-local drgnx-view-patch-twin-function #'drgnx-work-map--twin
               drgnx-view-nav-through-faces drgnx-work-map--through-faces
-              ;; the selected card is tinted, the cards off its chain are dimmed; the chain is the lanes' (the hub draws it)
-              drgnx-view-nav-faces '(("selected" . drgnx-work-selected) ("chain") ("dim" . drgnx-work-dim)))
+              drgnx-view-nav-faces drgnx-work-map--nav-faces)
   (setq drgnx-work-map--lens (drgnx-work-map--lens-string))
   (require 'drgnx-view-env)
   (drgnx-view-env-register view (current-buffer)))
@@ -329,11 +333,11 @@ switch), then KEYS, the lens's own keys ((LABEL . KEY) …), as chips with their
             "  "
             (mapconcat (lambda (v)
                          (propertize (format " %s " (cdr v))
-                                     'face (if (eq (car v) current) 'drgnx-work-lens-current 'drgnx-work-label)))
+                                     'face (if (eq (car v) current) '(bold drgnx-pill-on) 'drgnx-work-label)))
                        '((map . "Map") (board . "Board") (timeline . "Timeline") (flow . "Flow")) " ")
             (mapconcat (lambda (k)
-                         (concat "  " (propertize (format " %s " (car k)) 'face 'drgnx-work-chip)
-                                 (propertize (format " %s " (cdr k)) 'face 'drgnx-work-lens-key)))
+                         (concat "  " (propertize (format " %s " (car k)) 'face 'drgnx-pill)
+                                 (propertize (format " %s " (cdr k)) 'face 'drgnx-keycap)))
                        keys ""))))
 
 (defun drgnx-work-lens-name (&optional map)
@@ -341,9 +345,12 @@ switch), then KEYS, the lens's own keys ((LABEL . KEY) …), as chips with their
   (with-current-buffer (if (buffer-live-p map) map (current-buffer))
     (and default-directory (file-name-nondirectory (directory-file-name default-directory)))))
 
+(defconst drgnx-work-map--lens-keys '(("focus" . "f") ("overlaps" . "o"))
+  "The map's own keys on its lens bar: the filters, as pills with their keycaps.")
+
 (defun drgnx-work-map--lens-string ()
   "The lens bar of the map, the map marked."
-  (drgnx-work-lens-string 'map (drgnx-work-lens-name)))
+  (drgnx-work-lens-string 'map (drgnx-work-lens-name) drgnx-work-map--lens-keys))
 
 ;;;; What needs you: the strip's entries, the model's list `needs-you'
 

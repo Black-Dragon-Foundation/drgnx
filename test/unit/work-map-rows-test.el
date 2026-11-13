@@ -382,3 +382,52 @@ asks the hub nothing and its keys say the same."
       (should-not (drgnx-view-nav--boxed-p card))
       (should-not (drgnx-view-nav--boxed-p 'drgnx-card-single))
       (should (drgnx-view-nav--boxed-p 'drgnx-chip)))))   ; a strip chip is still a chip
+
+(ert-deftest drgnx-work-map-rows/the-selected-card-is-the-hubs-and-the-class-only-dims ()
+  ;; the hub draws the selected card in its ring faces and the editor goes through both sets of card faces; the
+  ;; class `selected' has no face of its own on the map (a tint over the ring would hide it), `dim' has the dim face
+  (dolist (face '(drgnx-card-top drgnx-card-single drgnx-card-sel-top drgnx-card-sel-mid drgnx-card-sel-bottom
+                                 drgnx-card-sel-single))
+    (should (memq face drgnx-work-map--through-faces)))
+  (should (equal '(("selected") ("chain") ("dim" . drgnx-work-dim)) drgnx-work-map--nav-faces)))
+
+(ert-deftest drgnx-work-map-rows/the-lens-bar-is-pills-and-keycaps ()
+  ;; work-space-dark.html `.lens': the lens shown is a raised pill, the others quiet, and the map's own keys (focus f,
+  ;; overlaps o) are pills with a keycap each
+  (let* ((s (drgnx-work-lens-string 'map "drgnx" drgnx-work-map--lens-keys))
+         (face-at (lambda (word) (get-text-property (string-match word s) 'face s))))
+    (should (memq 'drgnx-pill-on (ensure-list (funcall face-at "Map"))))
+    (should-not (memq 'drgnx-pill-on (ensure-list (funcall face-at "Board"))))
+    (should (memq 'drgnx-pill (ensure-list (funcall face-at "focus"))))
+    (should (memq 'drgnx-keycap (ensure-list (get-text-property (1+ (string-match " f " s)) 'face s))))
+    (should (string-match-p "overlaps" s))))
+
+(ert-deftest drgnx-work-map-rows/the-trail-tile-has-its-tabs ()
+  ;; work-space-dark.html: the trail under the map is a tile with the tabs "Trail · AGENT" (shown) and
+  ;; "Agent · AGENT", and "following" at its right
+  (let ((s (drgnx-work-trail-panel-string "Opus · hub rows")))
+    (should (string-match-p "Trail · Opus · hub rows" s))
+    (should (string-match-p "Agent · Opus · hub rows" s))
+    (should (string-match-p "following" s))
+    (should (memq 'drgnx-pill-on (ensure-list (get-text-property (string-match "Trail" s) 'face s))))
+    (should-not (memq 'drgnx-pill-on (ensure-list (get-text-property (string-match "Agent ·" s) 'face s))))))
+
+(ert-deftest drgnx-work-map-rows/the-detail-island-has-the-mockups-title ()
+  ;; work-space-dark.html `.det': the Detail island's header is "Detail" and nothing else (no tabs of the right dock),
+  ;; drawn by the tile: the buffer says it has its own title, and the trail tile under the map the same
+  (with-temp-buffer
+    (drgnx-work-detail-mode)
+    (should (stringp drgnx-area-own-title))
+    (should (string-match-p "Detail" drgnx-area-own-title))
+    (should-not (string-match-p "WORK DETAIL" drgnx-area-own-title)))
+  (with-temp-buffer
+    (drgnx-work-trail-panel-title "Opus · hub rows")
+    (should (stringp drgnx-area-own-title))
+    (should (string-match-p "Trail · Opus · hub rows" drgnx-area-own-title))))
+
+(ert-deftest drgnx-work-map-rows/the-text-role-is-the-ui-text-face ()
+  ;; the cards' text is drawn in the UI font, so the hub measures it in the role `text': the UI text face, not
+  ;; `ui', the buffer's default (the code font)
+  (require 'drgnx-view-env)
+  (should (eq (cdr (assq 'text drgnx-view-env-roles)) 'drgnx-ui-text))
+  (should (eq (cdr (assq 'ui drgnx-view-env-roles)) 'default)))

@@ -44,6 +44,14 @@ own background, never a ring in the text colour), radius 4 where the compositor 
   "The last row of a card." :group 'drgnx-decor)
 (defface drgnx-card-single '((t :inherit secondary-selection :box (:line-width 1)))
   "A card of one row." :group 'drgnx-decor)
+(defface drgnx-card-sel-top '((t :inherit secondary-selection :box (:line-width 2)))
+  "The first row of the selected card: the accent ring (the themes give its colour)." :group 'drgnx-decor)
+(defface drgnx-card-sel-mid '((t :inherit secondary-selection :box (:line-width 2)))
+  "A middle row of the selected card." :group 'drgnx-decor)
+(defface drgnx-card-sel-bottom '((t :inherit secondary-selection :box (:line-width 2)))
+  "The last row of the selected card." :group 'drgnx-decor)
+(defface drgnx-card-sel-single '((t :inherit secondary-selection :box (:line-width 2)))
+  "The selected card of one row." :group 'drgnx-decor)
 
 (defconst drgnx-decor--boxes
   '((drgnx-chip :line-width (1 . 2) :style flat-button :corner-radius 4)
@@ -52,7 +60,11 @@ own background, never a ring in the text colour), radius 4 where the compositor 
     (drgnx-card-top :line-width 1 :corner-radius 8 :open (bottom))
     (drgnx-card-mid :line-width 1 :corner-radius 8 :open (top bottom))
     (drgnx-card-bottom :line-width 1 :corner-radius 8 :open (top))
-    (drgnx-card-single :line-width 1 :corner-radius 8))
+    (drgnx-card-single :line-width 1 :corner-radius 8)
+    (drgnx-card-sel-top :line-width 2 :corner-radius 8 :open (bottom))
+    (drgnx-card-sel-mid :line-width 2 :corner-radius 8 :open (top bottom))
+    (drgnx-card-sel-bottom :line-width 2 :corner-radius 8 :open (top))
+    (drgnx-card-sel-single :line-width 2 :corner-radius 8))
   "Each decoration face and its `:box' under Glitnir.  Without Glitnir only `:line-width' and `:style' stay.  The
 buttons are not here: their ring and radius are `drgnx-control''s, from the theme.")
 
@@ -79,6 +91,7 @@ buttons are not here: their ring and radius are `drgnx-control''s, from the them
 
 (defconst drgnx-decor--scaled-faces
   '(drgnx-chip drgnx-badge drgnx-focus-ring drgnx-card-top drgnx-card-mid drgnx-card-bottom drgnx-card-single
+               drgnx-card-sel-top drgnx-card-sel-mid drgnx-card-sel-bottom drgnx-card-sel-single
                drgnx-hover drgnx-focus drgnx-control drgnx-control-primary drgnx-pill drgnx-pill-on region isearch lazy-highlight
                drgnx-wb-tab drgnx-wb-tab-current
                diff-refine-added diff-refine-removed diff-refine-changed

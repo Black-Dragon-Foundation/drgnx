@@ -55,7 +55,7 @@
     (editor :left explorer :right nil :panel keep :editor one)
     (zen :left nil :right nil :panel nil :editor zen)
     (browser :left nil :right nil :panel nil :editor editor+browser)
-    (work :left nil :right work-detail :panel work-rules :editor work))
+    (work :left nil :right work-detail :panel work-trail :editor work :px (:right (logical 340))))
   "The built-in layouts, in the order Next Layout cycles them: NAME → (:left VIEW :right TAB :panel TAB
 :editor SHAPE).  An area's value nil hides it and `keep' leaves it as it was; SHAPE is a key of
 `drgnx-layouts-shapes'.  Your own layouts (layouts.eld) follow them.")
@@ -189,7 +189,9 @@ The size is noted `:by layout': a size you chose stays."
 (defun drgnx-layouts--target (def snap)
   "The areas layout DEF asks for, as a snapshot's: `keep' takes them from SNAP."
   (cl-flet ((area (key prop)
-              (let ((v (plist-get def key)) (px (plist-get (plist-get def :px) key)))
+              (let* ((v (plist-get def key)) (px (plist-get (plist-get def :px) key))
+                     ;; a built-in layout may give a size in logical pixels, `(logical N)', scaled to this frame's
+                     (px (if (eq (car-safe px) 'logical) (drgnx-px (cadr px)) px)))
                 (cond ((eq v 'keep) (plist-get snap key))
                       ((null v) (list :shown nil :px px))
                       (t (list :shown t prop v :px px))))))

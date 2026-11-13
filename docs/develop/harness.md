@@ -605,7 +605,10 @@ How it works:
   `RATATOSKR_SEED_SCENE=map` runs the same plan run (so its held gate is a card on the strip) and, in place of the
   Flow's one agent, feeds every map it opens the mockup's graph (`test/fixtures/work-space/scene.json`, the prototype's
   asks, specs, plans, four agents with their branches, files and an overlap, two machines, plus a push and a permission
-  card; the agents' minutes are counted from the hub's clock). The session picks the seed from `DRGNX_LOOK_ONLY`: draw
+  card; the agents' minutes are counted from the hub's clock), the strip's forecast and cost chips and the first agent's
+  trail (six steps and a finding, `orch::scene::map_trail`, shown by its trail view in place of the timeline's). The
+  scenes open the Work layout (the Detail island at its right, the trail under the map). The session picks the seed from
+  `DRGNX_LOOK_ONLY`: draw
   these scenes alone, `DRGNX_LOOK_ONLY=work-space` (it matches all three), never with `work-flow`. Each selects the
   first agent (its chain lit, the cards off it dimmed, its detail in the side panel) and waits for its rows.
 - It writes `NAME-sN-facts.eld` beside each shot: the themes, the fonts the chrome faces got, the windows, the

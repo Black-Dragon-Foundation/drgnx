@@ -517,6 +517,9 @@ a map off the rows path or without a hub draws a placeholder, and a shot of that
          map)))
 
 (declare-function drgnx-work-detail-buffer "drgnx-work-detail")
+(declare-function drgnx-layouts-current "drgnx-layouts")
+(declare-function drgnx-layouts-apply "drgnx-layouts")
+(defvar drgnx-work-space--panel-trail)
 
 (defun drgnx-look-scene--work-selected (theme)
   "The Work map of work-space-*.html in THEME: the first agent selected, its chain lit and its detail in the side panel.
@@ -525,6 +528,10 @@ Draw it without the other scenes (`DRGNX_LOOK_ONLY=work-space'): the hub then se
   (drgnx-look-scene--theme theme)
   (drgnx-look-scene--try "work space"
     (when-let* ((map (drgnx-look-scene--work-map)))
+      ;; the Work layout (the design's §14): the map full width, the Detail island at its right, the trail under it; the
+      ;; layout follows a shown lens by itself, but not before the shot, so it is asked for and waited for
+      (unless (eq (drgnx-layouts-current) 'work) (drgnx-layouts-apply 'work))
+      (unless (get-buffer-window map) (set-window-buffer (drgnx-wb-editor-window) map))
       (unless (drgnx-look-scene--until 15 "the map's seeded graph (the first agent, agent:a1)"
                                        (lambda () (with-current-buffer map
                                                     (member "agent:a1" (drgnx-look-scene--row-ids "agent:")))))
@@ -534,7 +541,13 @@ Draw it without the other scenes (`DRGNX_LOOK_ONLY=work-space'): the hub then se
       (drgnx-look-scene--until 15 "the side panel of the selected agent (Why, Touches)"
                                (lambda ()
                                  (with-current-buffer (drgnx-work-detail-buffer map)
-                                   (save-excursion (goto-char (point-min)) (search-forward "Touches" nil t)))))))
+                                   (save-excursion (goto-char (point-min)) (search-forward "Touches" nil t)))))
+      ;; the trail tile follows the selection: its steps and the finding are drawn from the hub's rows
+      (drgnx-look-scene--until 15 "the trail under the map (its finding card)"
+                               (lambda ()
+                                 (and (buffer-live-p drgnx-work-space--panel-trail)
+                                      (with-current-buffer drgnx-work-space--panel-trail
+                                        (save-excursion (goto-char (point-min)) (search-forward "Finding" nil t))))))))
   (drgnx-look-scene--answer))
 
 (defun drgnx-look-scene-work-space-dark () (drgnx-look-scene--work-selected 'drgnx-dark))

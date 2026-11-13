@@ -314,6 +314,38 @@ selects; nothing is approved, pushed, merged or answered."
   "The buffer pane kind `work-detail' shows: the side panel of the newest map."
   (if-let* ((map (car (drgnx-work-map-buffers)))) (drgnx-work-detail-buffer map) (get-buffer-create "*drgnx work detail*")))
 
+(defvar drgnx-work-space--panel-trail nil
+  "The trail buffer the Work layout's bottom tile shows: the one of the agent last selected on a map.")
+
+(defun drgnx-work-space--trail-buffer ()
+  "The buffer pane kind `work-trail' shows: the trail of the map's selected agent, else a line asking for one."
+  (if (buffer-live-p drgnx-work-space--panel-trail)
+      drgnx-work-space--panel-trail
+    (with-current-buffer (get-buffer-create "*drgnx work trail*")
+      (when (zerop (buffer-size)) (insert "Select an agent to follow its trail.\n"))
+      (current-buffer))))
+
+(declare-function drgnx-work-trail-open "drgnx-work-trail")
+(declare-function drgnx-work-trail--sid "drgnx-work-trail")
+(declare-function drgnx-work-trail-panel-title "drgnx-work-trail")
+(declare-function drgnx-layouts-current "drgnx-layouts")
+
+(defun drgnx-work-space--follow-trail (buffer id)
+  "`drgnx-view-selected-functions': with an agent ID selected on a map BUFFER, the trail tile of layout Work follows
+it (its trail is made when there is none, the tile shows it when the layout is on)."
+  (when (and id (string-prefix-p "agent:" id) (buffer-live-p buffer)
+             (eq (buffer-local-value 'major-mode buffer) 'drgnx-work-map-mode) (drgnx-work-map-rows-p))
+    (let* ((sid (drgnx-work-trail--sid id))
+           (label (or (with-current-buffer buffer
+                        (nidhogg-view-get (drgnx-work-map--sja) 'field "label" id))
+                      sid))
+           (trail (drgnx-work-trail-open buffer sid)))
+      (with-current-buffer trail (drgnx-work-trail-panel-title label))
+      (setq drgnx-work-space--panel-trail trail)
+      (when (and (fboundp 'drgnx-layouts-current) (eq (drgnx-layouts-current) 'work))
+        (drgnx-pane-show 'work-trail :buffer trail)
+        (drgnx-wb-area-redraw 'panel)))))
+
 (defun drgnx-work-space--rules-buffer ()
   "The buffer pane kind `work-rules' shows: the Rules tile of the newest Flow."
   (or (seq-some (lambda (flow) (drgnx-work-flow-rules-buffer flow)) (drgnx-work-flow-buffers))
@@ -461,6 +493,7 @@ windows; the commands."
     (drgnx-work-code--frame-replaced old new))
   (drgnx-module-hook 'drgnx-work-client-status-functions status (view status) (drgnx-work-space--show-status view status))
   (drgnx-module-hook 'find-file-hook live-file () (drgnx-work-live-file--maybe))
+  (drgnx-module-hook 'drgnx-view-selected-functions follow-trail (buffer id) (drgnx-work-space--follow-trail buffer id))
   (drgnx-command-define 'work-take-wheel :category "Work" :title "Take the Wheel from the Agent"
                         :command #'drgnx-work-take-wheel :map 'drgnx-work-live-file-mode-map
                         :doc "Pause the agent that is editing here and make this file editable; saving tells the agent")
@@ -490,7 +523,8 @@ windows; the commands."
                         :command #'drgnx-work-who-is-here
                         :doc "Name the agents in the file you are visiting, with their lines, and select it on the map")
   (when (fboundp 'drgnx-pane-define-kind)
-    (drgnx-pane-define-kind 'work-detail :title " WORK DETAIL" :home 'right :buffer #'drgnx-work-space--detail-buffer)
+    (drgnx-pane-define-kind 'work-detail :title " Detail" :home 'right :buffer #'drgnx-work-space--detail-buffer)
+    (drgnx-pane-define-kind 'work-trail :title " Trail" :home 'bottom :buffer #'drgnx-work-space--trail-buffer)
     (drgnx-pane-define-kind 'work-rules :title " RULES" :home 'bottom :buffer #'drgnx-work-space--rules-buffer))
   ;; layout Work's editor shape: the lens alone (tools/layouts follows a shown lens: `drgnx-work-space--follow-layout')
   (eval-after-load 'drgnx-layouts
