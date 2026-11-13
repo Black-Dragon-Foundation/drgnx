@@ -75,8 +75,8 @@ session's instruction view, a newer version winning; the hub's event for the ses
       (goto-char (point-min))
       (forward-line 2)                  ; 0x40113a
       (drgnx-debug-disassembly-toggle-breakpoint)
-      (should (equal (cadr (car calls)) (list :root "/p/" :session "s1"
-                                              :op (list :op "add-instruction" :session "s1" :instruction "0x40113a"))))
+      (should (equal (cadr (car calls)) (list :root "/p/" :session "s1" :kind "instruction"
+                                              :op (list :op "add-instruction" :instruction "0x40113a"))))
       (debug-disassembly-test--answer
        calls "debug/breakpoints"
        (list :session "s1" :version 2 :breakpoints (vector (list :id "i:s1:1" :n 1 :kind "instruction"
@@ -87,7 +87,7 @@ session's instruction view, a newer version winning; the hub's event for the ses
       (drgnx-debug-disassembly-breakpoints (list :session "s1" :version 1 :breakpoints []))
       (should (= 2 (length drgnx-debug-disassembly--marks)))
       (drgnx-debug-disassembly-toggle-breakpoint)
-      (should (equal (plist-get (cadr (car calls)) :op) (list :op "remove-instruction" :session "s1" :id 1)))
+      (should (equal (plist-get (cadr (car calls)) :op) (list :op "remove-instruction" :id 1)))
       (drgnx-debug-disassembly-breakpoints (list :session "s1" :version 3 :breakpoints []))
       (should (equal (debug-disassembly-test--marks) '((4 . "The current instruction"))))
       ;; an adapter without instruction breakpoints is not asked

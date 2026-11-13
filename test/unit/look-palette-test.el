@@ -52,6 +52,8 @@ Vim; a chord is one cap a key, a function key its number."
     (should (equal '("Ctrl" "Shift" "P") (drgnx-palette-keycap-names (funcall first-key 'emacs))))
     (should (equal '("Space" "Space") (drgnx-palette-keycap-names (funcall first-key 'vim)))))
   (should (equal '("F1") (drgnx-palette-keycap-names "<f1>")))
+  (should (equal '("PgUp") (drgnx-palette-keycap-names "<prior>")))   ; as the debugging extras mockup
+  (should (equal '("PgDn") (drgnx-palette-keycap-names "<next>")))
   (should (equal '("Alt" "X") (drgnx-palette-keycap-names "M-x")))
   ;; the function keys read as their ASCII twins (ESC, RET); Enter is ↵, as every mockup draws it
   (should (equal '("Esc") (drgnx-palette-keycap-names "<escape>")))

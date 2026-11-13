@@ -67,17 +67,17 @@
 
 (defface drgnx-debug-breakpoint-inline '((t :inherit drgnx-debug-breakpoint))
   "An inline breakpoint's dot, before its column's character." :group 'drgnx)
-(defcustom drgnx-debug-overview-ruler nil
-  "Non-nil: the file's breakpoints and the stopped line show in the overview ruler at the editor's right edge.  Off
-until the ruler's drawing meets the scroll budget (docs/develop/core.md, \"The overview ruler\")."
+(defcustom drgnx-debug-overview-ruler t
+  "Non-nil: the file's breakpoints and the stopped line show in the overview ruler at the editor's right edge (drawn
+by Nidhogg; none in a terminal or another Emacs: docs/develop/core.md, \"The overview ruler\")."
   :type 'boolean :group 'drgnx)
 
-(defface drgnx-debug-ruler-breakpoint '((t :inherit drgnx-debug-breakpoint :inverse-video t))
-  "A breakpoint's mark in the overview ruler (its background)." :group 'drgnx)
-(defface drgnx-debug-ruler-unverified '((t :inherit drgnx-debug-unverified :inverse-video t))
-  "A disabled or unbound breakpoint's mark in the overview ruler (its background)." :group 'drgnx)
-(defface drgnx-debug-ruler-stop '((t :inherit drgnx-debug-stopped :inverse-video t))
-  "The stopped line's mark in the overview ruler (its background)." :group 'drgnx)
+(defface drgnx-debug-ruler-breakpoint '((t :inherit drgnx-debug-breakpoint))
+  "A breakpoint's mark in the overview ruler (its foreground)." :group 'drgnx)
+(defface drgnx-debug-ruler-unverified '((t :inherit drgnx-debug-unverified))
+  "A disabled or unbound breakpoint's mark in the overview ruler (its foreground)." :group 'drgnx)
+(defface drgnx-debug-ruler-stop '((t :inherit drgnx-debug-stopped))
+  "The stopped line's mark in the overview ruler (its foreground)." :group 'drgnx)
 (defface drgnx-debug-breakpoint-candidate '((t :inherit drgnx-text-disabled))
   "A faint dot where an inline breakpoint can go, while stopped." :group 'drgnx)
 
@@ -584,7 +584,7 @@ disabled or not yet bound), the stopped line across the ruler."
   (let (marks)
     (pcase-dolist (`(,_ . ,o) drgnx-debug-gutter--overlays)
       (when (overlay-buffer o)
-        (push (list (line-number-at-pos (overlay-start o) t) 'middle
+        (push (list (overlay-start o) 'middle
                     (if (memq (overlay-get o 'drgnx-debug-kind) '(off unverified))
                         'drgnx-debug-ruler-unverified 'drgnx-debug-ruler-breakpoint)
                     (if (memq (overlay-get o 'drgnx-debug-kind) '(off unverified)) 1 2))
@@ -592,7 +592,7 @@ disabled or not yet bound), the stopped line across the ruler."
     (dolist (stop drgnx-debug-gutter--stops)
       (dolist (o (cdr stop))
         (when (and (eq (overlay-buffer o) (current-buffer)) (eq (overlay-get o 'drgnx-debug-stop) 'top))
-          (push (list (line-number-at-pos (overlay-start o) t) 'full 'drgnx-debug-ruler-stop 3) marks))))
+          (push (list (overlay-start o) 'full 'drgnx-debug-ruler-stop 3) marks))))
     marks))
 
 (defun drgnx-debug-gutter--ruler-later ()

@@ -41,7 +41,7 @@ the lines already there."
 (defface drgnx-debug-console-result '((t :inherit default)) "An evaluation's result." :group 'drgnx-debug-console)
 (defface drgnx-debug-console-logpoint '((t :inherit success)) "A logpoint's message." :group 'drgnx-debug-console)
 (defface drgnx-debug-console-source '((t :inherit shadow)) "Where a logpoint's message came from." :group 'drgnx-debug-console)
-(defface drgnx-debug-console-time '((t :inherit shadow)) "A line's timestamp." :group 'drgnx-debug-console)
+(defface drgnx-debug-console-time '((t :inherit drgnx-text-subtle)) "A line's timestamp." :group 'drgnx-debug-console)
 (defface drgnx-debug-console-count '((t :inherit drgnx-chip-quiet)) "How many times a line came in a row." :group 'drgnx-debug-console)
 (defface drgnx-debug-console-stale '((t :inherit shadow)) "A result whose stop is over." :group 'drgnx-debug-console)
 (defface drgnx-debug-console-prompt '((t :inherit minibuffer-prompt)) "The input's prompt." :group 'drgnx-debug-console)

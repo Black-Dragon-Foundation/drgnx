@@ -61,8 +61,9 @@ palette. Its header starts the configuration picked there. While the program run
 dimmed. A big list keeps its last 64 opened pages open; opening another closes the oldest.
 
 **View Binary Data** (`m` in the Emacs and Vim profiles) shows a variable's bytes when its debugger can read memory
-(C, C++, Rust, Go): 16 to a line with the address and the text, PageDown / PageUp (`n` / `p`, C-f / C-b) for the next
-page, F2 (`e`, `c`) to write bytes typed in hex at point.
+(C, C++, Rust, Go): 16 to a line in two halves of 8, with the address and the text, PageDown / PageUp (`n` / `p`, C-f /
+C-b) for the next page, F2 (`e`, `c`) to write bytes typed in hex at point. Its header names the variable, the page's
+address and size, and those keys.
 
 **Open Disassembly View** (the palette) shows the machine instructions around the current frame when its debugger
 can disassemble (C, C++, Rust, Go). A stop in code with no source file opens it by itself. Each run of instructions
@@ -93,9 +94,10 @@ red when an adapter bound it, grey before, hollow when disabled; a dot with two 
 logpoint. A line you move by editing keeps its breakpoint, which takes the new line when you save.
 `drgnx-debug-gutter-show` chooses when the column shows (`auto`: while the file has breakpoints or a session runs). The
 **overview ruler** at the editor's right edge shows the whole file's breakpoints (red, grey when disabled or not
-bound yet) and the stopped line (amber, across it), scaled to the window's height, with the lines on screen as a
-soft band; click it to go there. It shows while the file has a breakpoint or a stop, once
-`drgnx-debug-overview-ruler` is on (off for now: its drawing still costs more than a scroll may).
+bound yet) and the stopped line (amber, across it), scaled to the window's height, with the part on screen as a
+soft band. Click it to go there. It shows while the file has a breakpoint or a stop. Turn it off with
+`drgnx-debug-overview-ruler`. Marks sit by their position in the file, not by line, as the scroll bar measures, so a
+file with very long lines looks uneven. Nidhogg draws it, so there is none in a terminal.
 Keys: VS Code F9 and C-F10 (Run to Cursor); Emacs `C-x C-a` and `C-b` (toggle), `C-c` (condition), `C-l` (logpoint),
 `C-e` (enable), `C-u` (Run to Cursor), as GUD has them; Vim `SPC d` and `b`, `B`, `l`, `e`, `c`.
 

@@ -68,3 +68,23 @@ fn a_poll_that_ends_frees_its_slot() {
     }));
     assert!(holders(Duration::ZERO).iter().all(|h| h.2 != "test:quick"));
 }
+
+/// A hub that ends stops its watchdog first: the runtime's shutdown ends the heartbeat, and a watchdog still running
+/// then reported a stall that was the hub's exit (one a perf run, "no named task", never ended).
+#[test]
+fn a_stopped_watchdog_reports_no_stall_when_the_runtime_ends() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let seen: Arc<Mutex<Vec<String>>> = Arc::default();
+    let dog = rt.block_on(async { start_to(Duration::from_millis(100), Some(seen.clone())) });
+    // the heartbeat has ticked: the watchdog is watching a live runtime
+    skuld::wait_until("the first beat", 30, || {
+        (dog.beat.last.load(Ordering::Relaxed) > 0).then_some(())
+    });
+    dog.stop();
+    rt.shutdown_timeout(Duration::from_secs(2));
+    assert!(lock(&seen).is_empty(), "{:?}", lock(&seen));
+}

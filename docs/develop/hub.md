@@ -79,7 +79,8 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   syscall from `/proc`. `DRGNX_RATATOSKR_STALL_MS` sets the threshold; without it the watchdog runs at 250 ms in a
   `test-hooks` build (conformance, the perf and UI runs) and is off in the installed hub, whose idle wakeups it would
   multiply; it is always off on the virtual clock. `DRGNX_RATATOSKR_STALL_FILE` also appends each report to that
-  file. A file read or written on a task's path never runs on a worker, since a slow disk (or a stderr nobody reads)
+  file. The watchdog stops as the server's run returns, before the runtime shuts down (whose end stops the heartbeat:
+  it was reported as a stall that never ended). A file read or written on a task's path never runs on a worker, since a slow disk (or a stderr nobody reads)
   would hold it: a session's files are written in order by `disk::Ordered` on the blocking pool (a failed write is
   logged), a resume reads the session's meta, transcript, queue and wheel there, a folder an agent works in is looked
   at there, an MCP session's owner is looked up in `/proc` and its sockets and directory removed there, and stderr's warnings go through a queue of their own that drops lines when full and says how many. The
@@ -4204,6 +4205,10 @@ Every step of an agent's work is a row of the `step` table (`norn::write::steps`
 session's step writer (`agents/session.rs`) and announced as `agent-step`. The classifier sees the updates as they
 arrive: text between tool calls is `think`; a tool call is `tool` from `in_progress` to `completed`; a permission
 request is `user-wait` (the hub answers it, so it is the user's time, not the tool's); a paused session is `paused`.
+A refused call is finished: when the hub refuses it (a seam deny, the matrix's Never, a gate, a fork's
+`_drgnx/before_tool` deny) or the user does (a card, an answer, a cancel), its `tool` step ends before the answer goes
+back and the agent's time after it is `think` (`State::call_refused`); a step the wait had only just given back
+writes no row. So the timeline holds the refused call when the agent hears the refusal, not at its next update.
 `job-wait`, `machine-queue` and `stalled` are written by the tasks that own those events (exec, the supervisor).
 A step's `provider` is the profile's gateway provider environment (`:ai`) when it has one, else whose CLI it starts
 (`claude`, `codex`, `gemini`), so a subscription session's steps say where they ran (the matrix's `(:provider NAME)`

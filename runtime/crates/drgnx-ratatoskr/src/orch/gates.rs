@@ -456,7 +456,7 @@ pub async fn before_merge(
     let top = tree.path.as_path();
     // a run of the task's that has no result yet (its exec/start on its way, or queued or running) is evidence to
     // come: red first waits for it and is judged again, never holds without it (a slow start, the macOS lane's)
-    if front.core.exec.busy_in(top) {
+    if front.core.exec.busy_in_tree(top).await {
         return Ok(Decision::Wait(
             "a run in the task's tree has no result yet".into(),
         ));

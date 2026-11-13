@@ -172,10 +172,19 @@ branch gateway-queue, staged file and history come with the Magit adapter (look 
     (explorer-focused-dark "no agent badges (C, R) in the Explorer: agent system part 3 (G9)")
     (explorer-focused-light "no agent badges (C, R) in the Explorer: agent system part 3 (G9)")
     (explorer-focused-hc "no agent badges (C, R) in the Explorer: agent system part 3 (G9)")
-    (debugging "no session runs: no stopped line (arrow and band on 24), toolbar, inline values, Run and Debug view or
-Debug Console (graphical debugging's later tasks); compare the breakpoint column"
+    (debugging "the mock adapter's session has one thread: no price-feed (RUNNING) in the Call Stack"
+               "the console's input is empty: the mockup's `item.' with its completion popup is not typed"
+               "pricing.py's not-bound breakpoint (77) is not set: the scene's project has no pricing.py"
                "the hover dot on 32 only on a Nidhogg with the margin's mouse-face (glitnir-margin-mouse-face)"
-               "no change bars: the scene's inventory.py is new, not a changed file"))
+               "no change bars: the scene's inventory.py is new, not a changed file"
+               "the container has no keyring: the status bar says the session is not recorded"
+               "the project, branch and other tabs are the scenes' shared fixture, not the mockup's stockroom")
+    (debug-extras "the extras mockup's panels are cut from these windows (debugging-extras.png has no window)"
+                  "a breakpoint being dragged is not shown: the drag lasts only while the mouse button is held")
+    (debug-extras-light "the extras mockup's panels are cut from these windows (debugging-extras.png has no window)"
+                        "a breakpoint being dragged is not shown: the drag lasts only while the mouse button is held")
+    (debug-extras-views "the extras mockup's panels are cut from these windows (debugging-extras.png has no window)")
+    (debug-extras-views-light "the extras mockup's panels are cut from these windows (debugging-extras.png has no window)"))
   "What the line cannot show of each scene's mockup yet, written to the scene's facts (:limits).  A scene is never
 changed to hide a gap: the gap is named here instead.")
 
@@ -756,12 +765,219 @@ colour bar and the file's chip."
 (declare-function drgnx-debug-gutter--apply "drgnx-debug-gutter")
 (declare-function drgnx-debug-gutter--columns "drgnx-debug-gutter")
 (declare-function drgnx-margins-offset "drgnx-margins")
+(declare-function drgnx-modules--ok-p "drgnx-modules")
+(declare-function drgnx-hub-call-sync "drgnx-hub-client")
+(declare-function drgnx-modules--run-one "drgnx-modules")
+(defvar drgnx-modules--table)
+(defvar drgnx-debug--sessions)
+(declare-function drgnx-debug-view "drgnx-debug-view")
+(declare-function drgnx-debug-view--buffer "drgnx-debug-view")
+(declare-function drgnx-debug-view--toggle "drgnx-debug-view")
+(declare-function drgnx-debug-console-show "drgnx-debug-console")
+(declare-function drgnx-debug-open-disassembly "drgnx-debug-disassembly")
+(declare-function drgnx-debug-memory-open "drgnx-debug-memory")
+(declare-function drgnx-quickhelp--request "drgnx-quickhelp")
+(declare-function drgnx-quickhelp-shown-p "drgnx-quickhelp")
+(defvar drgnx-debug-console-timestamps)
+(defvar drgnx-debug-gutter--candidates)
+(defvar drgnx-debug-disassembly-buffer-name)
+
+(defun drgnx-look-scene--debug-script (&optional extras)
+  "The mock adapter's script for the debugging mockup's stop: the program's output, a stop on line 24 in
+reorder_quantities, its frames, Locals with `item' open, and the three watches.  EXTRAS: the extras mockup's too
+(the adapter places breakpoints, reads memory and disassembles; the output has groups; `item' has memory, the
+top frame an instruction, `shortfall' a hover value)."
+  (let* ((inv (expand-file-name "inventory.py" drgnx-look-scene--project))
+         (app (expand-file-name "app.py" drgnx-look-scene--project))
+         (var (lambda (name value &optional ref type)
+                (append (list :name name :value value :variablesReference (or ref 0)) (and type (list :type type))
+                        (and extras (equal name "item") (list :memoryReference "0x7ffd4c20")))))
+         (out (lambda (category text &optional line group)
+                (list :event "output" :body (append (list :category category :output text)
+                                                    (and line (list :source (list :path inv) :line line))
+                                                    (and group (list :group group))))))
+         (ins (lambda (address bytes text &optional line)
+                (append (list :address address :instructionBytes bytes :instruction text)
+                        (and line (list :location (list :path inv) :line line))))))
+    (vconcat
+     (list
+      (list :expect "initialize" :ok (append (list :supportsConfigurationDoneRequest t :supportsRestartRequest t
+                                                   :supportsCompletionsRequest t)
+                                             (and extras (list :supportsBreakpointLocationsRequest t
+                                                               :supportsReadMemoryRequest t
+                                                               :supportsDisassembleRequest t
+                                                               :supportsInstructionBreakpoints t
+                                                               :supportsSteppingGranularity t))))
+      (list :expect "launch")
+      (list :event "initialized")
+      (list :expect "setBreakpoints"
+            :ok (list :breakpoints (vector (list :id 1 :verified t :line 18) (list :id 2 :verified t :line 22)
+                                           (list :id 3 :verified t :line 24) (list :id 4 :verified t :line 25))))
+      (list :expect "configurationDone")
+      (funcall out "console" "Launching app.py with debugpy 1.8 · cwd ~/src/stockroom\n"))
+     (if (not extras)
+         (list (funcall out "console" "order bolt-m4\n" 25)
+               (funcall out "stderr" "WARNING:stock:large shortfall: washer-8\n")
+               (funcall out "console" "order washer-8\n" 25))
+       ;; the extras' console: a group, a repeated line, a folded group, a located line, a warning
+       (list (funcall out "stdout" "order nut-m6\n" nil "start")
+             (funcall out "stdout" "units=2 min=10\n")
+             (funcall out "stdout" "units=2 min=10\n")
+             (funcall out "stdout" "units=2 min=10\n")
+             (funcall out "stdout" "reservations (4)\n" nil "startCollapsed")
+             (funcall out "stdout" "bolt-m4 x6\n")
+             (funcall out "stdout" "" nil "end")
+             (funcall out "console" "shortfall = 8\n" 20)
+             (funcall out "stdout" "" nil "end")
+             (funcall out "stderr" "WARNING:stock:large shortfall: nut-m6\n")))
+     (list
+      (list :event "stopped" :body (list :reason "breakpoint" :threadId 1 :allThreadsStopped t))
+      (list :any
+            (vconcat
+             (and extras
+                  (append
+                   (list (list :expect "breakpointLocations" :args (list :line 24)
+                               :ok (list :breakpoints (vector (list :line 24 :column 9) (list :line 24 :column 20))))
+                         (list :expect "breakpointLocations" :args (list :line 25)
+                               :ok (list :breakpoints (vector (list :line 25 :column 9) (list :line 25 :column 33))))
+                         (list :expect "breakpointLocations" :args (list :line 18) :ok (list :breakpoints []))
+                         (list :expect "breakpointLocations" :args (list :line 22) :ok (list :breakpoints []))
+                         (list :expect "setInstructionBreakpoints"
+                               :ok (list :breakpoints (vector (list :verified t)))))
+                   ;; asked again by the light scenes: each answer is taken once
+                   (apply #'append
+                          (make-list
+                           2 (list
+                              (list :expect "evaluate" :args (list :expression "shortfall" :context "hover")
+                                    :ok (list :result "8" :type "int"))
+                              (list :expect "readMemory" :args (list :memoryReference "0x7ffd4c20")
+                                    :ok (list :address "0x7ffd4c20" :unreadableBytes 8
+                                              :data (base64-encode-string
+                                                     (apply #'unibyte-string
+                                                            (append (string-to-list "nut-m6")
+                                                                    '(0 0 2 0 0 0 10 0 0 0 5 0 0 0 0 0 0 0
+                                                                        #xe8 #x4c #xfd #x7f 0 0 0 0 0 0 0 0 0 0 0 0))))))
+                              (list :expect "disassemble" :args (list :memoryReference "0x40113f")
+                                    :ok (list :instructions
+                                              (vector (funcall ins "0x401136" "48 8b 7d f8" "mov rdi, [rbp-0x8]" 24)
+                                                      (funcall ins "0x40113a" "e8 c1 ff ff ff" "call pack_size")
+                                                      (funcall ins "0x40113f" "89 45 f4" "mov [rbp-0xc], eax")
+                                                      (funcall ins "0x401142" "8b 45 f0" "mov eax, [rbp-0x10]" 25)
+                                                      (funcall ins "0x401145" "0f af 45 f4" "imul eax, [rbp-0xc]")
+                                                      (funcall ins "0x401149" "89 45 ec" "mov [rbp-0x14], eax")))))))))
+             (list
+              (list :expect "threads" :ok (list :threads (vector (list :id 1 :name "MainThread"))))
+              (list :expect "stackTrace"
+                    :ok (list :totalFrames 4
+                              :stackFrames (vector (append (list :id 1000 :name "reorder_quantities" :line 24 :column 9
+                                                                 :source (list :path inv))
+                                                           (and extras (list :instructionPointerReference "0x40113f")))
+                                                   (list :id 1001 :name "plan_week" :line 31 :column 13
+                                                         :source (list :path inv))
+                                                   (list :id 1002 :name "main" :line 12 :column 5 :source (list :path app))
+                                                   (list :id 1003 :name "<module>" :line 30 :column 1
+                                                         :source (list :path app)))))
+              (list :expect "scopes" :ok (list :scopes (vector (list :name "Locals" :variablesReference 1)
+                                                               (list :name "Globals" :variablesReference 2 :expensive t))))
+              (list :expect "variables" :args (list :variablesReference 1)
+                    :ok (list :variables (vector (funcall var "items" "[Item(…), …]" 3 "list[Item]")
+                                                 (funcall var "threshold" "10" 0 "int")
+                                                 (funcall var "order" "{'bolt-m4': 6, 'washer-8': 12}" 4 "dict")
+                                                 (funcall var "i" "3" 0 "int")
+                                                 (funcall var "item" "Item(sku='nut-m6', qty=2, min=10)" 5 "Item")
+                                                 (funcall var "shortfall" "8" 0 "int"))))
+              (list :expect "variables" :args (list :variablesReference 5)
+                    :ok (list :variables (vector (funcall var "sku" "'nut-m6'" 0 "str") (funcall var "qty" "2" 0 "int")
+                                                 (funcall var "min" "10" 0 "int"))))
+              (list :expect "evaluate" :args (list :expression "order.get(item.sku, 0)") :ok (list :result "0"))
+              (list :expect "evaluate" :args (list :expression "len(items) - i") :ok (list :result "9"))
+              (list :expect "evaluate" :args (list :expression "total_cost")
+                    :fail "name 'total_cost' is not defined"))))))))
+
+(defun drgnx-look-scene--debug-stopped ()
+  "The stopped debug session, or nil."
+  (seq-find (lambda (s) (equal (plist-get s :state) "stopped")) drgnx-debug--sessions))
+
+(defvar drgnx-look-scene--debug-extras 'none
+  "Which script the scenes' stopped session runs: nil (the debugging mockup's) or t (the extras'); `none' before one.")
+
+(defun drgnx-look-scene--debug-start (extras)
+  "A session of the mock adapter stopped on line 24, with the extras' script when EXTRAS: the one there is when it
+runs that script, else a new one (an old one ended first).  The breakpoints and watches go into the store once."
+  (let* ((bin (getenv "DRGNX_RATATOSKR_BIN"))
+         (root (directory-file-name (expand-file-name drgnx-look-scene--project))) ; as the editor names it
+         (inv (expand-file-name "inventory.py" root))
+         (bp (lambda (op) (drgnx-hub-call-sync "debug/breakpoints" (list :root root :op op) 5))))
+    (unless (and (drgnx-look-scene--debug-stopped) (eq drgnx-look-scene--debug-extras extras))
+      (when drgnx-debug--sessions
+        (dolist (s drgnx-debug--sessions)
+          (drgnx-hub-call-sync "debug/control" (list :session (plist-get s :id) :op "stop") 5))
+        (drgnx-look-scene--until 15 "the last session's end" (lambda () (null drgnx-debug--sessions))))
+      (when (eq drgnx-look-scene--debug-extras 'none)
+        (make-directory (expand-file-name ".vscode" root) t)
+        (with-temp-file (expand-file-name ".vscode/launch.json" root)
+          (insert (json-serialize (list :version "0.2.0"
+                                        :configurations (vector (list :type "mock" :request "launch"
+                                                                      :name "Python: plan the week" :program "app.py"))))))
+        (with-temp-file (expand-file-name "app.py" root) (insert "from inventory import plan_week\n"))
+        (funcall bp (list :op "add" :path inv :line 18))
+        (funcall bp (list :op "add" :path inv :line 22 :condition "shortfall > 20"))
+        (funcall bp (list :op "add" :path inv :line 24))
+        (funcall bp (list :op "add" :path inv :line 25 :log "order {item.sku}"))
+        (let ((v (funcall bp (list :op "add" :path inv :line 30))))
+          (when-let* ((b (seq-find (lambda (b) (eql (plist-get b :line) 30)) (plist-get v :breakpoints))))
+            (funcall bp (list :op "edit" :id (plist-get b :id) :enabled :false))))
+        (dolist (e '("order.get(item.sku, 0)" "len(items) - i" "total_cost"))
+          (drgnx-hub-call-sync "debug/watch" (list :root root :op "add" :expr e) 5))
+        (drgnx-hub-call-sync "debug/trust" (list :root root :trusted t) 5))
+      (setq drgnx-look-scene--debug-extras extras)
+      (let ((script (make-temp-file "drgnx-debug-scene" nil ".json")))
+        (let ((coding-system-for-write 'utf-8))
+          (with-temp-file script
+            (insert (decode-coding-string (json-serialize (drgnx-look-scene--debug-script extras)) 'utf-8))))
+        ;; visited before the start: the stop's frame and inline values mark a buffer that visits the file
+        (find-file-noselect inv)
+        (drgnx-hub-call-sync
+         "debug/start"
+         (list :root root :config "launch:0"
+               :adapters (vector (list :id "mock" :name "Mock" :types ["mock"] :find (list :path bin)
+                                       :start (list :stdio (vector "{program}" "debug-mock" script)))))
+         10))
+      (drgnx-look-scene--until 15 "the stop" #'drgnx-look-scene--debug-stopped))))
+
+(defun drgnx-look-scene--debug-session (&optional extras)
+  "The mockup's stopped session, through the scenes' hub and its mock adapter (`debug-mock', a test-hooks build):
+the breakpoints in the store, three watches, launch.json's configuration started and stopped on line 24; the Run
+and Debug view in the sidebar and the Debug Console in the panel.  EXTRAS: the extras mockup's script.  Nil when
+there is no hub to run it."
+  (when-let* ((bin (getenv "DRGNX_RATATOSKR_BIN")) ((file-executable-p bin)))
+    (drgnx-look-scene--hub)
+    (unless (drgnx-modules--ok-p 'extra/debug)
+      (drgnx-modules--run-one 'extra/debug (alist-get 'extra/debug drgnx-modules--table) 'idle))
+    (progn
+      (drgnx-look-scene--debug-start extras)
+      (drgnx-debug-view)
+      (drgnx-debug-console-show)
+      (drgnx-wb-focus-editor)
+      (drgnx-look-scene--goto "inventory.py" 24 8 13)
+      ;; Locals' `item' open, as the mockup has it
+      (with-current-buffer (drgnx-debug-view--buffer)
+        (drgnx-debug-view--toggle (format "v:%s:Locals/item" (plist-get (drgnx-look-scene--debug-stopped) :id)) t))
+      (drgnx-look-scene--until 5 "inline values"
+                               (lambda ()
+                                 (seq-some (lambda (o) (string-search "shortfall" (or (overlay-get o 'after-string) "")))
+                                           (overlays-in (point-min) (point-max)))))
+      (drgnx-look-scene--until 5 "the Run and Debug rows"
+                               (lambda ()
+                                 (with-current-buffer (drgnx-debug-view--buffer)
+                                   (save-excursion (goto-char (point-min)) (search-forward "sku" nil t)))))
+      t)))
 
 (defun drgnx-look-scene-debugging ()
-  "The debugging mockup's editor: inventory.py from line 13, with its breakpoints in the column (18 verified, 22 a
-condition, 24 verified, 25 a logpoint, 30 disabled).  No session runs yet, so there is no stopped line, toolbar or
-views: the scene is the column's (the mockup's stop arrow on 24 is a plain breakpoint here).  The pointer is noted on
-line 32's hover dot, as the mockup shows it, where Nidhogg lights a margin's mouse face."
+  "The debugging mockup's window: inventory.py from line 13, a session of the mock adapter stopped on line 24 with
+the mockup's breakpoints (18 verified, 22 a condition, 24 verified, 25 a logpoint, 30 disabled), watches, Run and
+Debug and the Debug Console.  Without a hub only the column is shown: the store's answer as the hub would give it.
+The pointer is noted on line 32's hover dot, as the mockup shows it, where Nidhogg lights a margin's mouse face."
   (drgnx-look-scene--theme 'drgnx-dark)
   (drgnx-look-scene--try "debugging"
     (drgnx-wb-focus-editor)
@@ -769,17 +985,18 @@ line 32's hover dot, as the mockup shows it, where Nidhogg lights a margin's mou
       (unless (file-exists-p f) (with-temp-file f (insert drgnx-look-scene--inventory)))
       (dolist (m '("drgnx-debug-launch" "drgnx-debug-gutter"))
         (load (expand-file-name (concat "modules/extra/" m) (bound-and-true-p drgnx-dir)) nil t))
-      (drgnx-look-scene--goto "inventory.py" 24 8 13)
-      ;; the store's answer, as the hub would give it (the scene has no hub)
-      (cl-letf (((symbol-function 'drgnx-hub-call) #'ignore))
-        (drgnx-debug-gutter-mode 1))
-      (drgnx-debug-gutter--apply
-       (list :version 1 :breakpoints
-             (list (list :id 1 :line 18 :enabled t :verified t)
-                   (list :id 2 :line 22 :enabled t :verified t :condition "shortfall > 20")
-                   (list :id 3 :line 24 :enabled t :verified t)
-                   (list :id 4 :line 25 :enabled t :verified t :log "order {item.sku}")
-                   (list :id 5 :line 30 :enabled nil :verified t))))
+      (unless (drgnx-look-scene--debug-session)
+        (drgnx-look-scene--goto "inventory.py" 24 8 13)
+        ;; the store's answer, as the hub would give it (the scene has no hub)
+        (cl-letf (((symbol-function 'drgnx-hub-call) #'ignore))
+          (drgnx-debug-gutter-mode 1))
+        (drgnx-debug-gutter--apply
+         (list :version 1 :breakpoints
+               (list (list :id 1 :line 18 :enabled t :verified t)
+                     (list :id 2 :line 22 :enabled t :verified t :condition "shortfall > 20")
+                     (list :id 3 :line 24 :enabled t :verified t)
+                     (list :id 4 :line 25 :enabled t :verified t :log "order {item.sku}")
+                     (list :id 5 :line 30 :enabled nil :verified t)))))
       (when (and (featurep 'glitnir-margin-mouse-face) (fboundp 'nidhogg--note-mouse))
         (redisplay t)
         ;; line 32's dot: the column's middle character, after the claim's pad, left of the fringe
@@ -793,6 +1010,49 @@ line 32's hover dot, as the mockup shows it, where Nidhogg lights a margin's mou
                                         (/ cw 2))
                                  (+ top y (/ (line-pixel-height) 2))))))))
   (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene--debug-extras (theme views)
+  "The debugging extras mockup in THEME, a session of the mock adapter's extras script stopped on line 24.  Without
+VIEWS: inventory.py with line 24's candidates, the data tip of `shortfall' and the overview ruler, the Debug Console
+with groups and timestamps.  VIEWS: the Disassembly in the editor and the memory of `item'."
+  (drgnx-look-scene--theme theme)
+  (drgnx-look-scene--try (if views "debug-extras-views" "debug-extras")
+    (drgnx-wb-focus-editor)
+    (let ((f (expand-file-name "inventory.py" drgnx-look-scene--project)))
+      (unless (file-exists-p f) (with-temp-file f (insert drgnx-look-scene--inventory))))
+    (dolist (m '("drgnx-debug-launch" "drgnx-debug-gutter"))
+      (load (expand-file-name (concat "modules/extra/" m) (bound-and-true-p drgnx-dir)) nil t))
+    (setq drgnx-debug-console-timestamps t)
+    (when (drgnx-look-scene--debug-session t)
+      (let ((session (plist-get (drgnx-look-scene--debug-stopped) :id)))
+        (if (not views)
+            (progn
+              (drgnx-look-scene--goto "inventory.py" 24 8 13)
+              (drgnx-look-scene--until 5 "line 24's candidates" (lambda () drgnx-debug-gutter--candidates))
+              (goto-char (point-min)) (forward-line 23) (search-forward "shortfall") (backward-char 3)
+              (drgnx-quickhelp--request (selected-window) (point) nil)
+              (drgnx-look-scene--until 5 "the data tip" #'drgnx-quickhelp-shown-p))
+          (drgnx-wb-focus-editor)
+          (drgnx-debug-open-disassembly)
+          (drgnx-look-scene--until 5 "the instructions"
+                                   (lambda () (with-current-buffer drgnx-debug-disassembly-buffer-name
+                                                (string-search "pack_size" (buffer-string)))))
+          ;; the editor split: the Disassembly above, the memory below (the mockup shows both)
+          (unless (get-buffer-window "*Memory: item*")
+            (let* ((top (selected-window)) (below (split-window top nil 'below)))
+              (drgnx-debug-memory-open session "0x7ffd4c20" "item")
+              (set-window-buffer top (get-buffer drgnx-debug-disassembly-buffer-name))
+              (set-window-buffer below (get-buffer "*Memory: item*"))
+              (select-window top)))
+          (drgnx-look-scene--until 5 "the memory"
+                                   (lambda () (with-current-buffer "*Memory: item*"
+                                                (string-search "nut-m6" (buffer-string)))))))))
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-debug-extras () "The debugging extras' editor, dark." (drgnx-look-scene--debug-extras 'drgnx-dark nil))
+(defun drgnx-look-scene-debug-extras-light () "The debugging extras' editor, light." (drgnx-look-scene--debug-extras 'drgnx-light nil))
+(defun drgnx-look-scene-debug-extras-views () "The debugging extras' views, dark." (drgnx-look-scene--debug-extras 'drgnx-dark t))
+(defun drgnx-look-scene-debug-extras-views-light () "The debugging extras' views, light." (drgnx-look-scene--debug-extras 'drgnx-light t))
 
 (defun drgnx-look-scene-start-page ()
   "The start page in the editor, dark (no mockup: its buttons, keycaps and shield are the components of design §3.5)."

@@ -46,7 +46,11 @@
     (search-ask :mockup search-view :then "C-g")
     (search-handed :mockup search-view)
     (search-kinds :mockup search-view)
-    (debugging))
+    (debugging)
+    (debug-extras)
+    (debug-extras-light)
+    (debug-extras-views)
+    (debug-extras-views-light))
   "The scenes in the order they are drawn: (NAME . PLIST).  NAME is the mockup's (docs/specs, the-look/NAME.png; the
 start page, the highlights and the focused Explorer have none: they are judged against the components' spec and
 the tokens) and the session's `drgnx-look-scene-NAME' sets it up.  :agent t starts the mock agent first; :keys and
