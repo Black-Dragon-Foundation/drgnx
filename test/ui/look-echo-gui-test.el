@@ -246,7 +246,9 @@ buffer and point, the selected window, the frame's size and its buffers survive.
           (let ((shape (drgnx-look-echo-ui-test--shape f)) (size (list (frame-text-width f) (frame-text-height f))))
             (drgnx-look-echo-on)
             (setq new (drgnx-look-echo-swap f))
-            (drgnx-test-wait-presented :frame new)
+            ;; the size as a sample: the compositor applies the new frame's size after it is first presented, and
+            ;; its windows get their widths once it has (`drgnx-look-echo--widths')
+            (drgnx-test-wait-presented :frame new :value (lambda () (drgnx-look-echo-ui-test--size new)))
             (should-not (frame-live-p f))
             (should (framep (drgnx-look-echo-box new)))
             (should (equal (drgnx-look-echo-ui-test--shape new) shape))
@@ -255,7 +257,7 @@ buffer and point, the selected window, the frame's size and its buffers survive.
             (should (equal (list (frame-text-width new) (frame-text-height new)) size))
             (drgnx-look-echo-off)
             (setq back (drgnx-look-echo-swap new))
-            (drgnx-test-wait-presented :frame back)
+            (drgnx-test-wait-presented :frame back :value (lambda () (drgnx-look-echo-ui-test--size back)))
             (should-not (drgnx-look-echo-box back))
             (should (eq (window-frame (minibuffer-window back)) back))
             (should (equal (drgnx-look-echo-ui-test--shape back) shape))
@@ -265,6 +267,10 @@ buffer and point, the selected window, the frame's size and its buffers survive.
       (mapc #'kill-buffer (list a b c))
       (when (frame-live-p was) (select-frame-set-input-focus was))
       (drgnx-test-wait-presented))))
+
+(defun drgnx-look-echo-ui-test--size (frame)
+  "FRAME's text size and its windows' shape: what a swap must keep, as a `drgnx-test-wait-presented' sample."
+  (list (frame-text-width frame) (frame-text-height frame) (drgnx-look-echo-ui-test--shape frame)))
 
 (defun drgnx-look-echo-ui-test--shape (frame)
   "FRAME's windows as (BUFFER-NAME LEFT RIGHT AT-TOP SELECTED): the columns exactly, the rows only as top or not (a
