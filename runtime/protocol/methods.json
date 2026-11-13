@@ -16532,13 +16532,22 @@
         "$defs": {
           "Kind": {
             "description": "What a row is.",
-            "enum": [
-              "package",
-              "plugin",
-              "module",
-              "emacs"
-            ],
-            "type": "string"
+            "oneOf": [
+              {
+                "enum": [
+                  "package",
+                  "plugin",
+                  "module",
+                  "emacs"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "pack",
+                "description": "A language pack (`pack:NAME`): a language's grammar, mode, server, formatter and debug adapter in one.",
+                "type": "string"
+              }
+            ]
           },
           "Requirement": {
             "additionalProperties": false,
@@ -16584,6 +16593,13 @@
                   "string",
                   "null"
                 ]
+              },
+              "layers": {
+                "description": "What a language pack gives (`grammar`, `mode`, `server`, `format`, `search`, `debug`): the layer chips.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               },
               "name": {
                 "type": "string"
@@ -16921,6 +16937,11 @@
                   }
                 ]
               },
+              "packs": {
+                "default": false,
+                "description": "Language packs (`@packs`).",
+                "type": "boolean"
+              },
               "plugins": {
                 "default": false,
                 "type": "boolean"
@@ -17028,13 +17049,22 @@
           },
           "Kind": {
             "description": "What a row is.",
-            "enum": [
-              "package",
-              "plugin",
-              "module",
-              "emacs"
-            ],
-            "type": "string"
+            "oneOf": [
+              {
+                "enum": [
+                  "package",
+                  "plugin",
+                  "module",
+                  "emacs"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "pack",
+                "description": "A language pack (`pack:NAME`): a language's grammar, mode, server, formatter and debug adapter in one.",
+                "type": "string"
+              }
+            ]
           },
           "ListSection": {
             "description": "One section of the list: a search, its header's title.",
@@ -17072,6 +17102,7 @@
                   "disabled": false,
                   "enabled": false,
                   "installed": false,
+                  "packs": false,
                   "plugins": false,
                   "unsigned": false,
                   "updates": false
@@ -17372,13 +17403,22 @@
         "$defs": {
           "Kind": {
             "description": "What a row is.",
-            "enum": [
-              "package",
-              "plugin",
-              "module",
-              "emacs"
-            ],
-            "type": "string"
+            "oneOf": [
+              {
+                "enum": [
+                  "package",
+                  "plugin",
+                  "module",
+                  "emacs"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "pack",
+                "description": "A language pack (`pack:NAME`): a language's grammar, mode, server, formatter and debug adapter in one.",
+                "type": "string"
+              }
+            ]
           },
           "Row": {
             "additionalProperties": false,
@@ -17405,6 +17445,13 @@
                   "string",
                   "null"
                 ]
+              },
+              "layers": {
+                "description": "What a language pack gives (`grammar`, `mode`, `server`, `format`, `search`, `debug`): the layer chips.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               },
               "name": {
                 "type": "string"
@@ -17687,6 +17734,11 @@
                   }
                 ]
               },
+              "packs": {
+                "default": false,
+                "description": "Language packs (`@packs`).",
+                "type": "boolean"
+              },
               "plugins": {
                 "default": false,
                 "type": "boolean"
@@ -17714,13 +17766,22 @@
           },
           "Kind": {
             "description": "What a row is.",
-            "enum": [
-              "package",
-              "plugin",
-              "module",
-              "emacs"
-            ],
-            "type": "string"
+            "oneOf": [
+              {
+                "enum": [
+                  "package",
+                  "plugin",
+                  "module",
+                  "emacs"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "pack",
+                "description": "A language pack (`pack:NAME`): a language's grammar, mode, server, formatter and debug adapter in one.",
+                "type": "string"
+              }
+            ]
           },
           "Sort": {
             "description": "How the rows are ordered.",
@@ -17755,6 +17816,7 @@
               "disabled": false,
               "enabled": false,
               "installed": false,
+              "packs": false,
               "plugins": false,
               "unsigned": false,
               "updates": false
@@ -17800,13 +17862,22 @@
         "$defs": {
           "Kind": {
             "description": "What a row is.",
-            "enum": [
-              "package",
-              "plugin",
-              "module",
-              "emacs"
-            ],
-            "type": "string"
+            "oneOf": [
+              {
+                "enum": [
+                  "package",
+                  "plugin",
+                  "module",
+                  "emacs"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "pack",
+                "description": "A language pack (`pack:NAME`): a language's grammar, mode, server, formatter and debug adapter in one.",
+                "type": "string"
+              }
+            ]
           },
           "Row": {
             "additionalProperties": false,
@@ -17833,6 +17904,13 @@
                   "string",
                   "null"
                 ]
+              },
+              "layers": {
+                "description": "What a language pack gives (`grammar`, `mode`, `server`, `format`, `search`, `debug`): the layer chips.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               },
               "name": {
                 "type": "string"

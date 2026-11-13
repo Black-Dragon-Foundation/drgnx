@@ -31,6 +31,7 @@ pub fn rows(list: &[PluginRow], on: &[String]) -> Vec<w::Row> {
                 latest: None,
                 downloads: None,
                 why: Vec::new(),
+                layers: Vec::new(),
             }
         })
         .collect()

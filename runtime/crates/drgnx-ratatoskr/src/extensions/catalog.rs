@@ -262,6 +262,40 @@ pub fn parse_packages(bytes: &[u8]) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
+/// A language pack the lock records (`:packs`): what the user has installed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PackLock {
+    pub name: String,
+    pub commit: Option<String>,
+    /// `:wanted user` (the user asked for it, not a migration or a setup).
+    pub wanted_user: bool,
+}
+
+/// The lock's installed language packs (`:packs`); none when the lock has no such key.
+pub fn parse_pack_locks(bytes: &[u8]) -> Result<Vec<PackLock>, String> {
+    let forms = read_forms(bytes, Src::Lock)?;
+    let root = forms.first().and_then(items).ok_or("it holds no plist")?;
+    let Some(list) = plist_get(root, ":packs").and_then(items) else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    for e in list {
+        let parts = items(e).ok_or("a pack entry is not a list")?;
+        let name = parts
+            .first()
+            .and_then(text)
+            .ok_or("a pack entry has no name")?
+            .to_owned();
+        let rest = &parts[1..];
+        out.push(PackLock {
+            name,
+            commit: plist_get(rest, ":commit").and_then(text).map(str::to_owned),
+            wanted_user: plist_get(rest, ":wanted").and_then(text) == Some("user"),
+        });
+    }
+    Ok(out)
+}
+
 /// What an entry has besides its row, for `extensions/details`.
 #[derive(Clone, Debug, Default)]
 pub struct Detail {
@@ -307,15 +341,16 @@ impl Entry {
 
     /// An installed package: in the lock, whatever its update state.
     pub fn is_installed(&self) -> bool {
-        self.row.kind == w::Kind::Package
-            && matches!(
-                self.row.state,
-                w::State::Installed
-                    | w::State::Update
-                    | w::State::Dependency
-                    | w::State::Held
-                    | w::State::Incompat
-            )
+        self.row.kind == w::Kind::Pack && self.row.state == w::State::Installed
+            || self.row.kind == w::Kind::Package
+                && matches!(
+                    self.row.state,
+                    w::State::Installed
+                        | w::State::Update
+                        | w::State::Dependency
+                        | w::State::Held
+                        | w::State::Incompat
+                )
     }
 }
 
@@ -351,6 +386,8 @@ pub struct Inputs<'a> {
     pub modules: &'a [w::ModuleEntry],
     /// The plugins' rows ([`super::plugins::rows`]).
     pub plugins: &'a [w::Row],
+    /// The lock's installed language packs; `None` leaves the built-in packs out of the rows (a catalog test's).
+    pub packs: Option<&'a [PackLock]>,
     pub notes: Vec<String>,
 }
 
@@ -521,6 +558,7 @@ pub fn build(inputs: Inputs) -> Index {
             latest,
             downloads: c.and_then(|c| c.downloads),
             why,
+            layers: Vec::new(),
         };
         let detail = Detail {
             requires,
@@ -553,6 +591,7 @@ pub fn build(inputs: Inputs) -> Index {
             latest: None,
             downloads: None,
             why: Vec::new(),
+            layers: Vec::new(),
         };
         entries.push(Entry::new(row, Vec::new(), Detail::default()));
     }
@@ -575,6 +614,7 @@ pub fn build(inputs: Inputs) -> Index {
             latest: None,
             downloads: None,
             why: Vec::new(),
+            layers: Vec::new(),
         };
         let detail = Detail {
             requires: m
@@ -592,6 +632,12 @@ pub fn build(inputs: Inputs) -> Index {
 
     for row in inputs.plugins {
         entries.push(Entry::new(row.clone(), Vec::new(), Detail::default()));
+    }
+
+    if let Some(locked) = inputs.packs {
+        for (row, keywords, detail) in super::packs::rows(locked) {
+            entries.push(Entry::new(row, keywords, detail));
+        }
     }
 
     let by_id = entries
@@ -674,6 +720,8 @@ pub struct Cache {
     packages: Vec<String>,
     modules: Vec<w::ModuleEntry>,
     plugins: Vec<w::Row>,
+    pack_locks: Vec<PackLock>,
+    show_packs: bool,
     notes: HashMap<Src, String>,
     index: Arc<Index>,
     dirty: bool,
@@ -682,6 +730,12 @@ pub struct Cache {
 }
 
 impl Cache {
+    /// Whether the built-in language packs are rows (the hub says yes at start; a catalog test leaves them out).
+    pub fn show_packs(&mut self, on: bool) {
+        self.show_packs = on;
+        self.dirty = true;
+    }
+
     /// The editor's module table replaces the last one.
     pub fn set_modules(&mut self, modules: Vec<w::ModuleEntry>) {
         self.modules = modules;
@@ -710,7 +764,10 @@ impl Cache {
                 self.notes.remove(&src);
                 match src {
                     Src::Catalog => self.catalog = None,
-                    Src::Lock => self.lock.clear(),
+                    Src::Lock => {
+                        self.lock.clear();
+                        self.pack_locks.clear();
+                    }
                     Src::Wanted => self.wanted.clear(),
                     Src::Packages => self.packages.clear(),
                 }
@@ -722,7 +779,12 @@ impl Cache {
                 .map_err(|e| e.to_string())
                 .and_then(|b| match src {
                     Src::Catalog => parse_catalog(&b).map(|c| self.catalog = Some(c)),
-                    Src::Lock => parse_lock(&b).map(|l| self.lock = l),
+                    Src::Lock => parse_lock(&b).and_then(|l| {
+                        let packs = parse_pack_locks(&b)?;
+                        self.lock = l;
+                        self.pack_locks = packs;
+                        Ok(())
+                    }),
                     Src::Wanted => parse_names(&b).map(|n| self.wanted = n),
                     Src::Packages => parse_packages(&b).map(|n| self.packages = n),
                 });
@@ -755,6 +817,7 @@ impl Cache {
                 packages: &self.packages,
                 modules: &self.modules,
                 plugins: &self.plugins,
+                packs: self.show_packs.then_some(&self.pack_locks[..]),
                 notes,
             }));
         }

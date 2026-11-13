@@ -11,6 +11,7 @@
 
 pub mod catalog;
 pub mod methods;
+pub mod packs;
 pub mod plugins;
 pub mod rank;
 

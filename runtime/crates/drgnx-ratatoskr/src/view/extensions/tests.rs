@@ -13,6 +13,7 @@ fn row(id: &str, state: w::State) -> w::Row {
         latest: Some("1.3".into()),
         downloads: None,
         why: vec![],
+        layers: vec![],
     }
 }
 

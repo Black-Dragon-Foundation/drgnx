@@ -140,6 +140,7 @@ impl Hub {
     /// Where the files are; the hub calls this once at start.
     pub fn configure(&self, env: &Env) {
         let _ = self.files.set(Arc::new(RealFiles::new(env)));
+        lock(&self.cache).show_packs(true);
     }
 
     fn files(&self) -> Result<Arc<RealFiles>, Error> {
