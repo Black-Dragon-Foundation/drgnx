@@ -512,6 +512,9 @@ pub struct Map {
     inner: Mutex<Inner>,
     /// Whether any view is open (read on every session snapshot).
     open: AtomicBool,
+    /// The chips a test hub's scene puts left of the machines' on the strip (`orch::scene`): the forecast and the cost.
+    #[cfg(feature = "test-hooks")]
+    strip: Mutex<Vec<String>>,
     /// The front, for a session a step or presence names before its first snapshot reached the map.
     front: OnceLock<Weak<Front>>,
     origin: OnceLock<tokio::time::Instant>,
@@ -623,6 +626,7 @@ fn view_rows(
     fonts: &dyn Measure,
     now: u64,
     new: &BTreeSet<ItemId>,
+    extra: &[String],
 ) -> (Vec<Row>, Vec<(ImageId, String)>) {
     let Some(l) = v.layout.as_ref() else {
         return (Vec::new(), Vec::new());
@@ -649,6 +653,7 @@ fn view_rows(
         new,
         chain: &chain,
         outline: v.outline,
+        selected: v.selected.as_ref(),
         now,
     };
     let palette = Palette(env.palette.clone());
@@ -663,6 +668,7 @@ fn view_rows(
         &scene,
         &m.needs_you(),
         &machines,
+        extra,
         &renv,
         fonts,
     )];
@@ -675,7 +681,7 @@ pub(crate) fn render_env<'a>(env: &'a ViewEnv, palette: &'a Palette) -> render::
     let line = env
         .fonts
         .iter()
-        .find(|f| f.0 == "ui")
+        .find(|f| f.0 == "text")
         .map(|f| (f.4 + f.5, f.4))
         .filter(|(h, _)| *h > 0.0)
         .map_or((env.cell.1, 80), |(h, a)| {
@@ -725,6 +731,24 @@ impl Map {
     #[cfg(feature = "test-hooks")]
     pub fn scene(&self, sessions: Vec<(Snapshot, u64)>) {
         lock(&self.inner).scene = sessions;
+    }
+
+    /// The strip's forecast and cost chips of a test hub's scene.
+    #[cfg(feature = "test-hooks")]
+    pub fn scene_strip(&self, chips: Vec<String>) {
+        *self.strip.lock().unwrap_or_else(PoisonError::into_inner) = chips;
+    }
+
+    /// The chips left of the machines' on the strip: none yet outside a test hub's scene (DEFERRED MAP-STRIP-WK-COST-1).
+    fn strip_chips(&self) -> Vec<String> {
+        #[cfg(feature = "test-hooks")]
+        return self
+            .strip
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        #[cfg(not(feature = "test-hooks"))]
+        Vec::new()
     }
 
     /// A test hub's scene graph (`orch::scene::map_events`): EVENTS, fed to every map opened.
@@ -1298,11 +1322,12 @@ impl Map {
         }
         // the job chips' elapsed time: whole seconds of the wall clock
         let now = crate::clock::wall_secs() as u64;
+        let extra = self.strip_chips();
         for class in f.core.views.classes(key.conn, &key.view) {
             let k3 = (key.conn, key.view.clone(), class);
-            f.core
-                .views
-                .publish_built(&f, &k3, |env, fonts| view_rows(m, v, env, fonts, now, &new));
+            f.core.views.publish_built(&f, &k3, |env, fonts| {
+                view_rows(m, v, env, fonts, now, &new, &extra)
+            });
         }
         Self::publish_detail(&f, m, v, key, None);
         if let Some(ms) = wake

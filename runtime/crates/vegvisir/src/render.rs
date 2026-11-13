@@ -26,8 +26,8 @@ use crate::{Edge, EdgeKind, Item, ItemId, Kind};
 pub const MARGIN: u32 = 84;
 /// The six layers' labels, sentence case; the last is short for "Files and machines".
 pub const LAYER_NAMES: [&str; 6] = ["You asked", "Specs", "Plans", "Agents", "Branches", "Files"];
-/// The font role card text and labels are measured in.
-const ROLE: &str = "ui";
+/// The font role card text and labels are measured in: the UI text face (`drgnx-ui-text`), which they are drawn in.
+const ROLE: &str = "text";
 
 /// Whether the map is drawn as an outline: by the layout (a terminal, or a layout that does not fit), or the user's
 /// `O` either way.
@@ -67,6 +67,8 @@ pub struct Scene<'a> {
     /// The edges on the selection's chain (drawn in the accent).
     pub chain: &'a [Edge],
     pub outline: Outline,
+    /// The selected item: its card is drawn in the ring faces.
+    pub selected: Option<&'a ItemId>,
     /// Seconds since the epoch, for the job chips' elapsed time.
     pub now: u64,
 }
@@ -295,7 +297,7 @@ fn card_rows(
                 match *part {
                     Part::Card(k) => {
                         let (id, lines) = &cards[k];
-                        segment(&mut b, s, id, lines, line as usize, g, m);
+                        segment(&mut b, s, id, lines, line as usize, g, m, e, images);
                     }
                     Part::Lane(k) => {
                         let (col, id, alt) = &lanes[k];
@@ -336,7 +338,11 @@ fn fit_px(m: &dyn Measure, text: &str, px: u32) -> String {
 
 /// One text line of a card: pieces, each in a face or none.
 #[derive(Clone, Debug, Default, PartialEq)]
-struct Line(Vec<(String, Option<&'static str>)>);
+struct Line(
+    Vec<(String, Option<&'static str>)>,
+    /// A Lucide icon (its name, and the glyph a terminal shows) before the text.
+    Option<(&'static str, &'static str)>,
+);
 
 impl Line {
     fn push(&mut self, text: impl Into<String>, face: Option<&'static str>) -> &mut Self {
@@ -391,6 +397,7 @@ impl Line {
 
 /// Line LINE of ID's card at its x, fitted to its width: a stop at its left, its text (the card's face under the
 /// text's own), a stop at its right; nothing when the card has fewer lines or no place.
+#[allow(clippy::too_many_arguments)] // a card line's row, its geometry, its fonts and the image table: one place, no struct for one caller
 fn segment(
     b: &mut RowBuilder,
     s: &Scene,
@@ -399,30 +406,60 @@ fn segment(
     line: usize,
     g: &Geo,
     m: &dyn Measure,
+    e: &Edges,
+    images: &mut BTreeMap<ImageId, String>,
 ) {
     let (Some(rect), Some(l)) = (s.layout.at.get(id), lines.get(line)) else {
         return;
     };
     let left = g.margin + g.px(rect.x);
     let right = g.margin + g.px(rect.x + rect.w);
-    let fitted = fit_px(m, &l.text(), (right - left).saturating_sub(10));
+    let icon_px = (ICON_PX as f32 * g.scale).round() as u32;
+    let icon = l.1.filter(|(name, _)| !name.is_empty());
+    let room = (right - left).saturating_sub(10);
+    let fitted = fit_px(
+        m,
+        &l.text(),
+        room.saturating_sub(if icon.is_some() { icon_px } else { 0 }),
+    );
     b.stop(left);
     let start = b.pos();
+    if let Some((name, alt)) = icon {
+        match e.icon(name, icon_px) {
+            Some((id, svg)) => {
+                images.entry(id).or_insert(svg);
+                b.image(id, alt);
+            }
+            None => {
+                b.push(alt, None);
+            }
+        }
+    } else if let Some((_, alt)) = l.1 {
+        b.push(alt, None);
+    }
     l.push_fitted(b, &fitted);
     b.stop(right);
     let end = b.pos();
-    b.face(start, end, card_face(lines.len(), line));
+    b.face(
+        start,
+        end,
+        card_face(lines.len(), line, s.selected == Some(id)),
+    );
     b.face(start, end, "drgnx-work-card");
     b.prop(start, end, "drgnx-work-id", Value::String(id.0.clone()));
 }
 
-/// The decoration face of line I of a card of N lines.
-fn card_face(n: usize, i: usize) -> &'static str {
-    match (n, i) {
-        (1, _) => "drgnx-card-single",
-        (_, 0) => "drgnx-card-top",
-        (n, i) if i + 1 == n => "drgnx-card-bottom",
-        _ => "drgnx-card-mid",
+/// The decoration face of line I of a card of N lines; the selected card's is the ring's (`drgnx-card-sel-*`).
+fn card_face(n: usize, i: usize, selected: bool) -> &'static str {
+    match (selected, n, i) {
+        (false, 1, _) => "drgnx-card-single",
+        (false, _, 0) => "drgnx-card-top",
+        (false, n, i) if i + 1 == n => "drgnx-card-bottom",
+        (false, _, _) => "drgnx-card-mid",
+        (true, 1, _) => "drgnx-card-sel-single",
+        (true, _, 0) => "drgnx-card-sel-top",
+        (true, n, i) if i + 1 == n => "drgnx-card-sel-bottom",
+        (true, _, _) => "drgnx-card-sel-mid",
     }
 }
 
@@ -662,18 +699,18 @@ fn chip_line(it: &Item) -> Line {
         l.push(d, Some(dface))
             .push(format!(" {}", icon(&r.icon)), None);
     } else {
-        l.push(
-            match it.kind {
-                Kind::Ask => "❝",
-                Kind::Spec => "◫",
-                Kind::Plan => "☰",
-                Kind::Branch => "⑂",
-                Kind::File => "▭",
-                Kind::Machine => "▣",
-                _ => "·",
-            },
-            None,
-        );
+        // a Lucide icon in an image of its own (its glyph on a terminal): `segment` puts it first on the line
+        let (name, alt) = match it.kind {
+            Kind::Ask => ("message-square", "❝"),
+            Kind::Spec => ("file-text", "◫"),
+            Kind::Plan => ("list-checks", "☰"),
+            Kind::Branch => ("git-branch", "⑂"),
+            Kind::File => ("file-code", "▭"),
+            Kind::Machine if it.label == "laptop" => ("laptop", "▭"),
+            Kind::Machine => ("monitor", "▣"),
+            _ => ("", "·"),
+        };
+        l.1 = Some((name, alt));
     }
     let extra: Vec<String> = match it.kind {
         Kind::Plan => f
@@ -997,12 +1034,21 @@ impl<'a> Edges<'a> {
             .collect()
     }
 
+    /// Icon NAME at PX, stroked in the palette's chip text colour: its id and its SVG.
+    fn icon(&self, name: &str, px: u32) -> Option<(ImageId, String)> {
+        let svg = crate::icons::svg(name, self.palette.colour("chip-fg"), px)?;
+        Some((self.id(&svg), svg))
+    }
+
     fn id(&self, svg: &str) -> ImageId {
         ImageId::of(svg.as_bytes(), self.epoch)
     }
 }
 
 // ---- the strip ---------------------------------------------------------------------------------------------------
+
+/// A chip's icon, logical px.
+const ICON_PX: u32 = 16;
 
 /// The widest a strip chip's text is, logical px.
 const CHIP_MAX: u32 = 260;
@@ -1014,6 +1060,7 @@ pub fn strip(
     s: &Scene,
     needs: &[crate::NeedsYou],
     machines: &[Item],
+    extra: &[String],
     env: &Env,
     m: &dyn Measure,
 ) -> Row {
@@ -1041,19 +1088,24 @@ pub fn strip(
             Some("drgnx-work-needs-you"),
         );
     }
-    let chips: Vec<String> = machines
+    let chips: Vec<String> = extra
         .iter()
-        .filter(|it| it.kind == Kind::Machine)
-        .map(|it| {
-            let (used, total) = it.fields.slots.unwrap_or((0, 0));
-            let cost = it
-                .fields
-                .runner
-                .as_ref()
-                .and_then(|r| r.cost.as_ref())
-                .map_or(String::new(), |c| format!(" · cloud {c}"));
-            format!(" {} {used}/{total}{cost} ", it.label)
-        })
+        .map(|c| format!(" {c} "))
+        .chain(
+            machines
+                .iter()
+                .filter(|it| it.kind == Kind::Machine)
+                .map(|it| {
+                    let (used, total) = it.fields.slots.unwrap_or((0, 0));
+                    let cost = it
+                        .fields
+                        .runner
+                        .as_ref()
+                        .and_then(|r| r.cost.as_ref())
+                        .map_or(String::new(), |c| format!(" · cloud {c}"));
+                    format!(" {} {used}/{total}{cost} ", it.label)
+                }),
+        )
         .collect();
     let tail = chips.join(" ");
     let w = fit::width(m, ROLE, &tail).ceil() as u32;

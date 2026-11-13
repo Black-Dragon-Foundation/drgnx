@@ -68,6 +68,7 @@ fn scene<'a>(
         new,
         chain: &[],
         outline: Outline::Off,
+        selected: None,
         now: 0,
     }
 }
@@ -97,7 +98,7 @@ fn layout_row(rows: &[Row], key: &str) -> String {
         .collect()
 }
 
-/// [D] The rows with no lanes and no tiles are the editor's, character for character and stop for stop.
+/// [D] The rows with no lanes and no tiles are the editor's, character for character and stop for stop (a chip's icon is an image, one placeholder character, since the Lucide icons).
 #[test]
 fn golden_rows_of_the_fixture() {
     let (items, edges, layout) = frame();
@@ -106,9 +107,12 @@ fn golden_rows_of_the_fixture() {
     let s = scene(&items, &edges, &layout, &new);
     let drawn = render::rows(&s, &Index::of(&s), &gui(&palette), &Cols);
     let golden = [
-        ("row:1:0:0", "You asked<388>❝ fix deferred testin…<580>\n"),
-        ("row:2:0:0", "Specs<420>◫ race-proof tests<596>\n"),
-        ("row:3:0:0", "Plans<232>☰ deferred testing…<408>\n"),
+        (
+            "row:1:0:0",
+            "You asked<388><img> fix deferred testi…<580>\n",
+        ),
+        ("row:2:0:0", "Specs<420><img> race-proof tests<596>\n"),
+        ("row:3:0:0", "Plans<232><img> deferred testing…<408>\n"),
         (
             "row:4:0:0",
             "Agents<84>● O  Opus · hub rows<316><328>● S  Sonnet · fx-sess<560>\n\
@@ -119,12 +123,15 @@ fn golden_rows_of_the_fixture() {
         ),
         (
             "row:6:0:0",
-            "Files<248>▭ session.rs · …<392><404>▣ desktop · 3…<532>\n",
+            "Files<248><img> session.rs ·…<392><404><img> desktop · …<532>\n",
         ),
     ];
-    for (key, want) in golden {
-        assert_eq!(layout_row(&drawn.rows, key), want, "row {key}");
-    }
+    let bad: Vec<String> = golden
+        .iter()
+        .filter(|(key, want)| layout_row(&drawn.rows, key) != *want)
+        .map(|(key, _)| format!("{key}: {:?}", layout_row(&drawn.rows, key)))
+        .collect();
+    assert!(bad.is_empty(), "{bad:#?}");
     // each line names its item, and has its height
     let a1 = drawn
         .rows
@@ -249,6 +256,7 @@ fn tty_outline_rows() {
         };
         let s = Scene {
             outline: Outline::Auto,
+            selected: None,
             ..scene(&items, &edges, &layout, &new)
         };
         let drawn = render::rows(&s, &Index::of(&s), &env, &Cols);
@@ -330,7 +338,7 @@ fn lanes_on_one_column_are_one_image() {
     }
     assert_eq!(
         layout_row(&drawn.rows, "row:5:0:0"),
-        "Branches<99><img><120>⑂ rp-df-hub · edi…<280><364>⑂ rp-fx-sess · ed…<524>\n"
+        "Branches<99><img><120><img> rp-df-hub · ed…<280><364><img> rp-fx-sess · e…<524>\n"
     );
     assert_eq!(
         layout_row(&drawn.rows, "row:4:0:1"),
@@ -423,7 +431,7 @@ fn strip_chips_rows() {
         .filter(|i| i.id.0.starts_with("machine:"))
         .cloned()
         .collect();
-    let row = render::strip(&s, &f.needs_you, &machines, &gui(&pal), &Cols);
+    let row = render::strip(&s, &f.needs_you, &machines, &[], &gui(&pal), &Cols);
     assert_eq!(row.key, "strip");
     assert!(
         row.text.contains("⚑ Codex asks: cargo clippy  g1"),
@@ -446,7 +454,7 @@ fn strip_chips_rows() {
             ..f.needs_you[0].clone()
         })
         .collect();
-    let row = render::strip(&s, &many, &machines, &gui(&pal), &Cols);
+    let row = render::strip(&s, &many, &machines, &[], &gui(&pal), &Cols);
     assert!(
         row.text.contains("g9") && !row.text.contains("g10") && row.text.contains("+4"),
         "{}",
@@ -609,7 +617,7 @@ fn a_long_strip_entry_is_cut_and_the_row_is_ui_text() {
             .into(),
         ..f.needs_you[0].clone()
     }];
-    let row = render::strip(&s, &long, &[], &gui(&pal), &Cols);
+    let row = render::strip(&s, &long, &[], &[], &gui(&pal), &Cols);
     assert!(row.text.contains("…  g1"), "{:?}", row.text);
     assert!(!row.text.contains("some more words"), "{:?}", row.text);
     let end = u32::try_from(row.text.chars().count()).unwrap();
@@ -620,4 +628,92 @@ fn a_long_strip_entry_is_cut_and_the_row_is_ui_text() {
         "{:?}",
         row.runs
     );
+}
+
+/// [D] A chip's glyph is a Lucide icon (etc/icons) in an image of its own, one placeholder character where the glyph
+/// was, in the palette's colour at 1.6 stroke, and the text after it is fitted to what is left.
+#[test]
+fn a_chip_has_a_lucide_icon_image() {
+    let (items, edges, layout) = frame();
+    let new = BTreeSet::new();
+    let palette = Palette(vec![("chip-fg".into(), "#a2a5b2".into())]);
+    let s = scene(&items, &edges, &layout, &new);
+    let drawn = render::rows(&s, &Index::of(&s), &gui(&palette), &Cols);
+    let ask = drawn
+        .rows
+        .iter()
+        .find(|r| r.key == "row:1:0:0:0")
+        .expect("the asks' row");
+    assert_eq!(ask.images.len(), 1, "{ask:?}");
+    let svg = drawn
+        .images
+        .iter()
+        .find(|(id, _)| *id == ask.images[0].1)
+        .map(|(_, s)| s.as_str())
+        .expect("its image");
+    assert!(svg.contains("M22 17a2 2 0 0 1-2 2H6.828"), "{svg}");
+    assert!(
+        svg.contains("stroke=\"#a2a5b2\"") && svg.contains("stroke-width=\"1.6\""),
+        "{svg}"
+    );
+    assert!(!ask.text.contains('❝'), "{:?}", ask.text);
+    // a tile of the strip's: a machine takes a monitor, a laptop its own
+    let machine = drawn
+        .rows
+        .iter()
+        .find(|r| r.key.starts_with("row:6:") && r.text.contains("desktop"))
+        .expect("the machines' row");
+    assert!(!machine.images.is_empty(), "{machine:?}");
+}
+
+/// [D] The selected card is drawn in its own ring faces (the accent ring of work-space-dark.html), the others in the
+/// plain ones: the hub knows the selection, and the editor only inserts.
+#[test]
+fn the_selected_card_has_its_own_ring_faces() {
+    let (items, edges, layout) = frame();
+    let new = BTreeSet::new();
+    let palette = Palette::default();
+    let pick = ItemId("agent:a1".into());
+    let mut s = scene(&items, &edges, &layout, &new);
+    s.selected = Some(&pick);
+    let drawn = render::rows(&s, &Index::of(&s), &gui(&palette), &Cols);
+    let faces = |key: &str, word: &str| -> Vec<String> {
+        let r = drawn.rows.iter().find(|r| r.key == key).expect(key);
+        let at = r
+            .text
+            .find(word)
+            .unwrap_or_else(|| panic!("{word} in {:?}", r.text));
+        let at = u32::try_from(r.text[..at].chars().count()).unwrap();
+        r.runs
+            .iter()
+            .filter(|(s, e, _)| *s <= at && at < *e)
+            .map(|(_, _, f)| f.clone())
+            .collect()
+    };
+    assert!(faces("row:4:0:0:0", "Opus").contains(&"drgnx-card-sel-top".to_owned()));
+    assert!(faces("row:4:0:0:2", "testing").contains(&"drgnx-card-sel-mid".to_owned()));
+    assert!(faces("row:4:0:0:4", "shares").contains(&"drgnx-card-sel-bottom".to_owned()));
+    assert!(faces("row:4:0:0:0", "Sonnet").contains(&"drgnx-card-top".to_owned()));
+    assert!(faces("row:3:0:0:0", "deferred").contains(&"drgnx-card-single".to_owned()));
+}
+
+/// [D] The strip carries the forecast and cost chips before the machines' (work-space-dark.html: "wk 41 % ▲ Thu",
+/// "$31 / $40", "desk 3/16"), all at the right edge.
+#[test]
+fn the_strip_has_the_forecast_and_cost_chips_before_the_machines() {
+    let (items, edges, layout) = frame();
+    let new = BTreeSet::new();
+    let pal = palette();
+    let s = scene(&items, &edges, &layout, &new);
+    let machines: Vec<Item> = items
+        .values()
+        .filter(|i| i.id.0.starts_with("machine:"))
+        .cloned()
+        .collect();
+    let extra = vec!["wk 41 % ▲ Thu".to_owned(), "$31 / $40".to_owned()];
+    let row = render::strip(&s, &[], &machines, &extra, &gui(&pal), &Cols);
+    let wk = row.text.find("wk 41 % ▲ Thu").expect("the forecast chip");
+    let cost = row.text.find("$31 / $40").expect("the cost chip");
+    let desk = row.text.find("desktop 3/16").expect("a machine");
+    assert!(wk < cost && cost < desk, "{:?}", row.text);
 }

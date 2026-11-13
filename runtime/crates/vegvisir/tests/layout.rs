@@ -1,7 +1,8 @@
 //! The layout's properties over generated workspaces (proptest; pure, [D]) and its golden layouts.
 //!
 //! Goldens live in `tests/golden/`. `UPDATE_VEGVISIR_GOLDEN=1 cargo test -p vegvisir --test layout golden` rewrites
-//! them, and refuses a golden whose crossing count is above the one it replaces.
+//! them, and refuses a golden whose crossing count is above the one it replaces (`UPDATE_VEGVISIR_GOLDEN=metrics` does not:
+//! a layout metric moved on purpose).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -566,8 +567,10 @@ fn golden(name: &str, events: Vec<Event>, width: u32) {
     let old: Option<Layout> = std::fs::read_to_string(&path)
         .ok()
         .map(|t| serde_json::from_str(&t).expect("a golden layout"));
-    if std::env::var_os("UPDATE_VEGVISIR_GOLDEN").is_some() {
-        if let Some(old) = &old {
+    let update = std::env::var("UPDATE_VEGVISIR_GOLDEN").ok();
+    if update.is_some() {
+        // `metrics`: a layout metric (a card or chip width) moved on purpose, so the crossing count may rise
+        if let (Some(old), false) = (&old, update.as_deref() == Some("metrics")) {
             assert!(
                 l.crossings <= old.crossings,
                 "{name}: {} crossings, above the golden's {}; not rewritten",
@@ -800,4 +803,33 @@ fn live_arrivals_and_departures_move_nothing() {
         prev.rows[..],
         "the rows above stay"
     );
+}
+
+/// [D] A chip is as wide as the mockup's (work-space-dark.html): an ask holds “fix deferred testing rows”, a plan its
+/// title and its "3/6", a file its name and its counts, so none is cut at the comfortable density.
+#[test]
+fn chips_are_as_wide_as_the_mockups() {
+    let m = model_of(fixture::scene());
+    let l = layout(&m, &view(226), None);
+    let width = |kind: vegvisir::Kind| {
+        l.at.iter()
+            .filter(|(id, _)| id.kind() == Some(kind))
+            .map(|(_, r)| r.w)
+            .min()
+            .unwrap_or_else(|| panic!("a {kind:?} placed"))
+    };
+    for (kind, want) in [
+        (vegvisir::Kind::Ask, 56),
+        (vegvisir::Kind::Spec, 40),
+        (vegvisir::Kind::Plan, 52),
+        (vegvisir::Kind::Branch, 42),
+        (vegvisir::Kind::File, 50),
+        (vegvisir::Kind::Machine, 36),
+    ] {
+        assert!(
+            width(kind) >= want,
+            "{kind:?}: {} units, want {want}",
+            width(kind)
+        );
+    }
 }

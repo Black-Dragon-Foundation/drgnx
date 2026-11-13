@@ -493,7 +493,7 @@ fn every_order_deltas_then_resync_converge() {
         .map(|n| {
             let core = core_with(n);
             let v = rows_view(core.model(), 226);
-            view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new())
+            view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new(), &[])
         })
         .collect();
     assert!(
@@ -876,7 +876,7 @@ fn the_strip_and_the_needs_you_list_line_up() {
         }));
     }
     let v = rows_view(core.model(), 226);
-    let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new());
+    let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new(), &[]);
     let at = |chip: &str| {
         rows[0]
             .text
@@ -912,7 +912,7 @@ fn open_huddle_is_on_the_strip_and_the_needs_you_list() {
         true,
     )));
     let v = rows_view(core.model(), 226);
-    let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new());
+    let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new(), &[]);
     assert!(
         rows[0].text.contains("huddle: both edit a.rs"),
         "{}",
@@ -931,7 +931,7 @@ fn open_huddle_is_on_the_strip_and_the_needs_you_list() {
         false,
     )));
     let v = rows_view(core.model(), 226);
-    let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new());
+    let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new(), &[]);
     assert!(!rows[0].text.contains("huddle:"), "{}", rows[0].text);
 }
 
@@ -943,7 +943,7 @@ fn outline_follows_the_users_choice() {
     let mut v = rows_view(core.model(), 226);
     assert!(v.layout.as_ref().expect("laid out").fits);
     let outlined = |v: &View| {
-        view_rows(core.model(), v, &env(), &Cols, 0, &BTreeSet::new())
+        view_rows(core.model(), v, &env(), &Cols, 0, &BTreeSet::new(), &[])
             .0
             .iter()
             .any(|r| r.key.starts_with("outline:"))
@@ -956,10 +956,18 @@ fn outline_follows_the_users_choice() {
     assert!(!narrow.layout.as_ref().expect("laid out").fits);
     narrow.outline = render::Outline::Off;
     assert!(
-        !view_rows(thirty.model(), &narrow, &env(), &Cols, 0, &BTreeSet::new())
-            .0
-            .iter()
-            .any(|r| r.key.starts_with("outline:")),
+        !view_rows(
+            thirty.model(),
+            &narrow,
+            &env(),
+            &Cols,
+            0,
+            &BTreeSet::new(),
+            &[]
+        )
+        .0
+        .iter()
+        .any(|r| r.key.starts_with("outline:")),
         "off: the cards"
     );
     assert_eq!(outline_of("on"), Some(render::Outline::On));
@@ -1216,4 +1224,20 @@ fn detail_rows_are_the_mockups_tile() {
     for r in &rows {
         assert!(faces_of(r).contains(&"drgnx-work-card"), "{r:?}");
     }
+}
+
+/// [D] The map's text is the UI font (`drgnx-work-card`): the card line's height and its fit are those of the
+/// editor's `text` role (the UI text face), not of `ui` (the buffer's default, the code font) that the rows used to be
+/// drawn in.
+#[test]
+fn the_card_line_is_measured_in_the_text_role() {
+    let env: ViewEnv = serde_json::from_value(json!({
+        "view": "m", "class": "gui-1", "epoch": 1, "display": "gui", "scale": 1.0, "cell": [8, 16],
+        "width_px": 1000,
+        "fonts": [["ui", null, 0, 13.0, 11.0, 3.0, 8.0, 6.0],
+                  ["text", null, 0, 12.0, 12.0, 4.0, 6.5, 3.0]]
+    }))
+    .expect("an env");
+    let palette = Palette(Vec::new());
+    assert_eq!(render_env(&env, &palette).line, (16, 75));
 }

@@ -243,8 +243,68 @@ fn timestamps_use_the_env_time_zone() {
     let s = vec![step(1, 1_794_043_800.0)];
     let utc = trail::trail_rows(&s, &[], &env(&p), Zone::parse("+0000"));
     let ist = trail::trail_rows(&s, &[], &env(&p), Zone::parse("+0530"));
-    assert!(utc[0].text.contains("09:30:00 2.0s"), "{}", utc[0].text);
-    assert!(ist[0].text.contains("15:00:00 2.0s"), "{}", ist[0].text);
+    assert!(utc[0].text.contains("09:30:00 · 2.0s"), "{}", utc[0].text);
+    assert!(ist[0].text.contains("15:00:00 · 2.0s"), "{}", ist[0].text);
     assert_eq!(Zone::parse("-0800").time(1_794_043_800.0), "01:30:00");
     assert_eq!(Zone::parse("IST"), Zone(0), "a name is no offset");
+}
+
+/// [D] The trail is the mockup's tile (work-space-dark.html): rows in the UI font, each step's kind a Lucide icon in an
+/// image of its own, its time and duration muted in the code font, and a conclusion's card in the accent ring (the
+/// selected card's faces) with a lightbulb.
+#[test]
+fn trail_rows_are_ui_text_with_lucide_icons_and_a_finding_card() {
+    let p = Palette(vec![("chip-fg".into(), "#a2a5b2".into())]);
+    let steps = vec![step(1, 1000.0)];
+    let (rows, images) =
+        trail::trail_rows_with_images(&steps, &[conclusion(1, 1, &[1])], &env(&p), Zone(0));
+    fn faces(r: &Row) -> Vec<&str> {
+        r.runs.iter().map(|x| x.2.as_str()).collect()
+    }
+    let s = rows.iter().find(|r| r.key == "step:1").expect("the step");
+    assert_eq!(s.images.len(), 1, "{s:?}");
+    assert!(faces(s).contains(&"drgnx-work-card"), "{s:?}");
+    assert!(faces(s).contains(&"drgnx-work-meta"), "{s:?}");
+    let svg_of = |r: &Row| {
+        images
+            .iter()
+            .find(|(id, _)| *id == r.images[0].1)
+            .map(|(_, s)| s.clone())
+            .expect("its image")
+    };
+    assert!(svg_of(s).contains("stroke=\"#a2a5b2\""), "{}", svg_of(s));
+    let top = rows.iter().find(|r| r.key == "conc:1:0").expect("the card");
+    let bottom = rows.iter().find(|r| r.key == "conc:1:1").expect("the card");
+    assert!(faces(top).contains(&"drgnx-card-sel-top"), "{top:?}");
+    assert!(
+        faces(bottom).contains(&"drgnx-card-sel-bottom"),
+        "{bottom:?}"
+    );
+    assert_eq!(top.images.len(), 1, "{top:?}");
+    assert!(top.text.contains("Finding"), "{:?}", top.text);
+}
+
+/// [D] A conclusion's card runs to the tile's right edge (a stop with the card's face at its end), as the mockup's
+/// Finding card does, not just as far as its text.
+#[test]
+fn a_conclusion_card_runs_to_the_right_edge() {
+    let p = Palette::default();
+    let steps = vec![step(1, 1000.0)];
+    let rows = trail::trail_rows(&steps, &[conclusion(1, 1, &[1])], &env(&p), Zone(0));
+    for key in ["conc:1:0", "conc:1:1"] {
+        let r = rows.iter().find(|r| r.key == key).expect(key);
+        let (pos, px) = *r.stops.last().expect("a stop at the card's right edge");
+        assert_eq!(
+            usize::try_from(pos).unwrap() + 1,
+            r.text.chars().count(),
+            "{r:?}"
+        );
+        assert!(px >= 900, "{px}");
+        assert!(
+            r.runs
+                .iter()
+                .any(|(s, e, f)| *s == 0 && *e > pos && f.starts_with("drgnx-card-sel-")),
+            "{r:?}"
+        );
+    }
 }

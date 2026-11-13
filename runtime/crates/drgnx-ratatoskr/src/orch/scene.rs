@@ -293,6 +293,89 @@ pub(crate) fn map_events() -> Vec<vegvisir::Event> {
     vegvisir::fixture::scene()
 }
 
+/// The mockup's trail of its first agent (`a1`): the steps and the one finding (work-space-dark.html), at a day's
+/// 10:05:12 to 10:06:10 UTC; the last step (a job) is open.
+pub(crate) fn map_trail() -> (Vec<vegvisir::trail::Step>, Vec<vegvisir::trail::Conclusion>) {
+    use vegvisir::trail::{Conclusion, Detail, Step};
+    const DAY: f64 = 1_728_000_000.0;
+    let at = |h: f64, m: f64, s: f64| DAY + h * 3600.0 + m * 60.0 + s;
+    let step = |id: i64, class: &str, detail: Detail, start: f64, took: Option<f64>| Step {
+        id,
+        seq: id as u64,
+        class: class.into(),
+        tool: None,
+        detail,
+        start,
+        end: took.map(|t| start + t),
+    };
+    let kind = |k: &str| Detail {
+        kind: Some(k.into()),
+        ..Detail::default()
+    };
+    let steps = vec![
+        step(
+            1,
+            "tool",
+            Detail {
+                query: Some("search “session_end” in runtime/".into()),
+                ..kind("search")
+            },
+            at(10.0, 5.0, 12.0),
+            Some(0.3),
+        ),
+        step(
+            2,
+            "tool",
+            Detail {
+                path: Some("ratatoskr/src/session.rs".into()),
+                line_start: Some(120),
+                line_end: Some(184),
+                ..kind("read")
+            },
+            at(10.0, 5.0, 13.0),
+            Some(0.1),
+        ),
+        step(
+            3,
+            "tool",
+            Detail {
+                url: Some("https://agentclientprotocol.com/protocol".into()),
+                title: Some("ACP spec · session/cancel".into()),
+                ..kind("fetch")
+            },
+            at(10.0, 5.0, 20.0),
+            Some(1.8),
+        ),
+        step(
+            4,
+            "think",
+            Detail::default(),
+            at(10.0, 5.0, 31.0),
+            Some(6.0),
+        ),
+        step(
+            5,
+            "tool",
+            Detail {
+                path: Some("session.rs".into()),
+                ..kind("edit")
+            },
+            at(10.0, 6.0, 2.0),
+            Some(2.0),
+        ),
+        step(6, "job-wait", Detail::default(), at(10.0, 6.0, 10.0), None),
+    ];
+    let finding = Conclusion {
+        n: 1,
+        kind: "finding".into(),
+        text: "turn_core drops the started flag on a session end".into(),
+        step: Some(4),
+        rests_on: vec![1, 2, 4],
+        unmatched: Vec::new(),
+    };
+    (steps, vec![finding])
+}
+
 /// Write the run into FRONT's store and its merge queue.  Each write is the hub's (class system), as the gates' are.
 pub async fn seed(front: &Front, map: bool) -> Result<(), String> {
     let r = run();
@@ -408,6 +491,14 @@ pub async fn seed(front: &Front, map: bool) -> Result<(), String> {
     }
     if map {
         front.core.map.scene_graph(map_events());
+        {
+            let (steps, concs) = map_trail();
+            front.core.trails.scene("a1", steps, concs);
+        }
+        front
+            .core
+            .map
+            .scene_strip(vec!["wk 41 % ▲ Thu".into(), "$31 / $40".into()]);
     } else {
         front.core.map.scene(sessions());
     }
@@ -457,6 +548,23 @@ mod tests {
     }
 
     /// [D] Once seeded, the run is held from the runner: it runs (the status bar's job) and no agent starts for it.
+    /// [D] The map scene's trail is the mockup's: six steps of the kinds it shows, the last (a job) still open, and one
+    /// finding stamped on the thought, resting on three steps.
+    #[test]
+    fn the_map_scenes_trail_is_the_mockups() {
+        use vegvisir::trail::{self, Zone};
+        let (steps, concs) = map_trail();
+        let kinds: Vec<&str> = steps.iter().map(trail::kind).collect();
+        assert_eq!(kinds, ["search", "read", "web", "thought", "edit", "job"]);
+        assert!(steps[5].end.is_none() && steps[..5].iter().all(|s| s.end.is_some()));
+        assert_eq!(Zone(0).time(steps[0].start), "10:05:12");
+        assert_eq!(
+            (concs.len(), concs[0].rests_on.len(), concs[0].step),
+            (1, 3, Some(4))
+        );
+        assert_eq!(trail::title(&steps[1]), "ratatoskr/src/session.rs:120–184");
+    }
+
     #[test]
     fn the_runner_leaves_the_seeded_run_alone() {
         hold();

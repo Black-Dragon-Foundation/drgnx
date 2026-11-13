@@ -55,6 +55,10 @@ enum Data {
     Flow(Box<flow::Flow>, flow::Part),
 }
 
+/// A session's steps and conclusions (a test hub's scene seeds them).
+#[cfg(feature = "test-hooks")]
+type SceneTrail = (Vec<trail::Step>, Vec<trail::Conclusion>);
+
 /// The trail and Timeline views of every connection, keyed (connection, view).
 #[derive(Default)]
 pub struct Trails {
@@ -62,6 +66,10 @@ pub struct Trails {
     /// What each view was last built from.
     data: Mutex<BTreeMap<(u64, String), Arc<Data>>>,
     front: OnceLock<Weak<Front>>,
+    /// The steps and conclusions a test hub's scene gives a session (`orch::scene`), by session id: its trail shows
+    /// them in place of the timeline's.
+    #[cfg(feature = "test-hooks")]
+    scene: Mutex<BTreeMap<String, SceneTrail>>,
     /// One refresh at a time, so a view's patches go out in the order its data was read.
     busy: tokio::sync::Mutex<()>,
 }
@@ -71,6 +79,12 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl Trails {
+    /// Session SID's trail in a test hub's scene: STEPS and CONCS.
+    #[cfg(feature = "test-hooks")]
+    pub fn scene(&self, sid: &str, steps: Vec<trail::Step>, concs: Vec<trail::Conclusion>) {
+        lock(&self.scene).insert(sid.to_owned(), (steps, concs));
+    }
+
     /// Connection CONN is gone: its views with it.
     pub fn gone(&self, conn: u64) {
         lock(&self.views).retain(|k, _| k.0 != conn);
@@ -133,9 +147,18 @@ impl Trails {
         };
         let data = match sub {
             Sub::Trail(sid) => {
-                let from = f.core.views.window_from(key.0, &key.1, "steps");
-                let (steps, total) = trail_steps(f, &sid, from).await;
-                Data::Trail(steps, conclusions(f, &sid).await, total)
+                #[cfg(feature = "test-hooks")]
+                let seeded = lock(&self.scene).get(&sid).cloned();
+                #[cfg(not(feature = "test-hooks"))]
+                let seeded: Option<(Vec<trail::Step>, Vec<trail::Conclusion>)> = None;
+                if let Some((steps, concs)) = seeded {
+                    let total = steps.len();
+                    Data::Trail(steps, concs, total)
+                } else {
+                    let from = f.core.views.window_from(key.0, &key.1, "steps");
+                    let (steps, total) = trail_steps(f, &sid, from).await;
+                    Data::Trail(steps, conclusions(f, &sid).await, total)
+                }
             }
             Sub::Timeline(lanes) => {
                 let mut out = Vec::with_capacity(lanes.len());
@@ -198,7 +221,7 @@ fn rows(
     let zone = Zone::parse(&env.tz);
     let only = |rows| (rows, Vec::new());
     match data {
-        Data::Trail(steps, concs, _) => only(trail::trail_rows(steps, concs, &renv, zone)),
+        Data::Trail(steps, concs, _) => trail::trail_rows_with_images(steps, concs, &renv, zone),
         Data::Timeline(lanes) => only(trail::timeline_rows(lanes, &renv, fonts, zone)),
         Data::Board(cards) => only(board::board_rows(cards, env)),
         Data::Flow(flow, flow::Part::Lens) => flow::flow_rows(flow, env, fonts),

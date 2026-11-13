@@ -2,7 +2,8 @@
 //! editor's former navigation on the 30-agent fixture and on small scenarios.
 //!
 //! The golden (`tests/golden/nav-thirty-1600.json`) was recorded from the editor's former Lisp navigation (removed
-//! when the hub took the map's drawing) over the frame in `tests/golden/nav-thirty-1600-frame.json`, which
+//! when the hub took the map's drawing; `UPDATE_VEGVISIR_GOLDEN=1` writes it again from this crate when a layout metric
+//! moves) over the frame in `tests/golden/nav-thirty-1600-frame.json`, which
 //! `UPDATE_VEGVISIR_GOLDEN=1 cargo test -p vegvisir --test nav` writes from this crate's layout of the fixture.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -70,6 +71,25 @@ fn links_match_the_frozen_lisp_on_the_30_agent_fixture() {
     let frame_path = golden_path("nav-thirty-1600-frame");
     if std::env::var_os("UPDATE_VEGVISIR_GOLDEN").is_some() {
         std::fs::write(&frame_path, &frame).expect("the frame is written");
+        // the editor's navigation this was recorded from is gone: its links, as the layout of this crate gives them,
+        // are rewritten with the frame (a layout metric moved)
+        let name = |i: &Option<ItemId>| i.as_ref().map(|i| i.0.clone());
+        let links: serde_json::Map<String, Value> = nav::links(&m, &l, &ids)
+            .iter()
+            .map(|(k, v)| {
+                let link = json!({"up": name(&v.up), "down": name(&v.down), "left": name(&v.left),
+                                  "right": name(&v.right), "then": name(&v.then)});
+                (k.0.clone(), link)
+            })
+            .collect();
+        let ids_of = |v: Vec<ItemId>| v.into_iter().map(|i| i.0).collect::<Vec<_>>();
+        let golden = json!({"links": links, "outline": ids_of(nav::outline(&m, &ids)),
+                            "team": ids_of(nav::team(&m, &ids)), "needs-you": ids_of(nav::needs_you(&m, &ids))});
+        std::fs::write(
+            golden_path("nav-thirty-1600"),
+            serde_json::to_string_pretty(&golden).expect("a golden") + "\n",
+        )
+        .expect("the links are written");
     }
     // compared as JSON, not as text: serde_json keeps a map's insertion order when another crate of the build turns on
     // `preserve_order` (a workspace test run does, `-p vegvisir` alone does not), and that is the same frame

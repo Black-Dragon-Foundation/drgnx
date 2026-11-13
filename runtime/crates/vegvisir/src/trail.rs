@@ -94,6 +94,45 @@ pub fn kind(s: &Step) -> &'static str {
     }
 }
 
+/// The Lucide icon of a kind of step or conclusion, when it has one.
+fn icon_name(kind: &str) -> Option<&'static str> {
+    Some(match kind {
+        "read" => "file-text",
+        "search" => "search",
+        "web" => "globe",
+        "thought" => "brain",
+        "decision" => "flag",
+        "finding" => "lightbulb",
+        "edit" => "pencil",
+        "job" => "layers",
+        "waiting" => "clock",
+        "resumed" => "play",
+        _ => return None,
+    })
+}
+
+/// KIND's icon at the row's start: an image (its glyph on a terminal), registered in IMAGES; its glyph as text when it
+/// has no Lucide icon.
+fn put_icon(
+    b: &mut RowBuilder,
+    env: &Env,
+    kind: &str,
+    images: &mut std::collections::BTreeMap<drgnx_rows::ImageId, String>,
+) {
+    let px = (16.0 * env.scale.max(1.0)).round() as u32;
+    let svg = icon_name(kind).and_then(|n| crate::icons::svg(n, env.palette.colour("chip-fg"), px));
+    match svg {
+        Some(svg) => {
+            let id = drgnx_rows::ImageId::of(svg.as_bytes(), env.epoch);
+            images.entry(id).or_insert(svg);
+            b.image(id, icon(kind));
+        }
+        None => {
+            b.push(icon(kind), Some("drgnx-work-label"));
+        }
+    }
+}
+
 fn icon(kind: &str) -> &'static str {
     match kind {
         "read" => "▤",
@@ -167,6 +206,19 @@ fn duration(s: &Step) -> Option<String> {
 /// conclusion resting on it, and its time and duration 14 columns from the right edge. A pause that ended is followed
 /// by a note row `resumed` at the time it ended.
 pub fn trail_rows(steps: &[Step], concs: &[Conclusion], env: &Env, zone: Zone) -> Vec<Row> {
+    build(steps, concs, env, zone).0
+}
+
+fn build(
+    steps: &[Step],
+    concs: &[Conclusion],
+    env: &Env,
+    zone: Zone,
+) -> (
+    Vec<Row>,
+    std::collections::BTreeMap<drgnx_rows::ImageId, String>,
+) {
+    let mut images = std::collections::BTreeMap::new();
     let mut steps: Vec<&Step> = steps.iter().collect();
     steps.sort_by_key(|s| (s.seq, s.id));
     let mut concs: Vec<&Conclusion> = concs.iter().collect();
@@ -176,16 +228,19 @@ pub fn trail_rows(steps: &[Step], concs: &[Conclusion], env: &Env, zone: Zone) -
     for s in &steps {
         let mut b = RowBuilder::new(format!("step:{}", s.id));
         let k = kind(s);
-        b.push(icon(k), Some("drgnx-work-label"))
-            .push(&format!(" {}", title(s)), None);
+        put_icon(&mut b, env, k, &mut images);
+        b.push(&format!(" {}", title(s)), None);
         for c in concs.iter().filter(|c| c.rests_on.contains(&s.id)) {
             b.push(&format!(" [{}]", c.n), Some("drgnx-work-chip"));
         }
+        let from = b.pos();
         b.stop(right).push(&zone.time(s.start), None);
         if let Some(d) = duration(s) {
-            b.push(&format!(" {d}"), None);
+            b.push(&format!(" · {d}"), None);
         }
         let end = b.pos();
+        b.face(from, end, "drgnx-work-meta")
+            .face(0, end, "drgnx-work-card");
         b.prop(0, end, "drgnx-work-step", Value::from(s.id)).prop(
             0,
             end,
@@ -194,15 +249,17 @@ pub fn trail_rows(steps: &[Step], concs: &[Conclusion], env: &Env, zone: Zone) -
         );
         out.push(b.finish());
         for c in concs.iter().filter(|c| c.step == Some(s.id)) {
-            out.extend(conclusion_rows(c));
+            out.extend(conclusion_rows(c, env, &mut images));
         }
         // a pause that ended: the agent was resumed then (a note, no node)
         if let (true, Some(end)) = (s.class == "paused", s.end) {
             let mut b = RowBuilder::new(format!("resumed:{}", s.id));
-            b.push(icon("resumed"), Some("drgnx-work-label"))
-                .push(" resumed", None)
+            put_icon(&mut b, env, "resumed", &mut images);
+            b.push(" resumed", None)
                 .stop(right)
                 .push(&zone.time(end), None);
+            let to = b.pos();
+            b.face(0, to, "drgnx-work-card");
             out.push(b.finish());
         }
     }
@@ -210,13 +267,17 @@ pub fn trail_rows(steps: &[Step], concs: &[Conclusion], env: &Env, zone: Zone) -
         .iter()
         .filter(|c| !c.step.is_some_and(|id| steps.iter().any(|s| s.id == id)))
     {
-        out.extend(conclusion_rows(c));
+        out.extend(conclusion_rows(c, env, &mut images));
     }
-    out
+    (out, images)
 }
 
 /// A conclusion's card: its number and text, then what it rests on and its named sources no step matched.
-fn conclusion_rows(c: &Conclusion) -> Vec<Row> {
+fn conclusion_rows(
+    c: &Conclusion,
+    env: &Env,
+    images: &mut std::collections::BTreeMap<drgnx_rows::ImageId, String>,
+) -> Vec<Row> {
     let n = c.rests_on.len();
     let based = match n {
         0 => "no steps".to_owned(),
@@ -231,26 +292,40 @@ fn conclusion_rows(c: &Conclusion) -> Vec<Row> {
             c.unmatched.join(", ")
         )
     };
-    let lines = [
-        format!("{} {}  {}", icon(&c.kind), c.n, c.text),
-        format!("   based on {based}{unmatched}"),
-    ];
-    lines
-        .iter()
-        .enumerate()
-        .map(|(i, l)| {
+    // the card is the accent ring (the selected card's faces): its name and text in the heading face, its number in a
+    // chip, what it rests on muted
+    let name = if c.kind == "decision" {
+        "Decision"
+    } else {
+        "Finding"
+    };
+    (0..2)
+        .map(|i| {
             let mut b = RowBuilder::new(format!("conc:{}:{i}", c.n));
-            b.push(l, None);
+            if i == 0 {
+                put_icon(&mut b, env, &c.kind, images);
+                b.push(&format!(" {name} "), Some("drgnx-work-title"))
+                    .push(&format!(" {} ", c.n), Some("drgnx-work-chip"))
+                    .push(&format!(" {}", c.text), Some("drgnx-work-title"));
+            } else {
+                b.push(
+                    &format!("   based on {based}{unmatched}"),
+                    Some("drgnx-text-muted"),
+                );
+            }
+            // the card runs to the tile's right edge: a stop, in the card's face
+            b.stop(env.width_px.saturating_sub((8.0 * env.scale) as u32));
             let end = b.pos();
             b.face(
                 0,
                 end,
                 if i == 0 {
-                    "drgnx-card-top"
+                    "drgnx-card-sel-top"
                 } else {
-                    "drgnx-card-bottom"
+                    "drgnx-card-sel-bottom"
                 },
             )
+            .face(0, end, "drgnx-work-card")
             .prop(0, end, "drgnx-work-conclusion", Value::from(c.n))
             .prop(
                 0,
@@ -356,4 +431,15 @@ pub fn timeline_rows(lanes: &[Lane], env: &Env, m: &dyn Measure, zone: Zone) -> 
         out.push(b.finish());
     }
     out
+}
+
+/// [`trail_rows`] and the images they name (the Lucide icons of the steps and the conclusions).
+pub fn trail_rows_with_images(
+    steps: &[Step],
+    concs: &[Conclusion],
+    env: &Env,
+    zone: Zone,
+) -> (Vec<Row>, Vec<(drgnx_rows::ImageId, String)>) {
+    let (rows, images) = build(steps, concs, env, zone);
+    (rows, images.into_iter().collect())
 }
