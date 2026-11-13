@@ -19,6 +19,7 @@ use crate::files::Lang;
 pub use definers::{Definer, definer};
 pub use elisp::top_level_forms;
 pub use refs::Ref;
+pub use registry::{MissingHook, hub_grammars, on_missing};
 
 /// The chunk budget, in non-whitespace characters (the eval tunes it).
 pub const BUDGET: usize = 1800;

@@ -280,3 +280,11 @@ search off for that project with `:off t`. A project's `.drgnx/` files can only 
 configured, never add a provider of their own ([ai.md](ai.md)). The vectors and the chunks' text stay in the local
 index. An address written as `localhost` is used as `127.0.0.1` for the local servers; Ollama needs the model named in
 the `embed` role (`(ollama . "qwen3-embedding:0.6b")`).
+
+## Language grammars
+
+The index reads code through the language packs' grammars (Rust, C, shell, Python, JavaScript, TypeScript, TSX, Go and
+Java; Emacs Lisp, Org and Markdown need none). `install.sh` and `drgnx update` build them with `drgnx packs migrate`,
+which takes a few minutes and a C compiler. **Until that job has finished, those files are indexed as plain text**: no
+symbols, no references, no structural search or inline values for them. `ratatoskr doctor` says `pack X not built` for a
+pack whose library is missing; running `drgnx packs migrate` fixes it, with no restart.

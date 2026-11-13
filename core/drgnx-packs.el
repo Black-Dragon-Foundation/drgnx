@@ -337,9 +337,14 @@ everything as it was.  Returns (:ok t :packs NAMES :built LANGS :generation N)."
 
 (defun drgnx-packs--legacy-dir () (expand-file-name "tree-sitter/" (drgnx-data-dir)))
 
+(defvar drgnx-packs-hub-defaults '("rust" "c" "shell" "python" "javascript" "typescript" "tsx" "go" "java")
+  "The packs the hub parses code with (Hrafn's chunker, structural search, inline values): installed by default.  Until
+their grammars are built, those files read as text.")
+
 (defun drgnx-packs-migrate ()
-  "The build before packs left grammars in `<data>/tree-sitter/': install the built-in packs that own them (as
-`:wanted default'), and drop that folder once every language it holds has a build of its own.  Nothing is lost when
+  "The default packs (`drgnx-packs-hub-defaults') and the build before packs: install the built-in packs that are not
+in the lock yet (as `:wanted default'), those the hub parses with and those that own a grammar the old build left in
+`<data>/tree-sitter/', and drop that folder once every language it holds has a build of its own.  Nothing is lost when
 the build fails (no compiler, offline): the folder stays on the load path after the packs'.  Returns the names asked."
   (let* ((dir (drgnx-packs--legacy-dir))
          (langs (and (file-directory-p dir)
@@ -350,7 +355,8 @@ the build fails (no compiler, offline): the folder stays on the load path after 
                                                                     (drgnx-packs--owned-grammars (cdr p))))
                                               (drgnx-packs-builtins)))))
          (names (seq-filter (lambda (n) (not (assq (intern n) (drgnx-packs-locked))))
-                            (delete-dups (delq nil (mapcar owner langs))))))
+                            (delete-dups (append (delq nil (mapcar owner langs))
+                                                 (seq-filter #'drgnx-packs-manifest drgnx-packs-hub-defaults))))))
     (when names (drgnx-packs-sync :add names :mark 'default))
     (when (and langs (seq-every-p (lambda (l) (let ((g (cdr (assq l (drgnx-packs-locked-grammars)))))
                                                 (and g (drgnx-packs--built-p l (plist-get g :commit)))))

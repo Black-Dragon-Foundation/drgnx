@@ -135,6 +135,7 @@ pub fn report(env: &Env, binary: &Path, running: Option<Running>, sandbox: &Chec
         "job_agents": JOB_AGENTS,
         "sandbox": sandbox_section(sandbox),
         "legacy": crate::legacy::section(env),
+        "packs": packs_section(),
     });
     if let Some(r) = running {
         v["running"] = json!({"pid": r.pid, "commit": r.commit});
@@ -695,6 +696,38 @@ pub fn doctor(env: &Env, json_out: bool) -> i32 {
     0
 }
 
+/// The packs whose grammar the hub parses with and whether each library is built and loads: `[{pack, built, why?}]`.
+/// A pack that is not built reads as text until `drgnx packs sync` has built it.
+fn packs_section() -> Value {
+    Value::Array(
+        hrafn::chunk::hub_grammars()
+            .into_iter()
+            .map(|(pack, grammar)| match skald::registry::language(grammar) {
+                Ok(_) => json!({"pack": pack, "built": true}),
+                Err(e) => json!({"pack": pack, "built": false, "why": e.reason}),
+            })
+            .collect(),
+    )
+}
+
+/// One line per pack that is not built: `pack X not built (why)`.
+fn pack_lines(packs: &Value) -> String {
+    let mut out = String::new();
+    for p in packs
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|p| p["built"] == false)
+    {
+        out.push_str(&format!(
+            "\npack {} not built ({}): its files read as text",
+            p["pack"].as_str().unwrap_or("?"),
+            p["why"].as_str().unwrap_or("?")
+        ));
+    }
+    out
+}
+
 /// The lines `doctor` prints without `--json`.
 fn text(v: &Value, sandbox: &Check) -> String {
     let t = |p: &Value| p.as_str().unwrap_or("?").to_string();
@@ -735,6 +768,7 @@ fn text(v: &Value, sandbox: &Check) -> String {
     ));
     out.push_str(&watch_lines(&v["watch"]));
     out.push_str(&legacy_lines(&v["legacy"]));
+    out.push_str(&pack_lines(&v["packs"]));
     out
 }
 

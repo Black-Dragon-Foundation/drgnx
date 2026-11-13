@@ -14,6 +14,20 @@ fn code(c: i32) -> ExitCode {
     ExitCode::from(u8::try_from(c).unwrap_or(1))
 }
 
+/// The pack-built grammars the lock names, for everything that parses code. A grammar that is not built reads as
+/// text; the first miss of each pack is logged. `DRGNX_PACK_LOCK` (a test run's libraries) is left as it is.
+fn install_grammars(env: &Env) {
+    if std::env::var_os("DRGNX_PACK_LOCK").is_none() {
+        let _ = skald::registry::install_from(
+            &runstav::paths::config_dir(env).join("drgnx.lock.eld"),
+            &runstav::paths::data_dir(env).join("grammars"),
+        );
+    }
+    hrafn::chunk::on_missing(|pack, why| {
+        tracing::warn!("pack {pack} not built ({why}): its files read as text");
+    });
+}
+
 fn main() -> ExitCode {
     // the per-step wrapper of a traced shell step: before anything else, with no runtime and no thread
     let argv0 = std::env::args_os().next().unwrap_or_default();
@@ -29,6 +43,7 @@ fn main() -> ExitCode {
             return ExitCode::from(Exit::Usage as u8);
         }
     };
+    install_grammars(&Env::process());
     match command {
         Command::Version { json: true } => println!("{}", version::json()),
         Command::Version { json: false } => println!("{}", version::text()),

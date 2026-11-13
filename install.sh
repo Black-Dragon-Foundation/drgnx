@@ -819,6 +819,7 @@ plan_ratatoskr() { # the Ratatoskr lines of the plan
   local sudo="sudo " target
   if [[ "$FAMILY" == macos ]]; then sudo=""; fi
   note "build Ratatoskr (the agent runtime, Rust) from source, locked and memory-capped where this system can (a few minutes), and link $PREFIX/bin/ratatoskr and rtsk"
+  note "build the language grammars the code search parses with (drgnx packs migrate; a few minutes, C compiler; until then code files read as text)"
   case "$RUST_HOW" in
     path) note "Rust toolchain: cargo and rustc $RUST_VERSION on PATH" ;;
     distro) note "Rust toolchain: $sudo${RUST_CMD[*]} (the distro's rust $RUST_VERSION)" ;;
@@ -920,6 +921,11 @@ build_ratatoskr() { # the toolchain, then `drgnx runtime build' and `runtime ins
     return 0
   fi
   "$DIR/bin/drgnx" runtime install --prefix "$PREFIX" || warn "could not install Ratatoskr: run drgnx runtime install --prefix $PREFIX"
+  # the grammars the hub parses code with (rust, python, …): built by the pack job, a failure (no compiler, offline)
+  # only leaves those files read as text until `drgnx packs migrate' has run
+  say "Building the language grammars (a few minutes; until they are built, code files read as text; log: $log)…"
+  "$DIR/bin/drgnx" packs migrate >>"$log" 2>&1 ||
+    warn "the language grammars were not built (log: $log): drgnx runs, but code search reads code as text. Fix the cause, then run: drgnx packs migrate"
   # the runner bundle for this machine's architecture (docs/guide/runners.md): what `drgnx runner add` copies to a
   # runner; a failure only means no runners yet
   if [[ "$FAMILY" != macos ]]; then

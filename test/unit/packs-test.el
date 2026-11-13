@@ -217,6 +217,15 @@
 
 ;;;; The build before packs
 
+(ert-deftest drgnx-packs/migrate-installs-the-packs-the-hub-parses-with-once ()
+  ;; the hub reads code through these packs' grammars, so install and update put them in (`drgnx packs migrate'); those
+  ;; that are already in the lock, and names that are no built-in pack, are left alone
+  (drgnx-packs-test--with root
+    (let ((drgnx-packs-hub-defaults '("alpha" "beta" "nosuch")))
+      (should (equal (sort (copy-sequence (drgnx-packs-migrate)) #'string<) '("alpha" "beta")))
+      (should (eq (plist-get (cdr (assq 'beta (drgnx-packs-locked))) :wanted) 'default))
+      (should (null (drgnx-packs-migrate))))))
+
 (ert-deftest drgnx-packs/the-build-before-packs-becomes-packs-and-its-folder-goes ()
   (drgnx-packs-test--with root
     (let ((legacy (drgnx-packs--legacy-dir)))

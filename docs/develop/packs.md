@@ -196,7 +196,8 @@ list); `@wrapper` with `@wrapped` for `export` and decorators; `@doc` with `@doc
 
 The engine was checked against the Rust walkers it replaced on the repository's own files (about 700 Rust files, plus
 the other languages' fixtures) before they were deleted; the byte-for-byte goldens (`chunk_golden.rs`) and the property
-tests (`chunk_langs.rs`) pass unchanged. References stay the grammar crates' tags queries until the packs carry theirs.
+tests (`chunk_langs.rs`) pass unchanged. References come from each pack's `queries/tags.scm` (the grammars' own tags
+queries; C and shell have small ones of ours), keeping the `@reference.*` matches.
 
 ## Inline values, origin trails and debug adapters from packs
 
@@ -209,3 +210,26 @@ What the debugger and the trails knew per language is the pack's:
   installed or fixture pack's through `Table::with_pack`; a launch type another entry already serves stays with the first.
   The doctor and the installer (Lisp) read the same union (`drgnx-packs-adapters`).
 Probe families stay Rust, keyed by the adapter's id (design Q15).
+
+## The hub's grammars: the pack registry
+
+The hub links no grammar crate but `tree-sitter-elisp` (Emacs Lisp has no pack). Every other parse site (the chunker and
+its references, structural search, inline values, origin trails) asks `skald::registry` for a grammar by name. The
+registry reads the lock's `:grammars` (`drgnx.lock.eld` in the config folder), finds each library at
+`<data>/grammars/NAME/COMMIT/libtree-sitter-NAME.so`, checks its hash against the lock's `:lib-sha256` and its ABI
+(at least 14), loads it and never drops it (a `Language`, a cached `Tree` or a `Query` may point into it). One path, no
+fallback to a crate.
+
+A grammar that is not built, does not match the lock or does not load is not an error the hub dies of: its files read as
+text (no symbols, references or highlights), the first miss of each pack is one log line naming it, and `ratatoskr
+doctor` prints `pack X not built (why)`. The registry looks again on the next use, so a grammar built after the hub
+started is found without a restart. `install.sh` and `drgnx update` run `drgnx packs migrate`, which installs the nine
+packs the hub parses with (`drgnx-packs-hub-defaults`: rust, c, shell, python, javascript, typescript, tsx, go, java);
+until that job finishes, code files read as text.
+
+**Tests** parse with the same loader. `test/packs/hub-grammars.sh CACHE` builds those nine packs' grammars with the pack
+job (`ratatoskr packs sync --builtin OUT [PACK...]`) into `CACHE/KEY` (KEY: a hash of their commits, tree hashes and
+sources) and prints `DRGNX_PACK_LOCK` and `DRGNX_PACK_GRAMMARS`; before the hub installs anything, the registry reads
+those two variables. An unchanged set of pins reuses the folder; a pin change builds a new one. Run it in a container
+(it needs network, git and a C compiler); `chunk_golden.rs` and the other Hrafn goldens run on these libraries, so a
+golden that changes points at a pin or ABI mismatch between a pack and its mode's pin, not at the loader.

@@ -1,6 +1,7 @@
 //! Rust, C, shell, Python, JavaScript, TypeScript, TSX, Go and Java: top-level items from the tree-sitter grammars,
 //! merged and split like Lisp forms.
 
+use super::engine::Spec;
 use super::merge::{self, Form};
 use super::refs::{self, Ref};
 use super::{Chunk, Nws, Symbol};
@@ -31,20 +32,6 @@ impl Kind {
         Kind::Go,
         Kind::Java,
     ];
-
-    pub(super) fn language(self) -> tree_sitter::Language {
-        match self {
-            Kind::Rust => tree_sitter_rust::LANGUAGE.into(),
-            Kind::C => tree_sitter_c::LANGUAGE.into(),
-            Kind::Shell => tree_sitter_bash::LANGUAGE.into(),
-            Kind::Python => tree_sitter_python::LANGUAGE.into(),
-            Kind::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
-            Kind::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-            Kind::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
-            Kind::Go => tree_sitter_go::LANGUAGE.into(),
-            Kind::Java => tree_sitter_java::LANGUAGE.into(),
-        }
-    }
 }
 
 /// A `/** … */` comment directly above `start` (at most one line break between), as `(first line, whole text)`.
@@ -146,16 +133,14 @@ fn callback_body(n: Node) -> Option<Node> {
 /// that does not begin a line (Go's `statement_list`, a `{` on the header's line), before the forms nested in it.
 fn cuts(
     kind: Kind,
+    spec: &Spec,
     root: Node,
     n: Node,
     text: &str,
     nws: &Nws,
     budget: usize,
 ) -> Vec<(usize, usize)> {
-    let body = match super::registry::spec(kind)
-        .inner(root, n, text)
-        .child_by_field_name("body")
-    {
+    let body = match spec.inner(root, n, text).child_by_field_name("body") {
         Some(b) => Some(b),
         None if matches!(kind, Kind::JavaScript | Kind::TypeScript | Kind::Tsx) => callback_body(n),
         None => None,
@@ -195,8 +180,11 @@ pub(super) fn chunk(
     text: &str,
     budget: usize,
 ) -> Option<(Vec<Chunk>, Vec<Symbol>, Vec<Ref>)> {
+    let spec = super::registry::spec(kind)?;
     let mut parser = tree_sitter::Parser::new();
-    parser.set_language(&kind.language()).ok()?;
+    parser
+        .set_language(&super::registry::language(kind)?)
+        .ok()?;
     let tree = parser.parse(text, None)?;
     let root = tree.root_node();
     let mut cursor = root.walk();
@@ -222,13 +210,13 @@ pub(super) fn chunk(
             .map(|n| (n.start_byte(), n.end_byte()))
             .collect(),
         analyse: &|s, e| match node_at(s) {
-            Some(n) => analyse(kind, root, n, text),
+            Some(n) => analyse(spec, root, n, text),
             None => Form::plain(s, e),
         },
         heading: &|_, _| None,
         cuts: &|f| {
             node_at(f.start)
-                .map(|n| cuts(kind, root, n, text, &nws, budget))
+                .map(|n| cuts(kind, spec, root, n, text, &nws, budget))
                 .unwrap_or_default()
         },
     });
@@ -236,10 +224,10 @@ pub(super) fn chunk(
 }
 
 /// What the engine finds in the top-level node N of the tree rooted at ROOT (the pack's `chunks.scm`).
-fn analyse(kind: Kind, root: Node, n: Node, text: &str) -> Form {
+fn analyse(spec: &Spec, root: Node, n: Node, text: &str) -> Form {
     let mut form = Form::plain(n.start_byte(), n.end_byte());
     form.head = n.kind().to_string();
-    let (defs, doc) = super::registry::spec(kind).analyse(root, n, text);
+    let (defs, doc) = spec.analyse(root, n, text);
     form.defs = defs;
     form.doc = doc;
     form
@@ -248,6 +236,21 @@ fn analyse(kind: Kind, root: Node, n: Node, text: &str) -> Form {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The grammar a kind asks the registry for is the first one its pack owns: the pack is the one place the name lives.
+    #[test]
+    fn a_kinds_grammar_is_its_packs() {
+        for k in Kind::ALL {
+            let m =
+                skald::builtin::get(super::super::registry::pack_name(k)).expect("a built-in pack");
+            let first = m
+                .grammars
+                .iter()
+                .find(|g| g.repo.is_some())
+                .expect("it owns one");
+            assert_eq!(first.name, super::super::registry::grammar_name(k));
+        }
+    }
 
     #[test]
     fn every_pack_queries_compile_against_its_grammar() {

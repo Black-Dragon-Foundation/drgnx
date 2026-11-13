@@ -23,21 +23,29 @@ pub struct Grammar {
 }
 
 impl Grammar {
-    /// LANG's grammar; none for Org, Markdown and text.
+    /// LANG's grammar; none for Org, Markdown and text, and while its pack's library is not built.
     pub fn of(lang: Lang) -> Option<Grammar> {
-        let (ts, expando): (TSLanguage, char) = match lang {
-            Lang::Elisp => (tree_sitter_elisp::LANGUAGE.into(), '$'),
-            Lang::Rust => (tree_sitter_rust::LANGUAGE.into(), 'µ'),
-            Lang::C => (tree_sitter_c::LANGUAGE.into(), 'µ'),
-            Lang::Shell => (tree_sitter_bash::LANGUAGE.into(), 'µ'),
-            Lang::Python => (tree_sitter_python::LANGUAGE.into(), 'µ'),
-            Lang::JavaScript => (tree_sitter_javascript::LANGUAGE.into(), '$'),
-            Lang::TypeScript => (tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(), '$'),
-            Lang::Tsx => (tree_sitter_typescript::LANGUAGE_TSX.into(), '$'),
-            Lang::Go => (tree_sitter_go::LANGUAGE.into(), 'µ'),
-            Lang::Java => (tree_sitter_java::LANGUAGE.into(), '$'),
+        // Emacs Lisp's grammar is the crate's (no pack owns it); every other grammar is its pack's build
+        let (name, expando): (&str, char) = match lang {
+            Lang::Elisp => {
+                return Some(Grammar {
+                    lang,
+                    ts: tree_sitter_elisp::LANGUAGE.into(),
+                    expando: '$',
+                });
+            }
+            Lang::Rust => ("rust", 'µ'),
+            Lang::C => ("c", 'µ'),
+            Lang::Shell => ("bash", 'µ'),
+            Lang::Python => ("python", 'µ'),
+            Lang::JavaScript => ("javascript", '$'),
+            Lang::TypeScript => ("typescript", '$'),
+            Lang::Tsx => ("tsx", '$'),
+            Lang::Go => ("go", 'µ'),
+            Lang::Java => ("java", '$'),
             Lang::Org | Lang::Markdown | Lang::Text => return None,
         };
+        let ts = skald::registry::language(name).ok()?;
         Some(Grammar { lang, ts, expando })
     }
 }
