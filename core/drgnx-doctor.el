@@ -487,8 +487,9 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
             (kill-buffer buf)))
       (error (list :error (error-message-string err))))))
 
-(defun drgnx-doctor-facts ()
-  "Facts about the running Emacs and this machine."
+(defun drgnx-doctor-facts (&optional skip)
+  "Facts about the running Emacs and this machine.  SKIP is a list of fact keys not to gather (only `:terminal',
+which runs `tmux'): for a caller that shows no check reading them, whose rows are then absent."
   (let ((native (and (fboundp 'native-comp-available-p) (native-comp-available-p))))
     (append
      (list :version emacs-version
@@ -526,7 +527,7 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
            :work-plans (drgnx-doctor--work-plans)
            :ai-up (drgnx-doctor--ai-up)
            :search (drgnx-doctor--search)
-           :terminal (drgnx-doctor-terminal-facts)
+           :terminal (unless (memq :terminal skip) (drgnx-doctor-terminal-facts))
            :window-manager (drgnx-platform-doctor-facts)
            ;; whether a key is set, from the environment only: the doctor never opens auth-source (it may prompt)
            :ai-keys (let ((k (getenv "OPENROUTER_API_KEY"))) (and k (not (string-empty-p k)) '(openrouter)))

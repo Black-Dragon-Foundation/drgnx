@@ -1703,8 +1703,8 @@ layout comes back with drgnx open."
 modules on or installed packages here, in the drgnx app (CTX interactive): asked whether to restart drgnx now
 \(the result is recorded first)."
   (require 'drgnx-doctor)
-  (let* ((results (drgnx-doctor-run (drgnx-doctor-facts)))
-         (count (lambda (s) (seq-count (lambda (r) (eq (plist-get r :status) s)) results)))
+  (let* ((results (drgnx-doctor-run (drgnx-doctor-facts '(:terminal))))   ; this step shows no Terminal group
+         (count(lambda (s) (seq-count (lambda (r) (eq (plist-get r :status) s)) results)))
          (fails (seq-filter (lambda (r) (eq (plist-get r :status) 'fail)) results))
          (result (list (if fails 'fail 'ok)
                        (format "doctor: %d ok, %d warnings, %d failed%s — every command and its key: Keyboard Shortcuts (in the palette)%s; docs/guide/onboarding.md"

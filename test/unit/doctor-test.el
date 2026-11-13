@@ -49,6 +49,16 @@
   (should (string-search "31.1 or newer needed"
                          (nth 1 (drgnx-doctor-check 'emacs-version (drgnx-doctor-test--facts :nidhogg nil :version "30.2"))))))
 
+(ert-deftest drgnx-doctor/facts-can-skip-the-terminal-group ()
+  ;; the onboarding finish step does not show the Terminal group: its facts (tmux, ≤ 1 s) are not gathered (M12b-12-1)
+  (let ((asked 0))
+    (cl-letf (((symbol-function 'drgnx-doctor-terminal-facts) (lambda (&rest _) (cl-incf asked) '(:in-terminal nil)))
+              ((symbol-function 'drgnx-doctor--search) #'ignore))
+      (should-not (plist-get (drgnx-doctor-facts '(:terminal)) :terminal))
+      (should (= asked 0))
+      (should (plist-get (drgnx-doctor-facts) :terminal))
+      (should (= asked 1)))))
+
 (ert-deftest drgnx-doctor/facts-name-nidhogg ()
   (should (equal (plist-get (drgnx-doctor-facts) :nidhogg) (bound-and-true-p nidhogg-version))))
 
