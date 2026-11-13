@@ -650,8 +650,9 @@ The panel's **Debug Console** tab. The hub makes the lines; the editor only inse
   `important` error, `console` dim, a logpoint's in its own face with its source after it), a count as ` ×N`, keeps
   the last `drgnx-debug-console-max-lines` (10,000) and scrolls the windows that showed the end. The input at the
   bottom: RET evaluates it in the selected frame of the console's session (`debug/evaluate`, context `repl`; the
-  header's chip picks the session), S-RET adds a line, history on the profile's keys (Up / Down in VS Code keys,
-  M-p / M-n in Emacs keys, C-p / C-n in Vim keys; in the output they move by line). A result or an output with
+  session chip on the panel's tab row picks the session, through the toolbar's picker; the bin beside it clears),
+  S-RET adds a line, history on the profile's keys (Up / Down in VS Code keys, M-p / M-n in Emacs keys, C-p / C-n
+  in Vim keys; in the output they move by line). A result or an output with
   children shows a chevron: RET or TAB opens it in place (`debug/children {session, reference, epoch}` →
   `{variables: [{name, value, type?, reference?}]}`; `debug/evaluate`'s answer names its stop as `epoch`); after a
   resume the stop is over, the hub says so, and the value turns stale (dim, no longer opens).
@@ -1017,7 +1018,8 @@ with the manager's `gate` (an Ask makes a card and the call answers "X needs the
 its reason), then dispatches:
 
 - `debug_read` (`debug.read`): the sessions, a session's stop, a recorded run's summary or one stop (`Runs::capture`),
-  a fork's view. `history/*` stays the user's: no tool reads the edit history.
+  a fork's view, or (`heap`) a stopped session's heap graph from an expression (`heap::read`, the default limits; not
+  recorded, and with the stop's epoch for a later `debug_live`). `history/*` stays the user's: no tool reads the edit history.
 - `debug_probe` (`debug.probe`): adds a probe or breakpoint marked with the agent's session (`Probe.agent`,
   `Bp.agent`; `Probes::mark`, `Debug::mark_breakpoint`) and removes only its own. `debug-probes` tells the editors.
 - `debug_fork` (`debug.fork`): a value or replay what-if, marked as the agent's (`Forks::mark`, the view's `agent`).
@@ -1046,7 +1048,8 @@ norn's `each_debugger_tool_reaches_the_hub_as_its_session`, `a_hypothesis_is_rec
 `debug/partner-agent-under-cautious` (Never: a reason, no card), `debug/partner-agent-under-balanced` (Ask: a card)
 and `debug/partner-agent-investigates` (the mock adapter, Autonomous: the agent reads the stop, cannot remove the
 user's breakpoint, sets its own, which the editors get with its agent, and its step read before the user's step is
-refused while its step at the new stop runs). The tools' schemas are held to `BUDGET_DEBUG` (5,000 bytes; 3,791 when
+refused while its step at the new stop runs), and `debug/partner-agent-reads-heap` (the agent reads an expression's heap
+graph at the user's stop). The tools' schemas are held to `BUDGET_DEBUG` (5,000 bytes; 3,791 when
 it was set) in `tools_schema`.
 
 ## Which change broke it: bisect over the edit history (spec §19.6)
