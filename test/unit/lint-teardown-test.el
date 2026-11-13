@@ -28,7 +28,7 @@ migration batch that converts it and takes it off.  The dynamic check and the ra
 BATCH).  One that is gone fails the lint too, so the entry goes with it.")
 
 (defconst drgnx-teardown--library-files
-  '(("modules/ui/drgnx-tty-clipboard.el" . ui/terminal)
+  '(("modules/lang/drgnx-pack-ts-mode.el" . lang/packs) ("modules/ui/drgnx-tty-clipboard.el" . ui/terminal)
     ("modules/ui/drgnx-tty-fallback-layer.el" . ui/terminal)
     ("modules/ui/drgnx-decor.el" . ui/look) ("modules/tools/drgnx-agents-editor-draw.el" . tools/agents-in-editor)
     ("modules/tools/drgnx-agents-editor-line.el" . tools/agents-in-editor)

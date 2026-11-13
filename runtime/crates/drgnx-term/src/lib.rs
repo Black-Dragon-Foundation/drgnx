@@ -2,6 +2,7 @@
 //! sent to the editor as `drgnx-rows` patches through the hub. Without the `ghostty` feature only the parts that need
 //! no engine build: the frame clock, the row keys, the styles, the key table, the PTY and the wire.
 
+pub mod ask;
 pub mod child;
 pub mod frame;
 pub mod image;

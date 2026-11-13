@@ -708,6 +708,7 @@ impl Front {
             | Params::TermText(_)
             | Params::TermPaste(_)
             | Params::TermFocus(_)
+            | Params::TermClipboardReply(_)
             | Params::TermVisible(_)
             | Params::TermMouse(_)
             | Params::TermResize(_)

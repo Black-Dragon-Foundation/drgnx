@@ -830,6 +830,89 @@ fn search_sends_its_held_matches_as_a_list_model() {
 }
 
 #[test]
+fn a_clipboard_read_is_asked_of_the_hub_and_answered_with_its_text() {
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::os::unix::net::UnixStream;
+    let cfg = |name: &str, v: serde_json::Value| In::Config {
+        config: vec![(name.to_string(), v)],
+    };
+    let hub_says = |b: UnixStream, text: Option<&'static str>| {
+        std::thread::spawn(move || {
+            let mut line = String::new();
+            BufReader::new(b.try_clone().unwrap())
+                .read_line(&mut line)
+                .unwrap();
+            let Out::ClipboardRead { req, primary } = serde_json::from_str(&line).unwrap() else {
+                panic!("not a clipboard-read: {line}");
+            };
+            assert!(!primary);
+            // another message first: it is kept for the worker's loop, not lost
+            let mut b = b;
+            let other = serde_json::to_string(&In::Focus { gained: true }).unwrap();
+            writeln!(b, "{other}").unwrap();
+            let reply = In::ClipboardReply {
+                req,
+                text: text.map(String::from),
+            };
+            writeln!(b, "{}", serde_json::to_string(&reply).unwrap()).unwrap();
+        })
+    };
+    let mut w = worker(20, 2, 10);
+    let (a, b) = UnixStream::pair().unwrap();
+    w.set_ask_stream(Some(a));
+    // not asked for (the default): the program reads an empty clipboard and the hub hears nothing
+    w.take_pty();
+    w.output(b"\x1b]52;c;?\x07", 0);
+    b.set_nonblocking(true).unwrap();
+    assert_eq!(
+        (&b).read(&mut [0u8; 8]).unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+    b.set_nonblocking(false).unwrap();
+    // asked: the hub's text is what the program reads (base64 in OSC 52)
+    w.handle(cfg("clipboard-read", serde_json::json!("ask")), 0);
+    w.take_pty();
+    let hub = hub_says(b.try_clone().unwrap(), Some("hello"));
+    w.output(b"\x1b]52;c;?\x07", 0);
+    hub.join().unwrap();
+    let reply = String::from_utf8_lossy(&w.take_pty()).into_owned();
+    assert!(reply.contains("aGVsbG8="), "{reply:?}");
+    assert_eq!(
+        w.take_ask_stash(),
+        format!(
+            "{}\n",
+            serde_json::to_string(&In::Focus { gained: true }).unwrap()
+        )
+        .into_bytes()
+    );
+    // denied: an empty clipboard
+    let hub = hub_says(b, None);
+    w.output(b"\x1b]52;c;?\x07", 0);
+    hub.join().unwrap();
+    let reply = String::from_utf8_lossy(&w.take_pty()).into_owned();
+    assert!(!reply.contains("aGVsbG8="), "{reply:?}");
+    // a hub that is gone denies at once
+    w.set_ask_stream(None);
+    w.take_pty();
+    w.output(b"\x1b]52;c;?\x07", 0);
+    assert!(!String::from_utf8_lossy(&w.take_pty()).contains("aGVsbG8="));
+}
+
+#[test]
+fn an_unanswered_clipboard_read_times_out_denied() {
+    use drgnx_term::ask::Asker;
+    use std::io::Read;
+    use std::os::unix::net::UnixStream;
+    use std::time::Duration;
+    let (a, mut b) = UnixStream::pair().unwrap();
+    let mut asker = Asker::new(a);
+    assert_eq!(asker.ask(true, Duration::from_millis(100)), None);
+    let mut line = [0u8; 64];
+    let n = b.read(&mut line).unwrap();
+    assert!(String::from_utf8_lossy(&line[..n]).contains("\"t\":\"clipboard-read\""));
+}
+
+#[test]
 fn settings_reach_the_engine() {
     let (mut w, mut m) = (worker(20, 2, 10), Model::default());
     let cfg = |name: &str, v: serde_json::Value| In::Config {

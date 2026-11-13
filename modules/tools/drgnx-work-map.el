@@ -309,22 +309,51 @@ argument): without moving focus."
 
 ;;;; The lens: the tab line
 
+(defconst drgnx-work-lens-menu-labels
+  '(("Map" . work-view-map) ("Board" . work-view-board) ("Timeline" . work-view-timeline) ("Flow" . work-view-flow))
+  "The lens bar's ⋯ menu: (LABEL . COMMAND), the four lenses, registered commands.")
+
+(defun drgnx-work-lens-menu-items ()
+  "The ⋯ menu's items, (LABEL . COMMAND)."
+  drgnx-work-lens-menu-labels)
+
+(defun drgnx-work-lens-menu (event)
+  "A click on the lens bar's ⋯: the menu of the four lenses at EVENT; run the one chosen."
+  (interactive "e")
+  (when-let* ((choice (x-popup-menu event (list "Work" (cons "" (drgnx-work-lens-menu-items))))))
+    (drgnx-ui-kit-run choice)))
+
+(defvar drgnx-work-lens--menu-map
+  (let ((m (make-sparse-keymap)))
+    (define-key m [tab-line mouse-1] #'drgnx-work-lens-menu)
+    (define-key m [header-line mouse-1] #'drgnx-work-lens-menu)
+    m)
+  "The keymap of the lens bar's ⋯ control.")
+
 (defun drgnx-work-lens-string (&optional current name keys)
   "The lens bar: the Work space's tab (Work · NAME, the workspace's name), then Map · Board · Timeline · Flow with
 CURRENT (`map', `board', `timeline' or `flow'; default `map') marked and the others in the label face (`m' `b' `t' `F'
 switch), then KEYS, the lens's own keys ((LABEL . KEY) …), as chips with their key badges."
-  (let ((current (or current 'map)))
-    (concat (propertize (concat " " (or (drgnx-face-glyph 'layers) "") " " (if name (concat "Work · " name) "Work") " ")
-                        'face 'drgnx-work-lens-title)
-            "  "
-            (mapconcat (lambda (v)
-                         (propertize (format " %s " (cdr v))
-                                     'face (if (eq (car v) current) 'drgnx-work-lens-current 'drgnx-work-label)))
-                       '((map . "Map") (board . "Board") (timeline . "Timeline") (flow . "Flow")) " ")
-            (mapconcat (lambda (k)
-                         (concat "  " (propertize (format " %s " (car k)) 'face 'drgnx-work-chip)
-                                 (propertize (format " %s " (cdr k)) 'face 'drgnx-work-lens-key)))
-                       keys ""))))
+  (let* ((current (or current 'map))
+         (menu (propertize (drgnx-look-hover-control (drgnx-look-icon 'ellipsis 'drgnx-text-subtle))
+                           'drgnx-lens-menu t 'keymap drgnx-work-lens--menu-map 'help-echo "Work menu: the lenses"
+                           'pointer 'hand))
+         (bar
+          (concat (propertize (concat " " (or (drgnx-face-glyph 'layers) "") " " (if name (concat "Work · " name) "Work") " ")
+                              'face 'drgnx-work-lens-title)
+                  "  "
+                  (mapconcat (lambda (v)
+                               (propertize (format " %s " (cdr v))
+                                           'face (if (eq (car v) current) 'drgnx-work-lens-current 'drgnx-work-label)))
+                             '((map . "Map") (board . "Board") (timeline . "Timeline") (flow . "Flow")) " ")
+                  (mapconcat (lambda (k)
+                               (concat "  " (propertize (format " %s " (car k)) 'face 'drgnx-work-chip)
+                                       (propertize (format " %s " (cdr k)) 'face 'drgnx-work-lens-key)))
+                             keys "")
+                  (propertize " " 'display `(space :align-to (- right ,(+ (string-pixel-width menu) (drgnx-px 8)))))
+                  menu)))
+    (add-text-properties 0 (length bar) '(mouse-face drgnx-hover-row) bar)   ; the ⋯ shows while the bar is hovered
+    bar))
 
 (defun drgnx-work-lens-name (&optional map)
   "The workspace's name on the lens bar: the folder name of MAP's (default: the current buffer's) first root."

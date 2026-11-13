@@ -267,6 +267,7 @@
   "tasks/ready": ["user"],
   "tasks/write": ["user"],
   "term/attach": ["user"],
+  "term/clipboard-reply": ["user"],
   "term/close": ["user"],
   "term/config": ["user"],
   "term/fetch": ["user"],

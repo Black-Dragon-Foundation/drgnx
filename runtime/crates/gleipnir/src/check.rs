@@ -143,9 +143,15 @@ pub fn explain(
     let lower = stderr.map(str::to_lowercase).unwrap_or_default();
     let bwrap_failed = stderr.is_none_or(|s| s.contains("bwrap:"));
     if f.container {
+        // the cause stays visible: bwrap may run in the container and fail for another reason (GL-T12-2)
+        let said = stderr
+            .and_then(|s| s.lines().map(str::trim).find(|l| !l.is_empty()))
+            .map(|l| format!(" (it said: {l})"))
+            .unwrap_or_default();
         return (
-            "inside a container: bubblewrap needs user namespaces the container does not give"
-                .into(),
+            format!(
+                "inside a container: bubblewrap needs user namespaces the container does not give{said}"
+            ),
             None,
         );
     }

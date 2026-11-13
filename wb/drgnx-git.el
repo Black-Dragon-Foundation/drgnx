@@ -203,6 +203,12 @@ A peek: it keeps nothing from eviction."
   "(LETTER FACE) for STATUS."
   (let ((l (alist-get status drgnx-git--looks))) (list (car l) (cadr l))))
 
+(defun drgnx-git-letter (status)
+  "The letter an Explorer row shows for STATUS: M, A, U, D, C or R; an ignored file has none (its name is dimmed and
+italic), but on the Linux console, which draws no italic, it gets an I."
+  (or (car (alist-get status drgnx-git--looks))
+      (and (eq status 'ignored) (not (display-graphic-p)) (equal (tty-type) "linux") "I")))
+
 (defvar drgnx-git-errors-max 20000 "Characters of git's error output kept in ` *drgnx git errors*'.")
 
 (defun drgnx-git--stderr (_proc text)

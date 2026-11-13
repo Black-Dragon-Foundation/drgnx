@@ -891,6 +891,29 @@ and code in the code font."
             (should (seq-some (lambda (f) (drgnx-agent-panel-test--inherits-p f 'drgnx-code-small))
                               (ensure-list face)))))))))
 
+(ert-deftest drgnx-agent-panel/a-diff-card-fits-a-narrow-panel ()
+  "LOOK-FIX-AGENT-PANEL-NARROW-1: in a panel 320 px wide (8 px a column) the card's header leaves room for Reject and
+Accept (they are not pushed past the edge: the name and the hunk label give way) and no code line is wider than the
+panel."
+  (drgnx-agent-panel-test--with
+    (load (expand-file-name "modules/tools/drgnx-work-review" drgnx-dir) nil t)
+    (with-current-buffer buf
+      (setq drgnx-agent-panel--strip-width 320
+            drgnx-agent-panel--diffs
+            (list (cons "core/a-very-long-directory-name/drgnx-gateway-with-a-long-name.el"
+                        (concat "@@ -1,2 +1,2 @@\n ctx\n-a\n+"
+                                (make-string 90 ?x) "\n")))))
+    (with-current-buffer buf
+      (cl-letf (((symbol-function 'string-pixel-width) (lambda (s &rest _) (* 8 (string-width s))))
+                ((symbol-function 'frame-char-width) (lambda (&rest _) 8)))
+        (let* ((card (drgnx-agent-panel-cards--diff-row "core/a-very-long-directory-name/drgnx-gateway-with-a-long-name.el" 0))
+               (lines (split-string card "\n" t))
+               (head (car lines)))
+          (should (< (* 8 (string-width (replace-regexp-in-string "Reject  Accept" "" head))) 320))
+          (should (string-search "Reject" head))
+          (dolist (l (cdr lines))
+            (should (<= (* 8 (string-width l)) 320))))))))
+
 (defun drgnx-agent-panel-test--inherits-p (face target)
   "Whether FACE is TARGET or inherits it, through any depth."
   (or (eq face target)

@@ -13,9 +13,9 @@ use std::future::Future;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UnixListener};
@@ -152,6 +152,8 @@ pub struct ProxyConfig {
     pub max_conns: usize,
     /// How long one upstream connect attempt may take; one that takes longer counts as that address failing.
     pub connect_timeout: Duration,
+    /// How long a spliced tunnel may carry no byte in either direction before it is ended and its place freed.
+    pub idle_timeout: Duration,
 }
 
 impl Default for ProxyConfig {
@@ -164,6 +166,7 @@ impl Default for ProxyConfig {
             head_timeout: Duration::from_secs(10),
             max_conns: 64,
             connect_timeout: Duration::from_secs(10),
+            idle_timeout: Duration::from_secs(15 * 60),
         }
     }
 }
@@ -300,10 +303,13 @@ struct Shared {
     head_timeout: Duration,
     max_conns: usize,
     connect_timeout: Duration,
+    idle_timeout: Duration,
     conns: AtomicUsize,
     resolver: Arc<dyn Resolver>,
     connect: Connect,
     events: mpsc::Sender<ProxyEvent>,
+    /// Events dropped because the owner's channel was full (a reader that stopped draining).
+    dropped_events: AtomicUsize,
     /// The events sent already, so each is sent once.
     said: Mutex<HashSet<ProxyEvent>>,
     /// Each tag's accept loops; aborting one drops its listener and its connections with it.
@@ -355,7 +361,9 @@ fn start_with(
             head_timeout: cfg.head_timeout,
             max_conns: cfg.max_conns,
             connect_timeout: cfg.connect_timeout,
+            idle_timeout: cfg.idle_timeout,
             conns: AtomicUsize::new(0),
+            dropped_events: AtomicUsize::new(0),
             resolver,
             connect,
             events,
@@ -366,6 +374,11 @@ fn start_with(
 }
 
 impl ProxyHandle {
+    /// How many events were dropped because the events channel was full. A refused client never waits for a reader.
+    pub fn dropped_events(&self) -> usize {
+        self.shared.dropped_events.load(Ordering::SeqCst)
+    }
+
     /// Accepts clients on `listener`; their events carry `tag`.
     pub fn listen(&self, listener: Listener, tag: u64) {
         let task = tokio::spawn(serve(self.shared.clone(), listener, tag));
@@ -517,10 +530,15 @@ async fn answer(mut client: Box<dyn Client>, status: &str) {
 }
 
 /// Sends `event` unless it was sent before. It goes before the client's answer, so a refused client implies a queued
-/// event.
+/// event, unless the channel was full (then it is dropped and counted).
 async fn say(sh: &Shared, event: ProxyEvent) {
     if lock(&sh.said).insert(event.clone()) {
-        let _ = sh.events.send(event).await;
+        // never waits: a reader that stopped draining must not hold refused clients (and their places). A dropped
+        // event is counted, and forgotten as said so that a repeat can say it again.
+        if let Err(mpsc::error::TrySendError::Full(e)) = sh.events.try_send(event) {
+            lock(&sh.said).remove(&e);
+            sh.dropped_events.fetch_add(1, Ordering::SeqCst);
+        }
     }
 }
 
@@ -889,7 +907,85 @@ async fn handle(sh: Arc<Shared>, mut client: Box<dyn Client>, tag: u64, _slot: S
         return;
     }
     // both ways as they are; each side's EOF is passed on as a half-close
-    let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
+    let last = Arc::new(AtomicU64::new(0));
+    let began = Instant::now();
+    let mut client = Active::new(client, last.clone(), began);
+    let mut upstream = Active::new(upstream, last.clone(), began);
+    let copy = tokio::io::copy_bidirectional(&mut client, &mut upstream);
+    tokio::pin!(copy);
+    loop {
+        let idle_at = began + Duration::from_millis(last.load(Ordering::Relaxed)) + sh.idle_timeout;
+        tokio::select! {
+            _ = &mut copy => return,
+            () = tokio::time::sleep_until(idle_at.into()) => {
+                // no byte since `idle_at - idle_timeout`: end it (the place goes back when this returns)
+                if Instant::now() >= began + Duration::from_millis(last.load(Ordering::Relaxed)) + sh.idle_timeout {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// A stream that notes, in `last` (milliseconds since `began`), when a byte last moved through it.
+struct Active<T> {
+    inner: T,
+    last: Arc<AtomicU64>,
+    began: Instant,
+}
+
+impl<T> Active<T> {
+    fn new(inner: T, last: Arc<AtomicU64>, began: Instant) -> Self {
+        Active { inner, last, began }
+    }
+
+    fn touch(&self) {
+        let ms = u64::try_from(self.began.elapsed().as_millis()).unwrap_or(u64::MAX);
+        self.last.fetch_max(ms, Ordering::Relaxed);
+    }
+}
+
+impl<T: AsyncRead + Unpin> AsyncRead for Active<T> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        let before = buf.filled().len();
+        let r = Pin::new(&mut self.inner).poll_read(cx, buf);
+        if matches!(r, std::task::Poll::Ready(Ok(()))) && buf.filled().len() > before {
+            self.touch();
+        }
+        r
+    }
+}
+
+impl<T: AsyncWrite + Unpin> AsyncWrite for Active<T> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<io::Result<usize>> {
+        let r = Pin::new(&mut self.inner).poll_write(cx, buf);
+        if matches!(r, std::task::Poll::Ready(Ok(n)) if n > 0) {
+            self.touch();
+        }
+        r
+    }
+
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
 }
 
 /// How a request ends without an upstream.
@@ -1816,6 +1912,51 @@ mod tests {
             }
         })
         .await;
+    }
+
+    /// A timing test: the tunnel is ended only after the idle limit, and an active one outlives it.
+    #[tokio::test]
+    #[ignore = "timing: an idle tunnel is ended after the idle limit, an active one is not"]
+    async fn an_idle_tunnel_is_ended_and_an_active_one_is_not() {
+        let up = echo().await;
+        let cfg = ProxyConfig {
+            idle_timeout: Duration::from_millis(500),
+            ..pinned_up(up.port())
+        };
+        let r = rig(cfg, &[], &[]);
+        let p = r.listen(1);
+        let target = format!("up.test:{}", up.port());
+        let (mut idle, code) = connect_to(&p, &target).await;
+        assert_eq!(code, 200);
+        let (mut busy, code) = connect_to(&p, &target).await;
+        assert_eq!(code, 200);
+        for _ in 0..5 {
+            assert!(
+                echoes(&mut busy, b"ping").await,
+                "an active tunnel lives on"
+            );
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        assert!(closed(&mut idle).await, "the idle tunnel was ended");
+        assert_eq!(r.conns(), 1, "its place is free again");
+        drop(busy);
+        r.all_free().await;
+    }
+
+    #[tokio::test]
+    async fn a_stalled_event_reader_never_holds_a_place() {
+        let r = rig(ProxyConfig::default(), &[], &[]);
+        let p = r.listen(1);
+        // the events channel holds 64 and nobody reads it: the 65th and later refusals are still answered
+        for i in 0..70 {
+            let (mut s, code) = timeout(WAIT, connect_to(&p, &format!("denied{i}.test:443")))
+                .await
+                .unwrap_or_else(|_| panic!("refusal {i} waited on the events channel"));
+            assert_eq!(code, 403, "{i}");
+            assert!(closed(&mut s).await);
+        }
+        r.all_free().await;
+        assert_eq!(r.handle.dropped_events(), 6);
     }
 
     #[tokio::test]

@@ -37,6 +37,11 @@ tree-sitter = "0.27"   # 0.27 for ast-grep-core (the Search view's Pattern); nee
 # the Search view's structural matcher behind `hrafn::structural` (pattern by example, `$A` / `$$$A`, rewrite templates):
 # core only (no YAML rules), pinned exactly, moved on purpose (a 0.x API); MIT, MSRV 1.90
 ast-grep-core = "=0.51.1"   # its one feature, `tree-sitter`, is the parser it matches on
+# skald's pack job builds a pinned grammar's parser.c at runtime and loads it (language packs design §10); all three are
+# already in the lock through tree-sitter. libloading 0.8 (the lock's), not 0.9
+cc = "1"
+libloading = "0.8"
+tree-sitter-language = "0.1"
 tree-sitter-elisp = "1.7"
 tree-sitter-rust = "0.24"
 tree-sitter-c = "0.24"

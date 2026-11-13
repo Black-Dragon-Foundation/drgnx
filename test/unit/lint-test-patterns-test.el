@@ -242,7 +242,7 @@ levels that enclose it (a `let' binding, a call's argument); inside a branching 
     "test/unit/lisp-index-test.el" "test/unit/mock-llm-test.el" "test/unit/mod-agent-settings-test.el"
     "test/unit/modal-ai-test.el" "test/unit/modal-report-test.el" "test/unit/mod-amenities-test.el"
     "test/unit/mod-blame-test.el" "test/unit/mod-clipboard-test.el" "test/unit/mod-diff-test.el"
-    "test/unit/mod-grammars-test.el" "test/unit/mod-live-test.el" "test/unit/mod-remote-test.el"
+    "test/unit/mod-live-test.el" "test/unit/mod-remote-test.el"
     "test/unit/mod-replace-engine-test.el" "test/unit/mod-replace-view-test.el" "test/unit/mod-search-test.el"
     "test/unit/mod-terminal-test.el" "test/unit/mod-tools-test.el" "test/unit/peer-fixture-test.el"
     "test/unit/perf-day-test.el" "test/unit/platform-hypr-niri-test.el" "test/unit/platform-kwin-test.el"

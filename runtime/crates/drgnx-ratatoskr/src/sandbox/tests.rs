@@ -504,6 +504,120 @@ fn a_keyed_jobs_key_socket_is_allowed_by_its_path_alone() {
     }
 }
 
+// Kimi Code's and DeepSeek Harness's hub-owned homes (`<state>/agents/kimi-code`, `<state>/agents/dsh`) lie in the closed
+// state dir and are the sessions' own: exactly those two are open, a sibling stays closed, and the lock's
+// `config.toml` in the home is only the read-only copy bound over an empty file (P3-LOCK-ROWS-FULL-TIER-1).
+#[test]
+fn the_hub_owned_cli_homes_are_open_inside_the_closed_state_dir_and_nothing_beside_them() {
+    let fx = Fx::new();
+    fs::create_dir_all(fx.p("wt")).unwrap();
+    let env = fx.env();
+    let ctx = context_for(&env, None);
+    let agents = fx.p("home/.local/state/drgnx/agents");
+    for home in ["kimi-code", "dsh"] {
+        assert!(
+            ctx.open_inside_closed.contains(&agents.join(home)),
+            "{home}: {:?}",
+            ctx.open_inside_closed
+        );
+    }
+    assert!(
+        !ctx.open_inside_closed.contains(&agents),
+        "never the folder above"
+    );
+    assert!(
+        !ctx.open_inside_closed.contains(&agents.join("other")),
+        "{:?}",
+        ctx.open_inside_closed
+    );
+    let spec = |read: PathBuf| Spec {
+        read: vec![read],
+        write: vec![fx.p("wt")],
+        hide: vec![],
+        sockets: vec![],
+        binds: vec![],
+        home: None,
+        run: None,
+        env: vec![],
+        chdir: fx.p("wt"),
+        net: Net::Shared,
+        tmp: None,
+        layers: Layers::for_target(Target::LinuxBwrap),
+        extra_tcp_ports: vec![],
+        trace: Default::default(),
+        browser: None,
+    };
+    // strictly inside an open entry, never the entry itself
+    for ok in ["kimi-code/sessions", "dsh/profiles"] {
+        let p = agents.join(ok);
+        fs::create_dir_all(&p).unwrap();
+        validate(spec(p.clone()), &ctx, Target::LinuxBwrap)
+            .unwrap_or_else(|r| panic!("{ok} refused: {r}"));
+    }
+    let other = agents.join("other");
+    fs::create_dir_all(&other).unwrap();
+    let r = validate(spec(other), &ctx, Target::LinuxBwrap).unwrap_err();
+    assert_eq!(r.rule, Rule::Closed, "{}", r.message);
+}
+
+#[test]
+fn the_locks_config_toml_in_a_hub_home_stays_read_only_inside_the_session() {
+    let fx = Fx::new();
+    fs::create_dir_all(fx.p("wt")).unwrap();
+    let env = fx.env();
+    let ctx = context_for(&env, None);
+    let home = fx.p("home/.local/state/drgnx/agents/kimi-code");
+    let config = home.join("config.toml");
+    let mut plan = browser_plan(vec![]);
+    plan.login_dir = Some(home.clone());
+    plan.ro_files = vec![(config.clone(), b"default_yolo = false\n".to_vec())];
+    plan.make_home().unwrap();
+    let shape = SessionShape {
+        sid: "S5".into(),
+        cwd: fx.p("wt"),
+        write: vec![fx.p("wt")],
+        read: vec![],
+        net: crate::agents::launch::NetCell::ProviderOnly,
+        sockets: vec![],
+        browser: None,
+    };
+    let scratch = crate::agents::launch::scratch_dir(&env, "S5").unwrap();
+    let built = session_spec(
+        &env,
+        &ctx,
+        &plan,
+        &shape,
+        &scratch,
+        Tier::Full,
+        Target::LinuxBwrap,
+    )
+    .unwrap_or_else(|r| panic!("refused: {r}"));
+    let bind = built
+        .spec
+        .binds
+        .iter()
+        .find(|b| b.dest == config)
+        .expect("bound at its path");
+    assert_eq!(bind.mode, Mode::Ro);
+    assert_eq!(
+        fs::read_to_string(&bind.source).unwrap(),
+        "default_yolo = false\n"
+    );
+    // no write grant covers it, and the home's own state folders are the only writes there
+    assert!(
+        built.spec.write.iter().all(|w| !config.starts_with(w)),
+        "{:?}",
+        built.spec.write
+    );
+    assert!(
+        built.spec.write.contains(&home.join("sessions")),
+        "{:?}",
+        built.spec.write
+    );
+    // the spec as built validates (it was refused as "inside a closed directory")
+    validate(built.spec, &ctx, Target::LinuxBwrap).unwrap_or_else(|r| panic!("refused: {r}"));
+}
+
 #[test]
 fn browser_spec_shape() {
     let fx = Fx::new();

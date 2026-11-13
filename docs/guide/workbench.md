@@ -297,7 +297,7 @@ italics: the scratch buffer, the start page, and a **preview**, as in VS Code: a
 click is a preview until you edit it or open it to work in (a double click, Open), and the next preview takes its
 place. At the right end of the row, a split button (**Split Editor Right**) and an overflow button (**Go to Tab…**, in
 the palette: choose one of the group's tabs by name). Under Glitnir the shown tab's top corners are rounded (7
-pixels). With two editor groups or more, the selected group's card is ringed in the accent; with one, no card is.
+pixels). With two editor groups or more, the selected group's card is ringed in the accent; with one, no card is. The Work space's card (a Work lens) is ringed while it is selected, though it is the only one.
 
 - **Tabs**: the buffers an editor window has shown, in the order they were opened; switching never reorders them.
   Click a tab to show it, `×` or middle-click closes it (the buffer stays open — close it in the Buffers panel).

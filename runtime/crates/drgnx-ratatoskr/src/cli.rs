@@ -31,6 +31,8 @@ pub const USAGE: &str = "usage: ratatoskr serve [--foreground] [--parent-pid PID
     \x20      ratatoskr machines report --machine M --ttl SECS [--json FILE|-]   (a machine's slots, from jobq)\n\
     \x20      ratatoskr runner list [--json] | add HOST --trust T [--name N] [--profile P] [--accept A] [--root DIR] [--prefix P]\n\
     \x20          | check NAME | bench NAME | trust NAME T | unbench NAME | remove NAME [--yes] | audit   (the runners)\n\
+    \x20      ratatoskr packs check DIR [--builtin] [--other DIR]...   (check a language pack)\n\
+    \x20      ratatoskr packs sync --plan FILE [--out FILE] | pin REPO COMMIT [--src DIR] | translate PACKDIR OUT   (the pack job; pin a grammar; the generic mode's queries)\n\
     \x20      ratatoskr plugins install PATH [--replace] | list [--json] | remove NAME   (plugins; approve them in drgnx)\n\
     \x20      ratatoskr search index ROOT [--rebuild] [--now]   (build or rebuild a project's code index)\n\
     \x20      ratatoskr search query ROOT QUESTION... [-k N] [--scope code|tests|docs|all] [--json]\n\
@@ -116,6 +118,8 @@ pub enum Command {
     Machines(crate::machines_cli::MachinesCommand),
     /// `runner …`: the runners, a client of the running hub (`crate::runner_cli`).
     Runner(crate::runner_cli::RunnerCommand),
+    /// `packs …`: the language pack tools (`crate::packs_cli`).
+    Packs(crate::packs_cli::PacksCommand),
     /// `plugins …`: installing plugins (`crate::plugins_cli`).
     Plugins(crate::plugins_cli::PluginsCommand),
     /// `search …`: Hrafn from a terminal, and the MCP `search` tool on stdio (`crate::search_cli`).
@@ -411,6 +415,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
         "job" => crate::job_cli::parse(p.raw_args().map_err(e)?).map(Command::Job),
         "machines" => crate::machines_cli::parse(p.raw_args().map_err(e)?).map(Command::Machines),
         "runner" => crate::runner_cli::parse(p.raw_args().map_err(e)?).map(Command::Runner),
+        "packs" => crate::packs_cli::parse(p.raw_args().map_err(e)?).map(Command::Packs),
         "plugins" => crate::plugins_cli::parse(p.raw_args().map_err(e)?).map(Command::Plugins),
         "search" => crate::search_cli::parse(p.raw_args().map_err(e)?).map(Command::Search),
         #[cfg(feature = "test-hooks")]

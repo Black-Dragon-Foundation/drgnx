@@ -72,6 +72,32 @@ nearer than that is moved toward white or black until it reaches it.  1: colours
 1.1 keeps text from vanishing into its background.  Applies to every terminal at once."
   :type 'number :group 'drgnx :scope 'global :agents 'never :schema 'number :apply #'drgnx-term--theme-changed)
 
+(drgnx-defsetting drgnx-term-link-url t
+  "Whether an address in a terminal's plain output (http, https, ftp, file) is a link: a middle click opens it, as an
+OSC 8 link does.  Your own patterns (`drgnx-term-link') come first.  Applies to every terminal at once."
+  :type 'boolean :group 'drgnx :scope 'global :agents 'never :schema 'boolean :apply #'drgnx-term--theme-changed)
+
+(drgnx-defsetting drgnx-term-link nil
+  "Link patterns of your own: a list of (REGEXP TARGET).  Text in a terminal's output that REGEXP matches is a link
+to TARGET: a string, with `\\&' and `\\N' for the match and its groups (\"https://github.com/\\1\"), or a function of the
+matched text that returns the address (a file name works too).  Case counts.  Applies to every terminal at once."
+  :type '(repeat (list (regexp :tag "Matches") (choice :tag "Link to" string function)))
+  :group 'drgnx :scope 'global :agents 'never :schema '(list-of (list-of any)) :apply #'drgnx-term--theme-changed)
+
+(drgnx-defsetting drgnx-term-cursor-click-to-move t
+  "Whether a click at the shell's prompt, on the cursor's row, moves the cursor there (as Left or Right keys).  Needs
+the shell integration (it marks the prompt, OSC 133); nothing moves while a command runs, in a full-screen program
+or while the program tracks the mouse.  Applies at once."
+  :type 'boolean :group 'drgnx :scope 'global :agents 'never :schema 'boolean)
+
+(drgnx-defsetting drgnx-term-clipboard-read 'deny
+  "Whether a program in a terminal may read the clipboard (OSC 52 with `?'): `deny' (the default) answers with an empty
+clipboard; `ask' stops that terminal's output while a notice asks you, naming the terminal and whether it is remote:
+Allow gives it the kill ring's head, Deny, 30 s without an answer or a closed terminal an empty clipboard.  Any program
+can ask, over ssh too, so `deny' is the safe choice.  Applies to every terminal at once."
+  :type '(choice (const :tag "Deny every read" deny) (const :tag "Ask each time" ask))
+  :group 'drgnx :scope 'global :agents 'never :schema '(enum deny ask) :apply #'drgnx-term--apply-config)
+
 ;;;; Live: drgnx's
 
 (drgnx-defsetting drgnx-term-desktop-notifications t
@@ -314,7 +340,7 @@ Applies to new terminals."
     ("osc-color-report-format" none no-switch)
     ("vt-kam-allowed" none no-switch)
     ("grapheme-width-method" live drgnx-term-grapheme-width-method)
-    ("clipboard-read" later "a program never reads the clipboard: every read is refused")
+    ("clipboard-read" live drgnx-term-clipboard-read)
     ("clipboard-write" live drgnx-term-clipboard-write)
     ("palette-generate" live drgnx-term-palette-generate)
     ("palette-harmonious" live drgnx-term-palette-harmonious)
@@ -331,9 +357,9 @@ Applies to new terminals."
     ("mouse-reporting" live drgnx-term-mouse-reporting)
     ("mouse-shift-capture" live drgnx-term-mouse-shift-capture)
     ("mouse-scroll-multiplier" mapped "`mouse-wheel-scroll-amount'")
-    ("cursor-click-to-move" later "a click does not move the cursor at a prompt")
-    ("link" later "only OSC 8 links are links; there are no link patterns of your own")
-    ("link-url" later "an address in plain output is not a link (OSC 8 links are)")
+    ("cursor-click-to-move" live drgnx-term-cursor-click-to-move)
+    ("link" live drgnx-term-link)
+    ("link-url" live drgnx-term-link-url)
     ("link-previews" mapped "`help-echo'" "a link's target shows when the pointer rests on it")
     ("scroll-to-bottom" live drgnx-term-scroll-to-bottom)
     ("bell-features" mapped "`ring-bell-function', `visible-bell'" "the bell is Emacs's")

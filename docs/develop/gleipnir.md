@@ -59,6 +59,10 @@ neither the type nor the parameter.
 only ever adds rights, so a `hide` entry inside a root the reduced tier grants (a read, write or session root, a
 system root, the helper) is refused (`Malformed`), never left readable. A hide outside every granted root is
 unreachable anyway and passes.
+This stays a refusal (decided, GL-T13-1): honouring it would mean granting the root's children one by one, which
+works for a read root but leaves a write root (the worktree) unable to create a file at its top, and dropping the
+hide would leave `.env` readable. A task folder with a `.env` hide therefore runs in the full tier, or after the file
+is moved out of the folder.
 
 **Relay ports.** `backend::relay_ports(tier, wanted)` gives one session's ports. The full tier's network namespace
 is the session's own, so `wanted` (3128, 3129) is used as given. The reduced tier's relay binds on the host's
@@ -392,6 +396,8 @@ The argv, in this order (`argv_golden_shared` and `argv_golden_isolated` pin it)
 --unshare-all --unshare-user [--share-net] --disable-userns --die-with-parent --new-session --clearenv
 --ro-bind /usr /usr
 --ro-bind-try /etc /etc  (and /opt /nix /gnu /var/lib/flatpak)
+--tmpfs /etc  then, per top-level host entry: --ro-bind /etc/X /etc/X, or --symlink TARGET /etc/X for a link
+                  (instead of the line above, for a root a bind lands under at a path the host lacks)
 --symlink usr/bin /bin   (where the host's /bin is a link; else --ro-bind-try /bin /bin; also lib lib64 sbin)
 --dev /dev --proc /proc --tmpfs /tmp --tmpfs /run --tmpfs /var/tmp
 --ro-bind-try RESOLVER RESOLVER                  where /etc/resolv.conf leads under /run
@@ -403,6 +409,18 @@ The argv, in this order (`argv_golden_shared` and `argv_golden_isolated` pin it)
 --ro-bind-fd N /run/gleipnir/helper              the helper, last
 --chdir DIR -- /run/gleipnir/helper INNER-ARGS --spec-fd 3 -- COMMAND…
 ```
+
+**A private system root.** A bind under a system-read root (`/etc`, `/opt`, …) at a path the host does not have, such as
+Codex's lock file `/etc/codex/requirements.toml`, cannot be made inside a read-only bind of the host's directory
+(bwrap: "Can't mkdir parents … Read-only file system"), and the host is never written. For such a root only,
+`open_sources` lists the host's top-level entries (`private_roots`): the argv makes the root an empty tmpfs and puts
+each entry back, a link as the same link with the same target (never followed), a file or directory as a read-only
+bind of its own path. An entry that holds a missing bind path (the host's `/etc/codex`) is left out, so what the session
+binds there is all it sees. An entry that is not a file, directory or link, or a listing that cannot be read, refuses
+the launch with the entry's name: there is no partial root. Binds to paths that exist, and every spec without a bind
+under a system root, keep the plain read-only bind (the golden argvs are unchanged). Landlock still handles writes
+everywhere and grants none under `/etc`, so the tmpfs cannot be written from inside
+(`a_read_only_bind_under_etc_is_never_a_write_root`).
 
 Why each part:
 
@@ -424,7 +442,7 @@ Why each part:
   On a merged-/usr host `/bin` and friends are links into `/usr`, recreated as the same links inside.
 - **`--tmpfs /run`**: `/run/user` (the user's runtime dir: D-Bus, the ssh agent, the hub's sockets) is absent. The
   resolver's file is bound back on top of it alone, or `/etc/resolv.conf` (a link to systemd-resolved's stub on
-  Fedora and Ubuntu) would dangle. Only a file under `/run` outside `/run/user` and `/run/gleipnir` is bound.
+  Fedora and Ubuntu) would dangle. Only a file under `/run` outside `/run/user` and `/run/gleipnir` is bound, and only when root alone can change it (`eitri::root_only_file`: a regular file owned by uid 0, not group- or world-writable, in root-owned directories).
 - **Every source of the spec by fd** (`--bind-fd`, `--ro-bind-fd`; bwrap ≥ 0.10). A source given by path is resolved
   by bwrap later, when an agent may have swapped a link into it; an fd is what was checked. This is Flatpak's
   CVE-2024-42472 pattern, whose full fix needed exactly these flags.
@@ -656,6 +674,23 @@ ptrace scoping denies other processes' `environ`, `mem` and `fd` (EACCES). It do
 `stat`: a sandboxed program can read the command lines of the user's processes. The user accepted this gap
 (2026-10-21). It is recorded by the test `reduced_proc_other_cmdline_is_the_gap` and the escape row
 `reduced-proc-cmdline-the-gap`, and phase 6 names it in the reduced badge's text.
+
+**The reduced tier has no pty (decided, GL-T15-1).** Without a mount namespace `/dev/pts` is the host's devpts: a
+Landlock grant on it would let the sandboxed program read and write the user's other terminals (their input and
+output), a channel that blocking `TIOCSTI` does not close. So the reduced tier opens no pty (the escape row
+`reduced-no-pty` pins it) and tools that need one use the full tier. The reduced tier is opt-in.
+
+**Relay ports in the reduced tier (decided, GL-T13-2).** `relay_ports` frees its probe sockets before the relay
+binds, so a port another process takes in that window (milliseconds) fails the start with the bind error and nothing
+is shared; the caller may start the session again. A retry inside would need the spec, the Landlock rules and the
+proxy variables rebuilt around new ports, which is the whole launch.
+
+**The reduced tier's socket families (GL-T13-5).** UNIX, INET, INET6 and NETLINK only (NETLINK whole: it is local).
+A tool that needs another family (AF_ALG crypto, Bluetooth) fails with EAFNOSUPPORT there and runs in the full tier.
+
+**Toolchain layouts (GL-T3-2).** The toolchain roots the profile reads are the ones `toolchain::roots` knows
+(mise, cargo, rustup, nvm, pyenv, and so on). A layout it does not know (Homebrew under the home, asdf, volta, fnm,
+sdkman, bun globals beyond `~/.bun/bin`) is added by the user through the `agents.eld` read list.
 
 **The browser layer** (`landlock::browser_plan`). The agent browser's host and every Chromium process under it run
 in a second Landlock domain on top of the agent's. Landlock layers only narrow, so this layer can only take away.
@@ -1059,7 +1094,9 @@ it looks only at the request line, never at `Host:`:
 | a connection over `max_conns` (64, across all listeners) | 403 | — |
 | listed, but it does not resolve or no address connects (each attempt within `connect_timeout`, 10 s; a slower one counts as that address failing) | 502 | — |
 
-Each event is sent once per target per tag, before the client is answered; the tag tells the caller which session
+Each event is sent once per target per tag, before the client is answered (it never waits for the reader: when the
+events channel is full the event is dropped and counted, `ProxyHandle::dropped_events`, so a reader that stopped
+draining cannot hold refused clients and their places); the tag tells the caller which session
 asked. Only `Denied` may become a question to the user: a private address, a wildcard or a malformed request is never
 offered. A refused request's `target` is shown with every byte outside printable ASCII escaped.
 
@@ -1105,7 +1142,8 @@ Allowlist entries are exact `host:port` targets: `example.com:443` allows neithe
 **The addresses.** `net::host::is_public` decides what is public. Not public: IPv4 0/8, 10/8, 100.64/10, 127/8,
 169.254/16 (with the cloud metadata address), 172.16/12, 192.0.0/24, 192.0.2/24, 192.168/16, 198.18/15,
 198.51.100/24, 203.0.113/24, 224/4 and 240/4; IPv6 `::`, `::1`, `fc00::/7`, `fe80::/10`, `fec0::/10`, `ff00::/8`,
-`2001:db8::/32`, `2001::/32` (Teredo), `64:ff9b:1::/48` and `100::/64`. An IPv6 address that carries an IPv4 one is
+`2001:db8::/32`, `2001::/32` (Teredo), `64:ff9b:1::/48` and `100::/64`, and everything outside `2000::/3` (the only
+global unicast block: `4000::/2`, `fbff::`, `fe00::` and `::ffff:0:a.b.c.d` are unrouted or reserved). An IPv6 address that carries an IPv4 one is
 judged by that IPv4 address: `::ffff:0:0/96`, `::/96`, `64:ff9b::/96` and `2002::/16`. Where the proxy connects is
 decided once per request:
 - an address literal is the address itself, and only a public one gets this far;
@@ -1121,8 +1159,8 @@ that changes after the check (rebinding) cannot lead it anywhere else.
 - Once a target is allowed, the bytes are not inspected: TLS stays end to end, and the proxy cannot tell what is
   sent to an allowed host. A broad entry (a code host) can carry data out; entries should be as narrow as the work.
 - `deny` stops new connections only; a tunnel already spliced stays until either side closes.
-- There is no idle timeout on a spliced connection, and connecting upstream waits as long as the system's TCP
-  connect does. Both hold one of the `max_conns` places meanwhile.
+- A spliced connection that carries no byte in either direction for `idle_timeout` (15 min) is ended and its place
+  goes back; connecting upstream is bounded by `connect_timeout`.
 - The proxy speaks HTTP CONNECT, and plain-HTTP absolute-form under the web policy only; never SOCKS.
 
 ### The web policy
@@ -1202,7 +1240,7 @@ in_use}`. `in_use` is true: every session starts in the sandbox (`agents/launch.
 **The probe is the real invocation.** `check(helper, tier, bwrap_override, timeout, run)` detects the backend, makes a
 temp dir, and builds a spec as hard as a job's: the isolated network with one relay port to a real Unix socket in a
 session dir (Linux), the tier's Landlock floor, seccomp. It validates the spec, prepares it, and `run` (Ratatoskr:
-`sandbox::run_probe`, through `draugr::spawn_pinned`, the way jobs start) spawns it within 5 s (1.4 s in the doctor).
+`sandbox::run_probe`, through `draugr::spawn_pinned`, the way jobs start) spawns it within 5 s (1.4 s in the doctor, and that bound covers the host facts it gathers first, `bwrap --version` included: a check that has not answered by then is a failed one, "did not answer within 1400 ms").
 The command is `/bin/sh -c 'cat "$1" >/dev/null 2>&1 && exit 9; exit 0' sh CANARY`, where CANARY is a file the spec
 does not grant. Exit 0 means the read was blocked. Exit 9 means "the sandbox ran but did not block a read", which
 fails the check; this is what makes it prove the sandbox, and on macOS that the profile enforces something. A relay
@@ -1216,7 +1254,7 @@ namespace switches under `/proc/sys`, a root-owned bwrap and its version, the La
 
 | When | Reason | Fix |
 |---|---|---|
-| a container | inside a container: bubblewrap needs user namespaces the container does not give | none |
+| a container | inside a container: bubblewrap needs user namespaces the container does not give, then ` (it said: FIRST LINE)` of what the start printed, when it printed any | none |
 | macOS, no trusted `sandbox-exec` | sandbox-exec was not found where only root can change it | it ships with macOS at `/usr/bin/sandbox-exec` |
 | full tier, no trusted bwrap | bubblewrap (bwrap) is not installed where only root can change it | the distribution's install command (`dnf`, `apt`, `pacman`, `zypper`; else "install bubblewrap 0.12.0 or newer with your package manager") |
 | full tier, bwrap below 0.12.0 | bubblewrap X is older than 0.12.0, which fixes a sandbox escape (CVE-2026-87766) | install 0.12.0 or newer; no older version is accepted, even with a distribution's backport. On Ubuntu 26.04 it adds that the update removed the fix again (0.11.1-1ubuntu0.3) and 26.10 ships 0.12.0 |
