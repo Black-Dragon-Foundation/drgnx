@@ -251,6 +251,9 @@ logical pixels, and its text, is the same in both."
           (select-frame-set-input-focus root)
           (cl-list* frame (format "two monitors, scales %S and %S" (drgnx-pixels-scale root) (drgnx-pixels-scale frame)) t))
       (set-face-attribute 'default frame :font (font-spec :family "Inter" :size (* 2 px)))
+      ;; the first frame keeps the focus, as on the second monitor: a window manager that focuses a new frame (macOS)
+      ;; would otherwise make it the selected one, and the rows' first window would be the second frame's
+      (select-frame-set-input-focus root)
       (cl-list* frame "one monitor: the second frame's font twice the first's" nil))))
 
 (defun drgnx-rows-fit-ui-test--panel-keys (buffer)
