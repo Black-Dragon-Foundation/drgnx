@@ -3,12 +3,11 @@
 //!
 //! - **reads** only its library and this binary (and the system's, which every spec gets);
 //! - **writes** nothing: no write root, no home, no session dir, no socket;
-//! - **no network**: a network namespace of its own with no relay (loopback inside it only);
+//! - **no network**: `Net::None`, a network namespace with nothing in it and every TCP port denied;
 //! - **stdin and stdout** are the whole interface: the framed protocol of `hrafn::chunk::worker`; stderr is kept (its
 //!   tail goes into the reason of a failure);
-//! - time is capped by the hub (the request deadline kills the process group); **memory is not capped yet**: the sandbox's
-//!   own limits (Landlock, seccomp, the namespaces) bound what the worker can reach, not what it can allocate. An address-space
-//!   limit goes in as soon as a Gleipnir spec can carry one.
+//! - time is capped by the hub (the request deadline kills the process group) and memory by an address-space limit of 1 GiB
+//!   (Linux; macOS refuses the field, so a macOS worker has the deadline alone), with 64 open files and no core dump.
 //!
 //! Only the full tier runs one: on the reduced tier (no mount or network namespace to keep the grammar out of the user's
 //! files and the network) the launcher refuses, and the pack's files read as text with a doctor line saying why.
@@ -55,6 +54,18 @@ impl Sandboxed {
         }
     }
 
+    /// The worker's resource caps: 1 GiB of address space (a grammar that allocates without bound fails its allocations,
+    /// the worker dies, and the hub reads the file as text) and 64 open files. macOS refuses the field (Seatbelt has no
+    /// such limit to set), so a macOS worker has only the request deadline: documented in `docs/develop/packs.md`.
+    fn rlimits() -> Option<gleipnir::Rlimits> {
+        cfg!(target_os = "linux").then(|| gleipnir::Rlimits {
+            address_space: Some(1 << 30),
+            data: None,
+            cpu_seconds: None,
+            open_files: Some(64),
+        })
+    }
+
     /// The spec of one worker: see the module doc. `None` when this tier cannot hold it.
     fn spec(&self, w: &WorkerSpec, target: gleipnir::Target) -> Result<gleipnir::Spec, String> {
         // two files and nothing else: the library, and this binary (the helper and the worker)
@@ -74,18 +85,13 @@ impl Sandboxed {
             run: None,
             env,
             chdir: PathBuf::from("/"),
-            net: gleipnir::Net::Isolated {
-                relay: vec![],
-                mac_tcp_ports: vec![],
-                // Linux: a namespace with no way out (no relay) is only valid with its own loopback; macOS: no port at all
-                loopback: cfg!(target_os = "linux"),
-                mac_loopback_ports: vec![],
-            },
+            net: gleipnir::Net::None,
             tmp: None,
             layers: gleipnir::Layers::for_target(target),
             extra_tcp_ports: vec![],
             trace: gleipnir::Trace::Off,
             browser: None,
+            rlimits: Self::rlimits(),
         })
     }
 }

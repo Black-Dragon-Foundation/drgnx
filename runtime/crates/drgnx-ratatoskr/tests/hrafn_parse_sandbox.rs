@@ -203,7 +203,12 @@ fn the_probe_started_plainly_reaches_what_it_tries_so_its_silence_in_the_sandbox
         .unwrap();
     let said = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(77), "{said}");
-    for what in ["read secret", "connect tcp", "connect unix"] {
+    for what in [
+        "read secret",
+        "connect tcp",
+        "connect unix",
+        "allocate 2 GiB",
+    ] {
         assert!(
             said.contains(&format!("PROBE ESCAPE {what}")),
             "{what}: {said}"

@@ -287,14 +287,16 @@ files no built-in language takes) goes through `chunk_file_refs` to the worker; 
   text until the hub restarts. A reason, with the end of the worker's stderr, goes to the log once and to `ratatoskr doctor`
   (`pack X not built (why): its files read as text`).
 - **The sandbox** (`parse_worker.rs`): Gleipnir's full tier, a spec with two read-only files (the library and this
-  binary) and nothing else: no write root, no home, no session dir, no socket, a network namespace with no relay (only its
-  own loopback), no environment but `PATH` and `LANG`. stdin is the pipe (a sandboxed one-shot gets `/dev/null`; the
+  binary) and nothing else: no write root, no home, no session dir, no socket, `Net::None` (a network namespace with nothing
+  in it, every TCP port denied), no environment but `PATH` and `LANG`, and `rlimits`: 1 GiB of address space and 64 open files
+  (no core dump). **macOS:** Gleipnir refuses `rlimits` there (no helper sets them), so the macOS worker has the sandbox's
+  file and network denials and the request deadline, and no memory cap. stdin is the pipe (a sandboxed one-shot gets `/dev/null`; the
   launcher turns that off for this). On the reduced tier, with no sandbox backend, or when the spec is refused, nothing is
   started and the pack reads as text with the reason in the doctor. `hrafn_parse_sandbox.rs` (the sandbox lane, `ctr.sh
   --sandbox`) runs the worker in the real sandbox: its answer equals the in-process chunker's, and a `probe` grammar that
   tries on load to write beside itself and in `/etc`, `/usr` and `/var/tmp`, to read a secret file and to connect to a TCP
   port and a Unix socket the test serves, gets nowhere (its control, started plainly, reaches them). A `/var/tmp` write
-  succeeds inside the sandbox and goes to a private tmpfs; the test checks the outside for files.
+  succeeds inside the sandbox and goes to a private tmpfs; the test checks the outside for files; a 2 GiB `mmap` fails.
 - **Where the packs come from.** At start the hub reads `<state>/packs/active.eld` and the lock (`parse_worker::fetched`):
   the installed packs the built-in set lacks, with `:hrafn :chunks` (and `queries/tags.scm` unless `:tags` says another),
   a built library the lock hashes. The language stamp includes each one (library hash, extensions, queries), so installing,

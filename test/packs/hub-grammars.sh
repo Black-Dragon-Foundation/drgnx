@@ -8,8 +8,8 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")/../.." && pwd)"
 cache=${1:?usage: hub-grammars.sh CACHE}
 packs="rust c cpp shell python javascript typescript tsx go java csharp"
-# fixtures4: the fixture grammars below are part of the folder, so a change to them is a new key
-key=$({ echo fixtures4; for p in $packs json; do grep -ho ':\(commit\|tree-sha256\|src\) "[^"]*"' "$here/packs/$p/pack.eld"; done; } | sha256sum | cut -c1-16)
+# fixtures5: the fixture grammars below are part of the folder, so a change to them is a new key
+key=$({ echo fixtures5; for p in $packs json; do grep -ho ':\(commit\|tree-sha256\|src\) "[^"]*"' "$here/packs/$p/pack.eld"; done; } | sha256sum | cut -c1-16)
 dir="$cache/$key"
 
 # Two broken grammars for the parse worker's tests (language packs Task 6b): the JSON grammar at its pinned commit with its
@@ -17,7 +17,7 @@ dir="$cache/$key"
 # any grammar, so a parse is what fails: `libloopy.so` and `libcrashy.so`, symbols `tree_sitter_loopy` and
 # `tree_sitter_crashy`, under FIXTURES.
 # What the `probe` grammar does when its library loads: tries to leave the sandbox, says PROBE ESCAPE WHAT on stderr for each
-# way that worked (a secret read, a TCP or Unix connection) and exits 77 if any did (`PROBE CLEAN` otherwise). Files it
+# way that worked (a secret read, a TCP or Unix connection, 2 GiB of address space) and exits 77 if any did (`PROBE CLEAN` otherwise). Files it
 # manages to create (beside the library, in /etc, /usr, /var/tmp) are left, named `PROBE WROTE PATH`: a sandbox may
 # give a process a private /var/tmp, so whether a write left the sandbox is for the test to see on the outside. The bait comes in the environment: PROBE_SECRET (a
 # file), PROBE_PORT (a TCP listener on 127.0.0.1) and PROBE_SOCK (a Unix socket server).
@@ -28,6 +28,7 @@ probe_c() {
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <netinet/in.h>
@@ -82,6 +83,11 @@ __attribute__((constructor)) static void probe(void) {
     strncpy(a.sun_path, sock, sizeof a.sun_path - 1);
     if (s >= 0 && connect(s, (struct sockaddr *)&a, sizeof a) == 0) bad |= escape("connect unix", sock);
     if (s >= 0) close(s);
+  }
+  {
+    // 2 GiB of address space: the worker's cap is 1 GiB, so a sandboxed worker's mmap must fail
+    void *big = mmap(0, 2UL << 30, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    if (big != MAP_FAILED) { munmap(big, 2UL << 30); bad |= escape("allocate 2 GiB", "-"); }
   }
   if (bad) { fprintf(stderr, "PROBE FAILED\n"); _exit(77); }
   fprintf(stderr, "PROBE CLEAN\n");
