@@ -205,7 +205,8 @@ narrow the segments of
 `drgnx-statusbar-drop-order` go by the pixels they take. A terminal frame still counts columns. The bar measures only
 when something it shows changes: zooming with `global-text-scale-adjust`, a scale change (the display's scale), another
 density and a change of a font role each lay it out again, so the right edge never goes stale. `drgnx-look-pixel-width`
-is the function that measures a string in a face.
+is the function that measures a string in a face. Which segments fit and where the branch is cut is worked out by
+Nidhogg (Sjá) from those widths, not in Lisp.
 
 **The look.** The bar is set in the caption type face (`drgnx-ui-caption`, through the face `drgnx-statusbar`) in the
 muted text colour (`drgnx-text-muted`) on the `gap` surface, which is the themes' mode line, and it is `status-bar` high

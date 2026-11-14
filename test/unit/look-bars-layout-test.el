@@ -360,17 +360,19 @@ allocation (building the key of `statusbar-widths' did, for every segment at eve
 (ert-deftest drgnx-look-bars/a-wide-bar-drops-without-copying ()
   "Pattern D: a bar too wide for its window drops the segments of `drgnx-statusbar-drop-order' in order until it
 fits (here eol, indent, then tests), making its lists once: it allocates a cell for each dropped and each kept
-segment and the pair it returns, not two copies of both lists for every id it tries.  The count is printed."
+segment and the pair it returns, not two copies of both lists for every id it tries.  The count is printed.
+The Lisp fit, for an Emacs whose Sjá has no bar layout: frozen."
+  :tags '(:frozen)
   (let* ((drgnx-statusbar--measure (byte-compile (lambda (s) (* 10 (length s)))))
          (drgnx-statusbar--pad 10) (drgnx-statusbar--space 10) (drgnx-statusbar--left-sep " · ")
          (drgnx-statusbar-drop-order '(eol indent encoding lsp language misc tests jobs toasts drgnx trust))
          (left (list (cons 'a "AAAA") (cons 'b "BBBB") (cons 'tests "TT") (cons 'jobs "J")))
          (right (list (cons 'c "CC") (cons 'eol "E") (cons 'indent "I")))
-         (fitted (drgnx-statusbar--fit left right 215)))
+         (fitted (drgnx-statusbar--fit-lisp left right 215)))
     (should (equal (mapcar #'car (car fitted)) '(a b jobs)))
     (should (equal (mapcar #'car (cdr fitted)) '(c)))
-    (let ((n (drgnx-memo-fixture-alloc (lambda () (drgnx-statusbar--fit left right 215))
-                                       'drgnx-statusbar--fit 'drgnx-statusbar--total 'drgnx-statusbar--run-width
+    (let ((n (drgnx-memo-fixture-alloc (lambda () (drgnx-statusbar--fit-lisp left right 215))
+                                       'drgnx-statusbar--fit-lisp 'drgnx-statusbar--total 'drgnx-statusbar--run-width
                                        'drgnx-statusbar--w 'drgnx-statusbar--cut-branch
                                        'drgnx-statusbar--total-without 'drgnx-statusbar--last-kept
                                        'drgnx-statusbar--without)))
@@ -444,8 +446,9 @@ special-mode buffer's) is not built again at all.  The counts per move are print
               (should (= 0 calls)))))))))
 
 (ert-deftest drgnx-look-bars/the-branch-cut-measures-a-few-times ()
-  "Pattern D: cutting a long branch to fit measures a few candidate lengths (halving), not one per character, and
-nothing when the same bar is laid out again.  The counts are printed."
+  "Pattern D: cutting a long branch to fit measures a few times, not once per character (Sjá: each distinct character
+once; the Lisp fit: a few candidate lengths, halving), and nothing when the same bar is laid out again.  The counts
+are printed."
   (drgnx-statusbar-test--with
     (let ((drgnx-statusbar-left '(branch)) (drgnx-statusbar-right '(c))
           (branch (concat "⑂ " (make-string 120 ?x))))
@@ -503,6 +506,48 @@ of the variant.  Under a tiling window manager the same default is the system's 
       (cl-letf (((symbol-function 'drgnx-face--gui-system) (lambda (_f) 'pgtk)))
         (let ((drgnx-face-title-bar 'system)) (drgnx-face--apply-title frame)))
       (modify-frame-parameters frame '((toplevel-chrome) (undecorated))))))
+
+;;;; The layout in Sjá
+
+(defun drgnx-look-bars-test--fitted (f left right width)
+  "The bar F (a fit function) leaves of LEFT and RIGHT at WIDTH: (LEFT . RIGHT), each (ID . TEXT) without properties."
+  (let ((fit (funcall f left right width))
+        (plain (lambda (segs) (mapcar (lambda (s) (cons (car s) (substring-no-properties (cdr s)))) segs))))
+    (cons (funcall plain (car fit)) (funcall plain (cdr fit)))))
+
+(defun drgnx-look-bars-test--same-as-lisp (left right widths)
+  "At each of WIDTHS, Sjá's layout of LEFT and RIGHT is the Lisp fit's, text for text; the fits that cut the branch."
+  (let (cuts)
+    (dolist (width widths)
+      (let ((sja (drgnx-look-bars-test--fitted #'drgnx-statusbar--sja-fit left right width)))
+        (should (equal (cons width sja) (cons width (drgnx-look-bars-test--fitted #'drgnx-statusbar--fit-lisp left right width))))
+        (unless (equal (cdr (assq 'branch (car sja))) (substring-no-properties (cdr (assq 'branch left))))
+          (push width cuts))))
+    cuts))
+
+(ert-deftest drgnx-look-bars/sja-lays-the-bar-out-as-the-lisp-fit ()
+  "Pattern D: Sjá's layout (`nidhogg-view-bar') keeps, drops and cuts as the Lisp fit does, in pixels (a plain branch
+and one with room either side of its text) and in a terminal's columns, at every width from wide to none."
+  (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-bar) "nidhogg-view-bar")
+  (let* ((drgnx-statusbar-drop-order '(eol indent encoding lsp language misc tests jobs toasts drgnx trust))
+         (room (let ((s (concat " " "feature/a-long-branch-name" " ")))
+                 (put-text-property 0 1 'drgnx-statusbar-pixels (cons 12 (substring s 1 -1)) s)
+                 s))
+         (widths (number-sequence 0 700 7)))
+    (let ((drgnx-statusbar--measure (lambda (s) (* 10 (length s))))
+          (drgnx-statusbar--pad 8) (drgnx-statusbar--space 10)
+          (drgnx-statusbar--left-sep " · ") (drgnx-statusbar--right-sep "  "))
+      (dolist (branch (list "feature/a-long-branch-name" room))
+        (should (drgnx-look-bars-test--same-as-lisp
+                 (list (cons 'branch branch) (cons 'problems "2 errors") (cons 'tests "5 ok") (cons 'jobs "J"))
+                 (list (cons 'lsp "eglot") (cons 'position "12:4") (cons 'eol "LF"))
+                 widths))))
+    (let ((drgnx-statusbar--measure #'string-width) (drgnx-statusbar--pad 1) (drgnx-statusbar--space 1)
+          (drgnx-statusbar--left-sep " · ") (drgnx-statusbar--right-sep "  "))
+      (should (drgnx-look-bars-test--same-as-lisp
+               (list (cons 'branch "feature/a-long-branch-name") (cons 'problems "2 errors"))
+               (list (cons 'position "12:4") (cons 'eol "LF"))
+               (number-sequence 0 60))))))
 
 (provide 'look-bars-layout-test)
 ;;; look-bars-layout-test.el ends here

@@ -2289,6 +2289,17 @@ There are two recorded exceptions:
   Lisp over the text a draw changed, and only when you set some. The plain addresses (`drgnx-term-link-url`) are the
   worker's.
 
+### The status bar's layout in Sjá (`modules/ui/drgnx-statusbar.el`)
+
+Which segments fit the window and where the branch is cut are Sjá's (`nidhogg-view-bar`, nidhogg/sja's `bar.rs`). Lisp
+measures each segment's text once (`drgnx-statusbar--w`, kept by the string), and the branch's characters once per
+branch text (`drgnx-statusbar--char-widths`). It sends the widths, the drop ranks of `drgnx-statusbar-drop-order`, the
+pads and the separators as one line of integers, and gets back the indices of the segments kept and the branch's cut
+(its first N characters and whether the ellipsis follows). It then joins the texts it already has. The fit's steps are
+the ones the guide gives: the drop order first, the branch cut to a short form, the others from the right, then the
+branch as far as it takes; a terminal's bar counts columns and leaves out an ellipsis wider than the room. An Emacs
+without the layout keeps the Lisp fit (`drgnx-statusbar--fit-lisp`, frozen).
+
 ## Modal core (`drgnx-modal.el`)
 
 The engine-neutral half of modal editing; evil plugs into it (the `editor/evil` module, below), another engine could.
