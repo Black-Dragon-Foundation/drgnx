@@ -268,6 +268,54 @@ The debugger is netcoredbg 3.2.0-1092 (`:adapters`, launch types `coreclr` and `
 the default launch configuration names. The live test (`csharp_breaks_steps_and_inspects_through_netcoredbg`, in the adapter
 image whose .NET SDK is pinned by SHA-512 in `test/container/debug-adapters-image.sh`) breaks, steps and inspects.
 
+## Fetched packs: the parse worker
+
+A pack that is not built in brings a grammar library somebody else wrote. The hub never loads it: `hrafn::chunk::worker`
+runs it in a worker process, `ratatoskr hrafn-parse --lib FILE --grammar NAME --sha256 HASH` (this binary again), which
+checks the library's hash, loads it, builds the pack's `chunks.scm` and `tags.scm`, and answers requests until its stdin
+ends. The tree never crosses the process: a request is one file (`path`, `text`, `budget`, at most 4 MiB), the answer is
+its chunks, symbols and references. A file whose extension a fetched pack claims (`hrafn::chunk::worker::claims`; only
+files no built-in language takes) goes through `chunk_file_refs` to the worker; every other outcome is the file read as text.
+
+- **Protocol.** Length-prefixed JSON frames (`u32` big-endian, then the body) on stdin and stdout, nothing else. The reader
+  refuses a length over the cap (32 MiB) before it allocates, reads the body in pieces, and calls a stream that ends inside a
+  frame truncated; a fuzzed-stream test runs it over random bytes. The hub also checks what a worker says: chunk offsets
+  inside the text, on character boundaries and in order, symbols pointing at chunks that exist, the id of the request.
+- **Failure costs the worker.** A request has a deadline (20 s, set by the hub, not by the worker: a scanner that never
+  returns cannot check a flag). A fault, a bad frame, a wrong answer or a missed deadline ends the process and its group, fails
+  that file (it reads as text) and the next file starts a fresh worker; three failures in ten minutes and the pack reads as
+  text until the hub restarts. A reason, with the end of the worker's stderr, goes to the log once and to `ratatoskr doctor`
+  (`pack X not built (why): its files read as text`).
+- **The sandbox** (`parse_worker.rs`): Gleipnir's full tier, a spec with two read-only files (the library and this
+  binary) and nothing else: no write root, no home, no session dir, no socket, `Net::None` (a network namespace with nothing
+  in it, every TCP port denied), no environment but `PATH` and `LANG`, and `rlimits`: 1 GiB of address space and 64 open files
+  (no core dump). **macOS:** Gleipnir refuses `rlimits` there (no helper sets them), so the macOS worker has the sandbox's
+  file and network denials and the request deadline, and no memory cap. stdin is the pipe (a sandboxed one-shot gets `/dev/null`; the
+  launcher turns that off for this). On the reduced tier, with no sandbox backend, or when the spec is refused, nothing is
+  started and the pack reads as text with the reason in the doctor. `hrafn_parse_sandbox.rs` (the sandbox lane, `ctr.sh
+  --sandbox`) runs the worker in the real sandbox: its answer equals the in-process chunker's, and a `probe` grammar that
+  tries on load to write beside itself and in `/etc`, `/usr` and `/var/tmp`, to read a secret file and to connect to a TCP
+  port and a Unix socket the test serves, gets nowhere (its control, started plainly, reaches them). A `/var/tmp` write
+  succeeds inside the sandbox and goes to a private tmpfs; the test checks the outside for files; a 2 GiB `mmap` fails.
+- **Where the packs come from.** At start the hub reads `<state>/packs/active.eld` and the lock (`parse_worker::fetched`):
+  the installed packs the built-in set lacks, with `:hrafn :chunks` (and `queries/tags.scm` unless `:tags` says another),
+  a built library the lock hashes. The language stamp includes each one (library hash, extensions, queries), so installing,
+  updating or removing a pack parses a project's files again.
+- **Tests.** `test/packs/hub-grammars.sh` also builds three fixture grammars from the JSON grammar: `loopy` (spins on the
+  first token), `crashy` (faults on it) and `probe`; `hrafn_parse.rs` starts the real worker (equals the in-process
+  chunker; a wrong hash is refused; `crashy` and `loopy` cost the worker and never the caller, the spinner is killed at the
+  deadline); `fetched_pack.rs` checks the chunker's side (the worker's answer, a refused launcher, the stamp).
+
+**What the worker does for the other parse sites (Task 6b-2).** Besides `chunk`, a request can be `find` (a structural
+pattern, ast-grep's syntax, in a file: the Search view's Pattern toggle sends each file of a fetched pack to its worker and
+reads back the matches) and `scan` (the names inline values show at a stopped row: the tree walk of `hrafn::inline_scan`,
+the same function the debugger runs for a built-in language, with the pack's `:inline` node kinds; the matching of the
+frame's variables and the lines drawn stay the hub's). The pack's `:hrafn :sigil` is its metavariable character. A
+pattern the pack's grammar refuses comes back as the pattern's error (the worker and the pack are not struck for it). The
+hub checks these answers like the chunks: match spans inside the text on character boundaries, lines the file's, a bounded
+number of bounded captures; names on rows of the file. Origin trails (`debug::origin`) keep their per-language Rust path
+for the built-in languages and do not reach a fetched pack's grammar yet.
+
 ## The language stamp
 
 The code index records the stamp the files were parsed under (`hrafn::chunk::lang_stamp`: a hash of every tree-sitter

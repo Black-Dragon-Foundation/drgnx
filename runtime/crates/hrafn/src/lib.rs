@@ -13,6 +13,7 @@ pub mod fresh;
 pub mod graph;
 pub mod grep;
 pub mod index;
+pub mod inline_scan;
 pub mod map;
 mod memo;
 pub mod overlay;

@@ -13,6 +13,7 @@ mod refs;
 mod registry;
 mod text;
 mod ts;
+pub mod worker;
 
 use crate::files::Lang;
 
@@ -34,7 +35,7 @@ pub const CHUNKER_VERSION: u32 = 2;
 pub const PARSE_VERSION: u32 = 8;
 
 /// The text of a chunk's FTS columns. `symbols` is raw: the store encodes it (`encode_symbol`) on write.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FtsCols {
     pub path: String,
     pub symbols: String,
@@ -42,7 +43,7 @@ pub struct FtsCols {
     pub body: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Chunk {
     pub start: u32,
     pub end: u32,
@@ -57,7 +58,7 @@ pub struct Chunk {
     pub embed: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Symbol {
     pub name: String,
     pub kind: String,
@@ -129,6 +130,15 @@ pub fn chunk_file_refs(
     text: &str,
     budget: usize,
 ) -> (Vec<Chunk>, Vec<Symbol>, Vec<Ref>) {
+    // a fetched pack's file: its grammar runs in a sandboxed worker, never here; when the worker cannot, the file is text
+    if lang == Lang::Text
+        && let Some(pack) = worker::claims(path)
+    {
+        match worker::chunk(&pack, path, generated, text, budget) {
+            Ok(done) => return done,
+            Err(e) => registry::say_pack(&pack, &format!("{e}: its files read as text")),
+        }
+    }
     let tree_sitter = |kind| ts::chunk(kind, path, generated, text, budget);
     let none = |(c, s): (Vec<Chunk>, Vec<Symbol>)| (c, s, Vec::new());
     match lang {

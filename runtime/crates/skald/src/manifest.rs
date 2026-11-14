@@ -255,7 +255,7 @@ pub struct Hrafn {
     pub helpers: Vec<Helper>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, serde::Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Docs {
     #[serde(default)]
@@ -270,7 +270,7 @@ pub struct Docs {
     pub members: Vec<DocMember>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, serde::Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum DocMember {
     Line,
@@ -477,6 +477,21 @@ pub fn read(bytes: &[u8]) -> Result<Manifest, PackError> {
             path: Some("schema".into()),
             message: format!("format {} is not one this drgnx reads ({SCHEMA})", m.schema),
         });
+    }
+    // files of the pack's own folder: every reader (Hrafn's loader, the worker's launcher) reads them under it
+    if let Some(h) = &m.hrafn {
+        for (key, v) in [("chunks", &h.chunks), ("tags", &h.tags)] {
+            if let Some(p) = v
+                && !crate::check::safe_rel(p)
+            {
+                return Err(PackError {
+                    path: Some(format!("hrafn.{key}")),
+                    message: format!(
+                        "{p:?} is not a path inside the pack's folder (no absolute path, no `..`)"
+                    ),
+                });
+            }
+        }
     }
     Ok(m)
 }

@@ -508,3 +508,28 @@ fn a_fetched_pack_may_not_start_a_language_server_and_a_part_needs_its_digest() 
         "adapters[0].install.parts[1]"
     ));
 }
+
+/// The files a manifest names for Hrafn are inside the pack's folder, whoever reads it (the hub's launcher reads them
+/// from the folder without `check`): `read` refuses a path that is absolute or climbs.
+#[test]
+fn a_manifest_whose_hrafn_files_leave_the_folder_does_not_read() {
+    for bad in [
+        "/etc/passwd",
+        "../x.scm",
+        "queries/../../x.scm",
+        "a//b.scm",
+        "",
+        "a\\b.scm",
+    ] {
+        let text = format!(
+            r#"(:pack "p" :schema 1 :version "1" :name "P" :summary "s" :license "MIT" :hrafn (:lang "p" :chunks {bad:?}))"#
+        );
+        let e = skald::read(text.as_bytes()).expect_err(bad);
+        assert_eq!(e.path.as_deref(), Some("hrafn.chunks"), "{bad}: {e:?}");
+        let text = text.replace(":chunks", ":tags");
+        let e = skald::read(text.as_bytes()).expect_err(bad);
+        assert_eq!(e.path.as_deref(), Some("hrafn.tags"), "{bad}: {e:?}");
+    }
+    let ok = r#"(:pack "p" :schema 1 :version "1" :name "P" :summary "s" :license "MIT" :hrafn (:lang "p" :chunks "queries/chunks.scm" :tags "queries/tags.scm"))"#;
+    assert!(skald::read(ok.as_bytes()).is_ok());
+}

@@ -20,6 +20,8 @@ pub struct Grammar {
     lang: Lang,
     ts: TSLanguage,
     expando: char,
+    /// What a refused pattern's message calls the language, for a grammar that is not one of Hrafn's.
+    label: Option<std::sync::Arc<str>>,
 }
 
 impl Grammar {
@@ -32,6 +34,7 @@ impl Grammar {
                     lang,
                     ts: tree_sitter_elisp::LANGUAGE.into(),
                     expando: '$',
+                    label: None,
                 });
             }
             Lang::Rust => ("rust", 'µ'),
@@ -48,7 +51,25 @@ impl Grammar {
             Lang::Org | Lang::Markdown | Lang::Text => return None,
         };
         let ts = skald::registry::language(name).ok()?;
-        Some(Grammar { lang, ts, expando })
+        Some(Grammar {
+            lang,
+            ts,
+            expando,
+            label: None,
+        })
+    }
+}
+
+impl Grammar {
+    /// A grammar the caller loaded (a fetched pack's, in its worker) with the character its metavariable sigil becomes;
+    /// its language reads as text to the messages.
+    pub fn from_parts(ts: tree_sitter::Language, expando: char, label: &str) -> Grammar {
+        Grammar {
+            lang: Lang::Text,
+            ts,
+            expando,
+            label: Some(label.into()),
+        }
     }
 }
 
@@ -110,6 +131,7 @@ pub struct PatternError {
     pub lang: Lang,
     pub col: Option<usize>,
     no_grammar: bool,
+    label: Option<String>,
 }
 
 impl std::fmt::Display for PatternError {
@@ -117,7 +139,10 @@ impl std::fmt::Display for PatternError {
         if self.no_grammar {
             return write!(f, "no grammar for {} files", self.lang.as_str());
         }
-        write!(f, "pattern is not valid {}", lang_name(self.lang))?;
+        match &self.label {
+            Some(l) => write!(f, "pattern is not valid {l}")?,
+            None => write!(f, "pattern is not valid {}", lang_name(self.lang))?,
+        }
         match self.col {
             Some(c) => write!(f, " at col {c}"),
             None => Ok(()),
@@ -168,7 +193,7 @@ impl Skip {
 
 /// One match: bytes `[start, end)` of the file; LINE and END_LINE from 1, COL and END_COL characters of their lines
 /// from 0; each named metavariable's text; and the template's expansion when the pattern has one.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Match {
     pub start: usize,
     pub end: usize,
@@ -191,17 +216,30 @@ pub struct Pattern {
 impl Pattern {
     /// PATTERN parsed as LANG, with the template REWRITE.
     pub fn new(lang: Lang, pattern: &str, rewrite: Option<&str>) -> Result<Pattern, PatternError> {
-        let refused = |col| PatternError {
-            lang,
-            col,
-            no_grammar: false,
-        };
         let Some(grammar) = Grammar::of(lang) else {
             return Err(PatternError {
                 lang,
                 col: None,
                 no_grammar: true,
+                label: None,
             });
+        };
+        Pattern::in_grammar(grammar, pattern, rewrite)
+    }
+
+    /// PATTERN parsed in GRAMMAR, with the template REWRITE.
+    pub fn in_grammar(
+        grammar: Grammar,
+        pattern: &str,
+        rewrite: Option<&str>,
+    ) -> Result<Pattern, PatternError> {
+        let lang = grammar.lang;
+        let label = grammar.label.as_deref().map(str::to_owned);
+        let refused = |col| PatternError {
+            lang,
+            col,
+            no_grammar: false,
+            label: label.clone(),
         };
         let processed = grammar.pre_process_pattern(pattern).into_owned();
         if let Some(col) = first_error(&grammar, &processed) {
