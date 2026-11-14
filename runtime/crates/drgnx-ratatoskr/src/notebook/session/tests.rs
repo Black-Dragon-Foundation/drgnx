@@ -355,3 +355,53 @@ async fn one_large_message_is_shown_as_a_note_and_the_kernel_carries_on() {
         "no reader stopped"
     );
 }
+
+#[test]
+fn a_stub_carries_only_a_short_name_a_short_display_id_and_an_integer_count() {
+    let long = "n".repeat(500);
+    let m = |t: &str, content: Value| {
+        let mut m = Message::request("kernel", t, content);
+        m.parent = json!({"msg_id": "p"});
+        m
+    };
+    let s = stub(
+        m("stream", json!({"name": long, "text": "t"})),
+        100 << 20,
+        16 << 20,
+    )
+    .unwrap();
+    assert_eq!(s.content["name"].as_str().unwrap().len(), 64);
+    assert!(s.content["text"].as_str().unwrap().contains("not shown"));
+    let id = "d".repeat(500);
+    let s = stub(
+        m(
+            "display_data",
+            json!({"data": {}, "transient": {"display_id": id}, "execution_count": "x"}),
+        ),
+        20 << 20,
+        16 << 20,
+    )
+    .unwrap();
+    assert_eq!(s.content["transient"], json!({}), "a long id is dropped");
+    assert!(
+        s.content["execution_count"].is_null(),
+        "a count that is not an integer"
+    );
+    let s = stub(
+        m(
+            "execute_result",
+            json!({"data": {}, "transient": {"display_id": "short"}, "execution_count": 7}),
+        ),
+        20 << 20,
+        16 << 20,
+    )
+    .unwrap();
+    assert_eq!(
+        (
+            s.content["transient"]["display_id"].as_str(),
+            s.content["execution_count"].as_i64()
+        ),
+        (Some("short"), Some(7))
+    );
+    assert!(stub(m("status", json!({})), 20 << 20, 16 << 20).is_none());
+}

@@ -221,3 +221,22 @@ fn a_signature_of_another_length_is_refused_before_it_is_decoded() {
     );
     assert_eq!(sig_bytes(&[b'a'; 64]).unwrap(), vec![0xaa; 32]);
 }
+
+#[test]
+fn decode_checks_the_signature_through_sig_bytes_and_only_after_the_sizes() {
+    let k = key();
+    let frames = encode(&k, &msg());
+    let before = SIG_CHECKS.with(std::cell::Cell::get);
+    decode(&k, &frames).unwrap();
+    assert_eq!(
+        SIG_CHECKS.with(std::cell::Cell::get),
+        before + 1,
+        "one signature, checked by length"
+    );
+    // a frame over its cap is refused before the signature is looked at
+    let mut big = frames.clone();
+    big[3] = vec![b' '; MAX_SMALL + 1];
+    let before = SIG_CHECKS.with(std::cell::Cell::get);
+    assert!(decode(&k, &big).is_err());
+    assert_eq!(SIG_CHECKS.with(std::cell::Cell::get), before);
+}

@@ -373,11 +373,18 @@ impl Drop for Kernel {
     }
 }
 
+/// How many bounded waits were made (a test pins that `kill` and `bounded_exit` make theirs through `exited_within`).
+#[cfg(test)]
+pub(crate) static BOUNDED_WAITS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 /// The exit if it happens within D (on the hub's clock), else None.
 pub(crate) async fn exited_within(
     rx: &mut watch::Receiver<Option<Exit>>,
     d: Duration,
 ) -> Option<Exit> {
+    #[cfg(test)]
+    BOUNDED_WAITS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     crate::clock::timeout(d, exited(rx)).await.ok()
 }
 

@@ -40,10 +40,29 @@ struct Shown {
 /// The largest notebook file read.
 pub const MAX_NOTEBOOK_BYTES: usize = 32 << 20;
 
+/// The most cells a notebook is read with.
+pub const MAX_CELLS: usize = 10_000;
+/// The longest language or kernelspec name kept.
+const NAME_CHARS: usize = 64;
+
 pub struct Book {
     pub path: PathBuf,
     nb: Notebook,
     shown: HashMap<String, Shown>,
+    /// A cell's place, kept in step with the notebook's cells.
+    index: HashMap<String, usize>,
+    /// What the metadata names, read once (it is parsed from the file's text) and short.
+    language: Option<String>,
+    kernelspec: Option<String>,
+}
+
+fn short(s: Option<String>) -> Option<String> {
+    s.map(|s| {
+        super::output::terminal::clean(&s)
+            .chars()
+            .take(NAME_CHARS)
+            .collect()
+    })
 }
 
 /// An output object as nbformat's writer writes it: multiline text as a list of lines (images stay one string).
@@ -90,6 +109,20 @@ impl Book {
         }
         let nb = Notebook::parse(text, &mut random_id)
             .map_err(|e| format!("{}: not a notebook: {e:?}", path.display()))?;
+        if nb.cells().len() > MAX_CELLS {
+            return Err(format!(
+                "{}: too many cells ({}; the limit is {MAX_CELLS})",
+                path.display(),
+                nb.cells().len()
+            ));
+        }
+        let (language, kernelspec) = (short(nb.language()), short(nb.kernelspec_name()));
+        let index = nb
+            .cells()
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (c.id.clone(), i))
+            .collect();
         let shown = nb
             .cells()
             .iter()
@@ -118,6 +151,9 @@ impl Book {
             path: path.to_path_buf(),
             nb,
             shown,
+            index,
+            language,
+            kernelspec,
         })
     }
 
@@ -134,15 +170,79 @@ impl Book {
             .collect()
     }
 
+    /// The first LIMIT cells for the outline (their first lines, not their sources) and how many cells there are. A cell's state is
+    /// how its last run ended; queued and running are the caller's to say.
+    pub fn outline(&self, limit: usize) -> (usize, Vec<super::views::OutlineCell>) {
+        let cells = self.nb.cells();
+        let out = cells
+            .iter()
+            .take(limit)
+            .map(|c| {
+                let shown = self.shown.get(&c.id);
+                super::views::OutlineCell {
+                    id: c.id.clone(),
+                    kind: c.kind,
+                    first_line: super::views::first_line(&c.source),
+                    execution_count: c.execution_count,
+                    state: match shown.map(|s| s.run.status) {
+                        Some(RunStatus::Error) => "error",
+                        Some(RunStatus::Aborted) => "aborted",
+                        Some(RunStatus::Cancelled) => "cancelled",
+                        _ => "",
+                    },
+                    stale: shown.is_some_and(|s| s.stale),
+                }
+            })
+            .collect();
+        (cells.len(), out)
+    }
+
     /// One cell, without copying the others.
     pub fn cell_info(&self, id: &str) -> Option<CellInfo> {
-        let c = self.nb.cells().iter().find(|c| c.id == id)?;
+        let c = &self.nb.cells()[self.index(id)?];
         Some(CellInfo {
             id: c.id.clone(),
             kind: c.kind,
             source: c.source.clone(),
             execution_count: c.execution_count,
         })
+    }
+
+    /// A cell's kind and execution count (what its head shows), without its text.
+    pub fn cell_head(&self, id: &str) -> Option<(Kind, Option<i64>)> {
+        let c = &self.nb.cells()[self.index(id)?];
+        Some((c.kind, c.execution_count))
+    }
+
+    /// The text of the cells in CELLS is the notebook's (the others are as they were): what a run needs, however many cells there are.
+    pub fn update(&mut self, cells: &[CellSync]) {
+        for c in cells {
+            if let Some(i) = self.index(&c.id)
+                && self.nb.cells()[i].source != c.source
+            {
+                self.nb.set_source(i, &c.source);
+            }
+        }
+    }
+
+    /// Cell ID's tail is a new version: the number it carries (it counts up with every change the editor is told of).
+    pub fn next_version(&mut self, id: &str) -> u64 {
+        let s = self.shown.entry(id.to_string()).or_insert_with(|| Shown {
+            run: CellRun::from_outputs(id, [], RunStatus::Ok),
+            stale: false,
+            version: 0,
+        });
+        s.version += 1;
+        s.version
+    }
+
+    /// A cell that did not run (it was aborted or cancelled while queued) says so and keeps the outputs it had.
+    pub fn mark(&mut self, id: &str, status: RunStatus) -> u64 {
+        let v = self.next_version(id);
+        if let Some(s) = self.shown.get_mut(id) {
+            s.run.status = status;
+        }
+        v
     }
 
     /// Cell ID has no output and no execution count.
@@ -165,15 +265,15 @@ impl Book {
     }
 
     pub fn kernelspec_name(&self) -> Option<String> {
-        self.nb.kernelspec_name()
+        self.kernelspec.clone()
     }
 
     pub fn language(&self) -> Option<String> {
-        self.nb.language()
+        self.language.clone()
     }
 
     fn index(&self, id: &str) -> Option<usize> {
-        self.nb.cells().iter().position(|c| c.id == id)
+        self.index.get(id).copied()
     }
 
     /// Make the notebook's cells what the buffer says: removed ones go, moved ones move, new ones come, text and type follow.
@@ -190,31 +290,21 @@ impl Book {
             }
             return;
         }
-        let want: std::collections::HashSet<&str> = cells.iter().map(|c| c.id.as_str()).collect();
-        for i in (0..self.nb.cells().len()).rev() {
-            if !want.contains(self.nb.cells()[i].id.as_str()) {
-                let id = self.nb.cells()[i].id.clone();
-                self.nb.remove(i);
-                self.shown.remove(&id);
-            }
-        }
-        for (at, c) in cells.iter().enumerate() {
-            match self.index(&c.id) {
-                Some(j) if j == at => {}
-                Some(j) => self.nb.move_cell(j, at),
-                None => {
-                    let mut once = Some(c.id.clone());
-                    self.nb.insert(at, c.kind, &c.source, &mut || {
-                        once.take().unwrap_or_else(random_id)
-                    });
-                }
-            }
-            let i = self.index(&c.id).expect("the cell is there now");
-            if self.nb.cells()[i].source != c.source {
-                self.nb.set_source(i, &c.source);
-            }
-            self.nb.set_kind(i, c.kind);
-        }
+        // anything else (cells added, removed or moved): one pass, whatever changed
+        let plan: Vec<(String, Kind, String)> = cells
+            .iter()
+            .map(|c| (c.id.clone(), c.kind, c.source.clone()))
+            .collect();
+        self.nb.rearrange(&plan, &mut random_id);
+        self.index = self
+            .nb
+            .cells()
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (c.id.clone(), i))
+            .collect();
+        let index = &self.index;
+        self.shown.retain(|id, _| index.contains_key(id));
     }
 
     /// Cell ID shows what RUN has now (its outputs, its state, whether they were cut), with its execution count.
@@ -223,7 +313,7 @@ impl Book {
         if run.execution_count.is_some() {
             self.nb.set_execution_count(i, run.execution_count);
         }
-        let version = self.shown.get(id).map_or(0, |s| s.version) + 1;
+        let version = self.shown.get(id).map_or(0, |s| s.version);
         self.shown.insert(
             id.to_string(),
             Shown {
@@ -244,6 +334,15 @@ impl Book {
                 false,
             ),
         })
+    }
+
+    /// What cell ID shows as a run (its outputs as the hub holds them), for the full-output view.
+    pub fn run_of(&self, id: &str) -> Option<CellRun> {
+        self.index(id)?;
+        Some(self.shown.get(id).map_or_else(
+            || CellRun::from_outputs(id, [], RunStatus::Ok),
+            |s| s.run.clone(),
+        ))
     }
 
     /// The cell's full output as nbformat objects.

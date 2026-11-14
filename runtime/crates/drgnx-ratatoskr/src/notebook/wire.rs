@@ -40,10 +40,18 @@ fn hex(bytes: &[u8]) -> String {
 /// The 32 bytes of an HMAC-SHA256 signature written as 64 hex characters: a signature of any other length is refused before anything is
 /// decoded or allocated.
 pub(crate) fn sig_bytes(sig: &[u8]) -> Option<Vec<u8>> {
+    #[cfg(test)]
+    SIG_CHECKS.with(|c| c.set(c.get() + 1));
     if sig.len() != 64 {
         return None;
     }
     unhex(sig)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many signatures were checked for length on this thread (a test pins that `decode` is the one that does).
+    pub(crate) static SIG_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 fn unhex(s: &[u8]) -> Option<Vec<u8>> {

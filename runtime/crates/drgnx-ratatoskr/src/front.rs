@@ -327,6 +327,7 @@ impl Front {
         self.core.buffers.gone(conn);
         self.core.terms.gone(conn);
         self.extensions.gone(conn);
+        self.notebooks.gone(conn);
     }
 
     /// EVENT with DATA to every subscribed connection: queued for each before any is written (a queue never waits),
@@ -1012,6 +1013,8 @@ impl Front {
             | Params::NotebookInput(_)
             | Params::NotebookTail(_)
             | Params::NotebookOutput(_)
+            | Params::NotebookView(_)
+            | Params::NotebookLog(_)
             | Params::NotebookClear(_)
             | Params::NotebookClose(_)) => crate::notebook::rpc::serve(self, &caller, p)
                 .await

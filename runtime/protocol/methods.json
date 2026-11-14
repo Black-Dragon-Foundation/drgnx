@@ -27318,6 +27318,89 @@
       "classes": [
         "user"
       ],
+      "doc": "the kernel's log of a notebook after entry `since`: the messages that answered no cell (the kernel's own logging, messages from other clients), the last 500, each cut at 4096 characters",
+      "name": "notebook/log",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`notebook/log`: the kernel's log of notebook ID after entry SINCE (all it holds when none).",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "since": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "NotebookLogParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "NotebookLogEntry": {
+            "description": "One entry of a kernel's log: a message that answered no cell (the kernel's own logging, a message from another client). SEQ\ncounts from 1; TYPE is the message type (`stream`, `error`, ...); TEXT is what it says, cut at 4096 characters.",
+            "properties": {
+              "seq": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "text": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "seq",
+              "type",
+              "text"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`notebook/log`'s answer: the ENTRIES after SINCE (the hub keeps the last 500), NEXT the number to pass as `since` to get what is\nnewer, LOST how many entries after SINCE the hub no longer holds.",
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/$defs/NotebookLogEntry"
+            },
+            "type": "array"
+          },
+          "lost": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "next": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "entries",
+          "next",
+          "lost"
+        ],
+        "title": "NotebookLog",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "open a Jupyter notebook in the hub (from the buffer's text, else the file): its id, cells, kernelspec and each code cell's tail from the file",
       "name": "notebook/open",
       "params": {
@@ -27548,7 +27631,7 @@
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "description": "`notebook/open`'s answer: the notebook's ID, its CELLS, the kernelspec name and language it names, and each code cell's TAILS from the file.",
+        "description": "`notebook/open`'s answer: the notebook's ID, its CELLS, the kernelspec name and language it names, and the TAILS of the code cells that\nhave output in the file: the first 200 of them within 1 MiB of JSON (a cell without a tail has no output), and how many more there are\n(`more_tails`: ask `notebook/tail` for the cells it names).",
         "properties": {
           "cells": {
             "items": {
@@ -27573,6 +27656,11 @@
               "null"
             ]
           },
+          "more_tails": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
           "tails": {
             "items": {
               "$ref": "#/$defs/NotebookTail"
@@ -27583,7 +27671,8 @@
         "required": [
           "id",
           "cells",
-          "tails"
+          "tails",
+          "more_tails"
         ],
         "title": "NotebookOpened",
         "type": "object"
@@ -28078,6 +28167,63 @@
           "more_lines"
         ],
         "title": "NotebookTail",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a hub view of a notebook for the editor to show in Sjá: the cell outline (one row per cell with its index, type, first line, prompt and state) the whole output of one cell (windowed by view/window) or the kernel's log; the answer names the view, rows follow its view/env",
+      "name": "notebook/view",
+      "params": {
+        "$defs": {
+          "NotebookViewKind": {
+            "description": "What one of a notebook's Sjá views shows (docs/develop/notebooks.md, \"The views\"): `outline` is one row per cell, `output` the\nwhole output of one cell, `log` what the kernel says that answers no cell.",
+            "enum": [
+              "outline",
+              "output",
+              "log"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`notebook/view`: the hub view of KIND for notebook ID (`output` names the CELL). The answer names the view; the editor then sends `view/env` for it like\nany hub-fed view and gets its rows as `view-patch` events.",
+        "properties": {
+          "cell": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/$defs/NotebookViewKind"
+          }
+        },
+        "required": [
+          "id",
+          "kind"
+        ],
+        "title": "NotebookViewParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`notebook/view`'s answer: the view's id (at most 64 bytes, what `view/env` and `view/close` name).",
+        "properties": {
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "NotebookViewName",
         "type": "object"
       },
       "writes": false

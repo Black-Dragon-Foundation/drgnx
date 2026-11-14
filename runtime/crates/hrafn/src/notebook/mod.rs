@@ -600,6 +600,44 @@ impl Notebook {
         self.changed = true;
     }
 
+    /// The cells become PLAN (id, kind, source), in that order: the cells that were are kept (their bytes too, until their text or
+    /// type differs), a new one is added with its id (a repeated id gets one from MINT), the rest go. One pass, however much changed.
+    pub fn rearrange(&mut self, plan: &[(String, Kind, String)], mint: &mut dyn FnMut() -> String) {
+        let mut old: std::collections::HashMap<String, Cell> =
+            self.cells.drain(..).map(|c| (c.id.clone(), c)).collect();
+        let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut cells = Vec::with_capacity(plan.len());
+        for (id, kind, source) in plan {
+            let cell = match old.remove(id) {
+                Some(c) => c,
+                None => {
+                    let mut id = id.clone();
+                    while used.contains(&id) || old.contains_key(&id) {
+                        id = mint();
+                    }
+                    Cell {
+                        id,
+                        had_id: true,
+                        kind: *kind,
+                        source: source.clone(),
+                        origin: Origin::New,
+                        execution_count: None,
+                    }
+                }
+            };
+            used.insert(cell.id.clone());
+            cells.push(cell);
+        }
+        self.cells = cells;
+        self.changed = true;
+        for (i, (_, kind, source)) in plan.iter().enumerate() {
+            if self.cells[i].source != *source {
+                self.set_source(i, source);
+            }
+            self.set_kind(i, *kind);
+        }
+    }
+
     /// Remove cell I.
     pub fn remove(&mut self, i: usize) {
         self.cells.remove(i);

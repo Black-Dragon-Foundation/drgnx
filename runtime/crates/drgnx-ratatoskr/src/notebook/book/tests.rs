@@ -69,9 +69,12 @@ fn a_notebook_opens_with_its_cells_ids_and_the_files_outputs_as_stale_tails() {
 #[test]
 fn a_run_replaces_the_stale_outputs_and_the_tail_version_counts_up() {
     let mut b = open();
+    // the pump counts a version for each tail it sends and the notebook is shown the output now and then
+    assert_eq!(b.next_version("c1"), 2);
     b.show("c1", &run(vec![stream("new")], Some(4)));
     let (t, stale) = b.tail("c1").unwrap();
     assert_eq!((t.text.as_str(), stale, t.version), ("new", false, 2));
+    assert_eq!(b.next_version("c1"), 3);
     b.show("c1", &run(vec![stream("newer")], Some(4)));
     assert_eq!(b.tail("c1").unwrap().0.version, 3);
     assert_eq!(b.cells()[1].execution_count, Some(4));
@@ -209,4 +212,95 @@ fn the_same_cells_in_the_same_order_are_updated_in_place() {
         ),
         ("# New", Kind::Markdown, "now text", "z = 3")
     );
+}
+
+#[test]
+fn a_notebook_with_too_many_cells_is_refused_and_the_language_is_read_once_and_short() {
+    let cell = r#"{"cell_type": "markdown", "metadata": {}, "source": []}"#;
+    let many = format!(
+        r#"{{"cells": [{}], "metadata": {{}}, "nbformat": 4, "nbformat_minor": 4}}"#,
+        vec![cell; MAX_CELLS + 1].join(",")
+    );
+    let e = Book::open(Path::new("/x/many.ipynb"), many).err().unwrap();
+    assert!(e.contains("too many cells"), "{e}");
+    let lang = "p".repeat(500);
+    let text = format!(
+        r#"{{"cells": [], "metadata": {{"kernelspec": {{"name": "{lang}", "language": "{lang}"}}}}, "nbformat": 4, "nbformat_minor": 5}}"#
+    );
+    let b = Book::open(Path::new("/x/l.ipynb"), text).unwrap();
+    assert_eq!(b.language().unwrap().len(), 64);
+    assert_eq!(b.kernelspec_name().unwrap().len(), 64);
+}
+
+#[test]
+fn a_notebook_of_ten_thousand_cells_is_opened_synced_and_given_tails_by_index() {
+    let outs = r#"[{"output_type": "stream", "name": "stdout", "text": ["x\n"]}]"#;
+    let cells: Vec<String> = (0..MAX_CELLS)
+        .map(|i| format!(r#"{{"cell_type": "code", "id": "c{i}", "metadata": {{}}, "execution_count": {i}, "outputs": {outs}, "source": ["{i}"]}}"#))
+        .collect();
+    let text = format!(
+        r#"{{"cells": [{}], "metadata": {{}}, "nbformat": 4, "nbformat_minor": 5}}"#,
+        cells.join(",")
+    );
+    // on a thread waited for with a deadline: quadratic work here would fail the test, not hang it
+    let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let s2 = slot.clone();
+    std::thread::spawn(move || {
+        let mut b = Book::open(Path::new("/x/big.ipynb"), text).unwrap();
+        let tails = (0..MAX_CELLS)
+            .filter_map(|i| b.tail(&format!("c{i}")))
+            .count();
+        // the last cell first, a cell added in the middle, one gone: not the fast path
+        let mut plan: Vec<CellSync> = b
+            .cells()
+            .into_iter()
+            .map(|c| CellSync {
+                id: c.id,
+                kind: c.kind,
+                source: c.source,
+            })
+            .collect();
+        plan.rotate_right(1);
+        plan.remove(5);
+        plan.insert(
+            7,
+            CellSync {
+                id: "added".into(),
+                kind: Kind::Code,
+                source: "new".into(),
+            },
+        );
+        b.sync(&plan);
+        let cells = b.cells();
+        *s2.lock().unwrap() = Some((
+            tails,
+            cells.len(),
+            cells[0].id.clone(),
+            cells[7].id.clone(),
+            b.tail("c4").is_none(),
+            b.tail("added").is_some(),
+        ));
+    });
+    let (tails, n, first, seventh, c5_gone, added) =
+        skuld::wait_until("the notebook", 60, || slot.lock().unwrap().take());
+    assert_eq!((tails, n), (MAX_CELLS, MAX_CELLS));
+    assert_eq!(
+        (first.as_str(), seventh.as_str(), c5_gone, added),
+        (format!("c{}", MAX_CELLS - 1).as_str(), "added", true, true)
+    );
+}
+
+#[test]
+fn a_cell_that_did_not_run_keeps_its_outputs_and_only_its_state_changes() {
+    let mut b = open();
+    let before = b.outputs_of("c1");
+    assert_eq!(before.len(), 1);
+    b.mark("c1", RunStatus::Aborted);
+    assert_eq!(
+        b.outputs_of("c1"),
+        before,
+        "the output it had stays, and is saved"
+    );
+    let (t, _) = b.tail("c1").unwrap();
+    assert_eq!(t.text, "old\n\naborted");
 }
