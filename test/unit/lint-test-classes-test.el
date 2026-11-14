@@ -387,6 +387,24 @@ a test reaches by a call: a command a test binds to a key is named by `function'
   (should-not (drgnx-lint-classes--violations :cond #'drgnx-lint-classes--rule-cond))
   (should-not (drgnx-lint-classes--gui-pauses)))
 
+(defun drgnx-lint-classes--pause-files ()
+  "The live test files (relative names) that call `drgnx-test-pause' outside `drgnx-test-with-clock', anywhere in them."
+  (seq-filter (lambda (rel)
+                (seq-some (lambda (form) (memq 'drgnx-test-pause (drgnx-lint-classes--calls form)))
+                          (drgnx-lint-classes--forms (expand-file-name rel drgnx-dir))))
+              (drgnx-lint-classes--files)))
+
+(ert-deftest drgnx-lint/real-pauses-are-registered ()
+  ;; test/wall-clock-allowed.eld: a file with a real pause is listed with a reason and a slice; a listed file has one
+  (let ((rows (with-temp-buffer (insert-file-contents (expand-file-name "test/wall-clock-allowed.eld" drgnx-dir))
+                                (read (current-buffer))))
+        (files (drgnx-lint-classes--pause-files)))
+    (should-not (seq-difference files (mapcar #'car rows)))
+    (should-not (seq-difference (mapcar #'car rows) files))
+    (dolist (r rows)
+      (should (stringp (plist-get (cdr r) :why)))
+      (should (stringp (plist-get (cdr r) :slice))))))
+
 (ert-deftest drgnx-lint/event-waits-are-bounded-and-measure-nothing ()
   (should-not (drgnx-lint-classes--wait-violations)))
 
