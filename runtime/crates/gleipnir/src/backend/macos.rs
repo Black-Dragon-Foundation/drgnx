@@ -220,6 +220,7 @@ mod tests {
             tmp: Some(root.join("tmp")),
             layers: Layers::for_target(Target::Macos),
             extra_tcp_ports: vec![],
+            rlimits: None,
             trace: Default::default(),
             browser: None,
         };

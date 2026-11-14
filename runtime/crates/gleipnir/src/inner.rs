@@ -70,6 +70,10 @@ pub struct InnerSpec {
     /// The browser host (version 2), forked after the relay under a layer of its own and ready before the program.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub browser: Option<BrowserPlan>,
+    /// Resource caps for the program ([`crate::Rlimits`]), set just before the exec: the relay and the browser host,
+    /// started before it, are not held by them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rlimits: Option<crate::Rlimits>,
     /// Test hook (Task 15's row `landlock-layer-2`): removed from the write roots.
     #[cfg(feature = "test-hooks")]
     #[serde(default)]
@@ -154,6 +158,7 @@ impl InnerSpec {
             relay: None,
             trace_tree: None,
             browser: None,
+            rlimits: None,
             #[cfg(feature = "test-hooks")]
             landlock_omit: vec![],
             #[cfg(feature = "test-hooks")]
@@ -181,6 +186,7 @@ impl InnerSpec {
             chdir: Some(s.chdir.clone()),
             relay,
             trace_tree,
+            rlimits: s.rlimits.clone(),
             ..InnerSpec::new(plan_for(spec, tier))
         }
     }
@@ -618,6 +624,7 @@ mod linux {
         argv: Vec<CString>,
         envp: Vec<CString>,
         chdir: Option<CString>,
+        rlimits: Option<crate::Rlimits>,
         _relay: Option<ChildGuard>,
         _browser: Option<ChildGuard>,
     }
@@ -893,6 +900,14 @@ mod linux {
                 return EXIT_SETUP;
             }
         }
+        // The caps last: the relay and the browser host started under the helper's own limits, and the program is the
+        // helper from here on, so what it execs inherits these (soft and hard alike: it cannot raise them).
+        if let Some(r) = &ready.rlimits
+            && let Err(e) = apply_rlimits(r)
+        {
+            eprintln!("ratatoskr sandbox-inner: {e}");
+            return EXIT_SETUP;
+        }
         let argv = nul_terminated(&ready.argv);
         let envp = nul_terminated(&ready.envp);
         let mut cannot = None;
@@ -918,6 +933,36 @@ mod linux {
                 EXIT_NOT_FOUND
             }
         }
+    }
+
+    /// `RLIMIT_CORE` 0 and each cap the spec names, soft and hard the same.
+    fn apply_rlimits(r: &crate::Rlimits) -> Result<(), String> {
+        let set = |name: &str, resource: i64, v: u64| {
+            let lim = libc::rlimit {
+                rlim_cur: v as libc::rlim_t,
+                rlim_max: v as libc::rlim_t,
+            };
+            // SAFETY: a plain syscall on a struct that lives through the call.
+            if unsafe { libc::setrlimit(resource as _, &lim) } != 0 {
+                return Err(format!(
+                    "cannot set {name} to {v}: {}",
+                    io::Error::last_os_error()
+                ));
+            }
+            Ok(())
+        };
+        set("RLIMIT_CORE", libc::RLIMIT_CORE as i64, 0)?;
+        for (name, resource, v) in [
+            ("RLIMIT_AS", libc::RLIMIT_AS as i64, r.address_space),
+            ("RLIMIT_DATA", libc::RLIMIT_DATA as i64, r.data),
+            ("RLIMIT_CPU", libc::RLIMIT_CPU as i64, r.cpu_seconds),
+            ("RLIMIT_NOFILE", libc::RLIMIT_NOFILE as i64, r.open_files),
+        ] {
+            if let Some(v) = v {
+                set(name, resource, v)?;
+            }
+        }
+        Ok(())
     }
 
     fn nul_terminated(v: &[CString]) -> Vec<*const libc::c_char> {
@@ -975,6 +1020,7 @@ mod linux {
             argv,
             envp,
             chdir,
+            rlimits: spec.rlimits.clone(),
             _relay: None,
             _browser: None,
         })
@@ -1366,6 +1412,7 @@ mod tests {
             tmp: None,
             layers: Layers::for_target(Target::LinuxBwrap),
             extra_tcp_ports: vec![5173],
+            rlimits: None,
             trace: Default::default(),
             browser: Some(SpecBrowser {
                 program: "/usr/lib64/chromium-browser/headless_shell".into(),

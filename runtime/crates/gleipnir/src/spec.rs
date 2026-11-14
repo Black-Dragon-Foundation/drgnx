@@ -135,6 +135,12 @@ pub struct Spec {
     /// TCP ports the program may connect to besides the relay's, under `Net::Isolated` (Landlock's port rule).
     #[serde(default)]
     pub extra_tcp_ports: Vec<u16>,
+    /// Caps on the program's resources (Linux, both tiers): set by the inner helper just before it execs the program,
+    /// so the relay and the browser host it started are not held by them, and the program cannot raise them (soft and
+    /// hard alike). None: the host's limits as they are. Refused on macOS, which has no helper to set them: a cap that
+    /// is not enforced is not offered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rlimits: Option<Rlimits>,
     /// Whether the files the program's shell steps open are seen ([`crate::trace`]): off unless asked.
     #[serde(default, skip_serializing_if = "Trace::is_off")]
     pub trace: Trace,
@@ -221,12 +227,19 @@ pub enum Mode {
     Rw,
 }
 
-/// The network: `"shared"`, or `{"isolated": {"relay": [...], "mac_tcp_ports": [...], "loopback": false}}`.
+/// The network: `"shared"`, `"none"`, or `{"isolated": {"relay": [...], "mac_tcp_ports": [...], "loopback": false}}`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Net {
     /// The host's network (bwrap `--share-net`; Seatbelt allows any remote address).
     Shared,
+    /// No network at all, for a program that needs none (a grammar worker). Linux full tier: a new network namespace
+    /// with nothing in it, no relay, and Landlock's TCP rules kept with no port allowed (every connect and bind is
+    /// refused, the loopback's too). Linux reduced tier: no namespace, so the same Landlock rules alone (no TCP
+    /// connect or bind anywhere) and the tier's seccomp filter, which already refuses UDP and raw sockets. macOS:
+    /// Seatbelt's `(deny network*)` and no localhost port. `extra_tcp_ports`, a browser and a relay have nothing to
+    /// reach, so a spec that names one is refused.
+    None,
     /// No network of its own. Linux: a new network namespace, and the relay forwards loopback ports inside to Unix
     /// sockets outside (`relay` must not be empty, except with `loopback`: a sealed debug fork has no way out).
     /// macOS: only `localhost` on `mac_tcp_ports`.
@@ -247,6 +260,25 @@ pub enum Net {
         #[serde(default)]
         mac_loopback_ports: Vec<u16>,
     },
+}
+
+/// Resource caps for the program ([`Spec::rlimits`]). A field left out sets no cap of its own; `RLIMIT_CORE` is always 0
+/// when the `rlimits` field is present (no core dump leaves the sandbox's memory on disk).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Rlimits {
+    /// `RLIMIT_AS`: bytes of address space; a program over it fails its allocations.
+    #[serde(default)]
+    pub address_space: Option<u64>,
+    /// `RLIMIT_DATA`: bytes of data segment and heap (`brk`, and anonymous `mmap` on Linux 4.7 and later).
+    #[serde(default)]
+    pub data: Option<u64>,
+    /// `RLIMIT_CPU`: seconds of CPU time; the program is sent `SIGXCPU`, then killed at the hard limit one second on.
+    #[serde(default)]
+    pub cpu_seconds: Option<u64>,
+    /// `RLIMIT_NOFILE`: the highest file descriptor number plus one.
+    #[serde(default)]
+    pub open_files: Option<u64>,
 }
 
 /// A loopback port inside, forwarded to a Unix socket; `socket` is the socket's path inside.

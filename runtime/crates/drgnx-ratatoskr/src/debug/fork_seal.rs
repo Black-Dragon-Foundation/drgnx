@@ -310,6 +310,7 @@ pub fn spec(s: &Shape<'_>, target: Target) -> Spec {
         tmp: Some(s.tmp.to_path_buf()),
         layers: Layers::for_target(target),
         extra_tcp_ports: vec![],
+        rlimits: None,
         trace: Trace::Off,
         browser: None,
     }

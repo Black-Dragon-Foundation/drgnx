@@ -139,6 +139,7 @@ pub fn spec(job: &Job) -> Spec {
         tmp: Some(tmp),
         layers: Layers::for_target(Target::Macos),
         extra_tcp_ports: vec![],
+        rlimits: None,
         trace: Default::default(),
         browser: None,
     }
