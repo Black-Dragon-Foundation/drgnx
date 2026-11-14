@@ -1617,7 +1617,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `tasks/find` | user | `{assignee?: string, cursor?: natnum, labels?: [string], project?: string, query?: Text, status?: Status}` | `{cursor?: natnum, tasks?: [any]}` | no |
 | `tasks/ready` | user | `{labels?: [string], limit?: natnum, project?: string}` | `{cursor?: natnum, tasks?: [any]}` | no |
 | `tasks/write` | user | `{acceptance?: Text, add?: [string], body?: Text, cwd?: AbsPath, dst?: string, id?: string, kind?: string, labels?: [string], lease?: integer, mode?: "children" \| "replace", note?: Text, op: "create" \| "update" \| "claim" \| "heartbeat" \| "release" \| "handoff" \| "reassign" \| "split" \| "complete" \| "link" \| "unlink" \| "label" \| "tools", parent?: string, parts?: [Text], priority?: integer, project?: string, remove?: [string], src?: string, status?: Status, title?: Text, to?: string, tracker?: boolean, ver?: integer}` | `any` | yes |
-| `term/attach` | user | `{cell_px?: [natnum, natnum], cols: natnum, id: string, rows: natnum}` | `{id: string, view: string}` | no |
+| `term/attach` | user | `{cell_px?: [natnum, natnum], cols: natnum, id: string, rows: natnum, rows_in_sja?: boolean}` | `{id: string, view: string}` | no |
 | `term/clipboard-reply` | user | `{id: string, req: natnum, text?: string}` | `boolean` | no |
 | `term/close` | user | `{id: string, signal?: integer}` | `boolean` | no |
 | `term/config` | user | `{config: [[string, SettingValue]], id: string}` | `boolean` | no |
@@ -1626,7 +1626,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `term/key` | user | `{action?: "press" \| "repeat" \| "release", id: string, key: string, mods?: [string], text?: string, unshifted?: natnum}` | `boolean` | no |
 | `term/list` | user | `{}` | `[TermStatus]` | no |
 | `term/mouse` | user | `{button?: integer, col: natnum, id: string, kind: string, mods?: [string], row: natnum}` | `boolean` | no |
-| `term/open` | user | `{cell_px?: [natnum, natnum], class: string, cols: natnum, command?: [string], config?: [[string, SettingValue]], dir: string, env?: [[string, string]], memory_max?: string, place?: string, remote?: string, rows: natnum, tasks_max?: string, window?: natnum}` | `{id: string, view: string}` | no |
+| `term/open` | user | `{cell_px?: [natnum, natnum], class: string, cols: natnum, command?: [string], config?: [[string, SettingValue]], dir: string, env?: [[string, string]], memory_max?: string, place?: string, remote?: string, rows: natnum, rows_in_sja?: boolean, tasks_max?: string, window?: natnum}` | `{id: string, view: string}` | no |
 | `term/paste` | user | `{id: string, text: string}` | `boolean` | no |
 | `term/resize` | user | `{cell_px: [natnum, natnum], cols: natnum, id: string, rows: natnum}` | `boolean` | no |
 | `term/scroll` | user | `{delta?: integer, from?: string, id: string, prompt_delta?: integer, to?: string}` | `{key?: string}` | no |
@@ -1638,7 +1638,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `timeline/get` | user | `{before?: natnum, id: string, limit?: natnum, rollup?: boolean, scope: "session" \| "task" \| "plan" \| "project", since?: natnum}` | `{next?: natnum, rollup?: Rollup, steps?: [Step]}` | no |
 | `view/ack` | user | `{class: string, version: natnum, view: string}` | `boolean` | no |
 | `view/close` | user | `{view: string}` | `boolean` | no |
-| `view/env` | user | `{attach?: boolean, cell: [natnum, natnum], class: string, display: "gui" \| "tty", epoch: natnum, fonts?: [[string, string \| null, natnum, number, number, number, number, number]], palette?: [[string, string]], reduced_motion?: boolean, scale: number, tty_widths?: [[natnum, natnum, natnum]], tz?: string, view: string, width_px: natnum}` | `boolean` | no |
+| `view/env` | user | `{attach?: boolean, cell: [natnum, natnum], class: string, display: "gui" \| "tty", epoch: natnum, fonts?: [[string, string \| null, natnum, number, number, number, number, number]], palette?: [[string, string]], reduced_motion?: boolean, rows_in_sja?: boolean, scale: number, tty_widths?: [[natnum, natnum, natnum]], tz?: string, view: string, width_px: natnum}` | `boolean` | no |
 | `view/glyphs` | user | `{class: string, glyphs: [[string, string, number]], view: string}` | `boolean` | no |
 | `view/measured` | user | `{class: string, measured: [[string, string, number]], view: string}` | `boolean` | no |
 | `view/resync` | user | `{class?: string, model?: boolean, version?: natnum, view: string}` | `boolean` | no |
@@ -2342,10 +2342,13 @@ All of it is in memory only.
 
 - **Methods** (user connections, sent on the editor's subscribed connection, which the patches come back on).
   `view/env {view, class, epoch, display, scale, fonts: [[role, file, index, px, ascent, descent, avg, space]], cell,
-  width_px, palette: [[role, colour]], tty_widths: [[from, to, width]], tz, reduced_motion, attach?}` keeps the env of (view,
+  width_px, palette: [[role, colour]], tty_widths: [[from, to, width]], tz, reduced_motion, attach?, rows_in_sja?}` keeps the env of (view,
   class) and builds its rows again.  `attach: true` (the editor sends it with the first env of a new buffer) makes the hub
   drop a pair it already holds for the connection, with no `view/close` between (a buffer killed without its hook, an
-  Emacs restarted on the same connection), and start over: the rows go out whole, a reset from version 1. `view/resync {view, class, version}` answers a reset (with `model: true`, a reset
+  Emacs restarted on the same connection), and start over: the rows go out whole, a reset from version 1.
+  `rows_in_sja: true` says the editor holds the view's rows in Sjá, where they are drawn: the patches then go out on the
+  raw `view-model` line as `{view, rows: PATCH}` (the patch whole), which Sjá's push takes without Lisp reading it; so
+  far only a terminal's view (`term:<id>`) reads it. `view/resync {view, class, version}` answers a reset (with `model: true`, a reset
   of the view's model: below). `view/glyphs {view, class,
   glyphs: [[role, char, px]]}` answers the event `view-glyphs {view, class, ask: [[role, char]]}`. `view/measured
   {view, class, measured: [[role, string, px]]}` is the editor's fit guard's report. `view/ack {view, class,

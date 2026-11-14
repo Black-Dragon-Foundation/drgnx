@@ -313,6 +313,7 @@ pub fn profile(spec: &ValidSpec, mac: &MacContext) -> Result<String, Refusal> {
             ));
             push(rule("allow", "mach-lookup", "global-name", NET_SERVICES)?);
         }
+        Net::None => push(Some("(deny network*)".into())),
         Net::Isolated {
             mac_tcp_ports,
             loopback,
@@ -752,6 +753,7 @@ mod tests {
             tmp: Some(TMP.into()),
             layers: Layers::for_target(Target::Macos),
             extra_tcp_ports: vec![],
+            rlimits: None,
             trace: Default::default(),
             browser: None,
         }
@@ -1297,6 +1299,17 @@ mod tests {
         none.sockets = vec![];
         let p = prof(none);
         assert!(!p.contains("remote ip"));
+    }
+
+    /// `Net::None`: every network operation denied and none allowed back, not even `localhost`.
+    #[test]
+    fn no_network_denies_all_of_it() {
+        let p = prof(spec(Net::None));
+        assert!(p.contains("(deny network*)"));
+        assert!(
+            !p.contains("remote ip") && !p.contains("network-bind"),
+            "{p}"
+        );
     }
 
     /// A debug session (`loopback`): its own localhost ports bound, accepted and connected to, nothing wider (no

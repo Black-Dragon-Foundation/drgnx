@@ -13,7 +13,7 @@ case ${BASH_SOURCE[0]-} in
   */*) _drgnx_dir=$PWD/${BASH_SOURCE[0]%/*} ;;
   *) _drgnx_dir=$PWD ;;
 esac
-_drgnx_commands='open doctor build test ui macos-app sync upgrade rollback generations lock bisect service-unit onboard check lease fmt work hub runtime job runner search keys safe help shell secrets bootstrap update coord graph childframe-elpa browser plugins packs extensions record replay'
+_drgnx_commands='open doctor build test ui macos-app sync upgrade rollback generations lock bisect service-unit onboard check lease fmt design work hub runtime job runner search keys safe help shell secrets bootstrap update coord graph childframe-elpa browser plugins packs extensions record replay'
 _drgnx_steps='environment look-and-keys projects ai search agents daemon portability finish'
 _drgnx_bootstrap_steps='preflight config keys sync onboard desktop shell doctor'
 _drgnx_presets='minimal ide full-ai'
@@ -76,6 +76,7 @@ _drgnx() {
           'check '*) words='--no-perf --no-gui --jobs --shards' ;;
           'lease '*) words='--wait' ;;
           'fmt '*) words='--check' ;;
+          'design '*) words='--check --shots' ;;
           'work record') words='--task' ;;
           'work scan') words='--board' ;;
           'work status') words='--json' ;;

@@ -473,6 +473,10 @@ jobs:
         run: bash .github/ci/commit-times.sh runtime/target/.drgnx-built-from
       # the seccomp real-install cases and everything else of the three Linux crates, on this architecture
       - run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p gleipnir -p draugr -p eitri -p gleipnir-escape
+      # eitri's trust checks chown their fixtures: they run as root, in a target dir of their own (root's files stay out of
+      # runtime/target and its cache), and DRGNX_REQUIRE_ROOT_TESTS turns a skipped one into a failure
+      - name: eitri's trust tests as root
+        run: sudo env "PATH=$PATH" "HOME=$HOME" DRGNX_REQUIRE_ROOT_TESTS=1 "CARGO_HOME=$HOME/.cargo" cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p eitri --target-dir "$RUNNER_TEMP/eitri-root-target"
       # ghostty-vt-sys's builds_offline builds the crate in a network namespace of its own (unshare --net): a runner can,
       # Docker's default seccomp profile (the Fedora job's container) refuses it, so this is where the row runs;
       # DRGNX_REQUIRE_NETNS=1 makes a namespace it cannot make a failure rather than a skip. (Zig is the terminal

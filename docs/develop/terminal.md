@@ -195,7 +195,9 @@ The editor talks to its terminals through the hub (`runstav/src/methods/term.rs`
 **Events**, to the connection of the editor session that opened the terminal: `term/exit {id, code, signal}`,
 `term/title`, `term/cwd`, `term/bell`, `term/notify`, `term/progress`, `term/clipboard-write`, `term/clipboard-read {id, req, primary}` and `term/prompt` (the OSC
 133 marks, for notify-on-command-finish). `term/detached {ids}` goes to every live session when terminals detach. The
-view's `view/env`, `view/ack` and `view/resync` go to the worker.
+view's `view/env`, `view/ack` and `view/resync` go to the worker. An env with `rows_in_sja: true` (the editor holds the
+rows in Sjá) sends the worker's patches on as the raw `view-model` line `{view, rows: PATCH}` instead of `view-patch`;
+the last env decides.
 
 Where this differs from the design's sketch: the view id is the hub's (`term:<id>`, so an adopted terminal keeps
 it), `class` names the display class its patches are for, `term/scroll` takes the row it counts from (the editor owns
@@ -460,8 +462,18 @@ image) is drawn by the next Emacs pixel for pixel as before, the cursor's row as
 - **Links:** the worker sends an OSC 8 run as the row prop `drgnx-term-link`, on every row it sends: a screen cell's
   link is read through a viewport point, a row above the screen (scrolled off, a backfill, `term/fetch`) through a
   history point (row `scrollback rows - N` for viewport row `-N`: the engine's viewport never scrolls); PATCHED gives such runs `mouse-face` and a keymap, and `drgnx-term-open-link` opens a local `file://` URI with
-  `find-file-other-window`, anything else with `browse-url`. After it `drgnx-term--match-links` gives the same props to text with no
-  OSC 8 link that `drgnx-term-link` (your patterns, `(REGEXP TARGET)`) or, with `drgnx-term-link-url`, a plain URL matches, per patched row.
+  `find-file-other-window`, anything else with `browse-url`. With the rows held in Sjá (below) the worker also makes each
+  plain address a `drgnx-term-link` run (`style::link_urls`, setting `link-url`: a scheme `http(s)`, `ftp(s)` or
+  `file`, then up to a space, quote or bracket, without a sentence's last punctuation; text an OSC 8 link covers is left
+  alone), the draw gives every link run its keymap as it inserts it, and after the draw `drgnx-term--match-links` runs
+  only your patterns (`drgnx-term-link`, `(REGEXP TARGET)`), over the text that changed and only when you set some.
+  Without Sjá, `drgnx-term--match-links` gives the same props to text with no OSC 8 link that your patterns or, with
+  `drgnx-term-link-url`, a plain URL matches, per patched row.
+- **Rows held in Sjá** (a Nidhogg with `nidhogg-view-rows`; `docs/develop/core.md`, "rows held in Sjá"): `term/open`
+  and `term/attach` carry `rows_in_sja`, the patches come to Sjá on the raw `view-model` line, and the buffer draws
+  Sjá's edits (`drgnx-term--attach-view`). Per property the draw puts, an image slice gets its display
+  (`drgnx-term--sja-image`); per stop, a wide cell its fit (`drgnx-term--sja-stop`, the cell guard's memo); after a
+  draw, the cursor is placed by its row's start in Sjá (`drgnx-view-sja-row-start`) and your link patterns run.
 - **Resize:** a window change (`drgnx-state` `windows-changed`) debounces 50 ms per buffer
   (`drgnx-timer-debounce`), then sends `term/resize` with the selected window's size.
 - **Events:** `term/cwd` sets `default-directory`, `term/title` renames the buffer, `term/progress` sets

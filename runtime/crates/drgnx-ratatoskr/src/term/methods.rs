@@ -79,6 +79,7 @@ pub async fn serve(t: &Terms, conn: u64, p: Params) -> Result<Value, Error> {
                 config: p.config.into_iter().map(|(k, v)| (k, v.into())).collect(),
                 place: p.place,
                 remote: p.remote,
+                rows_in_sja: p.rows_in_sja,
             };
             let rec = t
                 .spawn(conn, t.session_of(conn), spawn)
@@ -210,7 +211,7 @@ pub async fn serve(t: &Terms, conn: u64, p: Params) -> Result<Value, Error> {
         }
         Params::TermAttach(p) => {
             let rec = t
-                .attach_to(conn, &p.id, p.cols, p.rows, p.cell_px)
+                .attach_to(conn, &p.id, p.cols, p.rows, p.cell_px, p.rows_in_sja)
                 .map_err(|e| {
                     if t.record(&p.id).is_none() {
                         no_such(&p.id)

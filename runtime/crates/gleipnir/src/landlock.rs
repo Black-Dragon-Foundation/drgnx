@@ -269,6 +269,8 @@ pub fn plan_for(spec: &ValidSpec, tier: Tier) -> LandlockPlan {
                 .chain(rw_home.map(|b| &b.dest));
             let tcp_connect_ports = match &s.net {
                 Net::Shared | Net::Isolated { loopback: true, .. } => None,
+                // handled and nothing allowed: every connect is refused, the namespace's loopback too
+                Net::None => Some(Vec::new()),
                 Net::Isolated { relay, .. } => {
                     let mut ports: Vec<u16> = relay
                         .iter()
@@ -315,7 +317,7 @@ pub fn plan_for(spec: &ValidSpec, tier: Tier) -> LandlockPlan {
             // rule reaches every host, and with binds refused there is no server inside to reach. `Net::Shared`
             // gets no TCP at all.
             let mut relay_ports: Vec<u16> = match &s.net {
-                Net::Shared => vec![],
+                Net::Shared | Net::None => vec![],
                 Net::Isolated { relay, .. } => relay.iter().map(|r| r.port).collect(),
             };
             relay_ports.sort_unstable();
@@ -764,6 +766,7 @@ mod tests {
             tmp: Some("/state/tmp-1".into()),
             layers: Layers::for_target(Target::LinuxBwrap),
             extra_tcp_ports: vec![8080, 3128],
+            rlimits: None,
             trace: Default::default(),
             browser: None,
         }
@@ -934,6 +937,30 @@ mod tests {
             let d = rules_for_abi(&p, abi);
             assert!(d.handled_net.is_empty(), "abi {abi}");
         }
+    }
+
+    /// `Net::None`: TCP connects are handled with no port allowed, in the full tier (the namespace is empty, and a
+    /// connect is refused first by Landlock where the kernel has it) and in the reduced tier (no namespace, so this
+    /// is the whole story), where binds are handled with none allowed too.
+    #[test]
+    fn no_network_handles_tcp_and_allows_nothing() {
+        let p = plan(fixture(Net::None), Target::LinuxBwrap, Tier::Full);
+        assert_eq!(p.tcp_connect_ports, Some(vec![]));
+        assert_eq!(p.tcp_bind_ports, None);
+        for abi in 4..=9 {
+            let d = rules_for_abi(&p, abi);
+            assert!(!d.handled_net.is_empty(), "abi {abi}");
+            assert!(d.tcp_connect_ports.is_empty(), "abi {abi}");
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let r = reduced_plan_net(dir.path(), Net::None);
+        assert_eq!(r.tcp_connect_ports, Some(vec![]));
+        assert_eq!(r.tcp_bind_ports, Some(vec![]));
+        // the specs's extra ports are never granted to it
+        let mut with_extra = fixture(Net::None);
+        with_extra.extra_tcp_ports = vec![8080];
+        let p = plan(with_extra, Target::LinuxBwrap, Tier::Full);
+        assert_eq!(p.tcp_connect_ports, Some(vec![]));
     }
 
     #[test]
@@ -1487,6 +1514,7 @@ mod tests {
             tmp: Some(p("t")),
             layers: Layers::for_target(Target::LinuxReduced),
             extra_tcp_ports: vec![],
+            rlimits: None,
             trace: Default::default(),
             browser: None,
         };

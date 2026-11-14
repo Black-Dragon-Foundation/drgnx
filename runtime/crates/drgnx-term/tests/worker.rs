@@ -600,6 +600,39 @@ fn osc8_link_is_a_row_prop() {
 }
 
 #[test]
+fn plain_addresses_are_links_unless_the_setting_is_off() {
+    let link =
+        |a: u32, b: u32, uri: &str| (a, b, "drgnx-term-link".to_owned(), serde_json::json!(uri));
+    let (mut w, mut m) = (worker(60, 2, 10), Model::default());
+    // a sentence's last punctuation is not the address's; an OSC 8 link keeps its own target
+    w.output(
+        b"go https://e.org/a?b=1. or \x1b]8;;file:///x\x1b\\http://in.side\x1b]8;;\x1b\\ (ftp://f.net)",
+        0,
+    );
+    draw(&mut w, &mut m, 0);
+    let row = &m.rows[0];
+    assert_eq!(
+        row.text,
+        "go https://e.org/a?b=1. or http://in.side (ftp://f.net)"
+    );
+    let mut props = row.props.clone();
+    props.sort_by_key(|p| p.0);
+    assert_eq!(
+        props,
+        vec![
+            link(3, 22, "https://e.org/a?b=1"),
+            link(27, 41, "file:///x"),
+            link(43, 54, "ftp://f.net")
+        ]
+    );
+    let (mut w, mut m) = (worker(60, 2, 10), Model::default());
+    w.config("link-url", &serde_json::json!(false));
+    w.output(b"go https://e.org", 0);
+    draw(&mut w, &mut m, 0);
+    assert_eq!(m.rows[0].props, vec![]);
+}
+
+#[test]
 fn osc8_links_survive_scrolling_and_backfill() {
     let link = |i: usize| format!("file:///tmp/{i:03}.txt");
     let line = |i: usize| format!("l{i:03} \x1b]8;;{}\x1b\\f{i:03}\x1b]8;;\x1b\\\r\n", link(i));

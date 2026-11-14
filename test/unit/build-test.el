@@ -12,6 +12,9 @@
         (progn
           (dolist (d '("core" "wb" "modules" "harness" "settings"))
             (copy-directory (expand-file-name d drgnx-dir) (expand-file-name d root)))
+          ;; the sources only: a copy's files are all new, each .elc newer than its .el, so a stale one in the checkout
+          ;; was loaded (`load-prefer-newer') by a file that requires it, and warned of what its source has since defined
+          (mapc #'delete-file (directory-files-recursively root "\\.elc\\'"))
           (let ((r (drgnx-build-test--build root)))
             (should (null (plist-get r :errors)))
             (should (equal (plist-get r :warnings) nil))

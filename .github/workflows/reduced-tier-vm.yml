@@ -76,7 +76,10 @@ jobs:
           t=$PWD/runtime/target/debug
           bash .github/ci/browser-vm.sh up "$RUNNER_TEMP/vm"
           bash .github/ci/browser-vm.sh put "$RUNNER_TEMP/vm" /usr/bin/bwrap "$t/ratatoskr" "$t/gleipnir-probe" "$t/ratatoskr-mock" \
-            "$PWD/runtime/crates/drgnx-ratatoskr/tests/data" "$bin"
+            "$PWD/runtime/crates/drgnx-ratatoskr/tests/data" "$PWD/test/conformance/fixtures" "$bin"
+          # the VM's own needs: git (the project-chat row runs it) and a /tmp that holds a copy of the hub binary per
+          # row (the rows' fixtures live there; the image's /tmp is a tmpfs of half the RAM)
+          bash .github/ci/browser-vm.sh run "$RUNNER_TEMP/vm" "sudo dnf -y install git >/dev/null && sudo mount -o remount,size=12G /tmp && df -h /tmp"
           bash .github/ci/browser-vm.sh run "$RUNNER_TEMP/vm" "cd '$PWD/runtime' && '$bin' --ignored --test-threads 1 --nocapture" 2>&1 | tee "$RUNNER_TEMP/launch.log"
           test "${PIPESTATUS[0]}" = 0
           # the rows say when the kernel's ABI is below 9 and they ran on the full tier: that is not what this job is for

@@ -36,7 +36,7 @@
 
 (defun drgnx-term-gui--lines (buffer)
   (with-current-buffer buffer
-    (when drgnx-view (drgnx-view-draw-now drgnx-view))
+    (drgnx-term--draw-now)
     (mapcar #'string-trim-right (split-string (buffer-substring-no-properties (point-min) (point-max)) "\n"))))
 
 (defun drgnx-term-gui--start ()
@@ -123,7 +123,7 @@ to the last whole band of its first cell row, blue below."
 (defun drgnx-term-gui--image-pos (buffer)
   "The first position of BUFFER whose cells display an image slice, or nil."
   (with-current-buffer buffer
-    (when drgnx-view (drgnx-view-draw-now drgnx-view))
+    (drgnx-term--draw-now)
     (let ((pos (text-property-not-all (point-min) (point-max) 'drgnx-term-image nil)))
       (and pos (eq (car-safe (car-safe (get-text-property pos 'display))) 'slice) pos))))
 

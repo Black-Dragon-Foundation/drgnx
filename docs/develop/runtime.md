@@ -54,6 +54,7 @@ runtime/
 | `verdandi` | the edit history: `history.db` (records, documents, branches) on urdr's store, a Loro document per tracked file and branch, the operation log and its settle rule, span revert on element ids; no hub or editor type ([history.md](history.md)) |
 | `vor` | a Debug Adapter Protocol client: framing, requests matched to answers, events and reverse requests, types generated from the protocol's schema; generic, used by the hub's debug sessions ([debugging.md](debugging.md)) |
 | `vordr` | the orchestration gates' pure core: a job's log as rows with failure classes, facts, evidence, the rule pack; pure, `serde` only ([orchestration.md](orchestration.md)) |
+| `drgnx-clock` | the time source the crates' timers read: tokio's, or a virtual clock a test installs ([below](#virtual-clocks-drgnx-clock)); tokio only |
 | `drgnx-exe` | a file written or copied and then run, never busy (ETXTBSY): the writing on a thread with a private file table ([below](#files-written-and-then-run-drgnx-exe)); libc only |
 | `skuld` | test support, never shipped: every order of a pure core, and the one real-time wait Rust tests may use ([below](#every-order-skuld)); crates name it under `[dev-dependencies]` only |
 | `heimdall` | the CDP broker's pure part: envelope parsing over `serde_json`'s `RawValue` (params never re-encoded), routing one browser connection between the agent and the hub by session owner, the refusal list, downloads, cleanup when the agent goes, and the pipe's NUL and frame codecs; no I/O, std and serde only, built for Android too ([hub.md](hub.md#the-cdp-broker)) |
@@ -257,7 +258,8 @@ cap }`, `Escapes`, `Untrusted { path, why }`, `Unsupported` or `Io`.
   file's group bits in `st_mode`, so the group-writable test sees it (a test sets a real ACL and shows the refusal).
   File capabilities are not examined: only root (`CAP_SETFCAP`) can set them, and root is who the program trusts.
   `root_only_file(path)` is the same check without the execute bit, for data bound into a sandbox by path (the
-  resolver's file under `/run`).
+  resolver's file under `/run`). `system_owned_file(path, max_uid)` widens the owners to uids of at most `max_uid` (a system
+  account's), and `pin_system_owned_file` returns the fd it checked, so the caller binds the fd and not the path again.
   Callers pass fixed candidates (bwrap, `sandbox-exec`, git); `PATH` is never searched. A link in any component,
   the last one included, is refused even when root owns it: the candidates are the distributions' own regular files.
   Not every system program is one (Ubuntu 26.04's `coreutils-from-uutils` makes `/usr/bin/env` a link into
@@ -658,6 +660,21 @@ wrapped; a raw `Command::spawn` elsewhere is outside the lock, so in lock mode `
 The hub uses it for the browser it unpacks and the
 `drgnx-key` it copies into a container job's folder, the runner for its job's `drgnx-key` copy, domr for the hub copies
 and scripts its scenarios run, the escape harness for its probe's copy, and the tests for every stand-in script they run.
+
+## Virtual clocks: drgnx-clock
+
+A timer in a crate (a kill's grace, a deadline, a debounce) waits through `drgnx_clock::sleep` and `drgnx_clock::timeout`,
+not through tokio or `std::thread`. With nothing installed they are tokio's own. A test installs a `Provider`: the hub's
+virtual clock (`drgnx_ratatoskr::clock`, moved by `__test_advance`) installs itself with `serve --test-clock`, and with the
+`test-hooks` feature `drgnx_clock::Manual` gives a crate's own test a clock it moves by hand (`advance`, `sleepers`) and
+`Manual::scope(future)` runs the code under test on it: only that future's timers read it, so no other test of the process
+sees it (a task it spawns is wrapped in `scope` too). The test waits for the timer
+it expects (`skuld::wait_until_async` on `sleepers()`), then advances (draugr's kill grace is the exception for real
+processes: `RealSignaller::pause` waits in real time, so a hub on the test clock never parks a kill on a clock that stands
+still; a test's own signaller reads the installed clock): nothing in it depends on how fast the machine is. What a
+virtual clock cannot do is wait for something outside it (a child's exit, a socket): that is an event wait, with a deadline that
+only bounds a failure, and it stays real. A real performance budget lives in the perf lane (`test/timing-rust.txt`, which only
+shrinks: `skuld`'s `the_timing_lane_list_only_shrinks`), never in a unit suite. Plan: `docs/plans/drgnx/2026-11-14-virtual-clocks.md` (org folder).
 
 ## The conformance harness
 

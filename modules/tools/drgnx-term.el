@@ -25,6 +25,7 @@
 (require 'drgnx-setting)
 (require 'drgnx-timer)
 (require 'drgnx-view)
+(require 'drgnx-view-sja)                ; the rows held in Sjá, where this Nidhogg has them
 (require 'drgnx-view-nav)                ; Find's matches move through the replica
 (require 'drgnx-hub-client)
 (require 'drgnx-registry)
@@ -38,6 +39,7 @@
 (require 'drgnx-term-remote (expand-file-name "drgnx-term-remote" (file-name-directory (macroexp-file-name))))
 (defvar drgnx-keys-last)
 (defvar drgnx-term-copy-mode)
+(declare-function nidhogg-view-rows "nidhogg-views" (h what &optional a b))
 (declare-function drgnx-config-file "drgnx-config" (name &optional root))
 (declare-function drgnx-settings-file-put "drgnx-settings-file" (file head scope var value &rest args))
 (declare-function drgnx-terminal-environment "drgnx-terminal" ())
@@ -632,6 +634,7 @@ one's images come only as direct data)."
           (vector "grapheme-width-method" drgnx-term-grapheme-width-method)
           (vector "clipboard-read" (symbol-name drgnx-term-clipboard-read))
           (vector "detached-keep" drgnx-term-detached-keep)
+          (vector "link-url" (if drgnx-term-link-url t :false))
           (vector "colours" (drgnx-term--colours))))
 
 (defun drgnx-term--apply-config ()
@@ -690,7 +693,7 @@ terminal shares, the memo `term-word-syntax'), the copy filter."
   "Point and the cursor where the worker's cursor is (the last patch's `term'), in the current terminal buffer.  A
 window scrolled away from the cursor stays where it is unless ALL or `drgnx-term-scroll-to-bottom' has `output'."
   (when-let* ((cur (plist-get (drgnx-view-patch-term drgnx-view-patch) :cursor))
-              (beg (drgnx-view-row-start drgnx-view (nth 0 cur))))
+              (beg (drgnx-term--row-start (nth 0 cur))))
     (let* ((eol (save-excursion (goto-char beg) (line-end-position)))
            (want (+ beg (nth 1 cur))) (pos (min want eol))
            (old (and drgnx-term--cursor-marker (marker-position drgnx-term--cursor-marker)))
@@ -717,10 +720,12 @@ window scrolled away from the cursor stays where it is unless ALL or `drgnx-term
   "The text properties of a link to URI: a click opens it."
   (list 'drgnx-term-link uri 'mouse-face 'highlight 'keymap drgnx-term-link-map 'follow-link t 'help-echo uri))
 
-(defun drgnx-term--match-links (beg end)
+(defun drgnx-term--match-links (beg end &optional patterns-only)
   "Between BEG and END (one row), text with no OSC 8 link of its own that `drgnx-term-link' (your patterns, first)
-or, with `drgnx-term-link-url', a plain URL matches becomes a link, as an OSC 8 one."
-  (dolist (rule (append drgnx-term-link (and drgnx-term-link-url (list (list drgnx-term--url-regexp #'identity)))))
+or, with `drgnx-term-link-url', a plain URL matches becomes a link, as an OSC 8 one.  PATTERNS-ONLY: only your
+patterns (the worker linked the plain URLs)."
+  (dolist (rule (append drgnx-term-link (and drgnx-term-link-url (not patterns-only)
+                                             (list (list drgnx-term--url-regexp #'identity)))))
     (save-excursion
       (goto-char beg)
       (let ((case-fold-search nil))
@@ -825,6 +830,77 @@ TRAMP name): with no host, `localhost' or the host its shell named; never a loca
 (drgnx-view-define 'drgnx-term-view :render #'drgnx-view-patch-render :patched #'drgnx-term--patched
                    :slice drgnx-view-slice :delay 0 :follow-tail t :ack t :epoch-reset nil)
 
+;;;; The rows held in Sjá
+;;
+;; With a Nidhogg whose Sjá holds rows (`drgnx-view-sja-available-p'), the worker's patches go to Sjá on the raw
+;; `view-model' line and the buffer draws Sjá's edits (`drgnx-view-sja'); the worker makes plain addresses links
+;; itself (`link-url').  What the draw leaves to the terminal: an OSC 8 link's keymap and an image slice's display,
+;; put on per property as the draw inserts it; a wide cell's fit, per stop; and after the draw the cursor and your
+;; own link patterns (`drgnx-term-link'), over the text it changed.  Without it the Lisp inserter above draws.
+
+(defvar drgnx-term-cell-width-function)  ; the cell guard's, below
+
+(defun drgnx-term--row-start (key)
+  "Where row KEY starts in this terminal's buffer, or nil when it is not drawn."
+  (if (drgnx-view-sja-p) (drgnx-view-sja-row-start key) (and drgnx-view (drgnx-view-row-start drgnx-view key))))
+
+(defun drgnx-term--top-key ()
+  "The key of the first row this terminal's buffer draws, or nil."
+  (if (drgnx-view-sja-p)
+      (car-safe (nidhogg-view-rows (drgnx-view-patch-handle drgnx-view-patch) 'place 0))
+    (and drgnx-view (drgnx-view-key-at (point-min)))))
+
+(defun drgnx-term--draw-now ()
+  "Draw this terminal's rows now."
+  (if (drgnx-view-sja-p) (drgnx-view-sja-draw-now) (when drgnx-view (drgnx-view-draw-now drgnx-view))))
+
+(defun drgnx-term--sja-link (from to uri string)
+  "An OSC 8 link's characters FROM..TO of STRING (or a plain address the worker found) are a button to URI."
+  (add-text-properties from to (list 'mouse-face 'highlight 'keymap drgnx-term-link-map 'follow-link t 'help-echo uri)
+                       string))
+
+(defun drgnx-term--sja-image (from to v string)
+  "An image slice's characters FROM..TO of STRING (V: `[FILE X Y W H ALT]') show their row's slice of the canvas
+FILE, or the alt on the placement's first row where PNGs cannot be drawn (`drgnx-term--draw-images')."
+  (let ((file (elt v 0)) (y (elt v 2)))
+    (cond ((and (display-images-p) (image-type-available-p 'png) (not (equal file "")))
+           (put-text-property from to 'display (list (list 'slice (elt v 1) y (elt v 3) (elt v 4)) (drgnx-term--image file))
+                              string))
+          ((eql y 0) (put-text-property from to 'display (propertize (elt v 5) 'face 'drgnx-term-image-alt) string)))))
+
+(defun drgnx-term--sja-stop (string lo pos)
+  "The stop at POS of STRING: the wide cluster before it (from LO on) drawn within its two cells
+\(`drgnx-term--cell-guard')."
+  (when-let* ((cell (funcall drgnx-term-cell-width-function))
+              (s (drgnx-term--cluster-start string lo pos))
+              ((< s pos))
+              (spec (drgnx-term--cell-scale (if (= (1+ s) pos) (aref string s) (substring-no-properties string s pos))
+                                            (* 2 cell))))
+    (put-text-property s pos 'display spec string)))
+
+(defun drgnx-term--sja-drawn (beg end)
+  "After a draw changed BEG..END: your link patterns over it, the cursor placed, the key release gate set."
+  (unless drgnx-term-copy-mode
+    (when drgnx-term-link
+      (save-excursion
+        (goto-char beg)
+        (while (< (point) end)
+          (drgnx-term--match-links (point) (line-end-position) t)
+          (forward-line 1))))
+    (drgnx-term--place-cursor))
+  (when (eq (current-buffer) (window-buffer (selected-window))) (drgnx-term--key-gate)))
+
+(defun drgnx-term--attach-view (view)
+  "This buffer shows the terminal's VIEW: through Sjá where it holds rows, else the Lisp inserter."
+  (if (drgnx-view-sja-available-p)
+      (progn
+        (drgnx-view-sja-attach view drgnx-term-class :ack t :delay 0)
+        (setq-local drgnx-view-sja-prop-functions
+                    (list (cons 'drgnx-term-link #'drgnx-term--sja-link) (cons 'drgnx-term-image #'drgnx-term--sja-image)))
+        (setq-local drgnx-view-sja-stop-function #'drgnx-term--sja-stop)
+        (add-hook 'drgnx-view-sja-drawn-functions #'drgnx-term--sja-drawn nil t))
+    (drgnx-view-patch-attach view drgnx-term-class :type 'drgnx-term-view)))
+
 ;;;; Copy mode and Find in Terminal
 
 (defvar drgnx-term-copy-mode-map
@@ -854,7 +930,7 @@ meanwhile."
     (deactivate-mark)
     (when drgnx-term--find-overlay (delete-overlay drgnx-term--find-overlay))
     (drgnx-view-patch-pause (current-buffer) nil)
-    (when drgnx-view (drgnx-view-draw-now drgnx-view))
+    (drgnx-term--draw-now)
     (drgnx-term--place-cursor)))
 
 (defun drgnx-term-find (query)
@@ -913,7 +989,7 @@ this buffer no longer draws is passed over in the same direction."
   (if (not drgnx-term--find)
       (user-error "Find in Terminal first")
     (let ((tries (cdr drgnx-term--find)) (id (drgnx-view-nav verb "matches" n)) (beg nil))
-      (while (and id (not (setq beg (drgnx-view-row-start drgnx-view (drgnx-view-nav-field "key"))))
+      (while (and id (not (setq beg (drgnx-term--row-start (drgnx-view-nav-field "key"))))
                   (> (cl-decf tries) 0))
         (setq id (drgnx-view-nav 'walk "matches" (if (< n 0) -1 1))))
       (if (not beg)
@@ -933,7 +1009,7 @@ this buffer no longer draws is passed over in the same direction."
   "Ask BUFFER's worker for the rows missing above its first row (`term/fetch'); one ask at a time."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
-      (let ((top (and drgnx-view (drgnx-view-key-at (point-min)))))
+      (let ((top (drgnx-term--top-key)))
         (when (and top (not drgnx-term--fetching) (not (equal top drgnx-term--top-done))
                    drgnx-term--id (eq drgnx-term--state 'open) (drgnx-term--up-p))
           (setq drgnx-term--fetching t)
@@ -1066,6 +1142,7 @@ hub is not up, connect, and the subscription opens it (`drgnx-term--connected').
                                    :config (drgnx-term--worker-config)
                                    ;; where a reattach opens it again: the panel is a side window
                                    :place (if (window-parameter window 'window-side) "panel" "editor"))
+                             (and (drgnx-view-sja-available-p) (list :rows_in_sja t))
                              (and drgnx-term--remote (list :remote drgnx-term--remote))
                              (and drgnx-term-linux-cgroup-memory-limit
                                   (list :memory_max drgnx-term-linux-cgroup-memory-limit))
@@ -1096,7 +1173,7 @@ subscription opens the terminal (`drgnx-term--connected').  When no hub can be h
             (message "The terminal could not start: %s" (or (plist-get error :message) error)))
         (setq drgnx-term--id (plist-get result :id) drgnx-term--state 'open)
         (puthash drgnx-term--id buffer drgnx-term--buffers)
-        (drgnx-view-patch-attach (plist-get result :view) drgnx-term-class :type 'drgnx-term-view)
+        (drgnx-term--attach-view (plist-get result :view))
         ;; the first reset may have come before this answer, when no buffer showed the view: ask for another
         (unless (drgnx-view-patch-version drgnx-view-patch)
           (funcall drgnx-view-patch-send-function "view/resync"
@@ -1735,7 +1812,8 @@ else the panel), drawn from a reset at this window's size; SELECT shows it selec
       (let ((size (drgnx-term--window-size (or (get-buffer-window buffer) (selected-window)))))
         (setq drgnx-term--size (list (nth 0 size) (nth 1 size)))
         (drgnx-hub--call-on drgnx-hub--events "term/attach"
-                            (list :id id :cols (nth 0 size) :rows (nth 1 size) :cell_px (nth 2 size))
+                            (append (list :id id :cols (nth 0 size) :rows (nth 1 size) :cell_px (nth 2 size))
+                                    (and (drgnx-view-sja-available-p) (list :rows_in_sja t)))
                             (lambda (r e) (drgnx-term--reattached buffer id r e)))))
     buffer))
 

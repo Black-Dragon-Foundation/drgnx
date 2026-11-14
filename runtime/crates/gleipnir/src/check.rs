@@ -504,6 +504,7 @@ where
         tmp: (target != Target::LinuxBwrap).then(|| base.join("t")),
         layers: Layers::for_target(target),
         extra_tcp_ports: vec![],
+        rlimits: None,
         trace: Default::default(),
         browser: None,
     };

@@ -28,6 +28,7 @@ commands=(
   'check:build, then every test tier'
   'lease:run a command in a slot of the host lease'
   'fmt:format drgnx'"'"'s Emacs Lisp'
+  'design:write the design system'"'"'s generated pages'
   'work:the work tracker'
   'hub:the hub behind agents and jobs'
   'runtime:build and install Ratatoskr, the agent runtime'
@@ -121,6 +122,8 @@ case $cmd in
       '--jobs[parallel jobs]:jobs:' '--shards[shards]:shards:' ;;
   fmt)
     _arguments '--check[only report]' '*:file:_files' ;;
+  design)
+    _arguments '--check[only say which pages are stale]' '--shots[cut the component pictures from look-scene output]' '*:scenes dir:_files -/' ;;
   work)
     if (( CURRENT == 2 )); then
       _values 'work command' 'record[link commits to a task]' 'scan[read specs, plans and the board]' 'status[every plan]'

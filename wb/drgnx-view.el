@@ -1429,7 +1429,11 @@ older epoch, held.  RESYNC: non-nil while a `view/resync' is outstanding.  STALE
   class-faces                                   ; the faces by class index, made by the class step; nil: again
   dim-class                                     ; the index of the class `dim' when it has a face, made with CLASS-FACES
   (resyncs 0) (refits 0) (measures 0)           ; counters, for tests and the perf lab
-  (classed 0))                                  ; the class step's overlays made and deleted (the perf lab's)
+  (classed 0)                                   ; the class step's overlays made and deleted (the perf lab's)
+  sja                                           ; rows held in Sjá (`drgnx-view-sja'): the delay to a draw, else nil
+  beg end                                       ; with SJA: the region's markers
+  (face-names (make-hash-table :test #'equal))  ; with SJA: a run's face name → its face (found ones only)
+  (draws 0))                                    ; with SJA: the batches drawn
 
 (defvar-local drgnx-view-patch nil "This buffer's hub-fed (view, class), or nil.")
 
@@ -1610,15 +1614,17 @@ drawn and not acknowledged (a view that acknowledges is sent no more meanwhile);
 asks for a reset when more than `drgnx-view-patch-paused-max' came."
   (with-current-buffer buffer
     (when-let* ((state drgnx-view-patch))
-      (if on
-          (unless (drgnx-view-patch-paused state) (setf (drgnx-view-patch-paused state) (list 0)))
-        (let ((kept (drgnx-view-patch-paused state)))
-          (setf (drgnx-view-patch-paused state) nil)
-          (if (and kept (> (car kept) drgnx-view-patch-paused-max))
-              (funcall drgnx-view-patch-send-function "view/resync"
-                       (list :view (drgnx-view-patch-view state) :class (drgnx-view-patch-class state)
-                             :version (or (drgnx-view-patch-version state) 0)))
-            (dolist (p (reverse (cdr kept))) (drgnx-view-apply-patch p))))))))
+      (if (drgnx-view-patch-sja state)
+          (drgnx-view-sja-pause state on)
+        (if on
+            (unless (drgnx-view-patch-paused state) (setf (drgnx-view-patch-paused state) (list 0)))
+          (let ((kept (drgnx-view-patch-paused state)))
+            (setf (drgnx-view-patch-paused state) nil)
+            (if (and kept (> (car kept) drgnx-view-patch-paused-max))
+                (funcall drgnx-view-patch-send-function "view/resync"
+                         (list :view (drgnx-view-patch-view state) :class (drgnx-view-patch-class state)
+                               :version (or (drgnx-view-patch-version state) 0)))
+              (dolist (p (reverse (cdr kept))) (drgnx-view-apply-patch p)))))))))
 
 (defvar-local drgnx-view-patch-hurry nil
   "Non-nil in a hub-fed view's buffer: the next patch applied there is drawn at the next timer pass, not a frame later
@@ -1678,7 +1684,8 @@ is applied, not dropped as older; the rows stay on screen until it comes."
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
         (when attach (drgnx-view-patch--forget drgnx-view-patch))
-        (setf (drgnx-view-patch-epoch drgnx-view-patch) epoch)))))
+        (setf (drgnx-view-patch-epoch drgnx-view-patch) epoch)
+        (when (drgnx-view-patch-sja drgnx-view-patch) (drgnx-view-sja--restart drgnx-view-patch attach epoch))))))
 
 (defun drgnx-view-patch-reclass (buffer class)
   "BUFFER's hub-fed view is shown in the display CLASS now (a `text-scale', a font or a scale change): it is paired
@@ -1690,6 +1697,7 @@ already."
         (when (and s (not (equal class (drgnx-view-patch-class s))))
           (remhash (cons (drgnx-view-patch-view s) (drgnx-view-patch-class s)) drgnx-view-patch--buffers)
           (drgnx-view-patch--forget s)
+          (when (drgnx-view-patch-sja s) (drgnx-view-sja--restart s t))
           (setf (drgnx-view-patch-class s) class (drgnx-view-patch-epoch s) 0)
           (puthash (cons (drgnx-view-patch-view s) class) buffer drgnx-view-patch--buffers))))))
 
@@ -1698,9 +1706,10 @@ already."
 every row is drawn again, with no message to the hub."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
-      (when (and drgnx-view-patch (drgnx-view-p drgnx-view))
-        (clrhash (drgnx-view-patch-faces drgnx-view-patch))
-        (drgnx-view-dirty drgnx-view t)))))
+      (cond ((and drgnx-view-patch (drgnx-view-patch-sja drgnx-view-patch)) (drgnx-view-sja-redraw buffer))
+            ((and drgnx-view-patch (drgnx-view-p drgnx-view))
+             (clrhash (drgnx-view-patch-faces drgnx-view-patch))
+             (drgnx-view-dirty drgnx-view t))))))
 
 (defun drgnx-view-patch--disconnected ()
   "The hub went away: every hub-fed view is stale (dimmed, keys work) and forgets its version and hub."
@@ -1734,6 +1743,11 @@ every row is drawn again, with no message to the hub."
 (declare-function drgnx-notice-clear "drgnx-notice" (source &optional id))
 (declare-function drgnx-notify "drgnx-notice" (source severity text &rest keys))
 (declare-function nidhogg-view-hub-lost "nidhogg-views" ())
+(declare-function drgnx-view-sja--restart "drgnx-view-sja" (s forget &optional epoch))
+(declare-function drgnx-view-sja-pushed "drgnx-view-sja" (r))
+(declare-function drgnx-view-sja-pause "drgnx-view-sja" (s on))
+(declare-function drgnx-view-sja-redraw "drgnx-view-sja" (buffer &optional refresh))
+(declare-function drgnx-view-sja--release "drgnx-view-sja" (s))
 
 (cl-defstruct (drgnx-view-model (:constructor drgnx-view-model--make) (:copier nil))
   "One hub-fed VIEW's model stream, as the editor's side of it: RESYNC, non-nil while a `view/resync' with `model' is
@@ -1784,19 +1798,21 @@ its model for the draw.  A gap or a full queue asks the hub for a reset; a queue
   "R, Sjá's answer to a pushed `view-model' line (`nidhogg-view-push', or the framed reader's own push): a gap or a
 full queue asks the hub for a reset; a queued model arms the view's timer and runs `drgnx-view-model-functions'.
 Returns the decision, or nil (no answer: not a `view-model' line)."
-  (when-let* ((r))
-    (let ((view (nth 0 r)) (what (nth 2 r)))
-      (when-let* ((state (gethash view drgnx-view-model--views)))
-        (pcase what
-          ('resync (drgnx-view-model--resync state))
-          ((or 'queue 'reset)
-           (when (eq what 'reset) (setf (drgnx-view-model-resync state) nil))
-           (drgnx-view-model--arm state)
-           (run-hook-with-args 'drgnx-view-model-functions view (nth 1 r))
-           ;; a key waits for this model's window: no throttle (`drgnx-view-nav-drained' runs it)
-           (when (and (fboundp 'drgnx-view-nav-waiting-p) (drgnx-view-nav-waiting-p view))
-             (drgnx-view-model--apply state nil)))))
-      what)))
+  (if (and r (nthcdr 3 r))                    ; a row patch's answer: the rows held in Sjá
+      (and (fboundp 'drgnx-view-sja-pushed) (drgnx-view-sja-pushed r))
+    (when-let* ((r))
+      (let ((view (nth 0 r)) (what (nth 2 r)))
+        (when-let* ((state (gethash view drgnx-view-model--views)))
+          (pcase what
+            ('resync (drgnx-view-model--resync state))
+            ((or 'queue 'reset)
+             (when (eq what 'reset) (setf (drgnx-view-model-resync state) nil))
+             (drgnx-view-model--arm state)
+             (run-hook-with-args 'drgnx-view-model-functions view (nth 1 r))
+             ;; a key waits for this model's window: no throttle (`drgnx-view-nav-drained' runs it)
+             (when (and (fboundp 'drgnx-view-nav-waiting-p) (drgnx-view-nav-waiting-p view))
+               (drgnx-view-model--apply state nil)))))
+        what))))
 
 (defun drgnx-view-model-event (data)
   "DATA, a `view-model' event's as a plist whose `:model' is the model's JSON text, as the hub writes the line, to
@@ -2127,7 +2143,9 @@ by the view that owns the buffer.")
   (when drgnx-view-patch
     (remhash (cons (drgnx-view-patch-view drgnx-view-patch) (drgnx-view-patch-class drgnx-view-patch))
              drgnx-view-patch--buffers)
-    (drgnx-view-model--close drgnx-view-patch)
+    (if (drgnx-view-patch-sja drgnx-view-patch)
+        (drgnx-view-sja--release drgnx-view-patch)
+      (drgnx-view-model--close drgnx-view-patch))
     (setq drgnx-view-patch nil))
   (drgnx-view-patch--hooks))
 

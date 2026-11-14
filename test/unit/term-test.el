@@ -55,8 +55,22 @@ hub or its worker."
 (defun drgnx-term-test--lines (buffer)
   "BUFFER's rows as drawn now (its view drawn first), a list of strings."
   (with-current-buffer buffer
-    (when drgnx-view (drgnx-view-draw-now drgnx-view))
+    (drgnx-term--draw-now)
     (split-string (buffer-substring-no-properties (point-min) (point-max)) "\n")))
+
+(defun drgnx-term-test--keys (buffer)
+  "The keys of BUFFER's rows, sorted: Sjá's rows where it holds them, else the inserter's."
+  (with-current-buffer buffer
+    (sort (if (drgnx-view-sja-p)
+              (let ((h (drgnx-view-patch-handle drgnx-view-patch)) keys)
+                (save-excursion
+                  (goto-char (point-min))
+                  (while (not (eobp))
+                    (push (car (nidhogg-view-rows h 'place (1- (point)))) keys)
+                    (forward-line 1)))
+                keys)
+            (hash-table-keys (drgnx-view-patch-rows drgnx-view-patch)))
+          #'string<)))
 
 (defun drgnx-term-test--until-line (buffer line what)
   "Wait until BUFFER shows a row that is exactly LINE (trailing blanks aside)."
@@ -190,7 +204,7 @@ hub or its worker."
       (drgnx-term-test--run b "printf '\\033[41mRED\\033[0m\\n'")
       (drgnx-term-test--settle (lambda () (and (drgnx-term-test--lines b) (drgnx-term-test--bg-at b "RED"))) "red cells")
       (setq before (drgnx-term-test--bg-at b "RED")
-            keys (with-current-buffer b (sort (hash-table-keys (drgnx-view-patch-rows drgnx-view-patch)) #'string<)))
+            keys (drgnx-term-test--keys b))
       (custom-theme-set-faces 'drgnx-term-test '(ansi-color-red ((t :foreground "#aa0011"))))
       (unwind-protect
           (progn
@@ -199,9 +213,7 @@ hub or its worker."
             (should (equal (drgnx-term-test--bg-at b "RED") "#aa0011"))
             (should-not (equal before "#aa0011"))
             ;; no reset: a reset gives every row a new key
-            (should (equal (with-current-buffer b
-                             (sort (hash-table-keys (drgnx-view-patch-rows drgnx-view-patch)) #'string<))
-                           keys)))
+            (should (equal (drgnx-term-test--keys b) keys)))
         (disable-theme 'drgnx-term-test)))))
 
 (ert-deftest drgnx-term/tty-frame-shows-terminal ()
@@ -567,7 +579,9 @@ notice, answer it with ANSWER (?a allow, ?d deny) through its command, and retur
           ;; where PNGs can be drawn: the cells display their row's slice of the canvas, one line tall
           (cl-letf (((symbol-function 'display-images-p) (lambda (&rest _) t))
                     ((symbol-function 'image-type-available-p) (lambda (&rest _) t)))
-            (drgnx-term--draw-images drgnx-view (append (drgnx-view--keys drgnx-view) nil)))
+            (if (drgnx-view-sja-p)
+                (progn (drgnx-view-sja-redraw b) (drgnx-view-sja-draw-now))
+              (drgnx-term--draw-images drgnx-view (append (drgnx-view--keys drgnx-view) nil))))
           (let ((d (get-text-property pos 'display)))
             (should (equal (car d) (list 'slice (elt v 1) (elt v 2) (elt v 3) (elt v 4))))
             (should (eq (car (cadr d)) 'image))
