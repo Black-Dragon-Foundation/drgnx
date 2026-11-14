@@ -126,5 +126,37 @@ gated tests use them, but without their need for Sjá (a notebook is not a hub-f
             (with-current-buffer buffer (set-buffer-modified-p nil))
             (kill-buffer buffer)))))))
 
+;; The hub's views of a notebook (docs/develop/notebooks.md "The views"): asked on the connection that opened the notebook, the
+;; subscribed one (a notebook, its events and its views are per connection: opened on the call connection, no event and no view/env would reach it).  The rows
+;; come only after a view/env on the subscribed connection, which needs Sjá (a Nidhogg with the view model): not here.
+(ert-deftest drgnx-notebook-live/the-hub-names-the-notebooks-views-and-closes-them ()
+  (notebook-live-test--with-hub
+    (drgnx-test-with-modules '(lang/notebook)
+      (let* ((file (expand-file-name "nb3.ipynb" root)) buffer)
+        (with-temp-file file (insert notebook-live-test--file))
+        (setq buffer (find-file-noselect file))
+        (unwind-protect
+            (with-current-buffer buffer
+              (drgnx-test-hub-settle (lambda () drgnx-notebook--id) "the notebook opened")
+              (let* ((id drgnx-notebook--id)
+                     (outline (notebook-live-test--ask "notebook/view" (list :id id :kind "outline")))
+                     (output (notebook-live-test--ask "notebook/view" (list :id id :kind "output" :cell "calc")))
+                     (again (notebook-live-test--ask "notebook/view" (list :id id :kind "output" :cell "calc")))
+                     (log (notebook-live-test--ask "notebook/view" (list :id id :kind "log"))))
+                (dolist (a (list outline output log))
+                  (should-not (cdr a))
+                  (should (stringp (plist-get (car a) :view))))
+                (should (equal (plist-get (car output) :view) (plist-get (car again) :view)))
+                (should-not (equal (plist-get (car outline) :view) (plist-get (car log) :view)))
+                (should-not (cdr (notebook-live-test--ask "view/close" (list :view (plist-get (car outline) :view)))))
+                ;; a notebook that is not this connection's has no views
+                (should (cdr (notebook-live-test--ask "notebook/view" (list :id "nb-not-mine" :kind "outline"))))
+                (let ((entries (notebook-live-test--ask "notebook/log" (list :id id))))
+                  (should-not (cdr entries))
+                  (should (listp (plist-get (car entries) :entries))))))
+          (when (buffer-live-p buffer)
+            (with-current-buffer buffer (set-buffer-modified-p nil))
+            (kill-buffer buffer)))))))
+
 (provide 'notebook-live-test)
 ;;; notebook-live-test.el ends here

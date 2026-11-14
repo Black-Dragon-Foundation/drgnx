@@ -33,6 +33,10 @@
 (require 'drgnx-hub-client)
 
 (declare-function drgnx-notify "drgnx-notice")
+(declare-function drgnx-view-patch-attach "drgnx-view")
+(declare-function drgnx-view-env-register "drgnx-view-env")
+(declare-function drgnx-view-env-unregister "drgnx-view-env")
+(declare-function drgnx-view-env-twin "drgnx-view-env")
 (declare-function drgnx-notice-define-source "drgnx-notice")
 (declare-function drgnx-state-subscribe "drgnx-state")
 (declare-function drgnx-look-icon "drgnx-icons" (name &optional face size))
@@ -59,6 +63,8 @@
   "A cell's error output." :group 'drgnx-notebook)
 (defface drgnx-notebook-stale '((t :inherit drgnx-text-subtle))
   "An output that came from the file, not from a run in this session." :group 'drgnx-notebook)
+(defface drgnx-notebook-inverse '((t :inverse-video t))
+  "Output text the terminal showed in reverse video (the hub's views name it, never a colour)." :group 'drgnx-notebook)
 
 ;; The terminal's sixteen roles, as foreground and as background faces (the themes set them: themes/drgnx-theme-gen.el);
 ;; the fallback is the text colour, so an output is readable under any theme.
@@ -115,21 +121,41 @@ connect.")
 
 ;;;; The hub
 
+(defvar drgnx-hub--events)
+(declare-function drgnx-hub--call-on "drgnx-hub-client")
+(declare-function drgnx-hub--settle "drgnx-hub-client")
+
+(defun drgnx-notebook--conn ()
+  "The connection the notebook's calls go on: this Emacs's subscribed one.  The hub keeps a notebook, its events and
+its views (`view/env' comes on this connection too) per connection, so all of them must be on the one the events
+come back on."
+  (if (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events))
+      drgnx-hub--events
+    (error "The drgnx hub is not subscribed")))
+
 (defun drgnx-notebook--call (method params callback &optional full)
   "Ask the hub METHOD with PARAMS; CALLBACK gets (RESULT ERROR).  The one place the notebook buffer reaches the hub.
 No hub to ask is an error for the callback, not for the caller (an open buffer must not fail because the hub is down).
 With FULL the hub's own error is a plist (:code :message), so it can be told from this side's, a string."
-  (condition-case err (drgnx-hub-call method params callback :full full)
+  (condition-case err (drgnx-hub--call-on (drgnx-notebook--conn) method params callback :full full)
     (error (funcall callback nil (error-message-string err)) nil)))
+
+(defun drgnx-notebook--call-sync (method params &optional timeout)
+  "METHOD's result, waiting up to TIMEOUT seconds on the notebook's connection (a save is a command the user gave)."
+  (let* ((conn (drgnx-notebook--conn)) (done nil) result error
+         (limit (+ (float-time (time-convert nil t)) (or timeout 5) 1))
+         (id (drgnx-hub--call-on conn method params (lambda (r e) (setq done t result r error e)) :deadline (or timeout 5))))
+    (while (and (not done) (< (float-time (time-convert nil t)) limit))
+      (accept-process-output conn 0.02))
+    (unless done (drgnx-hub--settle id nil "gave up"))
+    (cond ((not done) (error "The drgnx hub did not answer %s" method))
+          (error (error "drgnx hub: %s" error))
+          (t result))))
 
 (defun drgnx-notebook--say (format &rest args)
   "Say something about a notebook (a refusal, a failed call): a notice of source `notebook' (the Notices list, once in
 the echo area when it matters), not a message: most callers are hub callbacks."
   (drgnx-notify 'notebook 'warn (apply #'format format args)))
-
-(defun drgnx-notebook--call-sync (method params &optional timeout)
-  "METHOD's result, waiting up to TIMEOUT seconds (a save is a command the user gave)."
-  (drgnx-hub-call-sync method params timeout))
 
 (defun drgnx-notebook--sync-cells ()
   "The cells' id, type and source, for the hub: a vector of plists."
@@ -761,6 +787,7 @@ kernel, the tails' versions) and give it the buffer's cells, unsaved edits inclu
                                 (if e (drgnx-notebook--say "the hub did not take the cells: %s" e)
                                   (when (equal drgnx-notebook--id id) (drgnx-notebook--mark-known))))))))
   (dolist (tail (plist-get result :tails)) (drgnx-notebook--put-tail tail))
+  (drgnx-notebook--reask-views)
   (when (fboundp 'drgnx-statusbar-refresh) (drgnx-statusbar-refresh t)))
 
 (defun drgnx-notebook--reconnect ()
@@ -796,6 +823,7 @@ the buffer's cells.  A refusal leaves the buffer as it is; nothing in it is lost
   "`kill-buffer-hook': the hub forgets the notebook (its kernel ends), and the buffer's rescan is not waited for."
   (drgnx-timer-cancel (cons 'drgnx-notebook (current-buffer)))
   (drgnx-notebook--blocks-clear)
+  (drgnx-notebook--kill-views)
   (when drgnx-notebook--id
     (remhash drgnx-notebook--id drgnx-notebook--buffers)
     (ignore-errors (drgnx-notebook--call "notebook/close" (list :id drgnx-notebook--id) #'ignore))))
@@ -1144,21 +1172,186 @@ THEN-RUN-ALL: run every code cell once it is up."
                           (lambda (_r e) (when e (drgnx-notebook--say "%s" e))))))
 
 (defun drgnx-notebook-open-output ()
-  "Open this cell's whole output (what the hub holds of it) as text in a buffer of its own."
+  "Open this cell's whole output: a Sjá view of the hub's lines (drgnx's own Emacs), else its text in a buffer."
   (interactive)
   (let ((c (drgnx-notebook--current)) (name (buffer-name)))
-    (drgnx-notebook--call "notebook/output" (list :id drgnx-notebook--id :cell (plist-get c :id))
-                          (lambda (r e)
-                            (if e (drgnx-notebook--say "%s" e)
-                              (let ((text (drgnx-notebook--outputs-text (plist-get r :outputs)))
-                                    (buffer (get-buffer-create (format "*Output: %s %s*" name (plist-get c :id)))))
-                                (with-current-buffer buffer
-                                  (let ((inhibit-read-only t))
-                                    (erase-buffer)
-                                    (insert (if (string-empty-p text) "(no output)\n" text))
-                                    (goto-char (point-min)))
-                                  (special-mode))
-                                (pop-to-buffer buffer)))))))
+    (if (drgnx-notebook--views-p)
+        (drgnx-notebook--view-open 'output (plist-get c :id))
+      (drgnx-notebook--call "notebook/output" (list :id drgnx-notebook--id :cell (plist-get c :id))
+                            (lambda (r e)
+                              (if e (drgnx-notebook--say "%s" e)
+                                (let ((text (drgnx-notebook--outputs-text (plist-get r :outputs)))
+                                      (buffer (get-buffer-create (format "*Output: %s %s*" name (plist-get c :id)))))
+                                  (with-current-buffer buffer
+                                    (let ((inhibit-read-only t))
+                                      (erase-buffer)
+                                      (insert (if (string-empty-p text) "(no output)\n" text))
+                                      (goto-char (point-min)))
+                                    (special-mode))
+                                  (pop-to-buffer buffer))))))))
+
+;;;; The views: the outline, a cell's full output, the kernel log
+;; The hub builds their rows (`notebook/view', docs/develop/notebooks.md "The views"); the editor makes a buffer for each, attaches
+;; it to the hub's view, sends its env (`drgnx-view-env-register') and binds keys.  A view buffer belongs to a notebook buffer and
+;; ends with it; its hub view is closed with `view/close' when the buffer is killed, and asked for again when the notebook
+;; comes back on a new hub (the view's id is the old hub's).
+
+(defvar-local drgnx-notebook-view--notebook nil "In a view buffer: the notebook buffer it shows.")
+(defvar-local drgnx-notebook-view--kind nil "In a view buffer: `outline', `output' or `log'.")
+(defvar-local drgnx-notebook-view--cell nil "In an output view: the cell's id.")
+(defvar-local drgnx-notebook-view--id nil "In a view buffer: the hub's id of its view.")
+
+(defun drgnx-notebook--views-p ()
+  "Whether Sjá (drgnx's own Emacs) is here to show the hub's views."
+  (fboundp 'nidhogg-view--call))
+
+(defun drgnx-notebook--view-name (notebook kind cell)
+  (pcase kind
+    ('outline (format "*Notebook outline: %s*" notebook))
+    ('output (format "*Notebook output: %s %s*" notebook cell))
+    (_ (format "*Notebook log: %s*" notebook))))
+
+(defvar drgnx-notebook-view-mode-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map special-mode-map)
+    map)
+  "Keys of the notebook views.")
+(defvar drgnx-notebook-outline-mode-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map drgnx-notebook-view-mode-map)
+    map)
+  "Keys of the cell outline.")
+(defvar drgnx-notebook-output-mode-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map drgnx-notebook-view-mode-map)
+    map)
+  "Keys of a cell's full output.")
+
+(define-derived-mode drgnx-notebook-view-mode special-mode "Notebook view"
+  "A notebook's Sjá view: rows the hub builds."
+  (setq-local truncate-lines t cursor-type nil))
+(define-derived-mode drgnx-notebook-outline-mode drgnx-notebook-view-mode "Notebook outline"
+  "The cell outline: one row per cell; Go to Cell (the key profiles' RET) goes to the cell.")
+(define-derived-mode drgnx-notebook-output-mode drgnx-notebook-view-mode "Notebook output"
+  "The whole output of one cell, a window of 1000 lines at a time; Output Later and Earlier Lines move it.")
+(define-derived-mode drgnx-notebook-log-mode drgnx-notebook-view-mode "Notebook log"
+  "What the kernel says that answers no cell.")
+
+(defun drgnx-notebook--view-twin (class)
+  "The view's buffer in display CLASS (`drgnx-view-patch-twin-function')."
+  (drgnx-view-env-twin class '("drgnx-notebook-view-")))
+
+(defun drgnx-notebook--view-attach (view)
+  "Attach the current view buffer to the hub's VIEW and send its env."
+  (setq drgnx-notebook-view--id view)
+  (drgnx-view-patch-attach view "unshown")
+  (setq-local drgnx-view-patch-twin-function #'drgnx-notebook--view-twin)
+  (require 'drgnx-view-env)
+  (drgnx-view-env-register view (current-buffer)))
+
+(defun drgnx-notebook--view-killed ()
+  "`kill-buffer-hook' of a view buffer: the hub forgets the view."
+  (when drgnx-notebook-view--id
+    (ignore-errors (drgnx-notebook--call "view/close" (list :view drgnx-notebook-view--id) #'ignore))))
+
+(defun drgnx-notebook--view-params (notebook-id kind cell)
+  (append (list :id notebook-id :kind (symbol-name kind)) (and cell (list :cell cell))))
+
+(defun drgnx-notebook--view-open (kind &optional cell)
+  "Show the hub's view of KIND (`outline', `output' of CELL, `log') of this notebook."
+  (drgnx-notebook--ensure)
+  (unless (drgnx-notebook--views-p) (user-error "This view needs drgnx's own Emacs (Nidhogg)"))
+  (let* ((notebook (current-buffer)) (name (drgnx-notebook--view-name (buffer-name) kind cell)) (existing (get-buffer name)))
+    (if (buffer-live-p existing)
+        (pop-to-buffer existing)
+      (drgnx-notebook--call "notebook/view" (drgnx-notebook--view-params drgnx-notebook--id kind cell)
+                            (lambda (r e)
+                              (if (or e (null (plist-get r :view)))
+                                  (drgnx-notebook--say "no %s view: %s" kind (or e "no answer"))
+                                (when (and (buffer-live-p notebook) (not (get-buffer name)))
+                                  (with-current-buffer (generate-new-buffer name)
+                                    (pcase kind
+                                      ('outline (drgnx-notebook-outline-mode))
+                                      ('output (drgnx-notebook-output-mode))
+                                      (_ (drgnx-notebook-log-mode)))
+                                    (setq drgnx-notebook-view--notebook notebook drgnx-notebook-view--kind kind
+                                          drgnx-notebook-view--cell cell)
+                                    (add-hook 'kill-buffer-hook #'drgnx-notebook--view-killed nil t)
+                                    (drgnx-notebook--view-attach (plist-get r :view))
+                                    (pop-to-buffer (current-buffer))))))))))
+
+(defun drgnx-notebook--view-buffers (notebook)
+  "The live view buffers of NOTEBOOK."
+  (seq-filter (lambda (b) (eq (buffer-local-value 'drgnx-notebook-view--notebook b) notebook)) (buffer-list)))
+
+(defun drgnx-notebook--reask-views ()
+  "The notebook came back on a new hub with a new id: each of its views is asked for again, its old id forgotten."
+  (let ((notebook (current-buffer)) (id drgnx-notebook--id))
+    (dolist (view (drgnx-notebook--view-buffers notebook))
+      (let ((kind (buffer-local-value 'drgnx-notebook-view--kind view)) (cell (buffer-local-value 'drgnx-notebook-view--cell view))
+            (old (buffer-local-value 'drgnx-notebook-view--id view)))
+        (drgnx-notebook--call "notebook/view" (drgnx-notebook--view-params id kind cell)
+                              (lambda (r e)
+                                (when (buffer-live-p view)
+                                  (with-current-buffer view
+                                    (if (or e (null (plist-get r :view)))
+                                        (drgnx-notebook--say "no %s view on the new hub: %s" kind (or e "no answer"))
+                                      (when old (drgnx-view-env-unregister old))
+                                      (drgnx-notebook--view-attach (plist-get r :view)))))))))))
+
+(defun drgnx-notebook--kill-views ()
+  "The notebook goes: so do its views."
+  (dolist (view (drgnx-notebook--view-buffers (current-buffer)))
+    (kill-buffer view)))
+
+(defun drgnx-notebook-outline ()
+  "Show the cell outline: one row per cell (index, type, prompt, first line, state); RET goes to the cell."
+  (interactive)
+  (drgnx-notebook--view-open 'outline))
+
+(defun drgnx-notebook-kernel-log ()
+  "Show the kernel's log: what it sends that answers no cell (its own logging, other clients' messages)."
+  (interactive)
+  (drgnx-notebook--view-open 'log))
+
+(defun drgnx-notebook-outline-visit ()
+  "Go to the cell of the outline row at point."
+  (interactive)
+  (let ((id (get-text-property (line-beginning-position) 'drgnx-notebook-cell)) (notebook drgnx-notebook-view--notebook))
+    (unless id (user-error "This row is not a cell"))
+    (unless (buffer-live-p notebook) (user-error "The notebook is closed"))
+    (pop-to-buffer notebook)
+    (let ((c (drgnx-notebook--cell-by-id id)))
+      (unless c (user-error "The cell is not in the notebook any more"))
+      (goto-char (1+ (plist-get c :head)))
+      (drgnx-notebook--select-at (point)))))
+
+(defun drgnx-notebook--output-lines ()
+  "The first and last line numbers (1-based) the output view holds, or nil: a read of the rows' property, on a command."
+  (let ((pos (point-min)) first last)
+    (while (< pos (point-max))
+      (when-let* ((n (get-text-property pos 'drgnx-notebook-line)))
+        (setq first (min n (or first n)) last (max n (or last n))))
+      (setq pos (or (next-single-property-change pos 'drgnx-notebook-line) (point-max))))
+    (and first (cons first last))))
+
+(defun drgnx-notebook--output-move (delta)
+  "Ask the hub for the output's window moved by DELTA lines from the first line shown (the hub clamps it)."
+  (let ((lines (drgnx-notebook--output-lines)))
+    (unless lines (user-error "No lines here yet"))
+    (drgnx-notebook--call "view/window" (list :view drgnx-notebook-view--id :list "lines"
+                                              :from (max 0 (+ (1- (car lines)) delta)))
+                          (lambda (_r e) (when e (drgnx-notebook--say "%s" e))))))
+
+(defun drgnx-notebook-output-later ()
+  "Move the output's window half a window on."
+  (interactive)
+  (drgnx-notebook--output-move 500))
+
+(defun drgnx-notebook-output-earlier ()
+  "Move the output's window half a window back."
+  (interactive)
+  (drgnx-notebook--output-move -500))
 
 ;;;; The status bar: which cell, and the kernel
 
@@ -1224,11 +1417,20 @@ THEN-RUN-ALL: run every code cell once it is up."
     (notebook-clear-outputs "Clear Outputs" drgnx-notebook-clear-outputs)
     (notebook-select-kernel "Select Kernel…" drgnx-notebook-select-kernel)
     (notebook-open-output "Open Output" drgnx-notebook-open-output)
+    (notebook-outline "Show Cell Outline" drgnx-notebook-outline)
+    (notebook-kernel-log "Show Kernel Log" drgnx-notebook-kernel-log)
+    (notebook-outline-visit "Go to Cell" drgnx-notebook-outline-visit drgnx-notebook-outline-mode-map drgnx-notebook--in-outline-p)
+    (notebook-output-later "Output: Later Lines" drgnx-notebook-output-later drgnx-notebook-output-mode-map drgnx-notebook--in-output-p)
+    (notebook-output-earlier "Output: Earlier Lines" drgnx-notebook-output-earlier drgnx-notebook-output-mode-map
+                             drgnx-notebook--in-output-p)
     (notebook-copy-output "Copy Output" drgnx-notebook-copy-output)
     (notebook-toggle-outputs "Toggle Outputs" drgnx-notebook-toggle-outputs))
-  "The notebook's commands: (ID TITLE FUNCTION), registered in category Notebook.")
+  "The notebook's commands: (ID TITLE FUNCTION [MAP WHEN]), registered in category Notebook;
+MAP and WHEN for a view's buffer.")
 
 (defun drgnx-notebook--in-notebook-p () (derived-mode-p 'drgnx-notebook-mode))
+(defun drgnx-notebook--in-outline-p () (derived-mode-p 'drgnx-notebook-outline-mode))
+(defun drgnx-notebook--in-output-p () (derived-mode-p 'drgnx-notebook-output-mode))
 
 (drgnx-module-define 'lang/notebook
                      :doc "Jupyter notebooks: a .ipynb opens as one buffer of cells with their outputs, run on any installed kernel."
@@ -1250,8 +1452,9 @@ THEN-RUN-ALL: run every code cell once it is up."
                        (drgnx-notebook--segments-define)
                        (advice-add 'kill-region :before #'drgnx-notebook-guard-kill)
                        (dolist (c drgnx-notebook--commands)
-                         (drgnx-command-define (nth 0 c) :title (nth 1 c) :category "Notebook" :command (nth 2 c) :map 'drgnx-notebook-mode-map
-                                               :scope 'editing :when #'drgnx-notebook--in-notebook-p))))
+                         (drgnx-command-define (nth 0 c) :title (nth 1 c) :category "Notebook" :command (nth 2 c)
+                                               :map (or (nth 3 c) 'drgnx-notebook-mode-map)
+                                               :scope 'editing :when (or (nth 4 c) #'drgnx-notebook--in-notebook-p)))))
 
 (provide 'drgnx-notebook)
 ;;; drgnx-notebook.el ends here

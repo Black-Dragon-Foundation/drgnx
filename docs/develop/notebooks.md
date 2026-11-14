@@ -89,6 +89,23 @@ header does, so the output rows are outside the ring until Glitnir counts the ov
 the output as the tail's `before-string` the cursor at the end of the source draws after the output, and the `cursor` property is not
 honoured for a before-string).
 
+## The views in Lisp
+
+`drgnx-notebook-outline`, `drgnx-notebook-open-output` and `drgnx-notebook-kernel-log` ask `notebook/view {id, kind, cell?}` and get `{view}`.
+The editor makes a buffer (`*Notebook outline: NAME*`, `*Notebook output: NAME CELL*`, `*Notebook log: NAME*`; asking again shows the one
+there is) in `drgnx-notebook-outline-mode`, `-output-mode` or `-log-mode`, attaches it with `drgnx-view-patch-attach` (class `unshown`, a
+twin per display class), registers its env (`drgnx-view-env-register`), and sends `view/close` when it is killed. Rows are the hub's; the
+editor has registry commands for them, keys in the profiles: Go to Cell on the outline (the row's `drgnx-notebook-cell` property is the cell's id), Output: Later and Earlier Lines on the output
+(`view/window {view, list: "lines", from}`, half a window, from the `drgnx-notebook-line` property of the rows shown). The faces are Lisp's:
+`drgnx-notebook-prompt`, `-stale`, `-inverse` and the role faces; a view's text carries them, never a colour. A view is asked for again, its
+old id unregistered, when the notebook is opened again on a new hub (`drgnx-notebook--reask-views`), and killed with the notebook.
+
+**The notebook's connection.** The hub keeps a notebook, its events and its views per connection, and `view/env` and `view/window` come on the
+subscribed connection (`drgnx-view-env--send`). So every notebook call goes on `drgnx-hub--events` (`drgnx-notebook--call`,
+`--call-sync`), never the call connection: a notebook opened on the call connection is refused on the events connection ("no open
+notebook"), and its events and view rows would go to a connection nobody reads. No subscription yet is an error for the caller's
+callback, which a first open treats as no answer and asks again at the next connect.
+
 ## A hub that came back
 
 The hub keeps notebooks in memory, so a restarted hub holds none, and the ids of the old one mean nothing (the editor never builds or

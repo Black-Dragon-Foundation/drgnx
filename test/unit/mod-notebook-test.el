@@ -269,7 +269,7 @@
                                     notebook-restart notebook-restart-run-all notebook-add-below notebook-add-above notebook-cut-cell notebook-copy-cell
                                     notebook-paste-cell notebook-delete-cell notebook-move-up notebook-move-down notebook-split-cell notebook-merge-cell
                                     notebook-change-type notebook-clear-outputs notebook-select-kernel notebook-open-output notebook-copy-output
-                                    notebook-toggle-outputs))
+                                    notebook-toggle-outputs notebook-outline notebook-kernel-log))
       (should (drgnx-commands-get id)))))
 
 (ert-deftest drgnx-notebook/a-hub-that-says-no-leaves-the-file-as-text ()
@@ -480,15 +480,17 @@
       (should-error (drgnx-notebook--choose-kernel candidates) :type 'user-error))))
 
 (ert-deftest drgnx-notebook/open-output-shows-the-whole-output-in-a-buffer ()
+  ;; without Sjá (a stock Emacs): the text of the output in a buffer of its own
   (nb-test--with
-    (setq nb-test--answers
-          (list (cons "notebook/output" (lambda (_) (cons (list :outputs (list (list :output_type "stream" :text (list "one\n" "two\n")))) nil)))))
-    (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id "a") :head)))
-    (save-window-excursion
-      (drgnx-notebook-open-output)
-      (should (string-prefix-p "*Output: " (buffer-name)))
-      (should (equal (buffer-string) "one\ntwo\n"))
-      (kill-buffer (current-buffer)))))
+    (cl-letf (((symbol-function 'drgnx-notebook--views-p) #'ignore))
+      (setq nb-test--answers
+            (list (cons "notebook/output" (lambda (_) (cons (list :outputs (list (list :output_type "stream" :text (list "one\n" "two\n")))) nil)))))
+      (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id "a") :head)))
+      (save-window-excursion
+        (drgnx-notebook-open-output)
+        (should (string-prefix-p "*Output: " (buffer-name)))
+        (should (equal (buffer-string) "one\ntwo\n"))
+        (kill-buffer (current-buffer))))))
 
 (ert-deftest drgnx-notebook/the-selected-cell-has-the-add-row-and-the-selected-tint-on-its-output ()
   (nb-test--with
@@ -681,3 +683,148 @@
     (should (window-parameter (selected-window) 'glitnir-blocks))
     (drgnx-notebook--blocks-clear)
     (should-not (window-parameter (selected-window) 'glitnir-blocks))))
+
+;;; The views: the cell outline, a cell's full output and the kernel log, hub-fed Sjá views the editor only shows
+
+(defmacro nb-test--with-views (&rest body)
+  "BODY in a notebook, Sjá taken to be there: the view attach and env registration are recorded in `attached' and
+`registered', each view the hub names being `nbv:KIND' (an output's `nbv:output:CELL')."
+  (declare (indent 0))
+  `(nb-test--with
+     (let ((attached nil) (registered nil) (unregistered nil))
+       (setq nb-test--answers
+             (list (cons "notebook/view"
+                         (lambda (p) (cons (list :view (format "nbv:%s%s%s" (plist-get p :kind) (if (plist-get p :cell) ":" "")
+                                                               (or (plist-get p :cell) ""))
+                                                 )
+                                           nil)))))
+       (cl-letf (((symbol-function 'drgnx-notebook--views-p) (lambda () t))
+                 ((symbol-function 'drgnx-view-patch-attach) (lambda (view class &rest _) (push (list view class) attached)))
+                 ((symbol-function 'drgnx-view-env-register) (lambda (view buffer &rest _) (push (cons view buffer) registered)))
+                 ((symbol-function 'drgnx-view-env-unregister) (lambda (view) (push view unregistered)))
+                 ((symbol-function 'pop-to-buffer) (lambda (b &rest _) (set-buffer b))))
+         (let ((notebook (current-buffer)))
+           (unwind-protect (progn ,@body)
+             (dolist (b (buffer-list))
+               (when (string-prefix-p "*Notebook " (buffer-name b)) (let ((kill-buffer-hook nil)) (kill-buffer b))))
+             (set-buffer notebook)))))))
+
+(ert-deftest drgnx-notebook/the-outline-is-the-hubs-view-attached-and-registered ()
+  (nb-test--with-views
+    (drgnx-notebook-outline)
+    (let ((call (assoc "notebook/view" nb-test--calls)))
+      (should (equal (plist-get (cdr call) :id) "nb1"))
+      (should (equal (plist-get (cdr call) :kind) "outline")))
+    (should (equal attached '(("nbv:outline" "unshown"))))
+    (let ((buffer (cdr (car registered))))
+      (should (equal (car (car registered)) "nbv:outline"))
+      (should (string-prefix-p "*Notebook outline: " (buffer-name buffer)))
+      (should (eq (buffer-local-value 'major-mode buffer) 'drgnx-notebook-outline-mode)))))
+
+(ert-deftest drgnx-notebook/a-view-asked-again-is-the-same-buffer ()
+  (nb-test--with-views
+    (drgnx-notebook-outline)
+    (set-buffer (get-buffer (buffer-name (cdr (car registered)))))
+    (set-buffer (get-buffer (replace-regexp-in-string "\\*Notebook outline: \\(.*\\)\\*" "\\1" (buffer-name))))
+    (drgnx-notebook-outline)
+    (should (= (length registered) 1))))
+
+(ert-deftest drgnx-notebook/the-full-output-is-the-view-of-the-cell-at-point ()
+  (nb-test--with-views
+    (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id "c") :head)))
+    (drgnx-notebook-open-output)
+    (let ((call (assoc "notebook/view" nb-test--calls)))
+      (should (equal (plist-get (cdr call) :kind) "output"))
+      (should (equal (plist-get (cdr call) :cell) "c")))
+    (should (string-prefix-p "*Notebook output: " (buffer-name (cdr (car registered)))))
+    (should (eq (buffer-local-value 'major-mode (cdr (car registered))) 'drgnx-notebook-output-mode))))
+
+(ert-deftest drgnx-notebook/the-kernel-log-is-a-view-too ()
+  (nb-test--with-views
+    (drgnx-notebook-kernel-log)
+    (should (equal (plist-get (cdr (assoc "notebook/view" nb-test--calls)) :kind) "log"))
+    (should (eq (buffer-local-value 'major-mode (cdr (car registered))) 'drgnx-notebook-log-mode))))
+
+(ert-deftest drgnx-notebook/a-row-of-the-outline-takes-you-to-its-cell ()
+  (nb-test--with-views
+    (let ((notebook (current-buffer)))
+      (drgnx-notebook-outline)
+      (set-buffer (cdr (car registered)))
+      (let ((inhibit-read-only t))
+        (insert (propertize "2  code  [ ]  print(2)\n" 'drgnx-notebook-cell "c")))
+      (goto-char (point-min))
+      (drgnx-notebook-outline-visit)
+      (should (eq (current-buffer) notebook))
+      (should (equal (plist-get (drgnx-notebook--cell-at) :id) "c")))))
+
+(ert-deftest drgnx-notebook/an-outline-row-that-is-not-a-cell-says-so ()
+  (nb-test--with-views
+    (drgnx-notebook-outline)
+    (set-buffer (cdr (car registered)))
+    (let ((inhibit-read-only t)) (insert "more  3 cells\n"))
+    (goto-char (point-min))
+    (should-error (drgnx-notebook-outline-visit) :type 'user-error)))
+
+(ert-deftest drgnx-notebook/the-output-window-moves-by-half-a-window ()
+  (nb-test--with-views
+    (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id "a") :head)))
+    (drgnx-notebook-open-output)
+    (set-buffer (cdr (car registered)))
+    (let ((inhibit-read-only t))
+      (insert (propertize "line one\n" 'drgnx-notebook-cell "a" 'drgnx-notebook-line 1001))
+      (insert (propertize "line two\n" 'drgnx-notebook-cell "a" 'drgnx-notebook-line 1002)))
+    (setq nb-test--calls nil)
+    (drgnx-notebook-output-later)
+    (let ((call (assoc "view/window" nb-test--calls)))
+      (should (equal (plist-get (cdr call) :view) "nbv:output:a"))
+      (should (equal (plist-get (cdr call) :list) "lines"))
+      (should (= (plist-get (cdr call) :from) 1500)))
+    (setq nb-test--calls nil)
+    (drgnx-notebook-output-earlier)
+    (should (= (plist-get (cdr (assoc "view/window" nb-test--calls)) :from) 500))))
+
+(ert-deftest drgnx-notebook/killing-a-view-closes-it-at-the-hub ()
+  (nb-test--with-views
+    (drgnx-notebook-outline)
+    (let ((buffer (cdr (car registered))))
+      (setq nb-test--calls nil)
+      (kill-buffer buffer)
+      (should (equal (plist-get (cdr (assoc "view/close" nb-test--calls)) :view) "nbv:outline")))))
+
+(ert-deftest drgnx-notebook/the-views-go-with-the-notebook ()
+  (nb-test--with-views
+    (drgnx-notebook-outline)
+    (let ((view (cdr (car registered))))
+      (drgnx-notebook--kill-views)
+      (should-not (buffer-live-p view)))))
+
+(ert-deftest drgnx-notebook/a-view-is-asked-again-when-the-notebook-comes-back-on-a-new-hub ()
+  (nb-test--with-views
+    (setq buffer-file-name "/nonexistent/nb-test.ipynb")
+    (unwind-protect
+        (progn
+          (drgnx-notebook-outline)
+          (let ((view (cdr (car registered))))
+            (setq nb-test--answers
+                  (append (list (cons "notebook/open" (lambda (_) (cons nb-test--reopened nil)))
+                                (cons "notebook/sync" (lambda (_) (cons t nil))))
+                          nb-test--answers)
+                  nb-test--calls nil
+                  attached nil)
+            (drgnx-notebook--reconnect)
+            (should (equal (plist-get (cdr (assoc "notebook/view" nb-test--calls)) :id) "nb2"))
+            (should (member "nbv:outline" unregistered))
+            (should (equal attached '(("nbv:outline" "unshown"))))
+            (should (buffer-live-p view))))
+      (setq buffer-file-name nil))))
+
+(ert-deftest drgnx-notebook/without-sja-the-views-say-so ()
+  (nb-test--with
+    (cl-letf (((symbol-function 'drgnx-notebook--views-p) #'ignore))
+      (should-error (drgnx-notebook-outline) :type 'user-error)
+      (should-error (drgnx-notebook-kernel-log) :type 'user-error))))
+
+(ert-deftest drgnx-notebook/the-views-faces-are-lisps-and-hold-no-colour ()
+  (dolist (face '(drgnx-notebook-inverse drgnx-notebook-prompt drgnx-notebook-stale drgnx-notebook-fg-red drgnx-notebook-bg-red))
+    (should (facep face)))
+  (should (eq (face-attribute 'drgnx-notebook-inverse :inverse-video nil t) t)))

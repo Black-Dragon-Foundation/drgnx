@@ -63,6 +63,16 @@ A cell's source is coloured by its language's tree-sitter mode when the language
 
 PNG and JPEG outputs are drawn under the cell (at most 240 px tall, so a cell never scrolls past a window); the first draw fetches the image from the hub, and until it arrives a label (`[image/png 640×360]`) stands in. SVG is not drawn in this first version.
 
+## The outline, a cell's whole output and the kernel's log
+
+Three views the hub builds, shown in their own buffers (drgnx's own Emacs):
+
+- **Show Cell Outline** (`C-k n j` in the VS Code keys, `C-c C-j` in Emacs, `SPC n l` in Vim): one row per cell with its number, type, prompt, first line and state (queued, running, error, aborted, cancelled). `RET` goes to the cell (Go to Cell).
+- **Open Output** (`C-k n O`): the whole output of the cell at point, a window of 1000 lines at a time; `M-n` and `M-p` (Output: Later and Earlier Lines) move the window. Images are a row you can save as a file, never drawn here; a kernel's SVG is not rendered.
+- **Show Kernel Log** (`C-k n L`): what the kernel says that answers no cell, such as its own logging.
+
+Each follows the notebook while it is open, ends with it, and is asked for again when the hub restarts. In a terminal Emacs without these views, Open Output shows the output as text in a buffer of its own, and the other two say they need drgnx's own Emacs.
+
 ## Not yet
 
-The cell outline and the kernel's log wait for the hub's views (an Sjá view each); until then **Open Output** shows the cell's whole output as text in a buffer of its own. The card look has a ring but not yet the mockup's shadow, the gaps between cards, and the output inside the ring (Glitnir's blocks do not draw them yet); without blocks each cell is a tinted band with a hairline over its header. There are no toolbar or hover icons yet; every command is in the palette. Rich HTML and widget outputs show as their plain text.
+The card look has a ring but not yet the mockup's shadow, the gaps between cards, and the output inside the ring (Glitnir's blocks do not draw them yet); without blocks each cell is a tinted band with a hairline over its header. There are no toolbar or hover icons yet; every command is in the palette. Rich HTML and widget outputs show as their plain text.
