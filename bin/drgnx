@@ -437,7 +437,8 @@ orders_files() { # the test files whose `;; test-pattern:' line (an exact line i
   local f
   while IFS= read -r f; do
     if head -n 15 "$f" | grep -Eq '^;; test-pattern: ((orders|gated|handshake) )*gated( (orders|gated|handshake))*$'; then echo "$f"; fi
-  done < <(find "$here/test" -name '*-test.el' | LC_ALL=C sort)
+  # test/ssh needs a real sshd: its image is the ssh job's (test/container/ssh-row.sh); a job that has none (hub chaos) never selects it
+  done < <(find "$here/test" -name '*-test.el' -not -path "$here/test/ssh/*" | LC_ALL=C sort)
 }
 
 orders_skipped() { # LOG — the names of the tests a run's log lists as skipped (the runner's "Skipped (N):" block), sorted

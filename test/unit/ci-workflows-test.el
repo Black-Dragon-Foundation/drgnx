@@ -476,6 +476,26 @@ Returns (EXIT . OUTPUT), the output both streams' or, with STDOUT-ONLY, stdout's
     ;; the escape-host's sandbox lane and the macos fork row both run them
     (should (>= checked 2))))
 
+(ert-deftest drgnx-ci/the-ssh-rows-run-in-exactly-the-ssh-job ()
+  ;; test/ssh/ needs a real sshd (test/container/Containerfile.ssh): the swapped-pair runs (`bin/drgnx test --orders',
+  ;; hub chaos's second step, in an image with no sshd) leave it out, and the ssh job is the one that runs it
+  (let ((tiers (drgnx-ci-test--yml "drgnx-tiers.yml")) (bin (drgnx-ci-test--file "bin/drgnx")))
+    (skip-unless (and tiers bin))
+    (with-temp-buffer
+      (let* ((start (string-search "\norders_files() {" bin))
+             (def (and start (substring bin (1+ start) (+ (string-search "\n}\n" bin start) 3))))
+             (code (call-process "bash" nil t nil "-c"
+                                 (format "here=%s; %s\norders_files" (shell-quote-argument drgnx-ci-test--root) def))))
+        (should (= 0 code))
+        (should-not (string-match-p "/test/ssh/" (buffer-string)))
+        (should (string-match-p "/test/unit/" (buffer-string)))))
+    (should (string-search "bash test/container/ssh-row.sh" (drgnx-ci-test--job tiers "ssh")))
+    ;; no other job runs the ssh row's script or selects its folder
+    (dolist (job '("unit" "no-lisp-writes" "hub-chaos" "ui" "scenario" "perf" "tty" "timing" "macos"))
+      (let ((text (replace-regexp-in-string "^ *#.*\n" "" (drgnx-ci-test--job tiers job))))   ; its steps, not the comments
+        (should-not (string-search "ssh-row.sh" text))
+        (should-not (string-search "test/ssh" text))))))
+
 (ert-deftest drgnx-ci/the-debug-rows-the-escape-lane-skips-run-in-debug-live ()
   ;; a module the sandbox lane skips (--skip debug::tests_X) must run in another job: no silent skip
   (let ((rt (drgnx-ci-test--yml "runtime.yml")) (n 0))
