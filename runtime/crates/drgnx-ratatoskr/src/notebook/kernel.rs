@@ -302,6 +302,15 @@ impl Kernel {
         let bring_up = async {
             wait_endpoints(&conn, pid, &mut exit.clone()).await?;
             let mut session = Session::connect(&conn, &identity, t.limits).await?;
+            // asked again once connected: the listeners are still the kernel's alone (a listener that took the port
+            // between the first check and the connect is named, and nothing more is sent)
+            if let Some(ports) = conn.ports
+                && !tcp_listeners_are_the_kernels(ports, pid).await?
+            {
+                return Err("the kernel's ports have no listener after the connect"
+                    .to_string()
+                    .into());
+            }
             ready(&mut session, &session_id, &mut exit.clone(), t.ping).await?;
             Ok::<Session, Fail>(session)
         };
@@ -493,6 +502,26 @@ async fn exited(rx: &mut watch::Receiver<Option<Exit>>) -> Exit {
 /// are sockets of ours. Over tcp they are loopback ports whose every listener is in the kernel's process group
 /// (`debug::ports::owned`): the hub never connects to a port on a probe, because the port the hub claimed and the bind the
 /// kernel makes are apart, and a listener that is not the kernel's is an error naming the port, never connected to.
+/// Whether the four channels' ports each have listeners that are the kernel's own (its process or group PID) and that no other
+/// process of this account can join (`Ok(true)` for all), not all there yet (`Ok(false)`), or one that is not (an error
+/// naming the port: nothing is connected to it).
+async fn tcp_listeners_are_the_kernels(ports: [u16; 5], pid: i32) -> Result<bool, String> {
+    let four = [ports[0], ports[1], ports[2], ports[3]];
+    crate::clock::blocking(move || {
+        let mut all = true;
+        for p in four {
+            match crate::debug::ports::exclusively_owned(p, &[pid]) {
+                Ok(true) => {}
+                Ok(false) => all = false,
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(all)
+    })
+    .await
+    .map_err(|e| format!("the port check failed: {e}"))?
+}
+
 async fn wait_endpoints(
     conn: &Connection,
     pid: i32,
@@ -503,23 +532,7 @@ async fn wait_endpoints(
             None => ["shell", "iopub", "stdin", "control"]
                 .iter()
                 .all(|c| conn.socket(c).is_some_and(|p| is_our_socket(&p))),
-            Some(ports) => {
-                let four = [ports[0], ports[1], ports[2], ports[3]];
-                let owned = crate::clock::blocking(move || {
-                    let mut all = true;
-                    for p in four {
-                        match crate::debug::ports::owned(p, &[pid]) {
-                            Ok(true) => {}
-                            Ok(false) => all = false,
-                            Err(e) => return Err(e),
-                        }
-                    }
-                    Ok(all)
-                })
-                .await
-                .map_err(|e| format!("the port check failed: {e}"))?;
-                owned?
-            }
+            Some(ports) => tcp_listeners_are_the_kernels(ports, pid).await?,
         };
         if all {
             return Ok(());

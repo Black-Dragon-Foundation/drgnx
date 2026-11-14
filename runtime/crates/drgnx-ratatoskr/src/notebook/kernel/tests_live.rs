@@ -1,8 +1,8 @@
 //! Live: a real ipykernel, over ipc and over tcp (design §5.2, §5.3; `docs/develop/testing.md`, "Live notebook kernels").
 //!
-//! The kernel is the hash-pinned one of `test/container/ipykernel-requirements.txt` (`.github/ci/notebook-kernel.sh` makes the
-//! venv, the adapter image has it at `/opt/nb-kernel`): `DRGNX_NB_KERNEL_PYTHON` names its python. A lane that runs the ignored
-//! rows without it fails here, naming the script; it never skips.
+//! The kernel is the hash-pinned one of `test/container/ipykernel-requirements.txt` (the adapter image has it as a Python 3.15
+//! venv at `/opt/nb-kernel`, `test/container/debug-adapters-image.sh`): `DRGNX_NB_KERNEL_PYTHON` names its python. A lane that
+//! runs the ignored rows without it fails here, naming the image; it never skips.
 
 use std::path::PathBuf;
 
@@ -21,7 +21,7 @@ fn kernel_python() -> String {
         .is_ok_and(|o| o.status.success());
     assert!(
         ok,
-        "{python} cannot import ipykernel: the lane installs it (hash-pinned) with .github/ci/notebook-kernel.sh and sets DRGNX_NB_KERNEL_PYTHON; the adapter image has it at /opt/nb-kernel"
+        "{python} cannot import ipykernel: run these rows in the adapter image (test/container/Containerfile.debug), which has the hash-pinned kernel at /opt/nb-kernel and sets DRGNX_NB_KERNEL_PYTHON"
     );
     python
 }
@@ -165,7 +165,7 @@ async fn a_real_kernel_lives(transport: Transport) -> (tempfile::TempDir, PathBu
         for ch in ["shell", "iopub", "stdin", "control"] {
             let port = u16::try_from(body[format!("{ch}_port")].as_u64().unwrap()).unwrap();
             assert_eq!(
-                crate::debug::ports::owned(port, &[pid]),
+                crate::debug::ports::exclusively_owned(port, &[pid]),
                 Ok(true),
                 "{ch} port {port}"
             );
@@ -220,7 +220,13 @@ async fn a_real_kernel_lives(transport: Transport) -> (tempfile::TempDir, PathBu
 
     let exit = k.shutdown().await;
     // The kernel ended by itself within the grace, not by our kill. (Its exit status is the kernel's own: ipykernel
-    // sometimes aborts (SIGABRT) in its interpreter teardown, one run in several, after it has done everything asked.)
+    // sometimes aborts (SIGABRT) in its interpreter teardown, about one run in five, after it has done everything asked;
+    // the status is printed whenever it is not a plain 0, so a pattern shows in the logs.)
+    if exit.code != Some(0) {
+        eprintln!(
+            "the kernel's exit status after an orderly shutdown over {transport:?}: {exit:?}"
+        );
+    }
     assert!(
         exit.signal != Some(libc::SIGKILL) && exit.code.is_none_or(|c| c == 0),
         "an orderly shutdown ends the kernel by itself: {exit:?}"
@@ -235,7 +241,7 @@ async fn a_real_kernel_lives(transport: Transport) -> (tempfile::TempDir, PathBu
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "live: a real ipykernel (.github/ci/notebook-kernel.sh)"]
+#[ignore = "live: a real ipykernel (the adapter image: test/container/Containerfile.debug)"]
 async fn a_real_ipykernel_lives_over_ipc() {
     let (_keep, folder) = a_real_kernel_lives(Transport::Ipc).await;
     // the sockets were files in the 0700 folder, and went with the kernel
@@ -250,7 +256,7 @@ async fn a_real_ipykernel_lives_over_ipc() {
 /// The positive path of the tcp transport and of `debug::ports::owned` over a kernel's group: a kernelspec that says it cannot
 /// use ipc gets loopback ports the hub claimed, and the hub connects only once every listener on them is the kernel's.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "live: a real ipykernel (.github/ci/notebook-kernel.sh)"]
+#[ignore = "live: a real ipykernel (the adapter image: test/container/Containerfile.debug)"]
 async fn a_real_ipykernel_lives_over_tcp() {
     let (_keep, folder) = a_real_kernel_lives(Transport::Tcp).await;
     // no socket files in the folder: the sockets were loopback ports, released with the kernel

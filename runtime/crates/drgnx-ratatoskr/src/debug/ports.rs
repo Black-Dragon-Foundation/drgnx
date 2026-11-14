@@ -227,6 +227,67 @@ pub fn owned(port: u16, groups: &[i32]) -> Result<bool, String> {
     Ok(true)
 }
 
+/// [`owned`], and the listeners are ones no other process of this account can join. A process of the same user that binds
+/// PORT after the check could share a listener that set SO_REUSEPORT and take its connections (the kernel's messages with
+/// them), which `owned` cannot see: so such a listener is refused (an error naming the port). Without the option no
+/// second bind is possible, on Linux and macOS alike, so the check holds from then on: a second socket asks to bind the
+/// port with SO_REUSEPORT, which the system grants only when every listener on it has set it too, and drops it again (a
+/// socket that is bound and not listening takes no connection).
+pub fn exclusively_owned(port: u16, groups: &[i32]) -> Result<bool, String> {
+    if !owned(port, groups)? {
+        return Ok(false);
+    }
+    if joinable(port)? {
+        return Err(format!(
+            "port {port}'s listener allows another process of this account to share the port (SO_REUSEPORT): the session ends"
+        ));
+    }
+    Ok(true)
+}
+
+/// Whether a socket with SO_REUSEPORT can bind 127.0.0.1:PORT now, i.e. nothing holds it, or every listener on it set
+/// SO_REUSEPORT as well. Any other refusal (it is held without the option) is `false`; an error is an unexpected one.
+fn joinable(port: u16) -> Result<bool, String> {
+    // SAFETY: socket(2), setsockopt(2), bind(2), fcntl(2) and close(2) on a descriptor made and closed here; the sockaddr
+    // is zeroed, then set.
+    unsafe {
+        let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0);
+        if fd < 0 {
+            return Err(format!(
+                "port check: socket: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+        let on: libc::c_int = 1;
+        let mut a: libc::sockaddr_in = std::mem::zeroed();
+        a.sin_family = libc::AF_INET as libc::sa_family_t;
+        a.sin_port = port.to_be();
+        a.sin_addr.s_addr = u32::from_be_bytes([127, 0, 0, 1]).to_be();
+        let bound = libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_REUSEPORT,
+            std::ptr::from_ref(&on).cast(),
+            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+        ) == 0
+            && libc::bind(
+                fd,
+                std::ptr::from_ref(&a).cast(),
+                std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+            ) == 0;
+        let err = std::io::Error::last_os_error();
+        libc::close(fd);
+        if bound {
+            Ok(true)
+        } else if err.raw_os_error() == Some(libc::EADDRINUSE) {
+            Ok(false)
+        } else {
+            Err(format!("port check: bind 127.0.0.1:{port}: {err}"))
+        }
+    }
+}
+
 /// How long a port check's `lsof` may take: past it the process is killed and the check fails, so a session's start
 /// (which waits on the check, [`super::blocked::wait_owned`]) keeps its own deadline.
 pub const LSOF_WITHIN: std::time::Duration = std::time::Duration::from_secs(5);
