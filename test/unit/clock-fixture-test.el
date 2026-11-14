@@ -231,6 +231,20 @@ A stamp already on the virtual clock (H ahead of the real one) stays."
        (drgnx-test-advance 2)
        (should (equal (drgnx-clock-test--since t0) '(0.3 2.0)))))))
 
+(ert-deftest drgnx-test-clock/advance-until-runs-the-timers-a-condition-waits-for ()
+  ;; a reply 0.2 s away is reached by virtual time (0.2 s, not a real wait); a condition no timer brings fails at the
+  ;; virtual deadline, or at once when no timer is left
+  (drgnx-test-with-clock ()
+    (let ((done nil) (t0 (float-time)))
+      (run-at-time 0.2 nil (lambda () (setq done t)))
+      (should (drgnx-test-advance-until (lambda () done)))
+      (should (< (abs (- (float-time) t0 0.2)) 1e-6))
+      (should-error (drgnx-test-advance-until (lambda () nil) :secs 1 :what "never") :type 'ert-test-failed)
+      (run-at-time 5 nil #'ignore)
+      (should-error (drgnx-test-advance-until (lambda () nil) :secs 1 :what "never") :type 'ert-test-failed)
+      (should (< (- (float-time) t0) 2.3))
+      (drgnx-test-advance 10))))
+
 (ert-deftest drgnx-test-clock/advance-by-the-delay-always-fires ()
   ;; run-at-time D then advance D fires, for every D (0.3 is not a whole number of binary floats)
   (let (misses)

@@ -4,7 +4,6 @@
 ;; only shrinks).  :slice names the slice of docs/plans/drgnx/2026-11-14-virtual-clocks.md that converts the file to the virtual
 ;; clock; "decided" is an exception that stays: a real process, terminal, daemon or window manager, whose window needs real time.
 (
- ("test/unit/wb-monitors-test.el" :slice "S5 platform" :why "the fake adapter's timers: pauses become virtual advances")
  ("test/unit/platform-test.el" :slice "S5 platform" :why "fake adapters: pauses become virtual advances")
  ("test/unit/platform-kwin-test.el" :slice "S5 platform" :why "the kwin adapter's deadline: virtual advances")
  ("test/unit/platform-wm-test.el" :slice "S5 platform" :why "the wm adapter's timers: virtual advances")

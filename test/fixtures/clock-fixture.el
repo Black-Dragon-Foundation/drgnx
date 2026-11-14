@@ -236,6 +236,23 @@ cancelled), and a repeating one runs again each time it is due again within SECS
     (drgnx-test--move-to target)
     nil))
 
+(cl-defun drgnx-test-advance-until (pred &key (secs 3) what)
+  "Move virtual time forward, to each timer that comes due in turn, until PRED returns non-nil; return that value.
+The wait for something a timer brings (a fake adapter's reply, a debounce): no real time passes.  After SECS of
+virtual time without PRED (or with no timer left to run) the test fails, naming WHAT."
+  (let ((end (time-add drgnx-test--now (drgnx-test--secs secs))) (value (funcall pred)))
+    (while (and (not value) (time-less-p drgnx-test--now end))
+      (let ((next (cl-find-if-not #'timer--triggered timer-list)))
+        (unless next (setq end drgnx-test--now))
+        (when next
+          (drgnx-test-advance (max 0 (min (float-time (time-subtract (drgnx-test--due next) drgnx-test--now))
+                                          (float-time (time-subtract end drgnx-test--now)))))
+          (setq value (funcall pred)))))
+    (or value
+        (signal 'ert-test-failed
+                (list :waited-for what :virtual-secs secs :last-value value
+                      :timers (mapcar #'timer--function timer-list))))))
+
 (cl-defun drgnx-test-idle (secs &key input-at)
   "One idle pause of SECS seconds, as Emacs's command loop runs it, then back to non-idle.
 Every idle timer is a candidate again (`timer_start_idle' clears their triggered flag); each one due and not yet
