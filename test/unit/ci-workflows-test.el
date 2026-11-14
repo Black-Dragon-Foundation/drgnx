@@ -491,6 +491,19 @@ Returns (EXIT . OUTPUT), the output both streams' or, with STDOUT-ONLY, stdout's
     ;; the escape-host's sandbox lane and the macos fork row both run them
     (should (>= checked 2))))
 
+;; A JS fork's origin trail finds the stores to log with the JavaScript grammar (`origin::stores'): the lane that runs the
+;; ignored rows builds the pack grammars first and hands them on, or `tests_fork_live's JS row comes back with an empty trail.
+(ert-deftest drgnx-ci/the-sandbox-lane-builds-the-pack-grammars-before-its-ignored-rows ()
+  (let* ((rt (drgnx-ci-test--yml "runtime.yml")) (host (and rt (drgnx-ci-test--job rt "escape-host"))))
+    (skip-unless host)
+    (let ((built (string-search "bash test/packs/hub-grammars.sh" host))
+          (ignored (string-search "-p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks -- --ignored" host)))
+      (should built)
+      (should ignored)
+      (should (< built ignored))
+      (should (string-search "echo \"DRGNX_PACK_LOCK=$DRGNX_PACK_LOCK\" >> \"$GITHUB_ENV\"" host))
+      (should (string-search "echo \"DRGNX_PACK_GRAMMARS=$DRGNX_PACK_GRAMMARS\" >> \"$GITHUB_ENV\"" host)))))
+
 (ert-deftest drgnx-ci/the-offline-build-row-runs-where-a-network-namespace-can-be-made ()
   ;; ghostty-vt-sys's builds_offline needs unshare(2): the Fedora job's Docker container refuses it, so its test says so
   ;; and stops; the escape-host job (a runner) runs it with DRGNX_REQUIRE_NETNS=1, where a missing namespace fails
