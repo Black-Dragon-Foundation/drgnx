@@ -35,3 +35,14 @@ run with nbformat installed): the test compares bytes.
 `Lang::Notebook` (`.ipynb`): each non-empty cell is chunked by its language (a code cell by the notebook's
 `kernelspec.language`, markdown by Markdown, raw as text), the chunks and symbols are put in the view's offsets and lines, and a
 chunk's FTS path and header say `file.ipynb#CELL-ID`. Outputs are not indexed. A file that is not a notebook reads as text.
+
+## Saving
+
+The hub writes a notebook the way every hub write goes: to a temporary file in the same folder, then a rename over the notebook. A
+notebook that is a symbolic link is therefore replaced by a regular file with the same name; the file the link pointed at is not
+changed. (Keep a notebook that must stay a link in the folder the link points into, or save it from a tool that follows links.)
+
+Outputs are written the way nbformat's writer writes them: multiline text as a list of lines, one output object per output, keys
+sorted. A cell that was not run in this session keeps the outputs the file had, byte for byte. A notebook file is read up to 32 MiB;
+the outputs read from it go through the same limits as a kernel's (64 outputs and 1 MiB of text per cell, 16 MiB of images, 200
+traceback entries, an output larger than 8 MiB shown as a line saying so).
