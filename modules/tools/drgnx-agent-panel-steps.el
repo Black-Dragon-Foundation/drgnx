@@ -46,6 +46,7 @@
 (declare-function drgnx-agent-panel-explain-step-lines "drgnx-agent-panel-explain")
 (declare-function drgnx-history-revert-to-here "drgnx-history-revert")
 (declare-function drgnx-history-fork-here "drgnx-history-revert")
+(declare-function drgnx-agent-panel-ledger "drgnx-agent-panel-cards")
 
 (defun drgnx-agent-panel--align (meta)
   "A space that pushes META to the right edge, then META."
@@ -94,6 +95,7 @@ the chip (`drgnx-agent-panel-chip')."
                 ((and (stringp action) (string-prefix-p "type:" action))
                  (drgnx-agent-panel-toggle-type (intern (substring action 5))))
                 ((equal action "default") (drgnx-agent-panel-make-default))
+                ((equal action "card:ledger") (drgnx-agent-panel-ledger))
                 ((stringp chip) (drgnx-agent-panel-chip (intern chip)))))))))
 
 (defun drgnx-agent-panel-press (event)

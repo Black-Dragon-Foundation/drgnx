@@ -7813,6 +7813,13 @@
         "additionalProperties": false,
         "description": "`agents/panel/look`: what the user chose for an agent panel (docs/develop/hub.md, \"The agent panel's rows\").  Each\nfield given replaces the one before; none given builds the rows again.",
         "properties": {
+          "ledger_open": {
+            "description": "Whether the edits ledger lists its files; opening it sets the mark the \"new since you looked\" counts from.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "lens": {
             "description": "The header's lens: the presets' names, in order.",
             "items": {
@@ -7844,6 +7851,17 @@
             "description": "The step types whose detail is open (`thinking`, `read`, `search`, `edit`, `execute`, `fetch`, `other`).",
             "items": {
               "maxLength": 16,
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "pins": {
+            "description": "The pinned cards' texts, oldest first: each is a card under the strip.",
+            "items": {
+              "maxLength": 512,
               "type": "string"
             },
             "type": [
@@ -27786,6 +27804,39 @@
           "cells"
         ],
         "title": "NotebookCells",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the editor is in this cell of the notebook (none: in none): the cell outline marks its row; sent when the cell changes",
+      "name": "notebook/focus",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`notebook/focus`: the editor is in cell CELL of notebook ID (none: in none of its cells, such as in a view of it). The outline marks\nthat cell's row (the property `drgnx-notebook-current`). The editor sends it when the cell changes, not on every move of point.",
+        "properties": {
+          "cell": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "NotebookFocusParams",
         "type": "object"
       },
       "result": {

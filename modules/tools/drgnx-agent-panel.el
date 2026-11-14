@@ -117,6 +117,8 @@ to its top.  The hub gives at most 50."
 (declare-function drgnx-agent-panel--block-row "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel--row-toggle "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel--redraw-steps "drgnx-agent-panel-steps")
+(defvar drgnx-agent-panel--pins)
+(defvar drgnx-agent-panel--ledger-open)
 (declare-function drgnx-agent-panel--preset-in-force "drgnx-agent-panel-steps")
 (defvar drgnx-agent-panel-presets)
 (declare-function drgnx-agent-panel--resized "drgnx-agent-panel-steps")
@@ -138,10 +140,6 @@ to its top.  The hub gives at most 50."
 (declare-function drgnx-agent-panel-composer--row "drgnx-agent-panel-composer")
 
 (declare-function drgnx-agent-panel-cards-keys "drgnx-agent-panel-cards")
-(declare-function drgnx-agent-panel-cards-top-keys "drgnx-agent-panel-cards")
-(declare-function drgnx-agent-panel-cards--pin-row "drgnx-agent-panel-cards")
-(declare-function drgnx-agent-panel-cards--todo-row "drgnx-agent-panel-cards")
-(declare-function drgnx-agent-panel-cards--ledger-row "drgnx-agent-panel-cards")
 (declare-function drgnx-agent-panel-cards-redraw "drgnx-agent-panel-cards")
 (declare-function drgnx-agent-panel-cards-setup "drgnx-agent-panel-cards")
 (declare-function drgnx-agent-panel-cards-load "drgnx-agent-panel-cards")
@@ -246,9 +244,6 @@ folds under it."
     (:more (propertize "  ↑ earlier steps load when you scroll up\n" 'face 'drgnx-agent-panel-subtle))
     (:e (drgnx-agent-panel--entry-row (cadr key)))
     (:b (drgnx-agent-panel--block-row (cadr key) (nth 2 key)))
-    (:pin (drgnx-agent-panel-cards--pin-row (cadr key)))
-    (:todo (drgnx-agent-panel-cards--todo-row))
-    (:ledger (drgnx-agent-panel-cards--ledger-row))
     (:diff (drgnx-agent-panel-cards--diff-row (cadr key) (nth 2 key)))
     (:perm (drgnx-agent-panel-cards--perm-row (cadr key)))
     (:q (drgnx-agent-panel-composer--queue-row (cadr key)))
@@ -274,29 +269,24 @@ folds under it."
   "Whether this panel's transcript is the hub's rows (it is not when the panel was made while the hub was down)."
   (and drgnx-view-patch t))
 
-(defun drgnx-agent-panel--rows-after ()
-  "The panel's own row the transcript's first row goes after: the last of those above the transcript."
-  (car (last (drgnx-agent-panel-cards-top-keys))))
-
 (defun drgnx-agent-panel--top-row-p (row)
   "Whether the hub's ROW (a plist) is one of the panel's top rows: its key starts with `p:' (the header, the chips
 and the strip)."
   (let ((key (plist-get row :key))) (and (stringp key) (string-prefix-p "p:" key))))
 
-(defun drgnx-agent-panel--insert-ops (after rows)
-  "The insert ops that put the hub's ROWS (plists) in: the panel's top rows (the header, the chips) at the very top,
-the others after the panel's own row AFTER (none: after the last top row)."
+(defun drgnx-agent-panel--insert-ops (rows)
+  "The insert ops that put the hub's ROWS (plists) in: the panel's top rows (the header, the chips, the strip and the
+cards above the transcript) at the very top, the others after the last of them."
   (let ((top (seq-filter #'drgnx-agent-panel--top-row-p rows))
         (rest (seq-remove #'drgnx-agent-panel--top-row-p rows)))
     (append (and top (list (list :insert (list :after nil :rows top))))
-            ;; below the top rows when no row of the panel's own is above the transcript
-            (and rest (list (list :insert (list :after (or after (plist-get (car (last top)) :key)) :rows rest)))))))
+            (and rest (list (list :insert (list :after (plist-get (car (last top)) :key) :rows rest)))))))
 
 (defun drgnx-agent-panel--apply-rows (state view patch)
   "`drgnx-view-patch-apply-function' of a panel: PATCH applied as `drgnx-view-patch--apply-ops' does, with its rows
-placed between the rows above the transcript and `(:rows-end)', but the hub's header, chips and strip (keys `p:') at
-the top: a reset removes the hub rows there were and inserts its own there, an insert after no row goes there too."
-  (let ((after (drgnx-agent-panel--rows-after)) ops)
+placed above `(:rows-end)' (the panel's own rows below the transcript): a reset removes the hub rows there were and
+inserts its own at the top, an insert after no row goes there too."
+  (let (ops)
     (dolist (op (plist-get patch :ops))
       (cond
        ((plist-member op :reset)
@@ -304,9 +294,9 @@ the top: a reset removes the hub rows there were and inserts its own there, an i
           (clrhash (drgnx-view-patch-images state))
           (clrhash (drgnx-view-patch-ids state))
           (when old (push (list :remove old) ops))
-          (dolist (o (drgnx-agent-panel--insert-ops after (plist-get op :reset))) (push o ops))))
+          (dolist (o (drgnx-agent-panel--insert-ops (plist-get op :reset))) (push o ops))))
        ((and (plist-member op :insert) (null (plist-get (plist-get op :insert) :after)))
-        (dolist (o (drgnx-agent-panel--insert-ops after (plist-get (plist-get op :insert) :rows))) (push o ops)))
+        (dolist (o (drgnx-agent-panel--insert-ops (plist-get (plist-get op :insert) :rows))) (push o ops)))
        (t (push op ops))))
     (drgnx-view-patch--apply-ops state view (append (list :ops (nreverse ops)) patch))))
 
@@ -315,6 +305,8 @@ the top: a reset removes the hub rows there were and inserts its own there, an i
   (list :open (vconcat (mapcar #'symbol-name drgnx-agent-panel--disclosure))
         :lens (vconcat (mapcar (lambda (p) (symbol-name (car p))) drgnx-agent-panel-presets))
         :lens_on (or (drgnx-agent-panel--preset-in-force) 0)
+        :pins (vconcat (mapcar #'cdr drgnx-agent-panel--pins))
+        :ledger_open (if drgnx-agent-panel--ledger-open t :false)
         :rows (let (rows)
                 (maphash (lambda (k v) (when (eq (car-safe k) :e) (push (vector (cadr k) (if (eq v 'open) t :false)) rows)))
                          drgnx-agent-panel--open)
@@ -430,8 +422,7 @@ OLD's, and an event with neither keeps OLD's.  The result has no `patch'."
 
 (defun drgnx-agent-panel--wanted-keys ()
   "Every row key of the panel's own it should hold now, in order (the hub's rows go before `(:rows-end)')."
-  (append (drgnx-agent-panel-cards-top-keys)
-          (if (drgnx-agent-panel--rows-p) (list (list :rows-end))
+  (append (if (drgnx-agent-panel--rows-p) (list (list :rows-end))
             (append (and drgnx-agent-panel--more drgnx-agent-panel--loaded (list (list :more)))
                     (let ((idxs (sort (hash-table-keys drgnx-agent-panel--entries) #'<)))
                       (mapcan #'drgnx-agent-panel--row-keys (seq-filter #'drgnx-agent-panel--row-p idxs)))))

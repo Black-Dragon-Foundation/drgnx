@@ -190,6 +190,7 @@
   "notebook/clear": ["user"],
   "notebook/close": ["user"],
   "notebook/execute": ["user"],
+  "notebook/focus": ["user"],
   "notebook/input": ["user"],
   "notebook/interrupt": ["user"],
   "notebook/kernels": ["user"],

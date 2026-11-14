@@ -125,7 +125,13 @@ impl KernelLog {
 pub fn log_rows(entries: &[LogEntry], lost: u64) -> Vec<Row> {
     let mut rows = Vec::new();
     if lost > 0 {
-        rows.push(note_row("lost", &format!("{lost} earlier entries dropped")));
+        let mut b = RowBuilder::new("lost");
+        b.push(&format!("{:<14}", "lost"), Some("shadow"))
+            .push("  ", None)
+            .push(&format!("{lost} earlier entries"), Some("shadow"));
+        let end = b.pos();
+        b.prop(0, end, "drgnx-notebook-lost", json!(lost));
+        rows.push(b.finish());
     }
     if entries.is_empty() && lost == 0 {
         return vec![note_row("none", "the kernel has logged nothing")];
@@ -142,12 +148,15 @@ pub fn log_rows(entries: &[LogEntry], lost: u64) -> Vec<Row> {
         for (k, line) in lines.iter().enumerate() {
             let mut b = RowBuilder::new(format!("e:{}:{k}", e.seq));
             if k == 0 {
-                let face = if e.msg_type == "error" {
-                    "drgnx-status-fail"
+                let chip = if e.msg_type == "error" {
+                    "drgnx-chip-error"
                 } else {
-                    "shadow"
+                    "drgnx-chip-quiet"
                 };
-                b.push(&format!("{ty:<14}"), Some(face));
+                b.push(&ty, Some(chip)).push(
+                    &" ".repeat(14usize.saturating_sub(ty.chars().count())),
+                    None,
+                );
             } else {
                 b.push(&" ".repeat(14), None);
             }
@@ -163,6 +172,9 @@ pub fn log_rows(entries: &[LogEntry], lost: u64) -> Vec<Row> {
             }
             let n = b.pos();
             b.prop(0, n, "drgnx-notebook-log", json!(e.seq));
+            if e.msg_type == "error" {
+                b.face(0, n, "drgnx-notebook-error-row");
+            }
             rows.push(b.finish());
         }
     }
@@ -208,15 +220,19 @@ fn kind_name(k: Kind) -> &'static str {
     }
 }
 
-/// The outline's rows for CELLS, the first [`OUTLINE_ROWS`] of TOTAL: `INDEX  type  [n]  first line  state`, the index counted from 1.
-pub fn outline_rows(cells: &[OutlineCell], total: usize) -> Vec<Row> {
+/// The outline's rows for CELLS, the first [`OUTLINE_ROWS`] of TOTAL: `INDEX  type  [n]  first line  state`, the index counted from 1,
+/// the type and the state chips (`drgnx-chip-*`). CURRENT is the cell the editor is in: its row carries the property
+/// `drgnx-notebook-current` and, under the other faces, the face `drgnx-notebook-current-row`.
+pub fn outline_rows(cells: &[OutlineCell], total: usize, current: Option<&str>) -> Vec<Row> {
     let width = total.to_string().len();
     let mut rows = Vec::with_capacity(cells.len() + 1);
     for (i, c) in cells.iter().enumerate() {
         let mut b = RowBuilder::new(format!("cell:{}", c.id));
+        let kind = kind_name(c.kind);
         b.push(&format!("{:>width$}", i + 1), Some("shadow"))
             .push("  ", None)
-            .push(&format!("{:<8}", kind_name(c.kind)), Some("shadow"));
+            .push(kind, Some("drgnx-chip-quiet"))
+            .push(&" ".repeat(8 - kind.len()), None);
         let prompt = match (c.kind, c.state, c.execution_count) {
             (Kind::Code, "queued" | "running", _) => "[*]".to_string(),
             (Kind::Code, _, Some(n)) => format!("[{n}]"),
@@ -228,27 +244,39 @@ pub fn outline_rows(cells: &[OutlineCell], total: usize) -> Vec<Row> {
         } else {
             "drgnx-notebook-prompt"
         };
-        b.push(&format!("{prompt:<7}"), Some(face))
+        b.push(&prompt, (!prompt.is_empty()).then_some(face))
+            .push(
+                &" ".repeat(7usize.saturating_sub(prompt.chars().count())),
+                None,
+            )
             .push(&c.first_line, None);
-        let state = match c.state {
-            "queued" | "running" => Some("drgnx-status-warn"),
-            "error" => Some("drgnx-status-fail"),
-            "aborted" | "cancelled" => Some("shadow"),
+        let chip = match c.state {
+            "running" => Some("drgnx-chip-accent"),
+            "queued" => Some("drgnx-chip-quiet"),
+            "error" => Some("drgnx-chip-error"),
+            "aborted" | "cancelled" => Some("drgnx-chip-warn"),
             _ => None,
         };
-        if let Some(face) = state {
+        if let Some(face) = chip {
             b.push("  ", None).push(c.state, Some(face));
         }
         let end = b.pos();
         b.prop(0, end, "drgnx-notebook-cell", json!(c.id));
+        if current == Some(c.id.as_str()) {
+            b.prop(0, end, "drgnx-notebook-current", json!(true)).face(
+                0,
+                end,
+                "drgnx-notebook-current-row",
+            );
+        }
         rows.push(b.finish());
     }
     if total > cells.len() {
+        let n = total - cells.len();
         let mut b = RowBuilder::new("more");
-        b.push(
-            &format!("{} more cells", total - cells.len()),
-            Some("shadow"),
-        );
+        b.push(&format!("more: {n} cells are not listed"), Some("shadow"));
+        let end = b.pos();
+        b.prop(0, end, "drgnx-notebook-more", json!(n));
         rows.push(b.finish());
     }
     rows
@@ -277,6 +305,28 @@ const ANSI_NAMES: [&str; 16] = [
 fn note_row(key: &str, text: &str) -> Row {
     let mut b = RowBuilder::new(key);
     b.push(text, Some("shadow"));
+    b.finish()
+}
+
+/// A row that counts the lines outside the output window: `ARROW N lines WHERE   KEY LABEL`, tinted (`drgnx-notebook-cut`), the key a
+/// quiet chip, the number also the property PROP (so a reader never parses the text).
+fn cut_row(
+    key: &str,
+    arrow: &str,
+    n: usize,
+    where_: &str,
+    prop: &str,
+    keys: &str,
+    label: &str,
+) -> Row {
+    let mut b = RowBuilder::new(key);
+    b.push(&format!("{arrow} {n} lines {where_}"), None)
+        .push("   ", None)
+        .push(keys, Some("drgnx-chip-quiet"))
+        .push(&format!(" {label}"), Some("shadow"));
+    let end = b.pos();
+    b.prop(0, end, prop, json!(n))
+        .face(0, end, "drgnx-notebook-cut");
     b.finish()
 }
 
@@ -324,7 +374,15 @@ pub fn output_rows(cell: &str, run: &CellRun, from: usize) -> Vec<Row> {
     let end = total.min(from + OUTPUT_WINDOW);
     let mut rows = Vec::new();
     if from > 0 {
-        rows.push(note_row("above", &format!("{from} lines above")));
+        rows.push(cut_row(
+            "above",
+            "▲",
+            from,
+            "above",
+            "drgnx-notebook-above",
+            "M-p",
+            "earlier lines",
+        ));
     }
     for (i, l) in lines.iter().enumerate().skip(from).take(end - from) {
         let mut b = RowBuilder::new(format!("l:{i}"));
@@ -337,13 +395,17 @@ pub fn output_rows(cell: &str, run: &CellRun, from: usize) -> Vec<Row> {
             }
             None => {
                 let len = l.text.chars().count();
-                b.push(&l.text, None);
+                // an empty line of an error has no text to tint: a space gives its row something to carry
+                b.push(if l.error && len == 0 { " " } else { &l.text }, None);
                 for r in &l.runs {
                     run_faces(&mut b, r, len);
                 }
             }
         }
         let n = b.pos();
+        if l.error {
+            b.face(0, n, "drgnx-notebook-error-row");
+        }
         b.prop(0, n, "drgnx-notebook-cell", json!(cell)).prop(
             0,
             n,
@@ -353,7 +415,15 @@ pub fn output_rows(cell: &str, run: &CellRun, from: usize) -> Vec<Row> {
         rows.push(b.finish());
     }
     if total > end {
-        rows.push(note_row("below", &format!("{} lines below", total - end)));
+        rows.push(cut_row(
+            "below",
+            "▼",
+            total - end,
+            "below",
+            "drgnx-notebook-below",
+            "M-n",
+            "later lines",
+        ));
     }
     rows
 }
@@ -403,6 +473,8 @@ struct Dirty {
 
 #[derive(Default)]
 struct Watch {
+    /// The cell the editor is in (the outline marks its row).
+    current: Option<String>,
     outline: bool,
     log: bool,
     /// The cell of each full-output view, by its number.
@@ -413,6 +485,8 @@ struct Watch {
 type Key = (u64, String);
 /// The cells of a notebook's full-output views, by number.
 type Slots = Vec<Option<String>>;
+/// What a rebuild reads of a notebook's watch: its full-output views and the cell the editor is in.
+type Snap = (Slots, Option<String>);
 
 #[derive(Default)]
 struct State {
@@ -490,6 +564,25 @@ impl NbViews {
                 Ok(output_view(id, n))
             }
         }
+    }
+
+    /// The editor on CONN is in cell CELL of notebook ID (none: in none of its cells): the outline marks that cell's row. Whether this
+    /// is a change.
+    pub fn focus(self: &Arc<Self>, conn: u64, id: &str, cell: Option<&str>) -> bool {
+        {
+            let mut s = self.lock();
+            let key = (conn, id.to_owned());
+            let w = s.watch.entry(key.clone()).or_default();
+            if w.current.as_deref() == cell {
+                return false;
+            }
+            w.current = cell.map(str::to_owned);
+            if w.outline {
+                s.dirty.entry(key).or_default().outline = true;
+            }
+        }
+        self.schedule();
+        true
     }
 
     /// Notebook ID of CONN changed: its views are rebuilt soon.
@@ -616,14 +709,17 @@ impl NbViews {
 
     /// Build the rows of every view that is dirty and shown, and send what changed.
     pub async fn flush(&self) {
-        let (work, slots): (Vec<(Key, Dirty)>, HashMap<Key, Slots>) = {
+        let (work, snaps): (Vec<(Key, Dirty)>, HashMap<Key, Snap>) = {
             let mut s = self.lock();
             let work: Vec<_> = s.dirty.drain().collect();
-            let slots = work
+            let snaps = work
                 .iter()
-                .filter_map(|(k, _)| Some((k.clone(), s.watch.get(k)?.outputs.clone())))
+                .filter_map(|(k, _)| {
+                    let w = s.watch.get(k)?;
+                    Some((k.clone(), (w.outputs.clone(), w.current.clone())))
+                })
                 .collect();
-            (work, slots)
+            (work, snaps)
         };
         let (Some(nb), Some(stage)) = (self.nb.get().and_then(Weak::upgrade), self.stage.get())
         else {
@@ -635,7 +731,8 @@ impl NbViews {
                 if stage.shown(conn, &view)
                     && let Ok((total, cells)) = nb.outline(conn, &id, OUTLINE_ROWS).await
                 {
-                    stage.publish(conn, &view, outline_rows(&cells, total));
+                    let current = snaps.get(&(conn, id.clone())).and_then(|s| s.1.as_deref());
+                    stage.publish(conn, &view, outline_rows(&cells, total, current));
                 }
             }
             if d.log {
@@ -647,9 +744,9 @@ impl NbViews {
                 }
             }
             for cell in &d.outputs {
-                let Some(n) = slots
+                let Some(n) = snaps
                     .get(&(conn, id.clone()))
-                    .and_then(|v| v.iter().position(|c| c.as_deref() == Some(cell)))
+                    .and_then(|s| s.0.iter().position(|c| c.as_deref() == Some(cell)))
                 else {
                     continue;
                 };

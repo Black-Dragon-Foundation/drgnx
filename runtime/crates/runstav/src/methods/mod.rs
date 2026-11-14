@@ -362,6 +362,7 @@ params! {
     NotebookOutput(notebook::NotebookCellRef),
     NotebookView(notebook::NotebookViewParams),
     NotebookLog(notebook::NotebookLogParams),
+    NotebookFocus(notebook::NotebookFocusParams),
     NotebookClear(notebook::NotebookClear),
     NotebookClose(notebook::NotebookId),
     SearchQuery(search::QueryParams),

@@ -28,10 +28,16 @@
     (drgnx-view-draw-now drgnx-view)
     (buffer-substring-no-properties (point-min) (point-max))))
 
-(defun drgnx-agent-panel-pins-test--edit (id)
-  (list :type "tool" :id id :title (format "Edit %s" id) :kind "edit" :status "completed"))
+;;; hub rows: the pinned cards, the to-do list and the ledger are the hub's (view/panel_cards.rs).  What stays here is
+;;; the state the editor keeps and sends: what is pinned, and whether the ledger is open.
+
+(defvar drgnx-agent-panel--pins)
+(defvar drgnx-agent-panel--ledger-open)
+(declare-function drgnx-agent-panel--look-params "drgnx-agent-panel")
 
 (ert-deftest drgnx-agent-panel/pin-a-card ()
+  "A pin is the step's one line, sent to the hub with the look (`pins'); pinned again, or from its card (the hub's row
+carries `drgnx-agent-panel-pin'), it goes; what is not a step or a card cannot be pinned."
   (drgnx-agent-panel-pins-test--with
     (with-current-buffer buf
       (drgnx-agent-panel--take-entries
@@ -40,60 +46,29 @@
       (drgnx-agent-panel-pins-test--text buf)
       (goto-char (drgnx-view-row-start drgnx-view '(:e 1)))
       (drgnx-agent-panel-pin)
-      (let ((text (drgnx-agent-panel-pins-test--text buf)))
-        ;; the pinned card is above the transcript, under the chips
-        (should (string-match-p "⚑ Run the tests" text))
-        (should (< (string-search "⚑ Run the tests" text) (string-search "Read the spec" text))))
-      ;; pinned again from the card: gone
-      (goto-char (drgnx-view-row-start drgnx-view '(:pin 0)))
+      (should (equal '("Run the tests") (append (plist-get (drgnx-agent-panel--look-params) :pins) nil)))
+      ;; pinned again from the step: gone; and pinned, then unpinned from the card
       (drgnx-agent-panel-pin)
-      (should-not (string-match-p "⚑" (drgnx-agent-panel-pins-test--text buf)))
+      (should (= 0 (length (plist-get (drgnx-agent-panel--look-params) :pins))))
+      (drgnx-agent-panel-pin)
+      (let ((inhibit-read-only t))
+        (goto-char (point-max))
+        (insert (propertize "card" 'drgnx-agent-panel-pin 0))
+        (goto-char (- (point-max) 2)))
+      (drgnx-agent-panel-pin)
+      (should-not drgnx-agent-panel--pins)
       ;; something that is not a card cannot be pinned
       (goto-char (drgnx-view-row-start drgnx-view '(:composer)))
       (should-error (drgnx-agent-panel-pin) :type 'user-error))))
 
-(ert-deftest drgnx-agent-panel/todo-list-from-plan-entries ()
+(ert-deftest drgnx-agent-panel/the-ledger-open-flag-goes-to-the-hub ()
   (drgnx-agent-panel-pins-test--with
     (with-current-buffer buf
-      (drgnx-agent-panel--take-entries
-       (list (list 0 (list :type "plan" :entries (list (list :content "Read" :status "completed")
-                                                       (list :content "Write" :status "in_progress")
-                                                       (list :content "Test" :status "pending"))))))
-      (let ((text (drgnx-agent-panel-pins-test--text buf)))
-        (should (string-match-p "To do · 1 of 3 done" text))
-        (should (string-match-p "☑ Read" text))
-        (should (string-match-p "◐ Write" text))
-        (should (string-match-p "☐ Test" text))
-        ;; the plan entry is not a row of the transcript
-        (should-not (drgnx-view-row-start drgnx-view '(:e 0))))
-      ;; a plan is replaced, not repeated
-      (drgnx-agent-panel--take-entries
-       (list (list 1 (list :type "plan" :entries (list (list :content "Read" :status "completed")
-                                                       (list :content "Write" :status "completed")
-                                                       (list :content "Test" :status "in_progress"))))))
-      (let ((text (drgnx-agent-panel-pins-test--text buf)))
-        (should (string-match-p "To do · 2 of 3 done" text))
-        (should (= 2 (length (split-string text "To do"))))))))
-
-(ert-deftest drgnx-agent-panel/changes-since-you-looked-counts-from-the-mark ()
-  (drgnx-agent-panel-pins-test--with
-    (with-current-buffer buf
-      (drgnx-agent-panel--take-entries (list (list 0 (drgnx-agent-panel-pins-test--edit "a"))
-                                             (list 1 (drgnx-agent-panel-pins-test--edit "b"))))
-      ;; never looked: both are new
-      (should (string-match-p "2 new since you looked" (drgnx-agent-panel-pins-test--text buf)))
-      ;; looking sets the mark at the newest entry
+      (should (eq :false (plist-get (drgnx-agent-panel--look-params) :ledger_open)))
       (drgnx-agent-panel-ledger)
-      (should-not (string-match-p "new since you looked" (drgnx-agent-panel-pins-test--text buf)))
-      ;; two more edits and a read: the count is the edits after the mark
-      (drgnx-agent-panel--take-entries (list (list 2 (drgnx-agent-panel-pins-test--edit "c"))
-                                             (list 3 (list :type "tool" :id "r" :title "Read" :kind "read" :status "completed"))
-                                             (list 4 (drgnx-agent-panel-pins-test--edit "d"))))
-      (should (string-match-p "2 new since you looked" (drgnx-agent-panel-pins-test--text buf)))
-      ;; folded and opened again: looking again moves the mark
+      (should (eq t (plist-get (drgnx-agent-panel--look-params) :ledger_open)))
       (drgnx-agent-panel-ledger)
-      (drgnx-agent-panel-ledger)
-      (should-not (string-match-p "new since you looked" (drgnx-agent-panel-pins-test--text buf))))))
+      (should (eq :false (plist-get (drgnx-agent-panel--look-params) :ledger_open))))))
 
 (provide 'agent-panel-pins-test)
 ;;; agent-panel-pins-test.el ends here

@@ -25,7 +25,7 @@ fn an_outline_row_has_index_type_prompt_first_line_and_state_and_names_its_cell(
         cell("c", Kind::Code, "1/0", Some(6), "error"),
         cell("d", Kind::Code, "slow()", None, "running"),
     ];
-    let rows = outline_rows(&cells, 4);
+    let rows = outline_rows(&cells, 4, None);
     assert_eq!(rows.len(), 4);
     assert_eq!(rows[0].key, "cell:a");
     assert_eq!(rows[0].text, "1  code    [5]    import os");
@@ -39,28 +39,23 @@ fn an_outline_row_has_index_type_prompt_first_line_and_state_and_names_its_cell(
             vec![(0, len, "drgnx-notebook-cell".to_string(), json!(c.id))]
         );
     }
-    assert!(
-        rows[2]
-            .runs
-            .iter()
-            .any(|(_, _, f)| f == "drgnx-status-fail")
-    );
+    assert!(rows[2].runs.iter().any(|(_, _, f)| f == "drgnx-chip-error"));
     assert!(
         rows[3]
             .runs
             .iter()
-            .any(|(_, _, f)| f == "drgnx-status-warn")
+            .any(|(_, _, f)| f == "drgnx-chip-accent")
     );
 }
 
 #[test]
 fn a_cell_that_never_ran_has_an_empty_prompt_and_a_stale_one_is_dim() {
     let mut c = cell("a", Kind::Code, "x", None, "");
-    let r = &outline_rows(&[c.clone()], 1)[0];
+    let r = &outline_rows(&[c.clone()], 1, None)[0];
     assert_eq!(r.text, "1  code    [ ]    x");
     c.stale = true;
     c.execution_count = Some(2);
-    let r = &outline_rows(&[c], 1)[0];
+    let r = &outline_rows(&[c], 1, None)[0];
     assert!(r.runs.iter().any(|(_, _, f)| f == "drgnx-notebook-stale"));
 }
 
@@ -69,9 +64,9 @@ fn the_outline_lists_a_bounded_number_of_cells_and_says_how_many_it_left_out() {
     let cells: Vec<OutlineCell> = (0..OUTLINE_ROWS)
         .map(|i| cell(&format!("c{i}"), Kind::Code, "x", None, ""))
         .collect();
-    let rows = outline_rows(&cells, 5000);
+    let rows = outline_rows(&cells, 5000, None);
     assert_eq!(rows.len(), OUTLINE_ROWS + 1);
-    assert_eq!(rows.last().unwrap().text, "3000 more cells");
+    assert_eq!(rows.last().unwrap().text, "more: 3000 cells are not listed");
     // indexes line up at the width of the whole count
     assert!(rows[0].text.starts_with("   1  code"));
 }
@@ -104,6 +99,8 @@ impl Sink for Quiet {
 struct Recorder {
     shown: Mutex<HashSet<String>>,
     got: Mutex<Vec<(u64, String, Vec<String>)>>,
+    /// The rows of each publish that carry the current-cell mark.
+    marked: Mutex<Vec<Vec<usize>>>,
     from: std::sync::atomic::AtomicUsize,
 }
 
@@ -115,6 +112,13 @@ impl Stage for Recorder {
         self.from.load(std::sync::atomic::Ordering::SeqCst)
     }
     fn publish(&self, conn: u64, view: &str, rows: Vec<Row>) {
+        self.marked.lock().unwrap().push(
+            rows.iter()
+                .enumerate()
+                .filter(|(_, r)| r.props.iter().any(|p| p.2 == "drgnx-notebook-current"))
+                .map(|(i, _)| i)
+                .collect(),
+        );
         self.got.lock().unwrap().push((
             conn,
             view.into(),
@@ -294,7 +298,10 @@ fn a_full_output_is_a_window_of_its_lines_with_rows_counting_what_lies_outside()
     assert_eq!(rows[0].key, "l:0");
     assert_eq!(rows[0].text, "line 0");
     assert_eq!(rows[OUTPUT_WINDOW].key, "below");
-    assert_eq!(rows[OUTPUT_WINDOW].text, "1501 lines below");
+    assert_eq!(
+        rows[OUTPUT_WINDOW].text,
+        "▼ 1501 lines below   M-n later lines"
+    );
     assert_eq!(
         rows[0].props,
         vec![
@@ -303,10 +310,13 @@ fn a_full_output_is_a_window_of_its_lines_with_rows_counting_what_lies_outside()
         ]
     );
     let rows = output_rows("c", &run, 1200);
-    assert_eq!(rows[0].text, "1200 lines above");
+    assert_eq!(rows[0].text, "▲ 1200 lines above   M-p earlier lines");
     assert_eq!(rows[1].key, "l:1200");
     assert_eq!(rows[1].text, "line 1200");
-    assert_eq!(rows.last().unwrap().text, "301 lines below");
+    assert_eq!(
+        rows.last().unwrap().text,
+        "▼ 301 lines below   M-n later lines"
+    );
     // a window past the end comes back to the last line
     let rows = output_rows("c", &run, 1_000_000);
     assert_eq!(rows.last().unwrap().key, "l:2500");
@@ -440,16 +450,19 @@ async fn a_shown_full_output_is_built_from_the_notebook_in_the_editors_window_an
         .register(1, &id, NotebookViewKind::Output, Some("a"))
         .unwrap();
     assert!(!w.views.env_build(2, &view), "another connection's");
-    assert!(w.views.env_build(1, &view));
-    w.views.flush().await;
-    assert!(w.stage.got.lock().unwrap().is_empty(), "no class shows it");
+    // shown, and the window moved, before the env: its rebuild runs at once on a task of its own
     w.stage.shown.lock().unwrap().insert(view.clone());
     w.stage.from.store(1, std::sync::atomic::Ordering::SeqCst);
+    assert!(w.views.env_build(1, &view));
+    let got = skuld::wait_until("the output is built", 30, || {
+        w.stage.got.lock().unwrap().last().cloned()
+    });
+    assert_eq!(got.1, view);
+    assert_eq!(
+        got.2,
+        vec!["▲ 1 lines above   M-p earlier lines", "two", ""]
+    );
     assert!(w.views.window(1, &view), "a moved window builds it again");
-    w.views.flush().await;
-    let got = w.stage.got.lock().unwrap().clone();
-    assert_eq!(got.last().unwrap().1, view);
-    assert_eq!(got.last().unwrap().2, vec!["1 lines above", "two", ""]);
     // a cell that is not in the notebook
     let gone = w
         .views
@@ -457,11 +470,15 @@ async fn a_shown_full_output_is_built_from_the_notebook_in_the_editors_window_an
         .unwrap();
     w.stage.shown.lock().unwrap().insert(gone.clone());
     assert!(w.views.env_build(1, &gone));
-    w.views.flush().await;
-    assert_eq!(
-        w.stage.got.lock().unwrap().last().unwrap().2,
-        vec!["the cell is gone"]
-    );
+    skuld::wait_until("the gone cell is said", 30, || {
+        (w.stage
+            .got
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|g| g.1 == gone && g.2 == vec!["the cell is gone"]))
+        .then_some(())
+    });
 }
 
 // ---- the kernel log ----
@@ -502,7 +519,7 @@ fn log_rows_show_the_type_and_the_text_a_bounded_number_of_lines_and_say_what_is
         3,
     );
     let texts: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();
-    assert_eq!(texts[0], "3 earlier entries dropped");
+    assert_eq!(texts[0], "lost            3 earlier entries");
     assert_eq!(texts[1], "stream          hello");
     assert_eq!(texts[2], "error           l0");
     assert_eq!(
@@ -511,12 +528,7 @@ fn log_rows_show_the_type_and_the_text_a_bounded_number_of_lines_and_say_what_is
     );
     assert_eq!(texts[2 + LOG_LINES], "comm_open       ");
     assert_eq!(rows[2].key, "e:5:0");
-    assert!(
-        rows[2]
-            .runs
-            .iter()
-            .any(|(_, _, f)| f == "drgnx-status-fail")
-    );
+    assert!(rows[2].runs.iter().any(|(_, _, f)| f == "drgnx-chip-error"));
     assert_eq!(
         rows[1].props,
         vec![(0, 21, "drgnx-notebook-log".to_string(), json!(4))]
@@ -541,9 +553,13 @@ async fn a_shown_log_is_built_on_its_env_and_a_notebook_log_event_rebuilds_it_on
         .unwrap();
     assert_eq!(view, format!("notebook-log:{}", w.id));
     assert!(!w.views.env_build(2, &view), "another connection's");
-    assert!(w.views.env_build(1, &view));
+    // shown before the env, whose rebuild runs at once on a task of its own
     w.stage.shown.lock().unwrap().insert(view.clone());
+    assert!(w.views.env_build(1, &view));
     w.views.flush().await;
+    skuld::wait_until("the log is built", 30, || {
+        w.stage.got.lock().unwrap().last().cloned()
+    });
     let got = w.stage.got.lock().unwrap().clone();
     assert_eq!(got.last().unwrap().2, vec!["the kernel has logged nothing"]);
     // an event of another connection marks nothing
@@ -551,4 +567,220 @@ async fn a_shown_log_is_built_on_its_env_and_a_notebook_log_event_rebuilds_it_on
         .event(2, "notebook-log", &json!({"id": w.id, "seq": 1}));
     assert!(w.views.dirty_is_empty());
     assert!(!w.views.env_build(1, "notebook-log:nb-other"));
+}
+
+// ---- the look: chips, cut rows, error rows, the current cell ----
+
+/// The faces over the characters `[from, to)` of R.
+fn faces_at(r: &Row, from: u32, to: u32) -> Vec<&str> {
+    r.runs
+        .iter()
+        .filter(|(a, b, _)| *a <= from && to <= *b)
+        .map(|(_, _, f)| f.as_str())
+        .collect()
+}
+
+#[test]
+fn the_outlines_type_and_state_are_chips_of_the_look() {
+    let cells = vec![
+        cell("a", Kind::Code, "x", Some(1), "running"),
+        cell("b", Kind::Code, "x", Some(1), "queued"),
+        cell("c", Kind::Code, "x", Some(1), "error"),
+        cell("d", Kind::Code, "x", Some(1), "aborted"),
+        cell("e", Kind::Markdown, "x", None, "cancelled"),
+        cell("f", Kind::Code, "x", Some(1), ""),
+    ];
+    let rows = outline_rows(&cells, 6, None);
+    // the type word is a quiet chip, the padding after it is not
+    for r in &rows {
+        let kind_len = if r.text.contains("markdown") { 8 } else { 4 };
+        assert_eq!(
+            faces_at(r, 3, 3 + kind_len),
+            ["drgnx-chip-quiet"],
+            "{}",
+            r.text
+        );
+        assert!(
+            faces_at(r, 3 + kind_len, 3 + kind_len + 1).is_empty(),
+            "{}",
+            r.text
+        );
+    }
+    let chip = |r: &Row, word: &str| {
+        let at = r.text.rfind(word).unwrap() as u32;
+        faces_at(r, at, at + word.len() as u32)
+            .first()
+            .map(|f| f.to_string())
+    };
+    assert_eq!(
+        chip(&rows[0], "running").as_deref(),
+        Some("drgnx-chip-accent")
+    );
+    assert_eq!(
+        chip(&rows[1], "queued").as_deref(),
+        Some("drgnx-chip-quiet")
+    );
+    assert_eq!(chip(&rows[2], "error").as_deref(), Some("drgnx-chip-error"));
+    assert_eq!(
+        chip(&rows[3], "aborted").as_deref(),
+        Some("drgnx-chip-warn")
+    );
+    assert_eq!(
+        chip(&rows[4], "cancelled").as_deref(),
+        Some("drgnx-chip-warn")
+    );
+    assert_eq!(
+        rows[5]
+            .runs
+            .iter()
+            .filter(|r| r.2.starts_with("drgnx-chip-"))
+            .count(),
+        1,
+        "a cell at rest has the type chip only"
+    );
+}
+
+#[test]
+fn the_cell_the_editor_is_in_is_marked_in_the_outline_and_no_other() {
+    let cells = vec![
+        cell("a", Kind::Code, "x", None, ""),
+        cell("b", Kind::Code, "y", None, ""),
+    ];
+    let rows = outline_rows(&cells, 2, Some("b"));
+    let current = |r: &Row| r.props.iter().any(|p| p.2 == "drgnx-notebook-current");
+    assert!(!current(&rows[0]) && current(&rows[1]));
+    let len = rows[1].text.chars().count() as u32;
+    assert!(
+        rows[1]
+            .props
+            .contains(&(0, len, "drgnx-notebook-current".to_string(), json!(true)))
+    );
+    assert_eq!(
+        faces_at(&rows[1], 0, len).last().copied(),
+        Some("drgnx-notebook-current-row")
+    );
+    assert!(
+        !rows[0]
+            .runs
+            .iter()
+            .any(|(_, _, f)| f == "drgnx-notebook-current-row")
+    );
+    // no cell, or one that is not listed: nothing is marked
+    for c in [None, Some("zz")] {
+        assert!(!outline_rows(&cells, 2, c).iter().any(current));
+    }
+}
+
+#[test]
+fn the_rows_that_count_what_is_left_out_carry_the_number_as_a_property() {
+    let n = |r: &Row, name: &str| r.props.iter().find(|p| p.2 == name).map(|p| p.3.clone());
+    let cells: Vec<OutlineCell> = (0..3)
+        .map(|i| cell(&format!("c{i}"), Kind::Code, "x", None, ""))
+        .collect();
+    let more = outline_rows(&cells, 2003, None).pop().unwrap();
+    assert_eq!(more.text, "more: 2000 cells are not listed");
+    assert_eq!(n(&more, "drgnx-notebook-more"), Some(json!(2000)));
+    let rows = output_rows("c", &lines(2500), 1200);
+    assert_eq!(n(&rows[0], "drgnx-notebook-above"), Some(json!(1200)));
+    assert_eq!(
+        n(rows.last().unwrap(), "drgnx-notebook-below"),
+        Some(json!(301))
+    );
+    let lost = &log_rows(&[entry(9, "stream", "x")], 12)[0];
+    assert_eq!(lost.text, "lost            12 earlier entries");
+    assert_eq!(n(lost, "drgnx-notebook-lost"), Some(json!(12)));
+}
+
+#[test]
+fn a_cut_row_is_a_tinted_row_with_the_key_that_moves_the_window() {
+    let rows = output_rows("c", &lines(2500), 1200);
+    let (up, down) = (&rows[0], rows.last().unwrap());
+    let len = up.text.chars().count() as u32;
+    assert_eq!(
+        faces_at(up, 0, len).last().copied(),
+        Some("drgnx-notebook-cut")
+    );
+    // the arrow is one character, not three bytes: the key's place is counted in characters
+    let key = up.text[..up.text.find("M-p").unwrap()].chars().count() as u32;
+    assert_eq!(faces_at(up, key, key + 3)[0], "drgnx-chip-quiet");
+    let dlen = down.text.chars().count() as u32;
+    assert_eq!(
+        faces_at(down, 0, dlen).last().copied(),
+        Some("drgnx-notebook-cut")
+    );
+    assert!(down.text.contains("M-n later lines"));
+}
+
+#[test]
+fn the_lines_of_an_error_output_are_error_rows_and_other_lines_are_not() {
+    let run = run_with(|f| {
+        f("stream", json!({"name": "stdout", "text": "fine\n"}));
+        f(
+            "error",
+            json!({"ename": "ValueError", "evalue": "shapes", "traceback": ["Cell In[3], line 4", "", "ValueError: shapes"]}),
+        );
+    });
+    let rows = output_rows("c", &run, 0);
+    let is_err = |r: &Row| {
+        r.runs
+            .iter()
+            .any(|(_, _, f)| f == "drgnx-notebook-error-row")
+    };
+    assert_eq!(rows[0].text, "fine");
+    assert!(!is_err(&rows[0]), "the stream before it is not");
+    assert_eq!(rows[2].text, "ValueError: shapes");
+    let errors: Vec<&Row> = rows.iter().filter(|r| is_err(r)).collect();
+    assert_eq!(errors.len(), 4, "the name line and the traceback's three");
+    for r in errors {
+        let len = r.text.chars().count() as u32;
+        assert!(len > 0, "an empty line of an error still has a row to tint");
+        assert_eq!(
+            faces_at(r, 0, len).last().copied(),
+            Some("drgnx-notebook-error-row")
+        );
+    }
+}
+
+#[test]
+fn the_logs_type_is_a_chip_and_an_error_entry_is_an_error_row() {
+    let rows = log_rows(&[entry(1, "stream", "hi"), entry(2, "error", "a\nb")], 0);
+    assert_eq!(faces_at(&rows[0], 0, 6), ["drgnx-chip-quiet"]);
+    assert!(
+        faces_at(&rows[0], 6, 7).is_empty(),
+        "the padding is no chip"
+    );
+    let is_err = |r: &Row| {
+        r.runs
+            .iter()
+            .any(|(_, _, f)| f == "drgnx-notebook-error-row")
+    };
+    assert!(!is_err(&rows[0]));
+    assert!(
+        is_err(&rows[1]) && is_err(&rows[2]),
+        "every line of an error entry"
+    );
+    assert!(faces_at(&rows[1], 0, 5).contains(&"drgnx-chip-error"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_editors_current_cell_marks_its_outline_row() {
+    let w = world().await;
+    let view = w
+        .views
+        .register(1, &w.id, NotebookViewKind::Outline, None)
+        .unwrap();
+    w.stage.shown.lock().unwrap().insert(view);
+    assert!(w.views.focus(1, &w.id, Some("b")), "a change");
+    assert!(
+        !w.views.focus(1, &w.id, Some("b")),
+        "the same again is none"
+    );
+    w.views.flush().await;
+    assert_eq!(w.stage.marked.lock().unwrap().last(), Some(&vec![1]));
+    assert!(
+        w.views.focus(1, &w.id, None),
+        "the editor left the notebook's cells"
+    );
+    w.views.flush().await;
+    assert_eq!(w.stage.marked.lock().unwrap().last(), Some(&vec![]));
 }

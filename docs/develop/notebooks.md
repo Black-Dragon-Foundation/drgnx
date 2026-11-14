@@ -179,28 +179,37 @@ for its views.
   state word `queued`, `running`, `error`, `aborted` or `cancelled` ends the row). The whole row carries the text property
   `drgnx-notebook-cell` (the cell's id): selecting a row jumps to that cell. The first line is the first one with anything on it,
   without control or direction-changing characters, cut at 80 characters. It shows the cells as the hub has them, which are the
-  editor's as of its last `notebook/sync`, `execute` or `save`. At most 2000 cells are listed; a last row `more` says how many are
-  not. Faces: `shadow`, `drgnx-notebook-prompt`, `drgnx-notebook-stale` (the output is the file's own), `drgnx-status-warn`,
-  `drgnx-status-fail`.
+  editor's as of its last `notebook/sync`, `execute` or `save`. At most 2000 cells are listed; a last row `more`, text
+  `more: N cells are not listed`, carries N as the property `drgnx-notebook-more`. The type is a chip (`drgnx-chip-quiet`) and so is the
+  state word: `running` `drgnx-chip-accent`, `queued` `drgnx-chip-quiet`, `error` `drgnx-chip-error`, `aborted` and `cancelled`
+  `drgnx-chip-warn`; the padding after a chip is not in it. **The current cell:** the editor sends `notebook/focus {id, cell?}` when the
+  cell it is in changes (no `cell`: it is in none, such as in a view); the row of that cell then carries the property
+  `drgnx-notebook-current` (`true`) and, under its other faces, the face `drgnx-notebook-current-row` over the whole row, for the editor to
+  draw as the selected row. Other faces: `shadow`, `drgnx-notebook-prompt`, `drgnx-notebook-stale` (the output is the file's own).
 - **The full output of one cell** (`kind: "output", cell: ID`, view `notebook-output:ID#N`, N the view's number among at most 16 a
   notebook has; asking again for the same cell gives the same view, `view/close` frees the number): the lines of the cell's output as
   the hub holds them (within the output limits: 1 MiB of text, 64 outputs, a cut says so on a last line), at most 1000 lines at a
   time. Rows `l:I` carry `drgnx-notebook-cell` and `drgnx-notebook-line` (the 1-based line); a row `above` and one `below` count the
-  lines outside the window. The editor moves the window with `view/window {view, list: "lines", from}` (0-based line) and the hub
+  lines outside the window: `▲ N lines above   M-p earlier lines` and `▼ N lines below   M-n later lines` (N is also the property
+  `drgnx-notebook-above` or `-below`; the whole row has the face `drgnx-notebook-cut`, the key is a `drgnx-chip-quiet` chip; the
+  keys in the text are the default bindings, the hub does not know the user's). The editor moves the window with `view/window {view, list: "lines", from}` (0-based line) and the hub
   builds the rows again; a `from` past the end comes back to the last line. Text carries the terminal roles as faces
   (`drgnx-notebook-fg-NAME`, `drgnx-notebook-bg-NAME`, `bold`, `italic`, `underline`, `drgnx-notebook-inverse`), never colours. An
   image is a row `[image/png image, WxH: save output as file]` and is never drawn; a kernel's SVG is never rendered (its row says
-  so, as the inline output does). While the cell runs the hub copies its output into the notebook once a second, so the view
+  so, as the inline output does). The lines of an error output (its `ENAME: EVALUE` line and its traceback, an empty line as one
+  space) have the face `drgnx-notebook-error-row` over the whole row, under the text's own faces: the error tint, never a solid block.
+  While the cell runs the hub copies its output into the notebook once a second, so the view
   follows at that pace.
 - **The kernel log** (`kind: "log"`, view `notebook-log:ID`): what the kernel sends that answers no cell: a message with an empty
   parent header (its own logging) or one whose request the hub no longer tracks (another client's). They never reach a cell. The hub
   keeps the last 500 entries (a `stream`'s or an `error`'s text, cut at 4096 characters; any other message type is an entry with no
   text) across the kernel's restarts. One row per line of an entry, keys `e:SEQ:K`, text `TYPE  line` (the lines of an entry under
   its type, at most 8, each cut at 400 characters, the rest counted `(N more lines)`), the property `drgnx-notebook-log` (the entry's
-  number); a first row `lost` says how many earlier entries were dropped. `notebook/log {id, since?}` returns the same as data:
+  number); a first row `lost  N earlier entries` (property `drgnx-notebook-lost` N) says how many earlier entries were dropped. The type is a
+  chip, `drgnx-chip-quiet` (`drgnx-chip-error` for an `error`), and every line of an `error` entry has `drgnx-notebook-error-row`.
+  `notebook/log {id, since?}` returns the same as data:
   `{entries: [{seq, type, text}], next, lost}` for the entries after `since` (a number from a former answer, or from the
-  `notebook-log` event); `lost` counts the entries after `since` the hub no longer holds. Faces: `shadow`, `drgnx-status-fail` for an
-  `error`.
+  `notebook-log` event); `lost` counts the entries after `since` the hub no longer holds.
 
 **Bounds of the views** (design bounds, none a security limit; what a kernel sends is held under the output limits above): the
 outline lists at most 2000 cells; a notebook has at most 16 full-output views, each built 1000 lines at a time; the kernel log holds
