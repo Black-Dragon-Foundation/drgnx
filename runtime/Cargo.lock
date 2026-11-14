@@ -1477,6 +1477,7 @@ version = "0.1.0"
 dependencies = [
  "aws-credential-types",
  "aws-sigv4",
+ "base64 0.23.1",
  "bifrost",
  "brokkr",
  "bytes",
