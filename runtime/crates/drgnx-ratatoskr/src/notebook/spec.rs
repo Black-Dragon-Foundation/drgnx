@@ -275,6 +275,31 @@ pub fn sweep(folder: &Path, live: &[PathBuf]) -> usize {
 /// Whether the group GID has no member but the user it is the primary group of (a "user private group": files `ipykernel install
 /// --user` writes under umask 0002 are group-writable by it, and nobody else can write them).
 fn private_group(gid: u32) -> bool {
+    // SAFETY: geteuid has no preconditions.
+    let me = unsafe { libc::geteuid() };
+    // a shared primary group (`users`, 100) has no member listed either: it is the user's own only if no other account has it
+    let alone = gid == me
+        || std::fs::read_to_string("/etc/passwd")
+            .ok()
+            .is_some_and(|p| only_primary_of(&p, gid, me));
+    alone && group_has_no_members(gid)
+}
+
+/// Whether, in the passwd file text PASSWD, no account but UID has GID as its primary group.
+pub(crate) fn only_primary_of(passwd: &str, gid: u32, uid: u32) -> bool {
+    passwd.lines().all(|l| {
+        let f: Vec<&str> = l.split(':').collect();
+        let (Some(u), Some(g)) = (
+            f.get(2).and_then(|u| u.parse::<u32>().ok()),
+            f.get(3).and_then(|g| g.parse::<u32>().ok()),
+        ) else {
+            return true;
+        };
+        g != gid || u == uid
+    })
+}
+
+fn group_has_no_members(gid: u32) -> bool {
     let mut buf = vec![0u8; 4096];
     loop {
         let mut grp: libc::group = unsafe { std::mem::zeroed() };

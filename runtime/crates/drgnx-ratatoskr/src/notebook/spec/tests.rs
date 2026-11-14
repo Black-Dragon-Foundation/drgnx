@@ -390,3 +390,19 @@ fn kernel_json_is_opened_without_waiting_on_a_fifo_and_without_following_a_link(
     assert!(open_spec_file(&link).is_err());
     assert!(open_spec_file(&real).is_ok());
 }
+
+#[test]
+fn a_shared_primary_group_is_not_the_users_private_one() {
+    let passwd = "root:x:0:0:r:/root:/bin/sh\nme:x:1000:100:me:/home/me:/bin/sh\nyou:x:1001:100:you:/home/you:/bin/sh\nsolo:x:1002:1002::/home/solo:/bin/sh\nbad line\n";
+    assert!(
+        !only_primary_of(passwd, 100, 1000),
+        "`users` is two accounts' group"
+    );
+    assert!(only_primary_of(passwd, 1002, 1002));
+    assert!(
+        !only_primary_of(passwd, 1002, 1000),
+        "another account has it"
+    );
+    assert!(only_primary_of(passwd, 555, 1000), "nobody has it");
+    assert!(only_primary_of("", 100, 1000));
+}
