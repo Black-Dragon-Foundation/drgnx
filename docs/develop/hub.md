@@ -1475,6 +1475,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `gateway/set-budget` | user | `{budget: Usd, job: Id}` | `boolean` | no |
 | `gateway/unregister` | user | `{token: string}` | `boolean` | no |
 | `git/blame` | user | `{path: string, worktree_root: string}` | `{agents: [AgentLines], commits: [BlameCommit], head?: string, lines: [natnum]}` | no |
+| `git/blame/line` | user | `{path: string, pos: integer, width: integer, worktree_root: string}` | `{sha?: string, text?: string, time?: integer}` | no |
 | `git/letters` | user | `{root: AbsPath, shown?: [string], view: string}` | `boolean` | no |
 | `git/stage-hunk` | user | `{new_start: integer, path: string, worktree_root: string}` | `{staged: boolean}` | yes |
 | `graph/backup` | user | `{}` | `BackupAnswer` | no |
@@ -2151,6 +2152,11 @@ edit asks again.
 large-files module's default `:ask-above`, the size from which a file opens lean or in chunks) gets no marks, as
 `drgnx-large-file-p` kept them from large buffers in Lisp. Large-files v2's cost registry replaces this one constant.
 
+- `git/blame/line {path, worktree_root, pos, width}` answers the inline blame of the line the position is on, as
+  `{text?, sha?, time?}`: `marks::blame_text` words it ("Ada, 3 days ago · Fix the parser", "You · Uncommitted
+  changes", "agent s1 · …") and cuts it to `width` columns (`BLAME_MIN_WIDTH` 20: none under it, `BLAME_MAX_WIDTH` 80),
+  from `git/blame`'s cached answer for the text the hub holds; none for an untracked buffer, a text over the limit or
+  the empty last line. The client asks once per line change at idle (`drgnx-blame-delay`) and again on a resize.
 - `history/hunks/head` answers `marks: [{line, pos, kind}]` (`kind` `added`, `changed` or `deleted`; a deletion marks
   the line after it) beside the hunks, which Show, Revert and Stage Change still use.
 

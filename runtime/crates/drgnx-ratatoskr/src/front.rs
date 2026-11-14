@@ -889,6 +889,7 @@ impl Front {
             | Params::HistoryBlame(_)
             | Params::HistoryHunks(_)
             | Params::GitBlame(_)
+            | Params::GitBlameLine(_)
             | Params::GitStageHunk(_)
             | Params::HistoryHunksHead(_)
             | Params::HistoryTake(_)

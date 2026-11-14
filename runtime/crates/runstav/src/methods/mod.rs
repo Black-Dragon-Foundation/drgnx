@@ -403,6 +403,7 @@ params! {
     HistoryBlame(history::BlameParams),
     HistoryHunks(history::BranchHunksParams),
     GitBlame(history::GitBlameParams),
+    GitBlameLine(history::GitBlameLineParams),
     GitStageHunk(history::StageHunkParams),
     HistoryHunksHead(history::HeadHunksParams),
     HistoryTake(history::TakeParams),
