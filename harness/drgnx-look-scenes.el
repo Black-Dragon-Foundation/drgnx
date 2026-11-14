@@ -43,6 +43,7 @@
     (start-page-light)
     (notebook-dark :mockup notebook)
     (notebook-light :mockup notebook)
+    (notebook-views)
     (highlights-dark)
     (highlights-light)
     (highlights-hc)

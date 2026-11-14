@@ -179,6 +179,8 @@ branch gateway-queue, staged file and history come with the Magit adapter (look 
                    "the error output is the hub's red bold first line, not the mockup's error-tint block (the tail carries styles, not a kind)"
                    "the picture is a gradient the scene makes (a PPM): in use, images are the hub's PNG or JPEG, fetched from notebook/output")
     (notebook-light "see notebook-dark")
+    (notebook-views "no mockup yet: the three views are the hub's rows in Sjá (outline shown, beside the notebook); a mockup comes before any look judgment"
+                    "the notebook is a file the scene writes and the hub opens (no kernel: no prompts or states yet), so the rows are the hub's own")
     (palette "the mockup's palette rows come from its own commands; the line lists the registry's")
     (explorer-focused-dark "no agent badges (C, R) in the Explorer: agent system part 3 (G9)")
     (explorer-focused-light "no agent badges (C, R) in the Explorer: agent system part 3 (G9)")
@@ -1505,6 +1507,38 @@ would be (no kernel, no hub: the scene draws the buffer's own chrome)."
     (drgnx-look-scene--show (drgnx-look-scene--notebook-buffer)))
   (drgnx-look-scene--answer))
 
+(defun drgnx-look-scene--notebook-file ()
+  "A `.ipynb' the scene writes: the mockup's four cells, no outputs."
+  (let ((file (expand-file-name "cache-experiments.ipynb" temporary-file-directory)))
+    (with-temp-file file
+      (insert "{\"cells\": [\n"
+              "{\"cell_type\": \"markdown\", \"id\": \"c0\", \"metadata\": {}, \"source\": [\"# Cache experiments\\n\", \"How the hit rate moves with the capacity.\"]},\n"
+              "{\"cell_type\": \"code\", \"id\": \"c1\", \"metadata\": {}, \"execution_count\": 1, \"outputs\": [{\"output_type\": \"stream\", \"name\": \"stdout\", \"text\": [\"done: 10000 samples\"]}], \"source\": [\"import numpy as np\\n\", \"rng = np.random.default_rng(7)\"]},\n"
+              "{\"cell_type\": \"code\", \"id\": \"c2\", \"metadata\": {}, \"execution_count\": null, \"outputs\": [], \"source\": [\"for cap in (16, 64, 256):\\n\", \"    print(cap)\"]},\n"
+              "{\"cell_type\": \"code\", \"id\": \"c3\", \"metadata\": {}, \"execution_count\": 3, \"outputs\": [{\"output_type\": \"error\", \"ename\": \"NameError\", \"evalue\": \"name 'missing' is not defined\", \"traceback\": []}], \"source\": [\"plot(missing)\"]}\n"
+              "], \"metadata\": {\"kernelspec\": {\"display_name\": \"Python 3\", \"language\": \"python\", \"name\": \"python3\"}}, \"nbformat\": 4, \"nbformat_minor\": 5}\n"))
+    file))
+
+(defun drgnx-look-scene--notebook-views (theme)
+  "The notebook opened through the hub (a real file), its outline view beside it, in THEME."
+  (drgnx-look-scene--theme theme)
+  (drgnx-look-scene--try "notebook-views"
+    (drgnx-wb-focus-editor)
+    (drgnx-look-scene--hub)
+    (load (expand-file-name "modules/lang/drgnx-notebook" (bound-and-true-p drgnx-dir)) nil t)
+    (let ((buffer (find-file-noselect (drgnx-look-scene--notebook-file))))
+      (drgnx-look-scene--show buffer)
+      (when (drgnx-look-scene--until 30 "the notebook opens" (lambda () (buffer-local-value 'drgnx-notebook--id buffer)))
+        (with-current-buffer buffer (drgnx-notebook-outline))
+        (let ((name (format "*Notebook outline: %s*" (buffer-name buffer))))
+          (drgnx-look-scene--until 30 "the outline's rows"
+                                   (lambda () (and (get-buffer name)
+                                                   (with-current-buffer name
+                                                     (when (drgnx-view-p drgnx-view) (drgnx-view-draw-now drgnx-view))
+                                                     (> (buffer-size) 0)))))))))
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-notebook-views () "The notebook and its outline view." (drgnx-look-scene--notebook-views 'drgnx-dark))
 (defun drgnx-look-scene-notebook-dark () "The notebook, dark." (drgnx-look-scene--notebook 'drgnx-dark))
 (defun drgnx-look-scene-notebook-light () "The notebook, light." (drgnx-look-scene--notebook 'drgnx-light))
 

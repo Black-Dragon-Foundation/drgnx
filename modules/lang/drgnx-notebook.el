@@ -37,6 +37,7 @@
 (declare-function drgnx-view-env-register "drgnx-view-env")
 (declare-function drgnx-view-env-unregister "drgnx-view-env")
 (declare-function drgnx-view-env-twin "drgnx-view-env")
+(declare-function drgnx-view-env-update "drgnx-view-env")
 (declare-function drgnx-notice-define-source "drgnx-notice")
 (declare-function drgnx-state-subscribe "drgnx-state")
 (declare-function drgnx-look-icon "drgnx-icons" (name &optional face size))
@@ -1278,7 +1279,9 @@ THEN-RUN-ALL: run every code cell once it is up."
                                           drgnx-notebook-view--cell cell)
                                     (add-hook 'kill-buffer-hook #'drgnx-notebook--view-killed nil t)
                                     (drgnx-notebook--view-attach (plist-get r :view))
-                                    (pop-to-buffer (current-buffer))))))))))
+                                    (pop-to-buffer (current-buffer))
+                                    ;; shown now: its env goes out (the hooks that follow windows run at redisplay)
+                                    (drgnx-view-env-update drgnx-notebook-view--id)))))))))
 
 (defun drgnx-notebook--view-buffers (notebook)
   "The live view buffers of NOTEBOOK."

@@ -10,6 +10,8 @@
 (require 'cl-lib)
 (require 'drgnx)
 (require 'drgnx-hub-client)
+(require 'drgnx-view)
+(require 'drgnx-view-nav)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (dolist (f '("wait-fixture" "ratatoskr-fixture" "delivery-gate-fixture" "runtime-settings-fixture" "hub-client-fixture" "clock-fixture"))
   (load (expand-file-name (concat "test/fixtures/" f) drgnx-dir) nil t))
@@ -154,6 +156,45 @@ gated tests use them, but without their need for Sjá (a notebook is not a hub-f
                 (let ((entries (notebook-live-test--ask "notebook/log" (list :id id))))
                   (should-not (cdr entries))
                   (should (listp (plist-get (car entries) :entries))))))
+          (when (buffer-live-p buffer)
+            (with-current-buffer buffer (set-buffer-modified-p nil))
+            (kill-buffer buffer)))))))
+
+;; The rows of the views, on a Nidhogg with Sjá (skipped elsewhere): the hub builds them, the view env goes on the subscribed connection, the
+;; patches come back and draw in the view's buffer.
+(defun notebook-live-test--rows-p (name text)
+  "Whether view buffer NAME holds TEXT, its rows drawn now (a batch Emacs draws no timer's work by itself)."
+  (with-current-buffer name
+    (when (drgnx-view-p drgnx-view) (drgnx-view-draw-now drgnx-view))
+    (and (> (buffer-size) 0) (string-search text (buffer-string)))))
+
+(ert-deftest drgnx-notebook-live/the-outline-and-the-output-views-fill-with-the-hubs-rows ()
+  (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
+  (notebook-live-test--with-hub
+    (drgnx-test-with-modules '(lang/notebook)
+      (let* ((file (expand-file-name "nb6.ipynb" root)) buffer)
+        (with-temp-file file (insert notebook-live-test--file))
+        (setq buffer (find-file-noselect file))
+        (unwind-protect
+            (with-current-buffer buffer
+              (drgnx-test-hub-settle (lambda () drgnx-notebook--id) "the notebook opened")
+              (let ((outline-name (format "*Notebook outline: %s*" (buffer-name buffer)))
+                    (output-name (format "*Notebook output: %s calc*" (buffer-name buffer))))
+                (drgnx-notebook-outline)
+                (drgnx-test-hub-settle (lambda () (get-buffer outline-name)) "the outline's buffer")
+                (drgnx-test-hub-settle (lambda () (notebook-live-test--rows-p outline-name "x = 1")) "the outline's rows")
+                (with-current-buffer outline-name
+                  (should (string-search "markdown" (buffer-string)))
+                  (goto-char (point-min))
+                  (search-forward "x = 1")
+                  (drgnx-notebook-outline-visit))
+                (should (eq (current-buffer) buffer))
+                (should (equal (plist-get (drgnx-notebook--cell-at) :id) "calc"))
+                (drgnx-notebook-open-output)
+                (drgnx-test-hub-settle (lambda () (get-buffer output-name)) "the output view's buffer")
+                (drgnx-test-hub-settle (lambda () (notebook-live-test--rows-p output-name "")) "the output view's rows")))
+          (dolist (b (buffer-list))
+            (when (string-prefix-p "*Notebook " (buffer-name b)) (let ((kill-buffer-query-functions nil)) (kill-buffer b))))
           (when (buffer-live-p buffer)
             (with-current-buffer buffer (set-buffer-modified-p nil))
             (kill-buffer buffer)))))))
