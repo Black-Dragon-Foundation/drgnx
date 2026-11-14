@@ -7,7 +7,7 @@ use draugr::{
     reap, spawn, start_time,
 };
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::time::timeout;
 
@@ -163,18 +163,50 @@ async fn a_term_ignoring_group_gets_kill_after_2s() {
     );
 }
 
-/// The kill comes after the grace, not before: a timing test (the elapsed time is the assertion).
+/// The kill comes after the grace, not before: on a virtual clock the test moves time one probe at a time and checks, at
+/// each, that no SIGKILL has gone out before the grace is spent; the reaper's probes are the only thing it waits for.
 #[tokio::test]
-#[ignore = "timing: the SIGKILL waits out the grace"]
 async fn a_term_ignoring_group_is_killed_only_after_the_grace() {
     let mut g = Group::start("trap '' TERM; sleep 60 & echo ready; wait").await;
     g.ready().await;
-    let recs = [g.record()];
-    let spy = Spy::real();
-    let began = Instant::now();
-    let (out, _) = tokio::join!(timeout(LIMIT, reap(&recs, &spy)), g.child.wait());
-    assert_eq!(out.unwrap(), vec![ReapOutcome::Killed]);
-    assert!(began.elapsed() >= GRACE, "{:?}", began.elapsed());
+    let pgid = g.pgid;
+    let recs = vec![g.record()];
+    let spy = std::sync::Arc::new(Spy::real());
+    let clock = drgnx_clock::Manual::default();
+    let reaping = tokio::spawn(clock.scope({
+        let spy = spy.clone();
+        async move { reap(&recs, &*spy).await }
+    }));
+    let step = Duration::from_millis(20);
+    let mut advanced = Duration::ZERO;
+    let (_, out) = tokio::join!(g.child.wait(), async {
+        while !reaping.is_finished() {
+            skuld::wait_until_async(
+                "the reaper waits for its next probe, or ends",
+                20,
+                || async { (clock.sleepers() == 1 || reaping.is_finished()).then_some(()) },
+            )
+            .await;
+            if reaping.is_finished() {
+                break;
+            }
+            if advanced < GRACE {
+                assert!(
+                    !spy.sent().contains(&(-pgid, libc::SIGKILL)),
+                    "SIGKILL after {advanced:?} of a {GRACE:?} grace"
+                );
+            }
+            clock.advance(step);
+            advanced += step;
+        }
+        reaping.await.unwrap()
+    });
+    assert_eq!(out, vec![ReapOutcome::Killed]);
+    assert!(advanced >= GRACE, "{advanced:?}");
+    assert_eq!(
+        spy.sent(),
+        vec![(-pgid, libc::SIGTERM), (-pgid, libc::SIGKILL)]
+    );
 }
 
 #[tokio::test]

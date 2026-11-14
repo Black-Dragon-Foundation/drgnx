@@ -4,11 +4,9 @@
 # optimized (a budget set on the optimized build); `fleet` needs the fake fleet, so test/runners/drills.sh --timing
 # runs it and this lane only names it.  A new `#[ignore = "timing: …"]` test that is not listed here runs
 # nowhere: drgnx-ci/every-rust-timing-test-is-in-the-timing-list fails then.
-draugr reap a_term_ignoring_group_is_killed_only_after_the_grace
 drgnx-ratatoskr sandbox_check doctor_json_answers_within_the_editors_wait
 huginn timing read_64_kib_within_1_ms release
 gleipnir lib the_hung_helper_is_refused_at_the_deadline_not_before_or_long_after
-gleipnir lib slow_head_is_refused_only_after_the_head_timeout
 gleipnir timing notify_round_trip_p95_within_15_us release
 gleipnir timing traced_2000_opens_within_budget release
 saga records a_1600_row_table_parses_under_50_ms
@@ -37,6 +35,4 @@ verdandi timing undone_by_scan_cost_by_later_deletes
 vegvisir timing core_step_within_50_us release
 vegvisir timing layout_200_items_within_2_ms release
 drgnx-ratatoskr fleet_drills a_set_spreads_over_two_runners_within_its_bound fleet
-gleipnir lib an_idle_tunnel_is_ended_and_an_active_one_is_not
-drgnx-ratatoskr lib a_slow_check_is_a_failed_one_at_the_bound
 eitri lib a_refused_fifo_is_never_opened

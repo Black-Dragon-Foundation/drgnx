@@ -15,7 +15,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UnixListener};
@@ -772,7 +772,7 @@ pub fn fuzz_absolute_head(buf: &[u8]) -> Option<Vec<u8>> {
 async fn handle(sh: Arc<Shared>, mut client: Box<dyn Client>, tag: u64, _slot: Slot) {
     let mut buf = vec![0u8; sh.max_head];
     let (head, len) =
-        match tokio::time::timeout(sh.head_timeout, read_head(&mut client, &mut buf)).await {
+        match drgnx_clock::timeout(sh.head_timeout, read_head(&mut client, &mut buf)).await {
             Ok(r) => r,
             // too slow is refused like too large
             Err(_) => (Head::TooLarge, 0),
@@ -908,7 +908,7 @@ async fn handle(sh: Arc<Shared>, mut client: Box<dyn Client>, tag: u64, _slot: S
     }
     // both ways as they are; each side's EOF is passed on as a half-close
     let last = Arc::new(AtomicU64::new(0));
-    let began = Instant::now();
+    let began = drgnx_clock::now();
     let mut client = Active::new(client, last.clone(), began);
     let mut upstream = Active::new(upstream, last.clone(), began);
     let copy = tokio::io::copy_bidirectional(&mut client, &mut upstream);
@@ -917,9 +917,9 @@ async fn handle(sh: Arc<Shared>, mut client: Box<dyn Client>, tag: u64, _slot: S
         let idle_at = began + Duration::from_millis(last.load(Ordering::Relaxed)) + sh.idle_timeout;
         tokio::select! {
             _ = &mut copy => return,
-            () = tokio::time::sleep_until(idle_at.into()) => {
+            () = drgnx_clock::sleep(idle_at.saturating_sub(drgnx_clock::now())) => {
                 // no byte since `idle_at - idle_timeout`: end it (the place goes back when this returns)
-                if Instant::now() >= began + Duration::from_millis(last.load(Ordering::Relaxed)) + sh.idle_timeout {
+                if drgnx_clock::now() >= began + Duration::from_millis(last.load(Ordering::Relaxed)) + sh.idle_timeout {
                     return;
                 }
             }
@@ -927,20 +927,21 @@ async fn handle(sh: Arc<Shared>, mut client: Box<dyn Client>, tag: u64, _slot: S
     }
 }
 
-/// A stream that notes, in `last` (milliseconds since `began`), when a byte last moved through it.
+/// A stream that notes, in `last` (milliseconds since `began`, on `drgnx_clock`'s reading), when a byte last moved through it.
 struct Active<T> {
     inner: T,
     last: Arc<AtomicU64>,
-    began: Instant,
+    began: Duration,
 }
 
 impl<T> Active<T> {
-    fn new(inner: T, last: Arc<AtomicU64>, began: Instant) -> Self {
+    fn new(inner: T, last: Arc<AtomicU64>, began: Duration) -> Self {
         Active { inner, last, began }
     }
 
     fn touch(&self) {
-        let ms = u64::try_from(self.began.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let ms = u64::try_from(drgnx_clock::now().saturating_sub(self.began).as_millis())
+            .unwrap_or(u64::MAX);
         self.last.fetch_max(ms, Ordering::Relaxed);
     }
 }
@@ -1865,20 +1866,35 @@ mod tests {
         );
     }
 
-    /// The refusal waits out the head timeout: a timing test (the elapsed time is the assertion).
+    /// The refusal waits out the head timeout: on a virtual clock the head is still being waited for the instant before
+    /// the timeout, and refused at it.
     #[tokio::test]
-    #[ignore = "timing: a slow head is refused only after the head timeout"]
     async fn slow_head_is_refused_only_after_the_head_timeout() {
+        let clock = drgnx_clock::Manual::default();
+        let _on = clock.on_this_thread();
         let cfg = ProxyConfig {
             head_timeout: Duration::from_millis(300),
             ..ProxyConfig::default()
         };
         let r = rig(cfg, &[], &[]);
         let p = r.listen(1);
-        let started = std::time::Instant::now();
-        let (_s, code) = ask(&p, b"CONNECT up.test:443 HTTP/1.1\r\nHost: up").await;
+        let asking =
+            tokio::spawn(async move { ask(&p, b"CONNECT up.test:443 HTTP/1.1\r\nHost: up").await });
+        skuld::wait_until_async(
+            "the proxy waits for the rest of the head",
+            WAIT.as_secs(),
+            || async { (clock.sleepers() == 1).then_some(()) },
+        )
+        .await;
+        clock.advance(Duration::from_millis(299));
+        tokio::task::yield_now().await;
+        assert!(
+            !asking.is_finished(),
+            "refused 1 ms before the head timeout"
+        );
+        clock.advance(Duration::from_millis(1));
+        let (_s, code) = asking.await.unwrap();
         assert_eq!(code, 400);
-        assert!(started.elapsed() >= Duration::from_millis(300));
     }
 
     #[tokio::test]
@@ -1914,10 +1930,12 @@ mod tests {
         .await;
     }
 
-    /// A timing test: the tunnel is ended only after the idle limit, and an active one outlives it.
+    /// The tunnel is ended only after the idle limit, and an active one outlives it: on a virtual clock the idle one
+    /// is open at 499 ms and ended at 500, and the busy one's bytes move its limit.
     #[tokio::test]
-    #[ignore = "timing: an idle tunnel is ended after the idle limit, an active one is not"]
     async fn an_idle_tunnel_is_ended_and_an_active_one_is_not() {
+        let clock = drgnx_clock::Manual::default();
+        let _on = clock.on_this_thread();
         let up = echo().await;
         let cfg = ProxyConfig {
             idle_timeout: Duration::from_millis(500),
@@ -1930,15 +1948,27 @@ mod tests {
         assert_eq!(code, 200);
         let (mut busy, code) = connect_to(&p, &target).await;
         assert_eq!(code, 200);
-        for _ in 0..5 {
+        // 2 x 200 ms with the busy one echoing: nothing is idle for its limit yet
+        for _ in 0..2 {
             assert!(
                 echoes(&mut busy, b"ping").await,
                 "an active tunnel lives on"
             );
-            tokio::time::sleep(Duration::from_millis(200)).await;
+            clock.advance(Duration::from_millis(200));
+            tokio::task::yield_now().await;
         }
+        assert!(
+            echoes(&mut busy, b"ping").await,
+            "an active tunnel lives on"
+        );
+        assert_eq!(r.conns(), 2, "the idle one is open at 400 ms");
+        // the idle one's last byte was at 0: it is ended at 500 ms
+        clock.advance(Duration::from_millis(100));
         assert!(closed(&mut idle).await, "the idle tunnel was ended");
-        assert_eq!(r.conns(), 1, "its place is free again");
+        skuld::wait_until_async("its place is free again", WAIT.as_secs(), || async {
+            (r.conns() == 1).then_some(())
+        })
+        .await;
         drop(busy);
         r.all_free().await;
     }

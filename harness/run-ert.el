@@ -386,15 +386,36 @@ is a failure.  Prints the flakes."
 (defvar drgnx-run-ert--audit-current nil "The name of the :det test that runs now (a string), while the audit is on.")
 (defvar drgnx-run-ert--audit-seen nil "The (TEST . PRIMITIVE) pairs recorded this run, newest first.")
 (defvar drgnx-run-ert--audit-file nil "A file the rows are appended to, or nil.")
+(defvar drgnx-run-ert--audit-only nil
+  "The primitives the audit records for the test that runs now, or nil for all: a `cond' test may wait for events and
+start processes, but a real `sleep-for' or `sit-for' is a wait on time.")
+(defconst drgnx-run-ert--audit-cond-prims '(sleep-for sit-for)
+  "What the audit holds a `cond' test to (the primitives of a real wait on time).")
 (defvar drgnx-test--active)
 
 (defconst drgnx-run-ert--audit-waits '(sleep-for sit-for accept-process-output)
   "The watched waits: under the clock fixture they move virtual time, so they are not recorded there.")
 
+;; Emacs's own libraries poll a child with `sleep-for' (epg waits for gpg that way): a wait for an event, not for time.
+(defconst drgnx-run-ert--audit-event-polls '(epg-wait-for-completion)
+  "Functions whose `sleep-for' is a poll of a child process: a `cond' test that goes through one is not sleeping on time.")
+
+(defun drgnx-run-ert--audit-in-event-poll-p ()
+  "Whether the call that is being recorded runs inside one of `drgnx-run-ert--audit-event-polls'."
+  (let ((i 0) hit)
+    (while (and (not hit) (< i 40))
+      (let ((fr (backtrace-frame i 'drgnx-run-ert--audit-in-event-poll-p)))
+        (if fr (setq hit (memq (nth 1 fr) drgnx-run-ert--audit-event-polls)) (setq i 40)))
+      (setq i (1+ i)))
+    hit))
+
 (defun drgnx-run-ert--audit-record (prim)
   "Record PRIM as used by the :det test that runs now, once per test and primitive.  A wait under the clock fixture
 is virtual and not recorded; a process or a socket is real work under the fixture too."
   (when (and drgnx-run-ert--audit-current
+             (or (null drgnx-run-ert--audit-only)
+                 (and (memq prim drgnx-run-ert--audit-only)
+                      (not (drgnx-run-ert--audit-in-event-poll-p))))
              (not (and (memq prim drgnx-run-ert--audit-waits)
                        (boundp 'drgnx-test--active) drgnx-test--active)))
     (let ((key (cons drgnx-run-ert--audit-current prim)))
@@ -440,8 +461,9 @@ environment): `drgnx-test-run-isolated' passes them on, so the audit reaches the
   "Test files the audit leaves alone: they test the clock and wait fixtures, whose advice state they inspect.")
 
 (defun drgnx-run-ert--audit-advise ()
-  "Advise the watched primitives."
-  (dolist (p drgnx-run-ert--audit-primitives)
+  "Advise the watched primitives: all of them for a `det' test, only those `drgnx-run-ert--audit-only' names for a `cond'
+one (a test that stubs another primitive with `cl-letf' is not disturbed by advice on it)."
+  (dolist (p (or drgnx-run-ert--audit-only drgnx-run-ert--audit-primitives))
     (advice-add p :around (apply-partially #'drgnx-run-ert--audit-around p) `((name . drgnx-run-ert-audit)))))
 
 (defun drgnx-run-ert--audit-unadvise ()
@@ -545,13 +567,25 @@ never entered the gate and is listed as exempt.")
   (dolist (s (append '(drgnx-hub--client-filter drgnx-hub--open) drgnx-run-ert--audit-signals))
     (advice-remove s 'drgnx-run-ert-audit)))
 
+(defun drgnx-run-ert--audit-cond-allowed-p (name)
+  "Whether the `cond' test NAME (a symbol) is in test/audit-cond-allowed.eld: let through the sleep audit."
+  (let ((file (expand-file-name "../test/audit-cond-allowed.eld" (file-name-directory drgnx-run-ert--self))))
+    (and (file-readable-p file)
+         (with-temp-buffer
+           (insert-file-contents file)
+           (seq-some (lambda (row) (eq (car row) name)) (ignore-errors (read (current-buffer))))))))
+
 (defun drgnx-run-ert--audit-test (fn test &rest args)
   "Around `ert-run-test': a :det test (every test with DRGNX_TEST_AUDIT_ALL=1) runs with the primitives advised, and a
 :gated or :handshake test with its pattern checks advised, and only while it runs, so no other test sees the advice; the
 fixtures' own tests (`drgnx-run-ert--audit-skip-files') are not audited."
   (let* ((file (ignore-errors (ert-test-file-name test)))
          (skip (and file (member (file-name-nondirectory file) drgnx-run-ert--audit-skip-files)))
-         (audited (and (or (memq :det (ert-test-tags test)) drgnx-run-ert--audit-all) (not skip)))
+         (det (or (memq :det (ert-test-tags test)) drgnx-run-ert--audit-all))
+         (cond-only (and (not det) (memq :cond (ert-test-tags test))
+                         (not (drgnx-run-ert--audit-cond-allowed-p (ert-test-name test)))))
+         (audited (and (or det cond-only) (not skip)))
+         (drgnx-run-ert--audit-only (and cond-only drgnx-run-ert--audit-cond-prims))
          (ptags (and (not skip) (seq-filter (lambda (tag) (memq tag (ert-test-tags test))) '(:gated :handshake))))
          (name (symbol-name (ert-test-name test)))
          (drgnx-run-ert--audit-current (and audited name))
