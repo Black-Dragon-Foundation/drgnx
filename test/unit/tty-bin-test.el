@@ -91,6 +91,12 @@ terminal, as when a person types the command; else /dev/null and a pipe) → (EX
            ,@body)
        (delete-directory dir t))))
 
+(defun tty-bin-test--settled (dir)
+  "Wait until no process runs a fake tool of DIR (the fake kitty, the fake client).  A launch of kitty is made before the
+script exits, so once none runs, an absent kitty.log is final."
+  (drgnx-test-wait (lambda () (not (eql 0 (call-process "pgrep" nil nil nil "-f" "--" (regexp-quote dir)))))
+                   :what "the fake tools' processes ended"))
+
 (defun tty-bin-test--calls (dir &optional name)
   "The fake emacsclient's (or NAME's) calls so far, each a list of its arguments."
   (mapcar (lambda (line) (split-string line "\037" t))
@@ -271,7 +277,7 @@ terminal, as when a person types the command; else /dev/null and a pipe) → (EX
       (should (eql 0 (car (call '("-t") env))))
       (should (member "-t" (car (last (tty-bin-test--calls dir)))))
       (should-not (seq-find (lambda (c) (member tty-bin-test--capable c)) (tty-bin-test--calls dir)))
-      (drgnx-test-pause 0.3 "kitty may not be started")
+      (tty-bin-test--settled dir)
       (should-not (file-exists-p (expand-file-name "kitty.log" dir))))))
 
 (ert-deftest drgnx-bin/open-t-stays-here-by-default ()
@@ -280,14 +286,14 @@ terminal, as when a person types the command; else /dev/null and a pipe) → (EX
     ;; the daemon has no capable terminal to offer (the option is off): this terminal, kitty not started
     (should (eql 0 (car (call '("-t") '(("VTE_VERSION" . "7600"))))))
     (should (member "-t" (car (last (tty-bin-test--calls dir)))))
-    (drgnx-test-pause 0.3 "kitty may not be started")
+    (tty-bin-test--settled dir)
     (should-not (file-exists-p (expand-file-name "kitty.log" dir)))
     ;; a terminal that sends every key is not asked about at all
     (write-region "(\"kitty\" \"--\")\n" nil (expand-file-name "capable" dir))
     (delete-file (expand-file-name "client.log" dir))
     (should (eql 0 (car (call '("-t") '(("TERM" . "xterm-kitty"))))))
     (should-not (seq-find (lambda (c) (member tty-bin-test--capable c)) (tty-bin-test--calls dir)))
-    (drgnx-test-pause 0.3 "kitty may not be started")
+    (tty-bin-test--settled dir)
     (should-not (file-exists-p (expand-file-name "kitty.log" dir)))))
 
 (ert-deftest drgnx-bin/test-tty-tiers-are-listed ()

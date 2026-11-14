@@ -124,7 +124,9 @@ the temp dir) and sleeps.  Return the process."
                                 :command (list drgnx-lease-test--bin "lease" "exclusive" "--wait" "60" "--" "touch"
                                                exclusive-ran)))))
         (push ex drgnx-lease-test--procs)
-        (drgnx-test-pause 1 "the exclusive holder may not run while the light one holds")
+        ;; the exclusive lease tried the lock, failed and sleeps its poll: its `sleep' child is the observable
+        (drgnx-test-wait (lambda () (eql 0 (call-process "pgrep" nil nil nil "-P" (number-to-string (process-id ex)) "sleep")))
+                         :what "the exclusive lease's first poll sleep")
         (should-not (file-exists-p exclusive-ran))            ; it waits for the light holder
         ;; a new light holder starts while the exclusive polls
         (should (= 0 (car (drgnx-lease-test--call env "lease" "light" "--wait" "5" "--" "true"))))

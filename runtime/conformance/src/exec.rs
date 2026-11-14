@@ -135,6 +135,40 @@ pub fn run_scenario(cfg: &Config, s: &Scenario, perf: &mut Vec<(String, Vec<f64>
 /// How many lines of each hub's logs a failure keeps.
 const FAILURE_LOG_LINES: usize = 60;
 
+/// What the hub's threads are doing (state letter, kernel wait channel, name) and the machine's load, for a failure
+/// that names a silent hub: an expect that sees nothing within its real time is either a hub that waits on something
+/// or a machine too busy to run it, and these lines tell which.  Best effort: nothing where `/proc` is not there.
+fn proc_waits(pid: u32) -> String {
+    let mut out = String::new();
+    if let Ok(load) = std::fs::read_to_string("/proc/loadavg") {
+        out.push_str(&format!("load average: {}\n", load.trim()));
+    }
+    let read = |p: String| std::fs::read_to_string(p).unwrap_or_default().trim().to_owned();
+    let Ok(tasks) = std::fs::read_dir(format!("/proc/{pid}/task")) else {
+        return out;
+    };
+    let mut rows: Vec<String> = tasks
+        .flatten()
+        .map(|t| {
+            let dir = t.path();
+            let stat = read(format!("{}/stat", dir.display()));
+            let state = stat
+                .rsplit_once(") ")
+                .and_then(|(_, rest)| rest.chars().next())
+                .unwrap_or('?');
+            format!(
+                "  thread {} {} state {state} wchan {}",
+                t.file_name().to_string_lossy(),
+                read(format!("{}/comm", dir.display())),
+                read(format!("{}/wchan", dir.display()))
+            )
+        })
+        .collect();
+    rows.sort();
+    out.push_str(&rows.join("\n"));
+    out
+}
+
 impl Runner<'_> {
     /// An error once the scenario's bound has run out, saying so with WHAT it had done.
     fn within_bound(&self, what: &str) -> R {
@@ -155,11 +189,12 @@ impl Runner<'_> {
         );
         for h in &self.hubs {
             notes.push_str(&format!(
-                "\nhub {} (pid {}), its stderr's last lines:\n{}\nits log's last lines:\n{}",
+                "\nhub {} (pid {}), its stderr's last lines:\n{}\nits log's last lines:\n{}\nwhat it waits on:\n{}",
                 h.name,
                 h.pid,
                 h.log_tail_n(FAILURE_LOG_LINES),
-                h.jsonl_tail_n(FAILURE_LOG_LINES)
+                h.jsonl_tail_n(FAILURE_LOG_LINES),
+                proc_waits(h.pid)
             ));
         }
         notes
@@ -2441,5 +2476,14 @@ mod tests {
     fn a_dumpable_process_is_not_refused() {
         let e = environ_refused(std::process::id()).unwrap_err();
         assert!(e.contains("is dumpable"), "{e}");
+    }
+
+    /// A failure that names a silent hub says what its threads wait on and how busy the machine is.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn the_wait_report_names_the_threads_and_the_load() {
+        let r = proc_waits(std::process::id());
+        assert!(r.contains("load average: "), "{r}");
+        assert!(r.contains("  thread ") && r.contains(" wchan "), "{r}");
     }
 }

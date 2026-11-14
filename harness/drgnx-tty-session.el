@@ -530,6 +530,35 @@ is kitty's screen (`drgnx-tty-session-kitty-screen'; ESCAPES is not for it)."
   (let ((r (drgnx-tty-session-tmux sess "show-buffer")))
     (and (eq (car r) 0) (cdr r))))
 
+(defun drgnx-tty-session-key-barrier (sess &optional target)
+  "Wait until SESS's Emacs has read and run every key sent to TARGET (a session or a client; default SESS) before this
+call: F9, a command that only counts itself, goes down the same input stream and keys are read in order.  What \"no
+command ran from these bytes\" means is then settled, with no time passed."
+  (let ((n (drgnx-tty-session-eval sess '(progn (defvar kx-sentinel-n 0)
+                                                (unless (fboundp 'kx-sentinel) (defun kx-sentinel () (interactive) (cl-incf kx-sentinel-n)))
+                                                (global-set-key (kbd "<f9>") #'kx-sentinel)
+                                                kx-sentinel-n))))
+    (drgnx-tty-session-send (or target sess) "\e[20~")
+    (drgnx-tty-session-wait sess `(> kx-sentinel-n ,n) 10)))
+
+(defvar drgnx-tty-session--barriers 0)
+(declare-function drgnx-test-wait "wait-fixture")
+
+(defun drgnx-tty-session-pty-barrier (sess)
+  "Wait until tmux has read everything SESS's Emacs wrote to its terminal before this call.  Emacs writes one more thing, a
+window title, down the same pty (bytes of one pty arrive in order), and the wait ends when tmux reports it as the pane's
+title.  What \"nothing was sent to the terminal\" means is then settled, with no time passed."
+  (let ((title (format "kx-barrier-%d" (cl-incf drgnx-tty-session--barriers))))
+    ;; a nested session has two hops: its inner tmux hands its pane title on to the outer one (set-titles), after
+    ;; whatever it forwarded before, so the outer tmux reading the title means both have read everything
+    (when (plist-get sess :nested)
+      (drgnx-tty-session-inner-tmux sess "set" "-g" "set-titles" "on")
+      (drgnx-tty-session-inner-tmux sess "set" "-g" "set-titles-string" "#{pane_title}"))
+    (drgnx-tty-session-eval sess `(progn (send-string-to-terminal ,(format "\e]2;%s\a" title)) t))
+    (drgnx-test-wait (lambda () (string-search title (drgnx-tty-session--tmux-ok
+                                                      sess "display" "-p" "-t" (plist-get sess :target) "#{pane_title}")))
+                     :secs 20 :what "tmux has read the terminal output up to the barrier")))
+
 (defun drgnx-tty-session-pane-flags (sess)
   "The mouse and key modes SESS's application asked of its pane: (:mouse-sgr N :mouse-any N :key-mode S)."
   (let ((out (string-trim (drgnx-tty-session--tmux-ok sess "display" "-p" "-t" (plist-get sess :target)

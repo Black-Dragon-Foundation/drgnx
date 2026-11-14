@@ -11,6 +11,7 @@ drgnx-bin 100
 drgnx-bootstrap 100
 drgnx-check 100
 drgnx-chrome 100
+drgnx-explorer 100
 drgnx-file 100
 drgnx-history 100
 drgnx-lang 100
@@ -24,6 +25,7 @@ drgnx-remote 100
 drgnx-run-ert 100
 drgnx-sandbox 100
 drgnx-search 100
+drgnx-settings 100
 drgnx-shell 100
 drgnx-state 100
 drgnx-statusbar 100

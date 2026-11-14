@@ -169,7 +169,7 @@ does not require to happen."
 (drgnx-platform-test--deftest drgnx-platform/detection-is-cached-and-makes-no-call ()
                               (drgnx-platform-test--with-fake-wm ()
                                 (drgnx-platform-test--with-frame 'pgtk '("SWAYSOCK=/s" "WAYLAND_DISPLAY=w")
-                                  (let ((n 0))
+                                  (let ((n 0) (before (process-list)))
                                     (advice-add 'drgnx-platform-detect :before (lambda (&rest _) (cl-incf n)) '((name . platform-test-count)))
                                     (unwind-protect
                                         (progn (should (eq 'sway (drgnx-platform-wm frame)))
@@ -177,7 +177,8 @@ does not require to happen."
                                                (should (= n 1))
                                                (should (eq 'sway (frame-parameter frame 'drgnx-platform-wm))))
                                       (advice-remove 'drgnx-platform-detect 'platform-test-count))
-                                    (drgnx-test-pause 0.1 "no call may come")
+                                    ;; any tool a call started has ended (its sentinel ran) before "no call came" is said
+                                    (drgnx-test-wait-ended (cl-set-difference (process-list) before) :what "the processes of the detection")
                                     (should-not (drgnx-platform-test--log-lines))))))
 
 (drgnx-platform-test--deftest drgnx-platform/adapters-are-registered-in-order-and-extended-by-name ()
@@ -379,7 +380,7 @@ does not require to happen."
                                   ;; safe: the cut deletes the process before it calls back
                                   (should-not (process-live-p proc))
                                   (should (drgnx-platform-test--await (lambda () (not (file-exists-p (format "/proc/%d" pid)))) 1))
-                                  (drgnx-test-pause 0.3 "a line arriving later may call nothing")
+                                  ;; the process is gone from /proc and deleted: no line can arrive later (asserted above)
                                   (should (= 1 (length calls))))))
 
 (drgnx-platform-test--deftest drgnx-platform/a-missing-tool-calls-back-an-error-never-signals ()
@@ -395,12 +396,13 @@ does not require to happen."
 
 (drgnx-platform-test--deftest drgnx-platform/an-error-in-a-callback-is-a-message ()
                               (drgnx-platform-test--with-fake-wm ()
-                                (let ((msgs nil) (n 0))
+                                (let ((msgs nil) (n 0) (before (process-list)))
                                   (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) msgs)))
                                             ((symbol-function 'drgnx-notify) (lambda (_s _v text &rest _) (push text msgs) nil)))   ; a notice, Task 20
                                     (drgnx-platform-call '("swaymsg") :callback (lambda (_s _o) (cl-incf n) (error "boom")))
                                     (should (drgnx-platform-test--await (lambda () msgs)))
-                                    (drgnx-test-pause 0.1 "the callback may not be called twice"))
+                                    ;; the tool's process has ended (its sentinel ran): the callback cannot be called again
+                                    (drgnx-test-wait-ended (cl-set-difference (process-list) before) :what "the tool's process"))
                                   (should (= n 1))
                                   (should (string-match-p "boom" (car msgs))))))
 

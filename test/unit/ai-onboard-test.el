@@ -769,7 +769,7 @@ while a step waits; until each end comes no virtual time passes."
             ;; a job runs it already: not a second one
             (setq drgnx-ai--ensure-time nil)
             (drgnx-ai-ensure-local)
-            (drgnx-test-pause 1.5 "a second one may not come")
+            (drgnx-test-hub-advance 1500)   ; the hub's clock moves 1.5 s: nothing may start meanwhile
             (setq serving (length (drgnx-ai-onboard-test--serving serve)))
             ;; it answers: nothing started
             (dolist (j (drgnx-exec-list)) (drgnx-exec-stop (plist-get j :id)))
@@ -778,7 +778,7 @@ while a step waits; until each end comes no virtual time passes."
               (unwind-protect
                   (progn (setq drgnx-ai--ensure-time nil)
                          (drgnx-ai-ensure-local)
-                         (drgnx-test-pause 1.5 "nothing may start")
+                         (drgnx-test-hub-advance 1500)   ; the hub's clock moves 1.5 s: nothing may start meanwhile
                          (setq later (drgnx-ai-onboard-test--serving serve)))
                 (delete-process mock))))
           (drgnx-ai-onboard-test--stop-jobs)
@@ -807,12 +807,12 @@ while a step waits; until each end comes no virtual time passes."
             (dolist (j (drgnx-exec-list)) (drgnx-exec-stop (plist-get j :id)))
             (setq stopped (drgnx-ai-onboard-test--settle (lambda () (null (drgnx-ai-onboard-test--serving serve)))))
             (funcall ask)                                       ; again within the minute: left alone
-            (drgnx-test-pause 1.5 "nothing may start")
+            (drgnx-test-hub-advance 1500)   ; the hub's clock moves 1.5 s: nothing may start meanwhile
             (setq again (drgnx-ai-onboard-test--serving serve))
             ;; another provider refusing never starts it
             (setq drgnx-ai--ensure-time nil)
             (drgnx-ai--refused 'lmstudio)
-            (drgnx-test-pause 1.5 "nothing may start")
+            (drgnx-test-hub-advance 1500)   ; the hub's clock moves 1.5 s: nothing may start meanwhile
             (setq other (drgnx-ai-onboard-test--serving serve)))
           (drgnx-ai-onboard-test--stop-jobs)
           (drgnx-test-deliver-all)

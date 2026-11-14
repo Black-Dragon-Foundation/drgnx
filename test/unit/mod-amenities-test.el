@@ -85,8 +85,12 @@
                                    (with-current-buffer (find-file-noselect file)
                                      (python-mode)
                                      (goto-char (point-max)) (insert "y  =  2\n")
-                                     (save-buffer)
-                                     (drgnx-test-pause 2 "no formatter may rewrite the saved file")
+                                     (let ((before (process-list)))
+                                       (save-buffer)
+                                       ;; no formatter is on exec-path: apheleia starts none (no new process) and what it
+                                       ;; scheduled has run once no timer is due
+                                       (drgnx-test-wait (lambda () (not (drgnx-test-wait--due-p))) :what "the timers due after the save have run")
+                                       (should-not (cl-set-difference (process-list) before)))
                                      (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "x  =  1\ny  =  2\n"))
                                      (set-buffer-modified-p nil) (kill-buffer))))
       (delete-file file))))

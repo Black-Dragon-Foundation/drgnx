@@ -320,7 +320,7 @@ Under X the window manager (or the pointer) gives Emacs the real event."
               (let ((r (drgnx-wm-move--move sess 2)))
                 (should (eq :error (car-safe r)))
                 (should (string-match-p "its own key" (cadr r))))
-              (drgnx-test-pause 1 "the window may not move")
+              ;; the move was refused (the error above): no request was sent, so none can move the window
               (should (equal (drgnx-wm-move--eval sess where) before))))
         (drgnx-ui-stop (plist-get sess :name))))))
 
