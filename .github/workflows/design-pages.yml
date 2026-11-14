@@ -1,0 +1,78 @@
+# The documentation book: all of docs/ (guide, reference, develop and the design system) built with mdBook and published
+# to GitHub Pages. Every run checks that the design system's generated pages are current and builds the book, so a
+# branch or a pull request shows breakage; only a run on main deploys. mdBook is pinned by version and checksum.
+# docs/develop/design-system.md
+name: Documentation book
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "harness/drgnx-design.el"
+      - "themes/**"
+      - "core/drgnx-type-faces.el"
+      - "modules/ui/drgnx-look-density.el"
+      - "etc/icons/**"
+      - ".github/workflows/design-pages.yml"
+  pull_request:
+    paths:
+      - "docs/**"
+      - "harness/drgnx-design.el"
+      - "themes/**"
+      - "core/drgnx-type-faces.el"
+      - "modules/ui/drgnx-look-density.el"
+      - "etc/icons/**"
+      - ".github/workflows/design-pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: design-pages-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MDBOOK_VERSION: "0.5.4"
+  MDBOOK_SHA256: "5222beabd3e37dc5be0d18ff99b79058469354db5c220153a1b92db5ba12be89"   # mdbook-v0.5.4-x86_64-unknown-linux-musl.tar.gz
+
+jobs:
+  build:
+    name: Build the book
+    runs-on: ubuntu-24.04
+    container: fedora:45          # Emacs 31.1, the baseline
+    steps:
+      - name: Emacs and git
+        run: dnf -y -q install emacs-nox git tar
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: The design system's generated pages are current
+        env:
+          DRGNX_EMACS: emacs
+        run: bin/drgnx design --check
+      - name: mdBook
+        run: |
+          curl -fsSL -o mdbook.tar.gz "https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          echo "${MDBOOK_SHA256}  mdbook.tar.gz" | sha256sum -c -
+          tar -xzf mdbook.tar.gz
+          ./mdbook --version
+      - name: Build the book
+        run: ./mdbook build docs -d "$RUNNER_TEMP/book"
+      - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
+        with:
+          path: ${{ runner.temp }}/book
+
+  deploy:
+    name: Publish to GitHub Pages
+    needs: build
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4

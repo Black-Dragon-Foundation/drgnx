@@ -1763,11 +1763,11 @@ On macOS FILE is the launch agent and its ProgramArguments take the ExecStart= l
         (_ (list :status 'foreign :file file :line (if macos "(no ProgramArguments)" "(no ExecStart= line)")))))))
 
 ;; Nidhogg's native shell names its windows `nidhogg': a desktop entry that does not claim that name leaves the app
-;; switcher with the bare name and no icon.  Nidhogg installs the logo under its own prefix as `emacs', where the
-;; desktop does not look (it finds the system's Emacs icon), so the entry's icon is a copy named `drgnx'.
+;; switcher with the bare name and no icon.  The desktop looks for the entry's icon in the hicolor theme, so drgnx's own
+;; app icon (etc/images/icon/drgnx-N.png) is copied there as `drgnx' at every size.
 
-(defconst drgnx-pkg-desktop-icon-sizes '(16 24 32 48 64 128 256 512)
-  "The sizes of Nidhogg's hicolor icons.")
+(defconst drgnx-pkg-desktop-icon-sizes '(16 24 32 48 64 128 256 512 1024)
+  "The sizes of drgnx's app icon, in the hicolor theme's folder names.")
 
 (defun drgnx-pkg-desktop-file ()
   "The user's desktop entry: $XDG_DATA_HOME/applications/drgnx.desktop, else ~/.local/share/applications/."
@@ -1776,14 +1776,15 @@ On macOS FILE is the launch agent and its ProgramArguments take the ExecStart= l
 
 (defun drgnx-pkg-desktop-refresh (&optional file icons from)
   "Give the desktop entry FILE (default `drgnx-pkg-desktop-file') drgnx's icon and the name of Nidhogg's windows.
-Returns `none' (no file: nothing is installed), `current' or `rewritten'.  The hicolor icons under FROM (default the
-running Emacs's) are copied into ICONS (default the user's) as `drgnx'.  Of FILE, only an `Icon=emacs' line changes,
-when there is an icon to name, and a `StartupWMClass=' line is added when it has none.  Never asks."
+Returns `none' (no file: nothing is installed), `current' or `rewritten'.  The app icons in FROM (default drgnx's
+`etc/images/icon', files drgnx-N.png) are copied into ICONS (default the user's hicolor theme) as `drgnx'.
+Of FILE, only an `Icon=emacs' line changes, when there is an icon to name,
+and a `StartupWMClass=' line is added when it has none.  Never asks."
   (let* ((case-fold-search nil)
          (default-directory "/")
          (file (or file (drgnx-pkg-desktop-file)))
          (icons (or icons (expand-file-name "../icons/hicolor/" (file-name-directory file))))
-         (from (or from (expand-file-name "../../../icons/hicolor/" data-directory)))
+         (from (or from (expand-file-name "etc/images/icon/" drgnx-dir)))
          (text (drgnx-file-read-bounded file))
          (installed nil)
          (copied nil))
@@ -1791,7 +1792,7 @@ when there is an icon to name, and a `StartupWMClass=' line is added when it has
         'none
       (dolist (n drgnx-pkg-desktop-icon-sizes)
         (let* ((dir (format "%dx%d/apps/" n n))
-               (source (expand-file-name (concat dir "emacs.png") from))
+               (source (expand-file-name (format "drgnx-%d.png" n) from))
                (target (expand-file-name (concat dir "drgnx.png") icons)))
           (when (file-newer-than-file-p source target)
             (make-directory (file-name-directory target) t)

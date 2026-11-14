@@ -496,6 +496,8 @@ brings it back whenever you want it. The page is a tab only while it is shown, l
 
 ## Faces
 
+The colours these faces take, in each variant, and the faces each colour token goes to, are generated in the design system ([colour tokens](../design/tokens.md)); how each piece of chrome is built is under [components](../design/components/index.md); the whole reference starts at the [design system](../design/index.md).
+
 drgnx draws with the theme's faces and none of its own colours: the dividers inherit `shadow`, so a theme that
 styles `window-divider` itself keeps its choice, and every colour you see comes from the theme you picked
 (Preferences: Color Theme). The quick help card is `drgnx-quickhelp` (inherits `tooltip`) with the symbol's name in
