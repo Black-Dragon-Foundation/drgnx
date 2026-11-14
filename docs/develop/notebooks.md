@@ -109,3 +109,7 @@ for its views.
   `{entries: [{seq, type, text}], next, lost}` for the entries after `since` (a number from a former answer, or from the
   `notebook-log` event); `lost` counts the entries after `since` the hub no longer holds. Faces: `shadow`, `drgnx-status-fail` for an
   `error`.
+
+**Bounds of the views** (design bounds, none a security limit; what a kernel sends is held under the output limits above): the
+outline lists at most 2000 cells; a notebook has at most 16 full-output views, each built 1000 lines at a time; the kernel log holds
+the last 500 entries, each cut at 4096 characters, and its view shows at most 8 lines of an entry, each cut at 400 characters.
