@@ -491,25 +491,24 @@ Returns (EXIT . OUTPUT), the output both streams' or, with STDOUT-ONLY, stdout's
     ;; the escape-host's sandbox lane and the macos fork row both run them
     (should (>= checked 2))))
 
-;; The live notebook rows (notebook::kernel::tests_live) start a real ipykernel and read its python from
-;; DRGNX_NB_KERNEL_PYTHON; without it they fail by design. The escape suite's sandbox lane runs every ignored row of the
-;; crate on the Linux runners: it installs the hash-pinned kernel first (.github/ci/notebook-kernel.sh). The debug-live job
-;; names the rows and has the adapter image's venv; the image sets the same variable.
-(ert-deftest drgnx-ci/the-live-notebook-rows-have-their-ipykernel-where-they-run ()
+;; The live notebook rows (notebook::kernel::tests_live) start a real ipykernel, hash-pinned for the adapter image's Python 3.15,
+;; and read its python from DRGNX_NB_KERNEL_PYTHON; without it they fail by design. A runner's Python is not 3.15: the escape
+;; suite's sandbox lane (which runs every ignored row of the crate) skips them, and the debug-live job runs them in the image,
+;; whose script makes the venv from python3.15 and whose ENV names it.
+(ert-deftest drgnx-ci/the-live-notebook-rows-run-in-the-adapter-image-and-nowhere-else ()
   (let ((rt (drgnx-ci-test--yml "runtime.yml"))
-        (image (drgnx-ci-test--file "test/container/Containerfile.debug")))
-    (skip-unless (and rt image))
-    (should (file-exists-p (expand-file-name ".github/ci/notebook-kernel.sh" drgnx-ci-test--root)))
+        (image (drgnx-ci-test--file "test/container/Containerfile.debug"))
+        (script (drgnx-ci-test--file "test/container/debug-adapters-image.sh")))
+    (skip-unless (and rt image script))
     (should (file-exists-p (expand-file-name "test/container/ipykernel-requirements.txt" drgnx-ci-test--root)))
-    (let ((install (string-search "notebook-kernel.sh \"$RUNNER_TEMP/nb-kernel\" >> \"$GITHUB_ENV\"" rt))
-          (lane (string-search "- name: agent core, sandbox lane (--ignored)" rt)))
-      (should install)
-      (should lane)
-      (should (< install lane)))
-    (should (string-match-p "notebook::kernel::tests_live" rt))
-    (should (string-match-p "DRGNX_NB_KERNEL_PYTHON: /opt/nb-kernel/bin/python3" rt))
+    (should (string-search "--skip notebook::kernel::tests_live" (drgnx-ci-test--job rt "escape-host")))
+    (let ((live (drgnx-ci-test--job rt "debug-live")))
+      (should (string-match-p "-- --ignored .*notebook::kernel::tests_live" live))
+      (should (string-search "DRGNX_NB_KERNEL_PYTHON: /opt/nb-kernel/bin/python3" live))
+      (should (string-search "test/container/debug-adapters-image.sh" live)))
     (should (string-match-p "ENV DRGNX_NB_KERNEL_PYTHON=/opt/nb-kernel/bin/python3" image))
-    (should (string-match-p "COPY debug-adapters-image.sh ipykernel-requirements.txt" image))))
+    (should (string-match-p "COPY debug-adapters-image.sh ipykernel-requirements.txt" image))
+    (should (string-search "python3.15 -m venv /opt/nb-kernel" script))))
 
 (ert-deftest drgnx-ci/the-offline-build-row-runs-where-a-network-namespace-can-be-made ()
   ;; ghostty-vt-sys's builds_offline needs unshare(2): the Fedora job's Docker container refuses it, so its test says so

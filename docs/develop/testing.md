@@ -72,12 +72,13 @@ wrapper's words come before every group's command.
 
 `notebook::kernel::tests_live` (ignored rows) start a real ipykernel, over ipc and over loopback tcp: ready, `print`, an error,
 `input()` through the stdin channel, interrupt, orderly shutdown. They read the kernel's python from `DRGNX_NB_KERNEL_PYTHON` and fail,
-saying how to install it, when it is missing. The kernel is the hash-pinned set in `test/container/ipykernel-requirements.txt`
-(every wheel checked, `--no-deps`, Linux): the adapter image has it at `/opt/nb-kernel` (its `ENV` sets the variable), and on a
-runner `.github/ci/notebook-kernel.sh DIR` makes the same venv and prints the variable. Run them in the image with
+saying where the kernel is, when it is missing. The kernel is the hash-pinned set in `test/container/ipykernel-requirements.txt`
+(every wheel checked, `--no-deps`, compiled for Python 3.15): the adapter image has it at `/opt/nb-kernel`, made with `python3.15`
+(its `ENV` sets the variable), and the rows run there only (`ci.md`, "The debug adapters"). Run them in the image with
 `cargo test -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks --lib -- --ignored --test-threads 1 notebook::kernel::tests_live`.
-A real ipykernel sometimes aborts (SIGABRT) in its interpreter teardown after an orderly shutdown, so the rows assert that the kernel
-ended by itself within the grace (not killed), not that its exit code is 0. The unit tests of the kernel module run under nextest (a
+**ipykernel aborts in its own teardown (SIGABRT) about one run in five**, after an orderly shutdown and after doing everything asked
+of it, so the rows assert that the kernel ended by itself within the grace (not killed), not that its exit code is 0; they print the
+exit status whenever it is not 0 (`--nocapture`, or the failing run's output), so a pattern shows. The unit tests of the kernel module run under nextest (a
 process each: their virtual-clock rows share process-wide state under plain `cargo test`).
 
 ## The result cache

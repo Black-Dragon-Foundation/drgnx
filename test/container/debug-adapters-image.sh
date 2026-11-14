@@ -14,8 +14,11 @@ printf 'debugpy==1.8.22 --hash=sha256:a9e9d3550e15ca479c59333e90845029190531f0ca
 
 # ipykernel for the live notebook rows (drgnx-ratatoskr's notebook::kernel::tests_live): a venv at /opt/nb-kernel from the hash-pinned
 # set next to this script (every file checked, the set is complete: --no-deps), the python the rows read as DRGNX_NB_KERNEL_PYTHON.
-# .github/ci/notebook-kernel.sh makes the same venv on a runner. The import check shows a gap in the set here, not in a test.
-python3 -m venv /opt/nb-kernel \
+# The set was compiled for Python 3.15 (Fedora 45's python3): the venv is made from python3.15 itself, and the build stops
+# if that interpreter is not there, so the install never meets another Python. This image is the only place the rows run
+# (docs/develop/ci.md, "The debug adapters"). The import check shows a gap in the set here, not in a test.
+command -v python3.15 > /dev/null || { echo "python3.15 is missing: ipykernel-requirements.txt was compiled for Python 3.15; recompile it for the image's python and change this pin" >&2; exit 1; }
+python3.15 -m venv /opt/nb-kernel \
     && /opt/nb-kernel/bin/pip install --no-cache-dir --require-hashes --no-deps -r "$(dirname "$0")/ipykernel-requirements.txt" \
     && /opt/nb-kernel/bin/python3 -c 'import ipykernel, ipykernel_launcher; print("ipykernel", ipykernel.__version__)'
 

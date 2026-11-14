@@ -625,12 +625,14 @@ the escape legs' sandbox lane. `drgnx-ci/the-debug-rows-the-escape-lane-skips-ru
 skipped debug module goes unrun.
 
 The live notebook rows (`notebook::kernel::tests_live`, [testing.md](testing.md), "Live notebook kernels") need a real ipykernel.
-The escape legs' sandbox lane runs every ignored row of the crate, so a Linux-only step before it,
-`bash .github/ci/notebook-kernel.sh "$RUNNER_TEMP/nb-kernel" >> "$GITHUB_ENV"`, installs the hash-pinned set
-(`test/container/ipykernel-requirements.txt`) and names its python as `DRGNX_NB_KERNEL_PYTHON`; the `debug-live` job runs the rows by
-name against the image's `/opt/nb-kernel` (`debug-adapters-image.sh` makes it from the same file). The ci-workflows test
-`the-live-notebook-rows-have-their-ipykernel-where-they-run` holds the step order, the variable and the image's `ENV`. The set
-was compiled on Linux for the image's Python; a runner whose Python lacks a wheel the set names fails at the install step's import check, not in a row.
+The kernel is installed in one place, the adapter image (`drgnx-debug-adapters:f45`, `Containerfile.debug`): the `debug-live` job
+runs `test/container/debug-adapters-image.sh`, which makes `/opt/nb-kernel` from the hash-pinned set
+`test/container/ipykernel-requirements.txt` with `python3.15` (the set was compiled for Python 3.15, Fedora 45's `python3`; the
+script stops if that interpreter is not there, so the install never meets another Python). The job runs the rows by name with
+`DRGNX_NB_KERNEL_PYTHON=/opt/nb-kernel/bin/python3`, and the image's `ENV` sets the same. The escape legs' sandbox lane, which runs
+every other ignored row of the crate on runners whose Python is not 3.15, skips `notebook::kernel::tests_live`. The ci-workflows test
+`the-live-notebook-rows-run-in-the-adapter-image-and-nowhere-else` holds the skip, the job's line and variable, the image's `ENV` and
+the `python3.15` venv.
 
 ## The reduced tier's launch rows in a VM
 

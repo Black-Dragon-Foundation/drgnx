@@ -517,12 +517,6 @@ jobs:
       - name: debug adapters (debugpy and js-debug at the hub's pins)
         if: ${{ !cancelled() }}
         run: bash .github/ci/debug-adapters.sh "$RUNNER_TEMP/debug-adapters" >> "$GITHUB_ENV"
-      # The live notebook rows (notebook::kernel::tests_live) start a real ipykernel: the hash-pinned set of
-      # test/container/ipykernel-requirements.txt in a venv, its python named for them. Linux runners only (the set was
-      # compiled for Linux), and not skipped by an earlier failure, like the adapters above.
-      - name: ipykernel for the live notebook rows (hash-pinned)
-        if: ${{ !cancelled() }}
-        run: bash .github/ci/notebook-kernel.sh "$RUNNER_TEMP/nb-kernel" >> "$GITHUB_ENV"
       - name: build the agent core's tests (test hooks)
         id: core-build
         if: ${{ !cancelled() }}
@@ -553,6 +547,9 @@ jobs:
           # network namespace of its own): tests_live_adapters and tests_blocked_live. tests_fork_live, the Python and JS
           # forks in the sandbox, runs here against the adapters installed above
           skips="$skips --skip debug::tests_live_adapters --skip debug::tests_blocked_live"
+          # the live notebook rows (a real ipykernel, hash-pinned for the adapter image's Python 3.15, which a runner's
+          # Python is not) run in the `debug-live` job as well
+          skips="$skips --skip notebook::kernel::tests_live"
           cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks -- --ignored --test-threads 1 $skips
       # The agent browser's rows where they can run: a Fedora 45 VM on the x64 runners (Linux 7.1 or later, Landlock ABI 9
       # or later, as the Fedora hosts drgnx supports have), booted under QEMU with KVM by .github/ci/browser-vm.sh, with
