@@ -733,6 +733,7 @@ impl Front {
             Params::ViewWindow(p) => crate::view::window(self, &caller, p)
                 .await
                 .map(|b| json!(b)),
+            Params::BuffersSet(p) => crate::view::buffers::set(self, &caller, p).map(|b| json!(b)),
             Params::AgentsPanelLook(p) => {
                 crate::view::panel::look(self, &caller, p).map(|b| json!(b))
             }

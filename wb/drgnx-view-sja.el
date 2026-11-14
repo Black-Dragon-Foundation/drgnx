@@ -242,10 +242,13 @@ asked again the next time (it may be defined later)."
   "POS turned into Sjá's (ROW . OFFSET) of H, or POS itself when it is outside BEG..END or past the rows."
   (or (and (<= beg pos) (< pos end) (nidhogg-view-rows h 'place (- pos beg))) pos))
 
-(defun drgnx-view-sja--pos (h beg place)
-  "PLACE (from `drgnx-view-sja--place') back to a position: its row's start plus its offset, or the position."
+(defun drgnx-view-sja--pos (h beg place &optional marker)
+  "PLACE (from `drgnx-view-sja--place') back to a position: its row's start plus its offset, or the position.  A row
+that went: MARKER's position (a marker put where PLACE was before the draw, which the edits moved to the row now in
+its place), else BEG."
   (if (consp place)
-      (let ((p (nidhogg-view-rows h 'pos (cdr place) (car place)))) (if p (+ beg p) beg))
+      (let ((p (nidhogg-view-rows h 'pos (cdr place) (car place))))
+        (cond (p (+ beg p)) (marker (marker-position marker)) (t beg)))
     (min place (point-max))))
 
 (defun drgnx-view-sja-draw (buffer)
@@ -260,7 +263,8 @@ asked again the next time (it may be defined later)."
           (widen)
           (let* ((wins (mapcar (lambda (w) (list w (drgnx-view-sja--place h beg end (window-start w))
                                                  (drgnx-view-sja--place h beg end (window-point w))
-                                                 (= (window-point w) end)))
+                                                 (= (window-point w) end)
+                                                 (copy-marker (window-start w)) (copy-marker (window-point w))))
                                (get-buffer-window-list buffer nil t)))
                  (pt (drgnx-view-sja--place h beg end (point)))
                  (pt-end (= (point) end))
@@ -285,10 +289,12 @@ asked again the next time (it may be defined later)."
               (cl-incf (drgnx-view-patch-draws s))
               (dolist (w wins)
                 (when (window-live-p (nth 0 w))
-                  (set-window-start (nth 0 w) (drgnx-view-sja--pos h beg (nth 1 w)) t)
-                  (set-window-point (nth 0 w) (if (nth 3 w) end (drgnx-view-sja--pos h beg (nth 2 w))))))
+                  ;; a window whose row went falls to the row now in its place, not to the top
+                  (set-window-start (nth 0 w) (drgnx-view-sja--pos h beg (nth 1 w) (nth 4 w)) t)
+                  (set-window-point (nth 0 w) (if (nth 3 w) end (drgnx-view-sja--pos h beg (nth 2 w) (nth 5 w))))))
               (goto-char (if pt-end end (drgnx-view-sja--pos h beg pt)))
-              (when-let* ((o (drgnx-view-patch-stale-overlay s))) (move-overlay o (point-min) (point-max))))))
+              (when-let* ((o (drgnx-view-patch-stale-overlay s))) (move-overlay o (point-min) (point-max))))
+            (dolist (w wins) (set-marker (nth 4 w) nil) (set-marker (nth 5 w) nil))))
         (when lo (run-hook-with-args 'drgnx-view-sja-drawn-functions lo hi))
         (when drawn
           ;; the model's classes on what was drawn, then the view's own marks over the rows drawn (KEYS)

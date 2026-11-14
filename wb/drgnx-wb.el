@@ -400,6 +400,20 @@ and its own back after."
         (overlay-put o 'after-string s))))))
 
 
+(defun drgnx-wb-shown-spans ()
+  "Where the current buffer's rows get tails (the Explorer's and the Buffers panel's hub rows): for each window showing
+it, (FROM . TO) from a page above its start to two pages below it; t when no window shows it (every row)."
+  (or (mapcar (lambda (w) (drgnx-wb-span (window-start w) (window-body-height w)))
+              (get-buffer-window-list nil nil t))
+      t))
+
+(defun drgnx-wb-span (start page)
+  "(FROM . TO): a PAGE of lines above START to two below it."
+  (save-excursion
+    (goto-char start)
+    (cons (progn (forward-line (- page)) (point))
+          (progn (goto-char start) (forward-line (* 2 page)) (point)))))
+
 (defun drgnx-wb--focused-p ()
   "Non-nil when the current buffer's window is the selected window."
   (let ((window (get-buffer-window (current-buffer)))) (and window (eq window (selected-window)))))

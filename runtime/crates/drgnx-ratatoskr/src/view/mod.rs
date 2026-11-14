@@ -17,6 +17,7 @@
 //!
 //! [`Store`] is the pure core (no I/O, no clock), tested in every order of envs, rows, resyncs and restarts.
 
+pub mod buffers;
 pub mod debug;
 pub mod explorer;
 pub mod extensions;
@@ -562,6 +563,8 @@ pub struct Views {
     explorers: explorer::Explorers,
     /// The Extensions lists (`extensions/list`).
     lists: extensions::Lists,
+    /// The Buffers panels' open buffers (`buffers/set`).
+    buffers: buffers::Buffers,
     /// The Run and Debug views (`debug/view`).
     pub debugs: debug::DebugViews,
     /// The agent panels' rows (`agent-panel/SESSION`).
@@ -584,6 +587,7 @@ impl Default for Views {
             files: files::Files::default(),
             explorers: explorer::Explorers::default(),
             lists: extensions::Lists::default(),
+            buffers: buffers::Buffers::default(),
             debugs: debug::DebugViews::default(),
             panels: Arc::default(),
             front: OnceLock::new(),
@@ -617,6 +621,7 @@ impl Views {
             || self.files_build(f, key)
             || self.explorer_build(f, key)
             || self.extensions_build(f, key)
+            || self.buffers_build(f, key)
             || self.debugs.env_build(f, key)
             || f.core.presence.here_build(f, key.0, &key.1)
         {
@@ -900,6 +905,7 @@ impl Views {
         self.files.gone(conn);
         self.explorers.gone(conn);
         self.lists.gone(conn);
+        self.buffers.gone(conn);
         self.debugs.gone(conn);
         self.panels.gone(conn, None);
         lock(&self.sja).retain(|(c, _, _)| *c != conn);
@@ -1018,6 +1024,7 @@ pub fn close(f: &Front, c: &Caller, p: ViewClose) -> Result<bool, Error> {
     views.files.stop(c.conn_id, &p.view);
     views.explorers.stop(c.conn_id, &p.view);
     views.lists.stop(c.conn_id, &p.view);
+    views.buffers.stop(c.conn_id, &p.view);
     views.debugs.stop(c.conn_id, &p.view);
     views.panels.gone(c.conn_id, Some(&p.view));
     lock(&views.sja).retain(|(c2, v, _)| !(*c2 == c.conn_id && *v == p.view));

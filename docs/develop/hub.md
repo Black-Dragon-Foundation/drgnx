@@ -1392,6 +1392,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `browser/check` | user | `{}` | `BrowserCheckResult` | no |
 | `budget/get` | user | `{scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}}` | `{limits?: [Limit], remaining?: [Limit], scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}, spent?: [Limit]}` | no |
 | `budget/set` | user | `{limits?: [{amount: number, unit: "tokens" \| "count" \| "usd" \| "usd-est" \| "limit-share"}], scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}}` | `{limits?: [Limit], remaining?: [Limit], scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}, spent?: [Limit]}` | yes |
+| `buffers/set` | user | `{ops: [{op: "reset"} \| {file?: string, id: string, modified?: boolean, name: string, op: "put"} \| {id: string, modified: boolean, op: "modified"} \| {id: string, op: "remove"} \| {ids?: [string], op: "scope"} \| {op: "filter", text?: string}], view: string}` | `boolean` | no |
 | `cards/settle` | user | `{card: natnum, choice: Text}` | `{settled: boolean}` | yes |
 | `config/changed` | user | `{}` | `boolean` | no |
 | `config/settings` | user | `{overrides: [{name: string, source: string, value: SettingValue}], project?: string}` | `{applied: natnum}` | no |
@@ -2861,6 +2862,28 @@ The Explorer's folders, listed by the hub as a model and rows (`runtime/crates/d
   list) on the name of each entry an agent is changing, or holding such a file inside; a change draws the listings
   again. The editor makes the badge (`drgnx-explorer-badge-functions`: the marks and colours of an ordinal are the
   display's) and draws it after the name.
+
+### The Buffers panel's rows (`buffers/set`)
+
+The Open list's rows, built by the hub from what the editor says is open (`runtime/crates/drgnx-ratatoskr/src/view/buffers.rs`;
+the editor's side is `wb/drgnx-buffers.el`).
+
+- `buffers/set {view, ops}` applies OPS in order to the (connection, view)'s open buffers and answers `true`; every class
+  of the view then gets the rows that changed (the first set a reset). An op is `{op: "reset"}` (none open: the editor
+  puts its whole set after it, at attach and after a reconnect), `{op: "put", id, name, file?, modified?}` (a new id goes
+  last in the open order, a known one keeps its place: a rename or a save never moves a row), `{op: "modified", id,
+  modified}`, `{op: "remove", id}`, `{op: "scope", ids}` (only those buffers on rows, in the open order; `null`: all)
+  and `{op: "filter", text}` (only names holding TEXT in any case; `null` or empty: all). At most 50,000 ops; ids are 1
+  to 64 bytes (the editor's `bN`, N counting up as buffers are first seen).
+- **When it is sent.** From the change bus's edges only (`buffer-set-changed`, `modified-changed`, a window or tab
+  change for the scope), coalesced into one call when the command loop is next idle; an unsaved flag goes as a
+  `modified` op on its flips, never per keystroke. Nothing goes while a mouse button pressed in the panel is held.
+- **A row** is two characters of room (on a graphical display a space, then the file's icon, chosen by the file's name
+  or else the buffer's, with 6 px either side, as the Explorer's top files), then the name with control characters as
+  `^X`. `drgnx-work-id` (the id) is over the row; over the name `drgnx-git-status` (the file's status in the
+  connection's repositories read by `git/letters`, an ignored or untracked folder's around it; an ignored name is dimmed
+  instead) and `drgnx-buffers-modified` while it has unsaved changes. A status read draws the connection's panels
+  again. The editor draws the right edge (the letter, ● or ×, the hover) for the rows drawn near what a window shows.
 
 ### The agent panel's rows
 

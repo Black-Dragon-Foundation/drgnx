@@ -10210,6 +10210,179 @@
       "classes": [
         "user"
       ],
+      "doc": "changes to the Buffers panel's open buffers of a hub-fed view (put, modified, remove, the window's scope, the filter), in order: the hub sends the view's rows that changed to every class of it",
+      "name": "buffers/set",
+      "params": {
+        "$defs": {
+          "BufferOp": {
+            "description": "One change of `buffers/set`.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "description": "No buffer is open (the editor puts its set again after it, in open order: a new hub, a reconnect).",
+                "properties": {
+                  "op": {
+                    "const": "reset",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "op"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Buffer ID (the editor's, at most 64 bytes) is open with NAME, visiting FILE (none: no file, such as a folder's\nlisting), MODIFIED when it has unsaved changes: a new id goes last in the open order, a known one keeps its place.",
+                "properties": {
+                  "file": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "modified": {
+                    "default": false,
+                    "type": "boolean"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "op": {
+                    "const": "put",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "op",
+                  "id",
+                  "name"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Buffer ID's unsaved flag flipped.",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "modified": {
+                    "type": "boolean"
+                  },
+                  "op": {
+                    "const": "modified",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "op",
+                  "id",
+                  "modified"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Buffer ID was closed.",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "op": {
+                    "const": "remove",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "op",
+                  "id"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Only the buffers IDS are on rows (those of the window the user works in), in the open order; none: every one.",
+                "properties": {
+                  "ids": {
+                    "default": null,
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "op": {
+                    "const": "scope",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "op"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Only the buffers whose names hold TEXT (any case) are on rows; none or empty: every one.",
+                "properties": {
+                  "op": {
+                    "const": "filter",
+                    "type": "string"
+                  },
+                  "text": {
+                    "default": null,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "op"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`buffers/set`: changes to the Buffers panel's open buffers for the hub-fed VIEW, in order; the hub sends VIEW's\nrows that changed to every class of it (docs/develop/hub.md, \"Rows\"). The editor sends one when the set of open\nbuffers, a name or an unsaved flag changed, or the window's scope or the filter did, never per keystroke.",
+        "properties": {
+          "ops": {
+            "items": {
+              "$ref": "#/$defs/BufferOp"
+            },
+            "type": "array"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "ops"
+        ],
+        "title": "BuffersSet",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "an open card settled with a choice, once (drgnx-coord-card-settle)",
       "name": "cards/settle",
       "params": {

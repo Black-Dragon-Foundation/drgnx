@@ -127,6 +127,12 @@ A hub that does not build stops the run with the reason before any session start
 
 The helpers of the hub-client tests (`test/fixtures/hub-client-fixture.el`) are a fixture so that loading them registers
 no test: a test file that loaded `hub-client-test.el` whole ran its 54 tests again in its own session.
+`test/fixtures/gated-hub-fixture.el` builds on them for a panel whose rows a real hub builds (the Buffers panel):
+`drgnx-test-with-gated-hub` runs its body on the manual clock with a gated hub this Emacs is connected to, and
+`drgnx-test-hub-settle` waits for a condition, moving the hub's clock and releasing what it wrote before each look. A
+GUI row gets a hub of its own from `test/fixtures/ui-hub-fixture.el` (`drgnx-ui-hub-start`, `drgnx-ui-hub-stop`).
+Batch Emacs never redisplays and a test's wait never idles, so such a test sends the panel's env itself
+(`drgnx-view-env-update`) once the panel is shown.
 
 ### Native trampolines
 

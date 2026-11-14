@@ -2265,7 +2265,8 @@ The draw (`drgnx-view-sja-draw`) asks Sjá for the edits that turn the region in
 - it confirms the batch with `drawn`. A batch never confirmed, or a region whose length is not Sjá's drawn state, is
   drawn whole next time;
 - the windows keep their place, turned into (ROW . OFFSET) with `place` and back with `pos`. A window whose point
-  was at the region's end follows the tail;
+  was at the region's end follows the tail. A window whose row went falls to the row now in its place (a marker put
+  there before the edits, released after), not to the top;
 - the text is read-only unless the buffer is.
 
 The buffer keeps its `drgnx-view-patch` state (the pairing, epoch, styles and their faces, images, stale shade and

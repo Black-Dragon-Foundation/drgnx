@@ -192,7 +192,8 @@ Save All (`C-k s` · palette — `C-x s` stays Emacs' asking save · `SPC f S`),
 hides —, a live name filter (`C-M-f` · `/` · `/`), middle-click closes a
 row, and so does a click on the `×` (or `●`) at its right edge. A row is the file's icon and its name, no folder (two
 files of one name are told apart by their buffer names). Git letters sit at the right edge. Save All and Close Saved
-are also on the island header's ⋯. The right-click menu has
+are also on the island header's ⋯. The hub builds the rows (Nidhogg draws them): until it is up the panel says it
+waits for it, and its commands work meanwhile. The right-click menu has
 Open, Close, Close Others, Save All, and for the row's buffer Save, Copy Path, Diff with File and Reveal in Explorer.
 The Explorer's right-click menu also has Reveal in Buffers, Open Folder in Dired and Open in Other Window.
 On a folder's top row it has **Remove Folder from Workspace** (also in the palette): the folder leaves the Explorer,
