@@ -378,7 +378,7 @@ fn conclusion_rows(
             if i == 0 {
                 put_icon(&mut b, env, &c.kind, images);
                 b.push(&format!(" {name} "), Some("drgnx-work-title"))
-                    .push(&format!(" {} ", c.n), Some("drgnx-work-step-number"))
+                    .push(&format!(" {} ", c.n), Some("drgnx-chip-solid"))
                     .push(&format!(" {}", c.text), Some("drgnx-work-title"));
                 if new {
                     // `new`, plain text at the card's right: a box of its own would break the ring
@@ -390,7 +390,7 @@ fn conclusion_rows(
                     &format!("   based on {based}{unmatched} · "),
                     Some("drgnx-text-muted"),
                 )
-                .push(" l ", Some("drgnx-keycap"))
+                .push(" l ", Some("drgnx-chip-quiet"))
                 .push(" light them · ↵ sources", Some("drgnx-text-muted"));
             }
             // the card runs to the tile's right edge: a stop, in the card's face

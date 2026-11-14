@@ -55,7 +55,7 @@
     (editor :left explorer :right nil :panel keep :editor one)
     (zen :left nil :right nil :panel nil :editor zen)
     (browser :left nil :right nil :panel nil :editor editor+browser)
-    (work :left nil :right work-detail :panel work-trail :editor work :px (:right (logical 340))))
+    (work :left nil :right work-detail :panel work-trail :editor work :px (:right (logical 340) :panel (logical 250))))
   "The built-in layouts, in the order Next Layout cycles them: NAME → (:left VIEW :right TAB :panel TAB
 :editor SHAPE).  An area's value nil hides it and `keep' leaves it as it was; SHAPE is a key of
 `drgnx-layouts-shapes'.  Your own layouts (layouts.eld) follow them.")

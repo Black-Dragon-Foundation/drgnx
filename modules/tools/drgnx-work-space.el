@@ -140,6 +140,10 @@ it (a notes repository with the code repositories inside it)."
 (defface drgnx-work-label '((t :inherit (drgnx-text-muted drgnx-ui-caption))) "A layer's label." :group 'drgnx-work-space)
 (defface drgnx-work-lens-title '((t :inherit (drgnx-ui-heading tab-line-tab-current)))
   "The Work space's tab on its lens bar." :group 'drgnx-work-space)
+(defface drgnx-work-lens-rail '((t :inherit drgnx-work-label)) "The lens switch's rail: the gap's colour behind its labels."
+  :group 'drgnx-work-space)
+(defface drgnx-work-lens-seg '((t :inherit drgnx-work-lens-rail)) "A lens label that is not shown, on the rail."
+  :group 'drgnx-work-space)
 (defface drgnx-work-lens-current '((t :inherit (bold drgnx-pill-on))) "The lens shown, on the lens bar: a raised pill."
   :group 'drgnx-work-space)
 (defface drgnx-work-lens-key '((t :inherit drgnx-keycap)) "A key's badge on the lens bar." :group 'drgnx-work-space)

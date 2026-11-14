@@ -461,8 +461,8 @@ fn a_finding_card_keeps_its_keys_and_a_filled_number() {
     let p = Palette::default();
     let rows = trail::trail_rows(&[step(1, 1000.0)], &[conclusion(1, 1, &[1])], &env(&p), Zone(0));
     let top = rows.iter().find(|r| r.key == "conc:1:0").expect("the card");
-    assert!(top.runs.iter().any(|r| r.2 == "drgnx-work-step-number"), "{top:?}");
+    assert!(top.runs.iter().any(|r| r.2 == "drgnx-chip-solid"), "{top:?}");
     let sub = rows.iter().find(|r| r.key == "conc:1:1").expect("its keys line");
     assert!(sub.text.contains("based on 1 step ·  l  light them · ↵ sources"), "{sub:?}");
-    assert!(sub.runs.iter().any(|r| r.2 == "drgnx-keycap"), "{sub:?}");
+    assert!(sub.runs.iter().any(|r| r.2 == "drgnx-chip-quiet"), "{sub:?}");
 }

@@ -134,6 +134,9 @@ above and below, the face's background between (Nidhogg's compositor).  Asked on
          (drgnx-work-who-4 :inherit drgnx-badge :foreground ,(c 'editor) :background ,(c 'a4))
          (drgnx-work-who-5 :inherit drgnx-badge :foreground ,(c 'editor) :background ,(c 'a5))
          (drgnx-work-who-6 :inherit drgnx-badge :foreground ,(c 'editor) :background ,(c 'a6))
+         ;; the lens switch's rail (look.css `.lens'): the gap's colour behind the labels
+         (drgnx-work-lens-rail :inherit drgnx-work-label :background ,(c 'gap))
+         (drgnx-work-lens-seg :inherit drgnx-work-lens-rail)
          (drgnx-chip-ok :foreground ,(c 'ok) :background ,(c 'ok-tint) ,@(and hc '(:box (:line-width (-1 . -1)))))
          (drgnx-chip-warn :foreground ,(c 'warn) :background ,(c 'warn-tint) ,@(and hc '(:box (:line-width (-1 . -1)))))
          (drgnx-tint-warn :background ,(c 'warn-tint) ,@(and hc `(:box (:line-width (-1 . -1) :color ,(c 'warn)))))

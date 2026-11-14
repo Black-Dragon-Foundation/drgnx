@@ -512,7 +512,10 @@ problems.  The shape and filler registries are restored afterwards."
     (should-not (plist-get def :left))
     ;; the Detail island is the mockup's 340 px, so the map has the width for four agents in a row
     (should (equal '(logical 340) (plist-get (plist-get def :px) :right)))
-    (should (eql (drgnx-px 340) (plist-get (plist-get (drgnx-layouts--target def nil) :right) :px)))))
+    (should (eql (drgnx-px 340) (plist-get (plist-get (drgnx-layouts--target def nil) :right) :px)))
+    ;; the trail tile is the mockup's 250 px tall, so the map keeps the rest and its rows fill it
+    (should (equal '(logical 250) (plist-get (plist-get def :px) :panel)))
+    (should (eql (drgnx-px 250) (plist-get (plist-get (drgnx-layouts--target def nil) :panel) :px)))))
 
 (ert-deftest drgnx-layouts/a-size-in-logical-pixels-is-scaled-to-the-frame ()
   "A built-in layout may give an area's size as `(logical N)': it is N logical pixels, scaled to the frame

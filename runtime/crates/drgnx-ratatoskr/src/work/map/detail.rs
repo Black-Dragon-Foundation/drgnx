@@ -357,14 +357,25 @@ const ROLE: &str = "text";
 /// TEXT wrapped by word into lines of at most ROOM px, none cut and no continuation glyph (the mockup's subtitle
 /// is two lines at the tile's width).
 fn wrap(text: &str, room: f32, m: &dyn Measure) -> Vec<String> {
+    // a number and its unit ("32 min") stay together
+    let mut words: Vec<String> = Vec::new();
+    for w in text.split(' ') {
+        match words.last_mut() {
+            Some(last) if w == "min" && last.chars().all(|c| c.is_ascii_digit()) => {
+                last.push(' ');
+                last.push_str(w);
+            }
+            _ => words.push(w.to_owned()),
+        }
+    }
     let mut lines: Vec<String> = Vec::new();
-    for word in text.split(' ') {
+    for word in &words {
         match lines.last_mut() {
             Some(last) if fit::width(m, ROLE, &format!("{last} {word}")) <= room - fit::SLACK => {
                 last.push(' ');
                 last.push_str(word);
             }
-            _ => lines.push(word.to_owned()),
+            _ => lines.push(word.clone()),
         }
     }
     lines
@@ -418,7 +429,11 @@ pub(crate) fn rows(lines: &[Line], scale: f32, width_px: u32, m: &dyn Measure) -
                         Some(&format!("drgnx-work-agent-{number}")),
                     );
                     let to = b.pos();
-                    b.face(from, to, "drgnx-badge");
+                    b.face(
+                        from,
+                        to,
+                        &format!("drgnx-work-who-{}", number.to_digit(10).unwrap_or(1).clamp(1, 6)),
+                    );
                     b.push(" ", None)
                         .push(parts.get(1).unwrap_or(&""), Some("drgnx-ui-heading"));
                     if let Some(chip) = parts.get(2).filter(|c| !c.is_empty()) {

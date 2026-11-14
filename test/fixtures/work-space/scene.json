@@ -24,15 +24,18 @@
     {"id": "a1", "name": "hub rows", "model": "Opus", "state": "running", "since": 8, "seq": 1, "task": "t1",
      "branch": "drgnx/rp-df-hub", "worktree": "wt/rp-df-hub", "base": "c-i6", "machine": "desktop", "slot": 3, "spend": "$1.20",
      "class": "test", "conclusion": "turn_core drops the started flag",
+     "reads": ["drgnx/runtime/crates/vegvisir/src/r1.rs", "drgnx/runtime/crates/vegvisir/src/r2.rs", "drgnx/runtime/crates/vegvisir/src/r3.rs", "drgnx/runtime/crates/vegvisir/src/r4.rs", "drgnx/runtime/crates/vegvisir/src/r5.rs", "drgnx/runtime/crates/vegvisir/src/r6.rs", "drgnx/runtime/crates/vegvisir/src/r7.rs", "drgnx/runtime/crates/vegvisir/src/r8.rs", "drgnx/runtime/crates/vegvisir/src/r9.rs", "drgnx/runtime/crates/vegvisir/src/r10.rs", "drgnx/runtime/crates/vegvisir/src/r11.rs", "drgnx/runtime/crates/vegvisir/src/r12.rs", "drgnx/runtime/crates/vegvisir/src/r13.rs", "drgnx/runtime/crates/vegvisir/src/r14.rs"],
      "files": {"drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs": [40, 3], "drgnx/runtime/crates/drgnx-ratatoskr/src/front.rs": [12, 1]}},
     {"id": "a2", "name": "fx-sess", "model": "Sonnet", "state": "review", "since": 26, "seq": 2, "task": "t2",
      "branch": "drgnx/rp-fx-sess", "worktree": "wt/rp-fx-sess", "base": "c-df-hub",
      "conclusion": "fixed in seq", "class": "edit",
      "files": {"drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs": [9, 2]}},
     {"id": "a3", "name": "I6", "model": "Opus", "state": "running", "since": 28, "seq": 3, "task": "t3",
-     "branch": "drgnx/rp-i6", "worktree": "wt/rp-i6", "base": "c-main", "machine": "desktop"},
+     "branch": "drgnx/rp-i6", "worktree": "wt/rp-i6", "base": "c-main", "machine": "desktop",
+     "reads": ["drgnx/runtime/crates/vegvisir/src/q1.rs", "drgnx/runtime/crates/vegvisir/src/q2.rs", "drgnx/runtime/crates/vegvisir/src/q3.rs", "drgnx/runtime/crates/vegvisir/src/q4.rs", "drgnx/runtime/crates/vegvisir/src/q5.rs", "drgnx/runtime/crates/vegvisir/src/q6.rs", "drgnx/runtime/crates/vegvisir/src/q7.rs", "drgnx/runtime/crates/vegvisir/src/q8.rs", "drgnx/runtime/crates/vegvisir/src/q9.rs", "drgnx/runtime/crates/vegvisir/src/q10.rs", "drgnx/runtime/crates/vegvisir/src/q11.rs", "drgnx/runtime/crates/vegvisir/src/q12.rs", "drgnx/runtime/crates/vegvisir/src/q13.rs", "drgnx/runtime/crates/vegvisir/src/q14.rs", "drgnx/runtime/crates/vegvisir/src/q15.rs", "drgnx/runtime/crates/vegvisir/src/q16.rs", "drgnx/runtime/crates/vegvisir/src/q17.rs", "drgnx/runtime/crates/vegvisir/src/q18.rs", "drgnx/runtime/crates/vegvisir/src/q19.rs", "drgnx/runtime/crates/vegvisir/src/q20.rs", "drgnx/runtime/crates/vegvisir/src/q21.rs", "drgnx/runtime/crates/vegvisir/src/q22.rs", "drgnx/runtime/crates/vegvisir/src/q23.rs", "drgnx/runtime/crates/vegvisir/src/q24.rs", "drgnx/runtime/crates/vegvisir/src/q25.rs", "drgnx/runtime/crates/vegvisir/src/q26.rs", "drgnx/runtime/crates/vegvisir/src/q27.rs", "drgnx/runtime/crates/vegvisir/src/q28.rs", "drgnx/runtime/crates/vegvisir/src/q29.rs", "drgnx/runtime/crates/vegvisir/src/q30.rs", "drgnx/runtime/crates/vegvisir/src/q31.rs"]},
     {"id": "a4", "name": "jobq plan", "model": "Opus", "state": "running", "since": 31, "seq": 4, "task": "t4",
-     "branch": "org/docs-plans-tooling", "worktree": "wt/org", "base": "c-org", "machine": "laptop"}
+     "branch": "org/docs-plans-tooling", "worktree": "wt/org", "base": "c-org", "machine": "laptop",
+     "reads": ["drgnx/runtime/crates/vegvisir/src/p1.rs", "drgnx/runtime/crates/vegvisir/src/p2.rs", "drgnx/runtime/crates/vegvisir/src/p3.rs", "drgnx/runtime/crates/vegvisir/src/p4.rs", "drgnx/runtime/crates/vegvisir/src/p5.rs", "drgnx/runtime/crates/vegvisir/src/p6.rs", "drgnx/runtime/crates/vegvisir/src/p7.rs", "drgnx/runtime/crates/vegvisir/src/p8.rs", "drgnx/runtime/crates/vegvisir/src/p9.rs"]}
   ],
   "refs": [
     {"branch": "drgnx/rp-fx-sess", "based_on": "drgnx/rp-df-hub"}
