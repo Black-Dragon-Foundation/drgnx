@@ -199,6 +199,8 @@ key as one keycap (it opens the palette), and the attention and agents chips pil
         (should-not (string-match-p "Shift" (funcall text 'drgnx-topline-search)))
         (should (eq 'drgnx-topline-test-files (nth 3 (assq 'drgnx-topline-search items))))
         (should (string-match-p "1 needs you" (funcall text 'drgnx-topline-attention)))
+        ;; more than one: "3 need you" (work-space-dark.html, agent-panel.html)
+        (should (string-match-p "3 need you" (substring-no-properties (nth 2 (car (drgnx-topline--pills 3 0))))))
         (should (memq 'drgnx-chip-attention (drgnx-look-bars-test--faces (funcall item 'drgnx-topline-attention))))
         (should (string-match-p "2 agents" (funcall text 'drgnx-topline-agents)))
         (should (memq 'drgnx-chip-accent (drgnx-look-bars-test--faces (funcall item 'drgnx-topline-agents))))

@@ -221,7 +221,7 @@ what waits) and the agents at work, each only while its count is positive."
                                   drgnx-topline--paused-help)))
      (when (> need 0)
        (list (drgnx-topline--item 'drgnx-topline-attention
-                                  (propertize (format " %d needs you " need) 'face 'drgnx-status-needs-you)
+                                  (propertize (format " %d %s you " need (if (= need 1) "needs" "need")) 'face 'drgnx-status-needs-you)
                                   (and (fboundp 'drgnx-notice-needs-you-click) 'drgnx-notice-needs-you-click)
                                   "Waiting on you: click for the newest, or the Notices list")))
      (when (> agents 0)
@@ -519,7 +519,7 @@ count is positive.  NEED and AGENTS stand for the counts (the room the row keeps
      (when (> need 0)
        (list (drgnx-topline--item 'drgnx-topline-attention
                                   (concat (drgnx-topline--space 10)
-                                          (drgnx-topline--chip (format "● %d needs you" need) 'drgnx-chip-attention 20 10))
+                                          (drgnx-topline--chip (format "● %d %s you" need (if (= need 1) "needs" "need")) 'drgnx-chip-attention 20 10))
                                   (and (fboundp 'drgnx-notice-needs-you-click) 'drgnx-notice-needs-you-click)
                                   "Waiting on you: click for the newest, or the Notices list")))
      (when (> agents 0)
