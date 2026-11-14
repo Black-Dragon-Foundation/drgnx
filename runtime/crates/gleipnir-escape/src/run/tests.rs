@@ -562,13 +562,13 @@ fn macos_rows_cover_mac_sb_10_and_skip_elsewhere() {
         }
         // Every refusing expectation names Seatbelt's errnos or none; a Linux-only errno would never match there.
         // The exceptions are the kernel's own answers: ENXIO for a process without a controlling terminal, ENOENT for a
-        // spelling APFS does not take for the file.
+        // spelling APFS does not take for the file (the `-is-not-` rows, whose control is a no-such-file too).
         for e in &r.expect {
             assert!(
                 e.errno.iter().all(|n| n == "EPERM"
                     || n == "EACCES"
                     || (n == "ENXIO" && r.row == "mac-no-controlling-tty")
-                    || (n == "ENOENT" && r.row == "mac-eszett-is-not-ss")),
+                    || (n == "ENOENT" && r.row.contains("-is-not-"))),
                 "{}",
                 r.row
             );
