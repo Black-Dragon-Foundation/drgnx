@@ -400,6 +400,27 @@ fn notebook_chunks_and_their_vector_keys_stay_as_designed() {
 }
 
 #[test]
+fn the_first_outputs_of_a_cell_are_taken_raw_and_the_rest_are_skipped() {
+    let outs: Vec<String> = (0..200)
+        .map(|i| format!(r#"{{"output_type": "stream", "name": "stdout", "text": ["{i}\n"]}}"#))
+        .collect();
+    let text = format!(
+        r#"{{"cells": [{{"cell_type": "code", "id": "a", "metadata": {{}}, "execution_count": 1, "outputs": [{}], "source": []}}],
+            "metadata": {{}}, "nbformat": 4, "nbformat_minor": 5}}"#,
+        outs.join(",")
+    );
+    let nb = Notebook::parse(text, &mut ids("x")).unwrap();
+    let raw = nb.outputs_raw(0, 64);
+    assert_eq!(raw.len(), 64);
+    assert_eq!(
+        serde_json::from_str::<Value>(&raw[63]).unwrap()["text"][0],
+        "63\n"
+    );
+    assert_eq!(nb.outputs_raw(0, 1000).len(), 200);
+    assert!(nb.outputs_raw(0, 0).is_empty());
+}
+
+#[test]
 fn a_cells_outputs_are_read_back_as_the_file_has_them_and_as_they_were_set() {
     let nb = parse("with-code.ipynb");
     assert!(nb.outputs(1).is_empty(), "a cell with `outputs: []`");

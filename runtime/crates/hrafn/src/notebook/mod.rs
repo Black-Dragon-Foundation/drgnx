@@ -508,6 +508,40 @@ impl Notebook {
             .unwrap_or_default()
     }
 
+    /// The first MAX of cell I's outputs, each as its JSON text: nothing is built of the rest (a hostile file's millions of entries
+    /// are skipped as they are read), and each output is left for the caller to read as far as it trusts it.
+    pub fn outputs_raw(&self, i: usize, max: usize) -> Vec<String> {
+        struct First(usize);
+        impl<'de> serde::de::Visitor<'de> for First {
+            type Value = Vec<String>;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("an array")
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut a: A,
+            ) -> Result<Vec<String>, A::Error> {
+                let mut out = Vec::new();
+                while out.len() < self.0 {
+                    match a.next_element::<&RawValue>()? {
+                        Some(r) => out.push(r.get().to_owned()),
+                        None => return Ok(out),
+                    }
+                }
+                while a.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+                Ok(out)
+            }
+        }
+        let Some((_, v)) = self.pairs_of(i).into_iter().find(|(k, _)| k == "outputs") else {
+            return Vec::new();
+        };
+        serde::Deserializer::deserialize_seq(
+            &mut serde_json::Deserializer::from_str(&v),
+            First(max),
+        )
+        .unwrap_or_default()
+    }
+
     /// Cell I's execution count.
     pub fn set_execution_count(&mut self, i: usize, n: Option<i64>) {
         self.cells[i].execution_count = n;
