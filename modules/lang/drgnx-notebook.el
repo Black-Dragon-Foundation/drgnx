@@ -32,6 +32,9 @@
 (require 'drgnx-timer)
 (require 'drgnx-hub-client)
 
+(declare-function drgnx-notify "drgnx-notice")
+(declare-function drgnx-notice-define-source "drgnx-notice")
+(declare-function drgnx-state-subscribe "drgnx-state")
 (declare-function drgnx-look-icon "drgnx-icons" (name &optional face size))
 
 (defgroup drgnx-notebook nil "Jupyter notebooks in drgnx." :group 'drgnx)
@@ -119,6 +122,11 @@ With FULL the hub's own error is a plist (:code :message), so it can be told fro
   (condition-case err (drgnx-hub-call method params callback :full full)
     (error (funcall callback nil (error-message-string err)) nil)))
 
+(defun drgnx-notebook--say (format &rest args)
+  "Say something about a notebook (a refusal, a failed call): a notice of source `notebook' (the Notices list, once in
+the echo area when it matters), not a message: most callers are hub callbacks."
+  (drgnx-notify 'notebook 'warn (apply #'format format args)))
+
 (defun drgnx-notebook--call-sync (method params &optional timeout)
   "METHOD's result, waiting up to TIMEOUT seconds (a save is a command the user gave)."
   (drgnx-hub-call-sync method params timeout))
@@ -186,7 +194,7 @@ repeated id is re-minted (a second cell with an id the buffer already has gets a
                      (let ((head (car open)) (id id))
                        (when (gethash id seen)
                          (let ((new (drgnx-notebook--mint)))
-                           (message "drgnx notebook: cell id %s was repeated; the second is %s" id new)
+                           (drgnx-notebook--say "cell id %s was repeated; the second is %s" id new)
                            (drgnx-notebook--retag head pos new)
                            (setq id new)))
                        (puthash id t seen)
@@ -250,6 +258,13 @@ repeated id is re-minted (a second cell with an id the buffer already has gets a
     s))
 
 (defun drgnx-notebook--head-string (id type)
+  "The header strip of cell ID (`drgnx-notebook--head-strip'), without the band look's hairline when the cell is a card:
+the card's ring is its edge."
+  (let ((s (drgnx-notebook--head-strip id type)))
+    (when (drgnx-notebook--cards-p) (add-face-text-property 0 (length s) '(:overline nil) nil s))
+    s))
+
+(defun drgnx-notebook--head-strip (id type)
   "The header strip of cell ID: the run button (the editor's) and the head the hub built (`[3]  python'), else the type
 until the hub has sent a head (a new cell, a markdown cell).  Built when a head arrives, never while redisplay draws."
   (let ((head (gethash id drgnx-notebook--heads)))
@@ -307,7 +322,8 @@ of it was ever shown."
                  (remhash id drgnx-notebook--chrome)))
              drgnx-notebook--chrome)
     (dolist (id (nreverse restored)) (drgnx-notebook--request-tail id))
-    (drgnx-notebook--select-at (point))))
+    (drgnx-notebook--select-at (point))
+    (drgnx-notebook--blocks-update)))
 
 (defun drgnx-notebook--refresh-head (id)
   "Build cell ID's header strip again (its type, prompt or the running cell changed)."
@@ -360,6 +376,7 @@ and the cell it left goes back (their strings are built again from their last ta
     (setq drgnx-notebook--selected-id new)
     (unless (equal old new)
       (dolist (id (delq nil (list old new))) (drgnx-notebook--refresh-tail id))
+      (drgnx-notebook--blocks-update)
       (when (fboundp 'drgnx-statusbar-refresh) (drgnx-statusbar-refresh t)))
     (cond ((null c) (when drgnx-notebook--selected (delete-overlay drgnx-notebook--selected)))
           (t (unless drgnx-notebook--selected
@@ -576,6 +593,74 @@ fails the notebook: a language without a grammar or a mode stays plain text."
             (treesit-major-mode-setup)))
       (error nil))))
 
+;;;; The card: Glitnir blocks
+;; Each cell's rows (head, source, tail) are one `ring' block (`glitnir-blocks', Nidhogg's `glitnir.el', as the Flow's cards):
+;; radius 10, its corners carved outside the rounded path in the colour of `default' beneath; the rows keep their own fill
+;; (the cell faces' `:extend' band), the fringes are the card's side insets.  The ring is `drgnx-border-subtle', the
+;; selected cell's `drgnx-border-strong', and `drgnx-focus-line' only on the selected cell of the selected window.  The
+;; window parameter is set only when the blocks changed (a rescan, the selection, the focus), never per redisplay; Glitnir
+;; takes the faces' colours again on a theme change.  Without Glitnir (a terminal) the band look stays.
+
+(defconst drgnx-notebook--card-inset 16 "The card's inset from the window's sides, logical pixels (the mockup's body padding).")
+
+(defvar-local drgnx-notebook--blocks nil
+  "Alist FOCUSED → (KEY . BLOCKS): the `glitnir-blocks' value last given to a window that is (or is not) the selected one.")
+
+(defun drgnx-notebook--cards-p ()
+  "Non-nil when cells are drawn as cards: a graphical frame with Glitnir's blocks."
+  (and (display-graphic-p) (fboundp 'glitnir--block-vector)))
+
+(defun drgnx-notebook--blocks-key (focused)
+  "What the blocks of a window are (FOCUSED: it is the selected one): one entry per cell, its positions and ring face."
+  (let ((radius (drgnx-px 10)))
+    (mapcar (lambda (c)
+              (list (plist-get c :head) (1+ (plist-get c :tail)) radius
+                    (cond ((not (equal (plist-get c :id) drgnx-notebook--selected-id)) 'drgnx-border-subtle)
+                          (focused 'drgnx-focus-line)
+                          (t 'drgnx-border-strong))))
+            drgnx-notebook--cells)))
+
+(defun drgnx-notebook--blocks-for (focused)
+  "The `glitnir-blocks' value for a window (FOCUSED: the selected one).  The same object while nothing changed."
+  (let* ((key (drgnx-notebook--blocks-key focused)) (entry (alist-get focused drgnx-notebook--blocks)))
+    (if (equal key (car entry))
+        (cl-loop for b in (cdr entry) for k in key
+                 do (set-marker (nth 1 b) (nth 0 k)) (set-marker (nth 2 b) (nth 1 k)))
+      (dolist (b (cdr entry)) (set-marker (nth 1 b) nil) (set-marker (nth 2 b) nil))
+      (setf (alist-get focused drgnx-notebook--blocks)
+            (cons key (mapcar (lambda (k) (list 'ring (copy-marker (nth 0 k)) (copy-marker (nth 1 k))
+                                                :radius (nth 2 k) :ring (nth 3 k) :beneath 'default))
+                              key))))
+    (cdr (alist-get focused drgnx-notebook--blocks))))
+
+(defun drgnx-notebook--blocks-update ()
+  "Give the windows showing this buffer their cards (and the fringes that inset them), when they changed."
+  (when (drgnx-notebook--cards-p)
+    (let ((inset (drgnx-px drgnx-notebook--card-inset)))
+      (setq-local left-fringe-width inset right-fringe-width inset)
+      (dolist (w (get-buffer-window-list nil nil t))
+        (unless (equal (window-fringes w) (list inset inset nil nil))
+          (set-window-fringes w inset inset))
+        (let ((blocks (drgnx-notebook--blocks-for (eq w (selected-window)))))
+          (unless (eq (window-parameter w 'glitnir-blocks) blocks)
+            (set-window-parameter w 'glitnir-blocks blocks)))))))
+
+(defun drgnx-notebook--blocks-clear ()
+  "No window keeps this buffer's cards (the buffer goes)."
+  (dolist (w (get-buffer-window-list nil nil t))
+    (when (memq (window-parameter w 'glitnir-blocks) (mapcar #'cddr drgnx-notebook--blocks))
+      (set-window-parameter w 'glitnir-blocks nil)))
+  (dolist (e drgnx-notebook--blocks)
+    (dolist (b (cddr e)) (set-marker (nth 1 b) nil) (set-marker (nth 2 b) nil)))
+  (setq drgnx-notebook--blocks nil))
+
+(defun drgnx-notebook--windows-changed (&optional _data)
+  "The state store's `windows-changed' and `selected-changed' (on idle): the notebooks shown take their cards."
+  (dolist (frame (frame-list))
+    (dolist (w (window-list frame 'never))
+      (with-current-buffer (window-buffer w)
+        (when (derived-mode-p 'drgnx-notebook-mode) (drgnx-notebook--blocks-update))))))
+
 ;;;; Hub events
 
 (defun drgnx-notebook--event (event data)
@@ -652,10 +737,10 @@ connect.  Only the hub's own refusal makes the file text."
                                   (cond ((and (null e) r) (drgnx-notebook--install r))
                                         ((stringp e)
                                          (setq drgnx-notebook--retry t)
-                                         (message "drgnx notebook: %s waits for the hub: %s" buffer-file-name e))
+                                         (drgnx-notebook--say "%s waits for the hub: %s" buffer-file-name e))
                                         (t (setq buffer-read-only nil)
-                                           (message "drgnx: %s is not opened as a notebook: %s" buffer-file-name
-                                                    (or (and (consp e) (plist-get e :message)) "no answer"))
+                                           (drgnx-notebook--say "%s is not opened as a notebook: %s" buffer-file-name
+                                                                (or (and (consp e) (plist-get e :message)) "no answer"))
                                            (fundamental-mode))))))
                             t))))
 
@@ -673,7 +758,7 @@ kernel, the tails' versions) and give it the buffer's cells, unsaved edits inclu
                           (lambda (_r e)
                             (when (buffer-live-p buffer)
                               (with-current-buffer buffer
-                                (if e (message "drgnx notebook: the hub did not take the cells: %s" e)
+                                (if e (drgnx-notebook--say "the hub did not take the cells: %s" e)
                                   (when (equal drgnx-notebook--id id) (drgnx-notebook--mark-known))))))))
   (dolist (tail (plist-get result :tails)) (drgnx-notebook--put-tail tail))
   (when (fboundp 'drgnx-statusbar-refresh) (drgnx-statusbar-refresh t)))
@@ -688,7 +773,7 @@ the buffer's cells.  A refusal leaves the buffer as it is; nothing in it is lost
                               (when (buffer-live-p buffer)
                                 (with-current-buffer buffer
                                   (if (or e (null r))
-                                      (message "drgnx notebook: %s is not open on the new hub: %s" buffer-file-name (or e "no answer"))
+                                      (drgnx-notebook--say "%s is not open on the new hub: %s" buffer-file-name (or e "no answer"))
                                     (drgnx-notebook--reopened r)))))))))
 
 (defun drgnx-notebook--reconnect-all ()
@@ -710,6 +795,7 @@ the buffer's cells.  A refusal leaves the buffer as it is; nothing in it is lost
 (defun drgnx-notebook--kill ()
   "`kill-buffer-hook': the hub forgets the notebook (its kernel ends), and the buffer's rescan is not waited for."
   (drgnx-timer-cancel (cons 'drgnx-notebook (current-buffer)))
+  (drgnx-notebook--blocks-clear)
   (when drgnx-notebook--id
     (remhash drgnx-notebook--id drgnx-notebook--buffers)
     (ignore-errors (drgnx-notebook--call "notebook/close" (list :id drgnx-notebook--id) #'ignore))))
@@ -887,7 +973,7 @@ The first part keeps the id and the output."
     (drgnx-notebook--call
      "notebook/sync" (list :id nb :cells cells)
      (lambda (_r e)
-       (cond ((and e (buffer-live-p buffer)) (message "drgnx notebook: %s" e))
+       (cond ((and e (buffer-live-p buffer)) (drgnx-notebook--say "%s" e))
              ((buffer-live-p buffer)
               (drgnx-notebook--call
                "notebook/execute" (list :id nb :cells (vconcat run))
@@ -895,7 +981,7 @@ The first part keeps the id and the output."
                  (when (and e (buffer-live-p buffer))
                    (if (string-match-p "no kernel\\|not started\\|has no kernel\\|ended" e)
                        (with-current-buffer buffer (drgnx-notebook--start-then ids))
-                     (message "drgnx notebook: %s" e)))))))))))
+                     (drgnx-notebook--say "%s" e)))))))))))
 
 (defun drgnx-notebook--start-then (ids)
   "Start the kernel (the notebook's own, or ask when several fit), then run IDS."
@@ -905,7 +991,7 @@ The first part keeps the id and the output."
                             (when (buffer-live-p buffer)
                               (with-current-buffer buffer
                                 (cond ((and e (string-match "several kernels fit" e)) (drgnx-notebook-select-kernel ids))
-                                      (e (message "drgnx notebook: %s" e))
+                                      (e (drgnx-notebook--say "%s" e))
                                       (t (setq drgnx-notebook--kernel (plist-get r :kernel))
                                          (drgnx-notebook--run-ids ids)))))))))
 
@@ -946,15 +1032,15 @@ the hub skipped with :why (shown in the picker with its reason, and refused when
             (when (buffer-live-p buffer)
               (with-current-buffer buffer
                 (let ((candidates (and (not e) (drgnx-notebook--kernel-candidates r))))
-                  (cond (e (message "drgnx notebook: %s" e))
-                        ((null candidates) (message "drgnx notebook: no kernelspec is installed"))
+                  (cond (e (drgnx-notebook--say "%s" e))
+                        ((null candidates) (drgnx-notebook--say "no kernelspec is installed"))
                         (t (let ((name (drgnx-notebook--choose-kernel candidates)))
                              (drgnx-notebook--call
                               "notebook/start" (list :id nb :kernel name)
                               (lambda (r2 e2)
                                 (when (buffer-live-p buffer)
                                   (with-current-buffer buffer
-                                    (if e2 (message "drgnx notebook: %s" e2)
+                                    (if e2 (drgnx-notebook--say "%s" e2)
                                       (setq drgnx-notebook--kernel (or (plist-get r2 :kernel) name))
                                       (when then-run (drgnx-notebook--run-ids then-run))))))))))))))))))))
 
@@ -992,7 +1078,7 @@ the hub skipped with :why (shown in the picker with its reason, and refused when
   "Interrupt the running cell."
   (interactive)
   (drgnx-notebook--ensure)
-  (drgnx-notebook--call "notebook/interrupt" (list :id drgnx-notebook--id) (lambda (_r e) (when e (message "drgnx notebook: %s" e)))))
+  (drgnx-notebook--call "notebook/interrupt" (list :id drgnx-notebook--id) (lambda (_r e) (when e (drgnx-notebook--say "%s" e)))))
 
 (defun drgnx-notebook-restart-kernel (&optional then-run-all)
   "Restart the kernel (the hub's: it ends and a new one of the same kernelspec starts; queued cells show cancelled).
@@ -1004,7 +1090,7 @@ THEN-RUN-ALL: run every code cell once it is up."
                           (lambda (r e)
                             (when (buffer-live-p buffer)
                               (with-current-buffer buffer
-                                (cond (e (message "drgnx notebook: %s" e))
+                                (cond (e (drgnx-notebook--say "%s" e))
                                       (t (setq drgnx-notebook--kernel (plist-get r :kernel))
                                          (when then-run-all (drgnx-notebook-run-all))))))))))
 
@@ -1032,7 +1118,7 @@ THEN-RUN-ALL: run every code cell once it is up."
   (let ((c (drgnx-notebook--current)) (buffer (current-buffer)))
     (drgnx-notebook--call "notebook/output" (list :id drgnx-notebook--id :cell (plist-get c :id))
                           (lambda (r e)
-                            (if e (message "drgnx notebook: %s" e)
+                            (if e (drgnx-notebook--say "%s" e)
                               (let ((text (drgnx-notebook--outputs-text (plist-get r :outputs))))
                                 (when (buffer-live-p buffer)
                                   (kill-new text)
@@ -1055,7 +1141,7 @@ THEN-RUN-ALL: run every code cell once it is up."
   (drgnx-notebook--ensure)
   (let ((id (and this-cell (plist-get (drgnx-notebook--current) :id))))
     (drgnx-notebook--call "notebook/clear" (append (list :id drgnx-notebook--id) (and id (list :cell id)))
-                          (lambda (_r e) (when e (message "drgnx notebook: %s" e))))))
+                          (lambda (_r e) (when e (drgnx-notebook--say "%s" e))))))
 
 (defun drgnx-notebook-open-output ()
   "Open this cell's whole output (what the hub holds of it) as text in a buffer of its own."
@@ -1063,7 +1149,7 @@ THEN-RUN-ALL: run every code cell once it is up."
   (let ((c (drgnx-notebook--current)) (name (buffer-name)))
     (drgnx-notebook--call "notebook/output" (list :id drgnx-notebook--id :cell (plist-get c :id))
                           (lambda (r e)
-                            (if e (message "drgnx notebook: %s" e)
+                            (if e (drgnx-notebook--say "%s" e)
                               (let ((text (drgnx-notebook--outputs-text (plist-get r :outputs)))
                                     (buffer (get-buffer-create (format "*Output: %s %s*" name (plist-get c :id)))))
                                 (with-current-buffer buffer
@@ -1156,6 +1242,10 @@ THEN-RUN-ALL: run every code cell once it is up."
                      (lambda ()
                        (add-to-list 'auto-mode-alist '("\\.ipynb\\'" . drgnx-notebook-mode))
                        (add-hook 'drgnx-hub-event-functions #'drgnx-notebook--event)
+                       (require 'drgnx-state)
+                       (drgnx-notice-define-source 'notebook :title "Notebooks")
+                       (drgnx-state-subscribe 'windows-changed #'drgnx-notebook--windows-changed)
+                       (drgnx-state-subscribe 'selected-changed #'drgnx-notebook--windows-changed)
                        (add-hook 'drgnx-hub-connected-functions #'drgnx-notebook--reconnect-all)
                        (drgnx-notebook--segments-define)
                        (advice-add 'kill-region :before #'drgnx-notebook-guard-kill)

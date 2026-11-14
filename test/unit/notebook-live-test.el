@@ -24,11 +24,10 @@ gated tests use them, but without their need for Sjá (a notebook is not a hub-f
   (declare (indent 0))
   `(drgnx-test-with-clock (:allow-pending t)
      (drgnx-hub-client-test--with-hub
-       (let ((drgnx-test-gate-unnamed-ok t))
-         (drgnx-test-gated '()
-           (drgnx-hub-connect)
-           (drgnx-test-hub-settle (lambda () (process-live-p drgnx-hub--events)) "the subscribed connection")
-           ,@body)))))
+       (drgnx-test-gated '()
+         (drgnx-hub-connect)
+         (drgnx-test-hub-settle (lambda () (process-live-p drgnx-hub--events)) "the subscribed connection")
+         ,@body))))
 
 (defconst notebook-live-test--file
   (concat "{\n \"cells\": [\n  {\n   \"cell_type\": \"markdown\",\n   \"id\": \"intro\",\n   \"metadata\": {},\n"

@@ -606,3 +606,78 @@
                                  (with-current-buffer buffer (set-buffer-modified-p nil) (setq buffer-file-name nil))
                                  (kill-buffer buffer)
                                  (clrhash drgnx-notebook--buffers))))))
+
+;;; The card: a Glitnir block ring around each cell's rows (the band stays without Glitnir: a terminal, batch)
+
+(defmacro nb-test--with-cards (&rest body)
+  "BODY in a notebook shown in the selected window, where Glitnir blocks are taken to be there."
+  (declare (indent 0))
+  `(nb-test--with
+     (cl-letf (((symbol-function 'drgnx-notebook--cards-p) (lambda () t)))
+       (let ((window (selected-window)))
+         (set-window-buffer window (current-buffer))
+         (unwind-protect (progn (drgnx-notebook--rescan) (drgnx-notebook--blocks-update) ,@body)
+           (set-window-parameter window 'glitnir-blocks nil))))))
+
+(ert-deftest drgnx-notebook/each-cell-is-a-ring-block-radius-10 ()
+  (nb-test--with-cards
+    (let ((blocks (window-parameter (selected-window) 'glitnir-blocks)))
+      (should (= (length blocks) 3))
+      (dolist (c (drgnx-notebook--rescan))
+        (let ((b (seq-find (lambda (b) (= (nth 1 b) (plist-get c :head))) blocks)))
+          (should (eq (car b) 'ring))
+          (should (= (nth 2 b) (1+ (plist-get c :tail))))       ; END exclusive: the tail's newline is the card's last row
+          (should (= (plist-get (nthcdr 3 b) :radius) (drgnx-px 10)))
+          (should (eq (plist-get (nthcdr 3 b) :beneath) 'default)))))))
+
+(ert-deftest drgnx-notebook/the-focus-ring-is-the-selected-cells-in-the-focused-window-only ()
+  (nb-test--with-cards
+    (let* ((window (selected-window))
+           (ring (lambda (id) (let ((c (drgnx-notebook--cell-by-id id)))
+                                (plist-get (nthcdr 3 (seq-find (lambda (b) (= (nth 1 b) (plist-get c :head)))
+                                                               (window-parameter window 'glitnir-blocks)))
+                                           :ring)))))
+      (should (equal drgnx-notebook--selected-id "a"))
+      (should (eq (funcall ring "a") 'drgnx-focus-line))
+      (should (eq (funcall ring "b") 'drgnx-border-subtle))
+      ;; the window is not the selected one: the selected cell keeps a stronger edge, no ring
+      (cl-letf (((symbol-function 'selected-window) (lambda () nil)))
+        (drgnx-notebook--blocks-update))
+      (should (eq (funcall ring "a") 'drgnx-border-strong))
+      (should (eq (funcall ring "b") 'drgnx-border-subtle)))))
+
+(ert-deftest drgnx-notebook/the-blocks-are-set-only-when-they-changed ()
+  (nb-test--with-cards
+    (let ((first (window-parameter (selected-window) 'glitnir-blocks)))
+      (drgnx-notebook--blocks-update)
+      (should (eq first (window-parameter (selected-window) 'glitnir-blocks)))
+      ;; the selection moves: the rings change
+      (goto-char (plist-get (drgnx-notebook--cell-by-id "c") :head))
+      (forward-char 1)
+      (drgnx-notebook--select-at (point))
+      (drgnx-notebook--blocks-update)
+      (should-not (eq first (window-parameter (selected-window) 'glitnir-blocks))))))
+
+(ert-deftest drgnx-notebook/a-card-has-no-overline-and-the-fringes-are-its-insets ()
+  (nb-test--with-cards
+    (should (= left-fringe-width (drgnx-px 16)))
+    (should (= right-fringe-width (drgnx-px 16)))
+    (let* ((s (drgnx-notebook--head-string "a" 'code)) (faces (get-text-property (1- (length s)) 'face s)))
+      (should (member '(:overline nil) (if (and (consp faces) (not (keywordp (car faces)))) faces (list faces)))))))
+
+(ert-deftest drgnx-notebook/without-glitnir-the-band-look-stays ()
+  (nb-test--with
+    (set-window-buffer (selected-window) (current-buffer))
+    (drgnx-notebook--rescan)
+    (drgnx-notebook--blocks-update)
+    (should-not (window-parameter (selected-window) 'glitnir-blocks))
+    (should-not (member '(:overline nil)
+                        (let ((f (get-text-property (1- (length (drgnx-notebook--head-string "a" 'code))) 'face
+                                                    (drgnx-notebook--head-string "a" 'code))))
+                          (if (and (consp f) (not (keywordp (car f)))) f (list f)))))))
+
+(ert-deftest drgnx-notebook/the-card-goes-with-the-buffer ()
+  (nb-test--with-cards
+    (should (window-parameter (selected-window) 'glitnir-blocks))
+    (drgnx-notebook--blocks-clear)
+    (should-not (window-parameter (selected-window) 'glitnir-blocks))))

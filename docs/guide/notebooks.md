@@ -12,8 +12,9 @@ installed on your machine (the kernelspecs Jupyter would list); the kernel runs 
 - **The output** sits under the cell: text, streams, errors and static images. Output from the file, not from a run in
   this session, is shown quieter. Inline output is capped at 20 rows (and 8 KiB); the last row says how many more lines
   there are. **Copy Output** copies the whole text of the cell's output.
-- The cell you are in is tinted; the others are a step quieter. This is the band look (each cell's rows tinted, a chip
-  for the run button and the type); it is also what a terminal shows.
+- The cell you are in is tinted; the others are a step quieter. On a graphical Nidhogg each cell is a **card**: a rounded
+  ring around its rows (the focus colour on the selected cell of the focused window only). Without Glitnir's blocks, and in
+  a terminal, it is the band look: each cell's rows tinted, a hairline over the header.
 
 ## The status bar
 
@@ -64,4 +65,4 @@ PNG and JPEG outputs are drawn under the cell (at most 240 px tall, so a cell ne
 
 ## Not yet
 
-The cell outline and the kernel's log wait for the hub's views (an Sjá view each); until then **Open Output** shows the cell's whole output as text in a buffer of its own. The card look (each cell a rounded card with a shadow, as in the mockup) waits for the compositor's block primitive: until then each cell is a tinted band with a hairline over its header. There are no toolbar or hover icons yet; every command is in the palette. Rich HTML and widget outputs show as their plain text.
+The cell outline and the kernel's log wait for the hub's views (an Sjá view each); until then **Open Output** shows the cell's whole output as text in a buffer of its own. The card look has a ring but not yet the mockup's shadow, the gaps between cards, and the output inside the ring (Glitnir's blocks do not draw them yet); without blocks each cell is a tinted band with a hairline over its header. There are no toolbar or hover icons yet; every command is in the palette. Rich HTML and widget outputs show as their plain text.

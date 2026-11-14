@@ -16,6 +16,7 @@ density](../type.md)); every colour is a [token](../tokens.md).
 | [Lens bar](lens-bar.md) | the Work space's tab line of views |
 | [Detail island](detail-island.md) | the Work space's side card for the selected thing |
 | [Research trail](trail.md) | an agent's steps, in order |
+| [Notebook cell](notebook-cell.md) | a Jupyter cell as a card on Glitnir, a band elsewhere |
 | [Empty states](empty-states.md) | what a list or view says when there is nothing in it |
 
 ## How to read a page

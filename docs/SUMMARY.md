@@ -104,6 +104,7 @@
     - [Empty states](design/components/empty-states.md)
     - [Explorer](design/components/explorer.md)
     - [Lens bar](design/components/lens-bar.md)
+    - [Notebook cell](design/components/notebook-cell.md)
     - [Palette](design/components/palette.md)
     - [Popups](design/components/popups.md)
     - [Status bar](design/components/status-bar.md)

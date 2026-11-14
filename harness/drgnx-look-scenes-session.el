@@ -172,7 +172,7 @@ named as drgnx names every session (its profile, `replay', and an id)")
     (magit "the scene's repository is the window mockups' (main, nothing staged, one commit); the Magit mockup's
 branch gateway-queue, staged file and history come with the Magit adapter (look step 7)"
            "the mockup's right-hand org card and floating transient are not opened by the scene")
-    (notebook-dark "the band look (a manager's call): the cell's rows tinted and a hairline over the header, not the mockup's 10 px card with a shadow (the block primitive is the Glitnir line agent's)"
+    (notebook-dark "the card is a Glitnir ring block (radius 10, the cell faces' band as its fill) on a line that has blocks, the band look elsewhere; against the mockup: (1) the output rows sit outside the ring, because a block takes the rows by their start position and a tail's rows start where the next cell's header does (Glitnir needs to count the rows of overlay strings at the block's END), (2) no card shadow (a ring is one 1 px line), (3) no 8 px gap between cards (a block has no inset above or below), (4) the focused card has one ring, not the mockup's inner focus ring and outer border step"
                    "the mockup's notebook toolbar (Run all, Restart, Clear outputs, the kernel's state) and the cell's hover icons (up, down, delete) are not drawn: the commands are in the palette and keys"
                    "the header is the Lisp stopgap (a chip for the run button and the type); the hub's head string replaces it"
                    "the source takes its syntax colours from tree-sitter where the language has a grammar and a tree-sitter mode (the scene's image may have none)"

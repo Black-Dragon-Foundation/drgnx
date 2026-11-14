@@ -76,6 +76,19 @@ on the inserted text before the first rescan makes the chrome.
 `notebook/output` once per cell (the cache is dropped when the cell runs again) and draws PNG and JPEG as an `image` display
 spec, a label until then.
 
+## The card
+
+On a graphical frame with Glitnir's blocks (`glitnir--block-vector` bound) each cell is a `ring` block (`glitnir-blocks` window
+parameter, `drgnx-notebook--blocks-update`): START the head boundary, END one past the tail boundary, radius 10, `:beneath` `default`,
+the rows' own fill carved by the corners. The fringes (16 px) are the card's side inset. The ring face is `drgnx-border-subtle`, the
+selected cell's `drgnx-border-strong`, and `drgnx-focus-line` for the selected cell of the selected window. The parameter is a list
+kept per focus state with markers, the same object while nothing changed; it is updated after a rescan, when the selection moves and
+on the state store's `windows-changed` and `selected-changed` events (idle lane), and cleared with the buffer. The head has no overline on
+a card. A block takes the rows whose start position lies in START..END, and a tail's `after-string` rows start where the next cell's
+header does, so the output rows are outside the ring until Glitnir counts the overlay-string rows at END (an `after-string` stays: with
+the output as the tail's `before-string` the cursor at the end of the source draws after the output, and the `cursor` property is not
+honoured for a before-string).
+
 ## A hub that came back
 
 The hub keeps notebooks in memory, so a restarted hub holds none, and the ids of the old one mean nothing (the editor never builds or
