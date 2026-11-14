@@ -1380,6 +1380,7 @@ dependencies = [
 name = "draugr"
 version = "0.1.0"
 dependencies = [
+ "drgnx-clock",
  "drgnx-exe",
  "eitri",
  "libc",

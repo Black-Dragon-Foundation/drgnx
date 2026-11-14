@@ -4,7 +4,6 @@
 # optimized (a budget set on the optimized build); `fleet` needs the fake fleet, so test/runners/drills.sh --timing
 # runs it and this lane only names it.  A new `#[ignore = "timing: …"]` test that is not listed here runs
 # nowhere: drgnx-ci/every-rust-timing-test-is-in-the-timing-list fails then.
-draugr reap a_term_ignoring_group_is_killed_only_after_the_grace
 drgnx-ratatoskr sandbox_check doctor_json_answers_within_the_editors_wait
 huginn timing read_64_kib_within_1_ms release
 gleipnir lib the_hung_helper_is_refused_at_the_deadline_not_before_or_long_after
