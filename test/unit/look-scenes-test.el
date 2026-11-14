@@ -132,3 +132,23 @@ an error while the hub's rows are on their way: the step waits for them, as the 
          (drgnx-look-scene--unfed))
        (should (= 1 (length drgnx-look-scene--errors)))
        (should (string-match-p "\\`unfed-test: shown in .* with no rows from the hub" (car drgnx-look-scene--errors)))))))
+
+;; The scenes that follow one another share a session: what a scene leaves is what the next one starts from.
+(ert-deftest drgnx-look-scenes/the-popup-scenes-are-closed-with-the-popups-own-key ()
+  ;; the Replace All sheet and the Ask an Agent card end on Esc (the popup lane's key; C-g is the palette's): a
+  ;; sheet left open leaves the popup frame selected, with no editor window for the scenes after it
+  (dolist (scene '(search-sheet search-ask))
+    (should (equal (plist-get (cdr (assq scene drgnx-look-scenes)) :then) "<escape>"))))
+
+(ert-deftest drgnx-look-scenes/the-stand-in-eglot-answers-what-the-product-asks-a-server
+    ()
+  ;; the Search view asks the buffer's server what it can do (`eglot-server-capable'): a stand-in of the status bar's
+  ;; `● eglot' that cannot answer made every Search scene after the window scene fail
+  (require 'eglot)
+  (with-temp-buffer
+    (unwind-protect
+        (progn (drgnx-look-scene--eglot)
+               (should (eglot-current-server))
+               (should-not (eglot-server-capable :renameProvider)))
+      (when (bound-and-true-p eglot--cached-server)
+        (ignore-errors (delete-process (jsonrpc--process eglot--cached-server)))))))

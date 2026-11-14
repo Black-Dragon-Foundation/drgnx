@@ -604,7 +604,9 @@ How it works:
   `search-preview` and `search-sheet` (mockup `search-view`), search the project for `(gateway)--pending` replaced by
   `\1--queued` (regexp) with the third match unticked, in the dark theme, then show the first file's preview tile and
   the Replace All sheet. They need the hub: the scene starts `DRGNX_RATATOSKR_BIN` in the foreground (a session starts
-  none). `debugging` opens the debugging mockup's `inventory.py` at line 24 with its breakpoints (18, a condition on
+  none). The hub reads code with the pack-built grammars (`test/packs/hub-grammars.sh`, handed on as
+  `DRGNX_PACK_LOCK` and `DRGNX_PACK_GRAMMARS`): the session has no packs installed, so a run without them shows the
+  debugging scenes no inline values, and those scenes say so. `debugging` opens the debugging mockup's `inventory.py` at line 24 with its breakpoints (18, a condition on
   22, 24, a logpoint on 25, 30 disabled) in the breakpoint column; the hub's answer is given to the column directly,
   since no session runs. The scenes share that hub, started with `RATATOSKR_SEED_SCENE=1`: the hub writes one plan
   run into its fresh store (`orch::scene`, test-hooks only). It is a running job, `scene-run`, that the runner leaves alone (no agent starts for it), with a rule pack, tasks

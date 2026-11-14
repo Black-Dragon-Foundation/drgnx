@@ -29,6 +29,9 @@
 (declare-function drgnx-history--st-make "drgnx-history")
 (declare-function drgnx-agent-panel-cards-load "drgnx-agent-panel-cards")
 (declare-function drgnx-agent-panel-reject "drgnx-agent-panel-cards")
+(declare-function drgnx-agent-panel--keep-top-windows "drgnx-agent-panel")
+(declare-function drgnx-agent-panel--restore-top-windows "drgnx-agent-panel")
+(defvar drgnx-agent-panel--top-windows)
 (declare-function drgnx-agent-panel-ledger "drgnx-agent-panel-cards")
 (declare-function drgnx-agent-panel-revert-here "drgnx-agent-panel")
 (declare-function drgnx-agent-panel-fork-here "drgnx-agent-panel")
@@ -560,6 +563,37 @@ unanswered, and panel \"s1\" as `buf'."
       (should (string-match-p "[█░]" text))
       (should (string-match-p "tool-output +1000 tokens" text))
       (should (string-match-p "/compact would free 300 tokens" text)))))
+
+(ert-deftest drgnx-agent-panel/a-window-at-the-top-stays-there-when-the-hubs-top-rows-come-in ()
+  "A window keeps its start on its row, so the header, chips and strip that arrive above the first row (the panel opened
+before the hub's rows came) would leave it starting below them: a window that started at the first row starts at the top."
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (dotimes (i 60) (insert (format "card %d\n" i)))
+        (set-window-buffer (selected-window) buf)
+        (set-window-start (selected-window) (point-min))
+        (drgnx-agent-panel--keep-top-windows)
+        ;; the rows arrive above, and the view's place restore leaves the window on the row it was on
+        (save-excursion (goto-char (point-min)) (insert "head\nchips\nstrip\n"))
+        (set-window-start (selected-window) (+ (point-min) (length "head\nchips\nstrip\n")) t)
+        (drgnx-agent-panel--restore-top-windows '("p:head" "p:chips"))
+        (should (= (window-start (selected-window)) (point-min)))
+        (should-not drgnx-agent-panel--top-windows)))))
+
+(ert-deftest drgnx-agent-panel/a-scrolled-window-is-left-where-it-is ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (dotimes (i 60) (insert (format "card %d\n" i)))
+        (set-window-buffer (selected-window) buf)
+        (set-window-start (selected-window) (+ (point-min) 40))
+        (drgnx-agent-panel--keep-top-windows)
+        (should-not drgnx-agent-panel--top-windows)
+        (drgnx-agent-panel--restore-top-windows '("p:head"))
+        (should (= (window-start (selected-window)) (+ (point-min) 40)))))))
 
 (provide 'agent-panel-test)
 ;;; agent-panel-test.el ends here

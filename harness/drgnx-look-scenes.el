@@ -54,8 +54,8 @@
     (extensions-light)
     (extensions-hc)
     (search-preview :mockup search-view)
-    (search-sheet :mockup search-view :then "C-g")
-    (search-ask :mockup search-view :then "C-g")
+    (search-sheet :mockup search-view :then "<escape>")
+    (search-ask :mockup search-view :then "<escape>")
     (search-handed :mockup search-view)
     (search-kinds :mockup search-view)
     (debugging)
@@ -111,6 +111,11 @@ of the scene, not of the run: the other scenes are still drawn."
             (drgnx-look-scenes--call sess (format "(setenv \"DRGNX_RATATOSKR_BIN\" %s)" (drgnx-ui-el bin))))
           (drgnx-look-scenes--call sess (format "(setenv \"DRGNX_LOOK_ONLY\" %s)"   ; which scenes: picks the hub's seed
                                                 (drgnx-ui-el (or (getenv "DRGNX_LOOK_ONLY") ""))))
+          ;; "1": a scene's error carries its backtrace; the pack-built grammars the hub reads code with (inline values,
+          ;; outlines, symbol rows): the session starts with an environment of its own
+          (dolist (var '("DRGNX_LOOK_BT" "DRGNX_PACK_LOCK" "DRGNX_PACK_GRAMMARS"))
+            (when-let* ((v (getenv var)))
+              (drgnx-look-scenes--call sess (format "(setenv %s %s)" (drgnx-ui-el var) (drgnx-ui-el v)))))
           (let ((errs (drgnx-look-scenes--call sess (format "(drgnx-look-scene-setup %s)" (drgnx-ui-el elpa)) 120)))
             (when errs (drgnx-ui-screenshot sess (expand-file-name (format "setup-%s.png" tag) out)))   ; what stopped it
             (push (cons 'setup errs) errors))
