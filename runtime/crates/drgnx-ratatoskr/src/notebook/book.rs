@@ -134,6 +134,36 @@ impl Book {
             .collect()
     }
 
+    /// One cell, without copying the others.
+    pub fn cell_info(&self, id: &str) -> Option<CellInfo> {
+        let c = self.nb.cells().iter().find(|c| c.id == id)?;
+        Some(CellInfo {
+            id: c.id.clone(),
+            kind: c.kind,
+            source: c.source.clone(),
+            execution_count: c.execution_count,
+        })
+    }
+
+    /// Cell ID has no output and no execution count.
+    pub fn clear(&mut self, id: &str) {
+        let Some(i) = self.index(id) else { return };
+        if self.nb.cells()[i].kind != Kind::Code {
+            return;
+        }
+        self.nb.set_execution_count(i, None);
+        let version = self.shown.get(id).map_or(0, |s| s.version) + 1;
+        let run = CellRun::from_outputs(id, [], RunStatus::Ok);
+        self.shown.insert(
+            id.to_string(),
+            Shown {
+                run,
+                stale: false,
+                version,
+            },
+        );
+    }
+
     pub fn kernelspec_name(&self) -> Option<String> {
         self.nb.kernelspec_name()
     }
