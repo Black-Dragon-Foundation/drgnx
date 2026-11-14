@@ -246,3 +246,23 @@ fn a_tail_has_the_execution_count_and_a_head_shows_the_prompt_the_kind_and_the_s
         "[ ]  py"
     );
 }
+
+#[test]
+fn a_head_chip_is_short_and_a_tail_carries_a_bounded_number_of_runs() {
+    use hrafn::notebook::Kind;
+    let h = head(Kind::Code, &"p".repeat(10_000), None, "idle");
+    assert_eq!(h.text.chars().count(), "[ ]  ".chars().count() + 64);
+    assert_eq!(h.runs[1].end - h.runs[1].start, 64);
+    // every other character coloured: rows of hundreds of runs are cut to MAX_RUNS
+    let line: String = (0..1000)
+        .map(|i| if i % 2 == 0 { "\x1b[31ma\x1b[0m" } else { "b" })
+        .collect();
+    let run = run_with(|f| {
+        f(
+            "stream",
+            json!({"name": "stdout", "text": format!("{line}\n").repeat(5)}),
+        )
+    });
+    let t = build("c", &run, 1);
+    assert_eq!(t.runs.len(), MAX_RUNS);
+}

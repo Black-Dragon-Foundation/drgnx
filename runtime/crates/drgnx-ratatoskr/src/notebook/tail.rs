@@ -11,6 +11,8 @@ use super::output::{CellRun, Output, RunStatus};
 
 pub const MAX_ROWS: usize = 20;
 pub const MAX_BYTES: usize = 8192;
+/// The most style runs one tail carries (an event stays small however the text is coloured).
+pub const MAX_RUNS: usize = 512;
 /// One character stands for an image in the text.
 pub const IMAGE_CHAR: char = '\u{fffc}';
 
@@ -90,7 +92,7 @@ pub fn head(
         text.push_str("  ");
     }
     let start = text.chars().count();
-    let chip = clean(chip);
+    let chip: String = clean(chip).chars().take(64).collect();
     text.push_str(&chip);
     runs.push(Run {
         start,
@@ -274,6 +276,7 @@ pub fn build(cell: &str, run: &CellRun, version: u64) -> Tail {
         text.push('\n');
         at += len + 1;
     }
+    runs.truncate(MAX_RUNS);
     if more_lines > 0 {
         text.push_str(&format!("{more_lines} more lines: open output"));
     } else {
