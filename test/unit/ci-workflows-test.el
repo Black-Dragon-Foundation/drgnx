@@ -262,6 +262,21 @@ Returns (EXIT . OUTPUT), the output both streams' or, with STDOUT-ONLY, stdout's
       (should (eql 0 (call-process "bash" nil t nil script "--self-test")))
       (should (string-search "timing-lane self-test: ok" (buffer-string))))))
 
+(ert-deftest drgnx-ci/the-timing-lane-is-report-only-and-no-gate-judges-a-timing-row ()
+  ;; a timing row (Lisp `:timing' tests, the Rust `#[ignore = "timing: ..."]' rows of test/timing-rust.txt) is a performance
+  ;; figure or an OS-level blocking timeout: both lane scripts report each row and exit 0, and every other job leaves them out
+  (dolist (f '("test/timing-lane.sh" "test/timing-rust.sh"))
+    (let ((text (drgnx-ci-test--file f)))
+      (skip-unless text)
+      ;; a row's verdict is a line in the report, never the script's status (only a usage error exits non-zero)
+      (should (string-suffix-p "exit 0\n" (string-trim-right text "[ \t\n]*\n")))))
+  (let ((tiers (drgnx-ci-test--yml "drgnx-tiers.yml")))
+    (skip-unless tiers)
+    ;; the Rust rows run only through test/timing-rust.sh in the timing job; the unit, gate-mode and GUI jobs set NO_TIMING
+    (should (string-search "test/timing-rust.sh --report" (drgnx-ci-test--job tiers "timing")))
+    (dolist (job '("unit" "no-lisp-writes" "ui"))
+      (should (string-search "DRGNX_TEST_NO_TIMING" (drgnx-ci-test--job tiers job))))))
+
 (ert-deftest drgnx-ci/no-job-runs-on-a-moving-image-label ()
   ;; `ubuntu-latest' moves to 26.04 by 2026-11-19: every job names its image
   (dolist (yml (drgnx-ci-test--workflows-and-actions
