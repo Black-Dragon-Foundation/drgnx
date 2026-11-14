@@ -169,8 +169,8 @@ An agent has no other way in: the hub's `search/*` methods are the editor's.
   each server that answers, in the background: capped in memory, at low priority, paced so that typing keeps its
   frame, and held back on battery until AC (Index Project with `--now` overrides that).
 - **Languages.** Emacs Lisp, Rust, C, C++, shell, Python, JavaScript, TypeScript, TSX, Go and Java are parsed: their chunks follow
-  definitions, and their definitions are what `symbols` and `outline` list. C++ is `.cc .cpp .cxx .hpp .hh .h++` (a `.h`
-  stays C): classes, structs, namespaces, templates, methods (with `~Name` and `operator==`), enums, aliases, concepts and macros. Org and Markdown follow headings; other
+  definitions, and their definitions are what `symbols` and `outline` list. C++ is `.cc .cpp .cxx .hpp .hh .h++`; a `.h` is judged by its own text: C++ when it holds a `namespace`, a `template`, a
+  `class`, an access label, a `::` between names or a standard include with no `.h` (`<vector>`), else C: classes, structs, namespaces, templates, methods (with `~Name` and `operator==`), enums, aliases, concepts and macros. Org and Markdown follow headings; other
   text is cut into windows of lines, with no definitions.
 - **Content-keyed.** A vector belongs to the text of its chunk (and the chunker's version), so a file that changed only
   re-embeds the chunks that changed, and switching to another branch and back embeds nothing.

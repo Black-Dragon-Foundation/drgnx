@@ -239,7 +239,8 @@ golden that changes points at a pin or ABI mismatch between a pack and its mode'
 
 ## C++
 
-The `cpp` pack (`.cc .cpp .cxx .hpp .hh .h++`; a `.h` stays C) is Hrafn's `cpp` language: `queries/chunks.scm` makes classes,
+The `cpp` pack (`.cc .cpp .cxx .hpp .hh .h++`; a `.h` is C++ when its text is, `hrafn::files::looks_cpp`: the same rule for the index, the
+debugger's inline values and search, in a pure C project or a mixed one) is Hrafn's `cpp` language: `queries/chunks.scm` makes classes,
 structs, unions and namespaces (and `extern "C"` blocks) containers, so a class's inline members are methods and nested
 types are members; `template <...>` is a wrapper, so a templated class or function is one form with its template line;
 `c-declarator-name` finds the name of `Cache<V>::put` (`put`), `~Cache`, `operator==` and `T& f()`. `queries/tags.scm`

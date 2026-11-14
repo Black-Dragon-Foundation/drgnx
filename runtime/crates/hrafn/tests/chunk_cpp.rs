@@ -29,6 +29,38 @@ fn cpp_files_are_cpp_and_h_stays_c() {
     assert_eq!(Lang::parse("cpp"), Lang::Cpp);
 }
 
+/// A `.h` is C++ when its text says so (a class, a namespace, a template, a `::`, an extension-less standard include), else C: the
+/// same file gets the same language wherever it is read, in a pure C project, a mixed one or none.
+#[test]
+fn a_dot_h_is_cpp_when_its_text_is_and_c_otherwise() {
+    let c_header = "#ifndef A_H\n#define A_H\n#include <stdio.h>\n/* class Foo { is only a comment; so is std::string */\ntypedef struct { int x; } point_t;\nint add(int a, int b);\n#endif\n";
+    let cpp_headers = [
+        "namespace store {\nint f();\n}\n",
+        "template <typename T>\nT id(T v);\n",
+        "class Cache {\n public:\n  int size();\n};\n",
+        "class Fwd;\nvoid use(Fwd* f);\n",
+        "#include <vector>\nvoid take(int n);\n",
+        "void run(std::string s);\n",
+        "struct S {\nprivate:\n  int v;\n};\n",
+        "int Cache::size() const;\n",
+    ];
+    assert_eq!(classify("a.h", c_header.as_bytes()).0, Lang::C);
+    for h in cpp_headers {
+        assert_eq!(classify("a.h", h.as_bytes()).0, Lang::Cpp, "{h}");
+    }
+    // only a `.h` is judged by its text: `.c` stays C, `.cc` stays C++, whatever they hold
+    assert_eq!(classify("a.c", cpp_headers[0].as_bytes()).0, Lang::C);
+    assert_eq!(classify("a.cc", c_header.as_bytes()).0, Lang::Cpp);
+    // the rule reads the whole file, not its first bytes: a long licence comment does not hide the class
+    let long = format!("/*{}*/\nclass Late {{}};\n", "x".repeat(5000));
+    assert_eq!(classify("late.h", long.as_bytes()).0, Lang::Cpp);
+    // and a C header chunks as C, a C++ header as C++ (symbols differ: a class is a symbol only in C++)
+    let (_, cs) = chunk_file("a.h", Lang::C, false, c_header, BUDGET);
+    assert!(cs.iter().all(|s| s.kind != "class"));
+    let (_, ps) = chunk_file("b.h", Lang::Cpp, false, cpp_headers[2], BUDGET);
+    assert!(ps.iter().any(|s| s.name == "Cache" && s.kind == "class"));
+}
+
 #[test]
 fn cpp_symbols_classes_templates_namespaces_methods_and_macros() {
     let text = fixture("cache.cpp");
