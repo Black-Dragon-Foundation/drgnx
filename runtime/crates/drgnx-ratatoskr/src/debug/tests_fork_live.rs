@@ -72,6 +72,13 @@ fn tools(at: &Path) -> PathBuf {
         ])
         .output()
         .unwrap();
+    // a lane without the adapters (.github/ci/debug-adapters.sh) says so, not "None"
+    assert!(
+        out.status.success(),
+        "{python} cannot import debugpy: the lane installs it with .github/ci/debug-adapters.sh and points \
+         DRGNX_DEBUG_LIVE_PYTHON at its venv: {}",
+        String::from_utf8_lossy(&out.stderr).trim()
+    );
     let text = String::from_utf8(out.stdout).unwrap();
     let mut lines = text.lines();
     let (pkg, exe, ver) = (
