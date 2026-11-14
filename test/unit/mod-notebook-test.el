@@ -881,3 +881,48 @@
     (let ((b (nb-test--view-buffer 'drgnx-notebook-log-mode '(("stream  hi" drgnx-notebook-log 1)))))
       (unwind-protect (with-current-buffer b (should (equal (drgnx-notebook--segment-view) "1 entries")))
         (kill-buffer b)))))
+
+;;; The views' pane title: a header line with the view's name, what it is of and a count chip (the approved mockup)
+
+(ert-deftest drgnx-notebook/the-outlines-title-names-the-notebook-and-counts-its-cells ()
+  (nb-test--with
+    (let ((b (nb-test--view-buffer 'drgnx-notebook-outline-mode
+                                   '(("1  markdown  # T" drgnx-notebook-cell "a") ("1 991 more cells")))))
+      (unwind-protect
+          (with-current-buffer b
+            (setq drgnx-notebook-view--notebook (get-buffer "*nb-test*"))
+            (drgnx-notebook-view--refresh)
+            (should (string-prefix-p "Outline" (substring-no-properties drgnx-notebook-view--header)))
+            (should (string-search "*nb-test*" drgnx-notebook-view--header))
+            (should (string-search "1 992 cells" drgnx-notebook-view--header))
+            (should (equal header-line-format '(" " (:eval drgnx-notebook-view--header)))))
+        (kill-buffer b)))))
+
+(ert-deftest drgnx-notebook/the-outputs-title-says-follows-the-run-for-the-running-cell ()
+  (nb-test--with
+    (let ((b (nb-test--view-buffer 'drgnx-notebook-output-mode '(("epoch 1" drgnx-notebook-line 1)))))
+      (unwind-protect
+          (with-current-buffer b
+            (setq drgnx-notebook-view--notebook (get-buffer "*nb-test*") drgnx-notebook-view--cell "a")
+            (with-current-buffer drgnx-notebook-view--notebook (setq drgnx-notebook--running "a"))
+            (drgnx-notebook-view--refresh)
+            (should (string-search "Output" drgnx-notebook-view--header))
+            (should (string-search "cell 1" drgnx-notebook-view--header))
+            (should (string-search "follows the run" drgnx-notebook-view--header))
+            (with-current-buffer drgnx-notebook-view--notebook (setq drgnx-notebook--running nil))
+            (drgnx-notebook-view--refresh)
+            (should-not (string-search "follows the run" drgnx-notebook-view--header)))
+        (kill-buffer b)))))
+
+(ert-deftest drgnx-notebook/the-logs-title-counts-what-was-dropped ()
+  (nb-test--with
+    (let ((b (nb-test--view-buffer 'drgnx-notebook-log-mode '(("12 earlier entries dropped") ("stream  hi" drgnx-notebook-log 1)))))
+      (unwind-protect
+          (with-current-buffer b
+            (should (string-search "Kernel log" drgnx-notebook-view--header))
+            (should (string-search "12 earlier entries dropped" drgnx-notebook-view--header)))
+        (kill-buffer b)))))
+
+(ert-deftest drgnx-notebook/the-hint-says-enter-not-ret ()
+  (should (equal (drgnx-notebook--key-word "RET") "Enter"))
+  (should (equal (drgnx-notebook--key-word "C-c C-j") "C-c C-j")))

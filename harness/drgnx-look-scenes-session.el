@@ -179,7 +179,8 @@ branch gateway-queue, staged file and history come with the Magit adapter (look 
                    "the error output is the hub's red bold first line, not the mockup's error-tint block (the tail carries styles, not a kind)"
                    "the picture is a gradient the scene makes (a PPM): in use, images are the hub's PNG or JPEG, fetched from notebook/output")
     (notebook-light "see notebook-dark")
-    (notebook-views "no mockup yet: the three views are the hub's rows in Sjá (outline shown, beside the notebook); a mockup comes before any look judgment"
+    (notebook-views-light "see notebook-views")
+    (notebook-views "the approved mockup (notebook-views.html): its chips, cut-row tints and error tints are the hub's rows' faces (the notebook views agent), not the editor's; the three views are windows of the editor, not the mockup's cards"
                     "the notebook is a file the scene writes and the hub opens (no kernel: no running cell, no log entries), so the rows are the hub's own")
     (palette "the mockup's palette rows come from its own commands; the line lists the registry's")
     (explorer-focused-dark "no agent badges (C, R) in the Explorer: agent system part 3 (G9)")
@@ -1535,6 +1536,12 @@ the full output of the failed cell, the kernel's log."
     (drgnx-wb-focus-editor)
     (drgnx-look-scene--hub)
     (load (expand-file-name "modules/lang/drgnx-notebook" (bound-and-true-p drgnx-dir)) nil t)
+    ;; the dark scene's notebook and views, when the light one follows
+    (dolist (b (buffer-list))
+      (when (string-prefix-p "*Notebook " (buffer-name b)) (let ((kill-buffer-query-functions nil)) (kill-buffer b))))
+    (when-let* ((old (get-buffer "cache-experiments.ipynb")))
+      (with-current-buffer old (set-buffer-modified-p nil))
+      (kill-buffer old))
     (let* ((buffer (find-file-noselect (drgnx-look-scene--notebook-file))) (base (buffer-name buffer)) views)
       (drgnx-look-scene--show buffer)
       (when (drgnx-look-scene--until 30 "the notebook opens" (lambda () (buffer-local-value 'drgnx-notebook--id buffer)))
@@ -1559,6 +1566,7 @@ the full output of the failed cell, the kernel's log."
                                                          views))))))
   (drgnx-look-scene--answer))
 
+(defun drgnx-look-scene-notebook-views-light () "The three notebook views, light." (drgnx-look-scene--notebook-views 'drgnx-light))
 (defun drgnx-look-scene-notebook-views () "The notebook and its outline view." (drgnx-look-scene--notebook-views 'drgnx-dark))
 (defun drgnx-look-scene-notebook-dark () "The notebook, dark." (drgnx-look-scene--notebook 'drgnx-dark))
 (defun drgnx-look-scene-notebook-light () "The notebook, light." (drgnx-look-scene--notebook 'drgnx-light))

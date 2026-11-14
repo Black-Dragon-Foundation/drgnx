@@ -1230,7 +1230,7 @@ THEN-RUN-ALL: run every code cell once it is up."
 
 (define-derived-mode drgnx-notebook-view-mode special-mode "Notebook view"
   "A notebook's Sjá view: rows the hub builds."
-  (setq-local truncate-lines t cursor-type nil)
+  (setq-local truncate-lines t cursor-type nil header-line-format '(" " (:eval drgnx-notebook-view--header)))
   (add-hook 'drgnx-view-patch-patched-functions #'drgnx-notebook-view--refresh nil t))
 (define-derived-mode drgnx-notebook-outline-mode drgnx-notebook-view-mode "Notebook outline"
   "The cell outline: one row per cell; Go to Cell (the key profiles' RET) goes to the cell.")
@@ -1363,6 +1363,21 @@ THEN-RUN-ALL: run every code cell once it is up."
 
 (defvar-local drgnx-notebook-view--foot nil "In a view buffer: the status bar's line about its rows (`9 of 2 000 listed').")
 (defvar-local drgnx-notebook-view--hint nil "In a view buffer: the key hint at the bar's other end.")
+(defvar-local drgnx-notebook-view--header nil "In a view buffer: its pane title, the name, what it is of and a count chip.")
+
+(defun drgnx-notebook--key-word (label)
+  "A key's LABEL as a hint says it: the Return key is `Enter'."
+  (if (equal label "RET") "Enter" label))
+
+(defun drgnx-notebook-view--title (name subtitle chip &optional accent)
+  "The pane title: NAME, the muted SUBTITLE and a CHIP at the right end (in the accent when ACCENT)."
+  (concat (propertize name 'face 'drgnx-text) "  " (propertize (or subtitle "") 'face 'drgnx-text-subtle)
+          (when chip
+            (concat (propertize " " 'display `(space :align-to (- right ,(+ 2 (string-width chip)))))
+                    (propertize (concat " " chip " ") 'face (if accent 'drgnx-chip-accent 'drgnx-chip-quiet))))))
+
+(defun drgnx-notebook-view--notebook-name ()
+  (if (buffer-live-p drgnx-notebook-view--notebook) (buffer-name drgnx-notebook-view--notebook) ""))
 
 (defun drgnx-notebook--group (n)
   "N with its thousands set off by a space, as the mockup writes them (`1 240')."
@@ -1386,6 +1401,20 @@ THEN-RUN-ALL: run every code cell once it is up."
     (goto-char (point-min))
     (if (re-search-forward regexp nil t) (string-to-number (replace-regexp-in-string " " "" (match-string 1))) 0)))
 
+(defun drgnx-notebook-view--output-title ()
+  "`Output  cell 3 · [*] · running', with `follows the run' while the cell runs."
+  (let* ((nb drgnx-notebook-view--notebook) (cell drgnx-notebook-view--cell)
+         (index (and (buffer-live-p nb)
+                     (with-current-buffer nb
+                       (seq-position drgnx-notebook--cells cell (lambda (c id) (equal (plist-get c :id) id))))))
+         (head (and (buffer-live-p nb) (gethash cell (buffer-local-value 'drgnx-notebook--heads nb))))
+         (running (and (buffer-live-p nb) (equal (buffer-local-value 'drgnx-notebook--running nb) cell))))
+    (drgnx-notebook-view--title "Output"
+                                (string-join (delq nil (list (and index (format "cell %d" (1+ index)))
+                                                             (and head (plist-get head :text) (string-trim (plist-get head :text)))))
+                                             " · ")
+                                (and running "follows the run") t)))
+
 (defun drgnx-notebook-view--refresh (&optional _view _keys)
   "Compute this view buffer's foot line, key hint and gutter from its rows (a draw just changed them)."
   (when (derived-mode-p 'drgnx-notebook-view-mode)
@@ -1394,16 +1423,20 @@ THEN-RUN-ALL: run every code cell once it is up."
        (let* ((listed (cdr (drgnx-notebook-view--rows-count 'drgnx-notebook-cell)))
               (more (drgnx-notebook-view--note "^\\([0-9 ]+\\) more cells")))
          (setq drgnx-notebook-view--foot (format "%s of %s listed" (drgnx-notebook--group listed) (drgnx-notebook--group (+ listed more)))
+               drgnx-notebook-view--header (drgnx-notebook-view--title "Outline" (drgnx-notebook-view--notebook-name)
+                                                                       (format "%s cells" (drgnx-notebook--group (+ listed more))))
                drgnx-notebook-view--hint
                (and (fboundp 'drgnx-surfaces-key-label)
-                    (when-let* ((k (drgnx-surfaces-key-label 'notebook-outline-visit :short t))) (format "%s goes to the cell" k))))))
+                    (when-let* ((k (drgnx-surfaces-key-label 'notebook-outline-visit :short t)))
+                      (format "%s goes to the cell" (drgnx-notebook--key-word k)))))))
       ('drgnx-notebook-output-mode
        (let ((lines (drgnx-notebook--output-lines)))
          (if (null lines)
              (setq drgnx-notebook-view--foot "no output")
            (let* ((above (drgnx-notebook-view--note "^\\([0-9 ]+\\) lines above"))
                   (below (drgnx-notebook-view--note "^\\([0-9 ]+\\) lines below")))
-             (setq drgnx-notebook-view--foot (format "lines %s–%s of %s" (drgnx-notebook--group (car lines)) (drgnx-notebook--group (cdr lines))
+             (setq drgnx-notebook-view--header (drgnx-notebook-view--output-title)
+                   drgnx-notebook-view--foot (format "lines %s–%s of %s" (drgnx-notebook--group (car lines)) (drgnx-notebook--group (cdr lines))
                                                      (drgnx-notebook--group (+ (cdr lines) below)))
                    ;; the gutter counts the cell's lines: a row above is the line before the first shown
                    display-line-numbers t
@@ -1411,7 +1444,11 @@ THEN-RUN-ALL: run every code cell once it is up."
       ('drgnx-notebook-log-mode
        (let ((entries (car (drgnx-notebook-view--rows-count 'drgnx-notebook-log)))
              (lost (drgnx-notebook-view--note "^\\([0-9 ]+\\) earlier entries dropped")))
-         (setq drgnx-notebook-view--foot (format "%d entries%s" entries (if (> lost 0) (format " · %d dropped" lost) ""))
+         (setq drgnx-notebook-view--header (drgnx-notebook-view--title "Kernel log" (or (and (buffer-live-p drgnx-notebook-view--notebook)
+                                                                                             (buffer-local-value 'drgnx-notebook--kernel drgnx-notebook-view--notebook))
+                                                                                        (drgnx-notebook-view--notebook-name))
+                                                                       (and (> lost 0) (format "%d earlier entries dropped" lost)))
+               drgnx-notebook-view--foot (format "%d entries%s" entries (if (> lost 0) (format " · %d dropped" lost) ""))
                drgnx-notebook-view--hint "answers no cell"))))
     (when (fboundp 'drgnx-statusbar-refresh) (drgnx-statusbar-refresh t))))
 
