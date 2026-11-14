@@ -162,12 +162,30 @@ pub fn mock_main(script: &std::ffi::OsStr) -> std::process::ExitCode {
 /// A boxed future, for the traits below.
 pub type BoxFut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
+/// What became of an event sent to one editor by [`Sink::send_lossy`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Delivery {
+    Sent,
+    /// Its queue is backed up: the event was not queued and the connection is kept.
+    Dropped,
+    /// The connection is gone.
+    Gone,
+}
+
 /// Where the events go: the editors' connections.
 pub trait Sink: Send + Sync {
     /// EVENT with DATA to every editor but EXCEPT.
     fn broadcast(&self, event: &str, data: Value, except: Option<u64>);
     /// EVENT with DATA to connection CONN only.
     fn send(&self, conn: u64, event: &str, data: Value) -> bool;
+    /// [`Sink::send`] for a producer whose events can be dropped: a backed-up client costs the event, not its subscription.
+    fn send_lossy(&self, conn: u64, event: &str, data: Value) -> Delivery {
+        if self.send(conn, event, data) {
+            Delivery::Sent
+        } else {
+            Delivery::Gone
+        }
+    }
 }
 
 impl Sink for crate::settings::agents::Editors {
@@ -176,6 +194,9 @@ impl Sink for crate::settings::agents::Editors {
     }
     fn send(&self, conn: u64, event: &str, data: Value) -> bool {
         self.send_to(conn, event, data)
+    }
+    fn send_lossy(&self, conn: u64, event: &str, data: Value) -> Delivery {
+        self.send_to_lossy(conn, event, data)
     }
 }
 
@@ -296,6 +317,9 @@ struct Inner {
     /// Told the roots of the live sessions each time they change (a session starts or ends; a recording starts with
     /// its session): the hub gives the agents there the debugger's tools.
     on_state: OnceLock<StateHook>,
+    /// Gives a file's lines as the editor's buffer positions (the edit history's mirror), so the breakpoints sent to
+    /// the editor carry them (`editor::marks`): none set (tests), none sent.
+    lines: OnceLock<LinesHook>,
     /// The inline values' parse cache and each session's last values.
     inline: inline::Inline,
     /// The open heap graphs (`debug/heap`), read again at each new stop of their session.
@@ -323,6 +347,10 @@ pub struct Snap {
 
 /// What [`Debug::on_state`] calls.
 pub type StateHook = Arc<dyn Fn(Vec<String>) + Send + Sync>;
+
+/// What [`Debug::on_lines`] calls: the lines of a file (an absolute path) as the editor's buffer positions, none when
+/// no buffer of it is tracked or it is over the marks' limit.
+pub type LinesHook = Arc<dyn Fn(&str) -> Option<crate::editor::marks::Lines> + Send + Sync>;
 
 /// The hub's debug sessions.
 #[derive(Clone)]
@@ -354,6 +382,7 @@ impl Debug {
                 store_dir,
                 rec: OnceLock::new(),
                 on_state: OnceLock::new(),
+                lines: OnceLock::new(),
                 inline: inline::Inline::new(),
                 heaps: heap_wire::Heaps::default(),
                 listeners: Mutex::new(Vec::new()),
@@ -366,6 +395,18 @@ impl Debug {
     /// Call HOOK with the live sessions' roots whenever they change (once; a later hook is ignored).
     pub fn on_state(&self, hook: StateHook) {
         let _ = self.inner.on_state.set(hook);
+    }
+
+    /// Use HOOK to put the editor's buffer positions on the breakpoints sent for a file (once; a later hook is ignored).
+    pub fn on_lines(&self, hook: LinesHook) {
+        let _ = self.inner.lines.set(hook);
+    }
+
+    /// Give each breakpoint of V (PATH's view) the buffer positions of its line when the editor holds PATH's text.
+    fn place_bps(&self, path: &str, v: &mut Value) {
+        if let Some(lines) = self.inner.lines.get().and_then(|hook| hook(path)) {
+            crate::editor::marks::place_breakpoints(v, &lines);
+        }
     }
 
     /// The roots that debug: a live session's, or a recorded run's.
@@ -497,6 +538,7 @@ impl Debug {
     fn publish_bps(&self, root: &str, path: &str) {
         let mut v = self.store(root, |s| s.view(path));
         v["root"] = json!(root);
+        self.place_bps(path, &mut v);
         self.inner.sink.broadcast("debug-breakpoints", v, None);
         self.changed();
     }
@@ -856,6 +898,7 @@ impl Debug {
         }
         let mut v = self.store(root, |s| s.view(&shown));
         v["root"] = json!(root);
+        self.place_bps(&shown, &mut v);
         v["functions"] = json!(self.store(root, |s| s.functions()));
         if let Some(id) = change.and_then(|c| c.id) {
             v["added"] = json!(id);

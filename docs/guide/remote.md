@@ -75,7 +75,7 @@ had. The one intended exception is Find in the Explorer: you are typing in the m
 live filter runs from an idle timer, as part of your command. Find on a remote folder leaves the ignored files
 (`grep-find-ignored-files`, such as `*.o` and `*.elc`) out here, not in find on the host: with them, the find line was
 too long for a macOS host. The change gutter is off for remote files; the
-Explorer's Git letters, inline blame and the Outline skip them, and sticky scroll works from the buffer's text alone.
+Explorer's Git letters, inline blame and the Outline skip them, and sticky scroll shows scopes only from tree-sitter there.
 Nothing remote asks a question from an automatic path; every ssh question comes from a command you ran. As a second
 guard, while the module is on, TRAMP's login, password, yes/no, one-time-code and confirm questions fail with an error
 unless the code asking is part of a command of yours (a key you press, `M-x`, a click) or Open Remote… or Reconnect

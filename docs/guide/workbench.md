@@ -97,12 +97,12 @@ stays at the same height, on the row that took its place, instead of jumping to 
 
 ### Outline
 
-Below the Explorer, the **Outline** lists the definitions of the file in the editor (as imenu finds them, nested the
-same way). A click shows the definition in the editor and keeps you in the Outline; `RET` goes there. It follows the
+Below the Explorer, the **Outline** lists the definitions of the file in the editor, nested in the definitions around
+them (the hub parses the file, your unsaved text included). A click shows the definition in the editor and keeps you in the Outline; `RET` goes there. It follows the
 editor, and half a second after you stop typing, your edits — only while it is shown (hidden, it lets go of the file
-at the next pause or editor change), and a key you press while it works wins (it tries again at the next pause). Files without an index, remote files and buffers over 1 MB get a
-one-line notice instead: an info icon and the reason in the muted text ("No outline for this file"), an empty
-state that is never selected. The definition your cursor is in is highlighted in the Outline (an overlay, set a moment
+at the next editor change); nothing of it runs while you type. Files with nothing to outline and remote files get a one-line notice
+instead: an info icon and the reason in the muted text ("No outline for this file"; a file over 1 MiB: "This file is
+too large for an outline"), an empty state that is never selected. Without the hub the section says it waits for it. The definition your cursor is in is highlighted in the Outline (an overlay, set a moment
 after the cursor stops — the Outline's own cursor is yours and never moves while you work in a file). Another file
 starts the Outline at its top, its cursor on the definition your cursor is in (scrolled into view). An edit that only
 moves definitions redraws nothing, and the Outline keeps your place in it when definitions are added above. Its rows
@@ -305,8 +305,8 @@ pixels). With two editor groups or more, the selected group's card is ringed in 
   Close Tab `C-<f4>` · palette · `SPC b d`; Next / Previous Tab `C-<next>` / `C-<prior>` · Emacs' `C-x <right>` /
   `C-x <left>` · `SPC b n` / `SPC b p`. `*scratch*` is a tab only while it is shown. Killing a buffer takes its tab
   out of every window at once; closing the shown tab (or killing its buffer) shows the tab you used before it, as in VS Code; with no such tab, the one to its right, else its left. Each window keeps its own history.
-- **Breadcrumb**: the folders from the project's root › file › the definition the cursor is in (a function, a heading,
-  a class: what `add-log-current-defun` names), `●` while unsaved, in the caption type face (the project is named by
+- **Breadcrumb**: the folders from the project's root › file › the definition the cursor is in (the innermost of the
+  definitions the Outline lists around its line; none without the hub or in a remote file), `●` while unsaved, in the caption type face (the project is named by
   the Explorer and the title row): a row 26 logical pixels high on a graphical frame, the folders subtle and the last
   part muted. The definition is looked up once Emacs has been idle for `drgnx-chrome-symbol-delay` (0.3 s), never while
   the screen is drawn. A buffer with a header line of its own (the
@@ -720,7 +720,7 @@ opening a folder row, New File, Rename, Delete and Paste, and leaving Find. A re
 shows the listing it already has and asks the host nothing; a remote folder that was never listed shows one row,
 `(not listed — Refresh)`, and Enter or a click on that row refreshes. A checkout in a local folder forgets only the
 local listings. Git decorations, inline blame, the Outline and the change gutter skip remote files, and sticky scroll
-works from the buffer's text alone; see [remote.md](remote.md).
+shows scopes only from tree-sitter there; see [remote.md](remote.md).
 
 ## Known limits of the restore
 

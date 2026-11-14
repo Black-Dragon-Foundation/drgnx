@@ -154,6 +154,16 @@ pub(crate) fn methods() -> Vec<Method> {
             doc: "git's blame of a whole file in one answer: per line the commit that last changed it, for the text of the editor's tracked buffer (unsaved typing included) or else the file; lines an agent wrote ride along; cached by path, HEAD and text",
         ),
         method!(
+            "history/line-positions", HistoryLinePositions(LinePositionsParams) -> LinePositions,
+            classes: [User], writes: false,
+            doc: "where the given lines of the editor's tracked buffer start in the text the hub holds (and just after them): the editor moves a mark to them without counting lines; none when the buffer is not tracked or the text is over the marks' limit",
+        ),
+        method!(
+            "history/eol-fit", HistoryEolFit(EolFitParams) -> EolFits,
+            classes: [User], writes: false,
+            doc: "end-of-line diagnostics fitted: each text cut with an ellipsis to the room its window has after the end of its line in the text the hub holds of the editor's tracked buffer (tabs counted); the editor shows the fitted strings and fits nothing itself",
+        ),
+        method!(
             "git/blame/line", GitBlameLine(GitBlameLineParams) -> BlamedLine,
             classes: [User], writes: false,
             doc: "the inline blame text of one line of the editor's tracked buffer (git/blame's answer for the text the hub holds), fitted to the columns the editor has room for: author, age, commit subject; no text when the buffer is not tracked, the line has none or there is no room",
@@ -477,6 +487,76 @@ pub struct GitBlamed {
     pub commits: Vec<BlameCommit>,
     pub lines: Vec<u32>,
     pub agents: Vec<AgentLines>,
+}
+
+/// `history/line-positions`: where LINES (1-based) of the editor's tracked buffer of PATH of the worktree at
+/// WORKTREE_ROOT start, in the text the hub holds (the editor hands its changes over first: `drgnx-history-ask`).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LinePositionsParams {
+    /// Relative to the worktree.
+    pub path: String,
+    pub worktree_root: String,
+    pub lines: Vec<u32>,
+}
+
+/// One line's place in the buffer: where it starts and just after it, its line break included.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LinePosition {
+    pub line: u32,
+    pub pos: i64,
+    pub end: i64,
+}
+
+/// `history/line-positions`' answer: none (`tracked` false, or `positions` empty) when no buffer of the file is
+/// tracked or its text is over the marks' limit.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LinePositions {
+    pub tracked: bool,
+    pub positions: Vec<LinePosition>,
+}
+
+/// `history/eol-fit`: the end-of-line diagnostics of the editor's tracked buffer of PATH of the worktree at
+/// WORKTREE_ROOT, each to be cut to the room a window WIDTH columns wide has after the end of its line (TAB_WIDTH
+/// columns to a tab).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EolFitParams {
+    /// Relative to the worktree.
+    pub path: String,
+    pub worktree_root: String,
+    /// The window's body width in columns.
+    pub width: u32,
+    pub tab_width: u32,
+    pub items: Vec<EolItem>,
+}
+
+/// One diagnostic: the client's KEY for it, the buffer POSITION (Emacs's) it starts at, and its TEXT.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EolItem {
+    pub key: u64,
+    pub pos: i64,
+    pub text: String,
+}
+
+/// A diagnostic's TEXT fitted: whole when it fits, else cut with an ellipsis (at least 8 columns).
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EolFitted {
+    pub key: u64,
+    pub text: String,
+}
+
+/// `history/eol-fit`'s answer: `items` empty (and `tracked` false) when no buffer of the file is tracked or its text
+/// is over the marks' limit.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EolFits {
+    pub tracked: bool,
+    pub items: Vec<EolFitted>,
 }
 
 /// `git/blame/line`: the blame text of the line POS is on, in the text the hub holds of the editor's tracked buffer of

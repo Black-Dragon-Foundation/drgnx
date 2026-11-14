@@ -36,6 +36,9 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// How many bytes may wait in a client's queue before [`Editors::send_to_lossy`] drops an event (a quarter of the queue's limit).
+pub const LOSSY_BACKLOG: usize = 4 << 20;
+
 impl Editors {
     /// Connection CONN gets the events from now on.
     pub fn subscribe(&self, conn: u64, out: Arc<Outbox>) {
@@ -74,6 +77,28 @@ impl Editors {
             return;
         };
         lock(&self.subscribers).retain(|c, out| Some(*c) == except || out.push(line.clone()));
+    }
+
+    /// EVENT with DATA to connection CONN only, for a producer whose events can be dropped (a notebook's output): when the
+    /// client's queue already holds [`LOSSY_BACKLOG`] bytes the event is dropped and the connection kept, where a push over
+    /// the queue's own limit would close the connection and end every subscription it has.
+    pub fn send_to_lossy(&self, conn: u64, event: &str, data: Value) -> crate::debug::Delivery {
+        use crate::debug::Delivery;
+        let Some(line) = crate::front::event_line(event, data) else {
+            return Delivery::Dropped;
+        };
+        let mut subs = lock(&self.subscribers);
+        let Some(out) = subs.get(&conn) else {
+            return Delivery::Gone;
+        };
+        if out.queued_bytes() + line.len() > LOSSY_BACKLOG {
+            return Delivery::Dropped;
+        }
+        if out.push(line) {
+            return Delivery::Sent;
+        }
+        subs.remove(&conn);
+        Delivery::Gone
     }
 
     /// EVENT with DATA to connection CONN only; false when it is not subscribed or its connection is closed.

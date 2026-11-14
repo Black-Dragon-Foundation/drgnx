@@ -371,8 +371,10 @@ uninstalled afterwards."
   (drgnx-clip-test--env nil
     (drgnx-clip-test--gsettings "echo false")
     (drgnx-clip-test--x11 '("bash")
-      (drgnx-clipboard-install)
-      (drgnx-test-pause 0.5 "the answers may not turn the syncing off")
+      (let ((before (process-list)))
+        (drgnx-clipboard-install)
+        ;; the manager's answers (its helper processes) have been read: only then is "they did not turn it off" said
+        (drgnx-test-wait-ended (cl-set-difference (process-list) before) :what "the settings helpers' answers"))
       (should select-active-regions))))
 
 (ert-deftest drgnx-clip/a-gsettings-that-hangs-is-given-up-after-a-second ()

@@ -54,7 +54,7 @@
 
 (defun drgnx-extensions-recommend--files (root)
   "The file names under ROOT the Explorer's cache already lists, breadth first, within the caps; nil without it."
-  (let ((queue (list (file-name-as-directory root))) (dirs 0) files)
+  (let ((queue (list (if (directory-name-p root) root (file-name-as-directory root)))) (dirs 0) files)
     (while (and queue (< dirs drgnx-extensions-recommend--max-dirs) (< (length files) drgnx-extensions-recommend--max-files))
       (let* ((dir (pop queue))
              (hit (condition-case nil (drgnx-cache-get 'explorer-listing dir) (error nil))))

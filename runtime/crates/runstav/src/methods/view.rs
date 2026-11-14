@@ -245,6 +245,69 @@ fn check_buffers(p: &BuffersSet) -> Result<(), Error> {
     Ok(())
 }
 
+/// The longest file name `outline/set` takes, in bytes.
+pub const OUTLINE_FILE_MAX: usize = 4096;
+
+/// `outline/set`: the Outline panel's hub-fed VIEW now shows FILE (absolute; none: the editor shows no file the hub
+/// can read, such as a buffer without one or a remote file).  The hub outlines the file as the editor's tracked buffer
+/// of it has it (unsaved typing included), else as it is on disk, keeps it per (connection, view), outlines it again
+/// after the editor's edits pause, and sends the view's model and rows (docs/develop/hub.md, "The Outline panel's
+/// rows").  Sent again when the editor shows another file or saves this one, never per keystroke.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OutlineSet {
+    pub view: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+}
+
+fn check_outline(p: &OutlineSet) -> Result<(), Error> {
+    check_ids(&p.view, None)?;
+    p.file.as_deref().map_or(Ok(()), check_outline_file)
+}
+
+/// `outline/scopes`: the definitions around LINE (from 1) of a file, as the Outline reads it (the editor's unsaved text
+/// where its edit history tracks the buffer, else the disk): what the breadcrumb's symbol and sticky scroll show.  The
+/// file is FILE (absolute), or PATH under WORKTREE_ROOT (the edit history's names: a tracked buffer asks through the
+/// history, its changes handed over first).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OutlineScopesParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_root: Option<String>,
+    pub line: u32,
+}
+
+/// One definition around a line: its NAME and the LINE (from 1) it starts on.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OutlineScope {
+    pub name: String,
+    pub line: u32,
+}
+
+/// `outline/scopes`' answer: the definitions that hold the line, outermost first (one that starts on it included);
+/// empty for a file with none, one that cannot be read, or one past the Outline's size limit.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OutlineScopes {
+    pub scopes: Vec<OutlineScope>,
+}
+
+fn check_outline_file(f: &str) -> Result<(), Error> {
+    if f.is_empty() || f.len() > OUTLINE_FILE_MAX || !f.starts_with('/') {
+        return Err(invalid(
+            "file",
+            "an absolute file name of at most 4096 bytes",
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
@@ -300,6 +363,33 @@ pub(crate) fn methods() -> Vec<Method> {
             classes: [User], writes: false,
             doc: "changes to the Buffers panel's open buffers of a hub-fed view (put, modified, remove, the window's scope, the filter), in order: the hub sends the view's rows that changed to every class of it",
             check: check_buffers,
+        ),
+        method!(
+            "outline/set", OutlineSet(OutlineSet) -> bool,
+            classes: [User], writes: false,
+            doc: "the file the Outline panel's hub-fed view shows (none: no file): the hub outlines it (the editor's unsaved text where its edit history tracks the buffer, else the disk), again after edits pause, and sends the view's model and rows",
+            check: check_outline,
+        ),
+        method!(
+            "outline/scopes", OutlineScopes(OutlineScopesParams) -> OutlineScopes,
+            classes: [User], writes: false,
+            doc: "the definitions around a line of a file, outermost first, as the Outline reads it (the editor's unsaved text where its edit history tracks the buffer, else the disk): the breadcrumb's symbol and sticky scroll",
+            check: |p: &OutlineScopesParams| {
+                match (&p.file, &p.worktree_root, &p.path) {
+                    (Some(f), None, None) => check_outline_file(f)?,
+                    (None, Some(root), Some(path)) => {
+                        check_outline_file(root)?;
+                        if path.is_empty() || path.len() > OUTLINE_FILE_MAX || path.starts_with('/') {
+                            return Err(invalid("path", "a file name relative to worktree_root, at most 4096 bytes"));
+                        }
+                    }
+                    _ => return Err(invalid("file", "a file, or a path and its worktree_root")),
+                }
+                if p.line == 0 {
+                    return Err(invalid("line", "a line number from 1"));
+                }
+                Ok(())
+            },
         ),
     ]
 }

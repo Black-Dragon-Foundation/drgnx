@@ -499,6 +499,49 @@ impl Notebook {
         }
     }
 
+    /// Cell I's outputs as nbformat output objects: as the file has them, or as `set_outputs` set them (none for a cell without).
+    pub fn outputs(&self, i: usize) -> Vec<Value> {
+        self.pairs_of(i)
+            .into_iter()
+            .find(|(k, _)| k == "outputs")
+            .and_then(|(_, v)| serde_json::from_str(&v).ok())
+            .unwrap_or_default()
+    }
+
+    /// The first MAX of cell I's outputs, each as its JSON text: nothing is built of the rest (a hostile file's millions of entries
+    /// are skipped as they are read), and each output is left for the caller to read as far as it trusts it.
+    pub fn outputs_raw(&self, i: usize, max: usize) -> Vec<String> {
+        struct First(usize);
+        impl<'de> serde::de::Visitor<'de> for First {
+            type Value = Vec<String>;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("an array")
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut a: A,
+            ) -> Result<Vec<String>, A::Error> {
+                let mut out = Vec::new();
+                while out.len() < self.0 {
+                    match a.next_element::<&RawValue>()? {
+                        Some(r) => out.push(r.get().to_owned()),
+                        None => return Ok(out),
+                    }
+                }
+                while a.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+                Ok(out)
+            }
+        }
+        let Some((_, v)) = self.pairs_of(i).into_iter().find(|(k, _)| k == "outputs") else {
+            return Vec::new();
+        };
+        serde::Deserializer::deserialize_seq(
+            &mut serde_json::Deserializer::from_str(&v),
+            First(max),
+        )
+        .unwrap_or_default()
+    }
+
     /// Cell I's execution count.
     pub fn set_execution_count(&mut self, i: usize, n: Option<i64>) {
         self.cells[i].execution_count = n;
@@ -555,6 +598,44 @@ impl Notebook {
         };
         self.cells.insert(at.min(self.cells.len()), cell);
         self.changed = true;
+    }
+
+    /// The cells become PLAN (id, kind, source), in that order: the cells that were are kept (their bytes too, until their text or
+    /// type differs), a new one is added with its id (a repeated id gets one from MINT), the rest go. One pass, however much changed.
+    pub fn rearrange(&mut self, plan: &[(String, Kind, String)], mint: &mut dyn FnMut() -> String) {
+        let mut old: std::collections::HashMap<String, Cell> =
+            self.cells.drain(..).map(|c| (c.id.clone(), c)).collect();
+        let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut cells = Vec::with_capacity(plan.len());
+        for (id, kind, source) in plan {
+            let cell = match old.remove(id) {
+                Some(c) => c,
+                None => {
+                    let mut id = id.clone();
+                    while used.contains(&id) || old.contains_key(&id) {
+                        id = mint();
+                    }
+                    Cell {
+                        id,
+                        had_id: true,
+                        kind: *kind,
+                        source: source.clone(),
+                        origin: Origin::New,
+                        execution_count: None,
+                    }
+                }
+            };
+            used.insert(cell.id.clone());
+            cells.push(cell);
+        }
+        self.cells = cells;
+        self.changed = true;
+        for (i, (_, kind, source)) in plan.iter().enumerate() {
+            if self.cells[i].source != *source {
+                self.set_source(i, source);
+            }
+            self.set_kind(i, *kind);
+        }
     }
 
     /// Remove cell I.

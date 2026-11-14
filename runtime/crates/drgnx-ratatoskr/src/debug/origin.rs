@@ -309,6 +309,14 @@ async fn probed_trail(
     files: &[(String, String)],
     mut on_level: impl FnMut(&[Link]),
 ) -> Result<Trail, String> {
+    // the stores are found with the language's grammar: without it (its pack not built) there is nothing to put
+    // logpoints on, and an empty trail would read as a program that never stored the value
+    if hrafn::structural::Grammar::of(lang).is_none() {
+        return Ok(Trail {
+            links: Vec::new(),
+            note: Some(format!("no grammar for {}", lang.as_str())),
+        });
+    }
     let mut links: Vec<Link> = Vec::new();
     let mut asked: Vec<String> = Vec::new();
     let mut questions = vec![question.to_owned()];
@@ -842,5 +850,38 @@ mod pack_tests {
             ["const {t} = $V", "let {t} = $V", "var {t} = $V"]
         );
         assert!(decls_of(Lang::Python).is_empty());
+    }
+
+    /// A replay that must not run: a trail with nothing to put logpoints on never asks for one.
+    struct Never;
+    impl Replay for Never {
+        fn trace(
+            &self,
+            _: &str,
+            _: u64,
+            _: Vec<String>,
+        ) -> BoxFut<'static, Result<Traced, String>> {
+            Box::pin(async { Err("the replay ran".to_owned()) })
+        }
+        fn probe(
+            &self,
+            _: &str,
+            _: u64,
+            _: Vec<RunProbe>,
+        ) -> BoxFut<'static, Result<Vec<RunHit>, String>> {
+            Box::pin(async { Err("the replay ran".to_owned()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_language_with_no_grammar_says_so_on_its_trail() {
+        // text has no grammar in any build: the stores cannot be looked for, and the card must not look like a
+        // program that never stored the value
+        let files = vec![("/p/a.txt".to_owned(), "x = 1\n".to_owned())];
+        let t = probed_trail(&Never, "r1", 1, "x", 3, Lang::Text, &files, |_| {})
+            .await
+            .unwrap();
+        assert!(t.links.is_empty());
+        assert_eq!(t.note.as_deref(), Some("no grammar for text"));
     }
 }

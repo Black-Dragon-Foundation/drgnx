@@ -517,6 +517,15 @@ jobs:
       - name: debug adapters (debugpy and js-debug at the hub's pins)
         if: ${{ !cancelled() }}
         run: bash .github/ci/debug-adapters.sh "$RUNNER_TEMP/debug-adapters" >> "$GITHUB_ENV"
+      # a JS fork's origin trail finds the stores to log with the JavaScript grammar (origin::stores): without the
+      # pack-built grammars the lane's tests_fork_live JS row traces nothing and its trail comes back empty
+      - name: Pack grammars for the tests
+        if: ${{ !cancelled() }}
+        run: |
+          line="$(bash test/packs/hub-grammars.sh "$RUNNER_TEMP/hub-grammars" | grep '^export DRGNX_PACK_LOCK=')"
+          eval "$line"
+          echo "DRGNX_PACK_LOCK=$DRGNX_PACK_LOCK" >> "$GITHUB_ENV"
+          echo "DRGNX_PACK_GRAMMARS=$DRGNX_PACK_GRAMMARS" >> "$GITHUB_ENV"
       - name: build the agent core's tests (test hooks)
         id: core-build
         if: ${{ !cancelled() }}
@@ -1192,6 +1201,16 @@ jobs:
           name: cargo-timings-macos
           path: runtime/target/cargo-timings/cargo-timing.html
           if-no-files-found: warn
+      # the hub parses code with the pack-built grammars: built once with the build's own hub (the pack job, `packs sync
+      # --builtin`, as the Linux job does with cargo run) and handed to the tests as DRGNX_PACK_LOCK / DRGNX_PACK_GRAMMARS
+      - name: Pack grammars for the tests
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          [ -x runtime/target/debug/ratatoskr ] || { echo "::error::the build made no hub binary"; exit 1; }
+          line="$(RATATOSKR="$PWD/runtime/target/debug/ratatoskr" bash test/packs/hub-grammars.sh "$RUNNER_TEMP/hub-grammars" | grep '^export DRGNX_PACK_LOCK=')"
+          eval "$line"
+          echo "DRGNX_PACK_LOCK=$DRGNX_PACK_LOCK" >> "$GITHUB_ENV"
+          echo "DRGNX_PACK_GRAMMARS=$DRGNX_PACK_GRAMMARS" >> "$GITHUB_ENV"
       # Each test binary of the build, as cargo test runs them (from its package's folder, in the build's order, every
       # one whatever the others said), each under its own bound: a binary that hangs is stopped and named, and the rest
       # still run (the slowest, the hub's lib, takes about 3 minutes). The `Running` lines are cargo's, for the step
@@ -1424,6 +1443,16 @@ jobs:
         run: |
           cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr -p gleipnir-escape --features drgnx-ratatoskr/test-hooks
           cargo build --locked --manifest-path runtime/Cargo.toml -p sleipnir --no-default-features --bin drgnx-key
+      # the hub parses code with the pack-built grammars: built once with the build's own hub (the pack job, `packs sync
+      # --builtin`, as the Linux job does with cargo run) and handed to the tests as DRGNX_PACK_LOCK / DRGNX_PACK_GRAMMARS
+      - name: Pack grammars for the tests
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          [ -x runtime/target/debug/ratatoskr ] || { echo "::error::the build made no hub binary"; exit 1; }
+          line="$(RATATOSKR="$PWD/runtime/target/debug/ratatoskr" bash test/packs/hub-grammars.sh "$RUNNER_TEMP/hub-grammars" | grep '^export DRGNX_PACK_LOCK=')"
+          eval "$line"
+          echo "DRGNX_PACK_LOCK=$DRGNX_PACK_LOCK" >> "$GITHUB_ENV"
+          echo "DRGNX_PACK_GRAMMARS=$DRGNX_PACK_GRAMMARS" >> "$GITHUB_ENV"
       # the hooks/* rows load the fixture plugins from runtime/target/plugin-fixtures, which brokkr's test support
       # installs; in one job the unit tests did that first, here one test of it does
       - name: the plugin fixtures

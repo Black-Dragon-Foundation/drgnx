@@ -610,3 +610,62 @@ async fn a_worker_that_ends_unanswered_releases_the_list() {
     assert!(st.iter().all(|s| s.id != "aa") || st[0].running, "{st:?}");
     let _ = worker.await;
 }
+
+/// A fake worker on SOCKET whose program reads the clipboard at once: hello, then `clipboard-read` REQ; each line it
+/// hears goes to the receiver.
+fn worker_reading_clipboard(socket: &Path, req: u64) -> mpsc::UnboundedReceiver<In> {
+    let l = UnixListener::bind(socket).unwrap();
+    let (tx, rx) = mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        let (s, _) = l.accept().await.unwrap();
+        let (r, mut w) = s.into_split();
+        let hello = Out::Hello {
+            proto: PROTO,
+            pid: std::process::id(),
+            shell_pid: 4242,
+        };
+        let read = Out::ClipboardRead {
+            req,
+            primary: false,
+        };
+        for m in [hello, read] {
+            let line = serde_json::to_string(&m).unwrap() + "\n";
+            w.write_all(line.as_bytes()).await.unwrap();
+        }
+        let mut r = BufReader::new(r);
+        let mut line = String::new();
+        while r.read_line(&mut line).await.unwrap_or(0) > 0 {
+            if let Ok(m) = serde_json::from_str::<In>(&line) {
+                let _ = tx.send(m);
+            }
+            line.clear();
+        }
+        drop(w);
+    });
+    rx
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_unanswered_clipboard_read_is_denied_on_the_hubs_clock() {
+    // The worker's read waits for the editor; the hub answers "no" once CLIPBOARD_WAIT has passed on its own clock,
+    // never sooner, so a test's clock (not the wall) decides when a read times out.
+    let tmp = tempfile::tempdir().unwrap();
+    let rec = record(tmp.path(), "aa", "s1");
+    let mut rx = worker_reading_clipboard(&rec.socket, 9);
+    let (_t, _ev) = open(tmp.path()).await;
+    let t0 = crate::clock::now();
+    let reply = loop {
+        let m = crate::clock::timeout(Duration::from_secs(3600), rx.recv())
+            .await
+            .expect("the hub never answered the read")
+            .expect("the hub dropped the worker");
+        if let In::ClipboardReply { .. } = m {
+            break m;
+        }
+    };
+    assert!(
+        matches!(reply, In::ClipboardReply { req: 9, text: None }),
+        "{reply:?}"
+    );
+    assert!(crate::clock::now().duration_since(t0) >= CLIPBOARD_WAIT);
+}

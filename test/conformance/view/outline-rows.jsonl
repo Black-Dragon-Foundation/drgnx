@@ -1,0 +1,20 @@
+{"scenario": "view/outline-rows", "requires": ["v1"], "doc": "The Outline panel's rows are the hub's: outline/set names the file the editor shows; the hub outlines it (Hrafn's parse; Elisp needs no grammar library), sends the model (a node per definition with its line) and a row per definition, indented by the definitions around it. Another file replaces the rows; a file with nothing to outline, or none, is one notice row."}
+{"do": "root"}
+{"do": "start", "hub": "h"}
+{"do": "write_file", "path": "$ROOT/a.el", "text": "(defun alpha () 1)\n(defvar beta 2)\n(defun gamma () 3)\n"}
+{"do": "write_file", "path": "$ROOT/notes.txt", "text": "just words\n"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "view/env", "params": {"view": "outline", "class": "tty", "display": "tty", "scale": 1, "fonts": [], "cell": [1, 1], "width_px": 80, "palette": [], "epoch": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "outline/set", "params": {"view": "outline", "file": "$ROOT/a.el"}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"view": "outline", "hub": "$capture:hub", "base": 0, "version": 1, "reset": true}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "outline", "class": "tty", "hub": "$hub", "base": 0, "version": 1, "env_epoch": 1, "ops": [{"reset": [{"key": "0:0:alpha", "text": "  alpha", "props": [[0, 7, "drgnx-work-id", "0:0:alpha"]]}, {"key": "0:0:beta", "text": "  beta", "props": [[0, 6, "drgnx-work-id", "0:0:beta"]]}, {"key": "0:0:gamma", "text": "  gamma", "props": [[0, 7, "drgnx-work-id", "0:0:gamma"]]}]}]}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "outline/set", "params": {"view": "outline", "file": "$ROOT/notes.txt"}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"view": "outline", "hub": "$hub", "base": 1, "version": 2}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "outline", "class": "tty", "hub": "$hub", "base": 1, "version": 2, "env_epoch": 1}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "outline/set", "params": {"view": "outline", "file": "relative.rs"}}}
+{"do": "expect", "conn": "e", "json": {"id": 5, "error": {"code": "invalid-params"}}}

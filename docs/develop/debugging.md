@@ -430,7 +430,15 @@ Its tests (`test/unit/debug-launch-test.el`) script the hub's answers.
 `core/drgnx-margins.el` (owner `debug`, order 0: outermost, 18 px rounded up to whole columns; one column in a
 terminal). The hub holds the breakpoints; the mode asks `debug/breakpoints` for the file when it turns on, sends each
 change as an op by id and draws the answer, and redraws on the hub's `debug-breakpoints` event (a newer `version`
-only).
+only). Each breakpoint of that view and event carries `pos` and `end` (offload step E, hub.md "Editor marks"): the buffer
+positions where its line (the adapter's, when it bound it elsewhere) starts and just after it, counted by the hub in
+the text of the editor's tracked buffer (`editor::marks::place_breakpoints`; none when no buffer of the file is
+tracked or its text is over the marks' limit). The editor lays a mark at them, counting no line, when the buffer has no
+unsaved changes and they bound a whole line of its text. A buffer with unsaved changes asks the hub instead
+(`history/line-positions {path, worktree_root, lines}` through `drgnx-history-ask`, which hands the buffer's changes
+over first, so the hub's text is the buffer's), one question for all the marks that need placing; an answer for text
+typed since is dropped and the marks are asked for again. Lines are counted only when the hub cannot say: it is down,
+the buffer is not tracked, or its text is over the limit.
 
 - Glyphs follow the mockup's legend (`docs/specs/drgnx/the-look/debugging.html`): ten kinds (`bp`, `unverified`,
   `cond`, `log`, `off`, `hover`, `stop`, `stop-bp`, `frame`, `exception`) as SVGs coloured from the role faces
@@ -478,7 +486,9 @@ only).
   character in the UI font (its `●` is the mockup's 10 px; the code font's is 8), in the margin's own background (`default` as the buffer remaps it) with a `mouse-face` of
   `drgnx-debug-hover` at 38 % over it, both through `drgnx-color`. The strings sit on a pool of overlays per window (the
   overlay's `window`), laid out from `pre-redisplay-functions` and `window-scroll-functions` when the window's start or
-  height, the text or the marks changed; folded lines and lines with a mark are skipped. A window that only scrolled
+  height, the text or the marks changed; folded lines and lines with a mark are skipped. Typing walks no line: the
+  dots stay where the text carried them and are laid again once the typing has rested 0.1 s (a debounce through
+  `drgnx-timer`, one timer per window). A window that only scrolled
   or was resized drops its dots and lays them again once it has rested 0.1 s (`drgnx-debug-gutter--settle`): drawn on
   every scroll frame they cost ~10 % of it (docs/develop/perf.md, "The breakpoint column's margin"). Only on a graphical frame of a
   Nidhogg that lights a margin's `mouse-face` (feature `glitnir-margin-mouse-face`); elsewhere there is no pool.

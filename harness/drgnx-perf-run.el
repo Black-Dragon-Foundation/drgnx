@@ -1132,13 +1132,17 @@ OWN-HUB: the workload started the hub (`drgnx-perf--hub-start'), and the teardow
       (defun drgnx-perf--term-open ()
         ,(if (not flood)
              `(setq drgnx-perf--term (drgnx-perf--term-start ',argv))
-           ;; the Work map holds the panel: both terminals open in the editor area, the typed one above, the flood below
-           `(let ((display-buffer-overriding-action '((display-buffer-same-window)))
-                  (top (selected-window)))
-              (setq drgnx-perf--term (drgnx-perf--term-start ',argv))
-              (select-window (split-window top nil 'below))
-              (setq drgnx-perf--term2 (drgnx-perf--term-start ',flood))
-              (select-window top))))
+           ;; the map stays shown: a frame showing it is in layout Work, which the bus moves it into, and out of once no
+           ;; window shows it (`drgnx-work-space--follow-layout'), so the bus is settled first and nothing opens over
+           ;; the map: the typed terminal below the editor window, the flood in the panel (the display rules)
+           `(progn
+              (drgnx-signal--flush)
+              (select-window (split-window (drgnx-wb-editor-window) nil 'below))
+              (let ((display-buffer-overriding-action '((display-buffer-same-window))))
+                (setq drgnx-perf--term (drgnx-perf--term-start ',argv)))
+              (let ((typed (selected-window)))
+                (setq drgnx-perf--term2 (drgnx-perf--term-start ',flood))
+                (select-window typed)))))
       (defun drgnx-perf--term-show ()
         "The terminal in the panel (the display rules choose where), the editor window selected."
         (let ((win (selected-window)))
@@ -2230,13 +2234,14 @@ $DRGNX_RATATOSKR_BIN, with `ratatoskr-mock' beside it) for the workload, give it
 its transcript.  A turn is over when its `stop' entry is in the mirror: the hub sends a session's state at most
 every 50 ms, so a turn can go by with no busy status in between and the status cannot tell it."
   (concat
-   ;; the session's environment is the harness's allowlist: the binary's name and the stall reports' file go in the form
+   ;; the session's environment is the harness's allowlist: the binary's name, the stall reports' file and the pack grammars
+   ;; (code files read as text without them: a Pattern or Symbol search finds nothing) go in the form
    "(progn (defvar drgnx-perf--hub-bin nil \"The Ratatoskr binary.\") (setq drgnx-perf--hub-bin "
    (prin1-to-string (getenv "DRGNX_RATATOSKR_BIN")) ") "
-   "(defvar drgnx-perf--hub-stall-env nil \"The hub's stall watchdog settings (\\\"VAR=VALUE\\\" strings).\") "
+   "(defvar drgnx-perf--hub-stall-env nil \"The hub's stall watchdog settings and pack grammars (\\\"VAR=VALUE\\\" strings).\") "
    "(setq drgnx-perf--hub-stall-env '"
    (prin1-to-string (mapcan (lambda (v) (and (getenv v) (list (concat v "=" (getenv v)))))
-                            '("DRGNX_RATATOSKR_STALL_FILE" "DRGNX_RATATOSKR_STALL_MS")))
+                            '("DRGNX_RATATOSKR_STALL_FILE" "DRGNX_RATATOSKR_STALL_MS" "DRGNX_PACK_LOCK" "DRGNX_PACK_GRAMMARS")))
    ") "
    (prin1-to-string
     '(progn
@@ -3128,7 +3133,7 @@ INIT-DIR: drgnx's init/ (default).  (:server_ms STATS :modules_ms N)."
             (unwind-protect
                 (progn
                   (while (and (not served) (process-live-p p) (< (- (float-time) t0) 30))
-                    (if (eql 0 (car (drgnx-perf-run--client name 2 "-e" "t"))) (setq served t) (sleep-for 0.01)))
+                    (if (eql 0 (car (drgnx-perf-run--client name 2 "-e" "t"))) (setq served t) (drgnx-ui--poll-pause 0.01)))
                   (unless served (error "The daemon never answered (%s)" (if (process-live-p p) "30 s" "it exited")))
                   (when (or (> i 0) (= (or runs 4) 1)) (push (* 1000 (- (float-time) t0)) times))
                   (let ((m (drgnx-perf-run--client name 5 "-e" "(apply #'+ (mapcar (lambda (m) (or (plist-get (cdr m) :ms) 0)) (drgnx-modules-report)))")))
@@ -3136,7 +3141,7 @@ INIT-DIR: drgnx's init/ (default).  (:server_ms STATS :modules_ms N)."
                       (error "No module report from the daemon: %s" (cdr m)))
                     (setq modules (string-to-number (cdr m)))))
               (drgnx-perf-run--client name 3 "-e" "(kill-emacs)")
-              (let ((d (+ (float-time) 5))) (while (and (process-live-p p) (< (float-time) d)) (sleep-for 0.05)))
+              (let ((d (+ (float-time) 5))) (while (and (process-live-p p) (< (float-time) d)) (drgnx-ui--poll-pause 0.05)))
               (when (process-live-p p) (delete-process p)))))
       (delete-directory tmp t))
     (list :server_ms (mapcar #'drgnx-perf--round (drgnx-perf-stats times)) :modules_ms modules)))
@@ -3182,7 +3187,7 @@ session stays idle between the calls, so its idle poll and redisplay run as they
   (let ((deadline (+ (float-time) drgnx-perf-run-complete-wait)))
     (while (and (not (eq t (drgnx-perf-run--call sess "(and drgnx-perf--complete (nth 2 drgnx-perf--complete) t)")))
                 (< (float-time) deadline))
-      (sleep-for 0.05))))
+      (drgnx-ui--poll-pause 0.05))))
 
 (defun drgnx-perf-run--extras (sess spec)
   "What SPEC adds to a run, read in SESS after the actions: `:complete-ms' (`:complete-when', once it holds: see

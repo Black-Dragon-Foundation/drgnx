@@ -133,6 +133,36 @@ impl Lines {
     }
 }
 
+impl Lines {
+    /// The position just after LINE, its line break included (the end of the text for the last line): the end of the
+    /// span a whole-line mark covers.
+    pub fn after(&self, line: u32) -> i64 {
+        self.starts
+            .get(self.index(line) + 1)
+            .copied()
+            .unwrap_or_else(|| self.ends[self.ends.len() - 1])
+    }
+}
+
+/// Give each breakpoint of VIEW (the `debug-breakpoints` view of a file: `breakpoints: [{line, bound_line?, ...}]`) the
+/// positions of the line its mark sits on (the adapter's line where it bound it elsewhere): `pos` where the line
+/// starts and `end` just after it, in LINES' text.
+pub fn place_breakpoints(view: &mut serde_json::Value, lines: &Lines) {
+    let Some(bps) = view.get_mut("breakpoints").and_then(|b| b.as_array_mut()) else {
+        return;
+    };
+    for bp in bps {
+        let line = bp
+            .get("bound_line")
+            .and_then(serde_json::Value::as_u64)
+            .or_else(|| bp.get("line").and_then(serde_json::Value::as_u64));
+        if let Some(line) = line.and_then(|l| u32::try_from(l).ok()) {
+            bp["pos"] = serde_json::json!(lines.start(line));
+            bp["end"] = serde_json::json!(lines.after(line));
+        }
+    }
+}
+
 /// Give AGENTS and GUTTER the positions of their lines in LINES, and SYMBOL names each agent's symbol (the line; none
 /// for a projected agent).
 pub fn place(
@@ -155,6 +185,46 @@ pub fn place(
         g.start_pos = Some(lines.start(g.start));
         g.end_pos = Some(lines.start(g.end));
     }
+}
+
+/// An end-of-line diagnostic's TEXT cut, with an ellipsis, to the room a window WIDTH columns wide has after COLUMN (the
+/// line's end) and a few columns of margin (one that does not fit would wrap onto a second screen line): at least 8
+/// columns.
+pub fn eol_fit(text: &str, column: usize, width: usize) -> String {
+    let room = width.saturating_sub(column).saturating_sub(4).max(8);
+    drgnx_rows::fit_tty::fit(text, room, &[])
+}
+
+/// The display column of the end of the line each position of POSITIONS (Emacs's, in characters) is on in TEXT, a tab
+/// taking it to the next multiple of TAB columns; none when TEXT is over the limit.
+pub fn eol_columns(text: &str, positions: &[i64], tab: u32) -> Option<Vec<usize>> {
+    if !within_limit(text.len()) {
+        return None;
+    }
+    let tab = usize::try_from(tab.max(1)).unwrap_or(8);
+    // each line: where it starts (in characters) and its end column, one pass
+    let mut starts = vec![1i64];
+    let mut ends = Vec::new();
+    let (mut pos, mut col) = (1i64, 0usize);
+    for c in text.chars() {
+        pos += 1;
+        if c == '\n' {
+            ends.push(col);
+            col = 0;
+            starts.push(pos);
+        } else if c == '\t' {
+            col += tab - col % tab;
+        } else {
+            col += drgnx_rows::fit_tty::char_width(c, &[]);
+        }
+    }
+    ends.push(col);
+    Some(
+        positions
+            .iter()
+            .map(|p| ends[starts.partition_point(|s| s <= p).max(1) - 1])
+            .collect(),
+    )
 }
 
 /// Fewer columns than this left for the blame: none (a stump says nothing).
@@ -308,6 +378,58 @@ mod tests {
         assert!(agents[2].pos.is_none() && agents[2].line_pos.is_none());
         assert_eq!(asked, [2]);
         assert_eq!((gutter[0].start_pos, gutter[0].end_pos), (Some(4), Some(9)));
+    }
+
+    #[test]
+    fn a_breakpoint_view_gets_the_positions_of_its_marks_lines() {
+        // "ab\ncde\n\nf": lines start at 1, 4, 8, 9 (no final break)
+        let lines = Lines::of("ab\ncde\n\nf").unwrap();
+        assert_eq!((lines.after(1), lines.after(2), lines.after(4)), (4, 8, 10));
+        let mut v = serde_json::json!({"path": "p", "version": 1, "breakpoints": [
+            {"id": 1, "line": 2}, {"id": 2, "line": 2, "bound_line": 4}, {"id": 3, "line": 3, "column": 1}]});
+        place_breakpoints(&mut v, &lines);
+        let at = |i: usize| {
+            (
+                v["breakpoints"][i]["pos"].as_i64(),
+                v["breakpoints"][i]["end"].as_i64(),
+            )
+        };
+        assert_eq!(at(0), (Some(4), Some(8)));
+        assert_eq!(
+            at(1),
+            (Some(9), Some(10)),
+            "the adapter's line, where it bound it"
+        );
+        assert_eq!(at(2), (Some(8), Some(9)));
+        // a view with no breakpoints, or none of the shape, is left alone
+        let mut none = serde_json::json!({"path": "p"});
+        place_breakpoints(&mut none, &lines);
+        assert_eq!(none, serde_json::json!({"path": "p"}));
+    }
+
+    #[test]
+    fn an_end_of_line_text_is_cut_to_the_room_after_its_line() {
+        // the Lisp it replaces: room = max(8, width - column - 4), whole when it fits
+        assert_eq!(eol_fit("short", 20, 60), "short");
+        let cut = eol_fit(&"x".repeat(80), 20, 60);
+        assert_eq!(cut.chars().count(), 36);
+        assert!(cut.ends_with('…'));
+        // never nothing at all
+        assert_eq!(eol_fit(&"x".repeat(80), 58, 60).chars().count(), 8);
+        // wide characters count by columns
+        let wide = eol_fit(&"漢".repeat(40), 20, 60);
+        assert_eq!(drgnx_rows::fit_tty::width(&wide, &[]), 35);
+    }
+
+    #[test]
+    fn the_column_of_a_lines_end_counts_tabs() {
+        // "ab\n\tc\nde": the first line ends at column 2 (its break is position 3), the second at 4 + 1 with tab 4
+        // (positions 4 to 6), the last at 2 (7, 8)
+        let cols = eol_columns("ab\n\tc\nde", &[1, 3, 4, 5, 8], 4).unwrap();
+        assert_eq!(cols, [2, 2, 5, 5, 2]);
+        // a position on the empty last line after a final break
+        assert_eq!(eol_columns("ab\n", &[4], 8).unwrap(), [0]);
+        with_limit(2, || assert!(eol_columns("ab\ncd", &[1], 8).is_none()));
     }
 
     #[test]

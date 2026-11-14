@@ -57,6 +57,40 @@ const VAR_NAMES: [&str; 15] = [
     "RUN",
 ];
 
+/// The variables whose value is a path in the scenario's root (`$ROOT $SOCKET $LOCK …`): they exist once a root does.
+const ROOT_VARS: [&str; 11] = [
+    "BACKEND_SOCKET",
+    "SOCKET_DIR",
+    "SOCKET",
+    "CONFIG",
+    "STATE",
+    "ROOT",
+    "HOME",
+    "DATA",
+    "LOCK",
+    "CAP",
+    "RUN",
+];
+
+/// The first root variable (`ROOT_VARS`) a string anywhere in OBJ names, by the longest-first reading `subst_str` uses.
+fn root_variable_in(obj: &Map<String, Value>) -> Option<&'static str> {
+    fn in_value(v: &Value) -> Option<&'static str> {
+        match v {
+            Value::String(s) => s.match_indices('$').find_map(|(i, _)| {
+                let rest = &s[i + 1..];
+                VAR_NAMES
+                    .iter()
+                    .find(|n| rest.starts_with(**n))
+                    .and_then(|n| ROOT_VARS.iter().find(|r| *r == n).copied())
+            }),
+            Value::Array(a) => a.iter().find_map(in_value),
+            Value::Object(o) => o.values().find_map(in_value),
+            _ => None,
+        }
+    }
+    obj.values().find_map(in_value)
+}
+
 /// Run `scenario`; the error says which step failed and why, and (a row not `pending`) when each step ran and how
 /// long it took, with the end of each hub's logs: what a red that will not come again needs, kept before every hub,
 /// helper and root is gone.
@@ -101,6 +135,40 @@ pub fn run_scenario(cfg: &Config, s: &Scenario, perf: &mut Vec<(String, Vec<f64>
 /// How many lines of each hub's logs a failure keeps.
 const FAILURE_LOG_LINES: usize = 60;
 
+/// What the hub's threads are doing (state letter, kernel wait channel, name) and the machine's load, for a failure
+/// that names a silent hub: an expect that sees nothing within its real time is either a hub that waits on something
+/// or a machine too busy to run it, and these lines tell which.  Best effort: nothing where `/proc` is not there.
+fn proc_waits(pid: u32) -> String {
+    let mut out = String::new();
+    if let Ok(load) = std::fs::read_to_string("/proc/loadavg") {
+        out.push_str(&format!("load average: {}\n", load.trim()));
+    }
+    let read = |p: String| std::fs::read_to_string(p).unwrap_or_default().trim().to_owned();
+    let Ok(tasks) = std::fs::read_dir(format!("/proc/{pid}/task")) else {
+        return out;
+    };
+    let mut rows: Vec<String> = tasks
+        .flatten()
+        .map(|t| {
+            let dir = t.path();
+            let stat = read(format!("{}/stat", dir.display()));
+            let state = stat
+                .rsplit_once(") ")
+                .and_then(|(_, rest)| rest.chars().next())
+                .unwrap_or('?');
+            format!(
+                "  thread {} {} state {state} wchan {}",
+                t.file_name().to_string_lossy(),
+                read(format!("{}/comm", dir.display())),
+                read(format!("{}/wchan", dir.display()))
+            )
+        })
+        .collect();
+    rows.sort();
+    out.push_str(&rows.join("\n"));
+    out
+}
+
 impl Runner<'_> {
     /// An error once the scenario's bound has run out, saying so with WHAT it had done.
     fn within_bound(&self, what: &str) -> R {
@@ -121,11 +189,12 @@ impl Runner<'_> {
         );
         for h in &self.hubs {
             notes.push_str(&format!(
-                "\nhub {} (pid {}), its stderr's last lines:\n{}\nits log's last lines:\n{}",
+                "\nhub {} (pid {}), its stderr's last lines:\n{}\nits log's last lines:\n{}\nwhat it waits on:\n{}",
                 h.name,
                 h.pid,
                 h.log_tail_n(FAILURE_LOG_LINES),
-                h.jsonl_tail_n(FAILURE_LOG_LINES)
+                h.jsonl_tail_n(FAILURE_LOG_LINES),
+                proc_waits(h.pid)
             ));
         }
         notes
@@ -773,6 +842,15 @@ impl Runner<'_> {
     // ------------------------------------------------------------ steps
 
     fn step(&mut self, step: &Step) -> R {
+        if self.hubs.is_empty()
+            && self.active_root.is_none()
+            && !matches!(step.verb.as_str(), "root" | "start")
+            && let Some(var) = root_variable_in(&step.obj)
+        {
+            return Err(format!(
+                "${var} has no value yet: no root exists before a `root` or `start` step, and the step would take the literal text"
+            ));
+        }
         match step.verb.as_str() {
             "start" => self.start(step),
             "root" => {
@@ -2335,6 +2413,32 @@ mod tests {
     }
 
     #[test]
+    fn a_root_variable_before_any_root_or_hub_fails_the_row() {
+        // `$ROOT` names a root, which exists once a `root` or a `start` step made it: before that it would stay
+        // literal, and a step that writes there makes a directory called `$ROOT` in the working directory
+        let cfg = Config {
+            hub_bin: PathBuf::from("/nonexistent"),
+            scenarios: PathBuf::from("/nonexistent"),
+        };
+        let early = crate::scenario::parse(
+            "{\"scenario\": \"t/early\"}\n\
+             {\"do\": \"run\", \"bin\": \"/bin/true\", \"args\": [\"$ROOT/a\"], \"expect_code\": 0}\n",
+        )
+        .unwrap();
+        let e = run_scenario(&cfg, &early, &mut Vec::new()).unwrap_err();
+        assert!(
+            e.contains("step 1 (run)") && e.contains("$ROOT") && e.contains("`root` or `start`"),
+            "{e}"
+        );
+        let after = crate::scenario::parse(
+            "{\"scenario\": \"t/after\"}\n{\"do\": \"root\"}\n\
+             {\"do\": \"run\", \"bin\": \"/bin/true\", \"args\": [\"$ROOT/a\"], \"expect_code\": 0}\n",
+        )
+        .unwrap();
+        run_scenario(&cfg, &after, &mut Vec::new()).unwrap();
+    }
+
+    #[test]
     fn the_root_is_its_own_true_name() {
         let r = Root::new().unwrap();
         assert_eq!(std::fs::canonicalize(r.path()).unwrap(), r.path());
@@ -2372,5 +2476,14 @@ mod tests {
     fn a_dumpable_process_is_not_refused() {
         let e = environ_refused(std::process::id()).unwrap_err();
         assert!(e.contains("is dumpable"), "{e}");
+    }
+
+    /// A failure that names a silent hub says what its threads wait on and how busy the machine is.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn the_wait_report_names_the_threads_and_the_load() {
+        let r = proc_waits(std::process::id());
+        assert!(r.contains("load average: "), "{r}");
+        assert!(r.contains("  thread ") && r.contains(" wchan "), "{r}");
     }
 }

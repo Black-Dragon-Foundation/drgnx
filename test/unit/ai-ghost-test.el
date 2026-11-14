@@ -82,11 +82,14 @@ LLM answering SPEC; `o' found running."
 
 (ert-deftest drgnx-ai-ghost/an-answer-to-text-since-changed-never-shows ()
   (drgnx-ai-ghost-test--with '((:path "/api/generate" :delay 0.5 :body "{\"response\":\"stale\"}"))
-    (drgnx-ai-ghost--trigger)
-    (insert "x")                                                   ; typed while the model thinks
-    (drgnx-ai-ghost--post-command)
-    (drgnx-test-pause 2 "nothing may show")
-    (should-not (drgnx-ai-ghost-text))))
+    (let ((before (process-list)) asking)
+      (drgnx-ai-ghost--trigger)
+      (setq asking (cl-set-difference (process-list) before))
+      (insert "x")                                                 ; typed while the model thinks
+      (drgnx-ai-ghost--post-command)
+      ;; the model's answer comes in and is processed (its request's sentinel has run); only then is "nothing shows" said
+      (drgnx-test-wait-ended asking :what "the answer to the stale question")
+      (should-not (drgnx-ai-ghost-text)))))
 
 (ert-deftest drgnx-ai-ghost/an-answer-after-a-change-no-command-made-never-shows ()
   ;; an agent, a process or a revert changes the buffer: no command ran, nothing cancelled the question
@@ -224,9 +227,12 @@ LLM answering SPEC; `o' found running."
   (drgnx-ai-ghost-test--with '((:path "/api/generate" :body "{\"response\":\"never\"}"))
     (let ((drgnx-ai-detected nil) (said nil))
       (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
-        (drgnx-ai-ghost--trigger)
-        (drgnx-ai-ghost--trigger))
-      (drgnx-test-pause 0.3 "no suggestion and no message may come")
+        (let ((before (process-list)))
+          (drgnx-ai-ghost--trigger)
+          (drgnx-ai-ghost--trigger)
+          ;; no request is made, so no process starts: the timers due now have run, and nothing came of them
+          (drgnx-test-wait (lambda () (not (drgnx-test-wait--due-p))) :what "the timers due now have run")
+          (should-not (cl-set-difference (process-list) before))))
       (should-not (drgnx-ai-ghost-text))
       (should-not said)
       (should (= 1 (length (drgnx-notices :source 'ai)))))))

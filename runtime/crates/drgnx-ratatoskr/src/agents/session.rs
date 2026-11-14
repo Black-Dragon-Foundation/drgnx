@@ -4735,7 +4735,7 @@ impl Session {
         // The matrix decides, after the before-tool hooks where any subscribe: allowed answers at once, never refuses
         // at once, an ask waits for the user.
         let s = self.clone();
-        tokio::spawn(async move {
+        crate::clock::spawn("session:permission", async move {
             if s.has_jobs() && is_wait_loop(req.get("toolCall")) {
                 let n = s.refuse_wait();
                 {
@@ -6349,7 +6349,7 @@ impl Session {
                 self.task.clone(),
                 self.job.clone(),
             );
-            tokio::spawn(async move {
+            crate::clock::spawn("session:submit-fallback", async move {
                 if let Some(Err(e)) = crate::runner::effects::submit_fallback(
                     &w,
                     &sid,

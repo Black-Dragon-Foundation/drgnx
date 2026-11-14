@@ -81,5 +81,17 @@
   "Wait until PRED holds, reading process output: PRED's value (`drgnx-test-wait', at least 30 s or SECS)."
   (drgnx-test-wait pred :secs (max 30 (or secs 0)) :what "the mock browser's predicate"))
 
+(defvar drgnx-mock-cdp--barriers 0)
+(declare-function drgnx-live--send "drgnx-live")
+
+(defun drgnx-mock-cdp-barrier ()
+  "Wait until the browser has received everything the live view sent before this call: it sends one more message down
+its own connection (frames of a connection arrive in order) and waits for the mock to have it.  What \"no second X may
+be sent\" means is then settled, with no time passed."
+  (let ((n (cl-incf drgnx-mock-cdp--barriers)))
+    (with-current-buffer "*drgnx live*" (drgnx-live--send "Test.barrier" (list :n n)))
+    (drgnx-mock-cdp-wait (lambda () (seq-find (lambda (m) (eql (plist-get (plist-get m :params) :n) n))
+                                              (drgnx-mock-cdp-received "Test.barrier"))))))
+
 (provide 'mock-cdp)
 ;;; mock-cdp.el ends here

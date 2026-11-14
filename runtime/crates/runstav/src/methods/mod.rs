@@ -26,6 +26,7 @@ pub mod hub;
 pub mod jobs;
 pub mod matrix;
 pub mod mcp;
+pub mod notebook;
 pub mod orch;
 pub mod pair;
 pub mod plans;
@@ -287,6 +288,8 @@ params! {
     ViewClose(view::ViewClose),
     ViewWindow(view::ViewWindow),
     BuffersSet(view::BuffersSet),
+    OutlineSet(view::OutlineSet),
+    OutlineScopes(view::OutlineScopesParams),
     TermOpen(term::TermOpen),
     TermConfig(term::TermConfig),
     TermKey(term::TermKey),
@@ -345,6 +348,20 @@ params! {
     DebugOrigin(debug_origin::DebugOrigin),
     DebugHeap(debug_heap::DebugHeap),
     DebugHeapClose(debug_heap::DebugHeapClose),
+    NotebookOpen(notebook::NotebookOpen),
+    NotebookSync(notebook::NotebookCells),
+    NotebookExecute(notebook::NotebookCells),
+    NotebookSave(notebook::NotebookSave),
+    NotebookKernels(Empty),
+    NotebookStart(notebook::NotebookStart),
+    NotebookRestart(notebook::NotebookId),
+    NotebookShutdown(notebook::NotebookId),
+    NotebookInterrupt(notebook::NotebookId),
+    NotebookInput(notebook::NotebookInput),
+    NotebookTail(notebook::NotebookCellRef),
+    NotebookOutput(notebook::NotebookCellRef),
+    NotebookClear(notebook::NotebookClear),
+    NotebookClose(notebook::NotebookId),
     SearchQuery(search::QueryParams),
     SearchStatus(search::RootParams),
     SearchIndex(search::IndexParams),
@@ -404,6 +421,8 @@ params! {
     HistoryHunks(history::BranchHunksParams),
     GitBlame(history::GitBlameParams),
     GitBlameLine(history::GitBlameLineParams),
+    HistoryLinePositions(history::LinePositionsParams),
+    HistoryEolFit(history::EolFitParams),
     GitStageHunk(history::StageHunkParams),
     HistoryHunksHead(history::HeadHunksParams),
     HistoryTake(history::TakeParams),
@@ -471,6 +490,7 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(debug_bisect::methods());
     v.extend(debug_origin::methods());
     v.extend(debug_heap::methods());
+    v.extend(notebook::methods());
     v
 }
 

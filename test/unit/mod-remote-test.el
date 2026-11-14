@@ -271,12 +271,14 @@ choice of two nobody has."
             (drgnx-remote-test--await "the stub server connected" (eglot-current-server))
             (let ((server (eglot-current-server)))
               (should (eq (eieio-oref server 'inhibit-autoreconnect) t))   ; not the timer eglot set
-              ;; past the 1 s window in which eglot would reconnect (a pause lasts at least its length)
-              (drgnx-test-pause 1.5 "the server may not be reconnected inside eglot's window")
-              (kill-process (jsonrpc--process server))
-              (drgnx-remote-test--await "the server died" (not (jsonrpc-running-p server)))
+              ;; a live server is not reconnected by anything: the reconnect that eglot's sentinel would arm after the
+              ;; death (a timer of `eglot-autoreconnect' seconds) is what must not exist once the death is processed
+              (let ((timers (copy-sequence timer-list)) (proc (jsonrpc--process server)))
+                (kill-process proc)
+                (drgnx-remote-test--await "the server died" (not (jsonrpc-running-p server)))
+                (drgnx-test-wait-ended proc :what "eglot's sentinel of the dead server")
+                (should-not (cl-set-difference timer-list timers :test #'eq)))   ; no reconnect timer was armed
               (setq drgnx-tramp-mock-sends 0)
-              (drgnx-test-pause 1.5 "no reconnect and no send may follow the death")
               (should (= connects 1))
               (should (= drgnx-tramp-mock-sends 0))))
         (advice-remove 'eglot--connect 'drgnx-remote-test)))))
@@ -588,7 +590,7 @@ choice of two nobody has."
   ;; the flag is set (a command waits, say in sit-for) while they run: C binds inhibit-quit for filters and
   ;; sentinels, the timer machinery for timers, and a timer body may undo that with with-local-quit
   (drgnx-remote-test--with
-    (let* ((root (drgnx-remote-test--root dir)) (connects 0) (results nil) (hooks nil)
+    (let* ((root (drgnx-remote-test--root dir)) (connects 0) (results nil) (hooks nil) (timers-ran 0)
            (b (drgnx-remote-test--code-buffer (concat root "app.py")))
            (try (lambda () (push (condition-case nil (drgnx-remote--guard-prompt (lambda (&rest _) 'asked) 1)
                                    (remote-file-error 'refused))
@@ -601,16 +603,16 @@ choice of two nobody has."
             (progn
               (drgnx-remote--setup)
               (let ((drgnx-lang--user-command t) (drgnx-remote-may-prompt t))   ; a command is waiting
-                (run-at-time 0.05 nil try)
-                (run-at-time 0.05 nil (lambda () (with-local-quit (funcall try))))
+                (run-at-time 0.05 nil (lambda () (funcall try) (cl-incf timers-ran)))
+                (run-at-time 0.05 nil (lambda () (with-local-quit (funcall try)) (cl-incf timers-ran)))
                 (let ((p (make-process :name "drgnx-test-filter" :command '("sh" "-c" "echo hi") :noquery t
                                        :filter (lambda (_p _s) (funcall try)) :sentinel (lambda (p _e) (process-put p :done t)))))
                   (drgnx-test-wait (lambda () (process-get p :done)) :what "the filter's process"))
                 (let ((p (make-process :name "drgnx-test-sentinel" :command '("sh" "-c" "true") :noquery t
                                        :sentinel (lambda (p _e) (unwind-protect (funcall try) (process-put p :done t))))))
                   (drgnx-test-wait (lambda () (process-get p :done)) :what "the sentinel's process"))
-                ;; past the two 0.05 s timers (a pause lasts at least its length)
-                (drgnx-test-pause 0.4 "no further answer and no connect may come")
+                ;; both 0.05 s timers have run (their own effect is the event waited for): no further answer, no connect
+                (drgnx-test-wait (lambda () (= timers-ran 2)) :what "the two timers ran")
                 (should (equal results '(refused refused refused refused)))
                 (should (= connects 0))
                 (setq results nil)

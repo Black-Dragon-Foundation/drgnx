@@ -22823,6 +22823,123 @@
       "classes": [
         "user"
       ],
+      "doc": "end-of-line diagnostics fitted: each text cut with an ellipsis to the room its window has after the end of its line in the text the hub holds of the editor's tracked buffer (tabs counted); the editor shows the fitted strings and fits nothing itself",
+      "name": "history/eol-fit",
+      "params": {
+        "$defs": {
+          "EolItem": {
+            "additionalProperties": false,
+            "description": "One diagnostic: the client's KEY for it, the buffer POSITION (Emacs's) it starts at, and its TEXT.",
+            "properties": {
+              "key": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "pos": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "key",
+              "pos",
+              "text"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`history/eol-fit`: the end-of-line diagnostics of the editor's tracked buffer of PATH of the worktree at\nWORKTREE_ROOT, each to be cut to the room a window WIDTH columns wide has after the end of its line (TAB_WIDTH\ncolumns to a tab).",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/EolItem"
+            },
+            "type": "array"
+          },
+          "path": {
+            "description": "Relative to the worktree.",
+            "type": "string"
+          },
+          "tab_width": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "width": {
+            "description": "The window's body width in columns.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "worktree_root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "worktree_root",
+          "width",
+          "tab_width",
+          "items"
+        ],
+        "title": "EolFitParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "EolFitted": {
+            "additionalProperties": false,
+            "description": "A diagnostic's TEXT fitted: whole when it fits, else cut with an ellipsis (at least 8 columns).",
+            "properties": {
+              "key": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "key",
+              "text"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`history/eol-fit`'s answer: `items` empty (and `tracked` false) when no buffer of the file is tracked or its text\nis over the marks' limit.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/EolFitted"
+            },
+            "type": "array"
+          },
+          "tracked": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "tracked",
+          "items"
+        ],
+        "title": "EolFits",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "fork from a step: a second agent in its own tree at the step's checkpoint, its conversation forked there (or told a labelled summary), started with the user's message; no task, no job, no approval",
       "name": "history/fork",
       "params": {
@@ -23167,6 +23284,92 @@
           "marks"
         ],
         "title": "HeadHunks",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "where the given lines of the editor's tracked buffer start in the text the hub holds (and just after them): the editor moves a mark to them without counting lines; none when the buffer is not tracked or the text is over the marks' limit",
+      "name": "history/line-positions",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`history/line-positions`: where LINES (1-based) of the editor's tracked buffer of PATH of the worktree at\nWORKTREE_ROOT start, in the text the hub holds (the editor hands its changes over first: `drgnx-history-ask`).",
+        "properties": {
+          "lines": {
+            "items": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "path": {
+            "description": "Relative to the worktree.",
+            "type": "string"
+          },
+          "worktree_root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "worktree_root",
+          "lines"
+        ],
+        "title": "LinePositionsParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "LinePosition": {
+            "additionalProperties": false,
+            "description": "One line's place in the buffer: where it starts and just after it, its line break included.",
+            "properties": {
+              "end": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "pos": {
+                "format": "int64",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "line",
+              "pos",
+              "end"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`history/line-positions`' answer: none (`tracked` false, or `positions` empty) when no buffer of the file is\ntracked or its text is over the marks' limit.",
+        "properties": {
+          "positions": {
+            "items": {
+              "$ref": "#/$defs/LinePosition"
+            },
+            "type": "array"
+          },
+          "tracked": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "tracked",
+          "positions"
+        ],
+        "title": "LinePositions",
         "type": "object"
       },
       "writes": false
@@ -27460,6 +27663,1039 @@
       "classes": [
         "user"
       ],
+      "doc": "clear one cell's output and execution count, or every code cell's; a queued or running cell is left as it is",
+      "name": "notebook/clear",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`notebook/clear`: CELL's output and execution count, or every code cell's when there is no CELL.",
+        "properties": {
+          "cell": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "NotebookClear",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "forget the notebook (its kernel ends first); unsaved changes are the editor's",
+      "name": "notebook/close",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A call that names a notebook only (`notebook/shutdown`, `/restart`, `/interrupt`, `/close`).",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "NotebookId",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "queue cells (id, type, source, in order) to run in the notebook's kernel: their text becomes the notebook's first; an error aborts the rest, an interrupt or a restart cancels them",
+      "name": "notebook/execute",
+      "params": {
+        "$defs": {
+          "NotebookCellText": {
+            "description": "A cell as the editor has it.",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "source": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "type",
+              "source"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`notebook/sync` and `notebook/execute`: the editor's CELLS, in order (the notebook's cells become these); for `execute`, the ones\nto run, in order, with their text.",
+        "properties": {
+          "cells": {
+            "items": {
+              "$ref": "#/$defs/NotebookCellText"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "cells"
+        ],
+        "title": "NotebookCells",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "answer a kernel's input request (the id notebook-input-request named)",
+      "name": "notebook/input",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`notebook/input`: the VALUE for the kernel's input request REQUEST (the id `notebook-input-request` named).",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "request": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "request",
+          "value"
+        ],
+        "title": "NotebookInput",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "interrupt the running cell (SIGINT to the kernel's group, or an interrupt_request when its kernelspec says so) and cancel what is queued",
+      "name": "notebook/interrupt",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A call that names a notebook only (`notebook/shutdown`, `/restart`, `/interrupt`, `/close`).",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "NotebookId",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the installed kernelspecs, and the ones found and not used with the reason",
+      "name": "notebook/kernels",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "NotebookKernel": {
+            "description": "An installed kernelspec.",
+            "properties": {
+              "display_name": {
+                "type": "string"
+              },
+              "interrupt": {
+                "description": "`signal` or `message`.",
+                "type": "string"
+              },
+              "language": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "display_name",
+              "language",
+              "interrupt"
+            ],
+            "type": "object"
+          },
+          "NotebookSkipped": {
+            "description": "A kernelspec that was found and not used, and why.",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "why": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "why"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`notebook/kernels`' answer.",
+        "properties": {
+          "kernels": {
+            "items": {
+              "$ref": "#/$defs/NotebookKernel"
+            },
+            "type": "array"
+          },
+          "skipped": {
+            "items": {
+              "$ref": "#/$defs/NotebookSkipped"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "kernels",
+          "skipped"
+        ],
+        "title": "NotebookKernels",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "open a Jupyter notebook in the hub (from the buffer's text, else the file): its id, cells, kernelspec and each code cell's tail from the file",
+      "name": "notebook/open",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`notebook/open`: the notebook at PATH, from TEXT when the editor's buffer has it (else the file).",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "NotebookOpen",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "NotebookCell": {
+            "description": "A cell the hub holds: its ID, TYPE (`code`, `markdown`, `raw`), SOURCE and the execution count of its last run.",
+            "properties": {
+              "execution_count": {
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "source": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "type",
+              "source"
+            ],
+            "type": "object"
+          },
+          "NotebookHead": {
+            "description": "A cell's head: its prompt and kind, and STATE (`idle`, `queued`, `running`).",
+            "properties": {
+              "runs": {
+                "items": {
+                  "$ref": "#/$defs/NotebookRun"
+                },
+                "type": "array"
+              },
+              "state": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text",
+              "state",
+              "runs"
+            ],
+            "type": "object"
+          },
+          "NotebookImage": {
+            "description": "An image shown in a tail: the character AT stands for it; OUTPUT is the output's index in the cell.",
+            "properties": {
+              "at": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "height": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "mime": {
+                "type": "string"
+              },
+              "output": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "width": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "at",
+              "output",
+              "mime",
+              "width",
+              "height"
+            ],
+            "type": "object"
+          },
+          "NotebookRun": {
+            "description": "A styled stretch of a tail or a head, in characters; FG and BG are the theme's terminal face roles 0 to 15.",
+            "properties": {
+              "bg": {
+                "default": null,
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "bold": {
+                "type": "boolean"
+              },
+              "end": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "fg": {
+                "default": null,
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "inverse": {
+                "type": "boolean"
+              },
+              "italic": {
+                "type": "boolean"
+              },
+              "start": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "underline": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "start",
+              "end",
+              "bold",
+              "italic",
+              "underline",
+              "inverse"
+            ],
+            "type": "object"
+          },
+          "NotebookTail": {
+            "description": "What goes after a cell (the `notebook-tail` event's data, and `notebook/tail`'s answer): TEXT with its RUNS and IMAGES, at most 20 rows\n(`more_lines` are left out), the head that goes with it, the cell's execution count, VERSION (counts up with each change) and\nwhether the output is `stale` (the file's own, no kernel ran it in this hub).",
+            "properties": {
+              "cell": {
+                "type": "string"
+              },
+              "execution_count": {
+                "default": null,
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "head": {
+                "$ref": "#/$defs/NotebookHead"
+              },
+              "id": {
+                "type": "string"
+              },
+              "images": {
+                "items": {
+                  "$ref": "#/$defs/NotebookImage"
+                },
+                "type": "array"
+              },
+              "more_lines": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "runs": {
+                "items": {
+                  "$ref": "#/$defs/NotebookRun"
+                },
+                "type": "array"
+              },
+              "stale": {
+                "type": "boolean"
+              },
+              "text": {
+                "type": "string"
+              },
+              "version": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "cell",
+              "text",
+              "version",
+              "stale",
+              "head",
+              "runs",
+              "images",
+              "more_lines"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`notebook/open`'s answer: the notebook's ID, its CELLS, the kernelspec name and language it names, and the TAILS of the code cells that\nhave output in the file: the first 200 of them within 1 MiB of JSON (a cell without a tail has no output), and how many more there are\n(`more_tails`: ask `notebook/tail` for the cells it names).",
+        "properties": {
+          "cells": {
+            "items": {
+              "$ref": "#/$defs/NotebookCell"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kernelspec": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "language": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "more_tails": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tails": {
+            "items": {
+              "$ref": "#/$defs/NotebookTail"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "cells",
+          "tails",
+          "more_tails"
+        ],
+        "title": "NotebookOpened",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the whole output of one cell as nbformat objects, within the hub's limits (the inline tail is cut at 20 rows)",
+      "name": "notebook/output",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`notebook/tail` and `notebook/output`: one cell of a notebook.",
+        "properties": {
+          "cell": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "cell"
+        ],
+        "title": "NotebookCellRef",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`notebook/output`'s answer: the cell's whole output as nbformat objects (within the hub's limits).",
+        "properties": {
+          "outputs": {
+            "items": true,
+            "type": "array"
+          }
+        },
+        "required": [
+          "outputs"
+        ],
+        "title": "NotebookOutput",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "end the notebook's kernel (asked, then its process group killed after the grace), cancel what was queued, and start a new one of the same kernelspec with a new connection and key",
+      "name": "notebook/restart",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A call that names a notebook only (`notebook/shutdown`, `/restart`, `/interrupt`, `/close`).",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "NotebookId",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`notebook/start`'s and `/restart`'s answer: the kernelspec started.",
+        "properties": {
+          "kernel": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kernel"
+        ],
+        "title": "NotebookStarted",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "write the notebook (after taking the editor's cells when given) by a temporary file and a rename; a symbolic link is replaced by a regular file",
+      "name": "notebook/save",
+      "params": {
+        "$defs": {
+          "NotebookCellText": {
+            "description": "A cell as the editor has it.",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "source": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "type",
+              "source"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`notebook/save`: write the notebook, first taking the editor's CELLS when given.",
+        "properties": {
+          "cells": {
+            "items": {
+              "$ref": "#/$defs/NotebookCellText"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "NotebookSave",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "end the notebook's kernel and say how it ended",
+      "name": "notebook/shutdown",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A call that names a notebook only (`notebook/shutdown`, `/restart`, `/interrupt`, `/close`).",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "NotebookId",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`notebook/shutdown`'s answer: how the kernel ended.",
+        "properties": {
+          "code": {
+            "default": null,
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "signal": {
+            "default": null,
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "stderr": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "stderr"
+        ],
+        "title": "NotebookEnded",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "start a kernel for the notebook, unconfined (the user's code as a terminal runs it); refused in a sealed session; ready when it answers kernel_info and publishes a status",
+      "name": "notebook/start",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`notebook/start`: a kernel for notebook ID, KERNEL by name (else the notebook's own, else its language's).",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kernel": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "NotebookStart",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`notebook/start`'s and `/restart`'s answer: the kernelspec started.",
+        "properties": {
+          "kernel": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kernel"
+        ],
+        "title": "NotebookStarted",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the editor's cells (id, type, source) in order become the notebook's: removed ones go, moved ones move, new ones come",
+      "name": "notebook/sync",
+      "params": {
+        "$defs": {
+          "NotebookCellText": {
+            "description": "A cell as the editor has it.",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "source": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "type",
+              "source"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`notebook/sync` and `notebook/execute`: the editor's CELLS, in order (the notebook's cells become these); for `execute`, the ones\nto run, in order, with their text.",
+        "properties": {
+          "cells": {
+            "items": {
+              "$ref": "#/$defs/NotebookCellText"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "cells"
+        ],
+        "title": "NotebookCells",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the tail of one cell as the hub holds it (an editor that lost a string asks for it again)",
+      "name": "notebook/tail",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`notebook/tail` and `notebook/output`: one cell of a notebook.",
+        "properties": {
+          "cell": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "cell"
+        ],
+        "title": "NotebookCellRef",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "NotebookHead": {
+            "description": "A cell's head: its prompt and kind, and STATE (`idle`, `queued`, `running`).",
+            "properties": {
+              "runs": {
+                "items": {
+                  "$ref": "#/$defs/NotebookRun"
+                },
+                "type": "array"
+              },
+              "state": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text",
+              "state",
+              "runs"
+            ],
+            "type": "object"
+          },
+          "NotebookImage": {
+            "description": "An image shown in a tail: the character AT stands for it; OUTPUT is the output's index in the cell.",
+            "properties": {
+              "at": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "height": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "mime": {
+                "type": "string"
+              },
+              "output": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "width": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "at",
+              "output",
+              "mime",
+              "width",
+              "height"
+            ],
+            "type": "object"
+          },
+          "NotebookRun": {
+            "description": "A styled stretch of a tail or a head, in characters; FG and BG are the theme's terminal face roles 0 to 15.",
+            "properties": {
+              "bg": {
+                "default": null,
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "bold": {
+                "type": "boolean"
+              },
+              "end": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "fg": {
+                "default": null,
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "inverse": {
+                "type": "boolean"
+              },
+              "italic": {
+                "type": "boolean"
+              },
+              "start": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "underline": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "start",
+              "end",
+              "bold",
+              "italic",
+              "underline",
+              "inverse"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "What goes after a cell (the `notebook-tail` event's data, and `notebook/tail`'s answer): TEXT with its RUNS and IMAGES, at most 20 rows\n(`more_lines` are left out), the head that goes with it, the cell's execution count, VERSION (counts up with each change) and\nwhether the output is `stale` (the file's own, no kernel ran it in this hub).",
+        "properties": {
+          "cell": {
+            "type": "string"
+          },
+          "execution_count": {
+            "default": null,
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "head": {
+            "$ref": "#/$defs/NotebookHead"
+          },
+          "id": {
+            "type": "string"
+          },
+          "images": {
+            "items": {
+              "$ref": "#/$defs/NotebookImage"
+            },
+            "type": "array"
+          },
+          "more_lines": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "runs": {
+            "items": {
+              "$ref": "#/$defs/NotebookRun"
+            },
+            "type": "array"
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "text": {
+            "type": "string"
+          },
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "cell",
+          "text",
+          "version",
+          "stale",
+          "head",
+          "runs",
+          "images",
+          "more_lines"
+        ],
+        "title": "NotebookTail",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "a task's evidence (its jobs' rows on their facts, the gates' findings), oldest first",
       "name": "orch/evidence",
       "params": {
@@ -27500,6 +28736,122 @@
         ],
         "title": "EvidenceList",
         "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the definitions around a line of a file, outermost first, as the Outline reads it (the editor's unsaved text where its edit history tracks the buffer, else the disk): the breadcrumb's symbol and sticky scroll",
+      "name": "outline/scopes",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`outline/scopes`: the definitions around LINE (from 1) of a file, as the Outline reads it (the editor's unsaved text\nwhere its edit history tracks the buffer, else the disk): what the breadcrumb's symbol and sticky scroll show.  The\nfile is FILE (absolute), or PATH under WORKTREE_ROOT (the edit history's names: a tracked buffer asks through the\nhistory, its changes handed over first).",
+        "properties": {
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "line": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "worktree_root": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "line"
+        ],
+        "title": "OutlineScopesParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "OutlineScope": {
+            "additionalProperties": false,
+            "description": "One definition around a line: its NAME and the LINE (from 1) it starts on.",
+            "properties": {
+              "line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "line"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`outline/scopes`' answer: the definitions that hold the line, outermost first (one that starts on it included);\nempty for a file with none, one that cannot be read, or one past the Outline's size limit.",
+        "properties": {
+          "scopes": {
+            "items": {
+              "$ref": "#/$defs/OutlineScope"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "scopes"
+        ],
+        "title": "OutlineScopes",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the file the Outline panel's hub-fed view shows (none: no file): the hub outlines it (the editor's unsaved text where its edit history tracks the buffer, else the disk), again after edits pause, and sends the view's model and rows",
+      "name": "outline/set",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`outline/set`: the Outline panel's hub-fed VIEW now shows FILE (absolute; none: the editor shows no file the hub\ncan read, such as a buffer without one or a remote file).  The hub outlines the file as the editor's tracked buffer\nof it has it (unsaved typing included), else as it is on disk, keeps it per (connection, view), outlines it again\nafter the editor's edits pause, and sends the view's model and rows (docs/develop/hub.md, \"The Outline panel's\nrows\").  Sent again when the editor shows another file or saves this one, never per keystroke.",
+        "properties": {
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "OutlineSet",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
       },
       "writes": false
     },

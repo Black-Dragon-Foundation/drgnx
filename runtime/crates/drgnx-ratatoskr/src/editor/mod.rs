@@ -560,6 +560,20 @@ async fn history_of(
     .unwrap_or((None, None, None))
 }
 
+/// The lines of FILE (an absolute path) as the buffer positions of the editor's tracked buffer of it (the edit
+/// history's mirror); none when no buffer of it is tracked or its text is over the marks' limit (`marks::Lines::of`).
+pub(crate) fn mirror_lines(front: &Front, file: &str) -> Option<marks::Lines> {
+    let (top, _) = presence::checkout_of(Path::new(file))?;
+    let rel = Path::new(file)
+        .strip_prefix(&top)
+        .ok()?
+        .to_string_lossy()
+        .into_owned();
+    let (hub, tree) = front.core.history.open_of(&top)?;
+    let text = hub.mirror_text(&tree, &rel).ok().flatten()?;
+    marks::Lines::of(&text)
+}
+
 /// The text and version of the editor's tracked buffer of FILE (the history's mirror: unsaved typing included, the
 /// version the last batch or resync carried); none when its project's history is not open or no buffer of it is
 /// tracked.  The editor sends nothing of the text.

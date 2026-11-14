@@ -26,6 +26,7 @@
 (require 'drgnx-faces)
 (require 'drgnx-color)
 (declare-function drgnx-hub-call "drgnx-hub-client")
+(declare-function drgnx-history-ask "drgnx-history")
 (require 'drgnx-debug-launch (expand-file-name "drgnx-debug-launch" (file-name-directory (macroexp-file-name))))
 (defvar drgnx-hub-event-functions)
 (declare-function drgnx-debug-disassembly-show "drgnx-debug-disassembly" (data))
@@ -324,6 +325,14 @@ draw none: fifty margin strings cost a full redraw about a millisecond (perf row
        (eql (aref key 4) (length drgnx-debug-gutter--overlays)) (eq (aref key 5) string)
        (not (and (eql (aref key 0) (window-start window)) (eql (aref key 1) (window-body-height window))))))
 
+(defun drgnx-debug-gutter--pool-edited-p (key window string)
+  "Whether KEY differs from WINDOW and STRING only in the text's tick (typing: the window did not move)."
+  (and key
+       (eql (aref key 0) (window-start window)) (eql (aref key 1) (window-body-height window))
+       (not (eql (aref key 2) (buffer-chars-modified-tick)))
+       (eql (aref key 3) drgnx-debug-gutter--version)
+       (eql (aref key 4) (length drgnx-debug-gutter--overlays)) (eq (aref key 5) string)))
+
 (defun drgnx-debug-gutter--pool-settle (window buffer)
   "The settle timer: lay WINDOW's dots in BUFFER now."
   (when (buffer-live-p buffer)
@@ -346,6 +355,12 @@ only scrolled gets them once it has rested `drgnx-debug-gutter--settle' seconds,
         (let ((cell (assq window drgnx-debug-gutter--pool)))
           (cond
            ((and cell (drgnx-debug-gutter--pool-key-p (cadr cell) window string)))
+           ;; typing: the dots stay where the text carried them (no keystroke walks the shown lines) and come right
+           ;; once the typing rests
+           ((and cell (not now) (drgnx-debug-gutter--pool-edited-p (cadr cell) window string))
+            (drgnx-timer-debounce (cons 'debug-hover window) drgnx-debug-gutter--settle
+                                  #'drgnx-debug-gutter--pool-settle :args (list window (current-buffer))
+                                  :owner (current-buffer)))
            ((and cell (not now) (drgnx-debug-gutter--pool-moved-p (cadr cell) window string))
             ;; the dots it showed go (they would sit on the wrong lines and cost each frame), and the key no
             ;; longer matches any start, so a window scrolled back still waits to settle
@@ -411,10 +426,26 @@ the buffer's start (a click deep in a long file was 10 ms of `forward-line')."
                    (when-let* ((a (plist-get bp :agent))) (format "set by agent %s" a))))
    " · "))
 
-(defun drgnx-debug-gutter--place (bp)
-  "Put BP's mark on its line (the adapter's line where it bound it elsewhere)."
-  (let* ((line (or (plist-get bp :bound_line) (plist-get bp :line)))
-         (b (drgnx-debug-gutter--line-bounds line))
+(defun drgnx-debug-gutter--hub-bounds (bp)
+  "(BEG . END) of BP's line as the hub gave it (`:pos', `:end': the buffer positions it counted in the text it holds),
+or nil: it gave none (no buffer of the file tracked, a text over its limit), the buffer has unsaved changes (the hub's
+text may differ), or the positions are not a whole line of this text."
+  (let ((pos (plist-get bp :pos)) (end (plist-get bp :end)))
+    (and pos end (not (buffer-modified-p))
+         (<= (point-min) pos end (point-max))
+         (or (= pos (point-min)) (eq (char-before pos) ?\n))
+         (or (= end (point-max)) (eq (char-before end) ?\n))
+         (cons pos end))))
+
+(defun drgnx-debug-gutter--line-of (bp)
+  "The line BP's mark sits on: the adapter's where it bound the breakpoint elsewhere."
+  (or (plist-get bp :bound_line) (plist-get bp :line)))
+
+(defun drgnx-debug-gutter--place (bp &optional bounds)
+  "Put BP's mark on its line at BOUNDS (BEG . END), else the hub's positions that came with it, else where counting
+lines finds it."
+  (let* ((line (drgnx-debug-gutter--line-of bp))
+         (b (or bounds (drgnx-debug-gutter--hub-bounds bp) (drgnx-debug-gutter--line-bounds line)))
          (col (plist-get bp :column))
          (o (if col
                 (let ((at (drgnx-debug-gutter--column-pos (car b) col)))
@@ -445,9 +476,11 @@ the buffer's start (a click deep in a long file was 10 ms of `forward-line')."
 
 (defun drgnx-debug-gutter--draw ()
   "Draw `drgnx-debug-gutter--bps': marks moved by edits stay where the text put them while the buffer has unsaved
-changes (drafts); otherwise each sits on the store's line."
+changes (drafts); otherwise each sits on the store's line.  A mark that needs placing goes to the positions the hub
+sent with it, or (a buffer with unsaved changes) to those it answers for the buffer's text as it is now; lines are
+counted only when the hub cannot say."
   (drgnx-debug-gutter--claim)
-  (let ((ids (mapcar (lambda (bp) (plist-get bp :id)) drgnx-debug-gutter--bps)))
+  (let ((ids (mapcar (lambda (bp) (plist-get bp :id)) drgnx-debug-gutter--bps)) pending)
     (dolist (e drgnx-debug-gutter--overlays)
       (unless (and (memq (car e) ids) (overlay-buffer (cdr e)))
         (delete-overlay (cdr e))))
@@ -456,13 +489,55 @@ changes (drafts); otherwise each sits on the store's line."
     (dolist (bp drgnx-debug-gutter--bps)
       (let ((o (cdr (assq (plist-get bp :id) drgnx-debug-gutter--overlays))))
         (when (and o (not (buffer-modified-p))
-                   (/= (overlay-get o 'drgnx-debug-drawn) (or (plist-get bp :bound_line) (plist-get bp :line))))
+                   (/= (overlay-get o 'drgnx-debug-drawn) (drgnx-debug-gutter--line-of bp)))
           (delete-overlay o)
           (setq drgnx-debug-gutter--overlays (assq-delete-all (plist-get bp :id) drgnx-debug-gutter--overlays))
           (setq o nil))
-        (drgnx-debug-gutter--dress (or o (drgnx-debug-gutter--place bp)) bp))))
+        (cond (o (drgnx-debug-gutter--dress o bp))
+              ((drgnx-debug-gutter--hub-bounds bp) (drgnx-debug-gutter--dress (drgnx-debug-gutter--place bp) bp))
+              (t (push bp pending)))))
+    (when pending (drgnx-debug-gutter--place-asking (nreverse pending))))
   (drgnx-debug-gutter--ruler-later)
   (drgnx-debug-gutter--candidates-refresh))
+
+(defun drgnx-debug-gutter--place-counting (bps)
+  "Put the marks of BPS on their lines, counting lines (the hub is down, the buffer is not tracked or is over its
+limit)."
+  (dolist (bp bps)
+    (unless (assq (plist-get bp :id) drgnx-debug-gutter--overlays)
+      (drgnx-debug-gutter--dress (drgnx-debug-gutter--place bp) bp))))
+
+(defun drgnx-debug-gutter--place-asking (bps)
+  "Place the marks of BPS from the hub's positions for the buffer's text as it is now (`history/line-positions', the
+buffer's changes handed over first); no line is counted unless the hub cannot answer."
+  (let ((buffer (current-buffer)) (tick (buffer-chars-modified-tick)))
+    (unless (condition-case nil
+                (drgnx-history-ask buffer "history/line-positions"
+                                   (lambda (result error) (drgnx-debug-gutter--placed buffer tick bps result error))
+                                   (list :lines (vconcat (mapcar #'drgnx-debug-gutter--line-of bps))))
+              (error nil))
+      (drgnx-debug-gutter--place-counting bps))))
+
+(defun drgnx-debug-gutter--placed (buffer tick bps result error)
+  "The hub's RESULT (or ERROR) for the marks BPS of BUFFER, asked at modification TICK."
+  (when (and (buffer-live-p buffer) (buffer-local-value 'drgnx-debug-gutter-mode buffer))
+    (with-current-buffer buffer
+      (let ((want (seq-filter (lambda (bp) (and (not (assq (plist-get bp :id) drgnx-debug-gutter--overlays))
+                                                (memq bp drgnx-debug-gutter--bps)))
+                              bps))
+            (positions (append (plist-get result :positions) nil)))
+        (cond ((or error (not (plist-get result :tracked)) (null positions))
+               (drgnx-debug-gutter--place-counting want))
+              ;; typed since the question: the positions are of the older text, and the marks come again
+              ((/= tick (buffer-chars-modified-tick))
+               (when want (drgnx-debug-gutter--draw)))
+              (t
+               (dolist (bp want)
+                 (let ((p (seq-find (lambda (p) (eql (plist-get p :line) (drgnx-debug-gutter--line-of bp))) positions)))
+                   (drgnx-debug-gutter--dress
+                    (drgnx-debug-gutter--place bp (and p (cons (plist-get p :pos) (plist-get p :end))))
+                    bp)))
+               (drgnx-debug-gutter--ruler-later)))))))
 
 (defun drgnx-debug-gutter--restring (buffer)
   "`drgnx-margins-changed-functions': the column moved in BUFFER's margin; its marks take the new pad."

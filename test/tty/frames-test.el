@@ -129,7 +129,7 @@ once TEXT is on its screen."
                                                                               (current-buffer)))
                                                   (drgnx-groups-move-to-next)
                                                   t))
-      (drgnx-test-pause 0.5 "the move may not end the edit")
+      ;; ending the edit is synchronous (the daemon's own state below says it did not end), not a later event
       (should (drgnx-tty-session-eval s '(let ((b (get-buffer "COMMIT_EDITMSG")))
                                            (and b (buffer-local-value 'server-buffer-clients b) t))))
       (should-not (drgnx-tty-session-find c "emacsclient exited"))

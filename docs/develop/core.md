@@ -1632,7 +1632,7 @@ What redisplay reads, built once per change (PERF-L L6):
 
 | Memo | On | Rebuilt when | Epoch |
 | --- | --- | --- | --- |
-| `sticky-segment` (`drgnx-sticky.el`) | window | the window's start moves, it shows another buffer, or the epoch `sticky` of its buffer moves | `sticky` (per buffer), bumped by an edit at or above the start of a window showing the buffer |
+| `sticky-segment` (`drgnx-sticky.el`) | window | the window's start moves, it shows another buffer, or the epoch `sticky` of its buffer moves | `sticky` (per buffer), bumped by an edit at or above the start of a window showing the buffer, by the hub's answer for its scopes and once its tree-sitter parse lands |
 | `live-header` (`drgnx-live.el`) | buffer | the epoch `live-tabs` of the view moves | `live-tabs` (per buffer), bumped where the tabs, the watched tab or driving change (`drgnx-live--tabs-changed`) |
 | `statusbar-bar` (`drgnx-statusbar.el`) | window | one of six epochs moves, or a plain value: the position the bar shows (not point: the text of `statusbar-position`, nil for a bar with no position), the change tick, the narrowing, width, full or compact, the selection, the buffer, `default-directory`, `mode-line-process`, a macro being recorded, keycast's keys, which-function's name, the text of other packages' entries this redisplay, the count of toasts waiting (24 keys). Built again, it measures only texts it has not met: the cache `statusbar-widths` (256, least recently used out) keeps each width per text, face properties, face and layout key, so a cursor move measures the new position alone, and a long branch is cut by halving. A segment that says the same again gives the same string (`drgnx-statusbar--texts`, per segment id), whose width is kept by the string object (`drgnx-statusbar--width-of`, weak), so the fit's repeated widths allocate nothing; a bar too wide drops its segments into one list of cells and makes its lists once; the row's font height comes from `drgnx-pixels-font-metrics` (one `font-info` per font name) |
 | `statusbar-position` (`drgnx-statusbar.el`) | window | the point it shows (the window's, or the buffer's when the window shows another), the change tick, the narrowing, the selection, whether you are in it or the large-file flag (7 keys) |
@@ -1677,7 +1677,7 @@ names, and on every bar it allocated more than the other segments together. Test
 
 Each module activates its memo in its `:setup` (`drgnx-memo-activate`), so turning the module off empties it. The Live
 view bumps by hand rather than by `:watch`: its tests and its use do not wait for the module's setup, and the sites are
-all in one file. The segment and the header are read per redisplay; a hit allocates 0 (tests: `mod-sticky-test.el`,
+all in one file. The segment and the header are read per redisplay; a hit allocates 0 (tests: `mod-sticky-hub-test.el`,
 `mod-live-test.el`).
 
 ### Caches
@@ -2295,6 +2295,11 @@ keymaps, settings and the final insert or draw call):
 - an image for an SVG (once per image);
 - the insert itself and the windows' places;
 - the messages to the hub.
+
+A dock section is as tall as its rows (`drgnx-wb--fit-window`, `window-resize` only); the count is the view's own,
+`drgnx-wb--section-rows`: the rows Sjá holds (`drgnx-view-row-count nil`, which a draw of the window's slice does not
+all put in the buffer) or the inserter's, and no line of the buffer is counted for a view. A buffer that is not a view
+keeps `count-lines`.
 
 There are two recorded exceptions:
 

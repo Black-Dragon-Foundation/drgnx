@@ -23,11 +23,11 @@
 (require 'drgnx-pixels)                 ; rows of an exact height, `drgnx-look-pixel-width'
 (require 'drgnx-icons)                  ; `drgnx-look-icon'
 (require 'drgnx-timer)                  ; the breadcrumb's symbol, on idle
-(require 'add-log)                      ; `add-log-current-defun'
 (declare-function drgnx-face-glyph "drgnx-face")
 (declare-function glitnir-active-p "glitnir")
 (declare-function drgnx-look-density-value "drgnx-look-density" (key &optional density))
 (declare-function drgnx-groups-split-right "drgnx-groups")
+(declare-function drgnx-outline-scopes "drgnx-outline" (buffer line callback))
 
 ;; No `:height' in the tab faces: a relative 1.0 scales by one, and costs a font spec copy at every run of the tab line.
 (defface drgnx-chrome-tab '((t :inherit (shadow tab-line-tab-inactive) :box nil))
@@ -575,16 +575,28 @@ a command while it waits only resets the wait."
   (drgnx-timer-debounce 'chrome-symbol drgnx-chrome-symbol-delay #'drgnx-chrome--symbol-update :idle t :owner :core))
 
 (defun drgnx-chrome--symbol-update ()
-  "The selected editor window's definition at point (`add-log-current-defun': a function, a heading, a class) into
-its parameter `drgnx-chrome-symbol' as (BUFFER . NAME), and its breadcrumb made again when that changed.  Runs on
-idle, never while drawing: the breadcrumb only reads the parameter."
+  "Ask for the selected editor window's definition at point: the innermost of the definitions the hub finds around
+point's line (`drgnx-outline-scopes': the Outline's parse of the file, unsaved text included), into the window's
+parameter `drgnx-chrome-symbol' as (BUFFER . NAME) when it answers, the breadcrumb made again when that changed.  Runs
+on idle, never while drawing: the breadcrumb only reads the parameter.  No local file or no hub: no name."
   (let ((w (selected-window)))
-    (when (and (eq (drgnx-chrome--role w) 'editor) (buffer-file-name (window-buffer w)))
-      (let ((sym (with-current-buffer (window-buffer w)
-                   (save-excursion (goto-char (window-point w)) (ignore-errors (add-log-current-defun))))))
-        (unless (equal (cons (window-buffer w) sym) (window-parameter w 'drgnx-chrome-symbol))
-          (set-window-parameter w 'drgnx-chrome-symbol (cons (window-buffer w) sym))
-          (drgnx-chrome--apply-window w nil))))))
+    (when (eq (drgnx-chrome--role w) 'editor)
+      (let ((b (window-buffer w)))
+        (unless (and (buffer-file-name b)
+                     (progn (require 'drgnx-outline)
+                            (drgnx-outline-scopes
+                             b (with-current-buffer b (line-number-at-pos (window-point w)))
+                             (lambda (scopes)
+                               (when (and (window-live-p w) (eq (window-buffer w) b))
+                                 (drgnx-chrome--symbol-set w b (plist-get (car (last scopes)) :name)))))))
+          (drgnx-chrome--symbol-set w b nil))))))
+
+(defun drgnx-chrome--symbol-set (w b name)
+  "Window W shows NAME, the definition its point is in in B: its parameter set and its breadcrumb made again, when
+that changed."
+  (unless (equal (cons b name) (window-parameter w 'drgnx-chrome-symbol))
+    (set-window-parameter w 'drgnx-chrome-symbol (cons b name))
+    (drgnx-chrome--apply-window w nil)))
 
 ;;;; Applying
 

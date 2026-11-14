@@ -85,6 +85,12 @@ impl Hub {
                 });
             }
         }));
+        // the breakpoints sent to an editor carry the buffer positions of their lines (the edit history's mirror)
+        let weak = Arc::downgrade(front);
+        self.debug(front).on_lines(Arc::new(move |path| {
+            weak.upgrade()
+                .and_then(|f| crate::editor::mirror_lines(&f, path))
+        }));
         self.origins
             .set_replay(Arc::new(super::origin_wire::ForkReplay {
                 front: Arc::downgrade(front),

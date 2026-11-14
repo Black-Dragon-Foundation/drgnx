@@ -1290,6 +1290,8 @@ a capitalised name a named type (below) or, in results, a record (`JobSummary`, 
 `HubStatus`, `HelloReply`: their fields are in `methods.json`). A params schema never holds an unconstrained value (`any`); a
 result may (a transcript entry's ACP fields, a job's tasks).
 
+The `notebook/*` methods and the events they come with (`notebook-tail`, `notebook-status`, `notebook-input-request`) are described in `notebooks.md`.
+
 <!-- hub-methods:begin -->
 | Method | Class | Params | Result | Writes |
 |---|---|---|---|---|
@@ -1443,10 +1445,12 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `history/batch` | user | `{buffer_id: string, changes: [{inserted: string, old_len: natnum, origin?: string, start: natnum}], region_hash?: string, version: natnum}` | `{ok?: boolean, resync?: boolean}` | yes |
 | `history/blame` | user | `{end: integer, path: string, start: integer, worktree_root: string}` | `{spans: [BlameSpan]}` | no |
 | `history/compare` | user | `{a: string, b: string}` | `{files: [ComparedFile]}` | no |
+| `history/eol-fit` | user | `{items: [{key: natnum, pos: integer, text: string}], path: string, tab_width: natnum, width: natnum, worktree_root: string}` | `{items: [EolFitted], tracked: boolean}` | no |
 | `history/fork` | user | `{message: string, profile?: string, seq: integer, session: string}` | `{branch: string, id: string, level: "message" \| "turn" \| "summary", path: string, source_branch: string}` | yes |
 | `history/fork/drop` | user | `{id: string}` | `{ok: boolean}` | yes |
 | `history/hunks` | user | `{branch: string, since: integer}` | `{files: [FileHunks]}` | no |
 | `history/hunks/head` | user | `{path: string, worktree_root: string}` | `{hunks: [HeadHunk], marks: [HunkMark], tracked: boolean}` | no |
+| `history/line-positions` | user | `{lines: [natnum], path: string, worktree_root: string}` | `{positions: [LinePosition], tracked: boolean}` | no |
 | `history/op/hunks` | user | `{op?: integer, session?: string, worktree: string}` | `{hunks: [OpHunk]}` | no |
 | `history/redo` | user | `{op: integer, session: string}` | `{commit?: string, op: integer, skipped: [RevertSkipped], written: [string]}` | yes |
 | `history/register` | user | `{buffer_id: string, path: string, worktree_root: string}` | `{doc: integer, reason?: string, tracked: boolean}` | yes |
@@ -1479,7 +1483,23 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `messages/mark` | user | `{id: natnum, state: "delivered" \| "read" \| "acted"}` | `{changed: boolean}` | yes |
 | `messages/retract` | user | `{id: natnum}` | `{retracted: boolean, status: string}` | yes |
 | `messages/send` | user | `{answers?: natnum, job?: Id, question?: boolean, recipient: AgentName, seen?: natnum, sender?: AgentName, text: Text}` | `SendResult` | yes |
+| `notebook/clear` | user | `{cell?: string, id: string}` | `boolean` | no |
+| `notebook/close` | user | `{id: string}` | `boolean` | no |
+| `notebook/execute` | user | `{cells: [{id: string, source: string, type: string}], id: string}` | `boolean` | no |
+| `notebook/input` | user | `{id: string, request: string, value: string}` | `boolean` | no |
+| `notebook/interrupt` | user | `{id: string}` | `boolean` | no |
+| `notebook/kernels` | user | `{}` | `{kernels: [NotebookKernel], skipped: [NotebookSkipped]}` | no |
+| `notebook/open` | user | `{path: string, text?: string}` | `NotebookOpened` | no |
+| `notebook/output` | user | `{cell: string, id: string}` | `{outputs: [any]}` | no |
+| `notebook/restart` | user | `{id: string}` | `{kernel: string}` | no |
+| `notebook/save` | user | `{cells?: [{id: string, source: string, type: string}], id: string}` | `boolean` | no |
+| `notebook/shutdown` | user | `{id: string}` | `{code?: integer, signal?: integer, stderr: string}` | no |
+| `notebook/start` | user | `{id: string, kernel?: string}` | `{kernel: string}` | no |
+| `notebook/sync` | user | `{cells: [{id: string, source: string, type: string}], id: string}` | `boolean` | no |
+| `notebook/tail` | user | `{cell: string, id: string}` | `NotebookTail` | no |
 | `orch/evidence` | user | `{task: TaskRef}` | `{evidence: [any]}` | no |
+| `outline/scopes` | user | `{file?: string, line: natnum, path?: string, worktree_root?: string}` | `{scopes: [OutlineScope]}` | no |
+| `outline/set` | user | `{file?: string, view: string}` | `boolean` | no |
 | `pace/get` | user | `{provider?: string}` | `{meters?: [Pace]}` | no |
 | `pair/answer` | user | `{lines?: [natnum], not_saved?: Text, reason?: Text, result: "applied" \| "refused" \| "dropped", saved?: boolean, version?: natnum, write: natnum}` | `boolean` | no |
 | `pair/closed` | user | `{file: AbsPath}` | `boolean` | no |
@@ -2096,6 +2116,19 @@ edit asks again.
 large-files module's default `:ask-above`, the size from which a file opens lean or in chunks) gets no marks, as
 `drgnx-large-file-p` kept them from large buffers in Lisp. Large-files v2's cost registry replaces this one constant.
 
+- The `debug-breakpoints` event and `debug/breakpoints`' answer give each breakpoint `pos` and `end` (the positions its
+  line starts at and just after it, `marks::place_breakpoints`, from the edit history's mirror; none without a tracked
+  buffer or over the limit). `Debug::on_lines` is the hook the hub binds to give a file's `marks::Lines`.
+- `history/eol-fit {path, worktree_root, width, tab_width, items: [{key, pos, text}]}` answers `{tracked, items:
+  [{key, text}]}`: each end-of-line problem's text cut with an ellipsis to the room `width` columns leave after the end
+  of its line in the text the hub holds (`marks::eol_columns` counts tabs, `marks::eol_fit` cuts: room is `width` less
+  the column less 4, at least 8). Flymake builds the string synchronously, so `drgnx-face--eol-text` shows the words
+  whole, asks once (after 50 ms, through `drgnx-history-ask`, for all the problems it has no fit for) and makes the
+  overlays again from the answers; an answer for text typed since is dropped and the problems are asked for again.
+  A buffer the hub does not track, or a hub that fails the question, gets Lisp's cut (`drgnx-face--eol-fit`) for 5 s.
+- `history/line-positions {path, worktree_root, lines}` answers `{tracked, positions: [{line, pos, end}]}`: where those
+  lines of the editor's tracked buffer start and just after them, in the text the hub holds (asked through
+  `drgnx-history-ask`, so after the buffer's changes were handed over); none past the limit.
 - `git/blame/line {path, worktree_root, pos, width}` answers the inline blame of the line the position is on, as
   `{text?, sha?, time?}`: `marks::blame_text` words it ("Ada, 3 days ago · Fix the parser", "You · Uncommitted
   changes", "agent s1 · …") and cuts it to `width` columns (`BLAME_MIN_WIDTH` 20: none under it, `BLAME_MAX_WIDTH` 80),
@@ -2861,6 +2894,34 @@ the editor's side is `wb/drgnx-buffers.el`).
   connection's repositories read by `git/letters`, an ignored or untracked folder's around it; an ignored name is dimmed
   instead) and `drgnx-buffers-modified` while it has unsaved changes. A status read draws the connection's panels
   again. The editor draws the right edge (the letter, ● or ×, the hover) for the rows drawn near what a window shows.
+
+### The Outline panel's rows (`outline/set`)
+
+The Outline section's rows: the definitions of the file in the editor, built by the hub with Hrafn's parse
+(`hrafn::symbols::outline_text`; `runtime/crates/drgnx-ratatoskr/src/view/outline.rs`; the editor's side is
+`wb/drgnx-outline.el`).
+
+- `outline/set {view, file?}` says the (connection, view) shows FILE now (absolute, at most 4096 bytes; none: no file
+  the hub can read, such as a buffer without one or a remote file), outlines it and answers `true` once its model and
+  rows have gone. The editor sends it when the file it shows changes and after a save, never per keystroke.
+- **The text.** The editor's own text of the file where the edit history tracks the buffer (unsaved typing included,
+  from the mirror Search already reads), else the file on disk. An edit the history takes for a shown file outlines it
+  again once the edits pause for 500 ms of the hub's clock (`QUIET`); an answer for an ask a later one replaced is
+  dropped.
+- **The size guard.** One check, `too_large` (`OUTLINE_MAX`, 1 MiB, the Lisp Outline's limit), on both paths: a text or
+  a file past it is not parsed, and the view shows the notice "This file is too large for an outline".
+- **The model** is a node per definition with its `label` and its `line` (from 1) in the list `order`, in file order:
+  the editor asks Sjá which definition a line is in (`at-line`) to mark the current one, and a row's line to jump.
+- **A row** is the name, indented two columns plus two per definition around it, with control characters as `^X`;
+  its key (`DEPTH:N:NAME`, N counting the earlier definitions of that name and depth) is over it as `drgnx-work-id`, so a
+  definition that only moved keeps its row. A file with nothing to outline (plain text, a language with no definitions)
+  is one inert, muted notice row, "No outline for this file", after the info icon on a graphical display.
+- `outline/scopes {file | path + worktree_root, line}` answers `{scopes: [{name, line}]}`: the definitions that hold LINE
+  (from 1), outermost first, one that starts on it included, from the same text and the same size guard (past it,
+  none). The breadcrumb's symbol (the innermost, `wb/drgnx-chrome.el`) and sticky scroll's scopes in a buffer without
+  tree-sitter (those starting above the window's top line, `modules/editor/drgnx-sticky.el`) read it; a buffer the
+  edit history tracks asks through it (`drgnx-history-ask`: its changes go first), another by its file. The last
+  `PARSED_FILES` (8) parses are kept by file and a hash of their text, so a scroll or a moved point parses nothing again.
 
 ### The agent panel's rows
 

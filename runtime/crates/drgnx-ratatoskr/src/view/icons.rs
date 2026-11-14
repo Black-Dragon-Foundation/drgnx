@@ -10,8 +10,9 @@ use std::sync::OnceLock;
 const FILES: &str = include_str!("../../../../../etc/icons/files.eld");
 
 /// The icons a row can show, by name: the Explorer's, the Work space's Flow (its columns and chips), the Extensions
-/// list's kinds.
-const SVGS: [(&str, &str); 27] = [
+/// list's kinds, the Outline's notice.
+const SVGS: [(&str, &str); 28] = [
+    ("info", include_str!("../../../../../etc/icons/info.svg")),
     (
         "package",
         include_str!("../../../../../etc/icons/package.svg"),

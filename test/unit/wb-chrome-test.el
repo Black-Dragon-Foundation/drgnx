@@ -694,32 +694,7 @@ each `›' (the text stays `a › b')."
         (should (equal '(space :width (6)) (get-text-property (1+ sep) 'display crumb)))
         (should (equal '(space :width (12)) (get-text-property (1- (string-search "src" crumb)) 'display crumb)))))))
 
-(ert-deftest drgnx-chrome/the-breadcrumb-names-the-definition-at-point ()
-  "window-dark.html `.crumbs': the breadcrumb ends with the definition point is in (`.cur', muted; the file then in
-the crumbs' colour).  The name is looked up on idle (a command only arms the debounce), kept in the window, and the
-breadcrumb only reads it: making it calls no lookup.  A window showing another buffer shows no stale name.  Pattern D
-(the idle timer's function is called)."
-  (drgnx-chrome-test--with dir
-    (make-directory (expand-file-name ".git" dir))
-    (let* ((w (selected-window)) (b (drgnx-chrome-test--open dir "src/a.el")))
-      (with-current-buffer b
-        (erase-buffer)
-        (insert "(defun drgnx-test-one ()\n  1)\n\n(defun drgnx-test-two ()\n  2)\n")
-        (emacs-lisp-mode)
-        (goto-char (point-min)) (search-forward "2)") (set-buffer-modified-p nil))
-      (set-window-point w (with-current-buffer b (point)))
-      (drgnx-chrome--symbol-schedule)
-      (should (drgnx-timer-active-p 'chrome-symbol))
-      (drgnx-chrome--symbol-update)
-      (let ((crumb (cl-letf (((symbol-function 'add-log-current-defun) (lambda () (error "Looked up while drawing"))))
-                     (drgnx-chrome-breadcrumb w))))
-        (should (equal "src › a.el › drgnx-test-two" (string-trim (substring-no-properties crumb))))
-        (should (memq 'drgnx-text-muted (ensure-list (get-text-property (string-search "drgnx-test-two" crumb) 'face crumb))))
-        (should (memq 'drgnx-chrome-crumb (ensure-list (get-text-property (string-search "a.el" crumb) 'face crumb)))))
-      (should (string-search "drgnx-test-two" (format "%s" (window-parameter w 'header-line-format))))
-      (drgnx-chrome-test--open dir "b.txt")
-      (should-not (string-search "drgnx-test" (drgnx-chrome-breadcrumb w)))
-      (drgnx-timer-cancel 'chrome-symbol))))
+;; The breadcrumb naming the definition at point (the hub answers): wb-chrome-symbol-test.el.
 
 (defun drgnx-chrome-test--face-key (s pos key)
   "The value of KEY in the anonymous face at POS of S (a plist in its `face' list), or nil."

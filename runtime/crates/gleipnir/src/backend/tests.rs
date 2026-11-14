@@ -158,6 +158,15 @@ fn targets(inv: &Invocation) -> Vec<i32> {
     inv.fds.iter().map(|(_, t)| *t).collect()
 }
 
+/// TARGETS, and the resolver file's fd after them when this host binds one (`host_resolver_fds`).
+fn with_host_resolver(mut targets: Vec<i32>) -> Vec<i32> {
+    #[cfg(target_os = "linux")]
+    if linux::bwrap::host_resolver_fds() == 1 {
+        targets.push(targets.last().unwrap() + 1);
+    }
+    targets
+}
+
 fn fd_at(inv: &Invocation, target: i32) -> &OwnedFd {
     &inv.fds.iter().find(|(_, t)| *t == target).unwrap().0
 }
@@ -213,7 +222,7 @@ fn bwrap_invocation_has_spec_status_and_binds_at_3_4_6() {
     assert!(inv.env.is_empty() && inv.cwd.is_none() && !inv.new_session);
     // 3 = the spec, 4 = the status pipe, (5 = the browser's, unused here,) then the binds from 6 in argv order:
     // read, write, run, the helper.
-    assert_eq!(targets(inv), [3, 4, 6, 7, 8, 9]);
+    assert_eq!(targets(inv), with_host_resolver(vec![3, 4, 6, 7, 8, 9]));
     let args = strings(&inv.args);
     let helper_at = args
         .windows(3)
@@ -276,7 +285,7 @@ fn browser_fd_is_5_and_binds_start_at_6() {
     )
     .unwrap();
     let inv = &p.invocation;
-    assert_eq!(targets(inv), [3, 4, 5, 6, 7, 8, 9]);
+    assert_eq!(targets(inv), with_host_resolver(vec![3, 4, 5, 6, 7, 8, 9]));
     assert_eq!(rustix::fs::fstat(fd_at(inv, 5)).unwrap().st_ino, id);
     let args = strings(&inv.args);
     assert!(

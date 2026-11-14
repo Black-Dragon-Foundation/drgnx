@@ -42,12 +42,23 @@
   "Wait until COMMAND ran (whatever the key looked like)."
   (drgnx-tty-session-wait s `(and (assq ',command kx-seen) t) 10))
 
+(defun drgnx-tty-fallback-test--barrier (s c)
+  "Wait until the daemon has read and run everything sent to client C before this call: one more key, F9 (a command that
+only notes itself), goes down the same input stream, and keys are read in order.  What \"nothing else may follow\"
+means is then settled, with no time passed; the note is taken out of the record."
+  (drgnx-tty-session-eval s '(progn (unless (fboundp 'kx-sentinel) (defun kx-sentinel () (interactive) nil))
+                                    (global-set-key (kbd "<f9>") #'kx-sentinel) t))
+  (drgnx-tty-session-eval s '(setq kx-seen (assq-delete-all 'kx-sentinel kx-seen)))
+  (drgnx-tty-session-send c "\e[20~")
+  (drgnx-tty-session-wait s '(assq 'kx-sentinel kx-seen) 10)
+  (drgnx-tty-session-eval s '(progn (setq kx-seen (assq-delete-all 'kx-sentinel kx-seen)) t)))
+
 (defun drgnx-tty-fallback-test--not-run (s command bytes c)
   "Send BYTES to C; once some command ran from them, COMMAND was not it."
   (drgnx-tty-session-eval s '(setq kx-seen nil))
   (drgnx-tty-session-send c bytes)
   (drgnx-tty-session-wait s 'kx-seen 10)
-  (drgnx-test-pause 0.3 "COMMAND may not run from the rest of the bytes")
+  (drgnx-tty-fallback-test--barrier s c)             ; the rest of the bytes has been read: COMMAND did not run from it
   (should-not (drgnx-tty-session-eval s `(assq ',command kx-seen))))
 
 (ert-deftest drgnx-tty-fallback/alt-shift-p-is-not-the-palette ()
@@ -88,7 +99,8 @@
                                                                   (frame-list)))
                             (drgnx-tty-session-eval s count))))
         (drgnx-tty-fallback-test--legacy s)
-        (drgnx-test-pause 1.5 "the second VTE client may get no hint")
+        ;; a client's hint is a timer until it is said: none left on any frame means the second client got none or has had it
+        (drgnx-tty-session-wait s '(cl-notany (lambda (f) (drgnx-timer-active-p (cons 'tty-fallback-hint f))) (frame-list)))
         (should (= before (drgnx-tty-session-eval s count))))
       (should (= 1 (seq-count (lambda (id) (eq id 'vte)) (drgnx-tty-session-eval s '(plist-get (drgnx-tty--read-report) :hinted))))))))
 
@@ -152,7 +164,7 @@
       (drgnx-tty-session-send c (concat "\C-x" f6))
       (drgnx-tty-session-wait-screen c "Ctrl\\+Shift\\+…")
       (drgnx-tty-session-send c "\a")
-      (drgnx-test-pause 0.5 "the bell may run no command but a quit")
+      (drgnx-tty-fallback-test--barrier s c)             ; the bell has been read: no command but a quit ran from it
       (should-not (drgnx-tty-session-eval s '(seq-remove (lambda (c) (memq (car c) '(keyboard-quit nil))) kx-seen)))
       ;; a click after F6 is a click: F6 is dropped, nothing of the mouse report is typed
       (let ((text `(with-current-buffer "*scratch*" (buffer-string))))
@@ -160,7 +172,7 @@
           (drgnx-tty-session-send c f6)
           (drgnx-tty-session-wait-screen c "Ctrl\\+Shift\\+…")
           (drgnx-tty-session-send c "\e[<0;60;6M\e[<0;60;6m")
-          (drgnx-test-pause 0.5 "nothing of the mouse report may be typed")
+          (drgnx-tty-fallback-test--barrier s c)             ; the mouse report has been read: nothing of it was typed
           (should (equal (drgnx-tty-session-eval s text) before))
           (should-not (drgnx-tty-session-find c "60;6\\|\\[<0"))
           (should-not (drgnx-tty-session-find c "Ctrl\\+Shift\\+…"))))

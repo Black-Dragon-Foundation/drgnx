@@ -313,12 +313,12 @@ does not hold it and tries again.  It removes the lock afterwards only while the
             (ignore-errors (drgnx-ui--write (expand-file-name "owner" lock) token))
             (if (equal (drgnx-ui--lock-token lock) token)
                 (setq held t)
-              (sleep-for 0.02)))
+              (drgnx-ui--poll-pause 0.02)))
         ;; the age is read again right before the removal, so a lock another taker just made is left alone
         (when (and (drgnx-ui--lock-stale-p lock) (drgnx-ui--lock-stale-p lock))
           (ignore-errors (delete-directory lock t)))
         ;; still there (held, or an old one that cannot be removed): wait, never spin
-        (when (file-exists-p lock) (sleep-for 0.02))))
+        (when (file-exists-p lock) (drgnx-ui--poll-pause 0.02))))
     (when held
       (unwind-protect (funcall fn)
         (when (equal (drgnx-ui--lock-token lock) token)
@@ -1033,6 +1033,11 @@ OVERRIDE (from $DRGNX_UI_LAUNCHER) wins."
   (drgnx-ui--choose-launcher (drgnx-env-container) (drgnx-env-systemd-user-p)
                              (getenv "DRGNX_UI_LAUNCHER")))
 
+(defun drgnx-ui--poll-pause (seconds)
+  "The pause between two looks of a poll for an event (a file, a lock, a process group's end): `sleep-for' SECONDS.
+The runtime audit knows it as an event wait, not a wait on time (`drgnx-run-ert--audit-event-polls')."
+  (sleep-for seconds))
+
 (defun drgnx-ui--read-pgid (run)
   (let ((file (expand-file-name "pgid" run)))
     (and (file-exists-p file)
@@ -1056,7 +1061,7 @@ OVERRIDE (from $DRGNX_UI_LAUNCHER) wins."
                           (shell-quote-argument (or (getenv "DRGNX_UI_MAX_RUNTIME") "1800")) cmd
                           (shell-quote-argument (expand-file-name "session.log" run))))
     (while (and (not (drgnx-ui--read-pgid run)) (< (float-time) deadline))
-      (sleep-for 0.02))
+      (drgnx-ui--poll-pause 0.02))
     (or (drgnx-ui--read-pgid run) (drgnx-ui--fail "setsid did not start %s" (plist-get sess :name)))))
 
 (defun drgnx-ui--group-ours-p (pgid run)
@@ -1127,7 +1132,7 @@ stops it and fails with \"scale S not applied\"; `drgnx-uitest-scale-ready-p')."
           (let ((p (ignore-errors
                      (plist-get (drgnx-ui-call sess "(drgnx-uitest-api-boot-status)" 5) :prompt))))
             (when (stringp p) (setq prompt p))))
-        (unless prompt (sleep-for 0.1)))
+        (unless prompt (drgnx-ui--poll-pause 0.1)))
       (if prompt
           (setq sess (plist-put sess :ready (list :init_running t :prompt prompt
                                                   :init_error :false :server_error :false)))
@@ -1170,12 +1175,12 @@ compositor saves its state into RUN on TERM, and the caller deletes RUN next."
     (drgnx-ui--run "kill" "-TERM" "--" (concat "-" pgid))
     (let ((deadline (+ (float-time) 2)))
       (while (and (drgnx-ui--group-live-p pgid) (< (float-time) deadline))
-        (sleep-for 0.05)))
+        (drgnx-ui--poll-pause 0.05)))
     (when (drgnx-ui--group-live-p pgid)
       (drgnx-ui--run "kill" "-KILL" "--" (concat "-" pgid))
       (let ((deadline (+ (float-time) 2)))
         (while (and (drgnx-ui--group-live-p pgid) (< (float-time) deadline))
-          (sleep-for 0.05))))))
+          (drgnx-ui--poll-pause 0.05))))))
 
 (defun drgnx-ui--display-in-use-p (name)
   "Non-nil while some process serves Wayland display NAME."
@@ -1225,7 +1230,7 @@ up to WAIT seconds (default 5) for its socket to go.  Never blocks longer; error
   (when-let* ((client (executable-find "emacsclient")))
     (ignore-errors (call-process "timeout" nil nil nil "3" client "-s" socket "--eval" "(kill-emacs)"))
     (let ((deadline (+ (float-time) (or wait 5))))
-      (while (and (file-exists-p socket) (< (float-time) deadline)) (sleep-for 0.05)))))
+      (while (and (file-exists-p socket) (< (float-time) deadline)) (drgnx-ui--poll-pause 0.05)))))
 
 (defun drgnx-ui-stop (name &optional legacy-ok)
   "Stop session NAME — Emacs asked to exit first, then the session's processes — and remove its run
@@ -1490,7 +1495,7 @@ never a drag from 0,0."
                          :settled)
               t)
           (setq settled t)
-        (sleep-for 0.05)))
+        (drgnx-ui--poll-pause 0.05)))
     settled))
 
 (defun drgnx-ui-wait-start-page (sess &optional timeout-s)
@@ -1502,7 +1507,7 @@ The page comes from a 1 s idle timer after the session is ready, so a picture of
       (if (eq t (plist-get (drgnx-ui-call sess "(drgnx-uitest--json (list :shown (if (get-buffer-window drgnx-start-buffer-name) t :false)))")
                            :shown))
           (setq shown t)
-        (sleep-for 0.05)))
+        (drgnx-ui--poll-pause 0.05)))
     (or shown (drgnx-ui--fail "the start page never showed in %s" (plist-get sess :name)))))
 
 (defun drgnx-ui--wait-delivered (sess &optional timeout-s)
@@ -1510,7 +1515,7 @@ The page comes from a 1 s idle timer after the session is ready, so a picture of
   (let ((deadline (+ (float-time) (or timeout-s 10))))
     (while (and (< (float-time) deadline)
                 (eq (plist-get (drgnx-ui-call sess "(drgnx-uitest-api-status)") :busy) t))
-      (sleep-for 0.04))))
+      (drgnx-ui--poll-pause 0.04))))
 
 (defun drgnx-ui-measure (sess actions &optional quiet-ms timeout-s)
   "Run ACTIONS (a list of action plists) as one measurement; return the jank report.
@@ -1696,7 +1701,7 @@ functions and hook totals measured in the session."
       (if (> (or (ignore-errors (plist-get (drgnx-ui-call sess "(drgnx-uitest-api-gui-frames)" 5) :visible)) 0)
              before)
           (setq visible-ms (round (* 1000 (- (float-time) t0))))
-        (sleep-for 0.02)))
+        (drgnx-ui--poll-pause 0.02)))
     (list :exit (if (eq (car r) 'timeout) :null (car r)) :output (string-trim (cadr r))
           :client_ms client-ms :visible_ms (or visible-ms :null)
           :hooks (plist-get (drgnx-ui-call sess "(drgnx-uitest-api-frame-hook-times)") :hooks))))
@@ -1785,7 +1790,7 @@ with EXTRA-ENV (\"K=V\" strings).  Return (RC RESULTS RUN)."
     (let ((deadline (+ (float-time) 2)))
       (while (and (or (drgnx-ui--display-in-use-p name) (drgnx-ui--serving-p (drgnx-ui--name-pattern name)))
                   (< (float-time) deadline))
-        (sleep-for 0.05)))
+        (drgnx-ui--poll-pause 0.05)))
     (drgnx-ui--remove-wayland-display name)
     (drgnx-ui--remove-compositor-files name run (plist-get sess :display))
     (delete-directory (drgnx-ui-socket-dir name) t)
