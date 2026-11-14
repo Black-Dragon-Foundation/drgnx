@@ -1500,6 +1500,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `history/batch` | user | `{buffer_id: string, changes: [{inserted: string, old_len: natnum, origin?: string, start: natnum}], region_hash?: string, version: natnum}` | `{ok?: boolean, resync?: boolean}` | yes |
 | `history/blame` | user | `{end: integer, path: string, start: integer, worktree_root: string}` | `{spans: [BlameSpan]}` | no |
 | `history/compare` | user | `{a: string, b: string}` | `{files: [ComparedFile]}` | no |
+| `history/eol-fit` | user | `{items: [{key: natnum, pos: integer, text: string}], path: string, tab_width: natnum, width: natnum, worktree_root: string}` | `{items: [EolFitted], tracked: boolean}` | no |
 | `history/fork` | user | `{message: string, profile?: string, seq: integer, session: string}` | `{branch: string, id: string, level: "message" \| "turn" \| "summary", path: string, source_branch: string}` | yes |
 | `history/fork/drop` | user | `{id: string}` | `{ok: boolean}` | yes |
 | `history/hunks` | user | `{branch: string, since: integer}` | `{files: [FileHunks]}` | no |
@@ -2156,6 +2157,13 @@ large-files module's default `:ask-above`, the size from which a file opens lean
 - The `debug-breakpoints` event and `debug/breakpoints`' answer give each breakpoint `pos` and `end` (the positions its
   line starts at and just after it, `marks::place_breakpoints`, from the edit history's mirror; none without a tracked
   buffer or over the limit). `Debug::on_lines` is the hook the hub binds to give a file's `marks::Lines`.
+- `history/eol-fit {path, worktree_root, width, tab_width, items: [{key, pos, text}]}` answers `{tracked, items:
+  [{key, text}]}`: each end-of-line problem's text cut with an ellipsis to the room `width` columns leave after the end
+  of its line in the text the hub holds (`marks::eol_columns` counts tabs, `marks::eol_fit` cuts: room is `width` less
+  the column less 4, at least 8). Flymake builds the string synchronously, so `drgnx-face--eol-text` shows the words
+  whole, asks once (after 50 ms, through `drgnx-history-ask`, for all the problems it has no fit for) and makes the
+  overlays again from the answers; an answer for text typed since is dropped and the problems are asked for again.
+  A buffer the hub does not track, or a hub that fails the question, gets Lisp's cut (`drgnx-face--eol-fit`) for 5 s.
 - `history/line-positions {path, worktree_root, lines}` answers `{tracked, positions: [{line, pos, end}]}`: where those
   lines of the editor's tracked buffer start and just after them, in the text the hub holds (asked through
   `drgnx-history-ask`, so after the buffer's changes were handed over); none past the limit.

@@ -254,6 +254,37 @@ impl Hub {
         Ok(out)
     }
 
+    /// ITEMS (end-of-line diagnostics of the editor's tracked buffer of REL of TREE) fitted for a window WIDTH columns
+    /// wide (`editor::marks::eol_fit`, the column of each one's line end counting tabs of TAB columns); none when no
+    /// buffer of it is tracked or the text is over the marks' limit.
+    pub fn eol_fit(
+        &self,
+        tree: &Tree,
+        rel: &str,
+        width: usize,
+        tab: u32,
+        items: &[w::EolItem],
+    ) -> verdandi::Result<Option<Vec<w::EolFitted>>> {
+        use crate::editor::marks;
+        let Some(text) = self.mirror_text(tree, rel)? else {
+            return Ok(None);
+        };
+        let positions: Vec<i64> = items.iter().map(|i| i.pos).collect();
+        let Some(columns) = marks::eol_columns(&text, &positions, tab) else {
+            return Ok(None);
+        };
+        Ok(Some(
+            items
+                .iter()
+                .zip(columns)
+                .map(|(i, column)| w::EolFitted {
+                    key: i.key,
+                    text: marks::eol_fit(&i.text, column, width),
+                })
+                .collect(),
+        ))
+    }
+
     /// Where LINES of the editor's tracked buffer of REL of TREE start in the text the hub holds, and just after them
     /// (`editor::marks::Lines`); none when no buffer of it is tracked or the text is over the marks' limit.
     pub fn line_positions(
@@ -648,6 +679,30 @@ pub async fn git_blame(f: &Front, c: &Caller, p: w::GitBlameParams) -> Result<w:
         .map_err(store)
 }
 
+/// `history/eol-fit`.
+pub async fn eol_fit(f: &Front, c: &Caller, p: w::EolFitParams) -> Result<w::EolFits, Error> {
+    super::revert::user_only(c)?;
+    let (hub, tree) = f
+        .core
+        .history
+        .of_tree(&hub_dir(f)?, Path::new(&p.worktree_root))?;
+    let (width, tab) = (p.width as usize, p.tab_width);
+    let found = crate::clock::blocking(move || hub.eol_fit(&tree, &p.path, width, tab, &p.items))
+        .await
+        .map_err(|e| internal(e.to_string()))?
+        .map_err(store)?;
+    Ok(match found {
+        Some(items) => w::EolFits {
+            tracked: true,
+            items,
+        },
+        None => w::EolFits {
+            tracked: false,
+            items: Vec::new(),
+        },
+    })
+}
+
 /// `history/line-positions`.
 pub async fn line_positions(
     f: &Front,
@@ -1019,6 +1074,51 @@ mod tests {
         assert_eq!(olds, vec![vec!["b\n".to_owned()], Vec::<String>::new()]);
         // no buffer of a file: nothing computed
         assert!(f.hub.hunks_head(&f.tree, "other.txt").unwrap().is_none());
+    }
+
+    // pattern: D
+    #[test]
+    fn end_of_line_diagnostics_come_back_fitted_for_the_unsaved_text() {
+        use crate::editor::marks;
+        let f = fx("a\n");
+        tracked(&f, "a.txt", "ab\nlong line of code here\n", "user");
+        let item = |key, pos, text: &str| runstav::methods::history::EolItem {
+            key,
+            pos,
+            text: text.into(),
+        };
+        // a long text on the short first line fits more than on the second, whose end is at column 22
+        let long = "x".repeat(60);
+        let got = f
+            .hub
+            .eol_fit(
+                &f.tree,
+                "a.txt",
+                50,
+                8,
+                &[item(1, 1, &long), item(2, 8, &long), item(3, 4, "ok")],
+            )
+            .unwrap()
+            .expect("tracked");
+        let len = |i: usize| got[i].text.chars().count();
+        assert_eq!((got[0].key, got[1].key, got[2].key), (1, 2, 3));
+        assert_eq!(len(0), 44); // 50 - 2 - 4
+        assert_eq!(len(1), 24); // 50 - 22 - 4
+        assert_eq!(got[2].text, "ok");
+        assert!(
+            f.hub
+                .eol_fit(&f.tree, "other.txt", 50, 8, &[])
+                .unwrap()
+                .is_none()
+        );
+        marks::with_limit(3, || {
+            assert!(
+                f.hub
+                    .eol_fit(&f.tree, "a.txt", 50, 8, &[item(1, 1, "x")])
+                    .unwrap()
+                    .is_none()
+            );
+        });
     }
 
     // pattern: D

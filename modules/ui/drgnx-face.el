@@ -15,6 +15,7 @@
 (require 'hl-line)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
+(require 'drgnx-timer)
 (require 'drgnx-face-state)
 (require 'drgnx-ui-kit)                     ; the glyph table and `drgnx-face-glyph' live in core
 (require 'drgnx-frame-kind)
@@ -467,6 +468,78 @@ columns of margin: an end-of-line problem that does not fit would wrap onto a se
   (let ((room (max 8 (- width column 4))))
     (if (<= (string-width text) room) text (truncate-string-to-width text room nil nil "…"))))
 
+;; The fit of an end-of-line problem is the hub's (`history/eol-fit'; hub.md "Editor marks"): Flymake builds the text
+;; synchronously, so the editor asks for the fit of what it has not been answered for (after a short pause, one
+;; question for the buffer's problems) and the format function only reads the answers.  The words go whole until the
+;; answer comes (then the overlays are made again); Lisp cuts them (`drgnx-face--eol-fit') only for a buffer the hub
+;; does not track and while it is down.
+
+(declare-function drgnx-history-tracked-p "drgnx-history")
+(declare-function drgnx-history-ask "drgnx-history")
+(declare-function flymake--update-eol-overlays "flymake")
+
+(defvar-local drgnx-face--eol-fits nil "KEY → the hub's fitted text, KEY the hash of (position text width).")
+(defvar-local drgnx-face--eol-wanted nil "(KEY POS TEXT) of the problems shown whole, waiting to be asked for.")
+(defvar-local drgnx-face--eol-down nil "`float-time' until which the hub counts as down for this buffer (Lisp fits).")
+(defconst drgnx-face--eol-fits-max 2000 "Fitted texts kept per buffer before they are dropped.")
+(defconst drgnx-face--eol-down-for 5 "Seconds a buffer's end-of-line fit stays in Lisp after the hub failed it.")
+
+(defun drgnx-face--eol-width ()
+  "The columns the buffer's window has."
+  (let ((w (get-buffer-window (current-buffer)))) (if w (window-body-width w) 80)))
+
+(defun drgnx-face--eol-render ()
+  "Make the current buffer's end-of-line overlays again (their texts come from `drgnx-face--eol-text')."
+  (when (fboundp 'flymake--update-eol-overlays)
+    (with-demoted-errors "drgnx end-of-line problems: %S" (flymake--update-eol-overlays))))
+
+(defun drgnx-face--eol-hub-down ()
+  "The hub could not fit the current buffer's problems: Lisp fits them for a few seconds."
+  (setq drgnx-face--eol-down (+ (float-time) drgnx-face--eol-down-for) drgnx-face--eol-wanted nil)
+  (drgnx-face--eol-render))
+
+(defun drgnx-face--eol-answered (buffer tick result error)
+  "The hub's RESULT (or ERROR) for the question about BUFFER asked at modification TICK."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (cond ((or error (not (plist-get result :tracked))) (drgnx-face--eol-hub-down))
+            ;; typed since: the answer is for older positions; the problems are shown again and ask again
+            ((/= tick (buffer-chars-modified-tick)) (drgnx-face--eol-render))
+            (t (unless drgnx-face--eol-fits (setq drgnx-face--eol-fits (make-hash-table :test #'eql)))
+               (when (> (hash-table-count drgnx-face--eol-fits) drgnx-face--eol-fits-max) (clrhash drgnx-face--eol-fits))
+               (dolist (i (append (plist-get result :items) nil))
+                 (puthash (plist-get i :key) (plist-get i :text) drgnx-face--eol-fits))
+               (drgnx-face--eol-render))))))
+
+(defun drgnx-face--eol-ask (buffer)
+  "Ask the hub to fit the problems of BUFFER shown whole (one question)."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when-let* ((wanted (reverse (delete-dups (prog1 drgnx-face--eol-wanted (setq drgnx-face--eol-wanted nil))))))
+        (let ((tick (buffer-chars-modified-tick)))
+          (unless (condition-case nil
+                      (drgnx-history-ask
+                       buffer "history/eol-fit" (lambda (result error) (drgnx-face--eol-answered buffer tick result error))
+                       (list :width (drgnx-face--eol-width) :tab_width tab-width
+                             :items (vconcat (mapcar (lambda (w) (list :key (nth 0 w) :pos (nth 1 w) :text (nth 2 w)))
+                                                     wanted))))
+                    (error nil))
+            (drgnx-face--eol-hub-down)))))))
+
+(defun drgnx-face--eol-text (diag text)
+  "TEXT of DIAG cut to the room after its line's end: the hub's fit when it has answered; whole while it is asked for
+\(a buffer the hub tracks); Lisp's cut otherwise."
+  (let* ((beg (flymake-diagnostic-beg diag)) (width (drgnx-face--eol-width))
+         (key (sxhash-equal (list beg text width))))
+    (cond ((and drgnx-face--eol-fits (gethash key drgnx-face--eol-fits)))
+          ((and (fboundp 'drgnx-history-tracked-p) (drgnx-history-tracked-p)
+                (not (and drgnx-face--eol-down (< (float-time) drgnx-face--eol-down))))
+           (push (list key beg text) drgnx-face--eol-wanted)
+           (drgnx-timer-debounce (cons 'eol-fit (current-buffer)) 0.05 #'drgnx-face--eol-ask
+                                 :args (list (current-buffer)) :owner (current-buffer))
+           text)
+          (t (drgnx-face--eol-fit text (save-excursion (goto-char beg) (end-of-line) (current-column)) width)))))
+
 (defun drgnx-face--eol-icon (format diag destination face-prop)
   "Flymake's text for DIAG at DESTINATION by FORMAT, its own function: at a line's end (`:eol', Flymake 1.4's
 `:inline-…') a chip as window-dark.html's `.diag', opening with its kind's icon (`circle-x' for an error,
@@ -479,9 +552,7 @@ display specs (an image, a pixel space) Emacs does not draw."
       (let* ((type (flymake-diagnostic-type diag))
              (severity (flymake--severity type))
              (face (flymake--lookup-type-property type face-prop 'flymake-error)))
-        (setq text (drgnx-face--eol-fit text
-                                        (save-excursion (goto-char (flymake-diagnostic-beg diag)) (end-of-line) (current-column))
-                                        (let ((w (get-buffer-window (current-buffer)))) (if w (window-body-width w) 80))))
+        (setq text (drgnx-face--eol-text diag text))
         (concat (propertize (drgnx-face-glyph (cond ((>= severity (flymake--severity :error)) 'circle-x)
                                                     ((>= severity (flymake--severity :warning)) 'triangle-alert)
                                                     (t 'info)))
