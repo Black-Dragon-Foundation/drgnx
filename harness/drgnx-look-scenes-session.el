@@ -1465,7 +1465,7 @@ notebook scene's picture output."
             (aset row (+ 2 (* 3 x)) (round (+ 120 (* 90 tt))))))
         (push row rows)))
     (list 'image :type 'pbm :data (concat (format "P6\n%d %d\n255\n" width height) (apply #'concat (nreverse rows)))
-          :ascent 'center :max-height 160)))
+          :ascent 'center :max-height (if (fboundp 'drgnx-px) (drgnx-px 160) 160))))
 
 (defun drgnx-look-scene--notebook-buffer ()
   "A notebook buffer, `cache-experiments.ipynb', with the mockup's four cells and their outputs put as the hub's tails

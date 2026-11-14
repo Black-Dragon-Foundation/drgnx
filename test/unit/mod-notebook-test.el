@@ -9,6 +9,7 @@
 
 (defvar nb-test--calls nil "The hub calls made, newest first: (METHOD . PARAMS).")
 (defvar nb-test--answers nil "Alist METHOD → a function of PARAMS returning (RESULT . ERROR).")
+(defvar nb-test--strict t "Whether the module teardown is checked for state left behind (not with a real grammar: loading its mode adds global hooks).")
 
 (defun nb-test--hub (method params &optional callback)
   (push (cons method params) nb-test--calls)
@@ -26,7 +27,7 @@
 (defmacro nb-test--with (&rest body)
   "BODY in a notebook buffer holding `nb-test--opened', the module on, the hub a recorder."
   (declare (indent 0))
-  `(drgnx-test-with-modules '(lang/notebook) :strict t
+  `(drgnx-test-with-modules '(lang/notebook) :strict nb-test--strict
                             (let ((nb-test--calls nil) (nb-test--answers nil))
                               (cl-letf (((symbol-function 'drgnx-notebook--call) (lambda (m p cb) (nb-test--hub m p cb)))
                                         ((symbol-function 'drgnx-notebook--call-sync) (lambda (m p &optional _t) (nb-test--hub m p))))
@@ -311,20 +312,27 @@
     (goto-char (plist-get (drgnx-notebook--cell-by-id "c") :head))
     (should (symbolp (drgnx-notebook--language-at-point)))))
 
+(defun nb-test--python-grammar-p ()
+  "Whether a python grammar is here: on the load path, or in the folder DRGNX_TEST_TS_GRAMMARS names (the pack job's)."
+  (when-let* ((dir (getenv "DRGNX_TEST_TS_GRAMMARS")) ((file-directory-p dir)))
+    (add-to-list 'treesit-extra-load-path dir))
+  (and (fboundp 'treesit-available-p) (treesit-available-p) (treesit-language-available-p 'python)))
+
 (ert-deftest drgnx-notebook/a-parser-holds-the-included-ranges-of-its-cells ()
-  (skip-unless (and (fboundp 'treesit-available-p) (treesit-available-p) (treesit-language-available-p 'python)))
-  (nb-test--with
-    (drgnx-notebook--sync-parsers)
-    (let* ((parsers (seq-filter (lambda (p) (eq (treesit-parser-language p) 'python)) (treesit-parser-list)))
-           (ranges (treesit-parser-included-ranges (car parsers))))
-      (should (= (length parsers) 1))
-      (should (= (length ranges) 2))
-      (should (equal (car ranges) (cons (1+ (plist-get (drgnx-notebook--cell-by-id "a") :head)) (plist-get (drgnx-notebook--cell-by-id "a") :tail)))))
-    ;; the same parser after an edit, not a second one
-    (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id "c") :head)))
-    (insert "y = 3\n")
-    (drgnx-notebook--rescan)
-    (should (= 1 (length (seq-filter (lambda (p) (eq (treesit-parser-language p) 'python)) (treesit-parser-list)))))))
+  :tags '(:real-grammar)
+  (skip-unless (nb-test--python-grammar-p))
+  (let ((nb-test--strict nil)) (nb-test--with
+                                 (drgnx-notebook--sync-parsers)
+                                 (let* ((parsers (seq-filter (lambda (p) (eq (treesit-parser-language p) 'python)) (treesit-parser-list)))
+                                        (ranges (treesit-parser-included-ranges (car parsers))))
+                                   (should (= (length parsers) 1))
+                                   (should (= (length ranges) 2))
+                                   (should (equal (car ranges) (cons (1+ (plist-get (drgnx-notebook--cell-by-id "a") :head)) (plist-get (drgnx-notebook--cell-by-id "a") :tail)))))
+                                 ;; the same parser after an edit, not a second one
+                                 (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id "c") :head)))
+                                 (insert "y = 3\n")
+                                 (drgnx-notebook--rescan)
+                                 (should (= 1 (length (seq-filter (lambda (p) (eq (treesit-parser-language p) 'python)) (treesit-parser-list))))))))
 
 ;;; Images: static PNG and JPEG outputs, fetched once from the hub's full output
 
@@ -365,3 +373,41 @@
                                                 :images (list (list :at 0 :output 0 :mime "image/svg+xml" :width 10 :height 10))))))
       (should-not (get-text-property 0 'display s))
       (should (string-search "image/svg+xml" s)))))
+
+;;; The same, against a recording tree-sitter layer: what the notebook asks of it (the suite has no grammar in its image)
+
+(defmacro nb-test--with-fake-treesit (&rest body)
+  "BODY with the tree-sitter functions the notebook uses replaced by a recorder: a parser is (LANGUAGE . RANGES)."
+  (declare (indent 0))
+  `(let ((parsers nil) (deleted nil))
+     (ignore deleted)
+     (cl-letf (((symbol-function 'treesit-available-p) (lambda () t))
+               ((symbol-function 'treesit-language-available-p) (lambda (lang &rest _) (memq lang '(python markdown))))
+               ((symbol-function 'treesit-parser-list) (lambda (&rest _) (copy-sequence parsers)))
+               ((symbol-function 'treesit-parser-language) (lambda (p) (car p)))
+               ((symbol-function 'treesit-parser-create) (lambda (lang &rest _) (car (push (cons lang nil) parsers))))
+               ((symbol-function 'treesit-parser-set-included-ranges) (lambda (p ranges) (setcdr p ranges)))
+               ((symbol-function 'treesit-parser-delete) (lambda (p) (push (car p) deleted) (setq parsers (delq p parsers)))))
+       ,@body)))
+
+(ert-deftest drgnx-notebook/one-parser-per-language-holds-its-cells-ranges ()
+  (nb-test--with
+    (nb-test--with-fake-treesit
+      (setq drgnx-notebook--ranges nil)
+      (drgnx-notebook--sync-parsers)
+      (should (equal (sort (mapcar #'car (treesit-parser-list)) (lambda (a b) (string< a b))) '(markdown python)))
+      (let* ((python (seq-find (lambda (p) (eq (car p) 'python)) (treesit-parser-list)))
+             (a (drgnx-notebook--cell-by-id "a")) (c (drgnx-notebook--cell-by-id "c")))
+        (should (equal (cdr python) (list (cons (1+ (plist-get a :head)) (plist-get a :tail)) (cons (1+ (plist-get c :head)) (plist-get c :tail))))))
+      ;; an edit moves the ranges on the same parsers, a second parser is not made
+      (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id "c") :head)))
+      (insert "y = 3\n")
+      (drgnx-notebook--rescan)
+      (should (= 2 (length (treesit-parser-list))))
+      (let ((python (seq-find (lambda (p) (eq (car p) 'python)) (treesit-parser-list))) (c (drgnx-notebook--cell-by-id "c")))
+        (should (equal (car (last (cdr python))) (cons (1+ (plist-get c :head)) (plist-get c :tail)))))
+      ;; a language no cell has any more loses its parser
+      (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id "b") :head)))
+      (drgnx-notebook-change-cell-type 'raw)
+      (drgnx-notebook--rescan)
+      (should (equal (mapcar #'car (treesit-parser-list)) '(python))))))
