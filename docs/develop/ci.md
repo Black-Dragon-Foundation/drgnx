@@ -302,9 +302,9 @@ is Nidhogg's), and `actions/checkout` without `repository` checks out the caller
 Between releases each repository is tested against the other's **current integration branch**, never an old release:
 
 - **drgnx's CI** (`nidhogg: line`): the `nidhogg-line` job reads the branch name in `.github/ci/nidhogg-line`
-  (`rel7-next`), resolves its head with `git ls-remote`, and `.github/ci/nidhogg-line.sh` finds Nidhogg's newest
+  (`rel7-next` on rel7-next; a release branch names its partner release branch: `rel/6-final` on drgnx's `rel/6-final`), resolves its head with `git ls-remote`, and `.github/ci/nidhogg-line.sh` finds Nidhogg's newest
   `build.yml` run of that commit (any event: a pull request, a by-hand or a scratch run) whose tarball jobs
-  (`Linux (fedora-45)`, `macOS (NS app)`) succeeded, even when its test jobs are red, and that still holds
+  (`Linux (fedora-45)`, `macOS (Naglfar app)`) succeeded, even when its test jobs are red, and that still holds
   the tarballs the asked tiers need (`tarball-fedora-45` for the Linux tiers, `tarball-macos` for `macos`). It
   downloads them and uploads them into this run under the same names, so every tier job installs them exactly as
   `nidhogg: artifact` does. Every tier job waits for it (`needs: nidhogg-line`) and is skipped when it failed. No such

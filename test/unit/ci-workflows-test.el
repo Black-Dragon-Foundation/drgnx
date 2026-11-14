@@ -128,9 +128,9 @@ there, so what a job does includes them (and theirs)."
     (drgnx-ci-test--has sh "status=completed" "never falls back to the release" "exit 1")
     (should (string-match-p "^[a-z0-9][a-z0-9./_-]*$" line))))   ; a line of its own names the branch
 
-(defun drgnx-ci-test--line (artifacts runs)
+(defun drgnx-ci-test--line (artifacts runs &optional stdout-only)
   "Run nidhogg-line.sh for ARTIFACTS with a stub git and gh; RUNS is ((ID JOBS ARTIFACTS)...) newest first.
-Returns (EXIT . OUTPUT)."
+Returns (EXIT . OUTPUT), the output both streams' or, with STDOUT-ONLY, stdout's."
   (let* ((dir (make-temp-file "drgnx-line" t)) (bin (expand-file-name "bin" dir)) (data (expand-file-name "data" dir))
          (ci (expand-file-name "ci" dir)))
     (unwind-protect
@@ -153,14 +153,15 @@ Returns (EXIT . OUTPUT)."
           (let ((process-environment (append (list (format "PATH=%s:%s" bin (getenv "PATH")) (concat "DATA=" data))
                                              process-environment)))
             (with-temp-buffer
-              (let ((rc (apply #'call-process "bash" nil t nil (expand-file-name "nidhogg-line.sh" ci) artifacts)))
+              (let ((rc (apply #'call-process "bash" nil (if stdout-only (list t nil) t) nil
+                               (expand-file-name "nidhogg-line.sh" ci) artifacts)))
                 (cons rc (buffer-string))))))
       (delete-directory dir t))))
 
 (ert-deftest drgnx-ci/the-line-takes-the-head-s-run-whose-tarball-jobs-passed ()
   ;; the run may be red (its test jobs); what counts is the job that builds each asked tarball, and the artifact
   (skip-unless (drgnx-ci-test--file ".github/ci/nidhogg-line.sh"))
-  (let* ((both '("Linux (fedora-45)" "macOS (NS app)")) (arts '("tarball-fedora-45" "tarball-macos"))
+  (let* ((both '("Linux (fedora-45)" "macOS (Naglfar app)")) (arts '("tarball-fedora-45" "tarball-macos"))
          (red (list "7" both arts)))
     ;; a red run whose tarball jobs succeeded is picked
     (let ((r (drgnx-ci-test--line '("tarball-fedora-45" "tarball-macos") (list red))))
@@ -181,6 +182,34 @@ Returns (EXIT . OUTPUT)."
         (should (= 1 (car r)))
         (should (string-match-p "::error::" (cdr r)))
         (should-not (string-match-p "^run=" (cdr r)))))))
+
+(ert-deftest drgnx-ci/the-line-script-names-the-jobs-nidhogg-s-build-has ()
+  ;; job_of maps an artifact to the job of Nidhogg's build.yml that builds it; the names are kept in nidhogg-build-jobs
+  ;; (a copy of Nidhogg's job names, changed with a rename there): a stale name matches no run, ever
+  (let ((sh (drgnx-ci-test--file ".github/ci/nidhogg-line.sh"))
+        (jobs (drgnx-ci-test--file ".github/ci/nidhogg-build-jobs")) (n 0))
+    (skip-unless (and sh jobs))
+    (should (string-match "^job_of() .*$" sh))
+    (let ((def (match-string 0 sh)))
+      (dolist (row (split-string jobs "\n" t))
+        (unless (string-prefix-p "#" row)
+          (let* ((parts (split-string row "|")) (artifact (car parts)) (job (cadr parts)))
+            (setq n (1+ n))
+            (with-temp-buffer
+              (call-process "bash" nil t nil "-c" (format "%s; job_of '%s'" def artifact))
+              (should (equal (string-trim (buffer-string)) job)))))))
+    (should (>= n 2))))
+
+(ert-deftest drgnx-ci/the-line-script-keeps-its-error-off-stdout ()
+  ;; drgnx-tiers.yml pipes stdout into $GITHUB_OUTPUT: only commit= and run= may reach it (a `::error::` there is
+  ;; "Unable to process file command 'output'"); the runner reads workflow commands from stderr too
+  (skip-unless (drgnx-ci-test--file ".github/ci/nidhogg-line.sh"))
+  (dolist (runs (list nil (list (list "8" '("Linux (fedora-45)") '("tarball-fedora-45")))))
+    (let ((r (drgnx-ci-test--line '("tarball-macos") runs t)))
+      (should (= 1 (car r)))
+      (should (equal "" (cdr r))))
+    (let ((r (drgnx-ci-test--line '("tarball-macos") runs)))
+      (should (string-match-p "::error::" (cdr r))))))
 
 (ert-deftest drgnx-ci/gui-runs-on-push-to-main ()
   (let ((gui (drgnx-ci-test--yml "gui.yml")) (tiers (drgnx-ci-test--yml "drgnx-tiers.yml")))

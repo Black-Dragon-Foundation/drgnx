@@ -2,9 +2,9 @@
 # nidhogg-line.sh ARTIFACT...: Nidhogg's integration line for drgnx-tiers.yml's `nidhogg: line`. Resolves the branch
 # named in .github/ci/nidhogg-line to its head, then finds Nidhogg's newest successful build run (build.yml) of that
 # commit whose tarball jobs (the jobs that build the ARTIFACTs: tarball-fedora-45 <- "Linux (fedora-45)", tarball-macos
-# <- "macOS (NS app)") concluded success and that still holds every ARTIFACT; the run itself may be red (its test jobs).
+# <- "macOS (Naglfar app)") concluded success and that still holds every ARTIFACT; the run itself may be red (its test jobs).
 # Prints `commit=SHA` and `run=ID` (for
-# GITHUB_OUTPUT). No such run: one error line and exit 1, never the release instead.
+# GITHUB_OUTPUT: stdout carries only those two lines). No such run: one `::error::` line on stderr (the runner reads workflow commands there; stdout is piped into GITHUB_OUTPUT) and exit 1, never the release instead.
 # GH_TOKEN: a token that reads Nidhogg's Actions (an App token with Actions: read; an artifact download needs one even
 # on a public repository). docs/develop/ci.md, "Nidhogg's integration line"
 set -euo pipefail
@@ -12,11 +12,11 @@ repo=${NIDHOGG_REPO:-Black-Dragon-Foundation/nidhogg}
 [ $# -gt 0 ] || { echo "usage: nidhogg-line.sh ARTIFACT..." >&2; exit 2; }
 here=$(cd "$(dirname "$0")" && pwd)
 branch=$(grep -v '^[[:space:]]*\(#\|$\)' "$here/nidhogg-line" | head -n 1 | tr -d '[:space:]')
-[ -n "$branch" ] || { echo "::error::.github/ci/nidhogg-line names no branch"; exit 1; }
+[ -n "$branch" ] || { echo "::error::.github/ci/nidhogg-line names no branch" >&2; exit 1; }
 sha=$(git ls-remote "https://github.com/$repo.git" "refs/heads/$branch" | cut -f1)
-[ -n "$sha" ] || { echo "::error::Nidhogg has no branch $branch (.github/ci/nidhogg-line); push it, or name the line there"; exit 1; }
-# the job that builds an artifact (Nidhogg's build.yml): tarball-macos <- "macOS (NS app)", tarball-D <- "Linux (D)"
-job_of() { case $1 in tarball-macos) echo "macOS (NS app)" ;; tarball-*) echo "Linux (${1#tarball-})" ;; *) echo "$1" ;; esac; }
+[ -n "$sha" ] || { echo "::error::Nidhogg has no branch $branch (.github/ci/nidhogg-line); push it, or name the line there" >&2; exit 1; }
+# the job that builds an artifact (Nidhogg's build.yml; the names are kept in nidhogg-build-jobs, which a test holds to this): tarball-macos <- "macOS (Naglfar app)", tarball-D <- "Linux (D)"
+job_of() { case $1 in tarball-macos) echo "macOS (Naglfar app)" ;; tarball-*) echo "Linux (${1#tarball-})" ;; *) echo "$1" ;; esac; }
 for run in $(gh api "repos/$repo/actions/workflows/build.yml/runs?head_sha=$sha&status=completed&per_page=20" --jq '.workflow_runs[].id'); do
   green=$(gh api "repos/$repo/actions/runs/$run/jobs?per_page=100" --jq '.jobs[] | select(.conclusion == "success") | .name')
   have=$(gh api "repos/$repo/actions/runs/$run/artifacts?per_page=100" --jq '.artifacts[] | select(.expired | not) | .name')
@@ -31,5 +31,5 @@ for run in $(gh api "repos/$repo/actions/workflows/build.yml/runs?head_sha=$sha&
     exit 0
   fi
 done
-echo "::error::no Nidhogg build run of $branch's head ${sha:0:12} has the green tarball job(s) and artifact(s) for $* (failed, expired, missing or still running): run Nidhogg's Build on it; drgnx's line mode never falls back to the release"
+echo "::error::no Nidhogg build run of $branch's head ${sha:0:12} has the green tarball job(s) and artifact(s) for $* (failed, expired, missing or still running): run Nidhogg's Build on it; drgnx's line mode never falls back to the release" >&2
 exit 1
