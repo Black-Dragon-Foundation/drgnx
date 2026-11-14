@@ -282,12 +282,6 @@ fn a_kernelspec_writable_by_others_is_not_trusted_and_a_fifo_for_kernel_json_is_
         fs::Permissions::from_mode(0o666),
     )
     .unwrap();
-    put(d, "group-open", PY);
-    fs::set_permissions(
-        d.join("group-open/kernel.json"),
-        fs::Permissions::from_mode(0o664),
-    )
-    .unwrap();
     fs::create_dir_all(d.join("fifo")).unwrap();
     rustix::fs::mknodat(
         rustix::fs::CWD,
@@ -302,4 +296,97 @@ fn a_kernelspec_writable_by_others_is_not_trusted_and_a_fifo_for_kernel_json_is_
         .map(|s| s.name)
         .collect();
     assert_eq!(names, ["ok"]);
+}
+
+#[test]
+fn trust_is_ours_or_roots_and_group_write_only_for_the_users_own_private_group() {
+    let me = (1000, 1000);
+    let private = |g: u32| g == 1000;
+    assert_eq!(trust(1000, 1000, 0o644, me, private), Ok(()));
+    assert_eq!(trust(0, 0, 0o755, me, private), Ok(()), "root's");
+    // `ipykernel install --user` under umask 0002 with a user private group
+    assert_eq!(trust(1000, 1000, 0o664, me, private), Ok(()));
+    assert_eq!(trust(1000, 1000, 0o775, me, private), Ok(()));
+    assert!(
+        trust(1000, 1000, 0o664, me, |_| false)
+            .unwrap_err()
+            .contains("other members"),
+        "a group with other members"
+    );
+    assert!(
+        trust(1000, 50, 0o664, me, |_| true)
+            .unwrap_err()
+            .contains("other members"),
+        "a group that is not the primary one"
+    );
+    assert!(
+        trust(1000, 1000, 0o646, me, private)
+            .unwrap_err()
+            .contains("everyone")
+    );
+    assert!(
+        trust(1001, 1000, 0o644, me, private)
+            .unwrap_err()
+            .contains("another user")
+    );
+}
+
+#[test]
+fn a_skipped_kernelspec_says_why() {
+    let t = tempfile::tempdir().unwrap();
+    let d = t.path();
+    put(d, "ok", PY);
+    put(d, "open", PY);
+    fs::set_permissions(
+        d.join("open/kernel.json"),
+        fs::Permissions::from_mode(0o666),
+    )
+    .unwrap();
+    put(d, "broken", "{");
+    fs::create_dir_all(d.join("empty")).unwrap();
+    let (specs, skipped) = discover_with_skips(&[d.to_path_buf()]);
+    assert_eq!(
+        specs.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+        ["ok"]
+    );
+    let mut by_name: Vec<_> = skipped
+        .iter()
+        .map(|s| (s.name.as_str(), s.why.as_str()))
+        .collect();
+    by_name.sort();
+    assert_eq!(by_name.len(), 2, "{by_name:?}");
+    assert!(
+        by_name[0].0 == "broken" && by_name[0].1.contains("not a valid kernelspec"),
+        "{by_name:?}"
+    );
+    assert!(
+        by_name[1].0 == "open" && by_name[1].1.contains("writable by everyone"),
+        "{by_name:?}"
+    );
+}
+
+#[test]
+fn kernel_json_is_opened_without_waiting_on_a_fifo_and_without_following_a_link() {
+    let t = tempfile::tempdir().unwrap();
+    let fifo = t.path().join("kernel.json");
+    rustix::fs::mknodat(
+        rustix::fs::CWD,
+        &fifo,
+        rustix::fs::FileType::Fifo,
+        rustix::fs::Mode::from_raw_mode(0o600),
+        0,
+    )
+    .unwrap();
+    // an open that waits for a writer never comes back: the test would hang, so it asks from a thread and waits with a deadline
+    let done = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let d2 = done.clone();
+    std::thread::spawn(move || *d2.lock().unwrap() = Some(open_spec_file(&fifo).err()));
+    let why = skuld::wait_until("the open to come back", 30, || done.lock().unwrap().take());
+    assert_eq!(why.as_deref(), Some("kernel.json is not a regular file"));
+    let real = t.path().join("real.json");
+    fs::write(&real, PY).unwrap();
+    let link = t.path().join("link.json");
+    symlink(&real, &link).unwrap();
+    assert!(open_spec_file(&link).is_err());
+    assert!(open_spec_file(&real).is_ok());
 }

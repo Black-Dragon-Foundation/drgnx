@@ -75,9 +75,17 @@ pub fn standard_dirs(
     out
 }
 
-/// Every valid kernelspec under DIRS (an earlier directory shadows a later one of the same name), sorted by name; a bad one is skipped.
-pub fn discover(dirs: &[PathBuf]) -> Vec<Kernelspec> {
-    let mut out: Vec<Kernelspec> = Vec::new();
+/// A kernelspec that was not used, and why.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Skipped {
+    pub name: String,
+    pub why: String,
+}
+
+/// Every valid kernelspec under DIRS (an earlier directory shadows a later one of the same name), sorted by name, and the ones that
+/// were skipped with the reason: an entry that has a `kernel.json` and is not used is never dropped silently.
+pub fn discover_with_skips(dirs: &[PathBuf]) -> (Vec<Kernelspec>, Vec<Skipped>) {
+    let (mut out, mut skipped): (Vec<Kernelspec>, Vec<Skipped>) = (Vec::new(), Vec::new());
     for dir in dirs {
         let Ok(rd) = std::fs::read_dir(dir) else {
             continue;
@@ -87,13 +95,24 @@ pub fn discover(dirs: &[PathBuf]) -> Vec<Kernelspec> {
             if out.iter().any(|s| s.name == name) {
                 continue;
             }
-            if let Some(spec) = read_spec(&entry.path(), &name) {
-                out.push(spec);
+            match read_spec(&entry.path(), &name) {
+                Ok(spec) => out.push(spec),
+                Err(Some(why)) => skipped.push(Skipped { name, why }),
+                Err(None) => {}
             }
         }
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
-    out
+    (out, skipped)
+}
+
+/// [`discover_with_skips`], the skipped ones logged.
+pub fn discover(dirs: &[PathBuf]) -> Vec<Kernelspec> {
+    let (specs, skipped) = discover_with_skips(dirs);
+    for k in skipped {
+        tracing::info!(target: "drgnx::notebook", "kernelspec {} not used: {}", k.name, k.why);
+    }
+    specs
 }
 
 /// The kernel for a notebook that names NAME and LANGUAGE (either may be absent).
@@ -253,47 +272,106 @@ pub fn sweep(folder: &Path, live: &[PathBuf]) -> usize {
     gone
 }
 
-/// Whether a kernelspec's folder or file may be trusted: ours or root's, and not writable by group or others (anyone who can write
-/// it chooses the command a notebook runs).
-fn trusted(m: &std::fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    // SAFETY: geteuid has no preconditions.
-    let me = unsafe { libc::geteuid() };
-    (m.uid() == me || m.uid() == 0) && m.mode() & 0o022 == 0
+/// Whether the group GID has no member but the user it is the primary group of (a "user private group": files `ipykernel install
+/// --user` writes under umask 0002 are group-writable by it, and nobody else can write them).
+fn private_group(gid: u32) -> bool {
+    let mut buf = vec![0u8; 4096];
+    loop {
+        let mut grp: libc::group = unsafe { std::mem::zeroed() };
+        let mut res: *mut libc::group = std::ptr::null_mut();
+        // SAFETY: getgrgid_r writes into GRP and BUF, which live through the call, and sets RES to GRP or null.
+        let rc = unsafe {
+            libc::getgrgid_r(gid, &mut grp, buf.as_mut_ptr().cast(), buf.len(), &mut res)
+        };
+        if rc == libc::ERANGE && buf.len() < (1 << 20) {
+            buf.resize(buf.len() * 4, 0);
+            continue;
+        }
+        // SAFETY: on success `gr_mem` is a null-terminated array of C strings in BUF; it is only read for its first entry.
+        return rc == 0
+            && !res.is_null()
+            && unsafe { grp.gr_mem.is_null() || (*grp.gr_mem).is_null() };
+    }
 }
 
-/// One kernelspec folder, or None if it is not a valid one.
-fn read_spec(dir: &Path, name: &str) -> Option<Kernelspec> {
-    use std::io::Read;
+/// Whether a kernelspec's folder or file may be trusted, or why not: ours or root's, not writable by others, and writable by its group
+/// only when that is the user's own private group (anyone who can write it chooses the command a notebook runs).
+pub(crate) fn trust(
+    uid: u32,
+    gid: u32,
+    mode: u32,
+    me: (u32, u32),
+    private: impl Fn(u32) -> bool,
+) -> Result<(), String> {
+    if uid != me.0 && uid != 0 {
+        return Err("belongs to another user".into());
+    }
+    if mode & 0o002 != 0 {
+        return Err("is writable by everyone".into());
+    }
+    if mode & 0o020 != 0 && !(gid == me.1 && private(gid)) {
+        return Err("is writable by a group that has other members".into());
+    }
+    Ok(())
+}
+
+fn trusted(m: &std::fs::Metadata) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+    // SAFETY: geteuid and getegid have no preconditions.
+    let me = unsafe { (libc::geteuid(), libc::getegid()) };
+    trust(m.uid(), m.gid(), m.mode(), me, private_group)
+}
+
+/// KERNEL.JSON opened without following a link and without blocking (a FIFO put there after a check would hold the open), then
+/// looked at: a regular file, small enough, trusted. The file and its metadata, or why not.
+pub(crate) fn open_spec_file(path: &Path) -> Result<std::fs::File, String> {
     use std::os::unix::fs::OpenOptionsExt;
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)
+        .map_err(|e| format!("cannot be opened: {e}"))?;
+    let meta = f.metadata().map_err(|e| format!("cannot be read: {e}"))?;
+    if !meta.is_file() {
+        return Err("kernel.json is not a regular file".into());
+    }
+    if meta.len() > MAX_SPEC_BYTES {
+        return Err("kernel.json is too large".into());
+    }
+    trusted(&meta).map_err(|e| format!("kernel.json {e}"))?;
+    Ok(f)
+}
+
+/// One kernelspec folder: the spec, `Err(None)` for an entry that is not a kernelspec at all, `Err(Some(why))` for one that is and is not
+/// used.
+fn read_spec(dir: &Path, name: &str) -> Result<Kernelspec, Option<String>> {
+    use std::io::Read;
     let valid_name = !name.starts_with('.')
         && name
             .bytes()
             .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c));
     if !valid_name {
-        return None;
+        return Err(None);
     }
-    let dm = std::fs::metadata(dir).ok()?;
-    if !dm.is_dir() || !trusted(&dm) {
-        return None;
+    let Ok(dm) = std::fs::metadata(dir) else {
+        return Err(None);
+    };
+    if !dm.is_dir() || !dir.join("kernel.json").exists() {
+        return Err(None);
     }
-    let file = dir.join("kernel.json");
-    // not through a link, and a FIFO swapped in after a check never blocks: open first, then look at what was opened
-    let mut f = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
-        .open(&file)
-        .ok()?;
-    let meta = f.metadata().ok()?;
-    if !meta.is_file() || meta.len() > MAX_SPEC_BYTES || !trusted(&meta) {
-        return None;
-    }
+    trusted(&dm).map_err(|e| Some(format!("its folder {e}")))?;
+    let mut f = open_spec_file(&dir.join("kernel.json")).map_err(Some)?;
     let mut text = Vec::new();
     (&mut f)
         .take(MAX_SPEC_BYTES + 1)
         .read_to_end(&mut text)
-        .ok()?;
-    let v: serde_json::Value = serde_json::from_slice(&text).ok()?;
+        .map_err(|e| Some(format!("kernel.json cannot be read: {e}")))?;
+    parse_spec(&text, name, dir)
+        .ok_or_else(|| Some("kernel.json is not a valid kernelspec".to_string()))
+}
+
+fn parse_spec(text: &[u8], name: &str, dir: &Path) -> Option<Kernelspec> {
+    let v: serde_json::Value = serde_json::from_slice(text).ok()?;
     let argv: Vec<String> = v
         .get("argv")?
         .as_array()?
