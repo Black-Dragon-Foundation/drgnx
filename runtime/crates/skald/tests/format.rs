@@ -437,3 +437,74 @@ fn a_missing_manifest_is_one_problem() {
     assert_eq!(r.problems.len(), 1);
     assert_eq!(r.problems[0].path, "pack.eld");
 }
+
+const LSP_ADAPTER: &str = r#":adapters ((:id "jv" :name "Java" :types ("java") :find (:tools "jv/x.jar")
+ :start (:lsp-command (:server ("{tools}/jdk/bin/java" "-jar" "{tools}/jdtls/launcher.jar") :root "{root}"
+                       :init-options (:bundles ("{tools}/jv/x.jar")) :debug-command "vscode.java.startDebugSession"
+                       :fill ((:command "vscode.java.resolveMainClass" :args ("{root-uri}")
+                               :select (:field "filePath" :equals "${file}") :when-missing "mainClass"
+                               :into ((:key "mainClass" :field "mainClass") (:key "projectName" :field "projectName")))
+                              (:command "vscode.java.resolveClasspath" :args ("${config:mainClass}" "${config:projectName}")
+                               :into ((:key "modulePaths" :index 0) (:key "classPaths" :index 1)))
+                              (:command "vscode.java.resolveJavaExecutable" :args ("${config:mainClass}")
+                               :into ((:key "javaExec"))))))
+ :install (:parts ((:into "jdk" :root "jdk-21" :platforms ((:platform "linux-x64" :url "https://example.org/jdk.tar.gz" :sha256 "SHA")))
+                   (:into "jv" :file "x.jar" :url "https://example.org/x.jar" :sha256 "SHA")))))"#;
+
+fn lsp() -> String {
+    scala_with(&LSP_ADAPTER.replace("SHA", &"a".repeat(64)))
+}
+
+#[test]
+fn an_lsp_command_adapter_and_its_install_parts_read_and_a_built_in_pack_may_have_them() {
+    let m = read(lsp().as_bytes()).unwrap();
+    let a = &m.adapters[0];
+    let l = a.start.as_ref().unwrap().lsp_command.as_ref().unwrap();
+    assert_eq!(l.debug_command, "vscode.java.startDebugSession");
+    assert_eq!(l.fill.len(), 3);
+    assert_eq!(l.fill[0].when_missing.as_deref(), Some("mainClass"));
+    assert_eq!(l.fill[1].into[1].index, Some(1));
+    assert_eq!(l.fill[2].into[0].field, None);
+    let parts = &a.install.as_ref().unwrap().parts;
+    assert_eq!(parts.len(), 2);
+    assert_eq!(parts[1].file.as_deref(), Some("x.jar"));
+    // the hub reads the recipe as JSON, parts included
+    let json = a.install.as_ref().unwrap().to_json();
+    assert_eq!(json["parts"][1]["file"], "x.jar");
+    assert_eq!(json["parts"][0]["platforms"][0]["platform"], "linux-x64");
+    // a built-in pack may start a language server: no command or install problem (the fixture's `scala` is no stored language)
+    assert!(
+        problems(&lsp(), Source::Builtin)
+            .iter()
+            .all(|(k, _, _)| !matches!(k, ProblemKind::Command | ProblemKind::Install)),
+    );
+}
+
+#[test]
+fn a_fetched_pack_may_not_start_a_language_server_and_a_part_needs_its_digest() {
+    assert!(has(
+        &problems(&lsp(), Source::Fetched),
+        ProblemKind::Command,
+        "adapters[0].start.lsp-command"
+    ));
+    let no_digest = scala_with(
+        &LSP_ADAPTER
+            .replace("SHA", "nil")
+            .replace(":sha256 \"nil\"", ":sha256 nil"),
+    );
+    assert!(has(
+        &problems(&no_digest, Source::Fetched),
+        ProblemKind::Install,
+        "adapters[0].install.parts[1]"
+    ));
+    let escape = scala_with(
+        &LSP_ADAPTER
+            .replace("SHA", &"a".repeat(64))
+            .replace(":file \"x.jar\"", ":file \"../x.jar\""),
+    );
+    assert!(has(
+        &problems(&escape, Source::Fetched),
+        ProblemKind::Install,
+        "adapters[0].install.parts[1]"
+    ));
+}

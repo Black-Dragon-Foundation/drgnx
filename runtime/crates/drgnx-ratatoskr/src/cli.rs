@@ -104,6 +104,12 @@ pub enum Command {
     DebugMock {
         script: OsString,
     },
+    /// `debug-lsp-mock MODE [ARG]` (test-hooks only): a language server that opens a DAP server, for the `lsp-command` tests.
+    #[cfg(feature = "test-hooks")]
+    DebugLspMock {
+        mode: String,
+        arg: Option<String>,
+    },
     /// `mcp-bridge`: an agent's stdio MCP server, copied to the hub (`crate::bridge`).
     McpBridge(BridgeArgs),
     /// `store migrate-check` and `store restore-pre7` (`crate::store_cli`).
@@ -423,6 +429,26 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
             Some(Value(v)) => Ok(Command::DebugMock { script: v }),
             _ => Err("debug-mock takes SCRIPT.json".into()),
         },
+        #[cfg(feature = "test-hooks")]
+        "debug-lsp-mock" => {
+            let words: Vec<OsString> = p.raw_args().map_err(e)?.collect();
+            let text = |w: &OsString| w.to_string_lossy().into_owned();
+            match words.as_slice() {
+                [mode] => Ok(Command::DebugLspMock {
+                    mode: text(mode),
+                    arg: None,
+                }),
+                [mode, arg] => Ok(Command::DebugLspMock {
+                    mode: text(mode),
+                    arg: Some(text(arg)),
+                }),
+                [mode, port, file] => Ok(Command::DebugLspMock {
+                    mode: text(mode),
+                    arg: Some(format!("{} {}", text(port), text(file))),
+                }),
+                _ => Err("debug-lsp-mock takes MODE [ARG] or stranger PORT FILE".into()),
+            }
+        }
         "embed-worker" => embed_worker(&mut p).map(Command::EmbedWorker),
         "recording" => {
             crate::recording_cli::parse(p.raw_args().map_err(e)?).map(Command::Recording)

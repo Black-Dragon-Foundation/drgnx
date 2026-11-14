@@ -30,6 +30,9 @@ pub struct StartHow {
     pub stdio: Option<Vec<String>>,
     #[serde(default)]
     pub tcp: Option<Vec<String>>,
+    /// An adapter inside a language server ([`super::lsp_command`]).
+    #[serde(default)]
+    pub lsp_command: Option<skald::manifest::LspCommand>,
 }
 
 /// One adapter.
@@ -71,6 +74,7 @@ impl From<&skald::manifest::Adapter> for Adapter {
             start: a.start.as_ref().map(|s| StartHow {
                 stdio: s.stdio.clone(),
                 tcp: s.tcp.clone(),
+                lsp_command: s.lsp_command.clone(),
             }),
             defaults: a.defaults.clone(),
             install: a.install.as_ref().map(skald::manifest::Install::to_json),
@@ -230,6 +234,12 @@ pub fn command(
     let (how, argv) = match (&start.stdio, &start.tcp) {
         (Some(a), _) => (Transport::Stdio, a),
         (None, Some(a)) => (Transport::Tcp, a),
+        (None, None) if start.lsp_command.is_some() => {
+            return Err(format!(
+                "{}: started through its language server, not a command line",
+                adapter.id
+            ));
+        }
         (None, None) => return Err(format!("{}: no way to start it", adapter.id)),
     };
     if how == Transport::Tcp && port.is_none() {
@@ -251,6 +261,43 @@ pub fn command(
         })
         .collect();
     Ok((how, argv))
+}
+
+/// One download an adapter needs and what is installed of it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PartStatus {
+    /// The folder under the tools folder (`jdk`, `jdtls`, `java-debug`).
+    pub part: String,
+    /// The version the table pins.
+    pub pinned: Option<String>,
+    /// The version installed: none when the part is not there.
+    pub installed: Option<String>,
+}
+
+/// The downloads of ADAPTER's `:install` (its `:parts`, or the one archive), each with the version pinned and the one
+/// installed under TOOLS (`.drgnx-installed`, written by the install; `unknown` for a folder from an older install).
+pub fn parts(adapter: &Adapter, tools: &Path) -> Vec<PartStatus> {
+    let Some(install) = &adapter.install else {
+        return Vec::new();
+    };
+    let one = |v: &Value| -> Option<PartStatus> {
+        let part = v.get("into")?.as_str()?.to_owned();
+        let installed = tools.join(&part).is_dir().then(|| {
+            std::fs::read_to_string(tools.join(&part).join(super::install::INSTALLED_MARKER))
+                .ok()
+                .and_then(|t| t.lines().next().map(str::to_owned))
+                .unwrap_or_else(|| "unknown".into())
+        });
+        Some(PartStatus {
+            part,
+            pinned: v.get("version").and_then(Value::as_str).map(str::to_owned),
+            installed,
+        })
+    };
+    match install.get("parts").and_then(Value::as_array) {
+        Some(list) => list.iter().filter_map(one).collect(),
+        None => one(install).into_iter().collect(),
+    }
 }
 
 /// A free port on 127.0.0.1 (the hub's pick for a TCP adapter; another local process could take it before the

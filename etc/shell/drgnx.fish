@@ -43,6 +43,7 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n __fish_use_subcommand -a check -d 'Build, then every test tier'
     complete -c drgnx -n __fish_use_subcommand -a lease -d 'Run a command in a slot of the host lease'
     complete -c drgnx -n __fish_use_subcommand -a fmt -d "Format drgnx's Emacs Lisp"
+    complete -c drgnx -n __fish_use_subcommand -a design -d "Write the design system's generated pages"
     complete -c drgnx -n __fish_use_subcommand -a work -d 'The work tracker'
     complete -c drgnx -n __fish_use_subcommand -a hub -d 'The hub behind agents and jobs'
     complete -c drgnx -n __fish_use_subcommand -a runtime -d 'Build and install Ratatoskr, the agent runtime'
@@ -151,6 +152,8 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n '__fish_seen_subcommand_from check' -l shards -x -d 'Shards'
     complete -c drgnx -n '__fish_seen_subcommand_from lease' -l wait -x -d 'Seconds to wait for a slot'
     complete -c drgnx -n '__fish_seen_subcommand_from fmt' -l check -d 'Only report'
+    complete -c drgnx -n '__fish_seen_subcommand_from design' -l check -d 'Only say which pages are stale'
+    complete -c drgnx -n '__fish_seen_subcommand_from design' -l shots -d 'Cut the component pictures from look-scene output'
 
     # work, hub, runtime, job, search, keys, ui
     complete -c drgnx -n '__fish_seen_subcommand_from work; and not __fish_seen_subcommand_from record scan status' -f -a record -d 'Link commits to a task'
