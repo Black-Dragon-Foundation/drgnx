@@ -1040,6 +1040,12 @@ impl Map {
             return;
         }
         let mut g = lock(&self.inner);
+        // a test hub's map scene has its own machines (desktop 3/16, laptop 1/2): the hub's registry, which reports
+        // later, does not replace them
+        #[cfg(feature = "test-hooks")]
+        if !g.scene_graph.is_empty() {
+            return;
+        }
         let keys: Vec<String> = g.spaces.keys().cloned().collect();
         for k in keys {
             self.feed(&mut g, &k, vec![Event::Machines(facts.clone())]);
