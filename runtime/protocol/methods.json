@@ -28086,21 +28086,28 @@
       "classes": [
         "user"
       ],
-      "doc": "the hub view of a notebook (the cell outline: one row per cell with its index, type, first line, prompt and state) for the editor to show in Sjá; the answer names the view, rows follow its view/env",
+      "doc": "a hub view of a notebook for the editor to show in Sjá: the cell outline (one row per cell with its index, type, first line, prompt and state) or the whole output of one cell (windowed by view/window); the answer names the view, rows follow its view/env",
       "name": "notebook/view",
       "params": {
         "$defs": {
           "NotebookViewKind": {
-            "description": "What one of a notebook's Sjá views shows (docs/develop/notebooks.md, \"The views\"): `outline` is one row per cell.",
+            "description": "What one of a notebook's Sjá views shows (docs/develop/notebooks.md, \"The views\"): `outline` is one row per cell, `output` the\nwhole output of one cell.",
             "enum": [
-              "outline"
+              "outline",
+              "output"
             ],
             "type": "string"
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "description": "`notebook/view`: the hub view of KIND for notebook ID. The answer names the view; the editor then sends `view/env` for it like\nany hub-fed view and gets its rows as `view-patch` events.",
+        "description": "`notebook/view`: the hub view of KIND for notebook ID (`output` names the CELL). The answer names the view; the editor then sends `view/env` for it like\nany hub-fed view and gets its rows as `view-patch` events.",
         "properties": {
+          "cell": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "id": {
             "type": "string"
           },

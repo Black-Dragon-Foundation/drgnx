@@ -259,8 +259,10 @@ pub async fn serve(
         }
         Params::NotebookView(p) => {
             if nb.owns(conn, &p.id) {
-                let view = views.register(conn, &p.id, p.kind);
-                Ok(json!(NotebookViewName { view }))
+                views
+                    .register(conn, &p.id, p.kind, p.cell.as_deref())
+                    .map(|view| json!(NotebookViewName { view }))
+                    .map_err(err)
             } else {
                 Err(err(format!("no open notebook {}", p.id)))
             }

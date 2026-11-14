@@ -336,6 +336,15 @@ impl Book {
         })
     }
 
+    /// What cell ID shows as a run (its outputs as the hub holds them), for the full-output view.
+    pub fn run_of(&self, id: &str) -> Option<CellRun> {
+        self.index(id)?;
+        Some(self.shown.get(id).map_or_else(
+            || CellRun::from_outputs(id, [], RunStatus::Ok),
+            |s| s.run.clone(),
+        ))
+    }
+
     /// The cell's full output as nbformat objects.
     pub fn outputs_of(&self, id: &str) -> Vec<Value> {
         self.shown

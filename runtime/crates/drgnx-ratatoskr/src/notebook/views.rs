@@ -4,10 +4,14 @@
 //! the hub sends the editor, seen on their way by [`WatchSink`]), or the editor's cells (`notebook/sync`, `execute`, `save`, `clear`).
 //! Changes are coalesced: a view is rebuilt at most once in [`VIEW_EVERY`], and only when the editor shows it.
 //!
+//! - the full output of one cell, `notebook-output:ID#N` (N names the cell: the hub keeps up to [`OUTPUT_VIEWS`] a notebook): the
+//!   cell's lines as the hub holds them, within the output limits (1 MiB of text, 64 outputs), [`OUTPUT_WINDOW`] lines at a time:
+//!   `view/window` (list `lines`) moves the window, and a row above and below says how many lines lie outside it. An image is a row
+//!   that says so, never drawn; a kernel's SVG is never rendered.
 //! - the cell outline, `notebook-outline:ID`: one row per cell (index, type, prompt, first line, state); a row carries the text
 //!   property `drgnx-notebook-cell` (the cell's id) for the editor to jump to the cell. At most [`OUTLINE_ROWS`] cells are listed.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
@@ -17,7 +21,9 @@ use runstav::methods::notebook::NotebookViewKind;
 use serde_json::{Value, json};
 
 use super::hub::Notebooks;
-use super::output::terminal::clean;
+use super::output::CellRun;
+use super::output::terminal::{Run, clean};
+use super::tail;
 use crate::debug::{Delivery, Sink};
 use crate::front::Front;
 
@@ -25,6 +31,10 @@ use crate::front::Front;
 pub const VIEW_EVERY: Duration = Duration::from_millis(100);
 /// The most cells the outline lists; what is past them is one row, "N more cells".
 pub const OUTLINE_ROWS: usize = 2000;
+/// The most full-output views one notebook has at once.
+pub const OUTPUT_VIEWS: usize = 16;
+/// The lines of a full output the hub builds rows for at a time.
+pub const OUTPUT_WINDOW: usize = 1000;
 /// The longest first line the outline shows, in characters.
 pub const FIRST_LINE_CHARS: usize = 80;
 
@@ -36,6 +46,17 @@ pub fn outline_view(id: &str) -> String {
 /// The notebook an outline view id names.
 fn outline_of(view: &str) -> Option<&str> {
     view.strip_prefix("notebook-outline:")
+}
+
+/// The view id of the N-th full-output view of notebook ID.
+pub fn output_view(id: &str, n: usize) -> String {
+    format!("notebook-output:{id}#{n}")
+}
+
+/// The notebook and the number a full-output view id names.
+fn output_of(view: &str) -> Option<(&str, usize)> {
+    let (id, n) = view.strip_prefix("notebook-output:")?.split_once('#')?;
+    Some((id, n.parse().ok()?))
 }
 
 /// What the outline knows of one cell. STATE is `queued`, `running`, or how its last run ended (`error`, `aborted`, `cancelled`),
@@ -123,12 +144,118 @@ pub fn outline_rows(cells: &[OutlineCell], total: usize) -> Vec<Row> {
     rows
 }
 
+/// The terminal's sixteen roles, in the hub's order (0 to 15): the names the faces `drgnx-notebook-fg-NAME` and `-bg-NAME` carry.
+const ANSI_NAMES: [&str; 16] = [
+    "black",
+    "red",
+    "green",
+    "yellow",
+    "blue",
+    "magenta",
+    "cyan",
+    "white",
+    "bright-black",
+    "bright-red",
+    "bright-green",
+    "bright-yellow",
+    "bright-blue",
+    "bright-magenta",
+    "bright-cyan",
+    "bright-white",
+];
+
+fn note_row(key: &str, text: &str) -> Row {
+    let mut b = RowBuilder::new(key);
+    b.push(text, Some("shadow"));
+    b.finish()
+}
+
+/// The faces over RUN's range of a line of LEN characters, as the tail's: the theme's terminal roles, never colours.
+fn run_faces(b: &mut RowBuilder, r: &Run, len: usize) {
+    let (start, end) = (r.start.min(len) as u32, r.end.min(len) as u32);
+    if start >= end {
+        return;
+    }
+    let s = r.style;
+    if let Some(fg) = s.fg.filter(|n| *n < 16) {
+        b.face(
+            start,
+            end,
+            &format!("drgnx-notebook-fg-{}", ANSI_NAMES[fg as usize]),
+        );
+    }
+    if let Some(bg) = s.bg.filter(|n| *n < 16) {
+        b.face(
+            start,
+            end,
+            &format!("drgnx-notebook-bg-{}", ANSI_NAMES[bg as usize]),
+        );
+    }
+    for (on, face) in [
+        (s.bold, "bold"),
+        (s.italic, "italic"),
+        (s.underline, "underline"),
+        (s.inverse, "drgnx-notebook-inverse"),
+    ] {
+        if on {
+            b.face(start, end, face);
+        }
+    }
+}
+
+/// The rows of CELL's full output, the [`OUTPUT_WINDOW`] lines from line FROM (0-based; what is past the end is brought back to the
+/// last line): a row `above` and one `below` count the lines outside the window. An image is a row that says what it is.
+pub fn output_rows(cell: &str, run: &CellRun, from: usize) -> Vec<Row> {
+    let (total, lines) = tail::lines(run, from.saturating_add(OUTPUT_WINDOW));
+    if total == 0 {
+        return vec![note_row("none", "no output")];
+    }
+    let from = from.min(total - 1);
+    let end = total.min(from + OUTPUT_WINDOW);
+    let mut rows = Vec::new();
+    if from > 0 {
+        rows.push(note_row("above", &format!("{from} lines above")));
+    }
+    for (i, l) in lines.iter().enumerate().skip(from).take(end - from) {
+        let mut b = RowBuilder::new(format!("l:{i}"));
+        match &l.image {
+            Some((_, mime, w, h)) => {
+                b.push(
+                    &format!("[{mime} image, {w}x{h}: save output as file]"),
+                    Some("shadow"),
+                );
+            }
+            None => {
+                let len = l.text.chars().count();
+                b.push(&l.text, None);
+                for r in &l.runs {
+                    run_faces(&mut b, r, len);
+                }
+            }
+        }
+        let n = b.pos();
+        b.prop(0, n, "drgnx-notebook-cell", json!(cell)).prop(
+            0,
+            n,
+            "drgnx-notebook-line",
+            json!(i + 1),
+        );
+        rows.push(b.finish());
+    }
+    if total > end {
+        rows.push(note_row("below", &format!("{} lines below", total - end)));
+    }
+    rows
+}
+
 /// Where a view's rows go: the editor's views of the hub.
 pub trait Stage: Send + Sync {
     /// Whether the editor on CONN shows VIEW in some display class.
     fn shown(&self, conn: u64, view: &str) -> bool;
     /// VIEW's rows are ROWS: what changed goes out.
     fn publish(&self, conn: u64, view: &str, rows: Vec<Row>);
+    /// The first line of VIEW's window the editor asked for (0 before it asked).
+    fn window(&self, conn: u64, view: &str) -> usize;
 }
 
 /// The hub's views as the stage.
@@ -146,18 +273,34 @@ impl Stage for FrontStage {
             f.core.views.publish_rows(&f, conn, view, rows);
         }
     }
+
+    fn window(&self, conn: u64, view: &str) -> usize {
+        self.0
+            .upgrade()
+            .and_then(|f| f.core.views.window_from(conn, view, "lines"))
+            .unwrap_or(0)
+    }
 }
 
 /// What a view of one notebook needs rebuilding.
 #[derive(Default)]
 struct Dirty {
     outline: bool,
+    /// The cells whose full output is to be rebuilt.
+    outputs: HashSet<String>,
 }
 
 #[derive(Default)]
 struct Watch {
     outline: bool,
+    /// The cell of each full-output view, by its number.
+    outputs: Vec<Option<String>>,
 }
+
+/// A notebook of a connection.
+type Key = (u64, String);
+/// The cells of a notebook's full-output views, by number.
+type Slots = Vec<Option<String>>;
 
 #[derive(Default)]
 struct State {
@@ -195,14 +338,40 @@ impl NbViews {
         let _ = self.stage.set(stage);
     }
 
-    /// The editor on CONN wants a view of KIND of notebook ID (which it owns): the view's id.
-    pub fn register(&self, conn: u64, id: &str, kind: NotebookViewKind) -> String {
+    /// The editor on CONN wants a view of KIND of notebook ID (which it owns; CELL for a full output): the view's id.
+    pub fn register(
+        &self,
+        conn: u64,
+        id: &str,
+        kind: NotebookViewKind,
+        cell: Option<&str>,
+    ) -> Result<String, String> {
         let mut s = self.lock();
         let w = s.watch.entry((conn, id.to_owned())).or_default();
         match kind {
             NotebookViewKind::Outline => {
                 w.outline = true;
-                outline_view(id)
+                Ok(outline_view(id))
+            }
+            NotebookViewKind::Output => {
+                let cell = cell.ok_or("a full output names its cell")?;
+                let n = match w.outputs.iter().position(|c| c.as_deref() == Some(cell)) {
+                    Some(n) => n,
+                    None => match w.outputs.iter().position(Option::is_none) {
+                        Some(n) => n,
+                        None if w.outputs.len() < OUTPUT_VIEWS => {
+                            w.outputs.push(None);
+                            w.outputs.len() - 1
+                        }
+                        None => {
+                            return Err(format!(
+                                "{OUTPUT_VIEWS} outputs are shown: close one first"
+                            ));
+                        }
+                    },
+                };
+                w.outputs[n] = Some(cell.to_owned());
+                Ok(output_view(id, n))
             }
         }
     }
@@ -222,11 +391,29 @@ impl NbViews {
 
     /// An event the hub sends CONN's editor: what it says changed.
     pub fn event(self: &Arc<Self>, conn: u64, event: &str, data: &Value) {
-        if matches!(event, "notebook-tail" | "notebook-status")
-            && let Some(id) = data.get("id").and_then(Value::as_str)
-        {
-            self.changed(conn, id);
+        if !matches!(event, "notebook-tail" | "notebook-status") {
+            return;
         }
+        let Some(id) = data.get("id").and_then(Value::as_str) else {
+            return;
+        };
+        if event == "notebook-tail"
+            && let Some(cell) = data.get("cell").and_then(Value::as_str)
+        {
+            let mut s = self.lock();
+            let key = (conn, id.to_owned());
+            if s.watch
+                .get(&key)
+                .is_some_and(|w| w.outputs.iter().any(|c| c.as_deref() == Some(cell)))
+            {
+                s.dirty
+                    .entry(key)
+                    .or_default()
+                    .outputs
+                    .insert(cell.to_owned());
+            }
+        }
+        self.changed(conn, id);
     }
 
     fn schedule(self: &Arc<Self>) {
@@ -246,27 +433,66 @@ impl NbViews {
         });
     }
 
-    /// CONN's VIEW got its env: if it is a notebook view the editor asked for, its rows are built now (true).
+    /// CONN's VIEW got its env, or its window moved: if it is a notebook view the editor asked for, its rows are built now (true).
     pub fn env_build(self: &Arc<Self>, conn: u64, view: &str) -> bool {
-        let Some(id) = outline_of(view) else {
-            return false;
-        };
-        let key = (conn, id.to_owned());
         {
             let mut s = self.lock();
-            if !s.watch.get(&key).is_some_and(|w| w.outline) {
+            if let Some(id) = outline_of(view) {
+                let key = (conn, id.to_owned());
+                if !s.watch.get(&key).is_some_and(|w| w.outline) {
+                    return false;
+                }
+                s.dirty.entry(key).or_default().outline = true;
+            } else if let Some((id, n)) = output_of(view) {
+                let key = (conn, id.to_owned());
+                let Some(cell) = s
+                    .watch
+                    .get(&key)
+                    .and_then(|w| w.outputs.get(n))
+                    .cloned()
+                    .flatten()
+                else {
+                    return false;
+                };
+                s.dirty.entry(key).or_default().outputs.insert(cell);
+            } else {
                 return false;
             }
-            s.dirty.entry(key).or_default().outline = true;
         }
         let me = self.clone();
         crate::clock::spawn("notebook:view-env", async move { me.flush().await });
         true
     }
 
+    /// The editor moved VIEW's window: its rows are built again (true when it is a full-output view it asked for).
+    pub fn window(self: &Arc<Self>, conn: u64, view: &str) -> bool {
+        output_of(view).is_some() && self.env_build(conn, view)
+    }
+
+    /// The editor ended VIEW: a full-output view's number is free again.
+    pub fn view_closed(&self, conn: u64, view: &str) {
+        if let Some((id, n)) = output_of(view)
+            && let Some(slot) = self
+                .lock()
+                .watch
+                .get_mut(&(conn, id.to_owned()))
+                .and_then(|w| w.outputs.get_mut(n))
+        {
+            *slot = None;
+        }
+    }
+
     /// Build the rows of every view that is dirty and shown, and send what changed.
     pub async fn flush(&self) {
-        let work: Vec<((u64, String), Dirty)> = self.lock().dirty.drain().collect();
+        let (work, slots): (Vec<(Key, Dirty)>, HashMap<Key, Slots>) = {
+            let mut s = self.lock();
+            let work: Vec<_> = s.dirty.drain().collect();
+            let slots = work
+                .iter()
+                .filter_map(|(k, _)| Some((k.clone(), s.watch.get(k)?.outputs.clone())))
+                .collect();
+            (work, slots)
+        };
         let (Some(nb), Some(stage)) = (self.nb.get().and_then(Weak::upgrade), self.stage.get())
         else {
             return;
@@ -279,6 +505,23 @@ impl NbViews {
                 {
                     stage.publish(conn, &view, outline_rows(&cells, total));
                 }
+            }
+            for cell in &d.outputs {
+                let Some(n) = slots
+                    .get(&(conn, id.clone()))
+                    .and_then(|v| v.iter().position(|c| c.as_deref() == Some(cell)))
+                else {
+                    continue;
+                };
+                let view = output_view(&id, n);
+                if !stage.shown(conn, &view) {
+                    continue;
+                }
+                let rows = match nb.run_of(conn, &id, cell).await {
+                    Ok(run) => output_rows(cell, &run, stage.window(conn, &view)),
+                    Err(_) => vec![note_row("none", "the cell is gone")],
+                };
+                stage.publish(conn, &view, rows);
             }
         }
     }

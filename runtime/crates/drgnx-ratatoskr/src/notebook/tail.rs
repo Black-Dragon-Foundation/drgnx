@@ -103,10 +103,10 @@ pub fn head(
 }
 
 /// A line of the tail with its styled runs (offsets within the line, in characters).
-struct Line {
-    text: String,
-    runs: Vec<Run>,
-    image: Option<(usize, String, u32, u32)>,
+pub(super) struct Line {
+    pub(super) text: String,
+    pub(super) runs: Vec<Run>,
+    pub(super) image: Option<(usize, String, u32, u32)>,
 }
 
 /// The lines of text S: how many, and the first TAKE of them.
@@ -208,12 +208,12 @@ fn part(i: usize, o: &Output, take: usize) -> (usize, Vec<Line>) {
     }
 }
 
-/// The tail of RUN for the cell CELL, as its VERSION-th state.
-pub fn build(cell: &str, run: &CellRun, version: u64) -> Tail {
+/// How many lines RUN's output has (its notes included) and the first TAKE of them: only as many are built as are asked for.
+pub(super) fn lines(run: &CellRun, take: usize) -> (usize, Vec<Line>) {
     let mut lines: Vec<Line> = Vec::new();
     let mut total = 0;
     for (i, o) in run.outputs.iter().enumerate() {
-        let (count, mut more) = part(i, o, MAX_ROWS.saturating_sub(lines.len()));
+        let (count, mut more) = part(i, o, take.saturating_sub(lines.len()));
         total += count;
         lines.append(&mut more);
     }
@@ -228,10 +228,16 @@ pub fn build(cell: &str, run: &CellRun, version: u64) -> Tail {
     }
     for n in tail_notes {
         total += 1;
-        if lines.len() < MAX_ROWS {
+        if lines.len() < take {
             lines.push(note(n));
         }
     }
+    (total, lines)
+}
+
+/// The tail of RUN for the cell CELL, as its VERSION-th state.
+pub fn build(cell: &str, run: &CellRun, version: u64) -> Tail {
+    let (total, lines) = lines(run, MAX_ROWS);
     let (mut kept, mut bytes) = (0, 0);
     for l in &lines {
         // a row too long for the byte cap is cut, never skipped whole

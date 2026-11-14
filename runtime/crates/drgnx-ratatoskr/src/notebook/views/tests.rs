@@ -104,11 +104,15 @@ impl Sink for Quiet {
 struct Recorder {
     shown: Mutex<HashSet<String>>,
     got: Mutex<Vec<(u64, String, Vec<String>)>>,
+    from: std::sync::atomic::AtomicUsize,
 }
 
 impl Stage for Recorder {
     fn shown(&self, _: u64, view: &str) -> bool {
         self.shown.lock().unwrap().contains(view)
+    }
+    fn window(&self, _: u64, _: &str) -> usize {
+        self.from.load(std::sync::atomic::Ordering::SeqCst)
     }
     fn publish(&self, conn: u64, view: &str, rows: Vec<Row>) {
         self.got.lock().unwrap().push((
@@ -166,7 +170,10 @@ async fn world() -> World {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_shown_outline_is_built_from_the_notebook_and_a_view_nobody_shows_is_not() {
     let w = world().await;
-    let view = w.views.register(1, &w.id, NotebookViewKind::Outline);
+    let view = w
+        .views
+        .register(1, &w.id, NotebookViewKind::Outline, None)
+        .unwrap();
     assert_eq!(view, format!("notebook-outline:{}", w.id));
     w.views.mark(1, &w.id);
     w.views.flush().await;
@@ -192,11 +199,15 @@ async fn only_the_owner_gets_a_view_and_a_close_forgets_it() {
         !w.nb.owns(2, &w.id),
         "an id says nothing to another connection"
     );
-    w.views.register(1, &w.id, NotebookViewKind::Outline);
+    w.views
+        .register(1, &w.id, NotebookViewKind::Outline, None)
+        .unwrap();
     assert_eq!(w.views.watched().len(), 1);
     w.views.closed(1, &w.id);
     assert!(w.views.watched().is_empty());
-    w.views.register(1, &w.id, NotebookViewKind::Outline);
+    w.views
+        .register(1, &w.id, NotebookViewKind::Outline, None)
+        .unwrap();
     w.views.gone(1);
     assert!(w.views.watched().is_empty());
 }
@@ -209,7 +220,9 @@ async fn an_env_for_a_view_nobody_asked_for_builds_nothing() {
         "not registered"
     );
     assert!(!w.views.env_build(1, "extensions"));
-    w.views.register(1, &w.id, NotebookViewKind::Outline);
+    w.views
+        .register(1, &w.id, NotebookViewKind::Outline, None)
+        .unwrap();
     assert!(
         !w.views.env_build(2, &outline_view(&w.id)),
         "another connection's"
@@ -230,7 +243,10 @@ fn changes_are_rebuilt_once_after_the_pause_on_the_virtual_clock() {
         .unwrap();
     rt.block_on(async {
         let w = world().await;
-        let view = w.views.register(1, &w.id, NotebookViewKind::Outline);
+        let view = w
+            .views
+            .register(1, &w.id, NotebookViewKind::Outline, None)
+            .unwrap();
         w.stage.shown.lock().unwrap().insert(view);
         for _ in 0..5 {
             w.views.changed(1, &w.id);
@@ -247,4 +263,203 @@ fn changes_are_rebuilt_once_after_the_pause_on_the_virtual_clock() {
             "five changes, one rebuild"
         );
     });
+}
+
+// ---- the full output of one cell ----
+
+fn run_with(feed: impl FnOnce(&mut dyn FnMut(&str, Value))) -> CellRun {
+    use crate::notebook::output::{Change, Router};
+    use crate::notebook::session::Channel;
+    use crate::notebook::wire::Message;
+    let mut r = Router::new();
+    r.begin("r");
+    feed(&mut |t, c| {
+        let mut m = Message::request("k", t, c);
+        m.parent = json!({"msg_id": "r"});
+        assert_eq!(r.apply(Channel::Iopub, &m), Some(Change::Run("r".into())));
+    });
+    r.run("r").unwrap().clone()
+}
+
+fn lines(n: usize) -> CellRun {
+    let text: String = (0..n).map(|i| format!("line {i}\n")).collect();
+    run_with(|f| f("stream", json!({"name": "stdout", "text": text})))
+}
+
+#[test]
+fn a_full_output_is_a_window_of_its_lines_with_rows_counting_what_lies_outside() {
+    let run = lines(2500); // 2501 lines, the last empty
+    let rows = output_rows("c", &run, 0);
+    assert_eq!(rows.len(), OUTPUT_WINDOW + 1);
+    assert_eq!(rows[0].key, "l:0");
+    assert_eq!(rows[0].text, "line 0");
+    assert_eq!(rows[OUTPUT_WINDOW].key, "below");
+    assert_eq!(rows[OUTPUT_WINDOW].text, "1501 lines below");
+    assert_eq!(
+        rows[0].props,
+        vec![
+            (0, 6, "drgnx-notebook-cell".to_string(), json!("c")),
+            (0, 6, "drgnx-notebook-line".to_string(), json!(1)),
+        ]
+    );
+    let rows = output_rows("c", &run, 1200);
+    assert_eq!(rows[0].text, "1200 lines above");
+    assert_eq!(rows[1].key, "l:1200");
+    assert_eq!(rows[1].text, "line 1200");
+    assert_eq!(rows.last().unwrap().text, "301 lines below");
+    // a window past the end comes back to the last line
+    let rows = output_rows("c", &run, 1_000_000);
+    assert_eq!(rows.last().unwrap().key, "l:2500");
+    assert_eq!(rows.len(), 2);
+    // everything fits: no row counts anything
+    let rows = output_rows("c", &lines(3), 0);
+    assert_eq!(
+        rows.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(),
+        ["l:0", "l:1", "l:2", "l:3"]
+    );
+}
+
+#[test]
+fn styled_text_carries_the_themes_terminal_roles_and_no_output_says_so() {
+    let run = run_with(|f| {
+        f(
+            "stream",
+            json!({"name": "stdout", "text": "ok \x1b[1;31mbad\x1b[0m"}),
+        )
+    });
+    let r = &output_rows("c", &run, 0)[0];
+    assert_eq!(r.text, "ok bad");
+    assert!(
+        r.runs
+            .contains(&(3, 6, "drgnx-notebook-fg-red".to_string()))
+    );
+    assert!(r.runs.contains(&(3, 6, "bold".to_string())));
+    let none = output_rows("c", &run_with(|_| {}), 0);
+    assert_eq!(none.len(), 1);
+    assert_eq!(none[0].text, "no output");
+}
+
+#[test]
+fn an_image_is_a_row_that_says_so_and_kernel_svg_is_never_in_a_row() {
+    use base64::Engine;
+    let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+    png.extend(10u32.to_be_bytes());
+    png.extend(20u32.to_be_bytes());
+    png.extend([8, 6, 0, 0, 0, 0, 0, 0, 0]);
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
+    let run = run_with(|f| {
+        f(
+            "display_data",
+            json!({"data": {"image/png": b64, "text/plain": "<Figure>"}}),
+        );
+        f(
+            "display_data",
+            json!({"data": {"image/svg+xml": "<svg onload=evil()/>", "text/plain": "<Fig2>"}}),
+        );
+    });
+    let rows = output_rows("c", &run, 0);
+    assert_eq!(
+        rows[0].text,
+        "[image/png image, 10x20: save output as file]"
+    );
+    assert!(rows[0].images.is_empty());
+    for r in &rows {
+        assert!(
+            !r.text.contains("<svg") && !r.text.contains("evil"),
+            "{}",
+            r.text
+        );
+        assert!(r.images.is_empty());
+    }
+    assert!(rows.iter().any(|r| r.text.contains("SVG output not shown")));
+}
+
+#[test]
+fn full_output_views_are_numbered_per_notebook_bounded_and_given_back_when_closed() {
+    let views = NbViews::default();
+    let a = views
+        .register(1, "nb", NotebookViewKind::Output, Some("a"))
+        .unwrap();
+    assert_eq!(a, "notebook-output:nb#0");
+    assert_eq!(
+        views
+            .register(1, "nb", NotebookViewKind::Output, Some("a"))
+            .unwrap(),
+        a,
+        "the same cell is the same view"
+    );
+    assert!(
+        views
+            .register(1, "nb", NotebookViewKind::Output, None)
+            .is_err()
+    );
+    for i in 1..OUTPUT_VIEWS {
+        views
+            .register(1, "nb", NotebookViewKind::Output, Some(&format!("c{i}")))
+            .unwrap();
+    }
+    assert!(
+        views
+            .register(1, "nb", NotebookViewKind::Output, Some("one more"))
+            .is_err(),
+        "at most {OUTPUT_VIEWS} at once"
+    );
+    views.view_closed(1, "notebook-output:nb#3");
+    assert_eq!(
+        views
+            .register(1, "nb", NotebookViewKind::Output, Some("one more"))
+            .unwrap(),
+        "notebook-output:nb#3"
+    );
+    // another notebook or connection has its own numbers
+    assert_eq!(
+        views
+            .register(2, "nb", NotebookViewKind::Output, Some("z"))
+            .unwrap(),
+        "notebook-output:nb#0"
+    );
+}
+
+const NB_OUT: &str = r##"{"cells": [
+ {"cell_type": "code", "id": "a", "metadata": {}, "execution_count": 1, "outputs": [
+   {"output_type": "stream", "name": "stdout", "text": ["one\n", "two\n"]}], "source": ["x"]}
+ ], "metadata": {}, "nbformat": 4, "nbformat_minor": 5}"##;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_shown_full_output_is_built_from_the_notebook_in_the_editors_window_and_a_gone_cell_says_so()
+ {
+    let w = world().await;
+    std::fs::write(w._d.path().join("o.ipynb"), NB_OUT).unwrap();
+    let id =
+        w.nb.open(1, &w._d.path().join("o.ipynb"), None)
+            .await
+            .unwrap()
+            .id;
+    let view = w
+        .views
+        .register(1, &id, NotebookViewKind::Output, Some("a"))
+        .unwrap();
+    assert!(!w.views.env_build(2, &view), "another connection's");
+    assert!(w.views.env_build(1, &view));
+    w.views.flush().await;
+    assert!(w.stage.got.lock().unwrap().is_empty(), "no class shows it");
+    w.stage.shown.lock().unwrap().insert(view.clone());
+    w.stage.from.store(1, std::sync::atomic::Ordering::SeqCst);
+    assert!(w.views.window(1, &view), "a moved window builds it again");
+    w.views.flush().await;
+    let got = w.stage.got.lock().unwrap().clone();
+    assert_eq!(got.last().unwrap().1, view);
+    assert_eq!(got.last().unwrap().2, vec!["1 lines above", "two", ""]);
+    // a cell that is not in the notebook
+    let gone = w
+        .views
+        .register(1, &id, NotebookViewKind::Output, Some("zz"))
+        .unwrap();
+    w.stage.shown.lock().unwrap().insert(gone.clone());
+    assert!(w.views.env_build(1, &gone));
+    w.views.flush().await;
+    assert_eq!(
+        w.stage.got.lock().unwrap().last().unwrap().2,
+        vec!["the cell is gone"]
+    );
 }

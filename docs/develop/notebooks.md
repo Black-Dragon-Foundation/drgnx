@@ -88,3 +88,13 @@ for its views.
   editor's as of its last `notebook/sync`, `execute` or `save`. At most 2000 cells are listed; a last row `more` says how many are
   not. Faces: `shadow`, `drgnx-notebook-prompt`, `drgnx-notebook-stale` (the output is the file's own), `drgnx-status-warn`,
   `drgnx-status-fail`.
+- **The full output of one cell** (`kind: "output", cell: ID`, view `notebook-output:ID#N`, N the view's number among at most 16 a
+  notebook has; asking again for the same cell gives the same view, `view/close` frees the number): the lines of the cell's output as
+  the hub holds them (within the output limits: 1 MiB of text, 64 outputs, a cut says so on a last line), at most 1000 lines at a
+  time. Rows `l:I` carry `drgnx-notebook-cell` and `drgnx-notebook-line` (the 1-based line); a row `above` and one `below` count the
+  lines outside the window. The editor moves the window with `view/window {view, list: "lines", from}` (0-based line) and the hub
+  builds the rows again; a `from` past the end comes back to the last line. Text carries the terminal roles as faces
+  (`drgnx-notebook-fg-NAME`, `drgnx-notebook-bg-NAME`, `bold`, `italic`, `underline`, `drgnx-notebook-inverse`), never colours. An
+  image is a row `[image/png image, WxH: save output as file]` and is never drawn; a kernel's SVG is never rendered (its row says
+  so, as the inline output does). While the cell runs the hub copies its output into the notebook once a second, so the view
+  follows at that pace.

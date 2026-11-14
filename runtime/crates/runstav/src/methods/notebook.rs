@@ -203,19 +203,23 @@ pub struct NotebookEnded {
     pub stderr: String,
 }
 
-/// What one of a notebook's Sjá views shows (docs/develop/notebooks.md, "The views"): `outline` is one row per cell.
+/// What one of a notebook's Sjá views shows (docs/develop/notebooks.md, "The views"): `outline` is one row per cell, `output` the
+/// whole output of one cell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum NotebookViewKind {
     Outline,
+    Output,
 }
 
-/// `notebook/view`: the hub view of KIND for notebook ID. The answer names the view; the editor then sends `view/env` for it like
+/// `notebook/view`: the hub view of KIND for notebook ID (`output` names the CELL). The answer names the view; the editor then sends `view/env` for it like
 /// any hub-fed view and gets its rows as `view-patch` events.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct NotebookViewParams {
     pub id: String,
     pub kind: NotebookViewKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cell: Option<String>,
 }
 
 /// `notebook/view`'s answer: the view's id (at most 64 bytes, what `view/env` and `view/close` name).
@@ -295,7 +299,13 @@ fn check_cell(p: &NotebookCellRef) -> Result<(), Error> {
 }
 
 fn check_view(p: &NotebookViewParams) -> Result<(), Error> {
-    name("id", &p.id)
+    name("id", &p.id)?;
+    match (p.kind, p.cell.as_deref()) {
+        (NotebookViewKind::Output, Some(c)) => name("cell", c),
+        (NotebookViewKind::Output, None) => Err(invalid("cell", "the cell whose output it shows")),
+        (NotebookViewKind::Outline, None) => Ok(()),
+        (NotebookViewKind::Outline, Some(_)) => Err(invalid("cell", "none for an outline")),
+    }
 }
 
 fn check_clear(p: &NotebookClear) -> Result<(), Error> {
@@ -379,7 +389,7 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "notebook/view", NotebookView(NotebookViewParams) -> NotebookViewName,
             classes: [User], writes: false,
-            doc: "the hub view of a notebook (the cell outline: one row per cell with its index, type, first line, prompt and state) for the editor to show in Sjá; the answer names the view, rows follow its view/env",
+            doc: "a hub view of a notebook for the editor to show in Sjá: the cell outline (one row per cell with its index, type, first line, prompt and state) or the whole output of one cell (windowed by view/window); the answer names the view, rows follow its view/env",
             check: check_view,
         ),
         method!(
@@ -502,6 +512,21 @@ mod tests {
             err("notebook/view", json!({"id": "nb1", "kind": "chart"}))
                 .path
                 .is_some()
+        );
+        assert_eq!(
+            err("notebook/view", json!({"id": "nb1", "kind": "output"}))
+                .path
+                .as_deref(),
+            Some("cell")
+        );
+        assert_eq!(
+            err(
+                "notebook/view",
+                json!({"id": "nb1", "kind": "outline", "cell": "a"})
+            )
+            .path
+            .as_deref(),
+            Some("cell")
         );
         assert!(err("notebook/shutdown", json!({})).path.is_some());
     }

@@ -558,6 +558,18 @@ impl Notebooks {
         Ok((total, cells))
     }
 
+    /// Cell CELL of notebook ID as a run (what its full-output view shows).
+    pub async fn run_of(
+        &self,
+        conn: u64,
+        id: &str,
+        cell: &str,
+    ) -> Result<super::output::CellRun, String> {
+        let open = self.get(conn, id)?;
+        let book = open.book.lock().await;
+        book.run_of(cell).ok_or_else(|| format!("no cell {cell}"))
+    }
+
     /// How many runs the notebook's kernel task still holds (none when nothing is queued or running).
     pub fn held_runs(&self, conn: u64, id: &str) -> Option<usize> {
         Some(self.get(conn, id).ok()?.held.load(Ordering::SeqCst))
