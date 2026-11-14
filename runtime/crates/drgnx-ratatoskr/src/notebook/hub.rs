@@ -36,6 +36,12 @@ pub const TAILS_PER_SEC: usize = 100;
 pub const SHOW_EVERY: Duration = Duration::from_secs(1);
 /// The most notebooks one connection holds open.
 pub const MAX_OPEN: usize = 32;
+/// What `open` puts in its answer: tails for at most this many cells that have output, within this many bytes of JSON; the others
+/// come through `notebook/tail` (the answer says how many).
+pub const OPEN_TAILS_MAX: usize = 200;
+pub const OPEN_TAILS_BYTES: usize = 1 << 20;
+/// The most bytes of cell sources `open` answers with.
+pub const OPEN_SOURCE_BYTES: usize = 8 << 20;
 /// The longest prompt of an input request that reaches the editor, in characters.
 pub const PROMPT_CHARS: usize = 1024;
 
@@ -46,8 +52,11 @@ pub struct Opened {
     pub cells: Vec<CellInfo>,
     pub kernelspec: Option<String>,
     pub language: Option<String>,
-    /// Each code cell's tail from the file (stale: no kernel has run it in this hub), as the editor gets a tail.
+    /// The tail of each code cell that has output in the file (stale: no kernel has run it in this hub), as the editor gets a tail: the
+    /// first [`OPEN_TAILS_MAX`] of them within [`OPEN_TAILS_BYTES`]. A cell without a tail has no output.
     pub tails: Vec<Value>,
+    /// How many cells with output have no tail here (ask `notebook/tail`).
+    pub more_tails: usize,
 }
 
 enum Cmd {
@@ -139,6 +148,8 @@ pub struct Notebooks {
     kernel_dirs: Vec<PathBuf>,
     timeouts: Timeouts,
     books: Mutex<HashMap<String, Arc<Open>>>,
+    /// Notebooks being opened, by connection: counted with the open ones against [`MAX_OPEN`] from the moment the call starts.
+    reserved: Mutex<HashMap<u64, usize>>,
     epochs: AtomicU64,
 }
 
@@ -199,6 +210,36 @@ pub(crate) fn read_notebook(path: &Path) -> Result<String, String> {
     String::from_utf8(bytes).map_err(|_| format!("{shown}: not UTF-8 text"))
 }
 
+/// A place reserved for a notebook being opened: given back when the call ends without having opened it.
+struct Place<'a>(&'a Notebooks, Option<u64>);
+
+impl Place<'_> {
+    /// The notebook is in the books: the place is no longer held (called with the books lock held).
+    fn commit(&mut self) {
+        if let Some(conn) = self.1.take() {
+            Self::release(self.0, conn);
+        }
+    }
+
+    fn release(nb: &Notebooks, conn: u64) {
+        let mut r = nb.reserved.lock().expect("reserved");
+        if let Some(n) = r.get_mut(&conn) {
+            *n -= 1;
+            if *n == 0 {
+                r.remove(&conn);
+            }
+        }
+    }
+}
+
+impl Drop for Place<'_> {
+    fn drop(&mut self) {
+        if let Some(conn) = self.1.take() {
+            Self::release(self.0, conn);
+        }
+    }
+}
+
 /// Clears the reservation of a kernel's slot if a start ends without handing the kernel over (an error, or the call dropped).
 struct Reserved<'a>(&'a Open, bool);
 
@@ -226,6 +267,7 @@ impl Notebooks {
             kernel_dirs,
             timeouts,
             books: Mutex::new(HashMap::new()),
+            reserved: Mutex::new(HashMap::new()),
             epochs: AtomicU64::new(1),
         }
     }
@@ -268,17 +310,18 @@ impl Notebooks {
         {
             return Err(format!("{}: not a .ipynb file", path.display()));
         }
-        if self
-            .books
-            .lock()
-            .expect("books")
-            .values()
-            .filter(|o| o.conn == conn)
-            .count()
-            >= MAX_OPEN
-        {
-            return Err(format!("{MAX_OPEN} notebooks are open: close one first"));
-        }
+        // a place is taken under the books lock before anything is awaited: concurrent opens cannot pass the limit together
+        let mut place = {
+            let books = self.books.lock().expect("books");
+            let mut reserved = self.reserved.lock().expect("reserved");
+            let held = books.values().filter(|o| o.conn == conn).count()
+                + reserved.get(&conn).copied().unwrap_or(0);
+            if held >= MAX_OPEN {
+                return Err(format!("{MAX_OPEN} notebooks are open: close one first"));
+            }
+            *reserved.entry(conn).or_default() += 1;
+            Place(self, Some(conn))
+        };
         let text = match text {
             Some(t) => t,
             None => {
@@ -291,6 +334,13 @@ impl Notebooks {
         let book = Book::open(path, text)?;
         let id = new_id();
         let (cells, kernelspec, language) = (book.cells(), book.kernelspec_name(), book.language());
+        if cells.iter().map(|c| c.source.len()).sum::<usize>() > OPEN_SOURCE_BYTES {
+            return Err(format!(
+                "{}: more than {} MiB of cell sources",
+                path.display(),
+                OPEN_SOURCE_BYTES >> 20
+            ));
+        }
         let open = Arc::new(Open {
             id: id.clone(),
             conn,
@@ -301,12 +351,27 @@ impl Notebooks {
             live: Mutex::new(HashMap::new()),
             held: std::sync::atomic::AtomicUsize::new(0),
         });
-        let tails = {
+        let (tails, more_tails) = {
             let book = open.book.lock().await;
-            cells
+            let (mut tails, mut more, mut bytes) = (Vec::new(), 0, 0);
+            for c in cells
                 .iter()
-                .filter_map(|c| open.tail_event(&book, &c.id))
-                .collect()
+                .filter(|c| c.kind == hrafn::notebook::Kind::Code)
+            {
+                let Some((t, _)) = book.tail(&c.id) else {
+                    continue;
+                };
+                if t.text.is_empty() && t.images.is_empty() {
+                    continue;
+                }
+                if tails.len() >= OPEN_TAILS_MAX || bytes >= OPEN_TAILS_BYTES {
+                    more += 1;
+                } else if let Some(ev) = open.tail_event(&book, &c.id) {
+                    bytes += ev.to_string().len();
+                    tails.push(ev);
+                }
+            }
+            (tails, more)
         };
         let opened = Opened {
             id: id.clone(),
@@ -314,8 +379,14 @@ impl Notebooks {
             kernelspec,
             language,
             tails,
+            more_tails,
         };
-        self.books.lock().expect("books").insert(id, open);
+        {
+            // the open notebook takes the place the reservation held, in one step
+            let mut books = self.books.lock().expect("books");
+            books.insert(id, open);
+            place.commit();
+        }
         Ok(opened)
     }
 
@@ -431,6 +502,17 @@ impl Notebooks {
         let k = Kernel::start(&spec, &self.folder, &conn_id, &cwd, self.timeouts)
             .await
             .inspect_err(|_| self.status(&open, "dead", None, 0))?;
+        // the notebook may have been closed (or its editor gone) while the kernel started: then the kernel is not wanted
+        let registered = self
+            .books
+            .lock()
+            .expect("books")
+            .get(id)
+            .is_some_and(|o| Arc::ptr_eq(o, &open));
+        if !registered {
+            let _ = k.shutdown().await;
+            return Err("the notebook was closed while its kernel started".into());
+        }
         let (tx, rx) = mpsc::channel(64);
         let epoch = self.epochs.fetch_add(1, Ordering::SeqCst);
         *open.kernel.lock().expect("kernel") = Slot::Running(Running {
@@ -461,13 +543,20 @@ impl Notebooks {
     /// Queue CELLS (id and source, in order) to run: their text becomes the notebook's first.
     pub async fn execute(&self, conn: u64, id: &str, cells: &[CellSync]) -> Result<(), String> {
         let open = self.get(conn, id)?;
-        open.book.lock().await.update(cells);
-        self.command(
-            conn,
-            id,
-            Cmd::Execute(cells.iter().map(|c| c.id.clone()).collect()),
-        )
-        .await
+        let ids: Vec<String> = {
+            let mut book = open.book.lock().await;
+            book.update(cells);
+            // only code cells the notebook has: any other id is nothing to run
+            cells
+                .iter()
+                .filter(|c| {
+                    book.cell_head(&c.id)
+                        .is_some_and(|(k, _)| k == hrafn::notebook::Kind::Code)
+                })
+                .map(|c| c.id.clone())
+                .collect()
+        };
+        self.command(conn, id, Cmd::Execute(ids)).await
     }
 
     pub async fn interrupt(&self, conn: u64, id: &str) -> Result<(), String> {
@@ -549,7 +638,9 @@ impl Notebooks {
 
 /// End OPEN's kernel and say how it ended.
 async fn end_kernel(open: &Open) -> Result<Exit, String> {
-    let cmds = match std::mem::replace(&mut *open.kernel.lock().expect("kernel"), Slot::Empty) {
+    // taken in a statement of its own: the guard must not live through the match, whose Starting arm locks the slot again
+    let slot = std::mem::replace(&mut *open.kernel.lock().expect("kernel"), Slot::Empty);
+    let cmds = match slot {
         Slot::Running(r) => r.cmds,
         Slot::Starting => {
             *open.kernel.lock().expect("kernel") = Slot::Starting;
@@ -620,6 +711,9 @@ struct Pump {
     budget: Budget,
     /// An `input_request` the editor was told of: by the id it was told, the cell and the request's header.
     inputs: HashMap<String, (String, Value)>,
+    /// What the editor's backed-up queue did not take and must not lose: the latest status and the input requests, by key; sent
+    /// again at each tick until they go.
+    pending: HashMap<String, (&'static str, Value)>,
     /// The editor is gone.
     gone: bool,
     /// The current request's reply (shell) and its `idle` (iopub) have come: it is done when both have, in either order.
@@ -644,6 +738,7 @@ impl Pump {
             shown_at: HashMap::new(),
             budget: Budget::new(crate::clock::now()),
             inputs: HashMap::new(),
+            pending: HashMap::new(),
             gone: false,
             replied: false,
             idle: false,
@@ -662,9 +757,32 @@ impl Pump {
         }
     }
 
+    /// EVENT that is kept until it is delivered (under KEY: a newer one with the same key replaces it).
+    fn emit_kept(&mut self, key: String, event: &'static str, data: Value) {
+        if self.emit(event, data.clone()) {
+            self.pending.remove(&key);
+        } else if !self.gone {
+            self.pending.insert(key, (event, data));
+        }
+    }
+
+    /// The kept events are sent again.
+    fn resend(&mut self) {
+        let keys: Vec<String> = self.pending.keys().cloned().collect();
+        for key in keys {
+            let Some((event, data)) = self.pending.get(&key).cloned() else {
+                continue;
+            };
+            if self.emit(event, data) {
+                self.pending.remove(&key);
+            }
+        }
+    }
+
     fn status(&mut self, state: &str) {
         let (cell, queue) = (self.current.as_ref().map(|c| c.0.clone()), self.queue.len());
-        self.emit(
+        self.emit_kept(
+            "status".into(),
             "notebook-status",
             json!({"id": self.open.id, "state": state, "cell": cell, "queue": queue}),
         );
@@ -815,6 +933,11 @@ impl Pump {
         self.latest.remove(&cell);
         self.shown_at.remove(&cell);
         self.inputs.retain(|_, (c, _)| *c != cell);
+        let inputs = &self.inputs;
+        self.pending.retain(|k, _| {
+            k.strip_prefix("input:")
+                .is_none_or(|r| inputs.contains_key(r))
+        });
         self.count_held();
         if status == Some(RunStatus::Error) {
             self.drop_queue(RunStatus::Aborted).await;
@@ -860,10 +983,10 @@ impl Pump {
             let event = json!({"id": self.open.id, "cell": cell, "request": request, "prompt": prompt,
                                "password": m.content.get("password").and_then(Value::as_bool).unwrap_or(false)});
             self.inputs.insert(
-                request,
+                request.clone(),
                 (cell, serde_json::to_value(&m.header).unwrap_or(Value::Null)),
             );
-            self.emit("notebook-input-request", event);
+            self.emit_kept(format!("input:{request}"), "notebook-input-request", event);
             return;
         }
         let Some(super::output::Change::Run(msg_id)) = self.router.apply(channel, &m) else {
@@ -903,6 +1026,7 @@ impl Pump {
                         self.status(if self.current.is_some() { "busy" } else { "idle" });
                     }
                     Some(Cmd::Input { request, value }) => {
+                        self.pending.remove(&format!("input:{request}"));
                         if let Some((_, parent)) = self.inputs.remove(&request) {
                             let mut reply = Message::request("hub", "input_reply", json!({"value": value, "status": "ok"}));
                             reply.parent = parent;
@@ -917,6 +1041,7 @@ impl Pump {
                     KernelEvent::Exited(_) => { self.status("dead"); break; }
                 },
                 _ = tick.tick() => {
+                    self.resend();
                     let due: Vec<String> = self.dirty.iter().cloned().collect();
                     for cell in due {
                         if self.allowed() {

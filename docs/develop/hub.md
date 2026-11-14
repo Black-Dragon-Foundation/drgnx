@@ -1542,7 +1542,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `notebook/input` | user | `{id: string, request: string, value: string}` | `boolean` | no |
 | `notebook/interrupt` | user | `{id: string}` | `boolean` | no |
 | `notebook/kernels` | user | `{}` | `{kernels: [NotebookKernel], skipped: [NotebookSkipped]}` | no |
-| `notebook/open` | user | `{path: string, text?: string}` | `{cells: [NotebookCell], id: string, kernelspec?: string, language?: string, tails: [NotebookTail]}` | no |
+| `notebook/open` | user | `{path: string, text?: string}` | `NotebookOpened` | no |
 | `notebook/output` | user | `{cell: string, id: string}` | `{outputs: [any]}` | no |
 | `notebook/restart` | user | `{id: string}` | `{kernel: string}` | no |
 | `notebook/save` | user | `{cells?: [{id: string, source: string, type: string}], id: string}` | `boolean` | no |

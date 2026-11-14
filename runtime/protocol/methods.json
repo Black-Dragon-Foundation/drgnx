@@ -27548,7 +27548,7 @@
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "description": "`notebook/open`'s answer: the notebook's ID, its CELLS, the kernelspec name and language it names, and each code cell's TAILS from the file.",
+        "description": "`notebook/open`'s answer: the notebook's ID, its CELLS, the kernelspec name and language it names, and the TAILS of the code cells that\nhave output in the file: the first 200 of them within 1 MiB of JSON (a cell without a tail has no output), and how many more there are\n(`more_tails`: ask `notebook/tail` for the cells it names).",
         "properties": {
           "cells": {
             "items": {
@@ -27573,6 +27573,11 @@
               "null"
             ]
           },
+          "more_tails": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
           "tails": {
             "items": {
               "$ref": "#/$defs/NotebookTail"
@@ -27583,7 +27588,8 @@
         "required": [
           "id",
           "cells",
-          "tails"
+          "tails",
+          "more_tails"
         ],
         "title": "NotebookOpened",
         "type": "object"

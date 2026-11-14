@@ -23,6 +23,10 @@ const NB: &str = r##"{
 struct Events(
     Mutex<Vec<(u64, String, Value)>>,
     std::sync::atomic::AtomicBool,
+    /// The editor's queue is backed up: every lossy send is dropped.
+    std::sync::atomic::AtomicBool,
+    /// How many input requests were dropped that way.
+    std::sync::atomic::AtomicUsize,
 );
 
 impl Sink for Events {
@@ -35,6 +39,12 @@ impl Sink for Events {
     fn send_lossy(&self, conn: u64, event: &str, data: Value) -> Delivery {
         if self.1.load(Ordering::SeqCst) {
             return Delivery::Gone;
+        }
+        if self.2.load(Ordering::SeqCst) {
+            if event == "notebook-input-request" {
+                self.3.fetch_add(1, Ordering::SeqCst);
+            }
+            return Delivery::Dropped;
         }
         self.send(conn, event, data);
         Delivery::Sent
@@ -153,6 +163,7 @@ fn kernel_side(folder: &Path, id: &str, nth: u32, seen: Arc<Seen>) -> tokio::tas
             }
         });
         let mut count = 0;
+        let mut late = None;
         loop {
             let f = frames(shell.recv().await.unwrap());
             let Ok(req) = wire::decode(&key, &f) else {
@@ -170,6 +181,15 @@ fn kernel_side(folder: &Path, id: &str, nth: u32, seen: Arc<Seen>) -> tokio::tas
                 shell.send(zmq(&key, &rep)).await.unwrap();
                 iopub.send(status("idle")).await.unwrap();
                 continue;
+            }
+            if let Some((old, ident)) = late.take() {
+                let mut q = reply_to(
+                    &old,
+                    "input_request",
+                    json!({"prompt": "too late? ", "password": false}),
+                );
+                q.idents = vec![ident];
+                stdin.send(zmq(&key, &q)).await.unwrap();
             }
             let code = req.content["code"].as_str().unwrap_or("").to_string();
             seen.executed.lock().unwrap().push(code.clone());
@@ -228,14 +248,9 @@ fn kernel_side(folder: &Path, id: &str, nth: u32, seen: Arc<Seen>) -> tokio::tas
             shell.send(zmq(&key, &rep)).await.unwrap();
             iopub.send(status("idle")).await.unwrap();
             if code == "ASKLATE" {
-                // a question after the run is over: the cell is not running, nobody is to be asked
-                let mut late = reply_to(
-                    &req,
-                    "input_request",
-                    json!({"prompt": "too late? ", "password": false}),
-                );
-                late.idents = vec![f[0].clone()];
-                stdin.send(zmq(&key, &late)).await.unwrap();
+                // a question after the run is over: it is sent when the next request comes, which the hub sends only once the
+                // run has ended (sent at once, it could pass the run's reply and idle on their other sockets)
+                late = Some((req.clone(), f[0].clone()));
             }
         }
     })
@@ -924,4 +939,188 @@ async fn a_question_after_the_run_is_over_is_not_forwarded() {
     assert_eq!(*seen.executed.lock().unwrap(), ["ASKLATE", "ok"]);
     assert!(w.events.of("notebook-input-request").is_empty());
     w.hub.close(7, &id).await;
+}
+
+/// A notebook of N code cells with output, each of LINES rows of WIDTH characters.
+fn big_notebook(n: usize, lines: usize, width: usize) -> String {
+    let text: Vec<String> = (0..lines)
+        .map(|_| format!("{}\n", "x".repeat(width)))
+        .collect();
+    let out = json!([{"output_type": "stream", "name": "stdout", "text": text}]);
+    let cells: Vec<Value> = (0..n)
+        .map(|i| json!({"cell_type": "code", "id": format!("c{i}"), "metadata": {}, "execution_count": i, "outputs": out, "source": [format!("{i}")]}))
+        .collect();
+    json!({"cells": cells, "metadata": {}, "nbformat": 4, "nbformat_minor": 5}).to_string()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn open_answers_with_the_tails_of_the_first_cells_with_output_within_a_budget_and_counts_the_rest()
+ {
+    let w = world("signal");
+    // 300 cells with output, and one without: tails for 200, the rest asked for
+    let mut nb: Value = serde_json::from_str(&big_notebook(300, 1, 10)).unwrap();
+    nb["cells"].as_array_mut().unwrap().push(json!({"cell_type": "code", "id": "bare", "metadata": {}, "execution_count": null, "outputs": [], "source": []}));
+    let o = w.hub.open(7, &w.path, Some(nb.to_string())).await.unwrap();
+    assert_eq!(
+        (o.tails.len(), o.more_tails, o.cells.len()),
+        (OPEN_TAILS_MAX, 100, 301)
+    );
+    assert!(
+        o.tails.iter().all(|t| t["cell"] != "bare"),
+        "a cell without output has no tail"
+    );
+    let late = w.hub.tail(7, &o.id, "c299").await.unwrap();
+    assert_eq!(late["text"], "xxxxxxxxxx\n");
+    // large tails stop at the byte budget
+    let o = w
+        .hub
+        .open(7, &w.path, Some(big_notebook(150, 20, 400)))
+        .await
+        .unwrap();
+    let bytes: usize = o.tails.iter().map(|t| t.to_string().len()).sum();
+    assert!(
+        o.tails.len() < 150 && o.more_tails > 0 && o.tails.len() + o.more_tails == 150,
+        "{} {}",
+        o.tails.len(),
+        o.more_tails
+    );
+    assert!(bytes < OPEN_TAILS_BYTES + 20_000, "{bytes}");
+    // sources past the answer's budget are refused
+    let huge = json!({"cells": [{"cell_type": "code", "id": "h", "metadata": {}, "execution_count": null, "outputs": [],
+                                  "source": ["x".repeat(OPEN_SOURCE_BYTES + 1)]}], "metadata": {}, "nbformat": 4, "nbformat_minor": 5});
+    let e = w
+        .hub
+        .open(7, &w.path, Some(huge.to_string()))
+        .await
+        .unwrap_err();
+    assert!(e.contains("MiB of cell sources"), "{e}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_notebook_closed_while_its_kernel_starts_does_not_keep_the_kernel() {
+    let w = world("signal");
+    let id = w.hub.open(7, &w.path, None).await.unwrap().id;
+    let hub = Arc::new(w.hub);
+    let file = private_folder(&w.d.path().join("s"))
+        .unwrap()
+        .join(format!("kernel-{id}-k1.json"));
+    // the kernel's side is not there yet: the start waits for its sockets
+    let (h2, id2) = (hub.clone(), id.clone());
+    let starting = tokio::spawn(async move { h2.start(7, &id2, None, None).await });
+    skuld::wait_until("the kernel to be starting", 30, || {
+        file.exists().then_some(())
+    });
+    hub.close(7, &id).await;
+    let _peer = {
+        let seen = Arc::new(Seen::default());
+        kernel_side(
+            &private_folder(&w.d.path().join("s")).unwrap(),
+            &id,
+            1,
+            seen,
+        )
+    };
+    let e = starting.await.unwrap().unwrap_err();
+    assert!(e.contains("closed while its kernel started"), "{e}");
+    skuld::wait_until("the kernel's connection file to go", 30, || {
+        (!file.exists()).then_some(())
+    });
+    assert!(hub.tail(7, &id, "a").await.is_err());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_status_and_an_input_request_a_backed_up_editor_did_not_take_are_sent_again() {
+    let w = world("signal");
+    let (id, _seen) = started(&w).await;
+    w.events.2.store(true, Ordering::SeqCst);
+    w.hub.execute(7, &id, &[sync("a", "ASK")]).await.unwrap();
+    skuld::wait_until("the question to have been dropped", 30, || {
+        (w.events.3.load(Ordering::SeqCst) >= 1).then_some(())
+    });
+    assert!(w.events.of("notebook-input-request").is_empty());
+    // the editor takes events again: the latest status and the question come
+    w.events.2.store(false, Ordering::SeqCst);
+    let ask = skuld::wait_until("the question", 30, || {
+        w.events.of("notebook-input-request").into_iter().next()
+    });
+    assert_eq!(ask["prompt"], "name? ");
+    skuld::wait_until("the latest status", 30, || {
+        w.events
+            .of("notebook-status")
+            .last()
+            .filter(|s| s["state"] == "busy" && s["cell"] == "a")
+            .cloned()
+    });
+    w.hub
+        .input(7, &id, ask["request"].as_str().unwrap(), "z")
+        .await
+        .unwrap();
+    skuld::wait_until("done", 30, || {
+        w.events
+            .tail("a")
+            .filter(|t| t["text"] == "z" && t["head"]["state"] == "idle")
+    });
+    w.hub.close(7, &id).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_id_the_notebook_does_not_have_is_not_queued() {
+    let w = world("signal");
+    let (id, seen) = started(&w).await;
+    w.hub
+        .execute(7, &id, &[sync("ghost", "x"), sync("a", "ok")])
+        .await
+        .unwrap();
+    skuld::wait_until("a done", 30, || {
+        w.events
+            .tail("a")
+            .filter(|t| t["text"] == "ok" && t["head"]["state"] == "idle")
+    });
+    assert_eq!(
+        *seen.executed.lock().unwrap(),
+        ["ok"],
+        "the kernel was asked for nothing else"
+    );
+    assert!(
+        w.events.tail("ghost").is_none(),
+        "no state or tail was made for it"
+    );
+    assert!(
+        !w.hub
+            .get(7, &id)
+            .unwrap()
+            .states
+            .lock()
+            .unwrap()
+            .contains_key("ghost"),
+        "no run state is kept for an id the notebook does not have"
+    );
+    skuld::wait_until("nothing held", 30, || {
+        (w.hub.held_runs(7, &id) == Some(0)).then_some(())
+    });
+    w.hub.close(7, &id).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn opens_that_run_at_once_cannot_pass_the_limit_together() {
+    let w = world("signal");
+    let hub = Arc::new(w.hub);
+    let path = w.path.clone();
+    let tasks: Vec<_> = (0..(MAX_OPEN * 3))
+        .map(|_| {
+            let (hub, path) = (hub.clone(), path.clone());
+            tokio::spawn(async move { hub.open(9, &path, None).await.is_ok() })
+        })
+        .collect();
+    let mut ok = 0;
+    for t in tasks {
+        ok += usize::from(t.await.unwrap());
+    }
+    assert_eq!(ok, MAX_OPEN);
+    // and a place that was reserved and not used is given back
+    assert!(hub.open(9, &w.d.path().join("x.txt"), None).await.is_err());
+    assert!(
+        hub.open(10, &path, None).await.is_ok(),
+        "another connection has its own places"
+    );
 }
