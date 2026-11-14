@@ -13,6 +13,7 @@
 (require 'drgnx-view-nav)
 (require 'drgnx-explorer)
 
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (defvar drgnx-hub--events)
 (defvar drgnx-explorer-rows-nav-test--n 0 "Each run's view gets a name of its own in Sjá.")
 
@@ -498,55 +499,57 @@ asks the hub again with the new indent at once (no restart)."
   "Pattern D: next and previous walk the visible rows; expand on a closed folder asks the hub with it open (the
 selection stays), on an open folder goes to its first child; collapse on a file goes to its folder, on an open folder
 asks the hub with it closed.  Point follows the selection."
-  (drgnx-explorer-rows-nav-test--with
-    (goto-char (point-max))                             ; no row here: the keys start from the model's start
-    (drgnx-explorer-next)
-    (should (equal "/r" (drgnx-view-nav-selection)))
-    (drgnx-explorer-next)
-    (should (equal "/r/a" (drgnx-view-nav-selection)))
-    (should (equal "/r/a" (drgnx-explorer-node-at (point))))
-    (drgnx-explorer-expand)
-    (should (equal "/r/a" (drgnx-view-nav-selection)))
-    (should (equal (list :view view :roots ["/r"] :expanded ["/r/a" "/r/lib"] :compact t
-                         :indent (drgnx-explorer--tree-indent)
-                         :exclude (vconcat drgnx-explorer-exclude-names) :window drgnx-explorer-rows-window)
-                   (cdar calls)))
-    (drgnx-explorer-next)
-    (drgnx-explorer-next)
-    (should (equal "/r/lib/m.el" (drgnx-view-nav-selection)))
-    (drgnx-explorer-collapse)
-    (should (equal "/r/lib" (drgnx-view-nav-selection)))
-    (drgnx-explorer-expand)
-    (should (equal "/r/lib/m.el" (drgnx-view-nav-selection)))
-    (drgnx-explorer-previous)
-    (should (equal "/r/lib" (drgnx-view-nav-selection)))
-    (drgnx-explorer-collapse)
-    (should (equal "/r/lib" (drgnx-view-nav-selection)))
-    (should (equal (list :view view :roots ["/r"] :expanded ["/r/a"] :compact t
-                         :indent (drgnx-explorer--tree-indent)
-                         :exclude (vconcat drgnx-explorer-exclude-names) :window drgnx-explorer-rows-window)
-                   (cdar calls)))))
+  (drgnx-test-with-clock ()
+    (drgnx-explorer-rows-nav-test--with
+      (goto-char (point-max))                             ; no row here: the keys start from the model's start
+      (drgnx-explorer-next)
+      (should (equal "/r" (drgnx-view-nav-selection)))
+      (drgnx-explorer-next)
+      (should (equal "/r/a" (drgnx-view-nav-selection)))
+      (should (equal "/r/a" (drgnx-explorer-node-at (point))))
+      (drgnx-explorer-expand)
+      (should (equal "/r/a" (drgnx-view-nav-selection)))
+      (should (equal (list :view view :roots ["/r"] :expanded ["/r/a" "/r/lib"] :compact t
+                           :indent (drgnx-explorer--tree-indent)
+                           :exclude (vconcat drgnx-explorer-exclude-names) :window drgnx-explorer-rows-window)
+                     (cdar calls)))
+      (drgnx-explorer-next)
+      (drgnx-explorer-next)
+      (should (equal "/r/lib/m.el" (drgnx-view-nav-selection)))
+      (drgnx-explorer-collapse)
+      (should (equal "/r/lib" (drgnx-view-nav-selection)))
+      (drgnx-explorer-expand)
+      (should (equal "/r/lib/m.el" (drgnx-view-nav-selection)))
+      (drgnx-explorer-previous)
+      (should (equal "/r/lib" (drgnx-view-nav-selection)))
+      (drgnx-explorer-collapse)
+      (should (equal "/r/lib" (drgnx-view-nav-selection)))
+      (should (equal (list :view view :roots ["/r"] :expanded ["/r/a"] :compact t
+                           :indent (drgnx-explorer--tree-indent)
+                           :exclude (vconcat drgnx-explorer-exclude-names) :window drgnx-explorer-rows-window)
+                     (cdar calls))))))
 
 (ert-deftest drgnx-explorer-rows/typing-and-open ()
   "Pattern D: typing selects the next visible sibling whose name starts with what was typed; a click on another row
 moves the selection there first; opening a file shows it in the editor, opening a folder asks the hub."
-  (drgnx-explorer-rows-nav-test--with
-    (goto-char (point-min))
-    (forward-line 1)                                    ; a click: point on a/, no key yet
-    (let ((last-command-event ?z)) (drgnx-explorer-type))
-    (should (equal "/r/z.txt" (drgnx-view-nav-selection)))
-    (should (equal "/r/z.txt" (drgnx-explorer-node-at (point))))
-    (let ((shown nil))
-      (cl-letf (((symbol-function 'find-file-noselect) (lambda (f &rest _) f))
-                ((symbol-function 'drgnx-wb-show-in-editor) (lambda (b &rest _) (push b shown))))
-        (drgnx-explorer-open))
-      (should (equal '("/r/z.txt") shown)))
-    (goto-char (point-min))
-    (forward-line 1)
-    (let ((n (length calls)))
-      (drgnx-explorer-open)
-      (should (= (1+ n) (length calls)))
-      (should (equal ["/r/a" "/r/lib"] (plist-get (cdar calls) :expanded))))))
+  (drgnx-test-with-clock ()
+    (drgnx-explorer-rows-nav-test--with
+      (goto-char (point-min))
+      (forward-line 1)                                    ; a click: point on a/, no key yet
+      (let ((last-command-event ?z)) (drgnx-explorer-type))
+      (should (equal "/r/z.txt" (drgnx-view-nav-selection)))
+      (should (equal "/r/z.txt" (drgnx-explorer-node-at (point))))
+      (let ((shown nil))
+        (cl-letf (((symbol-function 'find-file-noselect) (lambda (f &rest _) f))
+                  ((symbol-function 'drgnx-wb-show-in-editor) (lambda (b &rest _) (push b shown))))
+          (drgnx-explorer-open))
+        (should (equal '("/r/z.txt") shown)))
+      (goto-char (point-min))
+      (forward-line 1)
+      (let ((n (length calls)))
+        (drgnx-explorer-open)
+        (should (= (1+ n) (length calls)))
+        (should (equal ["/r/a" "/r/lib"] (plist-get (cdar calls) :expanded)))))))
 
 ;;;; The switch (plan sja-complete E4): the Explorer opens on the rows path
 

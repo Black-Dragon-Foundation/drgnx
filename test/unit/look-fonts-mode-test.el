@@ -125,6 +125,7 @@ install; it is ok when nothing is missing and absent before a graphical display 
 (ert-deftest drgnx-look-fonts/the-cli-doctor-reads-the-session-font-check ()
   "`drgnx doctor' runs in a batch Emacs with no graphical frame: the session's check of each new frame is written to
 fonts-report.eld in the state dir, and the doctor reads it there when it has no frame of its own to check."
+  :tags '(:cond)
   (require 'drgnx-doctor)
   (let* ((state (make-temp-file "drgnx-fonts-state" t))
          (drgnx-look-fonts--fallback-report nil))

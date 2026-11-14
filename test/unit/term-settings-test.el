@@ -4,6 +4,7 @@
 (require 'cl-lib)
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-terminal" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-term" drgnx-dir) nil t)
 
@@ -119,21 +120,22 @@
           (should (= rang 1)))))))
 
 (ert-deftest drgnx-term-settings/copy-on-select-copies ()
-  ;; a mouse selection copies at once, without its trailing blanks; off, it copies nothing
-  (drgnx-term-settings-test--in-terminal
-    (let ((inhibit-read-only t)) (insert "hello world   \nnext"))
-    (set-window-buffer (selected-window) (current-buffer))
-    (let* ((kill-ring nil) (kill-ring-yank-pointer nil) (interprogram-cut-function nil)
-           (posn (lambda (pos) (list (selected-window) pos '(0 . 0) 0 nil pos '(0 . 0) nil '(0 . 0) '(1 . 1))))
-           (drag (list 'drag-mouse-1 (funcall posn 1) (funcall posn 15))))
-      (let ((drgnx-term-copy-on-select nil))
-        (drgnx-term--apply-local)
-        (mouse-set-region drag)
-        (should-not kill-ring))
-      (let ((drgnx-term-copy-on-select t))
-        (drgnx-term--apply-local)
-        (mouse-set-region drag)
-        (should (equal (car kill-ring) "hello world"))))))
+  (drgnx-test-with-clock ()
+    ;; a mouse selection copies at once, without its trailing blanks; off, it copies nothing
+    (drgnx-term-settings-test--in-terminal
+      (let ((inhibit-read-only t)) (insert "hello world   \nnext"))
+      (set-window-buffer (selected-window) (current-buffer))
+      (let* ((kill-ring nil) (kill-ring-yank-pointer nil) (interprogram-cut-function nil)
+             (posn (lambda (pos) (list (selected-window) pos '(0 . 0) 0 nil pos '(0 . 0) nil '(0 . 0) '(1 . 1))))
+             (drag (list 'drag-mouse-1 (funcall posn 1) (funcall posn 15))))
+        (let ((drgnx-term-copy-on-select nil))
+          (drgnx-term--apply-local)
+          (mouse-set-region drag)
+          (should-not kill-ring))
+        (let ((drgnx-term-copy-on-select t))
+          (drgnx-term--apply-local)
+          (mouse-set-region drag)
+          (should (equal (car kill-ring) "hello world")))))))
 
 (ert-deftest drgnx-term-settings/paste-protection-asks-on-unsafe-paste ()
   (drgnx-term-settings-test--in-terminal

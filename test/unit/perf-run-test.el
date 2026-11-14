@@ -399,6 +399,7 @@ run of sources measures the interpreter); a compiled tree is not."
   "The agent workloads' wait (`drgnx-perf--wait', from the hub form): after a timer or a hub batch the check notes when
 the condition first held, in the wait's buffer, and the wait returns that time; an error inside the wait still takes
 its advice off `timer-event-handler' and the hub batch."
+  :tags '(:cond)
   (eval (car (read-from-string (drgnx-perf-run--hub-form))) t)
   (let ((buf (generate-new-buffer " wait")) (flag nil))
     (unwind-protect

@@ -324,6 +324,7 @@ are kept as a list, newest first."
   "A stale window: rows stream while the look changes (a theme or a font: the editor's next epoch).  Patches of the
 old epoch are held and the view dims; the new epoch's reset drops them, and the view ends plain, on the new epoch,
 with the last rows."
+  :tags '(:cond)
   (drgnx-rows-demo-with
     (let ((b (drgnx-rows-demo-open "c")))
       (drgnx-rows-demo-feed (drgnx-view-patch-test--rows "a" 3))
@@ -342,6 +343,7 @@ with the last rows."
 
 (ert-deftest drgnx-view-rows/two-classes-keep-their-own-rows ()
   "Two display classes of one view: each buffer gets the rows of its class, and a new epoch in one resets only it."
+  :tags '(:cond)
   (drgnx-rows-demo-with
     (let ((one (drgnx-rows-demo-open "one")) (two (drgnx-rows-demo-open "two")))
       (drgnx-rows-demo-feed (drgnx-view-patch-test--rows "x" 2))
@@ -358,6 +360,7 @@ with the last rows."
 
 (ert-deftest drgnx-view-rows/face-override-after-a-patch-applies ()
   "Rows name faces, never colours: a face remapped in the view's buffer after a patch shows on the patched rows."
+  :tags '(:cond)
   (drgnx-rows-demo-with
     (let ((b (drgnx-rows-demo-open "c")))
       (drgnx-rows-demo-feed (list (drgnx-rows-demo-row "r" "hello" :runs [[0 5 "bold"]])))
@@ -373,6 +376,7 @@ with the last rows."
 (ert-deftest drgnx-view-rows/dropped-patch-and-missing-image-resync ()
   "A patch lost on the way (the view's version falls behind) and an image the view lost each send one resync, and
 the hub's reset brings the view back: the rows, and the image."
+  :tags '(:cond)
   (drgnx-rows-demo-with
     (let* ((b (drgnx-rows-demo-open "c")) (id "00000000000000ab-1")
            (svg "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"4\"/>")
@@ -398,6 +402,7 @@ the hub's reset brings the view back: the rows, and the image."
   "A hub restart: the view dims and forgets its version; the new hub (a new instance id), once the env is sent again
 and the view resubscribed, starts it with a reset, and a resync after works on it.  A patch of the old hub that
 arrives after that reset is dropped."
+  :tags '(:cond)
   (drgnx-rows-demo-with
     (let* ((b (drgnx-rows-demo-open "c")) (old-patches nil)
            (keep (lambda (event data) (when (equal event "view-patch") (push data old-patches))))

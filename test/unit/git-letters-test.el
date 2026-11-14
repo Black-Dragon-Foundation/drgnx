@@ -118,6 +118,7 @@ buffer, never silence; the status of that root stays what it was."
 (ert-deftest drgnx-git/hub-down-reads-the-status-with-git-itself ()
   "With Sjá here but no hub connection the hub is not asked, a root has no letters, and `git status' run by Emacs
 fills the cache `drgnx-git-status' answers from."
+  :tags '(:cond)
   (skip-unless (executable-find "git"))
   (let ((root (file-name-as-directory (make-temp-file "drgnx-git-down" t)))
         (drgnx-hub--events nil) (drgnx-git--roots (make-hash-table :test #'equal)))

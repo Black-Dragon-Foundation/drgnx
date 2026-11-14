@@ -1265,7 +1265,8 @@ child Emacsen that only need to start together.
 
 A static lint cannot see through macros and fixtures. `DRGNX_TEST_AUDIT=1` records, for each `:det` test, the real-time
 primitives that execute while it runs (`sleep-for` and `sit-for` above 0, `accept-process-output` with a timeout above
-0, or with none on a live process, `make-process`, `start-process`, network, pipe and serial processes) as
+0, or with none on a live process, `make-process`, `start-process`, network and serial processes; not a pipe process,
+which starts no child and opens no socket: a stand-in connection is no real time) as
 `drgnx-audit: TEST PRIMITIVE` lines in the output; a value other than `1` is a file the rows are also appended to. A
 wait under `drgnx-test-with-clock` is virtual and does not count; a process or a socket started there does. `DRGNX_TEST_AUDIT_ALL=1` audits every test (for a run before files carry a class).
 `DRGNX_TEST_AUDIT_FAIL=1` makes each such `:det` test fail the run. All three are off by default. The primitives are

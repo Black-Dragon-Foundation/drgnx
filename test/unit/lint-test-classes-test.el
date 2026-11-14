@@ -593,6 +593,8 @@ a test reaches by a call: a command a test binds to a key is named by `function'
             (setq drgnx-run-ert--audit-seen nil)
             (accept-process-output nil 0)  ; no wait: not a use of real time
             (let ((pipe (make-pipe-process :name "drgnx-audit-pipe" :noquery t)))
+              ;; a pipe process starts no child and opens no socket: a stand-in connection is no real time
+              (should-not drgnx-run-ert--audit-seen)
               (setq drgnx-run-ert--audit-seen nil)
               (unwind-protect (accept-process-output pipe 0) ; a timeout of 0 on a live process is a look too
                 (delete-process pipe)))

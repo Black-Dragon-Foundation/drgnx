@@ -421,8 +421,10 @@ is virtual and not recorded; a process or a socket is real work under the fixtur
 
 (defconst drgnx-run-ert--audit-primitives
   '(sleep-for sit-for accept-process-output make-process start-process make-network-process open-network-stream
-              make-pipe-process make-serial-process)
-  "The primitives the audit watches.")
+              make-serial-process)
+  "The primitives the audit watches.  Not `make-pipe-process': it starts no child, opens no socket and waits for
+nothing, so the stand-in connection that many deterministic tests hold is no real time (a wait on it is
+`accept-process-output', which is watched).")
 
 (defun drgnx-run-ert--audit-around (prim fn &rest args)
   (when (drgnx-run-ert--audit-wait-p prim args) (drgnx-run-ert--audit-record prim))
