@@ -40,7 +40,7 @@ use runstav::methods::view::{
 };
 use runstav::wire::Error;
 use serde_json::json;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 
 use crate::dispatch::Caller;
@@ -568,6 +568,9 @@ pub struct Views {
     pub panels: Arc<panel::Panels>,
     /// The front, kept once at the hub's start: a search thread reaches the store and the connections through it.
     front: OnceLock<Weak<Front>>,
+    /// The (connection, view, class) pairs whose editor holds the rows in Sjá (`rows_in_sja`): their patches go on
+    /// the raw `view-model` line ([`Views::send_patch`]).  Locked alone, never with the store's lock taken after it.
+    sja: Mutex<BTreeSet<Key>>,
 }
 
 impl Default for Views {
@@ -584,6 +587,7 @@ impl Default for Views {
             debugs: debug::DebugViews::default(),
             panels: Arc::default(),
             front: OnceLock::new(),
+            sja: Mutex::new(BTreeSet::new()),
         }
     }
 }
@@ -593,6 +597,18 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl Views {
+    /// Patch P to CONN: on the raw `view-model` line `{view, rows: P}` when CONN's editor holds the pair's rows in Sjá
+    /// (its env's `rows_in_sja`), which Sjá's push takes whole; else as a `view-patch` event.  False when CONN took
+    /// nothing.
+    pub fn send_patch(&self, f: &Front, conn: u64, p: &Patch) -> bool {
+        let key = (conn, p.view.clone(), p.class.clone());
+        if lock(&self.sja).contains(&key) {
+            f.send_to(conn, "view-model", json!({"view": p.view, "rows": p}))
+        } else {
+            f.send_to(conn, "view-patch", json!(p))
+        }
+    }
+
     /// Builds (CONN, VIEW, CLASS)'s rows again and sends what changed. The builders: the test fixture view (its
     /// rows as given, then its labels fitted with the class's fonts).
     fn build(&self, f: &Front, key: &Key) {
@@ -627,7 +643,7 @@ impl Views {
         }
         let patch = lock(&self.store).publish(key, rows, &images);
         if let Some(p) = patch {
-            f.send_to(key.0, "view-patch", json!(p));
+            f.core.views.send_patch(f, key.0, &p);
         }
         self.ask(f, key);
     }
@@ -688,7 +704,7 @@ impl Views {
         };
         let patch = lock(&self.store).publish(key, rows, &images);
         if let Some(p) = patch {
-            f.send_to(key.0, "view-patch", json!(p));
+            f.core.views.send_patch(f, key.0, &p);
         }
         self.ask(f, key);
     }
@@ -757,7 +773,7 @@ impl Views {
             return false;
         };
         if let Some(p) = patch {
-            f.send_to(key.0, "view-patch", json!(p));
+            f.core.views.send_patch(f, key.0, &p);
         }
         self.ask(f, key);
         true
@@ -860,7 +876,7 @@ impl Views {
                 .collect()
         };
         for p in patches {
-            f.send_to(conn, "view-patch", json!(p));
+            f.core.views.send_patch(f, conn, &p);
         }
     }
 
@@ -886,6 +902,7 @@ impl Views {
         self.lists.gone(conn);
         self.debugs.gone(conn);
         self.panels.gone(conn, None);
+        lock(&self.sja).retain(|(c, _, _)| *c != conn);
         lock(&self.store).gone(conn);
         lock(&self.fixtures).retain(|(c, _), _| *c != conn);
         self.prune_fonts();
@@ -899,6 +916,11 @@ pub fn env(f: &Front, c: &Caller, p: ViewEnv) -> Result<bool, Error> {
     let key = (c.conn_id, p.view.clone(), p.class.clone());
     let old = lock(&views.store).env_of(&key).cloned();
     views.env_fonts(&key, &p, old.as_ref());
+    if p.rows_in_sja {
+        lock(&views.sja).insert(key.clone());
+    } else {
+        lock(&views.sja).remove(&key);
+    }
     lock(&views.store).env(c.conn_id, p);
     views.prune_fonts();
     views.build(f, &key);
@@ -916,7 +938,7 @@ pub fn resync(f: &Front, c: &Caller, p: ViewResync) -> Result<bool, Error> {
     let images = views.images_of(&key);
     let patch = lock(&views.store).resync(&key, &images);
     Ok(match patch {
-        Some(p) => f.send_to(key.0, "view-patch", json!(p)),
+        Some(p) => f.core.views.send_patch(f, key.0, &p),
         None => false,
     })
 }
@@ -944,7 +966,7 @@ pub fn ack(f: &Front, c: &Caller, p: ViewAck) -> Result<bool, Error> {
     let patch = store.ack(&key, p.version);
     drop(store);
     if let Some(patch) = patch {
-        f.send_to(key.0, "view-patch", json!(patch));
+        f.core.views.send_patch(f, key.0, &patch);
     }
     Ok(true)
 }
@@ -998,6 +1020,7 @@ pub fn close(f: &Front, c: &Caller, p: ViewClose) -> Result<bool, Error> {
     views.lists.stop(c.conn_id, &p.view);
     views.debugs.stop(c.conn_id, &p.view);
     views.panels.gone(c.conn_id, Some(&p.view));
+    lock(&views.sja).retain(|(c2, v, _)| !(*c2 == c.conn_id && *v == p.view));
     let closed = lock(&views.store).close(c.conn_id, &p.view);
     views.prune_fonts();
     views.prune_panels();

@@ -2347,8 +2347,9 @@ All of it is in memory only.
   drop a pair it already holds for the connection, with no `view/close` between (a buffer killed without its hook, an
   Emacs restarted on the same connection), and start over: the rows go out whole, a reset from version 1.
   `rows_in_sja: true` says the editor holds the view's rows in Sjá, where they are drawn: the patches then go out on the
-  raw `view-model` line as `{view, rows: PATCH}` (the patch whole), which Sjá's push takes without Lisp reading it; so
-  far only a terminal's view (`term:<id>`) reads it. `view/resync {view, class, version}` answers a reset (with `model: true`, a reset
+  raw `view-model` line as `{view, rows: PATCH}` (the patch whole), which Sjá's push takes without Lisp reading it, for
+  every view (a terminal's view, `term:<id>`, says it on `term/open` and `term/attach`); the env of the pair decides
+  each patch, so an env without it puts the pair back on `view-patch` events. `view/resync {view, class, version}` answers a reset (with `model: true`, a reset
   of the view's model: below). `view/glyphs {view, class,
   glyphs: [[role, char, px]]}` answers the event `view-glyphs {view, class, ask: [[role, char]]}`. `view/measured
   {view, class, measured: [[role, string, px]]}` is the editor's fit guard's report. `view/ack {view, class,
