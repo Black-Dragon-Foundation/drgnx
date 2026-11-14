@@ -108,14 +108,11 @@ jobs:
     # come out empty ("Unexpected value ''") before any step runs, so the fallback names none.
     # --init: a real PID 1 that reaps orphans: draugr's reap tests check a killed group is gone, and an unreaped zombie
     # still answers kill(-pgid, 0) (the same reason ctr.sh runs podman with --init)
-    # --security-opt seccomp=unconfined: Docker's default profile refuses unshare(2) (EPERM) without CAP_SYS_ADMIN, and
-    # drgnx-exe writes the files the hub runs on a thread with its own file table (unshare(CLONE_FILES)); podman's
-    # default profile, which the local checks use, allows it
     container: >-
       ${{ needs.images.outputs.rust
-      && fromJSON(format('{{"image":"{0}","options":"--init --security-opt seccomp=unconfined","credentials":{{"username":"{1}","password":"{2}"}}}}',
+      && fromJSON(format('{{"image":"{0}","options":"--init","credentials":{{"username":"{1}","password":"{2}"}}}}',
       needs.images.outputs.rust, github.actor, github.token))
-      || fromJSON('{"image":"registry.fedoraproject.org/fedora:45","options":"--init --security-opt seccomp=unconfined"}') }}
+      || fromJSON('{"image":"registry.fedoraproject.org/fedora:45","options":"--init"}') }}
     timeout-minutes: 45
     defaults:
       run:
