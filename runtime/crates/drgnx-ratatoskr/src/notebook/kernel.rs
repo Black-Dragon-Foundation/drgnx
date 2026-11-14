@@ -99,6 +99,20 @@ pub enum KernelEvent {
     Exited(Exit),
 }
 
+/// A kernel is refused in a sealed session (design §5.6): it runs the user's code unconfined, as a program run from a terminal does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Refusal(pub &'static str);
+
+/// Refuse to start a kernel for a session whose launch is enforced by a sandbox.
+pub fn refuse_when_sealed(plan: &crate::agents::lock::LaunchPlan) -> Result<(), Refusal> {
+    match plan.enforced {
+        crate::agents::lock::Enforced::Yes => Err(Refusal(
+            "a notebook kernel runs unconfined and is not started in a sealed session",
+        )),
+        crate::agents::lock::Enforced::No(_) => Ok(()),
+    }
+}
+
 pub struct Kernel {
     pub name: String,
     session: Session,

@@ -349,3 +349,32 @@ async fn a_kernel_that_floods_the_hub_is_killed() {
     };
     let _ = key;
 }
+
+fn plan(enforced: crate::agents::lock::Enforced) -> crate::agents::lock::LaunchPlan {
+    crate::agents::lock::LaunchPlan {
+        argv: vec![],
+        env: vec![],
+        session_meta: None,
+        protected_ro: vec![],
+        login_dir: None,
+        enforced,
+        gateway: false,
+        trace: None,
+        ro_files: vec![],
+        gateway_url_env: vec![],
+    }
+}
+
+#[test]
+fn a_sealed_session_refuses_a_kernel_and_an_ordinary_one_does_not() {
+    use crate::agents::lock::Enforced;
+    let r = refuse_when_sealed(&plan(Enforced::Yes)).unwrap_err();
+    assert_eq!(
+        r.0,
+        "a notebook kernel runs unconfined and is not started in a sealed session"
+    );
+    assert_eq!(
+        refuse_when_sealed(&plan(Enforced::No("an ordinary session"))),
+        Ok(())
+    );
+}
