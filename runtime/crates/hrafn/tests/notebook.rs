@@ -398,3 +398,26 @@ fn notebook_chunks_and_their_vector_keys_stay_as_designed() {
     }
     assert_eq!(std::fs::read_to_string(&path).unwrap(), out);
 }
+
+#[test]
+fn a_cells_outputs_are_read_back_as_the_file_has_them_and_as_they_were_set() {
+    let nb = parse("with-code.ipynb");
+    assert!(nb.outputs(1).is_empty(), "a cell with `outputs: []`");
+    assert!(nb.outputs(0).is_empty(), "a markdown cell has none");
+
+    let mut nb = parse("minimal.ipynb");
+    let set = vec![
+        serde_json::json!({"output_type": "stream", "name": "stdout", "text": ["hi\n"]}),
+        serde_json::json!({"output_type": "error", "ename": "E", "evalue": "v", "traceback": []}),
+    ];
+    nb.set_outputs(2, &set);
+    assert_eq!(nb.outputs(2), set, "as set, before the file is written");
+    // and from the file that was written
+    let again = Notebook::parse(nb.render(), &mut ids("n")).unwrap();
+    assert_eq!(again.outputs(2), set);
+    assert_eq!(
+        again.outputs(1),
+        parse("minimal.ipynb").outputs(1),
+        "the other cells are as the file had them"
+    );
+}

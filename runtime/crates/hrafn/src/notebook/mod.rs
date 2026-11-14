@@ -499,6 +499,15 @@ impl Notebook {
         }
     }
 
+    /// Cell I's outputs as nbformat output objects: as the file has them, or as `set_outputs` set them (none for a cell without).
+    pub fn outputs(&self, i: usize) -> Vec<Value> {
+        self.pairs_of(i)
+            .into_iter()
+            .find(|(k, _)| k == "outputs")
+            .and_then(|(_, v)| serde_json::from_str(&v).ok())
+            .unwrap_or_default()
+    }
+
     /// Cell I's execution count.
     pub fn set_execution_count(&mut self, i: usize, n: Option<i64>) {
         self.cells[i].execution_count = n;
