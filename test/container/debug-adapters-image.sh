@@ -12,6 +12,13 @@ dnf -y install python3 python3-pip golang nodejs lldb clang gdb curl unzip strac
 printf 'debugpy==1.8.22 --hash=sha256:a9e9d3550e15ca479c59333e90845029190531f0cacfedab3b815a57bd913947\n' > /tmp/req.txt \
     && python3 -m pip install --no-cache-dir --require-hashes -r /tmp/req.txt && rm /tmp/req.txt
 
+# ipykernel for the live notebook rows (drgnx-ratatoskr's notebook::kernel::tests_live): a venv at /opt/nb-kernel from the hash-pinned
+# set next to this script (every file checked, the set is complete: --no-deps), the python the rows read as DRGNX_NB_KERNEL_PYTHON.
+# .github/ci/notebook-kernel.sh makes the same venv on a runner. The import check shows a gap in the set here, not in a test.
+python3 -m venv /opt/nb-kernel \
+    && /opt/nb-kernel/bin/pip install --no-cache-dir --require-hashes --no-deps -r "$(dirname "$0")/ipykernel-requirements.txt" \
+    && /opt/nb-kernel/bin/python3 -c 'import ipykernel, ipykernel_launcher; print("ipykernel", ipykernel.__version__)'
+
 # delve (TCP adapter: dlv dap --listen=127.0.0.1:PORT): the module and every dependency are checked against the Go
 # checksum database (its h1: hashes are SHA-256 of the module trees); delve v1.27.2 is
 # h1:dhcjFjiVoQI53uwsG7EqYiMhdvFuywsBZx4KDOK+sYE=.
