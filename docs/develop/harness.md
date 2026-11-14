@@ -581,8 +581,10 @@ How it works:
   for the Explorer's Files rows, which come from the hub: without it the section is empty. It goes back to the
   editor layout first, because a Work scene before it leaves the Work layout.
   Once the scenes' hub runs, every step's answer checks the hub-fed views that a window of the frame shows, after a
-  redisplay like the shot's. It reports an error, naming the view, the classes its env went out for and the version
-  of the rows it applied, in two cases:
+  redisplay like the shot's. It first waits (20 s at most, `drgnx-look-scene-rows-wait`) for their rows, as the user
+  does: a view the step has just shown, or whose display class the step changed (a font or scale change pairs the
+  buffer anew, empty until the hub's reset), is drawn a round trip later. Then it reports an error, naming the view,
+  the classes its env went out for and the version of the rows it applied, in two cases:
   - its env never reached the hub;
   - it has no applied version and an empty buffer.
   The first case also catches a view that Lisp partly draws, such as the agent panel.

@@ -7,6 +7,8 @@
 (require 'drgnx)
 (require 'drgnx-look-scenes (expand-file-name "harness/drgnx-look-scenes" drgnx-dir))
 (load (expand-file-name "harness/drgnx-look-scenes-session" drgnx-dir) nil t)
+(defvar drgnx-look-scene-rows-wait)
+(require 'drgnx-view)
 
 (ert-deftest drgnx-look-scenes/one-scene-per-mockup ()
   "Every mockup the look was approved on has a scene of the same name, and every scene has its setup function."
@@ -87,3 +89,46 @@ words of its line pairs: `when' against `if', the faces `diff-refine-removed' an
           (should (string-search "NameError" (overlay-get (plist-get (drgnx-notebook--chrome-of "c3") :tail) 'after-string)))
           (should (equal (buffer-name) "cache-experiments.ipynb")))
       (kill-buffer buffer))))
+
+(defun drgnx-look-scenes-test--shown-view (view then)
+  "A hub-fed VIEW shown in the selected window, its env sent and no rows yet; THEN called with its state, with
+`accept-process-output' standing for the hub's wait (it returns nil)."
+  (let ((b (generate-new-buffer " *look-scenes unfed*")) (w (selected-window)) (was (window-buffer (selected-window))))
+    (unwind-protect
+        (progn
+          (with-current-buffer b (drgnx-view-patch-attach view "c"))
+          (set-window-buffer w b)
+          (funcall then (buffer-local-value 'drgnx-view-patch b)))
+      (set-window-buffer w was)
+      (kill-buffer b))))
+
+(ert-deftest drgnx-look-scenes/a-view-a-step-shows-is-waited-for-until-its-rows-come ()
+  "A view a step's command has just shown (a class change re-pairs it, so it is empty until the hub's reset) is not
+an error while the hub's rows are on their way: the step waits for them, as the user does, then answers."
+  (drgnx-look-scenes-test--shown-view
+   "unfed-test"
+   (lambda (state)
+     (let ((drgnx-look-scene--errors nil) (waits 0))
+       (cl-letf (((symbol-function 'drgnx-hub-running-p) (lambda () t))
+                 ((symbol-function 'drgnx-view-env-classes) (lambda (_) '("c")))
+                 ((symbol-function 'redisplay) #'ignore)
+                 ;; the hub's rows come during the second wait
+                 ((symbol-function 'accept-process-output)
+                  (lambda (&rest _) (when (= 2 (cl-incf waits)) (setf (drgnx-view-patch-version state) 1)) nil)))
+         (drgnx-look-scene--unfed))
+       (should (= 2 waits))
+       (should-not drgnx-look-scene--errors)))))
+
+(ert-deftest drgnx-look-scenes/a-view-whose-rows-never-come-is-an-error ()
+  "A shown view the hub sends no rows for is still the step's error, naming the view, once the wait is over."
+  (drgnx-look-scenes-test--shown-view
+   "unfed-test"
+   (lambda (_state)
+     (let ((drgnx-look-scene--errors nil) (drgnx-look-scene-rows-wait 0))
+       (cl-letf (((symbol-function 'drgnx-hub-running-p) (lambda () t))
+                 ((symbol-function 'drgnx-view-env-classes) (lambda (_) '("c")))
+                 ((symbol-function 'redisplay) #'ignore)
+                 ((symbol-function 'accept-process-output) #'ignore))
+         (drgnx-look-scene--unfed))
+       (should (= 1 (length drgnx-look-scene--errors)))
+       (should (string-match-p "\\`unfed-test: shown in .* with no rows from the hub" (car drgnx-look-scene--errors)))))))
