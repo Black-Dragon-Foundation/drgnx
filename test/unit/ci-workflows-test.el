@@ -536,8 +536,29 @@ Returns (EXIT . OUTPUT), the output both streams' or, with STDOUT-ONLY, stdout's
       (should (string-search "DRGNX_NB_KERNEL_PYTHON: /opt/nb-kernel/bin/python3" live))
       (should (string-search "test/container/debug-adapters-image.sh" live)))
     (should (string-match-p "ENV DRGNX_NB_KERNEL_PYTHON=/opt/nb-kernel/bin/python3" image))
-    (should (string-match-p "COPY debug-adapters-image.sh ipykernel-requirements.txt" image))
-    (should (string-search "python3.15 -m venv /opt/nb-kernel" script))))
+    (should (string-search "bash \"$(dirname \"$0\")/nb-kernel.sh\"" script))))
+
+;; The kernel is installed by one step, nb-kernel.sh, in both images that have it: the adapter image (through its script)
+;; and the GUI test image, which the notebook scenes run in (the Nidhogg line's GUI images are built on it). Each image
+;; copies the step and the pinned set, runs it at build and names the venv's python; the step alone makes the venv.
+(ert-deftest drgnx-ci/the-adapter-and-gui-images-get-the-kernel-from-one-step ()
+  (let ((step (drgnx-ci-test--file "test/container/nb-kernel.sh"))
+        (debug (drgnx-ci-test--file "test/container/Containerfile.debug"))
+        (gui (drgnx-ci-test--file "test/container/Containerfile.gui"))
+        (script (drgnx-ci-test--file "test/container/debug-adapters-image.sh")))
+    (skip-unless (and debug gui script))
+    (should step)
+    (should (string-search "python3.15 -m venv /opt/nb-kernel" step))
+    (should (string-search "--require-hashes --no-deps -r \"$(dirname \"$0\")/ipykernel-requirements.txt\"" step))
+    (should (string-search "import ipykernel, ipykernel_launcher" step))
+    (dolist (f (list script debug gui))   ; nobody else makes the venv: a copy of the step would drift
+      (should-not (string-search "-m venv" f)))
+    (should (string-search "bash \"$(dirname \"$0\")/nb-kernel.sh\"" script))
+    (should (string-match-p "^COPY debug-adapters-image.sh nb-kernel.sh ipykernel-requirements.txt /tmp/$" debug))
+    (should (string-match-p "^COPY nb-kernel.sh ipykernel-requirements.txt /tmp/nb-kernel/$" gui))
+    (should (string-match-p "^RUN bash /tmp/nb-kernel/nb-kernel.sh" gui))
+    (dolist (f (list debug gui))
+      (should (string-match-p "^ENV DRGNX_NB_KERNEL_PYTHON=/opt/nb-kernel/bin/python3$" f)))))
 
 (ert-deftest drgnx-ci/the-offline-build-row-runs-where-a-network-namespace-can-be-made ()
   ;; ghostty-vt-sys's builds_offline needs unshare(2): the Fedora job's Docker container refuses it, so its test says so
