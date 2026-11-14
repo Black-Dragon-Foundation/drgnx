@@ -38,7 +38,8 @@ curl -sSfL -o /tmp/codelldb.vsix https://github.com/vadimcn/codelldb/releases/do
 # tarball of Microsoft's release 10.0.15 (SDK 10.0.404), checked against the SHA-512 its release metadata publishes
 # (https://builds.dotnet.microsoft.com/dotnet/release-metadata/10.0/releases.json). Offline builds need no NuGet feed:
 # the test program has no package references. CSharpier 1.4.0 (the formatter the csharp pack names) is installed as a
-# .NET tool from its release's .nupkg, checked against GitHub's published SHA-256.
+# .NET tool from its release's .nupkg, checked against GitHub's published SHA-256, and installed from an isolated NuGet config that lists only that folder (nuget.org
+# is cleared), so the file checked is the file installed.
 curl -sSfL -o /tmp/dotnet-sdk.tar.gz https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.404/dotnet-sdk-10.0.404-linux-x64.tar.gz \
     && echo "577d0eb17fec33d029104c5c63a1ab0accc3e28776274abef2218dbac5af18d2109b5406d26b31d76f5c245215e3ba0926a94c20246c672c41847c9e1eb1dc50  /tmp/dotnet-sdk.tar.gz" | sha512sum -c - \
     && mkdir -p /opt/dotnet && tar -xzf /tmp/dotnet-sdk.tar.gz -C /opt/dotnet && rm /tmp/dotnet-sdk.tar.gz \
@@ -47,7 +48,8 @@ curl -sSfL -o /tmp/dotnet-sdk.tar.gz https://builds.dotnet.microsoft.com/dotnet/
 mkdir -p /tmp/csharpier-src \
     && curl -sSfL -o /tmp/csharpier-src/csharpier.1.4.0.nupkg https://github.com/belav/csharpier/releases/download/1.4.0/csharpier.1.4.0.nupkg \
     && echo "94295564b831e4c83e4a80bb044cb7c66fd3ab451df973c32c69d361eafd206c  /tmp/csharpier-src/csharpier.1.4.0.nupkg" | sha256sum -c - \
+    && printf '<?xml version="1.0" encoding="utf-8"?>\n<configuration><packageSources><clear /><add key="local" value="/tmp/csharpier-src" /></packageSources></configuration>\n' > /tmp/csharpier-src/nuget.config \
     && DOTNET_ROOT=/opt/dotnet DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 dotnet tool install csharpier --tool-path /opt/csharpier \
-        --add-source /tmp/csharpier-src --version 1.4.0 \
+        --configfile /tmp/csharpier-src/nuget.config --version 1.4.0 \
     && ln -s /opt/csharpier/csharpier /usr/local/bin/csharpier && rm -r /tmp/csharpier-src \
     && DOTNET_ROOT=/opt/dotnet csharpier --version

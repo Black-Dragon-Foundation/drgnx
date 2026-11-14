@@ -62,11 +62,26 @@ fn csharp_symbols_types_members_and_namespaces() {
 
 #[test]
 fn csharp_references_are_calls_constructions_and_bases() {
-    let text = "class B : Base, IFoo<int> {\n  void F() {\n    Bee(1);\n    obj.Cee();\n    Dee<int>(3);\n    var e = new Eff(2);\n    var g = new Gen<int>();\n  }\n}\n";
+    let text = "class B : Base, IFoo<int>, System.IDisposable, System.IEquatable<B> {\n  void F() {\n    Bee(1);\n    obj.Cee();\n    Dee<int>(3);\n    var e = new Eff(2);\n    var g = new Gen<int>();\n    var s = new System.Text.StringBuilder();\n    var l = new System.Collections.Generic.List<int>();\n  }\n}\n";
     let (_, _, refs) = chunk_file_refs("a.cs", Lang::Csharp, false, text, BUDGET);
     let mut names: Vec<&str> = refs.iter().map(|r| r.name.as_str()).collect();
     names.sort();
-    assert_eq!(names, ["Base", "Bee", "Cee", "Dee", "Eff", "Gen", "IFoo"]);
+    assert_eq!(
+        names,
+        [
+            "Base",
+            "Bee",
+            "Cee",
+            "Dee",
+            "Eff",
+            "Gen",
+            "IDisposable",
+            "IEquatable",
+            "IFoo",
+            "List",
+            "StringBuilder"
+        ]
+    );
 }
 
 #[test]

@@ -5,5 +5,9 @@
 (invocation_expression function: (member_access_expression name: (generic_name (identifier) @name))) @reference.call
 (object_creation_expression type: (identifier) @name) @reference.class
 (object_creation_expression type: (generic_name (identifier) @name)) @reference.class
+(object_creation_expression type: (qualified_name name: (identifier) @name)) @reference.class
+(object_creation_expression type: (qualified_name name: (generic_name (identifier) @name))) @reference.class
 (base_list (identifier) @name) @reference.class
 (base_list (generic_name (identifier) @name)) @reference.class
+(base_list (qualified_name name: (identifier) @name)) @reference.class
+(base_list (qualified_name name: (generic_name (identifier) @name))) @reference.class

@@ -2097,6 +2097,12 @@ async fn csharp_breaks_steps_and_inspects_through_netcoredbg() {
         }
         crate::clock::sleep(Duration::from_millis(20)).await;
     }
+    // the program ended on its own: asserted before the Stop below, which would end any session
+    assert!(
+        d.list().is_empty(),
+        "the session did not end when the program did: {:?}",
+        d.list()
+    );
     d.control(
         &sid_root,
         Op::Stop {
