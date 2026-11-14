@@ -140,25 +140,37 @@ fn write_in(mode: Mode, path: &Path, contents: &[u8]) -> std::io::Result<()> {
             .open(path)?;
         f.write_all(contents)
     })?;
+    made?;
     if mode == Mode::Lock {
-        wait_unshared(path);
+        wait_unshared(path)?;
     }
-    made
+    Ok(())
 }
 
 /// Until no process holds PATH open for writing (at most a few seconds): the copies of a descriptor of ours that
 /// a fork made on another thread keeps until its own `exec`.  Our own is closed by now, so nothing new can take one;
 /// the lock keeps out the forks that go through [`spawn`], this waits out the rest (the forks of any other code).
-fn wait_unshared(path: &Path) {
+fn wait_unshared(path: &Path) -> std::io::Result<()> {
+    wait_unshared_within(path, std::time::Duration::from_secs(5))
+}
+
+fn wait_unshared_within(path: &Path, within: std::time::Duration) -> std::io::Result<()> {
     use std::os::unix::fs::MetadataExt;
-    let Ok(m) = std::fs::metadata(path) else {
-        return;
+    let id = {
+        let m = std::fs::metadata(path)?;
+        (m.dev(), m.ino())
     };
-    let id = (m.dev(), m.ino());
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while held_for_writing(id) && std::time::Instant::now() < deadline {
+    let deadline = std::time::Instant::now() + within;
+    while held_for_writing(id) {
+        if std::time::Instant::now() >= deadline {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("{}: still open for writing in another process after {within:?}", path.display()),
+            ));
+        }
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
+    Ok(())
 }
 
 /// Whether some process holds the file ID (device, inode) open with write access: `/proc/PID/fd/N` naming it, and
@@ -208,10 +220,11 @@ pub fn copy(from: &Path, to: &Path) -> std::io::Result<u64> {
 
 fn copy_in(mode: Mode, from: &Path, to: &Path) -> std::io::Result<u64> {
     let made = private_fds_in(mode, || std::fs::copy(from, to))?;
+    let n = made?;
     if mode == Mode::Lock {
-        wait_unshared(to);
+        wait_unshared(to)?;
     }
-    made
+    Ok(n)
 }
 
 // Linux's: elsewhere nothing here differs from std
@@ -361,6 +374,30 @@ mod tests {
             std::process::Command::new(&p).status().unwrap().success(),
             "busy after the wait"
         );
+    }
+
+    /// A descriptor that stays open past the wait is an error naming the file, never a silent pass.
+    #[test]
+    fn a_file_still_held_after_the_wait_is_an_error_naming_it() {
+        use std::io::{BufRead, Write};
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("held.sh");
+        write_in(Mode::Direct, &p, b"#!/bin/sh\nexit 0\n").unwrap();
+        let mut holder = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("exec 3>>\"$0\"; echo held; read go")
+            .arg(&p)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut line = String::new();
+        std::io::BufReader::new(holder.stdout.take().unwrap()).read_line(&mut line).unwrap();
+        let e = wait_unshared_within(&p, std::time::Duration::from_millis(30)).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::TimedOut);
+        assert!(e.to_string().contains("held.sh"), "{e}");
+        writeln!(holder.stdin.take().unwrap(), "go").unwrap();
+        holder.wait().unwrap();
     }
 
     /// The probe agrees with what `unshare` does on this machine, and only a refusal ever gives the lock.
