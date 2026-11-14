@@ -85,6 +85,10 @@ status, no kernel), forgets the tails' versions (the new hub counts from the sta
 are at the time the answer arrives and puts the tails the open returned. The buffer's text is never replaced, so unsaved edits stay and
 are the hub's after the sync. An open the hub refuses leaves the buffer and its id as they are, with a message.
 
+An open that got no answer because there was no hub, or it went away first (the error is this side's string; a refusal is the hub's
+plist, asked for with `:full`), leaves the buffer a read-only notebook buffer holding the file's text, marked `drgnx-notebook--retry`;
+the same hook asks that open again, with the text, at the next connect. Only a refusal turns the buffer into plain text.
+
 ## The hub's notebooks and kernels
 
 `notebook/*` (the table in `hub.md`) is the editor's door; every method is the user's (an agent cannot start a kernel), and a kernel is

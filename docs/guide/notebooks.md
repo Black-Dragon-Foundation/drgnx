@@ -54,7 +54,7 @@ is open; a file that is not a notebook opens as text.
 
 If the hub restarts, every open notebook is opened again on the new hub by its file and given your cells, so unsaved edits stay
 in the buffer and the next save writes them. The kernel is gone with the old hub: it starts again on the next run, and the
-buffer shows no kernel until then. Outputs come back from the file.
+buffer shows no kernel until then. Outputs come back from the file. A notebook opened while no hub was there waits, read-only, and opens when the hub is up.
 
 ## Syntax colours and pictures
 

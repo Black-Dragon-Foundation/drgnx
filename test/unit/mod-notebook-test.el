@@ -31,7 +31,7 @@
   (declare (indent 0))
   `(drgnx-test-with-modules '(lang/notebook) :strict nb-test--strict
                             (let ((nb-test--calls nil) (nb-test--answers nil))
-                              (cl-letf (((symbol-function 'drgnx-notebook--call) (lambda (m p cb) (nb-test--hub m p cb)))
+                              (cl-letf (((symbol-function 'drgnx-notebook--call) (lambda (m p cb &optional _full) (nb-test--hub m p cb)))
                                         ((symbol-function 'drgnx-notebook--call-sync) (lambda (m p &optional _t) (nb-test--hub m p))))
                                 (let ((buf (generate-new-buffer "*nb-test*"))) ; not with-temp-buffer: it runs no buffer hooks
                                   (unwind-protect
@@ -274,7 +274,8 @@
 
 (ert-deftest drgnx-notebook/a-hub-that-says-no-leaves-the-file-as-text ()
   (drgnx-test-with-modules '(lang/notebook) :strict t
-                           (cl-letf (((symbol-function 'drgnx-notebook--call) (lambda (_m _p cb) (funcall cb nil "not a notebook"))))
+                           (cl-letf (((symbol-function 'drgnx-notebook--call) (lambda (_m _p cb &optional _full)
+                                                                                (funcall cb nil '(:code "refused" :message "not a notebook")))))
                              (with-temp-buffer
                                (setq buffer-file-name "/tmp/not-a-notebook.ipynb")
                                (insert "{}")
@@ -573,3 +574,35 @@
 (ert-deftest drgnx-notebook/the-reconnect-hook-is-the-modules ()
   (nb-test--with
     (should (memq #'drgnx-notebook--reconnect-all drgnx-hub-connected-functions))))
+
+(ert-deftest drgnx-notebook/an-open-the-dying-hub-never-answered-is-asked-again-at-the-next-connect ()
+  (drgnx-test-with-modules '(lang/notebook) :strict t
+                           (let ((calls nil) (hub-up nil) (buffer (generate-new-buffer "*nb-pending*")))
+                             (cl-letf (((symbol-function 'drgnx-notebook--call)
+                                        (lambda (m p cb &optional _full)
+                                          (push (cons m p) calls)
+                                          (if hub-up (funcall cb nb-test--opened nil) (funcall cb nil "the connection closed")))))
+                               (unwind-protect
+                                   (with-current-buffer buffer
+                                     (setq buffer-file-name "/nonexistent/pending.ipynb")
+                                     (insert "{\"cells\": []}")
+                                     (drgnx-notebook-mode)
+                                     ;; the hub went away before it answered: still a notebook buffer, still the file's text, waiting
+                                     (should (eq major-mode 'drgnx-notebook-mode))
+                                     (should buffer-read-only)
+                                     (should (equal (buffer-string) "{\"cells\": []}"))
+                                     (should-not drgnx-notebook--id)
+                                     (setq hub-up t)
+                                     (drgnx-notebook--reconnect-all)
+                                     (should (equal (plist-get (cdr (car calls)) :text) "{\"cells\": []}"))
+                                     (should (equal drgnx-notebook--id "nb1"))
+                                     (should-not buffer-read-only)
+                                     (should (equal (nb-test--ids) '("a" "b" "c")))
+                                     ;; opened now: the next connect takes the reconnect path, not another first open
+                                     (setq calls nil)
+                                     (drgnx-notebook--reconnect-all)
+                                     (should (equal (mapcar #'car (reverse calls)) '("notebook/open" "notebook/sync")))
+                                     (should-not (plist-member (cdr (car (reverse calls))) :text)))
+                                 (with-current-buffer buffer (set-buffer-modified-p nil) (setq buffer-file-name nil))
+                                 (kill-buffer buffer)
+                                 (clrhash drgnx-notebook--buffers))))))

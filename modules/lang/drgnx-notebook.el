@@ -89,6 +89,8 @@
   "ID → the hub's head of the cell (:text :state :runs), from its last tail: the header strip after the button.")
 (defvar-local drgnx-notebook--selected-id nil "The selected cell's id: its output is tinted selected and has the add-cell row.")
 (defvar-local drgnx-notebook--queue 0 "How many cells wait for the kernel, as the hub last said.")
+(defvar-local drgnx-notebook--retry nil "Non-nil when the first open got no answer (no hub, or it went away): asked again at the next
+connect.")
 (defvar-local drgnx-notebook--state "idle" "The kernel's state as the hub last said: idle, busy, starting, dead.")
 (defvar-local drgnx-notebook--running nil "The cell the kernel runs now, or nil.")
 (defvar-local drgnx-notebook--selected nil "The overlay that tints the selected cell.")
@@ -110,10 +112,11 @@
 
 ;;;; The hub
 
-(defun drgnx-notebook--call (method params callback)
+(defun drgnx-notebook--call (method params callback &optional full)
   "Ask the hub METHOD with PARAMS; CALLBACK gets (RESULT ERROR).  The one place the notebook buffer reaches the hub.
-No hub to ask is an error for the callback, not for the caller (an open buffer must not fail because the hub is down)."
-  (condition-case err (drgnx-hub-call method params callback)
+No hub to ask is an error for the callback, not for the caller (an open buffer must not fail because the hub is down).
+With FULL the hub's own error is a plist (:code :message), so it can be told from this side's, a string."
+  (condition-case err (drgnx-hub-call method params callback :full full)
     (error (funcall callback nil (error-message-string err)) nil)))
 
 (defun drgnx-notebook--call-sync (method params &optional timeout)
@@ -636,19 +639,25 @@ come with their tails."
     (drgnx-notebook--select-at (point))))
 
 (defun drgnx-notebook--begin-open ()
-  "Ask the hub to open the file this buffer visited; the text is its JSON until the answer comes."
+  "Ask the hub to open the file this buffer visited; the text is its JSON until the answer comes.  An answer that never
+comes (no hub, or it went away) leaves the buffer waiting: `drgnx-notebook--reconnect-all' asks again at the next
+connect.  Only the hub's own refusal makes the file text."
   (when (and buffer-file-name (null drgnx-notebook--id))
     (let ((buffer (current-buffer)) (text (buffer-substring-no-properties (point-min) (point-max))))
-      (setq buffer-read-only t)
+      (setq buffer-read-only t drgnx-notebook--retry nil)
       (drgnx-notebook--call "notebook/open" (list :path (expand-file-name buffer-file-name) :text text)
                             (lambda (r e)
                               (when (buffer-live-p buffer)
                                 (with-current-buffer buffer
-                                  (if (or e (null r))
-                                      (progn (setq buffer-read-only nil)
-                                             (message "drgnx: %s is not opened as a notebook: %s" buffer-file-name (or e "no answer"))
-                                             (fundamental-mode))
-                                    (drgnx-notebook--install r)))))))))
+                                  (cond ((and (null e) r) (drgnx-notebook--install r))
+                                        ((stringp e)
+                                         (setq drgnx-notebook--retry t)
+                                         (message "drgnx notebook: %s waits for the hub: %s" buffer-file-name e))
+                                        (t (setq buffer-read-only nil)
+                                           (message "drgnx: %s is not opened as a notebook: %s" buffer-file-name
+                                                    (or (and (consp e) (plist-get e :message)) "no answer"))
+                                           (fundamental-mode))))))
+                            t))))
 
 (defun drgnx-notebook--reopened (result)
   "The new hub's RESULT of `notebook/open' for this buffer's file: take its id, forget what belonged to the old hub (the
@@ -685,7 +694,9 @@ the buffer's cells.  A refusal leaves the buffer as it is; nothing in it is lost
 (defun drgnx-notebook--reconnect-all ()
   "`drgnx-hub-connected-functions': every open notebook goes to the hub that came up."
   (dolist (b (buffer-list))
-    (with-current-buffer b (when (derived-mode-p 'drgnx-notebook-mode) (drgnx-notebook--reconnect)))))
+    (with-current-buffer b
+      (when (derived-mode-p 'drgnx-notebook-mode)
+        (if drgnx-notebook--retry (drgnx-notebook--begin-open) (drgnx-notebook--reconnect))))))
 
 (defun drgnx-notebook--write ()
   "`write-contents-functions': the hub writes the file (the cells' text goes along); the buffer is not written as text."
