@@ -268,6 +268,7 @@ fn every_grammar_finds_the_function_and_its_names() {
 
 /// A fetched pack's file shows the same values a built-in language's does: its grammar is in a worker, which walks the
 /// tree, and the rest (matching the frame's variables, the lines) is the hub's, the same code.
+#[cfg(feature = "test-hooks")]
 #[test]
 fn a_fetched_packs_function_shows_its_values_through_its_worker() {
     let _pack = crate::parse_worker::fixture::install_csharp("csharpx", "xcs");

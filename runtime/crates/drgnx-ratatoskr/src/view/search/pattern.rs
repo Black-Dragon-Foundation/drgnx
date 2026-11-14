@@ -190,6 +190,7 @@ mod tests {
     }
 
     /// A fetched pack's files are searched by its worker, and its refusal of a pattern is said.
+    #[cfg(feature = "test-hooks")]
     #[test]
     fn a_fetched_packs_files_are_searched_through_its_worker() {
         let _pack = crate::parse_worker::fixture::install_csharp("csharpx", "xcs");
