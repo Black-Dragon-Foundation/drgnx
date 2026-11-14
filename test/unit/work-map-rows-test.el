@@ -467,3 +467,16 @@ asks the hub nothing and its keys say the same."
                           (number-sequence 0 (1- (length s))))))
     (should spacer)
     (should (equal (list (drgnx-px 70)) (nth 2 (plist-get (cdr spacer) :align-to))))))
+
+(ert-deftest drgnx-work-map-rows/a-trail-step-number-is-a-filled-accent-circle ()
+  "The trail's step number (`drgnx-work-step-number') resolves, under the dark theme, to the accent's fill and its text colour."
+  (load-theme 'drgnx-dark t)
+  (unwind-protect
+      (progn
+        (should (facep 'drgnx-work-step-number))
+        (should (equal (face-attribute 'drgnx-work-step-number :background nil t)
+                       (face-attribute 'drgnx-chip-solid :background nil t)))
+        (should (stringp (face-attribute 'drgnx-work-step-number :background nil t)))
+        (should (equal (face-attribute 'drgnx-work-step-number :foreground nil t)
+                       (face-attribute 'drgnx-chip-solid :foreground nil t))))
+    (disable-theme 'drgnx-dark)))

@@ -27,6 +27,9 @@
 own background, never a ring in the text colour), radius 4 where the compositor rounds." :group 'drgnx-decor)
 (defface drgnx-badge '((t :inherit (drgnx-ui-caption drgnx-chip-accent) :box (:line-width (1 . 2) :style flat-button)))
   "A pill: an accent chip with the largest radius." :group 'drgnx-decor)
+(defface drgnx-chip-solid '((t :inherit highlight))
+  "A chip on the accent's solid fill with its text colour (the theme sets the colours): a trail step's number."
+  :group 'drgnx-decor)
 (defface drgnx-button '((t :inherit (drgnx-ui-text drgnx-control)))
   "A clickable text button: the look's control (`drgnx-control', its fill and hairline)." :group 'drgnx-decor)
 (defface drgnx-button-hover '((t :inherit (highlight drgnx-ui-text drgnx-control)))
