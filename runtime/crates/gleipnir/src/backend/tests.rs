@@ -83,6 +83,7 @@ impl Fx {
             tmp: (!full).then(|| self.p("t")),
             layers: Layers::for_target(target),
             extra_tcp_ports: vec![],
+            rlimits: None,
             trace: Default::default(),
             browser: None,
         };

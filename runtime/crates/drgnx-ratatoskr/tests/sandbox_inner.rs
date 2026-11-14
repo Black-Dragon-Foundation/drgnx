@@ -711,6 +711,7 @@ fn a_reduced_run_end_to_end() {
         tmp: Some(root.join("t")),
         layers: Layers::for_target(Target::LinuxReduced),
         extra_tcp_ports: vec![],
+        rlimits: None,
         trace: Default::default(),
         browser: None,
     };
@@ -981,4 +982,144 @@ fn a_browser_child_is_layered_before_it_runs() {
         "control: the agent reaches hub.sock"
     );
     assert!(!dir.path().join("agent-file").exists());
+}
+
+/// What the helper puts on its program: `RLIMIT_CORE` 0 and each cap named, soft and hard alike.
+fn caps(dir: &Path, r: gleipnir::Rlimits) -> InnerSpec {
+    let mut s = spec(dir);
+    s.rlimits = Some(r);
+    s
+}
+
+#[test]
+fn rlimits_are_set_before_the_exec_soft_and_hard() {
+    if !landlock_here("rlimits_are_set_before_the_exec_soft_and_hard") {
+        return;
+    }
+    let dir = fixture();
+    let s = caps(
+        dir.path(),
+        gleipnir::Rlimits {
+            address_space: Some(256 << 20),
+            data: Some(128 << 20),
+            cpu_seconds: Some(30),
+            open_files: Some(64),
+        },
+    );
+    let o = run(
+        &s,
+        &[
+            "/bin/sh",
+            "-c",
+            "for o in c v d t n; do echo $o $(ulimit -S$o) $(ulimit -H$o); done",
+        ],
+        Opts::default(),
+    );
+    assert_eq!(o.code, Some(0), "{}", o.stderr);
+    // ulimit -v and -d are in KiB
+    assert_eq!(
+        o.stdout, "c 0 0\nv 262144 262144\nd 131072 131072\nt 30 30\nn 64 64\n",
+        "{}",
+        o.stderr
+    );
+    // with a field left out, no cap of that kind (the host's own, and not the cap's)
+    let s = caps(
+        dir.path(),
+        gleipnir::Rlimits {
+            cpu_seconds: Some(30),
+            ..Default::default()
+        },
+    );
+    let o = run(
+        &s,
+        &[
+            "/bin/sh",
+            "-c",
+            "echo $(ulimit -Sc) $(ulimit -St) $(ulimit -Sv)",
+        ],
+        Opts::default(),
+    );
+    assert_eq!(o.code, Some(0), "{}", o.stderr);
+    let words: Vec<&str> = o.stdout.split_whitespace().collect();
+    assert_eq!(&words[..2], ["0", "30"], "{}", o.stdout);
+    assert_ne!(words[2], "128", "no address-space cap was named");
+}
+
+/// 300 MB held by `tail` is fine without a cap and stopped (an allocation failure, `tail` fails) under a 128 MiB cap.
+#[test]
+fn a_program_over_its_address_space_cap_is_stopped() {
+    if !landlock_here("a_program_over_its_address_space_cap_is_stopped") {
+        return;
+    }
+    let hog = [
+        "/bin/sh",
+        "-c",
+        "head -c 300000000 /dev/zero | tail -c 300000000 >/dev/null",
+    ];
+    let dir = fixture();
+    let free = run(&spec(dir.path()), &hog, Opts::default());
+    assert_eq!(free.code, Some(0), "control: {}", free.stderr);
+    let capped = run(
+        &caps(
+            dir.path(),
+            gleipnir::Rlimits {
+                address_space: Some(128 << 20),
+                ..Default::default()
+            },
+        ),
+        &hog,
+        Opts::default(),
+    );
+    assert!(capped.status.is_ok(), "{}", capped.stderr);
+    assert_eq!(
+        capped.code,
+        Some(1),
+        "tail fails its allocation: {}",
+        capped.stderr
+    );
+}
+
+/// A program that burns CPU past its cap is killed by the kernel (`SIGXCPU`: no exit code); the run ends by itself
+/// after a second of CPU, and nothing here reads a clock.
+#[test]
+fn a_program_past_its_cpu_cap_is_killed() {
+    if !landlock_here("a_program_past_its_cpu_cap_is_killed") {
+        return;
+    }
+    let dir = fixture();
+    let o = run(
+        &caps(
+            dir.path(),
+            gleipnir::Rlimits {
+                cpu_seconds: Some(1),
+                ..Default::default()
+            },
+        ),
+        &["/bin/sh", "-c", "while :; do :; done"],
+        Opts::default(),
+    );
+    assert!(o.status.is_ok(), "{}", o.stderr);
+    assert_eq!(o.code, None, "killed by a signal: {}", o.stderr);
+}
+
+#[test]
+fn a_cap_the_kernel_refuses_is_a_setup_failure_and_the_program_never_runs() {
+    if !landlock_here("a_cap_the_kernel_refuses_is_a_setup_failure_and_the_program_never_runs") {
+        return;
+    }
+    let dir = fixture();
+    // RLIMIT_NOFILE above the system's fs.nr_open cannot be set: the helper exits 125 before the exec
+    let o = run(
+        &caps(
+            dir.path(),
+            gleipnir::Rlimits {
+                open_files: Some(u64::MAX >> 1),
+                ..Default::default()
+            },
+        ),
+        &["/bin/echo", "ran"],
+        Opts::default(),
+    );
+    assert_eq!(o.code, Some(inner::EXIT_SETUP), "{}", o.stderr);
+    assert!(!o.stdout.contains("ran"));
 }

@@ -1612,6 +1612,7 @@ pub fn session_spec(
         tmp: Some(tmp),
         layers: Layers::for_target(target),
         extra_tcp_ports,
+        rlimits: None,
         trace,
         browser: spec_browser,
     };

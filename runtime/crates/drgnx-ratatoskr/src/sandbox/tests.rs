@@ -145,6 +145,7 @@ fn context_closes_data_state_config_and_sockets() {
         tmp: None,
         layers: Layers::for_target(Target::LinuxBwrap),
         extra_tcp_ports: vec![],
+        rlimits: None,
         trace: Default::default(),
         browser: None,
     };
@@ -184,6 +185,7 @@ fn an_agent_cannot_write_the_trusted_folders_file() {
         tmp: None,
         layers: Layers::for_target(Target::LinuxBwrap),
         extra_tcp_ports: vec![],
+        rlimits: None,
         trace: Default::default(),
         browser: None,
     };
@@ -233,6 +235,7 @@ fn an_agent_session_dir_reaches_nothing_else_beside_the_socket() {
         tmp: None,
         layers: Layers::for_target(Target::LinuxBwrap),
         extra_tcp_ports: vec![],
+        rlimits: None,
         trace: Default::default(),
         browser: None,
     };
@@ -298,6 +301,7 @@ fn helper_dir_is_closed() {
         tmp: None,
         layers: Layers::for_target(Target::LinuxBwrap),
         extra_tcp_ports: vec![],
+        rlimits: None,
         trace: Default::default(),
         browser: None,
     };
@@ -544,6 +548,7 @@ fn the_hub_owned_cli_homes_are_open_inside_the_closed_state_dir_and_nothing_besi
         tmp: None,
         layers: Layers::for_target(Target::LinuxBwrap),
         extra_tcp_ports: vec![],
+        rlimits: None,
         trace: Default::default(),
         browser: None,
     };

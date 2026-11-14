@@ -917,6 +917,9 @@ const SYSCALLS: &[&str] = &[
     "tiocsti-high-own-pty",
     "ioctl-tioclinux",
     "ioctl-sg-io",
+    "alloc-300mb",
+    "open-many",
+    "core-limit-zero",
     "pty-session",
     "ptrace-own-child",
     "x32-getpid",
@@ -1024,6 +1027,47 @@ fn attempt(name: &str) -> i32 {
             // An ioctl no program here needs, on /dev/null: ENOTTY unfiltered, EPERM from the filter's allowlist (GL-T5-1).
             "ioctl-tioclinux" => ioctl_on_null(0x541C),
             "ioctl-sg-io" => ioctl_on_null(0x2285),
+            // What the spec's rlimits cap (Spec::rlimits): 300 MiB of address space, 40 descriptors, a core dump.
+            "alloc-300mb" => {
+                let len = 300usize << 20;
+                let p = libc::mmap(
+                    std::ptr::null_mut(),
+                    len,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                    -1,
+                    0,
+                );
+                if p == libc::MAP_FAILED {
+                    *libc::__errno_location()
+                } else {
+                    0
+                }
+            }
+            "open-many" => {
+                let mut e = 0;
+                for _ in 0..40 {
+                    if libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY) < 0 {
+                        e = *libc::__errno_location();
+                        break;
+                    }
+                }
+                e
+            }
+            "core-limit-zero" => {
+                let mut l = libc::rlimit {
+                    rlim_cur: 1,
+                    rlim_max: 1,
+                };
+                if libc::getrlimit(libc::RLIMIT_CORE, &mut l) == 0
+                    && l.rlim_cur == 0
+                    && l.rlim_max == 0
+                {
+                    0
+                } else {
+                    libc::EINVAL
+                }
+            }
             // What a terminal session does: open a pty, set its size and its modes (raw, cooked), read them back.
             "pty-session" => pty_session(),
             "tiocsti-own-pty" => tiocsti(false),

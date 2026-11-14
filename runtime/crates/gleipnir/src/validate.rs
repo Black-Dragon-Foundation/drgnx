@@ -594,7 +594,7 @@ fn malformed(spec: &Spec, target: Target) -> Result<(), Refusal> {
         }
     }
     let (relay, mac_ports): (&[RelayPort], &[u16]) = match &spec.net {
-        Net::Shared => (&[], &[]),
+        Net::Shared | Net::None => (&[], &[]),
         Net::Isolated {
             relay,
             mac_tcp_ports,
@@ -602,7 +602,7 @@ fn malformed(spec: &Spec, target: Target) -> Result<(), Refusal> {
         } => (relay, mac_tcp_ports),
     };
     let (loopback, loop_ports): (bool, &[u16]) = match &spec.net {
-        Net::Shared => (false, &[]),
+        Net::Shared | Net::None => (false, &[]),
         Net::Isolated {
             loopback,
             mac_loopback_ports,
@@ -638,6 +638,26 @@ fn malformed(spec: &Spec, target: Target) -> Result<(), Refusal> {
     // a debug fork with its own loopback needs no way out (the reduced tier's loopback is refused below)
     if linux && matches!(spec.net, Net::Isolated { .. }) && relay.is_empty() && !loopback {
         return bad("net: isolated without a relay on Linux".into());
+    }
+    if spec.net == Net::None && !spec.extra_tcp_ports.is_empty() {
+        return bad("net: none with extra_tcp_ports: there is no network to reach them on".into());
+    }
+    if let Some(r) = &spec.rlimits {
+        if target == Target::Macos {
+            return bad("rlimits: macOS has no helper to set them, and a cap that is not enforced is not offered".into());
+        }
+        for (name, v) in [
+            ("address_space", r.address_space),
+            ("data", r.data),
+            ("cpu_seconds", r.cpu_seconds),
+            ("open_files", r.open_files),
+        ] {
+            if v == Some(0) {
+                return bad(format!(
+                    "rlimits.{name} is 0: a cap of nothing lets the program do nothing"
+                ));
+            }
+        }
     }
     if linux && !mac_ports.is_empty() {
         return bad("net: mac_tcp_ports on Linux".into());
@@ -780,7 +800,7 @@ fn browser(spec: &mut Spec, target: Target) -> Result<(), Refusal> {
     }
     let relay: Vec<u16> = match &spec.net {
         Net::Isolated { relay, .. } => relay.iter().map(|r| r.port).collect(),
-        Net::Shared => {
+        Net::Shared | Net::None => {
             return bad(
                 None,
                 "browser: needs net isolated; its only way out is the web relay".into(),
@@ -873,7 +893,7 @@ fn browser(spec: &mut Spec, target: Target) -> Result<(), Refusal> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spec::{BASE_ENV_DENY, Bind, Layers, Mode, Net, RelayPort};
+    use crate::spec::{BASE_ENV_DENY, Bind, Layers, Mode, Net, RelayPort, Rlimits};
     use std::ffi::OsStr;
     use std::fs;
     use std::os::unix::ffi::OsStrExt;
@@ -991,6 +1011,7 @@ mod tests {
                 tmp: Some(self.p("state/sandbox/J1/tmp")),
                 layers: Layers::for_target(target),
                 extra_tcp_ports: vec![8080],
+                rlimits: None,
                 trace: Default::default(),
                 browser: None,
             }
@@ -1623,6 +1644,41 @@ mod tests {
         .expect("the full tier has a private /tmp");
     }
 
+    /// `Net::None` is a whole network policy on every target, with nothing to carry (no ports to reach, no relay);
+    /// `rlimits` are the Linux helper's, and are refused where nothing would enforce them.
+    #[test]
+    fn no_network_and_resource_caps() {
+        let fx = Fx::new();
+        base_passes(&fx);
+        let caps = Rlimits {
+            address_space: Some(64 << 20),
+            open_files: Some(32),
+            ..Rlimits::default()
+        };
+        for t in TARGETS {
+            let mut s = fx.spec(t);
+            s.net = Net::None;
+            s.extra_tcp_ports = vec![];
+            validate(s.clone(), &fx.ctx(), t)
+                .unwrap_or_else(|r| panic!("net none for {t:?}: {r:?}"));
+            s.extra_tcp_ports = vec![8080];
+            refused(&fx, "net none with ports", t, s, Rule::Malformed);
+            let mut s = fx.spec(t);
+            s.rlimits = Some(caps.clone());
+            if t == Target::Macos {
+                refused(&fx, "rlimits on macOS", t, s, Rule::Malformed);
+            } else {
+                validate(s, &fx.ctx(), t).unwrap_or_else(|r| panic!("rlimits for {t:?}: {r:?}"));
+                let mut s = fx.spec(t);
+                s.rlimits = Some(Rlimits {
+                    cpu_seconds: Some(0),
+                    ..Rlimits::default()
+                });
+                refused(&fx, "a cap of 0", t, s, Rule::Malformed);
+            }
+        }
+    }
+
     #[test]
     fn malformed_net_and_ports() {
         let fx = Fx::new();
@@ -1663,6 +1719,7 @@ mod tests {
                 t,
                 Spec {
                     extra_tcp_ports: vec![0],
+                    rlimits: None,
                     ..fx.spec(t)
                 },
                 Rule::Malformed,
@@ -2003,6 +2060,7 @@ mod tests {
                 Target::LinuxBwrap,
                 Spec {
                     extra_tcp_ports: vec![8080, 3128],
+                    rlimits: None,
                     ..change(&|b| b.local_ports.push(3128))
                 },
                 "is a relay port",
@@ -2269,7 +2327,7 @@ mod tests {
                             Net::Isolated { relay, .. } => {
                                 relay.iter().map(|r| &r.socket).collect()
                             }
-                            Net::Shared => Vec::new(),
+                            Net::Shared | Net::None => Vec::new(),
                         };
                         let all = s
                             .read
