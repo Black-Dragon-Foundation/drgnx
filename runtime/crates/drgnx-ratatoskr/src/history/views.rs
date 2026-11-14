@@ -254,6 +254,32 @@ impl Hub {
         Ok(out)
     }
 
+    /// Where LINES of the editor's tracked buffer of REL of TREE start in the text the hub holds, and just after them
+    /// (`editor::marks::Lines`); none when no buffer of it is tracked or the text is over the marks' limit.
+    pub fn line_positions(
+        &self,
+        tree: &Tree,
+        rel: &str,
+        lines: &[u32],
+    ) -> verdandi::Result<Option<Vec<w::LinePosition>>> {
+        let Some(text) = self.mirror_text(tree, rel)? else {
+            return Ok(None);
+        };
+        let Some(at) = crate::editor::marks::Lines::of(&text) else {
+            return Ok(None);
+        };
+        Ok(Some(
+            lines
+                .iter()
+                .map(|l| w::LinePosition {
+                    line: *l,
+                    pos: at.start(*l),
+                    end: at.after(*l),
+                })
+                .collect(),
+        ))
+    }
+
     /// The inline blame of the line the position POS (Emacs's) is on in the editor's tracked buffer of REL of TREE,
     /// fitted to WIDTH columns (`editor::marks::blame_text`); empty when no buffer of it is tracked, the text is over
     /// the marks' limit, the line is the empty last one, or there is no room.
@@ -622,6 +648,33 @@ pub async fn git_blame(f: &Front, c: &Caller, p: w::GitBlameParams) -> Result<w:
         .map_err(store)
 }
 
+/// `history/line-positions`.
+pub async fn line_positions(
+    f: &Front,
+    c: &Caller,
+    p: w::LinePositionsParams,
+) -> Result<w::LinePositions, Error> {
+    super::revert::user_only(c)?;
+    let (hub, tree) = f
+        .core
+        .history
+        .of_tree(&hub_dir(f)?, Path::new(&p.worktree_root))?;
+    let found = crate::clock::blocking(move || hub.line_positions(&tree, &p.path, &p.lines))
+        .await
+        .map_err(|e| internal(e.to_string()))?
+        .map_err(store)?;
+    Ok(match found {
+        Some(positions) => w::LinePositions {
+            tracked: true,
+            positions,
+        },
+        None => w::LinePositions {
+            tracked: false,
+            positions: Vec::new(),
+        },
+    })
+}
+
 /// `git/blame/line`.
 pub async fn git_blame_line(
     f: &Front,
@@ -966,6 +1019,37 @@ mod tests {
         assert_eq!(olds, vec![vec!["b\n".to_owned()], Vec::<String>::new()]);
         // no buffer of a file: nothing computed
         assert!(f.hub.hunks_head(&f.tree, "other.txt").unwrap().is_none());
+    }
+
+    // pattern: D
+    #[test]
+    fn lines_of_the_unsaved_text_come_as_positions() {
+        use crate::editor::marks;
+        let f = fx("a\nb\nc\n");
+        // the buffer holds text the file does not: its lines are the ones asked for
+        tracked(&f, "a.txt", "one\ntwo\nthree\nfour", "user");
+        let got = f
+            .hub
+            .line_positions(&f.tree, "a.txt", &[1, 3, 4, 9])
+            .unwrap()
+            .expect("tracked");
+        let got: Vec<_> = got.iter().map(|p| (p.line, p.pos, p.end)).collect();
+        // the last line ends at the end of the text; a line past it is the last
+        assert_eq!(got, [(1, 1, 5), (3, 9, 15), (4, 15, 19), (9, 15, 19)]);
+        assert!(
+            f.hub
+                .line_positions(&f.tree, "other.txt", &[1])
+                .unwrap()
+                .is_none()
+        );
+        marks::with_limit(3, || {
+            assert!(
+                f.hub
+                    .line_positions(&f.tree, "a.txt", &[1])
+                    .unwrap()
+                    .is_none()
+            );
+        });
     }
 
     // pattern: D

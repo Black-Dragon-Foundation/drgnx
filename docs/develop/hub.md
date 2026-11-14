@@ -1504,6 +1504,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `history/fork/drop` | user | `{id: string}` | `{ok: boolean}` | yes |
 | `history/hunks` | user | `{branch: string, since: integer}` | `{files: [FileHunks]}` | no |
 | `history/hunks/head` | user | `{path: string, worktree_root: string}` | `{hunks: [HeadHunk], marks: [HunkMark], tracked: boolean}` | no |
+| `history/line-positions` | user | `{lines: [natnum], path: string, worktree_root: string}` | `{positions: [LinePosition], tracked: boolean}` | no |
 | `history/op/hunks` | user | `{op?: integer, session?: string, worktree: string}` | `{hunks: [OpHunk]}` | no |
 | `history/redo` | user | `{op: integer, session: string}` | `{commit?: string, op: integer, skipped: [RevertSkipped], written: [string]}` | yes |
 | `history/register` | user | `{buffer_id: string, path: string, worktree_root: string}` | `{doc: integer, reason?: string, tracked: boolean}` | yes |
@@ -2152,6 +2153,12 @@ edit asks again.
 large-files module's default `:ask-above`, the size from which a file opens lean or in chunks) gets no marks, as
 `drgnx-large-file-p` kept them from large buffers in Lisp. Large-files v2's cost registry replaces this one constant.
 
+- The `debug-breakpoints` event and `debug/breakpoints`' answer give each breakpoint `pos` and `end` (the positions its
+  line starts at and just after it, `marks::place_breakpoints`, from the edit history's mirror; none without a tracked
+  buffer or over the limit). `Debug::on_lines` is the hook the hub binds to give a file's `marks::Lines`.
+- `history/line-positions {path, worktree_root, lines}` answers `{tracked, positions: [{line, pos, end}]}`: where those
+  lines of the editor's tracked buffer start and just after them, in the text the hub holds (asked through
+  `drgnx-history-ask`, so after the buffer's changes were handed over); none past the limit.
 - `git/blame/line {path, worktree_root, pos, width}` answers the inline blame of the line the position is on, as
   `{text?, sha?, time?}`: `marks::blame_text` words it ("Ada, 3 days ago · Fix the parser", "You · Uncommitted
   changes", "agent s1 · …") and cuts it to `width` columns (`BLAME_MIN_WIDTH` 20: none under it, `BLAME_MAX_WIDTH` 80),

@@ -133,6 +133,36 @@ impl Lines {
     }
 }
 
+impl Lines {
+    /// The position just after LINE, its line break included (the end of the text for the last line): the end of the
+    /// span a whole-line mark covers.
+    pub fn after(&self, line: u32) -> i64 {
+        self.starts
+            .get(self.index(line) + 1)
+            .copied()
+            .unwrap_or_else(|| self.ends[self.ends.len() - 1])
+    }
+}
+
+/// Give each breakpoint of VIEW (the `debug-breakpoints` view of a file: `breakpoints: [{line, bound_line?, ...}]`) the
+/// positions of the line its mark sits on (the adapter's line where it bound it elsewhere): `pos` where the line
+/// starts and `end` just after it, in LINES' text.
+pub fn place_breakpoints(view: &mut serde_json::Value, lines: &Lines) {
+    let Some(bps) = view.get_mut("breakpoints").and_then(|b| b.as_array_mut()) else {
+        return;
+    };
+    for bp in bps {
+        let line = bp
+            .get("bound_line")
+            .and_then(serde_json::Value::as_u64)
+            .or_else(|| bp.get("line").and_then(serde_json::Value::as_u64));
+        if let Some(line) = line.and_then(|l| u32::try_from(l).ok()) {
+            bp["pos"] = serde_json::json!(lines.start(line));
+            bp["end"] = serde_json::json!(lines.after(line));
+        }
+    }
+}
+
 /// Give AGENTS and GUTTER the positions of their lines in LINES, and SYMBOL names each agent's symbol (the line; none
 /// for a projected agent).
 pub fn place(
@@ -308,6 +338,33 @@ mod tests {
         assert!(agents[2].pos.is_none() && agents[2].line_pos.is_none());
         assert_eq!(asked, [2]);
         assert_eq!((gutter[0].start_pos, gutter[0].end_pos), (Some(4), Some(9)));
+    }
+
+    #[test]
+    fn a_breakpoint_view_gets_the_positions_of_its_marks_lines() {
+        // "ab\ncde\n\nf": lines start at 1, 4, 8, 9 (no final break)
+        let lines = Lines::of("ab\ncde\n\nf").unwrap();
+        assert_eq!((lines.after(1), lines.after(2), lines.after(4)), (4, 8, 10));
+        let mut v = serde_json::json!({"path": "p", "version": 1, "breakpoints": [
+            {"id": 1, "line": 2}, {"id": 2, "line": 2, "bound_line": 4}, {"id": 3, "line": 3, "column": 1}]});
+        place_breakpoints(&mut v, &lines);
+        let at = |i: usize| {
+            (
+                v["breakpoints"][i]["pos"].as_i64(),
+                v["breakpoints"][i]["end"].as_i64(),
+            )
+        };
+        assert_eq!(at(0), (Some(4), Some(8)));
+        assert_eq!(
+            at(1),
+            (Some(9), Some(10)),
+            "the adapter's line, where it bound it"
+        );
+        assert_eq!(at(2), (Some(8), Some(9)));
+        // a view with no breakpoints, or none of the shape, is left alone
+        let mut none = serde_json::json!({"path": "p"});
+        place_breakpoints(&mut none, &lines);
+        assert_eq!(none, serde_json::json!({"path": "p"}));
     }
 
     #[test]
