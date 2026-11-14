@@ -5,8 +5,9 @@
 //! `__test_advance {ms}` ([`advance`]) moves it, so a test chooses when each timer fires.  tokio's own clock is never
 //! paused: the runtime stays multi-thread, and a paused tokio clock jumps ahead whenever the runtime is idle.
 //!
-//! Its reach is this crate.  The timers inside draugr (a kill's grace), hermod (the ACP timeouts), bifrost and urdr
-//! run on real time; a path through one of them is not decided by the test's advances.
+//! Its reach is this crate and every crate whose timers wait through `drgnx_clock` (installed here as the provider): a
+//! timer a crate has not moved onto it (hermod's ACP timeouts, bifrost's, urdr's) still runs on real time, and a path
+//! through one is not decided by the test's advances.
 
 use std::borrow::Cow;
 use std::future::Future;
@@ -410,6 +411,7 @@ pub(crate) fn virtual_ms() -> u64 {
 #[cfg(all(test, feature = "test-hooks"))]
 pub(crate) fn on_virtual<F: Future>(f: F) -> F::Output {
     urdr::wait::set(virt::store_wait);
+    virt::install_provider();
     let clock = std::sync::Arc::new(virt::Virtual::new());
     let theirs = clock.clone();
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -471,6 +473,22 @@ mod virt {
     pub(super) fn install() {
         let _ = GLOBAL.set(Arc::new(Virtual::new()));
         urdr::wait::set(store_wait);
+        install_provider();
+    }
+
+    /// The other crates' timers (`drgnx_clock`) read this clock: one provider for the process, which looks the clock up
+    /// from the thread (a unit test's own, else the process's) and falls back to tokio's on a thread with none.
+    pub(super) fn install_provider() {
+        struct Hub;
+        impl drgnx_clock::Provider for Hub {
+            fn sleep(&self, d: Duration) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+                match current() {
+                    Some(v) => Box::pin(Sleep::new(&v, d)),
+                    None => Box::pin(tokio::time::sleep(d)),
+                }
+            }
+        }
+        drgnx_clock::install(Arc::new(Hub));
     }
 
     /// urdr's hook: the task that waits for a store thread's answer is inside a real wait until it has it (AT: the urdr

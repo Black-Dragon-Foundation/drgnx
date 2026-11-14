@@ -1431,6 +1431,7 @@ dependencies = [
  "brokkr",
  "bytes",
  "draugr",
+ "drgnx-clock",
  "drgnx-exe",
  "drgnx-px",
  "drgnx-rows",
