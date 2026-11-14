@@ -413,10 +413,19 @@ fn segment(
     // the text sits inside the card: 10 px from the border of an agent's, 8 px of a chip's
     let pad = ((if lines.len() > 1 { 10.0 } else { 8.0 }) * g.scale).round() as u32;
     let room = (right - left).saturating_sub(10 + pad);
+    // a `new` mark at the end of the line keeps its place: the text before it is what gets cut
+    let tail = l.0.last().filter(|(_, f)| *f == Some("drgnx-work-new")).cloned();
+    let body = match &tail {
+        Some(_) => Line(l.0[..l.0.len() - 1].to_vec(), l.1),
+        None => l.clone(),
+    };
+    let tail_px = tail
+        .as_ref()
+        .map_or(0, |(t, _)| fit::width(m, ROLE, t).ceil() as u32);
     let fitted = fit_px(
         m,
-        &l.text(),
-        room.saturating_sub(if icon.is_some() { icon_px } else { 0 }),
+        &body.text(),
+        room.saturating_sub(if icon.is_some() { icon_px } else { 0 } + tail_px),
     );
     b.stop(left);
     let start = b.pos();
@@ -434,7 +443,10 @@ fn segment(
     } else if let Some((_, alt)) = l.1 {
         b.push(alt, None);
     }
-    l.push_fitted(b, &fitted);
+    body.push_fitted(b, &fitted);
+    if let Some((t, f)) = &tail {
+        b.push(t, *f);
+    }
     b.stop(right);
     let end = b.pos();
     b.face(

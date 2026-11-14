@@ -853,3 +853,22 @@ fn chips_show_the_file_name_and_its_change_and_the_badge_is_a_circle() {
         "{agent:?}"
     );
 }
+
+/// [D] The `new` mark at the end of a card's conclusion line keeps its place when the text is cut to the card's width
+/// (work-space-dark.html: `→ turn_core drops the started flag [new]`).
+#[test]
+fn the_new_mark_survives_the_cut_of_a_long_conclusion() {
+    let (items, edges, layout) = frame();
+    let mut new = BTreeSet::new();
+    new.insert(ItemId("agent:a1".into()));
+    let palette = Palette::default();
+    let s = scene(&items, &edges, &layout, &new);
+    let drawn = render::rows(&s, &Index::of(&s), &gui(&palette), &Cols);
+    let r = drawn
+        .rows
+        .iter()
+        .find(|r| r.key == "row:4:0:0:3")
+        .expect("the conclusion line");
+    assert!(r.text.contains("new"), "{r:?}");
+    assert!(r.runs.iter().any(|x| x.2 == "drgnx-work-new"), "{r:?}");
+}
