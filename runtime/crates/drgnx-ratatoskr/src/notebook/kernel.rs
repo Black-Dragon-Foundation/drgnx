@@ -14,7 +14,7 @@ use serde_json::json;
 use tokio::sync::watch;
 
 use super::session::{Channel, Event, Limits, Session};
-use super::spec::{Connection, Interrupt, Kernelspec};
+use super::spec::{Connection, Interrupt, Kernelspec, private_folder};
 use super::wire::Message;
 
 /// The hub's variables a kernel inherits (a kernel is an ordinary session program, like the terminal's shell).
@@ -139,6 +139,20 @@ fn is_our_socket(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_socket() && m.uid() == me)
 }
 
+/// How long to wait for a killed kernel's process to be reaped.
+pub const END_WITHIN: Duration = Duration::from_secs(5);
+
+/// A kernel started and not yet handed over: dropped, it takes the kernel's group down.
+struct Spawned(Option<i32>);
+
+impl Drop for Spawned {
+    fn drop(&mut self) {
+        if let Some(pid) = self.0 {
+            kill_group_now(pid);
+        }
+    }
+}
+
 fn kill_group_now(pid: i32) {
     if pid > 1 {
         // SAFETY: kill(2) has no memory effects; a negative pid is the group, and 1 and below are never sent.
@@ -157,6 +171,11 @@ impl Kernel {
         t: Timeouts,
     ) -> Result<Kernel, String> {
         use std::os::unix::process::ExitStatusExt;
+        // the folder is checked here, not trusted from the caller: a kernel's sockets and key live in it
+        let folder = private_folder(folder)?;
+        let folder = folder.as_path();
+        let session_id = random_hex(8)?;
+        let identity = format!("drgnx-{}", random_hex(8)?);
         let conn = Connection::create(folder, id, &spec.name)?;
         let argv = spec.argv_for(&conn.path);
         let program = argv.first().ok_or("the kernelspec has no command")?;
@@ -177,6 +196,8 @@ impl Kernel {
         .await
         .map_err(|e| format!("cannot start {program}: {e}"))?;
         let pid = child.id();
+        // from here the kernel is ours to end: a start dropped part way (the caller gave up) takes it down
+        let mut guard = Spawned(Some(pid));
         // a kernel's stdout is noise, but an unread pipe would stop it
         if let Some(mut out) = child.take_stdout() {
             crate::clock::spawn("notebook-kernel-stdout", async move {
@@ -186,14 +207,15 @@ impl Kernel {
         let (exit_tx, exit) = watch::channel::<Option<Exit>>(None);
         crate::clock::spawn("notebook-kernel-wait", async move {
             let status = child.wait().await.ok().flatten();
+            // the leader is gone: what it forked goes now, before anything can ask for it (the group id is still ours while a
+            // member lives, and nothing signals it after the exit is known)
+            kill_group_now(pid);
             let _ = exit_tx.send(Some(Exit {
                 code: status.and_then(|s| s.code()),
                 signal: status.and_then(|s| s.signal()),
                 stderr: child.stderr_tail(),
             }));
         });
-        let session_id = random_hex(8)?;
-        let identity = format!("drgnx-{}", random_hex(8)?);
         let bring_up = async {
             wait_endpoints(&conn, &mut exit.clone()).await?;
             let mut session = Session::connect(&conn, &identity, t.limits).await?;
@@ -201,16 +223,19 @@ impl Kernel {
             Ok::<Session, String>(session)
         };
         match crate::clock::timeout(t.ready, bring_up).await {
-            Ok(Ok(session)) => Ok(Kernel {
-                name: spec.name.clone(),
-                session,
-                _conn: conn,
-                pid,
-                exit,
-                interrupt: spec.interrupt,
-                session_id,
-                grace: t.grace,
-            }),
+            Ok(Ok(session)) => {
+                guard.0 = None;
+                Ok(Kernel {
+                    name: spec.name.clone(),
+                    session,
+                    _conn: conn,
+                    pid,
+                    exit,
+                    interrupt: spec.interrupt,
+                    session_id,
+                    grace: t.grace,
+                })
+            }
             Ok(Err(e)) => {
                 kill_group_now(pid);
                 Err(e)
@@ -239,7 +264,9 @@ impl Kernel {
                 Some(Event::Message { channel, message, .. }) => KernelEvent::Message(channel, message),
                 Some(Event::Closed { channel, why }) => KernelEvent::Closed(channel, why),
                 Some(Event::Flood) => {
-                    kill_group_now(self.pid);
+                    if self.exit.borrow().is_none() {
+                        kill_group_now(self.pid);
+                    }
                     KernelEvent::Flood
                 }
                 None => KernelEvent::Exited(self.wait_exit().await),
@@ -249,7 +276,7 @@ impl Kernel {
     }
 
     async fn wait_exit(&self) -> Exit {
-        exited(&mut self.exit.clone()).await
+        self.bounded_exit().await
     }
 
     /// Send a request on CHANNEL; its `msg_id`.
@@ -280,6 +307,10 @@ impl Kernel {
                 if self.pid <= 1 {
                     return Err("no kernel process".into());
                 }
+                // once the leader is reaped its group id is not ours to signal
+                if self.exit.borrow().is_some() {
+                    return Err("the kernel has ended".into());
+                }
                 // SAFETY: kill(2) has no memory effects; the group of a kernel this hub started.
                 if unsafe { libc::kill(-self.pid, libc::SIGINT) } == 0 {
                     Ok(())
@@ -295,27 +326,42 @@ impl Kernel {
 
     /// End the kernel: ask it to shut down, give it the grace, then kill its group. The connection file goes with `self`.
     pub async fn shutdown(self) -> Exit {
+        let mut exit = self.exit.clone();
+        if let Some(e) = exit.borrow().clone() {
+            return e;
+        }
         let _ = self.request(
             Channel::Control,
             "shutdown_request",
             json!({"restart": false}),
         );
-        let mut exit = self.exit.clone();
-        let ended = crate::clock::timeout(self.grace, exited(&mut exit))
-            .await
-            .ok();
-        // whatever the leader did, nothing of its group stays
-        let _ = draugr::kill_group(self.pid, Duration::ZERO, &draugr::RealSignaller).await;
-        match ended {
-            Some(e) => e,
-            None => exited(&mut exit).await,
+        if let Ok(e) = crate::clock::timeout(self.grace, exited(&mut exit)).await {
+            // it went by itself, and the group went with it (see the wait task)
+            return e;
         }
+        // the leader is still there: the group is ours to take down
+        let _ = draugr::kill_group(self.pid, Duration::ZERO, &draugr::RealSignaller).await;
+        self.bounded_exit().await
+    }
+
+    /// The exit, waited for no longer than [`END_WITHIN`].
+    async fn bounded_exit(&self) -> Exit {
+        let mut exit = self.exit.clone();
+        crate::clock::timeout(END_WITHIN, exited(&mut exit))
+            .await
+            .unwrap_or_else(|_| Exit {
+                code: None,
+                signal: None,
+                stderr: "the kernel did not end".into(),
+            })
     }
 
     /// Kill the group now and wait for the process.
     pub async fn kill(self) -> Exit {
-        kill_group_now(self.pid);
-        self.wait_exit().await
+        if self.exit.borrow().is_none() {
+            kill_group_now(self.pid);
+        }
+        self.bounded_exit().await
     }
 }
 

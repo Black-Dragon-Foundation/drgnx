@@ -228,9 +228,11 @@ async fn interrupt_is_a_signal_to_the_group_or_a_control_message() {
     let d = tmp();
     let folder = private_folder(&d.path().join("s")).unwrap();
     let marker = d.path().join("got-int");
+    let up = d.path().join("trap-set");
     let script = format!(
-        "trap 'echo got > {}' INT; while :; do sleep 0.05; done",
-        marker.display()
+        "trap 'echo got > {}' INT; echo up > {}; while :; do sleep 0.05; done",
+        marker.display(),
+        up.display()
     );
     let peer = bind(&folder, "e").await;
     let f2 = folder.clone();
@@ -244,6 +246,8 @@ async fn interrupt_is_a_signal_to_the_group_or_a_control_message() {
     )
     .await
     .unwrap();
+    // ready does not mean the script got as far as its trap
+    skuld::wait_until("the script's trap", 30, || up.exists().then_some(()));
     k.interrupt().unwrap();
     skuld::wait_until("the kernel's SIGINT trap", 30, || {
         marker.exists().then_some(())
@@ -376,5 +380,90 @@ fn a_sealed_session_refuses_a_kernel_and_an_ordinary_one_does_not() {
     assert_eq!(
         refuse_when_sealed(&plan(Enforced::No("an ordinary session"))),
         Ok(())
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_start_that_is_dropped_part_way_kills_the_kernel_it_began() {
+    let d = tmp();
+    let folder = private_folder(&d.path().join("s")).unwrap();
+    let pidfile = d.path().join("pid");
+    let script = format!("echo $$ > {}; sleep 600 & wait", pidfile.display());
+    let (folder2, cwd) = (folder.clone(), d.path().to_path_buf());
+    let start = tokio::spawn(async move {
+        Kernel::start(
+            &spec(&script, Interrupt::Signal),
+            &folder2,
+            "x",
+            &cwd,
+            quick(),
+        )
+        .await
+    });
+    let pid: i32 = skuld::wait_until("the kernel's pid", 30, || {
+        std::fs::read_to_string(&pidfile).ok()?.trim().parse().ok()
+    });
+    start.abort();
+    let _ = start.await;
+    skuld::wait_until("the group to go", 30, || (!group_alive(pid)).then_some(()));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn start_checks_the_private_folder_itself() {
+    let d = tmp();
+    let folder = d.path().join("loose");
+    std::fs::create_dir(&folder).unwrap();
+    std::fs::set_permissions(&folder, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let e = Kernel::start(
+        &spec("sleep 600", Interrupt::Signal),
+        &folder,
+        "p",
+        d.path(),
+        quick(),
+    )
+    .await
+    .err()
+    .unwrap();
+    assert!(e.contains("0700"), "{e}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn workers_a_kernel_forked_go_with_it_and_nothing_is_signalled_after_it_is_gone() {
+    let d = tmp();
+    let folder = private_folder(&d.path().join("s")).unwrap();
+    let workers = d.path().join("worker");
+    let peer = bind(&folder, "w").await;
+    let f2 = folder.clone();
+    tokio::spawn(async move { serve_ready(peer, key_of(&f2, "w").await).await });
+    let script = format!(
+        "sleep 600 & echo $! > {}; exec sleep 600",
+        workers.display()
+    );
+    let mut k = Kernel::start(
+        &spec(&script, Interrupt::Signal),
+        &folder,
+        "w",
+        d.path(),
+        quick(),
+    )
+    .await
+    .unwrap();
+    let worker: i32 = skuld::wait_until("the worker's pid", 30, || {
+        std::fs::read_to_string(&workers).ok()?.trim().parse().ok()
+    });
+    // only the leader dies (not its group)
+    // SAFETY: the process this test started
+    unsafe { libc::kill(k.pid(), libc::SIGKILL) };
+    loop {
+        if let KernelEvent::Exited(_) = k.next().await {
+            break;
+        }
+    }
+    skuld::wait_until("the forked worker to go", 30, || {
+        (!draugr::alive(worker)).then_some(())
+    });
+    assert!(
+        k.interrupt().is_err(),
+        "no signal goes to a group whose leader is gone"
     );
 }
