@@ -578,28 +578,61 @@ fn deny_any_case(ops: &str, filter: &str, paths: &[&str]) -> Result<Option<Strin
 const FOLDS_TO: &[(char, char)] = &[('k', '\u{212A}'), ('s', '\u{17F}'), ('å', '\u{212B}')];
 
 /// The one letter case-insensitive APFS folds to two: `ß` and `ẞ` are `ss` (CaseFolding.txt's full fold; GL-T9-3: the
-/// macOS 27 runner's control reached a hidden `straße` as `STRASSE`). Other one-to-many folds (the `ﬁ` and `ﬂ`
-/// ligatures, `İ`, …) are not taken until a Mac's control shows APFS takes them.
+/// macOS 27 runner's control reached a hidden `straße` as `STRASSE`). Other one-to-many folds are taken only once a
+/// Mac's control shows APFS takes them ([`LIGATURES`]; `İ` is not one: its control found no file).
 const ESZETT: [char; 2] = ['ß', '\u{1E9E}'];
+
+/// The ligatures case-insensitive APFS folds to two letters, with those letters: the macOS 27 runner's control reached
+/// a hidden `config` as `conﬁg` and `flags` as `ﬂags`. `ﬀ`, `ﬃ`, `ﬄ`, `ﬅ` and `ﬆ` are not taken until a control shows
+/// them (their `-is-not-` rows).
+const LIGATURES: [(char, [char; 2]); 2] = [('\u{FB01}', ['f', 'i']), ('\u{FB02}', ['f', 'l'])];
+
+/// The ligature that `cs` starts with the letters of (in any case), if any.
+fn ligature_at(cs: &[char]) -> Option<char> {
+    let [a, b, ..] = cs else {
+        return None;
+    };
+    LIGATURES
+        .iter()
+        .find(|(_, [x, y])| a.to_ascii_lowercase() == *x && b.to_ascii_lowercase() == *y)
+        .map(|&(l, _)| l)
+}
 
 /// `path` as a regex that matches it in any case: an ASCII letter as a class of both cases (`[Gg]`), a letter with
 /// more spellings ([`FOLDS_TO`]: `(k|K|K)`) or a non-ASCII letter with case variants as a group of them (`(é|É)`), a
 /// regex metacharacter escaped. A run of s's and [`ESZETT`]s, which fold to s's two at a time, as one group for
 /// every spelling of its length ([`s_run`]: `ß` and `ss` both give `((s|S|ſ)(s|S|ſ)|(ß|ẞ))`), so a hidden `straße` is closed as
-/// `STRASSE` and a hidden `.ssh` as `.ßh`. No `(?i)`, which SBPL is not known to support. `whole`: the path and
+/// `STRASSE` and a hidden `.ssh` as `.ßh`. A [`LIGATURES`] ligature, or its two letters, as a group of both spellings
+/// (`(ﬁ|[Ff][Ii])`: a pair's group stands for those two letters alone, as no pair ends with a letter another starts
+/// with, so the regex grows with the path). No `(?i)`, which SBPL is not known to support. `whole`: the path and
 /// everything under it (as `subpath`); else the path alone (as `literal`).
 fn case_regex(path: &str, whole: bool) -> String {
     let mut re = String::from("^");
-    let mut cs = path.chars().peekable();
-    while let Some(c) = cs.next() {
+    // each ligature as its letters, so `conﬁg` and `config` give the same regex
+    let cs: Vec<char> = path
+        .chars()
+        .flat_map(|c| match LIGATURES.iter().find(|(l, _)| *l == c) {
+            Some((_, pair)) => pair.to_vec(),
+            None => vec![c],
+        })
+        .collect();
+    let mut i = 0;
+    while i < cs.len() {
+        let c = cs[i];
+        i += 1;
+        if let Some(l) = ligature_at(&cs[i - 1..]) {
+            re.push_str(&format!("({l}|{}{})", letter_regex(c), letter_regex(cs[i])));
+            i += 1;
+            continue;
+        }
         let mut run = s_weight(c);
         if run == 0 {
             re.push_str(&letter_regex(c));
             continue;
         }
-        while let Some(w) = cs.peek().map(|&c| s_weight(c)).filter(|&w| w > 0) {
+        while let Some(w) = cs.get(i).map(|&c| s_weight(c)).filter(|&w| w > 0) {
             run += w;
-            cs.next();
+            i += 1;
         }
         if run == 1 {
             re.push_str(&letter_regex(c));
@@ -1624,6 +1657,45 @@ mod tests {
         // (Fibonacci): 15 s's fit in one SBPL string, and 40 build at once (and are refused by `quote`).
         assert!(case_regex(&format!("/{}", "s".repeat(15)), false).len() <= MAX_LITERAL);
         assert!(case_regex(&"s".repeat(40), false).len() < 8 * 1024);
+        // The macOS 27 runner's control reached a hidden `config` as `con\u{FB01}g` and `flags` as `\u{FB02}ags`: APFS
+        // folds the ligatures \u{FB01} and \u{FB02} to "fi" and "fl". Each spelling stands for the other, either way.
+        for (path, hits, misses) in [
+            (
+                "/w/config",
+                &["/w/con\u{FB01}g", "/w/CONFIG", "/w/conFIg"][..],
+                &["/w/con\u{FB02}g", "/w/cong"][..],
+            ),
+            (
+                "/w/con\u{FB01}g",
+                &["/w/config", "/w/CONFIG", "/w/con\u{FB01}g"][..],
+                &["/w/conflg"][..],
+            ),
+            (
+                "/w/flags",
+                &["/w/\u{FB02}ags", "/w/FLAGS"][..],
+                &["/w/\u{FB01}ags"][..],
+            ),
+            (
+                "/w/\u{FB02}ow",
+                &["/w/flow", "/w/FLOW"][..],
+                &["/w/fow"][..],
+            ),
+            (
+                "/w/ffi",
+                &["/w/f\u{FB01}", "/w/FFI"][..],
+                &["/w/\u{FB01}f"][..],
+            ),
+        ] {
+            let re = case_regex(path, false);
+            for hit in hits {
+                assert!(re_match(&re, hit), "{hit} by {re}");
+            }
+            for miss in misses {
+                assert!(!re_match(&re, miss), "{miss} by {re}");
+            }
+        }
+        // a pair's group stands for its two letters alone: the regex grows with the path
+        assert!(case_regex(&"fi".repeat(40), false).len() < 40 * 32);
         assert_eq!(case_regex("/\u{212A}", false), "^/(\u{212A}|k|K)$");
         assert_eq!(case_regex("/g", false), "^/[Gg]$");
         // Homebrew's data, in every case too.
