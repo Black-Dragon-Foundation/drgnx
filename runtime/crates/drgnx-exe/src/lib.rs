@@ -131,7 +131,7 @@ pub fn write(path: &Path, contents: impl AsRef<[u8]>) -> std::io::Result<()> {
 }
 
 fn write_in(mode: Mode, path: &Path, contents: &[u8]) -> std::io::Result<()> {
-    private_fds_in(mode, || {
+    let made = private_fds_in(mode, || {
         let _ = std::fs::remove_file(path);
         let mut f = std::fs::OpenOptions::new()
             .write(true)
@@ -139,7 +139,65 @@ fn write_in(mode: Mode, path: &Path, contents: &[u8]) -> std::io::Result<()> {
             .mode(0o755)
             .open(path)?;
         f.write_all(contents)
-    })?
+    })?;
+    if mode == Mode::Lock {
+        wait_unshared(path);
+    }
+    made
+}
+
+/// Until no process holds PATH open for writing (at most a few seconds): the copies of a descriptor of ours that
+/// a fork made on another thread keeps until its own `exec`.  Our own is closed by now, so nothing new can take one;
+/// the lock keeps out the forks that go through [`spawn`], this waits out the rest (the forks of any other code).
+fn wait_unshared(path: &Path) {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(m) = std::fs::metadata(path) else {
+        return;
+    };
+    let id = (m.dev(), m.ino());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while held_for_writing(id) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+/// Whether some process holds the file ID (device, inode) open with write access: `/proc/PID/fd/N` naming it, and
+/// `/proc/PID/fdinfo/N` an access mode other than read-only.  A process whose descriptors cannot be read is not one
+/// of ours (a fork of this process has our uid).
+fn held_for_writing(id: (u64, u64)) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(procs) = std::fs::read_dir("/proc") else {
+        return false;
+    };
+    for p in procs.flatten() {
+        let name = p.file_name();
+        let name = name.to_string_lossy();
+        if !name.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        let Ok(fds) = std::fs::read_dir(p.path().join("fd")) else {
+            continue;
+        };
+        for fd in fds.flatten() {
+            let Ok(m) = std::fs::metadata(fd.path()) else {
+                continue;
+            };
+            if (m.dev(), m.ino()) != id {
+                continue;
+            }
+            let info = std::fs::read_to_string(p.path().join("fdinfo").join(fd.file_name()))
+                .unwrap_or_default();
+            let flags = info
+                .lines()
+                .find_map(|l| l.strip_prefix("flags:"))
+                .and_then(|f| u32::from_str_radix(f.trim(), 8).ok())
+                .unwrap_or(0);
+            if flags & 0o3 != 0 {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// FROM copied to TO as `std::fs::copy` does (mode included), TO's write descriptor never in a table another fork
@@ -149,7 +207,11 @@ pub fn copy(from: &Path, to: &Path) -> std::io::Result<u64> {
 }
 
 fn copy_in(mode: Mode, from: &Path, to: &Path) -> std::io::Result<u64> {
-    private_fds_in(mode, || std::fs::copy(from, to))?
+    let made = private_fds_in(mode, || std::fs::copy(from, to))?;
+    if mode == Mode::Lock {
+        wait_unshared(to);
+    }
+    made
 }
 
 // Linux's: elsewhere nothing here differs from std
@@ -179,6 +241,12 @@ mod tests {
     /// Each of 300 files, made and run at once while 4 threads spawn all along (through `spawn_in`, as the hub's
     /// spawns do), starts: none is busy.
     fn starts_while_other_threads_fork(mode: Mode, make: impl Fn(&Path, &Path)) {
+        starts_while_threads_fork(mode, make, true)
+    }
+
+    /// [`starts_while_other_threads_fork`] with the forking threads WRAPPED (through `spawn_in`) or RAW (a plain
+    /// `Command`, as the rest of a crate's code and tests spawn).
+    fn starts_while_threads_fork(mode: Mode, make: impl Fn(&Path, &Path), wrapped: bool) {
         // one at a time: the other test's raw spawns are outside the lock, as any raw spawn is
         static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
@@ -201,7 +269,12 @@ mod tests {
             for i in 0..300 {
                 let p = d.path().join(format!("x{i}"));
                 make(&src, &p);
-                match spawn_in(mode, || std::process::Command::new(&p).spawn()) {
+                let started = if wrapped {
+                    spawn_in(mode, || std::process::Command::new(&p).spawn())
+                } else {
+                    std::process::Command::new(&p).spawn()
+                };
+                match started {
                     Ok(mut c) => assert!(c.wait().unwrap().success()),
                     Err(e) if e.raw_os_error() == Some(libc::ETXTBSY) => busy += 1,
                     Err(e) => panic!("{}: {e}", p.display()),
@@ -241,6 +314,53 @@ mod tests {
     #[test]
     fn the_lock_keeps_a_file_written_or_copied_here_from_being_busy() {
         starts_while_other_threads_fork(Mode::Lock, write_then_copy(Mode::Lock));
+    }
+
+    /// In lock mode a fork that does NOT go through `spawn` (the rest of the code, a test's own threads) is outside the
+    /// lock, so `write` and `copy` also wait until no process holds the file open for writing (a fork's copy of the
+    /// descriptor, until its exec): a file made here is never busy.
+    #[test]
+    fn the_lock_mode_keeps_a_file_from_being_busy_against_raw_forks_too() {
+        starts_while_threads_fork(Mode::Lock, write_then_copy(Mode::Lock), false);
+    }
+
+    /// A fork's copy of the write descriptor, held by a child that has not exec'd yet (here: a shell that opened the file
+    /// for writing and waits for a line): `held_for_writing` sees it while it is there and not once it is gone, and the
+    /// file then starts; `wait_unshared` returns at once with nothing holding it.
+    #[test]
+    fn a_copy_of_the_write_descriptor_in_a_child_is_seen_until_it_is_gone() {
+        use std::io::{BufRead, Write};
+        use std::os::unix::fs::MetadataExt;
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("x");
+        write_in(Mode::Direct, &p, b"#!/bin/sh\nexit 0\n").unwrap();
+        let m = std::fs::metadata(&p).unwrap();
+        let id = (m.dev(), m.ino());
+        let mut holder = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("exec 3>>\"$0\"; echo held; read go")
+            .arg(&p)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut line = String::new();
+        std::io::BufReader::new(holder.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        assert_eq!(line, "held\n");
+        assert!(
+            held_for_writing(id),
+            "the child's write descriptor is not seen"
+        );
+        writeln!(holder.stdin.take().unwrap(), "go").unwrap();
+        holder.wait().unwrap();
+        assert!(!held_for_writing(id), "seen after the child is gone");
+        wait_unshared(&p);
+        assert!(
+            std::process::Command::new(&p).status().unwrap().success(),
+            "busy after the wait"
+        );
     }
 
     /// The probe agrees with what `unshare` does on this machine, and only a refusal ever gives the lock.
