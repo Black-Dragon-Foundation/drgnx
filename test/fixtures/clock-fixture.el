@@ -245,8 +245,9 @@ virtual time without PRED (or with no timer left to run) the test fails, naming 
       (let ((next (cl-find-if-not #'timer--triggered timer-list)))
         (unless next (setq end drgnx-test--now))
         (when next
-          (drgnx-test-advance (max 0 (min (float-time (time-subtract (drgnx-test--due next) drgnx-test--now))
-                                          (float-time (time-subtract end drgnx-test--now)))))
+          ;; a microsecond past the timer's time, so rounding never leaves it just out of reach of the step
+          (drgnx-test-advance (min (+ 1e-6 (max 0 (float-time (time-subtract (drgnx-test--due next) drgnx-test--now))))
+                                   (float-time (time-subtract end drgnx-test--now))))
           (setq value (funcall pred)))))
     (or value
         (signal 'ert-test-failed

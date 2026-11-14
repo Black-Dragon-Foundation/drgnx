@@ -22,6 +22,22 @@
     (insert-file-contents (expand-file-name (concat "test/fixtures/wm/kwin/" name) drgnx-dir))
     (buffer-string)))
 
+(defun drgnx-platform-kwin-test--clocked (fn)
+  "Call FN on the virtual clock (the one a test already runs under, else its own): KWin's replies are timers."
+  (if (bound-and-true-p drgnx-test--active)
+      (funcall fn)
+    (let (value)
+      (drgnx-test-with-clock (:allow-pending t) (setq value (funcall fn)))
+      value)))
+
+(defun drgnx-platform-kwin-test--await (pred &optional seconds)
+  "Move virtual time to each timer in turn until PRED is non-nil; its value.  Fails after SECONDS (default 3) of it."
+  (drgnx-test-advance-until pred :secs (or seconds 3) :what "the fake KWin's reply"))
+
+(defun drgnx-platform-kwin-test--quiet (seconds _why)
+  "Let SECONDS of virtual time pass, timers running: the window in which something may not happen (_WHY says what)."
+  (drgnx-test-advance seconds))
+
 (defvar drgnx-platform-kwin-test--calls nil "The recorded D-Bus calls, oldest last: (SERVICE PATH METHOD ARGS SERIAL).")
 (defvar drgnx-platform-kwin-test--sync-calls nil "Calls of the synchronous `dbus-call-method'.")
 (defvar drgnx-platform-kwin-test--script nil "The text of the script file when KWin was told to run it.")
@@ -95,7 +111,7 @@ temporary directory is private to the test."
                                              (setq drgnx-platform-kwin-test--reply-return
                                                    (funcall (nth 3 (car (drgnx-platform-kwin-test--entries))) json))))))))
                         (list :serial bus serial))))
-             (prog1 (progn ,@body)
+             (prog1 (drgnx-platform-kwin-test--clocked (lambda () ,@body))
                (should-not drgnx-platform-kwin-test--sync-calls)))
          (delete-directory tmp t)))))
 
@@ -104,12 +120,14 @@ temporary directory is private to the test."
 
 (defun drgnx-platform-kwin-test--ask (fn)
   "Call FN with a callback; wait for it; return the single result (failing when it is called twice or never)."
-  (let ((results nil))
-    (funcall fn (lambda (r) (push r results)))
-    (should (drgnx-platform-test--await (lambda () results) 5))
-    (drgnx-test-pause 0.2 "a second call of the callback")
-    (should (= 1 (length results)))
-    (car results)))
+  (drgnx-platform-kwin-test--clocked
+   (lambda ()
+     (let ((results nil))
+       (funcall fn (lambda (r) (push r results)))
+       (should (drgnx-platform-kwin-test--await (lambda () results) 5))
+       (drgnx-platform-kwin-test--quiet 0.2 "a second call of the callback")
+       (should (= 1 (length results)))
+       (car results)))))
 
 
 ;;;; The script text (pure)
@@ -322,7 +340,7 @@ temporary directory is private to the test."
                                 (should-not (file-exists-p drgnx-platform-kwin-test--script-file))
                                 (should-not (directory-files temporary-file-directory nil directory-files-no-dot-files-regexp))
                                 ;; a reply arriving after the deadline changes nothing (and does not signal)
-                                (drgnx-test-pause 0.1 "a call or an error after the deadline")))
+                                (drgnx-platform-kwin-test--quiet 0.1 "a call or an error after the deadline")))
 
 (drgnx-platform-test--deftest drgnx-platform-kwin/a-reply-cleans-up-too ()
                               (drgnx-platform-kwin-test--with-kwin (lambda (_s) "[]")
@@ -341,16 +359,16 @@ temporary directory is private to the test."
                                   (let ((ctx (drgnx-platform-ctx nil 2.0)))
                                     (drgnx-platform-kwin--monitors ctx (lambda (r) (push (cons 'a r) results)))
                                     (drgnx-platform-kwin--monitors ctx (lambda (r) (push (cons 'b r) results)))
-                                    (should (drgnx-platform-test--await (lambda () (= 4 (length drgnx-platform-kwin-test--calls))) 3))
+                                    (should (drgnx-platform-kwin-test--await (lambda () (= 4 (length drgnx-platform-kwin-test--calls))) 3))
                                     (setq handlers (reverse (drgnx-platform-kwin-test--entries)))
                                     ;; each call has its own object path, so answering one leaves the other pending
                                     (should (= 2 (length handlers)))
                                     (should-not (equal (nth 2 (nth 0 handlers)) (nth 2 (nth 1 handlers))))
                                     (funcall (nth 3 (nth 1 handlers)) "[]")
-                                    (should (drgnx-platform-test--await (lambda () results) 2))
+                                    (should (drgnx-platform-kwin-test--await (lambda () results) 2))
                                     (should (equal results '((b))))
                                     (funcall (nth 3 (nth 0 handlers)) "[]")
-                                    (should (drgnx-platform-test--await (lambda () (= 2 (length results))) 2))
+                                    (should (drgnx-platform-kwin-test--await (lambda () (= 2 (length results))) 2))
                                     (should-not (drgnx-platform-kwin-test--entries))))))
 
 ;; A D-Bus error reply (KWin is not running) does not reach an asynchronous call's handler; dbus.el runs
@@ -376,22 +394,22 @@ temporary directory is private to the test."
                                 (let ((results nil) (ctx (drgnx-platform-ctx nil 0.5)))
                                   (drgnx-platform-kwin--monitors ctx (lambda (r) (push r results)))
                                   (drgnx-platform-kwin--monitors ctx (lambda (r) (push r results)))
-                                  (should (drgnx-platform-test--await (lambda () (= 4 (length drgnx-platform-kwin-test--calls))) 3))
+                                  (should (drgnx-platform-kwin-test--await (lambda () (= 4 (length drgnx-platform-kwin-test--calls))) 3))
                                   (should (equal dbus-event-error-functions '(drgnx-platform-kwin--dbus-error)))
-                                  (should (drgnx-platform-test--await (lambda () (= 2 (length results))) 3))
+                                  (should (drgnx-platform-kwin-test--await (lambda () (= 2 (length results))) 3))
                                   (should-not dbus-event-error-functions))))
 
 (drgnx-platform-test--deftest drgnx-platform-kwin/an-error-for-another-call-is-not-ours ()
                               (drgnx-platform-kwin-test--with-kwin nil
                                 (let ((results nil))
                                   (drgnx-platform-kwin--monitors (drgnx-platform-ctx nil 0.4) (lambda (r) (push r results)))
-                                  (should (drgnx-platform-test--await (lambda () (= 2 (length drgnx-platform-kwin-test--calls))) 3))
+                                  (should (drgnx-platform-kwin-test--await (lambda () (= 2 (length drgnx-platform-kwin-test--calls))) 3))
                                   (should (= 1 (length dbus-event-error-functions)))
                                   ;; another serial, another bus: ignored
                                   (run-hook-with-args 'dbus-event-error-functions (list 'dbus-event :session 3 99 "x" "y" "/" "i" "m" nil) '(dbus-error "n" "m"))
                                   (run-hook-with-args 'dbus-event-error-functions (list 'dbus-event :system 3 1 "x" "y" "/" "i" "m" nil) '(dbus-error "n" "m"))
                                   (should-not results)
-                                  (should (drgnx-platform-test--await (lambda () results) 3))
+                                  (should (drgnx-platform-kwin-test--await (lambda () results) 3))
                                   (should (string-match-p "did not answer" (cadr (car results)))))))
 
 (drgnx-platform-test--deftest drgnx-platform-kwin/nothing-runs-after-a-deadline ()
@@ -402,7 +420,7 @@ temporary directory is private to the test."
                                   (should (eq :error (car r))))
                                 (should (functionp drgnx-platform-kwin-test--held-load))
                                 (funcall drgnx-platform-kwin-test--held-load 7)  ; the late reply
-                                (drgnx-test-pause 0.1 "a `run' after the late reply")
+                                (drgnx-platform-kwin-test--quiet 0.1 "a `run' after the late reply")
                                 ;; no `run' was sent for a script the call has given up on
                                 (should (equal (drgnx-platform-kwin-test--methods) '("loadScript" "unloadScript")))))
 
@@ -455,17 +473,18 @@ temporary directory is private to the test."
                                 (should (drgnx-platform-detect (drgnx-platform-test--env '(("WAYLAND_DISPLAY" . "w") ("XDG_CURRENT_DESKTOP" . "KDE"))) 'pgtk))))
 
 (drgnx-platform-test--deftest drgnx-platform-kwin/it-says-which-monitor-from-emacs-own-geometry ()
-                              ;; Next and Previous need the monitor the window is on: Emacs' own answer, no script
-                              (drgnx-platform-test--with-frame 'pgtk '("XDG_CURRENT_DESKTOP=KDE" "WAYLAND_DISPLAY=w")
-                                (cl-letf (((symbol-function 'frame-monitor-attributes)
-                                           (lambda (&optional _) '((name . "") (geometry 1280 0 1280 800) (workarea 1280 0 1280 800))))
-                                          ((symbol-function 'dbus-call-method-asynchronously)
-                                           (lambda (&rest _) (error "no D-Bus call expected"))))
-                                  (let (fm)
-                                    (should (eq 'kwin (drgnx-platform-wm frame)))
-                                    (drgnx-platform-frame-monitor frame (lambda (m) (setq fm (or m 'none))))
-                                    (should (drgnx-platform-test--await (lambda () fm)))
-                                    (should (equal (plist-get fm :geometry) '(1280 0 1280 800)))))))
+                              (drgnx-platform-kwin-test--clocked (lambda ()
+                                                                   ;; Next and Previous need the monitor the window is on: Emacs' own answer, no script
+                                                                   (drgnx-platform-test--with-frame 'pgtk '("XDG_CURRENT_DESKTOP=KDE" "WAYLAND_DISPLAY=w")
+                                                                     (cl-letf (((symbol-function 'frame-monitor-attributes)
+                                                                                (lambda (&optional _) '((name . "") (geometry 1280 0 1280 800) (workarea 1280 0 1280 800))))
+                                                                               ((symbol-function 'dbus-call-method-asynchronously)
+                                                                                (lambda (&rest _) (error "no D-Bus call expected"))))
+                                                                       (let (fm)
+                                                                         (should (eq 'kwin (drgnx-platform-wm frame)))
+                                                                         (drgnx-platform-frame-monitor frame (lambda (m) (setq fm (or m 'none))))
+                                                                         (should (drgnx-platform-kwin-test--await (lambda () fm)))
+                                                                         (should (equal (plist-get fm :geometry) '(1280 0 1280 800)))))))))
 
 (provide 'platform-kwin-test)
 ;;; platform-kwin-test.el ends here

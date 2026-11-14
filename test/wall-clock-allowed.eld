@@ -4,10 +4,8 @@
 ;; only shrinks).  :slice names the slice of docs/plans/drgnx/2026-11-14-virtual-clocks.md that converts the file to the virtual
 ;; clock; "decided" is an exception that stays: a real process, terminal, daemon or window manager, whose window needs real time.
 (
- ("test/unit/platform-test.el" :slice "S5 platform" :why "fake adapters: pauses become virtual advances")
- ("test/unit/platform-kwin-test.el" :slice "S5 platform" :why "the kwin adapter's deadline: virtual advances")
- ("test/unit/platform-wm-test.el" :slice "S5 platform" :why "the wm adapter's timers: virtual advances")
- ("test/unit/wb-explorer-test.el" :slice "S5 platform" :why "the explorer's window helper: virtual advance")
+ ("test/unit/platform-test.el" :slice "decided" :why "the fake tool is a real process (swaymsg, hyprctl): its late line, its second call and its log are real time; the timer-only twins run on the clock")
+ ("test/unit/wb-explorer-test.el" :slice "decided" :why "real file-notify events (inotify) arrive in real time: the window lets them in")
  ("test/unit/agent-check-test.el" :slice "S5 hub" :why "a second result may not come: the hub's clock")
  ("test/unit/ai-ask-test.el" :slice "S5 hub" :why "the mock's delay: the hub's clock")
  ("test/unit/ai-client-test.el" :slice "S5 hub" :why "the server's delay: virtual")
