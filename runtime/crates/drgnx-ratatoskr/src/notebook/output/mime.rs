@@ -272,6 +272,15 @@ impl Bundle {
             })
             .sum();
         let shown = match &self.shown {
+            // the view's copy is the very string held when nothing was cleaned out of it: once
+            Shown::Text { text, .. }
+                if self
+                    .data
+                    .values()
+                    .any(|v| v.as_str() == Some(text.as_str())) =>
+            {
+                0
+            }
             Shown::Text { text, .. } => text.len(),
             Shown::Note(n) => n.len(),
             Shown::Image { .. } => 0,

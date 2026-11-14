@@ -684,7 +684,9 @@ fn an_update_cannot_grow_a_display_past_the_caps_and_a_smaller_one_gives_the_roo
         &mut r,
         "update_display_data",
         "u",
-        with("x".repeat(600_000)),
+        // two representations of 600 KB: 1.2 MB held, over the megabyte
+        json!({"data": {"text/plain": "x".repeat(600_000), "text/markdown": "y".repeat(600_000)},
+               "transient": {"display_id": "d"}}),
     );
     let run = r.run("u").unwrap();
     assert_eq!(
@@ -826,4 +828,63 @@ fn text_shown_has_no_control_or_bidi_characters_but_the_file_keeps_what_the_kern
         }
     );
     assert_eq!(b.data()["text/plain"], raw);
+}
+
+#[test]
+fn a_file_is_as_untrusted_as_a_kernel_and_its_outputs_go_through_the_same_caps() {
+    use crate::notebook::output::file::{MAX_RAW_OUTPUT, from_nbformat_raw};
+    // a traceback of two million empty entries builds two hundred
+    let raw = format!(
+        r#"{{"output_type": "error", "ename": "E", "evalue": "v", "traceback": [{}""]}}"#,
+        r#""","#.repeat(2_000_000)
+    );
+    let Some(Output::Error { traceback, .. }) = from_nbformat_raw(&raw) else {
+        panic!("not an error output")
+    };
+    assert!(traceback.len() <= MAX_TRACEBACK);
+    // an output too large to read is a line saying so
+    let huge = format!(
+        r#"{{"output_type": "stream", "name": "stdout", "text": "{}"}}"#,
+        "x".repeat(MAX_RAW_OUTPUT)
+    );
+    let Some(Output::Display { bundle, .. }) = from_nbformat_raw(&huge) else {
+        panic!("not a note")
+    };
+    assert!(
+        matches!(bundle.shown(), Shown::Text { text, .. } if text.contains("too large to load"))
+    );
+    // the list form of a stream's text, and a name that is too long
+    let s = r#"{"output_type": "stream", "name": "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn", "text": ["a\n", "b"]}"#;
+    let Some(Output::Stream { name, text }) = from_nbformat_raw(s) else {
+        panic!("not a stream")
+    };
+    assert_eq!((name.len(), text.text().as_str()), (MAX_NAME, "a\nb"));
+    assert!(from_nbformat_raw(r#"{"output_type": "mystery"}"#).is_none());
+    // the run's caps: 100 outputs keep 64 and say so; text past the cap is dropped whole
+    let many: Vec<Output> = (0..100)
+        .map(|_| {
+            from_nbformat_raw(r#"{"output_type": "stream", "name": "a", "text": "t"}"#).unwrap()
+        })
+        .collect();
+    let run = CellRun::from_outputs("r", many, RunStatus::Ok);
+    assert_eq!(run.outputs.len(), MAX_OUTPUTS);
+    assert!(run.truncated);
+}
+
+#[test]
+fn a_text_the_view_shows_as_it_was_sent_is_held_once() {
+    let mut r = Router::new();
+    r.begin("t");
+    iopub(
+        &mut r,
+        "display_data",
+        "t",
+        json!({"data": {"text/plain": "x".repeat(700_000)}}),
+    );
+    assert_eq!(
+        r.run("t").unwrap().outputs.len(),
+        1,
+        "700 KB fits a megabyte"
+    );
+    assert!(!r.run("t").unwrap().truncated);
 }

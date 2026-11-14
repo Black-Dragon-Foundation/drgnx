@@ -155,7 +155,11 @@ fn an_error_has_its_head_row_and_traceback_and_an_aborted_or_cancelled_cell_says
 fn half_a_million_styled_lines_cost_only_the_rows_shown() {
     let text = "\x1b[31mx\x1b[0m\n".repeat(400_000);
     let run = run_with(|f| f("stream", json!({"name": "stdout", "text": text})));
-    let t = build("c", &run, 1);
+    // built on a thread that is waited for with a deadline: a build that walks every line fails the test instead of hanging it
+    let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let s2 = slot.clone();
+    std::thread::spawn(move || *s2.lock().unwrap() = Some(build("c", &run, 1)));
+    let t = skuld::wait_until("the tail", 20, || slot.lock().unwrap().take());
     assert_eq!(t.more_lines, 400_001 - MAX_ROWS);
     assert!(
         t.text

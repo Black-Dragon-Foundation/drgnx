@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use hrafn::notebook::{Kind, Notebook};
 use serde_json::Value;
 
-use super::output::file::from_nbformat;
-use super::output::{CellRun, Output, RunStatus};
+use super::output::file::from_nbformat_raw;
+use super::output::{CellRun, MAX_OUTPUTS, RunStatus};
 use super::tail::{self, Tail};
 
 /// What the buffer says a cell is.
@@ -31,16 +31,44 @@ pub struct CellInfo {
 }
 
 struct Shown {
-    outputs: Vec<Output>,
+    run: CellRun,
     /// From the file, not from a run of this hub.
     stale: bool,
     version: u64,
 }
 
+/// The largest notebook file read.
+pub const MAX_NOTEBOOK_BYTES: usize = 32 << 20;
+
 pub struct Book {
     pub path: PathBuf,
     nb: Notebook,
     shown: HashMap<String, Shown>,
+}
+
+/// An output object as nbformat's writer writes it: multiline text as a list of lines (images stay one string).
+fn for_file(mut o: Value) -> Value {
+    fn lines(v: &mut Value) {
+        if let Value::String(s) = v {
+            *v = Value::Array(
+                hrafn::notebook::split_lines(s)
+                    .into_iter()
+                    .map(|l| Value::String(l.to_owned()))
+                    .collect(),
+            );
+        }
+    }
+    if let Some(t) = o.get_mut("text") {
+        lines(t);
+    }
+    if let Some(Value::Object(d)) = o.get_mut("data") {
+        for (k, v) in d.iter_mut() {
+            if k.starts_with("text/") || k == "image/svg+xml" {
+                lines(v);
+            }
+        }
+    }
+    o
 }
 
 fn random_id() -> String {
@@ -52,6 +80,14 @@ fn random_id() -> String {
 impl Book {
     /// The notebook at PATH whose text is TEXT (the file's, read by the caller); ids are minted for cells that lack one.
     pub fn open(path: &Path, text: String) -> Result<Book, String> {
+        if text.len() > MAX_NOTEBOOK_BYTES {
+            return Err(format!(
+                "{}: too large for a notebook ({} MiB; the limit is {} MiB)",
+                path.display(),
+                text.len() >> 20,
+                MAX_NOTEBOOK_BYTES >> 20
+            ));
+        }
         let nb = Notebook::parse(text, &mut random_id)
             .map_err(|e| format!("{}: not a notebook: {e:?}", path.display()))?;
         let shown = nb
@@ -60,11 +96,18 @@ impl Book {
             .enumerate()
             .filter(|(_, c)| c.kind == Kind::Code)
             .map(|(i, c)| {
-                let outputs = nb.outputs(i).iter().filter_map(from_nbformat).collect();
+                // one past the cap, so a cell with more says it was cut
+                let outputs = nb
+                    .outputs_raw(i, MAX_OUTPUTS + 1)
+                    .iter()
+                    .filter_map(|r| from_nbformat_raw(r))
+                    .collect::<Vec<_>>();
+                let mut run = CellRun::from_outputs(&c.id, outputs, RunStatus::Ok);
+                run.execution_count = c.execution_count;
                 (
                     c.id.clone(),
                     Shown {
-                        outputs,
+                        run,
                         stale: true,
                         version: 1,
                     },
@@ -105,6 +148,18 @@ impl Book {
 
     /// Make the notebook's cells what the buffer says: removed ones go, moved ones move, new ones come, text and type follow.
     pub fn sync(&mut self, cells: &[CellSync]) {
+        // the usual case, the same cells in the same order: one pass, nothing found or moved
+        if cells.len() == self.nb.cells().len()
+            && cells.iter().zip(self.nb.cells()).all(|(a, b)| a.id == b.id)
+        {
+            for (i, c) in cells.iter().enumerate() {
+                if self.nb.cells()[i].source != c.source {
+                    self.nb.set_source(i, &c.source);
+                }
+                self.nb.set_kind(i, c.kind);
+            }
+            return;
+        }
         let want: std::collections::HashSet<&str> = cells.iter().map(|c| c.id.as_str()).collect();
         for i in (0..self.nb.cells().len()).rev() {
             if !want.contains(self.nb.cells()[i].id.as_str()) {
@@ -132,41 +187,40 @@ impl Book {
         }
     }
 
-    /// Cell ID shows OUTPUTS now (a run's), with its execution COUNT.
-    pub fn show(&mut self, id: &str, outputs: Vec<Output>, count: Option<i64>) {
+    /// Cell ID shows what RUN has now (its outputs, its state, whether they were cut), with its execution count.
+    pub fn show(&mut self, id: &str, run: &CellRun) {
         let Some(i) = self.index(id) else { return };
+        if run.execution_count.is_some() {
+            self.nb.set_execution_count(i, run.execution_count);
+        }
         let version = self.shown.get(id).map_or(0, |s| s.version) + 1;
         self.shown.insert(
             id.to_string(),
             Shown {
-                outputs,
+                run: run.clone(),
                 stale: false,
                 version,
             },
         );
-        if count.is_some() {
-            self.nb.set_execution_count(i, count);
-        }
     }
 
     /// The tail of cell ID, and whether it is the file's own (stale).
     pub fn tail(&self, id: &str) -> Option<(Tail, bool)> {
         self.index(id)?;
-        let empty = Shown {
-            outputs: Vec::new(),
-            stale: false,
-            version: 0,
-        };
-        let s = self.shown.get(id).unwrap_or(&empty);
-        let run = CellRun::from_outputs(id, s.outputs.clone(), RunStatus::Ok);
-        Some((tail::build(id, &run, s.version), s.stale))
+        Some(match self.shown.get(id) {
+            Some(s) => (tail::build(id, &s.run, s.version), s.stale),
+            None => (
+                tail::build(id, &CellRun::from_outputs(id, [], RunStatus::Ok), 0),
+                false,
+            ),
+        })
     }
 
     /// The cell's full output as nbformat objects.
     pub fn outputs_of(&self, id: &str) -> Vec<Value> {
         self.shown
             .get(id)
-            .map(|s| s.outputs.iter().map(Output::to_nbformat).collect())
+            .map(|s| s.run.to_nbformat())
             .unwrap_or_default()
     }
 
@@ -178,7 +232,7 @@ impl Book {
                 continue;
             }
             if let Some(s) = self.shown.get(&c.id).filter(|s| !s.stale) {
-                let objs: Vec<Value> = s.outputs.iter().map(Output::to_nbformat).collect();
+                let objs: Vec<Value> = s.run.to_nbformat().into_iter().map(for_file).collect();
                 self.nb.set_outputs(i, &objs);
             }
         }

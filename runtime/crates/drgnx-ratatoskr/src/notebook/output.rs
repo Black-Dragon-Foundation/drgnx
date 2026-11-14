@@ -149,16 +149,35 @@ impl CellRun {
     }
 
     /// A run that is only outputs (read from a file, or set by the hub), in STATUS.
-    pub fn from_outputs(msg_id: &str, outputs: Vec<Output>, status: RunStatus) -> CellRun {
-        let text = outputs.iter().map(Output::text_len).sum();
-        let images = outputs.iter().map(Output::image_len).sum();
-        CellRun {
-            outputs,
+    /// The caps of a kernel's output hold for it too (a file is as untrusted as a kernel).
+    pub fn from_outputs(
+        msg_id: &str,
+        outputs: impl IntoIterator<Item = Output>,
+        status: RunStatus,
+    ) -> CellRun {
+        let mut r = CellRun {
             status,
-            text,
-            images,
             ..CellRun::new(msg_id)
+        };
+        for o in outputs {
+            r.push_output(o);
         }
+        r
+    }
+
+    /// Hold OUT unless a cap says no (then the run says it was cut); whether it was kept.
+    pub(crate) fn push_output(&mut self, out: Output) -> bool {
+        if self.outputs.len() >= MAX_OUTPUTS
+            || self.text + out.text_len() > MAX_TEXT
+            || self.images + out.image_len() > MAX_IMAGES
+        {
+            self.truncated = true;
+            return false;
+        }
+        self.text += out.text_len();
+        self.images += out.image_len();
+        self.outputs.push(out);
+        true
     }
 
     /// The cell's `outputs` for the file.
@@ -202,6 +221,10 @@ impl Router {
 
     pub fn run(&self, msg_id: &str) -> Option<&CellRun> {
         self.runs.get(msg_id)
+    }
+
+    pub fn run_mut(&mut self, msg_id: &str) -> Option<&mut CellRun> {
+        self.runs.get_mut(msg_id)
     }
 
     /// Forget a run (its cell is done being shown).
@@ -374,17 +397,7 @@ impl Router {
 
     /// Whether the output was kept (the caps drop it, and the run says so).
     fn add(r: &mut CellRun, out: Output) -> bool {
-        if r.outputs.len() >= MAX_OUTPUTS
-            || r.text + out.text_len() > MAX_TEXT
-            || r.images + out.image_len() > MAX_IMAGES
-        {
-            r.truncated = true;
-            return false;
-        }
-        r.text += out.text_len();
-        r.images += out.image_len();
-        r.outputs.push(out);
-        true
+        r.push_output(out)
     }
 
     /// A stream grew past the text cap: cut it back to what fits.

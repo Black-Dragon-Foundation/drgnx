@@ -18,6 +18,12 @@ fn open() -> Book {
     Book::open(Path::new("/x/a.ipynb"), NB.to_string()).unwrap()
 }
 
+fn run(outputs: Vec<Output>, count: Option<i64>) -> CellRun {
+    let mut r = CellRun::from_outputs("r", outputs, RunStatus::Ok);
+    r.execution_count = count;
+    r
+}
+
 fn stream(text: &str) -> Output {
     let mut t = Terminal::default();
     t.push(text);
@@ -63,10 +69,10 @@ fn a_notebook_opens_with_its_cells_ids_and_the_files_outputs_as_stale_tails() {
 #[test]
 fn a_run_replaces_the_stale_outputs_and_the_tail_version_counts_up() {
     let mut b = open();
-    b.show("c1", vec![stream("new")], Some(4));
+    b.show("c1", &run(vec![stream("new")], Some(4)));
     let (t, stale) = b.tail("c1").unwrap();
     assert_eq!((t.text.as_str(), stale, t.version), ("new", false, 2));
-    b.show("c1", vec![stream("newer")], Some(4));
+    b.show("c1", &run(vec![stream("newer")], Some(4)));
     assert_eq!(b.tail("c1").unwrap().0.version, 3);
     assert_eq!(b.cells()[1].execution_count, Some(4));
 }
@@ -124,7 +130,7 @@ fn saving_writes_the_runs_outputs_and_leaves_stale_ones_as_the_file_had_them() {
         count: Some(5),
         bundle: Bundle::from_message(&json!({"data": {"text/plain": "2"}})),
     };
-    b.show(&minted, vec![result], Some(5));
+    b.show(&minted, &run(vec![result], Some(5)));
     b.save().unwrap();
     let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     let cells = saved["cells"].as_array().unwrap();
@@ -134,7 +140,7 @@ fn saving_writes_the_runs_outputs_and_leaves_stale_ones_as_the_file_had_them() {
         "a stale cell is as the file had it"
     );
     assert_eq!(cells[2]["outputs"][0]["output_type"], "execute_result");
-    assert_eq!(cells[2]["outputs"][0]["data"]["text/plain"], "2");
+    assert_eq!(cells[2]["outputs"][0]["data"]["text/plain"], json!(["2"]));
     assert_eq!(cells[2]["execution_count"], 5);
     assert_eq!(cells[2]["source"], json!(["1 + 1"]));
     assert_eq!(cells[2]["id"], minted.as_str(), "the minted id is written");
@@ -146,4 +152,61 @@ fn saving_writes_the_runs_outputs_and_leaves_stale_ones_as_the_file_had_them() {
     // and the saved file opens again with the run's output (stale, from the file)
     let again = Book::open(&path, String::from_utf8(first).unwrap()).unwrap();
     assert_eq!(again.tail(&minted).unwrap().0.text, "2");
+}
+
+#[test]
+fn a_file_over_the_size_limit_is_refused_before_it_is_parsed() {
+    let e = Book::open(
+        Path::new("/x/big.ipynb"),
+        "x".repeat(MAX_NOTEBOOK_BYTES + 1),
+    )
+    .err()
+    .unwrap();
+    assert!(e.contains("too large"), "{e}");
+}
+
+#[test]
+fn a_hostile_files_outputs_are_capped_when_it_is_opened() {
+    let outs: Vec<String> = (0..200)
+        .map(|_| r#"{"output_type": "stream", "name": "stdout", "text": ["x\n"]}"#.to_string())
+        .collect();
+    let err = format!(
+        r#"{{"output_type": "error", "ename": "E", "evalue": "v", "traceback": [{}""]}}"#,
+        r#""","#.repeat(500_000)
+    );
+    let text = format!(
+        r#"{{"cells": [
+          {{"cell_type": "code", "id": "many", "metadata": {{}}, "execution_count": 2, "outputs": [{}], "source": []}},
+          {{"cell_type": "code", "id": "tb", "metadata": {{}}, "execution_count": 1, "outputs": [{err}], "source": []}}],
+        "metadata": {{}}, "nbformat": 4, "nbformat_minor": 5}}"#,
+        outs.join(",")
+    );
+    let b = Book::open(Path::new("/x/h.ipynb"), text).unwrap();
+    assert_eq!(b.outputs_of("many").len(), MAX_OUTPUTS);
+    assert!(b.tail("many").unwrap().0.more_lines > 0);
+    let tb = &b.outputs_of("tb")[0];
+    assert!(tb["traceback"].as_array().unwrap().len() <= crate::notebook::output::MAX_TRACEBACK);
+    assert_eq!(b.cells()[0].execution_count, Some(2));
+}
+
+#[test]
+fn the_same_cells_in_the_same_order_are_updated_in_place() {
+    let mut b = open();
+    let ids: Vec<String> = b.cells().iter().map(|c| c.id.clone()).collect();
+    b.sync(&[
+        sync(&ids[0], Kind::Markdown, "# New"),
+        sync(&ids[1], Kind::Markdown, "now text"),
+        sync(&ids[2], Kind::Code, "z = 3"),
+    ]);
+    let cells = b.cells();
+    assert_eq!(cells.iter().map(|c| c.id.clone()).collect::<Vec<_>>(), ids);
+    assert_eq!(
+        (
+            cells[0].source.as_str(),
+            cells[1].kind,
+            cells[1].source.as_str(),
+            cells[2].source.as_str()
+        ),
+        ("# New", Kind::Markdown, "now text", "z = 3")
+    );
 }
