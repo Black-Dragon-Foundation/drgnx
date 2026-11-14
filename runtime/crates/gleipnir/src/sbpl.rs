@@ -577,49 +577,97 @@ fn deny_any_case(ops: &str, filter: &str, paths: &[&str]) -> Result<Option<Strin
 /// `.secrets` must also hold for `.ſecrets` (gate review S8), whichever spelling Seatbelt compares.
 const FOLDS_TO: &[(char, char)] = &[('k', '\u{212A}'), ('s', '\u{17F}'), ('å', '\u{212B}')];
 
+/// The one letter case-insensitive APFS folds to two: `ß` and `ẞ` are `ss` (CaseFolding.txt's full fold; GL-T9-3: the
+/// macOS 27 runner's control reached a hidden `straße` as `STRASSE`). Other one-to-many folds (the `ﬁ` and `ﬂ`
+/// ligatures, `İ`, …) are not taken until a Mac's control shows APFS takes them.
+const ESZETT: [char; 2] = ['ß', '\u{1E9E}'];
+
 /// `path` as a regex that matches it in any case: an ASCII letter as a class of both cases (`[Gg]`), a letter with
 /// more spellings ([`FOLDS_TO`]: `(k|K|K)`) or a non-ASCII letter with case variants as a group of them (`(é|É)`), a
-/// regex metacharacter escaped. No `(?i)`, which SBPL is not known to support. `whole`: the path and everything under
-/// it (as `subpath`); else the path alone (as `literal`).
+/// regex metacharacter escaped. A run of s's and [`ESZETT`]s, which fold to s's two at a time, as a group of every
+/// spelling of its length (`ß` and `ss` both give `((s|S|ſ)(s|S|ſ)|(ß|ẞ))`), so a hidden `straße` is closed as
+/// `STRASSE` and a hidden `.ssh` as `.ßh`. No `(?i)`, which SBPL is not known to support. `whole`: the path and
+/// everything under it (as `subpath`); else the path alone (as `literal`).
 fn case_regex(path: &str, whole: bool) -> String {
     let mut re = String::from("^");
-    for c in path.chars() {
-        let lower = single(c.to_lowercase());
-        // c, its lowercase and uppercase, the uppercase of its lowercase (a Kelvin sign's lowercase is `k`, whose
-        // uppercase is `K`), and the other spellings of that lowercase.
-        let mut vars: Vec<char> = vec![c];
-        let more = [
-            lower,
-            single(c.to_uppercase()),
-            lower.and_then(|l| single(l.to_uppercase())),
-        ];
-        let folds = FOLDS_TO
-            .iter()
-            .filter(|(base, _)| Some(*base) == lower)
-            .map(|&(_, extra)| extra);
-        for v in more.into_iter().flatten().chain(folds) {
-            if !vars.contains(&v) {
-                vars.push(v);
-            }
+    let mut cs = path.chars().peekable();
+    while let Some(c) = cs.next() {
+        let mut run = s_weight(c);
+        if run == 0 {
+            re.push_str(&letter_regex(c));
+            continue;
         }
-        if c.is_ascii_alphabetic() && vars.len() == 2 {
-            re.push_str(&format!(
-                "[{}{}]",
-                c.to_ascii_uppercase(),
-                c.to_ascii_lowercase()
-            ));
-        } else if vars.len() > 1 {
-            let alts: Vec<String> = vars.iter().map(char::to_string).collect();
-            re.push_str(&format!("({})", alts.join("|")));
+        while let Some(w) = cs.peek().map(|&c| s_weight(c)).filter(|&w| w > 0) {
+            run += w;
+            cs.next();
+        }
+        if run == 1 {
+            re.push_str(&letter_regex(c));
         } else {
-            if ".^$*+?()[]{}|\\".contains(c) {
-                re.push('\\');
-            }
-            re.push(c);
+            re.push_str(&format!("({})", s_spellings(run).join("|")));
         }
     }
     re.push_str(if whole { "(/.*)?$" } else { "$" });
     re
+}
+
+/// How many s's `c` folds to: 1 for `s`, `S` and the long `ſ`, 2 for an [`ESZETT`], else 0.
+fn s_weight(c: char) -> usize {
+    match c {
+        's' | 'S' | '\u{17F}' => 1,
+        c if ESZETT.contains(&c) => 2,
+        _ => 0,
+    }
+}
+
+/// Every spelling of `n` s's, as regexes: each a sequence of one-s groups and two-s [`ESZETT`] groups.
+fn s_spellings(n: usize) -> Vec<String> {
+    match n {
+        0 => vec![String::new()],
+        1 => vec![letter_regex('s')],
+        _ => {
+            let one = letter_regex('s');
+            let two = format!("({})", ESZETT.map(String::from).join("|"));
+            let mut alts: Vec<String> = s_spellings(n - 1)
+                .into_iter()
+                .map(|r| format!("{one}{r}"))
+                .collect();
+            alts.extend(s_spellings(n - 2).into_iter().map(|r| format!("{two}{r}")));
+            alts
+        }
+    }
+}
+
+/// `c` in each of its cases, as a regex: `[Gg]`, `(k|K|K)`, `(é|É)`, or `c` itself, escaped if a metacharacter.
+fn letter_regex(c: char) -> String {
+    let lower = single(c.to_lowercase());
+    // c, its lowercase and uppercase, the uppercase of its lowercase (a Kelvin sign's lowercase is `k`, whose
+    // uppercase is `K`), and the other spellings of that lowercase.
+    let mut vars: Vec<char> = vec![c];
+    let more = [
+        lower,
+        single(c.to_uppercase()),
+        lower.and_then(|l| single(l.to_uppercase())),
+    ];
+    let folds = FOLDS_TO
+        .iter()
+        .filter(|(base, _)| Some(*base) == lower)
+        .map(|&(_, extra)| extra);
+    for v in more.into_iter().flatten().chain(folds) {
+        if !vars.contains(&v) {
+            vars.push(v);
+        }
+    }
+    if c.is_ascii_alphabetic() && vars.len() == 2 {
+        format!("[{}{}]", c.to_ascii_uppercase(), c.to_ascii_lowercase())
+    } else if vars.len() > 1 {
+        let alts: Vec<String> = vars.iter().map(char::to_string).collect();
+        format!("({})", alts.join("|"))
+    } else if ".^$*+?()[]{}|\\".contains(c) {
+        format!("\\{c}")
+    } else {
+        c.to_string()
+    }
 }
 
 /// The one character `it` yields, or `None` when it yields none or several (`ß` uppercases to `SS`).
@@ -858,37 +906,89 @@ mod tests {
         hits[0]
     }
 
-    /// Does `re`, a regex [`profile`] made (`^`, `\c`, `[Aa]`, `(é|É)`, then `(/.*)?$` or `$`), match `s`? Only that
-    /// shape is understood; anything else fails the test.
+    /// One piece of a [`re_match`] regex: a character out of a set, or a group of alternatives.
+    enum Re {
+        One(Vec<char>),
+        Alt(Vec<Vec<Re>>),
+    }
+
+    /// The alternatives of `cs` from `at` to the `)` that closes `depth` (or the end, at depth 0).
+    fn re_parse(cs: &[char], at: &mut usize, depth: usize, re: &str) -> Vec<Vec<Re>> {
+        let mut alts = vec![Vec::new()];
+        while let Some(&c) = cs.get(*at) {
+            *at += 1;
+            let piece = match c {
+                '\\' => {
+                    *at += 1;
+                    Re::One(vec![cs[*at - 1]])
+                }
+                '[' => {
+                    let end = *at
+                        + cs[*at..]
+                            .iter()
+                            .position(|&c| c == ']')
+                            .expect("a closed class");
+                    let set = cs[*at..end].to_vec();
+                    *at = end + 1;
+                    Re::One(set)
+                }
+                '(' => Re::Alt(re_parse(cs, at, depth + 1, re)),
+                ')' if depth > 0 => return alts,
+                '|' if depth > 0 => {
+                    alts.push(Vec::new());
+                    continue;
+                }
+                '.' | '^' | '$' | '*' | '+' | '?' | ')' | ']' | '{' | '}' | '|' => {
+                    panic!("unescaped {c} in {re}")
+                }
+                c => Re::One(vec![c]),
+            };
+            alts.last_mut().unwrap().push(piece);
+        }
+        assert_eq!(depth, 0, "an unclosed ( in {re}");
+        alts
+    }
+
+    /// Every position `seq` can end at in `s` when it starts at `from`.
+    fn re_ends(seq: &[Re], s: &[char], from: usize) -> Vec<usize> {
+        let mut at = vec![from];
+        for piece in seq {
+            let mut next = Vec::new();
+            for &p in &at {
+                match piece {
+                    Re::One(set) => {
+                        if s.get(p).is_some_and(|c| set.contains(c)) {
+                            next.push(p + 1);
+                        }
+                    }
+                    Re::Alt(alts) => alts.iter().for_each(|a| next.extend(re_ends(a, s, p))),
+                }
+            }
+            next.sort_unstable();
+            next.dedup();
+            at = next;
+        }
+        at
+    }
+
+    /// Does `re`, a regex [`profile`] made (`^`, `\c`, `[Aa]`, groups of alternatives such as `(é|É)` or `(ss|ß)`,
+    /// nested, then `(/.*)?$` or `$`), match `s`? Only that shape is understood; anything else fails the test.
     fn re_match(re: &str, s: &str) -> bool {
         let (body, whole) = if let Some(b) = re.strip_suffix("(/.*)?$") {
             (b, true)
         } else {
             (re.strip_suffix('$').expect("ends in $"), false)
         };
-        let mut cs = body.strip_prefix('^').expect("starts with ^").chars();
-        let mut toks: Vec<Vec<char>> = Vec::new();
-        while let Some(c) = cs.next() {
-            toks.push(match c {
-                '\\' => vec![cs.next().unwrap()],
-                '[' => cs.by_ref().take_while(|&c| c != ']').collect(),
-                '(' => cs
-                    .by_ref()
-                    .take_while(|&c| c != ')')
-                    .filter(|&c| c != '|')
-                    .collect(),
-                '.' | '^' | '$' | '*' | '+' | '?' | ')' | ']' | '{' | '}' | '|' => {
-                    panic!("unescaped {c} in {re}")
-                }
-                c => vec![c],
-            });
-        }
+        let cs: Vec<char> = body
+            .strip_prefix('^')
+            .expect("starts with ^")
+            .chars()
+            .collect();
+        let alts = re_parse(&cs, &mut 0, 0, re);
         let sc: Vec<char> = s.chars().collect();
-        if sc.len() < toks.len() || !toks.iter().zip(&sc).all(|(t, c)| t.contains(c)) {
-            return false;
-        }
-        let rest = &sc[toks.len()..];
-        rest.is_empty() || (whole && rest[0] == '/')
+        re_ends(&[Re::Alt(alts)], &sc, 0)
+            .into_iter()
+            .any(|e| e == sc.len() || (whole && sc[e] == '/'))
     }
 
     /// A deny's paths and regexes, in pairs: `(F "p") (regex "r")`.
@@ -1449,9 +1549,9 @@ mod tests {
             assert!(re_match(re, hit), "{hit}");
         }
         assert!(h > pin);
-        // A non-ASCII letter: a group of its cases; a letter without cases and a metacharacter as themselves.
+        // A non-ASCII letter: a group of its cases; a metacharacter escaped.
         let re = case_regex("/w/café/ß+x", true);
-        assert!(re.contains("(é|É)") && re.contains("ß\\+"), "{re}");
+        assert!(re.contains("(é|É)") && re.contains("(ß|ẞ))\\+"), "{re}");
         for hit in ["/w/CAFÉ/ß+X", "/w/Café/ß+x/y"] {
             assert!(re_match(&re, hit), "{hit}");
         }
@@ -1473,6 +1573,36 @@ mod tests {
             assert!(re_match(&re, hit), "{hit}");
         }
         assert!(!re_match(&re, "/w/.cubes/å"));
+        // GL-T9-3: APFS folds ß (and ẞ) to "ss", one letter to two (the macOS 27 runner's control reached a hidden
+        // `straße` as `STRASSE`). Each spelling stands for the others, in both directions: a hidden `.ssh` read as
+        // `.ßh`, and a run of s's split into ß's anywhere.
+        let re = case_regex("/w/straße", false);
+        for hit in [
+            "/w/straße",
+            "/w/STRASSE",
+            "/w/strasse",
+            "/w/StraSse",
+            "/w/STRAẞE",
+            "/w/stra\u{17F}\u{17F}e",
+        ] {
+            assert!(re_match(&re, hit), "{hit} by {re}");
+        }
+        for miss in ["/w/strase", "/w/strasssE", "/w/straßse"] {
+            assert!(!re_match(&re, miss), "{miss} by {re}");
+        }
+        let re = case_regex("/w/.ssh", true);
+        for hit in ["/w/.ssh/id", "/w/.ßh", "/w/.ẞH/id", "/w/.SSH"] {
+            assert!(re_match(&re, hit), "{hit} by {re}");
+        }
+        let re = case_regex("/w/sss", false);
+        for hit in ["/w/sss", "/w/ßs", "/w/sß", "/w/Sẞ"] {
+            assert!(re_match(&re, hit), "{hit} by {re}");
+        }
+        assert!(!re_match(&re, "/w/ßß"), "{re}");
+        assert_eq!(
+            case_regex("/ß", false),
+            "^/((s|S|\u{17F})(s|S|\u{17F})|(ß|\u{1E9E}))$"
+        );
         assert_eq!(case_regex("/\u{212A}", false), "^/(\u{212A}|k|K)$");
         assert_eq!(case_regex("/g", false), "^/[Gg]$");
         // Homebrew's data, in every case too.

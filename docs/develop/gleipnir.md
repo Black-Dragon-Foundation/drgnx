@@ -957,7 +957,10 @@ policy:
   Homebrew's data) also carries a `regex` of character classes (`\.[Gg][Ii][Tt](/.*)?$`; a non-ASCII letter as
   `(é|É)`; no `(?i)`). APFS's case folding also takes the Kelvin sign `K` for `k`, the long `ſ` for `s` and the Angstrom
   sign `Å` for `å`, so those letters get a group with the odd spelling too (`(k|K|K)`, `(s|S|ſ)`; gate review S8:
-  `.ſecrets` is `.secrets` on disk). Allows stay exact: a path spelled otherwise is simply not allowed, which fails
+  `.ſecrets` is `.secrets` on disk). It also folds `ß` and `ẞ` to `ss`, one letter to two (GL-T9-3: the macOS 27
+  runner reached a hidden `straße` as `STRASSE`), so a run of s's and ß's becomes a group of every spelling of its
+  length: `ß` and `ss` both give `((s|S|ſ)(s|S|ſ)|(ß|ẞ))`, and a hidden `.ssh` is closed as `.ßh` too. No other
+  one-to-many fold is taken until a Mac's control shows APFS takes it (the `-is-not-` rows below). Allows stay exact: a path spelled otherwise is simply not allowed, which fails
   closed. The regex is about four times its path, so a deny path of more than about 250 bytes refuses the profile
   (1024 bytes, below).
 - **`/tmp`, `/var` and `/etc` are links into `/private`.** Seatbelt matches the resolved path, so every rule names
@@ -1643,7 +1646,9 @@ expects `EPERM` or `EACCES`: Seatbelt denies with EPERM, and a row that gets ano
 | `mac-case` | (h), GL-T9-1 | `.GIT/config`, `.Git/hooks/x`, `COMMONDIR`, `.ENV` and `CONF/.env` are closed. The control run must reach them too (APFS ignores case), so this row needs the default case-insensitive volume |
 | `mac-case-kelvin`, `mac-case-long-s` | gate review S8 | a hidden `kube` read with the Kelvin sign (U+212A) for its `k` and a hidden `.secrets` as `.ſecrets` are closed; the control shows APFS takes those spellings for the file |
 | `proxy-refusal-reaches-a-flooding-client`, `mac-proxy-refusal-reaches-a-flooding-client` | GLP-T10-3 | a client sends its `CONNECT` for a refused target and then 4 MiB more without reading: the 403 must still reach it, not a reset (a proxy that closes with unread data in its socket resets the connection, and the client loses the refusal). Probe `http-connect-flood TARGET BYTES`. The Linux row runs where bwrap does; **the macOS row is written, not yet run on a Mac** (it needs a macOS run: the TCP listener is the one in question) |
-| `mac-nfd-spelling`, `mac-eszett-is-not-ss` | GL-T2-1, GL-T9-3 | **written, not yet run on a Mac** (they need a macOS run): a hidden `café` read with the decomposed spelling `cafe` + U+0301 is closed (the control shows APFS takes the decomposed spelling for the file), and a hidden `straße` read as `STRASSE` is a no-such-file in the control and in the sandbox (APFS folds simple case only, so there is no multi-character fold to match; if a Mac says otherwise the control fails and `case_regex` gets the fold) |
+| `mac-nfd-spelling` | GL-T2-1 | **written, not yet run on a Mac** (it needs a macOS run): a hidden `café` read with the decomposed spelling `cafe` + U+0301 is closed (the control shows APFS takes the decomposed spelling for the file) |
+| `mac-case-eszett` | GL-T9-3 | a hidden `straße` read as `STRASSE` and as `strasse`, and a hidden `.ssh` read as `.ßh`, are closed; the control shows APFS takes those spellings for the file (the macOS 27 runner's control reached `STRASSE`, so `case_regex` folds ß to `ss`) |
+| `mac-fi-ligature-is-not-fi`, `mac-fl-ligature-is-not-fl`, `mac-dotted-i-is-not-i` | GL-T9-3 | **written, not yet run on a Mac**: a hidden `config`, `flags` and `id` read as `conﬁg` (U+FB01), `ﬂags` (U+FB02) and `İd` (U+0130) are a no-such-file in the control and in the sandbox. If a Mac's control reaches one, APFS folds that letter and `case_regex` gets the fold, as it did for ß |
 | `mac-no-controlling-tty` | gate review S6 | with Ratatoskr on a terminal, the program has none (`/dev/tty`: ENXIO) |
 | `mac-leaves-group-the-gap` | gate review S1 | the recorded gap: the program can `setsid` and `setpgid` (DEFERRED: phase 6's lifecycle) |
 | `mac-rename-hidden-dir`, `-case`, `mac-rename-task-out`, `mac-rename-over-root`, `mac-rename-binds-out`, `mac-link-hidden-pinned` | (i) | `mv conf c2` and `mv CONF c2` (then the `.env` is still closed), the task folder moved out or replaced, `${W}` and the home moved, a hard link to the hidden `.env` and to the `.git` pin, and an APFS clone of the `.env` all fail. One row each for what changes the fixture, so the control run can do all of them |
