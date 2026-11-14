@@ -88,3 +88,13 @@ read changed*, never *probably fine*.
 
 The tests (`test/unit/affected-test.el`) hold fixed fake diffs against the table and the cache's hit, miss and
 red-is-never-cached cases.
+
+## A real tree-sitter grammar in the unit tier
+
+A test that needs a real parser (the notebook's, which gives each language one parser over its cells' ranges) cannot rely on
+the image having a grammar. `bin/drgnx test --container` therefore runs `test/packs/ts-grammars.sh` inside the container before
+the suite: the pack job (`ratatoskr packs sync --builtin`, from the hub binary at `runtime/target/debug/ratatoskr`) builds the
+python grammar at the pack's pin into a host cache (`DRGNX_TEST_TS_CACHE`, default `test-ts-grammars` in drgnx's cache folder, keyed by the
+pin) and the suite gets `DRGNX_TEST_TS_GRAMMARS`. Without the hub binary the test skips; CI sets `DRGNX_TEST_TS_REQUIRED=1`, which
+fails the run when no grammar was built, and `test/no-skip.eld` lists the test. The container needs network, git and a C compiler,
+which the test image has.
