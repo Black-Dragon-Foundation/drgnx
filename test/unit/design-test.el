@@ -40,3 +40,51 @@
         (should block)
         (dolist (token (mapcar #'car (alist-get variant (drgnx-design--table))))
           (should (string-search (format "--%s: %s;" token (drgnx-look-token token variant)) block)))))))
+
+(defun design-test--rows (page)
+  "The table rows of PAGE (the lines that start with `| `')."
+  (seq-filter (lambda (l) (string-prefix-p "| " l)) (split-string page "\n")))
+
+(defun design-test--row-of (page key)
+  "The table row of PAGE whose first cell is `KEY`."
+  (seq-find (lambda (l) (string-prefix-p (format "| `%s` |" key) l)) (design-test--rows page)))
+
+(ert-deftest drgnx-design/the-type-page-has-every-font-role-with-its-size ()
+  (require 'drgnx-type-faces)
+  (let ((page (design-test--page "type.md")))
+    (dolist (role drgnx-type-defaults)
+      (should (design-test--row-of page (car role))))
+    ;; a ratio and the pixels it gives at the code size
+    (let ((row (design-test--row-of page 'ui-caption)))
+      (should (string-search "0.889" row))
+      (should (string-search (format "%.1f" (* 0.889 drgnx-type-code-px)) row)))
+    ;; a role whose family names another role shows that role's family
+    (should (string-search "Adwaita Sans" (design-test--row-of page 'ui-heading)))))
+
+(ert-deftest drgnx-design/the-type-page-has-the-density-table ()
+  (let ((page (design-test--page "type.md")))
+    (dolist (row drgnx-look-density-table)
+      (should (string-search (format "| `%s` | %d | %d | %d |" (car row) (nth 1 row) (nth 2 row) (nth 3 row)) page)))))
+
+(ert-deftest drgnx-design/the-type-page-lists-the-type-faces ()
+  (let ((page (design-test--page "type.md")))
+    (dolist (face '(drgnx-ui-text drgnx-ui-caption drgnx-code-small drgnx-terminal))
+      (should (design-test--row-of page face)))))
+
+(ert-deftest drgnx-design/the-icons-page-has-every-icon-file ()
+  (let ((page (design-test--page "icons.md"))
+        (names (mapcar #'file-name-sans-extension
+                       (directory-files (expand-file-name "etc/icons" drgnx-dir) nil "\\.svg\\'"))))
+    (should (> (length names) 50))
+    (dolist (name names) (should (design-test--row-of page name)))
+    (should (assoc "img/icons-dark.svg" (drgnx-design-pages)))
+    (should (assoc "img/icons-light.svg" (drgnx-design-pages)))))
+
+(ert-deftest drgnx-design/an-icon-names-the-files-that-use-it ()
+  (let ((row (design-test--row-of (design-test--page "icons.md") 'bell)))
+    (should (string-search "core/drgnx-notice-toast.el" row))))
+
+(ert-deftest drgnx-design/the-icons-page-gives-the-file-kinds ()
+  ;; the icons the Explorer and Quick Open pick by file name come from etc/icons/files.eld
+  (let ((row (design-test--row-of (design-test--page "icons.md") 'file-archive)))
+    (should (string-search "file kind" row))))

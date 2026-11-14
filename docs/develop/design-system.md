@@ -7,6 +7,8 @@ for authors of themes and extensions. Part of it is hand-written (principles, a 
 | Page | Made from |
 |---|---|
 | `tokens.md`, `tokens.css`, `img/tokens-*.svg` | `themes/drgnx-tokens.eld` (every colour, three variants) and the faces the theme generator builds from it: which faces use which token |
+| `type.md` | the font roles (`drgnx-type-defaults`), the type faces (`core/drgnx-type-faces.el`) and the density table (`drgnx-look-density-table`) |
+| `icons.md`, `img/icons-*.svg` | `etc/icons` (the pictures and names), `etc/icons/files.eld` (file kinds) and the Lisp files that name each icon |
 
 ## Regenerating
 

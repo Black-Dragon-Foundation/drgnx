@@ -5,8 +5,10 @@
 ;;; Commentary:
 ;; docs/design/ is drgnx's design system: hand-written guidance plus pages generated from the code that draws the
 ;; look, so they cannot disagree with it.  This file builds the generated ones:
-;;   tokens.md, tokens.css and img/tokens-VARIANT.svg   from themes/drgnx-tokens.eld and the faces the theme generator
-;;                                                      makes (which faces use which token).
+;;   tokens.md, tokens.css, img/tokens-VARIANT.svg   from themes/drgnx-tokens.eld and the faces the theme generator makes
+;;                                                   (which faces use which token);
+;;   type.md                                         from the font roles, the type faces and the density table;
+;;   icons.md, img/icons-VARIANT.svg                 from etc/icons, files.eld and the Lisp that names the icons.
 ;; `drgnx design' writes them (`drgnx-design-regenerate'); `drgnx design --check' lists the stale ones and exits 1
 ;; (`drgnx-design-stale'; test/unit/design-test.el runs the same comparison in the unit suite).  No colour literal
 ;; lives here: every colour on a page is read from the token table.  See docs/develop/design-system.md.
@@ -19,6 +21,10 @@
 (require 'drgnx-color)
 (require 'drgnx-file)
 (require 'drgnx-faces)
+(require 'drgnx-type-faces)
+(require 'drgnx-icons)
+(add-to-list 'load-path (expand-file-name "wb" drgnx-dir))   ; the density module needs drgnx-state
+(require 'drgnx-look-density (expand-file-name "modules/ui/drgnx-look-density" drgnx-dir))
 (require 'drgnx-theme-gen (expand-file-name "themes/drgnx-theme-gen" drgnx-dir))
 
 (defconst drgnx-design-dir "docs/design/" "Where the design system lives, relative to the checkout.")
@@ -184,9 +190,183 @@ place of the real colours, so every colour a face names can be traced back to th
       (let ((to (string-search "\n## " page (+ from (length start)))))
         (substring page from to)))))
 
+;;;; Type, density and spacing
+
+(defun drgnx-design--role (role)
+  "ROLE's plist from `drgnx-type-defaults', with what it leaves out taken from the role its family names."
+  (let* ((own (cdr (assq role drgnx-type-defaults))) (family (plist-get own :family)))
+    (if (and family (symbolp family))
+        (let ((merged (copy-sequence (drgnx-design--role family))))
+          (cl-loop for (key value) on own by #'cddr
+                   unless (eq key :family) do (setq merged (plist-put merged key value)))
+          merged)
+      own)))
+
+(defun drgnx-design--cell (value)
+  "VALUE as a table cell: its text, or - for none."
+  (cond ((null value) "-")
+        ((consp value) (mapconcat (lambda (v) (format "%s" v)) value ", "))
+        (t (format "%s" value))))
+
+(defun drgnx-design--type-roles ()
+  "The font roles table of the type page."
+  (concat
+   "| Role | Family | Fallbacks | Size (× code) | Pixels | Weight | Line height |\n|---|---|---|---|---|---|---|\n"
+   (mapconcat (lambda (entry)
+                (let* ((role (car entry)) (p (drgnx-design--role role)) (size (plist-get p :size)))
+                  (format "| `%s` | %s | %s | %s | %.1f | %s | %s |" role
+                          (drgnx-design--cell (plist-get p :family)) (drgnx-design--cell (plist-get p :fallback))
+                          size (* size drgnx-type-code-px)
+                          (drgnx-design--cell (plist-get p :weight)) (drgnx-design--cell (plist-get p :line-height)))))
+              drgnx-type-defaults "\n")
+   "\n"))
+
+(defun drgnx-design--type-faces ()
+  "The type faces table: the `defface's of core/drgnx-type-faces.el."
+  (let (rows)
+    (with-temp-buffer
+      (insert-file-contents (expand-file-name "core/drgnx-type-faces.el" drgnx-dir))
+      (goto-char (point-min))
+      (condition-case nil
+          (while t
+            (let ((form (read (current-buffer))))
+              (when (eq (car-safe form) 'defface)
+                (let ((spec (cdr (car (cadr (nth 2 form))))))   ; the (t ...) clause's attributes
+                  (push (format "| `%s` | %s | %s | %s | %s |" (nth 1 form)
+                                (drgnx-design--cell (plist-get spec :family))
+                                (drgnx-design--cell (plist-get spec :height))
+                                (drgnx-design--cell (plist-get spec :weight)) (nth 3 form))
+                        rows)))))
+        (end-of-file nil)))
+    (concat "| Face | Family | Height (× code) | Weight | For |\n|---|---|---|---|---|\n"
+            (mapconcat #'identity (nreverse rows) "\n") "\n")))
+
+(defun drgnx-design--density-table ()
+  "The density table: sizes in logical pixels."
+  (concat "| Size | Compact | Comfortable | Roomy |\n|---|---|---|---|\n"
+          (mapconcat (lambda (row) (format "| `%s` | %d | %d | %d |" (car row) (nth 1 row) (nth 2 row) (nth 3 row)))
+                     drgnx-look-density-table "\n")
+          "\n"))
+
+(defun drgnx-design--type-page ()
+  "docs/design/type.md."
+  (concat
+   "# Type, density and spacing\n\n"
+   (format "<!-- %s -->\n\n"
+           (format drgnx-design--notice "core/drgnx-type-faces.el and modules/ui/drgnx-look-density.el"))
+   (format (concat "drgnx sets type in **roles**, not fonts. A role is a family, a size, a weight and (for code) a "
+                   "line height; every role can be changed in the settings (`drgnx-look-font-ROLE`). Sizes are "
+                   "ratios to the code size (%s logical pixels), so zooming scales every role together. A logical "
+                   "pixel is 3/4 of a point; the display's scale and the UI scale (`drgnx-look-scale`, 100 to "
+                   "200 %%) turn logical pixels into device pixels through `drgnx-px`, and a size never appears in "
+                   "chrome code as a bare number.\n\n")
+           drgnx-type-code-px)
+   "## Roles\n\nA role that names another role as its family takes what it leaves out from that role.\n\n"
+   (drgnx-design--type-roles) "\n"
+   "## Faces\n\nThe faces that carry the roles. They choose letters only; colour comes from the "
+   "[tokens](tokens.md).\n\n"
+   (drgnx-design--type-faces) "\n"
+   "## Density\n\n`drgnx-look-density` (compact, comfortable, roomy) sets these sizes, in logical pixels. The heights "
+   "of rows, tabs and bars come from here; gaps and padding come from the 4, 8, 12, 16 and 24 scale through "
+   "`drgnx-px`.\n\n"
+   (drgnx-design--density-table) "\n"
+   (format "## Icon size\n\nAn icon is %d logical pixels (14 in dense rows), drawn with a stroke of %s in its 24-unit box. "
+           drgnx-icons-size drgnx-icons-stroke)
+   "See [icons](icons.md).\n"))
+
+;;;; Icons
+
+(defun drgnx-design--icon-names ()
+  "The names of the icon files of etc/icons, sorted."
+  (sort (mapcar #'file-name-sans-extension
+                (directory-files (expand-file-name "etc/icons" drgnx-dir) nil "\\.svg\\'"))
+        #'string<))
+
+(defun drgnx-design--file-kinds ()
+  "Alist icon name → a description of the files it stands for, from etc/icons/files.eld."
+  (let ((table (plist-get (drgnx-file-read (expand-file-name "etc/icons/files.eld" drgnx-dir)) :data)) counts)
+    (dolist (key '(:names :extensions))
+      (dolist (entry (plist-get table key))
+        (let ((cell (or (assq (car entry) counts) (car (push (list (car entry) 0 0) counts)))))
+          (cl-incf (nth (if (eq key :names) 1 2) cell) (length (cdr entry))))))
+    (mapcar (lambda (c) (cons (symbol-name (car c)) (format "file kind: %d names, %d extensions" (nth 1 c) (nth 2 c))))
+            counts)))
+
+(defun drgnx-design--icon-uses ()
+  "Hash table icon name → the Lisp files that name it, sorted.
+A file names an icon when it writes the name as 'NAME, \"NAME\" or . NAME) within three lines of the word icon."
+  (let ((names (make-hash-table :test #'equal)) (uses (make-hash-table :test #'equal)))
+    (dolist (n (drgnx-design--icon-names)) (puthash n t names))
+    (dolist (dir '("core" "wb" "modules" "harness"))
+      (dolist (file (directory-files-recursively (expand-file-name dir drgnx-dir) "\\.el\\'"))
+        (let ((rel (file-relative-name file drgnx-dir)) (case-fold-search t))
+          (unless (equal rel "harness/drgnx-design.el")
+            (with-temp-buffer
+              (insert-file-contents file)
+              (while (re-search-forward "\\(?:'\\|\"\\|\\. \\)\\([a-z][a-z0-9-]*\\)\\(?:\"\\|)\\|[ \n]\\)" nil t)
+                (let ((name (match-string 1)) (at (point)))
+                  (when (and (gethash name names)
+                             (save-excursion
+                               (let ((from (progn (forward-line -3) (point)))
+                                     (to (progn (goto-char at) (forward-line 3) (point))))
+                                 (goto-char from)
+                                 (re-search-forward "icon" to t))))
+                    (cl-pushnew rel (gethash name uses) :test #'equal)))))))))
+    (maphash (lambda (k v) (puthash k (sort v #'string<) uses)) uses)
+    uses))
+
+(defun drgnx-design--icon-body (name)
+  "The drawing elements of icon NAME: its file without the outer svg element and the comment."
+  (let ((text (drgnx-design--read (expand-file-name (format "etc/icons/%s.svg" name) drgnx-dir))))
+    (when (string-match "<svg[^>]*>\\(\\(?:.\\|\n\\)*\\)</svg>" text)
+      (string-trim (match-string 1 text)))))
+
+(defun drgnx-design--icon-sheet (variant)
+  "An SVG sheet of every icon in VARIANT's text colour on its editor colour."
+  (let* ((names (drgnx-design--icon-names)) (columns 8) (w 120) (h 76) (i 0) cells
+         (rows (ceiling (length names) (float columns))))
+    (dolist (name names)
+      (let ((x (+ 8 (* w (% i columns)))) (y (+ 8 (* h (/ i columns)))))
+        (push (format (concat "<g transform=\"translate(%d %d) scale(1.5)\" fill=\"none\" stroke=\"%s\" "
+                              "stroke-width=\"%s\" stroke-linecap=\"round\" stroke-linejoin=\"round\">%s</g>"
+                              "<text x=\"%d\" y=\"%d\" font-size=\"10\" fill=\"%s\">%s</text>\n")
+                      (+ x 4) y (drgnx-look-token 'fg variant) drgnx-icons-stroke (drgnx-design--icon-body name)
+                      x (+ y 52) (drgnx-look-token 'muted variant) name)
+              cells)
+        (cl-incf i)))
+    (format (concat "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"%d\" height=\"%d\" viewBox=\"0 0 %d %d\" "
+                    "font-family=\"sans-serif\">\n<rect width=\"100%%\" height=\"100%%\" fill=\"%s\"/>\n%s</svg>\n")
+            (+ 8 (* w columns)) (+ 16 (* h rows)) (+ 8 (* w columns)) (+ 16 (* h rows))
+            (drgnx-look-token 'editor variant) (apply #'concat (nreverse cells)))))
+
+(defun drgnx-design--icons-page ()
+  "docs/design/icons.md."
+  (let ((kinds (drgnx-design--file-kinds)) (uses (drgnx-design--icon-uses)))
+    (concat
+     "# Icons\n\n"
+     (format "<!-- %s -->\n\n" (format drgnx-design--notice "etc/icons and the Lisp that names them"))
+     "drgnx's icons are [Lucide](https://lucide.dev) line icons (a few are Feather's), kept in `etc/icons/` as SVG with "
+     "`currentColor`. Rules:\n\n"
+     (format "- 16 logical pixels (14 in dense rows), a stroke of %s in the 24-unit box, sized through `drgnx-px`.\n"
+             drgnx-icons-stroke)
+     "- An icon takes its colour from the face of the text around it (`drgnx-look-icon`): never a colour of its own, "
+     "never a literal in the file.\n"
+     "- A terminal frame shows the glyph of the same name instead (`drgnx-face-glyphs`).\n"
+     "- A new icon is a file in `etc/icons/` named after what it shows, with the licence notice kept.\n\n"
+     "![The dark icon sheet](img/icons-dark.svg)\n\n![The light icon sheet](img/icons-light.svg)\n\n"
+     "*Used in* lists the file kinds the Explorer and Quick Open give it (`etc/icons/files.eld`) and the Lisp files "
+     "that name it near the word icon.\n\n"
+     "| Icon | Used in |\n|---|---|\n"
+     (mapconcat (lambda (name)
+                  (let ((parts (append (and (assoc name kinds) (list (cdr (assoc name kinds))))
+                                       (mapcar (lambda (f) (format "`%s`" f)) (gethash name uses)))))
+                    (format "| `%s` | %s |" name (if parts (string-join parts ", ") "-"))))
+                (drgnx-design--icon-names) "\n")
+     "\n")))
+
 ;;;; The pages
 
-(defvar drgnx-design-page-makers '(drgnx-design--tokens-pages)
+(defvar drgnx-design-page-makers '(drgnx-design--tokens-pages drgnx-design--type-icon-pages)
   "Functions that return generated pages as ((PATH . TEXT)…), PATH relative to docs/design/.")
 
 (defun drgnx-design--tokens-pages ()
@@ -195,6 +375,13 @@ place of the real colours, so every colour a face names can be traced back to th
                 (cons "tokens.css" (drgnx-design--tokens-css)))
           (mapcar (lambda (variant) (cons (format "img/tokens-%s.svg" variant) (drgnx-design--sheet variant)))
                   (mapcar #'car drgnx-design-variants))))
+
+(defun drgnx-design--type-icon-pages ()
+  "type.md, icons.md and the icon sheets."
+  (list (cons "type.md" (drgnx-design--type-page))
+        (cons "icons.md" (drgnx-design--icons-page))
+        (cons "img/icons-dark.svg" (drgnx-design--icon-sheet 'dark))
+        (cons "img/icons-light.svg" (drgnx-design--icon-sheet 'light))))
 
 (defun drgnx-design-pages ()
   "Every generated page: ((PATH . TEXT)…), PATH relative to docs/design/."
