@@ -572,3 +572,41 @@ async fn wait_exit_gives_a_command_end_s_status_or_the_program_s_exit() {
     drop(go);
     let _ = crate::clock::timeout(Duration::from_secs(5), worker).await;
 }
+
+/// A fake worker on SOCKET that says hello, then goes away at the first status question without answering it (a
+/// worker whose program ended between the question and its answer).
+fn worker_gone_at_status(socket: &Path) -> tokio::task::JoinHandle<()> {
+    let l = UnixListener::bind(socket).unwrap();
+    tokio::spawn(async move {
+        let (s, _) = l.accept().await.unwrap();
+        let (r, mut w) = s.into_split();
+        let hello = Out::Hello {
+            proto: PROTO,
+            pid: std::process::id(),
+            shell_pid: 4242,
+        };
+        let line = serde_json::to_string(&hello).unwrap() + "\n";
+        w.write_all(line.as_bytes()).await.unwrap();
+        let mut r = BufReader::new(r);
+        let mut line = String::new();
+        while r.read_line(&mut line).await.unwrap_or(0) > 0 {
+            if matches!(serde_json::from_str::<In>(&line), Ok(In::Status { .. })) {
+                return;
+            }
+            line.clear();
+        }
+    })
+}
+
+#[tokio::test]
+async fn a_worker_that_ends_unanswered_releases_the_list() {
+    // The list waits for each worker's answer on the hub's clock, which stands still while a request is served under
+    // the test clock: a worker that ended without answering must end that wait, not leave it to the deadline.
+    let tmp = tempfile::tempdir().unwrap();
+    let rec = record(tmp.path(), "aa", "s1");
+    let worker = worker_gone_at_status(&rec.socket);
+    let (t, _ev) = open(tmp.path()).await;
+    let st = t.list(Duration::from_secs(24 * 3600), None).await;
+    assert!(st.iter().all(|s| s.id != "aa") || st[0].running, "{st:?}");
+    let _ = worker.await;
+}

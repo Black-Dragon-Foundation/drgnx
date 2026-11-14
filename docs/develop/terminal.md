@@ -188,7 +188,7 @@ The editor talks to its terminals through the hub (`runstav/src/methods/term.rs`
 | `term/search` | `id`, `query`, `dir?` (`up`, `down`) | `{found, held, model}`: every match, those in rows the buffer holds, and the version of the view's model that holds these (a `view-model` sent first: list `matches`, newest first for `up`, nodes `KEY:COL` with fields `key`, `col`, `len`, at most 20,000; none with no editor attached) |
 | `term/text-range` | `id`, `from_key?`, `to_key?` | `{text}`; with no `from_key` from the oldest row the engine holds |
 | `term/close` | `id`, `signal?` | `true`, then `term/exit` |
-| `term/list` | | `[{id, pid, running, cwd, title, old, mine, orphaned, detached_at?, command, place?}…]`; 200 ms per worker, a silent one counts as running; `mine`: it draws for this connection's session |
+| `term/list` | | `[{id, pid, running, cwd, title, old, mine, orphaned, detached_at?, command, place?}…]`; 200 ms per worker, a silent one counts as running, one that ends before it answers is not waited for (its question goes with it); `mine`: it draws for this connection's session |
 | `term/session-end` | `keep?` (ids) | how many terminals of this connection's session were closed (a clean Emacs exit); those in `keep` detach and run on |
 | `term/attach` | `id`, `cols`, `rows`, `cell_px?` | `{id, view}`: an orphaned or detached terminal now draws for this session, from a reset; refused for one another live session has |
 

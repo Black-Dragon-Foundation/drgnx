@@ -102,7 +102,8 @@ struct State {
     /// Connection → the editor session it carries.
     sessions: HashMap<u64, String>,
     next_req: u64,
-    waiting: HashMap<u64, oneshot::Sender<Out>>,
+    /// Request number → the terminal asked and who waits for its answer; a terminal that ends drops its own.
+    waiting: HashMap<u64, (String, oneshot::Sender<Out>)>,
     /// Terminal id → who waits for its exit status ([`Terms::wait_exit`]).
     exits: HashMap<String, Vec<oneshot::Sender<Option<i32>>>>,
 }
@@ -411,7 +412,7 @@ impl Terms {
                 ev("term/prompt", json!({"kind": kind, "exit": exit}))
             }
             Out::Status { req, .. } | Out::Answer { req, .. } => {
-                if let Some(w) = lock(&self.inner.state).waiting.remove(&req) {
+                if let Some((_, w)) = lock(&self.inner.state).waiting.remove(&req) {
                     let _ = w.send(out);
                 }
             }
@@ -433,8 +434,10 @@ impl Terms {
     fn ended(&self, id: &str, data: Value) {
         let t = {
             let mut st = lock(&self.inner.state);
-            // anyone still waiting hears none
+            // anyone still waiting hears none: for its exit status, or for an answer it will never give (a wait on
+            // the hub's clock, which stands still while a test's request is served, would hold that request)
             st.exits.remove(id);
+            st.waiting.retain(|_, (of, _)| of != id);
             st.terms.remove(id)
         };
         let Some(t) = t else { return };
@@ -768,7 +771,7 @@ impl Terms {
                 st.next_req += 1;
                 let req = st.next_req;
                 let (tx, rx) = oneshot::channel();
-                st.waiting.insert(req, tx);
+                st.waiting.insert(req, (id.clone(), tx));
                 let t = &st.terms[&id];
                 let line = serde_json::to_string(&In::Status { req }).unwrap_or_default() + "\n";
                 let sent = !t.old && t.tx.send(line).is_ok();
@@ -832,7 +835,7 @@ impl Terms {
             st.next_req += 1;
             let req = st.next_req;
             let (tx, rx) = oneshot::channel();
-            st.waiting.insert(req, tx);
+            st.waiting.insert(req, (id.to_owned(), tx));
             (req, rx)
         };
         if !self.send(id, &make(req)) {

@@ -916,6 +916,15 @@ does not end it, nor a batch another wait inside it took. Spans timed at the wai
 first run read 50.2 ms for an 18 ms page). From 2026-11-10 they end at the change: trail-long's and search-window's
 `:page_ms` and terminal-output-10mb's and -100mb's `:wall_ms`; the other waits are setup.
 
+A hub-fed view's rows are drawn by Lisp's inserter (the buffer's `drgnx-view`) or held and drawn by Sjá (no
+`drgnx-view`; the Explorer, Search, the Work views, Extensions, Run and Debug, Buffers, the terminal). Workloads read
+either through `harness/drgnx-perf.el`: `drgnx-perf-view-rows` (the rows held), `drgnx-perf-view-pending-p` (the
+inserter's marks, or Sjá's draw timer armed) and `drgnx-perf-advise-draws` (a timing advice on both draw functions,
+`drgnx-perf-view-draws`); `drgnx-perf-patch-functions` (after `drgnx-perf-watch-patches`) hears each row patch a view
+takes, `reset` or `rows` when Lisp parsed it, `sja` when the reader pushed it to Sjá, which does not say whether it was
+a reset: the search workloads take a search's first patch as its reset either way. On Sjá, work-live's `:draw_ms_s` is the sum of its timed draws and its `:long` entries have
+no TOUCHED or ROWS (nil).
+
 Beside the budget rows the workloads report where their time goes (results JSON, not judged): work-relayout's
 `:to_frame` (command to the frame's arrival), work-live's `:long` (each draw over 4 ms as `(MS TOUCHED ROWS GC-MS)`),
 work-trail's `:settled_s` (seconds from the turn to its 10,000 steps readable) and, when the hub never holds them, a
