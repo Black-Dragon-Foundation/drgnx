@@ -1502,7 +1502,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `history/fork` | user | `{message: string, profile?: string, seq: integer, session: string}` | `{branch: string, id: string, level: "message" \| "turn" \| "summary", path: string, source_branch: string}` | yes |
 | `history/fork/drop` | user | `{id: string}` | `{ok: boolean}` | yes |
 | `history/hunks` | user | `{branch: string, since: integer}` | `{files: [FileHunks]}` | no |
-| `history/hunks/head` | user | `{path: string, worktree_root: string}` | `{hunks: [HeadHunk], tracked: boolean}` | no |
+| `history/hunks/head` | user | `{path: string, worktree_root: string}` | `{hunks: [HeadHunk], marks: [HunkMark], tracked: boolean}` | no |
 | `history/op/hunks` | user | `{op?: integer, session?: string, worktree: string}` | `{hunks: [OpHunk]}` | no |
 | `history/redo` | user | `{op: integer, session: string}` | `{commit?: string, op: integer, skipped: [RevertSkipped], written: [string]}` | yes |
 | `history/register` | user | `{buffer_id: string, path: string, worktree_root: string}` | `{doc: integer, reason?: string, tracked: boolean}` | yes |
@@ -2134,6 +2134,25 @@ names and colours an agent the same way:
   is stopped or killed, or its process exits; a session resumed after a restart takes one again. The pool gives a
   Claude subagent's id (`agent:SID/TOOLID`, as the Work map names it) an identity of its own and frees it with its
   parent's; subagents have no snapshot, so none is shown yet.
+
+### Editor marks
+
+The marks in a buffer's gutter (changed lines, blame, an agent's strip, breakpoints, end-of-line diagnostics) are the
+hub's arithmetic (Lisp offload step E): the hub holds the buffer's text (the edit history's mirror), counts its lines
+and answers in **positions**, the buffer's own (1-based, in characters); Lisp keeps the overlays, and an answer
+deletes or makes only the overlays whose mark changed. No line is counted or walked to per keystroke. An answer is sent
+on a change only (the history's drain, then a debounce through `drgnx-timer`), never per keystroke, and the hub being
+down leaves the marks as they are and asks nothing of the user. An answer is for the text the hub held when it was asked:
+the client keeps it only if the buffer has not changed since (`buffer-chars-modified-tick`); the drain that follows an
+edit asks again.
+
+`editor::marks` (pure) is the one place the arithmetic lives: `line_starts` (positions by characters, not bytes) and
+`hunk_marks`. Every mark builder asks `marks::within_limit` first: a text over `marks::MAX_BYTES` (50 MiB, the
+large-files module's default `:ask-above`, the size from which a file opens lean or in chunks) gets no marks, as
+`drgnx-large-file-p` kept them from large buffers in Lisp. Large-files v2's cost registry replaces this one constant.
+
+- `history/hunks/head` answers `marks: [{line, pos, kind}]` (`kind` `added`, `changed` or `deleted`; a deletion marks
+  the line after it) beside the hunks, which Show, Revert and Stage Change still use.
 
 ### The buffer view
 

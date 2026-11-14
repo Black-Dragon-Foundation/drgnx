@@ -14,6 +14,7 @@
 
 pub mod buffer_view;
 pub mod follow;
+pub mod marks;
 pub mod project;
 pub mod ranges;
 

@@ -502,6 +502,32 @@ pub struct HeadHunk {
 pub struct HeadHunks {
     pub tracked: bool,
     pub hunks: Vec<HeadHunk>,
+    /// The gutter marks the hunks make, sorted by position, in the coordinates of the buffer text the hub holds (the
+    /// text the edit history was last told): empty for a text over the marks' size limit.
+    pub marks: Vec<HunkMark>,
+}
+
+/// What a gutter mark says.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum HunkMarkKind {
+    /// A line the buffer added.
+    Added,
+    /// A line the buffer changed.
+    Changed,
+    /// Where lines were deleted (the line after them carries it).
+    Deleted,
+}
+
+/// One gutter mark: the line (1-based) and the position (Emacs's, 1-based, in characters) the line starts at.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HunkMark {
+    pub line: i64,
+    pub pos: i64,
+    pub kind: HunkMarkKind,
 }
 
 /// `git/stage-hunk`: stage one hunk of the tracked buffer's change against HEAD (as `history/hunks/head` numbered it)

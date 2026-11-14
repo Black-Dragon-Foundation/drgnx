@@ -308,6 +308,24 @@ impl Hub {
         Ok(Some(head_hunks(&old, &now)?))
     }
 
+    /// [`Hub::hunks_head`] and the gutter marks the hunks make in the buffer's text (`editor::marks`).
+    #[allow(clippy::type_complexity)]
+    pub fn hunks_marked(
+        &self,
+        tree: &Tree,
+        rel: &str,
+    ) -> verdandi::Result<Option<(Vec<w::HeadHunk>, Vec<w::HunkMark>)>> {
+        let Some(now) = self.mirror_text(tree, rel)? else {
+            return Ok(None);
+        };
+        let old = super::blob::text_at(&tree.git_dir, &tree.root, "HEAD", rel)
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+            .unwrap_or_default();
+        let hunks = head_hunks(&old, &now)?;
+        let marks = crate::editor::marks::hunk_marks(&now, &hunks);
+        Ok(Some((hunks, marks)))
+    }
+
     /// Stage the hunk of the tracked buffer of REL that starts at line NEW_START: the index gets its text with that
     /// hunk applied to what the index holds (other staged hunks stay), the work tree is not touched.  False when the
     /// buffer is not tracked or has no such hunk against the index.
@@ -582,18 +600,20 @@ pub async fn hunks_head(
         .core
         .history
         .of_tree(&hub_dir(f)?, Path::new(&p.worktree_root))?;
-    let found = crate::clock::blocking(move || hub.hunks_head(&tree, &p.path))
+    let found = crate::clock::blocking(move || hub.hunks_marked(&tree, &p.path))
         .await
         .map_err(|e| internal(e.to_string()))?
         .map_err(store)?;
     Ok(match found {
-        Some(hunks) => w::HeadHunks {
+        Some((hunks, marks)) => w::HeadHunks {
             tracked: true,
             hunks,
+            marks,
         },
         None => w::HeadHunks {
             tracked: false,
             hunks: Vec::new(),
+            marks: Vec::new(),
         },
     })
 }
@@ -880,6 +900,18 @@ mod tests {
         assert_eq!(olds, vec![vec!["b\n".to_owned()], Vec::<String>::new()]);
         // no buffer of a file: nothing computed
         assert!(f.hub.hunks_head(&f.tree, "other.txt").unwrap().is_none());
+    }
+
+    // pattern: D
+    #[test]
+    fn the_hunks_answer_carries_the_marks_in_the_buffers_positions() {
+        let f = fx("a\nb\nc\nd\n");
+        tracked(&f, "a.txt", "a\nB\nc\nd\ne\n", "user");
+        let (hunks, marks) = f.hub.hunks_marked(&f.tree, "a.txt").unwrap().unwrap();
+        assert_eq!(hunks.len(), 2);
+        let got: Vec<_> = marks.iter().map(|m| (m.line, m.pos)).collect();
+        assert_eq!(got, [(2, 3), (5, 9)]);
+        assert!(f.hub.hunks_marked(&f.tree, "other.txt").unwrap().is_none());
     }
 
     // pattern: D

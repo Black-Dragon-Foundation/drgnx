@@ -24,11 +24,25 @@
          (drgnx-hunks--refresh (current-buffer))              ; the timer's job: the question goes
          (unwind-protect (progn ,@body) (drgnx-hunks-mode -1))))))
 
+(defun mod-hunks-test--hub-marks (hunks)
+  "The marks the hub sends for HUNKS (plists as the JSON gives them) over this buffer's text: what
+`editor::marks::hunk_marks' makes (pinned by its Rust test), so the answers below are the hub's."
+  (let (out (last (1+ (cl-count ?\n (buffer-string)))))
+    (dolist (h hunks)
+      (let ((oc (plist-get h :old_count)) (nc (plist-get h :new_count)) (ns (plist-get h :new_start)))
+        (dotimes (i (max nc 1))
+          (let ((line (min last (if (zerop nc) (1+ ns) (+ ns i)))))
+            (push (list :line line
+                        :pos (save-excursion (goto-char (point-min)) (forward-line (1- line)) (point))
+                        :kind (cond ((zerop nc) "deleted") ((< i oc) "changed") (t "added")))
+                  out)))))
+    (sort (nreverse out) (lambda (a b) (< (plist-get a :line) (plist-get b :line))))))
+
 (defun mod-hunks-test--answer (&rest hunks)
-  "The hub's answer to the oldest question: HUNKS (plists as the JSON gives them)."
+  "The hub's answer to the oldest question: HUNKS (plists as the JSON gives them) and their marks."
   (let ((q (car (last mod-hunks-test--asked))))
     (setq mod-hunks-test--asked (butlast mod-hunks-test--asked))
-    (funcall (nth 2 q) (list :tracked t :hunks hunks) nil)))
+    (funcall (nth 2 q) (list :tracked t :hunks hunks :marks (mod-hunks-test--hub-marks hunks)) nil)))
 
 (defun mod-hunks-test--marks ()
   "(LINE . KIND) of the marks drawn, in line order."
@@ -36,15 +50,38 @@
                 drgnx-hunks--overlays)
         (lambda (a b) (< (car a) (car b)))))
 
-(ert-deftest drgnx-hunks/a-hunk-is-lines-added-changed-or-a-deletion-mark ()
-  (let ((h (lambda (os oc ns nc) (list :old-start os :old-count oc :new-start ns :new-count nc))))
-    (should (equal (drgnx-hunks--lines (list (funcall h 2 2 2 2))) '((2 . changed) (3 . changed))))
-    (should (equal (drgnx-hunks--lines (list (funcall h 4 0 5 2))) '((5 . added) (6 . added))))
-    ;; more lines than before: the surplus is added
-    (should (equal (drgnx-hunks--lines (list (funcall h 3 1 3 3))) '((3 . changed) (4 . added) (5 . added))))
-    ;; lines deleted: the mark sits on the line after them
-    (should (equal (drgnx-hunks--lines (list (funcall h 2 1 1 0))) '((2 . deleted))))
-    (should (equal (drgnx-hunks--lines (list (funcall h 9 1 4 0) (funcall h 1 0 1 1))) '((1 . added) (5 . deleted))))))
+;; The marks' arithmetic (added, changed, deleted; the lines' positions) is the hub's: `editor::marks' and its tests.
+;; Lisp keeps the overlays: no line is counted or walked to, and an answer touches only the overlays that changed.
+(ert-deftest drgnx-hunks/an-answer-lays-its-marks-without-counting-or-walking-lines ()
+  (mod-hunks-test--with-buffer "one\ntwo\nthree\nfour\nfive\n"
+    (let* ((hunk '(:old_start 2 :old_count 1 :new_start 2 :new_count 1 :old_lines ("2\n")))
+           (result (list :tracked t :hunks (list hunk) :marks (mod-hunks-test--hub-marks (list hunk))))
+           (callback (nth 2 (car mod-hunks-test--asked))))
+      (cl-letf (((symbol-function 'forward-line) (lambda (&rest _) (error "walked a line")))
+                ((symbol-function 'line-number-at-pos) (lambda (&rest _) (error "counted a line"))))
+        (funcall callback result nil)))
+    (should (equal (mapcar (lambda (o) (overlay-start o)) drgnx-hunks--overlays) '(5)))))
+
+(ert-deftest drgnx-hunks/a-new-answer-changes-only-the-overlays-whose-mark-changed ()
+  (mod-hunks-test--with-buffer "a\nb\nc\nd\n"
+    (mod-hunks-test--answer '(:old_start 1 :old_count 1 :new_start 1 :new_count 1 :old_lines ("x\n"))
+                            '(:old_start 3 :old_count 1 :new_start 3 :new_count 1 :old_lines ("y\n")))
+    (let ((first (seq-find (lambda (o) (= (overlay-start o) 1)) drgnx-hunks--overlays))
+          (third (seq-find (lambda (o) (= (overlay-start o) 5)) drgnx-hunks--overlays)))
+      (drgnx-hunks--refresh (current-buffer))
+      ;; line 3's change went, line 4's came: line 1's overlay is the same one
+      (mod-hunks-test--answer '(:old_start 1 :old_count 1 :new_start 1 :new_count 1 :old_lines ("x\n"))
+                              '(:old_start 4 :old_count 0 :new_start 4 :new_count 1 :old_lines nil))
+      (should (memq first drgnx-hunks--overlays))
+      (should-not (overlay-buffer third))
+      (should (equal (sort (mapcar #'overlay-start drgnx-hunks--overlays) #'<) '(1 7))))))
+
+(ert-deftest drgnx-hunks/an-answer-for-text-since-edited-waits-for-the-next ()
+  (mod-hunks-test--with-buffer "a\nb\n"
+    (goto-char (point-min))
+    (insert "new\n")                                          ; typed after the question went
+    (mod-hunks-test--answer '(:old_start 1 :old_count 1 :new_start 1 :new_count 1 :old_lines ("x\n")))
+    (should-not drgnx-hunks--overlays)))
 
 (ert-deftest drgnx-hunks/the-hubs-answer-is-drawn-as-solid-bars ()
   (mod-hunks-test--with-buffer "one\ntwo\nthree\nfour\nfive\n"

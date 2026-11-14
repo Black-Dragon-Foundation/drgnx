@@ -22918,6 +22918,49 @@
               "old_lines"
             ],
             "type": "object"
+          },
+          "HunkMark": {
+            "additionalProperties": false,
+            "description": "One gutter mark: the line (1-based) and the position (Emacs's, 1-based, in characters) the line starts at.",
+            "properties": {
+              "kind": {
+                "$ref": "#/$defs/HunkMarkKind"
+              },
+              "line": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "pos": {
+                "format": "int64",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "line",
+              "pos",
+              "kind"
+            ],
+            "type": "object"
+          },
+          "HunkMarkKind": {
+            "description": "What a gutter mark says.",
+            "oneOf": [
+              {
+                "const": "added",
+                "description": "A line the buffer added.",
+                "type": "string"
+              },
+              {
+                "const": "changed",
+                "description": "A line the buffer changed.",
+                "type": "string"
+              },
+              {
+                "const": "deleted",
+                "description": "Where lines were deleted (the line after them carries it).",
+                "type": "string"
+              }
+            ]
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -22930,13 +22973,21 @@
             },
             "type": "array"
           },
+          "marks": {
+            "description": "The gutter marks the hunks make, sorted by position, in the coordinates of the buffer text the hub holds (the\ntext the edit history was last told): empty for a text over the marks' size limit.",
+            "items": {
+              "$ref": "#/$defs/HunkMark"
+            },
+            "type": "array"
+          },
           "tracked": {
             "type": "boolean"
           }
         },
         "required": [
           "tracked",
-          "hunks"
+          "hunks",
+          "marks"
         ],
         "title": "HeadHunks",
         "type": "object"
