@@ -96,5 +96,7 @@ The Seatbelt base policy in `runtime/crates/gleipnir/src/sbpl/base.sbpl` is Open
 Apache License 2.0 (`LICENSES/Apache-2.0.txt`).
 The Black Dragon Foundation logo (`etc/images/banner.jpg`, `etc/images/drgnx-logo.jpg`) is Copyright 2026 Black Dragon
 Foundation, under the GPL v3.0 or later like the rest of drgnx.
+The app icon (`etc/images/icon/`) is an AI redraw of the project's dragon art, made at 1024 px and scaled down for the
+other sizes; it is under the same licence.
 A separate `drgnx-pro` add-on may follow later under a source-available license that stays free for
 individuals, open-source developers and small businesses.

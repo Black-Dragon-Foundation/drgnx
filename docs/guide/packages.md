@@ -368,8 +368,8 @@ systemctl --user daemon-reload
 systemctl --user start drgnx                     # emacsclient -s drgnx -c
 ```
 
-**The desktop entry follows Nidhogg's windows.** Nidhogg names its windows `nidhogg`, and the logo it installs stays
-under its own prefix, so `drgnx service-unit --refresh` also copies those icons to
+**The desktop entry follows Nidhogg's windows.** Nidhogg names its windows `nidhogg`, so `drgnx service-unit --refresh` also copies drgnx's own app icon
+(`etc/images/icon/`, 16 to 1024 px) to
 `$XDG_DATA_HOME/icons/hicolor/` (default `~/.local/share/icons/hicolor/`) as `drgnx`, and updates an installed
 `drgnx.desktop`: `Icon=emacs` becomes `Icon=drgnx`, and a `StartupWMClass=nidhogg` line is added when it has none, so
 the app switcher shows drgnx and its icon. Every other line stays, and so does an icon of your own. With no entry

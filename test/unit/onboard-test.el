@@ -665,15 +665,15 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
   (should (string-match-p "^Icon=drgnx$" drgnx-onboard-desktop-entry)))
 
 (defmacro drgnx-onboard-test--with-icons (vars &rest body)
-  "BODY with VARS (ENTRY FROM TO): a desktop entry's path, Nidhogg's hicolor tree with a 48 px icon, an empty tree."
+  "BODY with VARS (ENTRY FROM TO): a desktop entry's path, drgnx's icon folder with a 48 px icon, an empty hicolor tree."
   (declare (indent 1))
   (pcase-let ((`(,entry ,from ,to) vars))
     `(let* ((root (file-name-as-directory (make-temp-file "drgnx-desktop" t)))
             (,entry (concat root "drgnx.desktop"))
-            (,from (concat root "nidhogg/"))
+            (,from (concat root "icon/"))
             (,to (concat root "icons/")))
-       (make-directory (concat ,from "48x48/apps") t)
-       (write-region "logo" nil (concat ,from "48x48/apps/emacs.png") nil 'silent)
+       (make-directory ,from t)
+       (write-region "logo" nil (concat ,from "drgnx-48.png") nil 'silent)
        (unwind-protect (progn ,@body) (delete-directory root t)))))
 
 (ert-deftest drgnx-pkg/desktop-refresh-gives-an-old-entry-the-icon-and-the-windows ()
@@ -714,13 +714,26 @@ one.  Returns (RESULT PROMPTS PROGRAMS INSTALLED): the questions asked, the prog
     (should (string-search "Icon=/mine.png\n" (with-temp-buffer (insert-file-contents entry) (buffer-string))))))
 
 (ert-deftest drgnx-pkg/desktop-refresh-leaves-the-icon-line-without-icons-to-copy ()
-  ;; a build with no hicolor tree: Icon=drgnx would name nothing
+  ;; a checkout with no icon files: Icon=drgnx would name nothing
   (require 'drgnx-pkg)
   (drgnx-onboard-test--with-icons (entry from to)
     (write-region "Icon=emacs\nType=Application\n" nil entry nil 'silent)
     (delete-directory from t)
     (drgnx-pkg-desktop-refresh entry to from)
     (should (string-search "Icon=emacs\n" (with-temp-buffer (insert-file-contents entry) (buffer-string))))))
+
+(ert-deftest drgnx-pkg/the-icon-folder-has-every-size-as-a-square-png ()
+  ;; the desktop gets these (etc/images/icon/drgnx-N.png), one per hicolor size, each N by N
+  (require 'drgnx-pkg)
+  (dolist (n (cons 1024 drgnx-pkg-desktop-icon-sizes))
+    (let ((file (expand-file-name (format "etc/images/icon/drgnx-%d.png" n) drgnx-dir)))
+      (should (file-exists-p file))
+      (with-temp-buffer
+        (set-buffer-multibyte nil)
+        (insert-file-contents-literally file nil 0 24)
+        (should (equal (buffer-substring 2 5) "PNG"))
+        (should (= (+ (ash (aref (buffer-string) 16) 24) (ash (aref (buffer-string) 17) 16) (ash (aref (buffer-string) 18) 8) (aref (buffer-string) 19)) n))
+        (should (= (+ (ash (aref (buffer-string) 20) 24) (ash (aref (buffer-string) 21) 16) (ash (aref (buffer-string) 22) 8) (aref (buffer-string) 23)) n))))))
 
 (ert-deftest drgnx-pkg/desktop-refresh-installs-nothing-without-an-entry ()
   (require 'drgnx-pkg)
