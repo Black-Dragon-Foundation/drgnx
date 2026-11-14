@@ -124,9 +124,9 @@ top-level `.git' left out.  What `ratatoskr packs pin' prints, and a built-in pa
 (defun drgnx-packs-locked-grammars () "The lock's built grammars, ((LANG :commit … :lib-sha256 …)…)."
        (plist-get (drgnx-pkg--config 'lock) :grammars))
 
-(defun drgnx-packs--write-lock (packs grammars removed)
+(defun drgnx-packs--write-lock (packs grammars &optional removed)
   "Make PACKS, GRAMMARS and REMOVED the lock's `:packs', `:grammars' and `:removed-packs'; every other key and the
-comments stay."
+comments stay. REMOVED (optional) is nil when nothing was removed."
   (let ((sort-fn (lambda (es) (sort (copy-sequence es) (lambda (a b) (string< (symbol-name (car a)) (symbol-name (car b))))))))
     (drgnx-pkg--update-lock
      (lambda (data)
