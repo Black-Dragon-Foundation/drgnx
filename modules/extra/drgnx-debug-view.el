@@ -172,7 +172,7 @@ right edge): a click on either runs it or picks another (debugging.html `.cfg').
           (if (not (fboundp 'nidhogg-view--call))
               (let ((inhibit-read-only t))
                 (insert (propertize "  Run and Debug needs drgnx's own Emacs (Nidhogg).\n" 'face 'shadow)))
-            (drgnx-view-patch-attach drgnx-debug-view-id "unshown")
+            (drgnx-view-patch-attach drgnx-debug-view-id "unshown" :sja t)
             (setq-local drgnx-view-patch-twin-function #'drgnx-debug-view--twin)
             (require 'drgnx-view-env)
             (drgnx-view-env-register drgnx-debug-view-id (current-buffer) #'drgnx-debug-view--ask)

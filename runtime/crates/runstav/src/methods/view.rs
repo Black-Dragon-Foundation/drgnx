@@ -65,7 +65,7 @@ pub struct ViewEnv {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub attach: bool,
     /// The editor holds this view's rows in Sjá: its patches come as a `view-model` line's `rows` (`{view, rows}`),
-    /// which Sjá takes whole. Only a terminal's view reads it so far.
+    /// which Sjá takes whole, for any view (a terminal's from `term/open` and `term/attach` too).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub rows_in_sja: bool,
 }

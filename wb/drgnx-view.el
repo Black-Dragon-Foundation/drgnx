@@ -374,8 +374,9 @@ An AFTER that is neither appends KEYS.  A key already shown or pending is left w
 (defun drgnx-view-hurry (view)
   "Draw VIEW's marks at the next timer pass instead of its type's DELAY after the first of them: for a change the
 user asked for and waits to see.  The draw is the view's own, sliced as ever.  Nothing while a slice chain's
-continuation is pending (its next slice, at the next pass, takes the marks), or for a view no longer attached."
-  (drgnx-view--arm view t))
+continuation is pending (its next slice, at the next pass, takes the marks), or for a view no longer attached.  VIEW
+nil: the current buffer's rows Sjá holds are drawn at the next timer pass (`drgnx-view-sja-hurry')."
+  (if view (drgnx-view--arm view t) (when (fboundp 'drgnx-view-sja-hurry) (drgnx-view-sja-hurry))))
 
 ;;;; The plan: the pending changes, worked out at draw time
 
@@ -947,17 +948,25 @@ the view's `cut' says whether work is left."
               (error (drgnx-view--record view (format "PATCHED: %s" (error-message-string err)))))))
         drgnx-view--rows))))
 
+;; a buffer whose rows Sjá holds has no `drgnx-view': the row helpers and `drgnx-view-draw-now' take VIEW nil for it
+(defvar drgnx-view-patch)
+(declare-function nidhogg-view-rows "nidhogg-views" (h what &optional a b))
+(declare-function drgnx-view-sja-draw-now "drgnx-view-sja" (&optional buffer))
+
 (defun drgnx-view-draw-now (view &optional keys)
   "Draw VIEW now, whole, even when hidden: run SYNC when touched, then apply every mark.  KEYS (a list of row keys):
 only the work on those rows, in the caller's own redisplay; the marks of the other rows stay for the view's own
 draw.  Window start and point stay on their row.  Returns the number of rows drawn, grown or removed; 0 for a view
 no longer attached or whose type was removed.  A RENDER, GROW, SYNC or PATCHED that signals is recorded
-\(`drgnx-view--record'), never raised."
-  (let ((buffer (drgnx-view--buffer view)))
-    (if (and (buffer-live-p buffer) (eq view (buffer-local-value 'drgnx-view buffer))
-             (drgnx-view--current-type view))
-        (prog1 (drgnx-view--draw view nil keys) (unless keys (setf (drgnx-view--stale view) nil)))
-      0)))
+\(`drgnx-view--record'), never raised.  VIEW nil: the current buffer's rows Sjá holds are drawn now
+\(`drgnx-view-sja-draw-now'; KEYS and the count do not apply: 0)."
+  (if (null view)
+      (progn (when (and drgnx-view-patch (drgnx-view-patch-sja drgnx-view-patch)) (drgnx-view-sja-draw-now)) 0)
+    (let ((buffer (drgnx-view--buffer view)))
+      (if (and (buffer-live-p buffer) (eq view (buffer-local-value 'drgnx-view buffer))
+               (drgnx-view--current-type view))
+          (prog1 (drgnx-view--draw view nil keys) (unless keys (setf (drgnx-view--stale view) nil)))
+        0))))
 
 (defun drgnx-view--draw-buffer (buffer)
   "The timer function of BUFFER's view (keys `(drgnx-view . BUFFER)' and `(drgnx-view-more . BUFFER)').
@@ -1153,25 +1162,46 @@ empty entry never holds a position); allocates nothing."
 
 (defun drgnx-view-key-at (&optional pos)
   "The key of the row at POS (default: point) of the current buffer's view, or nil.  A binary search on the row
-starts; allocates nothing."
-  (let ((view drgnx-view))
-    (when (drgnx-view-p view)
-      (let ((i (drgnx-view--entry-at view (- (or pos (point)) (marker-position (drgnx-view--start view))))))
-        (and i (aref (drgnx-view--keys view) i))))))
+starts; allocates nothing.  A buffer whose rows Sjá holds asks Sjá (`place')."
+  (let ((view drgnx-view) (pos (or pos (point))))
+    (if (drgnx-view-p view)
+        (let ((i (drgnx-view--entry-at view (- pos (marker-position (drgnx-view--start view))))))
+          (and i (aref (drgnx-view--keys view) i)))
+      (when-let* ((s drgnx-view-patch) ((drgnx-view-patch-sja s)) (h (drgnx-view-patch-handle s))
+                  (beg (marker-position (drgnx-view-patch-beg s)))
+                  ((<= beg pos)) ((< pos (marker-position (drgnx-view-patch-end s)))))
+        (car (nidhogg-view-rows h 'place (- pos beg)))))))
+
+(defun drgnx-view--sja-row (key)
+  "KEY's drawn row in the current buffer's rows Sjá holds (`drgnx-view-sja'): (START . END), or nil."
+  (when-let* ((s drgnx-view-patch) ((drgnx-view-patch-sja s)) (h (drgnx-view-patch-handle s))
+              (span (nidhogg-view-rows h 'span nil key)))
+    (let ((at (+ (marker-position (drgnx-view-patch-beg s)) (car span))))
+      (cons at (+ at (cadr span))))))
 
 (defun drgnx-view-row-start (view key)
-  "The buffer position where KEY's drawn row starts in VIEW, or nil."
-  (let ((i (gethash key (drgnx-view--index view))))
-    (and i (+ (marker-position (drgnx-view--start view)) (drgnx-view--at view i)))))
+  "The buffer position where KEY's drawn row starts in VIEW, or nil.  VIEW nil: the current buffer's rows Sjá holds."
+  (if (null view)
+      (car (drgnx-view--sja-row key))
+    (let ((i (gethash key (drgnx-view--index view))))
+      (and i (+ (marker-position (drgnx-view--start view)) (drgnx-view--at view i))))))
 
 (defun drgnx-view-row-end (view key)
-  "The buffer position where KEY's drawn row ends in VIEW (the next row's start), or nil."
-  (let ((i (gethash key (drgnx-view--index view))))
-    (and i (+ (marker-position (drgnx-view--start view)) (drgnx-view--at view (1+ i))))))
+  "The buffer position where KEY's drawn row ends in VIEW (the next row's start), or nil.  VIEW nil: the current
+buffer's rows Sjá holds."
+  (if (null view)
+      (cdr (drgnx-view--sja-row key))
+    (let ((i (gethash key (drgnx-view--index view))))
+      (and i (+ (marker-position (drgnx-view--start view)) (drgnx-view--at view (1+ i)))))))
 
 (defun drgnx-view-row-count (view)
-  "The number of rows in VIEW's buffer (between the slices of a draw, rows still to delete count too)."
-  (- (drgnx-view--n view) (drgnx-view--empty view)))
+  "The number of rows in VIEW's buffer (between the slices of a draw, rows still to delete count too).  VIEW nil: the
+rows Sjá holds for the current buffer."
+  (if view
+      (- (drgnx-view--n view) (drgnx-view--empty view))
+    (or (when-let* ((s drgnx-view-patch) ((drgnx-view-patch-sja s)) (h (drgnx-view-patch-handle s)))
+          (nth 5 (nidhogg-view-rows h 'state)))
+        0)))
 
 (defun drgnx-view-pending-p (view)
   "Non-nil if VIEW has marks not drawn yet."
@@ -1634,41 +1664,69 @@ Explorer opening a folder).")
 (defun drgnx-view-apply-patch (patch)
   "Apply PATCH (a `view-patch' event's data) to its (view, class)'s buffer, by the rules (`drgnx-view-patch--decide').
 Returns what was done: `drop', `hold', `resync', `apply', `paused' (kept until the view resumes:
-`drgnx-view-patch-pause'), or nil when no buffer shows the pair."
+`drgnx-view-patch-pause'), or nil when no buffer shows the pair.  A pair whose rows Sjá holds gets PATCH as the
+hub's raw line would bring it (`drgnx-view-model-line'; the hub sends that line itself once the pair's env said
+`rows_in_sja', so this door serves a patch that came parsed: a test's, or one sent before the env)."
   (let ((buffer (gethash (cons (plist-get patch :view) (plist-get patch :class)) drgnx-view-patch--buffers)))
-    (when (buffer-live-p buffer)
-      (with-current-buffer buffer
-        (if-let* ((kept (drgnx-view-patch-paused drgnx-view-patch)))
-            (progn (setcar kept (1+ (car kept)))
-                   (setcdr kept (and (<= (car kept) drgnx-view-patch-paused-max) (cons patch (cdr kept))))
-                   'paused)
-          (let* ((state drgnx-view-patch) (sent (drgnx-view-patch-resyncs state))
-                 (what (drgnx-view-patch--accept state patch)))
-            (pcase what
-              ('hold (drgnx-view-patch--stale state t))
-              ('resync
-               (unless (= sent (drgnx-view-patch-resyncs state))
-                 (funcall drgnx-view-patch-send-function "view/resync"
-                          (list :view (drgnx-view-patch-view state) :class (drgnx-view-patch-class state)
-                                :version (or (drgnx-view-patch-version state) 0)))))
-              ('apply
-               (when (drgnx-view-patch--reset-p patch) (drgnx-view-patch--stale state nil))
-               (funcall drgnx-view-patch-apply-function state drgnx-view patch)
-               (when-let* ((n (plist-get patch :model)))
-                 (drgnx-view-model--named state n (drgnx-view-patch--reset-p patch))
-                 (drgnx-view-touch drgnx-view))
-               (when drgnx-view-patch-hurry
-                 (setq drgnx-view-patch-hurry nil)
-                 (drgnx-view-hurry drgnx-view))
-               ;; a terminal's cursor: its row is drawn again, so the view type's PATCHED places it after the draw
-               (when-let* ((term (plist-get patch :term)))
-                 (setf (drgnx-view-patch-term state) term)
-                 (when-let* ((key (car (plist-get term :cursor)))) (drgnx-view-dirty drgnx-view (list key))))
-               (when (drgnx-view-patch-ack state)
-                 (funcall drgnx-view-patch-send-function "view/ack"
-                          (list :view (drgnx-view-patch-view state) :class (drgnx-view-patch-class state)
-                                :version (drgnx-view-patch-version state))))))
-            what))))))
+    (if (and (buffer-live-p buffer)
+             (let ((s (buffer-local-value 'drgnx-view-patch buffer))) (and s (drgnx-view-patch-sja s))))
+        (drgnx-view-model-line
+         (json-serialize (list :event "view-model"
+                               :data (list :view (plist-get patch :view) :rows (drgnx-view-patch--json patch)))))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (if-let* ((kept (drgnx-view-patch-paused drgnx-view-patch)))
+              (progn (setcar kept (1+ (car kept)))
+                     (setcdr kept (and (<= (car kept) drgnx-view-patch-paused-max) (cons patch (cdr kept))))
+                     'paused)
+            (let* ((state drgnx-view-patch) (sent (drgnx-view-patch-resyncs state))
+                   (what (drgnx-view-patch--accept state patch)))
+              (pcase what
+                ('hold (drgnx-view-patch--stale state t))
+                ('resync
+                 (unless (= sent (drgnx-view-patch-resyncs state))
+                   (funcall drgnx-view-patch-send-function "view/resync"
+                            (list :view (drgnx-view-patch-view state) :class (drgnx-view-patch-class state)
+                                  :version (or (drgnx-view-patch-version state) 0)))))
+                ('apply
+                 (when (drgnx-view-patch--reset-p patch) (drgnx-view-patch--stale state nil))
+                 (funcall drgnx-view-patch-apply-function state drgnx-view patch)
+                 (when-let* ((n (plist-get patch :model)))
+                   (drgnx-view-model--named state n (drgnx-view-patch--reset-p patch))
+                   (drgnx-view-touch drgnx-view))
+                 (when drgnx-view-patch-hurry
+                   (setq drgnx-view-patch-hurry nil)
+                   (drgnx-view-hurry drgnx-view))
+                 ;; a terminal's cursor: its row is drawn again, so the view type's PATCHED places it after the draw
+                 (when-let* ((term (plist-get patch :term)))
+                   (setf (drgnx-view-patch-term state) term)
+                   (when-let* ((key (car (plist-get term :cursor)))) (drgnx-view-dirty drgnx-view (list key))))
+                 (when (drgnx-view-patch-ack state)
+                   (funcall drgnx-view-patch-send-function "view/ack"
+                            (list :view (drgnx-view-patch-view state) :class (drgnx-view-patch-class state)
+                                  :version (drgnx-view-patch-version state))))))
+              what)))))))
+
+(defconst drgnx-view-patch--json-lists
+  '(:ops :reset :replace :remove :rows :runs :props :stops :images :spaces :styles)
+  "The keys of a row patch whose value is a list: an empty one is an empty array, not null.")
+
+(defun drgnx-view-patch--json (v)
+  "V, a patch as the hub client parsed it (objects plists, arrays lists), as `json-serialize' takes it.  An empty list
+is null, or an empty array under a key whose value is a list (`drgnx-view-patch--json-lists')."
+  (cond ((null v) :null)
+        ((and (consp v) (keywordp (car v)))
+         (let (out)
+           (while v
+             (push (car v) out)
+             (push (if (and (null (cadr v)) (memq (car v) drgnx-view-patch--json-lists)) []
+                     (drgnx-view-patch--json (cadr v)))
+                   out)
+             (setq v (cddr v)))
+           (nreverse out)))
+        ((consp v) (vconcat (mapcar #'drgnx-view-patch--json v)))
+        ((and (vectorp v) (not (stringp v))) (vconcat (mapcar #'drgnx-view-patch--json v)))
+        (t v)))
 
 (defun drgnx-view-patch-event (event data)
   "A `drgnx-hub-event-functions' handler: a `view-patch' goes to its buffer.  (A `view-model' line never comes here:
@@ -1697,7 +1755,7 @@ already."
         (when (and s (not (equal class (drgnx-view-patch-class s))))
           (remhash (cons (drgnx-view-patch-view s) (drgnx-view-patch-class s)) drgnx-view-patch--buffers)
           (drgnx-view-patch--forget s)
-          (when (drgnx-view-patch-sja s) (drgnx-view-sja--restart s t))
+          (when (drgnx-view-patch-sja s) (drgnx-view-sja--restart s t nil class))
           (setf (drgnx-view-patch-class s) class (drgnx-view-patch-epoch s) 0)
           (puthash (cons (drgnx-view-patch-view s) class) buffer drgnx-view-patch--buffers))))))
 
@@ -1743,7 +1801,7 @@ every row is drawn again, with no message to the hub."
 (declare-function drgnx-notice-clear "drgnx-notice" (source &optional id))
 (declare-function drgnx-notify "drgnx-notice" (source severity text &rest keys))
 (declare-function nidhogg-view-hub-lost "nidhogg-views" ())
-(declare-function drgnx-view-sja--restart "drgnx-view-sja" (s forget &optional epoch))
+(declare-function drgnx-view-sja--restart "drgnx-view-sja" (s forget &optional epoch class))
 (declare-function drgnx-view-sja-pushed "drgnx-view-sja" (r))
 (declare-function drgnx-view-sja-pause "drgnx-view-sja" (s on))
 (declare-function drgnx-view-sja-redraw "drgnx-view-sja" (buffer &optional refresh))
@@ -2149,12 +2207,26 @@ by the view that owns the buffer.")
     (setq drgnx-view-patch nil))
   (drgnx-view-patch--hooks))
 
-(cl-defun drgnx-view-patch-attach (view class &key buffer start epoch type keep)
+(cl-defun drgnx-view-patch-attach (view class &key buffer start epoch type keep sja)
   "Make BUFFER (default: the current one) show the hub-built rows of (VIEW, CLASS), from START: a view of TYPE
 \(default `drgnx-view-rows'; another type renders with `drgnx-view-patch-render' too, and sets ACK and EPOCH-RESET,
 `drgnx-view-define').  EPOCH: the env epoch sent for the pair.  KEEP: the buffer keeps the view it has, whose type
 renders the hub's rows with `drgnx-view-patch-render' among its own and sets `drgnx-view-patch-apply-function'.
-Returns the view."
+SJA: where this Emacs's Sjá holds rows, they are held and drawn there (`drgnx-view-sja-attach'): the buffer has no
+`drgnx-view', and the row helpers take VIEW nil for it (`drgnx-view-row-start', `drgnx-view-draw-now'); SJA `data':
+held there and never drawn (rows read as data, by `nidhogg-view-rows' `prop').  Returns the view, or with SJA the
+pair's state."
+  (if (and sja (not keep) (not type) (fboundp 'nidhogg-view-rows))
+      (progn (require 'drgnx-view-sja)
+             (if (eq sja 'data)
+                 (drgnx-view-sja-attach view class :buffer buffer :start start :epoch epoch :delay 'data)
+               (drgnx-view-sja-attach view class :buffer buffer :start start :epoch epoch)))
+    (drgnx-view-patch--attach-lisp view class buffer start epoch type keep)))
+
+(declare-function drgnx-view-sja-attach "drgnx-view-sja" (view class &rest keys))
+
+(defun drgnx-view-patch--attach-lisp (view class buffer start epoch type keep)
+  "`drgnx-view-patch-attach' of rows Lisp inserts."
   (with-current-buffer (or buffer (current-buffer))
     (let* ((v (if keep drgnx-view (drgnx-view-attach (or type 'drgnx-view-rows) :start start))) (ty (drgnx-view--type v)))
       (when drgnx-view-patch (drgnx-view-model--close drgnx-view-patch))   ; attached again: the old instance goes
@@ -2183,7 +2255,9 @@ buffer's view and its rows stay; attach another view type to replace them."
              (when (buffer-live-p b)
                (with-current-buffer b
                  (remove-hook 'kill-buffer-hook #'drgnx-view-patch--killed t)
-                 (when drgnx-view-patch (drgnx-view-model--close drgnx-view-patch t)))))
+                 (when drgnx-view-patch
+                   (if (drgnx-view-patch-sja drgnx-view-patch) (drgnx-view-sja--release drgnx-view-patch)
+                     (drgnx-view-model--close drgnx-view-patch t))))))
            drgnx-view-patch--buffers)
   (clrhash drgnx-view-patch--buffers)
   (drgnx-view-patch--hooks))

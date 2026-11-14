@@ -342,7 +342,7 @@ impl Views {
             return false;
         };
         if let Some(p) = lock(&self.store).publish(key, rows.clone(), &[]) {
-            f.send_to(key.0, "view-patch", json!(p));
+            f.core.views.send_patch(f, key.0, &p);
         }
         true
     }
@@ -360,7 +360,7 @@ impl Views {
         let mut store = lock(&self.store);
         for k in keys(&store, conn, view) {
             if let Some(p) = store.publish(&k, rows.clone(), &[]) {
-                f.send_to(conn, "view-patch", json!(p));
+                f.core.views.send_patch(f, conn, &p);
             }
         }
     }

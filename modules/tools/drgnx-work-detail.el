@@ -71,7 +71,7 @@ following the map's selection there.  Beside a map without Sjá it says the map 
       (unless (derived-mode-p 'drgnx-work-detail-mode)
         (drgnx-work-detail-mode)
         (if rows
-            (progn (drgnx-view-patch-attach (car rows) (cdr rows))
+            (progn (drgnx-view-patch-attach (car rows) (cdr rows) :sja t)
                    (setq-local drgnx-view-patch-twin-function #'drgnx-work-detail--twin)
                    (require 'drgnx-view-env)
                    (drgnx-view-env-register (car rows) buffer))

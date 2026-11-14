@@ -267,7 +267,8 @@ must be the hub-fed view (a Emacs without Sjá shows the notice and asks nothing
 (defun drgnx-extensions-list--holds-p (id)
   "Non-nil when the list's view holds a row ID (its rows, not its model: nothing is read out of Sjá, so a job's step
 makes no row data)."
-  (when-let* ((v (drgnx-extensions-list--view))) (drgnx-view-row-start v id)))
+  (when-let* ((b (get-buffer drgnx-extensions-list-buffer-name)))
+    (with-current-buffer b (drgnx-view-row-start drgnx-view id))))
 
 (defun drgnx-extensions-list--busy-ids ()
   "The ids of the rows in the list whose job is busy."
@@ -276,11 +277,6 @@ makes no row data)."
                                (push id out)))
              drgnx-extensions-list--jobs)
     (sort out #'string<)))
-
-(defun drgnx-extensions-list--view ()
-  "The view of the list's buffer, or nil."
-  (when-let* ((b (get-buffer drgnx-extensions-list-buffer-name)))
-    (buffer-local-value 'drgnx-view b)))
 
 (defun drgnx-extensions-list--tick ()
   "The one-second timer: draw the busy rows again (their elapsed time); stop when none is busy."
@@ -584,7 +580,7 @@ once."
       (dolist (id ids)
         (let* ((st (gethash id drgnx-extensions-list--jobs)) (chip (and st (drgnx-extensions-list--job-chip st)))
                (ov (gethash id drgnx-extensions-list--chips))
-               (beg (and chip drgnx-view (drgnx-view-row-start drgnx-view id))))
+               (beg (and chip (drgnx-view-row-start drgnx-view id))))
           (if (not beg)
               (when ov (delete-overlay ov) (remhash id drgnx-extensions-list--chips))
             (let ((end (save-excursion (goto-char beg) (line-end-position))))
@@ -603,7 +599,7 @@ once."
 
 (defun drgnx-extensions-list--rows-attach ()
   "Make the current buffer the hub-fed view of the list: its env goes when it is shown, and it asks again then."
-  (drgnx-view-patch-attach drgnx-extensions-list-view "unshown")
+  (drgnx-view-patch-attach drgnx-extensions-list-view "unshown" :sja t)
   (setq-local drgnx-view-patch-twin-function #'drgnx-extensions-list--twin)
   (add-hook 'drgnx-view-patch-patched-functions #'drgnx-extensions-list--rows-patched nil t)
   (require 'drgnx-view-env)
