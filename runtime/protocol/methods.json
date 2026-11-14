@@ -1372,6 +1372,13 @@
                   "null"
                 ]
               },
+              "call": {
+                "description": "The tool call the step ran (the transcript's tool entry `id`), on the `agent-step` event of a tool step; the\n`step` table keeps none, so `timeline/get` has none.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "class": {
                 "$ref": "#/$defs/StepClass"
               },
@@ -8689,6 +8696,13 @@
                 "minimum": 0,
                 "type": [
                   "integer",
+                  "null"
+                ]
+              },
+              "call": {
+                "description": "The tool call the step ran (the transcript's tool entry `id`), on the `agent-step` event of a tool step; the\n`step` table keeps none, so `timeline/get` has none.",
+                "type": [
+                  "string",
                   "null"
                 ]
               },
@@ -39940,6 +39954,13 @@
                 "minimum": 0,
                 "type": [
                   "integer",
+                  "null"
+                ]
+              },
+              "call": {
+                "description": "The tool call the step ran (the transcript's tool entry `id`), on the `agent-step` event of a tool step; the\n`step` table keeps none, so `timeline/get` has none.",
+                "type": [
+                  "string",
                   "null"
                 ]
               },

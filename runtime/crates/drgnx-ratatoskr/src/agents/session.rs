@@ -3406,6 +3406,7 @@ async fn write_steps(
                 history_op: history_op.map(|op| op as u64),
                 undone_by: None,
                 revertible: history_op.is_some(),
+                call: c.open.tool_id.clone(),
                 hooks: Vec::new(),
             };
             // the files the step was in: the presence model (a shell step's command looked up off the async threads).  A

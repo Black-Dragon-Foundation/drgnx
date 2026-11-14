@@ -46,3 +46,15 @@ unframed `json-parse-string` on the main thread. The probe (`drgnx-hub--ping-soc
 reader refuses is an error. The delivery gate, which replaces a connection's filter, parses each held line itself in
 the fixture and hands it to `drgnx-hub--client-batch`. `drgnx-hub--model-line` stays for the gate and the perf harness's
 advice.
+
+## Hook rows of a step
+
+The `agent-step` event names the tool call its step ran (`call`, the tool entry's `id`); `drgnx-agents-mirror--step` files
+the step's hook rows under it and no longer walks the transcript for the newest tool entry. `timeline/get` rows have no
+`call` (the `step` table keeps none).
+
+## Edits to review
+
+The attention set holds permissions only because reviews have no source: the hub's snapshot has `reviews: []` always
+(`agents/session.rs`), and the Lisp runtime that made them (held agent writes, `agents/do` op `review`) was deleted with
+the Lisp agent runtime (87dab81fd); before the offload the mirror's `reviews` was filled only from that empty list.

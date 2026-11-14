@@ -359,6 +359,7 @@ fn step_of(s: table::Step) -> Step {
         acp: s.acp,
         head: s.head,
         revertible: s.history_op.is_some(),
+        call: None,
         history_op: s.history_op.map(|v| v as u64),
         undone_by: s.undone_by.map(|v| v as u64),
         hooks: Vec::new(),

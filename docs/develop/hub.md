@@ -1684,7 +1684,7 @@ result is (`event(NAME).check`):
 | `notice` | the front | `{source, severity, id, life, text, command?}` |
 | `settings/proposed` | the front (`settings_change`) | `{tx, scope, name, value, root?, agent, reason}`: the editor checks it, writes the file, answers `settings/confirm` ([Agents change settings](#agents-change-settings)) |
 | `settings/explain` | the front (`settings_get`) | `{req, scope, names?, root?}`: the editor answers `settings/explained` with the same `req` |
-| `agent-step` | sessions (the front) | `{session, step: Step}`: a step opened or closed, with its class, the hub's stamps and its anchors |
+| `agent-step` | sessions (the front) | `{session, step: Step}`: a step opened or closed, with its class, the hub's stamps and its anchors; a tool step names its tool call (`call`, the transcript tool entry's `id`), which the editor files the step's hook rows under |
 | `exec-done` | jobs (the front) | `{id, session?, status, exit?, summary: {exit?, failing, lines, log}}` |
 | `exec-progress` | jobs (the front) | `{id, file, plan}` or `{id, file, step}`: a `--progress` job's plan or step file changed ([Jobs](#jobs-exec), "Progress") |
 | `plugin` | plugins (the front) | `{name, state}`: a plugin's state changed (`unapproved`, `approved`, `changed`, `disabled`, `broken`, or `removed` when its folder is gone) |
