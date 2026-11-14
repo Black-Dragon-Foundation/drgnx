@@ -25,7 +25,7 @@ async fn peer() -> Peer {
         .unwrap();
     let folder = private_folder(&dir.path().join("s")).unwrap();
     let conn = Connection::create(&folder, "t", "python3").unwrap();
-    let ep = |n| endpoint(&conn.prefix, n);
+    let ep = |n| conn.endpoint(n);
     let (mut shell, mut iopub, mut stdin, mut control) = (
         RouterSocket::new(),
         PubSocket::new(),
