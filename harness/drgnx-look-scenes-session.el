@@ -833,6 +833,10 @@ editor, the Explorer's rows beside it."
 (declare-function drgnx-replace-all "drgnx-replace")
 (declare-function drgnx-replace--hub-ready-p "drgnx-replace")
 (declare-function drgnx-hub-running-p "drgnx-hub-client")
+(declare-function drgnx-view-draw-now "drgnx-view")
+(declare-function drgnx-view-p "drgnx-view")
+(declare-function drgnx-notebook-outline "drgnx-notebook")
+(defvar drgnx-view)
 (declare-function drgnx-hub-connect "drgnx-hub-client")
 
 (defun drgnx-look-scene--until (secs what pred)
