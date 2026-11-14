@@ -137,6 +137,56 @@ pub fn from_lock(lock: &[u8], grammars: &Path) -> Result<Vec<Entry>, String> {
     Ok(out)
 }
 
+/// A pack `active.eld` names: its manifest file and the folders of its grammars that are built.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActivePack {
+    pub name: String,
+    pub manifest: PathBuf,
+    /// `(LANG, DIR)`: the folder `<data>/grammars/LANG/COMMIT/` holding the library.
+    pub grammars: Vec<(String, PathBuf)>,
+}
+
+/// The packs of an `active.eld` (`(:version 1 :packs ((NAME :manifest FILE :grammars ((LANG . DIR)…) …)…))`), in its order.
+/// An entry that does not read is skipped; a file that is not a plist is an error.
+pub fn active_from(active: &[u8]) -> Result<Vec<ActivePack>, String> {
+    let limits = Limits {
+        max_bytes: 8 << 20,
+        ..Limits::default()
+    };
+    let forms = read_all(active, limits).map_err(|e| e.to_string())?;
+    let root = forms.first().and_then(items).ok_or("it holds no plist")?;
+    let Some(list) = plist_get(root, ":packs").and_then(items) else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    for e in list {
+        let Some(parts) = items(e) else { continue };
+        let (Some(name), Some(manifest)) = (
+            parts.first().and_then(text),
+            plist_get(&parts[1..], ":manifest").and_then(text),
+        ) else {
+            continue;
+        };
+        let mut grammars = Vec::new();
+        for g in plist_get(&parts[1..], ":grammars")
+            .and_then(items)
+            .unwrap_or(&[])
+        {
+            if let Datum::Cons(head, tail) = &g.datum
+                && let (Some(lang), Some(dir)) = (head.first().and_then(text), text(tail))
+            {
+                grammars.push((lang.to_owned(), PathBuf::from(dir)));
+            }
+        }
+        out.push(ActivePack {
+            name: name.to_owned(),
+            manifest: PathBuf::from(manifest),
+            grammars,
+        });
+    }
+    Ok(out)
+}
+
 /// The packs the lock says the user removed (`:removed-packs`), which an update never installs again.
 pub fn removed_from_lock(lock: &[u8]) -> Vec<String> {
     let Ok(forms) = read_all(lock, Limits::default()) else {

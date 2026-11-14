@@ -44,11 +44,21 @@ fn build(kind: Kind) -> Result<Spec, String> {
     let (manifest, scm) = source(kind);
     let m = skald::read(manifest.as_bytes()).map_err(|e| e.to_string())?;
     let docs = m.hrafn.and_then(|h| h.docs).unwrap_or_default();
+    let language = language(kind).ok_or("its grammar is not built")?;
+    spec_from(&language, scm, &docs)
+}
+
+/// SCM (a `chunks.scm`) compiled against LANGUAGE with the doc rules DOCS: a built-in pack's, or a fetched pack's in the
+/// worker.
+pub(super) fn spec_from(
+    language: &tree_sitter::Language,
+    scm: &str,
+    docs: &skald::manifest::Docs,
+) -> Result<Spec, String> {
     let members: Vec<DocKind> = docs.members.iter().map(doc_kind).collect();
     let top: Vec<DocKind> = docs.top.iter().map(doc_kind).collect();
-    let language = language(kind).ok_or("its grammar is not built")?;
     Spec::new(
-        &language,
+        language,
         scm,
         docs.line.as_deref(),
         docs.block.is_some(),
@@ -94,7 +104,7 @@ pub(super) fn pack_name(kind: Kind) -> &'static str {
 pub type MissingHook = fn(pack: &str, reason: &str);
 
 static HOOK: OnceLock<MissingHook> = OnceLock::new();
-static SAID: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+static SAID: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// Install the function that says a pack's grammar is not built (the hub's log). Only the first call counts.
 pub fn on_missing(hook: MissingHook) {
@@ -102,10 +112,14 @@ pub fn on_missing(hook: MissingHook) {
 }
 
 fn say_missing(kind: Kind, reason: &str) {
-    let pack = pack_name(kind);
+    say_pack(pack_name(kind), reason);
+}
+
+/// PACK (built in or fetched) reads as text, REASON: said once per pack, to the hub's log.
+pub(super) fn say_pack(pack: &str, reason: &str) {
     let mut said = SAID.lock().unwrap_or_else(PoisonError::into_inner);
-    if !said.contains(&pack) {
-        said.push(pack);
+    if !said.iter().any(|p| p == pack) {
+        said.push(pack.to_owned());
         if let Some(h) = HOOK.get() {
             h(pack, reason);
         }
@@ -178,5 +192,6 @@ pub fn stamp() -> String {
         }
         h.update([u8::from(skald::registry::language(grammar_name(k)).is_ok())]);
     }
+    h.update(super::worker::stamp_part().as_bytes());
     h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }

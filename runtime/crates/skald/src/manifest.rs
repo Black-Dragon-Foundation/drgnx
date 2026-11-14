@@ -255,7 +255,7 @@ pub struct Hrafn {
     pub helpers: Vec<Helper>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, serde::Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Docs {
     #[serde(default)]
@@ -270,7 +270,7 @@ pub struct Docs {
     pub members: Vec<DocMember>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, serde::Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum DocMember {
     Line,

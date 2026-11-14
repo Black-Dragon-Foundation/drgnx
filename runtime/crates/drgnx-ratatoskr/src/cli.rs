@@ -133,6 +133,13 @@ pub enum Command {
     /// `embed-worker …`: Hrafn's embed worker, a child of the hub (`crate::search::worker`). `main` runs it before
     /// any tokio runtime.
     EmbedWorker(crate::search::worker::WorkerArgs),
+    /// `hrafn-parse --lib FILE --grammar NAME --sha256 HASH`: a fetched pack's parse worker (`hrafn::chunk::worker`),
+    /// framed JSON on stdin and stdout, started by the hub under Gleipnir.
+    HrafnParse {
+        lib: PathBuf,
+        grammar: String,
+        sha256: String,
+    },
     /// `recording lint DIR…`: the secret lint over recorded runs (`crate::recording_cli`).
     Recording(crate::recording_cli::RecordingCommand),
 }
@@ -450,10 +457,34 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
             }
         }
         "embed-worker" => embed_worker(&mut p).map(Command::EmbedWorker),
+        "hrafn-parse" => hrafn_parse(&mut p),
         "recording" => {
             crate::recording_cli::parse(p.raw_args().map_err(e)?).map(Command::Recording)
         }
         other => Err(format!("unknown command {other:?}")),
+    }
+}
+
+/// `hrafn-parse --lib FILE --grammar NAME --sha256 HASH`: all three, once each.
+fn hrafn_parse(p: &mut lexopt::Parser) -> Result<Command, String> {
+    use lexopt::prelude::*;
+    let e = |e: lexopt::Error| e.to_string();
+    let (mut lib, mut grammar, mut sha256) = (None, None, None);
+    while let Some(arg) = p.next().map_err(e)? {
+        match arg {
+            Long("lib") => lib = Some(PathBuf::from(p.value().map_err(e)?)),
+            Long("grammar") => grammar = Some(p.value().map_err(e)?.string().map_err(e)?),
+            Long("sha256") => sha256 = Some(p.value().map_err(e)?.string().map_err(e)?),
+            other => return Err(other.unexpected().to_string()),
+        }
+    }
+    match (lib, grammar, sha256) {
+        (Some(lib), Some(grammar), Some(sha256)) => Ok(Command::HrafnParse {
+            lib,
+            grammar,
+            sha256,
+        }),
+        _ => Err("hrafn-parse takes --lib FILE --grammar NAME --sha256 HASH".into()),
     }
 }
 

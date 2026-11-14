@@ -101,6 +101,20 @@ fn main() -> ExitCode {
         // Hrafn from a terminal (and `search mcp`, which builds a runtime of its own).
         Command::Search(s) => return code(drgnx_ratatoskr::search_cli::run(&Env::process(), s)),
         // Hrafn's embed worker: threads of its own (stdin, the CPU path's pool), never a tokio runtime.
+        // A fetched pack's grammar in its own process: stdin and stdout are the whole interface.
+        Command::HrafnParse {
+            lib,
+            grammar,
+            sha256,
+        } => {
+            return code(hrafn::chunk::worker::serve(
+                &lib,
+                &grammar,
+                &sha256,
+                &mut std::io::stdin().lock(),
+                &mut std::io::stdout().lock(),
+            ));
+        }
         Command::EmbedWorker(args) => return code(drgnx_ratatoskr::search::worker::run(args)),
         // No hub, no runtime: the lint reads files.
         Command::Recording(r) => return code(drgnx_ratatoskr::recording_cli::run(&r)),
@@ -119,6 +133,8 @@ fn main() -> ExitCode {
         #[cfg(feature = "test-hooks")]
         Command::DebugMock { script } => return drgnx_ratatoskr::debug::mock_main(&script),
         Command::Serve(args) => {
+            // the fetched packs' grammars: workers under the sandbox, started on first use
+            drgnx_ratatoskr::parse_worker::install_hub(&Env::process());
             let supervisor = args.supervisor;
             let mut builder = tokio::runtime::Builder::new_multi_thread();
             builder.worker_threads(2).enable_all();

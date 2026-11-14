@@ -749,20 +749,25 @@ fn packs_section(env: &Env) -> Value {
     let removed = std::fs::read(paths::config_dir(env).join("drgnx.lock.eld"))
         .map(|b| skald::registry::removed_from_lock(&b))
         .unwrap_or_default();
-    Value::Array(
-        hrafn::chunk::hub_grammars()
+    let mut rows: Vec<Value> = hrafn::chunk::hub_grammars()
+        .into_iter()
+        .map(|(pack, grammar)| {
+            if removed.iter().any(|r| r == pack) {
+                return json!({"pack": pack, "built": false, "removed": true});
+            }
+            match skald::registry::language(grammar) {
+                Ok(_) => json!({"pack": pack, "built": true}),
+                Err(e) => json!({"pack": pack, "built": false, "why": e.reason}),
+            }
+        })
+        .collect();
+    // a fetched pack whose worker cannot run (the reduced tier, no sandbox, repeated failures): its files read as text
+    rows.extend(
+        hrafn::chunk::worker::dead()
             .into_iter()
-            .map(|(pack, grammar)| {
-                if removed.iter().any(|r| r == pack) {
-                    return json!({"pack": pack, "built": false, "removed": true});
-                }
-                match skald::registry::language(grammar) {
-                    Ok(_) => json!({"pack": pack, "built": true}),
-                    Err(e) => json!({"pack": pack, "built": false, "why": e.reason}),
-                }
-            })
-            .collect(),
-    )
+            .map(|(pack, why)| json!({"pack": pack, "built": false, "why": why, "fetched": true})),
+    );
+    Value::Array(rows)
 }
 
 /// The adapters that live inside a language server, each with the downloads it needs: what the table pins and what is

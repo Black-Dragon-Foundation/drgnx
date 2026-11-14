@@ -110,6 +110,7 @@ pub mod matrix_gate;
 pub mod orch;
 pub mod packs_cli;
 pub mod pair;
+pub mod parse_worker;
 pub mod peer;
 pub mod plugins;
 pub mod plugins_cli;

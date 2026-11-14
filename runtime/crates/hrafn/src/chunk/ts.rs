@@ -147,7 +147,7 @@ fn callback_body(n: Node) -> Option<Node> {
 /// TypeScript, a callback's body when the statement has none), and inside a member that is over the budget itself, or
 /// that does not begin a line (Go's `statement_list`, a `{` on the header's line), before the forms nested in it.
 fn cuts(
-    kind: Kind,
+    kind: Option<Kind>,
     spec: &Spec,
     root: Node,
     n: Node,
@@ -157,7 +157,9 @@ fn cuts(
 ) -> Vec<(usize, usize)> {
     let body = match spec.inner(root, n, text).child_by_field_name("body") {
         Some(b) => Some(b),
-        None if matches!(kind, Kind::JavaScript | Kind::TypeScript | Kind::Tsx) => callback_body(n),
+        None if matches!(kind, Some(Kind::JavaScript | Kind::TypeScript | Kind::Tsx)) => {
+            callback_body(n)
+        }
         None => None,
     };
     let mut out = Vec::new();
@@ -196,10 +198,38 @@ pub(super) fn chunk(
     budget: usize,
 ) -> Option<(Vec<Chunk>, Vec<Symbol>, Vec<Ref>)> {
     let spec = super::registry::spec(kind)?;
+    let language = super::registry::language(kind)?;
+    chunk_with(
+        Some(kind),
+        spec,
+        &language,
+        refs_of(kind),
+        path,
+        generated,
+        text,
+        budget,
+    )
+}
+
+/// The reference query of KIND, when it has one that built.
+fn refs_of(kind: Kind) -> Option<&'static tree_sitter::Query> {
+    super::refs::query(kind)
+}
+
+/// A file chunked by SPEC on LANGUAGE (a built-in pack's, or the one a worker was given), its references by TAGS.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn chunk_with(
+    kind: Option<Kind>,
+    spec: &Spec,
+    language: &tree_sitter::Language,
+    tags: Option<&tree_sitter::Query>,
+    path: &str,
+    generated: bool,
+    text: &str,
+    budget: usize,
+) -> Option<(Vec<Chunk>, Vec<Symbol>, Vec<Ref>)> {
     let mut parser = tree_sitter::Parser::new();
-    parser
-        .set_language(&super::registry::language(kind)?)
-        .ok()?;
+    parser.set_language(language).ok()?;
     let tree = parser.parse(text, None)?;
     let root = tree.root_node();
     let mut cursor = root.walk();
@@ -235,7 +265,8 @@ pub(super) fn chunk(
                 .unwrap_or_default()
         },
     });
-    Some((chunks, symbols, refs::of_tree(kind, &tree, text)))
+    let refs = tags.map_or_else(Vec::new, |q| refs::of_tree_with(q, &tree, text));
+    Some((chunks, symbols, refs))
 }
 
 /// What the engine finds in the top-level node N of the tree rooted at ROOT (the pack's `chunks.scm`).

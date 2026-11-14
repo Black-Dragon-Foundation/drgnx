@@ -18,7 +18,7 @@ use tree_sitter::{CaptureQuantifier, Node, Query, QueryCursor, StreamingIterator
 pub const LINES: usize = 8;
 
 /// One name a file uses: how often, and the first [`LINES`] lines (from 1) it is used on.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Ref {
     pub name: String,
     pub n: u32,
@@ -81,7 +81,12 @@ pub(super) fn tags_source(kind: Kind) -> &'static str {
 /// KIND's reference query on its pack's grammar, compiled on first use; none while the grammar is not built or when
 /// the query does not compile against it (a test pins that each one does). Only a built one is kept.
 fn compile(kind: Kind) -> Option<Query> {
-    let mut q = Query::new(&super::registry::language(kind)?, tags_source(kind)).ok()?;
+    compile_tags(&super::registry::language(kind)?, tags_source(kind))
+}
+
+/// SOURCE (a `tags.scm`) against LANGUAGE with only its reference patterns left on.
+pub(super) fn compile_tags(language: &tree_sitter::Language, source: &str) -> Option<Query> {
+    let mut q = Query::new(language, source).ok()?;
     // the tags queries also match definitions (some with doc predicates): only references run
     let refs: Vec<usize> = q
         .capture_names()
@@ -99,7 +104,7 @@ fn compile(kind: Kind) -> Option<Query> {
     Some(q)
 }
 
-fn query(kind: Kind) -> Option<&'static Query> {
+pub(super) fn query(kind: Kind) -> Option<&'static Query> {
     static QUERIES: Mutex<Vec<(Kind, &'static Query)>> = Mutex::new(Vec::new());
     let mut all = QUERIES.lock().unwrap_or_else(PoisonError::into_inner);
     if let Some((_, q)) = all.iter().find(|(k, _)| *k == kind) {
@@ -142,11 +147,8 @@ fn line_of(n: Node) -> u32 {
     n.start_position().row as u32 + 1
 }
 
-/// The references of TREE, a KIND file's parse of TEXT.
-pub(super) fn of_tree(kind: Kind, tree: &Tree, text: &str) -> Vec<Ref> {
-    let Some(q) = query(kind) else {
-        return Vec::new();
-    };
+/// The references of TREE under the compiled reference query Q.
+pub(super) fn of_tree_with(q: &Query, tree: &Tree, text: &str) -> Vec<Ref> {
     let Some(name_ix) = q.capture_index_for_name("name") else {
         return Vec::new();
     };
