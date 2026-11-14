@@ -610,7 +610,7 @@ wheel in a venv, js-debug as the release tarball with its sha256 checked, and pr
 sandbox lane) or one of those rows by name (the macOS fork row) runs the script first; the ci-workflows test
 `a-lane-that-runs-the-ignored-debug-rows-installs-the-adapters` holds that.
 
-The rows that need the adapter image run in the `debug-live` job (`Runtime`, `only: rt-debug-live`; Fedora 45 in the
+The rows that need the adapter image run in the `debug-live` job (`Runtime`, with `rt-escape`, so on every pull request the escape legs run on; Fedora 45 in the
 prebuilt image, `--cap-add SYS_PTRACE`, no sccache): `test/container/debug-adapters-image.sh` installs delve, CodeLLDB,
 lldb-dap, debugpy and js-debug at their pins (the same script `Containerfile.debug` runs, so the image and the job hold
 the same adapters), then `debug::tests_live_adapters` and `debug::tests_blocked_live` run with `--ignored`. The second

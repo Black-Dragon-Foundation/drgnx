@@ -459,7 +459,9 @@ Returns (EXIT . OUTPUT)."
           (should (string-match-p (concat "-- --ignored .*" (regexp-quote module)) live))))
       ;; the job has the adapters (the image's script) and the ptrace the native debuggers need
       (should (string-search "test/container/debug-adapters-image.sh" live))
-      (should (string-search "--cap-add SYS_PTRACE" live)))
+      (should (string-search "--cap-add SYS_PTRACE" live))
+      ;; it runs wherever the escape legs do (ci.yml's path filter names jobs by id, and has none of its own for it)
+      (should (string-search "' rt-escape '" live)))
     (should (>= n 2))))
 
 (ert-deftest drgnx-ci/the-timing-job-runs-the-rust-timing-tests-report-only ()

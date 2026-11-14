@@ -576,7 +576,7 @@ jobs:
   debug-live:
     name: live debug adapters (Fedora 45, the adapter image's adapters)
     needs: images
-    if: ${{ !cancelled() && github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-debug-live ')) }}
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-escape ')) }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
