@@ -654,7 +654,7 @@ EPERM; devcontainers and CI containers run under it) the crate falls back to a p
 (`drgnx_exe::mode()` says which: `private-table`, `lock` or `direct`; `ratatoskr doctor` prints it as `exe_mode`; `DRGNX_EXE_MODE=lock` forces the lock where `unshare` works, to run a suite as Docker's default profile would): every
 write holds it shared while its descriptor is open, and every spawn wrapped in `drgnx_exe::spawn(|| cmd.spawn())` holds
 it exclusively from fork to exec, so no such child holds a write descriptor. draugr's spawn, which starts every job, is
-wrapped; a raw `Command::spawn` elsewhere is outside the lock (the guarantee holds against the spawns that take it).
+wrapped; a raw `Command::spawn` elsewhere is outside the lock, so in lock mode `write` and `copy` also wait, once their own descriptor is closed, until no process holds the file open for writing (`/proc/PID/fd` and `fdinfo`: a fork's copy, until its `exec`), at most 5 s: a file made here is never busy, whoever forked.
 The hub uses it for the browser it unpacks and the
 `drgnx-key` it copies into a container job's folder, the runner for its job's `drgnx-key` copy, domr for the hub copies
 and scripts its scenarios run, the escape harness for its probe's copy, and the tests for every stand-in script they run.

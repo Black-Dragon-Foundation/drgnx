@@ -476,6 +476,16 @@ Returns (EXIT . OUTPUT), the output both streams' or, with STDOUT-ONLY, stdout's
     ;; the escape-host's sandbox lane and the macos fork row both run them
     (should (>= checked 2))))
 
+(ert-deftest drgnx-ci/the-offline-build-row-runs-where-a-network-namespace-can-be-made ()
+  ;; ghostty-vt-sys's builds_offline needs unshare(2): the Fedora job's Docker container refuses it, so its test says so
+  ;; and stops; the escape-host job (a runner) runs it with DRGNX_REQUIRE_NETNS=1, where a missing namespace fails
+  (let ((rt (drgnx-ci-test--yml "runtime.yml")) (row (drgnx-ci-test--file "runtime/crates/ghostty-vt-sys/tests/link_rows.rs")))
+    (skip-unless (and rt row))
+    (should (string-search "DRGNX_REQUIRE_NETNS" row))
+    (let ((host (drgnx-ci-test--job rt "escape-host")))
+      (should (string-search "DRGNX_REQUIRE_NETNS: \"1\"" host))
+      (should (string-search "-p ghostty-vt-sys --test link_rows builds_offline" host)))))
+
 (ert-deftest drgnx-ci/the-ssh-rows-run-in-exactly-the-ssh-job ()
   ;; test/ssh/ needs a real sshd (test/container/Containerfile.ssh): the swapped-pair runs (`bin/drgnx test --orders',
   ;; hub chaos's second step, in an image with no sshd) leave it out, and the ssh job is the one that runs it

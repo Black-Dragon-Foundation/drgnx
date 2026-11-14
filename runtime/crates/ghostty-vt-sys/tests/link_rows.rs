@@ -172,6 +172,23 @@ fn no_libstdcxx_reference() {
 #[cfg(target_os = "linux")]
 #[test]
 fn builds_offline() {
+    // A network namespace needs `unshare(2)`, which Docker's default seccomp profile refuses (EPERM): there the row says
+    // so and stops; the escape-host job (runtime.yml: a runner, not a container) sets DRGNX_REQUIRE_NETNS=1, and a
+    // namespace it cannot make is a failure, so the row runs where it can and never passes by default.
+    let can = Command::new("unshare")
+        .args(["--net", "--map-root-user", "true"])
+        .status()
+        .is_ok_and(|s| s.success());
+    if !can {
+        assert!(
+            std::env::var_os("DRGNX_REQUIRE_NETNS").is_none(),
+            "DRGNX_REQUIRE_NETNS is set and this machine cannot make a network namespace"
+        );
+        eprintln!(
+            "builds_offline: no network namespace here (unshare refused); the escape-host job runs this row"
+        );
+        return;
+    }
     // The same crate, built in a network namespace of its own (no interface at all) from the pinned tarballs.
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let tarballs = std::env::var_os("GHOSTTY_VT_TARBALLS")
