@@ -8,9 +8,6 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
-/// One test at a time may hold the process's clock: the guard of [`Manual::install`].
-static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
-
 #[derive(Default)]
 struct State {
     elapsed: Duration,
@@ -21,33 +18,15 @@ struct State {
     fired: std::collections::BTreeSet<u64>,
 }
 
-/// A virtual clock: it stands still until [`Manual::advance`] moves it, and a sleeper is ready once it has.
-/// [`Manual::install`] makes it the clock of every timer through this crate until the guard drops.
+/// A virtual clock: it stands still until [`Manual::advance`] moves it, and a sleeper is ready once it has.  A test runs
+/// the code under test inside [`Manual::scope`]; no other test of the process sees this clock.
 #[derive(Clone, Default)]
 pub struct Manual(Arc<Mutex<State>>);
 
-/// The clock installed and the process's turn at it; dropping it puts tokio's clock back.
-pub struct Installed {
-    pub clock: Manual,
-    _turn: MutexGuard<'static, ()>,
-}
-
-impl Drop for Installed {
-    fn drop(&mut self) {
-        crate::uninstall();
-    }
-}
-
 impl Manual {
-    /// A new clock installed as the process's, waiting for its turn if another test holds it.
-    pub fn install() -> Installed {
-        let turn = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
-        let clock = Manual::default();
-        crate::install(Arc::new(clock.clone()));
-        Installed {
-            clock,
-            _turn: turn,
-        }
+    /// F with this clock as the clock of its timers.
+    pub fn scope<F: Future>(&self, f: F) -> impl Future<Output = F::Output> + use<F> {
+        crate::scope(Arc::new(self.clone()), f)
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
@@ -71,7 +50,11 @@ impl Manual {
             let mut st = self.state();
             st.elapsed += d;
             let now = st.elapsed;
-            let due: Vec<(Duration, u64)> = st.sleepers.range(..=(now, u64::MAX)).map(|(k, _)| *k).collect();
+            let due: Vec<(Duration, u64)> = st
+                .sleepers
+                .range(..=(now, u64::MAX))
+                .map(|(k, _)| *k)
+                .collect();
             let mut out = Vec::new();
             for k in due {
                 if let Some(w) = st.sleepers.remove(&k) {
@@ -151,50 +134,65 @@ mod tests {
     /// A sleeper is ready only once the clock was moved past its deadline, and not before.
     #[tokio::test]
     async fn a_sleep_ends_only_when_the_clock_moves_past_it() {
-        let c = Manual::install();
+        let c = Manual::default();
         let done = Arc::new(AtomicBool::new(false));
-        let t = tokio::spawn({
+        let t = tokio::spawn(c.scope({
             let done = done.clone();
             async move {
                 crate::sleep(Duration::from_secs(5)).await;
                 done.store(true, Ordering::SeqCst);
             }
-        });
-        skuld::wait_until_async("the sleeper waits", 10, || async { (c.clock.sleepers() == 1).then_some(()) }).await;
-        c.clock.advance(Duration::from_millis(4999));
+        }));
+        skuld::wait_until_async("the sleeper waits", 10, || async {
+            (c.sleepers() == 1).then_some(())
+        })
+        .await;
+        c.advance(Duration::from_millis(4999));
         tokio::task::yield_now().await;
         assert!(!done.load(Ordering::SeqCst), "ended 1 ms early");
-        c.clock.advance(Duration::from_millis(1));
+        c.advance(Duration::from_millis(1));
         t.await.unwrap();
         assert!(done.load(Ordering::SeqCst));
-        assert_eq!(c.clock.elapsed(), Duration::from_secs(5));
+        assert_eq!(c.elapsed(), Duration::from_secs(5));
     }
 
     /// `timeout` gives the future its answer when it comes first, and `Elapsed` when the clock reaches the deadline first.
     #[tokio::test]
-    async fn a_timeout_follows_the_installed_clock() {
-        let c = Manual::install();
+    async fn a_timeout_follows_the_scoped_clock() {
+        let c = Manual::default();
         let (tx, rx) = tokio::sync::oneshot::channel::<u8>();
-        let waiting = tokio::spawn(crate::timeout(Duration::from_secs(10), rx));
-        skuld::wait_until_async("the deadline is set", 10, || async { (c.clock.sleepers() == 1).then_some(()) }).await;
+        let waiting = tokio::spawn(c.scope(crate::timeout(Duration::from_secs(10), rx)));
+        skuld::wait_until_async("the deadline is set", 10, || async {
+            (c.sleepers() == 1).then_some(())
+        })
+        .await;
         tx.send(7).unwrap();
         assert_eq!(waiting.await.unwrap().unwrap().unwrap(), 7);
-        assert_eq!(c.clock.sleepers(), 0, "the finished timeout left its timer");
+        assert_eq!(c.sleepers(), 0, "the finished timeout left its timer");
 
-        let never = tokio::spawn(crate::timeout(Duration::from_secs(10), std::future::pending::<()>()));
-        skuld::wait_until_async("the deadline is set", 10, || async { (c.clock.sleepers() == 1).then_some(()) }).await;
-        c.clock.advance(Duration::from_secs(10));
+        let never = tokio::spawn(c.scope(crate::timeout(
+            Duration::from_secs(10),
+            std::future::pending::<()>(),
+        )));
+        skuld::wait_until_async("the deadline is set", 10, || async {
+            (c.sleepers() == 1).then_some(())
+        })
+        .await;
+        c.advance(Duration::from_secs(10));
         assert_eq!(never.await.unwrap(), Err(crate::Elapsed));
     }
 
-    /// Dropped, the guard puts tokio's clock back: nothing is installed, and a sleep is tokio's again.
+    /// Outside the scope a timer is tokio's: another test's clock never reaches it.
     #[tokio::test]
-    async fn dropping_the_guard_restores_tokios_clock() {
-        {
-            let _c = Manual::install();
-            assert!(crate::current().is_some());
-        }
-        assert!(crate::current().is_none());
+    async fn a_timer_outside_the_scope_does_not_see_the_clock() {
+        let c = Manual::default();
+        let inside = tokio::spawn(c.scope(crate::sleep(Duration::from_secs(3600))));
+        skuld::wait_until_async("the scoped sleeper waits", 10, || async {
+            (c.sleepers() == 1).then_some(())
+        })
+        .await;
         crate::sleep(Duration::ZERO).await;
+        assert_eq!(c.sleepers(), 1);
+        inside.abort();
     }
 }

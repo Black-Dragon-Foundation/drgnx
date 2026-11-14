@@ -26,6 +26,16 @@ pub trait Provider: Send + Sync + 'static {
 
 static PROVIDER: RwLock<Option<Arc<dyn Provider>>> = RwLock::new(None);
 
+tokio::task_local! {
+    static LOCAL: Arc<dyn Provider>;
+}
+
+/// F with P as its clock: only the timers F itself waits on (not the tasks it spawns: wrap those in `scope` too) read
+/// P, so a test's clock reaches no other test of the process.
+pub async fn scope<F: Future>(p: Arc<dyn Provider>, f: F) -> F::Output {
+    LOCAL.scope(p, f).await
+}
+
 /// Install P as the clock (replacing any); every timer through this crate reads it from now on.
 pub fn install(p: Arc<dyn Provider>) {
     *PROVIDER.write().unwrap_or_else(|e| e.into_inner()) = Some(p);
@@ -37,7 +47,10 @@ pub fn uninstall() {
 }
 
 fn current() -> Option<Arc<dyn Provider>> {
-    PROVIDER.read().unwrap_or_else(|e| e.into_inner()).clone()
+    LOCAL
+        .try_with(Arc::clone)
+        .ok()
+        .or_else(|| PROVIDER.read().unwrap_or_else(|e| e.into_inner()).clone())
 }
 
 /// Wait D on the installed clock, else on tokio's.

@@ -665,8 +665,9 @@ and scripts its scenarios run, the escape harness for its probe's copy, and the 
 A timer in a crate (a kill's grace, a deadline, a debounce) waits through `drgnx_clock::sleep` and `drgnx_clock::timeout`,
 not through tokio or `std::thread`. With nothing installed they are tokio's own. A test installs a `Provider`: the hub's
 virtual clock (`drgnx_ratatoskr::clock`, moved by `__test_advance`) installs itself with `serve --test-clock`, and with the
-`test-hooks` feature `drgnx_clock::Manual::install()` gives a crate's own test a clock it moves by hand
-(`advance`, `sleepers`; one test at a time holds it, and dropping the guard puts tokio's back). The test waits for the timer
+`test-hooks` feature `drgnx_clock::Manual` gives a crate's own test a clock it moves by hand (`advance`, `sleepers`) and
+`Manual::scope(future)` runs the code under test on it: only that future's timers read it, so no other test of the process
+sees it (a task it spawns is wrapped in `scope` too). The test waits for the timer
 it expects (`skuld::wait_until_async` on `sleepers()`), then advances: nothing in it depends on how fast the machine is. What a
 virtual clock cannot do is wait for something outside it (a child's exit, a socket): that is an event wait, with a deadline that
 only bounds a failure, and it stays real. A real performance budget lives in the perf lane (`test/timing-rust.txt`, which only
