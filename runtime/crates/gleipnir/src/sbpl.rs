@@ -584,8 +584,8 @@ const ESZETT: [char; 2] = ['ß', '\u{1E9E}'];
 
 /// `path` as a regex that matches it in any case: an ASCII letter as a class of both cases (`[Gg]`), a letter with
 /// more spellings ([`FOLDS_TO`]: `(k|K|K)`) or a non-ASCII letter with case variants as a group of them (`(é|É)`), a
-/// regex metacharacter escaped. A run of s's and [`ESZETT`]s, which fold to s's two at a time, as a group of every
-/// spelling of its length (`ß` and `ss` both give `((s|S|ſ)(s|S|ſ)|(ß|ẞ))`), so a hidden `straße` is closed as
+/// regex metacharacter escaped. A run of s's and [`ESZETT`]s, which fold to s's two at a time, as one group for
+/// every spelling of its length ([`s_run`]: `ß` and `ss` both give `((s|S|ſ)(s|S|ſ)|(ß|ẞ))`), so a hidden `straße` is closed as
 /// `STRASSE` and a hidden `.ssh` as `.ßh`. No `(?i)`, which SBPL is not known to support. `whole`: the path and
 /// everything under it (as `subpath`); else the path alone (as `literal`).
 fn case_regex(path: &str, whole: bool) -> String {
@@ -604,7 +604,7 @@ fn case_regex(path: &str, whole: bool) -> String {
         if run == 1 {
             re.push_str(&letter_regex(c));
         } else {
-            re.push_str(&format!("({})", s_spellings(run).join("|")));
+            re.push_str(&s_run(run));
         }
     }
     re.push_str(if whole { "(/.*)?$" } else { "$" });
@@ -620,20 +620,24 @@ fn s_weight(c: char) -> usize {
     }
 }
 
-/// Every spelling of `n` s's, as regexes: each a sequence of one-s groups and two-s [`ESZETT`] groups.
-fn s_spellings(n: usize) -> Vec<String> {
+/// Every spelling of `n` s's as one regex: the sequences of one-s groups and two-s [`ESZETT`] groups whose s count is
+/// `n`. Split at the middle s: a spelling either has a boundary there (the first half's spellings, then the second's)
+/// or an [`ESZETT`] across it (`n / 2 - 1` s's, the ß, the rest). Exact, and its size grows with the square of `n`
+/// (15 s's: 919 bytes), where listing every spelling grows as their number does, Fibonacci's (15 s's: 87 KB).
+fn s_run(n: usize) -> String {
     match n {
-        0 => vec![String::new()],
-        1 => vec![letter_regex('s')],
+        0 => String::new(),
+        1 => letter_regex('s'),
         _ => {
-            let one = letter_regex('s');
+            let m = n / 2;
             let two = format!("({})", ESZETT.map(String::from).join("|"));
-            let mut alts: Vec<String> = s_spellings(n - 1)
-                .into_iter()
-                .map(|r| format!("{one}{r}"))
-                .collect();
-            alts.extend(s_spellings(n - 2).into_iter().map(|r| format!("{two}{r}")));
-            alts
+            format!(
+                "({}{}|{}{two}{})",
+                s_run(m),
+                s_run(n - m),
+                s_run(m - 1),
+                s_run(n - m - 1)
+            )
         }
     }
 }
@@ -1603,6 +1607,23 @@ mod tests {
             case_regex("/ß", false),
             "^/((s|S|\u{17F})(s|S|\u{17F})|(ß|\u{1E9E}))$"
         );
+        // Every run of up to 9 s's matches exactly its spellings: the s's and ß's whose s count is the run's.
+        for n in 0..=9 {
+            let re = case_regex(&format!("/{}", "s".repeat(n)), false);
+            for len in 0..=n {
+                for bits in 0..1u32 << len {
+                    let w: String = (0..len)
+                        .map(|i| if bits >> i & 1 == 1 { 'ß' } else { 's' })
+                        .collect();
+                    let count = len + bits.count_ones() as usize;
+                    assert_eq!(re_match(&re, &format!("/{w}")), count == n, "{w} by {re}");
+                }
+            }
+        }
+        // Review of GL-T9-3: a run's group grows with the square of its length, not with its number of spellings
+        // (Fibonacci): 15 s's fit in one SBPL string, and 40 build at once (and are refused by `quote`).
+        assert!(case_regex(&format!("/{}", "s".repeat(15)), false).len() <= MAX_LITERAL);
+        assert!(case_regex(&"s".repeat(40), false).len() < 8 * 1024);
         assert_eq!(case_regex("/\u{212A}", false), "^/(\u{212A}|k|K)$");
         assert_eq!(case_regex("/g", false), "^/[Gg]$");
         // Homebrew's data, in every case too.
