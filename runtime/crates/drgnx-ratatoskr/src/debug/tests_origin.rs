@@ -306,6 +306,26 @@ fn a_cpp_files_stores_are_declarations_and_assignments() {
 }
 
 #[test]
+fn a_csharp_files_stores_are_declarations_and_assignments() {
+    let text = "class C {\n  int F(int a, int[] b) {\n    int x = a + b[0];\n    x += a;\n    x = a;\n    return x;\n  }\n}\n";
+    let files = vec![("/p/M.cs".to_owned(), text.to_owned())];
+    let lang = origin::lang_of("/p/M.cs").unwrap();
+    assert_eq!(lang, hrafn::Lang::Csharp);
+    let got: Vec<(u32, Vec<String>, Option<String>)> = origin::stores(lang, &files, "x")
+        .into_iter()
+        .map(|s| (s.line, s.operands, s.pure))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            (3, vec!["a".into(), "b".into()], Some("a + b[0]".into())),
+            (4, vec!["a".into()], None),
+            (5, vec!["a".into()], Some("a".into())),
+        ]
+    );
+}
+
+#[test]
 fn a_go_files_stores_are_assignments_and_short_declarations() {
     let text = "package main\n\nfunc f(a int, b []int) int {\n\tx := a + len(b)\n\tx += b[0]\n\tx = a\n\treturn x\n}\n";
     let files = vec![("/p/m.go".to_owned(), text.to_owned())];

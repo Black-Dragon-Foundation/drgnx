@@ -1940,3 +1940,177 @@ async fn java_breaks_steps_and_inspects_through_jdtls() {
     d.shutdown().await;
     assert!(d.list().is_empty(), "sessions left: {:?}", d.list());
 }
+
+const CSHARP: &str = r#"using System;
+
+class Program
+{
+    static int Add(int a, int b)
+    {
+        int s = a + b;
+        return s;
+    }
+
+    static void Main(string[] args)
+    {
+        int total = 0;
+        for (int i = 0; i < 5; i++)
+        {
+            total = Add(total, i);
+        }
+        Console.WriteLine("done " + total);
+    }
+}
+"#;
+
+const CSHARP_PROJECT: &str = r#"<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <UseAppHost>false</UseAppHost>
+    <Optimize>false</Optimize>
+    <DebugType>portable</DebugType>
+  </PropertyGroup>
+</Project>
+"#;
+
+/// netcoredbg in TOOLS, installed through the production installer (the pack's pinned, hashed download) unless it already is
+/// at its pinned version. `DRGNX_DEBUG_LIVE_CSHARP_TOOLS` names a folder that is kept between runs (`lp-cs-live.sh`).
+async fn csharp_tools() -> PathBuf {
+    let tools = std::env::var_os("DRGNX_DEBUG_LIVE_CSHARP_TOOLS")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| live_dir("csharp-tools"));
+    let table = Table::builtin();
+    let a = table.by_id("netcoredbg").unwrap();
+    let ok = adapters::parts(a, &tools)
+        .iter()
+        .all(|p| p.installed.is_some() && p.installed == p.pinned);
+    if !ok {
+        let plan =
+            super::install::plan(a.install.as_ref().unwrap(), &super::install::platform_key())
+                .unwrap();
+        let env: Vec<(OsString, OsString)> = std::env::vars_os().collect();
+        let said = super::install::install(&plan, &tools, &super::install::Source::Https, &env)
+            .await
+            .unwrap_or_else(|e| panic!("the C# adapter's install: {e}"));
+        eprintln!("T10-CSHARP {said}");
+    }
+    tools
+}
+
+/// C#: break, step and inspect through netcoredbg with the pack's pinned, hashed adapter and the image's pinned .NET SDK
+/// (it builds the program): a breakpoint in a loop, Variables, step in, step out, and the program ends on Continue.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "live: netcoredbg downloaded and the .NET SDK of the adapter image (see the module's doc and lp-cs-live.sh)"]
+async fn csharp_breaks_steps_and_inspects_through_netcoredbg() {
+    let tools = csharp_tools().await;
+    let dir = live_dir("csharp");
+    let file = write(&dir, "Program.cs", CSHARP);
+    write(&dir, "app.csproj", CSHARP_PROJECT);
+    run(
+        &dir,
+        "dotnet",
+        &["build", "-c", "Debug", "-o", "out", "--nologo"],
+    );
+    let table = Table::builtin();
+    let adapter = table.by_id("netcoredbg").unwrap();
+    let where_ = adapters::Env {
+        path: vec![],
+        tools: tools.clone(),
+    };
+    let found = adapters::find(adapter, &where_).expect("netcoredbg is installed");
+    let (_, argv) = adapters::command(adapter, &found, &where_, None).unwrap();
+    let launcher = Arc::new(Spawned {
+        argv,
+        env: std::env::vars_os().collect(),
+        cwd: dir.clone(),
+        port: None,
+    });
+    let ev = Arc::new(Events::default());
+    let terms = Arc::new(Procs::default());
+    let d = Debug::new(ev.clone(), terms);
+    let root = dir.display().to_string();
+    let bp = add(&d, &root, &file, 16, None, None, None).await;
+    let config = json!({"type": "coreclr", "request": "launch", "name": "cs", "program": dir.join("out/app.dll"),
+                        "cwd": dir, "stopAtEntry": false, "console": "internalConsole"});
+    let start = Start {
+        name: "cs".into(),
+        adapter_id: "netcoredbg".into(),
+        request: Request::Launch,
+        arguments: super::launch::adapter_arguments(&config),
+        breakpoints: vec![],
+        functions: vec![],
+        exception_filters: None,
+    };
+    let t0 = crate::clock::now();
+    let sid_root = d
+        .start(1, &root, start, launcher)
+        .await
+        .unwrap_or_else(|e| panic!("the start: {e}"));
+    // break at `total = Add(total, i)` the first time round the loop
+    let (c, f) = ev.stop(0).await;
+    eprintln!(
+        "T10-CSHARP first stop after {} ms",
+        t0.elapsed().as_millis()
+    );
+    assert!(path_is(&f, &file) && line_of(&f) == 16, "break: {f}");
+    let sid = f["session"].as_str().unwrap().to_owned();
+    let stop = d.stop_of(&sid).unwrap();
+    assert_eq!(int_of(&local(&stop, "i").0), 0, "i");
+    assert_eq!(int_of(&local(&stop, "total").0), 0, "total");
+    // step in: `Add`'s first line, with its arguments as locals
+    d.control(&sid, Op::StepIn { thread: None }).await.unwrap();
+    let (c, f) = ev.stop(c).await;
+    assert!(
+        path_is(&f, &file)
+            && (5..=8).contains(&line_of(&f))
+            && f["name"].as_str().is_some_and(|n| n.contains("Add")),
+        "step in: {f}"
+    );
+    let inside = d.stop_of(&sid).unwrap();
+    assert_eq!(int_of(&local(&inside, "b").0), 0, "b");
+    // step out: back in Main
+    d.control(&sid, Op::StepOut { thread: None }).await.unwrap();
+    let (c, f) = ev.stop(c).await;
+    assert!(
+        path_is(&f, &file) && (13..=18).contains(&line_of(&f)),
+        "step out: {f}"
+    );
+    // the breakpoint again on the next turn: i is 1; then take it away and run to the end
+    d.control(&sid, Op::Continue { thread: None })
+        .await
+        .unwrap();
+    let (_, f) = ev.stop(c).await;
+    assert_eq!(line_of(&f), 16, "second break: {f}");
+    assert_eq!(
+        int_of(&local(&d.stop_of(&sid).unwrap(), "i").0),
+        1,
+        "i on the next turn"
+    );
+    remove(&d, &root, bp).await;
+    d.control(&sid, Op::Continue { thread: None })
+        .await
+        .unwrap();
+    for _ in 0..1500 {
+        if d.list().is_empty() {
+            break;
+        }
+        crate::clock::sleep(Duration::from_millis(20)).await;
+    }
+    // the program ended on its own: asserted before the Stop below, which would end any session
+    assert!(
+        d.list().is_empty(),
+        "the session did not end when the program did: {:?}",
+        d.list()
+    );
+    d.control(
+        &sid_root,
+        Op::Stop {
+            kill_debuggee: None,
+        },
+    )
+    .await
+    .ok();
+    d.shutdown().await;
+    assert!(d.list().is_empty(), "sessions left: {:?}", d.list());
+}

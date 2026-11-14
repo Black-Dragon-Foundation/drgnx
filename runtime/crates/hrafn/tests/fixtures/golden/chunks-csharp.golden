@@ -1,0 +1,23 @@
+chunk 0 1913 1 84 Some("Store") true 42012f9deacf625c77f9654e1b41be0aca679d255fc2fa4340a6dd20062950a3
+symbol Store namespace 49 1912 0 namespace_declaration None
+symbol Evicted delegate 71 112 0 namespace_declaration None
+symbol Policy enum 118 150 0 namespace_declaration None
+symbol Cache class 229 1579 0 namespace_declaration Some("<summary>A least-recently-used cache of values by key.</summary>")
+symbol Cache constructor 395 474 0 namespace_declaration None
+symbol Cache destructor 484 539 0 namespace_declaration None
+symbol Capacity property 549 577 0 namespace_declaration None
+symbol OnEvicted event 587 618 0 namespace_declaration None
+symbol Get method 689 801 0 namespace_declaration Some("<summary>The value of KEY, or default.</summary>")
+symbol Put method 811 993 0 namespace_declaration None
+symbol == operator 1003 1083 0 namespace_declaration None
+symbol != operator 1093 1161 0 namespace_declaration None
+symbol Evict method 1219 1381 0 namespace_declaration None
+symbol Dispose method 1391 1430 0 namespace_declaration None
+symbol Stats struct 1440 1573 0 namespace_declaration None
+symbol Stats constructor 1482 1524 0 namespace_declaration None
+symbol Count property 1538 1563 0 namespace_declaration None
+symbol ICache interface 1585 1650 0 namespace_declaration None
+symbol Capacity property 1623 1644 0 namespace_declaration None
+symbol Entry record 1656 1698 0 namespace_declaration None
+symbol Describe class 1704 1910 0 namespace_declaration None
+symbol Print method 1795 1904 0 namespace_declaration Some("<summary>Prints the size.</summary>")

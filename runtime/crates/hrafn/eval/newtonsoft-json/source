@@ -1,0 +1,5 @@
+url https://github.com/JamesNK/Newtonsoft.Json
+commit 52fa3aef1f2cadcd3a3f874251eddc98d3efbbaa
+language C#
+licence MIT
+fetched at test time by commit; never vendored

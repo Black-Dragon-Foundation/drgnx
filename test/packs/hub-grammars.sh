@@ -7,7 +7,7 @@
 set -euo pipefail
 here="$(cd "$(dirname "$0")/../.." && pwd)"
 cache=${1:?usage: hub-grammars.sh CACHE}
-packs="rust c cpp shell python javascript typescript tsx go java"
+packs="rust c cpp shell python javascript typescript tsx go java csharp"
 key=$(for p in $packs; do grep -ho ':\(commit\|tree-sha256\|src\) "[^"]*"' "$here/packs/$p/pack.eld"; done | sha256sum | cut -c1-16)
 dir="$cache/$key"
 if [ ! -f "$dir/drgnx.lock.eld" ]; then

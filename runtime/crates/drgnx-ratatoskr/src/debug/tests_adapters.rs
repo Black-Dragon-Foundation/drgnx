@@ -23,7 +23,13 @@ fn the_built_in_table_reads_and_marks_the_five_tested_adapters() {
     assert_eq!(
         tested,
         [
-            "codelldb", "debugpy", "delve", "java", "js-debug", "lldb-dap"
+            "codelldb",
+            "debugpy",
+            "delve",
+            "java",
+            "js-debug",
+            "lldb-dap",
+            "netcoredbg"
         ]
     );
     assert!(

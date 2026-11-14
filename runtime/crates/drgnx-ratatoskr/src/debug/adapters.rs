@@ -346,6 +346,8 @@ mod pack_tests {
             ("js-debug", "javascript"),
             ("delve", "go"),
             ("xdebug", "php"),
+            ("java", "java"),
+            ("netcoredbg", "csharp"),
         ] {
             let m = skald::builtin::get(pack).unwrap();
             assert!(

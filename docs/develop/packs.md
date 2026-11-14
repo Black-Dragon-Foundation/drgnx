@@ -177,7 +177,7 @@ the same path and `DRGNX_TEST_SELECTOR='"drgnx-packs-gui"'`.
 
 Hrafn's chunker takes what a top-level form defines from the pack's `queries/chunks.scm` (compiled into the hub with the
 manifest, `hrafn::chunk::registry`), under rules fixed in `hrafn::chunk::engine`, in place of a Rust walker per language
-(Rust, C, C++, shell, Python, JavaScript, TypeScript, TSX, Go and Java; Emacs Lisp, Org and Markdown keep their chunkers).
+(Rust, C, C++, shell, Python, JavaScript, TypeScript, TSX, Go, Java and C#; Emacs Lisp, Org and Markdown keep their chunkers).
 A pattern captures `@definition.KIND` (the node that defines; the kind is the suffix) with `@name`; `@container` on a node
 whose `body` field holds members; `@transparent` on a node a definition may sit inside that is itself the member (a `const`
 statement, a C `declaration`, a Go `var` declaration); `@skip` on a go-between (a Java enum's declarations, Go's `var (...)`
@@ -227,14 +227,14 @@ fallback to a crate.
 A grammar that is not built, does not match the lock or does not load is not an error the hub dies of: its files read as
 text (no symbols, references or highlights), the first miss of each pack is one log line naming it, and `ratatoskr
 doctor` prints `pack X not built (why)`. The registry looks again on the next use, so a grammar built after the hub
-started is found without a restart. `install.sh` and `drgnx update` run `drgnx packs migrate`, which installs the ten
-packs the hub parses with (`drgnx-packs-hub-defaults`: rust, c, cpp, shell, python, javascript, typescript, tsx, go, java);
+started is found without a restart. `install.sh` and `drgnx update` run `drgnx packs migrate`, which installs the eleven
+packs the hub parses with (`drgnx-packs-hub-defaults`: rust, c, cpp, shell, python, javascript, typescript, tsx, go, java, csharp);
 until that job finishes, code files read as text. A pack you remove (`drgnx packs remove NAME`, the Remove button) is
 recorded in the lock's `:removed-packs`: `packs migrate` never installs it again, its files read as text, and `ratatoskr
 doctor` says `pack X removed by you; drgnx packs install X to get it back`. `drgnx packs install NAME` (or `sync --add`)
 forgets the record.
 
-**Tests** parse with the same loader. `test/packs/hub-grammars.sh CACHE` builds those ten packs' grammars with the pack
+**Tests** parse with the same loader. `test/packs/hub-grammars.sh CACHE` builds those eleven packs' grammars with the pack
 job (`ratatoskr packs sync --builtin OUT [PACK...]`) into `CACHE/KEY` (KEY: a hash of their commits, tree hashes and
 sources) and prints `DRGNX_PACK_LOCK` and `DRGNX_PACK_GRAMMARS`; before the hub installs anything, the registry reads
 those two variables. An unchanged set of pins reuses the folder; a pin change builds a new one. Run it in a container
@@ -251,6 +251,22 @@ types are members; `template <...>` is a wrapper, so a templated class or functi
 holds the references (calls, `new T`, base classes). `/** */` and `///` comments are the docs. The pack also carries its
 `:inline` lists (lambdas, range-for) and `:origin` declarations, so inline values and origin trails work in C++;
 debugging reuses lldb-dap and CodeLLDB by adapter id.
+
+## C#
+
+The `csharp` pack (`.cs`; grammar `c-sharp`, the commit Emacs's `csharp-ts-mode` pins) is Hrafn's `csharp` language:
+`queries/chunks.scm` makes namespaces, classes, structs, interfaces and records containers, so a type's methods,
+constructors, destructors, properties, events and nested types are members (a file-scoped `namespace N;` has no body, its
+types sit at the top); delegates, enums and operators are symbols too. `queries/tags.scm` holds the references (calls,
+`new T`, base types). `///` and `/** */` comments are the docs (the XML tags stay in the first line). The pack carries
+its `:inline` lists (local functions, lambdas, `foreach`) and `:origin` declarations (`$TY {t} = $V;`; the store forms are
+tried with a closing `;` too, since C# has no bare expression at the top). `:format` names CSharpier
+(`csharpier format --write-stdout`, a .NET tool the user installs, tested against 1.4.0; the marker files are `.csharpierrc*`).
+The debugger is netcoredbg 3.2.0-1092 (`:adapters`, launch types `coreclr` and `netcoredbg`): a pinned, hashed download
+(linux-x64, linux-arm64, darwin-arm64) into the tools folder, started as `netcoredbg --interpreter=vscode`. It needs the
+.NET runtime to run the program (`dotnet` on the PATH or `DOTNET_ROOT`); a build puts the dll in `bin/Debug/netN.0/`, which
+the default launch configuration names. The live test (`csharp_breaks_steps_and_inspects_through_netcoredbg`, in the adapter
+image whose .NET SDK is pinned by SHA-512 in `test/container/debug-adapters-image.sh`) breaks, steps and inspects.
 
 ## The language stamp
 

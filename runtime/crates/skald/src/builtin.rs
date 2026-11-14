@@ -9,6 +9,7 @@ use std::sync::OnceLock;
 pub const SOURCES: &[(&str, &str)] = &[
     ("c", include_str!("../../../../packs/c/pack.eld")),
     ("cpp", include_str!("../../../../packs/cpp/pack.eld")),
+    ("csharp", include_str!("../../../../packs/csharp/pack.eld")),
     ("css", include_str!("../../../../packs/css/pack.eld")),
     ("dart", include_str!("../../../../packs/dart/pack.eld")),
     ("elixir", include_str!("../../../../packs/elixir/pack.eld")),

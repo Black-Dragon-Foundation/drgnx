@@ -74,6 +74,7 @@ pub(super) fn tags_source(kind: Kind) -> &'static str {
         Kind::Tsx => tags!("tsx"),
         Kind::Go => tags!("go"),
         Kind::Java => tags!("java"),
+        Kind::Csharp => tags!("csharp"),
     }
 }
 

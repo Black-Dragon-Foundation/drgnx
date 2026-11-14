@@ -1,4 +1,4 @@
-//! Rust, C, shell, Python, JavaScript, TypeScript, TSX, Go and Java: top-level items from the tree-sitter grammars,
+//! Rust, C, shell, Python, JavaScript, TypeScript, TSX, Go, Java and C#: top-level items from the tree-sitter grammars,
 //! merged and split like Lisp forms.
 
 use super::engine::Spec;
@@ -19,10 +19,11 @@ pub(super) enum Kind {
     Tsx,
     Go,
     Java,
+    Csharp,
 }
 
 impl Kind {
-    pub(super) const ALL: [Kind; 10] = [
+    pub(super) const ALL: [Kind; 11] = [
         Kind::Rust,
         Kind::C,
         Kind::Cpp,
@@ -33,6 +34,7 @@ impl Kind {
         Kind::Tsx,
         Kind::Go,
         Kind::Java,
+        Kind::Csharp,
     ];
 }
 
