@@ -623,6 +623,20 @@ killing it would delete the folded windows of the other frames (they are dedicat
               (name (window-parameter w 'drgnx-section)))
     (drgnx-wb-toggle-section name)))
 
+(declare-function drgnx-view-sja-p "drgnx-view-sja")
+(declare-function drgnx-view-p "drgnx-view")
+(declare-function drgnx-view-row-count "drgnx-view")
+(defvar drgnx-view)
+
+(defun drgnx-wb--section-rows (buffer)
+  "The rows BUFFER holds, for a section to fit them: a view's own count (the rows Sjá holds, which a draw of the
+window's slice does not all put in the buffer, or the inserter's), else the buffer's lines.  No line is counted
+for a view."
+  (with-current-buffer buffer
+    (cond ((and (fboundp 'drgnx-view-sja-p) (drgnx-view-sja-p buffer)) (drgnx-view-row-count nil))
+          ((and (fboundp 'drgnx-view-p) (drgnx-view-p drgnx-view)) (drgnx-view-row-count drgnx-view))
+          (t (count-lines (point-min) (point-max))))))
+
 (defun drgnx-wb--fit-window (w)
   "Make dock section window W as tall as its buffer's rows and its header (VS Code's Open Editors), at most its
 section's `:fit' fraction of the frame, where it holds whole rows and scrolls; no rows: the header and the one text
@@ -635,7 +649,7 @@ edge moves (the section below takes the rest).  A second call changes nothing."
               (row (drgnx-wb--row-px frame))
               ((> row 0))
               ((window-in-direction 'below w t)))
-    (let* ((rows (with-current-buffer (window-buffer w) (count-lines (point-min) (point-max))))
+    (let* ((rows (drgnx-wb--section-rows (window-buffer w)))
            (chrome (- (window-pixel-height w) (window-body-height w t)))
            (most (* row (max 0 (/ (- (floor (* cap (frame-inner-height frame))) chrome) row))))
            (delta (- (min most (* rows row)) (window-body-height w t)))
