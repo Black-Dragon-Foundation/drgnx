@@ -163,7 +163,9 @@ impl Metrics {
                 compact: (42, 10),
                 chip_h: 7,
                 gap: 3,
-                band: 8,
+                // the design's row pitch is 60 px: a chip row and a band come to 15 units here, and the editor's lines
+                // add about 9 px to the pair (their descent), so the band is 6 units
+                band: 6,
                 inner_band: 3,
                 block_gap: 6,
                 chips: [56, 44, 52, 42, 50, 36],

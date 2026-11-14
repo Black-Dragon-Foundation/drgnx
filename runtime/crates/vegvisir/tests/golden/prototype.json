@@ -11,74 +11,74 @@
       "layer": 2,
       "block_line": 0,
       "sub": 0,
-      "y": 15,
+      "y": 13,
       "height_units": 7
     },
     {
       "layer": 3,
       "block_line": 0,
       "sub": 0,
-      "y": 30,
+      "y": 26,
       "height_units": 7
     },
     {
       "layer": 4,
       "block_line": 0,
       "sub": 0,
-      "y": 45,
+      "y": 39,
       "height_units": 25
     },
     {
       "layer": 5,
       "block_line": 0,
       "sub": 0,
-      "y": 73,
+      "y": 67,
       "height_units": 7
     },
     {
       "layer": 4,
       "block_line": 1,
       "sub": 0,
-      "y": 88,
+      "y": 80,
       "height_units": 25
     },
     {
       "layer": 5,
       "block_line": 1,
       "sub": 0,
-      "y": 116,
+      "y": 108,
       "height_units": 7
     },
     {
       "layer": 6,
       "block_line": 0,
       "sub": 0,
-      "y": 131,
+      "y": 121,
       "height_units": 7
     }
   ],
   "at": {
     "agent:a1": {
       "x": 0,
-      "y": 45,
+      "y": 39,
       "w": 54,
       "h": 25
     },
     "agent:a2": {
       "x": 57,
-      "y": 45,
+      "y": 39,
       "w": 54,
       "h": 25
     },
     "agent:a3": {
       "x": 117,
-      "y": 45,
+      "y": 39,
       "w": 54,
       "h": 25
     },
     "agent:a4": {
       "x": 0,
-      "y": 88,
+      "y": 80,
       "w": 54,
       "h": 25
     },
@@ -102,73 +102,73 @@
     },
     "branch:drgnx/rp-df-hub": {
       "x": 6,
-      "y": 73,
+      "y": 67,
       "w": 42,
       "h": 7
     },
     "branch:drgnx/rp-fx-sess": {
       "x": 63,
-      "y": 73,
+      "y": 67,
       "w": 42,
       "h": 7
     },
     "branch:drgnx/rp-i6": {
       "x": 123,
-      "y": 73,
+      "y": 67,
       "w": 42,
       "h": 7
     },
     "branch:org/docs-plans-tooling": {
       "x": 6,
-      "y": 116,
+      "y": 108,
       "w": 42,
       "h": 7
     },
     "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs": {
       "x": 30,
-      "y": 131,
+      "y": 121,
       "w": 50,
       "h": 7
     },
     "machine:desktop": {
       "x": 83,
-      "y": 131,
+      "y": 121,
       "w": 36,
       "h": 7
     },
     "machine:laptop": {
       "x": 122,
-      "y": 131,
+      "y": 121,
       "w": 36,
       "h": 7
     },
     "plan:deferred": {
       "x": 29,
-      "y": 30,
+      "y": 26,
       "w": 52,
       "h": 7
     },
     "plan:i6": {
       "x": 118,
-      "y": 30,
+      "y": 26,
       "w": 52,
       "h": 7
     },
     "plan:jobq": {
       "x": 173,
-      "y": 30,
+      "y": 26,
       "w": 52,
       "h": 7
     },
     "spec:job-scheduler": {
       "x": 177,
-      "y": 15,
+      "y": 13,
       "w": 44,
       "h": 7
     },
     "spec:race-proof": {
       "x": 77,
-      "y": 15,
+      "y": 13,
       "w": 44,
       "h": 7
     }
@@ -228,7 +228,7 @@
     {
       "row": 1,
       "y": 7,
-      "height_units": 8,
+      "height_units": 6,
       "segs": [
         {
           "from": "ask:1",
@@ -255,8 +255,8 @@
     },
     {
       "row": 2,
-      "y": 22,
-      "height_units": 8,
+      "y": 20,
+      "height_units": 6,
       "segs": [
         {
           "from": "spec:race-proof",
@@ -283,8 +283,8 @@
     },
     {
       "row": 3,
-      "y": 37,
-      "height_units": 8,
+      "y": 33,
+      "height_units": 6,
       "segs": [
         {
           "from": "agent:a1",
@@ -326,7 +326,7 @@
     },
     {
       "row": 4,
-      "y": 70,
+      "y": 64,
       "height_units": 3,
       "segs": [
         {
@@ -369,8 +369,8 @@
     },
     {
       "row": 5,
-      "y": 80,
-      "height_units": 8,
+      "y": 74,
+      "height_units": 6,
       "segs": [
         {
           "from": "branch:drgnx/rp-df-hub",
@@ -397,7 +397,7 @@
     },
     {
       "row": 6,
-      "y": 113,
+      "y": 105,
       "height_units": 3,
       "segs": [
         {
@@ -425,8 +425,8 @@
     },
     {
       "row": 7,
-      "y": 123,
-      "height_units": 8,
+      "y": 115,
+      "height_units": 6,
       "segs": [
         {
           "from": "branch:drgnx/rp-df-hub",
@@ -448,5 +448,5 @@
   "fits": true,
   "crossings": 2,
   "width_units": 226,
-  "height_units": 138
+  "height_units": 128
 }

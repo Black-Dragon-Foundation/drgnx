@@ -11,265 +11,265 @@
       "layer": 2,
       "block_line": 0,
       "sub": 0,
-      "y": 15,
+      "y": 13,
       "height_units": 7
     },
     {
       "layer": 3,
       "block_line": 0,
       "sub": 0,
-      "y": 30,
+      "y": 26,
       "height_units": 7
     },
     {
       "layer": 4,
       "block_line": 0,
       "sub": 0,
-      "y": 45,
+      "y": 39,
       "height_units": 25
     },
     {
       "layer": 5,
       "block_line": 0,
       "sub": 0,
-      "y": 73,
+      "y": 67,
       "height_units": 7
     },
     {
       "layer": 5,
       "block_line": 0,
       "sub": 1,
-      "y": 88,
+      "y": 80,
       "height_units": 7
     },
     {
       "layer": 4,
       "block_line": 1,
       "sub": 0,
-      "y": 103,
+      "y": 93,
       "height_units": 25
     },
     {
       "layer": 5,
       "block_line": 1,
       "sub": 0,
-      "y": 131,
+      "y": 121,
       "height_units": 7
     },
     {
       "layer": 4,
       "block_line": 2,
       "sub": 0,
-      "y": 146,
+      "y": 134,
       "height_units": 25
     },
     {
       "layer": 5,
       "block_line": 2,
       "sub": 0,
-      "y": 174,
+      "y": 162,
       "height_units": 7
     },
     {
       "layer": 4,
       "block_line": 3,
       "sub": 0,
-      "y": 189,
+      "y": 175,
       "height_units": 25
     },
     {
       "layer": 5,
       "block_line": 3,
       "sub": 0,
-      "y": 217,
+      "y": 203,
       "height_units": 7
     },
     {
       "layer": 6,
       "block_line": 0,
       "sub": 0,
-      "y": 232,
+      "y": 216,
       "height_units": 7
     }
   ],
   "at": {
     "agent:s01": {
       "x": 0,
-      "y": 45,
+      "y": 39,
       "w": 42,
       "h": 10
     },
     "agent:s01/toolu_a": {
       "x": 45,
-      "y": 45,
+      "y": 39,
       "w": 42,
       "h": 10
     },
     "agent:s01/toolu_b": {
       "x": 90,
-      "y": 45,
+      "y": 39,
       "w": 42,
       "h": 10
     },
     "agent:s02": {
       "x": 135,
-      "y": 45,
+      "y": 39,
       "w": 42,
       "h": 10
     },
     "agent:s03": {
       "x": 180,
-      "y": 45,
+      "y": 39,
       "w": 42,
       "h": 10
     },
     "agent:s04": {
       "x": 225,
-      "y": 45,
+      "y": 39,
       "w": 54,
       "h": 25
     },
     "agent:s05": {
       "x": 282,
-      "y": 45,
+      "y": 39,
       "w": 42,
       "h": 10
     },
     "agent:s06": {
       "x": 327,
-      "y": 45,
+      "y": 39,
       "w": 42,
       "h": 10
     },
     "agent:s07": {
       "x": 372,
-      "y": 45,
+      "y": 39,
       "w": 42,
       "h": 10
     },
     "agent:s08": {
       "x": 417,
-      "y": 45,
+      "y": 39,
       "w": 42,
       "h": 10
     },
     "agent:s09": {
       "x": 462,
-      "y": 45,
+      "y": 39,
       "w": 42,
       "h": 10
     },
     "agent:s10": {
       "x": 507,
-      "y": 45,
+      "y": 39,
       "w": 42,
       "h": 10
     },
     "agent:s11": {
       "x": 0,
-      "y": 103,
+      "y": 93,
       "w": 54,
       "h": 25
     },
     "agent:s11/toolu_c": {
       "x": 57,
-      "y": 103,
+      "y": 93,
       "w": 42,
       "h": 10
     },
     "agent:s12": {
       "x": 102,
-      "y": 103,
+      "y": 93,
       "w": 54,
       "h": 25
     },
     "agent:s13": {
       "x": 159,
-      "y": 103,
+      "y": 93,
       "w": 54,
       "h": 25
     },
     "agent:s14": {
       "x": 216,
-      "y": 103,
+      "y": 93,
       "w": 54,
       "h": 25
     },
     "agent:s15": {
       "x": 273,
-      "y": 103,
+      "y": 93,
       "w": 54,
       "h": 25
     },
     "agent:s16": {
       "x": 330,
-      "y": 103,
+      "y": 93,
       "w": 54,
       "h": 25
     },
     "agent:s17": {
       "x": 387,
-      "y": 103,
+      "y": 93,
       "w": 54,
       "h": 25
     },
     "agent:s18": {
       "x": 0,
-      "y": 146,
+      "y": 134,
       "w": 54,
       "h": 25
     },
     "agent:s18/toolu_d": {
       "x": 57,
-      "y": 146,
+      "y": 134,
       "w": 42,
       "h": 10
     },
     "agent:s19": {
       "x": 102,
-      "y": 146,
+      "y": 134,
       "w": 54,
       "h": 25
     },
     "agent:s20": {
       "x": 159,
-      "y": 146,
+      "y": 134,
       "w": 54,
       "h": 25
     },
     "agent:s21": {
       "x": 216,
-      "y": 146,
+      "y": 134,
       "w": 54,
       "h": 25
     },
     "agent:s22": {
       "x": 273,
-      "y": 146,
+      "y": 134,
       "w": 54,
       "h": 25
     },
     "agent:s23": {
       "x": 372,
-      "y": 146,
+      "y": 134,
       "w": 54,
       "h": 25
     },
     "agent:s24": {
       "x": 429,
-      "y": 146,
+      "y": 134,
       "w": 54,
       "h": 25
     },
     "agent:s25": {
       "x": 0,
-      "y": 189,
+      "y": 175,
       "w": 54,
       "h": 25
     },
     "agent:s26": {
       "x": 57,
-      "y": 189,
+      "y": 175,
       "w": 54,
       "h": 25
     },
@@ -311,265 +311,265 @@
     },
     "branch:drgnx/as2": {
       "x": 0,
-      "y": 88,
+      "y": 80,
       "w": 42,
       "h": 7
     },
     "branch:drgnx/as2-core": {
       "x": 462,
-      "y": 73,
+      "y": 67,
       "w": 42,
       "h": 7
     },
     "branch:drgnx/as2-data": {
       "x": 135,
-      "y": 73,
+      "y": 67,
       "w": 42,
       "h": 7
     },
     "branch:drgnx/as2-edits": {
       "x": 417,
-      "y": 73,
+      "y": 67,
       "w": 42,
       "h": 7
     },
     "branch:drgnx/as2-map": {
       "x": 0,
-      "y": 73,
+      "y": 67,
       "w": 42,
       "h": 7
     },
     "branch:drgnx/as2-s1": {
       "x": 372,
-      "y": 73,
+      "y": 67,
       "w": 42,
       "h": 7
     },
     "branch:drgnx/as2-s4": {
       "x": 327,
-      "y": 73,
+      "y": 67,
       "w": 42,
       "h": 7
     },
     "branch:drgnx/as2-sources": {
       "x": 180,
-      "y": 73,
+      "y": 67,
       "w": 42,
       "h": 7
     },
     "branch:drgnx/as2-step": {
       "x": 282,
-      "y": 73,
+      "y": 67,
       "w": 42,
       "h": 7
     },
     "branch:drgnx/as2-trace": {
       "x": 507,
-      "y": 73,
+      "y": 67,
       "w": 42,
       "h": 7
     },
     "branch:drgnx/as2-wire": {
       "x": 231,
-      "y": 73,
+      "y": 67,
       "w": 42,
       "h": 7
     },
     "branch:drgnx/main": {
       "x": 324,
-      "y": 174,
+      "y": 162,
       "w": 42,
       "h": 7
     },
     "branch:drgnx/rp-core": {
       "x": 6,
-      "y": 174,
+      "y": 162,
       "w": 42,
       "h": 7
     },
     "branch:drgnx/rp-hub": {
       "x": 108,
-      "y": 174,
+      "y": 162,
       "w": 42,
       "h": 7
     },
     "branch:drgnx/rp-install": {
       "x": 279,
-      "y": 174,
+      "y": 162,
       "w": 42,
       "h": 7
     },
     "branch:drgnx/rp-mods": {
       "x": 222,
-      "y": 174,
+      "y": 162,
       "w": 42,
       "h": 7
     },
     "branch:drgnx/rp-sweep": {
       "x": 165,
-      "y": 174,
+      "y": 162,
       "w": 42,
       "h": 7
     },
     "branch:nidhogg/gl-cards": {
       "x": 165,
-      "y": 131,
+      "y": 121,
       "w": 42,
       "h": 7
     },
     "branch:nidhogg/gl-fonts": {
       "x": 393,
-      "y": 131,
+      "y": 121,
       "w": 42,
       "h": 7
     },
     "branch:nidhogg/gl-leg": {
       "x": 108,
-      "y": 131,
+      "y": 121,
       "w": 42,
       "h": 7
     },
     "branch:nidhogg/gl-mask": {
       "x": 6,
-      "y": 131,
+      "y": 121,
       "w": 42,
       "h": 7
     },
     "branch:nidhogg/gl-pacer": {
       "x": 279,
-      "y": 131,
+      "y": 121,
       "w": 42,
       "h": 7
     },
     "branch:nidhogg/gl-scroll": {
       "x": 222,
-      "y": 131,
+      "y": 121,
       "w": 42,
       "h": 7
     },
     "branch:nidhogg/gl-shell": {
       "x": 336,
-      "y": 131,
+      "y": 121,
       "w": 42,
       "h": 7
     },
     "branch:nidhogg/nidhogg-31": {
       "x": 438,
-      "y": 131,
+      "y": 121,
       "w": 42,
       "h": 7
     },
     "branch:org/docs-brainstorm": {
       "x": 6,
-      "y": 217,
+      "y": 203,
       "w": 42,
       "h": 7
     },
     "branch:org/docs-chat": {
       "x": 63,
-      "y": 217,
+      "y": 203,
       "w": 42,
       "h": 7
     },
     "branch:org/jobq-plan": {
       "x": 378,
-      "y": 174,
+      "y": 162,
       "w": 42,
       "h": 7
     },
     "branch:org/jobq-report": {
       "x": 435,
-      "y": 174,
+      "y": 162,
       "w": 42,
       "h": 7
     },
     "branch:org/main": {
       "x": 108,
-      "y": 217,
+      "y": 203,
       "w": 42,
       "h": 7
     },
     "file:drgnx/core/drgnx-hub-core.el": {
       "x": 140,
-      "y": 232,
+      "y": 216,
       "w": 50,
       "h": 7
     },
     "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs": {
       "x": 246,
-      "y": 232,
+      "y": 216,
       "w": 50,
       "h": 7
     },
     "file:drgnx/runtime/crates/vegvisir/src/layout.rs": {
       "x": 0,
-      "y": 232,
+      "y": 216,
       "w": 50,
       "h": 7
     },
     "file:nidhogg/src/xdisp.c": {
       "x": 193,
-      "y": 232,
+      "y": 216,
       "w": 50,
       "h": 7
     },
     "machine:desktop": {
       "x": 299,
-      "y": 232,
+      "y": 216,
       "w": 36,
       "h": 7
     },
     "machine:laptop": {
       "x": 338,
-      "y": 232,
+      "y": 216,
       "w": 36,
       "h": 7
     },
     "machine:local": {
       "x": 377,
-      "y": 232,
+      "y": 216,
       "w": 36,
       "h": 7
     },
     "plan:agent-system-p2": {
       "x": 248,
-      "y": 30,
+      "y": 26,
       "w": 52,
       "h": 7
     },
     "plan:glitnir-p2-p4": {
       "x": 303,
-      "y": 30,
+      "y": 26,
       "w": 52,
       "h": 7
     },
     "plan:jobq": {
       "x": 413,
-      "y": 30,
+      "y": 26,
       "w": 52,
       "h": 7
     },
     "plan:race-proof": {
       "x": 358,
-      "y": 30,
+      "y": 26,
       "w": 52,
       "h": 7
     },
     "spec:glitnir": {
       "x": 307,
-      "y": 15,
+      "y": 13,
       "w": 44,
       "h": 7
     },
     "spec:race-proof": {
       "x": 362,
-      "y": 15,
+      "y": 13,
       "w": 44,
       "h": 7
     },
     "spec:work-space": {
       "x": 252,
-      "y": 15,
+      "y": 13,
       "w": 44,
       "h": 7
     }
@@ -1467,7 +1467,7 @@
     {
       "row": 1,
       "y": 7,
-      "height_units": 8,
+      "height_units": 6,
       "segs": [
         {
           "from": "ask:5",
@@ -1522,8 +1522,8 @@
     },
     {
       "row": 2,
-      "y": 22,
-      "height_units": 8,
+      "y": 20,
+      "height_units": 6,
       "segs": [
         {
           "from": "ask:5",
@@ -1578,8 +1578,8 @@
     },
     {
       "row": 3,
-      "y": 37,
-      "height_units": 8,
+      "y": 33,
+      "height_units": 6,
       "segs": [
         {
           "from": "agent:s01",
@@ -1799,7 +1799,7 @@
     },
     {
       "row": 4,
-      "y": 70,
+      "y": 64,
       "height_units": 3,
       "segs": [
         {
@@ -2003,8 +2003,8 @@
     },
     {
       "row": 5,
-      "y": 80,
-      "height_units": 8,
+      "y": 74,
+      "height_units": 6,
       "segs": [
         {
           "from": "branch:drgnx/as2-map",
@@ -2164,8 +2164,8 @@
     },
     {
       "row": 6,
-      "y": 95,
-      "height_units": 8,
+      "y": 87,
+      "height_units": 6,
       "segs": [
         {
           "from": "agent:s11",
@@ -2341,7 +2341,7 @@
     },
     {
       "row": 7,
-      "y": 128,
+      "y": 118,
       "height_units": 3,
       "segs": [
         {
@@ -2510,8 +2510,8 @@
     },
     {
       "row": 8,
-      "y": 138,
-      "height_units": 8,
+      "y": 128,
+      "height_units": 6,
       "segs": [
         {
           "from": "branch:drgnx/as2-map",
@@ -2652,7 +2652,7 @@
     },
     {
       "row": 9,
-      "y": 171,
+      "y": 159,
       "height_units": 3,
       "segs": [
         {
@@ -2771,8 +2771,8 @@
     },
     {
       "row": 10,
-      "y": 181,
-      "height_units": 8,
+      "y": 169,
+      "height_units": 6,
       "segs": [
         {
           "from": "branch:drgnx/as2-map",
@@ -2841,7 +2841,7 @@
     },
     {
       "row": 11,
-      "y": 214,
+      "y": 200,
       "height_units": 3,
       "segs": [
         {
@@ -2911,8 +2911,8 @@
     },
     {
       "row": 12,
-      "y": 224,
-      "height_units": 8,
+      "y": 210,
+      "height_units": 6,
       "segs": [
         {
           "from": "branch:drgnx/as2-map",
@@ -2969,5 +2969,5 @@
   "fits": true,
   "crossings": 124,
   "width_units": 576,
-  "height_units": 239
+  "height_units": 223
 }
