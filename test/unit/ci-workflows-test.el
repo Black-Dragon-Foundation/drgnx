@@ -491,6 +491,26 @@ Returns (EXIT . OUTPUT), the output both streams' or, with STDOUT-ONLY, stdout's
     ;; the escape-host's sandbox lane and the macos fork row both run them
     (should (>= checked 2))))
 
+;; The live notebook rows (notebook::kernel::tests_live) start a real ipykernel and read its python from
+;; DRGNX_NB_KERNEL_PYTHON; without it they fail by design. The escape suite's sandbox lane runs every ignored row of the
+;; crate on the Linux runners: it installs the hash-pinned kernel first (.github/ci/notebook-kernel.sh). The debug-live job
+;; names the rows and has the adapter image's venv; the image sets the same variable.
+(ert-deftest drgnx-ci/the-live-notebook-rows-have-their-ipykernel-where-they-run ()
+  (let ((rt (drgnx-ci-test--yml "runtime.yml"))
+        (image (drgnx-ci-test--file "test/container/Containerfile.debug")))
+    (skip-unless (and rt image))
+    (should (file-exists-p (expand-file-name ".github/ci/notebook-kernel.sh" drgnx-ci-test--root)))
+    (should (file-exists-p (expand-file-name "test/container/ipykernel-requirements.txt" drgnx-ci-test--root)))
+    (let ((install (string-search "notebook-kernel.sh \"$RUNNER_TEMP/nb-kernel\" >> \"$GITHUB_ENV\"" rt))
+          (lane (string-search "- name: agent core, sandbox lane (--ignored)" rt)))
+      (should install)
+      (should lane)
+      (should (< install lane)))
+    (should (string-match-p "notebook::kernel::tests_live" rt))
+    (should (string-match-p "DRGNX_NB_KERNEL_PYTHON: /opt/nb-kernel/bin/python3" rt))
+    (should (string-match-p "ENV DRGNX_NB_KERNEL_PYTHON=/opt/nb-kernel/bin/python3" image))
+    (should (string-match-p "COPY debug-adapters-image.sh ipykernel-requirements.txt" image))))
+
 (ert-deftest drgnx-ci/the-offline-build-row-runs-where-a-network-namespace-can-be-made ()
   ;; ghostty-vt-sys's builds_offline needs unshare(2): the Fedora job's Docker container refuses it, so its test says so
   ;; and stops; the escape-host job (a runner) runs it with DRGNX_REQUIRE_NETNS=1, where a missing namespace fails
