@@ -1009,6 +1009,39 @@ mod tests {
 
     // pattern: D
     #[test]
+    fn a_buffer_over_the_marks_limit_gets_no_marks_and_no_blame() {
+        use crate::editor::marks;
+        let f = fx("a\nb\nc\nd\n");
+        let now = "a\nB\nc\nd\ne\n";
+        tracked(&f, "a.txt", now, "user");
+        // under the limit: marks and blame come
+        assert!(
+            !f.hub
+                .hunks_marked(&f.tree, "a.txt")
+                .unwrap()
+                .unwrap()
+                .1
+                .is_empty()
+        );
+        assert!(
+            f.hub
+                .blame_line(&f.tree, "a.txt", 1, 60, 4e9)
+                .unwrap()
+                .text
+                .is_some()
+        );
+        // one byte under the text's size: both are empty, the hunks (Show, Revert, Stage Change) still come
+        marks::with_limit(now.len() - 1, || {
+            let (hunks, m) = f.hub.hunks_marked(&f.tree, "a.txt").unwrap().unwrap();
+            assert_eq!(hunks.len(), 2);
+            assert!(m.is_empty());
+            let l = f.hub.blame_line(&f.tree, "a.txt", 1, 60, 4e9).unwrap();
+            assert!(l.text.is_none() && l.sha.is_none());
+        });
+    }
+
+    // pattern: D
+    #[test]
     fn the_hunks_answer_carries_the_marks_in_the_buffers_positions() {
         let f = fx("a\nb\nc\nd\n");
         tracked(&f, "a.txt", "a\nB\nc\nd\ne\n", "user");

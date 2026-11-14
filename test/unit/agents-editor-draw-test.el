@@ -8,6 +8,7 @@
 (require 'drgnx-hub-client)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/agents-editor-place-fixture" drgnx-dir) nil t)
 (drgnx-test-modules-preload '(tools/agents-in-editor))
 
 (declare-function drgnx-agents-editor-sync-windows "drgnx-agents-editor")
@@ -51,10 +52,18 @@
        (delete-directory dir t))))
 
 (defun drgnx-agents-editor-draw-test--frame (buf agents &optional gutter)
-  "Feed BUF's watch the full frame of AGENTS and GUTTER ranges."
+  "Feed BUF's watch the full frame of AGENTS and GUTTER ranges, with the positions the hub would put on them."
+  (let ((placed (drgnx-test-editor-place buf agents gutter)))
+    (drgnx-agents-editor-draw-test--feed buf (car placed) (cdr placed))))
+
+(defun drgnx-agents-editor-draw-test--feed (buf agents gutter)
+  "Feed BUF's watch the full frame of AGENTS and GUTTER as they are."
   (drgnx-agents-editor--event
    "agent-buffer" (list :view (buffer-local-value 'drgnx-agents-editor--view buf) :full t
                         :version (cl-incf drgnx-agents-editor-draw-test--version) :agents agents :gutter gutter)))
+
+(defun drgnx-agents-editor-draw-test--pos (buf line)
+  (drgnx-test-editor-line-start buf line))
 
 (defun drgnx-agents-editor-draw-test--bars (buf)
   (with-current-buffer buf (seq-filter (lambda (o) (overlay-get o 'drgnx-decor-cursor)) (overlays-in (point-min) (point-max)))))
@@ -113,6 +122,36 @@
         (drgnx-agents-editor-draw--scrolled win (window-start win))
         (should-not (live))))))
 
+;; The hub's frames carry positions: drawing one, and scrolling, counts no line and walks to none from the top.
+(ert-deftest drgnx-agents-editor/a-frame-and-a-scroll-count-no-line ()
+  (drgnx-agents-editor-draw-test--with 400
+    (let* ((placed (drgnx-test-editor-place buf (list (drgnx-agents-editor-draw-test--agent 1 "editing" 300)
+                                                      (drgnx-agents-editor-draw-test--agent 2 "reading" 250 :line_end 260))
+                                            '((:session "s1" :kind "changed" :start 255 :end 258 :help "h"))))
+           (win (selected-window)))
+      (with-current-buffer buf (goto-char (point-min)) (forward-line 249) (set-window-start win (point)))
+      (cl-letf (((symbol-function 'line-number-at-pos) (lambda (&rest _) (error "counted a line"))))
+        (drgnx-agents-editor-draw-test--feed buf (car placed) (cdr placed))
+        (with-current-buffer buf (goto-char (point-min)) (forward-line 252) (set-window-start win (point)))
+        (drgnx-agents-editor-draw--scrolled win (window-start win)))
+      ;; the bar sits where the hub said (line 300), the ring and the strip on the visible rows of theirs
+      (should (= (overlay-start (car (drgnx-agents-editor-draw-test--bars buf)))
+                 (drgnx-agents-editor-draw-test--pos buf 300)))
+      (should (cl-every (lambda (o) (<= (drgnx-agents-editor-draw-test--pos buf 250) (overlay-start o)
+                                        (drgnx-agents-editor-draw-test--pos buf 260)))
+                        (cl-remove-if-not #'overlay-buffer (drgnx-agents-editor-draw-test--rings buf))))
+      (should (= 4 (length (cl-remove-if-not #'overlay-buffer (drgnx-agents-editor-draw-test--strip-overlays buf))))))))
+
+(ert-deftest drgnx-agents-editor/a-frame-with-no-positions-draws-nothing ()
+  ;; a text over the hub's marks limit: no positions, so no bar, ring, tag or strip
+  (drgnx-agents-editor-draw-test--with 30
+    (drgnx-agents-editor-draw-test--feed
+     buf (list (drgnx-agents-editor-draw-test--agent 1 "editing" 3) (drgnx-agents-editor-draw-test--agent 2 "reading" 5))
+     '((:session "s1" :kind "changed" :start 5 :end 7 :help "h")))
+    (should-not (drgnx-agents-editor-draw-test--bars buf))
+    (should-not (cl-remove-if-not #'overlay-buffer (drgnx-agents-editor-draw-test--rings buf)))
+    (should-not (cl-remove-if-not #'overlay-buffer (drgnx-agents-editor-draw-test--strip-overlays buf)))))
+
 (ert-deftest drgnx-agents-editor/projected-draws-no-bar ()
   (drgnx-agents-editor-draw-test--with 30
     (drgnx-agents-editor-draw-test--frame
@@ -168,9 +207,10 @@
                                           drgnx-agents-editor-draw-test--gutter)
     (with-current-buffer buf
       ;; the agent's lines 5-7 are its strip's; the user's line 10 is the change marks'
+      ;; (the function takes the position a line starts at)
       (should (functionp drgnx-hunks-skip-line-function))
-      (should (cl-every (lambda (l) (funcall drgnx-hunks-skip-line-function l)) '(5 6 7)))
-      (should-not (funcall drgnx-hunks-skip-line-function 10))
+      (should (cl-every (lambda (l) (funcall drgnx-hunks-skip-line-function (drgnx-agents-editor-draw-test--pos buf l))) '(5 6 7)))
+      (should-not (funcall drgnx-hunks-skip-line-function (drgnx-agents-editor-draw-test--pos buf 10)))
       ;; and the strip overlays hold a higher priority than any other mark
       (should (cl-every (lambda (o) (>= (overlay-get o 'priority) 100)) (drgnx-agents-editor-draw-test--strip-overlays buf))))))
 

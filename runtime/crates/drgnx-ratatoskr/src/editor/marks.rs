@@ -5,14 +5,34 @@
 //! positions, and Lisp only moves the overlays of the marks that changed.  Every answer here goes through
 //! [`within_limit`]: a text over [`MAX_BYTES`] gets no marks (the guard `drgnx-large-file-p` is in Lisp).
 
+use runstav::methods::editor::{BufferAgent, GutterRange};
 use runstav::methods::history::{AgentLines, BlameCommit, HeadHunk, HunkMark, HunkMarkKind};
 
 /// The size above which a buffer gets no marks: the large-files module's default `:ask-above` (50 MiB), the size from
 /// which a file opens lean or in chunks and draws none.  Large-files v2's cost registry replaces this one constant.
 pub const MAX_BYTES: usize = 50 * 1024 * 1024;
 
+#[cfg(test)]
+thread_local! {
+    /// A test's own limit (a test thread's, so parallel tests do not see it).
+    static TEST_LIMIT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// Run F with the limit at LIMIT bytes on this thread: a test of the guard needs no 50 MiB text.
+#[cfg(test)]
+pub fn with_limit<R>(limit: usize, f: impl FnOnce() -> R) -> R {
+    TEST_LIMIT.with(|l| l.set(Some(limit)));
+    let out = f();
+    TEST_LIMIT.with(|l| l.set(None));
+    out
+}
+
 /// Whether a text of LEN bytes gets marks: the one named check every mark builder asks.
 pub fn within_limit(len: usize) -> bool {
+    #[cfg(test)]
+    if let Some(limit) = TEST_LIMIT.with(std::cell::Cell::get) {
+        return len <= limit;
+    }
     len <= MAX_BYTES
 }
 
@@ -69,6 +89,72 @@ pub fn hunk_marks(text: &str, hunks: &[HeadHunk]) -> Vec<HunkMark> {
     }
     out.sort_by_key(|m| m.line);
     out
+}
+
+/// The lines of a text as the buffer's positions: where each starts and ends.
+pub struct Lines {
+    starts: Vec<i64>,
+    /// Each line's end (the position of its line break, or of the end of the text).
+    ends: Vec<i64>,
+}
+
+impl Lines {
+    /// TEXT's lines; none over the limit ([`within_limit`]).
+    pub fn of(text: &str) -> Option<Lines> {
+        if !within_limit(text.len()) {
+            return None;
+        }
+        let starts = line_starts(text);
+        let total = i64::try_from(text.chars().count()).unwrap_or(i64::MAX) + 1;
+        let ends = starts
+            .iter()
+            .skip(1)
+            .map(|s| s - 1)
+            .chain(std::iter::once(total))
+            .collect();
+        Some(Lines { starts, ends })
+    }
+
+    fn index(&self, line: u32) -> usize {
+        usize::try_from(line.max(1) - 1)
+            .unwrap_or(0)
+            .min(self.starts.len() - 1)
+    }
+
+    /// The position LINE (1-based; the last line for one past it) starts at.
+    pub fn start(&self, line: u32) -> i64 {
+        self.starts[self.index(line)]
+    }
+
+    /// The position COL characters into LINE, kept on the line.
+    pub fn at(&self, line: u32, col: u32) -> i64 {
+        let i = self.index(line);
+        (self.starts[i] + i64::from(col)).min(self.ends[i])
+    }
+}
+
+/// Give AGENTS and GUTTER the positions of their lines in LINES, and SYMBOL names each agent's symbol (the line; none
+/// for a projected agent).
+pub fn place(
+    agents: &mut [BufferAgent],
+    gutter: &mut [GutterRange],
+    lines: &Lines,
+    symbol: &mut dyn FnMut(u32) -> Option<String>,
+) {
+    for a in agents {
+        let Some(line) = a.line else { continue };
+        let end = a.line_end.unwrap_or(line);
+        a.line_pos = Some(lines.start(line));
+        a.end_pos = Some(lines.start(end));
+        a.pos = Some(lines.at(end, a.col.unwrap_or(0)));
+        if a.projected.is_none() {
+            a.symbol = symbol(line);
+        }
+    }
+    for g in gutter {
+        g.start_pos = Some(lines.start(g.start));
+        g.end_pos = Some(lines.start(g.end));
+    }
 }
 
 /// Fewer columns than this left for the blame: none (a stump says nothing).
@@ -149,6 +235,84 @@ mod tests {
         assert_eq!(at(800 * 86_400), "2 years ago");
         // a time after now is "just now"
         assert_eq!(ago(now as i64 + 99, now), "just now");
+    }
+
+    fn agent(
+        line: Option<u32>,
+        end: Option<u32>,
+        col: Option<u32>,
+        projected: bool,
+    ) -> BufferAgent {
+        use runstav::methods::editor::Projected;
+        use runstav::methods::work::{PresenceMode, PresenceSource};
+        BufferAgent {
+            session: "s".into(),
+            ordinal: Some(1),
+            handle: None,
+            mode: PresenceMode::Edit,
+            line,
+            line_end: end,
+            col,
+            source: PresenceSource::Edit,
+            live: false,
+            projected: projected.then(|| Projected {
+                worktree_label: "w".into(),
+            }),
+            step_title: None,
+            plan_entry: None,
+            pos: None,
+            line_pos: None,
+            end_pos: None,
+            symbol: None,
+        }
+    }
+
+    #[test]
+    fn the_agents_and_ranges_get_the_positions_of_their_lines() {
+        use runstav::methods::editor::GutterKind;
+        // lines: "ab" 1-2, "cde" 4-6, "" 8, "f" 9 (the text has no final break)
+        let text = "ab\ncde\n\nf";
+        let lines = Lines::of(text).unwrap();
+        assert_eq!((lines.start(2), lines.at(2, 1), lines.at(2, 99)), (4, 5, 7));
+        assert_eq!(lines.start(99), 9, "a line past the end is the last");
+        let mut agents = vec![
+            agent(Some(2), Some(3), Some(2), false),
+            agent(Some(4), None, None, true),
+            agent(None, None, None, false),
+        ];
+        let mut gutter = vec![GutterRange {
+            session: "s".into(),
+            kind: GutterKind::Changed,
+            start: 2,
+            end: 4,
+            projected: None,
+            help: String::new(),
+            start_pos: None,
+            end_pos: None,
+        }];
+        let mut asked = Vec::new();
+        place(&mut agents, &mut gutter, &lines, &mut |l| {
+            asked.push(l);
+            Some(format!("fn{l}"))
+        });
+        // an editing agent: the bar at (line_end, col), the ring from line to line_end
+        assert_eq!(
+            (agents[0].pos, agents[0].line_pos, agents[0].end_pos),
+            (Some(8), Some(4), Some(8))
+        );
+        assert_eq!(agents[0].symbol.as_deref(), Some("fn2"));
+        // a projected agent: its line's start, and no symbol asked for
+        assert_eq!(agents[1].line_pos, Some(9));
+        assert!(agents[1].symbol.is_none());
+        // no line, nothing
+        assert!(agents[2].pos.is_none() && agents[2].line_pos.is_none());
+        assert_eq!(asked, [2]);
+        assert_eq!((gutter[0].start_pos, gutter[0].end_pos), (Some(4), Some(9)));
+    }
+
+    #[test]
+    fn no_positions_over_the_limit() {
+        with_limit(4, || assert!(Lines::of("a\nb\nc\n").is_none()));
     }
 
     #[test]
@@ -239,11 +403,14 @@ mod tests {
 
     #[test]
     fn a_text_over_the_limit_gets_no_marks() {
-        let big = "x\n".repeat(MAX_BYTES / 2 + 1);
-        assert!(!within_limit(big.len()));
-        assert!(hunk_marks(&big, &[hunk(1, 1, 1, 1)]).is_empty());
-        let edge = "x".repeat(MAX_BYTES);
-        assert!(within_limit(edge.len()));
-        assert_eq!(hunk_marks(&edge, &[hunk(1, 1, 1, 1)]).len(), 1);
+        // the limit itself is a constant; the check is tried at a small one
+        assert_eq!(MAX_BYTES, 50 * 1024 * 1024);
+        with_limit(8, || {
+            assert!(within_limit(8) && !within_limit(9));
+            assert!(hunk_marks("x\nx\nx\nx\nx\n", &[hunk(1, 1, 1, 1)]).is_empty());
+            assert_eq!(hunk_marks("x\nx\nx\nx", &[hunk(1, 1, 1, 1)]).len(), 1);
+        });
+        // and the override is gone after
+        assert!(within_limit(9));
     }
 }

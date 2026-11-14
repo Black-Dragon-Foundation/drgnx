@@ -314,8 +314,17 @@ window, where margins work the same way: the marked row has the agent's colour i
 
 ;;;; Row 3: the module's own drawing (cursors, rings, tags, the gutter strip) in a real frame
 
-(defun agents-editor-gui--p3-frame (n)
-  "A frame of five agents and the gutter ranges around them; N makes its version."
+(defun agents-editor-gui--p3-frame (n &optional buf)
+  "A frame of five agents and the gutter ranges around them; N makes its version.  With BUF it carries the positions
+the hub would put on it over that buffer."
+  (let ((frame (agents-editor-gui--p3-frame-1 n)))
+    (if (not buf) frame
+      (load (expand-file-name "test/fixtures/agents-editor-place-fixture" agents-editor-gui--repo) nil t)
+      (let ((placed (drgnx-test-editor-place buf (plist-get frame :agents) (plist-get frame :gutter))))
+        (list :version n :agents (car placed) :gutter (cdr placed))))))
+
+(defun agents-editor-gui--p3-frame-1 (n)
+  "A frame of five agents and the gutter ranges around them (lines only); N makes its version."
   (list :version n :agents
         (list (list :ordinal 1 :session "s1" :handle "Opus" :mode "editing" :line 30 :line_end 30 :col 4)
               (list :ordinal 2 :session "s2" :handle "Codex" :mode "reading" :line 35 :line_end 42 :col 0)
@@ -356,7 +365,8 @@ in the dark, the light and the high-contrast theme: pictures, the gutter and tin
             (drgnx-agents-editor-draw-clear buf)
             (let ((ms nil))
               (dotimes (i 100)
-                (push (* 1000 (benchmark-elapse (drgnx-agents-editor-draw--apply buf (agents-editor-gui--p3-frame i)))) ms))
+                (let ((frame (agents-editor-gui--p3-frame i buf)))      ; the hub's work: not in the time
+                  (push (* 1000 (benchmark-elapse (drgnx-agents-editor-draw--apply buf frame))) ms)))
               (agents-editor-gui--note "P3 apply %s scale=%S: %S" variant (drgnx-uitest-device-scale (selected-frame))
                                        (agents-editor-gui--stats ms)))
             (let ((ms nil))

@@ -54,7 +54,18 @@ pub struct Buffers {
     /// Each watched file's latest body: the answer to a watch while the user types (it is built again after the
     /// quiet). Only files some view shows.
     last: Mutex<BTreeMap<String, Body>>,
+    /// The symbol names found, by (file, hash of its text, line): emptied when it holds [`SYMBOL_CACHE`].
+    names: Arc<Mutex<SymbolNames>>,
 }
+
+/// Symbol names by (file, hash of its text, line); none where the line names no symbol.
+type SymbolNames = BTreeMap<(String, u64, u32), Option<String>>;
+
+/// The largest text whose symbols are looked for (the cap `search/symbol-at` has).
+const SYMBOL_MAX: usize = 2_000_000;
+
+/// How many symbol names are kept.
+const SYMBOL_CACHE: usize = 512;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
@@ -204,6 +215,10 @@ impl Buffers {
                 projected: None,
                 step_title: front.core.agents.doing(&e.session),
                 plan_entry: None,
+                pos: None,
+                line_pos: None,
+                end_pos: None,
+                symbol: None,
             });
             if e.mode == PresenceMode::Pending
                 && let Some(line) = e.line
@@ -215,6 +230,8 @@ impl Buffers {
                     end: e.line_end.unwrap_or(line).max(line),
                     projected: None,
                     help: format!("{} · about to change", handle(&e.session)),
+                    start_pos: None,
+                    end_pos: None,
                 });
             }
         }
@@ -231,6 +248,8 @@ impl Buffers {
                     end: r.end,
                     projected: None,
                     help: format!("{} · changed", handle(&sid)),
+                    start_pos: None,
+                    end_pos: None,
                 });
             }
         }
@@ -254,15 +273,20 @@ impl Buffers {
                     end,
                     projected: None,
                     help: help.clone(),
+                    start_pos: None,
+                    end_pos: None,
                 }));
             }
         }
+        let text = mirror.clone();
         let projected = self
             .projected(front, file, mirror, &mut agents, &mut gutter)
             .await;
+        let mut gutter = buffer_view::merge_gutter(gutter);
+        self.place(file, text, &mut agents, &mut gutter).await;
         let body = Body {
             agents,
-            gutter: buffer_view::merge_gutter(gutter),
+            gutter,
             // the user's text read from disk (no tracked buffer): approximate
             approximate: projected
                 .is_some_and(project::UserSource::approximate)
@@ -271,6 +295,59 @@ impl Buffers {
         };
         lock(&self.last).insert(file.to_string(), body.clone());
         body
+    }
+
+    /// Give AGENTS and GUTTER the buffer positions of their lines and each agent its symbol, in TEXT (the edit
+    /// history's mirror of the buffer, else the file on disk): the editor moves overlays to positions and counts no
+    /// line.  Nothing for a text over the marks' limit (`marks::Lines::of`).  Symbols come from hrafn's outline of the
+    /// text, kept per (file, text, line).
+    async fn place(
+        &self,
+        file: &str,
+        text: Option<String>,
+        agents: &mut [BufferAgent],
+        gutter: &mut [GutterRange],
+    ) {
+        if !agents.iter().any(|a| a.line.is_some()) && gutter.is_empty() {
+            return;
+        }
+        let Some(text) = text.or_else(|| read_capped(Path::new(file))) else {
+            return;
+        };
+        let names = self.names.clone();
+        let file = file.to_string();
+        let (mut a, mut g) = (agents.to_vec(), gutter.to_vec());
+        let placed = crate::clock::blocking(move || {
+            let lines = marks::Lines::of(&text)?;
+            let key = {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                text.hash(&mut h);
+                h.finish()
+            };
+            marks::place(&mut a, &mut g, &lines, &mut |line| {
+                if text.len() > SYMBOL_MAX {
+                    return None;
+                }
+                let k = (file.clone(), key, line);
+                if let Some(n) = lock(&names).get(&k) {
+                    return n.clone();
+                }
+                let n = hrafn::chunk::symbol_at_line(&file, &text, line);
+                let mut cache = lock(&names);
+                if cache.len() >= SYMBOL_CACHE {
+                    cache.clear();
+                }
+                cache.insert(k, n.clone());
+                n
+            });
+            Some((a, g))
+        })
+        .await;
+        if let Ok(Some((a, g))) = placed {
+            agents.clone_from_slice(&a);
+            gutter.clone_from_slice(&g);
+        }
     }
 
     /// The agents of FILE's repository working in its other worktrees, mapped three-way onto FILE (see
@@ -404,6 +481,10 @@ impl Buffers {
                     projected: projected.clone(),
                     step_title: front.core.agents.doing(&sid),
                     plan_entry: None,
+                    pos: None,
+                    line_pos: None,
+                    end_pos: None,
+                    symbol: None,
                 });
             }
             let ranges = |rs: Vec<project::LineRange>, kind: GutterKind, help: String| {
@@ -415,6 +496,8 @@ impl Buffers {
                         end: r.end,
                         projected: projected.clone(),
                         help: help.clone(),
+                        start_pos: None,
+                        end_pos: None,
                     })
                     .collect::<Vec<_>>()
             };

@@ -47,7 +47,8 @@ space of that width."
   (with-temp-buffer
     (set-window-buffer (selected-window) (current-buffer))
     (insert "x = 1")
-    (drgnx-blame--show (list :sha (make-string 40 ?a) :author "Ada" :time nil :summary "Fix the thing"))
+    ;; what the hub answers for a line: its text, worded and fitted there (`git/blame/line')
+    (drgnx-blame--show (list :sha (make-string 40 ?a) :text "Ada · Fix the thing"))
     (let* ((s (overlay-get drgnx-blame--overlay 'after-string))
            (gap (get-text-property 0 'display s)))
       (should (equal `(space :width (,(round (* 24 (drgnx-pixels-scale))))) gap))

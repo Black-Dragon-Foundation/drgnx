@@ -32,7 +32,8 @@
   "The gutter mark where lines were deleted." :group 'drgnx)
 
 (defvar drgnx-hunks-skip-line-function nil
-  "A function of a line number, non-nil when something else draws the gutter on that line (an agent's strip).")
+  "A function of the position a line starts at, non-nil when something else draws the gutter on that line (an
+agent's strip).")
 
 (defvar drgnx-hunks-delay 0.25 "Seconds after the last drain before the marks are asked for again.")
 
@@ -111,7 +112,7 @@ walked to."
     (unless (display-graphic-p) (drgnx-hunks--margin t))
     (let ((want (make-hash-table :test #'equal)) (kept nil))
       (dolist (m drgnx-hunks--marks)
-        (unless (and drgnx-hunks-skip-line-function (funcall drgnx-hunks-skip-line-function (cadr m)))
+        (unless (and drgnx-hunks-skip-line-function (funcall drgnx-hunks-skip-line-function (car m)))
           (puthash (cons (car m) (cddr m)) t want)))
       (dolist (o drgnx-hunks--overlays)
         (let ((key (cons (overlay-start o) (overlay-get o 'drgnx-hunk))))
