@@ -618,12 +618,49 @@ connection in the order the client writes them."
       (setq start (1+ nl)))
     (process-put proc :partial (substring text start))))
 
+(defun drgnx-test-gate--hub-log-tail ()
+  "The last lines of the hub's own log (`<state>/hub/log/hub-*.jsonl'), for a failure that names a silent hub."
+  (ignore-errors
+    (let ((f (car (last (sort (directory-files (expand-file-name "hub/log" (drgnx-state-dir)) t "\\`hub-.*\\.jsonl\\'")
+                              #'string<)))))
+      (when f
+        (with-temp-buffer
+          (insert-file-contents f)
+          (goto-char (point-max))
+          (forward-line -40)
+          (split-string (buffer-substring (point) (point-max)) "\n" t))))))
+
+;; Under /proc: each process of this container (pid, state, kernel wait, command), and each thread of the hub's
+;; processes: what a silent hub is stuck on, in a failure that names it.
+(defun drgnx-test-gate--proc-lines ()
+  (ignore-errors
+    (let (out)
+      (dolist (d (directory-files "/proc" t "\\`/proc/[0-9]+\\'"))
+        (let* ((read (lambda (f) (ignore-errors (with-temp-buffer (insert-file-contents (expand-file-name f d))
+                                                                  (string-trim (replace-regexp-in-string "\0" " " (buffer-string)))))))
+               (cmd (funcall read "cmdline")) (stat (funcall read "stat")))
+          (when (and cmd stat (string-match-p "ratatoskr\\|drgnx-term\\|sleep\\|/bin/sh" cmd))
+            (push (format "%s %s wchan=%s %s" (file-name-nondirectory d)
+                          (and (string-match ") \\(.\\)" stat) (match-string 1 stat)) (funcall read "wchan")
+                          (substring cmd 0 (min 90 (length cmd))))
+                  out)
+            (dolist (td (ignore-errors (directory-files (expand-file-name "task" d) t "[0-9]+\\'")))
+              (push (format "  thread %s %s wchan=%s" (file-name-nondirectory td)
+                            (ignore-errors (with-temp-buffer (insert-file-contents (expand-file-name "comm" td)) (string-trim (buffer-string))))
+                            (ignore-errors (with-temp-buffer (insert-file-contents (expand-file-name "wchan" td)) (buffer-string))))
+                    out)))))
+      (nreverse out))))
+
 (defun drgnx-test-gate--control-wait (proc pred what)
   "Wait, for real, until PRED; nil when PROC closed first.  `drgnx-test-gate-block-secs' fails the test."
   (let ((deadline (+ (drgnx-test-real-time) drgnx-test-gate-block-secs)))
     (while (and (not (funcall pred)) (drgnx-test-gate--live-p proc))
       (when (> (drgnx-test-real-time) deadline)
-        (drgnx-test-gate--fail "drgnx-test-gated: the hub did not answer the gate" :waiting-for what))
+        (let ((tail (drgnx-test-gate--hub-log-tail)))
+          (dolist (l tail) (message "hub-log: %s" l))
+          (dolist (l (drgnx-test-gate--proc-lines)) (message "hub-proc: %s" l))
+          (drgnx-test-gate--fail "drgnx-test-gated: the hub did not answer the gate" :waiting-for what
+                                 :hub-log-lines (length tail))))
       (funcall drgnx-test-gate--raw proc 0.05 nil 0))
     (funcall pred)))
 
