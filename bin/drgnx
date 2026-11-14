@@ -2289,6 +2289,8 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
                                sharded; GUI jobs as memory allows; bench, then perf, alone); one summary
        drgnx fmt [--check] [FILE…]
                                format drgnx's Emacs Lisp (all of it, or FILEs); --check: only report
+       drgnx design [--check]  write the design system's generated pages (docs/design/: tokens, type, icons) from the code;
+                               --check: only say which are stale (docs/develop/design-system.md)
        drgnx record start NAME [--cap-usd N] [--cap-weekly P] [--max-minutes M] -- drgnx-ARGS…
                                run drgnx ARGS with the outside ends recorded (docs/develop/recordings.md)
        drgnx record stop NAME | lint DIR-OR-NAME… | export NAME --to DIR
@@ -2474,6 +2476,9 @@ case "${1:-help}" in
   fmt) shift
         "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-fmt -f drgnx-fmt-cli -- "$@" ;;
+  design) shift
+        "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" -L "$here/harness" \
+              -l drgnx-design -f drgnx-design-cli -- "$@" ;;
   record) shift; cmd_record "$@" ;;
   replay) shift; cmd_replay "$@" ;;
   update) shift; cmd_update "$@" ;;

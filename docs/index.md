@@ -69,6 +69,7 @@ How drgnx is built, tested and measured.
 - [Performance](develop/perf.md): the perf lab — input latency, frames, GC, startup, memory, budgets, the soak, tuning; the Extensions view's rows and its comparison with `list-packages`.
 - [Scenarios](develop/scenarios.md): behaviour scenarios and the evidence behind the workbench design.
 - [Formatting](develop/formatting.md): `bin/drgnx fmt` — the Emacs Lisp formatter, and where it is enforced.
+- [The design system](develop/design-system.md): `docs/design/`, the look's reference; which pages are generated from the code and `bin/drgnx design` (regenerate, `--check`).
 - [bin/drgnx check](develop/check.md): build and every test tier in one parallel run; shards, GUI slots, phases, the leak census, the shuffled test order and the polluter bisect.
 - [Testing a change](develop/testing.md): `bin/drgnx test --affected A..B` picks the test groups a git range can affect (the map `test/affected.eld`) and `--run` skips groups green on unchanged inputs (the result cache).
 - [CI](develop/ci.md): the GitHub Actions workflows — Emacs 31.1 suite, shellcheck, leak scan, nightly GUI tier.
