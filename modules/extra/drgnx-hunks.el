@@ -40,7 +40,12 @@
 
 (defvar-local drgnx-hunks--data nil
   "The hub's hunks for the buffer: a list of plists (:old-start :old-count :new-start :new-count :old-lines).")
+(defvar-local drgnx-hunks--marks nil
+  "The hub's gutter marks for the buffer: a list of (POS LINE . KIND), KIND `added', `changed' or `deleted', POS the
+buffer position the line starts at (the hub counts them, from the text it holds).")
 (defvar-local drgnx-hunks--overlays nil "The overlays drawing the marks.")
+(defvar-local drgnx-hunks--drawn-as nil "`drgnx-hunks--look' when the overlays were made.")
+(defvar-local drgnx-hunks--asked-at nil "The buffer's `buffer-chars-modified-tick' when the question was asked.")
 (defvar-local drgnx-hunks--tries 0)
 (defvar-local drgnx-hunks--request nil "The token of the question out.")
 (defvar-local drgnx-hunks--margin nil "Whether this file put the left margin in the buffer (terminals).")
@@ -88,36 +93,39 @@ inner side, just left of the line numbers (window-dark.html `.ln .g'), not out a
     (setq drgnx-hunks--margin on)
     (drgnx-margins-claim 'hunks (and on 1) :order 2)))
 
-(defun drgnx-hunks--lines (hunks)
-  "HUNKS as marked lines: a sorted list of (LINE . KIND), KIND `added', `changed' or `deleted' (the line after a
-deletion carries it)."
-  (let (out)
-    (dolist (h hunks)
-      (let ((oc (plist-get h :old-count)) (nc (plist-get h :new-count)) (ns (plist-get h :new-start)))
-        (if (zerop nc)
-            (push (cons (1+ ns) 'deleted) out)
-          (dotimes (i nc)
-            (push (cons (+ ns i) (if (< i oc) 'changed 'added)) out)))))
-    (sort out (lambda (a b) (< (car a) (car b))))))
+(defun drgnx-hunks--look ()
+  "What the marks look like now: graphic or not, and the bar's width (a change redraws every mark)."
+  (cons (display-graphic-p) drgnx-hunks--bitmap-width))
 
 (defun drgnx-hunks--draw ()
-  "Put the marks of `drgnx-hunks--data' in the buffer (those on lines something else draws are left out)."
+  "Make the overlays of the marks in `drgnx-hunks--marks' (the hub's, in the buffer's positions; those on lines
+something else draws are left out).  Only the overlays whose mark changed are deleted or made; no line is counted or
+walked to."
   (drgnx-hunks--define-bitmaps)
-  (drgnx-hunks--clear)
-  (when drgnx-hunks--data
-    (let ((marks (drgnx-hunks--lines drgnx-hunks--data)) (line 1) (last (line-number-at-pos (point-max))))
-      (unless (display-graphic-p) (drgnx-hunks--margin t))
-      (save-excursion
-        (goto-char (point-min))
-        (dolist (m marks)
-          (let ((target (min (car m) last)))
-            (forward-line (- target line))
-            (setq line target)
-            (unless (and drgnx-hunks-skip-line-function (funcall drgnx-hunks-skip-line-function target))
-              (let ((o (make-overlay (point) (point) nil t nil)))
-                (overlay-put o 'drgnx-hunk (cdr m))
-                (overlay-put o 'before-string (drgnx-hunks--mark (cdr m)))
-                (push o drgnx-hunks--overlays)))))))))
+  (let ((look (drgnx-hunks--look)))
+    (unless (equal look drgnx-hunks--drawn-as)
+      (mapc #'delete-overlay drgnx-hunks--overlays)
+      (setq drgnx-hunks--overlays nil drgnx-hunks--drawn-as look)))
+  (if (null drgnx-hunks--marks)
+      (drgnx-hunks--clear)
+    (unless (display-graphic-p) (drgnx-hunks--margin t))
+    (let ((want (make-hash-table :test #'equal)) (kept nil))
+      (dolist (m drgnx-hunks--marks)
+        (unless (and drgnx-hunks-skip-line-function (funcall drgnx-hunks-skip-line-function (cadr m)))
+          (puthash (cons (car m) (cddr m)) t want)))
+      (dolist (o drgnx-hunks--overlays)
+        (let ((key (cons (overlay-start o) (overlay-get o 'drgnx-hunk))))
+          (if (eq (gethash key want) t)
+              (progn (puthash key 'kept want) (push o kept))
+            (delete-overlay o))))
+      (maphash (lambda (key state)
+                 (when (eq state t)
+                   (let ((o (make-overlay (car key) (car key) nil t nil)))
+                     (overlay-put o 'drgnx-hunk (cdr key))
+                     (overlay-put o 'before-string (drgnx-hunks--mark (cdr key)))
+                     (push o kept))))
+               want)
+      (setq drgnx-hunks--overlays kept))))
 
 (defun drgnx-hunks-redraw (&optional buffer)
   "Draw BUFFER's marks again (something else's claim on its gutter lines changed)."
@@ -138,10 +146,18 @@ deletion carries it)."
     (with-current-buffer buffer
       (setq drgnx-hunks--request nil)
       (when drgnx-hunks-mode
-        (if (or error (not (plist-get result :tracked)))
-            (progn (setq drgnx-hunks--data nil) (drgnx-hunks--clear))
-          (setq drgnx-hunks--data (mapcar #'drgnx-hunks--hunk (plist-get result :hunks)))
-          (drgnx-hunks--draw))))))
+        (cond ((or error (not (plist-get result :tracked)))
+               (setq drgnx-hunks--data nil drgnx-hunks--marks nil)
+               (drgnx-hunks--clear))
+              (t
+               (setq drgnx-hunks--data (mapcar #'drgnx-hunks--hunk (plist-get result :hunks)))
+               ;; the marks' positions are the text the hub held when it was asked: an edit since (its drain asks
+               ;; again) would put them off, so they wait for that answer
+               (when (eql drgnx-hunks--asked-at (buffer-chars-modified-tick))
+                 (setq drgnx-hunks--marks
+                       (mapcar (lambda (m) (cons (plist-get m :pos) (cons (plist-get m :line) (intern (plist-get m :kind)))))
+                               (plist-get result :marks)))
+                 (drgnx-hunks--draw))))))))
 
 (defun drgnx-hunks--refresh (buffer)
   "Ask the hub for BUFFER's hunks against HEAD; a buffer the history does not track yet is tried again a few times."
@@ -152,7 +168,8 @@ deletion carries it)."
                 (drgnx-history-ask buffer "history/hunks/head"
                                    (lambda (result error) (drgnx-hunks--answered buffer token result error)))
               (error nil))
-            (setq drgnx-hunks--request token drgnx-hunks--tries 0)
+            (setq drgnx-hunks--request token drgnx-hunks--tries 0
+                  drgnx-hunks--asked-at (buffer-chars-modified-tick))
           (when (< (cl-incf drgnx-hunks--tries) drgnx-hunks--tries-max)
             (drgnx-hunks--schedule buffer 0.5)))))))
 
@@ -189,7 +206,7 @@ deletion carries it)."
     (remove-hook 'after-save-hook #'drgnx-hunks--changed-on-disk t)
     (remove-hook 'after-revert-hook #'drgnx-hunks--changed-on-disk t)
     (drgnx-timer-cancel (cons 'hunks (current-buffer)))
-    (setq drgnx-hunks--request nil drgnx-hunks--data nil)
+    (setq drgnx-hunks--request nil drgnx-hunks--data nil drgnx-hunks--marks nil)
     (drgnx-hunks--clear)))
 
 (defun drgnx-hunks--maybe ()
