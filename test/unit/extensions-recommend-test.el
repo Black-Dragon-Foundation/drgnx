@@ -22,7 +22,9 @@
   "BODY with the project's `drgnx-extensions-recommended' SETTING, every drgnx location a temp directory, the
 recommendations forgotten before and after."
   (declare (indent 1) (debug t))
-  `(let* ((root (file-name-as-directory (make-temp-file "drgnx-ext-rec" t)))
+  `(let* ((outer (make-temp-file "drgnx-ext-rec" t))
+          ;; a path as long as macOS's temp folders (/var/folders/xx/…/T/), whichever the platform
+          (root (file-name-as-directory (expand-file-name (make-string 60 ?p) outer)))
           (process-environment (append (list (concat "XDG_STATE_HOME=" root "state") (concat "DRGNX_DATA_DIR=" root "data")
                                              (concat "DRGNX_CONFIG_DIR=" root "config") (concat "XDG_CACHE_HOME=" root "cache"))
                                        process-environment))
@@ -37,7 +39,7 @@ recommendations forgotten before and after."
                    ((symbol-function 'drgnx-cache-get) #'drgnx-extensions-recommend-test--cache-get))
            ,@body)
        (drgnx-extensions-recommend-teardown)
-       (delete-directory root t))))
+       (delete-directory outer t))))
 
 (ert-deftest drgnx-extensions-recommend/order-project-then-autosuggest-then-flags ()
   "D: the project's own list first, then Emacs's autosuggest entries that match the files the Explorer listed here
@@ -55,7 +57,8 @@ recommendations forgotten before and after."
 
 (ert-deftest drgnx-extensions-recommend/ids-make-no-reasons ()
   "D: the Recommended section's ids (asked at each open of the list) are the same ids, and taking them makes no
-reason text: the characters allocated are the ids' own, with a path's worth of slack."
+reason text: the characters allocated are the ids' own, with slack for the project's path, which the test's stubs copy
+\(`file-name-as-directory') on each call (four lengths of it are allowed), so the bound holds with long temp paths."
   (drgnx-extensions-recommend-test--with '(magit)
     (let* ((missing (mapcar (lambda (i) (intern (format "waiting-package-%d" i))) (number-sequence 1 50)))
            (drgnx-modules--report `((tools/a-module-with-a-long-name :status missing-packages :missing ,missing)))
@@ -66,7 +69,7 @@ reason text: the characters allocated are the ids' own, with a path's worth of s
                (ids (drgnx-extensions-recommend-ids))
                (chars (- (nth 4 (memory-use-counts)) before)))
           (should (= (length ids) 51))
-          (should (<= chars (+ (apply #'+ (mapcar #'length ids)) 200))))))))
+          (should (<= chars (+ (apply #'+ (mapcar #'length ids)) 100 (* 4 (length project))))))))))
 
 (ert-deftest drgnx-extensions-recommend/the-hub-holds-the-set ()
   "D: the Recommended set (1,000 packages modules wait for) goes to the hub once, at a version; an open after it names

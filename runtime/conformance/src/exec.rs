@@ -57,6 +57,40 @@ const VAR_NAMES: [&str; 15] = [
     "RUN",
 ];
 
+/// The variables whose value is a path in the scenario's root (`$ROOT $SOCKET $LOCK …`): they exist once a root does.
+const ROOT_VARS: [&str; 11] = [
+    "BACKEND_SOCKET",
+    "SOCKET_DIR",
+    "SOCKET",
+    "CONFIG",
+    "STATE",
+    "ROOT",
+    "HOME",
+    "DATA",
+    "LOCK",
+    "CAP",
+    "RUN",
+];
+
+/// The first root variable (`ROOT_VARS`) a string anywhere in OBJ names, by the longest-first reading `subst_str` uses.
+fn root_variable_in(obj: &Map<String, Value>) -> Option<&'static str> {
+    fn in_value(v: &Value) -> Option<&'static str> {
+        match v {
+            Value::String(s) => s.match_indices('$').find_map(|(i, _)| {
+                let rest = &s[i + 1..];
+                VAR_NAMES
+                    .iter()
+                    .find(|n| rest.starts_with(**n))
+                    .and_then(|n| ROOT_VARS.iter().find(|r| *r == n).copied())
+            }),
+            Value::Array(a) => a.iter().find_map(in_value),
+            Value::Object(o) => o.values().find_map(in_value),
+            _ => None,
+        }
+    }
+    obj.values().find_map(in_value)
+}
+
 /// Run `scenario`; the error says which step failed and why, and (a row not `pending`) when each step ran and how
 /// long it took, with the end of each hub's logs: what a red that will not come again needs, kept before every hub,
 /// helper and root is gone.
@@ -773,6 +807,15 @@ impl Runner<'_> {
     // ------------------------------------------------------------ steps
 
     fn step(&mut self, step: &Step) -> R {
+        if self.hubs.is_empty()
+            && self.active_root.is_none()
+            && !matches!(step.verb.as_str(), "root" | "start")
+            && let Some(var) = root_variable_in(&step.obj)
+        {
+            return Err(format!(
+                "${var} has no value yet: no root exists before a `root` or `start` step, and the step would take the literal text"
+            ));
+        }
         match step.verb.as_str() {
             "start" => self.start(step),
             "root" => {
@@ -2332,6 +2375,32 @@ mod tests {
             "{e}"
         );
         assert!(perf.is_empty(), "a measure cut short records nothing");
+    }
+
+    #[test]
+    fn a_root_variable_before_any_root_or_hub_fails_the_row() {
+        // `$ROOT` names a root, which exists once a `root` or a `start` step made it: before that it would stay
+        // literal, and a step that writes there makes a directory called `$ROOT` in the working directory
+        let cfg = Config {
+            hub_bin: PathBuf::from("/nonexistent"),
+            scenarios: PathBuf::from("/nonexistent"),
+        };
+        let early = crate::scenario::parse(
+            "{\"scenario\": \"t/early\"}\n\
+             {\"do\": \"run\", \"bin\": \"/bin/true\", \"args\": [\"$ROOT/a\"], \"expect_code\": 0}\n",
+        )
+        .unwrap();
+        let e = run_scenario(&cfg, &early, &mut Vec::new()).unwrap_err();
+        assert!(
+            e.contains("step 1 (run)") && e.contains("$ROOT") && e.contains("`root` or `start`"),
+            "{e}"
+        );
+        let after = crate::scenario::parse(
+            "{\"scenario\": \"t/after\"}\n{\"do\": \"root\"}\n\
+             {\"do\": \"run\", \"bin\": \"/bin/true\", \"args\": [\"$ROOT/a\"], \"expect_code\": 0}\n",
+        )
+        .unwrap();
+        run_scenario(&cfg, &after, &mut Vec::new()).unwrap();
     }
 
     #[test]

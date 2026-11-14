@@ -95,6 +95,12 @@ mirrors (`drgnx-agents-mirror-start`). The hub tells of a session's state at mos
 by with no `busy` status: the workloads count the `stop` entries of the transcript to know that a turn has ended (the
 check "typed while it streamed" is a turn that has not ended), never the status. The agents and their events are the hub's.
 
+**Code grammars.** A hub parses code with the pack-built grammars; without them its code files read as text, and the
+Search view's Pattern and Symbol modes find nothing (`no grammar for rust`), so `search-pattern` and `search-modes` fail
+their premise. Build them once with `test/packs/hub-grammars.sh CACHE` (in a container: it needs network, git and a C
+compiler) and run with the two variables it prints, `DRGNX_PACK_LOCK` and `DRGNX_PACK_GRAMMARS`: `bin/drgnx test
+--container` mounts both folders read-only, and the workloads' hub gets them.
+
 **Input latency** is a command's start until the screen shows it: `post-command-hook` redisplays
 before it reads the clock (which leaves fontification and mode-line work in). The latency ends in the hook, not in a
 0 s timer: under the harness a timer ran at the next paced input event, so input p95 sat at the tick (40.3 ms at the

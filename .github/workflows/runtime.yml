@@ -517,6 +517,15 @@ jobs:
       - name: debug adapters (debugpy and js-debug at the hub's pins)
         if: ${{ !cancelled() }}
         run: bash .github/ci/debug-adapters.sh "$RUNNER_TEMP/debug-adapters" >> "$GITHUB_ENV"
+      # a JS fork's origin trail finds the stores to log with the JavaScript grammar (origin::stores): without the
+      # pack-built grammars the lane's tests_fork_live JS row traces nothing and its trail comes back empty
+      - name: Pack grammars for the tests
+        if: ${{ !cancelled() }}
+        run: |
+          line="$(bash test/packs/hub-grammars.sh "$RUNNER_TEMP/hub-grammars" | grep '^export DRGNX_PACK_LOCK=')"
+          eval "$line"
+          echo "DRGNX_PACK_LOCK=$DRGNX_PACK_LOCK" >> "$GITHUB_ENV"
+          echo "DRGNX_PACK_GRAMMARS=$DRGNX_PACK_GRAMMARS" >> "$GITHUB_ENV"
       - name: build the agent core's tests (test hooks)
         id: core-build
         if: ${{ !cancelled() }}

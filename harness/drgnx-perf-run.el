@@ -2234,13 +2234,14 @@ $DRGNX_RATATOSKR_BIN, with `ratatoskr-mock' beside it) for the workload, give it
 its transcript.  A turn is over when its `stop' entry is in the mirror: the hub sends a session's state at most
 every 50 ms, so a turn can go by with no busy status in between and the status cannot tell it."
   (concat
-   ;; the session's environment is the harness's allowlist: the binary's name and the stall reports' file go in the form
+   ;; the session's environment is the harness's allowlist: the binary's name, the stall reports' file and the pack grammars
+   ;; (code files read as text without them: a Pattern or Symbol search finds nothing) go in the form
    "(progn (defvar drgnx-perf--hub-bin nil \"The Ratatoskr binary.\") (setq drgnx-perf--hub-bin "
    (prin1-to-string (getenv "DRGNX_RATATOSKR_BIN")) ") "
-   "(defvar drgnx-perf--hub-stall-env nil \"The hub's stall watchdog settings (\\\"VAR=VALUE\\\" strings).\") "
+   "(defvar drgnx-perf--hub-stall-env nil \"The hub's stall watchdog settings and pack grammars (\\\"VAR=VALUE\\\" strings).\") "
    "(setq drgnx-perf--hub-stall-env '"
    (prin1-to-string (mapcan (lambda (v) (and (getenv v) (list (concat v "=" (getenv v)))))
-                            '("DRGNX_RATATOSKR_STALL_FILE" "DRGNX_RATATOSKR_STALL_MS")))
+                            '("DRGNX_RATATOSKR_STALL_FILE" "DRGNX_RATATOSKR_STALL_MS" "DRGNX_PACK_LOCK" "DRGNX_PACK_GRAMMARS")))
    ") "
    (prin1-to-string
     '(progn

@@ -622,7 +622,10 @@ lldb-dap, debugpy and js-debug at their pins (the same script `Containerfile.deb
 the same adapters), then `debug::tests_live_adapters` and `debug::tests_blocked_live` run with `--ignored`. The second
 asserts that every TCP listener in the network namespace is in its port block, which holds in a job container's own
 namespace and never on a shared runner; the Python and JS fork rows (`debug::tests_fork_live`) need bubblewrap and stay in
-the escape legs' sandbox lane. `drgnx-ci/the-debug-rows-the-escape-lane-skips-run-in-debug-live` holds that no
+the escape legs' sandbox lane, which builds the pack grammars first (`test/packs/hub-grammars.sh`, handed on as
+`DRGNX_PACK_LOCK` and `DRGNX_PACK_GRAMMARS`): the JS fork's origin trail finds its stores with the JavaScript grammar, and
+without it the trail comes back empty (`drgnx-ci/the-sandbox-lane-builds-the-pack-grammars-before-its-ignored-rows`).
+`drgnx-ci/the-debug-rows-the-escape-lane-skips-run-in-debug-live` holds that no
 skipped debug module goes unrun.
 
 ## The reduced tier's launch rows in a VM
