@@ -19880,6 +19880,77 @@
       "classes": [
         "user"
       ],
+      "doc": "the inline blame text of one line of the editor's tracked buffer (git/blame's answer for the text the hub holds), fitted to the columns the editor has room for: author, age, commit subject; no text when the buffer is not tracked, the line has none or there is no room",
+      "name": "git/blame/line",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`git/blame/line`: the blame text of the line POS is on, in the text the hub holds of the editor's tracked buffer of\nPATH of the worktree at WORKTREE_ROOT, fitted to WIDTH columns.",
+        "properties": {
+          "path": {
+            "description": "Relative to the worktree.",
+            "type": "string"
+          },
+          "pos": {
+            "description": "The buffer position (Emacs's: 1-based, in characters) of the line.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "width": {
+            "description": "The columns the text may take; under 20 nothing is answered, over 80 it is cut to 80.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "worktree_root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "worktree_root",
+          "pos",
+          "width"
+        ],
+        "title": "GitBlameLineParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`git/blame/line`'s answer: none of the fields when the buffer is not tracked, the line has no blame (the empty last\nline) or WIDTH is too small for a line of it.",
+        "properties": {
+          "sha": {
+            "description": "The commit that last changed the line (the zero one when it is not committed): Show Commit of Line.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "description": "\"Ada, 3 days ago · Fix the parser\", \"You · Uncommitted changes\" or \"agent s1 · …\", cut with an ellipsis to the\nwidth.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "time": {
+            "description": "The commit's author time; none for a line not committed yet.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "title": "BlamedLine",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "read a repository's git status on a thread and give a hub-fed view its rows (a letter per changed path, a mark per shown folder with a change, the branch): the view-patch follows, only what changed after the first",
       "name": "git/letters",
       "params": {

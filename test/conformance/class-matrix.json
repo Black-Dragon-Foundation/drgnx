@@ -124,6 +124,7 @@
   "gateway/set-budget": ["user"],
   "gateway/unregister": ["user"],
   "git/blame": ["user"],
+  "git/blame/line": ["user"],
   "git/letters": ["user"],
   "git/stage-hunk": ["user"],
   "graph/backup": ["user"],

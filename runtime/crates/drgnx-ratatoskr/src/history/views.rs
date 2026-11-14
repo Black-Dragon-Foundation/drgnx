@@ -254,6 +254,53 @@ impl Hub {
         Ok(out)
     }
 
+    /// The inline blame of the line the position POS (Emacs's) is on in the editor's tracked buffer of REL of TREE,
+    /// fitted to WIDTH columns (`editor::marks::blame_text`); empty when no buffer of it is tracked, the text is over
+    /// the marks' limit, the line is the empty last one, or there is no room.
+    pub fn blame_line(
+        &self,
+        tree: &Tree,
+        rel: &str,
+        pos: i64,
+        width: usize,
+        now: f64,
+    ) -> verdandi::Result<w::BlamedLine> {
+        use crate::editor::marks;
+        let none = w::BlamedLine {
+            text: None,
+            sha: None,
+            time: None,
+        };
+        let Some(text) = self.mirror_text(tree, rel)? else {
+            return Ok(none);
+        };
+        if !marks::within_limit(text.len()) {
+            return Ok(none);
+        }
+        let line = marks::line_number_at(&text, pos);
+        // the empty line after the last line break has no blame
+        if line > line_count(&text) {
+            return Ok(none);
+        }
+        let blamed = self.git_blame(tree, rel)?;
+        let Some(commit) = blamed
+            .lines
+            .get(line - 1)
+            .and_then(|i| blamed.commits.get(*i as usize))
+        else {
+            return Ok(none);
+        };
+        let agent = blamed
+            .agents
+            .iter()
+            .find(|a| (a.from..=a.to).contains(&n(line)));
+        Ok(w::BlamedLine {
+            text: marks::blame_text(commit, agent, now, width),
+            sha: Some(commit.sha.clone()),
+            time: commit.time,
+        })
+    }
+
     /// The lines of TEXT (REL's document of TREE) that agents wrote, from the history's blame.
     fn agent_lines(
         &self,
@@ -570,6 +617,25 @@ pub async fn git_blame(f: &Front, c: &Caller, p: w::GitBlameParams) -> Result<w:
         .history
         .of_tree(&hub_dir(f)?, Path::new(&p.worktree_root))?;
     crate::clock::blocking(move || hub.git_blame(&tree, &p.path))
+        .await
+        .map_err(|e| internal(e.to_string()))?
+        .map_err(store)
+}
+
+/// `git/blame/line`.
+pub async fn git_blame_line(
+    f: &Front,
+    c: &Caller,
+    p: w::GitBlameLineParams,
+) -> Result<w::BlamedLine, Error> {
+    super::revert::user_only(c)?;
+    let (hub, tree) = f
+        .core
+        .history
+        .of_tree(&hub_dir(f)?, Path::new(&p.worktree_root))?;
+    let width = usize::try_from(p.width).unwrap_or(0);
+    let now = crate::clock::wall_secs();
+    crate::clock::blocking(move || hub.blame_line(&tree, &p.path, p.pos, width, now))
         .await
         .map_err(|e| internal(e.to_string()))?
         .map_err(store)
@@ -900,6 +966,45 @@ mod tests {
         assert_eq!(olds, vec![vec!["b\n".to_owned()], Vec::<String>::new()]);
         // no buffer of a file: nothing computed
         assert!(f.hub.hunks_head(&f.tree, "other.txt").unwrap().is_none());
+    }
+
+    // pattern: D
+    #[test]
+    fn a_line_asks_for_its_blame_text_by_position() {
+        let f = fx("one\ntwo\n");
+        // the buffer: line 2 changed since the commit
+        tracked(&f, "a.txt", "one\nTWO\n", "user");
+        let now = 4_000_000_000.0;
+        // position 1 is line 1, committed by "t" (the fixture's author); position 5 is line 2, not committed
+        let l1 = f.hub.blame_line(&f.tree, "a.txt", 1, 60, now).unwrap();
+        assert!(l1.text.as_deref().unwrap().starts_with("t, "), "{l1:?}");
+        assert!(l1.text.as_deref().unwrap().ends_with("· base"), "{l1:?}");
+        assert!(l1.time.is_some());
+        let l2 = f.hub.blame_line(&f.tree, "a.txt", 5, 60, now).unwrap();
+        assert_eq!(l2.text.as_deref(), Some("You · Uncommitted changes"));
+        assert!(l2.time.is_none());
+        // the empty line after the last break, too little room, an untracked file: no text
+        assert!(
+            f.hub
+                .blame_line(&f.tree, "a.txt", 9, 60, now)
+                .unwrap()
+                .text
+                .is_none()
+        );
+        assert!(
+            f.hub
+                .blame_line(&f.tree, "a.txt", 1, 10, now)
+                .unwrap()
+                .text
+                .is_none()
+        );
+        assert!(
+            f.hub
+                .blame_line(&f.tree, "other.txt", 1, 60, now)
+                .unwrap()
+                .sha
+                .is_none()
+        );
     }
 
     // pattern: D
