@@ -250,8 +250,28 @@ fn refused(key: &str, path: &Path, e: FsError) -> Refusal {
     }
 }
 
+/// The highest uid of a system account: `SYS_UID_MAX` of `/etc/login.defs` when it reads, else 999, and never above
+/// 999 (a login user's uid is never taken for a system account's).
+fn sys_uid_max() -> u32 {
+    let text = fs::read_to_string("/etc/login.defs").unwrap_or_default();
+    parse_sys_uid_max(&text)
+}
+
+/// `SYS_UID_MAX` of a `login.defs` text, capped at 999; 999 when it is absent or not a number.
+fn parse_sys_uid_max(text: &str) -> u32 {
+    text.lines()
+        .filter_map(|l| {
+            let mut w = l.split('#').next()?.split_whitespace();
+            (w.next()? == "SYS_UID_MAX").then(|| w.next()?.parse::<u32>().ok())?
+        })
+        .next_back()
+        .map_or(999, |n| n.min(999))
+}
+
 /// Which of the host's `/bin`, `/lib`, `/lib64`, `/sbin` are links, and the resolver's file when bindable: under
-/// `/run`, a regular file only root can change, in root-owned directories (a file a user could swap is never bound, GL-T7-4).
+/// `/run`, a regular file only root or a system account can change (systemd-resolved's stub is its own), in
+/// directories of root or system accounts, none group- or world-writable and no link on the path (a file a user could
+/// swap is never bound, GL-T7-4).
 pub fn host_layout() -> HostLayout {
     let usr_links = USR_MERGED
         .iter()
@@ -260,7 +280,7 @@ pub fn host_layout() -> HostLayout {
         .collect();
     let resolver = fs::canonicalize("/etc/resolv.conf")
         .ok()
-        .filter(|r| resolver_bindable(r) && eitri::root_only_file(r).is_ok());
+        .filter(|r| resolver_bindable(r) && eitri::system_owned_file(r, sys_uid_max()).is_ok());
     HostLayout {
         usr_links,
         resolver,
@@ -786,7 +806,8 @@ mod tests {
     }
 
     /// The layout is the host's: a merged-/usr dir is listed exactly when it is a link, and the resolver's file only
-    /// when `/etc/resolv.conf` leads to a bindable file under `/run`.
+    /// when `/etc/resolv.conf` leads to a bindable file under `/run` that root or a system account owns, in directories
+    /// of the same owners that nobody else can write (systemd-resolved's stub is `systemd-resolve`'s).
     #[test]
     fn host_layout_reads_the_host() {
         let layout = host_layout();
@@ -795,25 +816,33 @@ mod tests {
                 fs::symlink_metadata(format!("/{x}")).is_ok_and(|m| m.file_type().is_symlink());
             assert_eq!(layout.usr_links.contains(x), link, "/{x}");
         }
+        let real = fs::canonicalize("/etc/resolv.conf").ok();
+        let trusted = real.as_deref().is_some_and(|r| {
+            resolver_bindable(r) && eitri::system_owned_file(r, sys_uid_max()).is_ok()
+        });
         match &layout.resolver {
             Some(r) => {
-                assert_eq!(fs::canonicalize("/etc/resolv.conf").unwrap(), *r);
+                assert_eq!(real.as_ref(), Some(r));
+                assert!(trusted, "{r:?}");
                 assert!(
                     r.starts_with("/run/") && !r.starts_with("/run/user"),
                     "{r:?}"
                 );
                 assert!(fs::metadata(r).unwrap().is_file(), "{r:?}");
             }
-            None => {
-                let real = fs::canonicalize("/etc/resolv.conf").ok();
-                assert!(
-                    real.as_deref()
-                        .is_none_or(|r| !(r.starts_with("/run/")
-                            && fs::metadata(r).is_ok_and(|m| m.is_file()))),
-                    "{real:?} should have been bound"
-                );
-            }
+            None => assert!(!trusted, "{real:?} should have been bound"),
         }
+    }
+
+    #[test]
+    fn sys_uid_max_reads_login_defs_and_never_passes_999() {
+        assert_eq!(parse_sys_uid_max(""), 999);
+        assert_eq!(parse_sys_uid_max("UID_MIN 1000\nSYS_UID_MAX 499\n"), 499);
+        assert_eq!(parse_sys_uid_max("SYS_UID_MAX\t999 # the usual\n"), 999);
+        assert_eq!(parse_sys_uid_max("# SYS_UID_MAX 200\n"), 999);
+        assert_eq!(parse_sys_uid_max("SYS_UID_MAX 60000\n"), 999);
+        assert_eq!(parse_sys_uid_max("SYS_UID_MAX lots\n"), 999);
+        assert_eq!(parse_sys_uid_max("XSYS_UID_MAX 5\n"), 999);
     }
 
     /// The helper's bind: read-only at `HELPER_INSIDE`, whatever else the spec holds.

@@ -442,7 +442,7 @@ Why each part:
   On a merged-/usr host `/bin` and friends are links into `/usr`, recreated as the same links inside.
 - **`--tmpfs /run`**: `/run/user` (the user's runtime dir: D-Bus, the ssh agent, the hub's sockets) is absent. The
   resolver's file is bound back on top of it alone, or `/etc/resolv.conf` (a link to systemd-resolved's stub on
-  Fedora and Ubuntu) would dangle. Only a file under `/run` outside `/run/user` and `/run/gleipnir` is bound, and only when root alone can change it (`eitri::root_only_file`: a regular file owned by uid 0, not group- or world-writable, in root-owned directories).
+  Fedora and Ubuntu) would dangle. Only a file under `/run` outside `/run/user` and `/run/gleipnir` is bound, and only when root or a system account alone can change it (`eitri::system_owned_file`: a regular file and every directory up to `/` owned by a uid of at most `SYS_UID_MAX` (read from `/etc/login.defs`, else 999, and never above 999), none of them group- or world-writable, and no link on the path). systemd-resolved's stub qualifies though `/run/systemd/resolve` belongs to `systemd-resolve` (decided by the user, 2026-11-14: a strictly root-only rule left every systemd-resolved host without a resolver file); a file or a directory of a login user (uid 1000 and up, `nobody` included) or one that a group or the world can write is refused, and the file is then simply not bound.
 - **Every source of the spec by fd** (`--bind-fd`, `--ro-bind-fd`; bwrap ≥ 0.10). A source given by path is resolved
   by bwrap later, when an agent may have swapped a link into it; an fd is what was checked. This is Flatpak's
   CVE-2024-42472 pattern, whose full fix needed exactly these flags.
