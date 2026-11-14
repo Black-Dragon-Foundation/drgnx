@@ -2299,6 +2299,11 @@ keymaps, settings and the final insert or draw call):
 - the insert itself and the windows' places;
 - the messages to the hub.
 
+A dock section is as tall as its rows (`drgnx-wb--fit-window`, `window-resize` only); the count is the view's own,
+`drgnx-wb--section-rows`: the rows Sjá holds (`drgnx-view-row-count nil`, which a draw of the window's slice does not
+all put in the buffer) or the inserter's, and no line of the buffer is counted for a view. A buffer that is not a view
+keeps `count-lines`.
+
 There are two recorded exceptions:
 
 - **Generic `completing-read` through Vertico** keeps `drgnx-completion--format-candidate`, which dresses each
