@@ -390,6 +390,7 @@ editor's one dispatcher) makes the hub send the header again with the new preset
             (should (member "p:strip" keys))
             (should (< (seq-position keys "p:head") (seq-position keys "p:strip")))
             (should (equal (car keys) "p:head"))
+            (should (= (window-start (selected-window)) (with-current-buffer panel (point-min))))
             (should (string-match-p "Open:" text))
             (dolist (w '("watch" "review" "debug" "thinking" "make default")) (should (string-match-p w text))))
           (with-current-buffer panel

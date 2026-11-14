@@ -2936,6 +2936,10 @@ only what changed. The lens is the editor's: `agents/panel/look` carries `lens` 
 in force, from 1, 0 none). A clickable part has the `drgnx-agent-panel-action` property (`lens:N`, `pin`, `more`) or
 `drgnx-agent-panel-chip` (`context`, `cost`, `mode`); the editor's `agents-panel-act` (a click) and `agents-panel-press`
 (a press keeps point) read them. The editor puts the rows whose key starts with `p:` above its own rows.
+A window keeps its start on its row, so a window that showed the panel from its first row (the editor's own rows, before
+the hub's came) would start below the header once the top rows come in above it: the editor notes such windows when a
+patch puts rows in (`drgnx-agent-panel--keep-top-windows`) and starts them at the top again when the `p:` rows are drawn.
+The look scenes check that the panel holds `p:head` and that its window starts at the top.
 
 **The cards (offload step F1, cards).** The pinned cards (`p:pinN:0`), the agent's to-do list (`p:todo:N`) and the edits
 ledger (`p:ledger:N`) are the hub's rows too (`view/panel_cards.rs`), each a card in the card faces to the right edge less
