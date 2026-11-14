@@ -2309,6 +2309,24 @@ the ones the guide gives: the drop order first, the branch cut to a short form, 
 branch as far as it takes; a terminal's bar counts columns and leaves out an ellipsis wider than the room. An Emacs
 without the layout keeps the Lisp fit (`drgnx-statusbar--fit-lisp`, frozen).
 
+The title row of a graphical frame is laid out the same way (`drgnx-topline--build-sja`): Lisp measures each item once
+per memo miss and sends the widths with the search box's (a version 2 spec: its width, the 10 px gap and the room the
+design keeps on the right for the chips); Sjá answers the items kept and the two gaps around the box, or the one gap
+when the box does not fit. A row too narrow for its items loses them from its right end (the bar's rule), where the
+Lisp layout let them run past the edge. The row's strings are memoized per frame on what they show (the memo `topline`, keyed on
+the epochs `buffer-look` and `git` and the counts). Kept in Lisp: a terminal's title row (`--build-columns`, a few
+column sums per memo miss; a terminal frame has no pixel layout to share), and the Lisp layout for an Emacs without
+the bar (`--build-pixels-lisp`, frozen).
+
+The tab line and the breadcrumb build propertized strings, which stays Lisp (UI), but nothing is made again that did
+not change. Each tab is kept on its own (`drgnx-chrome--tab-lines`): its name, file, modified flag, whether it is
+shown, the active group and the preview are compared by `eq` with what it was made from, so one changed tab is made
+again alone, and the line is kept while every tab is. What the whole row is drawn with (the frame, its rows, the
+themes and the row's colour, glyphs, icons, fonts, the window's width) is one vector compared the same way; a change
+there makes every tab again. A window's breadcrumb is kept the same way on its buffer, file, root, symbol, modified
+flag and short form (`drgnx-chrome--crumbs`). These are the epochs in effect: the objects themselves move when the
+state does (a rename gives a new name string), so no watcher is needed and nothing is allocated on a hit.
+
 ## Modal core (`drgnx-modal.el`)
 
 The engine-neutral half of modal editing; evil plugs into it (the `editor/evil` module, below), another engine could.

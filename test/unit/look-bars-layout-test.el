@@ -235,6 +235,34 @@ each; with other chips, or none, it stays where it was."
                    (other (drgnx-topline--build (current-buffer) 160 t 1440)))
               (should (equal (list counts (funcall width (assq 'drgnx-topline-gap-1 other))) (list counts gap-1))))))))))
 
+(ert-deftest drgnx-look-bars/sja-lays-the-title-row-out-as-the-lisp-fit ()
+  "Sjá's layout of the title row (`nidhogg-view-bar', a centred search box) gives the items and gaps the Lisp layout
+\(frozen) gives: wide, with and without the chips, the box fitting or not, drawn or not.  A row too narrow for its
+items, which the Lisp layout let run past the edge, loses items from its right end instead (the bar's rule)."
+  (skip-unless (fboundp 'nidhogg-view-bar))
+  (drgnx-topline-test--with 'vscode
+    (let ((drgnx-look-bars-measure-function #'drgnx-look-bars-test--ten) (compared 0))
+      (dolist (case '((1440 t 1 2) (1440 nil 0 0) (900 t 12 2) (900 nil 0 1) (700 t 1 2) (550 t 1 2) (550 nil 0 0)))
+        (pcase-let ((`(,px ,drawn ,need ,agents) case))
+          (cl-letf (((symbol-function 'drgnx-topline--agents-count) (lambda () agents)))
+            (let* ((drgnx-notice--needs-you need)
+                   (lisp (drgnx-topline--build-pixels-lisp (current-buffer) px drawn)))
+              ;; a row its items fit (the Lisp layout's gaps fill it exactly)
+              (when (= px (drgnx-topline--width lisp (drgnx-statusbar--measure-fn nil 'tab-bar)))
+                (cl-incf compared)
+                (should (equal (list case (drgnx-topline--build-sja (current-buffer) px drawn)) (list case lisp))))))))
+      (should (>= compared 4))
+      ;; too narrow for the chips: the mark stays, the box goes, and what is left fits the row
+      (cl-letf (((symbol-function 'drgnx-topline--agents-count) (lambda () 2)))
+        (let* ((drgnx-notice--needs-you 1)
+               (lisp (drgnx-topline--build-pixels-lisp (current-buffer) 300 t))
+               (items (drgnx-topline--build-sja (current-buffer) 300 t))
+               (measure (drgnx-statusbar--measure-fn nil 'tab-bar)))
+          (should (> (drgnx-topline--width lisp measure) 300))
+          (should (eq 'drgnx-topline-mark (caar items)))
+          (should-not (assq 'drgnx-topline-search items))
+          (should (<= (drgnx-topline--width items measure) 300)))))))
+
 (ert-deftest drgnx-look-bars/double-click-maximises ()
   "Pattern D: a double click on the title row's empty space is bound to the command Maximize or Restore Window
 \(`title-row-maximize' in the registry), which toggles the frame's maximised state."
