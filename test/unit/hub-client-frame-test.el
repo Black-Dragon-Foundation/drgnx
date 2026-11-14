@@ -160,6 +160,17 @@ through the connection's guard, and the batch goes on."
 line."
   (should-not (fboundp 'drgnx-hub--lines))
   (should-not (fboundp 'drgnx-hub--client-filter))
-  (should-not (fboundp 'drgnx-hub--model-line-p)))
+  (should-not (fboundp 'drgnx-hub--model-line-p))
+  (should-not (fboundp 'drgnx-hub--model-line)))
+
+(ert-deftest drgnx-hub-client-frame/the-perf-harness-measures-where-framed-lines-are-handled ()
+  "A framed `view-model' line is handled by `drgnx-hub--model-pushed' and the batch (`drgnx-hub--client-batch'): the
+perf harness advises those, no function the client never calls."
+  (dolist (file '("harness/drgnx-perf-run.el" "harness/drgnx-perf-work.el"))
+    (with-temp-buffer
+      (insert-file-contents (expand-file-name file drgnx-dir))
+      (should-not (search-forward "drgnx-hub--model-line" nil t))
+      (goto-char (point-min))
+      (should (search-forward "'drgnx-hub--model-pushed" nil t)))))
 
 ;;; hub-client-frame-test.el ends here

@@ -587,7 +587,6 @@ step: each key's time, and for a key that stopped at the window's edge the time 
 window (one `view/window' round trip and the model's apply); the longest list Sjá held.  An error when the first
 step is not reached or Sjá held more than the window."
         (with-current-buffer drgnx-perf--tl-buf
-          (advice-add 'drgnx-hub--model-line :around #'drgnx-perf--tl-line-ad)
           (advice-add 'drgnx-hub--model-pushed :around #'drgnx-perf--tl-line-ad)
           (let ((h (drgnx-perf--tl-h)) keys pages lines handled (most 0) (n 0))
             ;; each run starts from the last 500 (the run before paged to the first)
@@ -622,7 +621,6 @@ step is not reached or Sjá held more than the window."
                   :page_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats pages))
                   :line_ms (mapcar #'drgnx-perf--round2
                                    (drgnx-perf-stats (prog1 lines
-                                                       (advice-remove 'drgnx-hub--model-line #'drgnx-perf--tl-line-ad)
                                                        (advice-remove 'drgnx-hub--model-pushed #'drgnx-perf--tl-line-ad))))
                   :handled_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats handled))
                   :pages (length pages) :list_max most :keys n

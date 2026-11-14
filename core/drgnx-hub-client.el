@@ -249,13 +249,6 @@ Emacs connects again)."
   "How a hub's `view-model' line starts (the hub writes `event' first): such a line goes to Sjá whole, never parsed
 here (`:raw-prefix' of the framing).")
 
-(declare-function drgnx-view-model-line "drgnx-view" (line))
-
-(defun drgnx-hub--model-line (line)
-  "A hub's `view-model' LINE, whole and unparsed, to its view's model (`drgnx-view-model-line'); dropped when the
-views are not loaded."
-  (when (fboundp 'drgnx-view-model-line) (drgnx-view-model-line line)))
-
 (defun drgnx-hub--model-pushed (answer error)
   "A `view-model' line the framed reader pushed to Sjá itself: Sjá's ANSWER to its view's model
 \(`drgnx-view-model--pushed'); ERROR, Sjá's refusal, is signalled (the guard reports it, as a failed push)."

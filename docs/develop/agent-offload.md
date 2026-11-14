@@ -44,8 +44,8 @@ Nidhogg's reader splits and parses every hub connection's input (`drgnx-hub--fra
 `drgnx-hub--client-filter` and the `nidhogg-workers-framing` condition on the hub client are gone, and so is the
 unframed `json-parse-string` on the main thread. The probe (`drgnx-hub--ping-socket`) is no client connection (one `ping`, two lines, a filter of its own). A framing the
 reader refuses is an error. The delivery gate, which replaces a connection's filter, parses each held line itself in
-the fixture and hands it to `drgnx-hub--client-batch`. `drgnx-hub--model-line` stays for the gate and the perf harness's
-advice.
+the fixture and hands it to `drgnx-hub--client-batch`. `drgnx-hub--model-line` is gone: the gate hands a `view-model` line to `drgnx-view-model-line`, and the perf harness advises
+where framed lines are handled (`drgnx-hub--model-pushed`, `drgnx-hub--client-batch`).
 
 ## Hook rows of a step
 

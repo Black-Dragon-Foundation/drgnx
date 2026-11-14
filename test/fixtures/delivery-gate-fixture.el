@@ -253,7 +253,8 @@ parsed as the reader parses (plists and lists) into a batch of one for `drgnx-hu
 A line that is not JSON, or is `null' or `false', is skipped, as the reader's batch skips it."
   (let ((text (string-trim-right line "\r?\n")))
     (if (string-prefix-p drgnx-hub--model-prefix text)
-        (funcall (drgnx-guard-wrap #'drgnx-hub--model-line "hub connection") text)
+        (when (fboundp 'drgnx-view-model-line)
+          (funcall (drgnx-guard-wrap #'drgnx-view-model-line "hub connection") text))
       (let ((message (condition-case nil
                          (json-parse-string text :object-type 'plist :array-type 'list :null-object nil :false-object nil)
                        (error nil))))
