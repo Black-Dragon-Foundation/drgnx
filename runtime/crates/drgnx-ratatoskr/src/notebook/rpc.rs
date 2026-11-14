@@ -2,8 +2,8 @@
 //! The notebooks live as long as the hub; they are made on the first call, with the session's private folder for the kernels'
 //! connection files and sockets (under `$XDG_RUNTIME_DIR`, else a folder of the user's in `/tmp`).
 
-use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use runstav::methods::Params;
 use runstav::methods::notebook::{
@@ -21,9 +21,9 @@ use crate::dispatch::Caller;
 use crate::front::Front;
 use hrafn::notebook::Kind;
 
-/// The hub's notebooks, made when first asked for.
+/// The hub's notebooks, made when first asked for (an error is not kept: the next call tries again).
 #[derive(Default)]
-pub struct Hub(OnceLock<Result<Notebooks, String>>);
+pub struct Hub(Mutex<Option<Arc<Notebooks>>>);
 
 fn err(message: impl Into<String>) -> Error {
     Error {
@@ -33,13 +33,22 @@ fn err(message: impl Into<String>) -> Error {
     }
 }
 
+/// The folder the notebooks' private folder is made in: XDG_RUNTIME_DIR when it is an absolute path, else FALLBACK (the user's own
+/// folder in /tmp), which must itself be ours, private and not a link.
+pub(crate) fn runtime_dir(xdg: Option<PathBuf>, fallback: &Path) -> Result<PathBuf, String> {
+    match xdg.filter(|p| p.is_absolute()) {
+        Some(p) => Ok(p),
+        None => spec::private_folder(fallback),
+    }
+}
+
 fn make(front: &Front) -> Result<Notebooks, String> {
     // SAFETY: geteuid has no preconditions.
     let uid = unsafe { libc::geteuid() };
-    let runtime = std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .unwrap_or_else(|| PathBuf::from(format!("/tmp/drgnx-{uid}")));
+    let runtime = runtime_dir(
+        std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from),
+        Path::new(&format!("/tmp/drgnx-{uid}")),
+    )?;
     let folder = spec::private_folder(&runtime.join("drgnx-notebooks"))?;
     // connection files of kernels that are gone: this hub has none running yet
     spec::sweep(&folder, &[]);
@@ -60,11 +69,37 @@ fn make(front: &Front) -> Result<Notebooks, String> {
 }
 
 impl Hub {
-    fn get(&self, front: &Front) -> Result<&Notebooks, Error> {
-        self.0
-            .get_or_init(|| make(front))
-            .as_ref()
-            .map_err(|e| err(format!("notebooks are not available: {e}")))
+    fn get(&self, front: &Front) -> Result<Arc<Notebooks>, Error> {
+        self.get_with(|| make(front))
+    }
+
+    /// The notebooks, made by MAKE the first time it works: an error is not kept.
+    pub(crate) fn get_with(
+        &self,
+        make: impl FnOnce() -> Result<Notebooks, String>,
+    ) -> Result<Arc<Notebooks>, Error> {
+        let mut slot = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(nb) = &*slot {
+            return Ok(nb.clone());
+        }
+        let nb = Arc::new(make().map_err(|e| err(format!("notebooks are not available: {e}")))?);
+        *slot = Some(nb.clone());
+        Ok(nb)
+    }
+
+    /// The editor on connection CONN is gone: its notebooks close and their kernels end.
+    pub fn gone(&self, conn: u64) {
+        let nb = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let Some(nb) = nb {
+            crate::clock::spawn("notebook:gone", async move { nb.gone(conn).await });
+        }
     }
 }
 
@@ -121,11 +156,10 @@ pub async fn serve(
         Ok(nb) => nb,
         Err(e) => return Ok(Err(e)),
     };
+    let conn = caller.conn_id;
     let ok = |r: Result<(), String>| r.map(|()| json!(true)).map_err(err);
     Ok(match p {
-        Params::NotebookOpen(p) => match nb
-            .open(caller.conn_id, std::path::Path::new(&p.path), p.text)
-            .await
+        Params::NotebookOpen(p) => match nb.open(conn, std::path::Path::new(&p.path), p.text).await
         {
             Ok(o) => (|| {
                 Ok(json!(NotebookOpened {
@@ -138,11 +172,11 @@ pub async fn serve(
             })(),
             Err(e) => Err(err(e)),
         },
-        Params::NotebookSync(p) => ok(nb.sync(&p.id, &syncs(p.cells)).await),
-        Params::NotebookExecute(p) => ok(nb.execute(&p.id, &syncs(p.cells)).await),
+        Params::NotebookSync(p) => ok(nb.sync(conn, &p.id, &syncs(p.cells)).await),
+        Params::NotebookExecute(p) => ok(nb.execute(conn, &p.id, &syncs(p.cells)).await),
         Params::NotebookSave(p) => {
             let cells = p.cells.map(syncs);
-            ok(nb.save(&p.id, cells.as_deref()).await)
+            ok(nb.save(conn, &p.id, cells.as_deref()).await)
         }
         Params::NotebookKernels(_) => {
             let (specs, skipped) = nb.kernels_with_skips();
@@ -171,36 +205,91 @@ pub async fn serve(
         }
         // the editor is the user's: never a sealed session's launch plan
         Params::NotebookStart(p) => nb
-            .start(&p.id, p.kernel.as_deref(), None)
+            .start(conn, &p.id, p.kernel.as_deref(), None)
             .await
             .map(|kernel| json!(NotebookStarted { kernel }))
             .map_err(err),
         Params::NotebookRestart(p) => nb
-            .restart(&p.id)
+            .restart(conn, &p.id)
             .await
             .map(|kernel| json!(NotebookStarted { kernel }))
             .map_err(err),
         Params::NotebookShutdown(p) => nb
-            .shutdown(&p.id)
+            .shutdown(conn, &p.id)
             .await
             .map(|e| json!(ended(e)))
             .map_err(err),
-        Params::NotebookInterrupt(p) => ok(nb.interrupt(&p.id).await),
-        Params::NotebookInput(p) => ok(nb.input(&p.id, &p.request, &p.value).await),
-        Params::NotebookTail(p) => match nb.tail(&p.id, &p.cell).await {
+        Params::NotebookInterrupt(p) => ok(nb.interrupt(conn, &p.id).await),
+        Params::NotebookInput(p) => ok(nb.input(conn, &p.id, &p.request, &p.value).await),
+        Params::NotebookTail(p) => match nb.tail(conn, &p.id, &p.cell).await {
             Ok(v) => tail(v).map(|t| json!(t)),
             Err(e) => Err(err(e)),
         },
         Params::NotebookOutput(p) => nb
-            .output(&p.id, &p.cell)
+            .output(conn, &p.id, &p.cell)
             .await
             .map(|outputs| json!(NotebookOutput { outputs }))
             .map_err(err),
-        Params::NotebookClear(p) => ok(nb.clear(&p.id, p.cell.as_deref()).await),
+        Params::NotebookClear(p) => ok(nb.clear(conn, &p.id, p.cell.as_deref()).await),
         Params::NotebookClose(p) => {
-            nb.close(&p.id).await;
+            nb.close(conn, &p.id).await;
             Ok(json!(true))
         }
         other => return Err(Box::new(other)),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::*;
+
+    #[test]
+    fn the_fallback_folder_must_be_the_users_own_private_one_and_a_runtime_folder_is_taken_as_it_is()
+     {
+        let t = tempfile::tempdir().unwrap();
+        let fallback = t.path().join("drgnx-1000");
+        // made 0700 when missing
+        let made = runtime_dir(None, &fallback).unwrap();
+        assert_eq!(
+            std::fs::metadata(&made).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        // a loose one, or a link, is refused
+        std::fs::set_permissions(&fallback, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(runtime_dir(None, &fallback).unwrap_err().contains("0700"));
+        let link = t.path().join("link");
+        std::os::unix::fs::symlink(&made, &link).unwrap();
+        assert!(runtime_dir(None, &link).unwrap_err().contains("link"));
+        // a runtime folder is not looked at, a relative one is not used
+        assert_eq!(
+            runtime_dir(Some(PathBuf::from("/run/user/1000")), &fallback).unwrap(),
+            PathBuf::from("/run/user/1000")
+        );
+        assert!(
+            runtime_dir(Some(PathBuf::from("relative")), &link).is_err(),
+            "falls to the fallback, which is refused"
+        );
+    }
+
+    #[test]
+    fn a_failure_to_make_the_notebooks_is_not_kept() {
+        let hub = Hub::default();
+        let t = tempfile::tempdir().unwrap();
+        let sink = std::sync::Arc::new(crate::settings::agents::Editors::default());
+        assert!(hub.get_with(|| Err("no folder yet".into())).is_err());
+        let made = hub.get_with(|| {
+            Ok(Notebooks::new(
+                sink.clone(),
+                t.path().to_path_buf(),
+                vec![],
+                Timeouts::default(),
+            ))
+        });
+        assert!(made.is_ok(), "the next call tries again");
+        // and once made it is the same one
+        let again = hub.get_with(|| Err("not asked".into())).unwrap();
+        assert!(std::sync::Arc::ptr_eq(&made.unwrap(), &again));
+    }
 }

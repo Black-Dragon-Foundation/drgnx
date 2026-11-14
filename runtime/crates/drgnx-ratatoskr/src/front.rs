@@ -327,6 +327,7 @@ impl Front {
         self.core.buffers.gone(conn);
         self.core.terms.gone(conn);
         self.extensions.gone(conn);
+        self.notebooks.gone(conn);
     }
 
     /// EVENT with DATA to every subscribed connection: queued for each before any is written (a queue never waits),

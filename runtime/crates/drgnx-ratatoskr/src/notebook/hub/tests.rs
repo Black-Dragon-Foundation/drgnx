@@ -20,13 +20,24 @@ const NB: &str = r##"{
 }"##;
 
 #[derive(Default)]
-struct Events(Mutex<Vec<(u64, String, Value)>>);
+struct Events(
+    Mutex<Vec<(u64, String, Value)>>,
+    std::sync::atomic::AtomicBool,
+);
 
 impl Sink for Events {
     fn broadcast(&self, _: &str, _: Value, _: Option<u64>) {}
     fn send(&self, conn: u64, event: &str, data: Value) -> bool {
         self.0.lock().unwrap().push((conn, event.into(), data));
         true
+    }
+    /// The editor can be made to leave: every send says it is gone.
+    fn send_lossy(&self, conn: u64, event: &str, data: Value) -> Delivery {
+        if self.1.load(Ordering::SeqCst) {
+            return Delivery::Gone;
+        }
+        self.send(conn, event, data);
+        Delivery::Sent
     }
 }
 
@@ -112,10 +123,10 @@ struct Seen {
 
 /// The kernel's side of notebook `nb1` (its first kernel): answers `kernel_info`, runs what it is sent (the code is its own output;
 /// BOOM is an error, SLOW never answers, ASK asks for input), and notes what reached it.
-fn kernel_side(folder: &Path, nth: u32, seen: Arc<Seen>) -> tokio::task::JoinHandle<()> {
-    let prefix = folder.join(format!("k-nb1-k{nth}"));
+fn kernel_side(folder: &Path, id: &str, nth: u32, seen: Arc<Seen>) -> tokio::task::JoinHandle<()> {
+    let prefix = folder.join(format!("k-{id}-k{nth}"));
     let ep = move |n| format!("ipc://{}-{n}", prefix.display());
-    let path = folder.join(format!("kernel-nb1-k{nth}.json"));
+    let path = folder.join(format!("kernel-{id}-k{nth}.json"));
     tokio::spawn(async move {
         let (mut shell, mut iopub, mut stdin, mut control) = (
             RouterSocket::new(),
@@ -168,14 +179,29 @@ fn kernel_side(folder: &Path, nth: u32, seen: Arc<Seen>) -> tokio::task::JoinHan
                 continue;
             }
             let mut text = code.clone();
-            if code == "ASK" {
+            if code.starts_with("ASK") {
+                let prompt = if code == "ASKLONG" {
+                    format!("{}\u{202e}\x1b[31m", "p".repeat(5000))
+                } else {
+                    "name? ".to_string()
+                };
                 let mut ask = reply_to(
                     &req,
                     "input_request",
-                    json!({"prompt": "name? ", "password": false}),
+                    json!({"prompt": prompt, "password": false}),
                 );
                 ask.idents = vec![f[0].clone()];
                 stdin.send(zmq(&key, &ask)).await.unwrap();
+                if code == "ASKTWICE" {
+                    // a second question while the first is open
+                    let mut again = reply_to(
+                        &req,
+                        "input_request",
+                        json!({"prompt": "again? ", "password": false}),
+                    );
+                    again.idents = vec![f[0].clone()];
+                    stdin.send(zmq(&key, &again)).await.unwrap();
+                }
                 let got = frames(stdin.recv().await.unwrap());
                 text = wire::decode(&key, &got).unwrap().content["value"]
                     .as_str()
@@ -207,15 +233,20 @@ fn kernel_side(folder: &Path, nth: u32, seen: Arc<Seen>) -> tokio::task::JoinHan
 
 async fn started(w: &World) -> (String, Arc<Seen>) {
     let opened = w.hub.open(7, &w.path, None).await.unwrap();
-    assert_eq!(opened.id, "nb1");
+    let id = opened.id.clone();
+    assert!(
+        id.starts_with("nb") && id.len() == 34,
+        "an id nobody can guess: {id}"
+    );
     let seen = Arc::new(Seen::default());
     kernel_side(
         &private_folder(&w.d.path().join("s")).unwrap(),
+        &id,
         1,
         seen.clone(),
     );
-    assert_eq!(w.hub.start("nb1", None, None).await.unwrap(), "fake");
-    ("nb1".into(), seen)
+    assert_eq!(w.hub.start(7, &id, None, None).await.unwrap(), "fake");
+    (id, seen)
 }
 
 fn sync(id: &str, source: &str) -> CellSync {
@@ -274,7 +305,7 @@ async fn a_notebook_opens_with_its_files_outputs_as_stale_tails_and_a_bad_file_i
     );
     assert!(w.hub.open(7, &w.path, Some("[]".into())).await.is_err());
     assert!(
-        w.hub.tail("nb1", "a").await.unwrap()["stale"]
+        w.hub.tail(7, &o.id, "a").await.unwrap()["stale"]
             .as_bool()
             .unwrap()
     );
@@ -284,13 +315,16 @@ async fn a_notebook_opens_with_its_files_outputs_as_stale_tails_and_a_bad_file_i
 async fn a_cell_runs_its_output_reaches_the_editor_and_save_writes_it() {
     let w = world("signal");
     let (id, seen) = started(&w).await;
-    w.hub.execute(&id, &[sync("a", "print(1)")]).await.unwrap();
+    w.hub
+        .execute(7, &id, &[sync("a", "print(1)")])
+        .await
+        .unwrap();
     let t = skuld::wait_until("the cell's tail", 30, || {
         w.events.tail("a").filter(|t| t["text"] == "print(1)")
     });
     assert_eq!(
         (t["stale"].as_bool(), t["id"].as_str()),
-        (Some(false), Some("nb1"))
+        (Some(false), Some(id.as_str()))
     );
     assert!(t["version"].as_u64().unwrap() >= 2);
     skuld::wait_until("idle", 30, || {
@@ -299,12 +333,12 @@ async fn a_cell_runs_its_output_reaches_the_editor_and_save_writes_it() {
     assert_eq!(*seen.executed.lock().unwrap(), ["print(1)"]);
     // the editor is told through the connection that opened it
     assert!(w.events.0.lock().unwrap().iter().all(|e| e.0 == 7));
-    w.hub.save(&id, None).await.unwrap();
+    w.hub.save(7, &id, None).await.unwrap();
     let saved: Value = serde_json::from_slice(&std::fs::read(&w.path).unwrap()).unwrap();
     assert_eq!(saved["cells"][0]["outputs"][0]["text"], json!(["print(1)"]));
     assert_eq!(saved["cells"][0]["execution_count"], 1);
     assert_eq!(saved["cells"][0]["source"], json!(["print(1)"]));
-    w.hub.close(&id).await;
+    w.hub.close(7, &id).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -313,6 +347,7 @@ async fn an_error_aborts_the_cells_queued_behind_it_and_they_never_reach_the_ker
     let (id, seen) = started(&w).await;
     w.hub
         .execute(
+            7,
             &id,
             &[sync("a", "ok"), sync("b", "BOOM"), sync("c", "after")],
         )
@@ -327,7 +362,7 @@ async fn an_error_aborts_the_cells_queued_behind_it_and_they_never_reach_the_ker
         b["text"].as_str().unwrap().starts_with("BOOM\nBoom: no"),
         "{b}"
     );
-    w.hub.close(&id).await;
+    w.hub.close(7, &id).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -336,7 +371,7 @@ async fn an_interrupt_cancels_what_is_queued_and_asks_the_kernel_by_message_when
     let w = world("message");
     let (id, seen) = started(&w).await;
     w.hub
-        .execute(&id, &[sync("a", "SLOW"), sync("b", "x")])
+        .execute(7, &id, &[sync("a", "SLOW"), sync("b", "x")])
         .await
         .unwrap();
     skuld::wait_until("a busy", 30, || {
@@ -346,7 +381,7 @@ async fn an_interrupt_cancels_what_is_queued_and_asks_the_kernel_by_message_when
             .any(|s| s["state"] == "busy" && s["cell"] == "a")
             .then_some(())
     });
-    w.hub.interrupt(&id).await.unwrap();
+    w.hub.interrupt(7, &id).await.unwrap();
     skuld::wait_until("b cancelled", 30, || {
         w.events.tail("b").filter(|t| t["text"] == "cancelled")
     });
@@ -359,14 +394,14 @@ async fn an_interrupt_cancels_what_is_queued_and_asks_the_kernel_by_message_when
             .then_some(())
     });
     assert_eq!(*seen.executed.lock().unwrap(), ["SLOW"]);
-    w.hub.close(&id).await;
+    w.hub.close(7, &id).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_kernel_asking_for_input_gets_the_answer_through_the_stdin_socket() {
     let w = world("signal");
     let (id, _seen) = started(&w).await;
-    w.hub.execute(&id, &[sync("a", "ASK")]).await.unwrap();
+    w.hub.execute(7, &id, &[sync("a", "ASK")]).await.unwrap();
     let ask = skuld::wait_until("the input request", 30, || {
         w.events.of("notebook-input-request").into_iter().next()
     });
@@ -379,19 +414,19 @@ async fn a_kernel_asking_for_input_gets_the_answer_through_the_stdin_socket() {
         (Some("name? "), Some("a"), Some(false))
     );
     w.hub
-        .input(&id, ask["request"].as_str().unwrap(), "bob")
+        .input(7, &id, ask["request"].as_str().unwrap(), "bob")
         .await
         .unwrap();
     skuld::wait_until("the answer shown", 30, || {
         w.events.tail("a").filter(|t| t["text"] == "bob")
     });
-    w.hub.close(&id).await;
+    w.hub.close(7, &id).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_sealed_session_gets_no_kernel_and_a_missing_kernel_is_named() {
     let w = world("signal");
-    w.hub.open(7, &w.path, None).await.unwrap();
+    let id = w.hub.open(7, &w.path, None).await.unwrap().id;
     let plan = LaunchPlan {
         argv: vec![],
         env: vec![],
@@ -404,14 +439,14 @@ async fn a_sealed_session_gets_no_kernel_and_a_missing_kernel_is_named() {
         ro_files: vec![],
         gateway_url_env: vec![],
     };
-    let e = w.hub.start("nb1", None, Some(&plan)).await.unwrap_err();
+    let e = w.hub.start(7, &id, None, Some(&plan)).await.unwrap_err();
     assert_eq!(
         e,
         "a notebook kernel runs unconfined and is not started in a sealed session"
     );
-    assert!(w.hub.start("nope", None, None).await.is_err());
+    assert!(w.hub.start(7, "nope", None, None).await.is_err());
     assert!(
-        w.hub.execute("nb1", &[sync("a", "x")]).await.is_err(),
+        w.hub.execute(7, &id, &[sync("a", "x")]).await.is_err(),
         "no kernel started"
     );
 }
@@ -422,15 +457,15 @@ async fn shutdown_ends_the_kernel_says_so_and_removes_its_connection_file() {
     let (id, _seen) = started(&w).await;
     let file = private_folder(&w.d.path().join("s"))
         .unwrap()
-        .join("kernel-nb1-k1.json");
+        .join(format!("kernel-{id}-k1.json"));
     assert!(file.exists());
-    let exit = w.hub.shutdown(&id).await.unwrap();
+    let exit = w.hub.shutdown(7, &id).await.unwrap();
     assert!(exit.signal.is_some() || exit.code.is_some());
     assert_eq!(w.events.state().as_deref(), Some("dead"));
     skuld::wait_until("the file to go", 30, || (!file.exists()).then_some(()));
-    assert!(w.hub.kernel_name(&id).is_none());
+    assert!(w.hub.kernel_name(7, &id).is_none());
     assert!(
-        w.hub.shutdown(&id).await.is_err(),
+        w.hub.shutdown(7, &id).await.is_err(),
         "a second one has nothing to end"
     );
 }
@@ -439,7 +474,7 @@ async fn shutdown_ends_the_kernel_says_so_and_removes_its_connection_file() {
 async fn a_tail_carries_the_execution_count_and_a_head_that_follows_the_cell_through_its_states() {
     let w = world("signal");
     let (id, _seen) = started(&w).await;
-    w.hub.execute(&id, &[sync("a", "SLOW")]).await.unwrap();
+    w.hub.execute(7, &id, &[sync("a", "SLOW")]).await.unwrap();
     // queued and running show [*]
     let running = skuld::wait_until("a running head", 30, || {
         w.events
@@ -452,18 +487,18 @@ async fn a_tail_carries_the_execution_count_and_a_head_that_follows_the_cell_thr
         json!({"start": 0, "end": 3, "fg": null, "bg": null, "bold": true,
                                                     "italic": false, "underline": false, "inverse": false})
     );
-    w.hub.close(&id).await;
+    w.hub.close(7, &id).await;
 
     let w = world("signal");
     let (id, _seen) = started(&w).await;
-    w.hub.execute(&id, &[sync("a", "ok")]).await.unwrap();
+    w.hub.execute(7, &id, &[sync("a", "ok")]).await.unwrap();
     let done = skuld::wait_until("the finished head", 30, || {
         w.events
             .tail("a")
             .filter(|t| t["head"]["state"] == "idle" && t["execution_count"] == 1)
     });
     assert_eq!(done["head"]["text"], "[1]  fake");
-    w.hub.close(&id).await;
+    w.hub.close(7, &id).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -471,7 +506,7 @@ async fn clear_empties_one_cell_or_all_and_leaves_a_running_cell_alone() {
     let w = world("signal");
     let (id, _seen) = started(&w).await;
     w.hub
-        .execute(&id, &[sync("a", "ok"), sync("b", "two")])
+        .execute(7, &id, &[sync("a", "ok"), sync("b", "two")])
         .await
         .unwrap();
     skuld::wait_until("both done", 30, || {
@@ -479,7 +514,7 @@ async fn clear_empties_one_cell_or_all_and_leaves_a_running_cell_alone() {
             .tail("b")
             .filter(|t| t["text"] == "two" && t["head"]["state"] == "idle")
     });
-    w.hub.clear(&id, Some("a")).await.unwrap();
+    w.hub.clear(7, &id, Some("a")).await.unwrap();
     let a = w.events.tail("a").unwrap();
     assert_eq!(
         (
@@ -490,56 +525,368 @@ async fn clear_empties_one_cell_or_all_and_leaves_a_running_cell_alone() {
         (Some(""), true, Some("[ ]  fake"))
     );
     assert_eq!(
-        w.hub.tail(&id, "b").await.unwrap()["text"],
+        w.hub.tail(7, &id, "b").await.unwrap()["text"],
         "two",
         "the other cell keeps its output"
     );
-    w.hub.clear(&id, None).await.unwrap();
-    assert_eq!(w.hub.tail(&id, "b").await.unwrap()["text"], "");
-    assert!(w.hub.clear(&id, Some("nope")).await.is_err());
+    w.hub.clear(7, &id, None).await.unwrap();
+    assert_eq!(w.hub.tail(7, &id, "b").await.unwrap()["text"], "");
+    assert!(w.hub.clear(7, &id, Some("nope")).await.is_err());
     // a running cell is not cleared
-    w.hub.execute(&id, &[sync("c", "SLOW")]).await.unwrap();
+    w.hub.execute(7, &id, &[sync("c", "SLOW")]).await.unwrap();
     skuld::wait_until("c running", 30, || {
         w.events
             .tail("c")
             .filter(|t| t["head"]["state"] == "running")
     });
     let before = w.events.of("notebook-tail").len();
-    w.hub.clear(&id, Some("c")).await.unwrap();
+    w.hub.clear(7, &id, Some("c")).await.unwrap();
     assert_eq!(
-        w.hub.tail(&id, "c").await.unwrap()["head"]["state"],
+        w.hub.tail(7, &id, "c").await.unwrap()["head"]["state"],
         "running"
     );
     assert!(w.events.of("notebook-tail").len() >= before);
-    w.hub.close(&id).await;
+    w.hub.close(7, &id).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn restart_ends_the_kernel_and_starts_a_new_one_with_a_new_connection() {
     let w = world("signal");
     let (id, seen) = started(&w).await;
-    w.hub.execute(&id, &[sync("a", "before")]).await.unwrap();
+    w.hub.execute(7, &id, &[sync("a", "before")]).await.unwrap();
     skuld::wait_until("ran", 30, || {
         w.events.tail("a").filter(|t| t["text"] == "before")
     });
     let folder = private_folder(&w.d.path().join("s")).unwrap();
     let seen2 = Arc::new(Seen::default());
-    kernel_side(&folder, 2, seen2.clone());
-    assert_eq!(w.hub.restart(&id).await.unwrap(), "fake");
+    kernel_side(&folder, &id, 2, seen2.clone());
+    assert_eq!(w.hub.restart(7, &id).await.unwrap(), "fake");
     assert!(
-        !folder.join("kernel-nb1-k1.json").exists(),
+        !folder.join(format!("kernel-{id}-k1.json")).exists(),
         "the old connection file went"
     );
     assert!(
-        folder.join("kernel-nb1-k2.json").exists(),
+        folder.join(format!("kernel-{id}-k2.json")).exists(),
         "a new one, with its own key"
     );
-    w.hub.execute(&id, &[sync("b", "after")]).await.unwrap();
+    w.hub.execute(7, &id, &[sync("b", "after")]).await.unwrap();
     skuld::wait_until("ran on the new kernel", 30, || {
         w.events.tail("b").filter(|t| t["text"] == "after")
     });
     assert_eq!(*seen.executed.lock().unwrap(), ["before"]);
     assert_eq!(*seen2.executed.lock().unwrap(), ["after"]);
-    assert!(w.hub.restart("nope").await.is_err());
-    w.hub.close(&id).await;
+    assert!(w.hub.restart(7, "nope").await.is_err());
+    w.hub.close(7, &id).await;
+}
+
+fn spawn_peer(w: &World, id: &str, nth: u32) -> Arc<Seen> {
+    let seen = Arc::new(Seen::default());
+    kernel_side(
+        &private_folder(&w.d.path().join("s")).unwrap(),
+        id,
+        nth,
+        seen.clone(),
+    );
+    seen
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_notebook_is_its_connections_and_ends_with_it() {
+    let w = world("signal");
+    let (id, seen) = started(&w).await;
+    // another connection has no such notebook, whatever it calls
+    assert!(w.hub.tail(8, &id, "a").await.is_err());
+    assert!(w.hub.execute(8, &id, &[sync("a", "x")]).await.is_err());
+    assert!(w.hub.save(8, &id, None).await.is_err());
+    assert!(w.hub.shutdown(8, &id).await.is_err());
+    assert!(w.hub.interrupt(8, &id).await.is_err());
+    assert!(w.hub.input(8, &id, "r", "v").await.is_err());
+    assert!(w.hub.clear(8, &id, None).await.is_err());
+    assert!(w.hub.output(8, &id, "a").await.is_err());
+    assert!(w.hub.sync(8, &id, &[]).await.is_err());
+    assert!(w.hub.start(8, &id, None, None).await.is_err());
+    assert!(w.hub.restart(8, &id).await.is_err());
+    w.hub.close(8, &id).await;
+    assert!(
+        w.hub.tail(7, &id, "a").await.is_ok(),
+        "another connection's close did nothing"
+    );
+    assert!(seen.executed.lock().unwrap().is_empty());
+    // the editor leaves: the notebook is forgotten and the kernel's connection file goes with it
+    let file = private_folder(&w.d.path().join("s"))
+        .unwrap()
+        .join(format!("kernel-{id}-k1.json"));
+    assert!(file.exists());
+    w.hub.gone(7).await;
+    assert!(w.hub.tail(7, &id, "a").await.is_err());
+    skuld::wait_until("the file to go", 30, || (!file.exists()).then_some(()));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pump_whose_editor_is_gone_stops_and_the_kernel_with_it() {
+    let w = world("signal");
+    let (id, _seen) = started(&w).await;
+    let file = private_folder(&w.d.path().join("s"))
+        .unwrap()
+        .join(format!("kernel-{id}-k1.json"));
+    skuld::wait_until("the pump's first status", 30, || {
+        (w.events.state().as_deref() == Some("idle")).then_some(())
+    });
+    w.events.1.store(true, Ordering::SeqCst);
+    w.hub.execute(7, &id, &[sync("a", "SLOW")]).await.unwrap();
+    skuld::wait_until("the kernel to be ended", 30, || {
+        (!file.exists()).then_some(())
+    });
+    skuld::wait_until("the slot to be free", 30, || {
+        w.hub.kernel_name(7, &id).is_none().then_some(())
+    });
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn only_regular_notebook_files_ending_in_ipynb_are_opened() {
+    let w = world("signal");
+    let fifo = w.d.path().join("pipe.ipynb");
+    rustix::fs::mknodat(
+        rustix::fs::CWD,
+        &fifo,
+        rustix::fs::FileType::Fifo,
+        rustix::fs::Mode::from_raw_mode(0o600),
+        0,
+    )
+    .unwrap();
+    let zero = w.d.path().join("zero.ipynb");
+    std::os::unix::fs::symlink("/dev/zero", &zero).unwrap();
+    // an open that waits or reads for ever would hang these: they are asked on a thread with a deadline
+    let slot = Arc::new(Mutex::new(None));
+    let s2 = slot.clone();
+    let (a, b) = (fifo.clone(), zero.clone());
+    std::thread::spawn(move || *s2.lock().unwrap() = Some((read_notebook(&a), read_notebook(&b))));
+    let (f, z) = skuld::wait_until("the reads", 30, || slot.lock().unwrap().take());
+    assert!(f.unwrap_err().contains("not a regular file"));
+    assert!(z.unwrap_err().contains("not a regular file"));
+    assert!(read_notebook(&w.path).is_ok());
+    let e = w
+        .hub
+        .open(7, &w.d.path().join("notes.json"), Some("{}".into()))
+        .await
+        .unwrap_err();
+    assert!(e.contains("not a .ipynb file"), "{e}");
+    assert!(
+        w.hub
+            .open(7, &w.d.path().join("n.IPYNB"), Some(NB.into()))
+            .await
+            .is_ok()
+    );
+    // one connection holds at most MAX_OPEN
+    for _ in 0..MAX_OPEN {
+        let _ = w.hub.open(9, &w.path, None).await;
+    }
+    assert!(
+        w.hub
+            .open(9, &w.path, None)
+            .await
+            .unwrap_err()
+            .contains("close one first")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn two_starts_at_once_make_one_kernel() {
+    let w = world("signal");
+    let id = w.hub.open(7, &w.path, None).await.unwrap().id;
+    let _seen = spawn_peer(&w, &id, 1);
+    let (a, b) = tokio::join!(
+        w.hub.start(7, &id, None, None),
+        w.hub.start(7, &id, None, None)
+    );
+    assert_eq!(
+        [a.is_ok(), b.is_ok()].iter().filter(|x| **x).count(),
+        1,
+        "{a:?} {b:?}"
+    );
+    let refused = a.err().or(b.err()).unwrap();
+    assert!(refused.contains("already has a kernel"), "{refused}");
+    w.hub.close(7, &id).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_start_that_fails_leaves_the_slot_free() {
+    let w = world("signal");
+    let id = w.hub.open(7, &w.path, None).await.unwrap().id;
+    // no kernel by that name and the notebook's language has no kernelspec either: nothing starts
+    std::fs::remove_dir_all(w.d.path().join("kernels/fake")).unwrap();
+    assert!(
+        w.hub
+            .start(7, &id, Some("nothere"), None)
+            .await
+            .unwrap_err()
+            .contains("no kernel")
+    );
+    std::fs::create_dir_all(w.d.path().join("kernels/fake")).unwrap();
+    std::fs::write(
+        w.d.path().join("kernels/fake/kernel.json"),
+        r#"{"argv": ["sh", "-c", "sleep 600", "kernel", "{connection_file}"], "display_name": "Fake", "language": "fake"}"#,
+    )
+    .unwrap();
+    let _seen = spawn_peer(&w, &id, 1);
+    assert_eq!(
+        w.hub.start(7, &id, None, None).await.unwrap(),
+        "fake",
+        "the failed start did not keep the slot"
+    );
+    w.hub.close(7, &id).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_question_to_the_editor_is_short_clean_one_at_a_time_and_only_from_the_running_cell() {
+    let w = world("signal");
+    let (id, _seen) = started(&w).await;
+    w.hub
+        .execute(7, &id, &[sync("a", "ASKLONG")])
+        .await
+        .unwrap();
+    let ask = skuld::wait_until("the request", 30, || {
+        w.events.of("notebook-input-request").into_iter().next()
+    });
+    let prompt = ask["prompt"].as_str().unwrap();
+    assert_eq!(prompt.chars().count(), PROMPT_CHARS);
+    assert!(!prompt.contains('\u{202e}') && !prompt.contains('\x1b'));
+    w.hub
+        .input(7, &id, ask["request"].as_str().unwrap(), "x")
+        .await
+        .unwrap();
+    skuld::wait_until("done", 30, || {
+        w.events
+            .tail("a")
+            .filter(|t| t["head"]["state"] == "idle" && t["text"] == "x")
+    });
+    // a second question while one is open is not forwarded
+    w.hub
+        .execute(7, &id, &[sync("b", "ASKTWICE")])
+        .await
+        .unwrap();
+    skuld::wait_until("the first", 30, || {
+        (w.events.of("notebook-input-request").len() >= 2).then_some(())
+    });
+    let ours = w.events.of("notebook-input-request");
+    w.hub
+        .input(7, &id, ours[1]["request"].as_str().unwrap(), "y")
+        .await
+        .unwrap();
+    skuld::wait_until("b done", 30, || {
+        w.events
+            .tail("b")
+            .filter(|t| t["head"]["state"] == "idle" && t["text"] == "y")
+    });
+    assert_eq!(
+        w.events.of("notebook-input-request").len(),
+        2,
+        "one for b, not two"
+    );
+    w.hub.close(7, &id).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn what_a_finished_run_held_is_let_go() {
+    let w = world("signal");
+    let (id, _seen) = started(&w).await;
+    for i in 0..12 {
+        w.hub
+            .execute(7, &id, &[sync("a", &format!("run {i}"))])
+            .await
+            .unwrap();
+        skuld::wait_until("the run", 30, || {
+            w.events
+                .tail("a")
+                .filter(|t| t["text"] == format!("run {i}") && t["head"]["state"] == "idle")
+        });
+    }
+    skuld::wait_until("nothing held", 30, || {
+        (w.hub.held_runs(7, &id) == Some(0)).then_some(())
+    });
+    w.hub.close(7, &id).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cell_that_never_started_keeps_its_outputs_in_the_notebook_and_the_file() {
+    let w = world("signal");
+    let (id, _seen) = started(&w).await;
+    // b runs for ever, a (which has the file's output) waits behind it
+    w.hub
+        .execute(7, &id, &[sync("b", "SLOW"), sync("a", "ok")])
+        .await
+        .unwrap();
+    skuld::wait_until("b running", 30, || {
+        w.events
+            .tail("b")
+            .filter(|t| t["head"]["state"] == "running")
+    });
+    w.hub.interrupt(7, &id).await.unwrap();
+    let a = skuld::wait_until("a cancelled", 30, || {
+        w.events
+            .tail("a")
+            .filter(|t| t["text"].as_str().is_some_and(|t| t.ends_with("cancelled")))
+    });
+    assert!(a["text"].as_str().unwrap().starts_with("old\n"), "{a}");
+    w.hub.save(7, &id, None).await.unwrap();
+    let saved: Value = serde_json::from_slice(&std::fs::read(&w.path).unwrap()).unwrap();
+    assert_eq!(
+        saved["cells"][0]["outputs"][0]["text"],
+        json!(["old\n"]),
+        "the file's output was not blanked"
+    );
+    w.hub.close(7, &id).await;
+}
+
+#[test]
+fn at_most_a_hundred_tails_a_second_go_for_a_notebook() {
+    let t0 = tokio::time::Instant::now();
+    let mut b = Budget::new(t0);
+    for i in 0..TAILS_PER_SEC {
+        assert!(b.allowed(t0 + Duration::from_millis(i as u64)), "{i}");
+        b.spend();
+    }
+    assert!(
+        !b.allowed(t0 + Duration::from_millis(500)),
+        "the window is full"
+    );
+    assert!(b.allowed(t0 + Duration::from_millis(1000)), "a new window");
+}
+
+#[test]
+fn a_backed_up_editor_loses_events_not_its_subscription() {
+    let editors = crate::settings::agents::Editors::default();
+    let out = Arc::new(crate::conn::Outbox::new(5));
+    editors.subscribe(5, out.clone());
+    let big = json!({"text": "x".repeat(1 << 20)});
+    let mut sent = 0;
+    let mut dropped = false;
+    for _ in 0..10 {
+        match editors.send_to_lossy(5, "notebook-tail", big.clone()) {
+            Delivery::Sent => sent += 1,
+            Delivery::Dropped => {
+                dropped = true;
+                break;
+            }
+            Delivery::Gone => panic!("the subscription went"),
+        }
+    }
+    assert!(
+        dropped && (3..=4).contains(&sent),
+        "{sent} sent, dropped {dropped}"
+    );
+    assert_eq!(
+        editors.send_to_lossy(5, "notebook-tail", big.clone()),
+        Delivery::Dropped,
+        "still backed up"
+    );
+    assert!(
+        editors.send_to(5, "other", json!({})),
+        "the editor is still subscribed to everything else"
+    );
+    assert_eq!(
+        editors.send_to_lossy(6, "x", json!({})),
+        Delivery::Gone,
+        "no such editor"
+    );
 }
