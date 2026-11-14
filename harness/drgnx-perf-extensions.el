@@ -311,11 +311,13 @@ rows time)."
      (defun drgnx-perf-extensions--settle (buf)
        "Paint BUF's view as the editor would: fire the draw timers it armed (`:delay 0', then each slice of the
 chain) through the timer layer's own wrapper, in order, until none is armed; draw what is still marked; redisplay.
-A timed form that ends with this stops the clock on painted rows, not on armed timers."
+A timed form that ends with this stops the clock on painted rows, not on armed timers.  Rows held in Sjá draw from
+their own timer (`drgnx-view-sja'), fired the same way."
        (let ((n 0))
          (while (and (< n 10000)
                      (let ((e (or (gethash (cons 'drgnx-view buf) drgnx-timer--table)
-                                  (gethash (cons 'drgnx-view-more buf) drgnx-timer--table))))
+                                  (gethash (cons 'drgnx-view-more buf) drgnx-timer--table)
+                                  (gethash (cons 'drgnx-view-sja buf) drgnx-timer--table))))
                        (when e (drgnx-timer--fire e) t)))
            (cl-incf n)))
        (let ((v (and (buffer-live-p buf) (buffer-local-value 'drgnx-view buf))))
@@ -323,9 +325,10 @@ A timed form that ends with this stops the clock on painted rows, not on armed t
        (redisplay t))
 
      (defun drgnx-perf-extensions--drawn (buf)
-       "The rows BUF's view has in the buffer."
-       (let ((v (and (buffer-live-p buf) (buffer-local-value 'drgnx-view buf))))
-         (if (drgnx-view-p v) (drgnx-view-row-count v) 0)))
+       "The rows BUF's view has in the buffer: its Lisp view's, or the rows Sjá holds and drew for it."
+       (if (buffer-live-p buf)
+           (with-current-buffer buf (drgnx-view-row-count (and (drgnx-view-p drgnx-view) drgnx-view)))
+         0))
 
      (defun drgnx-perf-extensions--list () (get-buffer drgnx-extensions-list-buffer-name))
 
@@ -401,7 +404,8 @@ apply (the stub's build left out) and the draws it arms are timed apart, as slic
            (error "the list opened with no rows"))
          (list :open_ms (drgnx-perf-extensions--r (car r)) :processes (cdr r)
                :alloc drgnx-perf-extensions--open-alloc
-               :rows (with-current-buffer (drgnx-perf-extensions--list) (hash-table-count (drgnx-view-patch-rows drgnx-view-patch)))
+               :rows (with-current-buffer (drgnx-perf-extensions--list)   ; the rows held: Sjá's store, else the inserter's
+                       (if (drgnx-view-sja-p) (drgnx-view-row-count nil) (hash-table-count (drgnx-view-patch-rows drgnx-view-patch))))
                :rows_drawn (drgnx-perf-extensions--drawn (drgnx-perf-extensions--list)))))
      (defun drgnx-perf-extensions-open-teardown () (drgnx-perf-extensions--common-teardown))
 
