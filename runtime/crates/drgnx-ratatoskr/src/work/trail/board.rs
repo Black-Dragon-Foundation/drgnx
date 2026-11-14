@@ -336,6 +336,7 @@ mod tests {
             tz: String::new(),
             reduced_motion: false,
             attach: false,
+            rows_in_sja: false,
         };
         let mut a = card("task:a", "needs-input", Some("s1"));
         a.progress = Some((1, 3));
@@ -373,6 +374,7 @@ mod tests {
             tz: String::new(),
             reduced_motion: false,
             attach: false,
+            rows_in_sja: false,
         }
     }
 

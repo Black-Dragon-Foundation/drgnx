@@ -88,6 +88,9 @@ struct Term {
     /// The connection the terminal's patches and events go to (none while its session is away).
     owner: Option<u64>,
     old: bool,
+    /// The editor holds the view's rows in Sjá (its last `view/env` said so): the patches go on the raw
+    /// `view-model` line, as `{view, rows}`.
+    rows_in_sja: bool,
 }
 
 #[derive(Default)]
@@ -318,6 +321,7 @@ impl Terms {
                 tx,
                 owner,
                 old,
+                rows_in_sja: false,
             },
         );
         crate::clock::spawn("term:write", async move {
@@ -354,12 +358,20 @@ impl Terms {
 
     /// A line from worker ID; true when it ended.
     fn on_line(&self, id: &str, out: Out) -> bool {
-        let owner = lock(&self.inner.state).terms.get(id).and_then(|t| t.owner);
+        let (owner, rows_in_sja) = lock(&self.inner.state)
+            .terms
+            .get(id)
+            .map_or((None, false), |t| (t.owner, t.rows_in_sja));
         let ev = |name: &str, mut data: Value| {
             data["id"] = json!(id);
             self.send_event(owner, name, data);
         };
         match out {
+            Out::Patch { patch } if rows_in_sja => self.send_event(
+                owner,
+                "view-model",
+                json!({"view": patch.view.clone(), "rows": patch}),
+            ),
             Out::Patch { patch } => self.send_event(owner, "view-patch", json!(patch)),
             Out::Model { model } => self.send_event(owner, "view-model", model),
             Out::Title { title } => ev("term/title", json!({"title": title})),
@@ -443,6 +455,15 @@ impl Terms {
         };
         line.push('\n');
         t.tx.send(line).is_ok()
+    }
+
+    /// The editor's `view/env` of terminal ID: its EPOCH goes to the worker, and whether the editor holds the rows in
+    /// Sjá (ROWS_IN_SJA) says how the patches go out. False when there is no such terminal.
+    pub fn env(&self, id: &str, epoch: u64, rows_in_sja: bool) -> bool {
+        if let Some(t) = lock(&self.inner.state).terms.get_mut(id) {
+            t.rows_in_sja = rows_in_sja;
+        }
+        self.send(id, &In::Env { env_epoch: epoch })
     }
 
     /// Terminal ID draws for its view again: the next patch is a reset.

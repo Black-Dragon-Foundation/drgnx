@@ -2118,6 +2118,7 @@ mod tests {
             tz: String::new(),
             reduced_motion: false,
             attach: false,
+            rows_in_sja: false,
         }
     }
 

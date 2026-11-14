@@ -687,8 +687,7 @@ impl Front {
             // a terminal's view (`term:<id>`): its worker keeps the rows, versions and acknowledgements
             Params::ViewEnv(p) if crate::term::methods::view_id(&p.view).is_some() => {
                 let id = crate::term::methods::view_id(&p.view).unwrap_or_default();
-                let msg = drgnx_term::proto::In::Env { env_epoch: p.epoch };
-                Ok(json!(self.core.terms.send(id, &msg)))
+                Ok(json!(self.core.terms.env(id, p.epoch, p.rows_in_sja)))
             }
             Params::ViewResync(p) if crate::term::methods::view_id(&p.view).is_some() => {
                 let id = crate::term::methods::view_id(&p.view).unwrap_or_default();

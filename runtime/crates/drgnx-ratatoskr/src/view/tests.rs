@@ -51,6 +51,7 @@ fn env(class: &str, epoch: u64, width: u32) -> ViewEnv {
         tz: String::new(),
         reduced_motion: false,
         attach: false,
+        rows_in_sja: false,
     }
 }
 

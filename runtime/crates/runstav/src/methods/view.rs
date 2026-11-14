@@ -64,6 +64,10 @@ pub struct ViewEnv {
     /// `view/close` came) is dropped and starts again, so the new buffer gets the rows whole.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub attach: bool,
+    /// The editor holds this view's rows in Sjá: its patches come as a `view-model` line's `rows` (`{view, rows}`),
+    /// which Sjá takes whole. Only a terminal's view reads it so far.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rows_in_sja: bool,
 }
 
 /// `view/resync`: the editor's rows of (VIEW, CLASS) are not what the hub thinks (a patch's base it does not hold, an

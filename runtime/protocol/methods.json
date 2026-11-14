@@ -40095,6 +40095,10 @@
             "default": false,
             "type": "boolean"
           },
+          "rows_in_sja": {
+            "description": "The editor holds this view's rows in Sjá: its patches come as a `view-model` line's `rows` (`{view, rows}`),\nwhich Sjá takes whole. Only a terminal's view reads it so far.",
+            "type": "boolean"
+          },
           "scale": {
             "format": "float",
             "type": "number"

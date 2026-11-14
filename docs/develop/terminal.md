@@ -195,7 +195,9 @@ The editor talks to its terminals through the hub (`runstav/src/methods/term.rs`
 **Events**, to the connection of the editor session that opened the terminal: `term/exit {id, code, signal}`,
 `term/title`, `term/cwd`, `term/bell`, `term/notify`, `term/progress`, `term/clipboard-write`, `term/clipboard-read {id, req, primary}` and `term/prompt` (the OSC
 133 marks, for notify-on-command-finish). `term/detached {ids}` goes to every live session when terminals detach. The
-view's `view/env`, `view/ack` and `view/resync` go to the worker.
+view's `view/env`, `view/ack` and `view/resync` go to the worker. An env with `rows_in_sja: true` (the editor holds the
+rows in Sjá) sends the worker's patches on as the raw `view-model` line `{view, rows: PATCH}` instead of `view-patch`;
+the last env decides.
 
 Where this differs from the design's sketch: the view id is the hub's (`term:<id>`, so an adopted terminal keeps
 it), `class` names the display class its patches are for, `term/scroll` takes the row it counts from (the editor owns

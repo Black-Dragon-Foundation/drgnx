@@ -312,6 +312,51 @@ async fn hello_alone_keeps_terminals_where_they_draw() {
 }
 
 #[tokio::test]
+async fn an_editor_holding_rows_in_sja_gets_them_on_the_raw_line() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rec = record(tmp.path(), "aa", "s1");
+    let mut rx = fake_worker(&rec.socket, PROTO);
+    let (t, ev) = open(tmp.path()).await;
+    t.hello(3, "s1");
+    let patch = || Out::Patch {
+        patch: Box::new(drgnx_rows::Patch {
+            view: "term:aa".into(),
+            class: "gui".into(),
+            hub: 7,
+            base: 0,
+            version: 1,
+            env_epoch: 2,
+            ops: vec![],
+            images: vec![],
+            styles: vec![],
+            term: None,
+            model: None,
+        }),
+    };
+    // the env says where the rows are held; the worker hears the epoch either way
+    assert!(t.env("aa", 2, false));
+    t.on_line("aa", patch());
+    assert!(t.env("aa", 2, true));
+    t.on_line("aa", patch());
+    // the worker hears the hello's attach, then each env
+    while !matches!(next(&mut rx).await, In::Env { env_epoch: 2 }) {}
+    let got: Vec<(u64, String, Value)> = ev.0.lock().unwrap().clone();
+    let got: Vec<&(u64, String, Value)> = got
+        .iter()
+        .filter(|(_, e, _)| e.starts_with("view-"))
+        .collect();
+    assert_eq!(got.len(), 2, "{got:?}");
+    assert_eq!((got[0].0, got[0].1.as_str()), (3, "view-patch"));
+    assert_eq!(got[0].2["view"], "term:aa");
+    assert_eq!((got[1].0, got[1].1.as_str()), (3, "view-model"));
+    assert_eq!(got[1].2["view"], "term:aa");
+    assert_eq!(
+        got[1].2["rows"], got[0].2,
+        "the rows line carries the patch whole"
+    );
+}
+
+#[tokio::test]
 async fn clean_exit_closes_at_once() {
     let tmp = tempfile::tempdir().unwrap();
     let a = record(tmp.path(), "aa", "s1");
