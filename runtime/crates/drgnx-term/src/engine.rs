@@ -197,7 +197,7 @@ unsafe extern "C" fn on_clipboard_read(
     let text = s
         .ask
         .as_mut()
-        .and_then(|a| a.ask(r.location != 0, crate::ask::WAIT));
+        .and_then(|a| a.ask(r.location != 0));
     let Some(reply) = r.reply else {
         return;
     };
