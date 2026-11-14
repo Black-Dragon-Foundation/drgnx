@@ -14,7 +14,11 @@
                    (let ((ws (seq-filter (lambda (w) (eq (window-parameter w 'drgnx-role) 'dock)) (window-list nil 'nomini))))
                      (list :n (length ws)
                            :width (if ws (window-pixel-width (car ws)) 0)
-                           :headers (vconcat (mapcar #'window-header-line-height ws))
+                           :headers (vconcat (mapcar #'window-header-line-height
+                                                     (seq-remove (lambda (w) (window-parameter w 'drgnx-folded)) ws)))
+                           :folded (vconcat (mapcar (lambda (w) (with-current-buffer (window-buffer w)
+                                                                  (buffer-substring-no-properties (point-min) (pos-eol 1))))
+                                                    (seq-filter (lambda (w) (window-parameter w 'drgnx-folded)) ws)))
                            :scrollbars (vconcat (mapcar (lambda (w) (if (nth 2 (window-scroll-bars w)) t :false)) ws))
                            :selected-dock (if (memq (selected-window) ws) t :false))))"))
     (unwind-protect
@@ -23,7 +27,11 @@
           (let ((first (drgnx-ui-call sess probe)))
             (should (= (plist-get first :n) 3))                       ; Buffers, Explorer, Outline
             (should (eq (plist-get first :selected-dock) :false))
+            ;; open sections draw their title in a header line; the Outline starts folded to its header, drawn as its
+            ;; one-line buffer
             (should (seq-every-p (lambda (h) (> h 0)) (plist-get first :headers)))
+            (should (= (length (plist-get first :folded)) 1))
+            (should (seq-every-p (lambda (s) (string-match-p "[[:alpha:]]" s)) (plist-get first :folded)))
             (should (seq-every-p (lambda (v) (eq v :false)) (plist-get first :scrollbars)))
             (dotimes (_ 10)
               (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "C-b"))))
@@ -118,7 +126,10 @@
     (with-temp-file sh (insert "#!/bin/sh\necho hello\n"))
     (unwind-protect
         (progn
-          (drgnx-ui-call sess (format "(progn (drgnx-wb-show-sidebar) (drgnx-wb-focus-editor) (find-file %S)
+          ;; the Outline opened (it starts folded): this tests its rows, not its fold
+          (drgnx-ui-call sess (format "(progn (drgnx-wb-show-sidebar)
+                                             (when (drgnx-wb-section-collapsed-p 'outline) (drgnx-wb-toggle-section 'outline))
+                                             (drgnx-wb-focus-editor) (find-file %S)
                                              (drgnx-uitest--json (list :ok t)))" el))
           (drgnx-ui-measure sess nil)
           ;; a row of the Outline selected, as a click leaves it

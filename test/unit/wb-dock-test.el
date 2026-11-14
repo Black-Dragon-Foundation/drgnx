@@ -57,6 +57,22 @@ sidebar."
      (should (string-search "BOTTOM" (with-current-buffer (window-buffer (drgnx-wb-section-window 'bottom))
                                        (buffer-string)))))))
 
+(ert-deftest drgnx-wb/a-folded-section-outlasts-another-frame-folding-it ()
+  "Each frame's dock folds the same section into the same one-line buffer: folding it again (a second window's
+sidebar, a title change) redraws that buffer in place.  Killing it deleted the first frame's folded window, which is
+dedicated to it (drgnx-frames/a-new-window-is-editor-only lost frame 1's Outline)."
+  (drgnx-wb-test--with-sections
+   (let ((drgnx-wb--collapsed nil))
+     (setf (alist-get 'bottom drgnx-wb--sections)
+           (append (alist-get 'bottom drgnx-wb--sections) (list :collapsed t)))
+     (drgnx-wb-show-sidebar)
+     (let* ((w (drgnx-wb-section-window 'bottom)) (buf (window-buffer w)))
+       (should (window-parameter w 'drgnx-folded))
+       (drgnx-wb--collapsed-buffer 'bottom)            ; what another frame's fold does
+       (should (window-live-p w))
+       (should (eq (window-buffer w) buf))
+       (should (string-search "BOTTOM" (with-current-buffer buf (buffer-string))))))))
+
 (ert-deftest drgnx-wb/show-hide-keeps-the-width ()
   (drgnx-wb-test--with-sections
    (drgnx-wb-show-sidebar)

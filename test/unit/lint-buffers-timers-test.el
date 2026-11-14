@@ -88,7 +88,9 @@ wall-clock timer (`drgnx-lint-bt--timer-start-p')."
   ;; pass (`drgnx-view--spend') only clears the frame budget's deadline.  A view's model queue (`drgnx-view-model--arm')
   ;; hands a model no row patch named to Sjá a throttle later: it changes no buffer and moves no window.  A view's
   ;; trailing notice (`drgnx-view-nav--arm-notice') only tells the hub the selection: it follows nothing.
-  '(("wb/drgnx-explorer.el" drgnx-explorer--file-event drgnx-explorer--apply-file-events)
+  ;; The Explorer's held click (`drgnx-explorer--rows-hold') looks again while a mouse button is down, to let the
+  ;; hub's row patches in once it is up: it moves no window.
+  '(("wb/drgnx-explorer.el" drgnx-explorer--file-event drgnx-explorer--apply-file-events drgnx-explorer--rows-hold)
     ("wb/drgnx-monitors.el" drgnx-monitors--later)
     ("wb/drgnx-view.el" drgnx-view--arm drgnx-view--spend drgnx-view--draw-buffer drgnx-view-model--arm)
     ("wb/drgnx-view-nav.el" drgnx-view-nav--arm-notice))

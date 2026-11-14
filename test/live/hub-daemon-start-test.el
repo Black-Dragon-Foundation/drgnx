@@ -38,9 +38,10 @@
   (let* ((rbin (or (drgnx-test-ratatoskr-bin) (ert-skip "DRGNX_RATATOSKR_BIN is not set")))
          (root (file-name-as-directory (make-temp-file "drgnx-hub-daemon" t)))
          (process-environment (cons (concat "DRGNX_UI_STATE=" root "ui") process-environment))
-         ;; local noon, whatever the machine's zone: the catch-up rule makes a copy due at once
+         ;; local noon, whatever the machine's zone: the catch-up rule makes a copy due at once.  POSIX zone names have
+         ;; three letters at least: glibc reads "LT-10" as UTC, so the copy was due only after 03:00 UTC
          (tz (let ((east (- 12 (string-to-number (format-time-string "%H" nil t)))))
-               (format "LT%+d" (- (if (> east 12) (- east 24) east)))))
+               (format "LTZ%+d" (- (if (> east 12) (- east 24) east)))))
          (s nil) (sess nil))
     (unwind-protect
         (progn

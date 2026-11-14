@@ -548,11 +548,12 @@ foot.  Only UI-row buffers (`drgnx-wb-rows-setup'); a second call changes nothin
   (let ((title (plist-get (alist-get name drgnx-wb--sections) :title))) (if (functionp title) (funcall title) title)))
 
 (defun drgnx-wb--collapsed-buffer (name)
-  "The one-line buffer a folded section shows: its header, clickable (the window has no header line then).  Made
-anew each time, with the title as it is now."
+  "The one-line buffer a folded section shows: its header, clickable (the window has no header line then).  Drawn
+again each time, with the title as it is now, in place: every frame's dock folds the section into this one buffer, and
+killing it would delete the folded windows of the other frames (they are dedicated to it)."
   (let ((buf-name (format " *drgnx-section-%s*" name)))
-    (when (get-buffer buf-name) (kill-buffer buf-name))
     (with-current-buffer (get-buffer-create buf-name)
+      (let ((inhibit-read-only t)) (erase-buffer))
       (insert (drgnx-wb-section-header (drgnx-wb--section-title name) t))
       (setq-local cursor-type nil truncate-lines t mode-line-format nil header-line-format nil)
       (goto-char (point-min))
