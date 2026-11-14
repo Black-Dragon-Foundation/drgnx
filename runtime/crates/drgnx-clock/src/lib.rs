@@ -22,12 +22,34 @@ pub use manual::Manual;
 pub trait Provider: Send + Sync + 'static {
     /// A future that is ready once D has passed on this clock.
     fn sleep(&self, d: Duration) -> Pin<Box<dyn Future<Output = ()> + Send>>;
+    /// This clock's reading: time since an origin that stays the same for the clock's life (only differences count).
+    fn now(&self) -> Duration;
 }
 
 static PROVIDER: RwLock<Option<Arc<dyn Provider>>> = RwLock::new(None);
 
 tokio::task_local! {
     static LOCAL: Arc<dyn Provider>;
+}
+
+thread_local! {
+    static THREAD: std::cell::RefCell<Option<Arc<dyn Provider>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The clock of this thread until the guard drops: for a test on a current-thread runtime (`#[tokio::test]`), whose every
+/// task, spawned ones too, runs on its thread, so a clock no other test of the process sees reaches them all.
+pub fn on_this_thread(p: Arc<dyn Provider>) -> ThreadClock {
+    THREAD.with(|t| *t.borrow_mut() = Some(p));
+    ThreadClock(())
+}
+
+/// See [`on_this_thread`].
+pub struct ThreadClock(());
+
+impl Drop for ThreadClock {
+    fn drop(&mut self) {
+        THREAD.with(|t| *t.borrow_mut() = None);
+    }
 }
 
 /// F with P as its clock: only the timers F itself waits on (not the tasks it spawns: wrap those in `scope` too) read
@@ -50,6 +72,7 @@ fn current() -> Option<Arc<dyn Provider>> {
     LOCAL
         .try_with(Arc::clone)
         .ok()
+        .or_else(|| THREAD.with(|t| t.borrow().clone()))
         .or_else(|| PROVIDER.read().unwrap_or_else(|e| e.into_inner()).clone())
 }
 
@@ -58,6 +81,18 @@ pub async fn sleep(d: Duration) {
     match current() {
         Some(p) => p.sleep(d).await,
         None => tokio::time::sleep(d).await,
+    }
+}
+
+/// The installed clock's reading, else tokio's: only differences between two readings mean anything.
+pub fn now() -> Duration {
+    match current() {
+        Some(p) => p.now(),
+        None => {
+            static ORIGIN: std::sync::OnceLock<tokio::time::Instant> = std::sync::OnceLock::new();
+            tokio::time::Instant::now()
+                .saturating_duration_since(*ORIGIN.get_or_init(tokio::time::Instant::now))
+        }
     }
 }
 

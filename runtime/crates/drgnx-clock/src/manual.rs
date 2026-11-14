@@ -24,6 +24,12 @@ struct State {
 pub struct Manual(Arc<Mutex<State>>);
 
 impl Manual {
+    /// This clock as the clock of the current thread until the guard drops: for a `#[tokio::test]` (current-thread
+    /// runtime), where every task the test spawns runs on its thread.
+    pub fn on_this_thread(&self) -> crate::ThreadClock {
+        crate::on_this_thread(Arc::new(self.clone()))
+    }
+
     /// F with this clock as the clock of its timers.
     pub fn scope<F: Future>(&self, f: F) -> impl Future<Output = F::Output> + use<F> {
         crate::scope(Arc::new(self.clone()), f)
@@ -116,6 +122,10 @@ impl Drop for Sleep {
 }
 
 impl Provider for Manual {
+    fn now(&self) -> Duration {
+        self.elapsed()
+    }
+
     fn sleep(&self, d: Duration) -> Pin<Box<dyn Future<Output = ()> + Send>> {
         let due = self.elapsed() + d;
         Box::pin(Sleep {
@@ -180,6 +190,29 @@ mod tests {
         .await;
         c.advance(Duration::from_secs(10));
         assert_eq!(never.await.unwrap(), Err(crate::Elapsed));
+    }
+
+    /// On a current-thread test the spawned tasks read the clock too, and a second thread's timers do not.
+    #[tokio::test]
+    async fn the_thread_clock_reaches_spawned_tasks_and_no_other_thread() {
+        let c = Manual::default();
+        let _on = c.on_this_thread();
+        let t = tokio::spawn(crate::sleep(Duration::from_secs(3600)));
+        skuld::wait_until_async("the spawned sleeper waits", 10, || async {
+            (c.sleepers() == 1).then_some(())
+        })
+        .await;
+        let other = std::thread::spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .unwrap()
+                .block_on(crate::sleep(Duration::ZERO));
+        });
+        other.join().unwrap();
+        assert_eq!(c.sleepers(), 1);
+        c.advance(Duration::from_secs(3600));
+        t.await.unwrap();
     }
 
     /// Outside the scope a timer is tokio's: another test's clock never reaches it.

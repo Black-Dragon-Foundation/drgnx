@@ -487,6 +487,9 @@ mod virt {
                     None => Box::pin(tokio::time::sleep(d)),
                 }
             }
+            fn now(&self) -> Duration {
+                current().map_or_else(Duration::default, |v| v.elapsed())
+            }
         }
         drgnx_clock::install(Arc::new(Hub));
     }
