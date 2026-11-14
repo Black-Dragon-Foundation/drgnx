@@ -269,7 +269,7 @@ Returns (EXIT . OUTPUT), the output both streams' or, with STDOUT-ONLY, stdout's
     (let ((text (drgnx-ci-test--file f)))
       (skip-unless text)
       ;; a row's verdict is a line in the report, never the script's status (only a usage error exits non-zero)
-      (should (string-suffix-p "exit 0\n" (string-trim-right text "[ \t\n]*\n")))))
+      (should (string-suffix-p "exit 0" (string-trim-right text)))))
   (let ((tiers (drgnx-ci-test--yml "drgnx-tiers.yml")))
     (skip-unless tiers)
     ;; the Rust rows run only through test/timing-rust.sh in the timing job; the unit, gate-mode and GUI jobs set NO_TIMING
