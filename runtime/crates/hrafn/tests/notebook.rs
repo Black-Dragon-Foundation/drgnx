@@ -442,3 +442,54 @@ fn a_cells_outputs_are_read_back_as_the_file_has_them_and_as_they_were_set() {
         "the other cells are as the file had them"
     );
 }
+
+#[test]
+fn cells_are_rearranged_in_one_pass_keeping_the_bytes_of_those_that_stay() {
+    let mut nb = parse("minimal.ipynb");
+    let ids: Vec<String> = nb.cells().iter().map(|c| c.id.clone()).collect();
+    let before = nb
+        .cells()
+        .iter()
+        .map(|c| c.source.clone())
+        .collect::<Vec<_>>();
+    let mut mint = ids_fn();
+    // the last cell first, the first one edited, the middle one gone, a new one at the end, and a repeated id
+    let plan = vec![
+        (ids[2].clone(), Kind::Code, before[2].clone()),
+        (ids[0].clone(), Kind::Markdown, "# edited".to_string()),
+        ("brand-new".to_string(), Kind::Code, "x = 1".to_string()),
+        ("brand-new".to_string(), Kind::Raw, "again".to_string()),
+    ];
+    nb.rearrange(&plan, &mut mint);
+    let got: Vec<(String, Kind, String)> = nb
+        .cells()
+        .iter()
+        .map(|c| (c.id.clone(), c.kind, c.source.clone()))
+        .collect();
+    assert_eq!(got.len(), 4);
+    assert_eq!(
+        (got[0].0.as_str(), got[1].0.as_str(), got[2].0.as_str()),
+        (ids[2].as_str(), ids[0].as_str(), "brand-new")
+    );
+    assert_ne!(got[3].0, "brand-new", "a repeated id is made new");
+    assert_eq!(
+        (got[1].1, got[1].2.as_str(), got[3].1),
+        (Kind::Markdown, "# edited", Kind::Raw)
+    );
+    // what is written reads back as the same cells
+    let again = Notebook::parse(nb.render(), &mut ids_fn()).unwrap();
+    assert_eq!(
+        again
+            .cells()
+            .iter()
+            .map(|c| c.id.clone())
+            .collect::<Vec<_>>(),
+        got.iter().map(|c| c.0.clone()).collect::<Vec<_>>()
+    );
+    // the cell that stayed is as the file had it
+    assert!(nb.render().contains(&format!("\"id\": \"{}\"", ids[2])));
+}
+
+fn ids_fn() -> impl FnMut() -> String {
+    ids("r")
+}
