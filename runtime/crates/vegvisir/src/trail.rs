@@ -312,7 +312,7 @@ fn build(
         }
         let end = b.pos();
         b.face(from, end, "drgnx-work-meta")
-            .face(0, end, "drgnx-work-card");
+            .face(0, end, "drgnx-work-pane");
         b.prop(0, end, "drgnx-work-step", Value::from(s.id)).prop(
             0,
             end,
@@ -331,7 +331,7 @@ fn build(
                 .stop(right)
                 .push(&zone.time(end), None);
             let to = b.pos();
-            b.face(0, to, "drgnx-work-card");
+            b.face(0, to, "drgnx-work-pane");
             out.push(b.finish());
         }
     }
@@ -405,7 +405,7 @@ fn conclusion_rows(
                     "drgnx-card-sel-bottom"
                 },
             )
-            .face(0, end, "drgnx-work-card")
+            .face(0, end, "drgnx-work-pane")
             .prop(0, end, "drgnx-work-conclusion", Value::from(c.n))
             .prop(
                 0,

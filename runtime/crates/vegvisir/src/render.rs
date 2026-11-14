@@ -27,7 +27,8 @@ pub const MARGIN: u32 = 84;
 /// The six layers' labels, sentence case; the last is short for "Files and machines".
 pub const LAYER_NAMES: [&str; 6] = ["You asked", "Specs", "Plans", "Agents", "Branches", "Files"];
 /// The font role card text and labels are measured in: the UI text face (`drgnx-ui-text`), which they are drawn in.
-const ROLE: &str = "text";
+/// The map's cards and chips are the caption size, 12 px (work-space-dark.html `.acardm`), its role in the editor.
+const ROLE: &str = "caption";
 
 /// Whether the map is drawn as an outline: by the layout (a terminal, or a layout that does not fit), or the user's
 /// `O` either way.

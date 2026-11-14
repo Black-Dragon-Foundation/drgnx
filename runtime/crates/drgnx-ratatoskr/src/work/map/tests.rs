@@ -700,7 +700,8 @@ fn detail_rows_say_the_edges() {
             text.iter()
                 .any(|t| t.ends_with(&format!("\t{to} — came from this"))
                 // an agent's branch is the Touches' first line, its name alone
-                || *t == format!("branch\t{to}")),
+                || *t == format!("branch\t{to}")
+                || t.starts_with(&format!("branch\t{to} · worktree "))),
             "{to} in {text:?}"
         );
     }
@@ -1257,20 +1258,20 @@ fn detail_rows_are_the_mockups_tile() {
     assert!(faces_of(open).contains(&"drgnx-button"), "{open:?}");
     assert!(faces_of(open).contains(&"drgnx-keycap"), "{open:?}");
     for r in &rows {
-        assert!(faces_of(r).contains(&"drgnx-work-card"), "{r:?}");
+        assert!(faces_of(r).contains(&"drgnx-work-pane"), "{r:?}");
     }
 }
 
-/// [D] The map's text is the UI font (`drgnx-work-card`): the card line's height and its fit are those of the
-/// editor's `text` role (the UI text face), not of `ui` (the buffer's default, the code font) that the rows used to be
+/// [D] The map's text is the UI font at the caption size (`drgnx-work-card`): the card line's height and its fit are those of the
+/// editor's `caption` role (the UI caption face), not of `ui` (the buffer's default, the code font) that the rows used to be
 /// drawn in.
 #[test]
-fn the_card_line_is_measured_in_the_text_role() {
+fn the_card_line_is_measured_in_the_caption_role() {
     let env: ViewEnv = serde_json::from_value(json!({
         "view": "m", "class": "gui-1", "epoch": 1, "display": "gui", "scale": 1.0, "cell": [8, 16],
         "width_px": 1000,
         "fonts": [["ui", null, 0, 13.0, 11.0, 3.0, 8.0, 6.0],
-                  ["text", null, 0, 12.0, 12.0, 4.0, 6.5, 3.0]]
+                  ["caption", null, 0, 12.0, 12.0, 4.0, 6.5, 3.0]]
     }))
     .expect("an env");
     let palette = Palette(Vec::new());
@@ -1311,4 +1312,32 @@ fn the_detail_subtitle_wraps_by_word_in_the_tile() {
         roomy[1]
     );
     assert_ne!(roomy[2].key, "head/1.1");
+}
+
+/// [D] An agent's Touches names its branch with its worktree, its machine with its slot and the file its branch
+/// changed most with the change (work-space-dark.html, the Detail: `rp-df-hub · worktree rp-df-hub`, `desktop · slot 3`,
+/// `session.rs +40 −3`), in that order, reads after them.
+#[test]
+fn an_agents_touches_are_the_mockups_lines_in_order() {
+    let mut core = vegvisir::Core::new();
+    for e in vegvisir::fixture::scene() {
+        core.step(e);
+    }
+    let lines = detail::lines(core.model(), Some(&ItemId("agent:a1".into())), 0);
+    let touches: Vec<&str> = lines
+        .iter()
+        .filter(|l| l.0 == "touches")
+        .map(|l| l.1.as_str())
+        .collect();
+    assert_eq!(touches[0], "Touches ↓");
+    assert_eq!(touches[1], "branch\trp-df-hub · worktree rp-df-hub");
+    assert_eq!(touches[2], "machine\tdesktop · slot 3");
+    assert_eq!(touches[3], "edits\tsession.rs +40 −3");
+    assert_eq!(touches[4], "reads\t14 files ▸");
+    let heads: Vec<&str> = lines
+        .iter()
+        .filter(|l| l.1.ends_with('↑') || l.1.ends_with('↓') || l.1 == "Conclusions")
+        .map(|l| l.1.as_str())
+        .collect();
+    assert_eq!(heads, ["Why ↑", "Touches ↓", "Conclusions"]);
 }

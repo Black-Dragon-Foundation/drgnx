@@ -535,6 +535,10 @@ a map off the rows path or without a hub draws a placeholder, and a shot of that
 (declare-function drgnx-layouts-current "drgnx-layouts")
 (declare-function drgnx-layouts-apply "drgnx-layouts")
 (defvar drgnx-work-space--panel-trail)
+(defvar drgnx-notice--needs-you)
+(defvar drgnx-topline-agents-function)
+(declare-function drgnx-work-map--needs-you-count "drgnx-work-map")
+(declare-function drgnx-work-map--team "drgnx-work-map")
 
 (defun drgnx-look-scene--work-selected (theme)
   "The Work map of work-space-*.html in THEME: the first agent selected, its chain lit and its detail in the side panel.
@@ -551,6 +555,12 @@ Draw it without the other scenes (`DRGNX_LOOK_ONLY=work-space'): the hub then se
                                        (lambda () (with-current-buffer map
                                                     (member "agent:a1" (drgnx-look-scene--row-ids "agent:")))))
         (error "The map has no seeded agent: is it the `map' seed (DRGNX_LOOK_ONLY=work-space)?"))
+      ;; the title row's chips (`3 need you', `4 agents') count what the map's model holds, as the notice model and the
+      ;; agents module would in a session that ran these agents
+      (with-current-buffer map
+        (let ((need (drgnx-work-map--needs-you-count)) (agents (length (drgnx-work-map--team))))
+          (setq drgnx-notice--needs-you need
+                drgnx-topline-agents-function (lambda () agents))))
       (let ((win (get-buffer-window map)))
         (with-selected-window win (drgnx-view-nav 'select "agent:a1")))
       (drgnx-look-scene--until 15 "the side panel of the selected agent (Why, Touches)"

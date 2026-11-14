@@ -684,7 +684,8 @@
         "reads": 1,
         "spend": "≈$3.10",
         "state": "running",
-        "task": "vegvisir: model and layout"
+        "task": "vegvisir: model and layout",
+        "worktree": "as2-map"
       },
       "id": "agent:s01",
       "kind": "agent",
@@ -747,7 +748,8 @@
         "reads": 0,
         "spend": "≈$1.20",
         "state": "running",
-        "task": "The migration and hub-only records"
+        "task": "The migration and hub-only records",
+        "worktree": "as2-data"
       },
       "id": "agent:s02",
       "kind": "agent",
@@ -772,7 +774,8 @@
         "reads": 0,
         "spend": "≈$0.90",
         "state": "running",
-        "task": "Worktree bases, machines, shell reads"
+        "task": "Worktree bases, machines, shell reads",
+        "worktree": "as2-sources"
       },
       "id": "agent:s03",
       "kind": "agent",
@@ -797,7 +800,8 @@
         "reads": 0,
         "spend": "≈$0.70",
         "state": "needs-you",
-        "task": "Targeted sends and per-session entries"
+        "task": "Targeted sends and per-session entries",
+        "worktree": "as2-wire"
       },
       "id": "agent:s04",
       "kind": "agent",
@@ -822,7 +826,8 @@
         "reads": 0,
         "spend": "≈$1.05",
         "state": "running",
-        "task": "Step detail and conclusions"
+        "task": "Step detail and conclusions",
+        "worktree": "as2-step"
       },
       "id": "agent:s05",
       "kind": "agent",
@@ -847,7 +852,8 @@
         "reads": 0,
         "spend": "≈$2.40",
         "state": "waiting",
-        "task": "Spike S4: the tracing cost"
+        "task": "Spike S4: the tracing cost",
+        "worktree": "as2-s4"
       },
       "id": "agent:s06",
       "kind": "agent",
@@ -872,7 +878,8 @@
         "reads": 0,
         "spend": "≈$0.60",
         "state": "running",
-        "task": "Spike S1: geometry and rasters"
+        "task": "Spike S1: geometry and rasters",
+        "worktree": "as2-s1"
       },
       "id": "agent:s07",
       "kind": "agent",
@@ -899,7 +906,8 @@
         "reads": 0,
         "spend": "≈$0.80",
         "state": "review",
-        "task": "Edited files and hunks, the interim"
+        "task": "Edited files and hunks, the interim",
+        "worktree": "as2-edits"
       },
       "id": "agent:s08",
       "kind": "agent",
@@ -924,7 +932,8 @@
         "reads": 0,
         "spend": "≈$2.80",
         "state": "running",
-        "task": "The presence model and the current ask"
+        "task": "The presence model and the current ask",
+        "worktree": "as2-core"
       },
       "id": "agent:s09",
       "kind": "agent",
@@ -948,7 +957,8 @@
         "model": "Opus",
         "reads": 0,
         "state": "queued",
-        "task": "The trace supervisor"
+        "task": "The trace supervisor",
+        "worktree": "as2-trace"
       },
       "id": "agent:s10",
       "kind": "agent",
@@ -975,7 +985,8 @@
         "reads": 0,
         "spend": "≈$4.20",
         "state": "running",
-        "task": "Rounded scroll layers"
+        "task": "Rounded scroll layers",
+        "worktree": "gl-mask"
       },
       "id": "agent:s11",
       "kind": "agent",
@@ -1018,7 +1029,8 @@
         "reads": 1,
         "spend": "≈$3.60",
         "state": "running",
-        "task": "The layout leg"
+        "task": "The layout leg",
+        "worktree": "gl-leg"
       },
       "id": "agent:s12",
       "kind": "agent",
@@ -1043,7 +1055,8 @@
         "reads": 0,
         "spend": "≈$0.95",
         "state": "running",
-        "task": "Cards and rings"
+        "task": "Cards and rings",
+        "worktree": "gl-cards"
       },
       "id": "agent:s13",
       "kind": "agent",
@@ -1068,7 +1081,8 @@
         "reads": 0,
         "spend": "≈$1.10",
         "state": "running",
-        "task": "Scroll layers promoted"
+        "task": "Scroll layers promoted",
+        "worktree": "gl-scroll"
       },
       "id": "agent:s14",
       "kind": "agent",
@@ -1093,7 +1107,8 @@
         "reads": 0,
         "spend": "≈$1.40",
         "state": "stalled",
-        "task": "The pacer"
+        "task": "The pacer",
+        "worktree": "gl-pacer"
       },
       "id": "agent:s15",
       "kind": "agent",
@@ -1118,7 +1133,8 @@
         "reads": 0,
         "spend": "≈$0.75",
         "state": "running",
-        "task": "Native shell reconnect"
+        "task": "Native shell reconnect",
+        "worktree": "gl-shell"
       },
       "id": "agent:s16",
       "kind": "agent",
@@ -1143,7 +1159,8 @@
         "reads": 0,
         "spend": "≈$0.50",
         "state": "paused",
-        "task": "Font fallback"
+        "task": "Font fallback",
+        "worktree": "gl-fonts"
       },
       "id": "agent:s17",
       "kind": "agent",
@@ -1170,7 +1187,8 @@
         "reads": 0,
         "spend": "≈$5.10",
         "state": "running",
-        "task": "SESSION-END-LOSES-STARTED-1"
+        "task": "SESSION-END-LOSES-STARTED-1",
+        "worktree": "rp-core"
       },
       "id": "agent:s18",
       "kind": "agent",
@@ -1213,7 +1231,8 @@
         "reads": 0,
         "spend": "≈$1.30",
         "state": "running",
-        "task": "Hub client core restarts"
+        "task": "Hub client core restarts",
+        "worktree": "rp-hub"
       },
       "id": "agent:s19",
       "kind": "agent",
@@ -1238,7 +1257,8 @@
         "reads": 0,
         "spend": "≈$0.85",
         "state": "needs-you",
-        "task": "The det sweep"
+        "task": "The det sweep",
+        "worktree": "rp-sweep"
       },
       "id": "agent:s20",
       "kind": "agent",
@@ -1263,7 +1283,8 @@
         "reads": 0,
         "spend": "≈$0.65",
         "state": "running",
-        "task": "Module teardown rows"
+        "task": "Module teardown rows",
+        "worktree": "rp-mods"
       },
       "id": "agent:s21",
       "kind": "agent",
@@ -1290,7 +1311,8 @@
         "reads": 0,
         "spend": "≈$0.55",
         "state": "finished",
-        "task": "Install rows"
+        "task": "Install rows",
+        "worktree": "rp-install"
       },
       "id": "agent:s22",
       "kind": "agent",
@@ -1315,7 +1337,8 @@
         "reads": 0,
         "spend": "≈$1.90",
         "state": "needs-you",
-        "task": "Write the jobq plan"
+        "task": "Write the jobq plan",
+        "worktree": "jobq-plan"
       },
       "id": "agent:s23",
       "kind": "agent",
@@ -1341,7 +1364,8 @@
         "reads": 0,
         "spend": "≈$0.40",
         "state": "running",
-        "task": "The slot reporter"
+        "task": "The slot reporter",
+        "worktree": "jobq-report"
       },
       "id": "agent:s24",
       "kind": "agent",
@@ -1365,7 +1389,8 @@
         "model": "Opus",
         "reads": 0,
         "spend": "≈$6.30",
-        "state": "waiting"
+        "state": "waiting",
+        "worktree": "docs-brainstorm"
       },
       "id": "agent:s25",
       "kind": "agent",
@@ -1389,7 +1414,8 @@
         "model": "Sonnet",
         "reads": 0,
         "spend": "≈$0.20",
-        "state": "running"
+        "state": "running",
+        "worktree": "docs-chat"
       },
       "id": "agent:s26",
       "kind": "agent",

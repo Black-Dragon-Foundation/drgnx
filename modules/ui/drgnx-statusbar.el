@@ -65,6 +65,7 @@
 (defvar drgnx-statusbar--space)
 (defvar drgnx-statusbar--pad)
 (defvar drgnx-statusbar-other)
+(defvar drgnx-statusbar-other-right)
 (defvar vc-mode)
 (defvar flymake-mode)
 (defvar eglot--managed-mode)
@@ -706,8 +707,9 @@ COMPACT: only the segments of `drgnx-statusbar-compact' (on the right); `quiet':
              (left (cond ((eq compact 'quiet) (funcall texts drgnx-statusbar-quiet))
                          ((eq compact 'other) (funcall texts drgnx-statusbar-other))
                          ((not compact) (funcall texts drgnx-statusbar-left))))
-             (right (unless (memq compact '(quiet other))
-                      (funcall texts (if compact drgnx-statusbar-compact drgnx-statusbar-right))))
+             (right (cond ((eq compact 'quiet) nil)
+                          ((eq compact 'other) (funcall texts drgnx-statusbar-other-right))
+                          (t (funcall texts (if compact drgnx-statusbar-compact drgnx-statusbar-right)))))
              (fitted (drgnx-statusbar--fit left right (max width 0))))
         (setq left (car fitted) right (cdr fitted))
         (let* ((l (drgnx-statusbar--join left drgnx-statusbar--left-sep))
@@ -771,6 +773,11 @@ Help's and the other read-only buffers that are not files, and Dired's."
 (defcustom drgnx-statusbar-other '(mode misc)
   "The segments of the bar of the buffers of `drgnx-statusbar-other-modes', on the left, in order (nothing on the
 right: they have no line and column).  `mode' is the buffer's `mode-name'."
+  :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
+
+(defcustom drgnx-statusbar-other-right nil
+  "The segments on the right of the bar of the buffers of `drgnx-statusbar-other-modes', in order: none unless a mode
+asks (the Work map's view names: `Work · Map · 4 agents').  A buffer sets it locally."
   :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
 
 (defun drgnx-statusbar--other-p ()

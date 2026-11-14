@@ -673,12 +673,12 @@ fn view_rows(
     (rows, images)
 }
 
-/// The renderer's view of ENV: a card line's height and ascent from the `ui` font (else the cell's, 80 % up).
+/// The renderer's view of ENV: a card line's height and ascent from the `caption` font (else the cell's, 80 % up).
 pub(crate) fn render_env<'a>(env: &'a ViewEnv, palette: &'a Palette) -> render::Env<'a> {
     let line = env
         .fonts
         .iter()
-        .find(|f| f.0 == "text")
+        .find(|f| f.0 == "caption")
         .map(|f| (f.4 + f.5, f.4))
         .filter(|(h, _)| *h > 0.0)
         .map_or((env.cell.1, 80), |(h, a)| {

@@ -563,6 +563,12 @@ face under a class. The faces: `drgnx-work-band`, the decoration faces (`drgnx-c
   order branch, machine ("desktop · slot 3"), edits (the file its branch changed most), reads, then the rest. A trail
   step keeps its verb (`read PATH`, `web TITLE — HOST`, `edit PATH +P −M`, `job PATH · WHERE`), paths in the link
   colour, a thought's text muted and italic; durations read `0.3 s`; a finding's card keeps its keys line.
+- **The Work map's bars.** The map buffer sets `drgnx-statusbar-other` (`branch jobs work-agents work-needs-you`) and
+  `drgnx-statusbar-other-right` (`work-lens`) locally; the three `work-*` segments read the map's model (`team`,
+  `needs-you` lists, the `overlaps` field). A card is the caption size (`drgnx-work-card`, 12 px, measured in the
+  `caption` role); the Detail island and the trail are the UI text size (`drgnx-work-pane`). An agent's Detail names
+  its worktree on the branch line (`Fields::worktree`). The look scene gives the title row's `N need you` and
+  `N agents` chips the counts of the map's model (`drgnx-look-scene--work-selected`).
 - **The lens bar's right** (`drgnx-work-lens--controls`): the grip (drawn; the tile layout's drag is not wired), maximise
   (`drgnx-work-lens-maximize`: hides the Detail island and the trail, again shows them) and ⋯ (shown while the bar is hovered; its menu is the four lenses and the keys sheet). The lens
   shown is a pill in a ring (the themes give `drgnx-work-lens-current` its box).

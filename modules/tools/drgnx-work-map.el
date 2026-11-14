@@ -87,7 +87,14 @@ key profiles bind them (`drgnx-command-define' with this map); each view's own k
   "The Work space's map: layers of asks, specs, plans, agents, branches and files, and the edges between them."
   (setq-local drgnx-view-nav-notice-method "work/map/set")  ; the rows path tells the hub the selection, trailing
   (setq-local truncate-lines t cursor-type nil drgnx-chrome-own-tab-line t
-              tab-line-format '("" drgnx-work-map--lens)))
+              tab-line-format '("" drgnx-work-map--lens)
+              ;; the status line of work-space-dark.html: the branch, the jobs, the agents' dots, what needs you; at the
+              ;; right the lens and the counts
+              drgnx-statusbar-other '(branch jobs work-agents work-needs-you)
+              drgnx-statusbar-other-right '(work-lens)))
+
+(defvar drgnx-statusbar-other)
+(defvar drgnx-statusbar-other-right)
 
 (defconst drgnx-work-map--margin 84 "The width, in logical pixels, of the layer labels' margin.")
 
@@ -320,6 +327,42 @@ argument): without moving focus."
     (nidhogg-view-set h 'form (if (eq drgnx-work-map--outline t) "outline" "graph"))
     ;; the hub draws the form asked for (kept for the next subscription)
     (drgnx-work-client-set drgnx-work-space--view :outline (if (eq drgnx-work-map--outline t) "on" "off"))))
+
+;;;; The status line: the agents, what needs you, the lens and its counts
+
+(defun drgnx-work-map--team ()
+  "The ids of the map's agents (the model's team list), or nil."
+  (when-let* ((h (drgnx-work-map--sja)))
+    (append (nidhogg-view-get h 'list "team") nil)))
+
+(defun drgnx-work-map--needs-you-count ()
+  "How many things the map's model says need you."
+  (if-let* ((h (drgnx-work-map--sja))) (length (nidhogg-view-get h 'list "needs-you")) 0))
+
+(defun drgnx-work-map--seg-agents ()
+  "The agents' dots, each in its colour, with its model: `● Opus ● Sonnet' (nil without agents)."
+  (when-let* ((h (drgnx-work-map--sja)) (team (drgnx-work-map--team)))
+    (let ((n 0))
+      (mapconcat
+       (lambda (id)
+         (let ((model (car (split-string (or (nidhogg-view-get h 'field "label" id) "") " · "))))
+           (setq n (1+ n))
+           (concat (propertize "●" 'face (intern (format "drgnx-work-agent-%d" (1+ (% (1- n) 6)))))
+                   " " model)))
+       team " "))))
+
+(defun drgnx-work-map--seg-needs-you ()
+  "`● 3 need you' in the attention colour, while the model says something does."
+  (let ((n (drgnx-work-map--needs-you-count)))
+    (when (> n 0) (propertize (format "● %d need you" n) 'face 'drgnx-statusbar-waiting))))
+
+(defun drgnx-work-map--seg-lens ()
+  "The view and its counts at the status line's right: `Work · Map · 4 agents · 1 overlap'."
+  (when-let* ((h (drgnx-work-map--sja)) (team (drgnx-work-map--team)))
+    (let* ((pairs (/ (apply #'+ (mapcar (lambda (id) (length (split-string (or (nidhogg-view-get h 'field "overlaps" id) "")))) team)) 2))
+           (agents (length team)))
+      (concat "Work · Map · " (format "%d %s" agents (if (= agents 1) "agent" "agents"))
+              (when (> pairs 0) (format " · %d %s" pairs (if (= pairs 1) "overlap" "overlaps")))))))
 
 ;;;; The lens: the tab line
 

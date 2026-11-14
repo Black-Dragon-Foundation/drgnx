@@ -120,6 +120,20 @@ segment showing its `mode-name'; it does not show the stock mode line."
           (should (string-match-p "Special" (substring-no-properties bar)))
           (should (eq 'mode (get-text-property (string-match "Special" bar) 'drgnx-statusbar-segment bar))))))))
 
+(ert-deftest drgnx-look-bars/a-special-buffer-may-have-segments-on-the-right ()
+  "Pattern D: the bar of a special buffer has nothing on the right unless `drgnx-statusbar-other-right' names segments
+\(the Work map's: `Work · Map · 4 agents')."
+  (drgnx-statusbar-test--with
+    (drgnx-statusbar-define-segment 'a :fn (lambda () "left-seg"))
+    (drgnx-statusbar-define-segment 'b :fn (lambda () "right-seg"))
+    (let ((drgnx-statusbar-other '(a)))
+      (drgnx-statusbar-test--in-buffer 'special-mode
+        (should-not (string-match-p "right-seg" (substring-no-properties (drgnx-statusbar-mode-line))))
+        (setq-local drgnx-statusbar-other-right '(b))
+        (drgnx-statusbar--bump)
+        (let ((bar (substring-no-properties (drgnx-statusbar-mode-line))))
+          (should (string-match-p "left-seg.*right-seg" bar)))))))
+
 (defvar drgnx-notice--needs-you)
 (defvar drgnx-topline-agents-function)
 

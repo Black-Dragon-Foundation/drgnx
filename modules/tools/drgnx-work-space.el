@@ -126,9 +126,11 @@ it (a notes repository with the code repositories inside it)."
 ;;;; Faces: they inherit the look's semantic faces (core/drgnx-faces.el)
 
 (defface drgnx-work-dim '((t :inherit drgnx-text-muted)) "Items off the selection's chain." :group 'drgnx-work-space)
-(defface drgnx-work-card '((t :inherit drgnx-ui-text)) "A card's text: the UI font, under its box face and its runs' own faces."
+(defface drgnx-work-card '((t :inherit drgnx-ui-caption)) "A map card's text: the UI font at the caption size (12 px), under its box face and its runs' own faces."
   :group 'drgnx-work-space)
-(defface drgnx-work-title '((t :inherit drgnx-ui-heading)) "An agent card's name line." :group 'drgnx-work-space)
+(defface drgnx-work-pane '((t :inherit drgnx-ui-text)) "The text of the Detail island and the trail: the UI font."
+  :group 'drgnx-work-space)
+(defface drgnx-work-title '((t :inherit drgnx-ui-caption :weight semibold)) "An agent card's name line." :group 'drgnx-work-space)
 (defface drgnx-work-meta '((t :inherit drgnx-code-small)) "An agent card's line of minutes, spend and progress: the code font (it names no box: a card's box runs on)."
   :group 'drgnx-work-space)
 (defface drgnx-work-selected '((t :inherit drgnx-selected)) "The selected item." :group 'drgnx-work-space)
@@ -523,6 +525,11 @@ windows; the commands."
                         :command #'drgnx-work-take-wheel :map 'drgnx-work-live-file-mode-map
                         :doc "Pause the agent that is editing here and make this file editable; saving tells the agent")
   (drgnx-state-subscribe 'windows-changed #'drgnx-work-space--windows-changed)
+  (when (fboundp 'drgnx-statusbar-define-segment)
+    (drgnx-statusbar-define-segment 'work-agents :fn #'drgnx-work-map--seg-agents :help "The agents on the map")
+    (drgnx-statusbar-define-segment 'work-needs-you :fn #'drgnx-work-map--seg-needs-you :click #'drgnx-work-map-needs-you-here-next
+                                    :help "What needs you; click for the next")
+    (drgnx-statusbar-define-segment 'work-lens :fn #'drgnx-work-map--seg-lens :help "The view and its counts"))
   (drgnx-history-mode 1)                ; the editor's side of the edit history (stays off without Nidhogg's change hook)
   (when (fboundp 'drgnx-wb-place) (drgnx-wb-place 'drgnx-work-map-mode 'editor))
   (when (fboundp 'drgnx-wb-place) (drgnx-wb-place 'drgnx-work-files-mode 'popup))

@@ -280,6 +280,9 @@ pub struct Fields {
     /// A file's `+/−` on the branch that changes it most.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub change: Option<(u32, u32)>,
+    /// An agent's worktree, by its name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<String>,
     /// An agent's reads, counted.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reads: Option<u32>,
@@ -629,6 +632,11 @@ impl Model {
                 fields.minutes = Some(f.minute.saturating_sub(s.fact.since));
                 fields.model = (!s.fact.model.is_empty()).then(|| s.fact.model.clone());
                 fields.spend = s.fact.spend.clone();
+                fields.worktree = s
+                    .fact
+                    .worktree
+                    .as_deref()
+                    .map(|w| w.rsplit('/').next().unwrap_or(w).to_owned());
                 fields.job = s.fact.job.clone();
                 fields.context = s.fact.context;
                 let task = s.task.or_else(|| {

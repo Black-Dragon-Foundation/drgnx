@@ -124,7 +124,11 @@ fn touches(m: &Model, it: &Item) -> Vec<String> {
         .find(|b| word(&b.kind) == "branch");
     out.extend(branch.map(|l| {
         let name = l.split_once('\t').map_or("", |(_, v)| v);
-        format!("branch\t{}", name.split(" — ").next().unwrap_or(name))
+        let name = name.split(" — ").next().unwrap_or(name);
+        match &f.worktree {
+            Some(w) => format!("branch\t{name} · worktree {w}"),
+            None => format!("branch\t{name}"),
+        }
     }));
     // "desktop · slot 3": the machine, and the slot its branch's tag ends in
     let machine = take(&mut edges, "machine");
@@ -410,7 +414,7 @@ pub(crate) fn rows(lines: &[Line], scale: f32, width_px: u32, m: &dyn Measure) -
                         let mut b = RowBuilder::new(key);
                         b.push(&line, Some("drgnx-text-muted"));
                         let end = b.pos();
-                        b.face(0, end, "drgnx-work-card");
+                        b.face(0, end, "drgnx-work-pane");
                         b.finish()
                     })
                     .collect::<Vec<_>>();
@@ -459,6 +463,13 @@ pub(crate) fn rows(lines: &[Line], scale: f32, width_px: u32, m: &dyn Measure) -
                             );
                     }
                 }
+                ("touches", Some(("branch", value))) if value.contains(" · worktree ") => {
+                    // the branch, then its worktree muted
+                    let (name, rest) = value.split_once(" · worktree ").unwrap_or((value, ""));
+                    b.push("branch", Some("drgnx-text-muted")).stop(key_px);
+                    b.push(name, Some("drgnx-work-pane"))
+                        .push(&format!(" · worktree {rest}"), Some("drgnx-text-muted"));
+                }
                 ("touches", Some(("edits", value))) => {
                     // `NAME +P −M`: the file in the code font, its change in the added and removed colours
                     b.push("edits", Some("drgnx-text-muted")).stop(key_px);
@@ -478,7 +489,7 @@ pub(crate) fn rows(lines: &[Line], scale: f32, width_px: u32, m: &dyn Measure) -
                     let face = match (s, key) {
                         ("why", _) => "drgnx-accent",
                         (_, "overlap") => "drgnx-work-overlap",
-                        _ => "drgnx-work-card",
+                        _ => "drgnx-work-pane",
                     };
                     b.push(value, Some(face));
                 }
@@ -496,7 +507,7 @@ pub(crate) fn rows(lines: &[Line], scale: f32, width_px: u32, m: &dyn Measure) -
                 }
             }
             let end = b.pos();
-            b.face(0, end, "drgnx-work-card");
+            b.face(0, end, "drgnx-work-pane");
             if let Some(id) = job {
                 b.prop(0, end, "drgnx-work-job", Value::String(id.clone()));
             }

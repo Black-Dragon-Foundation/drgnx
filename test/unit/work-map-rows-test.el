@@ -431,7 +431,9 @@ asks the hub nothing and its keys say the same."
   ;; `ui', the buffer's default (the code font)
   (require 'drgnx-view-env)
   (should (eq (cdr (assq 'text drgnx-view-env-roles)) 'drgnx-ui-text))
-  (should (eq (cdr (assq 'ui drgnx-view-env-roles)) 'default)))
+  (should (eq (cdr (assq 'ui drgnx-view-env-roles)) 'default))
+  ;; the map's cards and chips are 12 px, the caption role (work-space-dark.html `.acardm')
+  (should (eq (cdr (assq 'caption drgnx-view-env-roles)) 'drgnx-ui-caption)))
 
 (defun drgnx-work-map-rows-test--echoes (s)
   "The distinct `help-echo' texts in string S."
@@ -482,3 +484,24 @@ asks the hub nothing and its keys say the same."
         (should (equal (face-attribute 'drgnx-work-step-number :foreground nil t)
                        (face-attribute 'drgnx-chip-solid :foreground nil t))))
     (disable-theme 'drgnx-dark)))
+
+(ert-deftest drgnx-work-map-rows/the-status-line-names-the-agents-what-needs-you-and-the-view ()
+  ;; work-space-dark.html `.status': `● Opus ● Sonnet', `● 3 need you' on the left, `Work · Map · 2 agents · 1 overlap' at
+  ;; the right, all from the map's model
+  (cl-letf (((symbol-function 'drgnx-work-map--sja) (lambda () 'h))
+            ((symbol-function 'nidhogg-view-get)
+             (lambda (_h what name &optional id)
+               (pcase (list what name)
+                 ('(list "team") ["agent:a1" "agent:a2"])
+                 ('(list "needs-you") ["x" "y" "z"])
+                 ('(field "label") (if (equal id "agent:a1") "Opus · hub rows" "Sonnet · fx-sess"))
+                 ('(field "overlaps") (if (equal id "agent:a1") "agent:a2" "agent:a1"))))))
+    (should (equal (substring-no-properties (drgnx-work-map--seg-agents)) "● Opus ● Sonnet"))
+    (should (eq (get-text-property 0 'face (drgnx-work-map--seg-agents)) 'drgnx-work-agent-1))
+    (should (equal (substring-no-properties (drgnx-work-map--seg-needs-you)) "● 3 need you"))
+    (should (equal (drgnx-work-map--seg-lens) "Work · Map · 2 agents · 1 overlap")))
+  ;; the map's buffers get the bar of the Work view: segments on both sides
+  (with-temp-buffer
+    (drgnx-work-map-mode)
+    (should (memq 'work-agents drgnx-statusbar-other))
+    (should (equal drgnx-statusbar-other-right '(work-lens)))))

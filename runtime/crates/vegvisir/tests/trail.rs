@@ -268,7 +268,7 @@ fn trail_rows_are_ui_text_with_lucide_icons_and_a_finding_card() {
     }
     let s = rows.iter().find(|r| r.key == "step:1").expect("the step");
     assert_eq!(s.images.len(), 1, "{s:?}");
-    assert!(faces(s).contains(&"drgnx-work-card"), "{s:?}");
+    assert!(faces(s).contains(&"drgnx-work-pane"), "{s:?}");
     assert!(faces(s).contains(&"drgnx-work-meta"), "{s:?}");
     let svg_of = |r: &Row| {
         images
