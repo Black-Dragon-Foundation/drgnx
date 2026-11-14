@@ -2282,9 +2282,10 @@ and node ids it drew, `drgnx-view-nav-sja-step` asks Sjá for each changed node'
 runs' faces change, so a boxed chip keeps its face) and for the dim runs (`dimruns`: consecutive rows whose every
 node is dim, and the dim nodes of the other rows), and puts only the overlays; then
 `drgnx-view-patch-patched-functions` runs with VIEW nil and the drawn rows' keys. A patch that reaches Lisp parsed
-(a test's, or one sent before the pair's env) goes to Sjá as the raw line would (`drgnx-view-apply-patch`). Views
-that read the hub's rows as data rather than draw them (the git letters, the agents' editor-here feed) and the agent
-panel (the hub's rows among its own) keep the Lisp path.
+(a test's, or one sent before the pair's env) goes to Sjá as the raw line would (`drgnx-view-apply-patch`). The git
+letters are rows read as data: `:sja 'data` holds them in Sjá and never draws them, and `drgnx-git-status` and the
+branch read a row's property there (`prop`), with no row table in Lisp. The agents' editor-here feed and the agent
+panel (the hub's rows among its own) keep the Lisp path for now.
 
 **What stays in Lisp** (the user, 2026-11-14: nothing that does work per row or per update in Lisp, only commands,
 keymaps, settings and the final insert or draw call):

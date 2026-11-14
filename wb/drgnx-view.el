@@ -2213,11 +2213,14 @@ by the view that owns the buffer.")
 `drgnx-view-define').  EPOCH: the env epoch sent for the pair.  KEEP: the buffer keeps the view it has, whose type
 renders the hub's rows with `drgnx-view-patch-render' among its own and sets `drgnx-view-patch-apply-function'.
 SJA: where this Emacs's Sjá holds rows, they are held and drawn there (`drgnx-view-sja-attach'): the buffer has no
-`drgnx-view', and the row helpers take VIEW nil for it (`drgnx-view-row-start', `drgnx-view-draw-now').  Returns
-the view, or with SJA the pair's state."
+`drgnx-view', and the row helpers take VIEW nil for it (`drgnx-view-row-start', `drgnx-view-draw-now'); SJA `data':
+held there and never drawn (rows read as data, by `nidhogg-view-rows' `prop').  Returns the view, or with SJA the
+pair's state."
   (if (and sja (not keep) (not type) (fboundp 'nidhogg-view-rows))
       (progn (require 'drgnx-view-sja)
-             (drgnx-view-sja-attach view class :buffer buffer :start start :epoch epoch))
+             (if (eq sja 'data)
+                 (drgnx-view-sja-attach view class :buffer buffer :start start :epoch epoch :delay 'data)
+               (drgnx-view-sja-attach view class :buffer buffer :start start :epoch epoch)))
     (drgnx-view-patch--attach-lisp view class buffer start epoch type keep)))
 
 (declare-function drgnx-view-sja-attach "drgnx-view-sja" (view class &rest keys))

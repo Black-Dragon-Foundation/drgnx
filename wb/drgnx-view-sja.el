@@ -152,9 +152,10 @@ and acknowledges the last, or asks for a reset when too many came."
 pass when the view asked for a change the user waits to see (`drgnx-view-patch-hurry', cleared)."
   (let ((delay (if drgnx-view-patch-hurry 0 (drgnx-view-patch-sja s))))
     (setq drgnx-view-patch-hurry nil)
-    (drgnx-timer-soon (cons 'drgnx-view-sja (current-buffer)) delay #'drgnx-view-sja-draw
-                      :args (list (current-buffer)) :owner :core
-                      :min-interval (and (> delay 0) drgnx-view-delay))))
+    (unless (eq (drgnx-view-patch-sja s) 'data)   ; rows read as data (`drgnx-view-patch-attach' :sja `data'): never drawn
+      (drgnx-timer-soon (cons 'drgnx-view-sja (current-buffer)) delay #'drgnx-view-sja-draw
+                        :args (list (current-buffer)) :owner :core
+                        :min-interval (and (> delay 0) drgnx-view-delay)))))
 
 (defun drgnx-view-sja-hurry ()
   "Draw the current buffer's rows at the next timer pass, not after their throttle (`drgnx-view-hurry')."

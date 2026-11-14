@@ -345,7 +345,8 @@ The look is a peek: a late sentinel is no use of ROOT, and a stamp would evict a
 (declare-function drgnx-hub--call-on "drgnx-hub-client")
 (declare-function drgnx-view-patch-attach "drgnx-view")
 (declare-function drgnx-view-patch-detach "drgnx-view")
-(declare-function drgnx-view-patch-rows "drgnx-view")
+(declare-function drgnx-view-patch-handle "drgnx-view")
+(declare-function nidhogg-view-rows "nidhogg-views" (h what &optional a b))
 (declare-function drgnx-view-patch-version "drgnx-view")
 (declare-function drgnx-view-patch-view "drgnx-view")
 (declare-function drgnx-view-env-register "drgnx-view-env" (view buffer &optional resubscribe headless))
@@ -379,18 +380,18 @@ marks (the Explorer's roots and open folders).")
   "The hub view id of ROOT's letters: 20 bytes, whatever the length of the path."
   (concat "git-" (substring (md5 root) 0 16)))
 
-(defun drgnx-git--letters-rows (buf)
-  (drgnx-view-patch-rows (buffer-local-value 'drgnx-view-patch buf)))
+(defun drgnx-git--letters-prop (buf key name)
+  "Property NAME of the row KEY of BUF's letters, as Sjá holds them (`nidhogg-view-rows' `prop'), or nil."
+  (when-let* ((s (buffer-local-value 'drgnx-view-patch buf)) (h (drgnx-view-patch-handle s)))
+    (nidhogg-view-rows h 'prop nil (concat key "\t" name))))
 
 (defun drgnx-git--letters-kind (rows key)
-  "The status symbol the row KEY of ROWS names, or nil."
-  (when-let* ((row (gethash key rows))
-              (p (seq-find (lambda (p) (equal (nth 2 p) "drgnx-git-status")) (plist-get row :props))))
-    (intern (nth 3 p))))
+  "The status symbol the row KEY of ROWS (a letters buffer) names, or nil."
+  (when-let* ((v (drgnx-git--letters-prop rows key "drgnx-git-status"))) (intern v)))
 
 (defun drgnx-git--letters-status (buf rel)
   "`drgnx-git-status' of the path REL (relative to the root, no trailing /) from the rows of BUF."
-  (let ((rows (drgnx-git--letters-rows buf)))
+  (let ((rows buf))
     (or (drgnx-git--letters-kind rows (concat "f:" rel))
         (drgnx-git--letters-kind rows (concat "d:" rel))
         (let ((dir (file-name-directory rel)) found)
@@ -402,8 +403,8 @@ marks (the Explorer's roots and open folders).")
 
 (defun drgnx-git--letters-branch (buf)
   "`drgnx-git-branch' from the branch row of BUF: (:head NAME :ahead A :behind B), or (:head nil :detached t)."
-  (when-let* ((row (gethash "branch" (drgnx-git--letters-rows buf)))
-              (v (nth 3 (car (plist-get row :props)))))
+  (when-let* ((j (drgnx-git--letters-prop buf "branch" "drgnx-git-branch"))
+              (v (json-parse-string (car j) :object-type 'plist :null-object nil :false-object nil)))
     (if (plist-get v :head) (list :head (plist-get v :head) :ahead (plist-get v :ahead) :behind (plist-get v :behind))
       (list :head nil :detached t))))
 
@@ -438,7 +439,7 @@ marks (the Explorer's roots and open folders).")
           (drgnx-git--letters-drop (car (last drgnx-git--letters-order))))
         (with-current-buffer (generate-new-buffer (format " *drgnx git letters %s*" view) t)
           (buffer-disable-undo)
-          (drgnx-view-patch-attach view "unshown")
+          (drgnx-view-patch-attach view "unshown" :sja 'data)   ; rows read as data, never drawn
           (require 'drgnx-view-env)
           (puthash root (current-buffer) drgnx-git--letters)
           (puthash view root drgnx-git--letters-views)
