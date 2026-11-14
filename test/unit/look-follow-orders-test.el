@@ -78,9 +78,12 @@
   (look-follow-orders-test--fake
    (drgnx-test-every-order
     :kinds '(config-load-theme module-setup portal-color-scheme portal-contrast portal-accent setting-change)
+    ;; one answer of each kind: the oracle ignores the values, so what matters is where the user's theme falls among the
+    ;; six kinds (720 orders, all of them); a second answer of a kind meets the same handler in the same state as the
+    ;; first, and every order of the repeats without the user's theme is in the pick test below
     :sources (list (cons 'setup '((module-setup)))
-                   (cons 'scheme '((portal-color-scheme 1) (portal-color-scheme 2)))
-                   (cons 'contrast '((portal-contrast 1) (portal-contrast 0)))
+                   (cons 'scheme '((portal-color-scheme 1)))
+                   (cons 'contrast '((portal-contrast 1)))
                    (cons 'accent '((portal-accent (0.2 0.4 0.9))))
                    (cons 'setting '((setting-change)))
                    (cons 'config '((config-load-theme))))
