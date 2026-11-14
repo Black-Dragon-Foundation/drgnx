@@ -29,6 +29,10 @@ pub mod hot_reload;
 pub mod inline;
 pub mod install;
 pub mod launch;
+pub mod lsp_client;
+pub mod lsp_command;
+#[cfg(feature = "test-hooks")]
+pub mod lsp_mock;
 pub mod origin;
 pub mod origin_wire;
 pub mod ports;
@@ -82,6 +86,10 @@ mod tests_keychain;
 mod tests_launch;
 #[cfg(test)]
 mod tests_live_adapters;
+#[cfg(test)]
+mod tests_lsp_client;
+#[cfg(test)]
+mod tests_lsp_command;
 #[cfg(test)]
 mod tests_origin;
 #[cfg(test)]
@@ -186,6 +194,10 @@ pub trait Launcher: Send + Sync {
     /// otherwise a new adapter.
     fn child(&self) -> BoxFut<'_, Result<Connected, String>> {
         self.connect()
+    }
+    /// The launch arguments completed from what the adapter's server knows (`lsp-command`); the same by default.
+    fn fill(&self, arguments: Value) -> BoxFut<'_, Result<Value, String>> {
+        Box::pin(async move { Ok(arguments) })
     }
 }
 
@@ -1081,11 +1093,22 @@ impl Debug {
             }
             self.add_probes(&root, &mut start);
         }
-        let c = if parent.is_some() {
+        let mut c = if parent.is_some() {
             launcher.child().await?
         } else {
             launcher.connect().await?
         };
+        if parent.is_none() {
+            match launcher.fill(std::mem::take(&mut start.arguments)).await {
+                Ok(arguments) => start.arguments = arguments,
+                Err(e) => {
+                    // the adapter is running: it ends with the start
+                    c.proc.signal(session::Sig::Kill);
+                    c.proc.wait().await;
+                    return Err(e);
+                }
+            }
+        }
         let (tx, rx) = mpsc::unbounded_channel();
         let handle = session::spawn(start.clone(), c.client, c.incoming, c.proc, tx);
         let (ended_tx, ended) = watch::channel(false);

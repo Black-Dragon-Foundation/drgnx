@@ -14,6 +14,20 @@ fn sha(bytes: &[u8]) -> String {
         .collect()
 }
 
+/// What an install leaves in TOOLS: the lock files beside the targets stay (an flock needs its file), nothing else.
+fn left(tools: &Path) -> usize {
+    std::fs::read_dir(tools).map_or(0, |d| {
+        d.filter(|e| {
+            !e.as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".lock")
+        })
+        .count()
+    })
+}
+
 /// A tar.gz of ENTRIES (path, bytes, mode); a path ending in `/` is a folder, a mode of 0o120777 a symlink to BYTES.
 fn tgz(entries: &[(&str, &[u8], u32)]) -> Vec<u8> {
     let gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
@@ -138,6 +152,7 @@ async fn a_pinned_tarball_is_checked_and_unpacked_under_its_folder() {
     let names: Vec<_> = std::fs::read_dir(tools.path())
         .unwrap()
         .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .filter(|n| !n.ends_with(".lock"))
         .collect();
     assert_eq!(names, ["js-debug"]);
 }
@@ -156,7 +171,7 @@ async fn a_download_with_another_digest_installs_nothing() {
         e.contains(&sha(&bytes)) && e.contains(&"0".repeat(64)),
         "{e}"
     );
-    assert_eq!(std::fs::read_dir(tools.path()).unwrap().count(), 0);
+    assert_eq!(left(tools.path()), 0);
 }
 
 #[tokio::test]
@@ -173,13 +188,68 @@ async fn an_archive_that_climbs_or_links_installs_nothing() {
             .await
             .unwrap_err();
         assert!(e.contains("unsafe"), "{name}: {e}");
-        assert_eq!(
-            std::fs::read_dir(tools.path()).unwrap().count(),
-            0,
-            "{name}"
-        );
+        assert_eq!(left(tools.path()), 0, "{name}");
     }
     assert!(!tools.path().parent().unwrap().join("evil").exists());
+}
+
+/// A relative link that stays inside the archive's tree is made (a JDK's `legal/` files point at each other); one that is
+/// absolute, climbs out of the tree, is a hard link or is written through, is not.
+#[tokio::test]
+async fn a_link_inside_the_archive_is_made_and_one_that_leaves_it_is_not() {
+    let src = tempfile::tempdir().unwrap();
+    let tools = tempfile::tempdir().unwrap();
+    let good = tgz(&[
+        ("jdk/legal/a/", b"", 0o755),
+        ("jdk/legal/a/LICENSE", b"text", 0o644),
+        ("jdk/legal/b/", b"", 0o755),
+        ("jdk/legal/b/LICENSE", b"../a/LICENSE", 0o120777),
+    ]);
+    std::fs::write(src.path().join("ok.tgz"), &good).unwrap();
+    let plan = archive("ok.tgz", &sha(&good), "jdk", Some("jdk"));
+    install::install(&plan, tools.path(), &Source::Dir(src.path().into()), &[])
+        .await
+        .unwrap();
+    let link = tools.path().join("jdk/legal/b/LICENSE");
+    assert!(link.is_symlink());
+    assert_eq!(std::fs::read(&link).unwrap(), b"text");
+    for (name, entries) in [
+        ("up.tgz", vec![("jdk/l", &b"../../outside"[..], 0o120777)]),
+        ("deep.tgz", vec![("jdk/a/l", &b"../../x"[..], 0o120777)]),
+        ("abs.tgz", vec![("jdk/l", &b"/etc/passwd"[..], 0o120777)]),
+        // each target passes the depth count alone; together they leave the root (x/a is the root, `..` of it is outside)
+        (
+            "pair.tgz",
+            vec![
+                ("jdk/x/a", &b".."[..], 0o120777),
+                ("jdk/y/b", &b"../x/a/.."[..], 0o120777),
+            ],
+        ),
+        (
+            "through.tgz",
+            vec![
+                ("jdk/d", &b"."[..], 0o120777),
+                ("jdk/d/d/d/l", &b"../../../../x"[..], 0o120777),
+            ],
+        ),
+        (
+            "write.tgz",
+            vec![
+                ("jdk/d", &b"."[..], 0o120777),
+                ("jdk/d/f", &b"x"[..], 0o644),
+            ],
+        ),
+    ] {
+        let bytes = tgz(&entries);
+        std::fs::write(src.path().join(name), &bytes).unwrap();
+        let t2 = tempfile::tempdir().unwrap();
+        let plan = archive(name, &sha(&bytes), "jdk", Some("jdk"));
+        let e = install::install(&plan, t2.path(), &Source::Dir(src.path().into()), &[])
+            .await
+            .unwrap_err();
+        assert!(e.contains("unsafe"), "{name}: {e}");
+        assert_eq!(left(t2.path()), 0, "{name}");
+    }
 }
 
 #[tokio::test]
@@ -255,4 +325,159 @@ async fn a_system_package_is_named_not_installed() {
     .await
     .unwrap_err();
     assert!(e.contains("dnf install delve"), "{e}");
+}
+
+/// Several downloads for one adapter (a JDK, a language server, a plugin jar): every part is downloaded, checked and
+/// unpacked before any is put in place, so one wrong digest changes nothing; a `:file` part is one checked file.
+#[tokio::test]
+async fn an_install_of_parts_is_all_or_none_and_a_file_part_is_one_checked_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let (src, tools) = (dir.path().join("src"), dir.path().join("tools"));
+    std::fs::create_dir_all(&src).unwrap();
+    let jdk = tgz(&[("jdk-1/", b"", 0o755), ("jdk-1/bin/java", b"#!java", 0o755)]);
+    let jar = b"PK-the-plugin".to_vec();
+    std::fs::write(src.join("jdk.tar.gz"), &jdk).unwrap();
+    std::fs::write(src.join("plugin.jar"), &jar).unwrap();
+    let recipe = |jar_sha: &str| {
+        serde_json::json!({"parts": [
+            {"url": "https://example.invalid/jdk.tar.gz", "sha256": sha(&jdk), "into": "jdk", "root": "jdk-1"},
+            {"url": "https://example.invalid/plugin.jar", "sha256": jar_sha, "into": "jv", "file": "plugin.jar"},
+        ]})
+    };
+    let source = Source::Dir(src.clone());
+    // a wrong digest on the second part: nothing at all is installed, no scratch left behind
+    let bad = install::plan(&recipe(&"0".repeat(64)), "linux-x64").unwrap();
+    let e = install::install(&bad, &tools, &source, &[])
+        .await
+        .unwrap_err();
+    assert!(e.contains("digest") || e.contains("sha256"), "{e}");
+    assert!(
+        !tools.join("jdk").exists() && !tools.join("jv").exists(),
+        "{e}"
+    );
+    assert!(left(&tools) == 0, "scratch left in {tools:?}");
+    // right digests: the folder and the file, and the file is exactly the download
+    let good = install::plan(&recipe(&sha(&jar)), "linux-x64").unwrap();
+    assert!(matches!(good, Plan::Parts(ref p) if p.len() == 2));
+    install::install(&good, &tools, &source, &[]).await.unwrap();
+    assert_eq!(
+        std::fs::read(tools.join("jdk/bin/java")).unwrap(),
+        b"#!java"
+    );
+    assert_eq!(std::fs::read(tools.join("jv/plugin.jar")).unwrap(), jar);
+    // it can be installed again over itself
+    install::install(&good, &tools, &source, &[]).await.unwrap();
+    // a part must be a download, and a file name is a name
+    assert!(
+        install::plan(
+            &serde_json::json!({"parts": [{"system": "dnf install x"}]}),
+            "linux-x64"
+        )
+        .is_err()
+    );
+    assert!(
+        install::plan(
+            &serde_json::json!({"url": "https://e/x.jar", "sha256": sha(&jar), "into": "jv", "file": "../x.jar"}),
+            "linux-x64"
+        )
+        .is_err()
+    );
+    // the pins of the recipe as the table reads them
+    let t = serde_json::json!({"parts": [{"into": "jdk", "platforms": [
+        {"platform": "linux-x64", "url": "https://e/a.tar.gz", "sha256": "a"},
+        {"platform": "darwin-arm64", "url": "https://e/b.tar.gz", "sha256": "b"}]}]});
+    assert!(install::plan(&t, "linux-arm64").is_err());
+}
+
+/// What the doctor says of an adapter's downloads: the pinned version and the installed one, per part.
+#[tokio::test]
+async fn the_parts_of_an_adapter_say_what_is_pinned_and_what_is_installed() {
+    use super::adapters::{self, Adapter, PartStatus};
+    let dir = tempfile::tempdir().unwrap();
+    let (src, tools) = (dir.path().join("src"), dir.path().join("tools"));
+    std::fs::create_dir_all(&src).unwrap();
+    let jar = b"jar".to_vec();
+    std::fs::write(src.join("p.jar"), &jar).unwrap();
+    let recipe = serde_json::json!({"parts": [
+        {"url": "https://example.invalid/p.jar", "sha256": sha(&jar), "into": "jv", "file": "p.jar", "version": "0.53.1"},
+        {"into": "jdk", "version": "21.0.5", "platforms": []},
+    ]});
+    let a = Adapter {
+        id: "java".into(),
+        name: "Java".into(),
+        types: vec!["java".into()],
+        languages: vec![],
+        tested: false,
+        find: None,
+        start: None,
+        defaults: vec![],
+        install: Some(recipe.clone()),
+        not_built_in: false,
+    };
+    let status = |tools: &Path| adapters::parts(&a, tools);
+    assert_eq!(
+        status(&tools),
+        [
+            PartStatus {
+                part: "jv".into(),
+                pinned: Some("0.53.1".into()),
+                installed: None
+            },
+            PartStatus {
+                part: "jdk".into(),
+                pinned: Some("21.0.5".into()),
+                installed: None
+            },
+        ]
+    );
+    // installing the jar part records its pin; a folder with no record is `unknown`
+    let plan = install::plan(
+        &serde_json::json!({"parts": [recipe["parts"][0].clone()]}),
+        "linux-x64",
+    )
+    .unwrap();
+    install::install(&plan, &tools, &Source::Dir(src), &[])
+        .await
+        .unwrap();
+    std::fs::create_dir_all(tools.join("jdk")).unwrap();
+    let s = status(&tools);
+    assert_eq!(s[0].installed.as_deref(), Some("0.53.1"));
+    assert_eq!(s[1].installed.as_deref(), Some("unknown"));
+}
+
+/// Two installs of the same adapter take turns: the second waits for the lock beside the target until the first is done.
+#[tokio::test]
+async fn an_install_waits_while_another_install_of_the_same_adapter_holds_its_lock() {
+    use std::os::fd::AsRawFd;
+    let src = tempfile::tempdir().unwrap();
+    let tools = tempfile::tempdir().unwrap();
+    let bytes = tgz(&[("js-debug/new.js", b"new", 0o644)]);
+    std::fs::write(src.path().join("js.tgz"), &bytes).unwrap();
+    let plan = archive("js.tgz", &sha(&bytes), "js-debug", Some("js-debug"));
+    // the other install: the lock file of the target, held
+    let lock = std::fs::File::create(tools.path().join(".js-debug.lock")).unwrap();
+    // SAFETY: flock(2) on a file descriptor this test owns.
+    assert_eq!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) }, 0);
+    let (t, s) = (tools.path().to_owned(), src.path().to_owned());
+    let task = crate::clock::spawn("test:install", async move {
+        install::install(&plan, &t, &Source::Dir(s), &[]).await
+    });
+    // no clock here: the install is blocked on the lock in a blocking thread; give the scheduler and the blocking pool
+    // plenty of turns, and it still has not finished
+    for _ in 0..200 {
+        tokio::task::yield_now().await;
+        crate::clock::blocking(|| ()).await.unwrap();
+    }
+    assert!(
+        !task.is_finished(),
+        "the install ran while the target was locked"
+    );
+    assert!(!tools.path().join("js-debug").exists());
+    drop(lock);
+    crate::clock::timeout(std::time::Duration::from_secs(30), task)
+        .await
+        .expect("the install ends once the lock is free")
+        .unwrap()
+        .unwrap();
+    assert!(tools.path().join("js-debug/new.js").is_file());
 }

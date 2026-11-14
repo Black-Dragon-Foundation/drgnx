@@ -236,6 +236,23 @@ fn install_rules(path: &str, i: &Install, out: &mut Vec<Problem>) {
     {
         bad(path.into(), "a pip install needs :hash \"sha256:…\"", out);
     }
+    if i.file
+        .as_deref()
+        .is_some_and(|f| !safe_rel(f) || f.contains('/'))
+    {
+        bad(path.into(), ":file is a file name", out);
+    }
+    for (n, part) in i.parts.iter().enumerate() {
+        let at = format!("{path}.parts[{n}]");
+        if part.system.is_some() || part.pip.is_some() || !part.parts.is_empty() {
+            bad(at.clone(), "a part is a download", out);
+            continue;
+        }
+        install_rules(&at, part, out);
+    }
+    if !i.parts.is_empty() {
+        return;
+    }
     if i.url.is_none() && i.pip.is_none() && i.platforms.is_empty() {
         bad(
             path.into(),
@@ -274,6 +291,13 @@ fn adapter_rules(i: usize, a: &Adapter, fetched: bool, out: &mut Vec<Problem>) {
         return;
     }
     if let Some(s) = &a.start {
+        if s.lsp_command.is_some() {
+            out.push(p(
+                ProblemKind::Command,
+                format!("adapters[{i}].start.lsp-command"),
+                "a language server is started by built-in packs only",
+            ));
+        }
         for (key, argv) in [("stdio", &s.stdio), ("tcp", &s.tcp)] {
             if let Some(argv) = argv {
                 command_rules(

@@ -210,6 +210,10 @@ What the debugger and the trails knew per language is the pack's:
   installed or fixture pack's through `Table::with_pack`; a launch type another entry already serves stays with the first.
   The doctor and the installer (Lisp) read the same union (`drgnx-packs-adapters`).
 Probe families stay Rust, keyed by the adapter's id (design Q15).
+  An adapter started by a language server uses `:start (:lsp-command …)`, with `:fill` steps whose argument language
+  has `${config:KEY}`, `${config:KEY?}` (null when missing), `${file}` and the brace words; an `:into` entry may be
+  `:optional t`. The `:install` of such an adapter can be several `:parts` (a JDK, a server, a plugin jar `:file`),
+  each pinned by hash. See "The `lsp-command` start kind" in `debugging.md`. A fetched pack may not use it.
 
 ## The hub's grammars: the pack registry
 

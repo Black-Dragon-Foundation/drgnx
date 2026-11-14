@@ -414,7 +414,10 @@ fn segment(
     let pad = ((if lines.len() > 1 { 10.0 } else { 8.0 }) * g.scale).round() as u32;
     let room = (right - left).saturating_sub(10 + pad);
     // a `new` mark at the end of the line keeps its place: the text before it is what gets cut
-    let tail = l.0.last().filter(|(_, f)| *f == Some("drgnx-work-new")).cloned();
+    let tail =
+        l.0.last()
+            .filter(|(_, f)| *f == Some("drgnx-work-new"))
+            .cloned();
     let body = match &tail {
         Some(_) => Line(l.0[..l.0.len() - 1].to_vec(), l.1),
         None => l.clone(),
