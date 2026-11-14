@@ -255,26 +255,42 @@ DRGNX_LOOK_BT=1 its backtrace follows)."
 (declare-function drgnx-view-patch-version "drgnx-view")
 (defvar drgnx-view-patch)
 
+(defvar drgnx-look-scene-rows-wait 20
+  "Seconds a step waits for the hub's rows of the views it shows (`drgnx-look-scene--unfed'), as the editor's scene
+waits for the Explorer's.")
+
+(defun drgnx-look-scene--unfed-views ()
+  "The hub-fed views a window of the selected frame shows without the hub's rows: ((VIEW BUFFER CLASSES) ...).  A
+view with no env sent (CLASSES nil), or with no version and an empty buffer, has none."
+  (let ((seen nil) (out nil))
+    (dolist (w (window-list nil 'never))
+      (let* ((b (window-buffer w)) (state (buffer-local-value 'drgnx-view-patch b))
+             (view (and state (drgnx-view-patch-view state))))
+        (when (and view (not (member view seen)))
+          (push view seen)
+          (let ((classes (and (fboundp 'drgnx-view-env-classes) (drgnx-view-env-classes view))))
+            (unless (and classes (or (drgnx-view-patch-version state) (> (buffer-size b) 0)))
+              (push (list view b classes) out))))))
+    (nreverse out)))
+
 (defun drgnx-look-scene--unfed ()
   "The hub-fed views a window of the selected frame shows without the hub's rows, while the scenes' hub runs: one
 error each, naming the view, the display classes its env went out for (none: the hub never heard it is shown, so it
-builds nothing) and the version of the rows it applied (nil: none since the env last re-paired it).  A view with no
-env sent, or with no version and an empty buffer, has none; a view whose Lisp draws part of it (the agent panel) is
-caught by the first.  A redisplay first, as the shot's: it runs the window change hooks that send the env of a view
-a window has just started showing."
+builds nothing) and the version of the rows it applied (nil: none since the env last re-paired it).  A view whose
+Lisp draws part of it (the agent panel) is caught by the first.  A redisplay first, as the shot's: it runs the window
+change hooks that send the env of a view a window has just started showing.  The step waits for the rows first
+\(`drgnx-look-scene-rows-wait'), as the user does: a view a step's command has just shown, or whose display class the
+step changed (a class change pairs the buffer anew, empty until the hub's reset), is drawn a round trip later."
   (redisplay)
   (when (and (fboundp 'drgnx-hub-running-p) (drgnx-hub-running-p))
-    (let ((seen nil))
-      (dolist (w (window-list nil 'never))
-        (let* ((b (window-buffer w)) (state (buffer-local-value 'drgnx-view-patch b))
-               (view (and state (drgnx-view-patch-view state))))
-          (when (and view (not (member view seen)))
-            (push view seen)
-            (let ((classes (and (fboundp 'drgnx-view-env-classes) (drgnx-view-env-classes view))))
-              (unless (and classes (or (drgnx-view-patch-version state) (> (buffer-size b) 0)))
-                (push (format "%s: shown in %s with no rows from the hub (env sent for %S, rows version %S)"
-                              view (buffer-name b) classes (drgnx-view-patch-version state))
-                      drgnx-look-scene--errors)))))))))
+    (let ((end (+ (float-time) drgnx-look-scene-rows-wait)))
+      (while (and (drgnx-look-scene--unfed-views) (< (float-time) end))
+        (accept-process-output nil 0.02)
+        (redisplay)))
+    (pcase-dolist (`(,view ,b ,classes) (drgnx-look-scene--unfed-views))
+      (push (format "%s: shown in %s with no rows from the hub (env sent for %S, rows version %S)"
+                    view (buffer-name b) classes (drgnx-view-patch-version (buffer-local-value 'drgnx-view-patch b)))
+            drgnx-look-scene--errors))))
 
 (defun drgnx-look-scene--answer (&rest more)
   "The step's JSON answer: its errors and MORE, then the echo area cleared, and the status bar's message with it (a

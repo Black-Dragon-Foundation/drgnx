@@ -2037,7 +2037,9 @@ owner decides when to collect.
 A view whose rows the hub builds (docs/develop/hub.md, "Rows") registers its buffer with
 `(drgnx-view-env-register VIEW BUFFER RESUBSCRIBE)`. The module then tells the hub, by `view/env` on the subscribed
 connection, what it needs to fit and colour the rows: per display class the buffer shows in (display kind, scale and
-the buffer's effective fonts, measured in the view's buffer after `text-scale` and face remapping), the fonts per role
+the buffer's effective fonts, measured in the view's buffer after `text-scale` and face remapping, whichever buffer
+is current when they are asked: `face-font` reads the current buffer's remapping, and a class read in the agent
+panel's buffer flipped the Explorer's), the fonts per role
 (`ui`, `code`, `card`: file, size, ascent, descent, average and space widths), the cell, `width_px` (the narrowest
 live window of the class: one buffer holds one fit; a GUI window with no right fringe gives a column less, which
 Emacs keeps for its truncation glyph), the palette roles the SVG writer colours from (read from faces,

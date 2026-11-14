@@ -234,6 +234,30 @@ builds nothing for a view before its env (the look scenes' Extensions list staye
       (should (= 1 (length (drgnx-view-env-test--envs))))
       (should (plist-get (car (drgnx-view-env-test--envs)) :attach)))))
 
+(ert-deftest drgnx-view-env/a-class-reads-the-fonts-in-the-views-buffer ()
+  "A window's class reads its fonts with the view's buffer current, whichever buffer is current when it is asked:
+`face-font' resolves `default' through the current buffer's remapping (the agent panel maps it to `drgnx-ui-text'),
+and the window change hooks run in any buffer, so the Explorer's class flipped with the selected panel and its rows
+went with every flip (the look scenes' empty Files)."
+  (let ((view (generate-new-buffer " *view-env-view*")) (panel (generate-new-buffer " *view-env-panel*")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t))
+                  ((symbol-function 'drgnx-pixels-scale) (lambda (&rest _) 1.0))
+                  ;; `face-font' as a GUI frame answers it: `default' through the current buffer's remapping
+                  ((symbol-function 'drgnx-view-env--font)
+                   (lambda (face _frame factor)
+                     (list (if (and (eq face 'default) (assq 'default face-remapping-alist)) "/f/Sans.ttf" "/f/Mono.ttf")
+                           0 (* 13.0 factor) 12.0 3.0 7.0 4.0 "f"))))
+          (with-current-buffer panel (face-remap-add-relative 'default 'variable-pitch))
+          (save-window-excursion
+            (set-window-buffer (selected-window) view)
+            (let ((facts (drgnx-view-env--window-facts (selected-window))))
+              (should (equal "/f/Mono.ttf" (nth 1 (assoc "ui" (plist-get facts :fonts)))))
+              (with-current-buffer panel
+                (should (equal facts (drgnx-view-env--window-facts (selected-window))))))))
+      (kill-buffer view)
+      (kill-buffer panel))))
+
 (ert-deftest drgnx-view-env/glyph-asks-are-cached-per-font ()
   (drgnx-view-env-test--with
     (drgnx-view-env-register "v" buf)
