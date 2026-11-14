@@ -84,7 +84,22 @@ failed \"no hub\" through it).  The hub is not stubbed."
       ("move" (plist-put (cdr (assq (plist-get op :id) debug-gutter-test--store)) :line (plist-get op :line)))))
   (list :root "/r" :path (or (plist-get (plist-get params :op) :path) (plist-get params :path))
         :version (cl-incf debug-gutter-test--version)
-        :breakpoints (mapcar #'cdr (reverse debug-gutter-test--store))))
+        :breakpoints (debug-gutter-test--hub-positions (mapcar #'cdr (reverse debug-gutter-test--store)))))
+
+(defvar debug-gutter-test--positions t "Whether the scripted hub puts positions on its breakpoints.")
+
+(defun debug-gutter-test--hub-positions (bps)
+  "BPS with the buffer positions of their lines (`:pos', `:end') as the hub's `editor::marks::place_breakpoints'
+gives them over this buffer's text (pinned by its Rust test)."
+  (if (not debug-gutter-test--positions) bps
+    (mapcar (lambda (bp)
+              (let ((line (or (plist-get bp :bound_line) (plist-get bp :line))))
+                (save-excursion
+                  (goto-char (point-min)) (forward-line (1- line))
+                  (let ((pos (point)))
+                    (forward-line 1)
+                    (append bp (list :pos pos :end (point)))))))
+            bps)))
 
 (defun debug-gutter-test--marks ()
   "The column's marks: (LINE . KIND) of each breakpoint overlay, in line order."
@@ -325,6 +340,32 @@ it on again with the store's lines."
                                        :breakpoints (list (list :id 1 :line 5 :enabled t :verified t :bound_line 6))))
       (should (equal (debug-gutter-test--marks) '((6 . bp)))))))
 
+;; The hub counts the lines: a mark goes to the positions it sends, no line is counted or walked to.
+(ert-deftest drgnx-debug-gutter/a-mark-goes-to-the-hubs-positions-without-counting-lines ()
+  (let ((debug-gutter-test--store nil) (debug-gutter-test--next 0))
+    (debug-gutter-test--with 10
+      (let ((view (list :root "/r" :path buffer-file-name :version 3
+                        :breakpoints (debug-gutter-test--hub-positions
+                                      (list (list :id 1 :line 5 :enabled t :verified t)
+                                            (list :id 2 :line 7 :enabled t :verified t :bound_line 8))))))
+        (cl-letf (((symbol-function 'drgnx-debug-gutter--line-bounds) (lambda (&rest _) (error "counted lines"))))
+          (drgnx-debug-gutter--event "debug-breakpoints" view))
+        (should (equal (debug-gutter-test--marks) '((5 . bp) (8 . bp))))))))
+
+(ert-deftest drgnx-debug-gutter/unsaved-changes-and-odd-positions-fall-back-to-the-lines ()
+  (let ((debug-gutter-test--store nil) (debug-gutter-test--next 0))
+    (debug-gutter-test--with 10
+      (let ((view (lambda (v bps) (list :root "/r" :path buffer-file-name :version v :breakpoints bps))))
+        ;; positions that are not a whole line of this text: the line's number decides
+        (drgnx-debug-gutter--event "debug-breakpoints"
+                                   (funcall view 1 (list (list :id 1 :line 5 :enabled t :verified t :pos 3 :end 4))))
+        (should (equal (debug-gutter-test--marks) '((5 . bp))))
+        ;; unsaved changes: the hub's text may differ from this one, so its positions are not used
+        (insert "x")
+        (drgnx-debug-gutter--event "debug-breakpoints"
+                                   (funcall view 2 (list (list :id 2 :line 6 :enabled t :verified t :pos 1 :end 8))))
+        (should (equal (debug-gutter-test--marks) '((6 . bp))))))))
+
 (ert-deftest drgnx-debug-gutter/terminal-characters-follow-the-claim ()
   (let ((debug-gutter-test--store nil) (debug-gutter-test--next 0))
     (debug-gutter-test--with 10
@@ -485,10 +526,18 @@ it on again with the store's lines."
           (drgnx-debug-gutter--pool-settle (selected-window) (current-buffer))
           (should (equal (debug-gutter-test--dots) (debug-gutter-test--shown (selected-window))))
           (should (= (length (debug-gutter-test--dots)) n))
-          ;; typing that adds lines on screen: one dot per line still, none doubled
+          ;; typing that adds lines on screen: no keystroke walks the shown lines (the dots stay where the text
+          ;; carried them); once the typing rests, one dot per line again, none doubled
           (goto-char (window-start))
           (insert "a\nb\nc\n")
-          (drgnx-debug-gutter--pool-update (selected-window))
+          (let ((laid 0) (lay (symbol-function 'drgnx-debug-gutter--pool-lay)))
+            (cl-letf (((symbol-function 'drgnx-debug-gutter--pool-lay)
+                       (lambda (&rest args) (cl-incf laid) (apply lay args))))
+              (dotimes (_ 5) (insert "x") (drgnx-debug-gutter--pool-update (selected-window)))
+              (should (= laid 0))
+              (should (drgnx-timer-active-p (cons 'debug-hover (selected-window))))
+              (drgnx-debug-gutter--pool-settle (selected-window) (current-buffer))
+              (should (= laid 1))))
           (should (equal (debug-gutter-test--dots) (debug-gutter-test--shown (selected-window)))))))))
 
 (ert-deftest drgnx-debug-gutter/the-hover-pool-is-per-window ()

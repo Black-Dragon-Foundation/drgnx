@@ -2152,6 +2152,9 @@ edit asks again.
 large-files module's default `:ask-above`, the size from which a file opens lean or in chunks) gets no marks, as
 `drgnx-large-file-p` kept them from large buffers in Lisp. Large-files v2's cost registry replaces this one constant.
 
+- The `debug-breakpoints` event and `debug/breakpoints`' answer give each breakpoint `pos` and `end` (the positions its
+  line starts at and just after it, `marks::place_breakpoints`, from the edit history's mirror; none without a tracked
+  buffer or over the limit). `Debug::on_lines` is the hook the hub binds to give a file's `marks::Lines`.
 - `git/blame/line {path, worktree_root, pos, width}` answers the inline blame of the line the position is on, as
   `{text?, sha?, time?}`: `marks::blame_text` words it ("Ada, 3 days ago · Fix the parser", "You · Uncommitted
   changes", "agent s1 · …") and cuts it to `width` columns (`BLAME_MIN_WIDTH` 20: none under it, `BLAME_MAX_WIDTH` 80),

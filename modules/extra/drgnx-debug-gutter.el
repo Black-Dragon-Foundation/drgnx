@@ -324,6 +324,14 @@ draw none: fifty margin strings cost a full redraw about a millisecond (perf row
        (eql (aref key 4) (length drgnx-debug-gutter--overlays)) (eq (aref key 5) string)
        (not (and (eql (aref key 0) (window-start window)) (eql (aref key 1) (window-body-height window))))))
 
+(defun drgnx-debug-gutter--pool-edited-p (key window string)
+  "Whether KEY differs from WINDOW and STRING only in the text's tick (typing: the window did not move)."
+  (and key
+       (eql (aref key 0) (window-start window)) (eql (aref key 1) (window-body-height window))
+       (not (eql (aref key 2) (buffer-chars-modified-tick)))
+       (eql (aref key 3) drgnx-debug-gutter--version)
+       (eql (aref key 4) (length drgnx-debug-gutter--overlays)) (eq (aref key 5) string)))
+
 (defun drgnx-debug-gutter--pool-settle (window buffer)
   "The settle timer: lay WINDOW's dots in BUFFER now."
   (when (buffer-live-p buffer)
@@ -346,6 +354,12 @@ only scrolled gets them once it has rested `drgnx-debug-gutter--settle' seconds,
         (let ((cell (assq window drgnx-debug-gutter--pool)))
           (cond
            ((and cell (drgnx-debug-gutter--pool-key-p (cadr cell) window string)))
+           ;; typing: the dots stay where the text carried them (no keystroke walks the shown lines) and come right
+           ;; once the typing rests
+           ((and cell (not now) (drgnx-debug-gutter--pool-edited-p (cadr cell) window string))
+            (drgnx-timer-debounce (cons 'debug-hover window) drgnx-debug-gutter--settle
+                                  #'drgnx-debug-gutter--pool-settle :args (list window (current-buffer))
+                                  :owner (current-buffer)))
            ((and cell (not now) (drgnx-debug-gutter--pool-moved-p (cadr cell) window string))
             ;; the dots it showed go (they would sit on the wrong lines and cost each frame), and the key no
             ;; longer matches any start, so a window scrolled back still waits to settle
@@ -411,10 +425,22 @@ the buffer's start (a click deep in a long file was 10 ms of `forward-line')."
                    (when-let* ((a (plist-get bp :agent))) (format "set by agent %s" a))))
    " · "))
 
+(defun drgnx-debug-gutter--hub-bounds (bp)
+  "(BEG . END) of BP's line as the hub gave it (`:pos', `:end': the buffer positions it counted in the text it holds),
+or nil: it gave none (no buffer of the file tracked, a text over its limit), the buffer has unsaved changes (the hub's
+text may differ), or the positions are not a whole line of this text."
+  (let ((pos (plist-get bp :pos)) (end (plist-get bp :end)))
+    (and pos end (not (buffer-modified-p))
+         (<= (point-min) pos end (point-max))
+         (or (= pos (point-min)) (eq (char-before pos) ?\n))
+         (or (= end (point-max)) (eq (char-before end) ?\n))
+         (cons pos end))))
+
 (defun drgnx-debug-gutter--place (bp)
-  "Put BP's mark on its line (the adapter's line where it bound it elsewhere)."
+  "Put BP's mark on its line (the adapter's line where it bound it elsewhere): at the hub's positions, else where
+counting lines finds it."
   (let* ((line (or (plist-get bp :bound_line) (plist-get bp :line)))
-         (b (drgnx-debug-gutter--line-bounds line))
+         (b (or (drgnx-debug-gutter--hub-bounds bp) (drgnx-debug-gutter--line-bounds line)))
          (col (plist-get bp :column))
          (o (if col
                 (let ((at (drgnx-debug-gutter--column-pos (car b) col)))
