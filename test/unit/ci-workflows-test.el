@@ -1033,3 +1033,17 @@ Returns (EXIT . OUTPUT)."
                         "runtime/crates/gleipnir/src/sbpl/base.sbpl" ".github/ci/sbpl-upstream.sh"
                         "issues: write" "github.event_name == 'schedule'")
     (should-not (string-search "secrets." yml))))
+
+;; AS1-REDUCED-TIER-CI-1: no runner's kernel has Landlock ABI 9, so a weekly job and any change to gleipnir or to the
+;; launch rows runs tests/launch_sandboxed.rs in the Fedora 45 VM (KVM on the runner), where the reduced tier is real.
+(ert-deftest drgnx-ci/the-reduced-tier-launch-rows-run-in-a-kvm-vm-weekly-and-on-gleipnir-changes ()
+  (let ((yml (drgnx-ci-test--yml "reduced-tier-vm.yml")))
+    (should yml)
+    (drgnx-ci-test--has yml "schedule:" "workflow_dispatch:" "permissions:\n  contents: read"
+                        "runtime/crates/gleipnir/**"
+                        "runtime/crates/drgnx-ratatoskr/tests/launch_sandboxed.rs"
+                        "runs-on: ubuntu-26.04" "/dev/kvm" ".github/ci/browser-vm.sh"
+                        "--test launch_sandboxed" "--ignored")
+    ;; the rows must have run on the reduced tier: a run that fell back to the full tier is red
+    (should (string-search "this row runs on the full tier" yml))
+    (should-not (string-search "secrets." yml))))
