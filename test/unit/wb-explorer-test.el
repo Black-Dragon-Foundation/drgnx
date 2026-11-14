@@ -223,6 +223,7 @@ time passed."
         (should (equal (drgnx-explorer-node-at (point)) (expand-file-name "d.txt" odd)))))))
 
 (ert-deftest drgnx-explorer/going-to-the-parent-is-cheap-in-cpu ()
+  :tags '(:timing)                ; a CPU budget (2 ms): the perf lane judges it against the runner's calibration
   ;; The parent is found by walking back over the folder's rows, which allocates nothing: CPU time, the median of 50
   ;; runs, 3 times the host's median (the wall-clock form, 15 ms, missed under load).
   (drgnx-test-compile "drgnx-explorer")
