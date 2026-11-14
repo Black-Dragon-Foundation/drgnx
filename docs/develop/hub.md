@@ -1542,6 +1542,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `notebook/input` | user | `{id: string, request: string, value: string}` | `boolean` | no |
 | `notebook/interrupt` | user | `{id: string}` | `boolean` | no |
 | `notebook/kernels` | user | `{}` | `{kernels: [NotebookKernel], skipped: [NotebookSkipped]}` | no |
+| `notebook/log` | user | `{id: string, since?: natnum}` | `{entries: [NotebookLogEntry], lost: natnum, next: natnum}` | no |
 | `notebook/open` | user | `{path: string, text?: string}` | `NotebookOpened` | no |
 | `notebook/output` | user | `{cell: string, id: string}` | `{outputs: [any]}` | no |
 | `notebook/restart` | user | `{id: string}` | `{kernel: string}` | no |
@@ -1550,7 +1551,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `notebook/start` | user | `{id: string, kernel?: string}` | `{kernel: string}` | no |
 | `notebook/sync` | user | `{cells: [{id: string, source: string, type: string}], id: string}` | `boolean` | no |
 | `notebook/tail` | user | `{cell: string, id: string}` | `NotebookTail` | no |
-| `notebook/view` | user | `{cell?: string, id: string, kind: "outline" \| "output"}` | `{view: string}` | no |
+| `notebook/view` | user | `{cell?: string, id: string, kind: "outline" \| "output" \| "log"}` | `{view: string}` | no |
 | `orch/evidence` | user | `{task: TaskRef}` | `{evidence: [any]}` | no |
 | `pace/get` | user | `{provider?: string}` | `{meters?: [Pace]}` | no |
 | `pair/answer` | user | `{lines?: [natnum], not_saved?: Text, reason?: Text, result: "applied" \| "refused" \| "dropped", saved?: boolean, version?: natnum, write: natnum}` | `boolean` | no |

@@ -59,12 +59,13 @@ process group killed after the grace) and starts a new one with a new connection
 `notebook/interrupt`, `notebook/input`, `notebook/clear`, `notebook/tail`, `notebook/output` (the whole output as nbformat objects)
 and `notebook/close` are what they say.
 
-The hub sends the editor that opened a notebook three events, only for what changed:
+The hub sends the editor that opened a notebook these events, only for what changed:
 
 - `notebook-tail`: a cell's tail, built whole (text, style runs as terminal face roles, images, `more_lines`, `version`, `stale`,
   `execution_count`) with the cell's head (`[n]`/`[ ]`/`[*]` and the kind, `state` `idle`, `queued` or `running`); at most 20 a
   second per cell. The editor only puts the strings.
 - `notebook-status`: `state` (`starting`, `idle`, `busy`, `dead`), the running `cell` and the length of the `queue`.
+- `notebook-log`: `{id, seq}`, the kernel logged something that answers no cell (below); one is kept, the newest, until delivered.
 - `notebook-input-request`: a kernel's question (`cell`, `request`, `prompt`, `password`); answer it with `notebook/input`.
 
 A cell is done when its `execute_reply` and its `idle` status have both come (they travel on different sockets). An error aborts the
@@ -99,3 +100,12 @@ for its views.
   image is a row `[image/png image, WxH: save output as file]` and is never drawn; a kernel's SVG is never rendered (its row says
   so, as the inline output does). While the cell runs the hub copies its output into the notebook once a second, so the view
   follows at that pace.
+- **The kernel log** (`kind: "log"`, view `notebook-log:ID`): what the kernel sends that answers no cell: a message with an empty
+  parent header (its own logging) or one whose request the hub no longer tracks (another client's). They never reach a cell. The hub
+  keeps the last 500 entries (a `stream`'s or an `error`'s text, cut at 4096 characters; any other message type is an entry with no
+  text) across the kernel's restarts. One row per line of an entry, keys `e:SEQ:K`, text `TYPE  line` (the lines of an entry under
+  its type, at most 8, each cut at 400 characters, the rest counted `(N more lines)`), the property `drgnx-notebook-log` (the entry's
+  number); a first row `lost` says how many earlier entries were dropped. `notebook/log {id, since?}` returns the same as data:
+  `{entries: [{seq, type, text}], next, lost}` for the entries after `since` (a number from a former answer, or from the
+  `notebook-log` event); `lost` counts the entries after `since` the hub no longer holds. Faces: `shadow`, `drgnx-status-fail` for an
+  `error`.

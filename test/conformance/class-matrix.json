@@ -189,6 +189,7 @@
   "notebook/input": ["user"],
   "notebook/interrupt": ["user"],
   "notebook/kernels": ["user"],
+  "notebook/log": ["user"],
   "notebook/open": ["user"],
   "notebook/output": ["user"],
   "notebook/restart": ["user"],

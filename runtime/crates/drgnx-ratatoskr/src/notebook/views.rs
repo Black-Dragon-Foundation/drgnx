@@ -8,10 +8,13 @@
 //!   cell's lines as the hub holds them, within the output limits (1 MiB of text, 64 outputs), [`OUTPUT_WINDOW`] lines at a time:
 //!   `view/window` (list `lines`) moves the window, and a row above and below says how many lines lie outside it. An image is a row
 //!   that says so, never drawn; a kernel's SVG is never rendered.
+//! - the kernel log, `notebook-log:ID`: what the kernel says that answers no cell (an empty parent header: its own logging, a message
+//!   from another client), the last [`LOG_ENTRIES`] of it, one row per line of an entry (at most [`LOG_LINES`] lines each, each cut at
+//!   [`LOG_LINE_CHARS`] characters). `notebook/log` returns the same entries as data.
 //! - the cell outline, `notebook-outline:ID`: one row per cell (index, type, prompt, first line, state); a row carries the text
 //!   property `drgnx-notebook-cell` (the cell's id) for the editor to jump to the cell. At most [`OUTLINE_ROWS`] cells are listed.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
@@ -21,8 +24,8 @@ use runstav::methods::notebook::NotebookViewKind;
 use serde_json::{Value, json};
 
 use super::hub::Notebooks;
-use super::output::CellRun;
 use super::output::terminal::{Run, clean};
+use super::output::{CellRun, LOG_ENTRIES};
 use super::tail;
 use crate::debug::{Delivery, Sink};
 use crate::front::Front;
@@ -35,6 +38,9 @@ pub const OUTLINE_ROWS: usize = 2000;
 pub const OUTPUT_VIEWS: usize = 16;
 /// The lines of a full output the hub builds rows for at a time.
 pub const OUTPUT_WINDOW: usize = 1000;
+/// The lines of one log entry that are shown, and the characters of a line.
+pub const LOG_LINES: usize = 8;
+pub const LOG_LINE_CHARS: usize = 400;
 /// The longest first line the outline shows, in characters.
 pub const FIRST_LINE_CHARS: usize = 80;
 
@@ -57,6 +63,110 @@ pub fn output_view(id: &str, n: usize) -> String {
 fn output_of(view: &str) -> Option<(&str, usize)> {
     let (id, n) = view.strip_prefix("notebook-output:")?.split_once('#')?;
     Some((id, n.parse().ok()?))
+}
+
+/// The view id of notebook ID's kernel log.
+pub fn log_view(id: &str) -> String {
+    format!("notebook-log:{id}")
+}
+
+/// One message the kernel sent that answered no cell: SEQ counts from 1.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LogEntry {
+    pub seq: u64,
+    pub msg_type: String,
+    pub text: String,
+}
+
+/// A notebook's kernel log: the last [`LOG_ENTRIES`] entries (each already cut by the router), kept across a kernel's restarts.
+#[derive(Debug, Default)]
+pub struct KernelLog {
+    last: u64,
+    entries: VecDeque<LogEntry>,
+}
+
+impl KernelLog {
+    /// File an entry; its number.
+    pub fn push(&mut self, msg_type: &str, text: &str) -> u64 {
+        self.last += 1;
+        if self.entries.len() >= LOG_ENTRIES {
+            self.entries.pop_front();
+        }
+        self.entries.push_back(LogEntry {
+            seq: self.last,
+            msg_type: msg_type.to_owned(),
+            text: text.to_owned(),
+        });
+        self.last
+    }
+
+    /// The number of the newest entry (0: none yet).
+    pub fn last_seq(&self) -> u64 {
+        self.last
+    }
+
+    /// The entries numbered above AFTER, and how many of those are no longer held.
+    pub fn since(&self, after: u64) -> (Vec<LogEntry>, u64) {
+        let oldest = self.entries.front().map_or(self.last + 1, |e| e.seq);
+        let lost = oldest.saturating_sub(after.saturating_add(1));
+        (
+            self.entries
+                .iter()
+                .filter(|e| e.seq > after)
+                .cloned()
+                .collect(),
+            lost,
+        )
+    }
+}
+
+/// The log view's rows: `TYPE  text` for the first line of an entry and the text of the others indented under it, a row `lost` first
+/// when entries were dropped.
+pub fn log_rows(entries: &[LogEntry], lost: u64) -> Vec<Row> {
+    let mut rows = Vec::new();
+    if lost > 0 {
+        rows.push(note_row("lost", &format!("{lost} earlier entries dropped")));
+    }
+    if entries.is_empty() && lost == 0 {
+        return vec![note_row("none", "the kernel has logged nothing")];
+    }
+    for e in entries {
+        let ty: String = clean(&e.msg_type).chars().take(14).collect();
+        let text = clean(&e.text);
+        let mut lines: Vec<&str> = text.lines().collect();
+        let more = lines.len().saturating_sub(LOG_LINES);
+        lines.truncate(LOG_LINES);
+        if lines.is_empty() {
+            lines.push("");
+        }
+        for (k, line) in lines.iter().enumerate() {
+            let mut b = RowBuilder::new(format!("e:{}:{k}", e.seq));
+            if k == 0 {
+                let face = if e.msg_type == "error" {
+                    "drgnx-status-fail"
+                } else {
+                    "shadow"
+                };
+                b.push(&format!("{ty:<14}"), Some(face));
+            } else {
+                b.push(&" ".repeat(14), None);
+            }
+            b.push("  ", None);
+            let shown: String = line
+                .replace('\t', " ")
+                .chars()
+                .take(LOG_LINE_CHARS)
+                .collect();
+            b.push(&shown, None);
+            if k + 1 == lines.len() && more > 0 {
+                b.push(&format!("  ({more} more lines)"), Some("shadow"));
+            }
+            let n = b.pos();
+            b.prop(0, n, "drgnx-notebook-log", json!(e.seq));
+            rows.push(b.finish());
+        }
+    }
+    rows
 }
 
 /// What the outline knows of one cell. STATE is `queued`, `running`, or how its last run ended (`error`, `aborted`, `cancelled`),
@@ -286,6 +396,7 @@ impl Stage for FrontStage {
 #[derive(Default)]
 struct Dirty {
     outline: bool,
+    log: bool,
     /// The cells whose full output is to be rebuilt.
     outputs: HashSet<String>,
 }
@@ -293,6 +404,7 @@ struct Dirty {
 #[derive(Default)]
 struct Watch {
     outline: bool,
+    log: bool,
     /// The cell of each full-output view, by its number.
     outputs: Vec<Option<String>>,
 }
@@ -353,6 +465,10 @@ impl NbViews {
                 w.outline = true;
                 Ok(outline_view(id))
             }
+            NotebookViewKind::Log => {
+                w.log = true;
+                Ok(log_view(id))
+            }
             NotebookViewKind::Output => {
                 let cell = cell.ok_or("a full output names its cell")?;
                 let n = match w.outputs.iter().position(|c| c.as_deref() == Some(cell)) {
@@ -391,12 +507,22 @@ impl NbViews {
 
     /// An event the hub sends CONN's editor: what it says changed.
     pub fn event(self: &Arc<Self>, conn: u64, event: &str, data: &Value) {
-        if !matches!(event, "notebook-tail" | "notebook-status") {
+        if !matches!(event, "notebook-tail" | "notebook-status" | "notebook-log") {
             return;
         }
         let Some(id) = data.get("id").and_then(Value::as_str) else {
             return;
         };
+        if event == "notebook-log" {
+            let mut s = self.lock();
+            let key = (conn, id.to_owned());
+            if s.watch.get(&key).is_some_and(|w| w.log) {
+                s.dirty.entry(key).or_default().log = true;
+                drop(s);
+                self.schedule();
+            }
+            return;
+        }
         if event == "notebook-tail"
             && let Some(cell) = data.get("cell").and_then(Value::as_str)
         {
@@ -443,6 +569,12 @@ impl NbViews {
                     return false;
                 }
                 s.dirty.entry(key).or_default().outline = true;
+            } else if let Some(id) = view.strip_prefix("notebook-log:") {
+                let key = (conn, id.to_owned());
+                if !s.watch.get(&key).is_some_and(|w| w.log) {
+                    return false;
+                }
+                s.dirty.entry(key).or_default().log = true;
             } else if let Some((id, n)) = output_of(view) {
                 let key = (conn, id.to_owned());
                 let Some(cell) = s
@@ -506,6 +638,14 @@ impl NbViews {
                     stage.publish(conn, &view, outline_rows(&cells, total));
                 }
             }
+            if d.log {
+                let view = log_view(&id);
+                if stage.shown(conn, &view)
+                    && let Ok((entries, _, lost)) = nb.kernel_log(conn, &id, 0)
+                {
+                    stage.publish(conn, &view, log_rows(&entries, lost));
+                }
+            }
             for cell in &d.outputs {
                 let Some(n) = slots
                     .get(&(conn, id.clone()))
@@ -549,6 +689,12 @@ impl NbViews {
             .entry((conn, id.to_owned()))
             .or_default()
             .outline = true;
+    }
+
+    /// Nothing waits to be rebuilt.
+    #[cfg(test)]
+    pub(crate) fn dirty_is_empty(&self) -> bool {
+        self.lock().dirty.is_empty()
     }
 
     /// The (connection, id) pairs with a view asked for.

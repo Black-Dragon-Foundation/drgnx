@@ -1014,6 +1014,7 @@ impl Front {
             | Params::NotebookTail(_)
             | Params::NotebookOutput(_)
             | Params::NotebookView(_)
+            | Params::NotebookLog(_)
             | Params::NotebookClear(_)
             | Params::NotebookClose(_)) => crate::notebook::rpc::serve(self, &caller, p)
                 .await

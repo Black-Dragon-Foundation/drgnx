@@ -463,3 +463,92 @@ async fn a_shown_full_output_is_built_from_the_notebook_in_the_editors_window_an
         vec!["the cell is gone"]
     );
 }
+
+// ---- the kernel log ----
+
+fn entry(seq: u64, ty: &str, text: &str) -> LogEntry {
+    LogEntry {
+        seq,
+        msg_type: ty.into(),
+        text: text.into(),
+    }
+}
+
+#[test]
+fn the_kernel_log_keeps_the_last_entries_and_says_how_many_after_a_number_are_gone() {
+    let mut log = KernelLog::default();
+    assert_eq!((log.last_seq(), log.since(0)), (0, (vec![], 0)));
+    for i in 1..=600 {
+        assert_eq!(log.push("stream", &format!("m{i}")), i);
+    }
+    let (all, lost) = log.since(0);
+    assert_eq!((all.len(), lost, all[0].seq), (LOG_ENTRIES, 100, 101));
+    let (some, lost) = log.since(550);
+    assert_eq!((some.len(), lost, some[0].text.as_str()), (50, 0, "m551"));
+    assert_eq!(log.since(50).1, 50, "entries 51 to 100 are gone");
+    assert_eq!(log.since(700), (vec![], 0));
+    assert_eq!(log.last_seq(), 600);
+}
+
+#[test]
+fn log_rows_show_the_type_and_the_text_a_bounded_number_of_lines_and_say_what_is_missing() {
+    let ten: String = (0..10).map(|i| format!("l{i}\n")).collect();
+    let rows = log_rows(
+        &[
+            entry(4, "stream", "hello\u{202e}"),
+            entry(5, "error", &ten),
+            entry(6, "comm_open", ""),
+        ],
+        3,
+    );
+    let texts: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();
+    assert_eq!(texts[0], "3 earlier entries dropped");
+    assert_eq!(texts[1], "stream          hello");
+    assert_eq!(texts[2], "error           l0");
+    assert_eq!(
+        texts[2 + LOG_LINES - 1],
+        "                l7  (2 more lines)"
+    );
+    assert_eq!(texts[2 + LOG_LINES], "comm_open       ");
+    assert_eq!(rows[2].key, "e:5:0");
+    assert!(
+        rows[2]
+            .runs
+            .iter()
+            .any(|(_, _, f)| f == "drgnx-status-fail")
+    );
+    assert_eq!(
+        rows[1].props,
+        vec![(0, 21, "drgnx-notebook-log".to_string(), json!(4))]
+    );
+    assert_eq!(log_rows(&[], 0)[0].text, "the kernel has logged nothing");
+    let long = "x".repeat(5000);
+    assert_eq!(
+        log_rows(&[entry(1, "stream", &long)], 0)[0]
+            .text
+            .chars()
+            .count(),
+        16 + LOG_LINE_CHARS
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_shown_log_is_built_on_its_env_and_a_notebook_log_event_rebuilds_it_only_for_its_owner() {
+    let w = world().await;
+    let view = w
+        .views
+        .register(1, &w.id, NotebookViewKind::Log, None)
+        .unwrap();
+    assert_eq!(view, format!("notebook-log:{}", w.id));
+    assert!(!w.views.env_build(2, &view), "another connection's");
+    assert!(w.views.env_build(1, &view));
+    w.stage.shown.lock().unwrap().insert(view.clone());
+    w.views.flush().await;
+    let got = w.stage.got.lock().unwrap().clone();
+    assert_eq!(got.last().unwrap().2, vec!["the kernel has logged nothing"]);
+    // an event of another connection marks nothing
+    w.views
+        .event(2, "notebook-log", &json!({"id": w.id, "seq": 1}));
+    assert!(w.views.dirty_is_empty());
+    assert!(!w.views.env_build(1, "notebook-log:nb-other"));
+}

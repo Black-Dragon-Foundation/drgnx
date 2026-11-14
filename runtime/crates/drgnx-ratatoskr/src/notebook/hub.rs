@@ -92,6 +92,8 @@ struct Open {
     live: Mutex<HashMap<String, Value>>,
     /// What the kernel's task holds of runs that are not over (requests, cells, latest): none when nothing runs.
     held: std::sync::atomic::AtomicUsize,
+    /// What the kernel said that answered no cell (the Sjá log view).
+    log: Mutex<super::views::KernelLog>,
 }
 
 impl Open {
@@ -350,6 +352,7 @@ impl Notebooks {
             states: Mutex::new(HashMap::new()),
             live: Mutex::new(HashMap::new()),
             held: std::sync::atomic::AtomicUsize::new(0),
+            log: Mutex::new(super::views::KernelLog::default()),
         });
         let (tails, more_tails) = {
             let book = open.book.lock().await;
@@ -622,6 +625,20 @@ impl Notebooks {
         }
     }
 
+    /// The kernel's log of notebook ID after entry SINCE: the entries, the number to ask the next after, and how many after SINCE are no
+    /// longer held.
+    pub fn kernel_log(
+        &self,
+        conn: u64,
+        id: &str,
+        since: u64,
+    ) -> Result<(Vec<super::views::LogEntry>, u64, u64), String> {
+        let open = self.get(conn, id)?;
+        let log = open.log.lock().expect("log");
+        let (entries, lost) = log.since(since);
+        Ok((entries, log.last_seq(), lost))
+    }
+
     /// Whether notebook ID is CONN's.
     pub fn owns(&self, conn: u64, id: &str) -> bool {
         self.get(conn, id).is_ok()
@@ -792,6 +809,22 @@ impl Pump {
                 false
             }
         }
+    }
+
+    /// The message the router just logged (it answered no cell) goes into the notebook's kernel log, and the editor is told (one
+    /// `notebook-log` is kept, the newest, until it is delivered).
+    fn log_last(&mut self) {
+        let Some(e) = self.router.log().last().cloned() else {
+            return;
+        };
+        let seq = self
+            .open
+            .log
+            .lock()
+            .expect("log")
+            .push(&e.msg_type, &e.text);
+        let id = self.open.id.clone();
+        self.emit_kept("log".into(), "notebook-log", json!({"id": id, "seq": seq}));
     }
 
     /// EVENT that is kept until it is delivered (under KEY: a newer one with the same key replaces it).
@@ -1026,7 +1059,12 @@ impl Pump {
             self.emit_kept(format!("input:{request}"), "notebook-input-request", event);
             return;
         }
-        let Some(super::output::Change::Run(msg_id)) = self.router.apply(channel, &m) else {
+        let change = self.router.apply(channel, &m);
+        if change == Some(super::output::Change::Log) {
+            self.log_last();
+            return;
+        }
+        let Some(super::output::Change::Run(msg_id)) = change else {
             return;
         };
         let Some(cell) = self.cells.get(&msg_id).cloned() else {

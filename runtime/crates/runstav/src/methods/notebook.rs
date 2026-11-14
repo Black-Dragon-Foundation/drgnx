@@ -207,12 +207,13 @@ pub struct NotebookEnded {
 }
 
 /// What one of a notebook's Sjá views shows (docs/develop/notebooks.md, "The views"): `outline` is one row per cell, `output` the
-/// whole output of one cell.
+/// whole output of one cell, `log` what the kernel says that answers no cell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum NotebookViewKind {
     Outline,
     Output,
+    Log,
 }
 
 /// `notebook/view`: the hub view of KIND for notebook ID (`output` names the CELL). The answer names the view; the editor then sends `view/env` for it like
@@ -229,6 +230,33 @@ pub struct NotebookViewParams {
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct NotebookViewName {
     pub view: String,
+}
+
+/// `notebook/log`: the kernel's log of notebook ID after entry SINCE (all it holds when none).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct NotebookLogParams {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<u64>,
+}
+
+/// One entry of a kernel's log: a message that answered no cell (the kernel's own logging, a message from another client). SEQ
+/// counts from 1; TYPE is the message type (`stream`, `error`, ...); TEXT is what it says, cut at 4096 characters.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct NotebookLogEntry {
+    pub seq: u64,
+    #[serde(rename = "type")]
+    pub ty: String,
+    pub text: String,
+}
+
+/// `notebook/log`'s answer: the ENTRIES after SINCE (the hub keeps the last 500), NEXT the number to pass as `since` to get what is
+/// newer, LOST how many entries after SINCE the hub no longer holds.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct NotebookLog {
+    pub entries: Vec<NotebookLogEntry>,
+    pub next: u64,
+    pub lost: u64,
 }
 
 /// `notebook/output`'s answer: the cell's whole output as nbformat objects (within the hub's limits).
@@ -301,13 +329,19 @@ fn check_cell(p: &NotebookCellRef) -> Result<(), Error> {
     name("cell", &p.cell)
 }
 
+fn check_log(p: &NotebookLogParams) -> Result<(), Error> {
+    name("id", &p.id)
+}
+
 fn check_view(p: &NotebookViewParams) -> Result<(), Error> {
     name("id", &p.id)?;
     match (p.kind, p.cell.as_deref()) {
         (NotebookViewKind::Output, Some(c)) => name("cell", c),
         (NotebookViewKind::Output, None) => Err(invalid("cell", "the cell whose output it shows")),
-        (NotebookViewKind::Outline, None) => Ok(()),
-        (NotebookViewKind::Outline, Some(_)) => Err(invalid("cell", "none for an outline")),
+        (NotebookViewKind::Outline | NotebookViewKind::Log, None) => Ok(()),
+        (NotebookViewKind::Outline | NotebookViewKind::Log, Some(_)) => {
+            Err(invalid("cell", "none for this view"))
+        }
     }
 }
 
@@ -392,8 +426,14 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "notebook/view", NotebookView(NotebookViewParams) -> NotebookViewName,
             classes: [User], writes: false,
-            doc: "a hub view of a notebook for the editor to show in Sjá: the cell outline (one row per cell with its index, type, first line, prompt and state) or the whole output of one cell (windowed by view/window); the answer names the view, rows follow its view/env",
+            doc: "a hub view of a notebook for the editor to show in Sjá: the cell outline (one row per cell with its index, type, first line, prompt and state) the whole output of one cell (windowed by view/window) or the kernel's log; the answer names the view, rows follow its view/env",
             check: check_view,
+        ),
+        method!(
+            "notebook/log", NotebookLog(NotebookLogParams) -> NotebookLog,
+            classes: [User], writes: false,
+            doc: "the kernel's log of a notebook after entry `since`: the messages that answered no cell (the kernel's own logging, messages from other clients), the last 500, each cut at 4096 characters",
+            check: check_log,
         ),
         method!(
             "notebook/clear", NotebookClear(NotebookClear) -> bool,
@@ -431,6 +471,7 @@ mod tests {
             "tail",
             "output",
             "view",
+            "log",
             "clear",
             "close",
         ] {
@@ -465,6 +506,13 @@ mod tests {
         ));
         assert!(ok("notebook/clear", json!({"id": "nb1"})));
         assert!(ok("notebook/view", json!({"id": "nb1", "kind": "outline"})));
+        assert!(ok(
+            "notebook/view",
+            json!({"id": "nb1", "kind": "output", "cell": "a"})
+        ));
+        assert!(ok("notebook/view", json!({"id": "nb1", "kind": "log"})));
+        assert!(ok("notebook/log", json!({"id": "nb1"})));
+        assert!(ok("notebook/log", json!({"id": "nb1", "since": 4})));
         assert!(ok("notebook/tail", json!({"id": "nb1", "cell": "a"})));
     }
 
@@ -513,6 +561,11 @@ mod tests {
         assert!(err("notebook/tail", json!({"id": "nb1"})).path.is_some());
         assert!(
             err("notebook/view", json!({"id": "nb1", "kind": "chart"}))
+                .path
+                .is_some()
+        );
+        assert!(
+            err("notebook/log", json!({"id": "nb1", "since": -1}))
                 .path
                 .is_some()
         );

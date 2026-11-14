@@ -9,6 +9,8 @@ use crate::notebook::session::frames;
 use crate::notebook::spec::private_folder;
 use crate::notebook::wire::{self, Key};
 
+mod views;
+
 const NB: &str = r##"{
  "cells": [
   {"cell_type": "code", "id": "a", "metadata": {}, "execution_count": null, "outputs": [{"output_type": "stream", "name": "stdout", "text": ["old\n"]}], "source": ["ok"]},
@@ -197,6 +199,15 @@ fn kernel_side(folder: &Path, id: &str, nth: u32, seen: Arc<Seen>) -> tokio::tas
             iopub.send(status("busy")).await.unwrap();
             if code == "SLOW" {
                 continue;
+            }
+            if code == "LOGIT" {
+                // a message of the kernel's own: no parent header
+                let own = Message::request(
+                    "kernel",
+                    "stream",
+                    json!({"name": "stderr", "text": "kernel log line\nsecond"}),
+                );
+                iopub.send(zmq(&key, &own)).await.unwrap();
             }
             let mut text = code.clone();
             if matches!(code.as_str(), "ASK" | "ASKLONG" | "ASKTWICE") {

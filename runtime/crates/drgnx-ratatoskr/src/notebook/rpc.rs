@@ -7,8 +7,9 @@ use std::sync::{Arc, Mutex};
 
 use runstav::methods::Params;
 use runstav::methods::notebook::{
-    NotebookCell, NotebookCellText, NotebookEnded, NotebookKernel, NotebookKernels, NotebookOpened,
-    NotebookOutput, NotebookSkipped, NotebookStarted, NotebookTail, NotebookViewName,
+    NotebookCell, NotebookCellText, NotebookEnded, NotebookKernel, NotebookKernels, NotebookLog,
+    NotebookLogEntry, NotebookOpened, NotebookOutput, NotebookSkipped, NotebookStarted,
+    NotebookTail, NotebookViewName,
 };
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
@@ -258,6 +259,23 @@ pub async fn serve(
             views.changed(conn, &p.id);
             ok(r)
         }
+        Params::NotebookLog(p) => nb
+            .kernel_log(conn, &p.id, p.since.unwrap_or(0))
+            .map(|(entries, next, lost)| {
+                json!(NotebookLog {
+                    entries: entries
+                        .into_iter()
+                        .map(|e| NotebookLogEntry {
+                            seq: e.seq,
+                            ty: e.msg_type,
+                            text: e.text
+                        })
+                        .collect(),
+                    next,
+                    lost,
+                })
+            })
+            .map_err(err),
         Params::NotebookView(p) => {
             if nb.owns(conn, &p.id) {
                 views
