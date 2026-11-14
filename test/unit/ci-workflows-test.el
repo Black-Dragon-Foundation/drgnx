@@ -445,6 +445,15 @@ Returns (EXIT . OUTPUT)."
     ;; the escape-host's sandbox lane and the macos fork row both run them
     (should (>= checked 2))))
 
+(ert-deftest drgnx-ci/every-job-container-allows-unshare ()
+  ;; drgnx-exe's private file table needs unshare(2), which Docker's default seccomp profile refuses
+  (let ((rt (drgnx-ci-test--yml "runtime.yml")) (pos 0) (n 0))
+    (skip-unless rt)
+    (while (string-match "\"options\":\"\\([^\"]*\\)\"" rt pos)
+      (setq n (1+ n) pos (match-end 0))
+      (should (string-search "seccomp=unconfined" (match-string 1 rt))))
+    (should (>= n 2))))
+
 (ert-deftest drgnx-ci/the-timing-job-runs-the-rust-timing-tests-report-only ()
   (let* ((tiers (drgnx-ci-test--yml "drgnx-tiers.yml")) (script (expand-file-name "test/timing-rust.sh" drgnx-ci-test--root)))
     (skip-unless (and tiers (file-exists-p script)))
@@ -907,7 +916,7 @@ Returns (EXIT . OUTPUT)."
                         "ghcr.sh ref drgnx-bwrap \"$(bash test/container/image-tag.sh .github/ci/bwrap/Containerfile)-$ARCH\"")
     (should-not (string-search "needs: images" (drgnx-ci-test--job rt "escape-host")))
     (drgnx-ci-test--has (drgnx-ci-test--job rt "linux")
-                        "|| fromJSON('{\"image\":\"registry.fedoraproject.org/fedora:45\",\"options\":\"--init\"}') }}"
+                        "|| fromJSON('{\"image\":\"registry.fedoraproject.org/fedora:45\",\"options\":\"--init --security-opt seccomp=unconfined\"}') }}"
                         "run: sh test/container/rust-packages.sh" "if: ${{ env.PREBUILT == '' }}")))
 
 (ert-deftest drgnx-ci/a-job-container-names-credentials-only-with-its-image ()
@@ -926,9 +935,9 @@ Returns (EXIT . OUTPUT)."
          (or-at (and expr (string-search "\n      || " expr))))
     (should or-at)
     (drgnx-ci-test--has (substring expr 0 or-at) "\"credentials\":{{\"username\":\"{1}\",\"password\":\"{2}\"}}"
-                        "needs.images.outputs.rust, github.actor, github.token" "\"options\":\"--init\"")
+                        "needs.images.outputs.rust, github.actor, github.token" "\"options\":\"--init --security-opt seccomp=unconfined\"")
     (should (equal (substring expr or-at)
-                   "\n      || fromJSON('{\"image\":\"registry.fedoraproject.org/fedora:45\",\"options\":\"--init\"}')"))))
+                   "\n      || fromJSON('{\"image\":\"registry.fedoraproject.org/fedora:45\",\"options\":\"--init --security-opt seccomp=unconfined\"}')"))))
 
 (ert-deftest drgnx-ci/test-images-are-built-on-published-bases ()
   ;; each test image adds Nidhogg and a few small files to a base of only the Fedora packages (test/container/base/);
