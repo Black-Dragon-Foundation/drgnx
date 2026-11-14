@@ -65,24 +65,29 @@ The draw file adds itself to `drgnx-agents-editor-apply-functions` and draws fro
 - **Tags:** `drgnx-agents-tags` and `drgnx-decor-cursor-keep-label`: `always` keeps every tag on, `never` turns decor's
   tags off, `activity` leaves decor's 2 s after a move; a shared identity face or `drgnx-agents-editor-followed` keeps
   a tag on. Without Glitnir the tag text is the bar's `help-echo`.
-- **Gutter strip:** the frame's `:gutter` ranges become a line table (`--lines`), one `before-string` overlay per visible
-  row at priority 100 (the fringe spec in GUI frames, a `(margin left-margin)` display in terminals, where the buffer
+- **Positions, not lines (offload step E):** the hub puts the buffer positions of its lines on the frame
+  (`editor::marks::place`, hub.md "Editor marks"): `:pos` (the bar), `:line_pos` and `:end_pos` (the ring's first and
+  last row, the projected tag), `:symbol` (hrafn's outline of the text the hub holds) on each agent, and `:start_pos`
+  and `:end_pos` on each gutter range. Lisp counts no line and walks to none from the top: it moves overlays to
+  positions and, on a scroll, walks only the visible rows, telling each by the position its line starts at. A frame
+  with no positions (a text over the hub's marks limit) draws nothing.
+- **Gutter strip:** the frame's `:gutter` ranges become a list of strips (`--strips`, start and end positions), one
+  `before-string` overlay per visible row at priority 100 (the fringe spec in GUI frames, a `(margin left-margin)` display in terminals, where the buffer
   also gets `left-margin-width` 1 for as long as the table is not empty). The first row of a changed range uses the
   identity's gutter shape; pending and conflict rows keep the hollow and hatched shapes, so the kind stays readable.
   Hover text is the frame's `help` as the string's `help-echo`.
 - **The change marks** (`modules/extra/drgnx-hunks.el`): `drgnx-agents-editor-draw--owns-line-p` is set as
-  `drgnx-hunks-skip-line-function` through `drgnx-module-set` (undone with the module). It reads the cached table,
-  nothing else. When the table comes or goes the buffer's change marks are drawn again (`drgnx-hunks-redraw`), and on
+  `drgnx-hunks-skip-line-function` through `drgnx-module-set` (undone with the module); the change marks call it with
+  the position a line starts at. It reads the cached strips, nothing else. When the table comes or goes the buffer's change marks are drawn again (`drgnx-hunks-redraw`), and on
   teardown every buffer's are.
 - **The agent line (`drgnx-agents-editor-line.el`):** `drgnx-chrome-add-tail-provider` (depth 30) registers
   `drgnx-agents-editor-line--provider`; the chrome's provider list (`drgnx-chrome-tail-providers`, depth order) is a
   `(:eval ...)` after the breadcrumb that joins the providers' strings, each a function of the window, run in
   redisplay, answering from cache. The large-file header (depth 10) and sticky scroll (depth 20) are providers too;
   `drgnx-chrome-header-tail` still works as a buffer-local construct after the providers. At each frame the line's
-  strings are built once per agent (the symbol at its line, or `drgnx-agents-editor-line-symbol-function`; the
-  name is kept per (modification tick, line) in `drgnx-agents-editor-line--names`: a saved local file asks the hub's
-  outline once per line, `search/symbol-at` in [hub.md](hub.md), and shows no name until it answers; a modified or
-  remote buffer runs `add-log-current-defun` once per tick and line;
+  strings are built once per agent (the symbol is the frame's `:symbol`: the hub names it from hrafn's outline of
+  the text it holds, kept per file, text and line, so Lisp asks nothing and runs no `add-log-current-defun`; a
+  projected agent shows none);
   the plan entry, else the step title, truncated to 40 columns; `%` doubled); redisplay only picks the entry nearest the window's point, so the same string object comes back until the
   next frame. `drgnx-chrome-short-breadcrumb-functions` shortens the breadcrumb to the file name while the line shows.
   `drgnx-agents-editor-line-probe` times the build and a provider call (the probe for `agents-line-tick`; the verdict

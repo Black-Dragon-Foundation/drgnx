@@ -58,7 +58,8 @@ Two agents of one colour, and the agent you follow, keep their tags on whatever 
 
 (defvar-local drgnx-agents-editor-draw--bars nil "Ordinals with a bar (a decor cursor) in this buffer.")
 (defvar-local drgnx-agents-editor-draw--rings nil
-  "This buffer's rings: ((ORDINAL KIND START END)...), KIND `reading' or `pending', START and END line numbers.")
+  "This buffer's rings: ((ORDINAL KIND START END)...), KIND `reading' or `pending', START and END the positions the
+range's first and last lines start at (the hub counts them: `:line_pos', `:end_pos').")
 (defvar-local drgnx-agents-editor-draw--pool nil "Ring row overlays, reused: a list, the first N in use.")
 (defvar-local drgnx-agents-editor-draw--in-use 0)
 (defvar-local drgnx-agents-editor-draw--tag-overlays nil "Tag overlays of projected agents, ordinal → overlay.")
@@ -91,15 +92,6 @@ Two agents of one colour, and the agent you follow, keep their tags on whatever 
     (list :background (drgnx-agents-editor-draw--tint ordinal))))
 
 ;;;; Positions and tags
-
-(defun drgnx-agents-editor-draw--line-pos (line col)
-  "The position at column COL of LINE (1-based) in the current buffer, clamped to the line."
-  (save-excursion
-    (save-restriction
-      (widen)
-      (goto-char (point-min))
-      (forward-line (1- (max 1 line)))
-      (min (+ (line-beginning-position) (max 0 (or col 0))) (line-end-position)))))
 
 (defun drgnx-agents-editor-draw--tag (agent frame)
   "AGENT's tag text: its mark, handle and what it does."
@@ -163,9 +155,10 @@ Two agents of one colour, and the agent you follow, keep their tags on whatever 
 
 ;;;; The visible rows: ring rows and the gutter strip
 
-(defvar-local drgnx-agents-editor-draw--lines nil
-  "Line number → [STRING ORDINAL KIND] for the lines the frame's gutter ranges cover, or nil.  STRING is the
-`before-string' of the line's strip overlay (the fringe or margin spec, with its hover text).")
+(defvar-local drgnx-agents-editor-draw--strips nil
+  "The frame's gutter ranges: a list of [START END FIRST REST ORDINAL KIND], START and END the positions the range's
+first and last lines start at (the hub counts them).  FIRST and REST are the `before-string' of the range's first
+row and of the others (the fringe or margin spec, with its hover text).")
 (defvar-local drgnx-agents-editor-draw--gpool nil "Gutter strip overlays, reused: a list, the first N in use.")
 (defvar-local drgnx-agents-editor-draw--gin-use 0)
 (defvar-local drgnx-agents-editor-draw--margin nil "Non-nil while this buffer holds a left margin for the strip.")
@@ -186,32 +179,44 @@ Two agents of one colour, and the agent you follow, keep their tags on whatever 
       (when-let* ((ov (nth i pool))) (delete-overlay ov))
       (cl-incf i))))
 
+(defun drgnx-agents-editor-draw--strip-at (bol strips)
+  "The strip of STRIPS (see `drgnx-agents-editor-draw--strips') the line starting at BOL belongs to: the first
+conflict one, else the last range that holds it."
+  (let (found)
+    (dolist (s strips)
+      (when (and (<= (aref s 0) bol) (<= bol (aref s 1)) (not (and found (eq (aref found 5) 'conflict))))
+        (setq found s)))
+    found))
+
 (defun drgnx-agents-editor-draw--rebuild-buffer (buffer)
   "Put a ring row overlay and a strip overlay on each visible row that needs one; free the overlays no row needs."
   (with-current-buffer buffer
-    (let ((n 0) (g 0) (lines drgnx-agents-editor-draw--lines) (rings drgnx-agents-editor-draw--rings))
-      (when (or lines rings)
+    (let ((n 0) (g 0) (strips drgnx-agents-editor-draw--strips) (rings drgnx-agents-editor-draw--rings))
+      (when (or strips rings)
         (dolist (win (get-buffer-window-list buffer nil t))
-          (let* ((start (window-start win)) (rows (1+ (window-body-height win)))
-                 (line (save-restriction (widen) (line-number-at-pos start))))
+          (let ((rows (1+ (window-body-height win))))
             (save-excursion
-              (goto-char start)
+              (goto-char (window-start win))
+              ;; the visible rows are walked, each told apart by the position its line starts at: the hub's ranges
+              ;; are positions, so no line is numbered
               (while (> rows 0)
-                (when-let* ((e (and lines (gethash line lines)))
-                            (ov (drgnx-agents-editor-draw--use 'drgnx-agents-editor-draw--gpool g
-                                                               'drgnx-agents-editor-gutter)))
-                  (move-overlay ov (line-beginning-position) (line-beginning-position) buffer)
-                  (unless (eq (overlay-get ov 'before-string) (aref e 0))
-                    (overlay-put ov 'before-string (aref e 0)))
-                  (cl-incf g))
-                (dolist (r rings)
-                  (when (and (>= line (nth 2 r)) (<= line (nth 3 r)))
-                    (let ((ov (drgnx-agents-editor-draw--use 'drgnx-agents-editor-draw--pool n 'drgnx-agents-editor-ring)))
-                      (move-overlay ov (line-beginning-position) (line-end-position) buffer)
-                      (overlay-put ov 'face (drgnx-agents-editor-draw--ring-face (car r) (nth 1 r)))
-                      (cl-incf n))))
+                (let ((bol (line-beginning-position)))
+                  (when-let* ((s (drgnx-agents-editor-draw--strip-at bol strips))
+                              (ov (drgnx-agents-editor-draw--use 'drgnx-agents-editor-draw--gpool g
+                                                                 'drgnx-agents-editor-gutter))
+                              (text (aref s (if (= bol (aref s 0)) 2 3))))
+                    (move-overlay ov bol bol buffer)
+                    (unless (eq (overlay-get ov 'before-string) text)
+                      (overlay-put ov 'before-string text))
+                    (cl-incf g))
+                  (dolist (r rings)
+                    (when (and (>= bol (nth 2 r)) (<= bol (nth 3 r)))
+                      (let ((ov (drgnx-agents-editor-draw--use 'drgnx-agents-editor-draw--pool n 'drgnx-agents-editor-ring)))
+                        (move-overlay ov bol (line-end-position) buffer)
+                        (overlay-put ov 'face (drgnx-agents-editor-draw--ring-face (car r) (nth 1 r)))
+                        (cl-incf n)))))
                 (cl-decf rows)
-                (if (or (eobp) (not (zerop (forward-line 1)))) (setq rows 0) (cl-incf line)))))))
+                (when (or (eobp) (not (zerop (forward-line 1)))) (setq rows 0)))))))
       (drgnx-agents-editor-draw--trim drgnx-agents-editor-draw--pool drgnx-agents-editor-draw--in-use n)
       (drgnx-agents-editor-draw--trim drgnx-agents-editor-draw--gpool drgnx-agents-editor-draw--gin-use g)
       (setq drgnx-agents-editor-draw--in-use n drgnx-agents-editor-draw--gin-use g))))
@@ -219,7 +224,7 @@ Two agents of one colour, and the agent you follow, keep their tags on whatever 
 (defun drgnx-agents-editor-draw--scrolled (window _start)
   "A window scrolled: its buffer's ring rows and strip follow."
   (let ((b (window-buffer window)))
-    (when (or (buffer-local-value 'drgnx-agents-editor-draw--rings b) (buffer-local-value 'drgnx-agents-editor-draw--lines b))
+    (when (or (buffer-local-value 'drgnx-agents-editor-draw--rings b) (buffer-local-value 'drgnx-agents-editor-draw--strips b))
       (drgnx-agents-editor-draw--rebuild-buffer b))))
 
 (defun drgnx-agents-editor-draw--resized (frame)
@@ -270,29 +275,27 @@ Two agents of one colour, and the agent you follow, keep their tags on whatever 
       (concat help " · huddle open · o opens it")
     help))
 
-(defun drgnx-agents-editor-draw--gutter-lines (frame)
-  "FRAME's gutter ranges as the line table of `drgnx-agents-editor-draw--lines', or nil when there are none."
-  (when-let* ((ranges (plist-get frame :gutter)))
-    (let ((table (make-hash-table)) (agents (plist-get frame :agents)))
-      (dolist (g ranges)
+(defun drgnx-agents-editor-draw--gutter-strips (frame)
+  "FRAME's gutter ranges as the list of `drgnx-agents-editor-draw--strips', or nil when there are none (a range the
+hub gave no positions, a text over its limit, is left out)."
+  (let ((agents (plist-get frame :agents)) out)
+    (dolist (g (plist-get frame :gutter))
+      (when-let* ((start (plist-get g :start_pos)) (end (plist-get g :end_pos)))
         (let* ((ord (or (plist-get g :ordinal)
                         (plist-get (cl-find (plist-get g :session) agents :key (lambda (a) (plist-get a :session)) :test #'equal)
                                    :ordinal)
                         1))
                (kind (intern (or (plist-get g :kind) "changed")))
-               (help (drgnx-agents-editor-draw--conflict-help kind (or (plist-get g :help) "") (plist-get g :session)))
-               (first (drgnx-agents-editor-draw--strip ord kind t help))
-               (rest (drgnx-agents-editor-draw--strip ord kind nil help)))
-          (cl-loop for l from (plist-get g :start) to (or (plist-get g :end) (plist-get g :start))
-                   for old = (gethash l table)
-                   unless (and old (eq (aref old 2) 'conflict))
-                   do (puthash l (vector (if (= l (plist-get g :start)) first rest) ord kind) table))))
-      table)))
+               (help (drgnx-agents-editor-draw--conflict-help kind (or (plist-get g :help) "") (plist-get g :session))))
+          (push (vector start end (drgnx-agents-editor-draw--strip ord kind t help)
+                        (drgnx-agents-editor-draw--strip ord kind nil help) ord kind)
+                out))))
+    (nreverse out)))
 
-(defun drgnx-agents-editor-draw--owns-line-p (line)
-  "Whether an agent's strip draws the gutter on LINE of this buffer: the change marks leave that line out
-(`drgnx-hunks-skip-line-function')."
-  (and drgnx-agents-editor-draw--lines (gethash line drgnx-agents-editor-draw--lines) t))
+(defun drgnx-agents-editor-draw--owns-line-p (pos)
+  "Whether an agent's strip draws the gutter on the line of this buffer that starts at POS: the change marks leave
+that line out (`drgnx-hunks-skip-line-function')."
+  (and (drgnx-agents-editor-draw--strip-at pos drgnx-agents-editor-draw--strips) t))
 
 (defun drgnx-agents-editor-draw--margin (buffer on)
   "Claim one column of BUFFER's left margin while ON, for the terminal's strip (`drgnx-margins': after the debug
@@ -316,31 +319,33 @@ column, before the change marks)."
     (with-current-buffer buffer
       (let ((agents (plist-get frame :agents)) bars tags rings)
         (dolist (a agents)
-          (let* ((ord (plist-get a :ordinal)) (mode (plist-get a :mode)) (line (plist-get a :line))
-                 (end (or (plist-get a :line_end) line)))
+          ;; every position is the hub's (`:pos', `:line_pos', `:end_pos'): none for a file-only agent or a text over
+          ;; the hub's marks limit, which draws nothing
+          (let* ((ord (plist-get a :ordinal)) (mode (plist-get a :mode)) (line-pos (plist-get a :line_pos))
+                 (pos (plist-get a :pos)))
             (cond
              ((plist-get a :projected)
-              (when line
-                (drgnx-agents-editor-draw--projected-tag ord a frame (drgnx-agents-editor-draw--line-pos line 0))
+              (when line-pos
+                (drgnx-agents-editor-draw--projected-tag ord a frame line-pos)
                 (push ord tags)))
-             ((null line))                      ; file-only: no mark in the text
+             ((or (null line-pos) (null pos)))  ; file-only: no mark in the text
              ((equal mode "editing")
-              (drgnx-agents-editor-draw--bar buffer a frame (drgnx-agents-editor-draw--line-pos end (plist-get a :col)) force)
+              (drgnx-agents-editor-draw--bar buffer a frame (min pos (point-max)) force)
               (push ord bars))
              ((member mode '("pending" "reading"))
-              (push (list ord (intern mode) line end) rings)))))
+              (push (list ord (intern mode) line-pos (or (plist-get a :end_pos) line-pos)) rings)))))
         (drgnx-agents-editor-draw--drop-bars bars)
         (drgnx-agents-editor-draw--drop-tags tags)
         (dolist (a agents)
           (when-let* ((ord (plist-get a :ordinal)) ((memq ord bars)))
             (drgnx-decor-cursor-keep-label buffer ord (drgnx-agents-editor-draw--tags-on-p a agents))))
         (setq drgnx-agents-editor-draw--rings (nreverse rings))
-        (let ((had drgnx-agents-editor-draw--lines))
-          (setq drgnx-agents-editor-draw--lines (drgnx-agents-editor-draw--gutter-lines frame))
-          (drgnx-agents-editor-draw--margin buffer (and drgnx-agents-editor-draw--lines (not (display-graphic-p))))
+        (let ((had drgnx-agents-editor-draw--strips))
+          (setq drgnx-agents-editor-draw--strips (drgnx-agents-editor-draw--gutter-strips frame))
+          (drgnx-agents-editor-draw--margin buffer (and drgnx-agents-editor-draw--strips (not (display-graphic-p))))
           (drgnx-agents-editor-draw--rebuild-buffer buffer)
           ;; the strip came or went: the change marks leave its lines out, or draw them again
-          (unless (eq (and had t) (and drgnx-agents-editor-draw--lines t)) (drgnx-agents-editor-draw--redraw-marks buffer)))))))
+          (unless (eq (and had t) (and drgnx-agents-editor-draw--strips t)) (drgnx-agents-editor-draw--redraw-marks buffer)))))))
 
 (defun drgnx-agents-editor-draw--redraw-all ()
   "The identity cache cleared: resolve every colour again and put every bar again."
@@ -355,7 +360,7 @@ column, before the change marks)."
       (drgnx-agents-editor-draw--drop-bars nil)
       (remove-hook 'kill-buffer-hook #'drgnx-agents-editor-draw--killed t)
       (drgnx-agents-editor-draw--drop-tags nil)
-      (setq drgnx-agents-editor-draw--rings nil drgnx-agents-editor-draw--lines nil)
+      (setq drgnx-agents-editor-draw--rings nil drgnx-agents-editor-draw--strips nil)
       (drgnx-agents-editor-draw--margin buffer nil)
       (mapc #'delete-overlay drgnx-agents-editor-draw--pool)
       (mapc #'delete-overlay drgnx-agents-editor-draw--gpool)

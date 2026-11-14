@@ -229,6 +229,8 @@ fn range(session: &str, kind: GutterKind, start: u32, end: u32, help: &str) -> G
         end,
         projected: None,
         help: help.into(),
+        start_pos: None,
+        end_pos: None,
     }
 }
 

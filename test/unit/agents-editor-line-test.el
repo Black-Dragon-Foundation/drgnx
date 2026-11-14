@@ -10,12 +10,12 @@
 (load (expand-file-name "modules/editor/drgnx-sticky" drgnx-dir) nil t)
 (load (expand-file-name "modules/editor/drgnx-large-files" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/agents-editor-place-fixture" drgnx-dir) nil t)
 (drgnx-test-modules-preload '(tools/agents-in-editor))
 
 (declare-function drgnx-agents-editor-sync-windows "drgnx-agents-editor")
 (declare-function drgnx-agents-editor-line--provider "drgnx-agents-editor-line")
 (defvar drgnx-agents-editor-line--entries)
-(defvar drgnx-agents-editor-line-symbol-function)
 (defvar drgnx-chrome-short-breadcrumb-functions)
 
 (defvar drgnx-agents-editor-line-test--version 0)
@@ -33,7 +33,7 @@ scroll's providers registered beside it."
                (delete-other-windows)
                (let ((buf (find-file-noselect (expand-file-name "a.el" dir))))
                  (unwind-protect
-                     (let ((drgnx-agents-editor-line-symbol-function (lambda (_b pos) (format "sym-%d" (line-number-at-pos pos)))))
+                     (progn
                        (with-current-buffer buf
                          (insert (mapconcat (lambda (i) (format "line %d" i)) (number-sequence 1 ,lines) "\n"))
                          (set-buffer-modified-p nil))
@@ -45,9 +45,11 @@ scroll's providers registered beside it."
        (delete-directory dir t))))
 
 (defun drgnx-agents-editor-line-test--frame (buf agents)
-  (drgnx-agents-editor--event
-   "agent-buffer" (list :view (buffer-local-value 'drgnx-agents-editor--view buf) :full t
-                        :version (cl-incf drgnx-agents-editor-line-test--version) :agents agents)))
+  "Feed BUF's watch the full frame of AGENTS with the positions and symbol names the hub would put on them."
+  (let ((placed (drgnx-test-editor-place buf agents nil (lambda (line) (format "sym-%d" line)))))
+    (drgnx-agents-editor--event
+     "agent-buffer" (list :view (buffer-local-value 'drgnx-agents-editor--view buf) :full t
+                          :version (cl-incf drgnx-agents-editor-line-test--version) :agents (car placed)))))
 
 (defun drgnx-agents-editor-line-test--agent (ord line &rest more)
   (append (list :ordinal ord :session (format "s%d" ord) :handle (format "Agent%d" ord) :mode "editing" :line line

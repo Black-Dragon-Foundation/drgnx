@@ -654,6 +654,14 @@
                   "null"
                 ]
               },
+              "end_pos": {
+                "description": "The position `line_end` (else `line`) starts at: where a ring's last row begins.",
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "handle": {
                 "type": [
                   "string",
@@ -671,6 +679,14 @@
               "line_end": {
                 "format": "uint32",
                 "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "line_pos": {
+                "description": "The position `line` starts at: where a projected agent's tag goes and where a ring begins.",
+                "format": "int64",
                 "type": [
                   "integer",
                   "null"
@@ -699,6 +715,14 @@
                   "null"
                 ]
               },
+              "pos": {
+                "description": "The buffer position (Emacs's: 1-based, in characters) of `line_end` at `col`, clamped to the line: where an\nediting agent's bar sits.  Positions are of the text the hub holds (`doc_version`); none for a text over the\nmarks' limit or an agent with no line.",
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "projected": {
                 "anyOf": [
                   {
@@ -718,6 +742,13 @@
               },
               "step_title": {
                 "description": "Its current step's title (the agent's own words).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "symbol": {
+                "description": "The innermost symbol that defines the line (hrafn's outline of the text the hub holds); none when none does,\nfor a projected agent, or for a text over 2 MB.",
                 "type": [
                   "string",
                   "null"
@@ -760,6 +791,13 @@
                 "minimum": 0,
                 "type": "integer"
               },
+              "end_pos": {
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "help": {
                 "description": "The hover text (\"Opus · changed in step 14 · 2 min ago\").",
                 "type": "string"
@@ -784,6 +822,14 @@
                 "format": "uint32",
                 "minimum": 0,
                 "type": "integer"
+              },
+              "start_pos": {
+                "description": "The positions `start` and `end` begin at (Emacs's, in the text the hub holds): a range is the rows whose line\nstarts lie from `start_pos` to `end_pos`.  None for a text over the marks' limit.",
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -4977,6 +5023,14 @@
                   "null"
                 ]
               },
+              "end_pos": {
+                "description": "The position `line_end` (else `line`) starts at: where a ring's last row begins.",
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "handle": {
                 "type": [
                   "string",
@@ -4994,6 +5048,14 @@
               "line_end": {
                 "format": "uint32",
                 "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "line_pos": {
+                "description": "The position `line` starts at: where a projected agent's tag goes and where a ring begins.",
+                "format": "int64",
                 "type": [
                   "integer",
                   "null"
@@ -5022,6 +5084,14 @@
                   "null"
                 ]
               },
+              "pos": {
+                "description": "The buffer position (Emacs's: 1-based, in characters) of `line_end` at `col`, clamped to the line: where an\nediting agent's bar sits.  Positions are of the text the hub holds (`doc_version`); none for a text over the\nmarks' limit or an agent with no line.",
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "projected": {
                 "anyOf": [
                   {
@@ -5041,6 +5111,13 @@
               },
               "step_title": {
                 "description": "Its current step's title (the agent's own words).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "symbol": {
+                "description": "The innermost symbol that defines the line (hrafn's outline of the text the hub holds); none when none does,\nfor a projected agent, or for a text over 2 MB.",
                 "type": [
                   "string",
                   "null"
@@ -5083,6 +5160,13 @@
                 "minimum": 0,
                 "type": "integer"
               },
+              "end_pos": {
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "help": {
                 "description": "The hover text (\"Opus · changed in step 14 · 2 min ago\").",
                 "type": "string"
@@ -5107,6 +5191,14 @@
                 "format": "uint32",
                 "minimum": 0,
                 "type": "integer"
+              },
+              "start_pos": {
+                "description": "The positions `start` and `end` begin at (Emacs's, in the text the hub holds): a range is the rows whose line\nstarts lie from `start_pos` to `end_pos`.  None for a text over the marks' limit.",
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
               }
             },
             "required": [

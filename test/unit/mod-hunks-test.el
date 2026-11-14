@@ -127,7 +127,7 @@
 
 (ert-deftest drgnx-hunks/a-line-an-agent-draws-is-left-out ()
   (mod-hunks-test--with-buffer "a\nb\nc\nd\n"
-    (let ((drgnx-hunks-skip-line-function (lambda (line) (= line 2))))
+    (let ((drgnx-hunks-skip-line-function (lambda (pos) (= pos 3))))      ; line 2 starts at position 3
       (mod-hunks-test--answer '(:old_start 1 :old_count 3 :new_start 1 :new_count 3 :old_lines ("x\n" "y\n" "z\n")))
       (should (equal (mod-hunks-test--marks) '((1 . changed) (3 . changed)))))
     (drgnx-hunks-redraw)                                    ; the strip went: the line is marked again

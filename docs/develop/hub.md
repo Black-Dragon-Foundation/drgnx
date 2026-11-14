@@ -2157,6 +2157,11 @@ large-files module's default `:ask-above`, the size from which a file opens lean
   changes", "agent s1 · …") and cuts it to `width` columns (`BLAME_MIN_WIDTH` 20: none under it, `BLAME_MAX_WIDTH` 80),
   from `git/blame`'s cached answer for the text the hub holds; none for an untracked buffer, a text over the limit or
   the empty last line. The client asks once per line change at idle (`drgnx-blame-delay`) and again on a resize.
+- The buffer view's frame (`agents/buffer/watch`, the `agent-buffer` event) carries positions beside its lines
+  (`marks::place`, text: the edit history's mirror, else the file; none over the limit): an agent's `pos` (line_end at
+  col, clamped), `line_pos`, `end_pos` and `symbol` (hrafn's `symbol_at_line` of the text, 2 MB at most, kept per file,
+  text and line), a range's `start_pos` and `end_pos`. Positions are the text the frame's `doc_version` names; the client
+  drops a frame older than the buffer's last change sent.
 - `history/hunks/head` answers `marks: [{line, pos, kind}]` (`kind` `added`, `changed` or `deleted`; a deletion marks
   the line after it) beside the hunks, which Show, Revert and Stage Change still use.
 
