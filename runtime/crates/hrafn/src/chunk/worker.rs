@@ -108,13 +108,44 @@ pub fn read_frame(r: &mut (impl Read + ?Sized), max: usize) -> Result<Option<Vec
 }
 
 /// What the worker needs of the pack besides its library: sent once, first.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Init {
     pub chunks_scm: String,
     #[serde(default)]
     pub tags_scm: Option<String>,
     #[serde(default)]
     pub docs: skald::manifest::Docs,
+    /// The pack's `:inline` node kinds: inline values' tree walk ([`Request::Scan`]).
+    #[serde(default)]
+    pub inline: Option<crate::inline_scan::Lists>,
+    /// The pack's metavariable sigil (`:hrafn :sigil`; `$` when it has none): structural search ([`Request::Find`]).
+    #[serde(default)]
+    pub sigil: Option<char>,
+}
+
+impl Init {
+    /// The init of a pack with manifest M and the text of its `chunks.scm` and `tags.scm`: the docs rules, the `:inline`
+    /// kinds and the `:sigil` are the manifest's.
+    pub fn from_manifest(
+        m: &skald::Manifest,
+        chunks_scm: String,
+        tags_scm: Option<String>,
+    ) -> Init {
+        let h = m.hrafn.as_ref();
+        Init {
+            chunks_scm,
+            tags_scm,
+            docs: h.and_then(|h| h.docs.clone()).unwrap_or_default(),
+            inline: m.inline.as_ref().map(|i| crate::inline_scan::Lists {
+                functions: i.functions.clone(),
+                loops: i.loops.clone(),
+                names: i.names.clone(),
+            }),
+            sigil: h
+                .and_then(|h| h.sigil.as_deref())
+                .and_then(|s| s.chars().next()),
+        }
+    }
 }
 
 /// Hub to worker, after [`Init`].
@@ -128,6 +159,22 @@ pub enum Request {
         text: String,
         budget: usize,
     },
+    /// The matches of a structural PATTERN (ast-grep's syntax) in TEXT.
+    Find {
+        id: u64,
+        pattern: String,
+        text: String,
+    },
+    /// The names inline values show at ROW (from 0) of TEXT.
+    Scan { id: u64, text: String, row: usize },
+}
+
+impl Request {
+    fn id(&self) -> u64 {
+        match self {
+            Request::Chunk { id, .. } | Request::Find { id, .. } | Request::Scan { id, .. } => *id,
+        }
+    }
 }
 
 /// Worker to hub.
@@ -143,10 +190,36 @@ pub enum Reply {
         symbols: Vec<Symbol>,
         refs: Vec<Ref>,
     },
+    Found {
+        id: u64,
+        matches: Vec<crate::structural::Match>,
+    },
+    Scanned {
+        id: u64,
+        found: Vec<(usize, usize, String)>,
+    },
+    /// The pattern is not valid in the grammar (the file and the worker are fine).
+    BadPattern {
+        id: u64,
+        error: String,
+    },
     Failed {
         id: u64,
         error: String,
     },
+}
+
+impl Reply {
+    fn id(&self) -> Option<u64> {
+        match self {
+            Reply::Ready { .. } => None,
+            Reply::Chunked { id, .. }
+            | Reply::Found { id, .. }
+            | Reply::Scanned { id, .. }
+            | Reply::BadPattern { id, .. }
+            | Reply::Failed { id, .. } => Some(*id),
+        }
+    }
 }
 
 fn send<T: Serialize>(w: &mut (impl Write + ?Sized), v: &T) -> io::Result<()> {
@@ -250,51 +323,32 @@ fn serve_inner(
         None => None,
     };
     send(w, &Reply::Ready { abi }).map_err(|e| e.to_string())?;
+    let grammar_for_find = crate::structural::Grammar::from_parts(
+        language.clone(),
+        init.sigil.unwrap_or('$'),
+        "for this pack's grammar",
+    );
+    let lists = init.inline.clone().unwrap_or_default();
+    let mut patterns: Vec<(String, Result<crate::structural::Pattern, String>)> = Vec::new();
     while let Some(body) = read_frame(r, MAX_FRAME).map_err(|e| e.to_string())? {
         let request: Request =
             serde_json::from_slice(&body).map_err(|e| format!("a request: {e}"))?;
-        let Request::Chunk {
+        let id = request.id();
+        let reply = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            answer(
+                request,
+                &spec,
+                &language,
+                tags.as_ref(),
+                &grammar_for_find,
+                &lists,
+                &mut patterns,
+            )
+        }))
+        .unwrap_or_else(|_| Reply::Failed {
             id,
-            path,
-            generated,
-            text,
-            budget,
-        } = request;
-        let reply = if text.len() > MAX_TEXT {
-            Reply::Failed {
-                id,
-                error: format!("a file of {} bytes, over {MAX_TEXT}", text.len()),
-            }
-        } else {
-            let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                ts::chunk_with(
-                    None,
-                    &spec,
-                    &language,
-                    tags.as_ref(),
-                    &path,
-                    generated,
-                    &text,
-                    budget,
-                )
-            }));
-            match done {
-                Ok(Some((chunks, symbols, refs))) => Reply::Chunked {
-                    id,
-                    chunks,
-                    symbols,
-                    refs,
-                },
-                Ok(None) => Reply::Failed {
-                    id,
-                    error: "the file did not parse".into(),
-                },
-                Err(_) => Reply::Failed {
-                    id,
-                    error: "the chunker panicked".into(),
-                },
-            }
-        };
+            error: "the worker panicked".into(),
+        });
         match send(w, &reply) {
             Ok(()) => {}
             // an answer over the frame cap is this file's failure, not the stream's
@@ -310,6 +364,114 @@ fn serve_inner(
         }
     }
     Ok(())
+}
+
+/// Patterns the worker keeps compiled.
+const PATTERNS: usize = 16;
+/// The longest pattern a request may carry.
+const MAX_PATTERN: usize = 4096;
+
+/// The reply to REQUEST.
+#[allow(clippy::too_many_arguments)]
+fn answer(
+    request: Request,
+    spec: &super::engine::Spec,
+    language: &tree_sitter::Language,
+    tags: Option<&tree_sitter::Query>,
+    grammar: &crate::structural::Grammar,
+    lists: &crate::inline_scan::Lists,
+    patterns: &mut Vec<(String, Result<crate::structural::Pattern, String>)>,
+) -> Reply {
+    let too_big = |id: u64, text: &str| {
+        (text.len() > MAX_TEXT).then(|| Reply::Failed {
+            id,
+            error: format!("a file of {} bytes, over {MAX_TEXT}", text.len()),
+        })
+    };
+    match request {
+        Request::Chunk {
+            id,
+            path,
+            generated,
+            text,
+            budget,
+        } => {
+            if let Some(r) = too_big(id, &text) {
+                return r;
+            }
+            match ts::chunk_with(None, spec, language, tags, &path, generated, &text, budget) {
+                Some((chunks, symbols, refs)) => Reply::Chunked {
+                    id,
+                    chunks,
+                    symbols,
+                    refs,
+                },
+                None => Reply::Failed {
+                    id,
+                    error: "the file did not parse".into(),
+                },
+            }
+        }
+        Request::Find { id, pattern, text } => {
+            if let Some(r) = too_big(id, &text) {
+                return r;
+            }
+            if pattern.len() > MAX_PATTERN {
+                return Reply::BadPattern {
+                    id,
+                    error: format!("a pattern of {} bytes, over {MAX_PATTERN}", pattern.len()),
+                };
+            }
+            let at = match patterns.iter().position(|(p, _)| *p == pattern) {
+                Some(i) => i,
+                None => {
+                    let built =
+                        crate::structural::Pattern::in_grammar(grammar.clone(), &pattern, None)
+                            .map_err(|e| e.to_string());
+                    if patterns.len() >= PATTERNS {
+                        let _ = patterns.remove(0);
+                    }
+                    patterns.push((pattern, built));
+                    patterns.len() - 1
+                }
+            };
+            match &patterns[at].1 {
+                Err(error) => Reply::BadPattern {
+                    id,
+                    error: error.clone(),
+                },
+                Ok(p) => match p.find(text.as_bytes()) {
+                    Ok(matches) => Reply::Found { id, matches },
+                    Err(skip) => Reply::Failed {
+                        id,
+                        error: skip.reason().into(),
+                    },
+                },
+            }
+        }
+        Request::Scan { id, text, row } => {
+            if let Some(r) = too_big(id, &text) {
+                return r;
+            }
+            let mut parser = tree_sitter::Parser::new();
+            if parser.set_language(language).is_err() {
+                return Reply::Failed {
+                    id,
+                    error: "the grammar does not load into a parser".into(),
+                };
+            }
+            match parser.parse(&text, None) {
+                Some(tree) => Reply::Scanned {
+                    id,
+                    found: crate::inline_scan::scan(&tree, &text, row, lists),
+                },
+                None => Reply::Failed {
+                    id,
+                    error: "the file did not parse".into(),
+                },
+            }
+        }
+    }
 }
 
 /// What the hub gives a launcher to start one worker.
@@ -345,12 +507,16 @@ pub enum WorkerError {
     Dead(String),
     /// This file only: it reads as text.
     File(String),
+    /// The pattern is not valid in the pack's grammar: the worker and the file are fine.
+    Pattern(String),
 }
 
 impl std::fmt::Display for WorkerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            WorkerError::Dead(e) | WorkerError::File(e) => write!(f, "{e}"),
+            WorkerError::Dead(e) | WorkerError::File(e) | WorkerError::Pattern(e) => {
+                write!(f, "{e}")
+            }
         }
     }
 }
@@ -577,31 +743,13 @@ impl Worker {
         }
     }
 
-    /// TEXT of PATH chunked by the pack's grammar in the worker.
-    pub fn chunk(
-        &mut self,
-        path: &str,
-        generated: bool,
-        text: &str,
-        budget: usize,
-    ) -> Result<Chunked, WorkerError> {
-        if text.len() > MAX_TEXT {
-            return Err(WorkerError::File(format!(
-                "a file of {} bytes, over {MAX_TEXT}",
-                text.len()
-            )));
-        }
+    /// One request and its answer: the worker started if need be, nothing sent while it has said something unasked, the
+    /// request written and the answer read under the deadlines, a wrong id or an answer after the answer ending it.
+    fn call(&mut self, make: impl FnOnce(u64) -> Request) -> Result<Reply, WorkerError> {
         self.ensure()?;
         let id = self.next_id;
         self.next_id += 1;
-        let request = Request::Chunk {
-            id,
-            path: path.to_owned(),
-            generated,
-            text: text.to_owned(),
-            budget,
-        };
-        let body = serde_json::to_vec(&request).map_err(|e| WorkerError::File(e.to_string()))?;
+        let body = serde_json::to_vec(&make(id)).map_err(|e| WorkerError::File(e.to_string()))?;
         let live = self.live.as_mut().expect("ensure started it");
         // a frame nobody asked for, from a worker that wrote while idle: it is not served
         if live.unsolicited() {
@@ -611,31 +759,101 @@ impl Worker {
             return Err(self.fail(e));
         }
         let live = self.live.as_mut().expect("still running");
-        match live.replies.recv_timeout(self.request_deadline) {
-            Ok(Ok(b)) => match serde_json::from_slice::<Reply>(&b) {
-                Ok(Reply::Chunked {
-                    id: got,
-                    chunks,
-                    symbols,
-                    refs,
-                }) if got == id => {
-                    check(text, &chunks, &symbols, &refs).map_err(|e| self.fail(e))?;
-                    // one answer for one request: more is a worker that is not doing what it was asked
-                    if self.live.as_ref().is_some_and(Live::unsolicited) {
-                        let _ = self.fail("the worker wrote more than one answer".into());
-                    }
-                    Ok((chunks, symbols, refs))
+        let got = match live.replies.recv_timeout(self.request_deadline) {
+            Ok(Ok(b)) => serde_json::from_slice::<Reply>(&b)
+                .map_err(|e| self.fail(format!("an answer that does not read: {e}")))?,
+            Ok(Err(e)) => return Err(self.fail(format!("the worker's stream: {e}"))),
+            Err(_) => {
+                return Err(self.fail(format!(
+                    "no answer within {} s: the worker was killed",
+                    self.request_deadline.as_secs()
+                )));
+            }
+        };
+        match got {
+            // this file failed, the worker is fine
+            Reply::Failed { id: g, error } if g == id => Err(WorkerError::File(error)),
+            Reply::BadPattern { id: g, error } if g == id => Err(WorkerError::Pattern(error)),
+            r if r.id() == Some(id) => {
+                // one answer for one request: more is a worker that is not doing what it was asked
+                if self.live.as_ref().is_some_and(Live::unsolicited) {
+                    let _ = self.fail("the worker wrote more than one answer".into());
                 }
-                // this file failed, the worker is fine
-                Ok(Reply::Failed { id: got, error }) if got == id => Err(WorkerError::File(error)),
-                Ok(other) => Err(self.fail(format!("an answer out of turn: {other:?}"))),
-                Err(e) => Err(self.fail(format!("an answer that does not read: {e}"))),
-            },
-            Ok(Err(e)) => Err(self.fail(format!("the worker's stream: {e}"))),
-            Err(_) => Err(self.fail(format!(
-                "no answer within {} s: the worker was killed",
-                self.request_deadline.as_secs()
-            ))),
+                Ok(r)
+            }
+            other => Err(self.fail(format!("an answer out of turn: {other:?}"))),
+        }
+    }
+
+    /// TEXT of PATH chunked by the pack's grammar in the worker.
+    pub fn chunk(
+        &mut self,
+        path: &str,
+        generated: bool,
+        text: &str,
+        budget: usize,
+    ) -> Result<Chunked, WorkerError> {
+        too_big(text)?;
+        let r = self.call(|id| Request::Chunk {
+            id,
+            path: path.to_owned(),
+            generated,
+            text: text.to_owned(),
+            budget,
+        })?;
+        match r {
+            Reply::Chunked {
+                chunks,
+                symbols,
+                refs,
+                ..
+            } => {
+                check(text, &chunks, &symbols, &refs).map_err(|e| self.fail(e))?;
+                Ok((chunks, symbols, refs))
+            }
+            other => Err(self.fail(format!("an answer of the wrong kind: {other:?}"))),
+        }
+    }
+
+    /// The matches of the structural PATTERN in TEXT, by the pack's grammar in the worker.
+    pub fn find(
+        &mut self,
+        pattern: &str,
+        text: &str,
+    ) -> Result<Vec<crate::structural::Match>, WorkerError> {
+        too_big(text)?;
+        let r = self.call(|id| Request::Find {
+            id,
+            pattern: pattern.to_owned(),
+            text: text.to_owned(),
+        })?;
+        match r {
+            Reply::Found { matches, .. } => {
+                check_matches(text, &matches).map_err(|e| self.fail(e))?;
+                Ok(matches)
+            }
+            other => Err(self.fail(format!("an answer of the wrong kind: {other:?}"))),
+        }
+    }
+
+    /// The names (row, column, text) inline values show for a stop at ROW (from 0) of TEXT, by the pack's grammar.
+    pub fn scan(
+        &mut self,
+        text: &str,
+        row: usize,
+    ) -> Result<Vec<(usize, usize, String)>, WorkerError> {
+        too_big(text)?;
+        let r = self.call(|id| Request::Scan {
+            id,
+            text: text.to_owned(),
+            row,
+        })?;
+        match r {
+            Reply::Scanned { found, .. } => {
+                check_names(text, &found).map_err(|e| self.fail(e))?;
+                Ok(found)
+            }
+            other => Err(self.fail(format!("an answer of the wrong kind: {other:?}"))),
         }
     }
 
@@ -715,6 +933,64 @@ fn check(text: &str, chunks: &[Chunk], symbols: &[Symbol], refs: &[Ref]) -> Resu
                 r.name
             ));
         }
+    }
+    Ok(())
+}
+
+fn too_big(text: &str) -> Result<(), WorkerError> {
+    if text.len() > MAX_TEXT {
+        return Err(WorkerError::File(format!(
+            "a file of {} bytes, over {MAX_TEXT}",
+            text.len()
+        )));
+    }
+    Ok(())
+}
+
+/// What a search takes from a worker's matches: spans inside the text on character boundaries, lines and columns that
+/// are the text's, a bounded number of bounded captures.
+fn check_matches(text: &str, matches: &[crate::structural::Match]) -> Result<(), String> {
+    let lines = u32::try_from(text.matches('\n').count() + 1).unwrap_or(u32::MAX);
+    if matches.len() > text.len().max(1) {
+        return Err("more matches than bytes".into());
+    }
+    for m in matches {
+        if m.start > m.end
+            || m.end > text.len()
+            || !text.is_char_boundary(m.start)
+            || !text.is_char_boundary(m.end)
+        {
+            return Err(format!("a match {}..{} outside the file", m.start, m.end));
+        }
+        if m.line < 1 || m.line > m.end_line || m.end_line > lines {
+            return Err(format!(
+                "a match's lines {}..{} are not the file's",
+                m.line, m.end_line
+            ));
+        }
+        if m.captures.len() > 64
+            || m.captures
+                .iter()
+                .any(|(k, v)| k.len() > 256 || v.len() > text.len())
+            || m.replacement.as_ref().is_some_and(|r| r.len() > MAX_TEXT)
+        {
+            return Err("a match with too many or too large captures".into());
+        }
+    }
+    Ok(())
+}
+
+/// What inline values take from a worker's names: rows of the text, a bounded number of bounded names.
+fn check_names(text: &str, found: &[(usize, usize, String)]) -> Result<(), String> {
+    let rows = text.matches('\n').count() + 1;
+    if found.len() > text.len().max(1) {
+        return Err("more names than bytes".into());
+    }
+    if found
+        .iter()
+        .any(|(r, _, n)| *r >= rows || n.len() > text.len().min(4096))
+    {
+        return Err("a name outside the file".into());
     }
     Ok(())
 }
@@ -803,15 +1079,45 @@ pub fn chunk(
     text: &str,
     budget: usize,
 ) -> Result<Chunked, WorkerError> {
-    let entry = PACKS
+    let entry = entry(pack)?;
+    let mut w = entry.worker.lock().unwrap_or_else(PoisonError::into_inner);
+    w.chunk(path, generated, text, budget)
+}
+
+/// The matches of the structural PATTERN in TEXT by PACK's worker.
+pub fn find(
+    pack: &str,
+    pattern: &str,
+    text: &str,
+) -> Result<Vec<crate::structural::Match>, WorkerError> {
+    entry(pack)?
+        .worker
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .find(pattern, text)
+}
+
+/// The names inline values show for a stop at ROW (from 0) of TEXT, by PACK's worker.
+pub fn scan(
+    pack: &str,
+    text: &str,
+    row: usize,
+) -> Result<Vec<(usize, usize, String)>, WorkerError> {
+    entry(pack)?
+        .worker
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .scan(text, row)
+}
+
+fn entry(pack: &str) -> Result<Arc<Entry>, WorkerError> {
+    PACKS
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .iter()
         .find(|e| e.pack == pack)
         .cloned()
-        .ok_or_else(|| WorkerError::Dead(format!("pack {pack} is not installed")))?;
-    let mut w = entry.worker.lock().unwrap_or_else(PoisonError::into_inner);
-    w.chunk(path, generated, text, budget)
+        .ok_or_else(|| WorkerError::Dead(format!("pack {pack} is not installed")))
 }
 
 /// (pack, reason) of each fetched pack that reads as text now: what the doctor prints.
@@ -997,11 +1303,7 @@ mod tests {
             grammar: "fixture".into(),
             sha256: "0".repeat(64),
         };
-        let init = Init {
-            chunks_scm: String::new(),
-            tags_scm: None,
-            docs: skald::manifest::Docs::default(),
-        };
+        let init = Init::default();
         let mut w = Worker::new(spec, init, launch);
         // a worker that never answers is cut at this deadline: short, so the test is (the only real wait here)
         w.request_deadline = Duration::from_millis(150);
@@ -1019,9 +1321,7 @@ mod tests {
 
     fn id_of(r: &mut dyn Read) -> Option<u64> {
         let body = read_frame(r, MAX_FRAME).ok()??;
-        match serde_json::from_slice::<Request>(&body).ok()? {
-            Request::Chunk { id, .. } => Some(id),
-        }
+        Some(serde_json::from_slice::<Request>(&body).ok()?.id())
     }
 
     #[test]
@@ -1215,11 +1515,7 @@ mod tests {
             grammar: "g".into(),
             sha256: String::new(),
         };
-        let init = Init {
-            chunks_scm: String::new(),
-            tags_scm: None,
-            docs: skald::manifest::Docs::default(),
-        };
+        let init = Init::default();
         let mut w = Worker::new(spec, init, Arc::new(Refuses));
         let e = w.chunk("a.x", false, "t", 10).unwrap_err();
         assert_eq!(
@@ -1329,8 +1625,7 @@ mod tests {
         if big_init {
             w.set_init_for_test(Init {
                 chunks_scm: "x".repeat(300_000),
-                tags_scm: None,
-                docs: skald::manifest::Docs::default(),
+                ..Init::default()
             });
         }
         (w, kills, done_tx)
@@ -1418,5 +1713,115 @@ mod tests {
         assert!(check(text, &ok, &[late], &[]).is_err());
         assert!(check(text, &ok, &[], &refs(vec![0])).is_err());
         assert!(check(text, &ok, &[], &refs(vec![99])).is_err());
+    }
+
+    // ---- 6b-2: structural search and inline values over the same channel ----
+
+    fn a_match(start: usize, end: usize, line: u32, end_line: u32) -> crate::structural::Match {
+        crate::structural::Match {
+            start,
+            end,
+            line,
+            col: 0,
+            end_line,
+            end_col: 0,
+            captures: Default::default(),
+            replacement: None,
+        }
+    }
+
+    /// A worker that answers a find with MATCHES (or says the pattern is bad) and a scan with FOUND.
+    fn answering(
+        matches: Vec<crate::structural::Match>,
+        found: Vec<(usize, usize, String)>,
+    ) -> (Worker, Arc<AtomicUsize>) {
+        let (w, _, kills) = worker_with(move |r, wr| {
+            if !ready(r, wr) {
+                return;
+            }
+            while let Some(body) = read_frame(r, MAX_FRAME).ok().flatten() {
+                let Ok(req) = serde_json::from_slice::<Request>(&body) else {
+                    return;
+                };
+                let reply = match req {
+                    Request::Find { id, pattern, .. } if pattern == "bad" => Reply::BadPattern {
+                        id,
+                        error: "pattern is not valid C# at col 1".into(),
+                    },
+                    Request::Find { id, .. } => Reply::Found {
+                        id,
+                        matches: matches.clone(),
+                    },
+                    Request::Scan { id, .. } => Reply::Scanned {
+                        id,
+                        found: found.clone(),
+                    },
+                    Request::Chunk { id, .. } => empty_chunked(id),
+                };
+                if send(wr, &reply).is_err() {
+                    return;
+                }
+            }
+        });
+        (w, kills)
+    }
+
+    #[test]
+    fn find_and_scan_answers_come_back_and_a_bad_pattern_costs_nothing() {
+        let text = "class A {}\nclass B {}\n";
+        let (mut w, kills) = answering(
+            vec![a_match(0, 10, 1, 1), a_match(11, 21, 2, 2)],
+            vec![(0, 6, "A".into()), (1, 6, "B".into())],
+        );
+        assert_eq!(w.find("class $N {}", text).unwrap().len(), 2);
+        assert_eq!(w.scan(text, 1).unwrap().len(), 2);
+        // a pattern the grammar refuses: its own error, the worker kept, the pack not struck
+        let e = w.find("bad", text).unwrap_err();
+        assert_eq!(
+            e,
+            WorkerError::Pattern("pattern is not valid C# at col 1".into())
+        );
+        assert_eq!(kills.load(Ordering::SeqCst), 0);
+        assert!(w.running() && w.dead().is_none());
+        assert_eq!(w.find("class $N {}", text).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_workers_matches_and_names_outside_the_file_end_it() {
+        let text = "héllo\nworld\n";
+        // past the end, inside a character, backwards, lines not the file's
+        for what in [
+            a_match(0, 999, 1, 1),
+            a_match(0, 2, 1, 1),
+            a_match(4, 2, 1, 1),
+            a_match(0, 3, 0, 1),
+            a_match(0, 3, 1, 9),
+        ] {
+            let (mut w, kills) = answering(vec![what.clone()], vec![]);
+            assert!(w.find("x", text).is_err(), "{what:?}");
+            assert_eq!(kills.load(Ordering::SeqCst), 1, "{what:?}");
+        }
+        for found in [vec![(9, 0, "x".into())], vec![(0, 0, "n".repeat(10_000))]] {
+            let (mut w, kills) = answering(vec![], found.clone());
+            assert!(w.scan(text, 0).is_err(), "{found:?}");
+            assert_eq!(kills.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[test]
+    fn an_answer_of_the_wrong_kind_to_a_find_ends_the_worker() {
+        // a worker that answers every request with a chunk answer
+        let (mut w, _, kills) = worker_with(|r, wr| {
+            if !ready(r, wr) {
+                return;
+            }
+            while let Some(id) = id_of(r) {
+                if send(wr, &empty_chunked(id)).is_err() {
+                    return;
+                }
+            }
+        });
+        assert!(w.find("x", "text").is_err());
+        assert_eq!(kills.load(Ordering::SeqCst), 1);
     }
 }

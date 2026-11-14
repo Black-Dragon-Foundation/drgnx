@@ -239,11 +239,7 @@ pub fn fetched(env: &runstav::paths::Env) -> Vec<hrafn::chunk::worker::Fetched> 
                 grammar: g.name.clone(),
                 sha256: entry.sha256.clone(),
             },
-            init: Init {
-                chunks_scm,
-                tags_scm,
-                docs: h.docs.clone().unwrap_or_default(),
-            },
+            init: Init::from_manifest(&m, chunks_scm, tags_scm),
             extensions: m.files.extensions.clone(),
         });
     }
@@ -284,4 +280,78 @@ pub fn install_hub(env: &runstav::paths::Env) {
         }
     };
     hrafn::chunk::worker::install(packs, launcher);
+}
+
+/// Test builds only: the worker in this process on two pipes (`serve` is what the real worker runs), and a fetched pack
+/// made of the C# grammar the tests' pack job built, claiming one extension nothing else has.
+#[cfg(feature = "test-hooks")]
+pub mod fixture {
+    use super::*;
+    use hrafn::chunk::worker::{Fetched, Init, serve};
+    use std::sync::MutexGuard;
+
+    struct InProcess;
+
+    impl Launch for InProcess {
+        fn start(&self, s: &WorkerSpec) -> Result<Started, String> {
+            let (req_r, req_w) = std::io::pipe().map_err(|e| e.to_string())?;
+            let (rep_r, rep_w) = std::io::pipe().map_err(|e| e.to_string())?;
+            let (lib, grammar, sha) = (s.lib.clone(), s.grammar.clone(), s.sha256.clone());
+            std::thread::spawn(move || {
+                let (mut r, mut w) = (req_r, rep_w);
+                serve(&lib, &grammar, &sha, &mut r, &mut w);
+            });
+            Ok(Started {
+                stdin: Box::new(req_w),
+                stdout: Box::new(rep_r),
+                kill: Box::new(|| {}),
+                stderr: Box::new(String::new),
+            })
+        }
+    }
+
+    static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+
+    /// The pack `PACK` claiming `.EXT`, installed for the chunker until the guard drops (tests of the process-wide set
+    /// take turns).
+    pub struct Installed(#[allow(dead_code)] MutexGuard<'static, ()>);
+
+    impl Drop for Installed {
+        fn drop(&mut self) {
+            hrafn::chunk::worker::install(vec![], Arc::new(InProcess));
+        }
+    }
+
+    pub fn install_csharp(pack: &str, ext: &str) -> Installed {
+        let guard = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+        let lock = PathBuf::from(std::env::var_os("DRGNX_PACK_LOCK").expect("DRGNX_PACK_LOCK"));
+        let grammars =
+            PathBuf::from(std::env::var_os("DRGNX_PACK_GRAMMARS").expect("DRGNX_PACK_GRAMMARS"));
+        let entry = skald::registry::from_lock(&std::fs::read(lock).unwrap(), &grammars)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.name == "c-sharp")
+            .expect("c-sharp is in the lock");
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../packs/csharp");
+        let m = skald::builtin::get("csharp").expect("the csharp pack");
+        let read = |f: &str| std::fs::read_to_string(dir.join(f)).unwrap();
+        hrafn::chunk::worker::install(
+            vec![Fetched {
+                spec: WorkerSpec {
+                    pack: pack.into(),
+                    lib: entry.lib,
+                    grammar: "c-sharp".into(),
+                    sha256: entry.sha256,
+                },
+                init: Init::from_manifest(
+                    m,
+                    read("queries/chunks.scm"),
+                    Some(read("queries/tags.scm")),
+                ),
+                extensions: vec![ext.into()],
+            }],
+            Arc::new(InProcess),
+        );
+        Installed(guard)
+    }
 }

@@ -33,6 +33,8 @@ pub(super) type Batch = Vec<(Match, Mark)>;
 struct Patterns<'a> {
     find: &'a Find,
     by_lang: HashMap<Lang, Result<Pattern, String>>,
+    /// The refusals of fetched packs' grammars (their workers parse the pattern), once each.
+    fetched: Vec<String>,
 }
 
 impl Patterns<'_> {
@@ -55,6 +57,7 @@ pub(super) fn run(
     let mut patterns = Patterns {
         find,
         by_lang: HashMap::new(),
+        fetched: Vec::new(),
     };
     // the one language's pattern refused: nothing to search
     let literal = match find.lang {
@@ -81,6 +84,30 @@ pub(super) fn run(
             return;
         };
         let (lang, _) = classify(file, &bytes[..bytes.len().min(64 * 1024)]);
+        // a file of a fetched pack: its worker searches it (a search for one language of Hrafn's skips it)
+        if lang == Lang::Text
+            && find.lang.is_none()
+            && let Some(pack) = hrafn::chunk::worker::claims(file)
+        {
+            let Ok(text) = std::str::from_utf8(&bytes) else {
+                return;
+            };
+            match hrafn::chunk::worker::find(&pack, &find.pattern, text) {
+                Ok(found) => {
+                    let batch = matches_of(file, &bytes, &found);
+                    if !batch.is_empty() {
+                        on_file(batch);
+                    }
+                }
+                Err(hrafn::chunk::worker::WorkerError::Pattern(e)) => {
+                    if !patterns.fetched.contains(&e) {
+                        patterns.fetched.push(e);
+                    }
+                }
+                Err(_) => {}
+            }
+            return;
+        }
         if find.lang.is_some_and(|l| l != lang) || structural::Grammar::of(lang).is_none() {
             return;
         }
@@ -96,6 +123,7 @@ pub(super) fn run(
         .by_lang
         .values()
         .filter_map(|r| r.as_ref().err())
+        .chain(&patterns.fetched)
         .collect();
     match refused.as_slice() {
         [] => Ok(()),
@@ -159,6 +187,35 @@ mod tests {
         let r = run(&q, &find, &AtomicBool::new(false), |b| out.push(b));
         out.sort_by(|a, b| a[0].0.file.cmp(&b[0].0.file));
         (out, r)
+    }
+
+    /// A fetched pack's files are searched by its worker, and its refusal of a pattern is said.
+    #[test]
+    fn a_fetched_packs_files_are_searched_through_its_worker() {
+        let _pack = crate::parse_worker::fixture::install_csharp("csharpx", "xcs");
+        let d = tempfile::tempdir().unwrap();
+        let f = put(
+            d.path(),
+            "a.xcs",
+            "class G { void M() {\n  Foo(2);\n  Bar(3);\n  Foo(4);\n} }\n",
+        );
+        put(d.path(), "b.xcs", "class H { }\n");
+        let (batches, r) = search(d.path(), "Foo($A)", None);
+        assert!(r.is_ok(), "{r:?}");
+        assert_eq!(batches.len(), 1);
+        let rows: Vec<(u32, String)> = batches[0]
+            .iter()
+            .map(|(m, mark)| match mark {
+                Mark::Span { captures, .. } => (m.line, captures[0].1.clone()),
+                _ => panic!("not a span"),
+            })
+            .collect();
+        assert_eq!(rows, [(2, "2".to_owned()), (4, "4".to_owned())]);
+        assert_eq!(batches[0][0].0.file, f);
+        // a pattern the pack's grammar refuses is the search's error
+        let (none, r) = search(d.path(), "Foo(", None);
+        assert!(none.is_empty());
+        assert!(r.unwrap_err().contains("pattern is not valid"), "said");
     }
 
     #[test]

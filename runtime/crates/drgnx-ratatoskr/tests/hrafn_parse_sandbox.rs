@@ -90,15 +90,11 @@ fn lib_of(name: &str) -> (PathBuf, String) {
 fn csharp_init() -> Init {
     let m = skald::builtin::get("csharp").expect("the csharp pack");
     let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../packs/csharp/queries");
-    Init {
-        chunks_scm: std::fs::read_to_string(pack.join("chunks.scm")).unwrap(),
-        tags_scm: Some(std::fs::read_to_string(pack.join("tags.scm")).unwrap()),
-        docs: m
-            .hrafn
-            .as_ref()
-            .and_then(|h| h.docs.clone())
-            .unwrap_or_default(),
-    }
+    Init::from_manifest(
+        m,
+        std::fs::read_to_string(pack.join("chunks.scm")).unwrap(),
+        Some(std::fs::read_to_string(pack.join("tags.scm")).unwrap()),
+    )
 }
 
 fn spec(pack: &str, grammar: &str, name: &str) -> WorkerSpec {
@@ -128,14 +124,23 @@ fn the_worker_chunks_inside_the_sandbox_exactly_as_the_in_process_chunker_does()
     let (chunks, symbols, refs) = got.unwrap_or_else(|e| panic!("{e}"));
     let (c2, s2, r2) = chunk_file_refs("Cache.cs", Lang::Csharp, false, &text, BUDGET);
     assert_eq!((chunks, symbols, refs), (c2, s2, r2));
+    // structural search and inline values over the same sandboxed process
+    let probe = "class G { void M() { Foo(2); Foo(3); } }";
+    let own = hrafn::structural::Pattern::new(Lang::Csharp, "Foo($A)", None).unwrap();
+    assert_eq!(
+        w.find("Foo($A)", probe).unwrap_or_else(|e| panic!("{e}")),
+        own.find(probe.as_bytes()).unwrap()
+    );
+    let scan_text = "class C {\n  int F(int a) {\n    int b = a + 1;\n    return b;\n  }\n}\n";
+    let found = w.scan(scan_text, 3).unwrap_or_else(|e| panic!("{e}"));
+    assert!(found.iter().any(|(_, _, n)| n == "b"), "{found:?}");
     w.stop();
 }
 
 fn probe_init() -> Init {
     Init {
         chunks_scm: "(object) @container".into(),
-        tags_scm: None,
-        docs: skald::manifest::Docs::default(),
+        ..Init::default()
     }
 }
 

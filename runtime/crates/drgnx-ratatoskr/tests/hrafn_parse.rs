@@ -98,23 +98,18 @@ fn lib_of(name: &str) -> (PathBuf, String) {
 fn csharp_init() -> Init {
     let m = skald::builtin::get("csharp").expect("the csharp pack");
     let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../packs/csharp/queries");
-    Init {
-        chunks_scm: std::fs::read_to_string(pack.join("chunks.scm")).unwrap(),
-        tags_scm: Some(std::fs::read_to_string(pack.join("tags.scm")).unwrap()),
-        docs: m
-            .hrafn
-            .as_ref()
-            .and_then(|h| h.docs.clone())
-            .unwrap_or_default(),
-    }
+    Init::from_manifest(
+        m,
+        std::fs::read_to_string(pack.join("chunks.scm")).unwrap(),
+        Some(std::fs::read_to_string(pack.join("tags.scm")).unwrap()),
+    )
 }
 
 fn fixture_init() -> Init {
     // any pattern the JSON grammar accepts: the lexer is what the fixtures break
     Init {
         chunks_scm: "(object) @container".into(),
-        tags_scm: None,
-        docs: skald::manifest::Docs::default(),
+        ..Init::default()
     }
 }
 
@@ -314,4 +309,64 @@ fn the_library_loaded_is_the_one_hashed_whatever_the_path_becomes() {
         serde_json::from_slice::<Reply>(&first).unwrap(),
         Reply::Ready { .. }
     ));
+}
+
+const PROBE_TEXT: &str = "class G { void M() { Foo(2); Foo(3); } }";
+const SCAN_TEXT: &str = "class C {\n  int F(int a) {\n    int b = a + 1;\n    return b;\n  }\n}\n";
+
+/// What the worker answers to a structural find and an inline scan is what the hub's own C# grammar answers.
+#[test]
+fn the_worker_finds_and_scans_exactly_as_the_built_in_c_sharp_does() {
+    let (lib, sha) = lib_of("c-sharp");
+    let (mut w, _) = worker("csharp", "c-sharp", lib, sha, csharp_init());
+    let found = w.find("Foo($A)", PROBE_TEXT).unwrap();
+    let own = hrafn::structural::Pattern::new(Lang::Csharp, "Foo($A)", None).unwrap();
+    assert_eq!(found, own.find(PROBE_TEXT.as_bytes()).unwrap());
+    assert_eq!(found.len(), 2);
+    assert!(matches!(
+        w.find("Foo(", PROBE_TEXT),
+        Err(WorkerError::Pattern(_))
+    ));
+    // the worker is still the same process after a refused pattern
+    assert_eq!(w.find("Foo($A)", PROBE_TEXT).unwrap(), found);
+    let i = skald::builtin::get("csharp")
+        .unwrap()
+        .inline
+        .as_ref()
+        .unwrap();
+    let lists = hrafn::inline_scan::Lists {
+        functions: i.functions.clone(),
+        loops: i.loops.clone(),
+        names: i.names.clone(),
+    };
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&skald::registry::language("c-sharp").unwrap())
+        .unwrap();
+    let tree = parser.parse(SCAN_TEXT, None).unwrap();
+    let want = hrafn::inline_scan::scan(&tree, SCAN_TEXT, 3, &lists);
+    assert!(!want.is_empty());
+    assert_eq!(w.scan(SCAN_TEXT, 3).unwrap(), want);
+    w.stop();
+}
+
+/// The same containment for the other two operations: a grammar that faults or spins on its first token costs the worker
+/// whatever is asked of it.
+#[test]
+fn a_faulting_or_spinning_grammar_costs_the_worker_for_a_find_and_a_scan_too() {
+    let (lib, sha) = lib_of("fixture:crashy");
+    let (mut w, pids) = worker("crashy", "crashy", lib, sha, fixture_init());
+    assert!(matches!(
+        w.find("x", "{\"a\": 1}"),
+        Err(WorkerError::File(_))
+    ));
+    assert!(matches!(w.scan("{\"a\": 1}", 0), Err(WorkerError::File(_))));
+    assert!(pids.lock().unwrap().iter().all(|p| !alive(*p)));
+    let (lib, sha) = lib_of("fixture:loopy");
+    let (mut w, pids) = worker("loopy", "loopy", lib, sha, fixture_init());
+    w.request_deadline = Duration::from_secs(2);
+    assert!(
+        matches!(w.scan("{\"a\": 1}", 0), Err(WorkerError::File(m)) if m.contains("no answer"))
+    );
+    assert!(pids.lock().unwrap().iter().all(|p| !alive(*p)));
 }

@@ -141,14 +141,24 @@ impl Inline {
         before: Option<&HashMap<String, String>>,
     ) -> Vec<Shown> {
         let (lang, _) = hrafn::classify(path, text.as_bytes());
-        let Some(language) = hrafn::structural::language(lang) else {
-            return vec![];
-        };
-        let Some(tree) = self.tree(text, lang, language) else {
-            return vec![];
-        };
         let row = line.saturating_sub(1) as usize;
-        let found = scan(&tree, text, row, lists());
+        let found = if lang == hrafn::Lang::Text
+            && let Some(pack) = hrafn::chunk::worker::claims(path)
+        {
+            // a fetched pack's grammar is not loaded here: its worker walks the tree
+            match hrafn::chunk::worker::scan(&pack, text, row) {
+                Ok(found) => found,
+                Err(_) => return vec![],
+            }
+        } else {
+            let Some(language) = hrafn::structural::language(lang) else {
+                return vec![];
+            };
+            let Some(tree) = self.tree(text, lang, language) else {
+                return vec![];
+            };
+            scan(&tree, text, row, lists())
+        };
         // the value of each name: a local scope's first, else a global's
         let value = |name: &str| {
             vars.iter()

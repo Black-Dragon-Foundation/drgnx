@@ -5,7 +5,7 @@
              :tree-sha256 "e883157c9f7205435742912e6b09bee37e0472637151a866855fe78e02ae1cf1" :src "src" :required t))
  :mode (:ts csharp-ts-mode :builtin t :classic csharp-mode)
  :format (:formatter csharpier :command ("csharpier" "format" "--write-stdout") :config-files (".csharpierrc" ".csharpierrc.json" ".csharpierrc.yaml" ".csharpierrc.yml"))
- :hrafn (:lang "csharp" :chunks "queries/chunks.scm" :docs (:line "///" :block "/**" :members (line block)))
+ :hrafn (:lang "csharp" :chunks "queries/chunks.scm" :sigil "µ" :docs (:line "///" :block "/**" :members (line block)))
  :inline (:functions ("method_declaration" "constructor_declaration" "local_function_statement" "lambda_expression")
           :loops ("for_statement" "foreach_statement" "while_statement" "do_statement")
           :names ("identifier"))

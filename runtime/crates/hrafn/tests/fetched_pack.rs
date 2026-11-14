@@ -67,15 +67,11 @@ fn fetched() -> Fetched {
             grammar: "c-sharp".into(),
             sha256,
         },
-        init: Init {
-            chunks_scm: std::fs::read_to_string(pack.join("queries/chunks.scm")).unwrap(),
-            tags_scm: Some(std::fs::read_to_string(pack.join("queries/tags.scm")).unwrap()),
-            docs: m
-                .hrafn
-                .as_ref()
-                .and_then(|h| h.docs.clone())
-                .unwrap_or_default(),
-        },
+        init: Init::from_manifest(
+            m,
+            std::fs::read_to_string(pack.join("queries/chunks.scm")).unwrap(),
+            Some(std::fs::read_to_string(pack.join("queries/tags.scm")).unwrap()),
+        ),
         // no built-in language has it: the file is `Text` until a fetched pack claims it
         extensions: vec!["xcs".into()],
     }
@@ -111,6 +107,38 @@ fn a_fetched_packs_files_are_chunked_by_its_worker_and_read_as_text_when_it_cann
     assert!(names(&symbols).contains(&("Put".into(), "method".into())));
     assert_eq!(chunks.len(), c2.len());
     assert!(SAID.lock().unwrap().is_empty());
+    // structural search and inline values go to the same worker and agree with the built-in C# path
+    let probe = "class G { void M() { Foo(2); Foo(3); } }";
+    let found = worker::find("csharpx", "Foo($A)", probe).unwrap();
+    let pattern = hrafn::structural::Pattern::new(Lang::Csharp, "Foo($A)", None).unwrap();
+    assert_eq!(found, pattern.find(probe.as_bytes()).unwrap());
+    assert_eq!(found.len(), 2);
+    assert_eq!(found[1].captures.get("A").map(String::as_str), Some("3"));
+    // a pattern the grammar refuses: the pattern's error, the worker kept
+    assert!(matches!(
+        worker::find("csharpx", "Foo(", probe),
+        Err(worker::WorkerError::Pattern(_))
+    ));
+    assert!(worker::dead().is_empty());
+    let source = "class C {\n  int F(int a) {\n    int b = a + 1;\n    return b;\n  }\n}\n";
+    let i = skald::builtin::get("csharp")
+        .unwrap()
+        .inline
+        .as_ref()
+        .unwrap();
+    let lists = hrafn::inline_scan::Lists {
+        functions: i.functions.clone(),
+        loops: i.loops.clone(),
+        names: i.names.clone(),
+    };
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&skald::registry::language("c-sharp").unwrap())
+        .unwrap();
+    let tree = parser.parse(source, None).unwrap();
+    let built_in = hrafn::inline_scan::scan(&tree, source, 3, &lists);
+    assert_eq!(worker::scan("csharpx", source, 3).unwrap(), built_in);
+    assert!(!built_in.is_empty());
     // the stamp moved with the install: the index parses a project's files again
     let stamp1 = lang_stamp();
     assert_ne!(stamp0, stamp1);

@@ -304,7 +304,15 @@ files no built-in language takes) goes through `chunk_file_refs` to the worker; 
   chunker; a wrong hash is refused; `crashy` and `loopy` cost the worker and never the caller, the spinner is killed at the
   deadline); `fetched_pack.rs` checks the chunker's side (the worker's answer, a refused launcher, the stamp).
 
-Not in the worker yet (Task 6b-2): structural search, inline values and origin trails over a fetched pack's tree.
+**What the worker does for the other parse sites (Task 6b-2).** Besides `chunk`, a request can be `find` (a structural
+pattern, ast-grep's syntax, in a file: the Search view's Pattern toggle sends each file of a fetched pack to its worker and
+reads back the matches) and `scan` (the names inline values show at a stopped row: the tree walk of `hrafn::inline_scan`,
+the same function the debugger runs for a built-in language, with the pack's `:inline` node kinds; the matching of the
+frame's variables and the lines drawn stay the hub's). The pack's `:hrafn :sigil` is its metavariable character. A
+pattern the pack's grammar refuses comes back as the pattern's error (the worker and the pack are not struck for it). The
+hub checks these answers like the chunks: match spans inside the text on character boundaries, lines the file's, a bounded
+number of bounded captures; names on rows of the file. Origin trails (`debug::origin`) keep their per-language Rust path
+for the built-in languages and do not reach a fetched pack's grammar yet.
 
 ## The language stamp
 

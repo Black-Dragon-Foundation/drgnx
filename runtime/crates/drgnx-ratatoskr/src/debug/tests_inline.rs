@@ -266,6 +266,25 @@ fn every_grammar_finds_the_function_and_its_names() {
     }
 }
 
+/// A fetched pack's file shows the same values a built-in language's does: its grammar is in a worker, which walks the
+/// tree, and the rest (matching the frame's variables, the lines) is the hub's, the same code.
+#[test]
+fn a_fetched_packs_function_shows_its_values_through_its_worker() {
+    let _pack = crate::parse_worker::fixture::install_csharp("csharpx", "xcs");
+    let vars = [local("a", "1"), local("b", "2"), local("k", "3")];
+    let text = "class F {\n  int G(int a) {\n    int b = a + 1;\n    foreach (var k in new[] { 1, 2, 3 }) {\n      H();\n      b += k;\n    }\n    return b;\n  }\n}\n";
+    let fetched = Inline::new().lines("F.xcs", text, 5, &vars, None);
+    let built_in = Inline::new().lines("F.cs", text, 5, &vars, None);
+    assert_eq!(lines(&fetched), [(3, "b = 2  a = 1"), (4, "k = 3")]);
+    assert_eq!(fetched, built_in);
+    // a stop in a file nobody claims has none
+    assert!(
+        Inline::new()
+            .lines("F.zzz", text, 5, &vars, None)
+            .is_empty()
+    );
+}
+
 #[test]
 fn a_stop_gives_its_event_with_the_changes_since_the_last_stop() {
     let dir = std::env::temp_dir().join(format!("drgnx-inline-{}", std::process::id()));
