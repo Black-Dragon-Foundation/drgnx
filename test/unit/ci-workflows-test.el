@@ -410,7 +410,9 @@ Returns (EXIT . OUTPUT)."
       ;; the crate is `-p''s, or, in a --workspace run, the one whose features it names (the macos job's ssh rows)
       (when (and (string-match-p "cargo test .*-- --ignored" line)
                  (string-match "\\(?:-p \\|--workspace --features \\)\\([a-z0-9-]+\\)" line)
-                 (member (match-string 1 line) timed))
+                 (member (match-string 1 line) timed)
+                 ;; the debug-live job names its modules, none of which holds a timing row
+                 (not (string-search "debug::tests_live_adapters" line)))
         (setq runs (1+ runs))
         (should (string-suffix-p " $skips" line))))
     ;; three runs: the escape-host's sandbox lane, the macos job's ssh rows (--test macos) and the Mac runner's
@@ -438,12 +440,27 @@ Returns (EXIT . OUTPUT)."
                            (and (string-match-p "cargo test .*-p drgnx-ratatoskr" line)
                                 (not (string-match-p " --test " line)))))
               (setq checked (1+ checked))
-              (should (string-search "debug-adapters.sh" (substring job 0 line-at))))
+              (should (string-match-p "debug-adapters\\(?:-image\\)?\\.sh" (substring job 0 line-at))))
             (setq line-at (+ line-at (length line) 1)))
           (ignore id)
           (setq pos end))))
     ;; the escape-host's sandbox lane and the macos fork row both run them
     (should (>= checked 2))))
+
+(ert-deftest drgnx-ci/the-debug-rows-the-escape-lane-skips-run-in-debug-live ()
+  ;; a module the sandbox lane skips (--skip debug::tests_X) must run in another job: no silent skip
+  (let ((rt (drgnx-ci-test--yml "runtime.yml")) (n 0))
+    (skip-unless rt)
+    (let ((lane (drgnx-ci-test--job rt "escape-host")) (live (drgnx-ci-test--job rt "debug-live")) (pos 0))
+      (should live)
+      (while (string-match "--skip \\(debug::tests_[a-z_]+\\)" lane pos)
+        (let ((module (match-string 1 lane)))
+          (setq pos (match-end 0) n (1+ n))
+          (should (string-match-p (concat "-- --ignored .*" (regexp-quote module)) live))))
+      ;; the job has the adapters (the image's script) and the ptrace the native debuggers need
+      (should (string-search "test/container/debug-adapters-image.sh" live))
+      (should (string-search "--cap-add SYS_PTRACE" live)))
+    (should (>= n 2))))
 
 (ert-deftest drgnx-ci/the-timing-job-runs-the-rust-timing-tests-report-only ()
   (let* ((tiers (drgnx-ci-test--yml "drgnx-tiers.yml")) (script (expand-file-name "test/timing-rust.sh" drgnx-ci-test--root)))

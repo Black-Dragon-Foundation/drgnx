@@ -508,10 +508,9 @@ jobs:
           vm=$(cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks --test browser_sandboxed -- --list --format terse --ignored | sed -n 's/: test$//p')
           [ -n "$vm" ] || { echo "browser_sandboxed lists no rows" >&2; exit 1; }
           skips="$skips$(printf '%s\n' "$vm" | awk '{ printf " --skip %s", $1 }')"
-          # the debug rows that need the adapter image, not this runner: tests_live_adapters runs delve, CodeLLDB and
-          # lldb-dap; tests_blocked_live asserts that every TCP listener in the network namespace is in its port
-          # block, which a shared runner's (sccache's server, the runner's own services) never are. tests_fork_live,
-          # the Python and JS forks in the sandbox, runs here against the adapters installed above
+          # the debug rows that run in the `debug-live` job instead (the adapter image's adapters, CAP_SYS_PTRACE, a
+          # network namespace of its own): tests_live_adapters and tests_blocked_live. tests_fork_live, the Python and JS
+          # forks in the sandbox, runs here against the adapters installed above
           skips="$skips --skip debug::tests_live_adapters --skip debug::tests_blocked_live"
           cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks -- --ignored --test-threads 1 $skips
       # The agent browser's rows where they can run: a Fedora 45 VM on the x64 runners (Linux 7.1 or later, Landlock ABI 9
@@ -568,6 +567,58 @@ jobs:
   # with only its worktree mounted, inside its caps, and every escape row is refused. GitHub's Ubuntu runners ship
   # podman; the rows pull busybox (digest-pinned at run time) and skip without podman. 26.04, not 24.04: the hub needs
   # podman 5 (`podman pull --policy`, networked jobs), and 24.04's is 4.9.
+  # The debug rows that need the adapter image (docs/develop/debugging.md, "Live adapters: the image") and a network
+  # namespace of their own: tests_live_adapters starts delve, CodeLLDB, lldb-dap, debugpy and js-debug for real (the
+  # native debuggers trace their debuggee, so the container has CAP_SYS_PTRACE), and tests_blocked_live asserts that
+  # every TCP listener in the namespace is in its port block, which a shared runner's never are: a job container's
+  # namespace is ours. No sccache here (its server listens on 4226, inside the namespace the second row inspects).
+  # The Python and JS fork rows (tests_fork_live) need bubblewrap and run in escape-host's sandbox lane.
+  debug-live:
+    name: live debug adapters (Fedora 45, the adapter image's adapters)
+    needs: images
+    if: ${{ !cancelled() && github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-debug-live ')) }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    container: >-
+      ${{ needs.images.outputs.rust
+      && fromJSON(format('{{"image":"{0}","options":"--init --cap-add SYS_PTRACE","credentials":{{"username":"{1}","password":"{2}"}}}}',
+      needs.images.outputs.rust, github.actor, github.token))
+      || fromJSON('{"image":"registry.fedoraproject.org/fedora:45","options":"--init --cap-add SYS_PTRACE"}') }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: runtime
+    env:
+      PREBUILT: ${{ needs.images.outputs.rust }}
+    steps:
+      - name: git for the checkout (in the prebuilt image already)
+        if: ${{ env.PREBUILT == '' }}
+        working-directory: /
+        run: dnf -y install git
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Tools (in the prebuilt image already)
+        if: ${{ env.PREBUILT == '' }}
+        working-directory: ${{ github.workspace }}
+        run: sh test/container/rust-packages.sh
+      - name: Zig (in the prebuilt image already; the terminal engine's build tool)
+        if: ${{ env.PREBUILT == '' }}
+        working-directory: ${{ github.workspace }}
+        run: bash test/container/zig.sh linux
+      - name: libghostty-vt's pinned tarballs (build.rs never downloads)
+        working-directory: ${{ github.workspace }}
+        run: bash runtime/crates/ghostty-vt-sys/fetch.sh
+      - name: the adapter image's adapters (debugpy, delve, js-debug, lldb-dap, CodeLLDB, at their pins)
+        working-directory: ${{ github.workspace }}
+        run: bash test/container/debug-adapters-image.sh
+      # lldb-dap's launches set disableASLR: false, since a container may not turn address randomisation off
+      - name: debug::tests_live_adapters and debug::tests_blocked_live (--ignored)
+        run: cargo test --locked --no-fail-fast --manifest-path Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks --lib -- --ignored --test-threads 1 debug::tests_live_adapters debug::tests_blocked_live
+
   agent-containers:
     name: agent core container rows (podman)
     if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-containers ')) }}
