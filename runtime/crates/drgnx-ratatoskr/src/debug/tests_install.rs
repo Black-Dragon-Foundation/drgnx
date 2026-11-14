@@ -14,6 +14,20 @@ fn sha(bytes: &[u8]) -> String {
         .collect()
 }
 
+/// What an install leaves in TOOLS: the lock files beside the targets stay (an flock needs its file), nothing else.
+fn left(tools: &Path) -> usize {
+    std::fs::read_dir(tools).map_or(0, |d| {
+        d.filter(|e| {
+            !e.as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".lock")
+        })
+        .count()
+    })
+}
+
 /// A tar.gz of ENTRIES (path, bytes, mode); a path ending in `/` is a folder, a mode of 0o120777 a symlink to BYTES.
 fn tgz(entries: &[(&str, &[u8], u32)]) -> Vec<u8> {
     let gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
@@ -138,6 +152,7 @@ async fn a_pinned_tarball_is_checked_and_unpacked_under_its_folder() {
     let names: Vec<_> = std::fs::read_dir(tools.path())
         .unwrap()
         .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .filter(|n| !n.ends_with(".lock"))
         .collect();
     assert_eq!(names, ["js-debug"]);
 }
@@ -156,7 +171,7 @@ async fn a_download_with_another_digest_installs_nothing() {
         e.contains(&sha(&bytes)) && e.contains(&"0".repeat(64)),
         "{e}"
     );
-    assert_eq!(std::fs::read_dir(tools.path()).unwrap().count(), 0);
+    assert_eq!(left(tools.path()), 0);
 }
 
 #[tokio::test]
@@ -173,11 +188,7 @@ async fn an_archive_that_climbs_or_links_installs_nothing() {
             .await
             .unwrap_err();
         assert!(e.contains("unsafe"), "{name}: {e}");
-        assert_eq!(
-            std::fs::read_dir(tools.path()).unwrap().count(),
-            0,
-            "{name}"
-        );
+        assert_eq!(left(tools.path()), 0, "{name}");
     }
     assert!(!tools.path().parent().unwrap().join("evil").exists());
 }
@@ -206,6 +217,14 @@ async fn a_link_inside_the_archive_is_made_and_one_that_leaves_it_is_not() {
         ("up.tgz", vec![("jdk/l", &b"../../outside"[..], 0o120777)]),
         ("deep.tgz", vec![("jdk/a/l", &b"../../x"[..], 0o120777)]),
         ("abs.tgz", vec![("jdk/l", &b"/etc/passwd"[..], 0o120777)]),
+        // each target passes the depth count alone; together they leave the root (x/a is the root, `..` of it is outside)
+        (
+            "pair.tgz",
+            vec![
+                ("jdk/x/a", &b".."[..], 0o120777),
+                ("jdk/y/b", &b"../x/a/.."[..], 0o120777),
+            ],
+        ),
         (
             "through.tgz",
             vec![
@@ -229,7 +248,7 @@ async fn a_link_inside_the_archive_is_made_and_one_that_leaves_it_is_not() {
             .await
             .unwrap_err();
         assert!(e.contains("unsafe"), "{name}: {e}");
-        assert_eq!(std::fs::read_dir(t2.path()).unwrap().count(), 0, "{name}");
+        assert_eq!(left(t2.path()), 0, "{name}");
     }
 }
 
@@ -336,10 +355,7 @@ async fn an_install_of_parts_is_all_or_none_and_a_file_part_is_one_checked_file(
         !tools.join("jdk").exists() && !tools.join("jv").exists(),
         "{e}"
     );
-    assert!(
-        std::fs::read_dir(&tools).map_or(true, |d| d.count() == 0),
-        "scratch left in {tools:?}"
-    );
+    assert!(left(&tools) == 0, "scratch left in {tools:?}");
     // right digests: the folder and the file, and the file is exactly the download
     let good = install::plan(&recipe(&sha(&jar)), "linux-x64").unwrap();
     assert!(matches!(good, Plan::Parts(ref p) if p.len() == 2));
@@ -427,4 +443,41 @@ async fn the_parts_of_an_adapter_say_what_is_pinned_and_what_is_installed() {
     let s = status(&tools);
     assert_eq!(s[0].installed.as_deref(), Some("0.53.1"));
     assert_eq!(s[1].installed.as_deref(), Some("unknown"));
+}
+
+/// Two installs of the same adapter take turns: the second waits for the lock beside the target until the first is done.
+#[tokio::test]
+async fn an_install_waits_while_another_install_of_the_same_adapter_holds_its_lock() {
+    use std::os::fd::AsRawFd;
+    let src = tempfile::tempdir().unwrap();
+    let tools = tempfile::tempdir().unwrap();
+    let bytes = tgz(&[("js-debug/new.js", b"new", 0o644)]);
+    std::fs::write(src.path().join("js.tgz"), &bytes).unwrap();
+    let plan = archive("js.tgz", &sha(&bytes), "js-debug", Some("js-debug"));
+    // the other install: the lock file of the target, held
+    let lock = std::fs::File::create(tools.path().join(".js-debug.lock")).unwrap();
+    // SAFETY: flock(2) on a file descriptor this test owns.
+    assert_eq!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) }, 0);
+    let (t, s) = (tools.path().to_owned(), src.path().to_owned());
+    let task = crate::clock::spawn("test:install", async move {
+        install::install(&plan, &t, &Source::Dir(s), &[]).await
+    });
+    // no clock here: the install is blocked on the lock in a blocking thread; give the scheduler and the blocking pool
+    // plenty of turns, and it still has not finished
+    for _ in 0..200 {
+        tokio::task::yield_now().await;
+        crate::clock::blocking(|| ()).await.unwrap();
+    }
+    assert!(
+        !task.is_finished(),
+        "the install ran while the target was locked"
+    );
+    assert!(!tools.path().join("js-debug").exists());
+    drop(lock);
+    crate::clock::timeout(std::time::Duration::from_secs(30), task)
+        .await
+        .expect("the install ends once the lock is free")
+        .unwrap()
+        .unwrap();
+    assert!(tools.path().join("js-debug/new.js").is_file());
 }

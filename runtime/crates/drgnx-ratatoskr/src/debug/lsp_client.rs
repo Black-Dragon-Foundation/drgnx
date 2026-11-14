@@ -205,10 +205,10 @@ impl Client {
                     Err(f) => break f,
                 }
             };
+            let _ = closed_tx.send(Some(end.clone()));
             for (_, tx) in lock(&pending).drain() {
                 let _ = tx.send(Err(end.clone()));
             }
-            let _ = closed_tx.send(Some(end));
         });
         client
     }
@@ -311,12 +311,15 @@ impl Client {
         params: Value,
         within: Duration,
     ) -> Result<Value, Failure> {
-        if let Some(f) = self.closed.borrow().clone() {
-            return Err(f);
-        }
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
+        // insert first, then look at `closed`: the reader marks the client closed before it drains `pending`, so a
+        // request is either refused here or drained there, never left to wait for its deadline
         lock(&self.pending).insert(id, tx);
+        if let Some(f) = self.closed.borrow().clone() {
+            lock(&self.pending).remove(&id);
+            return Err(f);
+        }
         let sent = self
             .send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}))
             .await;

@@ -472,6 +472,58 @@ fn plain(base: &Base) -> bool {
 /// How many redirects a pinned download may follow.
 const MAX_HOPS: usize = 5;
 
+/// A redirect's LOCATION resolved against the URL just asked, AT (RFC 3986, the parts a download's redirect uses): an
+/// absolute URL is itself, `//host/x` keeps the scheme and changes the host, `/x` keeps the host, `?q` keeps the path, and
+/// `b` or `../b` is relative to AT's folder (dot segments removed). Anything else (a scheme this does not follow) comes
+/// back as it is, for the https-only check.
+fn resolve_location(at: &str, location: &str) -> String {
+    if location.contains("://") {
+        return location.to_owned();
+    }
+    let Some((scheme, rest)) = at.split_once("://") else {
+        return location.to_owned();
+    };
+    if let Some(host_and_path) = location.strip_prefix("//") {
+        return format!("{scheme}://{host_and_path}");
+    }
+    let (authority, path_query) = rest.find('/').map_or((rest, ""), |i| rest.split_at(i));
+    let path = path_query.split(['?', '#']).next().unwrap_or("");
+    let path = if path.is_empty() { "/" } else { path };
+    let (path, tail) = if location.starts_with('/') {
+        (location, "")
+    } else if location.starts_with('?') {
+        (path, location)
+    } else {
+        let dir = &path[..=path.rfind('/').unwrap_or(0)];
+        let joined = format!("{dir}{location}");
+        return format!("{scheme}://{authority}{}", dot_segments(&joined));
+    };
+    format!("{scheme}://{authority}{}{tail}", dot_segments(path))
+}
+
+/// PATH (maybe with a `?query`) without its `.` and `..` segments.
+fn dot_segments(path: &str) -> String {
+    let (path, tail) = path
+        .find(['?', '#'])
+        .map_or((path, ""), |i| path.split_at(i));
+    let mut out: Vec<&str> = Vec::new();
+    for seg in path.split('/').skip(1) {
+        match seg {
+            "." => {}
+            ".." => {
+                out.pop();
+            }
+            s => out.push(s),
+        }
+    }
+    let trailing = matches!(path.rsplit('/').next(), Some("." | ".."));
+    let mut r = format!("/{}", out.join("/"));
+    if trailing && !r.ends_with('/') {
+        r.push('/');
+    }
+    format!("{r}{tail}")
+}
+
 /// URL's body into SINK, over https (or http when PLAIN), through the same client the gateway uses (so the proxy
 /// variables and the platform's certificate store apply).
 async fn over_http(
@@ -521,13 +573,9 @@ async fn over_http(
                 "more than {MAX_HOPS} redirects from {url}"
             )));
         }
-        at = if next.starts_with("https://") || (plain && next.starts_with("http://")) {
-            next
-        } else if next.starts_with('/') {
-            // the same server: the scheme and authority of the URL just asked
-            let (scheme, rest) = at.split_once("://").unwrap_or(("https", &at));
-            let authority = rest.split('/').next().unwrap_or(rest);
-            format!("{scheme}://{authority}{next}")
+        let joined = resolve_location(&at, &next);
+        at = if joined.starts_with("https://") || (plain && joined.starts_with("http://")) {
+            joined
         } else {
             return Err(InstallError::NotHttps(next));
         };
@@ -642,6 +690,25 @@ pub(crate) fn unpack(zip: &Path, dest: &Path, limits: Limits) -> Result<(), Inst
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_location_is_resolved_against_the_url_just_asked() {
+        let at = "https://h.example:8443/a/b/c.tgz?x=1";
+        for (loc, want) in [
+            ("https://other/y", "https://other/y"),
+            ("//cdn.example/z", "https://cdn.example/z"),
+            ("/abs/p", "https://h.example:8443/abs/p"),
+            ("d.tgz", "https://h.example:8443/a/b/d.tgz"),
+            ("../d.tgz", "https://h.example:8443/a/d.tgz"),
+            ("./e/../d.tgz", "https://h.example:8443/a/b/d.tgz"),
+            ("../../../../d", "https://h.example:8443/d"),
+            ("?y=2", "https://h.example:8443/a/b/c.tgz?y=2"),
+            ("ftp://x/y", "ftp://x/y"),
+        ] {
+            assert_eq!(resolve_location(at, loc), want, "{loc}");
+        }
+        assert_eq!(resolve_location("https://h", "b"), "https://h/b");
+    }
+
     use super::*;
 
     /// A zip of the entries (name, bytes, unix mode).
@@ -997,6 +1064,10 @@ mod tests {
                 let reply = match path.as_str() {
                     "/a" => format!("HTTP/1.1 302 Found\r\nlocation: http://127.0.0.1:{port}/b\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"),
                     "/b" => "HTTP/1.1 301 Moved\r\nlocation: /c\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".to_owned(),
+                    "/rel/x" => "HTTP/1.1 302 Found\r\nlocation: b\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".to_owned(),
+                    "/rel/dot/x" => "HTTP/1.1 302 Found\r\nlocation: ../b\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".to_owned(),
+                    "/rel/b" => "HTTP/1.1 200 OK\r\ncontent-length: 5\r\nconnection: close\r\n\r\nhello".to_owned(),
+                    "/proto" => format!("HTTP/1.1 302 Found\r\nlocation: //127.0.0.1:{port}/c\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"),
                     "/c" => "HTTP/1.1 200 OK\r\ncontent-length: 5\r\nconnection: close\r\n\r\nhello".to_owned(),
                     "/loop" => format!("HTTP/1.1 302 Found\r\nlocation: http://127.0.0.1:{port}/loop\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"),
                     "/ftp" => "HTTP/1.1 302 Found\r\nlocation: ftp://x/y\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".to_owned(),
@@ -1029,6 +1100,11 @@ mod tests {
         };
         // two hops (an absolute http one, a relative one) reach the body
         assert_eq!(get("/a").await.unwrap(), sha(b"hello"));
+        // a relative Location (`b`, `../b`) is resolved against the URL just asked; `//host/x` keeps the scheme and
+        // changes the host, it is never a path on the current host
+        assert_eq!(get("/rel/x").await.unwrap(), sha(b"hello"));
+        assert_eq!(get("/rel/dot/x").await.unwrap(), sha(b"hello"));
+        assert_eq!(get("/proto").await.unwrap(), sha(b"hello"));
         assert!(
             get("/loop")
                 .await

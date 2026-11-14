@@ -170,15 +170,16 @@ fn expand_value(value: &Value, v: &Vars) -> Result<Value, String> {
 }
 
 /// A fill argument that is exactly `${config:KEY?}`: the launch's string KEY, or null when the launch has none.
-fn optional_config(s: &str, arguments: &Value) -> Option<Value> {
+pub(super) fn optional_config(s: &str, arguments: &Value) -> Option<Result<Value, String>> {
     let key = s.strip_prefix("${config:")?.strip_suffix("?}")?;
-    Some(
-        arguments
-            .get(key)
-            .filter(|v| v.is_string())
-            .cloned()
-            .unwrap_or(Value::Null),
-    )
+    Some(match arguments.get(key) {
+        None | Some(Value::Null) => Ok(Value::Null),
+        Some(v) if v.is_string() => Ok(v.clone()),
+        // a key the launch has, of another type, is the same error `${config:KEY}` gives
+        Some(_) => Err(format!(
+            "the launch has no string {key} for ${{config:{key}}}"
+        )),
+    })
 }
 
 /// A fill argument: `${config:KEY}` (a string key of the launch arguments), `${file}`, then [`expand`]'s braces. A value
@@ -280,7 +281,7 @@ pub async fn fill_arguments(
             .args
             .iter()
             .map(|a| match optional_config(a, &arguments) {
-                Some(x) => Ok(x),
+                Some(x) => x,
                 None => fill_arg(a, &arguments, v),
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -423,6 +424,10 @@ impl Proc for LspProc {
 struct Live {
     client: Arc<Client>,
     port: u16,
+    /// The server's process (and group) id: a child session checks the port is still its.
+    pid: i32,
+    /// This session's folder: what `{session}` means in `:fill`, as it does in `:server`.
+    session: PathBuf,
 }
 
 /// The launcher of an `lsp-command` adapter.
@@ -459,12 +464,26 @@ impl LspLauncher {
         }
     }
 
+    /// The DAP port of the running server, if one is running.
+    pub fn port(&self) -> Option<u16> {
+        self.live().map(|(_, p)| p)
+    }
+
     fn live(&self) -> Option<(Arc<Client>, u16)> {
         self.live
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .as_ref()
             .map(|l| (l.client.clone(), l.port))
+    }
+
+    /// The server's process id and this session's folder.
+    fn live_proc(&self) -> Option<(i32, PathBuf)> {
+        self.live
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .map(|l| (l.pid, l.session.clone()))
     }
 
     async fn start(&self) -> Result<Connected, String> {
@@ -509,8 +528,12 @@ impl LspLauncher {
         };
         match self.bootstrap(&client, &vars, &proc).await {
             Ok((port, stream)) => {
-                *self.live.lock().unwrap_or_else(PoisonError::into_inner) =
-                    Some(Live { client, port });
+                *self.live.lock().unwrap_or_else(PoisonError::into_inner) = Some(Live {
+                    client,
+                    port,
+                    pid: proc.child.id(),
+                    session: vars.session.clone(),
+                });
                 Ok(super::wire::over_tcp(stream, Box::new(proc)))
             }
             Err(e) => {
@@ -616,11 +639,11 @@ impl LspLauncher {
         Ok((port, stream))
     }
 
-    fn vars(&self) -> Vars {
+    fn vars(&self, session: PathBuf) -> Vars {
         Vars {
             tools: self.tools.clone(),
             root: self.root.clone(),
-            session: self.work_base.clone(),
+            session,
             file: self.file.clone(),
         }
     }
@@ -635,6 +658,11 @@ impl Launcher for LspLauncher {
     fn child(&self) -> BoxFut<'_, Result<Connected, String>> {
         Box::pin(async move {
             let (_, port) = self.live().ok_or("the language server is not running")?;
+            let (pid, _) = self
+                .live_proc()
+                .ok_or("the language server is not running")?;
+            // the port may have been freed and bound by another process since: only the server's own listener is joined
+            super::blocked::wait_owned(port, pid, self.within.port).await?;
             let stream = super::wire::connect_tcp(SocketAddr::from(([127, 0, 0, 1], port))).await?;
             Ok(super::wire::over_tcp(
                 stream,
@@ -650,11 +678,14 @@ impl Launcher for LspLauncher {
                 return Ok(arguments);
             }
             let (client, _) = self.live().ok_or("the language server is not running")?;
+            let (_, session) = self
+                .live_proc()
+                .ok_or("the language server is not running")?;
             fill_arguments(
                 &client,
                 &self.spec.fill,
                 arguments,
-                &self.vars(),
+                &self.vars(session),
                 self.within.command,
             )
             .await

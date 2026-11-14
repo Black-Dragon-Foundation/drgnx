@@ -333,3 +333,78 @@ async fn a_key_that_is_not_optional_still_errors_when_the_answer_lacks_it() {
     let e = fill_without_project(false).await.unwrap_err();
     assert!(e.contains("the answer has no projectName"), "{e}");
 }
+
+/// A key the launch has but not as a string is an error, as `${config:KEY}` says; only a missing key (or null) reads null.
+#[tokio::test]
+async fn an_optional_config_word_errors_on_a_key_of_the_wrong_type_and_reads_null_when_it_is_missing()
+ {
+    // mainClass is named, so step 1 is skipped; step 2 and 3 ask with `${config:projectName?}`
+    let mut steps = fills();
+    steps[1].args[1] = "${config:projectName?}".into();
+    let r = rig_with("no-project", None, steps);
+    let _c = bounded("the start", r.launcher.connect())
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let e = bounded(
+        "the fill",
+        r.launcher
+            .fill(json!({"mainClass": "app.Main", "projectName": 123})),
+    )
+    .await
+    .unwrap_err();
+    assert!(e.contains("projectName"), "{e}");
+    for fine in [
+        json!({"mainClass": "app.Main"}),
+        json!({"mainClass": "app.Main", "projectName": null}),
+    ] {
+        bounded("the fill", r.launcher.fill(fine.clone()))
+            .await
+            .unwrap_or_else(|e| panic!("{fine}: {e}"));
+    }
+}
+
+/// `{session}` is the folder of this session in `:fill` as it is in `:server`.
+#[tokio::test]
+async fn session_is_the_sessions_own_folder_in_fill_steps() {
+    let steps = vec![Fill {
+        command: "echo.args".into(),
+        args: vec!["{session}".into()],
+        select: None,
+        when_missing: None,
+        retry_empty: None,
+        into: vec![put("sessionDir", None, Some(0))],
+    }];
+    let r = rig_with("ok", None, steps);
+    let _c = bounded("the start", r.launcher.connect())
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let args = bounded("the fill", r.launcher.fill(json!({})))
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let dir = PathBuf::from(args["sessionDir"].as_str().unwrap());
+    assert!(dir.is_dir(), "{}", dir.display());
+    assert_eq!(
+        dir.parent().unwrap(),
+        r.launcher.work_base,
+        "{}",
+        dir.display()
+    );
+}
+
+/// A child session reconnects only to the server's own port: when the server is gone and a stranger binds the port, the
+/// child session is refused, never connected.
+#[tokio::test]
+async fn a_child_session_never_connects_to_a_stranger_on_the_port_of_a_dead_server() {
+    let r = rig("ok", None);
+    let mut c = bounded("the start", r.launcher.connect())
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let port = r.launcher.port().expect("a running server has a port");
+    c.proc.signal(Sig::Kill);
+    bounded("the server ends", c.proc.wait()).await;
+    let stranger = std::net::TcpListener::bind(("127.0.0.1", port))
+        .unwrap_or_else(|e| panic!("the stranger cannot bind {port}: {e}"));
+    let got = bounded("the child connection", r.launcher.child()).await;
+    assert!(got.is_err(), "the child session connected to a stranger");
+    drop(stranger);
+}

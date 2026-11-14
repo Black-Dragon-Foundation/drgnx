@@ -208,7 +208,9 @@ js-debug, delve, lldb-dap), how to find it and how to start it:
   all-or-none: they are staged beside each other and committed together, and a failed part rolls the rest back. A
   `.drgnx-installed` marker in each folder records its `:version` and digest, so the doctor shows pinned and installed
   versions side by side. A tar.gz may hold symlinks that stay inside its own root (a JDK's); any other link fails.
-  Redirects are followed up to five hops, https only.
+  A link target may only start with `..` (never one after a name), so no chain of links leaves the root. Redirects are
+  followed up to five hops, https only; a relative `Location` (`b`, `../b`) and `//host/x` are resolved as RFC 3986 says.
+  Installs of one adapter take turns on an flock of `.DIR.lock` beside the target (the lock file stays).
 
 ### The `lsp-command` start kind
 

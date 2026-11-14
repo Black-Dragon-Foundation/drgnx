@@ -262,6 +262,33 @@ struct Staged {
     old: PathBuf,
     /// Removed when the install ends, whichever way: the download, the unpacked folder, the replaced folder.
     _guards: Vec<Gone>,
+    /// Held until the install ends (declared after the guards, so it is released last).
+    _lock: Lock,
+}
+
+/// An exclusive `flock` on `.NAME.lock` beside the target: two installs of one adapter (their staging names are the same)
+/// take turns. Released when the file closes, so a crashed install never leaves it held.
+struct Lock(#[allow(dead_code)] File);
+
+async fn lock_target(tools: &Path, into: &str) -> Result<Lock, String> {
+    use std::os::fd::AsRawFd;
+    let path = tools.join(format!(".{into}.lock"));
+    crate::clock::blocking(move || {
+        let file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .open(&path)
+            .map_err(|e| io_err(&path, e))?;
+        // SAFETY: flock(2) on a descriptor this function owns; it blocks until the other install is done.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+            return Err(io_err(&path, io::Error::last_os_error()));
+        }
+        Ok(Lock(file))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Downloads an archive or a file of PLAN (the digest checked before anything is read from it) and unpacks it into a
@@ -285,6 +312,7 @@ async fn stage(plan: &Plan, tools: &Path, source: &Source) -> Result<Staged, Str
         _ => return Err("not a download".into()),
     };
     fs::create_dir_all(tools).map_err(|e| io_err(tools, e))?;
+    let lock = lock_target(tools, into).await?;
     let download = tools.join(format!(".{into}.download"));
     let partial = tools.join(format!(".{into}.partial"));
     let old = tools.join(format!(".{into}.old"));
@@ -362,6 +390,7 @@ async fn stage(plan: &Plan, tools: &Path, source: &Source) -> Result<Staged, Str
         dest: tools.join(into),
         old,
         _guards: guards,
+        _lock: lock,
     })
 }
 
@@ -473,9 +502,21 @@ fn unpack_tgz(
                 .map_or(0, |r| r.components().count());
             let mut depth =
                 name.parent().map_or(0, |p| p.components().count()) as i64 - base as i64;
+            // a `..` after a name would be resolved through whatever link that name is (`x/a -> ..`, then `../x/a/..`):
+            // only leading `..` are allowed, so no target walks back out through a link
+            let mut named = false;
             for c in to.components() {
                 match c {
-                    Component::Normal(_) => depth += 1,
+                    Component::Normal(_) => {
+                        depth += 1;
+                        named = true;
+                    }
+                    Component::ParentDir if named => {
+                        return Err(InstallError::Unsafe(format!(
+                            "entry {raw:?} links to {} (a `..` after a name)",
+                            to.display()
+                        )));
+                    }
                     Component::ParentDir => depth -= 1,
                     Component::CurDir => {}
                     _ => {
