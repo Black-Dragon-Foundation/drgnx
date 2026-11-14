@@ -117,15 +117,18 @@ nil on a terminal or when FACE has no font."
 
 (defun drgnx-view-env--window-facts (window &optional buffer)
   "The facts of the display class WINDOW shows BUFFER in (default: its buffer; a twin is measured as its view's
-buffer): a plist :display :scale :fonts :cell.  FONTS is a list of (ROLE FILE INDEX PX ASCENT DESCENT AVG SPACE NAME)."
+buffer): a plist :display :scale :fonts :cell.  FONTS is a list of (ROLE FILE INDEX PX ASCENT DESCENT AVG SPACE NAME),
+read in BUFFER: `face-font' resolves a face through the current buffer's remapping, and the window change hooks run
+in whichever buffer is current (the agent panel's maps `default' to `drgnx-ui-text')."
   (let* ((frame (window-frame window)) (buffer (or buffer (window-buffer window)))
          (gui (display-graphic-p frame)) (factor (drgnx-view-env--scale-factor buffer)))
     (list :display (if gui "gui" "tty")
           :scale (if gui (drgnx-pixels-scale frame) 1.0)
-          :fonts (and gui (delq nil (mapcar (lambda (r)
-                                              (when-let* ((f (drgnx-view-env--font (cdr r) frame factor)))
-                                                (cons (symbol-name (car r)) f)))
-                                            drgnx-view-env-roles)))
+          :fonts (and gui (with-current-buffer buffer
+                            (delq nil (mapcar (lambda (r)
+                                                (when-let* ((f (drgnx-view-env--font (cdr r) frame factor)))
+                                                  (cons (symbol-name (car r)) f)))
+                                              drgnx-view-env-roles))))
           :cell (list (frame-char-width frame) (frame-char-height frame)))))
 
 (defun drgnx-view-env--class (facts)
