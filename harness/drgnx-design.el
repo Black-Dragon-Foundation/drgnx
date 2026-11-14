@@ -25,7 +25,13 @@
 (require 'drgnx-icons)
 (add-to-list 'load-path (expand-file-name "wb" drgnx-dir))   ; the density module needs drgnx-state
 (require 'drgnx-look-density (expand-file-name "modules/ui/drgnx-look-density" drgnx-dir))
-(require 'drgnx-theme-gen (expand-file-name "themes/drgnx-theme-gen" drgnx-dir))
+;; themes/ is not built with the rest (a build copies core, wb, modules, harness and settings), so the generator is
+;; loaded when this file loads, as the look modules do
+(unless (featurep 'drgnx-theme-gen)
+  (load (expand-file-name "themes/drgnx-theme-gen" drgnx-dir) nil t))
+(declare-function drgnx-theme--read "drgnx-theme-gen" ())
+(declare-function drgnx-theme--faces "drgnx-theme-gen" (variant tok))
+(declare-function drgnx-look-token "drgnx-theme-gen" (name &optional variant))
 
 (defconst drgnx-design-dir "docs/design/" "Where the design system lives, relative to the checkout.")
 
