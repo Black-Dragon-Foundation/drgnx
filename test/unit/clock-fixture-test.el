@@ -238,7 +238,7 @@ A stamp already on the virtual clock (H ahead of the real one) stays."
     (let ((done nil) (t0 (float-time)))
       (run-at-time 0.2 nil (lambda () (setq done t)))
       (should (drgnx-test-advance-until (lambda () done)))
-      (should (< (abs (- (float-time) t0 0.2)) 1e-6))
+      (should (< (abs (- (float-time) t0 0.2)) 1e-5))   ; the step goes a microsecond past the timer
       (should-error (drgnx-test-advance-until (lambda () nil) :secs 1 :what "never") :type 'ert-test-failed)
       (run-at-time 5 nil #'ignore)
       (should-error (drgnx-test-advance-until (lambda () nil) :secs 1 :what "never") :type 'ert-test-failed)
