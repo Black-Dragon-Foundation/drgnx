@@ -180,6 +180,7 @@ pub async fn serve(
                     kernelspec: o.kernelspec,
                     language: o.language,
                     tails: o.tails.into_iter().map(tail).collect::<Result<_, _>>()?,
+                    more_tails: o.more_tails as u32,
                 }))
             })(),
             Err(e) => Err(err(e)),

@@ -51,7 +51,8 @@ traceback entries, an output larger than 8 MiB shown as a line saying so).
 
 `notebook/*` (the table in `hub.md`) is the editor's door; every method is the user's (an agent cannot start a kernel), and a kernel is
 refused in a sealed session (`kernel::refuse_when_sealed`). The editor owns what the user types: it calls `notebook/open` (the buffer's
-text, else the file), `notebook/sync` with all its cells when it wants the hub to have them, then `notebook/execute` with the cells to
+text, else the file; the answer carries the tails of the first 200 cells with output, within 1 MiB, and `more_tails`, how many cells
+with output have none yet: `notebook/tail` gives those; cell sources over 8 MiB in all are refused), `notebook/sync` with all its cells when it wants the hub to have them, then `notebook/execute` with the cells to
 run (their text becomes the notebook's first) and `notebook/save` (which takes the cells again when given). `notebook/start` starts the
 kernel (the notebook's `metadata.kernelspec.name`, else its language's, else the name given); `notebook/restart` ends it (asked, its
 process group killed after the grace) and starts a new one with a new connection file and key; `notebook/shutdown`,

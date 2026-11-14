@@ -151,7 +151,9 @@ pub struct NotebookTail {
     pub more_lines: u32,
 }
 
-/// `notebook/open`'s answer: the notebook's ID, its CELLS, the kernelspec name and language it names, and each code cell's TAILS from the file.
+/// `notebook/open`'s answer: the notebook's ID, its CELLS, the kernelspec name and language it names, and the TAILS of the code cells that
+/// have output in the file: the first 200 of them within 1 MiB of JSON (a cell without a tail has no output), and how many more there are
+/// (`more_tails`: ask `notebook/tail` for the cells it names).
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct NotebookOpened {
     pub id: String,
@@ -161,6 +163,7 @@ pub struct NotebookOpened {
     #[serde(default)]
     pub language: Option<String>,
     pub tails: Vec<NotebookTail>,
+    pub more_tails: u32,
 }
 
 /// An installed kernelspec.
