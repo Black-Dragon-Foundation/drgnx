@@ -164,7 +164,10 @@ Mac as a runner on a macOS host: its spikes, `test/runners/mac/README.md`; sleip
 runner end to end, `drgnx-ratatoskr`'s `tests/mac_runner.rs`, `#[ignore = "macos-runner"]`: the hub's own registry and
 queue add the host's `drgnx-runner` account over its localhost `sshd`, run host jobs under the build profile, see the
 watchdog kill a job past its grant, survive the link's ssh master killed and a killed `serve`, and `remove` it), which run only
-on a manual dispatch of `runtime.yml` that names them, never on a push or in a gate:
+on a manual dispatch of `runtime.yml` that names them, never on a push or in a gate. The Linux escape legs' `--ignored` run of the whole
+crate skips the file by name (`--skip mac_runner::`: its rows need `DRGNX_TEST_MAC_RUNNER`, a Mac's ssh account), and
+`drgnx-ci/the-mac-runner-rows-run-in-the-macos-lane-and-nowhere-else` checks that and that every row of the file is
+`#[ignore = "macos-runner"]`:
 
 ```
 gh workflow run runtime.yml --ref ci/my-lane -f only=rt-fleet
@@ -608,7 +611,7 @@ To bump the image, change its name and sha256 (the `CHECKSUM` file beside the im
 The ignored debug rows (`debug::tests_blocked_live`, `tests_fork_live`, `tests_live_adapters`) run against real adapters.
 `.github/ci/debug-adapters.sh DIR` installs them at the hub's pins (`etc/debug-adapters.eld`): debugpy as a hash-pinned
 wheel in a venv, js-debug as the release tarball with its sha256 checked, and prints `DRGNX_DEBUG_LIVE_PYTHON` and
-`DRGNX_DEBUG_LIVE_JS_DEBUG` for `$GITHUB_ENV`. A lane that runs every ignored test of the hub's crate (the escape legs'
+`DRGNX_DEBUG_LIVE_JS_DEBUG` for `$GITHUB_ENV`. debugpy 1.8.22 needs Python 3.10 or later: the script refuses an older `DRGNX_ADAPTER_PYTHON` with that message (before pip answers "No matching distribution"), and the macOS fork row uses Homebrew's `/opt/homebrew/bin/python3` (the runner's `/usr/bin/python3` is 3.9; a tool-cache python is one the fork's Seatbelt profile cannot exec) and stops when the install failed. A lane that runs every ignored test of the hub's crate (the escape legs'
 sandbox lane) or one of those rows by name (the macOS fork row) runs the script first; the ci-workflows test
 `a-lane-that-runs-the-ignored-debug-rows-installs-the-adapters` holds that.
 
