@@ -671,6 +671,12 @@ pub struct PanelLook {
     /// The rows go back one window further (the editor scrolled to their top).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub older: Option<bool>,
+    /// The header's lens: the presets' names, in order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lens: Option<Vec<Bounded<String, 32>>>,
+    /// The preset in force, from 1 (0: none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lens_on: Option<u32>,
 }
 
 /// The change number a subscription to a session's entries continues from.

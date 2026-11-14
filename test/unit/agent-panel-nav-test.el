@@ -123,7 +123,7 @@ it folds the selected one."
     (drgnx-agent-panel-nav-test--goto "e:2")
     (drgnx-agent-panel-next-tool)
     (setq drgnx-agent-panel-nav-test--sent nil)
-    (goto-char (point-min))                ; the header: not a step
+    (goto-char (point-max))                ; below the steps (the rows' end): not a step
     (drgnx-agent-panel-toggle)
     (let ((look (cdr (assoc "agents/panel/look" drgnx-agent-panel-nav-test--sent))))
       (should look)

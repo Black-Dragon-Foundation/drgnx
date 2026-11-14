@@ -365,6 +365,49 @@ panel's, neither stale; the twin is no panel of its own."
       (drgnx-view-env-teardown)
       (drgnx-view-patch-teardown))))
 
+(ert-deftest drgnx-ui-rows-fit/the-agent-panels-header-and-strip-are-the-hubs-rows ()
+  "The agent panel's header, chips and strip come from the hub (offload F1) and are the first rows, each with its own
+key; the lens in the header is the editor's presets with the one in force raised; a click on a lens segment (the
+editor's one dispatcher) makes the hub send the header again with the new preset raised."
+  (skip-unless (display-graphic-p))
+  (load (expand-file-name "test/fixtures/panel-replay-fixture" drgnx-rows-fit-ui-test--repo) nil t)
+  (let* ((load-path (cons (expand-file-name "modules/tools" drgnx-rows-fit-ui-test--repo) load-path))
+         (drgnx-view-patch--buffers (make-hash-table :test #'equal)) (drgnx-view-patch--hooked nil)
+         (drgnx-view-env--views (make-hash-table :test #'equal)) (drgnx-view-env--sent (make-hash-table :test #'equal))
+         (drgnx-view-env--glyphs (make-hash-table :test #'equal)) (drgnx-view-env--hooked nil)
+         (drgnx-panel-replay-prefix 3) (panel nil))
+    (unwind-protect
+        (save-window-excursion
+          (setq panel (drgnx-panel-replay-up (drgnx-rows-demo--bin)))
+          (set-window-buffer (selected-window) panel)
+          (drgnx-view-env-update (with-current-buffer panel (drgnx-view-patch-view drgnx-view-patch)))
+          (drgnx-test-wait (lambda () (with-current-buffer panel
+                                        (and (> (hash-table-count (drgnx-view-patch-rows drgnx-view-patch)) 2)
+                                             (not (drgnx-view-patch-stale drgnx-view-patch)))))
+                           :secs 20 :what "the hub's rows of the panel")
+          (drgnx-rows-demo-settle panel)
+          (let ((keys (drgnx-rows-fit-ui-test--panel-keys panel)) (text (drgnx-rows-demo-text panel)))
+            (should (member "p:strip" keys))
+            (should (< (seq-position keys "p:head") (seq-position keys "p:strip")))
+            (should (equal (car keys) "p:head"))
+            (should (string-match-p "Open:" text))
+            (dolist (w '("watch" "review" "debug" "thinking" "make default")) (should (string-match-p w text))))
+          (with-current-buffer panel
+            (let ((pos (save-excursion (goto-char (point-min)) (search-forward "debug") (match-beginning 0))))
+              (should (eq 'drgnx-agent-panel-lens (car (ensure-list (get-text-property pos 'face)))))
+              (should (equal "lens:3" (get-text-property pos 'drgnx-agent-panel-action)))
+              (set-window-buffer (selected-window) panel)
+              (drgnx-agent-panel-act (list 'mouse-1 (list (selected-window) pos '(0 . 0) 0)))))
+          (drgnx-test-wait (lambda () (with-current-buffer panel
+                                        (drgnx-view-draw-now drgnx-view)
+                                        (let ((pos (save-excursion (goto-char (point-min)) (search-forward "debug" nil t)
+                                                                   (match-beginning 0))))
+                                          (memq 'drgnx-agent-panel-lens-on (ensure-list (get-text-property pos 'face))))))
+                           :secs 20 :what "the lens showing debug in force"))
+      (drgnx-panel-replay-down)
+      (drgnx-view-env-teardown)
+      (drgnx-view-patch-teardown))))
+
 (defvar drgnx-explorer--roots)
 (defvar drgnx-explorer--hub-view)
 (defvar drgnx-explorer--expanded)

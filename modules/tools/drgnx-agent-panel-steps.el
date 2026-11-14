@@ -22,7 +22,6 @@
 (defvar drgnx-agent-panel--session)
 (defvar drgnx-agent-panel--shown-keys)
 (defvar drgnx-agent-panel--snap)
-(defvar drgnx-agent-panel--busy-since)
 (defvar drgnx-agent-panel--entries)
 (defvar drgnx-agent-panel--steps)
 (defvar drgnx-agent-panel--open)
@@ -32,6 +31,7 @@
 (defvar drgnx-agent-panel-presets)
 (declare-function drgnx-agent-panel--key-at "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--rows-p "drgnx-agent-panel")
+(declare-function drgnx-agent-panel-chip "drgnx-agent-panel-explain")
 (declare-function drgnx-agent-panel--send-look "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--entry "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--blocks "drgnx-agent-panel")
@@ -51,24 +51,6 @@
   "A space that pushes META to the right edge, then META."
   (concat (propertize " " 'display `(space :align-to (- right ,(1+ (string-width meta))))) meta))
 
-(defun drgnx-agent-panel--status-line (snap since now)
-  "What the agent is doing, for the header: \"Claude · running 6 min\", \"held by you\" or \"Pair · editing your checkout\".
-SNAP is the snapshot, SINCE when it began running (float seconds) and NOW the time."
-  (let* ((who (or (plist-get snap :profile) "Agent"))
-         (status (format "%s" (plist-get snap :status)))
-         (what (cond ((plist-get snap :paused) "held by you")
-                     ((and (plist-get snap :paired) (not (eq (plist-get snap :paired) :json-false))) "Pair · editing your checkout")
-                     ((equal status "busy")
-                      (if since (format "running %d min" (max 1 (round (/ (- now since) 60.0)))) "running"))
-                     ((equal status "waiting") "waiting for you")
-                     ((equal status "exited") "ended")
-                     ((equal status "idle") "idle")
-                     (t status))))
-    (if (and (plist-get snap :paired) (not (plist-get snap :paused))
-             (not (eq (plist-get snap :paired) :json-false)))
-        what
-      (format "%s · %s" who what))))
-
 (defface drgnx-agent-panel-lens '((t :inherit (drgnx-ui-caption drgnx-text-muted drgnx-surface-gap)
                                      :box (:line-width (2 . 8) :style flat-button)))
   "A preset of the header's lens that is not in force, on the lens's well (`.lens': the gap's colour)." :group 'drgnx-agent-panel)
@@ -82,22 +64,6 @@ SNAP is the snapshot, SINCE when it began running (float seconds) and NOW the ti
                 (and (equal open (sort (mapcar #'symbol-name (cdr p)) #'string<)) n))
               drgnx-agent-panel-presets)))
 
-(defun drgnx-agent-panel--lens ()
-  "The header's lens: watch, review and debug, the one in force raised; a click picks one."
-  (let ((on (drgnx-agent-panel--preset-in-force)) (n 0)
-        (pad (propertize " " 'display `(when (display-graphic-p) space :width (,(drgnx-px 8))) 'invisible t)))
-    (mapconcat (lambda (p)
-                 (cl-incf n)
-                 (let ((map (make-sparse-keymap)))
-                   (define-key map [mouse-1] (intern (format "drgnx-agent-panel-preset-%d" n)))
-                   ;; `.lens span' pads the name 10 px either side: 8 here, in the segment's face, and its box's sides
-                   (propertize (concat pad (symbol-name (car p)) pad)
-                               'face (if (eql n on) 'drgnx-agent-panel-lens-on 'drgnx-agent-panel-lens)
-                               'mouse-face 'drgnx-hover 'keymap map 'help-echo (format "%d: %s" n (car p)))))
-               drgnx-agent-panel-presets
-               ;; 2 px of the well between segments: two segments of one face would be one box, padded at its ends only
-               (propertize " " 'face 'drgnx-surface-gap 'display `(space :width (,(drgnx-px 2)))))))
-
 (defvar drgnx-agent-panel-header-menu
   '(("Fork the Chat" . agents-panel-fork) ("Compact the Context" . agents-panel-compact)
     ("Switch the Model" . agents-panel-model) ("Switch the Mode" . agents-panel-mode)
@@ -110,80 +76,35 @@ SNAP is the snapshot, SINCE when it began running (float seconds) and NOW the ti
   (when-let* ((choice (x-popup-menu event (list "Agent" (cons "" drgnx-agent-panel-header-menu)))))
     (drgnx-ui-kit-run choice)))
 
-(defvar drgnx-agent-panel--header-maps nil "The header buttons' keymaps: (PIN . MORE), built on first use.")
+(defun drgnx-agent-panel-act (event)
+  "Run the header, strip or chip part the click EVENT is on: the lens segment (`lens:N'), the pin or the ⋯ menu, a
+step type's pill (`type:NAME') or `make default' (`drgnx-agent-panel-action' of the text, which the hub's rows set), or
+the chip (`drgnx-agent-panel-chip')."
+  (interactive "e")
+  (let* ((end (event-end event)) (pos (posn-point end)) (win (posn-window end))
+         (buf (and (windowp win) (window-buffer win))))
+    (when (and pos buf)
+      (let ((action (get-text-property pos 'drgnx-agent-panel-action buf))
+            (chip (get-text-property pos 'drgnx-agent-panel-chip buf)))
+        (with-current-buffer buf
+          (cond ((and (stringp action) (string-prefix-p "lens:" action))
+                 (drgnx-agent-panel-preset (string-to-number (substring action 5))))
+                ((equal action "pin") (drgnx-ui-kit-run 'agents-panel-pin))
+                ((equal action "more") (drgnx-agent-panel-header-menu event))
+                ((and (stringp action) (string-prefix-p "type:" action))
+                 (drgnx-agent-panel-toggle-type (intern (substring action 5))))
+                ((equal action "default") (drgnx-agent-panel-make-default))
+                ((stringp chip) (drgnx-agent-panel-chip (intern chip)))))))))
 
-(defun drgnx-agent-panel--header-maps ()
-  "The keymaps of the header's pin and ⋯ buttons.  A press leaves point where it is, so the pin takes the card at
-point, not the header."
-  (or drgnx-agent-panel--header-maps
-      (let ((pin (make-sparse-keymap)) (more (make-sparse-keymap)))
-        (set-keymap-parent pin (drgnx-ui--button-map 'agents-panel-pin 'text))
-        (define-key pin [down-mouse-1] #'ignore)
-        (define-key more [down-mouse-1] #'ignore)
-        (define-key more [mouse-1] #'drgnx-agent-panel-header-menu)
-        (setq drgnx-agent-panel--header-maps (cons pin more)))))
-
-(defun drgnx-agent-panel--header-buttons ()
-  "The header's buttons after the lens (`.ph .ib'): pin and ⋯, 24 px around 16 px icons, 6 px apart."
-  (let* ((graphic (display-graphic-p))
-         (pad (if graphic (propertize " " 'display `(space :width (,(drgnx-px 4)))) ""))
-         (gap (if graphic (propertize " " 'display `(space :width (,(drgnx-px 6)))) " "))
-         (maps (drgnx-agent-panel--header-maps)))
-    (cl-flet ((button (icon help map)
-                (propertize (concat pad (drgnx-look-icon icon 'drgnx-agent-panel-subtle) pad)
-                            'help-echo help 'mouse-face 'drgnx-hover 'keymap map 'pointer 'hand)))
-      (concat gap (button 'pin "Pin the card at point" (car maps))
-              gap (button 'ellipsis "More actions" (cdr maps))))))
-
-(defun drgnx-agent-panel--header-row ()
-  "The header (agent-panel.html `.agent .ph'): the agent's icon, the chat's name, what the agent is doing, the lens,
-then pin and ⋯, 8 px from the edge."
-  (let* ((snap drgnx-agent-panel--snap)
-         (name (or (plist-get snap :name) drgnx-agent-panel--session "agent"))
-         (lens (concat (drgnx-agent-panel--lens) (drgnx-agent-panel--header-buttons))))
-    (let* ((head (concat " " (drgnx-look-icon 'bot 'drgnx-accent) " " (propertize name 'face 'drgnx-agent-panel-title)))
-           (status (propertize (format " · %s" (drgnx-agent-panel--status-line snap drgnx-agent-panel--busy-since (float-time)))
-                               'face 'drgnx-agent-panel-subtle))
-           (width (drgnx-agent-panel--width))
-           ;; what is left between the name and the lens: 12 px before it, its buttons 8 px from the edge
-           (room (and width (- width (string-pixel-width head) (string-pixel-width lens) (drgnx-px 20)))))
-      (concat head (if room (drgnx-agent-panel--fit status room) status)
-              (propertize " " 'display `(space :align-to (- right (,(+ (string-pixel-width lens) (drgnx-px 8)))))) lens
-              "\n"))))
-
-(defun drgnx-agent-panel--fit (s px)
-  "S cut to at most PX pixels wide, ending in … when cut (nothing when not even that fits)."
-  (if (<= (string-pixel-width s) px) s
-    (let ((n (length s)))
-      (while (and (> n 0) (> (string-pixel-width (concat (substring s 0 n) "…")) px)) (cl-decf n))
-      (if (> n 0) (concat (substring s 0 n) (propertize "…" 'face (get-text-property 0 'face s))) ""))))
-
-(defun drgnx-agent-panel--chips (snap)
-  "The chips the snapshot feeds, a list of strings; one the hub did not feed is not there."
-  (let* ((usage (plist-get snap :usage))
-         (used (plist-get usage :used)) (size (plist-get usage :size)) (cost (plist-get usage :cost))
-         (files (plist-get snap :files_edited)) (checks (plist-get snap :checkpoints))
-         (mcp (plist-get snap :mcp)) (sandbox (plist-get snap :sandbox))
-         (model (plist-get snap :model)) (mode (plist-get snap :mode)))
-    (delq nil
-          (list (and (stringp model) (propertize model 'drgnx-agent-panel-chip 'model))
-                (and (numberp used) (numberp size) (> size 0)
-                     (let ((p (round (* 100 (/ (float used) size)))))
-                       (propertize (format "%s %d%%" (cond ((< p 13) "○") ((< p 38) "◔") ((< p 63) "◑") ((< p 88) "◕") (t "●")) p)
-                                   'drgnx-agent-panel-chip 'context)))
-                (and cost (let ((c (if (listp cost) (plist-get cost :amount) cost)))
-                            (and (numberp c) (propertize (format "$%.2f" c) 'drgnx-agent-panel-chip 'cost))))
-                (and mode (propertize (format "%s" mode) 'drgnx-agent-panel-chip 'mode))
-                (and sandbox (format "%s" (if (eq sandbox t) "sandboxed" sandbox)))
-                (and mcp (propertize (format "MCP %s" (if (numberp mcp) mcp (length mcp))) 'drgnx-agent-panel-chip 'mcp))
-                (and (numberp files) (format "%d files" files))
-                (and (numberp checks)
-                     (let ((level (plist-get snap :restore_level)))
-                       (format "%d checkpoints%s" checks (if (stringp level) (concat " · " level) ""))))))))
-
-(defun drgnx-agent-panel--chips-row ()
-  (let ((chips (drgnx-agent-panel--chips drgnx-agent-panel--snap)))
-    (concat " " (mapconcat (lambda (c) (propertize (concat " " c " ") 'face 'drgnx-agent-panel-chip)) chips " ") "\n")))
+(defun drgnx-agent-panel-press (event)
+  "Press EVENT: on a header or chip part nothing moves point (so the pin takes the card at point, not the header);
+anywhere else the press is the stock one."
+  (interactive "e")
+  (let* ((end (event-end event)) (pos (posn-point end)) (win (posn-window end))
+         (buf (and (windowp win) (window-buffer win))))
+    (unless (and pos buf (or (get-text-property pos 'drgnx-agent-panel-action buf)
+                             (get-text-property pos 'drgnx-agent-panel-chip buf)))
+      (mouse-drag-region event))))
 
 (defun drgnx-agent-panel--dot (status)
   (pcase status
@@ -261,11 +182,10 @@ else when the chat's toggle for its type is on."
     (if (drgnx-agent-panel--rows-p) (drgnx-agent-panel--send-look) (drgnx-view-dirty drgnx-view (list key)))))
 
 (defun drgnx-agent-panel--redraw-steps ()
-  "Every step row, the strip and the header (its lens) are drawn again."
+  "Every step row is drawn again."
   (when (drgnx-view-p drgnx-view)
     (drgnx-view-dirty drgnx-view
-                      (cons (list :strip) (cons (list :header)
-                                                (seq-filter (lambda (k) (eq (car-safe k) :e)) (hash-table-keys drgnx-agent-panel--shown-keys)))))))
+                      (seq-filter (lambda (k) (eq (car-safe k) :e)) (hash-table-keys drgnx-agent-panel--shown-keys)))))
 
 (defun drgnx-agent-panel--set-disclosure (types)
   "TYPES are the open step types of this chat; rows you opened or folded by hand are back under the toggles."
@@ -333,45 +253,18 @@ changed lays its strip out again."
               (unless (eql width drgnx-agent-panel--strip-width)
                 (setq drgnx-agent-panel--strip-width width)
                 (when (drgnx-view-p drgnx-view)
-                  (drgnx-view-dirty drgnx-view (cons (list :strip) (and (fboundp 'drgnx-agent-panel-cards-keys) (drgnx-agent-panel-cards-keys)))))))))))))
-
-(defun drgnx-agent-panel--strip-row ()
-  "The disclosure strip (agent-panel.html `.disc'): \"Open:\" and a pill for each step type, the open ones raised, a
-click flips one; \"make default\" at the end.  The pills go on as many lines as the panel's width needs.  The presets
-are the header's lens."
-  (let* ((open (propertize " Open: " 'face 'drgnx-agent-panel-subtle))
-         (pills (mapcar (lambda (ty)
-                          (let ((map (make-sparse-keymap)))
-                            (define-key map [mouse-1] (lambda () (interactive) (drgnx-agent-panel-toggle-type ty)))
-                            (propertize (format " %s " ty)
-                                        'face (if (memq ty drgnx-agent-panel--disclosure) 'drgnx-agent-panel-tag-on
-                                                'drgnx-agent-panel-tag)
-                                        'mouse-face 'drgnx-hover 'keymap map)))
-                        drgnx-agent-panel-step-types))
-         (default (let ((map (make-sparse-keymap)))
-                    (define-key map [mouse-1] #'drgnx-agent-panel-make-default)
-                    (propertize "make default" 'face 'drgnx-accent 'mouse-face 'drgnx-hover 'keymap map
-                                'help-echo "M: what is open now is what new panels open")))
-         (room (let ((w (drgnx-agent-panel--width))) (and w (- w (drgnx-px 12)))))
-         (indent (propertize " " 'display `(space :width (,(string-pixel-width open)))))
-         (line open) (lines nil))
-    (dolist (part (append pills (list default)))
-      (let ((next (concat line " " part)))
-        (cond ((and room (> (string-pixel-width next) room))
-               (push line lines)
-               (setq line (concat indent part)))
-              ;; "make default" sits at the right end of the line it fits on (`margin-left: auto')
-              ((eq part default)
-               (setq line (concat line (propertize " " 'display `(space :align-to (- right (,(+ (string-pixel-width default) (drgnx-px 12))))))
-                                  part)))
-              (t (setq line next)))))
-    (push line lines)
-    (mapconcat (lambda (l) (concat l "\n")) (nreverse lines) "")))
+                  (drgnx-view-dirty drgnx-view (and (fboundp 'drgnx-agent-panel-cards-keys) (drgnx-agent-panel-cards-keys))))))))))))
 
 (defun drgnx-agent-panel-steps-setup ()
   (drgnx-command-define 'agents-panel-toggle-type :category "Agents" :title "Open or Close a Step Type"
                         :command #'drgnx-agent-panel-toggle-type :map 'drgnx-agent-panel-mode-map
                         :doc "Show or hide the detail of every step of one type in this chat")
+  (drgnx-command-define 'agents-panel-act :category "Agents" :title "Panel Header: Click"
+                        :command #'drgnx-agent-panel-act :map 'drgnx-agent-panel-mode-map
+                        :doc "A click on the header's lens, pin or ⋯, or on a chip: what that part does")
+  (drgnx-command-define 'agents-panel-press :category "Agents" :title "Panel Header: Press"
+                        :command #'drgnx-agent-panel-press :map 'drgnx-agent-panel-mode-map
+                        :doc "A press on the header or a chip leaves point where it is; anywhere else it is the stock press")
   (drgnx-command-define 'agents-panel-preset-1 :category "Agents" :title "Panel View: Watch"
                         :command #'drgnx-agent-panel-preset-1 :map 'drgnx-agent-panel-mode-map
                         :doc "Steps as titles only")

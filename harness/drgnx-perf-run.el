@@ -685,14 +685,12 @@ and draws the card, as the throttle's timer would.  `drgnx-perf--bisect-stop' un
         (setq drgnx-perf--cad-last nil))
       (defun drgnx-perf--passes-arm ()
         (setq drgnx-perf--cad (list 0 0 0 0 0) drgnx-perf--cad-last nil drgnx-perf--cad-queued nil drgnx-perf--cad-lags nil)
-        (advice-add 'drgnx-hub--model-line :before #'drgnx-perf--cad-model)
         (advice-add 'drgnx-hub--model-pushed :before #'drgnx-perf--cad-model)
         (advice-add 'drgnx-hub--client-line :before #'drgnx-perf--cad-other)
         (advice-add 'drgnx-view-model--drained :before #'drgnx-perf--cad-drained)
         (advice-add 'redisplay--pre-redisplay-functions :before #'drgnx-perf--cad-pass))
       (defun drgnx-perf--passes-done ()
         "The cadence counts since the arm, as measure keys (none when not armed)."
-        (advice-remove 'drgnx-hub--model-line #'drgnx-perf--cad-model)
         (advice-remove 'drgnx-hub--model-pushed #'drgnx-perf--cad-model)
         (advice-remove 'drgnx-hub--client-line #'drgnx-perf--cad-other)
         (advice-remove 'drgnx-view-model--drained #'drgnx-perf--cad-drained)
@@ -1314,7 +1312,6 @@ match 50 entries before its end, Next Match until a key stopped at the window's 
 (at most 200 keys): each key's time and each page's, the time from that key until it ran; the entries the last round
 went from and to.  An error when a key went back (a wrap), a round paged no window, or Sjá held more than the window."
         (with-current-buffer (drgnx-perf--sw-view)
-          (advice-add 'drgnx-hub--model-line :around #'drgnx-perf--sw-line)
           (advice-add 'drgnx-hub--model-pushed :around #'drgnx-perf--sw-line)
           (advice-add 'drgnx-hub--client-batch :before #'drgnx-perf--sw-batch)
           ;; a new env between runs may search again (`drgnx-replace--hub-resubscribe'): its end first
@@ -1374,7 +1371,6 @@ went from and to.  An error when a key went back (a wrap), a round paged no wind
                                 (setq at i))
                               (setq most (max most (length (nidhogg-view-get h 'list "order"))))))
                 (unless paged (error "Premise: round %d's 200 Next Match keys from %d paged no window (at %d)" round from at))))
-            (advice-remove 'drgnx-hub--model-line #'drgnx-perf--sw-line)
             (advice-remove 'drgnx-hub--model-pushed #'drgnx-perf--sw-line)
             (advice-remove 'drgnx-hub--client-batch #'drgnx-perf--sw-batch)
             (when (> most 20000) (error "Premise: Sjá held %d entries, more than the window's 20,000" most))
