@@ -1105,3 +1105,68 @@ Returns (EXIT . OUTPUT), the output both streams' or, with STDOUT-ONLY, stdout's
 
 (provide 'ci-workflows-test)
 ;;; ci-workflows-test.el ends here
+
+;; The Mac runner's end-to-end rows (tests/mac_runner.rs) belong to the macOS lane: they need DRGNX_TEST_MAC_RUNNER, an
+;; ssh alias to a Mac's drgnx-runner account. A Linux lane that runs every ignored test of the hub's crate (the escape
+;; legs' sandbox lane) skips them by name; the macOS lane (`mac-runner`) runs the file with --ignored and skips none of
+;; them; and every row of the file is #[ignore = "macos-runner"], so no row can start running on Linux or be skipped
+;; there by accident (r6-gl, PR 4 run 43539558714).
+(ert-deftest drgnx-ci/the-mac-runner-rows-run-in-the-macos-lane-and-nowhere-else ()
+  (let ((rt (drgnx-ci-test--yml "runtime.yml")) (src (drgnx-ci-test--file "runtime/crates/drgnx-ratatoskr/tests/mac_runner.rs")))
+    (should (and rt src))
+    ;; the escape legs' --ignored run of the whole crate leaves them out
+    (let ((job (drgnx-ci-test--job rt "escape-host")) (found 0))
+      (dolist (line (split-string job "\n"))
+        (when (and (string-match-p "cargo test .*-p drgnx-ratatoskr.*-- --ignored" line)
+                   (not (string-match-p " --test \\| --list" line)))
+          (setq found (1+ found))
+          (should (string-search "$skips" line))))
+      (should (= found 1))
+      (should (string-search "skips=\"$skips --skip mac_runner::\"" job)))
+    ;; the macOS lane runs every row of the file
+    (let* ((job (drgnx-ci-test--job rt "mac-runner")) (n 0))
+      (dolist (line (split-string job "\n"))
+        (when (string-search "--test mac_runner" line)
+          (setq n (1+ n))
+          (should (string-search "-- --ignored" line))
+          (should-not (string-search "--skip mac_runner" line))))
+      (should (= n 1)))
+    ;; every test of the file is ignored for the macOS lane, none runs by default on Linux
+    (let ((tests 0) (ignored 0))
+      (with-temp-buffer
+        (insert src)
+        (goto-char (point-min))
+        (while (re-search-forward "^\\s-*#\\[\\(?:tokio::\\)?test\\]\n\\(\\s-*#\\[ignore = \"macos-runner\"\\]\\)?" nil t)
+          (setq tests (1+ tests))
+          (when (match-string 1) (setq ignored (1+ ignored)))))
+      (should (>= tests 4))
+      (should (= tests ignored)))))
+
+;; The pinned debugpy needs Python 3.10 or later (its wheels say so); the macOS runner's /usr/bin/python3 is 3.9 and its
+;; pip then answers "No matching distribution" while the step went on to a test that read no output (r6-gl, PR 4 run
+;; 43539558714). The script says so before pip runs, and the macOS fork step names a Python that is 3.10+ and one
+;; the fork's Seatbelt profile can exec (Homebrew's, under /opt/homebrew), and stops when the adapters did not install.
+(ert-deftest drgnx-ci/the-adapter-script-refuses-a-python-below-3-10-and-the-mac-step-uses-homebrews ()
+  (let* ((dir (make-temp-file "drgnx-adapt" t))
+         (py (expand-file-name "py39" dir))
+         (script (expand-file-name ".github/ci/debug-adapters.sh" drgnx-ci-test--root))
+         (rt (drgnx-ci-test--yml "runtime.yml")))
+    (unwind-protect
+        (progn
+          (should (file-exists-p script))
+          ;; a "Python 3.9": it refuses the version probe and anything else
+          (with-temp-file py (insert "#!/bin/sh\nexit 1\n"))
+          (set-file-modes py #o755)
+          (with-temp-buffer
+            (let ((rc (let ((process-environment (cons (concat "DRGNX_ADAPTER_PYTHON=" py) process-environment)))
+                        (call-process "bash" nil t nil script (expand-file-name "out" dir)))))
+              (should (/= rc 0))
+              (should (string-search "Python 3.10" (buffer-string)))
+              (should-not (file-exists-p (expand-file-name "out/venv" dir)))))
+          (should rt)
+          (let ((step (substring rt (string-search "debug forks keep to their port block" rt))))
+            (should (string-search "DRGNX_ADAPTER_PYTHON=/opt/homebrew/bin/python3" step))
+            (should-not (string-search "DRGNX_ADAPTER_PYTHON=/usr/bin/python3" step))
+            ;; the installer's failure stops the step: its output is read into a variable first, not through a pipe
+            (should (string-search "adapters=$(" step))))
+      (delete-directory dir t))))

@@ -508,6 +508,9 @@ jobs:
           vm=$(cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks --test browser_sandboxed -- --list --format terse --ignored | sed -n 's/: test$//p')
           [ -n "$vm" ] || { echo "browser_sandboxed lists no rows" >&2; exit 1; }
           skips="$skips$(printf '%s\n' "$vm" | awk '{ printf " --skip %s", $1 }')"
+          # the Mac runner's end-to-end rows (tests/mac_runner.rs) need a Mac's ssh account (DRGNX_TEST_MAC_RUNNER): the
+          # macOS lane's `mac-runner` job runs them
+          skips="$skips --skip mac_runner::"
           # the debug rows that run in the `debug-live` job instead (the adapter image's adapters, CAP_SYS_PTRACE, a
           # network namespace of its own): tests_live_adapters and tests_blocked_live. tests_fork_live, the Python and JS
           # forks in the sandbox, runs here against the adapters installed above
@@ -1286,8 +1289,12 @@ jobs:
         run: |
           set -euo pipefail
           set -a
-          # the system python: a venv on the runner's tool-cache python is one the fork's Seatbelt profile cannot exec
-          eval "$(DRGNX_ADAPTER_PYTHON=/usr/bin/python3 bash .github/ci/debug-adapters.sh "$RUNNER_TEMP/debug-adapters" | tee -a "$GITHUB_ENV")"
+          # not the runner's tool-cache python: a venv on it is one the fork's Seatbelt profile cannot exec
+          # Homebrew's python: debugpy needs 3.10 or later (/usr/bin/python3 is 3.9) and the fork's Seatbelt profile
+          # execs under /opt/homebrew; read into a variable first, so a failed install stops the step
+          adapters=$(DRGNX_ADAPTER_PYTHON=/opt/homebrew/bin/python3 bash .github/ci/debug-adapters.sh "$RUNNER_TEMP/debug-adapters")
+          printf '%s\n' "$adapters" >> "$GITHUB_ENV"
+          eval "$adapters"
           set +a
           bin=$(jq -r 'select(.profile.test == true and .target.name == "drgnx_ratatoskr" and (.target.kind | index("lib"))) | .executable' \
             "$RUNNER_TEMP/test-bins.json" | tail -n 1)
