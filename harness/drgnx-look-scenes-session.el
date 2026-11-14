@@ -180,7 +180,7 @@ branch gateway-queue, staged file and history come with the Magit adapter (look 
                    "the picture is a gradient the scene makes (a PPM): in use, images are the hub's PNG or JPEG, fetched from notebook/output")
     (notebook-light "see notebook-dark")
     (notebook-views "no mockup yet: the three views are the hub's rows in Sjá (outline shown, beside the notebook); a mockup comes before any look judgment"
-                    "the notebook is a file the scene writes and the hub opens (no kernel: no prompts or states yet), so the rows are the hub's own")
+                    "the notebook is a file the scene writes and the hub opens (no kernel: no running cell, no log entries), so the rows are the hub's own")
     (palette "the mockup's palette rows come from its own commands; the line lists the registry's")
     (explorer-focused-dark "no agent badges (C, R) in the Explorer: agent system part 3 (G9)")
     (explorer-focused-light "no agent badges (C, R) in the Explorer: agent system part 3 (G9)")
@@ -836,6 +836,10 @@ editor, the Explorer's rows beside it."
 (declare-function drgnx-view-draw-now "drgnx-view")
 (declare-function drgnx-view-p "drgnx-view")
 (declare-function drgnx-notebook-outline "drgnx-notebook")
+(declare-function drgnx-notebook-open-output "drgnx-notebook")
+(declare-function drgnx-notebook-kernel-log "drgnx-notebook")
+(declare-function drgnx-view-env-update "drgnx-view-env")
+(defvar drgnx-notebook-view--id)
 (defvar drgnx-view)
 (declare-function drgnx-hub-connect "drgnx-hub-client")
 
@@ -1524,22 +1528,35 @@ would be (no kernel, no hub: the scene draws the buffer's own chrome)."
     file))
 
 (defun drgnx-look-scene--notebook-views (theme)
-  "The notebook opened through the hub (a real file), its outline view beside it, in THEME."
+  "The notebook opened through the hub (a real file), its three views side by side in the editor, in THEME: the outline,
+the full output of the failed cell, the kernel's log."
   (drgnx-look-scene--theme theme)
   (drgnx-look-scene--try "notebook-views"
     (drgnx-wb-focus-editor)
     (drgnx-look-scene--hub)
     (load (expand-file-name "modules/lang/drgnx-notebook" (bound-and-true-p drgnx-dir)) nil t)
-    (let ((buffer (find-file-noselect (drgnx-look-scene--notebook-file))))
+    (let* ((buffer (find-file-noselect (drgnx-look-scene--notebook-file))) (base (buffer-name buffer)) views)
       (drgnx-look-scene--show buffer)
       (when (drgnx-look-scene--until 30 "the notebook opens" (lambda () (buffer-local-value 'drgnx-notebook--id buffer)))
-        (with-current-buffer buffer (drgnx-notebook-outline))
-        (let ((name (format "*Notebook outline: %s*" (buffer-name buffer))))
-          (drgnx-look-scene--until 30 "the outline's rows"
-                                   (lambda () (and (get-buffer name)
-                                                   (with-current-buffer name
-                                                     (when (drgnx-view-p drgnx-view) (drgnx-view-draw-now drgnx-view))
-                                                     (> (buffer-size) 0)))))))))
+        (with-current-buffer buffer
+          (drgnx-notebook-outline)
+          (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id "c3") :head)))
+          (drgnx-notebook-open-output)
+          (drgnx-notebook-kernel-log))
+        (setq views (mapcar (lambda (name) (format name base))
+                            '("*Notebook outline: %s*" "*Notebook output: %s c3*" "*Notebook log: %s*")))
+        (drgnx-look-scene--until 30 "the views' buffers" (lambda () (seq-every-p #'get-buffer views)))
+        (delete-other-windows)
+        (let* ((w1 (selected-window)) (w2 (split-window-right)) (w3 (with-selected-window w2 (split-window-right))))
+          (cl-loop for w in (list w1 w2 w3) for name in views
+                   do (set-window-buffer w (get-buffer name))
+                   (with-current-buffer name (drgnx-view-env-update drgnx-notebook-view--id))))
+        (drgnx-look-scene--until 30 "the views' rows"
+                                 (lambda () (seq-every-p (lambda (name)
+                                                           (with-current-buffer name
+                                                             (when (drgnx-view-p drgnx-view) (drgnx-view-draw-now drgnx-view))
+                                                             (> (buffer-size) 0)))
+                                                         views))))))
   (drgnx-look-scene--answer))
 
 (defun drgnx-look-scene-notebook-views () "The notebook and its outline view." (drgnx-look-scene--notebook-views 'drgnx-dark))

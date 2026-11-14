@@ -828,3 +828,56 @@
   (dolist (face '(drgnx-notebook-inverse drgnx-notebook-prompt drgnx-notebook-stale drgnx-notebook-fg-red drgnx-notebook-bg-red))
     (should (facep face)))
   (should (eq (face-attribute 'drgnx-notebook-inverse :inverse-video nil t) t)))
+
+;;; The views' foot line and gutter (the approved mockup: the-look/notebook-views.html): what the status bar says of a view, from its rows
+
+(defun nb-test--view-buffer (mode rows)
+  "A view buffer in MODE holding ROWS, each (TEXT . PROPS), as a hub's patch draws them."
+  (let ((buffer (generate-new-buffer "*Notebook view test*")))
+    (with-current-buffer buffer
+      (funcall mode)
+      (let ((inhibit-read-only t))
+        (dolist (r rows) (insert (apply #'propertize (car r) (cdr r)) "\n")))
+      (drgnx-notebook-view--refresh))
+    buffer))
+
+(ert-deftest drgnx-notebook/the-outlines-foot-counts-the-listed-cells-and-the-hidden-ones ()
+  (nb-test--with
+    (let ((b (nb-test--view-buffer 'drgnx-notebook-outline-mode
+                                   '(("1  markdown  # T" drgnx-notebook-cell "a") ("2  code      [1] x" drgnx-notebook-cell "b")
+                                     ("1 991 more cells")))))
+      (unwind-protect
+          (with-current-buffer b
+            (should (equal drgnx-notebook-view--foot "2 of 1 993 listed")))
+        (kill-buffer b)))))
+
+(ert-deftest drgnx-notebook/the-outputs-foot-says-which-lines-of-how-many ()
+  (nb-test--with
+    (let ((b (nb-test--view-buffer 'drgnx-notebook-output-mode
+                                   '(("1 240 lines above") ("epoch 41" drgnx-notebook-line 1241) ("epoch 42" drgnx-notebook-line 1242)
+                                     ("310 lines below")))))
+      (unwind-protect
+          (with-current-buffer b
+            (should (equal drgnx-notebook-view--foot "lines 1 241–1 242 of 1 552"))
+            ;; the gutter counts the cell's lines: the row above is line 1240 of the cell
+            (should (eq display-line-numbers t))
+            (should (= display-line-numbers-offset 1239)))
+        (kill-buffer b)))))
+
+(ert-deftest drgnx-notebook/the-logs-foot-counts-entries ()
+  (nb-test--with
+    (let ((b (nb-test--view-buffer 'drgnx-notebook-log-mode
+                                   '(("12 earlier entries dropped") ("stream  hello" drgnx-notebook-log 1) ("error   boom" drgnx-notebook-log 2)
+                                     ("        more" drgnx-notebook-log 2)))))
+      (unwind-protect
+          (with-current-buffer b (should (equal drgnx-notebook-view--foot "2 entries · 12 dropped")))
+        (kill-buffer b)))))
+
+(ert-deftest drgnx-notebook/the-view-foot-is-a-status-bar-segment ()
+  (nb-test--with
+    (when (fboundp 'drgnx-statusbar-define-segment)
+      (should (memq 'notebook-view drgnx-statusbar-other))
+      (should (memq 'notebook-view-hint drgnx-statusbar-other-right)))
+    (let ((b (nb-test--view-buffer 'drgnx-notebook-log-mode '(("stream  hi" drgnx-notebook-log 1)))))
+      (unwind-protect (with-current-buffer b (should (equal (drgnx-notebook--segment-view) "1 entries")))
+        (kill-buffer b)))))
