@@ -315,7 +315,7 @@ Turning `tools/agents` off (Preferences: Modules) stops the mirroring and closes
 the hub and its sessions go on.
 **New Agent Session…**, **Review Branch** and starting an agent on a task now start the session in the hub too (the
 hub's `agents/start`); the transcript you open is its mirror. A session whose provider's lock the hub could not enforce
-(for instance no sandbox on this machine) is announced once as "not enforced: <why>" and says so in
+(for instance no sandbox on this machine) is announced once as "not enforced: \<why\>" and says so in
 `drgnx-agents-mirror-lock-label`. A permission-matrix question (`matrix` card) or a rule that paused an agent
 (`supervisor`) shows as a notice; nothing asks you in the middle of your typing. `drgnx job` talks to the hub's `job/*`
 methods, which the hub itself serves.

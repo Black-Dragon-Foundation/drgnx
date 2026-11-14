@@ -30,8 +30,8 @@
 
 (ert-deftest drgnx-design/a-token-names-the-faces-that-use-it ()
   (let ((section (drgnx-design--section (design-test--page "tokens.md") 'dark)))
-    (should (string-match-p "^| `sel` | .*`drgnx-selected`" section))
-    (should (string-match-p "^| `ok` | .*`drgnx-status-ok`" section))))
+    (should (string-match-p "^| <span[^|]*</span> | `sel` | .*`drgnx-selected`" section))
+    (should (string-match-p "^| <span[^|]*</span> | `ok` | .*`drgnx-status-ok`" section))))
 
 (ert-deftest drgnx-design/the-css-has-every-token-of-every-variant ()
   (let ((css (design-test--page "tokens.css")))
@@ -39,7 +39,7 @@
       (let ((block (drgnx-design--css-block css variant)))
         (should block)
         (dolist (token (mapcar #'car (alist-get variant (drgnx-design--table))))
-          (should (string-search (format "--%s: %s;" token (drgnx-look-token token variant)) block)))))))
+          (should (string-search (format "--drgnx-%s: %s;" token (drgnx-look-token token variant)) block)))))))
 
 (defun design-test--rows (page)
   "The table rows of PAGE (the lines that start with `| `')."
@@ -147,3 +147,11 @@
             (call-process "magick" nil t nil "identify" "-format" "%wx%h" out)
             (should (equal (buffer-string) "20x10"))))
       (delete-directory dir t))))
+
+(ert-deftest drgnx-design/the-tokens-page-has-a-swatch-per-token ()
+  ;; inline HTML, so the book shows the colour next to its name; the colour is the token's own
+  (let ((section (drgnx-design--section (design-test--page "tokens.md") 'dark)))
+    (dolist (token '(sel ok accent))
+      (let ((hex (drgnx-look-token token 'dark)))
+        (should (string-match-p (format "^| <span class=\"swatch\" style=\"background: %s\"></span> | `%s` |" hex token)
+                                section))))))

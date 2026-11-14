@@ -5,7 +5,7 @@
 ;;; Commentary:
 ;; docs/design/ is drgnx's design system: hand-written guidance plus pages generated from the code that draws the
 ;; look, so they cannot disagree with it.  This file builds the generated ones:
-;;   tokens.md, tokens.css, img/tokens-VARIANT.svg   from themes/drgnx-tokens.eld and the faces the theme generator makes
+;;   tokens.md, tokens.css                           from themes/drgnx-tokens.eld and the faces the theme generator makes
 ;;                                                   (which faces use which token);
 ;;   type.md                                         from the font roles, the type faces and the density table;
 ;;   icons.md, img/icons-VARIANT.svg                 from etc/icons, files.eld and the Lisp that names the icons.
@@ -25,7 +25,6 @@
 (require 'drgnx-icons)
 (add-to-list 'load-path (expand-file-name "wb" drgnx-dir))   ; the density module needs drgnx-state
 (require 'drgnx-look-density (expand-file-name "modules/ui/drgnx-look-density" drgnx-dir))
-(declare-function drgnx-design-site-build "drgnx-design-site" (out &optional root))
 (require 'drgnx-theme-gen (expand-file-name "themes/drgnx-theme-gen" drgnx-dir))
 
 (defconst drgnx-design-dir "docs/design/" "Where the design system lives, relative to the checkout.")
@@ -99,46 +98,16 @@ place of the real colours, so every colour a face names can be traced back to th
   "COLOUR of a tint: a token's name in backticks, or the literal colour as the table has it."
   (format "`%s`" colour))
 
-(defun drgnx-design--on (variant)
-  "The colour for text and outlines drawn on VARIANT's editor surface."
-  (drgnx-look-token 'fg variant))
-
-(defun drgnx-design--text-on (colour variant)
-  "The better of VARIANT's `fg' and `editor' as text on COLOUR."
-  (let ((a (drgnx-look-token 'fg variant)) (b (drgnx-look-token 'editor variant)))
-    (if (>= (drgnx-color-contrast colour a) (drgnx-color-contrast colour b)) a b)))
-
-(defun drgnx-design--sheet (variant)
-  "An SVG sheet of VARIANT's tokens: a swatch each, named, on the variant's own editor colour."
-  (let* ((tokens (drgnx-design--tokens variant)) (columns 8) (w 132) (h 74)
-         (rows (ceiling (length tokens) (float columns)))
-         (i 0) (cells nil))
-    (dolist (token tokens)
-      (let* ((x (+ 8 (* w (% i columns)))) (y (+ 8 (* h (/ i columns))))
-             (colour (drgnx-look-token token variant)))
-        (push (format (concat "<rect x=\"%d\" y=\"%d\" width=\"%d\" height=\"40\" rx=\"6\" fill=\"%s\" stroke=\"%s\"/>"
-                              "<text x=\"%d\" y=\"%d\" font-size=\"11\" fill=\"%s\">%s</text>"
-                              "<text x=\"%d\" y=\"%d\" font-size=\"10\" fill=\"%s\">%s</text>\n")
-                      x y (- w 12) colour (drgnx-look-token 'border variant)
-                      x (+ y 54) (drgnx-design--on variant) token
-                      x (+ y 66) (drgnx-look-token 'muted variant) colour)
-              cells)
-        (cl-incf i)))
-    (format (concat "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"%d\" height=\"%d\" viewBox=\"0 0 %d %d\" "
-                    "font-family=\"sans-serif\">\n<rect width=\"100%%\" height=\"100%%\" fill=\"%s\"/>\n%s</svg>\n")
-            (+ 8 (* w columns)) (+ 16 (* h rows)) (+ 8 (* w columns)) (+ 16 (* h rows))
-            (drgnx-look-token 'editor variant) (apply #'concat (nreverse cells)))))
-
 (defun drgnx-design--tokens-section (variant)
   "The tokens page's section for VARIANT."
   (let ((faces (drgnx-design-faces variant)) (entries (alist-get variant (drgnx-design--table))))
     (concat
-     (format "## %s\n\n![The %s tokens](img/tokens-%s.svg)\n\n" (alist-get variant drgnx-design-variants)
-             (downcase (alist-get variant drgnx-design-variants)) variant)
-     "| Token | Value | Definition | Faces |\n|---|---|---|---|\n"
+     (format "## %s\n\n" (alist-get variant drgnx-design-variants))
+     "| Swatch | Token | Value | Definition | Faces |\n|---|---|---|---|---|\n"
      (mapconcat (lambda (entry)
                   (let ((used (drgnx-design--faces-using (car entry) faces)))
-                    (format "| `%s` | `%s` | %s | %s |" (car entry) (drgnx-look-token (car entry) variant)
+                    (format "| <span class=\"swatch\" style=\"background: %s\"></span> | `%s` | `%s` | %s | %s |"
+                            (drgnx-look-token (car entry) variant) (car entry) (drgnx-look-token (car entry) variant)
                             (drgnx-design--definition (cdr entry))
                             (if used (mapconcat (lambda (f) (format "`%s`" f)) used ", ") "-"))))
                 entries "\n")
@@ -162,9 +131,16 @@ place of the real colours, so every colour a face names can be traced back to th
   (when (string-match (format "/\\* %s \\*/\n[^{]*{\n\\(\\(?:[^}]*\\)\\)}" variant) css)
     (match-string 1 css)))
 
+(defconst drgnx-design-css-selectors
+  '((dark . ":root,\n:root[data-theme=\"dark\"],\nhtml.coal,\nhtml.navy,\nhtml.ayu")
+    (light . ":root[data-theme=\"light\"],\nhtml.light,\nhtml.rust")
+    (hc . ":root[data-theme=\"hc\"]"))
+  "What each variant's custom properties apply to in tokens.css: the page's own `data-theme' and the classes mdBook
+puts on the html element for its themes (its dark ones take the dark tokens, its light ones the light).")
+
 (defun drgnx-design--declarations (variant indent)
   "VARIANT's tokens as CSS custom properties, each on a line indented by INDENT."
-  (mapconcat (lambda (token) (format "%s--%s: %s;\n" indent token (drgnx-look-token token variant)))
+  (mapconcat (lambda (token) (format "%s--drgnx-%s: %s;\n" indent token (drgnx-look-token token variant)))
              (drgnx-design--tokens variant) ""))
 
 (defun drgnx-design--tokens-css ()
@@ -172,16 +148,11 @@ place of the real colours, so every colour a face names can be traced back to th
   (concat
    (format "/* %s */\n" (format drgnx-design--notice "themes/drgnx-tokens.eld"))
    (mapconcat (lambda (variant)
-                (format "/* %s */\n%s {\n%s}\n" variant
-                        (pcase variant
-                          ('dark ":root,\n:root[data-theme=\"dark\"]")
-                          (_ (format ":root[data-theme=\"%s\"]" variant)))
+                (format "/* %s */\n%s {\n%s}\n" variant (cdr (assq variant drgnx-design-css-selectors))
                         (drgnx-design--declarations variant "  ")))
               (mapcar #'car drgnx-design-variants) "")
-   "/* the reader's system asks for it, and the page does not choose */\n"
-   "@media (prefers-color-scheme: light) {\n  :root:not([data-theme]) {\n"
-   (drgnx-design--declarations 'light "    ") "  }\n}\n"
-   "@media (prefers-contrast: more) {\n  :root:not([data-theme]) {\n"
+   "/* a reader whose system asks for more contrast, unless the page chose */\n"
+   "@media (prefers-contrast: more) {\n  :root:not([data-theme]),\n  html.light, html.rust, html.coal, html.navy, html.ayu {\n"
    (drgnx-design--declarations 'hc "    ") "  }\n}\n"))
 
 (defun drgnx-design--section (page variant)
@@ -373,11 +344,9 @@ within three lines of the word icon."
   "Functions that return generated pages as ((PATH . TEXT)…), PATH relative to docs/design/.")
 
 (defun drgnx-design--tokens-pages ()
-  "tokens.md, tokens.css and the swatch sheets."
-  (append (list (cons "tokens.md" (drgnx-design--tokens-page))
-                (cons "tokens.css" (drgnx-design--tokens-css)))
-          (mapcar (lambda (variant) (cons (format "img/tokens-%s.svg" variant) (drgnx-design--sheet variant)))
-                  (mapcar #'car drgnx-design-variants))))
+  "tokens.md and tokens.css."
+  (list (cons "tokens.md" (drgnx-design--tokens-page))
+        (cons "tokens.css" (drgnx-design--tokens-css))))
 
 (defun drgnx-design--type-icon-pages ()
   "type.md, icons.md and the icon sheets."
@@ -460,8 +429,8 @@ each of DIRS in turn.  The paths written."
     (nreverse written)))
 
 (defun drgnx-design-cli-run (args)
-  "`drgnx design [--check | --site DIR | --shots SCENES-DIR...]': write the generated pages; with --check only say which
-are stale; with --site build the static site into DIR; with --shots cut the component pictures from the look scenes'
+  "`drgnx design [--check | --shots SCENES-DIR...]': write the generated pages; with --check only say which
+are stale; with --shots cut the component pictures from the look scenes'
 output.  Exit code: 0 done (or current), 1 with --check when a page is stale, 2 for an unknown argument."
   (cond ((equal args '("--check"))
          (let ((stale (drgnx-design-stale)))
@@ -470,14 +439,10 @@ output.  Exit code: 0 done (or current), 1 with --check when a page is stale, 2 
         ((null args)
          (dolist (p (drgnx-design-regenerate)) (princ (format "wrote %s%s\n" drgnx-design-dir p)))
          0)
-        ((and (equal (car args) "--site") (= (length args) 2))
-         (require 'drgnx-design-site)
-         (dolist (p (drgnx-design-site-build (expand-file-name (cadr args)))) (princ (format "built %s\n" p)))
-         0)
         ((and (equal (car args) "--shots") (cdr args))
          (dolist (p (drgnx-design-cut-shots (mapcar #'expand-file-name (cdr args)))) (princ (format "wrote %s\n" p)))
          0)
-        (t (princ "usage: drgnx design [--check | --site DIR | --shots SCENES-DIR...]\n") 2)))
+        (t (princ "usage: drgnx design [--check | --shots SCENES-DIR...]\n") 2)))
 
 (defun drgnx-design-cli ()
   "bin/drgnx design: the arguments after --."
