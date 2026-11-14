@@ -102,6 +102,30 @@ pub struct Message {
     pub buffers: Vec<Vec<u8>>,
 }
 
+static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+impl Message {
+    /// A request for the kernel: a fresh `msg_id` in SESSION, the protocol version the codec was written against.
+    pub fn request(session: &str, msg_type: &str, content: Value) -> Message {
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Message {
+            idents: Vec::new(),
+            header: Header {
+                msg_id: format!("{session}-{n}"),
+                session: session.to_string(),
+                username: "drgnx".into(),
+                date: crate::log::rfc3339(crate::clock::wall_secs() as u64),
+                msg_type: msg_type.to_string(),
+                version: "5.3".into(),
+            },
+            parent: Value::Object(Default::default()),
+            metadata: Value::Object(Default::default()),
+            content,
+            buffers: Vec::new(),
+        }
+    }
+}
+
 /// Why frames are not a message.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WireError {

@@ -2,7 +2,11 @@
 //! kernels. The notebook file model is `hrafn::notebook` (T11a).
 //!
 //! - [`wire`]: a message of the Jupyter protocol as ZeroMQ frames: encoding, the signature checked in constant time, size caps.
+//! - [`kernel`]: one kernel's process (draugr, own group), its connection, ready, interrupt, shutdown.
+//! - [`session`]: a kernel's four sockets, one reader task each that always drains, bounded in bytes.
 //! - [`spec`]: the installed kernelspecs, and a kernel's connection file (0600, in a 0700 folder, deleted when the kernel ends).
 
+pub mod kernel;
+pub mod session;
 pub mod spec;
 pub mod wire;
