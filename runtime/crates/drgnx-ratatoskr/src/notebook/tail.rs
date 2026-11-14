@@ -33,6 +33,71 @@ pub struct Tail {
     /// Rows left out of the inline text.
     pub more_lines: usize,
     pub version: u64,
+    /// The cell's execution count (the number of its prompt), when it has run.
+    pub execution_count: Option<i64>,
+}
+
+/// The string at a cell's head: its prompt (`[n]`, `[ ]`, `[*]` while queued or running) and what kind of cell it is; the chrome around
+/// it (buttons, toolbar) is the editor's to place. STATE is `idle`, `queued` or `running`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Head {
+    pub text: String,
+    pub runs: Vec<Run>,
+    pub state: &'static str,
+}
+
+pub fn head(
+    kind: hrafn::notebook::Kind,
+    language: &str,
+    count: Option<i64>,
+    state: &'static str,
+) -> Head {
+    use hrafn::notebook::Kind;
+    let (prompt, chip) = match kind {
+        Kind::Code => (
+            match (state, count) {
+                ("queued" | "running", _) => "[*]".to_string(),
+                (_, Some(n)) => format!("[{n}]"),
+                _ => "[ ]".to_string(),
+            },
+            if language.is_empty() {
+                "code"
+            } else {
+                language
+            },
+        ),
+        Kind::Markdown => (String::new(), "markdown"),
+        Kind::Raw => (String::new(), "raw"),
+    };
+    let strong = Style {
+        bold: true,
+        ..Style::default()
+    };
+    // role 8 is the terminal's bright black: the dim one
+    let dim = Style {
+        fg: Some(8),
+        ..Style::default()
+    };
+    let mut runs = Vec::new();
+    let mut text = String::new();
+    if !prompt.is_empty() {
+        runs.push(Run {
+            start: 0,
+            end: prompt.chars().count(),
+            style: strong,
+        });
+        text.push_str(&prompt);
+        text.push_str("  ");
+    }
+    let start = text.chars().count();
+    let chip = clean(chip);
+    text.push_str(&chip);
+    runs.push(Run {
+        start,
+        end: start + chip.chars().count(),
+        style: dim,
+    });
+    Head { text, runs, state }
 }
 
 /// A line of the tail with its styled runs (offsets within the line, in characters).
@@ -221,6 +286,7 @@ pub fn build(cell: &str, run: &CellRun, version: u64) -> Tail {
         images,
         more_lines,
         version,
+        execution_count: run.execution_count,
     }
 }
 

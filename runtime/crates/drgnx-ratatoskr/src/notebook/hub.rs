@@ -17,8 +17,8 @@ use super::kernel::{Exit, Kernel, KernelEvent, Timeouts, refuse_when_sealed};
 use super::output::terminal::Run;
 use super::output::{CellRun, Router, RunStatus};
 use super::session::Channel;
-use super::spec::{Choice, Kernelspec, choose, discover};
-use super::tail::Tail;
+use super::spec::{Choice, Kernelspec, Skipped, choose, discover, discover_with_skips};
+use super::tail::{self, Head, Tail};
 use super::wire::Message;
 use crate::agents::lock::LaunchPlan;
 use crate::debug::Sink;
@@ -33,8 +33,8 @@ pub struct Opened {
     pub cells: Vec<CellInfo>,
     pub kernelspec: Option<String>,
     pub language: Option<String>,
-    /// Each code cell's tail from the file (stale: no kernel has run it in this hub).
-    pub tails: Vec<(String, Tail, bool)>,
+    /// Each code cell's tail from the file (stale: no kernel has run it in this hub), as the editor gets a tail.
+    pub tails: Vec<Value>,
 }
 
 enum Cmd {
@@ -55,6 +55,40 @@ struct Open {
     book: tokio::sync::Mutex<Book>,
     kernel: Mutex<Option<Running>>,
     starts: AtomicU64,
+    /// Cells that are queued or running (the others are idle): what their heads show.
+    states: Mutex<HashMap<String, &'static str>>,
+}
+
+impl Open {
+    fn state_of(&self, cell: &str) -> &'static str {
+        self.states
+            .lock()
+            .expect("states")
+            .get(cell)
+            .copied()
+            .unwrap_or("idle")
+    }
+
+    fn set_state(&self, cell: &str, state: Option<&'static str>) {
+        let mut s = self.states.lock().expect("states");
+        match state {
+            Some(st) => s.insert(cell.to_string(), st),
+            None => s.remove(cell),
+        };
+    }
+
+    /// The tail event of CELL: its tail, and the head that goes with it.
+    fn tail_event(&self, book: &Book, cell: &str) -> Option<Value> {
+        let (t, stale) = book.tail(cell)?;
+        let info = book.cell_info(cell)?;
+        let head = tail::head(
+            info.kind,
+            &book.language().unwrap_or_default(),
+            t.execution_count,
+            self.state_of(cell),
+        );
+        Some(tail_json(&self.id, &t, stale, &head))
+    }
 }
 
 pub struct Notebooks {
@@ -74,9 +108,11 @@ fn style_json(r: &Run) -> Value {
 }
 
 /// A tail as the editor gets it.
-pub fn tail_json(id: &str, t: &Tail, stale: bool) -> Value {
+pub fn tail_json(id: &str, t: &Tail, stale: bool, head: &Head) -> Value {
     json!({
         "id": id, "cell": t.cell, "text": t.text, "version": t.version, "stale": stale,
+        "execution_count": t.execution_count,
+        "head": {"text": head.text, "state": head.state, "runs": head.runs.iter().map(style_json).collect::<Vec<_>>()},
         "runs": t.runs.iter().map(style_json).collect::<Vec<_>>(),
         "images": t.images.iter().map(|i| json!({"at": i.at, "output": i.output, "mime": i.mime,
                                                   "width": i.width, "height": i.height})).collect::<Vec<_>>(),
@@ -115,6 +151,15 @@ impl Notebooks {
         discover(&self.kernel_dirs)
     }
 
+    /// The installed kernelspecs and the ones that were found and not used, with why (logged too).
+    pub fn kernels_with_skips(&self) -> (Vec<Kernelspec>, Vec<Skipped>) {
+        let (specs, skipped) = discover_with_skips(&self.kernel_dirs);
+        for k in &skipped {
+            tracing::info!(target: "drgnx::notebook", "kernelspec {} not used: {}", k.name, k.why);
+        }
+        (specs, skipped)
+    }
+
     /// Open the notebook at PATH for the editor on CONN; TEXT is the buffer's text when it has one, else the file is read.
     pub async fn open(
         &self,
@@ -144,24 +189,29 @@ impl Notebooks {
         };
         let book = Book::open(path, text)?;
         let id = format!("nb{}", self.next.fetch_add(1, Ordering::SeqCst));
-        let opened = Opened {
-            id: id.clone(),
-            cells: book.cells(),
-            kernelspec: book.kernelspec_name(),
-            language: book.language(),
-            tails: book
-                .cells()
-                .iter()
-                .filter_map(|c| book.tail(&c.id).map(|(t, stale)| (c.id.clone(), t, stale)))
-                .collect(),
-        };
+        let (cells, kernelspec, language) = (book.cells(), book.kernelspec_name(), book.language());
         let open = Arc::new(Open {
             id: id.clone(),
             conn,
             book: tokio::sync::Mutex::new(book),
             kernel: Mutex::new(None),
             starts: AtomicU64::new(1),
+            states: Mutex::new(HashMap::new()),
         });
+        let tails = {
+            let book = open.book.lock().await;
+            cells
+                .iter()
+                .filter_map(|c| open.tail_event(&book, &c.id))
+                .collect()
+        };
+        let opened = Opened {
+            id: id.clone(),
+            cells,
+            kernelspec,
+            language,
+            tails,
+        };
         self.books.lock().expect("books").insert(id, open);
         Ok(opened)
     }
@@ -186,8 +236,36 @@ impl Notebooks {
     pub async fn tail(&self, id: &str, cell: &str) -> Result<Value, String> {
         let open = self.get(id)?;
         let book = open.book.lock().await;
-        let (t, stale) = book.tail(cell).ok_or_else(|| format!("no cell {cell}"))?;
-        Ok(tail_json(id, &t, stale))
+        open.tail_event(&book, cell)
+            .ok_or_else(|| format!("no cell {cell}"))
+    }
+
+    /// CELL (or every code cell) has no output and no execution count; a cell that is queued or running is left as it is.
+    pub async fn clear(&self, id: &str, cell: Option<&str>) -> Result<(), String> {
+        let open = self.get(id)?;
+        let mut book = open.book.lock().await;
+        let targets: Vec<String> = match cell {
+            Some(c) => vec![c.to_string()],
+            None => book
+                .cells()
+                .into_iter()
+                .filter(|c| c.kind == hrafn::notebook::Kind::Code)
+                .map(|c| c.id)
+                .collect(),
+        };
+        for c in targets {
+            if book.cell_info(&c).is_none() {
+                return Err(format!("no cell {c}"));
+            }
+            if open.state_of(&c) != "idle" {
+                continue;
+            }
+            book.clear(&c);
+            if let Some(v) = open.tail_event(&book, &c) {
+                self.sink.send(open.conn, "notebook-tail", v);
+            }
+        }
+        Ok(())
     }
 
     /// The full output of one cell as nbformat objects.
@@ -334,6 +412,14 @@ impl Notebooks {
         rx.await.map_err(|_| "the kernel's task ended".to_string())
     }
 
+    /// A new kernel of the same kind for notebook ID: the old one is asked to shut down (its group killed after the grace), what was queued
+    /// is cancelled, and a new process starts with a new connection file and key. The kernel's name.
+    pub async fn restart(&self, id: &str) -> Result<String, String> {
+        let name = self.kernel_name(id).ok_or("this notebook has no kernel")?;
+        self.shutdown(id).await?;
+        self.start(id, Some(&name), None).await
+    }
+
     /// Forget notebook ID (its kernel ends first).
     pub async fn close(&self, id: &str) {
         let _ = self.shutdown(id).await;
@@ -418,12 +504,8 @@ impl Pump {
         if let Some(run) = self.latest.get(cell).and_then(|m| self.router.run(m)) {
             book.show(cell, run);
         }
-        if let Some((t, stale)) = book.tail(cell) {
-            self.sink.send(
-                self.open.conn,
-                "notebook-tail",
-                tail_json(&self.open.id, &t, stale),
-            );
+        if let Some(v) = self.open.tail_event(&book, cell) {
+            self.sink.send(self.open.conn, "notebook-tail", v);
         }
     }
 
@@ -465,7 +547,8 @@ impl Pump {
                     self.current = Some((cell.clone(), msg_id));
                     (self.replied, self.idle) = (false, false);
                     self.status("busy");
-                    self.touch(&cell).await;
+                    self.open.set_state(&cell, Some("running"));
+                    self.flush(&cell).await;
                 }
                 Err(_) => {
                     self.status("dead");
@@ -487,12 +570,9 @@ impl Pump {
             self.dirty.remove(&cell);
             let mut book = self.open.book.lock().await;
             book.show(&cell, &run);
-            if let Some((t, stale)) = book.tail(&cell) {
-                self.sink.send(
-                    self.open.conn,
-                    "notebook-tail",
-                    tail_json(&self.open.id, &t, stale),
-                );
+            self.open.set_state(&cell, None);
+            if let Some(v) = self.open.tail_event(&book, &cell) {
+                self.sink.send(self.open.conn, "notebook-tail", v);
             }
         }
     }
@@ -507,6 +587,7 @@ impl Pump {
             return;
         };
         let status = self.router.run(&msg_id).map(|r| r.status);
+        self.open.set_state(&cell, None);
         self.flush(&cell).await;
         if status == Some(RunStatus::Error) {
             self.drop_queue(RunStatus::Aborted).await;
@@ -576,6 +657,10 @@ impl Pump {
                     None => break,
                     Some(Cmd::Shutdown(tx)) => { shutdown = Some(tx); break; }
                     Some(Cmd::Execute(cells)) => {
+                        for cell in &cells {
+                            self.open.set_state(cell, Some("queued"));
+                            self.flush(cell).await;
+                        }
                         self.queue.extend(cells);
                         self.start_next().await;
                     }

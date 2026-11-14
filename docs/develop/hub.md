@@ -1347,6 +1347,8 @@ a capitalised name a named type (below) or, in results, a record (`JobSummary`, 
 `HubStatus`, `HelloReply`: their fields are in `methods.json`). A params schema never holds an unconstrained value (`any`); a
 result may (a transcript entry's ACP fields, a job's tasks).
 
+The `notebook/*` methods and the events they come with (`notebook-tail`, `notebook-status`, `notebook-input-request`) are described in `notebooks.md`.
+
 <!-- hub-methods:begin -->
 | Method | Class | Params | Result | Writes |
 |---|---|---|---|---|
@@ -1534,6 +1536,20 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `messages/mark` | user | `{id: natnum, state: "delivered" \| "read" \| "acted"}` | `{changed: boolean}` | yes |
 | `messages/retract` | user | `{id: natnum}` | `{retracted: boolean, status: string}` | yes |
 | `messages/send` | user | `{answers?: natnum, job?: Id, question?: boolean, recipient: AgentName, seen?: natnum, sender?: AgentName, text: Text}` | `SendResult` | yes |
+| `notebook/clear` | user | `{cell?: string, id: string}` | `boolean` | no |
+| `notebook/close` | user | `{id: string}` | `boolean` | no |
+| `notebook/execute` | user | `{cells: [{id: string, source: string, type: string}], id: string}` | `boolean` | no |
+| `notebook/input` | user | `{id: string, request: string, value: string}` | `boolean` | no |
+| `notebook/interrupt` | user | `{id: string}` | `boolean` | no |
+| `notebook/kernels` | user | `{}` | `{kernels: [NotebookKernel], skipped: [NotebookSkipped]}` | no |
+| `notebook/open` | user | `{path: string, text?: string}` | `{cells: [NotebookCell], id: string, kernelspec?: string, language?: string, tails: [NotebookTail]}` | no |
+| `notebook/output` | user | `{cell: string, id: string}` | `{outputs: [any]}` | no |
+| `notebook/restart` | user | `{id: string}` | `{kernel: string}` | no |
+| `notebook/save` | user | `{cells?: [{id: string, source: string, type: string}], id: string}` | `boolean` | no |
+| `notebook/shutdown` | user | `{id: string}` | `{code?: integer, signal?: integer, stderr: string}` | no |
+| `notebook/start` | user | `{id: string, kernel?: string}` | `{kernel: string}` | no |
+| `notebook/sync` | user | `{cells: [{id: string, source: string, type: string}], id: string}` | `boolean` | no |
+| `notebook/tail` | user | `{cell: string, id: string}` | `NotebookTail` | no |
 | `orch/evidence` | user | `{task: TaskRef}` | `{evidence: [any]}` | no |
 | `pace/get` | user | `{provider?: string}` | `{meters?: [Pace]}` | no |
 | `pair/answer` | user | `{lines?: [natnum], not_saved?: Text, reason?: Text, result: "applied" \| "refused" \| "dropped", saved?: boolean, version?: natnum, write: natnum}` | `boolean` | no |

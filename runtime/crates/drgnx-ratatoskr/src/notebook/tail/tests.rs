@@ -199,3 +199,50 @@ fn an_error_value_of_many_lines_is_capped_like_any_other_row_and_its_text_is_cle
     });
     assert_eq!(build("c", &run, 1).text, "E: v[0m");
 }
+
+#[test]
+fn a_tail_has_the_execution_count_and_a_head_shows_the_prompt_the_kind_and_the_state() {
+    use hrafn::notebook::Kind;
+    let run = run_with(|f| {
+        f(
+            "execute_reply",
+            json!({"status": "ok", "execution_count": 7}),
+        )
+    });
+    assert_eq!(build("c", &run, 1).execution_count, Some(7));
+    let h = head(Kind::Code, "python", Some(7), "idle");
+    assert_eq!(h.text, "[7]  python");
+    assert_eq!(h.runs.len(), 2);
+    assert_eq!(
+        h.runs[0],
+        Run {
+            start: 0,
+            end: 3,
+            style: Style {
+                bold: true,
+                ..Style::default()
+            }
+        }
+    );
+    assert_eq!(h.runs[1].start, 5);
+    assert_eq!(head(Kind::Code, "python", None, "idle").text, "[ ]  python");
+    assert_eq!(
+        head(Kind::Code, "python", Some(7), "running").text,
+        "[*]  python"
+    );
+    assert_eq!(
+        head(Kind::Code, "python", Some(7), "queued").state,
+        "queued"
+    );
+    assert_eq!(head(Kind::Code, "", None, "idle").text, "[ ]  code");
+    assert_eq!(
+        head(Kind::Markdown, "python", None, "idle").text,
+        "markdown"
+    );
+    assert_eq!(head(Kind::Raw, "x", None, "idle").text, "raw");
+    // a language name from a file cannot carry controls or bidi marks into the head
+    assert_eq!(
+        head(Kind::Code, "py\u{202e}\x1b", None, "idle").text,
+        "[ ]  py"
+    );
+}

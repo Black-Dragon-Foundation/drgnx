@@ -75,3 +75,27 @@ on the inserted text before the first rescan makes the chrome.
 **Images**: a tail marks each image with one character (U+FFFC) and carries its output index, MIME type and size; Lisp fetches
 `notebook/output` once per cell (the cache is dropped when the cell runs again) and draws PNG and JPEG as an `image` display
 spec, a label until then.
+
+## The hub's notebooks and kernels
+
+`notebook/*` (the table in `hub.md`) is the editor's door; every method is the user's (an agent cannot start a kernel), and a kernel is
+refused in a sealed session (`kernel::refuse_when_sealed`). The editor owns what the user types: it calls `notebook/open` (the buffer's
+text, else the file), `notebook/sync` with all its cells when it wants the hub to have them, then `notebook/execute` with the cells to
+run (their text becomes the notebook's first) and `notebook/save` (which takes the cells again when given). `notebook/start` starts the
+kernel (the notebook's `metadata.kernelspec.name`, else its language's, else the name given); `notebook/restart` ends it (asked, its
+process group killed after the grace) and starts a new one with a new connection file and key; `notebook/shutdown`,
+`notebook/interrupt`, `notebook/input`, `notebook/clear`, `notebook/tail`, `notebook/output` (the whole output as nbformat objects)
+and `notebook/close` are what they say.
+
+The hub sends the editor that opened a notebook three events, only for what changed:
+
+- `notebook-tail`: a cell's tail, built whole (text, style runs as terminal face roles, images, `more_lines`, `version`, `stale`,
+  `execution_count`) with the cell's head (`[n]`/`[ ]`/`[*]` and the kind, `state` `idle`, `queued` or `running`); at most 20 a
+  second per cell. The editor only puts the strings.
+- `notebook-status`: `state` (`starting`, `idle`, `busy`, `dead`), the running `cell` and the length of the `queue`.
+- `notebook-input-request`: a kernel's question (`cell`, `request`, `prompt`, `password`); answer it with `notebook/input`.
+
+A cell is done when its `execute_reply` and its `idle` status have both come (they travel on different sockets). An error aborts the
+cells queued behind it (shown "aborted"), an interrupt or a restart cancels them ("cancelled"). Everything a kernel sends is held under
+the limits in the output model: 64 outputs and 1 MiB of text per cell, 16 MiB of images, a message of more than 16 MiB is a note, a flood
+(64 MiB unread, or 1000 messages that do not verify in 10 s) kills the kernel.
