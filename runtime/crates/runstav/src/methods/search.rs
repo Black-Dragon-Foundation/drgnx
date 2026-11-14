@@ -1017,6 +1017,13 @@ pub struct FilesParams {
     /// Default: the setting `drgnx-search-ignore-rules`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ignore: Option<GrepIgnore>,
+    /// True: only a file whose name (the basename) holds every word (the Explorer's Find). Default false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<bool>,
+    /// File and folder names left out, as the Explorer's `exclude` (exact, or globs with `*` and `?`), at most 256:
+    /// a path any part of which is one is not listed. Default none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclude: Option<Vec<String>>,
 }
 
 /// `search/symbol-at`: the name of the innermost symbol that FILE (relative to ROOT, read from disk) defines around

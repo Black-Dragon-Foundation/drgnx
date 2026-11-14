@@ -1575,7 +1575,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `search/edit-doc` | user | `{context?: natnum, max?: natnum, view: string}` | `{lines: [EditLine], over?: boolean, skipped?: [EditSkip], total: natnum}` | no |
 | `search/edits` | user | `{edits?: [{col: natnum, end_col: natnum, end_line?: natnum, line: natnum, new: string, old: string, path: AbsPath}], ids?: [string], lines?: [{eol?: boolean, line: natnum, line_id: string, new?: [string], old: string, path: AbsPath}], off?: [string], replace?: string, root?: AbsPath, view: string}` | `{change: natnum, files: [FileEdits], skipped: [EditSkip]}` | no |
 | `search/embedders` | user | `{}` | `{builtin: BuiltinInfo, prefer?: string, servers: [ServerInfo]}` | no |
-| `search/files` | user | `{ignore?: "index" \| "real", n?: natnum, query: string, root: AbsPath, view: string}` | `{query: natnum}` | no |
+| `search/files` | user | `{exclude?: [string], ignore?: "index" \| "real", n?: natnum, name?: boolean, query: string, root: AbsPath, view: string}` | `{query: natnum}` | no |
 | `search/fold` | user | `{node: string, open: boolean, view: string}` | `boolean` | no |
 | `search/grep-look` | user | `{fill?: boolean, more?: boolean, upto?: string, view: string}` | `boolean` | no |
 | `search/grep-replace` | user | `{replace: string, view: string}` | `boolean` | no |
@@ -2779,10 +2779,13 @@ Explorer listing that its watch relisted (a name made or removed outside Emacs) 
 Quick Open's and Find's candidates are a row stream too (`runtime/crates/drgnx-ratatoskr/src/view/files.rs`; the list
 and the ranking are `hrafn::rank`).
 
-- `search/files {view, root, query, n?, ignore?}` stops the view's earlier query and answers `{query}`. A thread then
-  ranks the root's names and sends every class of `view` the `n` best (default 100, at most 1000) as rows: the first
-  query of a view a `reset`, a later one the patch from the rows it shows (the store's diff). The rows of the earlier
-  query stay until the new ones arrive; a query a newer one stopped sends nothing.
+- `search/files {view, root, query, n?, ignore?, name?, exclude?}` stops the view's earlier query and answers
+  `{query}`. A thread then ranks the root's names and sends every class of `view` the `n` best (default 100, at most
+  1000) as rows: the first query of a view a `reset`, a later one the patch from the rows it shows (the store's diff).
+  The rows of the earlier query stay until the new ones arrive; a query a newer one stopped sends nothing.
+- **The Explorer's Find** asks with `name: true` (only a basename that holds every word: the ranking's third tier is
+  left out) and `exclude`, the Explorer's left-out names (`drgnx-explorer-exclude-names`, exact or `*`/`?` globs, at
+  most 256): a path any part of which is one is not listed. Nothing of Find's filtering is left in Lisp.
 - **The names.** In a repository, what `git ls-files -z --cached --others --exclude-standard` lists (a nested
   repository, listed as its folder, is left out); elsewhere a walk that follows no link, skips `.git` folders and
   applies every `.gitignore` it meets (a deeper file decides first, the last matching line of a file wins, `!` keeps,
@@ -2794,7 +2797,8 @@ and the ranking are `hrafn::rank`).
   among equals. A query checks its cancel flag every 4096 names.
 - **Row:** the key and the text are the path relative to `root`; each word's first place (in the basename when it is
   there) is in `drgnx-quick-open-match` (the editor's face for it).
-- **The kept lists.** The names of at most 8 roots are kept (by root, rule and globs; the one used longest ago goes).
+- **The kept lists.** The names of at most 8 roots are kept (by root, rule, globs and `exclude`; the one used longest
+  ago goes).
   A root whose Hrafn project is open is listed again when the project's watcher reports any change (a tap of
   `Project::tap`, taken without opening the project); any other root is listed again for each new view, so the keys
   typed in one Quick Open rank one listing and the next Quick Open sees the files as they are.

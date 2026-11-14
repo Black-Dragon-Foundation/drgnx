@@ -9,6 +9,7 @@
 ;; right edge; the groups are Commands, Files and Agents.
 ;; Input starting with `#' is a Semantic Search question.  The completion UI does not require a match (an
 ;; orderless or other style may never offer `#words' as a candidate); the answer is resolved here.
+;; With Nidhogg's Sjá, the rows are matched, ranked and grouped there, not here (see "The list in Sjá").
 
 ;;; Code:
 (require 'drgnx-registry)
@@ -24,6 +25,8 @@
 (require 'drgnx-pixels)                 ; `drgnx-px'
 
 (declare-function drgnx-surfaces-run "drgnx-surfaces")
+;; called, not inlined: Nidhogg's `nidhogg-views' is required when the palette opens (`drgnx-palette')
+(declare-function nidhogg-view-pick "nidhogg-views" (what &optional a b c))
 (declare-function project-files "project" (project &optional dirs))
 (declare-function project-root "project" (project))
 
@@ -416,7 +419,7 @@ recently run commands first, newest first, the rest in their order.  With text t
 matches it ranks first (`drgnx-palette-match-score') and a recent run only breaks near-ties: it is worth one point,
 less than a word matched at its start instead of inside one.  CANDS is (LABEL . ID); IDS, when given, is a hash of
 CANDS (`drgnx-palette--ids', made once per palette, not per key).  The history is read once and the groups are split
-in one pass."
+in one pass.  Frozen: only an Emacs without Sjá's pick (`nidhogg-view-pick') sorts here."
   (let* ((ids (or ids (drgnx-palette--ids cands)))
          (rank (make-hash-table :test #'eq)) (i 0)
          (words (and input (split-string (downcase input) "[ \t]+" t)))
@@ -454,6 +457,74 @@ in one pass."
         ((string-match-p "\\`\\(Files?\\|Go\\): " label) "Files")
         (t "Commands")))
 
+;;;; The list in Sjá
+;; With Nidhogg's `nidhogg-view-pick', the palette's candidates are loaded into Sjá once when it opens, and each key
+;; is one call that filters, scores, sorts and groups them there (the rule of `drgnx-palette-sort' and
+;; `drgnx-palette-match-score', which stay for an Emacs without it, frozen).  Lisp maps the answer's indices to labels
+;; and dresses each row shown once per open (`drgnx-palette--memo'); both go when the palette closes.
+
+(defconst drgnx-palette-pick-max 200 "The most rows the palette lists for an input.")
+
+(defvar drgnx-palette--pick nil
+  "While the palette reads with Sjá: (HANDLE LABELS INPUT . ROWS), LABELS a vector the answer's indices name, ROWS
+the labels of the last INPUT.")
+
+(defvar drgnx-palette--memo nil
+  "While the palette reads: a hash LABEL → [SHOWN ANNOTATION GROUP], each made the first time a row needs it.")
+
+(defun drgnx-palette--memoized (label slot make)
+  "LABEL's SLOT (0 shown, 1 annotation, 2 group) from `drgnx-palette--memo', made by MAKE the first time."
+  (if (not drgnx-palette--memo)
+      (funcall make)
+    (let ((e (or (gethash label drgnx-palette--memo)
+                 (puthash label (make-vector 3 :none) drgnx-palette--memo))))
+      (if (eq (aref e slot) :none) (aset e slot (funcall make)) (aref e slot)))))
+
+(defun drgnx-palette--pick-text (cands file-rows)
+  "The list `nidhogg-view-pick' loads: a line per candidate of CANDS (0, its place in the recent runs or -1, the
+label) and of FILE-ROWS (1, -1, the label), in that order.  The history is read once."
+  (let ((rank (make-hash-table :test #'eq)) (i 0))
+    (dolist (e (drgnx-palette--history))
+      (unless (gethash (car e) rank) (puthash (car e) i rank))
+      (setq i (1+ i)))
+    (concat (mapconcat (lambda (c) (concat "0\t" (number-to-string (gethash (cdr c) rank -1)) "\t" (car c))) cands "\n")
+            (and cands file-rows "\n")
+            (mapconcat (lambda (f) (concat "1\t-1\t" (car f))) file-rows "\n"))))
+
+(defun drgnx-palette--pick-load (cands file-rows)
+  "Load CANDS and FILE-ROWS into Sjá: the value of `drgnx-palette--pick'.  A file whose label holds a newline or a tab
+is left out (it would break the list's lines)."
+  (let ((file-rows (seq-remove (lambda (f) (or (string-search "\n" (car f)) (string-search "\t" (car f)))) file-rows)))
+    (list (nidhogg-view-pick 'load (drgnx-palette--pick-text cands file-rows))
+          (vconcat (mapcar #'car cands) (mapcar #'car file-rows))
+          nil)))
+
+(defun drgnx-palette--pick-labels (input)
+  "The labels Sjá picks for INPUT, best first, then the row that asks an agent; the last input's are kept."
+  (pcase-let ((`(,h ,labels ,last . ,rows) drgnx-palette--pick))
+    (if (and last (equal input last))
+        rows
+      (let (out)
+        (dolist (i (nidhogg-view-pick 'top h input drgnx-palette-pick-max))
+          (push (aref labels i) out))
+        (when-let* ((ask (drgnx-palette-ask-label input))) (push ask out))
+        (setq out (nreverse out))
+        (setcdr (cdr drgnx-palette--pick) (cons input out))
+        out))))
+
+(defun drgnx-palette--style-all (string table pred _point)
+  "A completion style that keeps what the table gives: Sjá has matched and ranked the candidates already."
+  (when-let* ((all (all-completions string table pred))) (nconc all 0)))
+
+(defun drgnx-palette--style-try (string table pred _point)
+  "The `try-completion' side of `drgnx-palette--style-all'."
+  (let ((c (try-completion string table pred)))
+    (cond ((eq c t) t) ((stringp c) (cons c (length c))))))
+
+(defconst drgnx-palette--style
+  '(drgnx-palette drgnx-palette--style-try drgnx-palette--style-all "The candidates Sjá picked.")
+  "The entry for `completion-styles-alist', bound only while the palette reads with Sjá.")
+
 (defun drgnx-palette-candidates ()
   "(LABEL . ID) for every command the palette offers, in registry order."
   (mapcar (lambda (c) (cons (drgnx-commands-label c) (drgnx-cmd-id c)))
@@ -487,45 +558,70 @@ The answer is resolved here, not by the completion UI (`require-match' is nil): 
 text starting with `#' is a question; empty does nothing; a partial label that completes to one command
 runs it; several is an \"Ambiguous\" error naming up to three; none is \"No command\"."
   (interactive)
+  (require 'nidhogg-views nil t)
   (let* ((cands (drgnx-palette-candidates))
          (ids (drgnx-palette--ids cands))
          (file-rows (drgnx-palette-files))
          (drgnx-palette--file-rows (drgnx-palette--file-table file-rows))
          (drgnx-palette--cands cands)
          (drgnx-palette--ask-now nil)
+         (drgnx-palette--memo (make-hash-table :test #'equal))
+         (drgnx-palette--pick (and (fboundp 'nidhogg-view-pick) (drgnx-palette--pick-load cands file-rows)))
          (rows (append cands file-rows))
          ;; the keys are the ones this terminal can send, asked from the buffer the command would run in
          ;; (the annotations are made with the minibuffer current)
          (origin (current-buffer))
          (annotate (lambda (label)
-                     (cond
-                      ((drgnx-palette--file label) (drgnx-palette--file-annotation label))
-                      ((string-prefix-p drgnx-palette--ask-prefix label) (drgnx-palette--ask-annotation))
-                      (t
-                       (when-let* ((c (drgnx-commands-get (cdr (assoc label cands)))))
-                         (let ((key (with-current-buffer (if (buffer-live-p origin) origin (current-buffer))
-                                      (drgnx-surfaces-key c))))
-                           (drgnx-palette--annotation (drgnx-cmd-category c)
-                                                      (drgnx-palette-recent-age (cdr (assoc label cands)))
-                                                      (and (not (string-empty-p key))
-                                                           (car (split-string key " (" t))))))))))
-         (table (lambda (string pred action)
-                  (if (eq action 'metadata)
-                      `(metadata (annotation-function . ,annotate) (category . drgnx-command)
-                                 (display-sort-function . ,(lambda (labels)
-                                                             (drgnx-palette-sort labels cands ids (and (minibufferp) (minibuffer-contents-no-properties)))))
-                                 (group-function . ,(lambda (label transform)
-                                                      (if transform (drgnx-palette--shown label)
-                                                        (drgnx-palette--group-title (drgnx-palette-group label))))))
-                    ;; the row that asks an agent carries what is typed (a completion style may pass no prefix)
-                    (let ((ask (and (minibufferp) (drgnx-palette-ask-label (minibuffer-contents-no-properties)))))
-                      (complete-with-action action (if ask (cons (list ask) rows) rows) string pred)))))
+                     (drgnx-palette--memoized
+                      label 1
+                      (lambda ()
+                        (cond
+                         ((drgnx-palette--file label) (drgnx-palette--file-annotation label))
+                         ((string-prefix-p drgnx-palette--ask-prefix label) (drgnx-palette--ask-annotation))
+                         (t
+                          (when-let* ((id (gethash label ids)) (c (drgnx-commands-get id)))
+                            (let ((key (with-current-buffer (if (buffer-live-p origin) origin (current-buffer))
+                                         (drgnx-surfaces-key c))))
+                              (drgnx-palette--annotation (drgnx-cmd-category c)
+                                                         (drgnx-palette-recent-age id)
+                                                         (and (not (string-empty-p key))
+                                                              (car (split-string key " (" t))))))))))))
+         (group (lambda (label transform)
+                  (if transform
+                      (drgnx-palette--memoized label 0 (lambda () (drgnx-palette--shown label)))
+                    (drgnx-palette--memoized
+                     label 2 (lambda () (drgnx-palette--group-title (drgnx-palette-group label)))))))
+         (table (if drgnx-palette--pick
+                    ;; Sjá picked the rows, in its order: kept as they come (`drgnx-palette--style')
+                    (lambda (string pred action)
+                      (pcase action
+                        ('metadata `(metadata (annotation-function . ,annotate) (category . drgnx-command)
+                                              (display-sort-function . identity) (cycle-sort-function . identity)
+                                              (group-function . ,group)))
+                        ('t (copy-sequence (drgnx-palette--pick-labels string)))
+                        ('nil (try-completion string (drgnx-palette--pick-labels string) pred))
+                        ('lambda (test-completion string (drgnx-palette--pick-labels string) pred))))
+                  (lambda (string pred action)
+                    (if (eq action 'metadata)
+                        `(metadata (annotation-function . ,annotate) (category . drgnx-command)
+                                   (display-sort-function . ,(lambda (labels)
+                                                               (drgnx-palette-sort labels cands ids (and (minibufferp) (minibuffer-contents-no-properties)))))
+                                   (group-function . ,group))
+                      ;; the row that asks an agent carries what is typed (a completion style may pass no prefix)
+                      (let ((ask (and (minibufferp) (drgnx-palette-ask-label (minibuffer-contents-no-properties)))))
+                        (complete-with-action action (if ask (cons (list ask) rows) rows) string pred))))))
          (choice nil) (file nil))
     (unwind-protect
         (setq choice (string-trim (minibuffer-with-setup-hook (:append #'drgnx-palette--keys)
-                                    (completing-read "Command (# for a code question): " table nil nil initial)))
+                                    (if drgnx-palette--pick
+                                        (let ((completion-styles-alist (cons drgnx-palette--style completion-styles-alist))
+                                              (completion-styles '(drgnx-palette))
+                                              (completion-category-overrides nil) (completion-category-defaults nil))
+                                          (completing-read "Command (# for a code question): " table nil nil initial))
+                                      (completing-read "Command (# for a code question): " table nil nil initial))))
               file (drgnx-palette--file choice))
-      (drgnx-palette--preview-end file))
+      (drgnx-palette--preview-end file)
+      (when drgnx-palette--pick (nidhogg-view-pick 'close (car drgnx-palette--pick))))
     (cond (drgnx-palette--ask-now
            (let ((text (string-trim (string-remove-prefix "@" (string-trim drgnx-palette--ask-now)))))
              (unless (string-empty-p text) (drgnx-palette--ask text))))

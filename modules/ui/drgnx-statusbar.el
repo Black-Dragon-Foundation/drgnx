@@ -37,6 +37,8 @@
 (require 'drgnx-faces)                  ; `drgnx-hover', the status faces
 (require 'drgnx-icons)                  ; `drgnx-look-icon'
 (require 'drgnx-notices)                ; the two counts the bar shows, and `drgnx-notice-tick'
+(require 'nidhogg-views nil t)          ; Nidhogg's: the bar's layout in Sjá (`nidhogg-view-bar')
+(declare-function nidhogg-view-bar "nidhogg-views" (spec))
 (declare-function drgnx-face-glyph "drgnx-face")
 (declare-function drgnx-look-echo-status "drgnx-look-echo" ())
 (declare-function drgnx-notice-toast-more-count "drgnx-notice-toast")
@@ -632,7 +634,109 @@ ellipsis is found by halving (a start's width grows with its length): a few meas
 (defun drgnx-statusbar--fit (left right width)
   "LEFT and RIGHT (alists ID → text) reduced until the bar fits WIDTH: (LEFT . RIGHT).
 First the segments of `drgnx-statusbar-drop-order' go, then the branch is cut to a short form, then the others go
-(right to left, then left to right, the branch last), and last the branch is cut as far as it takes."
+(right to left, then left to right, the branch last), and last the branch is cut as far as it takes.  Sjá lays the bar
+out (`drgnx-statusbar--sja-fit'); an Emacs without it, the Lisp fit (`drgnx-statusbar--fit-lisp')."
+  (if (fboundp 'nidhogg-view-bar)
+      (drgnx-statusbar--sja-fit left right width)
+    (drgnx-statusbar--fit-lisp left right width)))
+
+;;;; The layout in Sjá
+;;
+;; Lisp measures each segment's text (`drgnx-statusbar--w', kept by the string) and, once per branch text, the
+;; branch's characters; Sjá drops, cuts and lays out (nidhogg/sja's `bar.rs', `nidhogg-view-bar').  What Lisp does with
+;; the answer: picks the kept segments and cuts the branch's text where Sjá says.
+
+(defvar drgnx-statusbar--measure-each nil
+  "The function a character of the branch is measured with: the bar's measure, not kept (bound while rendering);
+nil: `drgnx-statusbar--measure'.")
+
+(defvar drgnx-statusbar--layout 0 "The bar's `drgnx-statusbar--layout-key' (bound while rendering).")
+
+(defvar drgnx-statusbar--chars-of (make-hash-table :test #'eq :weakness 'key)
+  "A branch text (the object) → (LAYOUT HOW . WIDTHS): its characters' widths in a layout; HOW is `columns',
+`pixels', `drgnx-look-bars-measure-function' or a caller's own measure.  Weak on the text.")
+
+(defconst drgnx-statusbar--char-cap 4096 "How many (CHARACTER . FACE) widths `drgnx-statusbar--char-width' keeps.")
+
+(defvar drgnx-statusbar--char-widths (list nil nil (make-hash-table :test #'equal))
+  "(LAYOUT HOW TABLE): each (CHARACTER . FACE) the branches showed → its width in that layout, measured once.  Emptied
+when the layout or the measure changes, and past `drgnx-statusbar--char-cap' entries.")
+
+(defun drgnx-statusbar--char-width (text i m how)
+  "The width of TEXT's character I by M, kept per (character . face) for HOW in the layout."
+  (pcase-let ((`(,layout ,kept-how ,table) drgnx-statusbar--char-widths))
+    (unless (and (eql layout drgnx-statusbar--layout) (eq kept-how how)
+                 (< (hash-table-count table) drgnx-statusbar--char-cap))
+      (clrhash table)
+      (setq drgnx-statusbar--char-widths (list drgnx-statusbar--layout how table)))
+    (let ((key (cons (aref text i) (get-text-property i 'face text))))
+      (or (gethash key table) (puthash key (funcall m (substring text i (1+ i))) table)))))
+
+(defun drgnx-statusbar--char-widths (text)
+  "The widths of TEXT's characters in the layout's units, kept by TEXT; each distinct character is measured once."
+  (let* ((hit (gethash text drgnx-statusbar--chars-of))
+         (m (or drgnx-statusbar--measure-each drgnx-statusbar--measure))
+         ;; the render's measure is a new closure each time: it is named by what it measures with
+         (how (cond ((eq m #'string-width) 'columns)
+                    (drgnx-statusbar--measure-each (or drgnx-look-bars-measure-function 'pixels))
+                    (t m))))
+    (if (and hit (eql (car hit) drgnx-statusbar--layout) (eq (cadr hit) how))
+        (cddr hit)
+      (let ((ws (let (out)
+                  (dotimes (i (length text)) (push (drgnx-statusbar--char-width text i m how) out))
+                  (nreverse out))))
+        (puthash text (cons drgnx-statusbar--layout (cons how ws)) drgnx-statusbar--chars-of)
+        ws))))
+
+(defun drgnx-statusbar--sja-seg (seg)
+  "SEG's part of a bar spec: its drop rank, width and, for the branch, its room and characters' widths."
+  (let ((rank (or (seq-position drgnx-statusbar-drop-order (car seg)) -1))
+        (w (drgnx-statusbar--w (cdr seg))))
+    (if (eq (car seg) 'branch)
+        (let* ((parts (get-text-property 0 'drgnx-statusbar-pixels (cdr seg)))
+               (text (if (cdr parts) (cdr parts) (cdr seg)))
+               (ws (drgnx-statusbar--char-widths text)))
+          (format "%d %d 1 %d %d %s" rank w (if (cdr parts) (car parts) 0) (length ws) (mapconcat #'number-to-string ws " ")))
+      (format "%d %d 0" rank w))))
+
+(defun drgnx-statusbar--sja-cut (s keep ellipsis)
+  "S, the branch's text, cut to its first KEEP characters and the ellipsis when ELLIPSIS (a pixel segment keeps the
+room either side of its text)."
+  (let ((parts (get-text-property 0 'drgnx-statusbar-pixels s))
+        (cut (lambda (text) (if (and (= keep 0) (not ellipsis)) ""
+                              (concat (substring text 0 keep) (and ellipsis (truncate-string-ellipsis)))))))
+    (if (cdr parts)
+        (let ((inner (funcall cut (cdr parts))))
+          (if (string-empty-p inner) ""
+            (let ((s (concat (substring s 0 1) inner (substring s -1))))
+              (put-text-property 0 1 'drgnx-statusbar-pixels (cons (car parts) inner) s)
+              s)))
+      (funcall cut s))))
+
+(defun drgnx-statusbar--sja-fit (left right width)
+  "`drgnx-statusbar--fit' by Sjá."
+  (let* ((columns (eq drgnx-statusbar--measure #'string-width))
+         (spec (mapconcat
+                #'identity
+                (append (list (format "1 %d %d %d %d %d %d %d %d %d %d" width drgnx-statusbar--pad
+                                      drgnx-statusbar--space (drgnx-statusbar--w drgnx-statusbar--left-sep)
+                                      (drgnx-statusbar--w drgnx-statusbar--right-sep)
+                                      (funcall drgnx-statusbar--measure (truncate-string-ellipsis))
+                                      (* drgnx-statusbar--branch-min drgnx-statusbar--space) (if columns 1 0)
+                                      (length left) (length right)))
+                        (mapcar #'drgnx-statusbar--sja-seg left) (mapcar #'drgnx-statusbar--sja-seg right))
+                " "))
+         (fit (nidhogg-view-bar spec))
+         (cut (nth 2 fit)))
+    (cons (mapcar (lambda (i) (let ((s (nth i left)))
+                                (if (and cut (= i (car cut)))
+                                    (cons (car s) (drgnx-statusbar--sja-cut (cdr s) (nth 1 cut) (= 1 (nth 2 cut))))
+                                  s)))
+                  (car fit))
+          (mapcar (lambda (i) (nth i right)) (nth 1 fit)))))
+
+(defun drgnx-statusbar--fit-lisp (left right width)
+  "`drgnx-statusbar--fit' in Lisp, for an Emacs whose Sjá has no bar layout."
   ;; The segments that go are collected in GONE (their cells) and left out of the totals; the lists are made once
   ;; after each step: a bar too wide for its window used to copy both lists for every id it tried.
   (let ((order drgnx-statusbar-drop-order) (gone nil))
@@ -696,6 +800,8 @@ COMPACT: only the segments of `drgnx-statusbar-compact' (on the right); `quiet':
              (measure (drgnx-statusbar--measure-fn frame drgnx-statusbar--bar-face
                                                    (and frame (drgnx-statusbar--layout-key w))))
              (drgnx-statusbar--measure (or measure #'string-width))
+             (drgnx-statusbar--measure-each (and measure (drgnx-statusbar--measure-fn frame drgnx-statusbar--bar-face)))
+             (drgnx-statusbar--layout (if frame (drgnx-statusbar--layout-key w) 0))
              (drgnx-statusbar--space (if measure (max 1 (funcall measure " ")) 1))
              ;; a pixel bar: 8 px at the ends, then each segment's own 6 (the design's `.status' and `.seg')
              (drgnx-statusbar--pad (if measure (drgnx-px 8 frame) 1))

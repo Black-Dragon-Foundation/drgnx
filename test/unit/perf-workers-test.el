@@ -424,7 +424,6 @@ the two arms agree.  Pattern D: the same listing under two roots."
                   (drgnx-perf-w-quick-open-digest))))
     (should (equal (funcall digest "/tmp/drgnx-perf-wAAA") (funcall digest "/tmp/drgnx-perf-wBBB")))))
 
-(defvar drgnx-quick-open--state)
 (defvar drgnx-quick-open--current)
 (defvar drgnx-perf-w--qot-seen)
 (defvar drgnx-perf-w--qot-listed)
@@ -432,20 +431,16 @@ the two arms agree.  Pattern D: the same listing under two roots."
 (declare-function drgnx-perf-w-quick-open-typing-each "perf-session")
 (declare-function drgnx-perf-w--qot-note "perf-session")
 (declare-function drgnx-perf-w-quick-open-typing-done "perf-session")
-(declare-function drgnx-quick-open--step "drgnx-quick-open")
-(declare-function drgnx-quick-open--init "drgnx-quick-open")
 (declare-function drgnx-quick-open--rows-make "drgnx-quick-open")
 (declare-function drgnx-quick-open--rows-patch "drgnx-quick-open")
 
-(defun perf-workers-test--qot-keys (listed-first inputs &optional stream)
+(defun perf-workers-test--qot-keys (listed-first inputs)
   "Quick Open's hub rows after each of INPUTS, noted as the workload's post-command does; LISTED-FIRST: the first rows
-had come before the first key.  STREAM: the keys reach the streamed listing instead (no hub).  Returns whether the
-workload counts the run as done."
+had come before the first key.  Returns whether the workload counts the run as done."
   (require 'drgnx-quick-open)
   (setq drgnx-perf-w--qot-seen nil drgnx-perf-w--qot-listed nil)
-  (let ((drgnx-quick-open--current (and (not stream) (drgnx-quick-open--rows-make "q" "/r/")))
-        (drgnx-quick-open--state (and stream (car (drgnx-quick-open--step (drgnx-quick-open--init) '(done))))))
-    (when (and listed-first (not stream))
+  (let ((drgnx-quick-open--current (drgnx-quick-open--rows-make "q" "/r/")))
+    (when listed-first
       (drgnx-quick-open--rows-patch
        drgnx-quick-open--current
        (list :view "q" :class "gui-1" :hub 7 :base 0 :version 1 :env_epoch 0
@@ -470,8 +465,8 @@ listed, or that lost a key, is not done.  Pattern D: the three runs."
 ;; the first run (2026-11-07) opened Quick Open from a timer: drgnx refuses a prompt there, and the session had no hub
 (ert-deftest drgnx-perf-workers/quick-open-typing-opens-by-its-key-on-its-path ()
   "The quick-open-typing workload opens Quick Open by its key, queued for the command loop (a timer's prompt is
-refused), and measures only the typed keys; it starts a hub and stops it, and a run on the streamed listing is not
-done.  Pattern D: the spec, the each function and the predicate."
+refused), and measures only the typed keys; it starts a hub and stops it.  Pattern D: the spec and the each
+function."
   (perf-workers-test--session)
   (let ((ws (drgnx-perf-run--workloads)))
     (should-not (assq 'quick-open-typing-old ws))
@@ -485,8 +480,6 @@ done.  Pattern D: the spec, the each function and the predicate."
     (let ((unread-command-events nil) (drgnx-perf-w--tmp temporary-file-directory))
       (drgnx-perf-w-quick-open-typing-each)
       (remove-hook 'post-command-hook #'drgnx-perf-w--qot-note)
-      (should (equal unread-command-events (listify-key-sequence (kbd "C-p"))))))
-  ;; the streamed listing's run is not the workload's
-  (should-not (perf-workers-test--qot-keys t (mapcar (lambda (n) (substring "d012/f001.txt" 0 n)) (number-sequence 1 13)) t)))
+      (should (equal unread-command-events (listify-key-sequence (kbd "C-p")))))))
 
 ;;; perf-workers-test.el ends here

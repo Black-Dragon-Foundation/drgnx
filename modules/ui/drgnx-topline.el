@@ -40,6 +40,7 @@
 (require 'drgnx-type-faces)
 (require 'drgnx-icons)
 (declare-function drgnx-palette-keycap-names "drgnx-palette")
+(declare-function nidhogg-view-bar "nidhogg-views" (spec))   ; loaded by drgnx-statusbar.el
 (declare-function glitnir-active-p "glitnir")
 (declare-function drgnx-face-glyph "drgnx-face")
 (declare-function drgnx-face-drawn-title-p "drgnx-face")
@@ -575,6 +576,40 @@ centred between the left items and the right ones as the design has them, both c
 `2 agents'), whether or not they show: a chip that comes or goes never moves it.  A paused debug session's chip adds
 its width to that room (with no session the row is as without the debug module).  It is left out when it would touch
 the sides; the controls sit 8 px from the right edge."
+  (if (fboundp 'nidhogg-view-bar)
+      (drgnx-topline--build-sja buffer pixels drawn)
+    (drgnx-topline--build-pixels-lisp buffer pixels drawn)))
+
+(defun drgnx-topline--build-sja (buffer pixels drawn)
+  "`drgnx-topline--build-pixels' laid out by Sjá (`nidhogg-view-bar'): Lisp measures each item once and joins the
+items Sjá keeps with the gaps it answers.  No search box is sent as one whose gap is wider than the row, so the one
+gap fills the row."
+  (let* ((measure (drgnx-statusbar--measure-fn nil 'tab-bar))
+         (left (delq nil (list (drgnx-topline--mark-pixels buffer) (drgnx-topline--branch-chip buffer))))
+         (paused (drgnx-topline--paused-pill))
+         (right (append paused (drgnx-topline--pills) (and drawn (drgnx-topline--control-buttons))
+                        (list (drgnx-topline--pixel-gap 'drgnx-topline-end (drgnx-topline--edge-px 8) nil))))
+         (search (drgnx-topline--search-box))
+         (room (append paused (drgnx-topline--pills 1 2) (and drawn (drgnx-topline--control-buttons))
+                       (list (drgnx-topline--pixel-gap 'drgnx-topline-end (drgnx-topline--edge-px 8) nil))))
+         (fit (nidhogg-view-bar
+               (format "2 %d 0 0 0 0 0 0 0 %d %d %s %d %d %d" pixels (length left) (length right)
+                       (mapconcat (lambda (item) (format "-1 %d 0" (drgnx-topline--width (list item) measure)))
+                                  (append left right) " ")
+                       (if search (funcall measure (nth 2 search)) 0)
+                       (if search (drgnx-topline--px 10) (1+ pixels))
+                       (drgnx-topline--width room measure))))
+         (left (mapcar (lambda (i) (nth i left)) (nth 0 fit)))
+         (right (mapcar (lambda (i) (nth i right)) (nth 1 fit)))
+         (place (nth 4 fit)))
+    (if (eql (nth 0 place) 1)
+        (append left (list (drgnx-topline--pixel-gap 'drgnx-topline-gap-1 (nth 1 place) drawn) search
+                           (drgnx-topline--pixel-gap 'drgnx-topline-gap-2 (nth 2 place) drawn))
+                right)
+      (append left (list (drgnx-topline--pixel-gap 'drgnx-topline-gap-2 (nth 1 place) drawn)) right))))
+
+(defun drgnx-topline--build-pixels-lisp (buffer pixels drawn)
+  "`drgnx-topline--build-pixels' laid out here, for an Emacs without Sjá's bar.  Frozen."
   (let* ((measure (drgnx-statusbar--measure-fn nil 'tab-bar))
          (left (delq nil (list (drgnx-topline--mark-pixels buffer) (drgnx-topline--branch-chip buffer))))
          (paused (drgnx-topline--paused-pill))

@@ -53,6 +53,22 @@ fn ranks_basename_prefix_first() {
     assert_eq!(r[0].runs, [(0, 3), (8, 10)]);
 }
 
+/// Pattern D. By name (the Explorer's Find) only the basenames hold the words: a path that holds them elsewhere is
+/// left out, the order is the same.
+#[test]
+fn by_name_only_the_basenames_count() {
+    let l = list(&["map/a.rs", "z/roadmap.rs", "src/map.rs", "src/xmap.rs"]);
+    let got: Vec<String> = l
+        .top_names("map", 10, &AtomicBool::new(false))
+        .unwrap()
+        .into_iter()
+        .map(|r| r.path)
+        .collect();
+    assert_eq!(got, ["src/map.rs", "src/xmap.rs", "z/roadmap.rs"]);
+    let r = l.top_names("rs src", 10, &AtomicBool::new(false)).unwrap();
+    assert!(r.is_empty());
+}
+
 /// Pattern D. In a repository the list is git's: `.gitignore` leaves files out, and the exclude globs do too.
 #[test]
 fn respects_ignore_rules() {

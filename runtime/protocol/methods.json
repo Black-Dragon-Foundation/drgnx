@@ -32460,6 +32460,16 @@
         "additionalProperties": false,
         "description": "`search/files`: rank ROOT's file names for QUERY and send VIEW the N best as rows (the event `view-patch`), one row\nper file, keyed by its path relative to ROOT, the query's words marked. A repository's names are what git lists\n(nothing is read), elsewhere a walk that follows no link and applies `.gitignore` files; binary, large and linked\nfiles are listed. A newer query of the same view stops this one, and its rows are never sent.",
         "properties": {
+          "exclude": {
+            "description": "File and folder names left out, as the Explorer's `exclude` (exact, or globs with `*` and `?`), at most 256:\na path any part of which is one is not listed. Default none.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "ignore": {
             "anyOf": [
               {
@@ -32477,6 +32487,13 @@
             "minimum": 0,
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "True: only a file whose name (the basename) holds every word (the Explorer's Find). Default false.",
+            "type": [
+              "boolean",
               "null"
             ]
           },

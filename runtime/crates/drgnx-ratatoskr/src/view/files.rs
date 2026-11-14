@@ -1,12 +1,14 @@
 //! Quick Open's and Find's rows: `search/files` ranks a root's file names for a query (hrafn's `rank`) on a thread of
 //! its own and sends the view the N best as rows, one per file, keyed by its path relative to the root, the query's
 //! words marked. A query of a view stops the one before it (a stopped query sends nothing), and the view's close or
-//! its connection's end stops it too. The rows do not depend on the display class.
+//! its connection's end stops it too. The rows do not depend on the display class. The Explorer's Find asks by name
+//! (`name`: the basename holds every word) and leaves out its excluded names (`exclude`, matched per path part).
 //!
 //! The names are listed once per root and kept ([`Lists`], at most [`LISTS_MAX`] roots). A root whose Hrafn project
 //! is open is listed again when its file watcher reports a change; any other root is listed again for each new view
 //! (each time Quick Open opens), and the keys typed in that view rank the list it listed.
 
+use super::explorer::{EXCLUDE_MAX, Exclude};
 use super::{Key, Views, lock};
 use crate::dispatch::Caller;
 use crate::front::Front;
@@ -52,8 +54,13 @@ pub fn ignore_for(f: &Front, asked: Option<GrepIgnore>) -> Ignore {
     ignore_of(asked, setting.as_ref())
 }
 
-/// A root's listing as the cache keeps it: by root, rule and exclude globs.
-pub type ListKey = (PathBuf, bool, Vec<String>);
+/// A root's listing as the cache keeps it: by root, rule, exclude globs and the Explorer's left-out names.
+pub type ListKey = (PathBuf, bool, Vec<String>, Vec<String>);
+
+/// Leave out of NAMES every path a part of which EXCLUDE matches (the Explorer's names, `search/files`' `exclude`).
+pub fn keep_shown(names: &mut Vec<String>, exclude: &Exclude) {
+    names.retain(|p| !p.split('/').any(|part| exclude.matches(part)));
+}
 
 struct Listed {
     list: Arc<NameList>,
@@ -288,6 +295,11 @@ pub fn start(f: &Front, c: &Caller, p: FilesParams) -> Result<FilesStarted, Erro
     if !root.is_dir() {
         return Err(invalid("root", "an existing folder"));
     }
+    let shown = p.exclude.unwrap_or_default();
+    if shown.len() > EXCLUDE_MAX {
+        return Err(invalid("exclude", "at most 256 names"));
+    }
+    let by_name = p.name.unwrap_or(false);
     let ignore = ignore_for(f, p.ignore);
     let (conn, view, query) = (c.conn_id, p.view, p.query);
     let (id, cancel) = views.files.start(conn, &view);
@@ -299,11 +311,22 @@ pub fn start(f: &Front, c: &Caller, p: FilesParams) -> Result<FilesStarted, Erro
         .spawn(move || {
             let Some(f) = front.upgrade() else { return };
             let exclude = excludes(&f, &root);
-            let key: ListKey = (root.clone(), ignore == Ignore::Real, exclude.clone());
+            let key: ListKey = (
+                root.clone(),
+                ignore == Ignore::Real,
+                exclude.clone(),
+                shown.clone(),
+            );
             let list = f.core.views.files.lists.get(
                 &key,
                 (conn, view.clone()),
-                || names(&root, ignore, &exclude),
+                || {
+                    let mut out = names(&root, ignore, &exclude)?;
+                    if !shown.is_empty() {
+                        keep_shown(&mut out, &Exclude::new(shown));
+                    }
+                    Ok(out)
+                },
                 || tap_of(&f, &root),
             );
             let list = match list {
@@ -313,7 +336,12 @@ pub fn start(f: &Front, c: &Caller, p: FilesParams) -> Result<FilesStarted, Erro
                     return;
                 }
             };
-            let Some(top) = list.top(&query, n as usize, &cancel) else {
+            let top = if by_name {
+                list.top_names(&query, n as usize, &cancel)
+            } else {
+                list.top(&query, n as usize, &cancel)
+            };
+            let Some(top) = top else {
                 return;
             };
             let rows = top.iter().map(row).collect();

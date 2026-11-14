@@ -105,6 +105,7 @@ off, the buffers have no such entry and the hook is gone."
 (ert-deftest drgnx-look-palette/sort-reads-the-history-once ()
   "Sorting the labels for one key reads the history once, whatever the number of labels, and keeps the order of the
 rest."
+  :tags '(:frozen)                      ; the Lisp sort: Sjá's pick replaces it (palette-pick-test.el)
   (drgnx-look-palette-test--with-state
     (drgnx-test-with-clock ()
       (drgnx-palette-record 'a)

@@ -1715,16 +1715,16 @@ render (an `mtime` check, then a directory read).
 framing in a repository, `nidhogg-directory-files-async` elsewhere), only with the feature and the switch on. The git
 processes of the listing and of the status run decode as `utf-8-unix` whatever the session's default: Nidhogg frames
 only a process whose own coding has no state, and a C locale's default (`undecided`) has, so the stream would be refused
-there and the synchronous path run instead. Quick Open
-(`core/drgnx-quick-open.el`) and Find in Explorer (`drgnx-explorer--find-load`, one generation per listing, a
-late batch is dropped) use it, and keep their synchronous path otherwise and for a remote folder. Quick Open's list and
-highlight are a pure core (`drgnx-quick-open--step`; events `batch`, `input`, `move`, `done`; the highlight is kept by the
-file's name and moves only on `input` and `move`), tested in every order (`test/unit/quick-open-stream-test.el`). The shell
-touches vertico's `vertico--input`, `vertico--candidates`, `vertico--index` and `vertico--exhibit` to show a batch with the
-highlight where the core says; a vertico update can break them, so `test/unit/quick-open-vertico-test.el` drives the command under real vertico (needs
-vertico and compat in `DRGNX_USER_ELPA`, else it skips). Quick Open reads with its own completion style, which keeps the
-core's candidates as they are (a user's prefix or orderless style would filter them a second time). Not checked under
-`vertico-buffer`.
+there and the synchronous path run instead. Find in Explorer (`drgnx-explorer--find-load`, one generation per listing,
+a late batch is dropped) uses it with no hub, and keeps its synchronous path otherwise and for a remote folder; with
+the hub up a local root's matches are the hub's (`search/files` by name, at most 1000 per root), filtered nowhere in
+Lisp.
+
+Quick Open (`core/drgnx-quick-open.el`) matches and ranks nothing in Lisp: the hub ranks the project's files
+(`search/files`) and the table shows its rows; with no hub, or on a remote folder, it is `project-find-file`. It
+touches vertico's `vertico--input` and `vertico--exhibit` to show a patch as it lands. It reads with its own completion
+style, which keeps the hub's candidates as they are (a user's prefix or orderless style would filter them a second
+time). Not checked under `vertico-buffer`.
 
 ### Declarations, activation and ownership
 
@@ -2284,10 +2284,48 @@ There are two recorded exceptions:
 
 - **Generic `completing-read` through Vertico** keeps `drgnx-completion--format-candidate`, which dresses each
   visible candidate in Lisp. There is no row seam of ours there: the candidates and the prompts are other packages'
-  as much as ours. The palette, which is ours, moves to Sjá.
+  as much as ours. The palette, which is ours, moves to Sjá: its candidates are loaded once per open
+  (`nidhogg-view-pick`), and each key is one call that filters, scores, sorts and groups them in Rust; Lisp maps the
+  answer's indices to labels and dresses each row once per open (`drgnx-palette--memo`, dropped at close, with the
+  list closed in Sjá). The palette still shows through Vertico, so the dressing of its visible rows on each exhibit
+  (`vertico--format-candidate` and our `drgnx-completion--format-candidate`, about ten rows) is part of this
+  exception. An Emacs without `nidhogg-view-pick` keeps the Lisp sort (`drgnx-palette-sort`, frozen).
 - **Your own terminal link patterns** (`drgnx-term-link`: an Emacs regexp and a target, or a Lisp function) run in
   Lisp over the text a draw changed, and only when you set some. The plain addresses (`drgnx-term-link-url`) are the
   worker's.
+- **Find in Explorer on a root the hub cannot list** (a remote folder, or no hub running) lists and filters the files
+  in Lisp (`drgnx-explorer--root-files`, the name filter in `drgnx-explorer--find-apply`). There is no Rust process
+  to ask. A local root with the hub up is the hub's alone: `search/files` with `name` and the Explorer's `exclude`,
+  its rows shown as they come (`:found`).
+
+### The status bar's layout in Sjá (`modules/ui/drgnx-statusbar.el`)
+
+Which segments fit the window and where the branch is cut are Sjá's (`nidhogg-view-bar`, nidhogg/sja's `bar.rs`). Lisp
+measures each segment's text once (`drgnx-statusbar--w`, kept by the string), and the branch's characters once per
+branch text (`drgnx-statusbar--char-widths`). It sends the widths, the drop ranks of `drgnx-statusbar-drop-order`, the
+pads and the separators as one line of integers, and gets back the indices of the segments kept and the branch's cut
+(its first N characters and whether the ellipsis follows). It then joins the texts it already has. The fit's steps are
+the ones the guide gives: the drop order first, the branch cut to a short form, the others from the right, then the
+branch as far as it takes; a terminal's bar counts columns and leaves out an ellipsis wider than the room. An Emacs
+without the layout keeps the Lisp fit (`drgnx-statusbar--fit-lisp`, frozen).
+
+The title row of a graphical frame is laid out the same way (`drgnx-topline--build-sja`): Lisp measures each item once
+per memo miss and sends the widths with the search box's (a version 2 spec: its width, the 10 px gap and the room the
+design keeps on the right for the chips); Sjá answers the items kept and the two gaps around the box, or the one gap
+when the box does not fit. A row too narrow for its items loses them from its right end (the bar's rule), where the
+Lisp layout let them run past the edge. The row's strings are memoized per frame on what they show (the memo `topline`, keyed on
+the epochs `buffer-look` and `git` and the counts). Kept in Lisp: a terminal's title row (`--build-columns`, a few
+column sums per memo miss; a terminal frame has no pixel layout to share), and the Lisp layout for an Emacs without
+the bar (`--build-pixels-lisp`, frozen).
+
+The tab line and the breadcrumb build propertized strings, which stays Lisp (UI), but nothing is made again that did
+not change. Each tab is kept on its own (`drgnx-chrome--tab-lines`): its name, file, modified flag, whether it is
+shown, the active group and the preview are compared by `eq` with what it was made from, so one changed tab is made
+again alone, and the line is kept while every tab is. What the whole row is drawn with (the frame, its rows, the
+themes and the row's colour, glyphs, icons, fonts, the window's width) is one vector compared the same way; a change
+there makes every tab again. A window's breadcrumb is kept the same way on its buffer, file, root, symbol, modified
+flag and short form (`drgnx-chrome--crumbs`). These are the epochs in effect: the objects themselves move when the
+state does (a rename gives a new name string), so no watcher is needed and nothing is allocated on a hit.
 
 ## Modal core (`drgnx-modal.el`)
 

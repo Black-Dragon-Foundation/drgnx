@@ -205,7 +205,8 @@ narrow the segments of
 `drgnx-statusbar-drop-order` go by the pixels they take. A terminal frame still counts columns. The bar measures only
 when something it shows changes: zooming with `global-text-scale-adjust`, a scale change (the display's scale), another
 density and a change of a font role each lay it out again, so the right edge never goes stale. `drgnx-look-pixel-width`
-is the function that measures a string in a face.
+is the function that measures a string in a face. Which segments fit and where the branch is cut is worked out by
+Nidhogg (Sjá) from those widths, not in Lisp.
 
 **The look.** The bar is set in the caption type face (`drgnx-ui-caption`, through the face `drgnx-statusbar`) in the
 muted text colour (`drgnx-text-muted`) on the `gap` surface, which is the themes' mode line, and it is `status-bar` high
@@ -371,7 +372,8 @@ comfortable), on the gap colour behind the cards: the drgnx mark and the project
 Open's key in your key profile as a keycap, `Ctrl P` in the VS Code profile; a click opens Quick Open, `>` for
 commands), the two chips, and the window controls. The search box sits where the design has it: centred between the
 left items and the right ones with both chips counted, so it stays put when a chip comes or goes, and leaves when the
-window is too narrow for it. At any display scale or UI scale every part takes a whole number of device pixels
+window is too narrow for it. A window too narrow even for the items without the box drops them from the right end
+(the window controls first), so the row never wraps or runs past the edge. At any display scale or UI scale every part takes a whole number of device pixels
 (rounded half up: a 26 pixel control is 33 at 125 %), so the row adds up to what is drawn and stays one line.
 Under the mouse a window control gets a round hover, 26 pixels across. Chips, the search box,
 the mark and the buttons are small images drawn from the theme's faces (a text background would fill the whole row

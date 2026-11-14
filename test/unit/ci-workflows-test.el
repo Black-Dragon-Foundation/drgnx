@@ -1245,6 +1245,15 @@ Returns (EXIT . OUTPUT), the output both streams' or, with STDOUT-ONLY, stdout's
       (should (>= tests 4))
       (should (= tests ignored)))))
 
+;; PR 4 run 43562883410: an earlier step's failure skipped the escape legs' adapter install, so every tests_fork_live row
+;; then failed on a missing debugpy, and the macos sshd row (the macOS lane's Remote Login) ran where nothing sets its host.
+(ert-deftest drgnx-ci/the-escape-legs-install-the-adapters-whatever-failed-before-and-leave-the-sshd-row-to-macos ()
+  (let* ((rt (drgnx-ci-test--yml "runtime.yml")) (job (and rt (drgnx-ci-test--job rt "escape-host"))))
+    (skip-unless job)
+    (should (string-match-p "- name: debug adapters[^\n]*\n\\s-+if: \\${{ !cancelled() }}\n\\s-+run: bash .github/ci/debug-adapters.sh" job))
+    (should (string-search "--skip macos::the_generated_config_against_a_localhost_sshd" job))
+    (should (string-search "DRGNX_TEST_SSHD_HOST=$(bash .github/ci/macos-sshd.sh up" rt))))
+
 ;; The pinned debugpy needs Python 3.10 or later (its wheels say so); the macOS runner's /usr/bin/python3 is 3.9 and its
 ;; pip then answers "No matching distribution" while the step went on to a test that read no output (r6-gl, PR 4 run
 ;; 43539558714). The script says so before pip runs, and the macOS fork step names a Python that is 3.10+ and one

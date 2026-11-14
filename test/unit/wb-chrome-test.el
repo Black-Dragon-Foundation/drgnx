@@ -364,6 +364,43 @@ row colour (light's tab row had dark's lift above the shown tab): the row's colo
         (should (string-search "renamed.txt" (drgnx-chrome--tab-line w)))
         (should (= made 2))))))
 
+(ert-deftest drgnx-chrome/one-changed-tab-is-made-again-alone ()
+  "Each tab is kept on its own: with three tabs, a change to one of them (its modified flag, its name) makes that tab
+again and no other, and the line is kept as it was while nothing it shows changed (the same string)."
+  (drgnx-chrome-test--with dir
+    (let ((a (drgnx-chrome-test--open dir "a.txt")) (_b (drgnx-chrome-test--open dir "b.txt"))
+          (c (drgnx-chrome-test--open dir "c.txt"))
+          (w (selected-window)) (made nil) (orig (symbol-function 'drgnx-chrome--tab)))
+      (cl-letf (((symbol-function 'drgnx-chrome--tab)
+                 (lambda (w b &rest args) (push (buffer-name b) made) (apply orig w b args))))
+        (let ((line (drgnx-chrome--tab-line w)))
+          (setq made nil)
+          (should (eq line (drgnx-chrome--tab-line w)))
+          (should-not made)
+          (with-current-buffer a (insert "y"))
+          (should-not (eq line (drgnx-chrome--tab-line w)))
+          (should (equal made '("a.txt")))
+          (setq made nil)
+          (with-current-buffer a (rename-buffer "renamed.txt"))
+          (should (string-search "renamed.txt" (drgnx-chrome--tab-line w)))
+          (should (equal made '("renamed.txt")))
+          (should (eq (window-buffer w) c)))))))
+
+(ert-deftest drgnx-chrome/the-breadcrumb-is-kept-while-its-file-and-root-are ()
+  "A window's breadcrumb is made once for its file, root, symbol and modified flag: applying again keeps the same
+string; a new symbol or an edit makes it again."
+  (drgnx-chrome-test--with dir
+    (make-directory (expand-file-name ".git" dir))
+    (drgnx-chrome-test--open dir "src/main.py")
+    (let* ((w (selected-window)) (crumb (drgnx-chrome-breadcrumb w)))
+      (should (eq crumb (drgnx-chrome-breadcrumb w)))
+      (set-window-parameter w 'drgnx-chrome-symbol (cons (window-buffer w) "run"))
+      (let ((with-symbol (drgnx-chrome-breadcrumb w)))
+        (should-not (eq crumb with-symbol))
+        (should (string-search "run" with-symbol))
+        (insert "y")
+        (should (string-match-p "●" (drgnx-chrome-breadcrumb w)))))))
+
 (ert-deftest drgnx-chrome/the-subscribers-repair-chrome-someone-else-changed ()
   "A window whose chrome was cleared is set again at the next observation; a panel gets its title-only chrome."
   (drgnx-chrome-test--with dir

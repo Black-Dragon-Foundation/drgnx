@@ -95,18 +95,17 @@ already.  No file is opened."
     (should (eq called #'project-find-file))
     (should-not sent)))
 
-(ert-deftest drgnx-quick-open/hub-down-lists-the-folder-by-stream ()
-  "With no hub connection a local folder is listed by the stream, and the hub is never asked."
-  (let ((sent nil) started (drgnx-hub--events nil) (dir (file-name-as-directory (make-temp-file "drgnx-qo" t))))
+(ert-deftest drgnx-quick-open/hub-down-is-project-find-file ()
+  "With no hub connection a local folder is `project-find-file' too: nothing is listed or ranked in Lisp, and the hub
+is never asked."
+  (let ((sent nil) called (drgnx-hub--events nil) (dir (file-name-as-directory (make-temp-file "drgnx-qo" t))))
     (unwind-protect
         (cl-letf (((symbol-function 'drgnx-quick-open--root) (lambda () dir))
-                  ((symbol-function 'drgnx-file-stream-start)
-                   (lambda (root &rest _) (setq started root) nil))   ; no stream: falls on `project-find-file'
-                  ((symbol-function 'call-interactively) #'ignore))
+                  ((symbol-function 'call-interactively) (lambda (f &rest _) (setq called f))))
           (should-not (drgnx-quick-open--hub-p dir))
           (let ((drgnx-quick-open-send-function (lambda (m p) (push (list m p) sent))))
             (drgnx-quick-open))
-          (should (equal started dir))
+          (should (eq called #'project-find-file))
           (should-not sent))
       (delete-directory dir t))))
 
@@ -133,8 +132,9 @@ already.  No file is opened."
       (should-not (get-text-property 0 'face c)))))
 
 (ert-deftest drgnx-explorer-find/rows-come-from-search-files ()
-  "Find asks the hub for each root's files that hold the query (search/files) and filters the tree by the rows it
-answers; nothing lists the folder in Lisp."
+  "Find asks the hub for each root's files whose names hold the query (search/files, `name', the Explorer's left-out
+names as `exclude', at most 1000) and the tree shows the rows it answers as they are: nothing lists the folder or
+filters a name in Lisp."
   (let ((sent nil) (root (file-name-as-directory (make-temp-file "drgnx-find" t))))
     (unwind-protect
         (quick-open-rows-test--hub sent
@@ -146,10 +146,22 @@ answers; nothing lists the folder in Lisp."
                 (should q)
                 (should (equal (plist-get (cadr q) :query) "map"))
                 (should (equal (plist-get (cadr q) :root) root))
+                (should (eq (plist-get (cadr q) :name) t))
+                (should (equal (plist-get (cadr q) :exclude) (vconcat drgnx-explorer-exclude-names)))
+                (should (equal (plist-get (cadr q) :n) 1000))
                 (drgnx-explorer--find-event
                  "view-patch" (quick-open-rows-test--patch (plist-get (cadr q) :view) 0 1
-                                                           (list (list :reset (list (quick-open-rows-test--row "src/map.rs")))))))
-              (should (equal (plist-get drgnx-explorer--find :files) (list (concat root "src/map.rs")))))))
+                                                           (list (list :reset (list (quick-open-rows-test--row "src/map.rs")
+                                                                                    (quick-open-rows-test--row "a/.git/x"))))))
+                ;; the hub chose them: shown as they came, none filtered again here
+                (should (equal (plist-get drgnx-explorer--find :found)
+                               (list (concat root "src/map.rs") (concat root "a/.git/x"))))
+                (should-not (plist-get drgnx-explorer--find :files))
+                ;; a file operation during Find: the new views are asked for the same query
+                (setq sent nil)
+                (drgnx-explorer--find-again)
+                (should (equal (plist-get (cadr (seq-find (lambda (s) (equal (car s) "search/files")) sent)) :query)
+                               "map"))))))
       (remove-hook 'drgnx-hub-event-functions #'drgnx-explorer--find-event)
       (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
       (delete-directory root t))))

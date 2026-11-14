@@ -1458,8 +1458,9 @@ excluded names left out.  A root that is your home or / and not a project is ref
   (seq-mapcat #'drgnx-explorer--root-files drgnx-explorer--roots))
 
 ;; Find's file list.  With the hub up, a local root's files come from the hub: each query asks `search/files' (the
-;; query, at most `drgnx-explorer--find-limit' rows) for a view of its own per root, and the rows it answers are Find's
-;; :files (Quick Open's list of keys, `drgnx-quick-open--rows', applies the patches by the patch rules).  Without the
+;; query by name, the left-out names, at most `drgnx-explorer--find-limit' rows) for a view of its own per root, and
+;; the rows it answers are Find's :found, shown as they came (Quick Open's list of keys, `drgnx-quick-open--rows',
+;; applies the patches by the patch rules).  Without the
 ;; hub, streamed: with Nidhogg's framing on, a local root is listed in batches (core/drgnx-file-stream.el) that land in
 ;; the Find state's :files while the tree is already filtered by them; a remote root, or no framing, reads the list now
 ;; as before.  A listing belongs to one generation: Find ending or starting over bumps it, and a batch of an older one
@@ -1495,20 +1496,22 @@ excluded names left out.  A root that is your home or / and not a project is ref
     (add-hook 'drgnx-hub-event-functions #'drgnx-explorer--find-event)))
 
 (defun drgnx-explorer--find-ask (query)
-  "Ask the hub for each Find view's files that hold QUERY; the rows come as patches (`drgnx-explorer--find-event')."
+  "Ask the hub for each Find view's files whose names hold QUERY, the Explorer's left-out names left out by the hub;
+the rows come as patches (`drgnx-explorer--find-event')."
   (dolist (v drgnx-explorer--find-views)
-    (drgnx-quick-open--rows-query (cdr v) query drgnx-explorer--find-limit)))
+    (drgnx-quick-open--rows-query (cdr v) query drgnx-explorer--find-limit
+                                  (list :name t :exclude (vconcat drgnx-explorer-exclude-names)))))
 
 (defun drgnx-explorer--find-event (event data)
-  "A `drgnx-hub-event-functions' handler while Find runs: a Find view's patch makes its rows Find's :files, and the
-tree is filtered by them once input pauses."
+  "A `drgnx-hub-event-functions' handler while Find runs: a Find view's patch makes its rows Find's :found, shown as
+the hub chose them, and the tree is filtered by them once input pauses."
   (when (and (equal event "view-patch") drgnx-explorer--find
              (seq-find (lambda (v) (drgnx-quick-open--rows-patch (cdr v) data)) drgnx-explorer--find-views))
     (let (files)
       (dolist (v (reverse drgnx-explorer--find-views))
         (dolist (k (drgnx-quick-open--rows-keys (cdr v)))
-          (unless (drgnx-explorer--excluded-p k) (push (concat (car v) k) files))))
-      (setq drgnx-explorer--find (plist-put drgnx-explorer--find :files (nreverse files))))
+          (push (concat (car v) k) files)))
+      (setq drgnx-explorer--find (plist-put drgnx-explorer--find :found (nreverse files))))
     (drgnx-timer-debounce 'explorer-find-batch 0.1 #'drgnx-explorer--find-refilter :idle t
                           :owner (or (get-buffer drgnx-explorer-buffer-name) :core))))
 
@@ -1541,10 +1544,13 @@ tree is filtered by them once input pauses."
               (t (setq files (nconc files (drgnx-explorer--root-files root)))))))
     files))
 
-(defconst drgnx-explorer--find-limit 5000 "Find shows at most this many matching files.")
+(defconst drgnx-explorer--find-limit 1000
+  "Find shows at most this many matching files per root (the most `search/files' answers).")
 
 (defun drgnx-explorer--find-apply (query)
-  "Show only the files whose name contains QUERY (any case), with their folders — collapsed or not."
+  "Show only the files whose name contains QUERY (any case), with their folders — collapsed or not.  A hub root's
+files are the hub's answer (:found), shown as they came; only the files listed here (:files: a remote root, or no hub)
+are filtered here."
   (with-current-buffer (let ((drgnx-explorer--remote-reads t)) (drgnx-explorer--buffer)) ; Find is a command of the user
     (unless drgnx-explorer--find
       (setq drgnx-explorer--find (list :files (drgnx-explorer--find-load)
@@ -1553,9 +1559,10 @@ tree is filtered by them once input pauses."
     (unless (equal query (plist-get drgnx-explorer--find :query)) (drgnx-explorer--find-ask query))
     (setq drgnx-explorer--find (plist-put drgnx-explorer--find :query query))
     (let* ((q (downcase query))
-           (files (seq-take (seq-filter (lambda (file) (string-search q (downcase (file-name-nondirectory file))))
-                                        (plist-get drgnx-explorer--find :files))
-                            drgnx-explorer--find-limit)))
+           (files (append (plist-get drgnx-explorer--find :found)
+                          (seq-take (seq-filter (lambda (file) (string-search q (downcase (file-name-nondirectory file))))
+                                                (plist-get drgnx-explorer--find :files))
+                                    drgnx-explorer--find-limit))))
       (if (drgnx-explorer--rows-p)
           ;; the hub lists the files found with their folders open (`only'), from nothing on disk
           (progn (setq drgnx-explorer--find (plist-put drgnx-explorer--find :only
@@ -1674,9 +1681,11 @@ inside another one selected goes: the folder carries it."
       (drgnx-explorer--show-folder-1 dir))))
 
 (defun drgnx-explorer--find-again ()
-  "Filter again with fresh files (a file operation or a refresh during Find)."
-  (setq drgnx-explorer--find (plist-put drgnx-explorer--find :files (drgnx-explorer--find-load)))
-  (drgnx-explorer--find-apply (plist-get drgnx-explorer--find :query)))
+  "Filter again with fresh files (a file operation or a refresh during Find): the new hub views are asked again."
+  (let ((query (plist-get drgnx-explorer--find :query)))
+    (setq drgnx-explorer--find (plist-put (plist-put drgnx-explorer--find :files (drgnx-explorer--find-load))
+                                          :query nil))
+    (drgnx-explorer--find-apply query)))
 
 (defun drgnx-explorer--show-folder-1 (dir)
   (with-current-buffer (drgnx-explorer--buffer)
