@@ -287,6 +287,7 @@ params! {
     ViewClose(view::ViewClose),
     ViewWindow(view::ViewWindow),
     BuffersSet(view::BuffersSet),
+    OutlineSet(view::OutlineSet),
     TermOpen(term::TermOpen),
     TermConfig(term::TermConfig),
     TermKey(term::TermKey),

@@ -185,6 +185,7 @@
   "messages/retract": ["user"],
   "messages/send": ["user"],
   "orch/evidence": ["user"],
+  "outline/set": ["user"],
   "pace/get": ["user"],
   "pair/answer": ["user"],
   "pair/closed": ["user"],

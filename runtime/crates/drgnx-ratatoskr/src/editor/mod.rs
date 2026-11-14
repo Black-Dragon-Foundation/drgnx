@@ -476,6 +476,26 @@ async fn history_of(
     .unwrap_or((None, None, None))
 }
 
+/// The text of the editor's tracked buffer of FILE (the edit history's mirror: unsaved typing included); none when its
+/// project's history is not open or tracks no buffer of it.
+pub(crate) async fn mirror_of(front: &Front, file: &str) -> Option<String> {
+    let hubs = front.core.history.clone();
+    let file = file.to_string();
+    crate::clock::blocking(move || {
+        let (top, _) = presence::checkout_of(Path::new(&file))?;
+        let rel = Path::new(&file)
+            .strip_prefix(&top)
+            .ok()?
+            .to_string_lossy()
+            .into_owned();
+        let (hub, tree) = hubs.open_of(&top)?;
+        hub.mirror_text(&tree, &rel).ok().flatten()
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
 /// FILE's text, CRLF and all; none past [`crate::work::detail::EDIT_TEXT_MAX`] bytes, empty when it is not there.
 fn read_capped(file: &Path) -> Option<String> {
     match std::fs::metadata(file) {

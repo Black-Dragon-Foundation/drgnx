@@ -97,12 +97,12 @@ stays at the same height, on the row that took its place, instead of jumping to 
 
 ### Outline
 
-Below the Explorer, the **Outline** lists the definitions of the file in the editor (as imenu finds them, nested the
-same way). A click shows the definition in the editor and keeps you in the Outline; `RET` goes there. It follows the
+Below the Explorer, the **Outline** lists the definitions of the file in the editor, nested in the definitions around
+them (the hub parses the file, your unsaved text included). A click shows the definition in the editor and keeps you in the Outline; `RET` goes there. It follows the
 editor, and half a second after you stop typing, your edits — only while it is shown (hidden, it lets go of the file
-at the next pause or editor change), and a key you press while it works wins (it tries again at the next pause). Files without an index, remote files and buffers over 1 MB get a
-one-line notice instead: an info icon and the reason in the muted text ("No outline for this file"), an empty
-state that is never selected. The definition your cursor is in is highlighted in the Outline (an overlay, set a moment
+at the next editor change); nothing of it runs while you type. Files with nothing to outline and remote files get a one-line notice
+instead: an info icon and the reason in the muted text ("No outline for this file"; a file over 1 MiB: "This file is
+too large for an outline"), an empty state that is never selected. Without the hub the section says it waits for it. The definition your cursor is in is highlighted in the Outline (an overlay, set a moment
 after the cursor stops — the Outline's own cursor is yours and never moves while you work in a file). Another file
 starts the Outline at its top, its cursor on the definition your cursor is in (scrolled into view). An edit that only
 moves definitions redraws nothing, and the Outline keeps your place in it when definitions are added above. Its rows

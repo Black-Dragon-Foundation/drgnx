@@ -245,6 +245,32 @@ fn check_buffers(p: &BuffersSet) -> Result<(), Error> {
     Ok(())
 }
 
+/// The longest file name `outline/set` takes, in bytes.
+pub const OUTLINE_FILE_MAX: usize = 4096;
+
+/// `outline/set`: the Outline panel's hub-fed VIEW now shows FILE (absolute; none: the editor shows no file the hub
+/// can read, such as a buffer without one or a remote file).  The hub outlines the file as the editor's tracked buffer
+/// of it has it (unsaved typing included), else as it is on disk, keeps it per (connection, view), outlines it again
+/// after the editor's edits pause, and sends the view's model and rows (docs/develop/hub.md, "The Outline panel's
+/// rows").  Sent again when the editor shows another file or saves this one, never per keystroke.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OutlineSet {
+    pub view: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+}
+
+fn check_outline(p: &OutlineSet) -> Result<(), Error> {
+    check_ids(&p.view, None)?;
+    match &p.file {
+        Some(f) if f.is_empty() || f.len() > OUTLINE_FILE_MAX || !f.starts_with('/') => Err(
+            invalid("file", "an absolute file name of at most 4096 bytes"),
+        ),
+        _ => Ok(()),
+    }
+}
+
 pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
@@ -300,6 +326,12 @@ pub(crate) fn methods() -> Vec<Method> {
             classes: [User], writes: false,
             doc: "changes to the Buffers panel's open buffers of a hub-fed view (put, modified, remove, the window's scope, the filter), in order: the hub sends the view's rows that changed to every class of it",
             check: check_buffers,
+        ),
+        method!(
+            "outline/set", OutlineSet(OutlineSet) -> bool,
+            classes: [User], writes: false,
+            doc: "the file the Outline panel's hub-fed view shows (none: no file): the hub outlines it (the editor's unsaved text where its edit history tracks the buffer, else the disk), again after edits pause, and sends the view's model and rows",
+            check: check_outline,
         ),
     ]
 }

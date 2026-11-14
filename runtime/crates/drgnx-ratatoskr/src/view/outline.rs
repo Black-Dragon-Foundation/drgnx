@@ -1,0 +1,289 @@
+//! The Outline panel's rows (`outline/set`): the editor names the file it shows; the hub outlines it with Hrafn's parse
+//! (`hrafn::symbols::outline_text`) over the editor's text of it where the edit history tracks the buffer (unsaved
+//! typing included), else the file on disk, and keeps the outline per (connection, view). An edit the history takes for
+//! that file outlines it again once the edits pause ([`QUIET`] of the hub's clock); a saved file the history does not
+//! track is sent again by the editor. The model is a list `order` of a node per definition, its `line` (from 1) and
+//! `label` fields: the editor asks Sjá which one a line is in (`at-line`) and where a row goes. A row is the name,
+//! indented two columns per definition around it, its key over it; a file with nothing to outline is one notice row.
+
+use super::explorer::{INDENT, RowLook};
+use super::model::Doc;
+use super::{Key, Views, icons, lock};
+use crate::dispatch::Caller;
+use crate::front::Front;
+use drgnx_rows::{ImageId, Row, RowBuilder};
+use hrafn::symbols::OutlineEntry;
+use runstav::methods::view::OutlineSet;
+use runstav::wire::Error;
+use serde_json::json;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+/// The largest text outlined, in bytes (the Lisp Outline's limit).
+pub const OUTLINE_MAX: usize = 1 << 20;
+
+/// Whether a text of LEN bytes is past [`OUTLINE_MAX`]: the one check every path to an outline goes through.
+pub fn too_large(len: u64) -> bool {
+    len > OUTLINE_MAX as u64
+}
+
+/// How long the edits to a shown file pause before it is outlined again.
+pub const QUIET: Duration = Duration::from_millis(500);
+
+/// What a view shows: a file's definitions, or a notice in their place.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Shown {
+    Entries(Vec<OutlineEntry>),
+    Notice(&'static str),
+}
+
+/// The notice of a view with no file, or a file with nothing to outline.
+pub const NONE: &str = "No outline for this file";
+/// The notice of a file past [`OUTLINE_MAX`].
+pub const LARGE: &str = "This file is too large for an outline";
+
+/// One view: the file it shows (its true name), the generation of its latest ask, what it shows.
+#[derive(Default)]
+struct One {
+    file: Option<String>,
+    generation: u64,
+    shown: Option<Arc<Shown>>,
+}
+
+/// The Outline views of every (connection, view).
+#[derive(Default)]
+pub struct Outlines {
+    views: Mutex<HashMap<(u64, String), One>>,
+}
+
+impl Outlines {
+    fn shown(&self, conn: u64, view: &str) -> Option<Arc<Shown>> {
+        lock(&self.views)
+            .get(&(conn, view.to_owned()))
+            .and_then(|o| o.shown.clone())
+    }
+
+    pub(super) fn stop(&self, conn: u64, view: &str) {
+        lock(&self.views).remove(&(conn, view.to_owned()));
+    }
+
+    pub(super) fn gone(&self, conn: u64) {
+        lock(&self.views).retain(|(c, _), _| *c != conn);
+    }
+}
+
+/// What TEXT of PATH shows: its definitions, else a notice.
+pub fn shown_of(path: &str, text: &str) -> Shown {
+    if too_large(text.len() as u64) {
+        return Shown::Notice(LARGE);
+    }
+    match hrafn::symbols::outline_text(path, text) {
+        Some((_, entries)) if !entries.is_empty() => Shown::Entries(entries),
+        _ => Shown::Notice(NONE),
+    }
+}
+
+/// FILE's text as the editor has it (the history's mirror), else as the disk has it; a notice when it is too large or
+/// cannot be read.
+async fn text_of(f: &Front, file: &str) -> Result<String, &'static str> {
+    if let Some(t) = crate::editor::mirror_of(f, file).await {
+        return Ok(t);
+    }
+    let path = file.to_owned();
+    crate::clock::blocking(move || {
+        let meta = std::fs::metadata(&path).map_err(|_| NONE)?;
+        if !meta.is_file() {
+            return Err(NONE);
+        }
+        if too_large(meta.len()) {
+            return Err(LARGE);
+        }
+        let bytes = std::fs::read(&path).map_err(|_| NONE)?;
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    })
+    .await
+    .unwrap_or(Err(NONE))
+}
+
+/// The keys of ENTRIES, in order: `DEPTH:N:NAME`, N counting the earlier entries of that name and depth, so a
+/// definition that only moved keeps its key (and its row is not drawn again).
+pub fn keys(entries: &[OutlineEntry]) -> Vec<String> {
+    let mut seen: HashMap<(&str, u32), u32> = HashMap::new();
+    entries
+        .iter()
+        .map(|e| {
+            let n = seen.entry((e.name.as_str(), e.depth)).or_default();
+            let key = format!("{}:{}:{}", e.depth, n, e.name);
+            *n += 1;
+            key
+        })
+        .collect()
+}
+
+/// The key of a notice's row.
+pub const NOTICE_KEY: &str = "notice";
+
+/// SHOWN's model: a node per definition with its `line` and `label`, the list `order` in file order (a notice: empty).
+pub fn doc(shown: &Shown) -> Doc {
+    let mut d = Doc {
+        descriptor: json!({
+            "scheme": "links",
+            "chain_kinds": [],
+            "match_fields": ["label"],
+            "lists": ["order"],
+            "classes": ["selected"],
+            "flags": [],
+            "forms": [],
+            "start": "order",
+        }),
+        ..Doc::default()
+    };
+    let mut order = Vec::new();
+    if let Shown::Entries(entries) = shown {
+        for (e, key) in entries.iter().zip(keys(entries)) {
+            d.nodes.insert(
+                key.clone(),
+                json!({"id": key, "kind": e.kind, "flags": 0,
+                       "fields": [["label", e.name], ["line", e.line_start]]}),
+            );
+            order.push(key);
+        }
+    }
+    d.lists.insert("order".into(), order);
+    d
+}
+
+/// SHOWN's rows in LOOK, and the icon a notice names.  A definition: two columns, two more per definition around it,
+/// the name as one row shows it, the key over the row.  A notice: the info icon (a graphical display) and the text,
+/// muted, inert.
+pub fn rows(shown: &Shown, look: &RowLook) -> (Vec<Row>, Vec<(ImageId, String)>) {
+    match shown {
+        Shown::Entries(entries) => {
+            let rows = entries
+                .iter()
+                .zip(keys(entries))
+                .map(|(e, key)| {
+                    let mut r = RowBuilder::new(key.clone());
+                    r.push(&" ".repeat(2 + 2 * e.depth as usize), None);
+                    r.push(&super::explorer::display(&e.name), None);
+                    let end = r.pos();
+                    r.prop(0, end, "drgnx-work-id", json!(key));
+                    r.finish()
+                })
+                .collect();
+            (rows, Vec::new())
+        }
+        Shown::Notice(text) => {
+            let mut images = BTreeMap::new();
+            let mut r = RowBuilder::new(NOTICE_KEY);
+            r.push("  ", None);
+            if let Some((_, icon, _)) = look.gui
+                && let Some((id, svg)) = icons::svg("info", icon)
+            {
+                images.insert(id, svg);
+                r.image(id, " ");
+                r.push(" ", None);
+            }
+            r.push(text, None);
+            let end = r.pos();
+            r.face(0, end, "drgnx-text-muted");
+            r.prop(0, end, "drgnx-row-inert", json!(true));
+            (vec![r.finish()], images.into_iter().collect())
+        }
+    }
+}
+
+impl Views {
+    /// The rows of KEY's view's outline for its class; false when the view has none (no `outline/set` yet).
+    pub(super) fn outline_build(&self, f: &Front, key: &Key) -> bool {
+        let Some(shown) = self.outlines.shown(key.0, &key.1) else {
+            return false;
+        };
+        self.publish_built(f, key, |env, _| rows(&shown, &RowLook::of(env, INDENT, 1)));
+        true
+    }
+
+    /// CONN's VIEW shows SHOWN now: the model first, then the rows that changed to every class of it.
+    fn outline_publish(&self, f: &Front, conn: u64, view: &str, shown: &Shown) {
+        self.publish_model(f, conn, view, doc(shown));
+        let classes = lock(&self.store).classes(conn, view);
+        for class in classes {
+            self.outline_build(f, &(conn, view.to_owned(), class));
+        }
+    }
+}
+
+/// Outline CONN's VIEW's file again for its ask GENERATION; nothing when a later ask came meanwhile.
+async fn refresh(f: &Front, conn: u64, view: &str, generation: u64) {
+    let file = {
+        let views = lock(&f.core.views.outlines.views);
+        match views.get(&(conn, view.to_owned())) {
+            Some(o) if o.generation == generation => o.file.clone(),
+            _ => return,
+        }
+    };
+    let shown = match file {
+        None => Shown::Notice(NONE),
+        Some(file) => match text_of(f, &file).await {
+            Err(notice) => Shown::Notice(notice),
+            Ok(text) => crate::clock::blocking(move || shown_of(&file, &text))
+                .await
+                .unwrap_or(Shown::Notice(NONE)),
+        },
+    };
+    let shown = Arc::new(shown);
+    {
+        let mut views = lock(&f.core.views.outlines.views);
+        match views.get_mut(&(conn, view.to_owned())) {
+            Some(o) if o.generation == generation => o.shown = Some(shown.clone()),
+            _ => return,
+        }
+    }
+    f.core.views.outline_publish(f, conn, view, &shown);
+}
+
+/// `outline/set`: the caller's VIEW shows P's file now; it is outlined before the answer.
+pub async fn set(f: &Front, c: &Caller, p: OutlineSet) -> Result<bool, Error> {
+    let file = p.file.as_deref().map(crate::work::presence::true_name);
+    let generation = {
+        let mut views = lock(&f.core.views.outlines.views);
+        let o = views.entry((c.conn_id, p.view.clone())).or_default();
+        o.file = file;
+        o.generation += 1;
+        o.generation
+    };
+    refresh(f, c.conn_id, &p.view, generation).await;
+    Ok(true)
+}
+
+/// The edit history took an edit to FILE: every view showing it is outlined again once its edits pause.
+pub fn touched(f: &Front, file: &str) {
+    let file = crate::work::presence::true_name(file);
+    let due: Vec<((u64, String), u64)> = {
+        let mut views = lock(&f.core.views.outlines.views);
+        views
+            .iter_mut()
+            .filter(|(_, o)| o.file.as_deref() == Some(file.as_str()))
+            .map(|(k, o)| {
+                o.generation += 1;
+                (k.clone(), o.generation)
+            })
+            .collect()
+    };
+    let Some(front) = f.core.views.front_weak() else {
+        return;
+    };
+    for ((conn, view), generation) in due {
+        let front = front.clone();
+        crate::clock::spawn("outline:quiet", async move {
+            crate::clock::sleep(QUIET).await;
+            if let Some(f) = front.upgrade() {
+                refresh(&f, conn, &view, generation).await;
+            }
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests;
