@@ -173,17 +173,8 @@ const RAW_SPAWNS: &[(&str, usize, &str)] = &[
         1,
         "a session's trace socket: the accept loop; what a step opened goes out from its blocking thread",
     ),
-    // write to clients: not on the clock yet; the gated tests do not reach them
-    ("server.rs", 3, "the resume, the embedder and the backup"),
-    ("sessions.rs", 2, "a session's MCP sockets"),
-    ("agents/wake.rs", 1, "a job end's wake"),
-    (
-        "agents/session.rs",
-        2,
-        "a session's permission asks (its run and turns: stall::spawn)",
-    ),
-    ("runner/tick.rs", 2, "a plan task's start and fallback"),
-    ("runner/review.rs", 1, "a plan review's work"),
+    // a listener's accept loop: what a connection it takes does is a clock task of its own (`sessions:mcp-connection`)
+    ("sessions.rs", 1, "a session's MCP sockets: the accept loop"),
 ];
 
 #[test]
