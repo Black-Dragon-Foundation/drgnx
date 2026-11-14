@@ -6,8 +6,9 @@
 //! - **no network**: a network namespace of its own with no relay (loopback inside it only);
 //! - **stdin and stdout** are the whole interface: the framed protocol of `hrafn::chunk::worker`; stderr is kept (its
 //!   tail goes into the reason of a failure);
-//! - the memory and time caps are the hub's: the request deadline kills the process group, and the sandbox's own limits
-//!   (Landlock, seccomp, the namespaces) are the full tier's.
+//! - time is capped by the hub (the request deadline kills the process group); **memory is not capped yet**: the sandbox's
+//!   own limits (Landlock, seccomp, the namespaces) bound what the worker can reach, not what it can allocate. An address-space
+//!   limit goes in as soon as a Gleipnir spec can carry one.
 //!
 //! Only the full tier runs one: on the reduced tier (no mount or network namespace to keep the grammar out of the user's
 //! files and the network) the launcher refuses, and the pack's files read as text with a doctor line saying why.

@@ -164,7 +164,20 @@ pub fn serve(
     r: &mut impl Read,
     w: &mut impl Write,
 ) -> i32 {
-    match serve_inner(lib, grammar, sha256, r, w) {
+    serve_with(lib, grammar, sha256, r, w, &|| {})
+}
+
+/// [`serve`], with BETWEEN called after the library's hash is checked and before it is loaded (a test replaces the file
+/// there: what was hashed must be what is loaded).
+pub fn serve_with(
+    lib: &Path,
+    grammar: &str,
+    sha256: &str,
+    r: &mut impl Read,
+    w: &mut impl Write,
+    between: &dyn Fn(),
+) -> i32 {
+    match serve_inner(lib, grammar, sha256, r, w, between) {
         Ok(()) => 0,
         Err(e) => {
             eprintln!("hrafn-parse: {e}");
@@ -179,13 +192,44 @@ fn serve_inner(
     sha256: &str,
     r: &mut impl Read,
     w: &mut impl Write,
+    between: &dyn Fn(),
 ) -> Result<(), String> {
-    let got = skald::job::file_sha256(lib).map_err(|e| e.to_string())?;
+    // opened once: what is hashed is what is loaded, whatever happens to the path in between
+    let mut file = std::fs::File::open(lib).map_err(|e| format!("{}: {e}", lib.display()))?;
+    let got = {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        let mut buf = vec![0u8; 64 << 10];
+        loop {
+            let n = file
+                .read(&mut buf)
+                .map_err(|e| format!("{}: {e}", lib.display()))?;
+            if n == 0 {
+                break;
+            }
+            h.update(&buf[..n]);
+        }
+        h.finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    };
     if got != sha256 {
         return Err(format!("the library's hash is {got}, not {sha256}"));
     }
+    between();
+    // the descriptor, where there is a /proc to name it by (Linux); elsewhere the path (macOS has no replaced-file race
+    // the sandbox's read-only grant of the one file leaves open)
+    #[cfg(target_os = "linux")]
+    let load_path = PathBuf::from(format!(
+        "/proc/self/fd/{}",
+        std::os::fd::AsRawFd::as_raw_fd(&file)
+    ));
+    #[cfg(not(target_os = "linux"))]
+    let load_path = lib.to_path_buf();
     // the library stays loaded for the life of the process: the language, the queries and every tree point into it
-    let (_library, language) = skald::job::load(lib, grammar).map_err(|e| e.to_string())?;
+    let (_library, language) = skald::job::load(&load_path, grammar).map_err(|e| e.to_string())?;
+    let _keep = file;
     let abi = language.abi_version();
     if abi < skald::registry::MIN_ABI {
         return Err(format!(
@@ -312,7 +356,12 @@ impl std::fmt::Display for WorkerError {
 }
 
 struct Live {
-    stdin: Box<dyn Write + Send>,
+    /// Frames for the worker's stdin: a thread of its own writes them, so a worker that does not read costs a deadline,
+    /// never the caller (a pipe's buffer is 64 KiB; an init or a file is more).
+    to_worker: mpsc::SyncSender<Vec<u8>>,
+    written: mpsc::Receiver<io::Result<()>>,
+    /// What the worker wrote, one frame at a time: the reader holds one more, so a worker that writes without being asked
+    /// leaves at most two frames in the hub's memory and stalls on a full pipe after them.
     replies: mpsc::Receiver<Result<Vec<u8>, FrameError>>,
     kill: Box<dyn FnMut() + Send>,
     stderr: Box<dyn Fn() -> String + Send>,
@@ -321,6 +370,26 @@ struct Live {
 impl Live {
     fn end(&mut self) {
         (self.kill)();
+    }
+
+    /// BODY as a frame to the worker, written within WITHIN.
+    fn send(&self, body: Vec<u8>, within: Duration) -> Result<(), String> {
+        self.to_worker
+            .send(body)
+            .map_err(|_| "the worker's input is closed".to_owned())?;
+        match self.written.recv_timeout(within) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(format!("the worker did not take its input: {e}")),
+            Err(_) => Err(format!(
+                "the worker did not read its input within {} s",
+                within.as_secs().max(1)
+            )),
+        }
+    }
+
+    /// Whether the worker wrote a frame nobody asked for (an answer is read only when a request waits for it).
+    fn unsolicited(&self) -> bool {
+        self.replies.try_recv().is_ok()
     }
 
     /// WHY with the last lines of the process's stderr, when it said any.
@@ -365,6 +434,11 @@ impl Worker {
             request_deadline: REQUEST_DEADLINE,
             start_deadline: START_DEADLINE,
         }
+    }
+
+    #[cfg(test)]
+    fn set_init_for_test(&mut self, init: Init) {
+        self.init = init;
     }
 
     /// Why the pack reads as text, once it does.
@@ -418,7 +492,7 @@ impl Worker {
                 return Err(WorkerError::Dead(e));
             }
         };
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::sync_channel(1);
         let mut stdout = started.stdout;
         std::thread::Builder::new()
             .name("hrafn-parse-reader".into())
@@ -442,15 +516,31 @@ impl Worker {
                 }
             })
             .map_err(|e| WorkerError::File(e.to_string()))?;
+        let (to_worker, jobs) = mpsc::sync_channel::<Vec<u8>>(1);
+        let (done, written) = mpsc::channel();
+        let mut stdin = started.stdin;
+        std::thread::Builder::new()
+            .name("hrafn-parse-writer".into())
+            .spawn(move || {
+                for body in jobs {
+                    let r = write_frame(&mut stdin, &body);
+                    let failed = r.is_err();
+                    if done.send(r).is_err() || failed {
+                        return;
+                    }
+                }
+            })
+            .map_err(|e| WorkerError::File(e.to_string()))?;
         let mut live = Live {
-            stdin: started.stdin,
+            to_worker,
+            written,
             replies: rx,
             kill: started.kill,
             stderr: started.stderr,
         };
         let init = serde_json::to_vec(&self.init).map_err(|e| WorkerError::File(e.to_string()))?;
-        if let Err(e) = write_frame(&mut live.stdin, &init) {
-            let why = live.because(format!("the worker did not take its init: {e}"));
+        if let Err(e) = live.send(init, self.start_deadline) {
+            let why = live.because(e);
             live.end();
             return Err(self.fail(why));
         }
@@ -513,8 +603,12 @@ impl Worker {
         };
         let body = serde_json::to_vec(&request).map_err(|e| WorkerError::File(e.to_string()))?;
         let live = self.live.as_mut().expect("ensure started it");
-        if let Err(e) = write_frame(&mut live.stdin, &body) {
-            return Err(self.fail(format!("the worker did not take a request: {e}")));
+        // a frame nobody asked for, from a worker that wrote while idle: it is not served
+        if live.unsolicited() {
+            return Err(self.fail("the worker wrote a frame nobody asked for".into()));
+        }
+        if let Err(e) = live.send(body, self.request_deadline) {
+            return Err(self.fail(e));
         }
         let live = self.live.as_mut().expect("still running");
         match live.replies.recv_timeout(self.request_deadline) {
@@ -525,7 +619,11 @@ impl Worker {
                     symbols,
                     refs,
                 }) if got == id => {
-                    check(text, &chunks, &symbols).map_err(|e| self.fail(e))?;
+                    check(text, &chunks, &symbols, &refs).map_err(|e| self.fail(e))?;
+                    // one answer for one request: more is a worker that is not doing what it was asked
+                    if self.live.as_ref().is_some_and(Live::unsolicited) {
+                        let _ = self.fail("the worker wrote more than one answer".into());
+                    }
                     Ok((chunks, symbols, refs))
                 }
                 // this file failed, the worker is fine
@@ -556,11 +654,15 @@ impl Drop for Worker {
 }
 
 /// What the hub does not take on trust from a worker: the chunks lie inside the text, on character boundaries, in order,
-/// and the symbols point at chunks that exist. The index stores these offsets and slices the file with them.
-fn check(text: &str, chunks: &[Chunk], symbols: &[Symbol]) -> Result<(), String> {
+/// and the symbols and references too: a symbol starts inside its chunk and ends inside the file, on boundaries, and every
+/// line number is one of the file's. The index stores these numbers and slices the file with them.
+fn check(text: &str, chunks: &[Chunk], symbols: &[Symbol], refs: &[Ref]) -> Result<(), String> {
     if chunks.len() > text.len().max(1) {
         return Err("more chunks than bytes".into());
     }
+    // lines run from 1 to the last line (a final newline starts one more, empty)
+    let lines = u32::try_from(text.matches('\n').count() + 1).unwrap_or(u32::MAX);
+    let line_ok = |a: u32, b: u32| a >= 1 && a <= b && b <= lines;
     let mut at = 0usize;
     for c in chunks {
         let (s, e) = (c.start as usize, c.end as usize);
@@ -572,14 +674,46 @@ fn check(text: &str, chunks: &[Chunk], symbols: &[Symbol]) -> Result<(), String>
         {
             return Err(format!("a chunk {s}..{e} outside the file or out of order"));
         }
+        if !line_ok(c.line_start, c.line_end) {
+            return Err(format!(
+                "a chunk's lines {}..{} are not the file's",
+                c.line_start, c.line_end
+            ));
+        }
         at = e;
     }
     for s in symbols {
-        if s.chunk as usize >= chunks.len() {
+        let Some(c) = chunks.get(s.chunk as usize) else {
             return Err("a symbol of a chunk that does not exist".into());
+        };
+        let (a, b) = (s.start as usize, s.end as usize);
+        if a > b
+            || b > text.len()
+            || !text.is_char_boundary(a)
+            || !text.is_char_boundary(b)
+            || a < c.start as usize
+            || a >= (c.end as usize).max(c.start as usize + 1)
+        {
+            return Err(format!(
+                "a symbol {a}..{b} outside the file or outside its chunk"
+            ));
         }
-        if s.start > s.end || s.end as usize > text.len() {
-            return Err("a symbol outside the file".into());
+        if !line_ok(s.line_start, s.line_end) {
+            return Err(format!(
+                "a symbol's lines {}..{} are not the file's",
+                s.line_start, s.line_end
+            ));
+        }
+    }
+    for r in refs {
+        if r.n == 0
+            || r.lines.len() > super::refs::LINES
+            || r.lines.iter().any(|l| *l < 1 || *l > lines)
+        {
+            return Err(format!(
+                "the lines of a reference ({}) are not the file's",
+                r.name
+            ));
         }
     }
     Ok(())
@@ -805,12 +939,12 @@ mod tests {
             fts: super::super::FtsCols::default(),
             embed: false,
         };
-        assert!(check(text, &[chunk(0, 6)], &[]).is_ok());
+        assert!(check(text, &[chunk(0, 6)], &[], &[]).is_ok());
         // past the end, inside a multi-byte character, backwards, overlapping
-        assert!(check(text, &[chunk(0, 7)], &[]).is_err());
-        assert!(check(text, &[chunk(0, 2)], &[]).is_err());
-        assert!(check(text, &[chunk(3, 2)], &[]).is_err());
-        assert!(check(text, &[chunk(0, 3), chunk(2, 6)], &[]).is_err());
+        assert!(check(text, &[chunk(0, 7)], &[], &[]).is_err());
+        assert!(check(text, &[chunk(0, 2)], &[], &[]).is_err());
+        assert!(check(text, &[chunk(3, 2)], &[], &[]).is_err());
+        assert!(check(text, &[chunk(0, 3), chunk(2, 6)], &[], &[]).is_err());
     }
 
     // ---- the hub side against hostile or broken workers (no process: two pipes and a thread) ----
@@ -1106,5 +1240,183 @@ mod tests {
             Err(WorkerError::File(_))
         ));
         assert_eq!(starts.load(Ordering::SeqCst), 0);
+    }
+
+    // ---- the review's findings: flooding, writes that block, offsets the hub must not trust ----
+
+    /// Runs F on a thread and fails the test, instead of hanging it, when F has not returned within SECS.
+    fn within<T: Send + 'static>(secs: u64, f: impl FnOnce() -> T + Send + 'static) -> T {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(f());
+        });
+        rx.recv_timeout(Duration::from_secs(secs))
+            .expect("the hub blocked: it waited on the worker past any deadline")
+    }
+
+    fn empty_chunked(id: u64) -> Reply {
+        Reply::Chunked {
+            id,
+            chunks: vec![],
+            symbols: vec![],
+            refs: vec![],
+        }
+    }
+
+    #[test]
+    fn a_worker_that_floods_after_its_answer_is_killed_and_the_hub_queues_a_few_frames_at_most() {
+        let written = Arc::new(AtomicUsize::new(0));
+        let w2 = written.clone();
+        let (mut w, _, kills) = worker_with(move |r, wr| {
+            if !ready(r, wr) {
+                return;
+            }
+            let Some(id) = id_of(r) else { return };
+            if send(wr, &empty_chunked(id)).is_err() {
+                return;
+            }
+            // then frames nobody asked for, 1 MiB each, as fast as the pipe takes them
+            let big = "x".repeat(1 << 20);
+            for _ in 0..300 {
+                let junk = Reply::Failed {
+                    id: 999_999,
+                    error: big.clone(),
+                };
+                if send(wr, &junk).is_err() {
+                    return;
+                }
+                w2.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        assert!(w.chunk("a.x", false, "text", 100).is_ok());
+        // between requests nobody reads: let the flood run until it stops by itself, either because the hub took all 300 MiB
+        // or because the pipe is full and the hub's reader will not take more
+        for _ in 0..50 {
+            let before = written.load(Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(100));
+            if written.load(Ordering::SeqCst) == before {
+                break;
+            }
+        }
+        // a pipe's buffer, the frame the reader holds and the one in its channel: the rest of the flood stays in the worker
+        assert!(
+            written.load(Ordering::SeqCst) <= 4,
+            "the hub took {} unsolicited frames of 1 MiB",
+            written.load(Ordering::SeqCst)
+        );
+        // the next request finds a frame it did not ask for: the worker is killed
+        let e = w.chunk("b.x", false, "text", 100).unwrap_err();
+        assert!(matches!(e, WorkerError::File(_)), "{e:?}");
+        assert_eq!(kills.load(Ordering::SeqCst), 1);
+    }
+
+    /// A worker that never reads its stdin: it is the init (bigger than a pipe's buffer) or a request that blocks the write.
+    fn deaf(big_init: bool) -> (Worker, Arc<AtomicUsize>, mpsc::Sender<()>) {
+        let (done_tx, done_rx) = mpsc::channel::<()>();
+        let done_rx = Mutex::new(done_rx);
+        let (mut w, _, kills) = worker_with(move |r, wr| {
+            if big_init {
+                // never reads: the init write fills the pipe and blocks
+                let _ = done_rx.lock().unwrap().recv();
+                return;
+            }
+            if !ready(r, wr) {
+                return;
+            }
+            // ready, then deaf: a request larger than the pipe's buffer blocks the write
+            let _ = done_rx.lock().unwrap().recv();
+        });
+        if big_init {
+            w.set_init_for_test(Init {
+                chunks_scm: "x".repeat(300_000),
+                tags_scm: None,
+                docs: skald::manifest::Docs::default(),
+            });
+        }
+        (w, kills, done_tx)
+    }
+
+    #[test]
+    fn an_init_written_to_a_worker_that_never_reads_is_cut_at_the_start_deadline() {
+        let (mut w, kills, done) = deaf(true);
+        let e = within(10, move || w.chunk("a.x", false, "text", 100)).unwrap_err();
+        assert!(matches!(e, WorkerError::File(_)), "{e:?}");
+        assert_eq!(kills.load(Ordering::SeqCst), 1);
+        drop(done);
+    }
+
+    #[test]
+    fn a_request_written_to_a_worker_that_stops_reading_is_cut_at_the_request_deadline() {
+        let (mut w, kills, done) = deaf(false);
+        let text = "y".repeat(1 << 20);
+        let e = within(10, move || w.chunk("a.x", false, &text, 100)).unwrap_err();
+        assert!(matches!(e, WorkerError::File(_)), "{e:?}");
+        assert_eq!(kills.load(Ordering::SeqCst), 1);
+        drop(done);
+    }
+
+    fn sym(name: &str, chunk: u32, start: u32, end: u32) -> Symbol {
+        Symbol {
+            name: name.into(),
+            kind: "function".into(),
+            start,
+            end,
+            chunk,
+            definer: String::new(),
+            doc1: None,
+            line_start: 1,
+            line_end: 1,
+            sig: String::new(),
+        }
+    }
+
+    fn chunk_at(start: u32, end: u32, line_start: u32, line_end: u32) -> Chunk {
+        Chunk {
+            start,
+            end,
+            line_start,
+            line_end,
+            symbol: None,
+            header: String::new(),
+            embed_text: String::new(),
+            fts: super::super::FtsCols::default(),
+            embed: false,
+        }
+    }
+
+    #[test]
+    fn symbols_lines_and_references_get_the_same_checks_as_chunks() {
+        let text = "🦀 fn a() {}\nfn b() {}\n";
+        let ok = [chunk_at(0, text.len() as u32, 1, 2)];
+        let refs = |lines: Vec<u32>| {
+            vec![Ref {
+                name: "a".into(),
+                n: 1,
+                lines,
+            }]
+        };
+        assert!(check(text, &ok, &[sym("a", 0, 5, 12)], &refs(vec![1])).is_ok());
+        // a symbol cut inside the crab, past the file, backwards, outside its chunk
+        for (what, s) in [
+            ("inside a character", sym("a", 0, 1, 5)),
+            ("past the file", sym("a", 0, 5, 9999)),
+            ("backwards", sym("a", 0, 9, 5)),
+        ] {
+            assert!(check(text, &ok, &[s], &refs(vec![1])).is_err(), "{what}");
+        }
+        let two = [chunk_at(0, 12, 1, 1), chunk_at(12, text.len() as u32, 2, 2)];
+        assert!(
+            check(text, &two, &[sym("b", 0, 13, 20)], &refs(vec![1])).is_err(),
+            "starts in another chunk"
+        );
+        // lines: zero, backwards, past the end; a reference's lines the same
+        assert!(check(text, &[chunk_at(0, text.len() as u32, 0, 2)], &[], &[]).is_err());
+        assert!(check(text, &[chunk_at(0, text.len() as u32, 2, 1)], &[], &[]).is_err());
+        assert!(check(text, &[chunk_at(0, text.len() as u32, 1, 99)], &[], &[]).is_err());
+        let mut late = sym("a", 0, 5, 12);
+        late.line_end = 99;
+        assert!(check(text, &ok, &[late], &[]).is_err());
+        assert!(check(text, &ok, &[], &refs(vec![0])).is_err());
+        assert!(check(text, &ok, &[], &refs(vec![99])).is_err());
     }
 }

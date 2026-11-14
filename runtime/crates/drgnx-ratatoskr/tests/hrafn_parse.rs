@@ -288,3 +288,30 @@ fn the_hub_finds_the_fetched_packs_in_active_eld() {
     std::fs::remove_file(libdir.join("libtree-sitter-c-sharp.so")).unwrap();
     assert!(drgnx_ratatoskr::parse_worker::fetched(&env).is_empty());
 }
+
+/// What is hashed is what is loaded: the library's file is replaced between the two (as a writer of the folder could), and
+/// the worker still serves the grammar it hashed, because it loads through the descriptor it hashed.
+#[test]
+fn the_library_loaded_is_the_one_hashed_whatever_the_path_becomes() {
+    use hrafn::chunk::worker::{Reply, read_frame, serve_with, write_frame};
+    let (real, sha) = lib_of("c-sharp");
+    let (other, _) = lib_of("fixture:loopy");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("libx.so");
+    std::fs::copy(&real, &path).unwrap();
+    let mut input = Vec::new();
+    write_frame(&mut input, &serde_json::to_vec(&csharp_init()).unwrap()).unwrap();
+    let mut out = Vec::new();
+    let swap = || {
+        let tmp = dir.path().join("swap");
+        std::fs::copy(&other, &tmp).unwrap();
+        std::fs::rename(&tmp, &path).unwrap();
+    };
+    let code = serve_with(&path, "c-sharp", &sha, &mut &input[..], &mut out, &swap);
+    assert_eq!(code, 0, "the swapped file was loaded, not the hashed one");
+    let first = read_frame(&mut &out[..], 1 << 20).unwrap().unwrap();
+    assert!(matches!(
+        serde_json::from_slice::<Reply>(&first).unwrap(),
+        Reply::Ready { .. }
+    ));
+}

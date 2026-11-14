@@ -478,5 +478,20 @@ pub fn read(bytes: &[u8]) -> Result<Manifest, PackError> {
             message: format!("format {} is not one this drgnx reads ({SCHEMA})", m.schema),
         });
     }
+    // files of the pack's own folder: every reader (Hrafn's loader, the worker's launcher) reads them under it
+    if let Some(h) = &m.hrafn {
+        for (key, v) in [("chunks", &h.chunks), ("tags", &h.tags)] {
+            if let Some(p) = v
+                && !crate::check::safe_rel(p)
+            {
+                return Err(PackError {
+                    path: Some(format!("hrafn.{key}")),
+                    message: format!(
+                        "{p:?} is not a path inside the pack's folder (no absolute path, no `..`)"
+                    ),
+                });
+            }
+        }
+    }
     Ok(m)
 }

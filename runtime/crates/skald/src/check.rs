@@ -189,10 +189,11 @@ fn hex(s: &str, n: usize) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-fn safe_rel(s: &str) -> bool {
+/// Whether S names a file inside the folder it is read from: relative, no `..`, no empty part, no NUL or backslash.
+pub(crate) fn safe_rel(s: &str) -> bool {
     !s.is_empty()
         && !s.starts_with('/')
-        && !s.contains('\\')
+        && !s.contains(['\\', '\0'])
         && s.split('/').all(|c| !c.is_empty() && c != "..")
 }
 
