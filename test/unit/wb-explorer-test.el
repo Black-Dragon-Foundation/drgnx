@@ -40,12 +40,18 @@
          (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
          (delete-directory ,root t)))))
 
-(defun drgnx-explorer-test--pause (secs)
-  "Let timers and queued file-notify events run for SECS (a window in which something must not happen)."
-  (let ((end (+ (drgnx-test-wait-now) secs)))
-    (while (< (drgnx-test-wait-now) end)
-      (drgnx-run-ert-drain-events)
-      (drgnx-test-pause 0.05 "a window: what may not happen in it, the caller asserts"))))
+(defun drgnx-explorer-test--barrier ()
+  "Wait until every file-notify event queued before this call has been delivered.  The kernel's events of one inotify
+instance come in order, so a watch of a directory of our own, a file written in it after the actions under test, and
+the wait for that watch's event settle every earlier one: what \"nothing may happen\" means is then decided, with no
+time passed."
+  (let* ((dir (make-temp-file "drgnx-explorer-barrier" t)) (seen nil)
+         (watch (file-notify-add-watch dir '(change) (lambda (_event) (setq seen t)))))
+    (unwind-protect
+        (progn (write-region "" nil (expand-file-name "b" dir) nil 'silent)
+               (drgnx-test-wait (lambda () (drgnx-run-ert-drain-events) seen) :what "the file-notify barrier's event"))
+      (file-notify-rm-watch watch)
+      (delete-directory dir t))))
 
 (defun drgnx-explorer-test--rows ()
   "The Explorer's rows as (DEPTH NAME) lists."
@@ -696,7 +702,7 @@
       (drgnx-explorer-toggle-at (drgnx-explorer-test--goto "docs"))
       (delete-directory docs t)
       (make-directory docs)                            ; rm -rf docs && mkdir docs
-      (drgnx-explorer-test--pause 2)
+      (drgnx-explorer-test--barrier)
       (write-region "" nil (expand-file-name "fresh.txt" docs) nil 'silent)
       (drgnx-test-wait (lambda () (drgnx-run-ert-drain-events) (member '(2 "fresh.txt") (drgnx-explorer-test--rows))) :secs 3 :what "the new file in the tree"))))
 
@@ -749,7 +755,7 @@
     (let ((drgnx-explorer--relists 0) (drgnx-explorer--renders 0))
       (drgnx-explorer-toggle-at (drgnx-explorer-test--goto "docs"))
       (drgnx-explorer-toggle-at (drgnx-explorer-test--goto "docs"))
-      (drgnx-explorer-test--pause 0.5)
+      (drgnx-explorer-test--barrier)
       (should (= drgnx-explorer--relists 0))
       (should (= drgnx-explorer--renders 0)))))
 

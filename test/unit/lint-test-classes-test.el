@@ -387,10 +387,19 @@ a test reaches by a call: a command a test binds to a key is named by `function'
   (should-not (drgnx-lint-classes--violations :cond #'drgnx-lint-classes--rule-cond))
   (should-not (drgnx-lint-classes--gui-pauses)))
 
+(defun drgnx-lint-classes--timing-form-p (form)
+  "Whether FORM (an `ert-deftest' or a file's own `...-deftest' macro) carries the :timing tag."
+  (and (symbolp (car-safe form)) (string-suffix-p "deftest" (symbol-name (car form)))
+       (let ((tags (cadr (memq :tags form))))
+         (when (eq (car-safe tags) 'quote) (setq tags (cadr tags)))
+         (memq :timing tags))))
+
 (defun drgnx-lint-classes--pause-files ()
   "The live test files (relative names) that call `drgnx-test-pause' outside `drgnx-test-with-clock', anywhere in them."
   (seq-filter (lambda (rel)
-                (seq-some (lambda (form) (memq 'drgnx-test-pause (drgnx-lint-classes--calls form)))
+                (seq-some (lambda (form) (and (memq 'drgnx-test-pause (drgnx-lint-classes--calls form))
+                                              ;; a :timing test measures real time by its tag: the perf lane's, not a unit test's
+                                              (not (drgnx-lint-classes--timing-form-p form))))
                           (drgnx-lint-classes--forms (expand-file-name rel drgnx-dir))))
               (drgnx-lint-classes--files)))
 

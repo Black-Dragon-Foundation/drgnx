@@ -35,6 +35,7 @@
     (string-to-number (match-string 1))))
 
 (ert-deftest drgnx-live/a-daemon-brings-the-hub-up-and-the-nightly-copy-runs ()
+  :tags '(:timing)                ; a CPU budget over a real 20 s window: the perf lane's kind of row
   (let* ((rbin (or (drgnx-test-ratatoskr-bin) (ert-skip "DRGNX_RATATOSKR_BIN is not set")))
          (root (file-name-as-directory (make-temp-file "drgnx-hub-daemon" t)))
          (process-environment (cons (concat "DRGNX_UI_STATE=" root "ui") process-environment))
