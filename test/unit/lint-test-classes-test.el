@@ -653,7 +653,8 @@ a test reaches by a call: a command a test binds to a key is named by `function'
 
 (ert-deftest drgnx-run-ert/the-audit-records-a-real-sleep-and-ignores-the-clock ()
   (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
-  (let ((drgnx-run-ert--audit-seen nil) (drgnx-run-ert--audit-file nil) (inhibit-message t))
+  (let ((drgnx-run-ert--audit-seen nil) (drgnx-run-ert--audit-file nil) (inhibit-message t)
+        (drgnx-run-ert--audit-only nil))   ; this test is `cond': the audit of its own run restricts nothing here
     (unwind-protect
         (progn
           (drgnx-run-ert--audit-advise)
@@ -698,7 +699,7 @@ a test reaches by a call: a command a test binds to a key is named by `function'
   (let* ((file (drgnx-lint-classes-test--tmp ";; test-class: det"
                                              '(ert-deftest x/sleeps () (sleep-for 0.01) (should t))
                                              '(ert-deftest x/quiet () (should t))
-                                             '(ert-deftest x/own-tag-is-cond () :tags '(:cond) (sleep-for 0.01) (should t))))
+                                             '(ert-deftest x/own-tag-is-cond () :tags '(:cond) (accept-process-output nil 0.01) (should t))))
          (dir (file-name-directory file)) (results (expand-file-name "r.json" dir))
          (run (lambda (&rest env)
                 (let ((process-environment (append env (list (concat "DRGNX_TEST_RESULTS=" results)
@@ -715,6 +716,32 @@ a test reaches by a call: a command a test binds to a key is named by `function'
     (let ((j (funcall json)))
       (should (equal 1 (plist-get j :failed)))
       (should (equal "x/sleeps" (plist-get (aref (plist-get j :failures) 0) :name))))
+    (should (eql 0 (funcall run "DRGNX_TEST_AUDIT=1")))
+    (should (eql 0 (funcall run)))))
+
+(ert-deftest drgnx-run-ert/an-audited-run-fails-a-cond-test-that-sleeps-but-not-one-that-waits-for-events ()
+  ;; a cond test may wait for an event and start a process, never sleep on time: sleep-for and sit-for fail it
+  (let* ((file (drgnx-lint-classes-test--tmp ";; test-class: cond"
+                                             '(ert-deftest x/sleeps () (sleep-for 0.01) (should t))
+                                             '(ert-deftest x/sits () (sit-for 0.01) (should t))
+                                             '(ert-deftest x/waits () (accept-process-output nil 0.01) (should t))
+                                             '(ert-deftest x/runs-a-child () (should (eql 0 (call-process "true"))))))
+         (dir (file-name-directory file)) (results (expand-file-name "r.json" dir))
+         (run (lambda (&rest env)
+                (let ((process-environment (append env (list (concat "DRGNX_TEST_RESULTS=" results)
+                                                             "DRGNX_TEST_SELECTOR" "DRGNX_TEST_SHUFFLE" "DRGNX_TEST_RERUN"
+                                                             "DRGNX_TEST_LEAKS" "DRGNX_TEST_AUDIT" "DRGNX_TEST_AUDIT_FAIL"
+                                                             "DRGNX_TEST_AUDIT_ALL")
+                                                   process-environment)))
+                  (call-process (expand-file-name invocation-name invocation-directory) nil nil nil
+                                "--batch" "-Q" "-L" (file-name-directory (locate-library "run-ert.el"))
+                                "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-batch" dir))))
+         (json (lambda () (json-parse-string (with-temp-buffer (insert-file-contents results) (buffer-string))
+                                             :object-type 'plist))))
+    (should-not (eql 0 (funcall run "DRGNX_TEST_AUDIT=1" "DRGNX_TEST_AUDIT_FAIL=1")))
+    (let ((j (funcall json)))
+      (should (equal '("x/sits" "x/sleeps")
+                     (sort (mapcar (lambda (f) (plist-get f :name)) (plist-get j :failures)) #'string<))))
     (should (eql 0 (funcall run "DRGNX_TEST_AUDIT=1")))
     (should (eql 0 (funcall run)))))
 
