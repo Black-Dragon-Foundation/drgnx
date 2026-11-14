@@ -253,25 +253,43 @@ pub fn sweep(folder: &Path, live: &[PathBuf]) -> usize {
     gone
 }
 
+/// Whether a kernelspec's folder or file may be trusted: ours or root's, and not writable by group or others (anyone who can write
+/// it chooses the command a notebook runs).
+fn trusted(m: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    // SAFETY: geteuid has no preconditions.
+    let me = unsafe { libc::geteuid() };
+    (m.uid() == me || m.uid() == 0) && m.mode() & 0o022 == 0
+}
+
 /// One kernelspec folder, or None if it is not a valid one.
 fn read_spec(dir: &Path, name: &str) -> Option<Kernelspec> {
     use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
     let valid_name = !name.starts_with('.')
         && name
             .bytes()
             .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c));
-    if !valid_name || !std::fs::metadata(dir).ok()?.is_dir() {
+    if !valid_name {
+        return None;
+    }
+    let dm = std::fs::metadata(dir).ok()?;
+    if !dm.is_dir() || !trusted(&dm) {
         return None;
     }
     let file = dir.join("kernel.json");
-    // not through a link: a kernelspec is what is in its own folder
-    let meta = std::fs::symlink_metadata(&file).ok()?;
-    if !meta.is_file() || meta.len() > MAX_SPEC_BYTES {
+    // not through a link, and a FIFO swapped in after a check never blocks: open first, then look at what was opened
+    let mut f = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(&file)
+        .ok()?;
+    let meta = f.metadata().ok()?;
+    if !meta.is_file() || meta.len() > MAX_SPEC_BYTES || !trusted(&meta) {
         return None;
     }
     let mut text = Vec::new();
-    std::fs::File::open(&file)
-        .ok()?
+    (&mut f)
         .take(MAX_SPEC_BYTES + 1)
         .read_to_end(&mut text)
         .ok()?;

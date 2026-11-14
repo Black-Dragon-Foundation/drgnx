@@ -268,3 +268,38 @@ fn the_sweep_removes_only_connection_files_of_kernels_that_are_gone() {
     assert_eq!(sweep(&folder, std::slice::from_ref(&live.path)), 1);
     assert!(live.path.exists() && !dead.exists() && other.exists() && dir.exists());
 }
+
+#[test]
+fn a_kernelspec_writable_by_others_is_not_trusted_and_a_fifo_for_kernel_json_is_not_waited_on() {
+    let t = tempfile::tempdir().unwrap();
+    let d = t.path();
+    put(d, "ok", PY);
+    put(d, "dir-open", PY);
+    fs::set_permissions(d.join("dir-open"), fs::Permissions::from_mode(0o777)).unwrap();
+    put(d, "file-open", PY);
+    fs::set_permissions(
+        d.join("file-open/kernel.json"),
+        fs::Permissions::from_mode(0o666),
+    )
+    .unwrap();
+    put(d, "group-open", PY);
+    fs::set_permissions(
+        d.join("group-open/kernel.json"),
+        fs::Permissions::from_mode(0o664),
+    )
+    .unwrap();
+    fs::create_dir_all(d.join("fifo")).unwrap();
+    rustix::fs::mknodat(
+        rustix::fs::CWD,
+        d.join("fifo/kernel.json"),
+        rustix::fs::FileType::Fifo,
+        rustix::fs::Mode::from_raw_mode(0o600),
+        0,
+    )
+    .unwrap();
+    let names: Vec<_> = discover(&[d.to_path_buf()])
+        .into_iter()
+        .map(|s| s.name)
+        .collect();
+    assert_eq!(names, ["ok"]);
+}
