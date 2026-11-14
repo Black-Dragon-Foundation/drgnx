@@ -1727,6 +1727,7 @@ result is (`event(NAME).check`):
 |---|---|---|
 | `agent` | sessions | `{id, seq, session: Snapshot}` |
 | `agent-entries` | sessions | `{id, seq, entries: [[index, Entry]]}` |
+| `agents-attention` | sessions (derived from their snapshots: `agents::attention`) | `{at_work, items: [{kind: "permission", session, id, text, job}]}`: how many sessions run a turn or wait on a permission, and one item per pending permission with the text the editor shows; sent to every subscriber when either changes (not per chunk), and to a connection that subscribes while one is non-empty |
 | `events` | the event log (the front's writer: [Events](#events)) | `{since, last, events: [{id, at, agent, job, task, kind, summary, data?}]}` |
 | `lease-released` | the hub's housekeeping | `{task, agent, job}` |
 | `fallback` | the gateway (the front), jobs (the backend) | `{agent, from, to, why}`, from a job with `job` and `task` too |
