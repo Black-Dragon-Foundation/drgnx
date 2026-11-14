@@ -58,21 +58,47 @@ fn pin_hub() {
     crate::idle::pin_exe_for_test(std::fs::canonicalize(&hub).unwrap());
 }
 
-/// A tools folder as Debug: Install Adapter makes it: `venv/` with debugpy, `js-debug/`.
+/// A tools folder as Debug: Install Adapter makes it: `venv/` with debugpy, `js-debug/`. The venv is a real one
+/// (`pyvenv.cfg`, `lib/pythonX.Y/site-packages`) over the interpreter DRGNX_DEBUG_LIVE_PYTHON runs on, whether that
+/// is a system python with debugpy installed or a venv of its own (the CI lane's): a symlink to a venv's python
+/// would not find the venv it names, since python looks for `pyvenv.cfg` beside the path it was started by, and
+/// debugpy is copied in.
 fn tools(at: &Path) -> PathBuf {
     let python = std::env::var("DRGNX_DEBUG_LIVE_PYTHON").unwrap_or_else(|_| "python3".into());
     let out = std::process::Command::new(&python)
-        .args(["-c", "import debugpy, os, sys; print(os.path.dirname(debugpy.__file__)); print(sys.executable)"])
+        .args([
+            "-c",
+            "import debugpy, os, sys; print(os.path.dirname(debugpy.__file__)); print(os.path.realpath(sys.executable)); print('python%d.%d' % sys.version_info[:2])",
+        ])
         .output()
         .unwrap();
     let text = String::from_utf8(out.stdout).unwrap();
     let mut lines = text.lines();
-    let (pkg, exe) = (lines.next().unwrap(), lines.next().unwrap());
+    let (pkg, exe, ver) = (
+        lines.next().unwrap(),
+        lines.next().unwrap(),
+        lines.next().unwrap(),
+    );
     let t = at.join("tools");
+    let site = t.join(format!("venv/lib/{ver}/site-packages"));
     std::fs::create_dir_all(t.join("venv/bin")).unwrap();
-    std::fs::create_dir_all(t.join("venv/lib/python3/site-packages")).unwrap();
+    std::fs::create_dir_all(&site).unwrap();
+    std::fs::write(
+        t.join("venv/pyvenv.cfg"),
+        format!(
+            "home = {}\ninclude-system-site-packages = false\n",
+            Path::new(exe).parent().unwrap().display()
+        ),
+    )
+    .unwrap();
     std::os::unix::fs::symlink(exe, t.join("venv/bin/python3")).unwrap();
-    std::os::unix::fs::symlink(pkg, t.join("venv/lib/python3/site-packages/debugpy")).unwrap();
+    // copied, not linked: the fork's sandbox binds the venv, and a link out of it (to a venv elsewhere) dangles there
+    let copied = std::process::Command::new("cp")
+        .args(["-r", pkg])
+        .arg(&site)
+        .status()
+        .unwrap();
+    assert!(copied.success(), "cp -r {pkg} {}", site.display());
     let js = std::env::var("DRGNX_DEBUG_LIVE_JS_DEBUG")
         .unwrap_or_else(|_| "/opt/js-debug/src/dapDebugServer.js".into());
     let release = Path::new(&js).parent().unwrap().parent().unwrap();

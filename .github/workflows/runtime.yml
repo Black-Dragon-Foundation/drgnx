@@ -508,6 +508,11 @@ jobs:
           vm=$(cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks --test browser_sandboxed -- --list --format terse --ignored | sed -n 's/: test$//p')
           [ -n "$vm" ] || { echo "browser_sandboxed lists no rows" >&2; exit 1; }
           skips="$skips$(printf '%s\n' "$vm" | awk '{ printf " --skip %s", $1 }')"
+          # the debug rows that need the adapter image, not this runner: tests_live_adapters runs delve, CodeLLDB and
+          # lldb-dap; tests_blocked_live asserts that every TCP listener in the network namespace is in its port
+          # block, which a shared runner's (sccache's server, the runner's own services) never are. tests_fork_live,
+          # the Python and JS forks in the sandbox, runs here against the adapters installed above
+          skips="$skips --skip debug::tests_live_adapters --skip debug::tests_blocked_live"
           cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks -- --ignored --test-threads 1 $skips
       # The agent browser's rows where they can run: a Fedora 45 VM on the x64 runners (Linux 7.1 or later, Landlock ABI 9
       # or later, as the Fedora hosts drgnx supports have), booted under QEMU with KVM by .github/ci/browser-vm.sh, with

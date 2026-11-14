@@ -628,12 +628,17 @@ hub clock's module (`drgnx-ratatoskr/src/clock*`).
 On Linux, running a file that any process holds open for writing fails with ETXTBSY ("Text file busy"). A child that
 another thread forks copies the whole file table, the write descriptor included, and holds it until its own `exec`; so
 a script written (or a binary copied) and then run at once fails now and then while other threads fork (every test
-binary's other tests do). A rename keeps the same file and does not help, and a lock helps only against forks that take
-it. `crates/drgnx-exe` is the one way the runtime does it: `drgnx_exe::write(path, contents)` (mode 0755),
+binary's other tests do). A rename keeps the same file and does not help. `crates/drgnx-exe` is the one way the runtime does it: `drgnx_exe::write(path, contents)` (mode 0755),
 `drgnx_exe::copy(from, to)`, or any writing inside `drgnx_exe::private_fds(|| …)`: a thread of its own with its own
 file table (`unshare(CLONE_FILES)`), which no other fork copies. That table starts as a copy, so the thread closes every
 descriptor but 0, 1 and 2 first (a pipe another thread closes meanwhile still ends at once); the closure opens what it
-uses itself. Elsewhere than Linux the closure runs in place. The hub uses it for the browser it unpacks and the
+uses itself. Elsewhere than Linux the closure runs in place. Where `unshare` is refused (Docker's default seccomp profile answers
+EPERM; devcontainers and CI containers run under it) the crate falls back to a process-wide lock instead
+(`drgnx_exe::mode()` says which: `private-table`, `lock` or `direct`; `ratatoskr doctor` prints it as `exe_mode`; `DRGNX_EXE_MODE=lock` forces the lock where `unshare` works, to run a suite as Docker's default profile would): every
+write holds it shared while its descriptor is open, and every spawn wrapped in `drgnx_exe::spawn(|| cmd.spawn())` holds
+it exclusively from fork to exec, so no such child holds a write descriptor. draugr's spawn, which starts every job, is
+wrapped; a raw `Command::spawn` elsewhere is outside the lock (the guarantee holds against the spawns that take it).
+The hub uses it for the browser it unpacks and the
 `drgnx-key` it copies into a container job's folder, the runner for its job's `drgnx-key` copy, domr for the hub copies
 and scripts its scenarios run, the escape harness for its probe's copy, and the tests for every stand-in script they run.
 

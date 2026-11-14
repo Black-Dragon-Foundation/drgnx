@@ -4,7 +4,7 @@
 //! `{binary: {path, commit, test_hooks}, running: {commit, pid}?, gateway: {port, registrations, providers, keys_held,
 //! warnings, keys_refused?}?, store: {schema, writer, failed, denied_in}?, watch: {max_user_watches?, projects: [{root, watched, error?}]}?,
 //! socket_dir: {path, mode, ok}, sqlite,
-//! job_agents, sandbox: {backend, version, ok, reason, fix, landlock_abi, in_use, pins_note}, legacy: {moved, left, at,
+//! job_agents, exe_mode (`private-table`, `lock` or `direct`: how a file written and run is kept from ETXTBSY), sandbox: {backend, version, ok, reason, fix, landlock_abi, in_use, pins_note}, legacy: {moved, left, at,
 //! lisp_processes: [{pid, what}]}}`.  `legacy` is what the Lisp runtime left (`crate::legacy`): what the first start
 //! moved to `<state>/hub/migrated-p7/`, what stays (a command job still running), and the user's processes that are
 //! still the Lisp hub or its coordination server.  `store` is the running hub's
@@ -133,6 +133,7 @@ pub fn report(env: &Env, binary: &Path, running: Option<Running>, sandbox: &Chec
         "sqlite": crate::version::sqlite(),
         "sqlite_wal_fixed": urdr::wal_reset_fixed(urdr::sqlite_version_number()),
         "job_agents": JOB_AGENTS,
+        "exe_mode": drgnx_exe::mode().name(),
         "sandbox": sandbox_section(sandbox),
         "legacy": crate::legacy::section(env),
     });
@@ -695,6 +696,19 @@ pub fn doctor(env: &Env, json_out: bool) -> i32 {
     0
 }
 
+/// What `exe_mode` means to a reader: how a file the hub writes and then runs is kept from ETXTBSY.
+fn exe_mode_line(mode: &Value) -> String {
+    match mode.as_str() {
+        Some("private-table") => "a private file table per write".into(),
+        Some("lock") => {
+            "a process-wide lock (this system refuses unshare, as Docker's default profile does)"
+                .into()
+        }
+        Some("direct") => "plain writes (no ETXTBSY here)".into(),
+        _ => "?".into(),
+    }
+}
+
 /// The lines `doctor` prints without `--json`.
 fn text(v: &Value, sandbox: &Check) -> String {
     let t = |p: &Value| p.as_str().unwrap_or("?").to_string();
@@ -727,6 +741,10 @@ fn text(v: &Value, sandbox: &Check) -> String {
         }
     ));
     out.push_str(&format!("\njob agents: {}", t(&v["job_agents"])));
+    out.push_str(&format!(
+        "\nfiles run after writing: {}",
+        exe_mode_line(&v["exe_mode"])
+    ));
     out.push_str(&format!("\n{}", sandbox_line(sandbox)));
     out.push_str(&format!("\nagent browser: {}", t(&v["browser"]["verdict"])));
     out.push_str(&format!(
@@ -853,6 +871,10 @@ mod tests {
         assert_eq!(v["sqlite_wal_fixed"], true);
         assert!(text(&v, &working()).contains("WAL-reset bug fixed"));
         assert_eq!(v["job_agents"], JOB_AGENTS);
+        // which way a file the hub writes and runs is kept from ETXTBSY: the probe's answer, in both forms
+        assert_eq!(v["exe_mode"], drgnx_exe::mode().name());
+        assert!(text(&v, &working()).contains("files run after writing: "));
+        assert!(!text(&v, &working()).contains("writing: ?"));
         for k in ["moved", "left", "lisp_processes"] {
             assert!(v["legacy"][k].is_array(), "legacy.{k}");
         }

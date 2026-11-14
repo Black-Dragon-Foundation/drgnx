@@ -11,8 +11,8 @@ publish = false
 eitri = { path = "../eitri", version = "0.1.0" }
 tokio.workspace = true
 libc.workspace = true
+drgnx-exe = { path = "../drgnx-exe", version = "0.1.0" }  # every spawn goes through its lock where unshare is refused (ETXTBSY)
 
 [dev-dependencies]
-drgnx-exe = { path = "../drgnx-exe", version = "0.1.0" }  # stand-in scripts written and run, never busy (ETXTBSY)
 skuld = { path = "../skuld", version = "0.1.0" }
 tempfile.workspace = true

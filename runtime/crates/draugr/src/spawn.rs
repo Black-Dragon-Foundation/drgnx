@@ -191,7 +191,8 @@ fn start(spec: Spec) -> io::Result<Child> {
             child_fds(&pairs)
         });
     }
-    let spawned = cmd.spawn();
+    // under drgnx-exe's lock where unshare is refused: a file written meanwhile is never held open by this fork
+    let spawned = drgnx_exe::spawn(|| cmd.spawn());
     drop(moved);
     drop(spec);
     let mut inner = spawned?;
