@@ -435,40 +435,31 @@ unanswered, and panel \"s1\" as `buf'."
 
 ;;;; Task 39a: a paired chat's hunks
 
-(defun drgnx-agent-panel-test--paired (buf hunks)
-  "Make BUF a paired chat in /w whose `history/op/hunks' answer is HUNKS; the ledger is open and drawn."
+(defun drgnx-agent-panel-test--paired (buf)
+  "Make BUF a paired chat in /w whose open ledger (the hub's card) shows a hunk line: its text carries the hunk
+\(`drgnx-agent-panel-op-hunk': op, path, index) Reject acts on; point is on it."
   (with-current-buffer buf
     (drgnx-agent-panel--take-snapshot (list :id "s1" :name "Pair" :status "idle" :paired t :cwd "/w"))
-    (let (asked cb)
-      (cl-letf (((symbol-function 'drgnx-hub-call)
-                 (lambda (method params callback &rest _) (push (cons method params) asked) (when (equal method "history/op/hunks") (setq cb callback)) 1)))
-        (drgnx-agent-panel-cards-load buf)
-        (funcall cb (list :hunks (vconcat hunks)) nil))
-      (drgnx-agent-panel-ledger)
-      (nreverse asked))))
+    (let ((inhibit-read-only t))
+      (erase-buffer)
+      (insert (propertize " a.el  3–4" 'drgnx-agent-panel-op-hunk (list 7 "a.el" 0)))
+      (goto-char (point-min)))))
 
-(defconst drgnx-agent-panel-test--hunks
-  (list (list :op 7 :path "a.el" :index 0 :start_line 3 :end_line 4 :text "new" :deleted "old" :state "live" :undone_by [])
-        (list :op 8 :path "b.el" :index 0 :start_line 1 :end_line 1 :text "x" :deleted "" :state "undone"
-              :undone_by [(list :op 12 :author (list :kind "user"))])))
-
-(ert-deftest drgnx-agent-panel/a-paired-chats-ledger-lists-its-hunks ()
+(ert-deftest drgnx-agent-panel/a-paired-chat-loads-no-worktree-diffs ()
+  "A paired chat has no `work/hunks': its ledger is the hub's card, read from the user's history there."
   (drgnx-agent-panel-test--with
-    (let ((asked (drgnx-agent-panel-test--paired buf drgnx-agent-panel-test--hunks)))
-      ;; the chat's own ledger comes from the user's history, filtered to its session; there is no work/hunks
-      (should (equal (cdr (assoc "history/op/hunks" asked)) '(:worktree "/w" :session "s1")))
-      (should-not (assoc "work/hunks" asked))
-      (let ((lines (split-string (drgnx-agent-panel-test--text buf) "\n")))
-        (should (string-match-p "a\\.el.*3" (seq-find (lambda (l) (string-match-p "a\\.el" l)) lines)))
-        (should-not (string-match-p "undone" (seq-find (lambda (l) (string-match-p "a\\.el" l)) lines)))
-        (should (string-match-p "undone by you" (seq-find (lambda (l) (string-match-p "b\\.el" l)) lines)))))))
+    (with-current-buffer buf
+      (drgnx-agent-panel--take-snapshot (list :id "s1" :name "Pair" :status "idle" :paired t :cwd "/w"))
+      (let (asked)
+        (cl-letf (((symbol-function 'drgnx-hub-call)
+                   (lambda (method params _cb &rest _) (push (cons method params) asked) 1)))
+          (drgnx-agent-panel-cards-load buf))
+        (should-not asked)))))
 
 (ert-deftest drgnx-agent-panel/reject-on-a-paired-hunk-reverts-that-operation ()
   (drgnx-agent-panel-test--with
-    (drgnx-agent-panel-test--paired buf drgnx-agent-panel-test--hunks)
+    (drgnx-agent-panel-test--paired buf)
     (with-current-buffer buf
-      (drgnx-agent-panel-test--text buf)
-      (goto-char (point-min)) (search-forward "a.el")
       (let (asked)
         (cl-letf (((symbol-function 'drgnx-hub-call)
                    (lambda (method params _cb &rest _) (push (cons method params) asked) 1)))
@@ -477,10 +468,8 @@ unanswered, and panel \"s1\" as `buf'."
 
 (ert-deftest drgnx-agent-panel/an-in-buffer-hunk-revert-keeps-later-typing ()
   (drgnx-agent-panel-test--with
-    (drgnx-agent-panel-test--paired buf drgnx-agent-panel-test--hunks)
+    (drgnx-agent-panel-test--paired buf)
     (with-current-buffer buf
-      (drgnx-agent-panel-test--text buf)
-      (goto-char (point-min)) (search-forward "a.el")
       (let ((file (generate-new-buffer " *hunk-file*")) cb)
         (unwind-protect
             (progn

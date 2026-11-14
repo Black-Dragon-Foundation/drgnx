@@ -1315,7 +1315,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `agents/list` | user, agent, service | `{}` | `{sessions?: [Snapshot]}` | no |
 | `agents/move` | user | `{id: Id, profile: string}` | `{id: string, name: string}` | yes |
 | `agents/pair` | user | `{id: Id, on: boolean}` | `boolean` | no |
-| `agents/panel/look` | user | `{lens?: [string], lens_on?: natnum, older?: boolean, open?: [string], rows?: [[natnum, boolean]], view: string}` | `boolean` | no |
+| `agents/panel/look` | user | `{ledger_open?: boolean, lens?: [string], lens_on?: natnum, older?: boolean, open?: [string], pins?: [string], rows?: [[natnum, boolean]], view: string}` | `boolean` | no |
 | `agents/pause` | user | `{id: Id}` | `boolean` | yes |
 | `agents/permission` | user | `{id: Id, option?: string, request: RequestId}` | `boolean` | yes |
 | `agents/presence/get` | user | `{file: string}` | `{entries?: [PresenceEntry], file: string, rel?: string, repo?: string}` | no |
@@ -2936,6 +2936,16 @@ only what changed. The lens is the editor's: `agents/panel/look` carries `lens` 
 in force, from 1, 0 none). A clickable part has the `drgnx-agent-panel-action` property (`lens:N`, `pin`, `more`) or
 `drgnx-agent-panel-chip` (`context`, `cost`, `mode`); the editor's `agents-panel-act` (a click) and `agents-panel-press`
 (a press keeps point) read them. The editor puts the rows whose key starts with `p:` above its own rows.
+
+**The cards (offload step F1, cards).** The pinned cards (`p:pinN:0`), the agent's to-do list (`p:todo:N`) and the edits
+ledger (`p:ledger:N`) are the hub's rows too (`view/panel_cards.rs`), each a card in the card faces to the right edge less
+12 px. The state split: what is pinned (the cards' texts, oldest first), whether the ledger is open and the ledger's mark
+are per-(connection, view) user state in the hub's `Chosen`; the editor sends `pins` and `ledger_open` in
+`agents/panel/look`, and the hub sets the mark to the entry count less one when the ledger opens. The plan comes from the
+session; the ledger's files and a paired chat's hunks the hub reads itself (`work/files`, `history/op/hunks`) when the
+count of finished edits changes. A card's buttons are `card:*` values of `drgnx-agent-panel-action`, which the editor's
+click dispatcher (`drgnx-agent-panel-act`) answers by calling the existing command. The hub orders every row of the
+panel; the editor inserts them in that order.
 
 The transcript of an agent session, as rows the panel only inserts (`runtime/crates/drgnx-ratatoskr/src/view/panel.rs`;
 the rows themselves are `agents/session/rows.rs`, pure).

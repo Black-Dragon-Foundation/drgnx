@@ -677,6 +677,12 @@ pub struct PanelLook {
     /// The preset in force, from 1 (0: none).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lens_on: Option<u32>,
+    /// The pinned cards' texts, oldest first: each is a card under the strip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pins: Option<Vec<Bounded<String, 512>>>,
+    /// Whether the edits ledger lists its files; opening it sets the mark the "new since you looked" counts from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ledger_open: Option<bool>,
 }
 
 /// The change number a subscription to a session's entries continues from.
