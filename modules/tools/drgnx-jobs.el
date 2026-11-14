@@ -118,6 +118,8 @@ one \"needs you\" count's, and the running ones the `jobs' segment's.  The recou
   "Count again within a second (once, however many events)."
   (drgnx-timer-soon 'jobs-recount 1 #'drgnx-jobs--recount :owner 'tools/jobs))
 
+(put 'drgnx-jobs--event 'hub-events-taken '("job" "card"))
+
 (defun drgnx-jobs--event (event _data)
   "`drgnx-hub-event-functions' (while the attention mode is on): a job or a card changed — count again.  A new card
 reaches the desktop through the set's `:added' ids (the notice routes), not from here."

@@ -583,6 +583,8 @@ buffer's changes handed over first); no line is counted unless the hub cannot an
                       (when (and result (not error) (buffer-live-p buffer))
                         (with-current-buffer buffer (drgnx-debug-gutter--apply result)))))))
 
+(put 'drgnx-debug-gutter--event 'hub-events-taken '("debug-breakpoints" "debug-state"))
+
 (defun drgnx-debug-gutter--event (event data)
   "`drgnx-hub-event-functions': a file's breakpoints changed (`debug-breakpoints'), or the sessions did."
   (pcase event

@@ -485,6 +485,8 @@ running is overtaken by the hub: the newer read wins."
   (drgnx-notify 'wb 'warn (format "git status of %s: %s" (abbreviate-file-name root) message)
                 :id (list 'git-letters-error root)))
 
+(put 'drgnx-git--hub-event 'hub-events-taken '("git-letters-error" "view-patch"))
+
 (defun drgnx-git--hub-event (event data)
   "`drgnx-hub-event-functions': after a patch of a letters view (the view's own handler ran first), the panels
 read the status again."

@@ -326,6 +326,8 @@ command, and never by an event."
 
 ;;;; Events
 
+(put 'drgnx-say-event 'hub-events-taken '("say-proposal" "say-message" "say-failed"))
+
 (defun drgnx-say-event (event params)
   "`drgnx-hub-event-functions': a proposal, a question or a failure of the planning is a notice from a hub that proved
 itself.  Nothing asks, nothing waits: the notice carries the command that does."

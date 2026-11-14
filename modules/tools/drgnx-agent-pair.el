@@ -589,6 +589,8 @@ no normal buffer has is `not-open' (the hub reads the disk)."
                          (and v (list :version v))))))
          (list :req req :error "not-open"))))))
 
+(put 'drgnx-agent-pair--event 'hub-events-taken '("pair-apply" "pair-read" "pair-drop" "pair-reconcile" "agent"))
+
 (defun drgnx-agent-pair--event (event data)
   "`drgnx-hub-event-functions': the pair door's events, from a hub that proved itself.  Each one queues, answers or
 drops; none applies or asks."

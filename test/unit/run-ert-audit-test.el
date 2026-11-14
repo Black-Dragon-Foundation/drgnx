@@ -11,7 +11,7 @@
 (defconst drgnx-run-ert-audit-test--stubs
   '((defvar drgnx-test-gate--active nil)
     (defvar drgnx-test-gate--releasing nil)
-    (defun drgnx-hub--client-filter (_conn _chunk) nil)
+    (defun drgnx-hub--client-batch (_conn _chunk) nil)
     (defun drgnx-hub--open (_events) nil)
     (defun drgnx-test-child-parked-p (proc) (and (process-get proc :parked) t)))
   "What a generated file defines in place of the hub client and the handshake fixture.")
@@ -49,9 +49,9 @@
 (ert-deftest drgnx-run-ert-audit/a-gated-test-that-saw-an-unreleased-line-fails ()
   (let* ((dir (drgnx-run-ert-audit-test--file
                "gated"
-               '(x/unreleased (let ((drgnx-test-gate--active t)) (drgnx-hub--client-filter nil "{}\n")) (should t))
+               '(x/unreleased (let ((drgnx-test-gate--active t)) (drgnx-hub--client-batch nil "{}\n")) (should t))
                '(x/released (let ((drgnx-test-gate--active t) (drgnx-test-gate--releasing 'call-1))
-                              (drgnx-hub--client-filter nil "{}\n"))
+                              (drgnx-hub--client-batch nil "{}\n"))
                             (should t))))
          (j (apply #'drgnx-run-ert-audit-test--run dir drgnx-run-ert-audit-test--on)))
     (should-not (eql 0 (plist-get j :exit)))
@@ -75,7 +75,7 @@
   (let* ((dir (drgnx-run-ert-audit-test--file
                "gated"
                '(x/no-gate (drgnx-hub--open nil) (should t))
-               '(x/no-gate-line (drgnx-hub--client-filter nil "{}\n") (should t))
+               '(x/no-gate-line (drgnx-hub--client-batch nil "{}\n") (should t))
                '(x/listed (drgnx-hub--open nil) (should t))
                '(x/pure (should t))))
          (exempt (expand-file-name "gate-exempt.eld" dir)))

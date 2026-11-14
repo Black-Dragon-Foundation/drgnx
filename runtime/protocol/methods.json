@@ -33501,7 +33501,7 @@
       "classes": [
         "user"
       ],
-      "doc": "an editor buffer with unsaved edits: the Search view's searches search its text in place of its file (the current search at once), or say the buffer is too large and is searched on disk; without text or large the file is searched again",
+      "doc": "an editor buffer with unsaved edits: the Search view's searches search its text in place of its file (the current search at once), the text sent or, with mirror, the edit history's mirror of the tracked buffer (false while it is behind version or no buffer is tracked), or say the buffer is too large and is searched on disk; without text, mirror or large the file is searched again",
       "name": "search/buffer",
       "params": {
         "$defs": {
@@ -33514,9 +33514,15 @@
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "description": "`search/buffer`: the editor's buffer of PATH holds unsaved edits: VIEW's searches search TEXT in place of the file\nfrom now on, and the current one takes its matches at once. A buffer over the editor's large-file threshold sends\n`large` and no text: the file is searched on disk, its header saying the buffer is open in chunks. Neither: the\nbuffer was saved or killed, and the next search reads the file again.",
+        "description": "`search/buffer`: the editor's buffer of PATH holds unsaved edits: VIEW's searches search TEXT in place of the file\nfrom now on, and the current one takes its matches at once. A buffer over the editor's large-file threshold sends\n`large` and no text: the file is searched on disk, its header saying the buffer is open in chunks. Neither: the\nbuffer was saved or killed, and the next search reads the file again. `mirror` sends no text: the hub takes the\ntext of the editor's tracked buffer from the edit history's mirror, once the mirror's version is at least `version`\n(the editor's drain counter after it handed its changes over); until then, or with no tracked buffer of the file,\nthe answer is false and nothing changes.",
         "properties": {
           "large": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "mirror": {
             "type": [
               "boolean",
               "null"
@@ -33534,6 +33540,13 @@
           "tick": {
             "default": 0,
             "description": "The buffer's `buffer-chars-modified-tick`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "version": {
+            "default": 0,
+            "description": "With `mirror`: the version the editor's changes to the buffer have reached.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"

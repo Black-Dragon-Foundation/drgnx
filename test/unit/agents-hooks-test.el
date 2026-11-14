@@ -163,20 +163,15 @@
       (kill-buffer "*agent compact preview*"))))
 
 ;; the title row's agents chip (window-dark.html `2 agents'): how many of the mirrored sessions work
-(ert-deftest drgnx-agents/at-work-counts-busy-and-waiting ()
-  "The agents at work, for the title row's chip: a mirrored session that runs a turn or waits on you counts; an idle,
-a starting or an exited one does not.  The count follows each change (`drgnx-agents--changed')."
-  (let ((drgnx-agents--sessions nil) (drgnx-agents--at-work 0) (drgnx-agents-changed-functions nil))
-    (let ((busy (drgnx-agents--make :remote "a" :id "a" :status 'busy))
-          (asks (drgnx-agents--make :remote "b" :id "b" :status 'idle :permissions (list (list :id 1))))
-          (idle (drgnx-agents--make :remote "c" :id "c" :status 'idle))
-          (gone (drgnx-agents--make :remote "d" :id "d" :status 'exited)))
-      (setq drgnx-agents--sessions (list busy asks idle gone))
-      (drgnx-agents--changed busy)
-      (should (= 2 (drgnx-agents-at-work)))
-      (setf (drgnx-agent-session-status busy) 'idle)
-      (drgnx-agents--changed busy)
-      (should (= 1 (drgnx-agents-at-work))))))
+(ert-deftest drgnx-agents/at-work-is-the-hubs-count ()
+  "The agents at work, for the title row's chip, is the count the hub sends (`agents-attention': a session that runs a
+turn or waits on you counts; an idle, a starting or an exited one does not).  Nothing counts the sessions here."
+  (let ((drgnx-agents--sessions nil) (drgnx-agents--at-work 0) (drgnx-agents-changed-functions nil)
+        (drgnx-agents-mirror--paused nil))
+    (drgnx-agents-mirror--event "agents-attention" (list :at_work 2 :items []))
+    (should (= 2 (drgnx-agents-at-work)))
+    (drgnx-agents-mirror--event "agents-attention" (list :at_work 1 :items []))
+    (should (= 1 (drgnx-agents-at-work)))))
 
 (provide 'agents-hooks-test)
 ;;; agents-hooks-test.el ends here

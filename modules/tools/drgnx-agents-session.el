@@ -27,7 +27,8 @@
 (declare-function drgnx-agent-panel-open "drgnx-agent-panel")
 (declare-function project-root "project")
 (defvar drgnx-hub--events)
-(defvar drgnx-agents--attention-seen)
+(defvar drgnx-agents--attention)
+(defvar drgnx-agents--at-work)
 
 (defun drgnx-agents-session-pick (&optional prompt)
   "A live session: the only one, else the one chosen by name."
@@ -101,7 +102,7 @@ what you typed, Ctrl+Return or `@' first)."
 notice source, so its set is emptied: what waits there cannot be answered once the commands are gone."
   (when (featurep 'drgnx-agents-mirror) (drgnx-agents-mirror-stop))
   (when (featurep 'drgnx-hub-client) (drgnx-hub-disconnect))
-  (setq drgnx-agents--attention-seen nil)
+  (setq drgnx-agents--attention nil drgnx-agents--at-work 0)
   (drgnx-notice-set 'agents nil))
 
 (drgnx-module-define 'tools/agents

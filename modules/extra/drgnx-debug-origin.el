@@ -92,6 +92,8 @@ drgnx-debug-origin-card-mode-map').")
         (insert (drgnx-debug-timeline--row-string row) "\n"))
       (goto-char (min at (point-max))))))
 
+(put 'drgnx-debug-origin--event 'hub-events-taken '("debug-origin"))
+
 (defun drgnx-debug-origin--event (event data)
   "`drgnx-hub-event-functions': the trail the card follows has a new level (`debug-origin')."
   (when (and (equal event "debug-origin") drgnx-debug-origin--id

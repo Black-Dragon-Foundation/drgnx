@@ -31,7 +31,7 @@
     ("core/drgnx-timer.el" . 1)
     ("core/drgnx-tty-fallback.el" . 1)
     ;; processes with no notice model of their own: batch entry points (their lines are their log; Rust-bound)
-    ("core/drgnx-hub-client.el" . 2)
+    ("core/drgnx-hub-client.el" . 1)
     ("core/drgnx-settings-defaults.el" . 1) ; the batch entry points' settings.el apply (hub, search CLIs, onboard)
     ("core/drgnx-record.el" . 2)        ; bin/drgnx record's batch entry point: what went wrong, and its usage line
     ;; gryphn is dead: no work on or for it

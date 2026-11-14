@@ -1,9 +1,8 @@
 ;;; hub-client-framed-test.el --- the hub client's connections framed by Nidhogg's reader, against the real Ratatoskr -*- lexical-binding: t -*-
 ;; test-class: cond
 ;; test-pattern: handshake
-;; The delivery gate replaces a connection's filter, which turns Nidhogg's framing off (docs/develop/harness.md), so no
-;; gated row can run the framed path.  This file does: `nidhogg-workers-framing' is on when the client connects, the
-;; hub is the real binary (DRGNX_RATATOSKR_BIN, skipped without it), and every wait is on what the hub announces by
+;; Every hub connection is framed by Nidhogg's reader.  The delivery gate delivers parsed lines to the client's batch
+;; function (docs/develop/harness.md); this file runs the reader itself: the hub is the real binary (DRGNX_RATATOSKR_BIN, skipped without it), and every wait is on what the hub announces by
 ;; its own answers (the subscription's, then each call's), never on a clock.
 (require 'ert)
 (require 'cl-lib)
@@ -13,14 +12,12 @@
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/ratatoskr-fixture" drgnx-dir) nil t)
 
-(defvar nidhogg-workers-framing)
 (declare-function nidhogg-process-framing "nidhogg-io.c")
 
-(defmacro drgnx-hub-client-framed-test--with (framing &rest body)
-  "BODY with Ratatoskr serving a temp root, this Emacs connected to it with `nidhogg-workers-framing' FRAMING."
-  (declare (indent 1))
+(defmacro drgnx-hub-client-framed-test--with (&rest body)
+  "BODY with Ratatoskr serving a temp root, this Emacs connected to it."
+  (declare (indent 0))
   `(let* ((root (file-name-as-directory (make-temp-file "drgnx-hf" t)))
-          (nidhogg-workers-framing ,framing)
           (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" root "config") (concat "DRGNX_DATA_DIR=" root "data")
                                              (concat "XDG_STATE_HOME=" root "state") (concat "XDG_RUNTIME_DIR=" root "run")
                                              (concat "XDG_DATA_HOME=" root "xdg-data") (concat "XDG_CONFIG_HOME=" root "xdg-config")
@@ -41,9 +38,9 @@
     (drgnx-test-wait (lambda () (= (length results) n)) :secs 30 :what "every answer of the burst")
     results))
 
-(defun drgnx-hub-client-framed-test--check (framing)
-  "Connect with FRAMING; the subscription and a burst of calls work, and the connections are framed iff FRAMING."
-  (drgnx-hub-client-framed-test--with framing
+(defun drgnx-hub-client-framed-test--check ()
+  "Connect; the subscription and a burst of calls work, and the connections are framed."
+  (drgnx-hub-client-framed-test--with
     (should drgnx-hub--events)                                  ; the subscription answered (the fixture waited)
     (should drgnx-hub--editor)                                  ; and the editor token came on a call connection
     (let ((results (drgnx-hub-client-framed-test--burst 50)))
@@ -53,25 +50,19 @@
         (should (natnump (plist-get (nth 0 r) :pid)))))
     (dolist (conn (list drgnx-hub--events drgnx-hub--client))
       (should (process-get conn :drgnx-proven))
-      (if framing
-          (should (nidhogg-process-framing conn))
-        (should-not (nidhogg-process-framing conn))))))
+      (should (nidhogg-process-framing conn)))))
 
-(ert-deftest drgnx-hub-client-framed/subscribe-and-a-burst-with-framing-on ()
+(ert-deftest drgnx-hub-client-framed/subscribe-and-a-burst ()
   (skip-unless (drgnx-test-ratatoskr-bin))
   ;; the client frames with `:raw-prefix', which came with Sjá's queue: an older nh-io refuses it and stays unframed
   (require 'nidhogg-views nil t)
   (drgnx-test-require-nidhogg (and (fboundp 'nidhogg-set-process-framing) (fboundp 'nidhogg-view-push))
                               ":raw-prefix framing (with nidhogg-view-push)")
-  (drgnx-hub-client-framed-test--check t))
+  (drgnx-hub-client-framed-test--check))
 
-(ert-deftest drgnx-hub-client-framed/subscribe-and-a-burst-with-framing-off ()
-  (skip-unless (drgnx-test-ratatoskr-bin))
-  (drgnx-hub-client-framed-test--check nil))
-
-(defun drgnx-hub-client-framed-test--sync-median (framing)
-  "Connect with FRAMING; the median in ms of 21 `drgnx-hub-call-sync' pings, after one."
-  (drgnx-hub-client-framed-test--with framing
+(defun drgnx-hub-client-framed-test--sync-median ()
+  "Connect; the median in ms of 21 `drgnx-hub-call-sync' pings, after one."
+  (drgnx-hub-client-framed-test--with
     (drgnx-hub-call-sync "ping" nil)
     (let ((times (cl-loop repeat 21
                           collect (let ((t0 (float-time)))
@@ -81,15 +72,11 @@
 
 ;; A sync call returns when its answer is read, not at the end of a fixed poll: a ping is well under a millisecond
 ;; of the hub's, so a median of 5 ms is a wait that did not end with the answer (a wait on no process ended 10 ms after the last read).
-(ert-deftest drgnx-hub-client-framed/a-sync-call-returns-with-its-answer-framed ()
+(ert-deftest drgnx-hub-client-framed/a-sync-call-returns-with-its-answer ()
   (skip-unless (drgnx-test-ratatoskr-bin))
   (require 'nidhogg-views nil t)
   (drgnx-test-require-nidhogg (and (fboundp 'nidhogg-set-process-framing) (fboundp 'nidhogg-view-push))
                               ":raw-prefix framing (with nidhogg-view-push)")
-  (should (< (drgnx-hub-client-framed-test--sync-median t) 5)))
-
-(ert-deftest drgnx-hub-client-framed/a-sync-call-returns-with-its-answer-unframed ()
-  (skip-unless (drgnx-test-ratatoskr-bin))
-  (should (< (drgnx-hub-client-framed-test--sync-median nil) 5)))
+  (should (< (drgnx-hub-client-framed-test--sync-median) 5)))
 
 ;;; hub-client-framed-test.el ends here

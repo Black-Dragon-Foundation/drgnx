@@ -1488,6 +1488,8 @@ the rows come as patches (`drgnx-explorer--find-event')."
     (drgnx-quick-open--rows-query (cdr v) query drgnx-explorer--find-limit
                                   (list :name t :exclude (vconcat drgnx-explorer-exclude-names)))))
 
+(put 'drgnx-explorer--find-event 'hub-events-taken '("view-patch"))
+
 (defun drgnx-explorer--find-event (event data)
   "A `drgnx-hub-event-functions' handler while Find runs: a Find view's patch makes its rows Find's :found, shown as
 the hub chose them, and the tree is filtered by them once input pauses."

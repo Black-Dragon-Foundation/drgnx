@@ -1311,7 +1311,7 @@ The audit also holds the patterns to their tools (`test/unit/run-ert-audit-test.
 on, the tests tagged `:gated` and `:handshake` ([Test patterns](#test-patterns)) run with these advised, again only
 while they run, and each failure names the test and carries one of these messages:
 
-- `gated test saw a hub line the gate did not release`: a line reached `drgnx-hub--client-filter` while
+- `gated test saw a hub line the gate did not release`: a line reached `drgnx-hub--client-batch` while
   `drgnx-test-gate--releasing` was nil. The gate's own connection (the barrier and the clock) has its own filter, and a
   line the gate delivers runs with the flag bound, so neither counts.
 - `gated test opened a hub connection outside the gate`: `drgnx-hub--open` ran while `drgnx-test-gate--active` was nil.
@@ -1472,12 +1472,15 @@ the client half of the `gated` pattern; the hub half is Ratatoskr's test clock a
   held the connection reads as open (`process-status`), so no close is seen before the data. The client's own
   `delete-process` runs the client's sentinel at once and drops what was held; `set-process-sentinel` and
   `process-sentinel` on a gated connection reach the client's sentinel behind the gate's.
-- **Gated connections are unframed.** The gate replaces the connection's filter (`set-process-filter`), which turns
-  Nidhogg's framing off ([hub.md](hub.md#the-clients-core)): a gated test always runs the client's filter path, whatever
-  `nidhogg-workers-framing` says. The framed path has its own rows (`hub-client-frame-test.el`, and the framed rows of
-  `hub-client-shell-test.el`, whose peers use `drgnx-test-peer-send`), and `hub-client-framed-test.el` runs the framed
-client against the real Ratatoskr (a subscription and a burst of calls; `handshake`, waiting on the hub's answers).
-`NIDHOGG_WORKERS` (for example `+nidhogg-workers-framing`) is passed into the test container, so a run can set the
+- **Gated connections hand parsed lines to the client's batch function.** The gate replaces the connection's filter
+  (`set-process-filter`), which turns Nidhogg's reader off, so the gate cuts the lines itself and delivers each one as
+  the reader would (`drgnx-test-gate--read`: parsed to plists and lists, a `view-model` line to
+  `drgnx-hub--model-line` whole, the rest as a batch of one for `drgnx-hub--client-batch`, inside the connection's
+  guard). Every hub connection is framed in the client ([hub.md](hub.md#the-clients-core)); the reader's own rows are
+  `hub-client-frame-test.el`, the rows of `hub-client-shell-test.el` (whose peers use `drgnx-test-peer-send`), and
+  `hub-client-framed-test.el`, which runs the client against the real Ratatoskr (a subscription and a burst of calls;
+  `handshake`, waiting on the hub's answers).
+`NIDHOGG_WORKERS` (for example `+nidhogg-workers-treesit`) is passed into the test container, so a run can set the
 switches for the whole suite.
 - **The schedule** is given up front: `(CONN :answer METHOD)`, `(CONN :event NAME)`, `(CONN :line)`, `(CONN :eof)`
   and `(:pause LABEL)`. A step releases its connection's lines up to its own, in order: the gate reorders lines across

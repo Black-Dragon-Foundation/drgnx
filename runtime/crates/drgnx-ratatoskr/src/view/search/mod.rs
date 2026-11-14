@@ -1359,19 +1359,29 @@ pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
 }
 
 /// `search/buffer`: VIEW's searches search the buffer's text in place of its file from now on (or the file on disk,
-/// saying the buffer is too large; neither: the file again); the current search takes it at once. True.
-pub fn buffer(f: &Front, c: &Caller, p: BufferParams) -> Result<bool, Error> {
+/// saying the buffer is too large; neither: the file again); the current search takes it at once. The text is the
+/// request's, or, with `mirror`, the edit history's mirror of the editor's tracked buffer (the editor sends no text):
+/// then the answer is false, and nothing changes, while no buffer of the file is tracked or the mirror is behind
+/// `version`. Otherwise true.
+pub async fn buffer(f: &Front, c: &Caller, p: BufferParams) -> Result<bool, Error> {
     let views = &f.core.views;
     if p.view.is_empty() || p.view.len() > runstav::methods::view::VIEW_MAX {
         return Err(invalid("view", "a view id of 1 to 64 bytes"));
     }
     let (conn, file) = (c.conn_id, p.path.as_str().to_owned());
-    let buf = match (p.text, p.large) {
-        (Some(text), _) => Some(Buffer {
+    let buf = match (p.text, p.mirror, p.large) {
+        (Some(text), _, _) => Some(Buffer {
             tick: p.tick,
             text: Some(text.into()),
         }),
-        (None, Some(true)) => Some(Buffer {
+        (None, Some(true), _) => match crate::editor::mirror_of(f, &file).await {
+            Some((text, version)) if version >= p.version => Some(Buffer {
+                tick: p.tick,
+                text: Some(text.into()),
+            }),
+            _ => return Ok(false),
+        },
+        (None, _, Some(true)) => Some(Buffer {
             tick: p.tick,
             text: None,
         }),

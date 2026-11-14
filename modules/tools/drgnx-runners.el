@@ -113,6 +113,8 @@ hello a hub proves (`drgnx-runners--resend') and are forgotten when the module i
   "The strings of V (a list or a vector from JSON)."
   (seq-filter #'stringp (append v nil)))
 
+(put 'drgnx-runners--event 'hub-events-taken '("runners-changed" "runners/need-keys" "runners/cloud-changed"))
+
 (defun drgnx-runners--event (event data)
   "`drgnx-hub-event-functions': `runners-changed' carries the list again; `runners/need-keys' (DATA (:names [NAME…]))
 asks for keys.  Only for a hub that proved itself.  This runs in a process filter, a daemon path: it raises a card and

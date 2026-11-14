@@ -25,6 +25,8 @@
   "The notice id for the proposal ID."
   (intern (concat "proposal-" id)))
 
+(put 'drgnx-records-review--event 'hub-events-taken '("view-proposal"))
+
 (defun drgnx-records-review--event (event data)
   "`drgnx-hub-event-functions': a `view-proposal' from a hub that proved itself is a notice.  Nothing asks, nothing
 waits: the notice carries the command that does."

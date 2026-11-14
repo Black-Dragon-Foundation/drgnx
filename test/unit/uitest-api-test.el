@@ -40,7 +40,7 @@
 
 (defun drgnx-uitest-test--asks-the-hub ()
   "A caller that asks the hub, as a hook in a GUI row would."
-  (drgnx-hub--connect-socket #'ignore))
+  (drgnx-hub--connect-socket))
 
 (ert-deftest drgnx-uitest/a-hub-asked-with-none-names-its-callers ()
   ;; the GUI rows run no hub: code that asks one fails, and the error names who asked (`drgnx-uitest--hub-callers')

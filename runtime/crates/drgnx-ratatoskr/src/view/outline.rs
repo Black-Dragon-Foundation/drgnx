@@ -97,7 +97,7 @@ pub fn shown_of(path: &str, text: &str) -> Shown {
 /// FILE's text as the editor has it (the history's mirror), else as the disk has it; a notice when it is too large or
 /// cannot be read.
 async fn text_of(f: &Front, file: &str) -> Result<String, &'static str> {
-    if let Some(t) = crate::editor::mirror_of(f, file).await {
+    if let Some((t, _)) = crate::editor::mirror_of(f, file).await {
         return Ok(t);
     }
     let path = file.to_owned();
