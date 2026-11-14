@@ -105,6 +105,9 @@ pub struct Opened {
     pub(crate) helper: Mount,
     pub(crate) inner_args: Vec<OsString>,
     pub(crate) host: HostLayout,
+    /// The resolver's file opened once and checked (`host.resolver` names where it is bound inside); bound by fd, so
+    /// a path swapped after the check changes nothing. None: no resolver file is bound.
+    pub(crate) resolver: Option<OwnedFd>,
 }
 
 impl Opened {
@@ -312,14 +315,16 @@ pub fn argv(
         &"--tmpfs",
         &"/var/tmp",
     ]);
-    // 4. The resolver's file, back on top of the empty /run.
-    if let Some(r) = &opened.host.resolver {
-        push(&[&"--ro-bind-try", r, r]);
+    // 4. The resolver's file, back on top of the empty /run: by the fd that was checked.
+    let mut fds = Vec::new();
+    let mut next = FIRST_BIND_FD;
+    if let (Some(r), Some(fd)) = (&opened.host.resolver, opened.resolver) {
+        push(&[&"--ro-bind-fd", &next.to_string(), r]);
+        fds.push((fd, next));
+        next += 1;
     }
     // 5–6. The spec's sources by fd, each with its own mode: home, reads, writes, run, binds.
     let hides = hide_places(&opened.mounts, &opened.hides);
-    let mut fds = Vec::new();
-    let mut next = FIRST_BIND_FD;
     for m in opened.mounts {
         let flag = match m.mode {
             Mode::Ro => "--ro-bind-fd",
@@ -456,6 +461,7 @@ mod tests {
                 Mode::Ro,
             ),
             inner_args: vec!["sandbox-inner".into()],
+            resolver: host.resolver.as_ref().map(|_| devnull()),
             host,
         }
     }
@@ -533,6 +539,28 @@ mod tests {
             o.contains("--ro-bind-try /etc /etc") && !o.contains("--tmpfs /etc"),
             "{o}"
         );
+    }
+
+    /// The resolver's file is bound by the fd that was checked, never by its path (a path swapped after the check would
+    /// be followed): `--ro-bind-fd N <path>`, N one of the fds passed, and no path bind of it; no fd, no bind.
+    #[test]
+    fn the_resolver_is_bound_by_fd_and_never_by_path() {
+        let dest = "/run/systemd/resolve/stub-resolv.conf";
+        let (argv, fds) = run(spec(Net::Shared), merged(), &["/bin/true"]);
+        let o = options(&argv);
+        let at = o
+            .iter()
+            .position(|a| a == dest)
+            .expect("the resolver is bound");
+        assert_eq!(o[at - 2], "--ro-bind-fd", "{o:?}");
+        let n: i32 = o[at - 1].parse().unwrap();
+        assert!(fds.contains(&n), "{n} is among the fds passed {fds:?}");
+        assert_eq!(
+            o.iter().filter(|a| *a == dest).count(),
+            1,
+            "bound once: {o:?}"
+        );
+        assert!(!o.join(" ").contains(&format!("{dest} {dest}")), "{o:?}");
     }
 
     #[test]
@@ -730,7 +758,8 @@ mod tests {
             (3, 4, 5, 6)
         );
         let s = spec(isolated());
-        let want = planned(&s).len() + 1;
+        // the spec's sources, the helper, and the resolver's file (`merged()` has one) first of all
+        let want = planned(&s).len() + 2;
         let (argv, fds) = run(s, merged(), &["/bin/true"]);
         let opts = options(&argv);
         let in_argv: Vec<i32> = opts

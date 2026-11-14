@@ -6,7 +6,7 @@ use std::path::{Component, Path, PathBuf};
 
 use rustix::fs::{Mode, fstat};
 
-use crate::{FsError, Kind, open_path};
+use crate::{FsError, Kind, Pinned, open_path};
 
 /// A program only root can change, and the identity it was checked under.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,6 +28,7 @@ const WHY_PARENT_NOT_ROOT: &str = "a parent directory is not owned by root";
 const WHY_PARENT_WRITABLE: &str = "a parent directory is group- or world-writable";
 const WHY_NOT_SYSTEM: &str = "not owned by root or a system account";
 const WHY_PARENT_NOT_SYSTEM: &str = "a parent directory is not owned by root or a system account";
+const WHY_CHANGED: &str = "its path changed while it was checked";
 const WHY_NO_CANDIDATE: &str = "no candidate given";
 
 /// The first of `candidates` that only root can change, never looked up through `PATH`:
@@ -65,8 +66,15 @@ pub fn root_only_file(path: &Path) -> Result<(), FsError> {
 /// `/run/systemd/resolve/stub-resolv.conf` (its directory belongs to `systemd-resolve`), which only that account or
 /// root can change.
 pub fn system_owned_file(path: &Path, max_uid: u32) -> Result<(), FsError> {
-    match check(path, false, max_uid) {
-        Ok(_) => Ok(()),
+    pin_system_owned_file(path, max_uid).map(drop)
+}
+
+/// [`system_owned_file`], keeping what it opened: the file's fd, the one that was checked (its owner and mode read from
+/// the fd, the path's directories walked, and the path opened again to be the same file). A caller that binds or reads
+/// the fd, never the path again, sees the checked file even if the path is swapped for a link afterwards.
+pub fn pin_system_owned_file(path: &Path, max_uid: u32) -> Result<Pinned, FsError> {
+    match check_pinned(path, false, max_uid) {
+        Ok(p) => Ok(p),
         Err(Why::Unsupported(w)) => Err(FsError::Unsupported(w)),
         Err(Why::Untrusted(why)) => Err(FsError::Untrusted {
             path: path.to_path_buf(),
@@ -83,6 +91,16 @@ enum Why {
 }
 
 fn check(path: &Path, need_exec: bool, max_uid: u32) -> Result<TrustedProgram, Why> {
+    let pinned = check_pinned(path, need_exec, max_uid)?;
+    Ok(TrustedProgram {
+        path: path.to_path_buf(),
+        dev: pinned.dev,
+        ino: pinned.ino,
+    })
+}
+
+/// [`check`], with the fd it opened.
+fn check_pinned(path: &Path, need_exec: bool, max_uid: u32) -> Result<Pinned, Why> {
     // Compared as bytes: `Path`'s own equality ignores `.` components, repeated and trailing slashes.
     let plain = path.components().collect::<PathBuf>();
     if !path.is_absolute()
@@ -114,11 +132,12 @@ fn check(path: &Path, need_exec: bool, max_uid: u32) -> Result<TrustedProgram, W
         return Err(Why::Untrusted(WHY_WRITABLE));
     }
     ancestors(path, max_uid)?;
-    Ok(TrustedProgram {
-        path: path.to_path_buf(),
-        dev: pinned.dev,
-        ino: pinned.ino,
-    })
+    // the directories were read after the file was opened: a path swapped in between would be a different file
+    let again = open_path(path, Kind::File).map_err(|_| Why::Untrusted(WHY_CHANGED))?;
+    if (again.dev, again.ino) != (pinned.dev, pinned.ino) {
+        return Err(Why::Untrusted(WHY_CHANGED));
+    }
+    Ok(pinned)
 }
 
 /// Every ancestor of `path` up to `/`: a directory, owned by a uid of at most `max_uid`, not group- or world-writable.
@@ -170,6 +189,11 @@ mod tests {
     fn uid0(test: &str) -> bool {
         let root = rustix::process::geteuid().is_root();
         if !root {
+            // a lane that is meant to run these as root sets the variable: a skip there is a failure, never a pass
+            assert!(
+                std::env::var_os("DRGNX_REQUIRE_ROOT_TESTS").is_none(),
+                "{test}: needs uid 0, and DRGNX_REQUIRE_ROOT_TESTS says this lane runs as root"
+            );
             eprintln!("{test}: needs uid 0; skipped");
         }
         root
@@ -532,5 +556,26 @@ mod tests {
         let file_link = top.path().join("file-link");
         symlink(&prog, &file_link).unwrap();
         assert_eq!(why_of(system_owned_file(&file_link, 999)), WHY_LINK);
+    }
+
+    /// The fd a pin returns is the file that was checked: the path swapped for a link to another file afterwards does
+    /// not change what the fd is (a caller binds the fd, not the path).
+    #[test]
+    fn a_pinned_file_stays_the_checked_one_when_its_path_is_swapped() {
+        if !uid0("a_pinned_file_stays_the_checked_one_when_its_path_is_swapped") {
+            return;
+        }
+        let (_top, prog) = system_owned_fixture();
+        let pinned = pin_system_owned_file(&prog, 999).unwrap();
+        let original = (pinned.dev, pinned.ino);
+        let other = prog.parent().unwrap().join("shadow");
+        fs::write(&other, b"secret\n").unwrap();
+        fs::remove_file(&prog).unwrap();
+        symlink(&other, &prog).unwrap();
+        let st = rustix::fs::fstat(&pinned.fd).unwrap();
+        assert_eq!((st.st_dev as u64, st.st_ino as u64), original);
+        assert_ne!(original.1, fs::metadata(&other).unwrap().ino());
+        // and the path, now a link, is refused if checked again
+        assert_eq!(why_of(system_owned_file(&prog, 999)), WHY_LINK);
     }
 }

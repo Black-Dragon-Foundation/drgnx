@@ -1273,3 +1273,12 @@ Returns (EXIT . OUTPUT), the output both streams' or, with STDOUT-ONLY, stdout's
             ;; the installer's failure stops the step: its output is read into a variable first, not through a pipe
             (should (string-search "adapters=$(" step))))
       (delete-directory dir t))))
+
+;; eitri's trust tests (trusted.rs) chown their fixtures and skip without uid 0, which would pass silently on a runner's
+;; unprivileged user: the escape legs run them under sudo, and DRGNX_REQUIRE_ROOT_TESTS makes a skip a failure.
+(ert-deftest drgnx-ci/eitri-s-root-tests-run-as-root-and-a-skip-fails ()
+  (let ((rt (drgnx-ci-test--yml "runtime.yml")) (src (drgnx-ci-test--file "runtime/crates/eitri/src/trusted.rs")))
+    (should (and rt src))
+    (drgnx-ci-test--has (drgnx-ci-test--job rt "escape-host")
+                        "sudo env" "DRGNX_REQUIRE_ROOT_TESTS=1" "-p eitri --target-dir")
+    (drgnx-ci-test--has src "DRGNX_REQUIRE_ROOT_TESTS")))

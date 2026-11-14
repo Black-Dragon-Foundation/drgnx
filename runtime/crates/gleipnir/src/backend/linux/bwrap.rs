@@ -144,6 +144,16 @@ pub fn open_sources(spec: &ValidSpec, helper: &InnerCommand) -> Result<Opened, R
         let dests: Vec<&Path> = mounts.iter().map(|m| m.dest.as_path()).collect();
         private_roots(&dests)?
     };
+    // the resolver's file is opened and checked once here, and bound by that fd: not trusted, not bound
+    let layout = host_layout();
+    let (resolver, resolver_fd) = match layout
+        .resolver
+        .as_deref()
+        .map(|r| eitri::pin_system_owned_file(r, sys_uid_max()).map(|pinned| pinned.fd))
+    {
+        Some(Ok(fd)) => (layout.resolver.clone(), Some(fd)),
+        _ => (None, None),
+    };
     Ok(Opened {
         mounts,
         hides,
@@ -151,8 +161,10 @@ pub fn open_sources(spec: &ValidSpec, helper: &InnerCommand) -> Result<Opened, R
         inner_args: helper.inner_args.clone(),
         host: HostLayout {
             private_roots,
-            ..host_layout()
+            resolver,
+            ..layout
         },
+        resolver: resolver_fd,
     })
 }
 
@@ -250,22 +262,36 @@ fn refused(key: &str, path: &Path, e: FsError) -> Refusal {
     }
 }
 
-/// The highest uid of a system account: `SYS_UID_MAX` of `/etc/login.defs` when it reads, else 999, and never above
-/// 999 (a login user's uid is never taken for a system account's).
+/// The highest uid of a system account on this host: from `/etc/login.defs` (`parse_uid_boundary`); root alone (0)
+/// when the file does not read.
 fn sys_uid_max() -> u32 {
-    let text = fs::read_to_string("/etc/login.defs").unwrap_or_default();
-    parse_sys_uid_max(&text)
+    parse_uid_boundary(fs::read_to_string("/etc/login.defs").ok().as_deref())
 }
 
-/// `SYS_UID_MAX` of a `login.defs` text, capped at 999; 999 when it is absent or not a number.
-fn parse_sys_uid_max(text: &str) -> u32 {
+/// The value of the last line of a `login.defs` text that begins with `key`; None when there is none, or that last line
+/// has no value that is a uid (a later line decides, so an earlier valid one never stands in for a broken one).
+fn login_defs_uid(text: &str, key: &str) -> Option<u32> {
     text.lines()
         .filter_map(|l| {
             let mut w = l.split('#').next()?.split_whitespace();
-            (w.next()? == "SYS_UID_MAX").then(|| w.next()?.parse::<u32>().ok())?
+            (w.next()? == key).then(|| w.next().and_then(|v| v.parse::<u32>().ok()))
         })
         .next_back()
-        .map_or(999, |n| n.min(999))
+        .flatten()
+}
+
+/// The system-uid boundary of a `login.defs` text (None: the file did not read), at most 999 always: `SYS_UID_MAX`;
+/// without one that reads, `UID_MIN - 1` (every uid below the first login user); with neither, or no text, 0: root
+/// alone. When both read, the lower of the two.
+fn parse_uid_boundary(text: Option<&str>) -> u32 {
+    let Some(text) = text else { return 0 };
+    let sys = login_defs_uid(text, "SYS_UID_MAX").map(|n| n.min(999));
+    let below_login = login_defs_uid(text, "UID_MIN").map(|n| n.saturating_sub(1).min(999));
+    match (sys, below_login) {
+        (Some(a), Some(b)) => a.min(b),
+        (Some(a), None) | (None, Some(a)) => a,
+        (None, None) => 0,
+    }
 }
 
 /// Which of the host's `/bin`, `/lib`, `/lib64`, `/sbin` are links, and the resolver's file when bindable: under
@@ -835,14 +861,31 @@ mod tests {
     }
 
     #[test]
-    fn sys_uid_max_reads_login_defs_and_never_passes_999() {
-        assert_eq!(parse_sys_uid_max(""), 999);
-        assert_eq!(parse_sys_uid_max("UID_MIN 1000\nSYS_UID_MAX 499\n"), 499);
-        assert_eq!(parse_sys_uid_max("SYS_UID_MAX\t999 # the usual\n"), 999);
-        assert_eq!(parse_sys_uid_max("# SYS_UID_MAX 200\n"), 999);
-        assert_eq!(parse_sys_uid_max("SYS_UID_MAX 60000\n"), 999);
-        assert_eq!(parse_sys_uid_max("SYS_UID_MAX lots\n"), 999);
-        assert_eq!(parse_sys_uid_max("XSYS_UID_MAX 5\n"), 999);
+    fn the_system_uid_boundary_reads_login_defs_and_fails_closed() {
+        let b = |t: &str| parse_uid_boundary(Some(t));
+        // readable, and capped at 999
+        assert_eq!(b("UID_MIN 1000\nSYS_UID_MAX 499\n"), 499);
+        assert_eq!(b("SYS_UID_MAX\t999 # the usual\n"), 999);
+        assert_eq!(b("SYS_UID_MAX 60000\n"), 999);
+        // the last SYS_UID_MAX line decides, even when it is the broken one: no earlier line stands in for it
+        assert_eq!(b("SYS_UID_MAX 499\nSYS_UID_MAX lots\n"), 0);
+        assert_eq!(b("SYS_UID_MAX 499\nSYS_UID_MAX 99999999999\n"), 0);
+        assert_eq!(b("SYS_UID_MAX 499\nSYS_UID_MAX\n"), 0);
+        assert_eq!(b("SYS_UID_MAX lots\nSYS_UID_MAX 300\n"), 300);
+        // a commented line, or another key that ends alike, is not SYS_UID_MAX
+        assert_eq!(b("# SYS_UID_MAX 200\n"), 0);
+        assert_eq!(b("XSYS_UID_MAX 5\n"), 0);
+        // no usable SYS_UID_MAX: the uids below the first login user, else root alone
+        assert_eq!(b("UID_MIN 500\n"), 499);
+        assert_eq!(b("UID_MIN 500\nSYS_UID_MAX lots\n"), 499);
+        assert_eq!(b("UID_MIN 500\nUID_MIN junk\n"), 0);
+        assert_eq!(b("UID_MIN 100000\n"), 999);
+        assert_eq!(b("UID_MIN 0\n"), 0);
+        assert_eq!(b(""), 0);
+        // both read: the lower
+        assert_eq!(b("UID_MIN 200\nSYS_UID_MAX 999\n"), 199);
+        // the file did not read: root alone
+        assert_eq!(parse_uid_boundary(None), 0);
     }
 
     /// The helper's bind: read-only at `HELPER_INSIDE`, whatever else the spec holds.
