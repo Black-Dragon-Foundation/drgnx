@@ -369,7 +369,19 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 304, "{names:?}");
+        // every method of the registry is in the committed methods.json, and nothing else is: the count is
+        // whatever that file says, so a new method breaks nothing here
+        let committed: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(repo("runtime/protocol/methods.json")).expect("methods.json"),
+        )
+        .expect("methods.json is JSON");
+        let listed: Vec<&str> = committed["methods"]
+            .as_array()
+            .expect("methods")
+            .iter()
+            .map(|m| m["name"].as_str().expect("a name"))
+            .collect();
+        assert_eq!(names, listed);
         assert!(find("job/start-task").is_some_and(|m| m.writes));
         assert!(find("job/status").is_some_and(|m| !m.writes));
         assert!(find("sandbox/global").is_none());
@@ -654,6 +666,8 @@ mod tests {
     #[test]
     fn every_method_with_required_params_refuses_empty() {
         let mut with = 0;
+        // how many refuse `{}` follows from each method's declared required params, not from a number written here
+        let mut expected = 0;
         for m in registry() {
             let schema = (m.params)().to_value();
             let req = required(&schema);
@@ -674,6 +688,7 @@ mod tests {
                 assert!((m.decode)(&json!({})).is_err());
                 continue;
             }
+            expected += usize::from(!req.is_empty());
             match (m.decode)(&json!({})) {
                 Ok(_) => assert!(req.is_empty(), "{} took {{}} but needs {req:?}", m.name),
                 Err(e) => {
@@ -689,7 +704,11 @@ mod tests {
                 }
             }
         }
-        assert_eq!(with, 253);
+        assert_eq!(with, expected);
+        assert!(
+            with > 0,
+            "no method refused {{}}: the schema read found no required params"
+        );
     }
 
     #[test]

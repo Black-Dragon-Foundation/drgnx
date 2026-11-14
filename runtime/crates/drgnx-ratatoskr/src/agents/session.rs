@@ -3062,6 +3062,14 @@ pub(crate) async fn relaunch(
         }
         None => None,
     };
+    // the ask it goes on under: its last user message (a worker has none: it takes the ask that dispatched it),
+    // told before the session can write (its first prompt, and what its jobs wake it with, come after this)
+    s.asks.restoring(&sid);
+    s.asks.restore(
+        &sid,
+        kept.as_ref()
+            .and_then(|(entries, _, _)| last_user_message(entries, s.ask_channel())),
+    );
     let (queue, paused, wheel) = match kept {
         Some((entries, (queue, paused), wheel)) => {
             // its steps go on from its last in the step table: an entry's `step` is that table's seq
@@ -3113,6 +3121,24 @@ pub(crate) async fn relaunch(
         None => s.next(),
     }
     Ok(level)
+}
+
+/// The last words the user said to a session, from its transcript ENTRIES: its current ask after a restart (CHANNEL is
+/// where they came from). None when there are none.
+fn last_user_message(entries: &[Entry], channel: &str) -> Option<crate::work::asks::LastMessage> {
+    let e = entries
+        .iter()
+        .rev()
+        .find(|e| e.kind == EntryType::User && e.rest.get("origin").is_none())?;
+    Some(crate::work::asks::LastMessage {
+        text: e.rest.get("text").and_then(Value::as_str)?.to_string(),
+        channel: channel.to_string(),
+        message_id: e
+            .rest
+            .get("key")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    })
 }
 
 /// The session SID if it was closed while it waited on a job: resumed now (its agent started again on the same
@@ -6998,6 +7024,41 @@ pub fn fuzz_context(params: &Value) {
 
 #[cfg(test)]
 mod tests {
+    /// A restart's ask is the user's last words: not a steer's origin tag, not an agent's text, none when there are none.
+    #[test]
+    fn the_ask_after_a_restart_is_the_last_user_message() {
+        let entry_of = |kind: EntryType, text: &str| {
+            let mut rest = Map::new();
+            rest.insert("text".into(), json!(text));
+            Entry { kind, rest }
+        };
+        let user = |text: &str, rest: &[(&str, &str)]| {
+            let mut e = entry_of(EntryType::User, text);
+            for (k, v) in rest {
+                e.rest.insert((*k).into(), json!(v));
+            }
+            e
+        };
+        let entries = vec![
+            user("first", &[("key", "message:1")]),
+            entry_of(EntryType::Agent, "an answer"),
+            user("second", &[("key", "message:2")]),
+            user("woken by a job", &[("origin", "job")]),
+            entry_of(EntryType::Agent, "an answer"),
+        ];
+        let got = last_user_message(&entries, "manager").unwrap();
+        assert_eq!(
+            (
+                got.text.as_str(),
+                got.channel.as_str(),
+                got.message_id.as_deref()
+            ),
+            ("second", "manager", Some("message:2"))
+        );
+        assert_eq!(last_user_message(&entries[1..2], "chat"), None);
+        assert_eq!(last_user_message(&[], "chat"), None);
+    }
+
     use super::*;
     use crate::budget::Budgets;
     use runstav::methods::agents::SessionStatus;

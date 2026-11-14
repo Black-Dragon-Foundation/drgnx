@@ -321,9 +321,16 @@ channel, session, message_id?}`) and `asked` links from it to specs, plans, task
 - A session's tool call answers only after its writes are linked: every tool on a session's socket is wrapped
   (`sessions::AfterTool`) to call `norn::tools::Hub::after_tool`, which waits for the shell to read the log. A live
   spec (`work::specs`) goes in as the scan, so its write is sent to the shell directly.
-- Current asks are kept in memory: after a hub restart a session has none until its next user message.
+- Current asks are kept in memory and **rebuilt when a session is resumed after a hub restart** (`relaunch` tells the
+  shell `Restoring`, then `Restore` before the session can write; what it writes meanwhile waits, in the core's `held`).
+  A session with a user message in its transcript takes the last one without an `origin` as its ask; the shell adopts the
+  `ask` entity an earlier hub made for exactly that message (the same `message_id`, else the same text, of the session's
+  newest ask), so a restart, a second restart or a crash in the middle never makes a second ask. A session with none
+  (a worker) takes the ask that dispatched it: the newest ask an `asked` link joins to `session:ID`, from data, with no
+  notice. With neither, its writes link to one ask that says "Ask before a hub restart: not recorded" (made at its first
+  write, the same entity at the next restart): never a guess. A message that reaches a session first is its ask instead.
 - Tests: `work::asks::tests` (`every_order_links_every_write`, pattern A over a manager, its worker, a chat and the
-  ends; the rest pattern D) and conformance `work/a-managers-later-turns-link-to-the-ask` (pattern B).
+  ends; the rest pattern D) and conformance `work/a-managers-later-turns-link-to-the-ask` (pattern B), `work/an-ask-survives-a-hub-restart`, `work/a-workers-ask-survives-a-hub-restart` and `work/a-session-with-no-recorded-ask-gets-one-line-after-a-restart`.
 
 ### Conclusions
 
