@@ -42,6 +42,15 @@ pub enum ReapOutcome {
 /// Sends signals: `kill(2)` semantics, a negative `target` names a process group.
 pub trait Signaller: Sync {
     fn kill(&self, target: i32, sig: i32) -> io::Result<()>;
+
+    /// The wait between two probes of a signalled group: on the installed clock (`drgnx_clock`), so a test that
+    /// watches signals decides when a grace has passed.  A signaller of real processes waits in real time.
+    fn pause(
+        &self,
+        d: Duration,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        Box::pin(drgnx_clock::sleep(d))
+    }
 }
 
 /// `libc::kill`. It refuses `target` 0 and -1 (the caller's group and every process of the user) whatever its caller
@@ -49,6 +58,14 @@ pub trait Signaller: Sync {
 pub struct RealSignaller;
 
 impl Signaller for RealSignaller {
+    /// Real processes exit in real time, whatever clock a test installed.
+    fn pause(
+        &self,
+        d: Duration,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        Box::pin(tokio::time::sleep(d))
+    }
+
     fn kill(&self, target: i32, sig: i32) -> io::Result<()> {
         if target == 0 || target == -1 {
             return Err(io::Error::new(
@@ -245,7 +262,7 @@ async fn wait_gone(sig: &dyn Signaller, pgid: i32, limit: Duration) -> bool {
         if waited >= limit {
             return false;
         }
-        drgnx_clock::sleep(POLL).await;
+        sig.pause(POLL).await;
         waited += POLL;
     }
 }
