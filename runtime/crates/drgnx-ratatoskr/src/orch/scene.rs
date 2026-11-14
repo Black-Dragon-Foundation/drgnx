@@ -396,6 +396,7 @@ pub async fn seed(front: &Front, map: bool) -> Result<(), String> {
         // the Work map's scene is the map's graph, trail and strip alone: no plan run, so no held gate, no job and no
         // queue beside the mockup's three cards
         front.core.map.scene_graph(map_events());
+        front.core.map.scene_new(&["agent:a1"]);
         let (steps, concs) = map_trail();
         front.core.trails.scene("a1", steps, concs);
         front

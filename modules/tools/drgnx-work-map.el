@@ -87,6 +87,8 @@ key profiles bind them (`drgnx-command-define' with this map); each view's own k
   "The Work space's map: layers of asks, specs, plans, agents, branches and files, and the edges between them."
   (setq-local drgnx-view-nav-notice-method "work/map/set")  ; the rows path tells the hub the selection, trailing
   (setq-local truncate-lines t cursor-type nil drgnx-chrome-own-tab-line t
+              ;; the rows' heights are the layout's: no spacing of the buffer's (the look's 3 px) between them
+              line-spacing 0
               tab-line-format '("" drgnx-work-map--lens)
               ;; the status line of work-space-dark.html: the branch, the jobs, the agents' dots, what needs you; at the
               ;; right the lens and the counts

@@ -410,7 +410,9 @@ fn segment(
     let right = g.margin + g.px(rect.x + rect.w);
     let icon_px = (ICON_PX as f32 * g.scale).round() as u32;
     let icon = l.1.filter(|(name, _)| !name.is_empty());
-    let room = (right - left).saturating_sub(10);
+    // the text sits inside the card: 10 px from the border of an agent's, 8 px of a chip's
+    let pad = ((if lines.len() > 1 { 10.0 } else { 8.0 }) * g.scale).round() as u32;
+    let room = (right - left).saturating_sub(10 + pad);
     let fitted = fit_px(
         m,
         &l.text(),
@@ -418,6 +420,7 @@ fn segment(
     );
     b.stop(left);
     let start = b.pos();
+    b.stop(left + pad);
     if let Some((name, alt)) = icon {
         match e.icon(name, icon_px) {
             Some((id, svg)) => {
@@ -501,7 +504,7 @@ fn state_word(f: &Fields) -> String {
 
 /// What an agent is doing, in words: a step class as its participle (`test` is `testing`), a finished run waiting
 /// for you as `done · ready`, else the class as it is, else the state's words.
-fn activity(f: &Fields) -> String {
+pub fn activity(f: &Fields) -> String {
     if f.state == Some(State::Review) {
         return "done · ready".into();
     }
@@ -1250,7 +1253,10 @@ pub fn strip(
         );
     }
     // 20 px short of the edge: the window's fringe and its truncation glyph are not drawn on
-    b.stop(env.width_px.saturating_sub(w.ceil() as u32 + (20.0 * env.scale) as u32));
+    b.stop(
+        env.width_px
+            .saturating_sub(w.ceil() as u32 + (20.0 * env.scale) as u32),
+    );
     let mut images = BTreeMap::new();
     for (i, (c, icon)) in chips.iter().enumerate() {
         if i > 0 {

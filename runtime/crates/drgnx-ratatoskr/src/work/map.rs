@@ -326,6 +326,7 @@ impl Sess {
             model: s.profile.clone().unwrap_or_default(),
             state: self.state,
             since: self.since,
+            age: None,
             seq: self.seq * 1000,
             task: s.task.clone(),
             manager: s.parent.clone(),
@@ -347,6 +348,7 @@ impl Sess {
                 model: String::new(),
                 state: self.state,
                 since: self.since,
+                age: None,
                 seq: self.seq * 1000 + i as u64 + 1,
                 task: None,
                 slot: None,
@@ -418,6 +420,9 @@ const NEW_MS: u64 = 4_000;
 pub(crate) struct NewMarks {
     seen: BTreeMap<ItemId, Option<String>>,
     at: BTreeMap<ItemId, u64>,
+    /// A test hub's scene marks these always.
+    #[cfg(feature = "test-hooks")]
+    pinned: BTreeSet<ItemId>,
 }
 
 impl NewMarks {
@@ -445,7 +450,11 @@ impl NewMarks {
 
     /// The items marked now.
     pub(crate) fn ids(&self) -> BTreeSet<ItemId> {
-        self.at.keys().cloned().collect()
+        #[allow(unused_mut)]
+        let mut ids: BTreeSet<ItemId> = self.at.keys().cloned().collect();
+        #[cfg(feature = "test-hooks")]
+        ids.extend(self.pinned.iter().cloned());
+        ids
     }
 }
 
@@ -506,6 +515,9 @@ struct Inner {
     /// The facts a test hub's map scene seeds (`orch::scene::map_events`): every map opened is fed them.
     #[cfg(feature = "test-hooks")]
     scene_graph: Vec<Event>,
+    /// The items a test hub's scene shows with a new conclusion (the mark never leaves).
+    #[cfg(feature = "test-hooks")]
+    scene_new: BTreeSet<ItemId>,
 }
 
 /// The hub's Work map (see the module).
@@ -752,6 +764,12 @@ impl Map {
     #[cfg(feature = "test-hooks")]
     pub fn scene_graph(&self, events: Vec<Event>) {
         lock(&self.inner).scene_graph = events;
+    }
+
+    /// The items IDS of a test hub's scene carry the `new` mark on their conclusions, whatever the time.
+    #[cfg(feature = "test-hooks")]
+    pub fn scene_new(&self, ids: &[&str]) {
+        lock(&self.inner).scene_new = ids.iter().map(|i| ItemId((*i).to_owned())).collect();
     }
 
     /// What a map opening at NOW (the clock's minute) is fed after its sessions: the minute, so a card counts its
@@ -1656,6 +1674,8 @@ pub async fn subscribe(f: &Front, c: &Caller, p: MapSubscribe) -> Result<MapRows
     }
     seed.extend(Map::opening(&mut g, minute()));
     seed.extend(Map::presence_events(&mut g, &ws, &files));
+    #[cfg(feature = "test-hooks")]
+    let pinned = g.scene_new.clone();
     map.feed(&mut g, &ws, seed);
     let sp = g.spaces.get_mut(&ws).expect("the view's workspace");
     sp.core.step(Event::View(ViewOp::Open {
@@ -1673,7 +1693,11 @@ pub async fn subscribe(f: &Front, c: &Caller, p: MapSubscribe) -> Result<MapRows
         sent: BTreeSet::new(),
         co: Coalescer::default(),
         outline,
-        marks: NewMarks::default(),
+        marks: NewMarks {
+            #[cfg(feature = "test-hooks")]
+            pinned,
+            ..NewMarks::default()
+        },
         new_wake: None,
     };
     Map::relayout(sp.core.model(), &mut v);

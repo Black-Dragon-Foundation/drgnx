@@ -69,6 +69,10 @@ pub struct SessionFact {
     /// The minute its current state began.
     #[serde(default)]
     pub since: u64,
+    /// How many minutes the session has run, when the feed knows (the Detail's `running 47 min`); else the minutes in
+    /// its state.
+    #[serde(default)]
+    pub age: Option<u64>,
     /// Start order (the team order inside a block).
     #[serde(default)]
     pub seq: u64,
@@ -280,6 +284,9 @@ pub struct Fields {
     /// A file's `+/−` on the branch that changes it most.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub change: Option<(u32, u32)>,
+    /// How many minutes an agent has run, when its feed says.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub age: Option<u64>,
     /// An agent's worktree, by its name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub worktree: Option<String>,
@@ -632,6 +639,7 @@ impl Model {
                 fields.minutes = Some(f.minute.saturating_sub(s.fact.since));
                 fields.model = (!s.fact.model.is_empty()).then(|| s.fact.model.clone());
                 fields.spend = s.fact.spend.clone();
+                fields.age = s.fact.age;
                 fields.worktree = s
                     .fact
                     .worktree

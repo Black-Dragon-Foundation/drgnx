@@ -273,17 +273,16 @@ fn agent_head(it: &Item) -> Vec<(&'static str, String)> {
         .and_then(|m| m.chars().next())
         .map_or('?', |c| c.to_ascii_uppercase());
     let number = vegvisir::render::agent_number(it);
-    let chip = f
-        .activity
-        .clone()
-        .or_else(|| state_word(it))
-        .unwrap_or_default();
+    let chip = vegvisir::render::activity(f);
     let mut sub: Vec<String> = f.task.clone().into_iter().collect();
-    let run = [state_word(it), f.minutes.map(|n| format!("{n} min"))]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .join(" ");
+    let run = [
+        state_word(it),
+        f.age.or(f.minutes).map(|n| format!("{n} min")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" ");
     if !run.is_empty() {
         sub.push(run);
     }
@@ -402,8 +401,10 @@ const KEY_PX: f32 = 66.0;
 /// overlap in the warning colour), an action as a button and its key. A job's line carries its id as
 /// `drgnx-work-job`.
 pub(crate) fn rows(lines: &[Line], scale: f32, width_px: u32, m: &dyn Measure) -> Vec<Row> {
-    let key_px = (KEY_PX * scale).round() as u32;
-    let room = width_px as f32 - 16.0 * scale;
+    // the text sits 10 px inside the island's edge, as the design's `.detail` does
+    let pad = (10.0 * scale).round() as u32;
+    let key_px = (KEY_PX * scale).round() as u32 + pad;
+    let room = width_px as f32 - 2.0 * pad as f32 - 8.0 * scale;
     lines
         .iter()
         .enumerate()
@@ -420,6 +421,7 @@ pub(crate) fn rows(lines: &[Line], scale: f32, width_px: u32, m: &dyn Measure) -
                             format!("head/{i}.{k}")
                         };
                         let mut b = RowBuilder::new(key);
+                        b.stop(pad);
                         b.push(&line, Some("drgnx-text-muted"));
                         let end = b.pos();
                         b.face(0, end, "drgnx-work-pane");
@@ -428,6 +430,7 @@ pub(crate) fn rows(lines: &[Line], scale: f32, width_px: u32, m: &dyn Measure) -
                     .collect::<Vec<_>>();
             }
             let mut b = RowBuilder::new(format!("{section}/{i}"));
+            b.stop(pad);
             match (*section, text.split_once('\t')) {
                 // an agent's head: its badge, its name and its state as a chip at the right edge
                 ("head", Some(_)) if i == 0 => {
@@ -450,7 +453,7 @@ pub(crate) fn rows(lines: &[Line], scale: f32, width_px: u32, m: &dyn Measure) -
                         .push(parts.get(1).unwrap_or(&""), Some("drgnx-ui-heading"));
                     if let Some(chip) = parts.get(2).filter(|c| !c.is_empty()) {
                         let width = (chip.chars().count() as f32 * 7.0 + 28.0) * scale;
-                        b.stop(width_px.saturating_sub(width as u32));
+                        b.stop(width_px.saturating_sub(width as u32 + pad));
                         let from = b.pos();
                         b.push(&format!(" {chip} "), None);
                         let to = b.pos();

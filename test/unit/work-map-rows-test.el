@@ -505,4 +505,6 @@ asks the hub nothing and its keys say the same."
   (with-temp-buffer
     (drgnx-work-map-mode)
     (should (memq 'work-agents drgnx-statusbar-other))
-    (should (equal drgnx-statusbar-other-right '(work-lens)))))
+    (should (equal drgnx-statusbar-other-right '(work-lens)))
+    ;; the rows' heights are the layout's: the look's line spacing is not added between them
+    (should (eql line-spacing 0))))

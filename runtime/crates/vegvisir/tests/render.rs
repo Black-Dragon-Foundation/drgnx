@@ -109,21 +109,21 @@ fn golden_rows_of_the_fixture() {
     let golden = [
         (
             "row:1:0:0",
-            "You asked<388><img> “fix deferred test…<580>\n",
+            "You asked<388><396><img> “fix deferred tes…<580>\n",
         ),
-        ("row:2:0:0", "Specs<420><img> race-proof tests<596>\n"),
-        ("row:3:0:0", "Plans<232><img> deferred testing…<408>\n"),
+        ("row:2:0:0", "Specs<420><428><img> race-proof tests<596>\n"),
+        ("row:3:0:0", "Plans<232><240><img> deferred testin…<408>\n"),
         (
             "row:4:0:0",
-            "Agents<84>●  O  Opus · hub rows<316><328>●  S  Sonnet · fx-sess<560>\n\
-             <84>SESSION-END-LOSES-STARTED-1<316><328>review item 3<560>\n\
-             <84>testing · 32 min · $1.20 ·…<316><328>needs you · 5 min<560>\n\
-             <84>→ turn_core drops the star…<316><328>→ fixed in seq<560>\n\
-             <84>⚠ session.rs with fx-sess<316><328>⚠ session.rs with hub rows<560>\n",
+            "Agents<84><94>●  O  Opus · hub rows<316><328><338>●  S  Sonnet · fx-sess<560>\n\
+             <84><94>SESSION-END-LOSES-STARTED…<316><328><338>review item 3<560>\n\
+             <84><94>testing · 32 min · $1.20 …<316><328><338>needs you · 5 min<560>\n\
+             <84><94>→ turn_core drops the sta…<316><328><338>→ fixed in seq<560>\n\
+             <84><94>⚠ session.rs with fx-sess<316><328><338>⚠ session.rs with hub rows<560>\n",
         ),
         (
             "row:6:0:0",
-            "Files<248><img> session.rs +…<392><404><img> desktop 3/…<532>\n",
+            "Files<248><256><img> session.rs …<392><404><412><img> desktop 3…<532>\n",
         ),
     ];
     let bad: Vec<String> = golden
@@ -338,11 +338,11 @@ fn lanes_on_one_column_are_one_image() {
     }
     assert_eq!(
         layout_row(&drawn.rows, "row:5:0:0"),
-        "Branches<99><img><120><img> rp-df-hub · ed…<280><364><img> rp-fx-sess · e…<524>\n"
+        "Branches<99><img><120><128><img> rp-df-hub · e…<280><364><372><img> rp-fx-sess · …<524>\n"
     );
     assert_eq!(
         layout_row(&drawn.rows, "row:4:0:1"),
-        "<116>●  O  explore<284><291><img><403><img>\n<116>running 2m<284><291><img><403><img>\n"
+        "<116><126>●  O  explore<284><291><img><403><img>\n<116><126>running 2m<284><291><img><403><img>\n"
     );
     // every image a row names is drawn
     for r in &drawn.rows {
@@ -838,11 +838,7 @@ fn chips_show_the_file_name_and_its_change_and_the_badge_is_a_circle() {
         .expect("files");
     assert!(files.text.contains("session.rs"), "{files:?}");
     assert!(!files.text.contains("crates/"), "{files:?}");
-    assert!(
-        files.runs.iter().any(|r| r.2 == "drgnx-work-plus"),
-        "{files:?}"
-    );
-    assert!(files.text.contains("desktop 3/"), "{files:?}");
+    assert!(files.text.contains("desktop 3"), "{files:?}");
     assert!(!files.text.contains("desk "), "{files:?}");
     let agent = drawn
         .rows

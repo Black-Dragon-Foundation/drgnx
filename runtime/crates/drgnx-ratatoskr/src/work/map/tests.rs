@@ -1342,3 +1342,16 @@ fn an_agents_touches_are_the_mockups_lines_in_order() {
         .collect();
     assert_eq!(heads, ["Why ↑", "Touches ↓", "Conclusions"]);
 }
+
+/// [D] The Detail head says what the agent is doing as the card does (`testing`, not the class `test`) and how long the
+/// session has run (`running 47 min`, the feed's age; the card's 32 min are the minutes in its state).
+#[test]
+fn the_detail_head_says_testing_and_the_run_age() {
+    let mut core = vegvisir::Core::new();
+    for e in vegvisir::fixture::scene() {
+        core.step(e);
+    }
+    let lines = detail::lines(core.model(), Some(&ItemId("agent:a1".into())), 0);
+    assert!(lines[0].1.ends_with("\ttesting"), "{:?}", lines[0]);
+    assert!(lines[1].1.contains("running 47 min"), "{:?}", lines[1]);
+}
