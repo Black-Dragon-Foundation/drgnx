@@ -37,6 +37,15 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// The 32 bytes of an HMAC-SHA256 signature written as 64 hex characters: a signature of any other length is refused before anything is
+/// decoded or allocated.
+pub(crate) fn sig_bytes(sig: &[u8]) -> Option<Vec<u8>> {
+    if sig.len() != 64 {
+        return None;
+    }
+    unhex(sig)
+}
+
 fn unhex(s: &[u8]) -> Option<Vec<u8>> {
     if !s.len().is_multiple_of(2) {
         return None;
@@ -210,11 +219,7 @@ pub fn decode(key: &Key, frames: &[Vec<u8>]) -> Result<Message, WireError> {
     {
         return Err(WireError::TooLarge("buffers"));
     }
-    // an HMAC-SHA256 in hex is exactly 64 characters: nothing longer is decoded
-    if sig.len() != 64 {
-        return Err(WireError::BadSignature);
-    }
-    let want = unhex(sig).ok_or(WireError::BadSignature)?;
+    let want = sig_bytes(sig).ok_or(WireError::BadSignature)?;
     let mut mac = key.mac();
     for p in [header, parent, meta, content] {
         mac.update(p);

@@ -209,3 +209,15 @@ fn an_identity_over_255_bytes_and_a_header_field_over_a_few_kib_are_refused() {
     s[2] = vec![b'a'; 1 << 20];
     assert_eq!(decode(&key(), &s), Err(WireError::BadSignature));
 }
+
+#[test]
+fn a_signature_of_another_length_is_refused_before_it_is_decoded() {
+    assert!(sig_bytes(&vec![b'a'; 1 << 20]).is_none());
+    assert!(sig_bytes(&[b'a'; 63]).is_none());
+    assert!(sig_bytes(&[b'a'; 65]).is_none());
+    assert!(
+        sig_bytes(&[b'z'; 64]).is_none(),
+        "64 characters that are not hex"
+    );
+    assert_eq!(sig_bytes(&[b'a'; 64]).unwrap(), vec![0xaa; 32]);
+}
