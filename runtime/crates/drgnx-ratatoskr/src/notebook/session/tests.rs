@@ -1,7 +1,7 @@
 //! A scripted peer plays the kernel: it binds the four sockets at the connection's ipc paths and sends what a kernel would.
 
 use bytes::Bytes;
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use zeromq::{PubSocket, RouterSocket, Socket, SocketRecv, SocketSend, ZmqMessage};
 
@@ -289,5 +289,69 @@ async fn a_message_small_on_the_wire_but_large_decoded_is_counted_by_what_it_hol
         sent.load(Ordering::SeqCst) <= 30,
         "flooded by what it holds, not by wire bytes: {} sent",
         sent.load(Ordering::SeqCst)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn one_large_message_is_shown_as_a_note_and_the_kernel_carries_on() {
+    let p = peer().await;
+    let limits = Limits {
+        flood_bytes: 1 << 20,
+        message_bytes: 512 << 10,
+        ..Limits::default()
+    };
+    let s = Session::connect(&p.conn, "ident-7", limits).await.unwrap();
+    let key = p.conn.key.clone();
+    let (p, s) = (Mutex::new(p), Mutex::new(s));
+    let big = json!({"data": {"text/plain": "x".repeat(800_000)}, "metadata": {}, "transient": {"display_id": "d"}});
+    let small = json!({"data": {"text/plain": "after"}, "metadata": {}});
+    let mut got: Vec<Value> = Vec::new();
+    let got_ref = Mutex::new(&mut got);
+    skuld::wait_until_async("the note and the message after it", 30, || async {
+        let mut pp = p.lock().await;
+        pp.iopub
+            .send(zmq(
+                &key,
+                &Message::request("kernel", "display_data", big.clone()),
+            ))
+            .await
+            .unwrap();
+        pp.iopub
+            .send(zmq(
+                &key,
+                &Message::request("kernel", "display_data", small.clone()),
+            ))
+            .await
+            .unwrap();
+        drop(pp);
+        let mut ss = s.lock().await;
+        let mut g = got_ref.lock().await;
+        while let Some(e) = ss.try_next() {
+            match e {
+                Event::Message { message, .. } => g.push(message.content),
+                Event::Flood => panic!("a large message is not a flood"),
+                _ => {}
+            }
+        }
+        g.iter()
+            .any(|c| c["data"]["text/plain"] == "after")
+            .then_some(())
+    })
+    .await;
+    let note = got
+        .iter()
+        .find(|c| {
+            c["data"]["text/plain"]
+                .as_str()
+                .is_some_and(|t| t.contains("not shown"))
+        })
+        .unwrap();
+    assert_eq!(
+        note["transient"]["display_id"], "d",
+        "the note belongs where the output would have"
+    );
+    assert!(
+        !s.lock().await.tasks.iter().any(|t| t.is_finished()),
+        "no reader stopped"
     );
 }

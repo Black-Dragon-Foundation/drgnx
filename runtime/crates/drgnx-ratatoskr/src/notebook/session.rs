@@ -59,6 +59,8 @@ pub struct Limits {
     pub send_within: Duration,
     /// Messages waiting to be sent, per socket.
     pub send_queue: usize,
+    /// One message, as weighed: past this it is replaced by a note and the kernel carries on (it is not a flood).
+    pub message_bytes: usize,
     /// Messages that do not verify, within BAD_WINDOW, before the kernel counts as flooding.
     pub bad_count: usize,
     pub bad_window: Duration,
@@ -70,6 +72,7 @@ impl Default for Limits {
             flood_bytes: 64 << 20,
             send_within: Duration::from_secs(10),
             send_queue: 64,
+            message_bytes: 16 << 20,
             bad_count: 1000,
             bad_window: Duration::from_secs(10),
         }
@@ -275,6 +278,37 @@ impl Recv for SubSocket {
     }
 }
 
+/// MESSAGE of WEIGHT (over LIMIT) as a note of the same kind, so the cell it belongs to says what happened; None for a kind of message
+/// that shows nothing.
+fn stub(m: Message, weight: usize, limit: usize) -> Option<Message> {
+    let note = format!(
+        "[a {} MiB message from the kernel was not shown: over the {} MiB limit]",
+        weight >> 20,
+        limit >> 20
+    );
+    let keep = |k: &str| m.content.get(k).cloned();
+    let content = match m.header.msg_type.as_str() {
+        "stream" => {
+            serde_json::json!({"name": keep("name").unwrap_or_else(|| "stdout".into()), "text": note})
+        }
+        "display_data" | "update_display_data" | "execute_result" => serde_json::json!({
+            "data": {"text/plain": note}, "metadata": {},
+            "transient": keep("transient").unwrap_or(serde_json::json!({})),
+            "execution_count": keep("execution_count").unwrap_or(serde_json::Value::Null),
+        }),
+        "error" => serde_json::json!({"ename": "OutputTooLarge", "evalue": note, "traceback": []}),
+        _ => return None,
+    };
+    Some(Message {
+        idents: m.idents,
+        header: m.header,
+        parent: m.parent,
+        metadata: serde_json::json!({}),
+        content,
+        buffers: Vec::new(),
+    })
+}
+
 /// What a value holds in memory, about: a node costs a few words however short its text.
 fn weigh(v: &serde_json::Value) -> usize {
     use serde_json::Value;
@@ -326,6 +360,18 @@ fn reader<R: Recv>(
                 Ok(message) => {
                     // what it holds decoded, not what it took on the wire: a small message can be a large value
                     bytes = bytes.max(weight(&message));
+                    // one large message is a large message, not a flood: shown as a note, the rest of the kernel's output goes on
+                    let message = if bytes > limits.message_bytes {
+                        match stub(message, bytes, limits.message_bytes) {
+                            Some(m) => {
+                                bytes = weight(&m);
+                                m
+                            }
+                            None => continue,
+                        }
+                    } else {
+                        message
+                    };
                     if queued.fetch_add(bytes, Ordering::SeqCst) + bytes > limits.flood_bytes {
                         let _ = events.send(Event::Flood);
                         return;
