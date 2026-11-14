@@ -1,0 +1,27 @@
+[package]
+name = "vegvisir"
+description = "The Work space's map core: items, edges, chains, overlaps and the layered layout, pure"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+# `fixture::thirty()`, the 30-agent fixture read from test/fixtures/work-space/thirty.json: tests and the hub's own
+# tests only, never a shipped binary.
+fixture = []
+
+[dependencies]
+serde.workspace = true
+# the rows the hub sends the editor (render): the row type, the fitter, the SVG writer
+drgnx-rows = { path = "../drgnx-rows", version = "0.1.0" }
+# the rows' text properties (render)
+serde_json.workspace = true
+
+[dev-dependencies]
+# the crate itself with the fixture, so its integration tests read the 30-agent fixture
+vegvisir = { path = ".", version = "0.1.0", features = ["fixture"] }
+serde_json.workspace = true
+skuld = { path = "../skuld", version = "0.1.0" }
+proptest.workspace = true

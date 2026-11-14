@@ -28,13 +28,17 @@ pub enum TrackerTools {
     Off,
 }
 
-/// Whose CLI a profile starts, so `agents::lock` knows which lock it gets (`:provider claude|codex|gemini`).
+/// Whose CLI a profile starts, so `agents::lock` knows which lock it gets (`:provider
+/// claude|codex|gemini|kimi|deepseek`): Kimi Code's `kimi acp`, DeepSeek Harness's `dsh --profile acp`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Provider {
     Claude,
     Codex,
     Gemini,
+    Kimi,
+    #[serde(rename = "deepseek")]
+    DeepSeek,
 }
 
 /// An agent profile (call 6): a name → `(:command LIST :env ("NAME=value"…) :mode M :ai ENV :model M
@@ -63,8 +67,9 @@ pub struct AgentProfile {
 }
 
 impl AgentProfile {
-    /// The provider: `:provider` when set, else the first of claude, codex, gemini that a file name in the command
-    /// contains (the Lisp's `drgnx-agents--command-agent`); none for anything else (no lock, "not enforced").
+    /// The provider: `:provider` when set, else the first of claude, codex, gemini, kimi and dsh that a file name in
+    /// the command contains (the Lisp's `drgnx-agents--command-agent`); none for anything else (no lock, "not
+    /// enforced").
     pub fn provider(&self) -> Option<Provider> {
         self.provider.or_else(|| {
             self.command.iter().find_map(|a| {
@@ -76,6 +81,8 @@ impl AgentProfile {
                     ("claude", Provider::Claude),
                     ("codex", Provider::Codex),
                     ("gemini", Provider::Gemini),
+                    ("kimi", Provider::Kimi),
+                    ("dsh", Provider::DeepSeek),
                 ]
                 .into_iter()
                 .find_map(|(k, p)| name.contains(k).then_some(p))

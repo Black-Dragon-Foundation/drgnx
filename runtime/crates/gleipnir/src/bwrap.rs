@@ -6,7 +6,10 @@
 //! are bound by path. No environment value is ever in the argv: bwrap gets `--clearenv` and no `--setenv`, and the
 //! program's environment travels in the inner spec (fd 3).
 
-use crate::spec::{Bind, HELPER_INSIDE, Mode, Net, RESERVED_DESTS, SYSTEM_CLOSED, Spec, ValidSpec};
+use crate::spec::{
+    Bind, HELPER_INSIDE, Mode, Net, RESERVED_DESTS, SYSTEM_CLOSED, Spec, TRACE_INSIDE, Trace,
+    ValidSpec,
+};
 use crate::validate::{Refusal, Rule};
 use eitri::Kind;
 use std::ffi::OsString;
@@ -21,8 +24,11 @@ pub const FLOOR: (u32, u32, u32) = (0, 12, 0);
 pub const SPEC_FD: i32 = 3;
 /// The status pipe's write end inside bwrap (Task 8).
 pub const STATUS_FD: i32 = 4;
+/// The browser host's socketpair end (the hub's other end stays outside), inside bwrap and in the helper. Left
+/// unused when the spec has no browser.
+pub const BROWSER_FD: i32 = 5;
 /// The first bind's fd; the binds follow in argv order, and the helper's is the last.
-pub const FIRST_BIND_FD: i32 = 5;
+pub const FIRST_BIND_FD: i32 = 6;
 
 /// Root-owned system trees bound read-only by path where they exist (`--ro-bind-try`). `/usr` is always bound.
 pub const SYSTEM_READS: &[&str] = &["/etc", "/opt", "/nix", "/gnu", "/var/lib/flatpak"];
@@ -33,12 +39,14 @@ pub const USR_MERGED: &[&str] = &["bin", "lib", "lib64", "sbin"];
 
 /// How the helper (the `ratatoskr` binary) is started inside: `source` is its path outside, bound read-only at
 /// [`HELPER_INSIDE`] and run as `HELPER_INSIDE <inner_args> --spec-fd 3 -- <command>`. `relay_args` are what the
-/// inner spec's relay runs (`Sandbox::prepare`); the argv does not use them.
+/// inner spec's relay runs, and `browser_host_args` what its browser host runs (`Sandbox::prepare`); the argv uses
+/// neither.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InnerCommand {
     pub source: PathBuf,
     pub inner_args: Vec<OsString>,
     pub relay_args: Vec<OsString>,
+    pub browser_host_args: Vec<OsString>,
 }
 
 /// One source opened without links, and where it is bound. `dev` and `ino` are the identity it was checked under.
@@ -66,6 +74,26 @@ pub struct Hidden {
 pub struct HostLayout {
     pub usr_links: Vec<&'static str>,
     pub resolver: Option<PathBuf>,
+    /// The system roots built as private tmpfs (empty for every spec whose binds all land on existing paths).
+    pub private_roots: Vec<PrivateRoot>,
+}
+
+/// One top-level entry of a system root that is rebuilt as a private tmpfs (see [`PrivateRoot`]): a link, recreated as
+/// the same link with the same target (never followed), or a file or directory bound read-only at its own path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RootEntry {
+    Link { name: OsString, target: PathBuf },
+    Bind { name: OsString },
+}
+
+/// A system root (`/etc`) that a bind lands under at a path the host does not have: bwrap cannot make the missing
+/// parents inside a read-only bind of the host's directory, so the session gets an empty tmpfs there with each
+/// top-level host entry put back (read-only binds and links), and the bind's parents are made on that tmpfs. Entries
+/// the host adds to the root after the launch are not in the session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrivateRoot {
+    pub root: PathBuf,
+    pub entries: Vec<RootEntry>,
 }
 
 /// The pinned sources of one spec, in argv order (home, reads, writes, run, binds), the hides, and the helper.
@@ -77,6 +105,9 @@ pub struct Opened {
     pub(crate) helper: Mount,
     pub(crate) inner_args: Vec<OsString>,
     pub(crate) host: HostLayout,
+    /// The resolver's file opened once and checked (`host.resolver` names where it is bound inside); bound by fd, so
+    /// a path swapped after the check changes nothing. None: no resolver file is bound.
+    pub(crate) resolver: Option<OwnedFd>,
 }
 
 impl Opened {
@@ -240,7 +271,28 @@ pub fn argv(
     // 2. The system's reads, by path: root-owned.
     push(&[&"--ro-bind", &"/usr", &"/usr"]);
     for d in SYSTEM_READS {
-        push(&[&"--ro-bind-try", d, d]);
+        match opened
+            .host
+            .private_roots
+            .iter()
+            .find(|p| p.root == Path::new(d))
+        {
+            Some(private) => {
+                push(&[&"--tmpfs", d]);
+                for e in &private.entries {
+                    match e {
+                        RootEntry::Link { name, target } => {
+                            push(&[&"--symlink", target, &private.root.join(name)]);
+                        }
+                        RootEntry::Bind { name } => {
+                            let at = private.root.join(name);
+                            push(&[&"--ro-bind", &at, &at]);
+                        }
+                    }
+                }
+            }
+            None => push(&[&"--ro-bind-try", d, d]),
+        }
     }
     for x in USR_MERGED {
         let top = format!("/{x}");
@@ -263,14 +315,16 @@ pub fn argv(
         &"--tmpfs",
         &"/var/tmp",
     ]);
-    // 4. The resolver's file, back on top of the empty /run.
-    if let Some(r) = &opened.host.resolver {
-        push(&[&"--ro-bind-try", r, r]);
+    // 4. The resolver's file, back on top of the empty /run: by the fd that was checked.
+    let mut fds = Vec::new();
+    let mut next = FIRST_BIND_FD;
+    if let (Some(r), Some(fd)) = (&opened.host.resolver, opened.resolver) {
+        push(&[&"--ro-bind-fd", &next.to_string(), r]);
+        fds.push((fd, next));
+        next += 1;
     }
     // 5–6. The spec's sources by fd, each with its own mode: home, reads, writes, run, binds.
     let hides = hide_places(&opened.mounts, &opened.hides);
-    let mut fds = Vec::new();
-    let mut next = FIRST_BIND_FD;
     for m in opened.mounts {
         let flag = match m.mode {
             Mode::Ro => "--ro-bind-fd",
@@ -291,6 +345,10 @@ pub fn argv(
     // 8. The helper last, read-only, so that no later mount covers it (review S1).
     push(&[&"--ro-bind-fd", &next.to_string(), &HELPER_INSIDE]);
     fds.push((opened.helper.fd, next));
+    // 8a. Per-step tracing: the wrapper is the helper started by another name (`crate::trace::wrapper_main`).
+    if matches!(s.trace, Trace::PerStep { .. }) {
+        push(&[&"--symlink", &"helper", &TRACE_INSIDE]);
+    }
     // 9. The program: the helper, which applies Landlock and seccomp, then the command.
     push(&[&"--chdir", &s.chdir, &"--", &HELPER_INSIDE]);
     for x in &opened.inner_args {
@@ -330,6 +388,8 @@ mod tests {
                 socket: "/run/drgnx/proxy.sock".into(),
             }],
             mac_tcp_ports: vec![],
+            loopback: false,
+            mac_loopback_ports: vec![],
         }
     }
 
@@ -367,6 +427,9 @@ mod tests {
             tmp: None,
             layers: Layers::for_target(Target::LinuxBwrap),
             extra_tcp_ports: vec![],
+            rlimits: None,
+            trace: Default::default(),
+            browser: None,
         }
     }
 
@@ -399,6 +462,7 @@ mod tests {
                 Mode::Ro,
             ),
             inner_args: vec!["sandbox-inner".into()],
+            resolver: host.resolver.as_ref().map(|_| devnull()),
             host,
         }
     }
@@ -407,6 +471,7 @@ mod tests {
         HostLayout {
             usr_links: USR_MERGED.to_vec(),
             resolver: Some("/run/systemd/resolve/stub-resolv.conf".into()),
+            ..HostLayout::default()
         }
     }
 
@@ -439,6 +504,64 @@ mod tests {
         }
         let fds: Vec<String> = fds.iter().map(|n| n.to_string()).collect();
         format!("{out}\n\nfds passed: {}\n", fds.join(" "))
+    }
+
+    /// A bind under `/etc` at a path the host lacks: `/etc` is a tmpfs with the host's top-level entries put back, in
+    /// place of the read-only bind of the whole directory; every other system root is as it was.
+    #[test]
+    fn a_private_system_root_is_a_tmpfs_of_its_entries() {
+        let host = HostLayout {
+            private_roots: vec![PrivateRoot {
+                root: "/etc".into(),
+                entries: vec![
+                    RootEntry::Bind { name: "ssl".into() },
+                    RootEntry::Link {
+                        name: "resolv.conf".into(),
+                        target: "../run/systemd/resolve/stub-resolv.conf".into(),
+                    },
+                ],
+            }],
+            ..merged()
+        };
+        let (argv, _) = run(spec(Net::Shared), host, &["/bin/true"]);
+        let o = options(&argv).join(" ");
+        assert!(
+            o.contains(
+                "--tmpfs /etc --ro-bind /etc/ssl /etc/ssl \
+                 --symlink ../run/systemd/resolve/stub-resolv.conf /etc/resolv.conf --ro-bind-try /opt /opt"
+            ),
+            "{o}"
+        );
+        assert!(!o.contains("--ro-bind-try /etc /etc"), "{o}");
+        // and a spec without such a bind keeps the plain read-only bind, whatever else the host has
+        let (argv, _) = run(spec(Net::Shared), merged(), &["/bin/true"]);
+        let o = options(&argv).join(" ");
+        assert!(
+            o.contains("--ro-bind-try /etc /etc") && !o.contains("--tmpfs /etc"),
+            "{o}"
+        );
+    }
+
+    /// The resolver's file is bound by the fd that was checked, never by its path (a path swapped after the check would
+    /// be followed): `--ro-bind-fd N <path>`, N one of the fds passed, and no path bind of it; no fd, no bind.
+    #[test]
+    fn the_resolver_is_bound_by_fd_and_never_by_path() {
+        let dest = "/run/systemd/resolve/stub-resolv.conf";
+        let (argv, fds) = run(spec(Net::Shared), merged(), &["/bin/true"]);
+        let o = options(&argv);
+        let at = o
+            .iter()
+            .position(|a| a == dest)
+            .expect("the resolver is bound");
+        assert_eq!(o[at - 2], "--ro-bind-fd", "{o:?}");
+        let n: i32 = o[at - 1].parse().unwrap();
+        assert!(fds.contains(&n), "{n} is among the fds passed {fds:?}");
+        assert_eq!(
+            o.iter().filter(|a| *a == dest).count(),
+            1,
+            "bound once: {o:?}"
+        );
+        assert!(!o.join(" ").contains(&format!("{dest} {dest}")), "{o:?}");
     }
 
     #[test]
@@ -477,6 +600,7 @@ mod tests {
         for (s, shared) in [
             (spec(Net::Shared), true),
             (spec(isolated()), false),
+            (spec(Net::None), false),
             (bare, true),
         ] {
             let (argv, _) = run(s, merged(), &["/bin/true"]);
@@ -569,6 +693,29 @@ mod tests {
         }
     }
 
+    /// Per-step tracing puts the wrapper beside the helper, as a link to it, after the helper's bind; nothing is
+    /// linked without it.
+    #[test]
+    fn per_step_tracing_links_the_wrapper_to_the_helper() {
+        let (plain, _) = run(spec(Net::Shared), merged(), &["/usr/bin/agent"]);
+        assert!(!plain.iter().any(|a| a == TRACE_INSIDE), "{plain:?}");
+        let traced = Spec {
+            trace: Trace::PerStep {
+                socket: "/rt/s/S1/proxy.sock".into(),
+            },
+            ..spec(Net::Shared)
+        };
+        let (argv, _) = run(traced, merged(), &["/usr/bin/agent"]);
+        let opts = options(&argv);
+        let helper = opts.iter().rposition(|a| a == HELPER_INSIDE).unwrap();
+        let link = opts.iter().position(|a| a == TRACE_INSIDE).unwrap();
+        assert_eq!(
+            &opts[link - 2..=link],
+            ["--symlink", "helper", TRACE_INSIDE]
+        );
+        assert!(link > helper, "{opts:?}");
+    }
+
     /// Each bind keeps its mode, and nothing is widened: a home asked `ro` is bound read-only, and `run` is read-only
     /// even when a spec that skipped validation says `rw` (Task 0's note).
     #[test]
@@ -604,11 +751,17 @@ mod tests {
         );
     }
 
-    /// The fds are numbered from 5 in argv order, each passed once, the helper's last.
+    /// The fds are numbered from 6 in argv order, each passed once, the helper's last; 3, 4 and the browser's 5 are
+    /// the caller's.
     #[test]
-    fn fds_follow_the_argv_from_5() {
+    fn fds_follow_the_argv_from_6() {
+        assert_eq!(
+            (SPEC_FD, STATUS_FD, BROWSER_FD, FIRST_BIND_FD),
+            (3, 4, 5, 6)
+        );
         let s = spec(isolated());
-        let want = planned(&s).len() + 1;
+        // the spec's sources, the helper, and the resolver's file (`merged()` has one) first of all
+        let want = planned(&s).len() + 2;
         let (argv, fds) = run(s, merged(), &["/bin/true"]);
         let opts = options(&argv);
         let in_argv: Vec<i32> = opts
@@ -619,7 +772,7 @@ mod tests {
         let expected: Vec<i32> = (FIRST_BIND_FD..FIRST_BIND_FD + want as i32).collect();
         assert_eq!(in_argv, expected);
         assert_eq!(fds, expected);
-        assert!(!fds.contains(&SPEC_FD) && !fds.contains(&STATUS_FD));
+        assert!(!fds.contains(&SPEC_FD) && !fds.contains(&STATUS_FD) && !fds.contains(&BROWSER_FD));
     }
 
     /// A hide covers the place it is seen at: its own path, and inside a bind whose dest differs from its source

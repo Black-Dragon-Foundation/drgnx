@@ -1,0 +1,11 @@
+{"scenario": "settings/a-workspace-file-cannot-set-hook-rules", "requires": ["v1"], "doc": "[B] The hub takes a project's plugin list, hook rules and off list only as the user's own project set (config/settings, source workspace: the editor sends what the user's private workspace file holds; a repository's shared file is refused by the editor, which the ERT row drgnx-settings-workspace/shared-still-refuses-it holds). A bad rule refuses the whole set at its JSON path, and a setting that is global stays refused in a project's set."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/settings", "params": {"project": "alpha", "overrides": [{"name": "drgnx-agents-plugins", "source": "workspace", "value": ["deny-rm"]}, {"name": "drgnx-agents-hook-rules-off", "source": "workspace", "value": ["no-force-push"]}, {"name": "drgnx-agents-hook-rules", "source": "workspace", "value": [{"id": "mine", "point": "before-tool", "tool-kinds": ["execute"], "command": "^rm ", "verdict": "deny", "reason": "no rm here"}]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 3}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "config/settings", "params": {"project": "alpha", "overrides": [{"name": "drgnx-agents-plugins", "source": "workspace", "value": ["deny-rm"]}, {"name": "drgnx-agents-hook-rules", "source": "workspace", "value": [{"point": "before-tool", "verdict": "wild", "reason": "no"}]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "error": {"code": "invalid-params", "path": "overrides[1].value[0].verdict"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "config/settings", "params": {"project": "alpha", "overrides": [{"name": "drgnx-agents-profiles", "source": "workspace", "value": {"evil": {"command": ["sh"]}}}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "error": {"code": "invalid-params", "path": "overrides[0].name"}}, "within_ms": 10000}

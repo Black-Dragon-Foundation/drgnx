@@ -1,0 +1,24 @@
+{"scenario": "debug/partner-agent-under-cautious", "requires": ["v1", "test-hooks"], "doc": "Gated (B). Under the Cautious preset a partner agent's evaluate and step in the user's live session are refused outright (debug.live-eval, debug.drive: never; no card), and its read of the sessions waits on a card (debug.read: ask). The project has a launch configuration, so the session has the debugger tools. Pattern B: each call's turn, idle with an agent entry, gates the transcript read."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$ROOT/work/.vscode/launch.json", "json": {"version": "0.2.0", "configurations": [{"type": "mock", "request": "launch", "name": "Mock", "program": "app"}]}}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))) (drgnx-agents-matrix (:preset cautious)))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:a", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 102, "method": "agents/send", "params": {"id": "$a", "text": "call:debug_live {\"debug_session\": \"d1\", \"op\": \"evaluate\", \"epoch\": 1, \"expr\": \"total\"}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 102, "result": true}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "for i in $(seq 300); do grep -q 'call: .*debug.live-eval' $STATE/hub/transcripts/$a.jsonl && exit 0; sleep 0.1; done; grep -o 'call:[^\"]*' $STATE/hub/transcripts/$a.jsonl >&2; exit 1"], "expect_code": 0}
+{"do": "sql_expect", "sql": "select count(*) from card where kind = 'matrix' and title like 'debug.live-eval%'", "rows": [[0]]}
+{"do": "send", "conn": "c", "json": {"id": 104, "method": "agents/send", "params": {"id": "$a", "text": "call:debug_live {\"debug_session\": \"d1\", \"op\": \"next\", \"epoch\": 1}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 104, "result": true}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "for i in $(seq 300); do grep -q 'call: .*debug.drive' $STATE/hub/transcripts/$a.jsonl && exit 0; sleep 0.1; done; grep -o 'call:[^\"]*' $STATE/hub/transcripts/$a.jsonl >&2; exit 1"], "expect_code": 0}
+{"do": "send", "conn": "c", "json": {"id": 106, "method": "agents/send", "params": {"id": "$a", "text": "call:debug_read {\"what\": \"sessions\"}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 106, "result": true}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "for i in $(seq 300); do grep -q 'call: debug.read needs the user.s yes' $STATE/hub/transcripts/$a.jsonl && exit 0; sleep 0.1; done; grep -o 'call:[^\"]*' $STATE/hub/transcripts/$a.jsonl >&2; exit 1"], "expect_code": 0}
+{"do": "sql_expect", "sql": "select count(*) from card where kind = 'matrix' and state = 'open' and title like 'debug.read%'", "rows": [[1]]}

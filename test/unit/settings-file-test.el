@@ -505,6 +505,38 @@
                                                         'drgnx-settings)
                              :last-good)))))
 
+(ert-deftest drgnx-settings-file/the-state-parses-a-file-once-when-its-copy-holds-the-same-text ()
+  (drgnx-test-with-config
+    (let ((f (drgnx-config-file 'settings)) (parses 0))
+      (drgnx-test-config-put 'settings (drgnx-settings-file-test--form "(a 1)" "(b 2)"))
+      (drgnx-settings-file-state f 'drgnx-settings)           ; makes the copy
+      (cl-letf* ((orig (symbol-function 'drgnx-settings-file--parse-form))
+                 ((symbol-function 'drgnx-settings-file--parse-form)
+                  (lambda (&rest args) (cl-incf parses) (apply orig args))))
+        (let* ((st (drgnx-settings-file-state f 'drgnx-settings)) (good (plist-get st :last-good)))
+          (should (= parses 1))
+          (should (equal (drgnx-settings-file-test--facts good) '((a nil 1 nil) (b nil 2 nil))))
+          (should (equal (drgnx-settings-doc-file good) (drgnx-config-last-good-file 'settings)))
+          (should (equal (drgnx-settings-doc-file (plist-get st :doc)) f)))))))
+
+(ert-deftest drgnx-settings-file/the-state-scans-and-reads-the-file-once-at-a-start ()
+  ;; a start has no applied state yet: the config layer's bookkeeping and the settings reader both read the file
+  (drgnx-test-with-config
+    (let ((f (drgnx-config-file 'settings)) (parses 0))
+      (drgnx-test-config-put 'settings (drgnx-settings-file-test--form "(a 1)" "(b 2)"))
+      (clrhash drgnx-config--state)
+      (cl-letf* ((orig (symbol-function 'drgnx-file--parse))
+                 ((symbol-function 'drgnx-file--parse) (lambda (&rest args) (cl-incf parses) (apply orig args))))
+        (let ((st (drgnx-settings-file-state f 'drgnx-settings)))
+          (should (= parses 1))
+          (should-not (plist-get st :problem))
+          (should (equal (drgnx-settings-file-test--facts (plist-get st :doc)) '((a nil 1 nil) (b nil 2 nil))))
+          (should (equal (drgnx-settings-file-test--facts (plist-get st :last-good)) '((a nil 1 nil) (b nil 2 nil)))))
+        ;; outside the state a read is a read
+        (setq parses 0)
+        (drgnx-file-read f) (drgnx-file-read f)
+        (should (= parses 2))))))
+
 ;;;; Two writers
 
 (ert-deftest drgnx-settings-file/two-emacsen-add-100-each ()

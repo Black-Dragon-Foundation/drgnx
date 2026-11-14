@@ -1,0 +1,8 @@
+{"scenario": "work/machines-report-from-an-agent-is-refused", "requires": ["v1", "test-hooks"], "doc": "Pattern B. Only a user connection may report machines: over an agent's session socket (no user hello) machines/report is not-allowed, and the list a user reads afterwards has local only."}
+{"do": "start", "hub": "h", "args": ["--agent-socket", "s1:j1"]}
+{"do": "connect", "conn": "a", "hub": "h", "socket": "agent:s1", "as": "service"}
+{"do": "send", "conn": "a", "json": {"id": 1, "method": "machines/report", "params": {"machine": "rogue", "ttl": 60, "slots": [{"id": "r1", "kind": "build"}]}}}
+{"do": "expect", "conn": "a", "json": {"id": 1, "error": {"code": "not-allowed", "message": "$string"}}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "machines/list", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"machines": [{"machine": "local", "local": true, "slots": "$any"}]}}}

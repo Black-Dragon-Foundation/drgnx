@@ -1,0 +1,28 @@
+{"scenario": "pair/retry-after-expiry-never-double-applies", "requires": ["v1", "test-hooks"], "doc": "Gated (B), the hub's clock. The editor applied a write just before its deadline and its answer was late: the hub's timer asked for a reconcile and refused nothing; the editor's answer (applied) is the verdict, once. A second answer to the same write changes nothing (false). The agent's retry is a new write with its own id, sent only after the first was answered, so the editor never takes one write twice."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/project && echo readme > $ROOT/project/README"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-matrix (:preset autonomous)) (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h", "args": ["--test-clock"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 90, "method": "pair/open", "params": {"file": "$ROOT/project/README", "kind": "normal"}}}
+{"do": "expect", "conn": "e", "json": {"id": 90, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/project"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "call:edit_file {\"path\": \"$ROOT/project/README\", \"old\": \"readme\", \"new\": \"README\"}\ncall:edit_file {\"path\": \"$ROOT/project/README\", \"old\": \"readme\", \"new\": \"README\"}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "pair-apply", "data": {"write": "$capture:w1", "ordinal": 1}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "__test_advance", "params": {"ms": 3100}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "pair-reconcile", "data": {"write": "$w1"}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "pair/answer", "params": {"write": "$w1", "result": "applied", "version": 3, "saved": true}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "pair/answer", "params": {"write": "$w1", "result": "applied", "version": 3, "saved": true}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": false}}
+{"do": "expect", "conn": "e", "json": {"event": "pair-apply", "data": {"write": "$capture:w2", "ordinal": 2, "edits": [{"kind": "replace", "old": "readme", "new": "README"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "pair/answer", "params": {"write": "$w2", "result": "refused", "reason": "no-match"}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": true}}
+{"do": "poll", "conn": "c", "json": {"id": 4, "method": "agents/get", "params": {"id": "$sid"}}, "expect": {"id": 4, "result": {"session": {"status": "idle"}, "entries": {"$contains": [{"type": "agent", "text": "call: applied in the editor and savedcall: old is not in the editor's text: read it with read_file (the editor's text, unsaved edits included), then retry"}]}}}, "within_ms": 20000}

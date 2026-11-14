@@ -45,6 +45,9 @@ pub struct PassFd {
     pub target: i32,
 }
 
+/// How many spawns were tried again because a target number changed hands (`child_fds`); for the test.
+static GUARD_RETRIES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 /// The files no child may be given as a [`PassFd`] (the hub's listening sockets: call 14's invariant), by device and
 /// inode; [`never_pass`] adds one.  Checked in debug builds.
 static NEVER_PASS: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
@@ -123,6 +126,10 @@ struct Job {
 
 static SPAWNER: Mutex<Option<mpsc::Sender<Job>>> = Mutex::new(None);
 
+/// Held by a test to stall the spawner thread before it starts the next job.
+#[cfg(test)]
+static SPAWNER_STALL: Mutex<()> = Mutex::new(());
+
 /// The `draugr-spawner` thread's queue, starting the thread on first use. The thread never exits.
 fn spawner() -> io::Result<mpsc::Sender<Job>> {
     let mut slot = SPAWNER.lock().unwrap_or_else(|e| e.into_inner());
@@ -134,11 +141,13 @@ fn spawner() -> io::Result<mpsc::Sender<Job>> {
         .name("draugr-spawner".into())
         .spawn(move || {
             for job in rx {
+                // a test holds this to keep the spawner from starting a job it has queued
+                #[cfg(test)]
+                drop(SPAWNER_STALL.lock().unwrap_or_else(|e| e.into_inner()));
                 let _rt = job.runtime.enter();
                 if let Err(Ok(child)) = job.reply.send(start(job.spec)) {
                     // The caller stopped waiting: nobody owns this child, so its group ends now.
-                    // SAFETY: kill(2) on the child's own process group (its pid; `start` made it a leader).
-                    unsafe { libc::kill(-child.pid, libc::SIGKILL) };
+                    kill_cancelled(-child.pid);
                 }
             }
         })?;
@@ -146,7 +155,29 @@ fn spawner() -> io::Result<mpsc::Sender<Job>> {
     Ok(tx)
 }
 
+/// SIGKILL to `target`, the process group of a child whose caller stopped waiting (`start` made the child a group
+/// leader, so its pid names the group: a negative `target`).
+fn kill_cancelled(target: i32) {
+    #[cfg(test)]
+    CANCELLED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(target);
+    // SAFETY: kill(2) has no memory effects; `target` is a child this thread just started.
+    unsafe { libc::kill(target, libc::SIGKILL) };
+}
+
+/// The targets `kill_cancelled` was given, for the test.
+#[cfg(test)]
+static CANCELLED: Mutex<Vec<i32>> = Mutex::new(Vec::new());
+
 fn start(spec: Spec) -> io::Result<Child> {
+    start_with(spec, |_| {})
+}
+
+/// [`start`], with `after_move` run once the descriptors are held and before the spawn (a test closes a held number
+/// there, as another thread of the process could).
+fn start_with(spec: Spec, after_move: impl FnOnce(&mut Moved)) -> io::Result<Child> {
     if cfg!(debug_assertions) {
         let never = NEVER_PASS.lock().unwrap_or_else(|e| e.into_inner());
         debug_assert!(
@@ -156,43 +187,62 @@ fn start(spec: Spec) -> io::Result<Child> {
             "a hub's listening socket was passed to a child"
         );
     }
-    let moved = move_above_targets(&spec.pass_fds)?;
-    let mut cmd = Command::new(&spec.program);
-    cmd.args(&spec.args)
-        .env_clear()
-        .envs(spec.env.iter().map(|(k, v)| (k, v)))
-        .stdin(if spec.stdin_null {
-            Stdio::null()
-        } else {
-            Stdio::piped()
-        })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    // std's setpgid runs before the pre_exec closure, and a group leader cannot setsid: so one or the other.
-    let new_session = spec.new_session;
-    if !new_session {
-        cmd.process_group(0);
-    }
-    if let Some(cwd) = &spec.cwd {
-        cmd.current_dir(cwd);
-    }
-    let pairs = moved.pairs.clone();
-    // SAFETY: runs in the forked child before exec; setsid(2), signal(2), close_range(2), fcntl(2), getrlimit(2) and
-    // dup2(2) are async-signal-safe and nothing here allocates (`pairs` was built in the parent). std runs pre_exec
-    // closures after it has reset SIGPIPE to the default and set up 0–2.
-    unsafe {
-        cmd.pre_exec(move || {
-            if new_session && libc::setsid() < 0 {
-                return Err(io::Error::last_os_error());
+    // A target that holds another file in the child than it did in the parent (`child_fds`) is a spawn tried again:
+    // the numbers are held anew. A few tries; a process that closes and opens descriptors that fast is refused.
+    let mut after_move = Some(after_move);
+    let mut tries = 0;
+    let spawned = loop {
+        let mut moved = move_above_targets(&spec.pass_fds)?;
+        if let Some(f) = after_move.take() {
+            f(&mut moved);
+        }
+        let expect = std::mem::take(&mut moved.expect);
+        let mut cmd = Command::new(&spec.program);
+        cmd.args(&spec.args)
+            .env_clear()
+            .envs(spec.env.iter().map(|(k, v)| (k, v)))
+            .stdin(if spec.stdin_null {
+                Stdio::null()
+            } else {
+                Stdio::piped()
+            })
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        // std's setpgid runs before the pre_exec closure, and a group leader cannot setsid: so one or the other.
+        let new_session = spec.new_session;
+        if !new_session {
+            cmd.process_group(0);
+        }
+        if let Some(cwd) = &spec.cwd {
+            cmd.current_dir(cwd);
+        }
+        let pairs = moved.pairs.clone();
+        let guarded = !expect.is_empty();
+        // SAFETY: runs in the forked child before exec; setsid(2), signal(2), close_range(2), fcntl(2), getrlimit(2)
+        // and dup2(2) are async-signal-safe and nothing here allocates (`pairs` was built in the parent). std runs
+        // pre_exec closures after it has reset SIGPIPE to the default and set up 0–2.
+        unsafe {
+            cmd.pre_exec(move || {
+                if new_session && libc::setsid() < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                if libc::signal(libc::SIGPIPE, libc::SIG_IGN) == libc::SIG_ERR {
+                    return Err(io::Error::last_os_error());
+                }
+                child_fds(&pairs, &expect)
+            });
+        }
+        // under drgnx-exe's lock where unshare is refused: a file written meanwhile is never held open by this fork
+        let r = drgnx_exe::spawn(|| cmd.spawn());
+        drop(moved);
+        match r {
+            Err(e) if guarded && tries < 4 && e.raw_os_error() == Some(libc::EBUSY) => {
+                tries += 1;
+                GUARD_RETRIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
-            if libc::signal(libc::SIGPIPE, libc::SIG_IGN) == libc::SIG_ERR {
-                return Err(io::Error::last_os_error());
-            }
-            child_fds(&pairs)
-        });
-    }
-    let spawned = cmd.spawn();
-    drop(moved);
+            r => break r,
+        }
+    };
     drop(spec);
     let mut inner = spawned?;
     let pid = inner
@@ -227,6 +277,9 @@ struct Moved {
     /// (the moved source, its target), for the child.
     pairs: Vec<(RawFd, RawFd)>,
     held: Vec<OwnedFd>,
+    /// Each target number with the device and inode of the file open on it when the fillers were set: a filler, or
+    /// a descriptor the process already held there.
+    expect: Vec<(RawFd, (u64, u64))>,
 }
 
 /// Validates the targets (each 3 or more, each once), then copies every source with `F_DUPFD_CLOEXEC` to a number
@@ -249,6 +302,7 @@ fn move_above_targets(pass: &[PassFd]) -> io::Result<Moved> {
     let mut moved = Moved {
         pairs: Vec::with_capacity(pass.len()),
         held: Vec::with_capacity(pass.len()),
+        expect: Vec::new(),
     };
     for p in pass {
         let fd = dup_cloexec(p.fd.as_raw_fd(), above)?;
@@ -263,6 +317,10 @@ fn move_above_targets(pass: &[PassFd]) -> io::Result<Moved> {
             }
             moved.held.push(filler);
         }
+        moved.expect = pass
+            .iter()
+            .filter_map(|p| file_id(p.target).map(|id| (p.target, id)))
+            .collect();
     }
     Ok(moved)
 }
@@ -280,7 +338,18 @@ fn dup_cloexec(fd: RawFd, lowest: RawFd) -> io::Result<OwnedFd> {
 /// In the forked child: every descriptor from 3 up is marked close-on-exec, then each moved source is `dup2`'d to
 /// its target (`dup2` clears close-on-exec on the copy). So the child keeps exactly 0–2 and its targets, also
 /// against descriptors the hub inherited without close-on-exec (from systemd, launchd or Emacs). No allocation.
-fn child_fds(pairs: &[(RawFd, RawFd)]) -> io::Result<()> {
+///
+/// Before any `dup2`, no target may hold another file than it did when the fillers were set (`Moved::expect`): a
+/// number another thread of the parent closed after that can be the one std opened for reporting a failed exec, and
+/// a `dup2` onto it would make that failure look like a start (GL-T6-1). Then the child refuses to go on (`EBUSY`),
+/// and the failure comes back through the intact report socket. A number that is simply closed now is fine: nothing
+/// took it, and the `dup2` fills it.
+fn child_fds(pairs: &[(RawFd, RawFd)], expect: &[(RawFd, (u64, u64))]) -> io::Result<()> {
+    for &(target, id) in expect {
+        if file_id(target).is_some_and(|now| now != id) {
+            return Err(io::Error::from_raw_os_error(libc::EBUSY));
+        }
+    }
     cloexec_from(3);
     for &(src, target) in pairs {
         // SAFETY: dup2(2) on descriptors this child holds.
@@ -565,6 +634,31 @@ mod tests {
         );
     }
 
+    /// GL-T6-1: another thread closes a held number that is a target; std's exec-report socket may take it, and the
+    /// child's `dup2` onto it must not make a failed exec look like a start: the child stops (`EBUSY`), the spawn is
+    /// tried again, and the exec failure is then reported as it is.
+    #[tokio::test]
+    async fn a_failed_exec_is_reported_when_a_held_number_was_closed() {
+        let (_r, w) = pipe();
+        let w = Arc::new(w);
+        let mut spec = sh("exit 0", true);
+        spec.program = "/nonexistent/glp-no-such-program".into();
+        // targets 3..=40, every filler gone: std opens /dev/null, two pipes for stdout and stderr, then its report pipe,
+        // on the lowest free numbers (the test process holds most of 3..22), so the report pipe's write end (the
+        // child's) lands on a target
+        spec.pass_fds = (3..=40).map(|t| pass(&w, t)).collect();
+        let before = GUARD_RETRIES.load(std::sync::atomic::Ordering::Relaxed);
+        let err = start_with(spec, |moved| moved.held.retain(|f| f.as_raw_fd() > 40))
+            .err()
+            .expect("a failed exec is an error");
+        // the guard stopped the first try (EBUSY), the second try held the numbers again and std reported the exec
+        assert!(
+            GUARD_RETRIES.load(std::sync::atomic::Ordering::Relaxed) > before,
+            "the guard never fired"
+        );
+        assert_eq!(err.raw_os_error(), Some(libc::ENOENT), "{err}");
+    }
+
     #[tokio::test]
     async fn bad_targets_are_refused() {
         // 2_000_000: above any descriptor limit (Linux's nr_open is at most 2^20 by default), so the parent's
@@ -646,6 +740,34 @@ mod tests {
             );
             assert!(child.wait().await.unwrap().unwrap().success());
         });
+    }
+
+    /// GL-T6-3: a caller that stopped waiting leaves a child nobody owns; the spawner kills its whole group (a
+    /// negative target), not only its leader.
+    #[tokio::test]
+    async fn a_cancelled_pinned_spawn_kills_the_group() {
+        use std::future::Future;
+        let stall = SPAWNER_STALL.lock().unwrap();
+        let before = CANCELLED.lock().unwrap().len();
+        // queue the job, then drop the caller before the spawner may start it
+        let mut fut = Box::pin(spawn_pinned(sh("sleep 30", true)));
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(
+            fut.as_mut().poll(&mut cx).is_pending(),
+            "the spawner was stalled"
+        );
+        drop(fut);
+        drop(stall);
+        let sent =
+            skuld::wait_until_async("the spawner killed the cancelled child", 10, || async {
+                let fresh: Vec<i32> = CANCELLED.lock().unwrap()[before..].to_vec();
+                (!fresh.is_empty()).then_some(fresh)
+            })
+            .await;
+        assert!(
+            sent.iter().all(|&t| t < -1),
+            "the group is killed (a negative pid), not the leader alone: {sent:?}"
+        );
     }
 
     #[tokio::test]

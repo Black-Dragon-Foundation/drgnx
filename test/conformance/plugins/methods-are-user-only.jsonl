@@ -1,0 +1,18 @@
+{"scenario": "plugins/methods-are-user-only", "requires": ["v1", "test-hooks"], "doc": "[B] plugins/list, plugins/approve and plugins/disable answer the user's connection and are not-allowed on an agent's: no agent approves or switches a plugin, and the plugin stays as it was."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "write_file", "path": "$DATA/plugins/alpha/plugin.json", "json": {"name": "alpha", "version": "1.0.0"}}
+{"do": "write_file", "path": "$DATA/plugins/alpha/plugin.wasm", "text": "wasm-one"}
+{"do": "start", "hub": "h", "args": ["--agent-socket", "s1:j1"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "a", "hub": "h", "socket": "agent:s1", "as": "service"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "plugins/list", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"plugins": [{"name": "alpha", "state": "unapproved", "hash": "$capture:h"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "a", "json": {"id": 1, "method": "plugins/list", "params": {}}}
+{"do": "expect", "conn": "a", "json": {"id": 1, "error": {"code": "not-allowed"}}, "within_ms": 10000}
+{"do": "send", "conn": "a", "json": {"id": 2, "method": "plugins/approve", "params": {"name": "alpha", "hash": "$h"}}}
+{"do": "expect", "conn": "a", "json": {"id": 2, "error": {"code": "not-allowed"}}, "within_ms": 10000}
+{"do": "send", "conn": "a", "json": {"id": 3, "method": "plugins/disable", "params": {"name": "alpha"}}}
+{"do": "expect", "conn": "a", "json": {"id": 3, "error": {"code": "not-allowed"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "plugins/list", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"plugins": [{"name": "alpha", "state": "unapproved"}]}}, "within_ms": 10000}

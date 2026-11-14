@@ -1,0 +1,27 @@
+{"scenario": "wheel/an-untracked-file-falls-back-to-the-snapshot", "requires": ["v1", "test-hooks"], "doc": "Gated (B). In a worker's worktree the editor tracks a.txt but not b.txt. While the user holds the wheel they type a line in a.txt (unsaved) and change b.txt on disk outside the editor. The give's message has both: a.txt's line from the edit history since the boundary, and b.txt's change from the step snapshot taken at held (the history does not track it)."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && cd $ROOT/work && git init -q -b main && echo one > a.txt && echo x > b.txt && git add a.txt b.txt && git -c user.email=t@example.invalid -c user.name=t commit -qm base"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "history/register", "params": {"path": "a.txt", "worktree_root": "$ROOT/work", "buffer_id": "b1"}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"tracked": true}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/wheel/take", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-wheel", "data": {"id": "$sid", "state": "held"}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "history/batch", "params": {"buffer_id": "b1", "changes": [{"start": 4, "old_len": 0, "inserted": "USER-LINE\n"}], "region_hash": "a81a2468d3f9687b11c3933ea758f42dff91e8c751314fa4941022413e91f9a9", "version": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": {"ok": true}}, "within_ms": 30000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "echo by-shell > $ROOT/work/b.txt"], "expect_code": 0}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/wheel/give", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "e", "json": {"event": "wheel-save", "data": {"req": "$capture:req", "id": "$sid"}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 6, "method": "agents/wheel/saved", "params": {"req": "$req", "unsaved": []}}}
+{"do": "expect", "conn": "e", "json": {"id": 6, "result": true}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": true}, "within_ms": 10000}
+{"do": "poll", "conn": "c", "json": {"id": 10, "method": "agents/get", "params": {"id": "$sid"}}, "expect": {"id": 10, "result": {"session": {"status": "idle"}, "seq": "$number", "entries": {"$contains": [{"type": "user", "key": "wheel:edits"}]}}}, "within_ms": 20000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "t=$STATE/hub/transcripts/$sid.jsonl; grep -q '+USER-LINE' $t && grep -q '+by-shell' $t && grep -q 'b/b.txt' $t"], "expect_code": 0}

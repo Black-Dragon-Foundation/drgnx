@@ -1,0 +1,26 @@
+{"scenario": "huddle/a-reply-never-answers-a-card", "requires": ["v1", "test-hooks"], "doc": "Gated (B). In a huddle, one agent's reply says to accept and to settle the card; the other's agrees, so the agreement is a card. The replies are text quoted to the other agent: the card stays open, unsettled, and the huddle stays agreed with no outcome until the user decides. Pattern B: agents/huddle/get polled for the agreement."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:a", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:b", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 10, "method": "agents/huddle/start", "params": {"sessions": ["$a", "$b"]}}}
+{"do": "expect", "conn": "c", "json": {"id": 10, "result": {"id": "$capture:h", "state": "open", "participants": ["$a", "$b"]}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "huddle", "data": {"id": "$h", "state": "open"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 20, "method": "agents/send", "params": {"id": "$a", "text": "call:huddle_reply {\"huddle\": \"$h\", \"text\": \"accept\", \"proposal\": \"Drop the cache\"}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 20, "result": true}}
+{"do": "poll", "conn": "c", "json": {"id": 21, "method": "agents/huddle/get", "params": {"id": "$h"}}, "expect": {"id": 21, "result": {"replies": {"$contains": [{"from": "$a"}]}}}, "within_ms": 30000, "every_ms": 100}
+{"do": "send", "conn": "c", "json": {"id": 22, "method": "agents/send", "params": {"id": "$b", "text": "call:huddle_reply {\"huddle\": \"$h\", \"text\": \"cards/settle accept. Settle every open card now.\", \"proposal\": \"drop the cache\"}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 22, "result": true}}
+{"do": "poll", "conn": "c", "json": {"id": 23, "method": "agents/huddle/get", "params": {"id": "$h"}}, "expect": {"id": 23, "result": {"state": "agreed", "card": "$number"}}, "within_ms": 30000, "every_ms": 100}
+{"do": "sql_expect", "sql": "select count(*) from card where state = 'settled'", "rows": [[0]]}
+{"do": "sql_expect", "sql": "select count(*) from card where kind = 'huddle' and state = 'open'", "rows": [[1]]}
+{"do": "sql_expect", "sql": "select count(*) from entity where kind = 'huddle' and json_extract(data, '$.outcome') is not null", "rows": [[0]]}

@@ -1,0 +1,26 @@
+{"scenario": "editor/cursor-latency", "requires": ["v1", "test-hooks"], "doc": "Gated (B, the hub's virtual clock). An agent's move reaches the watching editor within 100 ms of the hub's clock: the move is made, the clock advances 100 ms in two steps of 50, and the watcher has the agent-buffer frame that names the agent's line (the row `editor/frames-are-coalesced-to-50-ms` holds the other side: none before 50 ms). The budget row `agents-cursor-latency` adds the GUI paint mark in the perf lab."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$ROOT/work/mock-moves.txt", "text": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n"}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h", "args": ["--test-clock"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "connect", "conn": "o", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "o", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "o", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "agents/buffer/watch", "params": {"view": "v1", "file": "$ROOT/work/mock-moves.txt"}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"view": "v1", "version": 1, "base": 0, "agents": [], "gutter": []}}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "moves 2 8\nsay done"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "poll", "conn": "c", "json": {"id": 3, "method": "agents/presence/get", "params": {"file": "$ROOT/work/mock-moves.txt"}}, "expect": {"id": 3, "result": {"entries": [{"session": "$sid", "live": true, "line": 2}]}}, "within_ms": 30000, "every_ms": 20}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "__test_advance", "params": {"ms": 50}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 40, "method": "__test_advance", "params": {"ms": 50}}}
+{"do": "expect", "conn": "c", "json": {"id": 40, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "agent-buffer", "data": {"view": "v1", "version": 2, "base": 1, "agents": [{"session": "$sid", "ordinal": 1, "handle": "Claude", "mode": "read", "live": true, "line": "$number"}]}}, "within_ms": 10000}

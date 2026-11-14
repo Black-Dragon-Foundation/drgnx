@@ -1,0 +1,21 @@
+{"scenario": "hooks/an-agent-kind-drgnx-is-other-at-the-seam", "requires": ["v1", "test-hooks"], "doc": "[C] The agent sends `\"kind\": \"drgnx\"` for a Bash step. Only the hub's own servers say `drgnx`: at the seam the step is `other`, so a rule on `drgnx` does not see it (no hook row) and one on `other` does."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/acp.log\")))) (drgnx-agents-matrix (:cells ((:action code.edit :column (:role worker) :verdict allow)))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-agents-hook-rules", "source": "row", "value": [{"id": "hub-only", "point": "before-tool", "tool-kinds": ["drgnx"], "verdict": "deny", "reason": "hub tools only"}]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$sid", "text": "ask:tool {\"kind\": \"drgnx\", \"title\": \"rm -rf x\", \"rawInput\": {\"command\": \"rm -rf x\"}, \"_meta\": {\"claudeCode\": {\"toolName\": \"Bash\"}}}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "{\"permission\":{\"kind\":\"drgnx\",\"answer\":\"allow_once\"}}", "within_ms": 15000}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select count(*) from event e join tx t on t.id = e.tx where t.actor = 'hub:hooks'", "rows": [[0]]}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-agents-hook-rules", "source": "row", "value": [{"id": "others", "point": "before-tool", "tool-kinds": ["other"], "verdict": "deny", "reason": "no unknown kinds"}]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"applied": 1}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/send", "params": {"id": "$sid", "text": "ask:tool {\"kind\": \"drgnx\", \"title\": \"rm -rf y\", \"rawInput\": {\"command\": \"rm -rf y\"}, \"_meta\": {\"claudeCode\": {\"toolName\": \"Bash\"}}}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": true}}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "{\"permission\":{\"kind\":\"drgnx\",\"answer\":\"reject_once\"}}", "within_ms": 15000}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select json_extract(e.data, '$.outcome'), json_extract(e.data, '$.records[0].source') from event e join tx t on t.id = e.tx where t.actor = 'hub:hooks'", "rows": [["deny", "rule:others"]]}

@@ -186,7 +186,7 @@
 ;;;; Reviewing a hand edit (Task 14c): a real Ratatoskr, a view edited by hand in a temp org folder
 
 (require 'drgnx-records-review)
-(load (expand-file-name "test/unit/hub-client-test" drgnx-dir) nil t)   ; its Ratatoskr helpers
+(load (expand-file-name "test/fixtures/hub-client-fixture" drgnx-dir) nil t)   ; its Ratatoskr helpers
 (load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
 
 (defconst records-test--deferred

@@ -2,7 +2,9 @@
 //! Balanced allows work that reaches beyond the worktree; Autonomous allows most of what Balanced asks of the manager
 //! (a done task, the CI configuration, a larger spend and fleet), but still asks for pushes to main, settings and the
 //! user's Emacs, asks the worker for the CI configuration, and keeps `spend.over` Ask for the manager and chat.
-//! `unsandboxed` and `user.private` are Never in every column of every preset.
+//! `unsandboxed` and `user.private` are Never in every column of every preset.  The browser rows: `browser` asks in
+//! Cautious, is allowed in Balanced for managers and workers (asked of chat) and everywhere in Autonomous;
+//! `browser.web` is allowed only in Autonomous; `browser.private` asks in every preset (and no layer can allow it).
 
 use super::{Action, Cell, Column, Limit, Matrix, Preset, Role, Unit, Verdict};
 
@@ -65,13 +67,39 @@ fn row(a: Action, p: Preset) -> [Cell; 3] {
         (Machines, _) => [ALLOW, ALLOW, NEVER],
         (JobContainer, Cautious) => [ASK, ASK, NEVER],
         (JobContainer, _) => [ALLOW, ALLOW, NEVER],
+        (JobKeys, Autonomous) => [ALLOW, ALLOW, NEVER],
+        (JobKeys, _) => [ASK, ASK, NEVER],
         (Network, Cautious) => [ASK, ASK, ALLOW],
         (Network, _) => [ALLOW, ALLOW, ALLOW],
+        (Browser, Cautious) => [ASK, ASK, ASK],
+        (Browser, Balanced) => [ALLOW, ALLOW, ASK],
+        (Browser, Autonomous) => [ALLOW, ALLOW, ALLOW],
+        (BrowserWeb, Autonomous) => [ALLOW, ALLOW, ALLOW],
+        (BrowserWeb, _) | (BrowserPrivate, _) => [ASK, ASK, ASK],
         (Unsandboxed, _) | (UserPrivate, _) => [NEVER, NEVER, NEVER],
         (SettingsChange, _) => [ASK, ASK, ASK],
         (UserEmacs, Cautious) => [NEVER, NEVER, NEVER],
         (UserEmacs, _) => [ASK, NEVER, NEVER],
         (ChatProjectRead, _) => [NEVER, NEVER, ASK],
+        (PluginAbilities, Cautious) => [ASK, ASK, ASK],
+        (PluginAbilities, _) => [ALLOW, ALLOW, ASK],
+        // a chat edits your checkout through the pair door: ask = the Pair toggle is allowed, allow = paired from
+        // the start; the chat's code.edit stays never
+        (ChatProjectEdit, Cautious) => [NEVER, NEVER, NEVER],
+        (ChatProjectEdit, Balanced) => [NEVER, NEVER, ASK],
+        (ChatProjectEdit, Autonomous) => [NEVER, NEVER, ALLOW],
+        // two agents state their positions in a huddle for the user to decide: a card first under Cautious
+        (Huddles, Cautious) => [ASK, ASK, ASK],
+        (Huddles, _) => [ALLOW, ALLOW, ALLOW],
+        // the debugger (graphical debugging spec §19.5): everything asks under Cautious except the user's live
+        // process, which it never touches; a chat asks before its probes under Balanced; a live evaluate always asks
+        (DebugRead | DebugProbe | DebugFork, Cautious) => [ASK, ASK, ASK],
+        (DebugRead | DebugFork, _) => [ALLOW, ALLOW, ALLOW],
+        (DebugProbe, Balanced) => [ALLOW, ALLOW, ASK],
+        (DebugProbe, Autonomous) => [ALLOW, ALLOW, ALLOW],
+        (DebugLiveEval | DebugDrive, Cautious) => [NEVER, NEVER, NEVER],
+        (DebugLiveEval, _) | (DebugDrive, Balanced) => [ASK, ASK, ASK],
+        (DebugDrive, Autonomous) => [ALLOW, ALLOW, ALLOW],
     }
 }
 

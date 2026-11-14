@@ -24,7 +24,7 @@ fn balanced_is_the_mockups_table() {
     use Action::*;
     use Verdict::*;
     let p = preset(Preset::Balanced);
-    let rows: [(Action, [Verdict; 3]); 22] = [
+    let rows: [(Action, [Verdict; 3]); 34] = [
         (AgentsStart, [Allow, Never, Never]),
         (AgentsModel, [Allow, Never, Never]),
         (AgentsControl, [Allow, Never, Never]),
@@ -41,14 +41,26 @@ fn balanced_is_the_mockups_table() {
         (CodeCiConfig, [Ask, Ask, Never]),
         (Machines, [Allow, Allow, Never]),
         (JobContainer, [Allow, Allow, Never]),
+        (JobKeys, [Ask, Ask, Never]),
         (Network, [Allow, Allow, Allow]),
+        (Browser, [Allow, Allow, Ask]),
+        (BrowserWeb, [Ask, Ask, Ask]),
+        (BrowserPrivate, [Ask, Ask, Ask]),
         (Unsandboxed, [Never, Never, Never]),
         (SettingsChange, [Ask, Ask, Ask]),
         (UserPrivate, [Never, Never, Never]),
         (UserEmacs, [Ask, Never, Never]),
         (ChatProjectRead, [Never, Never, Ask]),
+        (PluginAbilities, [Allow, Allow, Ask]),
+        (ChatProjectEdit, [Never, Never, Ask]),
+        (Huddles, [Allow, Allow, Allow]),
+        (DebugRead, [Allow, Allow, Allow]),
+        (DebugProbe, [Allow, Allow, Ask]),
+        (DebugFork, [Allow, Allow, Allow]),
+        (DebugLiveEval, [Ask, Ask, Ask]),
+        (DebugDrive, [Ask, Ask, Ask]),
     ];
-    assert_eq!(p.cells.len(), 22 * 3);
+    assert_eq!(p.cells.len(), 34 * 3);
     for (a, vs) in rows {
         for (r, want) in [Role::Manager, Role::Worker, Role::Chat]
             .into_iter()
@@ -71,6 +83,178 @@ fn balanced_is_the_mockups_table() {
 }
 
 #[test]
+fn browser_rows_per_preset() {
+    use Action::*;
+    use Preset::*;
+    use Verdict::*;
+    let table: [(Action, Preset, [Verdict; 3]); 9] = [
+        (Browser, Cautious, [Ask, Ask, Ask]),
+        (Browser, Balanced, [Allow, Allow, Ask]),
+        (Browser, Autonomous, [Allow, Allow, Allow]),
+        (BrowserWeb, Cautious, [Ask, Ask, Ask]),
+        (BrowserWeb, Balanced, [Ask, Ask, Ask]),
+        (BrowserWeb, Autonomous, [Allow, Allow, Allow]),
+        (BrowserPrivate, Cautious, [Ask, Ask, Ask]),
+        (BrowserPrivate, Balanced, [Ask, Ask, Ask]),
+        (BrowserPrivate, Autonomous, [Ask, Ask, Ask]),
+    ];
+    for (a, p, vs) in table {
+        let m = preset(p);
+        for (r, want) in [Role::Manager, Role::Worker, Role::Chat]
+            .into_iter()
+            .zip(vs)
+        {
+            let c = m.cells[&(a, Column::Role(r))];
+            assert_eq!((c.verdict, c.limit), (want, None), "{} {p:?} {r:?}", a.id());
+            // what the session gets is the preset's cell
+            assert_eq!(decide(&eff(&[&m], &who(r)), a, None), want);
+        }
+    }
+    assert_eq!(Action::ALL.len(), 34);
+    let at = |a| Action::ALL.iter().position(|x| *x == a).unwrap();
+    assert_eq!(
+        (at(Browser), at(BrowserWeb), at(BrowserPrivate)),
+        (at(Network) + 1, at(Network) + 2, at(Network) + 3)
+    );
+    assert_eq!(
+        [Browser.id(), BrowserWeb.id(), BrowserPrivate.id()],
+        ["browser", "browser.web", "browser.private"]
+    );
+}
+
+/// `chat.project-edit` (a chat edits your checkout): only the chat column ever opens, and only as the preset says:
+/// Cautious never, Balanced ask (the Pair toggle is allowed), Autonomous allow (paired from the start).  The chat's
+/// `code.edit` stays never in every preset.
+#[test]
+fn chat_project_edit_per_preset_and_column() {
+    use Preset::*;
+    use Verdict::*;
+    for (p, want) in [
+        (Cautious, [Never, Never, Never]),
+        (Balanced, [Never, Never, Ask]),
+        (Autonomous, [Never, Never, Allow]),
+    ] {
+        let m = preset(p);
+        for (r, v) in [Role::Manager, Role::Worker, Role::Chat]
+            .into_iter()
+            .zip(want)
+        {
+            let c = m.cells[&(Action::ChatProjectEdit, Column::Role(r))];
+            assert_eq!((c.verdict, c.limit), (v, None), "{p:?} {r:?}");
+            assert_eq!(
+                decide(&eff(&[&m], &who(r)), Action::ChatProjectEdit, None),
+                v
+            );
+        }
+        assert_eq!(
+            m.cells[&(Action::CodeEdit, Column::Role(Role::Chat))].verdict,
+            Never,
+            "{p:?}"
+        );
+    }
+    assert_eq!(
+        Action::from_id("chat.project-edit"),
+        Some(Action::ChatProjectEdit)
+    );
+    assert!(Action::ALL.contains(&Action::ChatProjectEdit));
+}
+
+#[test]
+fn always_ask_caps_every_layer() {
+    let limited = Cell {
+        verdict: Verdict::Allow,
+        limit: Some(Limit {
+            amount: 3.0,
+            unit: Unit::Count,
+        }),
+    };
+    for p in [Preset::Cautious, Preset::Balanced, Preset::Autonomous] {
+        let base = preset(p);
+        for r in [Role::Manager, Role::Worker, Role::Chat] {
+            // an Allow in the user's overrides, a project's or a plan's (the later layers), in a role or an agent
+            // column, reads as Ask with its limit kept
+            for depth in 1..=3 {
+                let mut layers = vec![Matrix::default(); 3];
+                layers[depth - 1].set(Action::BrowserPrivate, Column::Role(r), limited);
+                layers[depth - 1].set(Action::BrowserPrivate, agent_column("x"), limited);
+                let refs: Vec<&Matrix> = std::iter::once(&base).chain(layers.iter()).collect();
+                let w = Who {
+                    agent: Some("x".into()),
+                    ..who(r)
+                };
+                let e = eff(&refs, &w);
+                assert_eq!(
+                    e.cell(Action::BrowserPrivate),
+                    Cell {
+                        verdict: Verdict::Ask,
+                        ..limited
+                    },
+                    "{p:?} {r:?} layer {depth}"
+                );
+                assert_eq!(decide(&e, Action::BrowserPrivate, None), Verdict::Ask);
+                // the neighbouring rows are not capped
+                layers[depth - 1].set(Action::BrowserWeb, Column::Role(r), cell(Verdict::Allow));
+                let refs: Vec<&Matrix> = std::iter::once(&base).chain(layers.iter()).collect();
+                assert_eq!(
+                    decide(&eff(&refs, &who(r)), Action::BrowserWeb, None),
+                    Verdict::Allow
+                );
+                // a Never stays Never
+                layers[depth - 1].set(
+                    Action::BrowserPrivate,
+                    Column::Role(r),
+                    cell(Verdict::Never),
+                );
+                let refs: Vec<&Matrix> = std::iter::once(&base).chain(layers.iter()).collect();
+                let e = eff(&refs, &who(r));
+                assert_eq!(e.cell(Action::BrowserPrivate).verdict, Verdict::Never);
+                assert_eq!(decide(&e, Action::BrowserPrivate, None), Verdict::Never);
+            }
+        }
+    }
+    // `decide` caps the row itself, whatever the cells it is handed say
+    let handed = Effective {
+        cells: [(Action::BrowserPrivate, cell(Verdict::Allow))].into(),
+    };
+    assert_eq!(decide(&handed, Action::BrowserPrivate, None), Verdict::Ask);
+    assert!(always_ask(Action::BrowserPrivate));
+    assert!(
+        Action::ALL
+            .into_iter()
+            .filter(|a| *a != Action::BrowserPrivate)
+            .all(|a| !always_ask(a))
+    );
+}
+
+#[test]
+fn narrowing_holds_for_browser_rows() {
+    // a manager whose browser cells ask cannot hand a worker an Allow of them
+    let base = preset(Preset::Cautious);
+    let manager = eff(&[&base], &who(Role::Manager));
+    let mut over = Matrix::default();
+    for a in [Action::Browser, Action::BrowserWeb] {
+        over.set(a, Column::Role(Role::Worker), cell(Verdict::Allow));
+    }
+    let own = eff(&[&base, &over], &who(Role::Worker));
+    for a in [Action::Browser, Action::BrowserWeb] {
+        let asked = Effective {
+            cells: [(a, cell(Verdict::Allow))].into(),
+        };
+        assert_eq!(narrow(&manager, &asked), Err(Widening { action: a }));
+        // what the worker gets is the meet of its own cells, its delegation and the manager's now: Ask
+        assert_eq!(own.cell(a).verdict, Verdict::Allow);
+        let got = meet(&meet(&own, &asked), &manager);
+        assert_eq!(decide(&got, a, None), Verdict::Ask, "{}", a.id());
+    }
+    // under Balanced the manager allows `browser`, so the same delegation fits
+    let manager = eff(&[&preset(Preset::Balanced)], &who(Role::Manager));
+    let asked = Effective {
+        cells: [(Action::Browser, cell(Verdict::Allow))].into(),
+    };
+    assert!(narrow(&manager, &asked).is_ok());
+}
+
+#[test]
 fn job_container_follows_the_users_call() {
     let jc = |p, r| preset(p).cells[&(Action::JobContainer, Column::Role(r))].verdict;
     for r in [Role::Manager, Role::Worker] {
@@ -81,6 +265,22 @@ fn job_container_follows_the_users_call() {
     for p in [Preset::Cautious, Preset::Balanced, Preset::Autonomous] {
         assert_eq!(jc(p, Role::Chat), Verdict::Never);
     }
+}
+
+/// [D] `job.keys` (the manager's call 11): Ask in Cautious and Balanced, Allow in Autonomous, Never for chat.
+#[test]
+fn job_keys_presets_are_the_managers_call() {
+    use Verdict::*;
+    let jk = |p| {
+        let m = preset(p);
+        [Role::Manager, Role::Worker, Role::Chat]
+            .map(|r| m.cells[&(Action::JobKeys, Column::Role(r))].verdict)
+    };
+    assert_eq!(jk(Preset::Cautious), [Ask, Ask, Never]);
+    assert_eq!(jk(Preset::Balanced), [Ask, Ask, Never]);
+    assert_eq!(jk(Preset::Autonomous), [Allow, Allow, Never]);
+    assert_eq!(Action::JobKeys.id(), "job.keys");
+    assert_eq!(Action::from_id("job.keys"), Some(Action::JobKeys));
 }
 
 #[test]
@@ -399,4 +599,67 @@ fn a_widening_names_the_action() {
         w.to_string(),
         format!("{} is wider than the parent allows", Action::PushMain.id())
     );
+}
+
+/// [D] Huddles: Autonomous and Balanced allow them in every column, Cautious asks (a card, nothing prompts).
+#[test]
+fn huddles_per_preset() {
+    use Preset::*;
+    use Verdict::*;
+    for (p, want) in [(Cautious, Ask), (Balanced, Allow), (Autonomous, Allow)] {
+        let m = preset(p);
+        for r in [Role::Manager, Role::Worker, Role::Chat] {
+            let c = m.cells[&(Action::Huddles, Column::Role(r))];
+            assert_eq!((c.verdict, c.limit), (want, None), "{p:?} {r:?}");
+            assert_eq!(decide(&eff(&[&m], &who(r)), Action::Huddles, None), want);
+        }
+    }
+    assert_eq!(Action::from_id("huddles"), Some(Action::Huddles));
+}
+
+/// [D4] The debugger's rows (graphical debugging spec §19.5) per preset, in the manager, worker and chat columns: a
+/// Cautious live evaluate is refused, a Balanced one asks (a card), and so does an Autonomous one; Balanced asks a
+/// chat before it adds probes.
+#[test]
+fn debug_rows_per_preset() {
+    use Action::*;
+    use Preset::*;
+    use Verdict::*;
+    let table: [(Action, Preset, [Verdict; 3]); 15] = [
+        (DebugRead, Cautious, [Ask, Ask, Ask]),
+        (DebugRead, Balanced, [Allow, Allow, Allow]),
+        (DebugRead, Autonomous, [Allow, Allow, Allow]),
+        (DebugProbe, Cautious, [Ask, Ask, Ask]),
+        (DebugProbe, Balanced, [Allow, Allow, Ask]),
+        (DebugProbe, Autonomous, [Allow, Allow, Allow]),
+        (DebugFork, Cautious, [Ask, Ask, Ask]),
+        (DebugFork, Balanced, [Allow, Allow, Allow]),
+        (DebugFork, Autonomous, [Allow, Allow, Allow]),
+        (DebugLiveEval, Cautious, [Never, Never, Never]),
+        (DebugLiveEval, Balanced, [Ask, Ask, Ask]),
+        (DebugLiveEval, Autonomous, [Ask, Ask, Ask]),
+        (DebugDrive, Cautious, [Never, Never, Never]),
+        (DebugDrive, Balanced, [Ask, Ask, Ask]),
+        (DebugDrive, Autonomous, [Allow, Allow, Allow]),
+    ];
+    for (a, p, vs) in table {
+        let m = preset(p);
+        for (r, want) in [Role::Manager, Role::Worker, Role::Chat]
+            .into_iter()
+            .zip(vs)
+        {
+            let c = m.cells[&(a, Column::Role(r))];
+            assert_eq!((c.verdict, c.limit), (want, None), "{} {p:?} {r:?}", a.id());
+            assert_eq!(decide(&eff(&[&m], &who(r)), a, None), want);
+        }
+    }
+    for (a, id) in [
+        (DebugRead, "debug.read"),
+        (DebugProbe, "debug.probe"),
+        (DebugFork, "debug.fork"),
+        (DebugLiveEval, "debug.live-eval"),
+        (DebugDrive, "debug.drive"),
+    ] {
+        assert_eq!(Action::from_id(id), Some(a));
+    }
 }

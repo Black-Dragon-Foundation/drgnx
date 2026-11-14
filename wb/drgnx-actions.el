@@ -30,7 +30,8 @@
 (defun drgnx-buffers-reveal-row () "Show the file of this row in the Explorer." (interactive)
        (let ((f (or (buffer-file-name (drgnx-actions--row-buffer)) (user-error "This buffer has no file"))))
          (drgnx-explorer-focus)
-         (drgnx-explorer-reveal f (drgnx-wb-section-window 'explorer))))
+         (let ((drgnx-explorer--await t))      ; the user's command: the row shows in its own frame
+           (drgnx-explorer-reveal f (drgnx-wb-section-window 'explorer)))))
 
 (defun drgnx-buffers-full-view () "All buffers in a table (ibuffer), in the editor." (interactive) (ibuffer))
 

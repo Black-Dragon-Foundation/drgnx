@@ -1,0 +1,12 @@
+{"scenario": "extensions/an-available-gnu-row-is-not-unsigned", "requires": ["v1"], "doc": "A package from an archive that signs (GNU ELPA) that the lock does not list yet is signing-archive, never unsigned: @unsigned leaves it out and the editor shows it no trust card; signed once the lock says :verified t."}
+{"do": "root"}
+{"do": "write_file", "path": "$ROOT/cache/drgnx/extensions/catalog.json", "text": "{\"version\":1,\"archives\":[{\"name\":\"gnu\",\"url\":\"https://elpa.gnu.org/packages/\",\"signed\":true},{\"name\":\"melpa\",\"url\":\"https://melpa.org/packages/\",\"signed\":false}],\"packages\":[{\"name\":\"compat\",\"summary\":\"Compatibility library\",\"versions\":[{\"archive\":\"gnu\",\"version\":\"30.1\",\"reqs\":[]}],\"candidate\":{\"archive\":\"gnu\",\"version\":\"30.1\"}},{\"name\":\"dash\",\"summary\":\"A modern list API\",\"versions\":[{\"archive\":\"gnu\",\"version\":\"2.19\",\"reqs\":[]}],\"candidate\":{\"archive\":\"gnu\",\"version\":\"2.19\"}},{\"name\":\"magit\",\"summary\":\"A Git porcelain\",\"versions\":[{\"archive\":\"melpa\",\"version\":\"4.1\",\"reqs\":[]}],\"candidate\":{\"archive\":\"melpa\",\"version\":\"4.1\"}}]}"}
+{"do": "write_file", "path": "$CONFIG/drgnx.lock.eld", "text": "(:version 1 :packages ((dash :version \"2.19\" :archive \"gnu\" :kind tar :sha256 \"aa\" :requires nil :verified t :wanted user)))"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "extensions/search", "params": {"query": "compat"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"total": 1, "rows": [{"id": "pkg:compat", "state": "available", "source": "gnu", "signed": "signing-archive"}]}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "extensions/search", "params": {"query": "dash"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"total": 1, "rows": [{"id": "pkg:dash", "state": "installed", "signed": "signed"}]}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "extensions/search", "params": {"query": "", "filters": {"unsigned": true}}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"total": 1, "rows": [{"id": "pkg:magit", "signed": "unsigned-archive"}]}}}

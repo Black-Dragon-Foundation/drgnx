@@ -11,6 +11,11 @@
 //! running; the hub's monitor (or, after a restart, the re-attached one) writes the result once.
 
 pub mod container;
+pub(crate) mod hostgrants;
+pub mod keys;
+pub mod net;
+pub mod packages;
+pub mod progress;
 pub mod summary;
 pub mod unit;
 
@@ -18,17 +23,21 @@ use crate::agents::launch::{self, NetCell};
 use crate::agents::lock::{Enforced, LaunchPlan};
 use crate::dispatch::Caller;
 use crate::front::Front;
+use crate::runners::local::{Admission, LocalRunner};
+use crate::runners::queue::{
+    self, Machine, Origin, Outcome, Placement, Queue, QueueCfg, Submit, priority_of,
+};
+use crate::runners::sync;
 use crate::sandbox::SessionShape;
 use gleipnir::{Refusal, Rule};
 use runstav::methods::exec::{
     ById, ExecDone, ExecKind, ExecRow, ExecStatus, ExecSummary, Jobs, ListParams, LogParams,
     LogSlice, StartParams, Started,
 };
-use runstav::paths::Env;
 use runstav::wire::{Error, ErrorCode};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{BTreeMap, HashSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -41,6 +50,20 @@ use unit::Meta;
 pub enum Starter {
     Session(String),
     User,
+    /// The hub, for a command it doesn't trust (a gate's rerun of an agent's command, a bisect's predicate): run in
+    /// the Session launch shape, sealed to its tree, under this label (`sealed-` and letters, digits, `-`, `_`), which
+    /// no session holds: its events name no session, so they reach no agent ([`start_sealed`]).
+    Sealed(String),
+}
+
+impl Starter {
+    /// The agent session the job belongs to (its events and wake go there); none for the user's or a sealed job.
+    pub fn session(&self) -> Option<String> {
+        match self {
+            Starter::Session(s) => Some(s.clone()),
+            Starter::User | Starter::Sealed(_) => None,
+        }
+    }
 }
 
 /// What a job's output is read as.
@@ -89,6 +112,8 @@ pub struct ExecSpec {
     pub container: Option<ContainerJob>,
     /// What only the user's jobs carry (an agent's is always the default).
     pub user: UserJob,
+    /// Where it may run, and how it is placed.
+    pub place: Placement,
 }
 
 /// A user's job's own name, environment and limits (`exec/start`'s `name`, `env`, `memory_max`, `nice`).
@@ -153,6 +178,16 @@ impl Live {
         self.0.lock().unwrap().remove(id);
     }
 
+    fn has(&self, id: &str) -> bool {
+        self.0.lock().unwrap().contains_key(id)
+    }
+
+    /// Job ID of SESSION runs, as a start records it (for the tests of the modules that read the running jobs).
+    #[cfg(test)]
+    pub(crate) fn started(&self, id: &str, session: &str) {
+        self.add(id, Some(session.to_string()));
+    }
+
     /// The running jobs SESSION started.
     pub fn ids(&self, session: &str) -> Vec<String> {
         let mut ids: Vec<String> = self
@@ -179,15 +214,30 @@ pub struct Hooks {
     pub systemd: bool,
     /// `podman`, found on the PATH when the hub started; none: container jobs are refused.
     pub podman: Option<PathBuf>,
-    /// `drgnx-fwd` (next to the hub, else on the PATH): the forwarder a container job granted network runs.
-    pub forwarder: Option<PathBuf>,
-    /// Agents' jobs running at once on this machine; the next waits for a slot (the session's step is a machine-queue
-    /// wait).  The user's jobs take no slot.
-    pub slots: usize,
+    /// The folder of the relay's binaries (`drgnx-px-<arch>-linux-musl`, next to the hub): the sidecar a container job
+    /// granted network runs is imported from there ([`net::prepare_net`]).
+    pub px_dir: Option<PathBuf>,
+    /// `drgnx-key`, next to the hub: what a keyed command job here runs in front of its command ([`keys`]); none or
+    /// missing: such a job is refused (`drgnx doctor` says so).
+    pub key_bin: Option<PathBuf>,
+    /// How this machine admits the queue's jobs (`runners::local`): live on Linux, else by count.  The user's servers
+    /// (no time box) never queue.
+    pub admission: Admission,
+    /// `runtime.db`, where the queue is kept; none: in memory only.
+    pub runtime: Option<urdr::Handle>,
     /// The login shell's variables (`env/set`): the base environment of every job and podman the hub starts.
     pub shell_env: crate::shell_env::ShellEnv,
+    /// The hub's host addresses and never-set (the browser's watches), which a networked job's proxy judges
+    /// `host.drgnx.internal` by; none: fresh empty sets (tests).
+    pub nevers: Option<crate::browser::nevers::Nevers>,
+    /// What a session's networked job asks the user through (a host port on a card, [`hostgrants`]); none: its
+    /// proxy's refusals ask nothing.
+    pub cards: Option<hostgrants::Hub>,
     /// The providers' key variables (`key_env`) as the settings say now: never in a user's job's environment.
     pub key_envs: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
+    /// The projects' edit histories and the state folder they live in: a runner's applied changes are one version
+    /// there. None: they are applied unrecorded (tests).
+    pub history: Option<(Arc<crate::history::wire::Hubs>, PathBuf)>,
     /// Unit tests: a session's job runs as the user's do (they have no sandbox helper).
     #[cfg(test)]
     pub plain_sessions: bool,
@@ -201,14 +251,24 @@ impl Default for Hooks {
             memory: "4G".into(),
             systemd: unit::systemd_user(),
             podman: unit::find_on_path("podman"),
-            forwarder: std::env::current_exe()
+            px_dir: std::env::current_exe()
                 .ok()
-                .and_then(|e| e.parent().map(|d| d.join("drgnx-fwd")))
-                .filter(|f| f.is_file())
-                .or_else(|| unit::find_on_path("drgnx-fwd")),
-            slots: 4,
+                .and_then(|e| e.parent().map(Path::to_path_buf)),
+            key_bin: std::env::current_exe()
+                .ok()
+                .and_then(|e| e.parent().map(|d| d.join("drgnx-key"))),
+            // tests and the conformance lane admit by count, never by the machine they happen to run on
+            admission: if cfg!(any(test, feature = "test-hooks")) {
+                Admission::Fixed(crate::runners::local::FIXED_SLOTS)
+            } else {
+                Admission::default()
+            },
+            runtime: None,
             shell_env: crate::shell_env::ShellEnv::default(),
+            nevers: None,
+            cards: None,
             key_envs: Arc::new(Vec::new),
+            history: None,
             #[cfg(test)]
             plain_sessions: false,
         }
@@ -222,6 +282,9 @@ struct End {
     exit: Option<i32>,
     ended: f64,
     summary: ExecSummary,
+    /// Every row of the log, with its verdict and a failure's class (`vordr::rows`), plus the job's own row.
+    #[serde(default)]
+    rows: Vec<vordr::rows::Row>,
 }
 
 struct Inner {
@@ -231,15 +294,92 @@ struct Inner {
     finishing: Mutex<HashSet<String>>,
     live: Arc<Live>,
     events: tokio::sync::broadcast::Sender<JobEvent>,
-    slots: Arc<tokio::sync::Semaphore>,
-    /// Jobs recorded as queued, oldest first; each starts when a slot frees ([`Inner::pump`]).
-    queue: Mutex<VecDeque<String>>,
+    /// Every machine's queue (`runners::queue`): this machine's admission and the runners'.
+    queue: Arc<Queue>,
+    /// The running networked jobs' stop doors: a graceful hub stop ends each `infra: proxy` ([`Runner::end_networked`]).
+    nets: Mutex<std::collections::HashMap<String, NetStop>>,
+    /// The running jobs that write a progress file (`--progress FILE`): the file and what the editors were sent of it.
+    progress: Mutex<std::collections::HashMap<String, (PathBuf, progress::Watch)>>,
+    unsettled: Arc<Unsettled>,
 }
 
-/// What a queued job is started from, saved as `<dir>/pending.json` (the hub may restart before its turn).
+/// The ended jobs whose end the reader of the ends (the gates' evidence, [`Runner::settling`]) has not taken yet, by
+/// id and folder: such a job is still busy in its tree ([`Runner::busy_in`]), so a gate never judges between a run's
+/// end and its evidence.  Kept only once a reader said it takes them.
+#[derive(Default)]
+struct Unsettled {
+    on: std::sync::atomic::AtomicBool,
+    jobs: Mutex<Vec<(String, PathBuf)>>,
+}
+
+/// What ends a networked job from outside its watch: the reason, and who to tell once its end is recorded.
+type NetStop = tokio::sync::oneshot::Sender<(&'static str, tokio::sync::oneshot::Sender<()>)>;
+
+/// A networked job's relay as its watch holds it.
+struct Net {
+    net: net::JobNetwork,
+    stop: tokio::sync::oneshot::Receiver<(&'static str, tokio::sync::oneshot::Sender<()>)>,
+}
+
+/// Why a networked job's relay arm fired.
+enum RelayEnd {
+    Channel(drgnx_px::owner::End),
+    Stop(&'static str, tokio::sync::oneshot::Sender<()>),
+}
+
+impl Net {
+    async fn ended(&mut self) -> RelayEnd {
+        tokio::select! {
+            e = self.net.ended() => RelayEnd::Channel(e),
+            Ok((why, ack)) = &mut self.stop => RelayEnd::Stop(why, ack),
+        }
+    }
+}
+
+/// The end of a keyed job a restarted hub found running.
+const KEYED_RESTART: &str =
+    "infra: the hub restarted (a keyed job's key socket and log went with it)";
+
+/// A keyed job's keys and the `drgnx-key` that asks for them, made before its launch: a command job's own key socket
+/// and the hub's `drgnx-key`; a container job's copy of the static one in its folder (it asks its sidecar, no socket).
+struct KeySocket {
+    socket: Option<keys::Socket>,
+    keys: Arc<keys::JobKeys>,
+    bin: PathBuf,
+}
+
+/// A running keyed job's key socket (removed when the job ends) and the task that redacts its output into its log.
+struct Keyed {
+    _socket: Option<keys::Socket>,
+    pump: tokio::task::JoinHandle<()>,
+}
+
+/// How long a keyed job's log may take to drain once its process has ended (a child it left may hold the pipe).
+const DRAIN: Duration = Duration::from_secs(5);
+
+/// Ends job DIR `infra: proxy` for REASON: the reason line goes to its log, and `why` says so (before the job's
+/// process is ended, so its result reads it).
+fn write_infra(dir: &Path, reason: &str) {
+    use std::io::Write;
+    let line = format!("{}: {reason}", net::INFRA);
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("log"))
+    {
+        let _ = writeln!(f, "drgnx: {line}");
+    }
+    let _ = std::fs::write(dir.join("why"), line);
+}
+
+/// What a queued job is started from, kept with it in the queue (`rq_job.spec`; an older hub wrote it as
+/// `<dir>/pending.json`, read into the queue once).
 #[derive(Serialize, Deserialize)]
 struct Pending {
     session: Option<String>,
+    /// A sealed job's label ([`Starter::Sealed`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sealed: Option<String>,
     cwd: PathBuf,
     worktree: Option<PathBuf>,
     argv: Vec<String>,
@@ -248,14 +388,17 @@ struct Pending {
     container: Option<ContainerJob>,
     #[serde(default)]
     user: UserJob,
+    #[serde(default)]
+    place: Placement,
 }
 
 impl Pending {
     fn of(spec: &ExecSpec) -> Pending {
         Pending {
-            session: match &spec.starter {
-                Starter::Session(s) => Some(s.clone()),
-                Starter::User => None,
+            session: spec.starter.session(),
+            sealed: match &spec.starter {
+                Starter::Sealed(l) => Some(l.clone()),
+                _ => None,
             },
             cwd: spec.cwd.clone(),
             worktree: spec.worktree.clone(),
@@ -264,12 +407,16 @@ impl Pending {
             kind: spec.kind.name().to_string(),
             container: spec.container.clone(),
             user: spec.user.clone(),
+            place: spec.place.clone(),
         }
     }
 
     fn into_spec(self) -> ExecSpec {
         ExecSpec {
-            starter: self.session.map_or(Starter::User, Starter::Session),
+            starter: match (self.sealed, self.session) {
+                (Some(l), _) => Starter::Sealed(l),
+                (None, s) => s.map_or(Starter::User, Starter::Session),
+            },
             cwd: self.cwd,
             worktree: self.worktree,
             argv: self.argv,
@@ -277,7 +424,71 @@ impl Pending {
             kind: CheckKind::from_name(&self.kind),
             container: self.container,
             user: self.user,
+            place: self.place,
         }
+    }
+}
+
+impl ExecSpec {
+    /// The scheduler's view of this job: its command, folders, time box and memory range, its project (the
+    /// worktree's folder name, until Urdr names projects to the hub) and its placement's marks.
+    fn forseti_spec(&self, id: &str, memory: &str) -> forseti::JobSpec {
+        let mut s = queue::blank_spec(id);
+        s.command = self.argv.clone();
+        s.tree = self.worktree.clone().unwrap_or_else(|| self.cwd.clone());
+        // a runner mounts its own checkout of the tree: it is told the folder inside it, never this machine's path
+        s.cwd = match self.cwd.strip_prefix(&s.tree) {
+            Ok(inside) if !inside.as_os_str().is_empty() => inside.to_path_buf(),
+            _ => PathBuf::from("."),
+        };
+        s.timeout_s = self.time_box().map_or(0, |t| t.as_secs());
+        s.mem_mib.max =
+            mem_mib(self.user.memory_max.as_deref().unwrap_or(memory)).max(s.mem_mib.min);
+        s.project = s
+            .tree
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        s.local_only = self.place.local_only;
+        s.keys = self.place.keys.clone();
+        s.writes = self.place.writes.clone();
+        if self.place.heavy {
+            s.weight = forseti::Weight::Heavy;
+        }
+        s.os = self.place.os;
+        s.features = self.place.features.clone();
+        // a test job whose parser counts rows passes only if it ran some: a run of 0 tests (a selector that matched
+        // nothing) proves nothing
+        if self
+            .place
+            .suite
+            .as_ref()
+            .is_some_and(|x| matches!(x.parser.as_str(), "ert" | "cargo-test"))
+        {
+            s.expect.min_ran = Some(1);
+        }
+        s
+    }
+
+    /// The priority the hub gives it: the user's own choice, else who started it and how.
+    fn priority(&self) -> forseti::Priority {
+        match self.place.priority {
+            Some(n) if self.starter == Starter::User => forseti::Priority::from_number(n),
+            _ => priority_of(&self.starter, self.place.background, Origin::Request),
+        }
+    }
+}
+
+/// A systemd size (`512M`, `4G`) in MiB; 4096 when it can't be read.
+fn mem_mib(size: &str) -> u64 {
+    let (digits, unit) = size.split_at(size.trim_end_matches(['K', 'M', 'G', 'T']).len());
+    let n: u64 = digits.parse().unwrap_or(4096);
+    match unit {
+        "K" => n / 1024,
+        "M" => n,
+        "G" => n * 1024,
+        "T" => n * 1024 * 1024,
+        _ => n / (1024 * 1024),
     }
 }
 
@@ -288,12 +499,23 @@ const KEEP_DAYS: f64 = 14.0;
 const KEEP_GRACE_S: f64 = 3600.0;
 /// How long a stop waits for the job's end to be recorded.
 const STOP_WAIT: Duration = Duration::from_secs(5);
+/// The job folder's file naming the `shared` runner the job ran on: its result is labelled and never counts for a gate.
+const SHARED: &str = "shared";
+/// The job folder's file with the line saying how the job's rows split over its attempts (`summary::split_line`).
+const SPLIT: &str = "split";
+/// The job folder's file with what a runner returned and where it went (applied, kept for review, the outputs' folder).
+const RETURNED: &str = "returned";
 
 /// The jobs the hub runs.
 pub struct Runner {
     inner: OnceLock<Arc<Inner>>,
     live: Arc<Live>,
     events: tokio::sync::broadcast::Sender<JobEvent>,
+    /// The rule pack's `no-cache` words ([`Runner::set_no_cache`]).
+    no_cache: Mutex<Vec<String>>,
+    /// The worktrees of the sessions whose `exec/start` is on its way (one entry per start; [`Runner::starting`]).
+    starting: Mutex<Vec<PathBuf>>,
+    unsettled: Arc<Unsettled>,
 }
 
 impl Default for Runner {
@@ -302,8 +524,197 @@ impl Default for Runner {
             inner: OnceLock::new(),
             live: Arc::default(),
             events: tokio::sync::broadcast::channel(256).0,
+            no_cache: Mutex::default(),
+            starting: Mutex::default(),
+            unsettled: Arc::default(),
         }
     }
+}
+
+/// A session's `exec/start` on its way, in its worktree: dropped (answered or refused), it is not.
+pub(crate) struct Starting<'a> {
+    runner: &'a Runner,
+    worktree: PathBuf,
+}
+
+impl Drop for Starting<'_> {
+    fn drop(&mut self) {
+        let mut s = self.runner.starting.lock().unwrap();
+        if let Some(i) = s.iter().position(|w| *w == self.worktree) {
+            s.swap_remove(i);
+        }
+    }
+}
+
+/// The job folder's file with the job's facts (`vordr::facts::Facts`), written before it is queued.
+const FACTS: &str = "facts.json";
+
+/// The job folder's list of the protected files its sandbox made empty in its tree (`sandbox::note_missing`).
+const STUBS: &str = "stubs";
+
+/// The job folder's tree as its key read it at submit ([`Snap`]).
+const SNAP: &str = "snap.json";
+
+/// The job folder's files that changed in its tree while it ran, one a line, when its facts went for it.
+const MOVED: &str = "moved";
+
+/// The job folder's facts once its tree moved while it ran: no one's evidence, never reused.
+const FACTS_MOVED: &str = "facts.moved.json";
+
+/// What a job's result and a gate's note say of a run whose tree moved while it ran (FILES, [`Runner::moved`]).
+pub fn moved_line(files: &[String]) -> String {
+    if files.is_empty() {
+        return "its tree moved while it ran: no facts kept".into();
+    }
+    format!(
+        "its tree moved while it ran ({}): no facts kept; a file a run writes belongs in .gitignore",
+        some_paths(files)
+    )
+}
+
+/// The Emacs build and the Rust toolchain on this machine (`emacs`, `rustc`, `cargo` `--version`'s first lines, `none`
+/// for one that is missing), read once: as `core/drgnx-affected.el`'s stamp.
+pub(crate) fn env_stamp() -> &'static str {
+    static STAMP: OnceLock<String> = OnceLock::new();
+    STAMP.get_or_init(|| {
+        let tool = |p: &str| {
+            std::process::Command::new(p)
+                .arg("--version")
+                .stdin(std::process::Stdio::null())
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .and_then(|o| {
+                    String::from_utf8_lossy(&o.stdout)
+                        .lines()
+                        .next()
+                        .map(|l| l.trim().to_string())
+                })
+                .unwrap_or_else(|| "none".into())
+        };
+        [tool("emacs"), tool("rustc"), tool("cargo")].join("\n")
+    })
+}
+
+/// SPEC's facts at submit: its tree's key (the hardened capture of `sleipnir::sync::capture`: the commit's tree, plus
+/// the overlay's input key when anything is uncommitted), this machine's env stamp (with a container job's image), the
+/// platform and the selector.  None outside a git tree.
+async fn facts_of(spec: &ExecSpec) -> Option<(vordr::facts::Facts, Snap)> {
+    let cwd = spec.cwd.clone();
+    let argv = spec.argv.clone();
+    let env = spec.user.env.clone();
+    let image = spec.container.as_ref().map(|c| c.image.clone());
+    crate::clock::blocking(move || {
+        let (top, tree_key, snap) = tree_key_at(&cwd)?;
+        let rel = cwd.strip_prefix(&top).ok()?.to_string_lossy().into_owned();
+        let mut stamp = env_stamp().to_string();
+        if let Some(i) = image {
+            stamp.push_str("\nimage ");
+            stamp.push_str(&i);
+        }
+        let facts = vordr::facts::Facts {
+            tree_key,
+            env_stamp: stamp,
+            platform: local_platform(),
+            selector: vordr::facts::selector(&rel, &argv, &env),
+        };
+        Some((facts, snap))
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// This machine's platform in a job's facts: `OS-ARCH/local`.
+pub(crate) fn local_platform() -> String {
+    format!("{}-{}/local", std::env::consts::OS, std::env::consts::ARCH)
+}
+
+/// A tree as a job's key read it: the commit's tree and each uncommitted path with its content's hash (none for a
+/// deleted one).  Kept in the job's folder ([`SNAP`]) so its end can name what moved ([`Snap::moved`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Snap {
+    tree: String,
+    files: BTreeMap<String, Option<String>>,
+}
+
+impl Snap {
+    fn of(inputs: &sleipnir::sync::capture::Inputs) -> Snap {
+        use sleipnir::sync::capture::Entry;
+        let files = inputs
+            .manifest
+            .iter()
+            .map(|e| {
+                let hash = match e {
+                    Entry::File { sha256, .. } => {
+                        Some(sha256.iter().map(|b| format!("{b:02x}")).collect())
+                    }
+                    Entry::Deleted { .. } => None,
+                };
+                (String::from_utf8_lossy(e.path()).into_owned(), hash)
+            })
+            .collect();
+        Snap {
+            tree: inputs.tree.clone(),
+            files,
+        }
+    }
+
+    /// The paths that differ between this snap and NOW, in git TOP: the commits' trees' changes, then an uncommitted
+    /// path changed, added or gone; sorted, each once.  Blocking.
+    fn moved(&self, now: &Snap, top: &Path) -> Vec<String> {
+        let mut out = std::collections::BTreeSet::new();
+        if self.tree != now.tree
+            && let Ok(o) = std::process::Command::new("git")
+                .args([
+                    "diff-tree",
+                    "-r",
+                    "--name-only",
+                    "-z",
+                    &self.tree,
+                    &now.tree,
+                ])
+                .current_dir(top)
+                .output()
+        {
+            out.extend(
+                o.stdout
+                    .split(|b| *b == 0)
+                    .filter(|p| !p.is_empty())
+                    .map(|p| String::from_utf8_lossy(p).into_owned()),
+            );
+        }
+        for path in self.files.keys().chain(now.files.keys()) {
+            if self.files.get(path) != now.files.get(path) {
+                out.insert(path.clone());
+            }
+        }
+        out.into_iter().collect()
+    }
+}
+
+/// PATHS for a reader: the first five, then how many more.
+fn some_paths(paths: &[String]) -> String {
+    let shown = paths.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
+    match paths.len() {
+        n if n > 5 => format!("{shown} and {} more", n - 5),
+        _ => shown,
+    }
+}
+
+/// The git tree holding CWD, its key now (the commit's tree, plus the overlay's input key when anything is
+/// uncommitted) and the tree as read.  Blocking.
+fn tree_key_at(cwd: &Path) -> Option<(PathBuf, String, Snap)> {
+    let top = cwd
+        .ancestors()
+        .find(|d| d.join(".git").exists())?
+        .to_path_buf();
+    let inputs = sleipnir::sync::capture::capture(&top, &[]).ok()?;
+    let overlay =
+        (!inputs.manifest.is_empty()).then(|| sleipnir::sync::capture::input_key(&inputs));
+    let key = vordr::facts::tree_key(&inputs.tree, overlay.as_deref());
+    let snap = Snap::of(&inputs);
+    Some((top, key, snap))
 }
 
 fn now() -> f64 {
@@ -318,6 +729,11 @@ fn refusal(message: impl Into<String>) -> Refusal {
     }
 }
 
+/// PID's start time, or the refusal of the job: without it the restart path cannot tell the job from a reused pid.
+fn start_time_or_refuse(read: std::io::Result<u64>, pid: i32) -> Result<u64, Refusal> {
+    read.map_err(|e| setup(format!("reading the start time of process {pid}: {e}")))
+}
+
 fn setup(message: impl Into<String>) -> Refusal {
     Refusal {
         rule: Rule::Setup,
@@ -330,22 +746,32 @@ impl Runner {
     /// Open the runner on ROOT (`<state>/hub/exec`) and re-attach the jobs a hub before this one left running.  Runs
     /// inside a tokio runtime.  A second call changes nothing.
     pub fn open(&self, root: PathBuf, hooks: Hooks) {
-        let mut fresh = false;
+        let mut fresh = None;
         let inner = self.inner.get_or_init(|| {
-            fresh = true;
-            Arc::new(Inner {
+            let (queue, links) = Queue::new(QueueCfg {
+                hub_id: "hub".into(),
+                exec_root: root.clone(),
+                local: LocalRunner::new(hooks.admission, &root),
+                db: hooks.runtime.clone(),
+            });
+            let inner = Arc::new(Inner {
                 root,
-                slots: Arc::new(tokio::sync::Semaphore::new(hooks.slots.max(1))),
                 hooks,
                 seq: AtomicU64::new(0),
-                queue: Mutex::new(VecDeque::new()),
+                queue,
                 finishing: Mutex::new(HashSet::new()),
+                nets: Mutex::default(),
+                progress: Mutex::default(),
                 live: self.live.clone(),
                 events: self.events.clone(),
-            })
+                unsettled: self.unsettled.clone(),
+            });
+            fresh = Some(links);
+            inner
         });
-        if fresh {
+        if let Some(links) = fresh {
             inner.reattach();
+            Inner::run_queue(Arc::downgrade(inner), links);
         }
     }
 
@@ -359,6 +785,16 @@ impl Runner {
         self.events.subscribe()
     }
 
+    /// This machine's job slots in the queue: `(all, free)` ([`Queue::local_slots`]); none before the runner is open.
+    pub fn slot_counts(&self) -> Option<(usize, usize)> {
+        self.inner.get().map(|i| i.queue.local_slots())
+    }
+
+    /// Every machine's queue (the runners register in it); none before the runner is open.
+    pub fn queue(&self) -> Option<Arc<Queue>> {
+        self.inner.get().map(|i| i.queue.clone())
+    }
+
     fn inner(&self) -> Result<&Arc<Inner>, Refusal> {
         self.inner
             .get()
@@ -368,12 +804,53 @@ impl Runner {
     /// Start a job; answers its id.  A session's job runs in that session's sandbox (its worktree, writable, is the
     /// only folder it writes; its CWD must be the worktree or inside it; no sandbox here is a refusal); the user's
     /// runs with the user's rights.  A session's job on a full machine is recorded as queued and the id answered at
-    /// once; the user's take no machine slot.
+    /// once; the user's servers (no time box) never queue.
     pub async fn start(&self, spec: ExecSpec) -> Result<String, Refusal> {
         self.inner()?.clone().start(spec).await
     }
 
-    /// Whether job ID waits for a machine slot.
+    /// Start SPEC, or answer the green job that already ran it on the same facts (`vordr::facts`: tree key, env stamp,
+    /// platform, selector): `(id, reused)`.  Only a green counts (exit 0, no failed row, not run on a `shared`
+    /// runner); a red is never reused, and a selector holding one of the `no-cache` words ([`Runner::set_no_cache`])
+    /// always runs.
+    pub async fn start_or_reuse(&self, spec: ExecSpec) -> Result<(String, bool), Refusal> {
+        let i = self.inner()?.clone();
+        let facts = facts_of(&spec).await;
+        if let Some((f, _)) = &facts
+            && vordr::facts::cacheable(&f.selector, &self.no_cache.lock().unwrap())
+            && let Some(id) = i.green_with(f)
+        {
+            return Ok((id, true));
+        }
+        i.start_with(spec, facts).await.map(|id| (id, false))
+    }
+
+    /// The words the rule pack marks `no-cache` (clock-, network- or machine-dependent groups): a job whose selector
+    /// holds one is never served from the cache.
+    pub fn set_no_cache(&self, words: Vec<String>) {
+        *self.no_cache.lock().unwrap() = words;
+    }
+
+    /// Job ID's facts as recorded at its submit, with the machine it ran on (a runner's job: `runner/NAME`, its env
+    /// stamp the runner's name); none for a job outside a git tree, a server, or an unknown job.
+    pub fn facts(&self, id: &str) -> Option<vordr::facts::Facts> {
+        self.inner.get()?.facts(id)
+    }
+
+    /// Job ID's tree moved while it ran: the files that changed (maybe none known) and the facts it had at submit.
+    pub fn moved(&self, id: &str) -> Option<(Vec<String>, vordr::facts::Facts)> {
+        let i = self.inner.get()?;
+        let files = i.moved(id)?;
+        let text = std::fs::read(i.dir(id).join(FACTS_MOVED)).ok()?;
+        Some((files, serde_json::from_slice(&text).ok()?))
+    }
+
+    /// What job ID is (its command, folder, kind and image), as saved when it started; none when it is unknown.
+    pub fn meta(&self, id: &str) -> Option<unit::Meta> {
+        self.inner.get()?.meta(id)
+    }
+
+    /// Whether job ID is in the queue (here, or on a runner).
     pub fn is_queued(&self, id: &str) -> bool {
         self.inner
             .get()
@@ -383,6 +860,38 @@ impl Runner {
 
     pub fn get(&self, id: &str) -> Option<ExecRow> {
         self.inner.get()?.row(id)
+    }
+
+    /// Raises queued job ID to priority 1; its row, or none when no queue holds it.
+    pub fn bump(&self, id: &str) -> Option<ExecRow> {
+        let i = self.inner.get()?;
+        if !i.queue.bump(id) {
+            return None;
+        }
+        if let Some(mut m) = i.meta(id) {
+            m.priority = Some(1);
+            let _ = i.save_meta(&m);
+        }
+        i.pump();
+        i.row(id)
+    }
+
+    /// A graceful hub stop (channel review S9): end every running networked job `infra: proxy` ("the hub stopped"),
+    /// its container before its sidecar, and wait until each end is recorded.  Jobs without network are left as they
+    /// are (the next hub adopts them).
+    pub async fn end_networked(&self) {
+        let Some(i) = self.inner.get() else { return };
+        let stops: Vec<NetStop> = i.nets.lock().unwrap().drain().map(|(_, s)| s).collect();
+        let mut acks = Vec::new();
+        for s in stops {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            if s.send((net::HUB_STOPPED, tx)).is_ok() {
+                acks.push(rx);
+            }
+        }
+        for a in acks {
+            let _ = a.await;
+        }
     }
 
     /// How job ID ended, as the event that announced it said; none while it runs (or when it is unknown).
@@ -398,6 +907,19 @@ impl Runner {
         })
     }
 
+    /// Job ID's rows (`vordr::rows`) once it ended; none while it runs or when it is unknown.
+    pub fn rows(&self, id: &str) -> Option<Vec<vordr::rows::Row>> {
+        Some(self.inner.get()?.end(id)?.rows)
+    }
+
+    /// Whether job ID's result may count for a gate or a job's `needs`: the job is known and didn't run on a `shared`
+    /// runner.
+    pub fn counts_for_gates(&self, id: &str) -> bool {
+        self.inner
+            .get()
+            .is_some_and(|i| i.meta(id).is_some() && !i.dir(id).join(SHARED).exists())
+    }
+
     /// Whether the job's row says running but its process is gone (the supervisor's `dead-wait`).
     pub fn process_gone(&self, id: &str) -> bool {
         let Some(i) = self.inner.get() else {
@@ -410,6 +932,63 @@ impl Runner {
             },
             None => true,
         }
+    }
+
+    /// A session's `exec/start` in WORKTREE is on its way until the answer drops.
+    pub(crate) fn starting(&self, worktree: PathBuf) -> Starting<'_> {
+        self.starting.lock().unwrap().push(worktree.clone());
+        Starting {
+            runner: self,
+            worktree,
+        }
+    }
+
+    /// The caller takes every job's end from the events and says when it has ([`Runner::settled`]): from now on a job
+    /// that ended is busy in its tree until then.
+    pub fn settling(&self) {
+        self.unsettled.on.store(true, Ordering::SeqCst);
+    }
+
+    /// The end of job ID was taken (its evidence recorded, or it is no one's).
+    pub fn settled(&self, id: &str) {
+        self.unsettled.jobs.lock().unwrap().retain(|(j, _)| j != id);
+    }
+
+    /// Every end so far was taken (the reader missed some: they are no one's evidence).
+    pub fn settled_all(&self) {
+        self.unsettled.jobs.lock().unwrap().clear();
+    }
+
+    /// [`Runner::busy_in`] of the tree TOP names, by its true name (read off the hub's workers): a job's folder is
+    /// recorded by its true name, and a tree may be named through a link (macOS's `/var` is `/private/var`).
+    pub async fn busy_in_tree(&self, top: &Path) -> bool {
+        let t = top.to_path_buf();
+        let real = crate::clock::blocking(move || std::fs::canonicalize(&t).unwrap_or(t))
+            .await
+            .unwrap_or_else(|_| top.to_path_buf());
+        self.busy_in(&real)
+    }
+
+    /// Whether a run in TOP (or a folder inside it) has no result yet: a session's `exec/start` there on its way, a
+    /// job there queued or running, or one that ended whose end the reader of the ends has not taken yet.  TOP is a
+    /// true name (no link on the way), as the jobs' folders are recorded: [`Runner::busy_in_tree`] finds it.
+    pub fn busy_in(&self, top: &Path) -> bool {
+        self.starting
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|w| w.starts_with(top))
+            || self
+                .unsettled
+                .jobs
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(_, cwd)| cwd.starts_with(top))
+            || self
+                .list(None, true)
+                .iter()
+                .any(|r| Path::new(&r.cwd).starts_with(top))
     }
 
     /// The jobs, newest first; SESSION only that session's, RUNNING only those that run.
@@ -485,6 +1064,46 @@ impl Inner {
         serde_json::from_str(&text).ok()
     }
 
+    /// The files [`MOVED`] names, when job ID's tree moved while it ran.
+    fn moved(&self, id: &str) -> Option<Vec<String>> {
+        let text = std::fs::read_to_string(self.dir(id).join(MOVED)).ok()?;
+        Some(text.lines().map(String::from).collect())
+    }
+
+    fn facts(&self, id: &str) -> Option<vordr::facts::Facts> {
+        let text = std::fs::read(self.dir(id).join(FACTS)).ok()?;
+        let mut f: vordr::facts::Facts = serde_json::from_slice(&text).ok()?;
+        if let Some(m) = self.meta(id).and_then(|m| m.machine)
+            && m != "local"
+        {
+            f.platform = format!("runner/{m}");
+            f.env_stamp = format!("runner {m}");
+        }
+        Some(f)
+    }
+
+    /// The newest green job whose facts are F: done, exit 0, no failed row, not on a `shared` runner.
+    fn green_with(&self, f: &vordr::facts::Facts) -> Option<String> {
+        let rd = std::fs::read_dir(&self.root).ok()?;
+        let mut found: Vec<(f64, String)> = rd
+            .flatten()
+            .filter_map(|e| e.file_name().into_string().ok())
+            .filter_map(|id| {
+                let end = self.end(&id)?;
+                let green = end.status == ExecStatus::Done
+                    && end.exit == Some(0)
+                    && !end
+                        .rows
+                        .iter()
+                        .any(|r| r.verdict == vordr::rows::Verdict::Fail)
+                    && !self.dir(&id).join(SHARED).exists();
+                (green && self.facts(&id).as_ref() == Some(f)).then_some((end.ended, id))
+            })
+            .collect();
+        found.sort_by(|a, b| b.0.total_cmp(&a.0));
+        found.into_iter().next().map(|(_, id)| id)
+    }
+
     fn save_meta(&self, m: &Meta) -> Result<(), Refusal> {
         let dir = self.dir(&m.id);
         let tmp = dir.join("meta.tmp");
@@ -496,6 +1115,11 @@ impl Inner {
     fn row(&self, id: &str) -> Option<ExecRow> {
         let m = self.meta(id)?;
         let end = self.end(id);
+        let q = self.queue.row(id);
+        // a job on a runner has no process here: the queue says it runs there
+        let remote = q
+            .as_ref()
+            .is_some_and(|q| q.machine.as_deref().is_some_and(|n| n != queue::LOCAL));
         let kind = match m.kind.as_str() {
             "cargo" => ExecKind::Cargo,
             "ert" => ExecKind::Ert,
@@ -513,7 +1137,7 @@ impl Inner {
             image: m.image,
             name: m.name,
             status: end.as_ref().map_or(
-                if m.queued {
+                if m.queued && !remote {
                     ExecStatus::Queued
                 } else {
                     ExecStatus::Running
@@ -525,6 +1149,10 @@ impl Inner {
             timebox_s: m.timebox_s,
             unit: m.unit,
             summary: end.map(|e| e.summary),
+            machine: q.as_ref().and_then(|q| q.machine.clone()).or(m.machine),
+            attempt: q.as_ref().and_then(|q| q.attempt),
+            waiting: q.as_ref().and_then(|q| q.waiting.clone()),
+            priority: q.as_ref().map(|q| q.priority).or(m.priority),
         })
     }
 
@@ -555,7 +1183,7 @@ impl Inner {
             .filter(|c| c.is_dir())
             .ok_or_else(|| refusal(format!("{} is not a folder", spec.cwd.display())))?;
         match (&spec.starter, spec.worktree.take()) {
-            (Starter::Session(_), Some(wt)) => {
+            (Starter::Session(_) | Starter::Sealed(_), Some(wt)) => {
                 let wt = std::fs::canonicalize(&wt)
                     .map_err(|_| refusal(format!("{} is not a folder", wt.display())))?;
                 if !cwd.starts_with(&wt) {
@@ -567,7 +1195,7 @@ impl Inner {
                 }
                 spec.worktree = Some(wt);
             }
-            (Starter::Session(_), None) => {
+            (Starter::Session(_) | Starter::Sealed(_), None) => {
                 return Err(refusal("a session's job needs its worktree"));
             }
             (Starter::User, _) => spec.worktree = Some(cwd.clone()),
@@ -577,6 +1205,20 @@ impl Inner {
     }
 
     async fn start(self: Arc<Self>, spec: ExecSpec) -> Result<String, Refusal> {
+        let facts = if spec.starter == Starter::User && spec.user.no_timebox {
+            None
+        } else {
+            facts_of(&spec).await
+        };
+        self.start_with(spec, facts).await
+    }
+
+    /// Start SPEC, its FACTS (computed at submit, with the tree they read) kept in the job's folder.
+    async fn start_with(
+        self: Arc<Self>,
+        spec: ExecSpec,
+        facts: Option<(vordr::facts::Facts, Snap)>,
+    ) -> Result<String, Refusal> {
         if spec.argv.is_empty() || spec.argv[0].is_empty() {
             return Err(refusal("a job needs a command"));
         }
@@ -584,48 +1226,53 @@ impl Inner {
         let id = self.new_id();
         let dir = self.dir(&id);
         std::fs::create_dir_all(&dir).map_err(|e| setup(format!("{}: {e}", dir.display())))?;
-        // The slots are the agents': the user's jobs (the editor's servers, which run for days, and its one-shot work)
-        // take none, so they never queue an agent's job, nor wait behind one.
-        let permit = match spec.starter {
-            Starter::User => None,
-            Starter::Session(_) => match self.slots.clone().try_acquire_owned() {
-                Ok(p) => Some(p),
-                Err(_) => {
-                    if let Err(e) = self.enqueue(&id, &dir, &spec) {
-                        let _ = std::fs::remove_dir_all(&dir);
-                        return Err(e);
-                    }
-                    // a slot may have freed between the failed try and the queue entry
-                    self.pump();
-                    return Ok(id);
-                }
-            },
+        if let Some((f, snap)) = &facts {
+            let _ = std::fs::write(dir.join(FACTS), serde_json::to_vec(f).unwrap_or_default());
+            let _ = std::fs::write(dir.join(SNAP), serde_json::to_vec(snap).unwrap_or_default());
+        }
+        // The user's servers (no time box: the editor's, which run for days) never queue: they start at once and count
+        // only in the memory the machine shows.  Every other job enters the queue.
+        if spec.starter == Starter::User && spec.user.no_timebox {
+            let r = self.clone().launch(&id, &dir, spec, None).await;
+            if r.is_err() {
+                let _ = std::fs::remove_dir_all(&dir);
+            }
+            return r.map(|()| id);
+        }
+        if let Err(e) = self.enqueue(&id, &dir, &spec) {
+            let _ = std::fs::remove_dir_all(&dir);
+            return Err(e);
+        }
+        // admitted at once: started here, so a refused launch is the start's answer (the queue's tick, woken only
+        // now, finds it taken; one that waits is its)
+        let t = self.queue.tick(now() as u64);
+        self.queue.wake_tick();
+        let mut mine = None;
+        for s in t.starts {
+            if s == id {
+                mine = Some(self.queue.slot(&s));
+            } else {
+                self.spawn_queued(s);
+            }
+        }
+        self.outcomes(t.outcomes);
+        let Some(slot) = mine else {
+            return Ok(id);
         };
-        let r = self.clone().launch(&id, &dir, spec, permit).await;
+        let r = self.clone().launch(&id, &dir, spec, Some(slot)).await;
         if r.is_err() {
+            self.live.remove(&id);
             let _ = std::fs::remove_dir_all(&dir);
             self.pump();
         }
         r.map(|()| id)
     }
 
-    /// Record job ID as queued: what to start (`pending.json`), a meta saying it waits, a place in the queue.
+    /// Record job ID as queued: a meta saying it waits, and its place in the queue (what to start is kept there).
     fn enqueue(&self, id: &str, dir: &Path, spec: &ExecSpec) -> Result<(), Refusal> {
-        let write = |name: &str, bytes: Vec<u8>| {
-            let tmp = dir.join(format!("{name}.tmp"));
-            std::fs::write(&tmp, bytes)
-                .and_then(|()| std::fs::rename(&tmp, dir.join(name)))
-                .map_err(|e| setup(format!("{}: {e}", dir.display())))
-        };
-        write(
-            "pending.json",
-            serde_json::to_vec(&Pending::of(spec)).unwrap_or_default(),
-        )?;
+        let _ = dir;
         let started = now();
-        let session = match &spec.starter {
-            Starter::Session(s) => Some(s.clone()),
-            Starter::User => None,
-        };
+        let session = spec.starter.session();
         self.save_meta(&Meta {
             id: id.to_string(),
             session: session.clone(),
@@ -642,34 +1289,280 @@ impl Inner {
             image: spec.container.as_ref().map(|c| c.image.clone()),
             name: spec.user.name.clone(),
             queued: true,
+            machine: None,
+            priority: Some(spec.priority().number()),
+            relay: None,
+            keyed: false,
         })?;
         self.live.add(id, session);
-        self.queue.lock().unwrap().push_back(id.to_string());
+        // the tick wakes after start's own: a job admitted at once is start's to launch
+        self.queue.enter(self.submit_of(id, spec), started as u64);
         Ok(())
     }
 
-    /// Start queued jobs while slots are free.
-    fn pump(self: &Arc<Self>) {
-        loop {
-            let Ok(permit) = self.slots.clone().try_acquire_owned() else {
-                return;
-            };
-            let Some(id) = self.queue.lock().unwrap().pop_front() else {
-                return;
-            };
-            let me = self.clone();
-            tokio::spawn(async move { me.run_queued(id, permit).await });
+    /// Job ID with SPEC as the queue takes it.
+    fn submit_of(&self, id: &str, spec: &ExecSpec) -> Submit {
+        let mut place = spec.place.clone();
+        if place.image.is_none() {
+            place.image = spec.container.as_ref().and_then(|c| {
+                container::resolve(&c.caps, &c.image)
+                    .ok()
+                    .map(|r| r.to_string())
+            });
+        }
+        // a runner's proxy reaches what the job's grant reaches here, pins aside: it gets none (a pin names an address
+        // on this machine's network), so a job that reaches a pinned name stays here
+        place.net_hosts = net_hosts_of(spec.container.as_ref());
+        if let Some(c) = &spec.container
+            && let Some(h) = pinned_host(&place.net_hosts, &c.caps.pins)
+        {
+            tracing::info!("job {id} runs on this machine only: it reaches {h}, a pinned name");
+            place.local_only = true;
+        }
+        let fspec = spec.forseti_spec(id, &self.hooks.memory);
+        // inputs frozen at submit, for a job a runner could take: what it syncs, whatever the worktree holds later.
+        // One that can't be frozen (not a git worktree, a submodule's change) stays on this machine.
+        let mut inputs = None;
+        if self.queue.runners() > 0 && place.may_leave() {
+            let store = self.root.with_file_name("runner-store");
+            match sync::freeze(
+                &fspec.tree,
+                &[],
+                place.visibility,
+                place.shared_overlay,
+                &store,
+            ) {
+                Ok(f) => inputs = Some(f),
+                Err(why) => {
+                    tracing::info!("job {id} runs on this machine only: {why}");
+                    place.local_only = true;
+                }
+            }
+        }
+        Submit {
+            id: id.to_string(),
+            session: spec.starter.session(),
+            own: spec.priority(),
+            spec: fspec,
+            place,
+            pending: serde_json::to_value(Pending::of(spec)).unwrap_or_default(),
+            inputs,
         }
     }
 
-    /// A queued job got its slot: start it, or end it when it cannot start (stopped while it waited, its spec gone,
-    /// the launch refused); the reason is in its log and its end is the usual `exec-done`.
-    async fn run_queued(self: Arc<Self>, id: String, permit: tokio::sync::OwnedSemaphorePermit) {
+    /// The queue as `runtime.db` kept it, put back after a restart: the jobs that waited (WAITING, oldest first) wait
+    /// again, and those on runners keep their attempts, detached until their runner's `hello`. A queued job an older
+    /// hub left as `pending.json` is read into the queue once (the file goes once `rq_job` holds it).
+    async fn restore(self: Arc<Self>, waiting: Vec<String>) {
+        let (stored, attempts) = match &self.hooks.runtime {
+            Some(db) => {
+                self.queue.restore_kept(queue::kept(db).await);
+                queue::stored(db).await
+            }
+            None => (vec![], vec![]),
+        };
+        let known: HashSet<String> = stored.iter().map(|s| s.submit.id.clone()).collect();
+        let open: Vec<queue::Stored> = stored
+            .into_iter()
+            .filter(|s| self.meta(&s.submit.id).is_some() && self.end(&s.submit.id).is_none())
+            .collect();
+        self.queue.restore(open, attempts, now() as u64);
+        for id in waiting {
+            if known.contains(&id) {
+                continue;
+            }
+            let dir = self.dir(&id);
+            let file = dir.join("pending.json");
+            let pending = std::fs::read_to_string(&file)
+                .ok()
+                .and_then(|t| serde_json::from_str::<Pending>(&t).ok());
+            let Some(p) = pending else {
+                let _ = std::fs::write(
+                    dir.join("log"),
+                    "could not start: its start request is gone\n",
+                );
+                self.finish(&id).await;
+                continue;
+            };
+            let started = self.meta(&id).map_or(now(), |m| m.started);
+            let spec = p.into_spec();
+            self.queue
+                .submit(self.submit_of(&id, &spec), started as u64);
+            if self.hooks.runtime.is_some() {
+                self.queue.flush().await;
+                if let Err(e) = std::fs::remove_file(&file) {
+                    tracing::warn!("job {id}: {}: {e}", file.display());
+                }
+            }
+        }
+        self.pump();
+    }
+
+    /// A tick of the queue: start what this machine admits, carry out what ended on runners.
+    fn pump(self: &Arc<Self>) {
+        let t = self.queue.tick(now() as u64);
+        for id in t.starts {
+            self.spawn_queued(id);
+        }
+        self.outcomes(t.outcomes);
+    }
+
+    fn spawn_queued(self: &Arc<Self>, id: String) {
+        let me = self.clone();
+        let slot = self.queue.slot(&id);
+        crate::clock::spawn("exec:queued", async move { me.run_queued(id, slot).await });
+    }
+
+    /// The queue's tick every 2 s and its runners' events, for as long as the jobs are open.
+    fn run_queue(
+        inner: std::sync::Weak<Inner>,
+        mut links: tokio::sync::mpsc::UnboundedReceiver<crate::runners::link::LinkEvent>,
+    ) {
+        let ticks = inner.clone();
+        crate::clock::spawn("exec:queue-tick", async move {
+            let mut every = crate::clock::interval(queue::TICK);
+            loop {
+                // an idle queue sets no timer: it waits for a job (or an attempt) to wait for
+                let Some(q) = ticks.upgrade().map(|i| i.queue.clone()) else {
+                    return;
+                };
+                if q.busy() {
+                    every.tick().await;
+                } else {
+                    q.woken().await;
+                    continue;
+                }
+                let Some(i) = ticks.upgrade() else { return };
+                i.pump();
+            }
+        });
+        crate::clock::spawn("exec:queue-links", async move {
+            while let Some(ev) = links.recv().await {
+                let Some(i) = inner.upgrade() else { return };
+                let out = i.queue.on_link(ev, now() as u64);
+                i.outcomes(out);
+                i.pump();
+            }
+        });
+    }
+
+    /// What ended on a runner: its verdict becomes the job's end (`exit` and `why` as a job here writes them), a lost
+    /// job ends lost, a late result stays in the folder as that attempt's. A `shared` runner's name goes to the job's
+    /// [`SHARED`] file: its summary is labelled, and it never counts for a gate.
+    fn outcomes(self: &Arc<Self>, outs: Vec<Outcome>) {
+        for o in outs {
+            let (id, verdict, shared, split, machine, back) = match o {
+                Outcome::Done {
+                    id,
+                    result,
+                    shared,
+                    machine,
+                    back,
+                    ..
+                } => {
+                    let split = result["split"].as_str().map(String::from);
+                    (id, queue::verdict_of(&result), shared, split, machine, back)
+                }
+                Outcome::Lost { id } => (id, None, None, None, None, None),
+                Outcome::Late { id, attempt, .. } => {
+                    tracing::info!(
+                        "job {id}: attempt {attempt} finished late; its result is kept, not applied"
+                    );
+                    continue;
+                }
+            };
+            let dir = self.dir(&id);
+            let write = |name: &str, text: &str| {
+                if let Err(e) = std::fs::write(dir.join(name), text) {
+                    tracing::warn!("job {id}: {name} not written: {e}");
+                }
+            };
+            match verdict {
+                Some(forseti::Verdict::Pass) => write("exit", "0\n"),
+                Some(forseti::Verdict::Red) => write("exit", "1\n"),
+                Some(forseti::Verdict::Cancelled) => write("why", "stopped"),
+                Some(forseti::Verdict::Timeout) => write("why", "timed-out"),
+                Some(v) => write(
+                    "exit",
+                    if matches!(v, forseti::Verdict::Crash) {
+                        "134\n"
+                    } else {
+                        "1\n"
+                    },
+                ),
+                None => {}
+            }
+            if let Some(runner) = shared {
+                write(SHARED, &runner);
+            }
+            if let Some(line) = split {
+                write(SPLIT, &line);
+            }
+            // the queue forgets the job now: its row keeps the runner it ran on
+            if let Some(n) = machine
+                && let Some(mut m) = self.meta(&id)
+            {
+                m.machine = Some(n);
+                if let Err(e) = self.save_meta(&m) {
+                    tracing::warn!("job {id}: its machine not kept: {}", e.message);
+                }
+            }
+            let me = self.clone();
+            crate::clock::spawn("exec:remote-end", async move {
+                if let Some(back) = back {
+                    me.take_back(&id, back).await;
+                }
+                me.finish(&id).await
+            });
+        }
+    }
+
+    /// What job ID's runner returned, put back ([`crate::runners::returned::take_back`]) off the runtime's threads:
+    /// its lines go to the job's [`RETURNED`] file, which its summary reads. An applied patch is one history version,
+    /// the starting session's (or the runner's, for the user's job).
+    async fn take_back(&self, id: &str, back: crate::runners::returned::Back) {
+        let dir = self.dir(id);
+        let session = self.meta(id).and_then(|m| m.session);
+        let history = self.hooks.history.clone();
+        let (runner, id) = (back.runner.clone(), id.to_owned());
+        let _ = crate::clock::blocking(move || {
+            let record = |tree: &Path, writes: &crate::runners::returned::Writes| {
+                let Some((hubs, state)) = &history else {
+                    return Ok(());
+                };
+                let (hub, tree) = hubs.of_tree(state, tree).map_err(|e| e.message)?;
+                hub.on_returned_writes(&tree, writes, session.as_deref(), &runner, now())
+                    .map(|_| ())
+                    .map_err(|e| e.to_string())
+            };
+            // a patch that comes while its session's revert runs is kept, and the revert lists it
+            let patch = crate::runners::queue::returned_file(&dir, "patch", "");
+            let held = match (&history, &session) {
+                (Some((hubs, _)), Some(sid)) if patch.metadata().is_ok_and(|m| m.len() > 0) => {
+                    crate::history::revert::patch_returned(hubs, sid, &id)
+                }
+                _ => false,
+            };
+            let lines = crate::runners::returned::take_back(&dir, &back, held, &record);
+            if !lines.is_empty() {
+                let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+                if let Err(e) = std::fs::write(dir.join(RETURNED), text) {
+                    tracing::warn!("{}: {e}", dir.join(RETURNED).display());
+                }
+            }
+        })
+        .await;
+    }
+
+    /// A queued job was admitted here: start it, or end it when it cannot start (stopped while it waited, its spec
+    /// gone, the launch refused); the reason is in its log and its end is the usual `exec-done`.
+    async fn run_queued(self: Arc<Self>, id: String, slot: queue::Slot) {
         let dir = self.dir(&id);
-        let pending = std::fs::read_to_string(dir.join("pending.json"))
-            .ok()
-            .and_then(|t| serde_json::from_str::<Pending>(&t).ok());
-        let mut permit = Some(permit);
+        let pending = self
+            .queue
+            .pending(&id)
+            .and_then(|v| serde_json::from_value::<Pending>(v).ok());
+        let mut permit = Some(slot);
         let failed = if dir.join("why").exists() {
             None
         } else {
@@ -703,7 +1596,8 @@ impl Inner {
         id: &str,
         dir: &Path,
         spec: &ExecSpec,
-    ) -> Result<(draugr::Spec, Option<container::JobProxy>), Refusal> {
+        keyed: Option<&KeySocket>,
+    ) -> Result<(draugr::Spec, Option<net::JobNetwork>), Refusal> {
         let job = spec.container.as_ref().expect("a container job");
         let podman = self
             .hooks
@@ -711,21 +1605,7 @@ impl Inner {
             .clone()
             .ok_or_else(container::podman_missing)?;
         let mut caps = job.caps.clone();
-        // A granted network is this job's own proxy: a socket on a short path under the runtime dir and a copy of the
-        // forwarder in the job's folder, both mounted read-only.  One that cannot be given refuses the job.
-        let mut proxy = None;
-        if let Some(n) = job.net {
-            let forwarder = self.hooks.forwarder.clone().ok_or_else(|| {
-                setup("this job was granted network access, but drgnx-fwd (the forwarder) is not installed beside the hub")
-            })?;
-            let run_dir = runstav::paths::socket_path(&Env::process())
-                .parent()
-                .map(Path::to_path_buf)
-                .unwrap_or_else(std::env::temp_dir);
-            let jp = container::prepare_proxy(id, dir, &run_dir, &forwarder, n, &caps.net_hosts)?;
-            caps.proxy = Some(jp.mounts.clone());
-            proxy = Some(jp);
-        }
+        let owner = container::owner_tag();
         // the mount is the session's worktree, never a folder the request names; the command runs in its CWD inside
         let worktree = spec.worktree.clone().unwrap_or_else(|| spec.cwd.clone());
         let subdir = spec
@@ -739,21 +1619,80 @@ impl Inner {
             worktree,
             subdir,
             job: id.to_string(),
-            net: job.net,
+            net: job.net.is_some(),
+            // each key in the variable of its name, as for a command job
+            keys: keyed.map(|k| container::KeyMounts {
+                helper: k.bin.clone(),
+                vars: spec
+                    .place
+                    .keys
+                    .iter()
+                    .map(|n| (n.clone(), n.clone()))
+                    .collect(),
+            }),
+            runner: None,
         };
-        let args = container::argv(&req, &caps)?;
         let (p, reference) = (
             podman.clone(),
             container::resolve(&caps, &job.image)?.to_string(),
         );
-        // caps podman cannot enforce refuse the job: a container without its limits is never run
         let shell = self.hooks.shell_env.clone();
-        tokio::task::spawn_blocking(move || {
-            container::check_limits(&shell, &p, Duration::from_secs(30))?;
-            container::ensure_image(&shell, &p, &reference, container::PULL_TIMEOUT)
-        })
-        .await
-        .map_err(|e| setup(format!("pulling the image: {e}")))??;
+        // A granted network, or keys, is this job's relay: its sidecar (joined with the host checks and the image pull)
+        // and its proxy (for keys alone, with no host allowed), started before the job; a keyed job's key streams are
+        // answered from the hub's keys.  One that cannot be given refuses the job.
+        let mut relay = None;
+        if job.net.is_some() || keyed.is_some() {
+            let n = job.net;
+            let px_dir = self
+                .hooks
+                .px_dir
+                .clone()
+                .ok_or_else(|| setup("the relay's binaries were not found next to the hub"))?;
+            let (mut jn, job_net) = net::prepare_net(
+                id,
+                &shell,
+                &podman,
+                &px_dir,
+                &owner,
+                n,
+                &caps.net_hosts,
+                &caps.pins,
+                &reference,
+                &dir.join("log"),
+                net::job_web(self.hooks.nevers.as_ref()),
+                keyed.map(|k| {
+                    Arc::new(keys::Source(k.keys.clone())) as Arc<dyn drgnx_px::owner::KeySource>
+                }),
+            )
+            .await?;
+            caps.proxy = Some(job_net);
+            // a session's job asks for a host port on a card; the session's grants apply live
+            if let (Some(_), Starter::Session(sid), Some(cards), Some(events)) =
+                (n, &spec.starter, &self.hooks.cards, jn.take_events())
+            {
+                let (task, _) =
+                    hostgrants::start(cards.clone(), id, sid, jn.web().clone(), events).await;
+                jn.set_asker(task);
+            }
+            relay = Some(jn);
+        } else {
+            // caps podman cannot enforce refuse the job: a container without its limits is never run
+            crate::clock::blocking(move || {
+                container::check_limits(&shell, &p, Duration::from_secs(30))?;
+                container::ensure_image(&shell, &p, &reference, container::PULL_TIMEOUT)
+            })
+            .await
+            .map_err(|e| setup(format!("pulling the image: {e}")))??;
+        }
+        let args = match container::argv(&req, &caps, &owner) {
+            Ok(a) => a,
+            Err(e) => {
+                if let Some(r) = relay {
+                    r.end().await;
+                }
+                return Err(e);
+            }
+        };
         Ok((
             draugr::Spec {
                 program: podman,
@@ -764,39 +1703,131 @@ impl Inner {
                 pass_fds: vec![],
                 new_session: false,
             },
-            proxy,
+            relay,
         ))
+    }
+
+    /// Job ID's key socket (in DIR, or its session's folder), answered from the hub's keys, and `drgnx-key`.
+    fn key_socket(&self, id: &str, dir: &Path, spec: &ExecSpec) -> Result<KeySocket, Refusal> {
+        let bin = self
+            .hooks
+            .key_bin
+            .clone()
+            .filter(|b| b.is_file())
+            .ok_or_else(|| {
+                setup("drgnx-key was not found next to the hub: a keyed job can't get its keys")
+            })?;
+        let env = self.hooks.shell_env.paths_env();
+        let session = match &spec.starter {
+            Starter::Session(s) => Some(s.as_str()),
+            // a sealed job has no agent session: its key socket goes in the job's dir, as a user job's
+            Starter::User | Starter::Sealed(_) => None,
+        };
+        let path = keys::socket_path(&env, session, dir, id)
+            .ok_or_else(|| setup("the job's key socket has no path within a socket's length"))?;
+        if let Some(sid) = session {
+            runstav::paths::make_session_dir(&env, &runstav::paths::socket_path(&env), sid)
+                .map_err(|e| setup(format!("the session's folder: {e}")))?;
+        }
+        let jk = keys::JobKeys::new(
+            id,
+            spec.place.keys.clone(),
+            self.queue.keys().clone(),
+            dir,
+            sleipnir::keyline::KEY_WAIT,
+        );
+        let socket = keys::serve(&path, jk.clone())
+            .map_err(|e| setup(format!("the job's key socket {}: {e}", path.display())))?;
+        Ok(KeySocket {
+            socket: Some(socket),
+            keys: jk,
+            bin,
+        })
+    }
+
+    /// Container job ID's keys, answered through its sidecar, and its own copy (in DIR: the container relabels what it
+    /// mounts) of the static `drgnx-key` next to the hub.
+    fn container_keys(&self, id: &str, dir: &Path, spec: &ExecSpec) -> Result<KeySocket, Refusal> {
+        let from = self
+            .hooks
+            .px_dir
+            .as_deref()
+            .map(|d| d.join(keys::static_key_name(net::podman_arch())))
+            .filter(|b| b.is_file())
+            .ok_or_else(|| {
+                setup("the static drgnx-key was not found next to the hub: a keyed container job can't get its keys")
+            })?;
+        let bin = dir.join("drgnx-key");
+        // the container runs this copy: its write descriptor kept out of the hub's other forks (drgnx-exe)
+        drgnx_exe::copy(&from, &bin)
+            .map_err(|e| setup(format!("drgnx-key for the job ({}): {e}", from.display())))?;
+        Ok(KeySocket {
+            socket: None,
+            keys: keys::JobKeys::new(
+                id,
+                spec.place.keys.clone(),
+                self.queue.keys().clone(),
+                dir,
+                sleipnir::keyline::KEY_WAIT,
+            ),
+            bin,
+        })
     }
 
     async fn launch(
         self: Arc<Self>,
         id: &str,
         dir: &Path,
-        spec: ExecSpec,
-        permit: Option<tokio::sync::OwnedSemaphorePermit>,
+        mut spec: ExecSpec,
+        permit: Option<queue::Slot>,
     ) -> Result<(), Refusal> {
+        // a suite whose rows a runner may split runs here whole
+        spec.argv = local_argv(&spec.argv, spec.place.suite.as_ref());
         let name = self.hooks.systemd.then(|| unit::unit_name(id));
-        let mut proxy = None;
+        let mut relay = None;
+        // a keyed command job asks the hub for its keys on a socket of its own, through drgnx-key in front of it; a
+        // keyed container job asks its sidecar, through its copy of drgnx-key as the entrypoint
+        let keyed = if spec.place.keys.is_empty() {
+            None
+        } else if spec.container.is_some() {
+            Some(self.container_keys(id, dir, &spec)?)
+        } else {
+            let k = self.key_socket(id, dir, &spec)?;
+            spec.argv = keys::wrapped_argv(&k.bin, &spec.place.keys, &spec.argv);
+            Some(k)
+        };
+        let key_env = keyed.as_ref().and_then(|k| k.socket.as_ref()).map(|s| {
+            (
+                "DRGNX_KEY_SOCK".to_string(),
+                s.path().to_string_lossy().into_owned(),
+            )
+        });
         let (inner, status) = match &spec.starter {
             _ if spec.container.is_some() => {
-                let (s, p) = self.container_spec(id, dir, &spec).await?;
-                proxy = p;
+                let (s, r) = self.container_spec(id, dir, &spec, keyed.as_ref()).await?;
+                relay = r;
                 (s, None)
             }
             // the conformance lane has no sandbox for a job: its jobs run as the user's do
-            Starter::Session(_) if unsandboxed_for_tests(&self.hooks) => (
+            Starter::Session(_) | Starter::Sealed(_) if unsandboxed_for_tests(&self.hooks) => (
                 plain_spec(&spec, agent_plain_env(&self.hooks.shell_env)),
                 None,
             ),
-            Starter::Session(sid) => {
+            // a sealed job's label keys its sandbox's folders as a session's id does
+            Starter::Session(sid) | Starter::Sealed(sid) => {
                 let worktree = spec
                     .worktree
                     .clone()
                     .ok_or_else(|| refusal("a session's job needs its worktree"))?;
                 // the lock's protected files stay read-only for a job as for the session itself
+                // the variables the start named (a sealed rerun's test selector; a session's job names none),
+                // then the key socket's, last, so a named variable never redirects it
+                let mut env = tool_env(&self.hooks.shell_env);
+                env.extend(spec.user.env.iter().cloned());
+                env.extend(key_env.clone());
                 let plan = LaunchPlan {
                     argv: spec.argv.iter().map(OsString::from).collect(),
-                    env: tool_env(&self.hooks.shell_env),
+                    env,
                     session_meta: None,
                     protected_ro: crate::agents::lock::PROTECTED_RO
                         .iter()
@@ -805,13 +1836,27 @@ impl Inner {
                     login_dir: None,
                     enforced: Enforced::Yes,
                     gateway: false,
+                    trace: None,
+                    ro_files: Vec::new(),
+                    gateway_url_env: Vec::new(),
                 };
+                // the protected files the launch makes empty to pin them go at the job's end (`finish`), before its
+                // tree's key is read again: they were never the agent's
+                crate::sandbox::note_missing(&dir.join(STUBS), &worktree, &plan.protected_ro)
+                    .map_err(|e| setup(format!("the job's stub list: {e}")))?;
+                // a keyed job reads drgnx-key (the file alone) and reaches its key socket (the path alone)
                 let shape = SessionShape {
                     sid: sid.clone(),
                     cwd: spec.cwd.clone(),
                     write: vec![worktree],
-                    read: vec![],
+                    read: keyed.iter().map(|k| k.bin.clone()).collect(),
                     net: NetCell::ProviderAndPackages,
+                    sockets: keyed
+                        .iter()
+                        .filter_map(|k| k.socket.as_ref())
+                        .map(|s| s.path().to_path_buf())
+                        .collect(),
+                    browser: None,
                 };
                 let l = launch::launch(&self.hooks.shell_env.paths_env(), &plan, &shape).await?;
                 (l.spec, l.status)
@@ -829,26 +1874,55 @@ impl Inner {
             inner.env.retain(|(n, _)| n != k.as_str());
             inner.env.push((k.into(), v.into()));
         }
+        // a sandboxed session's job got it in its plan; the others' environment is this one
+        if status.is_none()
+            && let Some((k, v)) = &key_env
+        {
+            inner.env.push((k.into(), v.into()));
+        }
         let memory = spec
             .user
             .memory_max
             .as_deref()
             .unwrap_or(self.hooks.memory.as_str());
-        let wrapped = unit::wrap(
+        let wrap = if keyed.is_some() {
+            unit::wrap_to_hub
+        } else {
+            unit::wrap
+        };
+        let wrapped = wrap(
             inner,
             dir,
             name.as_deref().map(|n| (n, memory)),
             spec.user.nice,
             &self.hooks.shell_env,
         );
-        let child = draugr::spawn_pinned(wrapped)
-            .await
-            .map_err(|e| setup(format!("starting the job: {e}")))?;
+        let mut child = match draugr::spawn_pinned(wrapped).await {
+            Ok(c) => c,
+            Err(e) => {
+                if let Some(r) = relay {
+                    r.end().await;
+                }
+                return Err(setup(format!("starting the job: {e}")));
+            }
+        };
         let pid = child.id();
+        // a keyed job's output reaches its log only through the hub's redactor
+        let keyed = keyed.map(|k| {
+            let out = child.take_stdout().expect("the job's stdout");
+            let pump = crate::clock::spawn(
+                "exec:key-log",
+                keys::pump(out, dir.join("log"), k.keys.redactor()),
+            );
+            Keyed {
+                _socket: k.socket,
+                pump,
+            }
+        });
         // The sandbox helper reports on a pipe; a launch whose status is not read hangs (Task 10).
         if let Some(fd) = status {
             let log = dir.join("log");
-            let read = tokio::task::spawn_blocking(move || {
+            let read = crate::clock::blocking(move || {
                 gleipnir::read_status(
                     fd,
                     &|| {
@@ -867,13 +1941,18 @@ impl Inner {
                 return Err(e);
             }
         }
+        let start_time = match start_time_or_refuse(draugr::start_time(pid), pid) {
+            Ok(t) => t,
+            Err(e) => {
+                let _ =
+                    draugr::kill_group(pid, Duration::from_secs(1), &draugr::RealSignaller).await;
+                return Err(e);
+            }
+        };
         let started = now();
         let mut meta = Meta {
             id: id.to_string(),
-            session: match &spec.starter {
-                Starter::Session(s) => Some(s.clone()),
-                Starter::User => None,
-            },
+            session: spec.starter.session(),
             kind: spec.kind.name().to_string(),
             argv: spec.argv.clone(),
             cwd: spec.cwd.display().to_string(),
@@ -882,11 +1961,15 @@ impl Inner {
             deadline: spec.time_box().map(|t| started + t.as_secs_f64()),
             unit: name,
             pid: Some(pid),
-            start_time: draugr::start_time(pid).ok(),
+            start_time: Some(start_time),
             entity: None,
             image: spec.container.as_ref().map(|c| c.image.clone()),
             name: spec.user.name.clone(),
             queued: false,
+            machine: Some(queue::LOCAL.into()),
+            priority: Some(spec.priority().number()),
+            relay: relay.as_ref().map(|r| r.sidecar_name().to_string()),
+            keyed: keyed.is_some(),
         };
         self.save_meta(&meta)?;
         meta.entity = self.record_start(&meta).await;
@@ -895,15 +1978,72 @@ impl Inner {
         let id = id.to_string();
         // counted as running before the starter hears of its id
         self.live.add(&id, meta.session.clone());
+        self.watch_progress(&id, &spec.argv);
+        // a networked job's relay answers for as long as the job runs; a graceful hub stop ends it through `nets`
+        let relay = relay.map(|net| {
+            let (tx, stop) = tokio::sync::oneshot::channel();
+            self.nets.lock().unwrap().insert(id.clone(), tx);
+            Net { net, stop }
+        });
         crate::clock::spawn("exec:watch", async move {
-            // a container job's proxy answers for as long as the job runs
-            let _proxy = proxy;
-            // a real wait (the child's end): a test's barrier waits for a job that ends, and names one that does not
-            crate::clock::real(me.clone().watch(&id, Some(child))).await;
+            // a real wait (the child's end): a test's barrier waits for a job that ends, and names one that does not;
+            // an advance does not wait for it (the job's time box may be what ends it)
+            crate::clock::real_long(me.clone().watch(&id, Some(child), relay, keyed)).await;
             drop(permit);
             me.pump();
         });
         Ok(())
+    }
+
+    /// Job ID's progress file, when ARGV names one and an editor listens: looked at every [`progress::EVERY`] while
+    /// the job runs (its end looks once more, before `exec-done`).
+    fn watch_progress(self: &Arc<Self>, id: &str, argv: &[String]) {
+        let Some(file) = progress::file_of(argv) else {
+            return;
+        };
+        if self.hooks.editors.is_none() {
+            return;
+        }
+        self.progress
+            .lock()
+            .unwrap()
+            .insert(id.to_owned(), (file, progress::Watch::default()));
+        let me = self.clone();
+        let id = id.to_owned();
+        crate::clock::spawn("exec:progress", async move {
+            while me.live.has(&id) && me.look_progress(&id, false) {
+                crate::clock::sleep(progress::EVERY).await;
+            }
+            // a job that left the table without its end (lost) takes its watch with it
+            me.progress.lock().unwrap().remove(&id);
+        });
+    }
+
+    /// One look at job ID's progress: what changed goes to the editors as `exec-progress`. LAST: the job ended, its
+    /// watch goes. False when the job has no watch (any more).
+    fn look_progress(&self, id: &str, last: bool) -> bool {
+        let mut all = self.progress.lock().unwrap();
+        let Some((file, watch)) = all.get_mut(id) else {
+            return false;
+        };
+        let mut events = watch.look(
+            id,
+            progress::read(file),
+            progress::read(&progress::plan_of(file)),
+        );
+        for e in &mut events {
+            e["file"] = json!(file.display().to_string());
+        }
+        if last {
+            all.remove(id);
+        }
+        drop(all);
+        if let Some(ed) = &self.hooks.editors {
+            for e in events {
+                ed.broadcast("exec-progress", e);
+            }
+        }
+        !last
     }
 
     /// The graph entity of a job that starts (best effort: a store that is not ready loses the record, not the job).
@@ -933,9 +2073,18 @@ impl Inner {
         }
     }
 
-    /// Wait for the job to end (or its time box), then record the end.  CHILD is the process this hub started; none:
-    /// a job re-attached after a restart, watched by polling.
-    async fn watch(self: Arc<Self>, id: &str, child: Option<draugr::Child>) {
+    /// Wait for the job to end (or its time box, or its relay), then record the end.  CHILD is the process this hub
+    /// started; none: a job re-attached after a restart, watched by polling.  RELAY is a networked job's: when its
+    /// channel ends first (or a graceful hub stop asks), the job ends `infra: proxy`.
+    async fn watch(
+        self: Arc<Self>,
+        id: &str,
+        child: Option<draugr::Child>,
+        relay: Option<Net>,
+        keyed: Option<Keyed>,
+    ) {
+        let mut relay = relay;
+        let mut acks = Vec::new();
         let Some(meta) = self.meta(id) else { return };
         let dir = self.dir(id);
         // a job without a time box has no timer arm: it ends only by itself or by a stop
@@ -947,12 +2096,41 @@ impl Inner {
         };
         match child {
             Some(mut c) => {
+                let relay_end = async {
+                    match relay.as_mut() {
+                        Some(r) => r.ended().await,
+                        None => std::future::pending().await,
+                    }
+                };
                 tokio::select! {
                     _ = c.wait() => {}
+                    end = relay_end => {
+                        let r = relay.take().expect("the relay arm fired");
+                        // the sidecar's stderr is read before it is stopped; the job container goes before the sidecar
+                        let stderr = r.net.stderr();
+                        let code = r.net.end().await;
+                        let reason = match end {
+                            RelayEnd::Channel(e) => net::end_reason(&e, code, &stderr),
+                            RelayEnd::Stop(why, ack) => {
+                                acks.push(ack);
+                                why.to_string()
+                            }
+                        };
+                        write_infra(&dir, &reason);
+                        crate::clock::real(async {
+                            let _ = draugr::kill_group(c.id(), Duration::from_secs(2), &draugr::RealSignaller).await;
+                            let _ = c.wait().await;
+                        })
+                        .await;
+                    }
                     () = time_up => {
                         let _ = std::fs::write(dir.join("why"), "timed-out");
-                        let _ = draugr::kill_group(c.id(), Duration::from_secs(2), &draugr::RealSignaller).await;
-                        let _ = c.wait().await;
+                        // the kill ends by itself, within its grace: an advance past the time box waits for it
+                        crate::clock::real(async {
+                            let _ = draugr::kill_group(c.id(), Duration::from_secs(2), &draugr::RealSignaller).await;
+                            let _ = c.wait().await;
+                        })
+                        .await;
                     }
                 }
             }
@@ -967,14 +2145,32 @@ impl Inner {
                     () = time_up => {
                         let _ = std::fs::write(dir.join("why"), "timed-out");
                         if let Some(p) = meta.pid {
-                            let _ = draugr::kill_group(p, Duration::from_secs(2), &draugr::RealSignaller)
-                                .await;
+                            let _ = crate::clock::real(draugr::kill_group(
+                                p,
+                                Duration::from_secs(2),
+                                &draugr::RealSignaller,
+                            ))
+                            .await;
                         }
                     }
                 }
             }
         }
+        if let Some(r) = relay {
+            r.net.end().await;
+        }
+        // the log is whole before the result reads it; the key socket goes with the job
+        if let Some(k) = keyed {
+            let mut pump = k.pump;
+            if crate::clock::real_timeout(DRAIN, &mut pump).await.is_err() {
+                pump.abort();
+            }
+        }
+        self.nets.lock().unwrap().remove(id);
         self.finish(id).await;
+        for ack in acks {
+            let _ = ack.send(());
+        }
     }
 
     /// Write the job's result once: status from `why` and the exit file, the summary from the log; record it in the
@@ -984,26 +2180,95 @@ impl Inner {
             return;
         }
         let Some(meta) = self.meta(id) else { return };
+        // busy in its tree from before its result shows until the reader of the ends has taken it ([`Unsettled`])
+        if self.unsettled.on.load(Ordering::SeqCst) {
+            (self.unsettled.jobs.lock().unwrap()).push((id.to_string(), PathBuf::from(&meta.cwd)));
+        }
         let dir = self.dir(id);
+        crate::sandbox::remove_made(&dir.join(STUBS));
+        // a job here ran on its tree as it was while it ran (a runner's ran on the inputs frozen at its submit): when
+        // the tree's key moved since the submit, its facts go, so it is no one's evidence and never reused
+        if meta.machine.as_deref().is_none_or(|m| m == "local")
+            && let Some(f) = self.facts(id)
+        {
+            let cwd = PathBuf::from(&meta.cwd);
+            let key = f.tree_key.clone();
+            let before: Option<Snap> = std::fs::read(dir.join(SNAP))
+                .ok()
+                .and_then(|t| serde_json::from_slice(&t).ok());
+            // the files that changed: what a user adds to .gitignore when a run writes them
+            let moved = crate::clock::blocking(move || {
+                let (top, now, snap) = tree_key_at(&cwd)?;
+                (now != key).then(|| before.map(|b| b.moved(&snap, &top)).unwrap_or_default())
+            })
+            .await
+            .ok()
+            .flatten();
+            if let Some(files) = moved {
+                tracing::info!(
+                    "job {id}: its tree moved while it ran ({}): no facts kept",
+                    some_paths(&files)
+                );
+                let _ = std::fs::rename(dir.join(FACTS), dir.join(FACTS_MOVED));
+                let _ = std::fs::write(dir.join(MOVED), files.join("\n"));
+            }
+        }
         let exit = unit::read_exit(&dir);
         let status = match std::fs::read_to_string(dir.join("why")).as_deref() {
             Ok("stopped") => ExecStatus::Stopped,
             Ok("timed-out") => ExecStatus::TimedOut,
+            Ok(w) if w.starts_with("infra:") => ExecStatus::Infra,
             _ if exit.is_some() => ExecStatus::Done,
             _ => ExecStatus::Lost,
         };
         let text = tail_of(&dir.join("log"));
-        let summary = summary::summarise(
+        let mut summary = summary::summarise(
             CheckKind::from_name(&meta.kind),
             exit,
             &text,
             &dir.join("log").display().to_string(),
         );
+        // rows that ran over several attempts: the split first
+        if let Ok(line) = std::fs::read_to_string(dir.join(SPLIT)) {
+            summary.lines.insert(0, line);
+        }
+        if let Some(files) = self.moved(id) {
+            summary.lines.push(moved_line(&files));
+        }
+        // what a runner returned, and where it went
+        if let Ok(text) = std::fs::read_to_string(dir.join(RETURNED)) {
+            summary.lines.extend(text.lines().map(String::from));
+        }
+        // a shared runner's output reaches the summary, and so the starter's wake, labelled untrusted
+        if let Ok(runner) = std::fs::read_to_string(dir.join(SHARED)) {
+            summary
+                .lines
+                .insert(0, crate::runners::returned::shared_label(runner.trim()));
+        }
+        let mut rows = rows_of(&dir.join("log"));
+        let word = match status {
+            ExecStatus::Done => "done",
+            ExecStatus::Stopped => "stopped",
+            ExecStatus::TimedOut => "timed-out",
+            ExecStatus::Infra => "infra",
+            _ => "lost",
+        };
+        vordr::rows::close(&mut rows, word, exit);
+        // the summary names the failed rows (a build row too), the job's own row left out
+        let failed: Vec<String> = vordr::rows::failing(&rows)
+            .filter(|n| *n != vordr::rows::JOB_ROW)
+            .take(50)
+            .map(String::from)
+            .collect();
+        if !failed.is_empty() {
+            summary.failing = failed;
+        }
         let end = End {
             status,
             exit,
             ended: now(),
             summary,
+            rows,
         };
         let tmp = dir.join("result.tmp");
         let written = std::fs::write(&tmp, serde_json::to_vec(&end).unwrap_or_default())
@@ -1012,12 +2277,6 @@ impl Inner {
             tracing::warn!("job {id}: result not written: {e}");
         }
         if let (Some(w), Some(entity)) = (self.hooks.writer.as_ref(), meta.entity.clone()) {
-            let word = match status {
-                ExecStatus::Done => "done",
-                ExecStatus::Stopped => "stopped",
-                ExecStatus::TimedOut => "timed-out",
-                _ => "lost",
-            };
             let e = norn::write::exec::ExecEnd {
                 status: word.into(),
                 exit,
@@ -1039,10 +2298,23 @@ impl Inner {
             exit,
             summary: end.summary,
         };
+        // the job's last step goes before its end
+        self.look_progress(id, true);
         if let Some(ed) = &self.hooks.editors {
             ed.broadcast("exec-done", json!(done));
         }
         self.live.remove(id);
+        // a job here that ran to its end is this machine's history, as a runner's run is the runner's
+        if status == ExecStatus::Done {
+            let verdict = if exit == Some(0) { "Pass" } else { "Red" };
+            let wall_s = (end.ended - meta.started).max(0.0);
+            self.queue.ran_here(
+                id,
+                &json!({"verdict": verdict, "wall_s": wall_s}),
+                end.ended as u64,
+            );
+        }
+        self.queue.release(id);
         let _ = self.events.send(JobEvent::Done(done));
         self.prune();
     }
@@ -1077,10 +2349,26 @@ impl Inner {
     async fn stop(self: Arc<Self>, id: &str) -> Result<ExecRow, Error> {
         let meta = self.meta(id).ok_or_else(|| no_job(id))?;
         if meta.queued && self.end(id).is_none() {
-            // still waiting for a slot: it never starts
-            let _ = std::fs::write(self.dir(id).join("why"), "stopped");
-            self.queue.lock().unwrap().retain(|q| q != id);
-            self.finish(id).await;
+            let (removed, outs) = self.queue.remove(id, now() as u64);
+            if removed || self.queue.row(id).is_none() {
+                // still waiting in the queue: it never starts
+                let _ = std::fs::write(self.dir(id).join("why"), "stopped");
+                self.finish(id).await;
+                return self.row(id).ok_or_else(|| no_job(id));
+            }
+            // on a runner: cancelled there; its end comes back through the link (or at once when it can't be told)
+            let mut events = self.events.subscribe();
+            self.outcomes(outs);
+            let _ = crate::clock::timeout(STOP_WAIT, async {
+                while self.end(id).is_none() {
+                    if let Err(tokio::sync::broadcast::error::RecvError::Closed) =
+                        events.recv().await
+                    {
+                        break;
+                    }
+                }
+            })
+            .await;
             return self.row(id).ok_or_else(|| no_job(id));
         }
         if self.end(id).is_none() {
@@ -1143,26 +2431,85 @@ impl Inner {
                     waiting.push((m.started, id));
                     continue;
                 }
+                // a networked job lost its relay with the last hub: it is ended, not adopted (B3), and left out of
+                // `running`, so the sweep below takes its sidecar
+                if m.relay.is_some() {
+                    let me = self.clone();
+                    crate::clock::spawn("exec:end-relayed", async move {
+                        if let (Some(podman), Ok(name)) =
+                            (me.hooks.podman.clone(), container::name_of(&id))
+                        {
+                            let shell = me.hooks.shell_env.clone();
+                            let _ = crate::clock::blocking(move || {
+                                sleipnir::linux::podman::run_limited(
+                                    &podman,
+                                    &["rm", "-f", "-t", "0", &name],
+                                    &container::podman_env(&shell),
+                                    Duration::from_secs(30),
+                                )
+                            })
+                            .await;
+                        }
+                        write_infra(&me.dir(&id), net::HUB_RESTARTED);
+                        me.finish(&id).await;
+                    });
+                    continue;
+                }
+                // a keyed job's key socket and log went with the last hub: it is ended, not adopted
+                if m.keyed {
+                    let me = self.clone();
+                    crate::clock::spawn("exec:end-keyed", async move {
+                        if let Some(p) = m.pid
+                            && m.start_time.is_some()
+                            && m.start_time == draugr::start_time(p).ok()
+                        {
+                            let _ = crate::clock::real(draugr::kill_group(
+                                p,
+                                Duration::from_secs(2),
+                                &draugr::RealSignaller,
+                            ))
+                            .await;
+                        }
+                        let dir = me.dir(&id);
+                        let _ = std::fs::write(dir.join("why"), KEYED_RESTART);
+                        me.finish(&id).await;
+                    });
+                    continue;
+                }
                 running.insert(id.clone());
+                // it still takes its room here
+                if m.timebox_s.is_some() {
+                    let own = forseti::Priority::from_number(m.priority.unwrap_or(1));
+                    self.queue.adopt(&id, own, now() as u64);
+                }
                 let me = self.clone();
                 crate::clock::spawn("exec:watch", async move {
-                    crate::clock::real(me.watch(&id, None)).await;
+                    crate::clock::real_long(me.watch(&id, None, None, None)).await;
                 });
             }
         }
-        // jobs that waited for a slot when the last hub ended wait again, oldest first
+        // jobs that waited when the last hub ended wait again, oldest first
         waiting.sort_by(|a, b| a.0.total_cmp(&b.0));
-        self.queue
-            .lock()
-            .unwrap()
-            .extend(waiting.into_iter().map(|(_, id)| id));
-        self.pump();
+        let me = self.clone();
+        crate::clock::spawn(
+            "exec:queue-restore",
+            me.restore(waiting.into_iter().map(|(_, id)| id).collect()),
+        );
         self.prune();
-        // a podman client that died with the last hub leaves its container: remove those no running job owns
+        // a podman client that died with the last hub leaves its container (and a networked job its sidecar): remove
+        // those of this hub's label no running job owns, and the relay images of an older binary
         if let Some(podman) = self.hooks.podman.clone() {
             let shell = self.hooks.shell_env.clone();
-            tokio::task::spawn_blocking(move || {
-                container::remove_leftovers(&shell, &podman, &running)
+            let px_dir = self.hooks.px_dir.clone();
+            crate::clock::blocking(move || {
+                let current = px_dir.and_then(|d| net::px_image_ref(&d));
+                container::remove_leftovers(
+                    &shell,
+                    &podman,
+                    &container::owner_tag(),
+                    &running,
+                    current.as_deref(),
+                )
             });
         }
     }
@@ -1241,6 +2588,23 @@ fn unsandboxed_for_tests(_hooks: &Hooks) -> bool {
     cfg!(any(test, feature = "test-hooks")) && std::env::var_os("DRGNX_TEST_PLAIN_JOBS").is_some()
 }
 
+/// The rows of the whole log at PATH (`vordr::rows`), read a line at a time; none when it cannot be read.
+fn rows_of(path: &Path) -> Vec<vordr::rows::Row> {
+    use std::io::BufRead;
+    let Ok(f) = std::fs::File::open(path) else {
+        return Vec::new();
+    };
+    let mut r = std::io::BufReader::new(f);
+    let mut reader = vordr::rows::Reader::new();
+    let mut buf = Vec::new();
+    while matches!(r.read_until(b'\n', &mut buf), Ok(n) if n > 0) {
+        let line = String::from_utf8_lossy(&buf);
+        reader.line(line.trim_end_matches(['\n', '\r']));
+        buf.clear();
+    }
+    reader.finish()
+}
+
 /// The last megabyte of a log, as text.
 fn tail_of(path: &Path) -> String {
     String::from_utf8_lossy(&tail_bytes(path, 1 << 20)).into_owned()
@@ -1292,6 +2656,13 @@ pub fn ensure_open(f: &Front) {
     }
 }
 
+/// The queue of every machine, opening the runner first when it is not open yet.
+pub fn queue(f: &Front) -> Result<Arc<Queue>, Error> {
+    runner(f)?
+        .queue()
+        .ok_or_else(|| error(ErrorCode::Internal, "exec: the queue is not open yet"))
+}
+
 fn runner(f: &Front) -> Result<&Runner, Error> {
     let r = &f.core.exec;
     if r.inner.get().is_none() {
@@ -1304,6 +2675,25 @@ fn runner(f: &Front) -> Result<&Runner, Error> {
             writer: Some(f.writer.clone()),
             editors: Some(f.editors.clone()),
             shell_env: f.shell_env.clone(),
+            nevers: Some(f.browser_nevers.clone()),
+            cards: Some(hostgrants::Hub {
+                settings: f.settings.clone(),
+                writer: f.writer.clone(),
+                gate: f.core.matrix.clone(),
+                // read when the job starts, through the front the tools hold (it outlives the runner's hooks)
+                session: {
+                    let tools = f.tool_hub.clone();
+                    Arc::new(move |sid: &str| {
+                        let f = tools.front.get()?.upgrade()?;
+                        // an MCP session's columns are not held: the default (no role); browser.private asks anyway
+                        let who = f.core.agents.who(sid).unwrap_or_default();
+                        Some((
+                            who,
+                            crate::matrix_gate::ActionCtx::of_session(&f.core.runs.scopes(), sid),
+                        ))
+                    })
+                },
+            }),
             // read at each start, so a provider added since is left out too (as `Front::provider_key_envs`)
             key_envs: Arc::new(move || {
                 crate::settings::providers::effective(
@@ -1321,27 +2711,251 @@ fn runner(f: &Front) -> Result<&Runner, Error> {
         {
             hooks.memory = m;
         }
+        hooks.runtime = f.core.agents.db().cloned();
+        hooks.history = Some((f.core.history.clone(), dirs.hub.clone()));
+        // test-hooks: admission by this many slots (the fixed-slot path a macOS hub takes; 0: nothing is admitted)
         #[cfg(feature = "test-hooks")]
         if let Some(n) = std::env::var("DRGNX_TEST_JOB_SLOTS")
             .ok()
             .and_then(|n| n.parse().ok())
         {
-            hooks.slots = n;
+            hooks.admission = Admission::Fixed(n);
         }
         r.open(dirs.hub.join("exec"), hooks);
+        // the job keys' events go to the user's connections, their audit to the graph
+        if let Some(q) = r.queue() {
+            let editors = f.editors.clone();
+            q.keys()
+                .set_tell(move |event, data| editors.broadcast(event, data));
+            q.keys()
+                .set_sink(crate::runners::keys::graph_sink(f.writer.db.clone()));
+        }
     }
     Ok(r)
 }
 
-/// Part 1 runs jobs on this machine only (Calls made 3).
-fn check_machine(p: &StartParams) -> Result<(), Error> {
-    match &p.machine {
-        Some(m) if m.as_str() != "local" => Err(error(
+/// The request's `machine`: `auto` (the default), `local`, or a runner the queue knows; any other name is refused.
+fn machine(p: &StartParams, q: &Queue) -> Result<Machine, Error> {
+    let m = Machine::parse(p.machine.as_ref().map(|m| m.as_str()));
+    if let Machine::Runner(n) = &m
+        && !q.has_runner(n)
+    {
+        return Err(error(
             ErrorCode::InvalidParams,
-            format!("machine {}: jobs run on this machine only", m.as_str()),
-        )),
-        _ => Ok(()),
+            format!("machine {n}: no runner {n} (`drgnx runner list` shows them)"),
+        ));
     }
+    Ok(m)
+}
+
+/// Where the request asks its job to run, and what its project's settings and the starter's `machines` cell say.
+async fn placement(
+    f: &Front,
+    c: &Caller,
+    p: &StartParams,
+    m: Machine,
+    runners: bool,
+) -> Result<Placement, Error> {
+    // the project's own value (the set the editor sent for it, under its id or slug), else the global one
+    let projects = match p.cwd.as_ref().map(|c| PathBuf::from(c.as_str())) {
+        // a git that cannot answer refuses the start: the global settings are never used in its project's place
+        Some(at) => crate::graph::project_of(&at)
+            .await
+            .map_err(|e| error(ErrorCode::Internal, e))?
+            .map(|r| vec![r.id, r.slug])
+            .unwrap_or_default(),
+        None => vec![],
+    };
+    let setting = |name: &str| {
+        projects
+            .iter()
+            .find_map(|pr| {
+                f.settings
+                    .effective(name, Some(pr))
+                    .filter(|(_, seen)| *seen)
+            })
+            .or_else(|| f.settings.effective(name, None))
+            .map(|(v, _)| v)
+    };
+    // a Mac job needs the Command Line Tools, the project's Homebrew packages and its toolchains; it can't run here,
+    // so it is heavy
+    let os = match p.os {
+        Some(runstav::methods::exec::JobOs::Macos) => forseti::Os::Macos,
+        _ => forseti::Os::Linux,
+    };
+    let features: Vec<String> = if os == forseti::Os::Macos {
+        let list = |name: &str| {
+            setting(name)
+                .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
+                .unwrap_or_default()
+        };
+        std::iter::once("xcode-clt".to_string())
+            .chain(
+                list("drgnx-runners-mac-tools")
+                    .iter()
+                    .map(|t| format!("brew:{t}")),
+            )
+            .chain(
+                list("drgnx-runners-mac-toolchains")
+                    .iter()
+                    .map(|t| format!("tool:{t}")),
+            )
+            .collect()
+    } else {
+        vec![]
+    };
+    let send = setting("drgnx-runners-send")
+        .and_then(|v| v.as_str().and_then(queue::SendMode::parse))
+        .unwrap_or_default();
+    let image = setting("drgnx-runners-image").and_then(|v| v.as_str().map(String::from));
+    let weight = setting("drgnx-runners-weight")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(1.0);
+    let visibility = setting("drgnx-runners-project-visibility")
+        .and_then(|v| v.as_str().map(crate::runners::sync::Visibility::parse))
+        .unwrap_or_default();
+    let shared_overlay =
+        setting("drgnx-runners-shared-overlay").and_then(|v| v.as_bool()) == Some(true);
+    let origin_key = setting("drgnx-runners-origin-key")
+        .and_then(|v| v.as_str().map(String::from))
+        .filter(|s| !s.is_empty());
+    // the project's heavy patterns mark a job whose command line holds one; nothing else marks a job heavy
+    let line = p
+        .argv
+        .iter()
+        .map(|a| a.to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let marked = os == forseti::Os::Macos
+        || setting("drgnx-runners-heavy")
+            .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
+            .unwrap_or_default()
+            .iter()
+            .any(|pat| !pat.is_empty() && line.contains(pat.as_str()));
+    // the starter's `machines` cell: a session's job leaves this machine only on an Allow (an Ask keeps it here); the
+    // user's always may. Asked only of a job that could leave at all, so a job that stays raises no card.
+    let could_leave = runners
+        && m != Machine::Local
+        && p.local_only != Some(true)
+        && (send == queue::SendMode::All
+            || (send == queue::SendMode::Heavy && (p.heavy == Some(true) || marked)));
+    let machines_cell = match &c.sid {
+        None => true,
+        Some(_) if !could_leave => true,
+        Some(sid) => {
+            let argv: Vec<String> = p.argv.iter().map(|a| a.to_string()).collect();
+            let cwd = p
+                .cwd
+                .as_ref()
+                .map(|c| PathBuf::from(c.as_str()))
+                .unwrap_or_default();
+            matches!(
+                decide_session_job(f, sid, &cwd, &argv, norn::matrix::Action::Machines).await,
+                crate::matrix_gate::Gate::Allow
+            )
+        }
+    };
+    Ok(Placement {
+        machine: m,
+        heavy: p.heavy == Some(true) || marked,
+        keys: p
+            .keys
+            .iter()
+            .flat_map(|k| k.iter())
+            .map(|k| k.to_string())
+            .collect(),
+        local_only: p.local_only == Some(true),
+        background: p.background == Some(true),
+        writes: p
+            .writes
+            .iter()
+            .flat_map(|w| w.iter())
+            .map(|w| w.to_string())
+            .collect(),
+        priority: p.priority,
+        send,
+        machines_cell,
+        image,
+        weight,
+        visibility,
+        shared_overlay,
+        origin_key,
+        suite: suite_of(p),
+        net_hosts: vec![],
+        os,
+        features,
+    })
+}
+
+/// The hosts a container job's network grant reaches (its cell over the caps' `drgnx-agents-net-hosts`): what its
+/// proxy allows here, and what a runner's proxy gets for it. None without a grant.
+fn net_hosts_of(c: Option<&ContainerJob>) -> Vec<String> {
+    c.and_then(|c| {
+        c.net
+            .map(|n| crate::sandbox::allowed_hosts(n, &c.caps.net_hosts))
+    })
+    .unwrap_or_default()
+}
+
+/// The first of HOSTS (`host:port`) whose name PINS pins (names compared as hosts are: case and a trailing dot aside).
+fn pinned_host(hosts: &[String], pins: &[(String, std::net::IpAddr)]) -> Option<String> {
+    let norm = |n: &str| n.trim_end_matches('.').to_ascii_lowercase();
+    hosts
+        .iter()
+        .find(|h| {
+            let name = h.rsplit_once(':').map_or(h.as_str(), |(n, _)| n);
+            pins.iter().any(|(p, _)| norm(p) == norm(name))
+        })
+        .cloned()
+}
+
+/// The request's `rows` as the queue's suite.
+fn suite_of(p: &StartParams) -> Option<queue::Suite> {
+    p.rows.as_ref().map(|r| queue::Suite {
+        parser: r.parser.to_string(),
+        listed: r.listed.iter().map(|l| l.to_string()).collect(),
+    })
+}
+
+/// ARGV as a run on this machine takes it: [`queue::ROWS`] becomes the selector of every row of SUITE (a job here
+/// runs once, whole).
+fn local_argv(argv: &[String], suite: Option<&queue::Suite>) -> Vec<String> {
+    let Some(s) = suite else {
+        return argv.to_vec();
+    };
+    let all = forseti::split::selector(&s.listed);
+    argv.iter().map(|a| a.replace(queue::ROWS, &all)).collect()
+}
+
+/// The keys REQUESTED by name, when each is on the project's `drgnx-runners-job-keys` list and, for a session's job,
+/// the matrix's `job.keys` allows it (an Ask refuses the start with its card, as `code.edit`'s does).
+async fn job_keys(
+    f: &Front,
+    c: &Caller,
+    p: &StartParams,
+    cwd: &std::path::Path,
+) -> Result<(), Error> {
+    let names: Vec<String> = p
+        .keys
+        .iter()
+        .flat_map(|k| k.iter())
+        .map(|k| k.to_string())
+        .collect();
+    if names.is_empty() {
+        return Ok(());
+    }
+    let list = f
+        .settings
+        .effective("drgnx-runners-job-keys", None)
+        .and_then(|(v, _)| serde_json::from_value::<Vec<String>>(v).ok())
+        .unwrap_or_default();
+    crate::runners::keys::on_the_project_list(&names, &list)
+        .map_err(|why| error(ErrorCode::InvalidParams, format!("keys: {why}")))?;
+    if let Some(sid) = &c.sid {
+        let argv: Vec<String> = p.argv.iter().map(|a| a.to_string()).collect();
+        gate_session_job(f, sid, cwd, &argv, norn::matrix::Action::JobKeys).await?;
+    }
+    Ok(())
 }
 
 /// A session's job runs commands in its worktree: the matrix's `code.edit` decides, as for the session's own tool
@@ -1392,7 +3006,101 @@ async fn decide_session_job(
 }
 
 pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Error> {
-    check_machine(&p)?;
+    start_as(f, c, p, None).await
+}
+
+/// A job the hub starts for a command it doesn't trust (`orch::gates`' runs: the command an agent ran, or the pack's
+/// over a tree an agent wrote; a bisect's predicate).  It runs in an agent's sandbox (the Session launch shape) with
+/// the tree TREE its only writable folder, on this machine, as [`Starter::Sealed`] `sealed-LABEL`: no session holds
+/// it, so its events reach no agent; the hub's own decision, so no matrix cell is asked.
+pub struct Sealed {
+    /// Letters, digits, `-` and `_`: the job's sandbox folders are keyed by it.
+    pub label: String,
+    pub tree: PathBuf,
+}
+
+/// `exec/start` of the sealed job S, made by the hub (P names no priority, keys or network).
+pub async fn start_sealed(f: &Front, s: &Sealed, mut p: StartParams) -> Result<Started, Error> {
+    if s.label.is_empty()
+        || !s
+            .label
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(crate::agents::session::invalid(
+            "label",
+            "a sealed job's label: letters, digits, - and _",
+        ));
+    }
+    // a runner elsewhere would not run it in this sandbox
+    p.local_only = Some(true);
+    start_as(f, &crate::runner::user(), p, Some(s)).await
+}
+
+async fn start_as(
+    f: &Front,
+    c: &Caller,
+    p: StartParams,
+    gate: Option<&Sealed>,
+) -> Result<Started, Error> {
+    // a session's start is on its way until it answers: the merge gates wait for the run it brings (`orch::gates`)
+    let _starting = match (gate, &c.sid) {
+        (None, Some(sid)) => f
+            .core
+            .agents
+            .worktree(sid)
+            .map(|wt| f.core.exec.starting(wt)),
+        _ => None,
+    };
+    // `RATATOSKR_TEST_EXEC_START_DELAY_MS` (test-hooks): a session's start answers that late, as a slow machine's
+    #[cfg(feature = "test-hooks")]
+    if c.sid.is_some() && gate.is_none() {
+        static DELAY: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+        let ms = *DELAY.get_or_init(|| {
+            std::env::var("RATATOSKR_TEST_EXEC_START_DELAY_MS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0)
+        });
+        if ms > 0 {
+            crate::clock::sleep(std::time::Duration::from_millis(ms)).await;
+        }
+    }
+    // the hub sets an agent's job's priority; only the user's connections choose one
+    if c.sid.is_some() && p.priority.is_some() {
+        return Err(crate::agents::session::invalid(
+            "priority",
+            "only the user's connections set a job's priority (background lowers it)",
+        ));
+    }
+    // an agent's job never changes the user's packages: the hub's rule, whatever the sandbox would let through (a
+    // gate's run is an agent's command)
+    if c.sid.is_some() || gate.is_some() {
+        let argv: Vec<String> = p.argv.iter().map(|a| a.to_string()).collect();
+        // nor pushes: a push goes through the session's shell tool, where the push gate and the matrix see it
+        if crate::orch::push::parse(&argv.join(" ")) != crate::orch::push::Parsed::NotPush {
+            return Err(error(
+                ErrorCode::NotAllowed,
+                "argv: a job never pushes; push from your shell tool, where the push gate judges each ref it sends",
+            ));
+        }
+        if let Some(why) = packages::changes_packages(&argv) {
+            return Err(error(
+                ErrorCode::NotAllowed,
+                format!(
+                    "argv: {why} changes your packages: an agent's job never installs, updates or removes your packages (suggest one with extensions_suggest)"
+                ),
+            ));
+        }
+    }
+    let r = runner(f)?;
+    let q = r
+        .inner()
+        .map_err(|e| error(ErrorCode::Internal, e.message))?
+        .queue
+        .clone();
+    let machine = machine(&p, &q)?;
+    let runners = q.runners() > 0;
     let kind = match p.kind.unwrap_or(ExecKind::Other) {
         ExecKind::Cargo => CheckKind::Cargo,
         ExecKind::Ert => CheckKind::Ert,
@@ -1423,22 +3131,36 @@ pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Err
         .map(|c| PathBuf::from(c.as_str()))
         .ok_or_else(|| error(ErrorCode::InvalidParams, "cwd: the folder the job runs in"))?;
     // A session's job works in the session's own worktree (or a folder inside it), whatever folder the request names.
-    let worktree = match &c.sid {
-        Some(sid) => Some(f.core.agents.worktree(sid).ok_or_else(|| {
+    // A gate's run works in its detached tree.
+    let worktree = match (gate, &c.sid) {
+        (Some(g), _) => Some(g.tree.clone()),
+        (None, Some(sid)) => Some(f.core.agents.worktree(sid).ok_or_else(|| {
             error(
                 ErrorCode::NotAllowed,
                 format!("session {sid} is not held by this hub"),
             )
         })?),
-        None => None,
+        (None, None) => None,
     };
     let cwd = match &worktree {
         Some(wt) => confined(&cwd, wt)?,
         None => cwd,
     };
+    // each phase's real time, logged when the start took over a second (macOS round 5: an agent's start took ~15 s,
+    // and the review overtook it)
+    let mut phases = Phases::new();
     if let Some(sid) = &c.sid {
         let argv: Vec<String> = p.argv.iter().map(|a| a.to_string()).collect();
         gate_session_job(f, sid, &cwd, &argv, action).await?;
+        phases.end("matrix");
+    }
+    job_keys(f, c, &p, &cwd).await?;
+    phases.end("keys");
+    // a confined user_u login can't run rootless podman: refused here, with the cause and an admin's fix
+    if kind == CheckKind::Container
+        && let Some(why) = sleipnir::linux::confined::refusal()
+    {
+        return Err(error(ErrorCode::NotAllowed, why));
     }
     // The Network cell: an Allow gives the job its proxy (never a network of its own), a Never leaves it with none, an
     // Ask refuses the start with the card (the matrix keeps one open card per question, so a start while it is open
@@ -1477,8 +3199,21 @@ pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Err
         }
         _ => None,
     };
+    phases.end("network");
+    let place = placement(f, c, &p, machine, runners).await?;
+    phases.end("placement");
+    // a Mac job runs on a Mac runner as a host job: never in a container, never on this machine
+    if place.os == forseti::Os::Macos && (container.is_some() || place.local_only) {
+        return Err(error(
+            ErrorCode::InvalidParams,
+            "os: a macos job runs on a Mac runner, never in a container or on this machine only",
+        ));
+    }
     let spec = ExecSpec {
-        starter: c.sid.clone().map_or(Starter::User, Starter::Session),
+        starter: match gate {
+            Some(g) => Starter::Sealed(format!("sealed-{}", g.label)),
+            None => c.sid.clone().map_or(Starter::User, Starter::Session),
+        },
         cwd,
         worktree,
         argv: p.argv.iter().map(|a| a.to_string()).collect(),
@@ -1486,20 +3221,71 @@ pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Err
         kind,
         container,
         user,
+        place,
     };
-    let r = runner(f)?;
     let id = r
         .start(spec)
         .await
         .map_err(|r| error(ErrorCode::InvalidParams, r.message))?;
+    phases.end("start");
+    phases.log_if_slow(&id);
     let text = if r.is_queued(&id) {
+        let why = r
+            .get(&id)
+            .and_then(|row| {
+                row.waiting
+                    .or(row.machine.map(|m| format!("it runs on {m}")))
+            })
+            .unwrap_or_else(|| "it waits for room".into());
         format!(
-            "job {id} is queued (the machine is full); it starts when a slot frees: end your turn, you will be woken with the result"
+            "job {id} is queued ({why}); it starts when a machine admits it: end your turn, you will be woken with the result"
         )
     } else {
         format!("job {id} runs: end your turn; you will be woken with the result")
     };
     Ok(Started { text, id })
+}
+
+/// An `exec/start`'s phases in real time: each [`Phases::end`] closes one; [`Phases::log_if_slow`] logs them all when
+/// the whole start took over a second (a slow start lets a review overtake the run it should see).
+struct Phases {
+    began: std::time::Instant,
+    last: std::time::Instant,
+    done: Vec<(&'static str, Duration)>,
+}
+
+impl Phases {
+    fn new() -> Self {
+        let now = crate::clock::real_now();
+        Phases {
+            began: now,
+            last: now,
+            done: Vec::new(),
+        }
+    }
+
+    fn end(&mut self, phase: &'static str) {
+        let now = crate::clock::real_now();
+        self.done.push((phase, now - self.last));
+        self.last = now;
+    }
+
+    fn log_if_slow(&self, id: &str) {
+        let total = self.last - self.began;
+        if total > Duration::from_secs(1) {
+            let each: Vec<String> = self
+                .done
+                .iter()
+                .map(|(p, d)| format!("{p} {} ms", d.as_millis()))
+                .collect();
+            tracing::info!(
+                job = id,
+                "exec/start took {} ms: {}",
+                total.as_millis(),
+                each.join(", ")
+            );
+        }
+    }
 }
 
 /// The time box a request asks for: its `timebox_s`, else an hour (a job that asked for none ignores it).
@@ -1606,6 +3392,17 @@ pub async fn stop(f: &Front, c: &Caller, p: ById) -> Result<ExecRow, Error> {
     let r = runner(f)?;
     visible(r, c, p.id.as_str())?;
     r.stop(p.id.as_str()).await
+}
+
+/// `exec/bump`: a queued job raised to priority 1 (classes `[User]`: the registry refuses every other connection).
+pub async fn bump(f: &Front, _: &Caller, p: ById) -> Result<ExecRow, Error> {
+    let id = p.id.as_str();
+    runner(f)?.bump(id).ok_or_else(|| {
+        error(
+            ErrorCode::InvalidParams,
+            format!("job {id} is not in the queue"),
+        )
+    })
 }
 
 pub async fn log(f: &Front, c: &Caller, p: LogParams) -> Result<LogSlice, Error> {

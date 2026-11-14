@@ -34,6 +34,10 @@ pub struct HelloParams {
     /// home.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<AbsPath>,
+    /// The editor session the connection carries (an editor sends it): its terminals draw on its subscribed
+    /// connection, and end when no connection says it for a minute.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<Bounded<String, 64>>,
 }
 
 /// The binary that serves: its version and build commit.
@@ -71,6 +75,23 @@ pub struct HelloReply {
 #[serde(deny_unknown_fields)]
 pub struct PingResult {
     pub pid: u64,
+}
+
+/// `browser/check`: what a throwaway browser session did (the doctor's smoke run).  `browser` is the program found
+/// (`{path, kind, version, source}`); `start_ms` the time from the start to the first answer; `peak_bytes` the
+/// scope's peak memory where a user systemd answers; `sys_missed` that the browser's stderr named a `/sys/` path (a
+/// read the layer does not allow); `why` what stopped it, and `at` when it ran (RFC 3339, UTC).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserCheckResult {
+    pub ok: bool,
+    pub browser: Option<Value>,
+    pub start_ms: u64,
+    pub peak_bytes: Option<u64>,
+    pub sys_missed: bool,
+    pub screenshot_bytes: u64,
+    pub why: Option<String>,
+    pub at: String,
 }
 
 /// The refusals the hub counted, and the last ones (method, code, class, path; never params).
@@ -116,6 +137,10 @@ pub struct StoreStatus {
     /// Whether that copy passed its check.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backup_ok: Option<bool>,
+    /// Whether the last night's copies of the edit histories (`history.db`, one per project) were all good (none: no
+    /// copy was made since the hub started).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_backup: Option<bool>,
     /// The copies that still hold what the migration's deny-list kept out of work.db (the pre-migration copy,
     /// `work.db.schema5`): the doctor offers removing them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -185,6 +210,50 @@ pub struct HubStatus {
     /// What the hub read of `settings.el` and the shipped defaults (none from a Lisp hub).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settings: Option<SettingsStatus>,
+    /// The run this hub records or replays (`DRGNX_RECORD`, `DRGNX_REPLAY`); absent for a hub that does neither.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recording: Option<RecordingStatus>,
+    /// Hrafn's file watches: what is watched and which projects run unwatched (none from a Lisp hub).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watch: Option<WatchStatus>,
+}
+
+/// `status.watch`: the inotify budget and each open project's watches.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WatchStatus {
+    /// `fs.inotify.max_user_watches` (none off Linux or when unreadable).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_user_watches: Option<u64>,
+    pub projects: Vec<ProjectWatch>,
+}
+
+/// One project's file watches.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectWatch {
+    pub root: String,
+    /// Directories under watch.
+    pub watched: u64,
+    /// Why the project runs unwatched (the watch budget is spent, or the watcher could not start); none: it is watched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Whether a hub records its run or replays one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum RecordingMode {
+    Record,
+    Replay,
+}
+
+/// `status.recording`: the mode and the run's directory.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RecordingStatus {
+    pub mode: RecordingMode,
+    pub dir: String,
 }
 
 /// Whether `settings.el` read (`ok`, also when there is none) or not (`failed`: the agents' settings use the shipped
@@ -353,6 +422,11 @@ pub(crate) fn methods() -> Vec<Method> {
             "status", Status(Empty) -> HubStatus,
             classes: [User, Agent, Service], writes: false,
             doc: "the hub's state: versions, refusals, read-only, the gateway",
+        ),
+        method!(
+            "browser/check", BrowserCheck(Empty) -> BrowserCheckResult,
+            classes: [User], writes: false,
+            doc: "runs a throwaway browser session (a screenshot of a data: page) and caches the result for the doctor",
         ),
         method!(
             "restart", Restart(Empty) -> bool,

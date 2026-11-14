@@ -22,13 +22,13 @@
 (require 'button)
 (require 'eldoc)
 (require 'thingatpt)
-(require 'color)
+(require 'drgnx-color)
 (require 'drgnx-registry)
 (require 'drgnx-modal)
 (require 'drgnx-timer)
 (require 'drgnx-state)
 (declare-function drgnx-face-glyph "drgnx-face")
-(defvar drgnx-look-chrome)
+(declare-function drgnx-look-chrome-current "drgnx-look" (&optional frame))
 (declare-function eldoc--format-doc-buffer "eldoc")
 
 (defgroup drgnx-quickhelp nil
@@ -63,6 +63,10 @@
 takes a tint of the text colour instead (`drgnx-quickhelp-colors'), so it always stands out."
   :group 'drgnx-quickhelp)
 (defface drgnx-quickhelp-title '((t :inherit bold)) "The symbol's name on the quick help card." :group 'drgnx-quickhelp)
+(defface drgnx-quickhelp-data-tip '((t :inherit (drgnx-code-small drgnx-surface-raised)))
+  "A data tip's card (a debugger's value, docs marked `:drgnx-data-tip'): the small code font on the raised surface,
+in every theme (debugging-extras.html `.dtip')."
+  :group 'drgnx-quickhelp)
 
 ;;;; Colours (pure) and width (pure)
 
@@ -70,31 +74,6 @@ takes a tint of the text colour instead (`drgnx-quickhelp-colors'), so it always
   "How far the card's background moves from the editor's towards the text colour, where the face gives none apart.")
 (defconst drgnx-quickhelp--distinct 1.15
   "The contrast ratio against the editor's background from which the face's own background is kept.")
-
-(defun drgnx-quickhelp--rgb (color)
-  "COLOR (#RRGGBB, or a name) as (R G B) in 0..1, or nil when it is not a colour (`unspecified', nil).
-A #RRGGBB is read as written: `color-name-to-rgb' would snap it to the palette of a terminal frame."
-  (and (stringp color)
-       (if-let* ((v (color-values-from-color-spec color)))
-           (mapcar (lambda (c) (/ c 65535.0)) v)
-         (color-name-to-rgb color))))
-
-(defun drgnx-quickhelp--mix (from to ratio)
-  "The colour RATIO of the way from FROM to TO (both colour strings), as #RRGGBB; nil when either is no colour."
-  (let ((a (drgnx-quickhelp--rgb from)) (b (drgnx-quickhelp--rgb to)))
-    (when (and a b)
-      (apply #'color-rgb-to-hex (append (cl-mapcar (lambda (p q) (+ p (* ratio (- q p)))) a b) '(2))))))
-
-(defun drgnx-quickhelp--contrast (a b)
-  "The WCAG contrast ratio of colours A and B (1 up to 21), or nil when either is no colour."
-  (let ((l (mapcar (lambda (c)
-                     (when-let* ((rgb (drgnx-quickhelp--rgb c)))
-                       (pcase-let ((`(,r ,g ,b) (mapcar (lambda (v) (if (<= v 0.03928) (/ v 12.92) (expt (/ (+ v 0.055) 1.055) 2.4)))
-                                                        rgb)))
-                         (+ (* 0.2126 r) (* 0.7152 g) (* 0.0722 b)))))
-                   (list a b))))
-    (when (and (car l) (cadr l))
-      (/ (+ 0.05 (max (car l) (cadr l))) (+ 0.05 (min (car l) (cadr l)))))))
 
 (defun drgnx-quickhelp-colors (&optional frame)
   "The card's colours on FRAME's theme: (BACKGROUND . BORDER), or nil when the theme has no colours to go by.
@@ -104,12 +83,12 @@ theme and a dark one on a light theme.  BORDER is the card's text colour halfway
   (let* ((face-bg (face-attribute 'drgnx-quickhelp :background frame t))
          (bg0 (face-attribute 'default :background frame))
          (fg (let ((c (face-attribute 'drgnx-quickhelp :foreground frame t)))
-               (if (drgnx-quickhelp--rgb c) c (face-attribute 'default :foreground frame))))
-         (bg (if (let ((r (drgnx-quickhelp--contrast face-bg bg0))) (and r (>= r drgnx-quickhelp--distinct)))
+               (if (drgnx-color-rgb c) c (face-attribute 'default :foreground frame))))
+         (bg (if (let ((r (drgnx-color-contrast face-bg bg0))) (and r (>= r drgnx-quickhelp--distinct)))
                  face-bg
-               (drgnx-quickhelp--mix bg0 (face-attribute 'default :foreground frame) drgnx-quickhelp--tint))))
-    (when (and bg (drgnx-quickhelp--rgb fg))
-      (cons bg (drgnx-quickhelp--mix fg bg 0.5)))))
+               (drgnx-color-mix bg0 (face-attribute 'default :foreground frame) drgnx-quickhelp--tint 'srgb))))
+    (when (and bg (drgnx-color-rgb fg))
+      (cons bg (drgnx-color-mix fg bg 0.5 'srgb)))))
 
 (defun drgnx-quickhelp--text-width (text-w buttons-w char-w max-w)
   "The card's text width in pixels: TEXT-W (the widest line) and a character of room for the ✕, at most MAX-W —
@@ -154,6 +133,10 @@ and never leaves the window (nil: the caller shortens the card, or shows none). 
     (elisp-eldoc-funcall . elisp-eldoc-funcall-with-docstring))
   "Eldoc functions whose fuller sibling (with the docstring) the card asks instead, where this Emacs has it.")
 
+(defvar drgnx-quickhelp-fuller-functions nil
+  "Like `drgnx-quickhelp--fuller', for modules: they add their pairs with `drgnx-module-alist-put' (extra/debug: the
+echo area evaluates nothing, the card evaluates the expression under the mouse).")
+
 (defun drgnx-quickhelp--cancel ()
   "Drop the pending request: its answers and its timeout come to nothing."
   (cl-incf drgnx-quickhelp--request)
@@ -190,7 +173,8 @@ is first; a newer request drops this one (CALLBACK is then never called).  Retur
             (run-hook-wrapped
              'eldoc-documentation-functions
              (lambda (f)
-               (let* ((fuller (and (symbolp f) (alist-get f drgnx-quickhelp--fuller)))
+               (let* ((fuller (and (symbolp f) (or (alist-get f drgnx-quickhelp-fuller-functions)
+                                                   (alist-get f drgnx-quickhelp--fuller))))
                       (f (if (and fuller (fboundp fuller)) fuller f))
                       (cb (answer-fn (prog1 n (cl-incf n))))
                       ;; a backend that prints a value (a variable's, with its docstring) prints a short one:
@@ -263,8 +247,38 @@ Close Quick Help).")
 
 (defconst drgnx-quickhelp--gap '(space :align-to (- right 2)) "The space before the ✕: up to the right edge.")
 
+(defun drgnx-quickhelp--data-tip-p (docs)
+  "Non-nil when every one of DOCS is a data tip (`:drgnx-data-tip' in its plist): a value, not documentation."
+  (and (consp docs) (seq-every-p (lambda (d) (plist-get (cdr d) :drgnx-data-tip)) docs)))
+
 (defun drgnx-quickhelp--render (docs width max strip)
-  "Fill the card's buffer: DOCS in WIDTH columns, at most MAX lines; STRIP: the buttons on top (a terminal)."
+  "Fill the card's buffer: DOCS in WIDTH columns, at most MAX lines; STRIP: the buttons on top (a terminal).
+Data tips (`drgnx-quickhelp--data-tip-p') draw alone in their own faces: no name, no buttons, no ✕."
+  (if (and (not strip) (drgnx-quickhelp--data-tip-p docs))
+      (drgnx-quickhelp--render-tip docs width max)
+    (drgnx-quickhelp--render-docs docs width max strip)))
+
+(defun drgnx-quickhelp--render-tip (docs width max)
+  "Fill the card's buffer with the data tips DOCS, in WIDTH columns, at most MAX lines."
+  (let ((buf (get-buffer-create drgnx-quickhelp--buffer-name))
+        (lines (seq-mapcat (lambda (d) (seq-mapcat (lambda (l) (drgnx-quickhelp--wrap l width)) (split-string (car d) "\n")))
+                           docs)))
+    (with-current-buffer buf
+      (buffer-disable-undo)
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (setq-local mode-line-format nil header-line-format nil tab-line-format nil
+                    cursor-type nil cursor-in-non-selected-windows nil truncate-lines t
+                    buffer-read-only t show-trailing-whitespace nil
+                    face-remapping-alist '((default drgnx-quickhelp-data-tip)))
+        (use-local-map drgnx-quickhelp-card-map)
+        (insert (string-join (if (<= (length lines) max) lines (append (seq-take lines (max 0 (1- max))) (list "…")))
+                             "\n"))
+        (goto-char (point-min))))
+    buf))
+
+(defun drgnx-quickhelp--render-docs (docs width max strip)
+  "Fill the card's buffer with documentation DOCS (`drgnx-quickhelp--render')."
   (let ((buf (get-buffer-create drgnx-quickhelp--buffer-name))
         (lines (cond ((eq docs :pending) (list "…"))         ; asked, not answered yet
                      (docs (drgnx-quickhelp--doc-lines docs (if strip width (max 10 (- width 3))) max))   ; room for the ✕
@@ -413,8 +427,8 @@ another display)."
                           (vertical-scroll-bars . nil) (horizontal-scroll-bars . nil) (menu-bar-lines . 0)
                           (tool-bar-lines . 0) (tab-bar-lines . 0) (line-spacing . 0) (cursor-type . nil)
                           (desktop-dont-save . t) (drgnx-quickhelp . t)
-                          ,@(and (featurep 'glitnir) (bound-and-true-p drgnx-look-chrome)
-                                 drgnx-look-chrome))))))
+                          ,@(and (featurep 'glitnir) (fboundp 'drgnx-look-chrome-current)
+                                 (drgnx-look-chrome-current)))))))
   (let ((win (frame-root-window drgnx-quickhelp--frame)))
     (set-window-buffer win (get-buffer-create drgnx-quickhelp--buffer-name))
     (set-window-dedicated-p win t)
@@ -492,6 +506,11 @@ symbol's whole line or the line point is on."
                    (lines drgnx-quickhelp-max-lines)
                    (size nil))
         (drgnx-quickhelp--render docs cols lines nil)
+        ;; a data tip's card is the raised surface edge to edge, in every theme: its margins and border too
+        (when (drgnx-quickhelp--data-tip-p docs)
+          (when-let* ((bg (face-background 'drgnx-quickhelp-data-tip parent t)))
+            (set-frame-parameter frame 'background-color bg)
+            (set-face-background 'child-frame-border bg frame)))
         (setq size (drgnx-quickhelp--fit frame max-w))
         ;; too tall for either side of the line: fewer lines of docs
         (while (and (> (cdr size) room) (> lines 1))

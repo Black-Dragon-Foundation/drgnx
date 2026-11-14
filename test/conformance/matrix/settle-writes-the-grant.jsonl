@@ -1,0 +1,20 @@
+{"scenario": "matrix/settle-writes-the-grant", "requires": ["v1", "test-hooks"], "doc": "Settling a browser.web card with session writes, in the user's settle, a matrix grant of the session with the card's number, and the same question asked again is allowed with no second card; the session hears the yes. A browser.private card for a LAN literal settled with session/cidr stores the target's /24 on its port in the grant-target wire form the web proxy reads. What makes it fail: a yes that writes no grant (a retry makes a new card), or a width stored in another shape."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "__test_matrix_ask", "params": {"action": "browser.web", "who": {"role": "worker"}, "session": "s1", "facts": {"host": "example.com:443"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"gate": "ask", "card": "$capture:c1"}}}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select title from card where id = $c1", "rows": [["s1 wants to open web sites (first: example.com:443)"]]}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "cards/settle", "params": {"card": "$c1", "choice": "session"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"settled": true}}}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select json_extract(e.data, '$.who.session'), json_extract(e.data, '$.what.matrix'), json_extract(e.data, '$.what.host') is null, json_extract(e.data, '$.expires') is null, json_extract(e.data, '$.card') = $c1, t.class from entity e join tx t on t.id = e.created_tx where e.kind = 'grant'", "rows": [["s1", "browser.web", 1, 1, 1, "user"]]}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select count(*) from message where recipient = 'agent:s1' and text like 'your browser.web request (card $c1): allowed (session;%'", "rows": [[1]]}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "__test_matrix_ask", "params": {"action": "browser.web", "who": {"role": "worker"}, "session": "s1", "facts": {"host": "example.com:443"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"gate": "allow"}}}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select count(*) from card where kind = 'matrix'", "rows": [[1]]}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "__test_matrix_ask", "params": {"action": "browser.private", "who": {"role": "worker"}, "session": "s1", "facts": {"target": {"host_port": "192.168.1.20:8080"}, "addr": "192.168.1.20:8080", "class": "lan"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"gate": "ask", "card": "$capture:c2"}}}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "cards/settle", "params": {"card": "$c2", "choice": "session/cidr"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"settled": true}}}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select json_extract(data, '$.what.target') from entity where kind = 'grant' and json_extract(data, '$.card') = $c2", "rows": [["{\"cidr\":\"192.168.1.0/24\",\"ports\":\"8080\"}"]]}

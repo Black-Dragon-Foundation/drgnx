@@ -117,3 +117,17 @@
     (should (consp (drgnx-setting-check 'drgnx-setting-test-f '(:a "x"))))
     ;; no type, no schema: anything goes
     (should-not (drgnx-setting-check 'drgnx-setting-test-nothing 'whatever))))
+
+(ert-deftest drgnx-setting/check-converts-a-shared-type-once ()
+  ;; a start checks hundreds of values, most of an `integer', `boolean' or `string' type
+  (drgnx-setting-test--with-fresh '(drgnx-setting-test-g drgnx-setting-test-h)
+    (eval '(drgnx-defsetting drgnx-setting-test-g 1 "g" :type 'integer) t)
+    (eval '(drgnx-defsetting drgnx-setting-test-h 1 "h" :type 'integer) t)
+    (drgnx-setting-check 'drgnx-setting-test-g 1)                   ; warms the widget library
+    (let ((converts 0) (orig (symbol-function 'widget-convert)))
+      (cl-letf (((symbol-function 'widget-convert) (lambda (&rest args) (cl-incf converts) (apply orig args))))
+        (dotimes (_ 20)
+          (should-not (drgnx-setting-check 'drgnx-setting-test-g 5))
+          (should-not (drgnx-setting-check 'drgnx-setting-test-h 6)))
+        (should (drgnx-setting-check 'drgnx-setting-test-h "six"))
+        (should (= converts 0))))))

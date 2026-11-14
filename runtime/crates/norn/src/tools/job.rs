@@ -253,14 +253,17 @@ struct RecordDecisionArgs {
     reason: String,
     /// The decision it replaces
     replaces: Option<i64>,
-    /// The decision-log version you last read (read_decisions)
+    /// Log version from read_decisions
     seen_version: u64,
-    /// Entities it is about (ids): `about` links from the decision
+    /// Entity ids it is about
     about: Option<Vec<String>>,
-    /// The step (your timeline's step number) the decision was made in
+    /// Ignored
+    #[allow(dead_code)]
     step: Option<i64>,
     /// Where it came from: from-brief, own or needs-user
     origin: Option<String>,
+    /// What it rests on (at most 12)
+    sources: Option<Vec<crate::write::work::Source>>,
 }
 
 #[derive(Serialize)]
@@ -276,7 +279,7 @@ struct RecordDecision;
 impl CoordTool for RecordDecision {
     type Args = RecordDecisionArgs;
     const NAME: &'static str = "record_decision";
-    const DESCRIPTION: &'static str = "Record a decision: build, wait, wont-build or replaces.  Inside your own task it is current; about anything else it is proposed (the reviewer and the user decide)";
+    const DESCRIPTION: &'static str = "Record a decision: current inside your own task, else proposed (the reviewer and the user decide)";
 
     fn run<'a>(
         &'a self,
@@ -303,7 +306,12 @@ async fn record_decision(
             "origin is from-brief, own or needs-user, not {o:?}"
         ));
     }
-    let (step, origin) = (args.step, args.origin.clone());
+    if let Some(s) = &args.sources {
+        crate::write::work::check_sources(s).map_err(|e| e.to_string())?;
+    }
+    let sources = args.sources.clone().filter(|s| !s.is_empty());
+    // the step is the hub's stamp (the MCP call's own timeline step), never the agent's claim: `args.step` is ignored
+    let origin = args.origin.clone();
     let sid = match who {
         Identity::Session { sid, .. } => Some(sid.clone()),
         _ => None,
@@ -341,10 +349,10 @@ async fn record_decision(
             };
             note_held(tx, &me, held)?;
             if let (DecideResult::Ok { n, .. }, true) =
-                (&r, step.is_some() || origin.is_some() || sid.is_some())
+                (&r, origin.is_some() || sid.is_some() || sources.is_some())
                 && let Some(e) = entity::by_id(tx.sql(), &format!("decision:{n}"))?
             {
-                let patch = json!({"step": step, "origin": origin, "session": sid});
+                let patch = json!({"origin": origin, "session": sid, "sources": sources});
                 entity::update(
                     tx,
                     e.n,
@@ -595,5 +603,12 @@ async fn escalate(coord: &Coord, who: &Identity, args: EscalateArgs) -> Result<S
         answers: None,
         question: false,
     };
-    send_text(coord, who, message, None).await
+    let sent = send_text(coord, who, message, None).await;
+    // a clash the agent is in may open a huddle (the hub decides)
+    if sent.is_ok()
+        && let Identity::Session { sid, .. } = who
+    {
+        coord.hub().escalated(sid);
+    }
+    sent
 }

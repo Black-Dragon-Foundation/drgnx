@@ -1,0 +1,423 @@
+;;; drgnx-agents-editor-here.el --- Explorer badges, the status segment and who is here -*- lexical-binding: t -*-
+
+;; SPDX-License-Identifier: GPL-3.0-or-later
+
+;;; Commentary:
+;; Part of module tools/agents-in-editor.  The workspace's presence (`agents/presence/subscribe') is the hub's view
+;; model `agents-here' (see "The hub's model" below); from it this file builds, when the presence changes and never in
+;; redisplay:
+;;   - Explorer badges: on each file an agent is editing (or has changed) a few marks, "+N" past three; on a folder one
+;;     dot per agent with files under it.  A worktree agent's file lands on the user's tree (the hub works that out).
+;;   - the `agents-here' status segment: one mark per agent working in the project (eight, then "+N"), in the attention
+;;     face for an agent that needs you; it opens who is here.
+;;   - who is here: a small list window, one row per agent (mark, handle, mode, file, line); RET follows the agent,
+;;     `o' opens its panel, `q' closes the list (keys from the profiles).
+;; An agent's ordinal is the hub's, from `drgnx-agents-editor-here-ordinal-function' (the client sets it from each
+;; session's `agent' snapshot); an agent the hub has not named yet has no mark until its snapshot comes.
+;; See docs/guide/agents-in-the-editor.md and docs/develop/agents-editor.md.
+
+;;; Code:
+(require 'cl-lib)
+(require 'subr-x)
+(require 'drgnx-modules)
+(require 'drgnx-registry)
+(require 'drgnx-agent-identity)
+(require 'drgnx-hub-client)
+
+(declare-function drgnx-statusbar-define-segment "drgnx-statusbar")
+(declare-function drgnx-work-space-workspace "drgnx-work-space")
+(declare-function drgnx-work-code--session "drgnx-work-code")
+(declare-function drgnx-agent-session-name "drgnx-agents")
+(declare-function drgnx-agent-session-permissions "drgnx-agents")
+(declare-function drgnx-agents-editor-draw--apply "drgnx-agents-editor-draw")
+(declare-function drgnx-agents-editor-frame "drgnx-agents-editor")
+(declare-function drgnx-agents-editor-watched-buffers "drgnx-agents-editor")
+(defvar drgnx-statusbar-left)
+(defvar drgnx-agents-editor-followed)
+(defvar drgnx-hub-event-functions)
+(defvar drgnx-hub-connected-functions)
+(defvar drgnx-hub--events)
+(defvar drgnx-view-patch)
+(defvar drgnx-view-patch-apply-function)
+(declare-function drgnx-hub--call-on "drgnx-hub-client")
+(defvar drgnx-view)
+(declare-function drgnx-view-patch-attach "drgnx-view")
+(declare-function drgnx-view-patch-handle "drgnx-view")
+(declare-function drgnx-view-draw-now "drgnx-view")
+(declare-function drgnx-timer-soon "drgnx-timer")
+(declare-function drgnx-timer-cancel "drgnx-timer")
+(declare-function nidhogg-view-get "nidhogg-views")
+
+(defvar drgnx-agents-editor-here-ordinal-function nil
+  "A function of a session id returning the hub's ordinal for it (1-based), or nil when the hub has not named it.")
+(defvar drgnx-agents-editor-here-needs-you-function #'drgnx-agents-editor-here--needs-you
+  "A function of a session id: non-nil when the agent waits on you (its mark takes the attention colour).")
+(defvar drgnx-agents-editor-here-paired-function nil
+  "A function of a session id: non-nil when the agent is paired with you (its mark gets a ring).")
+
+(defvar drgnx-agents-editor-here--on nil "Non-nil while the module shows who is here (work-who-is-here then lists the agents).")
+(defvar drgnx-agents-editor-here--badges (make-hash-table :test 'equal)
+  "The user's path (no trailing slash) → the badge string of its Explorer row.")
+(defvar drgnx-agents-editor-here--rows nil
+  "Who is here: ((SESSION ORDINAL MODE USER-FILE LINE)...), one per agent, its newest entry.")
+(defvar drgnx-agents-editor-here--status nil "The status segment's string, or nil.")
+(defvar drgnx-agents-editor-here--initials (make-hash-table) "Ordinal → the first letter of its agent's name.")
+
+(defun drgnx-agents-editor-here--ordinal (session)
+  (and drgnx-agents-editor-here-ordinal-function (funcall drgnx-agents-editor-here-ordinal-function session)))
+
+(defun drgnx-agents-editor-here-identities-changed ()
+  "A session's ordinal came, changed or went: the agents' marks are made again from the hub's model held (while the
+module shows who is here)."
+  (when (and drgnx-agents-editor-here--on (fboundp 'nidhogg-view--call))
+    (when-let* ((h (drgnx-agents-editor-here--model))) (drgnx-agents-editor-here--agents-from h))))
+
+(defun drgnx-agents-editor-here--needs-you (session)
+  (when-let* ((s (and (fboundp 'drgnx-work-code--session) (drgnx-work-code--session session))))
+    (and (drgnx-agent-session-permissions s) t)))
+
+(defun drgnx-agents-editor-here--name (session)
+  (if-let* ((s (and (fboundp 'drgnx-work-code--session) (drgnx-work-code--session session))))
+      (drgnx-agent-session-name s)
+    (format "agent %s" session)))
+
+;;;; Building what is drawn
+
+(defun drgnx-agents-editor-here--mark (ordinal &optional session)
+  "Agent ORDINAL's mark as a propertized string."
+  (let* ((face (plist-get (drgnx-agent-identity ordinal) :face))
+         (needs (and session drgnx-agents-editor-here-needs-you-function
+                     (funcall drgnx-agents-editor-here-needs-you-function session)))
+         (paired (and session drgnx-agents-editor-here-paired-function
+                      (funcall drgnx-agents-editor-here-paired-function session))))
+    (propertize (concat (drgnx-agent-identity-text ordinal) (if paired "◌" ""))
+                'face (if needs (list 'drgnx-status-needs-you face) face))))
+
+(defun drgnx-agents-editor-here--badge (ordinals limit initials)
+  "The marks of ORDINALS (up to LIMIT, then \"+N\"); with INITIALS, each followed by its agent's first letter."
+  (let* ((shown (seq-take ordinals limit)) (more (- (length ordinals) (length shown))))
+    (concat " "
+            (mapconcat (lambda (o)
+                         (let ((m (drgnx-agents-editor-here--mark o)))
+                           (if initials (concat m (propertize (drgnx-agents-editor-here--initial o) 'face (get-text-property 0 'face m))) m)))
+                       shown " ")
+            (if (> more 0) (format " +%d" more) ""))))
+
+(defun drgnx-agents-editor-here--initial (ordinal)
+  (or (gethash ordinal drgnx-agents-editor-here--initials) ""))
+
+(defconst drgnx-agents-editor-here--doing
+  '(("edit" . "editing") ("write" . "editing") ("read" . "reading") ("listed" . "searching"))
+  "What an agent here does, by the presence mode the hub names.")
+
+(defun drgnx-agents-editor-here--status-of (agents &optional modes)
+  "The status segment's string for AGENTS ((SESSION . ORDINAL)...): one agent's mark, then its name and what it does
+by its mode in MODES ((SESSION . MODE)...), as `● Claude editing'; several agents' marks by ordinal, eight then
+\"+N\"; nil for none."
+  (if (and agents (null (cdr agents)))
+      (let* ((a (car agents)) (doing (cdr (assoc (cdr (assoc (car a) modes)) drgnx-agents-editor-here--doing))))
+        (concat (drgnx-agents-editor-here--mark (cdr a) (car a)) " " (drgnx-agents-editor-here--name (car a))
+                (if doing (concat " " doing) "")))
+    (when agents
+      (let* ((sorted (sort (copy-sequence agents) (lambda (a b) (< (cdr a) (cdr b)))))
+             (shown (seq-take sorted 8)) (more (- (length sorted) (length shown))))
+        (concat (mapconcat (lambda (a) (drgnx-agents-editor-here--mark (cdr a) (car a))) shown " ")
+                (if (> more 0) (format " +%d" more) ""))))))
+
+;;;; The Explorer badge and the status segment
+
+(defun drgnx-agents-editor-here--explorer-badge (ordinals dirp)
+  "`drgnx-explorer-badge-functions': the badge of the agents ORDINALS on an Explorer row of the hub's (DIRP: a
+folder, six marks; a file: three, each with its agent's initial)."
+  (drgnx-agents-editor-here--badge ordinals (if dirp 6 3) (not dirp)))
+
+(defun drgnx-agents-editor-here--segment ()
+  "The `agents-here' segment: the marks of the agents in this project."
+  (let ((huddles (and (fboundp 'drgnx-agent-panel-huddle-open-count) (drgnx-agent-panel-huddle-open-count))))
+    (if (and huddles (> huddles 0))
+        (concat drgnx-agents-editor-here--status (and drgnx-agents-editor-here--status " ")
+                (format "huddle %d" huddles))
+      drgnx-agents-editor-here--status)))
+
+;;;; Who is here
+
+(defconst drgnx-agents-here-buffer-name "*drgnx agents here*" "The who-is-here list's buffer.")
+
+(defvar-local drgnx-agents-here--rows nil "The list's rows, one per line: (SESSION ORDINAL MODE FILE LINE).")
+
+(define-derived-mode drgnx-agents-here-mode special-mode "Here"
+  "A small list of the agents working here.  Keys come from the key profiles: RET follows the agent on the row,
+`o' opens its panel, `q' closes the list."
+  (setq-local truncate-lines t cursor-type nil)
+  (buffer-disable-undo)
+  (hl-line-mode 1))
+
+(defun drgnx-agents-editor-here--row-text (row)
+  "ROW as one line: the agent's mark and name in its colour, then what it does and where."
+  (pcase-let* ((`(,sid ,ord ,mode ,file ,line) row)
+               (face (plist-get (drgnx-agent-identity ord) :face)))
+    (concat (propertize (format "%s %s" (drgnx-agent-identity-text ord) (drgnx-agents-editor-here--name sid)) 'face face)
+            (propertize (format " · %s · %s%s" (or mode "here") (file-name-nondirectory file) (if line (format ":%d" line) ""))
+                        'face 'shadow)
+            "\n")))
+
+(defun drgnx-agents-editor-here-show (rows)
+  "List ROWS ((SESSION ORDINAL MODE FILE LINE)...) in a small window and return its buffer.  An agent the hub has not
+named yet (no ordinal) is not listed."
+  (let ((rows (seq-filter #'cadr rows))
+        (buffer (get-buffer-create drgnx-agents-here-buffer-name)))
+    (with-current-buffer buffer
+      (unless (derived-mode-p 'drgnx-agents-here-mode) (drgnx-agents-here-mode))
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (dolist (r rows) (insert (drgnx-agents-editor-here--row-text r))))
+      (setq drgnx-agents-here--rows rows)
+      (goto-char (point-min)))
+    (when-let* ((w (display-buffer buffer)))
+      (ignore-errors (fit-window-to-buffer w 12 2)))
+    buffer))
+
+(defun drgnx-agents-here--row-at-point ()
+  (or (nth (1- (line-number-at-pos (point) t)) drgnx-agents-here--rows) (user-error "No agent on this row")))
+
+(defun drgnx-agents-editor-here-row (entry file)
+  "The who-is-here row of presence ENTRY (a plist) in FILE: (SESSION ORDINAL MODE FILE LINE)."
+  (let ((sid (plist-get entry :session)))
+    (list sid (drgnx-agents-editor-here--ordinal sid) (plist-get entry :mode) file (plist-get entry :line))))
+
+(defun drgnx-agents-editor-here-follow (row)
+  "Follow the agent of ROW: open its file at its line and keep its name tag on."
+  (pcase-let ((`(,sid ,_ord ,_mode ,file ,line) row))
+    (setq drgnx-agents-editor-followed sid)
+    (pop-to-buffer (find-file-noselect file))
+    (when line (goto-char (point-min)) (forward-line (1- line)))
+    (dolist (b (drgnx-agents-editor-watched-buffers))
+      (when-let* ((f (drgnx-agents-editor-frame b))) (drgnx-agents-editor-draw--apply b f)))))
+
+(defun drgnx-agents-here-follow ()
+  "Follow the agent on the row at point."
+  (interactive)
+  (drgnx-agents-editor-here-follow (drgnx-agents-here--row-at-point)))
+
+(defun drgnx-agents-here-panel ()
+  "Open the panel of the agent on the row at point."
+  (interactive)
+  (let ((sid (car (drgnx-agents-here--row-at-point))))
+    (if (fboundp 'drgnx-agent-panel-open)
+        (drgnx-agent-panel-open sid)
+      (user-error "The agent panel is not loaded"))))
+
+(defvar-local drgnx-agents-here--marks nil "The sessions marked in the list (by `m'), for a huddle.")
+(declare-function drgnx-agent-panel-huddle-open-thread "drgnx-agent-panel-huddle")
+(declare-function drgnx-agent-panel-huddle-open-count "drgnx-agent-panel-huddle")
+
+(defun drgnx-agents-here-mark ()
+  "Mark or unmark the agent on the row at point; two marked agents can meet in a huddle (`h')."
+  (interactive)
+  (let ((sid (car (drgnx-agents-here--row-at-point))))
+    (setq drgnx-agents-here--marks
+          (if (member sid drgnx-agents-here--marks) (remove sid drgnx-agents-here--marks)
+            (append drgnx-agents-here--marks (list sid))))
+    (message "Marked: %s" (if drgnx-agents-here--marks (string-join drgnx-agents-here--marks ", ") "none"))))
+
+(defun drgnx-agents-editor-here-huddle (a b)
+  "Open a huddle between sessions A and B: the hub asks for your yes first if the matrix says so; the thread opens."
+  (drgnx-hub-call "agents/huddle/start" (list :sessions (vector a b))
+                  (lambda (r err)
+                    (cond (err (message "agents/huddle/start: %s" err))
+                          ((fboundp 'drgnx-agent-panel-huddle-open-thread) (drgnx-agent-panel-huddle-open-thread r))))))
+
+(defun drgnx-agents-here-huddle ()
+  "Start a huddle between the two marked agents."
+  (interactive)
+  (let ((marks (seq-filter (lambda (s) (member s drgnx-agents-here--marks)) (mapcar #'car drgnx-agents-here--rows))))
+    (unless (= (length marks) 2) (user-error "Mark two agents with m first"))
+    (drgnx-agents-editor-here-huddle (car marks) (cadr marks))))
+
+(defun drgnx-agents-editor-here-huddle-command ()
+  "Start a huddle: choose the two agents working in this project."
+  (interactive)
+  (let* ((names (mapcar (lambda (r) (cons (drgnx-agents-editor-here--name (car r)) (car r))) drgnx-agents-editor-here--rows))
+         (a (completing-read "Huddle, first agent: " names nil t))
+         (b (completing-read "Second agent: " (seq-remove (lambda (n) (equal (car n) a)) names) nil t)))
+    (drgnx-agents-editor-here-huddle (cdr (assoc a names)) (cdr (assoc b names)))))
+
+(defun drgnx-agents-here-quit ()
+  "Close the list."
+  (interactive)
+  (let ((window (get-buffer-window (current-buffer))))
+    (if (window-live-p window) (quit-window t window) (kill-buffer (current-buffer)))))
+
+(defun drgnx-agents-editor-here ()
+  "Who is here: the agents working in this project, in a small list; RET follows the one on the row."
+  (interactive)
+  (if drgnx-agents-editor-here--rows
+      (drgnx-agents-editor-here-show drgnx-agents-editor-here--rows)
+    (message "No agent is working in this project")))
+
+;;;; The feed
+
+(defun drgnx-agents-editor-here--subscribe ()
+  "Ask the hub for the workspace's presence; a missing hub is quiet (the next connection asks again).  Without Sjá
+nothing is shown."
+  (when-let* (((fboundp 'nidhogg-view--call)) (ws (and (fboundp 'drgnx-work-space-workspace) (drgnx-work-space-workspace))))
+    (drgnx-agents-editor-here--rows-subscribe ws)))
+
+;;;; The hub's model
+
+;; Who is here is the hub's (docs/develop/agents-editor.md, "Who is here"): `agents/presence/subscribe' with a VIEW
+;; makes the hub keep the view `agents-here' in a data class of its own, and its model in Sjá: a node per agent
+;; (`a:SESSION', fields session, ordinal, mode, file, line; the list `agents' in ordinal order) and per shown path
+;; (`p:PATH', kind file or folder, fields path and ordinals: a file an agent is changing, and each folder above it up
+;; to a root; a worktree's file lands at its place in the main checkout).  The rows, in a buffer never shown, only
+;; name what changed: their apply step keeps the keys, and once the model they name is in (the buffer's draw, which
+;; inserts nothing) the badges and the status segment are made from the model, path by path, with no rebuild.  Marks
+;; and colours stay this display's (by ordinal), so the who-is-here list is drawn here, from the model.
+
+(defconst drgnx-agents-editor-here-view "agents-here" "The hub's view of who is here.")
+(defconst drgnx-agents-editor-here--class "data" "The view's one display class: its rows are data, never drawn.")
+(defconst drgnx-agents-editor-here--rows-name " *drgnx agents here rows*" "The buffer holding the view's rows.")
+
+(defvar drgnx-agents-editor-here--keys nil
+  "The keys the rows' patches named since the model was last read, newest first; t: everything (a reset).")
+
+(defun drgnx-agents-editor-here--rows-buffer (&optional existing)
+  "The rows' buffer, attached to the view's data class (made when missing, unless EXISTING)."
+  (or (get-buffer drgnx-agents-editor-here--rows-name)
+      (unless existing
+        (require 'drgnx-view)
+        (with-current-buffer (get-buffer-create drgnx-agents-editor-here--rows-name)
+          (drgnx-view-patch-attach drgnx-agents-editor-here-view drgnx-agents-editor-here--class :epoch 1)
+          (setq-local drgnx-view-patch-apply-function #'drgnx-agents-editor-here--apply)
+          (current-buffer)))))
+
+(defun drgnx-agents-editor-here--model ()
+  "The view's instance in Sjá, or nil."
+  (when-let* ((b (drgnx-agents-editor-here--rows-buffer t)))
+    (with-current-buffer b (and drgnx-view-patch (drgnx-view-patch-handle drgnx-view-patch)))))
+
+(defun drgnx-agents-editor-here--rows-subscribe (ws)
+  "Subscribe to WS's presence as the view's rows, on the connection the patches come back on: the data class's env
+first (the rows read none of it), then the subscription; quiet while that connection is down."
+  (when (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events))
+    (drgnx-agents-editor-here--rows-buffer)
+    (drgnx-hub--call-on drgnx-hub--events "view/env"
+                        (list :view drgnx-agents-editor-here-view :class drgnx-agents-editor-here--class :epoch 1
+                              :display "tty" :scale 1.0 :fonts [] :cell [1 1] :width_px 80 :palette [] :tty_widths []
+                              :tz "UTC" :reduced_motion :false)
+                        #'ignore)
+    (drgnx-hub--call-on drgnx-hub--events "agents/presence/subscribe"
+                        (list :workspace (list :id (plist-get ws :id) :roots (vconcat (plist-get ws :roots)))
+                              :view drgnx-agents-editor-here-view)
+                        #'ignore)))
+
+(defun drgnx-agents-editor-here--field (h id name)
+  "Field NAME (a string) of node ID in model H, or nil."
+  (nidhogg-view-get h 'field name id))
+
+(defun drgnx-agents-editor-here--path-badge (h key)
+  "The badge of path KEY (\"p:PATH\") from model H (no node: gone)."
+  (let ((path (substring key 2)) (kind (nidhogg-view-get h 'kind key)))
+    (if (null kind)
+        (remhash path drgnx-agents-editor-here--badges)
+      (let ((ords (sort (mapcar #'string-to-number (split-string (or (drgnx-agents-editor-here--field h key "ordinals") "")))
+                        #'<))
+            (dir (equal kind "folder")))
+        (puthash path (drgnx-agents-editor-here--badge ords (if dir 6 3) (not dir)) drgnx-agents-editor-here--badges)))))
+
+(defun drgnx-agents-editor-here--agents-from (h)
+  "The agents of model H (its list `agents'): who is here's rows, the initials and the status segment."
+  (let (rows agents modes)
+    (seq-doseq (id (or (nidhogg-view-get h 'list "agents") []))
+      (let ((sid (drgnx-agents-editor-here--field h id "session"))
+            (ord (drgnx-agents-editor-here--field h id "ordinal")))
+        (when (and sid ord)
+          (puthash ord (upcase (substring (drgnx-agents-editor-here--name sid) 0 1)) drgnx-agents-editor-here--initials)
+          (push (cons sid ord) agents)
+          (push (cons sid (drgnx-agents-editor-here--field h id "mode")) modes)
+          (push (list sid ord (drgnx-agents-editor-here--field h id "mode") (drgnx-agents-editor-here--field h id "file")
+                      (drgnx-agents-editor-here--field h id "line"))
+                rows))))
+    (setq drgnx-agents-editor-here--rows (nreverse rows)
+          drgnx-agents-editor-here--status (drgnx-agents-editor-here--status-of agents modes))))
+
+(defun drgnx-agents-editor-here--apply (_state _view patch)
+  "The apply step of the view's rows: the keys PATCH names are kept for `drgnx-agents-editor-here--take', which reads
+the model they name once it is in.  Nothing is drawn and nothing rebuilt."
+  (dolist (op (plist-get patch :ops))
+    (cond ((plist-member op :reset) (setq drgnx-agents-editor-here--keys t))
+          ((eq drgnx-agents-editor-here--keys t))
+          ((plist-member op :insert)
+           (dolist (r (plist-get (plist-get op :insert) :rows)) (push (plist-get r :key) drgnx-agents-editor-here--keys)))
+          ((plist-member op :replace)
+           (dolist (r (plist-get op :replace)) (push (plist-get r :key) drgnx-agents-editor-here--keys)))
+          ((plist-member op :remove)
+           (dolist (k (plist-get op :remove)) (push k drgnx-agents-editor-here--keys)))))
+  (drgnx-timer-soon 'drgnx-agents-editor-here-take 0 #'drgnx-agents-editor-here--take :owner 'tools/agents-in-editor))
+
+(defun drgnx-agents-editor-here--take ()
+  "The model the rows named goes in (the rows' buffer's draw), then the badge of each path they named and, when an
+agent's row is among them, the agents and the status segment; a reset makes everything again."
+  (let ((keys drgnx-agents-editor-here--keys) (b (drgnx-agents-editor-here--rows-buffer t)))
+    (setq drgnx-agents-editor-here--keys nil)
+    (when-let* (((and keys b)) (h (with-current-buffer b (drgnx-view-draw-now drgnx-view) (drgnx-agents-editor-here--model))))
+      (let ((reset (eq keys t)))
+        (when reset
+          (clrhash drgnx-agents-editor-here--badges)
+          (setq keys (append (nidhogg-view-get h 'list "paths") nil)))
+        ;; the agents first: a file's badge carries its agents' initials
+        (when (or reset (seq-some (lambda (k) (string-prefix-p "a:" k)) keys))
+          (drgnx-agents-editor-here--agents-from h)))
+      (dolist (k keys)
+        (when (string-prefix-p "p:" k) (drgnx-agents-editor-here--path-badge h k)))
+      (force-mode-line-update t))))
+
+;;;; Setup
+
+(defun drgnx-agents-editor-here--bar-list (left)
+  "LEFT, the status bar's left segments, with `agents-here' straight after `jobs'."
+  (if (or (memq 'agents-here left) (not (memq 'jobs left)))
+      left
+    (let (out) (dolist (s left) (push s out) (when (eq s 'jobs) (push 'agents-here out))) (nreverse out))))
+
+(defun drgnx-agents-editor-here-setup ()
+  "Cache the workspace's presence and show it.  Called by the module's setup."
+  (drgnx-module-hook 'drgnx-hub-connected-functions here-connected ()
+    :module 'tools/agents-in-editor
+    (drgnx-agents-editor-here--subscribe))
+  (drgnx-command-define 'agents-here :category "Agents" :title "Who Is Here"
+                        :command #'drgnx-agents-editor-here
+                        :doc "The agents working in this project; RET follows the one you choose")
+  (drgnx-command-define 'agents-huddle :category "Agents" :title "Start a Huddle"
+                        :command #'drgnx-agents-editor-here-huddle-command
+                        :doc "Two agents state their positions about a clash, and you decide")
+  (when (fboundp 'drgnx-wb-place) (drgnx-wb-place 'drgnx-agents-here-mode 'popup))
+  (pcase-dolist (`(,id ,title ,fn ,doc)
+                 '((agents-here-follow "Follow the Agent on the Row" drgnx-agents-here-follow "Follow the agent on this row of the list")
+                   (agents-here-panel "Open the Agent's Panel from the Row" drgnx-agents-here-panel "Open the panel of the agent on this row")
+                   (agents-here-mark "Mark the Agent on the Row" drgnx-agents-here-mark "Mark or unmark the agent on this row for a huddle")
+                   (agents-here-huddle "Huddle the Marked Agents" drgnx-agents-here-huddle "Start a huddle between the two marked agents")
+                   (agents-here-quit "Close Who Is Here" drgnx-agents-here-quit "Close the list of the agents here")))
+    (drgnx-command-define id :category "Agents" :title title :command fn :doc doc
+                          :map 'drgnx-agents-here-mode-map :when (lambda () (derived-mode-p 'drgnx-agents-here-mode))))
+  (add-hook 'drgnx-explorer-badge-functions #'drgnx-agents-editor-here--explorer-badge)
+  (eval-after-load 'drgnx-statusbar
+    (drgnx-modules-with-owner
+      (drgnx-statusbar-define-segment 'agents-here :fn #'drgnx-agents-editor-here--segment :click 'drgnx-agents-editor-here
+                                      :help "Agents working in this project; click for who is here")
+      (drgnx-module-set 'drgnx-statusbar-left (drgnx-agents-editor-here--bar-list drgnx-statusbar-left))))
+  (setq drgnx-agents-editor-here--on t)
+  (drgnx-agents-editor-here--subscribe))
+
+(defun drgnx-agents-editor-here-teardown ()
+  "Take the badges out of the Explorer and forget the cached presence."
+  (remove-hook 'drgnx-explorer-badge-functions #'drgnx-agents-editor-here--explorer-badge)
+  (clrhash drgnx-agents-editor-here--badges)
+  (clrhash drgnx-agents-editor-here--initials)
+  (when-let* ((b (get-buffer drgnx-agents-here-buffer-name))) (kill-buffer b))
+  (when-let* ((b (get-buffer drgnx-agents-editor-here--rows-name))) (kill-buffer b))
+  (drgnx-timer-cancel 'drgnx-agents-editor-here-take)
+  (setq drgnx-agents-editor-here--keys nil drgnx-agents-editor-here--rows nil drgnx-agents-editor-here--status nil drgnx-agents-editor-here--on nil))
+
+(provide 'drgnx-agents-editor-here)
+;;; drgnx-agents-editor-here.el ends here

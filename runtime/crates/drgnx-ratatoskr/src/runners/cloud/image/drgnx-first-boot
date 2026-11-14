@@ -1,0 +1,57 @@
+#!/bin/bash
+# drgnx's first boot of a cloud machine (runners design 6.7.2, 6.7.4). The image carries no per-machine secret and no
+# per-machine key: each boot reads what is public from its own instance user-data (IMDSv2) and sets up SSH for
+# certificate login only. Host keys are made by cloud-init (the image was cleaned with `ssh_deletekeys` set); their
+# fingerprints reach the console through cloud-init's own write-ssh-key-fingerprints, where the hub pins them.
+#
+# user-data lines read (cloud-config, so cloud-init ignores the keys it does not know):
+#   drgnx-principal: the one principal this machine's certificate carries (required)
+#   drgnx-ca: the hub's SSH CA public key, when it is newer than the one baked into the image (optional)
+#   drgnx-watchdog-idle, drgnx-watchdog-lifetime, drgnx-watchdog-unattended: the watchdog's limits in seconds
+#   drgnx-provider: aws or gcp
+# DRGNX_IMDS, DRGNX_ETC and DRGNX_SYSTEMCTL exist for the local test (test/runners/image-units.sh).
+set -euo pipefail
+imds=${DRGNX_IMDS:-http://169.254.169.254}
+etc=${DRGNX_ETC:-/etc}
+systemctl=${DRGNX_SYSTEMCTL:-systemctl}
+
+tok=$(curl -sf --max-time 10 -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' "$imds/latest/api/token")
+ud=$(curl -sf --max-time 10 -H "X-aws-ec2-metadata-token: $tok" "$imds/latest/user-data")
+field() { printf '%s\n' "$ud" | sed -n "s/^$1: //p" | head -n 1; }
+
+principal=$(field drgnx-principal)
+case $principal in
+  '' | *[!A-Za-z0-9._-]*) echo "drgnx-first-boot: no usable drgnx-principal in the user-data" >&2; exit 1 ;;
+esac
+
+mkdir -p "$etc/ssh/sshd_config.d" "$etc/drgnx"
+ca=$(field drgnx-ca)
+if [ -n "$ca" ]; then
+  printf '%s\n' "$ca" > "$etc/ssh/drgnx-ca.pub.new"
+  mv "$etc/ssh/drgnx-ca.pub.new" "$etc/ssh/drgnx-ca.pub"
+fi
+[ -s "$etc/ssh/drgnx-ca.pub" ] || { echo "drgnx-first-boot: no SSH CA key, baked or in the user-data" >&2; exit 1; }
+printf '%s\n' "$principal" > "$etc/ssh/drgnx-principals"
+chmod 644 "$etc/ssh/drgnx-ca.pub" "$etc/ssh/drgnx-principals"
+
+# read before the distribution's drop-ins (sshd keeps the first value of an option)
+cat > "$etc/ssh/sshd_config.d/01-drgnx.conf" <<'EOF'
+TrustedUserCAKeys /etc/ssh/drgnx-ca.pub
+AuthorizedPrincipalsFile /etc/ssh/drgnx-principals
+AuthorizedKeysFile none
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin no
+MaxAuthTries 2
+EOF
+
+num() { case $1 in '' | *[!0-9]*) echo "$2" ;; *) echo "$1" ;; esac; }
+{
+  echo "DRGNX_WATCHDOG_PROVIDER=$(case $(field drgnx-provider) in gcp) echo gcp ;; *) echo aws ;; esac)"
+  echo "DRGNX_WATCHDOG_IDLE=$(num "$(field drgnx-watchdog-idle)" 600)"
+  echo "DRGNX_WATCHDOG_LIFETIME=$(num "$(field drgnx-watchdog-lifetime)" 28800)"
+  echo "DRGNX_WATCHDOG_UNATTENDED=$(num "$(field drgnx-watchdog-unattended)" 3600)"
+} > "$etc/drgnx/watchdog.env"
+
+# the watchdog unit starts after this one (it Requires it), from multi-user.target
+"$systemctl" reload-or-restart sshd.service

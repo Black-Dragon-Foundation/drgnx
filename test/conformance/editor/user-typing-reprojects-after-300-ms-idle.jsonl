@@ -1,0 +1,32 @@
+{"scenario": "editor/user-typing-reprojects-after-300-ms-idle", "requires": ["v1", "test-hooks"], "doc": "An agent's change re-projects at once (its frame at the next 50 ms flush); the user's typing (a watch again with a newer doc_version) is answered from the frame already built and re-projects only after 300 ms without another change, then at the next flush: the agent's line moves from 12 to 14 once the user's two new top lines count. Pattern B on the hub's virtual clock: the edit's agent-step is the gate for the first flush, each flush and the quiet by __test_advance; with the clock held nothing fires between two advances, so the absence is read with the clock 1 ms short of the quiet."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q -b main && seq -f 'l%g' 1 12 > a.txt && git add a.txt && git -c user.email=t@example.invalid -c user.name=t commit -qm base && git worktree add -q -b agent $ROOT/wt"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h", "args": ["--test-clock"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/wt"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "poll", "conn": "c", "json": {"id": 2, "method": "work/files", "params": {"session": "$sid"}}, "expect": {"id": 2, "result": {"files": []}}, "within_ms": 30000, "every_ms": 50}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "agents/buffer/watch", "params": {"view": "v1", "file": "$ROOT/repo/a.txt", "doc_version": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"view": "v1", "version": 1, "base": 0, "agents": [], "gutter": []}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$sid", "text": "tool:edit a.txt\nsay done"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"tool_kind": "edit"}}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "__test_advance", "params": {"ms": 60}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "agent-buffer", "data": {"view": "v1", "version": 2, "base": 1, "gutter": [{"session": "$sid", "kind": "changed", "start": 12, "end": 12}]}}, "within_ms": 10000}
+{"do": "write_file", "path": "$ROOT/repo/a.txt", "text": "u1\nu2\nl1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10\nl11\nl12\n"}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "agents/buffer/watch", "params": {"view": "v1", "file": "$ROOT/repo/a.txt", "doc_version": 2}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": {"view": "v1", "version": 3, "base": 0, "gutter": [{"session": "$sid", "kind": "changed", "start": 12, "end": 12}]}}}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "__test_advance", "params": {"ms": 299}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "count_events", "conn": "e", "for_ms": 300, "none": ["agent-buffer"]}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "__test_advance", "params": {"ms": 1}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "__test_advance", "params": {"ms": 60}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "agent-buffer", "data": {"view": "v1", "version": 4, "base": 3, "gutter": [{"session": "$sid", "kind": "changed", "start": 14, "end": 14}]}}, "within_ms": 10000}

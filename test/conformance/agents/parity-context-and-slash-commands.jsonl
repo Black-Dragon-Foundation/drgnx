@@ -12,6 +12,10 @@
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/start", "params": {"profile": "mock-gateway", "cwd": "$ROOT/work"}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:gid", "name": "$string"}}}
+{"do": "send", "conn": "e", "json": {"id": 901, "method": "agents/entries/subscribe", "params": {"session": "$sid"}}}
+{"do": "expect", "conn": "e", "json": {"id": 901, "result": {"seq": "$number"}}}
+{"do": "send", "conn": "e", "json": {"id": 902, "method": "agents/entries/subscribe", "params": {"session": "$gid"}}}
+{"do": "expect", "conn": "e", "json": {"id": 902, "result": {"seq": "$number"}}}
 {"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$sid", "text": "hello"}}}
 {"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
 {"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"via": "direct", "usage": {"used": "$number", "size": "$number"}}}}, "within_ms": 10000}

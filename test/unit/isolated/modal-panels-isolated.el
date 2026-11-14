@@ -1,5 +1,6 @@
 ;;; modal-panels-isolated.el --- batch tests (own Emacs, test/unit/modal-panels-test.el): panels under the Vim stack -*- lexical-binding: t -*-
-;; test-class: det
+;; test-class: cond
+;; test-pattern: gated
 ;; Needs the real evil: DRGNX_MODAL_ELPA (docs/develop/harness.md, "Modal tests"); without it those tests skip.
 ;; The full registry and the startup modules run in a temp configuration (editor/evil chosen, the Vim stack applied),
 ;; so the keys are the shipped ones.  Keys are pressed with `execute-kbd-macro' in a panel buffer shown in the
@@ -9,11 +10,13 @@
 (require 'drgnx)
 (require 'drgnx-modal)
 (require 'drgnx-explorer)
+(setq drgnx-explorer--lisp-listing t)       ; the Lisp listing (a remote root's, plan sja-complete Q3): on local folders here
 (require 'drgnx-buffers)
 (require 'drgnx-outline)
 (require 'drgnx-modules)
 (load (expand-file-name "test/fixtures/modal-elpa" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/gated-hub-fixture" drgnx-dir) nil t)   ; the Buffers panel's rows: a real hub's
 
 (defvar evil-state)
 (defvar drgnx-close--here)
@@ -21,13 +24,14 @@
 (declare-function drgnx-close-pane "drgnx-close")
 (declare-function evil-normal-state "evil-states")
 (declare-function evil-insert-state "evil-states")
+(declare-function evil-motion-state "evil-states")
+(declare-function drgnx-decor-button "drgnx-decor")
 (declare-function evil-emacs-state "evil-states")
 (declare-function drgnx-evil-stop "drgnx-evil")
 (declare-function drgnx-diff-mode "drgnx-diff")
 (declare-function drgnx-review-mode "drgnx-review")
 (declare-function drgnx-prs-mode "drgnx-prs")
-(declare-function drgnx-work-mode "drgnx-work-ui")
-(declare-function drgnx-agents-list-mode "drgnx-agents-ui")
+(declare-function drgnx-agent-panel-list-mode "drgnx-agent-panel-list")
 (declare-function drgnx-onboard-mode "drgnx-onboard")
 
 (defvar drgnx-modal-panels-test--calls nil "What the stubbed commands ran, newest first.")
@@ -113,30 +117,36 @@
          (delete-directory ,root t)))))
 
 (defmacro drgnx-modal-panels-test--buffers (&rest body)
-  "BODY with the Buffers panel listing three file buffers, shown in the selected window."
+  "BODY with the Buffers panel listing three file buffers, shown in the selected window.  Its rows are a real hub's
+\(`drgnx-test-with-gated-hub'), drawn by Sjá."
   (declare (indent 0))
-  `(drgnx-test-with-state
-     (let ((drgnx-wb--sections nil) (drgnx-buffers--order nil) (drgnx-buffers--signature nil)
-           (extra nil) (dir (make-temp-file "drgnx-modal-buffers" t)))
-       (unwind-protect
-           (progn
-             (delete-other-windows)
-             (drgnx-buffers-setup)
-             (drgnx-signal--flush)
-             (drgnx-wb-show-sidebar)
-             (dolist (n '("pa.txt" "pb.txt" "pc.txt"))
-               (let ((f (expand-file-name n dir)))
-                 (write-region "x\n" nil f nil 'silent)
-                 (push (find-file-noselect f) extra)))
-             (drgnx-signal--flush)
-             (drgnx-modal-panels-test--show (get-buffer drgnx-buffers-buffer-name)
-               (should (> (count-lines (point-min) (point-max)) 2))
-               ,@body))
-         (dolist (b extra) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b))
-         (drgnx-wb-hide-sidebar)
-         (delete-other-windows)
-         (when (get-buffer drgnx-buffers-buffer-name) (kill-buffer drgnx-buffers-buffer-name))
-         (delete-directory dir t)))))
+  `(drgnx-test-with-gated-hub
+     (drgnx-test-with-state
+       (let ((drgnx-wb--sections nil) (extra nil) (dir (make-temp-file "drgnx-modal-buffers" t)))
+         (unwind-protect
+             (progn
+               (delete-other-windows)
+               (drgnx-buffers-setup)
+               (drgnx-signal--flush)
+               (drgnx-wb-show-sidebar)
+               (drgnx-view-env-update drgnx-buffers-hub-view)   ; a batch Emacs never redisplays: the shown class's env
+               (dolist (n '("pa.txt" "pb.txt" "pc.txt"))
+                 (let ((f (expand-file-name n dir)))
+                   (write-region "x\n" nil f nil 'silent)
+                   (push (find-file-noselect f) extra)))
+               (drgnx-signal--flush)
+               (drgnx-test-hub-settle
+                (lambda () (with-current-buffer drgnx-buffers-buffer-name
+                             (drgnx-view-draw-now nil)
+                             (> (count-lines (point-min) (point-max)) 2)))
+                "the hub's three rows")
+               (drgnx-modal-panels-test--show (get-buffer drgnx-buffers-buffer-name)
+                 ,@body))
+           (dolist (b extra) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b))
+           (drgnx-wb-hide-sidebar)
+           (delete-other-windows)
+           (when (get-buffer drgnx-buffers-buffer-name) (kill-buffer drgnx-buffers-buffer-name))
+           (delete-directory dir t))))))
 
 (defmacro drgnx-modal-panels-test--outline (&rest body)
   "BODY with the Outline of a four-definition elisp buffer, shown in the selected window."
@@ -219,12 +229,12 @@
         ;; Modules
         (let ((b (drgnx-modules-list)))
           (unwind-protect (check b) (kill-buffer b)))
-        ;; Work, Diff, Review: special-mode panels
-        (dolist (cell '(("work" . drgnx-work-mode) ("diff" . drgnx-diff-mode) ("review" . drgnx-review-mode)))
+        ;; Diff, Review: special-mode panels
+        (dolist (cell '(("diff" . drgnx-diff-mode) ("review" . drgnx-review-mode)))
           (let ((b (drgnx-modal-panels-test--rows-buffer (car cell) (cdr cell))))
             (unwind-protect (check b) (kill-buffer b))))
         ;; Agents list, PRs, Welcome: tabulated-list panels
-        (dolist (cell '(("agents" . drgnx-agents-list-mode) ("prs" . drgnx-prs-mode) ("welcome" . drgnx-onboard-mode)))
+        (dolist (cell '(("agents" . drgnx-agent-panel-list-mode) ("prs" . drgnx-prs-mode) ("welcome" . drgnx-onboard-mode)))
           (let ((b (drgnx-modal-panels-test--table-buffer (car cell) (cdr cell))))
             (unwind-protect (check b) (kill-buffer b)))))
       (should-not bad))))
@@ -352,6 +362,26 @@
         (drgnx-modal-panels-test--outline (walk)))
       (should (= (length cursors) 9))
       (dolist (c cursors) (should (eq (cdr c) nil))))))
+
+(ert-deftest drgnx-modal-panels/enter-activates-a-decoration-button-in-a-read-only-buffer ()
+  ;; The button's keymap is a text property, which Emacs consults before evil's state maps: Enter runs the action
+  ;; once in every state a read-only view can be in.
+  (drgnx-modal-panels-test--with
+    (let ((ran 0) (b (generate-new-buffer "decor-button")))
+      (unwind-protect
+          (with-current-buffer b
+            (special-mode)
+            (let ((inhibit-read-only t))
+              (insert (drgnx-decor-button "Go" (lambda () (cl-incf ran))) " tail"))
+            (should buffer-read-only)
+            (drgnx-modal-panels-test--show b
+              (dolist (state '(evil-normal-state evil-emacs-state evil-motion-state))
+                (funcall state)
+                (goto-char 2)
+                (let ((before ran))
+                  (drgnx-modal-panels-test--press "RET")
+                  (should (= (1+ before) ran))))))
+        (kill-buffer b)))))
 
 (provide 'modal-panels-isolated)
 ;;; modal-panels-isolated.el ends here

@@ -86,6 +86,38 @@
    (should (drgnx-module-running-p 'test/ok))
    (dolist (m '(test/needs-pkg test/needs-mod test/off test/never-defined)) (should-not (drgnx-module-running-p m)))))
 
+(ert-deftest drgnx-modules/a-retry-lists-each-load-path-directory-once ()
+  ;; after a job, every waiting module's packages are looked for: one listing of each `load-path' directory for all of
+  ;; them, not a search of the whole path per package (EXT-ACTIVATE-NEW-PERF-1: `locate-library' per package was most
+  ;; of a job's end with 40 packages on the path)
+  (drgnx-modules-test--with-config
+   (let* ((dirs (cl-loop for i below 5 collect (make-temp-file "drgnx-mods-path" t)))
+          (load-path (append dirs load-path))
+          (listed 0) (ran nil) (searched nil))
+     (unwind-protect
+         (progn
+           (dotimes (i 10)
+             (drgnx-module-define (intern (format "test/waits-%d" i)) :doc "w"
+                                  :packages (list (intern (format "drgnx-test-pkg-%d" i)) 'drgnx-test-pkg-new)
+                                  :setup (let ((i i)) (lambda () (push i ran)))))
+           (drgnx-modules-run 'startup)
+           (should (eq (drgnx-modules-test--status 'test/waits-0) 'missing-packages))
+           ;; the job put the packages' files in the path's directories: one .el, one .elc, one compressed
+           (dotimes (i 10)
+             (write-region "" nil (expand-file-name (format "drgnx-test-pkg-%d.%s" i (nth (% i 3) '("el" "elc" "el.gz")))
+                                                    (nth (% i 5) dirs))))
+           (write-region "" nil (expand-file-name "drgnx-test-pkg-new.el" (car dirs)))
+           (cl-letf* ((list-dir (symbol-function 'directory-files)) (locate (symbol-function 'locate-library))
+                      ((symbol-function 'directory-files)
+                       (lambda (&rest args) (cl-incf listed) (apply list-dir args)))
+                      ((symbol-function 'locate-library)
+                       (lambda (&rest args) (push (car args) searched) (apply locate args))))
+             (should (= 10 (length (drgnx-modules-retry-waiting)))))
+           (should (equal (sort ran #'<) (number-sequence 0 9)))
+           (should-not searched)
+           (should (<= listed (length load-path))))
+       (dolist (d dirs) (delete-directory d t))))))
+
 (ert-deftest drgnx-modules/the-new-stages-run-on-their-hooks ()
   :tags '(:cond)
   (drgnx-modules-test--with-config
@@ -279,6 +311,28 @@
            (pcase-dolist (`(,_ ,fn ,args) timers) (apply fn args) (push '| log))
            (should (equal (reverse log) '(external | i1 | i2 | (after idle) |)))
            (should-not (drgnx-modules-test--idle-keys)))           ; one-shots: nothing left
+       (drgnx-timer-reset)))))
+
+(ert-deftest drgnx-modules/an-idle-module-started-early-is-left-alone-by-its-tick ()
+  :tags '(:cond)
+  ;; A module of the idle stage that something started before its tick (a command, `drgnx-modules-run') keeps
+  ;; running when the tick fires: no second setup, and no teardown of what it made (the agent panel's tick closed a
+  ;; panel opened before it).
+  (drgnx-modules-test--with-config
+   (let* ((log nil) (timers nil) (drgnx-first-gui-frame-hook nil) (drgnx-first-file-hook nil) (drgnx-first-input-hook nil))
+     (drgnx-module-define 'test/i1 :doc "1" :stage 'idle :setup (lambda () (push 'setup log))
+                          :teardown (lambda () (push 'teardown log)))
+     (unwind-protect
+         (cl-letf (((symbol-function 'run-with-idle-timer)
+                    (lambda (secs _repeat fn &rest args) (push (list secs fn args) timers)))
+                   ((symbol-function 'drgnx-modules-load-external) #'ignore))
+           (drgnx-modules-start cfg)
+           (drgnx-modules-run 'idle)
+           (should (equal log '(setup)))
+           (pcase-dolist (`(,_ ,fn ,args) (sort timers (lambda (a b) (< (car a) (car b))))) (apply fn args))
+           (should (equal log '(setup)))
+           (should (drgnx-module-running-p 'test/i1)))
+       (drgnx-module-teardown 'test/i1)
        (drgnx-timer-reset)))))
 
 (ert-deftest drgnx-modules/a-load-error-names-the-file-that-failed ()

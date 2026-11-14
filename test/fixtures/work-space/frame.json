@@ -1,0 +1,94 @@
+{
+  "version": 3,
+  "items": [
+    {"id": "ask:1", "kind": "ask", "label": "fix deferred testing rows", "live": true, "block": null, "parent": null, "order": 1, "warn": false, "needs_you": false, "shared": false, "fields": {}},
+    {"id": "spec:race-proof", "kind": "spec", "label": "race-proof tests", "live": true, "block": null, "parent": null, "order": 1, "warn": false, "needs_you": false, "shared": false, "fields": {}},
+    {"id": "plan:deferred", "kind": "plan", "label": "deferred testing rows", "live": true, "block": null, "parent": null, "order": 1, "warn": false, "needs_you": false, "shared": false, "fields": {"progress": [3, 6]}},
+    {"id": "agent:a1", "kind": "agent", "label": "hub rows", "live": true, "block": "plan:deferred", "parent": null, "order": 1, "warn": true, "needs_you": false, "shared": false,
+     "fields": {"state": "running", "minutes": 32, "model": "Opus", "task": "SESSION-END-LOSES-STARTED-1", "spend": "$1.20", "progress": [3, 6], "activity": "testing", "conclusion": "turn_core drops the started flag", "edits": [2, 52, 4], "reads": 14}},
+    {"id": "agent:a2", "kind": "agent", "label": "fx-sess", "live": true, "block": "plan:deferred", "parent": null, "order": 2, "warn": true, "needs_you": true, "shared": false,
+     "fields": {"state": "needs-you", "minutes": 5, "model": "Sonnet", "task": "review item 3", "conclusion": "fixed in seq", "reads": 3}},
+    {"id": "agent:a1/t1", "kind": "subagent", "label": "explore", "live": true, "block": "plan:deferred", "parent": "agent:a1", "order": 1, "warn": false, "needs_you": false, "shared": false,
+     "fields": {"state": "running", "minutes": 2, "model": "Opus"}},
+    {"id": "branch:drgnx/rp-df-hub", "kind": "branch", "label": "rp-df-hub", "live": true, "block": "plan:deferred", "parent": "agent:a1", "order": 1, "warn": true, "needs_you": false, "shared": false, "fields": {"repo": "drgnx", "edits": [2, 52, 4]}},
+    {"id": "branch:drgnx/rp-fx-sess", "kind": "branch", "label": "rp-fx-sess", "live": true, "block": "plan:deferred", "parent": "agent:a2", "order": 2, "warn": true, "needs_you": false, "shared": false, "fields": {"repo": "drgnx", "edits": [1, 9, 2]}},
+    {"id": "file:drgnx/src/session.rs", "kind": "file", "label": "session.rs", "live": true, "block": null, "parent": null, "order": 1, "warn": true, "needs_you": false, "shared": true, "fields": {"change": [40, 3]}},
+    {"id": "machine:desktop", "kind": "machine", "label": "desktop", "live": true, "block": null, "parent": null, "order": 1, "warn": false, "needs_you": false, "shared": false, "fields": {"slots": [3, 16]}}
+  ],
+  "edges": [
+    {"from": "ask:1", "to": "spec:race-proof", "kind": "came-from"},
+    {"from": "spec:race-proof", "to": "plan:deferred", "kind": "came-from"},
+    {"from": "plan:deferred", "to": "agent:a1", "kind": "came-from"},
+    {"from": "plan:deferred", "to": "agent:a2", "kind": "came-from"},
+    {"from": "agent:a1", "to": "agent:a1/t1", "kind": "came-from"},
+    {"from": "agent:a1", "to": "branch:drgnx/rp-df-hub", "kind": "came-from"},
+    {"from": "agent:a2", "to": "branch:drgnx/rp-fx-sess", "kind": "came-from"},
+    {"from": "branch:drgnx/rp-df-hub", "to": "file:drgnx/src/session.rs", "kind": "edits"},
+    {"from": "branch:drgnx/rp-fx-sess", "to": "file:drgnx/src/session.rs", "kind": "edits"},
+    {"from": "agent:a1", "to": "machine:desktop", "kind": "runs-on"},
+    {"from": "agent:a1", "to": "agent:a2", "kind": "overlap"}
+  ],
+  "layout": {
+    "rows": [
+      {"layer": 1, "block_line": 0, "sub": 0, "y": 0, "height_units": 7},
+      {"layer": 2, "block_line": 0, "sub": 0, "y": 15, "height_units": 7},
+      {"layer": 3, "block_line": 0, "sub": 0, "y": 30, "height_units": 7},
+      {"layer": 4, "block_line": 0, "sub": 0, "y": 45, "height_units": 25},
+      {"layer": 5, "block_line": 0, "sub": 0, "y": 73, "height_units": 7},
+      {"layer": 4, "block_line": 0, "sub": 1, "y": 88, "height_units": 10},
+      {"layer": 6, "block_line": 0, "sub": 0, "y": 101, "height_units": 7}
+    ],
+    "at": {
+      "ask:1": {"x": 76, "y": 0, "w": 48, "h": 7},
+      "spec:race-proof": {"x": 84, "y": 15, "w": 44, "h": 7},
+      "plan:deferred": {"x": 37, "y": 30, "w": 44, "h": 7},
+      "agent:a1": {"x": 0, "y": 45, "w": 58, "h": 25},
+      "agent:a2": {"x": 61, "y": 45, "w": 58, "h": 25},
+      "agent:a1/t1": {"x": 8, "y": 88, "w": 42, "h": 10},
+      "branch:drgnx/rp-df-hub": {"x": 9, "y": 73, "w": 40, "h": 7},
+      "branch:drgnx/rp-fx-sess": {"x": 70, "y": 73, "w": 40, "h": 7},
+      "file:drgnx/src/session.rs": {"x": 41, "y": 101, "w": 36, "h": 7},
+      "machine:desktop": {"x": 80, "y": 101, "w": 32, "h": 7}
+    },
+    "form": {"agent:a1": "rich", "agent:a2": "rich", "agent:a1/t1": "compact"},
+    "lanes": [
+      {"row": 4, "x": 4, "from": "agent:a1", "to": "agent:a1/t1", "kind": "came-from"},
+      {"row": 5, "x": 52, "from": "branch:drgnx/rp-df-hub", "to": "file:drgnx/src/session.rs", "kind": "edits"},
+      {"row": 5, "x": 80, "from": "branch:drgnx/rp-fx-sess", "to": "file:drgnx/src/session.rs", "kind": "edits"}
+    ],
+    "ports": [
+      {"target": "machine:desktop", "parents": ["agent:a1"]}
+    ],
+    "bands": [
+      {"row": 1, "y": 7, "height_units": 8, "segs": [
+        {"from": "ask:1", "to": "spec:race-proof", "kind": "came-from", "x0": 100, "x1": 106}]},
+      {"row": 2, "y": 22, "height_units": 8, "segs": [
+        {"from": "spec:race-proof", "to": "plan:deferred", "kind": "came-from", "x0": 106, "x1": 59}]},
+      {"row": 3, "y": 37, "height_units": 8, "segs": [
+        {"from": "plan:deferred", "to": "agent:a1", "kind": "came-from", "x0": 59, "x1": 29},
+        {"from": "plan:deferred", "to": "agent:a2", "kind": "came-from", "x0": 59, "x1": 90},
+        {"from": "agent:a1", "to": "agent:a2", "kind": "overlap", "x0": 29, "x1": 90, "arc": true}]},
+      {"row": 4, "y": 70, "height_units": 3, "segs": [
+        {"from": "agent:a1", "to": "agent:a1/t1", "kind": "came-from", "x0": 29, "x1": 4},
+        {"from": "agent:a1", "to": "branch:drgnx/rp-df-hub", "kind": "came-from", "x0": 29, "x1": 29},
+        {"from": "agent:a2", "to": "branch:drgnx/rp-fx-sess", "kind": "came-from", "x0": 90, "x1": 90}]},
+      {"row": 5, "y": 80, "height_units": 8, "segs": [
+        {"from": "agent:a1", "to": "agent:a1/t1", "kind": "came-from", "x0": 4, "x1": 29},
+        {"from": "branch:drgnx/rp-df-hub", "to": "file:drgnx/src/session.rs", "kind": "edits", "x0": 29, "x1": 52},
+        {"from": "branch:drgnx/rp-fx-sess", "to": "file:drgnx/src/session.rs", "kind": "edits", "x0": 90, "x1": 80}]},
+      {"row": 6, "y": 98, "height_units": 3, "segs": [
+        {"from": "branch:drgnx/rp-df-hub", "to": "file:drgnx/src/session.rs", "kind": "edits", "x0": 52, "x1": 59},
+        {"from": "branch:drgnx/rp-fx-sess", "to": "file:drgnx/src/session.rs", "kind": "edits", "x0": 80, "x1": 59}]}
+    ],
+    "fits": true,
+    "crossings": 0,
+    "width_units": 226,
+    "height_units": 108
+  },
+  "needs_you": [
+    {"card": "card:1", "kind": "permission", "text": "Codex asks: cargo clippy", "about": ["agent:a2"]}
+  ],
+  "chips": [
+    {"kind": "machine", "item": "machine:desktop", "label": "desktop", "used": 3, "total": 16}
+  ]
+}

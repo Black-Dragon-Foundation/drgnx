@@ -11,6 +11,8 @@ pub mod graph;
 mod migrate;
 mod open;
 mod thread;
+#[cfg(feature = "test-hooks")]
+pub mod wait;
 
 use std::fmt;
 

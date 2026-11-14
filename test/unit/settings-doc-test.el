@@ -49,6 +49,26 @@
       (delete-file tmp)
       (delete-directory home t))))
 
+(defun drgnx-settings-doc-test--declared ()
+  "The settings the checkout's Lisp declares: the NAME of every line that starts `(drgnx-defsetting NAME', read
+from the files themselves (not from what a generator loaded), sorted."
+  (let (names)
+    (dolist (dir '("core" "wb" "modules" "harness"))
+      (dolist (file (directory-files-recursively (expand-file-name dir drgnx-dir) "\\.el\\'"))
+        (with-temp-buffer
+          (insert-file-contents file)
+          (while (re-search-forward "^[ \t]*(drgnx-defsetting[ \t]+\\([^ \t\n()]+\\)" nil t)
+            (push (match-string 1) names)))))
+    (sort (delete-dups names) #'string<)))
+
+(ert-deftest drgnx-settings-doc/every-declared-setting-is-in-the-reference ()
+  "Pattern D: every setting a file declares has its section in docs/reference/settings.md, whichever file it is in."
+  (let* ((text (drgnx-settings-doc-test--read (expand-file-name "docs/reference/settings.md" drgnx-dir)))
+         (missing (cl-remove-if (lambda (name) (string-match-p (concat "^## " (regexp-quote name) "$") text))
+                                (drgnx-settings-doc-test--declared))))
+    (should (> (length (drgnx-settings-doc-test--declared)) 50))
+    (should-not missing)))
+
 (ert-deftest drgnx-settings-doc/the-markdown-describes-a-setting ()
   (require 'drgnx-setting)
   (unwind-protect

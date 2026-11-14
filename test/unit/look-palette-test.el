@@ -1,0 +1,315 @@
+;;; look-palette-test.el --- the palette: recent commands first, keycaps from the profile, the echo area on the gap -*- lexical-binding: t -*-
+;; test-class: det
+;; Pattern D (pure): the recent-command history runs on the manual clock with the state directory in a temporary
+;; folder; keycaps are a function of a key string; the echo-area remap is read from the buffers' remapping lists.
+(require 'ert)
+(require 'cl-lib)
+(require 'drgnx)
+(require 'drgnx-palette)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
+(load (expand-file-name "modules/ui/drgnx-look" drgnx-dir) nil t)
+
+(defmacro drgnx-look-palette-test--with-state (&rest body)
+  "BODY with the state directory in a temporary folder and no history read yet."
+  (declare (indent 0))
+  `(let* ((dir (file-name-as-directory (make-temp-file "look-palette" t)))
+          (process-environment (cons (concat "XDG_STATE_HOME=" dir) process-environment))
+          (drgnx-palette--history :unloaded))
+     (unwind-protect (progn ,@body) (delete-directory dir t))))
+
+(ert-deftest drgnx-look-palette/recent-first ()
+  "Pattern D, on the manual clock: the command used last ranks first, with its age as text; the history is kept in
+the state directory and read back."
+  (drgnx-look-palette-test--with-state
+    (drgnx-test-with-clock ()
+      (drgnx-palette-record 'a)
+      (drgnx-test-advance 60)
+      (drgnx-palette-record 'b)
+      (drgnx-test-advance 120)
+      (unless (eql 0 (drgnx-palette-recent-rank 'b))
+        (ert-fail (list 'in-memory drgnx-palette--history)))
+      (should (= 0 (drgnx-palette-recent-rank 'b)))
+      (should (= 1 (drgnx-palette-recent-rank 'a)))
+      (should-not (drgnx-palette-recent-rank 'never))
+      (should (equal "used 2 min ago" (drgnx-palette-recent-age 'b)))
+      (should (equal "used 3 min ago" (drgnx-palette-recent-age 'a)))
+      (should-not (drgnx-palette-recent-age 'never))
+      (setq drgnx-palette--history :unloaded)                         ; read back from the file
+      (unless (eql 0 (drgnx-palette-recent-rank 'b))
+        (ert-fail (list 'read-back drgnx-palette--history (drgnx-palette--history-file)
+                        (file-exists-p (drgnx-palette--history-file)))))
+      (should (= 0 (drgnx-palette-recent-rank 'b)))
+      (should (equal '("Y: B" "X: A" "Z: C")
+                     (drgnx-palette-sort '("X: A" "Y: B" "Z: C") '(("X: A" . a) ("Y: B" . b) ("Z: C" . c))))))))
+
+(ert-deftest drgnx-look-palette/keycaps-from-the-profile ()
+  "Pattern D: the palette's own key in each profile, as keycaps: Ctrl Shift P for vscode and Emacs, Space Space for
+Vim; a chord is one cap a key, a function key its number."
+  (unless drgnx-keys-profiles
+    (setq drgnx-keys-profiles (drgnx-keys-load-profiles (expand-file-name "keys" drgnx-dir))))
+  (let ((first-key (lambda (p) (seq-find #'stringp (cdr (assq 'palette (plist-get (alist-get p drgnx-keys-profiles) :bind)))))))
+    (should (equal '("Ctrl" "Shift" "P") (drgnx-palette-keycap-names (funcall first-key 'vscode))))
+    (should (equal '("Ctrl" "Shift" "P") (drgnx-palette-keycap-names (funcall first-key 'emacs))))
+    (should (equal '("Space" "Space") (drgnx-palette-keycap-names (funcall first-key 'vim)))))
+  (should (equal '("F1") (drgnx-palette-keycap-names "<f1>")))
+  (should (equal '("PgUp") (drgnx-palette-keycap-names "<prior>")))   ; as the debugging extras mockup
+  (should (equal '("PgDn") (drgnx-palette-keycap-names "<next>")))
+  (should (equal '("Alt" "X") (drgnx-palette-keycap-names "M-x")))
+  ;; the function keys read as their ASCII twins (ESC, RET); Enter is ↵, as every mockup draws it
+  (should (equal '("Esc") (drgnx-palette-keycap-names "<escape>")))
+  (should (equal '("Ctrl" "↵") (drgnx-palette-keycap-names "C-<return>")))
+  (should (equal '("↵") (drgnx-palette-keycap-names "RET")))
+  ;; a key alone reads as typed, and Shift alone with a letter is its capital (the mockups' `a keep', `D drop')
+  (should (equal '("a") (drgnx-palette-keycap-names "a")))
+  (should (equal '("D") (drgnx-palette-keycap-names "D")))
+  (should (equal '("D") (drgnx-palette-keycap-names "S-d")))
+  (should (equal '("Space" "f" "f") (drgnx-palette-keycap-names "SPC f f")))
+  (let ((caps (cl-letf (((symbol-function 'display-graphic-p) #'always)) (drgnx-palette-keycaps "C-S-p"))))
+    (should (equal "Ctrl Shift P" (string-join (split-string (substring-no-properties caps)) " ")))
+    (should (equal '(space :width (4)) (get-text-property 0 'display caps)))   ; room inside the cap
+    (should (eq 'drgnx-keycap (get-text-property 0 'face caps))))
+  ;; a terminal draws no ring: the names alone, one space between
+  (should (equal "Ctrl Shift P" (substring-no-properties (drgnx-palette-keycaps "C-S-p")))))
+
+(ert-deftest drgnx-look-palette/a-shifted-letter-shows-its-shift ()
+  "M-F and M-f are different keys: with another modifier the capital letter shows Shift, once, whether written M-F
+or M-S-f.  Alone, a capital is its letter (`G', as the mockups draw `D drop')."
+  (should (equal '("Alt" "Shift" "F") (drgnx-palette-keycap-names "M-F")))
+  (should (equal '("Alt" "F") (drgnx-palette-keycap-names "M-f")))
+  (should (equal '("Alt" "Shift" "F") (drgnx-palette-keycap-names "M-S-f")))
+  (should (equal '("Ctrl" "Shift" "F") (drgnx-palette-keycap-names "C-S-F")))
+  (should (equal '("G") (drgnx-palette-keycap-names "G")))
+  (should (equal '("?") (drgnx-palette-keycap-names "?"))))
+
+(ert-deftest drgnx-look-palette/echo-area-remap-on-and-off ()
+  "Pattern D: the echo area's buffer and every minibuffer draw `default' as the gap surface while the module is on;
+off, the buffers have no such entry and the hook is gone."
+  (let* ((made (not (get-buffer " *Echo Area 0*")))
+         (echo (get-buffer-create " *Echo Area 0*")) (mini (get-buffer-create " *Minibuf-look-test*")))
+    (unwind-protect
+        (progn
+          (drgnx-look-echo-area-on)
+          (should (memq 'drgnx-look--minibuffer-gap minibuffer-setup-hook))
+          (should (memq 'drgnx-look--minibuffer-inactive-gap minibuffer-inactive-mode-hook))
+          (with-current-buffer echo (should (eq 'drgnx-surface-gap (cadr (assq 'default face-remapping-alist)))))
+          (with-current-buffer mini (drgnx-look--minibuffer-gap)
+                               (should (eq 'drgnx-surface-gap (cadr (assq 'default face-remapping-alist)))))
+          (drgnx-look-echo-area-off)
+          (should-not (memq 'drgnx-look--minibuffer-gap minibuffer-setup-hook))
+          (should-not (memq 'drgnx-look--minibuffer-inactive-gap minibuffer-inactive-mode-hook))
+          (with-current-buffer echo (should-not (assq 'default face-remapping-alist))))
+      (drgnx-look-echo-area-off)
+      (when made (kill-buffer echo))
+      (kill-buffer mini))))
+
+(ert-deftest drgnx-look-palette/sort-reads-the-history-once ()
+  "Sorting the labels for one key reads the history once, whatever the number of labels, and keeps the order of the
+rest."
+  :tags '(:frozen)                      ; the Lisp sort: Sjá's pick replaces it (palette-pick-test.el)
+  (drgnx-look-palette-test--with-state
+    (drgnx-test-with-clock ()
+      (drgnx-palette-record 'a)
+      (drgnx-test-advance 60)
+      (drgnx-palette-record 'c)
+      (let* ((cands (mapcar (lambda (i) (cons (format "Cmd: %d" i) (intern (format "k%d" i)))) (number-sequence 1 300)))
+             (cands (append cands '(("X: A" . a) ("Z: C" . c))))
+             (labels (mapcar #'car cands)) (reads 0) (orig (symbol-function 'drgnx-palette--history)))
+        (cl-letf (((symbol-function 'drgnx-palette--history) (lambda () (cl-incf reads) (funcall orig))))
+          (let ((sorted (drgnx-palette-sort labels cands)))
+            (should (= reads 1))
+            (should (equal (seq-take sorted 3) '("Z: C" "X: A" "Cmd: 1")))
+            (should (equal (cddr sorted) (seq-take labels 300)))))))))
+
+(defun drgnx-look-palette-test--faces (face)
+  "FACE (a text property value) as a flat list of face names and plists."
+  (if (and (consp face) (not (keywordp (car face)))) face (list face)))
+
+(defun drgnx-look-palette-test--boxed-p (face)
+  "Non-nil when FACE carries the row's inside box."
+  (cl-some (lambda (f) (and (consp f) (plist-get f :box))) (drgnx-look-palette-test--faces face)))
+
+(ert-deftest drgnx-look-palette/the-current-row-is-one-rounded-inset-run ()
+  "Pattern D, palette.html `.row.sel': the current candidate is one rounded fill, 6 logical pixels in from the
+popup's sides: an inset before it (outside the fill), the text and a stretch to 6 pixels short of the right edge in the
+current face with the row's inside box (one box run: the stretch ends it, so its right corners are drawn), then a
+plain newline (no fill past the row).  Every row gets the same left inset, so the text does not move."
+  (load (expand-file-name "modules/extra/drgnx-completion" drgnx-dir) nil t)
+  (let* ((cand (let ((s (concat "Run Tests" "\n"))) (add-face-text-property 0 (length s) 'vertico-current t s) s))
+         (row (drgnx-completion--row cand t))
+         (n (length row)))
+    (should (equal "\n" (substring row -1)))
+    (should-not (memq 'vertico-current (drgnx-look-palette-test--faces (get-text-property (1- n) 'face row))))
+    (should (get-text-property 0 'display row))                                         ; the left inset
+    (should-not (memq 'vertico-current (drgnx-look-palette-test--faces (get-text-property 0 'face row))))
+    (should (string-search "Run Tests" row))
+    (cl-loop for i from 1 below (1- n)
+             do (should (memq 'vertico-current (drgnx-look-palette-test--faces (get-text-property i 'face row))))
+             do (should (drgnx-look-palette-test--boxed-p (get-text-property i 'face row))))
+    (should (string-match-p "align-to" (format "%S" (get-text-property (- n 2) 'display row))))
+    (let ((other (drgnx-completion--row (copy-sequence "Run Test at Point\n") nil)))
+      (should (get-text-property 0 'display other))
+      (should (equal "Run Test at Point\n" (substring other 1)))
+      (should-not (drgnx-look-palette-test--boxed-p (get-text-property 1 'face other))))))
+
+(ert-deftest drgnx-look-palette/a-row-keycap-is-a-chip-image ()
+  "A keycap on a row that can be selected is an SVG chip, not a face `:box': a face has one box, so a keycap's would
+cut the selected row's rounded fill into pieces around it.  The chip is a rounded ring in the keycap's ring colour
+with the name in `currentColor' (the subtle text, muted on the selected row), as tall as the text; its text stays the
+name; a terminal, or a frame with no SVG, gets the text keycap."
+  (let ((svg (drgnx-palette--keycap-svg "<" '(:width 20 :height 18 :ascent 13 :pad 4 :line 1 :radius 4
+                                                     :family "Sans" :px 13 :weight normal :ring "#123456"))))
+    (should (string-match-p "<rect [^>]*rx=\"4\"[^>]*stroke=\"#123456\"" svg))
+    (should (string-match-p "<text [^>]*fill=\"currentColor\"[^>]*>&lt;</text>" svg))
+    (should (string-match-p "font-size=\"13px\"" svg))
+    (should (string-match-p "width=\"20\" height=\"18\"" svg)))
+  (cl-letf (((symbol-function 'display-graphic-p) #'always)
+            ((symbol-function 'image-type-available-p) #'always)
+            ((symbol-function 'drgnx-palette--keycap-image) (lambda (name) (list 'image :type 'svg :name name))))
+    (let ((cap (drgnx-palette-row-keycap "Ctrl")))
+      (should (equal "Ctrl" (substring-no-properties cap)))
+      (should (eq 'image (car (get-text-property 0 'display cap))))
+      (should-not (memq 'drgnx-keycap (drgnx-look-palette-test--faces (get-text-property 0 'face cap)))))
+    (let ((ann (drgnx-palette--annotation "Tests" nil "C-; f")))
+      (should (cl-some (lambda (i) (equal "Ctrl" (plist-get (cdr-safe (get-text-property i 'display ann)) :name)))
+                       (number-sequence 0 (1- (length ann)))))
+      (dotimes (i (length ann))
+        (should-not (memq 'drgnx-keycap (drgnx-look-palette-test--faces (get-text-property i 'face ann)))))))
+  (should (equal "Ctrl" (substring-no-properties (drgnx-palette-row-keycap "Ctrl"))))
+  (should (eq 'drgnx-keycap (get-text-property 0 'face (drgnx-palette-row-keycap "Ctrl")))))
+
+(ert-deftest drgnx-look-palette/a-hairline-under-the-input-row ()
+  "palette.html `.in': a 1 px hairline in the border colour runs the box's width under the input row: an overline on
+the line that follows it (a group's title, or the first row when the typed text leaves no titles), stretched to the
+right edge; the lines after it are untouched."
+  (let* ((rows (concat "\n" (propertize "Commands" 'face 'drgnx-palette-group) "\nRun Tests\nOther\n"))
+         (out (drgnx-palette-frame--hairline rows "#123456"))
+         (first-end (string-search "\n" out 1)))
+    (should (equal "\n" (substring out 0 1)))
+    (should (string-search "Commands" out))
+    (should (string-search "\nRun Tests\nOther\n" out))
+    (cl-loop for i from 1 below first-end
+             do (should (equal "#123456" (plist-get (cl-find-if (lambda (f) (and (consp f) (plist-get f :overline)))
+                                                                (drgnx-look-palette-test--faces
+                                                                 (get-text-property i 'face out)))
+                                                    :overline))))
+    (should (string-match-p "align-to right" (format "%S" (get-text-property (1- first-end) 'display out))))
+    (should-not (get-text-property (1+ first-end) 'face out))
+    (should (memq 'drgnx-palette-group (drgnx-look-palette-test--faces (get-text-property 1 'face out)))))
+  ;; the selected row first (no titles): its rounded fill keeps its edge, so no hairline crosses it
+  (let ((rows (concat "\n" (propertize "Run Tests" 'face '(vertico-current (:box (:line-width 1)))) "\nOther\n")))
+    (should (equal rows (drgnx-palette-frame--hairline rows "#123456")))))
+
+(ert-deftest drgnx-look-palette/rows-own-their-inset ()
+  "palette.html `.row' and `.it': a row's fill sits 6 logical pixels in and its text 8 more, inside the fill; a group
+title's text lines up with a row's.  The minibuffer the palette dresses has a `line-prefix' (the input row's inset),
+which would put every row in twice, so a candidate row and a group title start with an empty one of their own."
+  (load (expand-file-name "modules/extra/drgnx-completion" drgnx-dir) nil t)
+  (let* ((cand (let ((s (concat "Run Tests" "\n"))) (add-face-text-property 0 (length s) 'vertico-current t s) s))
+         (row (drgnx-completion--row cand t))
+         (other (drgnx-completion--row (copy-sequence "Run Test at Point\n") nil))
+         (title (drgnx-palette--group-title "Commands"))
+         (width (lambda (s i) (plist-get (cdr (memq 'space (flatten-tree (get-text-property i 'display s)))) :width))))
+    (dolist (s (list row other title))
+      (should (equal "" (get-text-property 0 'line-prefix s))))
+    (let ((pad (string-search "Run" row)))                      ; the pad: in the fill, before the text
+      (should (= pad 2))
+      (should (memq 'vertico-current (drgnx-look-palette-test--faces (get-text-property 1 'face row))))
+      (should (drgnx-look-palette-test--boxed-p (get-text-property 1 'face row)))
+      (should (= (funcall width row 1) (drgnx-px drgnx-palette-row-padding))))
+    (should (= (funcall width row 0) (drgnx-px drgnx-completion-row-inset)))
+    (should (= (funcall width other 0) (drgnx-px (+ drgnx-completion-row-inset drgnx-palette-row-padding))))))
+
+(ert-deftest drgnx-look-palette/the-input-row-owns-its-inset ()
+  "palette.html `.in': the search icon sits 14 logical pixels in, as a row's text.  The palette's input row brings its
+own inset, so the minibuffer it shows has no `line-prefix' (the echo box's dressing gives it the input row's inset as
+one), whichever of the two dresses it first."
+  (let ((win (selected-window)) (mode (window-parameter (selected-window) 'mode-line-format)))
+    (with-temp-buffer
+      (set-window-buffer win (current-buffer))
+      (insert "run te")
+      (unwind-protect
+          (progn (drgnx-look-echo--dress)                             ; the echo box first
+                 (should line-prefix)
+                 (drgnx-palette-frame--dress win)
+                 (should-not line-prefix)
+                 (drgnx-look-echo--undress)
+                 (drgnx-palette-frame--undress)
+                 (drgnx-palette-frame--dress win)                      ; the palette first
+                 (drgnx-look-echo--dress)
+                 (should-not line-prefix)
+                 (with-temp-buffer (drgnx-look-echo--dress)              ; another buffer keeps its inset
+                                   (should line-prefix)))
+        (drgnx-look-echo--undress)
+        (drgnx-palette-frame--undress)
+        (set-window-parameter win 'mode-line-format mode)))))
+
+(ert-deftest drgnx-look-palette/secondary-text-on-the-current-row-is-muted ()
+  "Pattern D, the look's contrast rule: on the current candidate, text in the subtle colour (a keycap, an
+annotation) is `drgnx-selected-secondary' (muted: subtle is 3.8:1 on the dark selection, 4.3 on the light); the
+candidate's own text keeps its face; other rows keep subtle.  Under each drgnx theme the face is at least 4.5:1 on
+the selection (7 in high contrast)."
+  (load (expand-file-name "modules/extra/drgnx-completion" drgnx-dir) nil t)
+  (load (expand-file-name "themes/drgnx-theme-gen" drgnx-dir) nil t)
+  (pcase-dolist (`(,theme . ,bar) '((drgnx-dark . 4.5) (drgnx-light . 4.5) (drgnx-high-contrast . 7.0)))
+    (unwind-protect
+        (progn
+          (mapc #'disable-theme custom-enabled-themes)
+          (load-theme theme t)
+          (let* ((cand (concat "Run Tests" (propertize "  C-; F" 'face 'drgnx-keycap)
+                               (propertize "  Tests" 'face 'completions-annotations) "\n"))
+                 (row (drgnx-completion--row (let ((s (copy-sequence cand)))
+                                               (add-face-text-property 0 (length s) 'vertico-current t s) s)
+                                             t))
+                 (other (drgnx-completion--row (copy-sequence cand) nil))
+                 (at (lambda (s text) (drgnx-look-palette-test--faces (get-text-property (string-search text s) 'face s)))))
+            (should (memq 'drgnx-selected-secondary (funcall at row "C-; F")))
+            (should (memq 'drgnx-selected-secondary (funcall at row "  Tests")))
+            (should-not (memq 'drgnx-selected-secondary (funcall at row "Run")))
+            (should-not (memq 'drgnx-selected-secondary (funcall at other "C-; F")))
+            (let ((ratio (drgnx-color-contrast (face-foreground 'drgnx-selected-secondary nil t)
+                                               (face-background 'drgnx-selected nil t))))
+              (should (>= ratio bar)))))
+      (mapc #'disable-theme custom-enabled-themes))))
+
+(ert-deftest drgnx-look-palette/a-row-is-icon-title-category-and-keys ()
+  "Pattern D: palette.html's row.  The shown row is the title without its category (the matched letters keep their
+faces) after an icon; the annotation is the category in the subtle colour and no doc; keycaps sit at the right edge;
+a group's title is the group's name in its own face (no count, no rule line)."
+  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil) (meta nil))
+    (drgnx-command-define 'look-palette-test-run :title "Run Tests in This File" :category "Tests"
+                          :doc "Run every test of the file." :command #'ignore)
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (_prompt table &rest _) (setq meta (completion-metadata "" table nil)) "")))
+      (drgnx-palette))
+    (let* ((label "Tests: Run Tests in This File")
+           (lit (concat (propertize "Tests: Run" 'face 'completions-common-part) " Tests in This File"))
+           (group (completion-metadata-get meta 'group-function))
+           (shown (funcall group lit t))
+           (note (funcall (completion-metadata-get meta 'annotation-function) label)))
+      (should (string-suffix-p "Run Tests in This File" shown))
+      (should-not (string-search "Tests: " shown))
+      (should (eq 'completions-common-part (get-text-property (string-search "Run" shown) 'face shown)))
+      (should (string-search "Tests" note))
+      (should-not (string-search "every test" note))
+      (should (memq 'drgnx-text-subtle (ensure-list (get-text-property (string-search "Tests" note) 'face note))))
+      (should (equal "Commands" (string-trim (substring-no-properties (funcall group label nil)))))
+      (let ((title (funcall group label nil)))
+        (should (eq 'drgnx-palette-group (get-text-property (string-search "Commands" title) 'face title))))))
+  ;; keys: right-aligned caps on a graphical frame
+  (let ((note (cl-letf (((symbol-function 'display-graphic-p) #'always))
+                (drgnx-palette--annotation "Tests" nil "C-; f"))))
+    (should (string-search "Ctrl" note))
+    (should (seq-some (lambda (i) (eq :align-to (car-safe (cdr-safe (get-text-property i 'display note)))))
+                      (number-sequence 0 (1- (length note)))))))
+
+(ert-deftest drgnx-look-palette/a-command-can-name-its-own-row-icon ()
+  "LOOK-FIX-PALETTE-CMD-ICONS-1: `:icon' beats the category's icon; without one the category's stands."
+  (let ((drgnx-palette--cands '(("Settings: Undo" . ic-a) ("Settings: Other" . ic-b))))
+    (cl-letf (((symbol-function 'drgnx-look-icon) (lambda (name &rest _) (format "<%s>" name)))
+              ((symbol-function 'drgnx-commands-get)
+               (lambda (id) (drgnx-cmd--make :id id :icon (and (eq id 'ic-a) 'rotate-ccw)))))
+      (should (string-prefix-p "<rotate-ccw>" (drgnx-palette--command-shown "Settings: Undo")))
+      (should (string-prefix-p "<settings>" (drgnx-palette--command-shown "Settings: Other"))))))
+
+(provide 'look-palette-test)
+;;; look-palette-test.el ends here

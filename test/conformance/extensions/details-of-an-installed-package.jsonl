@@ -1,0 +1,13 @@
+{"scenario": "extensions/details-of-an-installed-package", "requires": ["v1"], "doc": "extensions/details merges the lock into a catalog package: its state and why, its requirements, who needs it, its cached readme as text; an unknown id is invalid-params."}
+{"do": "root"}
+{"do": "write_file", "path": "$ROOT/cache/drgnx/extensions/catalog.json", "text": "{\"version\":1,\"archives\":[{\"name\":\"gnu\",\"url\":\"https://elpa.gnu.org/packages/\",\"signed\":true}],\"packages\":[{\"name\":\"dash\",\"summary\":\"A modern list API\",\"keywords\":[\"lists\"],\"maintainer\":\"Someone\",\"url\":\"https://example.invalid/dash\",\"versions\":[{\"archive\":\"gnu\",\"version\":\"2.19\",\"reqs\":[]}],\"candidate\":{\"archive\":\"gnu\",\"version\":\"2.19\"}},{\"name\":\"magit\",\"summary\":\"A Git porcelain\",\"versions\":[{\"archive\":\"gnu\",\"version\":\"4.1\",\"reqs\":[[\"dash\",\"2.19\"]]}],\"candidate\":{\"archive\":\"gnu\",\"version\":\"4.1\"}}]}"}
+{"do": "write_file", "path": "$ROOT/cache/drgnx/extensions/readme/gnu/dash-readme.txt", "text": "# dash\n#+begin_src elisp\n(delete-file \"~/x\")\n#+end_src\n"}
+{"do": "write_file", "path": "$CONFIG/drgnx.lock.eld", "text": "(:version 1 :packages ((dash :version \"2.19\" :archive \"gnu\" :kind tar :sha256 \"aa\" :requires nil :verified t) (magit :version \"4.1\" :archive \"gnu\" :kind tar :sha256 \"bb\" :requires ((dash \"2.19\")) :wanted user)))"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "extensions/details", "params": {"id": "pkg:dash"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"row": {"id": "pkg:dash", "state": "dependency", "signed": "signed", "version": "2.19", "why": [{"needed-by": ["magit"]}]}, "requires": [], "required_by": ["magit"], "maintainer": "Someone", "url": "https://example.invalid/dash", "keywords": ["lists"], "readme": "# dash\n#+begin_src elisp\n(delete-file \"~/x\")\n#+end_src\n"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "extensions/details", "params": {"id": "pkg:magit"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"row": {"state": "installed", "why": ["you"]}, "requires": [{"name": "dash", "version": "2.19"}], "required_by": [], "readme": "$absent"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "extensions/details", "params": {"id": "pkg:nothing"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "error": {"code": "invalid-params"}}}

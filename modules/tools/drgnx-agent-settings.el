@@ -45,7 +45,9 @@
 (defvar drgnx-wb--owned)                ; drgnx-wb.el: windows the running code may move from a timer
 (defvar drgnx-agents-use-gateway)       ; drgnx-agents.el
 (defvar drgnx-ai-gateway-kinds)         ; drgnx-ai.el
-(defvar drgnx-agents-ui--session)       ; drgnx-agents-ui.el: the session of a transcript buffer
+(defvar drgnx-agent-panel--session)      ; drgnx-agent-panel.el: the hub id of a panel's session
+(declare-function drgnx-agent-session-remote "drgnx-agents")
+(declare-function drgnx-agents-sessions "drgnx-agents")
 
 (defface drgnx-agent-settings-heading '((t :inherit bold)) "Headings of an agent settings page." :group 'drgnx)
 (defface drgnx-agent-settings-dim '((t :inherit shadow)) "Details on an agent settings page." :group 'drgnx)
@@ -289,7 +291,7 @@ stable across updates), which connects to the hub as a service and is ext:KIND:P
             "  ")
     (drgnx-agent-settings--button (if on "[Remove drgnx]" "[Add drgnx]") #'drgnx-agent-settings-report
                                   (if on "Take the coordination server out of this agent's settings"
-                                    "Add the coordination server: the agent then shows in the Work cockpit"))
+                                    "Add the coordination server: the agent then shows in the Work space"))
     (insert "\n")))
 
 (defun drgnx-agent-settings--insert-problems ()
@@ -602,11 +604,34 @@ no longer what the page shows (what was confirmed must be what runs)."
             drgnx-agent-settings--root (drgnx-agent-settings--usable-root root)
             ;; never the caller's (a remote buffer's would be reached for every relative name)
             default-directory (or drgnx-agent-settings--root (expand-file-name "~/")))
-      (drgnx-agent-settings--read)
-      (drgnx-agent-settings--render)
-      (goto-char (point-min)))
+      (drgnx-agent-settings--read-then buffer
+                                       (lambda ()
+                                         (drgnx-agent-settings--render)
+                                         (goto-char (point-min)))))
     (pop-to-buffer buffer)
     buffer))
+
+(defun drgnx-agent-settings--read-then (buffer then &optional keep)
+  "Read the agent's settings for BUFFER's page, then call THEN in BUFFER.  Claude Code's user file (`.claude.json', big,
+rewritten every few seconds) is read off the main thread when Nidhogg's workers are on: THEN runs when it lands, and
+the page says it is reading until then (KEEP: the page stays as it is); otherwise THEN runs before this returns.  Only
+the page's open and Refresh come here: what an edit changes is re-read at once (`drgnx-agent-config-read-text-async')."
+  (let ((done nil))
+    (cl-flet ((finish (text)
+                (when (buffer-live-p buffer)
+                  (with-current-buffer buffer
+                    (let ((drgnx-agent-config--preread
+                           (and text (list (cons (drgnx-agent-config-claude-json-file) text)))))
+                      (drgnx-agent-settings--read))
+                    (funcall then)))
+                (setq done t)))
+      (if (and (eq (buffer-local-value 'drgnx-agent-settings--kind buffer) 'claude)
+               (drgnx-agent-config-read-text-async (drgnx-agent-config-claude-json-file) #'finish))
+          (unless (or done keep)                      ; asynchronous: the page waits for the text
+            (with-current-buffer buffer              ; a new page is empty; one shown before keeps its text meanwhile
+              (when (= (point-min) (point-max))
+                (let ((inhibit-read-only t)) (insert "Reading the settings…\n")))))
+        (unless done (finish nil))))))
 
 (defun drgnx-agent-settings--page ()
   (unless (derived-mode-p 'drgnx-agent-settings-mode) (user-error "Not an agent settings page"))
@@ -640,10 +665,12 @@ no longer what the page shows (what was confirmed must be what runs)."
           ((string-match-p "kimi" program) 'kimi))))
 
 (defun drgnx-agent-settings--session-at-point ()
-  "The agent session of this transcript, or of this row of the Agents list, or nil."
-  (cond ((and (derived-mode-p 'tabulated-list-mode) (fboundp 'drgnx-agent-session-p))
-         (let ((id (tabulated-list-get-id))) (and (drgnx-agent-session-p id) id)))
-        ((bound-and-true-p drgnx-agents-ui--session))))
+  "The agent session of this panel, or of this row of the Agents list, or nil."
+  (cond ((derived-mode-p 'drgnx-agent-panel-list-mode)
+         (when-let* ((id (get-text-property (line-beginning-position) 'drgnx-agent-panel-list-id)))
+           (seq-find (lambda (s) (equal (drgnx-agent-session-remote s) id)) (drgnx-agents-sessions))))
+        ((bound-and-true-p drgnx-agent-panel--session)
+         (seq-find (lambda (s) (equal (drgnx-agent-session-remote s) drgnx-agent-panel--session)) (drgnx-agents-sessions)))))
 
 (defun drgnx-agent-settings--of-session (session)
   "(KIND ROOT) for SESSION, or nil when its profile is not one of the four agents."
@@ -688,7 +715,8 @@ Interactively: the agent of the session at point (in the Agents list or a transc
 (defun drgnx-agent-settings-refresh ()
   "Read the agent's files again and redraw the page (nothing is started)."
   (interactive)
-  (drgnx-agent-settings--refresh-buffer (drgnx-agent-settings--page)))
+  (let ((page (drgnx-agent-settings--page)))
+    (drgnx-agent-settings--read-then page (lambda () (drgnx-agent-settings--redraw)) t)))
 
 (defun drgnx-agent-settings-other ()
   "Show another agent's settings, for the same project."
@@ -965,7 +993,7 @@ The answer may hold a secret (a token in a command line or URL): it is kept out 
 
 (defun drgnx-agent-settings-report ()
   "Add the `drgnx' MCP server to this agent's user settings, or take it out when it is there: an agent with it shows
-in the Work cockpit.  Asks first, names the file, and writes no token or key (the server needs none)."
+in the Work space.  Asks first, names the file, and writes no token or key (the server needs none)."
   (interactive)
   (drgnx-agent-settings--page)
   (let ((kind drgnx-agent-settings--kind)
@@ -1034,7 +1062,7 @@ for every OpenRouter route, saved in settings.el; it applies through drgnx's gat
   (drgnx-command-define 'agent-settings :category "Agents" :title "Settings" :command #'drgnx-agent-settings
                         :doc "An agent's routes, MCP servers, hooks and skills: Claude Code, Codex, Gemini, Kimi Code")
   (drgnx-command-define 'agent-settings-here :category "Agents" :title "Settings of This Agent"
-                        :command #'drgnx-agent-settings-here :map '(drgnx-agents-ui . drgnx-agents-list-mode-map)
+                        :command #'drgnx-agent-settings-here :map '(drgnx-agent-panel-list . drgnx-agent-panel-list-mode-map)
                         :doc "The settings page of the session's agent, for its project"
                         :when #'drgnx-agent-settings--session-at-point)
   (pcase-dolist (`(,id ,title ,fn ,doc)
@@ -1050,13 +1078,37 @@ for every OpenRouter route, saved in settings.el; it applies through drgnx's gat
                    (agent-settings-openrouter "OpenRouter Restrictions…" drgnx-agent-settings-openrouter
                                               "Which providers OpenRouter may use for the agents, and whether they may keep data")
                    (agent-settings-report "Report to drgnx" drgnx-agent-settings-report
-                                          "Add the drgnx coordination server to this agent (or take it out): it then shows in the Work cockpit")
+                                          "Add the drgnx coordination server to this agent (or take it out): it then shows in the Work space")
                    (agent-settings-new-skill "New Skill…" drgnx-agent-settings-new-skill "A SKILL.md with its name and description")
                    (agent-settings-open-file "Open Its File" drgnx-agent-settings-open-file "The file this line comes from")
                    (agent-settings-other "Other Agent…" drgnx-agent-settings-other "Another agent's settings, same project")))
     (drgnx-command-define id :category "Agent Settings" :title title :command fn :doc doc
                           :map '(drgnx-agent-settings . drgnx-agent-settings-mode-map)
                           :when #'drgnx-agent-settings--on-page-p)))
+
+;;;; The Pair row of the matrix
+
+(defconst drgnx-agent-settings-pair-row
+  '(chat.project-edit "Pair: a chat edits your checkout"
+                      "A chat in your project edits your own files live, through the editor (pair mode).  Its own edit \
+tools and commands still cannot write the checkout; the chat's code.edit stays never.")
+  "The matrix row behind pair mode: (ACTION TITLE EXPLANATION).")
+
+(defun drgnx-agent-settings-project-edit-explain (verdict preset &optional column)
+  "What VERDICT of `chat.project-edit' means for pair mode, under PRESET.
+COLUMN is the matrix column that set it, (:agent NAME), (:provider NAME) or (:role ROLE); nil: the preset did."
+  (pcase verdict
+    ('never
+     (concat "chat.project-edit is never: "
+             (pcase column
+               (`(:agent ,name) (format "the column of agent %s says so" name))
+               (`(:provider ,name) (format "the column of provider %s says so" name))
+               (`(:role ,role) (format "the %s column says so" role))
+               (_ (format "the %s preset says so" (capitalize (symbol-name preset)))))
+             "; the Pair toggle is off and cannot be turned on"))
+    ('ask "chat.project-edit is ask: you may turn Pair on for a chat in your project, and off again at any time")
+    ('allow "chat.project-edit is allow: chats in your project start paired; you may turn Pair off for one")
+    (_ (format "chat.project-edit: %s" verdict))))
 
 (drgnx-module-define 'tools/agent-settings
                      :doc "Agents: Settings — routes, MCP servers, hooks and skills of Claude Code, Codex, Gemini and Kimi Code"

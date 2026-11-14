@@ -1,0 +1,8 @@
+{"scenario": "term/exit-event", "requires": ["v1", "linux"], "doc": "A terminal whose program ends sends term/exit with its exit code to the editor that opened it, even when it ended before the hub first connected to its worker."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "term/open", "params": {"dir": "/", "command": ["/bin/sh", "-c", "exit 3"], "env": [["PATH", "/usr/bin:/bin"]], "cols": 40, "rows": 5, "cell_px": [8, 16], "class": "gui-1"}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"id": "$capture:t", "view": "$capture:tv"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "term/exit", "data": {"id": "$t", "code": 3, "signal": null}}, "within_ms": 10000}

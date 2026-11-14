@@ -1,0 +1,6 @@
+{
+  "name": "deny-rm-hook",
+  "version": "0.1.0",
+  "hooks": [{"point": "before-tool", "verdicts": ["deny"], "filter": {"tool_kinds": ["execute"]},
+             "deadline_ms": 500}]
+}

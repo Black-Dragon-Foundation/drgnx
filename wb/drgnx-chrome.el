@@ -5,7 +5,7 @@
 ;;; Commentary:
 ;; Every window's chrome is decided by its role, never by its buffer (invariant I3): an editor
 ;; window has a tab line (the buffers shown in it, in the order they were opened — switching
-;; never reorders them), a breadcrumb header (project › folders › file, ● when unsaved) and a
+;; never reorders them), a breadcrumb header (folders › file from the project's root, ● when unsaved) and a
 ;; mode line; a dock section has its title only; the panel and the right dock have their tab row
 ;; only.  The chrome lives in window parameters, which win over any mode's own
 ;; `header-line-format', `tab-line-format' or `mode-line-format', so no buffer can make a
@@ -19,18 +19,29 @@
 (require 'project)
 (require 'tab-line)                     ; the tab faces we inherit
 (require 'drgnx-area)
+(require 'drgnx-faces)                  ; `drgnx-look-hover-control', `drgnx-hover-row'
+(require 'drgnx-pixels)                 ; rows of an exact height, `drgnx-look-pixel-width'
+(require 'drgnx-icons)                  ; `drgnx-look-icon'
+(require 'drgnx-timer)                  ; the breadcrumb's symbol, on idle
+(require 'add-log)                      ; `add-log-current-defun'
 (declare-function drgnx-face-glyph "drgnx-face")
+(declare-function glitnir-active-p "glitnir")
+(declare-function drgnx-look-density-value "drgnx-look-density" (key &optional density))
+(declare-function drgnx-groups-split-right "drgnx-groups")
 
-(defface drgnx-chrome-tab '((t :inherit (shadow tab-line-tab-inactive) :height 1.0 :box nil))
-  "A tab in an editor's tab line: dimmed, at the text's height (the theme's `tab-line' is smaller)." :group 'drgnx)
-(defface drgnx-chrome-tab-current '((t :inherit tab-line-tab-current :height 1.0 :box nil :weight bold))
-  "The shown tab of an editor group that is not the active one." :group 'drgnx)
-(defface drgnx-chrome-tab-active '((t :inherit (link tab-line-tab-current) :height 1.0 :box nil :weight bold
-                                      :underline nil :overline t))
-  "The shown tab of the active editor group: the theme's link colour, overlined." :group 'drgnx)
+;; No `:height' in the tab faces: a relative 1.0 scales by one, and costs a font spec copy at every run of the tab line.
+(defface drgnx-chrome-tab '((t :inherit (shadow tab-line-tab-inactive) :box nil))
+  "A tab in an editor's tab line: dimmed." :group 'drgnx)
+(defface drgnx-chrome-tab-current '((t :inherit (drgnx-text-muted tab-line-tab-current) :box nil))
+  "The shown tab of an editor group that is not the active one: on the editor's colour, muted." :group 'drgnx)
+(defface drgnx-chrome-tab-active '((t :inherit tab-line-tab-current :box nil))
+  "The shown tab of the active editor group: it joins the editor, in the body text's colour (the look, §3.8)."
+  :group 'drgnx)
 (defface drgnx-chrome-tab-hover '((t :inherit tab-line-highlight))
   "The tab (or its ×) under the pointer; only that one." :group 'drgnx)
-(defface drgnx-chrome-crumb '((t :inherit shadow)) "The folders of a breadcrumb." :group 'drgnx)
+(defface drgnx-chrome-tab-preview '((t :slant italic))
+  "A tab that is only there while it is shown (the scratch buffer, the start page): italic." :group 'drgnx)
+(defface drgnx-chrome-crumb '((t :inherit (drgnx-text-subtle shadow))) "The folders of a breadcrumb." :group 'drgnx)
 
 (defun drgnx-chrome--role (w)
   "W's chrome role: `editor', `dock', `area', `lane', or nil (left alone).
@@ -48,6 +59,33 @@ role table has its `:chrome' (`drgnx-state-define-role'), anything else is left 
 (defun drgnx-chrome-tabs (w)
   "The buffers W has shown, in the order they were opened (live ones)."
   (seq-filter #'buffer-live-p (window-parameter w 'drgnx-tabs)))
+
+(defun drgnx-chrome-tab-p (b)
+  "Is B a tab of an editor window of the selected frame?"
+  (let ((found nil))
+    (dolist (w (window-list nil 'nomini) found)
+      (when (memq b (window-parameter w 'drgnx-tabs)) (setq found t)))))
+
+;; A preview (VS Code's): a file opened only to look at it (the Explorer's single click) is an italic tab that the
+;; next preview replaces, until it is edited or opened to work in.  W's parameter `drgnx-preview' is (BUFFER . TICK):
+;; BUFFER is a preview while its `buffer-modified-tick' is still TICK.
+(defun drgnx-chrome-preview-p (w b)
+  "Is B the preview tab of W (opened as one, not edited since)?"
+  (let ((p (window-parameter w 'drgnx-preview)))
+    (and (eq (car-safe p) b) (buffer-live-p b) (eql (cdr p) (buffer-modified-tick b)))))
+
+(defun drgnx-chrome-note-preview (b preview)
+  "B was just shown in an editor window: as a PREVIEW (it replaces the window's preview tab, if that is still one),
+or opened to work in (it is kept as a normal tab).  Called by the Explorer's opening commands."
+  (when-let* ((w (get-buffer-window b)))
+    (let ((old (car-safe (window-parameter w 'drgnx-preview))))
+      (cond (preview
+             (when (and old (not (eq old b)) (drgnx-chrome-preview-p w old))
+               (set-window-parameter w 'drgnx-tabs (remq old (window-parameter w 'drgnx-tabs)))
+               (set-window-parameter w 'drgnx-tab-history (remq old (window-parameter w 'drgnx-tab-history))))
+             (set-window-parameter w 'drgnx-preview (cons b (buffer-modified-tick b))))
+            ((eq old b) (set-window-parameter w 'drgnx-preview nil))))
+    (drgnx-chrome-apply (window-frame w) t)))
 
 (defcustom drgnx-chrome-transient-tabs "\\`\\*scratch\\*\\'\\|\\*drgnx start\\*"
   "Buffers that are a tab only while shown (like VS Code's welcome tab): `*scratch*' and the start page."
@@ -95,6 +133,10 @@ Called on the bus's edges and by commands — never while drawing, so a buffer s
     (drgnx-chrome--record-closed-position w b)
     (drgnx-chrome--close w b)))
 
+(defvar-local drgnx-chrome-tab-icon nil
+  "The icon name (an `etc/icons' name, as `server') this buffer's tab shows; nil: the file kind of its file's or
+buffer's name (`drgnx-look-file-icon-name').  A remote terminal sets `server'.")
+
 (defvar drgnx-chrome--tab-map
   (let ((m (make-sparse-keymap)))
     (define-key m [tab-line mouse-1] #'drgnx-chrome--select-tab)
@@ -109,23 +151,273 @@ Called on the bus's edges and by commands — never while drawing, so a buffer s
 ASCII form on a terminal that is not UTF-8; × without ui/face."
   (or (and (fboundp 'drgnx-face-glyph) (drgnx-face-glyph 'close (window-frame w))) "×"))
 
+(defconst drgnx-chrome--breadcrumb-row 26 "The breadcrumb row's height in logical pixels on a graphical frame.")
+(defconst drgnx-chrome--tab-gap 2 "Logical pixels between two tabs of a graphical frame (a space on a terminal).")
+(defconst drgnx-chrome--tab-top-radius 7 "The radius of a tab's top corners where the compositor can round them.")
+(defconst drgnx-chrome--tab-lift 4 "Logical pixels of the row above the shown tab (`.tabs' 34, `.tab' 30).")
+(defconst drgnx-chrome--tab-row-pad 6 "Logical pixels before the first tab and after the buttons (`.tabs' padding).")
+
+(defun drgnx-chrome--px (n frame)
+  "A stretch of N logical pixels on FRAME (the `display' value)."
+  `(space :width (,(drgnx-px n frame))))
+
+(defun drgnx-chrome--tab-rows (w)
+  "(ROW BOX FRAME) for W's tab line on a graphical frame, else nil: ROW is the `tab-row' height in device pixels,
+BOX the room above and below a tab's text in a tab four logical pixels shorter than the row (the text sits in the
+middle of the tab, which is at the bottom of the row)."
+  (let ((frame (window-frame w)))
+    (when (display-graphic-p frame)
+      (let* ((scale (drgnx-pixels-scale frame))
+             (row (round (* scale (if (fboundp 'drgnx-look-density-value) (drgnx-look-density-value 'tab-row) 34))))
+             (tab (- row (drgnx-px drgnx-chrome--tab-lift frame))))
+        (list row (drgnx-pixels-box-height 'drgnx-chrome-tab tab frame) frame)))))
+
+(defun drgnx-chrome--tab-paint (rows)
+  "The anonymous faces of a graphical tab row (ROWS: `drgnx-chrome--tab-rows'), read from the theme when the line is
+made: (LIFT . RULE).  LIFT is the shown tab's box:
+`drgnx-chrome--tab-lift' pixels of the row's colour above it (a box spans its row), none at its sides, its bottom open
+and its top corners rounded where the compositor rounds boxes.  RULE is the hairline under the rest of the row: an
+underline in `drgnx-border-subtle' on the row's last pixels, or nil when the theme gives that face no colour."
+  (let* ((frame (nth 2 rows))
+         (row-bg (face-background 'drgnx-chrome-tab frame t))
+         (rule (face-foreground 'drgnx-border-subtle frame t)))
+    (cons (list :box `(:line-width (0 . ,(drgnx-px drgnx-chrome--tab-lift frame))
+                                   ,@(if (stringp row-bg) (list :color row-bg) '(:style flat-button))
+                                   ,@(when (and (fboundp 'glitnir-active-p) (glitnir-active-p))   ; drawing, not just loaded
+                                       `(:corner-radius ,drgnx-chrome--tab-top-radius :open (bottom)))))
+          ;; `:position' 0: on the row's last pixels (a number is pixels above the descent line), the font's thickness
+          (and (stringp rule) (list :underline `(:color ,rule :position 0))))))
+
+(defun drgnx-chrome--tab (w b shown active rows &optional paint)
+  "The text of B's tab in W's tab line.  SHOWN: B is the window's buffer; ACTIVE: W is the active editor group;
+ROWS: `drgnx-chrome--tab-rows'; PAINT: `drgnx-chrome--tab-paint' on a graphical frame.  The whole tab carries one
+`mouse-face' value of its own (a fresh list, not `eq' to another tab's: Emacs lights the run of text whose value is
+`eq') unless it is shown, and its close mark is drawn in the row's colour until the pointer is on the tab
+\(`drgnx-look-hover-control', decided by W's frame: a terminal's tabs always show it, whichever frame is selected
+when the tab lines are made).  On a graphical frame the tab is laid out in pixels as window-dark.html's `.tab': 10
+before, the icon and 7, the name, 7, an 18 px slot with the 14 px × (or the dot of a modified file), 8 after; the
+shown tab is lifted off the row (PAINT's LIFT), the others are on its hairline (PAINT's RULE)."
+  (let* ((face (cond ((not shown) 'drgnx-chrome-tab) (active 'drgnx-chrome-tab-active) (t 'drgnx-chrome-tab-current)))
+         (face (if (or (string-match-p drgnx-chrome-transient-tabs (buffer-name b)) (drgnx-chrome-preview-p w b))
+                   (list 'drgnx-chrome-tab-preview face)
+                 face))
+         (frame (window-frame w))
+         (mouse (unless shown (list 'drgnx-hover-row)))
+         (modified (and (buffer-file-name b) (buffer-modified-p b)))
+         (tab (lambda (s) (propertize s 'face face 'help-echo "Show; middle-click closes" 'local-map drgnx-chrome--tab-map)))
+         (close (lambda (s) (propertize s 'help-echo "Close this tab" 'local-map drgnx-chrome--close-map)))
+         (s (if rows
+                (let ((icon (and shown (drgnx-look-icon (or (buffer-local-value 'drgnx-chrome-tab-icon b)
+                                                            (drgnx-look-file-icon-name (or (buffer-file-name b) (buffer-name b))))
+                                                        face 14)))
+                      (pad (lambda (n) (propertize " " 'display (drgnx-chrome--px n frame)))))
+                  (concat
+                   (funcall tab (concat (funcall pad 10)
+                                        (and icon (not (string-empty-p icon)) (concat icon (funcall pad 7)))
+                                        (drgnx-chrome--text (buffer-name b))
+                                        (funcall pad 7)))
+                   (funcall close
+                            (concat (propertize (funcall pad 2) 'face face)
+                                    (if modified
+                                        (propertize "●" 'face (cons 'drgnx-text-muted (ensure-list face)))
+                                      (drgnx-look-hover-control (drgnx-look-icon 'x nil 14) shown frame))
+                                    (propertize (funcall pad 2) 'face face)))
+                   (funcall close (propertize (funcall pad 8) 'face face))))
+              (concat
+               (funcall tab (format "  %s" (drgnx-chrome--text (buffer-name b))))
+               (when modified (propertize " ●" 'face (cons 'drgnx-text-muted (ensure-list face))
+                                          'help-echo "Show; middle-click closes" 'local-map drgnx-chrome--tab-map))
+               (funcall tab " ")
+               (funcall close (drgnx-look-hover-control (drgnx-chrome--close-glyph w) shown frame))
+               (funcall close (propertize "  " 'face face))))))
+    (add-text-properties 0 (length s) (list 'drgnx-buffer b) s)
+    (when mouse (add-text-properties 0 (length s) (list 'mouse-face mouse) s))
+    (when-let* ((extra (if shown (car paint) (cdr paint)))) (add-face-text-property 0 (length s) extra nil s))
+    s))
+
+(defvar drgnx-chrome--buttons (make-hash-table :test #'eq :weakness 'key)
+  "FRAME → [BOX GENERATION CHAR-WIDTH CHAR-HEIGHT RULE ICONS BUTTONS WIDTH]: the tab lines' buttons on FRAME and
+their measured width, made for a row whose text has BOX pixels above and below, the fonts of
+`drgnx-pixels-generation', the frame's character cell (a zoom or a scale moves it), the hairline RULE (the face of
+`drgnx-chrome--tab-paint') and the `drgnx-look-icons' setting.  A tab line is made again at every tab switch, and the
+buttons' keymaps and pixel measure cost more than all its tabs.  Weak on the frame.")
+
+(defvar drgnx-chrome-tab-row-function nil
+  "A function of an editor window giving a string drawn at the right of its tab row, before the split and more
+buttons (the debug toolbar docked), or nil.  It runs when the tab line is made and answers from cached state; its
+string is part of the line's key (`drgnx-chrome--tab-line-key'), so a new one is drawn at the next `drgnx-chrome-apply'.")
+
+(defun drgnx-chrome--tab-row-extra (w)
+  "What `drgnx-chrome-tab-row-function' puts in W's tab row, or nil."
+  (and drgnx-chrome-tab-row-function (funcall drgnx-chrome-tab-row-function w)))
+
+(defun drgnx-chrome--tab-buttons (w rows rule)
+  "The split and more buttons at the right end of W's tab line on a graphical frame (ROWS: `drgnx-chrome--tab-rows';
+RULE: the hairline's face or nil), made once per frame and size (`drgnx-chrome--buttons'), after what
+`drgnx-chrome-tab-row-function' adds."
+  (let* ((frame (nth 2 rows)) (box (nth 1 rows))
+         (kept (gethash frame drgnx-chrome--buttons))
+         (made (if (and kept (eql (aref kept 0) box) (eql (aref kept 1) drgnx-pixels-generation)
+                        (eql (aref kept 2) (frame-char-width frame)) (eql (aref kept 3) (frame-char-height frame))
+                        (equal (aref kept 4) rule) (eq (aref kept 5) (bound-and-true-p drgnx-look-icons)))
+                   kept
+                 (puthash frame (drgnx-chrome--tab-buttons-make frame box rule) drgnx-chrome--buttons)))
+         (extra (let ((s (drgnx-chrome--tab-row-extra w))) (and s (copy-sequence s))))
+         (extra-px (if extra (drgnx-look-pixel-width extra 'drgnx-chrome-tab) 0))
+         (fringe (or (nth 1 (window-fringes w)) 0))
+         (to (propertize " " 'face 'drgnx-chrome-tab
+                         'display `(space :align-to (- right (,(max 0 (- (+ (aref made 7) extra-px) fringe))))))))
+    (when rule (add-face-text-property 0 1 rule nil to))
+    (when extra
+      (add-face-text-property 0 (length extra) 'drgnx-chrome-tab t extra)
+      (when rule (add-face-text-property 0 (length extra) rule nil extra)))
+    (concat to extra (aref made 6))))
+
+(defun drgnx-chrome--tab-buttons-make (frame box rule)
+  "The entry of `drgnx-chrome--buttons' for FRAME: window-dark.html's `.tabs .more', the split and more buttons (24 px,
+a 16 px icon, 2 px apart, the row's 6 px after them), on the hairline RULE, for a row whose text has BOX pixels above
+and below, and their width."
+  (let* ((face '(drgnx-text-subtle drgnx-chrome-tab))
+         (pad (lambda (n) (propertize " " 'face face 'display (drgnx-chrome--px n frame))))
+         (button (lambda (icon fallback help command)
+                   (let* ((i (drgnx-look-icon icon face 16))
+                          (s (concat (funcall pad 4) (if (string-empty-p i) (propertize fallback 'face face) i) (funcall pad 4))))
+                     (add-text-properties 0 (length s) (list 'help-echo help 'mouse-face (list 'drgnx-hover-row)
+                                                             'local-map (let ((m (make-sparse-keymap)))
+                                                                          (define-key m [tab-line mouse-1] command)
+                                                                          m))
+                                          s)
+                     s)))
+         (buttons (concat (funcall button 'panel-right "[]" "Split the editor right" #'drgnx-chrome-split-click)
+                          (funcall pad 2)
+                          (funcall button 'ellipsis "..." "Tabs of this group" #'drgnx-chrome-switch-tab-click)
+                          (funcall pad drgnx-chrome--tab-row-pad)))
+         (width (drgnx-look-pixel-width buttons 'drgnx-chrome-tab)))
+    (when rule (add-face-text-property 0 (length buttons) rule nil buttons))
+    (vector box drgnx-pixels-generation (frame-char-width frame) (frame-char-height frame) rule
+            (bound-and-true-p drgnx-look-icons) buttons width)))
+
+(defun drgnx-chrome-switch-tab-click (event)
+  "A click on the overflow button: choose one of the group's tabs."
+  (interactive "e")
+  (with-selected-window (posn-window (event-start event)) (call-interactively #'drgnx-chrome-switch-tab)))
+
+(defun drgnx-chrome-split-click (event)
+  "A click on the split button: a new editor group to the right, same file."
+  (interactive "e")
+  (with-selected-window (posn-window (event-start event))
+    (when (fboundp 'drgnx-groups-split-right) (call-interactively #'drgnx-groups-split-right))))
+
+(defun drgnx-chrome-switch-tab ()
+  "Show one of this editor group's tabs, chosen by name."
+  (interactive)
+  (let* ((tabs (drgnx-chrome-tabs (selected-window)))
+         (names (mapcar (lambda (b) (cons (buffer-name b) b)) tabs))
+         (pick (and names (completing-read "Tab: " names nil t))))
+    (when pick
+      (set-window-buffer (selected-window) (cdr (assoc pick names)))
+      (drgnx-chrome-apply nil t))))
+
+(defvar drgnx-chrome--tab-lines (make-hash-table :test 'eq :weakness 'key)
+  "Window -> [LOOK TABS LINE]: W's tab row as last made.  LOOK is `drgnx-chrome--tab-look''s vector, TABS a list of
+\(BUFFER . [NAME FILE MODIFIED SHOWN ACTIVE PREVIEW LOOK STRING]), one per tab in order, LINE the joined line.  Weak on
+the window: one entry per live window.")
+
+(defun drgnx-chrome--tab-look (w old)
+  "OLD when W's row is drawn with the same settings as when OLD was made, else a new vector of them: the frame, its
+rows key, Glitnir, the frame's kind and character size, the enabled themes and the row's colour (a switch enables the
+new theme before its faces reach the frame, so a line made in between kept the old one), the glyphs, icons and fonts
+generation, the transient-tab pattern, the window's width and right fringe and the row's extra text.  Compared by
+`eq' (`equal' for the colour and the extra text): allocates only `window-fringes'' list."
+  (let* ((f (window-frame w))
+         (now (lambda ()
+                (vector f (drgnx-chrome--rows-key f) (and (fboundp 'glitnir-active-p) (glitnir-active-p) t)
+                        (drgnx-state-frame-kind f) (frame-char-width f) (frame-char-height f) custom-enabled-themes
+                        (face-background 'drgnx-chrome-tab f t) (bound-and-true-p drgnx-face-glyphs)
+                        (bound-and-true-p drgnx-look-icons) drgnx-pixels-generation drgnx-chrome-transient-tabs
+                        (window-pixel-width w) (nth 1 (window-fringes w)) (drgnx-chrome--tab-row-extra w) nil))))
+    (if (and old
+             (eq (aref old 0) f) (eql (aref old 1) (drgnx-chrome--rows-key f))
+             (eq (aref old 2) (and (fboundp 'glitnir-active-p) (glitnir-active-p) t))
+             (eq (aref old 3) (drgnx-state-frame-kind f))
+             (eql (aref old 4) (frame-char-width f)) (eql (aref old 5) (frame-char-height f))
+             (eq (aref old 6) custom-enabled-themes)
+             (equal (aref old 7) (face-background 'drgnx-chrome-tab f t))
+             (eq (aref old 8) (bound-and-true-p drgnx-face-glyphs)) (eq (aref old 9) (bound-and-true-p drgnx-look-icons))
+             (eql (aref old 10) drgnx-pixels-generation) (eq (aref old 11) drgnx-chrome-transient-tabs)
+             (eql (aref old 12) (window-pixel-width w)) (eql (aref old 13) (nth 1 (window-fringes w)))
+             (equal (aref old 14) (drgnx-chrome--tab-row-extra w)))
+        old
+      (funcall now))))
+
+(defun drgnx-chrome--tab-kept (entry b look shown active preview)
+  "ENTRY's string when B's tab still shows what ENTRY was made for (its name, file and modified flag, shown, ACTIVE,
+PREVIEW and LOOK, all by `eq'), else nil.  Allocates nothing."
+  (and entry
+       (eq (aref entry 0) (buffer-name b)) (eq (aref entry 1) (buffer-file-name b))
+       (eq (aref entry 2) (and (buffer-modified-p b) t)) (eq (aref entry 3) shown) (eq (aref entry 4) active)
+       (eq (aref entry 5) preview) (eq (aref entry 6) look)
+       (aref entry 7)))
+
 (defun drgnx-chrome--tab-line (w)
-  "W's tab line.  Each tab's name and × carry a mouse-face value of their own (a fresh list, not `eq' to any
-other): Emacs highlights the run of text whose `mouse-face' is `eq', so a shared value would light the whole strip.
-A plain space, without one, separates the tabs."
-  (let* ((shown (window-buffer w)) (active (eq w (drgnx-signal-editor-window))))
-    (mapconcat (lambda (b)
-                 (let ((face (cond ((not (eq b shown)) 'drgnx-chrome-tab)
-                                   (active 'drgnx-chrome-tab-active)
-                                   (t 'drgnx-chrome-tab-current))))
-                   (concat (propertize (format "  %s%s " (drgnx-chrome--text (buffer-name b))
-                                               (if (and (buffer-file-name b) (buffer-modified-p b)) " ●" ""))
-                                       'face face 'drgnx-buffer b 'local-map drgnx-chrome--tab-map
-                                       'mouse-face (list 'drgnx-chrome-tab-hover) 'help-echo "Show; middle-click closes")
-                           (propertize (concat (drgnx-chrome--close-glyph w) "  ")
-                                       'face face 'drgnx-buffer b 'local-map drgnx-chrome--close-map
-                                       'mouse-face (list 'drgnx-chrome-tab-hover) 'help-echo "Close this tab"))))
-               (drgnx-chrome-tabs w) " ")))
+  "W's tab line: each tab kept while what it shows is the same (`drgnx-chrome--tab-kept'), so a change to one tab
+makes that tab again (`drgnx-chrome--tab') and no other; the line itself is kept while every tab is."
+  (let* ((kept (gethash w drgnx-chrome--tab-lines))
+         (look (drgnx-chrome--tab-look w (and kept (aref kept 0))))
+         (shown (window-buffer w)) (active (eq w (drgnx-signal-editor-window)))
+         (p (window-parameter w 'drgnx-preview))
+         (preview (and (drgnx-chrome-preview-p w (car-safe p)) (car p)))
+         (all (and kept (aref kept 1))) (old all) (same (and kept (eq look (aref kept 0)))) (tabs nil) parts)
+    (dolist (b (drgnx-chrome-tabs w))
+      (let* ((pair (assq b all))
+             (s (drgnx-chrome--tab-kept (cdr pair) b look (eq b shown) active (eq b preview))))
+        (unless (and s (eq (car old) pair)) (setq same nil))
+        (setq old (cdr old))
+        (if s
+            (push pair tabs)
+          (setq parts (or parts (drgnx-chrome--tab-parts w look))
+                s (drgnx-chrome--tab w b (eq b shown) active (nth 0 parts) (nth 1 parts)))
+          (push (cons b (vector (buffer-name b) (buffer-file-name b) (and (buffer-modified-p b) t) (eq b shown) active
+                                (eq b preview) look s))
+                tabs))))
+    (setq tabs (nreverse tabs))
+    (if (and same (null old) kept)
+        (aref kept 2)
+      (let ((line (drgnx-chrome--tab-line-join w look (mapcar (lambda (e) (aref (cdr e) 7)) tabs))))
+        (puthash w (vector look tabs line) drgnx-chrome--tab-lines)
+        line))))
+
+(defun drgnx-chrome--tab-parts (w look)
+  "(ROWS PAINT PREFIX GAP BUTTONS) of W's row, made once per LOOK (kept in its last slot)."
+  (or (aref look 15)
+      (aset look 15
+            (let* ((rows (drgnx-chrome--tab-rows w)) (frame (nth 2 rows))
+                   (extent (and rows (drgnx-pixels-font-extent 'drgnx-chrome-tab frame)))
+                   (descent (and extent (+ (cdr extent) (nth 1 rows))))
+                   (paint (and extent (drgnx-chrome--tab-paint rows)))
+                   (stretch (lambda (n) (let ((s (propertize " " 'face 'drgnx-chrome-tab 'display (drgnx-chrome--px n frame))))
+                                          (when (cdr paint) (add-face-text-property 0 1 (cdr paint) nil s))
+                                          s))))
+              (list rows paint
+                    (concat (and extent (drgnx-pixels-spacer 'drgnx-chrome-tab (nth 0 rows) descent frame))
+                            (and paint (funcall stretch drgnx-chrome--tab-row-pad)))
+                    (if paint (funcall stretch drgnx-chrome--tab-gap) " ")
+                    (and rows (drgnx-chrome--tab-buttons w rows (cdr paint))))))))
+
+(defun drgnx-chrome--tab-line-join (w look tabs)
+  "W's tab line from the strings of its TABS and LOOK's parts."
+  (let ((parts (drgnx-chrome--tab-parts w look)))
+    (concat (nth 2 parts) (mapconcat #'identity tabs (nth 3 parts)) (nth 4 parts))))
+
+(defun drgnx-chrome--tab-line-make (w)
+  "W's tab line made from nothing, tab by tab (`drgnx-chrome--tab').  On a graphical frame the row is `tab-row' high
+on the panel, 6 pixels before the first tab, two between the tabs (a space on a terminal), the split and more buttons
+at the right, and the hairline under all but the shown tab (`drgnx-chrome--tab-paint')."
+  (let* ((look (drgnx-chrome--tab-look w nil)) (parts (drgnx-chrome--tab-parts w look))
+         (shown (window-buffer w)) (active (eq w (drgnx-signal-editor-window))))
+    (drgnx-chrome--tab-line-join
+     w look (mapcar (lambda (b) (drgnx-chrome--tab w b (eq b shown) active (nth 0 parts) (nth 1 parts)))
+                    (drgnx-chrome-tabs w)))))
 
 (defcustom drgnx-chrome-closed-positions-max 30
   "How many closed tabs' positions are remembered (`drgnx-chrome-closed-positions')."
@@ -208,24 +500,91 @@ An error here must never stop the kill."
                   (when-let* ((p (let ((non-essential t)) (project-current)))) (project-root p))))))
   (cdr drgnx-chrome--root))
 
+(defvar drgnx-chrome-short-breadcrumb-functions nil
+  "Functions of a window: when one returns non-nil the breadcrumb shows only the file name (the header's tail has
+something to say: the agent line).  Re-apply the chrome after the answer changes.")
+
+(defvar drgnx-chrome--crumbs (make-hash-table :test 'eq :weakness 'key)
+  "Window -> [BUFFER FILE ROOT SYMBOL MODIFIED SHORT ROWS GENERATION STRING]: its breadcrumb as last made and what it
+was made from (`drgnx-chrome-breadcrumb').  Weak on the window.")
+
 (defun drgnx-chrome-breadcrumb (w)
-  "W's breadcrumb: project › folders › file (● when unsaved).  A buffer without a file has no path to show and its tab
-already names it: the row stays (a window's rows never change with its buffer, I3) but is empty."
-  (let* ((b (window-buffer w)) (file (buffer-file-name b)))
-    (concat
-     " "
-     (if (not file)
-         ""
-       (let* ((root (with-current-buffer b (drgnx-chrome--project-root file)))
-              (rel (if root (file-relative-name file root) (abbreviate-file-name file)))
-              (parts (split-string rel "/" t)))
-         (concat (if root (propertize (concat (drgnx-chrome--text (file-name-nondirectory (directory-file-name root))) " › ")
-                                      'face 'drgnx-chrome-crumb)
-                   "")
-                 (propertize (mapconcat #'drgnx-chrome--text (butlast parts) " › ") 'face 'drgnx-chrome-crumb)
-                 (if (cdr parts) " › " "")
-                 (drgnx-chrome--text (car (last parts))))))
-     (if (and file (buffer-modified-p b)) " ●" ""))))
+  "W's breadcrumb: the folders from the project's root › file › the definition point is in (W's parameter
+`drgnx-chrome-symbol', kept by `drgnx-chrome--symbol-update'), ● when unsaved; the project itself is named by the
+Explorer and the title row.  A buffer without a file has no path to show and its tab
+already names it: the row stays (a window's rows never change with its buffer, I3) but is empty.  Kept per window
+while its buffer, file, root, symbol, modified flag, short form, rows and fonts are the same objects
+\(`drgnx-chrome--crumbs'): applying the chrome again makes nothing."
+  (let* ((b (window-buffer w)) (file (buffer-file-name b))
+         (symbol (let ((p (window-parameter w 'drgnx-chrome-symbol))) (and file (eq (car-safe p) b) (cdr p))))
+         (short (and file (run-hook-with-args-until-success 'drgnx-chrome-short-breadcrumb-functions w)))
+         (root (and file (not short) (with-current-buffer b (drgnx-chrome--project-root file))))
+         (modified (and file (buffer-modified-p b) t))
+         (rows (drgnx-chrome--rows-key (window-frame w)))
+         (m (gethash w drgnx-chrome--crumbs)))
+    (if (and m (eq (aref m 0) b) (eq (aref m 1) file) (eq (aref m 2) root) (eq (aref m 3) symbol)
+             (eq (aref m 4) modified) (eq (aref m 5) short) (eql (aref m 6) rows)
+             (eql (aref m 7) drgnx-pixels-generation))
+        (aref m 8)
+      (let ((s (drgnx-chrome--breadcrumb-make w b file symbol short root)))
+        (puthash w (vector b file root symbol modified short rows drgnx-pixels-generation s) drgnx-chrome--crumbs)
+        s))))
+
+(defun drgnx-chrome--breadcrumb-make (w b file symbol short root)
+  "W's breadcrumb made (`drgnx-chrome-breadcrumb'): B its buffer, FILE, SYMBOL, SHORT and ROOT as read there."
+  (let* ((frame (window-frame w))
+         (height (and (display-graphic-p frame)
+                      (round (* (drgnx-pixels-scale frame) drgnx-chrome--breadcrumb-row))))
+         (extent (and height (drgnx-pixels-font-extent 'drgnx-ui-caption frame)))
+         ;; window-dark.html `.crumbs': 12 px in (with the fringe's 2), 6 px either side of a `›'
+         (px (lambda (n) (if height (propertize " " 'display `(space :width (,(round (* (drgnx-pixels-scale frame) n)))))
+                           " ")))
+         (sep (concat (funcall px 6) "›" (funcall px 6)))
+         (s (concat
+             (or (and extent (drgnx-pixels-spacer 'drgnx-ui-caption height
+                                                  (+ (cdr extent) (/ (- height (car extent) (cdr extent)) 2)) frame))
+                 "")
+             (funcall px 12)
+             (if (not file)
+                 ""
+               (let* ((rel (cond (short (file-name-nondirectory file))
+                                 (root (file-relative-name file root))
+                                 (t (abbreviate-file-name file))))
+                      (parts (split-string rel "/" t)))
+                 (concat (propertize (mapconcat #'drgnx-chrome--text (butlast parts) sep) 'face 'drgnx-chrome-crumb)
+                         (if (cdr parts) (propertize sep 'face 'drgnx-chrome-crumb) "")
+                         (propertize (drgnx-chrome--text (car (last parts)))
+                                     'face (if symbol 'drgnx-chrome-crumb 'drgnx-text-muted))
+                         (if symbol
+                             (concat (propertize sep 'face 'drgnx-chrome-crumb)
+                                     (propertize (drgnx-chrome--text symbol) 'face 'drgnx-text-muted))
+                           ""))))
+             (if (and file (buffer-modified-p b)) " ●" ""))))
+    (add-face-text-property 0 (length s) 'drgnx-ui-caption t s)
+    s))
+
+;;;; The symbol at point
+
+(defcustom drgnx-chrome-symbol-delay 0.3
+  "Seconds of idleness before the breadcrumb names the definition point is in."
+  :type 'number :group 'drgnx)
+
+(defun drgnx-chrome--symbol-schedule ()
+  "On `post-command-hook': the breadcrumb's symbol is looked up once Emacs is idle (`drgnx-chrome--symbol-update');
+a command while it waits only resets the wait."
+  (drgnx-timer-debounce 'chrome-symbol drgnx-chrome-symbol-delay #'drgnx-chrome--symbol-update :idle t :owner :core))
+
+(defun drgnx-chrome--symbol-update ()
+  "The selected editor window's definition at point (`add-log-current-defun': a function, a heading, a class) into
+its parameter `drgnx-chrome-symbol' as (BUFFER . NAME), and its breadcrumb made again when that changed.  Runs on
+idle, never while drawing: the breadcrumb only reads the parameter."
+  (let ((w (selected-window)))
+    (when (and (eq (drgnx-chrome--role w) 'editor) (buffer-file-name (window-buffer w)))
+      (let ((sym (with-current-buffer (window-buffer w)
+                   (save-excursion (goto-char (window-point w)) (ignore-errors (add-log-current-defun))))))
+        (unless (equal (cons (window-buffer w) sym) (window-parameter w 'drgnx-chrome-symbol))
+          (set-window-parameter w 'drgnx-chrome-symbol (cons (window-buffer w) sym))
+          (drgnx-chrome--apply-window w nil))))))
 
 ;;;; Applying
 
@@ -240,33 +599,91 @@ sets it to its own construct while it is on.  Re-apply the chrome after changing
   "A mode-line construct an editor window's header shows after its breadcrumb — set buffer-locally (sticky scroll's
 scopes: modules/editor/drgnx-sticky.el); re-apply the chrome after changing it.")
 
+(defvar drgnx-chrome-tail-providers nil
+  "Functions of a window, in depth order (lowest first), each returning a string the header shows after the breadcrumb,
+or nil.  A string must be safe for the mode line (a `%' doubled).  Add and remove with
+`drgnx-chrome-add-tail-provider' and `drgnx-chrome-remove-tail-provider'.  A provider answers from cached state: it
+runs in redisplay.")
+
+(defconst drgnx-chrome--providers-tail '(:eval (drgnx-chrome--tail-string (selected-window)))
+  "The header's tail while there are providers: what they return, in order.")
+
+(defun drgnx-chrome--tail-string (w)
+  "The providers' strings for window W, joined."
+  (let (out)
+    (dolist (fn drgnx-chrome-tail-providers)
+      (let ((s (condition-case nil (funcall fn w) (error nil))))
+        (when (and (stringp s) (not (string-empty-p s))) (push s out))))
+    (apply #'concat (nreverse out))))
+
+(defun drgnx-chrome--reapply (&rest _)
+  "Every frame's chrome set again (`drgnx-chrome-apply').  Also on `enable-theme-functions' and
+`disable-theme-functions': a theme switch moves none of an editor's inputs, and its tab line is painted with the row's
+colour (`drgnx-chrome--tab-paint')."
+  (when (bound-and-true-p drgnx-chrome-mode)
+    (dolist (f (frame-list)) (drgnx-chrome-apply f))))
+
+(defun drgnx-chrome-add-tail-provider (fn depth)
+  "Show FN's string after the breadcrumb; lower DEPTH comes first (the large-files header 10, sticky scroll 20, the
+agent line 30).  Adding FN again moves it to its new depth."
+  (put fn 'drgnx-chrome-tail-depth depth)
+  (setq drgnx-chrome-tail-providers
+        (sort (cons fn (delq fn (copy-sequence drgnx-chrome-tail-providers)))
+              (lambda (a b) (< (get a 'drgnx-chrome-tail-depth) (get b 'drgnx-chrome-tail-depth)))))
+  (drgnx-chrome--reapply))
+
+(defun drgnx-chrome-remove-tail-provider (fn)
+  "Stop showing FN's string."
+  (setq drgnx-chrome-tail-providers (delq fn (copy-sequence drgnx-chrome-tail-providers)))
+  (put fn 'drgnx-chrome-tail-depth nil)
+  (drgnx-chrome--reapply))
+
 (defconst drgnx-chrome--own-header '(:eval header-line-format)
   "The header of a buffer that has its own (tabulated-list column headings, clicked to sort).")
 
+(defvar-local drgnx-chrome-own-tab-line nil
+  "Non-nil: an editor window showing this buffer shows its own `tab-line-format' in place of the editor's tabs (the
+Work space's lenses: its tab and the lens bar).  The row stays, so the window's text does not move; the lens bar is
+the window's heading, so it has no breadcrumb row.")
+
+(defconst drgnx-chrome--own-tab-line '(:eval tab-line-format)
+  "The tab line of a buffer that has its own (`drgnx-chrome-own-tab-line').")
+
 (defun drgnx-chrome--set (w param value)
-  "Set W's PARAM to VALUE only if it changed: setting a window parameter redraws the window."
+  "Set W's line format PARAM (`tab-line-format', `header-line-format', `mode-line-format') to VALUE only if it
+changed, and then have W's lines drawn again: Emacs redraws a window for a new parameter only when a face filter names
+it, so without this the next redisplay may keep the old line (the window's text unchanged)."
   (unless (equal-including-properties (window-parameter w param) value)
-    (set-window-parameter w param value)))
+    (set-window-parameter w param value)
+    (with-current-buffer (window-buffer w) (force-mode-line-update))))
 
 (defun drgnx-chrome--apply-window (w note)
   (pcase (drgnx-chrome--role w)
     ('editor
      (when note (drgnx-chrome--note w))
-     (drgnx-chrome--set w 'tab-line-format (let ((s (drgnx-chrome--tab-line w))) (if (equal s "") " " s)))
+     (drgnx-chrome--set w 'tab-line-format
+                        (if (buffer-local-value 'drgnx-chrome-own-tab-line (window-buffer w))
+                            drgnx-chrome--own-tab-line
+                          (let ((s (drgnx-chrome--tab-line w))) (if (equal s "") " " s))))
      (drgnx-chrome--set w 'header-line-format
                         (with-current-buffer (window-buffer w)
                           (cond ((and (local-variable-p 'header-line-format) header-line-format)
                                  drgnx-chrome--own-header)
+                                ;; its own tab line (the Work space's lens bar) is its heading: no breadcrumb
+                                (drgnx-chrome-own-tab-line 'none)
                                 ;; a short terminal frame has no row to spare (ui/terminal-layout sets this)
                                 ((eq (frame-parameter (window-frame w) 'drgnx-chrome-breadcrumb) 'off) 'none)
-                                (t (let ((tail (buffer-local-value 'drgnx-chrome-header-tail (window-buffer w))))
-                                     (if tail
-                                         (list (drgnx-wb-bar (drgnx-chrome-breadcrumb w) t) tail
-                                               (propertize " " 'display '(space :align-to right) 'face 'drgnx-wb-bar))
-                                       (drgnx-wb-bar (drgnx-chrome-breadcrumb w))))))))
+                                (t (let ((tail (buffer-local-value 'drgnx-chrome-header-tail (window-buffer w)))
+                                         (providers (and drgnx-chrome-tail-providers drgnx-chrome--providers-tail)))
+                                     ;; on the header line's own face: the editor's colour, so the breadcrumb is
+                                     ;; part of the editor's surface under the shown tab (the look, §4)
+                                     (if (or tail providers)
+                                         (delq nil (list (drgnx-chrome-breadcrumb w) providers tail))
+                                       (drgnx-chrome-breadcrumb w)))))))
      (drgnx-chrome--set w 'mode-line-format drgnx-chrome-editor-mode-line))
     ((or 'dock 'area)
-     (drgnx-chrome--set w 'tab-line-format 'none)
+     ;; the sidebar island's header row (`drgnx-wb-island-refresh') on the dock's top window
+     (drgnx-chrome--set w 'tab-line-format (or (window-parameter w 'drgnx-wb-island) 'none))
      (drgnx-chrome--set w 'mode-line-format 'none))
     ('lane
      (dolist (p '(tab-line-format mode-line-format)) (drgnx-chrome--set w p 'none)))))
@@ -284,14 +701,22 @@ those are previews)."
     (dolist (f (frame-list)) (drgnx-chrome-apply f note))))
 
 (defvar drgnx-chrome--memo (make-hash-table :test 'eq :weakness 'key)
-  "Editor window -> [BUFFER TABS BREADCRUMB-PARAM TAB-LINE HEADER MODE-LINE NOTED]: what the store's subscribers last
-set on it (weak on the window).  They skip a window whose inputs and parameters are still those objects, so a
-change that touches no editor costs a few `eq' tests per window, not two strings built.  The bus's edges and
-`drgnx-chrome-apply' always rebuild.")
+  "Editor window -> [BUFFER TABS BREADCRUMB-PARAM TAB-LINE HEADER MODE-LINE NOTED ROWS]: what the store's subscribers
+last set on it (weak on the window), ROWS the frame's `drgnx-chrome--rows-key'.  They skip a window whose inputs and
+parameters are still those objects, so a change that touches no editor costs a few `eq' tests per window, not two
+strings built.  The bus's edges and `drgnx-chrome-apply' always rebuild.")
 
-(defun drgnx-chrome--memo-current-p (w note breadcrumb)
+(defun drgnx-chrome--rows-key (frame)
+  "An integer that moves when FRAME's rows change size: the tab row in its pixels (the density at its scale) and its
+line height.  0 on a terminal.  Allocates nothing."
+  (if (display-graphic-p frame)
+      (+ (round (* (drgnx-pixels-scale frame) (if (fboundp 'drgnx-look-density-value) (drgnx-look-density-value 'tab-row) 34)))
+         (* 1000 (frame-char-height frame)))
+    0))
+
+(defun drgnx-chrome--memo-current-p (w note breadcrumb rows)
   "Non-nil when editor window W still shows what the store's subscribers last set on it (with its buffer noted
-as a tab, if NOTE; BREADCRUMB is its frame's parameter `drgnx-chrome-breadcrumb')."
+as a tab, if NOTE; BREADCRUMB is its frame's parameter `drgnx-chrome-breadcrumb', ROWS its `drgnx-chrome--rows-key')."
   (let ((m (gethash w drgnx-chrome--memo)))
     (and m
          (or (not note) (aref m 6))
@@ -301,12 +726,13 @@ as a tab, if NOTE; BREADCRUMB is its frame's parameter `drgnx-chrome-breadcrumb'
          (eq (aref m 3) (window-parameter w 'tab-line-format))
          (eq (aref m 4) (window-parameter w 'header-line-format))
          (eq (aref m 5) (window-parameter w 'mode-line-format))
-         (eq (aref m 5) drgnx-chrome-editor-mode-line))))
+         (eq (aref m 5) drgnx-chrome-editor-mode-line)
+         (eql (aref m 7) rows))))
 
-(defun drgnx-chrome--memo-set (w note breadcrumb)
+(defun drgnx-chrome--memo-set (w note breadcrumb rows)
   (puthash w (vector (window-buffer w) (window-parameter w 'drgnx-tabs) breadcrumb
                      (window-parameter w 'tab-line-format) (window-parameter w 'header-line-format)
-                     (window-parameter w 'mode-line-format) (and note t))
+                     (window-parameter w 'mode-line-format) (and note t) rows)
            drgnx-chrome--memo))
 
 (defun drgnx-chrome--apply-changed (frame note)
@@ -314,13 +740,24 @@ as a tab, if NOTE; BREADCRUMB is its frame's parameter `drgnx-chrome-breadcrumb'
 The store lists the editor windows; the other roles are set as `drgnx-chrome-apply' does."
   (unless (frame-parent frame)
     (let ((editors (drgnx-state-windows frame 'editor))
-          (breadcrumb (frame-parameter frame 'drgnx-chrome-breadcrumb)))
+          (breadcrumb (frame-parameter frame 'drgnx-chrome-breadcrumb))
+          (rows (drgnx-chrome--rows-key frame)))
       (dolist (w (window-list frame 'nomini))
         (if (not (memq w editors))
             (drgnx-chrome--apply-window w note)
-          (unless (drgnx-chrome--memo-current-p w note breadcrumb)
+          (unless (drgnx-chrome--memo-current-p w note breadcrumb rows)
             (drgnx-chrome--apply-window w note)
-            (drgnx-chrome--memo-set w note breadcrumb)))))))
+            (drgnx-chrome--memo-set w note breadcrumb rows)))))))
+
+(defun drgnx-chrome--rows-changed ()
+  "On `drgnx-look-density-changed-hook': every frame's tab rows at the new height, at once."
+  (dolist (f (frame-list)) (when (frame-live-p f) (drgnx-chrome--apply-changed f nil))))
+
+(defun drgnx-chrome--frame-resized (data)
+  "The store's `frame-resized': a scale change resizes the frame, so its tab rows are made again in its pixels (only
+the editors whose rows key moved)."
+  (when-let* ((frame (plist-get data :frame)) ((frame-live-p frame)))
+    (drgnx-chrome--apply-changed frame nil)))
 
 (defun drgnx-chrome--windows-changed (data)
   "The store's `windows-changed' (`now' lane: inside the observation, before the frame is drawn): set the
@@ -339,21 +776,36 @@ or buffer changed (no new tabs while the minibuffer is active: those are preview
       (progn
         (drgnx-state-subscribe 'windows-changed #'drgnx-chrome--windows-changed :lane 'now)
         (drgnx-state-subscribe 'editor-changed #'drgnx-chrome--editor-changed :lane 'now)
+        (drgnx-state-subscribe 'frame-resized #'drgnx-chrome--frame-resized)
+        (add-hook 'drgnx-look-density-changed-hook #'drgnx-chrome--rows-changed)
+        (add-hook 'enable-theme-functions #'drgnx-chrome--reapply)
+        (add-hook 'disable-theme-functions #'drgnx-chrome--reapply)
         (add-hook 'kill-buffer-hook #'drgnx-chrome--killed)
+        (add-hook 'post-command-hook #'drgnx-chrome--symbol-schedule)
         (dolist (e '(buffer-set-changed modified-changed))
           (drgnx-signal-subscribe e #'drgnx-chrome--refresh))
         (drgnx-chrome--refresh))
     (drgnx-state-unsubscribe 'windows-changed #'drgnx-chrome--windows-changed)
     (drgnx-state-unsubscribe 'editor-changed #'drgnx-chrome--editor-changed)
+    (drgnx-state-unsubscribe 'frame-resized #'drgnx-chrome--frame-resized)
+    (remove-hook 'drgnx-look-density-changed-hook #'drgnx-chrome--rows-changed)
+    (remove-hook 'enable-theme-functions #'drgnx-chrome--reapply)
+    (remove-hook 'disable-theme-functions #'drgnx-chrome--reapply)
     (clrhash drgnx-chrome--memo)
+    (clrhash drgnx-chrome--tab-lines)
+    (clrhash drgnx-chrome--crumbs)
     (remove-hook 'kill-buffer-hook #'drgnx-chrome--killed)
+    (remove-hook 'post-command-hook #'drgnx-chrome--symbol-schedule)
+    (drgnx-timer-cancel 'chrome-symbol)
     (dolist (e '(buffer-set-changed modified-changed))
       (drgnx-signal-unsubscribe e #'drgnx-chrome--refresh))
     (dolist (f (frame-list))
       (dolist (w (window-list f 'nomini))
         (pcase (drgnx-chrome--role w)
           ('editor (dolist (p '(tab-line-format header-line-format mode-line-format)) (set-window-parameter w p nil)))
-          ((or 'dock 'area 'lane) (dolist (p '(tab-line-format mode-line-format)) (set-window-parameter w p nil))))))))
+          ((or 'dock 'area 'lane)
+           (set-window-parameter w 'tab-line-format (window-parameter w 'drgnx-wb-island))
+           (set-window-parameter w 'mode-line-format nil)))))))
 
 (provide 'drgnx-chrome)
 ;;; drgnx-chrome.el ends here

@@ -1,6 +1,6 @@
 ;;; ai-keys-test.el --- batch tests: after the hand-over the editor holds no provider key -*- lexical-binding: t -*-
 ;; Binary tests (design §5.6): the real Ratatoskr hub takes the keys AI: Load Keys finds, and this Emacs then keeps none
-;; of them — not in `drgnx-ai--keys', not in auth-source's cache, not in a gptel backend, not in anything it sends but
+;; of them — not in `drgnx-ai--keys', not in auth-source's cache, not in anything it sends but
 ;; the one `gateway/keys'.  Keys in the environment are the user's and stay.  `ratatoskr-mock llm' is the provider.
 ;; Without the binary (or the mock beside it) these skip; test/no-skip.eld lists them.
 ;; test-class: cond
@@ -61,10 +61,6 @@ not in `drgnx-ai--keys', not in auth-source's netrc cache, no entry at all in `p
             ;; keeping nothing: review M3)
             (should-not (drgnx-ai-keys-test--auth-source-cached-p))
             (drgnx-ai-keys-test--a-hand-over-read-keeps-nothing)
-            ;; gptel's backend for OpenRouter carries the editor token
-            (let ((spec (drgnx-ai-gptel-spec 'openrouter "openrouter/auto")))
-              (should (equal (funcall (plist-get (cddr spec) :key)) (car drgnx-hub--editor)))
-              (should-not (string-search canary (prin1-to-string spec))))
             ;; of every line sent to the hub, only the one `gateway/keys' carried it
             (let ((with (seq-filter (lambda (l) (string-search canary l)) drgnx-ai-keys-test--lines)))
               (should (= (length with) 1))

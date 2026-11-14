@@ -53,36 +53,39 @@ case \"$last\" in '(drgnx-session-gui-frame-p)') echo t ;; esac" log log))))
            ,@body)
        (delete-directory dir t))))
 
-(ert-deftest drgnx-bin/inside-eat-opens-in-this-drgnx ()
-  ;; In drgnx's own terminal (eat sets INSIDE_EMACS, drgnx sets DRGNX_SERVER_NAME to its server's socket) `drgnx FILE'
-  ;; opens in that Emacs, in its selected frame: never a new window (-c) or a terminal frame (-t), no raise.
+(ert-deftest drgnx-bin/inside-terminal-opens-here-and-loads-ai-keys ()
+  ;; In drgnx's own terminal (DRGNX_TERMINAL, and DRGNX_SERVER_NAME naming its server's socket) `drgnx FILE' opens in
+  ;; that Emacs, in its selected frame: never a new window (-c) or a terminal frame (-t), no raise.  It loads the AI
+  ;; keys first, as a `drgnx' from any other terminal does: a drgnx used only through its terminal has them too.
   (drgnx-terminal-bin-test--with-dir
     (let* ((sock "/tmp/x/sock")
-           (env (list "INSIDE_EMACS=31.1,eat" (concat "DRGNX_SERVER_NAME=" sock)))
+           (env (list "DRGNX_TERMINAL=1" "INSIDE_EMACS=31.1,drgnx" (concat "DRGNX_SERVER_NAME=" sock)))
+           (keys (list "-a" "false" "-s" sock "-n" "-e" "(progn (require 'drgnx-ai) (drgnx-ai-load-keys-soon))"))
            (file (expand-file-name "My \"File\" café.py" dir))
            (folder (expand-file-name "a b" dir)))
       (should (equal (drgnx-terminal-bin-test--run dir env "My \"File\" café.py" "a b") '(0 . "")))
       (let ((calls (drgnx-terminal-bin-test--calls dir)))
         (should (equal calls
-                       (list (list "-a" "false" "-s" sock "-n" "--" file)
+                       (list keys
+                             (list "-a" "false" "-s" sock "-n" "--" file)
                              (list "-a" "false" "-s" sock "-n" "-e" (format "(drgnx-session-open-folder %S)" folder)))))
         (should-not (seq-some (lambda (c) (or (member "-c" c) (member "-t" c))) calls)))
       ;; --wait (an $EDITOR of the user's own, `drgnx open --wait'): this drgnx too, until C-x #
       (delete-file (expand-file-name "client.log" dir))
       (should (eql 0 (car (drgnx-terminal-bin-test--run dir env "open" "--wait" "My \"File\" café.py"))))
-      (should (equal (drgnx-terminal-bin-test--calls dir) (list (list "-a" "false" "-s" sock "--" file))))
+      (should (equal (drgnx-terminal-bin-test--calls dir) (list keys (list "-a" "false" "-s" sock "--" file))))
       ;; --wait still takes files only
       (should (eql 2 (car (drgnx-terminal-bin-test--run dir env "open" "--wait" "a b")))))))
 
-(ert-deftest drgnx-bin/outside-eat-opens-as-before ()
-  ;; Without eat's INSIDE_EMACS (another terminal, or Emacs's shell-mode) `drgnx FILE' is today's: the server is asked
+(ert-deftest drgnx-bin/outside-the-terminal-opens-as-before ()
+  ;; Outside drgnx's terminal (another terminal, or Emacs's shell-mode) `drgnx FILE' is today's: the server is asked
   ;; whether it runs and has a window, the window is raised, then the file opens.
   (drgnx-terminal-bin-test--with-dir
     (let ((file (expand-file-name "My \"File\" café.py" dir))
           (c (lambda (&rest args) (append (list "-a" "false" "-s" "drgnx-terminal-bin-test") args))))
       (dolist (inside '("INSIDE_EMACS" "INSIDE_EMACS=31.1,comint"))
         (when (file-exists-p (expand-file-name "client.log" dir)) (delete-file (expand-file-name "client.log" dir)))
-        (should (equal (drgnx-terminal-bin-test--run dir (list inside "DRGNX_SERVER_NAME=drgnx-terminal-bin-test")
+        (should (equal (drgnx-terminal-bin-test--run dir (list inside "DRGNX_TERMINAL" "DRGNX_SERVER_NAME=drgnx-terminal-bin-test")
                                                      "My \"File\" café.py")
                        '(0 . "")))
         (should (equal (drgnx-terminal-bin-test--calls dir)

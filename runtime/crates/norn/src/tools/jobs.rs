@@ -7,7 +7,7 @@
 //! [`super::Hub::exec`] as the calling session).
 
 use mimir::BoxFuture;
-use runstav::methods::exec::{ById, LogParams, StartParams};
+use runstav::methods::exec::{ById, JobStartParams, LogParams};
 use serde_json::{Value, json};
 
 use super::guard::{CoordTool, guarded};
@@ -50,15 +50,15 @@ fn refuse_wait(coord: &Coord, sid: &str, id: &str) -> String {
 pub struct JobStart;
 
 impl CoordTool for JobStart {
-    type Args = StartParams;
+    type Args = JobStartParams;
     const NAME: &'static str = "job_start";
-    const DESCRIPTION: &'static str = "Start a job (build, tests, a loop; kind container for an allowed image) in your worktree; answers its id. End your turn then: you are woken with the result.";
+    const DESCRIPTION: &'static str = "Start a job (build, tests, a loop; kind container for an allowed image) in your worktree; answers its id. Mark a long build or a whole suite heavy (it may run on another machine), background work background. End your turn then: you are woken with the result.";
 
     fn run<'a>(
         &'a self,
         coord: &'a Coord,
         who: &'a Identity,
-        args: StartParams,
+        args: JobStartParams,
     ) -> BoxFuture<'a, Result<String, String>> {
         Box::pin(async move {
             let (sid, home) = session(who)?;

@@ -1,0 +1,10 @@
+# Terminal test tiers, base: only the Fedora packages (the image on it adds Nidhogg: ../Containerfile.tty).
+# tmux for the tty tier; kitty under headless mutter for the exit test.  FEDORA is the release (45, the only one).
+# Run with --security-opt seccomp=unconfined --security-opt label=disable, as the GUI image.
+# Docs on (tsflags=): the Emacs and Elisp manuals; findutils for project search; ncurses for infocmp and terminfo.
+# Built and published as drgnx-base-tty, tagged by the hash of this file (../image-tag.sh).
+ARG FEDORA=45
+FROM registry.fedoraproject.org/fedora:${FEDORA}
+RUN dnf -y --setopt=tsflags= install info diffutils findutils git tmux kitty kitty-terminfo wl-clipboard \
+        mutter dbus-daemon mesa-dri-drivers procps-ng util-linux binutils ncurses \
+    && dnf clean all

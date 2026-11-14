@@ -1,0 +1,15 @@
+{"scenario": "matrix/private-card-offers-widths-for-a-lan-literal", "requires": ["v1", "test-hooks"], "doc": "A browser.private card for a LAN literal names the target, the pinned address and its class in its title, says that any page could then send requests to it, and offers the target's /24 on its port and all private as well as the one target (for the session; the plan's widths only with a plan). What makes it fail: a private card that offers only one target for a literal, or widths without saying what they open."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "__test_matrix_ask", "params": {"action": "browser.private", "who": {"role": "worker"}, "session": "s1", "facts": {"target": {"host_port": "192.168.1.20:8080"}, "addr": "192.168.1.20:8080", "class": "lan"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"gate": "ask", "card": "$capture:c1"}}}
+{"do": "expect", "conn": "e", "json": {"event": "card", "data": {"id": "$c1", "kind": "matrix", "title": "s1 wants to open 192.168.1.20:8080 → 192.168.1.20:8080 (your LAN)", "body": "Any page the agent opens could then send requests to it, including ones that change things", "choices": [{"id": "once"}, {"id": "session"}, {"id": "session/cidr", "label": "Allow 192.168.1.0/24 on port 8080 for this session"}, {"id": "session/all-private"}, {"id": "refuse"}]}}, "within_ms": 10000}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select (select group_concat(json_extract(value, '$.id'), ' ') from json_each(card.data, '$.choices')), json_extract(data, '$.body') is not null from card where id = $c1", "rows": [["once session session/cidr session/all-private refuse", 1]]}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "__test_matrix_ask", "params": {"action": "browser.private", "who": {"role": "worker"}, "session": "s1", "plan": "plan:aaaaaaaaaaaa", "facts": {"target": {"host_port": "192.168.1.20:8080"}, "addr": "192.168.1.20:8080", "class": "lan"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"gate": "ask", "card": "$capture:c2"}}}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select (select group_concat(json_extract(value, '$.id'), ' ') from json_each(card.data, '$.choices')) from card where id = $c2", "rows": [["once session plan session/cidr plan/cidr session/all-private plan/all-private refuse"]]}

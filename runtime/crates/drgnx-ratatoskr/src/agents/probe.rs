@@ -85,6 +85,7 @@ async fn run(
     let opts = ConnOpts {
         deadline: wait,
         stderr_tail: STDERR_MAX,
+        tap: crate::recording::acp_tap(sid, None, &profile.name, &prep.spec, cwd),
     };
     let (conn, mut events) = match Conn::spawn(prep.spec, opts).await {
         Ok(c) => c,
@@ -99,7 +100,7 @@ async fn run(
     // the sandbox helper reports on a pipe; a launch whose status is not read hangs
     if let Some(fd) = prep.status {
         let stderr = conn.stderr();
-        let read = tokio::task::spawn_blocking(move || {
+        let read = crate::clock::blocking(move || {
             gleipnir::read_status(fd, &|| stderr.get(), Duration::from_secs(20))
         })
         .await;

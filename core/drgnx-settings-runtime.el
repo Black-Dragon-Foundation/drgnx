@@ -13,6 +13,7 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+(require 'drgnx-config)
 (require 'drgnx-setting)
 (require 'drgnx-settings-prov)
 (require 'drgnx-settings-workspace)
@@ -44,11 +45,62 @@ hidden in the sandbox.  npm's global config is PREFIX/etc/npmrc."
   :type '(repeat string) :group 'drgnx :scope 'global :workspace 'never :agents 'never)
 
 (drgnx-defsetting drgnx-sandbox-proxy-pinned-addresses nil
-  "Names the job proxies resolve to a fixed address instead of asking DNS: ((NAME . ADDRESS)…), ADDRESS an IPv4 or
-IPv6 literal.  A pinned name may lead to a private or loopback address (a registry on the company's network, a
+  "Names the agents' proxies resolve to a fixed address instead of asking DNS: ((NAME . ADDRESS)…), ADDRESS an IPv4
+or IPv6 literal.  A pinned name may lead to a private or loopback address (a registry on the company's network, a
 test's local upstream); a name resolved through DNS never does.  Pinning only resolves: the name must still be on the
-job's allowlist."
-  :type '(alist :key-type string :value-type string) :group 'drgnx :scope 'global :workspace 'never :agents 'never)
+allowlist.  The hub pins them in each session's provider proxy and each container job's proxy."
+  :type '(alist :key-type string :value-type string) :group 'drgnx :scope 'global :workspace 'never :agents 'never
+  :runtime "ProxyPins")
+
+(drgnx-defsetting drgnx-search-model-mirror nil
+  "Where embedding models are downloaded from: a URL laid out as the Hugging Face host, or nil for that host."
+  :type '(choice (const :tag "Hugging Face" nil) string) :group 'drgnx :scope 'global :workspace 'never
+  :on-error 'strict :agents 'never :runtime "Option<String>" :schema '(or null string))
+
+(drgnx-defsetting drgnx-search-builtin t
+  "Non-nil: the built-in embedding model indexes every project's code and your tasks and notes, whatever servers are
+running.  Nil: only a running server (TEI, Ollama) makes vectors, and with none, search is keyword and symbol only."
+  :type 'boolean :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
+  :runtime "bool" :schema 'boolean)
+
+;; What a project's semantic search indexes: the hub (Hrafn) reads `.drgnx/search.eld' itself and takes the per-project
+;; values of these settings from the editor (`config/settings'), so a file narrows what the settings left.
+(drgnx-config-define 'search-project
+                     :dir 'project :file "search.eld"
+                     :schema '(plist (:include (list-of string)) (:exclude (list-of string)) (:off boolean))
+                     :doc "Narrows what a project's semantic search indexes: only these globs, not these, or off.")
+
+(defun drgnx-search--globs-p (x)
+  "Non-nil when X is a list of strings (globs): safe from any workspace, since it can only narrow the list."
+  (and (proper-list-p x) (cl-every #'stringp x)))
+
+(drgnx-defsetting drgnx-search-include nil
+  "Only files matching one of these globs are indexed (nil: all)."
+  :type '(repeat string) :group 'drgnx :safe #'drgnx-search--globs-p :scope 'project
+  :on-error 'strict :agents 'never :runtime "Vec<String>" :schema '(list-of string))
+
+(drgnx-defsetting drgnx-search-exclude nil
+  "Files matching one of these globs are not indexed; a workspace's are added to yours."
+  :type '(repeat string) :group 'drgnx :safe #'drgnx-search--globs-p :scope 'project :merge 'append
+  :on-error 'strict :agents 'never :runtime "Vec<String>" :schema '(list-of string))
+
+(drgnx-defsetting drgnx-search-off nil
+  "Non-nil turns a project's semantic search off."
+  :type 'boolean :group 'drgnx :safe #'booleanp :scope 'project
+  :on-error 'strict :agents 'never :runtime "bool" :schema 'boolean)
+
+(drgnx-defsetting drgnx-search-base nil
+  "The checkout a project's search index is built from (its base); nil: the main checkout.
+Every other worktree is an overlay of what differs from it, so a base on the line most worktrees branch from keeps
+the overlays small.  Changing it builds the base again."
+  :type '(choice (const :tag "The main checkout" nil) directory) :group 'drgnx :scope 'project :workspace 'never
+  :on-error 'strict :agents 'never :runtime "Option<String>" :schema '(or null string))
+
+(drgnx-defsetting drgnx-search-ignore-rules "index"
+  "Which files Quick Open, Find and the text search list: \"index\" leaves out dot paths and secret-looking names, as
+the index does; \"real\" lists them, leaving out only what .gitignore files and the search globs name."
+  :type '(choice (const "index") (const "real")) :group 'drgnx :on-error 'strict :agents 'never
+  :runtime "String" :schema '(string :match "\\`\\(?:index\\|real\\)\\'"))
 
 ;;;; Encoding: Lisp values as the runtime types' JSON
 
@@ -96,6 +148,59 @@ job's allowlist."
          (cons :doc (plist-get p :doc))
          (cons :job_safe (and (plist-get p :job-safe) t)))))
 
+(defun drgnx-settings-runtime--price (p)
+  "A price row's plist P (:in :out :cache-read :write-5m :write-1h :as-of) as `ModelPrice' takes it."
+  (drgnx-settings-runtime--plist
+   (list (cons :in (plist-get p :in))
+         (cons :out (plist-get p :out))
+         (cons :cache_read (plist-get p :cache-read))
+         (cons :write_5m (plist-get p :write-5m))
+         (cons :write_1h (plist-get p :write-1h))
+         (cons :as_of (plist-get p :as-of)))))
+
+(defun drgnx-settings-runtime--rule (r)
+  "A hook rule's plist R (:id :point :tool-kinds :paths :command :verdict :reason) as the hub's `Rule' takes it."
+  (drgnx-settings-runtime--plist
+   (list (cons :id (plist-get r :id))
+         (cons :point (drgnx-settings-runtime--str (plist-get r :point)))
+         (cons :tool_kinds (and (plist-get r :tool-kinds) (drgnx-settings-runtime--strings (plist-get r :tool-kinds))))
+         (cons :paths (and (plist-get r :paths) (vconcat (plist-get r :paths))))
+         (cons :command (plist-get r :command))
+         (cons :verdict (drgnx-settings-runtime--str (plist-get r :verdict)))
+         (cons :reason (plist-get r :reason)))))
+
+;; The permissions matrix, in the wire's own words (`runstav::methods::matrix'; the hub's `settings::matrix::decode').
+(defun drgnx-settings-runtime--matrix-limit (l)
+  "A cell's limit plist L (:amount :unit) as `Limit' takes it."
+  (list :amount (plist-get l :amount) :unit (drgnx-settings-runtime--str (plist-get l :unit))))
+
+(defun drgnx-settings-runtime--matrix-cell (c)
+  "A matrix cell's plist C (:action :column :verdict :limit) as `CellRow' takes it.
+The column is `{role|agent|provider: X}'."
+  (let ((col (plist-get c :column)))
+    (drgnx-settings-runtime--plist
+     (list (cons :action (drgnx-settings-runtime--str (plist-get c :action)))
+           (cons :column (list (drgnx-settings-runtime--key (substring (symbol-name (car col)) 1))
+                               (drgnx-settings-runtime--str (cadr col))))
+           (cons :verdict (drgnx-settings-runtime--str (plist-get c :verdict)))
+           (cons :limit (and (plist-get c :limit) (drgnx-settings-runtime--matrix-limit (plist-get c :limit))))))))
+
+(defun drgnx-settings-runtime--matrix-time (r)
+  "A time preset's plist R (:when :preset) as `TimePreset' takes it.
+`away' stays itself, (between FROM TO) is `{between: [FROM, TO]}'."
+  (let ((w (plist-get r :when)))
+    (list :when (if (consp w) (list :between (vconcat (cdr w))) (drgnx-settings-runtime--str w))
+          :preset (drgnx-settings-runtime--str (plist-get r :preset)))))
+
+(defun drgnx-settings-runtime--matrix (m)
+  "The matrix plist M (:preset :time :cells) as the JSON object the hub reads; nil is null (the shipped default)."
+  (if (null m)
+      :null
+    (drgnx-settings-runtime--plist
+     (list (cons :preset (drgnx-settings-runtime--str (plist-get m :preset)))
+           (cons :time (and (plist-get m :time) (vconcat (mapcar #'drgnx-settings-runtime--matrix-time (plist-get m :time)))))
+           (cons :cells (and (plist-get m :cells) (vconcat (mapcar #'drgnx-settings-runtime--matrix-cell (plist-get m :cells)))))))))
+
 (defun drgnx-settings-runtime--alist (alist fn)
   "ALIST (KEY . VALUE)… as an object: KEY → (FN VALUE), in order."
   (cl-loop for (k . v) in alist append (list (drgnx-settings-runtime--key k) (funcall fn v))))
@@ -129,7 +234,55 @@ job's allowlist."
                    (cons :data_collection (drgnx-settings-runtime--str (plist-get v :data-collection)))
                    (cons :zdr (and (plist-member v :zdr) (drgnx-settings-runtime--bool (plist-get v :zdr)))))))))
     (drgnx-agents-allow-unsandboxed . drgnx-settings-runtime--bool)
-    (drgnx-agents-start-env-names . drgnx-settings-runtime--strings))
+    (drgnx-search-builtin . drgnx-settings-runtime--bool)
+    (drgnx-search-include . drgnx-settings-runtime--strings)
+    (drgnx-search-exclude . drgnx-settings-runtime--strings)
+    (drgnx-search-off . drgnx-settings-runtime--bool)
+    (drgnx-search-base . ,(lambda (v) (or (drgnx-settings-runtime--str v) :null)))
+    (drgnx-search-ignore-rules . drgnx-settings-runtime--str)
+    (drgnx-agents-start-env-names . drgnx-settings-runtime--strings)
+    (drgnx-agents-trace-opens . drgnx-settings-runtime--strings)
+    ;; the permissions matrix and the agent limits (`drgnx-agents-matrix.el')
+    (drgnx-agents-matrix . drgnx-settings-runtime--matrix)
+    (drgnx-agents-away-after . identity)
+    (drgnx-agents-wait-refusals . identity)
+    (drgnx-agents-close-idle-after . identity)
+    (drgnx-agents-checkpoint-cap . identity)
+    (drgnx-agents-job-memory . identity)
+    (drgnx-agents-job-cpus . identity)
+    (drgnx-agents-net-hosts . ,(lambda (v) (drgnx-settings-runtime--alist v #'drgnx-settings-runtime--strings)))
+    (drgnx-agents-container-images . ,(lambda (v) (drgnx-settings-runtime--alist v #'identity)))
+    (drgnx-agents-silent-after . ,(lambda (v) (drgnx-settings-runtime--alist v #'identity)))
+    (drgnx-agents-repeat-limit . identity)
+    (drgnx-agents-no-progress-tokens . identity)
+    (drgnx-agents-manager-context . identity)
+    (drgnx-agents-model-prices . ,(lambda (v) (drgnx-settings-runtime--alist v #'drgnx-settings-runtime--price)))
+    ;; the agent browser and its session's memory cap
+    (drgnx-agents-browser-program . ,(lambda (v) (or v :null)))
+    (drgnx-agents-browser-local-ports . vconcat)
+    (drgnx-agents-browser-deny-hosts . vconcat)
+    (drgnx-agents-browser-max-message . identity)
+    (drgnx-agents-browser-idle . identity)
+    (drgnx-agents-browser-once-window . identity)
+    (drgnx-agents-session-memory . identity)
+    (drgnx-agents-browser-memory-high . identity)
+    ;; the runners' per-project settings (`drgnx-agents-matrix.el') and Hrafn's model mirror
+    (drgnx-runners-send . drgnx-settings-runtime--str)
+    (drgnx-runners-heavy . drgnx-settings-runtime--strings)
+    (drgnx-runners-image . ,(lambda (v) (or (drgnx-settings-runtime--str v) :null)))
+    (drgnx-runners-weight . identity)
+    (drgnx-runners-project-visibility . drgnx-settings-runtime--str)
+    (drgnx-runners-shared-overlay . drgnx-settings-runtime--bool)
+    (drgnx-runners-job-keys . drgnx-settings-runtime--strings)
+    (drgnx-runners-mac-tools . drgnx-settings-runtime--strings)
+    (drgnx-runners-mac-toolchains . drgnx-settings-runtime--strings)
+    (drgnx-runners-origin-key . ,(lambda (v) (or (drgnx-settings-runtime--str v) :null)))
+    ;; plugins and hook rules: a project's values come from your private workspace file only
+    (drgnx-agents-plugins . drgnx-settings-runtime--strings)
+    (drgnx-agents-hook-rules . ,(lambda (v) (vconcat (mapcar #'drgnx-settings-runtime--rule v))))
+    (drgnx-agents-hook-rules-off . drgnx-settings-runtime--strings)
+    (drgnx-search-model-mirror . ,(lambda (v) (or (drgnx-settings-runtime--str v) :null)))
+    (drgnx-sandbox-proxy-pinned-addresses . ,(lambda (v) (drgnx-settings-runtime--alist v #'identity))))
   "Runtime setting → the function that turns its Lisp value into the JSON of its runtime type.")
 
 (defun drgnx-settings-runtime--vars ()

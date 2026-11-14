@@ -76,6 +76,21 @@
     (redisplay t)
     (should-error (drgnx-uitest-target-xy "*drgnx-invisible*" "HIDDEN"))))
 
+(ert-deftest drgnx-ui-input/target-whose-first-glyph-is-narrow ()
+  "Text whose first glyph is narrower than half a column (a proportional font's `t', a row in the UI font) is
+clicked on that glyph, not on the next one.  Pattern D (one redisplayed frame read)."
+  (let ((buf (get-buffer-create "*drgnx-narrow*")))
+    (with-current-buffer buf
+      (erase-buffer)
+      (insert "aaa " (propertize "N" 'face '(:height 0.3)) "ARROW\n")
+      (goto-char (point-min)))
+    (delete-other-windows)
+    (switch-to-buffer buf)
+    (redisplay t)
+    (let ((xy (drgnx-uitest-target-xy "*drgnx-narrow*" "NARROW")))
+      (drgnx-uitest-run (drgnx-uitest-click-events (drgnx-uitest-posn (car xy) (cdr xy))))
+      (should (= (point) 5)))))
+
 (defun drgnx-test--record-clicks ()
   "In the current buffer, record clicks and drags into the returned list cell."
   (let ((log (list nil)) (map (make-sparse-keymap)))

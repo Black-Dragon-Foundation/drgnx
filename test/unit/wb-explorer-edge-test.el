@@ -4,6 +4,7 @@
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (require 'drgnx-explorer)
+(setq drgnx-explorer--lisp-listing t)       ; the Lisp listing (a remote root's, plan sja-complete Q3): on local folders here
 (require 'drgnx-buffers)
 (require 'drgnx-outline)
 
@@ -284,7 +285,8 @@
     (drgnx-explorer--find-apply "main")
     (drgnx-explorer-set-roots (list root))
     (let ((title (window-parameter (drgnx-wb-section-window 'explorer) 'header-line-format)))
-      (should (string-prefix-p (concat " " (drgnx-wb-close-glyph) " EXPLORER") title))         ; the ✕, then the title
+      (should-not (string-search (drgnx-wb-close-glyph) title))                 ; no close button: the island's ⋯ has it
+      (should (string-search " Files " title))
       (should-not (string-search "—" title)))))
 
 ;;;; M3a-1, M3b-16: a held button

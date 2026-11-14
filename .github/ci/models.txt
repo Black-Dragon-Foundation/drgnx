@@ -1,0 +1,16 @@
+# The pinned model files the Rust tests run the built-in model from (DRGNX_TEST_MODELS): hrafn-embed's MODELS table
+# (runtime/crates/hrafn-embed/src/models.rs), one file per line, which hrafn-embed's tests/models.rs keeps equal to it.
+# models.sh fetches them; runtime.yml caches them by this file's hash.
+#   ID REPO REVISION FILE SHA256
+gte-modernbert-base Alibaba-NLP/gte-modernbert-base e7f32e3c00f91d699e8c43b53106206bcc72bb22 model.safetensors 3e85899d5728cb7de79781c0c3acfb91ccef9f875f1f7e0b3c9f3dd4b6a724ba
+gte-modernbert-base Alibaba-NLP/gte-modernbert-base e7f32e3c00f91d699e8c43b53106206bcc72bb22 tokenizer.json 6c8aaa9a542084f2457eab775d4eeb51f92a70c0fd9de28d5edb0ddec3c08d30
+gte-modernbert-base Alibaba-NLP/gte-modernbert-base e7f32e3c00f91d699e8c43b53106206bcc72bb22 config.json 8ba54dc3d35d7194f5178a4194b649f146753e02dabd22bdca5c5cbac15069ed
+gte-modernbert-base Alibaba-NLP/gte-modernbert-base e7f32e3c00f91d699e8c43b53106206bcc72bb22 1_Pooling/config.json 4bf279dd9204db673304cab6e7db8448f427412a0d87f04c3e19f1de55dd98cd
+granite-embedding-small-english-r2 ibm-granite/granite-embedding-small-english-r2 2ab6fa8ea2d674564defd37171ae19079b864b33 model.safetensors dcbfaf2ee50d358763cbc0c08e5b045ecbf6aeb02dc0e86ffb910029bf9ebb5f
+granite-embedding-small-english-r2 ibm-granite/granite-embedding-small-english-r2 2ab6fa8ea2d674564defd37171ae19079b864b33 tokenizer.json 6c8aaa9a542084f2457eab775d4eeb51f92a70c0fd9de28d5edb0ddec3c08d30
+granite-embedding-small-english-r2 ibm-granite/granite-embedding-small-english-r2 2ab6fa8ea2d674564defd37171ae19079b864b33 config.json 154518e6452854eb11123ce433d165f2773437aa0f36935d2204249b2c327198
+granite-embedding-small-english-r2 ibm-granite/granite-embedding-small-english-r2 2ab6fa8ea2d674564defd37171ae19079b864b33 1_Pooling/config.json 7fae3727656cff4a760964a58f1e4b31695c97c75d2e26346df32a87d494bbca
+CodeRankEmbed nomic-ai/CodeRankEmbed 3c4b60807d71f79b43f3c4363786d9493691f8b1 model.safetensors 827529bcd58aef0d9082e66eeff7e7d53a02f62bd005f841a26b3d3e2fb17ebe
+CodeRankEmbed nomic-ai/CodeRankEmbed 3c4b60807d71f79b43f3c4363786d9493691f8b1 tokenizer.json 91f1def9b9391fdabe028cd3f3fcc4efd34e5d1f08c3bf2de513ebb5911a1854
+CodeRankEmbed nomic-ai/CodeRankEmbed 3c4b60807d71f79b43f3c4363786d9493691f8b1 config.json 5ff856a41d0f53ef2d74520627d464bd75c2efd8f26f381bd528654895c29b6c
+CodeRankEmbed nomic-ai/CodeRankEmbed 3c4b60807d71f79b43f3c4363786d9493691f8b1 1_Pooling/config.json d02ebf56344d20f773449b15d0c10ee9a86a9178f3b3c9bfecb8b87d4350ce38

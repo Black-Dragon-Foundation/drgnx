@@ -1,0 +1,5 @@
+url https://github.com/pallets/click
+commit 8abb77a8432e03ed14a95f972b44f905279415a7
+language Python
+licence BSD-3-Clause
+fetched at test time by commit; never vendored

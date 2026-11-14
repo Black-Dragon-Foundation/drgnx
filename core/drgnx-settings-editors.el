@@ -74,12 +74,15 @@
 (defun drgnx-settings-editors-check (var value tab)
   "Nil when VALUE may be saved for VAR at TAB, else `(PATH . MESSAGE)' naming why."
   (let ((b (and (numberp value) (drgnx-settings-editors-bounds var)))
-        (code (eq (plist-get (drgnx-setting-meta var) :workspace) 'code)))
+        (workspace (plist-get (drgnx-setting-meta var) :workspace)))
     (or (and b (car b) (< value (car b)) (cons nil (format "%s is below the lowest allowed, %s" value (car b))))
         (and b (cdr b) (> value (cdr b)) (cons nil (format "%s is above the highest allowed, %s" value (cdr b))))
         (drgnx-setting-check var value)
-        (and code (eq tab 'shared)
+        (and (eq workspace 'code) (eq tab 'shared)
              (cons nil (format "%s is code: it is saved in User or your Workspace file, never in Shared" var)))
+        (and (eq workspace 'never) (eq tab 'shared)
+             (cons nil (format "%s is your own security choice: it is saved in User or your Workspace file, never in Shared"
+                               var)))
         (progn (require 'drgnx-secrets)
                (when-let* ((rule (drgnx-secrets-looks-like (drgnx-settings-editors--strings value))))
                  (cons nil (format "that looks like a secret (%s): use your keyring, not a setting" rule)))))))

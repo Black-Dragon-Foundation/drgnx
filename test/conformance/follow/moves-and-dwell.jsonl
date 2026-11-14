@@ -1,0 +1,29 @@
+{"scenario": "follow/moves-and-dwell", "requires": ["v1", "test-hooks"], "doc": "The follow feed, on the hub's virtual clock: a view follows a session that reads a.txt, greps and reads b.txt at once. a.txt goes at once; the grep's query then goes in the line on a.txt only when the 200 ms throttle ends (a search never switches); b.txt is shown only after the 500 ms dwell, at its line, and nothing goes between. Pattern B: the turn's end is the gate for the moves, __test_advance for the events."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && echo a > $ROOT/work/a.txt && echo b > $ROOT/work/b.txt"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h", "args": ["--test-clock"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "agents/follow", "params": {"view": "f1", "session": "$sid"}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "provider:read $ROOT/work/a.txt\nprovider:grep retry\nprovider:read $ROOT/work/b.txt 7\nsay done"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-follow", "data": {"view": "f1", "session": "$sid", "file": "$ROOT/work/a.txt", "worktree": "$ROOT/work", "line": 1, "mode": "read", "step_title": "Read $ROOT/work/a.txt", "why_source": "step_title"}}, "within_ms": 30000}
+{"do": "poll", "conn": "c", "json": {"id": 3, "method": "agents/get", "params": {"id": "$sid"}}, "expect": {"id": 3, "result": {"session": {"status": "idle"}, "seq": "$number", "entries": {"$contains": [{"type": "tool", "title": "Read $ROOT/work/b.txt", "status": "completed"}]}}}, "within_ms": 20000}
+{"do": "count_events", "conn": "e", "for_ms": 300, "none": ["agent-follow"]}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "__test_advance", "params": {"ms": 200}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "agent-follow", "data": {"view": "f1", "file": "$ROOT/work/a.txt", "mode": "listed", "step_title": "grep \"retry\" ."}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "__test_advance", "params": {"ms": 299}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "count_events", "conn": "e", "for_ms": 300, "none": ["agent-follow"]}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "__test_advance", "params": {"ms": 1}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "agent-follow", "data": {"view": "f1", "file": "$ROOT/work/b.txt", "line": 7, "mode": "read", "step_title": "Read $ROOT/work/b.txt"}}, "within_ms": 10000}
+{"do": "count_events", "conn": "e", "for_ms": 300, "none": ["agent-follow"]}

@@ -1,0 +1,14 @@
+{"scenario": "work/machines-report-from-a-user", "requires": ["v1"], "doc": "Pattern B. A user connection reports a machine's slots: machines/list has local (always) and the machine with its slots, a subscribed connection hears machines-changed, and a report for local is refused."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "machines/list", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"machines": [{"machine": "local", "local": true, "slots": "$any"}]}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "machines/report", "params": {"machine": "desktop", "ttl": 60, "slots": [{"id": "d1", "kind": "agent-job", "holder": "job-7"}, {"id": "d2", "kind": "build"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"machine": "desktop", "local": false, "slots": [{"id": "d1", "kind": "agent-job", "holder": "job-7"}, {"id": "d2", "kind": "build"}]}}}
+{"do": "expect", "conn": "c", "json": {"event": "machines-changed", "data": {"machines": [{"machine": "local", "local": true, "slots": "$any"}, {"machine": "desktop", "local": false, "slots": "$any"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "machines/list", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"machines": [{"machine": "local", "local": true, "slots": "$any"}, {"machine": "desktop", "local": false, "slots": [{"id": "d1", "kind": "agent-job", "holder": "job-7"}, {"id": "d2", "kind": "build"}]}]}}}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "machines/report", "params": {"machine": "local", "ttl": 60}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "error": {"code": "invalid-params", "message": "$string"}}}

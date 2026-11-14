@@ -1,0 +1,23 @@
+# A minimal drgnx plugin: one ability and one hook (docs/develop/plugins.md, "The template").
+# Build:  cargo build --target wasm32-wasip2 --release
+# Install: copy target/wasm32-wasip2/release/my_plugin.wasm to plugin.wasm beside plugin.json in a folder named
+# after the plugin, then `ratatoskr plugins install THAT_FOLDER`.
+[package]
+name = "my-plugin"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "=0.63.0"
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+panic = "abort"
+
+[workspace]

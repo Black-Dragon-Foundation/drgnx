@@ -267,7 +267,7 @@ With VS Code keys (the rows are what `drgnx-tty-fallback-table` computes from th
 | `C-S-s` | Save As… | `Alt+Shift+S` | `F6 s` |
 | `C-S-t` | Reopen Closed Tab | `Alt+Shift+T` | `F6 t` |
 | `C-S-n` | New Window | `Alt+Shift+N` | `F6 n` |
-| `` C-` `` | Toggle Panel | — | `` F6 ` `` |
+| `` C-` `` | Toggle Terminal | — | `` F6 ` `` |
 | `C-1` | Focus First Editor Group | — | `F6 1` |
 | `C-2` | Focus Second Editor Group | — | `F6 2` |
 | `C-3` | Focus Third Editor Group | `Alt+Shift+3` | `F6 3` |
@@ -288,12 +288,17 @@ With VS Code keys (the rows are what `drgnx-tty-fallback-table` computes from th
 | `C-S-SPC` | Show Hover | — | `F6 Space` |
 | `C-.` | Quick Fix | — | `F6 .` |
 | `C-S-m` | Problems | `Alt+Shift+M` | `F6 m` |
+| `C-S-x` | View: Extensions | — | `F6 x` |
 | `C-S-f` | View: Search | `Alt+Shift+F` | `F6 f` |
 | `C-S-o` | Go to Symbol | — | `F6 o` |
 | `C-<tab>` | Recent Buffers | — | `F6 Tab` |
 | `C-S-h` | Replace in Files | `Alt+Shift+H` | `F6 h` |
 | `` C-S-` `` | New Terminal | — | `F6 ~` |
 | `C-S-g` | Source Control | `Alt+Shift+G` | `F6 g` |
+| `C-S-d` | Run and Debug | `Alt+Shift+D` | `F6 d` |
+| `C-S-y` | Debug Console | `Alt+Shift+Y` | `F6 y` |
+| `C-S-c` | Copy (in a terminal) | `Alt+Shift+C` | `F6 c` |
+| `C-S-v` | Paste (in a terminal) | `Alt+Shift+V` | `F6 v` |
 | `C-=` | Zoom In | `Alt+Shift+=` | `F6 =` |
 | `C-+` | Zoom In | — | `F6 +` |
 | `C--` | Zoom Out | — | `F6 -` |
@@ -378,7 +383,8 @@ terminal window on one daemon, a transient in one leaves the other alone.
 - **Completion** (corfu, when you have it) draws its popup (corfu, when you have it) as a floating child frame of the
   terminal window, as in a graphical window. A child frame with a border draws it with box-drawing characters
   (`┌ ─ ┐ │ └ ┘`) while every terminal on the daemon writes UTF-8, and with `+ - |` as soon as one does not. The border
-  glyphs are one shared table, so the choice follows the terminals that are connected.
+  glyphs are one shared table, so the choice follows the terminals that are connected. The border between side-by-side
+  windows follows the same choice (`│`, or `|`).
 - **A terminal that does not write UTF-8** (a window started with `LANG=C`) cannot show `×`, `●`, `›`, `▾`, `▸` or
   `│`. drgnx draws ASCII marks in their place in that window only (`x`, `*`, `>`, `v`, `>`, `|`), in the tab line,
   the breadcrumb, the Explorer and the docks' headings, instead of Emacs's `\u00D7` escapes. A UTF-8 terminal is not
@@ -485,7 +491,7 @@ terminal; on 256 colours it is approximated, on 8 colours only the basic ones re
   fixes are in the SSH section above.
 - **Nothing is told by colour alone.** On 8 colours drgnx still tells states apart: git status by its letter at the
   edge of an Explorer row (`M` changed, `A` added, `U` untracked, `D` deleted, `C` conflict; ignored files, which have
-  no letter, are italic), a review finding by its
+  no letter, are italic, and an `I` on the Linux console, which draws no italic), a review finding by its
   severity word, the shown tab by its weight or inverse video, and Work items by their glyph and words. Each of
   these faces is checked on 8, 256 and 24-bit terminals: none draws its text in its own background colour.
   `drgnx-tty-frames-state-faces` lists them with the cue each relies on.

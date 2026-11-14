@@ -39,6 +39,7 @@
 (require 'drgnx-modules)
 (require 'drgnx-paths)
 (require 'drgnx-registry)
+(require 'drgnx-timer)
 (require 'drgnx-tty)
 (require 'drgnx-wb)
 (require 'drgnx-tty-fallback)
@@ -96,6 +97,25 @@ without asking)."
     (when (eq chr ?\e) (xterm--read-event-for-query))   ; the final backslash
     (set-terminal-parameter nil 'drgnx-tty-xtversion (concat "\eP>|" text "\e\\"))))
 
+(defconst drgnx-tty-frames--xtversion-keys "\eP>|" "What an XTVERSION answer starts with.")
+
+(defvar drgnx-tty-frames-xtversion-expiry 5
+  "Seconds after XTVERSION was asked that its answer may still arrive; then the pending handler goes.")
+
+(defun drgnx-tty-frames--drop-xtversion-handler (&optional frame)
+  "Take the pending XTVERSION handler out of FRAME's terminal's `input-decode-map' (xterm.el's asynchronous query
+registers it and removes it only when the answer comes), with the prefix maps it made that are empty now: left,
+`ESC P' stays a prefix key, so M-P waits for a key (M12b-5b-1).  A late answer is typed as text after that."
+  (with-selected-frame (if (frame-live-p frame) frame (selected-frame))
+    (let ((keys drgnx-tty-frames--xtversion-keys))
+      (when (functionp (lookup-key input-decode-map keys))
+        (define-key input-decode-map keys nil t))
+      (cl-loop for n from (1- (length keys)) downto 1
+               for prefix = (substring keys 0 n)
+               for map = (lookup-key input-decode-map prefix)
+               when (and (keymapp map) (not (let (any) (map-keymap (lambda (&rest _) (setq any t)) map) any)))
+               do (define-key input-decode-map prefix nil t)))))
+
 (defun drgnx-tty-frames--ask (frame)
   "FRAME's terminal's answer to XTVERSION, or nil: asked once, waiting `drgnx-tty-frames-query-timeout'
 seconds at most; a later answer is taken off the input by Emacs's xterm.el.  Not on the Linux console."
@@ -103,7 +123,10 @@ seconds at most; a later answer is taken off the input by Emacs's xterm.el.  Not
     (require 'term/xterm)
     (with-selected-frame frame
       (let ((xterm-query-timeout drgnx-tty-frames-query-timeout))
-        (xterm--query "\e[>0q" '(("\eP>|" . drgnx-tty-frames--xtversion-handler))))
+        (xterm--query "\e[>0q" `((,drgnx-tty-frames--xtversion-keys . drgnx-tty-frames--xtversion-handler))))
+      (unless (terminal-parameter nil 'drgnx-tty-xtversion)
+        (drgnx-timer-start (cons 'xtversion-expiry frame) drgnx-tty-frames-xtversion-expiry
+                           #'drgnx-tty-frames--drop-xtversion-handler :args (list frame) :owner 'ui/terminal))
       (terminal-parameter nil 'drgnx-tty-xtversion))))
 
 (defun drgnx-tty-frames-mok-trusted-p (id)
@@ -649,16 +672,28 @@ variant of its TERM, when that terminfo exists on the machine running the daemon
 (defvar drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)
   "Terminal type → whether its terminfo has true colour as Emacs reads it, from infocmp's answer.  Bounded by its
 keys, never evicted: the TERM types clients used and their `-direct' variants (a handful).  Only answers are kept:
-an infocmp that printed nothing (missing, timed out, an unknown type) is asked again at the next frame.")
+an infocmp that printed nothing (missing, timed out, an unknown type) is remembered only for
+`drgnx-tty-frames--miss-ttl' seconds (`drgnx-tty-frames--miss-cache'), so a hanging infocmp is not run, up to
+`drgnx-tty-frames--infocmp-timeout' seconds, at every new frame.")
+
+(defconst drgnx-tty-frames--miss-ttl 60 "Seconds an infocmp that printed nothing is not asked again.")
+
+(defvar drgnx-tty-frames--miss-cache (make-hash-table :test #'equal)
+  "Terminal type → `float-time' of its last infocmp that printed nothing.  Bounded like
+`drgnx-tty-frames--direct-cache' (its keys).")
 
 (defun drgnx-tty-frames--terminfo-true-colour-p (type)
   "Whether the terminfo of terminal type TYPE (on this machine) has true colour as Emacs's term.c reads it: the
 `RGB' flag, or `setf24' together with `setb24'.  Asked of `infocmp' (bounded: `drgnx-tty--command-lines'); its
-answer is kept per type.  Nil when there is no such terminfo or no infocmp, which is not kept."
-  (let ((hit (gethash type drgnx-tty-frames--direct-cache 'unknown)))
+answer is kept per type.  Nil when there is no such terminfo or no infocmp, which is asked again only after
+`drgnx-tty-frames--miss-ttl' seconds."
+  (let ((hit (gethash type drgnx-tty-frames--direct-cache 'unknown))
+        (missed (gethash type drgnx-tty-frames--miss-cache)))
     (if (not (eq hit 'unknown)) hit
       (when-let* (((and (stringp type) (not (string-empty-p type))))
-                  (lines (drgnx-tty--command-lines (list "infocmp" "-x" "-1" type) drgnx-tty-frames--infocmp-timeout)))
+                  ((not (and missed (< (- (float-time) missed) drgnx-tty-frames--miss-ttl))))
+                  (lines (or (drgnx-tty--command-lines (list "infocmp" "-x" "-1" type) drgnx-tty-frames--infocmp-timeout)
+                             (progn (puthash type (float-time) drgnx-tty-frames--miss-cache) nil))))
         (puthash type
                  (let ((has (lambda (re) (seq-some (lambda (l) (string-match-p re l)) lines))))
                    (and (or (funcall has "\\`[ \t]+RGB,")
@@ -707,13 +742,11 @@ asked."
 (defconst drgnx-tty-frames-state-faces
   '((git :faces (drgnx-git-modified drgnx-git-added drgnx-git-deleted drgnx-git-conflict drgnx-git-ignored)
          :attribute-faces (drgnx-git-ignored)
-         :cue letter :doc "The status letter (M, A, U, D, C) at the row's edge in the Explorer; ignored files, which have none, are italic")
+         :cue letter :doc "The status letter (M, A, U, D, C) at the row's edge in the Explorer; ignored files, which have none, are italic (an I on the Linux console)")
     (review :faces (drgnx-review-critical drgnx-review-important drgnx-review-minor)
             :cue word :doc "The severity word that starts a finding's line")
     (tabs :faces (drgnx-chrome-tab drgnx-chrome-tab-current)
-          :cue attribute :doc "The shown tab differs from the others in weight or inverse video")
-    (work :faces (drgnx-work-ui-spec drgnx-work-ui-done drgnx-work-ui-stale drgnx-work-ui-branch)
-          :cue label :doc "The glyph and the words of a node's line (warning sign, merged, the branch in brackets)"))
+          :cue attribute :doc "The shown tab differs from the others in weight or inverse video"))
   "The faces that mark a state, by group, and the cue besides colour that tells the state on an 8-colour terminal:
 `letter', `word' and `label' are in the text on the screen; `attribute' is in the faces themselves.  :attribute-faces
 are the faces of a group that rely on an attribute because their state has no text.")

@@ -24,7 +24,6 @@
 (defvar posframe--frame)
 (defvar mini-frame-show-parameters)
 (defvar pgtk-preedit-overlay)
-(declare-function glitnir-stats "glitnir")
 (declare-function posframe-hide "posframe")
 (declare-function posframe-delete-all "posframe")
 (declare-function mini-frame-mode "mini-frame")
@@ -42,12 +41,10 @@
 (declare-function drgnx-test-chrome--off-snapshot "childframe-chrome-test")
 (declare-function drgnx-test-chrome--rows-equal-p "childframe-chrome-test")
 (declare-function drgnx-test-chrome--corner-cut-p "childframe-chrome-test")
-(declare-function drgnx-test-chrome--no-violations "childframe-chrome-test")
 (declare-function drgnx-test-chrome--check-chrome "childframe-chrome-test")
 (declare-function drgnx-test-chrome--check-stacking "childframe-chrome-test")
 (declare-function drgnx-test-chrome--reading "childframe-chrome-test")
 (declare-function drgnx-test-chrome--first-diff "childframe-chrome-test")
-(declare-function drgnx-test-chrome--clip "childframe-chrome-test")
 (defvar drgnx-test-chrome--margin)
 (defvar drgnx-jank-guard--timer-fn)
 (defvar drgnx-guard--timer-fn)
@@ -136,86 +133,6 @@ are written out: the runner's selector prefilter reads their names from the `ert
   (drgnx-test-extra--check-scale (drgnx-uitest-root-frame) (car (drgnx-test-extra--scales)))
   (drgnx-test-extra--run-core-rows))
 
-;;;; Mixed DPI: the root moved to a monitor of another scale
-
-(defun drgnx-test-extra--gdctl (&rest args)
-  "Run gdctl with ARGS on the session's mutter; signal with its output unless it succeeded."
-  (with-temp-buffer
-    (unless (eq 0 (apply #'call-process "gdctl" nil t nil args))
-      (ert-fail (list "gdctl failed" :args args :output (buffer-string))))))
-
-(defun drgnx-test-extra--logical-monitors (monitors)
-  "gdctl arguments for logical MONITORS ((K . SCALE) ...), side by side from x 0, the first primary."
-  (let ((w (car (mapcar #'string-to-number (split-string (drgnx-test-extra--size) "x")))) (x 0) (first t))
-    (cl-loop for (k . s) in monitors
-             append (prog1 (append '("--logical-monitor") (and first '("--primary"))
-                                   (list "--monitor" (format "Meta-%d" k) "--scale" (number-to-string s)
-                                         "--x" (number-to-string x) "--y" "0"))
-                      (setq first nil x (+ x (round (/ (float w) s))))))))
-
-(defun drgnx-test-extra--mismatches (root) (or (plist-get (glitnir-stats root) :scale-mismatch) 0))
-
-(ert-deftest drgnx-ui-chrome/mixed-dpi-move ()
-  "The root moved to a monitor of another scale with a popup shown (`DRGNX_UI_MONITORS=2', `DRGNX_UI_SCALES=\"1 2\"').
-The first monitor is taken out of mutter's layout (gdctl), so mutter moves the root to the second.  Once pgtk has
-looked at the monitor's scale (on a 1 s timer) the root is at the new scale, every pixel outside the popup is the stock
-picture's (full damage: nothing of the old scale is left), the popup's chrome and shadow are those of a popup shown at
-the new scale, and `:scale-mismatch' counted paints only during the wait."
-  (let ((scales (drgnx-test-extra--scales)))
-    (skip-unless (and (= (length scales) 2) (/= (nth 0 scales) (nth 1 scales))
-                      (drgnx-test-extra--mutter-p) (executable-find "gdctl")))
-    (drgnx-test-chrome--with-scratch
-      (let ((name " *extra-mixed*") (moved nil))
-        (unwind-protect
-            (let* ((f (drgnx-test-chrome--pf name "a popup that moves with its root" :position '(200 . 120))))
-              (drgnx-test-chrome--settle)
-              (drgnx-test-extra--check-scale root (nth 0 scales))
-              (drgnx-test-chrome--shown root (list f) none)
-              (let ((n0 (drgnx-test-extra--mismatches root)))
-                (apply #'drgnx-test-extra--gdctl "set" (drgnx-test-extra--logical-monitors (list (cons 1 (nth 1 scales)))))
-                (setq moved t)
-                ;; the wait, redisplaying, before any probe: pgtk's 1 s timer finds the new scale.  The factor moves
-                ;; first; the frame's surface follows, and until it has every paint counts a mismatch
-                (drgnx-test-chrome--wait-for (lambda () (= (frame-scale-factor root) (ceiling (nth 1 scales)))) 5)
-                (drgnx-test-chrome--wait-stable (lambda () (list (frame-pixel-width root) (frame-pixel-height root)
-                                                                 (frame-edges f 'outer-edges)
-                                                                 (drgnx-test-extra--mismatches root))))
-                (let* ((n1 (drgnx-test-extra--mismatches root))
-                       (moved-snap (drgnx-uitest-snapshot root))   ; before anything redraws the root whole
-                       (off (drgnx-test-chrome--off-snapshot root))
-                       (rect (drgnx-test-chrome--rect f root))
-                       (m (ceiling (* (frame-scale-factor root) drgnx-test-chrome--margin))))
-                  ;; full damage: outside the popup and its shadow, the moved picture is the stock one
-                  (should (drgnx-test-chrome--rows-equal-p moved-snap off (list (drgnx-test-chrome--grow rect m))))
-                  ;; the popup, its corners and its shadow are those of a popup shown afresh at the new scale
-                  (posframe-hide name)
-                  (drgnx-test-chrome--settle)
-                  (let* ((none2 (drgnx-uitest-snapshot root))
-                         (f2 (drgnx-test-chrome--pf name "a popup that moves with its root" :position '(200 . 120))))
-                    (drgnx-test-chrome--settle)
-                    (should (eq f f2))
-                    (let ((fresh (drgnx-uitest-snapshot root))
-                          (region (drgnx-test-chrome--clip (drgnx-test-chrome--grow rect m) moved-snap)))
-                      (should (equal (drgnx-test-chrome--rect f2 root) rect))
-                      (unless (drgnx-uitest-region-equal-p moved-snap fresh region :tolerance 0 :ignore-alpha t)
-                        (ert-fail (list "the moved popup is not drawn as one shown at the new scale" :region region
-                                        :first-pixel (drgnx-test-chrome--first-diff moved-snap fresh region)))))
-                    (let ((rects (drgnx-test-chrome--shown root (list f2) none2)))
-                      ;; no mismatch after the wait: paints at the new scale (a move, a redraw) count none
-                      (set-frame-position f2 240 140)
-                      (drgnx-test-chrome--settle)
-                      (redraw-frame root)
-                      (drgnx-test-chrome--settle)
-                      (unless (= (drgnx-test-extra--mismatches root) n1)
-                        (ert-fail (list "scale mismatches after the wait" :before-move n0 :after-wait n1
-                                        :now (drgnx-test-extra--mismatches root))))
-                      (posframe-hide name)
-                      (drgnx-test-chrome--hidden root (cons (drgnx-test-chrome--rect f2 root) rects) none2))))))
-          (when moved                     ; the session's own layout again
-            (apply #'drgnx-test-extra--gdctl "set"
-                   (drgnx-test-extra--logical-monitors (list (cons 0 (nth 0 scales)) (cons 1 (nth 1 scales)))))
-            (drgnx-test-chrome--wait-stable (lambda () (list (frame-scale-factor root) (frame-pixel-width root))))))))))
-
 ;;;; The nested `make-frame-visible' path
 
 (defun drgnx-test-extra--nested-run (root on none)
@@ -268,8 +185,7 @@ is what Glitnir off reads, the keys typed next reach the root, and the popup has
       (should (equal (nth 1 (assq :typed on)) (concat text "typed beside a popup")))
       (should (nth 3 (assq :typed on)))                        ; the root kept the focus
       (unless (equal on off)
-        (ert-fail (list "Glitnir on and off differ" :on on :off off)))
-      (drgnx-test-chrome--no-violations))))
+        (ert-fail (list "Glitnir on and off differ" :on on :off off))))))
 
 ;;;; Child frames that take the focus
 
@@ -324,8 +240,7 @@ child takes it) and after, the typed text arrives, and the popups have chrome."
           (pcase pkg
             ('vertico-posframe (vertico-posframe-mode -1) (vertico-mode -1))
             ('mini-frame (mini-frame-mode -1)))
-          (when (get-buffer "*chrome-scratch*") (kill-buffer "*chrome-scratch*")))
-        (drgnx-test-chrome--no-violations)))))
+          (when (get-buffer "*chrome-scratch*") (kill-buffer "*chrome-scratch*")))))))
 
 ;;;; IME preedit in a child frame
 

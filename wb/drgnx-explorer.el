@@ -19,21 +19,37 @@
 (require 'subr-x)
 (require 'drgnx-guard)
 (require 'text-property-search)
-(require 'hl-line)
 (require 'project)
 (require 'filenotify)
 (require 'drgnx-wb)
 (require 'drgnx-memo)
 (require 'drgnx-view)                   ; `drgnx-view-with-kept-windows'
+(require 'drgnx-view-nav)               ; the keys on the rows path
+(declare-function drgnx-chrome-tab-p "drgnx-chrome")
+(declare-function drgnx-chrome-note-preview "drgnx-chrome")
 (require 'drgnx-git)
 (require 'drgnx-timer)
+(require 'drgnx-file-stream)
+(require 'drgnx-quick-open)                ; Find's rows from the hub (`search/files')
 
 (defgroup drgnx-explorer nil "The drgnx Explorer." :group 'drgnx)
 
-(defcustom drgnx-explorer-exclude
-  "\\`\\(?:\\.git\\|\\.hg\\|\\.svn\\|\\.DS_Store\\|__pycache__\\|\\.#.*\\)\\'"
-  "Names the Explorer never shows (a regexp)."
-  :type 'regexp)
+(defcustom drgnx-explorer-exclude-names '(".git" ".hg" ".svn" ".DS_Store" "__pycache__" ".#*")
+  "Names the Explorer never shows: exact names or globs (`*' any run, `?' one character), at most 256.  The hub lists
+the folders by them (`explorer/subscribe' `exclude'); a change applies at the next listing."
+  :type '(repeat string) :group 'drgnx-explorer)
+
+(defvar drgnx-explorer--exclude-memo nil "(NAMES . REGEXP): `drgnx-explorer-exclude-names' as one regexp.")
+
+(defun drgnx-explorer--excluded-name-p (name)
+  "Non-nil when NAME (one file or folder name) is one of `drgnx-explorer-exclude-names'."
+  (unless (eq (car drgnx-explorer--exclude-memo) drgnx-explorer-exclude-names)
+    (setq drgnx-explorer--exclude-memo
+          (cons drgnx-explorer-exclude-names
+                (and drgnx-explorer-exclude-names
+                     (mapconcat (lambda (g) (wildcard-to-regexp g)) drgnx-explorer-exclude-names "\\|")))))
+  (when-let* ((re (cdr drgnx-explorer--exclude-memo)))
+    (let ((case-fold-search nil)) (string-match-p re name))))
 
 (defcustom drgnx-explorer-compact-folders t
   "Show an open folder whose only entry is a folder on one row (`src/app').
@@ -49,6 +65,9 @@ Only chains in listings already read are joined: a closed folder is never read f
 (defconst drgnx-explorer-buffer-name " *drgnx explorer*" "Internal (a leading space): not in C-x b or ibuffer.")
 
 (defvar drgnx-explorer--roots nil "The Explorer's root directories (never changed by the follower).")
+(defvar drgnx-explorer--default-roots nil
+  "The roots the Explorer took by itself (the editor's folder when it was first shown), not the user: Open Folder
+replaces them, the layout file never keeps them.")
 (defvar drgnx-explorer--expanded (make-hash-table :test #'equal) "Expanded folders (paths without trailing /).")
 ;; Folder → (MTIME . CHILDREN), at most 64 folders (PERF-L L1).  An expanded folder is got on every render, so the shown
 ;; ones stay recent and the least recently shown goes first.  `drgnx-core/workbench' activates it.
@@ -82,6 +101,114 @@ listed.  Otherwise a remote folder shows its cached listing, or one row saying i
   (dolist (dir (drgnx-cache-keys 'explorer-listing))
     (unless (file-remote-p dir) (drgnx-cache-remove 'explorer-listing dir))))
 
+;;;; Reading a folder off the main thread
+;; With Nidhogg's workers on (`drgnx-file-stream-available-p'), a local folder shown by a command of the user (expanding
+;; it) or by a file event is read by `nidhogg-directory-files-async' (unsorted, in batches).  Until the last batch the
+;; folder shows its cached rows, or one row "…"; then the rows are put in place (`drgnx-explorer--patch-dir').  What
+;; may happen when is decided by a pure core, `drgnx-explorer--read-step' (a state and an event give a state and the
+;; effects to run), tested in every order: a collapse before the last batch shows nothing, a read that a file event or a
+;; Refresh overtook is not shown, a batch of an older read is dropped.  The shell below only runs the effects.
+
+(cl-defstruct (drgnx-explorer--read (:constructor drgnx-explorer--read-make) (:copier drgnx-explorer--read-copy))
+  "One folder's read: EXPANDED (its rows are shown), GEN (the current read's number), READING (a read of GEN runs),
+ACC (the entries delivered by it, in order) and DIRTY (the folder changed while it ran)."
+  (expanded t) (gen 0) reading acc dirty)
+
+(defun drgnx-explorer--read-step (state event)
+  "STATE after EVENT, as (STATE . EFFECTS); STATE is not changed.  The events: (expand) rows of the folder are wanted
+and its cache is no good; (collapse); (changed) the folder changed on disk; (refresh) a full render follows, so every
+read so far is dropped; (batch GEN ENTRIES) and (done GEN) from the read GEN.  The effects: (start GEN), (store GEN) the
+read GEN ended and its entries are the folder's listing, (patch GEN) and show them now."
+  (let ((s (drgnx-explorer--read-copy state)) effects)
+    (cl-flet ((start () (setf (drgnx-explorer--read-gen s) (1+ (drgnx-explorer--read-gen s))
+                              (drgnx-explorer--read-reading s) t (drgnx-explorer--read-acc s) nil
+                              (drgnx-explorer--read-dirty s) nil)
+                (push (list 'start (drgnx-explorer--read-gen s)) effects)))
+      (pcase event
+        (`(expand) (setf (drgnx-explorer--read-expanded s) t)
+         (unless (drgnx-explorer--read-reading s) (start)))
+        (`(collapse) (setf (drgnx-explorer--read-expanded s) nil))
+        (`(changed) (if (drgnx-explorer--read-reading s)
+                        (setf (drgnx-explorer--read-dirty s) t)
+                      (when (drgnx-explorer--read-expanded s) (start))))
+        (`(refresh) (setf (drgnx-explorer--read-gen s) (1+ (drgnx-explorer--read-gen s))
+                          (drgnx-explorer--read-reading s) nil (drgnx-explorer--read-acc s) nil
+                          (drgnx-explorer--read-dirty s) nil))
+        (`(batch ,gen ,entries)
+         (when (and (drgnx-explorer--read-reading s) (eql gen (drgnx-explorer--read-gen s)))
+           (setf (drgnx-explorer--read-acc s) (append (drgnx-explorer--read-acc s) entries nil))))
+        (`(done ,gen)
+         (when (and (drgnx-explorer--read-reading s) (eql gen (drgnx-explorer--read-gen s)))
+           (setf (drgnx-explorer--read-reading s) nil)
+           (push (list 'store gen (drgnx-explorer--read-acc s)) effects)
+           (cond ((drgnx-explorer--read-dirty s) (when (drgnx-explorer--read-expanded s) (start)))
+                 ((drgnx-explorer--read-expanded s) (push (list 'patch gen) effects)))))))
+    (cons s (nreverse effects))))
+
+(defvar drgnx-explorer--async-reads nil
+  "Non-nil while a command of the user or a file event shows a folder: a local folder that must be read is read off the
+main thread (see `drgnx-explorer--read-step').  Everything else, a full render included, reads at once.")
+(defvar drgnx-explorer--reads (make-hash-table :test #'equal)
+  "Folder → its `drgnx-explorer--read'.  Small, so kept; past 256 the idle ones go, and `drgnx-explorer--read-epoch'
+keeps the number of a read that still runs from being given again.")
+(defvar drgnx-explorer--read-epoch 0 "The highest read number given to any folder.")
+(defvar drgnx-explorer--read-mtimes (make-hash-table :test #'equal) "Folder → its modification time when its read started.")
+(defconst drgnx-explorer--reading-row "…" "The one row of a folder with no cached rows while it is read.")
+
+(defun drgnx-explorer--batch-entries (dir batch)
+  "BATCH, a list of (NAME . ATTRIBUTES) from `nidhogg-directory-files-async' for DIR, as (NAME . DIRP) without the
+excluded names, as `drgnx-explorer-children' reads a folder."
+  (let (entries)
+    (dolist (e batch)
+      (let ((name (car e)) (type (file-attribute-type (cdr e))))
+        (unless (or (member name '("." "..")) (drgnx-explorer--excluded-name-p name))
+          (push (cons name (or (eq type t) (and (stringp type) (file-directory-p (expand-file-name name dir))))) entries))))
+    (nreverse entries)))
+
+(defun drgnx-explorer--read-feed (dir event)
+  "Give EVENT to DIR's read and run the effects; the state."
+  (setq dir (file-name-as-directory dir))
+  (when (> (hash-table-count drgnx-explorer--reads) 256)
+    (maphash (lambda (d s) (unless (drgnx-explorer--read-reading s) (remhash d drgnx-explorer--reads))) drgnx-explorer--reads))
+  (let* ((state (or (gethash dir drgnx-explorer--reads)
+                    (puthash dir (drgnx-explorer--read-make :gen drgnx-explorer--read-epoch) drgnx-explorer--reads)))
+         (result (drgnx-explorer--read-step state event))
+         (new (car result)))
+    (puthash dir new drgnx-explorer--reads)
+    (setq drgnx-explorer--read-epoch (max drgnx-explorer--read-epoch (drgnx-explorer--read-gen new)))
+    (dolist (effect (cdr result))
+      (pcase effect
+        (`(start ,gen) (drgnx-explorer--read-start dir gen))
+        (`(store ,_ ,entries) (drgnx-cache-put 'explorer-listing dir
+                                               (cons (gethash dir drgnx-explorer--read-mtimes)
+                                                     (sort (copy-sequence entries) #'drgnx-explorer--before))))
+        (`(patch ,_) (drgnx-explorer--patch-dir dir))))
+    (gethash dir drgnx-explorer--reads)))
+
+(defun drgnx-explorer--read-start (dir gen)
+  "Start read GEN of DIR; a read that cannot start ends at once with nothing, and the next look reads synchronously."
+  (puthash dir (file-attribute-modification-time (file-attributes dir)) drgnx-explorer--read-mtimes)
+  (let ((handle (condition-case nil
+                    (nidhogg-directory-files-async
+                     dir (drgnx-guard-wrap
+                          (lambda (batch done err)
+                            (drgnx-explorer--read-feed dir (list 'batch gen (drgnx-explorer--batch-entries dir batch)))
+                            (when (or done err) (drgnx-explorer--read-feed dir (list 'done gen))))
+                          "explorer folder read")
+                     :nosort t)
+                  (error nil))))
+    (unless handle (drgnx-explorer--read-feed dir '(refresh)))))
+
+(defun drgnx-explorer--async-rows (dir hit)
+  "DIR's cached rows (HIT is its cache entry), or the one reading row, while DIR is read off the main thread, started
+now when none runs; nil when it cannot be (the caller reads at once)."
+  (when (and drgnx-explorer--async-reads (drgnx-file-stream-available-p dir) (not (file-remote-p dir)))
+    (let ((state (drgnx-explorer--read-feed dir '(expand))))
+      (when (drgnx-explorer--read-reading state)
+        (if hit (cdr hit) (list (cons drgnx-explorer--reading-row nil)))))))
+
+(declare-function nidhogg-directory-files-async "nidhogg-blk.c" (dir callback &rest args))
+
 (defun drgnx-explorer-children (dir)
   "DIR's entries as sorted (NAME . DIRP), without excluded names; cached while DIR is unchanged.
 A remote DIR is read only while `drgnx-explorer--remote-reads' is non-nil (a command of the user): the
@@ -99,16 +226,17 @@ cached listing is used without asking the host, and a folder never listed has on
                       (file-attribute-modification-time (file-attributes dir)))))
         (if (or (and hit (equal (car hit) mtime)) (and remote (null mtime)))
             (if hit (cdr hit) (list (cons drgnx-explorer--not-listed nil)))
-          (let (entries)
-            (dolist (e (ignore-errors (directory-files-and-attributes dir nil nil t)))
-              (let ((name (car e)) (type (file-attribute-type (cdr e))))
-                (unless (or (member name '("." "..")) (string-match-p drgnx-explorer-exclude name))
-                  (push (cons name (or (eq type t)
-                                       (and (stringp type) (file-directory-p (expand-file-name name dir)))))
-                        entries))))
-            (setq entries (sort entries #'drgnx-explorer--before))
-            (drgnx-cache-put 'explorer-listing dir (cons mtime entries))
-            entries)))))))
+          (or (and (not remote) (drgnx-explorer--async-rows dir hit))
+              (let (entries)
+                (dolist (e (ignore-errors (directory-files-and-attributes dir nil nil t)))
+                  (let ((name (car e)) (type (file-attribute-type (cdr e))))
+                    (unless (or (member name '("." "..")) (drgnx-explorer--excluded-name-p name))
+                      (push (cons name (or (eq type t)
+                                           (and (stringp type) (file-directory-p (expand-file-name name dir)))))
+                            entries))))
+                (setq entries (sort entries #'drgnx-explorer--before))
+                (drgnx-cache-put 'explorer-listing dir (cons mtime entries))
+                entries))))))))
 
 (defun drgnx-explorer--expanded-p (path) (gethash path drgnx-explorer--expanded))
 
@@ -161,36 +289,53 @@ buffer, and they keep both in step.")
   (and v (not (aref v 2)) (aref v 3) (equal (aref v 0) drgnx-explorer--not-listed)))
 
 (defun drgnx-explorer-node-at (pos) "Path of the row at POS (nil for the \"(not listed — Refresh)\" row: no file operation acts on it)."
-       (when-let* ((v (drgnx-explorer--row-data pos)) ((not (drgnx-explorer--placeholder-p v))))
-         (drgnx-explorer--path v)))
+       (if (drgnx-explorer--rows-p)
+           (and pos (get-text-property (save-excursion (goto-char pos) (pos-bol)) drgnx-view-patch-id-prop))
+         (when-let* ((v (drgnx-explorer--row-data pos)) ((not (drgnx-explorer--placeholder-p v))))
+           (drgnx-explorer--path v))))
 (defun drgnx-explorer-depth-at (pos) "Depth of the row at POS (0 for a root)."
        (when-let* ((v (drgnx-explorer--row-data pos))) (aref v 1)))
 (defun drgnx-explorer-dir-at (pos) "Non-nil if the row at POS is a folder."
-       (when-let* ((v (drgnx-explorer--row-data pos))) (aref v 2)))
+       (if (drgnx-explorer--rows-p)
+           (when-let* ((id (drgnx-explorer-node-at pos))) (eql 1 (drgnx-view-nav-field "dir" id)))
+         (when-let* ((v (drgnx-explorer--row-data pos))) (aref v 2))))
 
 (defcustom drgnx-explorer-git t "Show git status in the Explorer (letters, colours, dimmed ignored files)."
   :type 'boolean)
 
-(defun drgnx-explorer--git-decorate (bol eol path dirp name-start)
-  "Colour the name and put the status letter (● for a folder with changes) at the right edge.
+(defun drgnx-explorer--git-decorate (_bol eol path dirp name-start)
+  "Dim an ignored file's name, and put at the right edge the status letter (● for a folder with changes) and the ⋯ control
+\(`drgnx-wb-row-tail-overlay'): the control is hidden until the row is hovered; the selected row's is drawn in the
+selection's face.
 A row of a repository whose status is not read yet asks for it (`drgnx-explorer--git-unread')."
   (when (and drgnx-explorer-git (drgnx-git-unread-p path)) (drgnx-explorer--git-unread))
-  (when-let* ((status (and drgnx-explorer-git (drgnx-git-status path))))
-    (pcase-let ((`(,letter ,face) (drgnx-git-look status)))
-      (add-face-text-property name-start eol face)
-      (let ((mark (if (and dirp (not (memq status '(ignored untracked)))) "●" letter)))
-        (when mark
-          (let ((o (make-overlay eol eol)))
-            (overlay-put o 'drgnx-git t)
-            ;; a terminal window has no fringe: its last column shows the truncation `$', so one more column stays
-            ;; free.  The overlay is painted once for every frame that shows the buffer, so it is the same everywhere.
-            (overlay-put o 'after-string (concat (propertize " " 'display '(space :align-to (- right 3)))
-                                                 (propertize mark 'face face)))))))
-    (ignore bol)))
+  (let* ((status (and drgnx-explorer-git (drgnx-git-status path)))
+         (look (and status (drgnx-git-look status)))
+         (mark (and status (if (and dirp (not (memq status '(ignored untracked)))) "●" (drgnx-git-letter status)))))
+    ;; the name keeps the text colour (window-dark.html `.row'): the state is the mark; an ignored file is dimmed
+    (when (eq status 'ignored) (add-face-text-property name-start eol (cadr look)))
+    ;; a terminal window has no fringe: the overlay's padding keeps the last column free for the truncation `$'
+    (drgnx-wb-row-tail-overlay eol mark (and mark (drgnx-wb-git-mark-face status)))))
+
+(defun drgnx-explorer--icons (bol depth name-start dirp name)
+  "Draw the row's chevron and file or folder icon over the two characters of its prefix, and the indent of each
+level as `tree-indent' pixels, when icons are drawn as images (graphical frames).  The text stays as it is."
+  (let* ((chevron (if (= depth 0) bol (- name-start 2)))
+         (open (eq (char-after chevron) ?▾))
+         (img (lambda (icon) (get-text-property 0 'display (drgnx-look-icon icon)))))
+    (when-let* ((file (funcall img (if dirp (if open 'folder-open 'folder) (drgnx-look-file-name-icon-name name)))))
+      (when (and dirp (funcall img 'chevron-down))
+        (put-text-property chevron (1+ chevron) 'display (funcall img (if open 'chevron-down 'chevron-right))))
+      (put-text-property (1+ chevron) (+ chevron 2) 'display (drgnx-wb-icon-gap file))
+      (when (and (fboundp 'drgnx-look-density-value) (> depth 1))
+        (let ((px (round (* (drgnx-pixels-scale) (drgnx-look-density-value 'tree-indent)))) (p bol))
+          (while (< p chevron)
+            (put-text-property p (+ p 2) 'display `(space :width (,px)))
+            (setq p (+ p 2))))))))
 
 (defun drgnx-explorer--fontify (beg end)
   "Paint the rows between BEG and END (jit-lock: only what is displayed): guides and chevron, the
-name's face, the hover highlight, the git status."
+name's face, the hover highlight, the icons, the git status and the ⋯ control."
   (save-excursion
     (goto-char beg)
     (forward-line 0)
@@ -204,9 +349,12 @@ name's face, the hover highlight, the git status."
             (put-text-property (point) name-start 'face 'drgnx-explorer-guide)
             (add-text-properties name-start (pos-eol)
                                  (list 'face (cond ((= depth 0) 'drgnx-explorer-root) ((aref v 2) 'drgnx-explorer-directory)
-                                                   (t 'drgnx-explorer-file))
-                                       'mouse-face 'highlight))
-            (drgnx-explorer--git-decorate (point) (pos-eol) (drgnx-explorer--path v) (aref v 2) name-start)
+                                                   (t 'drgnx-explorer-file))))
+            (unless (or (drgnx-explorer--placeholder-p v) (equal (aref v 0) drgnx-explorer--reading-row))
+              (put-text-property (point) (pos-eol) 'mouse-face 'drgnx-hover-row)
+              ;; not on the hidden root row: Emacs draws a `display' image even on invisible text
+              (unless (invisible-p (point)) (drgnx-explorer--icons (point) depth name-start (aref v 2) (aref v 0)))
+              (drgnx-explorer--git-decorate (point) (pos-eol) (drgnx-explorer--path v) (aref v 2) name-start))
             (when (and drgnx-explorer--selection (member (drgnx-explorer--path v) drgnx-explorer--selection))
               (add-face-text-property name-start (pos-eol) 'drgnx-explorer-selected)))
           (forward-line 1)
@@ -266,7 +414,9 @@ faces come later, from jit-lock, for the rows on screen."
   (or (get-buffer drgnx-explorer-buffer-name)
       (with-current-buffer (get-buffer-create drgnx-explorer-buffer-name)
         (drgnx-explorer-mode)
-        (unless drgnx-explorer--roots (setq drgnx-explorer--roots (list (drgnx-explorer--default-root))))
+        (unless drgnx-explorer--roots
+          (setq drgnx-explorer--roots (list (drgnx-explorer--default-root))
+                drgnx-explorer--default-roots drgnx-explorer--roots))
         (drgnx-explorer--render)
         (current-buffer))))
 
@@ -279,19 +429,36 @@ faces come later, from jit-lock, for the rows on screen."
                                                 default-directory)))))
 
 (defun drgnx-explorer--render ()
-  "Render every root from scratch, keeping the row at point by its path."
+  "Render every root from scratch, keeping the row at point by its path; on the rows path, ask the hub again.  The
+roots decide the path (`drgnx-explorer--use-path')."
+  (cond ((when-let* ((b (get-buffer drgnx-explorer-buffer-name))) (with-current-buffer b (drgnx-explorer--use-path))))
+        ((drgnx-explorer--rows-p) (drgnx-explorer--subscribe))
+        (t (drgnx-explorer--render-old))))
+
+(defun drgnx-explorer--insert-root (path)
+  "Insert the row of the root PATH: its name as it is.  With one root the row is not shown (window-dark.html: the
+tree starts at its entries, the island's header names the project); it stays in the rows, so every index holds."
+  (let ((start (point)))
+    (insert (drgnx-explorer--prefix 0 'open) (drgnx-wb-display-name (file-name-nondirectory path)) "\n")
+    (when (null (cdr drgnx-explorer--roots))
+      (put-text-property start (point) 'invisible 'drgnx-explorer-root))))
+
+(defun drgnx-explorer--render-old ()
+  "`drgnx-explorer--render' off the rows path."
   (with-current-buffer (get-buffer-create drgnx-explorer-buffer-name)
     (cl-incf drgnx-explorer--renders)
+    ;; this render reads every folder now: a read that runs is no use any more, and its batches are dropped
+    (dolist (dir (hash-table-keys drgnx-explorer--reads)) (drgnx-explorer--read-feed dir '(refresh)))
     (let ((inhibit-read-only t) data)
       (drgnx-view-with-kept-windows (:key-at #'drgnx-explorer-node-at :pos-of #'drgnx-explorer--row-pos)
         (erase-buffer)
         (dolist (root drgnx-explorer--roots)
           (let ((path (directory-file-name (expand-file-name root))))
-            (insert (drgnx-explorer--prefix 0 'open) (drgnx-wb-display-name (upcase (file-name-nondirectory path))) "\n")
+            (drgnx-explorer--insert-root path)
             (push (list (vector path 0 t nil)) data)
             (push (drgnx-explorer--insert-subtree path 1) data)))
         (setq drgnx-explorer--rows (apply #'vconcat (nreverse data))))
-      (when hl-line-mode (hl-line-highlight))
+      (drgnx-wb-selection-sync)
       (drgnx-explorer--sync-watches)
       (drgnx-explorer--git-refresh))))
 
@@ -299,7 +466,7 @@ faces come later, from jit-lock, for the rows on screen."
   "Read the git status of every root in the background — started once the tree is on screen
 \(starting a process costs milliseconds the render should not wait for): the key `explorer-git',
 0.05 s into a pause, owned by the Explorer buffer (no Explorer: nothing to read for)."
-  (when-let* ((drgnx-explorer-git) (buf (get-buffer drgnx-explorer-buffer-name)))
+  (when-let* ((drgnx-explorer-git) (buf (get-buffer drgnx-explorer-buffer-name)) ((not (drgnx-explorer--rows-p))))
     (drgnx-timer-soon 'explorer-git 0.05 #'drgnx-explorer--git-run :idle t :owner buf)))
 
 (defun drgnx-explorer--git-unread ()
@@ -352,9 +519,13 @@ UNREAD: only those whose status is not read yet (the key `explorer-git-unread').
 (defconst drgnx-explorer--splice-limit 20 "More changed folders than this at once: one full render instead.")
 
 (defun drgnx-explorer--shown-folders ()
-  "Every folder whose contents are on screen: the roots and the expanded, displayed folders."
+  "Every folder whose contents are on screen: the roots and the expanded, displayed folders (on the rows path, the
+local roots and the open folders the hub was asked for)."
   (let (out)
-    (seq-doseq (v drgnx-explorer--rows)
+    (when (drgnx-explorer--rows-p)
+      (setq out (nconc (mapcar #'directory-file-name (seq-remove #'file-remote-p drgnx-explorer--roots))
+                       (hash-table-keys drgnx-explorer--expanded))))
+    (seq-doseq (v (if (drgnx-explorer--rows-p) [] drgnx-explorer--rows))
       (when (and (aref v 2) (or (= (aref v 1) 0) (drgnx-explorer--expanded-p (drgnx-explorer--path v))))
         (push (drgnx-explorer--path v) out))
       (when (and (aref v 2) (aref v 3) (string-search "/" (aref v 0)))   ; a joined row: its middle folders are open too
@@ -365,7 +536,13 @@ UNREAD: only those whose status is not read yet (the key `explorer-git-unread').
 
 (defun drgnx-explorer--sync-watches ()
   "Watch exactly the shown folders (a collapsed folder stops being watched; one that could not be
-watched — the inotify limit — is tried again)."
+watched — the inotify limit — is tried again).  On the rows path the hub watches them: no watch here."
+  (if (drgnx-explorer--rows-p)
+      (drgnx-explorer--unwatch-all)
+    (drgnx-explorer--sync-watches-old)))
+
+(defun drgnx-explorer--sync-watches-old ()
+  "`drgnx-explorer--sync-watches' off the rows path."
   (let ((want (make-hash-table :test #'equal)) gone)
     (dolist (d (drgnx-explorer--shown-folders)) (puthash d t want))
     (maphash (lambda (d desc)
@@ -413,9 +590,10 @@ watched — the inotify limit — is tried again)."
       (setq drgnx-explorer--dirty nil)
       (when-let* ((buf (get-buffer drgnx-explorer-buffer-name)))
         (with-current-buffer buf
-          (if (> (length dirs) drgnx-explorer--splice-limit)
-              (progn (drgnx-explorer--local-cache-clear) (drgnx-explorer--render))   ; a checkout: one pass
-            (dolist (d dirs) (drgnx-explorer--refresh-dir d)))
+          (cond ((drgnx-explorer--rows-p) (drgnx-explorer--subscribe))              ; the hub lists them again
+                ((> (length dirs) drgnx-explorer--splice-limit)
+                 (drgnx-explorer--local-cache-clear) (drgnx-explorer--render))      ; a checkout: one pass
+                (t (dolist (d dirs) (drgnx-explorer--refresh-dir d))))
           (drgnx-explorer--git-refresh))))))
 
 (defun drgnx-explorer--entry-index (dir)
@@ -444,13 +622,23 @@ split, a plain one may join.  The folder's own row and everything else stay."
       (delete-region bol (save-excursion (goto-char bol) (forward-line (- j i)) (point)))
       (let ((new (save-excursion (goto-char bol) (drgnx-explorer--insert-subtree (aref v 3) (aref v 1) head))))
         (setq drgnx-explorer--rows (vconcat (seq-subseq rows 0 i) new (seq-subseq rows j)))))
-    (when hl-line-mode (hl-line-highlight))
+    (drgnx-wb-selection-sync)
     (drgnx-explorer--sync-watches)))
 
-(defun drgnx-explorer--refresh-dir (dir)
+(defun drgnx-explorer--patch-dir (dir)
+  "DIR's read ended and its listing is in the cache: put its rows in place (nothing when DIR is not shown any more or
+Find shows its own tree).  Called from the read's callback."
+  (when-let* ((buf (get-buffer drgnx-explorer-buffer-name)) ((not drgnx-explorer--find)))
+    (with-current-buffer buf
+      (let ((drgnx-explorer--async-reads nil))
+        (drgnx-explorer--refresh-dir dir t))
+      (drgnx-explorer--git-refresh))))
+
+(defun drgnx-explorer--refresh-dir (dir &optional keep-cache)
   "Re-list DIR (shown and expanded) and replace its rows in place, keeping views and selection.
 A folder in the middle of a joined row, or one that now joins its only folder (or no longer does),
-shows its whole entry again."
+shows its whole entry again.  KEEP-CACHE: the listing in the cache is the new one (`drgnx-explorer--patch-dir').
+With Nidhogg's workers on, a local DIR is read off the main thread instead: its rows change when the read ends."
   (when-let* ((dir (directory-file-name dir))
               (i (drgnx-explorer--entry-index dir))
               (v (aref drgnx-explorer--rows i)))
@@ -459,9 +647,13 @@ shows its whole entry again."
       (cl-incf drgnx-explorer--relists)
       (drgnx-cache-remove 'explorer-listing (file-name-as-directory dir))
       (drgnx-explorer--reinsert-entry i))
+     ((and (not keep-cache) (or (= (aref v 1) 0) (drgnx-explorer--expanded-p dir))
+           (drgnx-file-stream-available-p dir) (fboundp 'nidhogg-directory-files-async))
+      (cl-incf drgnx-explorer--relists)
+      (let ((drgnx-explorer--async-reads t)) (drgnx-explorer--read-feed dir '(changed))))
      ((or (= (aref v 1) 0) (drgnx-explorer--expanded-p dir))
       (cl-incf drgnx-explorer--relists)
-      (drgnx-cache-remove 'explorer-listing (file-name-as-directory dir))
+      (unless keep-cache (drgnx-cache-remove 'explorer-listing (file-name-as-directory dir)))
       (if (and (> (aref v 1) 0) (drgnx-explorer--compact-p)
                (drgnx-explorer--only-folder (drgnx-explorer-children dir)))
           (drgnx-explorer--reinsert-entry i)                         ; it joins its folder now
@@ -473,7 +665,7 @@ shows its whole entry again."
             (delete-region next (save-excursion (goto-char next) (forward-line (- j i 1)) (point)))
             (let ((new (save-excursion (goto-char next) (drgnx-explorer--insert-subtree dir (1+ (aref v 1))))))
               (setq drgnx-explorer--rows (vconcat (seq-subseq rows 0 (1+ i)) new (seq-subseq rows j)))))
-          (when hl-line-mode (hl-line-highlight))
+          (drgnx-wb-selection-sync)
           (drgnx-explorer--sync-watches)))))))
 
 (defun drgnx-explorer--row-pos (path)
@@ -494,36 +686,89 @@ shows its whole entry again."
     (save-excursion (goto-char p) (insert (if expanded "▾" "▸")))))
 
 (defun drgnx-explorer-toggle-at (pos)
-  "Expand or collapse the folder whose row is at POS (roots stay expanded)."
+  "Expand or collapse the folder whose row is at POS (roots stay expanded).  With the hub's git letters the folders
+shown changed: they are asked for again."
   (with-current-buffer (drgnx-explorer--buffer)
-    (let* ((i (drgnx-explorer--index pos)) (v (drgnx-explorer--row-data pos))
-           (inhibit-read-only t)
-           (bol (save-excursion (goto-char pos) (pos-bol)))
-           (next (save-excursion (goto-char bol) (forward-line 1) (point))))
-      (when (and v (aref v 2) (> (aref v 1) 0) (not drgnx-explorer--find))   ; Find shows its own folders
-        (let ((path (drgnx-explorer--path v)) (depth (aref v 1)) (rows drgnx-explorer--rows)
-              (inhibit-quit t))                     ; a quit between the text and the rows would desync them
-          (if (drgnx-explorer--expanded-p path)
-              (let ((j (drgnx-explorer--subtree-last i)))
-                (remhash path drgnx-explorer--expanded)
-                (delete-region next (save-excursion (goto-char next) (forward-line (- j i 1)) (point)))
-                (setq drgnx-explorer--rows (vconcat (seq-subseq rows 0 (1+ i)) (seq-subseq rows j)))
-                (drgnx-explorer--set-chevron bol depth nil))
-            (puthash path t drgnx-explorer--expanded)
+    (if (drgnx-explorer--rows-p)
+        (drgnx-explorer--rows-toggle (drgnx-explorer-node-at pos))
+      (prog1 (drgnx-explorer--toggle-at-old pos)
+        (when (drgnx-git-letters-active-p) (drgnx-explorer--git-refresh))))))
+
+(defun drgnx-explorer--toggle-at-old (pos)
+  "`drgnx-explorer-toggle-at' off the rows path, in the Explorer's buffer."
+  (let* ((i (drgnx-explorer--index pos)) (v (drgnx-explorer--row-data pos))
+         (inhibit-read-only t)
+         (bol (save-excursion (goto-char pos) (pos-bol)))
+         (next (save-excursion (goto-char bol) (forward-line 1) (point))))
+    (when (and v (aref v 2) (> (aref v 1) 0) (not drgnx-explorer--find))   ; Find shows its own folders
+      (let ((path (drgnx-explorer--path v)) (depth (aref v 1)) (rows drgnx-explorer--rows)
+            (inhibit-quit t))                     ; a quit between the text and the rows would desync them
+        (if (drgnx-explorer--expanded-p path)
+            (let ((j (drgnx-explorer--subtree-last i)))
+              (remhash path drgnx-explorer--expanded)
+              (when (gethash (file-name-as-directory path) drgnx-explorer--reads) ; a read still running shows nothing
+                (drgnx-explorer--read-feed (file-name-as-directory path) '(collapse)))
+              (delete-region next (save-excursion (goto-char next) (forward-line (- j i 1)) (point)))
+              (setq drgnx-explorer--rows (vconcat (seq-subseq rows 0 (1+ i)) (seq-subseq rows j)))
+              (drgnx-explorer--set-chevron bol depth nil))
+          (puthash path t drgnx-explorer--expanded)
+          (let ((drgnx-explorer--async-reads t))             ; the user's command: a folder to read is read off the main thread
             (if (and (drgnx-explorer--compact-p) (drgnx-explorer--only-folder (drgnx-explorer-children path)))
                 (drgnx-explorer--reinsert-entry i)           ; its only folder joins this row
               (let ((new (save-excursion (goto-char next) (drgnx-explorer--insert-subtree path (1+ depth)))))
                 (setq drgnx-explorer--rows (vconcat (seq-subseq rows 0 (1+ i)) new (seq-subseq rows (1+ i)))))
-              (drgnx-explorer--set-chevron bol depth t)))
-          (drgnx-explorer--sync-watches))
-        t))))
+              (drgnx-explorer--set-chevron bol depth t))))
+        (drgnx-explorer--sync-watches))
+      t)))
 
 (defun drgnx-explorer--root-of (file)
   (seq-find (lambda (r) (string-prefix-p (file-name-as-directory (expand-file-name r)) file)) drgnx-explorer--roots))
 
 (defun drgnx-explorer-reveal (file &optional window)
   "Show FILE's row: expand its folders and put WINDOW's point on it (no scroll if visible).
-Returns non-nil if FILE is under a root."
+Returns non-nil if FILE is under a root.  On the rows path the folders open now and the hub is asked again; FILE is
+selected when its row is there."
+  (if (drgnx-explorer--rows-p)
+      (drgnx-explorer--rows-reveal file)
+    (drgnx-explorer--reveal-old file window)))
+
+(defvar-local drgnx-explorer--reveal-pending nil
+  "On the rows path, the file a reveal waits for: its folders were opened and the hub asked; the draw that brings its
+row selects it (`drgnx-explorer--rows-patched').")
+
+(defconst drgnx-explorer--nav-faces '(("ticked" . drgnx-explorer-selected) ("selected") ("dim"))
+  "The Explorer's classes on the rows path (`drgnx-view-nav-faces'): the marks are Sjá's ticked set; the selected row is
+the workbench's (`drgnx-wb-selection-sync', the look's fill and ring at point), so Sjá's `selected' class draws none;
+and `dim' draws none: Sjá dims the rows off the selection's chain, and the Explorer has no chain (every other row).")
+
+(defun drgnx-explorer--rows-select (file)
+  "Select FILE's drawn row outside a command of the Explorer (a reveal): point and the selected row go to it."
+  (drgnx-view-nav 'select file)
+  (drgnx-wb-selection-sync))
+
+(defun drgnx-explorer--rows-reveal (file)
+  "`drgnx-explorer-reveal' on the rows path: FILE's folders open now and the hub is asked again; FILE is selected now
+when its row is drawn, else when the listing that holds it arrives."
+  (let* ((file (directory-file-name (expand-file-name file))) (root (drgnx-explorer--root-of file)))
+    (when root
+      (with-current-buffer (drgnx-explorer--buffer)
+        (let ((dir (directory-file-name (expand-file-name root))) (asked nil))
+          (dolist (part (butlast (split-string (file-relative-name file root) "/" t)))
+            (setq dir (expand-file-name part dir))
+            (unless (gethash dir drgnx-explorer--expanded) (puthash dir t drgnx-explorer--expanded) (setq asked t)))
+          (let ((drawn (drgnx-view-row-start drgnx-view file)))
+            ;; a row outside the hub's window is asked for with the window moved to it
+            (when (or asked (not drawn))
+              (drgnx-explorer--subscribe nil file)
+              (drgnx-explorer--await-answer)          ; a user's reveal: drawn (and selected) in its own frame
+              (setq drawn (drgnx-view-row-start drgnx-view file)))
+            (if drawn
+                (progn (setq drgnx-explorer--reveal-pending nil) (drgnx-explorer--rows-select file))
+              (setq drgnx-explorer--reveal-pending file)))
+          t)))))
+
+(defun drgnx-explorer--reveal-old (file &optional window)
+  "`drgnx-explorer-reveal' off the rows path."
   (let* ((file (expand-file-name file)) (root (drgnx-explorer--root-of file)))
     (when root
       (with-current-buffer (drgnx-explorer--buffer)
@@ -540,7 +785,7 @@ Returns non-nil if FILE is under a root."
                   (set-window-start window (save-excursion (goto-char pos)
                                                            (forward-line (- (/ (window-body-height window) 4)))
                                                            (pos-bol))))
-                (save-excursion (goto-char pos) (when hl-line-mode (hl-line-highlight))))
+                (save-excursion (goto-char pos) (drgnx-wb-selection-sync)))
             (goto-char pos))
           t)))))
 
@@ -558,14 +803,44 @@ A remote file is never revealed: this runs from the change bus, where remote I/O
 
 (defun drgnx-explorer-set-roots (roots)
   "Show ROOTS (directories) in the Explorer (this ends Find)."
-  (when drgnx-explorer--find (setq drgnx-explorer--find nil) (drgnx-explorer--plain-title))
-  (setq drgnx-explorer--roots (mapcar (lambda (r) (file-name-as-directory (expand-file-name r))) roots))
+  (when drgnx-explorer--find (drgnx-explorer--find-stop) (setq drgnx-explorer--find nil) (drgnx-explorer--plain-title))
+  (setq drgnx-explorer--roots (mapcar (lambda (r) (file-name-as-directory (expand-file-name r))) roots)
+        drgnx-explorer--default-roots (seq-filter (lambda (r) (member r drgnx-explorer--roots)) drgnx-explorer--default-roots))
   ;; a command of the user lists a remote root now; `drgnx open' (emacsclient -e, in the server's process filter) and
   ;; other automatic callers do not
   (let ((drgnx-explorer--remote-reads (or drgnx-explorer--remote-reads (not inhibit-quit))))
-    (if (get-buffer drgnx-explorer-buffer-name) (drgnx-explorer--render) (drgnx-explorer--buffer))))   ; a new one renders itself
+    (if (get-buffer drgnx-explorer-buffer-name) (drgnx-explorer--render) (drgnx-explorer--buffer)))   ; a new one renders itself
+  (dolist (f (frame-list)) (drgnx-wb-island-refresh f)))       ; the island is named after the first folder
 
 (defun drgnx-explorer-roots () drgnx-explorer--roots)
+
+(defun drgnx-explorer-chosen-roots ()
+  "The roots the user opened: `drgnx-explorer-roots' without the one the Explorer took by itself at the start."
+  (seq-remove (lambda (r) (member r drgnx-explorer--default-roots)) drgnx-explorer--roots))
+
+(defun drgnx-explorer-open-root (dir)
+  "Make DIR the Explorer's first folder, as `code DIR': the folder it took by itself goes, the ones the user opened
+stay.  Every window showing the Explorer then shows DIR's row at its top."
+  (let ((dir (file-name-as-directory (expand-file-name dir))))
+    (drgnx-explorer-set-roots (cons dir (remove dir (drgnx-explorer-chosen-roots))))
+    (with-current-buffer (drgnx-explorer--buffer)
+      (goto-char (point-min))
+      (dolist (w (get-buffer-window-list (current-buffer) nil t))
+        (set-window-start w (point-min))
+        (set-window-point w (point-min))))))
+
+(defun drgnx-explorer-remove-folder ()
+  "Remove the folder of the root row here from the Explorer (Remove Folder from Workspace): nothing on disk changes."
+  (interactive)
+  (let* ((here (drgnx-explorer--node))
+         (root (and here (car (member (file-name-as-directory here) drgnx-explorer--roots)))))
+    (unless root (user-error "Not a folder of the workspace: right-click its top row"))
+    (drgnx-explorer-set-roots (remove root drgnx-explorer--roots))))
+
+(defun drgnx-explorer--root-row-p (_click)
+  "Non-nil on a root row of the Explorer (the right-click menu's `explorer-root' context)."
+  (and (derived-mode-p 'drgnx-explorer-mode)
+       (when-let* ((here (drgnx-explorer--node))) (member (file-name-as-directory here) drgnx-explorer--roots))))
 
 (defun drgnx-explorer-refresh ()
   "Re-read changed folders and render again, keeping expansion and the selected row (during Find: filter again)."
@@ -574,32 +849,433 @@ A remote file is never revealed: this runs from the change bus, where remote I/O
     (drgnx-explorer--buffer)
     (if drgnx-explorer--find (drgnx-explorer--find-again) (drgnx-explorer--render))))
 
+;;;; On the rows path: the hub's listing, keys through the replica (Sjá)
+;; With `drgnx-explorer-rows-attach' the Explorer is a hub-fed view: the hub lists the roots and the open folders
+;; (`explorer/subscribe') and sends a `tree' model (one node per row, its id the row's path, the flag `expanded' on an
+;; open folder) and the rows.  The keys answer from the model in-process: next and previous follow `down' and `up',
+;; collapse on a closed row goes to the parent (`left'), expand on an open folder to its first child (`right'), typing
+;; selects a visible sibling by prefix.  Opening or closing a folder changes the set of open folders here and asks the
+;; hub again without waiting; the rows change when its answer comes.  Folder watches stay the Explorer's: an event asks
+;; again.  Icons, git letters, Find and multi-select are still drawn only off this path, so the Explorer does not attach
+;; itself yet.
+
+(declare-function nidhogg-view-set "nidhogg-views" (h what value))
+(declare-function nidhogg-view-get "nidhogg-views" (h what &optional arg arg2))
+(defvar drgnx-hub--events)
+(declare-function drgnx-hub--call-on "drgnx-hub-client")
+
+(defvar drgnx-explorer--hub-view nil "The Explorer's hub-fed view on the rows path, or nil (it draws its own rows).")
+
+(defvar drgnx-explorer-hub-view-name "explorer" "The name of the Explorer's view in the hub and in Sjá.")
+
+(defun drgnx-explorer--rows-p ()
+  "Whether the Explorer is a hub-fed view with its model in Sjá (the rows path)."
+  (when-let* ((drgnx-explorer--hub-view) (b (get-buffer drgnx-explorer-buffer-name)))
+    (with-current-buffer b (and drgnx-view-patch (drgnx-view-patch-handle drgnx-view-patch) t))))
+
+(defvar drgnx-explorer--lisp-listing nil
+  "Non-nil: list in Lisp even when the hub could.  Set by the tests of the Lisp listing, which a remote root still uses.")
+
+(defun drgnx-explorer--hub-lists-p ()
+  "Whether the hub lists the roots: this Emacs has Sjá and no root is remote.  The hub lists local folders only; a
+remote root keeps the Lisp listing, frozen until the hub lists remote folders (plan sja-complete Q3 (b))."
+  (and (not drgnx-explorer--lisp-listing) (fboundp 'nidhogg-view--call)
+       (not (seq-some #'file-remote-p drgnx-explorer--roots))))
+
+(defun drgnx-explorer--use-path ()
+  "In the Explorer's buffer: be the hub's view when the hub lists the roots, else list in Lisp, switching when the
+roots changed which.  Non-nil when it attached now (the attach asked the hub already)."
+  (let ((want (drgnx-explorer--hub-lists-p)) (have (and drgnx-explorer--hub-view drgnx-view-patch t)))
+    (cond ((and want (not have)) (drgnx-explorer-rows-attach drgnx-explorer-hub-view-name "unshown") t)
+          ((and have (not want)) (drgnx-explorer--rows-detach) nil))))
+
+(declare-function drgnx-hub-start-for-command "drgnx-hub-client" (on-fail))
+
+(defun drgnx-explorer-start-hub ()
+  "A command shows the Explorer: when the hub lists its folders (`drgnx-explorer--hub-lists-p') and none runs, start it
+\(`drgnx-hub-start-for-command', not waited for); the rows come once it answers.  Only commands call this: a hook or a
+timer never starts the hub."
+  (when (drgnx-explorer--hub-lists-p)
+    (require 'drgnx-hub-client)
+    (drgnx-hub-start-for-command #'drgnx-explorer--no-hub)))
+
+(defun drgnx-explorer--no-hub (why)
+  "`drgnx-explorer-start-hub' found no hub to have: say WHY."
+  (message "The Explorer cannot list the folders without the hub: %s" why))
+
+(defun drgnx-explorer--rows-detach ()
+  "In the Explorer's buffer: no longer the hub's view; the buffer is a new Explorer, for the Lisp listing to draw
+\(it replaces the text)."
+  (require 'drgnx-view-env)
+  (drgnx-view-env-unregister drgnx-explorer--hub-view)
+  (drgnx-view-patch-detach)
+  (drgnx-explorer--rows-unhook)
+  (setq drgnx-explorer--hub-view nil)
+  (drgnx-explorer-mode)                 ; the rows path's buffer-local state goes, the Lisp painting comes back
+  (delete-all-overlays))
+
+(defvar-local drgnx-explorer--waiting nil
+  "On the rows path, the overlay of the line saying the Explorer waits for the hub, until its first rows are drawn.")
+
+(defvar drgnx-explorer-rows-window 150
+  "How many entries the hub's model and rows hold on the rows path (`explorer/subscribe' `window', 50 to 20000): a tall
+Explorer's rows and a page either side.  Past them the window moves on scroll (`drgnx-explorer--rows-scrolled') and on
+a key at its edge, so opening a folder of thousands costs a window, not every entry.")
+
+(defun drgnx-explorer--subscribe (&optional _view around)
+  "Ask the hub for the listing of the roots and the open folders, which it then watches; nothing waits for it.  The hub
+leaves out `drgnx-explorer-exclude-names', and while Find runs lists only the files it found.  The hub
+lists local folders only: a remote root is left out.  It holds `drgnx-explorer-rows-window' entries, moved to hold
+AROUND (a path) when that falls outside.  On the subscribed connection, where the view's env went: the hub
+sends the rows to the connection that asked.  While it is down nothing is asked; the reconnect asks again."
+  (when (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events))
+    (setq drgnx-view-patch-hurry t)       ; the user waits for this listing: drawn at the next pass, not a frame on
+    (condition-case nil
+        (drgnx-hub--call-on drgnx-hub--events "explorer/subscribe"
+                            (append
+                             (list :view drgnx-explorer--hub-view
+                                   :roots (vconcat (mapcar (lambda (r) (directory-file-name (expand-file-name r)))
+                                                           (seq-remove #'file-remote-p drgnx-explorer--roots)))
+                                   :expanded (vconcat (sort (hash-table-keys drgnx-explorer--expanded) #'string<))
+                                   :compact (if drgnx-explorer-compact-folders t :false)
+                                   :indent (drgnx-explorer--tree-indent)
+                                   :exclude (vconcat drgnx-explorer-exclude-names)
+                                   :window drgnx-explorer-rows-window)
+                             (when around (list :around around))
+                             ;; Find: only the files it found (`drgnx-explorer--find-apply')
+                             (when-let* ((only (plist-get drgnx-explorer--find :only))) (list :only only)))
+                            #'ignore)
+      (error nil)))
+  (drgnx-explorer--sync-watches))
+
+(defun drgnx-explorer--rows-subscribe (&optional _view)
+  "Subscribe (`drgnx-explorer--subscribe') and read the roots' git status: the hub marks the rows from the statuses
+read on the same connection (`git/letters'), which a new hub has lost.  At attach and when the hub is up again."
+  (drgnx-explorer--subscribe)
+  (when drgnx-explorer-git
+    (dolist (r drgnx-explorer--roots)
+      (unless (file-remote-p r) (drgnx-git-refresh (file-name-as-directory (expand-file-name r)))))))
+
+(defun drgnx-explorer--tree-indent ()
+  "A level's indent in logical px for the hub's rows: the density's `tree-indent'."
+  (if (fboundp 'drgnx-look-density-value) (drgnx-look-density-value 'tree-indent) 12))
+
+(defun drgnx-explorer--density-changed ()
+  "On `drgnx-look-density-changed-hook': the hub draws the rows again with the new indent, at once."
+  (when (drgnx-explorer--rows-p)
+    (with-current-buffer (get-buffer drgnx-explorer-buffer-name) (drgnx-explorer--subscribe))))
+
+(defvar-local drgnx-explorer--tails nil
+  "On the rows path, the tail overlay of each drawn row by its key (`drgnx-wb-row-tail-overlay'), moved with the row.")
+
+(defvar-local drgnx-explorer--badges nil
+  "On the rows path, the who-is-here badge overlay (empty, at the name's end) of each drawn row that has one, by key.")
+
+(defvar drgnx-explorer-badge-functions nil
+  "Called with (ORDINALS DIRP) for a row the hub says agents are at (`drgnx-agents-here': their ordinals, ascending;
+DIRP for a folder with a file of theirs inside); the first string returned is the row's badge, drawn after the name.
+The marks and colours of an ordinal are the display's: who is here (tools/agents-in-editor) adds its function.")
+
+(defun drgnx-explorer--rows-badge (key eol ords)
+  "Put KEY's badge for the agents ORDS (a list or vector from the hub, or nil) at EOL, moving its overlay; none: gone."
+  (let* ((badges (or drgnx-explorer--badges (setq drgnx-explorer--badges (make-hash-table :test #'equal))))
+         (o (gethash key badges))
+         (s (and ords (> (length ords) 0)
+                 (run-hook-with-args-until-success 'drgnx-explorer-badge-functions (append ords nil)
+                                                   (eql 1 (drgnx-view-nav-field "dir" key))))))
+    (if (not s)
+        (when o (delete-overlay o) (remhash key badges))
+      (if (and o (overlay-buffer o)) (move-overlay o eol eol) (setq o (make-overlay eol eol)) (puthash key o badges))
+      (overlay-put o 'priority 5)
+      (overlay-put o 'before-string s))))
+
+(defun drgnx-explorer--rows-tail (key beg eol)
+  "Give KEY's drawn row (BEG to EOL) its tail at the right edge, its overlay moved rather than made again: the ⋯
+control and the hover, and the git mark of the status the hub put on the name (a file's letter, ● for a folder with
+changes inside)."
+  (let* ((status (and (< beg eol) (intern-soft (get-text-property (1- eol) 'drgnx-git-status))))
+         (status (and (assq status drgnx-git--looks) status))
+         (mark (and status (if (and (not (memq status '(ignored untracked)))
+                                    (eql 1 (drgnx-view-nav-field "dir" key)))
+                               "●" (drgnx-git-letter status))))
+         (o (drgnx-wb-row-tail-overlay eol mark (and mark (drgnx-wb-git-mark-face status)) nil
+                                       (gethash key drgnx-explorer--tails))))
+    (overlay-put o 'evaporate t)
+    (puthash key o drgnx-explorer--tails)))
+
+(defvar-local drgnx-explorer--hidden-line nil
+  "On the rows path, the overlay that hides the single root's line, its newline included (`drgnx-explorer--hide-line').")
+
+(defun drgnx-explorer--hide-line (beg eol)
+  "Hide the line of the invisible row from BEG to EOL, its newline too, with one overlay moved to it."
+  (let ((end (min (1+ eol) (point-max))))
+    (if (overlayp drgnx-explorer--hidden-line)
+        (move-overlay drgnx-explorer--hidden-line beg end)
+      (setq drgnx-explorer--hidden-line (make-overlay beg end nil t nil))
+      (overlay-put drgnx-explorer--hidden-line 'invisible t)
+      (overlay-put drgnx-explorer--hidden-line 'evaporate t))))
+
+(defun drgnx-explorer--rows-tails-in (window start)
+  "The rows near what WINDOW shows from START (`drgnx-wb-span') that have no tail get one (after a scroll)."
+  (when drgnx-explorer--tails
+    (let ((span (drgnx-wb-span start (window-body-height window))))
+      (save-excursion
+        (goto-char (car span))
+        (while (< (point) (cdr span))
+          (when-let* ((key (get-text-property (point) drgnx-view-patch-id-prop))
+                      ((not (when-let* ((o (gethash key drgnx-explorer--tails))) (overlay-buffer o)))))
+            (drgnx-explorer--rows-tail key (point) (pos-eol)))
+          (forward-line 1))))))
+
+(defun drgnx-explorer--rows-patched (view keys)
+  "`drgnx-view-patch-patched-functions' of the Explorer: the drawn rows KEYS get their tail at the right edge (the ⋯
+control and the hover, the git mark of the status the hub put on the name: a file's letter, ● for a folder with
+changes inside) and their who-is-here badge after the name (`drgnx-explorer--rows-badge'), each row's overlays moved
+rather than made again.  A tail goes with its row's text (`evaporate'): a removed or redrawn row's is gone, and a
+redrawn row gets a new one; a badge of a row that went is deleted here."
+  (when drgnx-explorer--waiting (delete-overlay drgnx-explorer--waiting) (setq drgnx-explorer--waiting nil))
+  (let ((tails (or drgnx-explorer--tails (setq drgnx-explorer--tails (make-hash-table :test #'equal))))
+        (spans (drgnx-wb-shown-spans)))
+    (dolist (key keys)
+      (let ((beg (drgnx-view-row-start view key)) (o (gethash key tails)))
+        (if (not beg)
+            (progn (when o (delete-overlay o) (remhash key tails))
+                   (drgnx-explorer--rows-badge key nil nil))
+          (let ((eol (save-excursion (goto-char beg) (pos-eol))))
+            ;; a tail only near what a window shows (as the Lisp listing's fontify made them); the others when scrolled to.
+            ;; The hidden root's row (invisible text) takes no line: its newline is hidden too, and it has no tail.
+            (if (get-text-property beg 'invisible)
+                (progn (when o (delete-overlay o) (remhash key tails))
+                       (drgnx-explorer--hide-line beg eol))
+              (if (or (eq spans t) (seq-some (lambda (s) (<= (car s) beg (cdr s))) spans))
+                  (drgnx-explorer--rows-tail key beg eol)
+                (when o (delete-overlay o) (remhash key tails))))
+            (drgnx-explorer--rows-badge key eol (and (< beg eol) (get-text-property (1- eol) 'drgnx-agents-here)))))))
+    (when (> (hash-table-count tails) (drgnx-view-row-count view))
+      (maphash (lambda (key o) (unless (overlay-buffer o) (remhash key tails))) tails))
+    (when-let* ((file drgnx-explorer--reveal-pending) ((drgnx-view-row-start view file)))
+      (setq drgnx-explorer--reveal-pending nil)
+      (drgnx-explorer--rows-select file))
+    ;; a reset put point back on the selection (`drgnx-view-nav-class-step'): the selected row follows it
+    (let ((o drgnx-wb--selected-overlay))
+      (when (and (overlayp o) (overlay-buffer o) (/= (overlay-start o) (pos-bol))) (drgnx-wb-selection-sync)))
+    (when drgnx-explorer--badges        ; a few rows at most: the badges of rows that went
+      (maphash (lambda (key o) (unless (drgnx-view-row-start view key) (delete-overlay o) (remhash key drgnx-explorer--badges)))
+               drgnx-explorer--badges))))
+
+(defun drgnx-explorer--rows-twin (class)
+  "The Explorer's buffer in display CLASS (a dock on a monitor at another scale; `drgnx-view-patch-twin-function'), made
+from the Explorer's buffer: its mode and keys, the hub's rows of CLASS and the same handlers after a draw.  Its scroll
+pages the hub's window as the Explorer's does (`drgnx-explorer--rows-scrolled': the window is the view's, so both
+buffers hold the same entries), and with the hub down it says it waits.  The folders' watches and the find stay the
+Explorer buffer's: the twin's kill leaves them."
+  (let ((patched (buffer-local-value 'drgnx-view-patch-patched-functions (current-buffer))))
+    (with-current-buffer (generate-new-buffer (format " *drgnx-explorer %s*" class))
+      (drgnx-explorer-mode)
+      (remove-hook 'kill-buffer-hook #'drgnx-explorer--unwatch-all t)
+      (remove-hook 'kill-buffer-hook #'drgnx-explorer--forget-find t)
+      (jit-lock-unregister #'drgnx-explorer--fontify)
+      (drgnx-view-patch-attach drgnx-explorer--hub-view class :sja t)
+      (dolist (f patched) (unless (eq f t) (add-hook 'drgnx-view-patch-patched-functions f nil t)))
+      (setq-local drgnx-view-nav-faces drgnx-explorer--nav-faces)                 ; the marks, as in the Explorer
+      (add-hook 'window-scroll-functions #'drgnx-explorer--rows-scrolled nil t)  ; its scroll pages the view's window
+      (drgnx-explorer--wait-for-hub)
+      (current-buffer))))
+
+(defun drgnx-explorer--wait-for-hub ()
+  "With the hub not up, show the line saying the Explorer waits for it; its first rows take the line away."
+  (unless (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events))   ; Q2: the frame, filled when it comes
+    (setq drgnx-explorer--waiting (make-overlay (point-min) (point-min)))
+    (overlay-put drgnx-explorer--waiting 'before-string
+                 (propertize "  Waiting for the hub to list the folders…\n" 'face 'shadow))))
+
+(defun drgnx-explorer-rows-attach (view class)
+  "Make the Explorer the hub-fed VIEW in display CLASS: the hub lists it, and its keys answer from Sjá."
+  (with-current-buffer (drgnx-explorer--buffer)
+    (jit-lock-unregister #'drgnx-explorer--fontify)   ; the hub's rows come with their faces
+    (drgnx-view-patch-attach view class :sja t)
+    (setq drgnx-explorer--hub-view view)
+    (add-hook 'drgnx-view-patch-patched-functions #'drgnx-explorer--rows-patched nil t)
+    (setq-local drgnx-view-nav-faces drgnx-explorer--nav-faces)
+    (add-hook 'drgnx-look-density-changed-hook #'drgnx-explorer--density-changed)
+    (add-hook 'kill-buffer-hook #'drgnx-explorer--rows-unhook nil t)
+    (setq-local drgnx-view-patch-twin-function #'drgnx-explorer--rows-twin)
+    (add-hook 'window-scroll-functions #'drgnx-explorer--rows-scrolled nil t)
+    (drgnx-explorer--wait-for-hub)
+    (require 'drgnx-view-env)
+    (drgnx-view-env-register view (current-buffer) #'drgnx-explorer--rows-subscribe)
+    (drgnx-explorer--rows-subscribe)))
+
+(defun drgnx-explorer--rows-unhook ()
+  "The rows path's Explorer goes: the density no longer asks the hub for it, nor a scroll for another window."
+  (remove-hook 'drgnx-look-density-changed-hook #'drgnx-explorer--density-changed)
+  (remove-hook 'window-scroll-functions #'drgnx-explorer--rows-scrolled t))
+
+(defvar-local drgnx-explorer--asked-from nil "The `from' the last `view/window' the scroll asked for named.")
+
+(defvar-local drgnx-explorer--seen-from nil "The window's `from' at this buffer's last scroll.")
+
+(defvar drgnx-explorer--window-asker nil
+  "(FROM . BUFFER): the last `view/window' an Explorer buffer (the Explorer's or a twin) asked for, and which.  The
+hub holds one window per view, so another buffer's scroll moves this one's rows too; its scroll then asks nothing.")
+
+(defun drgnx-explorer--rows-scrolled (window start)
+  "`window-scroll-functions' on the rows path: WINDOW scrolled to START.  The rows near it without a tail get one
+\(`drgnx-explorer--rows-tails-in').  Within a page of the end of the rows held
+(past which the listing has more) the hub is asked for the window half of it further on; within a page of their start
+(with entries before them), half of it back.  Each `from' is asked once; the rows that go and come keep the shown ones
+in place (window starts are markers).  The window is the view's: when another of its buffers (a twin) moved it, the
+first scroll after asks nothing (`drgnx-explorer--window-asker'), so two displays never ask each other back."
+  (with-current-buffer (window-buffer window)
+    (drgnx-explorer--rows-tails-in window start)
+    (when-let* ((drgnx-view-patch) (h (drgnx-view-patch-handle drgnx-view-patch))
+                (w (nidhogg-view-get h 'window "order")))
+      (let* ((from (nth 0 w)) (len (nth 1 w)) (total (nth 2 w))
+             (page (window-body-height window)) (step (max 1 (/ len 2)))
+             ;; another buffer of the view (the Explorer in another class) asked for this window: these rows moved
+             ;; under this window, which keeps them; asking back would take that buffer's away
+             (moved (and (eql from (car drgnx-explorer--window-asker))
+                         (not (eq (cdr drgnx-explorer--window-asker) (current-buffer)))
+                         (not (eql from drgnx-explorer--seen-from))))
+             (want (cond (moved nil)
+                         ((and (< (+ from len) total)
+                               (save-excursion (goto-char start) (/= 0 (forward-line (* 2 page)))))
+                          (min (- total len) (+ from step)))
+                         ((and (> from 0)
+                               (save-excursion (goto-char start) (/= 0 (forward-line (- page)))))
+                          (max 0 (- from step))))))
+        (setq drgnx-explorer--seen-from from)
+        (when (and want (/= want from) (not (eql want drgnx-explorer--asked-from)))
+          (setq drgnx-explorer--asked-from want
+                drgnx-explorer--window-asker (cons want (current-buffer))
+                drgnx-view-patch-hurry t)
+          (funcall drgnx-view-patch-send-function "view/window"
+                   (list :view (drgnx-view-patch-view drgnx-view-patch) :list "order" :from want)))))))
+
+(defun drgnx-explorer--rows-here ()
+  "The node of the row at point, made the selection when it is not (a click moved point), or nil."
+  (when-let* ((id (get-text-property (pos-bol) drgnx-view-patch-id-prop)))
+    (unless (equal id (drgnx-view-nav-selection)) (drgnx-view-nav 'select id))
+    id))
+
+(defun drgnx-explorer--rows-open-p (id)
+  "Whether ID is a folder whose entries are shown."
+  (when-let* ((id) (h (drgnx-view-patch-handle drgnx-view-patch))) (eql 1 (nidhogg-view-get h 'open id))))
+
+(defun drgnx-explorer--rows-toggle (id)
+  "Open or close the folder ID (a root stays open): the set changes now, the hub is asked again (in a user's command,
+its answer is waited for: `drgnx-explorer--await')."
+  (when (and id (eql 1 (drgnx-view-nav-field "dir" id))
+             (not (equal "root" (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'kind id))))
+    (if (gethash id drgnx-explorer--expanded)
+        (remhash id drgnx-explorer--expanded)
+      (puthash id t drgnx-explorer--expanded))
+    (drgnx-explorer--subscribe)
+    (drgnx-explorer--await-answer)
+    t))
+
+(defvar drgnx-explorer--await nil
+  "Non-nil (bound by the commands that open, close or reveal a folder): the hub's answer is waited for inside the
+command, at most `drgnx-explorer-await-limit', and drawn before its redisplay.  Never bound in a timer, hook or other
+automatic path (the follower's reveal does not wait).")
+
+(defvar drgnx-explorer-await-limit 0.012
+  "Seconds a user's command waits for the hub's listing (`drgnx-explorer--await-answer'): within it the rows show in the
+key's own frame, as the Lisp listing's did; past it they come when the hub answers.")
+
+(defun drgnx-explorer--await-answer ()
+  "In a user's command (`drgnx-explorer--await'), after asking the hub: read the subscribed connection alone until a
+row patch for this buffer comes, at most `drgnx-explorer-await-limit' (\\[keyboard-quit] stops it), and draw it now, in
+the command, so the key's redisplay shows it.  Past the limit nothing more is done: the answer is drawn when it comes."
+  (when-let* ((drgnx-explorer--await) (state drgnx-view-patch)
+              ((boundp 'drgnx-hub--events)) (proc drgnx-hub--events) ((process-live-p proc)))
+    (let ((before (drgnx-view-patch-version state)) (end (+ (float-time) drgnx-explorer-await-limit)))
+      (with-local-quit
+        (while (and (eql before (drgnx-view-patch-version state)) (< (float-time) end))
+          (accept-process-output proc (max 0.001 (- end (float-time))) nil t)))
+      (unless (eql before (drgnx-view-patch-version state))
+        (drgnx-view-draw-now drgnx-view)))))
+
+(defun drgnx-explorer--rows-key (key)
+  "KEY (`next' `previous' `expand' `collapse') on the rows path, answered from the model."
+  (let ((id (drgnx-explorer--rows-here)))
+    (pcase key
+      ('next (drgnx-view-nav 'follow "down"))
+      ('previous (drgnx-view-nav 'follow "up"))
+      ('expand (if (drgnx-explorer--rows-open-p id) (drgnx-view-nav 'follow "right") (drgnx-explorer--rows-toggle id)))
+      ('collapse (unless (and (drgnx-explorer--rows-open-p id) (drgnx-explorer--rows-toggle id))
+                   (drgnx-view-nav 'follow "left"))))))
+
+(defun drgnx-explorer--rows-type (prefix)
+  "Select the visible sibling whose name starts with PREFIX (type-to-navigate)."
+  (drgnx-explorer--rows-here)
+  (when-let* ((h (drgnx-view-patch-handle drgnx-view-patch)) (id (nidhogg-view-set h 'prefix prefix)))
+    (drgnx-view-nav 'select id)))
+
 ;;;; Commands
 
 (defun drgnx-explorer--node () (drgnx-explorer-node-at (point)))
 
 (defun drgnx-explorer-activate (pos &optional keep-focus)
   "A folder toggles; a file opens in the editor (KEEP-FOCUS keeps the Explorer selected)."
+  (if (drgnx-explorer--rows-p)
+      (when-let* ((id (drgnx-explorer-node-at pos)))
+        (if (drgnx-explorer-dir-at pos)
+            (drgnx-explorer--rows-toggle id)
+          (drgnx-explorer--show id keep-focus)))
+    (drgnx-explorer--activate-old pos keep-focus)))
+
+(defun drgnx-explorer--show (file keep-focus)
+  "Show FILE in the editor: with KEEP-FOCUS as a preview tab (unless it is a tab already), else to work in."
+  (let* ((b (find-file-noselect file)) (new (not (and (fboundp 'drgnx-chrome-tab-p) (drgnx-chrome-tab-p b)))))
+    (drgnx-wb-show-in-editor b (not keep-focus))
+    (when (fboundp 'drgnx-chrome-note-preview) (drgnx-chrome-note-preview b (and keep-focus new)))))
+
+(defun drgnx-explorer--activate-old (pos keep-focus)
+  "`drgnx-explorer-activate' off the rows path."
   (when-let* ((v (drgnx-explorer--row-data pos)))
     (cond
      ((drgnx-explorer--placeholder-p v) (drgnx-explorer-refresh))   ; the row says so
      ((drgnx-explorer-dir-at pos)
       (let ((drgnx-explorer--remote-reads t)) (drgnx-explorer-toggle-at pos)))   ; a click or Open: the user's command
      (t
-      (drgnx-wb-show-in-editor (find-file-noselect (drgnx-explorer--path v)) (not keep-focus))))))
+      (drgnx-explorer--show (drgnx-explorer--path v) keep-focus)))))
 
 (defun drgnx-explorer-next () "Next row (ends a multi-select)."
-       (interactive) (drgnx-explorer--clear-selection) (forward-line 1) (when (eobp) (forward-line -1)))
+       (interactive) (drgnx-explorer--clear-selection)
+       (if (drgnx-explorer--rows-p) (drgnx-explorer--rows-key 'next) (forward-line 1) (when (eobp) (forward-line -1))))
 (defun drgnx-explorer-previous () "Previous row (ends a multi-select)."
-       (interactive) (drgnx-explorer--clear-selection) (forward-line -1))
+       (interactive) (drgnx-explorer--clear-selection)
+       (if (drgnx-explorer--rows-p) (drgnx-explorer--rows-key 'previous) (forward-line -1)))
 
 ;;;; Multi-select
 
 (defvar drgnx-explorer--anchor nil "Where a Shift-selection started (a path).")
 
 (defun drgnx-explorer--set-selection (paths)
-  (setq drgnx-explorer--selection paths)
-  (when-let* ((b (get-buffer drgnx-explorer-buffer-name))) (with-current-buffer b (jit-lock-refontify))))
+  "Select PATHS together.  On the rows path the selection is Sjá's ticked set, drawn by the class step (the class
+`ticked' in `drgnx-explorer-selected'); off it the rows are painted again."
+  (let ((old drgnx-explorer--selection))
+    (setq drgnx-explorer--selection paths)
+    (when-let* ((b (get-buffer drgnx-explorer-buffer-name)))
+      (with-current-buffer b
+        (if (drgnx-explorer--rows-p)
+            (drgnx-explorer--rows-tick old paths)
+          (jit-lock-refontify))))))
+
+(defun drgnx-explorer--rows-tick (old new)
+  "Make Sjá's ticked set NEW where it was OLD (each a list of paths): the paths in one only are toggled, then the
+class step draws them."
+  (when-let* ((h (drgnx-view-patch-handle drgnx-view-patch)))
+    (dolist (p old) (unless (member p new) (nidhogg-view-set h 'tick p)))
+    (dolist (p new) (unless (member p old) (nidhogg-view-set h 'tick p)))
+    (drgnx-view-nav-class-step drgnx-view)))
+
+(defun drgnx-explorer--row-start (path)
+  "Where PATH's row starts, or nil: the hub's drawn row on the rows path."
+  (if (drgnx-explorer--rows-p)
+      (drgnx-view-row-start (buffer-local-value 'drgnx-view (drgnx-explorer--buffer)) (directory-file-name path))
+    (drgnx-explorer--row-pos path)))
 
 (defun drgnx-explorer--clear-selection ()
   (setq drgnx-explorer--anchor nil)
@@ -607,12 +1283,26 @@ A remote file is never revealed: this runs from the change bus, where remote I/O
 
 (defun drgnx-explorer--ensure-anchor ()
   "Start a range at the row here unless the anchor is a row on screen (not deleted, not from another root)."
-  (unless (and drgnx-explorer--anchor (drgnx-explorer--row-pos drgnx-explorer--anchor))
+  (unless (and drgnx-explorer--anchor (drgnx-explorer--row-start drgnx-explorer--anchor))
     (setq drgnx-explorer--anchor (drgnx-explorer--node))))
 
 (defun drgnx-explorer--select-range-to (pos)
-  "Select every row from the anchor to the row at POS."
+  "Select every row from the anchor to the row at POS: on the rows path the drawn rows between them, which are the
+tree's visible rows in order."
   (drgnx-explorer--ensure-anchor)
+  (if (drgnx-explorer--rows-p)
+      (let* ((a (or (drgnx-explorer--row-start drgnx-explorer--anchor) (pos-bol)))
+             (b (save-excursion (goto-char pos) (pos-bol))) ids)
+        (save-excursion
+          (goto-char (min a b))
+          (while (and (<= (point) (max a b)) (not (eobp)))
+            (when-let* ((id (get-text-property (point) drgnx-view-patch-id-prop))) (push id ids))
+            (forward-line 1)))
+        (drgnx-explorer--set-selection (nreverse ids)))
+    (drgnx-explorer--select-range-to-old pos)))
+
+(defun drgnx-explorer--select-range-to-old (pos)
+  "`drgnx-explorer--select-range-to' off the rows path."
   (let* ((a (drgnx-explorer--index (or (drgnx-explorer--row-pos drgnx-explorer--anchor) (point))))
          (b (drgnx-explorer--index pos)))
     (drgnx-explorer--set-selection
@@ -633,12 +1323,20 @@ A remote file is never revealed: this runs from the change bus, where remote I/O
   (let ((p (or (drgnx-explorer--node) (user-error "Nothing here"))))
     (drgnx-explorer--set-selection (if (member p drgnx-explorer--selection) (remove p drgnx-explorer--selection)
                                      (append drgnx-explorer--selection (list p))))
-    (forward-line 1)
-    (when (eobp) (forward-line -1))))
+    (if (drgnx-explorer--rows-p)
+        (drgnx-explorer--rows-key 'next)
+      (forward-line 1)
+      (when (eobp) (forward-line -1)))))
 
 (defun drgnx-explorer-expand ()
   "Expand the folder at point; on an expanded folder, go to its first child."
   (interactive)
+  (if (drgnx-explorer--rows-p)
+      (let ((drgnx-explorer--await t)) (drgnx-explorer--rows-key 'expand))
+    (drgnx-explorer--expand-old)))
+
+(defun drgnx-explorer--expand-old ()
+  "`drgnx-explorer-expand' off the rows path."
   (when (drgnx-explorer-dir-at (point))
     (if (and (drgnx-explorer--expanded-p (drgnx-explorer--node)) (> (drgnx-explorer-depth-at (point)) 0))
         (drgnx-explorer-next)
@@ -647,6 +1345,12 @@ A remote file is never revealed: this runs from the change bus, where remote I/O
 (defun drgnx-explorer-collapse ()
   "Collapse the folder at point; otherwise go to the parent folder."
   (interactive)
+  (if (drgnx-explorer--rows-p)
+      (let ((drgnx-explorer--await t)) (drgnx-explorer--rows-key 'collapse))
+    (drgnx-explorer--collapse-old)))
+
+(defun drgnx-explorer--collapse-old ()
+  "`drgnx-explorer-collapse' off the rows path."
   (if (and (drgnx-explorer-dir-at (point)) (drgnx-explorer--expanded-p (drgnx-explorer--node))
            (> (drgnx-explorer-depth-at (point)) 0))
       (drgnx-explorer-toggle-at (point))
@@ -656,14 +1360,14 @@ A remote file is never revealed: this runs from the change bus, where remote I/O
         (forward-line (- j i))))))
 
 (defun drgnx-explorer-open () "Open the file (focus the editor) or toggle the folder at point."
-       (interactive) (drgnx-explorer-activate (point)))
+       (interactive) (let ((drgnx-explorer--await t)) (drgnx-explorer-activate (point))))
 (defun drgnx-explorer-preview () "Open the file at point, keeping the Explorer focused."
-       (interactive) (drgnx-explorer-activate (point) t))
+       (interactive) (let ((drgnx-explorer--await t)) (drgnx-explorer-activate (point) t)))
 (defun drgnx-explorer-toggle () "Expand or collapse the folder at point."
-       (interactive) (let ((drgnx-explorer--remote-reads t)) (drgnx-explorer-toggle-at (point))))
+       (interactive) (let ((drgnx-explorer--remote-reads t) (drgnx-explorer--await t)) (drgnx-explorer-toggle-at (point))))
 
-(defun drgnx-explorer-focus () "Show the sidebar and focus the Explorer."
-       (interactive) (drgnx-wb-focus-section 'explorer))
+(defun drgnx-explorer-focus () "Show the sidebar and focus the Explorer; start the hub when none runs."
+       (interactive) (drgnx-wb-focus-section 'explorer) (drgnx-explorer-start-hub))
 
 ;;;; Find
 
@@ -675,9 +1379,11 @@ A remote file is never revealed: this runs from the change bus, where remote I/O
          (prefix (concat (if (and drgnx-explorer--typed (< (- now (car drgnx-explorer--typed)) 1.0))
                              (cdr drgnx-explorer--typed) "")
                          (string char)))
-         (rows drgnx-explorer--rows) (n (length rows)) (here (drgnx-explorer--index (point)))
+         (rows (if (drgnx-explorer--rows-p) [] drgnx-explorer--rows))   ; the rows path: siblings, from the model
+         (n (length rows)) (here (drgnx-explorer--index (point)))
          (from (if (> (length prefix) 1) here (1+ here))) found)
     (setq drgnx-explorer--typed (cons now prefix))
+    (when (drgnx-explorer--rows-p) (drgnx-explorer--rows-type prefix))
     (dotimes (k n)
       (let ((i (mod (+ from k) n)))
         (when (and (not found)
@@ -686,7 +1392,7 @@ A remote file is never revealed: this runs from the change bus, where remote I/O
           (setq found i))))
     (when found
       (goto-char (drgnx-explorer--line-pos found))
-      (when hl-line-mode (hl-line-highlight)))))
+      (drgnx-wb-selection-sync))))
 
 (defun drgnx-explorer-type ()
   "Typing in the Explorer jumps to the next row starting with what you typed (as VS Code)."
@@ -712,79 +1418,194 @@ host."
       (seq-remove (lambda (f) (and re (string-match-p re (file-name-nondirectory f))))
                   (let ((grep-find-ignored-files nil)) (project-files p))))))
 
+(defun drgnx-explorer--check-find-root (root)
+  "Refuse ROOT when it is your home or / and not a project (far too many files)."
+  (when (and (not (project-current nil root))
+             (member (directory-file-name root) (list (directory-file-name (expand-file-name "~")) "" "/")))
+    (user-error "Find needs a project folder here, not %s" (abbreviate-file-name root))))
+
+(defun drgnx-explorer--excluded-p (name)
+  "Non-nil when a part of NAME (relative to its root) is a name the Explorer never shows."
+  (seq-some #'drgnx-explorer--excluded-name-p (split-string name "/" t)))
+
+(defun drgnx-explorer--root-files (root)
+  "Every file under ROOT, read now (see `drgnx-explorer--all-files')."
+  (let ((default-directory root))
+    (seq-remove (lambda (f) (drgnx-explorer--excluded-p (string-remove-prefix root f)))
+                (if-let* ((p (project-current nil root)))
+                    (seq-filter (lambda (f) (string-prefix-p root f)) (drgnx-explorer--project-files p root))
+                  (drgnx-explorer--check-find-root root)
+                  (directory-files-recursively
+                   root "" nil (lambda (d) (not (drgnx-explorer--excluded-name-p (file-name-nondirectory d)))))))))
+
 (defun drgnx-explorer--all-files ()
   "Every file under the roots — the project's files (only those under the root) when there is a project;
 excluded names left out.  A root that is your home or / and not a project is refused (far too many files)."
-  (seq-mapcat (lambda (root)
-                (let ((default-directory root))
-                  (seq-remove (lambda (f) (seq-some (lambda (part) (string-match-p drgnx-explorer-exclude part))
-                                                    (split-string (string-remove-prefix root f) "/" t)))
-                              (if-let* ((p (project-current nil root)))
-                                  (seq-filter (lambda (f) (string-prefix-p root f)) (drgnx-explorer--project-files p root))
-                                (when (member (directory-file-name root)
-                                              (list (directory-file-name (expand-file-name "~")) "" "/"))
-                                  (user-error "Find needs a project folder here, not %s" (abbreviate-file-name root)))
-                                (directory-files-recursively
-                                 root "" nil (lambda (d) (not (string-match-p drgnx-explorer-exclude (file-name-nondirectory d)))))))))
-              drgnx-explorer--roots))
+  (seq-mapcat #'drgnx-explorer--root-files drgnx-explorer--roots))
 
-(defconst drgnx-explorer--find-limit 5000 "Find shows at most this many matching files.")
+;; Find's file list.  With the hub up, a local root's files come from the hub: each query asks `search/files' (the
+;; query by name, the left-out names, at most `drgnx-explorer--find-limit' rows) for a view of its own per root, and
+;; the rows it answers are Find's :found, shown as they came (Quick Open's list of keys, `drgnx-quick-open--rows',
+;; applies the patches by the patch rules).  Without the
+;; hub, streamed: with Nidhogg's framing on, a local root is listed in batches (core/drgnx-file-stream.el) that land in
+;; the Find state's :files while the tree is already filtered by them; a remote root, or no framing, reads the list now
+;; as before.  A listing belongs to one generation: Find ending or starting over bumps it, and a batch of an older one
+;; is dropped.
+(defvar drgnx-explorer--find-gen 0 "Which Find listing is current.")
+(defvar drgnx-explorer--find-streams nil "The listings Find is reading.")
+(defvar drgnx-explorer--find-views nil "((ROOT . ROWS) ...): the hub's Find views, one per root (`drgnx-quick-open--rows').")
+(defvar drgnx-explorer--find-view-count 0 "The number of the last Find view.")
+(defvar drgnx-explorer--find-limit)                     ; below
+(declare-function drgnx-view-env-register "drgnx-view-env")
+(declare-function drgnx-view-env-unregister "drgnx-view-env")
+
+(defun drgnx-explorer--find-stop ()
+  "End the listings Find is reading; their late batches are dropped, and the hub's Find views are closed."
+  (cl-incf drgnx-explorer--find-gen)
+  (mapc #'drgnx-file-stream-stop drgnx-explorer--find-streams)
+  (setq drgnx-explorer--find-streams nil)
+  (when drgnx-explorer--find-views
+    (dolist (v drgnx-explorer--find-views)
+      (let ((view (drgnx-quick-open--rows-view (cdr v))))
+        (drgnx-view-env-unregister view)
+        (funcall drgnx-quick-open-send-function "view/close" (list :view view))))
+    (setq drgnx-explorer--find-views nil)
+    (remove-hook 'drgnx-hub-event-functions #'drgnx-explorer--find-event)))
+
+(defun drgnx-explorer--find-view (root)
+  "A hub Find view for ROOT: registered for its env (in the Explorer's buffer), its patches taken."
+  (require 'drgnx-view-env)
+  (let ((r (drgnx-quick-open--rows-make (format "explorer-find-%d" (cl-incf drgnx-explorer--find-view-count)) root)))
+    (drgnx-view-env-register (drgnx-quick-open--rows-view r)
+                             (let ((drgnx-explorer--remote-reads t)) (drgnx-explorer--buffer)))
+    (push (cons root r) drgnx-explorer--find-views)
+    (add-hook 'drgnx-hub-event-functions #'drgnx-explorer--find-event)))
+
+(defun drgnx-explorer--find-ask (query)
+  "Ask the hub for each Find view's files whose names hold QUERY, the Explorer's left-out names left out by the hub;
+the rows come as patches (`drgnx-explorer--find-event')."
+  (dolist (v drgnx-explorer--find-views)
+    (drgnx-quick-open--rows-query (cdr v) query drgnx-explorer--find-limit
+                                  (list :name t :exclude (vconcat drgnx-explorer-exclude-names)))))
+
+(defun drgnx-explorer--find-event (event data)
+  "A `drgnx-hub-event-functions' handler while Find runs: a Find view's patch makes its rows Find's :found, shown as
+the hub chose them, and the tree is filtered by them once input pauses."
+  (when (and (equal event "view-patch") drgnx-explorer--find
+             (seq-find (lambda (v) (drgnx-quick-open--rows-patch (cdr v) data)) drgnx-explorer--find-views))
+    (let (files)
+      (dolist (v (reverse drgnx-explorer--find-views))
+        (dolist (k (drgnx-quick-open--rows-keys (cdr v)))
+          (push (concat (car v) k) files)))
+      (setq drgnx-explorer--find (plist-put drgnx-explorer--find :found (nreverse files))))
+    (drgnx-timer-debounce 'explorer-find-batch 0.1 #'drgnx-explorer--find-refilter :idle t
+                          :owner (or (get-buffer drgnx-explorer-buffer-name) :core))))
+
+(defun drgnx-explorer--find-batch (gen root names)
+  "NAMES (relative to ROOT) of the Find listing generation GEN: add them to :files, and filter again once input pauses."
+  (when (and drgnx-explorer--find (eql gen drgnx-explorer--find-gen))
+    (let ((new nil))
+      (dolist (n names) (unless (drgnx-explorer--excluded-p n) (push (concat root n) new)))
+      (setq drgnx-explorer--find
+            (plist-put drgnx-explorer--find :files (nconc (plist-get drgnx-explorer--find :files) (nreverse new)))))
+    (drgnx-timer-debounce 'explorer-find-batch 0.1 #'drgnx-explorer--find-refilter :idle t
+                          :owner (or (get-buffer drgnx-explorer-buffer-name) :core))))
+
+(defun drgnx-explorer--find-refilter ()
+  "Show the files read so far that match Find's query."
+  (when-let* ((find drgnx-explorer--find) (query (plist-get find :query)))
+    (drgnx-explorer--find-apply query)))
+
+(defun drgnx-explorer--find-load ()
+  "Start reading Find's files, and return those read at once: all of them, or nil while local roots stream in."
+  (drgnx-explorer--find-stop)
+  (let ((gen drgnx-explorer--find-gen) (files nil))
+    (dolist (root drgnx-explorer--roots)
+      (let ((stream (and (not (drgnx-quick-open--hub-p root))
+                         (drgnx-file-stream-available-p root)
+                         (progn (drgnx-explorer--check-find-root root) t)
+                         (drgnx-file-stream-start root (lambda (names) (drgnx-explorer--find-batch gen root names)) #'ignore))))
+        (cond (stream (push stream drgnx-explorer--find-streams))
+              ((drgnx-quick-open--hub-p root) (drgnx-explorer--find-view root))
+              (t (setq files (nconc files (drgnx-explorer--root-files root)))))))
+    files))
+
+(defconst drgnx-explorer--find-limit 1000
+  "Find shows at most this many matching files per root (the most `search/files' answers).")
 
 (defun drgnx-explorer--find-apply (query)
-  "Show only the files whose name contains QUERY (any case), with their folders — collapsed or not."
+  "Show only the files whose name contains QUERY (any case), with their folders — collapsed or not.  A hub root's
+files are the hub's answer (:found), shown as they came; only the files listed here (:files: a remote root, or no hub)
+are filtered here."
   (with-current-buffer (let ((drgnx-explorer--remote-reads t)) (drgnx-explorer--buffer)) ; Find is a command of the user
     (unless drgnx-explorer--find
-      (setq drgnx-explorer--find (list :files (drgnx-explorer--all-files)
+      (setq drgnx-explorer--find (list :files (drgnx-explorer--find-load)
                                        :expanded (copy-hash-table drgnx-explorer--expanded)
                                        :views (drgnx-view-save-places #'drgnx-explorer-node-at))))
+    (unless (equal query (plist-get drgnx-explorer--find :query)) (drgnx-explorer--find-ask query))
     (setq drgnx-explorer--find (plist-put drgnx-explorer--find :query query))
-    (let ((tree (make-hash-table :test #'equal)) (q (downcase query)))
-      (dolist (file (seq-take (seq-filter (lambda (file) (string-search q (downcase (file-name-nondirectory file))))
-                                          (plist-get drgnx-explorer--find :files))
-                              drgnx-explorer--find-limit))
-        (progn
-          (let ((path (directory-file-name file)))
-            (while (let ((parent (directory-file-name (file-name-directory path))))
-                     (unless (member (cons (file-name-nondirectory path) (not (equal path (directory-file-name file))))
-                                     (gethash parent tree))
-                       (push (cons (file-name-nondirectory path) (not (equal path (directory-file-name file)))) (gethash parent tree)))
-                     (prog1 (not (or (member (file-name-as-directory parent) drgnx-explorer--roots)
-                                     (equal parent path)))           ; at a root, or at / : stop
-                       (setq path parent)))))))
-      (let ((drgnx-explorer--children-function
-             (lambda (dir) (sort (copy-sequence (gethash (directory-file-name dir) tree)) #'drgnx-explorer--before)))
-            (drgnx-explorer--expanded-function (lambda (_) t))
-            (inhibit-read-only t) data)
-        (erase-buffer)
-        (dolist (root drgnx-explorer--roots)
-          (let ((path (directory-file-name (expand-file-name root))))
-            (insert (drgnx-explorer--prefix 0 'open) (drgnx-wb-display-name (upcase (file-name-nondirectory path))) "\n")
-            (push (list (vector path 0 t nil)) data)
-            (push (drgnx-explorer--insert-subtree path 1) data)))
-        (setq drgnx-explorer--rows (apply #'vconcat (nreverse data)))
-        (goto-char (point-min))
-        (when-let* ((w (drgnx-wb-section-window 'explorer)))
-          (set-window-parameter w 'header-line-format (drgnx-wb-section-header (format " EXPLORER — %s" query))))))))
+    (let* ((q (downcase query))
+           (files (append (plist-get drgnx-explorer--find :found)
+                          (seq-take (seq-filter (lambda (file) (string-search q (downcase (file-name-nondirectory file))))
+                                                (plist-get drgnx-explorer--find :files))
+                                    drgnx-explorer--find-limit))))
+      (if (drgnx-explorer--rows-p)
+          ;; the hub lists the files found with their folders open (`only'), from nothing on disk
+          (progn (setq drgnx-explorer--find (plist-put drgnx-explorer--find :only
+                                                       (vconcat (mapcar #'directory-file-name files))))
+                 (drgnx-explorer--subscribe))
+        (drgnx-explorer--find-draw-old files))
+      (when-let* ((w (drgnx-wb-section-window 'explorer)))
+        (set-window-parameter w 'header-line-format (drgnx-wb-section-header (format "Files — %s" query)))))))
+
+(defun drgnx-explorer--find-draw-old (files)
+  "Find's tree of FILES off the rows path: the files with their folders, drawn here."
+  (let ((tree (make-hash-table :test #'equal)))
+    (dolist (file files)
+      (let ((path (directory-file-name file)))
+        (while (let ((parent (directory-file-name (file-name-directory path))))
+                 (unless (member (cons (file-name-nondirectory path) (not (equal path (directory-file-name file))))
+                                 (gethash parent tree))
+                   (push (cons (file-name-nondirectory path) (not (equal path (directory-file-name file)))) (gethash parent tree)))
+                 (prog1 (not (or (member (file-name-as-directory parent) drgnx-explorer--roots)
+                                 (equal parent path)))           ; at a root, or at / : stop
+                   (setq path parent))))))
+    (let ((drgnx-explorer--children-function
+           (lambda (dir) (sort (copy-sequence (gethash (directory-file-name dir) tree)) #'drgnx-explorer--before)))
+          (drgnx-explorer--expanded-function (lambda (_) t))
+          (inhibit-read-only t) data)
+      (erase-buffer)
+      (dolist (root drgnx-explorer--roots)
+        (let ((path (directory-file-name (expand-file-name root))))
+          (drgnx-explorer--insert-root path)
+          (push (list (vector path 0 t nil)) data)
+          (push (drgnx-explorer--insert-subtree path 1) data)))
+      (setq drgnx-explorer--rows (apply #'vconcat (nreverse data)))
+      (goto-char (point-min)))))
 
 (defun drgnx-explorer--plain-title ()
   "The Explorer's title without a Find query."
   (when-let* ((w (drgnx-wb-section-window 'explorer)))
-    (set-window-parameter w 'header-line-format (drgnx-wb-section-header " EXPLORER"))))
+    (set-window-parameter w 'header-line-format (drgnx-wb-section-header "Files"))))
 
 (defun drgnx-explorer--forget-find ()
   "The Explorer was killed: its Find goes too (else the live updates would wait for it forever)."
+  (drgnx-explorer--find-stop)
   (setq drgnx-explorer--find nil))
 
 (defun drgnx-explorer-find-clear ()
   "Leave Find: the tree, its open folders, the view and the selection come back as they were."
   (interactive)
   (when-let* ((state drgnx-explorer--find))
+    (drgnx-explorer--find-stop)
     (setq drgnx-explorer--find nil drgnx-explorer--expanded (plist-get state :expanded))
     (with-current-buffer (drgnx-explorer--buffer)
-      (let ((drgnx-explorer--remote-reads t))              ; a command of the user
-        (drgnx-explorer--render))
-      (drgnx-view-restore-places (plist-get state :views) #'drgnx-explorer--row-pos)
-      (when hl-line-mode (hl-line-highlight)))
+      (if (drgnx-explorer--rows-p)
+          (drgnx-explorer--subscribe)                       ; the tree as it was: the hub lists it again
+        (let ((drgnx-explorer--remote-reads t))              ; a command of the user
+          (drgnx-explorer--render))
+        (drgnx-view-restore-places (plist-get state :views) #'drgnx-explorer--row-pos)
+        (drgnx-wb-selection-sync)))
     (drgnx-explorer--plain-title)
     (when drgnx-explorer--dirty (drgnx-explorer--apply-file-events))))
 
@@ -846,9 +1667,11 @@ inside another one selected goes: the folder carries it."
       (drgnx-explorer--show-folder-1 dir))))
 
 (defun drgnx-explorer--find-again ()
-  "Filter again with fresh files (a file operation or a refresh during Find)."
-  (setq drgnx-explorer--find (plist-put drgnx-explorer--find :files (drgnx-explorer--all-files)))
-  (drgnx-explorer--find-apply (plist-get drgnx-explorer--find :query)))
+  "Filter again with fresh files (a file operation or a refresh during Find): the new hub views are asked again."
+  (let ((query (plist-get drgnx-explorer--find :query)))
+    (setq drgnx-explorer--find (plist-put (plist-put drgnx-explorer--find :files (drgnx-explorer--find-load))
+                                          :query nil))
+    (drgnx-explorer--find-apply query)))
 
 (defun drgnx-explorer--show-folder-1 (dir)
   (with-current-buffer (drgnx-explorer--buffer)
@@ -863,7 +1686,7 @@ inside another one selected goes: the folder carries it."
     (when-let* ((pos (drgnx-explorer--row-pos path)))
       (goto-char pos)
       (when-let* ((w (get-buffer-window (current-buffer)))) (set-window-point w pos))
-      (when hl-line-mode (hl-line-highlight)))))
+      (drgnx-wb-selection-sync))))
 
 (defun drgnx-explorer--parent (path) (directory-file-name (file-name-directory (directory-file-name path))))
 
@@ -1093,10 +1916,24 @@ is read.  File events and timers read none."
         (when (and (consp v) (nth 3 v) (> (nth 3 v) 0))
           (set-window-vscroll w (+ (window-vscroll w t) (nth 3 v)) t))))))
 
+(defun drgnx-explorer--rows-hold ()
+  "On the rows path, the hub's patches wait while a button pressed in the Explorer is held, as the Lisp listing's file
+events do (`drgnx-explorer--apply-file-events'): the tree does not change under a held button, so the release is a
+click on the row pressed.  The view is paused (`drgnx-view-patch-pause') and checked again every
+`drgnx-explorer-event-delay'; once the button counts as released (`drgnx-explorer--held-p') it resumes, the patches
+kept applied in order."
+  (when-let* ((buf (get-buffer drgnx-explorer-buffer-name)))
+    (if (and (drgnx-explorer--held-p) (drgnx-explorer--rows-p))
+        (progn (drgnx-view-patch-pause buf t)
+               (drgnx-timer-soon 'explorer-held drgnx-explorer-event-delay #'drgnx-explorer--rows-hold :owner buf))
+      (drgnx-timer-cancel 'explorer-held)
+      (drgnx-view-patch-pause buf nil))))
+
 (defun drgnx-explorer-mouse-press (event)
   "Press: select the row under EVENT (and the Explorer); nothing else happens until release."
   (interactive "e")
   (setq drgnx-explorer--pressed num-input-keys)       ; the release is the next key sequence
+  (drgnx-explorer--rows-hold)
   (let* ((posn (event-start event)) (w (posn-window posn)) (pos (posn-point posn)))
     (when (window-live-p w)
       (unless (eq w (selected-window)) (select-window w))
@@ -1121,7 +1958,7 @@ is read.  File events and timers read none."
   (interactive "e")
   (setq drgnx-explorer--pressed nil)
   (when-let* ((pos (posn-point (event-end event))) ((integer-or-marker-p pos)))
-    (unless (and drgnx-explorer--anchor (drgnx-explorer--row-pos drgnx-explorer--anchor))
+    (unless (and drgnx-explorer--anchor (drgnx-explorer--row-start drgnx-explorer--anchor))
       (setq drgnx-explorer--anchor drgnx-explorer--focused-before))
     (drgnx-explorer--select-range-to pos)
     (drgnx-explorer--goto-in-place pos)))
@@ -1132,7 +1969,16 @@ is read.  File events and timers read none."
   (setq drgnx-explorer--pressed nil)
   (drgnx-explorer--clear-selection)
   (let ((pos (posn-point (event-end event))))
-    (when (integer-or-marker-p pos) (drgnx-explorer--goto-in-place pos) (drgnx-explorer-activate pos t))))
+    ;; the patches kept while the button was held go in now: the click acts on the row it was released on, found
+    ;; again by its key where they moved it (the same place in it)
+    (let* ((id (and (integer-or-marker-p pos) (drgnx-explorer--rows-p) (drgnx-explorer-node-at pos)))
+           (before (and id (drgnx-view-row-start drgnx-view id))))
+      (drgnx-explorer--rows-hold)
+      (when-let* ((before) (after (drgnx-view-row-start drgnx-view id)))
+        (setq pos (+ pos (- after before)))))
+    (when (integer-or-marker-p pos)
+      (drgnx-explorer--goto-in-place pos)
+      (let ((drgnx-explorer--await t)) (drgnx-explorer-activate pos t)))))
 
 (defun drgnx-explorer-mouse-double (event)
   "Double click: on a file, focus the editor (the first click opened it); on a folder, nothing
@@ -1141,6 +1987,8 @@ is read.  File events and timers read none."
   (setq drgnx-explorer--pressed nil)
   (let ((pos (posn-point (event-end event))))
     (when (and (integer-or-marker-p pos) (not (drgnx-explorer-dir-at pos)) (drgnx-explorer-node-at pos))
+      (let ((b (get-file-buffer (drgnx-explorer-node-at pos))))     ; opened to work in: no longer a preview
+        (when (and b (fboundp 'drgnx-chrome-note-preview)) (drgnx-chrome-note-preview b nil)))
       (drgnx-wb-focus-editor))))
 
 (defun drgnx-explorer-mouse-ignore (_event)
@@ -1171,10 +2019,10 @@ is read.  File events and timers read none."
 (define-derived-mode drgnx-explorer-mode nil "Explorer"
   "The drgnx Explorer (file tree)."
   (setq buffer-read-only t buffer-undo-list t truncate-lines t cursor-type nil mode-line-format nil)
-  (setq-local hl-line-sticky-flag t)
   ;; A press on a partly visible row must not scroll: the row would move under the pointer.
   (setq-local scroll-margin 0 make-cursor-line-fully-visible nil)
-  (hl-line-mode 1)
+  (drgnx-wb-rows-setup)
+  (setq-local drgnx-wb-selection-unfocused t)       ; the sidebar's one selection: the current buffer's file
   (jit-lock-register #'drgnx-explorer--fontify)
   (add-hook 'kill-buffer-hook #'drgnx-explorer--unwatch-all nil t)
   (add-hook 'kill-buffer-hook #'drgnx-explorer--forget-find nil t))
@@ -1189,17 +2037,20 @@ is over — its release will not come here (Wayland)."
   "Put the Explorer in the dock and let it follow the editor."
   (drgnx-wb-define-section 'explorer :slot 0 :buffer #'drgnx-explorer--buffer
                            :title (lambda () (if drgnx-explorer--find
-                                                 (format " EXPLORER — %s" (plist-get drgnx-explorer--find :query))
-                                               " EXPLORER"))
+                                                 (format "Files — %s" (plist-get drgnx-explorer--find :query))
+                                               "Files"))
                            ;; Like VS Code: showing the Explorer reveals the active editor's file.
                            :on-show (lambda (_w) (drgnx-explorer--follow (window-buffer (drgnx-wb-editor-window)))))
   (drgnx-signal-subscribe 'editor-changed #'drgnx-explorer--follow)
+  (drgnx-state-subscribe 'selected-changed #'drgnx-wb--selected-changed)
+  (drgnx-wb-rows-follow)                ; rows of the density, at the scale of the frame that shows them
   ;; A save changes git status; so does git itself (another window, a terminal): check on focus.
   (drgnx-signal-subscribe 'modified-changed (lambda (_) (drgnx-explorer--git-refresh)))
   (add-function :after after-focus-change-function #'drgnx-explorer--focus-changed '((name . drgnx-explorer)))
   (drgnx-modules-push-undo "after-focus-change-function drgnx-explorer"
                            (lambda () (remove-function after-focus-change-function 'drgnx-explorer)))
-  (add-hook 'drgnx-git-changed-functions #'drgnx-explorer--git-changed))
+  (add-hook 'drgnx-git-changed-functions #'drgnx-explorer--git-changed)
+  (add-hook 'drgnx-git-shown-functions #'drgnx-explorer--shown-folders))
 
 (provide 'drgnx-explorer)
 ;;; drgnx-explorer.el ends here

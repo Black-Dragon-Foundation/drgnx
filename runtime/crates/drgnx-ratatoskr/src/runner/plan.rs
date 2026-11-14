@@ -1,5 +1,6 @@
-//! Reading a plan file as a job: `# Title`, `**Repo:** path`, `### Task N: title` headings with `**Role:**` and `**Depends:** Task M`
-//! lines in their bodies, `**Won't build:** subject` lines for the decision log.
+//! Reading a plan file as a job: `# Title`, `**Repo:** path`, `### Task N: title` headings with `**Role:**`,
+//! `**Depends:** Task M` and `**Profile:** name` (within the pack's routes) lines in their bodies, `**Won't build:** subject` lines for the decision log, a `**Pack:** file` line for the rule
+//! pack.
 
 use std::path::{Path, PathBuf};
 
@@ -10,6 +11,10 @@ pub struct PlanTask {
     pub role: String,
     pub deps: Vec<i64>,
     pub body: String,
+    /// The profile the task runs on (a graph plan's task may name one); none: its role's route.
+    pub profile: Option<String>,
+    /// The model the plan asked for: a hint for the forecast when no profile is named, never what runs.
+    pub model: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -19,6 +24,9 @@ pub struct Plan {
     pub repo: Option<String>,
     pub tasks: Vec<PlanTask>,
     pub wont_build: Vec<String>,
+    /// The **Pack:** line (the rule pack the job's gates read), made absolute against the plan's directory; none:
+    /// the pack drgnx ships.
+    pub pack: Option<PathBuf>,
     /// A hash of the text, to see later that the file changed (the job never follows it).
     pub hash: String,
 }
@@ -113,6 +121,12 @@ pub fn read(text: &str, file: &Path) -> Plan {
                     .map(task_numbers)
                     .unwrap_or_default(),
                 body: b.trim().to_owned(),
+                // a plan line names the profile within the pack's routes (`**Profile:** opus`)
+                profile: lines_after(&b, "**Profile:**")
+                    .next()
+                    .and_then(|p| p.split_whitespace().next())
+                    .map(str::to_owned),
+                model: None,
             });
         }
         body.clear();
@@ -136,6 +150,7 @@ pub fn read(text: &str, file: &Path) -> Plan {
         wont_build: lines_after(text, "**Won't build:**")
             .map(str::to_owned)
             .collect(),
+        pack: line_after(text, "**Pack:**").map(|p| dir.join(p)),
         hash: fnv(text),
     }
 }
@@ -257,6 +272,12 @@ mod tests {
         let p = read("### Task 3: x\n\nnothing\n", Path::new("/w/some-plan.md"));
         assert_eq!(p.title, "some-plan");
         assert_eq!(p.tasks[0].role, "implement");
+        assert_eq!(p.pack, None);
+        let p = read(
+            "**Pack:** packs/org.eld\n### Task 1: x\n",
+            Path::new("/w/p.md"),
+        );
+        assert_eq!(p.pack, Some(PathBuf::from("/w/packs/org.eld")));
     }
 
     #[test]
@@ -267,6 +288,8 @@ mod tests {
             role: "implement".into(),
             deps: deps.to_vec(),
             body: String::new(),
+            profile: None,
+            model: None,
         };
         assert!(
             check(&[t(1, &[]), t(1, &[])])

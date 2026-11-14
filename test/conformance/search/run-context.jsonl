@@ -1,0 +1,13 @@
+{"scenario": "search/run-context", "requires": ["v1", "test-hooks"], "doc": "search/run puts a dim label row (c:RUN:N, `ƒ name`, the face drgnx-replace-ctx) above the first match of each definition, none for a top-level match; context false leaves the labels out."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "view/env", "params": {"view": "s", "class": "gui-1", "display": "gui", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 7, 4]], "cell": [8, 17], "width_px": 400, "palette": [], "epoch": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "write_file", "path": "$ROOT/proj/a.rs", "text": "fn outer() {\n    needle();\n    needle();\n}\nuse needle;\n"}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "search/run", "params": {"view": "s", "root": "$ROOT/proj", "search": {"query": {"mode": "text", "text": "needle"}}}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "s", "ops": [{"insert": {"after": null, "rows": [{"key": "f:a.rs"}, {"key": "c:1:0", "text": "  ƒ outer", "runs": [[0, 9, "drgnx-replace-ctx"]]}, {"key": "m:1:0"}, {"key": "m:1:1"}, {"key": "m:1:2"}]}}]}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "search-run-done", "data": {"view": "s", "run": 1, "files": 1, "matches": 3}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "search/run", "params": {"view": "s", "root": "$ROOT/proj", "search": {"query": {"mode": "text", "text": "needle"}}, "context": false}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "s", "ops": [{"insert": {"after": null, "rows": [{"key": "f:a.rs"}, {"key": "m:2:0"}, {"key": "m:2:1"}, {"key": "m:2:2"}]}}]}}, "within_ms": 10000}

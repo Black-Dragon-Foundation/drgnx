@@ -4,9 +4,9 @@
 //! [`super::Hooks`].
 
 use super::{
-    GitError, GitFuture, MAX_AGENTS, RunGit, START_TRIES, TaskTree, TreeMode, TrialResult, changed,
-    clash, data_for, data_of, fallback, internal, load, ordered, profile_of, put_in, raise_card,
-    service, settle_cards, update_data, user,
+    GitError, GitFuture, RunGit, START_TRIES, TaskTree, TreeMode, TrialResult, agent_slots,
+    changed, clash, data_for, data_of, fallback, internal, load, ordered, profile_of, put_in,
+    raise_card, service, settle_cards, update_data, user,
 };
 use crate::agents::Origin;
 use crate::coord::fail;
@@ -59,6 +59,11 @@ pub async fn once(front: &Arc<Front>) {
         }
     };
     for id in ids {
+        // a test hub's look scene: its run runs, and nothing moves it
+        #[cfg(feature = "test-hooks")]
+        if crate::orch::scene::holds(&id) {
+            continue;
+        }
         if let Err(e) = step(front, &id).await {
             tracing::warn!("plan run {id}: {}", e.message);
         }
@@ -69,9 +74,10 @@ pub async fn once(front: &Arc<Front>) {
             h.tick(front, &id).await;
         }
     }
+    crate::forecast::sweep(front).await;
 }
 
-/// Move job ID on: tasks whose agent is gone are free again, ready tasks get agents (up to [`MAX_AGENTS`]) in the
+/// Move job ID on: tasks whose agent is gone are free again, ready tasks get agents (up to [`agent_slots`]) in the
 /// run order, the job is done when every task is.
 pub async fn step(front: &Arc<Front>, id: &str) -> Result<(), crate::runner::Error> {
     let Some(l) = load(front, id, false).await? else {
@@ -113,13 +119,13 @@ pub async fn step(front: &Arc<Front>, id: &str) -> Result<(), crate::runner::Err
             {
                 let tr = front.core.agents.get(a).ok();
                 if let (Some(why), Some(tr)) = (fallback::exit_limit(&snap, tr.as_ref()), tr) {
-                    runs.set_busy(&tid, Some("starting"));
+                    let mark = super::BusyMark::set(front, &tid, "starting");
                     let (f, job, task) = (front.clone(), id.to_owned(), t.clone());
                     tokio::spawn(async move {
                         if let Err(e) = fallback::worker(&f, &job, &task, &snap, &tr, &why).await {
                             tracing::warn!("plan run {job}: fallback: {}", e.message);
                         }
-                        f.core.runs.set_busy(&task.row.id, None);
+                        drop(mark);
                     });
                     continue;
                 }
@@ -177,10 +183,10 @@ pub async fn step(front: &Arc<Front>, id: &str) -> Result<(), crate::runner::Err
     for t in ordered(&l.tasks, &data) {
         if t.row.status.as_deref() == Some("ready")
             && runs.busy_of(&t.row.id).is_none()
-            && count < MAX_AGENTS
+            && count < agent_slots(front)
             && data_for(&data, "blocked", &t.row.id).is_none()
         {
-            runs.set_busy(&t.row.id, Some("starting"));
+            let mark = super::BusyMark::set(front, &t.row.id, "starting");
             let (f, job, task) = (front.clone(), id.to_owned(), t.clone());
             tokio::spawn(async move {
                 if let Err(e) = start(&f, &job, &task, None, None).await {
@@ -190,7 +196,7 @@ pub async fn step(front: &Arc<Front>, id: &str) -> Result<(), crate::runner::Err
                         e.message
                     );
                 }
-                f.core.runs.set_busy(&task.row.id, None);
+                drop(mark);
                 changed(&f, &job).await;
             });
             count += 1;
@@ -285,6 +291,7 @@ pub(crate) fn run_state(
                 id: s.id.clone(),
                 task: s.task.clone(),
                 exited: s.status == Some(SessionStatus::Exited),
+                held_by_user: s.held_by.is_some(),
                 held: held
                     .get(&s.id)
                     .copied()
@@ -309,6 +316,7 @@ pub(crate) fn run_state(
             .filter(|c| c.kind.as_deref() == Some("clash"))
             .filter_map(|c| c.task.clone())
             .collect(),
+        predictions: Vec::new(),
     }
 }
 
@@ -373,12 +381,19 @@ pub async fn clashes(front: &Arc<Front>, id: &str) -> Result<(), crate::runner::
             diffs.insert(t.row.id.clone(), files);
         }
     }
-    let run = run_state(&l, &data, &sessions, &held, &settled, &diffs);
+    let mut run = run_state(&l, &data, &sessions, &held, &settled, &diffs);
+    // what the conflict predictor found between the run's sessions
+    run.predictions = front
+        .core
+        .predict
+        .among(&sessions.iter().map(|s| s.id.as_str()).collect());
     let decisions = decisions_of(&l);
     let found = clash::scan(&run, &decisions, &diffs);
     for c in &found {
         card_clash(front, id, c).await?;
     }
+    // a predicted conflict or a contradiction between two of the run's sessions opens a huddle
+    front.core.huddles.clashed(front, Some(id), &found);
     if !found.is_empty()
         && let Some(h) = front.core.runs.hooks()
     {
@@ -499,8 +514,10 @@ pub async fn start(
     // its edits are against where the task's tree started, not where the job's branch is later: kept from the first
     if data_for(&data, "bases", tid).is_none() {
         let (key, base) = (tid.to_owned(), tree.base.clone());
+        let agents = agent_slots(front);
         update_data(front, &svc, job, move |d| {
             put_in(d, "bases", &key, Some(json!(base)));
+            run_facts(d, &base, agents);
         })
         .await?;
     }
@@ -540,19 +557,11 @@ pub async fn start(
         }
     };
     // the session's steps are filed under its plan and project
-    let plan = l
-        .job
-        .plan
-        .as_deref()
-        .map(|p| format!("plan:{p}"))
-        .unwrap_or_else(|| format!("plan:{job}"));
-    let project = {
-        let dir = repo.clone();
-        tokio::task::spawn_blocking(move || norn::project::resolve(&dir).map(|p| p.id))
-            .await
-            .ok()
-            .flatten()
-    };
+    let plan = super::plan_scope(&l.job);
+    let project = crate::graph::project_of(&repo)
+        .await
+        .map_err(super::internal)?
+        .map(|p| p.id);
     // spend counts toward the plan, and the plan toward its project; the gateway books the session's requests
     // under the job
     {
@@ -726,10 +735,30 @@ impl RunGit for BasicGit {
     }
 }
 
+/// The run's facts the Flow's head shows, kept from the first task's start: its `base` (where its first tree started)
+/// and `agents` (how many it runs at once).
+pub(crate) fn run_facts(d: &mut serde_json::Map<String, Value>, base: &str, agents: usize) {
+    d.entry("base").or_insert_with(|| json!(base));
+    d.entry("agents").or_insert_with(|| json!(agents));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use norn::read::jobs::Job;
+
+    /// [D] The first task to start records the run's base (where the job's line started) and how many agents it runs
+    /// at once; a later start changes neither.
+    #[test]
+    fn the_first_start_records_the_runs_base_and_agents() {
+        let mut d = serde_json::Map::new();
+        run_facts(&mut d, "4fe72a5aa", 1);
+        assert_eq!(d["base"], json!("4fe72a5aa"));
+        assert_eq!(d["agents"], json!(1));
+        run_facts(&mut d, "9999999", 3);
+        assert_eq!(d["base"], json!("4fe72a5aa"));
+        assert_eq!(d["agents"], json!(1));
+    }
 
     #[test]
     fn the_run_state_remembers_carded_keys_from_the_job_data() {

@@ -42,6 +42,15 @@ pub enum ReapOutcome {
 /// Sends signals: `kill(2)` semantics, a negative `target` names a process group.
 pub trait Signaller: Sync {
     fn kill(&self, target: i32, sig: i32) -> io::Result<()>;
+
+    /// The wait between two probes of a signalled group: on the installed clock (`drgnx_clock`), so a test that
+    /// watches signals decides when a grace has passed.  A signaller of real processes waits in real time.
+    fn pause(
+        &self,
+        d: Duration,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        Box::pin(drgnx_clock::sleep(d))
+    }
 }
 
 /// `libc::kill`. It refuses `target` 0 and -1 (the caller's group and every process of the user) whatever its caller
@@ -49,6 +58,14 @@ pub trait Signaller: Sync {
 pub struct RealSignaller;
 
 impl Signaller for RealSignaller {
+    /// Real processes exit in real time, whatever clock a test installed.
+    fn pause(
+        &self,
+        d: Duration,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        Box::pin(tokio::time::sleep(d))
+    }
+
     fn kill(&self, target: i32, sig: i32) -> io::Result<()> {
         if target == 0 || target == -1 {
             return Err(io::Error::new(
@@ -152,12 +169,65 @@ fn probe(sig: &dyn Signaller, target: i32) -> bool {
     }
 }
 
-/// Whether the group can still be signalled; only ESRCH says it is gone.
+/// Whether the group can still be signalled; only ESRCH says it is gone. A group that only unreaped zombies are left
+/// in (a leader nobody has waited for) answers `kill(-pgid, 0)` too, but nothing in it can run or be killed: it is
+/// gone, where `/proc` shows it (GL-T12-5).
 fn group_left(sig: &dyn Signaller, pgid: i32) -> bool {
     match sig.kill(-pgid, 0) {
-        Ok(()) => true,
+        Ok(()) => !only_zombies(pgid),
         Err(e) => e.raw_os_error() != Some(libc::ESRCH),
     }
+}
+
+/// Whether the leader of group `pgid` is an unreaped zombie and every other process of the group is a zombie too, read
+/// from `/proc`: `false` when `/proc` cannot be read, and on any other OS (the group is then waited for as before).
+#[cfg(target_os = "linux")]
+fn only_zombies(pgid: i32) -> bool {
+    // only a leader that is itself an unreaped zombie: a group whose members were killed and wait for init to reap them
+    // is still going (its leader is gone), and is waited for as before
+    let leader_is_zombie = std::fs::read_to_string(format!("/proc/{pgid}/stat"))
+        .ok()
+        .and_then(|s| {
+            s.rsplit_once(')')
+                .map(|(_, r)| r.trim_start().starts_with('Z'))
+        })
+        .unwrap_or(false);
+    if !leader_is_zombie {
+        return false;
+    }
+    let Ok(dir) = std::fs::read_dir("/proc") else {
+        return false;
+    };
+    for entry in dir.flatten() {
+        if !entry
+            .file_name()
+            .to_string_lossy()
+            .bytes()
+            .all(|b| b.is_ascii_digit())
+        {
+            continue;
+        }
+        // "PID (comm) STATE PPID PGRP ...": comm may hold spaces and parentheses, so cut at the last `)`
+        let Ok(stat) = std::fs::read_to_string(entry.path().join("stat")) else {
+            continue; // gone since the listing
+        };
+        let Some(rest) = stat.rsplit_once(')').map(|(_, r)| r) else {
+            return false;
+        };
+        let mut f = rest.split_whitespace();
+        let (state, _ppid, group) = (f.next(), f.next(), f.next());
+        if group.and_then(|g| g.parse::<i32>().ok()) == Some(pgid)
+            && !matches!(state, Some("Z" | "X"))
+        {
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(not(target_os = "linux"))]
+fn only_zombies(_pgid: i32) -> bool {
+    false
 }
 
 async fn terminate(pgid: i32, grace: Duration, sig: &dyn Signaller) -> ReapOutcome {
@@ -181,16 +251,18 @@ async fn terminate(pgid: i32, grace: Duration, sig: &dyn Signaller) -> ReapOutco
     }
 }
 
-/// Probe the group until it is gone (true) or `limit` has passed (false).
+/// Probe the group until it is gone (true) or `limit` has passed (false).  The wait is counted in probes (POLL each on
+/// the installed clock), so a virtual clock decides when the limit is reached.
 async fn wait_gone(sig: &dyn Signaller, pgid: i32, limit: Duration) -> bool {
-    let deadline = tokio::time::Instant::now() + limit;
+    let mut waited = Duration::ZERO;
     loop {
         if !group_left(sig, pgid) {
             return true;
         }
-        if tokio::time::Instant::now() >= deadline {
+        if waited >= limit {
             return false;
         }
-        tokio::time::sleep(POLL).await;
+        sig.pause(POLL).await;
+        waited += POLL;
     }
 }

@@ -11,17 +11,30 @@
 //! - [`launch`]: the session's Gleipnir spec (Task 10).
 //! - [`net`]: the session's provider proxy on `proxy.sock`, which the spec's relay port reaches.
 //! - [`wake`]: a job's end prompts the session that started it; a queue wait is a step (Task 15).
+//! - [`rewind`]: the restore level a provider gives and where a conversation is cut for a step.
+//! - [`wheel`]: the user takes an agent's wheel and gives it back with what they changed.
 
+pub mod before_tool_tool;
+pub mod config;
 pub mod deliver;
+pub mod explain;
+pub mod grants;
 pub mod handoff;
+pub mod identity;
 pub mod launch;
 pub mod lock;
+pub mod markdown;
 pub mod net;
 pub mod probe;
 pub mod queue;
+pub mod rewind;
 pub mod session;
+pub mod tool_output;
 pub mod transcript;
+pub mod trust;
 pub mod wake;
+pub mod wheel;
+pub mod wire;
 
 use crate::dispatch::Caller;
 use crate::front::Front;
@@ -55,6 +68,8 @@ pub struct Hub {
     sessions: Mutex<HashMap<String, Arc<Session>>>,
     db: OnceLock<urdr::Handle>,
     steps: StepBus,
+    /// Each live session's ordinal, handle and monogram ([`identity`]).
+    pub identities: Arc<identity::Pool>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -95,6 +110,13 @@ impl Hub {
     /// The worktree session SID works in (none for a session the hub does not hold).
     pub fn worktree(&self, sid: &str) -> Option<PathBuf> {
         lock(&self.sessions).get(sid).map(|s| s.worktree())
+    }
+
+    /// What session SID is doing now: its running step's title, the agent's own words (none: between steps, or a
+    /// session the hub does not hold).
+    pub fn doing(&self, sid: &str) -> Option<String> {
+        let s = lock(&self.sessions).get(sid).cloned()?;
+        s.doing()
     }
 
     /// A session on PROFILE, started by CALLER (the user's connection), in the directory and role of P.
@@ -217,6 +239,8 @@ impl Hub {
 
     /// After a restart: the recorded sessions resumed, their queued prompts delivered.
     pub async fn resume_all(&self, front: &Front) {
+        // a revert a crash cut short is finished before its session resumes
+        crate::history::revert::finish_pending(front).await;
         session::resume_all(self, front).await;
     }
 
@@ -228,6 +252,7 @@ impl Hub {
     }
 
     async fn forget(&self, id: &str) {
+        self.identities.free(id);
         if let Some(db) = self.db() {
             session::delete_row(db, id).await;
         }
@@ -247,6 +272,33 @@ impl Hub {
             ));
         }
         self.find(id)?.answer_permission(request, option).await
+    }
+
+    /// The Always grants of session ID (`agents/grants`).
+    pub fn grants(
+        &self,
+        caller: &Caller,
+        id: &str,
+    ) -> Result<runstav::methods::agents::Grants, Error> {
+        if caller.class != Class::User {
+            return Err(session::refuse("only the user reads the grants"));
+        }
+        Ok(runstav::methods::agents::Grants {
+            grants: self.find(id)?.grants(),
+        })
+    }
+
+    /// Take back grant GRANT of session ID (`agents/grants/revoke`).
+    pub async fn revoke_grant(
+        &self,
+        caller: &Caller,
+        id: &str,
+        grant: &str,
+    ) -> Result<runstav::methods::agents::Revoked, Error> {
+        if caller.class != Class::User {
+            return Err(session::refuse("only the user takes a grant back"));
+        }
+        self.find(id)?.revoke_grant(grant).await
     }
 
     /// Matrix card CARD was settled (in the cockpit, or by an answer here): the requests waiting on it go on.

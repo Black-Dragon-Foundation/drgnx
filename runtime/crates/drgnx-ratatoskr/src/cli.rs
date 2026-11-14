@@ -1,8 +1,9 @@
 //! The command line (lexopt): `ratatoskr serve [--foreground] [--parent-pid PID] [--supervisor none|self|launchd]`,
 //! `ensure`, `stop`, `status`, `doctor`, `restart`, `version [--json]`, `methods --json|--markdown`,
-//! `sandbox check`, `sandbox-inner …` and `relay …` (the sandbox's inner helper and its relay, their arguments taken
-//! raw), `mcp-bridge --socket PATH | --outside --kind KIND [--cwd DIR]` (an agent's coordination tools over stdio), and
-//! with the `test-hooks` feature `sandbox run …`.  A line that does not parse exits 2 ([`crate::Exit::Usage`]).
+//! `sandbox check`, `sandbox-inner …`, `relay …` and `browser-host …` (the sandbox's inner helper, its relay and its
+//! browser host, their arguments taken raw), `mcp-bridge --socket PATH | --outside --kind KIND [--cwd DIR]` (an agent's
+//! coordination tools over stdio), `embed-worker …` (Hrafn's embed worker), and with the `test-hooks` feature
+//! `sandbox run …`.  A line that does not parse exits 2 ([`crate::Exit::Usage`]).
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -18,17 +19,32 @@ pub const USAGE: &str = "usage: ratatoskr serve [--foreground] [--parent-pid PID
     \x20      ratatoskr methods --json|--markdown\n\
     \x20      ratatoskr sandbox-inner --spec-fd 3 -- CMD...   (the sandbox's inner helper; run by the sandbox only)\n\
     \x20      ratatoskr relay --parent-pid PID [--ready-fd N] PORT=SOCKET...   (the sandbox's relay; run by the sandbox only)\n\
+    \x20      ratatoskr browser-host --hub-fd 3 --ready-fd 4 --program P --dir D --web-port N [--max-message B]\n\
+    \x20          [--headless-shell|--full]   (Chromium over a pipe for the hub; run by the sandbox only)\n\
     \x20      ratatoskr sandbox check [--json] [--tier full|reduced]   (does the job sandbox start here?)\n\
     \x20      ratatoskr store migrate-check --db FILE --scratch DIR [--json]   (migrate a copy of work.db; counts only)\n\
     \x20      ratatoskr store restore-pre7 [--yes]   (the hub stopped: work.db back from before schema 7)\n\
     \x20      ratatoskr graph export|import|backup|revert|excise|scrub|grants|sql|compact|proposed ...   (the store, from a terminal)\n\
     \x20      ratatoskr job propose PLAN [--repo DIR] [--budget USD] [--auto] [--json]   (plan runs, from a terminal)\n\
     \x20      ratatoskr job approve ID [--budget USD] | status [ID] | stop ID | resume ID [--budget USD]   [--json]\n\
+    \x20      ratatoskr browser install [--version V] | list   [--json]   (the agent browser: a pinned download; what sessions get)\n\
+    \x20      ratatoskr machines report --machine M --ttl SECS [--json FILE|-]   (a machine's slots, from jobq)\n\
+    \x20      ratatoskr runner list [--json] | add HOST --trust T [--name N] [--profile P] [--accept A] [--root DIR] [--prefix P]\n\
+    \x20          | check NAME | bench NAME | trust NAME T | unbench NAME | remove NAME [--yes] | audit   (the runners)\n\
+    \x20      ratatoskr packs check DIR [--builtin] [--other DIR]...   (check a language pack)\n\
+    \x20      ratatoskr packs sync --plan FILE [--out FILE] | pin REPO COMMIT [--src DIR] | translate PACKDIR OUT   (the pack job; pin a grammar; the generic mode's queries)\n\
+    \x20      ratatoskr plugins install PATH [--replace] | list [--json] | remove NAME   (plugins; approve them in drgnx)\n\
+    \x20      ratatoskr search index ROOT [--rebuild] [--now]   (build or rebuild a project's code index)\n\
+    \x20      ratatoskr search query ROOT QUESTION... [-k N] [--scope code|tests|docs|all] [--json]\n\
+    \x20      ratatoskr search mcp [ROOT]   (the MCP search tool on stdio, for an agent outside drgnx)\n\
     \x20      ratatoskr mcp-bridge --socket PATH   (an agent's coordination tools: stdio to its session's mcp.sock)\n\
     \x20      ratatoskr mcp-bridge --outside --kind KIND [--cwd DIR]   (an agent outside drgnx: stdio to the hub)\n\
+    \x20      ratatoskr embed-worker --model ID --dir D --device auto|cpu --device-cache FILE [--threads N] [--idle-ms N]\n\
+    \x20          (Hrafn's embed worker; run by the hub only)\n\
+    \x20      ratatoskr recording lint DIR...   (the secret lint over recorded runs: bin/drgnx record lint)\n\
     \x20      ratatoskr sandbox run --spec FILE --result FILE [--tier full|reduced] [--bwrap PATH]\n\
     \x20          [--pause-before-spawn FIFO] [--landlock-omit PATH]... [--landlock-abi-cap N] [--settings-guards]\n\
-    \x20          -- CMD...   (test builds only)";
+    \x20          [--browser-probe ARG]... -- CMD...   (test builds only)";
 
 /// How long `ensure` waits for the hub to answer `ping`.
 pub const ENSURE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -74,17 +90,58 @@ pub enum Command {
     Relay {
         args: Vec<OsString>,
     },
+    /// The browser host (`crate::browser::host`), its arguments untouched: Chromium over a pipe, inside a session's
+    /// sandbox. It builds no runtime.
+    BrowserHost {
+        args: Vec<OsString>,
+    },
     /// `sandbox run` (test-hooks only): one command under the sandbox, for the escape rows.
     #[cfg(feature = "test-hooks")]
     SandboxRun(SandboxRunArgs),
+    /// `debug-mock SCRIPT.json` (test-hooks only): the mock debug adapter on stdio (`vor::mock`), for the `debug/*`
+    /// conformance rows and ERT.
+    #[cfg(feature = "test-hooks")]
+    DebugMock {
+        script: OsString,
+    },
+    /// `debug-lsp-mock MODE [ARG]` (test-hooks only): a language server that opens a DAP server, for the `lsp-command` tests.
+    #[cfg(feature = "test-hooks")]
+    DebugLspMock {
+        mode: String,
+        arg: Option<String>,
+    },
     /// `mcp-bridge`: an agent's stdio MCP server, copied to the hub (`crate::bridge`).
     McpBridge(BridgeArgs),
     /// `store migrate-check` and `store restore-pre7` (`crate::store_cli`).
     Store(StoreCommand),
     /// `graph …`: the store's commands, a client of the running hub (`crate::graph_cli`).
     Graph(crate::graph_cli::GraphCommand),
+    /// `browser install|list`: the agent browser (`crate::browser`).
+    Browser(crate::browser::BrowserCommand),
     /// `job …`: plan runs, a client of the running hub (`crate::job_cli`).
     Job(crate::job_cli::JobCommand),
+    /// `machines report …`: a machine's slots, from jobq (`crate::machines_cli`).
+    Machines(crate::machines_cli::MachinesCommand),
+    /// `runner …`: the runners, a client of the running hub (`crate::runner_cli`).
+    Runner(crate::runner_cli::RunnerCommand),
+    /// `packs …`: the language pack tools (`crate::packs_cli`).
+    Packs(crate::packs_cli::PacksCommand),
+    /// `plugins …`: installing plugins (`crate::plugins_cli`).
+    Plugins(crate::plugins_cli::PluginsCommand),
+    /// `search …`: Hrafn from a terminal, and the MCP `search` tool on stdio (`crate::search_cli`).
+    Search(crate::search_cli::SearchCommand),
+    /// `embed-worker …`: Hrafn's embed worker, a child of the hub (`crate::search::worker`). `main` runs it before
+    /// any tokio runtime.
+    EmbedWorker(crate::search::worker::WorkerArgs),
+    /// `hrafn-parse --lib FILE --grammar NAME --sha256 HASH`: a fetched pack's parse worker (`hrafn::chunk::worker`),
+    /// framed JSON on stdin and stdout, started by the hub under Gleipnir.
+    HrafnParse {
+        lib: PathBuf,
+        grammar: String,
+        sha256: String,
+    },
+    /// `recording lint DIR…`: the secret lint over recorded runs (`crate::recording_cli`).
+    Recording(crate::recording_cli::RecordingCommand),
 }
 
 /// `store`'s subcommands.
@@ -146,6 +203,9 @@ pub struct SandboxRunArgs {
     /// `--settings-guards`: close your config files and pin the write roots' settings files, as a job will
     /// (`crate::sandbox_settings`).
     pub settings_guards: bool,
+    /// `--browser-probe ARG`, one per argument: the browser host's argv in place of the plan's, so the escape probe
+    /// runs under the browser layer (the spec has a `browser`; the run makes the socketpair and holds the hub's end).
+    pub browser_probe: Vec<String>,
     pub command: Vec<String>,
 }
 
@@ -341,6 +401,10 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
         "relay" => Ok(Command::Relay {
             args: p.raw_args().map_err(e)?.collect(),
         }),
+        // So does the browser host (`browser::host::parse`).
+        "browser-host" => Ok(Command::BrowserHost {
+            args: p.raw_args().map_err(e)?.collect(),
+        }),
         "sandbox" => {
             let sub = match p.next().map_err(e)? {
                 Some(Value(v)) => v.string().map_err(e)?,
@@ -360,9 +424,138 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
         "mcp-bridge" => mcp_bridge(&mut p).map(Command::McpBridge),
         "store" => store(&mut p).map(Command::Store),
         "graph" => crate::graph_cli::parse(p.raw_args().map_err(e)?).map(Command::Graph),
+        "browser" => crate::browser::parse(p.raw_args().map_err(e)?).map(Command::Browser),
         "job" => crate::job_cli::parse(p.raw_args().map_err(e)?).map(Command::Job),
+        "machines" => crate::machines_cli::parse(p.raw_args().map_err(e)?).map(Command::Machines),
+        "runner" => crate::runner_cli::parse(p.raw_args().map_err(e)?).map(Command::Runner),
+        "packs" => crate::packs_cli::parse(p.raw_args().map_err(e)?).map(Command::Packs),
+        "plugins" => crate::plugins_cli::parse(p.raw_args().map_err(e)?).map(Command::Plugins),
+        "search" => crate::search_cli::parse(p.raw_args().map_err(e)?).map(Command::Search),
+        #[cfg(feature = "test-hooks")]
+        "debug-mock" => match p.next().map_err(e)? {
+            Some(Value(v)) => Ok(Command::DebugMock { script: v }),
+            _ => Err("debug-mock takes SCRIPT.json".into()),
+        },
+        #[cfg(feature = "test-hooks")]
+        "debug-lsp-mock" => {
+            let words: Vec<OsString> = p.raw_args().map_err(e)?.collect();
+            let text = |w: &OsString| w.to_string_lossy().into_owned();
+            match words.as_slice() {
+                [mode] => Ok(Command::DebugLspMock {
+                    mode: text(mode),
+                    arg: None,
+                }),
+                [mode, arg] => Ok(Command::DebugLspMock {
+                    mode: text(mode),
+                    arg: Some(text(arg)),
+                }),
+                [mode, port, file] => Ok(Command::DebugLspMock {
+                    mode: text(mode),
+                    arg: Some(format!("{} {}", text(port), text(file))),
+                }),
+                _ => Err("debug-lsp-mock takes MODE [ARG] or stranger PORT FILE".into()),
+            }
+        }
+        "embed-worker" => embed_worker(&mut p).map(Command::EmbedWorker),
+        "hrafn-parse" => hrafn_parse(&mut p),
+        "recording" => {
+            crate::recording_cli::parse(p.raw_args().map_err(e)?).map(Command::Recording)
+        }
         other => Err(format!("unknown command {other:?}")),
     }
+}
+
+/// `hrafn-parse --lib FILE --grammar NAME --sha256 HASH`: all three, once each.
+fn hrafn_parse(p: &mut lexopt::Parser) -> Result<Command, String> {
+    use lexopt::prelude::*;
+    let e = |e: lexopt::Error| e.to_string();
+    let (mut lib, mut grammar, mut sha256) = (None, None, None);
+    while let Some(arg) = p.next().map_err(e)? {
+        match arg {
+            Long("lib") => lib = Some(PathBuf::from(p.value().map_err(e)?)),
+            Long("grammar") => grammar = Some(p.value().map_err(e)?.string().map_err(e)?),
+            Long("sha256") => sha256 = Some(p.value().map_err(e)?.string().map_err(e)?),
+            other => return Err(other.unexpected().to_string()),
+        }
+    }
+    match (lib, grammar, sha256) {
+        (Some(lib), Some(grammar), Some(sha256)) => Ok(Command::HrafnParse {
+            lib,
+            grammar,
+            sha256,
+        }),
+        _ => Err("hrafn-parse takes --lib FILE --grammar NAME --sha256 HASH".into()),
+    }
+}
+
+/// `embed-worker --model ID --dir D --threads N --device auto|cpu --device-cache FILE [--idle-ms N]`, and with
+/// test-hooks `--device gpu:NAME`, `--test-park`, `--test-crash-once FILE`, `--test-crash-always`,
+/// `--test-rss-cap-mb N`, `--test-power-root DIR`. A repeated option: the last counts.
+fn embed_worker(p: &mut lexopt::Parser) -> Result<crate::search::worker::WorkerArgs, String> {
+    use crate::search::worker::{DeviceArg, WorkerArgs, WorkerTest};
+    use lexopt::prelude::*;
+    let e = |e: lexopt::Error| e.to_string();
+    let (mut model, mut dir, mut threads, mut device, mut cache, mut idle_ms) =
+        (None, None, None, DeviceArg::Auto, None, None);
+    #[allow(unused_mut)] // only the test-hooks switches change it
+    let mut test = WorkerTest::default();
+    while let Some(arg) = p.next().map_err(e)? {
+        match arg {
+            Long("model") => model = Some(p.value().map_err(e)?.string().map_err(e)?),
+            Long("dir") => dir = Some(PathBuf::from(p.value().map_err(e)?)),
+            Long("threads") => {
+                let n: usize = p.value().map_err(e)?.parse().map_err(e)?;
+                if n == 0 {
+                    return Err("--threads takes a number above 0".into());
+                }
+                threads = Some(n);
+            }
+            Long("device") => {
+                let v = p.value().map_err(e)?.string().map_err(e)?;
+                let named = v
+                    .strip_prefix("gpu:")
+                    .filter(|n| !n.is_empty() && cfg!(feature = "test-hooks"));
+                device = match (v.as_str(), named) {
+                    ("auto", _) => DeviceArg::Auto,
+                    ("cpu", _) => DeviceArg::Cpu,
+                    (_, Some(name)) => DeviceArg::Gpu(name.to_string()),
+                    (other, None) => {
+                        return Err(format!("--device takes auto or cpu, not {other:?}"));
+                    }
+                }
+            }
+            Long("device-cache") => cache = Some(PathBuf::from(p.value().map_err(e)?)),
+            Long("idle-ms") => {
+                let ms: u64 = p.value().map_err(e)?.parse().map_err(e)?;
+                if ms == 0 {
+                    return Err("--idle-ms takes a number above 0".into());
+                }
+                idle_ms = Some(ms);
+            }
+            #[cfg(feature = "test-hooks")]
+            Long("test-park") => test.park = true,
+            #[cfg(feature = "test-hooks")]
+            Long("test-crash-once") => test.crash_once = Some(PathBuf::from(p.value().map_err(e)?)),
+            #[cfg(feature = "test-hooks")]
+            Long("test-crash-always") => test.crash_always = true,
+            #[cfg(feature = "test-hooks")]
+            Long("test-rss-cap-mb") => {
+                test.rss_cap_mb = Some(p.value().map_err(e)?.parse().map_err(e)?)
+            }
+            #[cfg(feature = "test-hooks")]
+            Long("test-power-root") => test.power_root = Some(PathBuf::from(p.value().map_err(e)?)),
+            other => return Err(other.unexpected().to_string()),
+        }
+    }
+    Ok(WorkerArgs {
+        model: model.ok_or("embed-worker needs --model ID")?,
+        dir: dir.ok_or("embed-worker needs --dir D")?,
+        threads: threads.unwrap_or_else(crate::search::worker::threads),
+        device,
+        device_cache: cache.ok_or("embed-worker needs --device-cache FILE")?,
+        idle_ms,
+        test,
+    })
 }
 
 /// `store migrate-check --db FILE --scratch DIR [--json]`, or `store restore-pre7 [--yes]`.
@@ -441,6 +634,7 @@ fn sandbox_run(p: &mut lexopt::Parser) -> Result<SandboxRunArgs, String> {
     let (mut spec, mut result, mut tier) = (None, None, gleipnir::Tier::Full);
     let (mut bwrap, mut pause, mut omit, mut cap) = (None, None, Vec::new(), None);
     let mut settings_guards = false;
+    let mut browser_probe = Vec::new();
     let mut command: Vec<OsString> = Vec::new();
     while let Some(arg) = p.next().map_err(e)? {
         match arg {
@@ -458,6 +652,8 @@ fn sandbox_run(p: &mut lexopt::Parser) -> Result<SandboxRunArgs, String> {
             Long("landlock-omit") => omit.push(PathBuf::from(p.value().map_err(e)?)),
             Long("landlock-abi-cap") => cap = Some(p.value().map_err(e)?.parse().map_err(e)?),
             Long("settings-guards") => settings_guards = true,
+            // Taken as it is, even when it starts with `-` (a probe's own flags).
+            Long("browser-probe") => browser_probe.push(p.value().map_err(e)?.string().map_err(e)?),
             Value(first) => {
                 command.push(first);
                 command.extend(p.raw_args().map_err(e)?);
@@ -482,6 +678,7 @@ fn sandbox_run(p: &mut lexopt::Parser) -> Result<SandboxRunArgs, String> {
         landlock_omit: omit,
         landlock_abi_cap: cap,
         settings_guards,
+        browser_probe,
         command: (!command.is_empty())
             .then_some(command)
             .ok_or("sandbox run needs a command after --")?,
@@ -756,6 +953,20 @@ mod tests {
         );
     }
 
+    /// `browser-host` takes its arguments raw too: the host parses its own.
+    #[test]
+    fn browser_host_parses_raw() {
+        let rest = ["--hub-fd", "3", "--ready-fd", "4", "--full", "--json"];
+        let mut all = vec!["browser-host"];
+        all.extend(rest);
+        assert_eq!(
+            p(&all),
+            Ok(Command::BrowserHost {
+                args: rest.map(OsString::from).to_vec()
+            })
+        );
+    }
+
     #[test]
     fn sandbox_check_parses() {
         let args = |json, tier| {
@@ -842,6 +1053,10 @@ mod tests {
                 "--landlock-abi-cap",
                 "8",
                 "--settings-guards",
+                "--browser-probe",
+                "/p",
+                "--browser-probe",
+                "--as-browser",
                 "--",
                 "/bin/sh",
                 "-c",
@@ -856,6 +1071,7 @@ mod tests {
                 landlock_omit: vec!["/a".into(), "/b".into()],
                 landlock_abi_cap: Some(8),
                 settings_guards: true,
+                browser_probe: vec!["/p".into(), "--as-browser".into()],
                 command: vec!["/bin/sh".into(), "-c".into(), "echo --spec".into()],
             }))
         );

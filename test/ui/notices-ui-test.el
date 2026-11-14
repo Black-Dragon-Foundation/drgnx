@@ -24,12 +24,13 @@
   (setq drgnx-notice-ui-test--ran what))
 
 (defun drgnx-notice-ui-test--bar ()
-  "The bar of the root frame's selected window with only the two notice segments, as redisplay would build it."
+  "The bar of the root frame's selected window with only the two notice segments, as redisplay would build it: at
+the window's width, in pixels on a graphical frame."
   (let ((drgnx-statusbar--segments (make-hash-table :test #'eq)) (drgnx-statusbar--errors nil))
     (drgnx-statusbar--define-defaults)
     (let ((drgnx-statusbar-left '(needs-you drgnx)) (drgnx-statusbar-right nil)
           (drgnx-statusbar--window (selected-window)))
-      (drgnx-statusbar-render 120))))
+      (drgnx-statusbar-render (drgnx-statusbar--window-width (selected-window))))))
 
 (defun drgnx-notice-ui-test--click (bar text)
   "Click the segment of BAR that shows TEXT, as the mouse would."

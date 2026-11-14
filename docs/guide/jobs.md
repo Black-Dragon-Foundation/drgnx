@@ -19,7 +19,8 @@ it does not depend on the agent that started it or on the editor, and it survive
   any other ("… is outside your worktree …"); `job_start` without a `cwd` uses the worktree. Your own jobs run with
   your rights, in the folder they name. On Linux the job is
   a transient `systemd-run --user` scope with a memory cap (`agents-job-memory`, default 4G); without a user systemd it
-  has a session and process group of its own. A job on another machine is refused: part 1 runs jobs on this machine.
+  has a session and process group of its own. `machine` is `auto` (the default: whichever allowed machine finishes it
+  first), `local`, or one of your runners by name (see `docs/guide/runners.md`); a name that is no runner is refused.
 - **Its files.** `<state>/hub/exec/<id>/` holds the log, the exit code and the result. The hub reads the same files
   after a restart: a job still running is picked up again (by its process and start time, not just its pid), one that
   ended meanwhile gets its result, one that vanished without an exit is marked lost. A picked-up job is waited on by
@@ -28,21 +29,36 @@ it does not depend on the agent that started it or on the editor, and it survive
   hour is always kept); older ones are removed, so `exec/get` and `exec/log` answer "no job" for them, while the
   job's row in the graph stays.
 - **Time box.** 1 to 86400 seconds (default 3600; a missing `timebox_s` means the default). At the end the job's process
-  group gets SIGTERM, then SIGKILL, and its status is `timed-out`. `exec/stop` ends it by hand (`stopped`). The user's
+  group gets SIGTERM, then SIGKILL, and its status is `timed-out`. `exec/stop` ends it by hand (`stopped`). A job the
+  hub's own machinery ends (a networked container job whose relay stopped, or one the hub's stop or restart ended) is
+  `infra`; the last line of its log says why (`infra: proxy: …`). The user's
   job (not an agent's) may send `no_timebox: true` instead: it has no deadline, its row has no `timebox_s`, and only
   `exec/stop` or the hub's stop ends it (with `timebox_s` it is refused). An agent that sends `no_timebox` is refused
   with `invalid-params`, like the four fields below.
 - **The end.** The `exec-done` event carries the exit code and a summary: the names of the failing tests (read from
   `cargo test`, ERT and domr output, by the job's kind: `cargo`, `ert`, `domr`, `other`) and at most 20 lines of the log
   (failure lines first, then the end of the log), plus the log's path. Nothing is polled: the agent that started the job
-  waits at no cost and is woken by the end.
+  waits at no cost and is woken by the end. A job that ran on a `shared` runner has a summary that begins "output from
+  runner NAME (shared)", so the woken agent reads it as untrusted, and its result never counts for a gate (see
+  `docs/guide/runners.md`, "What comes back").
 - **Methods.** `exec/start`, `exec/get`, `exec/list`, `exec/stop`, `exec/log` (at most 1000 lines a call from line
   `from`, or with `tail_bytes` the log's last bytes, up to 1 MiB, read from the file's end; bytes that are not UTF-8
-  come back replaced); agents use the `job_*` tools.
+  come back replaced), `exec/bump` (yours only: a queued job to priority 1); agents use the `job_*` tools.
+- **The queue and priority.** Every job but your servers enters one queue, kept in the hub's `runtime.db`, so it
+  survives a restart. The hub sets each job's priority: 1 for yours, 3 for an agent's `job_start`, 5 for `background`
+  work (2 and 4 are the splitter's probes and a plan's or gate's bulk). Only your own connections may send `priority`
+  (1 to 5) or bump a job; an agent's request with a priority is refused, and `background` can only lower its job's.
+  A job waits until a machine admits it, and its row says why (`waiting`: "every job slot of the machine is in use",
+  "needs 6144 MiB of memory; …", "this machine is on battery", …). Rows also say where a job runs (`machine`), its
+  `priority`, and on a runner its `attempt`. A start may mark a job `heavy` (under the project's
+  `drgnx-runners-send heavy`, the default, only heavy jobs may leave this machine), `local_only`, name the `keys` it
+  needs, and the `writes` it may make to the tree. A start with `os: macos` (a Naglfar build, macOS tests) runs only
+  on a Mac runner, as a host job (never in a container): it counts as heavy, and waits for a Mac that has its
+  project's `drgnx-runners-mac-tools` and `drgnx-runners-mac-toolchains`.
 
 ### The editor's jobs
 
-The editor's own background work (tree-sitter grammars, mermaid, the browser for agents, local AI servers, onboarding
+The editor's own background work (tree-sitter grammars, mermaid, local AI servers, onboarding
 installs, the search indexer) is a job of the same list: you see it beside the agents' jobs, and it keeps running when
 Emacs closes. A job you start (through the editor or `exec/start`) may carry four things an agent's job never does; an
 agent that sends any of them is refused with `invalid-params`:
@@ -63,9 +79,15 @@ In Lisp, `core/drgnx-exec.el` is the client. `drgnx-exec-start` is asynchronous 
 reason it did not start); `drgnx-exec-get` and `drgnx-exec-list` read a cache that follows the hub's `exec-done` events
 and never call the hub, so timers and redisplay may use them; `drgnx-exec-log` and `drgnx-exec-stop` read the end of a job's log
 (one call, `tail_bytes`; waiting up to 5 s: for commands only) and end it. A job's status there is `running`, `done`, `failed` (a non-zero exit
-or the time box), `stopped` or `gone` (lost). A job's time box is an hour unless the caller passes `:timebox` (up to 24
-hours) or `:no-timebox`. The servers the editor starts and leaves up (the local AI runner, the Playwright server of Test
-Report, the browser for agents) run without a time box, so a daemon that stays up for days never loses them: they end
+or the time box), `stopped` or `gone` (lost); a job that ended keeps the hub's summary as `:summary` (`:exit`,
+`:failing`, `:lines`, `:log`), from its `exec-done` event or its `exec/get` and `exec/list` row, and
+`drgnx-exec-listed-hook` runs after each list answer. A job's time box is an hour unless the caller passes `:timebox` (up to 24
+hours) or `:no-timebox`. `:machine` says where it runs (`"local"` or a runner's name; the hub's `auto` when absent) and
+`:local-only t` keeps it on this machine whatever the project's runner settings say: the Extensions view's installs,
+updates and catalog refreshes are jobs named `Extensions: …` with both, and a two-hour time box
+([Extensions](../develop/extensions.md#jobs); what the view shows of them is in the [guide](extensions.md): `C-g` never
+stops one, **Cancel Extension Job** does). The servers the editor starts and leaves up (the local AI runner, the Playwright server of Test
+Report) run without a time box, so a daemon that stays up for days never loses them: they end
 when you stop them, when the editor's teardown does, or when the hub stops. The search indexer is a batch job (it exits
 when the index is built) and has the longest time box, 24 hours; tree-sitter grammar builds and mermaid drawings keep the
 hour. Onboarding runs its installs and downloads as jobs too and waits for
@@ -81,18 +103,36 @@ tmpfs `/tmp`), and the only folder it sees is the starting session's worktree, a
 from the session, never from the request; the command runs in the job's `cwd` inside it, which must be the worktree or
 a folder in it). The worktree is mounted writable as a whole: the protected files above are pinned for jobs that run
 in the sandbox, not for a container job. It has a process limit, and
-`agents-job-memory` and `agents-job-cpus` as its memory and CPU limits. Those limits are enforced or the job does not
+`agents-job-memory` and `agents-job-cpus` as its memory and CPU limits; it never swaps (its swap limit is its memory
+limit), and when the machine runs out of memory it is the first thing the kernel stops, the whole container at once,
+before anything of yours. Those limits are enforced or the job does not
 run: before each container job the hub asks `podman info`, and unless podman uses cgroup v2 with the systemd cgroup
 manager and the memory, pids and cpu controllers, the job is refused with the reason. Rootless podman needs a systemd
 user session for that (a login, or `loginctl enable-linger`); without one it would run the container with no limits.
+A login confined as the SELinux user `user_u` (domain `user_t`) can't run rootless podman at all: it needs
+`newuidmap`, which the stock policy denies `user_t`. There every container job is refused at its start, saying so and
+what an admin would change (map the login to another SELinux user, `semanage login -m -s staff_u LOGIN`; or give it a
+subuid range and a local policy module that lets `user_t` run `newuidmap`); jobs without an image run as usual, and
+`drgnx doctor` says it on its `networked container jobs` line.
 It has **no network of its own**
 (`--network=none`, only a loopback). When the matrix's Network cell allows it (a job you start yourself has none unless it asks), the
-job gets the one route there is: the job's own allow-list proxy, a Unix socket the hub mounts read-only into the
-container, and a small forwarder (`drgnx-fwd`, mounted read-only, next to the hub) that listens on `127.0.0.1:3128`
-inside the job and runs the command in its place. `HTTP_PROXY`, `HTTPS_PROXY` (and lowercase) point at it; only the
+job gets the one route there is: a relay sidecar (`drgnx-px`, a tiny image the hub makes from the binary next to it)
+shares the job's loopback only, listens on `127.0.0.1:3128` there and carries each connection over its stdio to the
+job's own allow-list proxy in the hub. `HTTP_PROXY`, `HTTPS_PROXY` (and lowercase) point at it; only the
 hosts on the allow-list are reached: the setting `agents-net-hosts` (an alist tier to `"host:port"` strings; the
 `packages` tier is a granted network's). Its default is `crates.io`, `index.crates.io`, `static.crates.io`,
-`registry.npmjs.org`, `pypi.org` and `files.pythonhosted.org`, port 443; a tier you leave out reaches nothing. A job you start yourself asks with `network: true`; without `drgnx-fwd`, or if the socket cannot be made, a job that was allowed a network is refused. An Ask on the Network cell refuses the start with the matrix card. The request has no
+`registry.npmjs.org`, `pypi.org` and `files.pythonhosted.org`, port 443; a tier you leave out reaches nothing. A job you start yourself asks with `network: true`. An agent's networked job may also ask for a port of
+your computer as `host.drgnx.internal:PORT` (a dev server, say): it is refused, and you get a card "Job N wants your
+port PORT". Allowing it opens that port for the job's session, its browser and its other jobs too, with the browser's
+scopes (once, this session, its plan); it applies to the job's next connection, with no restart. Each port asks once
+per job. Revoking the grant refuses the next connection; connections already open stay until they end, so end the job
+to cut them. The hub's own ports are never opened, whatever you allow. A job on a runner can't ask: its proxy is the
+runner's and has the allow-list only, so `host.drgnx.internal` is refused there. A networked job needs rootless podman 5.0 or newer; otherwise, or
+if its relay can't start (no `READY` within 10 s), a job that was allowed a network is refused with what to fix. The
+relay lives as long as the job: if it stops first (the sidecar exits, breaks the channel's rules or stops reading) the
+job ends `infra` with the sidecar's exit code and its meaning in its log (137: killed, most likely at its memory limit).
+A networked job can't outlive its hub: stopping the hub ends it, and a hub that restarts after a crash ends the ones
+it finds. An Ask on the Network cell refuses the start with the matrix card. The request has no
 other fields: `exec/start` refuses a field it does not know (a `mounts` or `privileged` is an `invalid-params` error,
 not ignored).
 
@@ -122,13 +162,15 @@ cache for this).
   the agent's process ends (`session/close` first, for the CLIs that have it). The job's end, or your next message,
   resumes it on the same session (`session/resume`; Gemini, which can only load a session, reloads it with
   `session/load`).
-- **Machine slots.** This machine runs four agents' jobs at once (your own jobs, the editor's servers and one-shot work
-  among them, take no slot: they never hold an agent's job up, nor wait behind one, as the editor's jobs never had a
-  limit). A fifth agent's job is recorded as queued and `job_start` answers at once
-  ("queued ... you will be woken"): the agent ends its turn like for any job. The queued job (its row says `queued`,
-  with no unit yet) starts when a slot frees, oldest first, and also after a hub restart; `exec/stop` ends it without
-  it ever starting. A queued job that cannot start (its request is gone, the sandbox refuses) ends as `lost` with the
-  reason in its log, and its starter is woken. Waiting for a job is a `job-wait` step.
+- **The machine's room.** On Linux this machine admits a job by what it has free (memory, pressure, disk, power, the
+  other schedulers' reservations, under the `workstation` profile: 4 GiB and 4 threads kept for you, no new jobs on
+  battery, 10 s between starts); a macOS hub admits four at once. Your servers (no time box) never wait: they start at
+  once and count only in the memory they use. A job that finds no room is recorded as queued and `job_start` answers
+  at once ("queued (…) … you will be woken"): the agent ends its turn like for any job. The queued job (its row says
+  `queued`, with no unit yet) starts when the machine admits it, in the queue's order (priority, then shortest
+  expected first, with fairness between projects), and also after a hub restart; `exec/stop` ends it without it ever
+  starting. A queued job that cannot start (its request is gone, the sandbox refuses) ends as `lost` with the reason in
+  its log, and its starter is woken. Waiting for a job is a `job-wait` step.
 - **Tools in a hub-started session.** An agent the hub starts gets the coordination tools (including the job tools)
   through `ratatoskr mcp-bridge` on a socket the hub made for that session; the socket goes when the session ends.
 
@@ -155,9 +197,12 @@ drgnx job resume job-20261017-101500 --budget 10      # go on (after a stop, or 
 `--json` on `status` gives the same as JSON (an empty list is `[]`); `status` without an id lists every job.
 `--budget` wants a number of USD (`5`, `.5`), nothing else. `propose --auto` starts at once, with no proposal card;
 `--repo DIR` names the repository when the plan is not inside it. `resume` of a proposal you rejected (stopped before you approved it) is refused with "Job ID was
-never approved: propose the plan again", and the job stays stopped; a job you approved and then stopped resumes. In Emacs: **Start Job from Plan…** (the
-proposal, in the Work cockpit, with Approve and Reject), **Show Job in Work…**, **Approve Plan Job…**, **Show Plan
-Jobs**, **Stop Plan Job…** — in the palette (no keys by default; module `tools/jobs`).
+never approved: propose the plan again", and the job stays stopped; a job you approved and then stopped resumes. Whether
+a stopped job was still a proposal is decided in the hub's one write of the stop: reject a proposal in one place while
+you approve it in another, and the approval that lands first runs and is then stopped like any job (its work resumes);
+a budget pause never turns a job you just stopped back into a paused one. Emacs has no job commands of its own: a
+job's proposal and everything it needs of you are cards in the [Work space](work-space.md) and the agent panel, and
+`drgnx job` starts, approves and stops it.
 
 ### From the command line
 
@@ -166,7 +211,7 @@ call to the hub (`job/propose`, `job/approve`, `job/status`, `job/stop`, `job/re
 no editor, and the hub's own checks apply:
 
 ```
-ratatoskr job propose PLAN [--repo DIR] [--budget USD] [--auto] [--json]
+ratatoskr job propose PLAN [--repo DIR] [--budget USD] [--auto] [--gate review|review+accept] [--json]
 ratatoskr job approve ID [--budget USD] [--json]
 ratatoskr job status [ID] [--json]
 ratatoskr job stop ID [--json]
@@ -180,43 +225,20 @@ with: drgnx job approve ID`. `--json` prints the hub's answer on one line. The e
 was asked, 1 when it answered with an error (its text goes to stderr), and 2 when the arguments do not parse (an
 unknown option, a missing plan or id, a `--budget` that is not a number).
 
-## A job in the Work cockpit
+## A job in the Work space
 
-**Show Job in Work…** (`job-show`) filters the [Work cockpit](cockpit.md) to a job: the Work graph shows that job's
-tasks, agents and reviews (with their plan and spec), and two panes of the right dock, stacked with What happened,
-show the rest. No window of its own opens. Until M12f a job had a frame of its own, the job window; a workbench saved
-with one comes back as the cockpit's filter on that job: the restored workbench keeps its panes, sizes and focus,
-and no frame opens.
-
-- **What needs you** (pane `needs-you`; **Show What Needs You**, `cockpit-needs-you`): the cards, each with its
-  actions as buttons (a clash shows both sides and the reviewer's recommendation; **Accept the reviewer** is there
-  only when it recommended a side; a clash whose reviewer was lost twice says so), then the messages agents sent
-  you, each with **Reply…** (answers the agent) or **Dismiss** (needs no answer: it is acted on, and stops counting
-  in the "needs you" number). Below them, the job's tasks (each one's status, profile and what it waits on), the budget, spent
-  against the limit, and the agents at work, each with **Transcript** and **Message…** (queued: the agent gets it,
-marked as yours, when its turn ends).
-- **Decisions** (pane `decisions`; **Show Decisions**, `cockpit-decisions`): the job's decision log, newest first:
-  replaced decisions dimmed, disputed ones (in an open clash) marked.
-
-Without a job filter, What needs you lists every proposed, running or paused job that waits on you, each under its
-name; a click on the name filters the cockpit to that job. **Show What Needs You** (also a click on the status bar's
-jobs count) drops the job filter; **Filter Graph…** (`f` in the graph) asks for the job too, and an empty answer is every job. The graph's first line says which job it shows, and
-the filter is saved with the workbench.
-
-The panes follow the hub's events and redraw only what changed, at most twice a second, and only while one shows (a
-hidden one keeps no timer and catches up when it shows). Hiding them stops nothing of the job. Without a hub What needs you says so, and fills in
-when the hub runs again; if the hub does not know the job (it was deleted), the cockpit shows every job again.
+Open the [Work space](work-space.md): the job's agents are on the map (what needs
+you is the strip along its top, `n` and `g 1` to `g 9` select the chips), its tasks are on the Board (`b`), an agent's
+decisions and edits are in its review (`v`), and its steps are in the research trail (`r`). No window of its own opens.
 
 You do not have to watch it: the open cards and the messages to you (not yet acted on) of the proposed, running and
-paused jobs are the **Jobs** source of [Notices](notices.md), so they count in the one "needs you" number (the status
-bar's, What needs you's first line, the Notices list) and each new card is a desktop notification (D-Bus on Linux;
-`osascript` on macOS; else a message in the echo area — `drgnx-notice-desktop` nil turns them off; the backends are
-[Notices](notices.md#on-the-desktop)). An `overlap` card is advice: it counts but never interrupts. When the hub cannot
-be asked or goes away the count is not shown as a number: Notices says "Jobs: not known" and why, rather than showing
-the last count. The mode-line badge of earlier releases is gone (`drgnx-job-ui-badge-mode` is now the obsolete name of
-`drgnx-job-ui-attention-mode`, and `drgnx-job-ui-notify` of `drgnx-notice-desktop`). Nothing here ever asks you
-anything. Turning `tools/jobs` off (Preferences: Modules) removes the source and its items; open job windows stay as
-they are but no longer follow the hub (the job goes on). What needs you is a **card** with its actions — the proposal (Approve, Reject), a permission (Allow, Reject),
+paused jobs are the **Jobs** source of [Notices](notices.md) (module `tools/jobs`), so they count in the one "needs you"
+number (the status bar's, What needs you's first line, the Notices list) and each new card is a desktop notification
+(D-Bus on Linux; `osascript` on macOS; else a message in the echo area — `drgnx-notice-desktop` nil turns them off; the
+backends are [Notices](notices.md#on-the-desktop)). The status bar's `jobs` segment counts the running jobs. An
+`overlap` card is advice: it counts but never interrupts. When the hub cannot be asked or goes away the count is not
+shown as a number: Notices says "Jobs: not known" and why, rather than showing the last count. Turning `tools/jobs`
+off (Preferences: Modules) removes the source and its items. Nothing here ever asks you anything. What needs you is a **card** with its actions — the proposal (Approve, Reject), a permission (Allow, Reject),
 a merge conflict (let the agent resolve it, merge again after you resolved it, drop the task), a review that failed
 (merge as it is, back to an agent, drop), a stuck or failed agent (retry, drop), the budget (resume with more, stop);
 each acts once. Messages agents send you are listed with a Reply and a Dismiss.
@@ -235,7 +257,12 @@ at once, without a card. Every command goes through the hub, starting it when ne
 The work tracker's grammar ([work.md](work.md)): `# Title`, then `### Task N: title` per task, its text below. Under a
 task, `**Depends:** Task 1, Task 2` (it waits for them) and `**Role:** implement|test|review|docs` (default
 `implement`). Plan-wide: `**Repo:** path` and `**Won't build:** text` — each won't-build line becomes your decision
-in the job's decision log, so no agent builds it. A plan with a dependency cycle, an unknown task or a task number
+in the job's decision log, so no agent builds it; `**Pack:** file` names the rule pack its gates read (default: the
+one drgnx ships; [orchestration.md](../develop/orchestration.md), "The rule pack"), which you approve with the plan.
+Under the pack's red-first rule a task merges only when its first commit is its tests, failing, and the tip passes
+them; a task with nothing to test says `**Red:** none (reason)` in its body, and only the line in the plan you
+approved counts. A task held by a gate waits on a card that says what is missing.
+A plan with a dependency cycle, an unknown task or a task number
 twice is refused. The
 job keeps a snapshot of the plan: editing the file later does not change a running job.
 
@@ -252,11 +279,23 @@ Each role's value is a list of profile names, or one name. If the entry has a mi
 or `settings.el` does not read, no route is read from it until it is fixed: the roles use `drgnx-job-default-profile`, and
 the message that names the line is said once (Preferences: Open Config File… opens the file).
 
-A role without a route gets `drgnx-job-default-profile` ("claude"). The estimate counts
-`drgnx-job-task-tokens` (150 000 in, 15 000 out) per task at the price of the profile's provider when its traffic
-goes through the gateway; profiles drgnx cannot price (a subscription) are listed as unpriced. With a `--budget`, the
-proposal also warns about a profile on a route whose provider has no `:price` in `drgnx-ai-providers`: the gateway cannot count
-what it spends, so the budget would not stop it.
+A role without a route gets `drgnx-job-default-profile` ("claude"). The estimate on the proposal is a forecast from the
+history of similar finished tasks (same role, profile and model, then wider; with no history, a labelled prior with a
+wide range): tokens, the cost and the time, each as a middle and a high end ("3 tasks, about 12–41 USD (estimate),
+40M–130M tokens, 2 h 10–4 h"). Tokens are priced at the rates of `drgnx-agents-model-prices`; a profile with no price
+(a model with no row and no gateway `:price`) is listed as unpriced and shows tokens only, never a price of 0. A
+subscription's cost is an estimate at API prices and is labelled so. A cost under a cent reads "<0.01", never "0.00".
+With a `--budget`, the proposal warns when the plan's high end, its `usd` and `usd-est` summed, is over it (you decide;
+nothing is refused). How to read
+the range, its basis, the price table's date and the week's share: [Reading a forecast](agents.md#reading-a-forecast).
+After the run, each step, task and plan shows what it really used (`timeline/get` with `rollup`): the same numbers as
+the step records, what `budget/get` booked, and, for a gateway task, the gateway's own spend.
+
+A dollar budget on a plan that has a subscription profile also sets a limit of the same amount in `usd-est`, because a
+subscription's spend lands there; without it the dollar limit would never fire. The two limits bind together: each
+counts the gateway's measured dollars and the subscription's estimated ones summed, so a plan with tasks on both is
+capped once at the budget (not at the budget in each unit), and the proposal's warning reads the two p90s summed. The
+budget view says both limits, and the card when the budget is reached says it is an estimate.
 
 **Only job-safe profiles run a job's agents.** A job's agent works unwatched in a repository you may not have
 written, and that repository's own settings (`.claude/settings.json`, a `.gemini/` folder, …) could let its agent act
@@ -274,8 +313,8 @@ why. Details in [agents.md](agents.md#jobs-and-your-claude-settings).
 - **Worktrees:** the job's branch `job/ID` (from your HEAD when you approved) in `.claude/worktrees/ID`; each task
   on `job/ID-N` in `.claude/worktrees/ID-N`, branched from the job's branch — so a task starts from the work of the
   tasks it depends on. At most `drgnx-job-max-agents` (3) agents work at once. A slow checkout (a big repository, a
-  hook) does not hold drgnx up: the task says `starting` until its worktree is there, and `merging` while its branch
-  is merged; a worktree that cannot be made is a card, and so is a git that takes more than `drgnx-job-git-timeout`
+  hook) does not hold drgnx up: the task says `starting` until its worktree is there, `checking` while the gates
+  look at it before a merge, and `merging` while its branch is merged; a worktree that cannot be made is a card, and so is a git that takes more than `drgnx-job-git-timeout`
   seconds (300; git is ended, the card has its last output). Stopping the job ends its git processes too.
 - **Permissions:** a role's policy (`drgnx-job-policies`) allows routine tool calls inside the task's worktree —
   reading, editing, running commands; a reviewer only reads (and runs `git diff`, `log`, `show`, `status`). Anything else waits for you as a **card** (a message
@@ -319,19 +358,15 @@ why. Details in [agents.md](agents.md#jobs-and-your-claude-settings).
 
 The job is **done** when every task is done (or dropped). Review the job's branch and merge it yourself.
 
-From the Work graph you can also reassign a job's task to another profile, mark it blocked, move it in the order
-ready tasks start in, and propose a job of one plan task and the tasks it needs (**Start as Job**):
-[cockpit.md](cockpit.md#changing-jobs-from-the-graph).
-
 ## The merge gate
 
-`drgnx-job-merge-gate` (Customize group `drgnx-cockpit`) says what a finished task needs before it is merged into
-the job's branch:
+The `gate` of the hub's `job/propose` (the default is `review`; the planning agent's proposal block can set it, there is no Emacs option) says what a finished task
+needs before it is merged into the job's branch:
 
 - `review` (the default): its reviewer's pass, as above.
 - `review+accept`: the pass, then every file its agent changed accepted by you. Until then the task waits on you
-  with a `review` card: "waiting on your review: N of M files accepted". **Open its edits** shows the agent's edits
-  ([cockpit.md](cockpit.md#an-agents-edits)), where `a` accepts a file. Once every file is accepted and its
+  with a `review` card: "waiting on your review: N of M files accepted". The agent's review (`v` in the
+  [Work space](work-space.md)) shows its edits, where `a` accepts a file. Once every file is accepted and its
   worktree is clean, the task is merged, within the hub's next tick (2 s).
 
 The details:
@@ -353,7 +388,7 @@ The details:
 - **When files cannot be checked.** Some files count but can never be accepted, so the task waits:
   - a file the edits refuse to show (a link out of the worktree, a dangling link, a submodule);
   - a file whose diff is too large to show;
-  - the files past `drgnx-cockpit-changed-files-max`.
+  - the files past the cap on how many files the edits list.
 
   A task whose edits show no file at all never merges by itself either. For all of these, use **Merge as it is**.
 - **Your other actions.** Accepting never merges by itself, and the card's other actions stay yours: **Merge as it
@@ -362,8 +397,12 @@ The details:
   worktree folder changes, and every 5 s while the worktree is not clean. Just before it merges, it checks that
   nothing changed since the look.
 
+- **Your hooks.** After the gate cleared a task, the `before-commit` rules and plugin hooks are asked (see
+  [Plugins](plugins.md#rules-and-hooks)); one can reword the merge commit's message or hold the merge with a `hook`
+  card (Retry the merge, Dismiss and carry on, Stop the job). `at-review` hooks are asked before the reviewer starts.
+
 A job keeps the gate it was proposed with: the hub runs it, and it does not read your `config.el`. **Start Job from
-Plan…** and **Start as Job** take your option with them. `drgnx job propose` gives the hub's default, `review`.
+Plan…** and **Start as Job** take your option with them. `drgnx job propose` gives the hub's default, `review`, unless you pass `--gate review+accept`.
 
 ## Your first real job
 
@@ -378,7 +417,8 @@ dir), with profiles of your own where the built-in ones do not fit ([agents.md](
 ```
 
 Then **Start Job from Plan…** (or `drgnx job propose PLAN --budget 2`): read the proposal — the tasks, what waits on
-what, the profile per role, the estimate (subscription traffic is unpriced: drgnx does not see it) — and approve.
+what, the profile per role, the estimate (a subscription's cost is an estimate at API prices from the dated price
+table, labelled so) — and approve.
 Watch the job window: agents start per ready task, permissions you did not allow show up as cards, the decision
 log fills. When the job is done, look at its branch (`git log job/ID`, `git diff main...job/ID`) and merge it yourself.
 Things worth trying once: Stop the job and resume it; a budget small enough to pause it; a won't-build decision
@@ -392,8 +432,7 @@ limit, a crashed agent), `job-policy-test.el` (the policy, writes in the worktre
 not start, a stalled turn, a reviewer's answered permission, a restart with a request waiting), `job-cli-test.el` (`drgnx job`
 against a hub in a child process), `job-cards-test.el` (cards and their actions), `job-clash-test.el` and
 `job-clash-review-test.el` (the rules, the reviewer, the user's choice), `job-gate-test.el` (the gate),
-`job-cockpit-test.el` (reassign, block, the run order and Start as Job from the Work graph; the merge gate),
-`job-ui-test.el` and `test/ui/job-window-test.el` (the window; `job-ui-test.el`: the Jobs source, not known, notifications), `job-exit-test.el` (a
+`test/ui/job-window-test.el`, `job-exit-test.el` (a
 four-task job end to end with automatic start, no credential file opened under a fake HOME, closing the window);
 the perf workload `job-window` ([perf.md](../develop/perf.md)). Developer details: [coordination.md](../develop/coordination.md#jobs).
 

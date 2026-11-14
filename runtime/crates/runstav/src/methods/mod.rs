@@ -3,23 +3,43 @@
 //! ([`coord`]), the graph store ([`graph`]), the settings' history ([`settings`]), the tracker for the editor
 //! ([`tasks`]) and the coordination tools' sockets ([`mcp`]); the agent core's (agent system part 1): jobs
 //! ([`exec`]), the permissions matrix ([`matrix`]), plans, briefs and reports ([`plans`]), records ([`records`]) and
-//! time, budgets and the supervisor ([`timeline`]).  [`crate::registry`] puts them in one sorted table.
+//! time, budgets and the supervisor ([`timeline`]); the Extensions view's catalog ([`extensions`]).  [`crate::registry`] puts them in one sorted table.
 
 pub mod agents;
 pub mod config;
 pub mod coord;
+pub mod debug;
+pub mod debug_bisect;
+pub mod debug_fork;
+pub mod debug_heap;
+pub mod debug_origin;
+pub mod debug_runs;
+pub mod editor;
 pub mod exec;
+pub mod extensions;
+pub mod forecast;
 pub mod gateway;
+pub mod git;
 pub mod graph;
+pub mod history;
 pub mod hub;
 pub mod jobs;
 pub mod matrix;
 pub mod mcp;
+pub mod orch;
+pub mod pair;
 pub mod plans;
+pub mod plugins;
 pub mod records;
+pub mod runners;
+pub mod say;
+pub mod search;
 pub mod settings;
 pub mod tasks;
+pub mod term;
 pub mod timeline;
+pub mod view;
+pub mod work;
 
 use crate::registry::Method;
 use crate::wire::{Error, ErrorCode};
@@ -109,6 +129,7 @@ params! {
     Hello(hub::HelloParams),
     Ping(Empty),
     Status(Empty),
+    BrowserCheck(Empty),
     Restart(Empty),
     Shutdown(Empty),
     Subscribe(Empty),
@@ -161,6 +182,7 @@ params! {
     GatewayRegister(gateway::RegisterParams),
     GatewayUnregister(gateway::UnregisterParams),
     GatewayKeys(gateway::KeysParams),
+    GatewayRevokeKey(gateway::RevokeKeyParams),
     GatewaySetBudget(gateway::SetBudgetParams),
     ConfigSettings(config::SettingsParams),
     ConfigChanged(Empty),
@@ -190,12 +212,32 @@ params! {
     AgentsMove(agents::MoveParams),
     AgentsRole(agents::RoleParams),
     AgentsSlice(agents::SliceParams),
+    AgentsEntriesSubscribe(agents::SessionRef),
+    AgentsEntriesUnsubscribe(agents::SessionRef),
+    AgentsPanelLook(agents::PanelLook),
+    AgentsToolInput(agents::ToolInputParams),
+    AgentsToolOutput(agents::ToolOutputParams),
+    AgentsPause(agents::ById),
+    AgentsHuddleStart(agents::HuddleStart),
+    AgentsHuddleGet(agents::ById),
+    AgentsGrants(agents::ById),
+    AgentsGrantsRevoke(agents::GrantRevoke),
+    AgentsWheelTake(agents::ById),
+    AgentsWheelGive(agents::ById),
+    AgentsWheelSaved(agents::WheelSaved),
     AgentsProbe(agents::ProbeParams),
+    AgentsContextDrop(agents::ContextDropParams),
+    AgentsContextPin(agents::ContextPinParams),
+    AgentsCompactPreview(agents::ById),
+    AgentsConfig(agents::ConfigParams),
+    AgentsExplain(agents::ExplainParams),
     ExecStart(exec::StartParams),
     ExecGet(exec::ById),
     ExecList(exec::ListParams),
     ExecStop(exec::ById),
     ExecLog(exec::LogParams),
+    ExecBump(exec::ById),
+    OrchEvidence(orch::ByTask),
     MatrixGet(matrix::GetParams),
     MatrixCheck(matrix::CheckParams),
     PresenceSet(matrix::PresenceParams),
@@ -210,10 +252,185 @@ params! {
     BudgetGet(timeline::BudgetGetParams),
     BudgetSet(timeline::BudgetSetParams),
     PaceGet(timeline::PaceParams),
+    ForecastGet(forecast::ForecastParams),
+    ForecastSession(forecast::SessionForecastParams),
+    ForecastAccuracy(forecast::AccuracyParams),
+    SayStart(say::SayStart),
+    SayRevise(say::SayRevise),
+    SayEnd(say::SayById),
     RecordsImport(records::ImportParams),
     RecordsStatus(records::ByPath),
     RecordsProposals(records::ByPath),
     RecordsDecide(records::DecideParams),
+    MachinesReport(work::MachineReport),
+    MachinesList(Empty),
+    WorkConclusions(work::ConclusionsParams),
+    AgentsPresenceSubscribe(work::PresenceSubscribe),
+    AgentsPresenceGet(work::PresenceGet),
+    AgentsBufferWatch(editor::BufferWatch),
+    AgentsBufferUnwatch(editor::BufferUnwatch),
+    WorkMapSubscribe(work::MapSubscribe),
+    WorkMapSet(work::MapSet),
+    WorkMapClose(work::MapClose),
+    WorkTrailSubscribe(work::TrailSubscribe),
+    WorkTrailClose(work::TrailClose),
+    WorkBoardSubscribe(work::BoardSubscribe),
+    WorkFlowSubscribe(work::FlowSubscribe),
+    WorkFiles(work::EditedFiles),
+    WorkHunks(work::HunksParams),
+    WorkFileAt(work::FileAtParams),
+    ViewEnv(view::ViewEnv),
+    ViewResync(view::ViewResync),
+    ViewAck(view::ViewAck),
+    ViewGlyphs(view::ViewGlyphs),
+    ViewMeasured(view::ViewMeasured),
+    ViewClose(view::ViewClose),
+    ViewWindow(view::ViewWindow),
+    BuffersSet(view::BuffersSet),
+    TermOpen(term::TermOpen),
+    TermConfig(term::TermConfig),
+    TermKey(term::TermKey),
+    TermText(term::TermText),
+    TermPaste(term::TermText),
+    TermFocus(term::TermFocus),
+    TermClipboardReply(term::TermClipboardReply),
+    TermVisible(term::TermVisible),
+    TermMouse(term::TermMouse),
+    TermResize(term::TermResize),
+    TermScroll(term::TermScroll),
+    TermFetch(term::TermFetch),
+    TermSearch(term::TermSearch),
+    TermTextRange(term::TermTextRange),
+    TermClose(term::TermClose),
+    TermList(Empty),
+    TermSessionEnd(term::TermSessionEnd),
+    TermAttach(term::TermAttach),
+    DebugConfigs(debug::DebugConfigs),
+    DebugStart(debug::DebugStart),
+    DebugControl(debug::DebugControl),
+    DebugSelect(debug::DebugSelect),
+    DebugTrust(debug::DebugTrust),
+    DebugInstall(debug::DebugInstall),
+    DebugSource(debug::DebugSource),
+    DebugBreakpointLocations(debug::DebugBreakpointLocations),
+    DebugCompletions(debug::DebugCompletions),
+    DebugDisassemble(debug::DebugDisassemble),
+    DebugHotReload(debug::DebugHotReload),
+    DebugReadMemory(debug::DebugReadMemory),
+    DebugWriteMemory(debug::DebugWriteMemory),
+    DebugBreakpoints(debug::DebugBreakpoints),
+    DebugRunToCursor(debug::DebugRunToCursor),
+    DebugDataBreakpoint(debug::DebugDataBreakpoint),
+    DebugView(debug::DebugView),
+    DebugExpand(debug::DebugExpand),
+    DebugWatch(debug::DebugWatch),
+    DebugSetValue(debug::DebugSetValue),
+    DebugEvaluate(debug::DebugEvaluate),
+    DebugChildren(debug::DebugChildren),
+    DebugFork(debug_fork::DebugFork),
+    DebugForkRun(debug_fork::DebugForkId),
+    DebugForkDrop(debug_fork::DebugForkId),
+    DebugCompare(debug_fork::DebugCompare),
+    DebugProbeOp(debug_runs::DebugProbeOp),
+    DebugRunsList(debug_runs::DebugRunsList),
+    DebugRunGet(debug_runs::DebugRunGet),
+    DebugRunStop(debug_runs::DebugRunStop),
+    DebugRunPin(debug_runs::DebugRunPin),
+    DebugRunExport(debug_runs::DebugRunExport),
+    DebugRunImport(debug_runs::DebugRunImport),
+    DebugBisect(debug_bisect::DebugBisect),
+    DebugBisectCancel(debug_bisect::DebugBisectId),
+    DebugBisectNarrow(debug_bisect::DebugBisectId),
+    DebugBisectStates(debug_bisect::DebugBisectStates),
+    DebugOrigin(debug_origin::DebugOrigin),
+    DebugHeap(debug_heap::DebugHeap),
+    DebugHeapClose(debug_heap::DebugHeapClose),
+    SearchQuery(search::QueryParams),
+    SearchStatus(search::RootParams),
+    SearchIndex(search::IndexParams),
+    SearchEmbedders(Empty),
+    SearchModelDownload(search::DownloadParams),
+    SearchTyping(Empty),
+    GitLetters(git::LettersParams),
+    SearchRun(search::RunParams),
+    SearchBuffer(search::BufferParams),
+    SearchFiles(search::FilesParams),
+    SearchSymbolAt(search::SymbolAtParams),
+    SearchSymbols(search::SymbolsParams),
+    SearchOutline(search::OutlineParams),
+    SearchMap(search::MapParams),
+    SearchUsages(search::UsagesParams),
+    SearchGrepReplace(search::GrepReplaceParams),
+    SearchGrepLook(search::GrepLookParams),
+    SearchGrepSkipped(search::GrepSkippedParams),
+    SearchGroup(search::GroupParams),
+    SearchFold(search::FoldParams),
+    SearchEdits(search::EditsParams),
+    SearchEditDoc(search::EditDocParams),
+    SearchHandoff(search::HandoffParams),
+    SearchHandoffContext(search::HandoffContextParams),
+    SearchHandoffMark(search::HandoffMarkParams),
+    SearchHandoffState(search::HandoffStateParams),
+    SearchPreview(search::PreviewParams),
+    SearchApply(search::ApplyParams),
+    SearchApplied(search::AppliedParams),
+    SearchUndo(search::UndoParams),
+    SearchRecent(search::RootParams),
+    SearchSavedList(search::RootParams),
+    SearchSavedPut(search::SavedPutParams),
+    SearchSavedDelete(search::SavedNameParams),
+    SearchSavedShare(search::SavedNameParams),
+    SearchScopeBases(search::RootParams),
+    ExplorerSubscribe(search::ExplorerParams),
+    SearchServerPlan(search::ServerKindParams),
+    SearchServerStart(search::ServerStartParams),
+    SearchServerStop(search::ServerKindParams),
+    RunnersList(Empty),
+    RunnersProbeHost(runners::ProbeParams),
+    RunnersAdd(runners::AddParams),
+    RunnersCheck(runners::ByName),
+    RunnersBench(runners::ByName),
+    RunnersSet(runners::SetParams),
+    HistoryRegister(history::RegisterParams),
+    HistoryBatch(history::BatchParams),
+    HistoryResync(history::ResyncParams),
+    HistoryUnregister(history::UnregisterParams),
+    HistoryRevertPreview(history::RevertPreviewParams),
+    HistoryRevertApply(history::RevertApplyParams),
+    HistoryFork(history::ForkParams),
+    HistoryForkDrop(history::ForkDropParams),
+    HistoryCompare(history::CompareParams),
+    HistoryBlame(history::BlameParams),
+    HistoryHunks(history::BranchHunksParams),
+    GitBlame(history::GitBlameParams),
+    GitStageHunk(history::StageHunkParams),
+    HistoryHunksHead(history::HeadHunksParams),
+    HistoryTake(history::TakeParams),
+    HistoryRedo(history::RedoParams),
+    HistoryOpHunks(history::OpHunksParams),
+    HistoryRevertHunk(history::RevertHunkParams),
+    RunnersUnbench(runners::ByName),
+    RunnersRemove(runners::RemoveParams),
+    ExtensionsSearch(extensions::SearchParams),
+    ExtensionsDetails(extensions::DetailsParams),
+    ExtensionsRows(extensions::RowsParams),
+    ExtensionsList(extensions::ListParams),
+    ExtensionsModules(extensions::ModulesParams),
+    ExtensionsRecommended(extensions::RecommendedParams),
+    PluginsList(Empty),
+    PluginsApprove(plugins::ApproveParams),
+    PluginsDisable(plugins::DisableParams),
+    RunnersKeys(runners::KeysParams),
+    RunnersKeysHeld(Empty),
+    RunnersAudit(runners::AuditParams),
+    PairAnswer(pair::PairAnswer),
+    PairReadAnswer(pair::PairReadAnswer),
+    PairOpen(pair::OpenParams),
+    PairClosed(pair::ClosedParams),
+    PairOpenSet(pair::OpenSetParams),
+    AgentsPair(pair::PairToggle),
+    AgentsFollow(editor::FollowParams),
+    AgentsUnfollow(editor::UnfollowParams),
 }
 
 /// Every method, in no order.
@@ -229,10 +446,30 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(agents::methods());
     v.extend(jobs::methods());
     v.extend(exec::methods());
+    v.extend(orch::methods());
     v.extend(matrix::methods());
     v.extend(plans::methods());
     v.extend(timeline::methods());
+    v.extend(forecast::methods());
+    v.extend(say::methods());
     v.extend(records::methods());
+    v.extend(work::methods());
+    v.extend(view::methods());
+    v.extend(term::methods());
+    v.extend(editor::methods());
+    v.extend(search::methods());
+    v.extend(git::methods());
+    v.extend(runners::methods());
+    v.extend(extensions::methods());
+    v.extend(plugins::methods());
+    v.extend(history::methods());
+    v.extend(pair::methods());
+    v.extend(debug::methods());
+    v.extend(debug_fork::methods());
+    v.extend(debug_runs::methods());
+    v.extend(debug_bisect::methods());
+    v.extend(debug_origin::methods());
+    v.extend(debug_heap::methods());
     v
 }
 

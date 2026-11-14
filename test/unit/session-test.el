@@ -8,6 +8,8 @@
 (require 'drgnx)
 (require 'drgnx-session)
 (require 'drgnx-explorer)
+(setq drgnx-explorer--lisp-listing t)       ; the Lisp listing (a remote root's, plan sja-complete Q3): on local folders here
+(require 'drgnx-persist)
 (require 'project)
 (defvar server-client-instructions)
 
@@ -297,6 +299,62 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
         (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
         (delete-directory root t)))))
 
+(ert-deftest drgnx-session/an-opened-folder-replaces-the-folder-drgnx-chose ()
+  :tags '(:cond)
+  ;; `drgnx DIR' as `code DIR': the folder the Explorer took by itself at the start (the editor's folder, here the
+  ;; home-like H) goes, and the restart does not bring it back; folders the user opened stay; Remove Folder from
+  ;; Workspace takes one out.  Every window showing the Explorer then shows DIR's root row at its top.
+  (drgnx-test-with-state
+    (let* ((root (file-name-as-directory (make-temp-file "drgnx-session-only" t)))
+           (home (file-name-as-directory (expand-file-name "home" root)))
+           (a (drgnx-session-test--repo root "projA" "a.py"))
+           (b (drgnx-session-test--repo root "projB" "b.py"))
+           (project-list-file (expand-file-name "projects" root))
+           (drgnx-wb--sections nil) (drgnx-explorer--roots nil) (drgnx-explorer--default-roots nil)
+           buf)
+      (unwind-protect
+          (cl-letf (((symbol-function 'drgnx-session-raise) #'ignore))
+            (dotimes (i 300) (make-directory (expand-file-name (format "d%03d" i) home) t))
+            (delete-other-windows)
+            (drgnx-explorer-setup)
+            (setq buf (find-file-noselect (expand-file-name "notes.txt" home)))
+            (switch-to-buffer buf)
+            (drgnx-wb-show-sidebar)
+            (should (equal (drgnx-explorer-roots) (list home)))           ; the start: the editor's folder
+            (let ((w (drgnx-wb-section-window 'explorer)))
+              (should w)
+              ;; the user scrolled far down home's rows
+              (with-current-buffer drgnx-explorer-buffer-name
+                (let ((deep (save-excursion (goto-char (point-min)) (forward-line 250) (point))))
+                  (set-window-start w deep) (set-window-point w deep)))
+              (drgnx-session-open-folder (directory-file-name b))
+              (should (equal (drgnx-explorer-roots) (list b)))            ; DIR is the only folder: home went
+              (should (= (window-start w) (with-current-buffer drgnx-explorer-buffer-name (point-min))))
+              (should (equal (with-current-buffer drgnx-explorer-buffer-name (drgnx-explorer-node-at (window-point w)))
+                             (directory-file-name b))))
+            (drgnx-session-open-folder a)                                 ; a folder the user opened stays
+            (should (equal (drgnx-explorer-roots) (list a b)))
+            (should (equal (plist-get (drgnx-persist--workbench-state nil) :roots) (list a b)))
+            ;; Remove Folder from Workspace on b's root row
+            (with-current-buffer drgnx-explorer-buffer-name
+              (goto-char (point-min))
+              (while (not (equal (drgnx-explorer-node-at (point)) (directory-file-name b))) (forward-line 1))
+              (drgnx-explorer-remove-folder))
+            (should (equal (drgnx-explorer-roots) (list a))))
+        (when (buffer-live-p buf) (kill-buffer buf))
+        (drgnx-wb-hide-sidebar)
+        (delete-other-windows)
+        (drgnx-explorer-set-roots nil)
+        (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
+        (delete-directory root t)))))
+
+(ert-deftest drgnx-session/the-folder-drgnx-chose-is-not-saved ()
+  ;; The layout file keeps only the folders the user opened: the one the Explorer took at the start is worked out
+  ;; again at the next start.
+  (let ((drgnx-explorer--roots '("/w/a/" "/start/")) (drgnx-explorer--default-roots '("/start/")))
+    (should (equal (drgnx-explorer-chosen-roots) '("/w/a/")))
+    (should (equal (plist-get (drgnx-persist--workbench-state nil) :roots) '("/w/a/")))))
+
 (ert-deftest drgnx-session/an-unsaved-untitled-buffer-is-offered-and-never-lost ()
   ;; Nothing of drgnx-session stubbed: the real `save-some-buffers' offers New Untitled's buffer (its question,
   ;; `map-y-or-n-p', records the buffers and declines), the buffer still counts as unsaved, "no" keeps drgnx.
@@ -341,24 +399,35 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
 
 (ert-deftest drgnx-session/running-programs-refreshes-terminal-query-flags-first ()
   :tags '(:cond)
-  ;; A terminal's flag is set by its module (a shell asks, an idle prompt does not); the quit question asks the module
-  ;; to bring the flags up to date first — when the module is there.
+  ;; A terminal's flag is set by its module (a shell asks, an idle prompt does not); the quit question runs the
+  ;; modules' functions first, so a flag they set counts, and the names they return are listed too.
   (let ((p (make-process :name "drgnx-session-test-term" :command '("sleep" "30") :noquery t)))
     (unwind-protect
         (progn
-          (should-not (memq p (drgnx-session--running-programs)))                  ; no terminal module: as it was
-          (cl-letf (((symbol-function 'drgnx-terminal-eat-refresh-query-flags)
-                     (lambda () (set-process-query-on-exit-flag p t))))
-            (should (memq p (drgnx-session--running-programs)))))
+          (let ((drgnx-session-running-functions nil))
+            (should-not (member "drgnx-session-test-term" (drgnx-session--running-names))))   ; no module: as it was
+          (let ((drgnx-session-running-functions
+                 (list (lambda () (set-process-query-on-exit-flag p t) nil) (lambda () '("*terminal*")))))
+            (let ((names (drgnx-session--running-names)))
+              (should (member "drgnx-session-test-term" names))
+              (should (member "*terminal*" names)))))
       (delete-process p))))
 
 (ert-deftest drgnx-session/a-failing-terminal-refresh-does-not-stop-the-quit-question ()
   :tags '(:cond)
   (let ((p (make-process :name "drgnx-session-test-term2" :command '("sleep" "30") :noquery nil)))
     (unwind-protect
-        (cl-letf (((symbol-function 'drgnx-terminal-eat-refresh-query-flags) (lambda () (error "eat is gone"))))
-          (should (memq p (drgnx-session--running-programs))))
+        (let ((drgnx-session-running-functions (list (lambda () (error "the terminal is gone")))))
+          (should (member "drgnx-session-test-term2" (drgnx-session--running-names))))
       (delete-process p))))
+
+(ert-deftest drgnx-session/quit-question-names-terminal-programs ()
+  ;; a program in drgnx's terminal is no Emacs process: the question names it from the terminal's function
+  (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :processes nil :confirm nil)
+    (let ((drgnx-session-running-functions (list (lambda () '("*terminal*")))))
+      (should-not (drgnx-session-quit-confirm))
+      (should (= asked 1))
+      (should (string-match-p "1 program is still running (\\*terminal\\*)" (car events))))))
 
 
 (ert-deftest drgnx-session/windows-ask-the-classifier ()

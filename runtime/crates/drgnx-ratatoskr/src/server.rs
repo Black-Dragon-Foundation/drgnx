@@ -55,6 +55,22 @@ pub async fn run(args: ServeArgs) -> Exit {
     if args.test_clock {
         crate::clock::install_virtual();
     }
+    // the stall watchdog (`DRGNX_RATATOSKR_STALL_MS`; on in test builds off the virtual clock): tasks are named from
+    // here on, and its thread starts once the log does
+    let stall = crate::stall::threshold(
+        std::env::var("DRGNX_RATATOSKR_STALL_MS").ok().as_deref(),
+        cfg!(feature = "test-hooks"),
+        {
+            #[cfg(feature = "test-hooks")]
+            let v = crate::clock::is_virtual();
+            #[cfg(not(feature = "test-hooks"))]
+            let v = false;
+            v
+        },
+    );
+    if stall.is_some() {
+        crate::stall::enable();
+    }
     // `--test-sequencer`: before any connection, so every one is known to it
     #[cfg(feature = "test-hooks")]
     if args.test_sequencer {
@@ -88,6 +104,9 @@ pub async fn run(args: ServeArgs) -> Exit {
             return Exit::CannotStart;
         }
     }
+    // the hub's folder by its true name, found once: what it makes under it (forks' trees, plugins) is then named
+    // without a link, as the sandbox and the no-link file layer require (a link above it: macOS's /var, a moved home)
+    let hub_dir = std::fs::canonicalize(&hub_dir).unwrap_or(hub_dir);
     let _log = match log::init(&log_dir) {
         Ok(g) => g,
         Err(e) => {
@@ -98,8 +117,18 @@ pub async fn run(args: ServeArgs) -> Exit {
             return Exit::CannotStart;
         }
     };
+    // held until the run returns: dropped then, before `main` shuts the runtime down (`stall::Watchdog`)
+    let _watchdog = stall.map(crate::stall::start);
     let lock_path = paths::lock_path(&socket);
-    let lock = match lock::acquire(&lock_path, &lock::System) {
+    // a hub a restart re-executed waits up to a second for the lock its predecessor's exec let go of
+    let tries = if std::env::var_os(lock::RESTARTED).is_some() {
+        20
+    } else {
+        0
+    };
+    let lock = match lock::acquire_retrying(&lock_path, &lock::System, tries, || {
+        std::thread::sleep(Duration::from_millis(50));
+    }) {
         Ok(l) => l,
         Err(LockError::LispHub { pid }) => {
             tracing::error!(pid, "{}", lock::LISP_HUB_SERVES);
@@ -114,6 +143,11 @@ pub async fn run(args: ServeArgs) -> Exit {
             return Exit::CannotStart;
         }
     };
+    // a recorded or replayed run: the recorder, or the replayer the providers are pointed at, before any setting is read
+    if let Err(e) = crate::recording::start(&env).await {
+        tracing::error!("cannot start: {e}");
+        return Exit::CannotStart;
+    }
     let (mut term, mut int) = match (
         signal(SignalKind::terminate()),
         signal(SignalKind::interrupt()),
@@ -185,7 +219,7 @@ pub async fn run(args: ServeArgs) -> Exit {
     }
     // what the Lisp hub left in the state dir, moved aside (never deleted), before anything is served
     let moving = env.clone();
-    match tokio::task::spawn_blocking(move || crate::legacy::migrate(&moving)).await {
+    match crate::clock::blocking(move || crate::legacy::migrate(&moving)).await {
         Ok(Ok(m)) => {
             if !m.moved.is_empty() || !m.left.is_empty() {
                 tracing::info!(moved = ?m.moved, left = ?m.left, "what the Lisp hub left");
@@ -204,11 +238,31 @@ pub async fn run(args: ServeArgs) -> Exit {
         Some(graph),
     ));
     front.tool_hub.bind(&front);
+    // what the browser sessions' web proxies never reach: the host's addresses and the hub's loopback ports, kept
+    // live from now on (the gateway's port is added once it listens)
+    front
+        .browser_nevers
+        .start(crate::browser::nevers::emacs_server_dirs(
+            &home,
+            env.vars
+                .get("XDG_CONFIG_HOME")
+                .map(Path::new)
+                .filter(|p| p.is_absolute()),
+        ));
     let _ = front.dirs.set(crate::graph::StoreDirs {
         home,
         config: paths::config_dir(&env),
         hub: hub_dir.clone(),
     });
+    front.extensions.configure(&env);
+    front.search.bind(&front);
+    front.debug.bind(&front);
+    front.core.views.bind(&front);
+    if let Some(d) = front.dirs.get() {
+        front
+            .search
+            .configure(&env, d.home.clone(), d.config.clone(), runtime.clone());
+    }
     // before anything is served: a hub that could not be hardened takes no key
     front.gate.set_hardened(hardened);
     #[cfg(feature = "test-hooks")]
@@ -223,6 +277,7 @@ pub async fn run(args: ServeArgs) -> Exit {
     front
         .mcp
         .open_store(env.clone(), socket.clone(), runtime.clone());
+    front.mcp.bind_search(&front);
     front.mcp.restore().await;
     front.core.agents.open_store(runtime.clone());
     crate::clock::spawn("sessions:watch", sessions::watch(front.clone()));
@@ -231,22 +286,114 @@ pub async fn run(args: ServeArgs) -> Exit {
         "wake:run",
         crate::agents::wake::run(front.clone(), front.core.exec.subscribe()),
     );
+    // a task's session's job is that task's evidence once it ends; until the watcher has taken an end, the job is
+    // still busy in its tree for the gates (exec's `settling`)
+    front.core.exec.settling();
+    crate::clock::spawn(
+        "orch:evidence",
+        crate::orch::evidence::run(front.clone(), front.core.exec.subscribe()),
+    );
+    // `RATATOSKR_SEED_SCENE=1` (test-hooks): one plan run for the look scenes, once, into a fresh store; `map` seeds
+    // the same run with the Work map's graph (the mockup's) in place of the Flow's one agent
+    #[cfg(feature = "test-hooks")]
+    if let Some(mode) = std::env::var_os("RATATOSKR_SEED_SCENE").filter(|v| v == "1" || v == "map")
+    {
+        let f = front.clone();
+        let map = mode == "map";
+        crate::clock::spawn("orch:scene", async move {
+            if let Err(e) = crate::orch::scene::seed(&f, map).await {
+                tracing::warn!("the scene's plan run was not seeded: {e}");
+            }
+        });
+    }
     // a queued message reaches its session once that is free
     crate::clock::spawn("deliver:run", crate::agents::deliver::run(front.clone()));
+    // reported machines expire; the local slots follow the job pool
+    crate::clock::spawn("machines:run", crate::work::machines::run(front.clone()));
+    // the sessions' writes and starts link to the asks behind them
+    crate::clock::spawn("asks:run", crate::work::asks::run(front.clone()));
+    // a planning session's turn ends, the user's revisions and ends, through each session's order
+    crate::clock::spawn("say:run", crate::say::run(front.clone()));
+    // finished tasks, including part 1's history, become forecast samples
+    {
+        let f = front.clone();
+        crate::clock::spawn("forecast:backfill", async move {
+            crate::forecast::sweep(&f).await;
+        });
+    }
+    // an earlier hub's what-if forks, traces and bisect slots (none outlives the hub that made it)
+    crate::debug::fork_seal::sweep(&crate::debug::fork_seal::forks_root(
+        &front.shell_env.paths_env(),
+    ));
+    // the Work map follows the store's records and the clock's minutes while a map is open
+    crate::clock::spawn("map:run", crate::work::map::run(front.clone()));
+    crate::clock::spawn("trail:run", crate::work::trail::run(front.clone()));
+    // the editors' buffer views follow the presence model from now on
+    front.core.buffers.bind(&front);
+    // an edit step's file is checked against the other worktrees' from now on
+    front.core.predict.bind(&front);
     // settings.el and the shipped defaults, as data, before anything is served (its last good values in runtime.db)
     front
         .settings
         .open(paths::config_dir(&env), runtime.clone());
     front.refresh_settings().await;
+    // the matrix cards an earlier hub's sessions waited on: nobody waits any more (before any session resumes, so a
+    // card a resumed session raises is never taken for one of them)
+    {
+        let at = crate::clock::wall_secs();
+        let caller = crate::dispatch::Caller {
+            class: runstav::registry::Class::Service,
+            sid: None,
+            job: None,
+            conn_id: 0,
+        };
+        // only when there is something to withdraw: a start with nothing left over writes nothing
+        let any = front
+            .writer
+            .db
+            .read(|c| Ok(norn::write::cards::has_orphaned_matrix_cards(c).unwrap_or(false)))
+            .await
+            .unwrap_or(false);
+        match if any {
+            front
+                .writer
+                .write(&caller, "cards/withdraw", move |tx| {
+                    norn::write::cards::withdraw_orphaned_matrix_cards(tx, at)
+                })
+                .await
+        } else {
+            Ok(0)
+        } {
+            Ok(n) if n > 0 => {
+                tracing::info!("{n} matrix cards of an earlier hub's sessions withdrawn")
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!("matrix cards of an earlier hub not withdrawn: {e:?}"),
+        }
+    }
     // the sessions recorded before this start: resumed (their profiles are in the settings now), queues delivered
     // (in the background: a slow agent never delays serving)
     // The jobs a hub before this one left running are watched again first (a session resumed then knows it waits),
     // and a job end that reached no session is delivered once they are back.
     crate::exec::ensure_open(&front);
+    // the terminals a hub before this one left running are connected to again (in the background)
+    crate::term::start(&front);
+    crate::work::machines::seed(&front);
+    // the runners recorded before this start are linked (in the background: an unreachable one delays nothing)
+    crate::runners::methods::start(&front);
+    // the plugins installed in <data>/plugins: read now, their approval cards raised (nothing runs yet)
+    front.core.plugins.open(
+        paths::data_dir(&env).join("plugins"),
+        runtime.clone(),
+        front.settings.clone(),
+    );
+    crate::plugins::start(&front).await;
     front.core.runs.set_recovering(true);
     {
         let f = front.clone();
         tokio::spawn(async move {
+            // who was in which file, from the recorded sessions' steps, before they run again
+            f.core.presence.rebuild_from_store(&f).await;
             f.core.agents.resume_all(&f).await;
             f.core.runs.set_recovering(false);
             crate::agents::wake::recover(&f).await;
@@ -261,6 +408,9 @@ pub async fn run(args: ServeArgs) -> Exit {
     front.gate.open_store(runtime.clone());
     match front.gate.listen(gateway_port).await {
         Ok(events) => {
+            if let Some(port) = front.gate.port() {
+                front.browser_nevers.never.hold(port);
+            }
             front.gate.restore(&front.mcp).await;
             crate::clock::spawn("gateway:events", gateway::run_events(events, front.clone()));
             crate::clock::spawn("gateway:watch", gateway::watch(front.clone()));
@@ -285,15 +435,32 @@ pub async fn run(args: ServeArgs) -> Exit {
     );
     crate::records::install_tool(&front);
     crate::clock::spawn("records:follow", crate::records::follow(front.clone()));
-    front.core.runs.set_git(Arc::new(
-        crate::runner::git::HubGit::new(
-            crate::sandbox::runs_root(&env),
-            crate::runner::TreeMode::Snapshot,
-            Box::new(crate::runner::git::HubPolicy(Arc::downgrade(&front))),
-            Some(runtime.clone()),
-        )
-        .with_shell_env(front.shell_env.clone()),
-    ));
+    // a matrix change that makes a paired chat's chat.project-edit never closes its pair door at once
+    crate::clock::spawn(
+        "pair:follow-matrix",
+        crate::pair::door::follow_matrix(front.clone()),
+    );
+    let mut git = crate::runner::git::HubGit::new(
+        crate::sandbox::runs_root(&env),
+        crate::runner::TreeMode::Snapshot,
+        Box::new(crate::runner::git::HubPolicy(Arc::downgrade(&front))),
+        Some(runtime.clone()),
+    )
+    .with_shell_env(front.shell_env.clone());
+    // each tree the hub makes records where it branched from (work.db's worktree_base)
+    if let Some(dirs) = front.dirs.get() {
+        let writer = front.writer.clone();
+        git = git.with_bases(
+            dirs.hub.join("checkpoints"),
+            Arc::new(move |row| {
+                let w = writer.clone();
+                crate::clock::spawn("bases:put", async move {
+                    crate::work::bases::put(&w, row).await;
+                });
+            }),
+        );
+    }
+    front.core.runs.set_git(Arc::new(git));
     front
         .core
         .runs
@@ -323,10 +490,8 @@ pub async fn run(args: ServeArgs) -> Exit {
             .and_then(|p| p.parse().ok())
             .filter(|p| *p > 0)
     });
-    let mut parent = parent_pid.map(|p| {
-        let every = crate::clock::interval(Duration::from_secs(1));
-        (p, every)
-    });
+    // real time on any clock: it watches a real process, and on the test clock it is no task's timer
+    let mut parent = parent_pid.map(|p| (p, crate::clock::real_interval(Duration::from_secs(1))));
     let exit = loop {
         let parent_gone = async {
             match &mut parent {
@@ -342,7 +507,7 @@ pub async fn run(args: ServeArgs) -> Exit {
         tokio::select! {
             a = listener.accept() => match a {
                 Ok((stream, _)) => {
-                    tokio::spawn(conn::serve(stream, front.clone(), Socket::Main));
+                    crate::stall::spawn("conn", conn::serve(stream, front.clone(), Socket::Main));
                 }
                 Err(e) => {
                     // out of descriptors, for example: never a hot loop
@@ -371,6 +536,10 @@ pub async fn run(args: ServeArgs) -> Exit {
     drop(listener);
     // the hub's own sessions end with it (their rows, transcripts and queues stay for the next start)
     front.core.agents.shutdown().await;
+    // the debug sessions stop (children first) and their adapters are reaped
+    front.debug.shutdown().await;
+    // networked jobs can't run on without the hub's relay: they end now, as the next start would end them
+    front.core.exec.end_networked().await;
     // `--test-sequencer`: what it still holds is written before the connections close
     #[cfg(feature = "test-hooks")]
     if let Some(seq) = crate::sequencer::current() {
@@ -619,7 +788,7 @@ async fn accept(listener: UnixListener, front: Arc<Front>, socket: Socket) {
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
-                tokio::spawn(conn::serve(stream, front.clone(), socket.clone()));
+                crate::stall::spawn("conn", conn::serve(stream, front.clone(), socket.clone()));
             }
             Err(e) => {
                 tracing::warn!("accept failed: {e}");
@@ -695,7 +864,7 @@ async fn open_store(
         pool: urdr::graph::ReadPool::open(&path, 4),
         deny,
     };
-    let db = tokio::task::spawn_blocking(move || norn::store::CoordDb::with_graph(handle))
+    let db = crate::clock::blocking(move || norn::store::CoordDb::with_graph(handle))
         .await
         .map_err(|e| e.to_string())?;
     Ok((writer, graph, db, home))
@@ -725,7 +894,7 @@ async fn watch_schema(front: Arc<Front>) {
             front.note_migration(report.as_deref());
         }
         let db = front.writer.db.clone();
-        let _ = tokio::task::spawn_blocking(move || db.tick()).await;
+        let _ = crate::clock::blocking(move || db.tick()).await;
         // the personal-notes opt-ins: applied when their file changed (norn::privacy, Task 9b)
         if let (Some(g), Some(d)) = (front.tools.graph(), front.dirs.get())
             && let Some(r) =
@@ -773,13 +942,32 @@ fn embed_idle(front: &Arc<Front>, timer: &Arc<std::sync::Mutex<crate::embed::Tim
     if !due {
         return;
     }
-    let Ok(Some(e)) = front.gate.embedder() else {
+    let current = front.settings.current();
+    let chain = crate::settings::providers::role_chain(
+        &current.loaded.values.ai_roles,
+        &crate::settings::defaults().roles,
+        "embed",
+    );
+    // servers first (when one answers it is preferred), then the built-in model, unless the setting turned it off
+    let mut embedders: Vec<Arc<dyn urdr::graph::search::Embedder>> = front
+        .gate
+        .embedders(&chain)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|e| Arc::new(e) as Arc<dyn urdr::graph::search::Embedder>)
+        .collect();
+    if current.loaded.values.search_builtin
+        && let Some(b) = front.search.builtin()
+    {
+        embedders.push(b);
+    }
+    if embedders.is_empty() {
         timer
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .finish(false, now);
         return;
-    };
+    }
     let (front, timer, deny) = (
         front.clone(),
         timer.clone(),
@@ -789,7 +977,9 @@ fn embed_idle(front: &Arc<Front>, timer: &Arc<std::sync::Mutex<crate::embed::Tim
             .clone(),
     );
     tokio::spawn(async move {
-        let out = crate::embed::run(&front.writer.db, &e, &deny, probe).await;
+        let each: Vec<&dyn urdr::graph::search::Embedder> =
+            embedders.iter().map(|e| e.as_ref()).collect();
+        let out = crate::embed::run(&front.writer.db, &each, &deny, probe).await;
         let stopped = matches!(out, crate::embed::Outcome::Stopped { .. });
         match &out {
             crate::embed::Outcome::Stopped { embedded, why } => {
@@ -822,10 +1012,10 @@ fn nightly_backup(front: &Front) {
         return;
     }
     let g = g.clone();
-    tokio::spawn(async move {
-        crate::graph::run_backup(&g).await;
-        crate::backup_timer::finish();
-    });
+    let hub = front.dirs.get().map(|d| d.hub.clone());
+    tokio::spawn(crate::backup_timer::guarded(async move {
+        crate::graph::run_backup(&g, hub.as_deref()).await;
+    }));
 }
 
 /// Under the lock: agent socket A at `hub.sock` in its session dir, `<socket dir>/s/SID/` (`paths::make_session_dir`:

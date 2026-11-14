@@ -34,13 +34,14 @@
     (drgnx-gc-setup)                                   ; the steady threshold, mode on, key started
     (setq gc-cons-threshold 1200000)
     (drgnx-gc-owner-test--counting gcs
-      (setq drgnx-gc--base (drgnx-gc--consed))
-      (drgnx-test-idle 9)
-      (should (= gcs 0))                                  ; nothing consed since the last collection
-      (let ((junk (make-string 400000 ?x)))               ; a third of the threshold
-        (ignore junk)
-        (drgnx-test-idle 9))
-      (should (= gcs 1)))))
+      (cl-letf (((symbol-function 'drgnx-gc--someone-waits-p) (lambda () t)))
+        (setq drgnx-gc--base (drgnx-gc--consed))
+        (drgnx-test-idle 9)
+        (should (= gcs 0))                                ; nothing consed since the last collection
+        (let ((junk (make-string 700000 ?x)))             ; more than half the threshold
+          (ignore junk)
+          (drgnx-test-idle 9))
+        (should (= gcs 1))))))
 
 (ert-deftest drgnx-gc/consed-weighs-the-counters ()
   (let ((a (drgnx-gc--consed)))

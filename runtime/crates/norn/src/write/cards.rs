@@ -149,6 +149,76 @@ pub fn card_settle(tx: &mut WTx<'_>, id: i64, choice: &str, now: f64) -> Result<
     Ok(true)
 }
 
+/// Open card `id` is withdrawn: the question it asked has nobody waiting on the answer any more (a permission request
+/// answered cancelled).  It leaves the open cards, with a `card` event; false when it was not open (a card the user
+/// settled first stays settled).
+pub fn card_withdraw(tx: &mut WTx<'_>, id: i64, now: f64) -> Result<bool, CoordError> {
+    let by = tx.id();
+    let n = tx.sql().execute(
+        "update card set state = 'withdrawn', tx = ?2 where id = ?1 and state = 'open'",
+        (id, by),
+    )?;
+    if n == 0 {
+        return Ok(false);
+    }
+    // job, task, kind, title
+    type Withdrawn = (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    );
+    let (job, task, kind, title): Withdrawn = tx.sql().query_row(
+        "select job, task, kind, title from card where id = ?1",
+        [id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+    )?;
+    event(
+        tx,
+        ev(
+            now,
+            None,
+            job,
+            task,
+            EventKind::Card,
+            format!("{}: {} -> withdrawn", lisp(&kind), lisp(&title)),
+            json!({"card": id, "state": "withdrawn"}),
+        ),
+    )?;
+    Ok(true)
+}
+
+/// Whether [`withdraw_orphaned_matrix_cards`] has anything to withdraw (a read: a start with nothing left over writes
+/// nothing).
+pub fn has_orphaned_matrix_cards(conn: &urdr::Connection) -> Result<bool, CoordError> {
+    Ok(conn.query_row(
+        "select exists(select 1 from card where kind = 'matrix' and state = 'open' \
+         and json_extract(data, '$.session') is not null)",
+        [],
+        |r| r.get::<_, bool>(0),
+    )?)
+}
+
+/// The hub starts: every open `matrix` card a session's request waits on (`data.session` set) is withdrawn.  The hub
+/// that asked is gone with its sessions' agents, so nobody waits on the answer; a resumed session that asks again gets
+/// a new card.  A matrix card with no session (a job's spending limit) stays.  How many.
+pub fn withdraw_orphaned_matrix_cards(tx: &mut WTx<'_>, now: f64) -> Result<usize, CoordError> {
+    let ids: Vec<i64> = {
+        let mut st = tx.sql().prepare(
+            "select id from card where kind = 'matrix' and state = 'open' \
+             and json_extract(data, '$.session') is not null order by id",
+        )?;
+        st.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?
+    };
+    let mut n = 0;
+    for id in ids {
+        if card_withdraw(tx, id, now)? {
+            n += 1;
+        }
+    }
+    Ok(n)
+}
+
 /// `drgnx-coord-card-set`: change card `id`'s title, data and/or state.  A change of state (a reopened card) leaves a
 /// `card` event.
 pub fn card_set(tx: &mut WTx<'_>, id: i64, set: CardSet, now: f64) -> Result<(), CoordError> {
@@ -348,6 +418,64 @@ mod tests {
         assert!(card_settle(&mut tx, id, "yes", 2.0).unwrap());
         assert!(!card_settle(&mut tx, id, "no", 3.0).unwrap());
         assert_eq!(kinds(tx.sql()), ["question", "answer"]);
+    }
+
+    /// Pure (D): withdrawing takes an open card out of the open ones once, with its event; a settled card stays.
+    #[test]
+    fn a_withdrawn_card_leaves_the_open_ones_and_a_settled_one_stays() {
+        let mut c = db7();
+        let mut tx = tx_of(&mut c);
+        let state = |tx: &mut WTx<'_>, id: i64| -> String {
+            tx.sql()
+                .query_row("select state from card where id = ?1", [id], |r| r.get(0))
+                .unwrap()
+        };
+        let open = card_create(&mut tx, card("matrix"), 1.0).unwrap();
+        assert!(card_withdraw(&mut tx, open, 2.0).unwrap());
+        assert_eq!(state(&mut tx, open), "withdrawn");
+        assert!(!card_withdraw(&mut tx, open, 3.0).unwrap(), "once");
+        let settled = card_create(&mut tx, card("matrix"), 4.0).unwrap();
+        assert!(card_settle(&mut tx, settled, "allow", 5.0).unwrap());
+        assert!(!card_withdraw(&mut tx, settled, 6.0).unwrap());
+        assert_eq!(state(&mut tx, settled), "settled");
+        assert_eq!(kinds(tx.sql()), ["card", "card", "card", "card"]);
+    }
+
+    /// Pure (D): at a hub's start the open matrix cards of sessions' requests go (nobody waits any more); a matrix
+    /// card with no session, an ask card and a settled card stay.
+    #[test]
+    fn a_hub_start_withdraws_the_session_matrix_cards_only() {
+        let mut c = db7();
+        let mut tx = tx_of(&mut c);
+        let matrix = |tx: &mut WTx<'_>, data: Value| {
+            card_create(
+                tx,
+                NewCard {
+                    kind: Some("matrix".into()),
+                    title: Some("t".into()),
+                    data: Some(data),
+                    ..NewCard::default()
+                },
+                1.0,
+            )
+            .unwrap()
+        };
+        let asked = matrix(&mut tx, json!({"action": "code.edit", "session": "s-1"}));
+        let limit = matrix(&mut tx, json!({"action": "spend", "session": null}));
+        let settled = matrix(&mut tx, json!({"action": "code.edit", "session": "s-2"}));
+        assert!(card_settle(&mut tx, settled, "allow", 2.0).unwrap());
+        let question = card_create(&mut tx, card("ask"), 3.0).unwrap();
+        assert_eq!(withdraw_orphaned_matrix_cards(&mut tx, 4.0).unwrap(), 1);
+        let state = |tx: &mut WTx<'_>, id: i64| -> String {
+            tx.sql()
+                .query_row("select state from card where id = ?1", [id], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(state(&mut tx, asked), "withdrawn");
+        assert_eq!(state(&mut tx, limit), "open");
+        assert_eq!(state(&mut tx, settled), "settled");
+        assert_eq!(state(&mut tx, question), "open");
+        assert_eq!(withdraw_orphaned_matrix_cards(&mut tx, 5.0).unwrap(), 0);
     }
 
     #[test]

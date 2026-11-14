@@ -111,11 +111,14 @@ Your own layouts; the built-in ones are not stored.
 
 Folder: config. Format: 1. Read: when it changes. On a mistake: drgnx sync stops until it is fixed; nothing is changed.
 
-Every installed package, pinned by drgnx sync.  A mistake in it stops the sync, and drgnx never replaces the file.
+Every installed package, pinned by drgnx sync, and `:wanted user' on the packages you asked for (drgnx sync --add).  A mistake in it stops the sync, and drgnx never replaces the file.
 
 | Key | Type | Required | What |
 | --- | --- | --- | --- |
-| `:packages` | list of (NAME :version :archive :kind :file :sha256 :size :requires :summary) | yes | What is installed: one entry per package |
+| `:packages` | list of (NAME :version :archive :kind :file :sha256 :size :requires :summary [:verified t] [:wanted user]) | yes | What is installed: one entry per package |
+| `:packs` | list of (NAME :commit :tree-sha256 :source :wanted) | no | Language packs installed: one entry per pack (drgnx packs sync) |
+| `:removed-packs` | list of symbol | no | Language packs you removed: an update never installs these again (drgnx packs install brings one back) |
+| `:grammars` | list of (LANG :commit :tree-sha256 :lib-sha256 :owner) | no | Tree-sitter grammars built for the packs: one entry per language |
 | `:from-shipped` | boolean | no | Copied from the lock drgnx ships; the first sync completes it |
 
 ## modules.eld
@@ -160,6 +163,7 @@ The packages you want besides the modules', their sources and archives.  Read at
 | `:git * :lisp-dir` | string | no | Where the package's files are |
 | `:archives` | alist of string to string | no | The archives: name and URL or directory |
 | `:archive-priorities` | alist of string to number | no | Which archive wins: name and priority |
+| `:unsigned-archives` | list of string | no | Archives that do not sign their packages, besides MELPA and directories |
 
 ## projects.eld
 

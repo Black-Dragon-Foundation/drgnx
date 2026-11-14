@@ -11,6 +11,8 @@
 {"do": "sqlite", "path": "$DATA/work.db", "sql": ["insert into card (job, task, kind, title, data, state, at) values ('$job', null, 'review', 'review it', '{\"review\": true}', 'open', 1.5)"]}
 {"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT"}}}
 {"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 901, "method": "agents/entries/subscribe", "params": {"session": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 901, "result": {"seq": "$number"}}}
 {"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/send", "params": {"id": "$sid", "text": "hello"}}}
 {"do": "expect", "conn": "c", "json": {"id": 4, "result": true}, "within_ms": 30000}
 {"do": "expect", "conn": "c", "json": {"event": "agent-entries", "data": {"id": "$sid", "entries": {"$contains": [["$number", {"type": "stop"}]]}}}, "within_ms": 30000}

@@ -12,7 +12,7 @@
 
 (defconst drgnx-lint-segments--file "modules/ui/drgnx-statusbar.el" "The file the lint reads.")
 
-(defconst drgnx-lint-segments--producers '("agent" "agents" "hub" "job" "jobs" "cockpit")
+(defconst drgnx-lint-segments--producers '("agent" "agents" "hub" "job" "jobs")
   "Name families of the modules whose state the bar once read: `drgnx-FAMILY-…' is another module's.")
 
 (defun drgnx-lint-segments--forms (file)
@@ -59,8 +59,8 @@ function of the family (`drgnx-FAMILY-x') the bar asks `fboundp' about or declar
 (ert-deftest drgnx-lint/segments-lint-sees-a-producer-symbol ()
   ;; the lint's own check: a producer's symbol is found, the bar's own is not
   (should (drgnx-lint-segments--other-p 'drgnx-hub--events))
+  (should (drgnx-lint-segments--other-p 'drgnx-jobs--running))
   (should (drgnx-lint-segments--other-p 'drgnx-agents-sessions))
-  (should (drgnx-lint-segments--other-p 'drgnx-job-ui--running))
   (should-not (drgnx-lint-segments--other-p 'drgnx-statusbar--now))
   (should-not (drgnx-lint-segments--other-p 'drgnx-hubris)))
 

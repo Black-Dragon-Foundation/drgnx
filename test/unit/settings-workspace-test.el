@@ -22,7 +22,7 @@
 (defvar drgnx-swt-risky-function nil "A variable risky by its name.")
 (defvar drgnx-swt--seen nil "What a W2 :eval saw.")
 
-(defconst drgnx-swt--settings '(drgnx-swt--global drgnx-swt--never drgnx-swt--limit)
+(defconst drgnx-swt--settings '(drgnx-swt--global drgnx-swt--never drgnx-swt--limit drgnx-swt--mine drgnx-swt--nobuf)
   "The fixture settings, declared fresh by `drgnx-swt--with'.")
 
 (defun drgnx-swt--declare ()
@@ -35,6 +35,12 @@
         t)
   (eval '(drgnx-defsetting drgnx-swt--limit 50 "A project's limit, lower only." :type 'integer :group 'drgnx-swt
            :safe #'integerp :scope 'project :merge 'lower-only)
+        t)
+  (eval '(drgnx-defsetting drgnx-swt--mine 1 "A project's own security choice." :type 'integer :group 'drgnx-swt
+           :scope 'project :workspace 'never)
+        t)
+  (eval '(drgnx-defsetting drgnx-swt--nobuf 1 "A buffer setting a workspace never sets." :type 'integer
+           :group 'drgnx-swt :scope 'buffer :workspace 'never)
         t))
 
 (defun drgnx-swt--undeclare ()
@@ -173,6 +179,54 @@ fixture settings; the buffers it opened are killed after."
       (should (equal (mapcar (lambda (x) (plist-get x :line)) p) '(4 5)))
       (should (cl-every (lambda (x) (string-match-p "never set by a workspace" (plist-get x :text))) p)))))
 
+(ert-deftest drgnx-settings-workspace/private-holds-a-never-project-setting ()
+  ;; your own file may hold a `:scope project :workspace never' entry (the plugins a project runs): nobody else writes it
+  (drgnx-swt--with
+    (drgnx-swt--private " (drgnx-swt--mine 7)")
+    (should (equal (drgnx-setting-for-root 'drgnx-swt--mine drgnx-swt--root) 7))
+    (should-not (drgnx-settings-workspace-problems (drgnx-swt--private-file)))
+    (drgnx-swt--in "a.txt"
+      (should-not (local-variable-p 'drgnx-swt--mine)))))
+
+(ert-deftest drgnx-settings-workspace/private-shared-overlay-goes-in-its-projects-set ()
+  ;; your own file turns a project's `drgnx-runners-shared-overlay' on: the editor sends it in that project's set to the
+  ;; hub (whose placement takes it for that project's jobs only); another root's set doesn't have it
+  (require 'drgnx-agents-matrix)
+  (require 'drgnx-settings-runtime)
+  (drgnx-swt--with
+    (drgnx-swt--private " (drgnx-runners-shared-overlay t)")
+    (should-not (drgnx-settings-workspace-problems (drgnx-swt--private-file)))
+    (should (eq (drgnx-setting-for-root 'drgnx-runners-shared-overlay drgnx-swt--root) t))
+    (should (member '(:name "drgnx-runners-shared-overlay" :value t :source "workspace")
+                    (drgnx-settings-runtime-overrides drgnx-swt--root)))
+    (let ((other (file-name-as-directory (expand-file-name "other" drgnx-test-config-root))))
+      (make-directory other t)
+      (should-not (cl-find "drgnx-runners-shared-overlay" (drgnx-settings-runtime-overrides other)
+                           :key (lambda (o) (plist-get o :name)) :test #'equal)))))
+
+(ert-deftest drgnx-settings-workspace/shared-still-refuses-it ()
+  ;; a repository's .drgnx/settings.el and the old shims still refuse it
+  (drgnx-swt--with
+    (drgnx-swt--shared " (drgnx-swt--mine 7)")
+    (should (equal (drgnx-setting-for-root 'drgnx-swt--mine drgnx-swt--root) 1))
+    (let ((p (drgnx-settings-workspace-problems (expand-file-name ".drgnx/settings.el" drgnx-swt--root))))
+      (should (equal (mapcar (lambda (x) (plist-get x :line)) p) '(3)))
+      (should (string-match-p "never set by a workspace" (plist-get (car p) :text))))
+    (should (string-match-p "never set by a workspace"
+                            (drgnx-settings-workspace--refusal
+                             (make-drgnx-settings-entry :var 'drgnx-swt--mine :value 7) 'shared)))
+    (should-not (drgnx-settings-workspace--refusal
+                 (make-drgnx-settings-entry :var 'drgnx-swt--mine :value 7) 'private))))
+
+(ert-deftest drgnx-settings-workspace/private-still-refuses-a-never-buffer-setting ()
+  (drgnx-swt--with
+    (drgnx-swt--private " (drgnx-swt--nobuf 7)\n (drgnx-swt--global 5)")
+    (drgnx-swt--in "a.txt"
+      (should-not (local-variable-p 'drgnx-swt--nobuf)))
+    (let ((p (drgnx-settings-workspace-problems (drgnx-swt--private-file))))
+      (should (equal (mapcar (lambda (x) (plist-get x :line)) p) '(4 5)))
+      (should (string-match-p "never set by a workspace" (plist-get (car p) :text))))))
+
 (ert-deftest drgnx-settings-workspace/w1-refuses-the-sandbox-settings ()
   ;; US-WORKSPACE-NEVER-1: a repository's .drgnx/settings.el never sets the sandbox's secrets, cap or pinned names
   (require 'drgnx-settings-runtime)
@@ -264,7 +318,7 @@ fixture settings; the buffers it opened are killed after."
 
 (ert-deftest drgnx-settings-workspace/old-project-files-read-as-w1 ()
   (drgnx-swt--with
-    (require 'drgnx-search-chunk)
+    (require 'drgnx-settings-runtime)
     (unless (fboundp 'drgnx-large-files--define-config)
       (load (expand-file-name "modules/editor/drgnx-large-files" drgnx-dir) nil t))
     (drgnx-large-files--define-config)
@@ -297,6 +351,36 @@ fixture settings; the buffers it opened are killed after."
       (drgnx-swt--in "a.txt"
         (should (= tab-width 4))
         (should-not (local-variable-p 'fill-column))))))
+
+(ert-deftest drgnx-settings-workspace/a-repeat-open-lists-and-resolves-nothing ()
+  ;; W2's private files are listed once per change of their folder, and a file's roots resolved once per read of it
+  (drgnx-swt--with
+    (drgnx-swt--private " (fill-column 91)")
+    (let ((lists 0) (roots 0) (root drgnx-swt--root)
+          (dir-files (symbol-function 'directory-files)) (norm (symbol-function 'drgnx-settings-workspace--norm)))
+      (cl-letf (((symbol-function 'directory-files)
+                 (lambda (dir &rest args)
+                   (when (equal (expand-file-name dir) (expand-file-name (drgnx-settings-workspace-private-dir)))
+                     (cl-incf lists))
+                   (apply dir-files dir args)))
+                ((symbol-function 'drgnx-settings-workspace--norm)
+                 (lambda (dir) (when (equal dir root) (cl-incf roots)) (funcall norm dir))))
+        ;; a folder changed within the last second is listed again (a same-tick change would keep its stamp)
+        (set-file-times (drgnx-settings-workspace-private-dir) (time-subtract nil 10))
+        (drgnx-swt--in "src/a.txt" (should (= fill-column 91)))
+        (setq lists 0 roots 0)
+        (drgnx-swt--in "src/b.txt" (should (= fill-column 91)))
+        (drgnx-swt--in "src/c.txt" (should (= fill-column 91)))
+        (should (= lists 0))
+        (should (= roots 0))
+        ;; the file changes: read and resolved again
+        (drgnx-swt--private " (fill-column 92)")
+        (drgnx-swt--in "src/d.txt" (should (= fill-column 92)))
+        (should (> roots 0))
+        ;; a private file goes away: the folder is listed again and its entries stop
+        (delete-file (drgnx-swt--private-file))
+        (drgnx-swt--in "src/e.txt" (should-not (local-variable-p 'fill-column)))
+        (should (> lists 0))))))
 
 (provide 'settings-workspace-test)
 ;;; settings-workspace-test.el ends here

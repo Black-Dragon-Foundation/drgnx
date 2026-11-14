@@ -37,7 +37,7 @@ request returns before drgnx may quit."
          (file (expand-file-name "café.py" project))
          (process-environment (cons (concat "DRGNX_UI_STATE=" root) process-environment))
          (s (progn (make-directory project) (write-region "print(1)\n" nil file nil 'silent)
-                   (drgnx-ui-start "drgnx" "1200x700" 30 t)))
+                   (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1200x700") 30 t)))
          (name (plist-get s :name))
          (sess (drgnx-ui-own-session name)))
     (unwind-protect

@@ -75,7 +75,7 @@ the loop and sets `kx-returned' when it ends."
     (drgnx-tty-session-wait s '(memq 'drgnx-lang-quick-fix kx-commands))
     ;; what tmux folds: C-S-p reaches Emacs as C-p
     (drgnx-tty-session-key s "C-S-p" 'mok)
-    (drgnx-tty-session-wait s '(memq 'project-find-file kx-commands))
+    (drgnx-tty-session-wait s '(memq 'drgnx-quick-open kx-commands))
     (should-not (drgnx-tty-session-eval s '(memq 'drgnx-palette kx-commands)))
     (drgnx-tty-session-key s "C-g")
     (drgnx-tty-session-wait s '(null (active-minibuffer-window)))

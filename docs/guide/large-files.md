@@ -20,7 +20,7 @@ The status bar shows the same, on the right: `412 MB · chunk 3/412`, `412 MB ·
 ## What asks, and what never does
 
 **A file you open yourself asks once:** a click or RET in the Explorer, Open File, quick open, a link in the Work
-cockpit or the AI pane. The question appears at the bottom of the window:
+Work space or the AI pane. The question appears at the bottom of the window:
 
 ```
 big.log is 412 MB: [c]hunks [n]ormal (lean) [r]aw [q]uit

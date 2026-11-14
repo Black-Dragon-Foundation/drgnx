@@ -7,7 +7,6 @@
 (require 'cl-lib)
 (require 'drgnx)
 (require 'drgnx-config)
-(require 'drgnx-cockpit-model)
 (require 'drgnx-agents)
 (require 'drgnx-agents-mirror)
 (require 'drgnx-modal-choose)
@@ -49,10 +48,6 @@ SEVERITY must be there.  Returns it."
       (cl-letf (((symbol-function 'drgnx-config-defined-p) (lambda (_n) t))
                 ((symbol-function 'drgnx-config-reread) (lambda (_n) (error "Boom"))))
         (drgnx-config--after-save)))))
-
-(ert-deftest drgnx-notice-core/cockpit-call-failure-is-a-notice ()
-  (drgnx-notice-echo-pass-test--notice 'render 'warn
-    (should-not (drgnx-cockpit--call (lambda () (error "Boom"))))))
 
 (ert-deftest drgnx-notice-core/a-hub-call-error-on-an-agent-is-a-notice ()
   (drgnx-notice-echo-pass-test--notice 'agents 'warn

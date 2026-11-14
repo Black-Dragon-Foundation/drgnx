@@ -1,0 +1,514 @@
+;;; drgnx-view-nav.el --- Keys through the native view model: the move, the classes on the cards, the notice -*- lexical-binding: t -*-
+
+;; SPDX-License-Identifier: GPL-3.0-or-later
+
+;;; Commentary:
+;; A hub-fed view's keys answer in-process from Sjá, Nidhogg's replica of the view's model as it is drawn
+;; (`drgnx-view.el', "The native view model"; docs/develop/core.md).  A command is one line:
+;;
+;;   (drgnx-view-nav 'follow "up")        ; a link of the selection
+;;   (drgnx-view-nav 'walk "team" 1)      ; the next entry of a list
+;;
+;; `drgnx-view-nav' moves the buffer's instance, puts point on the selection's span in every window, runs the class
+;; step, arms the trailing notice and runs `drgnx-view-selected-functions'.  No call waits on the hub.
+;;
+;; The class step: Sjá answers the nodes whose class changed; each class is a face (`drgnx-view-nav-faces', by the
+;; descriptor's class name), put as an overlay on the node's span (the text whose `drgnx-view-patch-id-prop' is the
+;; node's id) in the rows that hold it, never on the whole line.  The rows that hold a node are learned as rows are
+;; rendered (`drgnx-view-patch-ids', and per row `drgnx-view-patch-keys'); a row a patch replaced gets its nodes'
+;; classes again after the draw, found through that per-row index.
+;;
+;; The trailing notice tells the hub the selection once it has been still for `drgnx-view-delay', and at most once per
+;; `drgnx-view-delay' while a key is held: the view's `drgnx-view-nav-notice-method' with (:view V :selected ID), or
+;; (:view V :clear t) for no selection.
+;;
+;; Windows: a list longer than the hub sends whole is a window of it (a trail past 500 steps, a search or an Explorer
+;; past 20,000 entries).  A key that stops at its edge gets `more' from Sjá; the view asks the hub for the window
+;; centred on that edge (`view/window'), keeps the key (one per buffer, the newest wins) and runs it again once a
+;; model whose window moved is drained.  Nothing waits for the hub: keys pressed meanwhile answer from the window held.
+
+;;; Code:
+(require 'cl-lib)
+(require 'drgnx-timer)
+(require 'drgnx-notice)
+(require 'drgnx-view)
+
+(declare-function nidhogg-view-follow "nidhogg-views" (h link))
+(declare-function nidhogg-view-walk "nidhogg-views" (h list step))
+(declare-function nidhogg-view-walk-to "nidhogg-views" (h list n))
+(declare-function nidhogg-view-set "nidhogg-views" (h what value))
+(declare-function nidhogg-view-get "nidhogg-views" (h what &optional arg arg2))
+
+(defface drgnx-view-match '((t :inherit match))
+  "A node that matches a hub-fed view's search."
+  :group 'drgnx)
+
+(defface drgnx-view-chain '((t :inherit lazy-highlight))
+  "A node on the selection's chain in a hub-fed view."
+  :group 'drgnx)
+
+(defface drgnx-view-lit '((t :inherit secondary-selection))
+  "A node another view lit (the map's selection's lanes, in the timeline)."
+  :group 'drgnx)
+
+(defconst drgnx-view-nav-default-faces
+  '(("selected" . drgnx-view-selected) ("match" . drgnx-view-match) ("chain" . drgnx-view-chain)
+    ("lit" . drgnx-view-lit) ("dim" . shadow))
+  "Each class Sjá knows by name and its face, unless a view names its own (`drgnx-view-nav-faces').")
+
+(defvar-local drgnx-view-nav-faces nil
+  "This view's (CLASS-NAME . FACE) pairs, before `drgnx-view-nav-default-faces'.  A class with neither has no face.")
+
+(defvar-local drgnx-view-nav-notice-method nil
+  "The hub method the trailing notice calls with (:view V :selected ID) or (:view V :clear t); nil: none.")
+
+(defvar drgnx-view-selected-functions nil
+  "Called with (BUFFER ID) after a key moved the selection of BUFFER's hub-fed view (ID nil: none).  Another view
+follows here (the timeline's lit lanes after the map's selection).")
+
+(defvar-local drgnx-view-nav--said-broken nil "Non-nil once this buffer said its view is broken.")
+
+(defvar-local drgnx-view-nav-list "order"
+  "The list a `follow' that answers `more' pages: the view's primary list (the descriptor's `start').")
+
+(defvar-local drgnx-view-nav-paged-functions nil
+  "Called with the selection (an id or nil) after a key that waited for another window ran again: a view whose rows
+are a window of their own shows the selection's row here (Search).")
+
+(defvar-local drgnx-view-nav--place-after-draw nil
+  "Non-nil when a key ran again as a model came, before the rows drawn from it: the draw's class step puts point.")
+
+(defvar-local drgnx-view-nav--pending nil
+  "The key waiting for another window: (LIST WINDOW VERB . ARGS), WINDOW being the list's (FROM LENGTH TOTAL) when
+the view asked the hub (`drgnx-view-nav--ask-window').  One per buffer; the newest key wins.")
+
+(defun drgnx-view-nav--face-of (class)
+  "The face of CLASS, an index into the descriptor's classes, or nil.  The faces by index are made once per applied
+model (`drgnx-view-patch-class-faces'), with the index of `dim' when it has a face (`drgnx-view-patch-dim-class')."
+  (let ((faces (or (drgnx-view-patch-class-faces drgnx-view-patch)
+                   (let* ((names (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'class-names))
+                          (faces (vconcat (mapcar (lambda (name)
+                                                    (cdr (or (assoc name drgnx-view-nav-faces)
+                                                             (assoc name drgnx-view-nav-default-faces))))
+                                                  names)))
+                          (dim (cl-position "dim" names :test #'equal)))
+                     (setf (drgnx-view-patch-dim-class drgnx-view-patch) (and dim (aref faces dim) dim))
+                     (setf (drgnx-view-patch-class-faces drgnx-view-patch) faces)))))
+    (and class (< class (length faces)) (aref faces class))))
+
+;;;; The class step
+;;
+;; `dim' is the class most nodes can have at once (a search's non-matches, the nodes off the selection's chain or a
+;; lit list): it is drawn over runs of whole rows, one overlay for consecutive rows whose every node is dim, never one
+;; per row.  A dim node in a row with other classes gets its spans' overlays as the other classes do.
+
+(defvar-local drgnx-view-nav-through-faces nil
+  "Boxed faces a class goes through: a run in one of them is classed like text (a card's rows, whose selection and dimming
+must show), not kept as a chip.")
+
+(defun drgnx-view-nav--boxed-p (face)
+  "Whether the text property FACE (a face, a list of faces or a plist) draws a box: a chip, whose own background a
+class's overlay would hide."
+  (cond ((null face) nil)
+        ((symbolp face) (and (facep face) (not (memq face drgnx-view-nav-through-faces))
+                             (not (memq (face-attribute face :box nil t) '(nil unspecified)))))
+        ((keywordp (car face)) (and (plist-get face :box) t))
+        (t (let (boxed)
+             (while (and face (not boxed))
+               (setq boxed (drgnx-view-nav--boxed-p (car face)) face (cdr face)))
+             boxed))))
+
+(defun drgnx-view-nav--spans (view id &optional whole)
+  "The (BEG . END) spans of node ID in VIEW's drawn rows, by `drgnx-view-patch-id-prop', less their boxed runs
+\(`drgnx-view-nav--boxed-p'): a chip keeps its own face under a class.  WHOLE: with their boxed runs."
+  (let ((prop drgnx-view-patch-id-prop) spans)
+    (dolist (key (gethash id (drgnx-view-patch-ids drgnx-view-patch)))
+      (when-let* ((beg (drgnx-view-row-start view key)))
+        (let ((end (save-excursion (goto-char beg) (line-end-position))) (pos beg))
+          (while (and pos (< pos end))
+            (if (equal (get-text-property pos prop) id)
+                (let ((stop (min end (next-single-property-change pos prop nil end))) (from pos))
+                  (while (< pos stop)
+                    (let ((next (next-single-property-change pos 'face nil stop)))
+                      (when (and (not whole) (drgnx-view-nav--boxed-p (get-text-property pos 'face)))
+                        (when (< from pos) (push (cons from pos) spans))
+                        (setq from next))
+                      (setq pos next)))
+                  (when (< from stop) (push (cons from stop) spans)))
+              (setq pos (next-single-property-change pos prop nil end)))))))
+    (nreverse spans)))
+
+(defun drgnx-view-nav--span-overlays (view id face)
+  "FACE over node ID's spans, as ID's overlays in the spans table (its old ones go first)."
+  (let* ((state drgnx-view-patch) (table (drgnx-view-patch-spans state)) (old (gethash id table)))
+    (mapc #'delete-overlay old)
+    (cl-incf (drgnx-view-patch-classed state) (length old))
+    (remhash id table)
+    (when face
+      (let (ovs)
+        (dolist (span (drgnx-view-nav--spans view id))
+          (let ((ov (make-overlay (car span) (cdr span))))
+            (overlay-put ov 'face face)
+            (overlay-put ov 'priority 10)
+            (push ov ovs)))
+        (cl-incf (drgnx-view-patch-classed state) (length ovs))
+        (when ovs (puthash id ovs table))))))
+
+(defun drgnx-view-nav--put-class (view id class rows)
+  "Show node ID in CLASS (an index, or nil: none) over its spans; its old overlays go.  `dim' is noted, not drawn: the
+rows that hold ID are put in ROWS (a table of row keys) for `drgnx-view-nav--dim-rows'."
+  (let* ((dims (drgnx-view-patch-dims drgnx-view-patch))
+         (dim (and class (eql class (drgnx-view-patch-dim-class drgnx-view-patch)))))
+    (unless (eq dim (gethash id dims))
+      (if dim (puthash id t dims) (remhash id dims))
+      (dolist (k (gethash id (drgnx-view-patch-ids drgnx-view-patch))) (puthash k t rows)))
+    (drgnx-view-nav--span-overlays view id (and (not dim) (drgnx-view-nav--face-of class)))))
+
+(defun drgnx-view-nav--runs-by (beg end)
+  "The dim runs over BEG..END or touching it at either edge."
+  (let (runs)
+    (dolist (o (overlays-in (max (point-min) (1- beg)) (min (point-max) (1+ end))))
+      (when (overlay-get o 'drgnx-view-dim-run) (push o runs)))
+    runs))
+
+(defun drgnx-view-nav--run-on (beg end face)
+  "The rows from BEG to END in a dim run of FACE: one run with the runs over them or touching their edges."
+  (let ((runs (drgnx-view-nav--runs-by beg end)) (a beg) (b end))
+    (dolist (o runs) (setq a (min a (overlay-start o)) b (max b (overlay-end o))))
+    (if runs
+        (progn (move-overlay (car runs) a b) (mapc #'delete-overlay (cdr runs)))
+      (let ((ov (make-overlay beg end nil t nil)))        ; rows inserted at its edges stay out of it
+        (overlay-put ov 'drgnx-view-dim-run t)
+        (overlay-put ov 'face face)
+        (overlay-put ov 'priority 10)
+        (overlay-put ov 'evaporate t)
+        (cl-incf (drgnx-view-patch-classed drgnx-view-patch))))))
+
+(defun drgnx-view-nav--run-off (beg end)
+  "The rows from BEG to END out of the dim runs over them: each run is cut around them."
+  (dolist (o (overlays-in beg end))
+    (when (overlay-get o 'drgnx-view-dim-run)
+      (let ((a (overlay-start o)) (b (overlay-end o)))
+        (cond ((and (< a beg) (< end b))
+               (move-overlay o a beg)
+               (move-overlay (copy-overlay o) end b))
+              ((< a beg) (move-overlay o a beg))
+              ((< end b) (move-overlay o end b))
+              (t (delete-overlay o)))))))
+
+(defvar-local drgnx-view-nav--rows nil
+  "The rows a class step puts in or out of the dim runs, a table of row keys kept from step to step and cleared, so a
+step over thousands of rows grows no table (the perf row `view-select-dim').  Bounded by the view's rows.")
+
+(defun drgnx-view-nav--dim-rows (view rows)
+  "The rows ROWS (a table of row keys) of VIEW in or out of the dim runs: in when every node a row holds is dim, else
+its dim nodes' spans are drawn dim.  The rows go in buffer order, a stretch of consecutive rows in or out at a time
+(the perf row `view-select-dim': a run looked up per row allocated enough for GC pauses over its 50 ms)."
+  (let* ((state drgnx-view-patch) (dims (drgnx-view-patch-dims state)) (index (drgnx-view-patch-keys state))
+         (face (drgnx-view-nav--face-of (drgnx-view-patch-dim-class state))) marks on b0 e0)
+    (maphash (lambda (key _)
+               (when-let* ((beg (drgnx-view-row-start view key)) ((drgnx-view-row-end view key)))
+                 (push (cons beg key) marks)))
+             rows)
+    (dolist (m (sort marks (lambda (x y) (< (car x) (car y)))))
+      (let* ((beg (car m)) (end (drgnx-view-row-end view (cdr m))) (ids (gethash (cdr m) index))
+             (in (and ids face (let ((all t)) (dolist (id ids) (unless (gethash id dims) (setq all nil))) all))))
+        (dolist (id ids)
+          (cond (in (drgnx-view-nav--span-overlays view id nil))
+                ((gethash id dims) (drgnx-view-nav--span-overlays view id face))))
+        (if (and b0 (eq in on) (= e0 beg))
+            (setq e0 end)
+          (when b0 (if on (drgnx-view-nav--run-on b0 e0 face) (drgnx-view-nav--run-off b0 e0)))
+          (setq on in b0 beg e0 end))))
+    (when b0 (if on (drgnx-view-nav--run-on b0 e0 face) (drgnx-view-nav--run-off b0 e0)))))
+
+(defun drgnx-view-nav-class-step (view &optional keys)
+  "The class step of VIEW, in its buffer: the nodes whose class changed in Sjá get it on their spans; with KEYS (rows a
+draw replaced), every node drawn in them gets its current class again and the overlays left empty go.  A view whose
+rows Sjá holds takes `drgnx-view-nav-sja-step' (its draw runs that with the nodes it drew)."
+  (if (and drgnx-view-patch (drgnx-view-patch-sja drgnx-view-patch))
+      (drgnx-view-nav-sja-step)
+    (when-let* ((h (drgnx-view-patch-handle drgnx-view-patch)))
+      (drgnx-view-nav--face-of nil)                       ; the faces, and the class `dim', for this model
+      (let ((changes (nidhogg-view-get h 'classes)) (done (and keys (make-hash-table :test #'equal))) (i 0)
+            (rows (if drgnx-view-nav--rows (clrhash drgnx-view-nav--rows)
+                    (setq drgnx-view-nav--rows (make-hash-table :test #'equal)))))
+        (while (< i (length changes))
+          (when done (puthash (aref changes i) t done))     ; a key's step makes no table: only a draw's reads it
+          (drgnx-view-nav--put-class view (aref changes i) (aref changes (1+ i)) rows)
+          (setq i (+ i 2)))
+        (when keys
+          ;; the nodes drawn in the replaced rows, by the row → ids index: never a walk of every node drawn
+          (let ((index (drgnx-view-patch-keys drgnx-view-patch)))
+            (dolist (k keys)
+              (puthash k t rows)                            ; drawn again: in or out of its dim run afresh
+              (dolist (id (gethash k index))
+                (unless (gethash id done)
+                  (puthash id t done)
+                  (drgnx-view-nav--put-class view id (nidhogg-view-get h 'class id) rows))))))
+        (drgnx-view-nav--dim-rows view rows)
+        (when keys
+          ;; a draw may have deleted text under an overlay: the empty ones go (a key alone deletes no text; dim runs
+          ;; evaporate)
+          (let ((table (drgnx-view-patch-spans drgnx-view-patch)))
+            (maphash (lambda (id ovs)
+                       (let ((live (cl-remove-if (lambda (o)
+                                                   (when (= (overlay-start o) (overlay-end o)) (delete-overlay o) t))
+                                                 ovs)))
+                         (if live (puthash id live table) (remhash id table))))
+                     table))
+          (when drgnx-view-nav--place-after-draw
+            (setq drgnx-view-nav--place-after-draw nil)
+            (when-let* ((id (nidhogg-view-get h 'selection))) (drgnx-view-nav--place-point view id))))))))
+
+;;;; The class step of a view whose rows Sjá holds (`drgnx-view-sja')
+;;
+;; Sjá drew the rows, so it answers where a node is: its spans (`spans', cut where the runs' faces change) and the dim
+;; runs (`dimruns': consecutive drawn rows whose every node is dim, and the dim nodes of the other rows).  Lisp puts
+;; the overlays, and asks once per face name whether it draws a box.
+
+(declare-function drgnx-view-sja--face "drgnx-view-sja" (s name))
+
+(defvar-local drgnx-view-nav--sja-boxed nil
+  "(FACES . TABLE): run face name → whether it draws a box, learned once per name for the class faces FACES (a new
+model or theme makes them again, and the table with them).  Bounded by the face names the rows use.")
+
+(defvar-local drgnx-view-nav--sja-dim nil
+  "The dim runs as drawn: (RUNS OVERLAYS LONE), RUNS Sjá's vector, LONE a table of the dim nodes drawn by their spans.")
+
+(defun drgnx-view-nav--sja-boxed-p (names)
+  "Whether one of the run face NAMES (a vector, or nil) draws a box (`drgnx-view-nav--boxed-p')."
+  (let* ((s drgnx-view-patch) (faces (drgnx-view-patch-class-faces s)) (memo drgnx-view-nav--sja-boxed) (boxed nil))
+    (unless (and memo (eq (car memo) faces))
+      (setq memo (setq drgnx-view-nav--sja-boxed (cons faces (make-hash-table :test #'equal)))))
+    (dotimes (i (length names))
+      (let* ((name (aref names i)) (v (gethash name (cdr memo) 'unknown)))
+        (when (eq v 'unknown)
+          (setq v (and (drgnx-view-nav--boxed-p (if (integerp name) (drgnx-view-patch--style-face s name)
+                                                  (drgnx-view-sja--face s name)))
+                       t))
+          (puthash name v (cdr memo)))
+        (when v (setq boxed t))))
+    boxed))
+
+(defun drgnx-view-nav--sja-spans (id &optional whole)
+  "The (BEG . END) spans of node ID in the rows Sjá drew, less their boxed runs (WHOLE: with them)."
+  (let* ((s drgnx-view-patch) (beg (drgnx-view-patch-beg s))
+         (v (nidhogg-view-rows (drgnx-view-patch-handle s) 'spans nil (concat (symbol-name drgnx-view-patch-id-prop) "\t" id)))
+         (i 0) spans)
+    (while (< i (length v))
+      (let ((from (+ beg (aref v i))) (to (+ beg (aref v (1+ i)))))
+        (unless (and (not whole) (drgnx-view-nav--sja-boxed-p (aref v (+ i 2))))
+          (if (and spans (= (cdar spans) from)) (setcdr (car spans) to) (push (cons from to) spans))))
+      (setq i (+ i 3)))
+    (nreverse spans)))
+
+(defun drgnx-view-nav--sja-overlays (id face)
+  "FACE over node ID's spans, as ID's overlays in the spans table (its old ones go first); FACE nil: none."
+  (let* ((state drgnx-view-patch) (table (drgnx-view-patch-spans state)) (old (gethash id table)))
+    (mapc #'delete-overlay old)
+    (remhash id table)
+    (when face
+      (let (ovs)
+        (dolist (span (drgnx-view-nav--sja-spans id))
+          (let ((ov (make-overlay (car span) (cdr span))))
+            (overlay-put ov 'face face)
+            (overlay-put ov 'priority 10)
+            (push ov ovs)))
+        (when ovs (puthash id ovs table))))))
+
+(defun drgnx-view-nav--sja-dim (h dim redrawn)
+  "The dim runs and the lone dim nodes of H's rows as Sjá answers them for class DIM; REDRAWN: the nodes a draw drew
+again (a table), whose lone overlays are made again."
+  (let* ((s drgnx-view-patch) (beg (drgnx-view-patch-beg s)) (face (drgnx-view-nav--face-of dim))
+         (d (nidhogg-view-rows h 'dimruns dim (symbol-name drgnx-view-patch-id-prop)))
+         (runs (car d)) (lone (cadr d)) (was drgnx-view-nav--sja-dim)
+         (ovs (nth 1 was)) (old (or (nth 2 was) (make-hash-table :test #'equal))) (now (make-hash-table :test #'equal)))
+    (unless (equal runs (car was))
+      (mapc #'delete-overlay ovs)
+      (setq ovs nil)
+      (let ((i 0))
+        (while (< i (length runs))
+          (let ((ov (make-overlay (+ beg (aref runs i)) (+ beg (aref runs (1+ i))) nil t nil)))
+            (overlay-put ov 'drgnx-view-dim-run t)
+            (overlay-put ov 'face face)
+            (overlay-put ov 'priority 10)
+            (overlay-put ov 'evaporate t)
+            (push ov ovs))
+          (setq i (+ i 2)))))
+    (dotimes (i (length lone))
+      (let ((id (aref lone i)))
+        (puthash id t now)
+        (when (or (not (gethash id old)) (gethash id redrawn)) (drgnx-view-nav--sja-overlays id face))))
+    ;; a node no longer lone and still dim is in a run now: its own overlays go
+    (maphash (lambda (id _)
+               (unless (or (gethash id now) (not (eql dim (nidhogg-view-get h 'class id))))
+                 (drgnx-view-nav--sja-overlays id nil)))
+             old)
+    (setq drgnx-view-nav--sja-dim (list runs ovs now))))
+
+(defun drgnx-view-nav-sja-step (&optional ids)
+  "The class step of the current buffer's view, whose rows Sjá holds: the nodes whose class changed in Sjá, and IDS
+\(a vector: the nodes a draw drew), get their class on their spans; the dim runs are Sjá's."
+  (when-let* ((s drgnx-view-patch) (h (drgnx-view-patch-handle s))
+              (faces (progn (drgnx-view-nav--face-of nil) (drgnx-view-patch-class-faces s)))
+              ((> (length faces) 0)))
+    (let* ((changes (nidhogg-view-get h 'classes)) (dim (drgnx-view-patch-dim-class s))
+           (done (make-hash-table :test #'equal)) (i 0))
+      (while (< i (length changes))
+        (let ((id (aref changes i)) (class (aref changes (1+ i))))
+          (puthash id t done)
+          (drgnx-view-nav--sja-overlays id (and class (not (eql class dim)) (drgnx-view-nav--face-of class))))
+        (setq i (+ i 2)))
+      (dotimes (j (length ids))
+        (let ((id (aref ids j)))
+          (unless (gethash id done)
+            (puthash id t done)
+            (let ((class (nidhogg-view-get h 'class id)))
+              (drgnx-view-nav--sja-overlays id (and class (not (eql class dim)) (drgnx-view-nav--face-of class)))))))
+      (if dim
+          (drgnx-view-nav--sja-dim h dim done)
+        (when drgnx-view-nav--sja-dim
+          (mapc #'delete-overlay (nth 1 drgnx-view-nav--sja-dim))
+          (maphash (lambda (id _) (drgnx-view-nav--sja-overlays id nil)) (nth 2 drgnx-view-nav--sja-dim))
+          (setq drgnx-view-nav--sja-dim nil)))
+      (when (> (length ids) 0)
+        ;; a draw may have deleted text under an overlay: the empty ones go
+        (let ((table (drgnx-view-patch-spans s)))
+          (maphash (lambda (id ovs)
+                     (let ((live (cl-remove-if (lambda (o)
+                                                 (when (= (overlay-start o) (overlay-end o)) (delete-overlay o) t))
+                                               ovs)))
+                       (if live (puthash id live table) (remhash id table))))
+                   table))
+        (when drgnx-view-nav--place-after-draw
+          (setq drgnx-view-nav--place-after-draw nil)
+          (when-let* ((id (nidhogg-view-get h 'selection))) (drgnx-view-nav--place-point nil id)))))))
+
+;;;; Point, the notice, the broken view
+
+(defun drgnx-view-nav--place-point (view id)
+  "Point to the start of ID's first span, in every window that shows VIEW's buffer."
+  (when-let* ((span (car (if (drgnx-view-patch-sja drgnx-view-patch) (drgnx-view-nav--sja-spans id t)
+                           (drgnx-view-nav--spans view id t)))))
+    (goto-char (car span))
+    (dolist (w (get-buffer-window-list (current-buffer) nil t))
+      (set-window-point w (car span)))))
+
+(defun drgnx-view-nav--notice (buffer)
+  "The trailing notice of BUFFER's view: tell the hub its selection as it is now."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when-let* ((state drgnx-view-patch) (h (drgnx-view-patch-handle state)) (method drgnx-view-nav-notice-method))
+        (let ((id (nidhogg-view-get h 'selection)) (view (drgnx-view-patch-view state)))
+          (funcall drgnx-view-patch-send-function method
+                   (if id (list :view view :selected id) (list :view view :clear t))))))))
+
+(defun drgnx-view-nav--arm-notice ()
+  (when drgnx-view-nav-notice-method
+    (drgnx-timer-soon (cons 'drgnx-view-nav-notice (current-buffer)) drgnx-view-delay #'drgnx-view-nav--notice
+                      :args (list (current-buffer)) :min-interval drgnx-view-delay :owner (current-buffer))))
+
+(defun drgnx-view-nav--broken-p (h)
+  "Non-nil when H's view is broken (Sjá's breaker tripped): said once per buffer."
+  (when (eql 2 (nidhogg-view-get h 'health))
+    (unless drgnx-view-nav--said-broken
+      (setq drgnx-view-nav--said-broken t)
+      ;; a condition while the view is broken: the doctor's `views' row fails on it; closing the view clears it
+      (drgnx-notify 'render 'fail (format "the view %s stopped: its model broke twice" (drgnx-view-patch-view drgnx-view-patch))
+                    :id (cons 'view-broken (drgnx-view-patch-view drgnx-view-patch)) :life 'condition
+                    :fix "close its buffer and open it again"))
+    t))
+
+;;;; Windows
+
+(defconst drgnx-view-nav-window-step 2000
+  "The most entries a window moves by when a key passes its edge: a page costs the hub, the line and Sjá what it adds,
+so a long window moves a step, not half its length.")
+
+(defun drgnx-view-nav--ask-window (h verb args)
+  "The key VERB ARGS stopped at the edge of its list's window (`nidhogg-view-more' the direction): ask the hub for the
+window that holds a step past that edge (half the window, at most `drgnx-view-nav-window-step'), or for a `walk-to' the
+window centred on its entry, once while one is asked, and keep the key as the one to run when it comes."
+  (let* ((list (if (eq verb 'follow) drgnx-view-nav-list (car args)))
+         (window (nidhogg-view-get h 'window list)))
+    (when window
+      (let* ((from (nth 0 window)) (len (nth 1 window)) (total (nth 2 window))
+             (step (min (/ len 2) drgnx-view-nav-window-step))
+             (want (max 0 (min (- total len)
+                               (cond ((eq verb 'walk-to) (- (cadr args) (/ len 2)))
+                                     ((< nidhogg-view-more 0) (- from step))
+                                     (t (+ from step)))))))
+        (unless (and drgnx-view-nav--pending (equal (car drgnx-view-nav--pending) list))
+          (funcall drgnx-view-patch-send-function "view/window"
+                   (list :view (drgnx-view-patch-view drgnx-view-patch) :list list :from want)))
+        (setq drgnx-view-nav--pending
+              (cons list (cons (if (equal (car drgnx-view-nav--pending) list) (cadr drgnx-view-nav--pending) window)
+                               (cons verb args))))))))
+
+(defun drgnx-view-nav-drained (view)
+  "A model of VIEW was drained into Sjá: in each of VIEW's buffers, a key waiting for another window runs again when
+the window it was asked from has moved (a model that did not move it leaves the key waiting)."
+  (maphash (lambda (pair buffer)
+             (when (and (equal (car pair) view) (buffer-live-p buffer))
+               (with-current-buffer buffer
+                 (when-let* ((pending drgnx-view-nav--pending) (state drgnx-view-patch)
+                             (h (drgnx-view-patch-handle state))
+                             ((not (equal (nidhogg-view-get h 'window (car pending)) (cadr pending)))))
+                   (setq drgnx-view-nav--pending nil
+                         drgnx-view-nav--place-after-draw t)
+                   (run-hook-with-args 'drgnx-view-nav-paged-functions (apply #'drgnx-view-nav (cddr pending)))))))
+           drgnx-view-patch--buffers))
+
+(defun drgnx-view-nav-waiting-p (view)
+  "Non-nil when a buffer of VIEW (a view's name) has a key waiting for another window: its models apply as they come."
+  (catch 'waiting
+    (maphash (lambda (pair buffer)
+               (when (and (equal (car pair) view) (buffer-live-p buffer)
+                          (buffer-local-value 'drgnx-view-nav--pending buffer))
+                 (throw 'waiting t)))
+             drgnx-view-patch--buffers)
+    nil))
+
+(defun drgnx-view-nav-paging-p ()
+  "Non-nil while a key of the current hub-fed view waits for another window (a move that stayed is not an end)."
+  (and drgnx-view-nav--pending t))
+
+;;;; The one entry point
+
+(defun drgnx-view-nav (verb &rest args)
+  "Move the current hub-fed view's selection by VERB with ARGS, in-process: `follow' LINK, `walk' LIST STEP,
+`walk-to' LIST N, or `select' ID.  Puts point on the selection, runs the class step, arms the trailing notice and
+runs `drgnx-view-selected-functions'.  A move that stops at a window's edge asks the hub for the next window and runs
+again when it comes (\"Windows\" above).  Returns the selection (an id or nil).  Nothing without a model."
+  (when-let* ((state drgnx-view-patch) (h (drgnx-view-patch-handle state)))
+    (let* ((before (nidhogg-view-get h 'selection))
+           (answer (pcase verb
+                     ('follow (nidhogg-view-follow h (car args)))
+                     ('walk (nidhogg-view-walk h (car args) (cadr args)))
+                     ('walk-to (nidhogg-view-walk-to h (car args) (cadr args)))
+                     ('select (nidhogg-view-set h 'select (car args)))
+                     (_ (error "drgnx-view-nav: no verb %s" verb)))))
+      (unless (and (null answer) (drgnx-view-nav--broken-p h))
+        (when (and (consp answer) (eq (cdr answer) 'more))
+          (drgnx-view-nav--ask-window h verb args))
+        (let ((view drgnx-view) (id (nidhogg-view-get h 'selection)))
+          (drgnx-view-nav-class-step view)
+          (when id (drgnx-view-nav--place-point view id))
+          (unless (equal id before)
+            (drgnx-view-nav--arm-notice)
+            (run-hook-with-args 'drgnx-view-selected-functions (current-buffer) id))
+          id)))))
+
+(defun drgnx-view-nav-selection ()
+  "The current hub-fed view's selection (an id), or nil."
+  (when-let* ((state drgnx-view-patch) (h (drgnx-view-patch-handle state)))
+    (nidhogg-view-get h 'selection)))
+
+(defun drgnx-view-nav-field (name &optional id)
+  "Field NAME of node ID (default: the selection) of the current hub-fed view, or nil."
+  (when-let* ((state drgnx-view-patch) (h (drgnx-view-patch-handle state)))
+    (nidhogg-view-get h 'field name id)))
+
+(provide 'drgnx-view-nav)
+;;; drgnx-view-nav.el ends here

@@ -65,7 +65,7 @@ fn barrier_marks_every_connection_after_what_was_sent() {
     assert_eq!(on_a[2]["data"], json!({"marker": 1}));
     assert_eq!(
         on_a[3]["result"],
-        json!({"marker": 1, "unnamed": 0, "busy": [], "waiting": []})
+        json!({"marker": 1, "unnamed": 0, "busy": [], "waiting": [], "sites": []})
     );
     let on_b = until(&mut b, |v| v["event"] == "__test_marker");
     let kinds: Vec<String> = on_b.iter().map(kind).collect();
@@ -139,6 +139,31 @@ fn subscribe_and_keys_answers_come_in_seq_order() {
                 "__test_marker false false"
             ],
             "run {run}: {on_b:?}"
+        );
+    }
+}
+
+#[cfg(feature = "test-hooks")]
+#[test]
+fn a_bare_hub_parks_every_timer_it_wakes() {
+    // Pattern B, on the hub's virtual clock: a hub with no clients' work moves through seconds of its own timers (the
+    // tick loops, the sweeps) and every task they woke waits on the clock again, so an advance names nothing busy (a
+    // busy task holds the advance for 5 s of real time).
+    let root = Root::new();
+    let socket = root.socket();
+    let mut hub = Hub::start_with(&root, 1, &["--test-clock"]);
+    hub.wait_ready(&socket);
+    let mut c = Client::open(&socket);
+    c.hello(&socket);
+    let mut now = 0;
+    for (id, ms) in [(1, 4000), (2, 6000), (3, 30_000)] {
+        now += ms;
+        c.send(json!({"id": id, "method": "__test_advance", "params": {"ms": ms}}));
+        let a = c.answer(id).0["result"].clone();
+        assert_eq!(
+            (a["now_ms"].clone(), a["busy"].clone()),
+            (json!(now), json!([])),
+            "{a}"
         );
     }
 }

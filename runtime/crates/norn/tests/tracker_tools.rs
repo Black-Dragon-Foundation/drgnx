@@ -815,7 +815,10 @@ mod tools {
         let a = w.agent("a1", &h);
         let id = id_of(&create(&w, &a, "ready one").await);
         let on = w.call(&a, "hello", json!({})).await;
-        let off_tools = tools_for(ToolSets { tracker: false });
+        let off_tools = tools_for(ToolSets {
+            tracker: false,
+            debug: false,
+        });
         let off = call_in(&off_tools, &w.coord, &a, "hello", json!({})).await;
         assert!(!on.err && !off.err, "{} / {}", on.text, off.text);
         assert_eq!(on.text, off.text, "the first item is the same");
@@ -862,6 +865,79 @@ mod tools {
             bad.err && bad.text.contains("no such entity"),
             "{}",
             bad.text
+        );
+    }
+
+    /// Pattern D: the sources are in the decision view and the finding's data.
+    #[tokio::test]
+    async fn record_decision_keeps_sources() {
+        let w = World::new().await;
+        let h = w.place("pa");
+        let a = w.agent("a1", &h);
+        let sources =
+            json!([{"path": "src/a.rs", "lines": [3, 9]}, {"url": "https://example.test/x"}]);
+        let o = w
+            .call(&a, "record_decision", json!({"kind": "build", "subject": "use x", "reason": "because", "seen_version": 0, "sources": sources}))
+            .await;
+        assert!(!o.err, "{}", o.text);
+        assert_eq!(
+            w.count("select count(*) from decision where json_array_length(sources) = 2 and json_extract(sources, '$[0].lines[1]') = 9"),
+            1
+        );
+        let many: Vec<_> = (0..13).map(|i| json!({"path": format!("f{i}")})).collect();
+        let bad = w
+            .call(&a, "record_decision", json!({"kind": "build", "subject": "use y", "reason": "because", "seen_version": 1, "sources": many}))
+            .await;
+        assert!(bad.err && bad.text.contains("at most 12"), "{}", bad.text);
+        assert_eq!(w.count("select count(*) from decision"), 1);
+    }
+
+    /// Pattern D: a decision's step is the hub's stamp, never the agent's claim; its origin and session stay.
+    #[tokio::test]
+    async fn the_agents_step_argument_is_ignored() {
+        let w = World::new().await;
+        let h = w.place("pa");
+        let a = w.agent("a1", &h);
+        let o = w
+            .call(&a, "record_decision", json!({"kind": "build", "subject": "use x", "reason": "because", "seen_version": 0, "step": 7, "origin": "own"}))
+            .await;
+        assert!(!o.err, "{}", o.text);
+        assert_eq!(
+            w.count("select count(*) from entity where kind = 'decision' and json_extract(data, '$.step') is null and json_extract(data, '$.origin') = 'own'"),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn note_add_sources_only_on_a_finding() {
+        let w = World::new().await;
+        let h = w.place("pa");
+        let a = w.agent("a1", &h);
+        let id = id_of(&create(&w, &a, "subject").await);
+        let sources = json!([{"path": "src/a.rs"}]);
+        let ok = w
+            .call(
+                &a,
+                "note_add",
+                json!({"about": id, "text": "it is so", "kind": "finding", "sources": sources}),
+            )
+            .await;
+        assert!(!ok.err, "{}", ok.text);
+        assert_eq!(
+            w.count("select count(*) from entity where kind = 'note' and json_extract(data, '$.sources[0].path') = 'src/a.rs'"),
+            1
+        );
+        let bad = w
+            .call(
+                &a,
+                "note_add",
+                json!({"about": id, "text": "progress", "kind": "progress", "sources": sources}),
+            )
+            .await;
+        assert!(bad.err && bad.text.contains("finding"), "{}", bad.text);
+        assert_eq!(
+            w.count("select count(*) from entity where kind = 'note'"),
+            1
         );
     }
 
@@ -1010,17 +1086,60 @@ mod tools {
 
     #[test]
     fn default_session_lists_23() {
-        // the 23, the four job tools (Task 15), `report_submit` and the two plan tools (Task 21)
-        assert_eq!(tools_for(ToolSets::default()).len(), 30);
+        // the 23, the four job tools (Task 15), `report_submit` and the two plan tools (Task 21), `extensions_suggest`,
+        // `huddle_reply`, `procedure_get`
+        assert_eq!(tools_for(ToolSets::default()).len(), 33);
         assert_eq!(tools().len(), 23);
+    }
+
+    /// The six debugger tools come only with the debug set (a session whose project debugs).
+    #[test]
+    fn debug_tools_only_with_the_debug_set() {
+        let debug = |sets: ToolSets| {
+            tools_for(sets)
+                .iter()
+                .filter(|t| t.name().starts_with("debug_"))
+                .count()
+        };
+        assert_eq!(debug(ToolSets::default()), 0);
+        assert_eq!(
+            debug(ToolSets {
+                debug: true,
+                ..ToolSets::default()
+            }),
+            6
+        );
+        assert_eq!(
+            tools_for(ToolSets {
+                debug: true,
+                ..ToolSets::default()
+            })
+            .len(),
+            39
+        );
     }
 
     /// The 16 of before and the two settings tools, which every agent has (unified-settings call 10).
     #[test]
     fn tracker_off_lists_18() {
-        let off = tools_for(ToolSets { tracker: false });
-        assert_eq!(off.len(), 25);
-        for name in ["settings_get", "settings_change"] {
+        let off = tools_for(ToolSets {
+            tracker: false,
+            debug: true,
+        });
+        assert_eq!(off.len(), 34);
+        for name in [
+            "settings_get",
+            "settings_change",
+            "extensions_suggest",
+            "huddle_reply",
+            "procedure_get",
+            "debug_read",
+            "debug_probe",
+            "debug_fork",
+            "debug_live",
+            "debug_hypothesis",
+            "debug_fix",
+        ] {
             assert!(off.iter().any(|t| t.name() == name), "{name}");
         }
         for t in &off {

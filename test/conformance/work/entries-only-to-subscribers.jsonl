@@ -1,0 +1,29 @@
+{"scenario": "work/entries-only-to-subscribers", "requires": ["v1", "test-hooks"], "doc": "Two editor connections subscribe to the hub's events; only the one that asked for the session's entries (agents/entries/subscribe) gets agent-entries. Both get the session's snapshots (agent). After agents/entries/unsubscribe the first stops getting them."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e1", "hub": "h"}
+{"do": "connect", "conn": "e2", "hub": "h"}
+{"do": "send", "conn": "e1", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e1", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e2", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e2", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "e1", "json": {"id": 2, "method": "agents/entries/subscribe", "params": {"session": "$sid"}}}
+{"do": "expect", "conn": "e1", "json": {"id": 2, "result": {"seq": "$number"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "hello"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e1", "json": {"event": "agent-entries", "data": {"id": "$sid", "seq": "$number", "entries": {"$contains": [["$any", {"type": "stop"}]]}}}, "within_ms": 10000}
+{"do": "expect", "conn": "e2", "json": {"event": "agent", "data": {"id": "$sid", "session": {"status": "idle"}}}, "within_ms": 10000}
+{"do": "count_events", "conn": "e2", "for_ms": 300, "none": ["agent-entries"]}
+{"do": "count_events", "conn": "e1", "for_ms": 300}
+{"do": "send", "conn": "e1", "json": {"id": 3, "method": "agents/entries/unsubscribe", "params": {"session": "$sid"}}}
+{"do": "expect", "conn": "e1", "json": {"id": 3, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$sid", "text": "again"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "expect", "conn": "e2", "json": {"event": "agent", "data": {"id": "$sid", "session": {"status": "idle"}}}, "within_ms": 10000}
+{"do": "count_events", "conn": "e1", "for_ms": 300, "none": ["agent-entries"]}

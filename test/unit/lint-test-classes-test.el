@@ -274,6 +274,61 @@ the clock fixture is virtual (except `drgnx-test-real-time'); a value stays a re
                 t))))
     (nreverse out)))
 
+;;;; Waits: an event wait is bounded and measures nothing
+
+(defconst drgnx-lint-classes--wait-max-secs 300
+  "The longest `:secs' a `drgnx-test-wait' may ask for: a deadline is a failure message, never a hang.")
+
+(defun drgnx-lint-classes--durationish-p (f)
+  "F holds a wall-clock reading, or a variable that names a duration: what a wait's result must not be held to."
+  (let (hit)
+    (drgnx-lint-classes--walk
+     f (lambda (y)
+         (when (or (drgnx-lint-classes--clock-read-p y)
+                   (and y (symbolp y) (string-match-p "elapsed\\|duration\\|-secs\\'\\|-seconds\\'\\|-ms\\'"
+                                                      (symbol-name y))))
+           (setq hit t))
+         hit))
+    hit))
+
+(defun drgnx-lint-classes--waits (form)
+  "The ways FORM misuses `drgnx-test-wait', as strings: a `:secs' that is nil, not above 0 or over
+`drgnx-lint-classes--wait-max-secs' (no deadline, or one that is no failure message); a predicate that reads the wall
+clock (an elapsed wait hidden in an event wait); its result compared against a duration or a clock reading."
+  (let ((form (drgnx-lint-classes--virtual form)) out)
+    (drgnx-lint-classes--walk
+     form
+     (lambda (x)
+       (when (eq (car-safe x) 'drgnx-test-wait)
+         (let ((secs (plist-member (cddr x) :secs)))
+           (when (and secs (let ((v (cadr secs)))
+                             (or (null v) (and (numberp v) (or (<= v 0) (> v drgnx-lint-classes--wait-max-secs))))))
+             (push (format "drgnx-test-wait with :secs %S" (cadr secs)) out)))
+         (let (hit)
+           (drgnx-lint-classes--walk (cadr x) (lambda (y) (when (drgnx-lint-classes--clock-read-p y) (setq hit t)) hit))
+           (when hit (push "a drgnx-test-wait predicate reads the wall clock" out))))
+       (when (and (memq (car-safe x) drgnx-lint-classes--comparisons)
+                  (seq-some (lambda (a) (eq (car-safe a) 'drgnx-test-wait)) (cdr x))
+                  (seq-some #'drgnx-lint-classes--durationish-p (cdr x)))
+         (push (format "a drgnx-test-wait result compared against a duration: %S" x) out))
+       nil))
+    (nreverse (delete-dups out))))
+
+(defconst drgnx-lint-classes--waits-exempt '("test/unit/wait-fixture-test.el")
+  "The file that tests the wait itself.")
+
+(defun drgnx-lint-classes--wait-violations ()
+  "`drgnx-lint-classes--waits' over every top-level form of every classified, non-timing test file."
+  (let (out)
+    (dolist (rel (drgnx-lint-classes--files))
+      (let ((file (expand-file-name rel drgnx-dir)))
+        (unless (or (member rel drgnx-lint-classes--waits-exempt) (eq (drgnx-run-ert--file-class file) :timing))
+          (dolist (form (seq-remove (lambda (f) (and (eq (car-safe f) 'ert-deftest) (eq (drgnx-lint-classes--own-class f) :timing)))
+                                    (drgnx-lint-classes--forms file)))
+            (dolist (m (drgnx-lint-classes--waits form))
+              (push (format "%s: %s" rel m) out))))))
+    (nreverse out)))
+
 ;;;; The rules, over one `ert-deftest' form
 
 (defun drgnx-lint-classes--rule-det (test helpers)
@@ -331,6 +386,32 @@ a test reaches by a call: a command a test binds to a key is named by `function'
 (ert-deftest drgnx-lint/cond-tests-have-no-fixed-pause ()
   (should-not (drgnx-lint-classes--violations :cond #'drgnx-lint-classes--rule-cond))
   (should-not (drgnx-lint-classes--gui-pauses)))
+
+(ert-deftest drgnx-lint/event-waits-are-bounded-and-measure-nothing ()
+  (should-not (drgnx-lint-classes--wait-violations)))
+
+(ert-deftest drgnx-lint/audit-cond-register ()
+  ;; test/audit-cond-allowed.eld: each row names a test that exists, with a reason and the slice that converts it
+  (let ((rows (with-temp-buffer (insert-file-contents (expand-file-name "test/audit-cond-allowed.eld" drgnx-dir))
+                                (read (current-buffer))))
+        (text (mapconcat (lambda (f) (with-temp-buffer (insert-file-contents (expand-file-name f drgnx-dir)) (buffer-string)))
+                         (drgnx-lint-classes--files) "\n")))
+    (dolist (r rows)
+      (should (string-search (format "(ert-deftest %s " (car r)) text))
+      (should (stringp (plist-get (cdr r) :why)))
+      (should (stringp (plist-get (cdr r) :slice))))))
+
+(ert-deftest drgnx-lint/event-wait-lint-bites ()
+  (dolist (bad '("(drgnx-test-wait (lambda () t) :secs nil)" "(drgnx-test-wait (lambda () t) :secs 0)"
+                 "(drgnx-test-wait (lambda () t) :secs 100000)"
+                 "(drgnx-test-wait (lambda () (> (- (float-time) t0) 0.5)))"
+                 "(let ((elapsed 1)) (< (drgnx-test-wait #'foo) elapsed))"
+                 "(< (drgnx-test-wait #'foo) (- (float-time) t0))"))
+    (should (drgnx-lint-classes--waits (car (read-from-string bad)))))
+  (dolist (ok '("(drgnx-test-wait (lambda () t))" "(drgnx-test-wait (lambda () t) :secs 60 :what \"x\")"
+                "(= 3 (drgnx-test-wait (lambda () (length x))))"
+                "(drgnx-test-with-clock () (drgnx-test-wait (lambda () (> (float-time) 5))))"))
+    (should-not (drgnx-lint-classes--waits (car (read-from-string ok))))))
 
 (ert-deftest drgnx-lint/only-timing-asserts-the-clock ()
   (should-not (drgnx-lint-classes--violations nil #'drgnx-lint-classes--rule-asserts)))
@@ -583,7 +664,8 @@ a test reaches by a call: a command a test binds to a key is named by `function'
 
 (ert-deftest drgnx-run-ert/the-audit-records-a-real-sleep-and-ignores-the-clock ()
   (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
-  (let ((drgnx-run-ert--audit-seen nil) (drgnx-run-ert--audit-file nil) (inhibit-message t))
+  (let ((drgnx-run-ert--audit-seen nil) (drgnx-run-ert--audit-file nil) (inhibit-message t)
+        (drgnx-run-ert--audit-only nil))   ; this test is `cond': the audit of its own run restricts nothing here
     (unwind-protect
         (progn
           (drgnx-run-ert--audit-advise)
@@ -593,6 +675,8 @@ a test reaches by a call: a command a test binds to a key is named by `function'
             (setq drgnx-run-ert--audit-seen nil)
             (accept-process-output nil 0)  ; no wait: not a use of real time
             (let ((pipe (make-pipe-process :name "drgnx-audit-pipe" :noquery t)))
+              ;; a pipe process starts no child and opens no socket: a stand-in connection is no real time
+              (should-not drgnx-run-ert--audit-seen)
               (setq drgnx-run-ert--audit-seen nil)
               (unwind-protect (accept-process-output pipe 0) ; a timeout of 0 on a live process is a look too
                 (delete-process pipe)))
@@ -626,7 +710,7 @@ a test reaches by a call: a command a test binds to a key is named by `function'
   (let* ((file (drgnx-lint-classes-test--tmp ";; test-class: det"
                                              '(ert-deftest x/sleeps () (sleep-for 0.01) (should t))
                                              '(ert-deftest x/quiet () (should t))
-                                             '(ert-deftest x/own-tag-is-cond () :tags '(:cond) (sleep-for 0.01) (should t))))
+                                             '(ert-deftest x/own-tag-is-cond () :tags '(:cond) (accept-process-output nil 0.01) (should t))))
          (dir (file-name-directory file)) (results (expand-file-name "r.json" dir))
          (run (lambda (&rest env)
                 (let ((process-environment (append env (list (concat "DRGNX_TEST_RESULTS=" results)
@@ -643,6 +727,32 @@ a test reaches by a call: a command a test binds to a key is named by `function'
     (let ((j (funcall json)))
       (should (equal 1 (plist-get j :failed)))
       (should (equal "x/sleeps" (plist-get (aref (plist-get j :failures) 0) :name))))
+    (should (eql 0 (funcall run "DRGNX_TEST_AUDIT=1")))
+    (should (eql 0 (funcall run)))))
+
+(ert-deftest drgnx-run-ert/an-audited-run-fails-a-cond-test-that-sleeps-but-not-one-that-waits-for-events ()
+  ;; a cond test may wait for an event and start a process, never sleep on time: sleep-for and sit-for fail it
+  (let* ((file (drgnx-lint-classes-test--tmp ";; test-class: cond"
+                                             '(ert-deftest x/sleeps () (sleep-for 0.01) (should t))
+                                             '(ert-deftest x/sits () (sit-for 0.01) (should t))
+                                             '(ert-deftest x/waits () (accept-process-output nil 0.01) (should t))
+                                             '(ert-deftest x/runs-a-child () (should (eql 0 (call-process "true"))))))
+         (dir (file-name-directory file)) (results (expand-file-name "r.json" dir))
+         (run (lambda (&rest env)
+                (let ((process-environment (append env (list (concat "DRGNX_TEST_RESULTS=" results)
+                                                             "DRGNX_TEST_SELECTOR" "DRGNX_TEST_SHUFFLE" "DRGNX_TEST_RERUN"
+                                                             "DRGNX_TEST_LEAKS" "DRGNX_TEST_AUDIT" "DRGNX_TEST_AUDIT_FAIL"
+                                                             "DRGNX_TEST_AUDIT_ALL")
+                                                   process-environment)))
+                  (call-process (expand-file-name invocation-name invocation-directory) nil nil nil
+                                "--batch" "-Q" "-L" (file-name-directory (locate-library "run-ert.el"))
+                                "-l" (locate-library "run-ert.el") "-f" "drgnx-run-ert-batch" dir))))
+         (json (lambda () (json-parse-string (with-temp-buffer (insert-file-contents results) (buffer-string))
+                                             :object-type 'plist))))
+    (should-not (eql 0 (funcall run "DRGNX_TEST_AUDIT=1" "DRGNX_TEST_AUDIT_FAIL=1")))
+    (let ((j (funcall json)))
+      (should (equal '("x/sits" "x/sleeps")
+                     (sort (mapcar (lambda (f) (plist-get f :name)) (plist-get j :failures)) #'string<))))
     (should (eql 0 (funcall run "DRGNX_TEST_AUDIT=1")))
     (should (eql 0 (funcall run)))))
 

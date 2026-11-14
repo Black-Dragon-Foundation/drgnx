@@ -16,6 +16,7 @@ use crate::agents::Origin;
 use crate::agents::session::{self, Session};
 use crate::dispatch::Caller;
 use crate::front::Front;
+use crate::hook_points;
 use crate::matrix_gate::{ActionCtx, Delegation, Gate, Manager};
 use crate::runner::{self, TaskTree};
 use norn::matrix::{Action, Cell, Effective, Who, narrow};
@@ -77,6 +78,8 @@ struct State {
     trees: HashMap<String, TaskTree>,
     /// Branch → the merge gate's card.
     gates: HashMap<String, i64>,
+    /// Branches whose before-commit hook the user dismissed for the manager's next merge.
+    hook_dismissed: HashSet<String>,
     /// Managers to rotate when their turn ends, and the `manager-context` card that waits for the news.
     deferred: HashMap<String, Option<i64>>,
 }
@@ -90,6 +93,11 @@ pub struct Managers {
 impl Managers {
     fn st(&self) -> std::sync::MutexGuard<'_, State> {
         self.st.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The user dismissed the before-commit hook for BRANCH: the manager's next merge of it skips the hooks.
+    pub(crate) fn dismiss_hook(&self, branch: &str) {
+        self.st().hook_dismissed.insert(branch.to_owned());
     }
 
     /// A job ended: its line is in the digest of the manager above the session that started it.
@@ -144,11 +152,14 @@ pub async fn role(f: &Front, c: &Caller, p: RoleParams) -> Result<bool, Error> {
 async fn link_budget(f: &Front, sid: &str, job: Option<&str>, cwd: &Path) {
     let b = &f.core.budgets;
     let mine = session::scope_of(Role::Manager, sid);
-    let dir = cwd.to_path_buf();
-    let project = tokio::task::spawn_blocking(move || norn::project::resolve(&dir).map(|p| p.id))
-        .await
-        .ok()
-        .flatten();
+    let project = match crate::graph::project_of(cwd).await {
+        Ok(p) => p.map(|p| p.id),
+        // the budget links up to its plan only, and the log says why
+        Err(e) => {
+            tracing::warn!(sid, "the manager's budget scope: {e}");
+            None
+        }
+    };
     let project = project.map(|p| BudgetScope::Project(Bounded(p)));
     match (job, &project) {
         (Some(j), Some(pr)) => {
@@ -195,8 +206,10 @@ async fn slice_of(f: &Front, id: &str, from: u64, n: Option<u64>) -> Result<Slic
         .await
         .map_err(|e| session::internal(format!("agents/slice: {e}")))?;
     let more = rows.len() as u64 > n;
-    let mut steps: Vec<runstav::methods::timeline::Step> =
-        rows.into_iter().map(crate::timeline::step_of).collect();
+    let mut steps: Vec<runstav::methods::timeline::Step> = rows
+        .into_iter()
+        .map(|r| f.core.timeline.wire_for(f, r))
+        .collect();
     steps.truncate(n as usize);
     let mids: HashSet<String> = steps.iter().filter_map(|s| s.message_id.clone()).collect();
     let entries = s.entries_for(&mids, SLICE_ENTRIES);
@@ -350,19 +363,20 @@ pub async fn run(f: Arc<Front>) {
     loop {
         every.tick().await;
         for s in f.core.agents.live_sessions() {
-            if s.role() != Role::Manager {
-                continue;
-            }
             if !matches!(s.status(), SessionStatus::Idle | SessionStatus::Waiting) {
                 continue;
             }
-            // its turn ended: the rotation the supervisor asked for happens now, and its card says so
+            // its turn ended: the rotation the supervisor asked for (a manager's, or a workflow task's agent's)
+            // happens now, and its card says so
             let waiting = f.core.manager.st().deferred.remove(&s.id);
             if let Some(card) = waiting {
                 let ok = rotate_now(&f, &s.id).await == Rotation::Done;
                 if let Some(card) = card {
-                    say_rotated(&f, card, ok).await;
+                    say_rotated(&f, s.role(), card, ok).await;
                 }
+                continue;
+            }
+            if s.role() != Role::Manager {
                 continue;
             }
             let due = {
@@ -407,6 +421,19 @@ pub async fn restart_prompt(f: &Front, sid: &str) -> String {
         out.push_str(&text);
     }
     out
+}
+
+/// What a workflow task's agent rotated past its rule pack's context share is told: its task's brief, and that its
+/// earlier work is in the worktree.
+async fn task_restart_prompt(f: &Front, sid: &str, task: &str) -> String {
+    let brief = crate::brief::for_dispatch(f, task, Some(sid))
+        .await
+        .unwrap_or_default();
+    format!(
+        "[drgnx task {task}] You were rotated past your rule pack's context share: you are a fresh session in the \
+         same worktree, and your earlier work is in its commits and files. Read git log and git status before you go \
+         on.\n\n{brief}\n\nWork only in this directory. Commit your work. Then call complete_task."
+    )
 }
 
 /// A manager's workers (from the sessions the hub recorded) and its decisions (from the graph).
@@ -469,8 +496,9 @@ pub enum Rotation {
 /// The context share at which a running turn is cut: the window is truly full.
 const FULL: f64 = 0.95;
 
-/// The supervisor's `manager-context` rule fired for manager SID.  Past the threshold the manager is rotated when its
-/// turn ends (a running turn is never cut) unless the window is full; then now.  The same path as the restart.
+/// The supervisor's `manager-context` rule fired for manager SID, or its `context` rule for a workflow task's agent.
+/// Past the threshold the session is rotated when its turn ends (a running turn is never cut) unless the window is
+/// full; then now.  The same path as the restart.
 pub async fn rotate_for_context(f: &Front, sid: &str) -> Rotation {
     let Ok(s) = f.core.agents.find(sid) else {
         return Rotation::Failed;
@@ -485,7 +513,14 @@ pub async fn rotate_for_context(f: &Front, sid: &str) -> Rotation {
 }
 
 async fn rotate_now(f: &Front, sid: &str) -> Rotation {
-    let first = restart_prompt(f, sid).await;
+    let Ok(s) = f.core.agents.find(sid) else {
+        return Rotation::Failed;
+    };
+    let first = match (s.role(), s.observe().task) {
+        (Role::Manager, _) => restart_prompt(f, sid).await,
+        (_, Some(task)) => task_restart_prompt(f, sid, &task).await,
+        (_, None) => return Rotation::Failed,
+    };
     if session::rotate(&f.core.agents, f, sid, first).await {
         Rotation::Done
     } else {
@@ -506,15 +541,21 @@ pub async fn note_card(f: &Front, sid: &str, card: i64) {
         }
     };
     if !waiting {
-        say_rotated(f, card, true).await;
+        let role = f.core.agents.find(sid).map_or(Role::Manager, |s| s.role());
+        say_rotated(f, role, card, true).await;
     }
 }
 
-async fn say_rotated(f: &Front, card: i64, ok: bool) {
-    let title = if ok {
-        "manager-context: rotated when its turn ended; a fresh session has its digest and open decisions"
-    } else {
-        "manager-context: could not be rotated when its turn ended"
+async fn say_rotated(f: &Front, role: Role, card: i64, ok: bool) {
+    let title = match (role, ok) {
+        (Role::Manager, true) => {
+            "manager-context: rotated when its turn ended; a fresh session has its digest and open decisions"
+        }
+        (Role::Manager, false) => "manager-context: could not be rotated when its turn ended",
+        (_, true) => {
+            "context: rotated when its turn ended; a fresh session has its task's brief in the same worktree"
+        }
+        (_, false) => "context: could not be rotated when its turn ended",
     };
     let set = norn::write::cards::CardSet {
         title: Some(title.to_owned()),
@@ -682,7 +723,7 @@ fn owned(f: &Front, manager: &str, id: &str) -> Result<Arc<Session>, String> {
 
 /// The facts of manager tool OP called with ARGS, as the hub parsed them: the card shows them and the user's answer
 /// counts for this call only (another call of the same kind is another question).
-fn call_facts(op: &str, args: &Value) -> Facts {
+pub(crate) fn call_facts(op: &str, args: &Value) -> Facts {
     let all = format!("{op} {args}");
     let mut command = all.clone();
     if command.len() > 4096 {
@@ -704,7 +745,7 @@ fn call_facts(op: &str, args: &Value) -> Facts {
 /// The gate for MANAGER doing A with FACTS: allowed, or the refusal (a card to wait on, or never).  An action that
 /// asked is asked again only through its card (the user's answer, nothing said in a message), and only for a call
 /// with the same facts.
-async fn gate(
+pub(crate) async fn gate(
     f: &Front,
     manager: &str,
     who: &Who,
@@ -1010,6 +1051,27 @@ async fn agent_start(
     }
     let _ = f.core.runs.git().touched(&tree.path).await;
     f.core.manager.st().trees.insert(wsid.clone(), tree.clone());
+    // the worker's record: the merge gate finds the user's acceptances through its worktree
+    let cwd = tree.path.to_string_lossy().into_owned();
+    let reg = norn::write::agents::AgentRegister {
+        id: wsid.clone(),
+        kind: Some("worker".into()),
+        cwd: Some(cwd.clone()),
+        worktree: Some(cwd),
+        branch: Some(tree.branch.clone()),
+        base: Some(tree.base.clone()),
+        task: task.clone(),
+        ..Default::default()
+    };
+    if let Err(e) = f
+        .writer
+        .write(&runner::service(), "coord/agent-register", move |tx| {
+            norn::write::agents::agent_register(tx, reg.clone(), now()).map(|_| ())
+        })
+        .await
+    {
+        tracing::warn!(wsid, "the worker is not registered: {e:?}");
+    }
     if let Some(t) = &task {
         let body = crate::brief::for_dispatch(f, t, Some(&wsid))
             .await
@@ -1101,7 +1163,7 @@ async fn merge(
 ) -> Result<String, String> {
     let sid = me.id.as_str();
     let mine = branches_of(f, sid).await;
-    let Some((_, tree)) = mine
+    let Some((worker, tree)) = mine
         .into_iter()
         .find(|(_, t)| t.branch == a.branch.as_str())
     else {
@@ -1119,12 +1181,9 @@ async fn merge(
     let git = f.core.runs.git();
     // the integration branch has a tree of its own next to the workers'
     let job_tree: PathBuf = tree.path.with_file_name("_job");
-    if !job_tree.exists() {
-        let p = job_tree.to_string_lossy().into_owned();
-        runner::tick::git(&repo, &["worktree", "add", "-q", &p, &target])
-            .await
-            .map_err(|e| e.stderr)?;
-    }
+    runner::review::branch_tree(&repo, &target, &job_tree)
+        .await
+        .map_err(|e| e.stderr)?;
     if runner::tick::git(
         &job_tree,
         &["merge-base", "--is-ancestor", &tree.branch, "HEAD"],
@@ -1155,6 +1214,8 @@ async fn merge(
         }
         None => git.merge_gate(&repo, &tree).await.map_err(|e| e.stderr)?,
     };
+    // the job tree's commit before the merge: the history records what the merge changed
+    let old = crate::timeline::snapshot::head_of(&job_tree);
     match answer {
         Gate::Ask(card) => {
             f.core.manager.st().gates.insert(tree.branch.clone(), card);
@@ -1163,15 +1224,47 @@ async fn merge(
             ))
         }
         Gate::Never(why) => Err(format!("the merge gate refuses: {why}")),
-        Gate::Allow => match git.merge_into(&job_tree, &tree).await {
-            Ok(runner::git::MergeOutcome::Merged) => {
-                Ok(json!({"merged": true, "into": target}).to_string())
+        Gate::Allow => {
+            // every commit the hub makes into a user's branch goes through the before-commit hooks
+            let site = hook_points::JobSite {
+                job: sid,
+                task: &worker,
+                project: None,
+            };
+            let dismissed = f.core.manager.st().hook_dismissed.remove(&tree.branch);
+            let hooked = if dismissed {
+                Some(None)
+            } else {
+                runner::review::before_commit_hooks(f, site, None, &tree, &job_tree)
+                    .await
+                    .map_err(|e| e.message)?
+            };
+            let message = match hooked {
+                Some(message) => message,
+                None => {
+                    return Err(
+                        "a before-commit hook holds the merge (a card asks the user); call merge again after it is settled"
+                            .into(),
+                    );
+                }
+            };
+            match git
+                .merge_into(&job_tree, &tree, message.as_deref(), None)
+                .await
+            {
+                Ok(runner::git::MergeOutcome::Merged) => {
+                    if let Some(d) = f.dirs.get() {
+                        let h = &f.core.history;
+                        crate::history::merge::record(h, &d.hub, &job_tree, &tree.path, old).await;
+                    }
+                    Ok(json!({"merged": true, "into": target}).to_string())
+                }
+                Ok(runner::git::MergeOutcome::Conflict(files)) => {
+                    Ok(json!({"merged": false, "conflicts": files}).to_string())
+                }
+                Err(e) => Err(format!("merge failed: {}", e.stderr)),
             }
-            Ok(runner::git::MergeOutcome::Conflict(files)) => {
-                Ok(json!({"merged": false, "conflicts": files}).to_string())
-            }
-            Err(e) => Err(format!("merge failed: {}", e.stderr)),
-        },
+        }
     }
 }
 

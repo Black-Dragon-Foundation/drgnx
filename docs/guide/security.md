@@ -25,10 +25,12 @@ Every other folder is untrusted, including the projects you open, until you trus
 
 ## The "Restricted Mode" mark
 
-A file from an untrusted folder shows **Restricted Mode** in the status bar, in a quiet colour from your theme;
-hovering it says what that means (Flymake checkers and symbol shorthands from the folder are off). Click it
-to trust the file's folder: its project's root when the file is in a project (a git repository, for example), else
-the file's own folder. The mark is not shown for remote files, and Trust This Folder refuses a remote folder.
+A file from an untrusted folder shows a small shield in the status bar, in your theme's warning colour (a terminal's
+text bar says **Restricted Mode**); hovering it says what that means (Flymake checkers and symbol shorthands from
+the folder are off). Clicking it (**About Restricted Mode** in the palette) says so again and offers to trust the
+file's folder: its project's root when the file is in a project (a git repository, for example), else the file's own
+folder; yes runs Trust This Folder, which shows the folder's code first. For a folder that is never trusted (below)
+it says that and asks nothing. The mark is not shown for remote files, and Trust This Folder refuses a remote folder.
 
 A folder that holds far more than one project is never trusted: `/`, your home folder, the temp folder, `/tmp/`,
 `/var/tmp/` and `/dev/shm/`, or a folder above any of them. A file lying directly in one of them has to move into a
@@ -80,6 +82,10 @@ The rules behind it:
   why. Emacs 31.2 does the same; drgnx adds the check on Emacs versions that lack it.
 - **Symbol shorthands** (`read-symbol-shorthands` in a file's or folder's local variables). They are dropped when
   the file opens, and given back when you trust the folder.
+- **Debugging.** A launch configuration runs programs and a debug adapter with your rights, so the hub starts none
+  in a folder it was not told is trusted: Start Debugging there asks first, and Trust This Folder tells the hub.
+  Untrust This Folder stops that folder's debug sessions at once. Your own configurations and adapters
+  (`drgnx-debug-configurations`, `drgnx-debug-adapters`) are never taken from a project's settings.
 
 ## What is guarded everywhere
 
@@ -92,7 +98,7 @@ The rules behind it:
 - **Remote names in compile and grep output.** In a local compilation or grep buffer, a remote file name or an
   "Entering directory" line naming a remote directory is read as a local name (quoted with `/:`). Output text never
   makes Emacs connect anywhere, and clicking such an error opens nothing remote.
-- **Links in the Work tab and agent edits.** A Work row, graph box, commit or worktree that names a remote file opens
+- **Links in the Work space and agent edits.** A Work space file or step that names a remote file opens
   nothing and says so. When an agent proposes a change to a remote name from a local session, the review does not
   open and the agent is told the change was rejected; in a session started in a remote folder, its files review as
   usual.
@@ -162,14 +168,13 @@ The hub holds your provider keys, in its memory only (above). What else gets nea
   never an agent's session socket, and never the Messages API agents use. One process holds one such token (asking
   again replaces it); it goes when that process does, and it survives a restart of the hub. A keyless provider on
   your machine (a local Ollama, llama.cpp, TEI) needs no key and is reached directly. Chat, completion, edits, commit
-  messages, embeddings and gptel all take this route ([ai.md](ai.md#where-requests-go)); the editor fetches its token
-  again on every reconnect and keeps it in memory only. The search indexer job asks for a token of its own, so it goes
-  with the job. A background request that has no token yet fails with "drgnx hub is starting; try again" and never
+  messages, embeddings all take this route ([ai.md](ai.md#where-requests-go)); the editor fetches its token
+  again on every reconnect and keeps it in memory only. A background request that has no token yet fails with "drgnx hub is starting; try again" and never
   waits.
 - **The editor keeps no key once the hub has one.** AI: Load Keys (and onboarding, the Store key button of Agent
   Settings, a command that finds a key in your Keychain or keyring) reads a key, hands it to the hub over the proven
-  socket and, once the hub answered, forgets it: it is gone from the editor's memory and auth-source's cache, the
-  gptel backend holds the editor token, and nothing the editor sends carries it but that one hand-over. Until a hub
+  socket and, once the hub answered, forgets it: it is gone from the editor's memory and auth-source's cache, and
+  nothing the editor sends carries it but that one hand-over. Until a hub
   runs, a key AI: Load Keys found waits in memory and goes when the editor connects. Checking whether a provider is
   usable (AI: Choose, onboarding's checks) reads its key only to see that there is one, and keeps nothing: neither the
   key nor auth-source's copy of the file. When the hub restarts (an update, `drgnx hub restart`), the editor hands
@@ -179,7 +184,8 @@ The hub holds your provider keys, in its memory only (above). What else gets nea
   and an agent of a keyed profile (OpenRouter, Anthropic, Kimi, DeepSeek) does not start without the hub: "the drgnx
   hub is not running; agents reach providers through it".
 - **Which keys the hub holds** is all anyone can ask of it: the provider names (`ratatoskr doctor`, and the hub's
-  `gateway/keys-held`), never a key. Your editor judges a provider usable from that list.
+  `gateway/keys-held`), never a key. Your editor judges a provider usable from that list. When you store a new key
+  for a provider, the hub forgets the old one at once (`gateway/revoke-key`).
 - **Keys in your environment** (`OPENROUTER_API_KEY` and the like) stay where you put them: drgnx never unsets them,
   so the programs your Emacs starts (shells, `compile`) still see them; agents do not (their environment drops every
   provider key) and use the copy the hub holds. `drgnx doctor` notes such a key ("OPENROUTER_API_KEY is set in this
@@ -232,7 +238,7 @@ path after resolving links, so a link from a project into `~/org`, or `..` in a 
 - **The work scan's own door.** The scan that reads your plans (`drgnx work scan`) applies the same rules in Lisp
   (`core/drgnx-deny.el`, held to the same table of cases as the hub's check) before it sends anything: it skips
   files the rules deny, and drops a plan's `**Spec:**` that names one, even through a link. The hub checks again
-  (defence in depth). The code indexer asks the same check with the opt-ins ignored: a file you opened for the store
+  (defence in depth). The code indexer (Hrafn, in the hub) asks the same check with the opt-ins ignored: a file you opened for the store
   is not opened for the code index. A scan root inside `~/org` (or `~/org` itself) is refused the same way, opt-ins
   ignored, with "the work tracker never reads a project inside ~/org (personal notes)": nothing under it is read and
   git never runs there (nor in a repository inside `~/org` that a project contains); the other roots are scanned.
@@ -240,9 +246,8 @@ path after resolving links, so a link from a project into `~/org`, or `..` in a 
   in your providers), an entity whose source, path or id the rules deny is never sent, even one stored before you
   added its folder to your deny list. A text you excise (or a file you revoke) while the provider is answering gets
   no vector of what was sent.
-- **The code search index never reads `~/org`.** `drgnx search index` refuses a project whose root is inside
-  `~/org` (or reaches it through a link) with "the search index never reads ~/org (personal notes)", before it
-  reads anything there. For a project that contains `~/org` (your home folder as a git repository), every file whose
+- **The code search index never reads `~/org`.** The hub refuses to index a project whose root is inside
+  `~/org` (or reaches it through a link), before it reads anything there. For a project that contains `~/org` (your home folder as a git repository), every file whose
   real path is under `~/org` is left out, the board excepted; nothing of it is read, sent to an embedding provider
   or stored.
 - **Every other way in is checked too.** Importing an export (`graph/import`) drops a record that names a denied
@@ -293,9 +298,9 @@ widens what it sees.
   another project.
 - **Only you make, change and revoke grants.** The store refuses any write of a grant that does not come from you,
   whatever path it takes (an agent's tool, a proposed change, an import, a scanned file), and the same holds for the
-  store's settings. An agent can only ask (an access card in the Work cockpit), never grant itself or another
+  store's settings. An agent can only ask (an access card in the Work space), never grant itself or another
   anything.
-- **An agent's request** (`access_request`) waits on a card in the Work cockpit with its reason. You answer with one
+- **An agent's request** (`access_request`) waits on a card in the Work space with its reason. You answer with one
   of four choices: **This session** (that session only, while it lives and for a day at most), **Its project**
   (every agent working in the requester's project), **Its profile** (every session of its profile) or **Refuse**.
   The first three give a read grant of the project it asked for; the agent is told either way. drgnx's own
@@ -345,6 +350,35 @@ that is allowed to write in a folder still cannot change what your Emacs loads a
   `ratatoskr sandbox check` and the doctor say so. There, as for a new file, [workspace trust](#workspace-trust)
   guards them: a folder's settings code runs only after you review it.
 
+## Agents and your CLI's login folder
+
+An agent's CLI needs its login folder (`~/.claude`, `~/.codex` or `~/.gemini`), and your own CLI, outside any sandbox,
+uses the same folder: its settings and their hooks, commands, skills, plugins, `CLAUDE.md`, and also the keys of your
+Claude Code's daemon and live sessions, your prompt history and every project's transcripts. So a session sees only
+the parts of its own CLI's login folder that the CLI uses (never another CLI's, never the folder itself), and writes
+only some of them:
+
+| CLI | Readable only | Writable |
+|---|---|---|
+| Claude Code | `settings.json`, `CLAUDE.md`, `agents/`, `commands/`, `skills/`, `plugins/`, `output-styles/`, `keybindings.json` | `.credentials.json` (the token, refreshed in place), `todos/`, and `projects/<the session's folder>/` (its transcript) |
+| Codex | `config.toml`, `AGENTS.md`, `prompts/`, `skills/`, `rules/` | `auth.json`, `log/`, and a `sessions/` of its own |
+| Gemini CLI | `google_accounts.json`, `settings.json`, `GEMINI.md`, `commands/`, `extensions/` | `oauth_creds.json`, and a `tmp/` of its own |
+
+A missing writable folder is made first; a file that does not exist is not made (a login that keeps its token
+elsewhere, such as the macOS keychain, has none). One of the readable files that is a link, into your dotfiles say,
+is read where it really is. Everything else (`hooks/`, `shell-snapshots/`, which Claude Code's Bash tool sources,
+Claude Code's `daemon/` and `sessions/` with their keys, `history.jsonl`, the other projects' folders) cannot be
+read, written or added to.
+
+A chat in your project runs in the folder your own Claude Code uses there, so its `projects/` folder would be yours:
+your transcripts and the project's auto memory. On the full tier the chat gets an empty folder of its own (in its
+scratch folder) in that place, and sees nothing of yours; on the reduced tier and on macOS it gets none, and Claude Code
+keeps no transcript of that chat. Codex's `sessions/` and Gemini's `tmp/` hold every session of that CLI, yours too, so
+no session gets yours: on the full tier each gets an empty folder of its own (in its scratch folder) in that place,
+which keeps what it records while that folder lasts; on the reduced tier and on macOS it gets none, so Codex and
+Gemini CLI there cannot keep or resume a session of their own (if the CLI cannot start without one, use the full
+tier).
+
 ## Secrets in the store
 
 An agent's write to the store that looks like a credential is refused ("looks like a secret; do not store
@@ -364,6 +398,10 @@ The store keeps every version of what is written into it. When a secret or a per
 - Then the store file is compacted, so the old bytes leave the file and its write-ahead log. If a drgnx editor still
   has the store open for reading, the log cannot be emptied yet: you are told so, and you can run the clean-up again
   after closing it.
+- A **revert honours the lock**: it restores only what the agent could have written itself. The protected paths (`.git`,
+  the provider's configuration folders, `.envrc`, `mise.toml`) and the credential patterns are never restored, a link is
+  restored as a link and never followed, and the restore of a sandboxed agent's tree runs inside its sandbox. A checkpoint
+  can therefore never widen a sandbox. `history.db` is a privacy door like the store: the personal-notes deny-list applies to it.
 - **Copies outside the store** are listed, not changed silently: the dated backups and the pre-upgrade copies
   (`backup/work-pre7-*.db`, `work.db.schema5`, and the `work.db.schema7-*` files a rollback set aside) that still
   hold the text, which you can have deleted; exports, which are
@@ -383,14 +421,54 @@ edit code, commit, push, change settings), columns are its role (manager, worker
 provider. Each cell is Allow, Ask or Never, sometimes with a limit. Three presets ship: Cautious, Balanced and
 Autonomous. Your own cells, a project's and a plan's refine the preset; where several columns apply the most
 restrictive wins, and a more specific column never widens. `unsandboxed` and `user.private` are never allowed.
+Three rows are about the agent's own browser, which runs inside its sandbox ([agent-browser.md](agent-browser.md)):
+
+- **`browser`**: the session gets a browser of its own, which can reach only the agent's local servers. Cautious
+  asks; Balanced allows it for managers and workers and asks for chats; Autonomous allows it.
+- **`browser.web`**: that browser may open any public site (HTTPS and plain HTTP, ports 80 and 443). Only
+  Autonomous allows it; the other presets ask.
+- **`plugin.abilities`**: an approved plugin's tools (its abilities) are offered to the session and may run. Never
+  hides them; Ask shows a card with the tool and its arguments for every call.
+- **`browser.private`**: that browser may reach a private address you name (your LAN, your tailnet, this computer).
+  It asks in every preset, Autonomous included, and an Allow you write for it still asks: no setting turns this
+  card off.
+
+Five rows are about debugging with an agent ([debugging.md](debugging.md#debugging-with-an-agent)); its forks are sealed, so a fork
+with network would use the `network` row:
+
+- **`debug.read`**: read your debug sessions and recorded runs (their values included). Cautious asks; the others
+  allow it.
+- **`debug.probe`**: add or remove its own probes and breakpoints. Cautious asks; Balanced allows it for managers and
+  workers and asks for chats; Autonomous allows it.
+- **`debug.fork`**: replay a recorded run in a sealed fork, change a value, and check a fix in a fresh fork. Cautious
+  asks; the others allow it.
+- **`debug.live-eval`**: evaluate an expression in your live session. Cautious never; the others ask.
+- **`debug.drive`**: step or continue your live session. Cautious never; Balanced asks; Autonomous allows it. Your
+  own step wins: an agent's step after yours is refused.
+
 A session's project and plan are those of the task it works on (a plan run's, or the task it was started with).
 A chat started in a project (the Agents panel, Review Branch) sees the project read-only (a linked worktree's
 repository too, so it can run `git log` and `git diff`) and writes only a scratch folder of its own; with `chat.project-read` set to Never for it, such a start is refused (start the chat without a
 project).
 
+- **`chat.project-edit`** (pair mode): a chat in your project may edit your own checkout, live, through the editor
+  that has the file open. Cautious never; Balanced asks, which here means the Pair toggle is yours to turn on;
+  Autonomous allows it, so chats start paired. It replaces the chat's `code.edit`, which stays Never: the chat's own
+  edit tools and commands still cannot write the checkout. The hub's door also needs `chat.project-read`, and it
+  never writes `.git/`, the agents' own configuration (`.claude`, `.codex`, `.gemini`, `.envrc`, `mise.toml`), a CI
+  or build file (`.github/`, `Makefile*`, `build.rs`, `*.sh`: `code.ci-config` is Never for chats), a credential
+  file, or anything outside the checkout, links resolved. Every file the hub serves a chat (its `read_file`, an ACP
+  `fs/read_text_file`) skips the same credential files the sandbox hides.
+
+- **`huddles`**: when two agents' work clashes (their changes will conflict when they merge, or their decisions
+  contradict) the hub may open a huddle: each states its position, at most twice, and you decide. Balanced and
+  Autonomous allow it; Cautious asks first (a card, nothing prompts). A reply reaches the other agent quoted, as that
+  agent's text, never as an instruction, and no reply answers a card; an agreement is a card for you, never a
+  recorded decision. A clash against a decision never opens one.
+
 - **Ask** puts one card in front of you showing what the hub itself knows (the command, the paths, the diff's
   hash), never the agent's own description. The same question open twice is one card. An agent's permission request
-  waits under that card's id: answering the request settles the card, and settling the card in the Work cockpit
+  waits under that card's id: answering the request settles the card, and settling the card in the Work space
   answers the request. Before the agent goes on the hub checks again: if the matrix has since become Never for it,
   it is refused whatever you answered.
 - **Away:** when you are away the matrix can switch to a stricter (or looser) preset on its own; it applies from the
@@ -418,21 +496,99 @@ project).
     `chatgpt.com` and `auth.openai.com`; Gemini's API, `oauth2.googleapis.com` and `cloudcode-pa.googleapis.com`;
   - the hosts you list under `agents-net-hosts` for the session's network tier (`provider-only`; none by default).
 
-  Anything else is refused. Each refused host is recorded once per session as an event (`proxy-denied`, with the
+  A plugin's HTTP is not the agent's: it reaches only the hosts its approved manifest names, and where the session's
+  network is not open, only those you also list on the `plugin` tier of `agents-net-hosts`
+  ([plugins.md](plugins.md)). Anything else is refused. Each refused host is recorded once per session as an event (`proxy-denied`, with the
   host), so you can see what an agent tried to reach; it never raises a card. Optional traffic a CLI sends
   (telemetry, error reports, update checks) is refused the same way; Claude is told not to send it
   (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, [agents.md](agents.md#jobs-and-your-claude-settings)). To let a session reach another host, add it to
   the `provider-only` list of `agents-net-hosts`.
 - **Container jobs** (`job.container`) run only images you put on `agents-container-images`, pinned by digest. The hub
   builds the `podman run` line itself: no capabilities, no new privileges, a read-only root, the worktree as the only
-  mount, no network of its own (a granted network is the job's allow-list proxy through a mounted socket and a copied forwarder, `drgnx-fwd`, nothing else; the list is the setting `agents-net-hosts`, by default the package hosts of crates.io, npm and PyPI, port 443), limits from `agents-job-memory` and `agents-job-cpus`. An agent chooses an image name and a
+  mount, no network of its own (a granted network is the job's allow-list proxy, reached only through its relay sidecar `drgnx-px` on the job's own loopback, nothing else; the list is the setting `agents-net-hosts`, by default the package hosts of crates.io, npm and PyPI, port 443), limits from `agents-job-memory` and `agents-job-cpus`. An agent chooses an image name and a
   command and nothing else (`exec/start` refuses any other field); the command is never read as a podman option. The hub pulls the image itself (600 s at most) and names the container `drgnx-job-<id>`, removing leftovers at start.
+- **Networked container jobs** need rootless podman 5.0 or newer and nothing else: no podman network, no bridge, no
+  pasta. The job shares its sidecar's network namespace, which has a loopback only and no route; the namespace belongs
+  to the sidecar's user namespace (the sidecar runs as `nobody` there), so even root inside the job can't change it.
+  Each job has its own sidecar, so two jobs can't see each other. The job can't take the relay's port: `drgnx-px`
+  listens without `SO_REUSEPORT` as another user. A job is refused, before anything starts, with one of:
+  "Networked container jobs need podman 5.0 or newer; this host has `*version*`." (on a Mac: "… inside podman
+  machine; this machine runs `*version*`: update its OS image (`podman machine os upgrade`), or remove and re-create
+  the machine."), "drgnx runs containers rootless; this podman is rootful.", "drgnx could not build its proxy
+  image: …", "The job's proxy did not start within 10 s: …", or the memory and cgroup reasons any container job has. A running one ends `infra` with its reason as the log's last line
+  (`drgnx: infra: proxy: …`): the sidecar exited (its code and what it means; 137 is most likely its memory limit),
+  broke the channel's rules, or stopped reading; the hub stopped; or a hub that restarted found it running. A port of
+  your computer is reached only as `host.drgnx.internal:PORT` and only after you allow it on a card (the next section);
+  the hub's own ports never, whatever you allow. On SELinux hosts nothing is to be set up: the job's network and its
+  keys need no socket, file or policy rule, for an unconfined user and a confined `staff_u` one alike (a keyed job
+  reads its keys through its own sidecar, on a name that exists only in the job's network namespace). A confined
+  `user_u` login (domain `user_t`) can't run rootless podman (it needs `newuidmap`, which the stock policy denies
+  `user_t`), so drgnx refuses its container jobs, at the job's start and in `drgnx doctor`, with that reason and what
+  an admin would change: another SELinux user for the login (`semanage login -m -s staff_u LOGIN`), or a subuid range
+  plus a local policy module letting `user_t` run `newuidmap`. Such a login can't be a runner either: the runner's
+  check refuses it with the same reason. The shape was checked on Fedora 45 with SELinux
+  enforcing; Ubuntu (AppArmor) is CI's lane; RHEL and openSUSE are expected to work, unverified. **macOS** (podman machine) is expected to work, unverified: the relay crosses the
+  machine over podman's SSH connection (about 170 MB/s into the job and 87 MB/s back on the test VM, before gvproxy),
+  a machine restart ends running networked jobs, the machine's SSH and REST ports are never opened by a grant, and
+  gvproxy forwards ports that containers publish to the Mac's loopback, so a container you run yourself with `-p`
+  is reachable from the Mac as usual.
+- **Keyed jobs** (`job.keys`): a job naming keys may name only those on the project's `drgnx-runners-job-keys` list,
+  and an agent's needs the matrix's `job.keys` too (ask under Cautious and Balanced; allowed for the manager and workers
+  under Autonomous; never for chat). The values reach the job in memory only, on a runner of yours or on this machine
+  (through a socket of the job's own, the only one beside it an agent's job may reach), are never sent to a `shared`
+  runner, and are masked in the log the hub keeps ([runners.md](runners.md#keys)).
+
+### Answering a browser card
+
+A card of the three browser rows lists its own answers, and your answer becomes a grant the hub checks before it asks
+again, so the agent's retry goes through without a second card.
+
+- **The card** is written from what the hub saw, never from the agent's words:
+  - `browser`: "*session* wants a browser in its sandbox";
+  - `browser.web`: "*session* wants to open web sites (first: *host:port*)", with the line "The agent's browser and its
+    own tools could then reach any public site; pages can send what the agent gives them";
+  - `browser.private`: "*session* wants to open *target* → *address* (*class*)", where the class is your LAN, your
+    network (IPv6), link-local, your tailnet (CGNAT) or this computer, with the line "Any page the agent opens could
+    then send requests to it, including ones that change things";
+  - `browser.private` for a container job: "Job *id* wants your port *PORT* (`host.drgnx.internal:PORT`)", with the
+    lines "Allowing it opens the port for this session: its browser and its other jobs too. Revoking it refuses the
+    next connection. Connections already open stay until they end; end the job to cut them." Its answers are the
+    browser's scopes, never a range or every private address.
+- **The answers:**
+  - **Allow once**: for `agents-browser-once-window` (10 minutes by default), and only what the card named (the web
+    card's first host, the private card's target);
+  - **Allow for this session**, and **Allow for this plan** when the session works for a plan (every session of the
+    plan then has it);
+  - for a LAN or IPv6 ULA address written as a number, also its **/24** (IPv4) or **/64** (IPv6) on the same port,
+    and **every LAN and ULA address** on any port, each for the session or the plan. A name (`printer.local`), this
+    computer (`host.drgnx.internal:PORT`), your tailnet and link-local addresses are offered one target at a time;
+  - **Refuse**: nothing is granted, and the session's browser is not asked about again.
+- **Where you answer:** the card's notice runs **Agents: Answer Permission Card** (also in the palette, where it asks
+  which card when several wait). It shows the card's line and its answers; the one you pick goes to the hub, which
+  settles the card and writes the grant. Nothing ever asks you from the background. In the Work space, Allow is
+  the narrowest answer (once) and Deny is Refuse.
+- A grant is yours alone (an agent cannot write one), and switching the row to Never ends it at once.
+
+### Hooks never widen
+
+Your hook rules and your plugins' hooks ([plugins.md](plugins.md#rules-and-hooks)) look at a step after the matrix
+has, and they can only narrow what it says. A hook's `allow` means "no objection": a step the matrix asks about is
+still asked about, and a step it refuses is refused before any hook runs. A hook can turn Allow or Ask into a refusal,
+never the other way. A hook that fails (it times out, crashes, is busy, or answers something its manifest did not
+declare) refuses the step too, unless it is declared advisory, and then its failure is a note under the step. Only
+at the hub's own tools may a hook change a call, only for the tools it names, and the tool checks the changed
+arguments, against its schema and its own matrix checks, before anything runs; at the permission seam a change is a
+failure ([plugins.md](plugins.md#before-a-tool-call)).
 
 ## Checking it
 
 `drgnx doctor` has a `security` line. It names the Emacs security issues that apply to your version (CVE numbers)
 and says OK while all of the guards above are on, or WARN naming the ones that are off. If it warns, restart drgnx:
 its startup turns the guards on.
+
+On Nidhogg the list is shorter: Nidhogg 31.1-nidhogg.4 and later carry the fixes for the TRAMP user-name issue
+(CVE-2026-108976) and the Flymake issue (CVE-2026-96442), so the doctor no longer names them. The shorthands issue
+(CVE-2026-96269) stays listed as partly fixed: its full fix is only in Emacs 32.
 
 ## What each provider obeys
 
@@ -443,14 +599,34 @@ if it were locked.
 | Provider | The lock | Where it comes from |
 |---|---|---|
 | Claude Code | policy-tier settings (no bypass or auto mode, only drgnx's hooks and permission rules, plus the deny and ask rules of your Claude settings), strict MCP config, Claude's own sandbox off (drgnx's is the boundary), mode `default` | `_meta.claudeCode.options` of the adapter |
-| Codex | `-c approval_policy={ granular = {…} }` with every category (`sandbox_approval`, `rules`, `mcp_elicitations`, `request_permissions`, `skill_approval`) asked of drgnx, `approvals_reviewer = "user"`, `sandbox_mode = "danger-full-access"` (Gleipnir is the one sandbox) | [Codex configuration reference](https://developers.openai.com/codex/config-reference); codex-acp takes `-c` overrides ([source](https://github.com/zed-industries/codex-acp/blob/main/src/lib.rs)) |
-| Gemini CLI | `--approval-mode default`; any `--yolo`, `-y` or `--approval-mode` in the profile's command is dropped | [Gemini CLI reference](https://www.mintlify.com/google-gemini/gemini-cli/reference/cli-options) |
+| Codex (codex-acp 2.x) | its environment, never argv (codex-acp ignores `-c`, and a profile's own `-c` is dropped): `INITIAL_AGENT_MODE=read-only`, codex-acp's mode whose every turn has approvals `on-request` by you (never a reviewer model) in Codex's read-only sandbox, inside drgnx's, so a write or a network call asks; `CODEX_CONFIG` with the same policy, `web_search = "disabled"`, every MCP server's tools `prompt` and the worktree `untrusted`; inside the sandbox, read-only, `/etc/codex/requirements.toml` (only that policy and sandbox, only managed hooks: a turn in another mode is refused by Codex) and `/etc/codex/config.toml` (a managed PreToolUse hook calling drgnx's `before_tool`). codex-acp takes a mode it does not know for its auto-review mode without a word, so the session is refused unless codex-acp says it is in `read-only` | codex-acp 2.5.0 `src/index.ts` (the environment it reads), `src/AgentMode.ts` (its four modes and the fallback), `src/CodexAcpClient.ts` (each turn's policy); Codex 0.165 `config/src/config_requirements.rs`, `config/src/loader/mod.rs` (the requirements and System layers), `hooks/src/engine/discovery.rs` (`mcp_tool` hooks, managed only) |
+| Gemini CLI | `--approval-mode default` (any `--yolo`, `-y` or `--approval-mode` in the profile's command is dropped); with a hook subscribed, `--admin-policy` with a file drgnx writes: the subscribed kinds' tools and every MCP tool `ask_user`, the tools of subagents and the bundled docs (which never ask) refused. Gemini drops a policy file whose rules miss a field its loader needs and runs on without it, saying so only on its stderr at exit, so drgnx checks the file as that loader does before it starts Gemini: a file that would not load is never passed, and a session with a hook subscribed is refused. drgnx's Gemini CLI build also says, when it starts, whether the file loaded and how many of its rules Gemini holds: a session it reports as not loaded, or holding fewer rules than drgnx wrote, is refused. It counts the rules by the file's name, so drgnx names the file after a hash of its content (`drgnx-<hash>.toml`), a name no system policy file has by accident | [Gemini CLI reference](https://www.mintlify.com/google-gemini/gemini-cli/reference/cli-options); Gemini CLI 0.67 `packages/core/src/policy/config.ts` (the admin tier, and that a `.toml` in `/etc/gemini-cli/policies` makes it ignore `--admin-policy`), `toml-loader.ts` (the fields every rule needs, and that a file without them is dropped) |
+| Kimi Code | `KIMI_CODE_HOME` is a folder of drgnx's own (`agents/kimi-code` in its state folder): its `config.toml`, bound read-only, has `default_permission_mode = "manual"`, `default_plan_mode = false` and an ask rule for each subscribed kind's tools (which beats Kimi's own approval of reads); `--yolo`, `-y`, `--yes`, `--auto-approve` and `--auto` are dropped; mode `default`. Plan mode is refused, because Kimi writes its plan file there without asking the hooks: a session that reports it at the start is not started, and one that switches to it is ended. A switch Kimi's engine makes without telling the client (none does today) would go unseen | Kimi Code `docs/en/configuration/config-files.md`, `env-vars.md`, `agent-core-v2` `permissionPolicyService.ts` |
+| DeepSeek Harness | `DSH_HOME` is a folder of drgnx's own (`agents/dsh`); `--patch` with an overlay, a list of loader patches: the `sandbox-policy` mode `danger-full-access` and, apart from it, the `approval` policy `ask` (the shipped bundle ties that mode to a policy that refuses every ask), and drgnx's ask plugin inserted for the subscribed kinds. Not enforced until that plugin ships with drgnx's DeepSeek Harness build | DeepSeek Harness 0.2.2 `apps/cli/src/args.ts`, `packages/boot/app-boot/src/index.ts` (the overlay format), `packages/bundle/base/cordis.patch.yml`, `packages/core/tools/src/pipeline.ts` |
 
 Gateway profiles of Claude (a profile with `:ai`) in the worker and manager roles also get
-`CLAUDE_CODE_PROMPT_CACHE_TTL=1h`; chats keep five minutes.
+`CLAUDE_CODE_PROMPT_CACHE_TTL=1h`; chats keep five minutes. Gateway profiles of Kimi Code and DeepSeek Harness get
+the gateway's address and the session's own token in the variables they read (`KIMI_MODEL_BASE_URL`,
+`KIMI_MODEL_API_KEY`; `DEEPSEEK_BASE_URL`, `DEEPSEEK_API_KEY`), never a provider key.
 
 In every worktree `.claude`, `.codex`, `.gemini`, `.envrc`, `.git/hooks` and `mise.toml` are read-only for the agent.
+Of Kimi Code's and DeepSeek Harness's own folders the agent may write only its login (`credentials`), sessions, logs
+and locks.
 
-An agent drgnx has no lock for (set `:provider claude|codex|gemini` in its profile, or name the CLI in its command)
-is shown as "not enforced": it is not started as a worker under the Cautious and Balanced presets. Codex counts as
-enforced only once its lock has passed the sandboxed-launch and laundering checks; until then it is "not enforced".
+The files a lock binds at a fixed path (Codex's `/etc/codex` pair, Kimi Code's `config.toml`) need the sandbox's
+full tier: on another, such a session is not started. The files drgnx writes for one session (Gemini's admin policy,
+DeepSeek's overlay) live in that session's own folder, which its agent reads and never writes.
+For Codex's `/etc/codex` pair the session sees the host's `/etc` as it was when the session started: the sandbox builds
+it from the host's top-level entries, so a file the host adds to `/etc` while the session runs is not visible in it, and
+the host's own `/etc/codex` (if there is one) is replaced by the lock's two files.
+
+**A hook never misses a step it subscribes to.** When a before-tool hook or rule subscribes to a kind, the lock makes
+the agent ask about it, or the agent's own hook calls drgnx (Codex's managed hook, which fails open on a timeout:
+its approvals still fail closed), or the tool is withheld (Codex's hosted web search, Gemini's subagents). An agent
+that would still run such a step unseen (one with no lock, a Gemini whose system policy shadows drgnx's) is not
+started, and the refusal names the kinds and why. The session's details list which kinds are hooked, and how.
+
+An agent drgnx has no lock for (set `:provider claude|codex|gemini|kimi|deepseek` in its profile, or name the CLI in
+its command) is shown as "not enforced": it is not started as a worker under the Cautious and Balanced presets. Codex
+counts as enforced only once its lock has passed the sandboxed-launch and laundering checks, and DeepSeek Harness
+once drgnx's ask plugin ships with its fork; until then they are "not enforced".

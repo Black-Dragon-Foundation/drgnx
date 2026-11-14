@@ -77,6 +77,10 @@ fn an_unlisted_skip_reason_is_a_fail() {
         (Skip::NeedsLinux, "needs linux"),
         (Skip::NeedsX86_64, "needs x86_64"),
         (Skip::X32Off, "x32 is off"),
+        (
+            Skip::HostFilterBlocks,
+            "the host blocks io_uring, the keyring calls or vsock",
+        ),
         (Skip::NeedsRoot, "needs root"),
         (
             Skip::LandlockBelow { have: 7, need: 9 },
@@ -99,6 +103,7 @@ fn an_unlisted_skip_reason_is_a_fail() {
         root: true,
         landlock_abi: 9,
         x32: true,
+        host_open: true,
     };
     let needy = row(
         json!({"row": "r", "needs": ["bwrap", "reduced", "root"], "probes": [["fds"]], "expect": [{"result": "reached"}]}),
@@ -436,6 +441,41 @@ fn spec_defaults_and_the_probe_dir() {
 }
 
 #[test]
+fn a_web_rows_relay_goes_to_the_web_proxy() {
+    let mut fx = Fixture::new().unwrap();
+    let r = row(
+        json!({"row": "r", "web": true, "grants": [{"target": {"host_port": "host.drgnx.internal:${TCP_LO_PORT}"}}], "dns": {"a.test": ["${HOST_LAN}"]}, "probes": [["fds"]], "expect": [{"result": "reached"}]}),
+    );
+    let bin = fx.path("bin");
+    let spec = build_spec_for(&fx, &r, &bin, true).unwrap();
+    let web = fx.path("run/drgnx/s/S1/web.sock");
+    let web = web.to_string_lossy();
+    assert_eq!(
+        spec["net"]["isolated"]["relay"],
+        json!([{"port": 3130, "socket": web}])
+    );
+    assert_eq!(spec["sockets"], json!([web]));
+    assert!(
+        spec["env"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(["HTTPS_PROXY", "http://127.0.0.1:3130"]))
+    );
+    serde_json::from_value::<gleipnir::Spec>(spec).unwrap();
+    // The row's grants (placeholders filled) and names reach the web proxy; a bad grant fails the row.
+    setup(&mut fx, &r, true).unwrap();
+    assert!(
+        fx.env("/usr/bin")
+            .contains(&("HTTPS_PROXY".into(), format!("http://{}", fx.addrs.web_tcp)))
+    );
+    let bad = row(
+        json!({"row": "r", "web": true, "grants": [{"target": {"host_port": "[::ffff:10.0.0.1]:80"}}], "probes": [["fds"]], "expect": [{"result": "reached"}]}),
+    );
+    let e = setup(&mut fx, &bad, true).err().unwrap();
+    assert!(e.contains("plain IPv4"), "{e}");
+}
+
+#[test]
 fn the_pause_dance_swaps_a_path_for_a_link() {
     let dir = tempfile::tempdir().unwrap();
     let fifo = dir.path().join("f");
@@ -513,6 +553,7 @@ fn macos_rows_cover_mac_sb_10_and_skip_elsewhere() {
         root: false,
         landlock_abi: 0,
         x32: false,
+        host_open: false,
     };
     for r in &rows {
         assert_eq!(r.platform(), Platform::Macos, "{}", r.row);
@@ -520,12 +561,14 @@ fn macos_rows_cover_mac_sb_10_and_skip_elsewhere() {
             assert_eq!(skip_reason(r, &host), Some(Skip::NeedsMacos), "{}", r.row);
         }
         // Every refusing expectation names Seatbelt's errnos or none; a Linux-only errno would never match there.
-        // The one exception is the kernel's own answer for a process without a controlling terminal.
+        // The exceptions are the kernel's own answers: ENXIO for a process without a controlling terminal, ENOENT for a
+        // spelling APFS does not take for the file.
         for e in &r.expect {
             assert!(
                 e.errno.iter().all(|n| n == "EPERM"
                     || n == "EACCES"
-                    || (n == "ENXIO" && r.row == "mac-no-controlling-tty")),
+                    || (n == "ENXIO" && r.row == "mac-no-controlling-tty")
+                    || (n == "ENOENT" && r.row == "mac-eszett-is-not-ss")),
                 "{}",
                 r.row
             );
@@ -548,6 +591,7 @@ fn any_rows_run_on_macos() {
         Need::Seccomp,
         Need::Netns,
         Need::X32,
+        Need::HostOpen,
     ];
     for r in &rows {
         assert_eq!(r.platform(), Platform::Any, "{}", r.row);
@@ -604,5 +648,158 @@ fn macos_row_specs_validate_and_make_a_profile() {
                 "the proxy port is listed"
             );
         }
+    }
+}
+
+fn browser_rows() -> Vec<Row> {
+    let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("rows/linux/browser.jsonl");
+    crate::row::parse_file(&file, Platform::Linux).unwrap()
+}
+
+/// The browser layer's rows: the plan's table, each `blocked` one with its control; a host below ABI 9 skips the
+/// layer's rows but runs the refusal row and the agent's two seccomp rows.
+#[test]
+fn browser_rows_cover_the_table_and_skip_below_abi_9() {
+    let rows = browser_rows();
+    let names: Vec<&str> = rows.iter().map(|r| r.row.as_str()).collect();
+    for want in [
+        "browser-cannot-read-worktree",
+        "browser-cannot-read-login-dir",
+        "browser-cannot-read-agent-tmp",
+        "browser-cannot-read-agent-environ",
+        "browser-cannot-connect-hub-sock",
+        "browser-cannot-connect-mcp-sock",
+        "browser-cannot-connect-provider-port",
+        "browser-cannot-connect-cdp-port",
+        "browser-reaches-web-port-and-a-local-port",
+        "browser-cannot-bind-tcp",
+        "browser-cannot-signal-agent",
+        "browser-cannot-reach-agent-abstract",
+        "browser-writes-own-dir-only",
+        "browser-below-abi9-refused",
+        "agent-pidfd-getfd-refused",
+        "agent-process-vm-readv-refused",
+    ] {
+        assert!(names.contains(&want), "no row {want}");
+    }
+    let host = Host {
+        in_container: false,
+        root: false,
+        landlock_abi: 8,
+        x32: false,
+        host_open: false,
+    };
+    for r in &rows {
+        let skip = skip_reason(r, &host);
+        if !cfg!(target_os = "linux") {
+            assert_eq!(skip, Some(Skip::NeedsLinux), "{}", r.row);
+        } else if r.needs.contains(&Need::Browser) {
+            assert_eq!(
+                skip,
+                Some(Skip::LandlockBelow { have: 8, need: 9 }),
+                "{}",
+                r.row
+            );
+        } else {
+            assert_eq!(skip, None, "{}", r.row);
+        }
+    }
+}
+
+/// A browser-layer row's spec is a browser session's (the web, CDP and provider relays, the session's sockets, the
+/// local port, the probe as the browser's program), and gleipnir accepts it for the full tier with its floor at 9.
+#[test]
+fn browser_row_specs_validate_for_the_full_tier() {
+    for r in browser_rows().iter().filter(|r| r.layer.is_some()) {
+        let mut fx = Fixture::new().unwrap();
+        fx.session_sockets().unwrap();
+        setup(&mut fx, r, false).unwrap();
+        let bin = fx.path("bin");
+        std::fs::write(bin.join("gleipnir-probe"), "x").unwrap();
+        let spec = build_spec_for(&fx, r, &bin, true).unwrap();
+        let run = |s: &str| fx.path("run/drgnx/s/S1").join(s);
+        let ports: Vec<u64> = spec["net"]["isolated"]["relay"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["port"].as_u64().unwrap())
+            .collect();
+        assert_eq!(ports, [3128, 3130, 9222], "{}", r.row);
+        assert_eq!(spec["sockets"].as_array().unwrap().len(), 5, "{}", r.row);
+        assert_eq!(spec["extra_tcp_ports"], json!([5173]), "{}", r.row);
+        assert_eq!(
+            spec["browser"]["program"],
+            bin.join("gleipnir-probe").to_string_lossy().as_ref()
+        );
+        let spec: gleipnir::Spec =
+            serde_json::from_value(spec).unwrap_or_else(|e| panic!("{}: {e}", r.row));
+        let p = |rel: &str| fx.path(rel);
+        let ctx = gleipnir::Context {
+            home: p("home"),
+            closed: vec![p("data"), p("config")],
+            user_sockets: vec![p("run/drgnx/hub-0000.sock"), p("run/bus")],
+            run_parents: vec![p("run/drgnx/s")],
+            program_dirs: vec!["/usr/bin".into()],
+            ..gleipnir::Context::default()
+        };
+        let valid = gleipnir::validate(spec, &ctx, gleipnir::Target::LinuxBwrap)
+            .unwrap_or_else(|e| panic!("{}: {e}", r.row));
+        assert_eq!(valid.spec().layers.landlock_min_abi, 9, "{}", r.row);
+        assert!(valid.spec().sockets.contains(&run("cdp.sock")), "{}", r.row);
+    }
+}
+
+/// The browser run's two argvs: the probes run in the browser host, or in the stand-in agent for the control.
+#[test]
+fn browser_layer_argv_puts_the_probes_in_the_browser_or_the_agent() {
+    let fx = Fixture::new().unwrap();
+    let probe = Path::new("/p/gleipnir-probe");
+    let probes = vec!["fds".to_string(), "--and".into(), "fds".into()];
+    let abs = fx.value("ABSTRACT").unwrap();
+    let (b, a) = browser_layer_argv(&fx, probe, probes.clone(), false).unwrap();
+    assert_eq!(
+        b,
+        [
+            "/p/gleipnir-probe",
+            "--as-browser",
+            "/tmp/drgnx-browser",
+            "fds",
+            "--and",
+            "fds"
+        ]
+    );
+    assert_eq!(
+        a,
+        [
+            "/p/gleipnir-probe",
+            "--stand-in",
+            "/tmp/drgnx-browser",
+            abs.as_str(),
+            "5173"
+        ]
+    );
+    let (b, a) = browser_layer_argv(&fx, probe, probes, true).unwrap();
+    assert_eq!(b.len(), 3);
+    assert_eq!(&a[5..], ["fds", "--and", "fds"]);
+}
+
+/// A row that needs `io_uring` is skipped, for that reason alone, where the host (a container's own seccomp, say)
+/// refuses `io_uring_setup` to an unfiltered process: our filter's refusal there could not be told from it.
+#[test]
+fn a_host_open_row_skips_only_where_the_host_filter_blocks() {
+    let r = row(
+        json!({"row": "r", "needs": ["bwrap", "host_open"], "control": true, "probes": [["syscall", "io-uring"]], "expect": [{"result": "blocked", "errno": ["EPERM"]}]}),
+    );
+    let mut host = Host {
+        in_container: false,
+        root: true,
+        landlock_abi: 9,
+        x32: true,
+        host_open: false,
+    };
+    if cfg!(target_os = "linux") {
+        assert_eq!(skip_reason(&r, &host), Some(Skip::HostFilterBlocks));
+        host.host_open = true;
+        assert_eq!(skip_reason(&r, &host), None);
     }
 }

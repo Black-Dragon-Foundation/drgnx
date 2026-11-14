@@ -7,13 +7,17 @@
 (require 'drgnx-wb)
 (require 'drgnx-area)
 (require 'drgnx-groups)
-(load (expand-file-name "modules/tools/drgnx-agents-ui" drgnx-dir) nil t)
+(load (expand-file-name "modules/tools/drgnx-agent-panel-list" drgnx-dir) nil t)
+(load (expand-file-name "modules/tools/drgnx-agent-panel" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-layouts" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+(drgnx-test-modules-preload '(tools/work-space))     ; layout Work follows a shown Work lens
+(declare-function drgnx-work-space--follow-layout "drgnx-work-space" (frame))
+(declare-function drgnx-work-flow-mode "drgnx-work-flow")
 
 (defconst drgnx-layouts-test--buffers
   '("*drgnx-layouts-explorer*" "*drgnx-layouts-code*" "*drgnx-layouts-a*" "*drgnx-layouts-b*" "*drgnx-layouts-proc*"
-    "*drgnx Agents*" "*agent: alpha*" "*agent: beta*" "*drgnx: no agent*" "*drgnx-layouts-output*"))
+    "*drgnx Agents*" "*drgnx agent: a1*" "*drgnx agent: b1*" "*drgnx: no agent*" "*drgnx-layouts-output*"))
 
 (defmacro drgnx-layouts-test--with (&rest body)
   "BODY in a 200×60 frame with one editor window on *drgnx-layouts-code*, an Explorer section, the right dock's
@@ -28,8 +32,7 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
             (drgnx-wb--sections nil)
             (drgnx-wb--areas (copy-tree drgnx-wb--areas))
             (drgnx-agents--sessions nil)
-            (drgnx-agents-ui--last (make-hash-table :test #'eq :weakness 'key))
-            (drgnx-agents-ui--jobs-cache (cons 1.0e+INF nil))     ; no job directory is read
+            (drgnx-agent-panel-list--last (make-hash-table :test #'eq :weakness 'key))
             (display-buffer-alist nil) (display-buffer-overriding-action '(nil))
             (size (cons (frame-width) (frame-height))))
        (drgnx-layouts--define-config)
@@ -40,11 +43,11 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
          (set-frame-parameter nil p nil))
        (drgnx-wb-define-section 'files :slot 0 :title "EXPLORER"
                                 :buffer (lambda () (get-buffer-create "*drgnx-layouts-explorer*")))
-       (drgnx-wb-define-tab 'right 'agents :title "Agents" :placeholder #'drgnx-agents-ui-list-buffer)
+       (drgnx-wb-define-tab 'right 'agents :title "Agents" :placeholder #'drgnx-agent-panel-list-buffer)
        (drgnx-rules-mode 1)
        (switch-to-buffer (get-buffer-create "*drgnx-layouts-code*"))
        (set-window-parameter nil 'drgnx-tabs nil)
-       (unwind-protect (progn ,@body)
+       (unwind-protect (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (&rest _) 1))) ,@body)  ; a panel asks the hub, which is not there
          (remove-hook 'window-size-change-functions #'drgnx-layouts--zen-resize)
          (drgnx-rules-mode -1)
          (drgnx-wb-hide-sidebar)
@@ -77,11 +80,11 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
 
 (ert-deftest drgnx-layouts/agent-arranges-like-zed ()
   (drgnx-layouts-test--with
-    (let ((alpha (drgnx-agents--make :id "a1" :name "alpha" :status 'idle))
-          (beta (drgnx-agents--make :id "b1" :name "beta" :status 'idle)))
+    (let ((alpha (drgnx-agents--make :id "a1" :remote "a1" :name "alpha" :status 'idle))
+          (beta (drgnx-agents--make :id "b1" :remote "b1" :name "beta" :status 'idle)))
       (setq drgnx-agents--sessions (list beta alpha))           ; beta is newer, alpha acted last
-      (puthash alpha (float-time) drgnx-agents-ui--last)
-      (puthash beta (- (float-time) 600) drgnx-agents-ui--last)
+      (puthash alpha (float-time) drgnx-agent-panel-list--last)
+      (puthash beta (- (float-time) 600) drgnx-agent-panel-list--last)
       (drgnx-wb-area-show 'panel 'output (drgnx-layouts-test--output))
       (drgnx-layouts-apply 'agent)
       (should (eq (drgnx-layouts-current) 'agent))
@@ -92,8 +95,8 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
       (let ((groups (drgnx-groups-list)))
         (should (= 2 (length groups)))
         (should (eq (window-buffer (car groups)) (drgnx-layouts-test--code)))
-        (should (equal (buffer-name (window-buffer (cadr groups))) "*agent: alpha*"))
-        (should (eq (buffer-local-value 'major-mode (window-buffer (cadr groups))) 'drgnx-agents-transcript-mode))
+        (should (equal (buffer-name (window-buffer (cadr groups))) "*drgnx agent: a1*"))
+        (should (eq (buffer-local-value 'major-mode (window-buffer (cadr groups))) 'drgnx-agent-panel-mode))
         (should (< (window-left-column (car groups)) (window-left-column (cadr groups))))
         (should (= (window-top-line (car groups)) (window-top-line (cadr groups))))
         (should (eq (selected-window) (car groups))))             ; focus stays in the editor
@@ -116,7 +119,7 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
 
 (ert-deftest drgnx-layouts/switching-back-restores ()
   (drgnx-layouts-test--with
-    (setq drgnx-agents--sessions (list (drgnx-agents--make :id "a1" :name "alpha" :status 'idle)))
+    (setq drgnx-agents--sessions (list (drgnx-agents--make :id "a1" :remote "a1" :name "alpha" :status 'idle)))
     (drgnx-layouts-apply 'agent)
     ;; the user changes the Agent arrangement: a wider right dock, the panel on Output
     (let ((window-resize-pixelwise t))
@@ -140,7 +143,7 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
       (should (window-live-p (drgnx-wb-area-window 'panel)))
       (should (drgnx-wb-sidebar-showing-p))
       (should (= 2 (length (drgnx-groups-list))))
-      (should (equal (buffer-name (window-buffer (cadr (drgnx-groups-list)))) "*agent: alpha*"))
+      (should (equal (buffer-name (window-buffer (cadr (drgnx-groups-list)))) "*drgnx agent: a1*"))
       (should (drgnx-signal-editor-window-p (selected-window)))
       (drgnx-layouts-apply 'editor)
       (should-not (drgnx-wb-sidebar-showing-p))
@@ -162,7 +165,7 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
 (ert-deftest drgnx-layouts/switching-loses-nothing ()
   :tags '(:cond)
   (drgnx-layouts-test--with
-    (setq drgnx-agents--sessions (list (drgnx-agents--make :id "a1" :name "alpha" :status 'idle)))
+    (setq drgnx-agents--sessions (list (drgnx-agents--make :id "a1" :remote "a1" :name "alpha" :status 'idle)))
     (let* ((a (get-buffer-create "*drgnx-layouts-a*")) (b (get-buffer-create "*drgnx-layouts-b*"))
            (code (drgnx-layouts-test--code))
            (proc (make-process :name "drgnx-layouts-sleep" :buffer (get-buffer-create "*drgnx-layouts-proc*")
@@ -185,7 +188,7 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
           (should (equal (window-parameter (car groups) 'drgnx-tabs) (list a code b)))
           (should (eq (window-buffer (car groups)) code))
           (should (= pt (window-point (car groups))))
-          (should (equal (buffer-name (window-buffer (cadr groups))) "*agent: alpha*")))
+          (should (equal (buffer-name (window-buffer (cadr groups))) "*drgnx agent: a1*")))
         (should (eq (window-buffer (drgnx-wb-area-window 'panel)) (process-buffer proc)))
         ;; one key cycles every layout and comes back
         (let ((names (drgnx-layouts-names)) (seen nil))
@@ -249,10 +252,58 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
       (should-not (drgnx-wb-sidebar-showing-p))
       (should-not (memq #'drgnx-layouts--zen-resize window-size-change-functions)))))
 
+(ert-deftest drgnx-layouts/work-shows-its-tiles-and-back-gives-everything-back ()
+  ;; Work (entered with no layout picked) hides the sidebar and shows its two tiles; going back puts the panel's own
+  ;; tab, the sidebar and the right dock back as they were, as leaving Zen does
+  (drgnx-layouts-test--with
+    (drgnx-wb-define-tab 'right 'work-detail :title "Detail" :placeholder (lambda () (get-buffer-create "*drgnx-layouts-a*")))
+    (drgnx-wb-define-tab 'panel 'work-trail :title "Trail" :placeholder (lambda () (get-buffer-create "*drgnx-layouts-b*")))
+    (drgnx-wb-show-sidebar)
+    (drgnx-wb-area-show 'panel 'output (drgnx-layouts-test--output))
+    (should-not (drgnx-layouts-current))
+    (drgnx-layouts-apply 'work)
+    (should (eq (drgnx-layouts-current) 'work))
+    (should-not (drgnx-wb-sidebar-showing-p))
+    (should (eq (drgnx-wb-area-tab 'right) 'work-detail))
+    (should (eq (drgnx-wb-area-tab 'panel) 'work-trail))
+    (drgnx-layouts-back)
+    (should-not (drgnx-layouts-current))
+    (should (drgnx-wb-sidebar-showing-p))
+    (should (eq (drgnx-wb-area-tab 'panel) 'output))
+    (should-not (drgnx-wb-area-window 'right))))
+
+(ert-deftest drgnx-layouts/a-shown-work-lens-enters-work-and-its-going-leaves-it ()
+  ;; tools/work-space: a Work lens shown in the editor enters Work (that lens still in front); once no lens is shown
+  ;; the frame goes back to where it came from; a layout picked while a lens is shown stays
+  (drgnx-layouts-test--with
+    (drgnx-wb-define-tab 'right 'work-detail :title "Detail" :placeholder (lambda () (get-buffer-create "*drgnx-layouts-a*")))
+    (drgnx-wb-define-tab 'panel 'work-trail :title "Trail" :placeholder (lambda () (get-buffer-create "*drgnx-layouts-b*")))
+    (drgnx-wb-show-sidebar)
+    (let ((lens (get-buffer-create "*drgnx-layouts-proc*")) (frame (selected-frame)))
+      (with-current-buffer lens (drgnx-work-flow-mode))
+      (unwind-protect
+          (cl-letf (((symbol-function 'drgnx-module-running-p) (lambda (m) (eq m 'tools/layouts))))
+            (drgnx-work-space--follow-layout frame)
+            (should-not (drgnx-layouts-current))
+            (set-window-buffer (drgnx-wb-editor-window) lens)
+            (drgnx-work-space--follow-layout frame)
+            (should (eq (drgnx-layouts-current) 'work))
+            (should-not (drgnx-wb-sidebar-showing-p))
+            (should (eq (window-buffer (drgnx-wb-editor-window)) lens))
+            (drgnx-layouts-apply 'editor)
+            (drgnx-work-space--follow-layout frame)
+            (should (eq (drgnx-layouts-current) 'editor))
+            (drgnx-layouts-apply 'work)
+            (set-window-buffer (drgnx-wb-editor-window) (drgnx-layouts-test--code))
+            (drgnx-work-space--follow-layout frame)
+            (should (eq (drgnx-layouts-current) 'editor))
+            (should (drgnx-wb-sidebar-showing-p)))
+        (set-frame-parameter frame 'drgnx-work-space-shown nil)))))
+
 (ert-deftest drgnx-layouts/agent-zen-editor-builds-editor-from-before-zen ()
   ;; Editor's first visit, just out of Zen: built from the arrangement Zen was entered from, not Zen's one window.
   (drgnx-layouts-test--with
-    (setq drgnx-agents--sessions (list (drgnx-agents--make :id "a1" :name "alpha" :status 'idle)))
+    (setq drgnx-agents--sessions (list (drgnx-agents--make :id "a1" :remote "a1" :name "alpha" :status 'idle)))
     (let ((a (get-buffer-create "*drgnx-layouts-a*")) (code (drgnx-layouts-test--code)))
       (drgnx-layouts-apply 'agent)
       (set-window-parameter (car (drgnx-groups-list)) 'drgnx-tabs (list a code))
@@ -451,3 +502,25 @@ problems.  The shape and filler registries are restored afterwards."
     (drgnx-layouts-test--with (ignore))
     (read-event nil nil 0.01)                           ; a terminal frame takes its new size at the next wait
     (should (equal (cons (frame-width) (frame-height)) size))))
+
+(ert-deftest drgnx-layouts/work-shows-the-trail-under-the-map ()
+  ;; work-space-dark.html: the Work layout is the map full width, the Detail island at its right and the trail
+  ;; under it (the Flow shows its Rules tile there on demand)
+  (let ((def (alist-get 'work drgnx-layouts)))
+    (should (eq (plist-get def :panel) 'work-trail))
+    (should (eq (plist-get def :right) 'work-detail))
+    (should-not (plist-get def :left))
+    ;; the Detail island is the mockup's 340 px, so the map has the width for four agents in a row
+    (should (equal '(logical 340) (plist-get (plist-get def :px) :right)))
+    (should (eql (drgnx-px 340) (plist-get (plist-get (drgnx-layouts--target def nil) :right) :px)))
+    ;; the trail tile is the mockup's 250 px tall, so the map keeps the rest and its rows fill it
+    (should (equal '(logical 250) (plist-get (plist-get def :px) :panel)))
+    (should (eql (drgnx-px 250) (plist-get (plist-get (drgnx-layouts--target def nil) :panel) :px)))))
+
+(ert-deftest drgnx-layouts/a-size-in-logical-pixels-is-scaled-to-the-frame ()
+  "A built-in layout may give an area's size as `(logical N)': it is N logical pixels, scaled to the frame
+\(`drgnx-px'); a plain number stays the device pixels it is."
+  (let* ((def '(:left nil :right some-tab :panel nil :px (:right (logical 100) :left 120)))
+         (target (drgnx-layouts--target def nil)))
+    (should (eql (drgnx-px 100) (plist-get (plist-get target :right) :px)))
+    (should (eql 120 (plist-get (plist-get target :left) :px)))))

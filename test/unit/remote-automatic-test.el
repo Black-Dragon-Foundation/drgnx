@@ -1,7 +1,7 @@
 ;;; remote-automatic-test.el --- batch tests: nothing automatic touches a remote -*- lexical-binding: t -*-
 ;; test-class: cond
 ;; The binding rule (M2-6): TRAMP stays on for what the user starts, but no timer, hook, background check, file
-;; watch, VC / diff-hl, Flymake, the Explorer, link or compile output touches a remote name.  The TRAMP method
+;; watch, VC / the change marks, Flymake, the Explorer, link or compile output touches a remote name.  The TRAMP method
 ;; `drgnx-mock' (test/fixtures/tramp-mock.el) logs in with a local sh and counts what would leave the machine.
 (require 'ert)
 (require 'cl-lib)
@@ -25,11 +25,9 @@
 (load (expand-file-name "modules/editor/drgnx-sticky" drgnx-dir) nil t)
 (load (expand-file-name "modules/extra/drgnx-hunks" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-ai-ui" drgnx-dir) nil t)
-(load (expand-file-name "modules/tools/drgnx-work-ui" drgnx-dir) nil t)
-(load (expand-file-name "modules/tools/drgnx-agents-ui" drgnx-dir) nil t)
 
 (defconst drgnx-remote-auto--elpa (expand-file-name (or (getenv "DRGNX_USER_ELPA") "~/.config/emacs/elpa"))
-  "The user's ELPA, read-only, where diff-hl is when installed.")
+  "The user's ELPA, read-only.")
 
 (defvar drgnx-remote-auto--clock 0)
 
@@ -141,7 +139,7 @@
       (switch-to-buffer rbuf)
       (with-current-buffer rbuf
         ;; nothing turns these on by itself for a remote file
-        (should-not (or flymake-mode auto-revert-mode (bound-and-true-p diff-hl-mode) drgnx-blame-mode))
+        (should-not (or flymake-mode auto-revert-mode drgnx-hunks-mode drgnx-blame-mode))
         (drgnx-blame--maybe)
         (should-not drgnx-blame-mode)
         (goto-char (point-max)) (insert "# edited\n")
@@ -386,25 +384,20 @@ buffer is not affected."
       (should (member "app.py" (drgnx-remote-auto--row-names)))
       (should (= drgnx-tramp-mock-sends 0)))))
 
-;;;; diff-hl
+;;;; The change marks
 
-(ert-deftest drgnx-remote/diff-hl-off-for-remote ()
-  ;; diff-hl in the user's ELPA (CI's DRGNX_USER_ELPA holds only the pinned evil and kkp)
-  (skip-unless (file-expand-wildcards (expand-file-name "diff-hl-*" drgnx-remote-auto--elpa)))
-  (let ((load-path (append load-path (seq-filter #'file-directory-p (directory-files drgnx-remote-auto--elpa t "\\`[^.]"))))
-        (cfg (make-temp-file "drgnx-cfg" t)))
+(ert-deftest drgnx-remote/hunks-off-for-remote ()
+  ;; the change marks ask the hub about local files only: a remote name sends nothing and turns nothing on
+  (let ((cfg (make-temp-file "drgnx-cfg" t)))
     (unwind-protect
-        (let* ((_ (require 'diff-hl))
-               (process-environment (cons (concat "DRGNX_CONFIG_DIR=" cfg) process-environment))
+        (let* ((process-environment (cons (concat "DRGNX_CONFIG_DIR=" cfg) process-environment))
                (drgnx-modules--table nil) (drgnx-modules--report nil) (drgnx-modules--state nil)
-               (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-               (default (default-value 'diff-hl-disable-on-remote)))
+               (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
           (load (expand-file-name "modules/extra/drgnx-hunks" drgnx-dir) nil t)
           (unwind-protect
               (progn
                 (drgnx-modules-run 'idle)
                 (should (eq (plist-get (alist-get 'extra/hunks (drgnx-modules-report)) :status) 'ok))
-                (should (eq diff-hl-disable-on-remote t))
                 (drgnx-remote-auto--with
                   (let ((b (generate-new-buffer " *drgnx-remote-hl*")))
                     (unwind-protect
@@ -412,12 +405,13 @@ buffer is not affected."
                           (with-current-buffer b                    ; looks like the remote file; nothing is read
                             (setq buffer-file-name (concat root "app.py") default-directory root)
                             (setq drgnx-tramp-mock-sends 0)
-                            (turn-on-diff-hl-mode)
-                            (should-not (bound-and-true-p diff-hl-mode)))
+                            (drgnx-hunks--maybe)
+                            (should-not drgnx-hunks-mode))
                           (should (= drgnx-tramp-mock-sends 0)))
                       (kill-buffer b)))))
-            (when (and (boundp 'global-diff-hl-mode) global-diff-hl-mode) (global-diff-hl-mode -1))
-            (setq-default diff-hl-disable-on-remote default)))
+            (drgnx-hunks--teardown)
+            (remove-hook 'find-file-hook #'drgnx-hunks--maybe)
+            (remove-hook 'drgnx-history-drained-functions #'drgnx-hunks--drained)))
       (delete-directory cfg t))))
 
 ;;;; The link followers (M2-6 c)
@@ -426,110 +420,6 @@ buffer is not affected."
   "Does a buffer visit NAME?  (Looks at the buffers' names only: `find-buffer-visiting' would send.)"
   (cl-some (lambda (b) (equal (buffer-file-name b) name)) (buffer-list)))
 
-(defun drgnx-remote-auto--work-line ()
-  "A buffer whose current line is a Work row (its node comes from `drgnx-work-ui--node', stubbed by the macro)."
-  (with-current-buffer (generate-new-buffer " *drgnx-remote-work*")
-    (insert "row\n")
-    (goto-char (point-min))
-    (current-buffer)))
-
-(defmacro drgnx-remote-auto--on-work-row (node &rest body)
-  "BODY in a buffer whose current line is the Work row for NODE; the mock's sends start at 0."
-  (declare (indent 1))
-  `(let ((rb (drgnx-remote-auto--work-line)) (row-node ,node))
-     (unwind-protect
-         (cl-letf (((symbol-function 'drgnx-work-ui--node) (lambda () row-node)))   ; the tree's row-key lookup
-           (with-current-buffer rb (setq drgnx-tramp-mock-sends 0) ,@body))
-       (kill-buffer rb))))
-
-(ert-deftest drgnx-remote/links-in-tool-output-never-open-a-remote ()
-  "A Work row naming a remote file is not opened, whatever the row is (M2-6 c): the real opener, no mock send."
-  (drgnx-remote-auto--with
-    (let ((file (concat root "app.py")))
-      (should-not (drgnx-trust-link-ok-p file))
-      (drgnx-remote-auto--on-work-row (list :kind 'task :path file :line 1)
-        (should-error (drgnx-work-ui-open) :type 'user-error)
-        (drgnx-remote-auto--none 'work-row)
-        (should-not (drgnx-remote-auto--visits-p file))))))
-
-(ert-deftest drgnx-remote/work-rows-open-local-files-still ()
-  "The Work row of a local file opens (the check is not a blanket refusal)."
-  (drgnx-remote-auto--with
-    (let ((file (expand-file-name "l.py" ldir)))
-      (drgnx-remote-auto--on-work-row (list :kind 'task :path file :line 2)
-        (unwind-protect
-            (with-current-buffer (save-window-excursion (drgnx-work-ui-open) (current-buffer))
-              (should (equal (buffer-file-name) (file-truename file))) (should (= (line-number-at-pos) 2)))   ; by its true name
-          (when-let* ((b (find-buffer-visiting file))) (kill-buffer b)))))))
-
-(ert-deftest drgnx-remote/work-commit-and-worktree-rows-never-reach-a-remote ()
-  "A commit row whose repository, and a plan row whose worktree, is a remote name: nothing is asked of the remote."
-  (drgnx-remote-auto--with
-    (drgnx-remote-auto--on-work-row (list :kind 'commit :sha "0123456789abcdef" :repo root)
-      (should-error (drgnx-work-ui-open) :type 'user-error)
-      (drgnx-remote-auto--none 'work-commit))
-    (drgnx-remote-auto--on-work-row (list :kind 'plan :id "p" :worktree root)
-      (let ((roots nil))
-        (cl-letf (((symbol-function 'drgnx-explorer-set-roots) (lambda (r) (setq roots r)))
-                  ((symbol-function 'dired) (lambda (&rest a) (setq roots a))))
-          (should-error (drgnx-work-ui-open-worktree) :type 'user-error)
-          (should-not roots)))
-      (drgnx-remote-auto--none 'work-worktree))))
-
-(ert-deftest drgnx-remote/work-graph-boxes-never-reach-a-remote ()
-  "A graph box for a plan file, or for a branch worktree, that is a remote name: no check of it, no visit."
-  (drgnx-remote-auto--with
-    (let ((file (concat root "app.py")))
-      (setq drgnx-tramp-mock-sends 0)
-      (should-error (drgnx-work-ui--graph-open (list :kind 'plan :node (list :path file))) :type 'user-error)
-      (should-error (drgnx-work-ui--graph-open (list :kind 'branch :lines '("b") :node (list :worktree root)))
-                    :type 'user-error)
-      (drgnx-remote-auto--none 'work-graph)
-      (should-not (drgnx-remote-auto--visits-p file)))))
-
-(defun drgnx-remote-auto--agent-review (cwd path)
-  "Open the review of an edit the agent proposes for PATH in a session at CWD.  (BUFFER ANSWERS): the review
-buffer, or nil; what the agent was told through the hub: (ITEM nil REJECT)."
-  (let* ((answers nil)
-         (s (drgnx-agents--make :name "auto-remote" :cwd cwd :remote "s-auto"))
-         (item (list :id 5 :path path :content "x\n")))
-    (setf (drgnx-agent-session-reviews s) (list item))
-    (setq drgnx-tramp-mock-sends 0)
-    (cl-letf (((symbol-function 'drgnx-hub-call)
-               (lambda (method params &rest _)
-                 (when (equal method "agents/do")
-                   (push (list (plist-get params :item) nil (plist-get params :reject)) answers)))))
-      (let ((b (condition-case nil (drgnx-agents-ui-review s item) (user-error nil))))
-        (list b answers (drgnx-agent-session-reviews s))))))
-
-(defun drgnx-remote-auto--close-review (b)
-  "Close the review buffer B without telling anyone (no agent is listening)."
-  (when (buffer-live-p b)
-    (with-current-buffer b
-      (when drgnx-agents-ui--review (drgnx-agents-ui--review-cleanup (nth 2 drgnx-agents-ui--review)))
-      (setq drgnx-agents-ui--review nil))
-    (kill-buffer b)))
-
-(ert-deftest drgnx-remote/agent-edit-review-never-reaches-a-remote-from-a-local-session ()
-  "A local session's agent proposes a change to a remote name: the review does not open, the remote is not touched,
-and the agent is told the change was rejected."
-  (drgnx-remote-auto--with
-    (pcase-let ((`(,b ,answers ,left) (drgnx-remote-auto--agent-review ldir (concat root "app.py"))))
-      (unwind-protect
-          (progn
-            (should-not b)
-            (drgnx-remote-auto--none 'agent-review)
-            (should (equal (mapcar #'car answers) '(5)))
-            (should (nth 2 (car answers)))             ; the error: rejected
-            (should-not left))
-        (drgnx-remote-auto--close-review b)))))
-
-(ert-deftest drgnx-remote/agent-edit-review-opens-for-a-remote-session ()
-  "The session's folder is remote (the user started it there): the review of a file under it opens."
-  (drgnx-remote-auto--with
-    (pcase-let ((`(,b ,_answers ,_left) (drgnx-remote-auto--agent-review root (concat root "app.py"))))
-      (unwind-protect (should b)
-        (drgnx-remote-auto--close-review b)))))
 
 ;; AI review links: the Sources buttons of an Ask the Codebase answer
 (defun drgnx-remote-auto--source-button (file root)

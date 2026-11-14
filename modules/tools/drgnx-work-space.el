@@ -1,0 +1,698 @@
+;;; drgnx-work-space.el --- Module tools/work-space: the Work space, one map of every live piece of agent work -*- lexical-binding: t -*-
+
+;; SPDX-License-Identifier: GPL-3.0-or-later
+
+;;; Commentary:
+;; The Work space shows a workspace's agent work in six layers (you asked, specs, plans, agents, branches, files and
+;; machines) and the edges between them.  The hub keeps the map, lays it out and sends each view's rows as patches,
+;; with its model for Sjá; this module owns the editor's side: the faces, the workspace of a frame, the map buffer
+;; (drgnx-work-map.el), the map client's wiring to the hub client (core/drgnx-work-client.el) and the commands.  A map
+;; no window shows is told to the hub as hidden and gets nothing.  Turned off, it closes its views and kills its
+;; buffers.
+;; See docs/guide/work-space.md and docs/develop/work-space.md.
+
+;;; Code:
+(require 'cl-lib)
+(require 'subr-x)
+(require 'project)
+(require 'drgnx-modules)
+(require 'drgnx-registry)
+(require 'drgnx-state)
+(require 'drgnx-view)
+(require 'drgnx-pixels)
+(require 'drgnx-work-client)
+(require 'drgnx-history)
+(unless (featurep 'drgnx-work-map)
+  (load (expand-file-name "drgnx-work-map" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(unless (featurep 'drgnx-work-detail)
+  (load (expand-file-name "drgnx-work-detail" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(unless (featurep 'drgnx-work-code)
+  (load (expand-file-name "drgnx-work-code" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(declare-function drgnx-work-code-files-command "drgnx-work-code")
+(declare-function drgnx-work-who-is-here "drgnx-work-code")
+(declare-function drgnx-work-code-diffs-command "drgnx-work-code")
+(declare-function drgnx-work-diff-quit "drgnx-work-code")
+(declare-function drgnx-work-diff-accept-hunk "drgnx-work-code")
+(declare-function drgnx-work-diff-reject-hunk "drgnx-work-code")
+(declare-function drgnx-work-code-teardown "drgnx-work-code")
+(declare-function drgnx-work-code-local-dir "drgnx-work-code")
+(declare-function drgnx-work-code-one-line "drgnx-work-code")
+(declare-function drgnx-work-code--frame-replaced "drgnx-work-code" (old new))
+(declare-function drgnx-work-map--frame-replaced "drgnx-work-map" (old new))
+(declare-function drgnx-work-map--seg-agents "drgnx-work-map")
+(declare-function drgnx-work-map--seg-needs-you "drgnx-work-map")
+(declare-function drgnx-work-map--seg-lens "drgnx-work-map")
+(defvar drgnx-work-diff-mode-map)
+(unless (featurep 'drgnx-work-board)
+  (load (expand-file-name "drgnx-work-board" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(unless (featurep 'drgnx-work-flow)
+  (load (expand-file-name "drgnx-work-flow" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(unless (featurep 'drgnx-work-trail)
+  (load (expand-file-name "drgnx-work-trail" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(unless (featurep 'drgnx-work-review)
+  (load (expand-file-name "drgnx-work-review" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(declare-function drgnx-work-review-buffers "drgnx-work-review")
+(declare-function drgnx-work-review-show "drgnx-work-review")
+(declare-function drgnx-work-review-second "drgnx-work-review")
+(declare-function drgnx-work-review-accept "drgnx-work-review")
+(declare-function drgnx-work-review-reject "drgnx-work-review")
+(declare-function drgnx-work-trail-buffers "drgnx-work-trail")
+(declare-function drgnx-work-timeline-buffers "drgnx-work-trail")
+(declare-function drgnx-work-trail-show "drgnx-work-trail")
+(declare-function drgnx-work-trail-steer "drgnx-work-trail")
+(declare-function drgnx-work-trail-pause "drgnx-work-trail")
+(declare-function drgnx-work-trail-resume "drgnx-work-trail")
+(declare-function drgnx-work-trail-stop "drgnx-work-trail")
+(declare-function drgnx-work-trail-show-steps "drgnx-work-trail")
+(declare-function drgnx-work-trail-show-conclusions "drgnx-work-trail")
+(declare-function drgnx-work-keys-sheet "drgnx-work-trail")
+(declare-function drgnx-work-lens-show-timeline "drgnx-work-board")
+(declare-function drgnx-work-board-buffers "drgnx-work-board")
+(declare-function drgnx-work-lens-show-map "drgnx-work-board")
+(declare-function drgnx-work-lens-show-board "drgnx-work-board")
+(declare-function drgnx-work-lens-show-flow "drgnx-work-flow")
+(declare-function drgnx-work-flow-evidence "drgnx-work-flow")
+(declare-function drgnx-work-flow-rules "drgnx-work-flow")
+(declare-function drgnx-work-flow-buffers "drgnx-work-flow")
+(declare-function drgnx-work-flow-detail-buffers "drgnx-work-flow")
+(declare-function drgnx-work-flow-rules-buffers "drgnx-work-flow")
+(declare-function drgnx-work-flow-rules-buffer "drgnx-work-flow")
+(declare-function drgnx-work-flow-run-red "drgnx-work-flow")
+(declare-function drgnx-work-flow-tell-agent "drgnx-work-flow")
+(declare-function drgnx-work-flow-waive "drgnx-work-flow")
+(declare-function drgnx-work-flow-held "drgnx-work-flow" (n))
+(declare-function drgnx-work-detail-buffer "drgnx-work-detail")
+(declare-function drgnx-work-detail-buffers "drgnx-work-detail")
+(declare-function drgnx-work-job-log "drgnx-work-detail")
+(declare-function drgnx-work-huddle-overlap "drgnx-work-detail")
+(declare-function drgnx-pane-define-kind "drgnx-panes")
+(declare-function drgnx-pane-show "drgnx-panes")
+(declare-function drgnx-layouts-apply "drgnx-layouts" (name))
+(declare-function drgnx-layouts-back "drgnx-layouts")
+(declare-function drgnx-layouts-current "drgnx-layouts" (&optional frame))
+(declare-function drgnx-layouts-define-shape "drgnx-layouts" (shape fn))
+(declare-function drgnx-signal-editor-window-p "drgnx-signal" (window))
+(declare-function drgnx-wb-editor-window "drgnx-wb")
+
+(declare-function drgnx-hub-ensure "drgnx-hub-client")
+(declare-function drgnx-wb-place "drgnx-rules")
+(declare-function drgnx-work-map-buffers "drgnx-work-map")
+(declare-function drgnx-work-map-buffer "drgnx-work-map")
+(declare-function drgnx-work-map-rows-p "drgnx-work-map")
+(declare-function drgnx-work-map-rows-attach "drgnx-work-map")
+(declare-function drgnx-work-map-mode "drgnx-work-map")
+(declare-function drgnx-work-map-toggle-outline "drgnx-work-map")
+(declare-function drgnx-work-map-needs-you "drgnx-work-map")
+(declare-function drgnx-work-map-needs-you-here-next "drgnx-work-map")
+(declare-function drgnx-work-map-collapse-layer "drgnx-work-map")
+(declare-function drgnx-work-map-motion-clear "drgnx-work-map")
+(defvar drgnx-work-space--view)
+(defvar drgnx-work-space--message)
+(declare-function drgnx-hub-start-for-command "drgnx-hub-client" (on-fail))
+(defvar drgnx-work-map-no-sja)
+(declare-function drgnx-hub-call "drgnx-hub-client")
+(defvar drgnx-hub-connected-functions)
+(defvar drgnx-hub-disconnect-functions)
+
+(defgroup drgnx-work-space nil "The Work space: one map of every live piece of agent work." :group 'drgnx)
+
+(defcustom drgnx-work-space-roots nil
+  "The repositories and folders one workspace spans (the map shows work in all of them).  Unset (nil): the frame's
+project root; when that lies inside another git repository, that repository and the git repositories directly inside
+it (a notes repository with the code repositories inside it)."
+  :type '(repeat directory) :group 'drgnx-work-space)
+
+(defcustom drgnx-work-space-density 'comfortable
+  "How roomy the map is: `compact', `comfortable' or `roomy' (card sizes, gaps and bands)."
+  :type '(choice (const compact) (const comfortable) (const roomy)) :group 'drgnx-work-space)
+
+;;;; Faces: they inherit the look's semantic faces (core/drgnx-faces.el)
+
+(defface drgnx-work-dim '((t :inherit drgnx-text-muted)) "Items off the selection's chain." :group 'drgnx-work-space)
+(defface drgnx-work-card '((t :inherit drgnx-ui-caption)) "A map card's text: the UI font at the caption size (12 px), under its box face and its runs' own faces."
+  :group 'drgnx-work-space)
+(defface drgnx-work-pane '((t :inherit drgnx-ui-text)) "The text of the Detail island and the trail: the UI font."
+  :group 'drgnx-work-space)
+(defface drgnx-work-title '((t :inherit drgnx-ui-caption :weight semibold)) "An agent card's name line." :group 'drgnx-work-space)
+(defface drgnx-work-meta '((t :inherit drgnx-code-small)) "An agent card's line of minutes, spend and progress: the code font (it names no box: a card's box runs on)."
+  :group 'drgnx-work-space)
+(defface drgnx-work-selected '((t :inherit drgnx-selected)) "The selected item." :group 'drgnx-work-space)
+(defface drgnx-work-chain '((t :inherit drgnx-accent)) "Items on the selection's chain." :group 'drgnx-work-space)
+(defface drgnx-work-overlap '((t :inherit warning)) "An overlap's flag and its edge." :group 'drgnx-work-space)
+(defface drgnx-work-needs-you '((t :inherit drgnx-status-attention)) "A thing that needs you." :group 'drgnx-work-space)
+(defface drgnx-work-edge '((t :inherit drgnx-text-subtle)) "An edge." :group 'drgnx-work-space)
+(defface drgnx-work-edge-strong '((t :inherit drgnx-text-muted :weight bold)) "An edge that edits." :group 'drgnx-work-space)
+(defface drgnx-work-label '((t :inherit (drgnx-text-muted drgnx-ui-caption))) "A layer's label." :group 'drgnx-work-space)
+(defface drgnx-work-lens-title '((t :inherit (drgnx-ui-heading tab-line-tab-current)))
+  "The Work space's tab on its lens bar." :group 'drgnx-work-space)
+(defface drgnx-work-lens-rail '((t :inherit drgnx-work-label)) "The lens switch's rail: the gap's colour behind its labels."
+  :group 'drgnx-work-space)
+(defface drgnx-work-lens-seg '((t :inherit drgnx-work-lens-rail)) "A lens label that is not shown, on the rail."
+  :group 'drgnx-work-space)
+(defface drgnx-work-lens-current '((t :inherit (bold drgnx-pill-on))) "The lens shown, on the lens bar: a raised pill."
+  :group 'drgnx-work-space)
+(defface drgnx-work-lens-key '((t :inherit drgnx-keycap)) "A key's badge on the lens bar." :group 'drgnx-work-space)
+(defface drgnx-work-chip '((t :inherit drgnx-selected-quiet)) "A chip." :group 'drgnx-work-space)
+(defface drgnx-work-step-number '((t :inherit (drgnx-chip-solid drgnx-badge)))
+  "A trail step's number: a filled circle in the accent's blue (work-space-dark.html `.mk')." :group 'drgnx-work-space)
+(defface drgnx-work-thought '((t :inherit (drgnx-text-muted italic))) "A thought step's text on the trail." :group 'drgnx-work-space)
+(defface drgnx-work-plus '((t :inherit success)) "The added lines of a change." :group 'drgnx-work-space)
+(defface drgnx-work-minus '((t :inherit error)) "The removed lines of a change." :group 'drgnx-work-space)
+(defface drgnx-work-needs-you-key '((t :inherit (drgnx-work-needs-you drgnx-keycap)))
+  "A needs-you chip's jump key (g1), boxed in the chip's colour." :group 'drgnx-work-space)
+(defface drgnx-work-who-1 '((t :inherit drgnx-badge))
+  "The filled circle of agent 1's initial (the theme gives its colour)." :group 'drgnx-work-space)
+(defface drgnx-work-who-2 '((t :inherit drgnx-badge))
+  "The filled circle of agent 2's initial (the theme gives its colour)." :group 'drgnx-work-space)
+(defface drgnx-work-who-3 '((t :inherit drgnx-badge))
+  "The filled circle of agent 3's initial (the theme gives its colour)." :group 'drgnx-work-space)
+(defface drgnx-work-who-4 '((t :inherit drgnx-badge))
+  "The filled circle of agent 4's initial (the theme gives its colour)." :group 'drgnx-work-space)
+(defface drgnx-work-who-5 '((t :inherit drgnx-badge))
+  "The filled circle of agent 5's initial (the theme gives its colour)." :group 'drgnx-work-space)
+(defface drgnx-work-who-6 '((t :inherit drgnx-badge))
+  "The filled circle of agent 6's initial (the theme gives its colour)." :group 'drgnx-work-space)
+(defface drgnx-work-new '((t :inherit success)) "The mark of a new conclusion." :group 'drgnx-work-space)
+(defface drgnx-work-agent-1 '((t :inherit drgnx-agent-1)) "The first agent colour." :group 'drgnx-work-space)
+(defface drgnx-work-agent-2 '((t :inherit drgnx-agent-2)) "The second agent colour." :group 'drgnx-work-space)
+(defface drgnx-work-agent-3 '((t :inherit drgnx-agent-3)) "The third agent colour." :group 'drgnx-work-space)
+(defface drgnx-work-agent-4 '((t :inherit drgnx-agent-4)) "The fourth agent colour." :group 'drgnx-work-space)
+(defface drgnx-work-agent-5 '((t :inherit drgnx-agent-5)) "The fifth agent colour." :group 'drgnx-work-space)
+(defface drgnx-work-agent-6 '((t :inherit drgnx-agent-6)) "The sixth agent colour." :group 'drgnx-work-space)
+
+(defconst drgnx-work-space-command-ids
+  '(work-view work-outline work-left work-right work-why work-touches work-next-agent work-previous-agent work-open
+              work-open-beside work-needs-you-next work-needs-you-here-next work-needs-you-here-previous
+              work-needs-you-1 work-needs-you-2 work-needs-you-3 work-needs-you-4 work-needs-you-5 work-needs-you-6
+              work-needs-you-7 work-needs-you-8 work-needs-you-9 work-view-map work-view-board work-view-timeline work-view-flow
+              work-flow-evidence work-flow-rules work-flow-run-red work-flow-tell-agent work-flow-waive work-trail
+              work-steer work-pause work-resume work-stop work-keys-sheet work-conclusion-steps work-step-conclusions
+              work-review work-second-reviewer work-review-accept work-review-reject
+              work-focus work-overlaps
+              work-collapse-layer-1 work-collapse-layer-2 work-collapse-layer-3 work-collapse-layer-4
+              work-collapse-layer-5 work-collapse-layer-6 work-expand-layers work-show-finished work-search
+              work-escape work-take-wheel work-files work-who-is-here
+              work-diffs work-diff-quit work-diff-accept-hunk work-diff-reject-hunk)
+  "The commands of this module, each with a row in every key profile (keys/*.eld).")
+
+;;;; The workspace of a frame
+
+(defun drgnx-work-space--fnv12 (strings)
+  "12 hex digits of the 64-bit FNV-1a hash of STRINGS (sorted, joined by newlines)."
+  (let ((h #xcbf29ce484222325) (mask #xffffffffffffffff))
+    (dolist (byte (append (encode-coding-string (mapconcat #'identity (sort (copy-sequence strings) #'string<) "\n")
+                                                'utf-8 t)
+                          nil))
+      (setq h (logand (* (logxor h byte) #x100000001b3) mask)))
+    (substring (format "%016x" h) 0 12)))
+
+(defun drgnx-work-space--git-p (dir) (file-exists-p (expand-file-name ".git" dir)))
+
+(defun drgnx-work-space--default-roots (root)
+  "ROOT, and when it lies inside another git repository, that repository and the git repositories directly in it."
+  (let* ((root (file-name-as-directory root))
+         (up (locate-dominating-file (file-name-directory (directory-file-name root)) ".git")))
+    (if (null up)
+        (list root)
+      (let ((up (file-name-as-directory up)))
+        (cons up (cl-remove-duplicates
+                  (cons root (seq-filter (lambda (d) (and (file-directory-p d) (drgnx-work-space--git-p d)))
+                                         (directory-files up t "\\`[^.]" t)))
+                  :test #'file-equal-p))))))
+
+(defun drgnx-work-space--project-id (root)
+  "A repository's id: its first root commit, else its path (the hub's Urdr project is `project:COMMIT')."
+  (or (ignore-errors
+        (with-temp-buffer
+          (when (zerop (call-process "git" nil '(t nil) nil "-C" root "rev-list" "--max-parents=0" "HEAD"))
+            (car (sort (split-string (buffer-string) "\n" t) #'string<)))))
+      root))
+
+(defun drgnx-work-space-workspace (&optional frame)
+  "The workspace FRAME's selected window works in: (:id ID :roots ROOTS), or nil when it is in no project (a scratch
+buffer, a folder outside git, a remote folder).  ROOTS: `drgnx-work-space-roots' or the default (see there); ID:
+\"workspace:\" and 12 hex digits of the roots' project ids."
+  (let* ((frame (or frame (selected-frame)))
+         (dir (with-current-buffer (window-buffer (frame-selected-window frame)) default-directory))
+         (root (and dir (not (file-remote-p dir))
+                    (let ((default-directory dir)) (when-let* ((p (project-current))) (project-root p)))))
+         (roots (cond (drgnx-work-space-roots (mapcar (lambda (r) (file-name-as-directory (expand-file-name r)))
+                                                      drgnx-work-space-roots))
+                      (root (drgnx-work-space--default-roots (file-truename root))))))
+    (when roots
+      (list :id (concat "workspace:" (drgnx-work-space--fnv12 (mapcar #'drgnx-work-space--project-id roots)))
+            :roots roots))))
+
+;;;; The map buffer
+
+(defun drgnx-work-space--name (workspace)
+  (format "*drgnx work: %s*"
+          (if-let* ((root (car (plist-get workspace :roots))))
+              (file-name-nondirectory (directory-file-name root))
+            (plist-get workspace :id))))
+
+(defun drgnx-work-space--width-units (&optional window)
+  "The drawing width, in units of 4 px, WINDOW (or the selected one) gives the map: its pixel width less the layer
+labels' margin (84 px) and 12 px of padding, in logical pixels.  A terminal frame has no pixels: 226 units."
+  (if (not (display-graphic-p))
+      226
+    (let* ((scale (drgnx-pixels-scale))
+           (px (/ (window-body-width (or window (selected-window)) t) (float scale))))
+      (max 0 (floor (- px 96) 4)))))
+
+(defun drgnx-work-space--killed ()
+  "`kill-buffer-hook' of a map buffer: its windows lose the layout motion's parameters and its view closes."
+  (drgnx-work-map-motion-clear)
+  (when drgnx-work-space--view (drgnx-work-client-close drgnx-work-space--view)))
+
+(defun drgnx-work-space--empty-buffer ()
+  (with-current-buffer (get-buffer-create "*drgnx work: none*")
+    (unless (derived-mode-p 'drgnx-work-map-mode)
+      (drgnx-work-map-mode)
+      (drgnx-view-attach 'work-map))
+    (setq drgnx-work-space--message
+          "No project: open a folder in a git repository to see its agents' work here.")
+    (drgnx-view-touch drgnx-view)
+    (current-buffer)))
+
+(defun drgnx-work-space--buffer (workspace)
+  "The map buffer of WORKSPACE (a plist :id :roots, or nil), made and subscribed when there is none."
+  (if (null workspace)
+      (drgnx-work-space--empty-buffer)
+    (let ((buffer (get-buffer-create (drgnx-work-space--name workspace))))
+      (with-current-buffer buffer
+        (unless (equal drgnx-work-space--view (plist-get workspace :id))
+          (drgnx-work-map-mode)
+          (setq default-directory (car (plist-get workspace :roots))
+                drgnx-work-space--view (plist-get workspace :id) drgnx-work-space--message nil)
+          (add-hook 'kill-buffer-hook #'drgnx-work-space--killed nil t)
+          ;; the hub lays the map out and draws it; an Emacs without Sjá cannot show its rows, and says so
+          (if (drgnx-work-map-rows-p)
+              (progn (drgnx-work-map-rows-attach (plist-get workspace :id))
+                     (drgnx-work-client-open (plist-get workspace :id) workspace
+                                             :width (drgnx-work-space--width-units)
+                                             :density (symbol-name drgnx-work-space-density)))
+            (setq drgnx-work-space--message drgnx-work-map-no-sja)
+            (drgnx-view-attach 'work-map)
+            (drgnx-view-touch drgnx-view))))
+      buffer)))
+
+;;;###autoload
+(defun drgnx-work-space-open (&optional workspace no-display)
+  "Open the Work space: the map of WORKSPACE (default: the selected frame's, `drgnx-work-space-workspace'), shown in
+an editor window unless NO-DISPLAY.  Returns the map buffer.  Outside a project it opens an empty map that says so
+and subscribes to nothing."
+  (interactive)
+  ;; the map's events come back on the subscribed connection: the hub is started when none runs, and dialled
+  (require 'drgnx-hub-client)
+  (drgnx-hub-start-for-command (lambda (why) (message "The Work space has no hub: %s" why)))
+  (let ((buffer (drgnx-work-space--buffer (or workspace (drgnx-work-space-workspace)))))
+    (unless no-display
+      (pop-to-buffer buffer)
+      (when (and (display-graphic-p) (buffer-local-value 'drgnx-work-space--view buffer))
+        (drgnx-work-space--show-detail buffer)))
+    buffer))
+
+(defun drgnx-work-space-needs-you-next ()
+  "Select the next thing that needs you in the Work space: in the map a window shows, else the newest, else a map
+opened now.  It selects; it never approves, pushes or answers."
+  (interactive)
+  (let ((buffer (or (seq-find (lambda (b) (get-buffer-window-list b nil t)) (drgnx-work-map-buffers))
+                    (car (drgnx-work-map-buffers)) (drgnx-work-space-open))))
+    (pop-to-buffer buffer)
+    (with-current-buffer buffer (drgnx-work-map-needs-you-here-next))))
+
+(defun drgnx-work-needs-you (n)
+  "`g N': on the map, select the Nth thing on its strip that needs you; in the Flow, the Nth task a gate holds.  It
+selects; nothing is approved, pushed, merged or answered."
+  (cond ((derived-mode-p 'drgnx-work-flow-mode) (drgnx-work-flow-held n))
+        ((derived-mode-p 'drgnx-work-map-mode) (drgnx-work-map-needs-you n))
+        (t (user-error "Work: g %d selects on the map and in the Flow" n))))
+
+(defun drgnx-work-space--show-detail (map-buffer)
+  "The side panel of MAP-BUFFER in a window of the right dock (pane kind `work-detail'), the map keeping focus."
+  (condition-case err
+      (let ((win (selected-window)))
+        (drgnx-work-detail-buffer map-buffer)
+        (drgnx-pane-show 'work-detail)
+        (when (window-live-p win) (select-window win)))
+    (error (message "Work: the side panel did not open: %s" (error-message-string err)))))
+
+(defun drgnx-work-space--detail-buffer ()
+  "The buffer pane kind `work-detail' shows: the side panel of the newest map."
+  (if-let* ((map (car (drgnx-work-map-buffers)))) (drgnx-work-detail-buffer map) (get-buffer-create "*drgnx work detail*")))
+
+(defvar drgnx-work-space--panel-trail nil
+  "The trail buffer the Work layout's bottom tile shows: the one of the agent last selected on a map.")
+
+(defun drgnx-work-space--trail-buffer ()
+  "The buffer pane kind `work-trail' shows: the trail of the map's selected agent, else a line asking for one."
+  (if (buffer-live-p drgnx-work-space--panel-trail)
+      drgnx-work-space--panel-trail
+    (with-current-buffer (get-buffer-create "*drgnx work trail*")
+      (when (zerop (buffer-size)) (insert "Select an agent to follow its trail.\n"))
+      (current-buffer))))
+
+(declare-function drgnx-work-trail-open "drgnx-work-trail")
+(declare-function drgnx-wb-area-redraw "drgnx-area")
+(declare-function drgnx-work-map--sja "drgnx-work-map")
+(declare-function drgnx-work-trail--sid "drgnx-work-trail")
+(declare-function drgnx-work-trail-panel-title "drgnx-work-trail")
+(declare-function drgnx-layouts-current "drgnx-layouts")
+
+(defun drgnx-work-space--follow-trail (buffer id)
+  "`drgnx-view-selected-functions': with an agent ID selected on a map BUFFER, the trail tile of layout Work follows
+it (its trail is made when there is none, the tile shows it when the layout is on)."
+  (when (and id (string-prefix-p "agent:" id) (buffer-live-p buffer)
+             (eq (buffer-local-value 'major-mode buffer) 'drgnx-work-map-mode) (drgnx-work-map-rows-p))
+    (let* ((sid (drgnx-work-trail--sid id))
+           (label (or (with-current-buffer buffer
+                        (nidhogg-view-get (drgnx-work-map--sja) 'field "label" id))
+                      sid))
+           (trail (drgnx-work-trail-open buffer sid)))
+      (with-current-buffer trail (drgnx-work-trail-panel-title label))
+      (setq drgnx-work-space--panel-trail trail)
+      (when (and (fboundp 'drgnx-layouts-current) (eq (drgnx-layouts-current) 'work))
+        (drgnx-pane-show 'work-trail :buffer trail)
+        (drgnx-wb-area-redraw 'panel)))))
+
+(defun drgnx-work-space--rules-buffer ()
+  "The buffer pane kind `work-rules' shows: the Rules tile of the newest Flow."
+  (or (seq-some (lambda (flow) (drgnx-work-flow-rules-buffer flow)) (drgnx-work-flow-buffers))
+      (get-buffer-create "*drgnx work rules*")))
+
+(defun drgnx-work-space-sync-shown ()
+  "Tell the hub which maps a window shows now: a hidden one gets nothing, a shown one is drawn anew.  Runs on the
+workbench state store's window events (and by hand in tests); only calls the hub when a map's shown state changed."
+  (dolist (buffer (drgnx-work-map-buffers))
+    (when-let* ((id (buffer-local-value 'drgnx-work-space--view buffer))
+                ((or (buffer-local-value 'drgnx-view buffer) (buffer-local-value 'drgnx-view-patch buffer))))
+      (let* ((view (buffer-local-value 'drgnx-view buffer))
+             (shown (and (if view (drgnx-view-shown-p view) (drgnx-view-buffer-shown-p buffer)) t)))
+        (unless (eq shown (drgnx-work-client-shown-p id))
+          (drgnx-work-client-set id :shown (if shown t :false)))))))
+
+(defun drgnx-work-space--windows-changed (&optional data)
+  "The state store's `windows-changed': maps that were shown or hidden tell the hub; DATA's frame enters or leaves
+layout Work (`drgnx-work-space--follow-layout')."
+  (drgnx-work-space-sync-shown)
+  (drgnx-work-space--follow-layout (plist-get data :frame)))
+
+;;;; Layout Work: the Work space as its own card, its tiles beside and below it
+
+(defconst drgnx-work-space--lens-modes
+  '(drgnx-work-map-mode drgnx-work-board-mode drgnx-work-timeline-mode drgnx-work-flow-mode)
+  "The Work lenses' major modes: a buffer in one, in an editor window, is the Work space on screen.")
+
+(defun drgnx-work-space--lens-window (&optional frame)
+  "FRAME's (default: the selected one's) editor window that shows a Work lens, or nil."
+  (seq-find (lambda (w) (and (drgnx-signal-editor-window-p w)
+                             (memq (buffer-local-value 'major-mode (window-buffer w)) drgnx-work-space--lens-modes)))
+            (window-list frame 'nomini)))
+
+(defun drgnx-work-space--layout-shape (editor)
+  "Layout Work's editor shape: the window that shows a Work lens (else EDITOR, given the Work space's map) alone."
+  (let ((w (or (drgnx-work-space--lens-window) editor)))
+    (delete-other-windows w)
+    (unless (memq (buffer-local-value 'major-mode (window-buffer w)) drgnx-work-space--lens-modes)
+      (set-window-buffer w (drgnx-work-space-open nil t)))
+    (select-window w)))
+
+(defun drgnx-work-space--follow-layout (frame)
+  "With module tools/layouts on, FRAME enters layout Work when it starts showing a Work lens, and leaves it for where
+it came from (`drgnx-layouts-back') once it shows none.  Only a change of whether a lens is shown moves the layout, so
+another layout picked while a lens is shown stays."
+  (when (and (frame-live-p frame) (drgnx-module-running-p 'tools/layouts))
+    (let ((lens (drgnx-work-space--lens-window frame)))
+      (unless (eq (and lens t) (frame-parameter frame 'drgnx-work-space-shown))
+        (set-frame-parameter frame 'drgnx-work-space-shown (and lens t))
+        (with-selected-frame frame
+          (cond ((and lens (not (eq (drgnx-layouts-current) 'work)))
+                 (let ((buffer (window-buffer lens)))
+                   (drgnx-layouts-apply 'work)
+                   ;; the arrangement Work was left in may show another lens: the one just shown stays in front
+                   (unless (get-buffer-window buffer) (set-window-buffer (drgnx-wb-editor-window) buffer))))
+                ((and (not lens) (eq (drgnx-layouts-current) 'work))
+                 (drgnx-layouts-back))))))))
+
+(defun drgnx-work-space--show-status (view-id status)
+  "`drgnx-work-client-status-functions': a view's status changed; the map says reconnecting in its mode line."
+  (when-let* ((buffer (drgnx-work-map-buffer view-id)))
+    (with-current-buffer buffer
+      (setq-local mode-name (if (equal status "reconnecting") "Work map (reconnecting)" "Work map"))
+      (force-mode-line-update))))
+
+;;;; Saved state: what the selection, view and filters are, for the layout to keep
+
+(defun drgnx-work-space-state (&optional buffer)
+  "The state of BUFFER's map to keep across restarts: a plist (:version 1 :selection :lens :filters :collapsed)."
+  (with-current-buffer (or buffer (current-buffer))
+    (list :version 1 :selection nil :lens 'map :filters nil :collapsed nil)))
+
+(defun drgnx-work-space-restore (state &optional buffer)
+  "Put STATE (`drgnx-work-space-state') back on BUFFER's map."
+  (ignore state buffer)
+  nil)
+
+;;;; Files an agent is still editing open read-only; take the wheel
+
+(require 'drgnx-agents)
+
+(defvar-local drgnx-work-live-file--agent nil "The mirrored session whose worktree holds this buffer's file.")
+(defvar-local drgnx-work-live-file--lighter "" "The mode line chip of `drgnx-work-live-file-mode': live · NAME.")
+(defvar-local drgnx-work-live-file--was-read-only nil "The buffer's read-only state before the mode.")
+
+(defvar drgnx-work-live-file-mode-map
+  (let ((m (make-sparse-keymap)))
+    (define-key m [remap read-only-mode] #'drgnx-work-take-wheel)
+    (define-key m [remap View-exit] #'drgnx-work-take-wheel)
+    (define-key m [remap View-exit-and-edit] #'drgnx-work-take-wheel)
+    m)
+  "Keys of a live agent's file.  The key profiles bind `work-take-wheel' (W) here.")
+
+(defun drgnx-work-live-file--session (file)
+  "The mirrored session that holds FILE: alive (not exited), and FILE is in its linked worktree.  A linked
+worktree has a `.git' file; the user's own checkout has a `.git' directory, and an agent in it locks nothing.  A
+session's folder is the hub's word: a remote one (or one a link leads out to a remote name) holds no file here, and
+no file name handler runs on it (`drgnx-work-code-local-dir')."
+  (seq-find (lambda (s)
+              (let ((cwd (and (drgnx-agent-session-remote s) (not (eq (drgnx-agent-session-status s) 'exited))
+                              (drgnx-work-code-local-dir (drgnx-agent-session-cwd s))))
+                    (file-name-handler-alist nil))
+                (and cwd
+                     (file-in-directory-p file cwd)
+                     (file-regular-p (expand-file-name ".git" cwd)))))
+            drgnx-agents--sessions))
+
+(define-minor-mode drgnx-work-live-file-mode
+  "An agent is still editing in this file's worktree: it is read-only, and \\[drgnx-work-take-wheel] takes the wheel."
+  :lighter drgnx-work-live-file--lighter :keymap drgnx-work-live-file-mode-map
+  (if drgnx-work-live-file-mode
+      (progn (setq drgnx-work-live-file--was-read-only buffer-read-only
+                   drgnx-work-live-file--lighter
+                   (format " live · %s" (if drgnx-work-live-file--agent (drgnx-agent-session-name drgnx-work-live-file--agent) "")))
+             (view-mode 1))
+    (view-mode -1)
+    (setq buffer-read-only drgnx-work-live-file--was-read-only)))
+
+(defun drgnx-work-live-file--maybe ()
+  "`find-file-hook': lock the file when an agent still holds its worktree."
+  (when-let* ((file buffer-file-name) ((not (file-remote-p file))) (s (drgnx-work-live-file--session file)))
+    (setq drgnx-work-live-file--agent s)
+    (drgnx-work-live-file-mode 1)))
+
+(declare-function drgnx-agents-take-wheel "drgnx-agents-follow")
+
+(defun drgnx-work-take-wheel ()
+  "Kept for one release cycle under its id: the same as `drgnx-agents-take-wheel' (the module tools/agents-in-editor),
+which the hub's wheel protocol drives.  It has no key of its own."
+  (interactive)
+  (unless drgnx-work-live-file--agent (user-error "No live agent holds this file"))
+  (if (fboundp 'drgnx-agents-take-wheel)
+      (call-interactively #'drgnx-agents-take-wheel)
+    (user-error "Taking the wheel needs the module tools/agents-in-editor")))
+
+;;;; The module
+
+(defun drgnx-work-space--setup ()
+  "tools/work-space's setup: the hub client's connection and disconnection reach the map client; the map follows the
+windows; the commands."
+  (drgnx-module-hook 'drgnx-hub-connected-functions connected () (drgnx-work-client-connected))
+  (drgnx-module-hook 'drgnx-hub-disconnect-functions disconnected () (drgnx-work-client-disconnected))
+  (drgnx-module-hook 'drgnx-frame-replaced-functions frame-replaced (old new)
+    (drgnx-work-map--frame-replaced old new)
+    (drgnx-work-code--frame-replaced old new))
+  (drgnx-module-hook 'drgnx-work-client-status-functions status (view status) (drgnx-work-space--show-status view status))
+  (drgnx-module-hook 'find-file-hook live-file () (drgnx-work-live-file--maybe))
+  (drgnx-module-hook 'drgnx-view-selected-functions follow-trail (buffer id) (drgnx-work-space--follow-trail buffer id))
+  (drgnx-command-define 'work-take-wheel :category "Work" :title "Take the Wheel from the Agent"
+                        :command #'drgnx-work-take-wheel :map 'drgnx-work-live-file-mode-map
+                        :doc "Pause the agent that is editing here and make this file editable; saving tells the agent")
+  (drgnx-state-subscribe 'windows-changed #'drgnx-work-space--windows-changed)
+  (when (fboundp 'drgnx-statusbar-define-segment)
+    (drgnx-statusbar-define-segment 'work-agents :fn #'drgnx-work-map--seg-agents :help "The agents on the map")
+    (drgnx-statusbar-define-segment 'work-needs-you :fn #'drgnx-work-map--seg-needs-you :click #'drgnx-work-map-needs-you-here-next
+                                    :help "What needs you; click for the next")
+    (drgnx-statusbar-define-segment 'work-lens :fn #'drgnx-work-map--seg-lens :help "The view and its counts"))
+  (drgnx-history-mode 1)                ; the editor's side of the edit history (stays off without Nidhogg's change hook)
+  (when (fboundp 'drgnx-wb-place) (drgnx-wb-place 'drgnx-work-map-mode 'editor))
+  (when (fboundp 'drgnx-wb-place) (drgnx-wb-place 'drgnx-work-files-mode 'popup))
+  (drgnx-command-define 'work-files :category "Work" :title "List the Agent's Files"
+                        :command #'drgnx-work-code-files-command :map 'drgnx-work-map-mode-map
+                        :doc "The files the selected agent edited, one key each; the key opens the file at the agent's line")
+  (drgnx-command-define 'work-diffs :category "Work" :title "Show the Agent's Diffs Side by Side"
+                        :command #'drgnx-work-code-diffs-command :map 'drgnx-work-map-mode-map
+                        :doc "The files the selected agent edited, one window each (three at most), against their base; q puts the windows back")
+  (drgnx-command-define 'work-diff-quit :category "Work" :title "Close the Diffs"
+                        :command #'drgnx-work-diff-quit :map 'drgnx-work-diff-mode-map
+                        :doc "Close the side-by-side diffs and restore the windows as they were")
+  (drgnx-command-define 'work-diff-accept-hunk :category "Work" :title "Accept the Hunk"
+                        :command #'drgnx-work-diff-accept-hunk :map 'drgnx-work-diff-mode-map
+                        :doc "Accept the hunk at point; the review view decides hunks")
+  (drgnx-command-define 'work-diff-reject-hunk :category "Work" :title "Reject the Hunk"
+                        :command #'drgnx-work-diff-reject-hunk :map 'drgnx-work-diff-mode-map
+                        :doc "Reject the hunk at point; the review view decides hunks")
+  (drgnx-command-define 'work-job-log :category "Work" :title "Show the Job's Live Log"
+                        :command #'drgnx-work-job-log :map 'drgnx-work-detail-mode-map
+                        :doc "Show the end of the log of the job on this row of a machine's queue in the side panel")
+  (drgnx-command-define 'work-who-is-here :category "Work" :title "Who Is in This File"
+                        :command #'drgnx-work-who-is-here
+                        :doc "Name the agents in the file you are visiting, with their lines, and select it on the map")
+  (when (fboundp 'drgnx-pane-define-kind)
+    (drgnx-pane-define-kind 'work-detail :title " Detail" :home 'right :buffer #'drgnx-work-space--detail-buffer)
+    (drgnx-pane-define-kind 'work-trail :title " Trail" :home 'bottom :buffer #'drgnx-work-space--trail-buffer)
+    (drgnx-pane-define-kind 'work-rules :title " RULES" :home 'bottom :buffer #'drgnx-work-space--rules-buffer))
+  ;; layout Work's editor shape: the lens alone (tools/layouts follows a shown lens: `drgnx-work-space--follow-layout')
+  (eval-after-load 'drgnx-layouts
+    (drgnx-modules-with-owner (drgnx-layouts-define-shape 'work #'drgnx-work-space--layout-shape)))
+  (pcase-dolist (`(,id ,title ,fn ,doc)
+                 '((work-left "Select the Previous Item" drgnx-work-map-left "Along the layer, to the left")
+                   (work-right "Select the Next Item" drgnx-work-map-right "Along the layer, to the right")
+                   (work-why "Select What It Came From" drgnx-work-map-why "Follow why up, to the nearest by position")
+                   (work-touches "Select What It Touches" drgnx-work-map-touches "Follow touches down")
+                   (work-back "Go Back" drgnx-work-map-back
+                              "Back to the selection before the last move (a run of arrows is one move)")
+                   (work-forward "Go Forward" drgnx-work-map-forward "Redo the move Go Back undid")
+                   (work-next-agent "Select the Next Agent" drgnx-work-map-next-agent "The next agent, in team order")
+                   (work-previous-agent "Select the Previous Agent" drgnx-work-map-previous-agent
+                                        "The previous agent, in team order")
+                   (work-open "Open" drgnx-work-map-open-selection
+                              "An agent's transcript, a branch's repository, a file or a document")
+                   (work-open-beside "Open Beside" drgnx-work-map-open-beside "Open it without moving focus")))
+    ;; the lens map: the Board and the Timeline share these keys and move in their own way
+    (drgnx-command-define id :category "Work" :title title :command fn :map 'drgnx-work-lens-map :doc doc))
+  (drgnx-command-define 'work-view-map :category "Work" :title "Show the Map" :command #'drgnx-work-lens-show-map
+                        :map 'drgnx-work-lens-map :doc "The map, keeping the selection")
+  (drgnx-command-define 'work-view-board :category "Work" :title "Show the Board" :command #'drgnx-work-lens-show-board
+                        :map 'drgnx-work-lens-map :doc "The tracker's tasks by column, keeping the selection")
+  (drgnx-command-define 'work-view-flow :category "Work" :title "Show the Flow" :command #'drgnx-work-lens-show-flow
+                        :map 'drgnx-work-lens-map :doc "A plan run's tasks by gate, its merge batch and its rule pack")
+  (drgnx-command-define 'work-flow-evidence :category "Work" :title "Show the Task's Evidence"
+                        :command #'drgnx-work-flow-evidence :map 'drgnx-work-flow-mode-map
+                        :doc "The hub's records of the selected task's runs, gate findings and waivers")
+  (drgnx-command-define 'work-flow-rules :category "Work" :title "Show the Rule Pack"
+                        :command #'drgnx-work-flow-rules :map 'drgnx-work-flow-mode-map
+                        :doc "The run's rule pack in the bottom panel: each rule, its kind, how the hub holds it")
+  (drgnx-command-define 'work-flow-run-red :category "Work" :title "Run the Held Task's Gates Again" :icon 'rotate-ccw
+                        :command #'drgnx-work-flow-run-red :map 'drgnx-work-flow-mode-map
+                        :doc "The hub runs what the held task's gates miss (its red, its author check) and merges when they pass")
+  (drgnx-command-define 'work-flow-tell-agent :category "Work" :title "Tell the Held Task's Agent"
+                        :command #'drgnx-work-flow-tell-agent :map 'drgnx-work-flow-mode-map
+                        :doc "Send the held task back to its agent with what its gates hold it for")
+  (drgnx-command-define 'work-flow-waive :category "Work" :title "Waive the Held Task's Gates Once"
+                        :command #'drgnx-work-flow-waive :map 'drgnx-work-flow-mode-map
+                        :doc "Yours only: pass the held task's gates for its tip, with a reason recorded on the task")
+  (pcase-dolist (`(,id ,title ,fn ,doc)
+                 '((work-view-timeline "Show the Timeline" drgnx-work-lens-show-timeline "A lane for each agent over time, keeping the selection")
+                   (work-trail "Open the Research Trail" drgnx-work-trail-show "The selected agent's steps in order, with its conclusions")
+                   (work-steer "Steer the Agent" drgnx-work-trail-steer "Message the selected agent; queued or steering, never a cancel")
+                   (work-pause "Pause the Agent" drgnx-work-trail-pause "Cancel after the current tool call; u resumes")
+                   (work-resume "Resume the Agent" drgnx-work-trail-resume "A plain continue prompt, labelled in the trail")
+                   (work-stop "Stop the Agent" drgnx-work-trail-stop "Stop it, after a confirmation line")
+                   (work-huddle "Huddle the Overlapping Agents" drgnx-work-huddle-overlap
+                                "Start a huddle between the selected agent and the one its overlap edge points at")
+                   (work-keys-sheet "Show This View's Keys" drgnx-work-keys-sheet "The keyboard shortcuts sheet")
+                   (work-review "Open the Review" drgnx-work-review-show
+                                "The selected agent's decisions with what they computed to, then its work as hunks")
+                   (work-second-reviewer "Start a Second Reviewer" drgnx-work-review-second
+                                         "A reviewer that sees the code and not the author's conclusions, through job/propose")))
+    (drgnx-command-define id :category "Work" :title title :command fn :map 'drgnx-work-lens-map :doc doc))
+  (drgnx-command-define 'work-review-accept :category "Work" :title "Accept the Change Here"
+                        :command #'drgnx-work-review-accept :map 'drgnx-work-review-mode-map
+                        :doc "A review mark with the diff's hash, for the merge gate; nothing is merged")
+  (drgnx-command-define 'work-review-reject :category "Work" :title "Reject the Hunk Here"
+                        :command #'drgnx-work-review-reject :map 'drgnx-work-review-mode-map
+                        :doc "The file goes back to pending and the agent is told, queued; the agent is not cancelled")
+  (drgnx-command-define 'work-conclusion-steps :category "Work" :title "Light the Steps of a Conclusion"
+                        :command #'drgnx-work-trail-show-steps :map 'drgnx-work-trail-mode-map
+                        :doc "On a conclusion: light the steps it rests on and go through them")
+  (drgnx-command-define 'work-step-conclusions :category "Work" :title "Go to the Conclusions of a Step"
+                        :command #'drgnx-work-trail-show-conclusions :map 'drgnx-work-trail-mode-map
+                        :doc "On a step: go to the first conclusion that rests on it")
+  (pcase-dolist (`(,id ,title ,fn ,doc)
+                 '((work-needs-you-here-next "Select the Next Thing That Needs You" drgnx-work-map-needs-you-here-next
+                                             "Cycle the strip's chips; it selects, it never approves")
+                   (work-needs-you-here-previous "Select the Previous Thing That Needs You"
+                                                 drgnx-work-map-needs-you-here-previous "Cycle the strip's chips backwards")
+                   (work-focus "Focus on the Chain" drgnx-work-map-focus "Hide what is not on the selection's chain; again for all")
+                   (work-overlaps "Show Overlaps Only" drgnx-work-map-overlaps "Only the agents and branches that overlap")
+                   (work-expand-layers "Expand All Layers" drgnx-work-map-expand-layers "Every layer open again")
+                   (work-show-finished "Show Finished Items" drgnx-work-map-show-finished "Finished items too; again to hide them")
+                   (work-search "Narrow the Map" drgnx-work-map-search "Dim what does not match; Enter selects the first match")
+                   (work-escape "Clear Search, Filters, then Close" drgnx-work-map-escape
+                                "Esc: the search first, then the filters, then the pane")))
+    (drgnx-command-define id :category "Work" :title title :command fn :map 'drgnx-work-map-mode-map :doc doc))
+  (drgnx-command-define 'work-needs-you-next :category "Work" :title "Next Thing That Needs You"
+                        :command #'drgnx-work-space-needs-you-next
+                        :doc "Select the next thing that needs you in the Work space, opening the map")
+  (dotimes (i 9)
+    (let ((n (1+ i)))
+      (drgnx-command-define (intern (format "work-needs-you-%d" n)) :category "Work"
+                            :title (format "Select Thing %d That Needs You" n)
+                            :command (lambda () (interactive) (drgnx-work-needs-you n))
+                            :map 'drgnx-work-lens-map
+                            :doc "Jump to it (in the Flow: the Nth held task); nothing is approved or answered")))
+  (dotimes (i 6)
+    (let ((n (1+ i)))
+      (drgnx-command-define (intern (format "work-collapse-layer-%d" n)) :category "Work"
+                            :title (format "Collapse or Expand Layer %d" n)
+                            :command (lambda () (interactive) (drgnx-work-map-collapse-layer n))
+                            :map 'drgnx-work-map-mode-map :doc "One thin row with its name and count; again to expand")))
+  (drgnx-command-define 'work-view :category "Work" :title "Open the Work Space" :command #'drgnx-work-space-open
+                        :doc "The map of every live piece of agent work: asks, specs, plans, agents, branches, files and machines")
+  (drgnx-command-define 'work-outline :category "Work" :title "Show the Map as an Outline"
+                        :command #'drgnx-work-map-toggle-outline :map 'drgnx-work-map-mode-map
+                        :doc "One block per agent, with why it exists and what it touches; again for the map"))
+
+(defun drgnx-work-space--teardown ()
+  "tools/work-space's `:teardown': the edit history's tracking stops, the views close (the hub forgets them), the
+windows lose the layout motion's parameters and the map buffers go."
+  (drgnx-history-mode -1)
+  (drgnx-work-client-close-all)
+  (dolist (b (drgnx-work-map-buffers))
+    (drgnx-work-map-motion-clear b)
+    (with-current-buffer b (remove-hook 'kill-buffer-hook #'drgnx-work-space--killed t))
+    (kill-buffer b))
+  (dolist (b (buffer-list))
+    (when (buffer-local-value 'drgnx-work-live-file-mode b)
+      (with-current-buffer b (drgnx-work-live-file-mode -1))))
+  (dolist (b (append (drgnx-work-board-buffers) (drgnx-work-flow-buffers) (drgnx-work-flow-detail-buffers)
+                     (drgnx-work-flow-rules-buffers)
+                     (drgnx-work-timeline-buffers)
+                     (drgnx-work-trail-buffers)
+                     (drgnx-work-review-buffers)))
+    (kill-buffer b))
+  (dolist (b (drgnx-work-detail-buffers)) (kill-buffer b))
+  (drgnx-work-code-teardown)
+  (dolist (b (buffer-list))
+    (when (eq (buffer-local-value 'major-mode b) 'drgnx-work-files-mode) (kill-buffer b)))
+  (when-let* ((b (get-buffer "*drgnx work: none*"))) (kill-buffer b))
+  (dolist (f (frame-list)) (set-frame-parameter f 'drgnx-work-space-shown nil)))
+
+(drgnx-module-define 'tools/work-space
+                     :doc "The Work space: one map of every live piece of agent work, in six layers, with the edges between them."
+                     :stage 'startup :requires '(core/workbench)
+                     :setup #'drgnx-work-space--setup :teardown #'drgnx-work-space--teardown)
+
+(provide 'drgnx-work-space)
+;;; drgnx-work-space.el ends here

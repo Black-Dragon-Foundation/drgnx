@@ -28,6 +28,7 @@
 (declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
 (declare-function drgnx-explorer-roots "drgnx-explorer")
 (declare-function drgnx-explorer-set-roots "drgnx-explorer")
+(declare-function drgnx-explorer-open-root "drgnx-explorer")
 (declare-function drgnx-explorer-focus "drgnx-explorer")
 (defvar drgnx-explorer-buffer-name)
 
@@ -94,7 +95,9 @@ this to decide whether `drgnx PATH' needs a new window."
 (defun drgnx-session-open-folder (dir)
   "Show DIR in front as the Explorer's first folder (`drgnx DIR'), the Explorer selected — as VS Code after
 `code DIR' — with DIR as its `default-directory', so quick open and project search work in DIR's project.
-The Explorer's other folders stay.  Without the workbench (drgnx safe), DIR opens in dired.
+DIR replaces the folder the Explorer took by itself at the start (the editor's folder): the folders you opened stay,
+and every window showing the Explorer shows DIR's row at its top.
+Without the workbench (drgnx safe), DIR opens in dired.
 In a terminal frame (`drgnx -t DIR', or the command typed there) DIR opens in that frame: the graphical window
 is not raised.  As File → Open Folder… it asks for DIR; bin/drgnx's call never asks."
   (interactive (list (read-directory-name "Open folder: " nil nil t)))
@@ -103,7 +106,7 @@ is not raised.  As File → Open Folder… it asks for DIR; bin/drgnx's call nev
       (drgnx-session-raise))
     (if (not (fboundp 'drgnx-explorer-set-roots))
         (dired dir)
-      (drgnx-explorer-set-roots (cons dir (remove dir (drgnx-explorer-roots))))
+      (drgnx-explorer-open-root dir)
       (drgnx-explorer-focus)
       (with-current-buffer drgnx-explorer-buffer-name (setq default-directory dir)))
     t))
@@ -116,29 +119,75 @@ is not raised.  As File → Open Folder… it asks for DIR; bin/drgnx's call nev
   (seq-filter (lambda (b) (and (buffer-modified-p b) (or (buffer-file-name b) (buffer-local-value 'buffer-offer-save b))))
               (buffer-list)))
 
+(defvar drgnx-session-running-functions nil
+  "Functions the quit question calls first, with no argument: each returns the names of programs still running that
+no Emacs process stands for (drgnx's terminals: their programs run in the hub's workers), or nil, and may bring
+processes' query flags up to date before they are read.  A failing one never stops the question.")
+
 (defun drgnx-session--running-programs ()
   "The live processes whose end Emacs would ask about (`process-query-on-exit-flag'): terminals, shells, servers
-you started — not drgnx's own background helpers.  The terminal module, when it is there, first brings its
-terminals' flags up to date (a shell at a prompt does not ask)."
-  (when (fboundp 'drgnx-terminal-eat-refresh-query-flags)
-    (ignore-errors (funcall 'drgnx-terminal-eat-refresh-query-flags)))   ; a failing refresh never stops the question
+you started — not drgnx's own background helpers."
   (seq-filter (lambda (p) (and (process-live-p p) (process-query-on-exit-flag p))) (process-list)))
+
+(defun drgnx-session--running-names ()
+  "The names of the programs quitting would stop: those `drgnx-session-running-functions' name, then the processes of
+`drgnx-session--running-programs' (read after the functions ran)."
+  (let ((others nil))
+    (run-hook-wrapped 'drgnx-session-running-functions
+                      (lambda (f) (setq others (append others (ignore-errors (funcall f)))) nil))
+    (append (mapcar #'process-name (drgnx-session--running-programs)) others)))
+
+(defvar drgnx-session-keepable-functions nil
+  "Functions the quit question calls first, with no argument: each returns the names of running programs that can
+keep running after drgnx quits (drgnx's terminals, `drgnx-term-on-quit' `ask'), or nil.  With any, the question
+offers Keep Running, Close Them and Cancel and sets `drgnx-session-quit-keep'.  A failing one never stops the
+question.")
+
+(defvar drgnx-session-quit-keep nil
+  "What the last quit question chose for the programs `drgnx-session-keepable-functions' named: `keep', `close', or
+nil when it did not ask (none could be kept, or a quit that cannot ask).  Read by `kill-emacs-hook' functions.")
+
+(defun drgnx-session--keepable-names ()
+  "The names of the running programs that can keep running after drgnx quits (`drgnx-session-keepable-functions')."
+  (let ((names nil))
+    (run-hook-wrapped 'drgnx-session-keepable-functions
+                      (lambda (f) (setq names (append names (ignore-errors (funcall f)))) nil))
+    names))
+
+(defun drgnx-session--confirm-running ()
+  "Ask once about the programs still running: t when quitting may go on, nil to keep drgnx running.  When some can
+keep running, Keep Running, Close Them or Cancel (`drgnx-session-quit-keep'); else stop them, yes or no."
+  (let* ((keepable (drgnx-session--keepable-names))
+         (running (append (drgnx-session--running-names) keepable)))
+    (cond (keepable
+           (let ((use-dialog-box nil))
+             (pcase (car (read-multiple-choice
+                          (format "%d program%s still running (%s): " (length running)
+                                  (if (cdr running) "s are" " is") (string-join running ", "))
+                          '((?k "keep running" "terminals run on for the next drgnx to reattach; other programs stop")
+                            (?c "close them" "stop every one")
+                            (?q "cancel" "drgnx keeps running"))))
+               (?k (setq drgnx-session-quit-keep 'keep) t)
+               (?c (setq drgnx-session-quit-keep 'close) t)
+               (_ nil))))
+          (running (yes-or-no-p (format "%d program%s still running (%s); quit and stop %s? "
+                                        (length running) (if (cdr running) "s are" " is")
+                                        (string-join running ", ") (if (cdr running) "them" "it"))))
+          (t t))))
 
 (defun drgnx-session-quit-confirm ()
   "Ask what quitting needs: offer to save each changed file and New Untitled buffer, then confirm losing what
-stays unsaved, then — once — confirm stopping the programs still running (terminals, shells).  t when drgnx may
-quit; nil when it keeps running (the answer was no).  C-g or an error while saving leaves through the signal, so
-a caller that quits afterwards never gets there."
+stays unsaved, then — once — ask about the programs still running (terminals, shells; terminals may keep running).
+t when drgnx may quit; nil when it keeps running (the answer was no).  C-g or an error while saving leaves through
+the signal, so a caller that quits afterwards never gets there."
+  (setq drgnx-session-quit-keep nil)
   (save-some-buffers nil t)          ; t: buffers with `buffer-offer-save' too, as `save-buffers-kill-emacs' does
   (let ((unsaved (drgnx-session--unsaved-buffers)))
     (cond ((and unsaved (not (yes-or-no-p (format "%d buffer%s not saved; quit and lose the changes? "
                                                   (length unsaved) (if (cdr unsaved) "s are" " is")))))
            (message "drgnx keeps running; nothing was lost")
            nil)
-          ((when-let* ((running (drgnx-session--running-programs)))
-             (not (yes-or-no-p (format "%d program%s still running (%s); quit and stop %s? "
-                                       (length running) (if (cdr running) "s are" " is")
-                                       (mapconcat #'process-name running ", ") (if (cdr running) "them" "it")))))
+          ((not (drgnx-session--confirm-running))
            (message "drgnx keeps running; nothing was stopped")
            nil)
           (t t))))

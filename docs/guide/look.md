@@ -1,0 +1,366 @@
+# The look
+
+How drgnx looks, and how to change it. What it looks like, and why (the colour tokens, type, spacing, icons and a page per component), is the
+[design system](../design/index.md); this page is about the settings. The module `ui/look` ([modules](modules.md)) draws the colours, the type, the
+density and the icons. Everything here is a setting: change it in the settings page or in `settings.el`, and it
+applies at once to every frame, with no restart.
+
+## Colours and themes
+
+drgnx ships three themes, all generated from one table of colours: **drgnx Dark**, **drgnx Light** and **drgnx High
+Contrast**. Load one like any Emacs theme (`M-x load-theme`, or Preferences: Color Theme); they are found without any
+setup.
+
+### What a theme paints
+
+- **Surfaces.** The editor is `default`. Beside it are the gap behind the cards and the bars (`drgnx-surface-gap`), the
+  side panels (`drgnx-surface-panel`), raised things such as chips and the current tab (`drgnx-surface-raised`) and
+  popups (`drgnx-surface-overlay`). In the dark theme the gap is darker than the editor; in the light theme it is
+  darker than the white editor, so the cards read as depth.
+- **Text.** Body text is `default`; secondary, tertiary and unavailable text are `drgnx-text-muted`, `-subtle` and
+  `-disabled`.
+- **Syntax and the rest.** Every `font-lock-*` face, the mode and header lines, tabs, dividers, search, completion,
+  diffs, version-control state, diagnostics and the language server's faces, `outline-1` to `outline-8` (colour only,
+  no size change) and the terminal's sixteen `ansi-color-*` colours come from the same table, so a package that
+  inherits standard faces looks right with no work of its own.
+- **Controls.** Buttons (`drgnx-control`: the quiet selection's fill in a 1 px ring of the border colour, radius 6;
+  `drgnx-control-primary`: the accent's fill) and keycaps (`drgnx-keycap`: subtle text in a 1 px ring of the strong
+  border, radius 4, as tall as its text even on a taller list row where Nidhogg's compositor draws boxes `:fit text`). A ring's colour cannot be inherited, so the theme gives it; chips need none (a tint with room
+  inside it), except in high contrast, which has no tints: there a chip is ringed in its own text colour, with the
+  same room. Hairlines come in three strengths: `drgnx-border-subtle` (under the tab row), `drgnx-border` (cards,
+  dividers) and `drgnx-border-strong` (inputs, popups). See [face.md](face.md#faces).
+- **The selection and matches over text.** The region is the selection colour in a run rounded 3 px, which stops at
+  the line's end; search matches (`lazy-highlight`) are the accent at 25 % over the editor (18 % in Dark, where each
+  one also has a thin outline of the accent at 72 %, so a match inside a selection still shows), and the text keeps its
+  syntax colours, at 4.5:1 on the selection and on a match (7:1 in High Contrast); the current match (`isearch`) is
+  the same tint in a 1 px ring of the accent. Their boxes are drawn
+  inside the characters, so selecting or searching never moves text or changes a line's height. Rounding needs
+  Nidhogg's compositor; elsewhere the runs are square.
+- **Native title strip.** `nidhogg-title-bar` and `nidhogg-title-bar-inactive` follow the theme.
+- **Shell scripts.** A here-document is in the string colour (sh-script's own is bold yellow), a command substitution
+  in the function colour.
+- **Problems at a line's end.** A diagnostic flymake shows after the line (`drgnx-face-inline-problems`) is a chip of
+  its kind, opening with its icon (the glyph table's cross, triangle or info sign): the error, warning or note colour on
+  its tint, in the caption size, as tall as the text, with Emacs's own Flymake and Flymake 1.4 alike. High contrast
+  rings it instead. The chips of the look come in six kinds: `drgnx-chip-quiet`, `-accent`, `-attention`, `-ok`,
+  `-warn` and `-error`.
+
+### Packages
+
+Packages whose faces do not inherit standard ones are given the look by ui/look (the theme bridge): only their faces'
+default specs change, so a theme that styles the package itself still wins, and turning ui/look off gives the package
+its own back. A package that loads later gets them when it loads.
+
+- **Magit.** Section headings in the UI heading role (not gold), the current section in the hover colour, hunk
+  headers muted on the quiet selection, diff lines on the diff tints, hashes and dates subtle. Branches and tags are
+  chips as tall as the text: a local branch in the accent, a remote one in ok, a tag in warn. Its text starts 16 px
+  into the card (a column of `line-prefix` on a graphical frame). Each section heading that folds starts with a
+  Lucide chevron, right when it is hidden and down when it shows (Magit's own fringe bitmaps are off on a graphical
+  frame: the card's fringe clips them; a terminal keeps Magit's ellipsis). Text Magit gives no face of its own is
+  dressed by overlays after each refresh: `Head:`, `Merge:`, `Push:` in the UI heading face, and a file's `modified`,
+  `new file` and `deleted` in the warn, ok and fail colours.
+- **The change gutter** (`extra/hunks`, not a package): a solid 3 px bar beside each added line (ok) and changed line (info), and a short mark where lines were deleted (error), in the status colours.
+- **Org** (module `org/org`). Headings in the UI font, 17 px at level 1 and 14.5 px at level 2 (over the editor's
+  13.5), weight 600, on Org's own `org-level-*` faces, so the headings of `outline-minor-mode` in code keep the text's
+  height. TODO is an attention chip, DONE an ok chip; source blocks are flat panels with their begin and end lines
+  subtle; tables are muted; links are in the accent. A headline's tags are right-aligned by pixel (8 px from the
+  window's edge), since proportional headings break Org's column-counted alignment; a terminal keeps Org's columns.
+
+### The three variants
+
+| | Dark | Light | High Contrast |
+|---|---|---|---|
+| Selection | blue-grey | pale blue | deep blue, text on it is white |
+| Selection without the focus (a list's selected row) | grey, 1.28:1 on the panel | grey, 1.28:1 | grey, 1.35:1 |
+| Tints (status chips, diff lines) | 11 to 15 % of the status colour | 8 to 14 % | none |
+| A diff's refined words (`diff-refine-*`) over the line's tint | 6 % added, 11 % removed, 3 % changed, each edged | 19 %, 16 %, 17 % | 6 %, 14 %, 24 %, each edged |
+
+A refined word is its line's colour, stronger: the status colour over the line's tint, as strong as it can be with
+every syntax colour still readable on it (4.5:1, 7:1 in High Contrast), since a hunk keeps its code's colours. Where
+that stands less than 1.25:1 off the line, and always in High Contrast, the word also gets a 1 px edge in the line's
+colour, 3:1 on the line's tint.
+
+High Contrast has no tints and no shadow faces; every text pair is at least 7:1.
+
+### Following the desktop
+
+The setting `drgnx-look-theme` is `auto` by default: drgnx Dark, Light or High Contrast, as your desktop says (through
+its settings portal; on macOS, the system appearance).
+
+| The desktop says | Theme |
+|---|---|
+| Contrast: more | High Contrast |
+| Dark | Dark |
+| Light, or no preference | Light |
+| Nothing (no portal, or it has not answered yet) | The theme the last answer picked (`drgnx-look-follow-last`, which drgnx writes), else Dark |
+
+The portal is read in the background and never waited for, so the first frame is drawn at once in the theme the desktop
+last asked for (Dark the first time) and the theme switches when the answer comes, if it differs, and again whenever you change the desktop's setting. A theme you choose yourself
+(Color Theme, `load-theme` in `config.el`, a package), drgnx's own three included, switches `auto` off for the
+session, and one notice says so ("Theme follows the desktop: paused while modus-vivendi is on"); drgnx never replaces
+it. To keep one theme, pick it with Color Theme; set `drgnx-look-theme` to `nil` to keep Emacs's own colours.
+
+The first time drgnx starts with `auto` because your `settings.el` named no theme, one notice says "drgnx now has its
+own themes; Color Theme picks another". It is shown once.
+
+`drgnx-look-accent` is `system` by default: the accent and the focus ring take the accent colour the desktop gives,
+made lighter on a dark theme and darker on a light one until it reads at 4.5:1 as text (7:1 under High Contrast).
+Set it to `theme` for the theme's own accent.
+
+### Terminals
+
+On a terminal with 256 colours or fewer, the gap, the editor and the panel are one colour: the cards are drawn by the
+vertical border instead. On every terminal (true colour too) drgnx's themes draw the selection in inverse video
+rather than in the selection colour, which a terminal can barely tell from the editor's.
+
+### For theme authors
+
+What a theme of your own can set, and the colours drgnx works out under a theme that is not its own (surfaces, muted
+text, the accent and the agents), are in [Writing a theme](../design/theme-authors.md) in the design system.
+
+### Agent colours, marks and handles
+
+Agents are told apart by a colour, a mark and a name, never by colour alone. The mark is one of circle, square, triangle,
+diamond, hexagon, star (Lucide icons in the UI, `●■▲◆⬢★` in text, `o # ^ < H *` where those do not display one column
+wide, and the first four as gutter bitmaps). With the look's six colours the first 36 agents get a distinct colour and
+mark pair, up to 72 with a full second ring; the first six also get six different marks. Past that an agent takes the pair
+of the least recently active one no buffer shows. `drgnx-agents-identity-walk` chooses the order: `diagonal` (the
+default) or `colour-first` (the six colours as circles, marks from the seventh agent). For code,
+`(drgnx-agent-identity ORDINAL)` is `(:face F :mark M :glyph G)` for the selected frame's display.
+
+How a face your theme or Customize set is kept, and how colours are worked out under another theme, is in [Writing a theme](../design/theme-authors.md).
+
+## Fonts
+
+Every piece of text has a **role**, and every role is one setting holding a plist:
+
+| Setting | What it sets | Default |
+| --- | --- | --- |
+| `drgnx-look-font-code` | code, and everything that must line up | JetBrains Mono, 13.5 px, 21 px lines |
+| `drgnx-look-font-ui` | tabs, status bar, lists, the palette's candidates, notices | Adwaita Sans, 13 px |
+| `drgnx-look-font-ui-heading` | panel titles and section heads | the UI font, semibold |
+| `drgnx-look-font-ui-caption` | the status bar, meta text, the tree's end column | the UI font, 12 px |
+| `drgnx-look-font-title` | the start page's and the reviews' headings | the UI font, 17 px, semibold |
+| `drgnx-look-font-code-small` | diffs and output inside cards | the code font, 12 px, 19 px lines |
+| `drgnx-look-font-agent` | the agent panel's prose | the UI font |
+| `drgnx-look-font-terminal` | the terminal's text | the code font |
+
+drgnx's three themes give Emacs's own chrome faces these roles: `tab-bar`, `tab-line` (and their tab faces) and
+`header-line` take the UI font, and `mode-line` takes the caption. So a package's mode line, a Magit header or a tab
+from another package is in the UI font too. A theme from elsewhere keeps its own chrome fonts.
+
+A role's plist has these keys, and you give only the ones you want to change:
+
+- `:family` a family name, or `ui` / `code` for "the same as that role";
+- `:fallback` families to try, in order, when the family is not installed;
+- `:size` a **ratio to the code size** (1.0 is the code size, 13.5 px), so zooming (`View: Zoom In`) scales every role
+  together; 13 px is 0.963, and a size typed on the settings page as pixels is stored as that ratio. A pixel here is
+  a logical pixel (a point on macOS), so 13.5 px is the same size on the screen on Linux (10.1 pt at 96 dpi) and on
+  macOS (13.5 pt);
+- `:weight` a weight name such as `regular`, `semibold` or `bold`;
+- `:line-height` (the code roles) pixels per line;
+- `:ligatures` (the code role) `t` or `nil`.
+
+```elisp
+;; settings.el
+(drgnx-look-font-code (:family "Iosevka" :size 1.05))
+(drgnx-look-font-ui (:family "Inter" :fallback ("sans-serif")))
+(drgnx-look-font-terminal follow-desktop)          ; the desktop's monospace font
+```
+
+`follow-desktop` as a whole value makes the role take the desktop's font (GNOME's interface and monospace fonts). It is
+opt-in per role and is never the default.
+
+### Where a value comes from
+
+When several places name a font for a role, the first match wins:
+
+1. **Your Lisp and Customize.** A `custom-set-faces` entry in `custom.el`, or a `set-face-attribute` on a role face
+   in `config.el`. drgnx then leaves that face alone, and the settings page says where the value is set
+   (`config.el:31`, `custom.el:9`). A theme load wipes `set-face-attribute`, so drgnx puts your attributes back after
+   every theme change. This holds for the code font too: a `(set-face-attribute 'default nil :family "Iosevka")` in
+   `config.el` stays, under drgnx's themes and without one.
+2. **A per-mode override**, a `(:mode MODE ...)` section of `settings.el` (for example Org's prose in the UI font).
+3. **The setting.**
+4. **The theme.** A theme may name fonts for the role faces.
+5. **The desktop**, only for roles set to `follow-desktop`.
+6. **drgnx's defaults** (the table above).
+
+A setting changes only the attributes you set; the theme's other attributes show through. A theme that paints a role
+face without naming a font (drgnx's three themes paint `default`, its colours) leaves the role's font as the list
+says: the desktop's or drgnx's defaults, so the code font is JetBrains Mono 13.5 px under drgnx Dark. A family that
+is not installed falls back down its `:fallback` list, then to the generic family.
+
+Terminal frames ignore families and sizes and keep only the weight.
+
+### Per-mode overrides
+
+A `(:mode MODE ...)` section of `settings.el` gives one mode another font, for example Org's prose in the UI font:
+
+```elisp
+(:mode org-mode
+ (drgnx-look-font-code (:family ui :size 1.05)))
+```
+
+drgnx installs a remap of the role's faces in each buffer of that mode (after the mode starts, and again when the
+setting changes) and removes it when the override goes. Buffers without an override get nothing, so they stay on
+Emacs's fast paths for the default face.
+
+### Live changes
+
+A change applies at once to every frame. The settings page waits 300 ms after the last change of a role before it
+redraws, so a size slider or typed digits do not redraw on every key.
+Turning ui/look off gives every frame the font it had before, at once, and `default` its attributes for new
+frames; your Lisp's attributes and Customize entries stay.
+
+### Ligatures
+
+`:ligatures t` on the code role installs composition rules for the usual programming sequences (`->`, `=>`, `!=`,
+`<=`, `::` and so on); `nil` takes them away. They only show with a font that has the ligatures: the default prefers
+the `-nl` build of JetBrains Mono, which has none, so turning them on also means installing the regular build.
+The rules are global (they are Emacs's composition table), and turning the module off gives the table back.
+
+### Missing fonts
+
+A role whose family is not installed uses the next family of its `:fallback` list that is (the code role's default:
+JetBrains Mono, then Adwaita Mono, then the system's `monospace`), never whatever font the system picks: the lists are
+handed to Emacs's font matching (`face-font-family-alternatives`, set through `internal-set-alternative-font-family-alist`
+so that the C side sees them).
+[`drgnx doctor`](install.md#fonts) names each role whose family is not installed, the family it fell back to and the
+package to install. drgnx checks each new window's display and writes what it found to `fonts-report.eld` in the
+state directory; the `drgnx doctor` command, which runs without a window, reads it there.
+
+The role faces are `drgnx-ui-text`, `drgnx-ui-heading`, `drgnx-ui-caption`, `drgnx-ui-title`, `drgnx-code-small`,
+`drgnx-agent-prose` and `drgnx-terminal`; the code role is the `default` and `fixed-pitch` faces and the UI role also
+sets `variable-pitch`. Their specs hold `:family`, `:height` and `:weight` only, never `:font`. The height is
+relative to `default`, except for the chrome's faces (`drgnx-ui-text`, `drgnx-ui-heading`, `drgnx-ui-caption`,
+`drgnx-ui-title`, `drgnx-code-small`): they get the absolute height their size gives on `default` (Emacs copies a font
+spec at every run of a face with a relative height, and the bars and the sidebar's rows are many runs). drgnx writes it
+again whenever the code size, the theme or a zoom (`View: Zoom In`) changes `default`, and in a buffer you scale with
+`C-x C-+` it remaps them by the same scale, so they look as a relative height would. For the same reason the editor
+tabs' faces and the header rows' band (`drgnx-wb-bar`) name no `:height` at all.
+
+## Density
+
+`drgnx-look-density` is `compact`, `comfortable` (the default) or `roomy`, and applies at once. Sizes are logical
+pixels (a frame at scale 2 draws twice as many). At a fractional scale a size rounds half up, so a 26 px row is 33
+device pixels at 125 % and a 38 px row 48 (the status bar's 24 px row is 30, its 2 px gaps 3), and a thin line (a
+card's edge, a divider) is always whole: 1 device pixel at 125 % and 133 %, 2 at 200 %. The boxes of cards, chips,
+buttons and focus rings follow each frame's own scale, its UI scale included: a 2 px focus ring is 3 device pixels
+at 125 % and a card's 8 px corner 10:
+
+| Thing | Compact | Comfortable | Roomy |
+| --- | --- | --- | --- |
+| Code line | 19 | 21 | 23 |
+| Tree and list row | 22 | 26 | 30 |
+| Tab row | 30 | 34 | 38 |
+| Status bar | 22 | 24 | 28 |
+| Title row | 34 | 38 | 42 |
+| Gap between cards, outer gap | 4 | 6 | 8 |
+| Panel padding | 8 | 12 | 16 |
+| Tree indent | 12 | 12 | 14 |
+
+**The code line** is the frame's `line-spacing` parameter, worked out in device pixels (the line less the font's own
+height) for every frame, a frame made later included (`C-x 5 2`, `emacsclient -c`, a daemon's first graphical
+frame), and again when the frame is resized, its scale changes or the code font changes. Who decides,
+first match: the `:line-height` you set on `drgnx-look-font-code`, then the density. A `line-spacing` you set
+yourself (`setq-default`) stays: drgnx then leaves the frames alone. `drgnx-face-line-spacing` is obsolete (use the
+code role's `:line-height`); while it is set it still wins, as a default `line-spacing`.
+
+**The rows, tabs and the status bar** follow a change at once too, with no restart: the Explorer, Open and Outline
+rows take the new tree row, every editor's tab row the new tab row and every status bar its new height. They are made
+in the pixels of the frame that shows them, again when its scale changes (a frame moved to a ×2 monitor), and a
+sidebar made before any graphical frame (a daemon's) gets its rows when a graphical frame first shows it.
+
+## UI scale
+
+`drgnx-look-scale` makes everything bigger on top of the display's own scale: every size above and every font, from
+100 % (the default) to 200 % in steps of 5. It applies at once to every frame, frames made later included, with no
+restart. At 110 % on a 125 % display a 26 px row is 36 device pixels (26 × 1.25 × 1.1, rounded half up) and a 16 px
+icon 22, and the fonts are opened at 96 dpi × 1.25 × 1.1, so each is the size a fresh start at that scale gives.
+When a frame's display scale changes (you change it in the display settings, or drag the frame to a monitor at
+another scale), every size follows at once, the code line, the gap, the bars and the boxes included, and a scale
+back where it was gives every size back exactly.
+
+- **Zoom In** and **Zoom Out** (`C-=` and `C--` in the VS Code profile) add or take 10 %; **Reset Zoom** (`C-0`)
+  gives 100 %. After one, `+`, `-` or `0` repeat it. Each step is saved in your settings.el.
+- **UI Scale…** (the palette) asks for a percent.
+- **Per monitor:** `drgnx-look-scale-monitors` maps a monitor's name to its own percent, say
+  `(("eDP-1" . 125))` for the laptop panel; a frame there takes it instead of the global one, and changes when it moves
+  to another monitor or its monitor is unplugged. **UI Scale for This Monitor…** sets it for the selected frame's
+  monitor, or clears it when you answer `default`.
+- The Emacs profile leaves `C-x C-+` and the rest to stock `text-scale`, which sizes one buffer's text; the UI scale is
+  in the palette there.
+
+Turning the look off gives every frame its own sizes back; the setting stays for the next time.
+
+## Popups and the palette
+
+Under Glitnir (the compositor; not in a terminal, and not where it is off) popups and the floating command palette are
+rounded and shadowed, with values per variant:
+
+| | Dark | Light | High Contrast |
+|---|---|---|---|
+| Popups | radius 8, shadow blur 16 down 6, opacity 0.35 | the same at 0.14 | no shadow, a 1 px `drgnx-border-strong` ring |
+| Palette | radius 12, shadow blur 48 down 16 at 0.50, a 1 px edge outside in the shadow's colour at 0.45, 90 % opaque over a 16 px blur of what lies behind | shadow 0.22, edge 0.08 | opaque, no shadow, no blur, a 2 px ring |
+
+The values follow the theme when it changes. `drgnx-look-chrome` and `drgnx-look-palette` hold them as frame
+parameter lists; a value you set (Customize or `settings.el`) stands in every variant. In the popup lane, descriptions
+(transient, which-key) use the UI font and their keys the code font.
+
+`drgnx-look-motion` (a setting) says how things move: `auto` (the default) follows the desktop's reduced-motion
+preference, `full` always moves, `reduced` never does: popups, the palette and notices then appear and vanish at once, and
+blur and shadows stay. A change applies at once. It sets Glitnir's own `glitnir-reduced-motion` (`auto`, `nil` or
+`t`) as the module, so a value you gave that option stays, and turning ui/look off gives it back. Where Glitnir is
+off, nothing floats and nothing moves: popups and the palette use the plain frames and notices go to the echo area.
+
+## The echo area
+
+A graphical frame has no echo row at the bottom (`drgnx-look-echo-row`, a setting: `float`, the default). When
+something asks, a box shows top-centre in the frame, as wide as the palette and in its look: a minibuffer
+(`find-file`, `yes-or-no-p`, a password), a question read a key at a time (`y-or-n-p`, `read-key`, `read-char`,
+`query-replace`'s), and the prompts Emacs's own commands show (`interactive` "c" and "k"; Nidhogg says which echo
+messages are prompts with `nidhogg-echo-prompt`). The box hides once the prompt is answered. The floating command
+palette is a prompt of its own: while it is open the box stays hidden, and a question asked on top of it shows in the
+box. Messages show in the
+status bar for `drgnx-look-echo-status-seconds` (5) or until the next one, a command's error in the error face, and
+so do the keys of a prefix (`C-x-`); clicking the message opens `*Messages*`, which still logs them all.
+
+A frame cannot gain or lose its echo row once it is made, so drgnx's `early-init.el` reads `settings.el` (as data)
+before Emacs makes the first frame: unless it says `classic` or turns ui/look off, that frame is born with the box,
+and a start swaps nothing. `classic` gives the row back. The change applies at once: each graphical frame is swapped for a new one with the same
+windows, buffers, selected window, size and place (a frame whose minibuffer is in use waits until it ends). A terminal
+frame keeps its row either way, and turning ui/look off gives every frame its row back.
+
+## Icons
+
+The icon set, with where each icon is used, is generated in the design system ([Icons](../design/icons.md)).
+
+drgnx draws its marks with [Lucide](https://lucide.dev) line icons: tree rows, tab leading icons, panel headers, the
+status bar, the palette's rows, the Extensions list's kinds, the agent panel's steps and notices (never inside code). About 60 SVG files sit in
+`etc/icons/`, each drawn with `currentColor`, so an icon takes the colour of the text around it: in a
+`drgnx-text-subtle` run it is subtle, in any theme, and no colour is written in the files. They are 16 px (14 px in
+dense rows) with Lucide's stroke of 1.6 in its 24-unit box, as the design draws them: about 1.07 px at 16 px. The sizes are logical pixels: an icon is drawn at
+a whole number of device pixels, the size times the display scale and the UI scale, rounded half up (16 px is 20 at
+1.25, 21 at 4/3, 24 at 1.5, 32 at 2, 22 at 1.25 with a UI scale of 110 %), sharp, whatever the font size (Emacs's own
+`image-scaling-factor` is not used). An icon drawn after a scale change or on a monitor at another scale gets that
+scale's size.
+
+`drgnx-look-icons` chooses how they are drawn:
+
+- `svg` (the default): the line icons, on graphical frames;
+- `glyphs`: the characters of the glyph table `drgnx-face-glyphs` (`⑂ ⚠ ✓ ◎ ● ×` and so on; every icon has a glyph
+  of the same name), which is also what a terminal frame always shows.
+
+A change applies to the icons drawn from then on.
+
+For code, `(drgnx-look-icon 'folder 'shadow)` is the string for the icon `folder` in the face `shadow` (the optional
+third argument is the size), and `(drgnx-look-file-icon "main.rs")` is the icon of a file's kind: code, text, config,
+image, archive, or a plain file, and a folder (open or closed) for a directory. The kind comes from the file name in
+`etc/icons/files.eld`: an exact name first (`Makefile`, `Dockerfile`, `LICENSE`, `README`, `.gitignore` and other
+well-known build files, notes and dotfiles), then the extension (any case); any other name is a plain file, and there
+are no per-language logos. The hub's Explorer rows read the same table, so the
+Explorer, Buffers and Quick Open name the same icon for a file.
+
+The icons are from Lucide (ISC licence) and a few from Feather (MIT licence); both notices are in `etc/icons/`
+(`LICENSE-lucide`, `LICENSE-feather`) and must stay with the icons in any copy.

@@ -1,0 +1,28 @@
+Test of Device Status Report 5 (report terminal status).
+Report is: <27> [ 0 n  -- means "TERMINAL OK"
+
+Test of Device Status Report 6 (report cursor position).
+Report is: <27> [ 5 ; 1 R  -- OK
+
+
+Report is: <27> [ 5 ; 1 R  -- OK
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Push <RETURN>
+
+--- runs (row: start-end style)
+1: 10-22 {"inverse":true}
+4: 10-26 {"inverse":true}
+7: 10-26 {"inverse":true}

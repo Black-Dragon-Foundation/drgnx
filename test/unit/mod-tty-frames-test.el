@@ -37,10 +37,13 @@ strings; the real frame is not touched), an empty cache and no terminal to ask: 
        ,@body)))
 
 (defmacro drgnx-tty-frames-test--state (&rest body)
-  "BODY with the state dir (XDG_STATE_HOME) a temp dir, `state'."
+  "BODY with the state dir (XDG_STATE_HOME) a temp dir, `state'.  A report written in BODY puts the fallback layer
+on the terminal and its prefix in `key-translation-map' (`drgnx-tty-frames-write-report'): taken back after, as
+ui/terminal's teardown does, so no later test finds the prefix bound."
   `(let* ((state (make-temp-file "drgnx-tty-frames" t))
           (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment)))
      (unwind-protect (progn ,@body)
+       (drgnx-tty-fallback-off)
        (delete-directory state t))))
 
 (defun drgnx-tty-frames-test--report ()
@@ -157,16 +160,38 @@ strings; the real frame is not touched), an empty cache and no terminal to ask: 
          (should (equal (car names) "kx-5"))
          (should (member "kx-3" names)))))))
 
-(ert-deftest drgnx-tty-frames/a-failed-infocmp-is-asked-again ()
-  ;; nothing printed (no infocmp, a timeout, a type it does not know) is not kept: the next frame asks again; an
-  ;; answer is kept
-  (let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)) (answer nil) (asked 0))
+(ert-deftest drgnx-tty-frames/a-failed-infocmp-is-asked-again-after-a-while ()
+  ;; nothing printed (no infocmp, a timeout, a type it does not know) is remembered for `--miss-ttl' seconds only
+  ;; (a hanging infocmp is not run at every new frame, M12b-F-4); then it is asked again; an answer is kept
+  (let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)) (drgnx-tty-frames--miss-cache (make-hash-table :test #'equal))
+        (answer nil) (asked 0))
     (cl-letf (((symbol-function 'drgnx-tty--command-lines) (lambda (&rest _) (cl-incf asked) answer)))
       (should-not (drgnx-tty-frames--terminfo-true-colour-p "xterm-direct"))
+      (should-not (drgnx-tty-frames--terminfo-true-colour-p "xterm-direct"))
+      (should (= asked 1))
+      (puthash "xterm-direct" (- (float-time) drgnx-tty-frames--miss-ttl 1) drgnx-tty-frames--miss-cache)
       (setq answer (list "xterm-direct|x," "\tRGB,"))
       (should (drgnx-tty-frames--terminfo-true-colour-p "xterm-direct"))
       (should (drgnx-tty-frames--terminfo-true-colour-p "xterm-direct"))
       (should (= asked 2)))))
+
+(ert-deftest drgnx-tty-frames/an-unanswered-xtversion-leaves-no-prefix-key ()
+  ;; xterm.el's asynchronous query leaves `ESC P > |' bound until an answer comes: ESC P stays a prefix (M-P waits
+  ;; for a key). The pending handler goes after `drgnx-tty-frames-xtversion-expiry' s, with its empty prefix maps; a
+  ;; neighbour in the same maps stays (M12b-5b-1)
+  (let ((input-decode-map (make-sparse-keymap)))
+    (define-key input-decode-map "\e[1;2A" 'kx-neighbour)
+    (define-key input-decode-map "\eP>|" #'ignore)
+    (should (keymapp (lookup-key input-decode-map "\eP")))
+    (drgnx-tty-frames--drop-xtversion-handler)
+    (should-not (lookup-key input-decode-map "\eP"))
+    (should (eq (lookup-key input-decode-map "\e[1;2A") 'kx-neighbour))
+    ;; a binding next to it in the prefix map keeps the prefix
+    (define-key input-decode-map "\eP>|" #'ignore)
+    (define-key input-decode-map "\ePx" 'kx-other)
+    (drgnx-tty-frames--drop-xtversion-handler)
+    (should (eq (lookup-key input-decode-map "\ePx") 'kx-other))
+    (should-not (lookup-key input-decode-map "\eP>"))))
 
 (ert-deftest drgnx-tty-frames/kkp-later-rewrites-the-report ()
   ;; Task 5 turns kkp on after the terminal's setup: refreshing the report says so, and C-S-p is sendable then
@@ -347,7 +372,7 @@ strings; the real frame is not touched), an empty cache and no terminal to ask: 
 COLORTERM unset and `drgnx-tty-true-colour' t (the terminal need not be a known one).  `asked' lists the
 types `infocmp' was asked about."
   (declare (indent 1))
-  `(let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal))
+  `(let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)) (drgnx-tty-frames--miss-cache (make-hash-table :test #'equal))
          (drgnx-tty-true-colour t)
          (process-environment (cons "COLORTERM" process-environment))
          (asked nil))
@@ -383,7 +408,7 @@ types `infocmp' was asked about."
 
 (ert-deftest drgnx-tty-frames/true-colour-means-what-emacs-means-by-it ()
   ;; term.c: the RGB flag, or setf24 and setb24 together; not Tc, not setrgbf, not a numeric RGB#
-  (let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)))
+  (let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)) (drgnx-tty-frames--miss-cache (make-hash-table :test #'equal)))
     (cl-letf (((symbol-function 'drgnx-tty--command-lines)
                (lambda (command &rest _)
                  (pcase (car (last command))
@@ -405,14 +430,14 @@ types `infocmp' was asked about."
     (should (equal (sort (copy-sequence asked) #'string<) '("xterm-256color" "xterm-direct")))))
 
 (ert-deftest drgnx-tty-frames/the-runner-is-given-a-timeout-and-the-bare-command ()
-  (let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)) seen)
+  (let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)) (drgnx-tty-frames--miss-cache (make-hash-table :test #'equal)) seen)
     (cl-letf (((symbol-function 'drgnx-tty--command-lines) (lambda (&rest args) (setq seen args) nil)))
       (drgnx-tty-frames--terminfo-true-colour-p "xterm-256color"))
     (should (equal (car seen) '("infocmp" "-x" "-1" "xterm-256color")))
     (should (numberp (cadr seen)))))
 
 (ert-deftest drgnx-tty-frames/no-infocmp-leaves-the-type ()
-  (let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)) (drgnx-tty-true-colour t))
+  (let ((drgnx-tty-frames--direct-cache (make-hash-table :test #'equal)) (drgnx-tty-frames--miss-cache (make-hash-table :test #'equal)) (drgnx-tty-true-colour t))
     (cl-letf (((symbol-function 'drgnx-tty--command-lines) (lambda (&rest _) nil)))
       (should (equal (drgnx-tty-frames--true-colour-type "xterm-256color" '("COLORTERM=truecolor")) "xterm-256color")))))
 
@@ -506,31 +531,52 @@ types `infocmp' was asked about."
                 (buffer-string))))
     (should (equal out "((nil nil) t)"))))
 
-(defun drgnx-tty-frames-test--status-column (graphic)
-  "The :align-to expression of the Explorer's status letter for a modified file, with the selected frame GRAPHIC or not."
+(defun drgnx-tty-frames-test--tail-columns (graphic)
+  "How a terminal draws the right edge of the Explorer's row for a modified file, painted while the selected frame is
+GRAPHIC (an 8-pixel cell, a 12-pixel ⋯ and a 7-pixel mark) or a terminal: (MARK DOTS END TEXT), the columns from the
+right edge where the mark and the ⋯ start and the tail ends (a terminal cuts a column count down to a whole one), and
+the tail's text."
   (require 'drgnx-explorer)
-  (with-temp-buffer
-    (insert "  name.txt\n")
-    (cl-letf (((symbol-function 'drgnx-git-status) (lambda (_) 'modified))
-              ((symbol-function 'display-graphic-p) (lambda (&rest _) graphic)))
-      (let ((drgnx-explorer-git t))
-        (drgnx-explorer--git-decorate (point-min) (1- (point-max)) "/x/name.txt" nil 3)))
-    (let ((s (overlay-get (car (overlays-in (point-min) (point-max))) 'after-string)))
-      (list (plist-get (cdr (get-text-property 0 'display s)) :align-to) (substring-no-properties s)))))
+  (drgnx-wb-mark-memo-clear)
+  (unwind-protect
+      (with-temp-buffer
+        (insert "  name.txt\n")
+        (cl-letf (((symbol-function 'drgnx-git-status) (lambda (_) 'modified))
+                  ((symbol-function 'display-graphic-p) (lambda (&rest _) graphic))
+                  ((symbol-function 'frame-char-width) (lambda (&rest _) (if graphic 8 1)))
+                  ((symbol-function 'drgnx-look-pixel-width)
+                   (lambda (s &optional _face) (if graphic (if (equal s "M") 7 12) (string-width s)))))
+          (let ((drgnx-explorer-git t))
+            (drgnx-explorer--git-decorate (point-min) (1- (point-max)) "/x/name.txt" nil 3)))
+        (let ((s (overlay-get (car (overlays-in (point-min) (point-max))) 'after-string)) cols)
+          (dotimes (i (length s))
+            (let ((d (get-text-property i 'display s)))
+              ;; what a terminal draws: a spec only a terminal shows, unwrapped
+              (when (equal (take 2 d) '(when (not (display-graphic-p)))) (setq d (cddr d)))
+              (when (eq (car-safe d) 'space)
+                (pcase (plist-get (cdr d) :align-to)
+                  (`(- right ,(and n (pred numberp))) (push (truncate n) cols))
+                  (other (push other cols))))))
+          (append (nreverse cols) (list (substring-no-properties s)))))
+    (drgnx-wb-mark-memo-clear)))
 
 (ert-deftest drgnx-tty-frames/the-git-letter-keeps-off-the-last-column-whoever-paints-it ()
   ;; a terminal window has no fringe: its last column shows the truncation `$', so a letter put at the edge
   ;; (right - 2) is lost.  The overlay is painted once into a buffer every frame shows: a graphical frame being
-  ;; the selected one when it is painted must not decide.
-  (should (equal (drgnx-tty-frames-test--status-column nil) '((- right 3) " M")))
-  (should (equal (drgnx-tty-frames-test--status-column t) '((- right 3) " M"))))
+  ;; the selected one when it is painted must not decide.  Pattern D (pure: the overlay's string is read).
+  (dolist (graphic '(nil t))
+    (pcase-let ((`(,mark ,dots ,end ,text) (drgnx-tty-frames-test--tail-columns graphic)))
+      (should (string-match-p "M.*⋯" text))
+      (should (and (integerp end) (>= end 2)))              ; the tail stops 2 columns in
+      (should (and (integerp dots) (>= dots (1+ end))))     ; the ⋯ (one column) ends there
+      (should (and (integerp mark) (>= mark (1+ dots)))))))  ; the mark (one column) ends before the ⋯
 
 (ert-deftest drgnx-tty-frames/ignored-files-are-told-by-more-than-colour ()
   (require 'drgnx-git)
   (should-not (equal (face-attribute 'drgnx-git-ignored :slant nil t) (face-attribute 'default :slant nil t))))
 
 (ert-deftest drgnx-tty-frames/the-state-table-names-each-group-its-faces-and-its-cue ()
-  (should (equal (mapcar #'car drgnx-tty-frames-state-faces) '(git review tabs work)))
+  (should (equal (mapcar #'car drgnx-tty-frames-state-faces) '(git review tabs)))
   (pcase-dolist (`(,group . ,spec) drgnx-tty-frames-state-faces)
     (should (symbolp group))
     (should (memq (plist-get spec :cue) '(letter word attribute label)))
@@ -547,8 +593,7 @@ types `infocmp' was asked about."
   (dolist (lib '(drgnx-git drgnx-chrome))
     (require lib))
   ;; modules, not on the load path: loaded by file, as their own tests do
-  (dolist (lib '("modules/tools/drgnx-review" "modules/tools/drgnx-work-ui"))
-    (load (expand-file-name lib drgnx-dir) nil t))
+  (load (expand-file-name "modules/tools/drgnx-review" drgnx-dir) nil t)
   (pcase-dolist (`(,_ . ,spec) drgnx-tty-frames-state-faces)
     (dolist (f (plist-get spec :faces))
       (should (facep f)))))

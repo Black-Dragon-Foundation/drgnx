@@ -433,25 +433,24 @@ STORED-CALLS a list of the ids `drgnx-ai-store-key' was called with (newest firs
               (should (string-search "password (sudo)" (car said))))))
       (delete-directory bin t))))
 
+(defvar drgnx-term-exit-functions)
+
 (ert-deftest drgnx-secrets/the-terminal-forgets-the-typed-keys ()
-  ;; the passphrase is typed into the terminal buffer, so Emacs's recent keys (C-h l) hold it until cleared
+  ;; the passphrase is typed into the terminal buffer, so Emacs's recent keys (C-h l) hold it until cleared: when the
+  ;; program in drgnx's terminal ends (its exit event runs the buffer's exit functions), and when `term''s process does
   (let ((cleared 0) (buf nil))
     (cl-letf (((symbol-function 'clear-this-command-keys) (lambda (&rest _) (cl-incf cleared)))
-              ((symbol-function 'drgnx-terminal-eat-usable-p) (lambda (_) t))
+              ((symbol-function 'drgnx-term-usable-p) (lambda (_) t))
               ((symbol-function 'pop-to-buffer) #'ignore)
-              ((symbol-function 'drgnx-terminal-eat-start)
-               (lambda (_dir &optional _command)
-                 (setq buf (generate-new-buffer "*drgnx-secrets-test-eat*"))
-                 (make-process :name "drgnx-secrets-test" :buffer buf :command '("sh" "-c" "sleep 0.2")
-                               :noquery t :sentinel #'ignore)
-                 buf)))
+              ((symbol-function 'drgnx-term-start)
+               (lambda (_dir &optional _command) (setq buf (generate-new-buffer "*drgnx-secrets-test-term*")))))
       (unwind-protect
           (progn
             (drgnx-secrets-import-keys)
             (should (= cleared 0))
-            (drgnx-test-wait (lambda () (= cleared 1)) :secs 5 :what "the sentinel to clear the keys")
+            (with-current-buffer buf (run-hook-with-args 'drgnx-term-exit-functions '(:code 0)))
             (should (= cleared 1)))
-        (when (buffer-live-p buf) (let ((kill-buffer-query-functions nil)) (kill-buffer buf)))))))
+        (when (buffer-live-p buf) (kill-buffer buf))))))
 
 (ert-deftest drgnx-secrets/age-missing-names-the-install-line ()
   (let* ((bin (file-name-as-directory (make-temp-file "drgnx-secrets-dnf" t)))
@@ -511,19 +510,19 @@ STORED-CALLS a list of the ids `drgnx-ai-store-key' was called with (newest firs
                (lambda (name program &optional _start &rest switches)
                  (push (cons name (cons program switches)) termed)
                  (car (push (generate-new-buffer "*drgnx-secrets-test-term*") bufs))))
-              ((symbol-function 'drgnx-terminal-eat-start)
+              ((symbol-function 'drgnx-term-start)
                (lambda (_dir &optional command)
                  (push command started)
-                 (car (push (generate-new-buffer "*drgnx-secrets-test-eat*") bufs)))))
+                 (car (push (generate-new-buffer "*drgnx-secrets-test-term*") bufs)))))
       (unwind-protect
           (progn
-            (cl-letf (((symbol-function 'drgnx-terminal-eat-usable-p) (lambda (_) t)))
+            (cl-letf (((symbol-function 'drgnx-term-usable-p) (lambda (_) t)))
               (let ((b (drgnx-secrets-export-keys)))
                 (should (equal started (list (list bin "secrets" "export"))))
                 (should (string-match-p "passphrase" (format "%s" (buffer-local-value 'header-line-format b)))))
               (drgnx-secrets-import-keys)
               (should (equal (car started) (list bin "secrets" "import"))))
-            (cl-letf (((symbol-function 'drgnx-terminal-eat-usable-p) (lambda (_) nil)))
+            (cl-letf (((symbol-function 'drgnx-term-usable-p) (lambda (_) nil)))
               (let ((b (drgnx-secrets-import-keys)))
                 (should (equal (cdar termed) (list bin "secrets" "import")))
                 (should (string-match-p "passphrase" (format "%s" (buffer-local-value 'header-line-format b))))))

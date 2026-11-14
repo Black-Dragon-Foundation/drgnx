@@ -3,9 +3,9 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; New Terminal opens your own shell in a real terminal (eat, module tools/terminal-eat) in the
-;; panel's Terminal tab and focuses it; for a remote folder, on Windows, and until eat is installed
-;; it is eshell instead (New Eshell asks for eshell anywhere).  Open Terminal Here does so in the
+;; New Terminal opens your own shell in drgnx's own terminal (module tools/term: a worker of the hub on
+;; Ghostty's engine) in the panel's Terminal tab and focuses it; for a remote folder, on Windows, or with that
+;; module off it is eshell instead (New Eshell asks for eshell anywhere).  Open Terminal Here does so in the
 ;; folder of the Explorer row.  The terminal's environment names this Emacs's server (EDITOR,
 ;; GIT_EDITOR, DRGNX_SERVER_NAME), so `git commit' and `drgnx' reach the Emacs hosting the terminal.
 ;; See docs/guide/modules.md.
@@ -14,15 +14,13 @@
 (require 'server)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
+(require 'drgnx-notice)
 (defvar eshell-buffer-name)
 (declare-function drgnx-explorer-node-at "drgnx-explorer")
-(declare-function drgnx-terminal-eat-start "drgnx-terminal-eat")
-
-(defconst drgnx-terminal-eat-missing-notice
-  "New Terminal: eat is not installed yet, so this is eshell — run drgnx sync (docs/guide/shell.md)"
-  "Said once per session when New Terminal falls back to eshell because eat is missing.")
-
-(defvar drgnx-terminal--notice-shown nil "Non-nil once `drgnx-terminal-eat-missing-notice' was said.")
+(declare-function drgnx-term-start "drgnx-term")
+(declare-function drgnx-term-start-directory "drgnx-term" (dir))
+(declare-function drgnx-term-usable-p "drgnx-term")
+(declare-function drgnx-wb-area-toggle-tab "drgnx-area" (area tab &optional start))
 
 (defun drgnx-terminal-shell ()
   "The user's shell: $SHELL when it names an executable file, else `shell-file-name'."
@@ -55,13 +53,6 @@
             (concat "VISUAL=" editor)
             (concat "GIT_EDITOR=" editor)))))
 
-(defun drgnx-terminal-eat-usable-p (dir)
-  "Non-nil when a terminal in DIR can be eat: not on Windows, DIR not remote, module tools/terminal-eat has run."
-  (and (not (eq system-type 'windows-nt))
-       (not (file-remote-p dir))
-       (fboundp 'drgnx-terminal-eat-start)
-       (drgnx-modules--ok-p 'tools/terminal-eat)))
-
 (defun drgnx-terminal-new-eshell (&optional dir)
   "A new eshell in DIR (default: here), in the panel; returns its buffer."
   (interactive)
@@ -75,15 +66,25 @@
 
 (defun drgnx-terminal-new (&optional dir)
   "A new terminal in DIR (default: here), in the panel; returns its buffer.
-Your shell in eat; eshell for a remote folder, on Windows, and (with a notice, once) while eat is not installed."
+Your shell in drgnx's own terminal (module tools/term); eshell for a remote folder, on Windows, and while that
+module is off."
   (interactive)
-  (let ((dir (or dir default-directory)))
-    (if (drgnx-terminal-eat-usable-p dir)
-        (drgnx-terminal-eat-start dir)
-      (unless (or (file-remote-p dir) (eq system-type 'windows-nt) drgnx-terminal--notice-shown)
-        (setq drgnx-terminal--notice-shown t)
-        (message "%s" drgnx-terminal-eat-missing-notice))
+  (let ((dir (or dir (if (fboundp 'drgnx-term-start-directory)
+                         (drgnx-term-start-directory default-directory)
+                       default-directory))))
+    (if (and (fboundp 'drgnx-term-usable-p) (drgnx-term-usable-p dir))
+        (drgnx-term-start dir)
+      (when (and (fboundp 'drgnx-term-usable-p) (file-remote-p dir) (not (eq system-type 'windows-nt)))
+        (drgnx-notify 'terminal 'info (format "No terminal reaches %s folders: eshell instead"
+                                              (file-remote-p dir 'method))
+                      :id 'terminal-remote-method))
       (drgnx-terminal-new-eshell dir))))
+
+(defun drgnx-terminal-toggle ()
+  "Show or hide the panel's Terminal tab (VS Code's Ctrl+`): shown, it is selected, and a new terminal starts when
+the tab has none; pressed while the tab shows, the panel hides."
+  (interactive)
+  (drgnx-wb-area-toggle-tab 'panel 'terminal #'drgnx-terminal-new))
 
 (defun drgnx-terminal-here ()
   "A new terminal in the folder of the Explorer row (or of this file)."
@@ -93,12 +94,15 @@ Your shell in eat; eshell for a remote folder, on Windows, and (with a notice, o
                           (if path (file-name-directory path) default-directory)))))
 
 (drgnx-module-define 'tools/terminal
-                     :doc "New Terminal (your shell in eat), New Eshell and Open Terminal Here, in the panel."
+                     :doc "New Terminal (your shell in drgnx's own terminal), New Eshell and Open Terminal Here, in the panel."
                      :stage 'startup
                      :setup
                      (lambda ()
                        (drgnx-command-define 'terminal-new :category "Terminal" :title "New Terminal" :scope 'window
                                              :command #'drgnx-terminal-new :doc "A new terminal in the panel")
+                       (drgnx-command-define 'terminal-toggle :category "Terminal" :title "Toggle Terminal" :scope 'window
+                                             :command #'drgnx-terminal-toggle
+                                             :doc "Show the panel's Terminal tab (a new terminal when it has none), or hide the panel when it shows")
                        (drgnx-command-define 'terminal-new-eshell :category "Terminal" :title "New Eshell" :scope 'window
                                              :command #'drgnx-terminal-new-eshell :doc "A new eshell in the panel")
                        (drgnx-command-define 'explorer-terminal-here :category "Terminal" :title "Open Terminal Here" :scope 'window

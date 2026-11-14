@@ -1,0 +1,19 @@
+{"scenario": "panel/model-before-its-rows", "requires": ["v1", "test-hooks"], "doc": "The panel's model (a list scheme: a node per step, and the lists of the tool calls, the steps with a diff and the user's messages) goes as view-model before the rows built from it, which name its version; a new turn sends a model diff first."}
+{"do": "root"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "view/env", "params": {"view": "agent-panel/$sid", "class": "gui-1", "display": "gui", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 7, 4]], "cell": [8, 17], "width_px": 400, "palette": [], "epoch": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"hub": "$capture:hub", "base": 0, "version": 1, "reset": true, "model": "$any"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"class": "gui-1", "hub": "$hub", "base": 0, "version": 1, "model": 1, "ops": [{"reset": "$any"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "tool:exec echo hi"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"hub": "$hub", "base": "$number", "version": "$capture:mv", "model": "$any"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"class": "gui-1", "hub": "$hub", "model": "$mv", "ops": "$any"}}, "within_ms": 10000}

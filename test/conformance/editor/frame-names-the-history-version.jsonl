@@ -1,0 +1,18 @@
+{"scenario": "editor/frame-names-the-history-version", "requires": ["v1", "test-hooks"], "doc": "A frame of a buffer the edit history tracks names the history document's version (doc_version), not the count the editor's watch sent: 0 at the register, then the version the editor's last batch carried (its drain counter), so the editor can drop a frame made before its last change. Pattern B on the hub's virtual clock: the flush by __test_advance."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q -b main && printf 'l1\\nl2\\nl3\\n' > a.txt && git add a.txt && git -c user.email=t@example.invalid -c user.name=t commit -qm base"], "expect_code": 0}
+{"do": "start", "hub": "h", "args": ["--test-clock"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "history/register", "params": {"path": "a.txt", "worktree_root": "$ROOT/repo", "buffer_id": "b1"}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"tracked": true}}, "within_ms": 30000}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "agents/buffer/watch", "params": {"view": "v1", "file": "$ROOT/repo/a.txt", "doc_version": 7}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": {"view": "v1", "version": 1, "base": 0, "doc_version": 0}}}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "history/batch", "params": {"buffer_id": "b1", "changes": [{"start": 3, "old_len": 2, "inserted": "P2", "origin": "agent:paired-1#1"}], "region_hash": "833fd2af51471b023d4b1fa8c0d643339a318353fa44d2c27b231894dbdb2e39", "version": 4}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": {"ok": true}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "__test_advance", "params": {"ms": 60}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "agent-buffer", "data": {"view": "v1", "version": 2, "base": 1, "doc_version": 4}}, "within_ms": 10000}

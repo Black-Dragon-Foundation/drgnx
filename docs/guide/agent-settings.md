@@ -7,7 +7,7 @@ settings.
 
 Opening the page:
 
-- From the Agents tab, `,` on a session's row opens the page of that session's agent, for its project (Agents:
+- From the Agents list, `,` on a session's row opens the page of that session's agent, for its project (Agents:
   Settings of This Agent). Settings from a transcript does the same.
 - Elsewhere, Agents: Settings (palette; `SPC a c` in the Vim profile) asks which agent, with Claude Code first. The
   page is for the project of the buffer you are in.
@@ -16,7 +16,10 @@ The page opens in the editor area as `*agent settings: Claude Code*` (or Codex, 
 at the top switch to another agent's page for the same project (also `TAB`, Other Agent…). The rules files
 (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`) come next, as links.
 
-Opening the page and Refresh (`g`) only read files. They never start a server, run a hook or ask for a login. The
+Opening the page and Refresh (`g`) only read files. With Nidhogg's workers on (`nidhogg-workers-framing`), Claude Code's
+`~/.claude.json`, which can be big and which Claude Code rewrites every few seconds, is read off the main thread: the page
+says "Reading the settings…" and draws when the text arrives. Adding, editing, removing and turning on or off read the
+file again at once, just before they write, as they always did. They never start a server, run a hook or ask for a login. The
 status is what the files tell: the file parses, the command is on `PATH`, the URL is set. Test does the rest, only
 when you ask.
 
@@ -95,7 +98,7 @@ Servers: **[Test All]** too).
 Under the rules and project, the page says **Reports to drgnx: yes** or **no**, with a button, **[Add drgnx]** or
 **[Remove drgnx]** (also `R`, or Agent Settings: Report to drgnx in the palette, which is offered on the page). A
 `drgnx` server that is switched off shows **no (disabled)**. An agent that runs outside drgnx, in a terminal or
-another editor, shows in the Work cockpit ([cockpit.md](cockpit.md)) only when it has drgnx's coordination server.
+another editor, shows in the Work space ([work-space.md](work-space.md)) only when it has drgnx's coordination server.
 The button adds an MCP server called `drgnx` to the agent's **user** settings: `<data>/bin/ratatoskr mcp-bridge --outside --kind KIND`, the
 same tools drgnx's own agents are given (an existing entry that runs `bin/drgnx coord mcp` is left as it is). It asks first and names the file. Nothing is written without it, and
 opening the page never writes.
@@ -107,7 +110,7 @@ opening the page never writes.
 The server carries no token, key or environment value, so nothing secret is written to any file. For another scope
 (a project's `.mcp.json`, say) use Add… with the name `drgnx` and the same command. Pressing the button again with the
 server there removes it (from the scope it is in), after a confirmation. Restart a running agent to pick the change up.
-In the cockpit, an agent that said hello shows as `outside`; a worktree with changes and no agent reporting shows as
+In the Work space, an agent that said hello shows as `outside`; a worktree with changes and no agent reporting shows as
 `silent` ("not reporting — add drgnx on its settings page").
 
 ## Adding and editing
@@ -148,7 +151,7 @@ again; the message after a write says so.
   event on its input. It asks "Run COMMAND for real?" first. The row shows its exit status.
 
 A tested server or hook gets Emacs's environment without the model vendors' keys and switches, the same list agents
-never inherit (`drgnx-agents-scrubbed-env`: `ANTHROPIC_*`, `OPENAI_*`, `OPENROUTER_API_KEY`, `MOONSHOT_API_KEY`,
+never inherit (`ANTHROPIC_*`, `OPENAI_*`, `OPENROUTER_API_KEY`, `MOONSHOT_API_KEY`,
 `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_API_KEY`, …), so a project's server never receives your provider keys.
 What the item sets itself (its `env`, `${VAR}` values, a bearer token from a variable) it gets; a hook also gets its
 project directory variables.

@@ -1,8 +1,90 @@
 # Your shell and drgnx
 
-New Terminal (`C-S-\`` in the VS Code profile) runs your own shell in a real terminal ([eat](https://codeberg.org/akib/emacs-eat))
-in the panel. Three small files in `etc/shell/` make that shell work better with drgnx. They are optional: without
-them the terminal still works.
+New Terminal (`C-S-\`` in the VS Code profile) runs your own shell in a real terminal in the panel: drgnx's own
+([below](#drgnxs-terminal)). Three
+small files in `etc/shell/` make that shell work better with drgnx. They are optional: without them the terminal
+still works.
+
+## drgnx's terminal
+
+Your shell runs in a small program of its own (a worker the drgnx hub starts, on Ghostty's terminal engine); the
+terminal's buffer only shows the screen it sends. When no hub runs, New Terminal starts it; when none can be started,
+the terminal says why in the echo area. So:
+
+- **Output never stalls typing.** A command that prints a flood shows the screen as it goes; the lines that scrolled
+  past fill in, newest first, as soon as the output pauses.
+- **Scrollback** is the setting `drgnx-term-scrollback-lines` (10,000 rows above the screen). Changing it trims or
+  fills every open terminal at once. Scrolling to the top of the buffer fetches the rows it is missing. The terminal
+  itself remembers at least 10,000 lines whatever the setting.
+- **In a remote folder** (`/ssh:build-box:/srv/app/`, a multi-hop name, a sudo hop on the host, a docker or podman
+  container), New Terminal runs your login shell on that host, in that folder, over its own ssh connection: your ssh
+  config applies, and a password or host-key question appears in the terminal. `cd` there keeps the buffer's folder on
+  that host, a link to a file opens the remote file, and the tab names the host, with a server icon. If the connection drops, the buffer
+  stays with **Reconnect**. A program there that sets the clipboard asks first (`drgnx-term-remote-clipboard-write`):
+  Allow, Always for that host, or Deny. Folders no terminal reaches (ftp, smb, adb) open eshell, and a notice says so.
+- **The hub can restart under it.** Your shell keeps running; while the hub is away the terminal dims, and what you
+  type waits (up to 4 kB) and goes when it is back. The terminal then draws afresh.
+- **Quitting drgnx** asks once when a terminal runs a program (a shell at its prompt does not count): **Keep
+  Running** keeps those terminals running for the next drgnx (idle shells close), **Close Them** ends them, **Cancel**
+  keeps drgnx running. `drgnx-term-on-quit` makes it `keep` (every terminal, no question) or `close` (they end). A
+  quit that cannot ask (a daemon's shutdown) keeps the terminals whose program runs; after a crash they all keep
+  running.
+- **The next drgnx** offers the terminals left running: a notice says how many, and **Reattach Terminal** (the
+  palette, or the notice) reattaches them all, lets you choose some, or closes them. A reattached terminal comes back
+  with its screen and scrollback, the same program still running. `drgnx-term-reattach` makes it `always` (they open
+  at once) or `never` (only the command). A terminal another running drgnx shows is never offered. A terminal no
+  drgnx shows ends after `drgnx-term-detached-keep` hours (24; 0: never), and a reboot ends them all. Only you can
+  reach them: their folder and sockets are yours alone, and another user's connection is refused.
+- **When the shell ends**, its buffer closes. A program drgnx runs for you in a terminal (Export Keys) leaves its buffer
+  open, its exit status in the mode line, so you can read what it printed.
+- **Keys**: the terminal gets every key the active profile does not keep for drgnx ([keys](keys.md#in-the-terminal));
+  a paste is bracketed when the program asks for it, so a shell does not run a pasted line on its own. On drgnx's
+  own Emacs (Nidhogg), a program that asks for key releases and repeats (the kitty keyboard protocol, as games, Helix
+  and some TUIs do) gets them; a key still held when you switch away from the terminal is released there.
+- **Copy mode** (*Terminal: Copy Mode*, `C-c C-e` in the Emacs profile) stops the screen so you can move, search and
+  copy in it; `C-g` leaves it and draws what the program printed meanwhile. *Find in Terminal* searches the screen and
+  the terminal's scrollback; *Find Next* and *Find Previous in Terminal* step through the matches without asking again.
+- **Mouse** clicks and the wheel go to the program only while it asks for the mouse; otherwise they select text.
+- **Links** a program prints (OSC 8, `ls --hyperlink`) open on a click: a file in the other window, a URL in the
+  browser, on the screen and in the rows scrolled off it alike.
+  An address in plain output (`https://…`, `file://…`) is a link too (`drgnx-term-link-url`, on by default), and
+  `drgnx-term-link` takes patterns of your own: `(("TICKET-\\([0-9]+\\)" "https://tracker.example/\\1"))` makes `TICKET-42` a link.
+  An OSC 8 link keeps its own address, and so does a plain address your pattern also matches.
+- **A click at the prompt** moves the cursor there (`drgnx-term-cursor-click-to-move`, on by default): on the cursor's row, while the
+  shell's integration says it is at a prompt, the terminal sends as many Left or Right keys as the click is cells away.
+  Not while a command runs, in a full-screen program, or while a program tracks the mouse.
+- **Images** a program shows (`kitten icat`, `chafa`, `img2sixel`, `imgcat`, yazi's previews; the kitty graphics
+  protocol, sixel and iTerm2 inline images) are drawn in the terminal, sharp at any scale, and scroll with the text;
+  kitty animations play while a window shows the terminal (at most `drgnx-term-image-fps` frames a second). In a text
+  terminal, or where Emacs has no PNG support, an image's place says `[image 640×480]`. The settings
+  `drgnx-term-image-storage-limit` (64 MB per terminal; 0 turns images off), `-image-max-bytes`, `-image-disk-max`
+  and `-image-file-medium` bound them. A program in a remote terminal can only send an image's data: it can never make
+  drgnx read a file on your machine; one that saves a file (`inline=0`) is refused.
+- **Programs can copy to the clipboard** (OSC 52, as tmux and neovim over ssh do): the text lands in the kill ring.
+  The setting `drgnx-term-clipboard-write` turns that off. A program that **reads** the clipboard gets an empty one
+  (`drgnx-term-clipboard-read` is `deny`); set it to `ask` and the terminal's output stops while a notice asks you, naming
+  the terminal and whether it is remote: Allow (it reads the newest kill) or Deny; with no answer in 30 seconds it is denied.
+- **The shell's directory** (OSC 7) is the buffer's directory, so `C-x C-f` starts where the shell is; the program's
+  title names the buffer, a progress report (OSC 9;4) shows in the mode line, and a notification (OSC 9 / 777) is a
+  drgnx notice.
+- Resizing the window resizes the terminal once the window settles.
+- Undo is off in a terminal's buffer; the theme's colours apply at once, and a program that asks for the terminal's
+  colours (OSC 10, 11, 4) is told the theme's.
+- **Settings:** every option of Ghostty's configuration has its place, listed in
+  [terminal settings](../reference/terminal-settings.md): the cursor, paste protection (a multi-line paste into a
+  program that did not ask for bracketed paste asks first), copy on select, trailing spaces trimmed on copy, a bell or
+  notice when a long command ends (`drgnx-term-notify-on-command-finish`), the program, environment, TERM and memory
+  limit of new terminals, and more. The colours are the theme's faces (`drgnx-term-color-0` to `15` and the others).
+- **TERM** is `xterm-ghostty`, Ghostty's own entry: `drgnx build` (run by the installer and every update) compiles it
+  with `tic` into `<data>/terminfo` (`drgnx build terminfo` does just that), and the terminal's `TERMINFO` names that
+  folder. Without `tic` (ncurses), or until it has run, the terminal says `xterm-256color`. The shell also sees
+  `COLORTERM=truecolor`, `TERM_PROGRAM=drgnx`, `INSIDE_EMACS=<Emacs version>,drgnx` and `DRGNX_TERMINAL=1`.
+  `drgnx FILE` typed there opens in the drgnx hosting the terminal, never a new window, and loads your AI keys as a
+  `drgnx` from any other terminal does ([opening](opening.md#how-it-works)).
+- Wide characters (CJK, emoji) keep the columns after them in place: an emoji whose font draws it wider than its two
+  cells is drawn a little smaller to fit them. A joined emoji (👩‍💻) takes two cells; set
+  `drgnx-term-grapheme-width-method` to "legacy" if your shell's cursor goes astray on such lines (then each emoji in
+  it takes two cells of its own).
 
 ## The one line
 
@@ -51,20 +133,15 @@ What the line does:
 - **Tab completion for `drgnx`** (see below). In zsh the directory with `_drgnx` goes on `fpath` (a `compinit` that
   runs later finds it; one that already ran gets `compdef _drgnx drgnx`). In bash it is `complete -F _drgnx drgnx`.
   In fish, `complete -c drgnx` lines.
-- **Inside drgnx's terminal only**, eat's shell integration: eat learns the directory you are in (the terminal's
-  `default-directory` follows `cd`), where each prompt starts, whether the last command failed (the margin mark), and
-  whether a command is running. In zsh and bash the line sources the integration file that comes with eat. Eat
-  ships none for fish, so `drgnx.fish` has its own few lines for it. Eat's file also hands Emacs your shell history
-  with `tail` on `$HISTFILE`; when that is not a readable file (zsh sets no `HISTFILE` unless your rc does, and bash's
-  is not written until your first shell exits) the file is sourced with `HISTFILE=/dev/null` for that moment only, so
-  no `tail: cannot open` greets you, and your `HISTFILE` stays as it was.
+- **Inside drgnx's terminal only**, [Ghostty's shell integration](#ghosttys-shell-integration-and-ssh) and an `ssh`
+  that gives the host a TERM it knows (below).
 
 What it never does:
 
 - it prints nothing, and runs no program while your shell starts (no `uname`, no `hostname`, no fork: the files hold
   functions and builtin calls only);
-- it never touches `PS1`, `PROMPT`, `PROMPT_COMMAND`, `fish_prompt`, or your plugin manager (oh-my-zsh, zinit,
-  fisher, ...). Outside eat the only change is completion.
+- outside drgnx's terminal it never touches `PS1`, `PROMPT`, `PROMPT_COMMAND`, `fish_prompt`, or your plugin
+  manager (oh-my-zsh, zinit, fisher, ...): the only change is completion.
 
 **Cost:** measured with `zsh -i -c exit` and `bash -i -c exit` (20 runs each, interleaved, median), the line adds
 less than a millisecond (0.2 ms in zsh 5.9, under 0.15 ms in bash 5.3). The test `drgnx-shell-files/startup-cost`
@@ -90,14 +167,52 @@ runs no program: the only thing read is the `keys/` folder for `--keys`. They ca
 onboarding steps and presets against the ones the code defines. A new command or option in `bin/drgnx` is added to
 those three files in the same change.
 
+## Ghostty's shell integration and ssh
+
+drgnx's terminal runs on Ghostty's engine, and so uses Ghostty's own shell integration, shipped in
+`etc/shell/ghostty/` (unchanged from Ghostty; `etc/shell/ghostty/NOTICE` says where each file comes from and its
+licence). With the line in your rc file, a shell in drgnx's terminal sources it:
+
+- **What it does:** it marks each prompt, where your input ends and the output starts, and the command's exit status
+  (OSC 133); it reports the folder (OSC 7, so the buffer's directory follows `cd`); it sets the title to the folder
+  at the prompt and to the command while it runs (bash and zsh; fish sets its own title); it puts a bar cursor at the
+  prompt; and its `sudo` keeps `TERMINFO`, so programs run with sudo know `xterm-ghostty`.
+- **Which parts:** the setting `drgnx-term-shell-integration-features` (default `cursor`, `title`, `sudo`; Ghostty's
+  names, also `path`) reaches the shell as `GHOSTTY_SHELL_FEATURES`. `drgnx-term-shell-integration` set to `none`
+  turns the integration off; set to `bash`, `zsh` or `fish` it loads in that shell only (`detect`, the default: in
+  whichever shell sources its drgnx file). Both apply to new terminals.
+- **What it leaves out:** Ghostty's ssh features (`ssh-env`, `ssh-terminfo`) need the `ghostty` program, which drgnx
+  does not have, so they are always off; `GHOSTTY_BIN_DIR` is unset, and a Ghostty around drgnx leaves none of its own
+  variables in drgnx's terminal.
+- **Your rc file's `set -u`** (bash) is off while Ghostty's file loads, and back on after.
+- elvish: `etc/shell/ghostty/shell-integration/elvish/lib/ghostty-integration.elv` is there too; drgnx has no elvish
+  file of its own, so use it from your `rc.elv` if you like.
+- **bash 3.2** (macOS's `/bin/bash`): Ghostty's file uses `bash-preexec.sh`, shipped beside it.
+
+**ssh.** A host knows `xterm-ghostty` only once its terminfo entry is installed there. So `ssh` typed in drgnx's
+terminal (a function the line defines there only; `command ssh` skips it) does what `drgnx-term-ssh-terminfo` says:
+
+- `fallback` (the default): ssh runs with `TERM=xterm-256color`, which every host knows.
+- `install`: the first ssh to a host sends the entry to the host's `tic` (`infocmp -x xterm-ghostty | ssh HOST tic -x
+  -`, with your ssh options but not a command you gave, into the remote `~/.terminfo`) and records the outcome in `<state>/terminal-ssh-hosts`, one
+  `USER@HOST:PORT TERM` line per host. Later ssh's to that host use what is recorded: `xterm-ghostty` when it worked,
+  `xterm-256color` when it did not (no `tic` there, say). Delete the host's line to try again. That first ssh
+  makes one connection: the `tic` call opens it (`ControlMaster`, kept 10 seconds, its socket in
+  `/tmp/drgnx-ssh-USER/`) and your session joins it, so a password is asked once. If ssh cannot share a connection
+  (a host or a setup that refuses it), the session connects on its own.
+
+The host's name, user and port come from `ssh -G` with your arguments, so `~/.ssh/config` aliases count. A terminal
+opened in a remote folder follows the same setting with no shell file on either side (the same record file, the
+password asked in the terminal).
+
 ## The integration is on by default inside the terminal
 
-With the line in your rc file there is nothing more to switch on: inside eat the shell reports its prompts and its
+With the line in your rc file there is nothing more to switch on: inside drgnx's terminal the shell reports its prompts and its
 commands. That is what lets drgnx tell an idle shell from a running program:
 
 - **An idle shell never makes drgnx ask** "programs still running" when you quit or close the terminal. With the
   integration the shell says so at every prompt; a command running (`make`, `sleep`, `vim`) makes drgnx ask once.
-- **Without the integration** (you did not add the line, or your prompt theme dropped eat's marks, below) drgnx treats
+- **Without the integration** (you did not add the line, or the integration did not load) drgnx treats
   a terminal as running only when its shell has a child process. A `sleep 100` is asked about when you close that
   terminal and when you quit. An idle shell is not asked about. Two limits: a shell
   builtin that waits (`read`, a long `while` loop in the shell itself) has no child process and is not seen; and a
@@ -113,12 +228,12 @@ outside drgnx's terminal:
 
 ```sh
 # bash, zsh
-case "$INSIDE_EMACS" in *eat*) ;; *) export EDITOR=vim ;; esac
+case "$INSIDE_EMACS" in *drgnx*) ;; *) export EDITOR=vim ;; esac
 ```
 
 ```fish
 # fish
-string match -q '*eat*' -- "$INSIDE_EMACS"; or set -gx EDITOR vim
+string match -q -r drgnx -- "$INSIDE_EMACS"; or set -gx EDITOR vim
 ```
 
 ## Your PATH in drgnx
@@ -153,31 +268,3 @@ like keys are never sent on.
 
 **Turning it off:** `DRGNX_NO_SHELL_ENV=1` in drgnx's environment (tests and CI; the harness sets it). It is also off
 in batch Emacs and on Windows.
-
-## If your prompt theme drops eat's prompt marks
-
-Eat finds the prompt by marks it adds around `PS1` (zsh, bash) and by the functions `__eat_precmd` and
-`__eat_preexec`. A prompt theme (powerlevel10k, starship, oh-my-posh, a plugin that rewrites `PS1`) can replace the
-prompt after the marks went in, and the margin marks and the command-running state go with it. Source the drgnx line
-**after** the theme is loaded (last in `.zshrc` / `.bashrc`), and do not remove eat's `precmd` / `preexec` hooks. With
-starship, keep `eval "$(starship init ...)"` above the line; with powerlevel10k, put the line after
-`source ~/.p10k.zsh`. If marks are still missing, drgnx falls back to the child-process rule above: nothing breaks,
-it only knows less.
-
-## fish
-
-Eat ships no integration for fish, so `drgnx.fish` defines two event handlers, `__drgnx_eat_preexec` and
-`__drgnx_eat_prompt`, that send what eat's zsh integration sends from `precmd` and `preexec`: the host and directory,
-the start of each prompt (and the "a new prompt is coming" mark, `J`, as eat's zsh and bash scripts send it), the command
-line, that a command started, and its exit status. The one thing missing is the prompt-end mark: fish cannot add it without redefining `fish_prompt`, which drgnx never does. So in fish:
-
-- the directory, the failed-command mark, and "a command is running" all work;
-- the prompt annotation and eat's line mode use bash and zsh's prompt-end mark and are unavailable in fish.
-
-The handlers run `base64` once per prompt, inside eat only.
-
-## "eat is not installed yet, so this is eshell"
-
-New Terminal needs the `eat` package. Until it is synced, New Terminal opens eshell and says so once. Run
-`drgnx sync` (see [Packages](packages.md)) and open a new terminal. For a remote folder (TRAMP) and on Windows, New
-Terminal is always eshell.

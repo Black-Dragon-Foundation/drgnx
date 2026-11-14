@@ -159,6 +159,53 @@ LOG/security.calls."
           (should (string-search "openrouter.ai" (if (eq (nth 0 case) 'darwin) stdin argv)))
           (should (= 1 (drgnx-ai-test--count "sk-or-test-123" stdin))))))))
 
+(ert-deftest drgnx-ai/a-replaced-key-makes-the-hub-forget-the-old-one ()
+  (drgnx-ai-test--with root
+    (drgnx-ai-test--with-fake-store 'gnu/linux bin log
+      (let (revoked)
+        (cl-letf (((symbol-function 'auth-source-search) (lambda (&rest _) (list (list :secret "sk-or-new"))))
+                  ((symbol-function 'drgnx-hub-revoke-key) (lambda (id) (push id revoked) t)))
+          (drgnx-ai-store-key 'openrouter "sk-or-new"))
+        (should (equal revoked '(openrouter)))))))
+
+(ert-deftest drgnx-ai/removing-a-key-clears-the-store-this-emacs-and-the-hub ()
+  (dolist (case '((gnu/linux "secret-tool" "clear\nhost\nopenrouter.ai\nservice\ndrgnx\n")
+                  (darwin "security" "delete-internet-password\n-a\ndrgnx\n-s\nopenrouter.ai\n")))
+    (drgnx-ai-test--with root
+      (drgnx-ai-test--with-fake-store (nth 0 case) bin log
+        (let (revoked)
+          (puthash 'openrouter "sk-or-old" drgnx-ai--keys)
+          (cl-letf (((symbol-function 'drgnx-hub-revoke-key) (lambda (id) (push id revoked) t)))
+            (drgnx-ai-remove-key 'openrouter))
+          ;; the store was asked to delete drgnx's item for the provider's host, by name (no key in it)
+          (should (equal (drgnx-ai-test--slurp (concat log (nth 1 case) (if (eq (nth 0 case) 'darwin) ".calls" ".argv")))
+                         (nth 2 case)))
+          ;; this Emacs forgot it, and the hub was told to
+          (should-not (gethash 'openrouter drgnx-ai--keys))
+          (should (equal revoked '(openrouter))))))))
+
+(ert-deftest drgnx-ai/removing-a-key-of-a-provider-with-none-is-refused ()
+  (drgnx-ai-test--with root
+    (drgnx-ai-test--with-fake-store 'gnu/linux bin log
+      (should-error (drgnx-ai-remove-key 'ollama) :type 'user-error))))
+
+(ert-deftest drgnx-hub-client/revoke-key-asks-only-a-proven-connection ()
+  (let (calls (drgnx-hub--keys-held '("openrouter" "anthropic")))
+    (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (method params _cb) (push (list method params) calls) 1)))
+      ;; no connection: nothing is asked, nothing started
+      (let ((drgnx-hub--events nil))
+        (should-not (drgnx-hub-revoke-key 'openrouter))
+        (should-not calls))
+      ;; a live, proven one: the call, and the held list drops that provider
+      (let ((p (start-process "drgnx-test-revoke" nil "sleep" "60")))
+        (unwind-protect
+            (let ((drgnx-hub--events p))
+              (process-put p :drgnx-proven t)
+              (should (drgnx-hub-revoke-key 'openrouter))
+              (should (equal calls '(("gateway/revoke-key" (:provider "openrouter")))))
+              (should (equal drgnx-hub--keys-held '("anthropic"))))
+          (delete-process p))))))
+
 (ert-deftest drgnx-ai/the-keychain-command-quotes-a-key-with-spaces-and-quotes ()
   (drgnx-ai-test--with root
     (drgnx-ai-test--with-fake-store 'darwin bin log
@@ -600,30 +647,6 @@ LOG/security.calls."
         (should entry)
         (should (eq (cadr entry) :none))
         (should (stringp (nth 2 entry)))))))                                            ; with its reason
-
-(defmacro drgnx-ai-test--with-gptel-vars (vars &rest body)
-  "BODY with the gptel variables VARS ((SYMBOL VALUE)…) set by hand and unset or restored after: gptel is not loaded
-here, and a variable let-bound before it loads would turn special for good."
-  (declare (indent 1))
-  `(let ((saved (mapcar (lambda (v) (list (car v) (boundp (car v)) (and (boundp (car v)) (symbol-value (car v))))) ',vars)))
-     (unwind-protect (progn ,@(mapcar (lambda (v) `(set ',(car v) ,(cadr v))) vars) ,@body)
-       (dolist (s saved) (if (nth 1 s) (set (nth 0 s) (nth 2 s)) (makunbound (nth 0 s)))))))
-
-(ert-deftest drgnx-ai/own-gptel-api-key-keeps-default-backend ()
-  :tags '(:frozen)
-  ;; gptel's default backend with the user's own `gptel-api-key' is the user's choice: not replaced
-  (drgnx-ai-test--with root
-    (let ((drgnx-ai--gptel-ours nil))
-      (cl-letf (((symbol-function 'gptel-make-ollama) (lambda (name &rest _) (list 'backend name))))
-        (drgnx-ai-test--with-gptel-vars ((gptel--openai 'the-default) (gptel-backend 'the-default) (gptel-model 'gpt-x)
-                                         (gptel-api-key "sk-x"))
-          (should-not (drgnx-ai-gptel-maybe-configure (lambda (id) (eq id 'ollama))))
-          (should (eq gptel-backend 'the-default))
-          (should (eq gptel-model 'gpt-x))
-          ;; gptel's own default key function is nobody's choice: the default backend is still replaced
-          (set 'gptel-api-key #'gptel-api-key-from-auth-source)
-          (should (drgnx-ai-gptel-maybe-configure (lambda (id) (eq id 'ollama))))
-          (should (equal gptel-backend '(backend "Ollama"))))))))
 
 ;;; ai-test.el ends here
 

@@ -1,0 +1,22 @@
+{"scenario": "editor/a-disconnect-drops-its-views", "requires": ["v1", "test-hooks"], "doc": "A connection's buffer views end with it: two views open on one connection are gone once it disconnects (the hub's count, __test_buffer_views), while another connection's view stays. Pattern B: the watches' answers are the gate for the first count; the disconnect is seen by polling the count."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$ROOT/work/a.txt", "text": "a\n"}
+{"do": "write_file", "path": "$ROOT/work/b.txt", "text": "b\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "connect", "conn": "f", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "agents/buffer/watch", "params": {"view": "v1", "file": "$ROOT/work/a.txt"}}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": {"view": "v1", "version": 1, "base": 0}}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "agents/buffer/watch", "params": {"view": "v2", "file": "$ROOT/work/b.txt"}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"view": "v2", "version": 1, "base": 0}}}
+{"do": "send", "conn": "f", "json": {"id": 1, "method": "agents/buffer/watch", "params": {"view": "v1", "file": "$ROOT/work/a.txt"}}}
+{"do": "expect", "conn": "f", "json": {"id": 1, "result": {"view": "v1", "version": 1, "base": 0}}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "__test_buffer_views"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"views": 3}}}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "ping"}, "eof": true}
+{"do": "poll", "conn": "c", "json": {"id": 2, "method": "__test_buffer_views"}, "expect": {"id": 2, "result": {"views": 1}}, "within_ms": 10000, "every_ms": 20}
+{"do": "send", "conn": "f", "json": {"id": 2, "method": "agents/buffer/unwatch", "params": {"view": "v1"}}}
+{"do": "expect", "conn": "f", "json": {"id": 2, "result": true}}

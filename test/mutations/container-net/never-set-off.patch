@@ -1,0 +1,17 @@
+Target: row container-escape/host-grant-never-reaches-the-hub
+The reserved name skips the never-set: a grant naming a port the hub holds opens it.
+
+diff --git a/runtime/crates/gleipnir/src/net/policy.rs b/runtime/crates/gleipnir/src/net/policy.rs
+index d13d7676..f7b34255 100644
+--- a/runtime/crates/gleipnir/src/net/policy.rs
++++ b/runtime/crates/gleipnir/src/net/policy.rs
+@@ -291,9 +291,6 @@ fn named_grant(t: &Target, ctx: &WebCtx) -> bool {
+ 
+ /// Step 3: `host.drgnx.internal:PORT`, the one way to the host's loopback.
+ fn reserved(port: u16, ctx: &WebCtx) -> Judgement {
+-    if ctx.never.loopback_ports.contains(&port) {
+-        return Judgement::Refuse(RefuseWhy::Never);
+-    }
+     let t = Target {
+         host: Host::Name(RESERVED_HOST.to_owned()),
+         port,

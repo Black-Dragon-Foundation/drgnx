@@ -190,6 +190,21 @@ keys); every binding is undone after."
               (should (eq (keymap-lookup global-map "C-o") #'ignore)))
      (keymap-set global-map "C-o" #'open-line))))
 
+(ert-deftest drgnx-keys/the-vscode-profile-indents-with-spaces ()
+  "VS Code's default is spaces (M12f-AF-3): the profile sets `indent-tabs-mode' nil, the other profiles leave it."
+  (drgnx-keys-test--live
+   (let ((orig (default-value 'indent-tabs-mode)))
+     (unwind-protect
+         (progn
+           (setq-default indent-tabs-mode t)
+           (drgnx-keys-use '((emacs app editing window)))
+           (should (default-value 'indent-tabs-mode))
+           (drgnx-keys-use '((vscode app editing window)))
+           (should-not (default-value 'indent-tabs-mode))
+           (drgnx-keys-use '((emacs app editing window)))
+           (should (default-value 'indent-tabs-mode)))
+       (setq-default indent-tabs-mode orig)))))
+
 (defvar drgnx-keys-test-late-map (make-sparse-keymap))
 
 (ert-deftest drgnx-keys/deferred-bindings-of-an-old-setup-never-apply ()
@@ -231,7 +246,7 @@ keys); every binding is undone after."
                                             "View: Command Palette"))
                   "")))
        (drgnx-palette))
-     (should (string-search "C-c p" annotation)))))
+     (should (string-search "Ctrl C p" (string-join (split-string annotation) " "))))))   ; the key as keycaps
 
 (ert-deftest drgnx-keys/a-broken-settings-el-is-not-an-error ()
   ;; the default stack applies; the applier (not the keys) says what is wrong with the file
@@ -771,7 +786,7 @@ keys); every binding is undone after."
 (ert-deftest drgnx-keys/vscode-on-macos-matches-vscode ()
   ;; VS Code's own macOS keys where they are not its Linux key with Ctrl → Cmd; every key valid.
   (let ((r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'macos)))
-    (pcase-dolist (`(,id ,key) '((toggle-panel "C-`") (terminal-new "C-S-`") (go-recent "C-<tab>") (go-back "C--")
+    (pcase-dolist (`(,id ,key) '((terminal-toggle "C-`") (toggle-panel "M-j") (terminal-new "C-S-`") (go-recent "C-<tab>") (go-back "C--")
                                  (go-forward "C-_") (next-tab "M-s-<right>") (previous-tab "M-s-<left>")
                                  (file-close-window "s-W") (move-editor-to-next-group "C-s-<right>")
                                  (edit-expand "C-S-s-<right>") (edit-shrink "C-S-s-<left>")
@@ -797,6 +812,16 @@ keys); every binding is undone after."
   (let ((r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'macos)))
     (dolist (key '("s-h" "s-m" "s-`" "s-SPC" "s-<tab>"))
       (should (equal (list key nil) (list key (drgnx-keys-test--on r key)))))))
+
+(ert-deftest drgnx-keys/vscode-undo-is-c-z ()
+  ;; Undo had no key in the VS Code profile: C-z was Emacs' `suspend-frame' (on Wayland it minimises the window) and
+  ;; C-/ is Toggle Comment.  VS Code's undo is C-z (Cmd+Z on a Mac); C-y stays Emacs' yank (the profile keeps it).
+  (let ((r (drgnx-keys-test--resolve '((vscode app editing window)))))
+    (should (member "C-z" (drgnx-keys-test--keys r 'edit-undo)))
+    (should (member "C-S-z" (drgnx-keys-test--keys r 'edit-redo)))
+    (should-not (drgnx-keys-test--on r "C-y")))
+  (let ((r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'macos)))
+    (should (member "s-z" (drgnx-keys-test--keys r 'edit-undo)))))
 
 (ert-deftest drgnx-keys/cmd-shift-letters-are-what-ns-sends ()
   ;; GNU Emacs on macOS sends Cmd+Shift+P as s-P, never S-s-p (which no key press would reach: s-P unbound
@@ -835,7 +860,7 @@ keys); every binding is undone after."
     (should (string-search "kill-current-buffer (s-k)" (seq-find (lambda (l) (string-prefix-p "s-k " l))
                                                                  (drgnx-keys-conflict-lines))))
     ;; The ns-win keys VS Code takes over, on purpose (Cmd+Shift+letter included: s-S Save As, s-H Replace
-    ;; in Project, …) and s-v, Paste (M12b: it replaces the selection); the others stay Emacs' (s-z …).  s-c and
+    ;; in Project, …), s-v, Paste (M12b: it replaces the selection), and s-z, Undo; the others stay Emacs'.  s-c and
     ;; s-x are bound only while text is selected (the region map), so Emacs' own stay without a selection.
     (should (equal (sort (seq-filter (lambda (key) (seq-find (lambda (b) (and (null (plist-get b :map))
                                                                               (equal (plist-get b :key) key)))
@@ -843,8 +868,8 @@ keys); every binding is undone after."
                                      (mapcar #'car drgnx-keys-test--ns-defaults))
                          #'string<)
                    (sort (list "<end>" "<home>" "s-'" "s-+" "s-," "s--" "s-0" "s-<left>" "s-<right>" "s-=" "s-a"
-                               "s-f" "s-l" "s-n" "s-o" "s-p" "s-q" "s-s" "s-t" "s-v" "s-w" "s-S" "s-H" "s-M" "s-F"
-                               "s-E")
+                               "s-f" "s-l" "s-n" "s-o" "s-p" "s-q" "s-s" "s-t" "s-v" "s-w" "s-z" "s-S" "s-H" "s-M"
+                               "s-F" "s-E")
                          #'string<)))
     ;; and s-L, Select All Occurrences — the extra/mc module's command, not in this registry
     (let ((vscode (alist-get 'vscode drgnx-keys-test--profiles)))
@@ -856,7 +881,7 @@ keys); every binding is undone after."
     (modules-toggle "RET" drgnx-modules-list-mode-map) (keyboard-profile "C-k C-p" nil) (open-file "C-o" nil)
     (save-file "C-s" nil) (file-save-as "C-S-s" nil) (file-new "C-n" nil) (file-reopen-tab "C-S-t" nil)
     (file-new-window "C-S-n" nil) (file-close-window "C-q" nil) (view-escape "<escape>" nil)
-    (toggle-panel "C-`" nil) (toggle-panel "M-j" nil) (toggle-panel "C-j" nil) (toggle-right-dock "C-M-b" nil)
+    (toggle-panel "M-j" nil) (toggle-panel "C-j" nil) (toggle-right-dock "C-M-b" nil)
     (split-editor-right "C-\\" nil) (split-editor-down "C-k C-\\" nil) (close-group-editors "C-k w" nil)
     (focus-group-1 "C-1" nil) (focus-group-1 "M-1" nil) (focus-group-2 "C-2" nil) (focus-group-2 "M-2" nil)
     (focus-group-3 "C-3" nil) (focus-group-3 "M-3" nil) (move-editor-to-next-group "C-M-<right>" nil)
@@ -890,32 +915,41 @@ keys); every binding is undone after."
     (search-semantic "C-k C-f" nil) (terminal-new "C-S-`" nil) (scm-view "C-S-g" nil)
     (view-zen "C-k z" nil)
     (view-zen "<f11>" nil) (view-zoom-in "C-=" nil) (view-zoom-in "C-+" nil) (view-zoom-out "C--" nil)
-    (view-zoom-reset "C-0" nil) (agents-view "C-k a" nil) (agents-stop "C-c C-c" drgnx-agents-transcript-mode-map)
-    (agents-deliver "C-c C-d" drgnx-agents-transcript-mode-map) (agents-open "RET" drgnx-agents-list-mode-map)
-    (agents-reply "RET" drgnx-agents-transcript-mode-map)
-    (agents-review-done "C-c C-c" drgnx-agents-review-mode-map)
-    (agents-review-reject "C-c C-k" drgnx-agents-review-mode-map)
+    (view-zoom-reset "C-0" nil) (decor-activate "RET" drgnx-decor-button-map)
     (ai-accept-word "C-<right>" drgnx-ai-ghost-showing-map) (ai-dismiss "C-g" drgnx-ai-ghost-showing-map)
     (ai-tab "TAB" drgnx-ai-ghost-mode-map) (ai-edit "C-k C-e" nil)
     (ai-edit-apply-hunk "C-c C-a" drgnx-ai-edit-review-mode-map)
     (ai-edit-done "C-c C-c" drgnx-ai-edit-review-mode-map) (ai-edit-reject "C-c C-k" drgnx-ai-edit-review-mode-map)
-    (work-view "C-k t" nil) (work-open "RET" drgnx-work-mode-map) (work-toggle "TAB" drgnx-work-mode-map)
-    (work-refresh "g" drgnx-work-mode-map) (work-filter "f" drgnx-work-mode-map)
-    (work-hide-merged "m" drgnx-work-mode-map)
-    ;; M12f: the Work graph's keys
-    (cockpit-filter "f" drgnx-cockpit-graph-mode-map) (cockpit-open "RET" drgnx-cockpit-graph-mode-map)
-    (cockpit-open-in-plan "o" drgnx-cockpit-graph-mode-map) (cockpit-refresh "g" drgnx-cockpit-graph-mode-map)
-    (cockpit-next "TAB" drgnx-cockpit-graph-mode-map) (cockpit-previous "<backtab>" drgnx-cockpit-graph-mode-map)
-    ;; M12f C9: writing back to jobs from the Work graph
-    (cockpit-reassign "R" drgnx-cockpit-graph-mode-map) (cockpit-block "b" drgnx-cockpit-graph-mode-map)
-    (cockpit-run-earlier "M-<up>" drgnx-cockpit-graph-mode-map) (cockpit-run-later "M-<down>" drgnx-cockpit-graph-mode-map)
-    (cockpit-start-as-job "s" drgnx-cockpit-graph-mode-map)
-    ;; M12f: an agent's edits
-    (cockpit-accept-file "a" drgnx-cockpit-edits-mode-map) (cockpit-revert-file "r" drgnx-cockpit-edits-mode-map)
-    (cockpit-comment "c" drgnx-cockpit-edits-mode-map) (cockpit-edits-next-file "n" drgnx-cockpit-edits-mode-map)
-    (cockpit-edits-previous-file "p" drgnx-cockpit-edits-mode-map) (cockpit-edits-next-hunk "TAB" drgnx-cockpit-edits-mode-map)
-    (cockpit-edits-previous-hunk "<backtab>" drgnx-cockpit-edits-mode-map) (cockpit-edits-visit "RET" drgnx-cockpit-edits-mode-map)
-    (cockpit-answer "A" drgnx-cockpit-map)
+    (work-take-wheel "W" drgnx-work-live-file-mode-map) (work-files "e" drgnx-work-map-mode-map)
+    (work-diffs "d" drgnx-work-map-mode-map) (work-diff-quit "q" drgnx-work-diff-mode-map)
+    (work-diff-accept-hunk "a" drgnx-work-diff-mode-map) (work-diff-reject-hunk "D" drgnx-work-diff-mode-map)
+    (work-job-log "l" drgnx-work-detail-mode-map) (work-who-is-here "C-k h" nil) (work-left "<left>" drgnx-work-lens-map) (work-right "<right>" drgnx-work-lens-map)
+    (work-why "<up>" drgnx-work-lens-map) (work-touches "<down>" drgnx-work-lens-map)
+    (work-back "M-<left>" drgnx-work-lens-map) (work-forward "M-<right>" drgnx-work-lens-map)
+    (work-next-agent "TAB" drgnx-work-lens-map) (work-previous-agent "<backtab>" drgnx-work-lens-map)
+    (work-open "RET" drgnx-work-lens-map) (work-open-beside "S-<return>" drgnx-work-lens-map)
+    (work-view-map "m" drgnx-work-lens-map) (work-view-board "b" drgnx-work-lens-map)
+    (work-view-flow "F" drgnx-work-lens-map) (work-flow-evidence "e" drgnx-work-flow-mode-map)
+    (work-flow-rules "R" drgnx-work-flow-mode-map) (work-flow-run-red "r" drgnx-work-flow-mode-map)
+    (work-flow-tell-agent "s" drgnx-work-flow-mode-map) (work-flow-waive "w" drgnx-work-flow-mode-map)
+    (work-view-timeline "t" drgnx-work-lens-map) (work-trail "r" drgnx-work-lens-map) (work-steer "s" drgnx-work-lens-map)
+    (work-pause "p" drgnx-work-lens-map) (work-resume "u" drgnx-work-lens-map) (work-stop "x" drgnx-work-lens-map)
+    (work-keys-sheet "?" drgnx-work-lens-map) (work-review "v" drgnx-work-lens-map)
+    (work-second-reviewer "V" drgnx-work-lens-map) (work-review-accept "a" drgnx-work-review-mode-map)
+    (work-review-reject "D" drgnx-work-review-mode-map) (work-conclusion-steps "l" drgnx-work-trail-mode-map)
+    (work-step-conclusions "L" drgnx-work-trail-mode-map) (work-needs-you-here-next "n" drgnx-work-map-mode-map)
+    (work-needs-you-here-previous "N" drgnx-work-map-mode-map) (work-focus "f" drgnx-work-map-mode-map)
+    (work-overlaps "o" drgnx-work-map-mode-map) (work-expand-layers "0" drgnx-work-map-mode-map)
+    (work-show-finished "." drgnx-work-map-mode-map) (work-search "/" drgnx-work-map-mode-map)
+    (work-escape "<escape>" drgnx-work-map-mode-map) (work-needs-you-next "C-k n" nil)
+    (work-needs-you-1 "g 1" drgnx-work-lens-map) (work-needs-you-2 "g 2" drgnx-work-lens-map)
+    (work-needs-you-3 "g 3" drgnx-work-lens-map) (work-needs-you-4 "g 4" drgnx-work-lens-map)
+    (work-needs-you-5 "g 5" drgnx-work-lens-map) (work-needs-you-6 "g 6" drgnx-work-lens-map)
+    (work-needs-you-7 "g 7" drgnx-work-lens-map) (work-needs-you-8 "g 8" drgnx-work-lens-map)
+    (work-needs-you-9 "g 9" drgnx-work-lens-map) (work-collapse-layer-1 "1" drgnx-work-map-mode-map)
+    (work-collapse-layer-2 "2" drgnx-work-map-mode-map) (work-collapse-layer-3 "3" drgnx-work-map-mode-map)
+    (work-collapse-layer-4 "4" drgnx-work-map-mode-map) (work-collapse-layer-5 "5" drgnx-work-map-mode-map)
+    (work-collapse-layer-6 "6" drgnx-work-map-mode-map) (work-view "C-k t" nil) (work-outline "O" drgnx-work-map-mode-map)
     (diff-toggle-layout "s" drgnx-diff-mode-map) (diff-toggle-file "TAB" drgnx-diff-mode-map)
     (diff-next-file "n" drgnx-diff-mode-map) (diff-prev-file "p" drgnx-diff-mode-map)
     (diff-visit "RET" drgnx-diff-mode-map) (review-visit "RET" drgnx-review-mode-map)
@@ -947,6 +981,16 @@ The commands of modules that need no installed package are in it, the later stag
   (let* ((new '(view-explorer view-search replace-in-files rename-symbol   ; M12a's views took four of the keys
                               ;; the later stages' modules from M11c-1: replace, layouts, browser, shortcuts
                               replace-in-file replace-all replace-this replace-next replace-prev replace-bar-close
+                              replace-next-file replace-prev-file ; the Search view's file moves (sja-complete S1)
+                              search-mode-next ; the Search view's mode chip
+                              search-scope-next search-scope-changed search-scope-branch ; its scope chips
+                              search-history-prev search-history-next search-save search-run-saved ; its history
+                              search-preview-file search-preview-keep search-preview-drop ; its preview tile
+                              search-sheet-confirm search-sheet-cancel search-sheet-next search-sheet-previous ; the sheet
+                              search-edit-results search-edit-save search-edit-delete-line ; Edit Results
+                              search-to-agent search-handoff-send search-handoff-cancel ; Ask an Agent
+                              search-handoff-next-who search-handoff-hidden
+                              search-group-next ; the grouping control
                               layout-next browser-go keyboard-shortcuts shortcuts-change shortcuts-add shortcuts-filter
                               shortcuts-record-filter shortcuts-conflicts shortcuts-no-key shortcuts-changed
                               shortcuts-undo shortcuts-reset shortcuts-reset-all shortcuts-profile
@@ -955,17 +999,63 @@ The commands of modules that need no installed package are in it, the later stag
                               agent-settings-add agent-settings-edit agent-settings-remove agent-settings-toggle
                               agent-settings-new-skill agent-settings-open-file agent-settings-other
                               agent-settings-openrouter agent-settings-report
+                              ;; P9's plugins page: keys in its own page map only
+                              plugins-refresh plugins-approve plugins-disable plugins-project-toggle
                               shortcuts-tty-fallback  ; M12b's terminal fallback in the Shortcuts editor
+                              terminal-copy terminal-paste terminal-find terminal-copy-mode ; drgnx's terminal's own map
+                              terminal-find-next terminal-find-previous ; its copy mode's
+                              agents-panel-next-tool agents-panel-previous-tool agents-panel-next-change ; the panel's moves
+                              agents-panel-previous-change agents-panel-next-prompt agents-panel-previous-prompt
+                              ;; the Extensions list: its open key and its own keys
+                              extensions-open extensions-search extensions-details extensions-install extensions-update
+                              extensions-update-all extensions-uninstall extensions-toggle-project extensions-refresh
+                              extensions-cancel extensions-show-log
+                              extensions-trust-install extensions-trust-cancel ; the trust card's own keys
                               quit preferences edit-line-start edit-line-end edit-buffer-start edit-buffer-end edit-word-left
                               edit-word-right edit-delete-word-back edit-delete-line-back edit-copy edit-cut edit-paste
                               code-next-problem code-previous-problem ; M12d: F8 / S-F8
                               quick-help quick-help-close             ; M12f's quick help
                               close-pane                              ; M12f's Esc and q in a pane
                               settings-lisp-files-open           ; settings Task 28: RET on the Lisp files page
+                              edit-undo                          ; Undo on C-z
                               settings-lisp-files-toggle settings-add-lisp-file   ; settings Task 29: t and a there
                               ;; settings Task 26: the Settings page took C-, from Modules, and its own keys
                               preferences-settings settings-page-tab settings-page-group settings-page-search
-                              settings-page-reset settings-page-history settings-page-open-source settings-page-convert))
+                              settings-page-reset settings-page-history settings-page-open-source settings-page-convert
+                              agents-follow       ; part 3: the agent line's follow key
+                              agents-here-follow agents-here-panel agents-here-quit   ; part 3: the who-is-here list
+                              agents-follow-here agents-follow-resume agents-follow-stop agents-follow-panel   ; part 3: the follow window
+                              agents-follow-wheel agents-take-wheel agents-give-wheel   ; part 3: the wheel
+                              agents-panel agents-panel-toggle agents-panel-older agents-panel-toggle-type
+                              agents-panel-preset-1 agents-panel-preset-2 agents-panel-preset-3 agents-panel-make-default
+                              agents-panel-send agents-panel-stop agents-panel-pause agents-panel-resume
+                              agents-panel-edit-queued agents-panel-drop-queued agents-panel-pair
+                              agents-panel-accept agents-panel-reject agents-panel-allow agents-panel-always
+                              agents-panel-pin agents-panel-ledger
+                              agents-panel-output-search agents-panel-output-open agents-panel-output-more
+                              agents-panel-revert-here agents-panel-fork-here
+                              agents-panel-chip agents-panel-revoke-always
+                              agents-panel-start agents-panel-move agents-panel-compact agents-panel-mode agents-panel-model
+                              agents-here-mark agents-here-huddle agents-huddle agents-huddle-send agents-huddle-open
+                              work-huddle agents-view agents-open   ; part 3: the agent panel (its list) and H on a map overlap
+                              ;; extra/debug needs no package now (the hub is its client), so it sets up here too
+                              debug-start debug-breakpoint debug-breakpoint-conditional debug-logpoint
+                              debug-breakpoint-enable debug-run-to-cursor debug-step-over debug-step-in debug-step-out
+                              debug-stop debug-timeline-back debug-timeline-forward debug-timeline-open ; recorded runs' maps
+                              debug-bisect-act ; the bisect card's RET
+                              debug-share-cancel ; the Send Run card's Esc
+                              debug-origin-open ; the origin card's RET
+                              debug-restart debug-pause ; the toolbar's
+                              debug-view debug-view-next debug-view-previous debug-view-expand debug-view-collapse
+                              debug-view-activate debug-view-filter debug-set-value debug-copy-value debug-watch-remove
+                              debug-watch-move-up debug-watch-move-down ; Run and Debug
+                              debug-console debug-console-history-previous debug-console-history-next ; the console
+                              debug-memory-next debug-memory-previous debug-memory-write ; the memory view
+                              debug-heap-select ; the heap graph's RET
+                              debug-disassembly-toggle-breakpoint ; the disassembly view
+                              debug-inline-breakpoint ; Shift+F9, as in VS Code
+                              debug-run-no-debug ; Run Without Debugging's C-F5
+                              terminal-toggle))   ; C-` is Toggle Terminal, as in VS Code (the panel keeps M-j)
          (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))
     (should (equal (mapcar (lambda (b) (list (plist-get b :id) (plist-get b :key) (plist-get b :map)))
@@ -975,6 +1065,19 @@ The commands of modules that need no installed package are in it, the later stag
     (should (equal (drgnx-keys-test--keys r 'edit-word-left) '("C-<left>")))
     (should-not (drgnx-keys-test--keys r 'quit))
     (should-not (drgnx-keys-test--keys r 'preferences))))
+
+(ert-deftest drgnx-keys/run-and-debug-keys-in-every-profile ()
+  "The Run and Debug view's row keys are in all three profiles, in the view's own map."
+  (let ((drgnx-keys-test--later-stages t))
+    (pcase-dolist (`(,profile ,next ,expand ,set) '((vscode "<down>" "<right>" "<f2>") (emacs "n" "<right>" "e")
+                                                    (vim "j" "l" "c")))
+      (let ((r (drgnx-keys-test--resolve `((,profile app editing window)) :platform 'linux)))
+        (should (member next (drgnx-keys-test--keys r 'debug-view-next)))
+        (should (member expand (drgnx-keys-test--keys r 'debug-view-expand)))
+        (should (member set (drgnx-keys-test--keys r 'debug-set-value)))
+        (should (eq 'drgnx-debug-view-mode-map
+                    (plist-get (seq-find (lambda (b) (eq (plist-get b :id) 'debug-view-next)) (plist-get r :bindings))
+                               :map)))))))
 
 (ert-deftest drgnx-keys/views-took-their-keys ()
   ;; After M12a: VS Code's C-S-e / C-S-f / C-S-h / F2 and Vim's SPC s r / SPC c R belong to the new views.
@@ -1048,3 +1151,63 @@ The commands of modules that need no installed package are in it, the later stag
   (should (eq (let ((system-type 'darwin)) (drgnx-platform)) 'macos))
   (should (eq (let ((system-type 'gnu/linux)) (drgnx-platform)) 'linux))
   (should (eq (let ((system-type 'darwin)) (drgnx-keys-platform)) 'macos)))
+
+;;;; A key in its own keymap (`:key-map')
+
+(ert-deftest drgnx-keys/key-map-gives-one-key-its-own-keymap ()
+  ;; One entry, two places: M-p in the view's map, C-p in the Find field's insert-state map.
+  (should-not (drgnx-keys--entry-error '(open-file "M-p" "C-p" :map a-map :key-map (("C-p" (feat . b-map))))))
+  (should (string-search "not one of the entry's keys"
+                         (drgnx-keys--entry-error '(open-file "M-p" :key-map (("C-p" b-map))))))
+  (should (string-search "is not (KEY MAP)" (drgnx-keys--entry-error '(open-file "M-p" :key-map (("M-p"))))))
+  (should (drgnx-keys--entry-error '(open-file "M-p" :key-map "C-p")))
+  (let ((a (drgnx-keys--entry '(open-file "M-p" "C-p" :map a-map :key-map (("C-p" (feat . b-map)))) nil 'linux)))
+    (should (eq (drgnx-keys-entry-map a "M-p") 'a-map))
+    (should (equal (drgnx-keys-entry-map a "C-p") '(feat . b-map))))
+  ;; on macOS the key is turned as the others are; :mac's own keys take the entry's :map
+  (let ((a (drgnx-keys--entry '(open-file "C-p" :key-map (("C-p" b-map))) '(:mac-cmd t) 'macos)))
+    (should (equal (plist-get a :keys) '("s-p")))
+    (should (eq (drgnx-keys-entry-map a "s-p") 'b-map)))
+  (let ((r (drgnx-keys-test--resolve '((vscode app editing window))
+                                     :user '(:bind ((open-file "C-c o" "C-c O" :map a-map
+                                                               :key-map (("C-c O" drgnx-keys-test-late-map))))))))
+    (should (equal (mapcar (lambda (b) (list (plist-get b :key) (plist-get b :map)))
+                           (seq-filter (lambda (b) (eq (plist-get b :id) 'open-file)) (plist-get r :bindings)))
+                   '(("C-c o" a-map) ("C-c O" drgnx-keys-test-late-map))))))
+
+(defun drgnx-keys-test--placed (r id)
+  "The keys resolution R binds command ID to, each with its keymap symbol: ((KEY MAPSYM)…)."
+  (mapcar (lambda (b) (list (plist-get b :key) (cdr (drgnx-commands--keymap-spec (plist-get b :map)))))
+          (seq-filter (lambda (b) (eq (plist-get b :id) id)) (plist-get r :bindings))))
+
+(ert-deftest drgnx-keys/vim-search-keys-in-their-states ()
+  ;; Spec §7: Vim's i (normal state) in the Search view, d d and Z Q in Edit Results, C-p / C-n in the Find field's
+  ;; insert state beside the view's M-p / M-n; each in its own state map, none in a conflict.
+  (let* ((drgnx-keys-test--later-stages t)
+         (r (drgnx-keys-test--resolve '((vim app editing window)) :platform 'linux)))
+    (should (equal (drgnx-keys-test--placed r 'search-edit-results)
+                   '(("C-c C-e" drgnx-replace-keys-map) ("i" drgnx-replace-normal-state-map))))
+    (should (equal (drgnx-keys-test--placed r 'search-edit-delete-line)
+                   '(("C-c C-d" drgnx-search-edit-keys-map) ("d d" drgnx-search-edit-normal-state-map))))
+    (should (equal (drgnx-keys-test--placed r 'search-edit-abort)
+                   '(("C-c C-k" drgnx-search-edit-keys-map) ("Z Q" drgnx-search-edit-normal-state-map))))
+    (should (equal (drgnx-keys-test--placed r 'search-history-prev)
+                   '(("M-p" drgnx-replace-keys-map) ("C-p" drgnx-replace-find-insert-state-map))))
+    (should (equal (drgnx-keys-test--placed r 'search-history-next)
+                   '(("M-n" drgnx-replace-keys-map) ("C-n" drgnx-replace-find-insert-state-map))))
+    (dolist (key '("i" "d d" "Z Q" "C-p" "C-n"))
+      (should-not (seq-find (lambda (c) (and (equal (plist-get c :key) key)
+                                             (string-prefix-p "drgnx-" (format "%s" (plist-get c :map)))))
+                            (plist-get r :conflicts))))))
+
+(ert-deftest drgnx-keys/a-views-state-keys-show-with-their-state ()
+  ;; The sheet and the cheat sheet: the first key, then the keys of a view's state map with the state.
+  (should (equal (drgnx-modal-where 'drgnx-replace-normal-state-map) "normal state"))
+  (should (equal (drgnx-modal-where '(drgnx-replace . drgnx-replace-find-insert-state-map)) "insert state"))
+  (should-not (drgnx-modal-where 'drgnx-replace-keys-map))
+  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil))
+    (drgnx-command-define 'search-history-prev :category "Search" :title "Previous Search" :command #'ignore :doc "test")
+    (let ((c (drgnx-commands-get 'search-history-prev)))
+      (setf (drgnx-cmd-bound c) '(("M-p" drgnx-replace . drgnx-replace-keys-map)
+                                  ("C-p" drgnx-replace . drgnx-replace-find-insert-state-map)))
+      (should (equal (drgnx-surfaces--sheet-key c t) "M-p (in drgnx-replace-keys), C-p (insert state)")))))

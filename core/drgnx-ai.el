@@ -3,7 +3,7 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; One registry for every AI feature — ghost text, inline edit, chat (gptel), embeddings, agents.  Providers are
+;; One registry for every AI feature — ghost text, inline edit, chat, embeddings, agents.  Providers are
 ;; presets for OpenRouter and the local runners (settings/runtime-defaults.el), plus the user's (the setting
 ;; `drgnx-ai-providers', in settings.el); roles (complete, edit, chat, embed, agent) are fallback chains of
 ;; (PROVIDER . MODEL): the user's `drgnx-ai-roles' and the project's (.drgnx/ai.eld, a config file: read-only, 64 KiB).
@@ -315,6 +315,7 @@ auth-source's cache is emptied.  The environment is left as it is: keys the user
 (declare-function drgnx-hub-editor-token "drgnx-hub-client")
 (declare-function drgnx-hub-keys-held "drgnx-hub-client")
 (declare-function drgnx-hub-give-key "drgnx-hub-client")
+(declare-function drgnx-hub-revoke-key "drgnx-hub-client")
 
 (defun drgnx-ai--waits-p (interactive &optional waits)
   "Whether a request may wait for the hub: a command the user ran (INTERACTIVE, or WAITS: a caller that waits for
@@ -550,27 +551,83 @@ reads it back, and a Keychain item that does not match is deleted (`drgnx-ai--ke
         (unless (equal back key)
           (user-error "The key was stored, but the %s did not give it back. %s" store advice))))
     (puthash id key drgnx-ai--keys)
+    ;; the key the hub holds for ID is the old one now: the hub forgets it (the new one goes with the next hand-over)
+    (when (fboundp 'drgnx-hub-revoke-key) (drgnx-hub-revoke-key id))
     (if mac 'keychain 'keyring)))
+
+(defun drgnx-ai-remove-key (id)
+  "Remove provider ID's key: drgnx's item in the macOS Keychain or the Linux keyring (what `drgnx-ai-store-key'
+wrote), this Emacs's copy, and the hub's, which forgets it at once (`drgnx-hub-revoke-key').  A key in your environment
+stays where you put it.  Asks first when run as a command; nothing else deletes a key."
+  (interactive
+   (list (intern (completing-read "Remove the key of: "
+                                  (mapcar (lambda (p) (symbol-name (car p)))
+                                          (seq-filter (lambda (p) (plist-get (cdr p) :key-env)) (drgnx-ai-providers)))
+                                  nil t))))
+  (let* ((p (drgnx-ai-provider id))
+         (env (plist-get p :key-env))
+         (host (and env (url-host (url-generic-parse-url (plist-get p :url)))))
+         (mac (eq system-type 'darwin))
+         (store (if mac "Keychain" "keyring")))
+    (unless host (user-error "Provider %s has no key to remove" id))
+    (when (and (called-interactively-p 'interactive)
+               (not (y-or-n-p (format "Remove the %s key from your %s and the drgnx hub? (A key in %s stays.) " id store env))))
+      (user-error "Not removed"))
+    (let ((status (if mac
+                      (car (drgnx-ai--security-call (list "delete-internet-password" "-a" "drgnx" "-s" host)))
+                    (if (executable-find "secret-tool")
+                        (call-process "secret-tool" nil nil nil "clear" "host" host "service" "drgnx")
+                      (user-error "No `secret-tool' found: nothing in the keyring was removed")))))
+      ;; 44: the Keychain had no item; the keyring answers 0 either way
+      (unless (memq status '(0 44))
+        (user-error "The %s did not remove the key (exit %s)" store status)))
+    (remhash id drgnx-ai--keys)
+    (when (featurep 'auth-source) (auth-source-forget-all-cached))
+    (when (fboundp 'drgnx-hub-revoke-key) (drgnx-hub-revoke-key id))
+    (when (called-interactively-p 'interactive)
+      (message "Removed the %s key from your %s and the drgnx hub" id store))
+    id))
 
 ;;;; Agent environments (agent profiles; M9b adds more kinds)
 
-(defconst drgnx-ai-gateway-kinds '(claude-openrouter claude-ollama claude-anthropic claude-moonshot claude-deepseek)
-  "Agent profile kinds whose traffic the agent gateway may carry (the hub's gateway).")
+(defconst drgnx-ai-gateway-kinds
+  '(claude-openrouter claude-ollama claude-anthropic kimi-moonshot dsh-deepseek claude-moonshot claude-deepseek)
+  "Agent profile kinds whose traffic the agent gateway may carry (the hub's gateway).  `kimi-moonshot' and
+`dsh-deepseek' are the vendors' own agents (Kimi Code, DeepSeek Harness) on their own APIs; `claude-moonshot' and
+`claude-deepseek' (Claude Code on those APIs) are retired from the built-in profiles and still run
+\(`drgnx-ai-retired-kind-note').")
+
+(defconst drgnx-ai-retired-kinds
+  '((claude-moonshot . "kimi") (claude-deepseek . "deepseek"))
+  "Agent kinds no built-in profile uses any more, each with the built-in profile that replaces it.")
+
+(defvar drgnx-ai--retired-noted nil
+  "The retired kinds `drgnx-ai-retired-kind-note' has named in this Emacs session.")
+
+(defun drgnx-ai-retired-kind-note (kind)
+  "Once per Emacs session for each retired KIND (`drgnx-ai-retired-kinds'): the status line naming the profile that
+replaces it (the session still starts).  Nil for another kind, or one named already."
+  (when-let* ((new (alist-get kind drgnx-ai-retired-kinds))
+              ((not (memq kind drgnx-ai--retired-noted))))
+    (push kind drgnx-ai--retired-noted)
+    (format "drgnx: the agent kind %s (Claude Code on the vendor's own API) is retired; the built-in profile %S runs \
+the vendor's own agent" kind new)))
 
 (defun drgnx-ai-agent-gateway-chain (kind &optional model)
   "The providers ((PROVIDER . MODEL)…) an agent of KIND may use through the gateway, in order.  MODEL (the
-profile's) names the model of the one provider of `claude-moonshot', `claude-deepseek' and `claude-openrouter';
-`claude-openrouter' without it follows the `agent' role."
+profile's) names the model of the one provider of `kimi-moonshot', `dsh-deepseek' (and the retired
+`claude-moonshot', `claude-deepseek') and `claude-openrouter'; `claude-openrouter' without it follows the `agent'
+role."
   (pcase kind
     ('claude-openrouter (if model (list (cons 'openrouter model)) (drgnx-ai-role 'agent)))
     ('claude-ollama '((ollama)))
     ('claude-anthropic '((anthropic)))
-    ('claude-moonshot (list (cons 'moonshot model)))
-    ('claude-deepseek (list (cons 'deepseek model)))))
+    ((or 'kimi-moonshot 'claude-moonshot) (list (cons 'moonshot model)))
+    ((or 'dsh-deepseek 'claude-deepseek) (list (cons 'deepseek model)))))
 
 (defconst drgnx-ai--agent-providers
   '((claude-openrouter . openrouter) (claude-ollama . ollama) (claude-anthropic . anthropic)
-    (claude-moonshot . moonshot) (claude-deepseek . deepseek))
+    (kimi-moonshot . moonshot) (dsh-deepseek . deepseek) (claude-moonshot . moonshot) (claude-deepseek . deepseek))
   "Each gateway kind's own provider: the one whose key decides whether the kind is keyed (`drgnx-ai-agent-keyed-p').")
 
 (defun drgnx-ai-agent-keyed-p (kind)
@@ -582,8 +639,10 @@ keyless one (Ollama) may go direct."
 
 (defun drgnx-ai-check-agent-model (kind model)
   "Signal a `user-error' when an agent of KIND needs a MODEL and has none: the vendors' own APIs
-\(`claude-moonshot', `claude-deepseek') do not know Claude Code's default model names."
-  (when (and (memq kind '(claude-moonshot claude-deepseek)) (not (and (stringp model) (not (string-empty-p model)))))
+\(`kimi-moonshot', `dsh-deepseek', and the retired `claude-moonshot', `claude-deepseek') do not know an agent's
+default model names."
+  (when (and (memq kind '(kimi-moonshot dsh-deepseek claude-moonshot claude-deepseek))
+             (not (and (stringp model) (not (string-empty-p model)))))
     (user-error "The %s agent profile needs a :model (the vendor's model name)" kind)))
 
 (defun drgnx-ai-agent-env (profile &optional gateway)
@@ -596,6 +655,8 @@ Sonnet, Opus and subagent models, and :small-model (else the :model) for the sma
 `ANTHROPIC_DEFAULT_HAIKU_MODEL' (Claude Code's current variable; `ANTHROPIC_SMALL_FAST_MODEL' is deprecated).  A
 subscription CLI gets nothing: it uses its own login, which drgnx never reads."
   (drgnx-ai-check-agent-model (plist-get profile :kind) (plist-get profile :model))
+  (when-let* ((note (drgnx-ai-retired-kind-note (plist-get profile :kind))))
+    (message "%s" note))
   (let ((env (drgnx-ai--agent-route-env profile gateway))
         (model (plist-get profile :model)))
     (if (and env (stringp model))
@@ -626,58 +687,6 @@ error (`drgnx-settings-refused', a `user-error') says so."
   (let ((roles (copy-alist (default-value 'drgnx-ai-roles))))
     (setf (alist-get role roles) chain)
     (drgnx-settings-defaults-save 'drgnx-ai-roles roles)))
-
-;;;; gptel (the chat UI) from the registry
-
-(declare-function gptel-make-openai "gptel-openai")
-(declare-function gptel-make-ollama "gptel-ollama")
-(defvar gptel-backend)
-(defvar gptel-model)
-
-(defun drgnx-ai-gptel-spec (id model)
-  "How to make provider ID's gptel backend for MODEL: (FUNCTION NAME . ARGS).  A provider with a key is the hub's
-gateway, and gptel's key is the editor token, a function asked when gptel sends, never a stored string; a keyless one
-is asked directly."
-  (let* ((p (drgnx-ai-provider id))
-         (gateway (and (drgnx-ai-gateway-p id) (drgnx-ai-gateway-credentials)))   ; signals when the hub has no token yet
-         (u (url-generic-parse-url (if gateway (format "%s/p/%s" (string-remove-suffix "/" (car gateway)) id) (plist-get p :url))))
-         (host (if (url-portspec u) (format "%s:%d" (url-host u) (url-portspec u)) (url-host u)))
-         (path (string-remove-suffix "/" (or (url-filename u) "")))
-         (name (or (plist-get p :name) (symbol-name id))))
-    (pcase (plist-get p :kind)
-      ('ollama (list 'gptel-make-ollama name :host host :protocol (url-type u) :models (list (intern model)) :stream t))
-      (kind (append (list 'gptel-make-openai name :host host :protocol (url-type u)
-                          :endpoint (concat (if (eq kind 'llamacpp) (concat path "/v1") path) "/chat/completions")
-                          :models (list (intern model)) :stream t)
-                    (and gateway (list :key (lambda () (cdr (drgnx-ai-gateway-credentials t))))))))))
-
-(defvar drgnx-ai--gptel-ours nil "The gptel backend drgnx made last.")
-(defvar gptel--openai)
-(defvar gptel-api-key)
-
-(defun drgnx-ai-gptel-maybe-configure (usable-p)
-  "Point gptel at the `chat' role's first provider USABLE-P accepts — unless the user chose a backend of their
-own (only gptel's default, none, or the one drgnx made is replaced; gptel's default with a `gptel-api-key' the
-user set is theirs).  Returns the step, or nil."
-  (when (or (not (boundp 'gptel-backend)) (null gptel-backend) (eq gptel-backend drgnx-ai--gptel-ours)
-            (and (boundp 'gptel--openai) (eq gptel-backend gptel--openai)
-                 ;; gptel's own default for the key is a function that asks auth-source: nobody's choice
-                 (or (not (boundp 'gptel-api-key)) (null gptel-api-key)
-                     (eq gptel-api-key 'gptel-api-key-from-auth-source))))
-    (when-let* ((step (drgnx-ai-gptel-configure usable-p)))
-      (setq drgnx-ai--gptel-ours gptel-backend)
-      step)))
-
-(defun drgnx-ai-gptel-configure (usable-p)
-  "Point gptel at the first provider of the `chat' role USABLE-P accepts.  Returns it, or nil."
-  (when-let* ((step (seq-find (lambda (s) (funcall usable-p (car s))) (drgnx-ai-role 'chat)))
-              ;; the gateway's address comes with the hub's token: not yet (nil), and gptel is set up when it arrives
-              (spec (condition-case nil (drgnx-ai-gptel-spec (car step) (cdr step)) (drgnx-ai-gateway-unavailable nil))))
-    ;; `gptel' alone does not load the backend makers (they are autoloads, absent without package.el)
-    (unless (fboundp (car spec)) (require (if (eq (car spec) 'gptel-make-ollama) 'gptel-ollama 'gptel-openai)))
-    (setq gptel-backend (apply (car spec) (cdr spec))
-          gptel-model (intern (cdr step)))
-    step))
 
 (provide 'drgnx-ai)
 ;;; drgnx-ai.el ends here

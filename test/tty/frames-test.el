@@ -23,7 +23,7 @@ Explorer once the sidebar is shown.  EVAL evaluates a form in the frame on that 
   (should (eq (funcall eval '(plist-get (terminal-parameter nil 'drgnx-tty-caps) :id)) 'tmux))
   (funcall eval '(progn (drgnx-wb-show-sidebar) t))
   (should (funcall eval '(and (drgnx-wb--dock-windows) t)))
-  (drgnx-tty-session-wait-screen sess "EXPLORER"))
+  (drgnx-tty-session-wait-screen sess drgnx-tty-session-explorer-heading))
 
 (ert-deftest drgnx-tty-frames/emacs-nw-gets-the-workbench ()
   (drgnx-tty-session-with (s :size "120x40")
@@ -90,7 +90,7 @@ once TEXT is on its screen."
                                      t))
         (drgnx-tty-session-wait-screen c "\\[emacsclient exited 0\\]" 10)
         (should (= (drgnx-tty-session-eval s `(length ,drgnx-tty-frames-test--clients)) 2))
-        (drgnx-tty-session-wait-screen w "EXPLORER")))))
+        (drgnx-tty-session-wait-screen w drgnx-tty-session-explorer-heading)))))
 
 (ert-deftest drgnx-tty-frames/move-editor-into-new-window-from-a-terminal-client ()
   ;; the command made from a terminal client's frame (a key there) is one command, not an "Unknown terminal type" error

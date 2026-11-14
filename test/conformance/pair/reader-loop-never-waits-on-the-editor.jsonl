@@ -1,0 +1,23 @@
+{"scenario": "pair/reader-loop-never-waits-on-the-editor", "requires": ["v1", "test-hooks"], "doc": "Gated (B). A Gemini chat's fs/write_text_file waits in the editor (no answer yet). The session's reader loop is not waiting with it: the agent killed meanwhile, its exit is read at once and the session says exited. What makes it fail: the hub awaiting the editor inline in the loop that reads the agent's messages."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/project && echo readme > $ROOT/project/README"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-matrix (:preset autonomous)) (drgnx-agents-profiles ((\"mock-gemini\" :provider gemini :command (\"$MOCK\" \"acp\" \"--as\" \"gemini\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 90, "method": "pair/open", "params": {"file": "$ROOT/project/README", "kind": "normal"}}}
+{"do": "expect", "conn": "e", "json": {"id": 90, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-gemini", "cwd": "$ROOT/project"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "provider:whole-diff README"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "pair-read", "data": {"req": "$capture:r"}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "pair/read-answer", "params": {"req": "$r", "text": "readme\n", "version": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "pair-apply", "data": {"write": "$capture:w", "session": "$sid"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/kill", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}, "within_ms": 10000}
+{"do": "poll", "conn": "c", "json": {"id": 4, "method": "agents/get", "params": {"id": "$sid"}}, "expect": {"id": 4, "result": {"session": {"id": "$sid", "status": "exited"}}}, "within_ms": 10000}

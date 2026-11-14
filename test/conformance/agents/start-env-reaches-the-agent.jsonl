@@ -1,12 +1,12 @@
-{"scenario": "agents/start-env-reaches-the-agent", "requires": ["v1", "test-hooks"], "doc": "An editor module's variable (agents/start env, a name on drgnx-agents-start-env-names) is in the started agent's environment: the profile's command is a shell that writes the variable to a file before it runs the mock ACP agent."}
+{"scenario": "agents/start-env-reaches-the-agent", "requires": ["v1", "test-hooks"], "doc": "An editor module's variable (agents/start env, a name the settings put on drgnx-agents-start-env-names, which is empty by default) is in the started agent's environment: the profile's command is a shell that writes the variable to a file before it runs the mock ACP agent."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
-{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-env\" :provider claude :command (\"/bin/sh\" \"-c\" \"printenv PLAYWRIGHT_MCP_CDP_ENDPOINT > $ROOT/env.txt; exec $MOCK acp --as claude --log $ROOT/acp.log\")))))\n"}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-start-env-names (\"DRGNX_MODULE_ENDPOINT\")) (drgnx-agents-profiles ((\"mock-env\" :provider claude :command (\"/bin/sh\" \"-c\" \"printenv DRGNX_MODULE_ENDPOINT > $ROOT/env.txt; exec $MOCK acp --as claude --log $ROOT/acp.log\")))))\n"}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
-{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-env", "cwd": "$ROOT/work", "env": [{"name": "PLAYWRIGHT_MCP_CDP_ENDPOINT", "value": "http://127.0.0.1:9222"}]}}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-env", "cwd": "$ROOT/work", "env": [{"name": "DRGNX_MODULE_ENDPOINT", "value": "http://127.0.0.1:8080/module"}]}}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:agent", "name": "$string"}}, "within_ms": 30000}
-{"do": "file", "path": "$ROOT/env.txt", "contains": "http://127.0.0.1:9222", "within_ms": 30000}
+{"do": "file", "path": "$ROOT/env.txt", "contains": "http://127.0.0.1:8080/module", "within_ms": 30000}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/stop", "params": {"id": "$agent"}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": "$any"}, "within_ms": 10000}

@@ -18,6 +18,7 @@ serde_json = { version = "1", features = ["raw_value"] }
 runstav = { path = "../crates/runstav" }
 drgnx-ratatoskr = { path = "../crates/drgnx-ratatoskr", features = ["fuzzing"] }
 saga = { path = "../crates/saga" }
+heimdall = { path = "../crates/heimdall" }
 gleipnir = { path = "../crates/gleipnir", features = ["fuzzing"] }
 huginn = { path = "../crates/huginn" }
 mimir = { path = "../crates/mimir", features = ["fuzzing"] }
@@ -25,8 +26,10 @@ mimir = { path = "../crates/mimir", features = ["fuzzing"] }
 bifrost = { path = "../crates/bifrost", default-features = false }
 http = "1"
 norn = { path = "../crates/norn" }
+brokkr = { path = "../crates/brokkr" }
 urdr = { path = "../crates/urdr", features = ["test-hooks"] }
-tokio = { version = "1.54", features = ["rt", "io-util", "time"] }
+drgnx-px = { path = "../crates/drgnx-px" }
+tokio = { version = "1.54", features = ["rt", "io-util", "time", "sync"] }
 
 [workspace]
 
@@ -54,6 +57,13 @@ bench = false
 [[bin]]
 name = "connect_head"
 path = "fuzz_targets/connect_head.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "absolute_head"
+path = "fuzz_targets/absolute_head.rs"
 test = false
 doc = false
 bench = false
@@ -215,6 +225,55 @@ bench = false
 [[bin]]
 name = "saga_org"
 path = "fuzz_targets/saga_org.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cdp_envelope"
+path = "fuzz_targets/cdp_envelope.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "px_frames"
+path = "fuzz_targets/px_frames.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "plugin_manifest"
+path = "fuzz_targets/plugin_manifest.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "px_owner"
+path = "fuzz_targets/px_owner.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "hook_rules"
+path = "fuzz_targets/hook_rules.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "px_mux"
+path = "fuzz_targets/px_mux.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "drgnx_context"
+path = "fuzz_targets/drgnx_context.rs"
 test = false
 doc = false
 bench = false

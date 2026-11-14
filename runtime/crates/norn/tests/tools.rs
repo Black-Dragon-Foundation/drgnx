@@ -200,6 +200,8 @@ async fn none_identity_reads_but_never_writes() {
                 error && text.contains("no agent identity"),
                 "{name}: {text}"
             );
+            // the hub takes identity from the session socket, never from an environment variable
+            assert!(!text.contains("DRGNX_AGENT"), "{name}: {text}");
         }
     }
     assert_eq!(w.written(), 0);
@@ -259,9 +261,9 @@ async fn outside_is_refused_the_job_tools() {
             "ask the user with ask_user",
         ),
     ];
-    let names: Vec<&str> = tools().iter().map(|t| t.name()).collect();
+    let names: Vec<String> = tools().iter().map(|t| t.name().to_owned()).collect();
     for (name, args, says) in job_tools {
-        if names.contains(&name) {
+        if names.iter().any(|n| n == name) {
             let (error, text) = w.call(&out, name, args).await;
             assert!(error && text.contains(says), "{name}: {text}");
         }
@@ -518,9 +520,7 @@ async fn hello_cwd_must_be_inside_home() {
 }
 
 fn script(path: &Path, body: &str) {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::write(path, format!("#!/bin/sh\n{body}\n")).unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    drgnx_exe::write(path, format!("#!/bin/sh\n{body}\n")).unwrap();
 }
 
 /// git for the fixture itself: no overrides, `HOME` in the temporary root.

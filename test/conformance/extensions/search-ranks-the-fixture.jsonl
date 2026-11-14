@@ -1,0 +1,13 @@
+{"scenario": "extensions/search-ranks-the-fixture", "requires": ["v1"], "doc": "extensions/search answers rows from the refresh job's catalog, exact name first, then a name prefix, then the summary; every word must match; the total counts before limit."}
+{"do": "root"}
+{"do": "write_file", "path": "$ROOT/cache/drgnx/extensions/catalog.json", "text": "{\"version\":1,\"archives\":[{\"name\":\"melpa\",\"url\":\"https://melpa.org/packages/\",\"signed\":false}],\"packages\":[{\"name\":\"forge\",\"summary\":\"Access Git forges from Magit\",\"versions\":[{\"archive\":\"melpa\",\"version\":\"1\",\"reqs\":[]}],\"candidate\":{\"archive\":\"melpa\",\"version\":\"1\"}},{\"name\":\"magit-todos\",\"summary\":\"TODOs in Magit\",\"versions\":[{\"archive\":\"melpa\",\"version\":\"1\",\"reqs\":[]}],\"candidate\":{\"archive\":\"melpa\",\"version\":\"1\"}},{\"name\":\"magit\",\"summary\":\"A Git porcelain inside Emacs\",\"keywords\":[\"git\"],\"versions\":[{\"archive\":\"melpa\",\"version\":\"2\",\"reqs\":[]}],\"candidate\":{\"archive\":\"melpa\",\"version\":\"2\"},\"downloads\":10}]}"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "extensions/search", "params": {"query": "magit"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"total": 3, "rows": [{"id": "pkg:magit", "kind": "package", "state": "available", "source": "melpa", "signed": "unsigned-archive", "latest": "2", "downloads": 10}, {"id": "pkg:magit-todos"}, {"id": "pkg:forge"}]}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "extensions/search", "params": {"query": "git porc"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"total": 1, "rows": [{"id": "pkg:magit"}]}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "extensions/search", "params": {"query": "magit", "limit": 1, "offset": 1}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"total": 3, "rows": [{"id": "pkg:magit-todos"}]}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "extensions/search", "params": {"limit": 501}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "error": {"code": "invalid-params"}}}

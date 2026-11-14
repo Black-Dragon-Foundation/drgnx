@@ -40,7 +40,8 @@ that prints no address within a minute is stopped (asked to stop, not waited for
 session there is, else it asks) and takes the last one that navigated: a Playwright tool call with a `url` in its input.
 It opens that page in the pane, and shows the latest image any tool of that agent returned (a Playwright
 screenshot) in the side buffer `*drgnx: agent screenshot*`. An agent with no such call gets a message saying so.
-This is the same page, not a live view: the agent's own browser is its own.
+This is the same page, not a live view: the agent's own browser is its own and runs inside its sandbox
+([agent-browser.md](agent-browser.md)).
 
 ## For module authors
 

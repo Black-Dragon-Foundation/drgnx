@@ -1,5 +1,7 @@
-;;; wb-buffers-edge-test.el --- batch tests: the Buffers panel, edge cases -*- lexical-binding: t -*-
+;;; wb-buffers-edge-test.el --- batch tests: the Buffers panel with no hub, edge cases -*- lexical-binding: t -*-
 ;; test-class: det
+;; No hub runs: the panel says it waits for one, what it would send is read where it is queued, and its commands act
+;; on the buffers.  The rows from a real hub: wb-buffers-test.el.
 (require 'ert)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
@@ -13,8 +15,11 @@
   (declare (indent 1))
   `(drgnx-test-with-state
      (let* ((,dir (make-temp-file "drgnx-buffers-edge" t))
-            (drgnx-wb--sections nil) (drgnx-buffers--order nil) (drgnx-buffers--signature nil)
-            (drgnx-buffers--filter nil) (drgnx-buffers-all-windows nil))
+            (drgnx-wb--sections nil) (drgnx-buffers--filter nil) (drgnx-buffers-all-windows nil)
+            (drgnx-buffers--ids (make-hash-table :test #'eq :weakness 'key))
+            (drgnx-buffers--by-id (make-hash-table :test #'equal :weakness 'value))
+            (drgnx-buffers--sent (make-hash-table :test #'eq :weakness 'key))
+            (drgnx-buffers--next 0) (drgnx-buffers--ops nil) (drgnx-buffers--scope 'all) (drgnx-buffers--pressed nil))
        (unwind-protect
            (progn
              (delete-other-windows)
@@ -51,7 +56,7 @@
     (drgnx-wb-hide-sidebar)
     (drgnx-wb-show-sidebar)
     (should-not (string-search "alp" (drgnx-buffers-edge--header 'buffers)))
-    (should (string-search "save all" (drgnx-buffers-edge--header 'buffers)))))   ; the buttons are back
+    (should (string-search "Open" (drgnx-buffers-edge--header 'buffers)))))   ; the plain title is back
 
 (ert-deftest drgnx-buffers/the-explorer-find-title-survives-hide-and-show ()
   (drgnx-test-with-state
@@ -75,38 +80,6 @@
         (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
         (delete-directory dir t)))))
 
-(defun drgnx-buffers-edge--alive (bufs) (seq-filter #'buffer-live-p bufs))
-
-(ert-deftest drgnx-buffers/close-commands-act-on-the-rows-shown ()
-  ;; Close Saved, Close Others and Close All never touch buffers the filter hides.
-  (drgnx-buffers-edge--with dir
-    (let ((alpha (drgnx-buffers-edge--open dir "alpha.txt")) (alps (drgnx-buffers-edge--open dir "alps.txt"))
-          (zzz (drgnx-buffers-edge--open dir "zzz.txt")))
-      (drgnx-buffers--filter-apply "alp")
-      (with-current-buffer drgnx-buffers-buffer-name
-        (goto-char (drgnx-buffers--row-pos alpha))
-        (drgnx-buffers-close-others))
-      (should (equal (drgnx-buffers-edge--alive (list alpha alps zzz)) (list alpha zzz)))
-      (drgnx-buffers-close-saved)
-      (should (equal (drgnx-buffers-edge--alive (list alpha zzz)) (list zzz)))
-      (let ((other (drgnx-buffers-edge--open dir "alpine.txt")))
-        (drgnx-buffers-close-all)
-        (should-not (buffer-live-p other))
-        (should (buffer-live-p zzz))))))
-
-(ert-deftest drgnx-buffers/a-name-with-two-spaces-is-painted-whole ()
-  ;; The name ends where its length says, not at the first two spaces.
-  (drgnx-buffers-edge--with dir
-    (let ((b (drgnx-buffers-edge--open dir "a  b.txt")))
-      (drgnx-buffers--refresh)
-      (with-current-buffer drgnx-buffers-buffer-name
-        (drgnx-buffers--fontify (point-min) (point-max))
-        (let* ((bol (drgnx-buffers--row-pos b)) (b-pos (+ bol 4 3)))     ; the "b" of "a  b.txt"
-          (should (equal (buffer-substring-no-properties b-pos (1+ b-pos)) "b"))
-          (should (eq (get-text-property b-pos 'mouse-face) 'highlight))
-          (should-not (eq (get-text-property b-pos 'face) 'drgnx-buffers-dir))
-          (should (eq (get-text-property (+ bol 4 (length "a  b.txt") 2) 'face) 'drgnx-buffers-dir)))))))
-
 (defun drgnx-buffers-edge--fake-files (n)
   "N user buffers (visiting files that need not exist), oldest first."
   (cl-loop for i below n
@@ -117,38 +90,87 @@
 (defun drgnx-buffers-edge--kill (bufs)
   (dolist (b bufs) (with-current-buffer b (set-buffer-modified-p nil) (setq buffer-file-name nil)) (kill-buffer b)))
 
-(ert-deftest drgnx-buffers/the-order-keeps-old-rows-and-appends-new-ones ()
-  (let* ((bufs (drgnx-buffers-edge--fake-files 4)) (a (nth 0 bufs)) (b (nth 1 bufs)) (c (nth 2 bufs)) (d (nth 3 bufs))
-         (drgnx-buffers--order (list c a b)))
-    (unwind-protect
-        (progn
-          (kill-buffer b)
-          (drgnx-buffers--update-order)
-          (should (equal (seq-filter (lambda (x) (memq x bufs)) drgnx-buffers--order) (list c a d))))
-      (drgnx-buffers-edge--kill (seq-filter #'buffer-live-p bufs)))))
+;;; With the hub down
 
-(ert-deftest drgnx-buffers/this-windows-rows-keep-the-panel-order ()
-  (let* ((bufs (drgnx-buffers-edge--fake-files 4)) (drgnx-buffers--order bufs) (drgnx-buffers-all-windows nil))
-    (unwind-protect
-        (cl-letf (((symbol-function 'drgnx-frames-count) (lambda () 2))
-                  ((symbol-function 'drgnx-frame-buffers) (lambda (&optional _) (list (nth 3 bufs) (nth 1 bufs)))))
-          (should (equal (drgnx-buffers--in-window) (list (nth 1 bufs) (nth 3 bufs)))))
-      (drgnx-buffers-edge--kill bufs))))
+(ert-deftest drgnx-buffers/with-the-hub-down-the-panel-waits-and-the-commands-work ()
+  "No hub: the panel's one line says it waits for the hub, nothing is sent (the reconnect sends the whole set), and
+Save All saves."
+  (drgnx-buffers-edge--with dir
+    (let ((a (drgnx-buffers-edge--open dir "a.txt")))
+      (with-current-buffer drgnx-buffers-buffer-name
+        (should (overlayp drgnx-buffers--waiting))
+        (should (string-search "Waiting for the hub" (overlay-get drgnx-buffers--waiting 'before-string))))
+      (drgnx-buffers--send)
+      (should-not drgnx-buffers--ops)
+      (should (zerop drgnx-buffers--sends))
+      (with-current-buffer a (insert "y"))
+      (drgnx-buffers-save-all)
+      (should-not (buffer-modified-p a)))))
+
+(ert-deftest drgnx-buffers/the-set-is-sent-again-in-open-order ()
+  "A reconnect (`drgnx-buffers--resend') sends a reset, then every open buffer in the order it was first seen, the
+scope and the filter."
+  (drgnx-buffers-edge--with dir
+    (let* ((bufs (drgnx-buffers-edge--fake-files 3)) (drgnx-buffers--filter "drgnx"))
+      (unwind-protect
+          (progn
+            (drgnx-buffers--set-changed (list (nth 1 bufs) (nth 0 bufs)))
+            (drgnx-buffers--set-changed bufs)
+            (drgnx-buffers--resend)
+            (let ((ops (reverse drgnx-buffers--ops)))
+              (should (equal (plist-get (car ops) :op) "reset"))
+              (should (equal (seq-filter (lambda (name) (member name (mapcar #'buffer-name bufs)))
+                                         (mapcar (lambda (op) (plist-get op :name))
+                                                 (seq-filter (lambda (op) (equal (plist-get op :op) "put")) ops)))
+                             (mapcar #'buffer-name (list (nth 1 bufs) (nth 0 bufs) (nth 2 bufs)))))
+              (should (equal (car (last ops)) '(:op "filter" :text "drgnx")))))
+        (drgnx-buffers-edge--kill bufs)))))
+
+(ert-deftest drgnx-buffers/a-closed-buffer-is-removed-and-forgotten ()
+  (drgnx-buffers-edge--with dir
+    (let* ((bufs (drgnx-buffers-edge--fake-files 2)) (gone (nth 0 bufs)) (id nil))
+      (unwind-protect
+          (progn
+            (drgnx-buffers--set-changed bufs)
+            (setq id (gethash gone drgnx-buffers--ids) drgnx-buffers--ops nil)
+            (drgnx-buffers-edge--kill (list gone))
+            (drgnx-buffers--set-changed (list (nth 1 bufs)))
+            (should (equal drgnx-buffers--ops (list (list :op "remove" :id id))))
+            (should-not (gethash id drgnx-buffers--by-id)))
+        (drgnx-buffers-edge--kill (seq-filter #'buffer-live-p bufs))))))
+
+(ert-deftest drgnx-buffers/this-windows-scope-names-its-buffers ()
+  "With several windows the scope is the ids of the window's buffers (the hub keeps them in open order); with
+`drgnx-buffers-all-windows' or one window, all.  Only a change is sent."
+  (drgnx-buffers-edge--with dir
+    (let ((bufs (drgnx-buffers-edge--fake-files 4)))
+      (unwind-protect
+          (progn
+            (drgnx-buffers--set-changed bufs)
+            (cl-letf (((symbol-function 'drgnx-frames-count) (lambda () 2))
+                      ((symbol-function 'drgnx-frame-buffers) (lambda (&optional _) (list (nth 3 bufs) (nth 1 bufs)))))
+              (should (equal (drgnx-buffers--scope-now)
+                             (vector (gethash (nth 3 bufs) drgnx-buffers--ids) (gethash (nth 1 bufs) drgnx-buffers--ids))))
+              (setq drgnx-buffers--ops nil)
+              (drgnx-buffers--scope-sync)
+              (should (equal (plist-get (car drgnx-buffers--ops) :op) "scope"))
+              (setq drgnx-buffers--ops nil)
+              (drgnx-buffers--scope-sync)
+              (should-not drgnx-buffers--ops)
+              (let ((drgnx-buffers-all-windows t)) (should (eq (drgnx-buffers--scope-now) 'all)))))
+        (drgnx-buffers-edge--kill bufs)))))
 
 (defun drgnx-buffers-edge--alloc (n)
-  "What ordering N buffers, picking one window's half and working out the main window's allocates."
+  "What telling the hub about N new buffers, then about the same set again, allocates."
   (let ((bufs (drgnx-buffers-edge--fake-files n)) (best nil))
     (unwind-protect
-        (cl-letf (((symbol-function 'drgnx-frames-count) (lambda () 2))
-                  ((symbol-function 'drgnx-frame-role) (lambda (&optional _) 'main))
-                  ((symbol-function 'frame-list) (lambda () (list (selected-frame) 'other)))
-                  ((symbol-function 'drgnx-frames--workbench-p) (lambda (_) t))
-                  ((symbol-function 'drgnx-frames--tabs)
-                   (lambda (f) (if (eq f 'other) (seq-drop bufs (/ n 2)) (seq-take bufs (/ n 3))))))
-          (setq best (drgnx-test-alloc
-                       (let ((drgnx-buffers--order (reverse bufs)))
-                         (drgnx-buffers--update-order)
-                         (drgnx-buffers--in-window)))))
+        (setq best (drgnx-test-alloc
+                     (let ((drgnx-buffers--ids (make-hash-table :test #'eq :weakness 'key))
+                           (drgnx-buffers--by-id (make-hash-table :test #'equal :weakness 'value))
+                           (drgnx-buffers--sent (make-hash-table :test #'eq :weakness 'key))
+                           (drgnx-buffers--ops nil))
+                       (drgnx-buffers--set-changed bufs)
+                       (drgnx-buffers--set-changed bufs))))
       (drgnx-buffers-edge--kill bufs))
     best))
 

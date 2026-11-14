@@ -1,0 +1,24 @@
+{"scenario": "rewind/claude-message-level", "requires": ["v1", "test-hooks"], "doc": "A Claude worker wrote b.txt in two turns. The revert card for the end of the first turn names b.txt and a message-level restore of the conversation (Claude forks at a message). Applying it writes the first turn's text back, restores the conversation, and says the level it restored."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work $ROOT/state && cd $ROOT/work && git init -q && echo base > a.txt && git add -A && git -c user.name=t -c user.email=t@t commit -q -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--state\" \"$ROOT/state\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "say first\nfs:write b.txt one\\n"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"seq": "$capture:s1", "class": "think", "turn_id": "t1"}}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$sid", "text": "say second\nfs:write b.txt one\\ntwo\\n"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"seq": "$capture:s2", "class": "think", "turn_id": "t2"}}}, "within_ms": 15000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "test \"$(cat $ROOT/work/b.txt)\" = \"$(printf 'one\\ntwo')\""], "expect_code": 0}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "history/revert/preview", "params": {"session": "$sid", "seq": "$s1"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"preview_id": "$capture:pid", "session": "$sid", "seq": "$s1", "files": ["b.txt"], "level": "message", "needs_message": false, "blocked": [], "conversation": "$any"}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "history/revert/apply", "params": {"preview_id": "$pid", "mode": "keep-mine", "choices": []}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"session": "$sid", "conversation": {"state": "restored"}, "skipped": [], "op": "$number"}}, "within_ms": 30000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "test \"$(cat $ROOT/work/b.txt)\" = one"], "expect_code": 0}

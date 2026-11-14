@@ -1,0 +1,21 @@
+[package]
+name = "ghostty-vt-sys"
+description = "libghostty-vt (the terminal engine), built from pinned source tarballs with Zig and linked statically"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+links = "ghostty-vt"
+build = "build.rs"
+
+[features]
+# The engine. Off, the crate is empty and build.rs runs nothing: a target without a working Zig link (Android, until its
+# row passes) builds the consumers with default features off (docs/develop/terminal.md, "Building the engine")
+default = ["ghostty"]
+ghostty = []
+# The fallback of a failed symbol row: no simdutf and no Highway (no C++); the library is much slower
+no-simd = []
+
+[build-dependencies]
+sha2.workspace = true

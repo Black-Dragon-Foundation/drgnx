@@ -1,0 +1,29 @@
+{"scenario": "work/presence-goes-only-to-subscribers", "requires": ["v1", "test-hooks"], "doc": "agent-presence goes only to the connections that asked for its file (here through a workspace's roots), never to the others subscribed to the hub's events; agents/presence/get answers anyone, and a workspace subscription answers who is in its files now. Pattern B on the hub's virtual clock: the turn's last step is the gate for the read, __test_advance for the event."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h", "args": ["--test-clock"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "connect", "conn": "o", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "o", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "o", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "agents/presence/subscribe", "params": {"workspace": {"id": "workspace:000000000000", "roots": ["$ROOT/work"]}}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"files": []}}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "provider:read src/b.rs 7 3\nsay done"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"turn_id": "t1"}}}, "within_ms": 30000}
+{"do": "expect", "conn": "o", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"turn_id": "t1"}}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "__test_advance", "params": {"ms": 100}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "agent-presence", "data": {"file": "$ROOT/work/src/b.rs", "entries": [{"session": "$sid", "mode": "read", "line": 7, "source": "acp"}]}}, "within_ms": 10000}
+{"do": "count_events", "conn": "o", "for_ms": 300, "none": ["agent-presence"]}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/presence/get", "params": {"file": "$ROOT/work/src/b.rs"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"file": "$ROOT/work/src/b.rs", "entries": [{"session": "$sid", "line": 7}]}}}
+{"do": "send", "conn": "o", "json": {"id": 2, "method": "agents/presence/subscribe", "params": {"workspace": {"id": "workspace:000000000000", "roots": ["$ROOT/work"]}}}}
+{"do": "expect", "conn": "o", "json": {"id": 2, "result": {"files": [{"file": "$ROOT/work/src/b.rs", "entries": [{"session": "$sid", "line": 7}]}]}}}

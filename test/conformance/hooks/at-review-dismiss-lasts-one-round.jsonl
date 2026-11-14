@@ -1,0 +1,32 @@
+{"scenario": "hooks/at-review-dismiss-lasts-one-round", "requires": ["v1", "test-hooks"], "doc": "[C] Dismissing an at-review hook card carries on without the hook for that review round only: the reviewer starts and fails the task, and when the task comes back for its next review the hook runs again and raises a new card."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--script\" \"$ROOT/w.txt\" \"--log\" \"$ROOT/w.log\")) (\"mock-gemini\" :provider gemini :command (\"$MOCK\" \"acp\" \"--as\" \"gemini\" \"--script\" \"$ROOT/r.txt\" \"--log\" \"$ROOT/r.log\")))) (drgnx-agents-routes ((implement \"mock-claude\") (review \"mock-gemini\"))))\n"}
+{"do": "write_file", "path": "$ROOT/plan.md", "text": "# Plan\n\n**Repo:** $ROOT/repo\n\n### Task 1: Add the note\n\n**Role:** implement\n\nAdd note.txt.\n"}
+{"do": "write_file", "path": "$ROOT/src/plugin.json", "json": {"name": "broken", "version": "1.0.0", "hooks": [{"point": "at-review", "verdicts": ["deny"]}]}}
+{"do": "write_file", "path": "$ROOT/src/plugin.wasm", "text": "not a component"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "run", "args": ["plugins", "install", "$ROOT/src"], "expect_code": 0, "expect_stdout": "installed broken 1.0.0"}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "plugins/list", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"plugins": [{"name": "broken", "state": "unapproved", "hash": "$capture:h"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "plugins/approve", "params": {"name": "broken", "hash": "$h"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"state": "approved"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 10, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-agents-plugins", "source": "row", "value": ["broken"]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 10, "result": {"applied": 1}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/propose", "params": {"plan": "$ROOT/plan.md"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:job", "status": "proposed"}}, "within_ms": 10000}
+{"do": "write_file", "path": "$ROOT/w.txt", "text": "tool:edit note.txt\\ncommit work\\ncall:complete_task {\"task\": \"$job#1\", \"seen_version\": 0}\n"}
+{"do": "write_file", "path": "$ROOT/r.txt", "text": "say Not yet.\\nsay **VERDICT: fail: add more**\n"}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "job/approve", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$job"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "card", "data": {"id": "$capture:card1", "kind": "hook", "title": "$string"}}, "within_ms": 90000}
+{"do": "send", "conn": "c", "json": {"id": 8, "method": "job/card", "params": {"card": "$card1", "action": "dismiss"}}}
+{"do": "expect", "conn": "c", "json": {"id": 8, "result": {"id": "$job"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "card", "data": {"id": "$any", "kind": "hook", "title": "$string"}}, "within_ms": 120000}
+{"do": "sql_expect", "sql": "select count(*), sum(state = 'open') from card where kind = 'hook'", "rows": [[2, 1]]}
+{"do": "sql_expect", "sql": "select count(*) from event where kind = 'review'", "rows": [[1]]}

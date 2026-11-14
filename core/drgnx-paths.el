@@ -11,6 +11,8 @@
   (file-name-directory (directory-file-name (file-name-directory (or load-file-name buffer-file-name))))
   "The drgnx checkout.")
 
+(add-to-list 'custom-theme-load-path (expand-file-name "themes" drgnx-dir))   ; drgnx-dark, -light, -high-contrast
+
 (defun drgnx-platform ()
   "The platform drgnx runs on: `macos', else `linux' (the BSDs and others count as Linux)."
   (if (eq system-type 'darwin) 'macos 'linux))

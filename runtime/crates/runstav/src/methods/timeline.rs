@@ -10,6 +10,7 @@ use crate::types::{Bounded, Id, null_as_empty};
 use crate::wire::Error;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// What a step was spent on.
 #[derive(
@@ -29,6 +30,37 @@ pub enum StepClass {
     UserWait,
     Paused,
     Stalled,
+}
+
+/// What a step read, searched or fetched (the `step_detail` table); never the content.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StepDetail {
+    /// The tool's name as the provider sent it, when it sent one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    /// `read`, `search`, `fetch`, `edit` or `execute`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_start: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_end: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// A page's title (the agent browser's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// The `Task` tool call of the subagent that made the step (Claude's `parentToolUseId`); absent: the session's
+    /// own step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_tool: Option<String>,
+    /// How the hub learned it: `acp`, `acp-title` (parsed from the title), `browser`, `command` or `opened`.
+    pub origin: String,
 }
 
 /// One row of the `step` table.
@@ -81,6 +113,28 @@ pub struct Step {
     pub cost: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_unit: Option<Unit>,
+    /// What the step read, searched or fetched (tool steps).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<StepDetail>,
+    /// The agent conversation (ACP session id) the step ran in: a session runs another one after a revert.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acp: Option<String>,
+    /// The worktree's commit when the step's snapshot was taken, read from its ref files: the agent's claim, a hint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
+    /// The edit history's record the step anchors.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_op: Option<u64>,
+    /// The revert record that abandoned the step (the session went back to a step before it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undone_by: Option<u64>,
+    /// Whether "Revert to here" can act on the step: it has an edit history record and its checkpoint is kept.
+    #[serde(default)]
+    pub revertible: bool,
+    /// Its provenance: each hook point run on it, as the hub's own `hook` row records it (`{point, records:
+    /// [{source, verdict, ms, reason?}], outcome, …}`), oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hooks: Vec<Value>,
 }
 
 /// What a timeline covers.
@@ -104,6 +158,12 @@ pub struct TimelineParams {
     /// The rollup only, no steps.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rollup: Option<bool>,
+    /// Page backwards: the last `limit` steps (1 to 500), newest last; with `before`, those before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    /// Steps before this one (a session's `seq`, else a step id); with `limit`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -235,6 +295,8 @@ pub enum SupervisorRule {
     Refusals,
     Unrecorded,
     ManagerContext,
+    /// A workflow task's agent past its rule pack's context share: rotated like a manager.
+    Context,
 }
 
 /// The `supervisor` event: an agent was paused by a rule, with its card.

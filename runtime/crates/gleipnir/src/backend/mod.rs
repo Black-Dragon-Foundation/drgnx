@@ -78,13 +78,15 @@ impl BackendKind {
     }
 }
 
-/// The escape rows' hooks (Task 15): write roots Landlock leaves out, and a cap on the kernel's Landlock ABI. They
-/// exist only with the `test-hooks` feature, which only Ratatoskr's own `test-hooks` turns on.
+/// The escape rows' hooks (Task 15): write roots Landlock leaves out, a cap on the kernel's Landlock ABI, and the
+/// browser host's argv in place of the plan's (the escape probe, run under the browser layer; empty: the plan's).
+/// They exist only with the `test-hooks` feature, which only Ratatoskr's own `test-hooks` turns on.
 #[cfg(feature = "test-hooks")]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TestHooks {
     pub landlock_omit: Vec<PathBuf>,
     pub abi_cap: Option<u8>,
+    pub browser_argv: Vec<String>,
 }
 
 /// What the backends take for the hooks: [`TestHooks`] with the feature, nothing without.
@@ -108,12 +110,14 @@ pub struct Invocation {
 
 /// A prepared run. `status` is the read end of the status pipe (Linux); its write end is in `invocation.fds` at
 /// fd 4 and nowhere else, so it moves into the spawn and is gone once the spawn returns (review S6): read it with
-/// [`crate::inner::read_status`]. `layers` is the report known without a status line (Seatbelt).
+/// [`crate::inner::read_status`]. `layers` is the report known without a status line (Seatbelt). `browser`: the spec
+/// asked for the browser host, so read the status with [`crate::inner::read_status_for`] and `browser` set.
 #[derive(Debug)]
 pub struct Prepared {
     pub invocation: Invocation,
     pub status: Option<OwnedFd>,
     pub layers: Option<LayersReport>,
+    pub browser: bool,
 }
 
 /// The sandbox of this host, for one tier: the backend and what it runs with. Each field is read only by the
@@ -194,10 +198,15 @@ impl Sandbox {
 
     /// `command` under `spec`, which must have been validated for this backend's target. Every source is opened now
     /// (the full tier), so what was checked is what gets mounted. Nothing is spawned.
+    ///
+    /// `browser_hub` is the browser host's end of the socketpair the caller made (it keeps the other end): given
+    /// exactly when the spec has a `browser`, else the spec is `Malformed`. It goes into the invocation's fds at
+    /// [`crate::bwrap::BROWSER_FD`], and the inner helper hands it to the browser host alone.
     pub fn prepare(
         &self,
         spec: ValidSpec,
         command: Vec<String>,
+        browser_hub: Option<OwnedFd>,
         #[cfg(feature = "test-hooks")] hooks: TestHooks,
     ) -> Result<Prepared, Refusal> {
         #[cfg(not(feature = "test-hooks"))]
@@ -205,6 +214,19 @@ impl Sandbox {
         let Some(target) = self.target() else {
             return Err(none::refusal("this host has none"));
         };
+        match (&spec.spec().browser, &browser_hub) {
+            (Some(_), None) => {
+                return Err(malformed(
+                    "the spec has a browser, and no socketpair end was given for it".into(),
+                ));
+            }
+            (None, Some(_)) => {
+                return Err(malformed(
+                    "a browser socketpair end was given for a spec without a browser".into(),
+                ));
+            }
+            _ => {}
+        }
         if spec.target() != target {
             return Err(Refusal {
                 rule: Rule::Malformed,
@@ -223,7 +245,7 @@ impl Sandbox {
                 message: "the command is empty".into(),
             });
         }
-        self.run_on(spec, command, hooks)
+        self.run_on(spec, command, browser_hub, hooks)
     }
 
     #[cfg(target_os = "linux")]
@@ -231,23 +253,28 @@ impl Sandbox {
         &self,
         spec: ValidSpec,
         command: Vec<String>,
+        browser_hub: Option<OwnedFd>,
         hooks: Hooks,
     ) -> Result<Prepared, Refusal> {
         match self.kind {
-            BackendKind::Bwrap => linux::prepare_full(self, spec, command, hooks),
-            BackendKind::Reduced => linux::prepare_reduced(self, spec, command, hooks),
+            BackendKind::Bwrap => linux::prepare_full(self, spec, command, browser_hub, hooks),
+            BackendKind::Reduced => linux::prepare_reduced(self, spec, command, browser_hub, hooks),
             BackendKind::Seatbelt | BackendKind::None => Err(none::refusal("not on this system")),
         }
     }
 
-    /// `_hooks` are Landlock's; Seatbelt has none.
+    /// `_hooks` are Landlock's; Seatbelt has none. Nor has it the browser yet (validation refuses it).
     #[cfg(target_os = "macos")]
     fn run_on(
         &self,
         spec: ValidSpec,
         command: Vec<String>,
+        browser_hub: Option<OwnedFd>,
         _hooks: Hooks,
     ) -> Result<Prepared, Refusal> {
+        if browser_hub.is_some() {
+            return Err(no_browser_here(self.kind));
+        }
         let program = match (self.kind, &self.program) {
             (BackendKind::Seatbelt, Some(p)) => p,
             _ => return Err(none::refusal("not on this system")),
@@ -261,10 +288,32 @@ impl Sandbox {
         &self,
         spec: ValidSpec,
         command: Vec<String>,
+        browser_hub: Option<OwnedFd>,
         hooks: Hooks,
     ) -> Result<Prepared, Refusal> {
-        let _ = (spec, command, hooks);
+        let _ = (spec, command, browser_hub, hooks);
         Err(none::refusal("this system has none"))
+    }
+}
+
+fn malformed(message: String) -> Refusal {
+    Refusal {
+        rule: Rule::Malformed,
+        path: None,
+        message,
+    }
+}
+
+/// A backend that has no browser host yet (the reduced tier, Seatbelt): what validation's rule 12 says too.
+#[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
+pub(crate) fn no_browser_here(kind: BackendKind) -> Refusal {
+    Refusal {
+        rule: Rule::Browser,
+        path: None,
+        message: format!(
+            "browser: the agent browser on this tier ({}) comes in a later phase",
+            kind.name()
+        ),
     }
 }
 
@@ -285,6 +334,7 @@ fn seatbelt_prepared(run: macos::Run) -> Prepared {
         },
         status: None,
         layers: Some(LayersReport::seatbelt()),
+        browser: false,
     }
 }
 

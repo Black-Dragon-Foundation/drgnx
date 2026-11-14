@@ -16,14 +16,52 @@
 (require 'subr-x)
 (require 'drgnx-registry)
 (require 'drgnx-surfaces)
+(require 'drgnx-faces)
+(require 'drgnx-type-faces)
+(require 'drgnx-pixels)
+
+(defconst drgnx-ui--icon-glyphs
+  ;; one per icon of etc/icons (`drgnx-look-icon'): the glyph a terminal frame or the setting `glyphs' shows
+  '((file-code "‹›" . "<>") (file-text "≡" . "=") (file-cog "⚙" . "*") (file-image "▣" . "#") (file-archive "▥" . "z")
+    (file "▯" . "-") (folder "▪" . "/") (folder-open "▫" . "/") (folder-git-2 "▪" . "/")
+    (chevron-right "›" . ">") (chevron-left "‹" . "<") (chevron-down "⌄" . "v") (chevron-up "⌃" . "^")
+    (plus "+" . "+") (minus "−" . "-") (ellipsis "…" . "...") (x "×" . "x") (check "✓" . "+") (replace-all "⇗" . "/")
+    (git-branch "⑂" . "Y") (git-merge "⑃" . "Y") (git-pull-request "⇄" . "<>") (git-commit-horizontal "○" . "o")
+    (circle-x "✕" . "X") (triangle-alert "⚠" . "!") (circle-check "✓" . "+") (circle-alert "!" . "!")
+    (layers "☰" . "=") (grip-vertical "⠿" . "::") (maximize-2 "▢" . "[]") (minimize-2 "–" . "-")
+    (message-square "▭" . "m") (scroll-text "≣" . "=") (list-checks "☑" . "x")
+    (monitor "▭" . "M") (laptop "▭" . "L") (server "☰" . "S") (globe "◍" . "@") (brain "◉" . "B")
+    (lightbulb "◌" . "i") (pencil "✎" . "e") (clock "◷" . "t") (bot "◈" . "b") (pin "⌖" . "p")
+    (circle-dot "◉" . "o") (play "▶" . ">") (pause "⏸" . "||") (git-fork "⑂" . "Y") (arrow-up "↑" . "^") (sparkle "✦" . "*") (square "■" . "#") (refresh-cw "↻" . "r")
+    (trash-2 "⌫" . "d") (copy "⎘" . "c") (settings "⚙" . "*") (terminal "›_" . ">_") (bell "◔" . "!")
+    (eye "◉" . "o") (lock "▮" . "#") (tag "⌗" . "#") (shield "⛨" . "!") (panel-right "◫" . "|")
+    (triangle "▲" . "^") (hexagon "⬢" . "H") (star "★" . "*") (flask-conical "⚗" . "T")
+    ;; the debug toolbar's (step over, into, out; restart; the session's bug; disconnect)
+    (redo-dot "↷" . ">") (arrow-down-to-dot "↓" . "v") (arrow-up-from-dot "↑" . "^") (rotate-ccw "↺" . "r")
+    (bug "✱" . "*") (unplug "⏏" . "x")
+    ;; Send Run's card and a sent run's chip
+    (send "➤" . ">") (key "⚿" . "k") (inbox "⊔" . "u") (braces "{}" . "{}")
+    ;; the heap graph's header
+    (workflow "⧉" . "#")
+    ;; the Search view's kind chips, as the hub's kind icons on definition rows
+    (square-function "ƒ" . "f") (type "◇" . "T") (wand "#" . "#") (variable "≡" . "=")
+    ;; the Extensions list's kinds (a package's is `package''s, below)
+    (plug "◆" . "&") (blocks "▣" . "M"))
+  "The glyphs of the icons (NAME → (UNICODE . ASCII)), named after the icon files.  Several look alike on a terminal
+that is not UTF-8: an icon's glyph says less than its picture.  The icon names that exist as glyphs already
+\(`circle', `search', `info', `flag') are in the table below.")
 
 (defconst drgnx-ui--default-glyphs
-  '((handle "⠿" . "::") (close "×" . "x") (branch "⑂" . "Y") (warning "⚠" . "!") (ok "✓" . "+")
-    (busy "◎" . "@") (waiting "◐" . "?") (paused "⏸" . "||") (ahead "↑" . "^") (behind "↓" . "v")
-    (dot "●" . "*") (circle "○" . "o") (sep " · " . " | ") (flag "⚑" . "#")
-    (diamond "◆" . "<>") (search "⌕" . "/") (bullet "•" . ">") (minimize "–" . "-") (maximize "▢" . "[]")
-    (fail "✕" . "X") (stopped "■" . "#") (dismiss "×" . "x") (unqueue "−" . "-")
-    (info "ℹ" . "i") (warn "⚠" . "!"))
+  (append
+   '((handle "⠿" . "::") (close "×" . "x") (branch "⑂" . "Y") (warning "⚠" . "!") (ok "✓" . "+")
+     (busy "◎" . "@") (waiting "◐" . "?") (paused "⏸" . "||") (ahead "↑" . "^") (behind "↓" . "v")
+     (dot "●" . "*") (circle "○" . "o") (sep " · " . " | ") (flag "⚑" . "#")
+     (diamond "◆" . "<>") (search "⌕" . "/") (bullet "•" . ">") (minimize "–" . "-") (maximize "▢" . "[]")
+     (fail "✕" . "X") (stopped "■" . "#") (dismiss "×" . "x") (unqueue "−" . "-")
+     (info "ℹ" . "i") (warn "⚠" . "!") (cloud "☁" . "c")
+     (package "⬡" . "P") (plugin "◆" . "&") (module "▣" . "M")
+     (refused "⛔" . "X") (note "✎" . "n") (changed "↻" . "~") (hook-busy "⏳" . "..."))
+   drgnx-ui--icon-glyphs)
   "The standard glyph table: the default of `drgnx-face-glyphs', and where a name the option lacks is found.")
 
 (defcustom drgnx-face-glyphs drgnx-ui--default-glyphs
@@ -55,7 +93,7 @@ neither has it."
 (defface drgnx-status-info '((t :inherit shadow)) "Something to know." :group 'drgnx)
 (defface drgnx-status-warn '((t :inherit warning)) "Something to look at." :group 'drgnx)
 (defface drgnx-status-fail '((t :inherit error)) "Something failed." :group 'drgnx)
-(defface drgnx-status-needs-you '((t :inherit error)) "Something waits for you." :group 'drgnx)
+(defface drgnx-status-needs-you '((t :inherit drgnx-status-attention)) "Something waits for you." :group 'drgnx)
 
 (defconst drgnx-ui--severities
   '((ok ok drgnx-status-ok) (info info drgnx-status-info) (warn warn drgnx-status-warn)
@@ -70,7 +108,10 @@ An unknown SEVERITY is `info'."
 
 ;;;; Buttons
 
-(defface drgnx-ui-button '((t :inherit button)) "A button drawn by the UI kit (`drgnx-ui-button')." :group 'drgnx)
+(defface drgnx-ui-button '((t :inherit (drgnx-ui-text drgnx-control)))
+  "A button drawn by the UI kit (`drgnx-ui-button'): the look's control, in the UI text role." :group 'drgnx)
+(defface drgnx-ui-button-primary '((t :inherit (drgnx-ui-text drgnx-control-primary)))
+  "The primary button of a group (`drgnx-ui-button' with this face): filled with the accent." :group 'drgnx)
 
 (defface drgnx-ui-close '((t :inherit shadow))
   "The close button (×) of a title, tab row or popup header (`drgnx-ui-close-button')." :group 'drgnx)
@@ -78,7 +119,7 @@ An unknown SEVERITY is `info'."
 (defvar drgnx-ui--button-maps (make-hash-table :test #'eq :weakness 'key)
   "ACTION → alist WHERE → the keymap of a button that runs ACTION.  Weak: a closure's maps go with it.")
 
-(defun drgnx-ui--run (action)
+(defun drgnx-ui-kit-run (action)
   "Run ACTION: a registry id through `drgnx-surfaces-run' (the usage count and the key tip follow), else a command
 called interactively, else a function of no arguments.  A symbol that is none of these (its module is off) says so."
   (cond ((and (symbolp action) (drgnx-commands-get action)) (drgnx-surfaces-run action))
@@ -90,20 +131,53 @@ called interactively, else a function of no arguments.  A symbol that is none of
   "The keymap of a button that runs ACTION on WHERE, built once per (ACTION . WHERE)."
   (let ((maps (gethash action drgnx-ui--button-maps)))
     (or (alist-get where maps)
-        (let ((m (make-sparse-keymap)) (run (lambda () (interactive) (drgnx-ui--run action))))
+        (let ((m (make-sparse-keymap)) (run (lambda () (interactive) (drgnx-ui-kit-run action))))
           (if (eq where 'text)
               (progn (define-key m [mouse-1] run) (define-key m [mouse-2] run) (define-key m (kbd "RET") run))
             (define-key m (vector where 'mouse-1) run))
           (puthash action (cons (cons where m) maps) drgnx-ui--button-maps)
           m))))
 
-(cl-defun drgnx-ui-button (label action &key help face (where 'text) props)
+(defconst drgnx-ui-button-height 26
+  "A button's height with its 1 px ring, in logical pixels (design §3.5 `.btn').  The room's stretch is this tall:
+the ring does not add to a stretch's height.")
+
+(defun drgnx-ui-button-pad (face &optional frame)
+  "The `display' of the room at either end of a button in FACE on FRAME: 11 logical pixels (12 with the ring), and on
+a graphical frame as tall as `drgnx-ui-button-height', the text centred in it."
+  (let* ((scale (drgnx-pixels-scale frame)) (width (list (round (* scale 11))))
+         (height (round (* scale drgnx-ui-button-height)))
+         (extent (drgnx-pixels-font-extent face frame)))
+    (if (and extent (> height (+ (car extent) (cdr extent))))
+        (let* ((below (+ (cdr extent) (/ (- height (car extent) (cdr extent)) 2))))
+          `(space :width ,width :height (,height) :ascent ,(min 100 (ceiling (* 100.0 (- height below)) height))))
+      `(space :width ,width))))
+
+(defun drgnx-ui-button-focus-box ()
+  "The box of a button that has the focus (look.css `.btn.focus'): the theme's `drgnx-focus' ring, 2 px inside, with
+the button's corners where Glitnir rounds them; nil when the theme gives no ring."
+  (let ((ring (face-attribute 'drgnx-focus :box nil t)) (w (- (drgnx-px-line 2))))
+    (when (stringp (plist-get ring :color))
+      `(:line-width (,w . ,w) :color ,(plist-get ring :color)
+                    ,@(and (fboundp 'glitnir-active-p) (glitnir-active-p) (list :corner-radius (drgnx-px 6)))))))
+
+(declare-function glitnir-active-p "glitnir")
+
+(cl-defun drgnx-ui-button (label action &key help face (where 'text) props focus)
   "LABEL as a button that runs ACTION: a registry id (run as from the palette, so its use is counted), a command, or
 a function of no arguments.  WHERE is `text' (`mouse-1' and RET), `header-line', `mode-line' or `tab-line' (`mouse-1'
-there).  FACE defaults to `drgnx-ui-button'; HELP is the `help-echo'; PROPS are more text properties."
-  (apply #'propertize label 'face (or face 'drgnx-ui-button) 'mouse-face 'highlight 'help-echo help
-         (if (eq where 'text) 'keymap 'local-map) (drgnx-ui--button-map action where)
-         (append (and (eq where 'text) '(follow-link t)) props)))
+there).  FACE defaults to `drgnx-ui-button' (`drgnx-ui-button-primary' for a group's main action); HELP is the
+`help-echo'; PROPS are more text properties.  FOCUS non-nil rings the button as the one RET presses (a card's
+default, `drgnx-ui-button-focus-box').  In text the label has room inside the button at either end
+\(`drgnx-ui-button-pad'); on a line (header, mode, tab) it is the label alone."
+  (let* ((face (or face 'drgnx-ui-button)) (box (and focus (drgnx-ui-button-focus-box)))
+         (label (if (eq where 'text)
+                    (let ((pad (propertize " " 'display (drgnx-ui-button-pad face))))
+                      (concat pad label pad))
+                  label)))
+    (apply #'propertize label 'face (if box `(:inherit ,face :box ,box) face) 'mouse-face 'highlight 'help-echo help
+           (if (eq where 'text) 'keymap 'local-map) (drgnx-ui--button-map action where)
+           (append (and (eq where 'text) '(follow-link t)) props))))
 
 (defun drgnx-ui-insert-button (label action &rest keys)
   "Insert at point the button `drgnx-ui-button' makes of LABEL, ACTION and KEYS."

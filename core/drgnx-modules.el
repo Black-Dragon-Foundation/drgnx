@@ -32,6 +32,9 @@
 
 (defvar drgnx-modules--table nil "Alist NAME → plist (:doc :stage … :file), in definition order.")
 (defvar drgnx-modules--report nil "Alist NAME → plist (:stage :ms :status :error :missing :problems :left).")
+(defvar drgnx-modules-report-tick 0
+  "Counts the changes to the modules' report (`drgnx-modules--record'): what is made from the report is made again only
+when this moved (the Extensions list's Recommended set).")
 (defconst drgnx-modules-stages '(startup idle first-frame first-file first-input))
 (defconst drgnx-modules-state-version 2
   "Format of modules.eld.  2: it holds `:enabled' (format 1 had no such field).  An older drgnx reads
@@ -225,6 +228,7 @@ in this session, or disabled in modules.eld though on by default (one that is of
   (setf (alist-get name drgnx-modules--report)
         (list :stage stage :ms ms :status status :error err :missing missing :problems problems
               :left (alist-get name drgnx-modules--left)))
+  (cl-incf drgnx-modules-report-tick)
   (drgnx-modules--notice name status err missing problems)
   (drgnx-modules--notice-off))
 
@@ -250,10 +254,36 @@ order (a cycle keeps it, and is reported waiting)."
               todo (seq-remove (lambda (m) (memq m ready)) todo))))
     done))
 
+(defvar drgnx-modules--libraries nil
+  "Within `drgnx-modules-retry-waiting': (PATH LENGTH . TABLE), the libraries of `load-path' PATH (of LENGTH entries)
+as one listing of each directory made them, TABLE their names; nil elsewhere (`locate-library' is asked).")
+
+(defun drgnx-modules--library-names ()
+  "A table of the library names one listing of each `load-path' directory finds (NAME.el, NAME.elc, a compressed or
+module file), made again when `load-path' gains or loses an entry."
+  (let ((c drgnx-modules--libraries))
+    (if (and c (eq (car c) load-path) (= (cadr c) (length load-path)))
+        (cddr c)
+      (let ((table (make-hash-table :test #'equal))
+            (re (concat "\\`\\(.+?\\)\\(?:\\.elc\\|\\.el\\|" (regexp-quote (or module-file-suffix ".so")) "\\)"
+                        "\\(?:\\.gz\\)?\\'")))
+        (dolist (dir load-path)
+          (when (and (stringp dir) (file-directory-p dir))
+            (dolist (f (directory-files dir nil re t))
+              (when (string-match re f) (puthash (match-string 1 f) t table)))))
+        (setq drgnx-modules--libraries (cons load-path (cons (length load-path) table)))
+        table))))
+
+(defun drgnx-modules--package-p (p)
+  "Whether package P is loaded or its library is on `load-path'."
+  (or (featurep p)
+      (if drgnx-modules--libraries
+          (gethash (symbol-name p) (drgnx-modules--library-names))
+        (locate-library (symbol-name p)))))
+
 (defun drgnx-modules--run-one (name spec stage)
   "Run module NAME (SPEC) of STAGE, isolated and timed, and record it.  Non-nil if its setup ran."
-  (let ((missing (seq-remove (lambda (p) (or (featurep p) (locate-library (symbol-name p))))
-                             (plist-get spec :packages)))
+  (let ((missing (seq-remove #'drgnx-modules--package-p (plist-get spec :packages)))
         (unmet (seq-remove #'drgnx-modules--ok-p (plist-get spec :requires))))
     (cond
      ((drgnx-module-disabled-p name) (drgnx-modules--record name stage 0 'disabled) nil)
@@ -275,6 +305,22 @@ order (a cycle keeps it, and is reported waiting)."
     (dolist (m (drgnx-modules--in-order stage))
       (when (drgnx-modules--run-one (car m) (cdr m) stage) (setq ran t)))
     (when ran (run-hook-with-args 'drgnx-modules-after-stage-functions stage))))
+
+(defun drgnx-modules-retry-waiting ()
+  "Run the setup of every module that waits for packages (status missing-packages) whose packages now load: they
+were just installed.  The registry follows (keys, menus) when one ran.  Never prompts.  The modules that ran."
+  ;; the packages of every waiting module are looked for in one listing of each `load-path' directory
+  (let ((ran nil) (drgnx-modules--libraries (list nil -1)))
+    (dolist (m drgnx-modules--table)
+      (let ((r (alist-get (car m) drgnx-modules--report)))
+        (when (and (eq (plist-get r :status) 'missing-packages)
+                   (seq-every-p #'drgnx-modules--package-p (plist-get (cdr m) :packages))
+                   (drgnx-modules--run-one (car m) (cdr m) (or (plist-get (cdr m) :stage) (plist-get r :stage))))
+          (push (car m) ran))))
+    (when ran
+      (run-hooks 'drgnx-modules-after-teardown-functions)
+      (drgnx-modules--refresh-list))
+    (nreverse ran)))
 
 (defun drgnx-modules-load-directory (dir)
   "Load every module file under DIR (modules/<category>/drgnx-*.el); a file that fails to
@@ -363,7 +409,11 @@ never stops Emacs — nothing is installed (the module waits for the package, as
   ;; external modules load before them (the end of the stage re-applies keys), the last runs the stage hook.
   (let* ((ran nil)
          (steps (append (list #'drgnx-modules-load-external)
-                        (mapcar (lambda (m) (lambda () (when (drgnx-modules--run-one (car m) (cdr m) 'idle) (setq ran t))))
+                        ;; a module something started before its tick keeps running: a second setup would tear
+                        ;; down what it made (the agent panel's tick closed a panel opened before it)
+                        (mapcar (lambda (m) (lambda () (when (and (not (drgnx-module-running-p (car m)))
+                                                                  (drgnx-modules--run-one (car m) (cdr m) 'idle))
+                                                         (setq ran t))))
                                 (drgnx-modules--in-order 'idle))
                         (list (lambda ()
                                 (when ran (run-hook-with-args 'drgnx-modules-after-stage-functions 'idle)))))))
@@ -516,15 +566,18 @@ A module that stays running until restart (`:teardown \\='restart', or needed by
 A running module that `drgnx-module-disabled-p' now says is off is torn down (with the modules that need it); one that
 was turned off and is chosen again runs its setup, when its stage has passed.  The registry follows (keys, menus).  A
 module that stays running until restart, and the external modules, wait for the next start.  Idempotent, so the
-writers that already stopped or started a module cost nothing; never prompts."
-  (let ((changed nil))
+writers that already stopped or started a module cost nothing; never prompts.  A dependent stopped with its module
+stays off until the module runs again."
+  (let ((changed nil) (stopped nil))
     (dolist (m drgnx-modules--table)
       (when (and (drgnx-modules--ok-p (car m)) (drgnx-module-disabled-p (car m)))
+        (setq stopped (append stopped (drgnx-modules--dependents (car m)) (list (car m))))
         (drgnx-modules--stop (car m))
         (setq changed t)))
     (dolist (m drgnx-modules--table)
       (let ((r (alist-get (car m) drgnx-modules--report)))
-        (when (and r (memq (plist-get r :status) '(disabled off)) (not (drgnx-module-disabled-p (car m))))
+        (when (and r (memq (plist-get r :status) '(disabled off)) (not (memq (car m) stopped))
+                   (not (drgnx-module-disabled-p (car m))))
           (when (drgnx-modules--run-one (car m) (cdr m) (plist-get (cdr m) :stage))
             (setq changed t)))))
     (when changed
@@ -537,17 +590,36 @@ writers that already stopped or started a module cost nothing; never prompts."
     (when-let* ((p (plist-get (alist-get m drgnx-modules--report) :problems)))
       (message "drgnx: %s: %s" m (mapconcat #'identity p "; ")))))
 
+(declare-function drgnx-settings-editors-commit "drgnx-settings-editors" (var tab root value))
+(declare-function drgnx-settings-area--apply "drgnx-settings-area" ())
+
+(defun drgnx-modules--commit (module on)
+  "Choose MODULE ON or off as the Settings page saves a value: each module setting that changes goes through
+`drgnx-settings-editors-commit' (settings.el, the User tab), and applies at once through the settings' `:apply'
+\(`drgnx-modules--settings-apply'), so Preferences: Modules and the Extensions view never disagree."
+  (require 'drgnx-settings-page)
+  (let* ((state (drgnx-modules-read-state)) (new (drgnx-modules--choose state module on)))
+    (pcase-dolist (`(,key . ,var) drgnx-modules--settings)
+      (unless (equal (plist-get state key) (plist-get new key))
+        (drgnx-settings-editors-commit var 'user nil (plist-get new key))))
+    (drgnx-settings-area--apply)
+    (drgnx-modules--settings-apply)
+    (drgnx-modules--refresh-list)))
+
 (defun drgnx-modules-list-toggle ()
   "Turn the module on this row off now, or back on (one that cannot be turned off while Emacs runs: at the next start).
-When running modules need it, asks once whether to turn them off too."
+When running modules need it, asks once whether to turn them off too.  The choice is saved as the Settings page saves
+a value and applies through the settings' `:apply' (`drgnx-modules--commit')."
   (interactive)
   (when-let* ((m (tabulated-list-get-id)))
     (if (or (drgnx-module-disabled-p m) (eq (plist-get (alist-get m drgnx-modules--report) :status) 'off))
-        (progn (drgnx-modules-turn-on m) (drgnx-modules--say-problems (list m)))
-      (let* ((deps (drgnx-modules-turn-off m)) (all (cons m deps)))
-        (when (and deps (y-or-n-p (format "Also turn off %s? " (mapconcat #'symbol-name deps ", "))))
-          (drgnx-modules-turn-off m :dependents t))
-        (drgnx-modules--say-problems all)))))
+        (progn (drgnx-modules--commit m t) (drgnx-modules--say-problems (list m)))
+      (let* ((deps (and (not (or (drgnx-modules--restart-p m)
+                                 (seq-some #'drgnx-modules--restart-p (drgnx-modules--dependents m))))
+                        (drgnx-modules--dependents m))))
+        (when (or (null deps) (y-or-n-p (format "Also turn off %s? " (mapconcat #'symbol-name deps ", "))))
+          (drgnx-modules--commit m nil))
+        (drgnx-modules--say-problems (cons m deps))))))
 
 (defalias 'drgnx-modules-show-report #'drgnx-modules-list)
 

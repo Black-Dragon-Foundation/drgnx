@@ -157,14 +157,39 @@ feature; each `glitnir-refresh' pushes the option's value at that moment onto RE
 
 (ert-deftest drgnx-look/chrome-on-with-glitnir ()
   (drgnx-look-test--with-glitnir refreshes
-    (should (equal child-frame-chrome drgnx-look-chrome))
-    (should (equal (car refreshes) drgnx-look-chrome))))             ; refreshed at once, with the chrome set
+    (should (eq child-frame-chrome #'drgnx-look-chrome-current))
+    (should (eq (car refreshes) #'drgnx-look-chrome-current))))           ; refreshed at once, with the chrome set
 
 (ert-deftest drgnx-look/teardown-restores-chrome ()
   (drgnx-look-test--with-glitnir refreshes
     (drgnx-module-teardown 'ui/look)
     (should (equal child-frame-chrome (drgnx-look-test--before)))
     (should (equal (car refreshes) (drgnx-look-test--before)))))     ; refreshed after the old value is back
+
+(defvar glitnir-reduced-motion)
+(defvar drgnx-look-motion)
+
+(defmacro drgnx-look-test--from-auto-motion (&rest body)
+  "BODY with `glitnir-reduced-motion' at `auto': on a stock build `let'-bound, on a Glitnir build the option's
+standard value (not `let'-bound, as `drgnx-look-test--call-from-before' says)."
+  (declare (indent 0))
+  `(if (get 'glitnir-reduced-motion 'standard-value)
+       (progn (should (eq glitnir-reduced-motion 'auto)) ,@body)
+     (let ((glitnir-reduced-motion 'auto)) ,@body)))
+
+(ert-deftest drgnx-look/teardown-restores-reduced-motion ()
+  "Motion `full' or `reduced' sets `glitnir-reduced-motion' as ui/look, at setup and on a later change; turning ui/look
+off gives the desktop's `auto' back, so popups stop animating when GNOME asks for reduced motion."
+  (drgnx-look-test--from-auto-motion
+    (let ((drgnx-look-motion 'full))
+      (drgnx-look-test--with-glitnir refreshes
+        (ignore refreshes)
+        (should (null glitnir-reduced-motion))
+        (setq drgnx-look-motion 'reduced)
+        (drgnx-look--motion-apply)
+        (should (eq t glitnir-reduced-motion))
+        (drgnx-module-teardown 'ui/look)
+        (should (eq 'auto glitnir-reduced-motion))))))
 
 (ert-deftest drgnx-look/no-glitnir-no-chrome ()
   (skip-unless (not (featurep 'glitnir)))                               ; a stock build: Glitnir's turns the chrome on

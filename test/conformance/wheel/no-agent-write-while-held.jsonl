@@ -1,0 +1,33 @@
+{"scenario": "wheel/no-agent-write-while-held", "requires": ["v1", "test-hooks"], "doc": "Gated (B). The user takes a worker's wheel while its Edit is in flight (waiting on the user's permission): the snapshot says paused and held by the user at once, the edit is let through and completes, then the turn is cancelled and agent-wheel held follows; the words after the edit never run, so nothing of the agent's is written after held, and no turn starts while held."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && echo old > $ROOT/work/a.txt"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))) (drgnx-agents-matrix (:cells ((:action code.edit :column (:role worker) :verdict ask)))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "e", "json": {"id": 901, "method": "agents/entries/subscribe", "params": {"session": "$sid"}}}
+{"do": "expect", "conn": "e", "json": {"id": 901, "result": {"seq": "$number"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "provider:pending-edit $ROOT/work/a.txt old new\nsilent 20\ntool:edit never"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"status": "busy", "permissions": {"$contains": [{"id": "$capture:req", "options": "$any"}]}}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/wheel/take", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"status": "busy", "paused": true, "held_by": "user"}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/send", "params": {"id": "$sid", "text": "tool:edit queued-while-held"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/permission", "params": {"id": "$sid", "request": "$req", "option": "allow_once"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-wheel", "data": {"id": "$sid", "state": "held"}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "agents/get", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"session": {"status": "idle", "paused": true, "held_by": "user", "queue": ["tool:edit queued-while-held"]}, "seq": "$number", "entries": {"$contains": [{"type": "tool", "status": "completed"}, {"type": "stop", "stop": "Cancelled"}]}}}}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "agents/do", "params": {"id": "$sid", "op": "deliver-queue"}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 8, "method": "agents/get", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 8, "result": {"session": {"status": "idle", "held_by": "user", "queue": ["tool:edit queued-while-held"]}, "seq": "$number", "entries": "$any"}}}
+{"do": "file", "path": "$ROOT/work/never", "exists": false}
+{"do": "file", "path": "$ROOT/work/queued-while-held", "exists": false}

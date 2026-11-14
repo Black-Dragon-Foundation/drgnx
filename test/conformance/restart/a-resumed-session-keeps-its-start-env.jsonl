@@ -1,0 +1,16 @@
+{"scenario": "restart/a-resumed-session-keeps-its-start-env", "requires": ["v1", "test-hooks"], "doc": "An editor module's variable (agents/start env, a name the settings put on drgnx-agents-start-env-names) reaches the session's agent again when a restarted hub resumes it: the hub keeps the start's env with the session. The profile's command is a shell that writes the variable, then a line saying it started, before it runs the mock ACP agent; the second start's line is the handshake before the check (no deadline decides it)."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-start-env-names (\"DRGNX_MODULE_ENDPOINT\")) (drgnx-agents-profiles ((\"mock-env\" :provider claude :command (\"/bin/sh\" \"-c\" \"(printenv DRGNX_MODULE_ENDPOINT || echo unset) >> $ROOT/env.txt; echo started >> $ROOT/env.txt; exec $MOCK acp --as claude --log $ROOT/acp.log\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-env", "cwd": "$ROOT/work", "env": [{"name": "DRGNX_MODULE_ENDPOINT", "value": "http://127.0.0.1:9222"}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:agent", "name": "$string"}}, "within_ms": 30000}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "\"session/new\"", "within_ms": 30000}
+{"do": "kill", "hub": "h", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h", "code": 0, "within_ms": 15000}
+{"do": "start", "hub": "h2", "same_root_as": "h"}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "\"session/resume\"", "within_ms": 30000}
+{"do": "file", "path": "$ROOT/env.txt", "contains": "started", "count": 2, "at_most": 2, "within_ms": 10000}
+{"do": "file", "path": "$ROOT/env.txt", "contains": "http://127.0.0.1:9222", "count": 2, "at_most": 2, "within_ms": 0}

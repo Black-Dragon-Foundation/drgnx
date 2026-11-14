@@ -1,0 +1,5 @@
+{
+  "name": "annotate-edit",
+  "version": "0.1.0",
+  "hooks": [{"point": "after-edit", "verdicts": ["annotate"]}]
+}

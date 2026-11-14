@@ -27,8 +27,9 @@
 
 (defvar drgnx-onboard-install-recipes)
 (declare-function drgnx-onboard--linux-shell "drgnx-onboard")
-(declare-function drgnx-terminal-eat-usable-p "drgnx-terminal")
-(declare-function drgnx-terminal-eat-start "drgnx-terminal-eat")
+(declare-function drgnx-term-usable-p "drgnx-term")
+(declare-function drgnx-term-start "drgnx-term")
+(defvar drgnx-term-exit-functions)
 (declare-function term-char-mode "term")
 (defvar drgnx-ai--security-program)
 
@@ -409,20 +410,26 @@ bundle goes nowhere but into age."
 
 (defun drgnx-secrets--terminal (sub header)
   "A terminal running `drgnx secrets SUB' with HEADER as its header line, shown; returns its buffer.
-Eat when it can run here, else `term'.  This Emacs runs nothing of age's: age asks in the terminal."
+drgnx's own terminal when it can run here, else `term'.  This Emacs runs nothing of age's: age asks in the terminal."
   (let* ((bin (expand-file-name "bin/drgnx" drgnx-dir))
          (dir (expand-file-name "~/"))
-         (buf (if (and (fboundp 'drgnx-terminal-eat-usable-p) (drgnx-terminal-eat-usable-p dir))
-                  (drgnx-terminal-eat-start dir (list bin "secrets" sub))
+         (buf (if (and (fboundp 'drgnx-term-usable-p) (drgnx-term-usable-p dir))
+                  (drgnx-term-start dir (list bin "secrets" sub))
                 (require 'term)
                 (let ((default-directory dir) (b (make-term (format "drgnx secrets %s" sub) bin nil "secrets" sub)))
                   (with-current-buffer b (term-char-mode))
                   (pop-to-buffer b)
                   b))))
     (with-current-buffer buf (setq header-line-format header))
-    (when-let* ((proc (get-buffer-process buf)))
-      (add-function :after (process-sentinel proc) #'drgnx-secrets--forget-keys))
+    (if-let* ((proc (get-buffer-process buf)))
+        (add-function :after (process-sentinel proc) #'drgnx-secrets--forget-keys)
+      ;; drgnx's terminal: the program runs in the hub's worker, and its end comes as an exit event
+      (with-current-buffer buf (add-hook 'drgnx-term-exit-functions #'drgnx-secrets--forget-keys-on-exit nil t)))
     buf))
+
+(defun drgnx-secrets--forget-keys-on-exit (_data)
+  "`drgnx-term-exit-functions' of a secrets terminal: its program ended, so clear Emacs's record of recent keys."
+  (clear-this-command-keys))
 
 (defun drgnx-secrets--forget-keys (proc _event)
   "When PROC (a secrets terminal) has ended, clear Emacs's record of recent keys (`recent-keys', C-h l): the

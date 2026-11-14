@@ -1,0 +1,10 @@
+{"scenario": "term/list-running", "requires": ["v1", "linux"], "doc": "term/list names every terminal and whether a program runs in it: without shell integration, whether the shell has a child."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "term/open", "params": {"dir": "/", "command": ["/bin/sh", "-c", "sleep 600; true"], "env": [["PATH", "/usr/bin:/bin"]], "cols": 40, "rows": 5, "cell_px": [8, 16], "class": "gui-1"}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"id": "$capture:t", "view": "$capture:tv"}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "term/open", "params": {"dir": "/", "command": ["/bin/sh", "-c", "read x"], "env": [["PATH", "/usr/bin:/bin"]], "cols": 40, "rows": 5, "cell_px": [8, 16], "class": "gui-1"}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": {"id": "$capture:u", "view": "$capture:uv"}}, "within_ms": 10000}
+{"do": "poll", "conn": "e", "json": {"id": 4, "method": "term/list", "params": {}}, "expect": {"id": 4, "result": {"$contains": [{"id": "$t", "running": true, "pid": "$number"}, {"id": "$u", "running": false}]}}, "within_ms": 10000}

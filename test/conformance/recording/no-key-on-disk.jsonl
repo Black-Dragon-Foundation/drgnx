@@ -1,0 +1,23 @@
+{"scenario": "recording/no-key-on-disk", "requires": ["v1"], "doc": "Pattern B (gates on the recorded line). A recorded agent request on a keyed provider whose body names the provider's key (handed over by gateway/keys) and the agent's own gateway token: the provider got the key in its header, and the recording holds neither the key nor the token in any file (the key scrubbed inside bifrost, the token by the recorder, told at issue), only $SECRET in their place; no auth header is stored."}
+{"do": "root"}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$SCENARIOS/fixtures/llm-messages.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h", "env": {"DRGNX_RECORD": "$ROOT/rec", "DRGNX_RECORD_PROVENANCE": "mock"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do":"send","conn":"c","json":{"id":1,"method":"config/settings","params":{"overrides":[{"name":"drgnx-ai-providers","source":"row","value":{"a":{"kind":"anthropic","url":"http://127.0.0.1:$port","caps":["chat"],"messages":true,"key_env":"KEY"}}}]}}}
+{"do":"expect","conn":"c","json":{"id":1,"result":{"applied":1}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/keys", "params": {"keys": {"a": "canary-key-rec-1"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "gateway/register", "params": {"chain": [["a", null]], "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"token": "$capture:tok"}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"gateway": {"port": "$capture:gw", "keys_held": ["a"]}}}}
+{"do": "http", "conn": "g", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/v1/messages", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok", "content-type": "application/json"}, "body": "{\"model\": \"m\", \"max_tokens\": 8, \"messages\": [{\"role\": \"user\", \"content\": \"key canary-key-rec-1 token $tok\"}]}"}
+{"do": "expect_http", "conn": "g", "status": 200, "body_json": {"id": "msg-1"}}
+{"do": "file", "path": "$ROOT/llm.log", "contains": "canary-key-rec-1", "count": 2}
+{"do": "file", "path": "$ROOT/rec/llm.jsonl", "contains": "\"end\":\"complete\"", "count": 1}
+{"do": "file", "path": "$ROOT/rec/llm.jsonl", "contains": "key $SECRET token $SECRET", "count": 1}
+{"do": "file", "path": "$ROOT/rec/llm.jsonl", "lacks": "authorization"}
+{"do": "file", "path": "$ROOT/rec/llm.jsonl", "lacks": "x-api-key"}
+{"do": "file_grep", "paths": ["$ROOT/rec/**"], "absent": "canary-key-rec"}
+{"do": "file_grep", "paths": ["$ROOT/rec/**"], "absent": "$tok"}

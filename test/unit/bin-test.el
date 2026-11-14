@@ -23,8 +23,9 @@
 
 (defun drgnx-bin-test--call (bin env &rest args)
   "Run BIN (a bin/drgnx) with ENV (\"K=V\" strings) and ARGS in `drgnx-bin-test--cwd'; return (EXIT . OUTPUT),
-stderr included.  DRGNX_EMACS is unset unless ENV sets it; HOME is the caller's temp directory in ENV."
-  (let ((process-environment (append env (list "DRGNX_EMACS") process-environment))
+stderr included.  DRGNX_EMACS is unset unless ENV sets it; HOME is the caller's temp directory in ENV.  `test --ui'
+builds no test hub unless ENV unsets DRGNX_TEST_HUB_BUILD (a bare name)."
+  (let ((process-environment (append env (list "DRGNX_EMACS" "DRGNX_TEST_HUB_BUILD=0") process-environment))
         (default-directory (file-name-as-directory (or drgnx-bin-test--cwd temporary-file-directory))))
     (with-temp-buffer
       (cons (apply #'call-process bin nil t nil args) (buffer-string)))))
@@ -67,7 +68,7 @@ logging to PATHLOG), CONFIG (a DRGNX_CONFIG_DIR) and ENV (the environment lists 
           (fake (expand-file-name "recorded-emacs" dir)))
       (drgnx-bin-test--fake fake log)
       (write-region (concat fake "\n") nil (expand-file-name "emacs" config))
-      (dolist (args '(("build") ("keys" "diff" "--help") ("ui" "--help") ("search" "index" "--help") ("macos-app")))
+      (dolist (args '(("build") ("keys" "diff" "--help") ("ui" "--help") ("work" "--help") ("macos-app")))
         (delete-file log)
         (apply #'drgnx-bin-test--call drgnx-bin-test--bin env args)
         (should (string-search fake (drgnx-bin-test--slurp log))))
@@ -113,6 +114,35 @@ logging to PATHLOG), CONFIG (a DRGNX_CONFIG_DIR) and ENV (the environment lists 
         (should (eql 1 (car r)))
         (should (string-search "Ratatoskr is not built: run `drgnx runtime build'" (cdr r)))))))
 
+(ert-deftest drgnx-bin/plugins-execs-ratatoskr-with-the-extensions-jobs-arguments ()
+  ;; EXT-PLUGIN-JOBS-NEED-P9-CLI-1: the Extensions view's plugin jobs run bin/drgnx with these argument lists, and
+  ;; docs/guide/plugins.md names `drgnx plugins install|list|remove': each is `ratatoskr plugins …' unchanged, its exit
+  ;; status coming back; anything else is a usage error; with no binary the message says how to build
+  (require 'drgnx-exec)
+  (load (expand-file-name "modules/tools/drgnx-extensions-jobs" drgnx-bin-test--root) nil t)
+  (drgnx-bin-test--with-setup ()
+    (let* ((log (expand-file-name "rtsk.log" dir)) (fake (expand-file-name "ratatoskr" dir))
+           (env (append (list (concat "DRGNX_RATATOSKR_BIN=" fake) "DRGNX_EMACS=/an/emacs") env))
+           (job (lambda (kind &rest args) (nth 1 (drgnx-extensions-jobs--command kind args))))
+           (install (funcall job 'plugin-install "/a plugin/dir" :replace t))
+           (remove (funcall job 'plugin-remove "lint-hook")))
+      (write-region (format "#!/bin/sh\nprintf '%%s|' \"$@\" >> '%s'\necho >> '%s'\nexit ${FAKE_EXIT:-0}\n" log log) nil fake)
+      (set-file-modes fake #o755)
+      (should (equal install '("plugins" "install" "/a plugin/dir" "--replace")))
+      (should (equal remove '("plugins" "remove" "lint-hook")))
+      (dolist (args (list install remove '("plugins" "list") '("plugins" "install" "/p")))
+        (should (eql 0 (car (apply #'drgnx-bin-test--call drgnx-bin-test--bin env args)))))
+      (should (equal (split-string (drgnx-bin-test--slurp log) "\n" t)
+                     '("plugins|install|/a plugin/dir|--replace|" "plugins|remove|lint-hook|" "plugins|list|"
+                       "plugins|install|/p|")))
+      (should (string-empty-p (drgnx-bin-test--slurp pathlog)))
+      (should (eql 3 (car (drgnx-bin-test--call drgnx-bin-test--bin (cons "FAKE_EXIT=3" env) "plugins" "list"))))
+      (should (eql 2 (car (drgnx-bin-test--call drgnx-bin-test--bin env "plugins" "bogus"))))
+      (let ((r (drgnx-bin-test--call drgnx-bin-test--bin (cons "DRGNX_RATATOSKR_BIN=/nonexistent/ratatoskr" env)
+                                     "plugins" "list")))
+        (should (eql 1 (car r)))
+        (should (string-search "Ratatoskr is not built: run `drgnx runtime build'" (cdr r)))))))
+
 (ert-deftest drgnx-bin/no-nidhogg-is-an-error-never-a-bare-emacs ()
   ;; drgnx runs only on Nidhogg: with no $DRGNX_EMACS, no record and no nidhogg on PATH, a bare `emacs' there is
   ;; not run; the error names the installer
@@ -125,16 +155,23 @@ logging to PATHLOG), CONFIG (a DRGNX_CONFIG_DIR) and ENV (the environment lists 
     (should (string-empty-p (drgnx-bin-test--slurp pathlog)))))
 
 (ert-deftest drgnx-bin/no-emacs-stops-every-subcommand-cleanly ()
-  ;; with no Emacs found, a subcommand prints the message and exits non-zero; it never runs an empty command
-  ;; (CI once ended in "env: '': No such file or directory", exit 127)
+  ;; with no Emacs found, a subcommand that runs Emacs prints the message and exits non-zero; it never runs an empty
+  ;; command (CI once ended in "env: '': No such file or directory", exit 127).  Ratatoskr's subcommands run no Emacs:
+  ;; with no Emacs and no Ratatoskr built they say how to build it
   (drgnx-bin-test--with-setup ()
     (delete-file (expand-file-name "nidhogg" pathdir))
-    (dolist (args '(("build") ("test") ("safe") ("search" "index")))
-      (let ((r (apply #'drgnx-bin-test--call drgnx-bin-test--bin env args)))
-        (should-not (eql 0 (car r)))
-        (should (string-search "no Nidhogg found" (cdr r)))
-        (should-not (string-search "No such file" (cdr r)))
-        (should-not (string-search "command not found" (cdr r)))))))
+    (let ((env (cons "DRGNX_RATATOSKR_BIN=/nonexistent/ratatoskr" env)))
+      (pcase-dolist (`(,want . ,args)
+                     '(("no Nidhogg found" "build") ("no Nidhogg found" "test") ("no Nidhogg found" "safe")
+                       ("no Nidhogg found" "work" "--help")
+                       ("Ratatoskr is not built" "search" "index") ("Ratatoskr is not built" "runner" "list")
+                       ("Ratatoskr is not built" "browser" "install") ("Ratatoskr is not built" "hub" "status")
+                       ("Ratatoskr is not built" "graph" "backup") ("Ratatoskr is not built" "job" "status")))
+        (let ((r (apply #'drgnx-bin-test--call drgnx-bin-test--bin env args)))
+          (should-not (eql 0 (car r)))
+          (should (string-search want (cdr r)))
+          (should-not (string-search "No such file" (cdr r)))
+          (should-not (string-search "command not found" (cdr r))))))))
 
 (ert-deftest drgnx-bin/a-container-run-names-the-images-emacs ()
   ;; the container has no Nidhogg and no record: the run passes DRGNX_EMACS, so drgnx needs no bare `emacs'
@@ -620,16 +657,18 @@ with a display: `drgnx open' stays graphical (the unit tier has no DISPLAY, and 
   (string-search "--bg-daemon=" (or (ignore-errors (drgnx-bin-test--slurp (expand-file-name "emacs.log" dir))) "")))
 
 (ert-deftest drgnx-bin/open-waits-count-seconds-not-polls ()
-  :tags '(:timing)                                      ; wall-clock budget: the :timing group runs alone
-  ;; Each poll costs its sleep and a client call (0.3 s here): 20 polls would be 8 s, not the 2 s asked for.
+  ;; Each poll costs its sleep and a client call (0.3 s here, more on a loaded machine): a loop that counted polls
+  ;; would make 2 s / 0.1 s = 20 of them; one that counts seconds stops after 2-3 s, at most 3 s / 0.4 s of them.
+  ;; Counted, not timed: a slow machine makes fewer polls, never more.
   (drgnx-bin-test--with-open
     (write-region "never" nil (expand-file-name "delay" dir))
     (drgnx-bin-test--touch dir "slow-probe")
-    (let* ((start (float-time))
-           (r (drgnx-bin-test--call drgnx-bin-test--bin (cons "DRGNX_OPEN_WAIT=2" env) "open")))
+    (let* ((r (drgnx-bin-test--call drgnx-bin-test--bin (cons "DRGNX_OPEN_WAIT=2" env) "open"))
+           (probes (seq-count (lambda (call) (equal (car (last call)) "t"))
+                              (drgnx-bin-test--client-calls dir))))
       (should (eql 1 (car r)))
       (should (string-search "did not start within 2 s" (cdr r)))
-      (should (< (- (float-time) start) 4.5)))))
+      (should (< 0 probes 12)))))
 
 (ert-deftest drgnx-bin/open-wait-is-decimal-and-a-bad-value-is-refused ()
   (drgnx-bin-test--with-open
@@ -852,7 +891,11 @@ than any `drgnx-test-wait', so only the signal can end it while a test waits)."
 (defun drgnx-bin-test--env (dir parent &rest more)
   (append more   ; first: it wins over the unsets below
           (list (concat "HOME=" dir) (concat "DRGNX_CONFIG_DIR=" dir "/config") (concat "TMPDIR=" parent)
-                "DRGNX_TEST_SELECTOR=\"tmp-probe/leaks\"" "DRGNX_TEST_RESULTS" "DRGNX_RUN_TMP" "DRGNX_TEST_SHUFFLE")))
+                "DRGNX_TEST_SELECTOR=\"tmp-probe/leaks\"" "DRGNX_TEST_RESULTS" "DRGNX_RUN_TMP" "DRGNX_TEST_SHUFFLE"
+                ;; the outer run's file choice (a run of this file alone sets it) would replace the nested run's suite
+                "DRGNX_TEST_ONLY"
+                ;; a GUI or scenario run builds no test hub (`test_hub'): a fake Emacs needs none
+                "DRGNX_TEST_HUB_BUILD=0")))
 
 (defun drgnx-bin-test--spawn (env &rest args)
   "Start bin/drgnx ARGS with ENV; return the process."
@@ -968,6 +1011,34 @@ macOS (no /proc there)."
             (should (equal (funcall ks) '("0" "1")))))
       (delete-directory dir t))))
 
+(ert-deftest drgnx-bin/orders-runs-its-files-at-the-same-time ()
+  ;; test-pattern: C (handshake): a file's run leaves its marker and waits for another file's; run one file at a time
+  ;; and the first run never sees a second marker.  The wait is bounded (10 s) so a serial run fails instead of hanging
+  (let* ((dir (make-temp-file "drgnx-bin-orders" t))
+         (parent (expand-file-name "parent" dir))
+         (marks (expand-file-name "marks" dir))
+         (drgnx-bin-test--cwd dir))
+    (unwind-protect
+        (progn
+          (make-directory parent)
+          (make-directory marks)
+          (let ((r (drgnx-bin-test--call
+                    drgnx-bin-test--bin
+                    (append
+                     (drgnx-bin-test--env
+                      dir parent
+                      (concat "DRGNX_EMACS="
+                              (drgnx-bin-test--fake-emacs
+                               (expand-file-name "fake-emacs" dir)
+                               (concat "echo \"drgnx-gate-swap-pairs: 0\"; : > " marks "/$(basename \"$DRGNX_TEST_ONLY\"); n=0;"
+                                       " while [ \"$(ls " marks " | wc -l)\" -lt 2 ]; do n=$((n + 1));"
+                                       " [ $n -gt 100 ] && { echo 'no other file ran at the same time'; exit 1; }; sleep 0.1; done"))))
+                     '("DRGNX_ORDERS_JOBS=2"))
+                    "test" "--orders")))
+            (should (eql 0 (car r)))
+            (should (string-match-p "green, [0-9]+ gated file" (cdr r)))))
+      (delete-directory dir t))))
+
 (ert-deftest drgnx-bin/a-container-run-forwards-the-test-selector ()
   ;; A narrowed `bin/drgnx test --container' stays narrow inside the container.
   (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
@@ -1026,7 +1097,9 @@ macOS (no /proc there)."
                                drgnx-bin-test--bin
                                (append (list (concat "HOME=" dir) (concat "DRGNX_CONFIG_DIR=" dir "/config")
                                              (concat "DRGNX_CONTAINER=" rt) "DRGNX_TEST_IMAGE=cpu-image")
-                                       env)
+                                       env
+                                       ;; the outer run's file choice must not reach the container's argv
+                                       '("DRGNX_TEST_ONLY"))
                                "test" "--container" args))))
     (split-string (drgnx-bin-test--slurp log) "\n" t)))
 
@@ -1054,12 +1127,25 @@ macOS (no /proc there)."
                                                           "test" "--container" "--perf" "--compositor" "kwin"))))))
       (delete-directory dir t))))
 
+(ert-deftest drgnx-bin/container-perf-takes-the-hook-audit ()
+  ;; --audit (what each hook function costs) goes with --perf inside the container too: the run's command carries it;
+  ;; it is refused on any other tier and beside an A/B.
+  (let ((dir (make-temp-file "drgnx-bin-tmp" t)))
+    (unwind-protect
+        (let* ((args (drgnx-bin-test--container-argv dir '("DRGNX_TEST_GUI_IMAGE=gui-image") "--perf" "--audit"))
+               (tail (member "gui-image" args)))
+          (should tail)
+          (should (equal (cdr tail) '("bin/drgnx" "test" "--perf" "--audit")))
+          (should (drgnx-bin-test--container-refused-p dir nil "--ui" "--audit"))
+          (should (drgnx-bin-test--container-refused-p dir nil "--perf" "--audit" "--ab-env" "A=1,2")))
+      (delete-directory dir t))))
+
 (ert-deftest drgnx-bin/container-passes-the-run-control-variables-and-turns-the-lease-off ()
   ;; The run-control variables go in with their values when set (and not when unset); the host's lease never applies
   ;; inside; the perf results file goes through a writable /out mount, since the checkout is read-only.
   (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
          (vars '("DRGNX_TEST_SELECTOR=\"x\"" "DRGNX_TEST_JOBS=4" "DRGNX_TEST_RERUN=1" "DRGNX_TEST_NO_TIMING=1"
-                 "DRGNX_PERF_CPU_FACTOR=2" "DRGNX_PERF_WORKLOADS=typing" "DRGNX_UITEST_SETTLE_SCALE=3" "DRGNX_UI_TEST_TIMEOUT=3000"
+                 "DRGNX_PERF_CPU_FACTOR=2" "DRGNX_PERF_WORKLOADS=typing" "DRGNX_UITEST_SETTLE_SCALE=3" "DRGNX_UITEST_TICK=0.03" "DRGNX_UI_TEST_TIMEOUT=3000"
                  ;; UI-SCALE-1: the sessions' size and scale (without them a container run was silently 1600x900 at 1)
                  "DRGNX_UI_SIZE=2880x1800" "DRGNX_UI_SCALE=1.5" "DRGNX_UI_SCALES=1 2")))
     (unwind-protect
@@ -1155,6 +1241,26 @@ macOS (no /proc there)."
             (should (member "DRGNX_EMACS=/opt/nidhogg-built/bin/nidhogg" args))))
       (delete-directory dir t))))
 
+(ert-deftest drgnx-bin/container-nidhogg-prefix-applies-to-every-tier ()
+  ;; A branch's Nidhogg is tested by mounting it, never by building an image per prefix: the batch, GUI, scenario,
+  ;; perf, soak and terminal tiers all run the mounted Emacs, in the image they use without it.
+  (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
+         (pfx (file-truename (expand-file-name "nid" dir))))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name "bin" pfx) t)
+          (dolist (c '((nil "cpu-image") ("--ui" "gui-image") ("--scenario" "gui-image") ("--perf" "gui-image")
+                       ("--soak" "gui-image") ("--tty" "tty-image")))
+            (let ((args (apply #'drgnx-bin-test--container-argv dir
+                               (list (concat "DRGNX_CONTAINER_NIDHOGG=" pfx) "DRGNX_TEST_GUI_IMAGE=gui-image"
+                                     "DRGNX_TEST_TTY_IMAGE=tty-image")
+                               (and (car c) (list (car c))))))
+              (should (member (concat pfx ":" pfx ":ro") args))
+              (should (member (concat "DRGNX_EMACS=" pfx "/bin/nidhogg") args))
+              (should-not (member "DRGNX_EMACS=/usr/local/bin/emacs" args))
+              (should (member (cadr c) args)))))
+      (delete-directory dir t))))
+
 (ert-deftest drgnx-bin/container-soak-accepted ()
   ;; --soak [MIN] runs the soak in the GUI image, memory-capped like --ui; combined with another tier it is refused.
   (let ((dir (make-temp-file "drgnx-bin-tmp" t)))
@@ -1188,17 +1294,27 @@ macOS (no /proc there)."
       (delete-directory dir t))))
 
 (ert-deftest drgnx-bin/container-perf-ab-env-passed ()
-  ;; --perf --ab-env VAR=JUDGED,REF [--n N] reaches the command inside the GUI image; a malformed pair is a usage
-  ;; error; --ab-env without --perf is refused.
+  ;; --perf --ab-env VAR=JUDGED,REF [--n N] reaches the command inside the GUI image, capped at two sessions' memory
+  ;; (6g, swap equal; a plain --perf run gets one session's 3g; DRGNX_TEST_GUI_MEMORY overrides both); a malformed
+  ;; pair is a usage error; --ab-env without --perf is refused.
   (let ((dir (make-temp-file "drgnx-bin-tmp" t)))
     (unwind-protect
         (progn
-          (let ((args (drgnx-bin-test--container-argv
-                       dir '("DRGNX_TEST_GUI_IMAGE=gui-image" "DRGNX_PERF_WORKLOADS=popup-typing")
-                       "--perf" "--ab-env" "DRGNX_PERF_GLITNIR=on,off" "--n" "20")))
+          (let* ((args (drgnx-bin-test--container-argv
+                        dir '("DRGNX_TEST_GUI_IMAGE=gui-image" "DRGNX_PERF_WORKLOADS=popup-typing")
+                        "--perf" "--ab-env" "DRGNX_PERF_GLITNIR=on,off" "--n" "20"))
+                 (opts (butlast args (length (member "gui-image" args)))))
             (should (equal (cdr (member "gui-image" args))
                            '("bin/drgnx" "test" "--perf" "--ab-env" "DRGNX_PERF_GLITNIR=on,off" "--n" "20")))
-            (should (member "DRGNX_PERF_WORKLOADS=popup-typing" args)))
+            (should (member "DRGNX_PERF_WORKLOADS=popup-typing" args))
+            (should (equal (cadr (member "--memory" opts)) "6g"))
+            (should (equal (cadr (member "--memory-swap" opts)) "6g")))
+          (let ((args (drgnx-bin-test--container-argv dir '("DRGNX_TEST_GUI_IMAGE=gui-image") "--perf")))
+            (should (equal (cadr (member "--memory" args)) "3g")))
+          (let ((args (drgnx-bin-test--container-argv
+                       dir '("DRGNX_TEST_GUI_IMAGE=gui-image" "DRGNX_TEST_GUI_MEMORY=8g")
+                       "--perf" "--ab-env" "DRGNX_PERF_GLITNIR=on,off")))
+            (should (equal (cadr (member "--memory" args)) "8g")))
           (should (drgnx-bin-test--container-refused-p dir nil "--perf" "--ab-env" "X=on"))
           (should (drgnx-bin-test--container-refused-p dir nil "--perf" "--ab-env"))
           (should (drgnx-bin-test--container-refused-p dir nil "--ab-env" "X=a,b")))
@@ -1307,28 +1423,28 @@ macOS (no /proc there)."
           (should-not (drgnx-bin-test--left parent)))
       (delete-directory dir t))))
 
-(ert-deftest drgnx-bin/a-test-run-stops-the-podman-pause-process-it-made ()
-  ;; TEST-PODMAN-PAUSE-1: rootless podman under the run's private XDG_RUNTIME_DIR starts a `catatonit -P' pause
-  ;; process (pid file RUN/libpod/tmp/pause.pid) that outlives the run, and the systemd scope it lives in.  The run
-  ;; stops exactly that one at its end, and never another catatonit (the user's own, with its pid file elsewhere).
-  ;; Linux only: bin/drgnx tells catatonit by /proc/PID/comm, and on macOS podman runs in a VM, so a run leaves no
-  ;; local pause process.
-  (skip-unless (and (executable-find "sleep") (file-readable-p "/proc/self/comm")))
+;; The run's pause process, as a script named catatonit: TRAP is its TERM handling (what it does after the signal).
+(defun drgnx-bin-test--pause-run (trap)
   (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
          (parent (expand-file-name "parent" dir))
          (ours (expand-file-name "ours.pid" dir))
          (other (expand-file-name "other" dir))
-         (catatonit (expand-file-name "catatonit" dir))
+         (catatonit (expand-file-name "pause/catatonit" dir))
+         (users-catatonit (expand-file-name "catatonit" dir))
          (emacs (drgnx-bin-test--fake-emacs
                  (expand-file-name "fake-emacs" dir)
-                 (format "mkdir -p \"$XDG_RUNTIME_DIR/libpod/tmp\"; %s 300 >/dev/null 2>&1 </dev/null & echo $! > \"$XDG_RUNTIME_DIR/libpod/tmp/pause.pid\"; echo $! > %s"
+                 (format "mkdir -p \"$XDG_RUNTIME_DIR/libpod/tmp\"; %s >/dev/null 2>&1 </dev/null & echo $! > \"$XDG_RUNTIME_DIR/libpod/tmp/pause.pid\"; echo $! > %s"
                          catatonit ours)))
          (users nil))
     (unwind-protect
         (progn
           (make-directory parent)
-          (make-symbolic-link (executable-find "sleep") catatonit)
-          (setq users (start-process "drgnx-bin-test-catatonit" nil catatonit "300"))
+          (make-directory (file-name-directory catatonit))
+          (with-temp-file catatonit
+            (insert (format "#!/bin/sh\ntrap '%s' TERM\nwhile :; do sleep 0.05; done\n" trap)))
+          (set-file-modes catatonit #o755)
+          (make-symbolic-link (executable-find "sleep") users-catatonit)
+          (setq users (start-process "drgnx-bin-test-catatonit" nil users-catatonit "300"))
           (make-directory (expand-file-name "libpod/tmp" other) t)
           (with-temp-file (expand-file-name "libpod/tmp/pause.pid" other) (insert (format "%d\n" (process-id users))))
           (should (eql 0 (car (drgnx-bin-test--call drgnx-bin-test--bin
@@ -1341,6 +1457,19 @@ macOS (no /proc there)."
           (should (process-live-p users)))
       (when (process-live-p users) (delete-process users))
       (delete-directory dir t))))
+
+(ert-deftest drgnx-bin/a-test-run-stops-the-podman-pause-process-it-made ()
+  ;; TEST-PODMAN-PAUSE-1: rootless podman under the run's private XDG_RUNTIME_DIR starts a `catatonit -P' pause
+  ;; process (pid file RUN/libpod/tmp/pause.pid) that outlives the run, and the systemd scope it lives in.  The run
+  ;; stops exactly that one at its end, waits until it is gone, and never another catatonit (the user's own, with its
+  ;; pid file elsewhere).  Here the pause process takes 0.3 s to act on TERM.  Linux only: bin/drgnx tells catatonit
+  ;; by /proc/PID/comm, and on macOS podman runs in a VM, so a run leaves no local pause process.
+  (skip-unless (and (executable-find "sleep") (file-readable-p "/proc/self/comm")))
+  (drgnx-bin-test--pause-run "sleep 0.3; exit 0"))
+
+(ert-deftest drgnx-bin/a-test-run-kills-a-pause-process-that-ignores-term ()
+  (skip-unless (and (executable-find "sleep") (file-readable-p "/proc/self/comm")))
+  (drgnx-bin-test--pause-run ":"))
 
 (ert-deftest drgnx-bin/a-test-run-removes-podman-storage-through-unshare ()
   ;; Podman storage in a run's temp HOME holds sub-UID files a plain `rm -rf' leaves behind (stood in for by an
@@ -1637,6 +1766,21 @@ while :; do wait; done" job job job job job)))
       (delete-directory dir t)
       (delete-directory tmp t))))
 
+(defun drgnx-bin-test--bootstrap-tree (dir)
+  "A checkout in DIR/src with only what `drgnx test --bootstrap' reads before its first container: its bin/drgnx.
+The run snapshots its whole checkout first (tar, a commit, a bundle); this one's is a few files, not the tree's
+thousands, and nothing else writes into it meanwhile."
+  (let ((src (expand-file-name "src" dir)))
+    (make-directory (expand-file-name "bin" src) t)
+    (make-directory (expand-file-name "etc" src) t)
+    (make-directory (expand-file-name "test/fixtures/bootstrap" src) t)
+    (dolist (f '("bin/drgnx" "bin/drgnx-paths.sh" "etc/drgnx.lock.eld"))
+      (copy-file (expand-file-name f drgnx-bin-test--root) (expand-file-name f src)))
+    (copy-directory (expand-file-name "test/fixtures/bootstrap/config" drgnx-bin-test--root)
+                    (expand-file-name "test/fixtures/bootstrap/" src))
+    (call-process "git" nil nil nil "-C" src "init" "-q")
+    (expand-file-name "bin/drgnx" src)))
+
 (ert-deftest drgnx-bin/test-bootstrap-removes-its-container-when-stopped ()
   ;; TERM (a CI cancel; Ctrl-C is the same path) while a container runs: bin/drgnx exits at once and removes the
   ;; container by name — the container's bash (PID 1) ignores the TERM podman forwards, so nothing else would stop it.
@@ -1657,10 +1801,12 @@ while :; do wait; done" job job job job job)))
         (progn
           (setq proc (make-process :name "drgnx-bin-stop" :buffer nil :noquery t :connection-type 'pipe
                                    :sentinel (lambda (p _e) (process-put p :done t))
-                                   :command (list drgnx-bin-test--bin "test" "--bootstrap")))
-          (drgnx-test-wait (lambda () (and (string-match-p "^run " (or (ignore-errors (drgnx-bin-test--slurp log)) ""))
-                                           (string-match-p "[0-9]" (or (ignore-errors (drgnx-bin-test--slurp (concat log ".runpid"))) ""))))
+                                   :command (list (drgnx-bin-test--bootstrap-tree dir) "test" "--bootstrap")))
+          (drgnx-test-wait (lambda () (or (process-get proc :done)   ; it gave up before any container: say so below
+                                          (and (string-match-p "^run " (or (ignore-errors (drgnx-bin-test--slurp log)) ""))
+                                               (string-match-p "[0-9]" (or (ignore-errors (drgnx-bin-test--slurp (concat log ".runpid"))) "")))))
                            :secs 60 :what "the container's run")
+          (should-not (and (process-get proc :done) (list 'exited (process-exit-status proc))))
           (should (string-match-p "^run .*--name drgnx-bootstrap-[0-9]+-keys " (drgnx-bin-test--slurp log)))
           (signal-process proc 'term)
           (should (drgnx-test-wait (lambda () (process-get proc :done)) :what "bin/drgnx's exit"))
@@ -1816,3 +1962,90 @@ when that is non-nil; return (EXIT OUTPUT INSTALLED-DIRECTORY-NAMES)."
     (with-temp-buffer
       (insert-file-contents (expand-file-name file drgnx-bin-test--root))
       (should (equal (drgnx-bin-test--early-waits (buffer-string)) nil)))))
+
+;; The test hub (docs/develop/harness.md, "The test hub"): `test --ui' fetches libghostty-vt's tarballs and builds
+;; Ratatoskr (test hooks), ratatoskr-mock and drgnx-term before the session.  Fakes on PATH stand in for curl, the
+;; checksum and the signature check (no network), DRGNX_TEST_CARGO for cargo and DRGNX_EMACS for the harness.
+(defmacro drgnx-bin-test--with-hub-fakes (vars &rest body)
+  "Bind VARS: DIR, LOG (what the fakes wrote), ENV for a `test --ui' run with fake curl, sha256sum, minisign,
+cargo (DRGNX_TEST_CARGO) and Emacs (DRGNX_EMACS: logs its DRGNX_RATATOSKR_BIN), tarballs in DIR/tarballs."
+  (declare (indent 1))
+  `(let* ((dir (make-temp-file "drgnx-bin-hub" t))
+          (log (expand-file-name "log" dir))
+          (fakes (expand-file-name "fakes" dir))
+          (pin (expand-file-name "runtime/crates/ghostty-vt-sys/pin.toml" drgnx-bin-test--root))
+          (drgnx-bin-test--cwd dir)
+          (env (list (concat "HOME=" dir) (concat "DRGNX_CONFIG_DIR=" dir "/config") (concat "DRGNX_DATA_DIR=" dir "/data")
+                     (concat "PATH=" fakes ":/usr/bin:/bin") (concat "GHOSTTY_VT_TARBALLS=" dir "/tarballs")
+                     (concat "DRGNX_TEST_CARGO=" fakes "/cargo") (concat "DRGNX_EMACS=" fakes "/emacs")
+                     "DRGNX_RATATOSKR_BIN" "DRGNX_TEST_HUB_BUILD" "DRGNX_TEST_SELECTOR")))
+     (make-directory fakes)
+     (drgnx-bin-test--fake-emacs (expand-file-name "curl" fakes)
+                                 (format "echo \"curl $*\" >> %s\nwhile [ $# -gt 0 ]; do [ \"$1\" = -o ] && : > \"$2\"; shift; done" log))
+     ;; the pinned sha256 of the file whose name (less .new) is the argument, as sha256sum prints it
+     (drgnx-bin-test--fake-emacs (expand-file-name "sha256sum" fakes)
+                                 (format "f=$(basename \"$1\" .new); awk -v f=\"$f\" '$1 == \"file\" {gsub(/\"/, \"\", $3); c = $3} $1 == \"sha256\" && c == f {gsub(/\"/, \"\", $3); print $3 \"  x\"}' %s" pin))
+     (drgnx-bin-test--fake-emacs (expand-file-name "minisign" fakes) "exit 0")
+     (drgnx-bin-test--fake-emacs (expand-file-name "cargo" fakes) (format "echo \"cargo $*\" >> %s" log))
+     (drgnx-bin-test--fake-emacs (expand-file-name "emacs" fakes) (format "echo \"emacs hub=$DRGNX_RATATOSKR_BIN\" >> %s" log))
+     (ignore env)
+     (unwind-protect (let ,vars ,@body)
+       (delete-directory dir t))))
+
+(ert-deftest drgnx-bin/test-ui-builds-the-test-hub-first ()
+  (drgnx-bin-test--with-hub-fakes ()
+    (should (eql 0 (car (drgnx-bin-test--call drgnx-bin-test--bin env "test" "--ui"))))
+    (let ((lines (split-string (drgnx-bin-test--slurp log) "\n" t)))
+      ;; both pinned tarballs fetched (and their signatures), into the tarballs directory
+      (should (= 2 (seq-count (lambda (l) (string-suffix-p ".tar.gz" l)) lines)))
+      (should (= 2 (seq-count (lambda (l) (string-suffix-p ".tar.gz.minisig" l)) lines)))
+      (should (file-exists-p (expand-file-name "tarballs/libghostty-vt-1.0.0.tar.gz" dir)))
+      ;; then one build of the three binaries, then the harness with the hub named
+      (should (equal (seq-remove (lambda (l) (string-prefix-p "curl " l)) lines)
+                     (list "cargo build -p drgnx-ratatoskr -p domr -p drgnx-term --bins --features drgnx-ratatoskr/test-hooks"
+                           (concat "emacs hub=" drgnx-bin-test--root "runtime/target/debug/ratatoskr")))))))
+
+(ert-deftest drgnx-bin/test-scenario-builds-the-test-hub-first ()
+  ;; the Explorer's rows are the hub's on a Nidhogg with Sjá: the scenario tier gets the GUI tier's hub
+  (drgnx-bin-test--with-hub-fakes ()
+    (should (eql 0 (car (drgnx-bin-test--call drgnx-bin-test--bin env "test" "--scenario"))))
+    (should (equal (seq-remove (lambda (l) (string-prefix-p "curl " l)) (split-string (drgnx-bin-test--slurp log) "\n" t))
+                   (list "cargo build -p drgnx-ratatoskr -p domr -p drgnx-term --bins --features drgnx-ratatoskr/test-hooks"
+                         (concat "emacs hub=" drgnx-bin-test--root "runtime/target/debug/ratatoskr"))))))
+
+(ert-deftest drgnx-bin/test-ui-stops-when-the-test-hub-cannot-be-built ()
+  (drgnx-bin-test--with-hub-fakes ()
+    ;; the build fails: the run stops with the reason, no session starts
+    (drgnx-bin-test--fake-emacs (expand-file-name "fakes/cargo" dir) (format "echo \"cargo $*\" >> %s; exit 101" log))
+    (let ((r (drgnx-bin-test--call drgnx-bin-test--bin env "test" "--ui")))
+      (should (eql 1 (car r)))
+      (should (string-search "the test hub did not build" (cdr r)))
+      (should-not (string-search "emacs hub=" (drgnx-bin-test--slurp log))))))
+
+(ert-deftest drgnx-bin/test-ui-uses-a-named-hub-as-it-is ()
+  (drgnx-bin-test--with-hub-fakes ()
+    (let* ((hub (drgnx-bin-test--fake-emacs (expand-file-name "ratatoskr" dir) "exit 0"))
+           (r (drgnx-bin-test--call drgnx-bin-test--bin (cons (concat "DRGNX_RATATOSKR_BIN=" hub) env) "test" "--ui")))
+      (should (eql 0 (car r)))
+      ;; nothing fetched or built; no drgnx-term beside it is said
+      (should (equal (split-string (drgnx-bin-test--slurp log) "\n" t) (list (concat "emacs hub=" hub))))
+      (should (string-search "no drgnx-term beside" (cdr r))))))
+
+(ert-deftest drgnx-bin/a-container-ui-run-mounts-the-hubs-directory-and-builds-nothing-inside ()
+  (drgnx-bin-test--with-hub-fakes ()
+    (let* ((rtlog (expand-file-name "rt.log" dir))
+           (rt (drgnx-bin-test--fake-emacs (expand-file-name "fake-rt" dir)
+                                           (format "for a in \"$@\"; do echo \"$a\" >> %s; done" rtlog)))
+           (bins (expand-file-name "bins" dir))
+           (hub (progn (make-directory bins) (drgnx-bin-test--fake-emacs (expand-file-name "ratatoskr" bins) "exit 0"))))
+      (should (eql 0 (car (drgnx-bin-test--call
+                           drgnx-bin-test--bin
+                           (append (list (concat "DRGNX_CONTAINER=" rt) "DRGNX_TEST_GUI_IMAGE=an-image"
+                                         (concat "DRGNX_RATATOSKR_BIN=" hub))
+                                   env)
+                           "test" "--container" "--ui"))))
+      (let ((args (split-string (drgnx-bin-test--slurp rtlog) "\n" t)))
+        ;; the directory, so ratatoskr-mock and drgnx-term beside the hub are seen inside too
+        (should (member (concat (file-truename bins) ":/opt/ratatoskr:ro") args))
+        (should (member "DRGNX_RATATOSKR_BIN=/opt/ratatoskr/ratatoskr" args))
+        (should (member "DRGNX_TEST_HUB_BUILD=0" args))))))

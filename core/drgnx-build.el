@@ -130,6 +130,103 @@ function another file's compile happened to load cannot hide a missing `declare-
             :warnings (seq-mapcat (lambda (r) (plist-get r :warnings)) ordered)
             :errors (seq-mapcat (lambda (r) (plist-get r :errors)) ordered)))))
 
+;;;; Trampolines ahead of time
+;; Advising a primitive, or `cl-letf'-ing one, makes Emacs compile a trampoline for it (a small native function that
+;; calls the replacement) the first time, and that compile waits for gcc inside whatever command was running.  A new
+;; Nidhogg invalidates them all, which `drgnx update' does by installing one and then running this build.  So the
+;; build compiles the trampolines of the primitives drgnx advises, here and now, into the first writable directory of
+;; `native-comp-eln-load-path' (DRGNX_TEST_ELN_DIR first when a test run gives one: never the user's eln-cache).
+
+(defconst drgnx-build-trampoline-dirs '("core" "modules" "wb")
+  "Where `drgnx-build-advised-primitives' looks (harness/ and test/ replace primitives only in a test run, which has
+its own trampolines).")
+
+(defconst drgnx-build--advised-lists
+  '(("core/drgnx-guard.el" . drgnx-guard-prompt-functions) ("core/drgnx-sandbox-vc.el" . drgnx-sandbox-vc--advised))
+  "Advice put on a list of functions by a loop rather than by name: (FILE . VARIABLE), the variable's value a list of
+symbols or of (SYMBOL . ADVICE) pairs, read from the file's `defvar' or `defconst'.")
+
+(defun drgnx-build--quoted (form)
+  "The symbol FORM quotes (a quote or a function quote of a symbol), else nil."
+  (and (consp form) (memq (car form) '(quote function)) (symbolp (cadr form)) (cadr form)))
+
+(defun drgnx-build--scan-form (form acc)
+  "Add to the list ACC (returned) the symbols FORM advises or replaces: `advice-add', `drgnx-module-advice' and
+a `symbol-function' of a quoted name (a `cl-letf' of a function), anywhere in FORM."
+  (when (consp form)
+    (let ((head (car form)) (arg (and (consp (cdr form)) (drgnx-build--quoted (cadr form)))))
+      (when (and arg (memq head '(advice-add drgnx-module-advice symbol-function)))
+        (push arg acc)))
+    (while (consp form)
+      (setq acc (drgnx-build--scan-form (car form) acc) form (cdr form))))
+  acc)
+
+(defun drgnx-build--read-forms (file)
+  "The top-level forms of FILE as far as they read."
+  (with-temp-buffer
+    (insert-file-contents file)
+    (let ((forms nil) (read-circle nil))
+      (goto-char (point-min))
+      (condition-case nil
+          (while t (push (read (current-buffer)) forms))
+        (error nil))
+      (nreverse forms))))
+
+(defun drgnx-build-advised-primitives (root)
+  "The primitives (C functions, `subr-primitive-p') the Lisp under ROOT's `drgnx-build-trampoline-dirs' advises
+or replaces, sorted: what a static scan of `advice-add', `drgnx-module-advice' and a quoted `symbol-function' finds, and
+the functions of `drgnx-build--advised-lists'."
+  (let ((syms nil))
+    (dolist (d drgnx-build-trampoline-dirs)
+      (let ((dir (expand-file-name d root)))
+        (when (file-directory-p dir)
+          (dolist (file (directory-files-recursively dir "\\.el\\'"))
+            (let ((rel (file-relative-name file root)))
+              (dolist (form (drgnx-build--read-forms file))
+                (setq syms (drgnx-build--scan-form form syms))
+                (when-let* ((var (cdr (assoc rel drgnx-build--advised-lists)))
+                            ((memq (car-safe form) '(defvar defconst)))
+                            ((eq (cadr form) var))
+                            (value (eval (caddr form) t)))
+                  (dolist (e value) (push (if (consp e) (car e) e) syms)))))))))
+    (sort (seq-uniq (seq-filter (lambda (s) (and (symbolp s) (fboundp s) (not (special-form-p s))
+                                                 ;; an advised primitive's definition is the advice around the subr
+                                                 (subr-primitive-p (let ((f (symbol-function s)))
+                                                                     (if (advice--p f) (advice--cd*r f) f)))))
+                                syms))
+          #'string<)))
+
+(defun drgnx-build-trampoline-dir ()
+  "Where the trampolines go: DRGNX_TEST_ELN_DIR (absolute) when set, else the first writable directory of
+`native-comp-eln-load-path'; nil when there is none."
+  (let ((given (getenv "DRGNX_TEST_ELN_DIR")))
+    (if (and given (file-name-absolute-p given))
+        (progn (make-directory given t) (expand-file-name given))
+      (seq-find (lambda (d) (ignore-errors (make-directory d t) (file-writable-p d)))
+                (mapcar (lambda (d) (expand-file-name d invocation-directory))
+                        (bound-and-true-p native-comp-eln-load-path))))))
+
+(defvar native-comp-eln-load-path)
+(declare-function comp-trampoline-compile "comp-run")
+(declare-function comp--trampoline-search "comp-run")
+
+(defun drgnx-build--native-p ()
+  "Does this Emacs compile natively?"
+  (and (fboundp 'native-comp-available-p) (native-comp-available-p)))
+
+(defun drgnx-build-trampolines (root)
+  "Compile the trampolines of the primitives under ROOT that drgnx advises (`drgnx-build-advised-primitives'), which
+are not there yet, into `drgnx-build-trampoline-dir'.  Return the list of the primitives it compiled; nil without
+native compilation.  One that fails to compile is skipped: Emacs compiles it when it is first advised, as before."
+  (when (and (drgnx-build--native-p) (require 'comp nil t) (require 'comp-run nil t)
+             (fboundp 'comp-trampoline-compile))
+    (when-let* ((dir (drgnx-build-trampoline-dir)))
+      (let ((native-comp-eln-load-path (cons dir (bound-and-true-p native-comp-eln-load-path))) done)
+        (dolist (s (drgnx-build-advised-primitives root))
+          (unless (and (fboundp 'comp--trampoline-search) (comp--trampoline-search s))
+            (when (ignore-errors (comp-trampoline-compile s) t) (push s done))))
+        (nreverse done)))))
+
 (defun drgnx-build-cli ()
   "Batch entry: `drgnx build' — compile the checkout; exit 1 on errors."
   (let* ((root (file-name-directory (directory-file-name (file-name-directory (locate-library "drgnx-build")))))
@@ -138,6 +235,9 @@ function another file's compile happened to load cannot hide a missing `declare-
     (dolist (e (plist-get r :errors)) (princ (format "error: %s\n" e)))
     (princ (format "drgnx build: %d files compiled, %d warnings, %d errors\n" (plist-get r :compiled)
                    (length (plist-get r :warnings)) (length (plist-get r :errors))))
+    (unless (plist-get r :errors)
+      (let ((made (drgnx-build-trampolines root)))
+        (princ (format "drgnx build: %d trampolines compiled\n" (length made)))))
     (kill-emacs (if (plist-get r :errors) 1 0))))
 
 (provide 'drgnx-build)

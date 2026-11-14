@@ -1,0 +1,21 @@
+{"scenario": "view/ack-releases-next-patch", "requires": ["v1", "test-hooks"], "doc": "An acknowledged view (a terminal's) has at most one patch in flight: rows built before the editor's view/ack wait, the newest winning, and go as one patch when view/ack names the version sent; an ack of another version releases nothing."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "view/env", "params": {"view": "demo", "class": "gui-1", "display": "gui", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 7, 4]], "cell": [8, 17], "width_px": 400, "palette": [["accent", "#123456"]], "epoch": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "__test_view_rows", "params": {"view": "demo", "ack": true, "rows": [{"key": "1", "text": "one"}]}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"base": 0, "version": 1, "ops": [{"reset": [{"key": "1", "text": "one"}]}]}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "__test_view_rows", "params": {"view": "demo", "ack": true, "rows": [{"key": "1", "text": "one"}, {"key": "2", "text": "two"}]}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "__test_view_rows", "params": {"view": "demo", "ack": true, "rows": [{"key": "1", "text": "one"}, {"key": "2", "text": "two"}, {"key": "3", "text": "three"}]}}}
+{"do": "expect", "conn": "e", "json": {"id": 5, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 6, "method": "view/ack", "params": {"view": "demo", "class": "gui-1", "version": 0}}}
+{"do": "expect", "conn": "e", "json": {"id": 6, "result": true}}
+{"do": "count_events", "conn": "e", "for_ms": 300, "none": ["view-patch"]}
+{"do": "send", "conn": "e", "json": {"id": 7, "method": "view/ack", "params": {"view": "demo", "class": "gui-1", "version": 1}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"base": 1, "version": 2, "ops": [{"insert": {"after": "1", "rows": [{"key": "2", "text": "two"}, {"key": "3", "text": "three"}]}}]}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 7, "result": true}}
+{"do": "count_events", "conn": "e", "for_ms": 300, "none": ["view-patch"]}

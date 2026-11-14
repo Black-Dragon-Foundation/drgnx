@@ -23,6 +23,7 @@
 (defvar package-quickstart)
 (defvar package-quickstart-file)
 (defvar native-comp-eln-load-path)
+(defvar native-comp-jit-compilation-deny-list)
 (defvar use-package-ensure-function)
 (declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
 (declare-function package-installed-p "package")
@@ -38,7 +39,42 @@
     ;; For good, not let-bound: package.el refreshes this file after a package the user installs.
     (setq package-quickstart t
           package-quickstart-file (expand-file-name "drgnx-quickstart.el" elpa))
+    (drgnx-pkg-jit-guard elpa)
     (when (file-directory-p elpa) (package-activate-all))))
+
+(defconst drgnx-pkg-build-file "drgnx-built-by.eld"
+  "The file in the packages directory that names the Emacs build that byte-compiled its packages.")
+
+(defun drgnx-pkg-emacs-build ()
+  "This Emacs build as a string: version, configuration, native-code ABI and build time.  An .elc holds the macro
+expansions of the Emacs that compiled it, so packages another build compiled are compiled again (`drgnx-pkg-sync')."
+  (string-join (delq nil (list emacs-version system-configuration
+                               (and (boundp 'comp-native-version-dir) comp-native-version-dir)
+                               (and emacs-build-time (format-time-string "%FT%T" emacs-build-time t))))
+               " "))
+
+(defun drgnx-pkg-elpa-build (&optional dir)
+  "The build that compiled the packages of DIR (default the packages directory), from its `drgnx-pkg-build-file';
+nil when nothing says (a directory from before the record)."
+  (let ((f (expand-file-name drgnx-pkg-build-file (or dir (drgnx-elpa-dir)))))
+    (when (file-exists-p f)
+      (let ((v (ignore-errors (car (read-from-string (with-temp-buffer (insert-file-contents f) (buffer-string)))))))
+        (and (stringp v) v)))))
+
+(defun drgnx-pkg-jit-guard (&optional dir)
+  "Keep this Emacs's JIT native compiler away from the packages of DIR (default the packages directory) when another
+Emacs build byte-compiled them (`drgnx-pkg-elpa-build' differs from `drgnx-pkg-emacs-build', or says nothing about .elc
+files that are there).  The JIT compiles a package's .el with this build's macros and swaps the functions in minutes
+after the .elc was loaded, while the .elc's top level (compiled by the other build) never defined what the new
+expansions use: `corfu-mode--set-explicitly' void in every mode hook.  `drgnx sync' compiles the packages again for this
+build and the guard does nothing then.  Non-nil when it denied DIR."
+  (let* ((dir (file-name-as-directory (expand-file-name (or dir (drgnx-elpa-dir)))))
+         (built (drgnx-pkg-elpa-build dir)))
+    (when (and (file-directory-p dir)
+               (if built (not (equal built (drgnx-pkg-emacs-build)))
+                 (file-expand-wildcards (concat dir "*/*.elc"))))
+      (add-to-list 'native-comp-jit-compilation-deny-list (concat "\\`" (regexp-quote dir)))
+      t)))
 
 ;;;; use-package :ensure only records
 
@@ -105,14 +141,25 @@ not the user asking to install."
         ((bound-and-true-p drgnx-guard--automatic) "automatic code")
         ((drgnx-pkg--in-hook-p) "a hook")))
 
+(defvar drgnx-pkg--holding-lock)
+(declare-function drgnx-pkg--take-sync-lock "drgnx-pkg" ())
+(declare-function drgnx-pkg--release-sync-lock "drgnx-pkg" (stamp))
+
 (defun drgnx-pkg--guard (orig &rest args)
   "Around ORIG (an install or refresh): signal when the call comes from startup, a timer, a hook or other
-automatic code; a command the user runs (M-x, a menu button, M-:) may install."
+automatic code; a command the user runs (M-x, a menu button, M-:) may install, holding the sync lock as `drgnx sync'
+does (one writer of the packages directory at a time).  While a sync holds it, the install is refused at once (a
+`user-error'): it never waits."
   (if-let* ((why (drgnx-pkg--automatic-context)))
       (signal 'drgnx-pkg-error
               (list (format "drgnx installs packages only with `drgnx sync' or a command you run (refused %s %S from %s)"
                             (if (symbolp orig) orig "an install") args why)))
-    (apply orig args)))
+    (require 'drgnx-pkg)
+    (if drgnx-pkg--holding-lock (apply orig args)   ; an install inside one (list-packages refreshing, then installing)
+      (let ((stamp (condition-case nil (drgnx-pkg--take-sync-lock)
+                     (drgnx-pkg-sync-busy (user-error "a sync is running; try again when it ends")))))
+        (unwind-protect (let ((drgnx-pkg--holding-lock t)) (apply orig args))
+          (drgnx-pkg--release-sync-lock stamp))))))
 
 (define-minor-mode drgnx-pkg-guard-mode
   "Refuse package installs and archive refreshes from automatic code (timers, hooks, startup)."

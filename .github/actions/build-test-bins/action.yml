@@ -1,6 +1,8 @@
 # The binaries drgnx's tests run against, built from the checkout and cached by its Cargo.lock: Ratatoskr with the test
 # hooks (some client tests need --idle-tick-ms) and ratatoskr-mock beside it (the gateway tests' provider,
-# test/unit/ai-gateway-test.el), and huginn's dump example (drgnx-huginn/differential-fresh-seed). The tests that need
+# test/unit/ai-gateway-test.el), with `term`, drgnx-term beside them too (the GUI tier's terminal rows: its test hub,
+# docs/develop/harness.md; the caller installs Zig and fetches libghostty-vt's tarballs
+# first), and huginn's dump example (drgnx-huginn/differential-fresh-seed). The tests that need
 # them fail rather than skip (test/no-skip.eld). Sets DRGNX_RATATOSKR_BIN and DRGNX_HUGINN_DUMP. Built on the runner
 # (its glibc is older than Fedora 45's, so they run in the test container). docs/develop/ci.md
 name: drgnx test binaries (build)
@@ -9,6 +11,9 @@ inputs:
   dir:
     description: The drgnx checkout
     default: drgnx
+  term:
+    description: Build drgnx-term too ("true"; needs Zig and libghostty-vt's pinned tarballs)
+    default: "false"
 runs:
   using: composite
   steps:
@@ -25,6 +30,11 @@ runs:
       env:
         DIR: ${{ inputs.dir }}
       run: echo "commit=$(git -C "$DIR" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+    # the pinned Rust, never the runner's moving `stable` (.github/ci/rust.sh)
+    - shell: bash
+      env:
+        DIR: ${{ inputs.dir }}
+      run: bash "$DIR/.github/ci/rust.sh"
     - id: rv
       shell: bash
       run: echo "v=$(rustc -V | tr -cs 'A-Za-z0-9.' '-')" >> "$GITHUB_OUTPUT"
@@ -48,23 +58,40 @@ runs:
       shell: bash
       working-directory: ${{ inputs.dir }}
       run: bash .github/ci/commit-times.sh runtime/target/.drgnx-built-from
+    # sccache (GitHub's cache as its store) for what the target cache above lacks; inline, not .github/actions/sccache:
+    # a composite action cannot name a sibling by a path that depends on `dir` (Nidhogg's calls check drgnx out elsewhere)
+    - if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+      uses: mozilla-actions/sccache-action@1583d6b38d7be47f593cb472781bbb21cab4321e # v0.0.11
+    - if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+      shell: bash
+      env:
+        RW: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'READ_WRITE' || 'READ_ONLY' }}   # only main writes
+      run: |
+        {
+          echo "RUSTC_WRAPPER=sccache"
+          echo "SCCACHE_GHA_ENABLED=true"
+          echo "SCCACHE_GHA_RW_MODE=${RW}"
+          echo "SCCACHE_IGNORE_SERVER_IO_ERROR=1"
+        } >> "$GITHUB_ENV"
     - name: Ratatoskr (test hooks), ratatoskr-mock, huginn's dump example
       id: build
       shell: bash
       env:
         DIR: ${{ inputs.dir }}
+        TERM_TOO: ${{ inputs.term }}
         CARGO_INCREMENTAL: "0"
         CARGO_PROFILE_DEV_DEBUG: line-tables-only   # as runtime.yml: half the kept build
       run: |
         cargo build --locked --manifest-path "$DIR/runtime/Cargo.toml" -p drgnx-ratatoskr -p domr \
           --features drgnx-ratatoskr/test-hooks --bin ratatoskr --bin ratatoskr-mock
+        if [ "$TERM_TOO" = true ]; then cargo build --locked --manifest-path "$DIR/runtime/Cargo.toml" -p drgnx-term --bins; fi
         cargo build --locked --manifest-path "$DIR/runtime/Cargo.toml" -p huginn --example dump
         t="$(cd "$DIR/runtime/target/debug" && pwd)"
         echo "DRGNX_RATATOSKR_BIN=$t/ratatoskr" >> "$GITHUB_ENV"
         echo "DRGNX_HUGINN_DUMP=$t/examples/dump" >> "$GITHUB_ENV"
     # --keep-bins: the job uploads or runs them next
     - id: prune
-      if: ${{ ((github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && steps.own.outputs.commit == (github.event.pull_request.head.sha || github.sha) && github.repository == 'Black-Dragon-Foundation/drgnx' && steps.bins-cache.outputs.cache-hit != 'true' }}
+      if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && runner.os == 'Linux' && steps.own.outputs.commit == (github.event.pull_request.head.sha || github.sha) && github.repository == 'Black-Dragon-Foundation/drgnx' && steps.bins-cache.outputs.cache-hit != 'true' }}
       shell: bash
       env:
         DIR: ${{ inputs.dir }}

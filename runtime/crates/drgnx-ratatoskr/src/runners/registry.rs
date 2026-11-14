@@ -1,0 +1,1488 @@
+//! The runner registry (docs/develop/hub.md, "Runners: the registry"): which machines run the hub's jobs, and how one
+//! becomes a runner.
+//!
+//! A runner is a [`Record`] the hub keeps (in the graph as kind `runner`, written by the hub only: [`UrdrStore`]) and
+//! a link in the queue ([`super::queue::Queue`]). [`Registry::add`] probes the host, refuses one that is the hub's own
+//! machine or lacks the runner contract (every missing item with its fix), copies the bundle for its architecture,
+//! pulls the images by digest, benches it, records it and connects it. [`Registry::remove`] stops our units and
+//! containers there and deletes the runner's folder.
+//!
+//! Everything the hub does on a host before the runner is connected goes through [`Transport`] as one command on its
+//! three sessions (`sh -c` with the script, its standard input and its exit code), so the user's own ssh config
+//! applies and nothing is installed but the one folder.
+
+use super::link;
+use super::queue::{Queue, RemoteRunner};
+use super::ssh_config;
+use super::transport::{Channels, LinkError, Transport};
+use super::{NAME_MAX, Remote, RunnerCfg};
+use forseti::{Accept as FAccept, RunnerTrust};
+use mimir::BoxFuture;
+use runstav::methods::runners::{
+    self as wire, Accept, AddParams, Effective, HostFacts, Missing, Probed, Profile, Trust,
+};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use sleipnir::proto::{Frame, FrameWriter, PROTO_VERSION};
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+
+/// What a runner's units, containers and files are named after, unless the user says otherwise. Letters, digits and
+/// inner dashes: a unit's and a slice's name hold it.
+pub const DEFAULT_PREFIX: &str = "drgnx";
+/// The runner's one folder, under the user's home there, unless the user says otherwise.
+pub const DEFAULT_ROOT: &str = ".drgnx-runner";
+/// A Mac runner's folder under the runner account's home: `.noindex` keeps Spotlight out of targets and caches.
+pub const MAC_ROOT: &str = ".drgnx-runner.noindex";
+/// The bundle folder (and Rust target) a Mac runner takes: Apple silicon only.
+pub const MAC_BUNDLE: &str = "aarch64-apple-darwin";
+
+/// What kind of host `runner add` was given.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HostOs {
+    Linux,
+    Macos,
+}
+
+/// HOST's kind from its `uname -m`, `uname -s` and (on a Mac) `sysctl.proc_translated`: the OS, the architecture the
+/// record keeps, and the folder under the bundles its bundle is in. A Rosetta shell on Apple silicon says x86_64 and
+/// translated 1; an Intel Mac, any other kernel or architecture is refused.
+fn host_kind(
+    host: &str,
+    machine: &str,
+    kernel: &str,
+    translated: &str,
+) -> Result<(HostOs, String, String), RegError> {
+    match kernel {
+        "Linux" => match machine {
+            "x86_64" | "aarch64" => Ok((HostOs::Linux, machine.into(), machine.into())),
+            other => Err(refused(format!(
+                "no runner bundle for {other} (x86_64 or aarch64)"
+            ))),
+        },
+        "Darwin" => match (machine, translated) {
+            ("arm64", _) | ("x86_64", "1") => {
+                Ok((HostOs::Macos, "aarch64".into(), MAC_BUNDLE.into()))
+            }
+            _ => Err(refused(format!(
+                "{host} is an Intel Mac ({machine}): Mac runners are Apple silicon only"
+            ))),
+        },
+        other => Err(refused(format!(
+            "{host} runs {other}: runners are Linux machines (a systemd user manager and rootless podman) or Macs with Apple silicon (macOS)"
+        ))),
+    }
+}
+
+/// How long a short command on a runner may take.
+const SHORT: Duration = Duration::from_secs(120);
+/// How long a copy, a pull or a bench may take.
+const LONG: Duration = Duration::from_secs(900);
+/// How long `serve` may take to answer a `probe` (its contract tools may take 30 s each).
+const PROBE: Duration = Duration::from_secs(150);
+
+/// The marker the last line of a command's output carries: its exit code.
+const EXIT: &str = "drgnx-exit:";
+
+/// Why a registry call did not do what it was asked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RegError {
+    /// The user's to fix: a name taken, a host that lacks the contract, the hub's own machine, a job still running.
+    Refused(String),
+    /// The runner or the link failed.
+    Failed(String),
+}
+
+impl std::fmt::Display for RegError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RegError::Refused(s) | RegError::Failed(s) => f.write_str(s),
+        }
+    }
+}
+
+impl std::error::Error for RegError {}
+
+fn refused(s: impl Into<String>) -> RegError {
+    RegError::Refused(s.into())
+}
+
+fn failed(s: impl Into<String>) -> RegError {
+    RegError::Failed(s.into())
+}
+
+impl From<LinkError> for RegError {
+    fn from(e: LinkError) -> RegError {
+        match e {
+            LinkError::Refused(_) => RegError::Refused(e.to_string()),
+            e => RegError::Failed(e.to_string()),
+        }
+    }
+}
+
+/// A runner as the hub keeps it. The facts are from the probe at `add` (and each check); the rest is the user's.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Record {
+    pub name: String,
+    pub host: String,
+    pub trust: Trust,
+    pub profile: Profile,
+    pub accept: Accept,
+    pub root: String,
+    pub prefix: String,
+    /// The folder under `<root>/bin/` the hub copied the bundle to: a hash of its `sleipnir`.
+    pub bundle: String,
+    pub arch: String,
+    pub os: String,
+    pub cores: u32,
+    pub mem_mib: u64,
+    pub disk_free_gb: u64,
+    pub podman: String,
+    pub linger: bool,
+    pub landlock_abi: u32,
+    #[serde(default)]
+    pub features: Vec<String>,
+    #[serde(default)]
+    pub speed: Option<f64>,
+    #[serde(default)]
+    pub checked: Option<f64>,
+    /// The image its health check's canary and its bench ran in, by digest.
+    #[serde(default)]
+    pub image: Option<String>,
+    /// What the user allowed at `add` beyond a Mac's dedicated standard account (`--allow-own-account`,
+    /// `--allow-admin`); `serve` gets them at every start.
+    #[serde(default)]
+    pub allow_own_account: bool,
+    #[serde(default)]
+    pub allow_admin: bool,
+    /// A workstation's reserve for its user, MiB, when the user set one (`--reserve-mib`); `serve` gets it at every
+    /// start.
+    #[serde(default)]
+    pub reserve_mib: Option<u64>,
+    /// The memory the host had available at its last probe, MiB: the runner list's room for jobs until the runner's
+    /// first ready.
+    #[serde(default)]
+    pub mem_available_mib: Option<u64>,
+}
+
+/// Where the records are kept.
+pub trait Store: Send + Sync {
+    fn list(&self) -> BoxFuture<'_, Result<Vec<Record>, String>>;
+    fn put<'a>(&'a self, r: &'a Record) -> BoxFuture<'a, Result<(), String>>;
+    fn remove<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), String>>;
+}
+
+/// Records in memory: the hub's tests and the fleet's.
+#[derive(Default)]
+pub struct MemStore(Mutex<BTreeMap<String, Record>>);
+
+impl Store for MemStore {
+    fn list(&self) -> BoxFuture<'_, Result<Vec<Record>, String>> {
+        Box::pin(async move {
+            Ok(self
+                .0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .values()
+                .cloned()
+                .collect())
+        })
+    }
+
+    fn put<'a>(&'a self, r: &'a Record) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            self.0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(r.name.clone(), r.clone());
+            Ok(())
+        })
+    }
+
+    fn remove<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            self.0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(name);
+            Ok(())
+        })
+    }
+}
+
+/// Records as entities of kind `runner` in the graph, written as `("hub", Class::System)`.
+pub struct UrdrStore(pub norn::store::CoordDb);
+
+impl Store for UrdrStore {
+    fn list(&self) -> BoxFuture<'_, Result<Vec<Record>, String>> {
+        Box::pin(async move {
+            let rows = self
+                .0
+                .read(|c| norn::read::runners::list(c, "runner"))
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(rows
+                .into_iter()
+                .filter_map(
+                    |(name, data)| match serde_json::from_value::<Record>(data) {
+                        Ok(r) => Some(r),
+                        Err(e) => {
+                            tracing::warn!("runners: the record of {name} is unreadable: {e}");
+                            None
+                        }
+                    },
+                )
+                .collect())
+        })
+    }
+
+    fn put<'a>(&'a self, r: &'a Record) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            let (name, data) = (
+                r.name.clone(),
+                serde_json::to_value(r).map_err(|e| e.to_string())?,
+            );
+            let meta =
+                urdr::graph::TxMeta::new("hub", urdr::graph::Class::System, "runners/registry");
+            self.0
+                .write(meta, move |tx| {
+                    norn::write::runners::put(tx, "runner", &name, data).map(|_| ())
+                })
+                .await
+                .map_err(|e| e.to_string())
+        })
+    }
+
+    fn remove<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            let name = name.to_string();
+            let meta =
+                urdr::graph::TxMeta::new("hub", urdr::graph::Class::System, "runners/registry");
+            self.0
+                .write(meta, move |tx| {
+                    norn::write::runners::remove(tx, "runner", &name)
+                })
+                .await
+                .map_err(|e| e.to_string())
+        })
+    }
+}
+
+/// What the registry needs from the hub.
+pub struct Cfg {
+    pub transport: Arc<dyn Transport>,
+    pub store: Arc<dyn Store>,
+    pub queue: Arc<Queue>,
+    /// The hub's id at a runner's `hello`.
+    pub hub_id: String,
+    /// This machine's boot id: a runner with the same one is this machine.
+    pub hub_boot_id: String,
+    /// The hub's `$XDG_RUNTIME_DIR`, where the generated ssh configs are (`ssh -G` reads one).
+    pub runtime_dir: PathBuf,
+    /// The built bundles: `<arch>/sleipnir` (and `drgnx-key`, `drgnx-px-<arch>-linux-musl`), as `drgnx build runner-bundle` leaves them.
+    pub bundles: PathBuf,
+    /// The images a new runner pulls, by digest (`name@sha256:...`); the first benches it and runs its canary.
+    pub images: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
+    /// The toolchains a Mac runner installs at `add` and `check` (every project's `drgnx-runners-mac-toolchains`).
+    pub toolchains: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
+}
+
+/// The hub's runners.
+pub struct Registry {
+    cfg: Cfg,
+    /// One change at a time: an `add`, `set` or `remove` of a runner never interleaves with another.
+    busy: tokio::sync::Mutex<()>,
+}
+
+/// What a command printed, and how it ended.
+struct Out {
+    code: i32,
+    stdout: String,
+    stderr: String,
+}
+
+/// S in single quotes, for a shell on the runner.
+fn quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+/// SCRIPT as the remote shell runs it: its output, then its exit status after the marker (`parse_out`). The status is
+/// SCRIPT's own, kept before the newline is printed (an `echo` in between would leave `$?` 0 for every script).
+fn wrapped(script: &str) -> String {
+    format!("( {script}\n); s=$?; echo; echo {EXIT}$s")
+}
+
+/// The output of a [`wrapped`] script: what it printed, and its exit status (-1 when unreadable); none without the marker.
+fn parse_out(text: &str) -> Option<(String, i32)> {
+    let at = text.rfind(EXIT)?;
+    Some((
+        text[..at].trim_end_matches('\n').trim_end().to_string(),
+        text[at + EXIT.len()..].trim().parse::<i32>().unwrap_or(-1),
+    ))
+}
+
+/// The tag a runner with PREFIX gives the image IMG it pulled by digest: `localhost/<prefix>-runner:<12 digits>`.
+/// Pulled by digest alone an image is dangling, and any `podman image prune` takes it from under the runner;
+/// `remove` takes the tag back (and so the image, unless something else holds it). IMG `@sha256:` gives the tag's
+/// leading part, which every such tag starts with.
+fn image_tag(prefix: &str, img: &str) -> String {
+    let digest = img.rsplit("@sha256:").next().unwrap_or("");
+    format!(
+        "localhost/{}-runner:{}",
+        prefix.to_ascii_lowercase(),
+        digest.get(..12).unwrap_or(digest)
+    )
+}
+
+/// The name a host gets when the user gives none: its first label, in the characters a name may have.
+pub fn default_name(host: &str) -> String {
+    let h = host.rsplit('@').next().unwrap_or(host);
+    let label = h.split('.').next().unwrap_or(h);
+    let name: String = label
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let name = name.trim_start_matches('-');
+    let name = &name[..name.len().min(NAME_MAX)];
+    if name.is_empty() {
+        "runner".into()
+    } else {
+        name.into()
+    }
+}
+
+/// What a refused host lacks, as one text: every item with its fix.
+pub fn refusal_text(missing: &[Missing]) -> String {
+    let mut s = String::from("this host doesn't meet the runner contract:");
+    for m in missing {
+        s.push_str(&format!("\n  - {}\n    fix: {}", m.what, m.fix));
+    }
+    s
+}
+
+fn forseti_trust(t: Trust) -> RunnerTrust {
+    match t {
+        Trust::Mine => RunnerTrust::Mine,
+        Trust::MyCloud => RunnerTrust::MyCloud,
+        Trust::Shared => RunnerTrust::Shared,
+    }
+}
+
+fn forseti_accept(a: Accept) -> FAccept {
+    match a {
+        Accept::All => FAccept::All,
+        Accept::Heavy => FAccept::Heavy,
+    }
+}
+
+fn profile_word(p: Profile) -> &'static str {
+    match p {
+        Profile::Dedicated => "dedicated",
+        Profile::Workstation => "workstation",
+    }
+}
+
+/// `serve`'s flags for what the user allowed of RECORD's account, and a workstation's set reserve.
+fn serve_flags(r: &Record) -> Vec<String> {
+    let mut f: Vec<String> = [
+        (r.allow_own_account, "--allow-own-account"),
+        (r.allow_admin, "--allow-admin"),
+    ]
+    .into_iter()
+    .filter(|(on, _)| *on)
+    .map(|(_, flag)| flag.to_string())
+    .collect();
+    if let Some(n) = r.reserve_mib {
+        f.extend(["--reserve-mib".to_string(), n.to_string()]);
+    }
+    f
+}
+
+/// The scheduler's limits for PROFILE with RESERVE_MIB (refused as [`forseti::Limits::with_reserve`] refuses).
+fn limits(profile: Profile, reserve_mib: Option<u64>) -> Result<forseti::Limits, String> {
+    let p = match profile {
+        Profile::Dedicated => forseti::Profile::Dedicated,
+        Profile::Workstation => forseti::Profile::Workstation,
+    };
+    forseti::Limits::for_profile(p, 0, 1).with_reserve(p, reserve_mib)
+}
+
+/// A reserve for the user is a workstation's, of at least [`forseti::MIN_RESERVE_MIB`].
+fn check_reserve(profile: Profile, reserve_mib: Option<u64>) -> Result<(), RegError> {
+    limits(profile, reserve_mib).map(|_| ()).map_err(refused)
+}
+
+/// Below this much memory for jobs, hardly a job fits: the runner list says the runner has no room.
+const ROOM_MIB: i64 = 512;
+
+/// What the runner list says of runner NAME when its floor and reserve leave no room for jobs in AVAILABLE_MIB: the
+/// numbers, and the ways out (dedicated, or a smaller reserve while the reserve is above the minimum), each with what it
+/// would leave. None while there is room, and for 0 (the runner couldn't read its memory).
+fn no_room(
+    name: &str,
+    profile: Profile,
+    reserve_mib: Option<u64>,
+    available_mib: u64,
+) -> Option<String> {
+    if available_mib == 0 {
+        return None;
+    }
+    let l = limits(profile, reserve_mib).ok()?;
+    let left =
+        |l: &forseti::Limits| available_mib as i64 - l.floor_mib as i64 - l.reserve_user_mib as i64;
+    let room = left(&l);
+    if room >= ROOM_MIB {
+        return None;
+    }
+    let mut m = format!(
+        "{name} has no room for jobs: {available_mib} MiB available, less the floor of {} MiB",
+        l.floor_mib
+    );
+    if profile == Profile::Dedicated {
+        m.push_str(&format!(
+            ", leaves {room} MiB; it takes jobs once more memory is free"
+        ));
+        return Some(m);
+    }
+    let d = limits(Profile::Dedicated, None).ok()?;
+    m.push_str(&format!(
+        " and your reserve of {} MiB, leaves {room} MiB. If nobody works at it, make it dedicated \
+         (drgnx runner profile {name} dedicated: floor {} MiB, no reserve, leaves {} MiB)",
+        l.reserve_user_mib,
+        d.floor_mib,
+        left(&d)
+    ));
+    let min = forseti::MIN_RESERVE_MIB;
+    if l.reserve_user_mib > min {
+        let small = limits(profile, Some(min)).ok()?;
+        m.push_str(&format!(
+            "; or keep a smaller reserve (drgnx runner profile {name} workstation --reserve-mib {min} leaves {} MiB)",
+            left(&small)
+        ));
+    }
+    m.push('.');
+    Some(m)
+}
+
+/// What `serve`'s `hello-ok` and `probe-result` said.
+struct Probe {
+    boot_id: String,
+    linger: bool,
+    facts: Option<sleipnir::proto::Facts>,
+    missing: Vec<Missing>,
+    limits: Option<String>,
+    features: Vec<String>,
+    /// The memory the host had available, MiB.
+    mem_available_mib: u64,
+}
+
+impl Registry {
+    pub fn new(cfg: Cfg) -> Registry {
+        Registry {
+            cfg,
+            busy: tokio::sync::Mutex::new(()),
+        }
+    }
+
+    fn base_cfg(&self, name: &str, host: &str) -> RunnerCfg {
+        let idle = vec!["true".to_string()];
+        RunnerCfg {
+            name: name.into(),
+            host: host.into(),
+            linger: true,
+            cloud: None,
+            remote: Remote {
+                control: idle.clone(),
+                bulk_in: idle.clone(),
+                bulk_out: idle,
+            },
+        }
+    }
+
+    /// The config that runs `serve` for RECORD on the runner.
+    fn serve_cfg(&self, r: &Record) -> RunnerCfg {
+        let mut c = self.base_cfg(&r.name, &r.host);
+        c.linger = r.linger;
+        c.remote.control = vec![
+            format!("{}/bin/{}/sleipnir", r.root, r.bundle),
+            "serve".into(),
+            "--root".into(),
+            r.root.clone(),
+            "--prefix".into(),
+            r.prefix.clone(),
+            "--hub-id".into(),
+            self.cfg.hub_id.clone(),
+            "--profile".into(),
+            profile_word(r.profile).into(),
+        ];
+        c.remote.control.extend(serve_flags(r));
+        // the sync channels are Task 20's; until then they hold the sessions open and carry nothing
+        c.remote.bulk_in = vec!["cat".into()];
+        c.remote.bulk_out = vec!["cat".into()];
+        c
+    }
+
+    /// SCRIPT on the runner CFG names, STDIN on its standard input, as one `sh -c` on the runner's control session.
+    async fn sh(
+        &self,
+        cfg: &RunnerCfg,
+        script: &str,
+        stdin: &[u8],
+        limit: Duration,
+    ) -> Result<Out, RegError> {
+        let mut c = cfg.clone();
+        c.remote.control = vec!["sh".into(), "-c".into(), wrapped(script)];
+        let channels = self.cfg.transport.open(&c).await?;
+        let Channels {
+            control,
+            bulk_in,
+            bulk_out,
+        } = channels;
+        let _held = (bulk_in, bulk_out);
+        let (mut tx, mut rx, err) = (control.tx, control.rx, control.err);
+        let run = async {
+            let write = async {
+                let _ = tx.write_all(stdin).await;
+                let _ = tx.shutdown().await;
+            };
+            let read = async {
+                let mut out = Vec::new();
+                let _ = rx.read_to_end(&mut out).await;
+                out
+            };
+            let read_err = async {
+                let mut out = Vec::new();
+                if let Some(mut e) = err {
+                    let _ = e.read_to_end(&mut out).await;
+                }
+                out
+            };
+            let ((), out, err) = tokio::join!(write, read, read_err);
+            (out, err)
+        };
+        let (out, err) = crate::clock::timeout(limit, run).await.map_err(|_| {
+            failed(format!(
+                "{}: the command took over {} s",
+                cfg.name,
+                limit.as_secs()
+            ))
+        })?;
+        let text = String::from_utf8_lossy(&out).into_owned();
+        let stderr = String::from_utf8_lossy(&err).trim().to_string();
+        let (body, code) = match parse_out(&text) {
+            Some(v) => v,
+            None => {
+                return Err(failed(format!(
+                    "{}: the command ended without an exit code: {stderr}",
+                    cfg.name
+                )));
+            }
+        };
+        Ok(Out {
+            code,
+            stdout: body,
+            stderr,
+        })
+    }
+
+    /// Like [`Registry::sh`], and a command that fails is a [`RegError::Failed`] with what it said.
+    async fn sh_ok(
+        &self,
+        cfg: &RunnerCfg,
+        script: &str,
+        stdin: &[u8],
+        limit: Duration,
+    ) -> Result<String, RegError> {
+        let o = self.sh(cfg, script, stdin, limit).await?;
+        if o.code == 0 {
+            Ok(o.stdout)
+        } else {
+            Err(failed(format!(
+                "{}: `{}` failed ({}): {}",
+                cfg.name,
+                script.lines().next().unwrap_or(""),
+                o.code,
+                if o.stderr.is_empty() {
+                    &o.stdout
+                } else {
+                    &o.stderr
+                }
+            )))
+        }
+    }
+
+    /// `serve` of RECORD's folder asked for its `hello-ok` and its `probe`, once, over one set of sessions that end
+    /// when it returns.
+    async fn probe_serve(&self, r: &Record) -> Result<Probe, RegError> {
+        let cfg = self.serve_cfg(r);
+        let channels = self.cfg.transport.open(&cfg).await?;
+        let Channels {
+            control,
+            bulk_in,
+            bulk_out,
+        } = channels;
+        let _held = (bulk_in, bulk_out, control.err);
+        let (mut tx, rx) = (control.tx, control.rx);
+        let mut w = FrameWriter::new(Vec::new());
+        for f in [
+            Frame::Hello {
+                version: PROTO_VERSION,
+                hub_id: self.cfg.hub_id.clone(),
+            },
+            Frame::Probe,
+        ] {
+            w.write(&f).map_err(|e| failed(e.to_string()))?;
+        }
+        tx.write_all(&w.into_inner())
+            .await
+            .map_err(|e| failed(format!("{}: {e}", cfg.name)))?;
+        tx.flush()
+            .await
+            .map_err(|e| failed(format!("{}: {e}", cfg.name)))?;
+        let mut rx = BufReader::new(rx);
+        let name = cfg.name.clone();
+        let read = async {
+            let (mut hello, mut result) = (None, None);
+            while hello.is_none() || result.is_none() {
+                match link::read_frame(&mut rx).await {
+                    Ok(Some(Frame::HelloOk {
+                        boot_id,
+                        linger,
+                        missing,
+                        ..
+                    })) => hello = Some((boot_id, linger, missing)),
+                    Ok(Some(Frame::ProbeResult {
+                        facts,
+                        missing,
+                        limits,
+                        features,
+                        mem_available_mib,
+                    })) => result = Some((facts, missing, limits, features, mem_available_mib)),
+                    Ok(Some(_)) => {}
+                    Ok(None) => {
+                        return Err(failed(format!("{name}: serve ended before it answered")));
+                    }
+                    Err(e) => return Err(failed(format!("{name}: {e}"))),
+                }
+            }
+            Ok((hello.expect("hello-ok"), result.expect("probe-result")))
+        };
+        let ((boot_id, linger, mut missing), (facts, more, limits, features, mem_available_mib)) =
+            crate::clock::timeout(PROBE, read).await.map_err(|_| {
+                failed(format!(
+                    "{}: serve didn't answer in {} s",
+                    cfg.name,
+                    PROBE.as_secs()
+                ))
+            })??;
+        for m in more {
+            if !missing.iter().any(|x| x.what == m.what) {
+                missing.push(m);
+            }
+        }
+        let missing = missing
+            .into_iter()
+            .map(|m| Missing {
+                what: m.what,
+                fix: m.fix,
+            })
+            .collect();
+        Ok(Probe {
+            boot_id,
+            linger,
+            facts,
+            missing,
+            limits,
+            features,
+            mem_available_mib,
+        })
+    }
+
+    /// What applies to HOST's connection under the generated config (`ssh -G`), and what the host is: the facts of
+    /// the runner contract, or everything it lacks. The host is not recorded; the bundle is put in its folder.
+    pub async fn probe_host(&self, host: &str) -> Result<Probed, RegError> {
+        let name = format!("probe-{:.8}", hex(&Sha256::digest(host.as_bytes())));
+        let rc = self.base_cfg(&name, host);
+        rc.check().map_err(refused)?;
+        let config = ssh_config::write(&self.cfg.runtime_dir, &name, &ssh_config::render(&rc))
+            .map_err(|e| failed(format!("writing the ssh config: {e}")))?;
+        let effective = super::transport::effective(&config, host).await?;
+        let effective = Effective {
+            forward_agent: effective.forward_agent,
+            forwards: effective.forwards,
+            proxy: effective.proxy,
+        };
+        let _g = self.busy.lock().await;
+        let staged = self.stage(&name, host, None, None, false, false).await;
+        self.cfg.transport.stop(&name).await;
+        let (rec, probe) = staged?;
+        let _ = rec;
+        Ok(match probe.facts {
+            Some(f) if all_missing(&probe).is_empty() => Probed {
+                effective,
+                facts: Some(host_facts(&f)),
+                missing: vec![],
+            },
+            _ => Probed {
+                effective,
+                facts: None,
+                missing: all_missing(&probe),
+            },
+        })
+    }
+
+    /// The host's architecture and home, the bundle copied into `<root>/bin/<version>/`, and `serve`'s probe of it:
+    /// a record with the facts filled in and no user choices (trust, profile) beyond the defaults and what the user
+    /// allowed of the account (OWN_ACCOUNT, ADMIN: `serve`'s contract reads them).
+    async fn stage(
+        &self,
+        name: &str,
+        host: &str,
+        root: Option<&str>,
+        prefix: Option<&str>,
+        own_account: bool,
+        admin: bool,
+    ) -> Result<(Record, Probe), RegError> {
+        let cfg = self.base_cfg(name, host);
+        cfg.check().map_err(refused)?;
+        // a Rosetta shell reports x86_64 on Apple silicon: `sysctl.proc_translated` says so
+        let basics = self
+            .sh_ok(
+                &cfg,
+                "uname -m; uname -s; printf '%s\\n' \"$HOME\"; \
+                 if [ \"$(uname -s)\" = Darwin ]; then sysctl -n sysctl.proc_translated 2>/dev/null; fi; true",
+                &[],
+                SHORT,
+            )
+            .await?;
+        let mut lines = basics.lines();
+        let (machine, kernel, home, translated) = (
+            lines.next().unwrap_or("").trim().to_string(),
+            lines.next().unwrap_or("").trim().to_string(),
+            lines.next().unwrap_or("").trim().to_string(),
+            lines.next().unwrap_or("").trim().to_string(),
+        );
+        let (os, arch, bundle_dir) = host_kind(host, &machine, &kernel, &translated)?;
+        let mac = os == HostOs::Macos;
+        let root = match root {
+            Some(r) => r.to_string(),
+            None if mac => format!("{home}/{MAC_ROOT}"),
+            None => format!("{home}/{DEFAULT_ROOT}"),
+        };
+        check_root(&root, &home)?;
+        let prefix = prefix.unwrap_or(DEFAULT_PREFIX).to_string();
+        let dir = self.cfg.bundles.join(&bundle_dir);
+        let sleipnir = tokio::fs::read(dir.join("sleipnir")).await.map_err(|_| {
+            refused(if mac {
+                format!(
+                    "no runner bundle for {MAC_BUNDLE}: build it on a Mac with `bin/drgnx build runner-bundle --target {MAC_BUNDLE}` (macOS CI builds it)"
+                )
+            } else {
+                format!(
+                    "no runner bundle for {arch}: build it with `bin/drgnx build runner-bundle --arch {arch}`"
+                )
+            })
+        })?;
+        let bundle = hex(&Sha256::digest(&sleipnir))[..16].to_string();
+        let px = format!("drgnx-px-{arch}-linux-musl");
+        // a Mac takes no keyed jobs and no containers: its bundle is `sleipnir` alone; its root is the runner account's
+        // own, 0700, and its checksum tool is `shasum`
+        let files: &[&str] = if mac {
+            &["sleipnir"]
+        } else {
+            &["sleipnir", "drgnx-key", px.as_str()]
+        };
+        let (sum, made) = if mac {
+            (
+                "shasum -a 256 -c -",
+                format!("mkdir -p {r}; chmod 700 {r}; ", r = quote(&root)),
+            )
+        } else {
+            ("sha256sum -c -", String::new())
+        };
+        for &file in files {
+            let bytes = if file == "sleipnir" {
+                sleipnir.clone()
+            } else {
+                match tokio::fs::read(dir.join(file)).await {
+                    Ok(b) => b,
+                    Err(_) => continue,
+                }
+            };
+            let sha = hex(&Sha256::digest(&bytes));
+            let script = format!(
+                "set -e; {made}d={d}; mkdir -p \"$d\"; head -c {len} > \"$d/{file}.part\"; \
+                 echo '{sha}  '\"$d/{file}.part\" | {sum} >/dev/null; chmod 755 \"$d/{file}.part\"; \
+                 mv \"$d/{file}.part\" \"$d/{file}\"",
+                d = quote(&format!("{root}/bin/{bundle}")),
+                len = bytes.len()
+            );
+            // exactly LEN bytes are read, so the copy never waits for the end of the input
+            self.sh_ok(&cfg, &script, &bytes, LONG).await?;
+        }
+        if mac {
+            // targets and caches are not backed up (the user's own setting decides nothing else); a Mac without Time
+            // Machine set up still takes the exclusion
+            let tm = format!(
+                "tmutil addexclusion {} >/dev/null 2>&1 || echo 'tmutil addexclusion failed' >&2",
+                quote(&root)
+            );
+            self.sh_ok(&cfg, &tm, &[], SHORT).await?;
+            self.mac_toolchains(&cfg, &root, &bundle).await;
+        }
+        let mut rec = Record {
+            name: name.into(),
+            host: host.into(),
+            trust: Trust::Mine,
+            profile: Profile::Dedicated,
+            accept: Accept::All,
+            root,
+            prefix,
+            bundle,
+            arch,
+            os: String::new(),
+            cores: 0,
+            mem_mib: 0,
+            disk_free_gb: 0,
+            podman: String::new(),
+            linger: true,
+            landlock_abi: 0,
+            features: vec![],
+            speed: None,
+            checked: None,
+            image: None,
+            allow_own_account: own_account,
+            allow_admin: admin,
+            reserve_mib: None,
+            mem_available_mib: None,
+        };
+        let probe = self.probe_serve(&rec).await?;
+        rec.linger = probe.linger;
+        rec.mem_available_mib = Some(probe.mem_available_mib);
+        if let Some(f) = &probe.facts {
+            rec.os = f.os.clone();
+            rec.cores = f.cores;
+            rec.mem_mib = f.mem_mib;
+            rec.disk_free_gb = f.disk_free_gb;
+            rec.podman = f.podman_version.clone();
+            rec.landlock_abi = f.landlock_abi;
+            rec.features = probe.features.clone();
+        }
+        Ok((rec, probe))
+    }
+
+    /// A Mac's toolchains: every project's pins installed into ROOT by `sleipnir tools` (the user's `mise`), as the
+    /// runner account and outside any job, before the probe reads them as `tool:` features. Nothing here refuses: a pin
+    /// that failed is logged and its jobs wait with the reason, and a Mac without `mise` fails the contract.
+    async fn mac_toolchains(&self, cfg: &RunnerCfg, root: &str, bundle: &str) {
+        let pins = (self.cfg.toolchains)();
+        if pins.is_empty() {
+            return;
+        }
+        let script = format!(
+            "{}/bin/{}/sleipnir tools --root {} {}",
+            quote(root),
+            quote(bundle),
+            quote(root),
+            pins.iter().map(|p| quote(p)).collect::<Vec<_>>().join(" ")
+        );
+        match self.sh_ok(cfg, &script, &[], LONG).await {
+            Ok(out) => {
+                let last = out.lines().rev().find(|l| l.trim_start().starts_with('{'));
+                let v: serde_json::Value =
+                    serde_json::from_str(last.unwrap_or("")).unwrap_or_default();
+                for o in v["outcomes"].as_array().into_iter().flatten() {
+                    if let Some(why) = o["failed"].as_str() {
+                        tracing::warn!("runners: {}: {} not installed: {why}", cfg.name, o["pin"]);
+                    }
+                }
+            }
+            Err(e) => tracing::warn!("runners: {}: the toolchains: {e:?}", cfg.name),
+        }
+    }
+
+    /// A host made a runner: the probe and the contract, the bundle, the images pulled by digest, a bench, the record,
+    /// the link.
+    pub async fn add(&self, p: AddParams) -> Result<wire::Runner, RegError> {
+        let _g = self.busy.lock().await;
+        let host = p.host.as_str().to_string();
+        let name = p
+            .name
+            .as_ref()
+            .map(|n| n.as_str().to_string())
+            .unwrap_or_else(|| default_name(&host));
+        self.base_cfg(&name, &host).check().map_err(refused)?;
+        check_reserve(p.profile.unwrap_or(Profile::Dedicated), p.reserve_mib)?;
+        let known = self.cfg.store.list().await.map_err(failed)?;
+        if known.iter().any(|r| r.name == name) {
+            return Err(refused(format!("{name} is a runner already")));
+        }
+        let staged = self
+            .stage(
+                &name,
+                &host,
+                p.root.as_ref().map(|r| r.as_str()),
+                p.prefix.as_ref().map(|r| r.as_str()),
+                p.allow_own_account,
+                p.allow_admin,
+            )
+            .await;
+        let (mut rec, probe) = match staged {
+            Ok(x) => x,
+            Err(e) => {
+                self.cfg.transport.stop(&name).await;
+                return Err(e);
+            }
+        };
+        let done = self.finish_add(&mut rec, &probe, &p).await;
+        if done.is_err() {
+            self.cfg.transport.stop(&name).await;
+        }
+        done?;
+        self.view(&rec).await
+    }
+
+    async fn finish_add(
+        &self,
+        rec: &mut Record,
+        probe: &Probe,
+        p: &AddParams,
+    ) -> Result<(), RegError> {
+        if !self.cfg.hub_boot_id.is_empty() && probe.boot_id == self.cfg.hub_boot_id {
+            return Err(refused(
+                "this is the hub's own machine; it already runs jobs as `local`",
+            ));
+        }
+        if !all_missing(probe).is_empty() {
+            return Err(refused(refusal_text(&all_missing(probe))));
+        }
+        rec.trust = p.trust;
+        rec.profile = p.profile.unwrap_or(Profile::Dedicated);
+        rec.reserve_mib = p.reserve_mib;
+        rec.accept = p.accept.unwrap_or(Accept::All);
+        let cfg = self.base_cfg(&rec.name, &rec.host);
+        let images = (self.cfg.images)();
+        for img in &images {
+            if !img.contains("@sha256:")
+                || img
+                    .chars()
+                    .any(|c| c.is_whitespace() || c.is_control() || c == '\'')
+            {
+                return Err(refused(format!(
+                    "the image {img:?} is not pinned by digest (name@sha256:...)"
+                )));
+            }
+            self.sh_ok(
+                &cfg,
+                &format!(
+                    "{{ podman image exists {img} || podman pull --quiet {img}; }} && podman tag {img} {tag}",
+                    img = quote(img),
+                    tag = quote(&image_tag(&rec.prefix, img)),
+                ),
+                &[],
+                LONG,
+            )
+            .await?;
+        }
+        if let Some(img) = images.first() {
+            rec.image = Some(img.clone());
+            rec.speed = Some(self.bench_run(rec, img).await?);
+        }
+        rec.checked = Some(crate::clock::wall_secs());
+        self.cfg.store.put(rec).await.map_err(failed)?;
+        if let Err(e) = self.connect(rec).await {
+            let _ = self.cfg.store.remove(&rec.name).await;
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    /// The reference workload under the runner's caps, in IMG: its speed.
+    async fn bench_run(&self, rec: &Record, img: &str) -> Result<f64, RegError> {
+        let cfg = self.base_cfg(&rec.name, &rec.host);
+        let script = format!(
+            "{}/bin/{}/sleipnir bench --root {} --image {}",
+            quote(&rec.root),
+            quote(&rec.bundle),
+            quote(&rec.root),
+            quote(img)
+        );
+        let out = self.sh_ok(&cfg, &script, &[], LONG).await?;
+        let line = out.lines().rev().find(|l| l.trim_start().starts_with('{'));
+        let result: serde_json::Value = serde_json::from_str(line.unwrap_or(""))
+            .map_err(|e| failed(format!("{}: the bench's answer isn't JSON: {e}", rec.name)))?;
+        result["speed"]
+            .as_f64()
+            .ok_or_else(|| failed(format!("{}: the bench's answer has no speed", rec.name)))
+    }
+
+    /// RECORD's runner linked into the queue: `serve` started over the transport, its session the queue's
+    /// ([`Queue::dial`]: a login the user must do, or a changed host key, puts it in `needs login`).
+    pub async fn connect(&self, rec: &Record) -> Result<(), RegError> {
+        let cfg = self.serve_cfg(rec);
+        if let Some(old) = self.cfg.queue.session(&rec.name) {
+            old.close().await;
+        }
+        self.cfg
+            .queue
+            .dial(&*self.cfg.transport, &cfg, self.remote(rec, &cfg))
+            .await?;
+        // what it offered at its last probe, until its next health check reads them again
+        self.cfg.queue.set_features(&rec.name, rec.features.clone());
+        Ok(())
+    }
+
+    fn remote(&self, rec: &Record, cfg: &RunnerCfg) -> RemoteRunner {
+        RemoteRunner {
+            name: rec.name.clone(),
+            trust: forseti_trust(rec.trust),
+            accept: forseti_accept(rec.accept),
+            os: if rec.os.starts_with("macos") {
+                forseti::Os::Macos
+            } else {
+                forseti::Os::Linux
+            },
+            grace_s: cfg.grace().as_secs(),
+            image: rec.image.clone(),
+        }
+    }
+
+    /// Every record linked, as the hub starts. A runner that can't be reached stays recorded (and `unreachable` in
+    /// the list); `runners/check` links it again.
+    pub async fn connect_all(&self) {
+        let recs = match self.cfg.store.list().await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("runners: the registry is unreadable: {e}");
+                return;
+            }
+        };
+        for rec in recs {
+            if let Err(e) = self.connect(&rec).await {
+                tracing::warn!("runners: {} isn't connected: {e}", rec.name);
+            }
+        }
+    }
+
+    /// Every runner whose link is lost dialled again on the backoff of [`super::transport::Redial`], for as long as
+    /// the hub runs; a login or a host key it needs stays the user's to do (those runners are not `unreachable`).
+    pub async fn redial_lost(self: Arc<Self>) {
+        let mut clocks: std::collections::HashMap<String, super::transport::RedialClock> =
+            Default::default();
+        loop {
+            crate::clock::sleep(std::time::Duration::from_secs(1)).await;
+            let now = crate::clock::wall_secs() as u64;
+            let Ok(recs) = self.cfg.store.list().await else {
+                continue;
+            };
+            clocks.retain(|n, _| recs.iter().any(|r| &r.name == n));
+            for rec in recs {
+                let out = self.cfg.queue.needs_redial(&rec.name);
+                if !clocks.entry(rec.name.clone()).or_default().tick(out, now) {
+                    continue;
+                }
+                let _g = self.busy.lock().await;
+                match self.connect(&rec).await {
+                    Ok(()) => tracing::info!("runners: {} is dialled again", rec.name),
+                    Err(e) => tracing::info!("runners: {} is still out of reach: {e}", rec.name),
+                }
+            }
+        }
+    }
+
+    async fn record(&self, name: &str) -> Result<Record, RegError> {
+        self.cfg
+            .store
+            .list()
+            .await
+            .map_err(failed)?
+            .into_iter()
+            .find(|r| r.name == name)
+            .ok_or_else(|| refused(format!("no runner named {name}")))
+    }
+
+    /// The runner as the list shows it.
+    async fn view(&self, r: &Record) -> Result<wire::Runner, RegError> {
+        let row = self.cfg.queue.runner(&r.name);
+        let (state, strikes, last_strike) = match row {
+            Some(row) => (row.state, row.strikes, row.last),
+            None => ("not connected".to_string(), 0, None),
+        };
+        let jobs = self.cfg.queue.runner_jobs(&r.name);
+        Ok(wire::Runner {
+            name: r.name.clone(),
+            host: r.host.clone(),
+            trust: r.trust,
+            profile: r.profile,
+            accept: r.accept,
+            root: r.root.clone(),
+            prefix: r.prefix.clone(),
+            arch: r.arch.clone(),
+            os: r.os.clone(),
+            cores: r.cores,
+            mem_mib: r.mem_mib,
+            disk_free_gb: r.disk_free_gb,
+            podman: r.podman.clone(),
+            linger: r.linger,
+            landlock_abi: r.landlock_abi,
+            features: r.features.clone(),
+            speed: r.speed,
+            state,
+            strikes,
+            last_strike,
+            jobs,
+            checked: r.checked,
+            reserve_mib: r.reserve_mib,
+            no_room: (jobs == 0)
+                .then(|| {
+                    let available = self
+                        .cfg
+                        .queue
+                        .available_mib(&r.name)
+                        .or(r.mem_available_mib)?;
+                    no_room(&r.name, r.profile, r.reserve_mib, available)
+                })
+                .flatten(),
+        })
+    }
+
+    /// The runners, by name.
+    pub async fn list(&self) -> Result<Vec<wire::Runner>, RegError> {
+        let mut out = Vec::new();
+        for r in self.cfg.store.list().await.map_err(failed)? {
+            out.push(self.view(&r).await?);
+        }
+        Ok(out)
+    }
+
+    /// NAME's health check now: a Mac's toolchains installed again (any new pin), linked again when its link is gone,
+    /// then the queue's check at its next tick.
+    pub async fn check(&self, name: &str) -> Result<wire::Runner, RegError> {
+        let _g = self.busy.lock().await;
+        let rec = self.record(name).await?;
+        // the sessions are free for one command only while serve isn't running on them (a Mac's attempts outlive
+        // the link); the probe at the new link reads the toolchains
+        let tools = rec.os.starts_with("macos") && !(self.cfg.toolchains)().is_empty();
+        if tools {
+            if let Some(old) = self.cfg.queue.session(name) {
+                old.close().await;
+            }
+            let cfg = self.base_cfg(&rec.name, &rec.host);
+            self.mac_toolchains(&cfg, &rec.root, &rec.bundle).await;
+        }
+        let linked = self
+            .cfg
+            .queue
+            .runner(name)
+            .is_some_and(|r| r.state != "unreachable" && r.state != "sleeping");
+        if tools || !linked {
+            self.connect(&rec).await?;
+        }
+        self.cfg.queue.check_now(name);
+        self.view(&rec).await
+    }
+
+    /// NAME benched again.
+    pub async fn bench(&self, name: &str) -> Result<wire::Runner, RegError> {
+        let _g = self.busy.lock().await;
+        let mut rec = self.record(name).await?;
+        let img = rec.image.clone().ok_or_else(|| {
+            refused(format!(
+                "{name} has no image to bench in: set drgnx-runners-image, then add it again"
+            ))
+        })?;
+        // the sessions are free for one command only while serve isn't running on them
+        if let Some(old) = self.cfg.queue.session(name) {
+            old.close().await;
+        }
+        let speed = self.bench_run(&rec, &img).await;
+        let again = self.connect(&rec).await;
+        rec.speed = Some(speed?);
+        self.cfg.store.put(&rec).await.map_err(failed)?;
+        again?;
+        self.view(&rec).await
+    }
+
+    /// NAME's trust, profile or accept changed; a new profile starts `serve` again.
+    pub async fn set(&self, p: wire::SetParams) -> Result<wire::Runner, RegError> {
+        let _g = self.busy.lock().await;
+        let mut rec = self.record(p.name.as_str()).await?;
+        let profile = p.profile.unwrap_or(rec.profile);
+        // a new profile without a reserve takes the profile's own
+        let reserve = match (p.reserve_mib, profile == rec.profile) {
+            (Some(n), _) => Some(n),
+            (None, true) => rec.reserve_mib,
+            (None, false) => None,
+        };
+        check_reserve(profile, reserve)?;
+        let new_profile = profile != rec.profile || reserve != rec.reserve_mib;
+        rec.trust = p.trust.unwrap_or(rec.trust);
+        rec.profile = profile;
+        rec.reserve_mib = reserve;
+        rec.accept = p.accept.unwrap_or(rec.accept);
+        self.cfg.store.put(&rec).await.map_err(failed)?;
+        self.cfg.queue.set_runner(
+            &rec.name,
+            forseti_trust(rec.trust),
+            forseti_accept(rec.accept),
+        );
+        if new_profile {
+            self.connect(&rec).await?;
+        }
+        self.view(&rec).await
+    }
+
+    /// NAME back in rotation, with no strikes.
+    pub async fn unbench(&self, name: &str) -> Result<wire::Runner, RegError> {
+        let _g = self.busy.lock().await;
+        let rec = self.record(name).await?;
+        self.cfg.queue.unbench(name);
+        self.view(&rec).await
+    }
+
+    /// NAME removed: our units, slices and containers there stopped, its folder deleted, its link and record gone.
+    /// Refused while a job is on it.
+    pub async fn remove(&self, name: &str) -> Result<(), RegError> {
+        let _g = self.busy.lock().await;
+        let rec = self.record(name).await?;
+        let session = self.cfg.queue.session(name);
+        self.cfg.queue.remove_runner(name).map_err(refused)?;
+        if let Some(s) = session {
+            s.close().await;
+        }
+        let cfg = self.base_cfg(&rec.name, &rec.host);
+        let script = format!(
+            "podman ps -a --filter label=drgnx.runner={hub} --format '{{{{.Names}}}}' | grep -E '^{prefix}-' | xargs -r podman rm -f; \
+             systemctl --user list-units --all --plain --no-legend '{prefix}*' | awk '{{print $1}}' | xargs -r systemctl --user stop; \
+             systemctl --user list-units --all --plain --no-legend 'drgnx-runner*.slice' | awk '{{print $1}}' | xargs -r systemctl --user stop; \
+             systemctl --user reset-failed 2>/dev/null; \
+             podman images --format '{{{{.Repository}}}}:{{{{.Tag}}}}' | grep -F {tags} | xargs -r podman rmi >/dev/null 2>&1; \
+             rm -r -- {root}",
+            hub = self.cfg.hub_id,
+            prefix = rec.prefix,
+            tags = quote(&image_tag(&rec.prefix, "@sha256:")),
+            root = quote(&rec.root),
+        );
+        let gone = self.sh_ok(&cfg, &script, &[], LONG).await;
+        self.cfg.transport.stop(name).await;
+        gone?;
+        self.cfg.store.remove(name).await.map_err(failed)
+    }
+}
+
+/// A root the hub may delete: absolute, plain characters, below the user's home or two folders deep, never the home.
+fn check_root(root: &str, home: &str) -> Result<(), RegError> {
+    let plain = root
+        .chars()
+        .all(|c| !c.is_control() && c != '\'' && c != '"' && c != '\\');
+    let depth = root.split('/').filter(|s| !s.is_empty()).count();
+    if !root.starts_with('/') || !plain || root.contains("/../") || root.ends_with("/..") {
+        return Err(refused(format!(
+            "the runner folder {root:?} must be an absolute path without quotes, backslashes or `..`"
+        )));
+    }
+    if root.trim_end_matches('/') == home.trim_end_matches('/') || depth < 2 {
+        return Err(refused(format!(
+            "the runner folder {root:?} must be a folder of its own, never the home folder or a top-level one"
+        )));
+    }
+    Ok(())
+}
+
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+fn host_facts(f: &sleipnir::proto::Facts) -> HostFacts {
+    HostFacts {
+        arch: f.arch.clone(),
+        os: f.os.clone(),
+        cores: f.cores,
+        mem_mib: f.mem_mib,
+        disk_free_gb: f.disk_free_gb,
+        podman: f.podman_version.clone(),
+        linger: f.linger,
+        landlock_abi: f.landlock_abi,
+        battery: f.battery,
+    }
+}
+
+/// Everything a probe found missing, `limits` included.
+fn all_missing(p: &Probe) -> Vec<Missing> {
+    let mut m = p.missing.clone();
+    if let Some(why) = &p.limits {
+        m.push(Missing {
+            what: format!("container jobs can't be capped here: {why}"),
+            fix: "run podman on the systemd cgroup manager with the memory, pids and cpu controllers delegated to the user".into(),
+        });
+    }
+    if p.facts.is_none() && m.is_empty() {
+        m.push(Missing {
+            what: "the host's probe returned no facts".into(),
+            fix: "run `sleipnir serve` there by hand and read what it says".into(),
+        });
+    }
+    m
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // [D] a local `sh` runs the wrapper as the runner's shell does
+    #[test]
+    fn a_remote_scripts_exit_status_is_its_own() {
+        for (script, out, code) in [
+            ("true", "", 0),
+            ("false", "", 1),
+            ("echo hi; exit 3", "hi", 3),
+            ("printf 'a\\nb'; false", "a\nb", 1),
+        ] {
+            let o = std::process::Command::new("sh")
+                .args(["-c", &wrapped(script)])
+                .output()
+                .unwrap();
+            let got = parse_out(&String::from_utf8_lossy(&o.stdout));
+            assert_eq!(got, Some((out.to_string(), code)), "{script}");
+        }
+        assert_eq!(parse_out("no marker"), None);
+    }
+
+    // [D] pure
+    #[test]
+    fn a_name_comes_from_the_hosts_first_label() {
+        assert_eq!(default_name("desktop"), "desktop");
+        assert_eq!(default_name("me@build-1.tail1234.ts.net"), "build-1");
+        assert_eq!(default_name("10.0.0.7"), "10");
+        assert_eq!(default_name("-x"), "x");
+        assert_eq!(default_name("..."), "runner");
+        assert_eq!(default_name(&"a".repeat(80)).len(), NAME_MAX);
+    }
+
+    // [D] pure
+    #[test]
+    fn the_runner_folder_is_never_the_home_or_a_top_level_folder() {
+        assert!(check_root("/users/u/.drgnx-runner", "/users/u").is_ok());
+        assert!(check_root("/srv/runner", "/users/u").is_ok());
+        for bad in [
+            "/",
+            "/users/u",
+            "/users/u/",
+            "/tmp",
+            "rel/x",
+            "/a/../b",
+            "/a/b'c",
+            "/a/\nb",
+        ] {
+            assert!(check_root(bad, "/users/u").is_err(), "{bad:?}");
+        }
+    }
+
+    // [D] pure
+    #[test]
+    fn a_refusal_lists_every_item_with_its_fix() {
+        let t = refusal_text(&[
+            Missing {
+                what: "cgroup v2 controllers memory pids cpu delegated".into(),
+                fix: "enable delegation".into(),
+            },
+            Missing {
+                what: "git".into(),
+                fix: "install git".into(),
+            },
+        ]);
+        for want in ["cgroup v2", "enable delegation", "git", "install git"] {
+            assert!(t.contains(want), "{want}: {t}");
+        }
+    }
+
+    // [D] pure: a record kept before the allowances existed has none; each allowance becomes its `serve` flag
+    #[test]
+    fn the_accounts_allowances_reach_serve() {
+        let mut r: Record = serde_json::from_value(serde_json::json!({
+            "name": "m", "host": "h", "trust": "mine", "profile": "dedicated", "accept": "all", "root": "/r",
+            "prefix": "drgnx-", "bundle": "b", "arch": "aarch64", "os": "macos 15.6", "cores": 10, "mem_mib": 1,
+            "disk_free_gb": 1, "podman": "", "linger": true, "landlock_abi": 0
+        }))
+        .unwrap();
+        assert!(serve_flags(&r).is_empty());
+        r.allow_admin = true;
+        assert_eq!(serve_flags(&r), ["--allow-admin"]);
+        r.allow_own_account = true;
+        assert_eq!(serve_flags(&r), ["--allow-own-account", "--allow-admin"]);
+        r.reserve_mib = Some(2048);
+        assert_eq!(
+            serve_flags(&r),
+            [
+                "--allow-own-account",
+                "--allow-admin",
+                "--reserve-mib",
+                "2048"
+            ]
+        );
+    }
+
+    // [D] pure: a reserve is a workstation's, of at least 1024 MiB; anything else is refused at add and set
+    #[test]
+    fn a_reserve_below_1024_or_off_a_workstation_is_refused() {
+        assert!(check_reserve(Profile::Workstation, Some(1024)).is_ok());
+        assert!(check_reserve(Profile::Workstation, None).is_ok());
+        assert!(check_reserve(Profile::Dedicated, None).is_ok());
+        for (p, n) in [
+            (Profile::Workstation, 1023),
+            (Profile::Workstation, 0),
+            (Profile::Dedicated, 2048),
+        ] {
+            assert!(
+                matches!(check_reserve(p, Some(n)), Err(RegError::Refused(_))),
+                "{p:?} {n}"
+            );
+        }
+    }
+
+    // [D] pure: a runner whose floor and reserve leave no memory for jobs says so with the numbers and both ways out
+    // (dedicated, or a smaller reserve and what it would leave); one with room says nothing; a dedicated runner under
+    // its floor says only that
+    #[test]
+    fn no_room_for_jobs_is_said_with_the_numbers_and_the_ways_out() {
+        // the CI Mac of round 17: 5376 MiB available, a workstation's 4096 + 1536
+        let m = no_room("mac", Profile::Workstation, None, 5376).unwrap();
+        for want in [
+            "5376 MiB",
+            "4096 MiB",
+            "1536 MiB",
+            "-256 MiB",
+            "drgnx runner profile mac dedicated",
+            "drgnx runner profile mac workstation --reserve-mib 1024",
+            "--reserve-mib",
+            "2816 MiB",
+        ] {
+            assert!(m.contains(want), "{want}: {m}");
+        }
+        assert_eq!(no_room("mac", Profile::Workstation, None, 16000), None);
+        assert_eq!(no_room("mac", Profile::Workstation, Some(1024), 5376), None);
+        // 0 is a runner that couldn't read its memory: nothing is said from a read error
+        assert_eq!(no_room("mac", Profile::Workstation, None, 0), None);
+        let d = no_room("box", Profile::Dedicated, None, 1500).unwrap();
+        assert!(
+            d.contains("2048 MiB") && !d.contains("--reserve-mib"),
+            "{d}"
+        );
+    }
+
+    // [D] pure
+    #[test]
+    fn quoting_keeps_a_word_one_word() {
+        assert_eq!(quote("a b"), "'a b'");
+        assert_eq!(quote("it's"), r"'it'\''s'");
+    }
+}

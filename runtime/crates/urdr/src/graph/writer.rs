@@ -307,6 +307,8 @@ impl WriterHandle {
         R: Serialize + DeserializeOwned + Send + 'static,
         F: for<'t, 'c> FnOnce(&'t mut Tx<'c>) -> Result<R, WriteError> + Send + 'static,
     {
+        #[cfg(feature = "test-hooks")]
+        let _waiting = crate::wait::begin();
         let permit = self
             .permits
             .clone()
@@ -331,6 +333,8 @@ impl WriterHandle {
 
     /// Run M on the writer thread between batches, outside a transaction.
     pub async fn maintain(&self, m: Maintenance) -> Result<ScrubReport, WriteError> {
+        #[cfg(feature = "test-hooks")]
+        let _waiting = crate::wait::begin();
         let (reply, answer) = oneshot::channel();
         self.tx
             .send(Msg::Maintain(m, reply))
@@ -341,6 +345,8 @@ impl WriterHandle {
     /// The hub's schema tick: run the opening rule again while `NotReady`, and re-open when the file at the path is
     /// another file than the one opened.
     pub async fn tick(&self) {
+        #[cfg(feature = "test-hooks")]
+        let _waiting = crate::wait::begin();
         let (reply, answer) = oneshot::channel();
         if self.tx.send(Msg::Tick(reply)).is_ok() {
             let _ = answer.await;

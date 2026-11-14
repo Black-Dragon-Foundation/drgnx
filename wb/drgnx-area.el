@@ -23,23 +23,28 @@
 (defface drgnx-wb-tab '((t :inherit tab-line-tab-inactive)) "A tab in an area's tab row." :group 'drgnx)
 (defface drgnx-wb-tab-current '((t :inherit tab-line-tab-current)) "The shown tab in an area's tab row." :group 'drgnx)
 
-(defvar drgnx-wb--areas nil "Alist AREA → plist (:side SIDE :size N :tabs ((TAB . PLIST) …)).")
+(defvar drgnx-wb--areas nil "Alist AREA → plist (:side SIDE :size N :lone LONE :tabs ((TAB . PLIST) …)).")
 
-(cl-defun drgnx-wb-define-area (area &key side size)
-  "Define AREA on SIDE (`bottom' or `right'), SIZE lines or columns the first time it shows."
+(cl-defun drgnx-wb-define-area (area &key side size lone)
+  "Define AREA on SIDE (`bottom' or `right'), SIZE lines or columns the first time it shows.  LONE non-nil: no tab
+row while the shown tab is the only one with content (`drgnx-area--lone-p')."
   (setf (alist-get area drgnx-wb--areas)
-        (list :side side :size size :tabs (plist-get (alist-get area drgnx-wb--areas) :tabs)))
+        (list :side side :size size :lone lone :tabs (plist-get (alist-get area drgnx-wb--areas) :tabs)))
   area)
 
-(cl-defun drgnx-wb-define-tab (area tab &key title placeholder)
-  "Add TAB to AREA, titled TITLE; PLACEHOLDER returns the buffer shown while the tab has none.
+(cl-defun drgnx-wb-define-tab (area tab &key title icon placeholder actions)
+  "Add TAB to AREA, titled TITLE; ICON (an icon name, `drgnx-look-icon') shows before the title; PLACEHOLDER returns
+the buffer shown while the tab has none.
+ACTIONS, a function of no arguments, returns the tab's own pieces (a string, or nil for none), drawn at the right of
+the tab row before its ✕ while the tab is shown; the tab's module calls `drgnx-wb-area-redraw' when they change.
 Called from a module's setup, the definition claims the tab and records its undo: the tab it
 replaced put back in the same place, or `drgnx-wb-undefine-tab' — only while the tab is still the one
 defined here.  Two modules defining the same tab may be torn down in either order."
   (let* ((rec (drgnx-modules--recording-p))
          (spec (alist-get area drgnx-wb--areas)) (tabs (copy-alist (plist-get spec :tabs)))
          (previous (cdr (assq tab tabs)))
-         (props (list :title (or title (capitalize (symbol-name tab))) :placeholder placeholder)))
+         (props (list :title (or title (capitalize (symbol-name tab))) :icon icon :placeholder placeholder
+                      :actions actions)))
     (if (assq tab tabs) (setf (alist-get tab tabs) props)
       (setq tabs (append tabs (list (cons tab props)))))         ; in the order they are defined
     (setf (alist-get area drgnx-wb--areas) (plist-put spec :tabs tabs))
@@ -81,6 +86,10 @@ A window that shows the tab's current placeholder (the module's) shows the resto
       (with-selected-frame frame
         (set-window-parameter w 'header-line-format (drgnx-area--tab-row area))))))
 
+(defun drgnx-wb-area-redraw (area)
+  "Draw AREA's tab row again in every frame that shows it: its shown tab's actions changed."
+  (drgnx-area--redraw-rows area))
+
 (defun drgnx-wb-undefine-tab (area tab)
   "Remove TAB from AREA.  Where the area shows TAB it shows the next tab instead (the one before,
 for the last), or hides when TAB was its only one; the frame's saved buffer for TAB is dropped.
@@ -105,8 +114,8 @@ Returns non-nil when TAB was defined."
     (and pos t)))
 
 (defun drgnx-wb-area-window (area &optional frame)
-  "The window showing AREA on FRAME, or nil."
-  (seq-find (lambda (w) (eq (window-parameter w 'drgnx-role) area)) (window-list frame 'nomini)))
+  "The window showing AREA on FRAME (default: `drgnx-wb-frame'), or nil."
+  (seq-find (lambda (w) (eq (window-parameter w 'drgnx-role) area)) (window-list (or frame (drgnx-wb-frame)) 'nomini)))
 
 ;;;; Per-frame state: the shown tab, and each tab's buffer, start and point
 
@@ -131,13 +140,29 @@ Returns non-nil when TAB was defined."
             (list (window-buffer window) (window-start window) (window-point window)))
       (drgnx-area--set-state area (plist-put (copy-sequence state) :tabs tabs)))))
 
+(defvar-local drgnx-area--placeholder-p nil "Non-nil in a buffer an area shows for a tab that has none of its own.")
+(put 'drgnx-area--placeholder-p 'permanent-local t)
+
 (defun drgnx-area--placeholder (area tab)
-  (let ((fn (plist-get (alist-get tab (plist-get (alist-get area drgnx-wb--areas) :tabs)) :placeholder)))
-    (if fn (funcall fn)
-      (or (get-buffer (format " *drgnx %s*" (or tab area)))
-          (with-current-buffer (get-buffer-create (format " *drgnx %s*" (or tab area)) t)
-            (special-mode)
-            (current-buffer))))))
+  (let* ((fn (plist-get (alist-get tab (plist-get (alist-get area drgnx-wb--areas) :tabs)) :placeholder))
+         (buf (if fn (funcall fn)
+                (or (get-buffer (format " *drgnx %s*" (or tab area)))
+                    (with-current-buffer (get-buffer-create (format " *drgnx %s*" (or tab area)) t)
+                      (special-mode)
+                      (current-buffer))))))
+    (with-current-buffer buf (setq drgnx-area--placeholder-p t))
+    buf))
+
+(defun drgnx-area--content-p (buffer)
+  (and (buffer-live-p buffer) (not (buffer-local-value 'drgnx-area--placeholder-p buffer))))
+
+(defun drgnx-area--lone-p (area)
+  "Whether AREA's shown tab is the only one with content: its window shows a buffer of its own (not a placeholder)
+and no other tab left one."
+  (let ((shown (drgnx-wb-area-tab area)) (w (drgnx-wb-area-window area)))
+    (and w (drgnx-area--content-p (window-buffer w))
+         (not (seq-some (lambda (saved) (and (not (eq (car saved) shown)) (drgnx-area--content-p (nth 1 saved))))
+                        (plist-get (drgnx-area--state area) :tabs))))))
 
 ;;;; The tab row
 
@@ -158,17 +183,75 @@ Returns non-nil when TAB was defined."
               (area (get-text-property (cdr s) 'drgnx-area (car s))))
     (drgnx-wb-area-hide area)))
 
+(defvar-local drgnx-area-own-title nil
+  "Non-nil in a buffer that draws its own title row (the Work space's tiles): an area shows no tab row over it.  A
+string is the title the area draws itself, in its row with the area's close, in place of the tabs.")
+
 (defun drgnx-area--tab-row (area)
-  "AREA's tab row, ending in the ✕ that hides it; set as a window parameter, so it is built when the tab changes."
-  (let ((shown (drgnx-wb-area-tab area)))
-    (drgnx-wb-header-with-close
-     (mapconcat (lambda (tab)
-                  (propertize (format " %s " (plist-get (cdr tab) :title))
-                              'face (if (eq (car tab) shown) 'drgnx-wb-tab-current 'drgnx-wb-tab)
-                              'drgnx-tab (cons area (car tab)) 'mouse-face 'highlight
-                              'local-map drgnx-area--tab-map 'help-echo "Show this tab"))
-                (plist-get (alist-get area drgnx-wb--areas) :tabs) " ")
-     #'drgnx-area--close-click "Close (Esc, q)" 'drgnx-area area)))
+  "AREA's tab row, ending in the ✕ that hides it; set as a window parameter, so it is built when the tab changes.
+`none' (no row) in an area defined with LONE while its shown tab is the only one with content, and over a buffer with
+its own title (`drgnx-area-own-title')."
+  (let* ((shown (drgnx-wb-area-tab area)) (tabs (plist-get (alist-get area drgnx-wb--areas) :tabs))
+         (fn (plist-get (alist-get shown tabs) :actions))
+         (actions (and fn (funcall fn)))
+         (w (drgnx-wb-area-window area)))
+    (if (or (and w (buffer-local-value 'drgnx-area-own-title (window-buffer w)))
+            (and (plist-get (alist-get area drgnx-wb--areas) :lone) (drgnx-area--lone-p area)))
+        (let ((own (and w (buffer-local-value 'drgnx-area-own-title (window-buffer w)))))
+          (if (stringp own) (drgnx-area--row-with-close own area) 'none))
+      (drgnx-area--row-with-close
+       (concat
+        (mapconcat (lambda (tab)
+                     (let ((face (if (eq (car tab) shown) 'drgnx-wb-tab-current 'drgnx-wb-tab))
+                           (icon (plist-get (cdr tab) :icon)))
+                       ;; debugging.html `.pt': the icon is `.i.sm', 14 px, coloured as the title
+                       (propertize (concat " " (if icon (concat (drgnx-look-icon icon face 14) " ") "")
+                                           (plist-get (cdr tab) :title) " ")
+                                   'face face 'drgnx-tab (cons area (car tab)) 'mouse-face 'highlight
+                                   'local-map drgnx-area--tab-map 'help-echo "Show this tab")))
+                   tabs " ")
+        (drgnx-area--actions actions area))
+       area))))
+
+(defun drgnx-area--close (area)
+  "AREA's close on its tab row: the kit's close button (face, click, help), drawn as the Lucide x at 16 px
+\(debugging.html `.ptabs .ib') where icons are images."
+  (let ((b (drgnx-wb-close-button #'drgnx-area--close-click "Close (Esc, q)" 'drgnx-area area))
+        (icon (drgnx-look-icon 'x 'drgnx-ui-close 16)))
+    (if-let* ((img (get-text-property 0 'display icon))) (propertize b 'display img) b)))
+
+(defun drgnx-area--row-with-close (title area)
+  "TITLE, then AREA's close at the right edge, 8 px in (`.ptabs' padding), on the bar."
+  (let ((close (drgnx-area--close area)))
+    (drgnx-wb-bar (concat title (propertize " " 'display `(space :align-to (- right (,(drgnx-area--close-px close)))))
+                          ;; the pad is the button's too: a click at the row's edge closes
+                          close (apply #'propertize " " 'display `(space :width (,(drgnx-area--pad 8)))
+                                       (cl-loop for (k v) on (text-properties-at 0 close) by #'cddr
+                                                unless (eq k 'display) append (list k v))))
+                  t)))
+
+(defun drgnx-area--pad (px)
+  "PX logical pixels on a graphical frame, else one column."
+  (if (display-graphic-p) (drgnx-px px) (frame-char-width)))
+
+(defun drgnx-area--bar-px (string)
+  "STRING's width in pixels as the bar draws it: under `drgnx-wb-bar' (the UI font), not the buffer's default."
+  (let ((s (copy-sequence string)))
+    (add-face-text-property 0 (length s) 'drgnx-wb-bar t s)
+    (string-pixel-width s)))
+
+(defun drgnx-area--close-px (close)
+  "The pixels CLOSE and the row's right pad take."
+  (+ (drgnx-area--bar-px close) (drgnx-area--pad 8)))
+
+(defun drgnx-area--actions (actions area)
+  "ACTIONS (a string, or nil) right-aligned before AREA's close: a space to the right edge less their pixel width and
+the close's, then the pieces."
+  (if (or (null actions) (string-empty-p actions)) ""
+    (let ((close (drgnx-area--close area)))
+      (concat (propertize " " 'display `(space :align-to (- right (,(+ (drgnx-area--bar-px actions) (drgnx-area--close-px close)
+                                                                       (drgnx-area--pad 4))))))
+              actions))))
 
 ;;;; Show, hide
 
@@ -184,8 +267,10 @@ Returns non-nil when TAB was defined."
                buffer `((side . ,side) (slot . 0)
                         (,(if horizontal 'window-width 'window-height) . ,(plist-get spec :size))
                         (dedicated . drgnx)
+                        ;; no mode line from birth, as the chrome gives an area: the size Emacs preserves below is
+                        ;; the body without one, else the bar's own root-level window takes the difference
                         (window-parameters . ((drgnx-role . ,area) (no-delete-other-windows . t)
-                                              (no-other-window . t)
+                                              (no-other-window . t) (mode-line-format . none)
                                               (delete-window . drgnx-area--delete-window))))))))
     (when-let* ((px (frame-parameter nil (drgnx-area--px-param area))))
       (let ((window-resize-pixelwise t))             ; or the size is rounded to whole lines
@@ -211,6 +296,13 @@ Returns non-nil when TAB was defined."
     (when-let* ((area (window-parameter window 'drgnx-role)) ((alist-get area drgnx-wb--areas)))
       (window-preserve-size window (drgnx-area--horizontal-p area) t)))
   (set-window-dedicated-p window 'drgnx))
+
+(defun drgnx-wb-area-put-buffer (window buffer)
+  "Show BUFFER in WINDOW, an area's window, keeping the shown tab: its tab row follows the buffer (one with its own
+title has none)."
+  (drgnx-wb-set-area-buffer window buffer)
+  (when-let* ((area (window-parameter window 'drgnx-role)) ((alist-get area drgnx-wb--areas)))
+    (set-window-parameter window 'header-line-format (drgnx-area--tab-row area))))
 
 (defun drgnx-wb-area-show (area &optional tab buffer)
   "Show AREA's TAB (default: the shown one) with BUFFER (default: the tab's last); never select it.
@@ -274,6 +366,16 @@ area, so its size and tabs are kept."
   "Show AREA and move focus to it."
   (select-window (drgnx-wb-area-show area)))
 
+(defun drgnx-wb-area-toggle-tab (area tab &optional start)
+  "Hide AREA when it shows TAB; else show TAB and select it.  When TAB has no buffer of its own, call START (if
+given) instead of selecting the placeholder: it makes one, which the rules show in TAB."
+  (if (and (drgnx-wb-area-window area) (eq (drgnx-wb-area-tab area) tab))
+      (drgnx-wb-area-hide area)
+    (let ((w (drgnx-wb-area-show area tab)))
+      (if (and start (not (drgnx-area--content-p (window-buffer w))))
+          (funcall start)
+        (select-window w)))))
+
 (defun drgnx-wb-toggle-panel () "Show or hide the bottom panel." (interactive) (drgnx-wb-area-toggle 'panel))
 (defun drgnx-wb-focus-panel () "Show the bottom panel and move focus to it." (interactive) (drgnx-wb-area-focus 'panel))
 (defun drgnx-wb-toggle-right-dock () "Show or hide the right dock." (interactive) (drgnx-wb-area-toggle 'right))
@@ -290,7 +392,7 @@ area, so its size and tabs are kept."
 (drgnx-wb-define-place 'right (drgnx-area--place 'right))
 
 (drgnx-wb-define-area 'panel :side 'bottom :size 12)
-(drgnx-wb-define-area 'right :side 'right :size 50)
+(drgnx-wb-define-area 'right :side 'right :size 50 :lone t)
 (dolist (tab '(problems output results terminal help)) (drgnx-wb-define-tab 'panel tab))
 
 (pcase-dolist (`(,matcher ,tab)
@@ -301,9 +403,9 @@ area, so its size and tabs are kept."
                  ("\\`\\*Flycheck errors\\*\\'" problems)
                  ((messages-buffer-mode debugger-mode ert-results-mode process-menu-mode timer-list-mode) output)
                  ("\\`\\*\\(Warnings\\|Backtrace\\|Messages\\|timer-list\\|Process List\\)\\*\\'" output)
-                 ((shell-mode eshell-mode eat-mode term-mode vterm-mode inferior-emacs-lisp-mode comint-mode) terminal)
-                 ;; shell, eshell and eat show their buffer before setting its mode.
-                 ("\\`\\*\\(shell\\|eshell\\|eat\\|ielm\\|terminal\\|ansi-term\\|vterm\\)\\*\\(<[0-9]+>\\)?\\'" terminal)))
+                 ((shell-mode eshell-mode drgnx-term-mode term-mode vterm-mode inferior-emacs-lisp-mode comint-mode) terminal)
+                 ;; shell and eshell show their buffer before setting its mode.
+                 ("\\`\\*\\(shell\\|eshell\\|ielm\\|terminal\\|ansi-term\\|vterm\\)\\*\\(<[0-9]+>\\)?\\'" terminal)))
   (drgnx-wb-place matcher 'panel :tab tab))
 
 (provide 'drgnx-area)

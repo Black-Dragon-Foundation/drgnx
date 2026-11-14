@@ -8,7 +8,8 @@ license.workspace = true
 publish = false
 
 [features]
-# The migration's hub seams (`DRGNX_TEST_MIGRATE7_FAIL`, `DRGNX_TEST_MIGRATE7_PAUSE`): drgnx-ratatoskr's test-hooks
+# The migration's hub seams (`DRGNX_TEST_MIGRATE7_FAIL`, `DRGNX_TEST_MIGRATE7_PAUSE`) and the project's git
+# (`DRGNX_TEST_GIT`): drgnx-ratatoskr's test-hooks
 test-hooks = []
 
 [dependencies]
@@ -17,6 +18,12 @@ urdr = { path = "../urdr", version = "0.1.0" }
 mimir = { path = "../mimir", version = "0.1.0" }
 draugr = { path = "../draugr", version = "0.1.0" }
 huginn = { path = "../huginn", version = "0.1.0" }  # settings_change reads an agent's value as data
+# the hook engine (hooks/): plugin manifests and their hook points
+brokkr = { path = "../brokkr", version = "0.1.0" }
+# the orchestration records (evidence, the rule pack, batches, followups): their shapes
+vordr = { path = "../vordr", version = "0.1.0" }
+regex.workspace = true
+serde_path_to_error.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
@@ -25,10 +32,16 @@ tracing.workspace = true
 sha1.workspace = true
 
 [dev-dependencies]
+drgnx-exe = { path = "../drgnx-exe", version = "0.1.0" }  # stand-in scripts written and run, never busy (ETXTBSY)
 # `test-hooks`: `urdr::graph::Tx::for_test`, so the policy's tests write through the primitives without a writer
 urdr = { path = "../urdr", version = "0.1.0", features = ["test-hooks"] }
 # tests/canary.rs: the hub's entity embedder (door 4) over the canary store (a dev-dependency cycle cargo allows)
 drgnx-ratatoskr = { path = "../drgnx-ratatoskr", version = "0.1.0" }
 tempfile.workspace = true
+# tests/plugin_hooks.rs: the engine through the plugin host, over the fixture plugins
+brokkr = { path = "../brokkr", version = "0.1.0", features = ["test-support"] }
+# hooks::tests: the point's budget on paused time
+tokio = { workspace = true, features = ["test-util"] }
 proptest.workspace = true
 insta.workspace = true
+skuld = { path = "../skuld", version = "0.1.0" }  # every order of a proposal's approval and its withdrawal

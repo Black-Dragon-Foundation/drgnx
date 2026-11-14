@@ -508,11 +508,23 @@ no fallback layer).  Nil on a graphical frame and on a terminal that sends every
                 lines))))
     (sort lines #'string<)))
 
+(defvar drgnx-surfaces-cheatsheet-sections nil
+  "Abnormal hook of the key sheet: each function returns a section (TITLE . LINES), or nil; the sections show after
+\"Key problems\".  A module adds its function in its setup (the terminal's \"In the terminal\").")
+
+(defun drgnx-surfaces--sections ()
+  "The sections of `drgnx-surfaces-cheatsheet-sections' that have lines, in order."
+  (let ((out nil))
+    (run-hook-wrapped 'drgnx-surfaces-cheatsheet-sections
+                      (lambda (f) (pcase (funcall f) ((and s `(,_ . ,(pred consp))) (push s out))) nil))
+    (nreverse out)))
+
 (defun drgnx-surfaces-cheatsheet ()
   "Show every drgnx command: key, title and where to click.  The keys are the ones this terminal can send."
   (interactive)
   ;; computed here: the keys depend on the buffer and frame the sheet is asked from, not on the help buffer
   (let* ((rows (drgnx-surfaces-sheet-rows t)) (limited (drgnx-surfaces--limited-lines))
+         (sections (drgnx-surfaces--sections))
          (width (apply #'max 24 (mapcar (lambda (r) (string-width (nth 1 r))) rows))))   ; long keys keep the columns
     (with-help-window "*drgnx keys*"
       (with-current-buffer standard-output
@@ -534,7 +546,10 @@ no fallback layer).  Nil on a graphical frame and on a terminal that sends every
                                               ("Key problems" . ,(plist-get drgnx-keys-last :problems))))
             (when lines
               (insert "\n" (propertize title 'face 'drgnx-sheet-heading) "\n")
-              (dolist (l lines) (insert "  " l "\n")))))))))
+              (dolist (l lines) (insert "  " l "\n")))))
+        (pcase-dolist (`(,title . ,lines) sections)
+          (insert "\n" (propertize title 'face 'drgnx-sheet-heading) "\n")
+          (dolist (l lines) (insert "  " l "\n")))))))
 
 (defun drgnx-surfaces--md (s) (replace-regexp-in-string "|" "\\\\|" s))
 

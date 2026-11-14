@@ -1,0 +1,303 @@
+;;; debug-launch-test.el --- batch tests: debugging's configurations, picker, inputs and trust -*- lexical-binding: t -*-
+;; test-class: det
+;; The hub's answers are scripted (`drgnx-hub-call-sync' and `drgnx-hub-call' replaced for the test): what is tested
+;; is what the editor asks, sends and shows.  The hub side has its own tests (Rust and conformance `debug/*').
+(require 'ert)
+(require 'cl-lib)
+(require 'drgnx)
+(load (expand-file-name "modules/extra/drgnx-debug-launch" drgnx-dir) nil t)
+
+(defmacro debug-launch-test--with-hub (answers &rest body)
+  "BODY with the hub answering each `debug/*' call from ANSWERS (METHOD → list of results, taken in turn); `calls'
+holds (METHOD . PARAMS) of every call, in order."
+  (declare (indent 1))
+  `(let ((calls nil) (answers (copy-tree ,answers)))
+     (cl-letf (((symbol-function 'drgnx-hub-call-sync)
+                (lambda (method params &optional _timeout)
+                  (setq calls (append calls (list (cons method params))))
+                  (let ((queue (assoc method answers)))
+                    (if (cdr queue) (pop (cdr queue)) t))))
+               ((symbol-function 'drgnx-hub-call)
+                (lambda (method params _cb &rest _)
+                  (setq calls (append calls (list (cons method params))))))
+               ((symbol-function 'drgnx-hub-running-p) (lambda () t)))
+       ,@body)))
+
+(ert-deftest drgnx-debug-launch/language-of-the-major-mode ()
+  (should (equal (drgnx-debug-launch-language 'python-ts-mode) "python"))
+  (should (equal (drgnx-debug-launch-language 'python-mode) "python"))
+  (should (equal (drgnx-debug-launch-language 'c++-ts-mode) "c++"))
+  (should (equal (drgnx-debug-launch-language 'typescript-ts-mode) "typescript"))
+  (should-not (drgnx-debug-launch-language 'fundamental-mode)))
+
+(ert-deftest drgnx-debug-launch/user-adapters-in-the-tables-fields ()
+  (should (equal (drgnx-debug-launch--adapter
+                  '(:id "mock" :name "Mock" :types ("mock") :not-built-in t :find (:python-module "m")
+                        :start (:stdio ("{python}" "-m" "m"))))
+                 '(:id "mock" :name "Mock" :types ["mock"] :not_built_in t :find (:python_module "m")
+                       :start (:stdio ["{python}" "-m" "m"])))))
+
+(ert-deftest drgnx-debug-launch/start-asks-trust-then-inputs ()
+  "A root the hub was never told trusted: the trust card, Trust This Folder, then the input, then the session."
+  (let ((drgnx-debug-configurations '((:type "python" :request "launch" :name "Mine")))
+        (drgnx-debug-adapters nil) (trusted nil) (asked nil))
+    (debug-launch-test--with-hub
+        '(("debug/start" (:needs "trust")
+           (:needs [(:input (:id "who" :kind "pickString" :description "Who" :options ["a" "b"] :password :false))])
+           (:session "d1")))
+      (cl-letf (((symbol-function 'drgnx-debug-launch-trusted-p) (lambda (_) trusted))
+                ((symbol-function 'yes-or-no-p) (lambda (p) (push p asked) t))
+                ((symbol-function 'drgnx-trust-folder) (lambda (_) (setq trusted t)))
+                ((symbol-function 'completing-read)
+                 (lambda (prompt coll &rest _) (push prompt asked) (should (equal coll '("a" "b"))) "b")))
+        (with-temp-buffer
+          (should (equal (drgnx-debug-launch-start "/p" "launch:0") "d1"))))
+      (should (= (length asked) 2))
+      (should (string-match-p "/p is not trusted" (cadr asked)))
+      (should (equal (car asked) "Who: "))
+      (should (equal (mapcar #'car calls) '("debug/start" "debug/trust" "debug/start" "debug/start")))
+      (let ((last (cdar (last calls))))
+        (should (equal (plist-get last :inputs) [(:id "who" :value "b")]))
+        (should (equal (plist-get last :config) "launch:0"))
+        (should (equal (plist-get last :user) [(:type "python" :request "launch" :name "Mine")]))))))
+
+(ert-deftest drgnx-debug-launch/declined-trust-starts-nothing ()
+  (debug-launch-test--with-hub '(("debug/start" (:needs "trust")))
+    (cl-letf (((symbol-function 'drgnx-debug-launch-trusted-p) #'ignore)
+              ((symbol-function 'yes-or-no-p) #'ignore)
+              ((symbol-function 'drgnx-trust-folder) (lambda (_) (error "Not asked"))))
+      (with-temp-buffer
+        (should-error (drgnx-debug-launch-start "/p" "launch:0") :type 'user-error)))
+    (should (equal (mapcar #'car calls) '("debug/start")))))
+
+;; Run Without Debugging: the start says no_debug
+(ert-deftest drgnx-debug-launch/a-start-without-debugging-says-so ()
+  (debug-launch-test--with-hub '(("debug/start" (:session "d1") (:session "d2")))
+    (cl-letf (((symbol-function 'drgnx-debug-launch-trusted-p) #'always))
+      (with-temp-buffer
+        (drgnx-debug-launch-start "/p" "launch:0" t)
+        (drgnx-debug-launch-start "/p" "launch:0")))
+    (should (equal (mapcar (lambda (c) (plist-get (cdr c) :no_debug))
+                           (seq-filter (lambda (c) (equal (car c) "debug/start")) calls))
+                   '(t nil)))))
+
+(ert-deftest drgnx-debug-launch/pick-process-sends-the-pid ()
+  (debug-launch-test--with-hub '(("debug/start" (:needs ["pickProcess"]) (:session "d2")))
+    (cl-letf (((symbol-function 'drgnx-debug-launch-trusted-p) #'always)
+              ((symbol-function 'drgnx-debug-launch--processes) (lambda () '(("42  py  py app.py" . 42))))
+              ((symbol-function 'completing-read) (lambda (&rest _) "42  py  py app.py")))
+      (with-temp-buffer (should (equal (drgnx-debug-launch-start "/p" "launch:1") "d2"))))
+    (should (equal (plist-get (cdar (last calls)) :inputs) [(:id "pickProcess" :value "42")]))))
+
+(ert-deftest drgnx-debug-launch/a-broken-launch-json-opens-where-it-fails ()
+  (let* ((dir (make-temp-file "dbg" t)) (file (expand-file-name ".vscode/launch.json" dir)))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory file) t)
+          (with-temp-file file (insert "{\n  \"configurations\": [\n    {,}\n  ]\n}\n"))
+          (debug-launch-test--with-hub
+              `(("debug/configs" (:configs [] :error (:path ,file :line 3 :col 6 :message "unexpected ,"))))
+            (cl-letf (((symbol-function 'drgnx-debug-launch-trusted-p) #'ignore))
+              (with-temp-buffer
+                (should-error (drgnx-debug-launch-read-config dir) :type 'user-error))
+              (let ((b (find-buffer-visiting file)))
+                (should b)
+                (with-current-buffer b
+                  (should (= (line-number-at-pos) 3))
+                  (should (= (current-column) 5)))
+                (kill-buffer b)))))
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-debug-launch/the-picker-offers-the-last-choice-first ()
+  (debug-launch-test--with-hub
+      '(("debug/configs" (:configs [(:id "launch:0" :name "A" :source "launch" :type "python" :needs_trust :false)
+                                    (:id "default:0" :name "B" :source "default" :type "go" :needs_trust t)]
+                                   :last "default:0")))
+    (cl-letf (((symbol-function 'drgnx-debug-launch-trusted-p) #'always)
+              ((symbol-function 'completing-read)
+               (lambda (_p coll _pred _req _init _hist def)
+                 (should (equal def "B"))
+                 (should (equal (mapcar #'car coll) '("A" "B")))
+                 (should (string-match-p "not trusted"
+                                         (funcall (plist-get completion-extra-properties :annotation-function) "B")))
+                 "A")))
+      (with-temp-buffer (should (equal (drgnx-debug-launch-read-config "/p") "launch:0"))))
+    ;; trusted: the hub is told before it lists
+    (should (equal (mapcar #'car calls) '("debug/trust" "debug/configs")))))
+
+(ert-deftest drgnx-debug-launch/taking-trust-back-tells-the-hub ()
+  (debug-launch-test--with-hub nil
+    (drgnx-debug-launch-trust-changed "/p/" nil)
+    (should (equal calls '(("debug/trust" :root "/p" :trusted nil))))))
+
+(ert-deftest drgnx-debug-launch/trust-changes-run-the-hook ()
+  (require 'drgnx-trust)
+  (let* ((seen nil)
+         (drgnx-trust-changed-functions (list (lambda (f trusted) (push (cons f trusted) seen))))
+         (home (make-temp-file "home" t))
+         (dir (file-name-as-directory (expand-file-name "proj" home))))
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-trust-folders-file) (lambda () (expand-file-name "tf.eld" home)))
+                  ((symbol-function 'drgnx-trust--refresh) #'ignore)
+                  (trusted-content nil) (drgnx-trust--added nil))
+          (make-directory dir t)
+          (let ((e (drgnx-trust-folder dir)))
+            (drgnx-trust-untrust-folder dir)
+            (should (equal seen (list (cons e nil) (cons e t))))))
+      (delete-directory home t))))
+
+(ert-deftest drgnx-debug-launch/dape-configs-convert-once ()
+  (let ((r (drgnx-debug-launch-convert-dape
+            `((debugpy-here modes (python-mode) command "python3" command-args ("-m" "debugpy.adapter")
+                            :type "python" :request "launch" :program ,(lambda () "/p/app.py") :cwd "/p")
+              (no-type command "x" :request "launch")
+              (attach-go :type "go" :request "attach" :processId 7)))))
+    (should (equal (car r)
+                   '((:name "debugpy-here" :type "python" :request "launch" :program "/p/app.py" :cwd "/p")
+                     (:name "attach-go" :type "go" :request "attach" :processId 7))))
+    (should (equal (cdr r) '(("no-type" . "no :type"))))))
+
+;;;; drgnx doctor: the adapters
+
+(ert-deftest drgnx-debug-launch/doctor-lists-the-adapters ()
+  "Each built-in adapter of the table, found or not and how to get it; nothing in the table is evaluated."
+  (require 'drgnx-doctor)
+  (let* ((dir (make-temp-file "dbg" t))
+         (table (expand-file-name "a.eld" dir))
+         (data (expand-file-name "data" dir)))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name "debug-adapters/js/src" data) t)
+          (with-temp-file (expand-file-name "debug-adapters/js/src/server.js" data) (insert ""))
+          (with-temp-file table
+            (insert "((:id \"lldb-dap\" :name \"LLDB\" :tested t :find (:path \"lldb-dap\") :install (:system \"dnf install lldb\"))\n"
+                    " (:id \"js-debug\" :name \"JS\" :tested t :find (:tools \"js/src/server.js\"))\n"
+                    " (:id \"gdb\" :name \"GDB\" :tested nil :find (:path \"gdb\") :install (:system \"dnf install gdb\"))\n"
+                    " (:id \"evil\" :name \"E\" :tested nil :find (:path (eval (error \"evaluated\"))))\n"
+                    " (:id \"cpptools\" :name \"C\" :not-built-in t))\n"))
+          (cl-letf (((symbol-function 'executable-find) (lambda (p &rest _) (and (equal p "lldb-dap") "/usr/bin/lldb-dap")))
+                    ((symbol-function 'drgnx-data-dir) (lambda () data)))
+            (let ((rows (drgnx-doctor--debug-adapters table)))
+              (should (equal (mapcar (lambda (r) (list (plist-get r :id) (and (plist-get r :found) t))) rows)
+                             '(("lldb-dap" t) ("js-debug" t) ("gdb" nil) ("evil" nil))))
+              (let ((r (drgnx-doctor-check 'debug-adapters (list :debug-adapters rows))))
+                (should (eq (car r) 'ok))
+                (should (string-match-p "lldb-dap" (cadr r)))
+                (should (string-match-p "not installed: gdb (dnf install gdb)" (cadr r))))
+              (should (eq (car (drgnx-doctor-check 'debug-adapters (list :debug-adapters '((:id "gdb" :tested nil)))))
+                          'info)))))
+      (delete-directory dir t))))
+
+
+(ert-deftest debug-launch/the-default-table-is-the-file-and-the-packs-adapters ()
+  ;; the language adapters moved into their packs: the doctor and the installer still see them
+  (let ((ids (mapcar #'cdr (drgnx-debug-launch-installable))))
+    (dolist (id '("debugpy" "js-debug" "delve" "codelldb")) (should (member id ids))))
+  (require 'drgnx-doctor)
+  (let ((rows (drgnx-doctor--debug-adapters)))
+    (dolist (id '("debugpy" "js-debug" "delve" "lldb-dap" "gdb" "codelldb"))
+      (should (seq-find (lambda (r) (equal (plist-get r :id) id)) rows)))
+    (should-not (seq-find (lambda (r) (equal (plist-get r :id) "cpptools")) rows))))     ; not built in
+
+(defun debug-launch-test--missing-configs (missing)
+  "A `debug/configs' answer with one configuration whose adapter is MISSING."
+  `(("debug/configs" (:configs [(:id "launch:0" :name "Go" :source "launch" :type "go" :needs_trust :false
+                                     :missing ,missing)]))
+    ("debug/install" "installed")))
+
+(ert-deftest drgnx-debug-launch/a-missing-adapter-installs-on-one-yes ()
+  ;; the picker's row says "not installed"; picking it offers the pinned download, and yes installs, then starts
+  (let ((asked nil))
+    (debug-launch-test--with-hub
+        (debug-launch-test--missing-configs '(:adapter "js-debug" :name "JavaScript" :install "download"))
+      (cl-letf (((symbol-function 'drgnx-debug-launch-trusted-p) #'always)
+                ((symbol-function 'yes-or-no-p) (lambda (p) (setq asked p) t))
+                ((symbol-function 'completing-read)
+                 (lambda (_p _coll &rest _)
+                   (should (string-match-p "not installed"
+                                           (funcall (plist-get completion-extra-properties :annotation-function)
+                                                    "Go")))
+                   "Go")))
+        (with-temp-buffer (should (equal (drgnx-debug-launch-read-config "/p") "launch:0"))))
+      (should (string-match-p "JavaScript" asked))
+      (should (equal (car (car (last calls))) "debug/install"))
+      (should (equal (plist-get (cdr (car (last calls))) :adapter) "js-debug")))))
+
+(ert-deftest drgnx-debug-launch/a-missing-adapter-declined-installs-nothing ()
+  (debug-launch-test--with-hub
+      (debug-launch-test--missing-configs '(:adapter "debugpy" :name "Python" :install "pip"))
+    (cl-letf (((symbol-function 'drgnx-debug-launch-trusted-p) #'always)
+              ((symbol-function 'yes-or-no-p) #'ignore)
+              ((symbol-function 'completing-read) (lambda (&rest _) "Go")))
+      (with-temp-buffer (should-error (drgnx-debug-launch-read-config "/p") :type 'user-error)))
+    (should-not (assoc "debug/install" calls))))
+
+(ert-deftest drgnx-debug-launch/a-system-adapter-names-its-command ()
+  ;; nothing to download: the error says the system's command, and nothing is asked
+  (debug-launch-test--with-hub
+      (debug-launch-test--missing-configs
+       '(:adapter "delve" :name "Go (delve)" :install "system" :command "dnf install delve"))
+    (cl-letf (((symbol-function 'drgnx-debug-launch-trusted-p) #'always)
+              ((symbol-function 'yes-or-no-p) (lambda (_) (error "asked")))
+              ((symbol-function 'completing-read) (lambda (&rest _) "Go")))
+      (with-temp-buffer
+        (should (string-match-p "dnf install delve"
+                                (cadr (should-error (drgnx-debug-launch-read-config "/p") :type 'user-error))))))
+    (should-not (assoc "debug/install" calls))))
+
+;;;; Debug: Install Adapter
+
+(ert-deftest drgnx-debug-launch/install-lists-installable-and-asks-the-hub ()
+  "Only built-in adapters with an :install entry are offered; the hub gets the id and your own adapters."
+  (let* ((dir (make-temp-file "dbg" t))
+         (table (expand-file-name "a.eld" dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file table
+            (insert "((:id \"js-debug\" :name \"JS\" :install (:url \"https://x\" :sha256 \"00\" :into \"js\"))\n"
+                    " (:id \"gdb\" :name \"GDB\" :install (:system \"dnf install gdb\"))\n"
+                    " (:id \"plain\" :name \"Plain\")\n"
+                    " (:id \"java\" :name \"J\" :not-built-in t :install (:system \"x\")))\n"))
+          (should (equal (drgnx-debug-launch-installable table) '(("JS" . "js-debug") ("GDB" . "gdb")))))
+      (delete-directory dir t)))
+  (let ((drgnx-debug-adapters '((:id "mine" :name "Mine" :types ("m")))))
+    (debug-launch-test--with-hub nil
+      (drgnx-debug-install-adapter "js-debug")
+      (should (equal calls '(("debug/install" :adapter "js-debug"
+                              :adapters [(:id "mine" :name "Mine" :types ["m"])])))))))
+
+(ert-deftest drgnx-debug-launch/a-start-with-a-frame-runs-its-tasks-in-a-tab ()
+  ;; the hub runs preLaunchTask in a terminal tab and answers when it ends: the wait draws (the tab shows the task)
+  ;; and allows a long build
+  (let ((sent nil) (deadline nil))
+    (cl-letf (((symbol-function 'drgnx-debug-launch-trusted-p) #'always)
+              ((symbol-function 'drgnx-debug-launch--tab-p) #'always)
+              ((symbol-function 'drgnx-hub-call-sync)
+               (lambda (method &rest _) (unless (equal method "debug/trust") (error "Waited without drawing: %s" method))))
+              ((symbol-function 'drgnx-hub-call)
+               (lambda (method params cb &rest keys)
+                 (when (equal method "debug/start") (setq sent params deadline (plist-get keys :deadline)))
+                 (funcall cb (list :session "d1") nil))))
+      (with-temp-buffer (should (equal (drgnx-debug-launch-start "/p" "launch:0") "d1"))))
+    (should (eq (plist-get sent :terminal) t))
+    (should (>= deadline 600))))
+
+(ert-deftest drgnx-debug-launch/a-start-without-a-frame-keeps-the-captured-run ()
+  ;; batch, or a daemon with no frame: nothing opens, the task's output is captured as before
+  (should-not (drgnx-debug-launch--tab-p))
+  (debug-launch-test--with-hub '(("debug/start" (:session "d1")))
+    (cl-letf (((symbol-function 'drgnx-debug-launch-trusted-p) #'always))
+      (with-temp-buffer (should (equal (drgnx-debug-launch-start "/p" "launch:0") "d1"))))
+    (should-not (plist-member (cdr (assoc "debug/start" calls)) :terminal))))
+
+(ert-deftest drgnx-debug-launch/a-debug-terminal-for-this-emacs-opens-its-tab ()
+  (let ((opened nil))
+    (cl-letf (((symbol-function 'drgnx-term-reattach-one)
+               (lambda (row &optional select) (push (list row select) opened))))
+      (drgnx-debug-launch-show-terminal (list :term "t1" :view "term:t1" :task "build" :editor drgnx-hub-session))
+      (drgnx-debug-launch-show-terminal (list :term "t2" :view "term:t2" :task "build" :editor "another-emacs")))
+    (should (equal (mapcar (lambda (o) (plist-get (car o) :id)) opened) '("t1")))
+    (should (equal (plist-get (caar opened) :place) "panel"))
+    (should (string-match-p "build" (plist-get (caar opened) :title)))))
+
+;;; debug-launch-test.el ends here

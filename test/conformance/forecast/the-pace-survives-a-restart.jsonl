@@ -1,0 +1,21 @@
+{"scenario": "forecast/the-pace-survives-a-restart", "requires": ["v1", "test-hooks"], "doc": "A mock Claude reports its meter (_claude/rateLimit, 0.8) after its first turn; the reading is kept in runtime.db when it starts a quarter-hour slot, so a second hub on the same root answers pace/get with the same meter (claude, 0.8 used) before any session of it has read a meter. Pattern C: the first hub's exit is the handshake and the meter is read back with poll, not waited for as an event; the second hub's answer is the gate. The unit tests pin the history's thinning and its two readings."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "one"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"turn_id": "t1"}}}, "within_ms": 30000}
+{"do": "poll", "conn": "c", "json": {"id": 3, "method": "pace/get", "params": {}}, "expect": {"id": 3, "result": {"meters": [{"provider": "claude", "used_share": 0.8}]}}, "within_ms": 20000}
+{"do": "kill", "hub": "h", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h", "code": 0, "within_ms": 15000}
+{"do": "start", "hub": "h2", "same_root_as": "h"}
+{"do": "connect", "conn": "c2", "hub": "h2"}
+{"do": "poll", "conn": "c2", "json": {"id": 1, "method": "pace/get", "params": {}}, "expect": {"id": 1, "result": {"meters": [{"provider": "claude", "used_share": 0.8, "estimate": true}]}}, "within_ms": 10000}

@@ -200,7 +200,8 @@ fn public_v6(a: Ipv6Addr) -> bool {
     if w[0] == 0x2002 {
         return public_v4(inner(w[1], w[2]));
     }
-    let not_public = (w[0] & 0xfe00) == 0xfc00 // fc00::/7 unique local
+    let not_public = (w[0] & 0xe000) != 0x2000 // only 2000::/3 is global unicast: the rest is unrouted or reserved (GL-T10-4)
+        || (w[0] & 0xfe00) == 0xfc00 // fc00::/7 unique local
         || (w[0] & 0xffc0) == 0xfe80 // fe80::/10 link-local
         || (w[0] & 0xffc0) == 0xfec0 // fec0::/10 site-local
         || (w[0] & 0xff00) == 0xff00 // ff00::/8 multicast
@@ -211,9 +212,96 @@ fn public_v6(a: Ipv6Addr) -> bool {
     !not_public
 }
 
+/// An address as the web policy judges it: plain, or an IPv6 address that carries an IPv4 one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Embedded {
+    /// IPv4, or IPv6 that carries no IPv4 address (`::` and `::1` among them).
+    Plain(IpAddr),
+    /// `outer` carries `v4`: IPv4-mapped `::ffff:0:0/96`, IPv4-compatible `::/96`, NAT64 `64:ff9b::/96` and
+    /// `64:ff9b:1::/48` (the last 32 bits), 6to4 `2002::/16` (the 32 bits after the prefix) or Teredo `2001::/32`
+    /// (the client's address, the last 32 bits inverted).
+    Wrapped { outer: Ipv6Addr, v4: Ipv4Addr },
+}
+
+/// `ip` with the IPv4 address it carries, if it carries one.
+pub fn unwrap_embedded(ip: IpAddr) -> Embedded {
+    let IpAddr::V6(a) = ip else {
+        return Embedded::Plain(ip);
+    };
+    let w = a.segments();
+    let v4 = |hi: u16, lo: u16| Ipv4Addr::from((u32::from(hi) << 16) | u32::from(lo));
+    let inner = if a.is_unspecified() || a.is_loopback() {
+        None
+    } else if w[..5] == [0; 5] && (w[5] == 0xffff || w[5] == 0) {
+        // mapped, compatible
+        Some(v4(w[6], w[7]))
+    } else if w[0] == 0x64 && w[1] == 0xff9b && (w[2..6] == [0; 4] || w[2] == 1) {
+        // NAT64, the well-known and the local-use prefix
+        Some(v4(w[6], w[7]))
+    } else if w[0] == 0x2002 {
+        Some(v4(w[1], w[2]))
+    } else if w[0] == 0x2001 && w[1] == 0 {
+        Some(v4(!w[6], !w[7]))
+    } else {
+        None
+    };
+    match inner {
+        Some(v4) => Embedded::Wrapped { outer: a, v4 },
+        None => Embedded::Plain(ip),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unwrap_embedded_table() {
+        let wrapped = [
+            ("::ffff:192.168.1.20", "192.168.1.20"),
+            ("::ffff:7f00:1", "127.0.0.1"),
+            ("::10.1.2.3", "10.1.2.3"),
+            ("::0.0.0.2", "0.0.0.2"),
+            ("64:ff9b::a9fe:a9fe", "169.254.169.254"),
+            ("64:ff9b:1::c0a8:114", "192.168.1.20"),
+            ("64:ff9b:1:ffff::7f00:1", "127.0.0.1"),
+            ("2002:a83f:8110::", "168.63.129.16"),
+            ("2002:c0a8:101:1::1", "192.168.1.1"),
+            // Teredo: server 65.54.227.120, client 192.0.2.45 stored inverted (RFC 4380's example)
+            ("2001:0:4136:e378:8000:63bf:3fff:fdd2", "192.0.2.45"),
+        ];
+        for (outer, inner) in wrapped {
+            assert_eq!(
+                unwrap_embedded(v6(outer)),
+                Embedded::Wrapped {
+                    outer: outer.parse().unwrap(),
+                    v4: inner.parse().unwrap()
+                },
+                "{outer}"
+            );
+        }
+        for plain in [
+            "::",
+            "::1",
+            "fe80::1",
+            "fd00:ec2::254",
+            "2606:4700::1111",
+            "64:ff9b:2::1",
+            "2001:db8::1",
+            "2001:1::1",
+            "2003::1",
+        ] {
+            assert_eq!(
+                unwrap_embedded(v6(plain)),
+                Embedded::Plain(v6(plain)),
+                "{plain}"
+            );
+        }
+        assert_eq!(
+            unwrap_embedded(v4("10.0.0.1")),
+            Embedded::Plain(v4("10.0.0.1"))
+        );
+    }
 
     fn name(n: &str, port: u16) -> Target {
         Target {
@@ -497,6 +585,17 @@ mod tests {
             "64:ff9b:1:ffff::1",
             "100::1",
             "100::ffff:ffff:ffff:ffff",
+            // GL-T10-4: only 2000::/3 is global unicast; the rest is unrouted or reserved, listed or not
+            "fbff::1",
+            "fe00::1",
+            "64:ff9b:2::1",
+            "100:0:0:1::1",
+            "4000::1",
+            "8000::1",
+            "c000::1",
+            "e000::1",
+            "1fff::1",
+            "::ffff:0:808:808",
         ];
         for a in not_public6 {
             assert!(!is_public(v6(a)), "{a} counted as public");
@@ -506,11 +605,8 @@ mod tests {
             "2001:4860:4860::8888",
             "2001:1::1",
             "2001:db9::1",
-            "fbff::1",
-            "fe00::1",
-            "64:ff9b:2::1",
-            "100:0:0:1::1",
             "2a00:1450::1",
+            "3fff::1",
         ];
         for a in public6 {
             assert!(is_public(v6(a)), "{a} counted as not public");

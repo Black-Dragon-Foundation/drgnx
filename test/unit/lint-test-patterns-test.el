@@ -216,11 +216,11 @@ levels that enclose it (a `let' binding, a call's argument); inside a branching 
 ;;;; The registers that only shrink
 
 (defconst drgnx-lint-patterns--pending-allowed
-  '("test/live/daemon-test.el" "test/live/dape-live-test.el" "test/live/drgnx-ai-test.el"
+  '("test/live/daemon-test.el" "test/live/drgnx-ai-test.el"
     "test/live/drgnx-compositor-test.el" "test/live/drgnx-frames-test.el" "test/live/drgnx-invariants-test.el"
     "test/live/drgnx-keys-test.el" "test/live/drgnx-modal-ui-test.el" "test/live/drgnx-onboard-test.el"
     "test/live/drgnx-popup-test.el" "test/live/drgnx-tiling-test.el" "test/live/drgnx-workbench-test.el"
-    "test/live/drgnx-work-test.el" "test/live/mermaid-live-test.el" "test/live/observer-test.el"
+    "test/live/mermaid-live-test.el" "test/live/observer-test.el"
     "test/live/scenario-runner-test.el" "test/scenario/buffers-test.el" "test/scenario/explorer-test.el"
     "test/tty/clipboard-test.el" "test/tty/colours-test.el" "test/tty/harness-test.el" "test/tty/keys-test.el"
     "test/tty/layout-test.el" "test/tty/mixed-test.el" "test/tty/mouse-test.el" "test/tty/popups-test.el"
@@ -231,7 +231,7 @@ levels that enclose it (a `let' binding, a call's argument); inside a branching 
     "test/ui/quickhelp-test.el" "test/ui/report-test.el" "test/ui/rf2-process-test.el" "test/ui/session-home-test.el"
     "test/ui/settings-page-ui-test.el" "test/ui/smoke-test.el" "test/ui/state-intent-ui-test.el"
     "test/ui/state-ui-test.el" "test/ui/statusbar-state-ui-test.el" "test/ui/statusbar-test.el"
-    "test/ui/view-ui-test.el" "test/ui/workbench-pass-a-test.el" "test/unit/agent-check-test.el"
+    "test/ui/workbench-pass-a-test.el" "test/unit/agent-check-test.el"
     "test/unit/agent-config-claude-test.el" "test/unit/agents-matrix-test.el" "test/unit/ai-ask-test.el"
     "test/unit/ai-edit-test.el" "test/unit/ai-embed-test.el" "test/unit/ai-ghost-test.el" "test/unit/ai-test.el"
     "test/unit/bin-lease-test.el" "test/unit/bin-test.el" "test/unit/bootstrap-test.el" "test/unit/build-test.el"
@@ -242,13 +242,13 @@ levels that enclose it (a `let' binding, a call's argument); inside a branching 
     "test/unit/lisp-index-test.el" "test/unit/mock-llm-test.el" "test/unit/mod-agent-settings-test.el"
     "test/unit/modal-ai-test.el" "test/unit/modal-report-test.el" "test/unit/mod-amenities-test.el"
     "test/unit/mod-blame-test.el" "test/unit/mod-clipboard-test.el" "test/unit/mod-diff-test.el"
-    "test/unit/mod-grammars-test.el" "test/unit/mod-live-test.el" "test/unit/mod-remote-test.el"
+    "test/unit/mod-live-test.el" "test/unit/mod-remote-test.el"
     "test/unit/mod-replace-engine-test.el" "test/unit/mod-replace-view-test.el" "test/unit/mod-search-test.el"
     "test/unit/mod-terminal-test.el" "test/unit/mod-tools-test.el" "test/unit/peer-fixture-test.el"
     "test/unit/perf-day-test.el" "test/unit/platform-hypr-niri-test.el" "test/unit/platform-kwin-test.el"
     "test/unit/platform-test.el" "test/unit/platform-wm-test.el" "test/unit/projects-eld-test.el"
     "test/unit/remote-automatic-test.el" "test/unit/run-ert-audit-test.el" "test/unit/run-ert-test.el"
-    "test/unit/sandbox-vc-test.el" "test/unit/scripted-process-test.el" "test/unit/search-setup-test.el"
+    "test/unit/sandbox-vc-test.el" "test/unit/scripted-process-test.el"
     "test/unit/secrets-test.el" "test/unit/settings-agents-test.el" "test/unit/settings-apply-test.el"
     "test/unit/settings-child-test.el" "test/unit/settings-compat-custom-test.el"
     "test/unit/settings-compat-global-test.el" "test/unit/settings-compat-lisp-files-test.el"
@@ -304,7 +304,8 @@ shrinks (a test that enters the gate, or is deleted, leaves it and this list); a
 which the audit would catch.")
 
 (defconst drgnx-lint-patterns--unnamed-ok-allowed
-  '("test/unit/agents-mirror-test.el" "test/unit/agents-mirror-permission-test.el")
+  '("test/unit/agents-mirror-test.el" "test/unit/agents-mirror-permission-test.el" "test/unit/say-test.el"
+    "test/unit/agent-pair-hub-test.el")
   "The files that may bind or set `drgnx-test-gate-unnamed-ok': a stopgap until the hub's agent-session tasks run on
 its clock.")
 

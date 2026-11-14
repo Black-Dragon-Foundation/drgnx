@@ -1,5 +1,6 @@
 //! The nightly backup's schedule (Urdr Task 17; storage §8.1): at 03:00 local time, or at the first idle minute after
-//! a missed one, the hub makes a checked copy of `work.db` (`graph::backup_now`: `VACUUM INTO`, check, rotate).
+//! a missed one, the hub makes a checked copy of `work.db` (`graph::backup_now`: `VACUUM INTO`, check, rotate) and one of
+//! each project's `history.db` beside it (`history::backup`, replaced, never rotated; [`record_history`]).
 //!
 //! [`due`] is pure (the clock is its arguments), so the catch-up is tested without waiting for a night.  The hub's
 //! schema tick asks it every 2 s.  What the last copy was stays in a process-wide record that `status.store` shows
@@ -70,6 +71,19 @@ pub fn last() -> Last {
     *LAST.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// The last night's copies of the edit histories: when, and whether every project's copy was good.
+static HISTORY: Mutex<Option<(u64, bool)>> = Mutex::new(None);
+
+/// The edit histories were copied (or failed to be) at AT.
+pub fn record_history(at: u64, ok: bool) {
+    *HISTORY.lock().unwrap_or_else(|e| e.into_inner()) = Some((at, ok));
+}
+
+/// The last copy of the edit histories, as it is now.
+pub fn last_history() -> Option<(u64, bool)> {
+    *HISTORY.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// A copy made (or failed) at AT.
 pub fn record(at: u64, ok: bool) {
     let mut l = LAST.lock().unwrap_or_else(|e| e.into_inner());
@@ -133,6 +147,18 @@ pub fn finish() {
     RUNNING.store(false, Ordering::SeqCst);
 }
 
+/// Run the copy FUT that [`begin`] allowed, then [`finish`] on every way out: a panic or a dropped task included.
+pub async fn guarded<F: std::future::Future<Output = ()>>(fut: F) {
+    struct Finish;
+    impl Drop for Finish {
+        fn drop(&mut self) {
+            finish();
+        }
+    }
+    let _finish = Finish;
+    fut.await;
+}
+
 /// Whether the tick at NOW (unix seconds) should start the nightly copy.
 pub fn due_at(now: u64) -> bool {
     let l = last();
@@ -169,6 +195,21 @@ mod tests {
         // a failed try is not repeated every tick
         assert!(!due(at(12, 9, 13), ok, Some(60)));
         assert!(due(at(12, 10, 13), ok, Some(RETRY_AFTER)));
+    }
+
+    /// Pattern D (pure): no clock, no order; one task whose copy panics.
+    #[test]
+    fn a_panicking_copy_does_not_stop_the_next_nightly() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            assert!(begin(), "the first nightly starts");
+            let panicked = tokio::spawn(guarded(async { panic!("the copy panicked") })).await;
+            assert!(panicked.is_err(), "the copy task panicked");
+            assert!(begin(), "the next nightly can start after a panic");
+            finish();
+        });
     }
 
     #[test]

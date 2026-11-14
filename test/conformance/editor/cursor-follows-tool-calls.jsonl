@@ -1,0 +1,20 @@
+{"scenario": "editor/cursor-follows-tool-calls", "requires": ["v1", "test-hooks"], "doc": "An agent's presence follows its tool calls line by line: a running read's line moves with each update (the mock's moves word: one line a second), and the Edit after it, once its step closes, sits on the lines its diff changed with the column after its last inserted character, found in the file's text (rawInput is never read). Pattern B: agents/presence/get is polled for each line; the edit's agent-step is the gate for its entry."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$ROOT/work/mock-moves.txt", "text": "1\n2\n3\n4\n5\n6\n"}
+{"do": "write_file", "path": "$ROOT/work/a.txt", "text": "fn a() {\n    old();\n}\n"}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "moves 1 5\nprovider:edit-stream a.txt old(); \"new_one(); new_two();\"\nsay done"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "poll", "conn": "c", "json": {"id": 3, "method": "agents/presence/get", "params": {"file": "$ROOT/work/mock-moves.txt"}}, "expect": {"id": 3, "result": {"entries": [{"session": "$sid", "mode": "read", "line": 2, "live": true}]}}, "within_ms": 30000, "every_ms": 50}
+{"do": "poll", "conn": "c", "json": {"id": 4, "method": "agents/presence/get", "params": {"file": "$ROOT/work/mock-moves.txt"}}, "expect": {"id": 4, "result": {"entries": [{"session": "$sid", "mode": "read", "line": 4, "live": true}]}}, "within_ms": 30000, "every_ms": 50}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"tool_kind": "edit"}}}, "within_ms": 30000}
+{"do": "poll", "conn": "c", "json": {"id": 5, "method": "agents/presence/get", "params": {"file": "$ROOT/work/a.txt"}}, "expect": {"id": 5, "result": {"entries": [{"session": "$sid", "mode": "edit", "line": 2, "line_end": 2, "col": 25, "source": "edit", "live": "$absent", "step": "$number"}]}}, "within_ms": 30000, "every_ms": 50}

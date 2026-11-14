@@ -244,7 +244,7 @@ records whatever Emacs you point it at). On a system with a Nidhogg recipe the i
 - Emacs 31.1 has known issues that are fixed in 31.2 (not yet released): command injection through crafted TRAMP
   user names (CVE-2026-108976), Flymake running code from files being edited (CVE-2026-96442) and code execution
   through `read-symbol-shorthands` when opening a file (CVE-2026-96269; only partly fixed in 31.1). `drgnx doctor`'s `security` line names
-  the ones that apply to your Emacs. It says OK while drgnx's own guards for them are on (see
+  the ones that apply to your Emacs (Nidhogg 31.1-nidhogg.4 and later already carry the fixes for the first two). It says OK while drgnx's own guards for them are on (see
   [Trusted folders](security.md)) and WARN when one is off, so a warning that stays means a guard is missing, not
   that you must upgrade. Until you run 31.2, avoid opening files you do not trust.
 - The installer checks that the Nidhogg tag is the exact commit it pins before building anything, prints every root
@@ -271,7 +271,11 @@ drgnx app is installed (fix: `drgnx macos-app`), that Homebrew is there (also lo
 `/usr/local/bin`, in case it is not on PATH) and that the `drgnx` command is on PATH (fix: add `~/.local/bin` to PATH in
 your shell's profile, `~/.zprofile` for zsh or, with `SHELL` unset, when it exists; else `~/.profile`) — each only a warning. `portable-config` warns when the config dir holds a key in plain text (it names the file,
 never the key) or a machine-local file such as the old `emacs` record, and says which `projects.eld` roots are not
-cloned on this machine (info only; [second-machine.md](second-machine.md#the-doctors-check)). The `modules`, `display-rules` and `key-problems` checks (and the problems under the Terminal group's keys row) are
+cloned on this machine (info only; [second-machine.md](second-machine.md#the-doctors-check)). `view-model` fails on an
+Emacs without Sjá, Nidhogg's native view model (`nidhogg-view-push`), which the Work views' keys answer from, and on a
+Nidhogg older than the one drgnx pins (`drgnx update` brings it up to date); `views` fails while a hub-fed view is
+broken (its model broke twice; closing its buffer and opening it again clears it) and after a view model came to an
+Emacs without Sjá. The `modules`, `display-rules`, `views` and `key-problems` checks (and the problems under the Terminal group's keys row) are
 what the running drgnx says as notices (see below); `modules-report.eld` and `wb-report.eld` are no longer written, and
 `key-conflicts` still reads the conflict table of `keys-report.eld`. With Vim keys the `modal` check warns when the stack needs evil and it is not
 installed or not running (fix: `drgnx sync`, then restart, or choose another Keyboard Profile…), says when Vim waits for `drgnx sync`, and on
@@ -286,7 +290,10 @@ information: "OPENROUTER_API_KEY is set in this Emacs's environment; children in
 holds". drgnx leaves them there ([security.md](security.md#where-your-keys-live)).
 The `job-sandbox` check shows the job sandbox's state as Ratatoskr reports it (`sandbox` in `ratatoskr doctor --json`):
 the back end and its version, or a warning with the reason and the fix; with no answer from Ratatoskr it is only a
-notice. The `lisp-runtime` check (Agents group) says the old Lisp agent runtime is gone. It fails when a Lisp hub of
+notice. The `agent-browser` check (Agents group) says what an agent's browser would get on this machine: the tier and
+Landlock ABI, the browser found, whether the memory cap can be set, the web proxy's refusals, and the last smoke check
+(palette: Agents: Check the Agent Browser); see [agent-browser.md](agent-browser.md#the-doctors-lines). The
+`lisp-runtime` check (Agents group) says the old Lisp agent runtime is gone. It fails when a Lisp hub of
 yours still runs (`ratatoskr stop`, then `kill` the pid; drgnx starts Ratatoskr again). It warns when an outside
 agent's MCP config (Claude Code, Codex, Gemini, Kimi Code) still starts the Lisp coordination server (Agent settings →
 Register drgnx again), and when command jobs from before the move still run (they finish on their own, then drgnx
@@ -333,31 +340,35 @@ installs anything and never asks.
 
 ## Ratatoskr's Rust toolchain
 
-Ratatoskr is built from source (no prebuilt binaries yet) with `cargo build --release --locked`; it needs Rust 1.88
-or newer and a C compiler (`cc`; its bundled SQLite is C). The build takes a few minutes and about 1.5 GiB of memory per
-parallel job. The same build (`drgnx runtime build`, which install.sh and `drgnx update` run) also makes `drgnx-fwd`,
-the small forwarder that gives a container job its network (Container jobs in the jobs guide). On Linux it is built for
-`<arch>-unknown-linux-musl` (Rust's self-contained musl, so no static glibc package is needed; Fedora has none) into
-its own target folder, so it is a static binary that starts in any image; `drgnx runtime build` runs
-`rustup target add` for it first (a Rust without rustup needs that target installed, or the forwarder is skipped).
-`drgnx runtime install` puts it beside `ratatoskr`. A forwarder that cannot be built only warns and the update goes
-on; without it, a container job that is allowed a network is refused. (macOS builds it with
-`-C target-feature=+crt-static` and no target.)
+Ratatoskr is built from source (no prebuilt binaries yet) with `cargo build --release --locked`; it needs Rust 1.95
+or newer (an older distro Rust can't build it) and a C compiler (`cc`; its bundled SQLite is C). The build takes a few minutes and about 1.5 GiB of memory per
+parallel job. The same build (`drgnx runtime build`, which install.sh and `drgnx update` run) also makes `drgnx-px`,
+the small relay sidecar that gives a container job its network (Container jobs in the jobs guide). It is built for
+`<arch>-unknown-linux-musl` (Rust's self-contained musl, so no static glibc package is needed; Fedora has none; on a
+Mac it is cross-built with `rust-lld`) into its own target folder, so it is a static binary the hub turns into a tiny
+image; `drgnx runtime build` runs `rustup target add` for it first (a Rust without rustup needs that target
+installed, or the sidecar is skipped). `drgnx runtime install` puts it beside `ratatoskr` as
+`drgnx-px-<arch>-linux-musl` (and removes the older forwarder, `drgnx-fwd`). A sidecar that cannot be built only warns
+and the update goes on; without it, a container job that is allowed a network is refused.
+The same build makes `drgnx-key`, which a job given your keys runs its command behind: a native copy beside
+`ratatoskr` (built like the hub; a failure fails the build) and a static one, `drgnx-key-<arch>-linux-musl`, for a
+container job (it only warns). Without the native copy a keyed job on this machine is refused, and `drgnx doctor`
+says so in its Ratatoskr check.
 install.sh takes the first of these that applies (`--dry-run` says which):
 
-1. `cargo` and `rustc` 1.88 or newer already on `PATH`.
-2. The distro's default Rust package, only if its version is 1.88 or newer (asked first): Fedora `cargo rust gcc`,
-   Ubuntu and Debian `cargo rustc gcc`, Arch `rust gcc`, macOS `brew install rust`. Fedora 45, Ubuntu 26.04, Debian 13, Arch and
-   Homebrew qualify.
-3. A versioned Debian-family package when the default is too old (Ubuntu 24.04: `rustc-1.91 cargo-1.91`, binaries in
-   `/usr/lib/rust-1.91/bin`).
-4. Otherwise (Debian 13, other distros) a private rustup in `~/.local/share/drgnx/rustup` with Rust 1.93.1. rustup-init
+1. `cargo` and `rustc` 1.95 or newer already on `PATH`.
+2. The distro's default Rust package, only if its version is 1.95 or newer (asked first): Fedora `cargo rust gcc`,
+   Ubuntu and Debian `cargo rustc gcc`, Arch `rust gcc`, macOS `brew install rust`. Fedora 45, Arch and Homebrew
+   qualify; Ubuntu 26.04 (1.93) and Debian 13 (1.85) don't.
+3. A versioned Debian-family package when the default is too old: the newest `rustc-X.Y cargo-X.Y` pair of 1.95 or
+   newer, binaries in `/usr/lib/rust-X.Y/bin`.
+4. Otherwise (Debian 13, other distros) a private rustup in `~/.local/share/drgnx/rustup` with Rust 1.99.1. rustup-init
    is downloaded from the versioned archive on static.rust-lang.org and checked against a sha256 recorded in
    install.sh before it runs; nothing touches `~/.rustup` or `~/.cargo`.
 
 A missing `cc` is named in the plan (`gcc`; on macOS `xcode-select --install`). The choice is recorded in
 `~/.local/share/drgnx/cargo` (the cargo's path, and `RUSTUP_HOME`/`CARGO_HOME` lines for a private rustup) because the
-update timer's `PATH` lacks `~/.cargo/bin` and `/usr/lib/rust-1.91/bin`; `drgnx runtime build` and `drgnx update` use it.
+update timer's `PATH` lacks `~/.cargo/bin` and `/usr/lib/rust-X.Y/bin`; `drgnx runtime build` and `drgnx update` use it.
 
 The build uses `-j` by CPUs and memory (one job per 1.5 GiB available). On Linux with a user systemd it runs inside
 `systemd-run --user --scope` with `MemoryMax` of jobs x 1.5 GiB + 1 GiB (never more than available minus 1 GiB) and no
@@ -371,6 +382,29 @@ drgnx runtime install [--prefix DIR] # <data>/bin/ratatoskr (by rename), links D
 
 `runtime install` refuses a binary built with test hooks. The build's commit (`ratatoskr version --json`) is what the
 doctor compares with the checkout.
+
+## Fonts
+
+The look ([look guide](look.md#fonts)) uses Adwaita Sans for the interface and JetBrains Mono for code. Neither is
+installed by install.sh; a font that is missing falls back down its list (Adwaita Mono, then the generic monospace;
+Inter, then the generic sans-serif), and `drgnx doctor` names each role that fell back and how to install the font
+(the `fonts` row appears once a graphical frame has been checked):
+
+| System | Packages |
+| --- | --- |
+| Fedora | `adwaita-sans-fonts`, `jetbrains-mono-nl-fonts` (the `-nl` build has no ligatures; image-based Fedora: install them in the toolbox) |
+| Arch | `adwaita-fonts`, `ttf-jetbrains-mono` |
+| Ubuntu 26.04 | `fonts-adwaita-sans`, `fonts-jetbrains-mono` |
+| macOS (Homebrew) | `font-adwaita`, `font-jetbrains-mono` (casks) |
+
+Where Adwaita Sans is not packaged, Inter is the fallback (`inter-font` on Arch, `fonts-inter` on Ubuntu).
+
+## A browser for agents
+
+Agent sessions on Linux can drive a headless Chromium. install.sh and `drgnx update` never download one. If your
+distro has a package (Fedora: `dnf install chromium-headless`), use that; otherwise run `drgnx browser install`, which
+fetches a checksum-pinned headless shell into drgnx's data folder when you ask. See the
+[agent browser guide](agent-browser.md).
 
 ## Staying up to date
 
@@ -395,9 +429,10 @@ It works in the install's own checkout (the folder the `drgnx` command runs from
    got. A failed Rust build rolls the whole update back, so the Lisp and the binary never differ: the last run reads
    "failed: runtime build failed (…)", and the doctor says to fix the toolchain, then `drgnx update`. The same happens if the update is interrupted (Ctrl-C, a timeout,
    logout) before it finished. Output of the steps is kept in `~/.local/state/drgnx/update/last.log`.
-5. Points an installed `drgnx.service` at the Emacs drgnx uses now (`drgnx service-unit --refresh`; only the
-   `ExecStart=` line changes; see [packages.md](packages.md#running-drgnx-as-a-daemon)), and an installed desktop entry
-   at drgnx's icon and Nidhogg's windows. It never restarts the service.
+5. Points an installed `drgnx.service` (macOS: drgnx's launch agent) at the Emacs drgnx uses now (`drgnx service-unit
+   --refresh`; only the `ExecStart=` line, or the agent's `ProgramArguments`, changes; see
+   [packages.md](packages.md#running-drgnx-as-a-daemon)), and an installed desktop entry at drgnx's icon and Nidhogg's
+   windows. It never restarts the service.
 6. Prints what changed (`old..new`, one line per commit, at most 15) and ends with "Restart drgnx to use it": it
    never restarts or talks to a running drgnx unless you pass `--restart` (below). Restart it soon: a running drgnx still has the old code in memory, and
    files it loads later come from the new version.
@@ -414,10 +449,12 @@ It works in the install's own checkout (the folder the `drgnx` command runs from
 because `drgnx rollback` already exists for *packages*. A second `--back` goes forward again.
 
 `drgnx update --restart` (also with `--back`) restarts drgnx for you after a successful update: on Linux it runs
-`systemctl --user restart drgnx` when the drgnx systemd user unit is enabled. The restart ends the daemon, so its
+`systemctl --user restart drgnx` when the drgnx systemd user unit is enabled; on macOS, when drgnx's launch agent is
+installed (`drgnx service-unit --install`), it unloads the agent and loads it again (`launchctl bootout`, then
+`bootstrap`), so launchd starts the Emacs the update pointed the agent at. The restart ends the daemon, so its
 windows close and `emacsclient` sessions lose their server; run `drgnx` to open a window again. A failed update or
-rollback never restarts, and with no drgnx service installed (and on macOS, which has none) it says so and changes
-nothing. The daily timer never restarts.
+rollback never restarts, and with no drgnx service installed it says so and changes nothing. The daily timer never
+restarts.
 
 ### Updating by itself
 

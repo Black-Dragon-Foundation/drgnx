@@ -1,0 +1,29 @@
+{"scenario": "debug/start-select-stop", "requires": ["v1", "test-hooks"], "doc": "debug/start asks for trust, then for launch.json's input, then starts the mock adapter (ratatoskr debug-mock); its stop sends debug-state and debug-frame (open: true to the starting editor); debug/select shows another frame; debug/control stop disconnects and debug-ended follows."}
+{"do": "start", "hub": "h"}
+{"do": "write_file", "path": "$ROOT/proj/.vscode/launch.json", "json": {"version": "0.2.0", "configurations": [{"type": "mock", "request": "launch", "name": "Mock: ${input:who}", "program": "app", "who": "${input:who}"}], "inputs": [{"id": "who", "type": "pickString", "description": "Who", "options": ["a", "b"]}]}}
+{"do": "write_file", "path": "$ROOT/script.json", "json": [{"expect": "initialize", "args": {"adapterID": "mock"}, "ok": {"supportsConfigurationDoneRequest": true}}, {"expect": "launch", "args": {"program": "app", "who": "b"}, "ok": {}}, {"event": "initialized"}, {"expect": "configurationDone"}, {"event": "stopped", "body": {"reason": "breakpoint", "threadId": 1, "allThreadsStopped": true}}, {"expect": "threads", "ok": {"threads": [{"id": 1, "name": "main"}]}}, {"expect": "stackTrace", "args": {"threadId": 1, "startFrame": 0, "levels": 20}, "ok": {"stackFrames": [{"id": 1000, "name": "main", "line": 9, "column": 1, "source": {"path": "/p/a.py"}}, {"id": 1001, "name": "caller", "line": 20, "column": 3, "source": {"path": "/p/b.py"}}], "totalFrames": 2}}, {"expect": "scopes", "args": {"frameId": 1000}, "ok": {"scopes": [{"name": "Locals", "variablesReference": 7, "expensive": false}]}}, {"expect": "variables", "args": {"variablesReference": 7}, "ok": {"variables": [{"name": "x", "value": "1", "variablesReference": 0}]}}, {"expect": "scopes", "args": {"frameId": 1001}, "ok": {"scopes": []}}, {"expect": "disconnect", "ok": {}}, {"die": true}]}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "debug/configs", "params": {"root": "$ROOT/proj"}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"configs": [{"id": "launch:0", "name": "Mock: ${input:who}", "source": "launch", "type": "mock", "request": "launch", "needs_trust": true}]}}}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "debug/start", "params": {"root": "$ROOT/proj", "config": "launch:0", "adapters": [{"id": "mock", "name": "Mock", "types": ["mock"], "find": {"path": "$HUB_BIN"}, "start": {"stdio": ["{program}", "debug-mock", "$ROOT/script.json"]}}]}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": {"needs": "trust", "session": "$absent"}}}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "debug/trust", "params": {"root": "$ROOT/proj", "trusted": true}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "debug/start", "params": {"root": "$ROOT/proj", "config": "launch:0", "adapters": [{"id": "mock", "name": "Mock", "types": ["mock"], "find": {"path": "$HUB_BIN"}, "start": {"stdio": ["{program}", "debug-mock", "$ROOT/script.json"]}}]}}}
+{"do": "expect", "conn": "e", "json": {"id": 5, "result": {"needs": [{"input": {"id": "who", "kind": "pickString", "options": ["a", "b"]}}]}}}
+{"do": "send", "conn": "e", "json": {"id": 6, "method": "debug/start", "params": {"root": "$ROOT/proj", "config": "launch:0", "adapters": [{"id": "mock", "name": "Mock", "types": ["mock"], "find": {"path": "$HUB_BIN"}, "start": {"stdio": ["{program}", "debug-mock", "$ROOT/script.json"]}}], "inputs": [{"id": "who", "value": "c"}]}}}
+{"do": "expect", "conn": "e", "json": {"id": 6, "error": {"code": "invalid-params", "path": "inputs"}}}
+{"do": "send", "conn": "e", "json": {"id": 7, "method": "debug/start", "params": {"root": "$ROOT/proj", "config": "launch:0", "adapters": [{"id": "mock", "name": "Mock", "types": ["mock"], "find": {"path": "$HUB_BIN"}, "start": {"stdio": ["{program}", "debug-mock", "$ROOT/script.json"]}}], "inputs": [{"id": "who", "value": "b"}]}}}
+{"do": "expect", "conn": "e", "json": {"id": 7, "result": {"session": "$capture:s"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "debug-frame", "data": {"session": "$s", "thread": 1, "path": "/p/a.py", "line": 9, "top": true, "reason": "breakpoint", "open": true}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "debug-state", "data": {"sessions": [{"id": "$s", "name": "Mock: b", "state": "stopped", "reason": "breakpoint"}]}}}
+{"do": "send", "conn": "e", "json": {"id": 8, "method": "debug/select", "params": {"session": "$s", "frame": 1001}}}
+{"do": "expect", "conn": "e", "json": {"id": 8, "result": true}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "debug-frame", "data": {"session": "$s", "path": "/p/b.py", "line": 20, "top": false, "open": true}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 9, "method": "debug/configs", "params": {"root": "$ROOT/proj"}}}
+{"do": "expect", "conn": "e", "json": {"id": 9, "result": {"last": "launch:0", "configs": [{"id": "launch:0", "needs_trust": false}]}}}
+{"do": "send", "conn": "e", "json": {"id": 10, "method": "debug/control", "params": {"session": "$s", "op": "stop"}}}
+{"do": "expect", "conn": "e", "json": {"id": 10, "result": true}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "debug-ended", "data": {"session": "$s", "name": "Mock: b"}}}

@@ -1,0 +1,9 @@
+{"scenario": "term/text-range-beyond-window", "requires": ["v1", "linux"], "doc": "term/text-range with no first key starts at the oldest row the terminal holds, beyond the buffer's window: copy reaches past what the buffer shows."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "term/open", "params": {"dir": "/", "command": ["/bin/sh", "-c", "printf 'A1\\nA2\\nA3\\nA4\\nA5\\nA6\\nA7\\nA8'; exec sleep 600"], "env": [["PATH", "/usr/bin:/bin"]], "cols": 40, "rows": 3, "cell_px": [8, 16], "class": "gui-1", "window": 2}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"id": "$capture:t", "view": "$capture:tv"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "$tv", "base": 0, "ops": [{"reset": "$any"}]}}, "within_ms": 10000}
+{"do": "poll", "conn": "e", "json": {"id": 3, "method": "term/text-range", "params": {"id": "$t"}}, "expect": {"id": 3, "result": {"text": "A1\nA2\nA3\nA4\nA5\nA6\nA7\nA8"}}, "within_ms": 10000}

@@ -248,9 +248,13 @@ untouched.  Only runs as a typed command, and the wait ends at the delay."
         (if-let* ((event (condition-case nil        ; a keyboard macro that ends here has no next key
                              (with-timeout (drgnx-editing-prefix-delay nil) (read-key))
                            (args-out-of-range nil))))
-            (if (eq event ?\C-g)
-                (progn (deactivate-mark) (keyboard-quit))    ; C-x C-g would be undefined
-              (drgnx-editing--hand-back (append (listify-key-sequence keys) (list event))))
+            (cond ((eq event ?\C-g)
+                   (deactivate-mark) (keyboard-quit))    ; C-x C-g would be undefined
+                  ((and (consp event) (symbolp (car event)) (string-match-p "mouse" (symbol-name (car event))))
+                   ;; a click is no key of the prefix: the key acts, the click is its own event
+                   (funcall action)
+                   (setq unread-command-events (cons event unread-command-events)))
+                  (t (drgnx-editing--hand-back (append (listify-key-sequence keys) (list event)))))
           (funcall action))
       (funcall action))))
 
@@ -295,6 +299,7 @@ kill ring, so a hung owner or a terminal that refuses the read costs its timeout
                                         (go-line "Go to Line…" goto-line "Go to a line number")
                                         (edit-select-all "Select All" mark-whole-buffer "Select the whole buffer")
                                         (edit-select-line "Select Line" drgnx-editing-select-line "Select the line; again for the next")
+                                        (edit-undo "Undo" undo "Undo the last change (in the selection, with one)")
                                         (edit-redo "Redo" undo-redo "Redo the last undone change")
                                         (edit-comment "Toggle Comment" comment-line "Comment or uncomment the line or the selection")
                                         (edit-delete-line "Delete Line" kill-whole-line "Delete the whole line")

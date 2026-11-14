@@ -833,3 +833,535 @@ async fn the_gate_reads_the_real_clock_for_the_time_presets() {
         .unwrap();
     assert_eq!(e.cell(a).verdict, verdict(Preset::Autonomous, a));
 }
+
+/// The ctx of session SID (in PLAN) with FACTS.
+fn browser_ctx(sid: &str, plan: Option<&str>, facts: Value) -> ActionCtx {
+    ActionCtx {
+        session: Some(sid.into()),
+        plan: plan.map(Into::into),
+        facts: serde_json::from_value(facts).unwrap(),
+        ..ActionCtx::default()
+    }
+}
+
+/// A plan entity ID, written by the user.
+async fn user_plan(db: &CoordDb, id: &'static str) {
+    db.write(meta(Class::User), move |tx| {
+        entity::create(
+            tx,
+            EntityNew {
+                id: id.into(),
+                kind: "plan".into(),
+                project: None,
+                title: Some("p".into()),
+                status: None,
+                body: None,
+                priority: None,
+                assignee: None,
+                data: json!({}),
+                origin: Origin::Recorded,
+                source: None,
+            },
+        )?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
+fn matrix_cards(tx: &WTx<'_>) -> i64 {
+    tx.sql()
+        .query_row("select count(*) from card where kind = 'matrix'", [], |r| {
+            r.get(0)
+        })
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_retry_after_session_yes_makes_no_card() {
+    // Balanced asks a chat for `browser`: the first try makes card 1; the user's session yes is a grant, and the
+    // retry is allowed with no second card; another session still asks
+    let (_d, db) = db();
+    let g = MatrixGate::default();
+    g.apply_setting(&json!({"preset": "balanced"})).unwrap();
+    let g1 = g.clone();
+    let first = db
+        .write(meta(Class::System), move |tx| {
+            g1.check(
+                tx,
+                &who(Role::Chat),
+                Action::Browser,
+                &browser_ctx("s1", None, json!({})),
+                1.0,
+            )
+        })
+        .await
+        .unwrap();
+    let Gate::Ask(card) = first else {
+        panic!("asked: {first:?}")
+    };
+    db.write(meta(Class::User), move |tx| {
+        grants::create_matrix(
+            tx,
+            grants::Who::Session("s1".into()),
+            "browser",
+            None,
+            None,
+            None,
+            card,
+        )?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let (retry, other, n) = db
+        .write(meta(Class::System), move |tx| {
+            let w = who(Role::Chat);
+            let retry = g.check(
+                tx,
+                &w,
+                Action::Browser,
+                &browser_ctx("s1", None, json!({})),
+                2.0,
+            )?;
+            let n = matrix_cards(tx);
+            let other = g.check(
+                tx,
+                &w,
+                Action::Browser,
+                &browser_ctx("s2", None, json!({})),
+                2.0,
+            )?;
+            Ok((retry, other, n))
+        })
+        .await
+        .unwrap();
+    assert_eq!(retry, Gate::Allow);
+    assert_eq!(n, 1);
+    assert!(matches!(other, Gate::Ask(c) if c != card), "{other:?}");
+}
+
+#[tokio::test]
+async fn plan_grant_covers_every_session_of_the_plan() {
+    let (_d, db) = db();
+    user_plan(&db, "plan:p1").await;
+    user_plan(&db, "plan:p2").await;
+    db.write(meta(Class::User), |tx| {
+        grants::create_matrix(
+            tx,
+            grants::Who::Plan("plan:p1".into()),
+            "browser.web",
+            None,
+            None,
+            None,
+            9,
+        )?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let g = MatrixGate::default();
+    g.apply_setting(&json!({"preset": "balanced"})).unwrap();
+    let r = db
+        .write(meta(Class::System), move |tx| {
+            let mut out = Vec::new();
+            for (sid, plan) in [("w1", "plan:p1"), ("w2", "plan:p1"), ("w3", "plan:p2")] {
+                let c = browser_ctx(sid, Some(plan), json!({"host": "example.com:443"}));
+                out.push(g.check(tx, &who(Role::Worker), Action::BrowserWeb, &c, 1.0)?);
+            }
+            // a plan's grant is for its row only
+            let c = browser_ctx("w1", Some("plan:p1"), json!({}));
+            out.push(g.check(tx, &who(Role::Chat), Action::Browser, &c, 1.0)?);
+            Ok(out)
+        })
+        .await
+        .unwrap();
+    assert_eq!(r[0], Gate::Allow);
+    assert_eq!(r[1], Gate::Allow);
+    assert!(matches!(r[2], Gate::Ask(_)), "{:?}", r[2]);
+    assert!(matches!(r[3], Gate::Ask(_)), "{:?}", r[3]);
+}
+
+#[tokio::test]
+async fn never_ignores_grants() {
+    // a live session grant, then the user's switch to Never for the row: the gate and the recheck refuse
+    let (_d, db) = db();
+    let g = MatrixGate::default();
+    g.apply_setting(&json!({"preset": "balanced"})).unwrap();
+    let g1 = g.clone();
+    let card = db
+        .write(meta(Class::System), move |tx| {
+            let Gate::Ask(card) = g1.check(
+                tx,
+                &who(Role::Chat),
+                Action::Browser,
+                &browser_ctx("s1", None, json!({})),
+                1.0,
+            )?
+            else {
+                panic!("asked");
+            };
+            Ok(card)
+        })
+        .await
+        .unwrap();
+    db.write(meta(Class::User), move |tx| {
+        grants::create_matrix(
+            tx,
+            grants::Who::Session("s1".into()),
+            "browser",
+            None,
+            None,
+            None,
+            card,
+        )?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let g2 = g.clone();
+    assert_eq!(
+        db.read(move |c| Ok(g2.recheck(c, card, 2.0)))
+            .await
+            .unwrap(),
+        Gate::Allow
+    );
+    g.apply_setting(&json!({"preset": "balanced", "cells": [
+        {"action": "browser", "column": {"role": "chat"}, "verdict": "never"}]}))
+        .unwrap();
+    let g3 = g.clone();
+    let now = db
+        .write(meta(Class::System), move |tx| {
+            g3.check(
+                tx,
+                &who(Role::Chat),
+                Action::Browser,
+                &browser_ctx("s1", None, json!({})),
+                3.0,
+            )
+        })
+        .await
+        .unwrap();
+    assert!(matches!(now, Gate::Never(_)), "{now:?}");
+    let later = db.read(move |c| Ok(g.recheck(c, card, 3.0))).await.unwrap();
+    assert!(matches!(later, Gate::Never(_)), "{later:?}");
+}
+
+#[tokio::test]
+async fn web_once_covers_only_its_host() {
+    let (_d, db) = db();
+    let at = db
+        .write(meta(Class::User), |tx| {
+            let at = tx.at();
+            grants::create_matrix(
+                tx,
+                grants::Who::Session("s1".into()),
+                "browser.web",
+                None,
+                Some("example.com:443".into()),
+                Some(at + 600.0),
+                1,
+            )?;
+            let target = json!({"host": "printer.lan", "addr": "192.168.1.20", "port": 631});
+            grants::create_matrix(
+                tx,
+                grants::Who::Session("s1".into()),
+                "browser.private",
+                Some(target),
+                None,
+                None,
+                2,
+            )?;
+            Ok(at)
+        })
+        .await
+        .unwrap();
+    let g = MatrixGate::default();
+    g.apply_setting(&json!({"preset": "balanced"})).unwrap();
+    let r = db
+        .write(meta(Class::System), move |tx| {
+            let w = who(Role::Worker);
+            let web = |host: &str| browser_ctx("s1", None, json!({"host": host}));
+            let mut out = vec![
+                g.check(
+                    tx,
+                    &w,
+                    Action::BrowserWeb,
+                    &web("example.com:443"),
+                    at + 1.0,
+                )?,
+                g.check(tx, &w, Action::BrowserWeb, &web("other.org:443"), at + 1.0)?,
+                g.check(
+                    tx,
+                    &w,
+                    Action::BrowserWeb,
+                    &web("example.com:443"),
+                    at + 601.0,
+                )?,
+                g.check(
+                    tx,
+                    &w,
+                    Action::BrowserWeb,
+                    &browser_ctx("s2", None, json!({"host": "example.com:443"})),
+                    at + 1.0,
+                )?,
+            ];
+            // a private grant allows its own target only
+            let private = |t: Value| browser_ctx("s1", None, json!({"target": t}));
+            let same = json!({"host": "printer.lan", "addr": "192.168.1.20", "port": 631});
+            let other = json!({"host": "printer.lan", "addr": "192.168.1.20", "port": 80});
+            out.push(g.check(tx, &w, Action::BrowserPrivate, &private(same), at + 1.0)?);
+            out.push(g.check(tx, &w, Action::BrowserPrivate, &private(other), at + 1.0)?);
+            Ok(out)
+        })
+        .await
+        .unwrap();
+    assert_eq!(r[0], Gate::Allow);
+    for (i, x) in r.iter().enumerate().skip(1) {
+        let want_allow = i == 4;
+        assert_eq!(*x == Gate::Allow, want_allow, "{i}: {x:?}");
+        if !want_allow {
+            assert!(matches!(x, Gate::Ask(_)), "{i}: {x:?}");
+        }
+    }
+}
+
+/// The card of A for session s1 (in PLAN) with FACTS, asked of a chat under Balanced: its title and data.
+async fn browser_card(a: Action, plan: Option<&'static str>, facts: Value) -> (String, Value) {
+    let (_d, db) = db();
+    let g = MatrixGate::default();
+    g.apply_setting(&json!({"preset": "balanced"})).unwrap();
+    db.write(meta(Class::System), move |tx| {
+        let c = browser_ctx("s1", plan, facts);
+        let Gate::Ask(card) = g.check(tx, &who(Role::Chat), a, &c, 1.0)? else {
+            panic!("asked");
+        };
+        let (t, d): (String, String) =
+            tx.sql()
+                .query_row("select title, data from card where id = ?1", [card], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })?;
+        Ok((t, serde_json::from_str(&d).unwrap()))
+    })
+    .await
+    .unwrap()
+}
+
+fn ids(d: &Value) -> Vec<&str> {
+    d["choices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["id"].as_str().unwrap())
+        .collect()
+}
+
+#[tokio::test]
+async fn a_browser_card_lists_its_scopes_and_says_what_it_opens() {
+    let (title, d) = browser_card(Action::Browser, None, json!({})).await;
+    assert_eq!(title, "s1 wants a browser in its sandbox");
+    assert_eq!(ids(&d), ["once", "session", "refuse"]);
+    assert_eq!(d["choices"][0]["label"], "Allow once (10 minutes)");
+    assert_eq!(d["once_window"], 600);
+    assert!(d.get("body").is_none());
+    let (title, d) = browser_card(
+        Action::BrowserWeb,
+        Some("plan:p"),
+        json!({"host": "example.com:443"}),
+    )
+    .await;
+    assert_eq!(title, "s1 wants to open web sites (first: example.com:443)");
+    assert_eq!(ids(&d), ["once", "session", "plan", "refuse"]);
+    assert_eq!(
+        d["choices"][0]["label"],
+        "Allow example.com:443 only, for 10 minutes"
+    );
+    assert_eq!(d["body"], WEB_BODY);
+    // the other rows' cards are as they were: no choices
+    let (_, d) = {
+        let (_d, db) = db();
+        let g = MatrixGate::default();
+        g.apply_setting(&ask_commit("cautious", "ask")).unwrap();
+        db.write(meta(Class::System), move |tx| {
+            g.check(
+                tx,
+                &who(Role::Worker),
+                Action::Commit,
+                &ctx("git commit"),
+                1.0,
+            )?;
+            let d: String = tx
+                .sql()
+                .query_row("select data from card", [], |r| r.get(0))?;
+            Ok(((), serde_json::from_str::<Value>(&d).unwrap()))
+        })
+        .await
+        .unwrap()
+    };
+    assert!(d.get("choices").is_none(), "{d}");
+}
+
+#[tokio::test]
+async fn a_private_card_offers_widths_for_a_lan_or_ula_literal_only() {
+    let private = |t: &str, addr: &str, class: &str| json!({"target": {"host_port": t}, "addr": addr, "class": class});
+    let (title, d) = browser_card(
+        Action::BrowserPrivate,
+        Some("plan:p"),
+        private("192.168.1.20:8080", "192.168.1.20:8080", "lan"),
+    )
+    .await;
+    assert_eq!(
+        title,
+        "s1 wants to open 192.168.1.20:8080 → 192.168.1.20:8080 (your LAN)"
+    );
+    assert_eq!(
+        ids(&d),
+        [
+            "once",
+            "session",
+            "plan",
+            "session/cidr",
+            "plan/cidr",
+            "session/all-private",
+            "plan/all-private",
+            "refuse"
+        ]
+    );
+    assert_eq!(
+        d["choices"][3]["label"],
+        "Allow 192.168.1.0/24 on port 8080 for this session"
+    );
+    assert_eq!(d["body"], PRIVATE_BODY);
+    let (_, d) = browser_card(
+        Action::BrowserPrivate,
+        None,
+        private(
+            "[fd12:3456:789a:1::5]:80",
+            "[fd12:3456:789a:1::5]:80",
+            "ula",
+        ),
+    )
+    .await;
+    assert_eq!(
+        ids(&d),
+        [
+            "once",
+            "session",
+            "session/cidr",
+            "session/all-private",
+            "refuse"
+        ]
+    );
+    assert_eq!(
+        d["choices"][2]["label"],
+        "Allow fd12:3456:789a:1::/64 on port 80 for this session"
+    );
+    // a name, the reserved name, a tailnet or link-local literal: one target only
+    for (t, addr, class, shown) in [
+        ("printer.local:631", "192.168.1.20:631", "lan", "your LAN"),
+        (
+            "host.drgnx.internal:5173",
+            "127.0.0.1:5173",
+            "loopback",
+            "this computer",
+        ),
+        (
+            "100.64.0.7:22",
+            "100.64.0.7:22",
+            "cgnat",
+            "your tailnet (CGNAT)",
+        ),
+        (
+            "169.254.1.2:80",
+            "169.254.1.2:80",
+            "link_local",
+            "link-local",
+        ),
+    ] {
+        let (title, d) = browser_card(Action::BrowserPrivate, None, private(t, addr, class)).await;
+        assert_eq!(ids(&d), ["once", "session", "refuse"], "{t}");
+        assert_eq!(title, format!("s1 wants to open {t} → {addr} ({shown})"));
+    }
+}
+
+#[tokio::test]
+async fn recheck_follows_the_grant_a_browser_card_wrote() {
+    // a width's yes allows while its grant lives; a once's yes ends with its window
+    let (_d, db) = db();
+    let g = MatrixGate::default();
+    g.apply_setting(&json!({"preset": "balanced"})).unwrap();
+    let g1 = g.clone();
+    let (cidr, web) = db
+        .write(meta(Class::System), move |tx| {
+            let w = who(Role::Chat);
+            let lan = json!({"target": {"host_port": "192.168.1.20:80"}, "addr": "192.168.1.20:80",
+                             "class": "lan"});
+            let Gate::Ask(cidr) = g1.check(
+                tx,
+                &w,
+                Action::BrowserPrivate,
+                &browser_ctx("s1", None, lan),
+                1.0,
+            )?
+            else {
+                panic!("asked");
+            };
+            let Gate::Ask(web) = g1.check(
+                tx,
+                &w,
+                Action::BrowserWeb,
+                &browser_ctx("s1", None, json!({"host": "example.com:443"})),
+                1.0,
+            )?
+            else {
+                panic!("asked");
+            };
+            Ok((cidr, web))
+        })
+        .await
+        .unwrap();
+    let at = db
+        .write(meta(Class::User), move |tx| {
+            let at = tx.at();
+            card_settle(tx, cidr, "session/cidr", at)?;
+            grants::create_matrix(
+                tx,
+                grants::Who::Session("s1".into()),
+                "browser.private",
+                Some(json!({"cidr": "192.168.1.0/24", "ports": "80"})),
+                None,
+                None,
+                cidr,
+            )?;
+            card_settle(tx, web, "once", at)?;
+            grants::create_matrix(
+                tx,
+                grants::Who::Session("s1".into()),
+                "browser.web",
+                None,
+                Some("example.com:443".into()),
+                Some(at + 600.0),
+                web,
+            )?;
+            Ok(at)
+        })
+        .await
+        .unwrap();
+    let r = db
+        .read(move |c| {
+            Ok([
+                g.recheck(c, cidr, at + 1.0),
+                g.recheck(c, web, at + 1.0),
+                g.recheck(c, web, at + 601.0),
+            ])
+        })
+        .await
+        .unwrap();
+    assert_eq!(r[0], Gate::Allow);
+    assert_eq!(r[1], Gate::Allow);
+    assert!(
+        matches!(&r[2], Gate::Never(w) if w.contains("ended")),
+        "{:?}",
+        r[2]
+    );
+}

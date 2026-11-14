@@ -1,0 +1,21 @@
+{"scenario": "pair/write-latency", "requires": ["v1", "test-hooks"], "doc": "Gated (B, the hub's virtual clock, never advanced). An agent's write through the drgnx tool reaches the editor as `pair-apply` with the hub's clock standing still: nothing in the path waits on a timer, so the latency is the hub's work alone (the budget row `pair-write-latency` is 100 ms p95 with the editor idle; the perf lab measures it against the real clock)."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/project && echo readme > $ROOT/project/README"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-matrix (:preset autonomous)) (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h", "args": ["--test-clock"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 90, "method": "pair/open", "params": {"file": "$ROOT/project/README", "kind": "normal"}}}
+{"do": "expect", "conn": "e", "json": {"id": 90, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/project"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "call:edit_file {\"path\": \"$ROOT/project/README\", \"old\": \"readme\", \"new\": \"README\"}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "pair-apply", "data": {"write": "$capture:w", "session": "$sid", "ordinal": 1, "file": "$ROOT/project/README", "version": "$absent", "edits": [{"kind": "replace", "old": "readme", "new": "README"}], "ttl_ms": 2000}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "pair/answer", "params": {"write": "$w", "result": "applied", "version": 2, "saved": true}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "poll", "conn": "c", "json": {"id": 3, "method": "agents/get", "params": {"id": "$sid"}}, "expect": {"id": 3, "result": {"session": {"id": "$sid", "status": "idle"}, "entries": {"$contains": [{"type": "agent", "text": "call: applied in the editor and saved"}]}}}, "within_ms": 20000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "cat $ROOT/project/README"], "expect_code": 0, "expect_stdout": "readme\n"}

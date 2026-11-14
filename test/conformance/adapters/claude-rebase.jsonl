@@ -1,0 +1,34 @@
+{"scenario": "adapters/claude-rebase", "requires": ["v1", "test-hooks"], "doc": "[C] The check of a rebase of the org's claude-agent-acp fork: against the personality that mirrors it, the fork advertises context, drop, pin, compact-preview and before-tool; the context breakdown reaches the snapshot; drop, pin and the preview are forwarded as `_drgnx/context/drop|pin` and `_drgnx/compact/preview`; the fork's `_drgnx/before_tool` is answered by the hooks (a deny with the hub's words, an allow). A feature that drops out of the advertised list, or a method the fork stops answering, fails here by name. (The same file, with the profile's command pointed at the rebased fork, is the live check; the pin moves only on a green row.)"}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"fork\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--panel\" \"context,drop,pin,compact-preview,before-tool\" \"--log\" \"$ROOT/acp.log\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-agents-hook-rules", "source": "row", "value": [{"id": "no-rm", "point": "before-tool", "tool-kinds": ["execute"], "command": "^rm ", "verdict": "deny", "reason": "no rm"}]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/start", "params": {"profile": "fork", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/get", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"session": {"id": "$sid", "panel": {"features": ["context", "drop", "pin", "compact-preview", "before-tool"]}}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/send", "params": {"id": "$sid", "text": "panel:context {\"used\": 1200, \"size\": 200000, \"parts\": [{\"kind\": \"conversation\", \"tokens\": 1200}]}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"panel": {"context": {"used": 1200}}}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/context-drop", "params": {"id": "$sid", "item": "t1"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": true}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "agents/context-pin", "params": {"id": "$sid", "item": "f1", "pinned": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": true}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "agents/compact-preview", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "result": {"frees": "$number"}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 8, "method": "agents/send", "params": {"id": "$sid", "text": "panel:before-tool {\"kind\": \"execute\", \"title\": \"rm -rf x\", \"rawInput\": {\"command\": \"rm -rf x\"}, \"_meta\": {\"claudeCode\": {\"toolName\": \"Bash\"}}}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 8, "result": true}}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "{\"before_tool\":{\"outcome\":\"deny\",\"reason\":\"drgnx refused Bash; the rule no-rm said: «no rm»\"}}", "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 9, "method": "agents/send", "params": {"id": "$sid", "text": "panel:before-tool {\"kind\": \"execute\", \"title\": \"ls\", \"rawInput\": {\"command\": \"ls\"}, \"_meta\": {\"claudeCode\": {\"toolName\": \"Bash\"}}}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 9, "result": true}}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "{\"before_tool\":{\"outcome\":\"allow\"}}", "within_ms": 30000}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "\"method\":\"_drgnx/context/drop\"", "within_ms": 10000}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "\"method\":\"_drgnx/context/pin\"", "within_ms": 10000}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "\"method\":\"_drgnx/compact/preview\"", "within_ms": 10000}

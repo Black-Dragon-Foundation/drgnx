@@ -47,12 +47,17 @@ pub fn random_hex(bytes: usize) -> String {
 
 // ---------------------------------------------------------------- the root every hub lives in
 
-/// `/tmp/rtsk-XXXXXX/` with `home run state data config cache tmp`: `/tmp`, not `$TMPDIR`, so macOS socket paths stay short.
+/// `/tmp/rtsk-XXXXXX/` with `home run state data config cache tmp`: `/tmp`, not `$TMPDIR`, so macOS socket paths stay short
+/// (under its true name, `/private/tmp` on macOS).
 /// `DRGNX_CONFORMANCE_ROOTS=DIR/PREFIX` makes them `DIR/PREFIXXXXXXX/` instead (a short DIR: the socket path must stay
 /// within 103 bytes).
 pub struct Root {
     dir: tempfile::TempDir,
 }
+
+/// A scenario hub's log level when the caller sets none: info, and a session's turn stages at debug (sending, the
+/// snapshot before it, the prompt written, each update read and applied), so a failure's log tail names the stage.
+pub const HUB_LOG: &str = "info,drgnx_ratatoskr::agents::session=debug";
 
 impl Root {
     pub fn new() -> Result<Arc<Root>, String> {
@@ -64,9 +69,13 @@ impl Root {
             ),
             None => (Path::new("/tmp"), std::ffi::OsStr::new("rtsk-")),
         };
+        // The parent's true name, once: on macOS `/tmp` is a link to `/private/tmp`, and the hub refuses a link in a
+        // path it opens and reports the true names, so `$ROOT` must be one already.
+        let parent = std::fs::canonicalize(parent)
+            .map_err(|e| format!("cannot resolve {}: {e}", parent.display()))?;
         let dir = tempfile::Builder::new()
             .prefix(prefix)
-            .tempdir_in(parent)
+            .tempdir_in(&parent)
             .map_err(|e| format!("cannot make a root in {}: {e}", parent.display()))?;
         for sub in ["home", "run", "state", "data", "config", "cache", "tmp"] {
             std::fs::create_dir(dir.path().join(sub))
@@ -85,17 +94,32 @@ impl Root {
     }
 
     /// The whole environment a hub or a CLI run gets (nothing else is inherited but `PATH`, `DRGNX_EMACS` (the
-    /// editor's own CLIs that a row runs need it) and `DBUS_SESSION_BUS_ADDRESS`): every directory points into this root, so nothing reaches `~`.  The session bus is
+    /// editor's own CLIs that a row runs need it), `DBUS_SESSION_BUS_ADDRESS` and `DRGNX_RATATOSKR_LOG`, [`HUB_LOG`]
+    /// when unset): every directory points into this root, so nothing reaches `~`.  The session bus is
     /// how a container job's podman reaches the user's systemd, which enforces the job's caps (the hub refuses the job
     /// without it; `XDG_RUNTIME_DIR` here is the root's, so podman cannot find the bus there).  `extra` wins.
     pub fn base_env(&self, extra: Vec<(String, String)>) -> BTreeMap<String, String> {
         let dir = |s: &str| self.path().join(s).to_string_lossy().into_owned();
         let mut vars: BTreeMap<String, String> = BTreeMap::new();
-        for k in ["PATH", "DRGNX_EMACS", "DBUS_SESSION_BUS_ADDRESS"] {
+        for k in [
+            "PATH",
+            "DRGNX_EMACS",
+            "DBUS_SESSION_BUS_ADDRESS",
+            "DRGNX_RATATOSKR_STALL_FILE",
+        ] {
             if let Ok(v) = std::env::var(k) {
                 vars.insert(k.into(), v);
             }
         }
+        // the hub's log level: the caller's, else the turn's stages at debug, so a flaky row's log tail (printed on
+        // a failure) names the stage a session stopped at
+        vars.insert(
+            "DRGNX_RATATOSKR_LOG".into(),
+            std::env::var("DRGNX_RATATOSKR_LOG")
+                .ok()
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| HUB_LOG.into()),
+        );
         for (k, v) in [
             ("HOME", dir("home")),
             ("XDG_RUNTIME_DIR", dir("run")),
@@ -198,6 +222,23 @@ pub fn stop_detached(root: &Root) {
             unsafe { libc::kill(pid as i32, libc::SIGKILL) };
         }
     }
+}
+
+/// Removes the containers a scenario left in ROOT's own podman store (its `XDG_DATA_HOME`): a row that fails before
+/// its last step leaves its fixtures running, and once the root is gone no podman can see them, so they keep their
+/// host ports and the next rows' fixtures can't bind them.
+pub fn remove_containers(root: &Root) {
+    if !root.path().join("xdg-data/containers").is_dir() {
+        return;
+    }
+    let _ = std::process::Command::new("podman")
+        .args(["rm", "--all", "--force", "--time", "0"])
+        .env_clear()
+        .envs(root.base_env(vec![]))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
 }
 
 // ---------------------------------------------------------------- hubs
@@ -304,7 +345,11 @@ impl Hub {
             .last()
             .and_then(|f| std::fs::read_to_string(f).ok())
             .unwrap_or_default();
-        let lines: Vec<&str> = text.lines().collect();
+        // loro's block diagnostics come by the dozen per export and would push the hub's own lines out
+        let lines: Vec<&str> = text
+            .lines()
+            .filter(|l| !l.contains("\"target\":\"loro_internal"))
+            .collect();
         lines[lines.len().saturating_sub(n)..].join("\n")
     }
 
@@ -494,7 +539,8 @@ impl Conn {
     pub fn open_as_other_uid(path: &Path, dir: &Path) -> Result<Conn, String> {
         let me = std::env::current_exe().map_err(|e| e.to_string())?;
         let copy = dir.join("connect-as");
-        std::fs::copy(&me, &copy)
+        // run at once: copied through drgnx-exe, never held open for writing by another thread's fork
+        drgnx_exe::copy(&me, &copy)
             .map_err(|e| format!("cannot copy the harness for connect-as: {e}"))?;
         std::fs::set_permissions(&copy, std::fs::Permissions::from_mode(0o755))
             .map_err(|e| e.to_string())?;
@@ -752,6 +798,19 @@ impl Conn {
         }
     }
 
+    /// Every line that is buffered or arrives in the next FOR (a quiet connection ends early only at the deadline).
+    pub fn drain_for(&mut self, window: Duration) -> Vec<String> {
+        let mut lines: Vec<String> = self.buf.drain(..).collect();
+        let end = std::time::Instant::now() + window;
+        while let Some(left) = end.checked_duration_since(std::time::Instant::now()) {
+            match self.fetch(left) {
+                Ok(Some(l)) => lines.push(l),
+                _ => break,
+            }
+        }
+        lines
+    }
+
     pub fn expect_silent(&mut self, quiet: Duration) -> Result<(), String> {
         match self.fetch(quiet) {
             Err(_) => Ok(()),
@@ -801,6 +860,23 @@ mod tests {
     const CAP: &str = "abababababababababababababababababababababababababababababababab";
     const HUB: &str = "00112233445566778899aabbccddeeff";
     const CLIENT: &str = "000102030405060708090a0b0c0d0e0f";
+
+    #[test]
+    fn a_scenario_hub_logs_the_turn_stages_unless_told_otherwise() {
+        let root = Root::new().unwrap();
+        let env = root.base_env(vec![]);
+        let want = std::env::var("DRGNX_RATATOSKR_LOG")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| HUB_LOG.into());
+        assert_eq!(env.get("DRGNX_RATATOSKR_LOG"), Some(&want));
+        // a row's own level wins
+        let env = root.base_env(vec![("DRGNX_RATATOSKR_LOG".into(), "warn".into())]);
+        assert_eq!(
+            env.get("DRGNX_RATATOSKR_LOG").map(String::as_str),
+            Some("warn")
+        );
+    }
 
     #[test]
     fn proofs_match_an_independent_implementation() {

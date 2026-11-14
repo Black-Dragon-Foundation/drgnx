@@ -56,7 +56,7 @@
 
 (ert-deftest drgnx-ui-kit/status-faces-inherit ()
   (pcase-dolist (`(,face . ,parent) '((drgnx-status-ok . success) (drgnx-status-info . shadow) (drgnx-status-warn . warning)
-                                      (drgnx-status-fail . error) (drgnx-status-needs-you . error)))
+                                      (drgnx-status-fail . error) (drgnx-status-needs-you . drgnx-status-attention)))
     (should (facep face))
     (should (equal (face-attribute face :inherit nil nil) parent))
     (should-not (cl-some (lambda (a) (stringp (face-attribute face a nil nil))) '(:foreground :background)))))
@@ -160,7 +160,11 @@
   (drgnx-ui-kit-test--with-registry
    (let* ((seen nil) (drgnx-surfaces-run-functions (list (lambda (id) (push id seen))))
           (b (drgnx-ui-button "Go" 'kit-cmd :help "Run it")))
-     (should (equal (substring-no-properties b) "Go"))
+     (should (equal (string-trim (substring-no-properties b)) "Go"))
+     ;; room inside the button: a 12 px stretch at either end, in the button's face (design §3.5 `.btn')
+     (should (equal '(space :width (11)) (get-text-property 0 'display b)))
+     (should (equal '(space :width (11)) (get-text-property (1- (length b)) 'display b)))
+     (should (eq (get-text-property (1- (length b)) 'face b) 'drgnx-ui-button))
      (should (eq (get-text-property 0 'face b) 'drgnx-ui-button))
      (should (equal (get-text-property 0 'help-echo b) "Run it"))
      (should (eq (get-text-property 0 'mouse-face b) 'highlight))
@@ -170,7 +174,8 @@
      ;; run as typed (interactively), through `drgnx-surfaces-run': the run hook (the usage count) sees the id
      (should (equal drgnx-ui-kit-test--ran '(1 1)))
      (should (equal seen '(kit-cmd kit-cmd))))
-   (should (equal (face-attribute 'drgnx-ui-button :inherit nil nil) 'button))))
+   ;; the look's control (a fill in a hairline), never an underlined link
+   (should (equal (face-attribute 'drgnx-ui-button :inherit nil nil) '(drgnx-ui-text drgnx-control)))))
 
 (ert-deftest drgnx-ui-kit/button-runs-a-command-or-a-function ()
   (drgnx-ui-kit-test--with-registry
@@ -204,7 +209,7 @@
    (with-temp-buffer
      (insert "a ")
      (drgnx-ui-insert-button "Go" 'kit-cmd :help "Run it")
-     (should (equal (buffer-string) "a Go"))
+     (should (equal (substring-no-properties (buffer-string)) "a  Go "))     ; the label with room either side
      (should (equal (get-text-property 3 'help-echo) "Run it"))
      (goto-char 3)
      (call-interactively (key-binding (kbd "RET")))
@@ -244,24 +249,17 @@
   (should (eq (get 'drgnx-wb-close 'face-alias) 'drgnx-ui-close)))
 
 (ert-deftest drgnx-ui-kit/the-three-close-marks-have-an-ascii-form ()
-  ;; M12f-AF-1: the Buffers row's close, the find bar's close and the agents queue's unqueue were a literal ×
+  ;; M12f-AF-1: the Buffers row's close and the find bar's close were a literal ×
   (require 'drgnx-buffers)
   (load (expand-file-name "modules/tools/drgnx-replace" drgnx-dir) nil t)
-  (load (expand-file-name "modules/tools/drgnx-agents-ui" drgnx-dir) nil t)
-  (let ((queue (lambda ()
-                 (with-temp-buffer
-                   (drgnx-agents-ui-render (drgnx-agents--make :name "q" :status 'busy :queue '("one") :paused nil))
-                   (buffer-string))))
-        (bar (lambda ()
+  (let ((bar (lambda ()
                (unwind-protect
                    (with-current-buffer (drgnx-replace--bar-buffer)
                      (buffer-substring-no-properties (point-min) (pos-eol)))
                  (when (get-buffer drgnx-replace-bar-buffer-name) (kill-buffer drgnx-replace-bar-buffer-name))))))
     (drgnx-ui-test--ascii
-     (with-temp-buffer (should (string-prefix-p "x " (drgnx-buffers--row (current-buffer)))))
-     (should (string-search "[↓] [x]" (funcall bar)))
-     (should (string-search "one [-]" (funcall queue))))
+     ;; the Buffers row's close is the `close' glyph on its right edge (`drgnx-buffers--tail'), never a literal ×
+     (should-not (string-search "×" (drgnx-face-glyph 'close)))
+     (should (string-search "[↓] [x]" (funcall bar))))
     (drgnx-ui-test--unicode
-     (with-temp-buffer (should (string-prefix-p "× " (drgnx-buffers--row (current-buffer)))))
-     (should (string-search "[↓] [×]" (funcall bar)))
-     (should (string-search "one [−]" (funcall queue))))))
+     (should (string-search "[↓] [×]" (funcall bar))))))

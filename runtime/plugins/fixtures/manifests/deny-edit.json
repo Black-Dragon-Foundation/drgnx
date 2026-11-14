@@ -1,0 +1,5 @@
+{
+  "name": "deny-edit",
+  "version": "0.1.0",
+  "hooks": [{"point": "after-edit", "verdicts": ["deny"], "deadline_ms": 1000}]
+}

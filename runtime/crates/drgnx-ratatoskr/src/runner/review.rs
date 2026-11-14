@@ -25,6 +25,7 @@ use super::{
 use crate::agents::Origin;
 use crate::coord::fail;
 use crate::front::Front;
+use crate::hook_points;
 use crate::matrix_gate::Gate;
 use norn::read::cards::Card;
 use norn::read::tasks::Task;
@@ -67,6 +68,8 @@ struct State {
     gates: HashMap<String, i64>,
     /// Task id → when it began to wait for its agent's turn to end.
     since: HashMap<String, f64>,
+    /// Task id → what the gates last said of it, waiting or holding (logged once each time it changes).
+    waits: HashMap<String, String>,
 }
 
 /// The runner's hooks for review, fallback, nudges and the clash reviewers.
@@ -78,6 +81,15 @@ impl PlanHooks {
         self.0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Log LINE, what the gates say of task TID of JOB, unless it is what they said last.
+    fn said(&self, job: &str, tid: &str, line: String) {
+        let mut st = self.st();
+        if st.waits.get(tid) != Some(&line) {
+            tracing::info!(job, task = tid, "{line}");
+            st.waits.insert(tid.to_owned(), line);
+        }
     }
 
     fn busy(&self, key: &str) -> bool {
@@ -163,6 +175,121 @@ fn is_free(s: &Snapshot) -> bool {
 
 fn is_alive(s: &Snapshot) -> bool {
     s.status != Some(SessionStatus::Exited)
+}
+
+/// Session SID reviews a task: its record says so (`review`), so the task's forecast sample takes its worker's
+/// profile, not the reviewer's.  Best effort, as the session's own record is.
+async fn mark_review(front: &Front, sid: &str) {
+    use urdr::graph::entity::{self, Changes};
+    let id = format!("session:{sid}");
+    let refused = |e: urdr::graph::WriteError| norn::store::CoordError::Refused(e.to_string());
+    let r = front
+        .writer
+        .write(&user(), "agents/start", move |tx| {
+            let found = entity::by_id(tx.sql(), &id)
+                .map_err(|e| norn::store::CoordError::Refused(e.to_string()))?;
+            if let Some(e) = found.filter(|e| e.retired_tx.is_none()) {
+                let patch = Changes {
+                    data_patch: Some(json!({"review": true})),
+                    ..Changes::default()
+                };
+                entity::update(tx, e.n, None, patch).map_err(refused)?;
+            }
+            Ok(())
+        })
+        .await;
+    if let Err(e) = r {
+        tracing::warn!(sid, "the reviewer's session is not marked: {e}");
+    }
+}
+
+/// Whether the user dismissed POINT's hook card for TASK in its current review round (the failed reviews so far): the
+/// hook does not run again in this round, a new one runs it again.
+fn dismissed(data: &Map<String, Value>, task: &str, point: &str) -> bool {
+    data_for(data, "hook-dismissed", task).is_some_and(|d| {
+        d.get("point").and_then(Value::as_str) == Some(point)
+            && d.get("round").and_then(Value::as_i64) == Some(count(data, "fails", task))
+    })
+}
+
+/// The `git diff --stat` and the changed paths of RANGE in DIR; empty when git cannot tell.
+async fn diff_of(dir: &Path, range: &str) -> (String, Vec<String>) {
+    let stat = tick::git(dir, &["diff", "--stat", range])
+        .await
+        .unwrap_or_default();
+    let names = tick::git(dir, &["diff", "--name-only", range])
+        .await
+        .unwrap_or_default();
+    (stat, names.lines().map(str::to_owned).collect())
+}
+
+/// The `before-commit` hooks for a merge of TREE into the branch at JOB_TREE, the one path every commit the hub makes
+/// into a user's branch goes through: `Some(message)` merges (the message a hook changed, else git's own); a deny or an
+/// error is a `hook` card (of CARD_TASK, when the merge is a task's) and `None`.
+pub(crate) async fn before_commit_hooks(
+    front: &Front,
+    site: hook_points::JobSite<'_>,
+    card_task: Option<&str>,
+    tree: &TaskTree,
+    job_tree: &Path,
+) -> Result<Option<Option<String>>, Error> {
+    let (diff_stat, paths) = diff_of(job_tree, &format!("HEAD...{}", tree.branch)).await;
+    let info = hook_points::CommitInfo {
+        branch: tree.branch.clone(),
+        message: format!("Merge {}", tree.branch),
+        diff_stat,
+        paths,
+    };
+    let (job, tid) = (site.job, site.task);
+    // a manager's merge has no task: its card names the manager and the branch, and the hub answers it itself
+    let extra = card_task
+        .is_none()
+        .then(|| json!({"manager": job, "branch": tree.branch}));
+    let Some(out) = hook_points::before_commit(front, site, &info).await else {
+        return Ok(Some(None));
+    };
+    if let Some(why) = hook_points::hook_failure(&out, "commit") {
+        raise_hook_card(front, job, card_task, "before-commit", &why, None, extra).await?;
+        return Ok(None);
+    }
+    if let Some((name, reason)) = hook_points::refusal_of(&out) {
+        let title = format!("the before-commit hook refused the merge of {tid}");
+        let body = format!("{reason} \u{2014} by {name}");
+        raise_hook_card(
+            front,
+            job,
+            card_task,
+            "before-commit",
+            &title,
+            Some(body),
+            extra,
+        )
+        .await?;
+        return Ok(None);
+    }
+    Ok(Some(hook_points::commit_message(&out)))
+}
+
+/// The `hook` card of TASK at POINT (`before-commit`, `at-review`): the hub's TITLE, the plugin's words in BODY.
+pub(crate) async fn raise_hook_card(
+    front: &Front,
+    job: &str,
+    task: Option<&str>,
+    point: &str,
+    title: &str,
+    body: Option<String>,
+    extra: Option<Value>,
+) -> Result<(), Error> {
+    let mut data = json!({"point": point, "key": point});
+    if let Some(Value::Object(m)) = extra {
+        data.as_object_mut().unwrap().extend(m);
+    }
+    if let Some(b) = body {
+        data["body"] = json!(b);
+    }
+    raise_card(front, &service(), job, task, "hook", title, data)
+        .await
+        .map(|_| ())
 }
 
 fn count(data: &Map<String, Value>, bucket: &str, task: &str) -> i64 {
@@ -581,7 +708,76 @@ impl PlanHooks {
         if gate.wait {
             return Ok(());
         }
-        self.start_review_agent(front, job, t, &tree, None).await
+        let Some(notes) = self.review_hooks(front, job, t, &tree, &data).await? else {
+            return Ok(());
+        };
+        self.start_review_agent(front, job, t, &tree, None, &notes)
+            .await
+    }
+
+    /// The `at-review` hooks, before the reviewer starts: their notes (`Some`) go into its brief. A deny fails the
+    /// review as the reviewer's fail would (`REVIEW_TRIES` counts it); a hook that errored is a `hook` card for the
+    /// user, the task is not bounced. `None`: the review did not start.
+    async fn review_hooks(
+        &self,
+        front: &Arc<Front>,
+        job: &str,
+        t: &Task,
+        tree: &TaskTree,
+        data: &Map<String, Value>,
+    ) -> Result<Option<Vec<String>>, Error> {
+        let tid = t.row.id.as_str();
+        if dismissed(data, tid, "at-review") {
+            return Ok(Some(Vec::new()));
+        }
+        let (diff_stat, _) = diff_of(&tree.path, &format!("job/{job}...HEAD")).await;
+        let info = hook_points::ReviewInfo {
+            summary: t.row.title.clone().unwrap_or_default(),
+            report: String::new(),
+            diff_stat,
+        };
+        let site = hook_points::JobSite {
+            job,
+            task: tid,
+            project: data.get("project").and_then(Value::as_str),
+        };
+        let Some(out) = hook_points::at_review(front, site, &info).await else {
+            return Ok(Some(Vec::new()));
+        };
+        if let Some(why) = hook_points::hook_failure(&out, "review") {
+            raise_hook_card(front, job, Some(tid), "at-review", &why, None, None).await?;
+            return Ok(None);
+        }
+        if let Some((name, reason)) = hook_points::refusal_of(&out) {
+            let fail = Verdict::Fail(format!("the at-review hook {name} refused: {reason}"));
+            self.reviewed(front, job, t, Some(fail), None, data).await?;
+            return Ok(None);
+        }
+        Ok(Some(out.annotations))
+    }
+
+    /// The `before-commit` hooks, after the gate cleared: `Some(message)` merges (the message a hook changed, else
+    /// git's own); a deny or an error is a `hook` card and `None`.
+    async fn commit_hooks(
+        &self,
+        front: &Arc<Front>,
+        job: &str,
+        t: &Task,
+        tree: &TaskTree,
+        job_tree: &Path,
+        data: &Map<String, Value>,
+    ) -> Result<Option<Option<String>>, Error> {
+        let tid = t.row.id.as_str();
+        if dismissed(data, tid, "before-commit") {
+            return Ok(Some(None));
+        }
+        let project = data.get("project").and_then(Value::as_str);
+        let site = hook_points::JobSite {
+            job,
+            task: tid,
+            project,
+        };
+        before_commit_hooks(front, site, Some(tid), tree, job_tree).await
     }
 
     /// A reviewer agent for TASK, in the task's tree, on PROFILE (the first of the `review` route by default).
@@ -592,6 +788,7 @@ impl PlanHooks {
         t: &Task,
         tree: &TaskTree,
         profile: Option<String>,
+        notes: &[String],
     ) -> Result<(), Error> {
         let tid = t.row.id.as_str();
         let profile = profile
@@ -634,11 +831,18 @@ impl PlanHooks {
         self.st()
             .reviewers
             .insert(tid.to_owned(), Reviewer { sid: sid.clone() });
-        let prompt = format!(
+        mark_review(front, &sid).await;
+        let mut prompt = format!(
             "[drgnx review {tid}] {}\n\nReview the changes: git diff job/{job}...HEAD.  Answer with a last line \
              VERDICT: pass, or VERDICT: fail: what to change.",
             t.row.title.as_deref().unwrap_or("")
         );
+        if !notes.is_empty() {
+            prompt.push_str("\n\nNotes from the project's review hooks:");
+            for n in notes {
+                prompt.push_str(&format!("\n- {n}"));
+            }
+        }
         front.core.agents.prompt(&sid, prompt, Origin::Hub)?;
         changed(front, job).await;
         Ok(())
@@ -714,7 +918,7 @@ impl PlanHooks {
                                 let tree = me
                                     .tree_of(&f, &repo, &job2, &task, &data_of(&l.job))
                                     .await?;
-                                me.start_review_agent(&f, &job2, &task, &tree, Some(to))
+                                me.start_review_agent(&f, &job2, &task, &tree, Some(to), &[])
                                     .await
                             };
                             if let Err(e) = r.await {
@@ -740,7 +944,7 @@ impl PlanHooks {
             }
             Ended::Stopped => {
                 let v = verdict(&fallback::last_said(&tr));
-                self.reviewed(front, job, t, v, &s.id, data).await?;
+                self.reviewed(front, job, t, v, Some(&s.id), data).await?;
             }
         }
         Ok(())
@@ -754,7 +958,7 @@ impl PlanHooks {
         job: &str,
         t: &Task,
         v: Option<Verdict>,
-        reviewer: &str,
+        reviewer: Option<&str>,
         data: &Map<String, Value>,
     ) -> Result<(), Error> {
         let tid = t.row.id.as_str();
@@ -767,7 +971,7 @@ impl PlanHooks {
             front,
             job,
             tid,
-            Some(reviewer.to_owned()),
+            reviewer.map(str::to_owned),
             EventKind::Review,
             summary_text,
             kind_data,
@@ -830,6 +1034,7 @@ impl PlanHooks {
         if l.tasks
             .iter()
             .any(|o| runs.busy_of(&o.row.id) == Some("merging"))
+            || runs.busy_of(&t.row.id).is_some()
         {
             return Ok(());
         }
@@ -839,11 +1044,16 @@ impl PlanHooks {
             t.row.id.clone(),
             self.clone(),
         );
+        // marked before the merge's own task starts: a `job/stop` from here on waits for it, and the merge reads the
+        // job's status after the mark (`merge` loads it first); the mark goes however the task ends
+        // (`checking` while the gates look, `merging` from the merge itself: one merge at a time in a job)
+        let mark = super::BusyMark::set(front, &tid, "checking");
         self.spawn(t.row.id.clone(), async move {
+            let _mark = mark;
             if let Err(e) = me.merge(&f, &job2, &tid).await {
                 tracing::warn!("plan run {job2}: merge of {tid}: {}", e.message);
             }
-            f.core.runs.set_busy(&tid, None);
+            drop(_mark);
             changed(&f, &job2).await;
         });
         Ok(())
@@ -929,10 +1139,97 @@ impl PlanHooks {
             .await
             .map(|_| ()),
             Gate::Allow => {
+                // the gates on the hub's own records (docs/develop/orchestration.md): trailers, red first, the
+                // author check; a run they wait for ends as the task's evidence and the next tick looks again
+                use vordr::redfirst::Decision;
+                // the gates judge the tip the merge gate checked, and only that tip merges
+                let judged = git.checked_tip(&tree.branch);
+                match crate::orch::gates::before_merge(
+                    front,
+                    job,
+                    tid,
+                    t.row.n,
+                    &tree,
+                    judged.as_deref(),
+                    &data,
+                )
+                .await
+                .map_err(|e| {
+                    tracing::warn!(job, task = tid, "the gates could not judge the merge: {e}");
+                    internal(e)
+                })? {
+                    Decision::Pass(why) => {
+                        self.st().waits.remove(tid);
+                        tracing::info!(job, task = tid, "the gates pass the merge: {why}");
+                    }
+                    // a wait or a hold is logged when it begins or its reason changes, never once per tick
+                    Decision::Wait(why) => {
+                        self.said(job, tid, format!("the gates wait: {why}"));
+                        return Ok(());
+                    }
+                    Decision::Hold(why) => {
+                        self.said(job, tid, format!("the gates hold the merge: {why}"));
+                        // the tip's tree key: a waiver given on this card holds for this tip only
+                        let tip = tick::git(
+                            &tree.path,
+                            &["rev-parse", &format!("{}^{{tree}}", tree.branch)],
+                        )
+                        .await
+                        .map(|s| s.trim().to_owned())
+                        .ok();
+                        return raise_card(
+                            front,
+                            &service(),
+                            job,
+                            Some(tid),
+                            "gate",
+                            &format!("the gates hold the merge: {why}"),
+                            json!({"key": "gates", "tip": tip}),
+                        )
+                        .await
+                        .map(|_| ());
+                    }
+                }
+                // the merge queue: batches of the pack's size, members one at a time in readiness order
+                use crate::orch::queue::Turn;
+                match self
+                    .queue_turn(
+                        front,
+                        job,
+                        tid,
+                        &l,
+                        &data,
+                        &tree,
+                        &job_tree,
+                        judged.as_deref(),
+                    )
+                    .await?
+                {
+                    Turn::Merge => {}
+                    Turn::Wait(_) => return Ok(()),
+                    Turn::Back(note) => return retry(front, job, tid, Some(note)).await,
+                }
+                let Some(message) = self
+                    .commit_hooks(front, job, t, &tree, &job_tree, &data)
+                    .await?
+                else {
+                    return Ok(());
+                };
                 front.core.runs.set_busy(tid, Some("merging"));
                 changed(front, job).await;
-                match git.merge_into(&job_tree, &tree).await {
-                    Ok(super::git::MergeOutcome::Merged) => self.merged(front, job, t).await,
+                let old = crate::timeline::snapshot::head_of(&job_tree);
+                match git
+                    .merge_into(&job_tree, &tree, message.as_deref(), judged.as_deref())
+                    .await
+                {
+                    Ok(super::git::MergeOutcome::Merged) => {
+                        if let Some(d) = front.dirs.get() {
+                            let h = &front.core.history;
+                            crate::history::merge::record(h, &d.hub, &job_tree, &tree.path, old)
+                                .await;
+                        }
+                        self.merged(front, job, t).await
+                    }
                     Ok(super::git::MergeOutcome::Conflict(files)) => {
                         let names: Vec<_> = files.iter().map(|f| f.display().to_string()).collect();
                         raise_card(
@@ -968,6 +1265,114 @@ impl PlanHooks {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    /// Task TID's turn in its job's merge queue, once its gates passed (`orch::queue`).  A job with no rule pack
+    /// merges as before: one task at a time, as each passes.
+    #[allow(clippy::too_many_arguments)]
+    async fn queue_turn(
+        &self,
+        front: &Arc<Front>,
+        job: &str,
+        tid: &str,
+        l: &Loaded,
+        data: &Map<String, Value>,
+        tree: &TaskTree,
+        job_tree: &Path,
+        judged: Option<&str>,
+    ) -> Result<crate::orch::queue::Turn, Error> {
+        use crate::orch::queue::{Entry, Turn, turn};
+        let j = job.to_owned();
+        let pack = front
+            .writer
+            .db
+            .read(move |c| norn::read::evidence::pack_of_job(c, &j))
+            .await
+            .map_err(fail)?;
+        let Some(pack) = pack else {
+            return Ok(Turn::Merge);
+        };
+        let live: Vec<String> = l
+            .tasks
+            .iter()
+            .filter(|x| {
+                x.row.status.as_deref() == Some("in-review")
+                    && data_for(data, "passed", &x.row.id).is_some()
+            })
+            .map(|x| x.row.id.clone())
+            .collect();
+        let tip = match judged {
+            Some(t) => t.to_owned(),
+            None => tick::git(&tree.path, &["rev-parse", &tree.branch])
+                .await
+                .map_err(git_error)?
+                .trim()
+                .to_owned(),
+        };
+        let (f, dir, j, t) = (
+            front.clone(),
+            job_tree.to_path_buf(),
+            job.to_owned(),
+            tid.to_owned(),
+        );
+        let shared = pack.on("merge-notes").then(|| pack.shared_paths.clone());
+        let size = pack.batch();
+        let turn = crate::clock::blocking(move || {
+            turn(
+                &f.queue,
+                &dir,
+                Entry {
+                    job: &j,
+                    task: &t,
+                    tip: &tip,
+                    at: now(),
+                    live: &live,
+                    size,
+                    shared: shared.as_deref(),
+                },
+            )
+        })
+        .await
+        .map_err(|e| internal(e.to_string()))?
+        .map_err(internal)?;
+        if turn != Turn::Merge {
+            return Ok(turn);
+        }
+        // the batch's affected groups at its combined tree, before its first member merges
+        use crate::orch::groups::{Gate, gate};
+        let batch = front.queue.batch(job);
+        match gate(front, job, job_tree, &pack, &batch)
+            .await
+            .map_err(internal)?
+        {
+            Gate::Pass => Ok(Turn::Merge),
+            Gate::Wait(why) => Ok(Turn::Wait(why)),
+            // a red batch's reruns named these tips: back to their agents, the rest form the next batch
+            Gate::Back(back) => {
+                let names: Vec<String> = back.iter().map(|(t, _)| t.clone()).collect();
+                for (t, note) in back {
+                    front.queue.forget(job, &t);
+                    retry(front, job, &t, Some(note)).await?;
+                }
+                Ok(Turn::Wait(format!(
+                    "back to their agents: {}",
+                    names.join(", ")
+                )))
+            }
+            Gate::Hold(why, tree) => {
+                raise_card(
+                    front,
+                    &service(),
+                    job,
+                    Some(tid),
+                    "gate",
+                    &format!("the gates hold the merge: {why}"),
+                    json!({"key": "groups", "tip": tree}),
+                )
+                .await?;
+                Ok(Turn::Wait(why))
             }
         }
     }
@@ -1008,6 +1413,7 @@ impl PlanHooks {
     /// T's branch is in the job's: done, and its dependents may start.
     async fn merged(&self, front: &Arc<Front>, job: &str, t: &Task) -> Result<(), Error> {
         let tid = t.row.id.as_str();
+        front.queue.forget(job, tid);
         set_status(front, tid, "done", t.row.agent.clone()).await?;
         let t2 = tid.to_owned();
         update_data(front, &service(), job, move |d| {
@@ -1118,16 +1524,41 @@ impl PlanHooks {
     }
 }
 
-/// The job's own tree, where its branch is checked out (made beside the task trees when absent).
+/// The job's own tree, where its branch is checked out (made beside the task trees when absent).  One at a time: two
+/// merges making it at once had the losing `worktree add` remove the winner's folder on its way out, leaving the tree
+/// registered but missing, which every later add refused.  A tree registered but missing is pruned and made again.
 async fn job_tree(repo: &Path, job: &str, tree: &TaskTree) -> Result<PathBuf, Error> {
     let path = tree.path.with_file_name("_job");
-    if !path.exists() {
-        let p = path.to_string_lossy().into_owned();
-        tick::git(repo, &["worktree", "add", "-q", &p, &format!("job/{job}")])
-            .await
-            .map_err(git_error)?;
-    }
+    branch_tree(repo, &format!("job/{job}"), &path)
+        .await
+        .map_err(git_error)?;
     Ok(path)
+}
+
+/// BRANCH of REPO checked out at PATH, made when absent (the job's tree; the manager's merges use it too), one
+/// making at a time, a tree registered but missing pruned and made again (see [`job_tree`]).
+pub(crate) async fn branch_tree(
+    repo: &Path,
+    branch: &str,
+    path: &Path,
+) -> Result<(), super::GitError> {
+    static MAKING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    if path.exists() {
+        return Ok(());
+    }
+    let _one = MAKING.lock().await;
+    if path.exists() {
+        return Ok(());
+    }
+    let p = path.to_string_lossy().into_owned();
+    let add = ["worktree", "add", "-q", p.as_str(), branch];
+    match tick::git(repo, &add).await {
+        Err(e) if e.stderr.contains("missing but already registered") => {
+            tick::git(repo, &["worktree", "prune"]).await?;
+            tick::git(repo, &add).await.map(|_| ())
+        }
+        r => r.map(|_| ()),
+    }
 }
 
 /// Merge DATA into card ID's data.
@@ -1342,6 +1773,7 @@ pub(crate) async fn retry(
             "passed",
             "review-restarts",
             "merge-tries",
+            "hook-dismissed",
         ] {
             put_in(d, bucket, &t, None);
         }
@@ -1370,6 +1802,46 @@ fn arg_text(arg: &Option<StringOrNumber>) -> String {
     }
 }
 
+/// The user's ACTION on the `hook` card of a manager's refused merge of BRANCH (the manager is the card's job, it has no
+/// task): the card settles, and the manager is told to merge again for `retry` (the hooks run again) and `dismiss`
+/// (the hooks let that merge through once); `stop` only withdraws the card.
+async fn manager_hook_card(
+    front: &Front,
+    caller: &Caller,
+    cid: i64,
+    manager: &str,
+    branch: &str,
+    action: &str,
+) -> Result<JobSummary, Error> {
+    let settled = front
+        .writer
+        .write(caller, "cards/settle", {
+            let action = action.to_owned();
+            move |tx| card_settle(tx, cid, &action, now())
+        })
+        .await
+        .map_err(fail)?;
+    if !settled {
+        return Err(invalid(format!("Card {cid} is already settled")));
+    }
+    let text = match action {
+        "retry" => {
+            format!("[hub] The user asked to retry the merge of {branch}: call merge again.")
+        }
+        "dismiss" => {
+            front.core.manager.dismiss_hook(branch);
+            format!(
+                "[hub] The user dismissed the before-commit hook for {branch}: call merge again, the hook will not stop it."
+            )
+        }
+        _ => String::new(),
+    };
+    if !text.is_empty() {
+        let _ = front.core.agents.prompt(manager, text, Origin::Hub);
+    }
+    serde_json::from_value(json!({"id": manager})).map_err(|e| invalid(e.to_string()))
+}
+
 /// The user's ACTION on a card: done once (a card acted on before refuses).  The job's summary.
 pub async fn card_act(front: &Front, caller: &Caller, p: CardParams) -> Result<JobSummary, Error> {
     let cid = i64::try_from(p.card).map_err(|_| invalid("card"))?;
@@ -1392,6 +1864,12 @@ pub async fn card_act(front: &Front, caller: &Caller, p: CardParams) -> Result<J
     }
     if card.state.as_deref() != Some("open") {
         return Err(invalid(format!("Card {cid} is already settled")));
+    }
+    if kind == "hook"
+        && let Some(branch) = data.get("branch").and_then(Value::as_str)
+        && data.get("manager").and_then(Value::as_str) == Some(job.as_str())
+    {
+        return manager_hook_card(front, caller, cid, &job, branch, &action).await;
     }
     let l = load(front, &job, true)
         .await?
@@ -1488,14 +1966,57 @@ async fn act(
             super::stop(front, caller, p).await.map(|_| ())
         }
         "retry" => {
-            let note = (kind == "merge-conflict").then(|| {
-                format!(
-                    "Merging your branch into job/{job} conflicted ({}). Merge job/{job} into your branch, resolve \
-                     the conflicts, commit, then call complete_task.",
-                    card.title.as_deref().unwrap_or("")
-                )
-            });
+            let title = card.title.as_deref().unwrap_or("");
+            let note = match kind {
+                "merge-conflict" => Some(format!(
+                    "Merging your branch into job/{job} conflicted ({title}). Merge job/{job} into your branch, resolve \
+                     the conflicts, commit, then call complete_task."
+                )),
+                "gate" => Some(format!(
+                    "The hub's gates hold your merge ({title}). Fix what they name, commit, then call complete_task."
+                )),
+                _ => None,
+            };
             retry(front, job, need_task()?, note).await
+        }
+        // the user's waiver of the held gates at the tip the card names: recorded as the user's own evidence (the
+        // store refuses a waiver from any other connection), then the tick merges
+        "waive" => {
+            let tid = need_task()?;
+            let reason = arg_text(arg);
+            if reason.trim().is_empty() {
+                return Err(invalid("A waiver needs its reason"));
+            }
+            let tip = card
+                .data
+                .as_ref()
+                .and_then(|d| d.get("tip"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| invalid("This card names no tip to waive"))?
+                .to_owned();
+            let e = vordr::evidence::Evidence {
+                kind: "waiver".into(),
+                task: tid.to_owned(),
+                job: String::new(),
+                facts: vordr::facts::Facts {
+                    tree_key: tip,
+                    env_stamp: String::new(),
+                    platform: String::new(),
+                    selector: String::new(),
+                },
+                rows: Vec::new(),
+                truncated: false,
+                at: now(),
+                note: Some(reason),
+            };
+            front
+                .writer
+                .write(caller, "job/card", move |tx| {
+                    norn::write::evidence::record(tx, &e, None).map(|_| ())
+                })
+                .await
+                .map_err(fail)?;
+            set_status(front, tid, "in-review", agent_of(tid)).await
         }
         // merge as it is: the tick merges it (the reviewer's pass counts)
         "merge" | "accept" if kind != "clash" => {
@@ -1512,6 +2033,32 @@ async fn act(
         "review" => {
             let tid = need_task()?;
             end_task_sessions(front, job, tid).await;
+            set_status(front, tid, "in-review", agent_of(tid)).await
+        }
+        // the user carries on without the hook: its point is not asked again for this task
+        "dismiss" if kind == "hook" => {
+            let tid = need_task()?;
+            let point = card
+                .data
+                .as_ref()
+                .and_then(|d| d.get("point"))
+                .and_then(Value::as_str)
+                .unwrap_or("before-commit")
+                .to_owned();
+            let (t2, p2) = (tid.to_owned(), point.clone());
+            update_data(front, &service(), job, move |d| {
+                let round = count(d, "fails", &t2);
+                put_in(
+                    d,
+                    "hook-dismissed",
+                    &t2,
+                    Some(json!({"point": p2, "round": round})),
+                );
+                if p2 == "before-commit" {
+                    put_in(d, "passed", &t2, Some(json!(true)));
+                }
+            })
+            .await?;
             set_status(front, tid, "in-review", agent_of(tid)).await
         }
         "drop" => {
@@ -1846,5 +2393,55 @@ mod tests {
             Some((None, "ask the user".into()))
         );
         assert_eq!(recommendation("I recommend A"), None);
+    }
+
+    fn sh(dir: &Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// [D] The job's tree is made once whoever asks: two merges of the run asking at once both get it (a second
+    /// `worktree add` failing removed the first one's tree and left it registered, macOS CI), and a tree registered
+    /// but missing is made again rather than refused at every merge.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_jobs_tree_is_made_once_and_made_again_when_missing() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = d.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        sh(&repo, &["init", "-q", "-b", "main"]);
+        sh(&repo, &["commit", "-q", "--allow-empty", "-m", "init"]);
+        for i in 0..8 {
+            let job = format!("J{i}");
+            sh(&repo, &["branch", &format!("job/{job}")]);
+            let tree = |n: &str| TaskTree {
+                path: d.path().join("runs").join(&job).join(n),
+                branch: String::new(),
+                base: String::new(),
+                mode: crate::runner::TreeMode::Snapshot,
+            };
+            let (t1, t2) = (tree("1"), tree("2"));
+            let (a, b) = tokio::join!(job_tree(&repo, &job, &t1), job_tree(&repo, &job, &t2));
+            let (a, b) = (a.unwrap(), b.unwrap());
+            assert_eq!(a, b);
+            assert!(a.join(".git").exists(), "{job}: the tree is there");
+            // its folder gone while git still lists it: made again
+            std::fs::remove_dir_all(&a).unwrap();
+            assert!(
+                job_tree(&repo, &job, &t1)
+                    .await
+                    .unwrap()
+                    .join(".git")
+                    .exists()
+            );
+        }
     }
 }

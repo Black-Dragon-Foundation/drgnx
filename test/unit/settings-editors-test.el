@@ -30,7 +30,9 @@
     (drgnx-defsetting sat-ed-rep nil "A list." :type '(repeat string) :group 'sat-ed :scope 'global)
     (drgnx-defsetting sat-ed-any nil "Anything." :type 'sexp :group 'sat-ed :scope 'global)
     (drgnx-defsetting sat-ed-hook nil "Code." :type 'function :group 'sat-ed :workspace 'code)
-    (drgnx-defsetting sat-ed-text "x" "Text 2." :type 'string :group 'sat-ed :scope 'global))
+    (drgnx-defsetting sat-ed-text "x" "Text 2." :type 'string :group 'sat-ed :scope 'global)
+    (drgnx-defsetting sat-ed-mine nil "A project's own choice." :type '(repeat string) :group 'sat-ed
+      :scope 'project :workspace 'never))
   "Forms that declare the settings the tests use.")
 
 (defun drgnx-settings-editors-test--run (forms &optional files)
@@ -87,6 +89,15 @@
     (should (string-match-p "never in Shared" (nth 1 r)))
     (should-not (nth 2 r))
     (should-not (nth 3 r))))
+
+(ert-deftest drgnx-settings-editors/a-never-project-setting-never-to-shared ()
+  (let ((r (drgnx-settings-editors-test--run
+            '((list (cdr (drgnx-settings-editors-check 'sat-ed-mine '("p") 'shared))
+                    (drgnx-settings-editors-check 'sat-ed-mine '("p") 'workspace)
+                    (drgnx-settings-editors-check 'sat-ed-mine '("p") 'user))))))
+    (should (string-match-p "never in Shared" (nth 0 r)))
+    (should-not (nth 1 r))
+    (should-not (nth 2 r))))
 
 (ert-deftest drgnx-settings-editors/a-secret-is-refused ()
   (let ((r (drgnx-settings-editors-test--run

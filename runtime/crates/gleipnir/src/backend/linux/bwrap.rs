@@ -2,15 +2,15 @@
 //! (Task 7; docs/develop/gleipnir.md, "The bubblewrap argv"). The argv itself is the pure [`crate::bwrap`].
 
 use crate::bwrap::{
-    Hidden, HostLayout, InnerCommand, Mount, Opened, USR_MERGED, planned, resolver_bindable,
-    version_at_floor,
+    Hidden, HostLayout, InnerCommand, Mount, Opened, PrivateRoot, RootEntry, SYSTEM_READS,
+    USR_MERGED, planned, resolver_bindable, version_at_floor,
 };
 use crate::spec::{HELPER_INSIDE, Mode, Target, ValidSpec};
 use crate::validate::{Refusal, Rule};
 use eitri::{FsError, Kind, TrustedProgram, open_path, trusted_program};
 use std::fs;
 use std::io::{self, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -140,13 +140,98 @@ pub fn open_sources(spec: &ValidSpec, helper: &InnerCommand) -> Result<Opened, R
         Mode::Ro,
         Path::new(HELPER_INSIDE),
     )?;
+    let private_roots = {
+        let dests: Vec<&Path> = mounts.iter().map(|m| m.dest.as_path()).collect();
+        private_roots(&dests)?
+    };
+    // the resolver's file is opened and checked once here, and bound by that fd: not trusted, not bound
+    let layout = host_layout();
+    let (resolver, resolver_fd) = match layout
+        .resolver
+        .as_deref()
+        .map(|r| eitri::pin_system_owned_file(r, sys_uid_max()).map(|pinned| pinned.fd))
+    {
+        Some(Ok(fd)) => (layout.resolver.clone(), Some(fd)),
+        _ => (None, None),
+    };
     Ok(Opened {
         mounts,
         hides,
         helper: helper_mount,
         inner_args: helper.inner_args.clone(),
-        host: host_layout(),
+        host: HostLayout {
+            private_roots,
+            resolver,
+            ..layout
+        },
+        resolver: resolver_fd,
     })
+}
+
+/// The system roots ([`SYSTEM_READS`]) that must be private to this session: those a bind lands under at a path the
+/// host does not have (Codex's lock file at `/etc/codex/requirements.toml`). bwrap cannot make the missing parents
+/// inside a read-only bind of the host's directory, and the host is never written, so such a root becomes an empty
+/// tmpfs with each top-level host entry put back (a link as the same link, never followed; a file or directory bound
+/// read-only). An entry that cannot be put back is a refusal: never a partial root. A root the host does not have,
+/// and a spec whose binds all land on existing paths, change nothing.
+pub(crate) fn private_roots(dests: &[&Path]) -> Result<Vec<PrivateRoot>, Refusal> {
+    let mut out = Vec::new();
+    for root in SYSTEM_READS {
+        let root = Path::new(root);
+        let missing: Vec<&Path> = dests
+            .iter()
+            .copied()
+            .filter(|d| d.starts_with(root) && *d != root)
+            .filter(|d| fs::symlink_metadata(d).is_err_and(|e| e.kind() == io::ErrorKind::NotFound))
+            .collect();
+        if missing.is_empty() || !fs::symlink_metadata(root).is_ok_and(|m| m.is_dir()) {
+            continue;
+        }
+        out.push(PrivateRoot {
+            root: root.to_path_buf(),
+            entries: root_entries(root, &missing)?,
+        });
+    }
+    Ok(out)
+}
+
+/// The top-level entries of `root`, sorted, as [`RootEntry`]s. An entry that holds a path of `missing` is left out
+/// (its host contents are replaced by what the session binds there). Anything but a link, a file or a directory is
+/// refused, and so is an entry or a listing that cannot be read.
+fn root_entries(root: &Path, missing: &[&Path]) -> Result<Vec<RootEntry>, Refusal> {
+    let cannot = |at: &Path, why: String| {
+        malformed(format!(
+            "{}: cannot be put back into the session's private {}: {why}",
+            at.display(),
+            root.display()
+        ))
+    };
+    let mut names: Vec<std::ffi::OsString> = fs::read_dir(root)
+        .map_err(|e| cannot(root, e.to_string()))?
+        .map(|e| {
+            e.map(|e| e.file_name())
+                .map_err(|e| cannot(root, e.to_string()))
+        })
+        .collect::<Result<_, _>>()?;
+    names.sort();
+    let mut entries = Vec::new();
+    for name in names {
+        let at: PathBuf = root.join(&name);
+        if missing.iter().any(|d| d.starts_with(&at)) {
+            continue;
+        }
+        let meta = fs::symlink_metadata(&at).map_err(|e| cannot(&at, e.to_string()))?;
+        let kind = meta.file_type();
+        if kind.is_symlink() {
+            let target = fs::read_link(&at).map_err(|e| cannot(&at, e.to_string()))?;
+            entries.push(RootEntry::Link { name, target });
+        } else if kind.is_dir() || kind.is_file() {
+            entries.push(RootEntry::Bind { name });
+        } else {
+            return Err(cannot(&at, "neither a file, a directory nor a link".into()));
+        }
+    }
+    Ok(entries)
 }
 
 /// Opens `source` following no link, as `kind`, to be bound at `dest` with `mode`.
@@ -177,7 +262,42 @@ fn refused(key: &str, path: &Path, e: FsError) -> Refusal {
     }
 }
 
-/// Which of the host's `/bin`, `/lib`, `/lib64`, `/sbin` are links, and the resolver's file when bindable.
+/// The highest uid of a system account on this host: from `/etc/login.defs` (`parse_uid_boundary`); root alone (0)
+/// when the file does not read.
+fn sys_uid_max() -> u32 {
+    parse_uid_boundary(fs::read_to_string("/etc/login.defs").ok().as_deref())
+}
+
+/// The value of the last line of a `login.defs` text that begins with `key`; None when there is none, or that last line
+/// has no value that is a uid (a later line decides, so an earlier valid one never stands in for a broken one).
+fn login_defs_uid(text: &str, key: &str) -> Option<u32> {
+    text.lines()
+        .filter_map(|l| {
+            let mut w = l.split('#').next()?.split_whitespace();
+            (w.next()? == key).then(|| w.next().and_then(|v| v.parse::<u32>().ok()))
+        })
+        .next_back()
+        .flatten()
+}
+
+/// The system-uid boundary of a `login.defs` text (None: the file did not read), at most 999 always: `SYS_UID_MAX`;
+/// without one that reads, `UID_MIN - 1` (every uid below the first login user); with neither, or no text, 0: root
+/// alone. When both read, the lower of the two.
+fn parse_uid_boundary(text: Option<&str>) -> u32 {
+    let Some(text) = text else { return 0 };
+    let sys = login_defs_uid(text, "SYS_UID_MAX").map(|n| n.min(999));
+    let below_login = login_defs_uid(text, "UID_MIN").map(|n| n.saturating_sub(1).min(999));
+    match (sys, below_login) {
+        (Some(a), Some(b)) => a.min(b),
+        (Some(a), None) | (None, Some(a)) => a,
+        (None, None) => 0,
+    }
+}
+
+/// Which of the host's `/bin`, `/lib`, `/lib64`, `/sbin` are links, and the resolver's file when bindable: under
+/// `/run`, a regular file only root or a system account can change (systemd-resolved's stub is its own), in
+/// directories of root or system accounts, none group- or world-writable and no link on the path (a file a user could
+/// swap is never bound, GL-T7-4).
 pub fn host_layout() -> HostLayout {
     let usr_links = USR_MERGED
         .iter()
@@ -186,10 +306,11 @@ pub fn host_layout() -> HostLayout {
         .collect();
     let resolver = fs::canonicalize("/etc/resolv.conf")
         .ok()
-        .filter(|r| resolver_bindable(r) && fs::metadata(r).is_ok_and(|m| m.is_file()));
+        .filter(|r| resolver_bindable(r) && eitri::system_owned_file(r, sys_uid_max()).is_ok());
     HostLayout {
         usr_links,
         resolver,
+        private_roots: Vec::new(),
     }
 }
 
@@ -213,6 +334,131 @@ mod tests {
 
     fn is_root() -> bool {
         rustix::process::geteuid().is_root()
+    }
+
+    /// A root with a file, a directory, a dangling link, a link to a sibling directory and a directory that holds a
+    /// missing bind's parent: files and directories are bound, links stay links with their targets as they are (the
+    /// link to a directory is not followed), and the directory the bind lands in is left out.
+    #[test]
+    fn a_private_root_puts_each_entry_back_and_never_follows_a_link() {
+        let (dir, _) = script("true");
+        let root = fs::canonicalize(dir.path()).unwrap();
+        fs::write(root.join("a"), "x").unwrap();
+        fs::create_dir(root.join("d")).unwrap();
+        fs::create_dir(root.join("codex")).unwrap();
+        fs::write(root.join("codex/own.toml"), "x").unwrap();
+        std::os::unix::fs::symlink("../nowhere", root.join("l")).unwrap();
+        std::os::unix::fs::symlink("d", root.join("ld")).unwrap();
+        let missing = root.join("codex/requirements.toml");
+        let got = root_entries(&root, &[&missing]).unwrap();
+        let os = std::ffi::OsString::from;
+        assert_eq!(
+            got,
+            vec![
+                RootEntry::Bind { name: os("a") },
+                RootEntry::Bind { name: os("d") },
+                RootEntry::Link {
+                    name: os("l"),
+                    target: "../nowhere".into()
+                },
+                RootEntry::Link {
+                    name: os("ld"),
+                    target: "d".into()
+                },
+                RootEntry::Bind { name: os("prog") },
+            ]
+        );
+    }
+
+    /// The fail-closed case: an entry that is not a file, a directory or a link (a FIFO, a socket) refuses the whole
+    /// root, naming the entry; there is no partial `/etc`.
+    #[test]
+    fn a_private_root_with_an_entry_that_cannot_be_put_back_is_refused() {
+        let (dir, _) = script("true");
+        let root = fs::canonicalize(dir.path()).unwrap();
+        let fifo = std::ffi::CString::new(root.join("pipe").to_str().unwrap()).unwrap();
+        // SAFETY: a valid NUL-terminated path.
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        let missing = root.join("x/y");
+        let e = root_entries(&root, &[&missing]).unwrap_err();
+        assert!(
+            e.message.contains("pipe") && e.message.contains("cannot be put back"),
+            "{}",
+            e.message
+        );
+        let _sock = std::os::unix::net::UnixListener::bind(root.join("sock")).unwrap();
+        fs::remove_file(root.join("pipe")).unwrap();
+        let e = root_entries(&root, &[&missing]).unwrap_err();
+        assert!(e.message.contains("sock"), "{}", e.message);
+        // an unreadable root is refused too
+        let e = root_entries(&root.join("nope"), &[&missing]).unwrap_err();
+        assert!(e.message.contains("cannot be put back"), "{}", e.message);
+    }
+
+    /// Only a bind at a path the host lacks makes a root private; the host's real `/etc` is listed as it is.
+    #[test]
+    fn only_a_missing_bind_path_makes_a_system_root_private() {
+        let etc = Path::new("/etc");
+        let missing = Path::new("/etc/glp-no-such-dir/requirements.toml");
+        assert!(
+            private_roots(&[
+                Path::new("/etc/passwd"),
+                Path::new("/usr/x"),
+                Path::new("/tmp/y")
+            ])
+            .unwrap()
+            .is_empty()
+        );
+        let got = private_roots(&[missing]).unwrap();
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].root, etc);
+        let mut listed: Vec<std::ffi::OsString> = fs::read_dir(etc)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        listed.sort();
+        let names: Vec<_> = got[0]
+            .entries
+            .iter()
+            .map(|e| match e {
+                RootEntry::Link { name, .. } | RootEntry::Bind { name } => name.clone(),
+            })
+            .collect();
+        assert_eq!(
+            names, listed,
+            "every top-level entry of the host's /etc, none followed"
+        );
+        for e in &got[0].entries {
+            if let RootEntry::Link { name, target } = e {
+                assert_eq!(&fs::read_link(etc.join(name)).unwrap(), target);
+            }
+        }
+    }
+
+    /// An executable shell script `body` in a fresh dir (kept alive by the returned guard).
+    fn script(body: &str) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::Builder::new().prefix("glp-").tempdir().unwrap();
+        let p = dir.path().join("prog");
+        fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+        (dir, p)
+    }
+
+    /// GL-T7-3: a program that exits while a child of its own still holds its stdout open reads as empty output (the
+    /// pipe is read without blocking), never as a hang or a read error; ordinary output and a hang are as before.
+    #[test]
+    fn version_output_never_blocks_on_a_pipe_a_child_holds() {
+        let (_d, p) = script("sleep 5 &\nexit 0");
+        let out =
+            version_output(&p, Duration::from_secs(10)).expect("an empty answer, not an error");
+        assert_eq!(out, "");
+        let (_d, p) = script("echo bubblewrap 0.12.0");
+        assert_eq!(
+            version_output(&p, Duration::from_secs(10)).unwrap(),
+            "bubblewrap 0.12.0\n"
+        );
+        let (_d, p) = script("exec sleep 5");
+        assert!(version_output(&p, Duration::from_millis(200)).is_err());
     }
 
     /// A tree under /tmp/glp-XXXXXX: `home/u` (the user's home) with `proj` (the task folder: `.env`, `cache/`) and
@@ -286,6 +532,9 @@ mod tests {
                 tmp: None,
                 layers: Layers::for_target(Target::LinuxBwrap),
                 extra_tcp_ports: vec![],
+                rlimits: None,
+                trace: Default::default(),
+                browser: None,
             }
         }
 
@@ -294,6 +543,7 @@ mod tests {
                 source: self.p("bin/ratatoskr"),
                 inner_args: vec!["sandbox-inner".into()],
                 relay_args: vec![],
+                browser_host_args: vec![],
             }
         }
 
@@ -583,7 +833,8 @@ mod tests {
     }
 
     /// The layout is the host's: a merged-/usr dir is listed exactly when it is a link, and the resolver's file only
-    /// when `/etc/resolv.conf` leads to a bindable file under `/run`.
+    /// when `/etc/resolv.conf` leads to a bindable file under `/run` that root or a system account owns, in directories
+    /// of the same owners that nobody else can write (systemd-resolved's stub is `systemd-resolve`'s).
     #[test]
     fn host_layout_reads_the_host() {
         let layout = host_layout();
@@ -592,25 +843,50 @@ mod tests {
                 fs::symlink_metadata(format!("/{x}")).is_ok_and(|m| m.file_type().is_symlink());
             assert_eq!(layout.usr_links.contains(x), link, "/{x}");
         }
+        let real = fs::canonicalize("/etc/resolv.conf").ok();
+        let trusted = real.as_deref().is_some_and(|r| {
+            resolver_bindable(r) && eitri::system_owned_file(r, sys_uid_max()).is_ok()
+        });
         match &layout.resolver {
             Some(r) => {
-                assert_eq!(fs::canonicalize("/etc/resolv.conf").unwrap(), *r);
+                assert_eq!(real.as_ref(), Some(r));
+                assert!(trusted, "{r:?}");
                 assert!(
                     r.starts_with("/run/") && !r.starts_with("/run/user"),
                     "{r:?}"
                 );
                 assert!(fs::metadata(r).unwrap().is_file(), "{r:?}");
             }
-            None => {
-                let real = fs::canonicalize("/etc/resolv.conf").ok();
-                assert!(
-                    real.as_deref()
-                        .is_none_or(|r| !(r.starts_with("/run/")
-                            && fs::metadata(r).is_ok_and(|m| m.is_file()))),
-                    "{real:?} should have been bound"
-                );
-            }
+            None => assert!(!trusted, "{real:?} should have been bound"),
         }
+    }
+
+    #[test]
+    fn the_system_uid_boundary_reads_login_defs_and_fails_closed() {
+        let b = |t: &str| parse_uid_boundary(Some(t));
+        // readable, and capped at 999
+        assert_eq!(b("UID_MIN 1000\nSYS_UID_MAX 499\n"), 499);
+        assert_eq!(b("SYS_UID_MAX\t999 # the usual\n"), 999);
+        assert_eq!(b("SYS_UID_MAX 60000\n"), 999);
+        // the last SYS_UID_MAX line decides, even when it is the broken one: no earlier line stands in for it
+        assert_eq!(b("SYS_UID_MAX 499\nSYS_UID_MAX lots\n"), 0);
+        assert_eq!(b("SYS_UID_MAX 499\nSYS_UID_MAX 99999999999\n"), 0);
+        assert_eq!(b("SYS_UID_MAX 499\nSYS_UID_MAX\n"), 0);
+        assert_eq!(b("SYS_UID_MAX lots\nSYS_UID_MAX 300\n"), 300);
+        // a commented line, or another key that ends alike, is not SYS_UID_MAX
+        assert_eq!(b("# SYS_UID_MAX 200\n"), 0);
+        assert_eq!(b("XSYS_UID_MAX 5\n"), 0);
+        // no usable SYS_UID_MAX: the uids below the first login user, else root alone
+        assert_eq!(b("UID_MIN 500\n"), 499);
+        assert_eq!(b("UID_MIN 500\nSYS_UID_MAX lots\n"), 499);
+        assert_eq!(b("UID_MIN 500\nUID_MIN junk\n"), 0);
+        assert_eq!(b("UID_MIN 100000\n"), 999);
+        assert_eq!(b("UID_MIN 0\n"), 0);
+        assert_eq!(b(""), 0);
+        // both read: the lower
+        assert_eq!(b("UID_MIN 200\nSYS_UID_MAX 999\n"), 199);
+        // the file did not read: root alone
+        assert_eq!(parse_uid_boundary(None), 0);
     }
 
     /// The helper's bind: read-only at `HELPER_INSIDE`, whatever else the spec holds.

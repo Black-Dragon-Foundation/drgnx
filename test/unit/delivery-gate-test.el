@@ -276,6 +276,29 @@ barrier, and the test goes on."
       (should id)
       (should (natnump m)))))
 
+(ert-deftest drgnx-delivery-gate/a-real-wait-longer-than-five-seconds-is-waited-for ()
+  "A hub task inside a real wait that ends by itself after more than the barrier's 5 s (a store write on a loaded
+disk): the barrier waits for its end and the test goes on; it is not named `waiting' (which fails the test)."
+  (drgnx-delivery-gate-test--with-hub
+    (let (started m)
+      (drgnx-test-gated nil
+        (setq started (drgnx-test-gate--control-call "__test_real_wait" (list :ms 6500)))
+        (setq m (drgnx-test-deliver-all)))
+      (should (eq (plist-get started :result) t))
+      (should (natnump m)))))
+
+(ert-deftest drgnx-delivery-gate/a-real-wait-that-never-ends-fails-through-the-gate-deadline ()
+  "A hub task inside a real wait that never ends: the barrier does not answer as if the hub had settled; the test's
+own deadline (`drgnx-test-gate-block-secs', here past the barrier's 5 s) fails it."
+  (drgnx-delivery-gate-test--with-hub
+    (let ((err (should-error (let ((drgnx-test-gate-block-secs 8))
+                               (drgnx-test-gated nil
+                                 (drgnx-test-gate--control-call "__test_real_wait" nil)
+                                 (drgnx-test-deliver-all)))
+                             :type 'ert-test-failed)))
+      (should (string-match-p "did not answer the gate" (car (cadr err))))
+      (should (equal (plist-get (cdr (cadr err)) :waiting-for) "__test_barrier")))))
+
 (ert-deftest drgnx-delivery-gate/answers-t-releases-every-answer-as-it-is-due ()
   "With (:answers t) every answer is released like a handshake line, so a call the code under test waits on returns
 with no step of its own; the events stay held until a step or `drgnx-test-deliver-all'."
@@ -433,20 +456,24 @@ it held is delivered after."
     (should (= 1 (length (delete-dups (copy-sequence shapes)))))))
 
 (ert-deftest drgnx-delivery-gate/virtual-time-moves-only-when-the-test-advances ()
-  "A connection's challenge held through 2.5 s of real time: its 2 s challenge timer does not fire; a virtual advance
-of 2 s fires it."
+  "A connection's 2 s challenge timer runs on virtual time: real time passing moves nothing, 1.9 s of advance does not
+fire it, 0.1 s more does."
   (drgnx-delivery-gate-test--with-hub
-    (let (state-held now-held state-advanced now-advanced)
+    (let (state-held now-held state-near now-near state-advanced now-advanced)
       (drgnx-test-gated '((:pause "held"))
-        (let ((c (drgnx-hub--open nil)) (t0 (drgnx-test-real-time)))
-          (drgnx-test-wait (lambda () (> (- (drgnx-test-real-time) t0) 2.5)) :what "2.5 s of real time")
+        (let ((c (drgnx-hub--open nil)))
+          (drgnx-test-pause 0.2 "virtual time stands still while real time passes")
           (setq state-held (process-get c :drgnx-state) now-held (drgnx-test-clock-now))
-          (drgnx-test-advance 2)
+          (drgnx-test-advance 1.9)
+          (setq state-near (process-get c :drgnx-state) now-near (drgnx-test-clock-now))
+          (drgnx-test-advance 0.1)
           (setq state-advanced (process-get c :drgnx-state) now-advanced (drgnx-test-clock-now))
           (drgnx-test-gate-continue "held")
           (drgnx-test-deliver-all)
           (should (eq state-held 'wait))
           (should (= now-held 0))
+          (should (eq state-near 'wait))
+          (should (= now-near 1.9))
           (should (eq state-advanced 'rejected))
           (should (= now-advanced 2)))))))
 

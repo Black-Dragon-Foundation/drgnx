@@ -149,8 +149,8 @@ started by an apply (the after-apply functions are off)."
             (drgnx-keys-claims-evil-test--user '(:layers ((vim app editing window)) :bind ((go-quick-open "C-p"))))
             (drgnx-keys-apply)
             (should (eq (keymap-lookup evil-normal-state-map "C-p") #'drgnx-keys-claims-evil-test--mine))
-            (should (eq (keymap-lookup evil-insert-state-map "C-p") #'project-find-file))   ; evil's own: replaced
-            (should (eq (keymap-lookup global-map "C-p") #'project-find-file))
+            (should (eq (keymap-lookup evil-insert-state-map "C-p") #'drgnx-quick-open))   ; evil's own: replaced
+            (should (eq (keymap-lookup global-map "C-p") #'drgnx-quick-open))
             (should-not (member '("C-p" . (evil . evil-normal-state-map))
                                 (drgnx-cmd-bound (drgnx-commands-get 'go-quick-open))))
             (let ((c (seq-find (lambda (c) (and (equal (plist-get c :key) "C-p") (eq (plist-get c :map) 'evil-normal-state-map)))
@@ -167,8 +167,8 @@ started by an apply (the after-apply functions are off)."
       (drgnx-keys-claims-evil-test--user '(:layers ((vim app editing window)) :bind ((go-quick-open "C-p"))))
       (should (eq (keymap-lookup evil-normal-state-map "C-p") 'evil-paste-pop))
       (drgnx-keys-apply)
-      (should (eq (keymap-lookup evil-normal-state-map "C-p") #'project-find-file))
-      (should (eq (keymap-lookup global-map "C-p") #'project-find-file))
+      (should (eq (keymap-lookup evil-normal-state-map "C-p") #'drgnx-quick-open))
+      (should (eq (keymap-lookup global-map "C-p") #'drgnx-quick-open))
       (should (member '("C-p" . (evil . evil-normal-state-map)) (drgnx-cmd-bound (drgnx-commands-get 'go-quick-open))))
       (let ((c (seq-find (lambda (c) (and (equal (plist-get c :key) "C-p") (plist-get c :states)))
                          (plist-get drgnx-keys-last :conflicts))))
@@ -186,8 +186,8 @@ started by an apply (the after-apply functions are off)."
         (should (> (length record) 100))
         (drgnx-keys-claims-evil-test--user '(:bind ((go-quick-open "C-p"))))
         (drgnx-keys-use '((vim app editing window)))
-        (should (eq (keymap-lookup evil-normal-state-map "C-p") #'project-find-file))
-        (should (eq (keymap-lookup evil-insert-state-map "C-p") #'project-find-file))
+        (should (eq (keymap-lookup evil-normal-state-map "C-p") #'drgnx-quick-open))
+        (should (eq (keymap-lookup evil-insert-state-map "C-p") #'drgnx-quick-open))
         ;; VS Code: nothing of drgnx's is left in evil's maps or the leader map
         (drgnx-keys-use '((vscode app editing window)))
         (should (equal (funcall changed record) nil))
@@ -218,7 +218,7 @@ started by an apply (the after-apply functions are off)."
         (evil-local-mode 1)
         (evil-normal-state)
         (should (eq evil-state 'normal))
-        (should (eq (key-binding "j") #'project-find-file)))
+        (should (eq (key-binding "j") #'drgnx-quick-open)))
       (drgnx-keys--restore)
       (with-temp-buffer
         (text-mode)

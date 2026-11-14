@@ -1,0 +1,5 @@
+{
+  "name": "slow-hook",
+  "version": "0.1.0",
+  "hooks": [{"point": "before-tool", "verdicts": ["deny"]}]
+}

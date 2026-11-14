@@ -136,3 +136,27 @@
       ;; no time box wins over a time box: the hub refuses both together
       (should (eq (plist-get both :no_timebox) t))
       (should-not (plist-member both :timebox_s)))))
+
+(ert-deftest drgnx-exec/start-sends-machine-and-local-only ()
+  (drgnx-test-with-exec-calls calls
+    (drgnx-exec-start "anywhere" '("true") :cwd "/")
+    (drgnx-exec-start "here" '("true") :cwd "/" :machine "local" :local-only t)
+    (pcase-let ((`(,here ,anywhere) calls))
+      ;; nothing asked: the hub places it (`auto')
+      (should-not (plist-member anywhere :machine))
+      (should-not (plist-member anywhere :local_only))
+      (should (equal (plist-get here :machine) "local"))
+      (should (eq (plist-get here :local_only) t)))))
+
+(ert-deftest drgnx-exec/done-keeps-the-summary ()
+  (let ((drgnx-exec--jobs (make-hash-table :test #'equal)) (drgnx-exec--stale nil)
+        (summary '(:exit 1 :failing nil :lines ("installing magit" "drgnx: it broke") :log "/state/hub/exec/b/log")))
+    ;; an exec/get or exec/list row of a job that ended carries it
+    (drgnx-exec--put (list :id "a" :name "x" :status "done" :summary summary))
+    (should (equal (plist-get (drgnx-exec-get "a") :summary) summary))
+    ;; a running job's exec-done event brings it
+    (drgnx-exec--put (list :id "b" :name "y" :status "running"))
+    (should-not (plist-get (drgnx-exec-get "b") :summary))
+    (drgnx-exec--event "exec-done" (list :id "b" :status "done" :exit 1 :summary summary))
+    (should (eq (plist-get (drgnx-exec-get "b") :status) 'failed))
+    (should (equal (plist-get (drgnx-exec-get "b") :summary) summary))))

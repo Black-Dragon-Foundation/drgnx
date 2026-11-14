@@ -21,6 +21,10 @@
 (require 'drgnx-timer)
 (require 'drgnx-notice)
 (defvar drgnx-large-file-open)          ; core/drgnx-large-file.el: bound around the visits, read by editor/large-files
+(defvar drgnx-wb--owned)                ; wb/drgnx-wb.el: windows whose moves are their owner's (I9)
+(defvar drgnx-persist--refit (make-hash-table :test #'eq :weakness 'key)
+  "Frame → (WIDTH HEIGHT . GROUPS): its pixel size when last seen and the editor groups' states it was restored with,
+until the first command after the restore.")
 
 (defcustom drgnx-persist-restore-on-start t
   "Restore the last workbench layout at the first graphical frame."
@@ -51,7 +55,7 @@ After the restore the keys are in the frame parameter `drgnx-persist-extra', rea
 (define-error 'drgnx-persist-newer "workbench.eld was written by a newer drgnx" 'file-error)
 (declare-function drgnx-frame-role "drgnx-frames")
 (defvar drgnx-persist--pending)
-(defvar drgnx-explorer--roots)
+(declare-function drgnx-explorer-chosen-roots "drgnx-explorer")
 (declare-function drgnx-explorer-set-roots "drgnx-explorer")
 
 (defun drgnx-persist--file ()
@@ -96,13 +100,16 @@ size in pixels (width for the docks, height for the panel); nil when there is ne
   "FRAME's workbench as a plist (see the commentary).  A frame that rebuilds itself — its parameter
 `drgnx-persist-restore' is (FUNCTION . ARGS), e.g. a job window — is saved as (:role custom :restore …),
 with `:geometry' (pixel left top, then the text area's width and height — what `set-frame-size' sets, so the
-size does not grow at every restart) when it is graphical."
+size does not grow at every restart) and, when it has one, `:fullscreen' (its `fullscreen' parameter: `maximized', …)
+when it is graphical."
   (if-let* ((restore (frame-parameter frame 'drgnx-persist-restore)))
       (append (list :role 'custom :restore restore)
               (and (display-graphic-p frame)
                    (let ((edges (frame-edges frame 'outer-edges)))
-                     (list :geometry (list (nth 0 edges) (nth 1 edges)
-                                           (frame-text-width frame) (frame-text-height frame))))))
+                     (append (list :geometry (list (nth 0 edges) (nth 1 edges)
+                                                   (frame-text-width frame) (frame-text-height frame)))
+                             (and (frame-parameter frame 'fullscreen)
+                                  (list :fullscreen (frame-parameter frame 'fullscreen)))))))
     (drgnx-persist--workbench-state frame)))
 
 (defun drgnx-persist--place-frame (frame geometry)
@@ -126,6 +133,20 @@ window manager places the window then); the size is cut to the work area, from t
     (and (proper-list-p g) (= (length g) 4) (seq-every-p #'integerp g)
          (seq-every-p (lambda (n) (<= (abs n) 20000)) g) (> (nth 2 g) 0) (> (nth 3 g) 0) g)))
 
+(defun drgnx-persist--under-p (window ancestor)
+  "Non-nil when WINDOW is ANCESTOR or in its subtree."
+  (while (and window (not (eq window ancestor))) (setq window (window-parent window)))
+  (eq window ancestor))
+
+(defun drgnx-persist--main-window ()
+  "The window whose tree is saved: `window-main-window', except on a frame without side windows, where that is the
+root and holds the status bar's row (the bar is across the frame): there it is the editor groups' smallest common
+window, so the state brings back no stray group in the bar's place."
+  (let* ((groups (drgnx-groups-list)) (w (car groups)))
+    (while (and w (not (seq-every-p (lambda (g) (drgnx-persist--under-p g w)) groups)))
+      (setq w (window-parent w)))
+    (if (and w (not (window-with-parameter 'window-side nil nil 'nomini))) w (window-main-window))))
+
 (defun drgnx-persist--workbench-state (frame)
   (with-selected-frame (or frame (selected-frame))
     (let ((dock (car (drgnx-wb--dock-windows))))
@@ -133,8 +154,8 @@ window manager places the window then); the size is cut to the work area, from t
             :left (list :shown (and dock t) :view (drgnx-wb-sidebar-view) :px (drgnx-persist--size 'left dock))
             :panel (drgnx-persist--area 'panel)
             :right (drgnx-persist--area 'right)
-            :roots (and (boundp 'drgnx-explorer--roots) drgnx-explorer--roots)
-            :main (window-state-get (window-main-window) t)
+            :roots (and (fboundp 'drgnx-explorer-chosen-roots) (drgnx-explorer-chosen-roots))
+            :main (window-state-get (drgnx-persist--main-window) t)
             :groups (mapcar (lambda (g) (list :tabs (or (nth 2 (assq g drgnx-persist--pending))   ; still loading
                                                         (delq nil (mapcar #'buffer-file-name (drgnx-chrome-tabs g))))
                                               :shown (buffer-file-name (window-buffer g))
@@ -303,8 +324,7 @@ is a workbench (not a window that rebuilds itself); nil when there are only such
 
 (defvar drgnx-persist-restoring nil
   "Non-nil while `drgnx-persist-restore' runs.  A window's function that rebuilds it (`:restore') then takes back
-only its state and arranges nothing: the restored workbench keeps its panes, sizes and focus (a job window saved
-before M12f only filters the Work cockpit to its job).")
+only its state and arranges nothing: the restored workbench keeps its panes, sizes and focus.")
 
 (defun drgnx-persist-restore (&optional file)
   "Bring back the workbench saved in FILE — the selected frame gets the main window's layout (the state
@@ -364,7 +384,8 @@ input focus back after the other windows are made, unless KEEP-FOCUS (a restore 
                               (let ((frame (with-selected-frame host (apply (car restore) (cdr restore))))
                                     (g (drgnx-persist--geometry st)))
                                 (when (and g (frame-live-p frame) (display-graphic-p frame))
-                                  (drgnx-persist--place-frame frame g)))
+                                  (drgnx-persist--place-frame frame g)
+                                  (drgnx-persist--keep-state frame g (plist-get st :fullscreen))))
                             (error (drgnx-notify 'wb 'warn (format "a window was not restored: %s" (error-message-string err))
                                                  :id 'window-restore)))
                         (drgnx-notify 'wb 'warn "a window was not restored: no graphical display" :id 'window-restore)))
@@ -423,8 +444,65 @@ input focus back after the other windows are made, unless KEEP-FOCUS (a restore 
       (when (plist-get panel :shown) (drgnx-wb-area-show 'panel (plist-get panel :tab)))
       (when (plist-get right :shown) (drgnx-wb-area-show 'right (plist-get right :tab))))
     (drgnx-persist--fit-groups (plist-get state :groups))
+    (when (plist-get state :groups)                     ; and once more at the frame's next size change (below)
+      (puthash (selected-frame) (cons (frame-pixel-width) (cons (frame-pixel-height) (plist-get state :groups)))
+               drgnx-persist--refit)
+      (add-hook 'window-size-change-functions #'drgnx-persist--refit)
+      (add-hook 'pre-command-hook #'drgnx-persist--refit-done))
     (drgnx-chrome-apply))
   t)
+
+(defun drgnx-persist--refit (frame)
+  "A restored FRAME changed size: a new window is restored at the size it was made with, and the window manager's
+answers (the sizes it gives the window, one or more) can come after, as they do for a client's window at scale 2.
+Emacs shares each change out among the left dock and the editor groups by their sizes at the time (the dock came
+back 636 px, not 512, and a 536/528 split 528/536), so the dock is put back to its width and the groups to their
+saved pixel widths (`drgnx-persist--fit-groups': a correction of rounding only).  At every change of the frame's
+size until the first command (`drgnx-persist--refit-done'): a change of its windows alone (the docks shown after the
+restore) is passed over."
+  (when-let* ((at (gethash frame drgnx-persist--refit))
+              ((not (and (= (car at) (frame-pixel-width frame)) (= (cadr at) (frame-pixel-height frame))))))
+    (puthash frame (cons (frame-pixel-width frame) (cons (frame-pixel-height frame) (cddr at))) drgnx-persist--refit)
+    (with-selected-frame frame
+      (let ((drgnx-wb--owned (append (drgnx-groups-list) (drgnx-wb--dock-windows) drgnx-wb--owned)) ; the restore's (I9)
+            (window-resize-pixelwise t))
+        (when-let* ((px (frame-parameter frame 'drgnx-wb-dock-px)) (w (car (drgnx-wb--dock-windows))))
+          (ignore-errors (window-resize w (- px (window-pixel-width w)) t nil t)))
+        (drgnx-persist--fit-groups (cddr at))))))
+
+(defvar drgnx-persist--unmaximize (make-hash-table :test #'eq :weakness 'key)
+  "Restored window → (GEOMETRY . TRIES): its saved geometry, while the window manager may still maximize it unasked.")
+
+(defun drgnx-persist--keep-state (frame geometry fullscreen)
+  "A window restored at GEOMETRY with the saved `fullscreen' FULLSCREEN: a maximized or full-screen one is made so
+again; one saved as neither is watched (`drgnx-persist--unmaximize'): mutter maximizes a new window whose size comes
+close to the work area's, so a window you sized that big came back maximized, its size lost."
+  (if (memq fullscreen '(maximized fullboth fullwidth fullheight))
+      (set-frame-parameter frame 'fullscreen fullscreen)
+    (puthash frame (cons geometry 0) drgnx-persist--unmaximize)
+    (add-hook 'window-size-change-functions #'drgnx-persist--unmaximize)
+    (add-hook 'pre-command-hook #'drgnx-persist--refit-done)))
+
+(defun drgnx-persist--unmaximize (frame)
+  "FRAME, restored as neither maximized nor full screen, was maximized by the window manager: it is given back its
+`fullscreen' nil, then, once the window manager has unmaximized it (to a size of its own choosing, which can come
+after ours), its saved geometry (`drgnx-persist--place-frame'), again whenever a later answer takes it away.  Until the
+first command; three tries at most."
+  (when-let* ((at (gethash frame drgnx-persist--unmaximize)))
+    (let ((g (car at)) (tries (cdr at)))
+      (cond ((frame-parameter frame 'fullscreen) (set-frame-parameter frame 'fullscreen nil))
+            ((and (= (frame-text-width frame) (nth 2 g)) (= (frame-text-height frame) (nth 3 g))))
+            ((>= tries 3) (remhash frame drgnx-persist--unmaximize))
+            (t (puthash frame (cons g (1+ tries)) drgnx-persist--unmaximize)
+               (drgnx-persist--place-frame frame g))))))
+
+(defun drgnx-persist--refit-done ()
+  "The first command after a restore: the window's sizes are yours from now on, nothing is put back any more."
+  (clrhash drgnx-persist--refit)
+  (clrhash drgnx-persist--unmaximize)
+  (remove-hook 'window-size-change-functions #'drgnx-persist--unmaximize)
+  (remove-hook 'window-size-change-functions #'drgnx-persist--refit)
+  (remove-hook 'pre-command-hook #'drgnx-persist--refit-done))
 
 (defun drgnx-persist--fit-groups (specs)
   "Put the editor groups back to the pixel widths SPECS (the groups' states) hold.  `window-state-put' works in
@@ -455,8 +533,11 @@ none, leaves that group as it is."
 
 (defun drgnx-persist--before-client-delete (proc &optional noframe)
   "Before `server-delete-client' deletes PROC's frames one by one: if they are all the graphical
-windows left (\[save-buffers-kill-terminal] in the last client), save every one of them now."
-  (unless noframe
+windows left (\[save-buffers-kill-terminal] in the last client), save every one of them now.
+A client that made no frame (`emacsclient -e', a file shown in a window already there; server.el records
+a client's frame as its `frame' property) closes none: it is passed over at once, consing nothing, as every
+request ends here and `frame-parameter' of `client' copies each frame's whole parameter list."
+  (unless (or noframe (not (process-get proc 'frame)))
     (let ((gui (seq-filter #'drgnx-persist--gui-p (frame-list))))
       (when (and gui (seq-every-p (lambda (f) (eq (frame-parameter f 'client) proc)) gui))
         (drgnx-persist--save-quietly #'drgnx-persist--frames)   ; a terminal window may be the selected one
@@ -525,6 +606,7 @@ graphical frame, and at each emacsclient window that opens when no other one is 
     (remove-hook 'kill-emacs-hook #'drgnx-persist--on-exit)
     (remove-hook 'delete-frame-functions #'drgnx-persist--on-delete-frame)
     (advice-remove 'server-delete-client #'drgnx-persist--before-client-delete)
+    (drgnx-persist--refit-done)
     (remove-hook 'drgnx-first-gui-frame-hook #'drgnx-persist--on-start)
     (drgnx-timer-cancel 'persist-visit)))
 

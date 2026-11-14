@@ -15,8 +15,21 @@
        (drgnx-ui-stop (plist-get s :name))
        (delete-directory root t))))
 
+(defun drgnx-observer--compiling (sess)
+  "How many files SESS's native compiler still has queued or running (0 without native compilation)."
+  (plist-get (drgnx-ui-call sess "(drgnx-uitest--json
+                (list :n (if (and (boundp 'comp-files-queue) (fboundp 'comp--async-runnings))
+                             (+ (length comp-files-queue) (comp--async-runnings))
+                           0)))")
+             :n))
+
 (ert-deftest drgnx-live/harness-calls-run-no-session-hooks ()
+  "Pattern C: the hooks go in once the session's native compiler is done with the files it loaded at start (a cold
+eln cache compiles them in the background, and each compile's output in its log buffer runs `first-change-hook'
+there); then nothing but the harness's calls runs, and they may run no hook."
   (drgnx-observer--with-session sess
+    (drgnx-test-wait (lambda () (eql 0 (drgnx-observer--compiling sess)))
+                     :what "the session's background native compilation drained")
     (drgnx-ui-call sess "(progn (defvar obs-n 0)
       (add-hook 'first-change-hook (lambda () (setq obs-n (1+ obs-n))))
       (add-hook 'buffer-list-update-hook (lambda () (setq obs-n (1+ obs-n))))

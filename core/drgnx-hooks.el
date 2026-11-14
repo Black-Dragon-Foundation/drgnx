@@ -14,6 +14,16 @@
 (defvar drgnx-first-file-hook nil "Run once, when the first file is visited.")
 (defvar drgnx-first-gui-frame-hook nil "Run once, when the first graphical frame exists.")
 
+(defvar drgnx-frame-replaced-functions nil
+  "Run with OLD and NEW when frame OLD is replaced by NEW, a frame made like it (the same windows, buffers and
+parameters): NEW is up and OLD still live, deleted right after.  Whoever keeps OLD or its windows moves that to NEW
+here (`drgnx-frame-replaced-window' finds a window's counterpart), or lets it go.")
+
+(defun drgnx-frame-replaced-window (window new)
+  "WINDOW's counterpart in NEW, the frame that replaces WINDOW's frame (`drgnx-frame-replaced-functions'), or nil."
+  (when-let* ((id (and (window-live-p window) (window-parameter window 'drgnx-replaced-id))))
+    (seq-find (lambda (w) (eql (window-parameter w 'drgnx-replaced-id) id)) (window-list new 'nomini))))
+
 (defvar drgnx-hooks--done nil "Staged hooks that have run.")
 (defvar drgnx-hooks-problems nil
   "Errors the terminal modules (`modules/ui/drgnx-tty-*') catch in their own hooks (newest first).

@@ -125,17 +125,28 @@ OpenRouter agents do not start until it is fixed."
   :type 'boolean :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
   :runtime "bool" :schema 'boolean)
 
-(drgnx-defsetting drgnx-agents-start-env-names '("PLAYWRIGHT_MCP_CDP_ENDPOINT")
+(drgnx-defsetting drgnx-agents-start-env-names nil
   "The environment variables an editor module may add to an agent the hub starts (`drgnx-agents-env-functions'), by
 name.  The hub drops any other name, and any name that looks like a credential (it contains KEY, TOKEN, SECRET,
 PASSWORD, PASSPHRASE or CREDENTIAL), whatever this lists.  Only you can set it, never a repository or an agent."
   :type '(repeat string) :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
   :runtime "Vec<String>" :schema '(list-of string))
 
+(drgnx-defsetting drgnx-agents-trace-opens '("claude")
+  "The agents whose shell commands' opens the hub sees on Linux (\"seen open\" in the Work space), by provider:
+\"claude\", \"codex\", \"gemini\", \"kimi\" (Kimi Code), \"deepseek\" (DeepSeek Harness).  Claude Code is traced per
+shell step; the others over their whole process tree, which costs every command they run (a test suite run as one
+command: about a third longer), so they are off unless listed.  An agent not listed shows only the files its
+commands name.  Read when a session starts."
+  :type '(repeat (choice (const "claude") (const "codex") (const "gemini") (const "kimi") (const "deepseek")))
+  :group 'drgnx :scope 'global
+  :workspace 'never :on-error 'strict :agents 'never :runtime "Vec<String>" :schema '(list-of string))
+
 (cl-defstruct (drgnx-agent-session (:constructor drgnx-agents--make) (:copier nil))
   name profile cwd conn acp-id (status 'starting) entries queue (mode 'queue) capabilities usage commands
   permissions reviews stderr exit stopping paused turn draining task via gateway id job remote
-  mcp-dir mcp-sid mcp-socket)           ; unused since the hub runs every session; kept so the shape stays
+  mcp-dir mcp-sid mcp-socket            ; unused since the hub runs every session; kept so the shape stays
+  hooked panel plugins-changed hooks)   ; a hub session's hook reach, panel, plugin flag and ((STEP TOOL-ID ROWS)…)
 
 (defvar drgnx-agents--sessions nil "Live and finished sessions, newest first.")
 
@@ -337,9 +348,20 @@ applies through the gateway only."
                (list :data-collection (symbol-name (plist-get restrictions :data-collection))))
           (and (plist-get restrictions :zdr) (list :zdr t))))
 
+(defvar drgnx-agents--at-work 0 "How many mirrored sessions work (`drgnx-agents-at-work'), counted on each change.")
+
 (defun drgnx-agents--changed (s)
   (drgnx-agents--note-attention)
+  (let ((n 0))
+    (dolist (x drgnx-agents--sessions)
+      (when (or (eq (drgnx-agent-session-status x) 'busy) (drgnx-agent-session-permissions x)) (setq n (1+ n))))
+    (setq drgnx-agents--at-work n))
   (run-hook-with-args 'drgnx-agents-changed-functions s))
+
+(defun drgnx-agents-at-work ()
+  "How many of the mirrored sessions work: run a turn, or wait on you.  The title row's agents chip shows it (module
+tools/agents sets `drgnx-topline-agents-function'); it reads a variable, so redisplay may call it."
+  drgnx-agents--at-work)
 
 ;;;; What waits on you: the `agents' set of the one "needs you" count
 
@@ -496,29 +518,6 @@ keys, so they always go through its gateway (a token, never a key).")
   "Called with a session as its agent starts; each returns extra \"NAME=value\" strings for the agent's environment
 (the Live browser's endpoint, docs/guide/live.md).  One that fails is reported and skipped, and so is anything
 returned that is not a string.  Only names on `drgnx-agents-start-env-names' reach the agent.")
-
-(drgnx-defsetting drgnx-agents-scrubbed-env (copy-sequence drgnx-agent-config-vendor-env)
-  "Keys never inherited by agents: variables of Emacs's environment that an agent does not get.
-MCP Test and Hook Test on the Agent Settings page unset the same list (drgnx-agent-check.el).
-An agent gets the variables of its own route (the provider key or the gateway token, the model names) and
-nothing else from this list, so a Kimi agent never sees your DeepSeek or OpenRouter key.  A profile without a
-route (`:ai') is the user's own login and also keeps its own vendor's names (`drgnx-agents-own-env').  To pass
-another one on, remove it from this list (or set it in the profile's `:env')."
-  :type '(repeat string) :group 'drgnx :scope 'global :workspace 'never :agents 'never)
-
-(drgnx-defsetting drgnx-agents-own-env
-  '((claude "ANTHROPIC_API_KEY" "ANTHROPIC_AUTH_TOKEN" "ANTHROPIC_BASE_URL" "ANTHROPIC_MODEL"
-            "ANTHROPIC_SMALL_FAST_MODEL" "ANTHROPIC_DEFAULT_HAIKU_MODEL" "ANTHROPIC_DEFAULT_SONNET_MODEL"
-            "ANTHROPIC_DEFAULT_OPUS_MODEL" "ANTHROPIC_DEFAULT_FABLE_MODEL" "CLAUDE_CODE_SUBAGENT_MODEL"
-            "CLAUDE_CODE_OAUTH_TOKEN" "CLAUDE_CODE_USE_BEDROCK" "CLAUDE_CODE_USE_VERTEX")
-    (codex "OPENAI_API_KEY" "OPENAI_BASE_URL")
-    (gemini "GEMINI_API_KEY" "GOOGLE_API_KEY"))
-  "Each agent's own credentials and switches: (AGENT NAME…).  A profile without an `:ai' route runs on the user's
-own login, so the names of its agent (by its command: claude, codex, gemini) are exempt from
-`drgnx-agents-scrubbed-env' for it, and only for it.  `AWS_*' and `GOOGLE_APPLICATION_CREDENTIALS' are not scrubbed
-at all."
-  :type '(alist :key-type symbol :value-type (repeat string)) :group 'drgnx
-  :scope 'global :workspace 'never :agents 'never)
 
 (defun drgnx-agents-get (id) (seq-find (lambda (s) (equal (drgnx-agent-session-id s) id)) drgnx-agents--sessions))
 

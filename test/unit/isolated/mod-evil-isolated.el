@@ -32,7 +32,7 @@
 (defvar eshell-directory-name)
 (defvar eshell-history-file-name)
 (defvar eshell-last-dir-ring-file-name)
-(defvar drgnx-work-mode-hook)
+(defvar drgnx-buffers-mode-hook)
 (defvar drgnx-evil-test--count 0)
 (declare-function evil-mode "evil-core")
 (declare-function evil-normal-state "evil-states")
@@ -190,9 +190,8 @@ stopped.  Evil's packages are not on `load-path' here."
 
 (ert-deftest drgnx-evil/a-panel-that-sets-a-cursor-keeps-it ()
   (drgnx-evil-test--running
-    (load (expand-file-name "modules/tools/drgnx-work-ui" drgnx-dir) nil t)
-    (let ((drgnx-work-mode-hook (list (lambda () (setq cursor-type 'hollow)))))
-      (drgnx-evil-test--buffer b #'drgnx-work-mode
+    (let ((drgnx-buffers-mode-hook (list (lambda () (setq cursor-type 'hollow)))))
+      (drgnx-evil-test--buffer b #'drgnx-buffers-mode
         (should (eq drgnx-modal-state 'emacs))
         (should (eq cursor-type 'hollow))
         (evil-normal-state)

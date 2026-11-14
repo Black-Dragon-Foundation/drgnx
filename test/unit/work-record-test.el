@@ -52,7 +52,7 @@
       (should-not (drgnx-work-task-collect st))                       ; nothing new: nothing twice
       (should (equal (drgnx-work-rec--titles "task:/p.md#1") '("four" "three" "two" "one"))))))
 
-(load (expand-file-name "test/unit/hub-client-test" drgnx-dir) nil t)   ; its Ratatoskr helpers
+(load (expand-file-name "test/fixtures/hub-client-fixture" drgnx-dir) nil t)   ; its Ratatoskr helpers
 (require 'drgnx-agents-mirror)
 
 (ert-deftest drgnx-work-record/hub-session-turn-records-commits ()

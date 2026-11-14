@@ -18,12 +18,16 @@
       (match-string 1 s))))
 
 (ert-deftest drgnx-ci/test-images-run-nidhogg ()
+  ;; a row image built on the batch test image (the line `# on: drgnx-test`, as Containerfile.ssh) has Nidhogg from
+  ;; it: it names the build but does not install it again
   (let ((files (directory-files (drgnx-ci-test--path "test/container") t "\\`Containerfile")))
-    (should (= 6 (length files)))
+    ;; 8: Containerfile.debug (the live debug adapters, on drgnx-test) joined the seven
+    (should (= 8 (length files)))
     (dolist (f files)
       (let ((s (drgnx-ci-test--slurp f)))
         (should-not (string-match-p "dnf[^\n]*install[^\n]*emacs-pgtk" s))
-        (should (string-search "nidhogg.sh" s))
+        (unless (string-match-p "^# on: drgnx-test$" s)
+          (should (string-search "nidhogg.sh" s)))
         (should (string-search "ENV DRGNX_EMACS=/opt/nidhogg/" s))))))
 
 (ert-deftest drgnx-ci/nidhogg-pin-matches-install-sh ()

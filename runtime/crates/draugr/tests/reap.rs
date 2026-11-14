@@ -7,7 +7,7 @@ use draugr::{
     reap, spawn, start_time,
 };
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::time::timeout;
 
@@ -163,18 +163,50 @@ async fn a_term_ignoring_group_gets_kill_after_2s() {
     );
 }
 
-/// The kill comes after the grace, not before: a timing test (the elapsed time is the assertion).
+/// The kill comes after the grace, not before: on a virtual clock the test moves time one probe at a time and checks, at
+/// each, that no SIGKILL has gone out before the grace is spent; the reaper's probes are the only thing it waits for.
 #[tokio::test]
-#[ignore = "timing: the SIGKILL waits out the grace"]
 async fn a_term_ignoring_group_is_killed_only_after_the_grace() {
     let mut g = Group::start("trap '' TERM; sleep 60 & echo ready; wait").await;
     g.ready().await;
-    let recs = [g.record()];
-    let spy = Spy::real();
-    let began = Instant::now();
-    let (out, _) = tokio::join!(timeout(LIMIT, reap(&recs, &spy)), g.child.wait());
-    assert_eq!(out.unwrap(), vec![ReapOutcome::Killed]);
-    assert!(began.elapsed() >= GRACE, "{:?}", began.elapsed());
+    let pgid = g.pgid;
+    let recs = vec![g.record()];
+    let spy = std::sync::Arc::new(Spy::real());
+    let clock = drgnx_clock::Manual::default();
+    let reaping = tokio::spawn(clock.scope({
+        let spy = spy.clone();
+        async move { reap(&recs, &*spy).await }
+    }));
+    let step = Duration::from_millis(20);
+    let mut advanced = Duration::ZERO;
+    let (_, out) = tokio::join!(g.child.wait(), async {
+        while !reaping.is_finished() {
+            skuld::wait_until_async(
+                "the reaper waits for its next probe, or ends",
+                20,
+                || async { (clock.sleepers() == 1 || reaping.is_finished()).then_some(()) },
+            )
+            .await;
+            if reaping.is_finished() {
+                break;
+            }
+            if advanced < GRACE {
+                assert!(
+                    !spy.sent().contains(&(-pgid, libc::SIGKILL)),
+                    "SIGKILL after {advanced:?} of a {GRACE:?} grace"
+                );
+            }
+            clock.advance(step);
+            advanced += step;
+        }
+        reaping.await.unwrap()
+    });
+    assert_eq!(out, vec![ReapOutcome::Killed]);
+    assert!(advanced >= GRACE, "{advanced:?}");
+    assert_eq!(
+        spy.sent(),
+        vec![(-pgid, libc::SIGTERM), (-pgid, libc::SIGKILL)]
+    );
 }
 
 #[tokio::test]
@@ -261,6 +293,31 @@ async fn pgid_one_and_own_group_are_refused() {
     assert_eq!(out, vec![ReapOutcome::Skipped(Skip::Refused); 4]);
     assert_eq!(spy.calls(), vec![]);
     assert!(g.leader_alive());
+}
+
+/// GL-T12-5: a group whose only member left is its leader, unreaped (a zombie), is gone: `kill(-pgid, 0)` still
+/// succeeds for it, and waiting for the group to vanish would wait out the grace and the kill period for nothing.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_group_with_only_an_unreaped_zombie_leader_is_gone() {
+    let mut g = Group::start("exit 0").await;
+    let stat = format!("/proc/{}/stat", g.pgid);
+    skuld::wait_until("the leader is a zombie", 10, || {
+        std::fs::read_to_string(&stat).ok().filter(|s| {
+            s.rsplit(')')
+                .next()
+                .is_some_and(|r| r.trim_start().starts_with('Z'))
+        })
+    });
+    assert!(g.exists(), "the zombie still answers kill(-pgid, 0)");
+    let out = timeout(
+        LIMIT,
+        kill_group(g.pgid, Duration::from_millis(100), &Spy::real()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out, ReapOutcome::Killed);
+    assert!(g.child.wait().await.unwrap().is_some());
 }
 
 #[tokio::test]

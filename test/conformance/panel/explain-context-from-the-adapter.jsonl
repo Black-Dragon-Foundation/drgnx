@@ -1,0 +1,21 @@
+{"scenario": "panel/explain-context-from-the-adapter", "requires": ["v1", "test-hooks"], "doc": "[C] agents/explain context words the adapter's own _drgnx/context count (not an estimate), and says so when only usage_update (or nothing) is known; mode names the lock and the matrix column."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-panel\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--panel\" \"context\" \"--log\" \"$ROOT/acp.log\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-panel", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/explain", "params": {"id": "$sid", "item": "context"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"item": "context", "facts": [{"name": "source", "value": "none: the agent has not reported its context"}]}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$sid", "text": "panel:context {\"used\": 1200, \"size\": 200000, \"compact_frees\": 300, \"parts\": [{\"kind\": \"system\", \"tokens\": 200}, {\"kind\": \"tool-output\", \"tokens\": 1000}]}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"panel": {"context": {"used": 1200}}}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/explain", "params": {"id": "$sid", "item": "context"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"item": "context", "facts": [{"name": "source", "value": "the adapter's own count (`_drgnx/context`)"}, {"name": "used", "value": "1200 of 200000 tokens"}, {"name": "system", "value": "200 tokens"}, {"name": "tool-output", "value": "1000 tokens"}, {"name": "compaction frees", "value": "300 tokens"}]}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/explain", "params": {"id": "$sid", "item": "mode"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"item": "mode", "facts": [{"name": "mode", "value": "$string"}, {"name": "row", "value": "$string"}, {"name": "lock", "value": "$string"}, {"name": "allowed switches", "value": "default, plan"}, {"name": "other modes are refused because", "value": "$string"}]}}, "within_ms": 15000}

@@ -451,12 +451,9 @@ fn tables_named(sql: &str) -> Vec<String> {
         .collect()
 }
 
-/// The constants a `format` select may name: their values are read from their `defconst` strings.
-const FORMAT_CONSTANTS: &[&str] = &[
-    "drgnx-coord--agent-cols",
-    "drgnx-coord--event-cols",
-    "drgnx-work--select",
-];
+/// The constants a `format` select may name: their values are read from their `defconst` strings.  (The
+/// coordination readers' column lists went with the views that used them.)
+const FORMAT_CONSTANTS: &[&str] = &["drgnx-work--select"];
 
 /// The symbol at the start of TEXT (after blanks).
 fn symbol_at(text: &str) -> String {
@@ -537,9 +534,9 @@ fn every_old_select_runs_on_the_views() {
         }
     }
     assert!(failures.is_empty(), "{failures:#?}");
-    // The extraction found the readers it must (a sanity bound: 27 once the Lisp writers' own reads were deleted, and
-    // the fragment over two views).
-    assert!(checked.len() >= 25, "{}: {checked:#?}", checked.len());
+    // The extraction found the readers it must (a sanity bound: 18 once the Lisp writers' own reads, the cockpit's
+    // files and then the coordination readers were deleted, and the fragment over two views).
+    assert!(checked.len() >= 18, "{}: {checked:#?}", checked.len());
     assert!(
         checked
             .iter()
@@ -862,7 +859,7 @@ fn rerun_is_a_no_op() {
     assert_eq!(
         open(&mut c, &fx.db, &fx.opts),
         OpenOutcome::Ready {
-            schema: migrate8::SCHEMA
+            schema: crate::migrate12::SCHEMA
         }
     );
     assert_eq!(census(&c), before);
@@ -934,7 +931,7 @@ fn a_fresh_file_is_schema_7() {
     assert_eq!(
         open(&mut c, &fx.db, &fx.opts),
         OpenOutcome::Ready {
-            schema: migrate8::SCHEMA
+            schema: crate::migrate12::SCHEMA
         }
     );
     assert!(fx.backups().is_empty(), "nothing to copy");
@@ -943,13 +940,13 @@ fn a_fresh_file_is_schema_7() {
         kv,
         vec![
             vec![json!("compat-read"), json!("6")],
-            vec![json!("schema"), json!("8")]
+            vec![json!("schema"), json!("12")]
         ]
     );
     let schema = |c: &Connection| {
         rows(
             c,
-            "select type, name, tbl_name, sql from sqlite_master where name not like 'sqlite_%' and name not like 'step%' order by name",
+            "select type, name, tbl_name, sql from sqlite_master where name not like 'sqlite_%' and name not like 'step%' and name not like 'forecast%' and name not in ('decision', 'worktree_base', 'entity_manager_job') order by name",
         )
     };
     let (_m, migrated_conn, _) = migrated();
@@ -1178,7 +1175,7 @@ async fn a_migrated_lease_stays_in_history() {
     assert_eq!(
         handle.status().last_open,
         Some(OpenOutcome::Ready {
-            schema: migrate8::SCHEMA
+            schema: crate::migrate12::SCHEMA
         })
     );
     let read = || Connection::open(&fx.db).unwrap();
@@ -1246,7 +1243,7 @@ async fn excise_on_a_migrated_store_leaves_no_trace() {
     assert_eq!(
         handle.status().last_open,
         Some(OpenOutcome::Ready {
-            schema: migrate8::SCHEMA
+            schema: crate::migrate12::SCHEMA
         })
     );
     let read = || Connection::open(&fx.db).unwrap();

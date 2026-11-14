@@ -78,4 +78,43 @@
         (drgnx-test-peer-close peer)
         (drgnx-test-peer-close other)))))
 
+;;; The same edges with Nidhogg's reader framing the lines (`nidhogg-workers-framing' on)
+
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
+
+(defun drgnx-hub-client-shell-test--framed-peer (name)
+  "A scripted peer as `drgnx-hub--open' leaves a connection when framing is on: lines parsed by the reader."
+  (let ((p (drgnx-hub-client-shell-test--peer name)))
+    (let ((nidhogg-workers-framing t)) (drgnx-hub--frame p))
+    (should (nidhogg-process-framing p))
+    p))
+
+(ert-deftest drgnx-hub-client-shell/framed-the-challenge-comes-first-on-a-connection ()
+  (drgnx-hub-client-shell-test--with fed
+    (let ((peer (drgnx-hub-client-shell-test--framed-peer "hub-shell-framed-challenge")))
+      (unwind-protect
+          (progn
+            (drgnx-hub--step (list 'open peer nil))
+            (drgnx-test-peer-send peer (concat "{\"event\":\"challenge\",\"data\":{\"nonce\":\"n1\"}}\n"
+                                               "{\"id\":1,\"result\":{\"pid\":1}}\n{\"event\":\"no"))
+            (drgnx-test-peer-send peer "tice\",\"data\":{}}\n")
+            (drgnx-test-wait (lambda () (>= (length (drgnx-hub-client-shell-test--of peer fed)) 4))
+                             :what "the three lines reach the core")
+            (should (equal (drgnx-hub-client-shell-test--of peer fed) '(open challenge answer event)))
+            (should (equal (nth 2 (cl-find 'challenge (reverse fed) :key #'car)) "n1")))
+        (drgnx-test-peer-close peer)))))
+
+(ert-deftest drgnx-hub-client-shell/framed-closed-is-the-last-event ()
+  (drgnx-hub-client-shell-test--with fed
+    (let ((peer (drgnx-hub-client-shell-test--framed-peer "hub-shell-framed-end")))
+      (unwind-protect
+          (progn
+            (drgnx-hub--step (list 'open peer nil))
+            (drgnx-test-peer-send peer "{\"id\":1,\"result\":{\"pid\":1}}\n{\"event\":\"x\",\"data\":{}}\n")
+            (drgnx-test-peer-eof peer)
+            (drgnx-test-wait (lambda () (memq 'closed (drgnx-hub-client-shell-test--of peer fed)))
+                             :what "the connection's end reaches the core")
+            (should (equal (drgnx-hub-client-shell-test--of peer fed) '(open answer event closed))))
+        (drgnx-test-peer-close peer)))))
+
 ;;; hub-client-shell-test.el ends here

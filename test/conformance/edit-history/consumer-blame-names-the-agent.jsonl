@@ -1,0 +1,16 @@
+{"scenario": "edit-history/consumer-blame-names-the-agent", "requires": ["v1", "test-hooks"], "doc": "The frozen shape of history/blame as the editor's who-wrote-this reads it: after a worker wrote b.txt, the characters of the file are one span whose author is the history's object for an agent ({kind, session}) and which names the record and the session."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work $ROOT/state && cd $ROOT/work && git init -q && echo base > a.txt && git add -A && git -c user.name=t -c user.email=t@t commit -q -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--state\" \"$ROOT/state\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "say first\nfs:write b.txt one\\n"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"class": "think", "turn_id": "t1"}}}, "within_ms": 15000}
+{"do": "poll", "conn": "c", "json": {"id": 3, "method": "history/blame", "params": {"path": "b.txt", "worktree_root": "$ROOT/work", "start": 0, "end": 100}}, "expect": {"id": 3, "result": {"spans": [{"start": 0, "end": 4, "author": {"kind": "agent", "session": "$sid"}, "record": "$number", "session": "$sid"}]}}, "within_ms": 30000, "every_ms": 200}

@@ -8,23 +8,42 @@ In a large file, sticky scroll, guides, blame and the language server stay off.
 
 ## Language support (tree-sitter)
 
-Code buffers use a language's **tree-sitter mode** (faster, more precise highlighting and navigation) when its
-grammar is installed (`lang/eglot`, reading the language/mode table of `lang/grammars`, `drgnx-grammars-modes`). A file whose grammar is missing opens as usual, and the echo area says once per
-language, per session, that **Install Language Support** (in the palette) adds it — never a question.
+Every language is a **language pack** (`packs/` in drgnx: Python, JavaScript, TypeScript, TSX, Go, Rust, Java, C, C++,
+shell, Ruby, Lua, HTML, CSS, JSON, YAML, TOML, PHP, Elixir, Haskell, Kotlin, Swift, Zig and SQL, and the format-only Terraform and
+Dart). PHP and Elixir use Emacs's own tree-sitter modes, Haskell the `haskell-ts-mode` package (installed with the pack),
+and Kotlin, Swift, Zig and SQL drgnx's shared tree-sitter mode (`drgnx-pack-ts-mode`): highlighting from the pack's
+queries, navigation to its definitions, indentation from the previous line and the pack's rules. A pack names a language's
+tree-sitter grammar (pinned to the commit Emacs's own mode pins), its modes and its formatter; the manifest format is
+in `docs/develop/packs.md`.
 
-The command builds the grammar in the background (a durable job: Show Job Log → `grammars`; it needs `git` and a C
-compiler) into `~/.local/share/drgnx/tree-sitter/`; when it is done, open files of that language switch to its
-tree-sitter mode, and new ones open in it. A grammar counts as installed only when it was built and this Emacs can
-load it — otherwise the job says it failed (its log tells why: no `git`, no compiler, a grammar newer than this
-Emacs's tree-sitter). A tree-sitter mode that names its own grammar version is built at that version; otherwise each grammar is built at a pinned release tag whose parser is tree-sitter ABI 14. Emacs 30 always builds the pinned tags, whatever its tree-sitter library supports (a pinned parser loads in a newer library, and Emacs 30's tree-sitter modes were written against those grammar versions); Emacs 31 or later with an ABI 15 library (`treesit-library-abi-version`) builds the default branch instead. Languages: bash, c, cpp, css, go, html, java, javascript, json, lua,
-python, ruby, rust, toml, tsx, typescript, yaml (module `lang/grammars`, sources in `drgnx-grammars-sources`).
+Code buffers use a language's **tree-sitter mode** (faster, more precise highlighting and navigation) when its pack is
+installed and its grammar loads (module `lang/packs`). A file whose pack is not installed opens as usual, and the echo
+area says once per pack, per session, that **Install Language Support** (in the palette) adds it — never a question
+(Emacs's own "install this grammar?" prompt is turned off).
+
+The command runs `drgnx packs sync --add NAME` in the background (a durable job: Show Job Log → `packs`; it needs `git`
+and a C compiler): the grammar is fetched at its pinned commit, checked against the pinned tree hash, built, and loaded
+once in a separate process as a check (a grammar that crashes there fails the install and nothing else), then the lock,
+a generation (`drgnx rollback` brings the packs back too) and the grammar folder `~/.local/share/drgnx/grammars/LANG/COMMIT/`
+follow. When it is done, open files of that language switch to its tree-sitter mode, and new ones open in it. A grammar
+a parser was already made for in this session keeps its folder until you restart, so an update never mixes two builds.
+`drgnx packs list` shows the packs and which are installed. Format on save needs no install: a language whose formatter
+is its community's standard (Go, Rust, Terraform, Dart) is formatted in any project.
 
 ## Faster language servers
 
 With the [`emacs-lsp-booster`](https://github.com/blahgeek/emacs-lsp-booster) program installed (its release binary
 on your `PATH`), eglot talks to every language server through it: the server's JSON is parsed outside Emacs, so a big
 answer (completions, diagnostics of a large file) no longer stalls typing (module `extra/booster`, package
-`eglot-booster` — from Git, `drgnx sync` installs it). Without the program nothing changes.
+`eglot-booster` — from Git, `drgnx sync` installs it). Without the program nothing changes. The booster is not used
+while Nidhogg's own reading of language servers is on (`nidhogg-workers-framing`): its worker thread then finds and
+parses the messages, which the booster would make it stand back from.
+
+## The language server log
+
+eglot copies every message to and from a server into a log buffer, which costs time on big answers; drgnx turns that
+off. **Show LSP Log** (Code, in the palette) turns it on and shows the current server's log, and turns it off when you
+run it again. A running server keeps the setting it started with: the log fills from the next server you start.
 
 ## Format on save
 
@@ -33,7 +52,7 @@ TypeScript and CSS, gofmt, rustfmt, clang-format, … (apheleia's list) — when
 background, after the save, keeping the point and the view where they were. It formats only code whose project
 formats it: Go, Rust, Zig, Elixir, Terraform and Dart always (their formatter is their standard); other languages
 only under a formatter's config — `.prettierrc*`, `prettier.config.*`, `.clang-format`, `ruff.toml`, a
-`pyproject.toml` with `[tool.black]` or `[tool.ruff]`, `biome.json`, `deno.json`, `stylua.toml`, … — so saving a file
+`pyproject.toml` with `[tool.black]` or `[tool.ruff]`, `biome.json`, `deno.json`, `stylua.toml`, a `.google-java-format` marker file for Java (google-java-format reads no config of its own: an empty file of that name in the project root says "this project formats this way"), … — so saving a file
 in someone else's repository never rewrites it in a style it does not use. Lisp and BibTeX files are never
 re-indented on save. A formatter that is not installed, or fails, leaves the file as you saved it; nothing asks.
 **Toggle Format on Save** turns it off or on in this buffer (with `C-u`, everywhere). Module `extra/format`, package
@@ -41,20 +60,16 @@ re-indented on save. A formatter that is not installed, or fails, leaves the fil
 
 ## Debugging
 
-**Start Debugging…** runs a debug session through dape, which speaks the Debug Adapter Protocol: the adapters VS
-Code uses — debugpy for Python, the JavaScript/TypeScript debugger, delve for Go, codelldb for C, C++ and Rust — work
-here once installed (dape's documentation lists how to get each). While the session is stopped the same command
-continues; **Toggle Breakpoint**, **Step Over**, **Step Into**, **Step Out** and **Stop Debugging** do what they say.
-In the VS Code key profile: F5, F9, F10, F11 (Step Into while a session runs — Zen Mode otherwise), S-F11, S-F5; the
-Emacs and Vim profiles reach them in the palette. dape's windows (scopes, stack, breakpoints, the REPL) open on the
-right, so the panel stays the workbench's. Module `extra/debug`, package `dape`.
+Breakpoints, stepping, the Run and Debug view, the Debug Console, recorded runs, what-if forks and debugging with an
+agent have a page of their own: [debugging.md](debugging.md).
 
 ## Indent guides
 
 Thin vertical guides at each indentation level of code and YAML, on graphical frames, drawn by indent-bars (stipples,
 not characters: they cost little and the cursor never lands on them; with tree-sitter they follow the code's
-structure). Their colour comes from the theme — the `highlight` face, blended — so they follow theme changes.
-**Toggle Indent Guides** for this buffer. Module `extra/guides`, package `indent-bars`.
+structure). Their colour comes from the theme — the `shadow` face, blended — so they follow theme changes.
+**Toggle Indent Guides** for this buffer. Module `extra/guides`, package `indent-bars`: **off until you choose it**
+(Settings → Modules, or `extra/guides` in modules.eld), as the look's code shows no guides.
 
 ## Smooth scrolling
 
@@ -65,14 +80,18 @@ scroll by lines as always. **Toggle Smooth Scrolling**. Module `ui/smooth`.
 
 ## Sticky scroll
 
-When the start of the function, class or block you are in has scrolled off the top, its first line shows in the
-header, after the breadcrumb — up to three enclosing scopes, outermost first: `src › shape.py › class Shape: › def
-area(self):`. The header line is always there (the breadcrumb), so nothing moves as you scroll — except in a terminal window with
+When the start of the function, class or block you are in has scrolled off the top, its name shows in the header,
+after the breadcrumb and in the breadcrumb's type — up to three enclosing scopes, outermost first: `src › shape.py ›
+Shape › area`. A scope that names nothing (a `let` in Lisp, an `if` block) is left out. The header line is always there (the breadcrumb), so nothing moves as you scroll — except in a terminal window with
 fewer than 30 frame lines (31 terminal rows with the menu bar on), where the breadcrumb row is off and the scopes,
 which share its row, are hidden too. Scopes come from
-tree-sitter when the buffer has a parser (functions, methods, classes, structs, …), else from indentation; each
-position is worked out once, and again only when the text above the window's top changes. **Toggle Sticky Scroll** for this buffer. Module `editor/sticky` (drgnx's own; a buffer
-can add to the header the same way: `drgnx-chrome-header-tail`).
+tree-sitter when the buffer has a parser (functions, methods, classes, structs, …), else from indentation (also while
+the tree is not ready — a large file's first parse still running on Nidhogg's parse worker: the header never waits for
+it and redraws once the tree is there); each
+position is worked out once, and again only when the text above the window's top changes. Scrolling inside the same
+scopes reuses their names (the scope lines are read once), and a comment block or a long string above the
+top is passed in one step, however many lines it has. **Toggle Sticky Scroll** for this buffer. Module `editor/sticky` (drgnx's own). It is one of the header's tail providers: add your own with
+`drgnx-chrome-add-tail-provider` (a function of a window returning a string or nil, and a depth; lowest first).
 
 ## Markdown
 
@@ -142,10 +161,10 @@ Module `editor/clipboard`. Tests: `test/unit/mod-clipboard-test.el`.
 ## Tests
 
 `test/unit/edit-clipboard-test.el` (the keys pressed through the command loop in each profile; the prefixes
-with and without a selection and the delay; the Explorer's own keys); `test/unit/mod-grammars-test.el` (the language of a buffer, the hint once and never a prompt, the install as a job
+with and without a selection and the delay; the Explorer's own keys); `test/unit/mod-lang-packs-test.el` (the packs applied, the hint once and never a prompt, the install as a job
 and its command, buffers switching after it); `test/unit/mod-amenities-test.el` (the modules wait without their
-package and run with it; the booster only with its program; a missing formatter still saves); `mod-sticky-test.el` (the scopes, outermost first, at most three, one line, the
-cost of a scroll step); `mod-markdown-test.el` (GFM for READMEs, the preview through pandoc or without a program,
+package and run with it; the booster only with its program; a missing formatter still saves); `mod-sticky-test.el` (the scopes' names, outermost first, at most three, one line, the
+cost of a scroll step, never waiting for a parse that is not ready); `mod-markdown-test.el` (GFM for READMEs, the preview through pandoc or without a program,
 Mermaid as a job once, without mmdc nothing); `test/ui/code-editing-test.el` (on a graphical frame: the sticky
 scopes of a long function, indent guides, smooth scrolling, a screenshot); the perf workload `code-scrolling`
 ([perf.md](../develop/perf.md)).

@@ -1,0 +1,5 @@
+{
+  "name": "rewrite-commit-msg",
+  "version": "0.1.0",
+  "hooks": [{"point": "before-commit", "verdicts": ["change"], "deadline_ms": 1000}]
+}

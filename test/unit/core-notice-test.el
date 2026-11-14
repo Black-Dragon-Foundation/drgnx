@@ -14,7 +14,7 @@
 (ert-deftest drgnx-notice/notify-returns-the-key-and-stores-a-readable-plist ()
   (drgnx-notice-test-with-model
     (let* ((key (drgnx-notify 'modules 'fail "tools/x did not start" :id 'tools/x :life 'condition
-                              :fix "Turn it off" :command '(drgnx-job-ui-show "j1") :scope "j1"))
+                              :fix "Turn it off" :command '(drgnx-work-space-open "j1") :scope "j1"))
            (n (car (drgnx-notices))))
       (should (equal key '(modules . tools/x)))
       (should (eq (plist-get n :source) 'modules))
@@ -82,7 +82,7 @@
 (ert-deftest drgnx-notice/command-must-be-readable ()
   (drgnx-notice-test-with-model
     (should (drgnx-notify 'hub 'warn "a" :command 'notices))
-    (should (drgnx-notify 'hub 'warn "b" :command '(drgnx-job-ui-show "j1" 2 (x . y))))
+    (should (drgnx-notify 'hub 'warn "b" :command '(drgnx-work-space-open "j1" 2 (x . y))))
     (should-error (drgnx-notify 'hub 'warn "c" :command (lambda () 1)) :type 'wrong-type-argument)
     (should-error (drgnx-notify 'hub 'warn "d" :command '(lambda () 1)) :type 'wrong-type-argument)
     (should-error (drgnx-notify 'hub 'warn "e" :command (list 'f (current-buffer))) :type 'wrong-type-argument)
@@ -536,7 +536,7 @@ item says something else and the last is another entity — what changes between
               (cl-loop for i from from below to
                        collect (list :id (cons 'card (if (and churn (= i (1- to))) (+ i 1000) i))
                                      :text (format "j1 — card %d%s" i (if (and churn (= i from)) " (answered)" ""))
-                                     :scope "j1" :command (list 'drgnx-job-ui-show "j1")))))
+                                     :scope "j1" :command (list 'drgnx-work-space-open "j1")))))
     (list (items 0 40) (items 20 60) (items 60 80))))
 
 (defun drgnx-notice-test--replace-3 ()

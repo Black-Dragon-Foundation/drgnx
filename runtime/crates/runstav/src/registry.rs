@@ -19,8 +19,8 @@ pub const PROTO: u32 = 1;
 pub const PROTO_MIN: u32 = 1;
 /// The records layout: 2 is JSON (design 4.5).
 pub const RECORDS: u32 = 2;
-/// The work.db schema this code knows (7: the hub makes it, or migrates a schema-6 file to it at start).
-pub const SCHEMA: u32 = 8;
+/// The work.db schema this code knows (the hub makes it, or migrates an older file to it at start).
+pub const SCHEMA: u32 = 12;
 
 /// What a connection proved (design 4.2): `user` a valid `hello` proof, `agent` the agent socket it came in on,
 /// `service` nothing.
@@ -369,7 +369,19 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 108, "{names:?}");
+        // every method of the registry is in the committed methods.json, and nothing else is: the count is
+        // whatever that file says, so a new method breaks nothing here
+        let committed: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(repo("runtime/protocol/methods.json")).expect("methods.json"),
+        )
+        .expect("methods.json is JSON");
+        let listed: Vec<&str> = committed["methods"]
+            .as_array()
+            .expect("methods")
+            .iter()
+            .map(|m| m["name"].as_str().expect("a name"))
+            .collect();
+        assert_eq!(names, listed);
         assert!(find("job/start-task").is_some_and(|m| m.writes));
         assert!(find("job/status").is_some_and(|m| !m.writes));
         assert!(find("sandbox/global").is_none());
@@ -379,15 +391,64 @@ mod tests {
             .map(|m| m.name)
             .collect();
         let mut want = vec![
+            "agents/config",
             "agents/do",
+            "agents/grants/revoke",
+            "agents/huddle/start",
             "agents/kill",
+            "agents/pause",
             "agents/permission",
             "agents/send",
             "agents/start",
             "agents/stop",
+            "agents/wheel/give",
+            "agents/wheel/take",
         ];
         want.extend(FRONT_WRITES);
         want.extend(CORE_WRITES);
+        // Hrafn's: the index and the consented download change what the hub holds
+        want.extend(["search/index", "search/model-download"]);
+        // the Search view's saved searches: the hub's state, and the project's file on a click
+        // the Search view's writes: project files, on disk or through the editor
+        want.extend(["search/apply", "search/undo"]);
+        // Ask an Agent: a worktree, a session and its brief
+        want.extend(["search/handoff"]);
+        want.extend([
+            "search/saved/delete",
+            "search/saved/put",
+            "search/saved/share",
+        ]);
+        // the runners': the registry's changes
+        want.extend([
+            "runners/add",
+            "runners/bench",
+            "runners/check",
+            "runners/remove",
+            "runners/set",
+            "runners/unbench",
+        ]);
+        // say's: a planning session, the proposal it writes, its end
+        want.extend(["say/end", "say/revise", "say/start"]);
+        // the plugins': an approval and a switch-off change what the hub may run
+        want.extend(["plugins/approve", "plugins/disable"]);
+        // the edit history's: the editor's buffers, as the user's operations
+        want.extend([
+            "history/batch",
+            "history/register",
+            "history/resync",
+            "history/unregister",
+        ]);
+        // one hunk staged in git's index
+        want.extend(["git/stage-hunk"]);
+        // a revert to here: the files, the steps, the conversation and a commit; and one hunk of a record
+        want.extend(["history/revert/apply", "history/revert/hunk"]);
+        // a fork from here, its drop, and the text taken across or redone
+        want.extend([
+            "history/fork",
+            "history/fork/drop",
+            "history/redo",
+            "history/take",
+        ]);
         want.extend(
             registry()
                 .iter()
@@ -436,9 +497,10 @@ mod tests {
     ];
 
     /// The agent core's methods that write (agent system part 1, Task 0), besides `agents/*` and `job/*`.
-    const CORE_WRITES: [&str; 10] = [
+    const CORE_WRITES: [&str; 11] = [
         "agents/move",
         "agents/role",
+        "exec/bump",
         "exec/start",
         "exec/stop",
         "messages/retract",
@@ -604,11 +666,15 @@ mod tests {
     #[test]
     fn every_method_with_required_params_refuses_empty() {
         let mut with = 0;
+        // how many refuse `{}` follows from each method's declared required params, not from a number written here
+        let mut expected = 0;
         for m in registry() {
             let schema = (m.params)().to_value();
             let req = required(&schema);
             if [
+                "agents/presence/subscribe",
                 "coord/agent",
+                "debug/heap",
                 "graph/revert",
                 "graph/grants",
                 "graph/proposed",
@@ -622,6 +688,7 @@ mod tests {
                 assert!((m.decode)(&json!({})).is_err());
                 continue;
             }
+            expected += usize::from(!req.is_empty());
             match (m.decode)(&json!({})) {
                 Ok(_) => assert!(req.is_empty(), "{} took {{}} but needs {req:?}", m.name),
                 Err(e) => {
@@ -637,7 +704,11 @@ mod tests {
                 }
             }
         }
-        assert_eq!(with, 73);
+        assert_eq!(with, expected);
+        assert!(
+            with > 0,
+            "no method refused {{}}: the schema read found no required params"
+        );
     }
 
     #[test]

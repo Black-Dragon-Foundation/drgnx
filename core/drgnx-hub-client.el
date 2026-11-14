@@ -27,6 +27,8 @@
 (declare-function drgnx-exec-unsync "drgnx-exec")
 (declare-function drgnx-settings-agents--event "drgnx-settings-agents")
 (declare-function drgnx-records-review--event "drgnx-records-review")
+(declare-function drgnx-history-revert--event "drgnx-history-revert")
+(declare-function drgnx-say-event "drgnx-say")
 (declare-function drgnx-ai-providers "drgnx-ai")
 (declare-function drgnx-settings-runtime-send "drgnx-settings-runtime")
 (declare-function drgnx-ai-provider "drgnx-ai")
@@ -52,6 +54,11 @@ only and must be told again, such as the login shell's variables.")
 (defvar drgnx-hub--event-conn nil
   "The connection whose event `drgnx-hub-event-functions' run for, while they run (else nil): a handler that acts
 only for a hub that proved itself checks its `:drgnx-proven'.")
+
+(defvar drgnx-hub-session (format "%d-%x" (emacs-pid) (random (ash 1 40)))
+  "This Emacs's session id, said in every hello.  The hub keeps the session's terminals while a connection carries it,
+and for a minute after the last one closes (a dropped socket, a hub restart); a subscribed connection of it is where
+they draw (docs/develop/terminal.md, \"Lifetime\").")
 
 (defvar drgnx-hub--client nil "This Emacs's connection to the hub, for requests.")
 (defvar drgnx-hub--events nil "This Emacs's subscribed connection to the hub.")
@@ -98,9 +105,10 @@ nil or the reason it failed) when it ends.")
 
 (defun drgnx-hub-socket ()
   "The hub's socket: $XDG_RUNTIME_DIR/drgnx/hub-HASH.sock (HASH of the data dir: one hub per data dir), else under
-the state dir; past 103 bytes, drgnx-hub-UID/ in the first of $TMPDIR, $TMP, $TEMP, else /tmp.  A function of the
-environment alone, as the Rust side computes it (test/fixtures/hub-socket-cases.json): never `temporary-file-directory',
-which macOS's Emacs takes from `getconf DARWIN_USER_TEMP_DIR' when none of the three is set, and a user can change."
+the state dir; past 103 bytes, drgnx-hub-UID/ in the first of $TMPDIR, $TMP, $TEMP that is absolute (a relative one
+counts for nothing), else /tmp.  A function of the environment alone, as the Rust side computes it
+\(test/fixtures/hub-socket-cases.json): never `temporary-file-directory', which macOS's Emacs takes from
+`getconf DARWIN_USER_TEMP_DIR' when none of the three is set, and a user can change."
   (let* ((name (format "hub-%s.sock" (substring (secure-hash 'sha1 (drgnx-data-dir)) 0 8)))
          (run (getenv "XDG_RUNTIME_DIR"))
          (path (if (and run (file-directory-p run))
@@ -109,7 +117,10 @@ which macOS's Emacs takes from `getconf DARWIN_USER_TEMP_DIR' when none of the t
     ;; a Unix socket's path ends with a NUL inside 104 bytes on macOS (108 on Linux): at most 103; a deep state
     ;; dir gets a short private one instead.  Counted as the system sees it: encoded (macOS decomposes "é" to 3 bytes)
     (if (<= (length (encode-coding-string path (or file-name-coding-system default-file-name-coding-system))) 103) path
-      (let ((tmp (file-name-as-directory (or (getenv "TMPDIR") (getenv "TMP") (getenv "TEMP") "/tmp"))))
+      ;; a relative value counts for nothing, as in Rust (it would be read against this Emacs's own folder)
+      (let ((tmp (file-name-as-directory
+                  (or (seq-find (lambda (v) (and v (string-prefix-p "/" v))) (list (getenv "TMPDIR") (getenv "TMP") (getenv "TEMP")))
+                      "/tmp"))))
         (expand-file-name name (expand-file-name (format "drgnx-hub-%d" (user-uid)) tmp))))))
 
 (defun drgnx-hub--private-dir (dir)
@@ -236,11 +247,35 @@ Emacs connects again)."
   (process-put conn :pending nil)
   (delete-process conn))
 
-(defun drgnx-hub--lines (conn chunk fn &optional bad limit)
+(defconst drgnx-hub--model-prefix "{\"event\":\"view-model\""
+  "How a hub's `view-model' line starts (the hub writes `event' first): such a line goes to Sjá whole, never parsed
+here (`drgnx-hub--model-line-p', `:raw-prefix' on the framed path).")
+
+(defsubst drgnx-hub--model-line-p (line)
+  "Non-nil when LINE starts with `drgnx-hub--model-prefix' (a compare in place: nothing is allocated)."
+  (and (>= (length line) (length drgnx-hub--model-prefix))
+       (eq t (compare-strings line 0 (length drgnx-hub--model-prefix) drgnx-hub--model-prefix nil nil))))
+
+(declare-function drgnx-view-model-line "drgnx-view" (line))
+
+(defun drgnx-hub--model-line (line)
+  "A hub's `view-model' LINE, whole and unparsed, to its view's model (`drgnx-view-model-line'); dropped when the
+views are not loaded."
+  (when (fboundp 'drgnx-view-model-line) (drgnx-view-model-line line)))
+
+(defun drgnx-hub--model-pushed (answer error)
+  "A `view-model' line the framed reader pushed to Sjá itself: Sjá's ANSWER to its view's model
+\(`drgnx-view-model--pushed'); ERROR, Sjá's refusal, is signalled (the guard reports it, as a failed push)."
+  (when error (signal (car error) (cdr error)))
+  (when (fboundp 'drgnx-view-model--pushed) (drgnx-view-model--pushed (nidhogg-view--pushed answer))))
+
+(defun drgnx-hub--lines (conn chunk fn &optional bad limit raw)
   "Split CONN's input into lines; FN gets each parsed JSON object, BAD (when given) each line that is not JSON.
 With LIMIT, a line longer than LIMIT closes CONN: nothing after it is read, nor after FN or BAD closed CONN.
+With RAW, a line that starts with `drgnx-hub--model-prefix' goes to RAW whole, never parsed.
 Only CHUNK is searched for a newline: the start of a line still open waits in CONN's list of pieces (`:pending'),
-joined once when its newline comes, so a long line in many chunks costs its length (HUB-LINES-1)."
+joined once when its newline comes, so a long line in many chunks costs its length (HUB-LINES-1); a chunk with no
+newline is held as it came, not copied."
   (let ((start 0) (n (length chunk)) (live (process-live-p conn)) nl)
     (while (and (setq nl (string-search "\n" chunk start)) (or (not live) (process-live-p conn)))
       (let* ((pending (process-get conn :pending))
@@ -249,18 +284,23 @@ joined once when its newline comes, so a long line in many chunks costs its leng
         (process-put conn :pending nil)
         (process-put conn :pending-length 0)
         (setq start (1+ nl))
-        (if (and limit (> (length line) limit))
-            (progn (setq start n) (drgnx-hub--line-too-long conn limit))
+        (cond
+         ((and limit (> (length line) limit))
+          (setq start n) (drgnx-hub--line-too-long conn limit))
+         ((and raw (drgnx-hub--model-line-p line)) (funcall raw line))
+         (t
           (let ((json (condition-case nil
                           (json-parse-string line :object-type 'plist :array-type 'list :null-object nil :false-object nil)
                         (error :bad))))
             (cond ((eq json :bad) (when bad (funcall bad line)))
-                  (json (funcall fn json)))))))
+                  (json (funcall fn json))))))))
     (when (and (< start n) (or (not live) (process-live-p conn)))
       (let ((length (+ (or (process-get conn :pending-length) 0) (- n start))))
         (if (and limit (> length limit))
             (drgnx-hub--line-too-long conn limit)
-          (process-put conn :pending (cons (substring chunk start) (process-get conn :pending)))
+          ;; a chunk with no newline is held as it came (the filter's string is fresh per call): a line of megabytes
+          ;; (a view model) costs its chunks and the join, not a copy of each chunk as well
+          (process-put conn :pending (cons (if (= start 0) chunk (substring chunk start)) (process-get conn :pending)))
           (process-put conn :pending-length length))))))
 
 ;;;; The client side
@@ -287,13 +327,26 @@ never asked.  Event lines (Ratatoskr's challenge comes first) are skipped: the f
             (delete-process c))))
     (error nil)))
 
+(defun drgnx-hub--accepts-p (socket)
+  "Does something take a connection on SOCKET?  A hub that is there, if too busy to answer `drgnx-hub--ping-socket'
+within its second (a socket file left by a hub that ended refuses).  Never one not private to this user; never an
+error."
+  (condition-case nil
+      (and (file-exists-p socket) (not (drgnx-hub--untrusted socket))
+           (progn (delete-process (make-network-process :name "drgnx-hub-accepts" :family 'local :service socket
+                                                        :noquery t))
+                  t))
+    (error nil)))
+
 (defun drgnx-hub--connect-socket (filter)
   "A connection to the hub's socket — never one that is not private to this user (`drgnx-hub--untrusted')."
   (let ((socket (drgnx-hub-socket)))
     (when-let* ((why (drgnx-hub--untrusted socket)))
       (error "Not connecting to the drgnx hub: %s" why))
     (make-network-process :name "drgnx-hub-client" :family 'local :service socket :noquery t
-                          :coding 'utf-8-unix :filter (drgnx-guard-wrap filter "hub connection"))))
+                          ;; binary in, UTF-8 out: Nidhogg's `lines' framing needs a decoding without state; the
+                          ;; filter's `drgnx-hub--lines' parses UTF-8 bytes as well as characters
+                          :coding '(binary . utf-8-unix) :filter (drgnx-guard-wrap filter "hub connection"))))
 
 ;;;; Proofs and the binary on disk
 
@@ -407,17 +460,66 @@ path: a filter, a timer) never waits: the cached value, or nil while the read it
 
 (defun drgnx-hub--client-filter (conn chunk)
   "A client connection's filter: the challenge starts the hello, an answer settles its call, an event (on the
-subscribed connection) goes to `drgnx-hub-event-functions'."
-  (drgnx-hub--lines conn chunk (lambda (json) (drgnx-hub--client-line conn json))))
+subscribed connection) goes to `drgnx-hub-event-functions', a `view-model' line whole to its view's model."
+  (drgnx-hub--lines conn chunk (lambda (json) (drgnx-hub--client-line conn json)) nil nil #'drgnx-hub--model-line))
+
+(defvar nidhogg-workers-framing)
+(declare-function nidhogg-set-process-framing "nidhogg-io.c")
+(declare-function nidhogg-view--pushed "nidhogg-views" (r))
+(declare-function drgnx-view-model--pushed "drgnx-view" (r))
+
+(defun drgnx-hub--frame (conn)
+  "Have Nidhogg's reader thread split CONN's input into lines and parse them, when `nidhogg-workers-framing' is on:
+the main thread then gets batches (`drgnx-hub--client-batch') where it gets chunks (`drgnx-hub--client-filter').
+Without the feature or the switch, or on an error from the framing, the filter reads, as it always did.  No
+`:max-message': the client has no line limit.  A `view-model' line the reader pushes to Sjá itself (`:raw-prefix'
+with `:raw-to-sja'): the line, up to megabytes a window move, never becomes a Lisp string.  A connection whose
+filter is replaced (the delivery gate's, in tests) is unframed again by the reader itself."
+  (when (and (fboundp 'nidhogg-set-process-framing) (bound-and-true-p nidhogg-workers-framing))
+    (condition-case nil
+        (nidhogg-set-process-framing conn 'lines :parse 'string :object-type 'plist :array-type 'list
+                                     :null-object nil :false-object nil
+                                     :raw-prefix drgnx-hub--model-prefix :raw-to-sja t
+                                     :batch-function (drgnx-guard-wrap #'drgnx-hub--client-batch "hub connection"))
+      (error nil))))
+
+(defun drgnx-hub--client-batch (conn batch)
+  "The framed counterpart of `drgnx-hub--lines' with `drgnx-hub--client-line': BATCH is a list of (MESSAGE RAW ERROR)
+from CONN's reader, in the order the hub wrote them.  One whose line is not JSON (ERROR), or is JSON `null' or
+`false' (no MESSAGE), is skipped as `drgnx-hub--lines' skips it.  Nothing is read once CONN, live when the batch
+began, is not any more (nothing after `closed').  Each message runs in a guard of its own: one that fails never drops
+the rest of the batch.  A last line with no newline before the end of the stream is a message here, where the filter
+drops it.  A `view-model' line the reader pushed to Sjá (`:raw-to-sja') comes as (ANSWER sja ERROR): Sjá's answer
+goes to its view's model, and an ERROR (Sjá refused the line) is reported as a failed push is."
+  (let ((live (process-live-p conn)) (one (drgnx-guard-wrap #'drgnx-hub--client-line "hub connection"))
+        (pushed (drgnx-guard-wrap #'drgnx-hub--model-pushed "hub connection")))
+    (dolist (entry batch)
+      (when (or (not live) (process-live-p conn))
+        (let ((message (nth 0 entry)))
+          (cond ((eq (nth 1 entry) 'sja) (funcall pushed message (nth 2 entry)))
+                ((nth 2 entry))
+                (message (funcall one conn message))))))))
+
+(defconst drgnx-hub--conn-props
+  '((:state . :drgnx-state) (:queue . :drgnx-queue) (:proven . :drgnx-proven) (:asked . :drgnx-asked)
+    (:events . :drgnx-events) (:since . :since))
+  "The core's connection fields and the process properties that keep them between steps.")
 
 (defun drgnx-hub--client-line (conn json)
   "One line JSON read on CONN, as the core's event: the challenge, an event, or an answer."
   (let ((event (plist-get json :event)))
     (cond ((equal event "challenge")
            (drgnx-hub--step (list 'challenge conn (plist-get (plist-get json :data) :nonce) (drgnx-hub-socket))))
-          (event (drgnx-hub--step (list 'event conn event (plist-get json :data))))
+          (event (drgnx-hub--step-event conn event (plist-get json :data)))
           ((plist-get json :id)
            (drgnx-hub--step (list 'answer conn (plist-get json :id) (plist-get json :result) (plist-get json :error)))))))
+
+(defun drgnx-hub--step-event (conn name data)
+  "The hub's event NAME with DATA, read on CONN, through the core with only CONN's subscription mark as its state:
+an event changes nothing in the client, so no snapshot of the globals or the connections is taken."
+  (let ((state (drgnx-hub-core-make
+                :conns (list (list conn :events (process-get conn (alist-get :events drgnx-hub--conn-props)))))))
+    (dolist (e (cdr (drgnx-hub-core-step state (list 'event conn name data)))) (drgnx-hub--effect e))))
 
 (defun drgnx-hub--settle (id result error)
   "Call the callback of call ID with RESULT and ERROR (the hub's error object, or this side's message) — once: the
@@ -430,11 +532,6 @@ raises is recorded, and the lines after its answer are still read."
   (drgnx-hub--step (list 'timer (cons 'hub-call id))))
 
 ;;;; The shell: the core decides (drgnx-hub-core.el), this runs what it decided
-
-(defconst drgnx-hub--conn-props
-  '((:state . :drgnx-state) (:queue . :drgnx-queue) (:proven . :drgnx-proven) (:asked . :drgnx-asked)
-    (:events . :drgnx-events) (:since . :since))
-  "The core's connection fields and the process properties that keep them between steps.")
 
 (defvar drgnx-hub--asked-disconnect nil
   "Non-nil when this editor ended its own subscription (`drgnx-hub-disconnect', or a `shutdown' it sent): a hub that
@@ -570,7 +667,8 @@ two within `drgnx-hub--challenge-wait' closes the connection (`drgnx-hub--challe
 makes a hub `legacy'.  The process."
   (let ((c (drgnx-hub--connect-socket #'drgnx-hub--client-filter)))
     (set-process-sentinel c (drgnx-guard-wrap #'drgnx-hub--client-sentinel "hub connection"))
-    (drgnx-hub-client-binary-version t)         ; read now, never waiting: for this hello and the skew
+    (drgnx-hub--frame c)
+    (drgnx-hub-client-binary-version t)        ; read now, never waiting: for this hello and the skew
     (drgnx-hub--step (list 'open c events))
     c))
 
@@ -593,7 +691,7 @@ core judges the answer from what the hello said: the proof the hub must give bac
                         (append (list :proto drgnx-hub-proto :nonce nonce)
                                 (and version (list :drgnx_version version))
                                 (list :schema drgnx-work-db-schema-version :records drgnx-hub-records
-                                      :client (if noninteractive "cli" "editor"))
+                                      :client (if noninteractive "cli" "editor") :session drgnx-hub-session)
                                 (and proof (list :proof proof)))
                         nil :full t :first t
                         :hello (list :problem (and (consp cap) (or (plist-get cap :problem) "it cannot be read"))
@@ -637,8 +735,11 @@ error, or when it does not answer."
   (let* ((done nil) result error
          (limit (+ (float-time (time-convert nil t)) (or timeout 5) 1))
          (id (drgnx-hub-call method params (lambda (r e) (setq done t result r error e)) :deadline (or timeout 5))))
-    ;; the deadline ends the wait; the real clock is only a backstop (a test's virtual clock never fires the deadline)
-    (while (and (not done) (< (float-time (time-convert nil t)) limit)) (accept-process-output nil 0.02))
+    ;; the deadline ends the wait; the real clock is only a backstop (a test's virtual clock never fires the deadline).
+    ;; The wait is on the call connection: it returns as soon as that connection is read.  On no process it would
+    ;; return only once no process had written for 10 ms (Emacs's read delay), whatever ended the wait
+    (while (and (not done) (< (float-time (time-convert nil t)) limit))
+      (accept-process-output (and (process-live-p drgnx-hub--client) drgnx-hub--client) 0.02))
     (unless done (drgnx-hub--settle id nil "gave up"))
     (cond ((not done) (error "The drgnx hub did not answer %s" method))
           (error (error "drgnx hub: %s" error))
@@ -704,8 +805,11 @@ closes it when this Emacs dies."
   (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--need-keys)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--keys-changed)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--note-card)
+  (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--note-plugin)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-settings-agents--event)
-  (remove-hook 'drgnx-hub-event-functions #'drgnx-records-review--event))
+  (remove-hook 'drgnx-hub-event-functions #'drgnx-records-review--event)
+  (remove-hook 'drgnx-hub-event-functions #'drgnx-history-revert--event)
+  (remove-hook 'drgnx-hub-event-functions #'drgnx-say-event))
 
 ;;;; Skew: another drgnx's hub
 
@@ -811,7 +915,7 @@ said, or `:unknown' before the hub answered.  Never a key.")
 
 (defvar drgnx-hub-editor-token-hook nil
   "Functions of no arguments run (inside the guard) when the hub gave this Emacs its editor token: what needed the
-gateway's address (gptel's backend) can be set up.")
+gateway's address can be set up.")
 
 (defun drgnx-hub--keys-note ()
   "The hub said which keys it holds (`drgnx-hub--keys-held'): each is one it had (`drgnx-hub--keys-had'), and its
@@ -911,6 +1015,18 @@ drops it (`drgnx-hub--drop-keys')."
   (unless (eq drgnx-hub--keys-held :unknown)
     (cl-pushnew (symbol-name id) drgnx-hub--keys-held :test #'equal)))
 
+(defun drgnx-hub-revoke-key (id)
+  "Tell the hub to forget provider ID's key (`gateway/revoke-key'): a request after it finds no key, one already sent
+finishes.  Only a hub this Emacs is connected to and that proved itself, without waiting and without asking or starting
+anything (a daemon path may call it): the hub holds nothing else to forget.  A replaced key is this plus the hand-over
+\(`drgnx-hub-give-key', `drgnx-hub--send-keys').  Returns whether the call was made."
+  (when (and (processp drgnx-hub--events) (process-live-p drgnx-hub--events)
+             (process-get drgnx-hub--events :drgnx-proven))
+    (drgnx-hub-call "gateway/revoke-key" (list :provider (symbol-name id)) #'ignore)
+    (unless (eq drgnx-hub--keys-held :unknown)
+      (setq drgnx-hub--keys-held (delete (symbol-name id) drgnx-hub--keys-held)))
+    t))
+
 (defun drgnx-hub--hand-over ()
   "Hand the hub the runtime settings your Lisp holds (`drgnx-settings-runtime-send') and the keys this Emacs holds
 \(`drgnx-hub--send-keys'), and ask it for the editor token and the keys it holds (`drgnx-hub--fetch-editor'): the ids
@@ -975,11 +1091,16 @@ or the user is told, when the start ends."
   "Make sure a hub runs, without waiting: CALLBACK is called with nil once one answers (at once when one does already)
 or with the reason it does not, when the one asynchronous `ratatoskr ensure --timeout 5' ends or passes
 `drgnx-hub-ensure-deadline'.  Returns that process (nil when a hub ran already).  Signals when it cannot start one:
-Ratatoskr is not built, or starting is off (DRGNX_NO_HUB_START)."
+Ratatoskr is not built, or starting is off (DRGNX_NO_HUB_START) and no hub is there.  With starting off, a hub that
+takes the connection but does not answer the probe's second (a busy one) runs: `drgnx-hub--accepts-p'.  (With starting
+on, `ratatoskr ensure' judges it, with its own longer wait.)"
   (require 'drgnx-ai)
   (cond ((drgnx-hub-running-p) (funcall callback nil) nil)
         ((getenv "DRGNX_NO_HUB_START")
-         (error "No drgnx hub runs, and starting one is off here (DRGNX_NO_HUB_START)"))
+         (unless (drgnx-hub--accepts-p (drgnx-hub-socket))
+           (error "No drgnx hub runs, and starting one is off here (DRGNX_NO_HUB_START)"))
+         (funcall callback nil)
+         nil)
         ((process-live-p drgnx-hub--ensuring)
          (process-put drgnx-hub--ensuring :callbacks (cons callback (process-get drgnx-hub--ensuring :callbacks)))
          drgnx-hub--ensuring)
@@ -997,6 +1118,19 @@ Ratatoskr is not built, or starting is off (DRGNX_NO_HUB_START)."
            (setq drgnx-hub--ensuring p)
            (drgnx-timer-start 'hub-ensure drgnx-hub-ensure-deadline #'drgnx-hub--ensure-expired :owner :core)
            p))))
+
+(defun drgnx-hub-start-for-command (on-fail)
+  "A command the user invoked needs the hub's subscription (a terminal, a hub-fed view): start Ratatoskr when no hub
+runs (`drgnx-hub--ensure-running', not waited for) and connect once it answers; with one running, connect.  ON-FAIL
+gets the reason, a string, when no hub can be had.  Nothing while a subscription is up or being made.  In a daemon path
+\(`inhibit-interaction') it starts nothing and only connects to a hub already there: timers, hooks, sentinels and
+startup never start one."
+  (unless (or (process-live-p drgnx-hub--events) (process-live-p drgnx-hub--subscribing))
+    (if inhibit-interaction
+        (when (drgnx-hub-running-p) (drgnx-hub-connect))
+      (condition-case e
+          (drgnx-hub--ensure-running (lambda (err) (if err (funcall on-fail err) (drgnx-hub-connect))))
+        (error (funcall on-fail (error-message-string e)))))))
 
 (defun drgnx-hub--restart-legacy ()
   "End the Lisp hub of before this update (protocol 0 has `shutdown', not `restart'), wait up to 5 s for its lock
@@ -1065,8 +1199,11 @@ end is said by its sentinel."
     (add-hook 'drgnx-hub-event-functions #'drgnx-hub--need-keys)
     (add-hook 'drgnx-hub-event-functions #'drgnx-hub--keys-changed)
     (add-hook 'drgnx-hub-event-functions #'drgnx-hub--note-card)
+    (add-hook 'drgnx-hub-event-functions #'drgnx-hub--note-plugin)
     (when (require 'drgnx-settings-agents nil t) (add-hook 'drgnx-hub-event-functions #'drgnx-settings-agents--event))
     (when (require 'drgnx-records-review nil t) (add-hook 'drgnx-hub-event-functions #'drgnx-records-review--event))
+    (when (require 'drgnx-history-revert nil t) (add-hook 'drgnx-hub-event-functions #'drgnx-history-revert--event))
+    (when (require 'drgnx-say nil t) (add-hook 'drgnx-hub-event-functions #'drgnx-say-event))
     (drgnx-hub-send-settings)
     (when (fboundp 'drgnx-settings-history-connected) (drgnx-settings-history-connected))))
 
@@ -1132,25 +1269,124 @@ the command it names (Hub: Restart Now).  A condition: the hub, or the next hell
       (when (and (stringp id) (stringp text) (member severity '("info" "warn" "fail")))
         (drgnx-notify 'hub (intern severity) text :id (intern id)
                       :life (if (equal (plist-get data :life) "condition") 'condition 'event)
-                      ;; only a registry id: the click runs it through `drgnx-ui--run'
+                      ;; only a registry id: the click runs it through `drgnx-ui-kit-run'
                       :command (let ((sym (and (stringp command) (intern-soft command))))
                                  (and sym (fboundp 'drgnx-commands-get) (drgnx-commands-get sym) sym)))))))
 
+(defvar drgnx-hub--card-choices nil
+  "The matrix cards that list their answers, newest first: (ID :title TITLE :body BODY :choices ((CHOICE . LABEL)…)),
+as their `card' events said.  At most `drgnx-hub--card-choices-cap' entries; an entry goes once its card's notice is
+gone (`drgnx-hub--card-choices-live').")
+
+(defconst drgnx-hub--card-choices-cap 64 "How many cards' choices `drgnx-hub--card-choices' keeps.")
+
+(defun drgnx-hub--card-notice-id (id)
+  "The notice id of matrix card ID."
+  (intern (format "matrix-card-%d" id)))
+
+(defun drgnx-hub--card-choices-live ()
+  "`drgnx-hub--card-choices' without the cards whose notice is gone (answered, or cleared with the hub)."
+  (when drgnx-hub--card-choices
+    (let ((live (mapcar (lambda (n) (plist-get n :id)) (drgnx-notices :source 'hub :life 'condition))))
+      (setq drgnx-hub--card-choices
+            (cl-remove-if-not (lambda (e) (memq (drgnx-hub--card-notice-id (car e)) live)) drgnx-hub--card-choices))))
+  drgnx-hub--card-choices)
+
+(defun drgnx-hub--card-choices-of (data)
+  "The choices a `card' event's DATA lists, as ((CHOICE . LABEL)…); nil when it lists none."
+  (let (out)
+    (dolist (c (plist-get data :choices))
+      (let ((id (plist-get c :id)) (label (plist-get c :label)))
+        (when (and (stringp id) (stringp label)) (push (cons id label) out))))
+    (nreverse out)))
+
+(defun drgnx-hub--card-choices-put (id data choices)
+  "Keep CHOICES of card ID with its DATA's title and body, newest first, within the cap."
+  (let ((entry (list id :title (plist-get data :title) :body (plist-get data :body) :choices choices))
+        (rest (assq-delete-all id (drgnx-hub--card-choices-live))))
+    (setq drgnx-hub--card-choices (seq-take (cons entry rest) drgnx-hub--card-choices-cap))))
+
+(defun drgnx-hub--event-proven-p ()
+  "Non-nil when the event now handled came on a connection of a hub that proved itself."
+  (and (processp (bound-and-true-p drgnx-hub--event-conn)) (process-get drgnx-hub--event-conn :drgnx-proven)))
+
+(defconst drgnx-hub--quote-max 280 "The most of an agent's words a suggestion's notice quotes, in characters.")
+
+(defun drgnx-hub--quote (text)
+  "TEXT, an agent's words, as one inert line: no control, bidi or zero-width character, at most
+`drgnx-hub--quote-max' characters."
+  (let* ((line (replace-regexp-in-string "[\n\r\t  ]" " " text t t))
+         (clean (replace-regexp-in-string
+                 "[[:cntrl:]­؜᠎​-‏‪-‮⁠-⁤⁦-⁩﻿]" "" line t t)))
+    (substring-no-properties (truncate-string-to-width (string-trim clean) drgnx-hub--quote-max))))
+
+(defun drgnx-hub--note-extension-card (data)
+  "An agent's suggestion (an `extension' card): an open one is a notice whose command opens the package's page, with
+the hub's title as its text and the agents' words only quoted in its detail; nothing on it installs.  A withdrawn or
+settled one takes its notice away."
+  (let ((key (intern (format "extension-card-%d" (plist-get data :id))))
+        (id (plist-get (plist-get data :data) :id)))
+    (if (not (equal (plist-get data :state) "open"))
+        (drgnx-notice-clear 'hub key)
+      (when (and (stringp id) (string-match-p "\\`\\(?:pkg\\|plugin\\):[^[:space:][:cntrl:]]\\{1,200\\}\\'" id)
+                 (stringp (plist-get data :title)))
+        (drgnx-notify 'hub 'info (drgnx-hub--quote (plist-get data :title))
+                      :id key :life 'condition
+                      :detail (mapconcat (lambda (q)
+                                           (format "%s says: “%s”"
+                                                   (drgnx-hub--quote (format "%s" (plist-get q :session)))
+                                                   (drgnx-hub--quote (format "%s" (plist-get q :text)))))
+                                         (plist-get (plist-get data :data) :why) "; ")
+                      :command (list 'drgnx-extensions-show-suggestion id))))))
+
 (defun drgnx-hub--note-card (event data)
-  "In an editor: a `matrix' card (the permission matrix asks) or a `supervisor' pause from a hub that proved itself is
-a notice.  Nothing asks and nothing waits: the cockpit's cards answer.  `agent-step' is not handled here: it matters
-only to a subscriber that asked for it."
-  (when (and (processp (bound-and-true-p drgnx-hub--event-conn)) (process-get drgnx-hub--event-conn :drgnx-proven))
+  "In an editor: a `matrix' card (the permission matrix asks), an `extension' card (an agent's suggestion:
+`drgnx-hub--note-extension-card') or a `supervisor' pause from a hub that proved itself is a notice.  Nothing asks
+and nothing waits: a card that lists its answers (a browser row's) keeps them here and its notice carries Agents:
+Answer Permission Card with the card's id; the agent panel's cards answer the others.
+`agent-step' is not handled here: it matters only to a subscriber that asked for it."
+  (when (drgnx-hub--event-proven-p)
     (cond
      ((and (equal event "card") (equal (plist-get data :kind) "matrix") (numberp (plist-get data :id)))
-      (drgnx-notify 'hub 'info
-                    (format "The permission matrix asks: %s" (or (plist-get data :title) "a question is waiting"))
-                    :id (intern (format "matrix-card-%d" (plist-get data :id))) :life 'condition
-                    :scope (plist-get data :job)))
+      (let* ((id (plist-get data :id)) (choices (drgnx-hub--card-choices-of data)))
+        (drgnx-notify 'hub 'info
+                      (format "The permission matrix asks: %s" (or (plist-get data :title) "a question is waiting"))
+                      :id (drgnx-hub--card-notice-id id) :life 'condition
+                      :scope (plist-get data :job)
+                      :command (and choices (list 'drgnx-agents-answer-card id)))
+        (when choices (drgnx-hub--card-choices-put id data choices))))
+     ((and (equal event "card") (equal (plist-get data :kind) "extension") (natnump (plist-get data :id)))
+      (drgnx-hub--note-extension-card data))
      ((and (equal event "supervisor") (stringp (plist-get data :text)))
       (drgnx-notify 'hub 'warn (format "An agent was paused: %s" (plist-get data :text))
                     :id (intern (format "supervisor-%s" (or (plist-get data :card) (plist-get data :session) "rule")))
                     :life 'condition)))))
+
+(defun drgnx-hub--plugin-notice-id (name)
+  "The notice id of plugin NAME."
+  (intern (format "plugin-%s" name)))
+
+(defun drgnx-hub--note-plugin (event data)
+  "In an editor: a `plugin' event from a hub that proved itself, or a `card' of kind `plugin', becomes a notice of
+source `hub' for a plugin that waits for your approval (`unapproved', `changed') or is `broken'; any other state
+takes the notice away.  The click opens the plugin's page (`drgnx-plugins-page-open', when the module
+`tools/plugins' runs).  Nothing asks and nothing is approved here."
+  (when (and (drgnx-hub--event-proven-p)
+             (or (equal event "plugin")
+                 (and (equal event "card") (equal (plist-get data :kind) "plugin"))))
+    (let* ((name (or (plist-get data :name) (plist-get data :subject)))
+           (state (or (plist-get data :state) "unapproved"))
+           (id (and (stringp name) (drgnx-hub--plugin-notice-id name))))
+      (when id
+        (if (not (member state '("unapproved" "changed" "broken")))
+            (drgnx-notice-clear 'hub id)
+          (drgnx-notify 'hub (if (equal state "broken") 'warn 'info)
+                        (pcase state
+                          ("unapproved" (format "Plugin %s waits for your approval" name))
+                          ("changed" (format "Plugin %s changed since you approved it: it does not run until you approve it again" name))
+                          (_ (format "Plugin %s does not load" name)))
+                        :id id :life 'condition
+                        :command (and (fboundp 'drgnx-plugins-page-open) (list 'drgnx-plugins-page-open name))))))))
 
 (provide 'drgnx-hub-client)
 ;;; drgnx-hub-client.el ends here

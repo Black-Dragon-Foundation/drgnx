@@ -37,11 +37,13 @@
 XAUTHORITY is the caller's; a GUI tier gets the harness compositor's own (from `:display').  The system data and
 configuration directories fall back to /usr/share and /etc/xdg when unset.")
 
-(defconst drgnx-test-env-scan-exempt '("HOME" "PATH" "PWD" "OLDPWD" "DRGNX_USER_ELPA" "DRGNX_RATATOSKR_BIN" "DRGNX_HUGINN_DUMP")
+(defconst drgnx-test-env-scan-exempt
+  '("HOME" "PATH" "PWD" "OLDPWD" "DRGNX_USER_ELPA" "DRGNX_RATATOSKR_BIN" "DRGNX_HUGINN_DUMP" "DRGNX_RECORD" "DRGNX_REPLAY")
   "Variables that may hold a path under the real HOME: the tools on PATH, the working directory, the read-only
 package directory (`DRGNX_USER_ELPA', deliberate: tests that load packages read it, never write it), the
-Ratatoskr the client's tests run (`DRGNX_RATATOSKR_BIN': macOS CI builds it in the checkout, which is under HOME)
-and huginn's dump example (`DRGNX_HUGINN_DUMP': the differential test runs it).")
+Ratatoskr the client's tests run (`DRGNX_RATATOSKR_BIN': macOS CI builds it in the checkout, which is under HOME),
+huginn's dump example (`DRGNX_HUGINN_DUMP': the differential test runs it) and the recording a run records into or
+replays (`DRGNX_RECORD', `DRGNX_REPLAY': `bin/drgnx record' and `replay' set them for the agent smoke test).")
 
 (defconst drgnx-test-env-set-variables
   '("HOME" "XDG_CONFIG_HOME" "XDG_DATA_HOME" "XDG_STATE_HOME" "XDG_CACHE_HOME" "XDG_RUNTIME_DIR" "DRGNX_CONFIG_DIR"

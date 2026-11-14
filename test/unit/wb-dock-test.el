@@ -33,6 +33,46 @@
        (should (< (cadr (window-edges top)) (cadr (window-edges bottom))))
        (should-not (drgnx-signal-editor-window-p top))))))
 
+(ert-deftest drgnx-wb/a-collapsed-section-is-its-header-alone ()
+  "LOOK-FIX-SECTION-FIT-1: a section defined `:collapsed' shows only its header (a one-line buffer, no header line, the
+window one line tall); toggling opens it again, with its own buffer and header line, and the state outlasts hiding the
+sidebar."
+  (drgnx-wb-test--with-sections
+   (let ((drgnx-wb--collapsed nil))
+     (setf (alist-get 'bottom drgnx-wb--sections)
+           (append (alist-get 'bottom drgnx-wb--sections) (list :collapsed t)))
+     (drgnx-wb-show-sidebar)
+     (let ((w (drgnx-wb-section-window 'bottom)))
+       (should (drgnx-wb-section-collapsed-p 'bottom))
+       (should-not (window-parameter w 'header-line-format))
+       (should (string-search "BOTTOM" (with-current-buffer (window-buffer w) (buffer-string))))
+       (should (<= (window-total-height w) 2))
+       (drgnx-wb-toggle-section 'bottom)
+       (should-not (drgnx-wb-section-collapsed-p 'bottom))
+       (should (equal "*drgnx-test-bottom*" (buffer-name (window-buffer w))))
+       (should (string-search "BOTTOM" (window-parameter w 'header-line-format)))
+       (drgnx-wb-toggle-section 'bottom))
+     (drgnx-wb-hide-sidebar)
+     (drgnx-wb-show-sidebar)
+     (should (string-search "BOTTOM" (with-current-buffer (window-buffer (drgnx-wb-section-window 'bottom))
+                                       (buffer-string)))))))
+
+(ert-deftest drgnx-wb/a-folded-section-outlasts-another-frame-folding-it ()
+  "Each frame's dock folds the same section into the same one-line buffer: folding it again (a second window's
+sidebar, a title change) redraws that buffer in place.  Killing it deleted the first frame's folded window, which is
+dedicated to it (drgnx-frames/a-new-window-is-editor-only lost frame 1's Outline)."
+  (drgnx-wb-test--with-sections
+   (let ((drgnx-wb--collapsed nil))
+     (setf (alist-get 'bottom drgnx-wb--sections)
+           (append (alist-get 'bottom drgnx-wb--sections) (list :collapsed t)))
+     (drgnx-wb-show-sidebar)
+     (let* ((w (drgnx-wb-section-window 'bottom)) (buf (window-buffer w)))
+       (should (window-parameter w 'drgnx-folded))
+       (drgnx-wb--collapsed-buffer 'bottom)            ; what another frame's fold does
+       (should (window-live-p w))
+       (should (eq (window-buffer w) buf))
+       (should (string-search "BOTTOM" (with-current-buffer buf (buffer-string))))))))
+
 (ert-deftest drgnx-wb/show-hide-keeps-the-width ()
   (drgnx-wb-test--with-sections
    (drgnx-wb-show-sidebar)
@@ -71,22 +111,20 @@
 
 ;;;; M12f A7: the ✕
 
-(ert-deftest drgnx-wb/a-section-title-closes-the-sidebar ()
+(ert-deftest drgnx-wb/the-island-menu-closes-the-sidebar ()
+  "window-dark.html: a section's title has no ✕; Close Sidebar is in the island header's ⋯ menu."
   (drgnx-wb-test--with-sections
    (drgnx-wb-show-sidebar)
    (dolist (section '(top bottom))
      (let* ((w (drgnx-wb-section-window section)) (title (window-parameter w 'header-line-format)))
        (should (stringp title))
-       ;; the ✕ comes first (a long title cannot clip it), one space in from the frame's edge
-       (should (string-prefix-p (concat " " (drgnx-wb-close-glyph)) title))
-       (should (string-search (upcase (symbol-name section)) title))
-       (should (equal (get-text-property 1 'help-echo title) "Close sidebar"))
-       (should (eq (get-text-property 1 'mouse-face title) 'highlight))))
-   (let* ((w (drgnx-wb-section-window 'bottom)) (title (window-parameter w 'header-line-format)) (i 1))
-     (funcall (lookup-key (get-text-property i 'local-map title) [header-line mouse-1])
-              (list 'mouse-1 (list w 'header-line '(0 . 0) 0 (cons title i))))
-     (should-not (drgnx-wb-sidebar-showing-p))
-     (should (= 1 (length (window-list nil 'nomini)))))))
+       (should-not (string-search (drgnx-wb-close-glyph) title))
+       (should (string-search (upcase (symbol-name section)) title))))
+   (should (eq (cdr (assoc "Close Sidebar" drgnx-wb-island-menu)) 'toggle-sidebar))
+   (cl-letf (((symbol-function 'x-popup-menu) (lambda (&rest _) 'drgnx-wb-toggle-sidebar)))
+     (drgnx-wb-island-show-menu))
+   (should-not (drgnx-wb-sidebar-showing-p))
+   (should (= 1 (length (window-list nil 'nomini))))))
 
 (ert-deftest drgnx-wb/the-close-glyph-has-an-ascii-form ()
   (let ((drgnx-face-glyphs '((close "✕" . "x"))))

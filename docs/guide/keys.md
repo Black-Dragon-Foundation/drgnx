@@ -23,6 +23,9 @@ The last preset puts Vim **last**: it is the later layer for editing, so Vim kee
 insert state, in panels and, on a Mac, as Cmd keys. `keys.eld` flips any single key. The `SPC` leader keys stay in
 this stack for every command, next to VS Code's own keys (see Leader keys below).
 
+A stack with the VS Code profile also indents with spaces, as VS Code does (`indent-tabs-mode` defaults to nil; a file's own
+indentation and `.editorconfig` still win). The Emacs and Vim profiles leave Emacs's default.
+
 Onboarding's Look and Keys step asks which one you want (VS Code preselected; [onboarding.md](onboarding.md)).
 
 **A Vim stack needs its engine.** Vim keys run on evil, which the `editor/evil` module provides; it is off, and
@@ -61,7 +64,8 @@ loaded, so there is never a session with Vim keys and no Vim editing:
 | Focus Explorer / Buffers | palette / `C-k e` | `C-x M-e` / `C-x C-b` | `SPC E` / `SPC ,` |
 | View: Explorer / View: Search | `C-S-e` / `C-S-f` | palette / palette | palette / `SPC /` |
 | Replace in Files | `C-S-h` | `C-c s r` | `SPC s r` |
-| Toggle Panel / Right Dock | ``C-` ``, `C-j` / `C-M-b` | — / — | `SPC j` / `SPC R` |
+| Toggle Panel / Right Dock | `M-j`, `C-j` / `C-M-b` | — / — | `SPC j` / `SPC R` |
+| Toggle Terminal | ``C-` `` | palette | palette |
 | Close Tab / Next / Previous | `C-<f4>` / `C-<next>` / `C-<prior>` | — / Emacs' `C-x <right>` / `C-x <left>` | `SPC b d` / `SPC b n` or `g t` / `SPC b p` or `g T` |
 | Split Editor Right / Down | ``C-\`` / ``C-k C-\`` | Emacs' `C-x 3` / `C-x 2` | `SPC w v` / `SPC w s` |
 | Focus Group 1–3 / Move Editor to Next Group | `C-1`–`C-3` / `C-M-<right>` | `C-x o` / — | `SPC 1`–`SPC 3` / `SPC w m` |
@@ -82,6 +86,9 @@ loaded, so there is never a session with Vim keys and no Vim editing:
 The Explorer's and the Buffers panel's own keys (rows, expand, open, close) are in [workbench.md](workbench.md).
 A command that lives in a mode's keymap (like those) keeps its keymap in every profile: an entry's `:map` wins,
 else the command's own, else the profile's.
+
+The title row's search box opens Quick Open and shows Quick Open's key in your profile as its keycap (`Ctrl P` in the
+VS Code profile; another profile, or your own binding, shows its own); `>` typed first in Quick Open gives the palette.
 
 "—" means the profile has no key for it; every command is always in the palette. Vim's keys are leader keys in
 drgnx's leader map (`SPC …`), which the Vim engine plugs into its normal, visual and motion states and the panels. On **macOS** the VS Code profile uses Cmd (`s-`) as VS Code does there — see below.
@@ -105,7 +112,7 @@ later (Meow is the candidate):
   already running; it works in Xterm-compatible terminals, and the default shape returns when Vim editing stops.
 - **Panels are in Emacs state.** They keep their own keys and get `SPC` leader and `j` / `k` for rows; forms (the
   Search/Replace view) take typed text and have no Vim keys.
-- **Inputs are in insert state.** Shells (eshell, comint, term, eat) and commit messages start where you type.
+- **Inputs are in insert state.** Shells (eshell, comint, term) and commit messages start where you type.
   The minibuffer is never modal.
 - **Leader Menu.** `M-SPC` from any state, and `SPC` in normal state, show the leader's keys in a which-key popup.
 - **Toggle Modal Editing** (`SPC u m`, the palette) turns Vim editing off and on for this session; the key stack
@@ -311,11 +318,13 @@ drgnx (a graphical window, a capable terminal, a legacy one with Alt+Shift and F
 | Command | VS Code | Emacs | Vim |
 |---|---|---|---|
 | Copy / Cut / Paste (in a file) | `C-c` / `C-x` / `C-v` | `M-w` / `C-w` / `C-y` | `y` / `d` in visual state, `p` |
+| Undo / Redo | `C-z` / `C-S-z` | `C-/` / `C-?` | `u` / `C-r` |
 
 In the VS Code profile `C-c` and `C-x` copy and cut **only while text is selected** (as Emacs's CUA mode does); with
 no selection they are Emacs's prefixes, so `C-x C-s`, `C-c C-c` in a mode and the rest work as always. A selection
 the mark leaves empty (`C-SPC` and no move) counts as none. `C-v` always pastes, replacing the selection if there is
-one, in one undo step; it no longer scrolls (PageDown does). In a read-only buffer Cut copies, and Paste says the
+one, in one undo step; it no longer scrolls (PageDown does). `C-z` undoes (Emacs' own `C-z`, which minimises the window, is not on it), and `C-y` stays
+Emacs' paste of the last cut (yank), as in every profile; Redo is `C-S-z`. In a read-only buffer Cut copies, and Paste says the
 buffer is read-only. The Explorer keeps its own `C-c` / `C-x` / `C-v` for files (see [workbench.md](workbench.md)):
 they are in its own keymap, which beats the global `C-v`, and the Explorer never selects text, so the selection-only
 `C-c` / `C-x` stay out of its way. On a Mac they are `s-c`, `s-x` and `s-v`.
@@ -328,7 +337,8 @@ mode's `C-c C-c`, the agent and comint buffers' `C-c C-c`). With a selection the
 (0.3 seconds; `M-x customize-variable`; `nil` acts at once) for the next key, as CUA mode does: a key that arrives in
 time drops the selection and goes on as the prefix, so nothing is cut or lost; none, and `C-c` copies and `C-x`
 cuts. So `C-x C-s`, `C-x b` and `C-c C-c` work with a selection when typed at your normal speed, and a lone `C-c`
-or `C-x` acts after a short pause; `C-g` in that moment just drops the selection. A keyboard macro that recorded a
+or `C-x` acts after a short pause; `C-g` in that moment just drops the selection; a mouse click in that moment is
+no key of the prefix: `C-c` or `C-x` acts, then the click does its own work. A keyboard macro that recorded a
 pause and then a cut replays without the pause, so the key after it becomes a prefix. Cmd+C and Cmd+X on a Mac are no prefix and act at once.
 
 **The face's commands** ([face.md](face.md)) are in the palette in every profile; few have keys. **Show Quick
@@ -372,7 +382,7 @@ yours (`:mac "S-s-y"` in `keys.eld` binds `s-Y`).
 
 | Command | Linux | Mac |
 |---|---|---|
-| Toggle Panel / New Terminal | ``C-` `` / ``C-S-` `` | Ctrl: ``C-` `` / ``C-S-` `` (Cmd+` is macOS' next window) |
+| Toggle Terminal / New Terminal | ``C-` `` / ``C-S-` `` | Ctrl: ``C-` `` / ``C-S-` `` (Cmd+` is macOS' next window) |
 | Go to Recent / Back / Forward | `C-<tab>` / `M-<left>` / `M-<right>` | Ctrl: `C-<tab>` / `C--` / `C-_` (Ctrl+Shift+-) |
 | Next / Previous Tab | `C-<next>` / `C-<prior>` | `M-s-<right>` / `M-s-<left>` (Option+Cmd+→ / ←) |
 | Close Tab / Close Window | `C-w` / `C-q` | `s-w` / `s-W` (Shift+Cmd+W) |
@@ -457,19 +467,19 @@ The key sheet says who wins where: `C-o Jump Back (vim; normal, visual, motion s
 
 ## In the terminal
 
-A terminal (New Terminal, `tools/terminal-eat`) is a program that wants most keys itself, so the active profile
+A terminal (New Terminal, `tools/term`) is a program that wants most keys itself, so the active profile
 decides which keys it gets, the way VS Code's terminal does:
 
 - **App and window keys reach drgnx** when they are not control or Alt characters: the palette, panel and terminal
   keys of the VS Code profile (`Ctrl+Shift+P`, `F1`, ``Ctrl+` ``), function keys, `C-c` keys, whatever the profile uses.
 - **Editing keys go to the shell**: a control or Alt key (`C-a`, `C-e`, `C-w`, `C-d`, `M-f`) means what readline or zle
   make of it, even when the profile gives it to a drgnx command outside the terminal (VS Code's `C-w` Close Tab, `C-s`
-  Save, `C-n` New Untitled). Eat's own reserved keys (`C-x`, `C-c`, `C-g`, `C-h`, `C-u`, `C-q`, `M-x`, `M-:`, `M-!`,
+  Save, `C-n` New Untitled). The terminal's reserved keys (`C-x`, `C-c`, `C-g`, `C-h`, `C-u`, `C-q`, `M-x`, `M-:`, `M-!`,
   `M-&`) stay with Emacs.
 - **VS Code's own exceptions, in the VS Code profile**: VS Code's terminal skips the shell for some control keys
   (`terminal.integrated.commandsToSkipShell`), so the VS Code profile gets them in the terminal too: `C-p` Quick Open
-  (Go to File), `C-b` Toggle Sidebar, every `C-k` chord (Keyboard Shortcuts, Open Folder, ...), and `C-f` Find in File,
-  which searches the text of the terminal. This is the option `drgnx-terminal-skip-shell-keys` (a list of first keys,
+  (Go to File), `C-b` Toggle Sidebar, every `C-k` chord (Keyboard Shortcuts, Open Folder, ...), and `C-f`, which is
+  *Find in Terminal* there: it searches the terminal's screen and scrollback. This is the option `drgnx-terminal-skip-shell-keys` (a list of first keys,
   default `("C-p" "C-b" "C-k" "C-f")`; drop a key from it and that key reaches the shell again). It only applies
   to keys the active profile binds: in the Emacs and Vim profiles nothing is bound to these keys, so `C-p` (previous
   history entry), `C-b`, `C-k` (kill to end of line) and `C-f` all reach the shell. In the VS Code profile `C-k` is a
@@ -485,8 +495,19 @@ palette)". Several chords of one key are shown once ("C-k chords").
 
 **Copy and paste**: `Ctrl+Shift+C` copies the selected text of the terminal (nothing selected, nothing happens) and
 `Ctrl+Shift+V` pastes, on a Mac `Cmd+C` / `Cmd+V`. They are the commands *Terminal: Copy* and *Terminal: Paste* and
-work in terminal buffers only. The Emacs profile leaves eat's own keys: `C-y` pastes, and copying is `C-c C-e`
-(Emacs mode) then `M-w`.
+work in terminal buffers only. The editor's Copy key with text selected (`C-c`, `Cmd+C`) is *Terminal: Copy* there too,
+so the selection clears or stays as `selection-clear-on-copy` says, whichever key copied. The Emacs profile pastes with `C-y`, and copies with `C-c C-e` (*Terminal: Copy
+Mode*) then `M-w`.
+
+**Copy mode** (*Terminal: Copy Mode*) stops the screen and makes the terminal an ordinary read-only buffer: move,
+select, `C-s` and `M-w` as anywhere else. The program's output is kept meanwhile and drawn when you leave; `C-g` (or
+the command again) leaves it. *Find in Terminal* asks for text, enters copy mode and jumps to the nearest match
+above; *Find Next in Terminal* and *Find Previous in Terminal* (`F3` and `S-F3` in copy mode in the VS Code profile,
+the palette in the others) go to the next older and newer match, wrapping, and so does Find again with the same text while in copy mode.
+
+**Mouse**: while the program asks for the mouse (htop, vim with `mouse=a`, tmux), clicks, drags and the wheel go to
+it; otherwise they select text as in any buffer. A link the program prints (OSC 8, `ls --hyperlink`) is underlined on
+hover and opens on a click: a file in the other window, anything else in the browser.
 
 ## Conflicts are reported, never hidden
 
@@ -533,6 +554,11 @@ may not change them. Below, "`keys.eld`" in older sections means these entries.
   mixed stack a key that starts with `SPC` (or `C-w`, the leader keys) always goes in the leader map, whatever `:map` says.
   A global key that evil binds in some state (`C-p`, `C-o` …) beats evil's there: drgnx binds it in evil's map too
   and puts evil's key back when the stack switches (see "Vim's claims are per state").
+- `:key-map` gives some of the entry's keys a keymap of their own, `((KEY MAP)…)`, where a command works in two
+  places: Vim's `(search-history-prev "M-p" "C-p" :map (drgnx-replace . drgnx-replace-keys-map) :key-map (("C-p"
+  (drgnx-replace . drgnx-replace-find-insert-state-map))))` is `M-p` in the Search view and `C-p` in its Find field's
+  insert state. A view's keymap for one Vim state is named `…-STATE-state-map`; the key sheet shows its keys with the
+  state (`C-p (insert state)`).
 - `:mac` gives a different key on macOS: `(palette "C-c p" :mac "s-p")`; `:mac ()` is no key there, and
   `(quit :none "reason" :mac "s-q")` a key only there.
 - `:everywhere` names keys that must work in every mode: ``(toggle-panel "C-`" :everywhere "C-j")`` binds `C-j`

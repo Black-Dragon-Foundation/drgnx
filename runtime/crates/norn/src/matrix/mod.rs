@@ -92,6 +92,23 @@ pub(crate) fn always_never(a: Action) -> bool {
     matches!(a, Action::Unsandboxed | Action::UserPrivate)
 }
 
+/// The rows capped at Ask: an Allow in any layer, column or override reads as Ask, so the user always sees the card.
+pub(crate) fn always_ask(a: Action) -> bool {
+    matches!(a, Action::BrowserPrivate)
+}
+
+/// CELL with an Allow raised to Ask (its limit kept) when A is capped at Ask.
+fn capped(a: Action, cell: Cell) -> Cell {
+    if always_ask(a) && cell.verdict == Verdict::Allow {
+        Cell {
+            verdict: Verdict::Ask,
+            ..cell
+        }
+    } else {
+        cell
+    }
+}
+
 /// The more restrictive of two cells.  A greater verdict wins; at the same verdict a limit beats none, and limits in
 /// one unit take the smaller amount.  Limits in different units do not compare: the cell becomes Ask (at least) with
 /// no limit, so the user is asked rather than a guess widening anything.
@@ -116,7 +133,8 @@ fn tighter(x: Cell, y: Cell) -> Cell {
 }
 
 /// The cells WHO gets from LAYERS (preset, user overrides, project, plan; a later layer replaces a cell), the most
-/// restrictive of the matching columns.  `unsandboxed` and `user.private` are Never whatever the layers say.
+/// restrictive of the matching columns.  `unsandboxed` and `user.private` are Never whatever the layers say, and an
+/// Allow of `browser.private` is Ask.
 pub fn effective(layers: &[&Matrix], who: &Who) -> Effective {
     let mut merged: BTreeMap<&(Action, Column), Cell> = BTreeMap::new();
     for layer in layers {
@@ -136,6 +154,8 @@ pub fn effective(layers: &[&Matrix], who: &Who) -> Effective {
     for a in Action::ALL {
         if always_never(a) {
             cells.insert(a, NEVER);
+        } else if let Some(c) = cells.get_mut(&a) {
+            *c = capped(a, *c);
         }
     }
     Effective { cells }
@@ -153,9 +173,10 @@ pub fn meet(x: &Effective, y: &Effective) -> Effective {
 }
 
 /// The verdict for ACTION with AMOUNT (in the cell's unit).  Over the cell's limit the answer is Ask when
-/// `spend.over` allows asking, else Never; a limit with no amount is not exceeded.
+/// `spend.over` allows asking, else Never; a limit with no amount is not exceeded.  A row capped at Ask never answers
+/// Allow, whatever the cells it is handed say.
 pub fn decide(e: &Effective, a: Action, amount: Option<f64>) -> Verdict {
-    let cell = e.cell(a);
+    let cell = capped(a, e.cell(a));
     if cell.verdict == Verdict::Never || always_never(a) {
         return Verdict::Never;
     }

@@ -83,6 +83,20 @@ pub struct Card {
     pub kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// A card that lists its answers (a browser row's matrix card): the ids `cards/settle` takes, with their labels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choices: Option<Vec<CardChoice>>,
+    /// What the user should know before answering, in one line (the hub's text).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+}
+
+/// One answer a card lists.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CardChoice {
+    pub id: String,
+    pub label: String,
 }
 
 /// A job's status, tasks or open cards changed.
@@ -177,7 +191,7 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
         event!(
             "agent-entries",
             AgentEntries,
-            "a session's entries new or changed since the last time"
+            "a session's entries new or changed since the last time, without `rawInput`, only to the connections that subscribed to the session (`agents/entries/subscribe`)"
         ),
         event!(
             "events",
@@ -234,6 +248,36 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             "a session's step opened or closed, with its class, stamps and anchors (to subscribers that asked)"
         ),
         event!(
+            "machines-changed",
+            crate::methods::work::MachinesList,
+            "the machines the hub lists changed (a report, an expiry, a local slot): the whole list"
+        ),
+        event!(
+            "runners-changed",
+            crate::methods::runners::Runners,
+            "the runners changed (one added, removed, benched or back in rotation, its trust or state, its load): the whole list"
+        ),
+        event!(
+            "plugin",
+            crate::methods::plugins::PluginChanged,
+            "a plugin's state changed (installed, approved, changed on disk, disabled, broken or removed): its name and new state"
+        ),
+        event!(
+            "runners/need-keys",
+            crate::methods::runners::KeyNames,
+            "a job needs keys the hub does not hold (names only; to user connections): answered only by a command the user runs"
+        ),
+        event!(
+            "agent-buffer",
+            crate::methods::editor::BufferFrame,
+            "a watched buffer view's frame changed: the agents in it and the gutter, at most once per view per 50 ms of the hub's clock, to the watching connection only (agents/buffer/watch)"
+        ),
+        event!(
+            "agent-presence",
+            crate::methods::work::FilePresence,
+            "who is in a file now changed: its entries, at most once per file per 100 ms, to the connections that asked (agents/presence/subscribe)"
+        ),
+        event!(
             "exec-done",
             crate::methods::exec::ExecDone,
             "a job ended: its status, exit and summary"
@@ -252,6 +296,181 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             "view-proposal",
             crate::methods::records::ViewProposal,
             "a hand edit to a view became a proposal (Records: Review Proposal)"
+        ),
+        event!(
+            "say-proposal",
+            crate::methods::say::SayProposal,
+            "a planning session's proposal is a job, waiting for the user's OK or started by the Autonomous preset"
+        ),
+        event!(
+            "say-message",
+            crate::methods::say::SayMessage,
+            "a planning session asks the user something (agent-written text)"
+        ),
+        event!(
+            "say-failed",
+            crate::methods::say::SayFailed,
+            "a planning session gave up: its blocks did not hold, with the reasons"
+        ),
+        event!(
+            "agent-wheel",
+            crate::methods::agents::AgentWheel,
+            "the user's hold on a session's wheel: held once the turn the take stopped has ended (a step snapshot is taken first), free once it is given back"
+        ),
+        event!(
+            "huddle",
+            crate::methods::agents::Huddle,
+            "a huddle opened or changed: its record (the replies are agent text, quoted, never instructions)"
+        ),
+        event!(
+            "wheel-save",
+            crate::methods::agents::WheelSave,
+            "the user gives back the wheel of a session in a worktree of its own: the editor saves its buffers there and answers agents/wheel/saved with the files left unsaved"
+        ),
+        event!(
+            "pair-apply",
+            crate::methods::pair::PairApply,
+            "a paired chat's write, to the editor that has the file open: it applies it whole or refuses it whole and answers pair/answer; ttl_ms counts from its arrival"
+        ),
+        event!(
+            "pair-read",
+            crate::methods::pair::PairRead,
+            "a paired chat's read of a file the editor may have open: the editor answers pair/read-answer with the buffer's text and version"
+        ),
+        event!(
+            "pair-drop",
+            crate::methods::pair::PairDrop,
+            "the user turned pair off for a chat or took its wheel: the editor drops that session's queued writes, answering each pair/answer dropped with the reason"
+        ),
+        event!(
+            "pair-reconcile",
+            crate::methods::pair::PairReconcile,
+            "a pair write whose answer did not come in its time to live: the editor answers pair/answer from what it applied"
+        ),
+        event!(
+            "debug-breakpoints",
+            crate::methods::debug::DebugBreakpointsView,
+            "a file's breakpoints changed, or what an adapter made of them (verified, message, its line): to every editor"
+        ),
+        event!(
+            "debug-state",
+            crate::methods::debug::DebugState,
+            "every debug session (id, name, parent, root, state, reason, the adapter's capabilities), to every editor, whenever one starts, runs, stops or ends"
+        ),
+        event!(
+            "debug-frame",
+            crate::methods::debug::DebugFrame,
+            "a debug session stopped: its selected frame's file (or source reference), line and column; open is true only for the editor that started the session, which opens the file"
+        ),
+        event!(
+            "debug-terminal",
+            crate::methods::debug::DebugTerminal,
+            "a debug session's program runs in a drgnx terminal (runInTerminal), to the editor that started it"
+        ),
+        event!(
+            "debug-ended",
+            crate::methods::debug::DebugEnded,
+            "a debug session ended, with why and its program's exit code"
+        ),
+        event!(
+            "debug-fork",
+            crate::methods::debug_fork::DebugForkView,
+            "a what-if fork as it goes (preparing, editing, running, done, failed, dropped), to every editor: when done, matched on N of M hits, the first difference, each probe's values then and now, how each side went on"
+        ),
+        event!(
+            "view-model",
+            crate::methods::view::ViewModel,
+            "what changed in one hub-fed view's model, to its connection only: the model as an object, {\"ops\": [...]}, in a line that starts {\"event\":\"view-model\" so the editor hands it whole and unparsed to its replica (a reset first, after a hidden view is shown again and on view/resync with model), written before the rows built from it, which name its version"
+        ),
+        event!(
+            "view-patch",
+            crate::methods::view::Patch,
+            "what changed in one (view, display class) of a hub-fed view, to its connection only: a reset first and after every new env epoch, then ops against the version base; every patch names the hub's instance id and the editor's epoch"
+        ),
+        event!(
+            "term/exit",
+            crate::methods::term::TermExit,
+            "a terminal's program ended (its code, or the signal), to the connection of the editor session that opened it; the terminal is gone"
+        ),
+        event!(
+            "term/title",
+            crate::methods::term::TermTitle,
+            "a terminal's program set its title, to its editor session's connection"
+        ),
+        event!(
+            "term/cwd",
+            crate::methods::term::TermCwd,
+            "a terminal's shell reported its working directory (OSC 7), to its editor session's connection"
+        ),
+        event!(
+            "term/detached",
+            crate::methods::term::TermDetached,
+            "terminals whose editor session went past the grace or quit keeping them run on, detached: to every live editor session's connection, which may offer them (term/attach)"
+        ),
+        event!(
+            "term/bell",
+            crate::methods::term::TermBell,
+            "a terminal's program rang the bell, to its editor session's connection"
+        ),
+        event!(
+            "term/notify",
+            crate::methods::term::TermNotify,
+            "a terminal's program asked for a notification (OSC 9, 777), to its editor session's connection"
+        ),
+        event!(
+            "term/progress",
+            crate::methods::term::TermProgress,
+            "a terminal's program reported progress (OSC 9;4), to its editor session's connection"
+        ),
+        event!(
+            "term/clipboard-write",
+            crate::methods::term::TermClipboardWrite,
+            "a terminal's program wrote the clipboard (OSC 52; only when clipboard-write allows), to its editor session's connection"
+        ),
+        event!(
+            "term/clipboard-read",
+            crate::methods::term::TermClipboardRead,
+            "a terminal's program asked to read the clipboard (OSC 52 ?, with clipboard-read set to ask); answered with term/clipboard-reply, to its editor session's connection"
+        ),
+        event!(
+            "term/prompt",
+            crate::methods::term::TermPrompt,
+            "a terminal's shell sent an OSC 133 mark (prompt, input, output, command end with its status), to its editor session's connection"
+        ),
+        event!(
+            "view-glyphs",
+            crate::methods::view::ViewGlyphsAsk,
+            "the hub asks the editor for advances it cannot read from a font file, [role, char] each: answered by view/glyphs"
+        ),
+        event!(
+            "git-letters-error",
+            crate::methods::git::LettersError,
+            "git/letters could not read a repository's status (git's complaint): the view keeps the rows it has; to the asking connection only"
+        ),
+        event!(
+            "search-run-done",
+            crate::methods::search::RunDone,
+            "a Search view's search (search/run) ended: its run number, the files and matches it found, or why it could not run, and the matches that come back unticked; to the searching connection only; a search a newer one stopped says nothing"
+        ),
+        event!(
+            "search-apply",
+            crate::methods::search::SearchApply,
+            "the Search view's write of a file the editor has open (search/apply, search/undo): it applies the edits in its buffer, each where its old text is, and answers search/applied within ttl_ms; to that editor's connection only"
+        ),
+        event!(
+            "search-change",
+            crate::methods::search::ChangeDone,
+            "a change set of the Search view (search/apply, search/undo) is final: what it wrote, in how many files, what it skipped and why, the files an undo left alone; to the asking connection only"
+        ),
+        event!(
+            "search-handoff-state",
+            crate::methods::search::HandoffState,
+            "where a Search view's hand-off (search/handoff) is, after its agent's edits and when its agent stops: which handed-off matches are done, still there or not found again; to the handing-off connection only"
+        ),
+        event!(
+            "agent-follow",
+            crate::methods::editor::AgentFollow,
+            "where the session a follow view follows is now, to that view's connection only (agents/follow): at most one move per 200 ms, a read's file switch after a 500 ms dwell, a search never switches; the line is the agent's own plan entry or step title"
         ),
     ];
     v.sort_by_key(|e| e.name);
@@ -311,6 +530,58 @@ mod tests {
                     "supervisor",
                     "view-written",
                     "view-proposal",
+                    // agent system part 2
+                    "machines-changed",
+                    "runners-changed",
+                    "plugin",
+                    "runners/need-keys",
+                    "agent-presence",
+                    // agent system part 3
+                    "agent-buffer",
+                    // agent system part 5
+                    "say-proposal",
+                    "say-message",
+                    "say-failed",
+                    // agent system part 3: take the wheel
+                    "agent-wheel",
+                    "wheel-save",
+                    // agent system part 3: huddles
+                    "huddle",
+                    // agent system part 3: pair mode
+                    "pair-apply",
+                    "pair-drop",
+                    "pair-read",
+                    "pair-reconcile",
+                    // agent system part 3: the follow feed
+                    "agent-follow",
+                    // hub-built rows (the render offload)
+                    "view-patch",
+                    "view-glyphs",
+                    "search-run-done",
+                    "search-apply",
+                    "search-change",
+                    "search-handoff-state",
+                    "git-letters-error",
+                    // the native view model
+                    "view-model",
+                    // the terminals
+                    "term/exit",
+                    "term/title",
+                    "term/cwd",
+                    "term/detached",
+                    "term/bell",
+                    "term/notify",
+                    "term/progress",
+                    "term/clipboard-write",
+                    "term/clipboard-read",
+                    "term/prompt",
+                    // debugging
+                    "debug-breakpoints",
+                    "debug-state",
+                    "debug-frame",
+                    "debug-terminal",
+                    "debug-ended",
+                    "debug-fork",
                 ]
                 .contains(&n.as_str())
             })
@@ -325,7 +596,15 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(events().len(), 20);
+        assert_eq!(events().len(), 61);
+        // names only: a value-shaped name is no key name, and nothing but `names` is taken
+        let need = event("runners/need-keys").unwrap();
+        assert_eq!(
+            (need.check)(&json!({"names": ["CRATES_IO_TOKEN"]})).unwrap(),
+            json!({"names": ["CRATES_IO_TOKEN"]})
+        );
+        assert!((need.check)(&json!({"names": ["sk or-v1 x"]})).is_err());
+        assert!((need.check)(&json!({"names": [], "keys": {"a": "k"}})).is_err());
         assert!(event("settings/proposed").is_some());
         // ids only: a key-shaped value is no id, and nothing but `providers` is taken
         let changed = event("gateway/keys-changed").unwrap();

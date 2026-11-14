@@ -8,10 +8,20 @@
 
 (defconst drgnx-inv--probe
   "(drgnx-uitest--json
+   (with-selected-frame (drgnx-wb-frame)           ; the workbench's, also while a prompt is in the echo box
      (let ((p (drgnx-wb-area-window 'panel)) (r (drgnx-wb-area-window 'right)) (e (drgnx-wb-section-window 'explorer)))
        (list :geometry (format \"%S\" (sort (mapcar #'window-pixel-edges (window-list nil 'nomini))   ; any order
                                             (lambda (a b) (or (< (car a) (car b)) (and (= (car a) (car b)) (< (cadr a) (cadr b)))))))
-             :frames (length (frame-list))
+             ;; the same with the sidebar's sections as one box: the Open section fits its rows, so its foot moves
+             :outer (let* ((ws (window-list nil 'nomini))
+                           (dock (mapcar #'window-pixel-edges (seq-filter (lambda (w) (eq (window-parameter w 'drgnx-role) 'dock)) ws)))
+                           (rest (mapcar #'window-pixel-edges (seq-remove (lambda (w) (eq (window-parameter w 'drgnx-role) 'dock)) ws))))
+                      (format \"%S\" (sort (if dock (cons (list (apply #'min (mapcar #'car dock)) (apply #'min (mapcar #'cadr dock))
+                                                             (apply #'max (mapcar #'caddr dock)) (apply #'max (mapcar #'cadddr dock)))
+                                                       rest)
+                                             rest)
+                                         (lambda (a b) (or (< (car a) (car b)) (and (= (car a) (car b)) (< (cadr a) (cadr b))))))))
+             :frames (length (seq-remove #'frame-parent (visible-frame-list)))   ; the echo box is a child frame
              :editors (length (seq-filter #'drgnx-signal-editor-window-p (window-list nil 'nomini)))
              :panel (if p (window-pixel-height p) 0) :right (if r (window-pixel-width r) 0)
              :left (if e (window-pixel-width e) 0)
@@ -23,8 +33,10 @@
                           (if (or buffer-file-name
                                   (derived-mode-p 'dired-mode 'Buffer-menu-mode 'ibuffer-mode 'Custom-mode 'proced-mode
                                                   'edit-abbrevs-mode 'bookmark-bmenu-mode 'command-history-mode 'lisp-interaction-mode))
-                              t (format \"%s (%s)\" (buffer-name) major-mode))))))"
-  "The layout facts the invariants are about.")
+                              t (format \"%s (%s)\" (buffer-name) major-mode)))))))"
+  "The layout facts the invariants are about, of the workbench frame (`drgnx-wb-frame').  :frames counts the visible
+top-level ones: the echo box shows while a prompt is in it, and under Glitnir the popup lane's child frame is made once
+and kept, hidden, between popups.")
 
 (defmacro drgnx-inv--with (sess &rest body)
   "BODY with SESS a fresh GUI session (config=drgnx) whose editor shows a fixture project's file."
@@ -37,7 +49,7 @@
                  (make-directory (file-name-directory (expand-file-name f project)) t)
                  (write-region (format "%s\n" f) nil (expand-file-name f project) nil 'silent))
                (make-directory (expand-file-name ".git" project))
-               (drgnx-ui-start "drgnx" "1400x800" 30)))
+               (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1400x800") 30)))
           (,sess (drgnx-ui-own-session (plist-get s :name))))
      (unwind-protect
          (progn
@@ -81,14 +93,14 @@ settled within 250 ms."
 
 (ert-deftest drgnx-inv/i2-every-area-keeps-its-size ()
   (drgnx-inv--with sess
-    (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "C-`") (list :keys "C-M-b")))
+    (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "M-j") (list :keys "C-M-b")))
     (drgnx-ui-call sess "(progn (require 'transient)
                                 (transient-define-prefix drgnx-inv-tr () [(\"a\" \"Do A\" ignore)])
                                 (keymap-global-set \"<f19>\" #'drgnx-inv-tr) (drgnx-uitest--json (list :ok t)))")
     (let ((first (drgnx-inv--probe sess)))
       (should (> (plist-get first :panel) 0))
       (dotimes (_ 10)
-        (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "C-b") (list :keys "C-`") (list :keys "C-`")
+        (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "C-b") (list :keys "M-j") (list :keys "M-j")
                                      (list :keys "C-M-b") (list :keys "C-M-b"))))
       (drgnx-ui-measure sess (list (list :keys "M-x") (list :type "describe-function") (list :keys "RET") (list :type "car") (list :keys "RET")))   ; a tab switch
       (drgnx-ui-measure sess (list (list :keys "<f19>")))                                       ; a popup
@@ -102,7 +114,7 @@ settled within 250 ms."
 
 (ert-deftest drgnx-inv/i4-buffer-switches-and-messages-keep-the-rows ()
   (drgnx-inv--with sess
-    (drgnx-ui-measure sess (list (list :keys "C-`")))
+    (drgnx-ui-measure sess (list (list :keys "M-j")))
     (drgnx-ui-call sess "(progn (find-file-noselect (expand-file-name \"docs/guide.md\" (car drgnx-explorer--roots)))
                                 (drgnx-uitest--json (list :ok t)))")
     (let ((first (drgnx-inv--probe sess)))
@@ -119,10 +131,11 @@ settled within 250 ms."
   (drgnx-inv--with sess
     (drgnx-ui-call sess "(progn (setq which-key-idle-delay 0.1) (which-key-mode 1) (drgnx-uitest--json (list :ok t)))")
     (dolist (panel '(nil t))
-      (when panel (drgnx-ui-measure sess (list (list :keys "C-`"))))
+      (when panel (drgnx-ui-measure sess (list (list :keys "M-j"))))
       (let ((before (drgnx-inv--probe sess)))
         (drgnx-ui-measure sess (list (list :keys "C-x")) 400)
-        (should (eq t (plist-get (drgnx-ui-call sess "(drgnx-uitest--json (list :shown (if (get-buffer-window \" *which-key*\") t :false)))") :shown)))
+        ;; on any visible frame: under Glitnir the lane is a child frame of the window
+        (should (eq t (plist-get (drgnx-ui-call sess "(drgnx-uitest--json (list :shown (if (get-buffer-window \" *which-key*\" 'visible) t :false)))") :shown)))
         (drgnx-ui-measure sess (list (list :keys "C-g")))
         (should (equal (plist-get (drgnx-inv--probe sess) :geometry) (plist-get before :geometry)))))))
 
@@ -134,7 +147,7 @@ settled within 250 ms."
   (let ((forms (with-temp-buffer (insert-file-contents drgnx-inv--fuzz-file) (read (current-buffer)))))
     (should (= 50 (length forms)))
     (drgnx-inv--with sess
-      (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "C-`") (list :keys "C-M-b")))
+      (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "M-j") (list :keys "C-M-b")))
       (drgnx-ui-call sess (format "(progn (setq drgnx-inv--forms '%S)
                                           (setq drgnx-inv--errors nil)
                                           (keymap-global-set \"<f11>\" (lambda () (interactive)
@@ -152,12 +165,12 @@ settled within 250 ms."
                           (drgnx-ui-call sess "(progn (when (drgnx-popup-active-p) (delete-window (drgnx-popup--window)))
                                                       (drgnx-uitest--json (list :ok t)))")
                           (drgnx-inv--probe sess))))
-            (unless (and (equal (plist-get after :geometry) (plist-get first :geometry))
+            (unless (and (equal (plist-get after :outer) (plist-get first :outer))   ; the Open section fits its rows
                          (= (plist-get after :frames) (plist-get first :frames))
                          (= (plist-get after :editors) 1)
                          (eq (plist-get after :editor-ok) t)        ; only files and their kind in the editor
                          (= 0 (plist-get r :guard_violations)))
-              (push (list form :geometry (plist-get after :geometry) :editor (plist-get after :editor-ok)
+              (push (list form :geometry (plist-get after :outer) :frames (plist-get after :frames) :editor (plist-get after :editor-ok)
                           :guard (plist-get r :guard))
                     bad))))
         (should-not bad)
@@ -169,12 +182,13 @@ settled within 250 ms."
 (ert-deftest drgnx-inv/i3-chrome-height-depends-on-the-role-only ()
   ;; The editor shows a file, then ibuffer (its own header line), then *scratch*: same chrome heights.
   (drgnx-inv--with sess
-    (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "C-`")))
+    (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "M-j")))
     (let* ((q "(drgnx-uitest--json (let ((e (drgnx-wb-editor-window)) (p (drgnx-wb-area-window 'panel)))
                  (list :editor (vector (window-tab-line-height e) (window-header-line-height e) (window-mode-line-height e))
                        :panel (vector (window-tab-line-height p) (window-header-line-height p) (window-mode-line-height p)))))")
            (first (drgnx-ui-call sess q)))
-      (should (seq-every-p #'cl-plusp (plist-get first :editor)))
+      ;; a tab line and a breadcrumb; no mode line: the status bar is one window across the frame
+      (should (equal (seq-map #'cl-plusp (plist-get first :editor)) '(t t nil)))
       (should (= 0 (aref (plist-get first :panel) 2)))                  ; no mode line in the panel
       (dolist (form '("(ibuffer)" "(switch-to-buffer \"*scratch*\")"))
         (drgnx-ui-call sess (format "(progn (select-window (drgnx-wb-editor-window)) %s (drgnx-uitest--json (list :ok t)))" form))
@@ -192,9 +206,9 @@ settled within 250 ms."
                      :tab (format \"%s\" (drgnx-wb-area-tab 'panel)))))")
          first)
     (unwind-protect
-        (let* ((s (drgnx-ui-start "drgnx" "1400x800" 30)) (sess (drgnx-ui-own-session (plist-get s :name))))
+        (let* ((s (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1400x800") 30)) (sess (drgnx-ui-own-session (plist-get s :name))))
           (drgnx-ui-wait-start-page sess)
-          (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "C-`") (list :keys "C-M-b")))
+          (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "M-j") (list :keys "C-M-b")))
           (drgnx-ui-call sess (format "(let ((window-resize-pixelwise t))
                                          (setq drgnx-persist-file %S)
                                          (window-resize (car (drgnx-wb--dock-windows)) 37 t nil t)
@@ -205,7 +219,7 @@ settled within 250 ms."
           (setq first (drgnx-ui-call sess q))
           (drgnx-ui-stop (plist-get s :name))
           (should (file-exists-p file))
-          (let* ((s2 (drgnx-ui-start "drgnx" "1400x800" 30)) (sess2 (drgnx-ui-own-session (plist-get s2 :name))))
+          (let* ((s2 (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1400x800") 30)) (sess2 (drgnx-ui-own-session (plist-get s2 :name))))
             (unwind-protect
                 (progn
                   (drgnx-ui-wait-start-page sess2)
@@ -220,7 +234,7 @@ settled within 250 ms."
   ;; toggles (I2), keys with no collateral move and no guard violation (I1, I9), on both windows.
   (let* ((root (make-temp-file "drgnx-2mon" t))
          (process-environment (cons (concat "DRGNX_UI_STATE=" root) process-environment))
-         (s (drgnx-ui-start "drgnx" "1280x800" 30 nil 2))
+         (s (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1280x800") 30 nil 2))
          (sess (drgnx-ui-own-session (plist-get s :name))))
     (unwind-protect
         (progn
@@ -235,7 +249,7 @@ settled within 250 ms."
                          (list :editor (vector (window-tab-line-height e) (window-header-line-height e) (window-mode-line-height e))
                                :dock (if d (window-pixel-width d) 0))))")
                    (first (drgnx-ui-call sess q)))
-              (should (seq-every-p #'cl-plusp (plist-get first :editor)))
+              (should (equal (seq-map #'cl-plusp (plist-get first :editor)) '(t t nil)))   ; the status bar is the frame's
               (should (> (plist-get first :dock) 0))
               (dotimes (_ 5) (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "C-b"))))
               (should (equal (drgnx-ui-call sess q) first))

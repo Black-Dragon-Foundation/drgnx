@@ -10,7 +10,7 @@ profile's; every command is also in the palette.
 | Language support (tree-sitter grammars, installed when asked) | `lang/*` modules | [editing.md](editing.md) | — (batch: `mod-grammars-test.el`) | — |
 | Faster language servers | `extra/booster` (eglot through emacs-lsp-booster) | [editing.md](editing.md) | — (batch: `mod-amenities-test.el`) | — |
 | Format on save | `extra/format` (apheleia) | [editing.md](editing.md) | — (batch: `mod-amenities-test.el`) | — |
-| Debugging | `extra/debug` (dape) | [editing.md](editing.md) | — (batch: `mod-amenities-test.el`) | — |
+| Debugging | `extra/debug` | [editing.md](editing.md) | — (batch: `debug-module-test.el`, `debug-launch-test.el`, `debug-gutter-test.el`) | — |
 | Sticky scroll | `editor/sticky` | [editing.md](editing.md) | `drgnx-ui-code/sticky-guides-smooth` | code-scrolling |
 | Indent guides | `extra/guides` | [editing.md](editing.md) | `drgnx-ui-code/sticky-guides-smooth` | code-scrolling |
 | Smooth scrolling | `ui/smooth` | [editing.md](editing.md) | `drgnx-ui-code/sticky-guides-smooth` | code-scrolling |
@@ -26,7 +26,7 @@ profile's; every command is also in the palette.
 | Sidebar views: Explorer, Search | View: Explorer `C-S-e`, View: Search `C-S-f` | [workbench.md](workbench.md) | `drgnx-ui-m11c1/replace-layouts-shortcuts` | explorer |
 | Layouts (Agent, Editor, Zen, Browser, your own) | Next Layout `C-k C-l` | [layouts.md](layouts.md) | `drgnx-ui-m11c1/replace-layouts-shortcuts` | — |
 | A web page beside the editor; Playwright reports | `tools/browser` | [browser.md](browser.md) | `drgnx-ui-m11c1/replace-layouts-shortcuts` (without WebKit) | — |
-| Watch and take over the agents' browser | `tools/live` | [live.md](live.md) | `drgnx-ui-m11c1/replace-layouts-shortcuts` (a mock browser) | live-view |
+| Watch and take over the agents' browser (waits for a later update; agents' browsers: [agent-browser.md](agent-browser.md)) | `tools/live` | [live.md](live.md) | `drgnx-ui-m11c1/replace-layouts-shortcuts` (a mock browser) | live-view |
 | Edit on another machine (ssh hosts, podman containers), a status-line segment, Reconnect | `tools/remote` | [remote.md](remote.md) | `drgnx-ui-m11c2/agent-settings-and-remote` (a podman container) | remote-typing |
 | Agent settings pages (Claude Code, Codex, Gemini, Kimi Code): routes, MCP servers, hooks, skills, Test | `tools/agent-settings` | [agent-settings.md](agent-settings.md) | `drgnx-ui-m11c2/agent-settings-and-remote` (mock MCP servers) | agent-settings-open |
 | Keyboard Shortcuts editor (record chords, conflicts, filters) | Keyboard Shortcuts `C-k C-s` | [shortcuts.md](shortcuts.md) | `drgnx-ui-m11c1/replace-layouts-shortcuts` | — |

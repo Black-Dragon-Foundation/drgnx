@@ -2,8 +2,9 @@
 //!
 //! `doctor --json` is
 //! `{binary: {path, commit, test_hooks}, running: {commit, pid}?, gateway: {port, registrations, providers, keys_held,
-//! warnings, keys_refused?}?, store: {schema, writer, failed, denied_in}?, socket_dir: {path, mode, ok}, sqlite,
-//! job_agents, sandbox: {backend, version, ok, reason, fix, landlock_abi, in_use, pins_note}, legacy: {moved, left, at,
+//! warnings, keys_refused?}?, store: {schema, writer, failed, denied_in}?, watch: {max_user_watches?, projects: [{root, watched, error?}]}?,
+//! socket_dir: {path, mode, ok}, sqlite,
+//! job_agents, exe_mode (`private-table`, `lock` or `direct`: how a file written and run is kept from ETXTBSY), sandbox: {backend, version, ok, reason, fix, landlock_abi, in_use, pins_note}, legacy: {moved, left, at,
 //! lisp_processes: [{pid, what}]}}`.  `legacy` is what the Lisp runtime left (`crate::legacy`): what the first start
 //! moved to `<state>/hub/migrated-p7/`, what stays (a command job still running), and the user's processes that are
 //! still the Lisp hub or its coordination server.  `store` is the running hub's
@@ -15,6 +16,12 @@
 //! `warnings` are its clear-text providers (the settings' provider table), and `keys_refused` (only when there is one) says why
 //! the hub takes no key: it could not keep other processes out of its memory (on macOS, started under a debugger). `sandbox` is the job sandbox's check
 //! (`gleipnir::check`), `in_use` true (every session starts in it).
+//! `browser` is what an agent session's browser would get here: `{found, fix, tier, landlock_abi, verdict, modes, cap,
+//! proxy_refusals: [{target, refused}], last_check, age_warning}`.  `found` is the program `browser::resolve` finds (or
+//! null, with `fix`), `verdict` says whether Mode A runs on this tier and ABI, `cap` is `systemd` where a memory cap
+//! can be set, `proxy_refusals` are the web policy's hard refusals judged in-process (a `refused: false` is a failure),
+//! `last_check` is the cached `browser/check` result (`browser::check`) and `age_warning` a downloaded browser more
+//! than 28 days old.
 //! `socket_dir.ok` is true when the directory is the user's own with mode 0700, and also while it does not exist yet
 //! (the hub makes it private at its first start); `mode` is then null.
 
@@ -47,6 +54,8 @@ pub struct Running {
     pub commit: Option<String>,
     pub gateway: Option<Value>,
     pub store: Option<Value>,
+    /// Its `watch`: Hrafn's file watches.
+    pub watch: Option<Value>,
 }
 
 /// The socket directory's state.
@@ -124,8 +133,11 @@ pub fn report(env: &Env, binary: &Path, running: Option<Running>, sandbox: &Chec
         "sqlite": crate::version::sqlite(),
         "sqlite_wal_fixed": urdr::wal_reset_fixed(urdr::sqlite_version_number()),
         "job_agents": JOB_AGENTS,
+        "exe_mode": drgnx_exe::mode().name(),
         "sandbox": sandbox_section(sandbox),
         "legacy": crate::legacy::section(env),
+        "packs": packs_section(env),
+        "debug_adapters": debug_adapters_section(env),
     });
     if let Some(r) = running {
         v["running"] = json!({"pid": r.pid, "commit": r.commit});
@@ -140,6 +152,9 @@ pub fn report(env: &Env, binary: &Path, running: Option<Running>, sandbox: &Chec
             if let Some(why) = g.get("keys_refused").filter(|w| w.is_string()) {
                 v["gateway"]["keys_refused"] = why.clone();
             }
+        }
+        if let Some(w) = r.watch {
+            v["watch"] = w;
         }
         if let Some(s) = r.store {
             v["store"] = json!({
@@ -156,7 +171,166 @@ pub fn report(env: &Env, binary: &Path, running: Option<Running>, sandbox: &Chec
         }
     }
     store_files(env, &mut v, now_secs());
+    v["container_net"] = json!(container_net_verdict(
+        sleipnir::linux::confined::refusal(),
+        crate::exec::unit::find_on_path("podman").map(|podman| {
+            sleipnir::linux::podman::check_limits(
+                &podman,
+                &crate::exec::container::podman_env(&crate::shell_env::ShellEnv::default()),
+                std::time::Duration::from_secs(10),
+            )
+        })
+    ));
+    let values =
+        crate::settings::Settings::load(&paths::config_dir(env), &crate::settings::Kv::default())
+            .values;
+    v["browser"] = browser_section(
+        &crate::browser::resolve::resolve(&values, &paths::data_dir(env)),
+        sandbox,
+        v["gateway"]["port"]
+            .as_u64()
+            .and_then(|p| u16::try_from(p).ok()),
+        crate::browser::check::read(env),
+        crate::exec::unit::systemd_user(),
+        now_secs(),
+    );
     v
+}
+
+/// Whether a networked container job can run here (design §6's checks under Q8): CONFINED is why this login can't run
+/// containers at all (a `user_u` login, `sleipnir::linux::confined`), INFO `podman info`'s answer (or why it failed),
+/// none when podman isn't on the PATH.
+pub fn container_net_verdict(
+    confined: Option<String>,
+    info: Option<Result<Value, String>>,
+) -> String {
+    if let Some(why) = confined {
+        return why;
+    }
+    match info {
+        None => "no podman on the PATH: container jobs are refused".into(),
+        Some(Err(e)) => e,
+        Some(Ok(i)) => match sleipnir::linux::netcheck::net_ready(&i) {
+            Ok(()) => "ok (rootless podman 5.0 or newer)".into(),
+            Err(e) => e,
+        },
+    }
+}
+
+/// A downloaded browser older than this many days warns.
+const BROWSER_AGE_WARN_DAYS: u64 = crate::browser::check::AGE_WARN_DAYS;
+
+/// `browser`: what an agent session would get, the tier and the kernel's Landlock ABI, the proxy's refusals (judged
+/// here, in-process), whether a memory cap can be set (SYSTEMD: a user systemd answers), the last cached smoke check
+/// and the age warning.  `gateway_port` is the running hub's gateway; a stand-in port is judged without one.
+pub fn browser_section(
+    found: &Result<crate::browser::resolve::Found, crate::browser::resolve::NotFound>,
+    c: &Check,
+    gateway_port: Option<u16>,
+    last_check: Option<crate::browser::check::CheckResult>,
+    systemd: bool,
+    now: u64,
+) -> Value {
+    use gleipnir::BackendKind;
+    let abi = c.landlock_abi;
+    let floor = gleipnir::LANDLOCK_FLOOR_BROWSER;
+    let (tier, verdict, modes) = match c.backend {
+        BackendKind::Bwrap if abi >= floor => ("full", "full tier: Mode A".to_owned(), vec!["A"]),
+        BackendKind::Bwrap => (
+            "full",
+            format!(
+                "refused: Landlock ABI {abi} < {floor} (fix: run a newer kernel, one with Landlock ABI {floor} or later)"
+            ),
+            vec![],
+        ),
+        BackendKind::Reduced => (
+            "reduced",
+            "reduced tier: not yet (phase 2)".to_owned(),
+            vec![],
+        ),
+        BackendKind::Seatbelt => ("macos", "macOS: not yet".to_owned(), vec![]),
+        BackendKind::None => ("none", "none: no sandbox".to_owned(), vec![]),
+    };
+    let age_warning = match found {
+        Ok(f) => match &f.source {
+            crate::browser::resolve::Source::Downloaded { released } => {
+                let day = format!("{released}T00:00:00Z");
+                parse_rfc3339(&day)
+                    .is_some_and(|t| now.saturating_sub(t) > BROWSER_AGE_WARN_DAYS * 86_400)
+            }
+            _ => false,
+        },
+        Err(_) => false,
+    };
+    json!({
+        "found": found.as_ref().ok(),
+        "fix": found.as_ref().err().map(|n| n.fix.clone()),
+        "tier": tier,
+        "landlock_abi": abi,
+        "verdict": verdict,
+        "modes": modes,
+        "cap": if systemd { "systemd" } else { "none" },
+        "proxy_refusals": proxy_refusals(gateway_port.unwrap_or(4100)),
+        "last_check": last_check,
+        "age_warning": age_warning,
+    })
+}
+
+/// The web policy's hard refusals, judged in-process (`gleipnir::net::policy::judge`): each target below must be
+/// refused, and `refused: false` is a doctor `fail`.
+pub fn proxy_refusals(gateway_port: u16) -> Vec<Value> {
+    use gleipnir::net::host::parse_target;
+    use gleipnir::net::policy::{
+        HostAddrs, Judgement, NeverSet, Pre, PrivateGrant, PrivateTarget, WebCtx, judge,
+        pre_resolve,
+    };
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    let host_addrs = HostAddrs::default();
+    let never = NeverSet {
+        loopback_ports: [gateway_port].into_iter().collect(),
+    };
+    let gateway = format!("host.drgnx.internal:{gateway_port}");
+    let test_grant = |t: &str| PrivateGrant {
+        target: PrivateTarget::HostPort(parse_target(t).expect("a target")),
+        expires: None,
+    };
+    let both = [
+        PrivateGrant {
+            target: PrivateTarget::AllPrivate,
+            expires: None,
+        },
+        test_grant("10.0.0.1:80"),
+    ];
+    let gateway_grant = [test_grant(&gateway)];
+    let public = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34)), 22);
+    let cases: [(&str, &[PrivateGrant], &[SocketAddr]); 4] = [
+        ("host.drgnx.internal:1", &[], &[]),
+        ("example.com:22", &[], &[public]),
+        ("169.254.169.254:80", &both, &[]),
+        (&gateway, &gateway_grant, &[]),
+    ];
+    cases
+        .iter()
+        .map(|(target, grants, answer)| {
+            let ctx = WebCtx {
+                web: true,
+                deny_hosts: &[],
+                grants,
+                now: now_secs() as f64,
+                host_addrs: &host_addrs,
+                never: &never,
+            };
+            let refused = parse_target(target).is_ok_and(|t| {
+                let answer: Vec<SocketAddr> = match pre_resolve(&t, &ctx) {
+                    Pre::Refuse(_) => return true,
+                    Pre::Fixed(a) => a,
+                    Pre::Resolve => answer.to_vec(),
+                };
+                !matches!(judge(&t, &answer, &ctx), Judgement::Connect(_))
+            });
+            json!({"target": target, "refused": refused})
+        })
+        .collect()
 }
 
 /// work.db's WAL above this size warns: an editor that keeps a read open stops it being checkpointed.
@@ -259,6 +433,37 @@ fn store_files(env: &Env, v: &mut Value, now: u64) {
                 .into(),
         );
     }
+    // the edit histories' copies (`history-<project>.db`, one each, replaced each night)
+    let history_copies: Vec<u64> = std::fs::read_dir(&backup)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| {
+            let n = e.file_name().to_string_lossy().into_owned();
+            n.starts_with("history-") && n.ends_with(".db")
+        })
+        .filter_map(|e| {
+            e.metadata()
+                .ok()?
+                .modified()
+                .ok()?
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .map(|d| d.as_secs())
+        })
+        .collect();
+    v["store"]["history"] = json!({
+        "copies": history_copies.len(),
+        "newest_age_s": history_copies.iter().max().map(|t| now.saturating_sub(*t)),
+    });
+    if v["store"]["history_backup"] == false {
+        warnings.push(
+            "the last copy of an edit history (history.db) failed: see the hub log; the older copy was kept".into(),
+        );
+    }
+    let mut history_warnings = Vec::new();
+    v["store"]["history_size"] = json!(history_rows(env, &mut history_warnings));
+    v["store"]["history_warnings"] = json!(history_warnings);
     // the personal-notes opt-in file, as it loads now
     if let Some(home) = env.vars.get("HOME").filter(|h| Path::new(h).is_absolute()) {
         let deny = norn::deny::DenyList::load(Path::new(home), &paths::config_dir(env));
@@ -285,6 +490,48 @@ fn store_files(env: &Env, v: &mut Value, now: u64) {
     v["store"]["warnings"] = json!(warnings);
 }
 
+/// A history this full of its cap is warned about.
+const HISTORY_FULL: f64 = 0.8;
+
+/// One row per project history: its size, its cap and what pins the size, read from the report the hub's sweep leaves
+/// beside each `history.db` (`history::timers::REPORT`). A history near its cap adds a warning naming its biggest pin.
+fn history_rows(env: &Env, warnings: &mut Vec<String>) -> Vec<Value> {
+    let dir = paths::state_dir(env).join("hub/history");
+    let mut projects: Vec<_> = std::fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    projects.sort();
+    let mut rows = Vec::new();
+    for project in projects {
+        let Some(mut row) = std::fs::read(dir.join(&project).join(crate::history::timers::REPORT))
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        else {
+            continue;
+        };
+        row["project"] = json!(project);
+        let (size, cap) = (
+            row["size"].as_f64().unwrap_or(0.0),
+            row["cap"].as_f64().unwrap_or(0.0),
+        );
+        if cap > 0.0 && size >= cap * HISTORY_FULL {
+            let pin = row["pins"][0]["name"]
+                .as_str()
+                .unwrap_or("nothing set aside");
+            warnings.push(format!(
+                "the edit history of {project} is {} MiB of its {} MiB cap; the biggest thing keeping it is {pin}",
+                (size / (1 << 20) as f64) as u64,
+                (cap / (1 << 20) as f64) as u64,
+            ));
+        }
+        rows.push(row);
+    }
+    rows
+}
+
 /// What the doctor and `status` say of work.db beyond "ready": a migration that failed (and how to go back), and the
 /// copies that still hold what the migration's deny-list kept out.
 fn store_lines(store: &Value) -> String {
@@ -303,6 +550,28 @@ fn store_lines(store: &Value) -> String {
         .filter_map(Value::as_str)
     {
         out.push_str(&format!("\nwork.db: {w}"));
+    }
+    for row in store
+        .get("history_size")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        out.push_str(&format!(
+            "\nhistory {}: {} MiB of {} MiB",
+            row["project"].as_str().unwrap_or("?"),
+            row["size"].as_u64().unwrap_or(0) >> 20,
+            row["cap"].as_u64().unwrap_or(0) >> 20,
+        ));
+    }
+    for w in store
+        .get("history_warnings")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        out.push_str(&format!("\nhistory: {w}"));
     }
     if let Some(copies) = store.get("denied_in").and_then(Value::as_array)
         && !copies.is_empty()
@@ -382,6 +651,40 @@ fn summary(v: &Value) -> String {
     out
 }
 
+/// A check running on a thread of its own, awaited by [`BoundedCheck::wait`] for at most what is left of `limit`
+/// since it started: the facts it gathers first (`bwrap --version`, up to 2 s) are inside the bound too, and a
+/// check that does not answer is a failed one (GL-T12-1), never a doctor that is late. The thread is not joined: a
+/// hung one ends with the process.
+struct BoundedCheck {
+    rx: std::sync::mpsc::Receiver<Check>,
+    started: std::time::Instant,
+    limit: Duration,
+}
+
+fn bounded(limit: Duration, f: impl FnOnce() -> Check + Send + 'static) -> BoundedCheck {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let started = crate::clock::real_now();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    BoundedCheck { rx, started, limit }
+}
+
+impl BoundedCheck {
+    fn wait(self) -> Check {
+        let left = self.limit.saturating_sub(self.started.elapsed());
+        self.rx.recv_timeout(left).unwrap_or_else(|_| {
+            Check::failed(
+                format!(
+                    "the sandbox check did not answer within {} ms",
+                    self.limit.as_millis()
+                ),
+                None,
+            )
+        })
+    }
+}
+
 /// `doctor`: `--json` is the report; without it, a few lines of text. The sandbox check runs beside the hub ask, so
 /// the two together stay under the editor's 2 s.
 pub fn doctor(env: &Env, json_out: bool) -> i32 {
@@ -391,33 +694,32 @@ pub fn doctor(env: &Env, json_out: bool) -> i32 {
         .unwrap_or_default();
     let deadline = crate::clock::real_now() + DOCTOR_ASK;
     let left = || deadline.saturating_duration_since(crate::clock::real_now());
-    let (running, sandbox) = std::thread::scope(|s| {
-        let check = s.spawn(|| sandbox::check_blocking(Tier::Full, None, DOCTOR_CHECK));
-        let running = Client::user(env, left())
-            .and_then(|mut c| c.call("status", json!({}), left()))
-            .ok()
-            .map(|s| Running {
-                pid: s["pid"]
-                    .as_u64()
-                    .and_then(|p| u32::try_from(p).ok())
-                    .unwrap_or(0),
-                commit: s["runtime"]["commit"].as_str().map(str::to_string),
-                gateway: s.get("gateway").cloned(),
-                store: s.get("store").cloned(),
-            })
-            .or_else(|| {
-                client::ping(&socket, left().max(DOCTOR_PING)).map(|pid| Running {
-                    pid,
-                    commit: None,
-                    gateway: None,
-                    store: None,
-                })
-            });
-        let check = check
-            .join()
-            .unwrap_or_else(|_| Check::failed("the check panicked".into(), None));
-        (running, check)
+    let check = bounded(DOCTOR_CHECK, || {
+        sandbox::check_blocking(Tier::Full, None, DOCTOR_CHECK)
     });
+    let running = Client::user(env, left())
+        .and_then(|mut c| c.call("status", json!({}), left()))
+        .ok()
+        .map(|s| Running {
+            pid: s["pid"]
+                .as_u64()
+                .and_then(|p| u32::try_from(p).ok())
+                .unwrap_or(0),
+            commit: s["runtime"]["commit"].as_str().map(str::to_string),
+            gateway: s.get("gateway").cloned(),
+            store: s.get("store").cloned(),
+            watch: s.get("watch").cloned(),
+        })
+        .or_else(|| {
+            client::ping(&socket, left().max(DOCTOR_PING)).map(|pid| Running {
+                pid,
+                commit: None,
+                gateway: None,
+                store: None,
+                watch: None,
+            })
+        });
+    let sandbox = check.wait();
     let v = report(env, &binary, running, &sandbox);
     if json_out {
         println!("{v}");
@@ -425,6 +727,113 @@ pub fn doctor(env: &Env, json_out: bool) -> i32 {
         println!("{}", text(&v, &sandbox));
     }
     0
+}
+
+/// What `exe_mode` means to a reader: how a file the hub writes and then runs is kept from ETXTBSY.
+fn exe_mode_line(mode: &Value) -> String {
+    match mode.as_str() {
+        Some("private-table") => "a private file table per write".into(),
+        Some("lock") => {
+            "a process-wide lock (this system refuses unshare, as Docker's default profile does)"
+                .into()
+        }
+        Some("direct") => "plain writes (no ETXTBSY here)".into(),
+        _ => "?".into(),
+    }
+}
+
+/// The packs whose grammar the hub parses with and whether each library is built and loads: `[{pack, built, why?,
+/// removed?}]`. A pack that is not built reads as text until `drgnx packs sync` has built it; one you removed stays
+/// removed (`removed: true`).
+fn packs_section(env: &Env) -> Value {
+    let removed = std::fs::read(paths::config_dir(env).join("drgnx.lock.eld"))
+        .map(|b| skald::registry::removed_from_lock(&b))
+        .unwrap_or_default();
+    let mut rows: Vec<Value> = hrafn::chunk::hub_grammars()
+        .into_iter()
+        .map(|(pack, grammar)| {
+            if removed.iter().any(|r| r == pack) {
+                return json!({"pack": pack, "built": false, "removed": true});
+            }
+            match skald::registry::language(grammar) {
+                Ok(_) => json!({"pack": pack, "built": true}),
+                Err(e) => json!({"pack": pack, "built": false, "why": e.reason}),
+            }
+        })
+        .collect();
+    // a fetched pack whose worker cannot run (the reduced tier, no sandbox, repeated failures): its files read as text
+    rows.extend(
+        hrafn::chunk::worker::dead()
+            .into_iter()
+            .map(|(pack, why)| json!({"pack": pack, "built": false, "why": why, "fetched": true})),
+    );
+    Value::Array(rows)
+}
+
+/// The adapters that live inside a language server, each with the downloads it needs: what the table pins and what is
+/// installed (`[{adapter, parts: [{part, pinned, installed}]}]`; `installed: null` is a part that is not there).
+fn debug_adapters_section(env: &Env) -> Value {
+    let tools = paths::data_dir(env).join("debug-adapters");
+    Value::Array(
+        crate::debug::adapters::Table::builtin()
+            .0
+            .iter()
+            .filter(|a| a.start.as_ref().is_some_and(|s| s.lsp_command.is_some()))
+            .map(|a| {
+                let parts: Vec<Value> = crate::debug::adapters::parts(a, &tools)
+                    .into_iter()
+                    .map(|p| json!({"part": p.part, "pinned": p.pinned, "installed": p.installed}))
+                    .collect();
+                json!({"adapter": a.id, "parts": parts})
+            })
+            .collect(),
+    )
+}
+
+/// One line per part of an adapter that is missing or is not the pinned version.
+fn debug_adapter_lines(adapters: &Value) -> String {
+    let mut out = String::new();
+    for a in adapters.as_array().into_iter().flatten() {
+        let id = a["adapter"].as_str().unwrap_or("?");
+        for p in a["parts"].as_array().into_iter().flatten() {
+            let part = p["part"].as_str().unwrap_or("?");
+            let pinned = p["pinned"].as_str().unwrap_or("?");
+            match p["installed"].as_str() {
+                None => out.push_str(&format!(
+                    "\ndebug adapter {id}: {part} not installed (pinned {pinned}): Debug: Install Adapter"
+                )),
+                Some(have) if have != pinned => out.push_str(&format!(
+                    "\ndebug adapter {id}: {part} pinned {pinned}, installed {have}: Debug: Install Adapter"
+                )),
+                Some(_) => {}
+            }
+        }
+    }
+    out
+}
+
+/// One line per pack that is not built: `pack X not built (why)`.
+fn pack_lines(packs: &Value) -> String {
+    let mut out = String::new();
+    for p in packs
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|p| p["built"] == false)
+    {
+        let name = p["pack"].as_str().unwrap_or("?");
+        if p["removed"] == true {
+            out.push_str(&format!(
+                "\npack {name} removed by you; `drgnx packs install {name}` to get it back: its files read as text"
+            ));
+            continue;
+        }
+        out.push_str(&format!(
+            "\npack {name} not built ({}): its files read as text",
+            p["why"].as_str().unwrap_or("?")
+        ));
+    }
+    out
 }
 
 /// The lines `doctor` prints without `--json`.
@@ -459,12 +868,47 @@ fn text(v: &Value, sandbox: &Check) -> String {
         }
     ));
     out.push_str(&format!("\njob agents: {}", t(&v["job_agents"])));
+    out.push_str(&format!(
+        "\nfiles run after writing: {}",
+        exe_mode_line(&v["exe_mode"])
+    ));
     out.push_str(&format!("\n{}", sandbox_line(sandbox)));
+    out.push_str(&format!("\nagent browser: {}", t(&v["browser"]["verdict"])));
+    out.push_str(&format!(
+        "\nnetworked container jobs: {}",
+        t(&v["container_net"])
+    ));
+    out.push_str(&watch_lines(&v["watch"]));
     out.push_str(&legacy_lines(&v["legacy"]));
+    out.push_str(&pack_lines(&v["packs"]));
+    out.push_str(&debug_adapter_lines(&v["debug_adapters"]));
     out
 }
 
 /// Lines about what the Lisp runtime left: a command job still running there, and its processes still alive.
+/// `watch`: the inotify budget and the open projects' watches; a project that runs unwatched is named with why.
+fn watch_lines(watch: &Value) -> String {
+    let Some(projects) = watch["projects"].as_array().filter(|p| !p.is_empty()) else {
+        return String::new();
+    };
+    let dirs: u64 = projects.iter().filter_map(|p| p["watched"].as_u64()).sum();
+    let mut out = format!("\nwatch: {dirs} directories in {} projects", projects.len());
+    if let Some(max) = watch["max_user_watches"].as_u64() {
+        out.push_str(&format!(
+            " (inotify budget {max}, fs.inotify.max_user_watches)"
+        ));
+    }
+    for p in projects {
+        if let Some(why) = p["error"].as_str() {
+            out.push_str(&format!(
+                "\nwatch: {} runs unwatched: {why}",
+                p["root"].as_str().unwrap_or("?")
+            ));
+        }
+    }
+    out
+}
+
 fn legacy_lines(legacy: &Value) -> String {
     let list = |k: &str, f: &dyn Fn(&Value) -> String| {
         legacy[k]
@@ -510,6 +954,43 @@ pub fn restart(env: &Env) -> i32 {
 mod tests {
     use super::*;
 
+    /// GL-T12-1: a check that does not answer in time (its facts included) is a failed check at the bound, not a
+    /// doctor that is late.  The check here blocks until the test lets it go, so the answer can only have come from
+    /// the bound, with the check still running: no elapsed time is asserted.
+    #[test]
+    fn a_slow_check_is_a_failed_one_at_the_bound() {
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let slow = bounded(Duration::from_millis(20), move || {
+            let _ = held.recv();
+            Check::failed("late".into(), None)
+        })
+        .wait();
+        assert!(!slow.ok);
+        assert!(slow.reason.unwrap().contains("did not answer within 20 ms"));
+        drop(release);
+        let fast = bounded(Duration::from_secs(5), || {
+            Check::failed("quick".into(), None)
+        })
+        .wait();
+        assert_eq!(fast.reason.as_deref(), Some("quick"));
+    }
+
+    #[test]
+    fn doctor_names_the_networked_jobs_check() {
+        let old =
+            json!({"version": {"Version": "4.9.3"}, "host": {"security": {"rootless": true}}});
+        assert!(container_net_verdict(None, Some(Ok(old))).contains("podman 5.0 or newer"));
+        let ok = json!({"version": {"Version": "5.4.2"}, "host": {"security": {"rootless": true}}});
+        assert!(container_net_verdict(None, Some(Ok(ok.clone()))).starts_with("ok"));
+        assert!(container_net_verdict(None, None).contains("no podman"));
+        // a user_u login is refused first, whatever podman says
+        let why = sleipnir::linux::confined::refusal_for("user_u:user_r:user_t:s0");
+        assert_eq!(
+            container_net_verdict(why.clone(), Some(Ok(ok))),
+            why.unwrap()
+        );
+    }
+
     #[test]
     fn the_report_has_every_key_and_judges_the_socket_dir() {
         let dir = tempfile::tempdir().unwrap();
@@ -540,6 +1021,10 @@ mod tests {
         assert_eq!(v["sqlite_wal_fixed"], true);
         assert!(text(&v, &working()).contains("WAL-reset bug fixed"));
         assert_eq!(v["job_agents"], JOB_AGENTS);
+        // which way a file the hub writes and runs is kept from ETXTBSY: the probe's answer, in both forms
+        assert_eq!(v["exe_mode"], drgnx_exe::mode().name());
+        assert!(text(&v, &working()).contains("files run after writing: "));
+        assert!(!text(&v, &working()).contains("writing: ?"));
         for k in ["moved", "left", "lisp_processes"] {
             assert!(v["legacy"][k].is_array(), "legacy.{k}");
         }
@@ -563,9 +1048,11 @@ mod tests {
                 ),
                 store: Some(json!({"schema": 6, "writer": "not-ready", "writes": 0,
                     "failed": "the move of work.db to schema 7 failed: x", "denied_in": ["/d/backup/work-pre7-1.db"]})),
+                watch: Some(watch_json()),
             }),
             &working(),
         );
+        assert_eq!(up["watch"], watch_json());
         for (k, want) in [
             ("schema", json!(6)),
             ("writer", json!("not-ready")),
@@ -598,6 +1085,57 @@ mod tests {
             assert_eq!(parse_rfc3339(&crate::log::rfc3339(secs)), Some(secs));
         }
         assert_eq!(parse_rfc3339("yesterday"), None);
+    }
+
+    /// The `history` row: each project's size against its cap and what pins it, from the report the hub's sweep leaves
+    /// beside `history.db` (the live file is never opened here).
+    #[test]
+    fn the_history_row_names_size_cap_and_what_pins_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("s");
+        let env = Env::new(
+            &[
+                ("XDG_STATE_HOME", &state.to_string_lossy()),
+                ("HOME", &dir.path().to_string_lossy()),
+            ],
+            1000,
+        );
+        for (p, size) in [("p1", 1_900_000_000u64), ("p2", 5_000)] {
+            let d = paths::state_dir(&env).join("hub/history").join(p);
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(
+                d.join("size-report.json"),
+                json!({"size": size, "cap": 2u64 << 30, "pins": [
+                    {"kind": "frozen", "name": "wt-x", "bytes": 1_500_000_000u64},
+                    {"kind": "anchors", "name": "user (3 anchors)", "bytes": 0}]})
+                .to_string(),
+            )
+            .unwrap();
+        }
+        // the test writes only inside the drgnx state folder its environment names
+        let top: Vec<_> = std::fs::read_dir(&state)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .collect();
+        assert_eq!(
+            top,
+            [paths::state_dir(&env)],
+            "written outside {}",
+            paths::state_dir(&env).display()
+        );
+        let mut warnings = Vec::new();
+        let rows = history_rows(&env, &mut warnings);
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert_eq!(rows[0]["project"], "p1");
+        assert_eq!(rows[0]["size"], 1_900_000_000u64);
+        assert_eq!(rows[0]["pins"][0]["name"], "wt-x");
+        // only the project near its cap warns, and says what pins it
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].contains("p1") && warnings[0].contains("wt-x"),
+            "{warnings:?}"
+        );
     }
 
     /// The store section from files alone: a big WAL, a stale backup, a bad opt-in file and the copies kept.
@@ -685,6 +1223,7 @@ mod tests {
                 new_session: true,
                 relay: true,
                 seatbelt: false,
+                browser: false,
             }),
             landlock_abi: 10,
             container: false,
@@ -708,6 +1247,125 @@ mod tests {
     fn report_of(c: &Check) -> Value {
         let env = Env::new(&[("HOME", "/nonexistent/h")], 1000);
         report(&env, Path::new("/b"), None, c)
+    }
+
+    fn found(source: crate::browser::resolve::Source) -> crate::browser::resolve::Found {
+        crate::browser::resolve::Found {
+            path: "/usr/bin/chrome-headless-shell".into(),
+            kind: crate::browser::resolve::Kind::HeadlessShell,
+            version: Some("157.0.8103.38".into()),
+            source,
+        }
+    }
+
+    #[test]
+    fn a_removed_pack_is_said_removed_not_not_built() {
+        let lines = pack_lines(&json!([
+            {"pack": "go", "built": false, "removed": true},
+            {"pack": "java", "built": false, "why": "no lock"},
+            {"pack": "c", "built": true}
+        ]));
+        assert!(lines.contains("pack go removed by you; `drgnx packs install go` to get it back"));
+        assert!(lines.contains("pack java not built (no lock)"));
+        assert!(!lines.contains("pack c"));
+    }
+
+    #[test]
+    fn browser_section_shape() {
+        use crate::browser::resolve::{NotFound, Source};
+        let now = parse_rfc3339("2026-11-04T00:00:00Z").unwrap();
+        let ok = browser_section(
+            &Ok(found(Source::System)),
+            &working(),
+            Some(4100),
+            None,
+            true,
+            now,
+        );
+        assert_eq!(ok["tier"], "full");
+        assert_eq!(ok["verdict"], "full tier: Mode A");
+        assert_eq!(ok["modes"], json!(["A"]));
+        assert_eq!(ok["cap"], "systemd");
+        assert_eq!(ok["landlock_abi"], 10);
+        assert_eq!(ok["found"]["kind"], "headless-shell");
+        assert!(ok["last_check"].is_null());
+        assert_eq!(ok["age_warning"], false);
+        assert_eq!(ok["proxy_refusals"].as_array().unwrap().len(), 4);
+        // ABI 8: refused, with the fix, and no mode
+        let old = Check {
+            landlock_abi: 8,
+            ..working()
+        };
+        let v = browser_section(
+            &Err(NotFound {
+                fix: "install one".into(),
+            }),
+            &old,
+            None,
+            None,
+            false,
+            now,
+        );
+        assert!(
+            v["verdict"]
+                .as_str()
+                .unwrap()
+                .starts_with("refused: Landlock ABI 8 < 9 (fix")
+        );
+        assert_eq!(v["modes"], json!([]));
+        assert!(v["found"].is_null());
+        assert_eq!(v["fix"], "install one");
+        assert_eq!(v["cap"], "none");
+        // the other tiers
+        let tier = |backend| {
+            let c = Check {
+                backend,
+                ..working()
+            };
+            let v = browser_section(&Ok(found(Source::System)), &c, None, None, true, now);
+            (
+                v["tier"].as_str().unwrap().to_owned(),
+                v["verdict"].as_str().unwrap().to_owned(),
+            )
+        };
+        assert_eq!(
+            tier(gleipnir::BackendKind::Reduced),
+            ("reduced".into(), "reduced tier: not yet (phase 2)".into())
+        );
+        assert_eq!(
+            tier(gleipnir::BackendKind::Seatbelt),
+            ("macos".into(), "macOS: not yet".into())
+        );
+        assert_eq!(
+            tier(gleipnir::BackendKind::None),
+            ("none".into(), "none: no sandbox".into())
+        );
+        // a download more than 28 days old warns, 28 days exactly does not
+        let released = |d: &str| Source::Downloaded { released: d.into() };
+        let age = |d: &str| {
+            browser_section(&Ok(found(released(d))), &working(), None, None, true, now)["age_warning"].clone()
+        };
+        assert_eq!(age("2026-10-07"), false);
+        assert_eq!(age("2026-10-06"), true);
+        assert_eq!(age("2026-11-03"), false);
+    }
+
+    #[test]
+    fn proxy_refusals_all_hold() {
+        let all = proxy_refusals(4100);
+        let targets: Vec<&str> = all.iter().map(|r| r["target"].as_str().unwrap()).collect();
+        assert_eq!(
+            targets,
+            [
+                "host.drgnx.internal:1",
+                "example.com:22",
+                "169.254.169.254:80",
+                "host.drgnx.internal:4100"
+            ]
+        );
+        for r in &all {
+            assert_eq!(r["refused"], true, "{r}");
+        }
     }
 
     #[test]
@@ -791,6 +1449,7 @@ mod tests {
                     json!({"port": 4100, "registrations": 0, "providers": 0, "keys_refused": why}),
                 ),
                 store: None,
+                watch: None,
             }),
             &working(),
         );
@@ -811,11 +1470,31 @@ mod tests {
                 commit: None,
                 gateway: Some(json!({"port": 4100, "registrations": 0, "providers": 0})),
                 store: None,
+                watch: None,
             }),
             &working(),
         );
         assert!(fine["gateway"].get("keys_refused").is_none());
         assert!(!text(&fine, &working()).contains("keys: refused"));
+    }
+
+    fn watch_json() -> Value {
+        json!({"max_user_watches": 132648, "projects": [
+            {"root": "/p/a", "watched": 410},
+            {"root": "/p/b", "watched": 0,
+             "error": "the inotify watch limit is spent (ENOSPC; raise fs.inotify.max_user_watches): x"}]})
+    }
+
+    #[test]
+    fn the_watch_row_names_an_unwatched_project() {
+        let l = watch_lines(&watch_json());
+        assert!(l.contains("410 directories in 2 projects"), "{l}");
+        assert!(l.contains("132648"), "{l}");
+        assert!(l.contains("/p/b runs unwatched"), "{l}");
+        assert!(l.contains("ENOSPC"), "{l}");
+        assert!(!l.contains("/p/a runs unwatched"), "{l}");
+        // no hub, no row
+        assert_eq!(watch_lines(&Value::Null), "");
     }
 
     #[test]

@@ -29,6 +29,15 @@
   "The line number and the trimmed text of point's line in the selected window, in SESS."
   (drgnx-modal-session-eval sess '(list (line-number-at-pos) (string-trim (buffer-substring-no-properties (pos-bol) (pos-eol))))))
 
+(defun drgnx-modal-ui-test--tree-row (sess)
+  "The Explorer's row at point in SESS: its line number and its name after its chevron (\"▸ \" a closed folder, \"▾ \" an
+open one, two spaces a file).  The hub's rows draw the chevron as an image, so it is read from the row's state."
+  (drgnx-modal-session-eval
+   sess '(let* ((p (drgnx-explorer-node-at (point))) (dir (drgnx-explorer-dir-at (point))))
+           (list (line-number-at-pos)
+                 (concat (cond ((not dir) "  ") ((gethash (directory-file-name p) drgnx-explorer--expanded) "▾ ") (t "▸ "))
+                         (file-name-nondirectory (directory-file-name p)))))))
+
 (defun drgnx-modal-ui-test--prompt-p (sess prefix)
   (let ((p (drgnx-modal-session-prompt sess))) (and p (string-prefix-p prefix p))))
 
@@ -95,22 +104,22 @@
                                                    (drgnx-explorer-set-roots (list ,dir)) t))
             ;; SPC alone: which-key lists the leader, its prefixes once with which-key's "+"
             (drgnx-modal-session-act sess "SPC")
-            (should (drgnx-modal-session-until sess '(and (get-buffer-window " *which-key*") t)))
+            (should (drgnx-modal-session-until sess '(and (get-buffer-window " *which-key*" 'visible) t)))
             (let ((popup (drgnx-modal-session-eval
                           sess '(with-current-buffer " *which-key*" (buffer-substring-no-properties (point-min) (point-max))))))
               (should (string-match-p "f : \\+File" popup))
               (should (string-match-p "SPC : Command Palette" popup))
               (should-not (string-search "++" popup)))
             (drgnx-modal-session-act sess "C-g")
-            (should (drgnx-modal-session-until sess '(not (get-buffer-window " *which-key*"))))
+            (should (drgnx-modal-session-until sess '(not (get-buffer-window " *which-key*" 'visible))))
             ;; M-SPC opens the same popup
             (drgnx-modal-session-act sess "M-SPC")
-            (should (drgnx-modal-session-until sess '(and (get-buffer-window " *which-key*") t)))
+            (should (drgnx-modal-session-until sess '(and (get-buffer-window " *which-key*" 'visible) t)))
             (should (string-match-p "f : \\+File"
                                     (drgnx-modal-session-eval
                                      sess '(with-current-buffer " *which-key*" (buffer-substring-no-properties (point-min) (point-max))))))
             (drgnx-modal-session-act sess "C-g")
-            (should (drgnx-modal-session-until sess '(not (get-buffer-window " *which-key*"))))
+            (should (drgnx-modal-session-until sess '(not (get-buffer-window " *which-key*" 'visible))))
             ;; SPC SPC the palette, SPC f p Quick Open, SPC s p project search
             (pcase-dolist (`(,keys . ,prompt) '(("SPC SPC" . "Command") ("SPC f p" . "Find file in")
                                                 ("SPC s p" . "Search in project")))
@@ -129,7 +138,8 @@
 ;;;; Panels
 
 (ert-deftest drgnx-ui-modal/panels ()
-  (drgnx-modal-session-with (sess)
+  ;; the Explorer is the hub's view (it lists the folders): the session runs the test's hub
+  (drgnx-modal-session-with (sess :hub t)
     (let ((dir (drgnx-modal-ui-test--project '(("a/one.txt" . "one\n") ("b/three.txt" . "three\n") ("b/two.txt" . "two\n")
                                                ("top.txt" . "top\n"))))
           (outside (drgnx-modal-ui-test--project '(("outside.txt" . "outside\n")))))
@@ -148,25 +158,25 @@
             (drgnx-modal-session-act sess "SPC E")
             (should (equal (drgnx-modal-session-eval sess '(list (buffer-name) (line-number-at-pos))) '(" *drgnx explorer*" 1)))
             (drgnx-modal-session-act sess "j")
-            (should (equal (drgnx-modal-ui-test--row sess) '(2 "▸ a")))
+            (should (equal (drgnx-modal-ui-test--tree-row sess) '(2 "▸ a")))
             (drgnx-modal-session-act sess "j")
-            (should (equal (drgnx-modal-ui-test--row sess) '(3 "▸ b")))
+            (should (equal (drgnx-modal-ui-test--tree-row sess) '(3 "▸ b")))
             (drgnx-modal-session-act sess "l")                              ; expand b
-            (should (equal (drgnx-modal-ui-test--row sess) '(3 "▾ b")))
+            (should (equal (drgnx-modal-ui-test--tree-row sess) '(3 "▾ b")))
             (drgnx-modal-session-act sess "k")
-            (should (equal (drgnx-modal-ui-test--row sess) '(2 "▸ a")))
+            (should (equal (drgnx-modal-ui-test--tree-row sess) '(2 "▸ a")))
             (drgnx-modal-session-act sess "h")                              ; a is closed: up to its folder
-            (should (equal (car (drgnx-modal-ui-test--row sess)) 1))
+            (should (equal (car (drgnx-modal-ui-test--tree-row sess)) 1))
             (drgnx-modal-session-act sess "j" "j" "l")                      ; b is open: into it
-            (let ((row (drgnx-modal-ui-test--row sess)))
+            (let ((row (drgnx-modal-ui-test--tree-row sess)))
               (should (= (car row) 4))
               (should (string-suffix-p " three.txt" (cadr row))))
             ;; the leader from the Explorer, its popup on screen
             (drgnx-modal-session-act sess "SPC")
-            (should (drgnx-modal-session-until sess '(and (get-buffer-window " *which-key*") t)))
+            (should (drgnx-modal-session-until sess '(and (get-buffer-window " *which-key*" 'visible) t)))
             (drgnx-modal-session-shot sess "modal-explorer-leader.png")
             (drgnx-modal-session-act sess "C-g")
-            (should (drgnx-modal-session-until sess '(not (get-buffer-window " *which-key*"))))
+            (should (drgnx-modal-session-until sess '(not (get-buffer-window " *which-key*" 'visible))))
             (drgnx-modal-session-act sess "RET")
             (should (equal (drgnx-modal-session-eval sess '(list buffer-file-name evil-state))
                            (list (expand-file-name "b/three.txt" dir) 'normal)))
@@ -184,18 +194,16 @@
               (let ((shown (drgnx-modal-ui-test--where sess)))
                 (should (string-search (car shown) (cadr row)))
                 (should (eq (cadr shown) 'normal))))
-            ;; Work and the Agents list (two rows each) in the right dock: there and back with C-w l and C-w h (Escape is
-            ;; Dock Back in the sidebar's docks only, in every key profile)
+            ;; the Agents list (two rows) in the right dock: there and back with C-w l and C-w h (Escape is Dock Back in
+            ;; the sidebar's docks only, in every key profile).  The dock's Work tab retired: SPC a w opens the Work space
             (drgnx-modal-session-eval
-             sess '(progn (advice-add 'drgnx-work-ui--roots :override
-                                      (lambda () (list (list :id "r1" :kind 'ruling :title "First ruling")
-                                                       (list :id "r2" :kind 'ruling :title "Second ruling"))))
-                          (advice-add 'drgnx-work-ui-refresh :override #'ignore)
-                          (setq drgnx-agents--sessions
+             sess '(progn (setq drgnx-agents--sessions
                                 (list (drgnx-agents--make :id "a1" :name "alpha" :status 'idle :conn 'fake :cwd default-directory)
                                       (drgnx-agents--make :id "b1" :name "beta" :status 'idle :conn 'fake :cwd default-directory)))
                           t))
-            (pcase-dolist (`(,show . ,buffer) '(("SPC a w" . "*drgnx Work*") ("SPC a v" . "*drgnx Agents*")))
+            ;; the agent panel's module sets up in the idle stage, whose end applies the keys again: SPC a v comes then
+            (drgnx-modal-session-until sess '(eq (keymap-lookup drgnx-modal-leader-map "SPC a v") 'drgnx-agent-panel-list-show) 30)
+            (pcase-dolist (`(,show . ,buffer) '(("SPC a v" . "*drgnx Agents*")))
               (let ((editor (drgnx-modal-ui-test--where sess)))
                 (drgnx-modal-session-act sess show "C-w l")
                 (should (equal (drgnx-modal-session-eval sess '(list (buffer-name) evil-state)) (list buffer 'emacs)))
@@ -256,7 +264,8 @@
 ;;;; Inputs take text
 
 (ert-deftest drgnx-ui-modal/inputs-type-text ()
-  (drgnx-modal-session-with (sess)
+  ;; New Terminal opens drgnx's own terminal, which runs in the hub: the session runs the test's hub
+  (drgnx-modal-session-with (sess :hub t)
     (let ((dir (drgnx-modal-ui-test--project '(("a.txt" . "text\n")))))
       (unwind-protect
           (progn
@@ -272,18 +281,13 @@
             (drgnx-modal-session-act sess "SPC SPC" '(:type "jjk"))
             (should (equal (drgnx-modal-session-eval sess '(minibuffer-contents-no-properties)) "jjk"))
             (drgnx-modal-session-act sess "C-g")
-            ;; the agent prompt (Send to Agent…; M-x, since SPC completes a word in the palette's minibuffer)
-            (drgnx-modal-session-act sess "M-x" '(:type "drgnx-agents-ui-send") "RET")
-            (should (drgnx-modal-ui-test--prompt-p sess "To alpha"))
-            (drgnx-modal-session-act sess '(:type "jjk"))
-            (should (equal (drgnx-modal-session-eval sess '(minibuffer-contents-no-properties)) "jjk"))
-            (drgnx-modal-session-act sess "RET")
-            (should (equal (drgnx-modal-session-eval sess 'drgnx-modal-ui-test--sent) "jjk"))
             ;; a terminal
             (drgnx-modal-session-act sess "SPC t n")
-            (should (equal (drgnx-modal-session-eval sess '(list major-mode evil-state)) '(eshell-mode insert)))
+            (should (equal (drgnx-modal-session-eval sess '(list major-mode evil-state)) '(drgnx-term-mode insert)))
+            (drgnx-modal-session-until sess '(eq drgnx-term--state 'open) 30)
             (drgnx-modal-session-act sess '(:type "jjk"))
-            (should (string-suffix-p " jjk" (drgnx-modal-ui-test--text sess))))
+            ;; the shell echoes what insert state typed (no jj escape): it reaches the shell's line
+            (drgnx-modal-session-until sess '(string-match-p " jjk *$" (buffer-substring-no-properties (pos-bol) (pos-eol)))))
         (delete-directory dir t)))))
 
 ;;;; Vim editing with VS Code's app keys

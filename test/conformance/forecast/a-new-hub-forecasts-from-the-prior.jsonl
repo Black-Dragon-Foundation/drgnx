@@ -1,0 +1,12 @@
+{"scenario": "forecast/a-new-hub-forecasts-from-the-prior", "requires": ["v1", "test-hooks"], "doc": "forecast/get on a fresh store: both tasks of a proposed plan are forecast from the labelled prior (basis level prior, n 0), with a range for tokens, active time and wall time, and a session unknown to the hub is refused by forecast/session. Pattern B: the hub's clock is virtual, so made_at is a fixed number. That p90 is above p50 is the unit test a_sessions_forecast_is_one_task_of_its_role_and_profile: the matcher has no comparison."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "write_file", "path": "$ROOT/plan.md", "text": "# Pair\n\n**Repo:** $ROOT/repo\n\n### Task 1: One\n\n**Role:** implement\n\nDo it.\n\n### Task 2: Two\n\n**Role:** review\n**Depends:** Task 1\n\nCheck it.\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/propose", "params": {"plan": "$ROOT/plan.md"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:job"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "forecast/get", "params": {"job": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"tasks": [{"n": 1, "role": "implement", "basis": {"level": "prior", "n": 0, "other_model": false, "calibrated": false, "label": "no history: prior"}, "tokens": {"p50": "$number", "p90": "$number"}, "active_secs": {"p50": "$number", "p90": "$number"}}, {"n": 2, "role": "review", "basis": {"level": "prior", "n": 0}}], "tokens": {"p50": "$number", "p90": "$number"}, "wall_secs": {"p50": "$number", "p90": "$number"}, "prices_as_of": "2026-11-01", "made_at": "$number"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "forecast/session", "params": {"session": "nosuchsession"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "error": {"message": "$string"}}}

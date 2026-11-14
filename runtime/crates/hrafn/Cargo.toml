@@ -1,0 +1,41 @@
+[package]
+name = "hrafn"
+description = "Code search: the code store (files, chunks, FTS columns, symbols, content-keyed vectors), the file list and the chunker"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+# The host-side doors (git CLI, the gix door of touched trees, file watcher) behind the `Git`, `TreeGit` and `Watch` traits.
+default = ["host"]
+host = ["dep:notify", "dep:gix", "dep:inotify", "dep:libc"]
+
+[dependencies]
+eitri = { path = "../eitri", version = "0.1.0" }
+gix = { workspace = true, optional = true }
+urdr = { path = "../urdr", version = "0.1.0" }
+serde.workspace = true
+serde_json.workspace = true
+regex.workspace = true
+rusqlite.workspace = true
+sha2.workspace = true
+tree-sitter.workspace = true
+skald = { path = "../skald", version = "0.1.0" }  # the packs' manifests: the chunker's rules (chunk::registry)
+ast-grep-core.workspace = true
+tree-sitter-elisp.workspace = true
+
+# inotify directly on Linux and Android (a mask of our own, no IN_OPEN); notify's FSEvents on macOS
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
+inotify = { workspace = true, optional = true }
+libc = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+notify = { workspace = true, optional = true }
+
+[dev-dependencies]
+drgnx-exe = { path = "../drgnx-exe", version = "0.1.0" }  # stand-in scripts written and run, never busy (ETXTBSY)
+skuld = { path = "../skuld", version = "0.1.0" }  # every order of the settle core
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "macros"] }

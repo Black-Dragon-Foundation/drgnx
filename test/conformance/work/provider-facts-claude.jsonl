@@ -1,0 +1,17 @@
+{"scenario": "work/provider-facts-claude", "requires": ["v1", "test-hooks"], "doc": "A Claude session's tool steps carry what they read, searched or fetched, taken by tool name from the provider's own fields: a Read with its lines (the end only from the limit), a Grep's pattern, WebSearch as a search though ACP's kind is fetch, a WebFetch URL, a Write's path and no content. Read back from timeline/get. Pattern B (the turn's last step is the gate)."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "provider:read src/a.rs 10 5\nprovider:grep needle\nprovider:web-search rust release\nprovider:web-fetch https://example.test/a\nprovider:write out.txt\nsay done"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"turn_id": "t1", "class": "think"}}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "timeline/get", "params": {"scope": "session", "id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"steps": {"$contains": [{"class": "tool", "tool_kind": "read", "detail": {"tool": "Read", "kind": "read", "path": "src/a.rs", "line_start": 10, "line_end": 14, "origin": "acp"}}, {"class": "tool", "tool_kind": "search", "detail": {"tool": "Grep", "kind": "search", "query": "needle", "origin": "acp"}}, {"class": "tool", "tool_kind": "fetch", "detail": {"tool": "WebSearch", "kind": "search", "query": "rust release", "origin": "acp"}}, {"class": "tool", "tool_kind": "fetch", "detail": {"tool": "WebFetch", "kind": "fetch", "url": "https://example.test/a", "origin": "acp"}}, {"class": "tool", "tool_kind": "edit", "detail": {"tool": "Write", "kind": "edit", "path": "out.txt", "query": "$absent", "origin": "acp"}}]}}}}

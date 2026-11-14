@@ -26,6 +26,7 @@
 (declare-function drgnx-perf-ab-env "drgnx-perf-run")
 (declare-function drgnx-perf-ab "drgnx-perf-run")
 (declare-function drgnx-bench-run "drgnx-bench")
+(declare-function drgnx-look-scenes-run "drgnx-look-scenes")
 
 (defconst drgnx-ui-harness-dir (file-name-directory (or load-file-name buffer-file-name)))
 (defconst drgnx-ui-repo-dir (file-name-directory (directory-file-name drgnx-ui-harness-dir)))
@@ -48,8 +49,8 @@ this at an exported REF.")
   "The MCP client's token (`drgnx-ui-mcp--token') while it starts a session: session.json's :owner :client.")
 (defconst drgnx-ui-keep-env
   '("USER" "LOGNAME" "LANG" "LC_ALL" "PATH" "GRYPHN_EMACS_DIR" "DRGNX_STARTUP_TRACE"
-    "DRGNX_UITEST_SETTLE_SCALE" "DRGNX_MODAL_ELPA" "DRGNX_CHILDFRAME_ELPA" "DRGNX_CHILDFRAME_REQUIRED" "DRGNX_LEASE_HELD" "DRGNX_PERF_GLITNIR"
-    "DRGNX_PERF_WATCHDOG")
+    "DRGNX_UITEST_SETTLE_SCALE" "DRGNX_UITEST_TICK" "DRGNX_MODAL_ELPA" "DRGNX_CHILDFRAME_ELPA" "DRGNX_CHILDFRAME_REQUIRED" "DRGNX_LEASE_HELD" "DRGNX_PERF_GLITNIR"
+    "DRGNX_PERF_WATCHDOG" "DRGNX_PERF_WORKERS")
   "The only variables a session inherits; everything else (keys, tokens) stays out.  Not HOME: a session's is
 RUN/home (`drgnx-ui-session-env').")
 (defvar drgnx-ui-session-tier 'ui
@@ -610,6 +611,16 @@ without its \"drgnx-ui-\" (the socket inside it has the whole NAME)."
 (defun drgnx-ui--save (sess)
   (drgnx-ui--write (expand-file-name "session.json" (plist-get sess :run)) (drgnx-ui--json sess)))
 
+(defun drgnx-ui-size-at-scale (size)
+  "SIZE (\"WxH\"), the monitor a row names at scale 1, in device pixels at the tier's scale: the same logical
+monitor at every scale.  The tier's scale is the largest of $DRGNX_UI_SCALES, else $DRGNX_UI_SCALE, else 1.
+Mutter has no scale 2 for a monitor that small in device pixels: 1400x800 at 2 is 700x400 logical, below its
+minimum (\"Scale 2.0 not supported by mode\"), and the session never starts."
+  (let* ((env (let ((l (getenv "DRGNX_UI_SCALES"))) (if (member l '(nil "")) (getenv "DRGNX_UI_SCALE") l)))
+         (s (apply #'max 1 (mapcar #'string-to-number (split-string (or env "") " " t))))
+         (wh (mapcar #'string-to-number (split-string size "x"))))
+    (format "%dx%d" (round (* s (car wh))) (round (* s (cadr wh))))))
+
 (defun drgnx-ui-prepare-run (name &optional config size root daemon monitors compositor scales)
   "Create the run directory for session NAME under ROOT; return the session plist.
 DAEMON non-nil: Emacs runs as a daemon (no frame until `drgnx-ui-new-frame').
@@ -694,7 +705,7 @@ variables (a later entry wins): a test puts a package's directory on the daemon'
 \(`drgnx-tty-session-kitty-start').  Nil for every session the CLI and the MCP server start.  Only names in
 `drgnx-ui-session-extra-env-names' are taken; anything else signals.")
 
-(defconst drgnx-ui-session-extra-env-names '("EMACSLOADPATH" "DRGNX_PERF_GLITNIR" "DRGNX_PERF_WATCHDOG")
+(defconst drgnx-ui-session-extra-env-names '("EMACSLOADPATH" "DRGNX_PERF_GLITNIR" "DRGNX_PERF_WATCHDOG" "DRGNX_PERF_WORKERS")
   "The variables `drgnx-ui-session-extra-env' may set.  Not HOME, DISPLAY, the bus, XDG_RUNTIME_DIR or TMPDIR:
 a later entry wins, so one of those would move a session out of its run directory or onto the user's desktop.")
 
@@ -1147,15 +1158,24 @@ refusing a session the harness cannot own"
          (or legacy-ok (drgnx-ui--refuse "%s" drgnx-ui-legacy-message)))
         (t (drgnx-ui--refuse "%S is not a drgnx harness session (drgnx-ui-N-HEX)" name))))
 
+(defun drgnx-ui--group-live-p (pgid)
+  "Non-nil while process group PGID has a member."
+  (eq 0 (car (drgnx-ui--run "pgrep" "-g" pgid))))
+
 (defun drgnx-ui--stop-group (pgid run)
-  "TERM process group PGID if it is RUN's session, KILL it if it is still there after 2 s."
+  "TERM process group PGID if it is RUN's session, KILL it if it is still there after 2 s; return once it is gone
+\(at most 2 s more).  Every member is waited for, not only those whose command lines name RUN: Emacs under the
+compositor saves its state into RUN on TERM, and the caller deletes RUN next."
   (when (drgnx-ui--group-ours-p pgid run)
     (drgnx-ui--run "kill" "-TERM" "--" (concat "-" pgid))
     (let ((deadline (+ (float-time) 2)))
-      (while (and (drgnx-ui--group-ours-p pgid run) (< (float-time) deadline))
+      (while (and (drgnx-ui--group-live-p pgid) (< (float-time) deadline))
         (sleep-for 0.05)))
-    (when (drgnx-ui--group-ours-p pgid run)
-      (drgnx-ui--run "kill" "-KILL" "--" (concat "-" pgid)))))
+    (when (drgnx-ui--group-live-p pgid)
+      (drgnx-ui--run "kill" "-KILL" "--" (concat "-" pgid))
+      (let ((deadline (+ (float-time) 2)))
+        (while (and (drgnx-ui--group-live-p pgid) (< (float-time) deadline))
+          (sleep-for 0.05))))))
 
 (defun drgnx-ui--display-in-use-p (name)
   "Non-nil while some process serves Wayland display NAME."
@@ -1435,9 +1455,9 @@ never a drag from 0,0."
     (list (car from) (cdr from) (car to) (cdr to) button steps)))
 
 (defun drgnx-ui-act (sess action)
-  "Queue ACTION in SESS: (:keys K), (:type T), (:buffer B :text T), (:x X :y Y) or
+  "Queue ACTION in SESS: (:keys K), (:type T), (:pause SECS), (:buffer B :text T), (:x X :y Y) or
 (:drag (:from (X . Y) :to (X . Y) :steps N :button B)), with optional :button, :count,
-:hold_ms (not for :drag).  Returns the API's reply."
+:hold_ms (not for :drag).  :pause is SECS of no input before the next action.  Returns the API's reply."
   (let ((opts (mapconcat (lambda (k) (drgnx-ui-el (plist-get action k)))
                          '(:button :count :hold_ms) " ")))
     (cond
@@ -1445,6 +1465,10 @@ never a drag from 0,0."
       (drgnx-ui-call sess (format "(drgnx-uitest-api-keys %s)" (drgnx-ui-el (plist-get action :keys)))))
      ((plist-member action :type)
       (drgnx-ui-call sess (format "(drgnx-uitest-api-type %s)" (drgnx-ui-el (plist-get action :type)))))
+     ((plist-member action :pause)
+      (let ((secs (plist-get action :pause)))
+        (unless (and (numberp secs) (>= secs 0)) (drgnx-ui--fail "a pause is seconds, not %S" secs))
+        (drgnx-ui-call sess (format "(drgnx-uitest-api-pause %s)" secs))))
      ((plist-member action :drag)
       (pcase-let ((`(,fx ,fy ,tx ,ty ,button ,steps) (drgnx-ui--drag-spec (plist-get action :drag))))
         (drgnx-ui-call sess (format "(drgnx-uitest-api-drag %d %d %d %d %d %s)" fx fy tx ty button
@@ -1456,7 +1480,7 @@ never a drag from 0,0."
      ((and (plist-member action :x) (plist-member action :y))
       (drgnx-ui-call sess (format "(drgnx-uitest-api-click %d %d %s)"
                                   (truncate (plist-get action :x)) (truncate (plist-get action :y)) opts)))
-     (t (drgnx-ui--fail "unknown action %S: use keys, type, buffer+text, x+y or drag" action)))))
+     (t (drgnx-ui--fail "unknown action %S: use keys, type, pause, buffer+text, x+y or drag" action)))))
 
 (defun drgnx-ui-wait (sess &optional quiet-ms timeout-s)
   "Poll SESS until settled (QUIET-MS without change); t, or nil after TIMEOUT-S."
@@ -1827,6 +1851,15 @@ With a selector a half may select no test (the selector names tests of the other
          (insert-file-contents log)
          (seq-filter (lambda (l) (string-prefix-p "drgnx harness: " l)) (split-string (buffer-string) "\n" t)))))
 
+(defun drgnx-ui--hub-env ()
+  "The GUI suite's hub, as \"K=V\" strings: DRGNX_TEST_HUB_REQUIRED=1, so a hub row that finds no Ratatoskr fails
+instead of skipping (`drgnx-test-no-hub'), and DRGNX_RATATOSKR_BIN, which a session does not inherit: the caller's,
+else the checkout's debug build when there is one."
+  (let ((bin (or (getenv "DRGNX_RATATOSKR_BIN")
+                 (let ((b (expand-file-name "runtime/target/debug/ratatoskr" drgnx-ui-repo-dir)))
+                   (and (file-executable-p b) b)))))
+    (cons "DRGNX_TEST_HUB_REQUIRED=1" (and bin (list (concat "DRGNX_RATATOSKR_BIN=" bin))))))
+
 (defun drgnx-ui-run-ui-session-tests ()
   "The GUI suite (test/ui) in a session — the first half of `drgnx test --ui', alone for bin/drgnx check (which
 runs the live suite in shards).  Return an exit code."
@@ -1840,7 +1873,8 @@ runs the live suite in shards).  Return an exit code."
                                        selector (error-message-string err))))))
          ;; a narrowed run stays narrow in the session too
          (res (drgnx-ui-run-ert-session (expand-file-name "test/ui" drgnx-ui-repo-dir) timeout nil
-                                        (append (and selector (list (concat "DRGNX_TEST_SELECTOR=" selector)))
+                                        (append (drgnx-ui--hub-env)
+                                                (and selector (list (concat "DRGNX_TEST_SELECTOR=" selector)))
                                                 (and (equal (getenv "DRGNX_TEST_EMPTY_OK") "1") (list "DRGNX_TEST_EMPTY_OK=1")))))
          (rc (nth 0 res)) (results (nth 1 res)) (run (nth 2 res))
          (ok (and (eq rc 0) results (eq (plist-get results :failed) 0))))
@@ -1938,6 +1972,8 @@ CONFIG (default drgnx) and print each scenario: green, red (known) with its trac
                    (drgnx-ui-run-ert-session
                     dir (string-to-number (or (getenv "DRGNX_SCENARIO_TIMEOUT") "300")) config
                     (append (list (concat "DRGNX_SCENARIO_CONFIG=" (drgnx-ui--config-name config)))
+                            ;; the hub: on a Nidhogg with Sjá the Explorer's rows are the hub's listing
+                            (drgnx-ui--hub-env)
                             ;; a narrowed run stays narrow in the session too (M12f-A3-1)
                             (let ((s (getenv "DRGNX_TEST_SELECTOR")))
                               (and s (not (string-empty-p s)) (list (concat "DRGNX_TEST_SELECTOR=" s))))))))
@@ -1986,6 +2022,7 @@ CONFIG (default drgnx) and print each scenario: green, red (known) with its trac
   click NAME X Y | click NAME --buffer B --text T     [--button N] [--count N] [--hold-ms N]
   keys NAME KEYS | type NAME TEXT                     kbd syntax / literal text
   measure NAME ACTIONS-JSON                           several actions, one jank report
+  look-scenes OUT                                     the look's scenes as PNGs in OUT, for the mockups' side-by-side
   mcp                                                 serve the drgnx-ui MCP tools on stdio
   test-ui                                             the --ui test tier
   test-ui-session                                     its test/ui half alone (bin/drgnx check)
@@ -2049,6 +2086,8 @@ a boolean flag (`drgnx-ui--boolean-flags') becomes :name t."
       ("type" (drgnx-ui-measure (drgnx-ui-own-session name) (list (list :type (nth 1 pos)))))
       ("measure" (drgnx-ui-measure (drgnx-ui-own-session name)
                                    (append (drgnx-ui--parse-json (or (nth 1 pos) "[]")) nil)))
+      ("look-scenes" (require 'drgnx-look-scenes (expand-file-name "drgnx-look-scenes" drgnx-ui-harness-dir))
+       (drgnx-look-scenes-run (or name (drgnx-ui--fail "look-scenes needs OUT, a directory for the PNGs"))))
       ("test-ui" (drgnx-ui-run-ui-tests))
       ("test-ui-session" (drgnx-ui-run-ui-session-tests))
       ("test-scenario" (drgnx-ui-run-scenarios (plist-get opts :config) (plist-get opts :dir)))
@@ -2059,7 +2098,8 @@ a boolean flag (`drgnx-ui--boolean-flags') becomes :name t."
           ((getenv "DRGNX_PERF_AB")
            (drgnx-perf-ab (getenv "DRGNX_PERF_AB") :n (string-to-number (or (getenv "DRGNX_PERF_AB_N") "100"))))
           ((getenv "DRGNX_PERF_AB_ENV")
-           (drgnx-perf-ab-env (getenv "DRGNX_PERF_AB_ENV") :n (string-to-number (or (getenv "DRGNX_PERF_AB_N") "100"))))
+           (drgnx-perf-ab-env (getenv "DRGNX_PERF_AB_ENV") :n (string-to-number (or (getenv "DRGNX_PERF_AB_N") "100"))
+                              :aa (not (getenv "DRGNX_PERF_NO_AA"))))
           (t (drgnx-perf-run (getenv "DRGNX_PERF_AUDIT"))))))
       ("test-soak" (require 'drgnx-perf-run)
        (let ((drgnx-ui-session-tier 'perf)) (drgnx-perf-soak (and (car pos) (string-to-number (car pos))))))

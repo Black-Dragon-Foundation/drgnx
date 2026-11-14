@@ -91,9 +91,89 @@ pub fn summarise(kind: CheckKind, exit: Option<i32>, text: &str, log: &str) -> E
     }
 }
 
+/// The line of a job whose rows ran over several attempts: `rows 1–212 on desktop (attempt 1), 213–240 on laptop
+/// (attempt 2)`, numbered in LISTED's order from 1, each run of rows from one attempt and machine a part; a row with no
+/// result ends a part. None when one attempt gave every row.
+pub fn split_line(
+    listed: &[String],
+    union: &std::collections::BTreeMap<String, crate::runners::attempts::RowResult>,
+) -> Option<String> {
+    // (first, last, attempt, machine) of each part, in listing order
+    let mut parts: Vec<(usize, usize, u32, &str)> = Vec::new();
+    let mut open = false;
+    for (i, row) in listed.iter().enumerate() {
+        let Some(r) = union.get(row) else {
+            open = false;
+            continue;
+        };
+        match parts.last_mut() {
+            Some(p) if open && p.2 == r.attempt && p.3 == r.machine => p.1 = i + 1,
+            _ => parts.push((i + 1, i + 1, r.attempt, &r.machine)),
+        }
+        open = true;
+    }
+    let first = parts.first()?.2;
+    if parts.iter().all(|p| p.2 == first) {
+        return None;
+    }
+    let text: Vec<String> = parts
+        .iter()
+        .map(|&(a, b, attempt, machine)| {
+            let span = if a == b {
+                a.to_string()
+            } else {
+                format!("{a}–{b}")
+            };
+            format!("{span} on {machine} (attempt {attempt})")
+        })
+        .collect();
+    Some(format!("rows {}", text.join(", ")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // [D] pure
+    #[test]
+    fn summary_shows_the_split() {
+        use crate::runners::attempts::RowResult;
+        let listed: Vec<String> = (1..=240).map(|i| format!("t{i}")).collect();
+        let at = |attempt: u32, machine: &str| RowResult {
+            verdict: "pass".into(),
+            attempt,
+            machine: machine.into(),
+        };
+        let mut u = std::collections::BTreeMap::new();
+        for (i, row) in listed.iter().enumerate() {
+            let r = if i < 212 {
+                at(1, "desktop")
+            } else {
+                at(2, "laptop")
+            };
+            u.insert(row.clone(), r);
+        }
+        assert_eq!(
+            split_line(&listed, &u).as_deref(),
+            Some("rows 1–212 on desktop (attempt 1), 213–240 on laptop (attempt 2)")
+        );
+        // a row with no result ends a part; a part of one row is its number
+        u.remove("t100");
+        u.insert("t240".into(), at(3, "desktop"));
+        assert_eq!(
+            split_line(&listed, &u).as_deref(),
+            Some(
+                "rows 1–99 on desktop (attempt 1), 101–212 on desktop (attempt 1), 213–239 on laptop (attempt 2), \
+                 240 on desktop (attempt 3)"
+            )
+        );
+        // one attempt gave every row: no split to show
+        let one: std::collections::BTreeMap<String, RowResult> = listed
+            .iter()
+            .map(|r| (r.clone(), at(1, "desktop")))
+            .collect();
+        assert_eq!(split_line(&listed, &one), None);
+    }
 
     #[test]
     fn cargo_failures() {

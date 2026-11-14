@@ -131,8 +131,11 @@ afterwards.  (cdr SPEC) :kkp t: skip unless kkp is there; :size: kitty's size in
                                  (derived-mode-p 'drgnx-explorer-mode)))
     ;; ctrl+`: the panel, its tab row with the Terminal tab
     (should-not (drgnx-tty-session-eval s `(drgnx-wb-area-window 'panel ,drgnx-tty-kitty-test--frame)))
+    ;; a terminal tab with a buffer of its own: Toggle Terminal shows it and starts no shell, which would take the keys after
+    (drgnx-tty-session-eval s `(with-selected-frame ,drgnx-tty-kitty-test--frame (drgnx-wb-area-show 'panel 'terminal (get-buffer-create "*terminal*"))
+                                                    (drgnx-wb-area-hide 'panel)))
     (drgnx-tty-session-kitty-key s "ctrl+`")
-    (drgnx-tty-keys-test--ran s 'drgnx-wb-toggle-panel "C-`")
+    (drgnx-tty-keys-test--ran s 'drgnx-terminal-toggle "C-`")
     (drgnx-tty-session-wait s `(drgnx-wb-area-window 'panel ,drgnx-tty-kitty-test--frame))
     (drgnx-tty-session-wait-screen s "Problems +Output +Results +Terminal" 10)
     ;; ctrl+.: the code actions (Quick Fix)
@@ -182,7 +185,7 @@ screen.  Returns its directory."
                                         (drgnx-wb-show-sidebar)
                                         (drgnx-wb-show-in-editor (find-file-noselect ,(expand-file-name "a.txt" dir)) t)
                                         t))
-    (drgnx-tty-session-wait-screen s "EXPLORER")
+    (drgnx-tty-session-wait-screen s drgnx-tty-session-explorer-heading)
     (drgnx-tty-session-wait-screen s "alpha beta gamma")
     (drgnx-tty-session-wait-screen s "b\\.txt")
     dir))

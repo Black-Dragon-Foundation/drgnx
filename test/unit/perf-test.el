@@ -30,7 +30,7 @@
   (let ((r (list 'tabs :input (drgnx-perf-stats '(1 2 3 400)))))
     (should-not (drgnx-perf-verdict (list r) '((tabs (:input :p95) 16))))
     (should (equal (drgnx-perf-report (list r) '((tabs (:input :p95) 16) (tabs (:input :p90) 16)))
-                   '("tabs input p95 - (budget 16): reported (wall clock; judge with --perf --ab)"
+                   '("tabs input p95 - (n=4, under 100: not judged) (budget 16): reported (wall clock; judge with --perf --ab)"
                      "tabs input p90 400 (budget 16): reported (wall clock; judge with --perf --ab)")))))
 
 (defvar drgnx-perf-test--rows-a 0)
@@ -52,6 +52,17 @@
   (drgnx-perf-begin)
   (mapc #'drgnx-perf-test--command works)
   (drgnx-perf-end))
+
+(ert-deftest drgnx-perf/a-commands-latency-ends-with-its-post-command-hook ()
+  "The latency was recorded by a 0 s timer after the hook, so it ended when the session's event loop next ran a timer:
+under the harness that is the next tick of its paced input (40 ms: input p95 40.3, 30.3 at a 30 ms tick).  The sample
+is complete when the hook returns.  Pattern D: no turn of the event loop between the hook and the check."
+  (drgnx-perf-begin)
+  (unwind-protect
+      (progn (run-hooks 'pre-command-hook)
+             (run-hooks 'post-command-hook)
+             (should (= (length drgnx-perf--latencies) 1)))
+    (drgnx-perf-end)))
 
 (ert-deftest drgnx-perf/per-command-alloc-cpu-and-wall ()
   :tags '(:cond)
@@ -326,5 +337,50 @@
                        1.2))
           (should (drgnx-perf--history file)))
       (delete-directory dir t))))
+
+(ert-deftest drgnx-perf/a-tail-of-too-few-samples-is-not-judged ()
+  ;; a workload that drew 50 layouts: its p95 is nil, and the report says why instead of a bare dash or an error
+  (let* ((results '((w :relayout (:n 50 :p50 5.0 :p90 9.0 :p95 nil :p99 nil :max 12.0 :mean 6.0))))
+         (budgets '((w (:relayout :p95) 50))))
+    (should (equal (drgnx-perf-report results budgets)
+                   '("w relayout p95 - (n=50, under 100: not judged) (budget 50): reported (wall clock; judge with --perf --ab)")))
+    (should-not (drgnx-perf-verdict results budgets))
+    (should-not (drgnx-perf-regressions (make-temp-name (expand-file-name "no-history" temporary-file-directory))
+                                        results '((:relayout :p95))))))
+
+(defun drgnx-perf-test--allocate ()
+  "Make about 40 MB of lists, for the memory profiler to sample."
+  (dotimes (_ 50) (make-list 50000 'x)))
+
+(ert-deftest drgnx-perf/profiled-reports-where-memory-went-even-when-it-signals ()
+  "Pattern D: the profile report names the function that allocated, under its caller, and is written when the
+thunk signals too; the profilers are off after."
+  (let ((file (make-temp-file "drgnx-perf-profile" nil ".txt")))
+    (unwind-protect
+        (progn
+          (should (eq 'done (drgnx-perf-profiled file (lambda () (drgnx-perf-test--allocate) 'done))))
+          (should-not (profiler-memory-running-p))
+          (let ((text (with-temp-buffer (insert-file-contents file) (buffer-string))))
+            (should (string-match-p "^== Memory: call paths$" text))
+            (should (string-match-p "^== Memory: most sampled, with their callers$" text))
+            (should (string-match-p "%  +[0-9]+  .*drgnx-perf-test--allocate$" text)))
+          (delete-file file)
+          (should-error (drgnx-perf-profiled file (lambda () (drgnx-perf-test--allocate) (error "Boom"))))
+          (should (file-exists-p file))
+          (should-not (profiler-memory-running-p)))
+      (when (file-exists-p file) (delete-file file)))))
+
+(ert-deftest drgnx-perf/a-profile-can-start-and-end-in-separate-calls ()
+  "Pattern D: `drgnx-perf-profile-begin' and `drgnx-perf-profile-end' bracket work that spans several calls (a
+workload's typed keys), and the report names what allocated in between."
+  (let ((file (make-temp-file "drgnx-perf-profile" nil ".txt")))
+    (unwind-protect
+        (progn
+          (drgnx-perf-profile-begin)
+          (drgnx-perf-test--allocate)
+          (drgnx-perf-profile-end file)
+          (should-not (profiler-memory-running-p))
+          (should (string-match-p "drgnx-perf-test--allocate$" (with-temp-buffer (insert-file-contents file) (buffer-string)))))
+      (when (file-exists-p file) (delete-file file)))))
 
 ;;; perf-test.el ends here

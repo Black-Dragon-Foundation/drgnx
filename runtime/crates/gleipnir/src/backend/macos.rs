@@ -28,6 +28,11 @@ pub const PROFILE_PREFIX: &str = "profile-";
 /// is refused here with a reason instead of failing the exec with `E2BIG`.
 pub const MAX_INLINE: usize = 256 * 1024;
 
+/// Whether a profile of `len` bytes may travel in argv (exactly [`MAX_INLINE`] still does).
+fn inline_fits(len: usize) -> bool {
+    len <= MAX_INLINE
+}
+
 /// What to spawn: `program` with `args`, exactly `env`, in `cwd`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Run {
@@ -91,7 +96,7 @@ pub fn prepare(
             })?;
             ("-f", file.clone().into_os_string(), Some(file))
         }
-        None if text.len() > MAX_INLINE => {
+        None if !inline_fits(text.len()) => {
             let msg = format!(
                 "seatbelt: the profile is {} bytes, more than {MAX_INLINE} can pass in argv without a session dir",
                 text.len()
@@ -215,6 +220,9 @@ mod tests {
             tmp: Some(root.join("tmp")),
             layers: Layers::for_target(Target::Macos),
             extra_tcp_ports: vec![],
+            rlimits: None,
+            trace: Default::default(),
+            browser: None,
         };
         (top, spec)
     }
@@ -414,6 +422,13 @@ mod tests {
             assert_eq!(e.rule, Rule::Malformed, "{cmd:?}");
         }
         prepare(&valid, &mac, &fake_sandbox_exec(), &["true".to_owned()]).unwrap();
+    }
+
+    #[test]
+    fn the_inline_limit_is_exact() {
+        assert!(inline_fits(0));
+        assert!(inline_fits(MAX_INLINE));
+        assert!(!inline_fits(MAX_INLINE + 1));
     }
 
     #[test]

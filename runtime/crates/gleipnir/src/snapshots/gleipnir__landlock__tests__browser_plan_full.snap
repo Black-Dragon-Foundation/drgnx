@@ -1,0 +1,27 @@
+---
+source: crates/gleipnir/src/landlock.rs
+expression: render_desc(&d)
+---
+== ABI 9
+handled fs: execute write_file read_file read_dir remove_dir remove_file make_char make_dir make_reg make_sock make_fifo make_block make_sym refer truncate resolve_unix
+handled net: bind_tcp connect_tcp
+scoped: abstract_unix_socket signal
+tcp ports: [3000, 3001, 3130, 4173, 4200, 5000, 5173, 8000, 8080, 8888]
+tcp bind ports: []
+/bin: execute read_file read_dir
+/dev/null: execute write_file read_file read_dir
+/dev/random: execute read_file read_dir
+/dev/shm: write_file remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/dev/urandom: execute read_file read_dir
+/dev/zero: execute read_file read_dir
+/etc: execute read_file read_dir
+/lib: execute read_file read_dir
+/lib64: execute read_file read_dir
+/opt: execute read_file read_dir
+/proc: execute read_file read_dir
+/run/gleipnir: execute read_file read_dir
+/sbin: execute read_file read_dir
+/tmp/drgnx-browser: execute write_file read_file read_dir remove_dir remove_file make_dir make_reg make_sock make_fifo make_sym refer truncate
+/usr: execute read_file read_dir
+/usr/lib64/chromium-browser: execute read_file read_dir
+/var/cache/fontconfig: execute read_file read_dir

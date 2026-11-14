@@ -1,0 +1,18 @@
+# The debug adapters' image, drgnx-debug-adapters:f45 (docs/develop/testing.md, "Live debug adapters"): the live
+# debugger tests run real adapters in it (they are local programs, not outside services), and nothing downloads at test
+# time: every adapter is pinned here by version and SHA-256.
+#   podman build --memory 4g --memory-swap 4g --build-arg BASE=IMAGE -t drgnx-debug-adapters:f45 \
+#     -f test/container/Containerfile.debug test/container
+# BASE is an image with Nidhogg as emacs, gcc and bubblewrap (the dev image of Nidhogg's integration line).
+# Runs need ptrace for delve and lldb-dap: `--cap-add=SYS_PTRACE` (podman's default seccomp profile then allows
+# ptrace); lldb-dap's launch turns off address randomisation, which that profile refuses, so its scenarios set
+# `disableASLR: false`. gdb is there for debugpy's attach to a PID (it injects its server through gdb on Linux).
+# Nidhogg is BASE's (Containerfile ran nidhogg.sh); the ENV below names the same pinned build, so a pin bump changes
+# this file too.
+# on: drgnx-test
+ARG BASE=localhost/drgnx-test:f45
+FROM ${BASE}
+ENV DRGNX_EMACS=/opt/nidhogg/31.1-nidhogg.5/bin/nidhogg
+ENV DOTNET_ROOT=/opt/dotnet DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
+COPY debug-adapters-image.sh /tmp/
+RUN bash /tmp/debug-adapters-image.sh && rm /tmp/debug-adapters-image.sh

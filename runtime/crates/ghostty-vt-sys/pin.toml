@@ -1,0 +1,14 @@
+# The pinned libghostty-vt release (build.rs reads this; docs/develop/terminal.md, "Building the engine"). The tarballs
+# come from https://release.files.ghostty.org/libghostty-vt/VERSION/ and are signed (minisign key RWQlAjJC23149WL2sEpT/l0QKy7hMIFhYdQOFy0Z7z7PbneUgvlsnYcV);
+# the sha256 values below are those of the signed SHA256SUMS of that release. `fetch.sh` downloads and checks them;
+# build.rs never does. A bump changes version, both files and both sha256 lines together, and NOTICE.
+version = "1.0.0"
+zig = "0.17"
+
+[source]
+file = "libghostty-vt-1.0.0.tar.gz"
+sha256 = "4a6ef758be721923e1969e7b81b443dcc92d8dd3fb5a39600c03a8817a753676"
+
+[deps]
+file = "libghostty-vt-1.0.0-deps.tar.gz"
+sha256 = "4d5ea5e448e4c7ea8fb55ccbaa8668f2a97d44f438cee831e2b7ecd162d85c29"

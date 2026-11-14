@@ -21,7 +21,9 @@
     "(list[ \t]+\"emacs\"[ \t]+\"-"
     "'(\"emacs\"[ \t]+\"-"
     "\"-c\"[ \t]+\"emacs\\b"
-    "[ \t]\"emacs\"[ \t]*)+[ \t]*$")
+    ;; a fallback to the bare name: `(or (executable-find ...) "emacs")', `(if x y "emacs")', `(t "emacs")' -- not a list of
+    ;; names that merely holds the string (`(member source \'("git" "emacs"))')
+    "(\\(or\\|if\\|cond\\|t\\|executable-find\\)\\_>[^\n]*[ \t]\"emacs\"[ \t]*)+[ \t]*$")
   "Regexps for a Lisp line that starts the bare name as a subprocess.")
 
 (defconst drgnx-lint-bare-emacs--shell-pattern
@@ -73,6 +75,13 @@
     (unless (equal (car row) "test/unit/lint-bare-emacs-test.el")
       (should (file-exists-p (expand-file-name (car row) drgnx-dir)))
       (should (drgnx-lint-bare-emacs--hits (car row))))))
+
+(ert-deftest drgnx-lint-bare-emacs/a-list-of-names-is-no-subprocess ()
+  ;; the string "emacs" closing a data list (a source kind, a module name) starts nothing
+  (dolist (s '("(not (member source '(\"git\" \"builtin\" \"emacs\"))))" "(memq kind '(\"a\" \"emacs\"))" "  '(\"git\" \"emacs\"))"))
+    (should-not (seq-some (lambda (re) (string-match-p re s)) drgnx-lint-bare-emacs--lisp-patterns)))
+  (dolist (s '("(or (executable-find \"nidhogg\") \"emacs\"))" "(if nid nid \"emacs\")" "  (t \"emacs\"))"))
+    (should (seq-some (lambda (re) (string-match-p re s)) drgnx-lint-bare-emacs--lisp-patterns))))
 
 (ert-deftest drgnx-lint-bare-emacs/patterns-catch-the-forms ()
   (dolist (s '("(executable-find \"emacs\")" "(call-process \"emacs\" nil nil nil)" "  :command (list \"emacs\" \"--batch\")"

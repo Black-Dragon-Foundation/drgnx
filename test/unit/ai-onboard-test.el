@@ -85,32 +85,6 @@ known: no preset, so nothing running on this machine counts; no OpenRouter key."
       (should (memq (car r) '(info warn)))
       (should (string-match-p "no provider" (cadr r))))))
 
-(ert-deftest drgnx-onboard/the-ai-step-checks-chats-module-when-providers-work ()
-  :tags '(:frozen)
-  ;; a provider that answers is not Chat yet: the ide preset leaves extra/llm (gptel) off
-  (drgnx-ai-onboard-test--with
-    (drgnx-modules-update-state (lambda (s) (plist-put (copy-sequence s) :disabled '(extra/llm))))
-    (let ((r (drgnx-onboard--ai-step '(:interactive nil))))
-      (should (eq (car r) 'warn))
-      (should (string-match-p "chat: o/llama3:8b answered" (cadr r)))
-      (should (string-match-p "Chat needs module extra/llm" (cadr r))))
-    ;; run again, interactively: Keep, then the offer (declined: still a warning)
-    (drgnx-onboard--record 'ai 'warn "before")
-    (let* ((asked nil)
-           (r (cl-letf (((symbol-function 'completing-read)
-                         (lambda (prompt &rest _) (push prompt asked) "Keep"))
-                        ((symbol-function 'y-or-n-p) (lambda (prompt) (push prompt asked) nil)))
-                (drgnx-onboard--ai-step '(:interactive t)))))
-      (should (string-match-p "keep it or change it" (cadr asked)))
-      (should (equal (car asked) "Turn on Chat (module extra/llm)? "))
-      (should (eq (car r) 'warn))
-      (should (drgnx-module-disabled-p 'extra/llm)))
-    ;; module on: ok as before
-    (drgnx-modules-update-state (lambda (s) (plist-put (copy-sequence s) :disabled nil)))
-    (let ((r (drgnx-onboard--ai-step '(:interactive nil))))
-      (should (eq (car r) 'ok))
-      (should (string-match-p "Chat (module extra/llm) is on" (cadr r))))))
-
 (ert-deftest drgnx-ai-onboard/role-written-only-after-answer ()
   :tags '(:frozen)
   ;; A provider that never answers leaves the roles (settings.el) as they were, and the three test calls share one
@@ -767,77 +741,6 @@ while a step waits; until each end comes no virtual time passes."
       (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'linux)))
         (should (string-match-p "curl -fsSL https://ollama.com/install.sh | sh.*sudo"
                                 (cadr (drgnx-onboard--ai-setup 'ollama '(:interactive nil)))))))))
-
-(ert-deftest drgnx-onboard/chat-needs-its-module ()
-  :tags '(:frozen)
-  ;; the ide preset leaves extra/llm (gptel) off: a chat model that answers is not Chat yet.  Binary: OpenRouter is
-  ;; asked through the hub, which holds the key
-  (drgnx-ai-onboard-test--with-mac drgnx-ai-onboard-test--openai-answers
-    (let ((mock (drgnx-ai-test-mock-llm port script llm-log))
-          (process-environment (cons "OPENROUTER_API_KEY=sk-or-test-123" process-environment)))
-      (drgnx-ai-onboard-test--openrouter-in-settings)
-      (unwind-protect
-          (drgnx-test-with-ratatoskr root
-            (drgnx-modules-update-state (lambda (s) (plist-put (copy-sequence s) :disabled '(extra/llm))))
-            (let ((r (drgnx-onboard--ai-setup 'openrouter '(:interactive nil))))
-              (should (eq (car r) 'warn))
-              (should (string-match-p "Chat needs module extra/llm (Preferences: Modules)" (cadr r)))
-              (should (drgnx-module-disabled-p 'extra/llm)))
-            (let* ((asked nil)
-                   (r (cl-letf (((symbol-function 'y-or-n-p) (lambda (prompt) (push prompt asked) t))
-                                ((symbol-function 'drgnx-onboard--job) (lambda (&rest _) 'ok)))
-                        (drgnx-onboard--ai-setup 'openrouter '(:interactive t)))))
-              (should (equal asked '("Turn on Chat (module extra/llm)? ")))
-              (should-not (drgnx-module-disabled-p 'extra/llm))
-              (should (eq (car r) 'ok))
-              (should (string-match-p "Chat (module extra/llm) turned on" (cadr r)))))
-        (delete-process mock)))))
-
-(ert-deftest drgnx-onboard/chat-turned-on-installs-its-package ()
-  :tags '(:frozen)
-  ;; Turning Chat on installs gptel (the Look step's drgnx sync job) when drgnx's packages lack it; installed but
-  ;; not loaded in this Emacs, it is on from the next start.  Whether it is installed: drgnx's elpa, not load-path.
-  (let* ((root (file-name-as-directory (make-temp-file "drgnx-chat" t)))
-         (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" root "config") (concat "XDG_STATE_HOME=" root "state")
-                                            (concat "DRGNX_DATA_DIR=" root "data"))
-                                      process-environment))
-         (drgnx-onboard--restart-needed nil) (jobs nil) (done 'ok))
-    (unwind-protect
-        (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
-                  ((symbol-function 'locate-library) (lambda (&rest _) "/somewhere/gptel.el"))   ; never asked
-                  ((symbol-function 'drgnx-onboard--job) (lambda (what command &rest _) (push (cons what command) jobs) done)))
-          (make-directory (concat root "config") t)
-          (drgnx-modules-update-state (lambda (s) (plist-put (copy-sequence s) :disabled '(extra/llm))))
-          (let ((r (drgnx-onboard--chat-module '(:interactive t))))
-            (should (car r))
-            (should-not (drgnx-module-disabled-p 'extra/llm))
-            (should (equal (caar jobs) "Installing the packages"))
-            (should (equal (last (cdar jobs) 2) (list (expand-file-name "bin/drgnx" drgnx-dir) "sync")))
-            (should (string-match-p "loads at drgnx's next start" (cdr r))))      ; batch: no Finish offer promised
-          (should drgnx-onboard--restart-needed)
-          ;; on, not installed, without interaction: says how; nothing runs
-          (setq jobs nil)
-          (let ((r (drgnx-onboard--chat-module '(:interactive nil))))
-            (should (string-match-p "not installed yet: run drgnx sync" (cdr r)))
-            (should-not jobs))
-          ;; installed, not loaded in this Emacs: on from the next start, nothing installed again
-          (make-directory (expand-file-name "gptel-0.9.9" (drgnx-elpa-dir)) t)
-          (let ((r (drgnx-onboard--chat-module '(:interactive t))))
-            (should (car r))
-            (should-not jobs)
-            (should (string-match-p "loads at drgnx's next start" (cdr r))))
-          (drgnx-modules-update-state (lambda (s) (plist-put (copy-sequence s) :disabled '(extra/llm))))
-          (drgnx-onboard--chat-module '(:interactive t))
-          (should-not jobs)
-          ;; the install fails: Chat is not ready, and the result says why
-          (delete-directory (drgnx-elpa-dir) t)
-          (drgnx-modules-update-state (lambda (s) (plist-put (copy-sequence s) :disabled '(extra/llm))))
-          (setq done '(fail "Installing the packages failed (exit 1): no network" nil))
-          (let ((r (drgnx-onboard--chat-module '(:interactive t))))
-            (should-not (car r))
-            (should (string-match-p "no network" (cdr r)))
-            (should (string-match-p "drgnx sync" (cdr r)))))
-      (delete-directory root t))))
 
 (defun drgnx-ai-onboard-test--serving (command)
   "Running jobs whose command is COMMAND."

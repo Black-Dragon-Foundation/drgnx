@@ -1,0 +1,15 @@
+{"scenario": "plugins/a-changed-plugin-lists-its-approved-reach", "requires": ["v1"], "doc": "[B] When a plugin changes and its manifest now asks for more, plugins/list shows the current reach and, as approved_reach, the reach the user approved: the editor shows what grew. An approved plugin has no approved_reach."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "write_file", "path": "$ROOT/src/plugin.json", "json": {"name": "alpha", "version": "1.0.0", "hosts": ["api.example.com"], "abilities": [{"name": "echo", "description": "d", "input_schema": {"type": "object"}}]}}
+{"do": "write_file", "path": "$ROOT/src/plugin.wasm", "text": "wasm-one"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "run", "args": ["plugins", "install", "$ROOT/src"], "expect_code": 0, "expect_stdout": "installed alpha 1.0.0"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "plugins/list", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"plugins": [{"name": "alpha", "state": "unapproved", "hash": "$capture:h"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "plugins/approve", "params": {"name": "alpha", "hash": "$h"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"state": "approved", "abilities": ["echo"], "hosts": ["api.example.com:443"]}}, "within_ms": 10000}
+{"do": "write_file", "path": "$DATA/plugins/alpha/plugin.json", "json": {"name": "alpha", "version": "1.1.0", "hosts": ["api.example.com", "evil.example.org"], "abilities": [{"name": "echo", "description": "d", "input_schema": {"type": "object"}}, {"name": "more", "description": "d", "input_schema": {"type": "object"}}]}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "plugins/list", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"plugins": [{"name": "alpha", "state": "changed", "version": "1.1.0", "abilities": ["echo", "more"], "hosts": ["api.example.com:443", "evil.example.org:443"], "approved_reach": {"abilities": ["echo"], "hosts": ["api.example.com:443"], "hooks": []}}]}}, "within_ms": 10000}

@@ -117,6 +117,9 @@ mod tests {
             tmp: Some("/state/tmp-1".into()),
             layers: Layers::for_target(Target::LinuxReduced),
             extra_tcp_ports: vec![8080],
+            rlimits: None,
+            trace: Default::default(),
+            browser: None,
         }
     }
 
@@ -127,6 +130,8 @@ mod tests {
                 socket: "/rt/s/S1/proxy.sock".into(),
             }],
             mac_tcp_ports: vec![],
+            loopback: false,
+            mac_loopback_ports: vec![],
         }
     }
 

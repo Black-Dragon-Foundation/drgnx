@@ -1,0 +1,5 @@
+{"scenario": "cli/browser-install-bad-digest", "requires": ["v1"], "doc": "ratatoskr browser install (agent browser Task 17): an archive whose sha256 is not the pin's is refused with exit 1, and nothing is left behind: no version folder, no .partial; list still finds no downloaded browser."}
+{"do": "root"}
+{"do": "run", "args": ["browser", "install"], "env": {"DRGNX_TEST_CFT_BASE": "file://$SCENARIOS/../fixtures/browser", "DRGNX_TEST_PINS": "$SCENARIOS/../fixtures/browser/pins.json"}, "expect_code": 1, "expect_stderr": "nothing was installed"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "test -z \"$(ls -A $DATA/browsers)\""], "expect_code": 0}
+{"do": "run", "args": ["browser", "list", "--json"], "env": {"DRGNX_TEST_PINS": "$SCENARIOS/../fixtures/browser/pins.json"}, "expect_code": 0, "expect_stdout": {"installed": []}}

@@ -634,6 +634,20 @@ pub struct BackupAnswer {
     pub ms: f64,
     #[serde(default, deserialize_with = "null_as_empty")]
     pub removed: Vec<String>,
+    /// The copy of each project's edit history (`history.db`) made beside `work.db`: one per project, replaced each
+    /// night.  A failed one never fails the `work.db` copy.
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub history: Vec<HistoryCopy>,
+}
+
+/// One project's `history.db` copy.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryCopy {
+    pub project: String,
+    pub path: String,
+    pub ok: bool,
+    pub bytes: u64,
 }
 
 /// What a scrub did (`graph/scrub`; the excise's own report carries the same three fields).

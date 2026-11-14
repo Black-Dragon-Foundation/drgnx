@@ -7,7 +7,7 @@
 (load (expand-file-name "test/fixtures/held-fixture" drgnx-dir) nil t)
 (require 'drgnx-git)
 (require 'drgnx-explorer)
-(require 'drgnx-buffers)
+(setq drgnx-explorer--lisp-listing t)       ; the Lisp listing (a remote root's, plan sja-complete Q3): on local folders here
 
 (ert-deftest drgnx-git/parse-porcelain-v2 ()
   (let ((h (drgnx-git-parse
@@ -79,8 +79,10 @@ build/ ignored (with build/out.o)."
               (drgnx-git-refresh root t)
               (with-current-buffer drgnx-explorer-buffer-name
                 (drgnx-explorer--fontify (point-min) (point-max))
+                ;; every row's tail holds the ⋯ control; the letter is the mark the tail remembers
                 (cl-flet ((deco (name) (goto-char (point-min)) (search-forward name)
-                            (mapconcat (lambda (o) (or (overlay-get o 'after-string) ""))
+                            (mapconcat (lambda (o) (let ((tail (overlay-get o 'drgnx-row-tail)))
+                                                     (if tail (or (car tail) "") (or (overlay-get o 'after-string) ""))))
                                        (overlays-in (pos-bol) (1+ (pos-eol))) "")))
                   (should (string-search "U" (deco "c.txt")))
                   (should (string-search "●" (deco "src")))     ; a folder with changes inside
@@ -89,28 +91,17 @@ build/ ignored (with build/out.o)."
           (drgnx-explorer-set-roots nil)                ; its watches go: no events from the folder's removal
           (kill-buffer drgnx-explorer-buffer-name))))))
 
-(ert-deftest drgnx-git/the-buffers-panel-shows-letters ()
-  (skip-unless (executable-find "git"))
-  (drgnx-git-test--repo root
-    (drgnx-test-with-state
-      (let ((drgnx-wb--sections nil)
-            (drgnx-buffers--order nil) (drgnx-buffers--signature nil)
-            (b (find-file-noselect (expand-file-name "src/b.txt" root))))
-        (unwind-protect
-            (progn
-              (delete-other-windows)
-              (drgnx-buffers-setup)
-              (drgnx-git-refresh root t)
-              (drgnx-signal--flush)
-              (drgnx-wb-show-sidebar)
-              (with-current-buffer drgnx-buffers-buffer-name
-                (drgnx-buffers--fontify (point-min) (point-max))
-                (goto-char (drgnx-buffers--row-pos b))
-                (should (string-search "M" (mapconcat (lambda (o) (or (overlay-get o 'after-string) ""))
-                                                      (overlays-in (pos-bol) (1+ (pos-eol))) "")))))
-          (drgnx-wb-hide-sidebar)
-          (kill-buffer b)
-          (when (get-buffer drgnx-buffers-buffer-name) (kill-buffer drgnx-buffers-buffer-name)))))))
+(ert-deftest drgnx-git/an-ignored-file-has-a-letter-only-on-the-linux-console ()
+  ;; the console draws no italic, so the ignored cue there is a trailing I (M12b-7-2); elsewhere none
+  (should (equal (drgnx-git-letter 'modified) "M"))
+  (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) nil)))
+    (cl-letf (((symbol-function 'tty-type) (lambda (&rest _) "xterm-256color")))
+      (should-not (drgnx-git-letter 'ignored)))
+    (cl-letf (((symbol-function 'tty-type) (lambda (&rest _) "linux")))
+      (should (equal (drgnx-git-letter 'ignored) "I"))
+      (should (equal (drgnx-git-letter 'added) "A"))))
+  (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t)))
+    (should-not (drgnx-git-letter 'ignored))))
 
 (ert-deftest drgnx-git/huge-ignored-lists-are-skipped ()
   ;; Ignored files only dim rows; past the limit they are not parsed (a build tree inside tracked folders).
@@ -340,3 +331,16 @@ build/ ignored (with build/out.o)."
           (drgnx-wb-hide-sidebar)
           (drgnx-explorer-set-roots nil)
           (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name)))))))
+
+(ert-deftest drgnx-git/the-status-run-is-framed-whatever-the-session-decodes ()
+  "With Nidhogg's framing on, git's status run is framed (read in records) also when the session's process coding
+detects (has state), as a C locale's does."
+  (skip-unless (and (fboundp 'nidhogg-set-process-framing) (executable-find "git")))
+  (drgnx-git-test--repo root
+    (let ((nidhogg-workers-framing t) (default-process-coding-system '(undecided . undecided)) accs)
+      (cl-letf* ((frame (symbol-function 'drgnx-git--frame))
+                 ((symbol-function 'drgnx-git--frame) (lambda (p) (car (push (funcall frame p) accs)))))
+        (drgnx-git-refresh root t))
+      (should accs)
+      (should (cl-every #'identity accs))
+      (should (equal (drgnx-git-status (expand-file-name "c.txt" root)) 'untracked)))))

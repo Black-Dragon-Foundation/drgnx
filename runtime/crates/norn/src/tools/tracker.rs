@@ -36,11 +36,17 @@ use crate::write::meta;
 pub struct ToolSets {
     /// The five tracker and graph tools.
     pub tracker: bool,
+    /// The six debugger tools (graphical debugging D4): on for a session whose project has a launch configuration, a
+    /// live debug session or a recorded run (the hub decides, and adds them mid-session when one appears).
+    pub debug: bool,
 }
 
 impl Default for ToolSets {
     fn default() -> Self {
-        ToolSets { tracker: true }
+        ToolSets {
+            tracker: true,
+            debug: false,
+        }
     }
 }
 
@@ -70,11 +76,17 @@ pub fn tools_for(sets: ToolSets) -> Vec<Box<dyn Tool<Ctx>>> {
     all.extend(super::jobs::tools());
     all.extend(super::reports::tools());
     all.extend(super::plan::tools());
+    all.extend(super::procedure::tools());
     if sets.tracker {
         all.extend(tools());
         all.extend(super::graph::tools());
     }
     all.extend(super::settings::tools());
+    all.extend(super::extensions::tools());
+    all.extend(super::huddle::tools());
+    if sets.debug {
+        all.extend(super::debug::tools());
+    }
     all
 }
 
@@ -227,10 +239,12 @@ pub(super) async fn caller_of(
                 Some(p) => Some(p),
                 None => {
                     let dir = home.clone();
+                    // git that cannot answer is an error here, never "no project" (nothing is kept: the next call
+                    // asks again)
                     let p = tokio::task::spawn_blocking(move || project::resolve(&dir))
                         .await
-                        .ok()
-                        .flatten();
+                        .map_err(|e| format!("the project of {}: {e}", home.display()))?
+                        .map_err(|e| format!("the project of {}: {e}", home.display()))?;
                     coord
                         .projects()
                         .lock()
@@ -826,13 +840,13 @@ fn find(
 
 #[derive(Deserialize, JsonSchema)]
 struct TaskWriteArgs {
-    /// create, update, claim, heartbeat, release, handoff, reassign, split, complete, link, unlink, label or tools
+    /// An op named above, or tools (the user's)
     op: String,
-    /// The task (every op but create, link and unlink)
+    /// The task (all but create, link, unlink)
     id: Option<String>,
-    /// The task's version you read (update, reassign, split)
+    /// Version you read (update, reassign, split)
     ver: Option<i64>,
-    /// The lease number claim gave you (heartbeat, release, handoff, complete)
+    /// From claim (heartbeat, release, handoff, complete)
     lease: Option<i64>,
     /// create, update: one line
     title: Option<String>,
@@ -844,13 +858,13 @@ struct TaskWriteArgs {
     acceptance: Option<String>,
     /// update: open, running, needs-input, in-review, blocked, done or dropped
     status: Option<String>,
-    /// create: labels; label: use add and remove
+    /// create; label uses add, remove
     labels: Option<Vec<String>>,
     /// create: the parent task
     parent: Option<String>,
     /// handoff, reassign: an agent's id, or user
     to: Option<String>,
-    /// release, handoff, reassign, complete: what was done and what is left
+    /// release, handoff, reassign, complete: done and left
     note: Option<String>,
     /// split: the titles of the parts
     parts: Option<Vec<String>>,
@@ -862,13 +876,13 @@ struct TaskWriteArgs {
     kind: Option<String>,
     /// link, unlink: the target
     dst: Option<String>,
-    /// label: labels to add
+    /// label: to add
     add: Option<Vec<String>>,
-    /// label: labels to remove
+    /// label: to remove
     remove: Option<Vec<String>>,
-    /// tools (the user's): the task's tracker tools on or off
+    /// tools: the task's tracker tools on or off
     tracker: Option<bool>,
-    /// A request key (1-64 of A-Za-z0-9._-): retrying with the same key returns the first answer
+    /// Request key (1-64 of A-Za-z0-9._-); a retry with it gets the first answer
     req: Option<String>,
 }
 
@@ -969,7 +983,7 @@ struct TaskWrite;
 impl RichTool for TaskWrite {
     type Args = TaskWriteArgs;
     const NAME: &'static str = "task_write";
-    const DESCRIPTION: &'static str = "Change tasks in your project: create, update (with ver), claim (lease), heartbeat, release, handoff, reassign, split, complete, link, unlink, label. Answers {id, title, ver, lease?}, a conflict (re-read, retry) or a refusal that says what to do next";
+    const DESCRIPTION: &'static str = "Change your project's tasks: create, update (ver), claim (lease), heartbeat, release, handoff, reassign, split, complete, link, unlink, label. Answers {id, title, ver, lease?}, a conflict (re-read, retry) or a refusal saying what next";
 
     fn run<'a>(
         &'a self,
@@ -1143,6 +1157,8 @@ struct NoteAddArgs {
     kind: Option<String>,
     /// A request key (1-64 of A-Za-z0-9._-): retrying with the same key returns the first answer
     req: Option<String>,
+    /// A finding's sources (at most 12)
+    sources: Option<Vec<crate::write::work::Source>>,
 }
 
 struct NoteAdd;
@@ -1167,7 +1183,14 @@ impl RichTool for NoteAdd {
 async fn head_of(home: Option<&Path>) -> Option<String> {
     let dir = home?.to_path_buf();
     tokio::task::spawn_blocking(move || {
-        project::git(&dir, &["rev-parse", "HEAD"]).map(|s| s.trim().to_owned())
+        match project::git(&dir, &["rev-parse", "HEAD"]) {
+            Ok(head) => head.map(|s| s.trim().to_owned()),
+            // a note goes on without its commit, and the log says why
+            Err(e) => {
+                tracing::warn!("a note's commit: {e}");
+                None
+            }
+        }
     })
     .await
     .ok()
@@ -1188,6 +1211,13 @@ async fn note_add(coord: &Coord, who: &Identity, a: NoteAddArgs) -> Result<Answe
             "kind is progress, finding, question or handoff, not {kind:?}"
         ));
     }
+    if let Some(s) = &a.sources {
+        if kind != "finding" {
+            return Err("sources go on a finding (note_add kind finding)".into());
+        }
+        crate::write::work::check_sources(s).map_err(|e| e.to_string())?;
+    }
+    let sources = a.sources.clone().filter(|s| !s.is_empty());
     let code = a.about.starts_with("file:") || a.about.starts_with("sym:");
     let at = if code {
         head_of(who.home()).await
@@ -1254,7 +1284,10 @@ async fn note_add(coord: &Coord, who: &Identity, a: NoteAddArgs) -> Result<Answe
                     body: Some(body),
                     priority: None,
                     assignee: None,
-                    data: json!({ "kind": kind }),
+                    data: match &sources {
+                        Some(s) => json!({ "kind": kind, "sources": s }),
+                        None => json!({ "kind": kind }),
+                    },
                     origin: Origin::Recorded,
                     source: None,
                 },
@@ -1290,11 +1323,11 @@ struct Brief {
 }
 
 impl Tool<Ctx> for Brief {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         self.inner.name()
     }
 
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         self.inner.description()
     }
 

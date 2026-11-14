@@ -11,7 +11,10 @@ publish = false
 eitri = { path = "../eitri", version = "0.1.0" }
 tokio.workspace = true
 libc.workspace = true
+drgnx-clock = { path = "../drgnx-clock", version = "0.1.0" }  # the grace and the probes wait on the installed clock
+drgnx-exe = { path = "../drgnx-exe", version = "0.1.0" }  # every spawn goes through its lock where unshare is refused (ETXTBSY)
 
 [dev-dependencies]
+drgnx-clock = { path = "../drgnx-clock", version = "0.1.0", features = ["test-hooks"] }
 skuld = { path = "../skuld", version = "0.1.0" }
 tempfile.workspace = true

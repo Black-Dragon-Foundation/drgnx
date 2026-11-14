@@ -4,9 +4,12 @@
 //! The allowlist is [`provider_hosts`]: the hosts of the profile's providers, its CLI's own hosts ([`CLI_HOSTS`]) and
 //! the `agents-net-hosts` tier of its cell.  A host the proxy denies becomes a store event (`proxy-denied`, once per
 //! host per session), never a card.  The proxy is bound before the agent spawns and goes with the session
-//! ([`SessionNet`]'s drop), a failed start included.
+//! ([`SessionNet`]'s drop), a failed start included.  A session with the browser also gets its web proxy and its CDP
+//! broker the same way ([`start_browser`]); one whose cell allows a browser the host cannot give raises one notice
+//! per reason per hub run ([`no_browser_notice`]).
 
 use crate::agents::launch::NetCell;
+use crate::browser::broker::BrokerHandle;
 use crate::coord::Writer;
 use crate::settings::AgentProfile;
 use crate::settings::NetHosts;
@@ -18,6 +21,7 @@ use std::io;
 use std::net::IpAddr;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
@@ -124,7 +128,8 @@ pub(crate) fn start_session(
     );
     let env = front.shell_env.paths_env();
     let dir = runstav::paths::make_session_dir(&env, &runstav::paths::socket_path(&env), sid)?;
-    SessionNet::start(&dir, sid, allow, pins(), Some(front.writer.clone())).map(Some)
+    let pinned = pins(&cur.loaded.values);
+    SessionNet::start(&dir, sid, allow, pinned, Some(front.writer.clone())).map(Some)
 }
 
 /// A provider's base URL as the `host:port` a CONNECT names: the URL's host, and its port or the scheme's (443 for
@@ -149,15 +154,178 @@ fn base_target(url: &str) -> Option<Target> {
     parse_target(&t).ok()
 }
 
-/// One session's network: its provider proxy, the socket it listens on, and the task that records what it denies.
-/// Dropping it closes the listener and every connection and removes the socket (when it is still this one's).  The
-/// browser's web proxy and CDP broker join it later.
+/// One session's network: its provider proxy, the socket it listens on, and the task that records what it denies;
+/// for a session with the browser ([`start_browser`]) also its web proxy, its CDP broker on `cdp.sock`, the broker's
+/// end of the browser host's socketpair and the memory watch.  Dropping it closes the listeners, every connection and
+/// the socketpair (so the browser host stops Chromium and exits), and removes the sockets (when they are still this
+/// one's).
 pub struct SessionNet {
     provider: ProxyHandle,
     socket: PathBuf,
     /// The socket's (dev, inode), so a drop never removes a later session's socket on the same path.
     bound: (u64, u64),
     tasks: JoinSet<()>,
+    /// The browser's web proxy on `web.sock` (`crate::browser::web::start_web`), for a session with a browser.
+    web: Option<crate::browser::web::WebProxy>,
+    /// The browser's CDP broker, and its socket with its (dev, inode).
+    broker: Option<(Arc<BrokerHandle>, PathBuf, (u64, u64))>,
+    /// A test launch's far end of the socketpair, held so its broker's host never ends (no browser is behind it).
+    #[allow(dead_code, reason = "held for the session's life; dropped with it")]
+    held: Option<std::os::unix::net::UnixStream>,
+}
+
+/// What a session with the browser brings from its launch to [`start_browser`]: the hub's end of the browser host's
+/// socketpair, the session's CDP secret, and its scope's unit (with a user systemd).
+pub struct BrowserHub {
+    pub hub: std::os::unix::net::UnixStream,
+    pub secret: crate::browser::Secret,
+    pub unit: Option<String>,
+    /// A test launch has no browser host: the far end, kept for the session's life.
+    pub held: Option<std::os::unix::net::UnixStream>,
+}
+
+/// Session SID's browser on the hub's side, in its network NET (bound before the spawn, like the provider proxy):
+/// its web proxy on `web.sock`, and its CDP broker on `cdp.sock` (0600) for the browser host at the other end of
+/// B's socketpair.  The broker's gate is the session's `browser` cell (WHO in its plan and project), asked at each
+/// websocket upgrade; its limits are `agents-browser-max-message` and `agents-browser-idle`.  With a scope (B's
+/// unit), the memory watch stops the browser above `agents-browser-memory-high` percent of `agents-session-memory`.
+pub(crate) async fn start_browser(
+    front: &crate::front::Front,
+    net: &mut SessionNet,
+    sid: &str,
+    who: norn::matrix::Who,
+    b: BrowserHub,
+) -> io::Result<()> {
+    start_browser_with(front, net, sid, who, b, None).await
+}
+
+/// What the doctor's check changes in a browser session's start: a gate of its own (the throwaway session asks no
+/// card) and a channel for the browser's stderr lines.
+pub(crate) struct CheckHooks {
+    pub gate: crate::browser::broker::GateFn,
+    pub stderr: mpsc::UnboundedSender<String>,
+}
+
+/// [`start_browser`], with the check's hooks when it is the doctor's throwaway session.
+pub(crate) async fn start_browser_with(
+    front: &crate::front::Front,
+    net: &mut SessionNet,
+    sid: &str,
+    who: norn::matrix::Who,
+    b: BrowserHub,
+    check: Option<CheckHooks>,
+) -> io::Result<()> {
+    use crate::browser::broker::{self, BrokerCfg, GateFn};
+    let dir = net
+        .socket
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| io::Error::other("the session's proxy socket has no dir"))?;
+    let ctx = crate::matrix_gate::ActionCtx::of_session(&front.core.runs.scopes(), sid);
+    let web = crate::browser::web::start_web(sid, &dir, ctx.clone(), who.clone(), front).await?;
+    net.set_web(web);
+    let cdp = dir.join(runstav::paths::SESSION_CDP_SOCKET);
+    let listener = crate::sessions::bind_socket(&cdp)?;
+    let m = std::fs::symlink_metadata(&cdp)?;
+    b.hub.set_nonblocking(true)?;
+    let host = tokio::net::UnixStream::from_std(b.hub)?;
+    let cur = front.settings.current();
+    let v = &cur.loaded.values;
+    let (gate, settings, writer) = (
+        front.core.matrix.clone(),
+        front.settings.clone(),
+        front.writer.clone(),
+    );
+    let ask: GateFn = Arc::new(move || {
+        let (g, s, w, who, ctx) = (
+            gate.clone(),
+            settings.clone(),
+            writer.clone(),
+            who.clone(),
+            ctx.clone(),
+        );
+        Box::pin(async move {
+            g.decide(&s, &w, who, runstav::methods::matrix::Action::Browser, ctx)
+                .await
+        }) as mimir::BoxFuture<'static, crate::matrix_gate::Gate>
+    });
+    let (ask, stderr) = match check {
+        Some(c) => (c.gate, Some(c.stderr)),
+        None => (ask, None),
+    };
+    let (events, rx) = mpsc::channel(16);
+    let broker = Arc::new(broker::start(
+        BrokerCfg {
+            sid: sid.to_string(),
+            secret: b.secret.0,
+            max_message: usize::try_from(v.agents_browser_max_message).unwrap_or(usize::MAX),
+            idle: std::time::Duration::from_secs(v.agents_browser_idle),
+            gate: ask,
+            events,
+            stderr,
+        },
+        listener,
+        host,
+    ));
+    let who_sid = sid.to_string();
+    net.tasks.spawn(async move {
+        let mut rx = rx;
+        while let Some(ev) = rx.recv().await {
+            tracing::info!(sid = %who_sid, event = ?ev, "the session's browser");
+        }
+    });
+    if let Some(unit) = b.unit {
+        match crate::browser::memory_bytes(&v.agents_session_memory) {
+            Some(cap) => {
+                let high = v.agents_browser_memory_high;
+                let weak = Arc::downgrade(&broker);
+                net.tasks
+                    .spawn(crate::browser::memory_watch(unit, cap, high, move || {
+                        weak.upgrade().is_some_and(|b| {
+                            b.stop("memory");
+                            true
+                        })
+                    }));
+            }
+            None => tracing::warn!(sid, "no memory watch: agents-session-memory is not a size"),
+        }
+    }
+    net.broker = Some((broker, cdp, (m.dev(), m.ino())));
+    net.held = b.held;
+    Ok(())
+}
+
+/// The reasons a notice was raised for in this hub run: one notice per reason (OD1 (b)).
+#[cfg_attr(any(test, feature = "test-hooks"), allow(dead_code))]
+static NOTICED: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+
+/// A session that starts without the browser its cell allows (N): the hub's notice, once per reason per hub run,
+/// with the fix.  (A test launch is unsandboxed and never asks.)
+#[cfg_attr(any(test, feature = "test-hooks"), allow(dead_code))]
+pub(crate) fn no_browser_notice(front: &crate::front::Front, n: &crate::sandbox::NoBrowser) {
+    let first = {
+        let mut seen = NOTICED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let first = !seen.contains(&n.kind);
+        if first {
+            seen.push(n.kind);
+        }
+        first
+    };
+    tracing::info!(why = %n.why, "a session starts without the agent browser");
+    if first {
+        front.broadcast(
+            "notice",
+            serde_json::json!({
+                "source": "hub",
+                "severity": "warn",
+                "id": format!("browser-{}", n.kind),
+                "life": "event",
+                "text": format!("Sessions start without the agent browser: {}. Fix: {}", n.why, n.fix),
+            }),
+        );
+    }
 }
 
 impl SessionNet {
@@ -182,6 +350,9 @@ impl SessionNet {
             socket,
             bound: (m.dev(), m.ino()),
             tasks,
+            web: None,
+            broker: None,
+            held: None,
         })
     }
 
@@ -189,14 +360,28 @@ impl SessionNet {
     pub fn socket(&self) -> &Path {
         &self.socket
     }
+
+    /// The session's web proxy, which goes with the session from now on.
+    pub fn set_web(&mut self, web: crate::browser::web::WebProxy) {
+        self.web = Some(web);
+    }
 }
 
 impl Drop for SessionNet {
     fn drop(&mut self) {
         self.provider.shutdown();
         self.tasks.abort_all();
-        if std::fs::symlink_metadata(&self.socket).is_ok_and(|m| (m.dev(), m.ino()) == self.bound) {
+        let ours = |p: &Path, bound: (u64, u64)| {
+            std::fs::symlink_metadata(p).is_ok_and(|m| (m.dev(), m.ino()) == bound)
+        };
+        if ours(&self.socket, self.bound) {
             let _ = std::fs::remove_file(&self.socket);
+        }
+        if let Some((broker, cdp, bound)) = self.broker.take() {
+            broker.close();
+            if ours(&cdp, bound) {
+                let _ = std::fs::remove_file(&cdp);
+            }
         }
     }
 }
@@ -239,6 +424,8 @@ async fn record(mut rx: mpsc::Receiver<ProxyEvent>, sid: String, writer: Option<
             ProxyEvent::Refused { target, why, .. } => {
                 tracing::info!(sid = %sid, request = %target, ?why, "the provider proxy refused a request");
             }
+            // The web policy's events; this proxy runs the allowlist policy, which never sends them.
+            _ => {}
         }
     }
 }
@@ -275,18 +462,20 @@ async fn denied_event(w: &Writer, sid: &str, host: String) {
     }
 }
 
-/// Names the provider proxy resolves to a fixed address: none in a shipped build; a test build reads
-/// `DRGNX_TEST_PROXY_PINS` (`NAME=ADDR,…`), so a row can reach the mock LLM on loopback under a name.
-pub fn pins() -> Vec<(String, IpAddr)> {
+/// Names the provider proxy resolves to a fixed address: those of `drgnx-sandbox-proxy-pinned-addresses` in VALUES;
+/// a test build adds `DRGNX_TEST_PROXY_PINS` (`NAME=ADDR,…`), so a row can reach the mock LLM on loopback under a name.
+pub fn pins(values: &crate::settings::RuntimeValues) -> Vec<(String, IpAddr)> {
+    #[allow(unused_mut)] // a shipped build adds nothing
+    let mut out = values.sandbox_proxy_pins.clone();
     #[cfg(any(test, feature = "test-hooks"))]
     if let Ok(v) = std::env::var("DRGNX_TEST_PROXY_PINS") {
-        return v
-            .split(',')
-            .filter_map(|p| p.split_once('='))
-            .filter_map(|(n, a)| Some((n.to_string(), a.parse().ok()?)))
-            .collect();
+        out.extend(
+            v.split(',')
+                .filter_map(|p| p.split_once('='))
+                .filter_map(|(n, a)| Some((n.to_string(), a.parse().ok()?))),
+        );
     }
-    Vec::new()
+    out
 }
 
 #[cfg(test)]

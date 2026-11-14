@@ -4,8 +4,8 @@
 
 ;;; Commentary:
 ;; Like VS Code's sticky scroll: when the start of the function (class, block) you are in has scrolled off the top,
-;; its first line shows in the header, after the breadcrumb — up to three enclosing scopes, outermost first, one
-;; line (`a › b › c').  The header line is always there (the breadcrumb), so nothing shifts as you scroll.  Scopes
+;; its name shows in the header, after the breadcrumb — up to three enclosing scopes, outermost first, one
+;; line (`a › b › c'), in the breadcrumb's caption face (the look shows symbol names, never the code line).  The header line is always there (the breadcrumb), so nothing shifts as you scroll.  Scopes
 ;; come from tree-sitter when the buffer has a parser (functions, classes, …), else from indentation.  Each window
 ;; start is worked out once (a memo, rebuilt when the start moves or the text above it changes).  drgnx's own; no package.  See docs/guide/editing.md.
 
@@ -16,8 +16,13 @@
 (require 'drgnx-registry)
 (require 'drgnx-memo)
 (require 'drgnx-large-file)
+(require 'drgnx-timer)
+(require 'drgnx-type-faces)             ; `drgnx-ui-caption'
 
-(defvar drgnx-chrome-header-tail)
+(declare-function drgnx-chrome-add-tail-provider "drgnx-chrome")
+(declare-function drgnx-chrome-remove-tail-provider "drgnx-chrome")
+(declare-function nidhogg-treesit-parser-ready-p "nidhogg-treesit-bg.c" (parser))
+(declare-function treesit-parser-p "treesit.c")
 (declare-function drgnx-chrome-apply "drgnx-chrome")
 (declare-function treesit-parser-list "treesit.c")
 (declare-function treesit-node-at "treesit")
@@ -38,7 +43,8 @@
 
 (defvar drgnx-sticky-scan-chars 300000 "How far back (characters) the indentation fallback looks for a scope.")
 
-(defface drgnx-sticky '((t :inherit drgnx-wb-bar)) "Sticky scroll's scopes in the header line." :group 'drgnx)
+(defface drgnx-sticky '((t :inherit (drgnx-ui-caption drgnx-text-muted)))
+  "Sticky scroll's scope names in the header line: the breadcrumb's caption." :group 'drgnx)
 
 (defun drgnx-sticky--line-indent ()
   "The current line's indentation, or nil when it is blank."
@@ -54,17 +60,34 @@
       (setq node (treesit-node-parent node)))
     out))
 
-(defun drgnx-sticky--skip-line-p ()
-  "Is this line no scope: a comment, a preprocessor line (`#'), or a line inside a string or comment?"
+(defun drgnx-sticky--skip-to ()
+  "nil when this line may be a scope; else where the search for one goes on from.  A preprocessor line (`#') is
+passed alone; a line inside a string or a comment, or one that starts a comment, sends the search above that string or
+comment and the comments and blank lines just before it, so a block comment of N lines costs one parse, not N."
   (save-excursion
     (back-to-indentation)
-    (or (eq (char-after) ?#)
-        (let ((s (syntax-ppss))) (or (nth 3 s) (nth 4 s)))
-        (let ((p (point))) (forward-comment 1) (> (point) p)))))
+    (if (eq (char-after) ?#)
+        (line-beginning-position)
+      (let ((p (point)) (s (syntax-ppss)))
+        (cond ((or (nth 3 s) (nth 4 s))
+               (goto-char (nth 8 s)) (forward-comment (- (buffer-size))) (point))
+              ((progn (forward-comment 1) (> (point) p))
+               (goto-char p) (forward-comment (- (buffer-size))) (point)))))))
+
+(defvar drgnx-sticky--level-regexps (make-vector 64 nil)
+  "The regexp of a line indented less than I (slot I), made once: the search runs per scroll step.")
+
+(defun drgnx-sticky--level-regexp (indent)
+  "A regexp matching a line indented less than INDENT columns."
+  (if (< indent (length drgnx-sticky--level-regexps))
+      (or (aref drgnx-sticky--level-regexps indent)
+          (aset drgnx-sticky--level-regexps indent (format "^[ \t]\\{0,%d\\}[^ \t\n]" (1- indent))))
+    (format "^[ \t]\\{0,%d\\}[^ \t\n]" (1- indent))))
 
 (defun drgnx-sticky--indent-scopes (pos)
   "Line starts of the lines above POS's that open its indentation levels, outermost first.  One regexp search per
-level (not a walk over every line), at most `drgnx-sticky-scan-chars' back."
+level (not a walk over every line), at most `drgnx-sticky-scan-chars' back; a string or a run of comments above is
+passed in one step (`drgnx-sticky--skip-to')."
   (save-excursion
     (goto-char pos)
     (beginning-of-line)
@@ -73,28 +96,82 @@ level (not a walk over every line), at most `drgnx-sticky-scan-chars' back."
                       0))
           (limit (max (point-min) (- pos drgnx-sticky-scan-chars)))
           out)
-      (while (and (> indent 0) (not (bobp))
+      (while (and (> indent 0) (> (point) limit)
                   (progn (backward-char)                         ; the line above
-                         (re-search-backward (format "^[ \t]\\{0,%d\\}[^ \t\n]" (1- indent)) limit t)))
+                         (re-search-backward (drgnx-sticky--level-regexp indent) limit t)))
         (let ((i (current-indentation)))                         ; a tab counts as its width: checked again here
-          (when (and (< i indent) (not (drgnx-sticky--skip-line-p)))
-            (push (line-beginning-position) out)
-            (setq indent i))))
+          (when (< i indent)
+            (let ((skip (drgnx-sticky--skip-to)))
+              (cond ((null skip) (push (line-beginning-position) out) (setq indent i))
+                    ((< skip limit) (goto-char limit))           ; past the scan's reach: the loop ends
+                    (t (goto-char (min skip (point)))))))))
       out)))
 
+(defun drgnx-sticky--parse-pending-p ()
+  "Non-nil when this buffer's tree-sitter tree is not ready: on Nidhogg (`nidhogg-treesit-parser-ready-p') a parse job,
+a large file's first parse, may still run, and reading a node now would wait for it in the header's `:eval'."
+  (and (fboundp 'nidhogg-treesit-parser-ready-p)
+       (let ((p (or (bound-and-true-p treesit-primary-parser) (car (treesit-parser-list)))))
+         (and (treesit-parser-p p) (not (nidhogg-treesit-parser-ready-p p))))))
+
+(defun drgnx-sticky--parse-landed (buffer)
+  "The poll `drgnx-sticky-scopes' starts: once BUFFER's tree is ready, raise its `sticky' epoch and redraw the headers
+once, so the scopes come from tree-sitter again.  Non-nil ends the poll."
+  (or (not (buffer-live-p buffer))
+      (with-current-buffer buffer
+        (unless (drgnx-sticky--parse-pending-p)
+          (drgnx-epoch-bump 'sticky buffer)
+          (force-mode-line-update t)
+          t))))
+
 (defun drgnx-sticky-scopes (pos)
-  "Line starts of the scopes that enclose POS's line and start above it, outermost first."
-  (if (and (fboundp 'treesit-parser-list) (treesit-parser-list))
-      (drgnx-sticky--treesit-scopes pos)
-    (drgnx-sticky--indent-scopes pos)))
+  "Line starts of the scopes that enclose POS's line and start above it, outermost first.  From tree-sitter when the
+buffer has a parser and its tree is ready; until then (a parse job runs) from indentation, never waiting for the parse,
+and a poll redraws the header once the tree is there."
+  (cond ((not (and (fboundp 'treesit-parser-list) (treesit-parser-list))) (drgnx-sticky--indent-scopes pos))
+        ((drgnx-sticky--parse-pending-p)
+         (drgnx-timer-poll (cons 'sticky-parse (current-buffer)) 0.05 #'drgnx-sticky--parse-landed
+                           :deadline 30 :args (list (current-buffer)) :owner 'editor/sticky)
+         (drgnx-sticky--indent-scopes pos))
+        (t (drgnx-sticky--treesit-scopes pos))))
+
+(defconst drgnx-sticky--lisp-name
+  "(\\(?:[[:alnum:]-]+[:/]\\)?def[[:alnum:]-]*\\*?[ \t]+'?(?\\([^][ \t\n()\"]+\\)"
+  "A Lisp definition's name: `(defun NAME', `(cl-defmethod NAME', `(defvar NAME'.")
+
+(defconst drgnx-sticky--keyword-name
+  (concat "\\_<\\(?:def\\|fn\\|func\\|function\\|class\\|struct\\|enum\\|union\\|trait\\|impl\\|interface\\|module"
+          "\\|mod\\|namespace\\|object\\|record\\|type\\|macro_rules!\\)\\_>[ \t]+\\([[:alpha:]_$][[:alnum:]_$]*\\)")
+  "A definition's name after its keyword: `def area', `class Shape', `fn main', `impl Foo'.")
+
+(defconst drgnx-sticky--call-name "\\([[:alpha:]_][[:alnum:]_:.~]*\\)[ \t]*("
+  "A C-like definition's name: the identifier before its parameter list (`int main(void) {').")
+
+(defconst drgnx-sticky--key-name "\\`\\([[:alpha:]_][[:alnum:]_.-]*\\)[ \t]*:"
+  "A key that opens a block (`build:' in YAML).")
+
+(defconst drgnx-sticky--not-names '("if" "for" "while" "switch" "catch" "return" "sizeof" "else" "do")
+  "Words before a `(' that are statements, not definitions.")
+
+(defun drgnx-sticky--name (line lisp)
+  "The symbol name LINE (a scope's first line, trimmed) defines, or nil when it names nothing (`(let ((x', `if (a)').
+LISP: the buffer is a Lisp, where only a definition form names a scope."
+  (save-match-data
+    (cond ((string-match drgnx-sticky--lisp-name line) (match-string 1 line))
+          (lisp nil)
+          ((string-match drgnx-sticky--keyword-name line) (match-string 1 line))
+          ((and (string-match drgnx-sticky--call-name line)
+                (not (member (match-string 1 line) drgnx-sticky--not-names)))
+           (match-string 1 line))
+          ((string-match drgnx-sticky--key-name line) (match-string 1 line)))))
 
 (defun drgnx-sticky--text (start)
-  "The line at START, as the buffer shows it, trimmed."
+  "The symbol name the scope at START defines (the look: a breadcrumb shows names, never code), or nil."
   (save-excursion
     (goto-char start)
-    (let ((end (line-end-position)))
-      (when (fboundp 'font-lock-ensure) (ignore-errors (font-lock-ensure start end)))
-      (string-trim (buffer-substring (progn (back-to-indentation) (point)) end)))))
+    (drgnx-sticky--name (string-trim (buffer-substring-no-properties (progn (back-to-indentation) (point))
+                                                                     (line-end-position)))
+                        (derived-mode-p 'lisp-data-mode))))
 
 (drgnx-epoch-define 'sticky :per 'buffer
                     :doc "Raised by an edit at or above a window's start in the buffer (its scopes may have changed).")
@@ -108,28 +185,37 @@ level (not a walk over every line), at most `drgnx-sticky-scan-chars' back."
   (when (seq-some (lambda (w) (<= beg (window-start w))) (get-buffer-window-list nil nil t))
     (drgnx-epoch-bump 'sticky (current-buffer))))
 
+(defvar-local drgnx-sticky--last nil
+  "[TICK SCOPES SEGMENT]: the segment last made in this buffer, for the scopes starting at SCOPES, at change TICK.")
+
 (defun drgnx-sticky--segment (w)
   "Window W's sticky part of the header: \" › SCOPE › …\" for its start, or \"\" (the memo `sticky-segment': built
-again only when the start moves or the text above it changes)."
+again only when the start moves or the text above it changes).  A start under the same scopes as the buffer's last
+segment, with the text unchanged, takes that segment: the scope lines are read and fontified once."
   (drgnx-memo sticky-segment w
               (with-current-buffer (window-buffer w)
-                (let* ((scopes (seq-take (drgnx-sticky-scopes (window-start w)) drgnx-sticky-max)))
-                  (if scopes
-                      (let ((text (string-replace "%" "%%" (mapconcat #'drgnx-sticky--text scopes " › "))))  ; the mode line's %
-                        (add-face-text-property 0 (length text) 'drgnx-sticky t text)          ; the buffer's colours stay
-                        (concat " › " text))
-                    "")))))
+                (let* ((scopes (seq-take (drgnx-sticky-scopes (window-start w)) drgnx-sticky-max))
+                       (last drgnx-sticky--last) (tick (buffer-chars-modified-tick)))
+                  (cond ((null scopes) "")
+                        ((and last (eql (aref last 0) tick) (equal (aref last 1) scopes)) (aref last 2))
+                        (t (let* ((names (delq nil (mapcar #'drgnx-sticky--text scopes)))
+                                  (s (if names
+                                         (concat " › " (string-replace "%" "%%" (string-join names " › "))) ; the mode line's %
+                                       "")))
+                             (add-face-text-property 0 (length s) 'drgnx-sticky t s)
+                             (setq drgnx-sticky--last (vector tick scopes s))
+                             s)))))))
 
-(defconst drgnx-sticky--tail '(:eval (drgnx-sticky--segment (selected-window)))
-  "The header's tail in a buffer with sticky scroll (evaluated in the window being drawn).")
+(defun drgnx-sticky--tail (w)
+  "The chrome's tail provider (depth 20, after the large-file header): window W's sticky part,
+in a buffer with sticky scroll."
+  (and (buffer-local-value 'drgnx-sticky-mode (window-buffer w)) (drgnx-sticky--segment w)))
 
 (define-minor-mode drgnx-sticky-mode
   "Sticky scroll: the scopes scrolled off the top, in the header after the breadcrumb."
   :lighter nil
   (if drgnx-sticky-mode
-      (progn (setq-local drgnx-chrome-header-tail drgnx-sticky--tail)
-             (add-hook 'after-change-functions #'drgnx-sticky--after-change nil t))
-    (kill-local-variable 'drgnx-chrome-header-tail)
+      (add-hook 'after-change-functions #'drgnx-sticky--after-change nil t)
     (remove-hook 'after-change-functions #'drgnx-sticky--after-change t))
   (when (and (bound-and-true-p drgnx-chrome-mode) (get-buffer-window)) (drgnx-chrome-apply)))   ; the header shows it now
 
@@ -139,6 +225,7 @@ again only when the start moves or the text above it changes)."
 
 (defun drgnx-sticky--teardown ()
   "Sticky scroll off in every live buffer that has it (the hook and the command go with the setup)."
+  (when (fboundp 'drgnx-chrome-remove-tail-provider) (drgnx-chrome-remove-tail-provider #'drgnx-sticky--tail))
   (dolist (b (buffer-list))
     (with-current-buffer b (when drgnx-sticky-mode (drgnx-sticky-mode -1)))))
 
@@ -148,6 +235,8 @@ again only when the start moves or the text above it changes)."
                      :teardown #'drgnx-sticky--teardown
                      :setup (lambda ()
                               (drgnx-memo-activate 'sticky-segment)
+                              (eval-after-load 'drgnx-chrome
+                                (drgnx-modules-with-owner (drgnx-chrome-add-tail-provider #'drgnx-sticky--tail 20)))
                               (add-hook 'prog-mode-hook #'drgnx-sticky--maybe)
                               (drgnx-command-define 'toggle-sticky-scroll :category "View" :title "Toggle Sticky Scroll"
                                                     :command #'drgnx-sticky-mode :doc "The enclosing scopes in the header, off or on")))

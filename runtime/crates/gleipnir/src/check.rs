@@ -143,9 +143,15 @@ pub fn explain(
     let lower = stderr.map(str::to_lowercase).unwrap_or_default();
     let bwrap_failed = stderr.is_none_or(|s| s.contains("bwrap:"));
     if f.container {
+        // the cause stays visible: bwrap may run in the container and fail for another reason (GL-T12-2)
+        let said = stderr
+            .and_then(|s| s.lines().map(str::trim).find(|l| !l.is_empty()))
+            .map(|l| format!(" (it said: {l})"))
+            .unwrap_or_default();
         return (
-            "inside a container: bubblewrap needs user namespaces the container does not give"
-                .into(),
+            format!(
+                "inside a container: bubblewrap needs user namespaces the container does not give{said}"
+            ),
             None,
         );
     }
@@ -492,10 +498,15 @@ where
                 vec![]
             },
             mac_tcp_ports: vec![],
+            loopback: false,
+            mac_loopback_ports: vec![],
         },
         tmp: (target != Target::LinuxBwrap).then(|| base.join("t")),
         layers: Layers::for_target(target),
         extra_tcp_ports: vec![],
+        rlimits: None,
+        trace: Default::default(),
+        browser: None,
     };
     // The probe's own paths only: a home that exists nowhere, so nothing real is named or protected here.
     let ctx = Context {
@@ -513,9 +524,9 @@ where
         canary.to_string_lossy().into_owned(),
     ];
     #[cfg(feature = "test-hooks")]
-    let prepared = sandbox.prepare(valid, command, crate::backend::TestHooks::default())?;
+    let prepared = sandbox.prepare(valid, command, None, crate::backend::TestHooks::default())?;
     #[cfg(not(feature = "test-hooks"))]
-    let prepared = sandbox.prepare(valid, command)?;
+    let prepared = sandbox.prepare(valid, command, None)?;
     Ok(run(prepared, timeout).await)
 }
 

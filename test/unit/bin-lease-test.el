@@ -17,10 +17,13 @@
 (defvar drgnx-lease-test--procs nil "Holders the running test started.")
 
 (defun drgnx-lease-test--env (&rest extra)
-  "The environment of a bin/drgnx lease: a temp lease dir, 2 light and 1 heavy slot, EXTRA on top."
+  "The environment of a bin/drgnx lease: a temp lease dir, 2 light and 1 heavy slot, EXTRA on top.
+No test hub is built (DRGNX_TEST_HUB_BUILD=0): `test --ui' builds one before its Emacs runs, and where none can be
+built (no DRGNX_RATATOSKR_BIN, no cargo) the stub Emacs never ran."
   (append extra
           (list (concat "DRGNX_LEASE_DIR=" drgnx-lease-test--dir "/lease") "DRGNX_LEASE_LIGHT=2"
                 "DRGNX_LEASE_HEAVY=1" "DRGNX_LEASE_POLL=0.2" "DRGNX_LEASE_CAP=off" "CI=false"
+                "DRGNX_TEST_HUB_BUILD=0"
                 (concat "HOME=" drgnx-lease-test--dir) "DRGNX_LEASE_HELD" "DRGNX_LEASE")
           process-environment))
 

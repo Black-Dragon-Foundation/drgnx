@@ -77,7 +77,7 @@ asked from a timer, hook or in batch.
 |---|---|---|
 | `complete` | ghost-text completion (fill in the middle) | Ollama `qwen2.5-coder:1.5b` (fits next to TEI on a 6 GB GPU) |
 | `edit` | inline edit | OpenRouter `openrouter/auto`, then Ollama `qwen2.5-coder:7b` |
-| `chat` | chat (gptel), Ask the Codebase | as `edit` |
+| `chat` | Ask the Codebase | as `edit` |
 | `embed` | semantic search (embeddings: a vector per text, scaled to length 1) | TEI |
 | `agent` | Claude Code on OpenRouter, through the agent gateway ([agents.md](agents.md)) | OpenRouter, with the model the agent asks for |
 
@@ -191,13 +191,6 @@ ones the probe found running, remote ones with their key. Then it asks for a mod
 reported. It makes one test call. Only if that answers is the choice kept: at the head of the role's chain in
 `drgnx-ai-roles` (in `settings.el`), with the previous providers behind it as fallbacks. A key is never written there.
 
-## Chat (gptel)
-
-With module `extra/llm` (gptel installed), gptel's backend comes from the `chat` role: its first provider that can
-be asked. drgnx sets it up again whenever a probe finishes. A backend you set yourself is never replaced, and neither is
-gptel's default ChatGPT backend once you have set your own `gptel-api-key`. gptel asks for the key only when it
-sends.
-
 ## Detection, fallback and the doctor
 
 drgnx asks the local providers whether they run — every address at once, one second each, in the background,
@@ -228,7 +221,7 @@ never opens auth-source), and whether the GPU has room for the completion model 
 ## Where requests go
 
 Every request to a provider **with a key** (OpenRouter, Anthropic, … — chat, completion, edits, commit messages,
-embeddings, the search index, gptel) goes to the hub's gateway on this machine, `http://127.0.0.1:PORT/p/PROVIDER/…`,
+embeddings, the search index) goes to the hub's gateway on this machine, `http://127.0.0.1:PORT/p/PROVIDER/…`,
 with a token of your editor's own (`Authorization: Bearer …`). The hub adds the provider's key and passes the answer
 back, streaming included; the editor's requests carry no key. A provider **without** a key (a local Ollama, llama.cpp,
 TEI) is asked directly, as before. The fallback along a role's list is still the editor's: the gateway passes one
@@ -241,10 +234,8 @@ provider through per request.
 - **A provider is usable when the hub holds its key** (`drgnx hub status`, the hub's `gateway/keys-held`, kept up to
   date as keys come and go) or it needs none. A key your environment has is handed to the hub when your editor
   connects; a key found by a command you run (Keychain, keyring, `.authinfo`) is handed over by that command, once.
-- **The search indexer** is a background job: it asks the hub for a token of its own, which comes with the gateway's
-  current address, and goes with it when it ends. It is given no key, token or address in its environment, so it never
-  sends its token to a port the hub left after a restart.
-- **gptel** gets a backend at the gateway (`/p/PROVIDER/chat/completions`) once the hub gave your editor its token.
+- **The code search** ([search.md](search.md)) runs in the hub: its built-in model needs no provider, and the servers it
+  embeds through (TEI, Ollama) are reached through the same gateway, so each request is counted.
 
 ## Keys
 
@@ -291,6 +282,10 @@ key you gave onboarding works in the drgnx app; in a terminal (`drgnx onboard`, 
 environment variable. The one exception is `drgnx secrets` (below), which you run on a terminal to carry your keys
 to another machine.
 
+**AI: Remove Key…** (`drgnx-ai-remove-key`) deletes a provider's key: drgnx's item in the Keychain or keyring, this
+Emacs's copy, and the hub's, which forgets it at once (`gateway/revoke-key`; a request after it finds no key). It asks
+first. A key in your environment (`OPENROUTER_API_KEY`) stays where you put it: unset it yourself.
+
 ### Keys on a second machine
 
 `drgnx secrets export` puts the keys your keyring holds for the providers that take one (OpenRouter, Anthropic, any
@@ -313,18 +308,22 @@ Agent profiles can take their provider from the registry; the key is resolved wh
 - **claude (OpenRouter)** — Claude Code on OpenRouter: `ANTHROPIC_BASE_URL=https://openrouter.ai/api`,
   `ANTHROPIC_AUTH_TOKEN` = your OpenRouter key, `ANTHROPIC_API_KEY` empty.
 - **claude (Ollama)** — Claude Code on a local Ollama model.
-- **claude (Kimi)** and **claude (DeepSeek)** — Claude Code on Kimi or DeepSeek through the vendor's own
-  Anthropic-compatible API (`:ai claude-moonshot`, `claude-deepseek`): `ANTHROPIC_BASE_URL` = the vendor's address,
-  `ANTHROPIC_AUTH_TOKEN` = your `MOONSHOT_API_KEY` or `DEEPSEEK_API_KEY` (or auth-source for `api.moonshot.ai` or
-  `api.deepseek.com`), `ANTHROPIC_API_KEY` empty. The vendor bills you per token for an API key; Kimi's coding
-  membership is a subscription on a different endpoint, which these profiles do not use.
-- **claude (Kimi via OpenRouter)** and **claude (DeepSeek via OpenRouter)** — the same models through OpenRouter
-  (`:ai claude-openrouter` with a `:model`), billed by OpenRouter with your OpenRouter key.
+- **kimi** and **deepseek** — the vendors' own agents, Kimi Code and DeepSeek Harness, on the vendor's own
+  Anthropic-compatible API (`:ai kimi-moonshot`, `dsh-deepseek`), through the gateway: the agent gets the gateway's
+  address and its session token (Kimi Code's `KIMI_MODEL_BASE_URL` and `KIMI_MODEL_API_KEY`, DeepSeek Harness's
+  `DEEPSEEK_BASE_URL` and `DEEPSEEK_API_KEY`), and the gateway holds your `MOONSHOT_API_KEY` or `DEEPSEEK_API_KEY` (or
+  auth-source for `api.moonshot.ai` or `api.deepseek.com`). The vendor bills you per token for an API key; Kimi's
+  coding membership is a subscription on a different endpoint, which these profiles do not use. The former `claude
+  (Kimi)` and `claude (DeepSeek)` (Claude Code on those APIs, `:ai claude-moonshot`, `claude-deepseek`) are retired:
+  a profile of yours that names one still starts, and says which built-in replaces it.
+- **claude (Kimi via OpenRouter)** and **claude (DeepSeek via OpenRouter)** — the same models in Claude Code through
+  OpenRouter (`:ai claude-openrouter` with a `:model`), billed by OpenRouter with your OpenRouter key; they set
+  `ENABLE_TOOL_SEARCH=false`, as does `claude (Ollama)`.
 
 A profile's `:model` (any profile with an `:ai`) also sets `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`,
 `ANTHROPIC_DEFAULT_OPUS_MODEL` and `CLAUDE_CODE_SUBAGENT_MODEL` to that name, and `ANTHROPIC_DEFAULT_HAIKU_MODEL`
-(Claude Code's small, background model) to the profile's `:small-model`, else to the `:model`. A `claude-moonshot` or
-`claude-deepseek` profile without a `:model` does not start. The built-in names are data in
+(Claude Code's small, background model) to the profile's `:small-model`, else to the `:model`. A `kimi-moonshot`,
+`dsh-deepseek`, `claude-moonshot` or `claude-deepseek` profile without a `:model` does not start. The built-in names are data in
 `drgnx-agents-builtin-profiles`: copy a profile into `drgnx-agents-profiles` to use another model (the data is `settings/runtime-defaults.el`). Nothing about the route is
 written to `~/.claude/settings.json`: two profiles share Claude Code's configuration directory and differ only in
 these variables, so a model in that file's `env` would override them (the Claude page in Agent Settings notes it).
@@ -332,18 +331,14 @@ these variables, so a model in that file's `env` would override them (the Claude
 Moonshot and DeepSeek carry no `:price`, so the gateway cannot price their answers and counts their spend as zero (a
 job's budget does not stop them). Give the provider a `:price (IN . OUT)` in your `drgnx-ai-providers` to count it.
 
-**Agents do not inherit other vendors' keys.** Whatever Emacs's environment holds, an agent gets only the variables
-of its own route (its provider key or the gateway's token, the model names). The others -- every vendor key and route
-variable, `drgnx-agents-scrubbed-env` -- are unset for it, so a Kimi agent never sees your DeepSeek or OpenRouter key,
-and a Claude agent never sees `OPENAI_API_KEY`. A profile with no `:ai` route is your own login, and keeps its own
-agent's names from the environment (`drgnx-agents-own-env`, found from the profile's command): Claude Code
-`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, the model names, `CLAUDE_CODE_OAUTH_TOKEN` and the
-Bedrock and Vertex switches (the `AWS_*` and `GOOGLE_APPLICATION_CREDENTIALS` they need are never scrubbed); Codex
-`OPENAI_API_KEY` and `OPENAI_BASE_URL`; Gemini `GEMINI_API_KEY` and `GOOGLE_API_KEY`. A profile with a route (Kimi,
-DeepSeek, OpenRouter, Ollama) gets none of these, only its route's. To pass any other variable on, remove it from
-`drgnx-agents-scrubbed-env` (Customize), or set it in the profile's `:env`.
+**Agents do not inherit keys from your shell.** Whatever Emacs's environment holds, an agent gets only what the hub gives
+it: an allowlist (`PATH`, `HOME`, `LANG`, `TMPDIR`), its route's variables (the gateway's token and the model names) and
+the profile's own `:env`. So a Kimi agent never sees your DeepSeek or OpenRouter key, and a Claude agent never sees
+`OPENAI_API_KEY`. A profile with no `:ai` route is your own login: it authenticates through its login files (Claude Code's
+`~/.claude`, Codex's `~/.codex`, Gemini's own), never through a key in your shell. To pass any other variable on, set it in
+the profile's `:env`.
 
-In a profile of `drgnx-agents-profiles`, `:ai claude-openrouter`, `claude-ollama`, `claude-moonshot` or `claude-deepseek` gives any profile
+In a profile of `drgnx-agents-profiles`, `:ai claude-openrouter`, `claude-ollama`, `kimi-moonshot` or `dsh-deepseek` gives any profile
 that environment. Durable jobs get the keys they need in their environment too — never in a command line or a file (under systemd, the value travels in
 `systemd-run`'s own environment).
 
@@ -389,16 +384,51 @@ that no allowed provider serves fails with OpenRouter's own error, which the age
 Set it from Agent Settings (`r`, **OpenRouter Restrictions…**, [agent-settings.md](agent-settings.md#routes)); comments
 and the other entries of `settings.el` stay.
 
+## Recording a run and replaying it
+
+A run against real providers can be recorded once and replayed later without spending anything (for drgnx's own
+tests and demos). The hub records when it is started with `DRGNX_RECORD=DIR` and replays with `DRGNX_REPLAY=DIR`;
+it is never a setting, so your everyday hub records nothing. On replay the hub, the gateway and the editor run as
+usual, and every provider is answered from the recording; a request that differs from what was recorded is refused
+with a `replay_miss` error that says where it differs ("re-record"), never answered by a guess.
+
+Outside agents (Claude Code, Codex, Gemini) are recorded too: what the hub and the agent said to each other, the
+agent's calls of drgnx's own tools (its decisions), the files and commits its own tools made in the session's
+worktree, and the model calls it made through the gateway. On replay a stand-in plays the agent from the recording:
+it answers as the agent did, makes the same tool calls, writes the same files and commits (with the same hashes) just
+before it reports them, and sends its model calls through your gateway again, so budgets and spend rows are real.
+If you prompt it differently, or answer a permission differently, the agent's session ends with a "replay miss"
+error instead.
+
+What is written never holds a key or a token: the gateway's keys and the tokens it issues are replaced by `$SECRET`
+before anything reaches the disk, no authorization header is stored, and a lint checks every file of a run. Live
+recordings stay on your machine; drgnx's own repository holds only recordings made from its scripted mock providers.
+
+From a terminal, the commands do the setup:
+
+```
+drgnx record start smoke --cap-usd 5 --max-minutes 20 -- test --ui   # run a command with the outside ends recorded
+drgnx record stop smoke                                              # end the record: its report, the secret lint
+drgnx replay smoke --speed 0 --strict -- test --ui                   # the same command, answered from the recording
+drgnx record lint DIR…                                               # the secret lint alone, over any run
+```
+
+Runs are kept in `$DRGNX_RECORDINGS` (default: `recordings/` in drgnx's state directory), one directory per run,
+`DATE-NAME`. `--cap-usd`, `--cap-weekly` and `--max-minutes` are written into the run's record, and the minutes end
+the command when they pass. The command after `--` is any `drgnx` command; the recording is for the hub that command
+starts. `--speed` scales the recorded waits (0: none, 1: as they were), and `--strict` also fails a replay that left
+recorded lines unused. The details, and the steps of the smoke run you start yourself, are in
+[the recordings page](../develop/recordings.md).
+
 ## Tests
 
 - `test/unit/ai-test.el` (providers, roles, keys, agent environments), `test/unit/ai-client-test.el` (requests,
   fallback with every reason, cancel, probes, the doctor's check), `test/unit/ai-ghost-test.el` (ghost text, accept,
   the Tab arbiter), `test/unit/ai-edit-test.el` (the review, hunk by hunk), `test/unit/modal-ai-test.el` (ghost text
-  and Edit with AI's selection under Vim keys, with the real evil in its own Emacs, and unchanged without them), `test/unit/ai-ask-test.el` (Ask, Choose,
-  gptel), `test/unit/ai-onboard-test.el` (the onboarding step; setting up Ollama, LM Studio and OpenRouter with fake
+  and Edit with AI's selection under Vim keys, with the real evil in its own Emacs, and unchanged without them), `test/unit/ai-ask-test.el` (Ask, Choose), `test/unit/ai-onboard-test.el` (the onboarding step; setting up Ollama, LM Studio and OpenRouter with fake
   `brew`, `ollama`, `lms`, `sysctl` and `security`; the room on a Mac and the models for it).
 - `test/unit/ai-keys-test.el` (binary) — after AI: Load Keys hands a key to the hub the editor holds none (its key
-  table, auth-source's cache, gptel, what it sends), the environment is left as it was, and chat, completion,
+  table, auth-source's cache, what it sends), the environment is left as it was, and chat, completion,
   embeddings and the commit message still work through the hub.
 - `test/unit/agents-profiles-test.el` — Kimi and DeepSeek profiles: gateway environments (a token, never a key), the
   OpenRouter model chain, the missing-key message, routes on the Claude page, the runner unsetting the keys.

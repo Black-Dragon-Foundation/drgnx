@@ -210,5 +210,25 @@
                       (nreverse out))))
                  '((t t t t "changed this session" 42)))))
 
+(ert-deftest drgnx-settings-prov/lines-are-counted-from-the-form-before ()
+  ;; reading a file counts its lines once, not from the top for every form
+  (require 'drgnx-settings-prov)
+  (with-temp-buffer
+    (insert "a\n\n(b)\n  (c\n d)\n(e)\n")
+    (let (last)
+      (dolist (pos '(1 2 3 5 9 13 17 20))
+        (should (= (drgnx-settings-prov--line-at pos last) (line-number-at-pos pos t)))
+        (setq last (list (line-number-at-pos pos t) pos nil nil)))
+      (should (= (drgnx-settings-prov--line-at 3 last) (line-number-at-pos 3 t))))))   ; before the last: counted afresh
+
+(ert-deftest drgnx-settings-prov/a-file-is-judged-yours-once-per-load ()
+  (require 'drgnx-settings-prov)
+  (let ((n 0) (drgnx-settings-prov--user-file-cache (make-hash-table :test 'equal)))
+    (cl-letf (((symbol-function 'drgnx-settings-prov--user-file-p-1) (lambda (_) (cl-incf n) t)))
+      (dotimes (_ 5) (should (drgnx-settings-prov--user-file-p "/x/config.el")))
+      (should (= n 1))
+      (should (drgnx-settings-prov--user-file-p "/x/other.el"))
+      (should (= n 2)))))
+
 (provide 'settings-prov-test)
 ;;; settings-prov-test.el ends here

@@ -70,6 +70,33 @@
      (should (= h (window-pixel-height (drgnx-wb-area-window 'panel))))
      (should (= wd (window-pixel-width (drgnx-wb-area-window 'right)))))))
 
+(ert-deftest drgnx-area/a-tab-toggle-shows-its-tab-or-hides-the-area ()
+  "VS Code's Ctrl+` (`drgnx-terminal-toggle'): the Terminal tab is shown and selected, a terminal started when it
+has none; pressed again while it shows, the panel hides; from another tab it switches."
+  (drgnx-area-test--with
+   (let ((started 0) (editor (selected-window)))
+     (cl-labels ((start () (cl-incf started) (pop-to-buffer (get-buffer-create "*terminal*")))
+                 (toggle () (drgnx-wb-area-toggle-tab 'panel 'terminal (lambda () (start)))))
+       (unwind-protect
+           (progn
+             (toggle)                                         ; no terminal yet: one is started in the tab
+             (should (= started 1))
+             (should (eq (drgnx-wb-area-tab 'panel) 'terminal))
+             (should (eq (window-buffer (drgnx-wb-area-window 'panel)) (get-buffer "*terminal*")))
+             (should (eq (selected-window) (drgnx-wb-area-window 'panel)))
+             (select-window editor)
+             (toggle)                                         ; the tab shows: the panel hides
+             (should-not (drgnx-wb-area-window 'panel))
+             (toggle)                                         ; its terminal again, none started
+             (should (= started 1))
+             (should (eq (window-buffer (drgnx-wb-area-window 'panel)) (get-buffer "*terminal*")))
+             (should (eq (selected-window) (drgnx-wb-area-window 'panel)))
+             (drgnx-wb-area-show 'panel 'output)
+             (toggle)                                         ; another tab shows: switch, don't hide
+             (should (eq (drgnx-wb-area-tab 'panel) 'terminal))
+             (should (drgnx-wb-area-window 'panel)))
+         (when (get-buffer "*terminal*") (kill-buffer "*terminal*")))))))
+
 (ert-deftest drgnx-area/killing-the-shown-buffer-shows-the-placeholder ()
   (drgnx-area-test--with
    (describe-function 'car)
@@ -213,11 +240,18 @@
      (kill-buffer b))))
 
 (ert-deftest drgnx-area/faces-are-in-the-drgnx-group ()
-  ;; I10: Emacs 31 warns about a defface without a group (the build must have 0 warnings).
+  ;; I10: Emacs 31 warns about a defface without a group (the build must have 0 warnings).  A face may sit in a
+  ;; group under `drgnx' (the look's faces are in `drgnx-look').
   (require 'drgnx-explorer) (require 'drgnx-buffers) (require 'drgnx-git)
-  (dolist (f (face-list))
-    (when (string-prefix-p "drgnx-" (symbol-name f))
-      (should (assq f (get 'drgnx 'custom-group))))))
+  (let ((groups (list 'drgnx)) (faces nil))
+    (while groups
+      (dolist (member (get (pop groups) 'custom-group))
+        (pcase (cadr member)
+          ('custom-group (push (car member) groups))
+          ('custom-face (push (car member) faces)))))
+    (dolist (f (face-list))
+      (when (string-prefix-p "drgnx-" (symbol-name f))
+        (should (memq f faces))))))
 
 (ert-deftest drgnx-area/q-in-a-panel-buffer-hides-the-panel-and-returns-to-the-editor ()
   ;; DEFERRED M3c-6, ruled: `q' (quit-window) in a panel buffer hides the panel (size and tabs kept)
@@ -264,7 +298,8 @@
    (let* ((w (drgnx-wb-area-show 'panel 'results (drgnx-area-test--results)))
           (row (window-parameter w 'header-line-format)) (i (1- (length row)))
           (h (window-pixel-height w)))
-     (should (string-suffix-p (concat " " (drgnx-wb-close-glyph)) row))   ; ends with the ✕
+     ;; ends with the ✕ and its 8 px pad, which is part of the button
+     (should (equal (substring-no-properties row -2 -1) (drgnx-wb-close-glyph)))
      (should (equal (get-text-property i 'help-echo row) "Close (Esc, q)"))
      (should (eq (get-text-property i 'mouse-face row) 'highlight))
      (should (eq (lookup-key (get-text-property i 'local-map row) [header-line mouse-1]) #'drgnx-area--close-click))
@@ -280,3 +315,138 @@
    (let ((row (window-parameter (drgnx-wb-area-show 'panel 'help) 'header-line-format)))
      (should (stringp row))
      (should (eq (get-text-property (1- (length row)) 'drgnx-area row) 'panel)))))
+
+(ert-deftest drgnx-area/a-tab-s-actions-sit-before-the-close-while-it-is-shown ()
+  "the-look/debugging.html `.ptabs': a tab's own pieces (the Debug Console's session chip and clear) sit at the right
+of the panel's tab row, before its close, only while that tab is shown; `drgnx-wb-area-redraw' draws them again."
+  (drgnx-area-test--with
+   (let ((label "chip one"))
+     (drgnx-wb-define-tab 'panel 'area-test-acts :title "Acts" :actions (lambda () (propertize label 'drgnx-area-test t)))
+     (unwind-protect
+         (let* ((w (drgnx-wb-area-show 'panel 'area-test-acts))
+                (row (window-parameter w 'header-line-format))
+                (at (string-search "chip one" row)))
+           (should at)
+           (should (< (string-search " Acts " row) at))
+           (should (< at (next-single-property-change 0 'drgnx-area row)))
+           (setq label "chip two")
+           (drgnx-wb-area-redraw 'panel)
+           (should (string-search "chip two" (window-parameter w 'header-line-format)))
+           (drgnx-wb-area-show 'panel 'output)
+           (should-not (string-search "chip two" (window-parameter (drgnx-wb-area-window 'panel) 'header-line-format))))
+       (drgnx-wb-undefine-tab 'panel 'area-test-acts)))))
+
+;; the Work space's tiles draw their own title row (hub-orchestration.html's `.tile-h'): the area's row would be a second
+(ert-deftest drgnx-area/a-buffer-with-its-own-title-has-no-tab-row ()
+  "A buffer whose `drgnx-area-own-title' is set has no tab row over it, in the panel or the right dock even with other
+tabs holding content; another buffer in the same area gets the row again."
+  (drgnx-area-test--with
+   (drgnx-wb-define-tab 'right 'area-test-a :title "A")
+   (drgnx-wb-define-tab 'right 'area-test-b :title "B")
+   (unwind-protect
+       (let ((a (get-buffer-create "*notes*")) (b (get-buffer-create " area-test b")))
+         (unwind-protect
+             (progn
+               (with-current-buffer b (setq-local drgnx-area-own-title t))
+               (drgnx-wb-area-show 'right 'area-test-a a)
+               (should (eq 'none (window-parameter (drgnx-wb-area-show 'right 'area-test-b b) 'header-line-format)))
+               (should (stringp (window-parameter (drgnx-wb-area-show 'right 'area-test-a) 'header-line-format)))
+               (should (eq 'none (window-parameter (drgnx-wb-area-show 'panel 'output b) 'header-line-format))))
+           (kill-buffer b)))
+     (drgnx-wb-undefine-tab 'right 'area-test-a)
+     (drgnx-wb-undefine-tab 'right 'area-test-b))))
+
+(ert-deftest drgnx-area/a-buffer-with-its-own-title-put-in-an-area-window-drops-the-row ()
+  "A buffer with its own title put straight into an area's window (`drgnx-wb-area-put-buffer', as the Flow swaps its
+tile in for the map's side panel) drops the tab row too; putting another buffer back brings it back."
+  (drgnx-area-test--with
+   (drgnx-wb-define-tab 'right 'area-test-a :title "A")
+   (drgnx-wb-define-tab 'right 'area-test-b :title "B")
+   (unwind-protect
+       (let ((a (get-buffer-create "*notes*")) (b (get-buffer-create " area-test b")))
+         (unwind-protect
+             (let ((w (drgnx-wb-area-show 'right 'area-test-a a)))
+               (with-current-buffer b (setq-local drgnx-area-own-title t))
+               (drgnx-wb-area-show 'right 'area-test-b (get-buffer-create " area-test c"))
+               (drgnx-wb-area-show 'right 'area-test-a a)
+               (should (stringp (window-parameter w 'header-line-format)))
+               (drgnx-wb-area-put-buffer w b)
+               (should (eq 'none (window-parameter w 'header-line-format)))
+               (drgnx-wb-area-put-buffer w a)
+               (should (stringp (window-parameter w 'header-line-format))))
+           (kill-buffer b)
+           (kill-buffer " area-test c")))
+     (drgnx-wb-undefine-tab 'right 'area-test-a)
+     (drgnx-wb-undefine-tab 'right 'area-test-b))))
+
+(ert-deftest drgnx-area/a-tab-s-icon-and-the-close-are-the-mockup-s-icons ()
+  "the-look/debugging.html `.ptabs': a tab defined with an icon (the Debug Console's terminal) shows it, 14 px, before
+its title; the row's close is the Lucide x at 16 px, still the kit's close button (its face, click and help)."
+  (drgnx-area-test--with
+   (cl-letf (((symbol-function 'drgnx-look-icon)
+              (lambda (name &optional face size) (propertize " " 'display (list 'area-test-icon name size) 'face face))))
+     (drgnx-wb-define-tab 'panel 'area-test-icon :title "Iconed" :icon 'terminal)
+     (unwind-protect
+         (let* ((w (drgnx-wb-area-show 'panel 'area-test-icon))
+                (row (window-parameter w 'header-line-format))
+                (title (string-search "Iconed" row))
+                (at (lambda (spec row) (cl-loop for i below (length row)
+                                                when (equal (get-text-property i 'display row) spec) return i)))
+                (icon (funcall at '(area-test-icon terminal 14) row))
+                (close (funcall at '(area-test-icon x 16) row)))
+           (should (and icon title (< icon title)))
+           (should close)
+           (should (< title close))
+           (should (eq (get-text-property close 'drgnx-area row) 'panel))
+           (should (memq 'drgnx-ui-close (ensure-list (get-text-property close 'face row))))
+           (should (equal (get-text-property close 'help-echo row) "Close (Esc, q)"))
+           ;; the tab keeps it, once, while another tab is shown; the others have none
+           (drgnx-wb-area-show 'panel 'output)
+           (let ((r (window-parameter w 'header-line-format)))
+             (should (= 1 (cl-loop for i below (length r)
+                                   count (equal (get-text-property i 'display r) '(area-test-icon terminal 14)))))))
+       (drgnx-wb-undefine-tab 'panel 'area-test-icon)))))
+
+(ert-deftest drgnx-area/the-right-area-has-no-tab-row-for-one-tab ()
+  "agent-panel.html: the right area's tab row shows only while two of its tabs have content, so a lone pane's own
+header is the area's top row; showing a tab with nothing (its placeholder) keeps the row to switch back.  The bottom
+panel always has its row."
+  (drgnx-area-test--with
+   (drgnx-wb-define-tab 'right 'area-test-a :title "A")
+   (drgnx-wb-define-tab 'right 'area-test-b :title "B")
+   (unwind-protect
+       (let ((a (get-buffer-create "*notes*")) (b (get-buffer-create " area-test b")))
+         (unwind-protect
+             (progn
+               (let ((w (drgnx-wb-area-show 'right 'area-test-a a)))
+                 (should (eq 'none (window-parameter w 'header-line-format))))
+               (let ((row (window-parameter (drgnx-wb-area-show 'right 'area-test-b) 'header-line-format)))
+                 (should (stringp row))
+                 (should (string-search " A " row)))
+               (let ((row (window-parameter (drgnx-wb-area-show 'right 'area-test-b b) 'header-line-format)))
+                 (should (and (stringp row) (string-search " A " row) (string-search " B " row))))
+               (should (stringp (window-parameter (drgnx-wb-area-show 'panel 'output) 'header-line-format))))
+           (kill-buffer b)))
+     (drgnx-wb-undefine-tab 'right 'area-test-a)
+     (drgnx-wb-undefine-tab 'right 'area-test-b))))
+
+(ert-deftest drgnx-area/a-title-string-is-the-buffers-own-title-row-with-the-close ()
+  "A buffer whose `drgnx-area-own-title' is a string (the Work space's Detail island and trail tile) gets that string as
+the area's row, with the area's close, in place of the tabs."
+  (drgnx-area-test--with
+   (drgnx-wb-define-tab 'right 'area-test-a :title "A")
+   (drgnx-wb-define-tab 'right 'area-test-b :title "B")
+   (unwind-protect
+       (let ((a (get-buffer-create "*notes*")) (b (get-buffer-create " area-test b")))
+         (unwind-protect
+             (progn
+               (with-current-buffer b (setq-local drgnx-area-own-title " The Title "))
+               (drgnx-wb-area-show 'right 'area-test-a a)
+               (let ((row (window-parameter (drgnx-wb-area-show 'right 'area-test-b b) 'header-line-format)))
+                 (should (stringp row))
+                 (should (string-search "The Title" row))
+                 (should-not (string-search "A " (substring row 0 (string-search "The Title" row)))))
+               (should (string-search "A" (window-parameter (drgnx-wb-area-show 'right 'area-test-a) 'header-line-format))))
+           (kill-buffer b)))
+     (drgnx-wb-undefine-tab 'right 'area-test-a)
+     (drgnx-wb-undefine-tab 'right 'area-test-b))))

@@ -482,6 +482,10 @@ else signal with the last screen."
 
 ;;;; The screen
 
+(defconst drgnx-tty-session-explorer-heading "× \\(?:⌄ \\)?Files"
+  "The Explorer's section heading on a terminal screen (the dock's ×, the chevron, `Files'): the sidebar is drawn.
+The × keeps it off the title bar's `C-p files' (`string-match' folds case).")
+
 (defun drgnx-tty-session-screen (sess &optional escapes)
   "The text of SESS's pane (`capture-pane -p'; with ESCAPES, its attributes as escape sequences).  A kitty session's
 is kitty's screen (`drgnx-tty-session-kitty-screen'; ESCAPES is not for it)."

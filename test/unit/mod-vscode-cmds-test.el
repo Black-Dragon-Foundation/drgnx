@@ -25,7 +25,7 @@
       (drgnx-trust-mode (if trust-was 1 -1)))
     (dolist (id '(file-save-as file-new file-reopen-tab file-new-window file-close-window
                                go-recent go-symbol-project go-back go-forward search-file search-replace
-                               edit-select-all edit-select-line edit-redo edit-comment edit-delete-line edit-move-up edit-move-down
+                               edit-select-all edit-select-line edit-undo edit-redo edit-comment edit-delete-line edit-move-up edit-move-down
                                edit-duplicate edit-line-below edit-line-above edit-line-start edit-line-end
                                edit-buffer-start edit-buffer-end edit-word-left edit-word-right edit-delete-word-back
                                edit-delete-line-back code-quick-fix code-problems code-format

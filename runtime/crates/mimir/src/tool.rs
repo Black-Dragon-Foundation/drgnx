@@ -15,8 +15,9 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// One MCP tool, called with the server's context.
 pub trait Tool<Ctx>: Send + Sync {
     /// 1–128 characters of `A-Za-z0-9_-.` (MCP tool-name guidance; [`valid_name`]).
-    fn name(&self) -> &'static str;
-    fn description(&self) -> &'static str;
+    /// A tool's own, or one made at run time (a plugin's ability).
+    fn name(&self) -> &str;
+    fn description(&self) -> &str;
     /// From schemars; unknown keys denied ([`Typed::schema`]).
     fn input_schema(&self) -> Value;
     fn output_schema(&self) -> Option<Value> {

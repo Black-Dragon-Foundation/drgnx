@@ -1,0 +1,16 @@
+{"scenario": "locks/kimi-plan-mode-is-refused", "requires": ["v1", "test-hooks"], "doc": "[C] Kimi Code's plan mode writes its plan file without the hooks seeing it, so under Kimi's lock a session that opens in plan mode is refused (the start answers an error, nothing is listed), and one that switches to it (a `current_mode_update` to `plan`) is ended."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-kimi\" :provider kimi :command (\"$MOCK\" \"acp\" \"--as\" \"kimi\")) (\"kimi-in-plan\" :provider kimi :command (\"$MOCK\" \"acp\" \"--as\" \"kimi\" \"--start-mode\" \"plan\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "kimi-in-plan", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "error": {"code": "not-allowed", "message": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/list"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"sessions": []}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/start", "params": {"profile": "mock-kimi", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/send", "params": {"id": "$sid", "text": "mode plan"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
+{"do": "poll", "conn": "c", "json": {"id": 5, "method": "agents/list"}, "expect": {"id": 5, "result": {"sessions": {"$contains": [{"id": "$sid", "status": "exited"}]}}}, "within_ms": 15000}

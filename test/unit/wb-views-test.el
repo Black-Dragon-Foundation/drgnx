@@ -190,3 +190,20 @@
      (should (eq (drgnx-wb-sidebar-view) 'search))
      (should (eq (selected-window) (drgnx-wb-section-window 'search)))
      (should-error (drgnx-wb-show-view 'ghost) :type 'user-error))))
+
+(ert-deftest drgnx-wb-views/a-view-names-its-island-and-may-keep-its-own-header ()
+  "A view in `drgnx-wb-island-views' gives the island header its title and buttons (debugging.html: Run and Debug,
+Open launch.json, ⋯); others keep the Explorer's.  A section defined `:own-header' shows its buffer's header line
+instead of a section header."
+  (drgnx-wb-views-test--with-sections
+   (let ((drgnx-wb-island-views '((search :title "Look Here" :buttons ((settings "Open Settings" find . settings))))))
+     (drgnx-wb-define-section 'find :slot 0 :view 'search :own-header t
+                              :buffer (lambda () (get-buffer-create "*drgnx-views-find*")))
+     (drgnx-wb-show-view 'search)
+     (let ((head (format "%s" (window-parameter (drgnx-wb-section-window 'find) 'drgnx-wb-island))))
+       (should (string-search "Look Here" head))
+       (should-not (string-search "Explorer" head)))
+     (should-not (window-parameter (drgnx-wb-section-window 'find) 'header-line-format))
+     (drgnx-wb-show-view 'explorer)
+     (should-not (string-search "Look Here" (format "%s" (window-parameter (drgnx-wb-section-window 'top)
+                                                                           'drgnx-wb-island)))))))

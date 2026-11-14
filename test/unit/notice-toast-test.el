@@ -1,0 +1,102 @@
+;;; notice-toast-test.el --- notices as toasts: the model, the buttons, the off path -*- lexical-binding: t -*-
+;; test-class: det
+;; Pattern D (pure): which toasts show is a function of the notices offered; the drawing is not part of it, and a
+;; frame with no Glitnir takes nothing, so the echo route stays as it was.
+(require 'ert)
+(require 'cl-lib)
+(require 'drgnx-paths)
+(require 'drgnx-notice-echo)
+(require 'drgnx-notice-toast)
+(load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
+
+(defun notice-toast-test--notice (n &rest more)
+  "A notice N for the model tests."
+  (append (list :source 'config :id n :severity 'warn :life 'event :text (format "text %s" n)) more))
+
+(defmacro notice-toast-test--with-model (&rest body)
+  "BODY with an empty toast model and no drawing."
+  (declare (indent 0))
+  `(let ((drgnx-notice-toast--visible nil) (drgnx-notice-toast--waiting nil))
+     (cl-letf (((symbol-function 'drgnx-notice-toast--sync) #'ignore))
+       ,@body)))
+
+(ert-deftest drgnx-notice-toast/at-most-three-rest-counted ()
+  "Pattern D: five notices offered show three toasts, newest on top; the other two are counted, and come when one goes."
+  (notice-toast-test--with-model
+    (dotimes (i 5) (drgnx-notice-toast-admit (notice-toast-test--notice i)))
+    (should (equal (mapcar (lambda (n) (plist-get n :id)) drgnx-notice-toast--visible) '(0 1 2)))
+    (should (= 2 (drgnx-notice-toast-more-count)))
+    (should (equal (drgnx-notice-toast-more-text) "+2"))
+    (drgnx-notice-toast-expire (car drgnx-notice-toast--visible))
+    (should (equal (mapcar (lambda (n) (plist-get n :id)) drgnx-notice-toast--visible) '(1 2 3)))
+    (should (= 1 (drgnx-notice-toast-more-count)))
+    (dotimes (_ 4) (drgnx-notice-toast-expire (car drgnx-notice-toast--visible)))
+    (should (null drgnx-notice-toast--visible))
+    (should (= 0 (drgnx-notice-toast-more-count)))
+    (should (null (drgnx-notice-toast-more-text)))))
+
+(ert-deftest drgnx-notice-toast/buttons-primary-first ()
+  "Pattern D: the notice's own command is the first button; Show Notices and Dismiss follow; at most three."
+  (cl-letf (((symbol-function 'drgnx-commands-get) (lambda (_) nil))
+            ((symbol-function 'drgnx-surfaces-key-label) (lambda (id &rest _) (and (eq id 'notices) "C-c n"))))
+    (let ((b (drgnx-notice-toast-buttons (notice-toast-test--notice 1 :command 'fix-it))))
+      (should (equal (mapcar (lambda (x) (plist-get x :label)) b) '("fix-it" "Show Notices" "Dismiss")))
+      (should (eq (plist-get (car b) :action) 'fix-it))
+      (should (equal (plist-get (cadr b) :key) "C-c n"))
+      (should (= 3 (length b))))
+    (let ((b (drgnx-notice-toast-buttons (notice-toast-test--notice 2))))
+      (should (equal (mapcar (lambda (x) (plist-get x :label)) b) '("Show Notices" "Dismiss"))))
+    ;; a thing waiting on you is not dismissed from here
+    (let ((b (drgnx-notice-toast-buttons '(:source agents :id 3 :severity needs-you :life attention :text "t" :command fix-it))))
+      (should (equal (mapcar (lambda (x) (plist-get x :label)) b) '("fix-it" "Show Notices"))))))
+
+(ert-deftest drgnx-notice-toast/echo-without-glitnir ()
+  "Pattern D: with no Glitnir (style `auto') or style `echo', no toast is taken and the line goes to the echo queue;
+with the float route on, the notice is taken and the echo queue stays empty."
+  (drgnx-notice-test-with-model
+    (let ((drgnx-notice--echo-pending nil) (drgnx-notice--echo-last nil) (drgnx-notice--echo-waiting nil)
+          (taken nil))
+      (cl-letf (((symbol-function 'drgnx-notice--can-echo-p) #'ignore)   ; held: lines wait in the queue
+                ((symbol-function 'drgnx-notice-toast--sync) #'ignore))
+        (let ((drgnx-notice-style 'auto))
+          (should-not (drgnx-notice-toast-active-p))          ; batch: no Glitnir, no graphical frame
+          (drgnx-notice--echo-enqueue 'problem (notice-toast-test--notice 1))
+          (should (= 1 (length drgnx-notice--echo-pending))))
+        (let ((drgnx-notice-style 'echo))
+          (should-not (drgnx-notice-toast-active-p)))
+        (setq drgnx-notice--echo-pending nil)
+        (let ((drgnx-notice-toast--visible nil) (drgnx-notice-toast--waiting nil))
+          (cl-letf (((symbol-function 'drgnx-notice-toast-active-p) (lambda () t)))
+            (drgnx-notice--echo-enqueue 'problem (notice-toast-test--notice 2))
+            (drgnx-notice--echo-enqueue 'line "a startup line")
+            (setq taken (mapcar (lambda (n) (plist-get n :id)) drgnx-notice-toast--visible)))
+          (should (equal taken '(2)))
+          (should (equal drgnx-notice--echo-pending '((line . "a startup line")))))))))
+
+(ert-deftest drgnx-notice-toast/px-goes-through-the-pixel-rule ()
+  "The toast's sizes round half up at 1.25 (10 → 13, not `round''s 12), and a frame that counts logical pixels (no
+native shell: the seam `drgnx-pixels-device-p') takes them unscaled."
+  (cl-letf (((symbol-function 'frame-scale-factor) (lambda (&optional _f) 1.25)))
+    (cl-letf (((symbol-function 'drgnx-pixels-device-p) (lambda () t)))
+      (should (= (drgnx-notice-toast--px (selected-frame) 10) 13)))
+    (cl-letf (((symbol-function 'drgnx-pixels-device-p) (lambda () nil)))
+      (should (= (drgnx-notice-toast--px (selected-frame) 10) 10)))))
+
+(ert-deftest drgnx-notice-toast/each-toast-has-its-own-timer ()
+  "LOOK-TOAST-TIMER-PER-TOAST-1: a toast's timer starts when it shows and a later toast does not move it; one that goes
+loses its timer; a repeat that replaces a toast starts it again."
+  (let ((drgnx-notice-toast--visible nil) (drgnx-notice-toast--waiting nil) (drgnx-notice-toast--timed nil) started cancelled)
+    (cl-letf (((symbol-function 'drgnx-notice-toast--sync) (lambda () (drgnx-notice-toast--sync-timers)))
+              ((symbol-function 'drgnx-timer-start) (lambda (key &rest _) (push key started)))
+              ((symbol-function 'drgnx-timer-cancel) (lambda (key) (push key cancelled))))
+      (drgnx-notice-toast-admit (notice-toast-test--notice 1))
+      (drgnx-notice-toast-admit (notice-toast-test--notice 2))
+      (should (equal (length started) 2))                      ; one each, the first not started again
+      (drgnx-notice-toast-expire (car drgnx-notice-toast--visible))
+      (should (equal (length cancelled) 1))
+      (drgnx-notice-toast-admit (notice-toast-test--notice 2 :text "again"))   ; a repeat replaces toast 2
+      (should (equal (length started) 3))
+      (should (equal (length drgnx-notice-toast--timed) 1)))))
+
+(provide 'notice-toast-test)
+;;; notice-toast-test.el ends here

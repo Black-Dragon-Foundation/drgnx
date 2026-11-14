@@ -12,6 +12,9 @@
 ;;; Code:
 (require 'cl-lib)
 (require 'drgnx-jank-guard)
+(declare-function dbus-call-method "dbus")
+(declare-function dbus-call-method-asynchronously "dbus")
+(declare-function dbus-list-names "dbus")
 
 (defvar drgnx-uitest-record--last-change)
 (defvar drgnx-uitest-record--t0)
@@ -19,11 +22,15 @@
 (declare-function ert-fail "ert" (data))
 (declare-function x-export-frames "xfns.c" (&optional frames type))
 (declare-function glitnir-snapshot "glitnir")
+(declare-function drgnx-pixels-device-p "drgnx-pixels" ())
 
 (defvar drgnx-uitest-session-id nil
   "This session's id (DRGNX_UI_NAME, set by harness/init/prelude.el): `drgnx-uitest-api-as' runs only for it.")
 
-(defvar drgnx-uitest-tick 0.04 "Seconds between two delivered input events.")
+(defvar drgnx-uitest-tick
+  (let ((v (string-to-number (or (getenv "DRGNX_UITEST_TICK") ""))))   ; a probe of the pacing, e.g. 0.03
+    (if (> v 0) v 0.04))
+  "Seconds between two delivered input events ($DRGNX_UITEST_TICK overrides the default 0.04 for a probe).")
 (defvar drgnx-uitest-quiet 0.3
   "Seconds without delivered input or visible change after which the session counts as settled.")
 
@@ -70,6 +77,102 @@ Falls back to the selected frame (a daemon's terminal frame, or batch)."
                   (or (equal (buffer-name) buffer) (equal (symbol-name major-mode) buffer))))
               (window-list (drgnx-uitest-root-frame) 'nomini)))
 
+;;;; A pointer under headless sway
+;; Headless sway (WLR_LIBINPUT_NO_DEVICES) has no input device, so its seat offers no pointer and no client ever gets
+;; one: `swaymsg seat - cursor set' moves the cursor, but Emacs is never told.  A virtual pointer (the
+;; wlr-virtual-pointer protocol, which sway offers) is a pointer device of the seat: once one exists the seat has the
+;; pointer capability, and a cursor move enters the surface under it.  The session's Emacs makes one, over its own
+;; Wayland socket, with the few messages below, and keeps the connection (the device) until it exits.
+
+(defvar drgnx-uitest--vpointer nil "The connection that holds this session's virtual pointer, or nil.")
+
+(defun drgnx-uitest--wl-u32 (n)
+  "N as the 4 little-endian bytes of the Wayland wire."
+  (unibyte-string (logand n 255) (logand (ash n -8) 255) (logand (ash n -16) 255) (logand (ash n -24) 255)))
+
+(defun drgnx-uitest--wl-string (s)
+  "S as a Wayland string: its length with the NUL, the bytes, the NUL, padding to 4."
+  (let ((b (concat (encode-coding-string s 'utf-8) (unibyte-string 0))))
+    (concat (drgnx-uitest--wl-u32 (length b)) b (make-string (% (- 4 (% (length b) 4)) 4) 0))))
+
+(defun drgnx-uitest--wl-message (id opcode &rest args)
+  "The request OPCODE on object ID with ARGS (each already on the wire)."
+  (let ((body (apply #'concat args)))
+    (concat (drgnx-uitest--wl-u32 id) (drgnx-uitest--wl-u32 (logior (ash (+ 8 (length body)) 16) opcode)) body)))
+
+(defun drgnx-uitest--wl-read-u32 (s p)
+  (logior (aref s p) (ash (aref s (+ p 1)) 8) (ash (aref s (+ p 2)) 16) (ash (aref s (+ p 3)) 24)))
+
+(defun drgnx-uitest--wl-events (proc)
+  "The whole events PROC has received so far, as (ID OPCODE ARGS-BYTES), taken out of its input."
+  (let ((in (process-get proc 'drgnx-in)) (p 0) (out nil))
+    (while (>= (- (length in) p) 8)
+      (let ((size (ash (drgnx-uitest--wl-read-u32 in (+ p 4)) -16)))
+        (if (> (+ p size) (length in))
+            (setq p (length in) in nil)    ; a partial message: never here with the replies waited for below
+          (push (list (drgnx-uitest--wl-read-u32 in p) (logand (drgnx-uitest--wl-read-u32 in (+ p 4)) 65535)
+                      (substring in (+ p 8) (+ p size)))
+                out)
+          (setq p (+ p size)))))
+    (process-put proc 'drgnx-in (if in (substring in p) ""))
+    (nreverse out)))
+
+(defun drgnx-uitest--wl-roundtrip (proc callback-id)
+  "Send `wl_display.sync' as CALLBACK-ID and wait (2 s at most) for its `done': (DONE . EVENTS), DONE nil on a time
+out, EVENTS those that came before it."
+  (process-send-string proc (drgnx-uitest--wl-message 1 0 (drgnx-uitest--wl-u32 callback-id)))
+  (let ((deadline (+ (float-time) 2.0)) (events nil) (done nil))
+    (while (and (not done) (< (float-time) deadline) (process-live-p proc))
+      (accept-process-output proc 0.05)
+      (dolist (e (drgnx-uitest--wl-events proc))
+        (if (and (= (car e) callback-id) (= (nth 1 e) 0)) (setq done t) (push e events))))
+    (cons done (nreverse events))))
+
+(defun drgnx-uitest--sway-vpointer ()
+  "Give headless sway's seat a pointer: a virtual pointer made over this Emacs's Wayland socket, kept open.
+t when there is one (made now or before), nil when the compositor offers no such protocol or refuses."
+  (or (and drgnx-uitest--vpointer (process-live-p drgnx-uitest--vpointer) t)
+      (when-let* ((display (getenv "WAYLAND_DISPLAY"))
+                  (path (if (file-name-absolute-p display) display
+                          (expand-file-name display (or (getenv "XDG_RUNTIME_DIR") ""))))
+                  ((file-exists-p path))
+                  (proc (ignore-errors
+                          (make-network-process :name "drgnx-uitest-vpointer" :family 'local :service path
+                                                :coding 'binary :noquery t
+                                                :filter (lambda (p s) (process-put p 'drgnx-in (concat (process-get p 'drgnx-in) s)))))))
+        (process-put proc 'drgnx-in "")
+        (process-send-string proc (drgnx-uitest--wl-message 1 1 (drgnx-uitest--wl-u32 2)))   ; get_registry → 2
+        (let* ((globals (cdr (drgnx-uitest--wl-roundtrip proc 3)))
+               (manager (seq-find (lambda (e)
+                                    (and (= (car e) 2) (= (nth 1 e) 0)
+                                         (let* ((a (nth 2 e)) (n (drgnx-uitest--wl-read-u32 a 4)))
+                                           (equal (substring a 8 (+ 8 n -1)) "zwlr_virtual_pointer_manager_v1"))))
+                                  globals)))
+          (if (not manager)
+              (progn (delete-process proc) nil)
+            (process-send-string
+             proc (concat (drgnx-uitest--wl-message 2 0 (drgnx-uitest--wl-u32 (drgnx-uitest--wl-read-u32 (nth 2 manager) 0))
+                                                    (drgnx-uitest--wl-string "zwlr_virtual_pointer_manager_v1")
+                                                    (drgnx-uitest--wl-u32 1) (drgnx-uitest--wl-u32 4))   ; bind → 4
+                          (drgnx-uitest--wl-message 4 0 (drgnx-uitest--wl-u32 0) (drgnx-uitest--wl-u32 5))))   ; pointer 5, default seat
+            (let ((after (drgnx-uitest--wl-roundtrip proc 6)))
+              (if (or (not (car after)) (seq-find (lambda (e) (and (= (car e) 1) (= (nth 1 e) 0))) (cdr after)))   ; wl_display.error
+                  (progn (delete-process proc) nil)
+                (setq drgnx-uitest--vpointer proc)
+                t)))))))
+
+(defun drgnx-uitest-pointer-set (x y)
+  "Move the compositor's pointer to the layout position X, Y (logical pixels): t when it moved.
+Only sway can be told: the session's seat gets a virtual pointer first (`drgnx-uitest--sway-vpointer', or no client
+would ever see the pointer), then `swaymsg \"seat - cursor set X Y\"' moves it.  Any other session returns
+`unsupported', so a row that needs a real pointer skips there.  `failed' when sway refused or no pointer could be made."
+  (if (and (getenv "SWAYSOCK") (executable-find "swaymsg"))
+      (if (and (drgnx-uitest--sway-vpointer)
+               (zerop (call-process "swaymsg" nil nil nil (format "seat - cursor set %d %d" x y))))
+          t
+        'failed)
+    'unsupported))
+
 (defun drgnx-uitest-posn (x y)
   "Position object for root-frame pixel X, Y."
   (posn-at-x-y x y (drgnx-uitest-root-frame)))
@@ -92,14 +195,19 @@ line and header line: `window-body-pixel-edges' counts a tab line as body."
 
 (defun drgnx-uitest-pos-xy (window pos)
   "Root-frame pixel (X . Y) in the middle of the character at POS in WINDOW, or nil if a
-click there would not land on POS (invisible, scrolled away, cut off at the right edge)."
+click there would not land on POS (invisible, scrolled away, cut off at the right edge).
+The middle is that glyph's own (`posn-object-width-height'), not half a column: in a
+proportional font (the Explorer's rows) a `t' is narrower than half the frame's column."
   (let* ((f (window-frame window))
          (origin (drgnx-uitest--text-origin window))
          (posn (and (not (with-current-buffer (window-buffer window) (invisible-p pos)))
                     (posn-at-point pos window)))
          (xy (and posn (posn-x-y posn)))
-         (x (and xy (+ (car origin) (car xy) (/ (frame-char-width f) 2))))
-         (y (and xy (+ (cdr origin) (cdr xy) (/ (frame-char-height f) 2))))
+         (wh (and posn (posn-object-width-height posn)))
+         (w (if (natnump (car wh)) (max 1 (car wh)) (frame-char-width f)))
+         (h (if (natnump (cdr wh)) (max 1 (cdr wh)) (frame-char-height f)))
+         (x (and xy (+ (car origin) (car xy) (/ w 2))))
+         (y (and xy (+ (cdr origin) (cdr xy) (/ h 2))))
          (back (and xy (posn-at-x-y x y f))))
     (and back (eq (posn-window back) window) (eql (posn-point back) pos) (cons x y))))
 
@@ -250,6 +358,23 @@ does not move."
 
 (advice-add 'mouse-absolute-pixel-position :around #'drgnx-uitest--pointer-advice)
 
+(defun drgnx-uitest--hub-callers (orig &rest args)
+  "`drgnx-hub--connect-socket' in a harness session: when it refuses (\"…/drgnx does not exist (no hub)\": the GUI
+rows run no hub), its error names the functions that called it, so a row that fails on it says which caller asked
+the hub (the debug timeline's `find-file-hook' did, about one row in seven at scale 2, before it learned not to)."
+  (condition-case err
+      (apply orig args)
+    (error
+     (signal (car err)
+             (list (format "%s (called from: %s)" (error-message-string err)
+                           (mapconcat (lambda (frame) (format "%S" (cadr frame)))
+                                      (seq-filter (lambda (frame) (symbolp (cadr frame)))
+                                                  (seq-take (backtrace-frames) 40))
+                                      " <- ")))))))
+
+(with-eval-after-load 'drgnx-hub-client
+  (advice-add 'drgnx-hub--connect-socket :around #'drgnx-uitest--hub-callers))
+
 (defun drgnx-uitest--note-pointer (ev)
   "Remember where the mouse event EV puts the pointer (`drgnx-uitest--pointer'); other events leave it."
   (when (and (consp ev) (symbolp (car ev)) (string-match-p "mouse" (symbol-name (car ev))))
@@ -380,12 +505,21 @@ else `other' (process output, redisplay, …)."
   "Tick poll: changes no timer claimed — the running command's, or `other'."
   (drgnx-uitest-record--snapshot (drgnx-uitest-record--ambient-cause)))
 
+(defun drgnx-uitest-record--command-name (cmd)
+  "CMD as a cause: \"command:NAME\" for a symbol, else a short tag of its type (a closure or a keymap can hold a
+keymap that is a prefix of itself, `mouse-drag-line''s, whose printed form ran to hundreds of MB)."
+  (concat "command:"
+          (cond ((symbolp cmd) (symbol-name cmd))
+                ((keymapp cmd) "<keymap>")
+                ((functionp cmd) "<lambda>")
+                (t (format "<%s>" (type-of cmd))))))
+
 (defun drgnx-uitest-record--before-command ()
   (drgnx-uitest-record--snapshot "other")      ; whatever happened between commands
-  (setq drgnx-uitest-record--command (format "command:%s" this-command)))
+  (setq drgnx-uitest-record--command (drgnx-uitest-record--command-name this-command)))
 
 (defun drgnx-uitest-record--after-command ()
-  (drgnx-uitest-record--snapshot (or drgnx-uitest-record--command (format "command:%s" this-command)))
+  (drgnx-uitest-record--snapshot (or drgnx-uitest-record--command (drgnx-uitest-record--command-name this-command)))
   (drgnx-uitest--note-target (selected-window))      ; a window the input moved focus to is aimed at
   (setq drgnx-uitest-record--command nil))
 
@@ -604,6 +738,95 @@ with redisplay between them, while the test waits.  The plist has :settled."
       (cancel-timer watch))
     (append (list :settled (if drgnx-uitest--run-settled t :false)) (drgnx-uitest-measure-end))))
 
+;;;; A real pointer: mutter's virtual one
+
+;; Synthetic events (`drgnx-uitest-click-events') skip the shell: they never reach what only the toolkit's own input
+;; does, such as the tab bar's prefix.  Mutter's RemoteDesktop session gives the session a virtual pointer whose
+;; motion and buttons go through the compositor and the shell like a mouse's.  It has relative motion only (absolute
+;; needs a screen cast), so a move goes to the screen's corner, then by the distance, and is corrected by where Emacs
+;; saw the pointer arrive.
+
+(defvar drgnx-uitest--pointer-session nil "The RemoteDesktop session path this Emacs started, or nil.")
+(defvar drgnx-uitest-pointer-keys nil "The last `drgnx-uitest-pointer-click''s key sequences and their commands, for a failure's message.")
+
+(defconst drgnx-uitest--rd "org.gnome.Mutter.RemoteDesktop" "Mutter's RemoteDesktop service and interface.")
+
+(defun drgnx-uitest-pointer-available-p ()
+  "Non-nil when this session's bus has mutter's RemoteDesktop service (a session under headless mutter)."
+  (and (require 'dbus nil t) (getenv "DBUS_SESSION_BUS_ADDRESS")
+       (ignore-errors (member drgnx-uitest--rd (dbus-list-names :session)))))
+
+(defun drgnx-uitest--pointer-call (method &rest args)
+  "Call METHOD with ARGS on this Emacs's RemoteDesktop session, started the first time."
+  (unless drgnx-uitest--pointer-session
+    (let ((path (dbus-call-method :session drgnx-uitest--rd "/org/gnome/Mutter/RemoteDesktop" drgnx-uitest--rd
+                                  "CreateSession")))
+      (dbus-call-method :session drgnx-uitest--rd path (concat drgnx-uitest--rd ".Session") "Start")
+      (setq drgnx-uitest--pointer-session path)))
+  (apply #'dbus-call-method :session drgnx-uitest--rd drgnx-uitest--pointer-session
+         (concat drgnx-uitest--rd ".Session") method args))
+
+(defun drgnx-uitest--pointer-send (method &rest args)
+  "Send METHOD with ARGS to the RemoteDesktop session without waiting for its answer.  A press or release goes this
+way: `dbus-call-method' waits in `read-event' under its own binding of `unread-command-events', and the click event
+that arrives meanwhile is pushed into that binding and lost.  The session is the one a motion started."
+  (apply #'dbus-call-method-asynchronously :session drgnx-uitest--rd drgnx-uitest--pointer-session
+         (concat drgnx-uitest--rd ".Session") method nil args))
+
+(defun drgnx-uitest--pointer-by (dx dy)
+  "Move the virtual pointer by DX, DY logical pixels."
+  (drgnx-uitest--pointer-call "NotifyPointerMotionRelative" :double (float dx) :double (float dy)))
+
+(defun drgnx-uitest--pointer-seen (frame)
+  "Where FRAME saw the pointer last, (X . Y) in its pixels, after the motion events in flight were read; or nil."
+  (sit-for 0.15)
+  (let ((pos (mouse-pixel-position)))
+    (and (eq (car pos) frame) (cadr pos) (cons (cadr pos) (cddr pos)))))
+
+(defun drgnx-uitest-pointer-move (x y &optional frame)
+  "Move the real pointer to pixel X, Y of FRAME (default the selected one), within one pixel; return where it is.
+Signals when FRAME never sees it."
+  (let* ((frame (or frame (selected-frame)))
+         (scale (/ (frame-scale-factor frame) (drgnx-uitest-device-scale frame)))   ; frame pixels per logical one
+         ;; where the window may sit on the screen, logical pixels: Wayland never says, so the corner (a maximised
+         ;; window), then the middle (mutter centres a window it places), then a sweep
+         (sw (display-pixel-width)) (sh (display-pixel-height))
+         (fw (/ (frame-pixel-width frame) scale)) (fh (/ (frame-pixel-height frame) scale))
+         (guesses (append (list '(0 . 0) (cons (max 0 (/ (- sw fw) 2)) (max 0 (/ (- sh fh) 2))))
+                          (cl-loop for gy from 0 below sh by 150
+                                   nconc (cl-loop for gx from 0 below sw by 150 collect (cons gx gy)))))
+         (seen nil))
+    (while (and guesses (not seen))
+      (let ((g (pop guesses)))
+        (drgnx-uitest--pointer-by -100000 -100000)
+        (drgnx-uitest--pointer-by (+ (car g) (/ x scale)) (+ (cdr g) (/ y scale)))
+        (setq seen (drgnx-uitest--pointer-seen frame))))
+    (dotimes (_ 4)
+      (setq seen (drgnx-uitest--pointer-seen frame))
+      (when (and seen (or (> (abs (- (car seen) x)) 1) (> (abs (- (cdr seen) y)) 1)))
+        (drgnx-uitest--pointer-by (/ (- x (car seen)) scale) (/ (- y (cdr seen)) scale))))
+    (or (drgnx-uitest--pointer-seen frame) (error "drgnx-uitest: the frame never saw the pointer"))))
+
+(defun drgnx-uitest-pointer-click (x y &optional until timeout)
+  "Click the real pointer's first button at pixel X, Y of the selected frame, then read the key sequences it makes and
+run their commands, as the command loop would (Emacs hit-tests the events and looks the keys up), until UNTIL (a
+function of no arguments) is non-nil or TIMEOUT seconds (default 5) pass.  Return UNTIL's last value.
+A nested command loop (`recursive-edit', as `drgnx-uitest-run') reads none of a real pointer's events while a test
+runs from the session's server, so the keys are read here."
+  (drgnx-uitest-pointer-move x y)
+  (while (read-event nil nil 0.2))                          ; the motion's own events
+  (drgnx-uitest--pointer-send "NotifyPointerButton" :int32 272 t)     ; BTN_LEFT
+  (drgnx-uitest--pointer-send "NotifyPointerButton" :int32 272 nil)
+  (let ((deadline (+ (float-time) (or timeout 5))) (result nil))
+    (setq drgnx-uitest-pointer-keys nil)
+    (while (and (not (setq result (and until (funcall until)))) (< (float-time) deadline))
+      (let ((keys (with-timeout ((max 0.05 (- deadline (float-time))) nil) (read-key-sequence-vector nil))))
+        (when keys (push (list keys (key-binding keys t)) drgnx-uitest-pointer-keys))
+        (when-let* ((cmd (and keys (key-binding keys t))) ((commandp cmd)))
+          (setq this-command cmd)
+          (call-interactively cmd nil keys))))
+    result))
+
 (defun drgnx-uitest--run-watch ()
   "Leave `drgnx-uitest-run''s nested command loop once settled or past the deadline."
   (when (or (setq drgnx-uitest--run-settled (drgnx-uitest-settled-p))
@@ -651,7 +874,7 @@ Never signals."
 (defun drgnx-uitest-device-scale (frame)
   "Device pixels per unit of FRAME's Lisp coordinates, as a snapshot counts them: `frame-scale-factor' under GTK,
 which works in logical pixels, and 1 on the native shell, whose frames are in device pixels at any scale."
-  (if (featurep 'nidhogg-wayland) 1 (frame-scale-factor frame)))
+  (if (drgnx-pixels-device-p) 1 (frame-scale-factor frame)))
 
 (defun drgnx-uitest--png-raw (png)
   "Decode PNG (a unibyte string: 8-bit RGB or RGBA, not interlaced, as cairo writes) into a snapshot."
@@ -881,6 +1104,10 @@ form in it, so no socket path reaches a session other than the one whose id the 
 (defun drgnx-uitest-api-keys (keys)
   "Queue KEYS (`kbd' syntax)."
   (drgnx-uitest--json (list :queued (drgnx-uitest-enqueue (drgnx-uitest-key-events keys)))))
+
+(defun drgnx-uitest-api-pause (secs)
+  "Queue SECS seconds of no input (the next queued event waits them out)."
+  (drgnx-uitest--json (list :queued (drgnx-uitest-enqueue (list (cons 'drgnx-uitest-pause secs))))))
 
 (defun drgnx-uitest-api-type (text)
   "Queue typing TEXT."

@@ -1,0 +1,6 @@
+{
+  "name": "fs-importer",
+  "version": "0.1.0",
+  "abilities": [{"name": "probe", "description": "Tries to open files and list directories.",
+                 "input_schema": {"type": "object"}}]
+}

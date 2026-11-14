@@ -277,14 +277,23 @@ DOC is FILE read now; P the problem that fails it, or nil.  When FILE is a confi
 \(settings.el), the config layer's state is brought up to date (it keeps the last good copy of a file that reads,
 and says a mistake once), and LAST-GOOD is that copy read, as a doc whose file is the copy, when it reads; else nil.
 While FILE reads, the copy holds the same text."
-  (let* ((doc (drgnx-settings-file-read file head))
+  (let* ((drgnx-file--read-share (list t))      ; the config layer's bookkeeping reads the file too: parsed once
+         (doc (drgnx-settings-file-read file head))
          (name (drgnx-settings-file--config-name file))
          (good (when name
                  (drgnx-config-problem name)
                  (let ((copy (drgnx-config-last-good-file name)))
                    (when (file-exists-p copy)
-                     (let ((g (drgnx-settings-file-read copy head
-                                                        :max-bytes (plist-get (drgnx-config-definition name) :max-bytes))))
+                     (let ((g (if (and (drgnx-settings-doc-text doc) (not (drgnx-settings-doc-failed doc))
+                                       (null (drgnx-settings-doc-problems doc))
+                                       (equal (drgnx-settings-doc-text doc) (ignore-errors (drgnx-file-read-bounded copy))))
+                                  ;; the copy of a file that reads holds its text: the same doc, named for the copy
+                                  (let ((same (copy-sequence doc)))
+                                    (setf (drgnx-settings-doc-file same) (drgnx-settings-file--name copy)
+                                          (drgnx-settings-doc-stamp same) (drgnx-file-stamp copy))
+                                    same)
+                                (drgnx-settings-file-read copy head
+                                                          :max-bytes (plist-get (drgnx-config-definition name) :max-bytes)))))
                        (and (drgnx-settings-doc-text g) (not (drgnx-settings-doc-failed g)) g)))))))
     (list :doc doc :last-good good
           :problem (and (drgnx-settings-doc-failed doc) (car (drgnx-settings-doc-problems doc))))))

@@ -1,0 +1,42 @@
+{"scenario": "recording/acp-gateway-resend", "requires": ["v1", "test-hooks"], "doc": "Pattern B (gates on the request event). A mock Claude on a gateway profile (:ai claude-anthropic, --llm env: its turn POSTs to its own ANTHROPIC_BASE_URL with its ANTHROPIC_AUTH_TOKEN) is recorded against ratatoskr-mock llm: one spend row, and the exchange in llm.jsonl names the session. The llm mock is killed; on replay the ACP replayer re-sends the agent's recorded body at its point in the stream to its own gateway, which forwards it to the LLM replayer: the real gateway writes the same spend row again."}
+{"do": "root"}
+{"do": "write_file", "path": "$ROOT/llm.json", "json": [{"path": "/v1/messages", "body": "{\"id\": \"msg-1\", \"type\": \"message\", \"content\": [], \"usage\": {\"input_tokens\": 7, \"output_tokens\": 3}}"}]}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$ROOT/llm.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-gw\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--llm\" \"env\") :ai \"claude-anthropic\"))))\n"}
+{"do": "start", "hub": "live", "env": {"DRGNX_RECORD": "$ROOT/rec", "DRGNX_RECORD_PROVENANCE": "mock"}}
+{"do": "connect", "conn": "c", "hub": "live"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-ai-providers", "source": "row", "value": {"anthropic": {"kind": "anthropic", "url": "http://127.0.0.1:$port", "caps": ["chat"], "messages": true}}}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "subscribe"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/start", "params": {"profile": "mock-gw", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/send", "params": {"id": "$sid", "text": "say over the gateway"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
+{"do": "expect", "conn": "c", "json": {"event": "request", "data": {"provider": "anthropic", "input": 7, "output": 3, "status": 200}}, "within_ms": 15000}
+{"do": "file", "path": "$ROOT/rec/acp/1.jsonl", "contains": "\"stopReason\"", "within_ms": 15000}
+{"do": "file", "path": "$ROOT/rec/llm.jsonl", "contains": "\"session\":\"$sid\"", "count": 1, "at_most": 1}
+{"do": "sql_expect", "sql": "select provider, input, output, status from spend", "rows": [["anthropic", 7, 3, 200]]}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/kill", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": "$any"}, "within_ms": 10000}
+{"do": "kill", "hub": "live", "signal": "TERM"}
+{"do": "expect_exit", "hub": "live", "code": 0}
+{"do": "kill", "pid": "$mock", "signal": "KILL"}
+{"do": "expect_exit", "pid": "$mock", "signal": "KILL"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mv $DATA/work.db $ROOT/live.db && rm -f $DATA/work.db-wal $DATA/work.db-shm"], "expect_code": 0}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "replay", "env": {"DRGNX_REPLAY": "$ROOT/rec"}}
+{"do": "connect", "conn": "r", "hub": "replay"}
+{"do": "send", "conn": "r", "json": {"id": 1, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-ai-providers", "source": "row", "value": {"anthropic": {"kind": "anthropic", "url": "http://127.0.0.1:$port", "caps": ["chat"], "messages": true}}}]}}}
+{"do": "expect", "conn": "r", "json": {"id": 1, "result": {"applied": 1}}}
+{"do": "send", "conn": "r", "json": {"id": 2, "method": "subscribe"}}
+{"do": "expect", "conn": "r", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "r", "json": {"id": 3, "method": "agents/start", "params": {"profile": "mock-gw", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "r", "json": {"id": 3, "result": {"id": "$capture:sid2", "name": "$string"}}}
+{"do": "send", "conn": "r", "json": {"id": 4, "method": "agents/send", "params": {"id": "$sid2", "text": "say over the gateway"}}}
+{"do": "expect", "conn": "r", "json": {"id": 4, "result": true}}
+{"do": "expect", "conn": "r", "json": {"event": "request", "data": {"provider": "anthropic", "input": 7, "output": 3, "status": 200}}, "within_ms": 15000}
+{"do": "sql_expect", "sql": "select provider, input, output, status from spend", "rows": [["anthropic", 7, 3, 200]]}
+{"do": "file", "path": "$ROOT/tmp/replay/misses.jsonl", "exists": false}

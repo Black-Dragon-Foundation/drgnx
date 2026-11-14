@@ -1,0 +1,63 @@
+{"scenario": "system/abilities-every-profile", "requires": ["v1", "test-hooks"], "doc": "[C] A plugin with an ability, approved and on the project list, reaches every profile alike: the session's `mcpServers` gain the `drgnx-plugins` server at `session/new` for Claude, Claude through the gateway (the OpenRouter-like profile), Codex (the stock adapter), and Gemini, Kimi and DeepSeek, each stock and as the org fork that advertises its features. The ability's tools are the hub's own (kind `drgnx`), hooked at the hub's server whatever the agent, so with a rule on that kind no profile has anything unhooked and the fork's `before-tool` adds nothing to the snapshot. (The call itself, the cells and the cards are the `abilities::tests` rows against the real host; this row needs only the manifest.)"}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$ROOT/src/plugin.json", "json": {"name": "echo-ability", "version": "0.1.0", "abilities": [{"name": "echo", "description": "Returns its arguments.", "input_schema": {"type": "object"}}]}}
+{"do": "write_file", "path": "$ROOT/src/plugin.wasm", "text": "wasm-one"}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/claude.log\")) (\"mock-gw\" :ai claude-openrouter :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/gw.log\")) (\"mock-codex\" :provider codex :command (\"$MOCK\" \"acp\" \"--as\" \"codex\" \"--log\" \"$ROOT/codex.log\")) (\"mock-gemini\" :provider gemini :command (\"$MOCK\" \"acp\" \"--as\" \"gemini\" \"--log\" \"$ROOT/gemini.log\")) (\"mock-gemini-fork\" :provider gemini :command (\"$MOCK\" \"acp\" \"--as\" \"gemini\" \"--panel\" \"before-tool,context,drop,compact-preview\" \"--panel-policy\" \"engine\" \"--log\" \"$ROOT/gemini-fork.log\")) (\"mock-kimi\" :provider kimi :command (\"$MOCK\" \"acp\" \"--as\" \"kimi\" \"--log\" \"$ROOT/kimi.log\")) (\"mock-kimi-fork\" :provider kimi :command (\"$MOCK\" \"acp\" \"--as\" \"kimi\" \"--panel\" \"before-tool,context,compact-preview\" \"--log\" \"$ROOT/kimi-fork.log\")) (\"mock-dsh\" :provider deepseek :command (\"$MOCK\" \"acp\" \"--as\" \"dsh\" \"--log\" \"$ROOT/dsh.log\")) (\"mock-dsh-fork\" :provider deepseek :command (\"$MOCK\" \"acp\" \"--as\" \"dsh\" \"--panel\" \"before-tool,context,drop\" \"--log\" \"$ROOT/dsh-fork.log\")))) (drgnx-agents-matrix (:cells ((:action plugin.abilities :column (:role chat) :verdict allow)))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "run", "args": ["plugins", "install", "$ROOT/src"], "expect_code": 0, "expect_stdout": "installed echo-ability 0.1.0"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "plugins/list", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"plugins": [{"name": "echo-ability", "state": "unapproved", "hash": "$capture:hash"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "plugins/approve", "params": {"name": "echo-ability", "hash": "$hash"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"name": "echo-ability", "state": "approved"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-agents-plugins", "source": "row", "value": ["echo-ability"]}, {"name": "drgnx-agents-hook-rules", "source": "row", "value": [{"id": "watch-hub-tools", "point": "before-tool", "tool-kinds": ["drgnx"], "verdict": "annotate", "reason": "a hub tool"}]}, {"name": "drgnx-ai-providers", "source": "row", "value": {"openrouter": {"kind": "openai", "url": "https://openrouter.ai/api/v1", "caps": ["chat"], "messages": true, "key_env": "KEY"}}}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"applied": 3}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "gateway/keys", "params": {"keys": {"openrouter": "k"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 10, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "expect", "conn": "c", "json": {"id": 10, "result": {"id": "$capture:claude", "name": "$string"}}, "within_ms": 30000}
+{"do": "file", "path": "$ROOT/claude.log", "contains": "drgnx-plugins", "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 11, "method": "agents/get", "params": {"id": "$claude"}}}
+{"do": "expect", "conn": "c", "json": {"id": 11, "result": {"session": {"id": "$claude", "hooked": {"before_tool": ["drgnx"], "by_adapter": [], "unhooked": []}}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 20, "method": "agents/start", "params": {"profile": "mock-gw", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "expect", "conn": "c", "json": {"id": 20, "result": {"id": "$capture:gw", "name": "$string"}}, "within_ms": 30000}
+{"do": "file", "path": "$ROOT/gw.log", "contains": "drgnx-plugins", "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 21, "method": "agents/get", "params": {"id": "$gw"}}}
+{"do": "expect", "conn": "c", "json": {"id": 21, "result": {"session": {"id": "$gw", "hooked": {"before_tool": ["drgnx"], "by_adapter": [], "unhooked": []}}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 30, "method": "agents/start", "params": {"profile": "mock-codex", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "expect", "conn": "c", "json": {"id": 30, "result": {"id": "$capture:codex", "name": "$string"}}, "within_ms": 30000}
+{"do": "file", "path": "$ROOT/codex.log", "contains": "drgnx-plugins", "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 31, "method": "agents/get", "params": {"id": "$codex"}}}
+{"do": "expect", "conn": "c", "json": {"id": 31, "result": {"session": {"id": "$codex", "hooked": {"before_tool": ["drgnx"], "by_adapter": [], "unhooked": []}}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 40, "method": "agents/start", "params": {"profile": "mock-gemini", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "expect", "conn": "c", "json": {"id": 40, "result": {"id": "$capture:gemini", "name": "$string"}}, "within_ms": 30000}
+{"do": "file", "path": "$ROOT/gemini.log", "contains": "drgnx-plugins", "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 41, "method": "agents/get", "params": {"id": "$gemini"}}}
+{"do": "expect", "conn": "c", "json": {"id": 41, "result": {"session": {"id": "$gemini", "panel": "$absent", "hooked": {"before_tool": ["drgnx"], "by_adapter": [], "unhooked": []}}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 50, "method": "agents/start", "params": {"profile": "mock-gemini-fork", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "expect", "conn": "c", "json": {"id": 50, "result": {"id": "$capture:gfork", "name": "$string"}}, "within_ms": 30000}
+{"do": "file", "path": "$ROOT/gemini-fork.log", "contains": "drgnx-plugins", "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 51, "method": "agents/get", "params": {"id": "$gfork"}}}
+{"do": "expect", "conn": "c", "json": {"id": 51, "result": {"session": {"id": "$gfork", "panel": {"features": ["context", "drop", "compact-preview", "before-tool"]}, "hooked": {"before_tool": ["drgnx"], "by_adapter": [], "unhooked": []}}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 60, "method": "agents/start", "params": {"profile": "mock-kimi", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "expect", "conn": "c", "json": {"id": 60, "result": {"id": "$capture:kimi", "name": "$string"}}, "within_ms": 30000}
+{"do": "file", "path": "$ROOT/kimi.log", "contains": "drgnx-plugins", "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 61, "method": "agents/get", "params": {"id": "$kimi"}}}
+{"do": "expect", "conn": "c", "json": {"id": 61, "result": {"session": {"id": "$kimi", "panel": "$absent", "hooked": {"before_tool": ["drgnx"], "by_adapter": [], "unhooked": []}}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 70, "method": "agents/start", "params": {"profile": "mock-kimi-fork", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "expect", "conn": "c", "json": {"id": 70, "result": {"id": "$capture:kfork", "name": "$string"}}, "within_ms": 30000}
+{"do": "file", "path": "$ROOT/kimi-fork.log", "contains": "drgnx-plugins", "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 71, "method": "agents/get", "params": {"id": "$kfork"}}}
+{"do": "expect", "conn": "c", "json": {"id": 71, "result": {"session": {"id": "$kfork", "panel": {"features": ["context", "compact-preview", "before-tool"]}, "hooked": {"before_tool": ["drgnx"], "by_adapter": [], "unhooked": []}}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 80, "method": "agents/start", "params": {"profile": "mock-dsh", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "expect", "conn": "c", "json": {"id": 80, "result": {"id": "$capture:dsh", "name": "$string"}}, "within_ms": 30000}
+{"do": "file", "path": "$ROOT/dsh.log", "contains": "drgnx-plugins", "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 81, "method": "agents/get", "params": {"id": "$dsh"}}}
+{"do": "expect", "conn": "c", "json": {"id": 81, "result": {"session": {"id": "$dsh", "panel": "$absent", "hooked": {"before_tool": ["drgnx"], "by_adapter": [], "unhooked": []}}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 90, "method": "agents/start", "params": {"profile": "mock-dsh-fork", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "expect", "conn": "c", "json": {"id": 90, "result": {"id": "$capture:dfork", "name": "$string"}}, "within_ms": 30000}
+{"do": "file", "path": "$ROOT/dsh-fork.log", "contains": "drgnx-plugins", "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 91, "method": "agents/get", "params": {"id": "$dfork"}}}
+{"do": "expect", "conn": "c", "json": {"id": 91, "result": {"session": {"id": "$dfork", "panel": {"features": ["context", "drop", "before-tool"]}, "hooked": {"before_tool": ["drgnx"], "by_adapter": [], "unhooked": []}}}}, "within_ms": 10000}

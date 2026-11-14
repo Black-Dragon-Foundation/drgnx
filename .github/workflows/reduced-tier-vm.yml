@@ -1,0 +1,91 @@
+# The reduced tier's launch rows (tests/launch_sandboxed.rs), run where the reduced tier is real: in a Fedora 45 VM
+# (Landlock ABI 9 or later) booted under KVM on the runner. GitHub's Ubuntu runners boot Linux 7.0 (ABI 8), so on the
+# runner itself those rows fall back to the full tier. Weekly, on demand, and on any change to gleipnir or to the rows.
+# A row that fell back to the full tier inside the VM is a failure. Nothing secret is read. docs/develop/ci.md, "The reduced tier's
+# launch rows in a VM"
+name: Reduced tier VM
+
+on:
+  schedule:
+    - cron: "41 5 * * 3"
+  workflow_dispatch:
+  push:
+    branches: [main, "ci/*"]
+    paths:
+      - "runtime/crates/gleipnir/**"
+      - "runtime/crates/drgnx-ratatoskr/tests/launch_sandboxed.rs"
+      - ".github/workflows/reduced-tier-vm.yml"
+      - ".github/ci/browser-vm.sh"
+  pull_request:
+    paths:
+      - "runtime/crates/gleipnir/**"
+      - "runtime/crates/drgnx-ratatoskr/tests/launch_sandboxed.rs"
+      - ".github/workflows/reduced-tier-vm.yml"
+      - ".github/ci/browser-vm.sh"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reduced-tier-vm-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  launch-rows:
+    name: Launch rows on the reduced tier (Fedora 45 VM, KVM)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      # The evidence a reader needs if the runner has no KVM: what the runner offers, and a failure that says so (the
+      # VM would otherwise run emulated and never answer within the job's time).
+      - name: KVM on this runner
+        run: |
+          uname -r
+          ls -l /dev/kvm || true
+          grep -c -E 'vmx|svm' /proc/cpuinfo || true
+          if [ ! -e /dev/kvm ]; then
+            echo "::error title=no KVM::this runner has no /dev/kvm: the Fedora VM would run emulated and not answer; the reduced tier's launch rows cannot run here"
+            exit 1
+          fi
+      - name: bubblewrap 0.12.0 (prebuilt, or built from source)
+        env:
+          TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          REF="$(bash .github/ci/ghcr.sh ref drgnx-bwrap "$(bash test/container/image-tag.sh .github/ci/bwrap/Containerfile)-x64")"
+          if [ -n "$REF" ]; then
+            bash .github/ci/ghcr.sh file "$REF" bwrap "$RUNNER_TEMP/bwrap"
+          else
+            sh .github/ci/bwrap/build.sh "$RUNNER_TEMP/bwrap"
+          fi
+          sudo install -m 0755 "$RUNNER_TEMP/bwrap/bwrap" /usr/bin/bwrap
+          /usr/bin/bwrap --version
+      - run: bash .github/ci/rust.sh
+      - name: build the launch rows (test hooks) and the binaries they run
+        run: |
+          cargo build --locked --manifest-path runtime/Cargo.toml -p domr --bin ratatoskr-mock
+          cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p gleipnir-escape --features drgnx-ratatoskr/test-hooks
+      - name: the launch rows in the Fedora 45 VM, on the reduced tier
+        run: |
+          bin=$(cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks --test launch_sandboxed --no-run --message-format=json | jq -r 'select(.reason == "compiler-artifact" and .executable != null and .target.name == "launch_sandboxed" and (.target.kind | index("test"))) | .executable')
+          [ -n "$bin" ] && [ "$(printf '%s\n' "$bin" | wc -l)" = 1 ] || { echo "expected one launch_sandboxed test binary, got: ${bin:-none}" >&2; exit 1; }
+          t=$PWD/runtime/target/debug
+          bash .github/ci/browser-vm.sh up "$RUNNER_TEMP/vm"
+          bash .github/ci/browser-vm.sh put "$RUNNER_TEMP/vm" /usr/bin/bwrap "$t/ratatoskr" "$t/gleipnir-probe" "$t/ratatoskr-mock" \
+            "$PWD/runtime/crates/drgnx-ratatoskr/tests/data" "$PWD/test/conformance/fixtures" "$bin"
+          # the VM's own needs: git (the project-chat row runs it) and a /tmp that holds a copy of the hub binary per
+          # row (the rows' fixtures live there; the image's /tmp is a tmpfs of half the RAM)
+          bash .github/ci/browser-vm.sh run "$RUNNER_TEMP/vm" "sudo dnf -y install git >/dev/null && sudo mount -o remount,size=12G /tmp && df -h /tmp"
+          bash .github/ci/browser-vm.sh run "$RUNNER_TEMP/vm" "cd '$PWD/runtime' && '$bin' --ignored --test-threads 1 --nocapture" 2>&1 | tee "$RUNNER_TEMP/launch.log"
+          test "${PIPESTATUS[0]}" = 0
+          # the rows say when the kernel's ABI is below 9 and they ran on the full tier: that is not what this job is for
+          if grep -q "this row runs on the full tier" "$RUNNER_TEMP/launch.log"; then
+            echo "::error title=full tier::the VM's kernel is below Landlock ABI 9: the launch rows did not run on the reduced tier"
+            exit 1
+          fi
+      - if: always()
+        run: bash .github/ci/browser-vm.sh down "$RUNNER_TEMP/vm" || true

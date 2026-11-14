@@ -13,7 +13,6 @@
 (load (expand-file-name "modules/tools/drgnx-layouts" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-replace" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-ai-ui" drgnx-dir) nil t)
-(load (expand-file-name "modules/tools/drgnx-agents-ui" drgnx-dir) nil t)
 
 (defmacro drgnx-large-files-callers-test--visit (form)
   "Run FORM with `find-file-noselect' stubbed: the first visit leaves FORM with what it saw, the list
@@ -35,8 +34,7 @@
                                    ((symbol-function 'drgnx-layouts--reopen-groups) #'ignore))
                            (drgnx-large-files-callers-test--visit (drgnx-layouts--put-main (list :fill t :main nil))))
                          '(auto nil)))
-          ;; Replace's two visits: the whole file
-          (should (equal (drgnx-large-files-callers-test--visit (drgnx-replace--apply-file file nil "x")) '(whole nil)))
+          ;; Replace's visit (its writes go to buffers open already, or the hub): the whole file
           (with-temp-buffer
             (should (equal (drgnx-large-files-callers-test--visit
                             (drgnx-replace--show-match (list :file file :line 1 :col 0 :text "one") nil))
@@ -44,17 +42,7 @@
           ;; AI apply-hunk: the whole review copy
           (with-temp-buffer
             (setq-local drgnx-ai--edit (list :copy file))
-            (should (eq (car (drgnx-large-files-callers-test--visit (drgnx-ai-edit-apply-hunk))) 'whole)))
-          ;; the agent edit review: diff-mode visits the copy from the review's buffer, which says `whole'
-          (let* ((s (drgnx-agents--make :name "fake" :cwd dir))
-                 (b (drgnx-agents-ui--review-open s (list :id 5 :path file :content "one\nTWO\n"))))
-            (unwind-protect
-                (with-current-buffer b
-                  (should (eq (buffer-local-value 'drgnx-large-file-open b) 'whole))
-                  (goto-char (point-min))
-                  (diff-hunk-next)
-                  (should (eq (car (drgnx-large-files-callers-test--visit (diff-apply-hunk))) 'whole)))
-              (kill-buffer b))))
+            (should (eq (car (drgnx-large-files-callers-test--visit (drgnx-ai-edit-apply-hunk))) 'whole))))
       (delete-directory dir t))))
 
 (ert-deftest drgnx-large-files/off-persist-and-replace-never-ask ()
@@ -69,8 +57,6 @@
           (let ((b (drgnx-persist--visit file)))      ; it swallows errors: a question would give nil
             (should (buffer-live-p b))
             (kill-buffer b))
-          (should (equal (drgnx-replace--apply-file file nil "y") '(0 nil nil)))
-          (kill-buffer (find-buffer-visiting file))
           (with-temp-buffer
             (cl-letf (((symbol-function 'drgnx-wb-show-in-editor) (lambda (_buf _select) (selected-window))))
               (drgnx-replace--show-match (list :file file :line 1 :col 0 :text "x") nil)))

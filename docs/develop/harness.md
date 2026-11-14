@@ -34,6 +34,14 @@ selector is passed into the scenario session too.
 
 ### One Emacs per test file
 
+The GUI tests (`--ui`) are the exception: one session runs them all, so a row that leaves a frame size, a window's
+tab or header line, a mode or a default mode line behind breaks a later row with pixels that are merely elsewhere.
+The look's rows are defined with `drgnx-look-gui-deftest` (`test/fixtures/look-gui-fixture.el`), an `ert-deftest`
+that starts with `drgnx-look-gui-check-clean`: the session must be as it was before the first row (frame size, scale,
+font and the parameters that move pixels, the selected window and its parameters, focus, modes, themes, global hooks
+and mode lines). A failure names what differs, and the row that left it puts it back in its own unwind. Rows are never
+reordered or rerun to pass.
+
 `bin/drgnx test` and each unit shard of `bin/drgnx check` run every test file in a batch Emacs of its own, as Emacs's
 own `make check` does: a hook, timer, advice, feature or variable a file leaves behind never reaches the next file,
 so a test cannot pass or fail because of the file that happened to run before it. Within a file, ERT still runs the
@@ -81,6 +89,50 @@ GUI and live tiers and the tests that start an Emacs of their own keep their own
 
 `bin/drgnx test --shuffle[=SEED]` shuffles each file's tests from a seed, and `--find-polluter TEST [FILE…]` bisects the
 tests before TEST down to the one that makes it fail ([check.md](check.md#the-order-of-the-tests---shuffle---find-polluter)).
+
+### Running the whole suite locally
+
+A full `bin/drgnx test` is green only with two binaries, which CI builds and a local checkout does not have: Ratatoskr
+(`DRGNX_RATATOSKR_BIN`, built with `--features drgnx-ratatoskr/test-hooks`) and huginn's `dump` example
+(`DRGNX_HUGINN_DUMP`). `test/no-skip.eld` lists the tests that must run, and in a full run a listed test that skipped is
+a failure, so without the binaries about 175 hub-client, agents-mirror, ai-gateway, agent-pair-hub and work tests, and
+`drgnx-huginn/differential-fresh-seed`, fail with nothing but "skipped" as the reason (the huginn one prints no
+per-test line). Build both (`cargo build -p drgnx-ratatoskr -p huginn --examples --bins --features
+drgnx-ratatoskr/test-hooks` in `runtime/`), set the two variables, and run `bin/drgnx test` (or `--container`, which
+mounts them). A run narrowed by `DRGNX_TEST_SELECTOR` does not hold the list. The selector is read as a Lisp string:
+`DRGNX_TEST_SELECTOR='"a\\|b"'`, quotes included.
+
+The GUI suite (`test --ui`'s session) holds every hub row to run, narrowed or not. A session inherits no
+`DRGNX_RATATOSKR_BIN`, so `drgnx-ui-run-ui-session-tests` passes it explicitly: the caller's value, or else the checkout's
+`runtime/target/debug/ratatoskr`. It also sets `DRGNX_TEST_HUB_REQUIRED=1`, and under that a hub fixture that finds no
+Ratatoskr fails the row (`drgnx-test-no-hub`) instead of skipping it.
+
+#### The test hub
+
+`bin/drgnx test --ui` and `--scenario` (and `--container --ui` / `--scenario`, on the host before the container starts) give every contributor the same
+hub: `test_hub` fetches libghostty-vt's pinned tarballs when they are missing (`runtime/crates/ghostty-vt-sys/fetch.sh`,
+as `install.sh` sets the terminal's engine up; Zig 0.17 builds it), builds `cargo build --locked -p drgnx-ratatoskr -p
+domr -p drgnx-term --bins --features drgnx-ratatoskr/test-hooks` (cargo builds nothing when the binaries are current) and
+sets `DRGNX_RATATOSKR_BIN` to `runtime/target/debug/ratatoskr`, with `ratatoskr-mock` (the gateway tests' provider) and
+`drgnx-term` (the terminal rows' worker) beside it. `--container` mounts that directory, so both siblings are seen inside.
+
+- `DRGNX_RATATOSKR_BIN` already naming a binary: used as it is, nothing built (CI builds its own: its GUI tier fetches
+  the bins its `bins-linux` job built, drgnx-term included, `fetch-test-bins`); a missing `drgnx-term` beside it is said.
+- `DRGNX_TEST_CARGO`: the cargo to build with, a command run from the checkout's root that adds `--locked` and the
+  manifest itself (a wrapper that builds in a container); without it, the cargo `install.sh` recorded, else the one on
+  `PATH`, with the Zig `install.sh` recorded first on `PATH`.
+- `DRGNX_TEST_HUB_BUILD=0`: nothing is built (the run inside `--container` gets it: the host built the hub).
+
+A hub that does not build stops the run with the reason before any session starts.
+
+The helpers of the hub-client tests (`test/fixtures/hub-client-fixture.el`) are a fixture so that loading them registers
+no test: a test file that loaded `hub-client-test.el` whole ran its 54 tests again in its own session.
+`test/fixtures/gated-hub-fixture.el` builds on them for a panel whose rows a real hub builds (the Buffers panel):
+`drgnx-test-with-gated-hub` runs its body on the manual clock with a gated hub this Emacs is connected to, and
+`drgnx-test-hub-settle` waits for a condition, moving the hub's clock and releasing what it wrote before each look. A
+GUI row gets a hub of its own from `test/fixtures/ui-hub-fixture.el` (`drgnx-ui-hub-start`, `drgnx-ui-hub-stop`).
+Batch Emacs never redisplays and a test's wait never idles, so such a test sends the panel's env itself
+(`drgnx-view-env-update`) once the panel is shown.
 
 ### Native trampolines
 
@@ -152,8 +204,8 @@ seconds (default 110; `bin/drgnx check` gives its `ui` job 300) and never leaves
 `core/drgnx-modules-fingerprint.el` is what the leak census and the module test helper read global state with.
 `(drgnx-modules-fingerprint)` returns a plist of the state a test or a module can leave behind: timers (with their
 repeat), processes, buffers, `features`, the default values of the hooks in `drgnx-modules-fingerprint-hooks` (Emacs's
-and third-party hooks, by hand), `unload-feature-special-hooks` and every bound `drgnx-*` variable ending in `-hook`,
-`-hooks` or `-functions` (found once per Emacs with one `apropos-internal`, about 10 ms, and again by every full
+and third-party hooks, by hand), `unload-feature-special-hooks` and every bound `drgnx-*` variable ending in `-hook`
+or `-functions` (a `-hooks` name holds hook names, as `unload-feature-special-hooks` does: no hook) (found once per Emacs with one `apropos-internal`, about 10 ms, and again by every full
 scan, so a new drgnx hook needs no line anywhere), the `add-function` advice on
 `drgnx-modules-fingerprint-function-variables`, `global-mode-string`, `auto-mode-alist`, `major-mode-remap-alist`,
 `after-load-alist`, `emulation-mode-map-alists`, `default-frame-alist`, `global-minor-modes`, the length of
@@ -192,14 +244,20 @@ let-binds the registries the module touches:
 ```
 
 The first argument is a list of module names (evaluated): their files are loaded, and so are the modules they
-`:requires`, all the way down — also a required module whose file another file already loaded (`tools/cockpit`
-loads `tools/work`'s). A module's file is loaded only when the module is not in the table yet (a string element is loaded each time): then
+`:requires`, all the way down — also a required module whose file another file already loaded. A module's file is loaded only when the module is not in the table yet (a string element is loaded each time): then
 a `defcustom` with a `:set` function sets the global value again, over a `let` binding around the helper, and a
 function the file defines replaces a `cl-letf` stub made outside it. Set a module's own setting, and stub its functions, inside BODY. An element that is a string is a file to load instead, for a fake module a test writes to a temporary
 directory. `:stages '(startup idle)` sets up every shipped module of those stages as well. The module table, report
 and state are fresh, and `DRGNX_CONFIG_DIR` is a temporary directory, so the user's `modules.eld` is never read.
 Inside BODY, `drgnx-modules--table` holds only the selected modules and the modules they require, not every module file that was loaded.
 
+- **Under `--leaks`, load the libraries first.** The census reads the state around each test, so a library that the
+  first test's helper loads shows its top-level registrations (rules, places, view types, config definitions) as that
+  test's leaks. A file calls `(drgnx-test-modules-preload '(tools/browser))` once at its top, after loading the
+  fixture. Two more causes of a leak on a test's behalf: a `with-temp-buffer` buffer runs no kill hooks
+  (`inhibit-buffer-hooks`), so the timers a buffer owns outlive it (make the buffer with `generate-new-buffer` and
+  kill it); and a gated hub run (`drgnx-test-gated`) enters the test clock after the helper's setups, so a timer
+  they armed stays in the real list: wrap the helper in `(drgnx-test-with-clock (:allow-pending t) …)`.
 - **Teardown is part of the test.** After BODY (also when BODY signals) the modules are turned off last first through
   `drgnx-module-teardown`, then `drgnx-modules-after-teardown-functions` run: every use of the helper tests the
   module's teardown too. The product's after-teardown function re-applies the keys and menus from the registry; the
@@ -335,8 +393,9 @@ skip redisplay and hide the very jank we want to see.
 - **Pixels:** clicks take root-frame pixel coordinates — the same pixels as a screenshot (top-left = 0,0).
   `(posn-at-x-y x y root-frame)` turns them into the click position.
 - **Targets:** instead of pixels, name a window by its buffer name or major mode (e.g. `treemacs-mode`) and
-  some visible text; the click lands in the middle of the first character of the first visible occurrence.
-  An occurrence counts only if it is not invisible (folded) and a click at the computed pixel lands on it
+  some visible text; the click lands in the middle of the first character of the first visible occurrence —
+  the middle of that glyph as drawn, so a narrow glyph in a proportional font (a `t` in the Explorer's UI
+  font is half a column) is hit too. An occurrence counts only if it is not invisible (folded) and a click at the computed pixel lands on it
   (same window, same position) — text cut off at the right edge of a truncated line is skipped. A buffer that
   is not shown, or text with no such occurrence, is an error — never a click somewhere else.
 - **Clicks** are `down-mouse-N` + a release; `count 2` adds `double-down-mouse-N` + `double-mouse-N`;
@@ -375,7 +434,8 @@ every root-frame window — buffer, `window-start`, point, pixel edges, header-l
 selected — plus the minibuffer height, and also records `window-scroll-functions` calls, redisplays and GC.
 It snapshots the signatures **just before and right after every command** (`pre-`/`post-command-hook`) and
 **every timer** (advice on `timer-event-handler`), and polls once per tick, so each change is attributed to its
-cause: the innermost command or timer running when it happened (`command:NAME`, `timer:FUNCTION` — a timer
+cause: the innermost command or timer running when it happened (`command:NAME`, or `command:<lambda>` /
+`command:<keymap>` for a command that is not a symbol, never its printed form; `timer:FUNCTION` — a timer
 that runs inside another timer's or a command's `sit-for` keeps its own changes), or `other` when neither ran
 (process output — filters and sentinels are called from C and cannot be intercepted — or redisplay). An `other`
 change seen while the frame's pixel size changed is `wm:resize`: the window manager resized the frame; a resize
@@ -438,6 +498,11 @@ no syntax-cache flush or jit-lock notice) — set up buffers through requests if
 under test with input events. A live test
 installs a gryphn-shaped follower and checks that `measure` reports its snap-back.
 
+The GUI rows run no hub, so code that asks one from a hook or a timer fails there with "Not connecting to the drgnx
+hub: …/drgnx does not exist (no hub)". In a session that error also names the functions that called
+`drgnx-hub--connect-socket` (`drgnx-uitest--hub-callers`, advice on it), so a row that fails on it says which caller
+asked: the debug timeline's `find-file-hook` did, about one row in seven at scale 2, until it learned not to.
+
 ## Guard
 
 `harness/drgnx-jank-guard.el` is on in every session. It records (never blocks) calls to `select-window`,
@@ -479,8 +544,9 @@ shell (the shell applies the alpha itself); under GTK, Glitnir draws such a chil
 For tests that compare pixels. A snapshot is `(W H BYTES)`: `BYTES` holds W×H ARGB32 pixels, rows tightly packed,
 each a 32-bit word in the machine's byte order (little-endian: B G R A). Rectangles are `(L T R B)` in device pixels
 (`frame-edges` × `(drgnx-uitest-device-scale FRAME)`), right and bottom exclusive. That function is `frame-scale-factor`
-under GTK, which works in logical pixels, and 1 on the native shell, whose frames are in device pixels at any scale;
-sizes in logical pixels, such as a margin or a radius, still go by `frame-scale-factor`.
+under GTK, which works in logical pixels, and 1 on Nidhogg's native shells (Wayland and Naglfar,
+`drgnx-pixels-device-p`), whose frames are in device pixels at any scale; sizes in logical pixels, such as a margin or
+a radius, go through `drgnx-px` ([core.md](core.md#logical-and-device-pixels-drgnx-pixelsel)).
 
 | Function | Returns |
 |---|---|
@@ -490,8 +556,83 @@ sizes in logical pixels, such as a margin or a radius, still go by `frame-scale-
 | `(drgnx-uitest-region-equal-p A B RECT &key tolerance ignore-alpha)` | non-nil when every channel differs by at most `tolerance` (default 0) on RECT; nil for different sizes |
 | `(drgnx-uitest-darker-p A B X Y)` | A's pixel has the lower luma (0.2126 R + 0.7152 G + 0.0722 B) |
 | `(drgnx-uitest-bare-frame)` | scroll bars, tool bar, menu bar and `blink-cursor-mode` off, so a snapshot and an export can be equal |
+| `(drgnx-uitest-pointer-set X Y)` | moves the compositor's pointer to the layout position X, Y (logical pixels): `t` when it moved, `failed` when sway refused, `unsupported` anywhere but sway (`swaymsg "seat - cursor set X Y"`), so a row that needs a real pointer (hover) skips there; a hover row runs in the `--compositor sway` pass. Headless sway has no input devices, so its seat has no pointer and `cursor set` reaches no client: the first call makes a virtual pointer (`zwlr_virtual_pointer_manager_v1`, the Wayland wire protocol spoken from Lisp over the session's socket, kept open for the session), which gives the seat a pointer; `failed` when the compositor offers none |
+| `(drgnx-uitest-pointer-available-p)` | non-nil when the session's compositor is mutter with its RemoteDesktop service on the session bus, so a real pointer can be driven |
+| `(drgnx-uitest-pointer-move X Y)` | moves mutter's virtual pointer to the frame position X, Y: to the top-left corner, then relative motion, corrected up to four times from `mouse-pixel-position` |
+| `(drgnx-uitest-pointer-click X Y &optional UNTIL TIMEOUT)` | a real press and release of the left button at X, Y through mutter's RemoteDesktop (`NotifyPointerButton` 272), then reads the key sequences the clicks make and runs their commands, as the command loop would (a nested `recursive-edit` reads no real events in a test run from the server); the keys are kept in `drgnx-uitest-pointer-keys`; it stops when UNTIL returns non-nil or after TIMEOUT seconds |
 
 The export is decoded in Lisp (zlib and a PNG unfilter), so it needs an Emacs with zlib.
+
+## Look scenes
+
+`drgnx ui look-scenes OUT` draws the look's scenes and saves them as PNGs in OUT. Each PNG is named after the approved
+mockup it is compared with (`window-dark-s1.png`, `palette-s2.png`, …). The command runs in a container on the
+Nidhogg build under test, once with `DRGNX_UI_SCALE=1` and once with `2`.
+
+How it works:
+- It starts a session with the drgnx configuration at 1440×900 logical pixels, the mockups' window.
+- It loads `harness/drgnx-look-scenes-session.el` into the session. The session makes the mockups' project at
+  `~/code/drgnx` (in the session's own HOME), on branch `main`: the files the mockups name, `drgnx-gateway.el` and
+  `gateway-test.el` modified, `jobs-test.el` untracked, the lock file ignored, and a shell script with a Python
+  heredoc. It opens what the mockups have open: `drgnx-gateway.el` at line 216, `gateway-test.el` with unsaved text,
+  `drgnx-job.el`, Magit's status and the Explorer.
+- It calls each scene's `drgnx-look-scene-NAME`. The scenes, in order, are listed in `drgnx-look-scenes`.
+  A scene on the editor starts the scenes' hub first (the session starts none) and waits (20 s at most, else an error)
+  for the Explorer's Files rows, which come from the hub: without it the section is empty.
+  A scene that changes the theme waits (5 s at most, else an error) until no hub-fed view is drawn dimmed: its rows
+  wait for the hub's reset to the new theme, and a shot taken before would show the stale shade. `window-dark`'s
+  status bar has the mockup's facts: the seeded plan run counted from the hub (`1 job`), and the gateway file's two
+  problems from a stand-in Flymake backend (`✕ 1 ⚠ 1`), a stand-in eglot connection (`● eglot`; no language server
+  runs) and the mock agent, which works in the scenes' project and edits a file there (`● replay-… editing`). The
+  mock agent's hub seeds the plan run too, so a Work scene after an agent scene finds it. `start-page` and `start-page-light` have no mockup: they are judged against the components' spec (buttons, keycaps, the shield). The
+  three highlights scenes, `highlights-dark`, `highlights-light` and `highlights-hc`, have none either: each puts every highlight in one
+  shot, judged against the mockups' tokens. The editor holds the current line, isearch's current and other matches,
+  show-paren, eglot's symbol highlight, Flymake's marks, a rectangle and a region. A second group beside it holds a
+  diff, so the focused card's ring shows. A row in each sidebar section is hovered. Highlights that a command makes are
+  drawn as overlays in their faces, the way those commands draw them.
+  Then `explorer-focused-dark`, `explorer-focused-light` and `explorer-focused-hc`, the window scene with the Explorer
+  focused, so its selected row shows the focus ring and the other sections the inactive selection. The last two,
+  `search-preview` and `search-sheet` (mockup `search-view`), search the project for `(gateway)--pending` replaced by
+  `\1--queued` (regexp) with the third match unticked, in the dark theme, then show the first file's preview tile and
+  the Replace All sheet. They need the hub: the scene starts `DRGNX_RATATOSKR_BIN` in the foreground (a session starts
+  none). `debugging` opens the debugging mockup's `inventory.py` at line 24 with its breakpoints (18, a condition on
+  22, 24, a logpoint on 25, 30 disabled) in the breakpoint column; the hub's answer is given to the column directly,
+  since no session runs. The scenes share that hub, started with `RATATOSKR_SEED_SCENE=1`: the hub writes one plan
+  run into its fresh store (`orch::scene`, test-hooks only). It is a running job, `scene-run`, that the runner leaves alone (no agent starts for it), with a rule pack, tasks
+  in each gate state and their evidence, a held `gate` card, a batch of three with its affected groups' runs on two
+  machines, and the push tiers' runs at the line's head. Every map the hub opens also shows the held task's agent,
+  a seeded session that is not live ("Sonnet · search-quick", 41 min in its state, ≈$0.90, ctx 88%). `work-flow` (mockup
+  `hub-orchestration`) opens the Work map on that hub, then the Flow lens beside it, in the dark theme, then selects
+  the held task (its detail tile in the side panel) and opens the Rules tile below. It needs Nidhogg's view model (Sjá;
+  the line, not the tarball). A map or Flow drawn without the hub's rows shows only its placeholder text, so it is an
+  error of the scene, not a shot.
+- **The Work map's scenes** (`work-space-dark`, `work-space-light`, `work-space-hc`; mockups `work-space-dark.html`
+  and `-light.html`, the high-contrast one judged against the tokens) need the map's own seed: the hub started with
+  `RATATOSKR_SEED_SCENE=map` runs the same plan run (so its held gate is a card on the strip) and, in place of the
+  Flow's one agent, feeds every map it opens the mockup's graph (`test/fixtures/work-space/scene.json`, the prototype's
+  asks, specs, plans, four agents with their branches, files and an overlap, two machines, plus a push and a permission
+  card; the agents' minutes are counted from the hub's clock), the strip's forecast and cost chips and the first agent's
+  trail (six steps and a finding, `orch::scene::map_trail`, shown by its trail view in place of the timeline's). The
+  scenes open the Work layout (the Detail island at its right, the trail under the map). The session picks the seed from
+  `DRGNX_LOOK_ONLY`: draw
+  these scenes alone, `DRGNX_LOOK_ONLY=work-space` (it matches all three), never with `work-flow`. Each selects the
+  first agent (its chain lit, the cards off it dimmed, its detail in the side panel) and waits for its rows.
+- It writes `NAME-sN-facts.eld` beside each shot: the themes, the fonts the chrome faces got, the windows, the
+  modules, the visible child frames, `:palette` while a minibuffer is open (whether the palette floats and why: its
+  category's multiform entry, the display action, the frame), and `:limits`, what the line cannot show of that mockup yet (`drgnx-look-scene-limits`). A limit is
+  written down, never hidden by changing the scene. It also writes `scenes-sN.eld`, with the shots and each scene's
+  errors.
+
+What it reads from the environment:
+- `DRGNX_LOOK_ELPA`: a package directory to activate (Magit, Vertico, …). A session has no packages of its
+  own, and the user's install does.
+- `DRGNX_RATATOSKR_BIN`: a `test-hooks` ratatoskr with `ratatoskr-mock` beside it, for the agent panel, the Search
+  and the Work space scenes. Without it, those scenes record what is missing.
+- `DRGNX_LOOK_ONLY`: a regexp; only the scenes whose names match it run (`^search-`).
+
+Nothing in the command asserts a pixel. **A look change is done only when its scene sits beside its mockup at scales 1
+and 2, someone has looked at both, and the remaining differences are written down.** `test/unit/look-scenes-test.el`
+checks that every mockup has a scene and that the project is set up correctly.
 
 ## Emacs-side API
 
@@ -532,14 +673,17 @@ bin/drgnx ui keys drgnx-ui-1-3f9a0c "C-x b"             # kbd syntax
 bin/drgnx ui type drgnx-ui-1-3f9a0c "hello"
 bin/drgnx ui measure drgnx-ui-1-3f9a0c '[{"keys":"C-x 2"},{"x":10,"y":10}]'
 bin/drgnx ui stop drgnx-ui-1-3f9a0c | bin/drgnx ui reap
+bin/drgnx ui look-scenes OUT                     # the look's scenes as PNGs (see Look scenes)
 ```
 
 Input commands wait until the session settles and print the jank report. `click` takes X and Y as non-negative
 integers (pixels) and fails on anything else, never clicking at 0,0 instead. In `measure`, each action is
 delivered before the next one is resolved, so a click after `C-x 3` is aimed at the layout the keys produced. An
-action that fails (a bad key, a target not on screen) ends the measurement — the session's recorder stops — and
-the error names it: `action 2 (:keys "bad"): …`; later actions are not sent. `bin/drgnx` passes arguments after
-`--`, so options Emacs itself knows (`--title`, `-nw`, …) cannot be swallowed by Emacs.
+action `{"pause": SECS}` (`(:pause SECS)`) waits SECS seconds with no input before the next action is sent, so a
+workload can let a typing pause run out between keys. An action that fails (a bad key, a target not on screen)
+ends the measurement — the session's recorder stops — and the error names it: `action 2 (:keys "bad"): …`; later
+actions are not sent. `bin/drgnx` passes arguments after `--`, so options Emacs itself knows (`--title`, `-nw`, …)
+cannot be swallowed by Emacs.
 
 ## Ownership and cleanup
 
@@ -623,7 +767,8 @@ session launcher         systemd         # or detached (process group, no system
   containerd mode). `--podman` is short for `DRGNX_CONTAINER=podman … --container`.
 - **GUI tier in a container:** `test/container/Containerfile.gui` (fedora:45 + `emacs-pgtk mutter sway i3
   xorg-x11-server-Xvfb xrandr xprop emacs-lucid dbus-daemon mesa-dri-drivers ImageMagick procps-ng util-linux`, ~2.15 GB),
-  run with `--memory 3g --memory-swap 3g` (`DRGNX_TEST_GUI_MEMORY` overrides). mutter falls back to a surfaceless software renderer, so no GPU is
+  run with `--memory 3g --memory-swap 3g` (6g for `--perf --ab-env`, which runs two sessions; `DRGNX_TEST_GUI_MEMORY`
+  overrides). mutter falls back to a surfaceless software renderer, so no GPU is
   needed. The container needs `--security-opt seccomp=unconfined --security-opt label=disable`: GTK loads icons
   through glycin, whose `bwrap` sandbox cannot create namespaces under the default policy, and Emacs aborts.
 - **Window managers' image:** `--compositor kwin` and `--compositor niri` run in `drgnx-test-wm:TAG` (TAG: `test/container/image-tag.sh`, a hash of the Containerfile and every file it
@@ -632,6 +777,16 @@ session launcher         systemd         # or detached (process group, no system
   util-linux`, ~2.3 GB; `kwin_wayland` and `sway` lose their `cap_sys_nice` file capability, which the container does
   not grant), with the same cap and security options. `DRGNX_UI_COMPOSITOR=kwin|niri` without `--compositor` picks it
   too. `DRGNX_TEST_WM_IMAGE` uses a prebuilt one (`DRGNX_TEST_GUI_IMAGE` does not apply: that image has neither).
+- **A local run builds an image only when it must.** `bin/drgnx test --container` takes the image `NAME:TAG` (TAG as
+  above) from the local store when it is there; else pulls `ghcr.io/black-dragon-foundation/NAME:TAG` (CI's copy of the
+  same tag; anonymous, `DRGNX_TEST_IMAGE_PULL_TIMEOUT` seconds, default 180) and tags it as `NAME:TAG`; else builds it.
+  Stderr says which: `image: NAME:TAG (local|pulled|built)` (`test/container/image.sh`). `DRGNX_TEST_IMAGE_PULL=0`
+  never pulls (offline). A prebuilt override (below) skips all of it and prints `(prebuilt)`.
+- **A branch's Nidhogg is mounted, never baked.** `DRGNX_CONTAINER_NIDHOGG=PREFIX` (an unpacked Nidhogg build) mounts
+  it read-only at the prefix its `share/nidhogg/BUILDINFO` names and runs it as the Emacs, in every tier (batch,
+  `--ui`, `--scenario`, `--perf`, `--soak`, `--day`, `--tty`) and in the image the tier uses without it. To test a
+  branch's Nidhogg, build it (or take CI's tarball), unpack it and set the variable; no image
+  is built per prefix, so a run costs no image build and leaves none behind.
 - **Image builds are capped** like the runs: with podman, `podman build --memory 3g --memory-swap 3g`
   (`DRGNX_TEST_BUILD_MEMORY` sets another size; docker's buildx ignores `--memory`, so it gets none). A prebuilt image
   override (`DRGNX_TEST_IMAGE`, `DRGNX_TEST_GUI_IMAGE`, `DRGNX_TEST_WM_IMAGE`) must be an image reference (letters, digits,
@@ -662,6 +817,17 @@ per monitor (a count other than the monitors' fails with "scales need one per mo
 `(drgnx-ui-start nil size nil nil monitors compositor SCALES)`. Scale 1 is the default and changes nothing. The
 scale is applied before Emacs starts, and `ui start` then waits up to 10 s for the root frame to show the first
 monitor's scale, else stops the session and fails with `scale S not applied`.
+
+A row that needs a monitor of its own size names it at scale 1 through `(drgnx-ui-size-at-scale "1400x800")`, which
+multiplies it by the tier's scale (the largest of `DRGNX_UI_SCALES`, else `DRGNX_UI_SCALE`): the same logical monitor
+at every scale. A bare `"1400x800"` at scale 2 is 700×400 logical pixels, below mutter's smallest scaled monitor, so
+`gdctl` fails with "Scale 2.0 not supported by mode" and the session never becomes ready.
+
+A test that puts a frame on another monitor (sway: `swaymsg '[title="T"] move to output HEADLESS-2'`, the frame made
+with a `title`) waits for that frame's paint first (`drgnx-test-wait-presented :frame`): a new frame becomes a
+compositor window only when it is drawn and presented, so a wait that only reads process output leaves it unmapped
+and the move finds no node
+(`drgnx-ui-rows-fit/a-view-in-two-classes-shows-each-its-own-rows`, scales 1 and 2).
 
 | Compositor | How the scale is applied |
 |---|---|
@@ -735,14 +901,12 @@ does not have — the move between two outputs cannot run there.
 
 ## Real-tool tests
 
-Two live tests drive an external program drgnx only wraps, so they skip on a machine without it:
-`test/live/dape-live-test.el` (dape against a real debugpy adapter: a three-line script with a breakpoint on line 2
-stops there, and the top frame is at line 2) and `test/live/mermaid-live-test.el` (the Markdown module's mermaid
-job renders a two-node diagram with a real `mmdc`: a PNG through the module's job, an SVG through the same command
-line). `test/container/Containerfile.tools` has everything they need: fedora:45 with `emacs-pgtk`, `debugpy`
-(pip; Fedora has no package), dape 0.27.1 (the version `etc/drgnx.lock.eld` pins, checksum-checked, found through
-`$DRGNX_TOOLS_ELPA`), Node with `@mermaid-js/mermaid-cli` and Fedora's `chromium-headless`. The `mmdc` on its `PATH`
-is a wrapper that adds a puppeteer config with `--no-sandbox` (Chromium cannot sandbox as root in a container).
+A live test drives an external program drgnx only wraps, so it skips on a machine without it:
+`test/live/mermaid-live-test.el` (the Markdown module's mermaid job renders a two-node diagram with a real `mmdc`: a
+PNG through the module's job, an SVG through the same command line). `test/container/Containerfile.tools` has what it
+needs: fedora:45 with Nidhogg, Node with `@mermaid-js/mermaid-cli` and Fedora's `chromium-headless`. The `mmdc` on its
+`PATH` is a wrapper that adds a puppeteer config with `--no-sandbox` (Chromium cannot sandbox as root in a container).
+The debug adapters run live in their own image (debugging.md, "Live adapters").
 
 The image is large (Chromium): build it with at least 3 GB of memory free, and cap the build and every run:
 
@@ -750,11 +914,11 @@ The image is large (Chromium): build it with at least 3 GB of memory free, and c
 podman build --memory 3g --memory-swap 3g --jobs 1 -t drgnx-test-tools:f45 -f test/container/Containerfile.tools test/container
 podman run --rm --memory 3g --memory-swap 3g -v "$PWD:/src:ro,Z" -w /src drgnx-test-tools:f45 \
   emacs --batch -Q -L harness -L core -L wb -l harness/run-ert.el -f drgnx-run-ert-batch \
-  test/live/dape-live-test.el test/live/mermaid-live-test.el
+  test/live/mermaid-live-test.el
 ```
 
 The runner gives the tests a temporary home, so nothing reaches `~`. `bin/drgnx test --ui` and CI do not build this
-image; there the two tests skip.
+image; there the test skips.
 
 ## The second-machine exit test
 
@@ -859,6 +1023,13 @@ Scenarios are ERT tests named `drgnx-scenario/…` in `test/scenario/` that stat
 Code's behaviour is the reference) and run inside a session of the configuration under test. They use only the
 harness API and a per-configuration **driver** (`test/scenario/drivers/<config>.el`: how to open the Explorer,
 open a file, find a row, …); a configuration without a driver skips them.
+
+**The hub.** On a Nidhogg with Sjá the Explorer's rows are the hub's listing, so `bin/drgnx test --scenario` (and
+`--container --scenario`, on the host) builds the test hub as the GUI tier does (`test_hub`, below) and the session
+gets `DRGNX_RATATOSKR_BIN`. A session starts no hub (`DRGNX_NO_HUB_START`): drgnx's driver runs that binary in the
+foreground once (`serve --foreground --parent-pid`, ended with the session), connects, and before a scenario acts
+waits for the hub's rows of the new fixture's root with the editor's file revealed (30 s, setup only: the error names
+the root, the file and the rows drawn). Without a hub binary the driver says so instead of drawing nothing.
 
 **Known reds.** `test/scenario/known-red.eld` lists, per configuration, scenarios expected to fail
 (`((gryphn drgnx-scenario/explorer-click-stays …))`). Such a scenario counts as expected only if it fails an
@@ -985,7 +1156,7 @@ SIGPIPE ignored, in a temp directory of its own; the environment is the caller's
 test. It runs with the GUI tier's security options (`seccomp=unconfined`, `label=disable`) and `--memory 3g`.
 `DRGNX_USER_ELPA` (a directory holding the pinned kkp, and corfu, unpacked) is mounted read-only as `/elpa`, so the
 kkp tests and the kitty exit test run there too; without it they skip. Every `--container` tier mounts it the same
-way, so the batch tests that load a package (gptel's streaming test, the extras teardown) run in a container too.
+way, so the batch tests that load a package (the extras teardown) run in a container too.
 `DRGNX_TEST_TTY_IMAGE` uses a prebuilt image. `bin/drgnx check` runs the tier as the `tty` job (a GUI job for the memory
 accounting, in the parallel phase) when tmux is installed; `--no-gui` leaves it out. The `Terminal tier` workflow runs
 the two container runs nightly ([ci.md](ci.md)).
@@ -1010,7 +1181,8 @@ Also unset: `drgnx-test-env-ambient-variables` (the SSH agent, `GPG_AGENT_INFO`,
 socket and token) and every other variable of the caller that holds a path under the real HOME (found by a scan; the
 only exceptions are `PATH`, `PWD`, `OLDPWD`, `DRGNX_USER_ELPA`, `DRGNX_RATATOSKR_BIN`, the Ratatoskr the client's
 tests run, which macOS CI builds in the checkout under HOME, and `DRGNX_HUGINN_DUMP`, huginn's dump example for the
-differential test). `GNUPGHOME` is RUN/gnupg (mode 700). The unit
+differential test; `drgnx test` finds `runtime/target/debug/examples/dump` without the variable once
+`cargo build -p huginn --example dump` has built it, and the test is on the must-run list, so a full run without it fails). `GNUPGHOME` is RUN/gnupg (mode 700). The unit
 runner also binds `user-emacs-directory` to RUN/emacs, so nothing under `~/.emacs.d` or `~/.config/emacs` is written.
 `DRGNX_USER_ELPA` (the real `~/.config/emacs/elpa`, read-only) is the deliberate exception: tests that load packages
 read it and never write it. `TMPDIR` the runner reads before it fakes anything (its own run directory is made there).
@@ -1117,7 +1289,8 @@ child Emacsen that only need to start together.
 
 A static lint cannot see through macros and fixtures. `DRGNX_TEST_AUDIT=1` records, for each `:det` test, the real-time
 primitives that execute while it runs (`sleep-for` and `sit-for` above 0, `accept-process-output` with a timeout above
-0, or with none on a live process, `make-process`, `start-process`, network, pipe and serial processes) as
+0, or with none on a live process, `make-process`, `start-process`, network and serial processes; not a pipe process,
+which starts no child and opens no socket: a stand-in connection is no real time) as
 `drgnx-audit: TEST PRIMITIVE` lines in the output; a value other than `1` is a file the rows are also appended to. A
 wait under `drgnx-test-with-clock` is virtual and does not count; a process or a socket started there does. `DRGNX_TEST_AUDIT_ALL=1` audits every test (for a run before files carry a class).
 `DRGNX_TEST_AUDIT_FAIL=1` makes each such `:det` test fail the run. All three are off by default. The primitives are
@@ -1125,6 +1298,12 @@ advised only while an audited test runs, the two fixture test files (`clock-fixt
 audited, and the three variables are read once and removed from the environment, so no other test (or a child it starts)
 sees the runner's switches. CI's `unit` and `no-lisp-writes` jobs ([ci.md](ci.md)) and `bin/drgnx test --preflight`'s
 `det` step run with the audit on and failing.
+
+A `cond` test is audited for `sleep-for` and `sit-for` only (with the audit failing, a real sleep fails it): it may wait for events and
+start processes, never wait on time. Only those two primitives are advised for it, so a test that stubs another one is
+not disturbed. A `sleep-for` that Emacs's own library makes to poll a child (`epg-wait-for-completion`: gpg's exit) is an event wait and
+not recorded; the seven `cond` tests that really sleep today are listed in `test/audit-cond-allowed.eld` (a reason and the slice that
+moves each to a virtual clock; `drgnx-lint/audit-cond-register` keeps the list honest, and it only shrinks).
 
 The audit also holds the patterns to their tools (`test/unit/run-ert-audit-test.el` has a row for each). With the audit
 on, the tests tagged `:gated` and `:handshake` ([Test patterns](#test-patterns)) run with these advised, again only
@@ -1148,6 +1327,12 @@ entered the gate (a watcher on `drgnx-test-gate--active` notes the entry) and is
 STRING)`; see [Test patterns](#test-patterns) for what holds the register.
 
 Without `DRGNX_TEST_AUDIT_FAIL=1` they are only reported as `drgnx-audit:` lines.
+
+**Event waits.** A `drgnx-test-wait` waits for an event (a child's output, a socket) and measures nothing:
+`drgnx-lint/event-waits-are-bounded-and-measure-nothing` (every non-`:timing` test file) fails a wait whose `:secs` is
+`nil`, 0 or over 300 (a deadline is a failure message, never a hang), a predicate that reads the wall clock (an elapsed
+wait hidden in an event wait), and a result compared against a duration or a clock reading. What depends on time moves to
+the clock fixture or the hub's `__test_advance`; a real "did not happen" window is `drgnx-test-pause` with its reason.
 
 ### Test patterns
 
@@ -1184,7 +1369,7 @@ peer and stay; the others say "not converted". The audit holds every other test 
 file, and `drgnx-lint/gate-exempt-only-shrinks` holds the rows to a constant in `lint-test-patterns-test.el` that
 only loses entries; `drgnx-lint/the-registers-equal-their-constants` holds the two equal, as for the pattern register.
 `drgnx-test-gate-unnamed-ok` is a stopgap until the hub's agent-session tasks run on its clock:
-`drgnx-lint/gate-unnamed-ok-only-where-listed` lets only the two agents-mirror test files bind or set it.
+`drgnx-lint/gate-unnamed-ok-only-where-listed` lets only the two agents-mirror test files and the Say it test file bind or set it.
 `drgnx-test-gate-waiting-ok` (origins a barrier may find inside a real wait) is fenced the same way by
 `drgnx-lint/gate-waiting-ok-only-where-listed`: only the gate's own test binds it; a file that keeps a job running
 through a barrier on purpose is added by the owner's decision. A process
@@ -1285,6 +1470,13 @@ the client half of the `gated` pattern; the hub half is Ratatoskr's test clock a
   held the connection reads as open (`process-status`), so no close is seen before the data. The client's own
   `delete-process` runs the client's sentinel at once and drops what was held; `set-process-sentinel` and
   `process-sentinel` on a gated connection reach the client's sentinel behind the gate's.
+- **Gated connections are unframed.** The gate replaces the connection's filter (`set-process-filter`), which turns
+  Nidhogg's framing off ([hub.md](hub.md#the-clients-core)): a gated test always runs the client's filter path, whatever
+  `nidhogg-workers-framing` says. The framed path has its own rows (`hub-client-frame-test.el`, and the framed rows of
+  `hub-client-shell-test.el`, whose peers use `drgnx-test-peer-send`), and `hub-client-framed-test.el` runs the framed
+client against the real Ratatoskr (a subscription and a burst of calls; `handshake`, waiting on the hub's answers).
+`NIDHOGG_WORKERS` (for example `+nidhogg-workers-framing`) is passed into the test container, so a run can set the
+switches for the whole suite.
 - **The schedule** is given up front: `(CONN :answer METHOD)`, `(CONN :event NAME)`, `(CONN :line)`, `(CONN :eof)`
   and `(:pause LABEL)`. A step releases its connection's lines up to its own, in order: the gate reorders lines across
   connections, never within one. A connection's challenge and the answers to its first `ping` and its `hello` are
@@ -1313,8 +1505,9 @@ the client half of the `gated` pattern; the hub half is Ratatoskr's test clock a
   (pauses skipped) and every held line in connection open order, and repeats while the client sent more. It returns
   the marker, or nil once no hub answers (a test that stopped the hub). A barrier answer with `unnamed` > 0 (the hub
   wrote from a task without an origin), one whose `waiting` names an origin `drgnx-test-gate-waiting-ok` does not
-  list (a hub task, a job's watcher, still inside a real wait after the barrier waited 5 s for it:
-  docs/develop/hub.md, "The sequencer and the barrier"), or a step that cannot be met fails the test.
+  list (a job's watcher still inside its wait after the barrier waited 5 s for it; a blocking call or store answer is
+  waited for to its end, and one that never ends fails through `drgnx-test-gate-block-secs`: docs/develop/hub.md, "The
+  sequencer and the barrier"), or a step that cannot be met fails the test.
   Assertions come after it (the
   lint `drgnx-lint/gated-asserts-follow-deliver-all`). `(drgnx-test-hub-advance MS)` moves the hub's clock
   (`__test_advance`), then delivers all; `(drgnx-test-hub-advance MS t)` only moves it, for a test that lets the hub
@@ -1408,7 +1601,7 @@ for a timer. Load it with `(load (expand-file-name "test/fixtures/clock-fixture"
   `bin/drgnx test`'s unit tier sets the variable. On a system without `/proc` (macOS), where that clock cannot run, the
   clock reads and the timers' stamps are advice, as described below (`drgnx-test--advice-clock-p`). Anywhere else (a
   Linux Emacs with `NIDHOGG_TEST_CLOCK=0`, an interactive one) `drgnx-test-with-clock` refuses to start: there is no
-  advice of `float-time`, `current-time` or `timer--activate` beside the core clock.
+  advice of `float-time`, `current-time`, `timer-relative-time` or `timer--activate` beside the core clock.
   What differs on Nidhogg's clock:
   - every read of the time is virtual: `time-since`, `(time-subtract nil ...)` and `format-time-string` too, and
     `(float-time nil)`. `drgnx-test-real-time` reads `/proc/uptime` then, because nothing else in Emacs stays real
@@ -1434,11 +1627,13 @@ for a timer. Load it with `(load (expand-file-name "test/fixtures/clock-fixture"
   starts it, lands in lists of its own and the real ones are untouched. `float-time` and `current-time` without an
   argument return virtual time (with an argument they are Emacs's own); `current-idle-time` is nil outside a pause and
   the pause's length inside one; `input-pending-p` is nil, or t from `:input-at` on. Virtual time starts at the real
-  time (`drgnx-test-clock-now` is the virtual seconds since entry). On the advice, timers made by `run-at-time` are
-  stamped by Emacs from the real clock; a `:before` advice on `timer--activate` moves them to the virtual due time plus
-  10^6 s (`drgnx-test-clock-horizon`), so a real wait never finds a virtual timer ripe, and a timer made at virtual *v*
-  with delay *d* is due at *v* + *d*, also after an advance (a delay of 2 ms or more is rounded to the millisecond: Emacs
-  stamps the timer a few microseconds before the advice runs).
+  time (`drgnx-test-clock-now` is the virtual seconds since entry). On the advice, a timer made at virtual *v* with
+  delay *d* is due at *v* + *d* plus 10^6 s (`drgnx-test-clock-horizon`), so a real wait never finds a virtual timer
+  ripe, also after an advance. `run-at-time` and `run-with-timer` stamp a delay with `timer-relative-time` from now,
+  which the advice counts from the virtual clock, never a real read: however long a slow machine takes between that
+  stamp and the timer's activation, the delay holds exactly. A timer stamped from the real clock some other way (an
+  absolute time, `(time-add nil D)`) is moved by a `:before` advice on `timer--activate`, which takes stamp minus real
+  now as the delay and rounds one of 2 ms or more to the millisecond (right while under 0.5 ms passed since the stamp).
   Before the lists are swapped, the macro advises and unadvises each primitive the advice layer advises once, on scratch lists: Emacs 31
   compiles a native advice trampoline on the first `advice-add` of a primitive, and logging that compile arms
   `undo-auto--boundary-timer`. That timer, and any like it armed during the body, is cancelled by the macro (it is
@@ -1509,7 +1704,7 @@ skips unless Glitnir (the compositor) is active and the packages are present, so
 as skipped. Active, they set `child-frame-chrome` to drgnx's defaults and `glitnir-debug` to `verify`, and compare
 snapshots in device pixels: inside a popup away from its corners equals the Glitnir-off picture, a corner pixel equals
 the no-popup picture, 4 px outside the right edge is darker than the no-popup picture, and after the hide the popup
-plus its shadow margin equals the no-popup picture; the verifier must report no violations.
+plus its shadow margin equals the no-popup picture.
 
 The same file holds the rest of the design's §3.4 package matrix, as `drgnx-ui-chrome/<package>-<check>`, each at
 scale 1 and 2 with the verifier on:
@@ -1547,7 +1742,6 @@ of their own kind and skip in any other, so the file runs once per kind (`DRGNX_
 | `fractional-1-5`: the core rows (the four scenarios above) at 1.5, with the root's scale checked as GTK 3 shows it | `DRGNX_UI_SCALE=1.5` (e.g. `DRGNX_UI_SIZE=2880x1800`) |
 | `fractional-1-25-u1` … `-u5`: the core rows at the 125 % setups | `DRGNX_UI_SCALE=1.25` and `DRGNX_UI_SIZE` 2560x1440, 1920x1080, 2560x1600, 2880x1800, 3840x2160 |
 | `kwin-core-rows`: the core rows under KWin | `--compositor kwin` (the window managers' image), scales 1 and 2 |
-| `mixed-dpi-move`: the root moved to a monitor of another scale with a popup shown: gdctl takes the first monitor out of mutter's layout, so mutter moves the root; after 1.5 s the picture outside the popup is the stock one (full damage), the popup equals one shown afresh at the new scale, and `:scale-mismatch` counts no paint after the wait | `DRGNX_UI_MONITORS=2 DRGNX_UI_SCALES="1 2"` (mutter) |
 | `nested-make-frame-visible`, `focus-taking-child` (vertico-posframe, mini-frame), `ime-preedit-in-child`, `shadow-beside-scroll-bars-and-tool-bar`, `xwidget-under-popup` (skipped: Nidhogg builds no xwidgets yet) | any mutter session; run at scales 1 and 2 |
 
 The IME test types through mutter's RemoteDesktop service (`NotifyKeyboardKeysym` on the session bus), so the keys go
@@ -1573,7 +1767,7 @@ directory lacking one of them) the test is skipped with the message "evil is not
 package directory with evil, goto-chg and evil-collection", so a checkout without evil still passes.
 
 To get exactly the pinned packages without `drgnx sync`, run `test/container/modal-elpa.sh DIR` in a container: it
-downloads evil, goto-chg, evil-collection and kkp from MELPA, checks each tarball's sha256 against `etc/drgnx.lock.eld`
+downloads evil, goto-chg, evil-collection and kkp from MELPA and vertico, compat and orderless from GNU ELPA, checks each tarball's sha256 against `etc/drgnx.lock.eld`
 and unpacks them into DIR. Pass DIR as both `DRGNX_MODAL_ELPA` and `DRGNX_USER_ELPA` (the real-kkp tests read the
 latter). Or build the directory yourself, once, in temporary directories (never your own configuration):
 
@@ -1598,7 +1792,10 @@ and cursor, inputs, the mixed stack) and `test/live/drgnx-modal-daemon-test.el` 
 `:qa` in a daemon that keeps running) each start a session of config `drgnx` per test. `test/fixtures/modal-session.el`
 loads evil there from `DRGNX_MODAL_ELPA` (a session inherits it), starts the engine with `drgnx-modal-engine-start-now`,
 applies the key stack, and presses keys through the harness queue (`drgnx-ui-measure`, one event per 40 ms tick); each
-test prints a line summing its jank reports. Screenshots (`modal-normal.png`, `modal-visual-line.png`,
+test prints a line summing its jank reports. A test whose views need the hub (the Explorer's rows, the terminal) says
+`:hub t`: the session starts the test's Ratatoskr (`DRGNX_RATATOSKR_BIN`, with `drgnx-term` built beside it) as an
+install does and subscribes; without the binary the test skips, or fails where the hub is required
+(`DRGNX_TEST_HUB_REQUIRED=1`). Screenshots (`modal-normal.png`, `modal-visual-line.png`,
 `modal-explorer.png`, `modal-explorer-leader.png`) go to `$DRGNX_TEST_SHOTS` when set — the UI evidence of a run —
 else to the run's temp directory. To run only these: `DRGNX_TEST_SELECTOR='"^drgnx-\\(ui\\|live\\)-modal/"'` with
 `bin/drgnx test --ui` (the GUI half still runs all of `test/ui`).

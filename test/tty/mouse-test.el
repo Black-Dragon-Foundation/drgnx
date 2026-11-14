@@ -20,7 +20,7 @@ a.txt in the editor, wait until both are on the screen.  Returns the project dir
                                          (drgnx-wb-show-sidebar)
                                          (drgnx-wb-show-in-editor (find-file-noselect ,(expand-file-name "a.txt" dir)) t)
                                          t))
-    (drgnx-tty-session-wait-screen sess "EXPLORER")
+    (drgnx-tty-session-wait-screen sess drgnx-tty-session-explorer-heading)
     (drgnx-tty-session-wait-screen sess "alpha beta gamma")
     (drgnx-tty-session-wait-screen sess "b\\.txt")
     dir))

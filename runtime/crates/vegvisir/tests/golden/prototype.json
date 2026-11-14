@@ -1,0 +1,452 @@
+{
+  "rows": [
+    {
+      "layer": 1,
+      "block_line": 0,
+      "sub": 0,
+      "y": 0,
+      "height_units": 7
+    },
+    {
+      "layer": 2,
+      "block_line": 0,
+      "sub": 0,
+      "y": 13,
+      "height_units": 7
+    },
+    {
+      "layer": 3,
+      "block_line": 0,
+      "sub": 0,
+      "y": 26,
+      "height_units": 7
+    },
+    {
+      "layer": 4,
+      "block_line": 0,
+      "sub": 0,
+      "y": 39,
+      "height_units": 25
+    },
+    {
+      "layer": 5,
+      "block_line": 0,
+      "sub": 0,
+      "y": 67,
+      "height_units": 7
+    },
+    {
+      "layer": 4,
+      "block_line": 1,
+      "sub": 0,
+      "y": 80,
+      "height_units": 25
+    },
+    {
+      "layer": 5,
+      "block_line": 1,
+      "sub": 0,
+      "y": 108,
+      "height_units": 7
+    },
+    {
+      "layer": 6,
+      "block_line": 0,
+      "sub": 0,
+      "y": 121,
+      "height_units": 7
+    }
+  ],
+  "at": {
+    "agent:a1": {
+      "x": 0,
+      "y": 39,
+      "w": 54,
+      "h": 25
+    },
+    "agent:a2": {
+      "x": 57,
+      "y": 39,
+      "w": 54,
+      "h": 25
+    },
+    "agent:a3": {
+      "x": 117,
+      "y": 39,
+      "w": 54,
+      "h": 25
+    },
+    "agent:a4": {
+      "x": 0,
+      "y": 80,
+      "w": 54,
+      "h": 25
+    },
+    "ask:1": {
+      "x": 52,
+      "y": 0,
+      "w": 56,
+      "h": 7
+    },
+    "ask:2": {
+      "x": 111,
+      "y": 0,
+      "w": 56,
+      "h": 7
+    },
+    "ask:3": {
+      "x": 170,
+      "y": 0,
+      "w": 56,
+      "h": 7
+    },
+    "branch:drgnx/rp-df-hub": {
+      "x": 6,
+      "y": 67,
+      "w": 42,
+      "h": 7
+    },
+    "branch:drgnx/rp-fx-sess": {
+      "x": 63,
+      "y": 67,
+      "w": 42,
+      "h": 7
+    },
+    "branch:drgnx/rp-i6": {
+      "x": 123,
+      "y": 67,
+      "w": 42,
+      "h": 7
+    },
+    "branch:org/docs-plans-tooling": {
+      "x": 6,
+      "y": 108,
+      "w": 42,
+      "h": 7
+    },
+    "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs": {
+      "x": 30,
+      "y": 121,
+      "w": 50,
+      "h": 7
+    },
+    "machine:desktop": {
+      "x": 83,
+      "y": 121,
+      "w": 36,
+      "h": 7
+    },
+    "machine:laptop": {
+      "x": 122,
+      "y": 121,
+      "w": 36,
+      "h": 7
+    },
+    "plan:deferred": {
+      "x": 29,
+      "y": 26,
+      "w": 52,
+      "h": 7
+    },
+    "plan:i6": {
+      "x": 118,
+      "y": 26,
+      "w": 52,
+      "h": 7
+    },
+    "plan:jobq": {
+      "x": 173,
+      "y": 26,
+      "w": 52,
+      "h": 7
+    },
+    "spec:job-scheduler": {
+      "x": 177,
+      "y": 13,
+      "w": 44,
+      "h": 7
+    },
+    "spec:race-proof": {
+      "x": 77,
+      "y": 13,
+      "w": 44,
+      "h": 7
+    }
+  },
+  "form": {
+    "agent:a1": "rich",
+    "agent:a2": "rich",
+    "agent:a3": "rich",
+    "agent:a4": "rich"
+  },
+  "lanes": [
+    {
+      "row": 3,
+      "x": 199,
+      "from": "plan:jobq",
+      "to": "agent:a4",
+      "kind": "came-from"
+    },
+    {
+      "row": 4,
+      "x": 199,
+      "from": "plan:jobq",
+      "to": "agent:a4",
+      "kind": "came-from"
+    },
+    {
+      "row": 5,
+      "x": 55,
+      "from": "branch:drgnx/rp-df-hub",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "kind": "edits"
+    },
+    {
+      "row": 5,
+      "x": 55,
+      "from": "branch:drgnx/rp-fx-sess",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "kind": "edits"
+    },
+    {
+      "row": 6,
+      "x": 55,
+      "from": "branch:drgnx/rp-df-hub",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "kind": "edits"
+    },
+    {
+      "row": 6,
+      "x": 55,
+      "from": "branch:drgnx/rp-fx-sess",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "kind": "edits"
+    }
+  ],
+  "ports": [],
+  "bands": [
+    {
+      "row": 1,
+      "y": 7,
+      "height_units": 6,
+      "segs": [
+        {
+          "from": "ask:1",
+          "to": "spec:race-proof",
+          "kind": "came-from",
+          "x0": 80,
+          "x1": 99
+        },
+        {
+          "from": "ask:2",
+          "to": "spec:race-proof",
+          "kind": "came-from",
+          "x0": 139,
+          "x1": 99
+        },
+        {
+          "from": "ask:3",
+          "to": "spec:job-scheduler",
+          "kind": "came-from",
+          "x0": 198,
+          "x1": 199
+        }
+      ]
+    },
+    {
+      "row": 2,
+      "y": 20,
+      "height_units": 6,
+      "segs": [
+        {
+          "from": "spec:race-proof",
+          "to": "plan:deferred",
+          "kind": "came-from",
+          "x0": 99,
+          "x1": 55
+        },
+        {
+          "from": "spec:race-proof",
+          "to": "plan:i6",
+          "kind": "came-from",
+          "x0": 99,
+          "x1": 144
+        },
+        {
+          "from": "spec:job-scheduler",
+          "to": "plan:jobq",
+          "kind": "came-from",
+          "x0": 199,
+          "x1": 199
+        }
+      ]
+    },
+    {
+      "row": 3,
+      "y": 33,
+      "height_units": 6,
+      "segs": [
+        {
+          "from": "agent:a1",
+          "to": "agent:a2",
+          "kind": "overlap",
+          "x0": 27,
+          "x1": 84,
+          "arc": true
+        },
+        {
+          "from": "plan:deferred",
+          "to": "agent:a1",
+          "kind": "came-from",
+          "x0": 55,
+          "x1": 27
+        },
+        {
+          "from": "plan:deferred",
+          "to": "agent:a2",
+          "kind": "came-from",
+          "x0": 55,
+          "x1": 84
+        },
+        {
+          "from": "plan:i6",
+          "to": "agent:a3",
+          "kind": "came-from",
+          "x0": 144,
+          "x1": 144
+        },
+        {
+          "from": "plan:jobq",
+          "to": "agent:a4",
+          "kind": "came-from",
+          "x0": 199,
+          "x1": 199
+        }
+      ]
+    },
+    {
+      "row": 4,
+      "y": 64,
+      "height_units": 3,
+      "segs": [
+        {
+          "from": "agent:a1",
+          "to": "branch:drgnx/rp-df-hub",
+          "kind": "came-from",
+          "x0": 27,
+          "x1": 27
+        },
+        {
+          "from": "branch:drgnx/rp-df-hub",
+          "to": "branch:drgnx/rp-fx-sess",
+          "kind": "overlap",
+          "x0": 27,
+          "x1": 84,
+          "arc": true
+        },
+        {
+          "from": "agent:a2",
+          "to": "branch:drgnx/rp-fx-sess",
+          "kind": "came-from",
+          "x0": 84,
+          "x1": 84
+        },
+        {
+          "from": "agent:a3",
+          "to": "branch:drgnx/rp-i6",
+          "kind": "came-from",
+          "x0": 144,
+          "x1": 144
+        },
+        {
+          "from": "plan:jobq",
+          "to": "agent:a4",
+          "kind": "came-from",
+          "x0": 199,
+          "x1": 199
+        }
+      ]
+    },
+    {
+      "row": 5,
+      "y": 74,
+      "height_units": 6,
+      "segs": [
+        {
+          "from": "branch:drgnx/rp-df-hub",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 27,
+          "x1": 55
+        },
+        {
+          "from": "branch:drgnx/rp-fx-sess",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 84,
+          "x1": 55
+        },
+        {
+          "from": "plan:jobq",
+          "to": "agent:a4",
+          "kind": "came-from",
+          "x0": 199,
+          "x1": 27
+        }
+      ]
+    },
+    {
+      "row": 6,
+      "y": 105,
+      "height_units": 3,
+      "segs": [
+        {
+          "from": "agent:a4",
+          "to": "branch:org/docs-plans-tooling",
+          "kind": "came-from",
+          "x0": 27,
+          "x1": 27
+        },
+        {
+          "from": "branch:drgnx/rp-df-hub",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 55,
+          "x1": 55
+        },
+        {
+          "from": "branch:drgnx/rp-fx-sess",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 55,
+          "x1": 55
+        }
+      ]
+    },
+    {
+      "row": 7,
+      "y": 115,
+      "height_units": 6,
+      "segs": [
+        {
+          "from": "branch:drgnx/rp-df-hub",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 55,
+          "x1": 55
+        },
+        {
+          "from": "branch:drgnx/rp-fx-sess",
+          "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+          "kind": "edits",
+          "x0": 55,
+          "x1": 55
+        }
+      ]
+    }
+  ],
+  "fits": true,
+  "crossings": 2,
+  "width_units": 226,
+  "height_units": 128
+}

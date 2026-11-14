@@ -1,0 +1,20 @@
+Third-party notice: the terminal engine (ghostty-vt-sys)
+
+ghostty-vt-sys builds and links libghostty-vt from the pinned source tarballs named in pin.toml:
+
+  libghostty-vt-1.0.0.tar.gz
+  libghostty-vt-1.0.0-deps.tar.gz
+
+drgnx is GPL-3.0-or-later; everything below is under a licence compatible with it.
+
+  libghostty-vt 1.0.0   MIT        Copyright (c) 2024 Mitchell Hashimoto, Ghostty contributors
+  simdutf               Apache-2.0 OR MIT         (bundled in the source tarball, pkg/simdutf)
+  Highway               Apache-2.0 OR BSD-3-Clause (dependency tarball)
+  Wuffs                 Apache-2.0 OR MIT         (dependency tarball)
+  uucode 0.2.0          MIT                       (dependency tarball)
+  aro                   MIT        Copyright (c) 2021 Veikka Tuominen   (dependency tarball; build time only)
+  translate_c 2.0.0     MIT        Copyright (c) Zig contributors       (dependency tarball; build time only)
+  shell integration scripts of the source tarball (bash-preexec.sh and the Ghostty scripts)   MIT
+
+The full licence texts are in the tarballs, beside each package's sources. Zig itself is a build tool and is not
+distributed.

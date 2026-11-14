@@ -1,0 +1,140 @@
+# merge.rs rust
+chunk 0 2256 1 71 Some("Unit") true 2174315da3f58473c6c6a8deacbaec77b7a9be2105e50046c58bf4550767c57c
+chunk 2256 3420 73 105 Some("Input") true 9c7cef7d26ebbcef6c8fb144f03a14c68d9a66ef576e05374a6e051b195ac80b
+chunk 3420 5753 107 181 Some("assemble") true 5ea30ef3f2486dbb7f82ac4784f5d1f5c8ad9b6d8268e18be27ad86736146fcb
+chunk 5753 9085 182 273 Some("assemble") true a4a54c805c3eb52d14f04d6e780e0bfcccb8b204655c46dda6faac36ee7bcbe6
+chunk 9085 9280 274 281 Some("assemble") true edec29d3ab988fa2d68baeb820f8d0f09748b523c807506b95e1f70cc310e888
+chunk 9280 10144 283 312 Some("split_parts") true 4e51b77120e1468abf19055e04c7c5fabc5fc09a49cf89768c3c17129e208261
+symbol Unit struct 412 640 0 struct_item None
+symbol merge function 813 1650 0 function_item Some("Groups of consecutive units, each within `budget` non-whitespace characters, or a single unit that is over it or")
+symbol Form struct 1705 2000 0 struct_item Some("A top-level form: its span, and what it defines.")
+symbol Form impl 2002 2254 0 impl_item None
+symbol plain method 2018 2252 0 impl_item None
+symbol Input struct 2296 2850 1 struct_item Some("What a language gives the pipeline.")
+symbol after_last_blank_line function 2956 3418 1 function_item Some("The start of the part of the gap `[a, b)` that belongs to the next form: after the last blank line.")
+symbol assemble function 3420 9278 2 function_item None
+symbol split_parts function 9398 10143 5 function_item Some("Split an oversized unit at its child forms: a part ends before the child form that would take it over the budget.")
+# gnu.c c
+chunk 0 589 1 38 Some("WIDGET_MAX") true cec7e7aae087bd399ea20a2cf8d420fa7e89aa8ba683f8b391383ed0c303109b
+symbol WIDGET_MAX macro 87 109 0 preproc_def None
+symbol WIDGET_SIZE macro 109 145 0 preproc_function_def None
+symbol widget struct 163 212 0 struct_specifier None
+symbol widget_t type 215 246 0 type_definition None
+symbol widget_kind enum 248 295 0 enum_specifier None
+symbol make_widget function 351 465 0 function_definition None
+symbol widget_total function 467 588 0 function_definition None
+# changes.sh shell
+chunk 0 2552 1 30 None true a506ccbb3b37a3342af7df501adc2f42e7f86f3a35083e81ea1e49069a54eed0
+chunk 2552 4796 32 89 Some("usage") true 480829e6b3584301390ec5e52a1d82ead27f70484fedd6e50df5961e7b0ddb8b
+chunk 4796 6829 91 130 Some("need_of") true 5ad9291ceeb456a45254eb2dd3fd098cc6e3a53db0709fb0ccaa6f4a97bf01cc
+chunk 6829 8796 132 176 Some("decide") true 04f8ac22fb276b72955f6c4b5ea15c0f713668cbeb07251ddf236f1c79038aa3
+chunk 8796 13748 178 258 None true 9691e447a2df0524672d5ba1c07718d31a7b642100aad5d64b3a9caef64fb979
+chunk 13748 13892 260 266 None true f33b427c821c57e46d8f750fc2c12c2f34165c937f1c9d560c47def666b40329
+symbol usage function 2552 2636 1 function_definition None
+symbol words function 2835 2884 1 function_definition Some("shellcheck disable=SC2086  # split on purpose, with globbing off")
+symbol parse function 2981 3683 1 function_definition Some("read a table into JOBS, PATS/IDS (the rows), LISTN/LISTV and TESTS")
+symbol has function 3700 3762 1 function_definition None
+symbol union function 3763 3860 1 function_definition None
+symbol inter function 3861 3958 1 function_definition None
+symbol minus function 3959 4054 1 function_definition None
+symbol closure function 4146 4402 1 function_definition Some("a set with the jobs its jobs take artifacts from (`deps` lines), until nothing is added")
+symbol affects function 4485 4794 1 function_definition Some("the jobs one path can affect: a row's ids, \"\" for `-`, ALL when no row matches")
+symbol need_of function 4891 5127 2 function_definition Some("NEED from the changed paths on stdin: the union of what each can affect (ALL short-circuits)")
+symbol api_paths function 5232 5863 2 function_definition Some("the changed paths between BASE and SHA through the API, or a reason to run everything (prefixed \"!\")")
+symbol base_of function 5948 6827 2 function_definition Some("the base a filtered run diffs against, after its gate passed, or \"!\" and why not")
+symbol decide function 6920 8366 3 function_definition Some("decide: sets RUN, PARTIAL, WHY from the environment and, with $1, the paths in that file")
+symbol emit function 8368 8794 3 function_definition None
+# memo.el elisp
+chunk 0 1564 1 20 None true b336f8eb02112c39abdc07acecadd1c213cc7c2ae5232fce4d956c07c8889581
+chunk 1564 3334 22 62 Some("drgnx-memo--def") true 419959c51a61ae6904eaa4b46bd494bc2bcf6ad23fe706b09b9e125c134c0673
+chunk 3334 4302 64 78 Some("drgnx-memo--undefine") true 51ef12d6c34e604ae7e1691cdd649a2bc9973d44a224d5d80079e03914a051e8
+chunk 4302 4723 80 89 Some("drgnx-epoch--fixnum-limit") true aab1e903a6e2a281c05942253ca920338a02a5d40c7b25bcf21bfb8215af79f5
+chunk 4723 5955 91 103 Some("drgnx-epoch-define") true a7739b66d2920027230e8512aec9fca147a15f118e5155f584c6920c76b722cb
+chunk 5955 7144 104 122 Some("drgnx-epoch-define") true 96333bf57cb99c9407c2be50cf0f8ef8d3616746992295a750919cbff60453a3
+chunk 7144 8661 124 150 Some("drgnx-epoch--read") true 1e25b2a640213f9c92eee5db0067123e8a32fb89fa5a956f74e6cc1b50b68cc1
+chunk 8661 9902 152 173 Some("drgnx-epoch--bump") true db20dc0e338f82940f687ee7d396078b27ad2489e3789f561f7b6df223c6fe93
+chunk 9902 11961 175 208 Some("drgnx-memo--same-p") true 7bd82e672a0fed4e09846ec30587af205e9795e612ad368bef43bd43a4492ab8
+chunk 11961 12973 210 227 Some("drgnx-epoch-watch") true 557906067d010301f5acf7d98e364c8b5e04ab60838e7cb283bf61f987512da2
+chunk 12973 14643 229 256 Some("drgnx-memo-activate") true 72430ea67dc743d029b9dc244e45fc8b9f03d62d3d67ae2e7dcd1f390fce5310
+chunk 14643 16618 258 291 Some("drgnx-memo--define") true e7c0504939e9d62de5800f939ad19b2e4bb7f767f81235384d61df1e4b496409
+chunk 16618 18433 293 321 Some("drgnx-memo") true c010ac0deb543e583e62f730e4fe831ca7c009da80cf0ecc7d2e3744ac25ce77
+chunk 18433 20831 323 364 Some("drgnx-cache-define") true 7aedb6e8c2bfe6385fa52e483efd43f48db10b5bab2ef6aa7ad11d62a4ffd43e
+chunk 20831 22929 366 407 Some("drgnx-cache-peek") true 590aa9d76a5d64308f1b4a8526c1b3056da3682025801533d85b52bf00cea9a4
+chunk 22929 23292 409 413 Some("drgnx-cache-keys") true f8260eefcc8bbe3736649017067376bcf7a0e9535e90f6d0a1b6103519d7c62a
+chunk 23292 24375 415 435 Some("drgnx-memo-census") true 7378661989f04f46eaa7b1ba2df276d2a4b85bf9bb891cc603734fab8946a81f
+chunk 24375 24404 436 436 None true 37c6830fc0b4016d41132cf231bb202318b8acc4d93dac042bcc579d0955e893
+symbol drgnx-memo--def struct 1680 1995 1 cl-defstruct Some("One definition: an epoch, a memo or a cache.")
+symbol make-drgnx-memo--def constructor 1680 1995 1 cl-defstruct Some("One definition: an epoch, a memo or a cache.")
+symbol drgnx-memo--make-def constructor 1680 1995 1 cl-defstruct Some("One definition: an epoch, a memo or a cache.")
+symbol drgnx-memo--def-p predicate 1680 1995 1 cl-defstruct Some("One definition: an epoch, a memo or a cache.")
+symbol drgnx-memo--def-kind accessor 1680 1995 1 cl-defstruct Some("One definition: an epoch, a memo or a cache.")
+symbol drgnx-memo--def-name accessor 1680 1995 1 cl-defstruct Some("One definition: an epoch, a memo or a cache.")
+symbol drgnx-memo--def-doc accessor 1680 1995 1 cl-defstruct Some("One definition: an epoch, a memo or a cache.")
+symbol drgnx-memo--def-per accessor 1680 1995 1 cl-defstruct Some("One definition: an epoch, a memo or a cache.")
+symbol drgnx-memo--def-redisplay accessor 1680 1995 1 cl-defstruct Some("One definition: an epoch, a memo or a cache.")
+symbol drgnx-memo--def-on accessor 1680 1995 1 cl-defstruct Some("One definition: an epoch, a memo or a cache.")
+symbol drgnx-memo--def-keys accessor 1680 1995 1 cl-defstruct Some("One definition: an epoch, a memo or a cache.")
+symbol drgnx-memo--def-table accessor 1680 1995 1 cl-defstruct Some("One definition: an epoch, a memo or a cache.")
+symbol drgnx-memo--def-slot accessor 1680 1995 1 cl-defstruct Some("One definition: an epoch, a memo or a cache.")
+symbol drgnx-memo--def-key accessor 1680 1995 1 cl-defstruct Some("One definition: an epoch, a memo or a cache.")
+symbol drgnx-memo--def-cap accessor 1680 1995 1 cl-defstruct Some("One definition: an epoch, a memo or a cache.")
+symbol drgnx-memo--def-clock accessor 1680 1995 1 cl-defstruct Some("One definition: an epoch, a memo or a cache.")
+symbol drgnx-memo--registry variable 2074 2246 1 defvar Some("LABEL (\"epoch NAME\", \"memo NAME\" or \"cache NAME\") → the definition: declarations, not owned state.")
+symbol drgnx-memo--active variable 2248 2360 1 defvar Some("Alist EPOCH-NAME → how many `drgnx-memo-activate' calls hold its watchers.")
+symbol drgnx-memo--watched variable 2362 2496 1 defvar Some("Alist VARIABLE → the names of the epochs that `drgnx-memo--watcher' bumps when VARIABLE is set.")
+symbol drgnx-memo--compile-known variable 2498 2649 1 defvar Some("Epoch names that code being expanded or compiled defines with a literal name, before they exist at run time.")
+symbol drgnx-memo--options function 2651 2965 1 defun Some("ARGS, a plist, checked: every key is in ALLOWED.")
+symbol drgnx-memo--label function 2967 3031 1 defun None
+symbol drgnx-memo--register function 3033 3332 1 defun Some("Make DEF the definition of its name under symbol property PROP, and list it.")
+symbol drgnx-memo--undefine function 3334 4302 2 defun Some("Remove DEF's definition, when it is still the one of its name (tests; a declaration is otherwise permanent).")
+symbol drgnx-epoch--fixnum-limit constant 4317 4374 3 defconst None
+symbol drgnx-epoch--note-literal function 4376 4721 3 defun Some("Compiler macro of `drgnx-epoch-define': a literal name is known to later forms of the file being expanded.")
+symbol drgnx-epoch-define function 4723 7142 4 defun Some("Define epoch NAME and return it.  ARGS: `:per' nil, `buffer' or `object'; `:watch' the variables whose")
+symbol drgnx-epoch--read function 7144 7643 6 defun Some("The value of epoch NAME for OBJECT (see `drgnx-epoch').  Allocates nothing.")
+symbol drgnx-epoch macro 7645 8583 6 defmacro Some("The value of epoch NAME (a fixnum) for OBJECT; allocates nothing.")
+symbol drgnx-epoch--wrap function 8585 8659 6 defsubst None
+symbol drgnx-epoch--bump function 8661 9554 7 defun Some("Bump epoch NAME for OBJECT and return the new value, or nil when NAME is not defined.  Cheap: a watcher calls it.")
+symbol drgnx-epoch-bump function 9556 9902 7 defun Some("Bump epoch NAME and return its new value.  With OBJECT, on a `buffer' or `object' epoch, bump OBJECT's own count;")
+symbol drgnx-memo--same-p function 9957 10307 8 defun Some("Non-nil if setting SYMBOL (in buffer WHERE, else its default) to NEWVAL leaves the value it has now.")
+symbol drgnx-memo--watcher function 10309 11177 8 defun Some("Variable watcher: a `set', `makunbound' or `defvaralias' of SYMBOL bumps its epochs.")
+symbol drgnx-memo--watch function 11179 11516 8 defun Some("Epoch NAME starts watching VARIABLE.")
+symbol drgnx-memo--unwatch function 11518 11959 8 defun Some("Stop epoch NAME's watch of VARIABLE; the watcher leaves VARIABLE when no epoch watches it any more.")
+symbol drgnx-epoch-watch function 11961 12560 9 defun Some("Declare that setting one of VARIABLES bumps epoch NAME (a `let' does not count: `drgnx-memo--watcher').")
+symbol drgnx-memo--deactivate-epoch function 12562 12971 9 defun Some("Undo one activation of epoch NAME; the last one removes its watchers.")
+symbol drgnx-memo-activate function 12973 14643 10 defun Some("Put the declared epochs, memos and caches NAMES to work for the module whose :setup calls this.")
+symbol drgnx-memo--define function 14657 15209 11 defun Some("Define memo NAME (see `drgnx-memo-define').")
+symbol drgnx-memo-define macro 15211 15957 11 defmacro Some("Define memo NAME (an unquoted symbol) for `drgnx-memo'.  ARGS: `:on' window, buffer, frame or nil (one global")
+symbol drgnx-memo--lookup function 15959 16289 11 defun Some("The stored vector (keys, then the value) of memo NAME for OBJECT, or nil.  Allocates nothing.")
+symbol drgnx-memo--new function 16291 16616 11 defun Some("A new stored vector of SIZE for memo NAME and OBJECT.")
+symbol drgnx-memo macro 16618 18032 12 defmacro Some("The value of memo NAME (an unquoted symbol) for OBJECT, built by BUILD only when a key changed.")
+symbol drgnx-memo-forget function 18034 18433 12 defun Some("Drop memo NAME's stored value for OBJECT, or for every object without one.")
+symbol drgnx-cache-define function 18448 19887 13 defun Some("Define cache NAME and return it.  ARGS: `:key' `object' (a weak `eq' table: a get checks that a buffer, window,")
+symbol drgnx-cache--def function 19889 19981 13 defun None
+symbol drgnx-cache--live-p function 19983 20250 13 defun Some("Non-nil unless K is a killed buffer, deleted window or frame, or a dead process.")
+symbol drgnx-cache-get function 20252 20829 13 defun Some("The value of K in cache NAME, or nil.  A string hit stamps the entry (`setcdr': no allocation); a dead object")
+symbol drgnx-cache-peek function 20831 21223 14 defun Some("The value of K in cache NAME, or nil, stamping nothing: a look that is no use of the entry (a late callback")
+symbol drgnx-cache--evict function 21225 21555 14 defun Some("Drop DEF's entry with the oldest stamp (a scan of the table: on put only).")
+symbol drgnx-cache-put function 21557 22193 14 defun Some("Store V under K in cache NAME and return V.  A string cache past its cap evicts the oldest stamp.")
+symbol drgnx-cache--clear function 22195 22378 14 defun Some("Empty cache NAME (a module's teardown).")
+symbol drgnx-cache-remove function 22380 22511 14 defun Some("Drop K from cache NAME.")
+symbol drgnx-cache-size function 22513 22927 14 defun Some("How many entries cache NAME holds (an object cache first drops its dead keys).")
+symbol drgnx-cache-keys function 22929 23292 15 defun Some("The keys cache NAME holds now, as a fresh list in no order (a pass over the table: not for redisplay paths).")
+symbol drgnx-memo-census function 23307 24352 16 defun Some("Every memo and cache as (NAME KIND SIZE CAP), by name.  KIND is `memo' or `cache'; CAP is nil for a memo and for")
+# projects.org org
+chunk 0 19 1 1 None true 5b92bac56344a8c46d4ae83452049475463eb8032e301dedd609552f9c962a67
+chunk 19 96 3 6 None true 2872a10d2355e429a3b74cac5728cb885a7242ee3c27c4055d631e577f5d07e0
+chunk 96 178 7 11 None true 143fa151f12eb5593ea9b89f3aa9d3746239aada3396cf3edd1cc16860cb4e48
+chunk 178 312 12 15 None true d79c2cdbcae4c1efd8cc75da1970323ddd485605f9ec3b57ab224f7b7efeb8b5
+chunk 312 490 16 25 None true da99f1a9a2a88fb910c13981b2b8214b36f5a3a291713240ea86574d8763c4ad
+chunk 490 580 26 28 None true 32169de198a5062bd743e2439927b40c5c61a854e3df332c81e9ce80d5135567
+# search.md markdown
+chunk 0 868 1 11 None true c2e7267a559f3699d61b94d89c70d87652e3f261236a1aca97b86c31d6331d6c
+chunk 868 3026 13 39 None true 908656de1f15feb9e712e44376d8eb8b3780e8ff0eb1f6e85954d7a606d3b1c1
+chunk 3026 4996 41 65 None true 52531b24067f9937f4ad642e01c531dd00aa14dd24204ee8a597214185376d60
+chunk 4996 6607 67 97 None true 7bcb3b0bbec6d8fbbb8bf992bf0d3f905dd9be40b5f6b7dfba98606a9035b5c0
+chunk 6607 8148 99 114 None true bab64867ad372e28dda9bd6e9edaa82a2653f12a0864625bb9e824724b986447
+chunk 8148 9996 116 136 None true 88ad70b3014b5553e9455b9d74e815b08474ed5b3990af5ca18f1e9594a7bd69
+chunk 9996 11233 138 155 None true cd228c4ada7746ddf098c510857d52e63cafc888394cbb7a3015f8e70f83da77
+chunk 11233 13129 157 181 None true dc8e6fbc0b4cb1ad98d447cb7ea6edb73da9fb1cbfd357423c7af9e59ffd8f6c
+chunk 13129 14073 183 200 None true 2b129418ae43cde39fbf8aa795c491f3125d083d6310f5535b6173d80ac1711c
+chunk 14073 14961 202 211 None true f7bc2877aed663605faddca6889be063693ae000ae613fd61c3d63a842e72489

@@ -206,7 +206,7 @@ the Xcode Command Line Tools.  :fix is the one for this platform."
   (let* ((extras (drgnx-onboard--extras))
          (off (pcase preset
                 ('minimal extras)
-                ('ide (seq-filter (lambda (m) (memq m '(extra/llm))) extras))
+                ('ide nil)
                 ('full-ai nil)
                 (_ (user-error "Unknown preset %s (minimal, ide, full-ai)" preset)))))
     (drgnx-modules-update-state
@@ -237,8 +237,7 @@ the Xcode Command Line Tools.  :fix is the one for this platform."
   (let* ((extras (drgnx-onboard--extras))
          (off (seq-filter (lambda (m) (memq m extras)) (plist-get (drgnx-modules-read-state) :disabled))))
     (cond ((null off) 'full-ai)
-          ((seq-set-equal-p off extras) 'minimal)
-          ((equal off '(extra/llm)) 'ide))))
+          ((seq-set-equal-p off extras) 'minimal))))
 
 (defvar drgnx-onboard--restart-needed nil
   "Non-nil once a step in this Emacs turned modules on or installed packages: they load at the next start, and
@@ -592,6 +591,13 @@ the latest; the doctor checks the version.")
     (claude-agent-acp :name "the Claude Code adapter" :check (:program "claude-agent-acp" :dirs ("~/.local/bin"))
                       :macos (:job ("npm" "install" "-g" ,drgnx-onboard-claude-package))
                       :linux (:job ("npm" "install" "-g" "--prefix" "~/.local" ,drgnx-onboard-claude-package)))
+    ;; the vendors' own agents for the `kimi' and `deepseek' profiles (DeepSeek Harness on its pinned pre-release)
+    (kimi :name "Kimi Code" :check (:program "kimi" :dirs ("~/.local/bin"))
+          :macos (:job ("npm" "install" "-g" "@moonshot-ai/kimi-code"))
+          :linux (:job ("npm" "install" "-g" "--prefix" "~/.local" "@moonshot-ai/kimi-code")))
+    (dsh :name "DeepSeek Harness" :check (:program "dsh" :dirs ("~/.local/bin"))
+         :macos (:job ("npm" "install" "-g" "@deepseek-ai/dsh@0.2.2-rc.1"))
+         :linux (:job ("npm" "install" "-g" "--prefix" "~/.local" "@deepseek-ai/dsh@0.2.2-rc.1")))
     (age :name "age" :check (:program "age")
          :macos (:install ("brew" "install" "age"))
          :linux (:by-program (("dnf" . "sudo dnf install -y age") ("apt-get" . "sudo apt-get install -y age")
@@ -962,44 +968,17 @@ came for the snippets found."
           (car result))
       (delete-directory root t))))
 
-(defun drgnx-onboard--chat-module (ctx)
-  "Chat (gptel) is module extra/llm, off in the minimal and ide presets: (ON . TEXT), ON nil also when installing its
-package failed.  Whether gptel is installed: drgnx's packages.  Interactive, when it is off: asked whether to turn it
-on, and gptel installed (drgnx sync, as Look and Keys does) when it is missing.  Either loads at the next start: the
-text says so — with the Finish step's restart offer only when this run changed something and drgnx runs with windows
-\(Finish never offers it in batch); a restart is needed (`drgnx-onboard--restart-needed') only then."
-  (let ((next (if noninteractive "; it loads at drgnx's next start"
-                " from the next start: restart drgnx to load it (the Finish step offers it)"))
-        (later "; it loads at drgnx's next start"))
-    (cond ((not (drgnx-module-disabled-p 'extra/llm))
-           (cond ((featurep 'gptel) (cons t "Chat (module extra/llm) is on"))
-                 ((drgnx-onboard--installed-p 'gptel)
-                  (cons t (concat "Chat (module extra/llm) is on" later)))
-                 (t (cons t "Chat (module extra/llm) is on; its package is not installed yet: run drgnx sync (or the Look and Keys step)"))))
-          ((and (plist-get ctx :interactive) (y-or-n-p "Turn on Chat (module extra/llm)? "))
-           (drgnx-modules-set-enabled 'extra/llm t)     ; on, whatever the file says now (a toggle could turn it off)
-           (setq drgnx-onboard--restart-needed t)
-           (let ((done (if (drgnx-onboard--installed-p 'gptel) 'ok (drgnx-onboard--sync-job))))
-             (if (eq done 'ok)
-                 (cons t (concat "Chat (module extra/llm) turned on" next))
-               (pcase-let ((`(,_ ,why ,log) done))
-                 (cons nil (format "Chat (module extra/llm) turned on, but its package was not installed: %s — run drgnx sync in a terminal to retry%s"
-                                   why (if log (format " (log: %s)" log) "")))))))
-          (t (cons nil "Chat needs module extra/llm (Preferences: Modules)")))))
-
 (defun drgnx-onboard--ai-verify (head steps ctx &optional tail)
   "Test each of STEPS ((ROLE PROVIDER . MODEL)…) with one call, then Ask the Codebase with the chat step, then
-whether Chat's module is on: (STATUS MESSAGE), the message HEAD, the results, TAIL."
+(STATUS MESSAGE), the message HEAD, the results, TAIL."
   (drgnx-onboard--say "Testing every feature…")
   (let* ((results (mapcar (lambda (s) (cons s (drgnx-onboard--ai-test (car s) (cdr s) ctx))) steps))
-         (ask (drgnx-onboard--ask-test (cdr (assq 'chat steps)) ctx))
-         (chat (drgnx-onboard--chat-module ctx)))
-    (list (if (and ask (car chat) (seq-every-p #'cdr results)) 'ok 'warn)
+         (ask (drgnx-onboard--ask-test (cdr (assq 'chat steps)) ctx)))
+    (list (if (and ask (seq-every-p #'cdr results)) 'ok 'warn)
           (concat head "; "
                   (mapconcat (lambda (r) (format "%s: %s/%s %s" (caar r) (cadar r) (cddar r) (if (cdr r) "answered" "did not answer")))
                              results "; ")
                   "; Ask the Codebase " (if ask "answered" "did not answer")
-                  "; " (cdr chat)
                   (if tail (concat "; " tail) "")
                   " — change any: AI: Choose Provider/Model (docs/guide/ai.md)"))))
 
@@ -1139,10 +1118,8 @@ ensured first, also from the CLI (\"from the environment\")."
           ((zerop working)
            (if (plist-get ctx :interactive) (list (car found) (cadr found))
              (list (car found) (concat (cadr found) "; " (drgnx-onboard--ai-how)))))
-          ;; what works stays: Chat still needs its module (offered when interactive)
-          (t (let ((chat (drgnx-onboard--chat-module ctx)))
-               (list (if (and (not (car chat)) (eq (car found) 'ok)) 'warn (car found))
-                     (concat (cadr found) "; " (cdr chat))))))))
+          ;; what works stays
+          (t (list (car found) (cadr found))))))
 
 ;;;; Step 5: Semantic Search
 
@@ -1726,8 +1703,8 @@ layout comes back with drgnx open."
 modules on or installed packages here, in the drgnx app (CTX interactive): asked whether to restart drgnx now
 \(the result is recorded first)."
   (require 'drgnx-doctor)
-  (let* ((results (drgnx-doctor-run (drgnx-doctor-facts)))
-         (count (lambda (s) (seq-count (lambda (r) (eq (plist-get r :status) s)) results)))
+  (let* ((results (drgnx-doctor-run (drgnx-doctor-facts '(:terminal))))   ; this step shows no Terminal group
+         (count(lambda (s) (seq-count (lambda (r) (eq (plist-get r :status) s)) results)))
          (fails (seq-filter (lambda (r) (eq (plist-get r :status) 'fail)) results))
          (result (list (if fails 'fail 'ok)
                        (format "doctor: %d ok, %d warnings, %d failed%s — every command and its key: Keyboard Shortcuts (in the palette)%s; docs/guide/onboarding.md"

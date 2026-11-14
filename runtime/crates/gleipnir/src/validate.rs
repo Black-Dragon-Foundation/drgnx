@@ -2,8 +2,8 @@
 //! a [`ValidSpec`] outside tests.
 
 use crate::spec::{
-    BASE_ENV_DENY, Bind, HELPER_INSIDE, LANDLOCK_ABI_MAX, Mode, Net, RESERVED_DESTS, RelayPort,
-    SYSTEM_CLOSED, Spec, Target, ValidSpec,
+    BASE_ENV_DENY, BROWSER_DIR_FULL, Bind, HELPER_INSIDE, LANDLOCK_ABI_MAX, LANDLOCK_FLOOR_BROWSER,
+    Mode, Net, RESERVED_DESTS, RelayPort, SYSTEM_CLOSED, Spec, Target, Trace, ValidSpec,
 };
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -44,6 +44,8 @@ pub enum Rule {
     EnvDenied,
     DestDiffers,
     ReservedDest,
+    /// The agent browser asked where it cannot be had, or wired wrongly (rule 12).
+    Browser,
     /// Not a validation rule: the sandbox did not start. The inner helper's status line said why, or none came
     /// before the deadline ([`crate::inner::read_status`]).
     Setup,
@@ -99,6 +101,7 @@ pub fn validate(mut spec: Spec, ctx: &Context, target: Target) -> Result<ValidSp
     env_denied(&spec, ctx.env_deny)?;
     dests_differ(&spec, target)?;
     reserved_dests(&spec, cmp)?;
+    browser(&mut spec, target)?;
     drop_absent(&mut spec, &absent);
     Ok(ValidSpec::new(spec, target, Checked(())))
 }
@@ -288,6 +291,15 @@ fn all_paths(spec: &Spec, target: Target) -> Vec<Named<'_>> {
                 inside_is_host,
             ));
         }
+    }
+    // The browser's program and extra reads are seen where the host has them (system trees, or reads bound at
+    // their own path), so they are true names too; its own dir is a place inside.
+    if let Some(b) = &spec.browser {
+        out.push(named("browser.program".into(), &b.program, true));
+        for (i, p) in b.extra_read.iter().enumerate() {
+            out.push(named(format!("browser.extra_read[{i}]"), p, true));
+        }
+        out.push(named("browser.own_dir".into(), &b.own_dir, inside_is_host));
     }
     out
 }
@@ -582,13 +594,26 @@ fn malformed(spec: &Spec, target: Target) -> Result<(), Refusal> {
         }
     }
     let (relay, mac_ports): (&[RelayPort], &[u16]) = match &spec.net {
-        Net::Shared => (&[], &[]),
+        Net::Shared | Net::None => (&[], &[]),
         Net::Isolated {
             relay,
             mac_tcp_ports,
+            ..
         } => (relay, mac_tcp_ports),
     };
-    let ports = spec.extra_tcp_ports.iter().chain(mac_ports);
+    let (loopback, loop_ports): (bool, &[u16]) = match &spec.net {
+        Net::Shared | Net::None => (false, &[]),
+        Net::Isolated {
+            loopback,
+            mac_loopback_ports,
+            ..
+        } => (*loopback, mac_loopback_ports),
+    };
+    let ports = spec
+        .extra_tcp_ports
+        .iter()
+        .chain(mac_ports)
+        .chain(loop_ports);
     if relay.iter().map(|r| &r.port).chain(ports).any(|&p| p == 0) {
         return bad("a port is 0".into());
     }
@@ -610,17 +635,69 @@ fn malformed(spec: &Spec, target: Target) -> Result<(), Refusal> {
         ));
     }
     let linux = target != Target::Macos;
-    if linux && matches!(spec.net, Net::Isolated { .. }) && relay.is_empty() {
+    // a debug fork with its own loopback needs no way out (the reduced tier's loopback is refused below)
+    if linux && matches!(spec.net, Net::Isolated { .. }) && relay.is_empty() && !loopback {
         return bad("net: isolated without a relay on Linux".into());
+    }
+    if spec.net == Net::None && !spec.extra_tcp_ports.is_empty() {
+        return bad("net: none with extra_tcp_ports: there is no network to reach them on".into());
+    }
+    if let Some(r) = &spec.rlimits {
+        if target == Target::Macos {
+            return bad("rlimits: macOS has no helper to set them, and a cap that is not enforced is not offered".into());
+        }
+        for (name, v) in [
+            ("address_space", r.address_space),
+            ("data", r.data),
+            ("cpu_seconds", r.cpu_seconds),
+            ("open_files", r.open_files),
+        ] {
+            if v == Some(0) {
+                return bad(format!(
+                    "rlimits.{name} is 0: a cap of nothing lets the program do nothing"
+                ));
+            }
+        }
     }
     if linux && !mac_ports.is_empty() {
         return bad("net: mac_tcp_ports on Linux".into());
+    }
+    if target == Target::LinuxReduced && loopback {
+        return bad(
+            "net: loopback in the reduced tier, which has no network namespace to keep it in"
+                .into(),
+        );
+    }
+    if linux && !loop_ports.is_empty() {
+        return bad("net: mac_loopback_ports on Linux".into());
+    }
+    if !loopback && !loop_ports.is_empty() {
+        return bad("net: mac_loopback_ports without loopback".into());
     }
     if target == Target::LinuxReduced && spec.tmp.is_none() {
         return bad("tmp: the reduced tier has no private /tmp, so its spec needs a tmp".into());
     }
     if spec.run.as_ref().is_some_and(|r| r.mode == Mode::Rw) {
         return bad("run: the session dir is bound read-only; its mode must be ro".into());
+    }
+    match (&spec.trace, target) {
+        (Trace::Off, _) => {}
+        (_, Target::Macos) => return bad("trace: opens are not traced on macOS".into()),
+        (Trace::PerStep { .. }, Target::LinuxReduced) => {
+            return bad(
+                "trace: per_step needs the full tier (its wrapper lives under /run/gleipnir)"
+                    .into(),
+            );
+        }
+        _ => {}
+    }
+    if let Some(sock) = spec.trace.socket()
+        && !spec.sockets.contains(sock)
+    {
+        return bad(format!(
+            "trace: the socket {} is not one of the spec's sockets",
+            sock.display()
+        ));
     }
     Ok(())
 }
@@ -702,10 +779,121 @@ fn reserved_dests(spec: &Spec, cmp: Cmp) -> Result<(), Refusal> {
     Ok(())
 }
 
+/// The most the browser host's own flags may hold, in bytes.
+pub const BROWSER_HOST_ARGS_MAX: usize = 4096;
+
+/// Rule 12: the agent browser, when asked. Phase 1 has it on the full tier only, behind the relay: the web port is a
+/// relay port, the local ports are `extra_tcp_ports` and none is a relay port (the browser layer must never reach
+/// the provider or the CDP relay), the program lies under a read root the browser layer grants, its own dir is
+/// [`BROWSER_DIR_FULL`], and its host flags carry no secret. The spec's Landlock floor is raised to
+/// [`LANDLOCK_FLOOR_BROWSER`]: the browser layer is no boundary below it, and the agent's own layer is applied first.
+fn browser(spec: &mut Spec, target: Target) -> Result<(), Refusal> {
+    let Some(b) = &spec.browser else {
+        return Ok(());
+    };
+    let bad = |path: Option<&Path>, msg: String| Err(refusal(Rule::Browser, path, msg));
+    if target != Target::LinuxBwrap {
+        return bad(
+            None,
+            format!("browser: the agent browser on this tier ({target:?}) comes in a later phase"),
+        );
+    }
+    let relay: Vec<u16> = match &spec.net {
+        Net::Isolated { relay, .. } => relay.iter().map(|r| r.port).collect(),
+        Net::Shared | Net::None => {
+            return bad(
+                None,
+                "browser: needs net isolated; its only way out is the web relay".into(),
+            );
+        }
+    };
+    if !relay.contains(&b.web_port) {
+        return bad(
+            None,
+            format!(
+                "browser.web_port {} is not one of the relay ports",
+                b.web_port
+            ),
+        );
+    }
+    for p in &b.local_ports {
+        if relay.contains(p) {
+            return bad(
+                None,
+                format!(
+                    "browser.local_ports: {p} is a relay port, which the browser must never reach"
+                ),
+            );
+        }
+        if !spec.extra_tcp_ports.contains(p) {
+            return bad(
+                None,
+                format!("browser.local_ports: {p} is not one of extra_tcp_ports"),
+            );
+        }
+    }
+    let roots: Vec<&Path> = [Path::new("/usr"), Path::new("/opt")]
+        .into_iter()
+        .chain(b.extra_read.iter().map(PathBuf::as_path))
+        .collect();
+    if !roots
+        .iter()
+        .any(|r| b.program.starts_with(r) && b.program != *r)
+    {
+        return bad(
+            Some(&b.program),
+            format!(
+                "browser.program: {} lies under none of /usr, /opt and browser.extra_read",
+                b.program.display()
+            ),
+        );
+    }
+    if !fs::metadata(&b.program).is_ok_and(|m| m.is_file()) {
+        return bad(
+            Some(&b.program),
+            format!("browser.program: {} is not a file", b.program.display()),
+        );
+    }
+    if b.own_dir != Path::new(BROWSER_DIR_FULL) {
+        return bad(
+            Some(&b.own_dir),
+            format!(
+                "browser.own_dir: {} is not {BROWSER_DIR_FULL}",
+                b.own_dir.display()
+            ),
+        );
+    }
+    let size: usize = b.host_args.iter().map(|a| a.len() + 1).sum();
+    if size > BROWSER_HOST_ARGS_MAX {
+        return bad(
+            None,
+            format!("browser.host_args: {size} bytes; at most {BROWSER_HOST_ARGS_MAX}"),
+        );
+    }
+    for (i, a) in b.host_args.iter().enumerate() {
+        if a.contains('\0') {
+            return bad(None, format!("browser.host_args[{i}] holds a NUL"));
+        }
+        if let Some((_, v)) = a.split_once('=')
+            && !v.is_empty()
+            && spec.env.iter().any(|(_, e)| e == v)
+        {
+            return bad(
+                None,
+                format!(
+                    "browser.host_args[{i}]: its value is an env value of the spec; a secret never goes in an argv"
+                ),
+            );
+        }
+    }
+    spec.layers.landlock_min_abi = spec.layers.landlock_min_abi.max(LANDLOCK_FLOOR_BROWSER);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spec::{BASE_ENV_DENY, Bind, Layers, Mode, Net, RelayPort};
+    use crate::spec::{BASE_ENV_DENY, Bind, Layers, Mode, Net, RelayPort, Rlimits};
     use std::ffi::OsStr;
     use std::fs;
     use std::os::unix::ffi::OsStrExt;
@@ -785,6 +973,8 @@ mod tests {
                 Target::Macos => Net::Isolated {
                     relay: vec![],
                     mac_tcp_ports: vec![3128],
+                    loopback: false,
+                    mac_loopback_ports: vec![],
                 },
                 _ => Net::Isolated {
                     relay: vec![RelayPort {
@@ -796,6 +986,8 @@ mod tests {
                         },
                     }],
                     mac_tcp_ports: vec![],
+                    loopback: false,
+                    mac_loopback_ports: vec![],
                 },
             };
             Spec {
@@ -819,6 +1011,9 @@ mod tests {
                 tmp: Some(self.p("state/sandbox/J1/tmp")),
                 layers: Layers::for_target(target),
                 extra_tcp_ports: vec![8080],
+                rlimits: None,
+                trace: Default::default(),
+                browser: None,
             }
         }
     }
@@ -1449,6 +1644,41 @@ mod tests {
         .expect("the full tier has a private /tmp");
     }
 
+    /// `Net::None` is a whole network policy on every target, with nothing to carry (no ports to reach, no relay);
+    /// `rlimits` are the Linux helper's, and are refused where nothing would enforce them.
+    #[test]
+    fn no_network_and_resource_caps() {
+        let fx = Fx::new();
+        base_passes(&fx);
+        let caps = Rlimits {
+            address_space: Some(64 << 20),
+            open_files: Some(32),
+            ..Rlimits::default()
+        };
+        for t in TARGETS {
+            let mut s = fx.spec(t);
+            s.net = Net::None;
+            s.extra_tcp_ports = vec![];
+            validate(s.clone(), &fx.ctx(), t)
+                .unwrap_or_else(|r| panic!("net none for {t:?}: {r:?}"));
+            s.extra_tcp_ports = vec![8080];
+            refused(&fx, "net none with ports", t, s, Rule::Malformed);
+            let mut s = fx.spec(t);
+            s.rlimits = Some(caps.clone());
+            if t == Target::Macos {
+                refused(&fx, "rlimits on macOS", t, s, Rule::Malformed);
+            } else {
+                validate(s, &fx.ctx(), t).unwrap_or_else(|r| panic!("rlimits for {t:?}: {r:?}"));
+                let mut s = fx.spec(t);
+                s.rlimits = Some(Rlimits {
+                    cpu_seconds: Some(0),
+                    ..Rlimits::default()
+                });
+                refused(&fx, "a cap of 0", t, s, Rule::Malformed);
+            }
+        }
+    }
+
     #[test]
     fn malformed_net_and_ports() {
         let fx = Fx::new();
@@ -1458,6 +1688,8 @@ mod tests {
             s.net = Net::Isolated {
                 relay: vec![],
                 mac_tcp_ports: vec![],
+                loopback: false,
+                mac_loopback_ports: vec![],
             };
             refused(&fx, "isolated without a relay", t, s, Rule::Malformed);
             let mut s = fx.spec(t);
@@ -1487,15 +1719,97 @@ mod tests {
                 t,
                 Spec {
                     extra_tcp_ports: vec![0],
+                    rlimits: None,
                     ..fx.spec(t)
                 },
                 Rule::Malformed,
             );
         }
+        // loopback: never in the reduced tier (no namespace), its ports only on macOS and only with the flag
+        let flag = |s: &mut Spec, on: bool, ports: Vec<u16>| {
+            if let Net::Isolated {
+                loopback,
+                mac_loopback_ports,
+                ..
+            } = &mut s.net
+            {
+                *loopback = on;
+                *mac_loopback_ports = ports;
+            }
+        };
+        let mut s = fx.spec(Target::LinuxReduced);
+        flag(&mut s, true, vec![]);
+        refused(
+            &fx,
+            "loopback in the reduced tier",
+            Target::LinuxReduced,
+            s,
+            Rule::Malformed,
+        );
+        let mut s = fx.spec(Target::LinuxBwrap);
+        flag(&mut s, true, vec![]);
+        validate(s, &fx.ctx(), Target::LinuxBwrap)
+            .expect("the full tier keeps loopback in its namespace");
+        // a sealed debug fork: its own loopback and no way out at all (no relay), the full tier only
+        let no_relay = |s: &mut Spec| {
+            if let Net::Isolated { relay, .. } = &mut s.net {
+                relay.clear();
+            }
+        };
+        let mut s = fx.spec(Target::LinuxBwrap);
+        flag(&mut s, true, vec![]);
+        no_relay(&mut s);
+        validate(s, &fx.ctx(), Target::LinuxBwrap)
+            .expect("loopback in the namespace with no relay: a sealed fork");
+        let mut s = fx.spec(Target::LinuxBwrap);
+        no_relay(&mut s);
+        refused(
+            &fx,
+            "no relay without the loopback flag",
+            Target::LinuxBwrap,
+            s,
+            Rule::Malformed,
+        );
+        let mut s = fx.spec(Target::LinuxReduced);
+        flag(&mut s, true, vec![]);
+        no_relay(&mut s);
+        refused(
+            &fx,
+            "no relay with loopback in the reduced tier",
+            Target::LinuxReduced,
+            s,
+            Rule::Malformed,
+        );
+        let mut s = fx.spec(Target::LinuxBwrap);
+        flag(&mut s, true, vec![47001]);
+        refused(
+            &fx,
+            "mac_loopback_ports on Linux",
+            Target::LinuxBwrap,
+            s,
+            Rule::Malformed,
+        );
+        let mut s = fx.spec(Target::Macos);
+        flag(&mut s, false, vec![47001]);
+        refused(
+            &fx,
+            "loopback ports without the flag",
+            Target::Macos,
+            s,
+            Rule::Malformed,
+        );
+        let mut s = fx.spec(Target::Macos);
+        flag(&mut s, true, vec![0]);
+        refused(&fx, "loopback port 0", Target::Macos, s, Rule::Malformed);
+        let mut s = fx.spec(Target::Macos);
+        flag(&mut s, true, vec![47001]);
+        validate(s, &fx.ctx(), Target::Macos).expect("macOS loopback on its own ports");
         let mut s = fx.spec(Target::Macos);
         s.net = Net::Isolated {
             relay: vec![],
             mac_tcp_ports: vec![0],
+            loopback: false,
+            mac_loopback_ports: vec![],
         };
         refused(&fx, "mac port 0", Target::Macos, s, Rule::Malformed);
     }
@@ -1515,6 +1829,60 @@ mod tests {
             let v = validate(s, &fx.ctx(), t).unwrap();
             assert_eq!(v.spec().home.as_ref().unwrap().mode, Mode::Ro);
         }
+    }
+
+    /// Tracing opens: per step needs the full tier, whole tree any Linux tier, never macOS; its socket must be one of
+    /// the spec's sockets.
+    #[test]
+    fn trace_needs_its_socket_and_a_linux_tier() {
+        let fx = Fx::new();
+        base_passes(&fx);
+        let sock = fx.p("rt/drgnx/s/S1/proxy.sock");
+        let per = Trace::PerStep {
+            socket: sock.clone(),
+        };
+        let tree = Trace::Tree {
+            socket: sock.clone(),
+        };
+        let with = |t: Target, trace: &Trace| Spec {
+            trace: trace.clone(),
+            ..fx.spec(t)
+        };
+        validate(
+            with(Target::LinuxBwrap, &per),
+            &fx.ctx(),
+            Target::LinuxBwrap,
+        )
+        .expect("per step in the full tier");
+        for t in [Target::LinuxBwrap, Target::LinuxReduced] {
+            validate(with(t, &tree), &fx.ctx(), t).expect("the whole tree on Linux");
+        }
+        refused(
+            &fx,
+            "per step reduced",
+            Target::LinuxReduced,
+            with(Target::LinuxReduced, &per),
+            Rule::Malformed,
+        );
+        for trace in [&per, &tree] {
+            refused(
+                &fx,
+                "trace on macOS",
+                Target::Macos,
+                with(Target::Macos, trace),
+                Rule::Malformed,
+            );
+        }
+        let stray = Trace::Tree {
+            socket: fx.p("rt/drgnx/s/S1/trace.sock"),
+        };
+        refused(
+            &fx,
+            "a socket not listed",
+            Target::LinuxBwrap,
+            with(Target::LinuxBwrap, &stray),
+            Rule::Malformed,
+        );
     }
 
     #[test]
@@ -1607,6 +1975,170 @@ mod tests {
         let mut s = fx.spec(t);
         s.binds[0].dest = "/run/gleipnirx".into();
         validate(s, &fx.ctx(), t).expect("a sibling with a longer name is no child");
+    }
+
+    /// A spec for `target` with the browser: a second relay port for the web (3130), the local port 8080 (one of
+    /// `extra_tcp_ports`), the program a file under `other` (an extra read). Its own dir is [`BROWSER_DIR_FULL`], a
+    /// place inside; on a target without mounts it is a host path, so it is the true name of the host's `/tmp` (a link
+    /// to `/private/tmp` on macOS, which rule 1 would refuse before rule 12 says what the row is about).
+    fn with_browser(fx: &Fx, target: Target) -> Spec {
+        fs::write(fx.p("other/chrome"), "x").unwrap();
+        let mut s = fx.spec(target);
+        if let Net::Isolated { relay, .. } = &mut s.net
+            && let Some(first) = relay.first()
+        {
+            let socket = first.socket.with_file_name("web.sock");
+            relay.push(RelayPort { port: 3130, socket });
+        }
+        let own_dir = if no_mounts(target) {
+            fs::canonicalize("/tmp").unwrap().join("drgnx-browser")
+        } else {
+            BROWSER_DIR_FULL.into()
+        };
+        s.browser = Some(crate::spec::SpecBrowser {
+            program: fx.p("other/chrome"),
+            own_dir,
+            web_port: 3130,
+            local_ports: vec![8080],
+            extra_read: vec![fx.p("other")],
+            host_args: vec!["--headless-shell".into(), "--lang=".into()],
+        });
+        s
+    }
+
+    /// Rule 12, one row per check; each base row passes, so each refusal is its row's change. A passing spec has its
+    /// Landlock floor raised to 9.
+    #[test]
+    fn browser_table() {
+        let fx = Fx::new();
+        base_passes(&fx);
+        let ok = validate(
+            with_browser(&fx, Target::LinuxBwrap),
+            &fx.ctx(),
+            Target::LinuxBwrap,
+        )
+        .expect("the browser base row passes");
+        assert_eq!(ok.spec().layers.landlock_min_abi, 9);
+        assert!(ok.spec().browser.is_some());
+        let base = || with_browser(&fx, Target::LinuxBwrap);
+        let change = |f: &dyn Fn(&mut crate::spec::SpecBrowser)| {
+            let mut s = base();
+            f(s.browser.as_mut().unwrap());
+            s
+        };
+        let big = "x".repeat(BROWSER_HOST_ARGS_MAX);
+        let rows: Vec<(&str, Target, Spec, &str)> = vec![
+            (
+                "reduced tier",
+                Target::LinuxReduced,
+                with_browser(&fx, Target::LinuxReduced),
+                "later phase",
+            ),
+            (
+                "macOS",
+                Target::Macos,
+                with_browser(&fx, Target::Macos),
+                "later phase",
+            ),
+            (
+                "shared network",
+                Target::LinuxBwrap,
+                Spec {
+                    net: Net::Shared,
+                    ..base()
+                },
+                "isolated",
+            ),
+            (
+                "web port not a relay port",
+                Target::LinuxBwrap,
+                change(&|b| b.web_port = 3131),
+                "not one of the relay ports",
+            ),
+            (
+                "a local port is a relay port",
+                Target::LinuxBwrap,
+                Spec {
+                    extra_tcp_ports: vec![8080, 3128],
+                    rlimits: None,
+                    ..change(&|b| b.local_ports.push(3128))
+                },
+                "is a relay port",
+            ),
+            (
+                "a local port not in extra_tcp_ports",
+                Target::LinuxBwrap,
+                change(&|b| b.local_ports.push(5173)),
+                "not one of extra_tcp_ports",
+            ),
+            (
+                "program under no read root",
+                Target::LinuxBwrap,
+                change(&|b| b.program = fx.p("agent/agent.1")),
+                "lies under none of",
+            ),
+            (
+                "program a root itself",
+                Target::LinuxBwrap,
+                change(&|b| b.program = "/usr".into()),
+                "lies under none of",
+            ),
+            (
+                "program missing",
+                Target::LinuxBwrap,
+                change(&|b| b.program = "/usr/bin/glp-no-such-browser".into()),
+                "is not a file",
+            ),
+            (
+                "program a directory",
+                Target::LinuxBwrap,
+                change(&|b| b.program = "/usr/bin".into()),
+                "is not a file",
+            ),
+            (
+                "own dir elsewhere",
+                Target::LinuxBwrap,
+                change(&|b| b.own_dir = "/tmp/other".into()),
+                "/tmp/drgnx-browser",
+            ),
+            (
+                "host args too long",
+                Target::LinuxBwrap,
+                change(&|b| b.host_args.push(big.clone())),
+                "at most 4096",
+            ),
+            (
+                "an env value in a host arg",
+                Target::LinuxBwrap,
+                change(&|b| b.host_args.push("--lang=C.UTF-8".into())),
+                "env value",
+            ),
+        ];
+        for (row, target, spec, want) in rows {
+            match validate(spec, &fx.ctx(), target) {
+                Ok(_) => panic!("{row}: accepted"),
+                Err(r) => {
+                    assert_eq!(r.rule, Rule::Browser, "{row}: {}", r.message);
+                    assert!(r.message.contains(want), "{row}: {}", r.message);
+                }
+            }
+        }
+        // Rule 1 sees the browser's paths first: a relative program or one through a link is not canonical.
+        refused(
+            &fx,
+            "program relative",
+            Target::LinuxBwrap,
+            change(&|b| b.program = "chrome".into()),
+            Rule::NotCanonical,
+        );
+        std::os::unix::fs::symlink(fx.p("other/chrome"), fx.p("other/link")).unwrap();
+        refused(
+            &fx,
+            "program through a link",
+            Target::LinuxBwrap,
+            change(&|b| b.program = fx.p("other/link")),
+            Rule::NotCanonical,
+        );
     }
 
     #[test]
@@ -1795,7 +2327,7 @@ mod tests {
                             Net::Isolated { relay, .. } => {
                                 relay.iter().map(|r| &r.socket).collect()
                             }
-                            Net::Shared => Vec::new(),
+                            Net::Shared | Net::None => Vec::new(),
                         };
                         let all = s
                             .read

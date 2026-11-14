@@ -11,15 +11,43 @@
 //!   instead).  The log is JSONL: `{"request": {method, path, headers (lower-case names), body}}` per request, then
 //!   `{"closed": true}` when the client hangs up before it was answered to the end; with `--print-closed` it also
 //!   prints `MOCK-LLM-CLOSED` then.
+//! - `llm --replay DIR [--speed N] [--misses FILE] [--parent PID]` prints `MOCK-LLM-PORT N` and answers `/p/ID/REST`
+//!   from a recording's `llm.jsonl` (docs/develop/recordings.md): the request's match key picks the first unused
+//!   exchange with that key, answered with its status, stored headers and chunks (chunked, each after its recorded gap
+//!   times N, default 0), ended as live ended (`dropped` and a run that died drop the connection; `client-left` waits
+//!   for the client to go).  No such exchange: 500 `x-drgnx-replay: miss`, a `replay_miss` error naming the nearest
+//!   exchange's first differing path, and a line in FILE.
 //! - `proxy [--log FILE]` prints `MOCK-PROXY-PORT N`; `CONNECT host:port` is logged (`{"connect": "host:port"}`) and
 //!   tunnelled, anything else gets 405 (logged as `{"refused": "METHOD TARGET"}`).
 //!
-//! - `acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL]` is a scripted ACP agent on stdio (src/mock_acp/mod.rs).
+//! - `acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL] [--panel FEATURES]` is a scripted ACP agent on
+//!   stdio (src/mock_acp/mod.rs); with `--panel` it speaks drgnx's `_drgnx/panel` extension, as an adapter fork does.
+//! - `cloud --listen ADDR --podman-remote SOCK|none --prefix P --run R [--hub ID] …` is an EC2 and GCE subset with
+//!   failure knobs and a virtual clock (src/mock_cloud/mod.rs; docs/develop/scenarios.md, "The cloud mock").
+//! - `hf --dir DIR [--log FILE] [--cut FILE BYTES] [--bad FILE] [--location URL] [--no-range]` is the model host: it prints
+//!   `MOCK-HF-PORT N` and `MOCK-HF-CDN-PORT M`. `/…/resolve/REV/FILE` on N answers 302 to `FILE?sig=1` on M (or to URL, always,
+//!   with `--location`), and M serves the files of DIR and honours `Range: bytes=START-` (unless `--no-range`). The first
+//!   response for FILE stops after BYTES with `--cut`; a last byte is flipped with `--bad`. The log is JSONL: `{server, path,
+//!   range, credentials}`.
+//! - `http-serve PORT TEXT` prints `MOCK-HTTP-PORT N` and serves on 127.0.0.1:PORT (0: any free port) a page whose
+//!   title and text are TEXT, for every path but `/download`, which is TEXT as an attachment (`TEXT.txt`): an agent's
+//!   dev server, a site on the host.
+//! - `cdp-drive URL…` is an outside agent's browser tool: it runs Playwright MCP (`node` and the test image's
+//!   `/opt/pw-mcp`) over stdio with this process's environment, so it reaches the browser the session's
+//!   `PLAYWRIGHT_MCP_CDP_ENDPOINT` names, and for each URL calls `browser_navigate` and `browser_snapshot` and prints
+//!   `TITLE <the page's title>`, or `ERROR <url>: <why>` (exit 1 when any failed).
 //!
-//! `llm` ends when `--parent` is gone.
+//! - `embed [--dims N] [--log FILE] [--parent PID]` prints `MOCK-EMBED-PORT N` and serves, on 127.0.0.1 only, TEI's `POST
+//!   /embed {"inputs"}` (a list of vectors) and Ollama's `POST /api/embed {"model", "input"}` (`{"model", "embeddings",
+//!   "prompt_eval_count"}`, the words of the inputs). A vector is made from its text's bytes, so equal texts give equal
+//!   vectors. The log is JSONL like `llm`'s.
+//!
+//! `llm` and `embed` end when `--parent` is gone.
 
 #[path = "../mock_acp/mod.rs"]
 mod mock_acp;
+#[path = "../mock_cloud/mod.rs"]
+mod mock_cloud;
 
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use serde_json::{Value, json};
@@ -41,8 +69,13 @@ fn main() {
         Some("llm") => llm(&args[1..]),
         Some("proxy") => proxy(&args[1..]),
         Some("acp") => mock_acp::run(&args[1..]),
+        Some("cloud") => mock_cloud::run(&args[1..]),
+        Some("hf") => hf(&args[1..]),
+        Some("embed") => embed(&args[1..]),
+        Some("http-serve") => http_serve(&args[1..]),
+        Some("cdp-drive") => cdp_drive(&args[1..]),
         _ => die(
-            "usage: ratatoskr-mock llm --script FILE [--log FILE] [--tls CA_FILE] [--parent PID] | proxy [--log FILE] | acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL]",
+            "usage: ratatoskr-mock embed [--dims N] [--log FILE] [--parent PID] | llm --script FILE [--log FILE] [--tls CA_FILE] [--parent PID] | llm --replay DIR [--speed N] [--misses FILE] [--parent PID] | proxy [--log FILE] | acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL] | cloud --listen ADDR --podman-remote SOCK|none --prefix P --run R [--hub ID] [--image IMG] [--network NET] [--podman PATH] [--log FILE] [--parent PID] | hf --dir DIR [--log FILE] [--cut FILE BYTES] [--bad FILE] [--location URL] [--no-range] | http-serve PORT TEXT | cdp-drive URL...",
         ),
     }
 }
@@ -390,7 +423,298 @@ fn tls_config(ca_file: &str) -> Arc<rustls::ServerConfig> {
     Arc::new(cfg)
 }
 
+/// `--parent PID`: end when that process is gone.
+fn watch_parent(args: &[String]) {
+    if let Some(p) = flag(args, "--parent", 1) {
+        let pid: i32 = p[0].parse().unwrap_or_else(|_| die("--parent is a pid"));
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(Duration::from_secs(1));
+                if parent_gone(pid) {
+                    std::process::exit(0);
+                }
+            }
+        });
+    }
+}
+
+// ------------------------------------------------------------------------------------------ llm --replay
+
+/// One recorded exchange (an `llm.jsonl` line), with its key recomputed by the current normalizers.
+struct Recorded {
+    id: String,
+    route: String,
+    key: String,
+    /// The keyed object, normalized: what a miss is compared with.
+    keyed: Value,
+    status: u16,
+    headers: Vec<(String, String)>,
+    chunks: Vec<(u64, Vec<u8>)>,
+    /// `complete`, `dropped`, `client-left` (after `at_chunk` chunks), or none (the run died).
+    end: Option<String>,
+    at_chunk: usize,
+}
+
+struct Replay {
+    run: String,
+    exchanges: Vec<Recorded>,
+    used: Mutex<Vec<bool>>,
+    /// This run's roots (the hub's environment, inherited).
+    here: runstav::recording::Roots,
+    speed: f64,
+    misses: Option<std::path::PathBuf>,
+}
+
+fn load_replay(dir: &std::path::Path) -> Result<Vec<Recorded>, String> {
+    use runstav::recording as rec;
+    let manifest = rec::read_manifest(dir)?;
+    let live = rec::Roots::from_json(&manifest["roots"]);
+    let text = match std::fs::read_to_string(dir.join("llm.jsonl")) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(format!("llm.jsonl: {e}")),
+    };
+    let mut lines: Vec<Value> = Vec::new();
+    for (i, l) in text
+        .lines()
+        .enumerate()
+        .filter(|(_, l)| !l.trim().is_empty())
+    {
+        lines.push(serde_json::from_str(l).map_err(|e| format!("llm.jsonl line {}: {e}", i + 1))?);
+    }
+    lines.sort_by_key(|l| l["seq"].as_u64().unwrap_or(0));
+    Ok(lines
+        .iter()
+        .map(|l| {
+            let provider = l["provider"].as_str().unwrap_or_default();
+            let path = l["path"].as_str().unwrap_or_default();
+            let body = rec::body_bytes(&l["request"]["body"]).unwrap_or_default();
+            let body = String::from_utf8_lossy(&body);
+            let r = &l["response"];
+            Recorded {
+                id: l["id"].as_str().unwrap_or("?").to_owned(),
+                route: format!("{provider} {path}"),
+                key: rec::key(provider, path, &body, &live),
+                keyed: rec::normalized_keyed(provider, path, &body, &live),
+                status: r["status"].as_u64().unwrap_or(0) as u16,
+                headers: r["headers"]
+                    .as_object()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_owned())))
+                    .collect(),
+                chunks: r["chunks"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|c| Some((c[0].as_u64()?, rec::body_bytes(&c[1])?)))
+                    .collect(),
+                end: r["end"].as_str().map(str::to_owned),
+                at_chunk: r["at_chunk"].as_u64().unwrap_or(0) as usize,
+            }
+        })
+        .collect())
+}
+
+/// `llm --replay DIR [--speed N] [--misses FILE] [--parent PID]`: the recorded provider.  A request's key (the
+/// current normalizers, this run's roots) picks the first unused exchange recorded with that key; none is a miss.
+fn llm_replay(args: &[String], dir: &str) {
+    let dir = std::path::Path::new(dir);
+    let exchanges =
+        load_replay(dir).unwrap_or_else(|e| die(&format!("--replay {}: {e}", dir.display())));
+    let speed: f64 = flag(args, "--speed", 1).map_or(0.0, |s| {
+        s[0].parse()
+            .ok()
+            .filter(|v: &f64| *v >= 0.0)
+            .unwrap_or_else(|| die("--speed is 0 or more"))
+    });
+    watch_parent(args);
+    let replay = Arc::new(Replay {
+        run: dir.file_name().map_or_else(
+            || dir.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        ),
+        used: Mutex::new(vec![false; exchanges.len()]),
+        exchanges,
+        here: runstav::recording::Roots::of_env(&runstav::paths::Env::process()),
+        speed,
+        misses: flag(args, "--misses", 1).map(|m| m[0].clone().into()),
+    });
+    let listener =
+        TcpListener::bind("127.0.0.1:0").unwrap_or_else(|e| die(&format!("cannot listen: {e}")));
+    announce("MOCK-LLM-PORT", &listener);
+    for sock in listener.incoming().flatten() {
+        let replay = replay.clone();
+        std::thread::spawn(move || replay_serve(sock, &replay));
+    }
+}
+
+/// `/p/ID/REST` as `(ID, /REST)`.
+fn provider_path(target: &str) -> Option<(&str, &str)> {
+    let rest = target.strip_prefix("/p/")?;
+    let at = rest.find('/')?;
+    Some((&rest[..at], &rest[at..]))
+}
+
+fn replay_serve(mut sock: TcpStream, replay: &Replay) {
+    use runstav::recording as rec;
+    let Some(req) = read_request(&mut sock) else {
+        return;
+    };
+    let body = String::from_utf8_lossy(&req.body).into_owned();
+    let (provider, path) = provider_path(&req.path).unwrap_or(("", req.path.as_str()));
+    let key = rec::key(provider, path, &body, &replay.here);
+    let found = {
+        let mut used = replay.used.lock().unwrap();
+        let i = (0..replay.exchanges.len()).find(|i| !used[*i] && replay.exchanges[*i].key == key);
+        if let Some(i) = i {
+            used[i] = true;
+        }
+        i
+    };
+    match found {
+        Some(i) => replay_answer(&mut sock, replay, &replay.exchanges[i]),
+        None => {
+            let keyed = rec::normalized_keyed(provider, path, &body, &replay.here);
+            let route = format!("{provider} {path}");
+            let nearest = replay
+                .exchanges
+                .iter()
+                .filter(|x| x.route == route)
+                .min_by_key(|x| rec::distance(&x.keyed, &keyed));
+            let parsed: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+            let model = parsed["model"].as_str().unwrap_or("?");
+            let n = parsed["messages"].as_array().map_or(0, Vec::len);
+            let (near, at) = match nearest {
+                Some(x) => (
+                    Some(x.id.as_str()),
+                    rec::first_diff(&x.keyed, &keyed)
+                        .unwrap_or_else(|| "nothing (it was answered already)".into()),
+                ),
+                None => (None, String::new()),
+            };
+            let what = match near {
+                Some(id) => format!("nearest {id} differs at {at}"),
+                None => format!("nothing was recorded on {route}"),
+            };
+            let why = format!(
+                "not in the recording {}: {model}, {n} messages; {what}; re-record",
+                replay.run
+            );
+            replay_miss(
+                replay,
+                &json!({
+                    "request": {"provider": provider, "path": path, "body": rec::Scrub::default().text(&body)},
+                    "nearest": near, "differs_at": at, "why": why,
+                }),
+            );
+            let text = json!({"type": "error", "error": {"type": "replay_miss", "message": why}})
+                .to_string();
+            let extra = [("x-drgnx-replay".to_string(), "miss".to_string())];
+            let _ = sock
+                .write_all(head(500, "application/json", Some(text.len()), &extra).as_bytes())
+                .and_then(|()| sock.write_all(text.as_bytes()))
+                .and_then(|()| sock.flush());
+            let _ = sock.shutdown(Shutdown::Write);
+        }
+    }
+}
+
+/// A line in the replay's misses file.
+fn replay_miss(replay: &Replay, line: &Value) {
+    let Some(path) = &replay.misses else {
+        eprintln!("ratatoskr-mock: replay miss: {}", line["why"]);
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        Ok(mut f) => {
+            let _ = f.write_all(format!("{line}\n").as_bytes());
+        }
+        Err(e) => eprintln!("ratatoskr-mock: cannot write {}: {e}", path.display()),
+    }
+}
+
+/// The recorded answer: its head, its chunks at the recorded gaps times `--speed` (chunked, so a drop shows), then its
+/// end.  No head recorded: the connection is dropped.
+fn replay_answer(sock: &mut TcpStream, replay: &Replay, x: &Recorded) {
+    if x.status == 0 {
+        let _ = sock.shutdown(Shutdown::Both);
+        return;
+    }
+    let content_type = x
+        .headers
+        .iter()
+        .find(|(k, _)| k == "content-type")
+        .map_or("application/json", |(_, v)| v.as_str());
+    let mut h = format!(
+        "HTTP/1.1 {} X\r\nContent-Type: {content_type}\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n",
+        x.status
+    );
+    for (k, v) in x.headers.iter().filter(|(k, _)| k != "content-type") {
+        h.push_str(&format!("{k}: {v}\r\n"));
+    }
+    h.push_str("\r\n");
+    if sock
+        .write_all(h.as_bytes())
+        .and_then(|()| sock.flush())
+        .is_err()
+    {
+        return;
+    }
+    let fd = sock.as_raw_fd();
+    let upto = match x.end.as_deref() {
+        Some("client-left") => x.at_chunk.min(x.chunks.len()),
+        _ => x.chunks.len(),
+    };
+    for (dt, data) in &x.chunks[..upto] {
+        let wait = (*dt as f64 * replay.speed) as u64;
+        if wait > 0 && hung_up_within(fd, wait) {
+            return;
+        }
+        if data.is_empty() {
+            continue;
+        }
+        let size = format!("{:x}\r\n", data.len());
+        let framed = [size.as_bytes(), data.as_slice(), b"\r\n".as_slice()].concat();
+        if sock.write_all(&framed).and_then(|()| sock.flush()).is_err() {
+            return;
+        }
+    }
+    match x.end.as_deref() {
+        Some("complete") => {
+            let _ = sock.write_all(b"0\r\n\r\n").and_then(|()| sock.flush());
+            let _ = sock.shutdown(Shutdown::Write);
+        }
+        Some("client-left") => {
+            // live, the client left here: it must leave again
+            if !hung_up_within(fd, 30_000) {
+                replay_miss(
+                    replay,
+                    &json!({
+                        "nearest": x.id, "differs_at": "", "why": format!(
+                            "{}: the client stayed past where it left live (chunk {}); re-record", x.id, x.at_chunk),
+                    }),
+                );
+            }
+        }
+        // dropped, or the run died: the connection drops without the last chunk
+        _ => {
+            let _ = sock.shutdown(Shutdown::Both);
+        }
+    }
+}
+
 fn llm(args: &[String]) {
+    if let Some(dir) = flag(args, "--replay", 1) {
+        return llm_replay(args, &dir[0]);
+    }
     let script_path =
         flag(args, "--script", 1).map_or_else(|| die("llm needs --script FILE"), |s| &s[0]);
     let script: Vec<Entry> = std::fs::read_to_string(script_path)
@@ -497,4 +821,438 @@ fn proxy(args: &[String]) {
         let log = log.clone();
         std::thread::spawn(move || tunnel(sock, &log));
     }
+}
+
+// ------------------------------------------------------------------------------------------ hf
+
+struct Host {
+    dir: std::path::PathBuf,
+    log: Option<Mutex<File>>,
+    cdn_port: u16,
+    location: Option<String>,
+    bad: Option<String>,
+    no_range: bool,
+    /// The file to cut and where, until it has been.
+    cut: Mutex<Option<(String, usize)>>,
+}
+
+impl Host {
+    /// The request's target and Range, logged.
+    fn request(&self, c: &mut TcpStream, server: &str) -> Option<(String, Option<String>)> {
+        let head = read_head(c)?;
+        let path = head.lines().next()?.split(' ').nth(1)?.to_string();
+        let field = |name: &str| {
+            head.lines().find_map(|l| {
+                let (k, v) = l.split_once(':')?;
+                k.eq_ignore_ascii_case(name).then(|| v.trim().to_string())
+            })
+        };
+        let range = field("range");
+        let credentials = field("authorization").is_some() || field("cookie").is_some();
+        log_line(
+            &self.log,
+            &json!({"server": server, "path": path, "range": range, "credentials": credentials}),
+        );
+        Some((path, range))
+    }
+
+    fn resolve(&self, mut c: TcpStream) {
+        let Some((path, _)) = self.request(&mut c, "resolve") else {
+            return;
+        };
+        let file = path
+            .split_once("/resolve/")
+            .and_then(|(_, rest)| rest.split_once('/'))
+            .map_or("", |(_, file)| file);
+        let target = match &self.location {
+            Some(url) => url.clone(),
+            None => format!("http://127.0.0.1:{}/{file}?sig=1", self.cdn_port),
+        };
+        let found = self.location.is_some() || self.dir.join(file).is_file();
+        let head = if found {
+            format!("HTTP/1.1 302 Found\r\nLocation: {target}\r\n")
+        } else {
+            "HTTP/1.1 404 Not Found\r\n".to_string()
+        };
+        let _ =
+            c.write_all(format!("{head}Content-Length: 0\r\nConnection: close\r\n\r\n").as_bytes());
+    }
+
+    fn serve(&self, mut c: TcpStream) {
+        let Some((path, range)) = self.request(&mut c, "cdn") else {
+            return;
+        };
+        let file = path.trim_start_matches('/').split('?').next().unwrap_or("");
+        let Ok(mut bytes) = std::fs::read(self.dir.join(file)) else {
+            let _ = c.write_all(
+                b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+            return;
+        };
+        if self.bad.as_deref() == Some(file)
+            && let Some(last) = bytes.last_mut()
+        {
+            *last ^= 1;
+        }
+        let size = bytes.len();
+        let start = range
+            .as_deref()
+            .filter(|_| !self.no_range)
+            .and_then(|r| r.strip_prefix("bytes=")?.strip_suffix('-')?.parse().ok());
+        let head = match start {
+            Some(s) if s < size => format!(
+                "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {s}-{}/{size}\r\nContent-Length: {}\r\n",
+                size - 1,
+                size - s
+            ),
+            Some(_) => format!(
+                "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */{size}\r\nContent-Length: 0\r\n"
+            ),
+            None => format!("HTTP/1.1 200 OK\r\nContent-Length: {size}\r\n"),
+        };
+        let start = start.unwrap_or(0).min(size);
+        let mut body = &bytes[start..];
+        if head.contains(" 416 ") {
+            body = &[];
+        }
+        let mut cut = self.cut.lock().unwrap();
+        if cut.as_ref().is_some_and(|(name, _)| name == file) {
+            let (_, at) = cut.take().unwrap();
+            body = &body[..at.min(body.len())];
+        }
+        drop(cut);
+        let _ = c.write_all(format!("{head}Connection: close\r\n\r\n").as_bytes());
+        let _ = c.write_all(body);
+        let _ = c.flush();
+        let _ = c.shutdown(Shutdown::Both);
+    }
+}
+
+// ------------------------------------------------------------------------------------------ embed
+
+/// The vector of TEXT: DIMS numbers in 0..1 from an FNV-1a hash of its bytes, so equal texts give equal vectors and
+/// different texts differ.
+fn embed_vector(text: &str, dims: usize) -> Vec<f64> {
+    let h = text.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+    });
+    (0..dims)
+        .map(|i| (h.rotate_left(i as u32 * 7) % 1000) as f64 / 1000.0)
+        .collect()
+}
+
+/// One request of the embedding server: TEI's `POST /embed {"inputs": [...]}` answers a list of vectors, Ollama's
+/// `POST /api/embed {"model", "input": TEXT|[TEXT...]}` answers `{"model", "embeddings", "prompt_eval_count"}` (the
+/// words of the inputs, which the gateway counts as input tokens). Anything else is 404.
+fn embed_serve(mut sock: TcpStream, dims: usize, log: &Option<Mutex<File>>) {
+    let Some(req) = read_request(&mut sock) else {
+        return;
+    };
+    let body = String::from_utf8_lossy(&req.body).into_owned();
+    log_line(
+        log,
+        &json!({"request": {"method": req.method, "path": req.path, "headers": req.headers, "body": body}}),
+    );
+    let parsed: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+    let texts = |v: &Value| -> Vec<String> {
+        match v {
+            Value::String(s) => vec![s.clone()],
+            Value::Array(a) => a
+                .iter()
+                .filter_map(|t| t.as_str().map(str::to_owned))
+                .collect(),
+            _ => vec![],
+        }
+    };
+    let answer = match req.path.as_str() {
+        "/embed" => {
+            let inputs = texts(&parsed["inputs"]);
+            Some(json!(
+                inputs
+                    .iter()
+                    .map(|t| embed_vector(t, dims))
+                    .collect::<Vec<_>>()
+            ))
+        }
+        "/api/embed" => {
+            let inputs = texts(&parsed["input"]);
+            let words: usize = inputs.iter().map(|t| t.split_whitespace().count()).sum();
+            Some(json!({
+                "model": parsed["model"],
+                "embeddings": inputs.iter().map(|t| embed_vector(t, dims)).collect::<Vec<_>>(),
+                "prompt_eval_count": words,
+            }))
+        }
+        _ => None,
+    };
+    let (status, text) = match answer {
+        Some(v) => (200, v.to_string()),
+        None => (404, "{}".to_string()),
+    };
+    let _ = sock
+        .write_all(head(status, "application/json", Some(text.len()), &[]).as_bytes())
+        .and_then(|()| sock.write_all(text.as_bytes()))
+        .and_then(|()| sock.flush());
+    let _ = sock.shutdown(Shutdown::Write);
+}
+
+/// `embed [--dims N] [--log FILE] [--parent PID]`: prints `MOCK-EMBED-PORT N` and serves TEI's and Ollama's embedding
+/// requests on 127.0.0.1 only (a client that resolves `localhost` to `::1` first must fall back).
+fn embed(args: &[String]) {
+    let dims = flag(args, "--dims", 1).map_or(8, |d| {
+        d[0].parse()
+            .unwrap_or_else(|_| die("--dims is a number of dimensions"))
+    });
+    if let Some(p) = flag(args, "--parent", 1) {
+        let pid: i32 = p[0].parse().unwrap_or_else(|_| die("--parent is a pid"));
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(Duration::from_secs(1));
+                if parent_gone(pid) {
+                    std::process::exit(0);
+                }
+            }
+        });
+    }
+    let log = Arc::new(open_log(args));
+    let listener =
+        TcpListener::bind("127.0.0.1:0").unwrap_or_else(|e| die(&format!("cannot listen: {e}")));
+    announce("MOCK-EMBED-PORT", &listener);
+    for sock in listener.incoming().flatten() {
+        let log = log.clone();
+        std::thread::spawn(move || embed_serve(sock, dims, &log));
+    }
+}
+
+fn hf(args: &[String]) {
+    let dir = flag(args, "--dir", 1).unwrap_or_else(|| die("hf needs --dir"));
+    let listen =
+        || TcpListener::bind("127.0.0.1:0").unwrap_or_else(|e| die(&format!("cannot listen: {e}")));
+    let (front, cdn) = (listen(), listen());
+    let cut = flag(args, "--cut", 2).map(|c| {
+        let at = c[1].parse().unwrap_or_else(|_| die("--cut needs a count"));
+        (c[0].clone(), at)
+    });
+    let host = Arc::new(Host {
+        dir: dir[0].clone().into(),
+        log: open_log(args),
+        cdn_port: cdn.local_addr().map(|a| a.port()).unwrap_or(0),
+        location: flag(args, "--location", 1).map(|l| l[0].clone()),
+        bad: flag(args, "--bad", 1).map(|b| b[0].clone()),
+        no_range: args.iter().any(|a| a == "--no-range"),
+        cut: Mutex::new(cut),
+    });
+    announce("MOCK-HF-PORT", &front);
+    announce("MOCK-HF-CDN-PORT", &cdn);
+    let files = host.clone();
+    std::thread::spawn(move || {
+        for sock in cdn.incoming().flatten() {
+            let host = files.clone();
+            std::thread::spawn(move || host.serve(sock));
+        }
+    });
+    for sock in front.incoming().flatten() {
+        let host = host.clone();
+        std::thread::spawn(move || host.resolve(sock));
+    }
+}
+
+// ------------------------------------------------------------------------------------------ http-serve
+
+fn http_serve(args: &[String]) {
+    let [port, text] = args else {
+        die("usage: http-serve PORT TEXT")
+    };
+    let port: u16 = port
+        .parse()
+        .unwrap_or_else(|_| die("http-serve: PORT is a number"));
+    let listener = TcpListener::bind(("127.0.0.1", port))
+        .unwrap_or_else(|e| die(&format!("cannot listen on 127.0.0.1:{port}: {e}")));
+    announce("MOCK-HTTP-PORT", &listener);
+    let text: Arc<str> = text.as_str().into();
+    for sock in listener.incoming().flatten() {
+        let text = text.clone();
+        std::thread::spawn(move || page(sock, &text));
+    }
+}
+
+/// One request: `/download` is TEXT as an attachment, any other path the page.
+fn page(mut c: TcpStream, text: &str) {
+    // a browser's spare connection may never send a request
+    let _ = c.set_read_timeout(Some(Duration::from_secs(10)));
+    let Some(head) = read_head(&mut c) else {
+        return;
+    };
+    let path = head.split(' ').nth(1).unwrap_or("/");
+    let (content_type, extra, body) = if path == "/download" {
+        (
+            "text/plain",
+            format!("Content-Disposition: attachment; filename=\"{text}.txt\"\r\n"),
+            text.to_string(),
+        )
+    } else {
+        let t = text
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;");
+        (
+            "text/html; charset=utf-8",
+            String::new(),
+            format!(
+                "<!doctype html><html><head><title>{t}</title></head><body><p>{t}</p></body></html>"
+            ),
+        )
+    };
+    let _ = c.write_all(
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n{extra}Connection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .as_bytes(),
+    );
+}
+
+// ------------------------------------------------------------------------------------------ cdp-drive
+
+/// Playwright MCP in the test image (`test/container/browser/Containerfile`).
+const PW_MCP: &str = "/opt/pw-mcp/node_modules/@playwright/mcp/cli.js";
+/// How long one MCP call may take (a navigation through the session's proxy included).
+const CALL_WITHIN: Duration = Duration::from_secs(60);
+
+struct Mcp {
+    to: std::process::ChildStdin,
+    from: std::sync::mpsc::Receiver<Value>,
+    next: u64,
+}
+
+impl Mcp {
+    fn send(&mut self, v: &Value) {
+        if writeln!(self.to, "{v}")
+            .and_then(|()| self.to.flush())
+            .is_err()
+        {
+            die("cdp-drive: Playwright MCP closed its stdin");
+        }
+    }
+
+    /// A request and its answer (the result, or the error as `Err`).
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        self.next += 1;
+        let id = self.next;
+        self.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
+        let end = std::time::Instant::now() + CALL_WITHIN;
+        loop {
+            let left = end.saturating_duration_since(std::time::Instant::now());
+            let v = self
+                .from
+                .recv_timeout(left)
+                .map_err(|_| format!("no answer to {method} within {} s", CALL_WITHIN.as_secs()))?;
+            if v["id"] == id {
+                return match v.get("error") {
+                    Some(e) => Err(e.to_string()),
+                    None => Ok(v["result"].clone()),
+                };
+            }
+        }
+    }
+
+    /// A tool's text, or its error text as `Err`.
+    fn tool(&mut self, name: &str, arguments: Value) -> Result<String, String> {
+        let r = self.call("tools/call", json!({"name": name, "arguments": arguments}))?;
+        let text = r["content"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|c| c["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if r["isError"] == true {
+            Err(text)
+        } else {
+            Ok(text)
+        }
+    }
+}
+
+/// The title Playwright MCP reports in a tool's text (`- Page Title: T`).
+fn page_title(text: &str) -> Option<&str> {
+    text.lines()
+        .find_map(|l| l.trim_start_matches(['-', ' ']).strip_prefix("Page Title:"))
+        .map(str::trim)
+}
+
+fn cdp_drive(urls: &[String]) {
+    if urls.is_empty() {
+        die("usage: cdp-drive URL...");
+    }
+    // Playwright MCP writes its page snapshots to an output dir (else to the cwd): a temp one, removed at the end
+    let snaps = std::env::temp_dir().join(format!("ratatoskr-mock-pw-{}", std::process::id()));
+    let mut child = std::process::Command::new("node")
+        .arg(PW_MCP)
+        .arg("--output-dir")
+        .arg(&snaps)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .unwrap_or_else(|e| die(&format!("cannot run node {PW_MCP}: {e}")));
+    let (tx, rx) = std::sync::mpsc::channel();
+    let out = child.stdout.take().expect("piped");
+    std::thread::spawn(move || {
+        use std::io::BufRead;
+        for line in std::io::BufReader::new(out).lines().map_while(Result::ok) {
+            if let Ok(v) = serde_json::from_str::<Value>(&line)
+                && tx.send(v).is_err()
+            {
+                break;
+            }
+        }
+    });
+    let mut mcp = Mcp {
+        to: child.stdin.take().expect("piped"),
+        from: rx,
+        next: 0,
+    };
+    let init = json!({"protocolVersion": "2025-06-18", "capabilities": {},
+                      "clientInfo": {"name": "ratatoskr-mock cdp-drive", "version": "1"}});
+    if let Err(e) = mcp.call("initialize", init) {
+        let _ = child.kill();
+        die(&format!("cdp-drive: initialize: {e}"));
+    }
+    mcp.send(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
+    let mut failed = false;
+    let mut out = std::io::stdout();
+    for url in urls {
+        let got = mcp
+            .tool("browser_navigate", json!({"url": url}))
+            .and_then(|nav| {
+                let snap = mcp.tool("browser_snapshot", json!({}))?;
+                Ok(page_title(&snap)
+                    .or_else(|| page_title(&nav))
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| {
+                        eprintln!("cdp-drive: no page title in the snapshot:\n{snap}");
+                        "?".into()
+                    }))
+            });
+        let line = match got {
+            Ok(title) => format!("TITLE {title}"),
+            Err(e) => {
+                failed = true;
+                let why = e.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+                format!("ERROR {url}: {why}")
+            }
+        };
+        let _ = writeln!(out, "{line}").and_then(|()| out.flush());
+    }
+    // closing its stdin ends Playwright MCP, which disconnects from the browser
+    drop(mcp);
+    let end = std::time::Instant::now() + Duration::from_secs(10);
+    while matches!(child.try_wait(), Ok(None)) && std::time::Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&snaps);
+    std::process::exit(i32::from(failed));
 }

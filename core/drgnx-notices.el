@@ -49,7 +49,7 @@
 (defun drgnx-notices--command-title (command)
   "The registry title of COMMAND, else its name."
   (let ((id (if (consp command) (car command) command)))
-    (let ((cmd (drgnx-commands-get id)))
+    (let ((cmd (or (drgnx-commands-get id) (drgnx-commands-for-function id))))
       (if cmd (drgnx-cmd-title cmd) (symbol-name id)))))
 
 (defun drgnx-notices--render-notice (n)
@@ -200,7 +200,7 @@
     (dolist (item (cdr items))
       (unless (eq (plist-get item :source) (plist-get first :source)) (setq one nil)))
     (if (and first one (plist-get first :command))
-        (drgnx-ui--run (drgnx-notices--action (plist-get first :command)))
+        (drgnx-ui-kit-run (drgnx-notices--action (plist-get first :command)))
       (drgnx-notices-show))))
 
 (defun drgnx-notice-needs-you-text ()

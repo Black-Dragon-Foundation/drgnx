@@ -37,7 +37,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -56,6 +56,87 @@ const SID_HEX: usize = 12;
 /// The coordination tools, shared by every connection.
 pub type ToolList = Arc<[Box<dyn Tool<Ctx>>]>;
 
+/// A tool on a session's socket: before its call, the hub's `before-tool` hooks ([`norn::tools::Hub::before_tool`]:
+/// they may refuse it, or change its arguments, which its schema then checks again); once its call ends, the hub
+/// reads what it wrote ([`norn::tools::Hub::after_tool`]), then it answers.
+struct AfterTool(Box<dyn Tool<Ctx>>);
+
+impl Tool<Ctx> for AfterTool {
+    fn name(&self) -> &str {
+        self.0.name()
+    }
+    fn description(&self) -> &str {
+        self.0.description()
+    }
+    fn input_schema(&self) -> serde_json::Value {
+        self.0.input_schema()
+    }
+    fn output_schema(&self) -> Option<serde_json::Value> {
+        self.0.output_schema()
+    }
+    fn check(&self, args: &serde_json::Value) -> Result<(), mimir::ArgsError> {
+        self.0.check(args)
+    }
+    fn call<'a>(
+        &'a self,
+        ctx: &'a Ctx,
+        args: serde_json::Value,
+    ) -> mimir::BoxFuture<'a, mimir::ToolResult> {
+        Box::pin(async move {
+            // while recording, the call as the agent made it goes into its session's stream (an outside agent's MCP
+            // calls never cross the ACP pipe), a call a hook refuses too: the replayer makes it again and the
+            // replayed hub's hooks decide again
+            let recorded = crate::recording::is_recording().then(|| args.clone());
+            let note = |r: &mimir::ToolResult| {
+                if let (Some(args), Identity::Session { sid, .. }) = (&recorded, &ctx.1) {
+                    crate::recording::mcp(sid, self.0.name(), args, r);
+                }
+            };
+            let mut args = args;
+            if let Identity::Session { sid, .. } = &ctx.1 {
+                let asked = args.clone();
+                match ctx
+                    .0
+                    .hub()
+                    .before_tool(sid, "drgnx", self.0.name(), args)
+                    .await
+                {
+                    Ok(a) => args = a,
+                    Err(text) => {
+                        let r = mimir::ToolResult::Err(text);
+                        note(&r);
+                        return r;
+                    }
+                }
+                if args != asked
+                    && let Err(e) = self.0.check(&args)
+                {
+                    let r = mimir::ToolResult::Err(format!(
+                        "drgnx refused {}: a hook's change does not fit its arguments: {e}",
+                        self.0.name()
+                    ));
+                    note(&r);
+                    return r;
+                }
+            }
+            let r = self.0.call(ctx, args).await;
+            note(&r);
+            if let Identity::Session { sid, .. } = &ctx.1 {
+                ctx.0.hub().after_tool(sid, self.0.name()).await;
+            }
+            r
+        })
+    }
+}
+
+/// LIST, each tool behind [`AfterTool`].
+fn after_each(list: Vec<Box<dyn Tool<Ctx>>>) -> ToolList {
+    list.into_iter()
+        .map(|t| Box::new(AfterTool(t)) as Box<dyn Tool<Ctx>>)
+        .collect::<Vec<_>>()
+        .into()
+}
+
 /// A session as `runtime.db` keeps it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Row {
@@ -72,6 +153,11 @@ pub struct Row {
     pub profile: Option<String>,
     /// The profile's tracker tools on or off (`None`: the profile says nothing).
     pub tracker: Option<bool>,
+    /// The session also has a `search.sock` (the MCP `search` tool, pinned to its `cwd`).
+    pub search: bool,
+    /// The session started with enabled abilities and has a `plugins.sock`: the key of that plugin set
+    /// ([`crate::plugins::Plugins::set_key`]).
+    pub plugins: Option<String>,
 }
 
 impl Row {
@@ -103,15 +189,38 @@ impl Row {
     }
 }
 
-/// `msession.tools` of TRACKER.
-fn tools_text(tracker: Option<bool>) -> Option<String> {
-    tracker.map(|t| serde_json::json!({ "tracker": t }).to_string())
+/// `msession.tools` of TRACKER (the profile's setting), SEARCH (the session has a `search.sock`) and PLUGINS (the
+/// session has a `plugins.sock`: its plugin set's key).
+fn tools_text(tracker: Option<bool>, search: bool, plugins: Option<&str>) -> Option<String> {
+    let mut v = serde_json::Map::new();
+    if let Some(t) = tracker {
+        v.insert("tracker".into(), serde_json::json!(t));
+    }
+    if search {
+        v.insert("search".into(), serde_json::json!(true));
+    }
+    if let Some(p) = plugins {
+        v.insert("plugins".into(), serde_json::json!(p));
+    }
+    (!v.is_empty()).then(|| serde_json::Value::Object(v).to_string())
 }
 
-/// TEXT of `msession.tools` as the profile's tracker setting (anything else: none).
-fn tools_of(text: Option<String>) -> Option<bool> {
-    let v: serde_json::Value = serde_json::from_str(text.as_deref()?).ok()?;
-    v.get("tracker")?.as_bool()
+/// What a session's `msession.tools` TEXT says.
+type ToolsOf = (Option<bool>, bool, Option<String>);
+
+/// TEXT of `msession.tools` as the profile's tracker setting (anything else: none), whether the session has a
+/// `search.sock`, and its plugin set's key when it has a `plugins.sock`.
+fn tools_of(text: Option<String>) -> ToolsOf {
+    let Some(v) = text.and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()) else {
+        return (None, false, None);
+    };
+    (
+        v.get("tracker").and_then(serde_json::Value::as_bool),
+        v.get("search").and_then(serde_json::Value::as_bool) == Some(true),
+        v.get("plugins")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+    )
 }
 
 /// Where sessions live: the hub's environment and main socket (for `session_dir`) and `runtime.db`.
@@ -121,6 +230,9 @@ struct Store {
     db: urdr::Handle,
 }
 
+/// The servers a session has (name, tool count) and the ones it should have and has not (name, why).
+pub type Served = (Vec<(String, Option<usize>)>, Vec<(String, String)>);
+
 /// A session whose socket is bound.
 struct Live {
     row: Row,
@@ -128,8 +240,22 @@ struct Live {
     path: PathBuf,
     /// Ends its accept loop and its connections (and the gateway socket's).
     cancel: CancellationToken,
+    /// How many tools its `mcp.sock` serves.
+    tools: usize,
+    /// Its `mcp.sock`'s tools, as each connection serves them (a change is told to the connected agents).
+    tools_tx: tokio::sync::watch::Sender<ToolList>,
+    /// It has the debugger's tools: they came with the session or when its project began to debug, and stay until it
+    /// ends (an agent mid-investigation never loses them between two calls).
+    debug: bool,
     /// Its `gateway.sock`, once a registration asked for it.
     gateway: Option<PathBuf>,
+    /// Its `search.sock`, when the row has one.
+    search: Option<PathBuf>,
+    /// Its `plugins.sock`, when the row has one and its columns are known.
+    plugins: Option<PathBuf>,
+    /// The plugin set it started with (empty: none), and whether the set that runs for it now differs.
+    started_set: String,
+    changed: Arc<AtomicBool>,
 }
 
 /// The front's MCP hosting.
@@ -138,19 +264,33 @@ pub struct Sessions {
     tools: Arc<Coord>,
     /// Every tool: an outside bridge's.
     list: ToolList,
-    /// A session's, made when first served: without the tracker tools (16), with them (21).
-    by_sets: [OnceLock<ToolList>; 2],
+    /// A session's, made when first served, by [`set_index`]: with or without the tracker tools, and the debugger's.
+    by_sets: [OnceLock<ToolList>; 4],
     store: OnceLock<Store>,
     live: Mutex<BTreeMap<String, Live>>,
     /// Sessions made managers (Task 25): their socket also serves the manager tools.
     managers: Mutex<BTreeSet<String>>,
-    manager_list: OnceLock<ToolList>,
+    /// A manager's list, without the debugger's tools and with them.
+    manager_list: [OnceLock<ToolList>; 2],
+    /// Codex sessions whose hooks subscribe to a kind: their socket also serves `before_tool`, which Codex's managed
+    /// hook calls ([`crate::agents::before_tool_tool`]).
+    before_tool: Mutex<BTreeSet<String>>,
+    /// Chats in a project: their socket also serves the pair tools (`read_file`, `edit_file`, `write_file`).
+    project_chats: Mutex<BTreeSet<String>>,
+    /// A project chat's list, by [`set_index`].
+    pair_sets: [OnceLock<ToolList>; 4],
     /// Outside bridges connected now.
     outside: Arc<AtomicUsize>,
     /// The hub ends: every outside bridge's connection closes ([`Sessions::end_outside`]).
     outside_end: CancellationToken,
     /// One open or close at a time: a row and its socket change together.
     serial: tokio::sync::Mutex<()>,
+    /// The front (for the `drgnx-agents-mcp` setting and the questions a `search.sock` answers), once bound.
+    front: OnceLock<std::sync::Weak<Front>>,
+    /// The tools of a `search.sock`.
+    search_tools: OnceLock<Arc<[Box<dyn Tool<crate::search::mcp::SearchCtx>>]>>,
+    /// The columns a session's abilities run as (`bridge` says them before the session opens).
+    whos: Mutex<BTreeMap<String, norn::matrix::Who>>,
 }
 
 /// An `mcp/session` (or the front's work before it) slower than this, in real time, logs how long each stage took.
@@ -304,7 +444,7 @@ async fn insert(db: &urdr::Handle, row: &Row) -> urdr::Result<()> {
                 i64::try_from(r.owner_start).unwrap_or(i64::MAX),
                 r.at,
                 r.profile,
-                tools_text(r.tracker),
+                tools_text(r.tracker, r.search, r.plugins.as_deref()),
             ),
         )?;
         Ok(())
@@ -329,6 +469,7 @@ async fn rows(db: &urdr::Handle) -> urdr::Result<Vec<Row>> {
         )?;
         let rows = st
             .query_map([], |r| {
+                let (tracker, search, plugins) = tools_of(r.get(9)?);
                 Ok(Row {
                     sid: r.get(0)?,
                     agent: r.get(1)?,
@@ -339,7 +480,9 @@ async fn rows(db: &urdr::Handle) -> urdr::Result<Vec<Row>> {
                     owner_start: u64::try_from(r.get::<_, i64>(6)?).unwrap_or(0),
                     at: r.get(7)?,
                     profile: r.get(8)?,
-                    tracker: tools_of(r.get(9)?),
+                    tracker,
+                    search,
+                    plugins,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -348,17 +491,43 @@ async fn rows(db: &urdr::Handle) -> urdr::Result<Vec<Row>> {
     .await
 }
 
-/// Accept on a session's socket until CANCEL: each connection serves the tools as WHO.
-async fn accept(
+/// The index of SETS in a list cache: the tracker tools (1) and the debugger's (2).
+fn set_index(sets: norn::tools::ToolSets) -> usize {
+    usize::from(sets.tracker) + 2 * usize::from(sets.debug)
+}
+
+/// Whether a session in CWD works on ROOT's project: one is inside the other (a worktree of the project, or the
+/// project inside a session's folder).
+fn related(cwd: &Path, root: &Path) -> bool {
+    cwd.starts_with(root) || root.starts_with(cwd)
+}
+
+/// The tools a connection of a socket is served.
+type Tools<C> = Arc<[Box<dyn Tool<C>>]>;
+
+/// LIST as the tools of every connection of a socket (for [`accept`]).
+fn fixed<C: 'static>(
+    list: Tools<C>,
+) -> impl Fn() -> std::future::Ready<Tools<C>> + Send + Sync + 'static {
+    move || std::future::ready(list.clone())
+}
+
+/// Accept on a session's socket until CANCEL: each connection serves the tools LIST makes for it (when it connects)
+/// with CTX.
+async fn accept<C, F, Fut>(
     listener: UnixListener,
     sid: String,
-    who: Identity,
+    ctx: Arc<C>,
     cancel: CancellationToken,
     uid: u32,
-    tools: Arc<Coord>,
-    list: ToolList,
-) {
-    let ctx: Arc<Ctx> = Arc::new((tools, who));
+    list: F,
+    live: Option<tokio::sync::watch::Receiver<Tools<C>>>,
+) where
+    C: Send + Sync + 'static,
+    F: Fn() -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = Tools<C>> + Send,
+{
+    let list = Arc::new(list);
     let open = Arc::new(AtomicUsize::new(0));
     loop {
         let stream = tokio::select! {
@@ -397,13 +566,33 @@ async fn accept(
             continue;
         }
         let counted = Counted::new(&open);
-        let (ctx, list, cancel, sid) = (ctx.clone(), list.clone(), cancel.clone(), sid.clone());
+        let (ctx, list, cancel, sid, live) = (
+            ctx.clone(),
+            list.clone(),
+            cancel.clone(),
+            sid.clone(),
+            live.clone(),
+        );
         tokio::spawn(async move {
             let _counted = counted;
             let (r, w) = stream.into_split();
+            let served = async {
+                match live {
+                    // the session's list as it is now, and each change after it, told to the agent
+                    Some(rx) => {
+                        mimir::serve_live(ctx, rx, ServerInfo::default(), r, w, Limits::default())
+                            .await
+                    }
+                    None => {
+                        let tools = list().await;
+                        mimir::serve(ctx, tools, ServerInfo::default(), r, w, Limits::default())
+                            .await
+                    }
+                }
+            };
             tokio::select! {
                 () = cancel.cancelled() => {}
-                end = mimir::serve(ctx, list, ServerInfo::default(), r, w, Limits::default()) => {
+                end = served => {
                     tracing::debug!(sid, ?end, "an MCP connection ended");
                 }
             }
@@ -418,21 +607,134 @@ impl Sessions {
             uid,
             tools,
             list,
-            by_sets: [OnceLock::new(), OnceLock::new()],
+            by_sets: Default::default(),
             store: OnceLock::new(),
             live: Mutex::new(BTreeMap::new()),
             outside: Arc::new(AtomicUsize::new(0)),
             outside_end: CancellationToken::new(),
             serial: tokio::sync::Mutex::new(()),
             managers: Mutex::new(BTreeSet::new()),
-            manager_list: OnceLock::new(),
+            manager_list: Default::default(),
+            before_tool: Mutex::new(BTreeSet::new()),
+            project_chats: Mutex::new(BTreeSet::new()),
+            pair_sets: Default::default(),
+            front: OnceLock::new(),
+            search_tools: OnceLock::new(),
+            whos: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    /// The columns session SID's abilities run as: said before the session opens, kept until it closes.
+    pub fn note_who(&self, sid: &str, who: norn::matrix::Who) {
+        self.whos
+            .lock()
+            .expect("sessions")
+            .insert(sid.to_owned(), who);
+    }
+
+    /// The key of the plugin set that runs for session SID now, when its columns are known and it has abilities.
+    fn wants_plugins(&self, sid: &str) -> Option<String> {
+        let front = self.front.get().and_then(std::sync::Weak::upgrade)?;
+        self.whos.lock().expect("sessions").get(sid)?;
+        let set = front
+            .core
+            .plugins
+            .abilities_for(crate::abilities::project_of(&front, sid).as_deref());
+        (!set.is_empty()).then(|| crate::plugins::Plugins::set_key(&set))
+    }
+
+    /// Session SID's `plugins.sock`, while it is bound.
+    pub fn plugins_socket_of(&self, sid: &str) -> Option<PathBuf> {
+        self.live
+            .lock()
+            .expect("sessions")
+            .get(sid)
+            .and_then(|l| l.plugins.clone())
+    }
+
+    /// Whether the plugins that run for session SID now differ from those it started with.
+    pub fn plugins_changed(&self, sid: &str) -> bool {
+        self.plugins_flag(sid).load(Ordering::SeqCst)
+    }
+
+    /// The flag [`Sessions::plugins_changed`] reads, for the session's snapshot (a fresh one for no such session).
+    pub fn plugins_flag(&self, sid: &str) -> Arc<AtomicBool> {
+        self.live
+            .lock()
+            .expect("sessions")
+            .get(sid)
+            .map_or_else(|| Arc::new(AtomicBool::new(false)), |l| l.changed.clone())
+    }
+
+    /// The plugins may have moved (an approval, a switch): every live session's flag is read again.
+    pub fn plugins_refresh(&self) {
+        let Some(front) = self.front.get().and_then(std::sync::Weak::upgrade) else {
+            return;
+        };
+        for (sid, live) in self.live.lock().expect("sessions").iter() {
+            let set = front
+                .core
+                .plugins
+                .abilities_for(crate::abilities::project_of(&front, sid).as_deref());
+            let now = crate::plugins::Plugins::set_key(&set);
+            live.changed
+                .store(now != live.started_set, Ordering::SeqCst);
+        }
+    }
+
+    /// The front, once it is in its `Arc`: a session gets a `search.sock` when `drgnx-agents-mcp` holds `search`, and
+    /// the socket's questions go to the front's search.
+    pub fn bind_search(&self, front: &Arc<Front>) {
+        let _ = self.front.set(Arc::downgrade(front));
+    }
+
+    /// Whether a session started now with working folder CWD gets a `search.sock`: the setting holds `search` and the
+    /// folder is one (a root `/` is no project).
+    fn wants_search(&self, cwd: Option<&str>) -> bool {
+        let Some(front) = self.front.get().and_then(std::sync::Weak::upgrade) else {
+            return false;
+        };
+        cwd.is_some_and(|c| c != "/")
+            && front
+                .settings
+                .current()
+                .loaded
+                .values
+                .agents_mcp
+                .iter()
+                .any(|s| s == "search")
+    }
+
+    /// Session SID's `search.sock`, while it is bound.
+    pub fn search_socket_of(&self, sid: &str) -> Option<PathBuf> {
+        self.live
+            .lock()
+            .expect("sessions")
+            .get(sid)
+            .and_then(|l| l.search.clone())
     }
 
     /// Session SID is a manager: its next socket serves the manager tools too (an open socket is closed and opened
     /// again by the caller).
     pub fn mark_manager(&self, sid: &str) {
         self.managers
+            .lock()
+            .expect("sessions")
+            .insert(sid.to_owned());
+    }
+
+    /// Session SID is a Codex session with hooks: its next socket serves `before_tool` too.  Never behind the hook
+    /// wrapper of the other tools: it runs the hooks itself, and never hooks itself.
+    pub fn mark_before_tool(&self, sid: &str) {
+        self.before_tool
+            .lock()
+            .expect("sessions")
+            .insert(sid.to_owned());
+    }
+
+    /// Session SID is a chat in a project: its next socket serves the pair tools too.
+    pub fn mark_project_chat(&self, sid: &str) {
+        self.project_chats
             .lock()
             .expect("sessions")
             .insert(sid.to_owned());
@@ -505,6 +807,7 @@ impl Sessions {
         let dir = paths::make_session_dir(&store.env, &store.socket, &sid)
             .map_err(|e| internal(format!("session {sid}'s directory: {e}")))?;
         stages.mark("directory");
+        let search = self.wants_search(p.cwd.as_ref().map(|c| c.as_str()));
         let row = Row {
             sid: sid.clone(),
             agent,
@@ -516,6 +819,8 @@ impl Sessions {
             at: now(),
             profile: p.profile.map(|n| n.as_str().to_owned()),
             tracker: p.tools.map(|t| t.tracker),
+            search,
+            plugins: self.wants_plugins(&sid),
         };
         // recorded before bound: a hub that dies in between leaves a row whose socket the next start binds
         insert(&store.db, &row)
@@ -534,9 +839,10 @@ impl Sessions {
             }
         };
         stages.mark("bind");
-        let list = self.list_for(&row).await;
+        let debug = self.debug_wanted(row.cwd.as_deref());
+        let list = self.list_for(&row, debug).await;
         stages.mark("tools");
-        self.listen(row, dir, path.clone(), listener, list);
+        self.listen(row, dir, path.clone(), listener, list, debug);
         stages.mark("listen");
         Ok(SessionAnswer {
             sid,
@@ -544,25 +850,129 @@ impl Sessions {
         })
     }
 
-    /// The tools ROW's socket serves (call 16): the tracker tools as its task says, else as its profile says, else on.
-    async fn list_for(&self, row: &Row) -> ToolList {
+    /// Whether a session in CWD gets the debugger's tools: its project has a launch configuration (`.vscode/launch.json`
+    /// in CWD or a folder above), a live debug session or a recorded run.
+    fn debug_wanted(&self, cwd: Option<&str>) -> bool {
+        let Some(cwd) = cwd.map(Path::new) else {
+            return false;
+        };
+        if cwd
+            .ancestors()
+            .any(|d| d.join(".vscode").join("launch.json").is_file())
+        {
+            return true;
+        }
+        let Some(front) = self.front.get().and_then(std::sync::Weak::upgrade) else {
+            return false;
+        };
+        front
+            .debug
+            .debugged_roots(&front)
+            .iter()
+            .any(|r| related(cwd, Path::new(r)))
+    }
+
+    /// ROOTS debug now (a session started or ended there): the running sessions working on them that lack the
+    /// debugger's tools get them, told to their agents at once (no restart). Tools are never taken back mid-session.
+    pub async fn debug_seen(&self, roots: Vec<String>) {
+        let _one = self.serial.lock().await;
+        let rows: Vec<Row> =
+            self.live
+                .lock()
+                .expect("sessions")
+                .values()
+                .filter(|l| {
+                    !l.debug
+                        && l.row.cwd.as_deref().is_some_and(|c| {
+                            roots.iter().any(|r| related(Path::new(c), Path::new(r)))
+                        })
+                })
+                .map(|l| l.row.clone())
+                .collect();
+        for row in rows {
+            let list = self.list_for(&row, true).await;
+            if let Some(l) = self.live.lock().expect("sessions").get_mut(&row.sid) {
+                l.debug = true;
+                l.tools = list.len();
+                l.tools_tx.send_replace(list);
+                tracing::info!(
+                    sid = row.sid,
+                    "the debugger's tools came to a running session"
+                );
+            }
+        }
+    }
+
+    /// The tools ROW's socket serves (call 16): the tracker tools as its task says, else as its profile says, else on;
+    /// the debugger's when DEBUG.
+    async fn list_for(&self, row: &Row, debug: bool) -> ToolList {
         let task = match row.task_entity() {
             Some(id) => crate::graph::task_tools(&self.tools, id).await,
             None => None,
         };
-        let sets = crate::graph::tool_sets(task, row.tracker);
-        if self.managers.lock().expect("sessions").contains(&row.sid) {
-            return self
-                .manager_list
+        let sets = norn::tools::ToolSets {
+            debug,
+            ..crate::graph::tool_sets(task, row.tracker)
+        };
+        let manager = self.managers.lock().expect("sessions").contains(&row.sid);
+        let hooked = self
+            .before_tool
+            .lock()
+            .expect("sessions")
+            .contains(&row.sid);
+        let chat = self
+            .project_chats
+            .lock()
+            .expect("sessions")
+            .contains(&row.sid);
+        if hooked && let Some(front) = self.front.get().cloned() {
+            let mut all = if manager {
+                norn::tools::tools_for(norn::tools::ToolSets {
+                    debug,
+                    ..norn::tools::ToolSets::default()
+                })
+            } else {
+                norn::tools::tools_for(sets)
+            };
+            if manager {
+                all.extend(norn::tools::manager_tools());
+            }
+            // a hooked Codex chat in a project keeps the pair tools its edits go through
+            if chat {
+                all.extend(norn::tools::pair_tools());
+            }
+            let mut list: Vec<Box<dyn Tool<Ctx>>> = all
+                .into_iter()
+                .map(|t| Box::new(AfterTool(t)) as Box<dyn Tool<Ctx>>)
+                .collect();
+            list.push(Box::new(crate::agents::before_tool_tool::BeforeTool {
+                front,
+            }));
+            return list.into();
+        }
+        if manager {
+            return self.manager_list[usize::from(debug)]
                 .get_or_init(|| {
-                    let mut all = norn::tools::tools_for(norn::tools::ToolSets::default());
+                    let mut all = norn::tools::tools_for(norn::tools::ToolSets {
+                        debug,
+                        ..norn::tools::ToolSets::default()
+                    });
                     all.extend(norn::tools::manager_tools());
-                    all.into()
+                    after_each(all)
                 })
                 .clone();
         }
-        self.by_sets[usize::from(sets.tracker)]
-            .get_or_init(|| norn::tools::tools_for(sets).into())
+        if chat {
+            return self.pair_sets[set_index(sets)]
+                .get_or_init(|| {
+                    let mut all = norn::tools::tools_for(sets);
+                    all.extend(norn::tools::pair_tools());
+                    after_each(all)
+                })
+                .clone();
+        }
+        self.by_sets[set_index(sets)]
+            .get_or_init(|| after_each(norn::tools::tools_for(sets)))
             .clone()
     }
 
@@ -574,17 +984,23 @@ impl Sessions {
         path: PathBuf,
         listener: UnixListener,
         list: ToolList,
+        debug: bool,
     ) {
         let cancel = CancellationToken::new();
+        let tools = list.len();
+        let (tools_tx, tools_rx) = tokio::sync::watch::channel(list.clone());
+        let ctx: Arc<Ctx> = Arc::new((self.tools.clone(), row.identity()));
         tokio::spawn(accept(
             listener,
             row.sid.clone(),
-            row.identity(),
+            ctx,
             cancel.clone(),
             self.uid,
-            self.tools.clone(),
-            list,
+            fixed(list),
+            Some(tools_rx),
         ));
+        let search = self.listen_search(&row, &dir, &cancel);
+        let plugins = self.listen_plugins(&row, &dir, &cancel);
         tracing::info!(
             sid = row.sid,
             agent = row.agent,
@@ -595,13 +1011,108 @@ impl Sessions {
         self.live.lock().expect("sessions").insert(
             row.sid.clone(),
             Live {
+                started_set: row.plugins.clone().unwrap_or_default(),
                 row,
                 dir,
                 path,
                 cancel,
+                tools,
+                tools_tx,
+                debug,
                 gateway: None,
+                search,
+                plugins,
+                changed: Arc::new(AtomicBool::new(false)),
             },
         );
+    }
+
+    /// ROW's `plugins.sock` in DIR, when the row has one and its columns are known: the abilities of the plugins that
+    /// run for it, each connection offered the set as it is then.
+    fn listen_plugins(&self, row: &Row, dir: &Path, cancel: &CancellationToken) -> Option<PathBuf> {
+        row.plugins.as_ref()?;
+        let front = self.front.get()?.upgrade()?;
+        let who = self.whos.lock().expect("sessions").get(&row.sid)?.clone();
+        let path = dir.join(paths::SESSION_PLUGINS_SOCKET);
+        let listener = match bind_socket(&path) {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::warn!(sid = row.sid, "cannot bind {}: {e}", path.display());
+                return None;
+            }
+        };
+        let ctx = Arc::new(crate::abilities::AbilityCtx::new(
+            &front,
+            &row.sid,
+            who.clone(),
+        ));
+        let (weak, sid) = (Arc::downgrade(&front), row.sid.clone());
+        let list = move || {
+            let (weak, sid, who) = (weak.clone(), sid.clone(), who.clone());
+            async move {
+                match weak.upgrade() {
+                    Some(f) => crate::abilities::offered(&f, &sid, &who).await,
+                    None => Vec::<Box<dyn Tool<crate::abilities::AbilityCtx>>>::new().into(),
+                }
+            }
+        };
+        crate::clock::spawn(
+            "sessions:plugins",
+            accept(
+                listener,
+                row.sid.clone(),
+                ctx,
+                cancel.child_token(),
+                self.uid,
+                list,
+                None,
+            ),
+        );
+        tracing::info!(
+            sid = row.sid,
+            "the plugins' abilities on {}",
+            path.display()
+        );
+        Some(path)
+    }
+
+    /// ROW's `search.sock` in DIR, when the row has one: the `search` tool pinned to the row's working folder.
+    fn listen_search(&self, row: &Row, dir: &Path, cancel: &CancellationToken) -> Option<PathBuf> {
+        let (true, Some(cwd)) = (row.search, row.cwd.as_deref()) else {
+            return None;
+        };
+        let front = self.front.get()?.clone();
+        let path = dir.join(paths::SESSION_SEARCH_SOCKET);
+        let listener = match bind_socket(&path) {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::warn!(sid = row.sid, "cannot bind {}: {e}", path.display());
+                return None;
+            }
+        };
+        let ctx = Arc::new(crate::search::mcp::SearchCtx {
+            root: PathBuf::from(cwd),
+            backend: Arc::new(crate::search::mcp::HubBackend(front)),
+            session: Some(row.sid.clone()),
+        });
+        let list = self
+            .search_tools
+            .get_or_init(crate::search::mcp::tools)
+            .clone();
+        crate::clock::spawn(
+            "sessions:search",
+            accept(
+                listener,
+                row.sid.clone(),
+                ctx,
+                cancel.child_token(),
+                self.uid,
+                fixed(list),
+                None,
+            ),
+        );
+        tracing::info!(sid = row.sid, "the search tool on {}", path.display());
+        Some(path)
     }
 
     /// Session SID's `mcp.sock`, while it is bound.
@@ -611,6 +1122,33 @@ impl Sessions {
             .expect("sessions")
             .get(sid)
             .map(|l| l.path.clone())
+    }
+
+    /// The MCP servers the hub serves session SID, with each one's tool count where it is fixed (the plugins' abilities
+    /// are offered per connection: no count), and the servers it should serve and does not (name, why).
+    pub fn served(&self, sid: &str) -> Served {
+        let live = self.live.lock().expect("sessions");
+        let Some(l) = live.get(sid) else {
+            return (
+                Vec::new(),
+                vec![(
+                    "drgnx".into(),
+                    "the coordination tools are not bound: the session has none of the hub's tools"
+                        .into(),
+                )],
+            );
+        };
+        let mut up = vec![("drgnx".to_owned(), Some(l.tools))];
+        if l.search.is_some() {
+            up.push((
+                "drgnx-search".into(),
+                self.search_tools.get().map(|t| t.len()),
+            ));
+        }
+        if l.plugins.is_some() {
+            up.push(("drgnx-plugins".into(), None));
+        }
+        (up, Vec::new())
     }
 
     /// Whether session SID's socket is bound now.
@@ -655,20 +1193,32 @@ impl Sessions {
     /// `serial`.
     async fn end(&self, store: &Store, sid: &str, why: &str) -> bool {
         let live = self.live.lock().expect("sessions").remove(sid);
+        self.before_tool.lock().expect("sessions").remove(sid);
+        self.project_chats.lock().expect("sessions").remove(sid);
         let Some(live) = live else {
             return false;
         };
-        remove_socket(&live.path);
-        if let Some(g) = &live.gateway {
-            remove_socket(g);
-        }
-        remove_dir(&live.dir);
+        self.whos.lock().expect("sessions").remove(sid);
+        // its sockets and directory are removed off the hub's workers (a removal that waits on the disk holds none)
+        let socks: Vec<PathBuf> = std::iter::once(live.path.clone())
+            .chain(live.gateway.clone())
+            .chain(live.search.clone())
+            .chain(live.plugins.clone())
+            .collect();
+        let dir = live.dir.clone();
+        let _ = crate::clock::blocking(move || {
+            socks.iter().for_each(|s| remove_socket(s));
+            remove_dir(&dir);
+        })
+        .await;
         delete(&store.db, sid).await;
         tracing::info!(
             sid,
             agent = live.row.agent,
             "a session's mcp.sock is gone: {why}"
         );
+        // its extension suggestions lose its quote (a card no session stands behind is withdrawn)
+        norn::tools::extensions::session_ended(&self.tools, sid).await;
         // its connections last: a client that sees its connection close finds the socket, directory and row gone
         live.cancel.cancel();
         true
@@ -676,14 +1226,22 @@ impl Sessions {
 
     /// Close the sessions whose owner is gone (each tick).
     pub async fn prune(&self) {
-        let gone: Vec<String> = self
+        // the owners are looked up in /proc off the hub's workers, and outside the lock
+        let rows: Vec<(String, Row)> = self
             .live
             .lock()
             .expect("sessions")
             .iter()
-            .filter(|(_, l)| !owner_alive(&l.row))
-            .map(|(sid, _)| sid.clone())
+            .map(|(sid, l)| (sid.clone(), l.row.clone()))
             .collect();
+        let gone: Vec<String> = crate::clock::blocking(move || {
+            rows.into_iter()
+                .filter(|(_, row)| !owner_alive(row))
+                .map(|(sid, _)| sid)
+                .collect()
+        })
+        .await
+        .unwrap_or_default();
         self.close_all(&gone, "its owner is gone").await;
     }
 
@@ -743,8 +1301,9 @@ impl Sessions {
                 });
             match bound {
                 Ok((dir, path, listener)) => {
-                    let list = self.list_for(&row).await;
-                    self.listen(row, dir, path, listener, list)
+                    let debug = self.debug_wanted(row.cwd.as_deref());
+                    let list = self.list_for(&row, debug).await;
+                    self.listen(row, dir, path, listener, list, debug)
                 }
                 Err(e) => {
                     tracing::warn!(sid = row.sid, "cannot bind a session's mcp.sock again: {e}");
@@ -762,6 +1321,12 @@ impl Sessions {
             remove_socket(&live.path);
             if let Some(g) = &live.gateway {
                 remove_socket(g);
+            }
+            if let Some(s) = &live.search {
+                remove_socket(s);
+            }
+            if let Some(s) = &live.plugins {
+                remove_socket(s);
             }
         }
     }
@@ -1023,6 +1588,8 @@ mod tests {
             at: 0.0,
             profile: None,
             tracker: None,
+            search: false,
+            plugins: None,
         };
         let start = draugr::start_time(me() as i32).unwrap();
         assert!(owner_alive(&row(me(), start)));
@@ -1108,6 +1675,23 @@ mod tests {
         );
     }
 
+    // [D] LINE-P3-P9-INTERPLAY-1: a project chat's mark goes with its session, as the before-tool mark does
+    #[tokio::test]
+    async fn a_closed_sessions_marks_go_with_it() {
+        let h = hub();
+        let a = h
+            .front
+            .mcp
+            .open(params(json!({"agent": "s-1", "owner": me()})))
+            .await
+            .unwrap();
+        h.front.mcp.mark_project_chat(&a.sid);
+        h.front.mcp.mark_before_tool(&a.sid);
+        assert!(h.front.mcp.close(&a.sid).await.unwrap());
+        assert!(!h.front.mcp.project_chats.lock().unwrap().contains(&a.sid));
+        assert!(!h.front.mcp.before_tool.lock().unwrap().contains(&a.sid));
+    }
+
     #[tokio::test]
     async fn a_restart_binds_live_owners_again_and_drops_the_rest() {
         let h = hub();
@@ -1129,6 +1713,8 @@ mod tests {
             at: 1.0,
             profile: None,
             tracker: None,
+            search: false,
+            plugins: None,
         };
         insert(&h.db, &gone).await.unwrap();
         let gone_dir = paths::make_session_dir(&h.env, &h.socket, &gone.sid).unwrap();

@@ -7,10 +7,8 @@
 (defconst drgnx-extras-test--modules
   '(("extra/drgnx-jump" extra/jump (avy) (go-jump))
     ("extra/drgnx-undo" extra/undo (vundo) (edit-undo-tree))
-    ("extra/drgnx-wgrep" extra/wgrep (wgrep) (search-edit-results search-apply-edits))
-    ("extra/drgnx-hunks" extra/hunks (diff-hl) (git-hunk-show git-hunk-revert git-hunk-stage))
+    ("extra/drgnx-wgrep" extra/wgrep (wgrep) (grep-edit-results grep-apply-edits))
     ("extra/drgnx-keycast" extra/keycast (keycast) (view-keycast))
-    ("extra/drgnx-llm" extra/llm (gptel) (llm-menu llm-send))
     ("extra/drgnx-magit" extra/magit (magit) (scm-view))
     ("extra/drgnx-completion" extra/completion (vertico orderless marginalia corfu) ()))
   "FILE MODULE PACKAGES COMMANDS.")
@@ -50,30 +48,11 @@
                                                                            (regexp-quote (symbol-name pkg))))))
                                            (nth 2 m)))
                             drgnx-extras-test--modules))
-  (let ((load-path (append load-path (seq-filter #'file-directory-p (directory-files drgnx-extras-test--elpa t "\\`[^.]"))))
-        ;; extra/llm points gptel at the `chat' role's OpenRouter step (a key: a fake one, never sent)
-        (process-environment (cons "OPENROUTER_API_KEY=sk-or-fake" process-environment)))
+  (let ((load-path (append load-path (seq-filter #'file-directory-p (directory-files drgnx-extras-test--elpa t "\\`[^.]")))))
     (drgnx-test-with-modules (mapcar #'cadr drgnx-extras-test--modules) :strict t
                              (pcase-dolist (`(,_ ,mod ,_ ,cmds) drgnx-extras-test--modules)
                                (should (equal (list mod (plist-get (alist-get mod (drgnx-modules-report)) :status)) (list mod 'ok)))
                                (dolist (c cmds) (should (drgnx-commands-get c)))))))
-
-(ert-deftest drgnx-hunks/quiet-in-a-large-file-buffer ()
-  ;; the flag editor/large-files sets (by hand here): diff-hl's global mode skips the buffer; skips without diff-hl
-  (require 'drgnx-large-file)
-  (let ((load-path (append load-path (and (file-directory-p drgnx-extras-test--elpa)
-                                          (seq-filter #'file-directory-p (directory-files drgnx-extras-test--elpa t "\\`[^.]"))))))
-    (skip-unless (locate-library "diff-hl"))
-    (drgnx-test-with-modules '(extra/hunks) :strict t
-                             (let ((on 0))
-                               (with-temp-buffer
-                                 (cl-letf (((symbol-function 'turn-on-diff-hl-mode) (lambda () (setq on (1+ on)))))
-                                   (setq-local drgnx-large-file 'lean)
-                                   (diff-hl--global-turn-on)
-                                   (should (= on 0))
-                                   (setq-local drgnx-large-file nil)   ; the same buffer, not large: on
-                                   (diff-hl--global-turn-on)
-                                   (should (= on 1))))))))
 
 (ert-deftest drgnx-modules/later-stages-re-apply-the-keys ()
   ;; A module that runs at idle registers commands after the keys were applied.
@@ -82,3 +61,16 @@
     (drgnx-module-define 'test/late :doc "l" :stage 'idle :setup #'ignore)
     (drgnx-modules-run 'idle)
     (should (equal seen '(idle)))))
+
+(ert-deftest drgnx-modules/no-module-requires-gptel ()
+  ;; the agent panel replaced the chat UI: no shipped Lisp, module package list or lock row names gptel
+  (let (hits)
+    (dolist (dir '("core" "modules"))
+      (dolist (f (directory-files-recursively (expand-file-name dir drgnx-dir) "\\.el\\'"))
+        (with-temp-buffer
+          (insert-file-contents f)
+          (when (re-search-forward "gptel" nil t) (push (file-relative-name f drgnx-dir) hits)))))
+    (should (equal nil (sort hits #'string<)))
+    (with-temp-buffer
+      (insert-file-contents (expand-file-name "etc/drgnx.lock.eld" drgnx-dir))
+      (should-not (re-search-forward "gptel" nil t)))))

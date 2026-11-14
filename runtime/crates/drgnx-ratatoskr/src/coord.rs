@@ -8,7 +8,8 @@
 //!   thread and sends `events` `{since, last, events}` to the subscribers: at most 200 rows a batch, every 0.25 s at
 //!   most.  The 2 s schema tick wakes it too.
 //! - **The tools' hub** ([`ToolHub`]): `sessions()` is the front's session table, read at once; `notify()` wakes the
-//!   broadcast, the records' views and the delivery.
+//!   broadcast, the records' views and the delivery; `after_tool()` holds a session's tool answer until its writes are
+//!   linked to its current ask ([`crate::work::asks`]).
 //! - **One writer:** the hub. A `tx` row's actor comes from the connection ([`tx_meta`]); no param names a writer, and
 //!   `messages/send` refuses `sender` from every caller.
 
@@ -44,8 +45,15 @@ pub struct Signals {
     writes: AtomicU64,
     /// A write the record views may follow ([`crate::records::follow`]).
     pub records: Notify,
+    /// A write the Work map may follow: asks, specs, plans, tasks, worktree bases, cards ([`crate::work::map::run`]).
+    pub map: Notify,
+    /// A write or a closed step the trails may follow ([`crate::work::trail::run`]).
+    pub trail: Notify,
     /// What the proposal tools ask of the records (set once the hub's front is built).
     pub records_tool: std::sync::OnceLock<RecordsTool>,
+    /// Counts the changes that may change what a browser session may reach ([`Signals::answers_changed`]): each
+    /// session's web proxy reads its cells, grants and cards again at once ([`crate::browser::web`]).
+    pub answers: tokio::sync::watch::Sender<u64>,
 }
 
 /// The proposal tools' door into the records: the proposal ID, `None` to read it or `Some(accept)` to decide it,
@@ -61,6 +69,8 @@ impl Signals {
     pub fn wrote(&self) {
         self.writes.fetch_add(1, Ordering::Relaxed);
         self.records.notify_one();
+        self.map.notify_one();
+        self.trail.notify_one();
         self.deliver.notify_one();
         self.events_soon();
     }
@@ -73,6 +83,12 @@ impl Signals {
     /// A message may be waiting for a hub session: the delivery looks (coalesced).
     pub fn notify_soon(&self) {
         self.deliver.notify_one();
+    }
+
+    /// What the user answered may have changed: a write of theirs (a card settled, a grant made or revoked, a plan's or
+    /// a project's matrix override), the settings in effect, or the away flag.  Every web proxy reads again.
+    pub fn answers_changed(&self) {
+        self.answers.send_modify(|n| *n += 1);
     }
 
     /// The transactions the front's methods committed since the hub started.
@@ -105,10 +121,18 @@ impl Writer {
         let r = self.db.write(tx_meta(caller, method), f).await;
         if r.is_ok() {
             self.signals.wrote();
+            if caller.class == Class::User || matches!(method, "cards/settle" | "graph/grants") {
+                self.signals.answers_changed();
+            }
         }
         r
     }
 }
+
+/// The method name of the hub's hook records (`hook_points`): not a wire method.
+pub const HOOKS_METHOD: &str = "hub/hooks";
+/// The `tx` actor of those records, and only of those.
+pub const HOOKS_ACTOR: &str = "hub:hooks";
 
 /// The `tx` row of a front method's write (Urdr Task 12): who it is comes from the connection, never from a param.
 /// The hub is the one writer; the actor is
@@ -116,12 +140,16 @@ impl Writer {
 /// - for the editor's own methods (`cards/settle`, `messages/*`, `events/add`, `review/mark`) from the user's
 ///   connection: `user`, class `user`;
 /// - for an agent socket's session: `agent:SID`, class `agent`;
-/// - for anyone else (a service connection, the front's own timers): `hub`, class `system`.
+/// - for anyone else (a service connection, the front's own timers): `hub`, class `system`;
+/// - for the hub's hook records ([`HOOKS_METHOD`], whoever the caller): `hub:hooks`, class `system`. No wire method
+///   has that name, so no connection writes as `hub:hooks`, and a step's provenance reads only its rows.
 ///
 /// `tool` is `proto:<method>`.
 pub fn tx_meta(caller: &Caller, method: &str) -> TxMeta {
     let tool = format!("proto:{method}");
-    let mut meta = if method.starts_with("coord/") {
+    let mut meta = if method == HOOKS_METHOD {
+        TxMeta::new(HOOKS_ACTOR, TxClass::System, tool)
+    } else if method.starts_with("coord/") {
         TxMeta::new("hub", TxClass::System, tool)
     } else {
         match (caller.class, &caller.sid) {
@@ -598,9 +626,42 @@ impl ToolHub {
     pub fn bind(&self, front: &Arc<Front>) {
         let _ = self.front.set(Arc::downgrade(front));
     }
+
+    /// The front, once bound and while it lives.
+    pub fn front(&self) -> Option<Arc<Front>> {
+        self.front.get().and_then(std::sync::Weak::upgrade)
+    }
+
+    /// The hub's session SID (a tool's caller), or why not.
+    fn session(&self, sid: &str) -> Result<Arc<crate::agents::session::Session>, String> {
+        let front = self.front().ok_or("the hub is starting")?;
+        front
+            .core
+            .agents
+            .find(sid)
+            .map_err(|_| "only a chat drgnx runs edits your checkout".to_string())
+    }
 }
 
 impl Hub for ToolHub {
+    /// The `before-tool` hooks of a call of the hub's own tool ([`crate::hook_points::at_hub_server`]). Before the
+    /// front is bound no session socket serves, so nothing reaches this.
+    fn before_tool<'a>(
+        &'a self,
+        sid: &'a str,
+        server: &'static str,
+        tool: &'a str,
+        args: Value,
+    ) -> BoxFuture<'a, Result<Value, String>> {
+        let front = self.front();
+        Box::pin(async move {
+            match front {
+                Some(f) => crate::hook_points::at_hub_server(&f, sid, server, tool, args).await,
+                None => Err("drgnx refused the tool call: the hub is starting".into()),
+            }
+        })
+    }
+
     /// The front's own session table, read at once; `None` only before the front is bound.
     fn sessions(&self) -> BoxFuture<'_, Option<Vec<SessionRow>>> {
         let front = self.front.get().and_then(std::sync::Weak::upgrade);
@@ -622,6 +683,7 @@ impl Hub for ToolHub {
     fn notify(&self) {
         // every tool write says so: the record views follow it too
         self.signals.records.notify_one();
+        self.signals.map.notify_one();
         self.signals.events_soon();
         self.signals.notify_soon();
     }
@@ -671,12 +733,75 @@ impl Hub for ToolHub {
         })
     }
 
+    /// A debugger tool (D4): the hub's side checks the matrix's `debug.*` rows and acts.
+    fn debug(
+        &self,
+        sid: &str,
+        op: &'static str,
+        args: Value,
+    ) -> BoxFuture<'_, Result<String, String>> {
+        let (front, sid) = (self.front(), sid.to_owned());
+        Box::pin(async move {
+            let f = front.ok_or("the hub is starting")?;
+            crate::debug::agent::tool(&f, &sid, op, args).await
+        })
+    }
+
+    /// A session's tool call ended: its graph writes link to its current ask before it answers.
+    fn after_tool(&self, _sid: &str, _tool: &str) -> BoxFuture<'_, ()> {
+        let front = self.front.get().and_then(std::sync::Weak::upgrade);
+        Box::pin(async move {
+            if let Some(f) = front {
+                f.core.asks.handle().flush().await;
+            }
+        })
+    }
+
     fn wait_refused(&self, sid: &str) {
         if let Some(front) = self.front.get().and_then(std::sync::Weak::upgrade)
             && let Ok(s) = front.core.agents.find(sid)
         {
             s.refuse_wait();
         }
+    }
+
+    /// A chat's `read_file`: its session's read through the pair door.
+    fn pair_read(&self, sid: &str, path: String) -> BoxFuture<'_, Result<String, String>> {
+        let found = self.session(sid);
+        Box::pin(async move { found?.pair_read(path).await })
+    }
+
+    /// A chat's `edit_file` or `write_file`: its session's write through the pair door.
+    fn huddle_reply(
+        &self,
+        sid: &str,
+        huddle: String,
+        text: String,
+        proposal: Option<String>,
+    ) -> BoxFuture<'_, Result<String, String>> {
+        let (front, sid) = (self.front(), sid.to_owned());
+        Box::pin(async move {
+            let f = front.ok_or("the hub is starting")?;
+            f.core
+                .huddles
+                .reply(&f, &sid, &huddle, text, proposal)
+                .await
+        })
+    }
+
+    fn escalated(&self, sid: &str) {
+        if let Some(f) = self.front() {
+            f.core.huddles.escalated(&f, sid);
+        }
+    }
+
+    fn pair_write(
+        &self,
+        sid: &str,
+        w: norn::tools::pair::PairWrite,
+    ) -> BoxFuture<'_, Result<String, String>> {
+        let found = self.session(sid);
+        Box::pin(async move { found?.pair_write(w).await })
     }
 
     fn propose(
@@ -697,6 +822,20 @@ impl Hub for ToolHub {
             self.editors
                 .explain(scope, names, root, norn::tools::settings::EXPLAIN_WAIT),
         )
+    }
+
+    fn extension_fact(
+        &self,
+        id: &str,
+    ) -> BoxFuture<'_, Option<norn::tools::extensions::ExtensionFact>> {
+        let front = self.front.get().and_then(std::sync::Weak::upgrade);
+        let id = id.to_string();
+        Box::pin(async move { front?.extensions.fact(&id).await })
+    }
+
+    /// A tool's card goes to the editors as every card does (`card`).
+    fn card_event(&self, event: Value) {
+        self.editors.broadcast("card", event);
     }
 
     /// The runtime settings in effect globally (the project overrides are the editor's, keyed by its names).
@@ -853,7 +992,7 @@ mod tests {
         urdr::Connection::open(dir.path().join("work.db"))
             .unwrap()
             .execute_batch(
-                "create table meta (key text primary key, value text); insert into meta values ('schema', '9');",
+                "create table meta (key text primary key, value text); insert into meta values ('schema', '99');",
             )
             .unwrap();
         let w = writer(dir.path());
@@ -864,7 +1003,7 @@ mod tests {
             (e.code, e.message.as_str()),
             (
                 ErrorCode::Schema,
-                "work.db is schema 9, newer than this drgnx: read-only"
+                "work.db is schema 99, newer than this drgnx: read-only"
             )
         );
     }

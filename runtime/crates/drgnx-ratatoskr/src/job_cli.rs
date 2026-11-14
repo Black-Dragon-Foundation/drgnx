@@ -9,7 +9,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use runstav::methods::jobs::{JobStatusResult, JobSummary};
+use runstav::methods::jobs::{JobStatusResult, JobSummary, MergeGate};
 use runstav::paths::Env;
 use serde_json::{Value, json};
 
@@ -42,6 +42,7 @@ pub enum Sub {
         repo: Option<PathBuf>,
         budget: Option<Usd>,
         auto: bool,
+        gate: Option<MergeGate>,
     },
     Approve {
         id: String,
@@ -84,7 +85,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<JobCommand, Str
         return Err(format!("unknown job subcommand {name:?}"));
     }
     let (mut json, mut auto) = (false, false);
-    let (mut repo, mut budget_text) = (None, None);
+    let (mut repo, mut budget_text, mut gate) = (None, None, None);
     let mut words: Vec<String> = Vec::new();
     while let Some(arg) = p.next().map_err(e)? {
         match arg {
@@ -92,6 +93,15 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<JobCommand, Str
             Long("auto") if name == "propose" => auto = true,
             Long("repo") if name == "propose" => {
                 repo = Some(p.value().map_err(e)?.string().map_err(e)?);
+            }
+            Long("gate") if name == "propose" => {
+                gate = Some(match p.value().map_err(e)?.string().map_err(e)?.as_str() {
+                    "review" => MergeGate::Review,
+                    "review+accept" => MergeGate::ReviewAccept,
+                    other => {
+                        return Err(format!("--gate is review or review+accept, not {other:?}"));
+                    }
+                });
             }
             Long("budget") if ["propose", "approve", "resume"].contains(&name.as_str()) => {
                 budget_text = Some(p.value().map_err(e)?.string().map_err(e)?);
@@ -114,6 +124,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<JobCommand, Str
             repo: repo.map(PathBuf::from),
             budget,
             auto,
+            gate,
         },
         "approve" => Sub::Approve {
             id: one("a job id")?,
@@ -149,6 +160,7 @@ impl JobCommand {
                 repo,
                 budget,
                 auto,
+                gate,
             } => {
                 let mut params = json!({"plan": absolute(cwd, plan)});
                 if let Some(r) = repo {
@@ -159,6 +171,9 @@ impl JobCommand {
                 }
                 if *auto {
                     params["auto"] = json!(true);
+                }
+                if let Some(g) = gate {
+                    params["gate"] = json!(g);
                 }
                 ("job/propose", params)
             }
@@ -391,6 +406,9 @@ mod tests {
             &["status", "a", "b"],
             &["stop", "job-1", "--budget", "1"],
             &["propose", "a.md", "--repo"],
+            &["propose", "a.md", "--gate"],
+            &["propose", "a.md", "--gate", "none"],
+            &["approve", "job-1", "--gate", "review"],
         ] {
             assert!(p(bad).is_err(), "{bad:?} should not parse");
         }
@@ -434,6 +452,12 @@ mod tests {
             m(&["propose", "/abs/a.md"]),
             ("job/propose", json!({"plan": "/abs/a.md"}))
         );
+        for gate in ["review", "review+accept"] {
+            assert_eq!(
+                m(&["propose", "/abs/a.md", "--gate", gate]),
+                ("job/propose", json!({"plan": "/abs/a.md", "gate": gate}))
+            );
+        }
         assert_eq!(m(&["status"]), ("job/status", json!({})));
         assert_eq!(
             m(&["status", "job-1", "--json"]),
@@ -454,6 +478,7 @@ mod tests {
             repo: None,
             budget: None,
             auto: false,
+            gate: None,
         };
         assert!(
             render(&sub, &job)

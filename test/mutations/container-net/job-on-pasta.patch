@@ -1,0 +1,17 @@
+Target: row container-escape/network-granted-reaches-only-the-proxy
+The networked job gets its own pasta network instead of joining its sidecar's namespace: it has an interface and a
+default route, so row 1 (lo only, no route, 1.1.1.1 unreachable, the sidecar's namespace) goes red.
+
+diff --git a/runtime/crates/sleipnir/src/linux/podman.rs b/runtime/crates/sleipnir/src/linux/podman.rs
+index fd6dd7b4..fc8cc1c2 100644
+--- a/runtime/crates/sleipnir/src/linux/podman.rs
++++ b/runtime/crates/sleipnir/src/linux/podman.rs
+@@ -452,7 +452,7 @@ pub fn argv(req: &ContainerReq, caps: &Caps, ra: &RunnerArgs) -> Result<Vec<OsSt
+     }
+     a.push(
+         match sidecar {
+-            Some(s) => format!("--network=container:{s}"),
++            Some(_) => "--network=pasta".to_string(),
+             None => "--network=none".to_string(),
+         }
+         .into(),

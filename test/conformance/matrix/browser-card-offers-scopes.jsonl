@@ -1,0 +1,16 @@
+{"scenario": "matrix/browser-card-offers-scopes", "requires": ["v1", "test-hooks"], "doc": "Balanced asks a chat for the browser: the card's title is the hub's own (the session wants a browser in its sandbox), its data lists the choices once (the once window), this session and refuse, and the card event carries them; a session that works for a plan is also offered this plan. What makes it fail: a browser card with only the cockpit's allow and deny, or a plan choice for a session without a plan."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "__test_matrix_ask", "params": {"action": "browser", "who": {"role": "chat"}, "session": "s1"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"gate": "ask", "card": "$capture:c1"}}}
+{"do": "expect", "conn": "e", "json": {"event": "card", "data": {"id": "$c1", "kind": "matrix", "title": "s1 wants a browser in its sandbox", "choices": [{"id": "once", "label": "Allow once (10 minutes)"}, {"id": "session", "label": "Allow for this session"}, {"id": "refuse", "label": "Refuse"}]}}, "within_ms": 10000}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select (select group_concat(json_extract(value, '$.id'), ' ') from json_each(card.data, '$.choices')), json_extract(data, '$.once_window') from card where id = $c1 and kind = 'matrix' and state = 'open'", "rows": [["once session refuse", 600]]}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "__test_matrix_ask", "params": {"action": "browser", "who": {"role": "chat"}, "session": "s2", "plan": "plan:aaaaaaaaaaaa"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"gate": "ask", "card": "$capture:c2"}}}
+{"do": "expect", "conn": "e", "json": {"event": "card", "data": {"id": "$c2", "kind": "matrix", "title": "s2 wants a browser in its sandbox"}}, "within_ms": 10000}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select (select group_concat(json_extract(value, '$.id'), ' ') from json_each(card.data, '$.choices')) from card where id = $c2", "rows": [["once session plan refuse"]]}

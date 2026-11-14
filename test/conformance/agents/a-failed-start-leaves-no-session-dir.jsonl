@@ -1,0 +1,10 @@
+{"scenario": "agents/a-failed-start-leaves-no-session-dir", "requires": ["v1", "test-hooks"], "doc": "P7-FAILED-START-LEFTOVERS-1: a start that fails after the session's MCP socket was opened (here the agent's program cannot be run) removes the socket and the session dir with it; nothing of the session is left under <socket dir>/s/."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"broken\" :command (\"/nonexistent/agent-program\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "broken", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "error": {"code": "$string", "message": "$string"}}, "within_ms": 30000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "test -z \"$(ls -A $SOCKET_DIR/s 2>/dev/null)\""], "expect_code": 0}

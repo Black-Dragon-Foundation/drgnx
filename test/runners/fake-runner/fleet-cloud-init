@@ -1,0 +1,34 @@
+#!/bin/bash
+# The fleet's stand-in for cloud-init on a mock cloud machine (test/runners/README.md, "Cloud machines"): what the
+# real image does at first boot. New host keys; the CA and the principal from the instance's user-data (IMDSv2, from
+# ratatoskr-mock cloud's metadata); sshd certificate-only; then the host keys on the console in cloud-init's own format
+# (its tools/write-ssh-key-fingerprints: the fingerprints through `logger -s -t cloud-init`, then the keys as they are).
+# A container has no serial console, and systemd as its PID 1 sends nothing to `podman logs`: the console is the file
+# /run/fleet-console, written whole, which the mock reads with `podman exec … cat`.
+set -euo pipefail
+# the container's environment is PID 1's; systemd hands none of it to its units (nor to ConditionEnvironment)
+md=$(tr '\0' '\n' < /proc/1/environ | sed -n 's/^DRGNX_FAKE_CLOUD_METADATA=//p')
+[ -n "$md" ] || exit 0   # a plain fake runner, not a mock cloud's machine
+rm -f /etc/ssh/ssh_host_*
+ssh-keygen -A
+tok=$(curl -sf -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' "$md/latest/api/token")
+ud=$(curl -sf -H "X-aws-ec2-metadata-token: $tok" "$md/latest/user-data")
+printf '%s\n' "$ud" | sed -n 's/^drgnx-ca: //p' > /etc/ssh/drgnx-ca.pub
+printf '%s\n' "$ud" | sed -n 's/^drgnx-principal: //p' > /etc/ssh/drgnx-principals
+# read before the image's 10-fleet.conf, so these win (sshd keeps the first value)
+printf '%s\n' 'TrustedUserCAKeys /etc/ssh/drgnx-ca.pub' 'AuthorizedPrincipalsFile /etc/ssh/drgnx-principals' \
+  'AuthorizedKeysFile none' 'PasswordAuthentication no' 'KbdInteractiveAuthentication no' 'PermitRootLogin no' \
+  'MaxAuthTries 2' > /etc/ssh/sshd_config.d/01-cloud.conf
+systemctl restart sshd.service
+say() { logger -s -p user.info -t cloud-init -- "$1"; }
+{
+  say '#############################################################'
+  say '-----BEGIN SSH HOST KEY FINGERPRINTS-----'
+  for f in /etc/ssh/ssh_host_*key.pub; do say "$(ssh-keygen -l -f "$f")"; done
+  say '-----END SSH HOST KEY FINGERPRINTS-----'
+  say '#############################################################'
+  echo '-----BEGIN SSH HOST KEY KEYS-----'
+  cat /etc/ssh/ssh_host_*key.pub
+  echo '-----END SSH HOST KEY KEYS-----'
+} > /run/fleet-console.new 2>&1
+mv /run/fleet-console.new /run/fleet-console

@@ -17,8 +17,11 @@
 (declare-function drgnx-wb-view-search "drgnx-wb")
 (declare-function drgnx-wb-focus-editor "drgnx-wb")
 (declare-function drgnx-explorer-setup "drgnx-explorer")
+(declare-function drgnx-explorer-remove-folder "drgnx-explorer")
+(declare-function drgnx-explorer--root-row-p "drgnx-explorer")
 (declare-function drgnx-rules-mode "drgnx-rules")
 (declare-function drgnx-chrome-mode "drgnx-chrome")
+(declare-function drgnx-chrome-switch-tab "drgnx-chrome")
 (declare-function drgnx-buffers-save-row "drgnx-actions")
 (declare-function drgnx-buffers-copy-path-row "drgnx-actions")
 (declare-function drgnx-buffers-reveal-row "drgnx-actions")
@@ -29,6 +32,8 @@
 (declare-function drgnx-wb-panel-next-tab "drgnx-actions")
 (declare-function drgnx-help-mode-menu "drgnx-actions")
 (declare-function drgnx-frames-mode "drgnx-frames")
+(declare-function drgnx-pane--frame-replaced "drgnx-panes")
+(declare-function drgnx-popup--frame-replaced "drgnx-popup")
 (declare-function drgnx-frames-move-editor "drgnx-frames")
 (declare-function drgnx-frames-open-editor "drgnx-frames")
 (declare-function drgnx-frames-move-group "drgnx-frames")
@@ -91,6 +96,10 @@
                        ;; The bottom panel and the right dock; popups borrow the panel.
                        (require 'drgnx-area)
                        (require 'drgnx-popup)
+                       ;; A frame replaced by one like it (the echo box's swap): the panes and the popup lanes move.
+                       (drgnx-module-hook 'drgnx-frame-replaced-functions frame-replaced (old new)
+                         (when (featurep 'drgnx-panes) (drgnx-pane--frame-replaced old new))
+                         (drgnx-popup--frame-replaced old new))
                        (drgnx-command-define 'toggle-panel :category "View" :title "Toggle Panel" :scope 'window
                                              :command #'drgnx-wb-toggle-panel :menu '("View") :doc "Show or hide the bottom panel (Terminal, Problems, Output, Results, Help)")
                        (drgnx-command-define 'focus-panel :category "View" :title "Focus Panel" :scope 'window
@@ -102,6 +111,9 @@
                        ;; Chrome by role: tab lines and breadcrumbs in editor windows.
                        (require 'drgnx-chrome)
                        (drgnx-chrome-mode 1)
+                       (drgnx-command-define 'switch-tab :category "View" :title "Go to Tab…" :scope 'window
+                                             :command #'drgnx-chrome-switch-tab
+                                             :doc "Show one of this editor group's tabs, chosen by name (the overflow button of the tab row)")
                        ;; Editor groups (made only by these commands).
                        (require 'drgnx-groups)
                        (pcase-dolist (`(,id ,title ,fn ,doc)
@@ -169,10 +181,10 @@
                                              :command #'drgnx-wb-show-unrouted :doc "Buffers no placement rule matched (each one is a rule to add)")
                        (drgnx-command-define 'toggle-sidebar :category "View" :title "Toggle Sidebar" :scope 'window
                                              :command #'drgnx-wb-toggle-sidebar :menu '("View") :doc "Show or hide the Buffers panel and the Explorer")
-                       (drgnx-command-define 'view-explorer :category "View" :title "View: Explorer" :scope 'window
+                       (drgnx-command-define 'view-explorer :category "View" :title "Explorer" :scope 'window
                                              :command #'drgnx-wb-view-explorer
                                              :doc "Show the Buffers panel and the Explorer in the sidebar and focus the file tree")
-                       (drgnx-command-define 'view-search :category "View" :title "View: Search" :scope 'window
+                       (drgnx-command-define 'view-search :category "View" :title "Search" :scope 'window
                                              :command #'drgnx-wb-view-search
                                              :doc "Show the Search view in the sidebar and focus it")
                        (drgnx-command-define 'focus-editor :category "View" :title "Focus Editor" :scope 'window
@@ -216,7 +228,13 @@
                                           (explorer-copy-relative-path "Copy Relative Path" drgnx-explorer-copy-relative-path "The path from the root, to the clipboard")
                                           (explorer-reveal-externally "Reveal in File Manager" drgnx-explorer-reveal-externally "Open the folder in the system's file manager")))
                            (drgnx-command-define id :category "Explorer" :title title :command fn :doc doc
-                                                 :map 'drgnx-explorer-mode-map :when in-explorer :context 'explorer)))
+                                                 :map 'drgnx-explorer-mode-map :when in-explorer :context 'explorer))
+                         ;; A folder of the workspace: its top row's right-click menu.
+                         (drgnx-surfaces-define-context 'explorer-root #'drgnx-explorer--root-row-p)
+                         (drgnx-command-define 'explorer-remove-folder :category "Explorer" :title "Remove Folder from Workspace"
+                                               :command #'drgnx-explorer-remove-folder :map 'drgnx-explorer-mode-map
+                                               :when in-explorer :context 'explorer-root
+                                               :doc "Take this folder out of the Explorer (nothing on disk changes)"))
                        ;; The Outline, below the Explorer.
                        (require 'drgnx-outline)
                        (drgnx-outline-setup)

@@ -74,13 +74,19 @@ the Emacs server) do not list a remote folder either, and a folder whose host ca
 had. The one intended exception is Find in the Explorer: you are typing in the minibuffer and its
 live filter runs from an idle timer, as part of your command. Find on a remote folder leaves the ignored files
 (`grep-find-ignored-files`, such as `*.o` and `*.elc`) out here, not in find on the host: with them, the find line was
-too long for a macOS host. The change gutter (diff-hl) is off for remote files; the
+too long for a macOS host. The change gutter is off for remote files; the
 Explorer's Git letters, inline blame and the Outline skip them, and sticky scroll works from the buffer's text alone.
 Nothing remote asks a question from an automatic path; every ssh question comes from a command you ran. As a second
 guard, while the module is on, TRAMP's login, password, yes/no, one-time-code and confirm questions fail with an error
 unless the code asking is part of a command of yours (a key you press, `M-x`, a click) or Open Remote… or Reconnect
 asked for it. A timer, a process filter or a sentinel is never part of your command, even when it fires
 while the command waits: its login gets an error message, never a hidden question.
+
+A language server's answers are handled on Emacs's top-level timers, not inside a TRAMP call that happens to be
+running (TRAMP suspends the timers while it works, so the answer would meet "Forbidden reentrant call of Tramp"). On a
+Nidhogg whose reader thread reads language servers, that guard sits on the function that hands over its batches;
+for a connection it does not read (a remote server is one), on that connection's filter. Elsewhere it is on eglot's
+reader, as before.
 
 Auto-save files of remote buffers go to a private folder (mode 0700) in drgnx's state directory
 (`~/.local/state/drgnx/tramp-auto-save/`, the module sets `tramp-auto-save-directory` unless you set it yourself). So
@@ -103,7 +109,7 @@ file of a container that runs as root), from a visit, a daemon or a sentinel ali
 - The private auto-save folder helps only while drgnx's state directory is outside the temp directory
   (`temporary-file-directory`), as it is by default. With `XDG_STATE_HOME` inside `$TMPDIR`, TRAMP asks again on the
   first visit of a root-owned file; set `tramp-auto-save-directory` to a folder outside the temp directory.
-- Shell integration in a remote terminal (eat or zsh integration over TRAMP) is not built.
+- Shell integration in a remote terminal (zsh integration over TRAMP) is not built.
 - Remote folders are not restored at the next start (see the Explorer's rules in [workbench.md](workbench.md)); open
   them again with Open Remote….
 - Language servers are found on the host's `PATH` (what TRAMP sees, see `tramp-remote-path`); a server installed

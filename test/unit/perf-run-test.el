@@ -35,6 +35,18 @@
       (should (member "TEARDOWN" calls))
       (should (seq-find (lambda (f) (string-search "drgnx-perf-audit-end" f)) calls)))))   ; the probes are undone too
 
+(ert-deftest drgnx-perf-run/a-workload-timeout-reaches-its-setup-and-measure ()
+  ;; search-modes: the setup indexes 25,000 files, longer than the calls' 120 s
+  (let (waits)
+    (cl-letf (((symbol-function 'drgnx-perf-run--call) (lambda (_s f &optional secs) (push (cons f secs) waits) (list :x 1)))
+              ((symbol-function 'drgnx-ui-measure) #'ignore))
+      (drgnx-perf-run-workload 'sess '(:setup "s" :measure "m" :repeat 1 :timeout 1200))
+      (should (eql (cdr (assoc "s" waits)) 1200))
+      (should (eql (cdr (assoc "m" waits)) 1200))
+      (setq waits nil)
+      (drgnx-perf-run-workload 'sess '(:setup "s" :measure "m" :repeat 1))
+      (should (eql (cdr (assoc "s" waits)) 120)))))
+
 (ert-deftest drgnx-perf-run/a-daemon-that-never-serves-is-an-error ()
   :tags '(:cond)
   ;; I1: a daemon that dies (or never answers) is not a fast start.
@@ -65,6 +77,7 @@ after another (the last repeats).  Binds `history' (the history file) and `start
           (loads ,loads) (started 0))
      (unwind-protect
          (cl-letf (((symbol-function 'drgnx-perf-load) (lambda () (if (cdr loads) (pop loads) (car loads))))
+                   ((symbol-function 'drgnx-perf-run--compiled) #'ignore)   ; no tree to build: the session is fake
                    ((symbol-function 'drgnx-ui-state-root) (lambda () dir))
                    ((symbol-function 'drgnx-ui-start) (lambda (&rest _) (setq started (1+ started)) '(:name "fake")))
                    ((symbol-function 'drgnx-ui-own-session) (lambda (_) 'sess))
@@ -89,6 +102,21 @@ after another (the last repeats).  Binds `history' (the history file) and `start
       (setq out (with-output-to-string (should (eql (drgnx-perf-run) 0))))
       (should (file-exists-p history))
       (should (string-match-p "frame p50 1 p90 nil ms (loaded)" out)))))
+
+(ert-deftest drgnx-perf-run/a-run-waits-for-native-compilation-before-its-first-workload ()
+  "Pattern D.  A built tree's session compiles the files it loads natively, in the background, when it starts; the
+first workload (typing) paid for it (its calibration loop ran 4x slower than the later workloads').  The run waits for
+that to drain (`drgnx-perf-ab--settle-form', as an A/B does) before it calibrates or measures anything."
+  (drgnx-perf-run-test--with-fake-run '(1.0)
+    (let* ((forms nil) (fake (symbol-function 'drgnx-perf-run--call)))
+      (cl-letf (((symbol-function 'drgnx-perf-run--call) (lambda (s form &rest r) (push form forms) (apply fake s form r))))
+        (with-output-to-string (drgnx-perf-run)))
+      (setq forms (nreverse forms))
+      (let ((settle (seq-position forms drgnx-perf-ab--settle-form))
+            (calibrate (seq-position forms "(drgnx-perf-calibrate)")))
+        (should settle)
+        (should calibrate)
+        (should (< settle calibrate))))))
 
 (ert-deftest drgnx-perf/results-are-written-as-json ()
   (drgnx-perf-run-test--with-fake-run '(1.0)
@@ -209,6 +237,32 @@ without them would pass unjudged), unless `drgnx-perf-run-unseeded' says why it 
       (should (assq (car u) drgnx-perf-run-unseeded))
       (should (stringp (cdr u))))))
 
+(ert-deftest drgnx-perf-run/the-terminal-workloads-run-in-the-container ()
+  ;; drgnx's terminal needs no package: the terminal workloads are never skipped, and their setup starts the workload's
+  ;; hub (its worker beside it) and runs tools/term on it
+  (let ((process-environment (cons "DRGNX_USER_ELPA" process-environment)))
+    (should-not (drgnx-perf-run--container-skip 'terminal-output))
+    (should-not (drgnx-perf-run--container-skip 'terminal-typing))
+    (should (stringp (drgnx-perf-run--container-skip 'live-view)))
+    (let ((setup (plist-get (cdr (assq 'terminal-output (drgnx-perf-run--workloads))) :setup)))
+      (should (string-search "(drgnx-perf--hub-start nil)" setup))
+      (should (string-search "drgnx-term-start" setup)))))
+
+(ert-deftest drgnx-perf-run/the-live-view-runs-in-the-container-with-websocket ()
+  ;; DRGNX_USER_ELPA with a websocket package: live-view is not skipped, its setup names that directory and counts
+  ;; blank frames (its :measure)
+  (let ((elpa (make-temp-file "drgnx-perf-elpa" t)))
+    (unwind-protect
+        (let ((process-environment (cons (concat "DRGNX_USER_ELPA=" elpa) process-environment)))
+          (should (stringp (drgnx-perf-run--container-skip 'live-view)))
+          (make-directory (expand-file-name "websocket-1.16" elpa))
+          (should-not (drgnx-perf-run--container-skip 'live-view))
+          (let ((w (cdr (assq 'live-view (drgnx-perf-run--workloads)))))
+            (should (string-search (prin1-to-string elpa) (plist-get w :setup)))
+            (should (equal (plist-get w :measure) "(drgnx-perf--live-measure)"))
+            (should (string-search "drgnx-perf--live-blank-sample" (plist-get w :setup)))))
+      (delete-directory elpa t))))
+
 (ert-deftest drgnx-perf-run/the-terminal-workloads-run-a-program-not-a-shell ()
   "terminal-typing runs cat, terminal-output a seq loop; their setup forms are readable and name no shell config."
   (let ((ws (drgnx-perf-run--workloads)))
@@ -217,18 +271,178 @@ without them would pass unjudged), unless `drgnx-perf-run-unseeded' says why it 
         (should (stringp setup))
         (should (consp (read setup)))
         (should (string-match-p (regexp-quote (cadr spec)) setup))
-        (should (string-match-p "tools/terminal-eat" setup))   ; the session has no eat package at start: the module runs here
-        (should (string-match-p "need the tools/terminal-eat module" setup))   ; and the workload stops when it did not reach ok
+        (should (string-match-p "tools/term\\_>" setup))   ; the session's modules ran before its hub: the module runs here
+        (should (string-match-p "need the tools/term module" setup))   ; and the workload stops when it did not reach ok
         (should-not (string-match-p "\\.bashrc\\|\\.zshrc\\|SHELL" setup))))
     (should (string-match-p "seq 1 2000" (plist-get (cdr (assq 'terminal-output ws)) :setup)))))
 
+(defvar drgnx-perf-run-test--reach 0 "The furthest point a `forward-sexp' reached (`point-max' for a failed one).")
+
+(defun drgnx-perf-run-test--forward-sexp (f &rest args)
+  "Around `forward-sexp': note how far F got in `drgnx-perf-run-test--reach'."
+  (condition-case err
+      (prog1 (apply f args) (setq drgnx-perf-run-test--reach (max drgnx-perf-run-test--reach (point))))
+    (scan-error (setq drgnx-perf-run-test--reach (point-max)) (signal (car err) (cdr err)))))
+
+(ert-deftest drgnx-perf-run/typing-at-the-fixtures-spot-never-scans-past-its-form ()
+  "Pattern D (pure: the real fixture in a buffer, the typing workload's characters inserted one by one and the line
+fontified after each, as redisplay does; no session, no clock).  The fixture is core/ three times, so where its middle
+falls changes with every core file; when the keys went to a line with too few lists around it, each `(let ((x' typed
+left a list open past its form, and Emacs Lisp's font-lock (`lisp--el-funcall-position-p', through `forward-sexp')
+scanned the rest of the 4 MB file at every key.  The keys go to a spot of the fixture's own, the same in every tree:
+no `forward-sexp' of the font-lock goes past the form that holds it."
+  (let* ((drgnx-perf-run--fixture (drgnx-perf-run--make-fixture))
+         (text (mapconcat (lambda (a) (plist-get a :type)) (plist-get (cdr (assq 'typing (drgnx-perf-run--workloads))) :actions) ""))
+         (drgnx-perf-run-test--reach 0))
+    (unwind-protect
+        (progn
+          (should (eq t (eval (read (drgnx-perf-run--visit-fixture-form)) t)))
+          (with-current-buffer (find-buffer-visiting drgnx-perf-run--fixture)
+            (let* ((top (car (nth 9 (syntax-ppss)))) (end (and top (scan-lists top 1 0))))
+              (should top)                      ; inside a form
+              (font-lock-set-defaults)
+              (font-lock-fontify-region (line-beginning-position) (line-end-position))
+              (advice-add 'forward-sexp :around #'drgnx-perf-run-test--forward-sexp)
+              (dotimes (i (length text))
+                (insert (aref text i))
+                (font-lock-fontify-region (line-beginning-position) (line-end-position)))
+              (should (<= drgnx-perf-run-test--reach (+ end (length text)))))))
+      (advice-remove 'forward-sexp #'drgnx-perf-run-test--forward-sexp)
+      (when-let* ((b (find-buffer-visiting drgnx-perf-run--fixture))) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b))
+      (delete-file drgnx-perf-run--fixture))))
+
+
+
+(ert-deftest drgnx-perf-run/the-typing-workloads-cpu-rows-catch-a-key-spike ()
+  "Pattern D.  The typing workloads' CPU rows were 350-420 ms at p90 while one key in ten cost 100-200 ms; with that
+gone (seeded 2026-11-05: p90 5-8.5 ms in the GUI container) a key that costs 20 ms at p90, or 15 at p50, fails the
+run, also before `DRGNX_PERF_CPU_FACTOR'."
+  (let ((budgets (drgnx-perf-run--budgets)))
+    (dolist (w '(typing typing-with-ghost remote-typing))
+      (dolist (row '(((:cpu_ms :p50) . 15) ((:cpu_ms :p90) . 20)))
+        (let ((b (seq-find (lambda (b) (and (eq (car b) w) (equal (cadr b) (car row)))) budgets)))
+          (should b)
+          (should (<= (nth 2 b) (cdr row))))))))
+
+(ert-deftest drgnx-perf-run/a-profile-wraps-the-measure-and-goes-next-to-the-results ()
+  "Pattern D: with $DRGNX_PERF_PROFILE the measure runs under `drgnx-perf-profiled', its report beside the results
+file; without it the measure is as written."
+  (let (forms)
+    (cl-letf (((symbol-function 'drgnx-perf-run--call) (lambda (_s f &rest _) (push f forms) (list :x 1))))
+      (with-environment-variables (("DRGNX_PERF_PROFILE" "1") ("DRGNX_PERF_RESULTS" "/out/run.eld"))
+        (should (equal (drgnx-perf-run--profile-file "panel-replay") "/out/run-panel-replay.profile.txt"))
+        (let ((drgnx-perf-run--profile (drgnx-perf-run--profile-file "panel-replay")))
+          (drgnx-perf-run-workload 'sess '(:measure "(m)" :repeat 1))))
+      (should (member "(drgnx-perf-profiled \"/out/run-panel-replay.profile.txt\" (lambda () (m)))" forms))
+      (setq forms nil)
+      (with-environment-variables (("DRGNX_PERF_PROFILE" nil))
+        (should-not (drgnx-perf-run--profile-file "panel-replay"))
+        (let ((drgnx-perf-run--profile (drgnx-perf-run--profile-file "panel-replay")))
+          (drgnx-perf-run-workload 'sess '(:measure "(m)" :repeat 1))))
+      (should (member "(m)" forms)))))
+
+(ert-deftest drgnx-perf-run/a-profile-covers-the-typed-keys-of-a-workload-with-actions ()
+  "Pattern D: a workload with typed actions is profiled from before its first key to after the work it started is done
+\(the profilers start before the recording and stop after the completion wait), not only its measure."
+  (let (forms)
+    (cl-letf (((symbol-function 'drgnx-perf-run--call) (lambda (_s f &rest _) (push f forms) (list :x 1)))
+              ((symbol-function 'drgnx-perf-run--extras) (lambda (_s _spec) (push "extras" forms) nil))
+              ((symbol-function 'drgnx-ui-measure) (lambda (_s a) (push (format "keys %S" a) forms))))
+      (let ((drgnx-perf-run--profile "/out/run-w.profile.txt"))
+        (drgnx-perf-run-workload 'sess '(:actions (a) :measure "(m)" :repeat 1)))
+      (setq forms (nreverse forms))
+      (let ((begin (seq-position forms "(drgnx-perf-profile-begin)"))
+            (keys (seq-position forms "keys (a)"))
+            (extras (seq-position forms "extras"))
+            (end (seq-position forms "(drgnx-perf-profile-end \"/out/run-w.profile.txt\")")))
+        (should (and begin keys extras end (< begin keys extras end))))
+      (should (member "(m)" forms))                         ; the measure itself is not wrapped again
+      (should-not (cl-some (lambda (f) (string-prefix-p "(drgnx-perf-profiled" f)) forms)))))
+
+(ert-deftest drgnx-perf-run/the-terminal-flood-is-a-wait-the-profiler-can-see-into ()
+  "Pattern D: `terminal-flood' types no key and its measure is the wait itself (`drgnx-perf--term-watch'), with the
+setup that opens the streaming terminal outside it, so a profile of the measure is the stream's own work; the
+terminal workloads that profile only the driver (a file built in the measure) are not it."
+  (let ((w (cdr (assq 'terminal-flood (drgnx-perf-run--workloads)))))
+    (should w)
+    (should-not (plist-get w :actions))
+    (should (string-match-p "drgnx-perf--term-watch" (plist-get w :measure)))
+    (should (string-match-p "seq 1 2000" (plist-get w :setup)))
+    (should (assq 'terminal-flood drgnx-perf-run-unseeded))))
+
+(ert-deftest drgnx-perf-run/a-tree-of-sources-is-built-before-the-run ()
+  "Pattern D: a tree with a Lisp file whose .elc is missing or older than it is built before the sessions start (a
+run of sources measures the interpreter); a compiled tree is not."
+  (let* ((root (make-temp-file "perf-tree" t)) (el (expand-file-name "core/a.el" root)) built)
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-perf-ab--build) (lambda (tree) (push tree built))))
+          (make-directory (file-name-directory el))
+          (write-region "" nil el nil 'silent)
+          (drgnx-perf-run--compiled root)
+          (should (equal built (list root)))
+          (write-region "" nil (concat el "c") nil 'silent)
+          (set-file-times el (time-subtract nil 60))       ; backdated: file times sit on coarse ticks
+          (setq built nil)
+          (drgnx-perf-run--compiled root)
+          (should-not built)
+          (set-file-times (concat el "c") (time-subtract nil 120))
+          (drgnx-perf-run--compiled root)
+          (should (equal built (list root))))
+      (delete-directory root t))))
 
 ;;; perf-run-test.el ends here
 
-(ert-deftest drgnx-perf-run/the-typing-workloads-gate-a-normal-keys-cpu-too ()
-  "p90 sits on the 1-in-10 key spike (PERF-KEYSPIKE-1); the p50 row gates the keys that are not spikes."
-  (let ((budgets (drgnx-perf-run--budgets)))
-    (dolist (w '(typing typing-with-ghost remote-typing))
-      (let ((b (seq-find (lambda (b) (and (eq (car b) w) (equal (cadr b) '(:cpu_ms :p50)))) budgets)))
-        (should b)
-        (should (<= (nth 2 b) 30))))))
+(defvar drgnx-perf--wait-on)            ; the hub form's (special: the wait binds it)
+(declare-function drgnx-perf--wait-check nil)
+
+(ert-deftest drgnx-perf-run/a-wait-times-the-change-and-leaves-no-advice ()
+  "The agent workloads' wait (`drgnx-perf--wait', from the hub form): after a timer or a hub batch the check notes when
+the condition first held, in the wait's buffer, and the wait returns that time; an error inside the wait still takes
+its advice off `timer-event-handler' and the hub batch."
+  :tags '(:cond)
+  (eval (car (read-from-string (drgnx-perf-run--hub-form))) t)
+  (let ((buf (generate-new-buffer " wait")) (flag nil))
+    (unwind-protect
+        (let ((drgnx-perf--wait-on (list buf (lambda () (and flag (eq (current-buffer) buf))) nil)))
+          (drgnx-perf--wait-check)
+          (should-not (nth 2 drgnx-perf--wait-on))
+          (setq flag t)
+          (drgnx-perf--wait-check)
+          (let ((met (nth 2 drgnx-perf--wait-on)))
+            (should (numberp met))
+            (drgnx-perf--wait-check)
+            (should (eql met (nth 2 drgnx-perf--wait-on)))))
+      (kill-buffer buf)))
+  (let ((n 0))
+    (should-error (funcall 'drgnx-perf--wait 2 (lambda () (when (> (cl-incf n) 1) (error "Inside the wait")))))
+    (should-not (advice-member-p 'drgnx-perf--wait-check 'timer-event-handler))
+    (should-not (advice-member-p 'drgnx-perf--wait-check 'drgnx-hub--client-batch))))
+
+(ert-deftest drgnx-perf-run/the-column-may-add-five-percent-or-a-third-of-a-millisecond-over-a-claimed-margin ()
+  ;; the breakpoint column judged against the same scroll with hunks' margin and its own claimed and empty: what a user
+  ;; sees when a session starts in a file that shows hunks (p50s: n is 60, too few for a p95).  The larger of 5 % and
+  ;; 0.3 ms: on a 4 ms frame measured to 0.1 ms, 5 % alone is noise
+  (let* ((res (lambda (g b) `((debug-gutter-scroll :input (:p50 ,g)) (debug-gutter-baseline :input (:p50 ,b)))))
+         (fails (lambda (g b) (seq-some (lambda (l) (string-search "debug-gutter-scroll input p50" l))
+                                        (drgnx-perf-run--relative-fails (funcall res g b))))))
+    (should-not (funcall fails 4.4 4.1))   ; 7 %, but 0.3 ms
+    (should (funcall fails 4.5 4.1))
+    (should-not (funcall fails 10.0 9.6)) ; 0.4 ms, but 4 %
+    (should (funcall fails 10.4 9.6))
+    ;; one side missing: not judged
+    (should-not (drgnx-perf-run--relative-fails '((debug-gutter-scroll :input (:p50 9.0)))))
+    ;; the baseline is a workload of its own, with the column's setup
+    (should (assq 'debug-gutter-baseline (drgnx-perf-run--workloads)))))
+
+(ert-deftest drgnx-perf-run/the-ruler-is-judged-against-the-same-scroll-without-it ()
+  ;; the ruler's row narrows the file and has the column on; its baseline differs from it only by the ruler, so neither
+  ;; the narrowing nor the column is counted against the ruler
+  (let ((fails (lambda (r rb gb)
+                 (seq-some (lambda (l) (string-search "debug-ruler-scroll input p50" l))
+                           (drgnx-perf-run--relative-fails
+                            `((debug-ruler-scroll :input (:p50 ,r)) (debug-ruler-baseline :input (:p50 ,rb))
+                              (debug-gutter-baseline :input (:p50 ,gb))))))))
+    (should-not (funcall fails 4.7 4.5 4.3))   ; 0.4 over the gutter's baseline, 0.2 over its own
+    (should (funcall fails 4.9 4.5 4.3))
+    (should-not (drgnx-perf-run--relative-fails '((debug-ruler-scroll :input (:p50 9.0)) (debug-gutter-baseline :input (:p50 4.0)))))
+    (should (assq 'debug-ruler-baseline (drgnx-perf-run--workloads)))))

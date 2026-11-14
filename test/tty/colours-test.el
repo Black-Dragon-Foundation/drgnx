@@ -112,7 +112,7 @@ foreground and background are the same colour on this terminal, in the default t
       ;; the faces the groups of states are made of are loaded, so the check is not empty
       (should (drgnx-tty-colours-test--in-client
                s '(seq-every-p #'facep '(drgnx-git-modified drgnx-review-critical drgnx-chrome-tab
-                                                            drgnx-work-ui-stale drgnx-explorer-file))))
+                                                            drgnx-explorer-file))))
       (pcase-let ((`(,seen ,bad) (drgnx-tty-colours-test--in-client s drgnx-tty-colours-test--invisible)))
         (should (> seen 25))
         (should (equal (cons cells bad) (list cells)))))))
@@ -173,15 +173,6 @@ foreground and background are the same colour on this terminal, in the default t
                               (not (equal (face-attribute 'drgnx-chrome-tab a nil t)
                                           (face-attribute 'drgnx-chrome-tab-current a nil t))))
                             ',drgnx-tty-colours-test--attributes)))
-      ;; work: the label says what a node is
-      (should (equal (drgnx-tty-colours-test--in-client
-                      s '(list (string-match-p "\\`⚠ Task 1: t  (its commits are on no branch)"
-                                               (drgnx-work-ui--line '(:kind task :ord 1 :title "t" :stale t)))
-                               (string-match-p "\\`☑ t" (drgnx-work-ui--line '(:kind step :title "t" :status "done")))
-                               (string-match-p "\\`☐ t" (drgnx-work-ui--line '(:kind step :title "t")))
-                               (string-match-p "\\`✓ TODO t" (drgnx-work-ui--line '(:kind todo :title "t" :status "done")))
-                               (string-match-p "\\`○ TODO t" (drgnx-work-ui--line '(:kind todo :title "t")))))
-                     '(0 0 0 0 0)))
       ;; ignored files have no letter: their face differs from the default in an attribute that is not a colour
       (should (equal (drgnx-tty-colours-test--in-client
                       s `(mapcar (lambda (f)
@@ -195,19 +186,6 @@ foreground and background are the same colour on this terminal, in the default t
                s '(seq-every-p (lambda (g) (seq-every-p #'facep (plist-get (cdr g) :faces))) drgnx-tty-frames-state-faces))))))
 
 ;;;; Images
-
-(ert-deftest drgnx-tty-colours/the-work-graph-says-it-cannot-show-here ()
-  (drgnx-tty-session-with (s :daemon t)
-    (drgnx-tty-session-client s)
-    (let ((r (drgnx-tty-colours-test--in-client
-              s '(condition-case err (progn (call-interactively #'drgnx-work-ui-graph) 'shown)
-                   (user-error (cadr err))
-                   (error (list 'error err))))))
-      (should (stringp r))
-      (should (string-match-p "needs a graphical frame" r))
-      (should (string-match-p "Work tab shows the same tree" r)))
-    ;; no graph buffer was made on the way
-    (should-not (drgnx-tty-session-eval s '(and (get-buffer "*work graph*") t)))))
 
 (ert-deftest drgnx-tty-colours/the-browser-pane-says-it-cannot-show-here ()
   ;; a page needs a graphical frame: the system browser gets it (stubbed: no browser starts), once, with the reason
@@ -231,18 +209,20 @@ foreground and background are the same colour on this terminal, in the default t
       (should (nth 3 r)))
     (should-not (drgnx-tty-session-eval s '(and (get-buffer "*drgnx: browser*") (get-buffer-window "*drgnx: browser*") t)))))
 
-(ert-deftest drgnx-tty-colours/the-live-view-says-it-cannot-show-here ()
-  ;; the Live view is an image of the page: a text saying so, and the browser for agents is not started
+(ert-deftest drgnx-tty-colours/the-live-view-says-why-it-is-empty-here ()
+  ;; the Live view waits for a later update: in a terminal too it opens, says so, and connects to nothing
   (drgnx-tty-session-with (s :daemon t)
-    (drgnx-tty-session-client s)
-    (drgnx-tty-session-wait s '(fboundp 'drgnx-live-view) 20)
-    (let ((r (drgnx-tty-colours-test--in-client
-              s '(condition-case err (progn (call-interactively #'drgnx-live-view) 'shown)
-                   (user-error (cadr err))
-                   (error (list 'error err))))))
-      (should (stringp r))
-      (should (string-match-p "needs a graphical frame" r)))
-    (should-not (drgnx-tty-session-eval s '(or (and (drgnx-live-running) t) (and (get-buffer "*drgnx live*") t))))))
+    (let ((c (drgnx-tty-session-client s)))
+      (drgnx-tty-session-wait s '(fboundp 'drgnx-live-view) 20)
+      (let ((r (drgnx-tty-colours-test--in-client
+                s '(condition-case err
+                       (let ((buf (call-interactively #'drgnx-live-view)))
+                         (list (eq (window-frame (get-buffer-window buf t)) (selected-frame))
+                               (with-current-buffer buf (and (string-search drgnx-live--dormant-text (buffer-string)) t))
+                               (with-current-buffer buf drgnx-live--ws)))
+                     (error (list 'error err))))))
+        (should (equal r '(t t nil))))
+      (drgnx-tty-session-wait-screen c "arrives with a later drgnx update"))))
 
 (provide 'drgnx-tty-colours-test)
 ;;; colours-test.el ends here

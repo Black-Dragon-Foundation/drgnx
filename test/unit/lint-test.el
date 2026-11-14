@@ -40,17 +40,49 @@
 
 (defconst drgnx-lint--hex "\\`#\\([0-9a-fA-F]\\{3\\}\\)\\{1,2\\}\\'")
 
+(defun drgnx-lint--colour-literals (files)
+  "The colour literals in FILES: a hex string anywhere, or a string after :foreground, :background, :color (a face
+spec's `:box' colour too) or :distant-foreground."
+  (drgnx-lint--violations
+   files
+   (lambda (form)
+     (cond ((and (stringp form) (string-match-p drgnx-lint--hex form)) (format "hex colour %s" form))
+           ((and (consp form) (proper-list-p form))
+            (cl-loop for (k v) on form
+                     when (and (memq k '(:foreground :background :color :distant-foreground)) (stringp v))
+                     return (format "%s %S" k v)))))))
+
 (ert-deftest drgnx-lint/no-hard-coded-colours ()
-  ;; Faces inherit theme faces: a hex colour, or a colour name after :foreground/:background, is a bug.
-  (should-not
-   (drgnx-lint--violations
-    (drgnx-lint--files "core" "wb" "modules")
-    (lambda (form)
-      (cond ((and (stringp form) (string-match-p drgnx-lint--hex form)) (format "hex colour %s" form))
-            ((and (consp form) (proper-list-p form))
-             (cl-loop for (k v) on form
-                      when (and (memq k '(:foreground :background :color :distant-foreground)) (stringp v))
-                      return (format "%s %S" k v))))))))
+  ;; Colour literals live only in themes/drgnx-tokens.eld (not a .el file).  Faces inherit semantic or standard faces;
+  ;; what is derived from a theme goes through core/drgnx-color.el.
+  (should-not (drgnx-lint--colour-literals (drgnx-lint--files "core" "wb" "modules" "harness" "themes"))))
+
+(ert-deftest drgnx-lint/no-hard-coded-colours-sees-a-planted-literal ()
+  ;; The lint is red on a literal in a file outside themes/: a hex string, a name after :foreground, a box colour.
+  (let ((file (make-temp-file "drgnx-lint-planted-" nil ".el")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "(defface planted-a '((t :foreground \"#ff0000\")) \"A.\")\n"
+                    "(defface planted-b '((t :box (:line-width 1 :color \"red\"))) \"B.\")\n"))
+          (let ((found (drgnx-lint--colour-literals (list file))))
+            (should (cl-some (lambda (m) (string-match-p "#ff0000" m)) found))
+            (should (cl-some (lambda (m) (string-match-p ":color \"red\"" m)) found))))
+      (delete-file file))))
+
+(ert-deftest drgnx-lint/no-hard-coded-colours-passes-an-rgb-run ()
+  ;; A terminal's `{rgb}' colour is program data from the hub: the inserter passes it on from the patch (a variable
+  ;; after :foreground, never a string), so it is not a literal; the same code with a literal is one.
+  (let ((file (make-temp-file "drgnx-lint-rgb-" nil ".el")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "(defun rgb-run (fg bg) (list :foreground (plist-get fg :rgb) :background (plist-get bg :rgb)))\n"))
+          (should-not (drgnx-lint--colour-literals (list file)))
+          (with-temp-file file
+            (insert "(defun rgb-run (fg) (list :foreground (or (plist-get fg :rgb) \"#0ab0ff\")))\n"))
+          (should (drgnx-lint--colour-literals (list file))))
+      (delete-file file))))
 
 (defun drgnx-lint--keyboard-key-p (key)
   "KEY (a string, `kbd' form or vector) is a keyboard key — not a mouse, header-line, tab-line or remap event."
@@ -61,7 +93,8 @@
     (cond ((stringp k) (not (string-match-p "mouse\\|wheel\\|\\`<remap>" k)))
           ((vectorp k)
            (let ((first (and (> (length k) 0) (aref k 0))))
-             (not (or (memq first '(remap header-line tab-line mode-line left-fringe right-fringe))
+             ;; `t': a prefix map's default binding, every event no other binding takes (never a key typed as such)
+             (not (or (memq first '(t remap header-line tab-line mode-line left-fringe right-fringe left-margin right-margin))
                       (and (symbolp first) (string-match-p "mouse\\|wheel" (symbol-name first))))))))))
 
 (ert-deftest drgnx-lint/the-key-check-tells-keys-from-mouse ()
@@ -71,7 +104,9 @@
   (should-not (drgnx-lint--keyboard-key-p "<mouse-1>"))
   (should-not (drgnx-lint--keyboard-key-p "<remap> <self-insert-command>"))
   (should-not (drgnx-lint--keyboard-key-p [header-line mouse-1]))
-  (should-not (drgnx-lint--keyboard-key-p [remap kill-line])))
+  (should-not (drgnx-lint--keyboard-key-p [left-margin mouse-1]))
+  (should-not (drgnx-lint--keyboard-key-p [remap kill-line]))
+  (should-not (drgnx-lint--keyboard-key-p [t])))
 
 (ert-deftest drgnx-lint/keys-come-from-the-profiles ()
   ;; Keyboard keys are registry entries in keys/*.eld; code binds only mouse and chrome events.
@@ -80,13 +115,15 @@
     (drgnx-lint--files "wb" "modules")
     (lambda (form)
       (pcase form
-        (`(,(or 'define-key 'keymap-set 'keymap-local-set 'local-set-key) ,_ ,key . ,_)
-         (when (drgnx-lint--keyboard-key-p key) (format "%S binds a keyboard key" (car form))))
+        ;; `special-event-map' holds events Emacs makes, never typed (a key release, a frame's close button)
+        (`(,(or 'define-key 'keymap-set 'keymap-local-set 'local-set-key) ,map ,key . ,_)
+         (when (and (not (eq map 'special-event-map)) (drgnx-lint--keyboard-key-p key))
+           (format "%S binds a keyboard key" (car form))))
         (`(,(or 'global-set-key 'keymap-global-set) . ,_) (format "%S" (car form))))))))
 
-(defconst drgnx-lint--raw-input-maps '(drgnx-live-driving-map)
+(defconst drgnx-lint--raw-input-maps '(drgnx-live-driving-map drgnx-term-mode-map)
   "Keymaps allowed to bind keyboard keys in code: they forward raw input (to a web page, like a terminal's raw map), so
-their keys are not commands and have no registry entries.  Everything else gets its keys from the profiles.")
+their keys are not commands and have no registry entries (the terminal's keys go to its program).  Everything else gets its keys from the profiles.")
 
 (defconst drgnx-lint--decode-maps '(input-decode-map key-translation-map)
   "The terminal's decoding maps: a key sequence computed in code there is what a terminal sends (bytes, CSI forms), not
@@ -94,6 +131,13 @@ a keyboard key of a command.")
 
 (defconst drgnx-lint--decode-map-builders '(drgnx-tty-frames--mok-map drgnx-tty-frames--csi-u-map)
   "Functions that build a keymap for `input-decode-map' from the terminal's key encodings (modifyOtherKeys, CSI u).")
+
+(defconst drgnx-lint--raw-input-builders '(drgnx-term--fill-map)
+  "Functions that fill a raw-input map (`drgnx-lint--raw-input-maps') with every raw event, computed in code.")
+
+(defconst drgnx-lint--state-map-builders '(drgnx-search-edit--vim-prefixes drgnx-search-edit-evil-aux)
+  "Functions that copy into a view's evil auxiliary map what the profiles already put in its state map (its prefixes, the
+binding the map had before): the keys come from the profiles, computed only because they are copied.")
 
 (defun drgnx-lint--names-mouse-p (key)
   "Does the computed KEY form name a mouse or wheel event (a quoted mouse-1, wheel-up…)?"
@@ -108,7 +152,9 @@ a keyboard key of a command.")
     (dolist (f (drgnx-lint--files "wb" "modules"))
       (dolist (top (drgnx-lint--forms f))
         (unless (or (and (memq (car-safe top) '(defvar defconst defvar-keymap)) (memq (cadr top) drgnx-lint--raw-input-maps))
-                    (and (eq (car-safe top) 'defun) (memq (cadr top) drgnx-lint--decode-map-builders)))
+                    (and (eq (car-safe top) 'defun) (memq (cadr top) (append drgnx-lint--decode-map-builders
+                                                                             drgnx-lint--raw-input-builders
+                                                                             drgnx-lint--state-map-builders))))
           (drgnx-lint--walk top (lambda (form)
                                   (pcase form
                                     (`(,(or 'define-key 'keymap-set 'keymap-local-set 'local-set-key) ,map ,key . ,_)

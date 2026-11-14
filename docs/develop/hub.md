@@ -10,8 +10,7 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   `drgnx-hub-restart-now` and the write queue (`drgnx hub start|stop|status` is `bin/drgnx` calling the binary: no Emacs).
   It requires `cl-lib`, `subr-x`, `seq`, `drgnx-paths`, `drgnx-guard`, `drgnx-timer`, `drgnx-file`, `drgnx-notice`,
   `drgnx-agents-matrix` and `drgnx-work-db` (the AI provider list comes from `drgnx-ai`, which the caller has loaded).
-  There is no server half in Emacs: the hub is the Rust binary. The message prompt the cockpit preview uses is
-  `drgnx-coord-message-prompt` (`core/drgnx-coord-read.el`). A `declare-function` of a client function names
+  There is no server half in Emacs: the hub is the Rust binary. A `declare-function` of a client function names
   `"drgnx-hub-client"`. The editor's jobs go through `core/drgnx-exec.el`, a cache fed by `exec/list` and the hub's
   `exec-done` events ([Jobs](#jobs-exec)).
 - **The hub's environment.** One hub runs per drgnx data directory, started as
@@ -62,7 +61,7 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
      started: the hub serves every method itself ([The registry](#the-registry-protocol-v1)).
 
   It stops on SIGTERM, on SIGINT, or one second after the `--parent-pid` process is gone (`kill(pid, 0)`; the last
-  `--parent-pid` counts). It stops accepting, ends its own sessions, then removes the socket and the cap while the
+  `--parent-pid` counts; real time, also under `--test-clock`). It stops accepting, ends its own sessions, then removes the socket and the cap while the
   lock is still held. It then closes every connection, after what is queued for each is written (at most 1 s for all
   of them), and the outside bridges' connections `mcp/attach` handed to MCP, so its clients see the end before the hub
   waits on anything that can hang. Last, it stops its store
@@ -74,8 +73,22 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   the newest 7 kept, written by tracing-appender's non-blocking worker). Warnings and errors also go to stderr, behind
   `<4>` / `<3>` when `JOURNAL_STREAM` is set (the journal under systemd). `DRGNX_RATATOSKR_LOG` takes a `Targets`
   string (`info`, the default; `warn,drgnx_ratatoskr::conn=debug`). The cap, keys and params are never logged. The
+  stall watchdog (`stall.rs`) watches the runtime's two async workers: a task beats every 50 ms, and a plain thread
+  warns `the runtime stalled` when a beat is later than the threshold or a named task's poll has run that long, with
+  every poll in progress (thread, task name, how long) and, on Linux, each worker's kernel state, wait channel and
+  syscall from `/proc`. `DRGNX_RATATOSKR_STALL_MS` sets the threshold; without it the watchdog runs at 250 ms in a
+  `test-hooks` build (conformance, the perf and UI runs) and is off in the installed hub, whose idle wakeups it would
+  multiply; it is always off on the virtual clock. `DRGNX_RATATOSKR_STALL_FILE` also appends each report to that
+  file. The watchdog stops as the server's run returns, before the runtime shuts down (whose end stops the heartbeat:
+  it was reported as a stall that never ended). A file read or written on a task's path never runs on a worker, since a slow disk (or a stderr nobody reads)
+  would hold it: a session's files are written in order by `disk::Ordered` on the blocking pool (a failed write is
+  logged), a resume reads the session's meta, transcript, queue and wheel there, a folder an agent works in is looked
+  at there, an MCP session's owner is looked up in `/proc` and its sockets and directory removed there, and stderr's warnings go through a queue of their own that drops lines when full and says how many. The
+  tests make the file a FIFO nobody reads (`attach_tests.rs`, `log_tests.rs`). The
   cargo feature `test-hooks` (off in the binary install.sh builds) holds the test-only surfaces: the `__test_flood`
-  method, `--idle-tick-ms N` (the restart-when-idle tick), `--test-clock`, `__test_advance`, `--test-sequencer` and
+  method, `__test_matrix_ask {action, who, session?, plan?, facts?}` (the matrix gate asked as the hub's own callers
+  ask it, answered `{gate, card?, why?}`: the browser card rows raise their cards with it), `--idle-tick-ms N` (the
+  restart-when-idle tick), `--test-clock`, `__test_advance`, `--test-sequencer` and
   `__test_barrier` ([Test hooks](#test-hooks)), `--test-hold-store` (at the hub's end runtime.db's thread is held by a
   job until the hub gets SIGUSR1, with one write queued behind it, so a test sees the end close its connections first
   and then write that queue, or a second SIGTERM abandon it; only SIGUSR1 releases the job, never the runtime's end),
@@ -99,7 +112,12 @@ log when the wait timed out, and the log's directory); **3** when a Lisp hub fro
 |---|---|---|
 | Linux with a user systemd (the manager's `systemd` directory in `XDG_RUNTIME_DIR`) | `systemd-run --user --unit=ratatoskr-HASH --collect -p Restart=on-failure -p RestartForceExitStatus=75 -p "RestartPreventExitStatus=1 2 3" -p KillMode=mixed --setenv=NAME… ratatoskr serve`; "unit already exists" counts as success (two `ensure`s racing both then ping) | on a crash and on 75; never on 1, 2, 3 (`Restart=on-failure` alone restarts every non-zero exit until the start limit) |
 | macOS with a `gui/UID` domain | `<state>/hub/launchd.plist` (0600; label `org.blackdragonfoundation.ratatoskr.HASH`; `KeepAlive {SuccessfulExit: false}`, `ProcessType Background`; `serve --supervisor launchd`), then `launchctl bootstrap gui/UID <plist>`, or `kickstart` when `launchctl print gui/UID/LABEL` finds it loaded (a second `bootstrap` fails); a loaded label whose plist text changed (a new `DRGNX_EMACS`, a new `SSH_AUTH_SOCK`) gets `bootout`, then `bootstrap`, since `kickstart` would keep the old arguments and environment until logout. No domain (an SSH session): the self-detach row, with a line on stderr saying why | on a crash and on 75; `serve --supervisor launchd` maps exits 1, 2 and 3 to 0 after logging the real code, because launchd restarts on every non-zero exit |
-| none (`RATATOSKR_SUPERVISOR=none`, containers, no user manager) | the binary starts itself: `serve --supervisor self` in a session of its own (`setsid`), stdio on `/dev/null`; every descriptor is close-on-exec | no: a `restart` re-executes the binary instead |
+| none (`RATATOSKR_SUPERVISOR=none`, containers, no user manager) | the binary starts itself: `serve --supervisor self` in a session of its own (`setsid`), stdio on `/dev/null`; every descriptor from 3 up is close-on-exec in the child, whatever the caller left inheritable | no: a `restart` re-executes the binary instead |
+
+A hub that re-executes itself for a restart sets `RATATOSKR_RESTARTED=1` for the new image, which then tries the lock
+again for up to a second (20 × 50 ms) if it finds it held: the exec lets go of the predecessor's descriptor an instant
+before the image takes it, and an `ensure` landing in that instant could take it first (the loser exits 3, one hub
+serves). A start without it never waits.
 
 Only variable *names* go to a supervisor (`--setenv=NAME`, the plist's environment from the same names), each only
 when set: `DRGNX_DATA_DIR DRGNX_CONFIG_DIR XDG_RUNTIME_DIR XDG_STATE_HOME XDG_DATA_HOME XDG_CONFIG_HOME XDG_CACHE_HOME
@@ -157,8 +175,17 @@ editor keeps its keys for the next hand-over; start the hub outside the debugger
 `ratatoskr status [--json]` is `status` as a user client (with `"running": true` added with `--json`); with no hub it
 prints `{"running": false}` and exits 1. `ratatoskr doctor --json` prints `{binary: {path, commit, test_hooks},
 running: {commit, pid}?, gateway: {port, registrations, providers, keys_held, warnings, keys_refused?}?, socket_dir:
-{path, mode, ok}, sqlite, job_agents}` (`gateway` is the running hub's: the providers named in `keys_held`, never a key;
-`keys_refused` only from a hub that could not be hardened, above). `ratatoskr restart` calls `restart`.
+{path, mode, ok}, sqlite, job_agents, exe_mode, container_net}` (`container_net`, the text's `networked container jobs:` line,
+says whether container jobs can run here: refused first for a confined `user_u` login, `sleipnir::linux::confined`,
+then without podman, then by `podman info`'s checks; `gateway` is the running hub's: the providers named in `keys_held`, never a key;
+`keys_refused` only from a hub that could not be hardened, above). `exe_mode` (the text's `files run after writing:` line) says how a file the hub writes or copies and then runs is kept from ETXTBSY: `private-table` (the writing on a thread with its own file table), `lock` (where `unshare` is refused, as Docker's default seccomp profile does: a process-wide lock held shared by each write and exclusively by each spawn through draugr; a raw spawn elsewhere is outside it) or `direct` (not Linux). `ratatoskr restart` calls `restart`.
+
+**A recorded or replayed run.** `DRGNX_RECORD=DIR` or `DRGNX_REPLAY=DIR` in `serve`'s environment makes this run a
+recording or a replay ([recordings.md](recordings.md)); both at once, or a replay of what is not a recording this hub
+reads, exits 1 at start. `status` then has `recording: {mode: "record" | "replay", dir}`, and the log says it once.
+Recording, the gateway's tap writes each attempt and every gateway token is scrubbed from what is written; replaying,
+`ratatoskr-mock llm --replay DIR` is started beside the hub (`--parent` it) and every provider's base is `/p/ID` on it,
+keyless.
 
 **`restart`** (user class) answers `true`, then the hub stops as for `shutdown` and exits **75**. Under `--supervisor self`, where nothing would start it again, it releases
 its socket and cap and executes the binary again with the same arguments instead (the pid stays; the lock descriptor is
@@ -168,10 +195,12 @@ close-on-exec, so the new image takes the lock at the exec).
 at start names the file on disk; macOS `_NSGetExecutablePath` and `realpath`) and records that path's device, inode
 and mtime. Every 2 s it `stat`s **that path**, never `/proc/self/exe`: the link follows the running inode, which a
 rename-replace (an update) leaves alone, so it would never change. A changed stamp runs `<path> version --json` with a
-5 s deadline; only an answer with another `commit` counts, and a missing, half-written or failing file is logged and
-looked at again at the next tick (the same commit under a new stamp becomes the baseline, so a rebuild that says the
-same commit — `unknown`, a build without `DRGNX_BUILD_COMMIT`, the same `HEAD-dirty` while developing — is never
-picked up: `drgnx hub stop` by hand, and the next start runs the new build). Once another build is confirmed, the `notice` event
+5 s deadline; only an answer with another `commit` or another `build_id` counts (`build_id` is the unix second build.rs
+ran, which it does again whenever a source file of the crate changes, so a rebuild that says the same commit —
+`unknown`, a build without `DRGNX_BUILD_COMMIT`, the same `HEAD-dirty` while developing — is another build; a file with
+no `build_id` is from before it and counts as another build too), and a missing, half-written or failing file is logged
+and looked at again at the next tick (the same commit and build id under a new stamp, a touch or a re-install of the same
+build, becomes the baseline). Once another build is confirmed, the `notice` event
 `{source: "hub", severity: "warn", id: "restart-when-idle", life: "condition", text: "drgnx was updated; the hub
 restarts when its N running turns finish", command: "hub-restart-now"}` is sent (again when N changes), and the hub
 exits 75 the first time nothing is busy: **idle** is none of the hub's own sessions running a turn (an idle chat does
@@ -230,7 +259,8 @@ Every timer of the hub and every reading of its time go through `drgnx-ratatoskr
 `tokio::time::Instant`), `wall()` and `wall_secs()` (the time of day), `sleep`, `timeout`, `interval` (a late tick
 moves the next ones), and `spawn(origin, future)`, which names a task (`"module:what"`). In a release build each is
 tokio's or std's, inlined. `real_now()` is real time on every clock, for a blocking thread's limit on something outside
-the hub (a podman pull). The session's update throttle (`EMIT_EVERY`, 50 ms), its Stop timers (`STOP_ANSWER`, the
+the hub (a podman pull); `real_interval(period)` ticks on real time on every clock, for watching something outside
+the hub (the `--parent-pid` process). The session's update throttle (`EMIT_EVERY`, 50 ms), its Stop timers (`STOP_ANSWER`, the
 close when idle), a move's wait, a connection's `STUCK_AFTER` and flush, and a job's time box and stop all read it,
 and so does every other timer: the hub's tick loops (sessions, delivery, schema, runner, supervisor, manager, idle),
 the debounces, the paced reads, the accept back-off, the sandbox probe's limits and the stored timestamps. A `Delay`
@@ -247,7 +277,8 @@ file:line. Its `no_raw_spawn_outside_the_clock` counts each file's raw `tokio::s
 with a reason per entry: the tasks that never write to a client (the gateway's listeners, the accept loops and the
 connections, whose writes are serving steps), and those that do and are not on the clock yet (a session's run and
 turns, a job's start and wake, a plan task's start). A new raw spawn, or one that goes, changes the count and fails
-it. The blocking command-line code (`client`, `supervise`, `doctor`) has no virtual clock; its deadlines read
+it. Its `no_raw_blocking_outside_the_clock` does the same for `spawn_blocking` against `RAW_BLOCKINGS`: a hub task's
+blocking call is `clock::blocking`, a real wait a test's barrier sees. The blocking command-line code (`client`, `supervise`, `doctor`) has no virtual clock; its deadlines read
 `clock::real_now()`.
 
 **`serve --test-clock`** installs a virtual clock before any task starts. It stands still, whatever real time passes,
@@ -256,13 +287,18 @@ the real clock refuses it (`not-allowed`, "the hub runs on the real clock"). tok
 runtime stays multi-thread, and a paused tokio clock jumps ahead whenever the runtime is idle.
 
 An advance moves the clock to each due deadline in order. Sleepers due at one instant wake in the order they began to
-wait, one at a time. After each wake it waits until the woken task, and every task that one spawned, waits on the
-clock again or has ended. Before moving the clock it waits until every task spawned since has run once, so a timer it
-started is in the queue. It then answers:
+wait, one at a time. After each wake it waits until the woken task, and every task that one spawned, is parked or has
+ended. A task is parked between polls with no wake pending: every wake it was given, by the clock or by anything else
+(a channel, a socket), seen by a poll that began after it. What it then waits on does not matter, so a loop that sleeps
+and then waits for its next signal on a channel is parked once its poll ends. A wake tokio holds back (a `yield_now`'s,
+a spent budget's: deferred until the worker runs out of work) is not seen on the task, so the advance also waits until
+no clock task runs and every runtime worker is parked (`clock::worker_parks`, the runtime's park hook): a worker parks
+only once it holds no deferred wake. Before moving the clock it waits until
+every task spawned since has run once, so a timer it started is in the queue. It then answers:
 
 - `woken`: the sleepers it woke.
-- `busy`: the origins of tasks still running after 5 s of real time. The advance names them and goes on, never hangs.
-  A task woken from the clock that then waits on something else (a channel, a child's I/O) is busy.
+- `busy`: the origins of tasks still running after 5 s of real time: still polled, or woken again and again. The
+  advance names them and goes on, never hangs.
 - `unnamed`: woken sleepers in a task not started by `clock::spawn`. The advance cannot wait for those, so a test
   that sees `unnamed > 0` is not deterministic there.
 
@@ -311,21 +347,50 @@ sends, counting across its connections in the order it wrote them). The stamp is
 lowest pending line:
 
 1. Every connection's socket is read to `WouldBlock` or EOF, and every line read is served.
-2. The tasks inside a **real wait** are waited for, up to 5 s of real time, until each has left it and finished the
-   poll that left it; those whose origin `waiting_ok` lists are not waited for. A real wait is one the hub's code marks
-   with `clock::real`: a wait on something outside the clock that ends by itself. Marked today: a job's watcher
-   (`exec:watch`), from the child's start to its recorded end.
+2. The hub settles, up to 5 s of real time: every task started by `clock::spawn` is parked (no wake pending, not in a
+   poll, the workers parked as for an advance) and outside any **real wait**, and nothing outside the tasks is in
+   flight. Tasks whose origin `waiting_ok`
+   lists are not waited for. So a task another task wakes through a channel (a job's end waking its session, an event
+   bifrost put on `gateway:events`) has run before the barrier goes on. A real wait is a wait on something outside the
+   clock that ends by itself:
+   - `clock::real(f)`: a DNS lookup or connect, a download, the embed worker's answer, and every blocking call of the
+     hub's tasks (`clock::blocking`, the one door to `spawn_blocking`; `tests/hub_reads_its_clock.rs` counts the raw
+     ones against a list).
+   - a store thread's answer (runtime.db, work.db's writer and read pools): urdr marks the waiting task itself
+     (`urdr::wait`, with its `test-hooks`).
+   - `clock::real_long(f)`: a job's watcher (`exec:watch`), from the child's start to its recorded end.
+   - outside the tasks, `gateway:requests`: the gateway's requests from their send until their `request` (and
+     `budget`) event is on the channel, so a client that read its whole answer sees the event before the marker.
+   The first two end by themselves, however long a loaded machine makes them (a commit's fsync can take seconds), so
+   the barrier waits for them with no limit of its own (`clock::settle_barrier`), and the 5 s count again from the
+   end of the last one. One that never ends is a hang: the barrier does not answer, and the asker's own deadline
+   fails the test (the gate's `drgnx-test-gate-block-secs`, "the hub did not answer the gate"). The 5 s stay for a
+   job's watcher, `gateway:requests` and tasks still running. `__test_real_wait {ms?}` (test-hooks) starts a task
+   `test:real-wait` inside a blocking wait of MS ms, or one that never ends without MS: the gate's tests use it.
 3. The tasks spawned since then are run once (an advance of 0 ms), and the held writes are released.
 4. `{"event": "__test_marker", "data": {"marker": M}}` is written on every live connection. M counts from 1 per hub.
-5. The answer: `{"marker": M, "unnamed": n, "busy": [origins], "waiting": [origins]}`. `n` counts the writes from
+5. The answer: `{"marker": M, "unnamed": n, "busy": [origins], "waiting": [origins], "sites": [sites]}`. `n` counts the writes from
    tasks without an origin since the last barrier. The gate fails a test when n > 0, since such writes are released
    here and not by the test's own advance. `busy` names tasks still running after 5 s. `waiting` names the tasks
-   still inside a real wait: the allowed ones, and those still inside after the 5 s. The gate fails a test on any its
-   `drgnx-test-gate-waiting-ok` does not list, since what they write later is not ordered by the test.
+   still inside a real wait (and `gateway:requests` while requests are in flight): the allowed ones, and the
+   watchers still inside after the 5 s. The gate fails a test on any its `drgnx-test-gate-waiting-ok` does not list, since what they
+   write later is not ordered by the test. `sites` says where each of those waits began and for how long, as
+   `"ORIGIN at FILE:LINE for N ms"`: the line of the `clock::blocking`, `clock::real` or `clock::real_long` call (they
+   are `#[track_caller]`), or for a store thread's answer the urdr line that waits. The gate's failure prints them, so
+   a rare red names its line.
 
-A real wait the code does not mark is not seen: a clock task waiting on a store thread's answer, on bifrost's events
-channel (`gateway:events`), or on a channel another task fills after its own real wait. A barrier there answers as if
-the task were parked.
+An advance waits for a woken task's `clock::real` waits too (it is not parked inside one, whatever clock timer it also
+holds), but not for a `clock::real_long` one: the advance may be what ends it (a job's time box). A job's kill after
+its time box is a `clock::real` wait, so an advance past the time box answers after the job's end. A wait the code does
+not mark, on something outside the hub that has not answered yet (a raw thread, a raw-spawned task's work), is still
+not seen: a barrier there answers as if the task were parked.
+
+**In-process tests** (a crate test that runs the hub's tasks itself, as `tests/search_index.rs` does with a project's
+tier 2) call `clock::install_virtual()`, `clock::advance(d)` and `clock::barrier()`, the barrier's steps 2 and 3, which
+answers the origins still waiting or busy (none when it held). Both wait for the runtime's workers to park, which only
+a runtime built with `clock::worker_parks` and `clock::worker_unparks` as its park hooks reports: on a plain
+`#[tokio::test]` runtime every advance runs out its 5 s of real time instead. The clock is the process's, so these
+tests share one such runtime and run one at a time.
 
 A hub without the sequencer refuses `__test_barrier` (`not-allowed`). A release build has none of these: `__test_advance`
 and `__test_barrier` are unknown methods (`no-method`), `__seq` is dropped and listed in the answer's `ignored`, and
@@ -369,7 +434,7 @@ socket waits 20 ms before Emacs tries again, and macOS's local sockets hold 8 KB
 few MB takes seconds there (the hub writes ~400 KB/s to a client on macOS) and must not count as a stopped client. Only
 the innermost write in progress is judged by time (`drgnx-hub--writing`): one beneath it cannot go on meanwhile, so it gets
 back the time each write above it took (only that: a stopped client beneath writes to others is still dropped); its Emacs
-connects again (the Agents module's idle timer, the Work cockpit's What needs you refresh) — meanwhile it shows the hub's sessions as
+connects again (the Agents module's idle timer, the Work space's What needs you refresh) — meanwhile it shows the hub's sessions as
 ended.
 Snapshots and transcript entries travel as **JSON objects** ("Records 2" below). Events: from the gateway `request` (job, task, agent, provider, model, status, input, output, cost), `fallback`
 (agent, from, to, why), `budget` (job, spent, budget); from jobs `card` (id, job, task, kind, title), `job` (id: its status, tasks or open cards changed) and `fallback` (job, task,
@@ -377,6 +442,32 @@ agent, from, to, why); from sessions `agent` (id, seq, session — the snapshot)
 `agent-entries` (id, seq, entries: [[index, Entry]…], the entries new or changed since the last time — entries change
 in place: chunks appended, tool calls updated), at most one of each per session per 50 ms; `lease-released` (task,
 agent, job); `events` (below).
+
+**Who gets what.** `agent` goes to every subscribed connection, and carries no tool call's `rawInput` (a permission
+request's tool call included). A connection gets a session's snapshots at once (at most one per 50 ms) only while it
+shows the session (it subscribed to its entries); for every other session it gets at most 30 snapshots a second on the
+hub's clock, and when that is reached only the latest state of each session waits for the next second. The snapshot's
+`turns` counts the turns the hub process started for the session, so an editor that saw it rise with no `busy` in
+between knows whole turns went by (a turn can be shorter than the update throttle). `agent-entries` goes only to the connections that called `agents/entries/subscribe`
+for that session (the answer is the change number to continue from; the connection's subscriptions end with it, and
+`agents/entries/unsubscribe` ends one), and its tool entries have no `rawInput` either (a string `url` of the input
+stays as `url`). An editor that needs a tool call's input asks `agents/tool-input` (at most 256 KiB of its JSON text;
+a larger one comes back cut, as a string, with `truncated`). The hub keeps the whole input. A tool entry's `content`
+text over 64 KiB goes in an event as its first and last 32 KiB with `outputBytes`, the whole size; the hub itself keeps
+the first and last 8 MiB of an output past 16 MiB. `agents/tool-output {id, tool_call, from, to}` answers
+`{text, total_bytes, truncated}`: bytes `from..to` (cut at character boundaries, so the next `from` is `from` plus
+`text`'s length), at most 256 KiB; `truncated` says the answer holds less than was asked. A range that starts in
+output the hub did not keep gets the kept head and tail with a line saying how many bytes are gone. An agent message
+entry in an event carries `blocks`, `[{block, kind, spans: [{text, style}]}]`, the first time and for a connection
+that has just subscribed, then `patch`, the blocks that are new or changed (same shape; only the last block of the
+text is parsed again as it streams); `kind` is `paragraph`, `heading`, `code`, `quote`, `list`, `rule`, `table` or
+`html`, `style` is `text` or space-joined `emph`, `strong`, `strike`, `link`, `code`, `h1`..`h6`. `text` stays as it
+was. `agents/pause` cancels a
+busy session's turn once the tool call running now completes, and holds its queue. A mirror (below) subscribes while a
+transcript of its session is shown (`drgnx-agents-mirror-show` and `-hide`, run from `window-buffer-change-functions`
+for transcript buffers only) and fetches the transcript then; a session nobody shows has its turns told by the
+snapshots' `status` and `turns`. `agents/get` still returns whole entries, `rawInput` included: it is one editor
+asking for one session on demand, not a broadcast.
 
 **Mirrors** (`core/drgnx-agents-mirror.el`): the editing Emacs keeps a `drgnx-agent-session` per hub session (`remote`
 = its id) filled from these events; an action on a mirror goes to the hub (`drgnx-agents--remote`, never waiting).
@@ -396,7 +487,9 @@ the CLI only — it waits), `drgnx-hub-call` (asynchronous, with a deadline), `d
 again before the hub answers — up to `drgnx-hub-subscribe-deadline`, 5 s, after which an unanswered one is given up
 and the next call subscribes again; each new one hands over the keys this Emacs holds) + `drgnx-hub-event-functions`. The unit
 runner sets `DRGNX_NO_HUB_START=1`: a test never starts a hub that would outlive the suite unless it unsets it (the
-hub's own tests do, and stop what they start). It also sets `DRGNX_HUB_PARENT_PID` to its own pid, which a hub
+hub's own tests do, and stop what they start). With starting off, a hub that takes the connection but does not answer
+the ping probe within its second (a busy one: thirty agents streaming) still counts as running (`drgnx-hub--accepts-p`),
+so `drgnx-hub-ensure` does not fail on a hub that is there. It also sets `DRGNX_HUB_PARENT_PID` to its own pid, which a hub
 inherits: a hub whose parent is gone exits (checked each second), so an interrupted run leaves none behind.
 
 **Ratatoskr's socket** (`runtime/crates/drgnx-ratatoskr`: `lock.rs`, `conn.rs`, `server.rs`) keeps the same path,
@@ -461,13 +554,19 @@ tested over a socket pair in `conn/tests.rs`:
 - the client's EOF is the last read event;
 - the writer reports at most one of a refused and a stuck write, then ends.
 
+The client in these tests leaves with a `shutdown`, never by closing its end alone: a child another test of the same
+binary is spawning holds a copy of every descriptor from its fork to its exec, so a close ends the stream only once
+that copy is gone too. `a_drain_reads_what_the_socket_holds_before_the_reactor_saw_it` holds such a copy throughout.
+
 ### hello and versions
 
 Ratatoskr's `hello` (protocol v1, `runtime/crates/drgnx-ratatoskr/src/hello.rs`) closes SB-T12-6: a hello line is
 worth nothing on another connection, because each connection's challenge differs.
 
 1. On accept the hub sends `{"event":"challenge","data":{"nonce":HUB_NONCE}}`, 32 lowercase hex from 16 random bytes.
-2. The client sends `hello` `{proto, nonce, drgnx_version?, schema?, records?, client?, proof?}`. `proof` is
+2. The client sends `hello` `{proto, nonce, drgnx_version?, schema?, records?, client?, proof?, cwd?, session?}`.
+   An editor's `session` names its Emacs session: its terminals draw on that connection again ([the
+   terminal](terminal.md), "Lifetime"). `proof` is
    `HMAC-SHA256(cap, "drgnx-hub client " + HUB_NONCE + " " + nonce)` as 64 lowercase hex, keyed with the cap file's 64
    hex characters.
 3. The hub compares the decoded digests in constant time:
@@ -495,14 +594,14 @@ the same directory.
 
 **The store at start.** Before it serves anything the hub opens `<data>/work.db` with the graph writer and
 `norn::migrate7`'s opening rule ([store.md](store.md#migration-from-schema-6-task-11)), and waits for its answer: a
-missing file is made at schema 8, a schema-6 one is copied to `<data>/backup/work-pre7-<unix>.db`, checked, and
-migrated in one transaction, so the first request sees schema 8. A newer file (above 8) makes the hub read-only; a
+missing file is made at schema 12, a schema-6 one is copied to `<data>/backup/work-pre7-<unix>.db`, checked, and
+migrated in one transaction, so the first request sees schema 12. A newer file (above 12) makes the hub read-only; a
 file below 6, or a migration that failed, leaves the writer not ready (writes answer its text) and the hub serves
 the rest. A failed migration is not tried again until the hub restarts. The coordination writer
 (`norn::store::CoordDb`) and the coordination tools' graph store run on the same file.
 
 **`work.db` read-only.** The front reads work.db through `urdr::open_readonly` on a thread of its own (`store.rs`).
-It reads `meta.schema` (schema 7's `meta` view over `kv`) at the start and every 2 s. While it is above this hub's 8,
+It reads `meta.schema` (schema 7's `meta` view over `kv`) at the start and every 2 s. While it is above this hub's 12,
 the hub is read-only: a method that writes is `schema`, and `status.read_only` is the schema.
 
 **Rolling back.** The way back from schema 7 is `drgnx hub stop`, then `ratatoskr store restore-pre7 --yes`: the
@@ -580,10 +679,13 @@ opening rule's text (the writer looks at the file once more first); a newer one 
 `best_effort` event and `coord/agent`'s `seen` answer `{}`); a writer's refusal (a `seen` from the future, a review
 state) `invalid-params` with its text. `coord/prune` never fails (`{pruned: false}`). `coord/notify`, from any
 class, wakes the `events` broadcast. `status` says `store: {schema, writer: ready | not-ready |
-read-only, writes, migrated_at?, failed?, wal_bytes?, last_backup?, backup_ok?, denied_in?}`: the writer's state
-from its opening rule's last answer, the transactions the front's methods committed since start, when the move from
-schema 6 committed, why a migration failed, the WAL's size, and the copies that still hold what the deny-list kept
-out of the migration (`last_backup` and `backup_ok` come with the daily backups).
+read-only, writes, migrated_at?, failed?, wal_bytes?, last_backup?, backup_ok?, history_backup?, denied_in?}`: the
+writer's state from its opening rule's last answer, the transactions the front's methods committed since start, when the
+move from schema 6 committed, why a migration failed, the WAL's size, and the copies that still hold what the deny-list
+kept out of the migration (`last_backup` and `backup_ok` come with the daily backups; `history_backup` says whether the
+last night's copies of the edit histories were all good). `graph/backup` and the nightly timer also copy each
+project's `history.db` to `<data>/backup/history-<project>.db` (one copy each, replaced, never rotated) and answer
+`history: [{project, path, ok, bytes}]`; a failed one never fails the `work.db` copy.
 
 `messages/send`'s `sender` is refused from every connection (`invalid-params` at `sender`): a message's sender is
 its connection's, and the hub is work.db's one writer (coordination.md, "Who writes what").
@@ -681,7 +783,7 @@ reads its `methods`. `(drgnx-hub-skew REPLY)` is:
 |---|---|
 | `:legacy` (no challenge, or `no method hello`) | `restart-when-idle` |
 | `proto` missing or below `drgnx-hub-proto-min`, or `proto_min` above `drgnx-hub-proto` | `incompatible`: the connection is closed, its calls fail, an editor tells the user |
-| `records` other than 2; `drgnx_version` other than the binary on disk's commit (when that is known); `schema` other than `drgnx-work-db-schema-version` (0, no work.db yet, counts as the same) | `restart-when-idle` |
+| `records` other than 2; `drgnx_version` other than the binary on disk's commit (when that is known); `schema` below `drgnx-work-db-schema-version` or above `drgnx-hub-schema-readable-max` (10: schemas 8 to 10 keep schema 7's compatibility views; 0, no work.db yet, counts as readable) | `restart-when-idle` |
 | anything else | `ok` |
 
 `drgnx-hub-skew-functions` gets `(SKEW REPLY)` after each hello, inside the guard. The agents mirror pauses while
@@ -710,8 +812,10 @@ timer, file or hook. `test/unit/hub-core-test.el` runs it in every order of its 
 (`:drgnx-state`, `-queue`, `-proven`, `-asked`, `-events`, `:since`, and whether each is live) into a state. It calls
 the core, writes the new state back, and only then runs the effects, so an effect that comes back (a sentinel
 `delete-process` runs at once, a callback that calls the hub) steps from the new state. The globals stay the truth
-between steps: a test may let-bind them or set a connection's property. Its two I/O points stay
-`drgnx-hub--open` (returns the process) and `drgnx-hub--send-line`.
+between steps: a test may let-bind them or set a connection's property. An event line is the exception
+(`drgnx-hub--step-event`): it changes nothing in the client, so the core gets only the connection's subscription mark,
+no snapshot, and its step hands back the same state with the one effect that runs `drgnx-hub-event-functions`.
+Its two I/O points stay `drgnx-hub--open` (returns the process) and `drgnx-hub--send-line`.
 
 **Events** (`drgnx-hub-core-event-kinds`), each fed by one shell entry point:
 
@@ -731,6 +835,16 @@ callback, inside the guard), `notify` and `hook`. A hook is what only the shell 
 hello (the cap is read there; the core gets the proof the hub must give back, never the cap), read what arrived
 before giving up on a challenge, run the event, skew, disconnect and connected hooks, the hand-over, presence, the
 jobs' cache, and dial.
+
+**Who splits the lines.** The shell does, in one of two ways, and the core gets the same events from both. By default
+the connection's filter (`drgnx-hub--client-filter`, through `drgnx-hub--lines`) cuts the chunks into lines and parses
+them. With Nidhogg's `nidhogg-workers-framing` on, `drgnx-hub--open` hands the connection to Nidhogg's reader
+(`drgnx-hub--frame`: `lines` framing, parsed there, no line limit, as the client has none today), and the main thread
+gets batches (`drgnx-hub--client-batch`) of parsed messages; a line that is not JSON, or is `null`, is dropped on both
+paths. The connection is `(binary . utf-8-unix)`: bytes in, which framing needs, UTF-8 out. One difference: a last line
+with no newline before the end of the stream is a message when framed, and dropped by the filter. Without the feature
+or the switch, or when the framing is refused, the filter reads. The probe (`drgnx-hub--ping-socket`) is never framed.
+`test/unit/hub-client-frame-test.el` checks that both paths give the same events, over Nidhogg's own framer.
 
 **The shell's edges**, which the every-order tests assume and `test/unit/hub-client-shell-test.el` checks with
 scripted peers: a connection's lines reach the core in the order they were written (so the challenge, Ratatoskr's
@@ -754,6 +868,15 @@ never waits: CALLBACK gets nil when a hub answers, or the reason (the process's 
 path (`inhibit-interaction`) it returns at once and they go, or a `hub` notice `start` is posted, when the start ends. `DRGNX_NO_HUB_START` is honoured; with
 no binary every caller says "Ratatoskr is not built: run `drgnx runtime build`".
 
+**A command that needs the subscription.** `drgnx-hub-start-for-command ON-FAIL` is for commands the user invoked whose
+answer comes on the subscribed connection: New Terminal and Reconnect (`drgnx-term`), the Search view's key, `RET` and
+Search in Files, and the Work space. With no subscription up or being made it calls `drgnx-hub--ensure-running` (not
+waited for) and connects when the hub answers; ON-FAIL gets the reason when no hub can be had (the terminal fails and
+says it in the echo area, the Search view on its status line). In a daemon path (`inhibit-interaction`) it starts
+nothing and only connects to a hub already there: timers, hooks, sentinels and startup never start one. Before it,
+these only connected, so with no hub running they waited for good. The Extensions view and Debug's commands ask the hub
+by call, which signals "no hub" and shows the reason; they do not start it.
+
 **At daemon start.** The nightly graph backup (`backup_timer.rs`) runs inside the hub, so a daemon must not wait for AI
 to start one. `drgnx-hub-ask-at-daemon-start` (core, on `emacs-startup-hook`) schedules the layer timer
 `hub-daemon-start` (2 s, owner `:core`) in a daemon only: not in batch, not in a plain Emacs, not with
@@ -761,7 +884,10 @@ to start one. `drgnx-hub-ask-at-daemon-start` (core, on `emacs-startup-hook`) sc
 start is a `hub` warning notice. It does not connect and hands over no keys or settings: a key-less hub starts no
 provider; keys arrive with the first AI use (`drgnx-hub-hand-over-keys`) or when the hub asks (`gateway/need-keys`).
 `drgnx doctor` (the `store` check) says the hub is down, and the nightly cannot run, when the last backup is old and no
-hub runs.
+hub runs. The copy runs on its own task through `backup_timer::guarded`, which clears the running flag on every way
+out, a panic included, so one failed night never stops the next. `test/live/hub-daemon-start-test.el` starts a real daemon
+session with a real hub (`DRGNX_RATATOSKR_BIN`), sees the hub come up and the nightly copy appear, and reads the idle
+hub's CPU and resident memory from `/proc` (about 0.1 % CPU and 63 MB for a debug build).
 
 The hub's `notice` event (sent when the binary on disk changed) is posted by `drgnx-hub--note-notice` (an editor's
 subscription) as a notice of source `hub`, a condition with command `hub-restart-now`. A hello that finds the hub
@@ -782,7 +908,7 @@ chunks costs its length, not its length times its chunks (HUB-LINES-1, PERF-M3).
 protocol 0, a held hello) are in `test/fixtures/fake-hub.el`. The tests marked "binary" run against Ratatoskr:
 `DRGNX_RATATOSKR_BIN` names it (`bin/drgnx test --container` passes it into the container), they skip without it,
 and `test/no-skip.eld` makes CI fail when they skip. Among them, `editor-traffic-over-ratatoskr` replays what the
-cockpit, the job UI, the agents mirror and `drgnx job` send, with the params their own code builds, over a populated
+agents mirror and `drgnx job` send, with the params their own code builds, over a populated
 store, and fails on any `invalid-params` or `internal`.
 
 ## Events
@@ -814,15 +940,47 @@ the status bar.
 ## Session start: lock, sandbox and matrix
 
 A session starts in this order (`agents/session.rs`): the matrix's cells for the session's columns, `lock::plan` (Claude's
-managed settings plus the deny/ask rules of the user's and the worktree's settings, Codex's `-c` overrides plus
-`projects."<cwd>".trust_level="untrusted"`, Gemini's `--approval-mode default`), a refusal of a worker or manager whose
+managed settings plus the deny/ask rules of the user's and the worktree's settings, Codex's `CODEX_CONFIG` and
+`INITIAL_AGENT_MODE=read-only`, Gemini's `--approval-mode default`, Kimi Code's and DeepSeek Harness's hub-owned homes), then
+the lock's parts that depend on the session's subscribed `before-tool` kinds and folder (`with_hook_asks`: Claude's
+managed ask rules; `with_locks`: Codex's untrusted worktree and managed hook, Gemini's `--admin-policy`, Kimi Code's
+ask rules, DeepSeek Harness's `--patch` overlay; `with_gateway_env`), a refusal of a session that would run a
+subscribed kind unhooked (`lock::hooked`, `lock::unhooked_refusal`: an agent with no lock, a Gemini whose system policy
+shadows the admin policy or whose admin policy Gemini's loader would drop, `gemini_policy_problem`), a refusal of a worker or manager whose
 lock is not enforced unless the preset is autonomous, a refusal of a chat in a project whose `chat.project-read`
 cell is never (the message names the row; it is not started without the project instead), `launch::spawn` (`spawn_plain` for a chat in its own scratch
 directory, `spawn_chat` for a chat in a project: the project read-only, its scratch directory the only writable path;
 test builds spawn the mock unsandboxed), the sandbox status pipe read (`gleipnir::read_status`), the ACP
-handshake, `lock::verify` (a lock that does not hold kills the session). Every permission request then goes through
+handshake, `lock::verify` (a lock that does not hold kills the session; Codex's, proven or not, holds only when the
+mode `session/new`'s answer reports, `hermod::Conn::reported_mode`, is `read-only`; an enforced Gemini's, when its
+`initialize` reports `_meta["_drgnx/panel"].adminPolicy`, only when the admin policy loaded with at least the rules
+the lock wrote, `lock::gemini_policy_confirmed`; Kimi Code's, only when the reported mode is not `plan`,
+`lock::kimi_mode_refused`). A running session's `current_mode_update` to a mode its lock refuses (Kimi Code's `plan`,
+`lock::refused_mode_switch`) ends it the same way. Every permission request then goes through
 `MatrixGate::check` with the session's id (so a manager's delegation applies): allowed answers at once, never
-refuses at once, an ask waits for the user; a session's `exec/start` is checked as `code.edit` the same way.
+refuses at once, an ask waits for the user; a session's `exec/start` is checked as `code.edit` the same way. For the
+browser rows an ask that the user's matrix grant for the session or its plan already covers is allowed with no card
+([coordination.md](coordination.md), "Grant records").
+
+**The lock's files** (`LaunchPlan::ro_files`, `sandbox::lock_files`): one in the session dir (`lock/drgnx-<hash>.toml`,
+Gemini's admin policy, named by the first 16 hex digits of its content's SHA-256 so the rules drgnx's Gemini fork counts
+by file name, `Admin: <name>`, are drgnx's and no system policy's; `lock/dsh-overlay.yml`) is written there, and the agent reads that dir and never writes it on every target; one at a
+fixed path (`/etc/codex/requirements.toml`, `/etc/codex/config.toml`, Kimi Code's `config.toml` in its home) is
+written to the session's scratch and bound read-only at that path, which only the full tier can do: elsewhere the
+launch is refused (`Rule::Setup`). The user's own `/etc` is never touched. Kimi Code's and DeepSeek Harness's hub-owned homes (`<state>/agents/kimi-code`, `<state>/agents/dsh`) lie in the closed state
+folder: `sandbox::context` opens exactly those two inside it (`open_inside_closed`), never `<state>/agents` or a sibling, and
+the lock's files in a home are the read-only copies bound over empty files there. A gateway plan's `gateway_url_env` names the
+variables that get the relay's URL beside `ANTHROPIC_BASE_URL` (Kimi Code's, DeepSeek Harness's).
+
+**The `before_tool` tool** (`agents/before_tool_tool.rs`): a Codex session whose hooks subscribe to a kind other than
+`drgnx` is marked before its MCP session opens (`Sessions::mark_before_tool`), and its socket serves `before_tool
+{tool_name, tool_input, tool_use_id}` beside the coordination tools, outside the hook wrapper they share. Codex's
+managed PreToolUse hook (an `mcp_tool` handler in the lock's `/etc/codex/config.toml`) calls it before each tool: it
+runs `hook_points::before_tool` at `At::Adapter` (no `change`) with the kind of Codex's tool name (its shell `execute`,
+`apply_patch` `edit`, …) and answers `{}`, or a deny in the hook's shape (`hookSpecificOutput.permissionDecision`),
+never an `allow` (Codex's approvals still decide). A hub tool's name is answered `{}` without running anything (it is
+hooked at its server), and the seam records nothing for `mcp__drgnx__before_tool`, so it never hooks itself. Codex
+fails the hook open on a timeout, so the snapshot lists those kinds under `hooked.by_adapter` with that note.
 
 ## Sessions across a restart
 
@@ -845,7 +1003,9 @@ resume, the tick goes on from the store with the same workers, and the wakes sti
   its job is still running.
 - **If the agent can neither resume nor load**: a fresh session on the same transcript, told so by a hub prompt (`RESTART_NOTICE`, followed by the
   summary handoff when there is one). A manager is restarted from the graph (`restart_manager_from_graph`): a new
-  session told its digest and open decisions, its conversation not restored.
+  session told its digest and open decisions, its conversation not restored. What it is told goes at the front of the
+  queue kept on disk (`TurnCore::resume`), which stays as it was, so the agent reads it first and then the prompts
+  that waited (a rotated manager's brief included). Its cost, `usd-est`, counts from zero in the new conversation.
 - **A job's end wakes once.** `runtime.db` table `wake` (migration 7): a row `pending` when the end is announced,
   `sending` while it is delivered, `done` once the session has the prompt (the mark; pruned with the job). After the
   sessions are back (`agents::wake::recover`) a `pending` row is delivered, a `sending` one only when the session's
@@ -860,9 +1020,227 @@ resume, the tick goes on from the store with the same workers, and the wakes sti
   ([coordination.md](coordination.md#delivery-the-hub)); a prompt queued in a session is read back from its
   `<sid>.queue.json`.
 
+## Rewind and fork
+
+A step of an agent is a point its conversation can go back to (`agents/rewind.rs`). How much of the conversation comes
+back is its **restore level** (`runstav::methods::history::RestoreLevel`, `message` / `turn` / `summary`):
+`rewind::expected_level` gives Claude with `sessionCapabilities.fork` `message`, Codex with it `turn`, and anything
+else (Gemini, an agent without the capability) `summary`.
+
+- **The cut** (`rewind::point_for`, pure). Message: the last `step.message_id` at or before the step; the steps of one
+  assistant message share it. A subagent's step (part 2's `step_detail.parent_tool`) rounds down to the message before
+  the one that holds its `Task` call, so the fork never lands inside a call with no result. Turn: the end of the last
+  turn that completed at or before the step, cut at that turn's last message, because a Codex fork point is inclusive
+  and cannot be a turn in progress. A turn's end is its last step: once a turn ends every step of it carries its
+  `turn_id` (the step writer's anchors), so a step inside an ended turn rounds down too. The steps a cut drops are
+  `retained`: a labelled summary carries them, so the revert needs the user's message (`needs_message`). No id found (or the first turn still running): `summary`, carrying every step up to
+  the one asked for. Only the step's own conversation counts: a step an earlier revert abandoned (`step.undone_by`)
+  is no cut point, ends no turn and is in no summary, since the new conversation never held it and may reuse its turn
+  ids (Codex's restart after a fork). The steps after a step that is not abandoned stay its conversation's, abandoned
+  or not, because a revert marks them before it rewinds; an abandoned step's conversation is the steps its revert
+  abandoned with it and the ones before them that no revert abandoned.
+- **The attach** (`session::Attach`: `New`, `Resume(acp)`, `Fork { source, at, level }`). A fork always runs in a
+  fresh process: `launch` spawns the agent in its sandbox as for a new session, then sends `session/fork` with the
+  session's `mcpServers` (its drgnx tools) and the lock's `_meta`, and verifies the lock afterwards exactly as after
+  `session/new` (a lock that does not hold kills it). An agent without the fork capability, or a fork the agent
+  refuses (its transcript is gone, the message is unknown), gets a new conversation on the same process instead:
+  `Launched.level` is then `summary`, with the reason logged and returned, and the session is alive.
+- **The rewind** (`rewind::rewind_conversation(hub, front, target, first)`, `Target { sid, seq }`) keeps the hub
+  session: its id, `asession` row, budget, task, queue and workers. It starts from the row, not a live session, so it
+  runs at start-up too; a session with no row (a finished one) is `session-gone`. It forks the conversation the
+  step ran in (`step.acp`), so a second rewind to a point before the first forks the older conversation. A live
+  session gets the turn core's `Detach` (below), then is closed as a rotation closes it (`close_for_swap`: transcript
+  and queue kept on disk); `relaunch` launches it again with `Attach::Fork` and writes the row's `acp` only once that
+  launch has landed, so a failed launch leaves the row resumable. The new conversation then gets `Reattach` with what
+  it is told first. Steps go on with the session's `seq` and name their conversation; the budget counts the new
+  conversation's spend from its first reading (`spend_total_in` names `self.acp`).
+- **What it is told first** (`rewind::first_text`): at Message or Turn level, the user's message alone, or nothing
+  (no turn starts). When a summary must be delivered (Summary level, or steps a cut dropped), it is the labelled
+  summary of the session's facts cut at the step (`handoff::summary(.., up_to)`: its steps up to that `seq` in the
+  step's own conversation, by the cut's own filter (`rewind::same_line`, so no step an earlier revert abandoned), the
+  head recorded there, and the decisions stamped in those steps; an unstamped decision unless its version is after
+  the step's `log_version`) joined with the user's message, which is then required: without one the rewind is refused
+  (`needs-message`) before anything changes. A fork that lands at Summary though it was planned higher is told the
+  summary and the message; with no message the summary waits, held, at the front of the queue.
+- **The fork** (`rewind::fork_conversation`): a new session in another directory, from the step, while the source
+  keeps running. The same provider forks the step's conversation at the cut; another provider gets a new
+  conversation told the labelled summary. A finished source is read from its `session:<sid>` entity (profile, cwd).
+  The new session is linked `forked_from` its source with `{seq, level}`, and the user's message is its first prompt.
+- **The turn core across the swap** (`TurnEvent::Detach`, `TurnEvent::Reattach { told }`): `Detach` cancels a
+  running turn (`CancelTurn`) and cuts it off, so its later `PromptDone`/`PromptFailed` (which name their turn)
+  changes nothing; a prompt whose `Sending` had not answered `Prompt` goes back to the queue's front; no turn starts
+  while detached, a `Send` queues and a Stop holds the queue. `Reattach` puts `told` ahead of the queue, as
+  `TurnCore::resume` does, then starts the next prompt unless the queue is held. The core decides; the rewind only
+  sends the two events.
+
+## Revert to here
+
+A revert takes an agent's work back to one of its steps: the files, the decisions and the conversation as one record.
+
+- **The methods** (`history::revert`, user only). `history/revert/preview {session, seq} | {decision}` answers the
+  card: the files, the overlaps, the files merged with the user's later edits (`non_overlapping_files`), what the
+  revert cannot undo, the level, `needs_message` (the rewind tells the conversation a summary: at Summary level, or
+  for steps the cut leaves out, as at a subagent's step; apply then refuses without a message before anything
+  changes), `blocked`, the paths left out, the conversation (`restored`, or
+  `not-restored` with a label: a finished worker's is "conversation not restored: the agent has finished") and
+  `fork` (offered beside Apply for a finished worker or a blocked revert). The preview is kept in the project's
+  `history.db` (`History::keep_preview`, under a random 52-bit id unique across the projects), so it survives a hub
+  restart, and is taken once on apply (`take_preview`, from whichever project holds it).
+  `history/revert/apply {preview_id, mode, choices, message}` answers `Applied {op, session, level,
+  commit, skipped, conversation, kept_patches, undone}` and broadcasts `history/applied {op, paths, worktree}`.
+  Refusals start with their reason: `stale` (the files or the session moved since the preview, or no such
+  preview), `blocked`, `needs-message`, `not-revertible` (no checkpoint: older than the history; an agent's call),
+  `busy` (a revert of the tree runs).
+- **The user's work is never lost.** Each path the checkpoint and the files now differ in is the agent's alone when
+  it equals the agent's newest checkpoint (restored from the step's checkpoint), else the user's: a text file whose
+  edits do not meet the agent's is merged (`verdandi::merge3`: base the agent's last version, ours the user's,
+  theirs the step's) and the user's edit stays; where they meet it is an overlap, and its choice decides: keep the
+  user's (the default, also for a missing choice; listed `edited-later`), take the reverted file, or an edited text.
+  A text file the project's `history.db` holds as it is now is decided by the history instead: the typing waiting to
+  settle is flushed, and `History::preview_revert` over the records the session caused after the end of the step whose
+  checkpoint is used gives the text with the agent's operations undone and everyone else's kept, so an edit the user
+  made between two agent steps (which the agent's later checkpoint holds) stays; a hunk where the two meet is an
+  overlap as above (`docs/develop/history.md`, "Testing", says what this cannot tell apart).
+  `roll-back-mine` writes every path back. Either way the files as they were are kept as a tree under
+  `refs/drgnx/undone/<op>` of the shadow repository (`Applied.undone`).
+- **The record** is one `revert` record in the project's `history.db`, its parents the records the session caused
+  after the step (`History::caused_by`), or one `agent_step` record standing for those steps when the history has
+  none. A revert is the user's act: the record is by the user's peer, and what the revert is about to write at each
+  path (the checkpoint's file, link or nothing, or the merged or edited text) is applied onto the path's document
+  first as the user's operations, which the record holds (and each version is published as `history/file-version`).
+  So the history holds the files as the revert leaves them, and a later revert of them is decided by the history
+  again. The pending record (`History::mark_pending`) holds the plan and the answers until the last step clears it.
+  At start-up `agents::Hub::resume_all` first calls `history::revert::finish_pending`, which finishes every pending
+  revert from the files on.
+
+- **What it cannot undo** (`timeline::effects::of(front, target)` → `RevertEffects`, labelled `computed`), each from a
+  hub record after the step began, listed first on the card: the session's commits a remote already has (remote
+  tracking refs that contain them, read in the trusted store), messages it sent that their recipient has `read` or
+  `acted` on, its decisions after the step that another decision depends on (`decisions/effects`' computed
+  dependents), the tasks it filed and the settings it changed (txs of the session; a setting through
+  `mcp:settings_change`), its commits already merged into its job's `job/<job>` branch, what the steps after it spent
+  (cost by unit and tokens), and its jobs that run or wait: the hub's own (`exec::Live`), then the runners queue's
+  queued rows and remote attempts (`runtime.db`'s `rq_job` and `rq_attempt`), each named with where it runs.
+- **When it must become a fork** (`timeline::effects::blocked(front, dependents, sid)` → `[Blocked {decision, commit,
+  session, branch}]`): a dependent commit of another session that the integration branch already holds (`git
+  merge-base --is-ancestor` in the commit's trusted store; the branch is the session's `job/<job>`, or for a session
+  with no job the branch its repository's `HEAD` names). The session's own dependents never block: the revert takes
+  them too.
+- **Writing into an agent's tree** (`history::tree`, `timeline::snapshot`). `tree::restorable(rel, extra)` refuses
+  the lock's `NEVER_RESTORED` (`PROTECTED_RO`: `.claude`, `.codex`, `.gemini`, `.envrc`, `.git/hooks`,
+  `mise.toml`; the same list a runner's returned patch is refused by) at any depth, any `.git` component, and the
+  secret files a snapshot leaves out (`snapshot::excludes`, with the settings' extra paths), component by component
+  (case-folded on macOS). `snapshot::restore_into(root, source, target, tree, only, extra)` makes a tree equal to a
+  checkpoint: what it holds now is written as a tree into the source's shadow repository, `snapshot::changed`
+  (`diff-tree -r -z --raw`, both sides' git modes) lists what differs, and each path is written by mode through
+  `eitri`: `100644`/`100755` with `write_regular` and the mode, `120000` with `symlink_beneath` (the target as
+  bytes), a path the checkpoint lacks with `remove_beneath`; a gitlink (`160000`) and a refused path are skipped and
+  listed. Nothing is chmodded through a path. `snapshot::tree_at(root, worktree, sid, seq)` is the nearest snapshot
+  at or below a step.
+- **The forward commit** (`tree::commit_in_sandbox(front, sid, cwd, paths, subject)`), as `git commit --only` but
+  quiet about a path neither side has (a deletion committed before a crash, a file never added): HEAD is read into
+  the commit's own index (`GIT_INDEX_FILE=.git/drgnx-commit-index`), the paths updated there (`update-index --add
+  --remove`), the index compared with HEAD (`diff-index --cached --quiet`: equal is nothing to commit), committed
+  (`commit --no-verify`, `core.hooksPath=/dev/null`, no signing), and the same paths updated in the worktree's own
+  index; what the agent staged besides them stays staged. In a folder a sandboxed agent worked in
+  (`RunGit::is_touched`) each run is a Gleipnir one-shot of the session's worktree shape
+  (`launch::worktree_launch`: the folder writable, the protected paths and the git folder's hooks and config
+  read-only, the provider's relay only), and the placeholders that launch made to pin absent protected files
+  (`.envrc`, `mise.toml`) are removed when it ends (`sandbox::remove_stubs_since`: only the ones after the mark it
+  took, so the session's own stubs stay bound); elsewhere with plain git. The commit is read from the ref files after
+  (`snapshot::head_of`), since the sandboxed run keeps no stdout; nothing to commit is `Ok(None)`, so a retry after a
+  crash is quiet. A failure is reported and the files stand; in a linked worktree the sandboxed commit cannot reach
+  the common folder and fails.
+- **The order** (`history::revert_core`, pure): after the shell's check, `Quiet` (the session detached from its
+  turn core, its jobs stopped), `Rescan` (a record new since the preview is `stale`), `Record` (the history record and
+  the pending record: durable from here), `Files` (each path announced to the origin core as the hub's write before
+  it is written: the checkpoint's blob, or the blob of the merged or edited text hashed as the watcher hashes what it
+  reads, so the watcher's event about it is no outside edit), `Graph`, `Conversation` (a finished worker has
+  none: said once, and skipped), `Commit`, `Clear`, then `history/applied` and the manager told: a worker's manager
+  (its row's `parent`) gets a message from the hub naming the worker, the step, the conversation and the commit. A
+  failure before
+  `Record` reattaches the session and refuses; a conversation that cannot be restored is said and the commit follows;
+  a failed commit is reported and the record cleared. A crash forgets the revert; the next start finishes it from the
+  pending record (`Files` on, each step idempotent). A message or a Stop sent meanwhile is the turn core's (queued or
+  held until the reattach); the cancelled turn's answer changes nothing; a runner's patch returned meanwhile is kept
+  on its job, never applied: the returned-patch path asks `history::revert::patch_returned(front, sid, job)` first,
+  which is true while the session's revert runs, and the job is listed in `Applied.kept_patches`. Every order of these
+  is tested with skuld, composed with the turn and origin cores; the steps on a live session of the mock agent, a
+  hub stopped after a step and a second one finishing, are tested with a park hook (test builds only).
+- **A fork's tree** (`tree::fork_tree(front, source, new_sid)`): `RunGit::task_worktree(repo, "fork-<sid8>", new_sid,
+  base)`, where `repo` is the worktree's recorded repository (`worktree_base`) or the source's own untouched folder,
+  and `base` the step's head when that commit verifies there (a snapshot task's branch, named by its `.git/HEAD`, is
+  brought into the repository through its bundle first, `RunGit::import`: verified, fsck'd, written
+  compare-and-swap), else the worktree's recorded `base_commit`; the
+  checkpoint (`step.snapshot`, else `tree_at`) is then written over it with `restore_into` and the folder marked
+  touched.
+
+## Fork from here
+
+A fork starts a second agent from one of a session's steps, in its own tree, while the source runs on
+(`history::branches`, user only, a direct act of the user's: no task, no job, no `job/propose`, no approval card, no
+budget chain; the forecast line the user saw is the editor's).
+
+- **`history/fork {session, seq, message, profile?}`** answers `Forked {id, branch, source_branch, path, level}`. In
+  order: the tree (`tree::fork_tree`, above), then the fork's history branch, then the conversation
+  (`rewind::fork_conversation` with the new session id the tree was named for, told the user's `message`, which is
+  required). The branch is named for the fork's tree (`wt/<id>`), so the tree's later changes land on it; it holds
+  the source tree's documents as they were at the step: `History::fork` at the record the step anchors
+  (`step.history_op`), else the newest record the session caused by the step's end. A step whose record holds none of
+  the source's documents (the history has none of its files yet) starts the branch from its base. Either way there
+  is one `fork` record. A conversation that cannot start removes the tree again and freezes the branch. A Codex fork
+  marks its new tree untrusted, as every Codex launch marks its folder (`projects."<cwd>".trust_level`).
+- **`history/fork/drop {id}`** (a session linked `forked_from` another): its agent stopped, its tree removed (only a
+  tree the hub made for this fork, `fork-<sid8>`: `git worktree remove --force` and `worktree prune` in the trusted
+  repository the fork was made from, never git in the tree, then what is left with `remove_dir_all`, which follows no
+  link), its history branch frozen. The branch is kept for compare and expires 90 days later as a frozen worktree does
+  (`History::expire`); its git branch stays.
+- **`history/compare {a, b}`** (two branch names, from `Forked`): the hunks B has that A does not, per file, each
+  with who wrote B's text (the peer's author), the record and the session and step that record names
+  (`History::compare`), from whichever project's history holds both.
+- **`history/take {from, worktree, hunks}`**: whole hunks of branch FROM (a hunk's `theirs_start`/`theirs_end` from
+  compare) into the worktree's branch as the user's new text, one `merge` record whose provenance is the source
+  element ids (`History::take`; part of a hunk is refused and nothing changes), then the files written through
+  `eitri`, each announced to the origin core first. A file whose disk differs from what its history holds is refused
+  (`stale`), so the user's unsaved or unrecorded work is never overwritten; a protected path is refused.
+- **`history/redo {session, op}`**: the revert OP put back. Each path the revert changed (the step's checkpoint
+  against `refs/drgnx/undone/<op>`) goes back to the files as the revert found them when the user has not touched it
+  since, is merged with the user's later edit where they do not meet (`merge3`: base the checkpoint's, ours the
+  user's, theirs the undone), and is left, listed `edited-later`, where they meet. One `redo` record naming the
+  revert, by the user's peer and holding what the redo writes as the user's operations on the documents (as a
+  revert's record does), one forward commit (`tree::commit_in_sandbox`), `history/applied`, and the agent told by a message from the
+  hub: its conversation is not restored.
+- The methods are tested on live sessions of the mock agent in a real repository: an agent's writes recorded as the
+  session handler records them (`Hub::on_agent_write`), stamped at the steps' own times.
+
+## One hunk of a record
+
+What Reject on one agent hunk calls, a worktree agent's or a paired chat's (whose writes land in the user's buffers,
+as the peer `agent:<session>` on the user's branch). Both user only; `history/hunk.rs` over `verdandi::revert_hunk`.
+
+- **`history/op/hunks {worktree, op? | session?}`**: the hunks of record OP, or of every `edits` record of SESSION's
+  agent on the worktree's branch, each `{op, path, index, start_line, end_line, text, deleted, state, undone_by}`:
+  lines 1-based in the text now, `text` the record's text still there, `deleted` what it removed, `state` `live`,
+  `partly-undone` or `undone`, and `undone_by` the records that took its text away or put back what it deleted, each
+  with its author (the user's `C-/` of an agent's write is `{"kind": "user"}`: "undone by you"). Settling typing is
+  written into its records first.
+- **`history/revert/hunk {worktree, op, path, hunk}`**: hunk HUNK of record OP reverted as the user's operations,
+  keeping what the user typed since. `state`:
+  - `applied`: no editor buffer tracks the file, so the hub applied it, wrote one `revert` record (parent OP, OP's
+    cause) and the file through `eitri`, announced to the origin core first, then `history/applied`. A file whose
+    disk differs from its history is refused (`stale`), as `history/take` is.
+  - `in-buffer`: an editor buffer tracks the file, so the hub changes nothing (it never writes behind an open buffer)
+    and answers `buffer_id`, `version` (the SHA-256 of the text the edits apply to, the hash `history/batch` carries)
+    and `edits` (`history/batch` changes, in order, with the origin `revert:<op>`). The editor applies them when its
+    buffer hashes to `version`; its batch then records them as the user's operations in one `revert` record naming OP.
+  - `conflict`: the text the hunk deleted has no place to go back to (a neighbour it sat between is gone, or other
+    text now sits beside it outside the agent's own text): `conflict {start_line, end_line, users, reverted}`,
+    nothing changed.
+  - `undone`: nothing to do; `undone_by` names who did.
+
 ## The store
 
-The front serves the store (`work.db`, schema 8) itself: `graph/*` (reads and walks, history, revert, excise, grants,
+The front serves the store (`work.db`, schema 12) itself: `graph/*` (reads and walks, history, revert, excise, grants,
 proposed txs, read-only SQL, export, import, backup, settings, the personal-notes opt-ins) and `tasks/*` (the tracker
 for the editor), all class `user`. `cards/settle` of an `access` card makes a grant (or refuses) and of a `close`
 card closes the task (or rejects), in the settle's tx. `mcp/session` takes the session's `profile` and its tool sets (`tools: {tracker}`), and
@@ -972,22 +1350,49 @@ result may (a transcript entry's ACP fields, a job's tasks).
 <!-- hub-methods:begin -->
 | Method | Class | Params | Result | Writes |
 |---|---|---|---|---|
+| `agents/buffer/unwatch` | user | `{view: string}` | `boolean` | no |
+| `agents/buffer/watch` | user | `{doc_version?: natnum, file: string, view: string, worktree?: string}` | `BufferFrame` | no |
+| `agents/compact-preview` | user | `{id: Id}` | `{frees?: natnum, kept?: [ContextItem], note?: string, summarised?: [ContextItem]}` | no |
+| `agents/config` | user | `{id: Id, option: string, value: string}` | `boolean` | yes |
+| `agents/context-drop` | user | `{id: Id, item: string}` | `boolean` | no |
+| `agents/context-pin` | user | `{id: Id, item: string, pinned: boolean}` | `boolean` | no |
 | `agents/do` | user | `{id: Id, item?: RequestId, n?: natnum, op: "deliver-queue" \| "unqueue" \| "requeue" \| "review", reject?: boolean, text?: Prompt}` | `boolean` | yes |
+| `agents/entries/subscribe` | user | `{session: Id}` | `{seq: natnum}` | no |
+| `agents/entries/unsubscribe` | user | `{session: Id}` | `boolean` | no |
+| `agents/explain` | user | `{id: Id, item: "context" \| "cost" \| "mode" \| "model" \| "waiting" \| "mcp"}` | `{facts?: [Fact], item: "context" \| "cost" \| "mode" \| "model" \| "waiting" \| "mcp"}` | no |
+| `agents/follow` | user | `{session: Id, view: string}` | `boolean` | no |
 | `agents/get` | user | `{id: Id}` | `{entries?: [Entry], seq: natnum, session: Snapshot}` | no |
+| `agents/grants` | user | `{id: Id}` | `{grants: [Grant]}` | no |
+| `agents/grants/revoke` | user | `{grant: string, id: Id}` | `{agent_rule: "cleared" \| "kept", grant: string, restart: boolean}` | yes |
+| `agents/huddle/get` | user | `{id: Id}` | `Huddle` | no |
+| `agents/huddle/start` | user | `{clash?: string, sessions?: [Id]}` | `Huddle` | yes |
 | `agents/kill` | user | `{id: Id}` | `boolean` | yes |
 | `agents/list` | user, agent, service | `{}` | `{sessions?: [Snapshot]}` | no |
 | `agents/move` | user | `{id: Id, profile: string}` | `{id: string, name: string}` | yes |
+| `agents/pair` | user | `{id: Id, on: boolean}` | `boolean` | no |
+| `agents/panel/look` | user | `{older?: boolean, open?: [string], rows?: [[natnum, boolean]], view: string}` | `boolean` | no |
+| `agents/pause` | user | `{id: Id}` | `boolean` | yes |
 | `agents/permission` | user | `{id: Id, option?: string, request: RequestId}` | `boolean` | yes |
+| `agents/presence/get` | user | `{file: string}` | `{entries?: [PresenceEntry], file: string, rel?: string, repo?: string}` | no |
+| `agents/presence/subscribe` | user | `{file?: string, view?: string, workspace?: {id: string, roots?: [string]}}` | `{files?: [FilePresence]}` | no |
 | `agents/probe` | user | `{profile: string, wait_s?: natnum}` | `{agent?: AgentInfo, ok: boolean, stderr_tail?: string, why?: string}` | no |
 | `agents/role` | user | `{id: Id, role: "manager" \| "worker" \| "chat"}` | `boolean` | yes |
 | `agents/send` | user | `{id: Id, if_free?: boolean, text: Prompt}` | `boolean` | yes |
 | `agents/slice` | user | `{from_step: natnum, id: Id, n?: natnum}` | `{entries?: [[natnum, Entry]], id: string, next?: natnum, steps?: [Step]}` | no |
 | `agents/start` | user | `{about?: string, cwd?: AbsPath, document?: AbsPath, env?: [{name: EnvName, value: string}], job?: Id, profile: string, role?: "manager" \| "worker" \| "chat", task?: TaskRef}` | `{id: string, name: string}` | yes |
 | `agents/stop` | user | `{id: Id}` | `boolean` | yes |
+| `agents/tool-input` | user | `{session: Id, tool_call: string}` | `{raw_input: any, truncated: boolean}` | no |
+| `agents/tool-output` | user | `{from: natnum, id: Id, to: natnum, tool_call: string}` | `{text: string, total_bytes: natnum, truncated: boolean}` | no |
+| `agents/unfollow` | user | `{view: string}` | `boolean` | no |
+| `agents/wheel/give` | user | `{id: Id}` | `boolean` | yes |
+| `agents/wheel/saved` | user | `{req: natnum, unsaved?: [AbsPath]}` | `boolean` | no |
+| `agents/wheel/take` | user | `{id: Id}` | `boolean` | yes |
 | `brief/build` | user | `{task: string}` | `{cut: boolean, edited: boolean, parts?: [BriefPartText], task: string, text: string}` | no |
 | `brief/set` | user | `{task: string, text: string}` | `{note: string}` | yes |
+| `browser/check` | user | `{}` | `BrowserCheckResult` | no |
 | `budget/get` | user | `{scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}}` | `{limits?: [Limit], remaining?: [Limit], scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}, spent?: [Limit]}` | no |
 | `budget/set` | user | `{limits?: [{amount: number, unit: "tokens" \| "count" \| "usd" \| "usd-est" \| "limit-share"}], scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}}` | `{limits?: [Limit], remaining?: [Limit], scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}, spent?: [Limit]}` | yes |
+| `buffers/set` | user | `{ops: [{op: "reset"} \| {file?: string, id: string, modified?: boolean, name: string, op: "put"} \| {id: string, modified: boolean, op: "modified"} \| {id: string, op: "remove"} \| {ids?: [string], op: "scope"} \| {op: "filter", text?: string}], view: string}` | `boolean` | no |
 | `cards/settle` | user | `{card: natnum, choice: Text}` | `{settled: boolean}` | yes |
 | `config/changed` | user | `{}` | `boolean` | no |
 | `config/settings` | user | `{overrides: [{name: string, source: string, value: SettingValue}], project?: string}` | `{applied: natnum}` | no |
@@ -1002,21 +1407,76 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `coord/notify` | user, agent, service | `{}` | `boolean` | no |
 | `coord/prune` | user | `{}` | `{pruned: boolean}` | yes |
 | `coord/task-status` | user | `{agent?: AgentName, status: Status, task: TaskRef}` | `boolean` | yes |
+| `debug/bisect` | user | `{good: {id: string, kind: string}, parallel?: natnum, predicate: {argv?: [string], at?: string, build?: [string], code?: integer, condition?: string, kind: string, run?: string, timebox_s?: natnum}, root: string}` | `{bisect: string, estimate: any, states: [any]}` | no |
+| `debug/bisect/cancel` | user | `{bisect: string}` | `boolean` | no |
+| `debug/bisect/narrow` | user | `{bisect: string}` | `boolean` | no |
+| `debug/bisect/states` | user | `{good?: {id: string, kind: string}, root: string}` | `{states: [any]}` | no |
+| `debug/breakpoint-locations` | user | `{line: natnum, path: string, session: string}` | `{locations: [BreakpointLocation]}` | no |
+| `debug/breakpoints` | user | `{kind?: string, op?: {adapter?: string, column?: natnum, condition?: string, enabled?: boolean, hit?: string, id?: natnum, instruction?: string, line?: natnum, log?: string, name?: string, offset?: integer, op: string, path?: string, triggered_by?: natnum}, path?: string, root: string, session?: string}` | `DebugBreakpointsView` | no |
+| `debug/children` | user | `{epoch?: natnum, reference: integer, session: string}` | `{variables: [DebugChild]}` | no |
+| `debug/compare` | user | `{fork: string, run: string}` | `DebugForkView` | no |
+| `debug/completions` | user | `{column: natnum, frame?: integer, session: string, text: string}` | `{targets: [CompletionTarget]}` | no |
+| `debug/configs` | user | `{adapters?: [JsonObject], file?: string, language?: string, root: string, user?: [JsonObject]}` | `{configs: [DebugConfig], error?: DebugFileError, last?: string}` | no |
+| `debug/control` | user | `{granularity?: string, op: string, session: string, thread?: integer}` | `boolean` | no |
+| `debug/data-breakpoint` | user | `{access_type?: string, data_id?: string, name?: string, node?: string, op: string, reference?: integer, session?: string, view?: string}` | `{breakpoints: [any], session: string}` | no |
+| `debug/disassemble` | user | `{count: natnum, instruction_offset?: integer, offset?: integer, reference: string, session: string}` | `{instructions: [DisassembledInstruction]}` | no |
+| `debug/evaluate` | user | `{context: string, expr: string, frame?: integer, session: string}` | `{epoch?: natnum, reference?: integer, result: string, type?: string}` | no |
+| `debug/expand` | user | `{node: string, open: boolean, view: string}` | `boolean` | no |
+| `debug/fork` | user | `{anyway?: boolean, at: {hit?: natnum, line?: natnum, path?: string, stop?: natnum}, change?: {code?: boolean, value?: {path: [string], text: string}}, confirm?: boolean, inputs?: [{id: string, value: string}], run: string, until?: DebugForkUntil}` | `{ask?: string, fork?: string, needs?: any}` | no |
+| `debug/fork/drop` | user | `{fork: string}` | `boolean` | no |
+| `debug/fork/run` | user | `{fork: string}` | `boolean` | no |
+| `debug/heap` | user | `{depth?: natnum, expr?: string, frame?: integer, graph?: string, limit?: natnum, locals?: boolean, session?: string}` | `DebugHeapGraph` | no |
+| `debug/heap/close` | user | `{graph: string}` | `{closed: boolean}` | no |
+| `debug/hot-reload` | user | `{path: string, session: string}` | `{patched: [string], restarted: boolean, skipped: [HotReloadSkip]}` | no |
+| `debug/install` | user | `{adapter: string, adapters?: [JsonObject]}` | `string` | no |
+| `debug/origin` | user | `{depth?: natnum, expr: string, run: string, stop: natnum}` | `{origin: string}` | no |
+| `debug/probe/op` | user | `{op?: {enabled?: boolean, expr?: string, id?: string, language?: string, line?: natnum, op: string, path?: string, text?: string}, root: string}` | `{added?: string, path?: string, probes: [any], root: string}` | no |
+| `debug/read-memory` | user | `{count: natnum, offset?: integer, reference: string, session: string}` | `{address: string, data: string, unreadable?: natnum}` | no |
+| `debug/run-to-cursor` | user | `{line: natnum, path: string, session: string}` | `boolean` | no |
+| `debug/run/export` | user | `{path: string, run: string}` | `{bytes: natnum, code: string, path: string}` | no |
+| `debug/run/get` | user | `{count?: natnum, current?: natnum, from?: natnum, run: string}` | `DebugRunView` | no |
+| `debug/run/import` | user | `{code: string, path: string, root: string}` | `{run: string}` | no |
+| `debug/run/pin` | user | `{pinned: boolean, run: string}` | `boolean` | no |
+| `debug/run/stop` | user | `{file?: string, run: string, stop: natnum}` | `{capture: any, run: string, snapshot?: string, source: any, stop: any}` | no |
+| `debug/runs/list` | user | `{root: string}` | `{runs: [any]}` | no |
+| `debug/select` | user | `{frame: integer, session: string, thread?: integer}` | `boolean` | no |
+| `debug/set-value` | user | `{node: string, value: string, view: string}` | `{value: string}` | no |
+| `debug/source` | user | `{ref: integer, session: string}` | `{mime?: string, text: string}` | no |
+| `debug/start` | user | `{adapters?: [JsonObject], col?: natnum, config: string, file?: string, inputs?: [{id: string, value: string}], language?: string, line?: natnum, no_debug?: boolean, root: string, selection?: string, terminal?: boolean, unsaved?: [string], user?: [JsonObject]}` | `{needs?: any, session?: string, sessions?: [string]}` | no |
+| `debug/trust` | user | `{root: string, trusted: boolean}` | `boolean` | no |
+| `debug/view` | user | `{filter?: string, indent?: natnum, root: string, session?: string, view: string}` | `boolean` | no |
+| `debug/watch` | user | `{expr?: string, index?: natnum, op: string, root: string, to?: natnum}` | `[string]` | no |
+| `debug/write-memory` | user | `{allow_partial?: boolean, data: string, offset?: integer, reference: string, session: string}` | `{offset?: integer, written?: natnum}` | no |
 | `decisions/effects` | user | `{decision: string}` | `{commits?: [string], decision: string, label: string, later_hunks?: [Hunk]}` | no |
 | `env/set` | user | `{env: [{name: EnvName, value: string}]}` | `{applied?: [string]}` | no |
 | `events/add` | user | `{agent?: AgentName, best_effort?: boolean, data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text, task?: TaskRef}` | `{id?: natnum}` | yes |
 | `events/since` | user | `{limit?: natnum, since?: natnum}` | `{events?: [EventRow], last: natnum, since: natnum}` | no |
+| `exec/bump` | user | `{id: Id}` | `ExecRow` | yes |
 | `exec/get` | user | `{id: Id}` | `ExecRow` | no |
 | `exec/list` | user | `{running?: boolean, session?: Id}` | `{jobs?: [ExecRow]}` | no |
 | `exec/log` | user | `{from?: natnum, id: Id, n?: natnum, tail_bytes?: natnum}` | `{from?: natnum, id: string, lines?: [string], next?: natnum, running: boolean}` | no |
-| `exec/start` | user | `{argv: [string], cwd?: AbsPath, env?: [{name: EnvName, value: string}], image?: string, kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", machine?: Id, memory_max?: string, name?: string, network?: boolean, nice?: integer, no_timebox?: boolean, timebox_s?: natnum}` | `{id: string, text: string}` | yes |
+| `exec/start` | user | `{argv: [string], background?: boolean, cwd?: AbsPath, env?: [{name: EnvName, value: string}], heavy?: boolean, image?: string, keys?: [string], kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", local_only?: boolean, machine?: Id, memory_max?: string, name?: string, network?: boolean, nice?: integer, no_timebox?: boolean, os?: "linux" \| "macos", priority?: natnum, rows?: {listed: [string], parser: string}, timebox_s?: natnum, writes?: [string]}` | `{id: string, text: string}` | yes |
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes |
+| `explorer/subscribe` | user | `{around?: AbsPath, compact?: boolean, exclude?: [string], expanded?: [AbsPath], indent?: natnum, only?: [AbsPath], roots: [AbsPath], view: string, window?: natnum}` | `{listing: natnum}` | no |
+| `extensions/details` | user, agent | `{id: string}` | `DetailsResult` | no |
+| `extensions/list` | user | `{dense?: boolean, generations?: [{copies?: string, current?: boolean, differs?: [string], in_use?: boolean, n: natnum, note?: string, size?: string, time?: string}], glyphs?: [{gui: string, kind: string, tty: string}], restart?: [string], sections: [{minus_updates?: boolean, name: string, search: {filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs" \| "pack", packs?: boolean, plugins?: boolean, recommended?: natnum, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}, title: string}], view: string}` | `{sections: [ListTotal]}` | no |
+| `extensions/modules` | user | `{modules: [{doc?: string, flags?: [string], name: string, packages?: [string], state: "on" \| "off" \| "needs-package" \| "failed"}]}` | `{}` | no |
+| `extensions/recommended` | user | `{ids: [string], version: natnum}` | `{}` | no |
+| `extensions/rows` | user | `{ids: [string]}` | `{rows: [Row]}` | no |
+| `extensions/search` | user, agent | `{filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs" \| "pack", packs?: boolean, plugins?: boolean, recommended?: natnum, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}` | `{rows: [Row], total: natnum}` | no |
+| `forecast/accuracy` | user | `{profile?: Text, role?: Text}` | `{rows?: [AccuracyRow]}` | no |
+| `forecast/get` | user | `{job: Id}` | `Forecast` | no |
+| `forecast/session` | user | `{profile?: string, session: Id}` | `Forecast` | no |
 | `gateway/editor-token` | user | `{}` | `{token: string, url: string}` | no |
 | `gateway/keys` | user | `{keys: ProviderKeys}` | `boolean` | no |
 | `gateway/keys-held` | user | `{}` | `{providers?: [Id]}` | no |
 | `gateway/register` | user | `{agent?: AgentName, budget?: Usd, chain: [[string \| null]], job?: Id, keys?: ProviderKeys, openrouter?: {data-collection?: "deny" \| "allow", ignore?: [string], only?: [string], zdr?: boolean}, owner?: natnum, sid?: SessionId, task?: TaskRef}` | `{openrouter?: any, socket?: string, token: string, url?: string}` | no |
+| `gateway/revoke-key` | user | `{provider: Id}` | `boolean` | no |
 | `gateway/set-budget` | user | `{budget: Usd, job: Id}` | `boolean` | no |
 | `gateway/unregister` | user | `{token: string}` | `boolean` | no |
+| `git/blame` | user | `{path: string, worktree_root: string}` | `{agents: [AgentLines], commits: [BlameCommit], head?: string, lines: [natnum]}` | no |
+| `git/letters` | user | `{root: AbsPath, shown?: [string], view: string}` | `boolean` | no |
+| `git/stage-hunk` | user | `{new_start: integer, path: string, worktree_root: string}` | `{staged: boolean}` | yes |
 | `graph/backup` | user | `{}` | `BackupAnswer` | no |
 | `graph/compact` | user | `{dry_run?: boolean}` | `{dry_run: boolean, link_stats: natnum, versions: natnum}` | yes |
 | `graph/entity` | user | `{as_of?: natnum, id: string, include?: ["links" \| "notes" \| "history"]}` | `EntityAnswer` | no |
@@ -1035,7 +1495,23 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `graph/scrub` | user | `{}` | `{blocked_by?: string, vacuumed: boolean, wal_truncated: boolean}` | yes |
 | `graph/settings` | user | `{get?: Empty, set?: {only_user_closes?: boolean}}` | `{only_user_closes: boolean}` | yes |
 | `graph/sql` | user | `{deadline_ms?: natnum, params?: [SqlParam], rows?: natnum, sql: string}` | `{columns?: [string], rows?: [[any]], truncated: boolean}` | no |
-| `hello` | user, agent, service | `{client?: string, cwd?: AbsPath, drgnx_version?: string, nonce: Nonce, proof?: Hex64, proto: natnum, records?: natnum, schema?: natnum}` | `HelloReply` | no |
+| `hello` | user, agent, service | `{client?: string, cwd?: AbsPath, drgnx_version?: string, nonce: Nonce, proof?: Hex64, proto: natnum, records?: natnum, schema?: natnum, session?: string}` | `HelloReply` | no |
+| `history/batch` | user | `{buffer_id: string, changes: [{inserted: string, old_len: natnum, origin?: string, start: natnum}], region_hash?: string, version: natnum}` | `{ok?: boolean, resync?: boolean}` | yes |
+| `history/blame` | user | `{end: integer, path: string, start: integer, worktree_root: string}` | `{spans: [BlameSpan]}` | no |
+| `history/compare` | user | `{a: string, b: string}` | `{files: [ComparedFile]}` | no |
+| `history/fork` | user | `{message: string, profile?: string, seq: integer, session: string}` | `{branch: string, id: string, level: "message" \| "turn" \| "summary", path: string, source_branch: string}` | yes |
+| `history/fork/drop` | user | `{id: string}` | `{ok: boolean}` | yes |
+| `history/hunks` | user | `{branch: string, since: integer}` | `{files: [FileHunks]}` | no |
+| `history/hunks/head` | user | `{path: string, worktree_root: string}` | `{hunks: [HeadHunk], marks: [HunkMark], tracked: boolean}` | no |
+| `history/op/hunks` | user | `{op?: integer, session?: string, worktree: string}` | `{hunks: [OpHunk]}` | no |
+| `history/redo` | user | `{op: integer, session: string}` | `{commit?: string, op: integer, skipped: [RevertSkipped], written: [string]}` | yes |
+| `history/register` | user | `{buffer_id: string, path: string, worktree_root: string}` | `{doc: integer, reason?: string, tracked: boolean}` | yes |
+| `history/resync` | user | `{buffer_id: string, text: string, version: natnum}` | `{ok: boolean}` | yes |
+| `history/revert/apply` | user | `{choices?: [{choice: "keep-users"} \| {choice: "take-reverted"} \| {choice: "edited", text: string}], message?: string, mode?: "keep-mine" \| "roll-back-mine", preview_id: integer}` | `Applied` | yes |
+| `history/revert/hunk` | user | `{hunk: integer, op: integer, path: string, worktree: string}` | `HunkReverted` | yes |
+| `history/revert/preview` | user | `{decision?: integer, seq?: integer, session?: string}` | `RevertCard` | no |
+| `history/take` | user | `{from: string, hunks: [{path: string, theirs_end: integer, theirs_start: integer}], worktree: string}` | `{op: integer, skipped: [RevertSkipped], written: [string]}` | yes |
+| `history/unregister` | user | `{buffer_id: string}` | `{ok: boolean}` | yes |
 | `job/approve` | user | `{budget?: Usd, id: Id}` | `JobSummary` | yes |
 | `job/block` | user | `{reason?: Text, task: TaskRef}` | `JobSummary` | yes |
 | `job/card` | user | `{action: CardAction, arg?: StringOrNumber, card: natnum}` | `JobSummary` | yes |
@@ -1049,7 +1525,9 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `job/status` | user | `{decisions?: boolean, id?: Id}` | `JobSummary \| {jobs?: [JobSummary]}` | no |
 | `job/stop` | user | `{id: Id}` | `JobSummary` | yes |
 | `job/unblock` | user | `{task: TaskRef}` | `JobSummary` | yes |
-| `matrix/check` | user | `{action: "agents.start" \| "agents.model" \| "agents.control" \| "graph.change" \| "task.done" \| "spend" \| "spend.over" \| "code.read" \| "code.edit" \| "commit" \| "merge.integration" \| "push.ci" \| "push.main" \| "code.ci-config" \| "machines" \| "job.container" \| "network" \| "unsandboxed" \| "settings.change" \| "user.private" \| "user.emacs" \| "chat.project-read", amount?: number, plan?: string, project?: string, who: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `{verdict: "allow" \| "ask" \| "never", why?: string}` | no |
+| `machines/list` | user | `{}` | `{machines?: [Machine]}` | no |
+| `machines/report` | user | `{machine: string, slots?: [{holder?: string, id: string, kind: string}], ttl: number}` | `{local: boolean, machine: string, slots?: [Slot]}` | no |
+| `matrix/check` | user | `{action: "agents.start" \| "agents.model" \| "agents.control" \| "graph.change" \| "task.done" \| "spend" \| "spend.over" \| "code.read" \| "code.edit" \| "commit" \| "merge.integration" \| "push.ci" \| "push.main" \| "code.ci-config" \| "machines" \| "job.container" \| "job.keys" \| "network" \| "browser" \| "browser.web" \| "browser.private" \| "unsandboxed" \| "settings.change" \| "user.private" \| "user.emacs" \| "chat.project-read" \| "plugin.abilities" \| "chat.project-edit" \| "huddles" \| "debug.read" \| "debug.probe" \| "debug.fork" \| "debug.live-eval" \| "debug.drive", amount?: number, plan?: string, project?: string, who: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `{verdict: "allow" \| "ask" \| "never", why?: string}` | no |
 | `matrix/get` | user | `{plan?: string, project?: string, who?: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `MatrixView` | no |
 | `mcp/attach` | service | `{kind: AgentKind}` | `{identity: string}` | no |
 | `mcp/session` | user | `{agent: AgentName, cwd?: AbsPath, job?: Id, owner: natnum, profile?: Id, sid?: SessionId, task?: TaskRef, tools?: {tracker: boolean}}` | `{sid: string, socket: string}` | no |
@@ -1057,10 +1535,19 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `messages/mark` | user | `{id: natnum, state: "delivered" \| "read" \| "acted"}` | `{changed: boolean}` | yes |
 | `messages/retract` | user | `{id: natnum}` | `{retracted: boolean, status: string}` | yes |
 | `messages/send` | user | `{answers?: natnum, job?: Id, question?: boolean, recipient: AgentName, seen?: natnum, sender?: AgentName, text: Text}` | `SendResult` | yes |
+| `orch/evidence` | user | `{task: TaskRef}` | `{evidence: [any]}` | no |
 | `pace/get` | user | `{provider?: string}` | `{meters?: [Pace]}` | no |
+| `pair/answer` | user | `{lines?: [natnum], not_saved?: Text, reason?: Text, result: "applied" \| "refused" \| "dropped", saved?: boolean, version?: natnum, write: natnum}` | `boolean` | no |
+| `pair/closed` | user | `{file: AbsPath}` | `boolean` | no |
+| `pair/open` | user | `{file: AbsPath, kind: "normal" \| "large" \| "remote"}` | `boolean` | no |
+| `pair/open-set` | user | `{files: [{file: AbsPath, kind: "normal" \| "large" \| "remote"}]}` | `boolean` | no |
+| `pair/read-answer` | user | `{error?: Text, req: natnum, text?: string, version?: natnum}` | `boolean` | no |
 | `ping` | user, agent, service | `{}` | `{pid: natnum}` | no |
 | `plans/get` | user | `{plan: string}` | `PlanView` | no |
-| `plans/write` | user | `{base_version?: natnum, plan?: string, project?: string, tasks?: [{blocks?: [string], interfaces?: Text, model?: string, number: string, status?: Status, steps?: [{done: boolean, text: string}], title?: string}], title?: string}` | `{plan: string, tasks?: [TaskId], tx: natnum}` | yes |
+| `plans/write` | user | `{base_version?: natnum, plan?: string, project?: string, tasks?: [{blocks?: [string], body?: Text, interfaces?: Text, model?: string, number: string, profile?: string, role?: string, status?: Status, steps?: [{done: boolean, text: string}], title?: string}], title?: string}` | `{plan: string, tasks?: [TaskId], tx: natnum}` | yes |
+| `plugins/approve` | user | `{hash: Hex64, name: string}` | `PluginRow` | yes |
+| `plugins/disable` | user | `{name: string}` | `PluginRow` | yes |
+| `plugins/list` | user | `{}` | `{plugins?: [PluginRow]}` | no |
 | `presence/set` | user | `{away: boolean}` | `boolean` | no |
 | `records/decide` | user | `{accept: boolean, id: Id}` | `{backup?: string, id: string, note?: string, status: "open" \| "accepted" \| "rejected" \| "stale"}` | yes |
 | `records/import` | user | `{dry_run?: boolean, only?: "plans" \| "ledgers" \| "deferred" \| "build-board" \| "board", root: AbsPath}` | `{backup?: string, dry_run: boolean, files?: [ImportedFile]}` | yes |
@@ -1069,6 +1556,58 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `reports/get` | user | `{id?: string, task?: string}` | `{reports?: [Report]}` | no |
 | `restart` | user | `{}` | `boolean` | no |
 | `review/mark` | user | `{agent: AgentName, event?: {data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text}, hash: string, path: string, state: "accepted" \| "pending"}` | `boolean` | yes |
+| `runners/add` | user | `{accept?: "all" \| "heavy", allow_admin?: boolean, allow_own_account?: boolean, host: string, name?: Id, prefix?: string, profile?: "dedicated" \| "workstation", reserve_mib?: natnum, root?: AbsPath, trust: "mine" \| "my-cloud" \| "shared"}` | `Runner` | yes |
+| `runners/audit` | user | `{job?: Id, key?: KeyName}` | `{rows?: [AuditRow]}` | no |
+| `runners/bench` | user | `{name: Id}` | `Runner` | yes |
+| `runners/check` | user | `{name: Id}` | `Runner` | yes |
+| `runners/keys` | user | `{keys: RunnerKeys}` | `boolean` | no |
+| `runners/keys-held` | user | `{}` | `{names?: [KeyName]}` | no |
+| `runners/list` | user | `{}` | `{runners?: [Runner]}` | no |
+| `runners/probe-host` | user | `{host: string}` | `{effective: Effective, facts?: HostFacts, missing?: [Missing]}` | no |
+| `runners/remove` | user | `{confirm: boolean, name: Id}` | `{name: string}` | yes |
+| `runners/set` | user | `{accept?: "all" \| "heavy", name: Id, profile?: "dedicated" \| "workstation", reserve_mib?: natnum, trust?: "mine" \| "my-cloud" \| "shared"}` | `Runner` | yes |
+| `runners/unbench` | user | `{name: Id}` | `Runner` | yes |
+| `say/end` | user | `{id: Id}` | `boolean` | yes |
+| `say/revise` | user | `{id: Id, text: Text}` | `boolean` | yes |
+| `say/start` | user | `{profile?: string, project?: Id, repo: AbsPath, text: Text}` | `{id: string}` | yes |
+| `search/applied` | user | `{applied?: [string], change: natnum, inverse?: [{byte_end?: natnum, byte_start?: natnum, col: natnum, end_col: natnum, end_line: natnum, id: string, line: natnum, new: string, old: string}], not_open?: boolean, path: string, saved?: boolean, skipped?: [{id: string, why: string}], tick?: natnum}` | `boolean` | no |
+| `search/apply` | user | `{change: natnum, open?: [string], view: string}` | `boolean` | yes |
+| `search/buffer` | user | `{large?: boolean, path: AbsPath, text?: string, tick?: natnum, view: string}` | `boolean` | no |
+| `search/edit-doc` | user | `{context?: natnum, max?: natnum, view: string}` | `{lines: [EditLine], over?: boolean, skipped?: [EditSkip], total: natnum}` | no |
+| `search/edits` | user | `{edits?: [{col: natnum, end_col: natnum, end_line?: natnum, line: natnum, new: string, old: string, path: AbsPath}], ids?: [string], lines?: [{eol?: boolean, line: natnum, line_id: string, new?: [string], old: string, path: AbsPath}], off?: [string], replace?: string, root?: AbsPath, view: string}` | `{change: natnum, files: [FileEdits], skipped: [EditSkip]}` | no |
+| `search/embedders` | user | `{}` | `{builtin: BuiltinInfo, prefer?: string, servers: [ServerInfo]}` | no |
+| `search/files` | user | `{exclude?: [string], ignore?: "index" \| "real", n?: natnum, name?: boolean, query: string, root: AbsPath, view: string}` | `{query: natnum}` | no |
+| `search/fold` | user | `{node: string, open: boolean, view: string}` | `boolean` | no |
+| `search/grep-look` | user | `{fill?: boolean, more?: boolean, upto?: string, view: string}` | `boolean` | no |
+| `search/grep-replace` | user | `{replace: string, view: string}` | `boolean` | no |
+| `search/grep-skipped` | user | `{skipped: [{id: string, why: string}], view: string}` | `boolean` | no |
+| `search/group` | user | `{group: "file" \| "tree" \| "symbol", sort?: "path" \| "count" \| "rank", view: string}` | `boolean` | no |
+| `search/handoff` | user | `{hidden?: boolean, ids?: [string], instruction: Prompt, mark?: {face: string, glyph: string, name: string}, off?: [string], to: {new: {profile: string}} \| {pair: {profile: string}} \| {session: {id: Id}}, view: string}` | `HandoffAnswer` | yes |
+| `search/handoff-context` | user | `{hidden?: boolean, ids?: [string], off?: [string], view: string}` | `{hidden?: [string], rows: [HandoffContextRow], tokens: natnum, total: natnum}` | no |
+| `search/handoff-mark` | user | `{handoff: string, mark: {face: string, glyph: string, name: string}}` | `boolean` | no |
+| `search/handoff-state` | user | `{handoff: string}` | `HandoffState` | no |
+| `search/index` | user | `{now?: boolean, rebuild?: boolean, root: AbsPath}` | `{started: boolean}` | yes |
+| `search/map` | user | `{base?: boolean, budget?: natnum, focus?: [string], names?: [string], root: AbsPath, scope?: "code" \| "all"}` | `{files: [MapFile], files_total: natnum, fresh: Fresh, text: string, tokens: natnum}` | no |
+| `search/model-download` | user | `{consent: {bytes: natnum}, model: Id}` | `{started: boolean}` | yes |
+| `search/outline` | user | `{base?: boolean, docs?: boolean, path: string, root: AbsPath}` | `{entries: [OutlineEntry], fresh: Fresh, lang: string, path: string}` | no |
+| `search/preview` | user | `{off?: [string], path: AbsPath, replace?: string, view: string}` | `PreviewAnswer` | no |
+| `search/query` | user | `{base?: boolean, k?: natnum, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code", text: Prompt}` | `QueryAnswer` | no |
+| `search/recent` | user | `{root: AbsPath}` | `{recent: [SearchSpec]}` | no |
+| `search/run` | user | `{context?: boolean, count?: boolean, group?: "file" \| "tree" \| "symbol", ignore?: "index" \| "real", off?: [string], root: AbsPath, search: {exclude?: [string], include?: [string], query: {case?: boolean, mode: "text", regexp?: boolean, text: string, word?: boolean} \| {case?: boolean, kinds?: [string], mode: "symbol", name: string} \| {mode: "meaning", question: string} \| {lang?: string, mode: "pattern", pattern: string}, replace?: string, scope?: {base?: string, changed_lines?: boolean, files?: [AbsPath], kind: "project" \| "file" \| "open" \| "changed" \| "staged" \| "branch"}}, sort?: "path" \| "count" \| "rank", view: string}` | `{run: natnum}` | no |
+| `search/saved/delete` | user | `{name: string, root: AbsPath}` | `boolean` | yes |
+| `search/saved/list` | user | `{root: AbsPath}` | `{problems?: [string], saved: [SavedSearch]}` | no |
+| `search/saved/put` | user | `{name: string, pinned?: boolean, root: AbsPath, search: {exclude?: [string], include?: [string], query: {case?: boolean, mode: "text", regexp?: boolean, text: string, word?: boolean} \| {case?: boolean, kinds?: [string], mode: "symbol", name: string} \| {mode: "meaning", question: string} \| {lang?: string, mode: "pattern", pattern: string}, replace?: string, scope?: {base?: string, changed_lines?: boolean, files?: [AbsPath], kind: "project" \| "file" \| "open" \| "changed" \| "staged" \| "branch"}}}` | `boolean` | yes |
+| `search/saved/share` | user | `{name: string, root: AbsPath}` | `{path: AbsPath}` | yes |
+| `search/scope-bases` | user | `{root: AbsPath}` | `{current?: string, default?: string, detached: boolean, recent: [string], upstream?: string}` | no |
+| `search/server-plan` | user | `{kind: "tei" \| "ollama"}` | `ServerPlan` | no |
+| `search/server-start` | user | `{confirm: boolean, kind: "tei" \| "ollama"}` | `{provider: ProviderEntry, started: boolean, unit: string}` | no |
+| `search/server-stop` | user | `{kind: "tei" \| "ollama"}` | `{stopped: boolean}` | no |
+| `search/status` | user | `{root: AbsPath}` | `StatusAnswer` | no |
+| `search/symbol-at` | user | `{file: string, line: natnum, root: AbsPath}` | `{name?: string}` | no |
+| `search/symbols` | user | `{base?: boolean, k?: natnum, kind?: [string], match?: "auto" \| "exact" \| "prefix" \| "contains" \| "regex", name: string, path?: string, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code"}` | `{fresh: Fresh, matched: "auto" \| "exact" \| "prefix" \| "contains" \| "regex", symbols: [SymbolHit]}` | no |
+| `search/typing` | user | `{}` | `{}` | no |
+| `search/undo` | user | `{change: natnum, open?: [string], view: string}` | `boolean` | yes |
+| `search/usages` | user | `{base?: boolean, k?: natnum, name: string, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code"}` | `{defined: [SymbolHit], fresh: Fresh, usages: [Usage]}` | no |
 | `settings/confirm` | user | `{error?: string, ok: boolean, tx: natnum}` | `{state: "accepted" \| "reverted" \| "blocked"}` | yes |
 | `settings/explained` | user | `{req: natnum, settings: [JsonObject]}` | `boolean` | no |
 | `settings/record` | user | `{changes: [{file: string, id: string, line?: natnum, value?: Text}], req: string, reverts?: natnum, tool: string}` | `{tx: integer}` | yes |
@@ -1079,7 +1618,43 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `tasks/find` | user | `{assignee?: string, cursor?: natnum, labels?: [string], project?: string, query?: Text, status?: Status}` | `{cursor?: natnum, tasks?: [any]}` | no |
 | `tasks/ready` | user | `{labels?: [string], limit?: natnum, project?: string}` | `{cursor?: natnum, tasks?: [any]}` | no |
 | `tasks/write` | user | `{acceptance?: Text, add?: [string], body?: Text, cwd?: AbsPath, dst?: string, id?: string, kind?: string, labels?: [string], lease?: integer, mode?: "children" \| "replace", note?: Text, op: "create" \| "update" \| "claim" \| "heartbeat" \| "release" \| "handoff" \| "reassign" \| "split" \| "complete" \| "link" \| "unlink" \| "label" \| "tools", parent?: string, parts?: [Text], priority?: integer, project?: string, remove?: [string], src?: string, status?: Status, title?: Text, to?: string, tracker?: boolean, ver?: integer}` | `any` | yes |
-| `timeline/get` | user | `{id: string, rollup?: boolean, scope: "session" \| "task" \| "plan" \| "project", since?: natnum}` | `{next?: natnum, rollup?: Rollup, steps?: [Step]}` | no |
+| `term/attach` | user | `{cell_px?: [natnum, natnum], cols: natnum, id: string, rows: natnum, rows_in_sja?: boolean}` | `{id: string, view: string}` | no |
+| `term/clipboard-reply` | user | `{id: string, req: natnum, text?: string}` | `boolean` | no |
+| `term/close` | user | `{id: string, signal?: integer}` | `boolean` | no |
+| `term/config` | user | `{config: [[string, SettingValue]], id: string}` | `boolean` | no |
+| `term/fetch` | user | `{before_key?: string, id: string, max_bytes?: natnum}` | `{version?: natnum}` | no |
+| `term/focus` | user | `{id: string, in: boolean}` | `boolean` | no |
+| `term/key` | user | `{action?: "press" \| "repeat" \| "release", id: string, key: string, mods?: [string], text?: string, unshifted?: natnum}` | `boolean` | no |
+| `term/list` | user | `{}` | `[TermStatus]` | no |
+| `term/mouse` | user | `{button?: integer, col: natnum, id: string, kind: string, mods?: [string], row: natnum}` | `boolean` | no |
+| `term/open` | user | `{cell_px?: [natnum, natnum], class: string, cols: natnum, command?: [string], config?: [[string, SettingValue]], dir: string, env?: [[string, string]], memory_max?: string, place?: string, remote?: string, rows: natnum, rows_in_sja?: boolean, tasks_max?: string, window?: natnum}` | `{id: string, view: string}` | no |
+| `term/paste` | user | `{id: string, text: string}` | `boolean` | no |
+| `term/resize` | user | `{cell_px: [natnum, natnum], cols: natnum, id: string, rows: natnum}` | `boolean` | no |
+| `term/scroll` | user | `{delta?: integer, from?: string, id: string, prompt_delta?: integer, to?: string}` | `{key?: string}` | no |
+| `term/search` | user | `{dir?: string, id: string, query: string}` | `{found: natnum, held: natnum, model?: natnum}` | no |
+| `term/session-end` | user | `{keep?: [string]}` | `natnum` | no |
+| `term/text` | user | `{id: string, text: string}` | `boolean` | no |
+| `term/text-range` | user | `{from_key?: string, id: string, to_key?: string}` | `{text: string}` | no |
+| `term/visible` | user | `{id: string, visible: boolean}` | `boolean` | no |
+| `timeline/get` | user | `{before?: natnum, id: string, limit?: natnum, rollup?: boolean, scope: "session" \| "task" \| "plan" \| "project", since?: natnum}` | `{next?: natnum, rollup?: Rollup, steps?: [Step]}` | no |
+| `view/ack` | user | `{class: string, version: natnum, view: string}` | `boolean` | no |
+| `view/close` | user | `{view: string}` | `boolean` | no |
+| `view/env` | user | `{attach?: boolean, cell: [natnum, natnum], class: string, display: "gui" \| "tty", epoch: natnum, fonts?: [[string, string \| null, natnum, number, number, number, number, number]], palette?: [[string, string]], reduced_motion?: boolean, rows_in_sja?: boolean, scale: number, tty_widths?: [[natnum, natnum, natnum]], tz?: string, view: string, width_px: natnum}` | `boolean` | no |
+| `view/glyphs` | user | `{class: string, glyphs: [[string, string, number]], view: string}` | `boolean` | no |
+| `view/measured` | user | `{class: string, measured: [[string, string, number]], view: string}` | `boolean` | no |
+| `view/resync` | user | `{class?: string, model?: boolean, version?: natnum, view: string}` | `boolean` | no |
+| `view/window` | user | `{from: natnum, list: string, view: string}` | `boolean` | no |
+| `work/board/subscribe` | user | `{map: string, plans?: [string], view: string}` | `{hub: natnum}` | no |
+| `work/conclusions` | user | `{session: string}` | `{conclusions?: [Conclusion]}` | no |
+| `work/file-at` | user | `{path: string, seq: natnum, session: Id}` | `{bytes: string, seq: natnum}` | no |
+| `work/files` | user | `{session: Id}` | `{files: [EditedFile]}` | no |
+| `work/flow/subscribe` | user | `{detail?: string, job?: string, map: string, rules?: boolean, view: string}` | `{hub: natnum}` | no |
+| `work/hunks` | user | `{path: string, session: Id}` | `{diff: string}` | no |
+| `work/map/close` | user | `{view: string}` | `boolean` | no |
+| `work/map/set` | user | `{clear?: boolean, collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, outline?: string, selected?: string, shown?: boolean, view: string, width_units?: natnum}` | `{version: natnum}` | no |
+| `work/map/subscribe` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, outline?: string, selected?: string, view: string, width_units: natnum, workspace: {id: string, roots?: [string]}}` | `{hub: natnum, version: natnum}` | no |
+| `work/trail/close` | user | `{view: string}` | `boolean` | no |
+| `work/trail/subscribe` | user | `{lanes?: [{label: string, session: string}], session?: string, view: string}` | `{hub: natnum}` | no |
 <!-- hub-methods:end -->
 
 ### Classes
@@ -1097,7 +1672,7 @@ method from every class).
 | Classes | Methods |
 |---|---|
 | user, agent, service | `hello`, `ping`, `status`, `coord/notify` (users too: SB-T12-4), `agents/list`, `spend` |
-| user | `restart`, `shutdown`, `subscribe`, `events/since`, `env/set`, `config/settings`, `config/changed`, `gateway/register`, `gateway/unregister`, `gateway/keys`, `gateway/set-budget`, `gateway/editor-token`, `gateway/keys-held`, `agents/{start,get,send,stop,kill,permission,do}`, `job/{propose,start-task,reassign,block,unblock,order,approve,stop,resume,card,reply,dismiss,status}`, the editor's writes `cards/settle`, `messages/{send,mark}`, `events/add`, `review/mark`, the seam's `coord/{job-create,job-set,task-status,leases,decide,agent,card-create,card-set,held,prune}`, and `mcp/{session,session-close}` |
+| user | `browser/check`, `restart`, `shutdown`, `subscribe`, `events/since`, `env/set`, `config/settings`, `config/changed`, `gateway/register`, `gateway/unregister`, `gateway/keys`, `gateway/set-budget`, `gateway/editor-token`, `gateway/keys-held`, `agents/{start,get,send,stop,kill,permission,do}`, `job/{propose,start-task,reassign,block,unblock,order,approve,stop,resume,card,reply,dismiss,status}`, the editor's writes `cards/settle`, `messages/{send,mark}`, `events/add`, `review/mark`, the seam's `coord/{job-create,job-set,task-status,leases,decide,agent,card-create,card-set,held,prune}`, and `mcp/{session,session-close}` |
 | service | `mcp/attach` (an outside agent's bridge: [Sessions and their sockets](#sessions-and-their-sockets)) |
 
 Everything that answers, approves, starts, stops, configures or reads a transcript is `user` only. What the other
@@ -1166,12 +1741,117 @@ result is (`event(NAME).check`):
 | `settings/explain` | the front (`settings_get`) | `{req, scope, names?, root?}`: the editor answers `settings/explained` with the same `req` |
 | `agent-step` | sessions (the front) | `{session, step: Step}`: a step opened or closed, with its class, the hub's stamps and its anchors |
 | `exec-done` | jobs (the front) | `{id, session?, status, exit?, summary: {exit?, failing, lines, log}}` |
+| `exec-progress` | jobs (the front) | `{id, file, plan}` or `{id, file, step}`: a `--progress` job's plan or step file changed ([Jobs](#jobs-exec), "Progress") |
+| `plugin` | plugins (the front) | `{name, state}`: a plugin's state changed (`unapproved`, `approved`, `changed`, `disabled`, `broken`, or `removed` when its folder is gone) |
+| `machines-changed` | machines (the front) | `{machines: [{machine, slots: [{id, holder?, kind}], local}]}`: the whole list, sent when a report, an expiry or the local slots changed it |
+| `agent-presence` | the presence model (to the connections that asked) | `{file, rel?, repo?, entries: [{session, file, mode, line?, line_end?, col?, source, step, at, live?, tool_call?}]}`: who is in the file now (running tool calls included), at most once per file per 100 ms ("The presence model") |
+| `agent-buffer` | the buffer views (to the view's connection only) | `{view, version, base, doc_version?, approximate?, agents: [{session, ordinal?, handle?, mode, line?, line_end?, col?, source, live?, projected?, step_title?, plan_entry?}], gutter: [{session, kind, start, end, projected?, help}]}`: a watched buffer's frame, at most once per view per 50 ms ("The buffer view") |
+| `agent-follow` | the follow feed (to the view's connection only) | `{view, session, file?, worktree, line?, col?, mode: listed \| read \| pending \| write \| edit, step_title?, plan_entry?, why_source: plan_entry \| step_title, changed?}`: where the followed session is now, at most once per 200 ms ("The follow feed") |
 | `supervisor` | the supervisor | `{rule, session?, exec?, task?, card?, text}` |
 | `view-written` | records | `{path, kind, hash}`: a view file written (never committed) |
 | `view-proposal` | records | `{id, path, by?}`: a hand edit to a view became a proposal |
+| `agent-wheel` | sessions | `{id, state: held \| free}`: the user's hold on a session's wheel; `held` once the turn the take stopped has ended and its step snapshot is taken (coordination.md, "Take the wheel") |
+| `wheel-save` | sessions (a give) | `{req, id, worktree}`: the editor saves its buffers in the session's worktree and answers `agents/wheel/saved {req, unsaved}` |
+| `pair-apply` | the pair door (to the editor that has the file) | `{write, session, ordinal, file, version?, floor?, edits: [{kind: replace, old, new} \| {kind: lines, line, delete, text}], ttl_ms}`: applied whole or refused whole, answered by `pair/answer` ([Pair mode](#pair-mode)) |
+| `pair-read` | the pair door | `{req, file}`: the editor answers `pair/read-answer` with the buffer's text and version |
+| `pair-reconcile` | the pair door | `{write, file}`: no answer in `ttl_ms` plus a margin; the editor answers `pair/answer` from what it applied |
+| `pair-drop` | the pair door (to each editor holding the session's writes) | `{session, reason: pair-off \| held \| never}`: drop the session's queued writes, each answered `dropped` with the reason |
 
 The hub sends every event it lists; `card` and `lease-released` are in the registry for the clients that read them,
 and nothing sends them now (`runstav/src/events.rs`).
+
+## Pair mode
+
+A chat in a project edits your checkout only through the hub's door (`src/pair/`; user guide:
+[pair-mode.md](../guide/pair-mode.md); per agent: [pair-routing.md](pair-routing.md)). The sandbox still binds the
+checkout read-only for it.
+
+- **Its tools.** Every chat in a project gets `read_file {path}`, `edit_file {path, old, new}` and `write_file {path,
+  content}` on its `mcp.sock` (`norn::tools::pair`, through `Hub::pair_read` / `Hub::pair_write`); a Claude chat also
+  starts with `disallowedTools` = `Edit`, `Write`, `MultiEdit`, `NotebookEdit` (`lock::LaunchPlan::with_project_chat`;
+  its `Read` stays). A chat's ACP `fs/read_text_file` and `fs/write_text_file` inside the project go to the same door,
+  on a task of their own so the session's reader loop never waits on an editor; every other session keeps the fence.
+- **The gates.** `pair::gate`: `chat.project-edit` decides (never: refused; ask: the Pair toggle is the user's;
+  allow: paired from the start), never the chat's `code.edit`; `chat.project-read` too; an absolute path inside the
+  checkout, links resolved, never `.git/`, the protected agent-config paths, a CI or build file or a credential file.
+  `pair::read_gate` (every hub-served read): `chat.project-read`, inside the checkout, never a credential file.
+- **A write** goes to the editor as `pair-apply` with a relative `ttl_ms` (2000) the editor counts from its arrival.
+  `edit_file` travels as it is (the editor needs one match at apply time); `write_file` of an existing file needs a
+  read the editor served to that session (`read_file`, `fs/read_text_file`), and is diffed into line hunks against it
+  at its version; a new file needs none. One file's writes go one at a time, in order (`pair::writes::FileQueue`).
+- **The verdict is the editor's** (`pair/answer {write, result: applied | refused | dropped, version?, reason?, lines?,
+  saved?, not_saved?}`), from the connection the write went to. At `ttl_ms` plus a second with no answer the hub sends
+  `pair-reconcile`, which the editor answers from what it applied; the hub's timer never refuses. An editor that goes
+  away leaves a write in flight unknown ("read it with read_file to see"), never refused.
+- **Refusals** that need a re-read name `read_file`. Two refusals of one file within 60 s add "wait for the user or ask
+  them", and the session's snapshot carries `waiting {file, lines?}` until a write of that file applies.
+- **The open set** (`pair::open_set`): the editor tells the hub which files it has open, `pair/open {file, kind:
+  normal | large | remote}` and `pair/closed {file}`, and sends its full set (`pair/open-set {files: [{file, kind}]}`)
+  at its module's setup and on every connection, replacing what the hub held for it. A write and a hub-served read go
+  to the editor that has the file in a normal buffer; a large or remote buffer refuses the write; a file open in an
+  editor that went away refuses "the editor is away" until an editor opens it again or sends its set; a file no editor
+  has is read from the disk and written there (`pair::disk`, next item).
+- **The disk path** (`pair::disk`): a write of a file open nowhere lands only when the file's content hash (of its
+  canonical text: no BOM, LF) equals the last read the hub served that session ("changed since you read it; read it
+  with read_file"; never read: "you have not read it yet"), or, for a whole-file write, when the file does not exist.
+  It is atomic: a temporary file in the same folder, made beneath the checkout without following a link, takes the old
+  file's mode, owner (when the hub may set it), ACLs, extended attributes and SELinux context, keeps its BOM and CRLF
+  line ends, is synced, and is renamed over the file (a hard link is broken on purpose). The gate resolved a link to its
+  target inside the checkout, which is written; a link that names nothing is refused. Missing parent folders are made
+  only after every check passed and removed again if the write fails. Before the rename the write is recorded in the
+  project's edit history as the agent's operations (`Hub::on_agent_write`, the same record an agent's own write gets),
+  so the watcher's event about it is the hub's version, not an outside edit. The written text is the session's read
+  from then on.
+- **The toggle** (`agents/pair {id, on}`, the user's only): on needs `chat.project-edit` not never; off closes the
+  door at once: the session's writes not yet sent are refused "pair mode was turned off by the user", each editor
+  holding one is sent `pair-drop` (its answers `dropped` are the verdicts), and a note is queued to the agent; nothing
+  is cancelled. The snapshot's `paired` (chats in a project only) is the toggle, else the cell's allow.
+  `Door::hold` closes the door the same way while the user holds the wheel ("the user holds the wheel"), and
+  `Door::recheck` when the matrix makes the session's `chat.project-edit` never (a preset or a cell changed, reason
+  `never`): the task `pair::door::follow_matrix` decides every paired session again at each change that may change an
+  answer (`coord::Signals::answers_changed`), so the writes queued in the editor are dropped then, not at the next
+  write.
+- **Presence**: the door shares the hub's presence model (`work::presence::Live`). A write it sends is the session's
+  live entry `pair:WRITE` in `pending` mode on the lines it will change (`edit_lines::of_diff` over the session's served
+  read, else the file on disk up to `EDIT_TEXT_MAX`; the file only when `old` is not there once), in place before
+  `pair-apply` goes out. Applied, the entry closes into the session's `edit` entry on the lines the new text covers,
+  ranked at the session's step in that file (`Presence::step_in`), so it replaces the read before it and a later step
+  replaces it; refused, dropped or lost, it goes. The editor's buffer views and `agent-presence` follow; the Work map
+  hears it with the session's next step.
+- **The editor's side** is `modules/tools/drgnx-agent-pair.el` (module `tools/agent-pair`). Every pair call goes on
+  the subscribed connection, the one the door sends to. The event handler only queues a `pair-apply` in the buffer
+  visiting the file (deadline: arrival plus `ttl_ms` on Emacs's clock); `drgnx-agent-pair--drain` takes the queues
+  from `post-command-hook` (when `drgnx-agent-pair--pending` is set) or a zero-delay wall timer, only when
+  `drgnx-agent-pair-slot-open-p` holds: no command runs (a count kept by `pre-`/`post-command-hook`,
+  `drgnx-agent-pair-command-step`, since minibuffer commands run inside another), recursion and minibuffer depth 0, no
+  keyboard macro, no isearch, the history not resyncing, the re-entrancy lock free. An expired write is answered
+  `dropped` (`expired`) before its apply starts; a started one is never dropped. Answers are recorded (the last 256,
+  `drgnx-agent-pair-answer-of`) for `pair-reconcile` and sent again on the next connection until acknowledged.
+  `pair-read` is answered with the buffer's text and its version: its drain counter in the edit history after a drain
+  (`drgnx-history-drain-now`; none when the history does not track the buffer, so a whole-file write is refused).
+- **The shift** (`drgnx-agent-pair--shift`): while an `agent` snapshot says a chat is paired in a folder, each buffer
+  there keeps the changes every drain sent (`drgnx-history-drained-functions`) in `drgnx-agent-pair--log`, bounded by
+  4096 drains or back to the hub's `floor` (sent with each `pair-apply`), whichever reaches further; a drain that
+  returned `resync` (and the history's own resync) is a gap. Each version handed out keeps its line starts (the last
+  16). An apply drains first, then moves each `lines` edit's range past the changes since its version: a change before
+  it shifts it, one after leaves it, one inside it (or typed at its start) is a conflict and the whole write is refused
+  `overlap` with the lines it would change now; a version older than the log or before a gap is refused `gap` ("read it
+  with read_file"). An `edit_file` edit must match once in the text. No edit may touch the guard zone (the line at point
+  ±1 in every window on the buffer, and the active region): refused `guard` with its lines. Nothing falls back to an
+  unshifted apply. The applied answer carries the version after the write.
+- **The apply** (`drgnx-agent-pair--apply`): a read-only buffer refuses (`read-only`), a file another Emacs locked
+  refuses (`locked`); a file changed on disk is read again first when the buffer has no unsaved edits
+  (`insert-file-contents … replace` inside `drgnx-with-no-prompts`, origin `external:disk`, never `revert-buffer`),
+  else refused (`changed-on-disk`). The ranges get markers first and are replaced last to first through
+  `replace-region-contents` (with `drgnx-agent-pair-max-secs`, so point and markers stay on their text), inside one
+  change group amalgamated into one undo step, with `undo-boundary` before and after, all inside
+  `drgnx-history-with-origin` bound to `agent:SESSION#STEP` (`pair-apply` carries `step`, the session's current step, 0
+  before its first; a disk write records the same cause); the ring is drained right after (the answer's version), so the
+  change reaches the hub as the agent's before a resync could strip its origin. Then the command loop learns an apply
+  ran: from `post-command-hook` `this-command` is set to `drgnx-pair-apply` (the loop copies it to `last-command` after
+  the hook); from the timer `last-command` itself. So typing after an apply starts its own undo group, an `undo` run
+  ends at an apply, and `C-/` takes the agent's write away as one step. Each apply's milliseconds go to
+  `drgnx-agent-pair-apply-ticks` (the `pair-apply-tick` probe, the last 64).
 
 ## Per-session sockets
 
@@ -1192,21 +1872,24 @@ and name. The session is recorded in `runtime.db` (`asession`, migration 5) and 
 (`run_by` its agent, `works_on` its task; a brainstorm's topic note and design document are in its `data`).
 
 - **Module env.** `agents/start` takes `env` (at most 8 `{name, value}`): what the editor's modules add through
-  `drgnx-agents-env-functions` (the Live browser's `PLAYWRIGHT_MCP_CDP_ENDPOINT`). Each name must be on the runtime
+  `drgnx-agents-env-functions` (no module adds one by default). Each name must be on the runtime
   setting `drgnx-agents-start-env-names` and must not be `refused_env_name` (a name with KEY, TOKEN, SECRET, PASSWORD,
   PASSPHRASE or CREDENTIAL in it) nor a provider's `key_env` (as `env/set`), else `invalid-params` at `env[i].name`; the values are added to the launch plan's
-  environment last, so they win over the profile's and the lock's. They belong to that start only: a session the hub
-  restarts or resumes does not get them again. The mirror (`drgnx-agents-mirror-start`) fills `env` from the hook and
+  environment last, so they win over the profile's and the lock's. The hub keeps them in the session's notes
+  (`meta.json`, 0600 in its own folder): a session it restarts or resumes gets them again, checked against the settings
+  as they are then (a name taken off the list since, or now a provider's `key_env`, is left out and logged). The mirror (`drgnx-agents-mirror-start`) fills `env` from the hook and
   drops, with one notice, the names the hub would refuse. The mirror also runs `drgnx-agents-task-functions` for hub
   sessions that have a task: `start` when a session is first seen, `turn-start` when a turn begins and `turn-end` when
   it ends. A turn begins when the status becomes `busy` and ends when it stops being busy or when its `stop` entry
   arrives, whichever the mirror sees first: the hub sends a session's state at most every 50 ms, so a short turn can
   go by with no `busy` snapshot. Each turn runs its hooks once (the mirror counts turns per session), a snapshot or
-  entries sent again run nothing, and the turns already in a transcript fetched at attach run none. The work tracker
-  records a task's commits from `turn-end`.
+  entries sent again run nothing, and a fetched transcript's turns that had ended when the editor last heard of the
+  session (within the `entries-count` of the last snapshot it applied) run none. A turn that ended after that runs
+  its hooks once, even when it ended before the fetch's answer and its own events were dropped as older than it. The
+  work tracker records a task's commits from `turn-end`.
 
 - **Shapes.** Snapshots and entries are records 2 (`runstav::methods::agents::{Snapshot, Entry}`), unchanged for the
-  mirror and the cockpit. Message chunks of one message join into one entry (`text`, `length`); a tool call and its
+  mirror and the Work space. Message chunks of one message join into one entry (`text`, `length`); a tool call and its
   updates are one `tool` entry; a plan is replaced, not repeated. `agent` and `agent-entries` events come at most
   once per session per 50 ms. `agents/list` for an `agent` or `service` caller is shaped by `shape::result`.
 - **Permissions.** A permission request of the agent waits in the snapshot's `permissions` until the user answers it
@@ -1221,7 +1904,9 @@ and name. The session is recorded in `runtime.db` (`asession`, migration 5) and 
   unsandboxed.
 - **Stop and kill.** `agents/stop` on a running turn cancels it (`session/cancel`), answers the pending permission
   requests cancelled and holds the queue (`paused`); an agent that has not ended the turn after 2 s loses its process
-  group. A second Stop of the same turn changes nothing. On a session with no turn running it ends the session
+  group. A second Stop of the same turn changes nothing. A Stop that comes before the turn's prompt has reached the
+  agent wins: the prompt is not sent, no `session/cancel` goes, and it waits at the front of the held queue. On a
+  session with no turn running it ends the session
   (SIGTERM, SIGKILL after 3 s). `agents/kill` ends it at once. The pause after a tool call and the turn's end answer
   the requests still waiting cancelled too.
 
@@ -1248,13 +1933,16 @@ event and performs what it answers; the entries, steps and transcript stay with 
   `PromptFailed` (closed or not), `Stop` (or the pause after a tool call), `Kill` (`agents/kill`, the hub ending, or
   a Stop's deadline for its turn), `PermissionAsked` (with the turn it came in), `PermissionAnswered`,
   `ToolCompleted`, `EmitTick`, `QueueEdited` (deliver, unqueue, requeue, the freshness gate's notice), `Changed`,
-  `Exited`, and `Sending` (the turn's task is about to hand its prompt to the agent).
+  `Exited`, `Sending` (the turn's task is about to hand its prompt to the agent), `Written` (the prompt's line is on
+  its way to the agent), and `Detach` / `Reattach` (a rewind
+  swaps the conversation: [Rewind and fork](#rewind-and-fork)). `PromptDone` and `PromptFailed` name their turn.
 - Effects: start a turn with the next prompt, send its prompt now (`Prompt`) or put it back (`PutBack`, the hub's
   end), name what a user's kill drops (`Discard`), end it (waiting on a job, or held), tell the agent to cancel, arm a
   Stop's deadline, end the process group, hold a permission request for the user, answer it or answer it cancelled,
   keep the queue on disk, announce a change, arm and send the event pair; and the refusals (exited, not free, no
   turn running, no such queued prompt, no such request).
-- The shell asks it `status()`, `queue()`, `paused()`, `turn()`, `ending()` and `is_free()`.
+- The shell asks it `status()`, `queue()`, `kept()` (what the queue on disk holds), `paused()`, `turn()`, `ending()`
+  and `is_free()`.
 
 What the core keeps:
 
@@ -1263,9 +1951,17 @@ What the core keeps:
 - A prompt sent while the process is being ended for good (`agents/kill`, `agents/stop` with no turn running, a
   Stop's deadline) is refused as exited, and the session is not free then: the sender keeps it (a peer's message goes
   back to `queued`, a wake stays pending). A prompt sent while the hub ends waits on disk for the next start.
-- A turn's prompt reaches the agent only through its `Sending` step. When the hub ends between a turn's start and that
-  step, the turn is put back: its prompt goes back to the front of the queue, which is kept on disk, and the shell
-  drops the turn's entries (the transcript file holds a turn's entries only once its prompt was sent). When the
+- A turn's prompt reaches the agent only through its `Sending` step. Until then the queue on disk holds it at its
+  front (`kept()`: the waiting prompts behind the prompt not yet sent), so a hub that dies in between, with no end
+  step, runs it at the next start; the shell writes the turn's entries to the transcript file first and then the
+  queue without it (a hub that dies between the two runs the prompt again rather than losing it). When the hub ends,
+  a Stop comes or the agent's process exits between a turn's start and that step, the turn is put back: its prompt
+  goes back to the front of the queue, on disk too (held, after a Stop; for the next start or resume, after an exit),
+  and the shell drops the turn's entries (the transcript file holds a turn's entries
+  only once its prompt was sent). Between `Sending` and `Written` the turn's task still awaits (the tree's snapshot,
+  the transcript): a Stop then sends its `session/cancel` at `Written`, after the prompt's line, and its 2 s deadline
+  runs from there (an agent reads its input in order; a cancel ahead of the prompt would be lost, and the deadline
+  would end a turn the agent was never told to stop). When the
   user's kill comes there instead, the prompt is dropped with the queue, and `Discard` names both, so a peer's
   message among them goes back to `queued` in the store.
 - A turn ends once, at its agent's answer. A second Stop of a stopped turn changes nothing; a Stop's deadline ends
@@ -1273,8 +1969,15 @@ What the core keeps:
 - Each permission request is answered or answered cancelled once. A Stop, the pause after a tool call, the turn's end,
   a kill and the agent's exit cancel what is held; a kill's cancels change the snapshot at once, so the editors drop
   the card before the exit. A request the matrix decides on after its turn was cancelled or ended is answered
-  cancelled at once: the agent no longer waits on it.
-- One event pair is armed at a time; the timer's tick sends it.
+  cancelled at once: the agent no longer waits on it. A matrix card that no request waits on any more after such a
+  cancel is withdrawn (`Withdraw`: `norn::write::cards::card_withdraw`, state `withdrawn` with a `card` event), so it
+  leaves the open cards and the needs-you lists; a card the user settled first stays settled. A hub that crashed took
+  its sessions' agents with it, so at the next start, before any session resumes, every open matrix card with a
+  session (`norn::write::cards::withdraw_orphaned_matrix_cards`) is withdrawn the same way; a resumed session that
+  asks again gets a new card, and a matrix card with no session (a job's spending limit) stays.
+- One event pair is armed at a time; the timer's tick sends it. While the hub ends none is armed or sent: the shell
+  reads the snapshot when it sends a pair, so one sent then could show the session's own exit, and an editor that read
+  it before its connection's end of file would keep that reason instead of the hub's.
 
 The shell acts on a turn's end as the step decided it: whether the hub is ending is read under the step's lock, never
 again after it.
@@ -1286,12 +1989,22 @@ again after it.
 - four senders, an editor that removes and delivers, an agent, and a pause after the tool call;
 - two senders, the hub's delivery (`sending`, then the prompt), an editor that delivers, an agent, and the user's kill
   or the hub's end, then the exit;
+- a sender, an agent, the event pair's timer, and the hub's end, then the exit (no pair goes out while the hub ends);
 - a user who answers and stops, an agent that asks twice, completes a tool call and answers, a pause after the tool
-  call, and the cockpit settling a card;
+  call, and the Work space settling a card;
 - two senders, an agent that asks in each turn, the matrix deciding late, and the user's kill, the hub's end or a
   crash;
+- a user who sends and stops, an agent that asks the same question twice and answers, the matrix deciding late
+  through the question's open card or a new one, and the Work space settling the open card (no card stays open that no
+  request waits on, and none is withdrawn while one does);
 - two senders, the turn's task that sends each prompt in a step of its own, an agent, and the hub's end, then the exit
   (every prompt reached the agent or waits in the queue on disk);
+- the same, but the hub dies with no end step and nothing of it runs after (every prompt reached the agent or is in
+  the queue on disk);
+- a sender, the turn's task that sends in a step of its own, the freshness gate's notice (a queue write), and the
+  agent's exit, then a resume from the queue on disk (every prompt reaches an agent once);
+- a user who sends, stops and delivers, the turn's task that sends each prompt in a step of its own, an agent, and
+  the stop's deadline (no prompt goes after its turn was told to cancel);
 - a sender, the hub's delivery (`sending`, the prompt, the mark), an agent, and the user's kill, then the exit (a
   message marked delivered ran; one the kill discarded is `queued` again).
 
@@ -1319,9 +2032,287 @@ topic note and design document, so that a resumed brainstorm keeps its write fen
 The hub cuts each turn into steps from its own clock (`think` between tool calls, `tool` from the tool call to its
 `completed`/`failed` with the title and ACP kind, `user-wait` while a permission request waits, `paused` while the
 queue is held) and writes each closed step to schema 8's `step` table (`norn::write::steps`), in order, from one
-writer task per session; the last step of a turn carries its tokens and `turn_id` (`_meta.turnId`). Each write is
-announced as an `agent-step` event (`{session, step}`) and on `Hub::subscribe_steps()`. A store that is not ready
-loses the row (logged), not the event.
+writer task per session; the last step of a turn carries its tokens and `turn_id` (`_meta.turnId`). The steps that
+closed while the writer was busy go in one transaction (at most 256): the graph writer holds a transaction open for
+its linger after the first request, so one transaction per step capped a session at about one step per linger, and a
+10,000-step turn's steps were readable (`timeline/get` waits for them) only minutes after it ended. A batch that fails
+is written again one step at a time, so a bad row loses only itself. Each write is announced as an `agent-step` event
+(`{session, step}`) and on `Hub::subscribe_steps()`. A store that is not ready loses the row (logged), not the event.
+
+**Step detail** (`work::detail::of`, schema 9's `step_detail`): a tool step also records what it read, searched or
+fetched, in the same transaction as the step, taken when the call completes because `rawInput` is refined while it
+streams. The hub keeps `_meta.claudeCode.toolName` and `.parentToolUseId` of each tool call beside the entries (the
+entries' wire shape is unchanged) and classifies by tool name, never by ACP kind alone: Claude's `WebSearch` is kind
+`fetch`, like `WebFetch`. A provider that sends no name (Codex's parsed calls, Gemini) is classified by kind; Gemini's
+query or URL, which is only in the title, is labelled `acp-title`. A `Read` has `line_end` only from `rawInput.limit`.
+Content is never kept and no text field is longer than 4 KiB. A shell call has no detail yet (the shell-read layers
+write `command` and `opened` details). The detail is the step's `detail` on `agent-step` and `timeline/get`
+(`runstav::methods::timeline::StepDetail`). The mock agent's `provider:read|grep|web-search|web-fetch|write` words
+send each personality's real shapes. A Claude Code subagent's steps (the `Task` tool's nested calls) keep the
+`Task` call's id as `detail.parent_tool` (`work::subagents`); the mock's `provider:task DESCRIPTION` sends one.
+Edits have their own words (table in `runtime/conformance/src/mock_acp/mod.rs`): `provider:edit-stream`,
+`provider:pending-edit`, `provider:diff-hunks`, `provider:whole-diff`, `provider:native-edit` and `moves N [SECONDS]`.
+
+### The presence model
+
+Who is in which file, at which line, now (`work::presence`; agent system part 2 builds it, part 3's cursors, gutter
+and badges build on it). This is its contract.
+
+- **An entry** is one session's latest `{session, file, mode, line?, source, step, at}` in one file
+  (`runstav::methods::work::PresenceEntry`). `file` is an absolute path, its links followed: a file that does not exist
+  (not made yet, or removed) under the true name of its nearest folder that does, as a workspace root is (on macOS a
+  root asked as `/tmp/…` and a missing file under it are both `/private/tmp/…`); `mode`
+  is `read`, `edit`, `listed` (a listing, a recursive search) or `write` (a shell command's); `line` is the last line
+  known, or absent ("file only"); `source` is `acp` (a read or search step's fields), `edit` (an edit step), `command`
+  (a file a shell step's command names, from `work::shell_read`, only inside the session's folder) or `opened` (a file
+  its processes opened; Gleipnir's tracer, not yet); `step` is the timeline step it came from, `at` the hub's time.
+  Of one session's entries in one file the later step wins, then the stronger mode (`edit` > `write` > `pending` >
+  `read` > `listed`). Part 3 adds `line_end` (the range's last line), `col` (the column after an edit's last inserted
+  character, where its cursor sits) and `pending` (an edit about to land).
+- **Edit lines and read ranges** (part 3, `work::edit_lines`): an edit's lines come from its ACP `diff` content, never
+  from `rawInput`. A fragment (Claude's `Edit`, Codex's one `diff` per hunk) is placed where its `oldText` is found
+  exactly once in the file's text now, or its `newText` once it has landed; a whole file (Gemini's diff, a `Write`, a
+  new file) is its old text diffed against its new, line by line. A call with several hunks sits on its last one.
+  Lines count on LF (a CRLF file is read as LF); found nowhere, or more than once, or in a file over 8 MiB, the entry
+  is the file only. The step's detail records the lines (`line_start`, `line_end`), so they survive a restart. A
+  read's range is its location's line (else its `offset`) through `limit` lines.
+- **Pending:** an edit call with `diff` content that is still `pending` or `in_progress`, and a permission request
+  for one that waits for the user, show as `pending` on the lines the diff will change. A refused request's entry
+  goes at once; an allowed one gives way to the call's own updates.
+- **The live feed** (part 3): the session's reader applies each `tool_call` and `tool_call_update` as it arrives, not
+  only when the step closes. Such an entry has `live: true`, `tool_call` (the call's id) and `step: 0`, and stands in
+  for the session's closed entry in that file while the call runs. The call's end replaces it: the closed step's entry
+  when it completed, nothing when it failed or was denied; a step cut while its call runs on (a permission wait, the
+  next call starting) leaves the live entry standing, and a call that ends with no step of its own open drops it at
+  once. An update for a call already closed is dropped, so the reader and the step writer may come in either order.
+  Live entries are never rebuilt after a restart.
+- **Now:** a session's running call in a file is now; otherwise an entry is now while its session is live and it is
+  younger than 120 s (`presence-stale-after`) or it is its session's latest entry (a running call's, if it has one).
+  Older entries stay as history. A session ended with `agents/stop` or `agents/kill` is in no file.
+- **Methods** (user connections): `agents/presence/subscribe {workspace: {id, roots}} | {file}` makes the connection
+  get `agent-presence` for the files under the roots (or that file) from then on, and answers `{files: [{file, rel?,
+  repo?, entries}]}`, who is in them now; `agents/presence/get {file} -> {file, rel?, repo?, entries}`. `rel` is the
+  file's path from the top of its git checkout and `repo` the checkout's project id (16 hex digits of the main
+  checkout's real path, as the code index's), so a badge lands on the user's tree whatever worktree the agent is in;
+  both are read from the `.git` entries, with no git run. The names keep clear of `presence/set`, the user's away
+  state. A connection's subscriptions end with it.
+- **The event** `agent-presence {file, entries}` goes only to the connections that asked (`Front::send_to`), at most
+  once per file per 100 ms of the hub's clock: a change arms one flush 100 ms later (task `presence:flush`), and every
+  file changed meanwhile goes out once, with its entries then.
+- **Who is here as a view model** (`work::presence::here`): `agents/presence/subscribe {workspace, view}` (the editor
+  sent `view/env` for VIEW first; drgnx's is `agents-here` in a data class `data`, its rows reading none of the env)
+  also makes VIEW get a model (`here::doc`, published before the rows, which name its version) and rows: a node and a
+  row per agent present in the user's tree (`a:SESSION`, in ordinal order, its newest entry: kind `agent`, fields
+  `label` (its handle), `session`, `ordinal`, `mode`, `file`, `line`) and per shown path (`p:PATH`, a file an agent is
+  about to change or has changed (`pending`, `write`, `edit`) and each folder above it up to its root: kind `file` or
+  `folder`, fields `path` and `ordinals`, space-separated); the lists `agents` and `paths`. A row holds only its text
+  and `drgnx-work-id`; a path's text carries its ordinals, so every change of a node changes its row. A file outside the roots is shown where it lands
+  in the user's tree (a linked worktree's file at its place in the main checkout, from `rel` and the main checkout);
+  one landing nowhere, and an agent the hub has not named yet, are not shown. The subscription starts with a reset;
+  each flush publishes the model and the rows again and only what changed goes out. Marks and colours are the
+  editor's, by ordinal.
+  Tests: `work/presence/here/tests.rs`, scenario `work/presence-rows`.
+- **Durability:** none of its own. At start, before the recorded sessions resume, it is rebuilt from their steps'
+  details (reads, searches, edits); a shell step's command is not stored, so its files come back with its next step.
+- New sources (Gleipnir's opens, part 3's own refinements) add a `source` value without changing this contract.
+
+### Identity
+
+Every live session holds an identity from its start until it ends (`agents::identity`, part 3), so every surface
+names and colours an agent the same way:
+
+- **Ordinal:** the lowest number from 1 that no other live session of its workspace holds, kept for its life. A
+  workspace is the session's git repository (the project id of its checkout's common directory, the same for every
+  worktree of it), else its folder. The hub never gives a live ordinal twice; a display that has fewer
+  colour-and-mark pairs than agents reuses one by its own rule, reading `last_active`.
+- **Handle:** the model's short name (Claude's families by name, `Opus`, `Sonnet`, `Haiku`; another model by the first
+  word of its name; else the provider: `Claude`, `Codex`, `Gemini`), numbered from the second live agent of that model
+  in the workspace on (`Opus`, `Opus 2`, `Opus 3`; a freed number is given again, lowest first). The **monogram** is
+  its initial and that number (`O`, `O2`).
+- **Where:** the `agent` snapshot (`agents/list`, the `agent` event) carries `ordinal`, `handle`, `monogram` and
+  `last_active` (the hub's time of its latest update); an ended session has none. A session frees its identity when it
+  is stopped or killed, or its process exits; a session resumed after a restart takes one again. The pool gives a
+  Claude subagent's id (`agent:SID/TOOLID`, as the Work map names it) an identity of its own and frees it with its
+  parent's; subagents have no snapshot, so none is shown yet.
+
+### Editor marks
+
+The marks in a buffer's gutter (changed lines, blame, an agent's strip, breakpoints, end-of-line diagnostics) are the
+hub's arithmetic (Lisp offload step E): the hub holds the buffer's text (the edit history's mirror), counts its lines
+and answers in **positions**, the buffer's own (1-based, in characters); Lisp keeps the overlays, and an answer
+deletes or makes only the overlays whose mark changed. No line is counted or walked to per keystroke. An answer is sent
+on a change only (the history's drain, then a debounce through `drgnx-timer`), never per keystroke, and the hub being
+down leaves the marks as they are and asks nothing of the user. An answer is for the text the hub held when it was asked:
+the client keeps it only if the buffer has not changed since (`buffer-chars-modified-tick`); the drain that follows an
+edit asks again.
+
+`editor::marks` (pure) is the one place the arithmetic lives: `line_starts` (positions by characters, not bytes) and
+`hunk_marks`. Every mark builder asks `marks::within_limit` first: a text over `marks::MAX_BYTES` (50 MiB, the
+large-files module's default `:ask-above`, the size from which a file opens lean or in chunks) gets no marks, as
+`drgnx-large-file-p` kept them from large buffers in Lisp. Large-files v2's cost registry replaces this one constant.
+
+- `history/hunks/head` answers `marks: [{line, pos, kind}]` (`kind` `added`, `changed` or `deleted`; a deletion marks
+  the line after it) beside the hunks, which Show, Revert and Stage Change still use.
+
+### The buffer view
+
+What an editor draws in a buffer comes from one frame per visible buffer (`editor`, part 3; Lisp only moves
+overlays from it):
+
+- **Views:** `agents/buffer/watch {view, file, worktree?, doc_version?}` (user connections) opens view VIEW of this
+  connection on FILE, or opens it again, and answers its full frame (`base` 0); `agents/buffer/unwatch {view}` ends it
+  (`false`: none was open). Views are keyed by (connection, view), like the Work map's, and a connection's views end
+  with it. A view matches its file's true name and `REPO:REL` (the same file in every worktree of its repository, the
+  presence model's `rel` and `repo`).
+- **Frames:** a presence change in a matched file makes the view due, and one flush 50 ms of the hub's clock later
+  (task `editor:flush`) builds each due file's frame once and sends `agent-buffer` to that view's connection only
+  (`Front::send_to`), so a view gets at most one frame per 50 ms. Every frame is whole; `version` counts the view's
+  frames and `base` names the one it follows, so an editor that sees a gap watches again for a full frame. A watch with
+  a newer `doc_version` (the buffer's version, its edit history drain counter) is the user typing: that view's frame
+  follows after 300 ms without another (task `editor:quiet`). A frame of a file the edit history tracks names the
+  tracked buffer's version (its last `history/batch` or `history/resync`) as `doc_version`; any other the watch's. Nothing is built while no view matches, and an
+  unwatched file costs nothing.
+- **What a frame holds:** `agents`, each session present in the file now (the presence model's entries, with the
+  session's `ordinal` and `handle`, and `step_title`, its running step's title); `gutter`, ranges merged per session
+  and kind: `pending` for an edit about to land, and `changed` for the lines a session wrote. Where the project's edit
+  history holds the file, those come from its operations (`editor::ranges`, below): an agent's lines in its own
+  worktree, and a paired agent's writes in the user's checkout, drawn in that agent's identity ("NAME · changed");
+  where it does not, from the lines the session's latest step snapshot changed in its own worktree against its base,
+  with a hover that names the handle, the step and its age ("Opus · changed in step 14 · 2 min ago").
+- **Line authors** (`editor::ranges`, pure; kept by `history::Inner`). For each document on each branch, the runs of
+  characters each author wrote (`user`, `agent:<session>`, …; the base's text has none). The hook on every operation
+  the history applies (an agent's captured write, an editor's batch or resync) updates them in step; a document whose
+  version moved another way (a revert, a merge) or that was not kept (after a restart) is made again from its blame
+  when read, off the tick. A line is an author's when one of its characters is (its line break only on an empty
+  line); a line with the user's characters is never an agent's. A deletion leaves no character: it marks the line the text
+  joined for its author (so an agent's pure deletion shows in the gutter). After a restart the ranges are made again by
+  replaying the document's recorded edits in order (`History::edit_log`: each change with its peer, the seed the base's),
+  which keeps those marks; when the log cannot be replayed to exactly the text (a merge's concurrent edits, a history
+  cut shallow by compaction) they come from the blame, which knows characters only, so the marks go. A batch with an
+  `agent:` change (a paired chat's write) makes the file's views due at once; the user's typing waits for the quiet.
+- **Other worktrees, projected** (`editor::project`, pure). A session working in another worktree of the file's
+  repository shows on the user's checkout mapped three-way: base (the file at the session's base tree) → agent (its
+  copy now) gives the lines it changed, base → user (the user's text) maps them onto the user's lines. A change that
+  meets a user change is a `conflict` range there; the user's own lines are never in an agent's gutter. The session's
+  entry carries `projected {worktree_label}` (its worktree's folder name) and its cursor mapped the same way; its
+  ranges are `changed` or `conflict`, also `projected`. The user's text is the edit history's mirror of the buffer
+  when the editor tracks it (unsaved typing, and a paired agent's writes, are the user's side); an untracked buffer's is
+  read from disk, and such a frame is `approximate`. Base texts are kept by (base tree, path), the 256 last used. While
+  the user types, a watch is answered from the frame already built; the file is projected again after the quiet.
+- **Test hooks:** `__test_buffer_views` answers `{views, built}`: the views open and the frame bodies built so far.
+
+### The Work map
+
+The Work space's map (`work::map`): the hub feeds the pure map core `vegvisir` from its sources, lays each map view
+out, and sends the connection that shows it the view's model and rows.
+
+- **Methods** (user connections). `work/map/subscribe {view, workspace: {id, roots}, width_units, density?, filters?,
+  collapsed?, selected?, outline?}` opens one view of the connection (again, if it is open) and answers `{hub,
+  version}`. `view` is the editor's id for it: one editor can show two workspaces, or one at two widths, so the hub
+  keeps state per (connection, view). `work/map/set {view, filters? | collapsed? | width_units? | density? | shown? |
+  selected? | clear? | outline?}` answers `{version}`; an unknown view is `invalid-params`. `work/map/close {view}`
+  ends one; a connection's views end with it. A workspace no view shows is dropped. `version` counts the view's
+  layouts and changes from the subscription's 1.
+- **Model and rows** ("The native view model" and "Rows" below). The subscription sends the view's model as
+  `view-model` (a reset first: the items shown as nodes with their links, the edges among them, the lists the keys
+  walk), then its rows, built in the hub (`vegvisir::render`, `docs/develop/work-space.md`, "The rows"), to each
+  display class the editor sent a `view/env` for (the env's `view` is the map view's id) as `view-patch`, the first per
+  class a reset, each naming the model's version. Both go by `Front::send_to` to the view's connection only. Its width
+  is its narrowest GUI class's window (`(width_px / scale - 96) / 4` units; `width_units` until one sent an env, and a
+  terminal class alone keeps it): an env whose width moves the units lays the view out again at once, as the user's
+  change; any other env, a delta, a relayout or a new `selected` (the chain's edges) draws the classes again, and each
+  gets only what changed (a resize: `replace`s of the rows whose fit changed). The first row is `strip` (the needs-you
+  strip and the machines' load). Task 34 of the render offload removed the editor's own drawing and with it the
+  hub's frames (`work-map`).
+- **Coalescing** (design §11.3 step 5; `work::map::Coalescer`, pure, tested in every order). Field changes go out at
+  most once per 100 ms per view: the first change arms a flush 100 ms later on the hub's clock. A live arrival takes a
+  free place at the end of its layer's last row (or a row of its own at the bottom); a departure leaves its place
+  empty; nothing else moves (`vegvisir::layout::place_live`). What arrived and went reflows after a quiet second (no
+  change and no `work/map/set` with `selected` for 1 s) as one relayout, unless that would move an item of the
+  selection's chain: then it waits for the user. The user's own change (filters, collapsed layers, width, density,
+  shown again) relayouts at once. The clock's minute is one delta (time fields are minutes).
+- **Hidden:** `shown: false` (its editor hid it) gets nothing however much changes: no model, no rows; `shown: true`
+  lays it out and draws it anew, its model a reset.
+- **Sources.** Each session's snapshot and subagents at its `agent` emit (state, spend, context; its branch and tree
+  read from its folder's `.git` at first sight: `branch:REPO/NAME`, REPO being the main tree's folder name, so a linked
+  worktree is a branch of its repository); each closed step (the card's activity); the presence model's changed files
+  (edits in flight and reads, keyed `file:REPO/PATH` through the session's tree or a workspace root); after each step
+  that took a snapshot (an edit, or a turn's first step), the worktree's changed files against its base
+  (`work::edits::changed`, the interim before the edit history) as its changed set; the machine registry; and, re-read after each write while a map is open (task `map:run`), the store's asks, specs, plans,
+  tasks, `asked` and `derives` links, open cards and the worktree bases' "based on" pairs. A session belongs to a
+  workspace when its folder, its tree or its repository is under one of the roots. Overlaps are the core's: two live
+  agents on two branches changing one file, from their edits in flight and from their worktrees' changed sets, so a
+  finished edit still overlaps.
+- **Restart:** nothing is kept. The editor's re-subscription after a restart gets a model reset and its rows from the
+  new hub's sessions and store, under the new hub's id.
+
+### The trail and the Timeline
+
+The Work space's trail (one session's steps, its conclusions among them) and Timeline (a lane per agent session) as
+rows built in the hub (`work::trail`, pure part `vegvisir::trail`), per display class like the map's ("Rows" below).
+
+- **Methods** (user connections). `work/trail/subscribe {view, session}` opens a trail view of the connection (again,
+  if it is open); `{view, lanes: [{session, label}]}` (up to 256) a Timeline view instead; one of the two. Its rows go
+  to each class the editor sent a `view/env` for (the env's `view` is this view's id) as `view-patch`, the first per
+  class a reset, before the answer `{hub}`. `work/trail/close {view}` ends one; a connection's views end with it.
+- **Rows.** A trail: `step:ID` per step (the session's last 500, oldest first: its kind's icon, its title, the number of
+  each conclusion resting on it, and its time and duration 14 columns from the right edge), the two lines of each
+  conclusion's card (`conc:N:0`, `conc:N:1`) after the step it was stamped on, and those on no step shown at the end.
+  A Timeline: `axis` (the range's times), then `lane:SESSION` per lane (its label fitted to 130 px, each step a segment
+  at its time on a track from 140 px), or `none` without lanes. Times are in the env's `tz` (`+HHMM`, as `%z` prints it;
+  anything else is UTC).
+- **Updates.** Every view is read again (the timeline and the conclusions store, as `timeline/get` and
+  `work/conclusions` answer) after each write and each closed step, coalesced, one view at a time; each class gets
+  only what changed: a new step is an insert of its row, a conclusion replaces the rows of the steps it rests on and
+  inserts its card, a step in a lane's range redraws that lane, one past it the axis and every lane. A new env draws
+  the view again for its class. `timeline/get` and `work/conclusions` stay for their other callers.
+- **Model** (`work::trail::model`, the editor's replica; "The native view model"). Before the rows, each refresh sends
+  the view's `view-model`. A trail: nodes `step:ID` (kind `step`) and `conc:N` (kind `conclusion`) in the rows' order,
+  `up`/`left` to the row before and `down`/`right` to the row after; edges `conc:N → step:ID` of kind `rests-on` (the
+  chain kind: a selected conclusion lights its steps); the list `steps`, a window `{total, from}` of the session's
+  when it holds fewer steps than the session has (`from` = its first step's seq − 1): the last 500, or the 500 from
+  where `view/window` asked (clamped; the rows are those steps too). A Timeline: `lane:SESSION` (kind `lane`) and
+  `step:SESSION:SEQ` (kind `step`); left and right along the lane (left of the first step is the lane), up and down to
+  the step of the lane above or below nearest in time, wrapping (the lane when it has none); lists `lanes`, `lasts`
+  (each lane's last step, else the lane: the descriptor's `start`) and `near`, the lanes of the sessions the selection
+  of the connection's shown rows map views reaches (`Map::near`: the agents and subagents on its chain). A
+  `work/map/set` that moves a selection sends the connection's Timelines their model again from what was last read
+  (`Trails::map_moved`), no rows. Step nodes carry what opening one needs: `label seq class tool detail-kind path line
+  query url` and, in a Timeline, `session`. The rows' node spans are their `drgnx-work-id` props.
+- **The Board** (`work::trail::board`). `work/board/subscribe {view, map, plans?}` opens a Board view the same way:
+  the tasks of `plans` (`plans/get` each, their steps the progress), else every task (`tasks/find`, up to four pages),
+  each card naming the agent of the connection's map view `map` that works on it (the agent whose task id is the
+  card's: two tasks of one title never show each other's agent). It is read again after each write like a trail; `work/trail/close` ends it. Rows: `head` (each column's
+  heading and count at a sixth of the width, at least 120 px), then `cards:I:0` (the titles at height I) and
+  `cards:I:1` (state · agent · steps done) and `cards:I:2` (the progress bar: on a GUI two `spaces` 4 px high from
+  4 px in, the steps done in `drgnx-work-bar` and the rest in `drgnx-work-bar-rest`, together the column less 16 px,
+  in device px at the env's `scale`, rounded half up as `drgnx-px` does; on a terminal the card's text width of `▰`
+  and `▱` in those faces), or `none`. Its model is its own, not the map's: a `card` node per task
+  (fields `label status column plan agent agent-label`) whose links are the `board` form's (`navs.board`: up and down
+  in its column, left and right to the nearest column with cards, at the same height or its last card), lists
+  `cards` (column by column) and `team` (the cards an agent works on).
+
+### The follow feed
+
+A follow window in the editor shows where one agent is (`editor::follow`). `agents/follow {view, session}` (user
+connections) makes the connection's VIEW follow SESSION from now on, its latest place first; `agents/unfollow {view}`
+ends it (true when it followed one), and a connection's views end with it. The event `agent-follow {view, session,
+file?, worktree, line?, col?, mode, step_title?, plan_entry?, why_source, changed?}` goes by `Front::send_to` to the
+view's connection only.
+
+- **Source:** each tool call update of the session (`tool_call`, `tool_call_update`), as the transcript merges it:
+  its first location is the place, its kind the mode (`read`; `search` → `listed`; `edit`, `delete`, `move` →
+  `pending` until completed, then `edit`, or `write` for a whole-file write). A failed call and other kinds (a
+  command, a fetch) do not move the window.
+- **The rules** (`editor::follow::Core`, pure, tested in every order on the hub's clock): at most one move per 200 ms
+  per view (the latest one held goes when the window ends); a read of another file switches only after the agent has
+  stayed in it 500 ms (a third file starts the dwell again, a move back cancels it); a search or a glob never switches
+  files: its query (the step's title) goes in the line and the window stays; an edit, a write or a pending edit
+  switches at once (the throttle still holds). `changed` is set when a completed edit changed the file shown, so the
+  window reverts it from disk.
+- **The line is the agent's own words:** the plan's `in_progress` entry when the agent sends plans
+  (`why_source: plan_entry`), else the tool call's title (`step_title`). Nothing is generated.
+- **Restart:** nothing is kept; the editor follows again.
 
 ### After a restart
 
@@ -1331,6 +2322,646 @@ brings the session back: `session/resume` when the agent advertises it, else `se
 history, and the transcript is not used), else the row stays for the next start. The transcript and the queue are
 read back, and the first queued prompt is delivered. `restart-when-idle` counts the hub's busy sessions: a running
 turn delays the restart, an idle session does not.
+
+## Rows
+
+A hub-fed view gets finished rows from the hub and only inserts them (`wb/drgnx-view.el`'s inserter). The format,
+its builder, the fitter and the SVG writer are in the crate `drgnx-rows` (no I/O, no clock, no platform dependency:
+it builds for Android too).
+
+- **A row** `{key, text, runs: [[start, end, face]], props: [[start, end, name, value]], stops: [[pos, px]], images:
+  [[pos, image_id, alt]], spaces: [[pos, width, height]], height: {lines, unit}?}`. `face` is a registered drgnx face name (Lisp drops one it does
+  not know and never interns it); a stop is one placeholder character at POS, displayed as the space up to PX
+  (`(space :align-to (PX))`); an image takes one placeholder character too, and so does a space, shown as WIDTH x
+  HEIGHT device px (`(space :width (W) :height (H))`, a card's progress bar) in its run's face. Empty lists are left out. Runs may
+  overlap: the editor adds them in order, each below those before it (a card's box face under its text's faces).
+- **Positions** are Unicode scalar indices into `text`, which is what Lisp's string indices are after
+  `json-parse-string`; never bytes or UTF-16 units. `RowBuilder` counts them and merges adjacent runs of one face.
+- **Ids** (row keys, image ids, item ids in props) go in arrays, never as JSON object keys, so Lisp interns no
+  keywords. A runstav test checks every method and event; the places that still map (an event's stored payload, the
+  gateway's and runners' keys, history's cost by unit) are listed in it and wait for the wires' own plans. An image
+  id is one string, `HASH-EPOCH`: the content's hash and the env epoch it was drawn for, so a new
+  epoch (a theme change) never reuses an old tile.
+- **A patch** `{view, class, hub, base, version, env_epoch, ops, images: [[id, svg]]}` moves one (view, display
+  class) from version `base` to `version`. `ops` apply in order: `{reset: [row]}` (the view is exactly these rows),
+  `{insert: {after: key | null, rows}}`, `{replace: [row]}` (each by its key), `{remove: [key]}`. `images` carries the
+  images the rows name that the editor may not hold yet.
+- **Styles and terminal state** (a terminal's view; `drgnx_rows::style`). A patch may carry `styles: [[id, {fg, bg,
+  ul_color, bold, faint, italic, underline, strike, inverse, blink}]]`, each style sent once and kept by the editor
+  until the next reset (a reset carries every style its rows name). A run names a style as the face `s:<id>`
+  (`Face::Style`). A colour is `{ansi: 0..15}`, `{rgb: "#rrggbb"}` (program data, the 256-colour cube included, never
+  a theme literal) or absent (the default); attributes are present only when true. `term: {cursor: [row_key, col,
+  shape, visible], alt_screen, mouse_tracking, title}` (shape `block`, `block_hollow`, `bar` or `underline`; COL a
+  scalar index) comes on a patch that changes them. Both are left out when empty, so other views see no change.
+
+### The wire: envs, patches, resyncs (`view`)
+
+The hub keeps, per (connection, view, display class), the env the editor sent, the version and rows it last sent,
+and the images that editor holds (`view::Store`, pure, tested in every order of envs, rows, resyncs and restarts).
+All of it is in memory only.
+
+- **Methods** (user connections, sent on the editor's subscribed connection, which the patches come back on).
+  `view/env {view, class, epoch, display, scale, fonts: [[role, file, index, px, ascent, descent, avg, space]], cell,
+  width_px, palette: [[role, colour]], tty_widths: [[from, to, width]], tz, reduced_motion, attach?, rows_in_sja?}` keeps the env of (view,
+  class) and builds its rows again.  `attach: true` (the editor sends it with the first env of a new buffer) makes the hub
+  drop a pair it already holds for the connection, with no `view/close` between (a buffer killed without its hook, an
+  Emacs restarted on the same connection), and start over: the rows go out whole, a reset from version 1.
+  `rows_in_sja: true` says the editor holds the view's rows in Sjá, where they are drawn: the patches then go out on the
+  raw `view-model` line as `{view, rows: PATCH}` (the patch whole), which Sjá's push takes without Lisp reading it, for
+  every view (a terminal's view, `term:<id>`, says it on `term/open` and `term/attach`); the env of the pair decides
+  each patch, so an env without it puts the pair back on `view-patch` events. `view/resync {view, class, version}` answers a reset (with `model: true`, a reset
+  of the view's model: below). `view/glyphs {view, class,
+  glyphs: [[role, char, px]]}` answers the event `view-glyphs {view, class, ask: [[role, char]]}`. `view/measured
+  {view, class, measured: [[role, string, px]]}` is the editor's fit guard's report. `view/ack {view, class,
+  version}` says the editor applied that patch (sent by a view type with `:ack t`; others may ignore it).
+  `view/close {view}` forgets the view; a connection's views end with it.
+- **The event** `view-patch` (a patch, above) goes by `Front::send_to` to the view's connection only.
+
+**The rules** (one owner each). The switch tasks and the inserter (`wb/drgnx-view.el`) follow them:
+
+- **The epoch is the editor's.** It numbers each (view, class)'s env, one more for every change of its look (fonts,
+  scale, palette, display, widths, zone, motion); a width change alone keeps it. The hub echoes it as `env_epoch` on
+  every patch and owns no epoch counter.
+- **The hub owns `version`.** A patch's `base` is the version it applies to; `version` is one more.
+- **The hub's instance id `hub`** is drawn at its start (a random number below 2^53) and is on every patch. The editor
+  drops a patch whose `hub` is not its last reset's, and anything for a (view, class) before that pair's first reset.
+- **The first patch per (view, class)** after a `view/env` with a new epoch (or the first env) is a `reset`; a
+  `view/env` with the same epoch is answered by what changed (a resize: `replace`s of the rows whose fit changed).
+- **No env, no rows:** a hub with no env for a (view, class) builds nothing for it. A restarted hub holds none until
+  the editor sends its envs again (`drgnx-hub-connected-functions`), so its first patch is a reset with a new `hub`.
+- **Held and stale patches** (the editor's side). A patch with an epoch behind the editor's is held and the view dims;
+  a reset drops every held patch. A patch whose `base` is older than the editor's version is dropped silently. Only a
+  `base` newer than the version, an unknown `base` or an image the editor lacks sends `view/resync`, at most one
+  outstanding per (view, class).
+- **A stream is a row stream.** A stream method (`search/run`, `search/files`, `explorer/subscribe`) is a (view,
+  class) row stream like any other: a reset per new query, then inserts. A cancelled query's late patches carry an old `version` and are dropped.
+- **Images:** a reset carries every image its rows name; any other patch only those the editor was not sent.
+- **View options** (`view::ViewOpts`, set by the view's builder; the test hook `__test_view_rows` takes `ack` and
+  `epoch_reset`). **Acknowledged** (`ack`, a terminal's): at most one patch is in flight per (view, class). Rows built
+  before the editor's `view/ack` of the version sent wait, the newest winning, and go as one patch on that ack; an ack
+  of another version releases nothing. A `view/resync` answers a reset of the newest rows at once (it is then in
+  flight), and a reconnect starts afresh, so a lost ack never stalls the view. **No epoch reset** (`epoch_reset`
+  false, a terminal's: its faces repaint in the editor): a new epoch is answered by a diff, and the editor applies a
+  patch of an older epoch instead of holding it. A terminal view's resize is a reset, sent by its builder. Views with
+  the default options (`ack` false, `epoch_reset` true) behave as above.
+- **Styles in the editor:** a run naming a style the editor lacks (not in a reset) sends `view/resync`. An ansi
+  foreground is the face `drgnx-term-color-N` itself (it inherits `ansi-color-*` and resets the background), so a
+  remap or a theme shows on rows already inserted; the other attributes, program colours and ansi backgrounds become
+  one anonymous face per distinct style, from a per-buffer LRU of 4,096 (`drgnx-view-patch-style-face-max`).
+- **SVG images** (lanes, band tiles, chips) are drawn with `drgnx_rows::svg`, which takes palette roles, never colour
+  literals: each colour comes from the env's `palette` (the theme's faces, read through `core/drgnx-color.el`'s
+  callers), a role the palette lacks is drawn in `currentColor`, and a palette value that is not a `#hex` or a
+  colour name is never written. An image's id is its content hash and the epoch it was drawn at, so a theme change
+  never reuses an old tile. `drgnx_rows::image::ImageSet` keeps a (view, class)'s images and picks the ones a patch
+  carries.
+
+### The native view model (`view-model`)
+
+A view whose keys move a selection (the Work map first) also sends its **model**: what the editor's replica (Sjá, in
+Nidhogg) needs to answer every key in-process, never from the hub. The hub keeps, per (connection, view), the model
+and version it last sent (`view::Store`'s models, `view::model`), and sends what changed as the event `view-model
+{view, hub, base, version, reset?, model}`:
+
+- **One line, unparsed by the editor.** The line starts `{"event":"view-model"` (the event writer, `runstav::wire::Event`,
+  puts `event` first) and `model` is a JSON object, `{"ops": [...]}`. The editor routes the line by that prefix,
+  before any parse, and hands it whole to Sjá (`nidhogg-view-push`), which reads the envelope and the model; the editor
+  never makes Lisp data of it. Unframed, the line's chunks are held as they came until its newline and joined once
+  (a model of megabytes is not copied chunk by chunk). Every publisher (the map, the trail, the board, the panel, Search, the Explorer, agents
+  here, extensions, a terminal's Find) writes it through `view::model` or as an object. The ops are Sjá's wire: `reset {descriptor, nodes, edges, lists}`, then `edges
+  {remove}`, `remove [id]`, `nodes [node]`, `edges {add}`, `list {name, ids}` (a list that went is sent empty). A
+  changed descriptor is a reset.
+- **Windows.** A list longer than its builder sends whole is a window `{total, from}` of it. `view/window {view, list,
+  from}` (user) asks for the window from FROM (a position in the whole list): the hub keeps it per (connection, view,
+  list) and the view's builder (a trail's `steps`, a search's or an Explorer's `order`) sends its model again with
+  it, a diff that says the list whole (and, for a trail, its rows). A search that has not grown since its last model
+  sends the move alone (`Sent::move_window`): the ids the new window drops, the nodes it adds (only those are built;
+  no node is compared) and the list, so a move costs what it changes. When the two windows share entries, the
+  entries both hold are not looked at either: the ids dropped are the old list's ends and the parents outside it (as
+  the last move left them; found by one scan after any other change), the nodes added the new list's ends and parents,
+  and the list is spliced in place (a 2,000-entry step of a 20,000 window: 5–6 ms, was 11–12). Its answer is false for a view no such builder
+  holds. A view's from goes when its model starts again (a subscribe), when it closes and with its connection; the
+  editor moves the window a step past the key that stopped at its edge (half the window, at most 2,000), or centres
+  it on a `walk-to`'s entry (core.md, "Keys through the model").
+- **The model goes first.** A builder writes the model before the rows built from it (`work::map`'s `publish`), and
+  each `view-patch` carries `model: N`, the version its rows were built from; the editor applies its queued models up
+  to N at the draw. A change only the model sees (a field the rows don't show) sends a model and no patch.
+- **Resets.** The first model after a `work/map/subscribe` (the editor starts a new replica: version 1), after a
+  hidden view is shown again (`work/map/set {shown}`), and the answer to `view/resync {view, model: true}` (CLASS is
+  not read) are resets, and say so in the envelope (`reset: true`); a subscribe's reset has `base` 0. A hub restart is a new `hub`, and the subscribe that follows starts at a reset; the ids are the
+  items' own, so the same records give the same model.
+- **Hidden views get none.** A view hidden by its editor gets no model until it is shown again.
+- **The selection is the editor's.** The hub's own selection only draws the chain's edges in the rows: `work/map/set
+  {selected}` moves it, `{clear: true}` drops it; neither changes the model.
+
+The Work map's model (`work::map::model`): scheme `links`; the chain kinds `came-from`, `edits`, `reads`, `runs-on`;
+search over `label` and `task`; the lists `team`, `needs-you`, `outline` (`vegvisir::nav`) and `plans` (the plans
+the view shows: the Board's scope is those on the selection's chain); classes `selected`, `match`, `chain`, `dim` (the
+editor's faces by index); flags `needs-you`, `warn`, `live`; forms `graph` and `outline` (up and down walk the outline).
+Each node is an item the view shows, with its `nav` links, `then`, `parent`, and the fields `label`, `state`, `task`,
+its card's rect `x y w h` in layout units, what the review panel's summary reads (`done` of `steps`, `edit_files`
+`edit_plus` `edit_minus`, `reads`, `conclusion`, `spend`, `minutes`; each when known, `work::map::model::card_fields`)
+and `overlaps`, the agents it overlaps (ids, space-separated: the huddle key). Rows: `test/conformance/view-model/`,
+`work/map-set-clear-drops-selected`; unit: `work::map::tests::map_model_carries_review_fields_overlaps_and_plans`.
+
+A rows view is drawn in the form `work/map/set {outline}` asks (or `work/map/subscribe {outline}`: the editor keeps
+the word and sends it again; row `work/map-subscribe-keeps-the-outline-asked-for`): `on` the outline, `off` the cards, `auto` (until one is
+asked) the outline only where the cards do not fit or in a terminal; a new form is drawn at once, laid out as it is.
+An open huddle (`runner::huddle`, waiting for the user or going on) is a needs-you card of every map, `huddle: CLASH`
+about its two agents (`work::map::huddle_card`, kind `huddle`): on the strip and in the `needs-you` list, after the
+other cards and the agents that need you, marking and covering neither agent (`vegvisir::nav::strip_entries`, one
+order for both, so `g N` is the Nth chip; an entry about nothing shown holds its card's id; unit
+`the_strip_and_the_needs_you_list_line_up`). A conclusion that changed since the view was last drawn marks its card `new` for 4 s of the hub's
+clock (`NewMarks`; an item seen for the first time marks nothing); one wake per view draws it again when the oldest
+mark leaves. Unit: `outline_follows_the_users_choice`, `open_huddle_is_on_the_strip_and_the_needs_you_list`,
+`a_new_conclusion_is_marked_for_four_seconds`.
+
+### Fitting: text to a pixel width
+
+A builder fits each label to its segment's width with `drgnx_rows::fit` (the terminal: `fit_tty`, in columns). The
+hub sums the advances of the font file Emacs uses for the role (`view/env`'s `fonts`), read with skrifa, and trims
+with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an estimate: no shaping, kerning or hinting.
+
+- **Per grapheme cluster.** A cluster (a letter and its combining marks, an emoji ZWJ sequence, a flag) counts its
+  first char's advance, and a cut never splits one. The marks and joined chars after it are drawn into that glyph;
+  asked of the editor one by one (no font file, as on macOS) each had a width of its own, and the combining and ZWJ
+  labels were cut 21 to 35 px short. A cluster the font draws wider than its first char (an unjoined ZWJ sequence)
+  runs over, and the fit guard measures it.
+
+- **Measured against Emacs.** `test/ui/rows-fit-gui-test.el` compares the sums (`test/fixtures/rows-fit-sums.eld`,
+  written by `drgnx-rows`' `fit_sums`) with `string-pixel-width` for 40-char Latin, digit and punctuation strings in
+  Inter and JetBrains Mono at 11 to 16 px. The rounding with the smaller largest error is `fit::ROUNDING`: each
+  advance rounded to whole pixels (largest error 4.0 px; the fractional sum's was 16.4 px, as Emacs places glyphs on
+  whole pixels). The error must stay within the slack.
+- **No I/O in the crate.** `drgnx-rows` measures through the `Measure` trait over bytes handed in, so the builders
+  (vegvisir too) stay testable in every order. The hub's `view/fonts.rs` reads each file once when a `view/env`
+  names it (at most 64 files, none over 64 MiB), and drops it when no env names it.
+- **What the font lacks, the editor answers.** A char with no glyph, or a role with no font file (as `font-info`
+  often has on macOS), is asked of the editor once per (role, char) in `view-glyphs`; its `view/glyphs` answers are
+  kept and the rows built again. Caches are bounded: 4096 chars per font and per set, 1024 measured strings.
+- **The editor's measurement wins.** The fit guard reports a line it measured wider than the hub fitted it
+  (`view/measured`); from then on that width is used for that string instead of the sum (least recently used out).
+- **The fit check row** (`test/ui/rows-fit-gui-test.el`, on the fixture view `rows-demo`, whose labels the hub
+  fits per class: `__test_view_rows`' `labels`): Latin, ligatures, a ZWJ
+  sequence, combining marks and Arabic in Inter and JetBrains Mono at 11 to 16 px, fitted to 80, 160 and 240 px. A
+  label's width is logical, as every view's sizes are: a GUI class fits it, and puts its stop, at the env's scale in
+  device px, rounded half up as `drgnx-px` does (160 is 320 at 2, 200 at 1.25). No
+  segment runs past its stop after the guard, and none is cut more than the slack and one glyph short, except joined
+  Arabic in a font without it: its letters come per char from the editor's fallback font, whose shaped (joined) forms
+  are narrower, so the sum runs wide and the label may be cut up to about 26 px short at 80 px. That is reported, not
+  failed (first runs, 2026-11-07: 180 rows, 0 to 1 re-fit by the guard).
+- **The terminal** counts columns with Unicode's widths, overridden by the editor's `char-width-table` ranges
+  (`tty_widths`).
+
+### Text search as rows (`search/run`)
+
+The Search view's results are a row stream under the rules above (`runtime/crates/drgnx-ratatoskr/src/view/search/`:
+`mod.rs` the runs, `rows.rs` the rows and the model, `run.rs` the match ids, the carried unticks and the files'
+snapshots; the search itself is `hrafn::grep`).
+
+- `search/run {view, root, search, ignore?, off?, context?, count?}` takes a `SearchSpec` (as the saved searches below): a Text query
+  (`{mode: "text", text, case?, word?, regexp?}`; Symbol and Meaning below), `replace?`,
+  `scope?` (none or `project`; `file` with one file in `files`; `open` with the editor's open files in `files`; a git
+  scope, [below](#git-scopes-searchscope-bases)), `include?`, `exclude?`; `root` must be a folder. A list of files
+  (Open, a git scope) is searched alone, the globs narrowing it (`hrafn::grep`: a name glob names any part of the path,
+  one with a slash the path from the root; a list goes to the searcher a thousand files at a time; files outside the
+  root are not searched). It stops the view's earlier search, records the search as recent,
+  sends every class of `view` a `reset` of no rows at once (Text and Pattern; Symbol's and Meaning's go with their first rows, below), and answers `{run}`, the run's number. A thread then runs
+  ripgrep (else `git grep` in a repository, else `grep`) and sends, as each file's lines are complete, one `insert`
+  after the last row: the file's header row `f:<file>` and one row `m:<run>:<n>` per match (`n` from 0 in the run's
+  order; the id is opaque, the row's props name the match). `<file>` is the path relative to `root` when it is under
+  it, else whole (`key_path`; the editor's `drgnx-replace--key-path` names it the same way): a window move sends
+  thousands of ids, and whole paths in them were most of its bytes. A class whose env changed meanwhile gets a
+  `reset` of every row so far instead. The event `search-run-done {view, run, files, matches, error?, off?, scope?}` ends the
+  search; a search a newer one stopped sends neither rows nor the event, so a late row of an old query never reaches
+  the view (and the editor drops one by `base` as well). `count: true` sends only that event: no model, no rows, no
+  context labels, and the search is not recorded as recent (a pinned saved search's live count, on a view id of its
+  own, `<view>~pin<N>`).
+- **Symbol and Meaning** (`view/search/modes.rs`) ask the index on a task of their own and, once it answers, send
+  each file as it is read (off the runtime, in the order shown), then `search-run-done` (its `error` is the index's
+  refusal, e.g. no index yet). The first file (or the end, when none came) goes as one patch: the `reset` with its
+  rows (and the run's model), after `{run}`. (Holding the whole first window instead put a Symbol search's first
+  rows at 55–70 ms, p50, against 26 ms: a name's files are read one by one.) The
+  editor sets `drgnx-view-patch-hurry` for these runs, so that patch is drawn at the view's next pass rather than a
+  frame later (`drgnx-view-first-delay` waits for the rest of a burst, and this one has none); the files after it go
+  as Text's do. Sent at once, the reset was drawn alone one frame on, and the rows that followed waited for the view's
+  throttle (`drgnx-view-delay`, 100 ms). The view keeps the previous search's rows until then. Symbol (`{mode:
+  "symbol", name, case?}`, case on by default) is `search/usages`' answer: the files that define the name first, each
+  definition's line and then the file's uses in line order, then the files that use it in the index's rank (at most
+  100), each line's whole-word occurrences of the name a match (the line read from disk; a definition whose line lacks
+  the name is a match of nothing at its start). A definition's row is its kind's icon (`ƒ` function or method, `◇`
+  type, `#` macro, `≡` variable or constant, `•` else; face `drgnx-replace-kind`, the kind on hover) and its
+  signature, the name lit as a match; with `context`, the uses inside a definition follow one label row of it (as
+  Text's), the definition's own row standing for its label. Meaning (`{mode: "meaning", question}`) is
+  `search/query`'s hits (code scope, at most 100, re-located in the files as they are now): one match per hit under
+  its file, a row of a four-cell score bar (the hit's share of the best one, in eighths; face `drgnx-replace-score`,
+  the score on hover), the hit's symbol (face `drgnx-replace-kind`; else its first line) and its first line, and
+  `(moved)` when its lines moved since indexing. Both kinds of row keep a match row's tick box, `drgnx-replace-match`
+  and id. Both modes are read-only: a non-empty `replace` is refused at `search.replace`; scopes, globs and the open
+  buffers do not apply.
+- **Context labels** (`context?`, default true; the editor sends false when `drgnx-search-context` is off): the thread
+  that reads each file for its snapshot also parses it once (`search/context.rs`, Hrafn's definitions; code languages
+  only, none past 2 MB; an open buffer's text the same way; with labels on, up to 4 reader threads take the files as
+  grep finds them, so the parses overlap) and gives each match its innermost definition. A label row
+  `c:<run>:<n>` (`  ƒ name`, face `drgnx-replace-ctx`, the names around it in `help-echo`) goes above match `n` when
+  it is the first of its definition in a row; a top-level match gets none. A label is a row, not a node: no tick, no
+  `drgnx-work-id`, not in the model, not a stop for Next Match; the window and `upto` count it among the rows. The
+  index's outline is not used yet (a file is always parsed), and the match nodes carry no `ctx` field yet.
+- **Grouping** (`group?`: `file` (default), `tree`, `symbol`; `sort?`: `path`, `count`, and through `search/group`
+  only `rank`; `search/group {view, group, sort?}` regroups without searching, `view/search/group.rs`). `rank` asks
+  the project's index once per run for the files' unpersonalised rank in Hrafn's map (`hrafn::graph::file_ranks`;
+  a folder sorts by its files' ranks together; `search/run` refuses it, since it waits for the index, so the editor
+  sends it as a regroup right after the run). `search/fold {view, node, open}` folds a `d:` folder in Folders: its
+  row stays (`▸`, a `drgnx-replace-fold` property on the chevron), the rows under it go, the model keeps every
+  node; `upto` to a row under it opens the folders above it, and a regroup opens all. A regroup re-parents every
+  node, so its model goes as a first window of 2,000 entries (`FIRST_MODEL_WINDOW`) with the first window's rows;
+  once those are drawn the editor asks for the whole window (`view/window`), which drains after them (spec §8's
+  50 ms is the first window's). Files in the run's order need nothing; any other
+  grouping or a sort builds a layout of the run's files (every row in order with its parent node), again only when the
+  files change. Folders: a tree by path, folders before files, one-child chains joined, `d:<path>` nodes (kind
+  `folder`, a `count` field) parenting their folders and files. Symbols: each file's matches under `s:<path>:<start
+  byte>:<end byte>:<name>` nodes (kind `symbol`, `path` the file's, so a match still finds its file on its parent),
+  in the file's order, `s:<path>:top` "(top level)" last; no label rows. Rows step two columns in per level. While
+  grouped, each file found sends the rows and the model whole (diffs) at most once per `model_every`, and the end
+  sends what waited. A regroup sends the model from its start and the first window of rows; the match ids stay, so
+  Sjá's ticks do. The editor ticks a group's every match under it (walking `order` by parents) and Next Group follows
+  `down:file`, or `down:symbol` in Symbols.
+- **Unticks carried across runs:** `off` is the ids of the last run's matches the editor's user unticked. The hub
+  turns each into its match's key, a digest of the file, the text before and after the match, the match, its column
+  and end; not its line, so a line added above a match keeps it. A key two matches of a run share is dropped, and
+  both come back ticked. At the end `search-run-done`'s `off` is the new run's ids with those keys (absent when
+  none), and the editor unticks them. A run stopped before its end hands what it carried to the next run; the
+  skipped list of Replace All (`search/grep-skipped`) ends the carry.
+- **Snapshots:** the run records each file's size, modified time, inode and, up to 16 MiB, an xxh3 of its bytes, read
+  in the search's thread outside every lock; for a buffer's text (below), its size, xxh3 and the buffer's tick.
+- **Open buffers:** `search/buffer {view, path, tick?, text?, large?}` → `true`. With `text`, the view's searches
+  search it in place of the file at `path` (absolute) from now on: a run drops the file's matches on disk and, at its
+  end, searches each such text (`hrafn::grep::search_text`, line by line with the fallbacks' regex) where the run
+  would search its file (the File scope's one file, else under the root and searched by the ignore rules; the globs
+  do not apply), outside every lock. The current run takes a text sent while it runs or after it ended at once: the
+  file's matches are replaced in place with new numbers after the run's others (so no id sent names another match),
+  a file the run did not list comes last, and one left with no match goes; the model and the rows go out whole as
+  diffs, and a run that had ended sends `search-run-done` again with the new totals (no `off`). `large` (a buffer
+  over the editor's threshold, or open as a large file) keeps the file's matches on disk and adds "open in chunks:
+  searched on disk" to its header. Neither forgets the buffer (saved or killed): the next run reads the file. A
+  view's buffers go when the view closes or its connection ends.
+- **Row text:** a header is `[x] name` and, below the root, the folder in `drgnx-replace-dim`; a match is `  [x] ` and
+  the text around it, with the match in `drgnx-replace-match`, or, when `replace` is not empty, the changed characters
+  only: what the match and the replacement share at the start and the end shows once, untinted, and between them the
+  match's part struck out (`drgnx-replace-old`) then the replacement's (`drgnx-replace-new`); after a regexp search `\1`, `\&` and
+  `\\` in `replace` are the groups. Props: `drgnx-replace-box` on the box (the file, or the match as an object),
+  `drgnx-replace-file` on a header, `drgnx-replace-match` (the match: `file`, `line`, `col`, `end`, `text`,
+  `before`, `after`; positions in characters, `line` from 1) on a match row, and `drgnx-work-id` (the row's node id)
+  over each row. The tick state is the editor's.
+- **The model** (`view-model`, before the rows that name it; "The native view model"): a `tree` whose list `order`
+  holds each file node `f:<file>` (kind `file`, open: flag `expanded`; fields `label`, the name, and `path`) followed
+  by its match nodes `m:<run>:<n>` (kind `match`, `parent` the file; fields `label`, the text around it,
+  and `line`, `col`, `end`, `text`; its file is the parent's `path`, sent once per file, not again per match). A
+  search starts with a model of no nodes; each file's batch is a diff; a class's first env sends the model before its
+  rows. Replace reads the matches it writes from these fields and the parent's `path`. Past
+  20,000 entries (files and matches) the model holds 20,000 and `order` is a window `{total, from}`: the first ones,
+  or from where `view/window` asked (a window that starts inside a file holds the file's node outside `order`). A new
+  search starts at the first again.
+- **The window** (the agent panel's shape, `agents/panel/look`): the hub keeps every match and Sjá's model holds them
+  (so Next Match, Previous Match and Replace All, which read the model, act on all of them), but the rows sent are
+  the first 200 (a file's header and its matches) and no more until the editor asks. A Text or Pattern search keeps
+  its files by path, component by component (`a/x` before `a-b/x`, as VS Code lists them), whatever order the walk
+  finds them in (rg's threads and the file system: macOS's walk lists `b.txt` before `a.txt`), each file's lines in
+  file order: a file after the last goes as an insert, one inside the rows (or any while the rows are stale) sends
+  the rows and the model whole as diffs, at most once per throttle window (as a grouped search's) and at the end, and
+  moves a block after it down; Symbol and Meaning keep their own order; the totals (files, matches) come with `search-run-done`. `search/grep-look {view, more?, fill?, upto?}` goes
+  on: `more` is one window more (the editor's window neared the end of the rows), `upto` a row's key (Next or Previous
+  Match went to a match beyond them): the rows up to it and 100 after it. A row more than 400 rows (`FAR`) past the
+  rows sent comes in a block, the 100 rows before it, it and the 100 after, after a gap row (key `gap`, "⋯ N more"),
+  never every row before it (SJA-ROWS-FAR-1: a jump past ~19,000 rows was one patch over the 16 MiB a client may have
+  queued, and the hub dropped the editor); `more` then grows the block, an `upto` next to it grows it either way, and
+  `fill` (the editor shows the gap row) is one window more before the gap; when those rows reach the block the gap row
+  goes. Each look is the rows the editor should hold, sent as a diff (inserts where they go, the gap row's count
+  replaced). A search still streaming fills the room a look made. The answer is `false` when the view has no search. A replacement's preview (`search/grep-replace`) patches
+  the rows sent only.
+- **The model's cadence:** a file's batch adds its nodes and ids to what waits, and the model goes out with each file
+  while rows go out (the rows name the model they were built from), else at most once per 100 ms (`MODEL_EVERY`, the
+  editor's throttle `drgnx-view-delay`: it applies a model no row names one frame after it comes when it was quiet,
+  else one throttle after the last, and every line it
+  reads costs it a redisplay pass), and before `search-run-done` when anything waits. A send is what waited appended to
+  what the editor holds (`Sent::append`: the nodes by id and one `splice` at the end of `order`, the ops `Doc::diff`
+  would send, made from the batches alone, so the hub never rebuilds and diffs the whole model per send). The whole is
+  sent, and diffed, for a run's first batch and when the editor's model is not this run's up to what waits (a reset
+  due, a class's env that arrived); `Doc::diff` sends any changed list as the splice of what lies between its common
+  prefix and suffix, or whole when that is shorter or when its total moved by other than the ids added less those
+  removed, which is how Sjá moves a window's total. A window whose `from` moved over the same total goes as at most
+  two splices that name the new `from` (the ids after the part both windows hold, then those before it; Sjá sets
+  `from` and keeps the total), or whole when the windows share no ids or that is shorter. Past 20,000 entries the list is a
+  window whose total grows with no id to carry it, so each send is the window whole, sent when the search has doubled
+  it, while rows go out and at the end. What waits goes with the next batch or at the end: a search whose files come
+  more than 100 ms apart sends each with the next. Measured at 10k matches in 100 files (pinned lab): six model lines;
+  rebuilt and diffed per batch the hub took seconds and the models came over 4.7 s instead of 0.9 s; appended per batch
+  with no throttle each line woke the editor for a pass that redrew nothing, 1.3 times the editor CPU with framing on;
+  coalesced, 0.84 times the doubling cadence's CPU with framing on and 0.82 times off.
+- `search/grep-replace {view, replace}` changes the replacement the rows preview: the hub patches the rows that
+  change (`replace` ops) and searches nothing again.
+- `search/grep-skipped {view, skipped: [{id, why}]}` is what Replace All left: the search stops, its files and matches
+  become the ones named (each row shows why after the match), and the model and the rows go out as diffs.
+- `ignore` is `index` (no dot paths, no secret-looking names, the filters of the index) or `real` (only what
+  `.gitignore` files and the globs name). Without it the setting `drgnx-search-ignore-rules` decides (`index` by
+  default); it is a runtime setting, so the hub reads the user's value.
+
+### Search writes (`search/edits`, `search/apply`, `search/undo`)
+
+The Search view's one write path (`runtime/crates/drgnx-ratatoskr/src/view/search/edits.rs`, `apply.rs`): Replace All,
+Replace This, Undo Replace and Symbol mode's rename go through it, so a write never lands behind an open buffer.
+
+- `search/edits {view, ids?, off?, replace?, edits?, root?}` makes the edit set: the matches of the view's search (all
+  but `off`, or only `ids`; `replace` when the fields have one the run was not told yet), or `edits` the caller gives
+  (`{path, line, col, end_line?, end_col, old, new}`, ids `e:K` in their order; `root` required). Per file it reads the
+  text (a buffer's text sent with `search/buffer` in place of its file) and places each edit by line and character
+  columns, checks its old text, and gives both ranges, character and byte. Skipped with why: an overlapping match (the
+  first stays), a file changed since the search (size, mtime, inode, xxh3 of its snapshot), a buffer edited since,
+  binary (NUL in the first 8 KiB), not UTF-8, over 16 MiB, open in chunks, gone. The answer `{change, files: [{path,
+  source: disk|buffer, edits}], skipped}` names a change set the hub keeps (the last 20 per hub). With `lines` (an Edit
+  Results buffer's changed lines, `{line_id, path, line, old, new?, eol?}`) the edits are those lines: `old` (one line,
+  or several once a save split it) replaced by `new` joined with newlines, or with no `new` deleted with its newline
+  (`eol` false, the file's last line: emptied); each is checked by its old text where it was ("its text changed"), not
+  by the run's snapshot, so a buffer saved before keeps working; the change set's origin is `edit-results`.
+- `search/edit-doc {view, context?, max?}` is the Edit Results document: each source line of the run's matches once
+  (`{line_id: "l:K", path, line, text, kind: match|context, eol}`), `context` lines (0 to 3) around each match line,
+  by file and line; past `max` lines (default 20,000; counted from the match lines first, so a huge search reads no
+  file) it gives no lines and `over`, with `total`. A file that could not be written is left out with why, as
+  `search/edits` would skip it.
+- `search/handoff {view, ids?, off?, instruction, to: {new: {profile}} | {session: {id}}, hidden?}` (Ask an Agent,
+  `view/search/handoff.rs`) hands the run's matches (`ids`, else all but `off`) to an agent: a new worker of `profile`
+  in a worktree of its own from the project's HEAD (registered as a worker, so the Work space's review lists it), or a
+  live session, which edits where it is. The brief is the instruction, the search and the replacement, then the
+  matches by file as `path:line:col  in <definition>  <line>`, at most 300 lines or 32,000 characters (~8k tokens),
+  then "N more: call the `search_results` tool with handoff id h:N", the files changed since the search, and the rule
+  to edit only those places and say which were skipped. Paths the index never reads (dot paths, secret-looking names)
+  are left out unless `hidden` and named in the answer, `{handoff, session, worktree?, ids, sent, more, hidden?}`.
+  `search_results {handoff, page?}` is the drgnx-search MCP server's tool: 100 rows a page, to the session the
+  hand-off went to only (the server's own session, never the agent's word), for 24 hours, 2 MB in all; each page
+  names the files changed since. `search/handoff-state {handoff}` and the event `search-handoff-state` (after the
+  agent's steps settle, until its session ends) say where it is: `phase` sent, editing or done, and the matches
+  `done` (a hunk of the session's edit records near the match's line took out its line or its old text), `left`
+  (its line is still there near its place) and `unknown` (neither: never counted done).
+- `search/preview {view, path, off?, replace?}` is one file's part of the same edit set as a diff (the preview tile):
+  the unified diff (1 line of context, so nearby changes in different definitions are hunks of their own; `similar`),
+  its lines added and removed, the hunks (`old_start`, `old_lines`,
+  `new_start`, `new_lines`, the ids of the matches in each) and, for a regexp search, each match's groups (at most 8,
+  200 characters each, `null` for a group that matched nothing: the groups line), each hunk's `label` (the head of the
+  definition its first match is in: its first line up to its name, `defvar drgnx-gateway--pending`, `pub fn queue`) and `kept` (the old file's lines of
+  the unticked matches inside it), and what is skipped, with why. It reads the file and keeps nothing.
+- `search/apply {view, change, open}` writes it (false when the change set is unknown or written already) and answers at
+  once; the writes run in the background, a file at a time, each in its turn of the pair door's queue for that file
+  (`pair/door.rs`, a user turn: an agent's write to the same file waits, and the search waits for one in flight). A
+  file open in an editor (the pair open set, or a path in `open`, the asking editor's visited files) goes to that
+  editor as the event `search-apply {view, change, path, edits, ttl_ms, tick?}`; it answers `search/applied {change,
+  path, applied, skipped, inverse, tick?, saved, not_open}` within `ttl_ms` (else every edit is skipped, "the editor
+  did not answer"; a late answer is still recorded for Undo). `not_open` (no buffer visits the file any more) sends the
+  file to the disk writer. Any other file is written on disk (`pair/disk.rs`'s `replace`: a temporary file in the same
+  folder, owner, mode and xattrs kept, fsynced, renamed over the file), and only when the file's bytes still hash to
+  what the edit set read ("changed on disk since the preview") and nothing replaced it between the read and the rename.
+  `search-change {view, change, origin: replace-all|edit-results|undo, undoes?, written, files, skipped, left}` ends it.
+- `search/undo {view, change, open}` puts a written change set back as a new one (origin `undo`, `undoes` the change):
+  a file written on disk is restored when its digest is still the one the write left, a buffer by its inverse edits
+  when its tick is still the one the editor answered (else "edited since the replacement"); a buffer killed since gets
+  its file restored on disk when it was saved. Files left alone are listed in `left`.
+
+### Recent and saved searches (`search/recent`, `search/saved/*`)
+
+The Search view's history, per project root (`runtime/crates/drgnx-ratatoskr/src/search/saved.rs`). A search is a
+`SearchSpec`: `query` (`{mode: "text", text, case?, word?, regexp?}`, `{mode: "symbol", name, case?}` or `{mode:
+"meaning", question}`), `replace?`, `scope?` (`{kind, base?, changed_lines?}`; the open files of File and Open are
+never kept), `include?`, `exclude?`.
+
+- **Recent:** a view's search is recorded once it has stood for the typing pause (250 ms): the next search of the
+  view, or a `search/recent` after the pause, records it; one replaced sooner is not, and an empty one never is. Newest
+  first, each once (a search run again moves to the front), the last 50. `search/recent {root}` → `{recent}`.
+- **Saved:** `search/saved/put {root, name, search, pinned?}` (a name of 1 to 200 characters, one line; the same name
+  replaces), `search/saved/delete {root, name}` → whether there was one, `search/saved/list {root}` → `{saved,
+  problems?}`: the hub's, then the project's, each `{name, search, pinned, project, shared}`.
+- **Where:** the hub's state, `<state>/hub/search/<key>.json` (a digest of the root's path names the file; written
+  whole through a temporary file and a rename, mode 0600). At most 64 projects stay in memory. A `search/run` never
+  writes: when it records a search that changes the recent list, a thread of its own writes the file, one at a time,
+  each writing the newest state (a write and its sync on the run's path held a key's reset past the next key).
+- **The project's searches** are `.drgnx/searches.eld`, one plist per search: `(:name "TODOs" :mode text :query
+  "todo!(" :case t :scope changed :changed-lines t :include ("*.rs"))`; keys `:name`, `:mode` (`text`, `symbol`,
+  `meaning`), `:query`, `:case`, `:word`, `:regexp` (`t` or `nil`), `:replace`, `:scope`, `:base`, `:changed-lines`,
+  `:include`, `:exclude` (a string or a list of strings). The file is read as data only (huginn's reader: no reader
+  macro, nothing evaluated); a form that is not such a plist, or has an unknown or doubled key, is left out and named
+  in `problems`. They are listed after the hub's, `project: true`, read-only in the view; one with the name of a
+  hub's saved search is not listed again (the hub's is, `shared: true`).
+- `search/saved/share {root, name}` → `{path}` writes the hub's saved search into that file on the user's click: the
+  form of that name is replaced where it stands, else appended, every other byte kept (comments too); the new file is a
+  temporary file beside it, synced, then renamed over it, with the old file's mode. A file the reader refuses is not
+  touched (`invalid-params`).
+
+### Git scopes (`search/scope-bases`)
+
+Which files the Search view's git scopes search (`search/scope.rs`), read with the trusted git (`draugr::git`, a
+read-only call): Changed is the working tree's modified, added and untracked files (`status --porcelain=v2 -z
+--untracked-files=all`, ignored left out); Staged the files whose index entry differs from HEAD (their working-tree
+text is what is searched); Branch the files changed between the merge base of HEAD and a base (`merge-base`, `diff
+--raw -z -M BASE`) and the untracked ones. A rename is searched at its new path; deleted files and submodules are
+counted, not searched; a linked worktree is its own top level; an empty list says why ("nothing staged"). Branch's
+base when none is chosen is the upstream, else `main`, else `master`; a detached HEAD or an unborn branch has none, so
+the view asks. Changed lines only (`±`) keeps a match whose lines meet an added-side hunk (`diff -U0`, against HEAD,
+the index, or the merge base); a deleted-only hunk keeps nothing; a new file counts whole; Staged takes the
+working-tree hunks of a file that also has unstaged changes. A git child, not gix: the workspace's gix has no
+`status` feature, and Branch needs a merge base and a diff anyway.
+
+- **In `search/run`** (`scope: {kind: "changed" | "staged" | "branch", base?, changed_lines?}`;
+  `view/search/scoped.rs`): the list (and with `changed_lines` the added lines) is found on the search's thread, not
+  on the request's path; until then the run searches no file, and an open buffer's text counts only when its file is
+  in the list. `search-run-done`'s `scope` says what it searched: `{files, submodules, deleted, base?, why_empty?,
+  needs_base?}` (`files` the list under the root, before the globs). A folder outside git, or git's refusal, ends the
+  run with that `error`; a Branch with no base to take also sets `needs_base` (the view offers its menu). A match is
+  kept by `±` when its line meets one of its file's added ranges (a buffer's text is held to the file's ranges on
+  disk). Symbol and Meaning search the project whatever the scope.
+- `search/scope-bases {root}` → `{current?, upstream?, default?, recent, detached}`: the Branch menu (the 20 branches
+  most recently committed to, local and remote, without the current one).
+
+### Git letters as rows (`git/letters`)
+
+`git/letters {view, root, shown?}` reads the repository's status on a thread and gives the view the rows `f:<path>` (a
+letter in its git face; ignored paths too, unless more than 20,000), `d:<folder>` (a mark for each folder in `shown` and
+for `.` that holds a change) and `branch`; a later call sends only what changed.  When git cannot read the status (no
+repository, git's ownership check, a missing git) the hub sends the event `git-letters-error {view, root, error}` to the
+asking connection with git's first complaint, and the view keeps its rows; the editor shows it as a warning notice and in
+` *drgnx git errors*`.  A root that is no folder is an `invalid-params` error of the call. The status read is also kept per (connection,
+repository) for the Explorer's marks (`explorer/subscribe`, "Git marks").
+
+Once read for a connection, a repository is **watched** until the connection goes or its view closes
+(`view/close`): its gitdir (the index, `HEAD`, `packed-refs`; a linked worktree's own and the common dir) and the
+common dir's `refs`, not recursive except `refs`. A commit, checkout, `git add` or branch move from a terminal reads
+the status again once its burst is quiet for 50 ms (at most 250 ms after its first change) and sends what changed; a
+lock file's events and reads (the hub's own `git status` runs with `GIT_OPTIONAL_LOCKS=0`) are not changes. An
+Explorer listing that its watch relisted (a name made or removed outside Emacs) also reads its repositories again.
+
+### Ranked file names as rows (`search/files`)
+
+Quick Open's and Find's candidates are a row stream too (`runtime/crates/drgnx-ratatoskr/src/view/files.rs`; the list
+and the ranking are `hrafn::rank`).
+
+- `search/files {view, root, query, n?, ignore?, name?, exclude?}` stops the view's earlier query and answers
+  `{query}`. A thread then ranks the root's names and sends every class of `view` the `n` best (default 100, at most
+  1000) as rows: the first query of a view a `reset`, a later one the patch from the rows it shows (the store's diff).
+  The rows of the earlier query stay until the new ones arrive; a query a newer one stopped sends nothing.
+- **The Explorer's Find** asks with `name: true` (only a basename that holds every word: the ranking's third tier is
+  left out) and `exclude`, the Explorer's left-out names (`drgnx-explorer-exclude-names`, exact or `*`/`?` globs, at
+  most 256): a path any part of which is one is not listed. Nothing of Find's filtering is left in Lisp.
+- **The names.** In a repository, what `git ls-files -z --cached --others --exclude-standard` lists (a nested
+  repository, listed as its folder, is left out); elsewhere a walk that follows no link, skips `.git` folders and
+  applies every `.gitignore` it meets (a deeper file decides first, the last matching line of a file wins, `!` keeps,
+  a trailing `/` names folders, a leading or inner `/` anchors to the file's folder). No file is read: binary, large
+  and linked files are names like any other. The exclude globs of `.drgnx/search.eld` and `drgnx-search-exclude`
+  apply, and `ignore` as for `search/run` (dot paths and secret-looking names out under `index`, listed under `real`).
+- **The ranking.** Every word of `query` (case-insensitive) is in the path; a basename that starts with the first
+  word and holds them all first, then a basename that holds them all, then a path that does; shorter, then by path,
+  among equals. A query checks its cancel flag every 4096 names.
+- **Row:** the key and the text are the path relative to `root`; each word's first place (in the basename when it is
+  there) is in `drgnx-quick-open-match` (the editor's face for it).
+- **The kept lists.** The names of at most 8 roots are kept (by root, rule, globs and `exclude`; the one used longest
+  ago goes).
+  A root whose Hrafn project is open is listed again when the project's watcher reports any change (a tap of
+  `Project::tap`, taken without opening the project); any other root is listed again for each new view, so the keys
+  typed in one Quick Open rank one listing and the next Quick Open sees the files as they are.
+
+### The Explorer's listing as a tree (`explorer/subscribe`)
+
+The Explorer's folders, listed by the hub as a model and rows (`runtime/crates/drgnx-ratatoskr/src/view/explorer.rs`).
+
+- `explorer/subscribe {view, roots, expanded?, compact?, indent?, exclude?, only?, window?, around?}` stops the view's earlier listing and answers `{listing}`. A
+  thread then reads each root (1 to 16 existing folders) and, inside it, each folder of `expanded` (at most 10000, no
+  trailing slash) that is shown, and sends the view its model (`view-model`), then its rows to every class: the first
+  listing a reset, a later one the difference. The editor opens or closes a folder by asking again with the new set,
+  without waiting; a listing a newer one stopped sends nothing. A folder that cannot be read has no entries.
+- **Watching.** After its listing the thread watches every folder it read (the roots, the open folders and the
+  middle folders of a joined row; `notify`, one folder each, not recursive, so a closed folder's changes send nothing)
+  until `view/close`, a Find's listing or the connection's end, which stop it through its channel (the watcher goes
+  with the thread; nothing polls). A newer subscribe of the view goes to the same thread, which lists again at once
+  from the folders it has read (only a newly opened one is read from disk; up to 64 closed ones stay read and watched,
+  so opening one again reads nothing) and always sends the result: no change falls between two watchers. A burst of changes (a name made, removed or renamed; a file's data or metadata does
+  not count) is read again once it is quiet for 30 ms, or 100 ms after its first change: only the changed folders are
+  read, the others come from the listing's own copy, and the model and rows go out as for a listing when the entries
+  differ. A watch that lost events reads every folder again; a folder that cannot be watched (the inotify limit) is
+  tried again at the next relisting. The editor adds no watch of its own on this path (`drgnx-explorer--sync-watches`).
+- **The entries.** Folders first, then names in natural, case-insensitive order (`file2` before `file10`); a link to a
+  folder is a folder. The names of `exclude` (at most 256, exact or globs with `*` and `?`; the editor sends
+  `drgnx-explorer-exclude-names`) never show; without it `.git`, `.hg`, `.svn`, `.DS_Store`, `__pycache__` and `.#*`.
+- **Find** sends `only`, the files it found (at most 5000): the listing is those files under the roots with every
+  folder above them open, made from the names alone (nothing read from disk) and not watched. The model's descriptor
+  names the class `ticked`: the editor's marks are Sjá's ticked set. With
+  `compact` (default on), an open folder whose only entry is a folder shares its row with it (`src/app`, the node being
+  the last folder); the chain ends at the first closed folder, which is not read.
+- **The model** is a `tree`: one node per row, its id the path (a root's without the trailing slash), kind `root`, `dir`
+  or `file`, its parent the row above it in the tree, the flag `expanded` on a root and on each open folder, and the
+  fields `label` (as shown; a root's name in capitals), `path` and `dir` (1 or 0). The list `order` holds the rows in
+  pre-order; past `window` entries (50 to 20,000, default 20,000; the editor sends `drgnx-explorer-rows-window`, 150)
+  it is a window of the first ones, or from where `view/window` asked (with the folders above its first entry as nodes
+  outside `order`). The rows hold the window's entries only, so opening a folder of thousands costs a window: a
+  `view/window` sends the model and the rows again, the rows it dropped removed and the ones it added inserted. The
+  editor moves the window on a key at its edge (`drgnx-view-nav`) and on a scroll within a page of the rows' ends
+  (`drgnx-explorer--rows-scrolled`, half the window). `around` (a reveal) names an entry the next listing's window
+  must hold: when it falls outside, the window moves to hold it a quarter of the way down.
+- **Row,** per display class (`view/env`): the key is the path. On a terminal, the indent guides (`│ ` per level below
+  the first) and the chevron (`▾ `, `▸ `, or two spaces for a file) in `drgnx-explorer-guide`. On a graphical display
+  the look-fix layout (window-dark.html `.row`), sizes in device px at the env's scale: a space of `indent` (default 12,
+  the density's `tree-indent`) per level below the first, the chevron as an image (a space for a file), 6 px, the folder
+  (open or closed) or file-kind icon as an image, 6 px. The icons are drgnx's Lucide files, 16 logical px, stroke 1.6, in
+  `currentColor` (each image sent once); a file's kind is its exact name's in `etc/icons/files.eld`, else its extension's,
+  the table the editor reads too (`drgnx-look-file-name-icon-name`). Then the name in `drgnx-explorer-root`,
+  `-directory` or `-file` (`drgnx-git-ignored` when ignored), a control character as `^X`; the path is the
+  `drgnx-work-id` over the whole row. A listing with one root makes the root's row `invisible` (the island's header
+  names it).
+- **Git marks.** The hub keeps each repository's last status read on the connection (`git/letters`) and puts the
+  `drgnx-git-status` of each entry on its name: a file's own, a folder's strongest change inside it (untracked as
+  added), an untracked or ignored folder's on everything under it; ignored ones carry none. A read that changes a status
+  draws the connection's listings again (only the changed rows go out). The editor draws the mark at the right edge with
+  the ⋯ control (`drgnx-explorer--rows-patched`).
+- **Who is here.** Each time the connection's presence subscription (`agents/presence/subscribe` with a view) draws
+  who is here, the hub keeps its paths' ordinals for the connection and puts `drgnx-agents-here` (the ordinals, a
+  list) on the name of each entry an agent is changing, or holding such a file inside; a change draws the listings
+  again. The editor makes the badge (`drgnx-explorer-badge-functions`: the marks and colours of an ordinal are the
+  display's) and draws it after the name.
+
+### The Buffers panel's rows (`buffers/set`)
+
+The Open list's rows, built by the hub from what the editor says is open (`runtime/crates/drgnx-ratatoskr/src/view/buffers.rs`;
+the editor's side is `wb/drgnx-buffers.el`).
+
+- `buffers/set {view, ops}` applies OPS in order to the (connection, view)'s open buffers and answers `true`; every class
+  of the view then gets the rows that changed (the first set a reset). An op is `{op: "reset"}` (none open: the editor
+  puts its whole set after it, at attach and after a reconnect), `{op: "put", id, name, file?, modified?}` (a new id goes
+  last in the open order, a known one keeps its place: a rename or a save never moves a row), `{op: "modified", id,
+  modified}`, `{op: "remove", id}`, `{op: "scope", ids}` (only those buffers on rows, in the open order; `null`: all)
+  and `{op: "filter", text}` (only names holding TEXT in any case; `null` or empty: all). At most 50,000 ops; ids are 1
+  to 64 bytes (the editor's `bN`, N counting up as buffers are first seen).
+- **When it is sent.** From the change bus's edges only (`buffer-set-changed`, `modified-changed`, a window or tab
+  change for the scope), coalesced into one call when the command loop is next idle; an unsaved flag goes as a
+  `modified` op on its flips, never per keystroke. Nothing goes while a mouse button pressed in the panel is held.
+- **A row** is two characters of room (on a graphical display a space, then the file's icon, chosen by the file's name
+  or else the buffer's, with 6 px either side, as the Explorer's top files), then the name with control characters as
+  `^X`. `drgnx-work-id` (the id) is over the row; over the name `drgnx-git-status` (the file's status in the
+  connection's repositories read by `git/letters`, an ignored or untracked folder's around it; an ignored name is dimmed
+  instead) and `drgnx-buffers-modified` while it has unsaved changes. A status read draws the connection's panels
+  again. The editor draws the right edge (the letter, ● or ×, the hover) for the rows drawn near what a window shows.
+
+### The agent panel's rows
+
+The transcript of an agent session, as rows the panel only inserts (`runtime/crates/drgnx-ratatoskr/src/view/panel.rs`;
+the rows themselves are `agents/session/rows.rs`, pure).
+
+- **The view.** An editor that shows session SID's panel sends `view/env` for the view `agent-panel/SID`; the hub sends
+  every class of it the rows of the session's last 200 entries, a reset first, then each change of the transcript as
+  the patch of the rows it touched. `agent-entries` is unchanged: the mirror and the old panel still read it.
+- **Groups.** An entry is drawn in a group: a tool call with the thoughts right after it, or any other entry alone.
+  A change of the transcript (each `emit`, the same moment `agent-entries` is sent) builds again only the groups that
+  hold a changed entry; per (connection, view, class) a cache keeps the others' rows, so the store's diff sends only
+  the changed rows. A new env (its epoch or width), a new look or new step facts build every group again.
+- **Rows.** `e:I` is entry I's row (a step on one line: its state, title (an `execute` call: `Shell` and the title, its backticks dropped, in
+  `drgnx-agent-panel-code`), the first line of its result, `↶ undone`,
+  and its time and cost right-aligned, in `drgnx-agent-panel-warn` past 10 s or $0.50); `e:I/p:N` the lines under a
+  step (each hook's verdict that refused, changed, failed or was busy, `hooked at the hub's server`, and `allowed by
+  your Always`); `e:I/t`, `e:I/t:N` its thinking, folded to a line count or open (40 lines); `e:I/d:N` its output
+  when open (12 lines, or a large one's first and last 10 around a count of the hidden lines), in
+  `drgnx-agent-panel-output`; `e:I/h:N` its diff hunks when open (ACP `diff` items, or a paired chat's `edit_file` old
+  and new text), at most 30 lines a row, unchanged lines in `drgnx-agent-panel-context` (the panel's own text is in the
+  UI font, so every code line names a code face);
+  `b:I:N` block N of an agent message, its Markdown spans as runs; `more` above the first row when earlier entries
+  are not shown. A subagent's step is indented and drawn in one of the six agent faces, by its `Task` call.
+- **Props.** Every row carries `drgnx-agent-panel-entry` (the entry's index); a step that can be reverted to
+  `drgnx-agent-panel-checkpoint` (its step's seq); a hook line `drgnx-agent-panel-hook` (`[seq, row, record]`, for
+  the provenance); a hunk `drgnx-agent-panel-hunk` (`[path, hunk, part]`); and every row of a group
+  `drgnx-work-id` `e:HEAD`, its step's node in the model.
+- **The model** (`view-model`, before the rows, which name its version; `panel_doc`): a `list` scheme of the steps
+  shown alone (each group's head that draws rows, `e:I`, kind the entry's type, fields `entry` and `diff`, 1 for a
+  tool call with an edit). No step links to another and no list is kept: Sjá sends a list whole each time it
+  changes, so a list of the tool calls would go whole with each new one (about 4.7 MB over a 1,900-entry stream,
+  against about 140 kB of nodes). A new step adds its node and nothing else changes. The model is made again only
+  when the entries or the window changed, on a full build or when a tool call changed (a streamed chunk of a message
+  changes no step), and then only from the last step (or the changed tool call) on: the hub keeps each connection's
+  steps and sends the new or changed ones as their own op (`extend_model`), so an appended entry costs its steps, not
+  the transcript's (1,900 appends: 7 s whole in a debug build, 26 ms extended). It goes whole on a full build, a
+  window change, a step that went, past the cap, or when the view owes a reset. At most the newest 20,000 steps. A connection's first rows of the view start the model again (a
+  reset at base 0). The panel's next/previous keys look through the drawn rows from point for the next step whose
+  kind (or `diff`) in Sjá matches, wrapping, and select it there; a fold stays the panel's own state, told to the hub
+  after with `agents/panel/look`.
+- **The facts** of a step (time, cost, checkpoint, undone, subagent, hooks) are keyed by the entry's `step`, the
+  `step` table's seq a tool entry is given when its step begins (a resumed session counts on from its last step in
+  the table): they
+  come from the step bus as steps close, from the `step` table when a panel first shows the session, and again after
+  every `history/applied`. Grants changing (an Always given or revoked) build the session's panels again.
+- `agents/panel/look {view, open?, rows?, older?}` answers whether VIEW is a panel: the step types open
+  (`thinking`, `read`, `search`, `edit`, `execute`, `fetch`, `other`; a failed step is open anyway), the rows opened
+  or folded by hand (`[[entry, open], …]`), and `older` to show 200 entries more. It is per connection and view, and
+  is dropped when the view closes or the connection goes.
+- `huddle_rows` builds a huddle thread's rows (`h`, `r:N`, `o`) from its record; the thread still draws in Lisp.
+
+### The symbol at a line (`search/symbol-at`)
+
+`search/symbol-at {root, file, line}` answers `{name?}`: of the symbols Hrafn's chunker finds in `file` (relative to
+`root`, inside it, read from disk; at most 2 MB), the innermost whose span reaches into `line` (from 1), the shortest
+one among them; no name outside every symbol or when the file is missing or too large (`hrafn::chunk::symbol_at_line`).
+A path that leaves `root` is refused (`file`). The editor's agent line asks it once per line of a saved file
+([agents-editor.md](agents-editor.md)).
 
 ## Sessions and their sockets
 
@@ -1407,11 +3038,119 @@ makes: the hub never grants `Open`) has no network but its sandbox's relay port,
   job) the proxy closes its listener and every tunnel and removes the socket; a resume binds a new one. A start that
   fails after the bind drops it the same way. The removal checks the socket's inode, so an old session's end never
   removes a newer socket at the same path.
-- **Test hook.** A `test-hooks` build reads `DRGNX_TEST_PROXY_PINS` (`NAME=ADDR,…`): names the proxy resolves to a
-  fixed address, so a row reaches the mock LLM on loopback under a name. A shipped build pins nothing.
+- **Pinned names.** The proxy resolves the names of `drgnx-sandbox-proxy-pinned-addresses` (a runtime setting,
+  `ProxyPins`, from `settings.el` or the editor's `config/settings`; `agents::net::pins`) to their address instead of
+  asking DNS; a pinned name may lead to a private address and must still be on the allowlist. A container job's
+  proxy pins the same names (`Caps.pins`, from `settings::containers::caps`). A runner gets none (its `start` frame's
+  `pins` is always empty): a pin names an address on this machine's network, and a runner's proxy reaches only public
+  addresses. So a job whose granted hosts include a pinned name stays on this machine (`exec::pinned_host` sets
+  `local_only`). A `test-hooks` build adds
+  `DRGNX_TEST_PROXY_PINS` (`NAME=ADDR,…`), so a row reaches the mock LLM on loopback under a name.
 
 Rows: `test/conformance/sandbox-net/`. The real launch: `tests/launch_sandboxed.rs`
 (`a_session_reaches_its_provider_through_the_proxy`, the sandbox lane).
+
+### The web proxy (`web.sock`)
+
+A session with the agent browser reaches the web only through its web relay port, 3130, whose other end is `web.sock`
+in its session directory (`runstav::paths::SESSION_WEB_SOCKET`). The hub serves it with **a web proxy of its own per
+session** (`runtime/crates/drgnx-ratatoskr/src/browser/web.rs`): a `gleipnir::net::proxy` under the web policy
+(`Policy::Web`, [gleipnir.md](gleipnir.md), "The web policy"), separate from the session's provider proxy, with its own
+connection cap (64), so one session's flood never takes another's places. `browser::web::start_web(sid, dir, ctx, who,
+front)` binds it (a stale file replaced, 0600), reads the state below, and only then listens; the
+`agents::net::SessionNet` it is given (`set_web`) drops it with the session, removing the socket when it is still its
+own.
+
+- **The state, read at the start and again at each change:**
+  - `browser.web` is on when the session's cell for it is Allow, or a grant with no host covers the session (a
+    `session` or `plan` answer); a grant that names a `host:port` (an `once` answer, until it expires) opens that one
+    target alone (`WebState::set_web_hosts`);
+  - the `browser.private` grants of the session and its plan (`norn::grants::matrix_grants_for`), each target in its
+    wire form, go to the proxy, which matches them against what was asked and where it leads;
+  - a Never cell ignores every grant;
+  - the deny list is the `agents-browser-deny-hosts` setting.
+- **What the proxy refuses becomes a card, at most:**
+  - **`WebOff`**, a public target while the web is off: `MatrixGate::decide(browser.web)` with the facts
+    `{host: "H:P"}`, the first host refused, so a page of thirty hosts makes one card. A session has at most one open
+    `browser.web` card; the targets refused while it is open make none. An Allow (the cell, or a grant that covers the
+    session) turns the web on without a card. Once the user refused one (a settled matrix card of the session with the
+    choice `refuse` or `deny`, or one marked `refused`), the session gets no more `browser.web` cards, after a hub
+    restart too.
+  - **`Private`**, a private target no grant opens: `decide(browser.private)` with the facts `{target, addr, class}`:
+    `target` the target as a grant names it, `{"host_port": "H:P"}` (the name, the literal or the
+    `host.drgnx.internal` port that was asked), `addr` the address and port it led to, `class` its class (`lan`,
+    `ula`, `link_local`, `cgnat`, `loopback`, `host_own`). One card per target; none for a refused target.
+    `browser.private` is capped at Ask, so every new target asks.
+  - **A container job's host port** (`exec/hostgrants.rs`): a session's networked job's proxy runs under
+    `Policy::Job` with a web state of its own and sends its `Private` events to the job's loop, which asks
+    `decide(browser.private)` with the facts `{target, job}` (`target` `{"host_port": "host.drgnx.internal:PORT"}`;
+    other targets are the allow-list's and ask nothing). The card's title is "Job ID wants your port PORT
+    (`host.drgnx.internal:PORT`)", its body says the grant opens the port for the whole session (its browser and its
+    other jobs) and that a revoke leaves open connections until they end; its choices are the browser's scopes, never
+    a CIDR or "all private". One card per port per job, whatever the answer; none once the job ended, none for a
+    user's job. An MCP session's job asks with the default (no role) columns, as the hub holds no `Who` for it. On every change to an answer the loop reads the session's
+    `browser.private` grants again and sets the job's proxy's grants to their `host.drgnx.internal` ports
+    (`WebState::set_grants`): a grant opens the next request, a revoke refuses it; open streams stay (no
+    `CloseStreams`). The pure core is `Core::step(Ev) -> Vec<Effect>`; the loop ends with the relay.
+  - **`Refused`** (a hard never, a port, a rebinding, a malformed request) is logged only; **`Reached`** is a store
+    event, once per host per session: kind `status`, the session as `agent`, data
+    `{"browser-host": true, "session": SID, "host": HOST}`.
+- **Changes reach it at once.** `coord::Signals::answers_changed` is called for every write of the user's (a settled
+  card, `graph/grants`, a plan's or a project's matrix override), every `config/settings`, every settings refresh that
+  changed what is in effect, and `presence/set`. Every web proxy then reads its cells, grants and cards again, so a
+  narrowed `browser.web` cell refuses the very next request. The proxy also reads again when the earliest grant in
+  force expires and, while the matrix setting has time presets, at each minute's turn.
+  - When what the session's browser may reach changed (the start included, when it is not nothing), a store event
+    says so: kind `status`, the session as `agent`, data `{"browser-net": true, "session": SID, "web": BOOL,
+    "hosts": ["H:P", …], "private": [TARGET, …]}` (the once-opened hosts, the private grants' targets in their wire
+    form). Rows wait on it after a settle.
+  - When the state changed or a card it asked settled, the proxy may ask its questions anew
+    (`ProxyHandle::forget_questions`), so the target refused while another card was open asks on its retry.
+- **What no grant opens** (`browser/nevers.rs`, shared by every session's proxy, started with the hub):
+  - `HostAddrsWatch`: every interface address of the host (`getifaddrs`, every 5 s), which the policy treats as
+    loopback;
+  - `NeverSetWatch`: the hub's own TCP ports on the host's loopback: the gateway's (registered once it listens), every
+    listener the hub registers (`hold`, `release`), and an Emacs TCP server's port, read every 30 s from the first line
+    (`HOST:PORT PID`) of each server file in `~/.emacs.d/server/` and `$XDG_CONFIG_HOME/emacs/server/` (the hub's
+    HOME; the line with the key is never read). On a Mac also podman machine's control ports (B4): its SSH port and
+    its hypervisor's REST port (`machine_ports` over `podman machine inspect` and the machine's config file,
+    `AppleHypervisor.Vfkit.Endpoint` or `LibKrunHypervisor.KRun.Endpoint`), read on the same 30 s tick and before
+    each networked container job; a restart that moves a port swaps the held pair (`set_machine_ports`).
+- **Test hooks.** A test launch is unsandboxed and has no browser host. With `DRGNX_TEST_BROWSER` set, a session
+  whose `browser` cell is not Never still gets the hub's side of its browser at its start (the web proxy, and the
+  broker with the far end of its socketpair held); `DRGNX_TEST_WEB_REDIRECT=ADDR:PORT` sends every upstream but the
+  host's loopback there (the mock LLM stands for the site), and `DRGNX_TEST_PROXY_PINS` pins names for it as for the
+  provider proxy.
+
+Rows: `test/conformance/browser/web-*.jsonl`, `browser/private-*.jsonl`.
+
+### A session with the browser
+
+At `prepare`, the session's `browser` cell decides (`agents/session.rs`, `sandbox::browser_for`):
+
+- **Never:** today's spec, no browser.
+- **Allow or Ask:** the browser, when the sandbox is bubblewrap's full tier, the kernel's Landlock ABI is at least 9
+  and `browser::resolve` finds a program. Ask comes at first use: the broker asks the cell at each websocket upgrade.
+  Otherwise (OD1 (b)) the session starts without it: `agents/get` says why in `browser_why`, with the fix, and the hub
+  raises one `notice` per reason per hub run (`id` `browser-tier`, `browser-landlock` or `browser-program`).
+- **The spec** ([gleipnir.md](gleipnir.md), "Ratatoskr's side"): the relays 3128 → `proxy.sock`, 9222 → `cdp.sock`,
+  3130 → `web.sock`; the local ports (`agents-browser-local-ports`) in `extra_tcp_ports`; the program's folder and
+  `/var/cache/fontconfig` read-only; `PLAYWRIGHT_MCP_CDP_ENDPOINT` and `DRGNX_BROWSER_CDP` set to
+  `ws://127.0.0.1:9222/devtools/browser/SECRET` (a fresh 32-byte secret per session, in hex, in the environment
+  only: never in an argv or a log); no display, no runtime dir; `Spec.browser` with `--headless-shell` or `--full`
+  and `--max-message N`. An editor's value for either endpoint name is dropped for every session (`module_env`).
+- **The launch** makes the browser host's socketpair (`agents::launch::launch_on`): the host's end goes into the
+  sandbox, the hub's end to the broker. The status line must say the browser host is layered and ready
+  (`gleipnir::inner::read_status_for`). Where a user systemd answers, the sandbox runs in a scope of its own,
+  `drgnx-session-SID`, with `MemoryMax` = `agents-session-memory` and `TasksMax=4096` (`exec::unit::session_scope`).
+- **Before the spawn** `agents::net::start_browser` starts the web proxy (above) and the CDP broker on `cdp.sock`
+  (0600): its gate is the `browser` cell, its limits `agents-browser-max-message` and `agents-browser-idle`.
+- **The memory watch** (a scope only): it reads the scope's cgroup once (`systemctl --user show -P ControlGroup`),
+  then `memory.current` every second, and stops the browser (`stop("memory")`) each time it rises above
+  `agents-browser-memory-high` percent of `agents-session-memory`.
+- **At the end** of the agent's process the broker, the web proxy, the provider proxy and the socketpair close (the
+  browser host stops Chromium and exits), their sockets go, and the scope ends with its process. A resumed session
+  is launched again, with a fresh browser.
 
 ## The MCP bridge
 
@@ -1484,7 +3223,10 @@ other profile gets no gateway relay. A test build's launch is the unsandboxed te
   unregistered.
 - **Across a restart** the rows are read back (a row that does not read is dropped and logged), owners checked again,
   the sessions' sockets bound again, and the gateway's port too: `runtime.db`'s `kv.gateway_port` is tried first,
-  else a free one (logged), and the one used is kept.
+  else a free one, and the one used is kept. When the kept port is taken, the hub logs a warning and drops every
+  loopback registration at start (the editor's tokens and agents' on 127.0.0.1; a session's `gateway.sock` ones
+  stay): their holders still know the old port, so a process squatting it would collect live tokens. Each holder asks
+  again: the editor does on its next proven connect and learns the new port.
 - **Budget.** A registration's `budget` (USD), else its job's `data.budget` in work.db. `gateway/set-budget {job,
   budget}` sets it for every registration of the job, in memory and in `runtime.db` (the editor's `job resume
   --budget`).
@@ -1587,16 +3329,24 @@ a token of their own, so the editor need not hold the keys.
 - **Loopback only.** The token is good on the loopback listener and nowhere else: on a session's `gateway.sock` it is
   401. A `runtime.db` row of class `editor` that names another listener, or no owner, is dropped at start.
 - **One per owner.** A second call from the same process deletes its earlier editor token first, so a reconnecting
-  editor rotates; another process (a batch job such as the search indexer, the `drgnx` CLI) takes its own.
+  editor rotates; another process (a batch job, the `drgnx` CLI) takes its own.
 - **Kept across a restart.** It is a `registration` row like an agent's: read back at start, pruned with its owner,
-  and good again as long as the port is the same (`kv.gateway_port`). The editor asks for its token again on every
-  proven reconnect, so it learns a new port.
+  and good again only while the port is the same (`kv.gateway_port`): a moved port drops it. The editor asks for its
+  token again on every proven reconnect, so it learns a new port.
 
 **Which keys the hub holds.** `gateway/keys-held {}` (user) answers `{providers: [Id]}`, the ids whose key is held, and
 user subscribers get the event `gateway/keys-changed {providers}` whenever that set changes (`gateway/keys`, a
 registration's `keys`; a key replaced for a provider already held changes nothing). Never a key. The editor judges a
 provider usable from these, not from a key of its own. A restarted hub holds none: a reconnecting editor asks
 `gateway/keys-held`, and hears `gateway/keys-changed` when its handover fills the set again.
+
+**Forgetting a key.** `gateway/revoke-key {provider}` (user) makes the hub forget that provider's key (zeroed) and
+answers whether it held one; a provider it never held is `false`, not an error. The next request for the provider finds
+no key (the editor's route answers 503 `no key for P in the drgnx hub`, an agent's chain moves on and the hub asks again
+with `gateway/need-keys` when an agent needs it); a request already sent upstream finishes with the key it used. The set
+changes, so `gateway/keys-changed` follows. The editor calls it when a key it stored replaces the old one
+(`drgnx-ai-store-key` → `drgnx-hub-revoke-key`; the new key goes with the next hand-over): a replaced key is revoke plus
+set. It only asks a connection that proved itself and starts nothing.
 
 ## Settings
 
@@ -1635,7 +3385,7 @@ reading and fallbacks; `profiles.rs`, `providers.rs`: the types).
   `RUNTIME_NAMES` and `value` JSON of the setting's runtime type (alists are objects, keys sorted; `drgnx-ai-roles` a
   list of `{role, chain: [{provider, model}]}`; at most 64 KiB). A call replaces the whole set of that project (none:
   global); an empty list clears it (the project still counts as having sent). A project's set holds only the settings
-  the Lisp declares `:scope project` (`overrides::PER_PROJECT`: `drgnx-ai-roles`); every other runtime setting is
+  the Lisp declares `:scope project` (`overrides::PER_PROJECT`: `drgnx-ai-roles`, `drgnx-search-include`, `drgnx-search-exclude`, `drgnx-search-off`, and the user's own `drgnx-agents-plugins`, `drgnx-agents-hook-rules`, `drgnx-agents-hook-rules-off`: see "Plugins"); every other runtime setting is
   global and security-bearing (profiles and their commands, providers and their URLs,
   `drgnx-agents-allow-unsandboxed`), so a project never changes it. A name that is not a runtime setting, a global one
   in a project's set, or a value that does not fit is `invalid-params` at `overrides[N].name` or
@@ -1667,13 +3417,20 @@ reading and fallbacks; `profiles.rs`, `providers.rs`: the types).
 reads lines only up to the last it answers; its `tail_bytes` form seeks to the file's end; both replace bytes that are
 not UTF-8). A job's folder
 `<state>/hub/exec/<id>/` holds `meta.json`, `log`, `exit` (written by the wrapper shell through a rename), `why`
-(`stopped` or `timed-out`, written before the hub kills the group) and, once ended, `result.json`; a folder without
+(`stopped`, `timed-out` or `infra: proxy: <reason>`, written before the hub kills the group; the infra reason is also
+the log's last line) and, once ended, `result.json`; a folder without
 `result.json` is running. A session's job is launched with `launch::launch` (its sandbox spec) and the status pipe is
 read with `gleipnir::read_status`; the user's runs with the user's rights. The command is wrapped by a shell that logs
 and records the exit, and (Linux with a user systemd) by `systemd-run --user --scope -p MemoryMax=…`, a scope so the
-command stays the hub's child. `Runner::open` re-attaches every folder without a result. The machine's slots
-(`Hooks::slots`, 4) are the sessions' jobs': `Inner::start` gives a `Starter::User` job no permit, so the editor's
-servers (`no_timebox`, up for days) never fill them and a user's job never queues. `exec/get`, `exec/log` and
+command stays the hub's child. `Runner::open` re-attaches every folder without a result, except a networked container
+job's (its meta names a `relay`): its relay died with the old hub, so the job's container is removed and the job
+recorded `infra` ("the hub restarted, and a networked job can't keep its relay"); a graceful stop ends the running
+ones the same way first (`Runner::end_networked`, "the hub stopped"). Then it sweeps: the containers labelled `drgnx.owner=<this hub's
+tag>` whose `drgnx.job` isn't running, job containers before sidecars (`sleipnir::linux::podman::leftovers`, shared with
+the runners), and relay images (`localhost/drgnx-px:<tag>`) other than the current binary's. A sibling hub's
+containers carry its own tag and stay; unlabelled ones (made before the labels) are left. Every job but the editor's
+servers (a user's `no_timebox` job, up for days, started at once) goes through the queue ("Runners: the queue"), whose
+local runner admits it here (`Hooks::admission`). `exec/get`, `exec/log` and
 `exec/stop` answer an agent caller (`Class::Agent`, the job tools through `Coord::exec`) only for its own session's
 jobs (`exec::visible`: "not yours", `not-allowed`); the norn tools refuse the same (row
 `exec/an-agent-cannot-read-another-callers-job`). The graph record is
@@ -1682,6 +3439,20 @@ jobs (`exec::visible`: "not yours", `not-allowed`); the norn tools refuse the sa
 the `launch-sandboxed/*` rows (`tests/launch_sandboxed.rs`, a session's launch spec run in a real sandbox): a
 container has no user namespaces for bwrap, so CI runs them in `escape-host`'s sandbox lane; the rows of the reduced
 tier run on it where the kernel has Landlock ABI 9 and on the full tier elsewhere (no runner has ABI 9 yet).
+
+**Rows and failure classes.** `result.json` keeps every row of the whole log (`End.rows`, read a line at a time by
+`vordr::rows::Reader`, whatever the job's kind: cargo test, ERT and domr lines don't overlap): its name, verdict
+(`pass`, `skip`, `fail`) and a failure's class — `assert` (a panic or a `should` in the test), `build` (a compile error,
+an ERT void function or a file that didn't load; it carries the symbols the errors say are missing: rustc's
+`vordr::rows::MISSING` codes, `(void-function S)`), `error`, `timeout` and `infra`. A compile error is the row
+`build:CRATE (TARGET)` from cargo's `could not compile` line. `vordr::rows::close` adds the row `(job)` for a job that
+timed out (`timeout`), was lost or ended `infra` (`infra`), was stopped, or failed with no failing row (`error`). The
+summary's `failing` names the failed rows (at most 50, `(job)` left out); `Runner::rows` reads them. The gates read
+rows only (`docs/develop/orchestration.md`).
+
+An `exec/start` that takes over a second of real time logs its phases (`exec/start took N ms: matrix …, keys …,
+network …, placement …, start …`): a slow start lets a task's review overtake the run it should judge, as macOS's
+did once.
 
 The editor's own jobs are the user's `exec/start` with four more fields (`StartParams`: `name`, `env`, `memory_max`,
 `nice`; `StartParams::user_only_field` names the first one a request sets). `exec::start` refuses them from a session
@@ -1693,7 +3464,7 @@ every provider's `key_env` (`user_env`; `Hooks::key_envs` reads the providers fr
 session's job run unsandboxed (the conformance lane) keeps a short list (`agent_plain_env`), and a sandboxed one the
 tool paths (`tool_env`). `unit::wrap` hands the spec's environment to `systemd-run --scope` (the scope's command gets
 the caller's environment) or to the plain shell (macOS, no user systemd). They travel in `ExecSpec.user` (`UserJob`, also in a queued job's
-`pending.json`); the name is in `meta.json` and on the `ExecRow`. The unit takes `memory_max` as its `MemoryMax=`;
+`Pending`, kept in `rq_job`); the name is in `meta.json` and on the `ExecRow`. The unit takes `memory_max` as its `MemoryMax=`;
 `nice` is `nice -n N` in front of the command inside the logging shell (a scope takes no `Nice=`), the same line with
 and without a unit, and the form BSD's `nice` (macOS) takes too.
 
@@ -1706,12 +3477,820 @@ optional; an older file with numbers reads as before), the `ExecRow` has no `tim
 a time box of 0. The editor side is `core/drgnx-exec.el` (a cache fed by `exec/list` and `exec-done`; see
 `docs/guide/jobs.md`, "The editor's jobs").
 
+**Progress** (`exec/progress.rs`): a job whose command line has `--progress FILE` (the Extensions view's jobs) is
+watched while it runs. Every 250 ms the hub reads `FILE.plan.json` and then `FILE` (each up to `MAX_BYTES`), and for
+each that changed since the last look and holds a JSON object it broadcasts `exec-progress {id, file, plan}` or
+`{id, file, step}`; one last look runs before `exec-done`, so the final step is never lost. The editor's jobs take
+these events instead of watching and reading the files themselves.
+
+## Runners: the transport
+
+`drgnx-ratatoskr/src/runners/` reaches the user's other machines (runners) over the user's own OpenSSH
+(`docs/guide/runners.md`, "How drgnx reaches your machines"). A runner is a `RunnerCfg {name, host, linger, cloud,
+remote}`: the registry's name (letters, digits, `_`, `-`, at most 32 bytes), the host as the user's ssh knows it, a
+cloud machine's agent, certificate and pinned host key (`CloudSsh`), and the argv of its three sessions (`Remote`).
+`RunnerCfg::check` refuses a host or name that would read as an ssh option or holds a space, a path in the config
+that ssh would expand (`%`) or that would break its line, and an empty argv; `grace()` is an attempt's grace there
+(600 s with linger, 0 without).
+
+**The generated config** (`ssh_config.rs`). `render` writes the forced options first, because ssh keeps the first value
+it reads for an option: `ForwardAgent no`, `ForwardX11 no`, `ClearAllForwardings yes`, `PermitLocalCommand no`,
+`BatchMode yes`, `StrictHostKeyChecking yes`, `UpdateHostKeys no`, `ServerAliveInterval 15`, `ServerAliveCountMax 4`,
+`Compression yes`, `ControlPersist 10m`, `RemoteCommand none` and `RequestTTY no` (`FORCED`). A cloud runner adds
+`IdentityAgent`, `IdentityFile` (the public half of the agent's key), `CertificateFile`, `IdentitiesOnly yes` and
+`UserKnownHostsFile` (paths quoted) and reads no user config. The `IdentityFile` is needed: under `IdentitiesOnly`
+ssh pairs a certificate only with a named identity's agent key ("no separate private key for certificate"), and
+without one it offers the user's default keys; an SSH runner ends with `Include ~/.ssh/config`, so its host name, user, port, keys and `ProxyJump` /
+`ProxyCommand` stay the user's. `write` puts it at `$XDG_RUNTIME_DIR/drgnx-runners/<name>/ssh_config`, mode 0600, its
+folders 0700 (made, or narrowed), replaced in one rename; a runner folder that is a link or someone else's is refused.
+ssh expands `~` from the password database, not `$HOME`, so a test's `Include` reaches its own home only in a
+container.
+
+**The transport** (`transport.rs`). `trait Transport` (methods return `BoxFuture`, so a link can hold a `dyn
+Transport`):
+
+- `open(r) -> Channels`: R's master (the one it has if its socket answers, else one a previous hub left in the runner's
+  folder, resumed with `Session::resume_mux`, else a new one through `connect_mux`; the master's socket is in the
+  runner's folder unless its path would pass a Unix socket's limit, 104 bytes on macOS, whose per-user temporary
+  folder is long: then it is in a short folder of its own, `/tmp/drgnx-ssh-<uid>/<hash of the runner's folder>`, both
+  0700 and refused when a link or another user's, `ssh_config::control_dir`), then `true` on it, so a dead link
+  or a login banner shows before any session of ours starts, then three sessions: control, bulk in, bulk out. Each
+  `Channel` has `tx`, `rx` and `err`; `Channel::new(tx, rx)` makes one over any pipe, for a link's tests. At most
+  `SESSIONS` (3) per runner, kept by a semaphore: a second `open` while they are open is refused.
+- `round_trip(r) -> Duration`, within `ROUND_TRIP_DEADLINE` (60 s, the keep-alive's 15 s × 4): `true` while a session
+  is free, else the next bytes on the control channel (both ends ping every 10 s), so the check never needs a fourth
+  session. `-O check` only asks the master's local socket, which still answers after its link died: it is
+  `OpensshTransport::check_master`, never health.
+- `replace_master(r)` stops the master listening (the crate's `close`, which is `-O stop`) and dials a new one;
+  sessions on the old master finish or end through the keep-alive. `stop(r)` stops it the same way and forgets R.
+  **The hub never sends `-O exit`**, and dropping an `OpensshTransport` detaches its masters, which stay up for
+  `ControlPersist 10m` so the next hub resumes them. Sessions are opened from a handle that owns nothing (dropping it
+  never touches the master); one owner per master stops or detaches it.
+
+`OpensshTransport` and `effective` are `cfg(all(unix, not(target_os = "android")))`: the `openssh` crate (native mux
+only, no process mux) with `config_file`, `KnownHosts::Strict` and `ControlPersist::IdleFor(600)` on the master's
+command line too (the crate's defaults, `accept-new` and `yes`, would win over the file there), the control folder in
+the runner's folder. `LinkError {Lost, NeedsLogin(Login), HostKeyChanged, Refused(String)}` is never a job's result.
+`classify_stderr` reads ssh's error output: Tailscale's "requires an additional check" (its URL kept for the card,
+never opened), a passphrase, a host key not known yet (`Login`), a changed host key (`HostKeyChanged`, never
+accepted); `link_error` makes the machine down or out of reach `Lost` and the rest `Refused` in ssh's words.
+`for_runner` makes a cloud machine's unknown host key `HostKeyChanged` and any login it asks for a refusal: its keys
+are pinned and there is nothing to log in to. `Redial::delay(n)` is 5, 15, 45, then 120 s. `effective(config, host)` runs `ssh -G -F <generated> host` and reads
+`forwardagent`, the forwards and the proxy (`Effective`), for the onboarding probe and the runner list.
+
+Tests: unit rows `runners::` [D]; the fleet rows `tests/fleet_link.rs` [C] (`#[ignore = "fleet"]`) run in a fleet's
+harness against real sshd (its header has the commands). The target builds only with `--features fleet`, so the
+escape lane's `--ignored` run never picks it up. They need sshd set two ways, through
+`DRGNX_FLEET_RUNNER_OPTS` mounting `test/runners/link/*.conf` as `05-link.conf` (read before the image's
+`10-fleet.conf`): agent forwarding allowed with `--max-sessions 3`, and a `ForceCommand` that prints Tailscale's
+banner. Each row first shows the user's own ssh doing what the hub must not (forwarding the agent, running the user's
+`RemoteCommand` on a terminal and their `LocalCommand`, opening their `LocalForward`). The dead-link row stops the
+runner's sshd for the master's connection (`kill -STOP` over a second connection), which a network cut would do too.
+
+## Runners: cloud machines
+
+`runners/cloud/` starts and ends the user's cloud machines (`docs/guide/runners.md`, "Cloud: what you give drgnx").
+`trait Provider` (`BoxFuture` methods, so the hub holds a `dyn Provider`): `preflight() -> Vec<Check>`, `start(&StartReq)
+-> Instance`, `describe(id) -> InstanceInfo`, `list_ours()`, `end(id)` (one already gone is fine), `console(id)` (where
+a machine prints its host keys) and `prices(sizes) -> Prices`. Every call is bounded by `CALL_TIMEOUT` (30 s) and an
+answer by `MAX_BODY` (8 MiB). `CloudError {NeedsLogin(cmd), Denied, Capacity, Transient, Other}` carries the
+provider's code and message, never a credential.
+
+**AWS** (`aws.rs`): EC2's Query API (and STS `GetCallerIdentity`, the Pricing API's `GetProducts`), signed by
+`aws-sigv4` (`sign-http` only), sent through bifrost's `Upstream` (HTTP/1.1, rustls on ring) and read by a small
+`quick-xml` tree (`El`). `run_params` always sets `ClientToken` (the start's token: a retry returns the same
+machine), the `drgnx-hub` and `Name` tags on the instance, its volumes and its network interface,
+`InstanceInitiatedShutdownBehavior=terminate`, `MetadataOptions` tokens required with hop limit 1, the security group,
+the spot options, and the user-data (public things only). `classify(status, code)`: a 401/403 with an expired or
+unrecognised token (`ExpiredToken`, `AuthFailure`, …) is `NeedsLogin` and drops the cached credentials;
+`UnauthorizedOperation` is `Denied`; `Insufficient*Capacity` is `Capacity`; throttling, 5xx and a just-started
+machine not listed yet are `Transient`. `POLICY` is the IAM fixture (`aws-policy.json`), `policy_for(hub, regions,
+sizes)` what `drgnx runner cloud setup aws` prints.
+
+**GCP** (`gcp.rs`, design §6.7.1, §6.7.6, H6): Compute Engine's REST API (and Resource Manager's
+`testIamPermissions`, the Billing Catalog's `skus.list`) as JSON with a bearer token, through the same `Upstream`.
+`Gcp::new(GcpCfg {project, zone, hub_id, lifetime}, creds)`; a machine's id is `ZONE/NAME`. `insert_request(req, now)`
+always sets the `requestId` (`request_id(token)`: a UUID from the start's token, so a retry is the same request), the
+`drgnx-hub` label on the instance and its disk, `terminationTime` = now + the lifetime with
+`instanceTerminationAction=DELETE`, `SPOT` with `preemptionNoticeDuration` 120 s for a spot start (`STANDARD`
+otherwise), `automaticRestart` off, no service account, the network tag `drgnx-<hub id>-ssh` and the Ignition config
+as `user-data`; a name that isn't `drgnx-…` is refused (the conditional role allows only those). `start` waits for its
+operation (GCE reports capacity and quota there); `describe` of a deleted machine is `Gone` (GCE keeps no record);
+`list_ours` is `instances.aggregatedList` with the label filter, in the zone's region; `end` is `instances.delete` (a
+machine already gone is fine) and there is no stop: on GCP the guest never powers off, and the idle stop is the hub's
+delete (`Sweeper::with_idle`). `scheduling(id)` reads back the deadline and its action (the first start's check).
+`classify`: 401 is `NeedsLogin` (a cached token gets one retry with a fresh one first), the zone-pool reasons are
+`Capacity`, 429/5xx and rate limits `Transient`, other 403s `Denied`. Tokens: the credential source's output
+(`Resolver::raw`) is a token (`gcloud auth print-access-token`, used 5 minutes) or a service-account JSON key
+(`parse_service_account`), whose `jwt_assertion` (RS256 by `ring`, scope `cloud-platform`) is traded at its
+`token_uri`. `ROLE` is the custom-role fixture (`gcp-role.json`); `setup_check(gcp, member)` lists the VMs without a
+`drgnx-hub` label and gives the `gcloud` commands (`setup_commands`), the binding with `condition(project)` when there
+are any; `drgnx runner cloud setup gcp` prints both bindings. `ensure_firewall` finds or makes the two rules
+`drgnx-<hub id>-ssh` (`0.0.0.0/0`) and `…-ssh6` (`::/0`), TCP 22 to that tag, the hub id in their description; one of
+ours that allows anything else is refused. The pre-flight's lines: credentials, permissions (every one of the role's),
+the base image (`images.getFromFamily`), other machines, firewall rules.
+
+**Ignition** (`ignition.rs`, design §6.7.2): `render(&Machine {ca_public, principal, limits, bundle_url,
+bundle_sha256})` writes the Fedora CoreOS `stable` config (spec 3.4.0). Ignition runs once, on a disk's first boot, so
+each machine gets its whole setup there instead of in a baked image: the runner user (linger, subordinate ids),
+`/usr/local/bin/sleipnir` fetched from the hub with its `sha256-` verification, the CA's public key, the principal and
+sshd's certificate-only drop-in, the watchdog's `watchdog.env` with `DRGNX_WATCHDOG_PROVIDER=gcp` and the image's own
+watchdog unit (without its first-boot dependency), `drgnx-host-keys.service` printing the fingerprints and keys to
+`/dev/ttyS0` in cloud-init's shape (`ca::pin::from_console` reads them from `getSerialPortOutput`), and Zincati off (a
+`config.d` drop-in and the unit masked). Files are percent-encoded `data:` URLs; nothing in it is secret, and nothing
+in it powers the machine off.
+
+**Credentials** (`creds.rs`): `Source {Command(argv), Keyring(name)}`. `run_command(argv, timeout)` runs with stdin on
+`/dev/null` in a session of its own (`setsid`: no `/dev/tty`), kills its process group at the limit, and refuses a
+prompt on its error output (even when it then exits 0), a failure and empty output (`CredError`); what it printed is
+in a `Zeroizing` buffer, parsed into `SecretString`s (`AwsCredentials`, never `Debug` or `Clone`), and no error quotes
+it. `Resolver` keeps them until 5 minutes before they expire; a keyring source reads `Keys::value`. `Resolver::raw()`
+is the source's output unparsed (in a `Zeroizing` buffer), for GCP.
+
+**The market** (`market.rs`, design §6.7.3, pure): `Policy {mode}` with `Mode {Spot, OnDemand, SpotThenOnDemand}`
+(`drgnx-runners-cloud-market`, the default the last). `History::record(region, at, Event {Preempted, NoCapacity})`
+keeps only what can still matter (`WINDOW_S` + `FALLBACK_S`). `choose(region, now, history)` is on-demand in a region
+where two events of one kind came within `WINDOW_S` (1 h), for `FALLBACK_S` (6 h) after the second;
+`for_job(restartable, …)` never gives a job that can't be restarted spot (on-demand, or none with `spot` only). A
+runner's `preempting` frame (its watchdog's notice, `docs/develop/sleipnir.md`, "The watchdog") ends its attempts
+`infra: preempted` and requeues them at once (`attempts`, `Event::Preempting`).
+
+**Endpoints**: the providers' own, `https://` only. A `test-hooks` build reads `DRGNX_TEST_CLOUD_ENDPOINT_AWS` /
+`_GCP` and accepts `http://`, for `ratatoskr-mock cloud` (`docs/develop/scenarios.md`, "The cloud mock").
+
+Tests: `runners::cloud::` [D] (the SigV4 test suite's `get-vanilla`, the `RunInstances` parameters, the error
+classes, the policy's statements, a prompting credential command, the market's fallback and restartability), and [B]
+rows against the mock with its virtual clock (`start_describe_end_round_trip`,
+`a_retry_after_a_crash_returns_the_same_instance`). GCP: [D] `gcp::insert_always_has_deadline_delete_and_request_id`,
+`gcp::jwt_fallback_signs_with_ring` (a key `ssh-keygen` makes, verified by `ring`),
+`ignition::ignition_turns_zincati_off_and_holds_no_secret`, `ignition::the_guest_never_powers_off_on_gcp`; [B]
+`gcp::a_stopped_vm_is_deleted_by_the_sweeper` (and an idle one), `gcp::the_deadline_deletes_with_the_hub_down` (the
+mock's clock moved to the deadline with no client running; the firewall rules, the console, the prices),
+`gcp::a_shared_project_gets_the_conditional_role_warning` (the role, the setup's commands, the pre-flight).
+
+## Runners: cloud spend, the sweeper, the network rule
+
+**The meter** (`meter.rs`, design §6.7.5): `Meter::new(Rates, month_spent)` per month, from that month's records.
+Per machine (`Started {machine, runner, provider, region, size, market, price_h, disk_gb, at}`): running seconds ×
+the price at its start, its disk's GB-hours, its public IPv4 address-hours (`Rates`, AWS's list prices by default)
+and the bytes it sent back (`sent`) at the egress price; and the images' storage (`images(gb, now)`, the `images`
+record). `tick(now)` gives one `CloudSpend {machine, provider, region, type, market, from, to, amount}` per whole
+machine-hour, each once; `end(machine, now)` the last part-hour; `write(db, rec)` puts it in the graph as
+`cloud_spend:<machine>.<from>` (`("hub", Class::System)`, `norn::write::runners`). `spent(now)` is the records and
+what runs since.
+
+- `gate(now, cap, size, price_h, busy_s, idle_s, running, needs_login)`: while the credentials need a login, the
+  card's text (`needs_login_text`: "Run CMD, then Runners: Retry Cloud", CMD in backquotes); at the cap `"cloud cap: $50 of $50 used; no new cloud work"`; and a
+  start whose `forseti::cost::projection` passes the cap `"cloud cap: $41 of $50 used; a c7a.4xlarge for ~40 min would
+  pass it"` (dollars from $10, cents below; the minutes are busy + idle).
+- `check(now, cap, machine_hour, CHECK_S) -> CapAct {Go, NoNewWork, StopAll([(instance, runner)])}`, through
+  `forseti::cost::guard` one check (10 s) ahead: on `StopAll` the hub runs a sweep with `CapState::PastCapPlusHour`,
+  which ends every machine, and `Queue::cloud_gone(runner, now)` requeues their attempts at once
+  (`attempts::Event::CloudGone`; a job that can't be restarted ends lost).
+
+**The sweeper** (`sweep.rs`, design §6.7.6 layer 3): `Sweeper::new(hub_id, Bounds {lifetime_s, unreachable_s})`;
+`pass(provider, now, reached, cap) -> Pass {Done(Swept), Paused(cmd), Failed(e)}`, at hub start, every `EVERY_S`
+(600 s) and on the cap's stop. It lists the provider's tagged machines and skips (into `Swept::not_ours`) any without
+`drgnx-hub=<this hub>`, whatever the list returned. A running machine `reached` says the hub has no link to goes into
+`reattach`, and is ended after `UNREACHABLE_S` (300 s) unreached in a row; a machine past its lifetime (its
+`launchTime`, `InstanceInfo::launched`), a stopped one, and with `PastCapPlusHour` every one is ended
+(`Ended {Unreachable, Lifetime, Stopped, Cap, Idle}`). Where the idle stop is the hub's (GCP), `with_idle(idle_s)`
+ends a reached machine that `idle_since(id, Some(t))` (its watchdog's `Idle {since}`, through `serve`) says has been
+idle that long; `idle_since(id, None)` is busy again. A `NeedsLogin` pauses it (`paused()` names the command, nothing is
+ended); the next pass the credentials work for resumes and ends what is past its bound by then.
+
+**The network rule** (`net.rs`): `ensure_rule(&Aws)` finds or makes the region's one security group
+`drgnx-<hub id>-ssh` in the default VPC, tagged `drgnx-hub` at creation, and gives it the one rule TCP 22 from
+`0.0.0.0/0` and `::/0`. A group of ours with no rule (a crash between the calls) gets it; one with any other rule is
+refused, never used.
+
+Tests: `forseti::cost::` [D] (`docs/develop/forseti.md`); `runners::cloud::meter::` [D]
+(`the_reason_text_is_the_designs`, `cap_plus_one_hour_stops_now`, `the_meter_counts_disk_ipv4_egress_and_images`); and
+against the mock with its virtual clock [B]: `sweep::ends_an_unreachable_tagged_machine_after_5_minutes`,
+`sweep::stops_every_machine_past_the_cap`, `sweep::never_touches_an_untagged_instance` (with a list that returns the
+whole account), `sweep::creds::expired_pauses_the_sweeper_and_it_resumes`, `net::the_rule_is_port_22_only_and_tagged`.
+
+## Runners: cloud SSH
+
+`runners/cloud/ca.rs` (design §6.7.4). Keys are `ring` ed25519 (the plan's fallback: `ssh-key` 0.6 would add sha2
+0.10), and the OpenSSH formats are written here:
+
+- `Ca::new() -> (Ca, PublicKey)`: one CA per hub. `to_secret()` is its unencrypted `openssh-key-v1` PEM as a
+  `SecretString`, for the editor to write to the keyring; `from_secret` reads it back from `runners/keys`. Its seed is
+  a `Zeroizing` array; nothing writes it.
+- `UserKey::generate()`: a fresh key per redial, in memory only.
+- `Ca::sign(user, principal, valid) -> Certificate`: an `ssh-ed25519-cert-v01@openssh.com` user certificate, the
+  principal as its only principal and key id, valid from now less 60 s (clock skew) to now plus VALID (1 h), with no
+  critical options and no extensions (no pty, no forwarding). Public: written beside the key's public half.
+- `Agent::start(runtime_dir)`: the hub's own `ssh-agent -D -a $XDG_RUNTIME_DIR/drgnx-runners/agent.sock` (`$TMPDIR`
+  on macOS), ready when it prints `SSH_AUTH_SOCK=`. `add(key, lifetime)` is `ssh-add -t SECS -` with the PEM on
+  stdin. Both run with a cleared environment (`PATH` and our `SSH_AUTH_SOCK` only), so the user's agent is never
+  asked. Dropping it stops the agent.
+- `pin::from_console(text) -> Vec<HostKey>`: the machine's host keys as cloud-init's `write-ssh-key-fingerprints`
+  prints them: the fingerprint lines (after `logger`'s syslog prefix) and the public keys, the last pair of blocks
+  winning. A key counts only when its SHA-256 is among the fingerprints; a console without both blocks, a key the
+  fingerprints don't list, or no key refuses the machine. No trust on first use. `pin::known_hosts(host, keys)` is the
+  machine's `UserKnownHostsFile`. The GCP image (Fedora CoreOS has no cloud-init) prints the same blocks.
+- `ssh_config::write_in(runtime_dir, name, file, text)` writes those public files into the runner's folder, 0600.
+
+Tests: `runners::cloud::ca::` [D] (a certificate's fields and its signature, the CA's bytes in no file after signing,
+the user's agent untouched with `SSH_AUTH_SOCK` on a recording listener, the console's refusals), and the fleet rows
+`tests/fleet_cloud.rs` [C] (`fleet.sh up --cloud`: a mock cloud's machine reached by certificate only, a changed host
+key refused).
+
+## Runners: the AWS image
+
+`runners/cloud/image.rs` and `user_data.rs` (design §6.7.2). drgnx's own image is Fedora Cloud 45 with everything a
+runner needs baked in, so a started machine is ready in about a minute.
+
+- `image::build(api, list, cfg, inputs) -> Built {id, reused, base}`: resolves the base (`resolve_base`: Fedora's
+  published `releases.json` through `FedoraList`, parsed by `parse_fedora_list` for the release, region and arch;
+  else the caller's named fallback; else `unavailable: no supported base image`), hashes the inputs with the base
+  (`user_data::input_hash`), and returns the image already carrying that hash (`reused`, no machine). Otherwise it
+  starts the build machine (`ImageApi::start_builder`: on-demand, **stops** at power-off instead of terminating),
+  waits for it to stop (`wait_stopped`, bounded by `BuildCfg.wait`, 10 s polls on the hub clock), images it
+  (`create_image`: encrypted block device, the hub's tag and `drgnx-version`, `drgnx-bundle`, `drgnx-input-hash`,
+  `drgnx-built` on the image and its snapshot), ends the machine (also when imaging failed), and keeps the newest two
+  (`keep_newest`; the older ones are `deregister`ed with their snapshots).
+- `user_data::render_build(inputs)`: the build machine's cloud-config. It installs git, podman, the runner bundle
+  (checked against its SHA-256), the watchdog and first-boot units, the CA's public key, the `runner` user, the
+  project images by digest, the git mirrors fetched from the hub and a warm cargo registry, then runs `FINAL_STEPS`:
+  remove `/etc/ssh/ssh_host_*`, `cloud-init clean --logs`, `sync`, `systemctl poweroff`. `ssh_deletekeys` is set, so
+  each instance makes its own host keys. `BuildInputs` takes public data only and refuses anything else (a private key
+  line, a URL with credentials, an image not named by digest).
+- `user_data::render(ca, principal, limits, flavor)`: an instance's user-data, **public things only** (the principal,
+  the watchdog's limits, optionally a newer CA public key). Any process on the machine can read it from the instance
+  metadata. `image/drgnx-first-boot` reads it at boot (IMDSv2), writes the `TrustedUserCAKeys` and
+  `AuthorizedPrincipalsFile` drop-in and the watchdog's limits, and reloads sshd.
+
+Tests: `runners::cloud::image::` and `user_data::` ([D] pure: `user_data_holds_no_secret`,
+`host_keys_removed_before_the_snapshot`, `keeps_the_newest_two_images`; [B] `image::build_then_start_from_it` against
+`ratatoskr-mock cloud`, the guest's power-off played by the test at the one point the build waits), and
+`test/runners/image-units.sh` (the first-boot script against a stand-in metadata service, and the units, in a
+container).
+
+## Runners: attempts
+
+Every placement of a job on a runner is an **attempt** with a nonce the hub made (`sleipnir::proto::JobRef {job,
+attempt, nonce}`), and every frame about it carries all three.
+
+**The attempt state machine** (`runners/attempts.rs`) is pure: `Core::step(now, Event) -> Vec<Effect>`, no I/O and no
+clock, so `tests/runners_orders.rs` runs it in every order of what can happen to an attempt. Events: `Placed {job,
+attempt, nonce, runner, grace_s, restartable}`, `Started`, `Finished {runner, r, result}`, `FrameFrom {runner, r}`,
+`Refused {runner, r}` (an offer the runner refused: back to the queue, never lost), `LinkLost {runner}`, `Hello
+{runner, listed}`, `GraceEnded {job, attempt}`, `CloudGone {runner}`, `Preempting {runner}`, `HubRestarted`, `Cancel
+{job}`. Effects: `Verdict {job, attempt, result}`, `Requeue {job, reason}`, `Lost
+{job}`, `Ignore {notice}`, `ResumeLog {job, attempt, offset}` (send `attach`), `KeepLate {job, attempt}` and
+`SendCancel {runner, r}`. States: `offered`, `running`, `detached {since, grace_until}`, `finished`, `requeued`,
+`lost`.
+
+- A frame counts only from the runner the attempt was placed on and with its nonce (`frame_ok`); anything else is an
+  `Ignore` with a notice and changes nothing.
+- **`detached`** is exactly the design's (§6.9): no verdict, and the runner's control link is down (`LinkLost`), or the
+  hub restarted (`HubRestarted`) and the runner's `hello` hasn't listed it yet. It is a state, never a verdict. It ends
+  `running` when the `hello` lists it running or finished (the log resumes from the hub's offset, and a finished one
+  then sends its `finished`); requeued (`infra: runner lost`) when the `hello` doesn't list it or lists it lost, when
+  the grace ends (`graces_due(now)`, read at each tick), or when the cloud says the machine is gone; `lost` instead
+  when the job isn't restartable.
+- **The grace** is the runner's, passed in at `Placed`: the registry's (`RunnerCfg::grace()`, 600 s with linger) while
+  the runner's last `hello` says it lingers, 0 when it says it doesn't, where a lost link ends the attempt at once (the
+  runner's jobs die with the login). Each `hello` is read again: one without linger sets the grace of the runner's open
+  attempts to 0 (`Core::set_grace`), so linger turned off between two `hello`s ends them with the next lost link.
+- **Only `finished` gives a verdict.** A preemption requeues at once (`infra: preempted`), never a verdict and never an
+  eviction. A cancel sends `cancel` to a running attempt and waits for its `finished`; an attempt whose runner can't be
+  told (offered, detached) ends `cancelled` at once, and its runner is told when it lists the attempt again.
+- **Late results** (L8): an attempt whose job was requeued that still finishes is `KeepLate`: its log, patch, outputs
+  and rows are kept as that attempt's, never applied, and never replace the current attempt's verdict.
+- `restore` puts the database's attempts back after a restart, before `HubRestarted` detaches the open ones; `forget`
+  drops a job once its verdict is recorded and no late attempt is open.
+
+**The link session** (`runners/link.rs`). `Session::start(runner, Channels, route, events)` reads and writes the control
+channel with the protocol's codec (a frame's line, then the chunk its `len` announces), pings every 10 s
+(`PING_EVERY`), answers the runner's pings, and reports the link lost (`LinkEvent::Lost`) after 45 s without a frame
+(`LOST_AFTER`), at an EOF without `bye`, or at a channel error; a `bye` is `LinkEvent::Bye`. A `log` frame is appended
+to the file `Route::log_path(runner, r)` names, only for an attempt the route accepts (placed there, with its nonce),
+through `append_at(path, offset, bytes)`: only the bytes the hub's copy lacks, so a chunk sent again after a
+reconnect is never doubled and a gap is refused; `LinkEvent::Logged {r, upto}` says where the copy ends, which the
+next `attach` sends as its `log_offset`. Every other frame is a `LinkEvent::Frame`. A `key` frame's encoded bytes are
+zeroed once written. Dropping the session ends it; the runner's attempts run on.
+
+Tests: `runners::attempts::` and `runners::link::` [D]; `tests/runners_orders.rs` [A] (every order of a lost link, a
+reattaching and a non-listing `hello`, a restart, the grace, a preemption and a wrong nonce around a `finished`,
+exhaustively, then 2000 drawn orders with a cancel); `tests/fleet_runners.rs` [C] (`#[ignore = "fleet"]`, its header
+has the commands; like `fleet_link` it builds only with `--features fleet`, out of the escape lane's `--ignored`): a
+job's log cut mid-stream and reattached equals the runner's file byte for byte.
+
+## Runners: the queue
+
+One queue holds every job but the user's servers (`runners/queue.rs`), for this machine and the runners alike. The
+job layer (`exec/`) records a job's folder and meta as before, then `Queue::submit`s it: its forseti `JobSpec`, its
+`Placement {machine (auto | local | runner), heavy, keys, local_only, background, writes, priority, send, machines_cell,
+image, weight, visibility, shared_overlay, origin_key, suite, net_hosts, os, features}`, its frozen inputs (below) and what to start it
+from (`Pending`). `os` is the start's `os` (`macos`: a Mac runner's host job, counted heavy, refused for a container
+or `local_only` job); a Mac job's `features` are `xcode-clt` and a `brew:NAME` for each of the project's
+`drgnx-runners-mac-tools`, which the Mac's probe offers by name and at major.minor (`brew:cmake`, `brew:cmake@3.31`),
+and a `tool:PIN` for each of its `drgnx-runners-mac-toolchains` (`tool:rust@1.95`). The registry installs every
+project's pins on a Mac (`Settings::values_everywhere`) with `sleipnir tools` over the runner's ssh, as the runner
+account and outside any job, at `runner add` (before the probe) and at `runner check` (its session closed first, then
+dialled again); a pin that fails is logged, and its jobs wait with "`drgnx runner check` on the Mac installs the
+toolchains".
+`net_hosts` is what a container job's network grant reaches (its cell over the caps' hosts, as its
+proxy here allows them): a runner's `start` frame carries it, and the runner's proxy allows those hosts (it pins no
+name, so `pins` stay empty). `exec/start` lost `check_machine` and the agents' semaphore:
+`machine` names `auto` (the default), `local` or a runner the queue knows (else `invalid-params`); `priority` (1–5) is
+honoured on the user's connections only (a session's is `invalid-params`); `job_start` takes `JobStartParams`,
+`exec/start`'s fields without `priority`, so an agent's request that names one is refused as an unknown field.
+`exec/bump {id}` (classes `[User]`) sets a queued job's priority to 1. `ExecRow` gained `machine`, `attempt`,
+`waiting` and `priority`.
+
+**Priority** (`priority_of(starter, background, from: Origin)`, design §6.8.1): 1 for the user's request, 2 for the
+splitter's (`Origin::Splitter`), 3 for an agent's `job_start`, 4 for a plan's or gate's bulk (`Origin::Bulk`), 5 for
+`background` and the hub's upkeep (`Origin::Upkeep`); `background` only lowers.
+
+**A tick** (`Queue::tick(now)`, every 2 s on the hub's clock, at every start and on every link event): the detached
+attempts whose grace ended; then the queued jobs in `forseti`'s order (`effective_priorities`, `queue_order`, then
+`Drr::order` by project, weighted by `drgnx-runners-weight`); each placed by `forseti::pick_with` over this machine and every
+runner (trust, pin, features, state, the project's send mode, the `machines` cell). `Pick::Local` asks the local
+runner's admission: admitted, the job starts (`Ticked.starts`; the job layer holds a `Slot` until it ends, and dropping
+it frees the room); refused, the pick is made again without this machine, so the job may still go to a runner.
+`Pick::Runner` offers it there (a new attempt, a random nonce, `Placed` into the attempt state machine, an `offer`
+frame); `Pick::Wait` writes the reason's words (`wait_text`) on the job's row. A runner's last `ready` is its budget
+(free memory and CPU, less what the hub offered it since) and the slots and images it holds: a runner whose budget has
+no room for a job's need is passed by (`no room`), so the hub offers only what fits (§6.8.1); one that sent no `ready`
+yet is offered as before. A runner's `admit` is answered with `start`; a `refuse` puts the job back with the runner's
+reason; `started` is written to `rq_attempt` at once (`running`, so a restart never reads `offered` for a job that
+ran); `finished`, a lost link, a `hello` and a preemption go
+through the attempt state machine, whose verdicts, losses and late results become `Outcome`s: the job layer writes the
+verdict as the job's `exit` (or `why`) and ends it as a job here ends. The session's `Route` writes a runner's log
+frames to `<id>/log` for the current attempt and `<id>/log.<n>` for a late one; a requeue moves the log aside as
+`log.<n>`.
+
+**Dialing** (`Queue::dial`, which the registry's `connect` calls): the transport opens the runner, its session starts
+and the queue takes it (adding a runner it doesn't know yet). A dial refused for a login the user must do, or for a
+changed host key, puts the runner in `needs login` with the command its card shows (`ssh HOST true`); a lost link
+leaves that state as it is, and nothing is placed there until the runner's next `hello`. A Mac runner whose last
+`ready` said `on_battery` and whose link is then lost is `sleeping` (its lid closed), not `unreachable`: no strike,
+its attempts detached for the grace, redialed like an unreachable one (`a_mac_on_battery_that_goes_quiet_is_sleeping`,
+`a_mac_on_mains_that_goes_quiet_is_unreachable`).
+
+**The local runner** (`runners/local.rs`, Calls 6 and 7): `Admission::Live` on Linux, `forseti::admit` over
+`sleipnir::linux::probe` under the `workstation` profile, with a reservation per admitted job in the reservation
+protocol (scheduler `drgnx-hub`, under the admission lock, removed when it ends); `Admission::Fixed(n)` admits by count,
+a macOS hub's `Limits::fixed_slots(4)`, and what a probe that can't read the machine falls back to (one warning). The
+user's servers (`no_timebox`) bypass the queue and count in the memory the probe reads. Tests and `test-hooks` builds
+admit by count (4; `DRGNX_TEST_JOB_SLOTS=N`), so no row depends on the machine it runs on.
+
+**`runtime.db`** (migration 9): `rq_job` (the spec column holds the forseti spec, the placement, the session and the
+`Pending`), `rq_attempt`, `rq_offer`, `rq_admission`, `rq_detached` (an attempt's grace while it is detached),
+`rq_input`, `rq_history` and `rq_rows` (§7.4's columns; `rq_input.commit_sha` is §7.4's `commit`). The queue writes
+them in order on a task of its own (`Queue::flush` waits for what is queued); a restart reads them back
+(`queue::stored`, `Queue::restore`): queued jobs wait again, jobs on runners keep their attempts, detached until the
+runner's `hello` lists them, and jobs running here are adopted by the job layer, holding their room. A queued
+`pending.json` an older hub left is read into `rq_job` once, and the file removed.
+
+Tests: `runners::queue::`, `runners::local::`, `runtime_db::`, `exec::tests::a_queued_pending_json_is_read_once` [D];
+`test/conformance/runners/*.jsonl` [B]; `tests/fleet_runners.rs` `queue::` [C] (a heavy job goes to the runner under
+`send heavy` while the light one waits here).
+
+## Runners: partial rows and learned placement
+
+**Rows** (design §6.9, "Partial results"). A test job whose suite supports row selection carries
+`Placement.suite = Suite {parser, listed}`: the row parser that reads its log (`ert`, `cargo-test`, `plist`), and its
+rows in listing order. A suite whose parser counts rows (`ert`, `cargo-test`) sets the spec's `expect.min_ran` to 1, so a
+run that ran no row (a selector that matched nothing) is `suspect`, never `pass`. Its command holds `{rows}`
+(`queue::ROWS`) where the selector goes; each attempt's spec
+(`attempt_spec`) puts there `forseti::split::selector` of the listed rows that have no result yet
+(`forseti::split::remaining_rows`), all of them on a first attempt, and sets `select` to it. A job with no suite, a
+parser that reads no rows (`exit`), or no `{rows}` in its command (`selects_rows` false) reruns whole, as before. The
+`start` frame names the suite's parser, so the runner sends `row` frames; each counts for an attempt placed on that
+runner with that nonce, current or late, until the job's verdict (`attempts::Rows`, and `rq_rows`). A runner sends its
+rows at an attempt's end, so when an attempt is requeued the hub reads the rows its own copy of the log shows (up to the
+last whole line) as that attempt's. A requeued attempt whose rows the next one reruns is cancelled when its runner lists
+it again (an `attach`, then a `cancel`; its log and result are kept as late), so no row runs to its end twice. When
+every listed row already has its result at the requeue, nothing runs again: the job ends there from those rows, judged
+as a finish is (a `Pass` judged over the union), and the job layer gets its `Outcome::Done` for that attempt.
+
+At the verdict, `attempts::union_result` gives the runner's `result.json` the union's `counts`, `rows` (each with its
+attempt and machine) and `failing`: each row once, from its latest attempt. A `Pass` is judged again over the union
+(`sleipnir::linux::parse::judge` with the job's `expect`), so a row an earlier attempt failed keeps the job red; any other
+verdict stands. When the rows came from more than one attempt the result carries `split`, `exec::summary::split_line`'s
+words ("rows 1–212 on desktop (attempt 1), 213–240 on laptop (attempt 2)"), which the job layer puts first in the
+summary (the job folder's `split` file).
+
+`exec/start` takes the suite as `rows: {parser, listed}` (`StartParams.rows`, at most 20000 rows): the job's
+`Placement.suite`. A run on this machine runs once, whole: `{rows}` becomes the selector of every listed row.
+
+**Learned placement** (`forseti::learn`). A runner's `Pass` or `Red`, undisturbed and not a run of only some rows, is a
+history row (`rq_history`: key `forseti::history_key`, machine, wall, CPU, peak memory, verdict, time, and `warm` when
+its start was: no grant). A job here that ran to its end is one too, machine `local` (`Queue::ran_here`, from the job
+layer's finish). The queue keeps each key's last 5 runs per machine, and `forseti::Learned` learns the speed ratios
+between machines from each new row (`Learned::observe_run`). A bundle the runner took in times the link: its bytes
+over the time from its sending to the runner's next `sync-need` (`Learned::observe_transfer`), and a candidate's
+transfer counts its overlay's bytes unless an attempt there synced the same inputs (the queue remembers the last 64
+input keys per runner). A start is warm on a runner whose last `ready` lists the job's slot
+(`sleipnir::sync::slot::SlotKey::of(spec)`) and holds its image; `serve` lists the slot folders under its root and the
+images its attempts ran in. Every candidate's estimate reads the job's history on every machine, and the pick is
+`forseti::pick_with` with what was learned and each candidate's warmth. After a restart `queue::kept` reads `rq_rows`
+and `rq_history` (oldest first) and `Queue::restore_kept` puts the rows back and learns again in the same order, so
+placement is what it was; with no history it is the static rule's.
+
+**Backfill** (`forseti::backfill`, jobq §5.6). At each tick the head (the first queued job of the highest effective
+priority) reserves, when it fits none of the machines that may take it now, the one where it can start soonest
+(`forseti::reservation`): from this machine's probe and budget (live admission only: one admitting by count has no
+budget to reserve) and each runner's last `ready`, with the expected ends of what the queue runs there (a runner's job
+counts from its `started`, holding its grant, for the time its placement expected). While it holds, a job a machine
+would take waits as "room is kept for job H" there (`admit::head_protection`) unless it ends before the head's start,
+and may still go to another machine; the reservation goes once the head is placed, and is made again every tick.
+
+Tests: `runners::attempts::tests::union_with_latest_attempt_winning`,
+`exec::summary::tests::summary_shows_the_split`, `runners::queue::tests::a_requeue_runs_only_the_rows_without_a_result`,
+`learned_placement_comes_back_after_a_restart`, `the_head_reserves_a_runner_and_a_short_job_backfills_it`,
+`a_timed_bundle_teaches_the_link_and_placement_counts_the_transfer`, `a_runner_with_the_jobs_slot_and_image_wins_a_tie`,
+`a_run_here_is_this_machines_history`, `exec::tests::rows_reach_the_queue_and_a_run_here_runs_them_all` [D];
+`tests/runners_orders.rs`
+`every_order_each_row_counted_once_latest_wins` [A] (two attempts' rows and a late `finished`, all 280 orders);
+`tests/fleet_runners.rs` `drill::a_dropped_link_at_row_150_of_240_reruns_only_the_rest` [C].
+
+## Runners: sync and job trust
+
+`runners/sync.rs` (design §6.2, §6.6). **Inputs are frozen at submit**: when the queue knows a runner and the job may
+leave this machine (`Placement::may_leave`), `submit_of` calls `sync::freeze(tree, extras, visibility, shared_overlay,
+store)`: sleipnir's `capture` (the commit, its tree, the overlay against it, the input key), the origin's URL and the
+commits its `refs/remotes/origin/*` reach, how many commits of the job's are on none of them (`not_on`), and each
+overlay file's bytes copied into the hub's blob store (`<state>/runner-store/blobs/<sha256>`, sleipnir's `Store`). A file
+that changes while it is read refuses the freeze; a worktree that can't be frozen (not git, a submodule's change)
+makes the job `local_only`, logged. The frozen inputs (`Frozen`) go in the `rq_job` spec as `inputs`, and `rq_input`
+gets the manifest by input key (`rq_job.input_key`). No new migration: both came with runtime.db 9.
+
+**Job trust** (`job_trust(visibility, not_on_origin, keys)`): `private+keys` when the job names keys, `public` when
+`drgnx-runners-project-visibility` is `public` and every commit is on the origin, `private` otherwise. Placement gets
+`commits_not_on_origin` for a public project, so `forseti::why_here` says "runs here: N commits not on origin".
+
+**The overlay** (`overlay_for(job, runner trust)`): the lock's protected files (`agents::lock::PROTECTED_RO`) are left
+out for every runner: worktrees carry stub `.envrc` and `mise.toml` routinely, and the runner gets their committed
+versions. A shared runner gets an overlay only with `drgnx-runners-shared-overlay` on and every file passing
+`runstav::secrets::looks_like_secret`; otherwise the queue keeps the job off shared runners and says why
+(`QJob::shared_why`).
+
+**The sync** (`Queue::sync_have`, `sync_need`): an `admit` of an attempt with inputs is answered with `sync-have`
+(the repository's mirror id, `repo_id`; the commit, the tree, the overlay for that runner's trust) instead of `start`.
+The runner's `sync-need` gets, for the commit, `sync::plan(job, trust, missing, origin key)`:
+
+| Case | What the hub does |
+|---|---|
+| public, the commit on the origin, any runner | `origin-fetch` with the origin's URL |
+| a private origin, a deploy key named, the commit on it (`mine`, `my-cloud`) | the key in a `key` frame (recorded as `key_sent`), then `origin-fetch` naming it (`cred`); the key is `drgnx-runners-origin-key`, taken only while the hub holds it (else asked for, and the commit goes another way) |
+| over 8 MiB missing (`missing_bytes`: `rev-list --objects --disk-usage` past the runner's ref tips) | one bundle (`make_bundle`: a temporary bare repository borrowing the objects, `refs/hub/job`, the runner's tips left out), in 1 MiB chunks |
+| a small gap | a push; for now a bundle too |
+| a shared runner and anything not on the public origin | never: the attempt is cancelled with the reason |
+
+then the blobs it lacks (only those of its own overlay, `send_blob` in 1 MiB chunks), and asks again; an empty answer
+starts the attempt. Past 6 rounds, or when a step fails, the attempt is cancelled with why logged (`give_up`). A
+verdict, requeue or loss drops the attempt's sync and its bundle file.
+
+Tests: `runners::sync::` [D] (trust from visibility and reachability; the four cases; no lock file in any overlay; a
+bundle sent in chunks from an offset); `tests/fleet_sync.rs` [C] (one unpushed commit keeps a public job off the
+shared runner; the shared runner fetches from origin; the shared overlay off by default, and scanned when on).
+
+## Runners: keys
+
+`runners/keys.rs` and `runners/redact.rs` (design §6.3, §6.6; the user's side is docs/guide/runners.md, "Keys").
+
+**Naming a key.** `exec/start`'s `keys` (names) must each be on the project's `drgnx-runners-job-keys`
+(`keys::on_the_project_list`, else invalid-params naming the key and the setting); a session's start also passes the
+matrix's `job.keys` (`gate_session_job`; Cautious and Balanced ask, Autonomous allows the manager and workers, chat
+never). The names go to `Placement::keys` and the spec; the job is `private+keys`. This machine is a candidate for a
+keyed job as for any other (`Queue::candidates`).
+
+**Keyed jobs here** (`exec/keys.rs`). A keyed command job (user or session starter) launches behind
+`drgnx-key exec NAME=NAME… -- ARGV` (`Hooks::key_bin`, `drgnx-key` next to the hub; missing: refused at start) with
+`DRGNX_KEY_SOCK` naming its key socket: `<job dir>/key.sock` for a user's job (over 103 bytes, `k-ID.sock` in the hub's
+private temporary folder), `k-ID.sock` in the session's folder for a session's (its sandbox reaches sockets there only;
+`SessionShape::sockets` lists the path alone, which Gleipnir allows by path and Seatbelt by `path-literal`, and
+`drgnx-key` is a `read` file). `keys::serve` binds it 0600 under a temporary name and renames it into place, answers
+this user's connections only, one request line each, and is dropped (the file removed) when the job ends.
+`JobKeys::answer` speaks `sleipnir::keyline` (the job helper's request and answers, shared): only a name the job lists,
+waited for up to 60 s (`Keys::wait_for`, which asks `runners/need-keys` once), every value added to the job's
+`Redactor` before it is written, the first hand-out of each key recorded as `key_sent` on runner `local` (attempt 0); a
+key that never comes writes `why` = `infra: key not delivered` (any `why` starting `infra:` is `ExecStatus::Infra`)
+and a log line naming it, then answers `timeout`. The job's output never goes through the logging shell's file: its
+wrapper (`unit::wrap_to_hub`) leaves stdout and stderr on the pipe the hub reads, and `keys::pump` appends each chunk
+to the log through the redactor (the held-back end at EOF; `watch` waits up to 5 s for it before the result is
+written). `Meta::keyed` marks it: a restarted hub kills such a job and ends it `infra` rather than adopting it. A keyed
+container job (`Runner::container_keys`) has no socket: the static `drgnx-key-<arch>-linux-musl` next to the hub
+(`keys::static_key_name`; missing: refused) is copied into its folder and mounted read-only as its entrypoint
+(`ContainerReq::keys`, the names only in its argv), and its relay starts even without a network grant (no host
+allowed): `net::prepare_net` gives the sidecar `--keys drgnx-key` and runs `owner::run_keyed` with `keys::Source`, so
+the same `JobKeys` answers its key streams, redacts its output and records `key_sent`.
+
+**The handover.** `runners/keys {keys: {NAME: value}}` (user only; refused while `Gate::protects_keys` fails, as
+`gateway/keys` is) puts the values in `Keys` (`SecretString`s in memory; `RunnerKeys` refuses a NUL, an over-64-KiB
+value and more than 32 keys, naming the key, never the value). `runners/keys-held` answers the names. When an attempt
+needs a key the hub doesn't hold, `runners/need-keys {names}` goes to the user's connections; nothing answers it but a
+command the user runs.
+
+**Sending.** On a keyed attempt's `started` (never before), `Queue::send_keys` sends each held key it hasn't sent yet in
+its own `key` frame, only where `keys::trust_ok` (never `shared`; `my-cloud` only its list, empty until cloud runners
+come); each is a `key_sent` row. Keys taken later go to the started attempts still missing them. A `key-use` frame
+from an attempt the hub placed there becomes a `key_use` row, `runner_reported: true`. Rows go to memory (the last
+10 000) and to the graph (norn kind `key_sent` / `key_use`, written as `("hub", System)`); `runners/audit {job?, key?}`
+reads the graph, or memory when the graph can't be read.
+
+**Redaction.** `QRoute::write_log` (the link's `Route` hook for `log` frames) runs a keyed attempt's chunks through its
+`Redactor` before they reach the hub's copy: every value sent masked in its raw, base64 (both alphabets, padded or not)
+and percent forms, at its own length, so the copy keeps the runner's offsets; the end of a chunk that could begin a
+form is held back until the next one (`Redacting::consumed` is the runner's offset taken in). A redactor exists from
+`start`; a key is added to it before its frame goes. After a hub restart a keyed attempt's log isn't taken in until all
+its keys are held again (`runners/keys`), then it is attached from the copy's end; its runner's `hello` that lists it
+asks for the missing ones (`runners/need-keys`). At `finished` the held tail is
+written and `redact::notices` (the `looks_like_secret` heuristic) sends one `notice` per log that may hold some other
+secret, never masking it.
+
+Tests: `runners::keys::` and `runners::redact::` [D]; `runners/keys-never-in-the-log-or-any-reply` [B] (conformance);
+`tests/fleet_keys.rs` [C] (one frame and one `key_sent` per key and one `key_use` per read, no key bytes on the runner;
+the returned log redacted; a shared runner never gets a key; a key that never arrives is infra; `podman inspect` names
+only and `memory.swap.max` 0).
+
+## Runners: returned data
+
+`runners/returned.rs` (design §6.3; the user's side is docs/guide/runners.md, "What comes back"): what a runner
+returns is checked before it reaches anyone. The runner's side is docs/develop/sleipnir.md, "What comes back"; the
+hub's:
+
+- **Arriving.** The queue sets `spec.writes_tree` for a job that declares `writes` or `outputs`. A `returned` frame of
+  the job's current attempt (`frame_ok` is `Some(false)`; a late attempt's is dropped) is written by
+  `Queue::returned_piece` at its offset into the job folder's `returned.WHAT.part` (`queue::returned_file`); the first
+  piece starts afresh, makes the folder (a job that printed nothing has no log there yet) and writes what was left out
+  to `returned.WHAT.left` (or the size to `returned.WHAT.kept`); the last is checked against its total and sha256 and
+  renamed `returned.WHAT`. A piece that doesn't follow on, or a whole that doesn't check, is refused and logged.
+- **At the verdict.** `Queue::apply` gives `Outcome::Done` a `Back` (the job's `writes`, the frozen inputs' worktree,
+  the attempt's `JobRef` with its nonce, the runner and its trust) when the job declared `writes` or `outputs`. The
+  job layer (`exec::Inner::take_back`, off the runtime's threads) asks `history::revert::patch_returned` first (a
+  patch for a session whose revert runs is kept and listed), then calls `returned::take_back(dir, back, held,
+  record)`: the outputs archive through `archive_ok` and unpacked by `write` into `outputs/` (made afresh); the patch
+  through `Patch::parse` and `patch_ok` against the worktree as it is now (each file's blob id, read through `eitri`
+  with no link followed: a file edited since is no longer what the runner changed), applied by `git apply` to copies
+  in the folder's `apply/` (no repository looked for above it), the new contents handed to RECORD
+  (`history::Hub::on_returned_writes`: one version, the session's `AgentStep` or `runner NAME`'s `External`) before
+  any file is written through `eitri` (a removed file through `remove_beneath`). Its lines (what was left out or kept,
+  where the outputs went, "runner NAME's changes were applied to N files" or the `review_card` with each reason) go to
+  the job's `returned` file, which `finish` adds to the summary.
+
+- `path_ok(rel)`: relative and normalised (`.` and empty segments dropped), refused for `..`, an absolute name, a NUL
+  or nothing left. `never_returned(path)`: a `target` component, a build tree (`CMakeFiles`, `CMakeCache.txt`,
+  `build.ninja`, `.ninja_log`, `.ninja_deps`, `config.status`) or an image (`oci-layout`; `.oci`, `.qcow2`, `.vmdk`,
+  `.vdi`, `.iso`, `.img`), by name, whatever a job declared.
+- `write(job_dir_fd, rel, bytes)`: both checks, then each folder on the way opened with `eitri::open_beneath` (a link
+  is refused) or made with `mkdirat` beneath the last one, then `eitri::write_regular` (0644; a link at the name is
+  replaced, never followed).
+- `archive_ok(tar)`: ustar (checksums checked; a ustar prefix, a GNU long name and a pax `path` taken; a global pax
+  `path` refused) holding only regular files and folders, every name through both checks; a link, device, FIFO,
+  any other type, a truncated entry or a missing end is refused.
+- `Patch::parse(from, bytes)` reads `git diff --full-index --binary` output: per file the paths before and after
+  (none: created or deleted), the modes and the blob before. A quoted path, a copy, a binary change without its data,
+  text before the first `diff --git` or an unknown header line can't be read: the patch is kept. `patch_ok(patch, spec,
+  attempt, submit, runner_trust)` lists every reason not to apply it: a path outside `spec.writes` (`*`/`?` within a
+  segment, `**` any segments, `dir/` the folder), a protected name (`lock::NEVER_RESTORED`, the list a revert never writes either) or `.git` at any depth, a bad path,
+  a symlink or submodule mode, a changed mode or a new executable file, a blob before that isn't the file's `submit`
+  hash (or a created file that had one), another job, attempt number or nonce than `attempt`, a `shared` runner, more
+  than `PATCH_MAX`. A refused patch is kept with `review_card(runner, n)`.
+- **`shared`:** `Queue::apply` gives `Outcome::Done` the runner's name when its trust is `shared`; the job layer writes
+  it to the job's `shared` file, `finish` starts the summary with `shared_label` ("output from runner NAME (shared)"),
+  so `exec-done` and the starter's wake carry it, and `Runner::counts_for_gates(id)` is false for it
+  (`counts_for_gates(trust)`): what a gate or `needs` reads once the hub has one.
+
+Tests: `runners::returned::` [D] (the returned-data rules: paths, archive links, a planted link, writes globs, protected files and
+`.git`, exec bits, an old attempt, `shared`, `target/`; a patch applied and told once, one against a file changed since
+kept, the outputs unpacked, an applied patch as one history version); `sleipnir::sync::returned::` [D] (the runner's
+patch and archive); `exec::tests::a_shared_runners_result_is_labelled_and_never_counts_for_a_gate` [D]; the fleet row
+`fleet_sync::sync_rows::a_runners_changes_and_outputs_come_back` [C] (a real `sleipnir serve`: the change applied,
+the output unpacked).
+
+## Runners: health
+
+`runners/health.rs` (design §6.9). `is_strike(verdict, StrikeCtx {link_lost_today, link_stayed_up})` is the strike
+table: `infra: setup`, `sync`, `image`, `disk`, `killed` and `health check` always; `runner lost` the second time in a day
+(`Strikes::lost_link`); `key not delivered` only on a link that stayed up; nothing else (reds, crashes, `oom`, `oomd/killed`,
+timeouts, `preempted`, evictions, cancels). `Strikes` keeps a runner's strikes since its last passing check: `record(now,
+verdict, ctx)` (a job that ran ends a run of strikes, a non-strike infra end doesn't), `strike(now, reason)`; two in a row
+or two within 3600 s (`BENCH_WINDOW_S`) bench it; `clear` (a pass, the user's `unbench`), `text` for the runner list
+(`benched: REASON (HH:MM, HH:MM)`, UTC).
+
+The queue counts a strike at each runner verdict (`Queue::strike_of`) and at a link lost with attempts open, and holds a
+benched runner as `RunnerState::Benched`, which `forseti`'s filter keeps every job off; its `hello` doesn't put it back.
+**The check** runs every 300 s per runner (`CHECK_EVERY_S`; `Queue::check_now` makes it due), on a ready or benched one:
+a `probe` frame (its `probe-result`: the contract's missing items, `check_limits`, the free disk), a canary attempt
+offered straight to the runner (job `health<runner><at>`, letters and digits as a runner takes a job id, `true` in
+`RemoteRunner.image`, priority 1, no grace;
+offered again 2 s after a refusal; its verdict never reaches the job layer), and the runner's clock from its last `ping`
+(`LinkEvent::Clock`, the runner's `at` against the hub's time). `judge(Facts)` passes only when all hold: the probe
+answered with nothing missing and no `check_limits` failure, 20 GB free (and 10 % where the size is known), the canary
+`Pass`, the clock within 2 s (`CLOCK_SKEW_S`); else it names every part that failed. It judges once every answer is in,
+or after 120 s (`CHECK_WAIT_S`) with what it has. A pass clears the strikes and returns a benched runner to rotation; a
+failure is a strike (`health check: …`). `Queue::runner(name)` gives the row (`state`, `strikes`, `last`) and
+`Queue::unbench(name)` is the user's override (the `runners/unbench` method is the registry's).
+
+Tests: `runners::health::` [D] (the strike table, two in an hour, the check's parts); `tests/fleet_runners.rs` `health::`
+[C]: two jobs a runner can't start bench it and the next job runs here; a passing check returns a benched runner with no
+strikes; a hub clock 5 s off the runner's fails the check, saying so.
+
+## Runners: the registry
+
+`runners/registry.rs`, `runners/methods.rs`, `runner_cli.rs` (design §6.10, §7.2). A runner is a `Record` (name, host,
+trust, profile, accept, root, prefix, the bundle's folder, the probe's facts, speed, image) and a link in the queue.
+Records are entities of kind `runner` in the graph (`norn::write::runners`, id `runner:<name>`); only
+`("hub", Class::System)` writes them (also kinds `cloud_spend`, `key_sent`, `key_use`, which later tasks fill), and the
+graph's own door is shut to every other class (`write::runners::an_agent_write_of_runner_is_refused`). `Store` is the
+seam: `UrdrStore` in the hub, `MemStore` in tests.
+
+`Registry::add(host, trust, …)`, in order, each step a `sh -c` on the runner over the user's own ssh (the generated
+config, no terminal): `uname -m`, `uname -s`, `$HOME` and, on a Mac, `sysctl.proc_translated` (neither Linux nor
+Darwin, an architecture without a bundle, or an Intel Mac: refused; a Rosetta shell, x86_64 and translated, is Apple
+silicon). A Mac (`host_kind`) takes the `aarch64-apple-darwin` bundle (`sleipnir` alone, built and ad-hoc signed on a
+Mac by `drgnx build runner-bundle --target aarch64-apple-darwin`), checked with `shasum -a 256`, into the root
+`~/.drgnx-runner.noindex` (Spotlight skips `.noindex`), made 0700 and excluded from Time Machine (`tmutil
+addexclusion`). The hub's own boot id is `/proc/sys/kernel/random/boot_id`, or `kern.bootsessionuuid` on a Mac
+(`hub_boot_id`). A Linux host takes the bundle for its architecture from
+`DRGNX_RUNNER_BUNDLES` (default `runtime/target/bundle` beside the hub's build folder, where `drgnx build runner-bundle`
+puts `<arch>/sleipnir`, `drgnx-key`, `drgnx-px-<arch>-linux-musl`) copied to `<root>/bin/<hash>/` (written as `.part`, hash checked, moved
+into place; refused with the build command when there is none); `sleipnir serve` asked for `hello-ok` and `probe` over
+one set of sessions that end after. A `boot_id` equal to the hub's is refused (`this is the hub's own machine; it
+already runs jobs as `local``), then anything the contract finds missing (`Probe`'s missing items and `check_limits`)
+is refused with all of it, each with its fix. Then `podman pull --policy=missing` of each image in
+`drgnx-runners-image` (it must be pinned by digest), `sleipnir bench` in the first, the record, and the link:
+`Session::start` over the queue's route and events, `Queue::add_runner`. A root must be absolute, plain, and never the
+home or a top-level folder. `remove` refuses while a job is on the runner (`Queue::remove_runner`), stops our containers
+(label `drgnx.runner=<hub>` and our prefix), units (`<prefix>*`) and slices (`drgnx-runner*`), then deletes the root.
+
+`check` links a runner whose link is gone again (`Registry::connect`: the old session ended with `Session::close`, so the
+transport's three sessions are free) and makes its health check due; `set` changes trust and accept at once, a new
+profile starts `serve` again; `unbench` is `Queue::unbench`; `bench` ends the link, runs the bench, links again. At the
+hub's start every record is linked in the background (`runners::methods::start`); one that can't be reached stays
+recorded and shows `not connected`. **Nothing redials a lost link by itself yet**: `runners/check` does it.
+
+`runners/list` and the others are the user's alone (`runstav::methods::runners`); each change sends `runners-changed`
+with the whole list and gives the runner names to the machine registry (`work::machines::set_runners`), which lists them
+after `local`. The CLI (`ratatoskr runner …`, `drgnx runner …`) prints the list in plain text of at most 60 columns:
+per runner, its state dot, name, trust, profile and accept; its cores, memory, jobs, free disk and last check; and, out
+of rotation, its reason on a line of its own. `runner remove` without `--yes` only says what it would do.
+
+Tests: `norn::write::runners::` [D]; `runners::registry::` and `runner_cli::` [D]; `work::machines::` [D]; conformance
+`runners/methods-are-user-only` [B]; `tests/fleet_registry.rs` [C]: add (probe, copy, pull, bench, link), the contract's
+refusal with its list, the hub's own machine, a removal that leaves nothing of ours.
+
+## Extensions
+
+`extensions/*` (`drgnx-ratatoskr/src/extensions/`) serve the Extensions view's list from memory. The hub never installs
+and never reaches the network here: the refresh job (`drgnx extensions refresh`) writes
+`<cache>/extensions/catalog.json` (docs/develop/extensions.md), `drgnx sync` writes the lock, and the hub reads them.
+
+- **Sources, merged into rows:** the catalog; the user's lock (`<config>/drgnx.lock.eld`, read up to 8 MiB); the wanted
+  file (`<state>/packages-wanted.eld`); `packages.eld`'s `:packages` and `:git` names; the modules the editor sent with
+  `extensions/modules` (held in memory, replaced by each call); and Emacs's built-ins from the catalog. All Lisp files
+  are read as data with `huginn`, never evaluated.
+- **Reload:** each call looks at the four files' `(mtime, size)` in a blocking task and reads only those that changed,
+  so a refresh run from the command line is seen too. A file that does not read (truncated JSON, a catalog of another
+  `version`, a lock with a mistake) keeps its last good copy; `extensions/details` carries a note saying so. A file that
+  is gone is empty.
+- **Ids:** `pkg:NAME`, `module:NAME`, `emacs:NAME`, `plugin:NAME`. A plugin's row comes from the plugins' last look
+  (`plugins/list`, memory only), with the hub's `unapproved`, `changed`, `disabled` or `broken`, and for an approved one
+  `on` or `off` by the global `drgnx-agents-plugins`; `signed` is `hash-approved`. A search never reads the folder.
+- **State:** `installed`, `update` (the catalog's update plan takes a newer version), `held` (a newer version exists the
+  plan does not take), `incompat` (the newest version needs a newer Emacs), `dependency` (installed only because
+  another installed package requires it), `missing` (a module, `packages.eld` or the wanted file names it and the lock
+  does not have it), `available`, `built-in`, and for modules `on`, `off`, `needs-package`, `failed`.
+- **Signed:** `signed` only for a lock entry with `:verified t`; a row of an archive that signs without one (GNU or
+  NonGNU, not installed yet) is `signing-archive` (no trust card: the sync checks its signature); a MELPA package is
+  `unsigned-archive`, a directory archive `local`, a Git package `git-commit`. A lock entry without `:sha256` (and not Git) is `by-hand`.
+- **Search:** words are lower-cased; a row matches when each word is a prefix of a word of its name or a substring of
+  its name, keywords or summary. Rank: exact name, name prefix, name word prefix, inside the name, keyword, summary
+  (the worst of the words), then installed first, then downloads, then name. `limit` is 1 to 500 (default 200).
+- **The list as rows** (`extensions/list`, `view/extensions.rs`): the Extensions view sends its sections (name,
+  title, a search each, at most 8; `minus_updates` drops the rows the updates section shows), `dense`, its glyphs
+  (`{kind, gui, tty}` each) and the ids that need a restart. The hub runs the searches, builds the rows (a bold header
+  `Title (N)` per section, then a line per row with glyph, name, version, state chip and "restart to use", and unless
+  `dense` a shadowed `ID/2` line with summary, source and trust) and the model (a tree: section nodes with `label`,
+  `section`, `count`; row nodes with `label` (the name, once: the model reaches the editor as one line), `state`,
+  `signed`, `source`, `section`, `version`, `latest`),
+  publishes both to the `extensions` view of that connection, and answers each section's `{name, total, loaded}`. The
+  editor also sends the package generations it reads from disk (`generations`, newest first, at most 256: `n`, `time`,
+  `note`, `differs`, `in_use`, `current`, `size`, `copies`); they end the list as a Generations section (header
+  `section:generations`, a row `gen:N` with glyph, number, time, note, "in use" or "current" and size, then `gen:N/2`
+  for what differs and `gen:N/3` for the copies note; model nodes of kind `generation` with `label` and `gen`).
+  Roll Back Packages reads the selected row's `gen`. With `@generations` typed the editor sends no sections and the
+  generations alone. The last list per connection is kept to rebuild on a resync, dropped when the connection goes.
+- **The Recommended set** (`extensions/recommended {ids, version}`): the editor sends its Recommended ids once per
+  version and the hub holds them per connection (replaced by each call, dropped when the connection goes); a search or
+  a list section names the set by its version (`filters.recommended`) and carries no ids. A version the connection
+  does not hold (a new connection, a hub restart) is `invalid-params` at `filters/recommended`
+  (`sections/N/search/filters/recommended` in a list), and the editor sends its set again and asks once more. At most
+  20,000 ids. Scenario `extensions/the-recommended-set-is-the-connections`.
+- **Classes:** `extensions/search` and `extensions/details` are open to agents; `extensions/rows`,
+  `extensions/list`, `extensions/modules` and `extensions/recommended` are the user's.
+
+Tests: `extensions::catalog::` [D, one every-order test A], `extensions::rank::` [D] and
+`view::extensions::` [D]; conformance `extensions/search-ranks-the-fixture`, `details-of-an-installed-package`,
+`rows-keep-their-order`, `a-new-catalog-is-read-on-the-next-call`, `an-agent-may-search-but-not-send-modules` and
+`extensions/rows` [B].
+
+## Plugins
+
+`plugins/list`, `plugins/approve` and `plugins/disable` are the user's alone (`runstav::methods::plugins`); no agent
+connection and no tool reaches them, and `plugins/approve` takes the hash the editor displayed and refuses it when the
+files on disk hash differently. The plugins live in `<data>/plugins/NAME/` (`ratatoskr plugins install PATH
+[--replace] | list | remove NAME` puts them there); the hub reads that folder with `brokkr::scan` at its start and at
+every `plugins/list`.
+
+**`runtime.db`** (migration 10): `plugin` (`name`, `hash` last seen on disk, `approved_hash`, `approved_at`, `enabled`,
+`approved_reach` the manifest's whole reach as JSON) and `plugin_kv` (`plugin`, `key`, `value`: the plugins' key-value
+stores). A plugin is `unapproved`, `approved`, `changed`, `disabled` or `broken`; a `changed` entry of `plugins/list`
+also carries `approved_reach`. A change of state sends the event `plugin {name, state}` (`state` also `removed`) and
+keeps one card of kind `plugin` for each plugin that is `unapproved` or `changed`.
+
+Which approved plugins run for a project, and the hook rules in force, come from three settings the Lisp declares
+`:scope project :workspace never :agents never` (`drgnx-agents-plugins`, `drgnx-agents-hook-rules`,
+`drgnx-agents-hook-rules-off`; `overrides::PER_PROJECT`): `Plugins::enabled_for` and `Plugins::rules_for` read the
+global value and the project's own set from `config/settings` (`Settings::project_value`). A rule list that
+`norn::hooks::parse_rules` refuses refuses the whole set at `overrides[N].value[I].KEY`. `plugins::io` holds the
+decisions a plugin's imports need (the store's quota, `judge_http`); `docs/develop/plugins.md` ("Plugins in the hub")
+has the whole account.
+
+## The _drgnx/panel extension
+
+An ACP extension between the hub and an agent's adapter, for what standard ACP does not give: the context breakdown,
+dropping and pinning what is in it, a compaction preview, and the `before-tool` hooks on steps the agent allows itself.
+The org's adapter forks (Claude, Gemini, Kimi Code, DeepSeek Harness) speak it; any other agent simply does not
+advertise it, and the panel then shows none of it (hidden, never faked). Codex runs the stock `codex-acp`, which does
+not: its steps reach the hooks through its lock's managed hook instead ("The `before_tool` tool", above). The hub's side is `agents/session/panel.rs`.
+
+- **Handshake.** `initialize` sends `clientCapabilities._meta["_drgnx/panel"] = {"version": 1}`. The agent answers
+  in `agentCapabilities._meta["_drgnx/panel"] = {version, features}`, features among `context`, `drop`, `pin`,
+  `compact-preview` and `before-tool`. Only version 1 counts, and only those names: they become the snapshot's
+  `panel.features` (in that order). An agent that advertises none has no `panel` in its snapshot.
+- **`_drgnx/context`** (agent → hub notification) `{sessionId, used, size, parts: [{kind, tokens, items?: [{id, label,
+  tokens}]}], compact_frees?}`, `kind` one of `system`, `tools`, `files`, `tool-output`, `conversation`: the
+  snapshot's `panel.context`, at most 4 times a second (the first at once, then the latest after the quarter second;
+  the last one is never lost). At most 8 parts, 200 items a part and 256 characters a label.
+- **User actions.** `agents/context-drop {id, item}`, `agents/context-pin {id, item, pinned}` and
+  `agents/compact-preview {id}` (user class) go to the agent as `_drgnx/context/drop {sessionId, item}`,
+  `_drgnx/context/pin {sessionId, item, pinned}` and `_drgnx/compact/preview {sessionId}`, each with a 10 s deadline.
+  The preview's answer is `{frees?, kept?, summarised?, note?}` (items as in the breakdown); nothing is compacted. A
+  session whose agent does not offer the feature gets `invalid-params` "this agent does not offer it" (the editor hides
+  the action instead). An agent's error is `not-allowed` with its message quoted; no answer in time, or an answer that
+  does not fit its schema, is `internal`.
+- **Mode and model: `agents/config {id, option, value}`** (user class, writes). `option` is `mode` or `model`; any
+  other is `not-allowed`. A mode is switched only to one on the provider's lock allow-list
+  (`agents::lock::allowed_modes`: Claude `default` and `plan`, Gemini `default`, Kimi Code `default` without plan, Codex
+  and DeepSeek none); any other is `not-allowed` with the mode, the allowed list and why (Claude's other modes run tools
+  without asking, which skips the matrix; Codex's lock pins `read-only`). A session with no lock cannot switch its mode.
+  A model is free within the profile (the agent refuses one it does not have). The agent is asked by
+  `session/set_config_option {sessionId, configId, value}`; one without the method (`-32601`) gets `session/set_mode`
+  or `session/set_model`. An agent's refusal is `not-allowed` with its message quoted.
+- **The facts behind a chip: `agents/explain {id, item}`** (user class), `item` among `context`, `cost`, `mode`,
+  `model`, `waiting`, `mcp`; the answer `{item, facts: [{name, value}]}`, facts only (a value the hub does not know is
+  not listed, or says so). `context` is the adapter's own `_drgnx/context` count when it sent one (`source` says so),
+  else the agent's `usage_update`, else says none is known. `mode` names the lock (provider, enforced or why not), the
+  matrix column (`row`: role, agent, provider), the allowed switches and why the others are refused. `cost` has the
+  turns, the tokens of finished turns and the cost the agent reported; `model` the profile's model and environment;
+  `waiting` the status, the job waited on and the permission requests waiting; `mcp` the hub's server and the agent's
+  `mcpCapabilities`.
+- **`_drgnx/before_tool`** (agent → hub request) `{sessionId, toolCall}`, `toolCall` as in
+  `session/request_permission`: the session's `before-tool` rules and hooks run at the adapter site
+  (`hook_points::before_tool` with `At::Adapter`, no matrix cell, so they can only refuse; `change` is not taken), with
+  one hook row as at the seam. The answer is `{outcome: "allow"}`, or `{outcome: "deny", reason}` with the hub's words
+  and the hook's quoted, and a deny is also steered into the turn. A hub tool's step answers `allow`: it is hooked at its
+  server. The adapter runs inside the agent's sandbox, so this check is the agent's own and a second line: a fork's
+  steps still reach the seam (its lock makes them ask), so the snapshot's `hooked` comes from the lock alone
+  (`hooked.by_adapter` is Codex's managed hook), and a session whose lock leaves a subscribed kind unhooked is refused
+  whatever the fork advertises. A step both sites hooked has one provenance row, the seam's (`timeline/get`); a step
+  only the adapter hooked keeps its own.
+- **What the agent sends is untrusted.** Every params object is checked against its schema with unknown fields
+  refused, so an `outcome` or a verdict of the agent's own in a `_drgnx/before_tool` is refused (`-32602`, the field
+  named) and runs nothing: the answer is the hooks' outcome, never the agent's say. A `sessionId` that is not the
+  agent's own session, and a message over 256 KiB, are refused. A request the hub does not take from an agent (one it
+  sends, such as `_drgnx/context/drop`, or one it does not know) gets `-32601` "drgnx refuses it: it takes no METHOD
+  from an agent"; a feature the agent did not advertise is refused too. A notification that does not fit is dropped
+  with a warning in the hub's log. Nothing in the extension changes a session's matrix, grants or lock.
+- **Tests.** `agents::session::panel::tests` (the checks and the context gate, pure), hermod's
+  `an_extension_request_comes_with_a_responder` and `ext_request_returns_the_answer_or_ends_at_its_deadline`, and the
+  rows `panel/*` against `ratatoskr-mock acp --panel FEATURES`. The rows that run the hooks over every profile are
+  `system/hooks-every-profile` and `system/abilities-every-profile` (Claude, Claude through the gateway, Codex's
+  stock adapter, and Gemini, Kimi and DeepSeek stock and as their forks: with `before-tool` the mock asks
+  `_drgnx/before_tool` first, with the step's tool call id, and a deny vetoes it, as the forks' listeners do); each
+  fork's rebase is checked by `adapters/{claude,gemini,kimi,dsh}-rebase` (Codex has no fork). The fuzz targets
+  `drgnx_context`, `plugin_manifest` and `hook_rules` and the `perf/hook-overhead*` and `perf/ability-20-sessions`
+  rows are in [runtime.md](runtime.md).
+
 ## The timeline
 
 Every step of an agent's work is a row of the `step` table (`norn::write::steps`), written when it closes by the
 session's step writer (`agents/session.rs`) and announced as `agent-step`. The classifier sees the updates as they
 arrive: text between tool calls is `think`; a tool call is `tool` from `in_progress` to `completed`; a permission
 request is `user-wait` (the hub answers it, so it is the user's time, not the tool's); a paused session is `paused`.
+A refused call is finished: when the hub refuses it (a seam deny, the matrix's Never, a gate, a fork's
+`_drgnx/before_tool` deny) or the user does (a card, an answer, a cancel), its `tool` step ends before the answer goes
+back and the agent's time after it is `think` (`State::call_refused`); a step the wait had only just given back
+writes no row. So the timeline holds the refused call when the agent hears the refusal, not at its next update.
 `job-wait`, `machine-queue` and `stalled` are written by the tasks that own those events (exec, the supervisor).
 A step's `provider` is the profile's gateway provider environment (`:ai`) when it has one, else whose CLI it starts
 (`claude`, `codex`, `gemini`), so a subscription session's steps say where they ran (the matrix's `(:provider NAME)`
@@ -1719,15 +4298,470 @@ column still matches `:ai` only).
 
 Anchors of a step (part 4's rewind): `message_id` (the last message id seen, so tool calls carry their turn's
 message), `turn_id` (it arrives with the turn's last step; the turn's earlier rows get it then), `log_version` (the
-decision log's version when the step closed) and `snapshot`.
+decision log's version when the step closed) and `snapshot`; from schema 12 also `acp` (the agent conversation the
+step ran in), `head` (the worktree's commit when its snapshot was taken, read from the ref files without git), and
+`history_op` and `undone_by` (the edit history's record it anchors, and the revert that abandoned it). The wire step
+adds `revertible`: it has a history record and its session's snapshots were not removed at the cap in this hub's run
+([store.md](store.md#schema-12-the-timelines-step-facts-agent-system-part-4)).
 
 A **step snapshot** is a tree of the session's worktree, written at the first step of each turn and after each completed edit (`edit`, `delete`, `move`
-tool kinds) into a shadow repository `<state>/hub/checkpoints/<hash>.git` and kept as `refs/drgnx/s/<sid>/<seq>`. Each
-session has its own persistent index file in the shadow repository, so a snapshot only hashes what changed. The
-sandbox's secret file names (`.env`, `.npmrc`, `credentials*`, keys, …) are never in a tree. Over
+tool kinds) into a shadow repository `<state>/hub/checkpoints/<hash>.git` and kept as `refs/drgnx/s/<sid>/<seq>`. A
+turn's tree is taken before its prompt goes to the agent (through an index of its own, held by `refs/drgnx/turn/<sid>`
+until the turn's first step is written and keeps it), so nothing the agent writes in the turn is in it. An edit's
+tree is taken by the step writer once the step's row is written, unless the session serves the agent's next
+`fs/write_text_file` first: then the session takes the tree before it serves that write (`Snap::before_write`, through an
+index of its own, held by `refs/drgnx/write/<sid>/<tree>` until the step keeps it), one tree for every edit step closed
+since the last write, and the writer keeps that one. The writer holds the step's cell while it takes its own tree, so no
+write is served meanwhile; with no edit step waiting, a write costs a lock and nothing more. A step whose row cannot be
+written closes its cell (`EditCell::close`), so no later write takes a tree nobody would keep; a tree taken for it
+already stays held until the session's refs are pruned, since the steps closed before one write share it. Each
+session has its own persistent index file in the shadow repository, so a snapshot only hashes what changed. A missing
+shadow repository is made by `git init` in a folder of its own beside it, then renamed into place: a session's first
+two snapshots (its turn's and its base's) are taken at once, and two inits in one folder failed on each other's
+template files, which left the turn without its checkpoint (a revert to its first step then went back to a later
+tree). The sandbox's secret file names (`.env`, `.npmrc`, `credentials*`, keys, …) are never in a tree. Over
 `drgnx-agents-checkpoint-cap` (summed over the shadow repositories), the refs of finished sessions go oldest first and
 the repositories are collected (`git gc --prune=now`); with nothing finished left, snapshots stop and the editors get
 one `notice` (a running task's refs are never removed). Restore and fork are part 4's.
 
 `timeline/get {scope, id, since?, rollup?}` answers the steps of a session, task, plan or project (500 a page, `next`
 continues) and their rollup: seconds by class (closed steps), cost by unit (never summed across units) and tokens.
+
+A step's `cost` is what the budget booked from the agent's cost readings (ACP's `usage_update`) during the turn the
+step closes, on the turn's last step, with the unit `usd-est`: an estimate, since a subscription agent reports an
+API-equivalent price. Both the step and the budget book the same delta, keyed by the agent's conversation, so a new
+conversation (a rotation, a fresh start, a rewind or fork) counts from its first reading in both and `budget/get`
+never disagrees with the steps. An agent that reports no cost leaves `cost` empty (never `0`). The rollup of a task
+or plan adds a `usd` line with what the gateway charged (the `spend` table), next to the estimate. A plan scope is
+`plan:<id>` for a graph plan, `plan:<path>` for a plan file and `plan:<job>` for a job with none; steps and budget of
+a job use the same key. Rows written before this keep their old key.
+
+**Forecast samples.** Every task that finished (`done` or `dropped`) and ran a turn becomes one `forecast_sample` row
+(`forecast.rs`, `norn::forecast::sample`), and so does a finished job's manager (`JOB#manager`). The sweep runs once
+at hub start, which backfills the history of earlier runs, and at the end of each runner tick; it takes what is due in
+pages of 100. A task is due when every step of it has closed and no sample covers its newest step, so a restart, a
+second sweep and a task reopened after review are all the same query and leave one row per task. Because it runs
+every tick, the query reads no whole table of the graph: a finished job's manager sessions are found through the
+partial expression index `entity_manager_job` (work.db migration 11: live sessions whose `data.role` is `manager`, by
+`data.job`), compared as `+j.id` so the index is searched, and their steps through `step_session`. Every step with the
+task counts, whichever session wrote it (a fallback, a move, a reviewer) and whatever a rewind marked: spent is spent.
+A session with no task (a chat, a fork) makes no sample. The row's profile and provider are those of the last session
+that is no review: the runner marks a task's reviewer session (`review` in its record), whose steps count on the task
+but whose profile is not the task's class (else the next proposal would find the worker's class empty and fall to
+the role). Its model comes
+from the profile's setting, a wake is a job wait and a cold one is longer than the cache TTL (assumed 300 s).
+
+## The CDP broker
+
+A session with the browser drives a Chromium inside its own sandbox over CDP. The hub is the broker between the
+agent's websocket and the browser's pipe. Its routing is the crate `heimdall`: pure, with no I/O and no async runtime,
+std and serde only, built for every target (Android included). The hub's websocket server and the browser host wrap
+it.
+
+**Envelopes** (`heimdall::envelope`). `parse(msg, max)` reads `id`, `method` and `sessionId`, and for `Target.*` the
+`targetId` and `sessionId` params. `params`, `result` and `error` stay `serde_json` `RawValue`s borrowed from the
+message, so a 20 MiB screenshot passes byte for byte and is never re-encoded. The parse is strict, so the broker and
+Chromium never read one message two ways:
+- one JSON object (serde would read an array as a struct);
+- a key the broker reads appears once;
+- the strings it routes by are plain (an escape is an error, not decoded);
+- `id` is a whole number;
+- a message has a method or a reply, not both;
+- over `max` (`agents-browser-max-message`) is `TooLarge`.
+
+The router itself takes no limit: the pipe's codec and the websocket enforce it before a message reaches the router.
+What the router sends is rebuilt from what it parsed, so only `id`, `method`, `sessionId` and `params` reach the
+browser, and a key CDP does not have is dropped.
+
+**Routing** (`heimdall::route::Router`). One router per browser start. `Router::new()` returns the hub's first command,
+`Target.attachToBrowserTarget` on the root session. The agent gets that browser session, so it sees what looks like a
+root connection:
+- every agent message without a `sessionId` gets the browser session, and replies and events on it lose it again;
+- the hub's own commands use ids from `HUB_ID_BASE` (2^30) to `i32::MAX`, because Chromium reads an id as a 32-bit
+  integer; an agent id at or above it is refused (`-32600`), and a reply with a hub id is the hub's whatever its session;
+- a child session belongs to the owner of the session its `Target.attachedToTarget` arrived on, and an attach event
+  never changes the owner of a session that exists;
+- an agent command on a session it does not own (the hub's, a closed one, an unknown one), or naming one or the browser
+  target in `Target.*` params, gets `-32000` "not yours";
+- `REFUSED_ALWAYS` gets `-32601` "refused by drgnx": `Target.exposeDevToolsProtocol`, `Target.setRemoteLocations`,
+  `Target.sendMessageToTarget` (a whole message for a non-flat session that would pass unread), `Tethering.*`,
+  `Extensions.*`, `Browser.close`, `Browser.crash` and `Browser.crashGpuProcess`;
+- messages to or from the hub's sessions never reach the agent.
+
+Until the attach is answered the router is not `ready()`: the broker holds the agent's messages until it is, and a
+message passed anyway gets `-32000` "the browser is starting". If the attach fails, the agent gets the root session as it
+is, the router reports `BrokerEvent::NoBrowserSession`, and the hub cannot watch that browser.
+
+**Downloads.** Playwright sets `Browser.setDownloadBehavior` with a path in its own artifacts dir, which the browser
+layer cannot write. The router answers the agent `{}` and sends its own on the root: `allowAndName` into
+`/tmp/drgnx-browser/downloads` (`DOWNLOAD_DIR`), with events and the agent's `browserContextId`. The download events
+then arrive on the root session. They go to the agent, and a `downloadProgress` with `state: "completed"` and a plain
+guid is also `BrokerEvent::Download { guid, path }` (`Step::ToAgentAndEvent`). Playwright's `download.path()` does not
+find the file; the agent reads it from that dir.
+
+**The agent goes** (`agent_closed`). The router:
+1. resumes every agent session still paused by auto-attach (`waitingForDebugger`, not yet resumed by the agent) that no
+   hub session holds, with `Runtime.runIfWaitingForDebugger`;
+2. detaches every agent session on its parent, children first;
+3. marks them closing (what they still send is dropped until Chromium reports them detached);
+4. attaches to the browser target again for the next agent, and is not ready until that is answered.
+
+In the fallback it instead turns the root's auto-attach and target discovery off.
+
+**Codecs** (`heimdall::codec`):
+- `Nul` splits Chromium's NUL-delimited pipe messages under a limit. An overlong message is one `Overlong` error, and
+  the next message after its NUL reads as usual. `Nul::encode` refuses a message with a NUL inside.
+- `Frame::encode(kind, payload)` and `FrameDecoder` carry the socketpair between the hub and the browser host,
+  `[kind u8][len u32 BE][payload]`: kind 1 (`KIND_CDP`) is one CDP message, kind 2 (`KIND_CONTROL`) control JSON. A header
+  over the decoder's limit fails it for good, since the stream cannot resync.
+
+Tests: unit tests in each module. `route`'s tests play transcripts written by hand from the protocol JSON
+(`crates/heimdall/tests/data/*.jsonl`: an input line, then what it must give), and the fuzz target `cdp_envelope`
+([runtime.md](runtime.md#fuzzing)) seeds from them. `real-full.jsonl` and `real-headless-shell.jsonl` are recorded
+from real runs (the browser side only, long strings as their length; [runtime.md](runtime.md)'s `browser_real`):
+a test checks that the router's first command is the one sent there and that everything the browser said goes
+through a router as well-formed output.
+
+**The fallback's late replies.** In the fallback the agent owns the root session, so a reply there could outlive its
+agent and reach the next one. The router remembers the root commands an agent left unanswered when it went, and drops
+the first reply with each such id: Chromium answers one session's commands in order, so that reply is the old agent's,
+even when the next agent reused the id. At most 4096 ids are kept (the oldest go first).
+
+### The websocket server (`browser::broker`)
+
+The hub serves each browser session's `cdp.sock` with `broker::start(cfg, listener, host) -> BrokerHandle`, where `host`
+is the hub's end of the socketpair to the browser host ([The browser host](#the-browser-host)). `BrokerCfg` holds:
+- `sid` (logs say `cdp://SID`, never the path);
+- `secret` (32 bytes);
+- `max_message` (`agents-browser-max-message`);
+- `idle` (`agents-browser-idle`);
+- `gate`, an async closure that returns the session's `browser` cell as a `Gate`;
+- `events`, a channel of `BrokerEvent`s: downloads, `NoBrowserSession` and `Stopped { why }`. A full channel loses the
+  event, which is logged.
+
+The handle's `stop(why)`, `close()` and `connected()` do what their names say, and dropping the handle closes it.
+
+**The upgrade.** A connection from another uid is closed at once (`conn::peer_allowed`). HTTP/1.1 (hyper, a 10 s head
+timeout) then serves one path, `GET /devtools/browser/<the secret's 64 hex>` with a websocket upgrade (fastwebsockets).
+The secret is compared in constant time (`subtle`). Anything else (a wrong secret, no upgrade, a query) is 404 with no
+body. With the right secret:
+1. a broker whose host has ended answers 503;
+2. while an agent websocket is open, a second gets 409 "the agent's browser is already connected";
+3. `gate()` is asked: `Allow` goes on, `Ask(n)` is 403 "waiting for the user's yes: card N", and `Never(why)` is 403 with
+   WHY. So a cell narrowed to Never refuses the next connection, though not the open one;
+4. then 101.
+
+**The browser's life.** The first upgrade while the browser is stopped sends `{"op":"start"}` to the host. The agent's
+messages are held, in order, until `started` has come and the router is ready (its attach answered). More than twice
+the message limit held closes the agent with 1008. A message over the limit closes it with 1009.
+- **The agent goes:** the router's `agent_closed` commands go to the browser (resume, detach, attach afresh). A new
+  agent's messages wait for that attach.
+- **Idle:** with no agent websocket for `idle`, the broker sends `stop` with `idle` and reports `Stopped { why: "idle" }`.
+- **`stop(why)`:** an open websocket is closed with 1001. For `memory` the reason is "the browser was stopped: the
+  session is near its memory cap", and otherwise "the browser was stopped (WHY)". The broker then sends `{"op":"stop",
+  "why":WHY}` and reports `Stopped { why }`.
+- **`exited` while the browser ran** (a crash, or Chromium's own end): an open websocket is closed with 1011 "the browser
+  exited (signal N)" (or "(code N)", or the host's error text).
+- **After any stop or exit:** the next upgrade starts a fresh Chromium through the same host. An agent that connected
+  while a stop was under way gets the fresh one when `exited` comes.
+- **The host's end** (EOF on the socketpair): an open websocket is closed with 1011, and every later upgrade with the
+  right secret is 503 "the browser's host ended; restart the session to get it back".
+- **The hub restarted:** a resumed session has no host, since the socketpair died with the old hub.
+  `broker::start_after_restart(cfg, listener)` serves its endpoint with 503 "the browser ended with the hub's restart;
+  restart the session to get it back".
+- **`close()`:** the broker sends `stop` with `hub`, closes the agent with 1001, and closes the socketpair, so the
+  host exits.
+
+One task, the actor, owns the router and the state. The accept loop, each connection's reader and writer (the
+websocket split in two, fastwebsockets' `unstable-split`), and the host's reader and writer are tasks that talk to it
+over channels.
+
+Tests: `browser::broker` tests run a broker over the real browser host (`host::serve` on a thread with the stand-in
+Chromium), with a websocket client of their own: the 404s, 403s, 409, 503, the relay both ways, idle, the memory stop, a
+crash (Review Focus 3), a reconnect while the router detaches, and a log with no secret in it. The row
+`browser/the-endpoint-refuses-a-wrong-secret` (test-hooks) checks the endpoint through a hub: `__test_browser_endpoint
+{socket}` starts a broker with no browser behind it and answers its secret.
+
+## The browser check
+
+`browser/check` (user class, `writes: false`) is the doctor's smoke run (`browser::check`). `ratatoskr doctor --json`
+has two seconds, so the doctor only reads `<state>/hub/browser-check.json`, which this method writes. The method runs a
+throwaway session of the real shape: sid `check-<8 hex>`, command `sleep 60`, the browser on, made by
+`sandbox::browser_for` (so the reasons are a session's: `tier`, `landlock`, `program`), launched by `launch::spawn_plain`
+and, where a user systemd answers, in a scope. Its broker is `start_browser_with` with two hooks (`CheckHooks`): a gate
+that allows, so no card is raised, and a channel for the host's `stderr` events (`BrokerCfg::stderr`; only the check
+sets it). The hub then connects to its own `cdp.sock` with the secret as a websocket client, sends
+`Target.createTarget data:text/html,<p>drgnx`, `Target.attachToTarget` (flat) and `Page.captureScreenshot`, and tears
+the session down. The whole run has a 45 s deadline; the sandbox's process group is killed after it, and the session
+dir and scratch dir are removed.
+
+The answer is `{ok, browser, start_ms, peak_bytes, sys_missed, screenshot_bytes, why, at}`: `start_ms` runs from the
+connect to the page's target, `peak_bytes` is the scope's `MemoryPeak`, and `sys_missed` is true when a stderr line
+names `/sys/`. A check that could not run is `ok: false` with `why`. Under `test-hooks`,
+`DRGNX_TEST_BROWSER_CHECK_ABI=N` replaces the kernel's Landlock ABI, so the `landlock` reason can be tested on any host.
+
+The doctor's `browser` section (`doctor::browser_section`) is
+`{found, fix, tier, landlock_abi, verdict, modes, cap, proxy_refusals, last_check, age_warning}`. `proxy_refusals` are
+four `gleipnir::net::policy` judgements made in the doctor, no I/O: each must not be `Connect`.
+
+Tests: `browser::check` (the file round trip, the PNG size, the `/sys/` test), `doctor::tests::browser_section_shape`
+and `proxy_refusals_all_hold`, and the `#[ignore]` `browser_sandboxed::the_check_takes_a_screenshot` (a hub, the stand-in
+`tests/data/fake-chromium-png.sh` as the browser program, the real sandbox).
+
+## The browser host
+
+`ratatoskr browser-host` (`browser::host`, Linux only) runs Chromium inside a session's sandbox for the hub. The inner
+helper forks it under the browser layer, its own Landlock domain and seccomp filter ([gleipnir.md](gleipnir.md), "The
+inner helper", step 6b), with the hub's end of a socketpair at fd 3 and a ready pipe at fd 4:
+
+```
+browser-host --hub-fd 3 --ready-fd 4 --program P --dir D --web-port N [--max-message B] [--headless-shell|--full]
+```
+
+**The layer check.** Before it touches a descriptor or makes a dir, the host checks that it runs under the browser
+layer: `NoNewPrivs: 1` in `/proc/self/status`, and a TCP bind on loopback refused (`EACCES`). The browser layer binds no
+port at all, while the agent's own layer and an unsandboxed process may, so the bind tells the layers apart without a
+path. Otherwise it exits 1. Only a `test-hooks` build has `--unconfined`, which skips the check for the container tests
+that run it with a real Chromium and no sandbox ([the real browser tests](runtime.md#the-real-browser-tests)); the
+sandboxed path with a real Chromium is the `real-start/the-agent-drives-its-browser` row
+([the real-start rows](runtime.md#the-real-start-rows)).
+
+**Start.** The host makes `D/profile` and `D/downloads` (0700), writes `ready\n` on fd 4, closes it, and reads frames
+from fd 3 (`heimdall::codec`, `[kind u8][len u32 BE][payload]`; the largest is the message limit plus 64 bytes). A
+`{"op":"start"}` forks Chromium:
+- in its own process group, with `PR_SET_PDEATHSIG(SIGKILL)`;
+- stdin and stdout on `/dev/null`, stderr on a pipe, the CDP pipe at fds 3 (in) and 4 (out), every other fd closed at
+  the exec;
+- exactly the flags of the design (`--remote-debugging-pipe --user-data-dir=D/profile --no-sandbox --disable-gpu
+  --proxy-server=http://127.0.0.1:N …  about:blank`), and `--headless` unless `--headless-shell`;
+- an environment of `HOME`, `XDG_CACHE_HOME` and `TMPDIR`, all `D`, and nothing else.
+
+It answers `{"ev":"started","pid":N}`. A program that cannot be exec'd gets `{"ev":"exited","code":127|126,
+"signal":null,"error":"cannot start P: …"}` instead. A start while one runs answers `started` for the running one.
+
+**The relay.** A CDP frame from the hub goes to the pipe with its NUL. Each NUL-ended message from the pipe goes back as
+one CDP frame; one over the limit is dropped up to its NUL. A CDP frame while no browser runs is dropped.
+
+**Stop and exit.** `{"op":"stop","why":W}` sends SIGTERM to Chromium's process group, then closes the pipe (in that order: with
+the pipe closed first, a browser that ends at the pipe's end could exit 0 before the signal came), and SIGKILL after
+2 s. However Chromium ends (stopped, crashed, or on its own), the host waits for the main process without reaping it,
+kills what is left of its group (the group's id is still held by the unreaped leader), tells the pipe's reader how many
+bytes the pipe holds then (`FIONREAD`: all the group wrote), reaps it, and sends `{"ev":"exited","code":N|null,
+"signal":N|null}` once the reader has passed those bytes on and stopped. The reader never waits for the pipe's EOF
+there: a copy of its write end outside the group (any fork beside the host holds one until its exec; in the unit
+tests, every thread of the test binary forks) would hold that back, and what such a copy writes is never read as the
+browser. A Chromium without a group of its own (a filter refused `setpgid`) is waited for by the pipe's end, for up to
+1 s. The next `start` is a fresh
+Chromium through the same host. The host counts the browser as ended in the same hold of its stream as it writes
+`exited`, so a `start` the hub sends once it has read `exited` always gets a fresh Chromium: never the dead one's
+`started` (whose CDP would then be dropped), however late the waiting thread runs on a loaded machine.
+
+**The hub goes.** EOF on fd 3 (the hub ended, or restarted: an inherited fd cannot be handed over again), or a reset
+(the hub closed its end with the host's last lines unread), stops Chromium as
+`stop` does, and the host exits 0, so no Chromium is left behind.
+
+**Stderr.** Chromium's stderr lines go out as `{"ev":"stderr","line":S}`, at most one a second (the others are only in the
+tail), and the last 16 KiB are kept in `D/stderr.tail` across starts.
+
+There is no async runtime: the main thread reads the hub, and each start has a writer, a reader, a stderr reader and a
+waiter thread. The main thread is the one that forks, so Chromium's death signal fires when the host ends.
+
+Tests: `browser::host` unit tests run the host on a thread against `tests/data/fake-chromium.sh`, a stand-in that
+speaks the pipe and echoes every command as its reply. It records its argv, its environment and every call in its
+dir, and answers `Target.attachToBrowserTarget` and `Target.detachFromTarget` as Chromium would. On `Fake.attach` it
+sends a paused child target, on `Fake.crash` it dies by SIGKILL, on `Fake.stubborn` it ignores SIGTERM and the
+pipe's end, and on `Fake.stray` a process in its own session keeps a copy of the pipe and writes to it once the
+browser is reaped (`a_stray_copy_of_the_pipe_is_never_read_after_the_end`). `tests/browser_sandboxed.rs` (`#[ignore]`, the
+VM) starts the host under a real bwrap launch with the stand-in.
+
+## Forecasts
+
+A forecast comes from the history of similar finished tasks, never from a model's own guess. `norn::forecast` is pure:
+no store and no clock, so the same history and the same seed give the same numbers.
+
+**The reference class** (`model::reference_class`). A task is compared with finished tasks at each level in turn, and
+the first level with at least 5 observations (`MIN_CLASS`) wins:
+
+| Level | Same | |
+|---|---|---|
+| `Project` | role, profile, model and project | a task with no project skips this level |
+| `Profile` | role, profile and model | |
+| `Role` | role | `other_model` says when some ran on another model: their tokens are carried and priced at the task's rates |
+| `Any` | nothing | |
+| `Prior` | | `n` is 0, and the answer says it has no history |
+
+`other_model` compares models: another profile on the same model is the same model. A profile with no model set is
+the CLI's choice, so across profiles it counts as another model.
+
+Within a class an observation weighs `exp(-(ln b - ln b0)² / (2 · 0.7²))`, where `b` and `b0` are the two briefs'
+bytes, floored at 1 KiB: a brief twice the size weighs 0.61, four times 0.14. The prior is unweighted.
+
+**The prior** (`model::prior`) is one base task at ×⅓, ×½, ×1, ×2 and ×3: 19M cache reads, 600k cache writes, 60k input,
+90k output, 40 minutes active, 60 minutes of wall time. The cache reads and the output's share (under 0.5 %) are
+measured on this project's agents; the other figures are judgement. Its 2 wakes (1 cold) and 300k context are not
+scaled: the first is an assumed count, the second a level a task reaches.
+
+**Rates** (`model::usd`) are USD per million tokens, per token class. A cache write pays the 5 minute rate at a TTL of
+300 s or less, else the 1 hour rate. Every token class counts towards a forecast's tokens (`Usage::total`).
+
+**A wake** (`model::wake_usd`) costs the session's context × the cache read rate if the job ended within the TTL,
+and × the write rate after it, because the whole context is written again. At Opus 5.5's rates, 300k of context costs
+$0.06 within the TTL, $1.50 after a 5 minute TTL and $2.40 after an hour's. History already contains its wakes, so a
+forecast shows the wake as a part of the total, never added to it.
+
+**The simulation** (`sim::simulate`) runs the plan 2000 times (`DRAWS`). Each draw takes one whole observation per task,
+by weight, so one run's tokens, time and cost stay together. Time is a list schedule of each observation's wall time:
+whenever one of the slots is free it takes the ready task with the lowest `n`, as the runner does, and a task starts
+once its parents have finished. So wall time shows merge bias: three parallel tasks together end later than the p50 of
+any of them. Each range comes from the plan's own draws, because p90s do not add up.
+
+The stream is SplitMix64, and `seed_of` is FNV-1a over the inputs: both are written here so that the numbers do not move
+with a library or a compiler. Quantiles are nearest-rank (`quantile`).
+
+`price` answers a task's unit and amount for an observation, or nothing. Units are never summed. A pick with no price is
+not a zero: the task's cost comes from its priced picks, and a task with none is in no unit. Run again with the same
+seed and a `price` of a wake's cost, and the draws are the same, which gives the plan's wake cost.
+
+The class's picks count into the history, and a prior's count on past its end, so `simulate` takes the history followed
+by the prior. A prior serves only when the whole history is under 5 rows, because the `Any` level takes the rest.
+
+**The small-class floor** (`sim::widen`): below 20 observations a p90 is at least 1.5 × p50, whatever the draws say, so
+a class of five near-identical runs cannot print a tight range.
+
+**Calibration** (`sim::conformal`) is split conformal scaling. Past pairs of (p90, actual), per role, profile and model,
+give the actual/p90 ratios, and the factor is the ratio at rank ⌈(n+1)·0.9⌉, so it needs 9 pairs. `p90 × factor` then
+covers the next run at least 9 times in 10, provided past and future runs are exchangeable, which a change of model
+breaks; hence the model in the key and a recent window. Keep the p90 of each pair as it stood before calibration:
+ratios against a calibrated p90 say only how the last factor did, and the factor would swing. The factor can be below
+1, so the caller holds a scaled p90 at its p50 or above.
+
+**Prices and the hub's side** (`drgnx_ratatoskr::forecast`). Tokens are priced at today's rates, not at the sample's own
+cost. `rates_for` takes the rates of a profile from the setting `drgnx-agents-model-prices` (US dollars per million
+tokens, shipped dated `2026-11-01`; a cache price left out is the input price): the row with the longest key that is a
+prefix of the profile's model id; else, for a gateway profile, the provider's `:price (IN . OUT)` with every cache token
+at the input rate; else the row named for the profile's CLI (`claude`, for a Claude profile with no model set). No
+rate: the task is unpriced, and its cost is empty, never zero; a sample's own recorded cost serves only on the same
+profile. `prices_as_of` is the oldest date of a row. The cost unit is `usd` for a gateway profile and `usd-est` for a
+subscription's, which is an estimate.
+
+`ttl_of` is the prompt cache time to live of a profile in a role: 3600 s for a Claude subscription in any role and for a
+gateway Claude worker or manager (the lock asks for `LONG_CACHE_TTL`, `agents/lock.rs`), 300 s for everything else. The
+sweep passes it to `gather`, so a sample's cold wakes use the TTL its session had.
+
+`for_tasks` reads the newest 5000 samples, forms each task's class, simulates on `runner::agent_slots` slots (the number
+the tick starts at once) with a seed from the job key and every want's fields, widens each task by its class's size and
+the plan's totals by the smallest class's, and scales a task's p90 by its class's calibration factor when it has one.
+The plan's total has its own factor (a task's holds for that task alone and says nothing of a sum's p90): split
+conformal over whole plans, from `sample::plan_pairs`, the job's own `forecast_made` row (its total's tokens p90 before
+calibration) against what its tasks used, summed, managers apart, for `done` jobs whose every task that ran has its
+sample; the latest 200, at least 9. It scales the total's p90 of tokens, time and every cost unit, and the pace's
+added share, so the Autonomous rule's spend and week checks read the calibrated total; a session's forecast
+(`forecast/session`) has none. `forecast_made` keeps the p90 as it stood before calibration (`for_job` returns the rows
+to keep). The wake line is a
+second simulation with the same seed and a price of each drawn observation's cold wakes × its context at the cache
+write rate. A manager's own spend comes from the `manager` samples, per task, beside the total.
+
+**The week's pace** (`Forecast.pace`, one `PaceEffect` for each subscription meter a task of the plan runs on). A
+meter's readings are kept in a thinned history (`Budgets::history`): one for each quarter hour, none older than 8 days,
+at most 768 a provider, saved with the budgets in `runtime.db` (the `meters` field of the `budgets` row; a row saved
+before has none) and replayed when the hub starts, so a restart keeps the pace. `pace/get`'s rate still reads only the
+last 24 hours. A fall in the meter is a reset, a new segment: only rises count (`budget::rise_total`).
+`share_per_usd` is the rises over the `usd-est` that the provider's steps booked since the first kept reading; the
+account's meter includes use outside drgnx, so it is an estimate, high if anything. The plan's `added_share` is the
+plan's own `usd-est` draws on that provider (a second simulation with the same seed) times that ratio. `runs_out_p90`
+is true when the used share, the plan's p90 share and what the current rate adds before the reset reach 1; the
+forecast then warns, and the Autonomous preset's auto-start waits. `window` is `week` when the reset is more than a
+day off, else `short` ("this window"). No spend or no rise: no `added_share`, and the view says "no pace yet".
+
+| Method | Class | Answer |
+|---|---|---|
+| `forecast/get` | user | the forecast of a job, from its data as proposed |
+| `forecast/session` | user | one more run like a session: one task of its role and profile, nothing recorded |
+| `forecast/accuracy` | user | per role and profile, the share of finished tasks that took no more than their p90, and the median of actual over p50 |
+
+End to end, on mocks: `system/a-forecast-before-dispatch` proposes a plan on a subscription Claude mock and a gateway
+profile with a provider price, checks the card's range and the prior's basis before any worker exists, runs it to the
+end, and checks that each task's and the plan's rollup equal the step table summed in SQL, that the plan's `usd-est`
+equals what `budget/get` booked, that the gateway task's `usd` equals its spend rows, that `forecast/accuracy` has a
+row per role, and that the next proposal's implement task is forecast from its class of five. The rows wait on a
+condition with a deadline (`poll`), never a quiet period. `system/say-it-survives-a-restart` keeps a Say proposal,
+its card and its forecast across a second hub on the same root, where `say/revise` on the old planning session says
+the planning stopped. `system/mixed-providers-lease-clash-review-spend` checks cost per session, task and plan.
+
+## Say it
+
+One prompt becomes a proposed plan (`say.rs`). `say/start {text, repo, project?, profile?}` starts a planning session:
+a chat on `profile`, else the `say` route's first profile, which is the first `implement` route's when `say` has none
+(`runner::route`). It runs in a scratch folder of its own (no `cwd`: `spawn_plain`), with no repository, no task and
+no graph, so repository and graph text, the injection surface, never reach the session that shapes the plan. Its
+first prompt (origin `hub`) is the fixed instructions with the one block form, a digest of the profiles a task may
+name (those a job may run on), each role's route, the roles and the project's id (`say::digest`: settings only), and
+the user's words.
+
+The session's turn ends at the shell's `PromptDone` handling (`agents/session.rs`, where the last message is already
+read for `drgnx-report`): when its id is a planning session's (one set lookup), `(sid, message)` goes to `say::run`.
+A message with no `drgnx-proposal` block is a question: `say-message {id, text}` carries it to the editor. A block
+ends at the first line that is only "```" (a JSON string holds no raw line break, so a fenced command inside a task's
+body is never that line), and is parsed with every unknown key refused (`grants`, `approved`, `auto`, `repo` and the like: the format has `title`,
+`tasks` of `{n, title, role, profile?, deps, body}`, `budget` and `gate` only), and more than one block is refused.
+`say::check` then refuses, all at once: no title, no tasks or more than 32, a role other than `implement`, `test`,
+`docs`, `review` and `review-long`, a profile the settings do not have or a job may not run on
+(`runner::review::profile_refusal`), a body over 16 KiB, a dependency that is not there or goes round
+(`plan::check`), and a budget that is not a positive amount in `usd` or `usd-est`. A block that does not hold is
+answered with the reasons, twice at most; the third is `say-failed {id, why}` and the session is stopped. A block
+that holds is written as a graph plan as the user would (`plans/write`: each task's `role`, `profile` and `body`)
+and proposed with the repository `say/start` named, the smallest dollar budget of the block and its gate
+(`runner::propose_graph`): the job is `proposed` with its proposal card, whose title is the hub's (`card_title`),
+never the block's, and `say-proposal {id, job, started}` names it (`started`: the Autonomous preset started it at
+once, so nothing waits for an OK and the editor says so). The planning session's own use is the job's
+`data.planning` (`tokens`, `usd_est`, `usd`: numbers only), shown and not budgeted.
+
+A Say proposal waits for the user's OK (`job/approve`, a user-class method: an agent's connection is refused, and
+no word of the user's prompt or of the block is read for an OK) unless the Autonomous rule holds
+(`say::rule`, called from `runner::propose_job` before the job is written). All of these must hold, read with the
+manager's column (`MatrixGate::dry`, the project's and the plan's layers applied); the first that fails is why it
+waits, kept in the job's `data.waits`:
+
+1. the active preset is Autonomous (time presets and the away flag applied);
+2. `agents.start` with the number of tasks is Allow (Autonomous: up to 8);
+3. `spend` with the plan's p90 in `usd` plus its p90 in `usd-est`, the estimate counted as dollars, is Allow
+   (Autonomous: up to $150);
+4. nothing is unpriced;
+5. no meter would run out at the plan's p90 before it resets (`runs_out_p90`), whatever its `window`: Claude's one
+   meter blends the week with its 5 h window, the week's last day reads as `short`, and a meter with no reset known
+   is `short` too, so every window is checked and the reason names the one that would run out; and every
+   subscription a task runs on (a profile with no API key) has a pace with the plan's share known: a subscription
+   with no meter reading yet never starts alone.
+
+When it holds, the job is approved as the user's preset decided (`approve_job`, no proposal card) and a decision
+records it: kind `build`, author `user`, reason "started by the Autonomous preset within its cells".
+
+The order of one planning session is a pure core (`say::SayCore`, every order tested with skuld): at most one prompt
+is in flight; a revision (`say/revise {id, text}`) that comes while a prompt, a check or a proposal is under way
+waits for it and replaces what it would have done; a revision of a standing proposal withdraws it first and prompts
+again only when it was withdrawn (or the user had rejected it). The withdrawal and `job/approve` each decide in their
+own store write whether the job is still `proposed` (`norn::write::jobs::withdraw_proposal`, `approve_proposal`), and
+the store's writes are one at a time, so of the two exactly one holds: an approval that lands between a status read
+and the withdrawal runs on, never stopped (every order tested). `job/stop` (the editor's and the card's reject)
+decides in its write the same way (`stop_job`): a proposal is withdrawn and marked never approved, any other job is
+stopped unmarked, so an approval that landed first can still be resumed. It answers only once the job's work in
+flight ended (`Runs::settled`: a start still writing its task's tree, a merge, each clearing its own busy mark), so
+nothing of the job writes after the answer, and an agent such a start made is ended with the rest; the budget pause (`pause_running`) and
+`job/resume` (`resume_job`) read the status in their own write too (every order tested). A say has at
+most one live job: when its proposal starts (the Autonomous preset at once, or the user's `job/approve`, which the
+withdrawal finds), the planning is done: the session is stopped and forgotten, the latest 64 such sessions remember
+their job, `say/revise` on one answers `invalid` "JOB has started: stop it, then say it again", and a revision that
+was waiting is answered `say-failed` with that reason. A revision never stops a running job. The job's start is
+recorded before `say-proposal` goes out, so a revision the event prompts is refused at once. `agents/stop` or
+`agents/kill` of a planning session stops its planning: nothing
+more is prompted or proposed, and a proposal of it still proposed is stopped. `say/end {id}` stops the session and
+forgets it; its proposal is a job and stays. Say's state is memory only: after a restart `say/revise` answers "the
+planning stopped: say it again", and a proposal it made stays a job with its card.
+
+| Method | Class | Answer |
+|---|---|---|
+| `say/start` | user | the planning session's id |
+| `say/revise` | user | true (refused for a planning session the hub no longer holds, or whose job has started) |
+| `say/end` | user | true, or false for a session that is not a planning session |
+
+Events: `say-proposal {id, job, started}`, `say-message {id, text}` (agent-written), `say-failed {id, why}`.

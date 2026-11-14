@@ -12,7 +12,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// A row of the matrix: one thing an agent may do.  `unsandboxed` and `user.private` are Never in every column of
-/// every preset and no override changes them.
+/// every preset and no override changes them; `browser.private` is at most Ask, whatever a layer says.
+///
+/// The browser rows: `browser` is the in-sandbox browser itself (its relay ports, its host and the CDP endpoint; its
+/// network only the session's own local servers), `browser.web` lets that browser reach any public site on ports 80
+/// and 443, and `browser.private` lets it reach the private targets a grant names.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize, Serialize, JsonSchema,
 )]
@@ -49,8 +53,18 @@ pub enum Action {
     Machines,
     #[serde(rename = "job.container")]
     JobContainer,
+    // a job names keys: they reach the job's own process only, and only names on the project's
+    // `drgnx-runners-job-keys` list (a plain comment: a doc comment on one variant makes the schema a `oneOf`)
+    #[serde(rename = "job.keys")]
+    JobKeys,
     #[serde(rename = "network")]
     Network,
+    #[serde(rename = "browser")]
+    Browser,
+    #[serde(rename = "browser.web")]
+    BrowserWeb,
+    #[serde(rename = "browser.private")]
+    BrowserPrivate,
     #[serde(rename = "unsandboxed")]
     Unsandboxed,
     #[serde(rename = "settings.change")]
@@ -61,11 +75,30 @@ pub enum Action {
     UserEmacs,
     #[serde(rename = "chat.project-read")]
     ChatProjectRead,
+    #[serde(rename = "plugin.abilities")]
+    PluginAbilities,
+    #[serde(rename = "chat.project-edit")]
+    ChatProjectEdit,
+    #[serde(rename = "huddles")]
+    Huddles,
+    // the debugger's rows (graphical debugging spec §19.5): reading the user's sessions and runs, probes and
+    // breakpoints of the agent's own there, sealed forks, and, in the user's live process, evaluating or setting
+    // values and stepping
+    #[serde(rename = "debug.read")]
+    DebugRead,
+    #[serde(rename = "debug.probe")]
+    DebugProbe,
+    #[serde(rename = "debug.fork")]
+    DebugFork,
+    #[serde(rename = "debug.live-eval")]
+    DebugLiveEval,
+    #[serde(rename = "debug.drive")]
+    DebugDrive,
 }
 
 impl Action {
     /// Every action, in the matrix's row order.
-    pub const ALL: [Action; 22] = [
+    pub const ALL: [Action; 34] = [
         Action::AgentsStart,
         Action::AgentsModel,
         Action::AgentsControl,
@@ -82,12 +115,24 @@ impl Action {
         Action::CodeCiConfig,
         Action::Machines,
         Action::JobContainer,
+        Action::JobKeys,
         Action::Network,
+        Action::Browser,
+        Action::BrowserWeb,
+        Action::BrowserPrivate,
         Action::Unsandboxed,
         Action::SettingsChange,
         Action::UserPrivate,
         Action::UserEmacs,
         Action::ChatProjectRead,
+        Action::PluginAbilities,
+        Action::ChatProjectEdit,
+        Action::Huddles,
+        Action::DebugRead,
+        Action::DebugProbe,
+        Action::DebugFork,
+        Action::DebugLiveEval,
+        Action::DebugDrive,
     ];
 
     /// The action's id, as the wire and the `agents-matrix` setting spell it.
@@ -109,12 +154,24 @@ impl Action {
             Action::CodeCiConfig => "code.ci-config",
             Action::Machines => "machines",
             Action::JobContainer => "job.container",
+            Action::JobKeys => "job.keys",
             Action::Network => "network",
+            Action::Browser => "browser",
+            Action::BrowserWeb => "browser.web",
+            Action::BrowserPrivate => "browser.private",
             Action::Unsandboxed => "unsandboxed",
             Action::SettingsChange => "settings.change",
             Action::UserPrivate => "user.private",
             Action::UserEmacs => "user.emacs",
             Action::ChatProjectRead => "chat.project-read",
+            Action::PluginAbilities => "plugin.abilities",
+            Action::ChatProjectEdit => "chat.project-edit",
+            Action::Huddles => "huddles",
+            Action::DebugRead => "debug.read",
+            Action::DebugProbe => "debug.probe",
+            Action::DebugFork => "debug.fork",
+            Action::DebugLiveEval => "debug.live-eval",
+            Action::DebugDrive => "debug.drive",
         }
     }
 
@@ -254,6 +311,24 @@ pub struct Facts {
     pub paths: Bounded<Vec<AbsPath>, 64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diff_hash: Option<Hex64>,
+    /// `browser.web`: the first `host:port` the session's browser was refused (the web proxy's, never the agent's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<Text>,
+    /// `browser.private`: the one target the web proxy refused, in the grant's wire form (`{"host_port": "H:P"}`, the
+    /// name or the literal as asked), which a grant for exactly that target matches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<serde_json::Value>,
+    /// `browser.private`: the address the target resolved to and was pinned to (`ADDR:PORT`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub addr: Option<Text>,
+    /// `browser.private`: that address's class, as the web policy names it (`lan`, `ula`, `link_local`, `cgnat`,
+    /// `loopback`, `host_own`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub class: Option<Text>,
+    /// `browser.private` asked for a networked container job: the job's id (the hub's, never an agent's words); its
+    /// target is then a port of the user's computer (`{"host_port": "host.drgnx.internal:PORT"}`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job: Option<Text>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]

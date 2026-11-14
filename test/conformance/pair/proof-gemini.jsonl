@@ -1,0 +1,30 @@
+{"scenario": "pair/proof-gemini", "requires": ["v1", "test-hooks"], "doc": "Gated (B), Gemini's pair proof. Gemini's whole-file edit is ACP fs/read_text_file, then fs/write_text_file: both reach the door (a chat's fs calls inside the project go there), the read served from the editor's buffer and the write diffed against it into hunks at its version, applied by the editor. Its edit through the drgnx tool reaches the door too. Nothing is written to disk by the hub."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/project && echo readme > $ROOT/project/README"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-matrix (:preset autonomous)) (drgnx-agents-profiles ((\"mock-gemini\" :provider gemini :command (\"$MOCK\" \"acp\" \"--as\" \"gemini\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 90, "method": "pair/open", "params": {"file": "$ROOT/project/README", "kind": "normal"}}}
+{"do": "expect", "conn": "e", "json": {"id": 90, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-gemini", "cwd": "$ROOT/project"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "provider:whole-diff README"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "pair-read", "data": {"req": "$capture:r", "file": "$ROOT/project/README"}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "pair/read-answer", "params": {"req": "$r", "text": "readme\nunsaved\n", "version": 4}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "pair-apply", "data": {"write": "$capture:w", "session": "$sid", "file": "$ROOT/project/README", "version": 4, "edits": [{"kind": "lines", "line": 3, "delete": 0, "text": "edited by ratatoskr-mock\n"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "pair/answer", "params": {"write": "$w", "result": "applied", "version": 5, "saved": true}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": true}}
+{"do": "poll", "conn": "c", "json": {"id": 3, "method": "agents/get", "params": {"id": "$sid"}}, "expect": {"id": 3, "result": {"session": {"status": "idle"}, "entries": {"$contains": [{"type": "tool", "status": "completed", "kind": "edit"}]}}}, "within_ms": 20000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/send", "params": {"id": "$sid", "text": "call:edit_file {\"path\": \"$ROOT/project/README\", \"old\": \"unsaved\", \"new\": \"saved\"}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "pair-apply", "data": {"write": "$capture:w2", "edits": [{"kind": "replace", "old": "unsaved", "new": "saved"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "pair/answer", "params": {"write": "$w2", "result": "applied", "version": 6, "saved": true}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": true}}
+{"do": "poll", "conn": "c", "json": {"id": 5, "method": "agents/get", "params": {"id": "$sid"}}, "expect": {"id": 5, "result": {"session": {"status": "idle"}, "entries": {"$contains": [{"type": "agent", "text": "call: applied in the editor and saved"}]}}}, "within_ms": 20000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "cat $ROOT/project/README"], "expect_code": 0, "expect_stdout": "readme\n"}

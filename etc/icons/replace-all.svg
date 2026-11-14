@@ -1,0 +1,6 @@
+<!-- drgnx's own (the Search view's approved mockup, search-view.html `i-replace-all'), drawn as Lucide's are -->
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M14 4h6v6" />
+  <path d="M20 4l-7 7" />
+  <rect width="8" height="8" x="3" y="13" rx="1" />
+</svg>

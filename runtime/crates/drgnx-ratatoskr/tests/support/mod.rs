@@ -48,6 +48,12 @@ impl Root {
         if let Ok(path) = std::env::var("PATH") {
             v.push(("PATH".into(), path));
         }
+        // the pack-built grammars the run was pointed at (test/packs/hub-grammars.sh): a hub parses code with them
+        for k in ["DRGNX_PACK_LOCK", "DRGNX_PACK_GRAMMARS"] {
+            if let Ok(x) = std::env::var(k) {
+                v.push((k.into(), x));
+            }
+        }
         v
     }
 
@@ -248,33 +254,9 @@ impl Client {
     }
 }
 
-/// `ratatoskr-mock`, beside this test's own directory (`<target dir>/<profile dir>`); built once when it is not there.
+/// `ratatoskr-mock`, in the test build's profile folder ([`skuld::profile_dir`]); built once when it is not there.
 pub fn mock_binary() -> PathBuf {
-    let exe = std::env::current_exe().unwrap();
-    let dir = exe.parent().unwrap().parent().unwrap();
-    let bin = dir.join("ratatoskr-mock");
-    if !bin.exists() {
-        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-        let profile = dir.file_name().unwrap().to_str().unwrap();
-        let profile = if profile == "debug" { "dev" } else { profile };
-        let ok = Command::new(cargo)
-            .args([
-                "build",
-                "-p",
-                "domr",
-                "--bin",
-                "ratatoskr-mock",
-                "--profile",
-                profile,
-            ])
-            .arg("--target-dir")
-            .arg(dir.parent().unwrap())
-            .status()
-            .unwrap()
-            .success();
-        assert!(ok && bin.exists(), "ratatoskr-mock is not built");
-    }
-    bin
+    skuld::workspace_bin_built("domr", "ratatoskr-mock", None)
 }
 
 pub fn ping(socket: &Path) -> bool {
@@ -302,8 +284,12 @@ pub fn ping(socket: &Path) -> bool {
 
 /// The end of a child's exec, as a state a test can wait for.  `Command::spawn` can return while the child is still
 /// the forked copy of this test binary, so `/proc/PID/exe` names the test until the exec; the child holds a close-on-exec
-/// end of a pipe, which closes at the exec.
-pub struct ExecHandshake(std::io::PipeReader);
+/// end of a pipe, which closes at the exec. On Linux (7.2) the close-on-exec files close before `/proc/PID/exe` names the
+/// new image (seen on 1 child in 6000-8000 when 8 threads spawn at once), so the wait then also waits for that.
+pub struct ExecHandshake(
+    std::io::PipeReader,
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))] u32,
+);
 
 impl ExecHandshake {
     /// Spawn CMD; the handshake ends when the child has exec'd.
@@ -311,12 +297,22 @@ impl ExecHandshake {
         let (reader, writer) = std::io::pipe()?;
         let child = cmd.spawn()?;
         drop(writer);
-        Ok((child, ExecHandshake(reader)))
+        let pid = child.id();
+        Ok((child, ExecHandshake(reader, pid)))
     }
 
-    /// Block until the child has exec'd.
+    /// Block until the child has exec'd and `/proc/PID/exe` names its new image.
     pub fn wait(mut self) {
         let mut sink = Vec::new();
         std::io::Read::read_to_end(&mut self.0, &mut sink).unwrap();
+        // past the exec's point of no return: the image change follows (the deadline only bounds a failure)
+        #[cfg(target_os = "linux")]
+        {
+            let me = std::fs::read_link("/proc/self/exe").unwrap();
+            skuld::wait_until("the child's /proc/PID/exe naming its new image", 10, || {
+                (!std::fs::read_link(format!("/proc/{}/exe", self.1)).is_ok_and(|exe| exe == me))
+                    .then_some(())
+            });
+        }
     }
 }

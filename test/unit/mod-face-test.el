@@ -5,6 +5,7 @@
 (load (expand-file-name "modules/ui/drgnx-face" drgnx-dir) nil t)
 (load (expand-file-name "modules/core/drgnx-basics" drgnx-dir) nil t)   ; New Untitled
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/measure-fixture" drgnx-dir) nil t)
 (defvar drgnx-untitled-p)
 
 (defvar drgnx-face-test--state nil "The temp directory that is the state directory while a test runs.")
@@ -55,7 +56,9 @@ too, no stubs — and turned off after, strictly: the state after equals the sta
          (values (mapcar (lambda (v) (cons v (default-value v))) drgnx-face-test--defaults))
          (frame (mapcar (lambda (p) (cons p (frame-parameter nil p))) '(menu-bar-lines vertical-scroll-bars)))
          (frame-alist (copy-alist default-frame-alist))
-         (remap (lookup-key global-map [remap menu-bar-open])))
+         ;; the remapping, not `lookup-key': with no remap in the global map yet, it answers 1 (key too long), and an
+         ;; empty remap map left after one answers nil, though neither binds anything
+         (remap (command-remapping 'menu-bar-open nil global-map)))
     (should-not tab-bar-mode)
     (drgnx-face-test--settings
       (drgnx-test-with-modules '(ui/face) :strict t
@@ -81,13 +84,22 @@ too, no stubs — and turned off after, strictly: the state after equals the sta
                                        (should-not (or tab-bar-mode drgnx-statusbar-mode drgnx-close-mode window-divider-mode))
                                        (should-not (or drgnx-face--active drgnx-quickhelp--active drgnx-topline--active))
                                        (should-not (drgnx-timer-active-p 'quickhelp-hover))
-                                       (should (equal (lookup-key global-map [remap menu-bar-open]) remap))
+                                       (should (equal (command-remapping 'menu-bar-open nil global-map) remap))
                                        (should (equal (mapcar (lambda (f) (cons f (get f 'face-defface-spec))) drgnx-face-test--faces) specs))
                                        (should (equal (mapcar (lambda (v) (cons v (default-value v))) drgnx-face-test--defaults) values))
                                        (should (equal (mapcar (lambda (p) (cons p (frame-parameter nil p))) '(menu-bar-lines vertical-scroll-bars))
                                                       frame))
                                        (should (equal default-frame-alist frame-alist)))
                                    (kill-buffer b)))))))
+
+(ert-deftest drgnx-face/an-inline-problem-is-cut-to-the-window ()
+  "M12f-A10-4: an end-of-line problem chip never runs past the window (it would wrap onto a second screen line): its
+text is cut with an ellipsis to the room left after the line's end; a window with room keeps it whole."
+  (should (equal "short" (drgnx-face--eol-fit "short" 20 60)))
+  (let ((cut (drgnx-face--eol-fit (make-string 80 ?x) 20 60)))
+    (should (<= (string-width cut) (- 60 20 4)))
+    (should (string-suffix-p "…" cut)))
+  (should (<= (string-width (drgnx-face--eol-fit (make-string 80 ?x) 58 60)) 8)))   ; never nothing at all
 
 (ert-deftest drgnx-face/on-again-sets-up-what-it-did-first ()
   ;; the flags a teardown clears: on again, the module waits for flymake again and owns the dividers again
@@ -154,7 +166,22 @@ too, no stubs — and turned off after, strictly: the state after equals the sta
     (drgnx-face-test--file-buffer "x.el"
       (should (bound-and-true-p display-line-numbers-mode))
       (should (eq display-line-numbers-width-start t))      ; the number column never grows while typing
-      (should (eq display-line-numbers-grow-only t)))
+      (should (eq display-line-numbers-grow-only t))
+      ;; window-dark.html `.ln .n': 18 px from the numbers to the code, the number's own trailing space and 0.8
+      ;; columns more on a graphical frame (a terminal keeps the one space)
+      (dolist (prefix (list line-prefix wrap-prefix))
+        (should (equal '(when (display-graphic-p) space :width 0.8) (get-text-property 0 'display prefix)))
+        (should (get-text-property 0 'invisible prefix)))
+      ;; on the current line the gap is in the current line's colour, so its band runs unbroken to the numbers
+      (should (memq #'drgnx-face--current-line-gap post-command-hook))
+      (hl-line-highlight)
+      (drgnx-face--current-line-gap)
+      (dolist (prop '(line-prefix wrap-prefix))
+        (let ((gap (overlay-get hl-line-overlay prop)))
+          (should (equal (get-text-property 0 'display gap) (get-text-property 0 'display line-prefix)))
+          (should (eq 'hl-line (get-text-property 0 'face gap))))))
+    (drgnx-face-test--file-buffer "x.txt"
+      (should-not line-prefix))
     (drgnx-face-test--file-buffer "x.conf"
       (should (bound-and-true-p display-line-numbers-mode)))
     (drgnx-face-test--file-buffer "x.txt"
@@ -219,6 +246,57 @@ too, no stubs — and turned off after, strictly: the state after equals the sta
       (setopt drgnx-face-inline-problems t)
       (should (eq flymake-show-diagnostics-at-end-of-line t)))
     (should (eq flymake-show-diagnostics-at-end-of-line before))))   ; flymake's own again, with the module off
+
+(defun drgnx-face-test--eol-text ()
+  "The text flymake shows at the ends of this buffer's lines."
+  (mapconcat (lambda (o) (format "%s" (or (overlay-get o 'display) "")))
+             (seq-filter (lambda (o) (overlay-get o 'flymake--eol-overlay)) (overlays-in (point-min) (point-max)))
+             ""))
+
+(ert-deftest drgnx-face/inline-problems-show-every-problems-words ()
+  "window-dark.html: each problem's words at the end of its line, the warning's (`⚠ Unused lexical variable') as the
+error's, with `short' (the default) and `t'; nil underlines only."
+  (skip-unless (progn (require 'flymake) (boundp 'flymake-show-diagnostics-at-end-of-line)))
+  (drgnx-face-test--with
+    (dolist (setting '(short t nil))
+      (setopt drgnx-face-inline-problems setting)
+      (with-temp-buffer
+        (insert "one\ntwo\n")
+        (setq-local trusted-content :all)             ; Emacs 31 runs no backend in an untrusted buffer
+        (setq-local flymake-diagnostic-functions
+                    (list (lambda (report &rest _)
+                            (funcall report (list (flymake-make-diagnostic (current-buffer) 1 4 :warning "w-one")
+                                                  (flymake-make-diagnostic (current-buffer) 5 8 :error "e-two"))))))
+        (flymake-mode 1)
+        (flymake-start)
+        (let ((text (drgnx-face-test--eol-text)))
+          (should (eq (and (string-search "e-two" text) t) (and setting t)))
+          (should (eq (and (string-search "w-one" text) t) (and setting t))))
+        (flymake-mode -1)))))
+
+(ert-deftest drgnx-face/an-end-of-line-problem-opens-with-its-icon ()
+  "window-dark.html `.diag': the chip opens with its kind's icon (`circle-x', `triangle-alert') in the chip's face, then
+the words; for Emacs's own Flymake (`:eol') and Flymake 1.4's (`:inline-…') alike; the echo area's text has none.
+The text is an overlay's `display' string, whose own display specs Emacs does not draw, so the icon is its glyph (text)
+on a graphical frame too, and nothing in it is a display spec."
+  (require 'flymake)
+  (drgnx-face-test--with
+    (with-temp-buffer
+      (insert "one\ntwo\n")
+      (pcase-dolist (`(,type ,icon) '((:error circle-x) (:warning triangle-alert)))
+        (let* ((d (flymake-make-diagnostic (current-buffer) 1 4 type "the words"))
+               (face (flymake--lookup-type-property type 'eol-face))
+               cap)
+          (dolist (dest '(:eol :inline-short :inline-eol))
+            (let ((s (cl-letf (((symbol-function 'display-graphic-p) #'always)
+                               ((symbol-function 'image-type-available-p) #'always))
+                       (setq cap (drgnx-face-glyph icon)) ; the graphical frame's glyph
+                       (flymake--format-diagnostic d dest 'eol-face))))
+              (should (string-prefix-p (concat cap " ") s))
+              (should (string-suffix-p "the words" s))
+              (should (eq face (get-text-property 0 'face s)))
+              (should-not (text-property-not-all 0 (length s) 'display nil s))))
+          (should-not (string-prefix-p cap (flymake--format-diagnostic d :help-echo 'echo-face))))))))
 
 (ert-deftest drgnx-face/line-spacing-follows-the-setting ()
   (let ((line-spacing nil))
@@ -285,6 +363,27 @@ too, no stubs — and turned off after, strictly: the state after equals the sta
   (with-temp-buffer
     (setq major-mode 'drgnx-start-mode)
     (should (equal (drgnx-face-frame-title) "drgnx"))))
+
+(ert-deftest drgnx-face/a-redisplay-that-changes-nothing-reuses-the-frame-title ()
+  "Pattern D.  The title is formatted on every redisplay: with the same buffer, file, folder and project cache it is
+the string made last, and allocates nothing; a renamed buffer or another project makes it again."
+  (drgnx-test-compile "drgnx-face-")
+  (with-temp-buffer
+    (setq buffer-file-name "/x/proj/src/main.rs" default-directory "/x/proj/src/")
+    (setq-local drgnx-chrome--root (cons "/x/proj/src/" "/x/proj/"))
+    (let ((title (drgnx-face-frame-title)))
+      (should (equal title "main.rs — proj — drgnx"))
+      (should (eq title (drgnx-face-frame-title)))
+      (should (= 0 (drgnx-test-alloc (drgnx-face-frame-title))))
+      (setq-local drgnx-chrome--root (cons "/x/proj/src/" "/x/other/"))
+      (should (equal (drgnx-face-frame-title) "main.rs — other — drgnx"))
+      (setq buffer-file-name "/x/proj/src/lib.rs")
+      (should (equal (drgnx-face-frame-title) "lib.rs — other — drgnx"))))
+  (with-temp-buffer
+    (rename-buffer "one" t)
+    (let ((title (drgnx-face-frame-title)))
+      (rename-buffer "two" t)
+      (should-not (equal title (drgnx-face-frame-title))))))
 
 (ert-deftest drgnx-face/the-frame-title-setting-leaves-your-own-alone ()
   (let ((frame-title-format drgnx-face--stock-title))
@@ -372,7 +471,9 @@ too, no stubs — and turned off after, strictly: the state after equals the sta
       (should (string-match-p "\\`[[:ascii:]]+\\'" (cdr g)))))
   ;; no two glyphs share an ASCII form: on a terminal that is not UTF-8 each still says which it is
   ;; (the meanings the UI kit added -- fail, stopped, dismiss, unqueue, info, warn -- may look like an older one)
-  (let ((ascii (mapcar #'cddr (seq-remove (lambda (g) (memq (car g) '(fail stopped dismiss unqueue info warn)))
+  ;; nor the glyphs of the icons (`drgnx-ui--icon-glyphs'): they stand in for a picture
+  (let ((ascii (mapcar #'cddr (seq-remove (lambda (g) (or (memq (car g) '(fail stopped dismiss unqueue info warn))
+                                                          (assq (car g) drgnx-ui--icon-glyphs)))
                                           (default-value 'drgnx-face-glyphs)))))
     (should (= (length ascii) (length (delete-dups (copy-sequence ascii))))))
   (should (equal (cdr (alist-get 'flag drgnx-face-glyphs)) "#"))
@@ -494,7 +595,8 @@ The frame is the batch one; its parameters are put back afterwards."
 (ert-deftest drgnx-face/title-follows-the-theme ()
   (drgnx-face-test--settings
     (drgnx-face-test--frame 'pgtk 'dark
-      (should (eq drgnx-face-title-bar 'dark))
+      (should (eq drgnx-face-title-bar 'auto))                       ; dark here: no Nidhogg shell
+      (should (eq 'dark (drgnx-face--title-bar (selected-frame))))
       (should (eq (drgnx-face-title-variant) 'dark))
       (set-frame-parameter nil 'background-mode 'light)
       (should (eq (drgnx-face-title-variant) 'light))

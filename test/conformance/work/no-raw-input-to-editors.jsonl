@@ -1,0 +1,23 @@
+{"scenario": "work/no-raw-input-to-editors", "requires": ["v1", "test-hooks"], "doc": "A Write of 1 MB: the editor that subscribed to the session's entries gets the tool entry without rawInput (no editor-bound line holds it), and asks agents/tool-input for the input, which comes back capped at 256 KiB and marked truncated. A call for a tool that does not exist is refused."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "agents/entries/subscribe", "params": {"session": "$sid"}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"seq": "$number"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "tool:write 1000000"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-entries", "data": {"id": "$sid", "entries": {"$contains": [["$any", {"type": "tool", "id": "$capture:tid", "title": "Write big.txt", "status": "completed"}]]}}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"status": "idle"}}}, "within_ms": 10000}
+{"do": "count_events", "conn": "e", "for_ms": 300, "lacks": "rawInput"}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/tool-input", "params": {"session": "$sid", "tool_call": "$tid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"raw_input": "$string", "truncated": true}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/tool-input", "params": {"session": "$sid", "tool_call": "nope"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "error": {"code": "invalid-params"}}}

@@ -575,13 +575,18 @@ binding are taken off afterwards."
          (md (lambda (s) (if (string-search "`" s) (format "`` %s ``" s) (format "`%s`" s))))
          (table (tty-fallback-test--table "VS Code")))
     (pcase-dolist (`(,chord . ,row) table)
-      (should (equal (list chord t)
-                     (list chord (and (string-match-p
-                                       (format "^| %s | [^|\n]+ | %s | %s |$" (regexp-quote (funcall md chord))
-                                               (regexp-quote (if (plist-get row :alt) (funcall md (drgnx-tty-fallback-label (plist-get row :alt))) "—"))
-                                               (regexp-quote (funcall md (drgnx-tty-fallback-label (plist-get row :prefix)))))
-                                       section)
-                                      t)))))
+      ;; a row without its Alt+Shift key says why the key was not free (macOS's run left C-S-d without M-D)
+      (ert-info ((let ((alt (drgnx-tty-fallback--alt-of (aref (key-parse chord) 0))))
+                   (format "%s: %S; %s: %s" chord row alt
+                           (and alt (drgnx-tty-fallback--why-not alt tty-fallback-test--defaults
+                                                                 (tty-fallback-test--keys "VS Code"))))))
+        (should (equal (list chord t)
+                       (list chord (and (string-match-p
+                                         (format "^| %s | [^|\n]+ | %s | %s |$" (regexp-quote (funcall md chord))
+                                                 (regexp-quote (if (plist-get row :alt) (funcall md (drgnx-tty-fallback-label (plist-get row :alt))) "—"))
+                                                 (regexp-quote (funcall md (drgnx-tty-fallback-label (plist-get row :prefix)))))
+                                         section)
+                                        t))))))
     (should (= (length table) (with-temp-buffer (insert section) (how-many "^| `" (point-min) (point-max)))))))
 
 (ert-deftest drgnx-tty-fallback/facts-for-the-doctor ()

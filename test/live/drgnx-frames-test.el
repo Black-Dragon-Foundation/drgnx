@@ -13,7 +13,7 @@
           (s (progn
                (dolist (f '("README.md" "a.txt" "b.txt")) (make-directory project t)
                        (write-region (format "%s\n" f) nil (expand-file-name f project) nil 'silent))
-               (drgnx-ui-start "drgnx" "1400x800" 30)))
+               (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1400x800") 30)))
           (,sess (drgnx-ui-own-session (plist-get s :name))))
      (unwind-protect
          (progn
@@ -69,7 +69,8 @@
     ;; Open in New Window: the same buffer in both; closing its tab in one keeps it in the other (RF4).
     (drgnx-frames-test--eval sess "(progn (select-frame-set-input-focus kx-f1) (drgnx-frames-open-editor) t)")
     (drgnx-ui-measure sess nil)
-    (should (= 3 (drgnx-frames-test--eval sess "(length (frame-list))")))
+    ;; three windows; the echo box and the popup lane are child frames
+    (should (= 3 (drgnx-frames-test--eval sess "(length (seq-remove #'frame-parent (frame-list)))")))
     (drgnx-frames-test--eval sess "(progn (drgnx-chrome-close-tab) t)")
     (should (member "README.md" (drgnx-frames-test--eval sess "(with-selected-frame kx-f1 (mapcar #'buffer-name (drgnx-chrome-tabs (car (drgnx-groups-list)))))")))
     ;; Move Editor Group to New Window: frame 1's second group (b.txt) moves with its tabs.
@@ -102,7 +103,7 @@
     (dolist (f '("README.md" "a.txt")) (make-directory project t)
             (write-region "x\n" nil (expand-file-name f project) nil 'silent))
     (unwind-protect
-        (let* ((s (drgnx-ui-start "drgnx" "1400x800" 30)) (sess (drgnx-ui-own-session (plist-get s :name))))
+        (let* ((s (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1400x800") 30)) (sess (drgnx-ui-own-session (plist-get s :name))))
           (drgnx-ui-call sess (format "(progn (setq drgnx-persist-file %S)
                                          (find-file %S) (drgnx-chrome-apply nil t)
                                          (find-file %S) (drgnx-chrome-apply nil t)
@@ -112,7 +113,7 @@
           (drgnx-ui-measure sess nil)
           (drgnx-ui-stop (plist-get s :name))
           (should (= 2 (length (plist-get (with-temp-buffer (insert-file-contents file) (read (current-buffer))) :frames))))
-          (let* ((s2 (drgnx-ui-start "drgnx" "1400x800" 30)) (sess2 (drgnx-ui-own-session (plist-get s2 :name))))
+          (let* ((s2 (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1400x800") 30)) (sess2 (drgnx-ui-own-session (plist-get s2 :name))))
             (unwind-protect
                 (progn
                   (drgnx-ui-call sess2 (format "(progn (setq drgnx-persist-file %S) (drgnx-persist-restore) (drgnx-uitest--json (list :ok t)))" file))

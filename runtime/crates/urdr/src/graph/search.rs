@@ -664,4 +664,39 @@ mod tests {
         );
         assert_eq!(scale, 1.0 / 127.0);
     }
+
+    /// Pattern D. Two embedders write a vector for one entity: each keeps its own, a model lacks a vector only until it
+    /// has written one, and a third write of the first model replaces only the first's.
+    #[test]
+    fn two_models_keep_their_own_vectors() {
+        let mut c = db();
+        let a = put(&mut c, "a", Some("alpha"), None);
+        let put_vec = |c: &mut Connection, model: &str, v: &[f32]| {
+            let mut tx = Tx::for_test(c, TxMeta::new("user", Class::User, "test"), Arc::default());
+            vec_put(&mut tx, a, model, v).unwrap();
+            tx.commit_for_test().unwrap();
+        };
+        put_vec(&mut c, "server", &[1.0, 0.0]);
+        put_vec(&mut c, "builtin", &[0.0, 1.0]);
+        let count: i64 = c
+            .query_row("select count(*) from entity_vec where n = ?1", [a], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(
+            count, 2,
+            "the second embedder's vector replaced the first's"
+        );
+        assert!(vec_stale(&c, "server", 10).unwrap().is_empty());
+        assert!(vec_stale(&c, "builtin", 10).unwrap().is_empty());
+        put_vec(&mut c, "server", &[0.5, 0.5]);
+        let models: Vec<String> = c
+            .prepare("select model from entity_vec where n = ?1 order by model")
+            .unwrap()
+            .query_map([a], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(models, ["builtin", "server"]);
+    }
 }

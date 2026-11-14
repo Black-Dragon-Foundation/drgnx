@@ -18,10 +18,15 @@
            :tty (list (frame-width tty) (frame-height tty)
                       (mapcar (lambda (w) (list (buffer-name (window-buffer w)) (window-edges w)))
                               (window-list tty 'nomini)))
+           ;; under Glitnir the popup lane floats in a child frame: the frame it belongs to is the child's root
            :transient (let ((w (get-buffer-window " *transient*" t)))
-                        (and w (if (eq (window-frame w) gui) 'gui 'tty)))))
-  "A form, in the daemon: the graphical frame's and the terminal frame's windows with buffers and edges, and
-which frame (`gui' or `tty') shows the transient menu, if any.")
+                        (and w (let ((f (window-frame w)))
+                                 (while (frame-parent f) (setq f (frame-parent f)))
+                                 (if (eq f gui) 'gui 'tty))))
+           :floating (let ((w (get-buffer-window " *transient*" t)))
+                       (and w (frame-parent (window-frame w)) t))))
+  "A form, in the daemon: the graphical frame's and the terminal frame's windows with buffers and edges, which
+frame (`gui' or `tty') shows the transient menu, if any, and whether it shows in a child frame of it.")
 
 (defun drgnx-tty-mixed-test--wait (gui form &optional timeout)
   "FORM's value in the daemon once it is non-nil (`drgnx-test-wait', at least 30 s or TIMEOUT); else fail with FORM and
@@ -93,7 +98,8 @@ window is driven by calls, the terminal window by real keys."
       (let ((during (drgnx-tty-mixed-test--state gui)))
         (should (eq (plist-get during :transient) 'gui))
         (should (equal (plist-get during :tty) (plist-get before :tty)))
-        (should-not (equal (plist-get during :gui) (plist-get before :gui))))
+        ;; in a window of the graphical frame, or floating above it
+        (should (or (plist-get during :floating) (not (equal (plist-get during :gui) (plist-get before :gui))))))
       (drgnx-tty-mixed-test--in-gui gui '(progn (transient--emergency-exit) t))
       (drgnx-tty-mixed-test--wait gui '(null (get-buffer-window " *transient*" t)))
       (should (equal (drgnx-tty-mixed-test--state gui) before))

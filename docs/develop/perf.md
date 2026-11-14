@@ -7,6 +7,7 @@ drgnx is measured, not guessed at: every interaction it cares about is timed in 
 drgnx test --perf           every workload; fails when a gated budget (allocation, CPU, rows) breaks; wall clock is reported;
                             what got worse than the local history is printed
 drgnx test --perf --audit   the workloads with every hook function timed: judged on the hook budget only
+                            (also `drgnx test --container --perf --audit`, on the lab image)
 drgnx test --soak [MIN]     the input workloads in a loop for MIN minutes (30); fails when memory grows
 drgnx test --day [MIN]      the synthetic day (below): a pinned session of files, Org, eglot, vc-git and transcript replays
 DRGNX_STARTUP_TRACE=FILE    emacs --init-directory …/init: where startup time goes, written to FILE
@@ -14,6 +15,9 @@ DRGNX_PERF_WORKLOADS='A B'  only those workloads (space-separated names from the
                             A partial run is judged against its own budgets and writes no history line
 DRGNX_PERF_RESULTS=FILE     write the results as JSON: every metric (wall clock included), each workload's calibration,
                             the Emacs version and the commit
+DRGNX_RATATOSKR_STALL_FILE=FILE  the workloads' hubs append their stall reports to FILE (hub.md, the stall watchdog);
+                            `--container` mounts its folder at /stall; DRGNX_RATATOSKR_STALL_MS=MS their threshold
+                            (a test-hooks hub's default: 250)
 DRGNX_UI_SIZE=WxH           the perf sessions' monitor size (default 1400x800); DRGNX_UI_SCALE=S their scale (a session
                             that cannot apply it fails to start: exit 1, nothing measured)
 DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the three evil workloads
@@ -23,47 +27,78 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 
 | Workload | What it does | Measured |
 |---|---|---|
-| typing | 186 characters into the middle of a ~12k-line Emacs Lisp file | input latency (p50/p95/max), GC count, time and each pause |
+| typing | 186 characters into the middle of a ~140k-line Emacs Lisp file | input latency (p50/p95/max), GC count, time and each pause |
 | scrolling | 30 pages down and up in the same file | input latency |
 | tabs | 20 next-tab switches among 20 open files | input latency |
-| explorer | focus the Explorer, 10 rows down (each one moves), back | input latency |
-| agent-typing | typing while an agent streams a reply into the Agents tab: a `ratatoskr-mock acp` in a Ratatoskr hub, the editor's session a mirror of the hub's (see "The agent workloads" below); the turn takes three seconds (checked: its `stop` entry is not in the mirror yet at the end) | input latency |
-| transcript-replay | the typing workload's six strings while the editor's other window shows a transcript fed from a recording by a timer at the recorded pace (no agent; checked: chunks arrived while typing); runs in the container | input latency |
-| agent-stream | the typing workload's six strings while the editor's other window shows a transcript whose running answer starts 400 kB long (not done) and the hub's mock streams 100-character chunks onto it, 50 a second, for thirty seconds (checked: still streaming at the end): a chunk costs the chunk, and only the new text is drawn | input latency |
-| cockpit-cards | typing while the Work cockpit is filtered to a job (Show Job in Work: the graph, and What needs you with four cards, three tasks and their agents; twenty decisions) and three hub mock agents stream, the panes following the hub's events (checked: still streaming at the end); until M12f `job-window`, the job's own frame | input latency |
+| explorer | focus the Explorer, 10 rows down (each one moves), back. On the hub's rows a key costs 3286 objects (p50; the Lisp listing's 2509): Sjá's navigation hands back fresh Lisp values each key (the selection's id, the class changes) and the selected row's tail is drawn again in the selection's face | input latency |
+| agent-typing | typing while an agent streams a reply (the Agents list is shown): a `ratatoskr-mock acp` in a Ratatoskr hub, the editor's session a mirror of the hub's (see "The agent workloads" below); the turn takes three seconds (checked: its `stop` entry is not in the mirror yet at the end) | input latency |
 | code-scrolling | `<next>`×30 then `<prior>`×30 through the 12k-line fixture with sticky scroll and indent guides (when installed) on — smooth scrolling is on but pixel scrolling is a wheel's, not `<next>`'s | input latency |
+| debug-gutter-scroll | as code-scrolling (without sticky scroll and guides), hunks' margin claimed (a file that shows hunks), with the breakpoint column on and 300 breakpoints of every kind and the hover pool laid out (the hub answered by a store in the session) | input latency; p50 at most the larger of 5 % and 0.3 ms over debug-gutter-baseline in the same run (`drgnx-perf-run--relative-fails`, judged when both ran) |
+| debug-gutter-baseline | the same file and keys with hunks' margin and the breakpoint column claimed and empty, the column off: what a user sees when a session starts in a file that shows hunks (see "The breakpoint column's margin" below) | — (the 5 % rule's base) |
+| debug-ruler-baseline | debug-ruler-scroll with the ruler off (`drgnx-debug-overview-ruler`): the same narrowing, breakpoints, column and keys (see "The overview ruler" below) | — (the ruler's rule's base) |
+| debug-ruler-scroll | the fixture narrowed to its first 10,000 lines with 200 breakpoints (one every 50 lines) in the column and the overview ruler (Nidhogg's `glitnir-ruler`: its check needs the feature), scrolled as debug-gutter-scroll | input latency; p50 at most the larger of 5 % and 0.3 ms over debug-ruler-baseline in the same run |
+| debug-edges-scroll | debug-gutter-baseline's file and keys with 200 edges in the window's `glitnir-edges` (Nidhogg's edges: one every 50 lines, three lines down with two bends and an arrow; its check needs Nidhogg's `glitnir--edges`) | input latency; p50 at most the larger of 5 % and 0.3 ms over debug-gutter-baseline in the same run |
+| debug-breakpoint-click | F9 then `<down>`, 20 times: each a `debug/breakpoints` add answered at once and the column redrawn | input latency |
+| debug-step-line | the 12k-line fixture, then F10 120 times: each one `debug-frame` (a step's stop, sent to the starting editor) for the next line, the arrow and band moved, point placed, the window scrolled only when the line left it | input latency; within 16 ms p95 (spec §5) |
+| debug-inline | the 12k-line fixture with five breakpoints (three on the lines shown), the column and the overview ruler on, stopped at line 200, then F10 120 times: each one `debug-inline` as the hub sends it for a step (twelve lines' values, two changed), the lines that keep values updated in place, the next added, the oldest gone | input latency; within 2 ms p95 (spec §8, §12) |
+| debug-inline-heavy | debug-inline in the fixture with 200 breakpoints (one every 60 lines): the column's hover pool and the ruler's 200 marks drawn again with each step | input latency; within 4 ms p95 |
+| debug-toolbar-show | F8 120 times, alternating a `debug-state` with one stopped session and one with none: the toolbar's card shown and hidden (made once, then reused), the status bar's segment and the Paused chip with it | input latency; within 5 ms p95 (spec §12) |
+| debug-step-variables | the Run and Debug view (no hub: the hub's model and rows from the workload) with 300 variables and a 10,000-element list in 100 chunks, then F10 120 times: each a step's model diff and rows patch, ten values changed, drawn | input latency; within 30 ms p95 with the hub's half, the bench `debug_view` (spec §7) |
+| debug-expand-chunks | the view on a hub (`$DRGNX_RATATOSKR_BIN`, a test-hooks build) whose mock adapter (`ratatoskr debug-mock`) is stopped with 300 variables and a 10,000-element list, open on its 100 chunks; F8 100 times: the next chunk opened from its row (`debug/expand`, the adapter's page, the hub's rows), drawn in the key's command | input latency; within 15 ms p95 (spec §7) |
+| view-remove-above | any hub-fed view, here the Run and Debug view's stand-in grown to 6,400 rows (two align stops each, as the hub's rows have), a call-stack frame selected, a row named in Hebrew, the side window at the end; F8 100 times: a page of 100 rows far above the window removed and one added at the end (model and rows), drawn. The check: no overlay per row, paragraphs left to right, the Hebrew row reordered | input latency within 16 ms p95; allocation, CPU and rows set from three pinned runs, like the debug rows (redisplay included: a patch above the window never walks the buffer) |
+| view-select-dim | the same view; F8 100 times: the frame selected and searched for, every other row dim, or neither (the class step over 6,400 rows; dim is drawn over runs of whole rows). The check as above: the overlays are bounded by the runs, not the rows | input latency within 16 ms p95; allocation, CPU and rows set from three pinned runs, like the debug rows |
+| debug-console-flood | the debug console in a bottom window, F8 160 times: the next of 160 batches of a program's output as the hub sends them (64 KiB, 640 lines of 100 characters, every tenth coloured; 10 MB in all), inserted with the 10,000-line cap | input latency; within 16 ms p95 (spec §10: no command waits past a frame) |
+| debug-probe-flood | ten probes on the fixture (recorded runs), then `<f8>` 40 times: each one batch of probe hits as the hub sends them at 2,000 hits a second (100 hits every 50 ms), the line ends' sparklines drawn (the hub answered in the session) | input latency; the batch to the sparklines within 100 ms (spec §19.9) |
+| debug-bisect-typing | `<f7>` 40 times beside a bisect's card: each a character typed and a `debug-bisect` event (the card's rows: a head, nine dots, the result and its actions) drawn, as a 3-way bisect's slots end | input latency; keystroke p95 under 16 ms while a bisect runs (spec §19.9) |
+| debug-scrub | the stop timeline of a 60-stop run, then `Alt ←` 30 times: each a past stop opened from the hub's answer (its capture and a 2,000-line file as it ran) and drawn with its banner, line and variables | input latency; within 50 ms (spec §19.9) |
 | diff-scrolling | `<next>`×30 then `<prior>`×30 through a 10k-line diff in the split layout | input latency |
 | typing-with-ghost | the typing workload with ghost text on: a mock model answers every pause at once, the pause shortened to 10 ms so each key asks and the next cancels (checked: it asked) | input latency |
-| replace-typing | 22 characters into the fixture while the Search view lists 10k matches in 100 files: the first key starts the search (checked: at least 5 keys typed while it streamed, all 10k listed) | input latency, and `:slice_ms`: the wall time of each view draw while the matches stream (budget: max 16 ms) |
-| replace-retype | the same 10k matches listed and drawn, then the string `pi` typed 5 times into the Replace field: after the pause each match row is patched with its new preview, in slices, the visible rows first (checked: no full draw, the rows equal a fresh render of the view's keys) | input latency, and `:slice_ms`: the wall time of each view draw (`drgnx-view--draw-buffer`, timed by a harness-side advice; budget: max 6 ms) |
-| live-view | the typing workload's 186 characters while the Live view, beside the file, shows a mock browser's JPEG frames as wide as the view asked for (as Chrome sends them), 30 a second, each sent once the last was acknowledged (the mock runs in the same Emacs, so its message and websocket frame are made once; without ImageMagick the frames are a few bytes no decoder takes, so drawing costs less) (checked: frames were drawn) | input latency |
+| replace-typing-rows | 22 characters into the fixture while the Search view lists 10k matches in 100 files, the hub searching and streaming the matches as rows (a hub of the workload); the first key starts the search (checked: all 10k found, from `search-grep-done`; the hub sends a window of 200 rows, so the check asks for no minimum of keys typed while it streams) | **Whole operation** (`:complete-kb`, `:complete-cpu_ms`, report-only until the combined pass; measured with `replace-typing` in one session, pinned, on the line image; budgets 16800 kB, 400 ms after the model's lists went out as splices and the line height was read once per pass: 15249-15410 kB, 330-337 ms with `+nidhogg-workers-framing`, 26910 kB, 448 ms without it): old path 76189 kB, 391 ms; hub path 200012 kB, 2887 ms while the hub sent every row and a model per file, 17771 kB, 353 ms with the window (`search/grep-look`) and the model sent as it doubles, then 15.3 MB, 334 ms once a changed list is sent as a splice (the model on the wire is 6.45 MB in 9 sends, from 7.63 MB; a send per file batch was 24 MB and 1735 ms, the editor redisplaying on each; the hub then rebuilt and diffed the whole
+model per batch).  Since the model is appended and sent at most once per 100 ms (2026-11-10, pinned, medians of 3):
+framing on 9035 kB, 199 ms; off 14694 kB, 297 ms; six model lines.  The model's cadence is reported too:
+`:model_lag_ms` (stats: from the oldest model line not yet applied to the drain that applied it; a model the rows
+don't name waits one frame after a quiet spell, `drgnx-view-first-delay`, else up to one throttle, `drgnx-view-delay`) and `:cadence` (`:passes` redisplay passes from the first key to the
+end, `:model_passes` those whose last hub input was a model line alone, `:model_windows` the windows those redrew,
+`:model_lines`, `:model_bytes`).  The per-key rows below stay as they were, report-only.  `:alloc :p50` 4134 objects per command (a tenth of `replace-typing`'s 41340, the plan's target), `:cpu_ms :p90` 4.0, `:rows` 1, all report-only until the render offload's combined pass.  Measured once (2026-11-08, Nidhogg's line image, 4 CPUs): 5996 objects, cpu p90 3.21 ms; `replace-typing` in the same session 6073: the target is not met on this metric, the 41340 follows a slow runner's wall clock (see below).  A memory profile of the rows run (`DRGNX_PERF_PROFILE=1`) puts most of its bytes under `accept-process-output`, but that figure is mostly not the stream being read and parsed: every read of a process makes a 64 KiB buffer (`read-process-output-max`, `SAFE_ALLOCA` in `read_process_output`, above the alloca limit so a malloc) and the memory profiler counts it per read (168.5 MB under it for 1.87 MB of wire in 2817 events is 2817 x 64 KiB; inferred from that arithmetic and the source, not yet counted with `strace`), and on the framed path no JSON is parsed in the filter at all.  Judge heap pressure by `memory-use-counts` (`:alloc`, `:complete-kb`), not by bytes under a profiler frame; the per-key objects are the key command, redisplay and the draw slices between keys, Lisp work on either path |
+| live-view | the typing workload's 186 characters while the Live view, beside the file, shows a mock browser's JPEG frames as wide as the view asked for (as Chrome sends them), 30 a second, each sent once the last was acknowledged (two frames that differ, chosen by the count of frames drawn so that each drawn frame differs from the last, as a page's frames differ, so the last frame can stay cached as the next one's stand-in; the mock runs in the same Emacs, so their messages and websocket frames are made once; without ImageMagick the frames are a few bytes no decoder takes, so drawing costs less) (checked: frames were drawn) | input latency; measured `:live :blank` (redisplays that drew a frame's space with no picture: a decode Nidhogg's image worker deferred, drawn without the last frame as its stand-in; 0 without the worker), `:frames`, `:deferred`, `:timing` (Nidhogg's `nidhogg-workers--test-image-timing`, when the build has it) |
 | agent-settings-open | the Claude Code settings page opened and drawn (`redisplay`) against a fixture home: a 5 MB `.claude.json` (300 projects with history), 50 MCP servers and 200 skills; three runs | milliseconds until drawn (budget 150) and the processes started (budget 0: opening the page starts nothing) |
+| settings-start | `settings.el` with 200 entries (100 of defined options, 100 of packages not loaded; no `:set` functions) read and applied as at a second start; three runs | milliseconds (`:read_ms`, budget 2) |
+| settings-page | the Settings page opened and drawn with 5,000 customizable variables added to the session's own, then the name of one typed into the search a character at a time | `:open_ms` (budget 100), `:key_p50_ms` and `:key_max_ms` (a keystroke with its redisplay; the worst, budget 16), `:key_search_max_ms` (the search without the redisplay) |
+| settings-prov | a 500-line `config.el` (a header, ten `load`s of small libraries, 97 blocks of a function, a managed variable's `setq` and an `add-hook`) loaded plain and with provenance, interleaved, nine rounds | `:prov_pct` (budget 5), `:load_ms`, `:prov_load_ms`, and `:cold_extra_ms` (what the first, uncached load adds) |
+| settings-sync | the settings index written for 200 fixture packages of three files each | `:index_ms` (budget 2000) |
+| settings-open | 30 files in a project with a shared and a private workspace file and a language override, opened with the workspace and language layers in and out, interleaved (the layers are checked to have applied) | `:open_on_ms`, `:open_off_ms` (medians per open) and `:delta_ms`, what the layers add (budget 1) |
 | remote-typing | the typing workload's 186 characters in a local file while the Explorer lists a mock-method root (test/fixtures/tramp-mock.el: a real TRAMP connection to a local `sh`) and its connection is dead, the segment showing it lost (checked: nothing was sent to the remote, the connection stayed dead) | input latency |
-| typing-with-index | the typing workload's 186 characters with the search module on and the drgnx repo's semantic index loaded: the repo indexed into the session's own state dir by a stub embedder (384 numbers per chunk; no provider, no network), read into memory by one query before the keys (checked: the query cache still holds it); the index file is deleted after | input latency |
+| typing-with-index | the typing workload's 186 characters with the search module on and the drgnx repo indexed by the hub (Hrafn): tier 1 is finished before the keys, tier 2 runs while they are typed (checked: the hub still holds the chunks) | input latency |
 | typing-evil | the typing workload with Vim keys: `i`, the same six strings, `<escape>` (checked: typed, back in normal state) | input latency |
 | motions-evil | a 5000-line copy of the fixture, normal state, from the middle: `j`×20, `w`×20, `}`×10, `C-d`×5, `C-u`×5 (checked: point moved) | input latency |
 | explorer-evil | the explorer workload with Vim keys: `SPC E`, `j`×10, `<escape>` | input latency |
 | window-switch | `C-x o` ×50 across three editor groups showing one file, with the left dock, the panel and the right dock shown (checked: the selected window changed 50 times) | input latency |
-| terminal-typing | 6 × 20 characters (`echo hello world 123`) typed into an eat terminal in the panel running `cat` (no shell, so no shell configuration; the tty echoes every key and eat draws it) | input latency |
-| terminal-output | the same 120 characters typed into the fixture while an eat terminal in the panel streams `seq 1 2000` in a loop (checked: the terminal's process is alive, its window is shown and its text changed while typing) | input latency |
+| terminal-typing | 6 × 20 characters (`echo hello world 123`) typed into drgnx's terminal in the panel running `cat` (no shell, so no shell configuration; the tty echoes every key and the hub's terminal worker draws it; the workload starts its own hub, the worker beside it, and runs `tools/term` on it) | input latency |
+| terminal-output | the same 120 characters typed into the fixture while drgnx's terminal in the panel streams `seq 1 2000` in a loop (checked: the terminal is open, its window is shown and its text changed while typing) | input latency; the terminal's draws (`:slice_ms`, `:draw_kb`) and the session's allocation in MB/s (`:alloc_rate`) while it streams |
+| terminal-output-10mb, terminal-output-100mb | `cat` of a 10 MB (100 MB) file of numbered lines in a new terminal in the panel, then a mark; no keys | `:wall_ms` from the start to the mark on screen, the draws and `:alloc_rate` |
+| terminal-echo | terminal-typing end to end with load: the 120 characters typed into a terminal running `cat` in the editor area while 30 mock agents stream (their Work map shown, the 30-agent fixture's hub) and a second terminal in the panel runs the `seq` loop; one hub carries the agents, both terminals and the keys | input latency (the key read to its echo drawn) |
+| terminal-echo-idle | the same with nothing else running | input latency |
+| terminal-flood | the terminal in the panel streams `seq 1 2000` in a loop for 10 s and no key is typed: the measure is only the wait, so a profile (`DRGNX_PERF_PROFILE=1`) shows the stream's decode and the draws | `:alloc_rate` (MB/s), `:gc_count` and `:gc_pause` over the 10 s, the draws (`:slice_ms`, `:draw_kb`); report-only |
+| terminal-backfill | `seq 1 10000` in a new terminal in the panel, timed until the backfill has brought line 1 into the buffer | the draws while it fills (`:slice_ms`); `:lines`, and `:heap_kb` (the live objects a collection finds against before the terminal opened, plus the buffer's text): the 10k terminal's memory, recorded only |
 | frames | 5 new frames until drawn | frame time |
 | redisplay | 30 forced redisplays of the fixture | redisplay time |
 | startup | a drgnx daemon (isolated: its own HOME and drgnx dirs, the harness's environment allowlist) until its server answers (a daemon that never answers fails), 4 starts, the first dropped | server-ready time, modules' time |
-| memory | after the workloads and a GC | RSS |
+| memory | after the workloads, a GC, then one key (`<down>`) and the pause after it, read once the idle collection's timer has given the freed heap back to the system (as it does for a user: `drgnx-gc--idle`) | RSS |
 
-**The agent workloads** (`agent-typing`, `agent-stream`, `cockpit-cards`) run a Ratatoskr hub in the session, as the
+**The agent workload** (`agent-typing`) run a Ratatoskr hub in the session, as the
 user's editor does: `$DRGNX_RATATOSKR_BIN` (a build with the `test-hooks` feature, `ratatoskr-mock` in the same folder;
 without it the workloads fail and say so) is started with a settings file of its own whose profile `mock` is
 `ratatoskr-mock acp --as claude --script FILE`. The script's n-th line is the program of the n-th prompt (`say TEXT`,
-`silent SECONDS`: docs/develop/runtime.md), so a turn is the same whatever the prompt says. The session holds
+`silent SECONDS`: docs/develop/runtime.md), so a turn is the same whatever the prompt says. A prompt past the last
+line runs its own words and ends at once, so a script needs a line for every run one mock serves. The session holds
 mirrors (`drgnx-agents-mirror-start`). The hub tells of a session's state at most every 50 ms, so a short turn can go
 by with no `busy` status: the workloads count the `stop` entries of the transcript to know that a turn has ended (the
-check "typed while it streamed" is a turn that has not ended), never the status. `cockpit-cards` stubs only the job's
-summary (`job/status`); the agents, their events and the panes' reaction to them are the hub's.
+check "typed while it streamed" is a turn that has not ended), never the status. The agents and their events are the hub's.
 
-**Input latency** is a command's start until the screen shows it: a 0 s timer set after the command redisplays
-before it reads the clock (timers can run before the command loop's own redisplay, which would leave fontification
-and mode-line work out). Keys arrive one at a time (the harness), so typed-ahead input — where Emacs skips
+**Input latency** is a command's start until the screen shows it: `post-command-hook` redisplays
+before it reads the clock (which leaves fontification and mode-line work in). The latency ends in the hook, not in a
+0 s timer: under the harness a timer ran at the next paced input event, so input p95 sat at the tick (40.3 ms at the
+0.04 s tick, 30.3 at 0.03; `DRGNX_UITEST_TICK` sets the tick for a probe). Keys arrive one at a time (the harness), so typed-ahead input — where Emacs skips
 redisplay — is not covered; the harness's own recorder runs inside the measured span (small).
 
 **Per command** (`drgnx-perf-begin` / `drgnx-perf-end`), from `pre-command-hook` to the redisplay after the command,
@@ -77,12 +112,64 @@ three numbers are recorded for each of the commands of a workload:
 
 Each is `(:n :p50 :p90 :p95 :p99 :max :mean)` (nearest rank); **`:p95` and `:p99` are null below n = 100**: the tail of
 fewer samples is the maximum or next to it. A run also has `:rows`, the growth of the sum of the row counters
-(`drgnx-perf-row-counters`: the Explorer's and the Buffers panel's renders, the cockpit's draws), `:gc_count`, `:gc_ms`
+(`drgnx-perf-row-counters`: the Explorer's and the Buffers panel's renders), `:gc_count`, `:gc_ms`
 and `:gc_pause`. A perf session runs at drgnx's GC settings, as a user's does (HARNESS-GC-1): the run stops with an error
 when its `gc-cons-threshold` is not `drgnx-gc-cons-threshold`.
 
 Every workload runs three times (each with its own setup, its typing fixture reused, everything it opened closed
 after it) and the median of each number is kept, so one noisy run never decides.
+
+The typing fixture is `core/` three times with one form of the lab's own between two files near its middle
+(`drgnx-perf-run--fixture-spot`); the keys go into that form, six lists deep, the same text in every tree. They used to
+go to the fixture's middle line, which moves whenever a core file is added: on a line with too few lists around it,
+each `(let ((x` typed left a list open past its form, and Emacs Lisp's font-lock (`lisp--el-funcall-position-p`,
+through `forward-sexp`) scanned the rest of the 4 MB file at every key, about one key in five costing 190 to 370 ms,
+in every workload that types into the fixture.
+
+
+## The agents-in-the-editor workloads
+
+`harness/drgnx-perf-agents.el` (the session side: `test/fixtures/agents-editor-five-fixture.el`) measures what agents
+in the editor, the agent panel and pair mode cost the typing of the user. A hub of the workload's own
+(`$DRGNX_RATATOSKR_BIN`, a test-hooks build with `ratatoskr-mock` beside it) runs five mock agents, each in a worktree of
+a repository with one 3,000-line file; each makes an edit and then, a second at a time, a chunk and a read of another
+offset, as the thirty-agent fixture's agents do. The keys are typed into that file in the editor window (the change marks on). A
+workload's setup, `:each` and `:check` call the fixture's premise, which signals when the five agents are not streaming
+and says, in tenths of a second since the start, when each one's status changed, when the follow window began and when
+the file was visited.
+
+| Workload | Situation | Measured |
+|---|---|---|
+| agents-typing | `tools/agents-in-editor` on, a follow window on the second agent | input latency, stalls |
+| agents-typing-none | the same five agents, the module off | input latency, stalls (the baseline) |
+| agents-follow | a follow window moving with an agent while typing, then 20 `<down>` | input latency, stalls |
+| agent-panel-stream | the first agent's panel open while it streams | input latency, stalls |
+| pair-typing | the fifth agent a paired chat writing the file through the drgnx tool | input latency, stalls, `:pair_applied_ratio` |
+
+Budgets (`test/perf/budgets.eld`): input p95 16 ms and `(:stalls) 0` on each. Two rules compare runs
+(`drgnx-perf-run--relative-fails`): `agents-typing` at most 1 ms over `agents-typing-none` in one run, and at least 0.80
+of `pair-typing`'s writes applied. Allocation, CPU and rows follow the first runs on the desktop island. The keys of a
+workload go to the editor window, never to a follow window: its keys stop the follow and take the wheel, and a stray `x`
+or `q` there ended the followed agent's turn (the premise's timeline showed exactly that agent going idle). The paired
+chat of `pair-typing` also writes the whole file from a read the hub never served every 5 s; the hub refuses it whole
+(the plan's U1), so it is no applied write.
+
+`panel-replay` (no keys; session side `test/fixtures/panel-replay-fixture.el`) measures what one update of an agent's
+transcript costs the editor while its panel is shown. A hub of the workload's own runs one mock agent whose first turn
+makes about 1,900 entries at once (an answer and a read, 950 times); its second, sent when the measure starts, streams the
+synthetic day's recording (`test/fixtures/day/transcript.eld`) at 20 updates a second, a read every tenth chunk, so the
+transcript ends near 2,000 entries. The panel shows the session and the mirror holds its transcript. Over 400 updates (at most 40 s) it reports
+`:alloc` (objects the update's event handlers made: the mirror's and the panel's), `:draw_kb` (kB each draw of the panel
+made), `:updates` (`:patches` of them the panel's row patches), `:entries`, `:rows` (the panel's lines) and
+`:hub_rows` (the hub's rows the panel holds). With the hub's rows an update is either the entries
+event (the mirror and the panel's own state) or the panel's `view-patch` (the rows inserted). The paired old-path row
+(`panel-replay-old`) is retired with the path.
+Report-only until the render offload's combined pass.
+
+The conformance rows `editor/cursor-latency` (the hub's virtual clock: a move reaches the watcher within 100 ms) and
+`pair/write-latency` (the clock never advanced: nothing in the write's path waits on a timer) hold the hub's side; the
+GUI scenes `agents-editor-gui/p3-drawn-frame` (agents in the editor) and `p3-agent-panel-scene` (the panel) draw each look
+in the dark, the light and the high-contrast theme at the session's scale (`DRGNX_UI_SCALE` 1 and 2).
 
 ## Vim keys (evil)
 
@@ -114,6 +201,59 @@ filter every budget is judged: a budget whose workload did not run is reported a
 the three `-evil` rows when `DRGNX_MODAL_ELPA` is unset). Naming `typing-evil` without `typing` skips the 1 ms rule
 and the run says so; a filter that is not a valid regexp, or matches no workload, stops the run with a message.
 
+## The breakpoint column's margin
+
+The breakpoint column is a margin column of its own (`drgnx-margins-claim 'debug`, order 0), beside hunks' (order 2),
+not a share of it. So `debug-gutter-scroll` is judged against `debug-gutter-baseline`, a scroll with hunks' column and
+an empty breakpoint column claimed: the cost of the column's contents, not of a wider margin. Measured facts
+(2026-11-12, pinned runs on the desktop's perf island, p50 of 60 keys, three runs):
+
+| row | input p50 | alloc p50 |
+|---|---|---|
+| code-scrolling (no margin) | 4.1–4.2 ms | 3608 |
+| debug-gutter-baseline (margin claimed, empty) | 4.1–4.2 ms | 3608 |
+| debug-gutter-scroll (300 marks, hover pool) | 4.4 ms | 3708 |
+
+- Claiming the margin costs nothing measurable on this machine. On the laptop's island (a scroll frame of ~9 ms) an
+  earlier measurement put it at 0.4–0.5 ms; profiles showed no Lisp frames, only more time in `redisplay_internal`
+  (the margin's glyph rows). It is inside the frame budget; nobody owns a margin fix.
+- The hover pool (a dot string on each shown line without a mark, so a hover can show it) cost ~1 ms a frame on the
+  laptop when it moved with each scroll: ~50 margin strings drawn again, and inheriting `drgnx-ui-text` (the UI font)
+  in the dot allocated ~4.9k objects a frame. A scrolled window now drops its dots and lays them again once it has
+  rested 0.1 s (`drgnx-debug-gutter--settle`): unseen at rest anyway.
+- What is left, 0.2–0.3 ms (5–7 %), is the marks themselves on the shown lines, and it is accepted.
+- The rule is the larger of 1.05× the baseline and the baseline + 0.3 ms. Times come in 0.1 ms steps and the frame is
+  ~4.2 ms, so 5 % (0.2 ms) is two steps: a pure ratio there measures noise (the three runs above read 5 %, 5 % and
+  7 % for the same build). On a slower machine (a ~9 ms frame) the ratio is the larger and rules.
+
+## The overview ruler
+
+`debug-ruler-scroll` is judged against `debug-ruler-baseline`, which differs from it only by the ruler. It used to be
+judged against `debug-gutter-baseline`, which counted two costs that are not the ruler's (2026-11-13, pinned runs on
+the desktop's perf island, p50 of 60 keys, two runs):
+
+| row | input p50 |
+|---|---|
+| debug-gutter-baseline | 4.3, 4.3 ms |
+| the same, narrowed to 10,000 lines | 4.4, 4.5 ms |
+| narrowed, the column's 200 marks on, no ruler (now debug-ruler-baseline) | 4.6, 4.5 ms |
+| debug-ruler-scroll | 4.6, 4.7 ms |
+
+- Narrowing alone costs 0.1–0.2 ms a scroll, and the column's marks another 0.1–0.2 ms (judged by their own row,
+  debug-gutter-scroll). The ruler itself costs 0.0–0.2 ms.
+- A profile shows the difference only in `redisplay_internal`; no Lisp of the column or the ruler is sampled. The
+  hover pool's settle timer plays no part: with it held off the row reads the same.
+- Against its own baseline (three pinned runs): debug-ruler-baseline 4.4, 4.4, 4.4 ms and debug-ruler-scroll 4.7, 4.5,
+  4.6 ms, so the ruler adds 0.1–0.3 ms, inside the rule. Nidhogg's `nhwl_ruler_add` lays the band and one bar a mark
+  at each publish; it is left as it is.
+
+## The debug rows' breakpoints
+
+Every row of the debug setup (`drgnx-perf-run--debug-setup-form`) starts with an empty breakpoint store, and a row that
+needs breakpoints sets its own in `:each`. The store used to carry over from one row to the next, so debug-inline drew
+whatever the row before it left: 1.8–1.9 ms p95 when it ran first in a session, 2.2–2.4 ms after the ruler rows (their
+200 breakpoints, the column and the ruler), while a step that changes nothing read 1.3 ms either way (2026-11-13).
+
 ## Budgets
 
 `test/perf/budgets.eld`: entries `(WORKLOAD PATH LIMIT &rest PLIST)`; `:emacs MAJOR` limits an entry to that Emacs
@@ -125,7 +265,7 @@ not move. A broken one fails the run (`drgnx-perf-verdict`; `--perf` exits 1):
 | Path | Limit | Seeded as |
 |---|---|---|
 | `(:alloc :p50)` | objects allocated per command | measured x 1.25, rounded up |
-| `(:cpu_ms :p50)` (typing, typing-with-ghost, remote-typing) | a normal key: about 30 ms (the p90 sits on the 1-in-10 spike, PERF-KEYSPIKE-1) | the measured p50 with the same headroom |
+| `(:cpu_ms :p50)` (typing, typing-with-ghost, remote-typing) | a normal key: 8-12 ms. These rows and the p90 ones were 30 and 350-420 ms while one key in ten cost 100-200 ms (the fixture's open list and a Nidhogg redisplay, both fixed); seeded again 2026-11-05, so a key spike fails the run | the measured p50 with the same headroom |
 | `(:cpu_ms :p90)` | CPU ms per command, times `DRGNX_PERF_CPU_FACTOR` (default 1; 2 on hosted runners) | the container's p90 x 2 |
 | `(:rows)` | rows drawn during the run, exact | measured |
 | `(:processes)`, `(:rss_kb)` | as before | the design |
@@ -134,7 +274,8 @@ not move. A broken one fails the run (`drgnx-perf-verdict`; `--perf` exits 1):
 `:slice_ms`, the GC numbers): wall clock. The run prints `report ...` lines with the value and the budget and does not
 judge them; the paired A/B run at n >= 100 does. The numbers the design fixed - keystroke and scroll p95 < 16 ms, max
 50 ms, a GC pause p95 < 50 ms, a new frame p95 < 500 ms, a daemon's server ready < 1 s, modules < 1.8 s, redisplay p95
-16 ms - stay in the file as the targets those reports are read against; a p95 of fewer than 100 samples is shown as `-`.
+16 ms - stay in the file as the targets those reports are read against; a p95 or p99 of fewer than 100 samples is shown
+as `- (n=N, under 100: not judged)`.
 
 **Seeding.** `:alloc` and `:rows` come from the Emacs 31.1 container (the GUI image; `bin/drgnx test --container`
 has no `--perf` yet, so the tier runs by hand: `podman run --memory 4g --memory-swap 4g --security-opt
@@ -143,7 +284,7 @@ seccomp=unconfined --security-opt label=disable -v CHECKOUT:/src:ro -v OUT:/out 
 between the runs. The checkout is not built there, so the figures are those of code loaded from source; compiled
 code allocates less, so a built checkout stays under them. A workload that could not run in the container has no
 gated rows yet and is named, with the reason, in `drgnx-perf-run-unseeded` (a test checks both ways).
-In a container the lab names the workloads that error there (`drgnx-perf-run-container-skipped`: the Live view and the terminal ones, for want of the websocket and eat packages in the image) and leaves them out, so the CI perf job does not fail on them; on a host they run. `transcript-replay` (the synthetic day's stream, below) runs in the container too, with no agent or hub.
+In a container the lab names the workloads that error there (`drgnx-perf-run-container-skipped`: the Live view, for want of the websocket package in the image) and leaves them out, so the CI perf job does not fail on them; on a host they run. The terminal workloads run in the container (they need `DRGNX_RATATOSKR_BIN`, a test-hooks build with the terminal worker beside it). With `DRGNX_USER_ELPA` naming a directory that holds a `websocket-VERSION` package, `bin/drgnx test --container --perf` mounts it read-only and the Live view runs too. `transcript-replay` (the synthetic day's stream, below) runs in the container too, with no agent or hub.
 
 **Raising a budget** is a change of its own: edit `budgets.eld` in the same commit as the code that needs it, with the
 reason in a comment on the row. A budget is raised for a measured, explained increase, never to make a run pass.
@@ -166,9 +307,9 @@ loop of 2,000,000 iterations timed on the wall clock and on the process's CPU cl
 line still records the highest load average seen (`load`). A wall-clock judgement is made by the paired A/B run at
 n >= 100, not by one run.
 
-## Allocation that follows the wall clock (`replace-typing`)
+## Allocation that follows the wall clock (`replace-typing`, removed)
 
-`replace-typing` types while 10k matches stream into a view, and the view draws its rows in time-boxed slices that run
+`replace-typing` (the Search view's old path, removed with it in plan sja-complete S2) typed while 10k matches stream into a view, and the view draws its rows in time-boxed slices that run
 between the keys. A slower machine therefore runs more slices inside each of the 22 commands, and the per-command
 allocation grows with the command's wall time: in the Emacs 31.1 GUI container on the same tree, input p50 19 / 37 ms gave
 `:alloc :p50` 12732 / 15755, CI's slower runner (input p50 51 ms) gave 33072 against a seed run of 25252 (budget 31565).
@@ -187,10 +328,10 @@ timing. Both chains now yield to pending input (`drgnx-timer-chain-delay`, core.
 198 keys alone on (a traced run), and the A/B judges the median improved, -19.6 ms [-26.8, -11.3] (input p50 7.3
 on against 21.2 ms off, 2880x1800 at scale 2, n=176/172).
 
-## Waiting for a view inside a workload (`replace-retype`)
+## Waiting for a view inside a workload (`drgnx-perf--replace-idle`)
 
 A workload step that waits for a view to finish drawing (`drgnx-perf--replace-idle`: the arm, the measure and the
-check of both replace workloads) polls with `(accept-process-output nil 0)` while a timer is due and 50 ms otherwise,
+check of the replace workloads) polls with `(accept-process-output nil 0)` while a timer is due and 50 ms otherwise,
 and signals an error if the view still has work after 100 s. One `accept-process-output` runs one link of a chain of
 zero-delay timers however long it waits ([core.md](core.md), "Waits"), so a plain 50 ms poll gave the Search view one
 4 ms slice per poll. The wait then gave up at its deadline with rows left, and the command loop finished them: it
@@ -236,14 +377,18 @@ T = max(1 ms, 10 % of REF's median value); `not comparable` when a side lacks th
 
 `--ab REF` still judges the median only and also prints the p95 verdict (T = 1 ms). `--ab-env` prints, per workload,
 the median verdict, the p95 verdict at T = 1 ms and, when the runs carry it, the probe verdict on
-`(:compose :draw-ms :p95)`; any of them `regressed` is exit 1, any `inconclusive` is exit 3. It also judges the judged
+`(:compose :draw-ms :p95)`; any of them `regressed` is exit 1, any `inconclusive` is exit 3, and an A/A that fails
+(see "One A/A per A/B invocation") is exit 4. It also judges the judged
 side's `:compose` budget rows (the median of the value over its rounds) at n >= 100, n being `(:compose :count)` summed
 over its rounds.
 
 **Fresh builds and the eln cache (PERF-ELN-1).** A tree that was just built has no native-compiled files yet: its
 session compiles them in the background while it runs, and the first runs cost several times more. Both sessions
 therefore wait until their native compilation has drained, and both run a discarded warm-up before the samples; the
-report prints each side's warm-up p50 next to the measured one.
+report prints each side's warm-up p50 next to the measured one. A plain `--perf` run waits too, before its first
+workload: on a built tree `typing`, which runs first, measured the compilation (its calibration loop ran at 59 ms
+against 13 ms in every later workload of the same session, and the watchdog's stacks show the compilation's loads). A checkout
+that is not built (CI's perf job) compiles nothing, and the wait ends at once.
 
 ## Glitnir (the compositor): popups, the `compose` probe, A/B by environment
 
@@ -256,7 +401,11 @@ when the stats are nil (an inactive root), there is no `:compose` row and nothin
 frame clock's after-paint, which may come later, and when it comes differs between Glitnir on and off. On a build
 whose `glitnir--last-paint` has `:present-ns` (that after-paint's time), each command also records the time from its
 start to the first after-paint that sent a paint, waiting for it (100 ms at most) after the command's own numbers are
-taken; a run stores them as `:present` (stats, as for `:input`), on both sides of an A/B. The A/B prints them as
+taken; a run stores them as `:present` (stats, as for `:input`), on both sides of an A/B. The wait is a responsive
+one (`sit-for`, the watchdog's idle wait) and ends when input comes: a command that changed nothing on the screen has
+no paint to come, and a busy wait (`accept-process-output`) held the next key and kept the main thread out of its idle
+wait (work-nav, 2026-11-12: 186 of its 300 keys painted nothing, and 59 such waits back to back read as one 6 s stall
+in the lab's own wait). `:present_cut` counts the commands whose wait the next input ended with no paint. The A/B prints them as
 `key to present (ms, REF/tree): p50 …/… p90 …/…` under each judged workload: reported, not judged.
 
 `DRGNX_PERF_GLITNIR=on|off`
@@ -326,9 +475,14 @@ DRGNX_CONTAINER_NIDHOGG=/path/to/unpacked/nidhogg bin/drgnx test --container --s
 
 The container runs the Nidhogg at `DRGNX_CONTAINER_NIDHOGG` (an unpacked build; see [harness.md](harness.md)) instead of
 the image's, so a build under test is measured without touching the host. `--soak [MIN]` is the soak of the section above in
-the GUI image, memory-capped like `--ui`; `--ab-env` is the interleaved A/B of the Glitnir section (it compiles the
-tree first, so under podman the checkout is mounted as an overlay, `/src:O`: the `.elc` files go to a layer the run
-throws away; other runtimes keep it read-only, where the A/B's build fails). Name the workloads
+the GUI image, memory-capped like `--ui`; `--ab-env` is the interleaved A/B of the Glitnir section. Both compile the
+tree first (a plain `--perf` run only when a file has no `.elc` as new as it: a fresh clone, a synced copy; a run of
+sources measures the interpreter, and `panel-replay`'s mirror fell behind its own stream), so under podman the
+checkout is mounted as an overlay, `/src:O`: the `.elc` files go to a layer the run throws away; other runtimes keep
+it read-only, where that build fails. The A/B's two sessions run side by side, so
+`--ab-env` gets two sessions' memory, `--memory 6g` (a plain `--perf` run 3g; `DRGNX_TEST_GUI_MEMORY` overrides both):
+at 3g the OOM killer took one session in every `compile-flood` A/B (each peaks near 1.8 GB), and the run failed with
+"Connection refused" or "End of file during parsing". Name the workloads
 (`DRGNX_PERF_WORKLOADS`) for any A/B: the lab's other workloads need not suit the Nidhogg you mount.
 
 ## The synthetic day
@@ -346,25 +500,20 @@ every line, with the machine: `(:synthetic t :composition SHA :machine HOST)`).
   `test/fixtures/lsp-replay.el` (a batch Emacs on stdio that answers each request from the recorded exchange
   `lsp-exchange.eld`: no network, no language server; it reads its stdin through `/proc/PID/fd/0` on Linux, and on
   any POSIX system through the FIFO of `test/fixtures/mock-acp-stdin.sh` when started under it); `vc-git` reads the status and the log of the fixture repository
-  (made in a temporary directory, two commits at fixed dates and an uncommitted change); two `transcript-replay`
-  streams start. Each step prints its time, RSS and live Lisp heap.
+  (made in a temporary directory, two commits at fixed dates and an uncommitted change); two transcript replays
+  (headless sessions fed from `transcript.eld`) start. Each step prints its time, RSS and live Lisp heap.
 - **Steady**, until MIN minutes (default 30) have passed: rounds of `drgnx-perf-day-workloads` (`typing`, `scrolling`,
-  `tabs`, `explorer`, `code-scrolling`, `diff-scrolling`, `replace-typing`, `replace-retype`, `window-switch`,
-  `transcript-replay`), their order shuffled per round from the fixed seed. After each round: RSS and the live heap
+  `tabs`, `explorer`, `code-scrolling`, `diff-scrolling`, `window-switch`; the Search workloads need a hub), their order shuffled per round from the fixed seed. After each round: RSS and the live heap
   (`drgnx-perf-heap-mb`, after a collection), and the number of collections. With the watchdog on, the day also reads its cumulative counters
   (never reset) at the start, after build-up and after each round, and prints per phase and per round: the monitor's CPU
   as a percent of the wall, the drain's p95 and largest bucket, missed against samples, and the stalls with felt and
   the most frequent signatures. The closing line says whether `drgnx-watchdog-mode` is on and whether the preloaded
   Lisp is natively compiled. Each workload's own stalls and `:watchdog` numbers are kept per round in the results
   JSON (`:workload_watchdog`), with the interval's numbers under `:watchdog`.
-- **`transcript-replay`** is `agent-stream` with no agent: a session with no process whose transcript is fed from
-  `transcript.eld` by a timer, one `drgnx-agents--append-text` and `drgnx-agents--changed` per recorded chunk at the
-  recorded delay, while keys are typed in the editor window beside it. It runs in the container, which `agent-stream`
-  cannot. It has no budgets yet (`drgnx-perf-run-unseeded`).
 - **Rules** (`drgnx-perf-day-verdict`): RSS grows at most 20 % from the first steady round to the last, and no
   workload fails. There is **no 400 MB rule** (that is the soak's); a day is not compared with a user's numbers (a user's
   RSS is not the Lisp heap, the number of collections follows their consing, pauses differ by machine).
-- **Not in it:** the workloads that need eat, websocket, evil, popups, a mock agent or the repository's own index; real
+- **Not in it:** the workloads that need websocket, evil, popups, a mock agent or the repository's own index; real
   language servers and agents; Magit (the built-in `vc-git` stands in).
 - **Container memory:** `DRGNX_TEST_DAY_MEMORY` (default 6g, a desktop size; set 4g or less on a laptop), swap equal. The
   host name in the label is `DRGNX_PERF_MACHINE`, which `--container` sets to the host's.
@@ -390,7 +539,7 @@ fails). It gates on the budgets, not on history, and not on wall clock (the runn
 | RSS | 147 MB | 218 MB |
 | key resolution (startup) | 82 ms | 20 ms |
 
-## The terminal (eat), 2026-10-18
+## The terminal before drgnx's own (eat, deleted), 2026-10-18
 
 Measured on this machine at load 2.5–5 (other builds ran; each figure is the workload's median of three repeats, over
 several runs, range shown):
@@ -400,56 +549,56 @@ several runs, range shown):
 | terminal-typing (`cat` echoing) | 1.3–1.8 ms | 3.5–4.9 ms | 4.0–12.5 ms | none |
 | terminal-output (`seq 1 2000` in a loop, in the panel) | 1.8–2.7 ms | 4.1–6.0 ms | 23–68 ms | 9–10 collections, ~46 ms each, ~460 ms in all |
 
+The numbers above were measured with eat, the terminal backend before drgnx's own, which is deleted. The terminal workloads now drive drgnx's terminal (on Ghostty's
+engine, a worker per terminal behind the hub); its rows below are judged at the combined gate pass on the desktop island.
+
+## drgnx's terminal (the Ghostty engine), 2026-11-08
+
+The design's targets (§8), in `budgets.eld`: `terminal-echo` input p95 8 ms and max 16 ms with 30 agents streaming and
+a flood in a second terminal; `terminal-output` input max 16 ms; `cat` of 10 MB and 100 MB
+at ≤ 2 MB/s of Emacs allocation, `draw_kb` p50 ≤ 40 kB, draw slices ≤ 4 ms, and 10 MB on screen in ≤ 250 ms;
+`terminal-backfill` slices ≤ 4 ms. terminal-typing keeps p95 7 and max 13; its allocation per key and the full 10k
+terminal's heap are recorded first, then gated. If `terminal-echo` misses only because the key or the patch queued
+behind other hub traffic, that is recorded: a direct Emacs-to-worker socket is then a follow-up for the user.
+
+One smoke run in the GUI container on the desktop (a busy builder, one repeat; reported, not judged):
+
+| workload | what it showed |
+|---|---|
+| terminal-typing | input p95 0.9 ms, max 0.9 ms |
+| terminal-output | input p95 4.0 ms, max 5.1 ms |
+| terminal-output-10mb | 152 ms to the mark; 1.3 MB/s allocated; draw p50 5.3 kB, slice max 0.1 ms |
+| terminal-output-100mb | 0.4 MB/s; draw p50 5.7 kB, slice max 0.1 ms |
+| terminal-echo | echo p95 1.7 ms, max 4.1 ms (input p90 0.7 ms) |
+| terminal-echo-idle | input max 0.7 ms |
+| terminal-backfill | slice max 2.9 ms (3.4 and 4.2 in two earlier runs) |
+
+A flood draws the screen only (the rows that scrolled past fill in once it pauses), so its slices stay near 0.1 ms.
+`:echo_ms` ends at the draw that shows the echo, before the redisplay that follows it.
+
 Budgets (`test/perf/budgets.eld`): terminal-typing p95 7 ms, max 13 ms; terminal-output p95 6 ms, max 50 ms (provisional, below). Typing into
 a terminal costs about what typing into a file does.
 
-**Where the output garbage comes from.** Eat's terminal emulation allocates about 470 bytes for every text segment it
-writes (14 conses, 3 intervals, 10 vector cells and a string in `eat--t-write`) and 56 for each line feed, whatever the
-segment's length: 110 bytes per output byte for `seq` lines, 7 for 80-column lines. A flood saturates Emacs (about 0.2 MB/s of
-`seq`), so 20 to 30 MB of garbage a second and a collection every ~2 s. drgnx's own hooks do not appear in the memory
-profile, `eat-minimum-latency`/`eat-maximum-latency` change nothing about the amount (larger values only make batches of
-250 to 600 ms), and neither does the scrollback. Cutting the garbage means rewriting eat's writer (a fast path saved about
-a quarter: not worth shadowing eat's internals).
-
-**Where the pause lands.** A collection (45 to 55 ms: the live heap, not the garbage, sets it) is run by whichever code
-allocates when the threshold is crossed. That is often the keystroke's own handling (the command, its redisplay, the
-harness recorder) or the eat batch that runs before the latency timer; the pause then counts. So while a terminal prints,
-`tools/terminal-eat` takes the collection itself, after an eat output batch, when no key was handled in the last 20 ms, no
-input is waiting (`input-pending-p`) and 85% of `gc-cons-threshold` has been allocated: it calls the GC owner's `drgnx-gc-gap`
-(below; `drgnx-gc-gap-quiet`, nil
-turns it off; the module's old `drgnx-terminal-eat-gc-quiet` is an obsolete alias of it). The threshold is
-unchanged (a higher one only trades the pause for a longer one: 95 ms at 256 MB, and 410 MB of memory), and the natural
-collection stays as the backstop. The pause is not shortened, only kept out of a keystroke's handling; a key that arrives
-during it still waits.
-
-Measured on a machine at load 2.7 to 6.2, ten runs of terminal-output each (the workload's median of three repeats):
-
-| | max, sorted | over 50 ms |
-|---|---|---|
-| without the early collection | 8.7 16.8 23.9 24.1 25.3 39.5 41.9 53.3 54.6 54.9 | 3 of 10 |
-| with it | 5.3 5.6 5.9 5.9 22.3 24.0 30.7 36.3 40.7 49.4 | 0 of 10 |
-
-A second comparison, five runs each on a busy machine (load 3.3 to 7.8), could not tell the two apart (with: 29 6 17 36
-44; without: 26 5 38 32 35), so the evidence that the early collection helps is the mechanism (no collection overlapped a
-slow keystroke with it) and the first ten-run comparison, not a large margin.
-
-What remains is an eat output batch of 20 to 60 ms (under load) that a key waits for; slicing the batches (one chunk per
-timer) made the p95 worse, because each slice redraws the terminal. **terminal-output's max budget is provisional**: 50 ms
-is the ceiling, not a measurement (ten runs per arm, a busy machine, worst 49.4). The failures it can still give come from
-the length of eat's output batches, not from GC (DEFERRED M12e-5-1: throttle or slice eat's output without the redraw cost).
-terminal-typing's p95 is 7 ms: the worst of 16 runs with the module active (1.9 to 6.4, load 3 to 6), rounded up.
 
 ## Tuning (and why)
 
 - **GC.** One owner, `core/drgnx-gc.el`. Emacs' default threshold (800 kB) collected 28 times in 186 keystrokes.
   drgnx raises it to 512 MB while starting (early-init; set back after startup even if drgnx fails to start), then
   uses 64 MB (`drgnx-gc-cons-threshold`). A threshold your own init set (no longer early-init's) is kept.
-  - **The idle collection** is the timer layer's key `gc-idle` (`drgnx-gc-idle-seconds`, 8 s; started again by a
-    second setup, never doubled), owner `:core`, so it is covered by the timer lint like every other timer. It
-    collects only when more than a quarter of the threshold was allocated since the last collection
-    (`drgnx-gc--consed` minus `drgnx-gc--base`, which `drgnx-gc--note` on `post-gc-hook` sets): an idle Emacs that
-    allocated nothing stays still. `drgnx-gc-mode` (on after `drgnx-gc-setup`) owns that hook function, so it is
+  - **The idle collection** is the timer layer's key `gc-idle` (`drgnx-gc-idle-seconds`, 1 s; started again by a
+    second setup, never doubled), owner `:core`, so it is covered by the timer lint like every other timer. A
+    collection at the threshold takes about 45 ms and lands on whatever key allocates past it, so the idle one takes
+    it in a pause in typing instead: one second without input, when at least half the threshold
+    (`drgnx-gc-idle-share`) was allocated since the last collection (`drgnx-gc--consed` minus `drgnx-gc--base`, which
+    `drgnx-gc--note` on `post-gc-hook` sets): an idle Emacs that allocated nothing stays still. It collects at most
+    once per pause (`drgnx-gc--idle-pause`), never with input pending, and never in a batch Emacs or a daemon no
+    client is connected to (`drgnx-gc--someone-waits-p`). It was 8 s and a quarter, which a typist rarely gave it. `drgnx-gc-mode` (on after `drgnx-gc-setup`) owns that hook function, so it is
     one function, removed when the mode turns off.
+  - **The heap goes back to the system at idle:** a collection hands what it frees back to malloc, which keeps it,
+    so after the perf lab's `ts-open` (six 1 and 2 MB tree-sitter files) Emacs stayed at ~845 MB resident with a
+    small live heap (`malloc-trim` gave back ~650 MB). The idle collection's timer therefore trims the heap
+    (`malloc-trim`, glibc builds) once in the first pause after any collection, its own or an earlier one
+    (`drgnx-gc--trimmed` holds `gcs-done` at the last trim), never with input pending.
   - **A gap collection for producers:** `(drgnx-gc-gap)` collects, and returns t, when `drgnx-gc-gap-quiet` (0.02 s,
     nil: never) has passed without input, no input is pending and at least `drgnx-gc-gap-share` (85%) of the
     threshold was allocated since the last collection. A producer that finished a burst of work calls it instead
@@ -459,7 +608,7 @@ terminal-typing's p95 is 7 ms: the worst of 16 runs with the module active (1.9 
     (gcmh's own mode function sets its low threshold after the watcher ran, so `gcmh-mode-off-hook` restores
     them too). A `let` of `gcmh-mode` changes nothing.
   - **Batch Emacs** (workers): `drgnx-gc-batch-setup` sets 32 MB (`drgnx-gc-batch-threshold`) and
-    `gc-cons-percentage` 0.2. It is the first form of `drgnx-search-index-cli` and `drgnx-search-mcp-main`; short CLI
+    `gc-cons-percentage` 0.2. It is the first form of a worker's batch entry; short CLI
     commands keep Emacs's defaults.
   - **Harness sessions** of the minimal configuration run at the same settings (`drgnx-ui-gc-early` and
     `drgnx-ui-gc-setup` in `harness/init/prelude.el`); a session of an external configuration brings its own.
@@ -523,17 +672,25 @@ compositor, the first frame, fonts); drgnx's own init is ~220 ms in batch and ~2
 
 On a Nidhogg with `nidhogg-watchdog` the perf lab reads the watchdog per workload. `drgnx-perf-begin` drains it
 (`nidhogg-watchdog-drain-now`) and collects its records through `nidhogg-watchdog-record-functions`; `drgnx-perf-end`
-drains again and reports `(:stalls N :stalls-felt N :stall-max-ms F :gc (:count N :max F :p95 F) :typing (:ge16 F :p95 F)
+drains again and reports `(:stalls N :stalls-lab N :stalls-felt N :stall-max-ms F :gc (:count N :max F :p95 F) :typing (:ge16 F :p95 F)
 :watchdog (:missed N :spans N :samples N :monitor-cpu-ms F :drain-p95-ms F :drain-max-ms F))`. The watchdog's counters are
 never reset: the probe snapshots them at the start and reports the difference (a reset would zero the totals the day reads
 and the deltas of the watchdog's own summary lines). The difference comes from Nidhogg's `nidhogg-watchdog--stats-delta`
 (which copes with a reset in between) and the drain p95 and largest bucket are read on Nidhogg's own drain edges
-(1 2 4 8 16 33 50 100 ms; a forced `drain-now` is not in them); a build without these falls back to the C bucket edges. Each stall it keeps carries its wall time, felt, signature and culprit. `:typing :ge16` is the percent of commands at 16 ms or more.
+(1 2 4 8 16 33 50 100 ms; a forced `drain-now` is not in them); a build without these falls back to the C bucket edges. Each stall it keeps carries its wall time, felt, signature and culprit. `:stalls` is the counter's difference, not the number of records kept: the watchdog holds only its newest 32 records and the ring is not drained during a workload, so the records give `:stalls-felt`, `:stall-max-ms` and the stacks. `:stall-top` (in the results JSON) names the five
+most frequent signatures with their count, longest wall time and culprit: where a workload's stalls come from, the
+lab's own waits included. The lab's own waits are not the workload's stalls: a stall whose culprit is one of
+`drgnx-perf-lab-waits` (a command's wait for its present, a workload's wait for its premise or for a draw), in its `process-wait`
+phase, with less than the watchdog's threshold of its wall time anywhere else, goes to `:stalls-lab` and out of
+`:stalls`, `:stalls-felt` and `:stall-max-ms` (so the `(:stalls) 0` rows judge the workload, never the lab). Only a
+record can say a stall was the lab's: a stall the ring dropped stays in `:stalls`. `:typing :ge16` is the percent of
+commands at 16 ms or more.
 Without the feature the probe reports `:watchdog nil` and no stalls row is judged. The soak also prints `(:heap :live_mb
 F)`, the live Lisp heap after its last collection (from `garbage-collect-heapsize`); reported, not gated.
 
 **The switch.** `DRGNX_PERF_WATCHDOG` is applied when a recording starts (`drgnx-perf-begin`): unset or `default` runs
-the watchdog at 100 ms (the shipped configuration), `on` at 1 ms (the stress case), `off` leaves it off. A watchdog
+the watchdog at 100 ms (the shipped configuration), `on` at 1 ms (the stress case), a number at that many ms (`16`:
+what the `stalls-ge16` rows mean), `off` leaves it off. A watchdog
 already in that state is not restarted. On a system the watchdog does not run on (macOS: Nidhogg builds it but refuses
 to start it) the switch does nothing, and nothing is put back. The switch is `drgnx-watchdog-mode`, so `off` also stops the doctor's record
 hook and idle timer. `drgnx-perf-end` puts the watchdog back as it was before the recording (mode and threshold), so a
@@ -549,6 +706,227 @@ long pause is not always the collector's own marking.
 Reported stress: `--ab-env DRGNX_PERF_WATCHDOG=on,off` (1 ms; not a gate).
 
 Tests: `test/unit/perf-watchdog-test.el`.
+
+## The workers probe (off-the-main-thread work)
+
+On a Nidhogg with `nidhogg-workers` the lab measures the worker threads. Without the feature every row below reports
+`:workers nil` and nothing fails.
+
+**Advice on jsonrpc's reader keeps framing off.** Nidhogg's jsonrpc adoption stands back when `jsonrpc--process-filter`
+or `jsonrpc--json-read` has advice, which includes drgnx's own. So the TRAMP timer guard (`lang/eglot`) is on
+`nidhogg-workers-jsonrpc--batch` and on the filter of unframed connections only, the booster is not set up while
+`nidhogg-workers-framing` is on, and eglot's events log is off (`eglot-events-buffer-config`, Show LSP Log turns it
+on). A measurement of framing under drgnx's config compares the framed path only if none of these is undone
+(`drgnx-lang/framing-engages-under-drgnx`).
+
+**The switch.** `DRGNX_PERF_WORKERS` is read once per session, before any workload, and handed unchanged to
+`(nidhogg-workers-apply SPEC)`: `default` (also unset), `on`, `off`, `inline`, or `+SW`/`-SW` items such as
+`+nidhogg-workers-treesit+nidhogg-treesit-defer` (they have no commas, so `--ab-env` takes them). A step's gate is
+`--ab-env DRGNX_PERF_WORKERS=+SW1+SW2,default`. Sessions and containers pass it on. The lab applies it with its
+first call into a session, so a workload's `:setup` already runs under it: a connection is framed only if
+`nidhogg-workers-framing` is on when it opens, and lsp-burst's servers open in its setup
+(`drgnx-perf-workers/switch-applied-before-the-setup`). Each LSP row reports `:lsp :framed`, the connections Nidhogg
+frames; a framing A/B whose framed arm shows 0 compared the unframed path twice.
+
+**The probe.** `drgnx-perf-begin` resets `nidhogg-workers-stats`, `drgnx-perf-end` reports
+`:workers (:phase-ms PLIST :wait-ms F :fallbacks N :deferrals PLIST)`: busy ms by phase (`worker-wait` as its total
+and as `worker-wait-REASON` per reason; the A/B explains with them, see below; `treesit-with-waits` is `treesit`
+(Nidhogg counts every synchronous parse there, the workers on or off) plus `treesit-wait`, the main thread's whole
+tree-sitter time; `image-with-waits` is `image` plus the `display` and `image-pixels` waits, the main thread's whole
+time for images, so a decode moved into a wait for `nh-img` does not count as gone; both are explain lines next to
+input, cpu and stalls, not verdicts), the main thread's waits for a
+worker (`treesit-wait` + `worker-wait`), jobs that ran inline, deferred work. The stalls probe adds `:stalls-ge16` and
+`:stalls-ge100` (the watchdog resolves stalls at its threshold: 100 ms by default, so `-ge16` needs
+`DRGNX_PERF_WATCHDOG=16`, the threshold the gates' A/Bs run with, or `on`).
+
+**Workload keys.** `:complete-when FORM` is true once the work the actions started is done; the lab polls it every
+10 ms while the session is idle (a repeating `drgnx-timer-*` timer, not an idle timer: that runs once per idle period,
+and the lab's own calls do not end one) and records `:complete-ms`. Polling starts before the keys, so a form that is
+already true then (an unedited buffer is coloured) must also count the work. The work can outlast the keys (a compile flood, the reparse after a
+paste), so after the actions the lab waits for the form to hold (at most 60 s, `drgnx-perf-run-complete-wait`, the
+session idle meanwhile) before it reads `:complete-ms`, the digest and the check; the input rows cover the keys only.
+`:digest FORM` returns a string (buffer text plus the visible faces, filter-call arguments or the message sequence) kept
+as `:digest`.
+
+**Report-only rows.** A budget row `(W PATH LIMIT :report-only STEP)` never fails, and the report lists it as
+`report`, until `DRGNX_PERF_LANDED` (comma separated) names STEP; the gate that lands a step adds it. From then on the
+row is judged like any other, wall-clock paths included.
+
+**The A/B verdict.** Besides the wall samples, p95 and the compose probe, each judged workload prints a verdict for
+per-command input p50, p95, p99 and max, `:cpu_ms` p50 and p90, `:busy-ms` p50 and p95 (the main thread's busy time
+per command: its latency plus the timers that ran after the screen showed it, up to the next command), `:timer-ms` p95
+(the ms the timers took under each command; only the `:timers t` rows: `terminal-output`, `compile-flood`, `lsp-burst`,
+`lsp-typing`), stalls of 16 and of 100 ms or more, `:complete-ms` and `lsp-burst`'s `:lsp :handler_ms :max` (the statistic over the rounds is the median of
+the per-round differences; same rule: not worse unless the whole 95 % interval is above max (1 ms, 10 % of the REF
+median)). A path a side does not report is left out. A workload whose `:digest` differs between the sides is
+`regressed (digest)`. `--ab-env` counts all of these in the exit code (3 stays "inconclusive").
+
+**Worker phases explain, they do not decide.** A phase's ms (`:workers :phase-ms`) gets no verdict: moving work to a
+worker is meant to move time between phases, and the verdict is what the user feels (input, busy, timers, stalls). The
+A/B prints an explain block under each workload with every phase's REF and tree value. What the lab does check is that
+the phases add up in each arm (`drgnx-perf-ab-phase-sum`, printed on every A/B as `phase-sum ok` or `MISMATCH`): the
+sum of the phases (`worker-wait-REASON` entries repeat `worker-wait` and are left out) must not exceed `(:busy-ms :sum)`
+by more than 1 ms, else a phase counted time the main thread was not busy. The check works on the run's totals (the sum
+of the per-command values). The change across the arms is only explained, never judged: every A/B prints
+`explain busy changed by X ms, the phases' sum by Y ms` (`drgnx-perf-ab-phase-delta-line`). `:busy-ms` is a stand-in
+(latency plus the timers after the screen showed the command), because Nidhogg reports no per-command main-thread busy
+time, so run sums of it and of the phases are not comparable and a cross-arm rule failed by construction, even in an
+A/A. No run carries a watchdog busy measure today; when one does, the explain line should prefer it, and a cross-arm
+check can be judged again once Nidhogg reports a real per-command busy time.
+
+**One A/A per A/B invocation.** With `--ab-env` the first selected workload runs against itself once, before any A/B
+round (`--aa`, the default; `--no-aa` skips it, for debugging): the same session on the REF side, the same rounds, the
+same verdicts, read both ways (REF minus REF, and the sides swapped). It runs once because it proves the lab is quiet at
+that moment, which does not depend on the workload; one A/A per workload doubled the lab time of a gate arm. A deciding
+verdict (median, p95, compose probe, every metric above) of `regressed` in either direction (the build reads worse than
+itself, so the lab is broken), digests that differ, or a failing per-arm phase-sum check refuses the invocation: no
+workload gets an A/B round, `A/A failed` is printed under the A/A's workload with the reasons, and the exit code is 4
+(it comes before 1 and 3). Else every workload gets its A/B, and the results file records the A/A once (`aa`, with the
+workload it ran on). An `inconclusive` verdict does not refuse: with about 13 deciding
+metrics read two ways at n around 100, a tail metric is nearly always inconclusive against itself, so it prints a line
+(`A/A (typing): p95 inconclusive (forward)`) and the A/B goes on; the A/B's own verdicts, budgets and exit codes are unchanged.
+A probe that counts a phase twice shows up here, as a refused run, instead of as a verdict about the change. An A/A that
+is not judged (a loaded calibration, an error, a workload without per-command samples) proves nothing about the lab and
+refuses the invocation like a failed one: `A/A failed: the A/A was not-judged (loaded calibration)`, exit 4. Every
+calibration (of an A/A or an A/B) is taken once both sessions are quiet: the wait lets a stream left running by the
+last run end first, so a session's own background work does not mark it loaded. The A/A costs one workload's lab time
+per invocation.
+
+The results file carries `run_rounds` for every workload: per round and arm, the input p95, p99 and max and the counts of
+stalls of 16 and of 100 ms or more, so a tail in the pooled samples can be traced to the rounds that carry it. The
+`lsp-typing` digest hashes each server's first 100 messages of the session (not of the round, the flood goes on across
+rounds); the `quick-open-large` digest names files by their path under the repository, not under the session's temporary
+directory.
+
+**The calibration rows** (report-only, never failing; printed as `report cal-ROW WORKLOAD: KEY value, …` by plain
+`--perf`; a key the Nidhogg build does not report prints `n/a (Task 55/57)`): `cal-costs` (`:costs` and `:decisions`
+against `(nidhogg-workers--policy)` for `ts-open`, `ts-typing`, `ts-paste` and `image-open`), `cal-pressure` (`:pressure`:
+starts per second, mean and max frames, from `ts-typing` and `live-view`) and `cal-pty` (`terminal-output`'s `:ahead`
+p50 and max, sampled per command from `nidhogg-workers--test-io-info`). They come from the probe's `:cal` record.
+
+**Machine shape.** `DRGNX_PERF_CPUS=2|4` runs `bin/drgnx test --container` with `--cpuset-cpus` set to one thread of
+each of the first 2 or 4 physical cores, read from `lscpu -p=CPU,CORE` (`drgnx-perf-cpuset-args`): `0,1` / `0,1,2,3`
+on a machine that numbers its cores first, `0,2` / `0,2,4,6` on one that puts a core's two threads side by side, so
+"2 cores" never means one core's two threads. The workers' A/B runs both shapes:
+
+```sh
+DRGNX_PERF_CPUS=2 bin/drgnx test --container --perf --ab-env DRGNX_PERF_WORKERS=+SW1+SW2,default
+DRGNX_PERF_CPUS=4 bin/drgnx test --container --perf --ab-env DRGNX_PERF_WORKERS=+SW1+SW2,default
+```
+
+Tests: `test/unit/perf-workers-test.el`.
+
+### The workers' workloads
+
+Eighteen workloads (`harness/drgnx-perf-workloads.el`, the session side in `test/fixtures/workers/perf-session.el`) measure
+what the Nidhogg workers take off the main thread. Each types the same 6 commands into the editor while the work runs; the
+first key starts it (from a timer, as it starts for a user), so the keys and the work overlap. Each has `:complete-when`
+(`:complete-ms`, polled at idle) and `:digest` (equal on and off), and a budget row `(W PATH LIMIT :report-only STEP)` in
+`test/perf/budgets.eld`: the limit is the design's table (V2 §1 or drgnx's existing row), never a first run. A row fails
+only after `DRGNX_PERF_LANDED` names its step. Seven of them (`drgnx-perf-run-workers-seeded`: `explorer-git-rows` and the
+render offload's Quick Open, agent-line and who-is-here pairs) also have allocation, CPU and rows rows, a first run's numbers x 1.25;
+the others are on `drgnx-perf-run-unseeded`.
+
+| Workload | What it does | Budget rows (step) |
+|---|---|---|
+| `lsp-burst` | three jsonrpc connections to `test/fixtures/lsp-replay.el`, replaying recorded rust-analyzer, clangd and tsserver traffic; each sends completion answers of 0.5, 1 and 3 MB, three rounds. `:lsp :handler_ms :max` is the slowest handler after the server wrote its answer's last byte (the server sends that time next, `LSP_REPLAY_STAMP`); the workload puts no advice on jsonrpc, which would keep Nidhogg's framing off. `:lsp :framed` counts the framed connections. Each request carries the runner's own completion deadline as its jsonrpc timeout (60 s); a request that times out is a handled failure, reported as `:lsp :timeouts` (count) and `:lsp :timeout_ids` (`CONNECTION/ID`), never a silent hang | input p95 16, no 16 ms stall, `:lsp :handler_ms :max` 50 (ot4; the A/B judges it too) |
+| `lsp-typing` | the same servers flood 300 recorded diagnostics and progress messages a second (`:lsp :framed` as above) | input p95 16, max 50 (ot4) |
+| `ts-open` | 1 and 2 MB files in `c-ts-mode`, `typescript-ts-mode`, `python-ts-mode`, opened one after the other in a second window | `:ts :draw_ms` 16 (first draw), `:ts :colored_ms` 500, no 100 ms stall (ot2) |
+| `ts-paste` | `C-y` of 500 KB into a 1 MB C file, then typing (a p95 needs 100 commands over the repeats; every repeat starts from the file on disk) (electric-pair, show-paren, which-function on) | input p95 16, `:complete-ms` 300 (ot2) |
+| `ts-typing`, `ts-typing-unclosed` | typing balanced / unclosed code in that file; complete (and the digest read) once every typed character's command has run and the colour has settled: no parse job or deferred region for the buffer, and jit-lock's contextual refontification after the last key done | input p95 16 (ot2) |
+| `compile-flood` | `compile` (comint, a pty) of a generated 200k-line log; the digest is the count and md5 of the log lines that arrived, checked against the file | input p95 16, p99 50, max 50 (ot3) |
+| `image-open` | a 4K PNG screenshot, then the 20-image Markdown preview through `drgnx-markdown--insert-html`; every repeat clears the image cache first (or only the warm-up decodes), and `:preview_drawn_ms` waits until no decode is pending on Nidhogg's image worker | no 16 ms stall, `:image :screenshot_ms` 16, `:image :preview_drawn_ms` 500 (ot6) |
+| `explorer-expand` | the hub up; `big/` of 5,000 files opened on the Explorer's rows path, timed from the fire to its first file's row drawn (the hub lists it). 2026-11-11, pinned, release hub, 3 runs: 4.5, 4.6, 4.3 ms, the rows in the key's own frame | `:expand_ms` 10 (plan sja-complete's gate), no 16 ms stall (ot8; alloc p50 6565–6670 and cpu p90 3.6–3.8 measured, seeded with ot8) |
+| `explorer-git-rows` | the hub up (a hub of the workload); the status of a 25k-file repository read by the hub, the letters as its rows. The Lisp twin `explorer-git` went with the Explorer's switch to the hub's rows (plan sja-complete E4); its last numbers: the whole operation (first key to the letters applied) 1549 kB, 47 ms against 1640 kB, 54 ms here (52 rows; the cost is the key and its redisplay), 6574 to 6589 objects a key against 6542 here. On the Explorer's rows path (2026-11-11, pinned, release hub, 3 runs): 6684 objects a key, cpu p90 3.5-3.7, the whole operation 674-737 kB, 51-64 ms | input p95 16, no 16 ms stall, `:alloc :p50` 8357, `:cpu_ms :p90` 4.7, `:rows` 1, `:complete-kb` 922, `:complete-cpu_ms` 80 (the rows path's numbers x 1.25; ot5, report-only) |
+| `quick-open-large` | `project-files` of a 200,000-file git repository (Quick Open's listing) | `:complete-ms` 100, no 16 ms stall (ot5) |
+| `explorer-watch` | the hub up, the Explorer on a folder of 20 files on its rows path; after the first key 50 files are made in it (the last iteration's 50 removed first). Its check fails with a Lisp `file-notify` watch in place or off the rows path (plan sja-complete E1: the hub watches the listed folders) | `:settle_ms` 300 ms (from the last write to all 50 rows in the Explorer); allocation, CPU and rows report-only like the other workers rows. First runs (2026-11-10, release hub, pinned, two runs): settle 52.2 and 51.4 ms; input p90 3.3 ms, max 9.9; 6671 objects a key (p50), cpu p90 3.3 ms |
+| `quick-open-typing` | Quick Open (its key, C-p, queued as the user's command) in the 200,000-file repository, then `d012/f001.txt` typed a key at a time and `C-g`; the hub's ranked rows (the session starts a hub). Done once every key reached the minibuffer on the hub's rows and the first list came before the first key. The query has no space: a plain `completing-read` takes SPC as `minibuffer-complete-word`. The paired old-path row (`quick-open-typing-old`, alloc p50 8003808) is retired | `:alloc :p50` 4905, `:cpu_ms :p90` 1.4, `:rows` 0 (ot5; measured x 1.25) |
+| `agents-line-motion` | 20 `<down>` in a large Lisp file while three agents' frames arrive, one per command; the editor line's name from the outline. The paired old-path row (`agents-line-motion-old`, alloc p50 7298) is retired | `:alloc :p50` 6869, `:cpu_ms :p90` 4.5, `:rows` 0 (ot5; measured x 1.25) |
+| `presence-burst` | who is here with 30 agents over 90 files (six folders), then 20 `<down>`, each followed by one agent's move to another file: the hub's `agents-here` model diff (an agent node and a file node) and the rows patch naming it, read node by node. No hub: the model and the patches are the hub's shape, the model strings made before the run. The paired old-path row (`presence-burst-old`, alloc p50 201040) is retired | `:alloc :p50` 16084, `:cpu_ms :p90` 1.4, `:rows` 0 (ot5). Measured 2026-11-08, pinned: alloc p50 11832, cpu p90 1.31 |
+| `autosave-typing` | a 50 MB buffer, the keyboard loop's auto-save at the first key (`nidhogg-workers--test-keyboard-auto-save`, `read_char`'s call: a `do-auto-save` from Lisp never leaves the main thread); the digest is the auto-save file's md5; each repeat kills the buffer the one before made (they once stayed, 100 MB that the `memory` row read) | input max 50, `:complete-ms` 1000 (ot8) |
+
+`terminal-output` and `live-view` keep their rows. Their output depends on the clock (a paced stream, an
+endless `seq` loop), so a digest that is equal on and off needs a fixed-length run; that is DEFERRED, not done here.
+
+**Fixtures.** Generators, not big files: `test/fixtures/workers/generators.el` writes the sources (1 and 2 MB per language),
+the compile log, the 5,000-file folder and the 25k- and 200k-file repositories when a workload sets up. The pictures are
+`make-images.sh`'s output (ImageMagick; `screenshot-4k.png`, `images/`, `preview-20.md`). The language-server traffic is
+recorded once from the real servers by `capture-lsp.sh` (run it in the container: `.claude/tmp/ctr.sh --image
+localhost/drgnx-dev:f45 --memory 6g -- bash test/fixtures/workers/capture-lsp.sh`): a server the image lacks (clangd,
+rust-analyzer, Node and typescript-language-server) is installed for that run only; the corpora are
+`corpus-NAME.eld.gz` and `manifest.eld` gives the message count and byte total a replay must reproduce (a test checks it).
+`lsp-replay.el` serves a corpus (`LSP_REPLAY_CORPUS`), with `LSP_REPLAY_COMPLETION_SIZES`, `LSP_REPLAY_FLOOD` and
+`LSP_REPLAY_STAMP` (a `$/replaySent` notification with each answer's id and write time after the answer).
+
+**A report-only run** (the baseline; a Nidhogg with workers, under the lease, no A/B):
+
+```sh
+DRGNX_PERF_WATCHDOG=on DRGNX_PERF_WORKLOADS="lsp-burst lsp-typing ts-open ts-paste ts-typing ts-typing-unclosed compile-flood image-open explorer-expand explorer-git-rows quick-open-large quick-open-typing agents-line-motion autosave-typing" \
+  .claude/tmp/perf-exclusive.sh bin/drgnx test --container --perf
+```
+
+### The Work space's workloads
+
+`harness/drgnx-perf-work.el` (the session side: `test/fixtures/work-space-thirty-fixture.el`). Every workload but
+`work-trail` runs against **30 mock agents streaming in a real hub**: `test/fixtures/work-space/thirty.json`
+(`vegvisir`'s fixture too) built into three git repositories (`org`, `drgnx`, `nidhogg`) and a worktree per agent
+under a temp directory. Each agent is a `ratatoskr-mock acp` of its own profile whose one turn edits the files the
+description names (120 in all), reads one, records a decision where the description has a conclusion, starts a
+subagent where it has a parent, then makes a chunk, a read step and a second of quiet for fifteen minutes. Each
+gets the text of its ask. `$DRGNX_RATATOSKR_BIN` is needed as for the agent workloads. **Setup, `:each` and `:check`
+call the fixture's premise**, which signals when fewer than 30 sessions are busy, when the map holds fewer than 30
+agents, or when the map is not shown (hidden) to the hub and on screen as the workload says: a workload that did not
+get its situation fails instead of measuring something else. Mock agents only; nothing reaches a subscription.
+
+| Workload | What it does | Measured (budget row) |
+|---|---|---|
+| work-nav | 300 map keys (Tab, right, left, down and up, 60 each) with an agent selected, the 30 agents streaming: the absolute key budget the GUI tier's `drgnx-work-gui/keys-stay-fast-during-a-leg` leaves to the pinned island | `:input :p95` 16 ms; `:stalls` 0 (`:frame_kb`, the client's frame, went with it in render offload Task 34); report-only until the render offload's combined pass: `:alloc :p50` 1119 objects per key (a tenth of 2026-11-07's 11191), `:cpu_ms :p90` 11.31 and `:rows` 0 as measured then. On the hub's rows (Sjá's keys; 2026-11-12, pinned: input p95 4.4 ms, alloc p50 4764–6081, cpu p90 3.1–3.9 ms). Where a key's objects went then (counters around the functions): the key itself (`drgnx-work-map--nav`, the class step's overlays) about 450–650; the redisplay after it about 3500–4000, of which the display engine's relayout of the map's window about 2600–3500 (any change in it, a text property on one span included; a plain buffer's 49: the rows' image displays about 1300–2000 conses, their faces about 1200 vector cells) and the status bar's mode line, redrawn as point moves, about 800. Both wastes are gone: Nidhogg's image cache hashes a spec in place (no filtered copy per image per redisplay) and the status bar asks for no redraw on a move its bar does not show (`drgnx-statusbar--post-command`). After (2026-11-12, pinned, a Nidhogg with the hash): alloc p50 3858, input p95 4.4 ms, cpu p90 3.45 ms; a key's redisplay is now about 300 conses and 1660 vector cells (the faces: a copy of the map's text without faces relays out for 49 objects), its post-command hooks about 50. The faces' cells were font spec copies: each merge of a face with a float :height, a family or a weight of its own (and, with `default` remapped, every face lookup) copied the spec it cleared. Nidhogg keeps those copies (`font_clear_prop`'s cache, checked before reuse); with it (2026-11-12, pinned): alloc p50 672 (p90 2582: the keys that scroll or relayout more), input p95 3.6 ms, cpu p90 2.99 ms, 0 stalls. Split per key then: the command and its hooks about 630, its redisplay p50 44 (mean 420) |
+| work-relayout | 320 layout commands (`f`, `o`, `1` to `6`, 40 times) on the hub's rows: a layout is the first row patch applied while its `work/map/set` waits for the answer (the hub sends the rows first, on the same connection), drawn when the view has nothing pending; an answer with no patch before it changed no row and counts as lost, and no command waits for it. Each command first waits up to a second for the layout before it to be drawn; the lab's p95 needs 100 samples | `:relayout :p95` 50 ms, from the command to its layout drawn; `:stalls` 0; report-only until the combined pass: `:alloc :p50` 12842 (a tenth of 2026-11-07's 128420), `:cpu_ms :p90` 59.16 and `:rows` 0 as measured then. 2026-11-12, pinned: the layout waited for the view's 0.1 s throttle (live patches keep the map drawing) and the next command's wait drew it, so p95 228.9 ms and alloc p50 32563; with the answer hurrying the draw (`drgnx-work-map--answered`), p95 22.5 ms, alloc p50 4206, cpu p90 2.2 ms. A layout that moves is drawn by the motion (`drgnx-view-draw-now`, not the view's timer): the lab sees both draws; seeing only the timer's, it read the next live draw as the layout's (p95 87–96 ms) |
+| work-live | 30 s with the map shown and the agents streaming, on the hub's rows (checked: the map got at least 30 updates: its patches' versions; the paired row `work-live-old`, the map's Lisp frames, went with that path in render offload Task 34) | `:draw_ms_s` 40 (the view's `:draw-ms` per second); `:slice_ms :max` 4 (each draw of the map's view); `:stalls` 0; not judged: `:class_ms` (each class step's wall ms, `drgnx-view-nav-class-step`) and `:class_ms_total` (2026-11-11, pinned, release hub, 3 runs: 242–271 steps, total 7.2–8.0 ms with the walk of every node drawn, 2.9–4.3 ms with the row → ids index; p95 0.04 → 0.02 ms); report-only until the combined pass: `:draw_kb :p50` 40 (the Lisp frames drew 831 kB). Run on a Nidhogg with Sjá: the workload fails when the map is not on the hub's rows. First run (2026-11-08, pinned, the line's GUI image): rows 38.9 kB p50, 1.26 draw ms/s, slices ≤ 0.43 ms; old 814.2 kB, 13.86 ms/s, ≤ 3.77 ms |
+| work-typing-shown, work-typing-hidden | the typing workload's six strings with the map shown in the editor's other window, and with it open but shown nowhere (the hub told: no deltas) | `:input :p95` 16 ms each, `:stalls` 0; the rule between them (shown at most 1 ms over hidden) is `drgnx-perf-run--relative-fails`, judged when both are in the run |
+| view-patch | no hub: a hub-fed view (`drgnx-view-patch-attach`) holding 30 agents' cards (150 rows, a run of faces, an item id, two stops and an image each), then 100 patches, each replacing one row of every agent (30 rows), parsed from JSON, applied and drawn | report-only until the render offload's combined pass: `:alloc` (objects for the parse, the apply and the draw), `:draw_kb` (kB the draw made), `:slices`, `:rows`. First smoke run (2026-11-07, GUI container): alloc p50 6052 objects, draw 6.7 kB |
+| work-nav-rows | no hub: a map-shaped hub-fed view (30 agents, each with an ask above and a file below: 90 rows, each holding its node's span) and its model in Sjá, agent 00 selected; then 100 keys held with no time between them (right and left, the team walk, up and down) through `drgnx-view-nav`; then Sjá's apply of a 30-agent reset on a fresh view (20 times) and of a one-node field patch (40 times). Needs a Nidhogg with Sjá | report-only until the combined pass: `:alloc` (objects per key), `:classed` (overlays the class step made and deleted per key), `:hub_calls` (after the selection settled: the one trailing notice), `:reset_us` and `:field_us` (the design's targets: a reset ≤ 2 ms, a field patch ≤ 100 µs). First run (2026-11-07, GUI container): alloc p50 688 objects per key, 12 overlays per key, 1 hub call, a reset p50 271 µs, a field patch p50 3 µs |
+| work-trail | a mock session whose one turn took 10,000 read steps (checked: its newest step is 10,000 or more); the trail opened on the hub's rows until its first rows are drawn (errors when it is not on them) | `:draw_ms` 100; `:rows` reported. A new step is the hub's patch, as view-patch and work-live measure it: the Lisp append and its row `:append_ms` went with render offload Task 34 |
+| trail-long | a hub whose store (the session's data folder, which the hub shares) holds a seeded 2,000-step session; its trail on the rows path, the model's `steps` the last 500; from the newest step, `up` until the first: a key that stops at the window's edge asks `view/window` and runs again in the next window. Errors when the first step is not reached or Sjá held more than 500 steps. Needs a Nidhogg whose Sjá answers `more` from `follow` and reads `window` | plan sja-complete W1: `:key_ms` p95 ≤ 16, `:page_ms` p95 ≤ 50 (the key past the window lands within one `view/window` round trip), `:list_max` ≤ 500; `:line_ms` (from the key to the model line's arrival) and `:handled_ms` (the model line's handler) not judged. A page ends when the waiting key has run (`drgnx-perf--wait`, below the table). 2026-11-10, pinned, release hub: key p95 0.05 ms, page p50 18.4 ms (max 19.0), line 17.7 ms |
+| work-board | no hub: the Board of 200 cards in 6 columns (each a plan task with 0 to 5 of 5 steps done) on the hub's rows path, its model in Sjá and its rows (titles, states and progress bars) shaped like `work::trail::board`'s, as the hub sends them at 1200 px; from the first card, 40 moves (down, down, right, left, down, 8 times). Errors when the Board is not on the rows path or the keys moved nothing. Needs a Nidhogg with Sjá | plan sja-complete B1: `:input :p95` 16 ms; `:alloc :p50` 4750 objects a key, its old path's (work-board-old, alloc p50 4750-4752 and input p90 7.7-8.1 ms, measured before that path went in B2); `:cpu_ms :p90` 14.4; `:rows` 0. 2026-11-10, pinned, two runs each: before the bar alloc 1932-1944, input p90 7.0-11.5 ms; after 1942-1944, p90 8.7-10.1 |
+| search-window | the Search view on the hub's rows path over 300 files of 100 needles (30,000 matches, 30,300 entries: `order` a window of 20,000); the rows grown to the window's end 300 at a time (as scrolling grows them; an `upto` more than 400 rows on sends a block after a gap row, and before S1 one far `upto` sent ~20,000 rows in one patch, over the hub's 16 MiB per client); 12 rounds, each from the first window and the match 50 entries before its end, Next Match until the selection pages into the next window (at most 200 keys): 12 page samples a run (with 12, p95 is the max). Errors when a key goes back (a wrap at the window's edge), a round pages no window, or Sjá held more than 20,000 | the same rows as trail-long (`:list_max` ≤ 20,000); `:from` and `:to` the entries it went between; `:line_ms` (the hub's part) and `:handled_ms` (the model line's handler) not judged; pages timed as in trail-long. `:page_each`, `:line_each` and `:gc_each` (collections and their ms during each page) list the samples in order. The 50 ms bar is judged on `:page_nogc_ms`, the pages no collection landed in; `:gc_pages` counts the others, which stay in `:page_ms` (the workload never idles: a held key does not either, so the hitch is real; SJA-PAGE-GC-1). After S1 (2026-11-10, pinned, release hub, 3 runs of 12 pages), with a move that does not look at the entries both windows hold: page p50 33.6–34.5 ms (line ~17, handled ~17; was p50 44–46, line ~27.5), p90 37–38; the one slow page a run (108–117 ms) is a full collection of the editor's heap (77 ms) that lands in it, as `:gc_each` shows (the pages without one: max 42.5). What a page conses sets how often that collection comes: `:page_kb` and `:key_kb` (kB a page and a key between pages, from `memory-use-counts`), `:page_counts` (the page's object counts, medians), `:key_gcs`, and the framed batches' bytes per page, `:page_wire_model_kb` (model lines that came to Lisp as strings), `:page_wire_other_kb` and `:page_model_lines` (each model line's bytes, `sja` for one the reader pushed to Sjá itself). 2026-11-11, pinned, release hub, 3 runs each: the line as a Lisp string, page p50 36.5–37.2 ms (max 118–121), 1 page in 12 with a collection, page_kb 1540; pushed to Sjá by the reader, p50 35.3–37.2 (max 42–52), none, 366; and the match nodes' paths cut too, p50 24.3–25.4 (max 28–30), none, 224.5 (search-retype's collections 25 → 6, replace-typing-rows `:complete-kb` 7080 → 1950). Before: key p95 8.9 ms, page 42.8 ms (line 27.8, handled 14.4), after the window moves by a step (2,000) as the move alone, its list as splices that name `from`; before, page 160 ms (the whole doc rebuilt and diffed, the window moved by half, the list whole) |
+| search-context | the Search view over 100 Rust files of 10 functions, each 10 lines calling `needle` (10k matches, 1,000 context label rows); after one search with labels and one without, 10 of each, alternating (`drgnx-search-context` let-bound for the search). Errors when a search draws no rows or does not list 10,000 matches in 60 s | `:first_ratio` ≤ 1.10 and `:done_ratio` ≤ 1.15: the p50s with labels over those without, of `:on_first_ms` / `:off_first_ms` (from the search's start to its first rows drawn) and `:on_done_ms` / `:off_done_ms` (to the later of those rows and the search's end); report-only otherwise |
+| search-pattern | the Search view with `{}` on (Rust) over 1,000 Rust files of 10 functions of 10 lines; their lines call `other(2, x)` except, in every tenth file, each function's first line, which calls `needle(1, x)` (1,000 matches in 100 files); 100 searches of `needle($A, $B)` (the pattern's name narrows the files to 100) and 5 of `$F(1, x)` (no name: every file parsed), after one of each. Errors when a search draws no rows or does not list 1,000 matches in 60 s | `:first_ms` p95 ≤ 300 (start to the first rows drawn) and `:done_ms` p95 ≤ 2000 (to the later of those and the search's end); `:meta_first_ms` / `:meta_done_ms` reported |
+| search-lists | the empty Search view (Find empty) with 100 saved searches (10 pinned, with their live counts) and 50 recent ones, as the hub gives them; its lists drawn 100 times after one to warm up (`drgnx-replace--lists-draw`) | `:draw_ms :p95` 5 ms (spec §8) |
+| search-scopes | the Search view on a repository of 5,000 files in 50 folders: a branch `work` off `main` that changed 50, 50 more staged, 50 more changed in the tree; a search of nothing in Changed, Staged and Branch (against `main`), one to warm up and 20 of each. Errors when a search does not end in 30 s | reported, never failed (git's and the disk's time): `:changed_ms`, `:staged_ms`, `:branch_ms` from a search's start to its end (the scope's list, then rg over its files: an upper bound of the list; spec §8: Changed 60, Staged 40, Branch 120 ms p95) and each scope's `_files` |
+| search-regroup | the Search view listing 10k matches of `needle` on the hub's rows path, grouped by Files: 100 Rust files in 10 folders (`dNN/mod/`, a chain the Folders tree joins), each 10 functions of 10 lines that call it (so Folders and Symbols change the model and the rows); then 120 regroups by key (`M-g`: Folders, Symbols, Files in turn), each followed 50 ms later by `<down>` and 0.6 s of no input. A regroup sends the first 2,000 entries of the model with the first window's rows; once they are drawn the view asks for the whole window (`view/window`), which drains after them. Errors when a regroup draws nothing or never drains the whole window | `:first_ms :p95` 50 ms (spec §8: from `M-g` to its first window drawn), and the same per grouping, `:tree_ms`, `:symbol_ms`, `:file_ms`. Reported: `:follow_ms` (the whole window's drain, after the first window), `:settle_ms` (from `M-g` to that drain's end), `:key_wait_ms` (for `<down>`: how long after the drain's start it ran, when it came while the drain held the editor; 0 otherwise) and `:key_in_follow` (how many did), with the harness's `:input` and `:present` for both keys. First runs (2026-11-12, release hub, pinned, 2 runs of 120): first window p95 48.3 / 42.2 ms (p50 ~37.5; Folders ~32, Symbols ~38, Files ~39), the follow-up drain p95 8.6 ms (max 17.4), settle p95 ~145 ms (the hub's answer and the model's throttle), `<down>` in a drain once in 240 (13.6 ms), `:input` p95 21 ms. Before the first window (the whole 20,000-entry window re-parented at once): p50 75, p95 85 ms |
+| search-sheet | the Search view listing 10k matches of `needle` in 500 Rust files (20 lines each) on the hub's rows path, the replacement `pin`; Replace All 20 times after one, each sheet cancelled. Errors when no sheet shows, its hunk never comes or it lists other than 500 files | `:show_ms :p95` 300 ms (spec §8: from the command to the sheet shown, the edit set asked, answered and drawn). Reported: `:hunk_ms` (to the selected file's hunk in the sheet). The edit set alone is the hub's row `perf/search-write` (`search-edit-set-10k`). First run (2026-11-12, release hub, pinned, 100 sheets): show p95 214.7 ms (p50 175), hunk p95 365 ms (the sheet drawn again with it). Before the sheet measured its edge once per draw (each of its 500 rows measured every file's head and tail) it never showed within 10 minutes |
+| search-apply-open | the Search view listing 200 matches in 50 Rust files (4 lines each), every file open in a buffer; Replace All without the sheet (`C-u`), `needle` to `pin` and back, 20 times after one. Errors when the write never ends, other than 50 buffers take it, or a buffer is left unsaved or holding the old text | `:lisp_ms :p95` 100 ms (spec §8: the Lisp writing the hub's edits into the 50 buffers, one undo group each, saved). Reported: `:done_ms` (from the command to the write's end, `search-change`). The closed files' write is the hub's row `perf/search-write` (`search-apply-500-closed`). First run (2026-11-12, release hub, pinned, 100 writes): Lisp p95 16.0 ms (p50 15.4), the write's end p95 28.3 ms |
+| search-edit | the Search view listing 5,000 matches in 300 Rust files (17 lines in 200, 16 in 100); Edit Results opened 20 times after one; then the first 5 lines of each of the first 100 files changed (`needle` to `pin` and back) and saved, 20 times after one. Errors when the buffer holds other than 5,000 lines or a save says other than "Saved 500 lines in 100 files" | `:open_ms :p95` 400 ms (spec §8: from the command to the buffer made and shown), `:save_ms :p95` 600 ms (from the save to "Saved"). First run (2026-11-12, release hub, pinned, 100 of each): open p95 209.7 ms (p50 152), save p95 71.8 ms (p50 68). Before the buffer's text went in at once with the lines' markers made after it (a marker per line end made as it went, each moved by every insertion after it, and a reopened buffer kept the old ones), open p50 2.2 s, p95 5.3 s |
+| search-retype | the Search view listing the 10k matches of `needle` (100 files) on the hub's rows path, point at the end of its query; then 25 times `DEL`, `DEL`, `l`, `e` (`needl`, `need`, `needl`, `needle`: 100 keys, each a search of 10k matches), 0.6 s of no input after each key (the typing pause, `drgnx-replace-delay` 0.25 s, runs out; the next key can land while the rows stream) and 1.5 s after every fourth (the harness's `(:pause SECS)` action). Errors when a key's search drew no rows before the next key, or the last search did not end | `:input :p95` 16 ms, `:input :max` 50 ms; `:search_first_ms :p95` 50 ms; `:settle_ms :p95` 450 ms; allocation, CPU and rows are unseeded until its first runs on the desktop island. Reported: `:first_ms` (from the key to the first rows of its search drawn, the typing pause included: the hub's reset of the rows, then the first patch drawn, `drgnx-view-patch-patched-functions`), `:settle_ms` (to the later of those rows and the search's end with all 10k matches), `:search_first_ms` (from the search's start to its first rows), `:keys`, `:settled`. First run (2026-11-10, release hub, pinned, one run): input p95 1.7 ms, max 1.9; first rows p50 365 ms (search start to first rows 115); settle p50 365, max 386; 25 collections (26 ms each) over the 100 keys. Once a quiet view's first draw waited one frame, not the whole throttle (two runs, same day): search start to first rows p50 31-33, p95 33-35 ms; first rows
+| search-modes | the Search view's Symbol and Meaning modes over a hub index of 50,000 chunks: 25,000 synthetic Rust files of 10 functions each (Hrafn's timing rows' shape, each function calling 4 others drawn Zipf-like; a fixed seed), a git project indexed by tier 1 (the session has no model: Meaning's hits are keyword and symbol ones, as `search/query`'s). 100 Symbol searches of the names Hrafn's usages row asks (`fn_name((r * r * 31) % 200, r % 10)`, the names its 50 ms `search/usages` budget is set on), each also timed as a `search/usages` call, in its answer's callback and through `drgnx-hub-call-sync` as a command waits for it; 20 of `parse_request_0_0`, the most called function (tens of thousands of uses); then 100 Meaning searches of 6 questions in turn, each paired with a `search/query` of the same question (`k` 100, code; which goes first alternates), after one of each. Each search is followed by 200 ms for the view's last draws. Errors when the index holds fewer than 50,000 chunks after 15 min, or a search draws no rows in 60 s | `:symbol_first_ms` p95 ≤ 50 (start to the first rows drawn) and `:meaning_over_ms` p95 ≤ 20 (a Meaning search's first rows less its pair's `search/query`); reported: `:symbol_patch_ms` and `:meaning_patch_ms` (start to the hub's first rows patch), `:usages_ms`, `:usages_sync_ms`, `:query_ms`, `:meaning_first_ms`, `:symbol_hot_first_ms`. Runs (2026-11-12, release hub, pinned, three each): before Symbol's and Meaning's reset went with their first rows, Symbol's first rows p50 118 ms, p95 125 (the reset drawn alone, the rows then waiting out `drgnx-view-delay`); after, p50 26 ms, p95 32-43 (the hub's patch at 9 ms). Meaning's over p50 19-20 ms, p95 21-74: its patch comes with `search/query`'s answer, the rest is the view's first-draw wait (`drgnx-view-first-delay`, 16 ms) and the draw. Holding the whole first window put Symbol's first rows at p50 55-70 ms; since the run's first file goes with its reset and the editor sets `drgnx-view-patch-hurry` for these runs (hub.md, Symbol and Meaning), three runs (2026-11-13, release hub, pinned): Symbol's first rows p50 9.1-9.7 ms, p95 12.5-12.8 (the patch p95 12.8-15.5); usages p95 7.7-8.2, through `drgnx-hub-call-sync` 8.9-10.4 (a sync call returns once its answer is read); Meaning's over p95 3.5-12.2. A run on a hub without the stall watchdog had one run in three with a tail (Symbol p95 42-68, max 150-157 ms); none in the three on the watchdog's hub at a 30 ms threshold, whose only reports were one stall of 123-136 ms a run in no named task |
+from the key p50 281-283; settle p50 332-351, p95 337-356 (the budgets: 50, and 356 x 1.25). The hub-path pair of `replace-retype`, which went with the Search view's old path (plan sja-complete S2) |
+
+The Search view's git scopes (Changed, Staged, Branch) list their files on the search's thread; their budgets (spec §8:
+Changed 60 ms, Staged 40 ms, Branch 120 ms at the 95th percentile, a checkout of 5,000 files with 50 changes each) are
+git's and the disk's time, so they are reported, never failed: the workload `search-scopes` measures them through a
+release hub, and the hub's ignored test
+`git_scope_lists_at_a_checkouts_size` (`view/search/tests.rs`) builds that repository and prints each scope's p50 and
+p95; run it optimized, alone on the perf island:
+`cargo test --release -p drgnx-ratatoskr --lib -- git_scope_lists_at_a_checkouts_size --ignored --nocapture`.
+
+A workload's wait (`drgnx-perf--wait`) returns when its condition first held, not when its poll saw it: the condition
+is also tried after each hub batch and each timer. The poll (50 ms) can see a change up to 50 ms late: a timer it runs
+does not end it, nor a batch another wait inside it took. Spans timed at the wait's return held that (trail-long's
+first run read 50.2 ms for an 18 ms page). From 2026-11-10 they end at the change: trail-long's and search-window's
+`:page_ms` and terminal-output-10mb's and -100mb's `:wall_ms`; the other waits are setup.
+
+Beside the budget rows the workloads report where their time goes (results JSON, not judged): work-relayout's
+`:to_frame` (command to the frame's arrival), work-live's `:long` (each draw over 4 ms as `(MS TOUCHED ROWS GC-MS)`),
+work-trail's `:settled_s` (seconds from the turn to its 10,000 steps readable) and, when the hub never holds them, a
+trace of the newest step with the hub's and the session's CPU seconds in the premise's error. work-trail's wait for
+its draw ends by throwing out of one bounded `accept-process-output` when the view's draw ends: no timer wakes it.
+The relayout's wait for a draw is the same: a hook after each draw, no 1 ms timer; work-live waits its 30 s in one wait
+that wakes only for process output.
+
+The timing rows belong on the desktop's perf island (`perf-exclusive.sh` outermost; the relative rules need the shown
+and hidden workloads in one run). Allocation, CPU and rows are not budgeted yet (`drgnx-perf-run-unseeded`). The Rust
+rows (`vegvisir`'s layout and core step, the shell parse, the trace rows) are their crates' tests.
 
 ## Slow frames in another configuration
 
@@ -567,6 +945,30 @@ emacsclient -s SERVER -e '(progn (profiler-stop) (format "%S" (seq-take (drgnx-p
 The audit lists the hook functions that ran while the frame opened (`after-make-frame-functions`,
 `server-after-make-frame-hook`, window hooks …), costliest first.
 
+## Profiling a workload
+
+When a number moves and reading the code does not say why, profile the workload: with `DRGNX_PERF_PROFILE=1`, each
+workload's measure runs under Emacs's CPU and memory profilers (`drgnx-perf-profiled`), and its report goes next to
+the results file as `RESULTS-WORKLOAD.profile.txt` (in the temp directory without `DRGNX_PERF_RESULTS`):
+
+```sh
+DRGNX_PERF_PROFILE=1 DRGNX_PERF_RESULTS=out/run.eld DRGNX_PERF_WORKLOADS=panel-replay bin/drgnx test --container --perf
+```
+
+Per profile, memory (bytes sampled) then CPU (1 ms samples), the report has the call paths, callers above callees,
+and the functions sampled most with up to three of their callers; a path under 1% of its profile's samples is left
+out. A workload without typed input profiles its measure; one with typed input (typing, the terminal and panel
+floods, Replace) profiles from before its first key to the end of its completion wait, the measure not wrapped again.
+The setup is never profiled. The report is the last of the repeats, and is written when the measure fails too. The profilers cost time, so a profiled run's numbers are not judged against
+the budgets: read the report, then run the workload again without it.
+
+A `frame-parameter` in a report's most-sampled functions is a parameter Emacs does not answer itself: for anything
+but a few (`name`, the scroll bars, the colours, `display-type`, `background-mode`) it copies the frame's whole
+parameter list (about 1.4 kB on a graphical frame) to read one value. Keep such a value where reading it conses
+nothing (the UI scale is a frame-weak table, `drgnx-pixels-set-ui-scale`), or check something cheaper first (the
+save before a client closes looks at its frames only when the client made one), and hold the path to a cons check
+like `drgnx-pixels/the-scale-conses-nothing`.
+
 ## Tests
 
 `test/unit/perf-modal-test.el` (the evil workloads, their budget rows, the 1 ms rule, `DRGNX_PERF_WORKLOADS`), `test/unit/perf-test.el` (statistics, the probes, the audit — including that it never stops a function from removing
@@ -580,10 +982,75 @@ Budget p95 22 ms, max 50 ms, **provisional**. The ruled target is `typing`'s 16 
 the load. `typing` alone reads 3.5 ms on a quiet machine, so the loaded index is not shown to cost anything yet.
 A quiet-machine `bin/drgnx test --perf` run pins the number: set the p95 to 16 if it holds, and drop this note.
 
+The workload's setup starts a hub of its own (`$DRGNX_RATATOSKR_BIN`, a test-hooks build, as the agent workloads do),
+makes a git project of the checkout's `core/` and `wb/` in a temporary folder (the container's `/src` is not a git
+project) and waits for tier 1. It runs tier 1 only: tier 2 needs an embedder, and the container has no model, so the
+real-model variant on the perf island is still to be added.
+
+### Hrafn's rows
+
+The Rust rows are `#[ignore]` tests that print their figures and assert the budget table's constants. They are not in
+`budgets.eld`: a row there without a workload in a `--perf` run fails as "not measured". Each runs alone on the
+desktop's pinned island (`perf-exclusive.sh` as the outer wrapper, `DRGNX_PERF_CPUS=4`).
+
+| Row | Where | Budget |
+|---|---|---|
+| tier 1 of a drgnx checkout; one saved file searchable | `drgnx-ratatoskr/tests/timing.rs` (`tier1_of_a_checkout_and_one_saved_file`) | 60 s; 1 s (the references cost about 12 % of a full tier 1, paired on the island; the row prints the store's growth from them) |
+| `search/query` p95, 50,000 and 100,000 synthetic chunks, vectors on | the same file (`query_p95_at_50k_chunks`, `…_100k_…`) | 100 ms; 200 ms |
+| the agent tools at 50,000 synthetic chunks with references (each function calls 4 others, drawn Zipf-like): repo map cold (graph built) and warm p95, usages p95, symbols p95, outline p95, graph cache | the same file (`agent_tools_at_50k_chunks`) | 1,000 ms, 150 ms; 50 ms; 20 ms; 10 ms; 64 MB |
+| built-in embedding tokens/s (GPU), VRAM at 4,096 tokens | `hrafn-embed/tests/timing.rs` (`bench_tokens_per_s`) | 20,000; 800 MB |
+| CPU fallback tokens/s on 4 cores | `bench_cpu` | 680 |
+| one query embedding p95 | `query_p95` and `bench_cpu` | 50 ms |
+| stall probe: no copy over 16.6 ms, worst 16 ms | `stall_probe` | a stand-in for the compositor (a second process copying 64 KB every 8 ms on the same card), not a real frame |
+
+The GPU rows run through `hrafn-gpu.sh` on the Radeon; the RTX 2060's row (0.8 times its first AC figure) runs on the
+laptop on AC. The synthetic stores are made of the fixture's chunk shapes, with every word common, so a keyword list
+ranks nearly every chunk: a worst case for the full-text route.
+
 ## Settings (design §16)
 
-The settings gates (start, provenance, watchers, page open, `drgnx sync`'s index) are not perf rows yet: the perf
-deferral stands, so there is no `test/perf/settings-*.el`.
+The settings gates are the five `settings-*` workloads of the table above (`harness/drgnx-perf-settings.el`, which
+builds each fixture in the session under a temp config, state and cache directory and puts the environment back).
+They are wall clock, so they are reported against their budgets and judged in a pinned run:
+`DRGNX_PERF_WORKLOADS='settings-start settings-page settings-prov settings-sync settings-open' bin/drgnx test --container --perf`.
+The two gates that are not timings are tests: no provenance watcher sits on a variable that typing writes more than
+1,000 times (`test/unit/settings-watch-test.el`), and applying settings adds only the custom loads of the variables it
+names to `features` (`drgnx-settings-apply/applying-adds-only-the-named-custom-loads`).
+
+Installing a variable watcher costs about 160 µs: `add-variable-watcher` walks the whole obarray. Provenance installs
+one for each managed variable and each variable the static index finds your Lisp setting, once per start, so a
+`settings.el` with 100 entries costs 16 ms of the start, and `settings-prov` shows it.
+
+First measurements (2026-11-05, pinned island on the desktop, Emacs 31.1 in the GUI container; wall clock, so a
+second run moves by up to 1.5×): `settings-start` 18.8 ms, then 5.7 after the applied-values file stopped being
+rewritten at every start, the index file stopped being stat'ed for every setting and the last good copy stopped being
+parsed again (budget 2: the rest is the bounded reader's token scan, about 1.8 ms for 200 entries, the per-entry
+value check, about 1.7 ms, and the pushes, about 1.7 ms); `settings-page` open 90.6 then 49 ms (budget 100, met), a
+search keystroke 209 then 70 ms at most (budget 16: the search itself is at most 32 ms for the first key, which looks
+at every setting, then a few ms for the keys that narrow the last result; a forced redisplay of the page was the other
+40 ms: the workload's `(redisplay t)' runs the ripe timers first, and the page's view drew every listed row again,
+each worked out through provenance, because each search moved the rows' signature; a search now keeps the rows, and
+on the island the keystroke went from p50 23.9 / 19.8, max 66.1 / 68.5 ms to p50 12.3 / 12.3, max 26.7 / 29.4 ms, the
+worst key now the first key's own search, and the open from 31 to 19 ms); `settings-prov` 114 ms against a plain load of 0.8 ms before, 54 to 78 ms against 2 to 4 ms after provenance
+stopped re-judging the file at every write and counting lines from the top for every form (budget 5 %: 97 watchers
+installed at 160 µs and more each are most of it, so the gate cannot be met while every managed variable is watched
+before the load); `settings-sync` 510 to 860 ms for 200 packages (budget 2 s, met); `settings-open` 3.1 then 2.4 ms per
+open added by the workspace and language layers (budget 1: the trust resolution of the shared file's root, about
+0.9 ms, and the private file's, about 0.5 ms, run at every open).
+
+Third round (2026-11-05): `settings-start` resets the config layer's state of `settings.el` before each run, since a
+start has none, and the file is then scanned and read once for both readers (`drgnx-file--read-share`): 5.2 ms. The
+shared file's usable entries and the trust filter's classification are kept per read of the file and state of trust
+(`settings-open` 1.3 ms). Opening the page starts the warming in 0.1 ms (`:warm_start_ms`) and builds no search text
+(a test holds that); `:open_ms` of 57 ms is the page itself.
+
+Second round: the trust root and state are kept per folder (`settings-open` 1.5 to 1.7 ms, from 2.4), the token scan
+steps over plain atoms by regexp (`test/unit/file-scan-fast-test.el` holds it to the full scan's results), a type is
+converted once for all the settings that share it, and the applied-values file is read once per start
+(`settings-start` 5.1 to 5.5 ms from 5.8: still two reads of `settings.el` by the config layer and the settings
+reader, and about 1.9 ms of pushes). Opening the page now builds every setting's search text in idle time (the
+workload drains those steps, `:warm_ms` about 30 ms, outside `:open_ms`), so the search of the first key is at most
+5 ms (`:key_search_max_ms`, from 32).
 
 Ratatoskr's reader is timed by `runtime/crates/huginn/tests/timing.rs`: 64 KiB of settings-shaped data, median of 200
 reads at most 1 ms. It is `#[ignore]`, run once and alone on a pinned host, optimized:
@@ -592,3 +1059,76 @@ reads at most 1 ms. It is `#[ignore]`, run once and alone on a pinned host, opti
 
 In CI the `huginn_read` fuzz target runs in `runtime.yml`'s fuzz job, and `ci.yml`'s Nidhogg job builds huginn's `dump`
 example so the ERT differential (`drgnx-huginn/differential-fresh-seed`) compares it with Emacs's reader.
+
+## Extensions
+
+The Extensions view's rows are the workloads of `harness/drgnx-perf-extensions.el`, in the form of the settings rows: a
+library evaluated in the session builds the fixture under temporary data, config, state and cache directories, times the
+real functions against a hub stub that answers from memory, and puts everything back. The four archives are local
+directories of `archive-contents` at their 2026-11-06 sizes (gnu 420, nongnu 480, melpa 5,500, melpa-stable 750: 7,150
+rows), written by `drgnx-perf-extensions-write-archives`; no network. To write them for a look by hand:
+`emacs --batch -l harness/drgnx-perf-extensions.el -f drgnx-perf-extensions-fixture-main [DIR]`
+(default `test/fixtures/extensions/full`, written on demand and not committed).
+
+| Workload | What it measures | Budget (`:report-only ext-pass`) |
+|---|---|---|
+| `extensions-open` | `Open Extensions` to the painted sections (`:rows_drawn`); `:processes` counts processes started; `:alloc` the objects the open and paint allocated, the stub hub's own left out, on the hub's rows and model (`:rows` the patch's lines; needs Sjá) | `:open_ms` 100, `:processes` 0, `:alloc` 136400 (the floor plus 10%). Measured 2026-11-08, pinned: 119930; 2026-11-13: 124036, the floor while the hub client is a Lisp process filter: the model's line (the 200 nodes' JSON as the hub client gets it) about 49,000, the rows' text about 30,000 (each row copied once, its newline with it) and their insert about 29,000, the redisplay of the 404 lines about 29,500, the rest (the class step, timers, the list's params) about 10,000. The Recommended set (in the container about a thousand missing packages) is held by the hub: an open sends only its version |
+| `extensions-search` | each key of a search over 7,150 rows, to the painted results | `:key_p50_ms` 8, `:key_max_ms` 16 |
+| `extensions-scroll` | scrolling the whole catalog by name (`@sort:name`, pages of 200), per key: the command, the list's own `post-command-hook` and the redisplay; the slices that draw a next page are timed apart (`:slice_max_ms`). A next page a key asks for is answered after the key, as the hub's answer is its own event (the stub had answered inside the key, which put the page's apply into it: 4.7 ms, now 3.2 pinned 2026-11-13); the answer's apply, the stub's build left out, is a slice | `:key_max_ms` 16 |
+| `extensions-details` | opening a details page, to its painted rows | `:open_ms` 50 |
+| `extensions-progress` | a running job's steps as the hub sends them: `:alloc_event_step` the objects of taking one `exec-progress` event (20 of them), `:steps` the last step taken | `:alloc_event_step` 262. Measured 2026-11-08, pinned: 2073; 2026-11-13: 243 (a step reads no row out of the model and leaves the header; its chip is one `format`) |
+| `activate-live` | a job's plan step: repointing the 40 package directories of a running session into the generation that holds the old copies (one walk of `load-path`) | `:activate_ms` 20 |
+| `activate-live-new` | a job's end that added a package, as the job layer passes it (`drgnx-extensions-live-after` of `(:status done)`): the new package activated from its own descriptor, the session holding 40 others | `:activate_ms` 20 |
+| `install-overhead` | an install's cost beyond the package manager's own, both children run | `:overhead_ms` 3000 (reported on ext4; macOS has APFS clones) |
+| `refresh-job` | the catalog refresh from the archives | none (reported) |
+| `list-packages-compare` | `list-packages` on the same fixtures, offline: first render, a `package-menu-filter-by-name` keystroke, scrolling (the rows with an "e", as the view scrolls; it had scrolled the few the typed word left, so it never moved: 2.4 ms against the view's 4.8, now 7.1 against 3.1 pinned 2026-11-13), memory | none; `:beats_*` flags say whether the view wins each |
+
+The view draws from timers (`:delay 0`, then slices of at most `drgnx-view-slice`), so a timed form ends with the
+harness's settle: it fires the draw timers the view armed through the timer layer's own wrapper until none is left,
+draws what is still marked and redisplays. The clock stops on painted rows, never on armed timers.
+
+The rows are provisional: they report and never fail until `DRGNX_PERF_LANDED` names `ext-pass`, the combined gate pass
+that judges them. Run them pinned, alone on the perf island:
+`DRGNX_PERF_WORKLOADS='extensions-open extensions-search extensions-scroll extensions-details extensions-progress activate-live activate-live-new install-overhead refresh-job list-packages-compare' perf-exclusive.sh env DRGNX_PERF_CPUS=4 bin/drgnx test --container --perf`.
+
+The hub's side is a Rust bench, `runtime/crates/drgnx-ratatoskr/benches/extensions.rs`: `catalog-load` (parse and merge
+7,150 rows) at most 100 ms and 15 MB, and `extensions/search` at most 3 ms at the 95th percentile. The 15 MB is what
+the hub's cache keeps (the parsed file and the index): live bytes counted by the bench's own global allocator, not
+resident memory, which a warm process's arenas hide. It is `#[ignore]`d, and a test whose budget is missed fails;
+run it once, optimized and alone on a pinned host:
+`perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --bench extensions -- --ignored --nocapture --test-threads 1`.
+
+The Run and Debug view's hub rows are the bench `runtime/crates/drgnx-ratatoskr/benches/debug_view.rs`:
+`debug-step-variables` (the hub's half of a step: lines, model, model diff and rows built again with 300 variables, ten
+changed; with the editor's half within 30 ms at the 95th percentile) and `debug-hub-memory` (a 100,000-element list
+open to its two chunk levels with one page fetched, its lines, model and rows: at most 64 MB more heap, counted by the
+bench's own allocator) and `debug-hub-memory-pages` (every one of its 1,000 pages opened in turn, as `debug/expand`
+does: the view keeps the last `PAGE_CAP` = 64 open and lets the rest go; at most 64 MB). Ignored like the others:
+`perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --bench debug_view -- --ignored --nocapture --test-threads 1`.
+
+Recorded runs' hub rows are the bench `runtime/crates/drgnx-ratatoskr/benches/debug_record.rs`: `debug-launch-snapshot`
+(the launch snapshot of a 5,000-file project with nothing changed, at most 150 ms at the 95th percentile) and
+`debug-capture` (a stop's capture cut to 64 KB, appended to the run file and flushed, at most 1 ms at the 95th
+percentile). It is `#[ignore]`d and measures and prints; run it optimized and alone on a pinned host:
+`perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --bench debug_record -- --ignored --nocapture --test-threads 1`.
+
+Inline values' hub row is the bench `runtime/crates/drgnx-ratatoskr/benches/debug_inline.rs`: `debug-inline`, a stop's
+values for a 2,000-line Python file stopped in a 200-line function with 42 variables, the parse cached (at most 8 ms at
+the 95th percentile; the first parse is printed too). It is `#[ignore]`d and measures and prints:
+`perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --bench debug_inline -- --ignored --nocapture --test-threads 1`.
+
+`debug-fork-start` (a what-if fork's tree restored, its Gleipnir sandbox and adapter started and its program run to
+its first stop: at most 2 s at the 95th percentile on Linux) is the live row `debug::tests_fork_live::debug_fork_start`,
+ten Python traces in a row. It needs the adapter image with bwrap (`ctr.sh --sandbox`), is `#[ignore]`d as a timing
+test, and measures and prints.
+
+Tests: `test/unit/perf-extensions-test.el` (every row has a budget and a fixture, the comparison measures both sides).
+
+## What typing rebuilds
+
+The status bar is built again when the position or the text changes (every keystroke), but the segments that show
+nothing of the text (branch, problems, language, encoding, `misc` ...: `drgnx-statusbar--steady`) are worked out once
+per window while their key (epochs, notice tick, mode, encoding, narrowing, layout) holds; `position`, `indent` and
+segments of your own run on every build. A window's tab line is kept while its tabs (names, files, modified flags),
+width and drawing settings hold. The Buffers list works out its shown buffers once per render, and the palette ranks its
+candidates from one read of the history (a hash, a sort of the few ranked, no comparison per candidate).

@@ -1,0 +1,797 @@
+;;; drgnx-perf-work.el --- the perf lab's Work space workloads: 30 streaming mock agents, the map shown or hidden -*- lexical-binding: t -*-
+
+;; SPDX-License-Identifier: GPL-3.0-or-later
+
+;;; Commentary:
+;; Controller side of the Work space's budget rows (docs/develop/perf.md, "The Work space's workloads").  Each spec is
+;; one `drgnx-perf-run--workloads' entry.  The session side is test/fixtures/work-space-thirty-fixture.el: a hub of the
+;; workload's own (`$DRGNX_RATATOSKR_BIN', a test-hooks build with `ratatoskr-mock' beside it) with 30 mock agents in
+;; three repositories, all streaming.  A workload's setup, `:each' and `:check' call the fixture's premise, which
+;; signals when 30 sessions are not streaming or the map is not shown (hidden) as the workload says: a workload that
+;; did not get its situation fails.  The mock agents only; nothing here reaches a subscription.
+
+;;; Code:
+(require 'cl-lib)
+(require 'drgnx-ui)
+
+(defun drgnx-perf-work--fixture-file ()
+  (expand-file-name "test/fixtures/work-space-thirty-fixture" drgnx-ui-repo-dir))
+
+(defun drgnx-perf-work--lib-form ()
+  "The session side shared by every workload, as a form string: the fixture, and the functions that start the 30
+agents with the map shown or hidden, say whether the premise holds and take it all down."
+  (concat
+   "(progn (defvar drgnx-perf--hub-bin nil) (setq drgnx-perf--hub-bin " (prin1-to-string (getenv "DRGNX_RATATOSKR_BIN")) ") "
+   (prin1-to-string
+    `(progn
+       (load ,(drgnx-perf-work--fixture-file) nil t)
+       (defvar drgnx-perf--work-buf nil "The map's buffer.")
+       (defvar drgnx-perf--work-shown nil "Whether the workload's map is shown.")
+       (defun drgnx-perf--work-up (shown)
+         "30 agents streaming and the map of their workspace on the hub's rows, SHOWN or hidden; an error when that does
+not hold."
+         (require 'drgnx-view)
+         (drgnx-work-thirty-start drgnx-perf--hub-bin)
+         (setq drgnx-perf--work-shown shown drgnx-perf--work-buf (drgnx-work-thirty-map shown))
+         ;; the lane says which path it ran: without Sjá the map has no rows to draw
+         (unless (buffer-local-value 'drgnx-view-patch drgnx-perf--work-buf)
+           (error "Premise: the map is not on the hub's rows (Sjá: %s)" (if (fboundp 'nidhogg-view--call) "yes" "no")))
+         (drgnx-work-thirty-premise drgnx-perf--work-buf shown))
+       (defun drgnx-perf--work-premise ()
+         (drgnx-work-thirty-premise drgnx-perf--work-buf drgnx-perf--work-shown))
+       (defun drgnx-perf--work-down ()
+         (when (buffer-live-p drgnx-perf--work-buf) (kill-buffer drgnx-perf--work-buf))
+         (setq drgnx-perf--work-buf nil)
+         (advice-remove 'drgnx-view--draw-buffer #'drgnx-perf--wl-slice)
+         (when (fboundp 'drgnx-perf--wl-class-step) (advice-remove 'drgnx-view-nav-class-step #'drgnx-perf--wl-class-step))
+         (ignore-errors (delete-other-windows))
+         (drgnx-work-thirty-stop))
+       (defun drgnx-perf--work-select-map ()
+         "The map's window selected, with an agent selected in it."
+         (select-window (or (get-buffer-window drgnx-perf--work-buf) (error "The map is not shown")))
+         (with-current-buffer drgnx-perf--work-buf
+           (unless drgnx-work-map--selection (drgnx-work-map-next-agent))
+           (unless drgnx-work-map--selection (error "No agent could be selected"))))
+       (defun drgnx-perf--work-view () (buffer-local-value 'drgnx-view drgnx-perf--work-buf))
+       t))
+   ")"))
+
+(defun drgnx-perf-work--nav-keys ()
+  "300 keys on the map: 60 of each of Tab, right, left, down and up."
+  (cl-loop for k in '("TAB" "<right>" "<left>" "<down>" "<up>") append (make-list 60 (list :keys k))))
+
+(defun drgnx-perf-work--relayout-keys ()
+  "320 layout commands: f, o and the layers 1 to 6, 40 times.  Most change rows of the map (one that changes none, its
+answer with no patch before it, counts as lost), and the lab's p95 needs 100 samples; each command waits up to a
+second for the layout before it to be drawn."
+  (cl-loop repeat 40 append (mapcar (lambda (k) (list :keys k)) '("f" "o" "1" "2" "3" "4" "5" "6"))))
+
+(defconst drgnx-perf-work--relayout-form
+  (prin1-to-string
+   '(progn
+      (defvar drgnx-perf--rl-t0 nil "When the layout the user asked for was asked, until its frame is drawn.")
+      (defvar drgnx-perf--rl-ms nil "Per layout: ms from the command to the frame drawn.")
+      (defvar drgnx-perf--rl-frame-ms nil "Per layout: ms from the command to its frame's arrival.")
+      (defvar drgnx-perf--rl-timer nil "Non-nil from the layout's frame until its draw is done.")
+      (defvar drgnx-perf--rl-bt nil "The backtrace of the first nil-argument arithmetic error (diagnosis).")
+      (defun drgnx-perf--rl-debugger (&rest args)
+        (when (and (not drgnx-perf--rl-bt) (eq (car args) 'error)
+                   (equal (cadr args) '(wrong-type-argument number-or-marker-p nil)))
+          (setq drgnx-perf--rl-bt (backtrace-to-string))))
+      (setq debug-on-signal t debugger #'drgnx-perf--rl-debugger)
+      (defun drgnx-perf--rl-begin (&rest _)
+        "A layout is asked for: the one before is drawn first, so no sample is lost to the next key."
+        (drgnx-perf--rl-note 'begin (and drgnx-perf--rl-t0 t) unread-command-events)
+        (drgnx-perf--rl-idle 1)
+        (drgnx-perf--rl-note 'waited (and drgnx-perf--rl-t0 t) unread-command-events)
+        (when drgnx-perf--rl-t0 ; the one before was not drawn within the second (or its set had no answer)
+          (let ((c (assq drgnx-perf--rl-cmd drgnx-perf--rl-lost)))
+            (if c (cl-incf (cdr c)) (push (cons drgnx-perf--rl-cmd 1) drgnx-perf--rl-lost))))
+        (let ((c (assq this-command drgnx-perf--rl-asked)))
+          (if c (cl-incf (cdr c)) (push (cons this-command 1) drgnx-perf--rl-asked)))
+        (setq drgnx-perf--rl-cmd this-command drgnx-perf--rl-t0 (float-time)))
+      (defvar drgnx-perf--rl-frames nil "Per change the client reported: (t0 set, has layout, timer set), newest first.")
+      (defvar drgnx-perf--rl-cmd nil "The command whose layout is asked for.")
+      (defvar drgnx-perf--rl-asked nil "Per command: how many layouts it asked for.")
+      (defvar drgnx-perf--rl-lost nil "Per command: how many asked for a layout and got no frame with one.")
+      (defun drgnx-perf--rl-poll ()
+        (when (or (null drgnx-perf--rl-t0) (not (buffer-live-p drgnx-perf--work-buf))
+                  (not (drgnx-view-pending-p (drgnx-perf--work-view))))
+          (when drgnx-perf--rl-t0
+            (push (* 1000 (- (float-time) drgnx-perf--rl-t0)) drgnx-perf--rl-ms)
+            (setq drgnx-perf--rl-t0 nil))
+          (setq drgnx-perf--rl-timer nil)))
+      (defvar drgnx-perf--rl-sent nil "Non-nil from the layout's `work/map/set' until its answer.")
+      (defvar drgnx-perf--rl-patched nil "The ms from the command to the first patch applied since its set was sent.")
+      (defun drgnx-perf--rl-applied (orig patch)
+        "A patch came for the map.  The hub sends a layout's rows before it answers the set that asked for it (one
+connection, in order), so the first patch applied while the set waits for its answer is the layout's."
+        (prog1 (funcall orig patch)
+          (when (and drgnx-perf--rl-sent drgnx-perf--rl-t0 (not drgnx-perf--rl-patched))
+            (drgnx-perf--rl-note 'layout-patch)
+            (setq drgnx-perf--rl-patched (* 1000 (- (float-time) drgnx-perf--rl-t0))))))
+      (defun drgnx-perf--rl-drawn (&rest _)
+        "After each draw of the map's view, its timer's and the motion's (`drgnx-view-draw-now'; no timer of the lab's
+own to wake every millisecond): the layout is drawn when the view has nothing pending."
+        (when drgnx-perf--rl-timer (drgnx-perf--rl-poll)))
+      (defun drgnx-perf--rl-idle (&optional secs)
+        "Wait (SECS, default 10 s, at most) until the last layout asked for is drawn."
+        (drgnx-work-thirty--wait (or secs 10) (lambda () (null drgnx-perf--rl-t0))))
+      (defun drgnx-perf--rl-arm ()
+        "No filters, every layer open, the hub's answer drawn; the samples start over."
+        (with-current-buffer drgnx-perf--work-buf
+          (setq drgnx-work-map--filters nil drgnx-work-map--collapsed nil)
+          (drgnx-work-map--send-filters))
+        (drgnx-perf--rl-idle)
+        (setq drgnx-perf--rl-ms nil drgnx-perf--rl-frame-ms nil drgnx-perf--rl-trace nil))
+      (defvar drgnx-perf--rl-set nil "Per `work/map/set' answer, newest first: (MS ERR VERSION).")
+      (defvar drgnx-perf--rl-subs 0 "How many times the map subscribed again during the workload.")
+      (defvar drgnx-perf--rl-trace nil "Diagnosis, newest first: (MS WHAT ...), the first 120 things that happened.")
+      (defun drgnx-perf--rl-note (&rest what)
+        (when (< (length drgnx-perf--rl-trace) 120)
+          (push (cons (mod (round (* 1000 (float-time))) 1000000) what) drgnx-perf--rl-trace)))
+      (defun drgnx-perf--rl-pre ()
+        (drgnx-perf--rl-note 'cmd (key-description (this-command-keys)) (if (symbolp this-command) this-command 'closure)))
+      (defun drgnx-perf--rl-answer (t0 callback result err)
+        "The layout's answer: with a patch applied since its set was sent, the view draws it (poll until it has); with
+none, the layout changed no row: it counts as lost and no command waits for it."
+        (let ((v (plist-get result :version)))
+          (drgnx-perf--rl-note 'answer v (and err t) drgnx-perf--rl-patched)
+          (push (list (round (* 1000 (- (float-time) t0))) (and err t) v) drgnx-perf--rl-set)
+          (setq drgnx-perf--rl-sent nil)
+          (when (and drgnx-perf--rl-t0 (not err))
+            (if drgnx-perf--rl-patched
+                (progn (push (list t t nil) drgnx-perf--rl-frames)
+                       (push drgnx-perf--rl-patched drgnx-perf--rl-frame-ms)
+                       (setq drgnx-perf--rl-timer t)
+                       (drgnx-perf--rl-poll))
+              (push (list t nil nil) drgnx-perf--rl-frames)
+              (let ((c (assq drgnx-perf--rl-cmd drgnx-perf--rl-lost)))
+                (if c (cl-incf (cdr c)) (push (cons drgnx-perf--rl-cmd 1) drgnx-perf--rl-lost)))
+              (setq drgnx-perf--rl-t0 nil))))
+        (funcall callback result err))
+      (defun drgnx-perf--rl-call (orig method params callback)
+        "Diagnosis: time each `work/map/set' answer and count the subscriptions."
+        (if (equal method "work/map/set")
+            (progn (drgnx-perf--rl-note 'set (plist-get params :collapsed) (plist-get (plist-get params :filters) :overlaps))
+                   (setq drgnx-perf--rl-sent t drgnx-perf--rl-patched nil)
+                   (funcall orig method params (apply-partially #'drgnx-perf--rl-answer (float-time) callback)))
+          (when (equal method "work/map/subscribe") (cl-incf drgnx-perf--rl-subs))
+          (funcall orig method params callback)))
+      (defun drgnx-perf--rl-diag ()
+        "What the premise reports besides its counts: per command asked and lost, the subscriptions, the answers."
+        (let ((ms (mapcar #'car drgnx-perf--rl-set)))
+          (list :asked drgnx-perf--rl-asked :lost drgnx-perf--rl-lost :subscribes drgnx-perf--rl-subs
+                :set-answers (length drgnx-perf--rl-set) :set-errors (seq-count #'cadr drgnx-perf--rl-set)
+                :set-ms-max (and ms (apply #'max ms)) :set-versions (seq-take (mapcar #'caddr drgnx-perf--rl-set) 12)
+                :trace (reverse drgnx-perf--rl-trace))))
+      (advice-add 'drgnx-work-client--call :around #'drgnx-perf--rl-call)
+      (add-hook 'pre-command-hook #'drgnx-perf--rl-pre)
+      (advice-add 'drgnx-work-map--send-filters :before #'drgnx-perf--rl-begin)
+      (advice-add 'drgnx-view-apply-patch :around #'drgnx-perf--rl-applied)
+      (advice-add 'drgnx-view--draw-buffer :after #'drgnx-perf--rl-drawn)
+      (advice-add 'drgnx-view-draw-now :after #'drgnx-perf--rl-drawn)
+      (defun drgnx-perf--rl-measure ()
+        (drgnx-perf--rl-idle)
+        (unless drgnx-perf--rl-ms (error "Premise: no layout was drawn (t0 %S, timer %S)" drgnx-perf--rl-t0 drgnx-perf--rl-timer))
+        (list :relayout (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--rl-ms))
+              :to_frame (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--rl-frame-ms))))
+      (defun drgnx-perf--rl-guard (fn)
+        "FN's value; an error it signals is raised again with the backtrace of the first nil-argument error."
+        (condition-case e (funcall fn)
+          (error (error "%s; BT %s" (error-message-string e)
+                        (and drgnx-perf--rl-bt (substring drgnx-perf--rl-bt 0 (min 2500 (length drgnx-perf--rl-bt))))))))
+      (defun drgnx-perf--rl-teardown ()
+        (advice-remove 'drgnx-work-map--send-filters #'drgnx-perf--rl-begin)
+        (advice-remove 'drgnx-work-client--call #'drgnx-perf--rl-call)
+        (remove-hook 'pre-command-hook #'drgnx-perf--rl-pre)
+        (advice-remove 'drgnx-view-apply-patch #'drgnx-perf--rl-applied)
+        (advice-remove 'drgnx-view--draw-buffer #'drgnx-perf--rl-drawn)
+        (advice-remove 'drgnx-view-draw-now #'drgnx-perf--rl-drawn)
+        (setq drgnx-perf--rl-timer nil drgnx-perf--rl-t0 nil drgnx-perf--rl-sent nil)
+        (when drgnx-perf--rl-bt (error "BT %s" (substring drgnx-perf--rl-bt 0 (min 3000 (length drgnx-perf--rl-bt))))))
+      t))
+  "The relayout workload's session side: the time from a layout command (`drgnx-work-map--send-filters') to the frame it
+asked for drawn (the view has nothing pending).")
+
+(defconst drgnx-perf-work--live-form
+  (prin1-to-string
+   '(progn
+      (defvar drgnx-perf--wl-slices nil "Wall ms of each draw of the map's view since the arm.")
+      (defvar drgnx-perf--wl-start nil "(DRAW-MS DELTAS) when the arm was done.")
+      (defvar drgnx-perf--wl-long nil "The draws over 4 ms: (MS TOUCHED ROWS GC-MS), newest first.")
+      (defvar drgnx-perf--wl-consed nil "Per draw of the map's view: kB allocated (`drgnx-gc--consed').")
+      (defvar drgnx-perf--wl-idle 0 "Draws that ran while Emacs was idle (`current-idle-time' non-nil).")
+      (defvar drgnx-perf--wl-gcs nil "Collections in the window, by origin: ((ORIGIN . N) ...).")
+      (defun drgnx-perf--wl-gc ()
+        (let* ((o (or (bound-and-true-p nidhogg-watchdog-gc-origin) 'auto)) (c (assq o drgnx-perf--wl-gcs)))
+          (if c (cl-incf (cdr c)) (push (cons o 1) drgnx-perf--wl-gcs))))
+      (defun drgnx-perf--wl-slice (orig buffer)
+        (let* ((t0 (float-time)) (v (and (eq buffer drgnx-perf--work-buf) (buffer-local-value 'drgnx-view buffer)))
+               (gc0 gc-elapsed) (c0 (drgnx-gc--consed))
+               (touched (and v (drgnx-view--touched v))) (rows (and v (plist-get (drgnx-view-stats v) :rows-drawn))))
+          (prog1 (funcall orig buffer)
+            (when v
+              (let ((ms (* 1000 (- (float-time) t0))))
+                (push (/ (- (drgnx-gc--consed) c0) 1024.0) drgnx-perf--wl-consed)
+                (when (current-idle-time) (cl-incf drgnx-perf--wl-idle))
+                (push ms drgnx-perf--wl-slices)
+                (when (> ms 4)
+                  (push (list (drgnx-perf--round ms) (and touched t) (- (plist-get (drgnx-view-stats v) :rows-drawn) rows)
+                              (drgnx-perf--round (* 1000 (- gc-elapsed gc0))))
+                        drgnx-perf--wl-long)))))))
+      (defvar drgnx-perf--wl-class nil "Wall ms of each class step (`drgnx-view-nav-class-step') since the arm.")
+      (defun drgnx-perf--wl-class-step (orig &rest args)
+        (let ((t0 (float-time)))
+          (prog1 (apply orig args) (push (* 1000 (- (float-time) t0)) drgnx-perf--wl-class))))
+      (defun drgnx-perf--wl-updates ()
+        "The map's updates so far: its patches' version."
+        (or (drgnx-view-patch-version (buffer-local-value 'drgnx-view-patch drgnx-perf--work-buf)) 0))
+      (defun drgnx-perf--wl-arm ()
+        (setq drgnx-perf--wl-slices nil drgnx-perf--wl-long nil drgnx-perf--wl-consed nil drgnx-perf--wl-idle 0
+              drgnx-perf--wl-gcs nil drgnx-perf--wl-class nil
+              drgnx-perf--wl-start (list (plist-get (drgnx-view-stats (drgnx-perf--work-view)) :draw-ms)
+                                         (drgnx-perf--wl-updates)))
+        (advice-add 'drgnx-view--draw-buffer :around #'drgnx-perf--wl-slice)
+        (advice-add 'drgnx-view-nav-class-step :around #'drgnx-perf--wl-class-step))
+      (defun drgnx-perf--wl-wait (secs)
+        "Let the session run for SECS: one wait to the deadline, waking only for process output."
+        (let ((deadline (+ (float-time) secs)))
+          (while (< (float-time) deadline) (accept-process-output nil (- deadline (float-time))))))
+      (defun drgnx-perf--wl-measure ()
+        "30 s with the map shown and the agents streaming: the view's draw ms per second, each draw's ms and the stalls."
+        (let ((t0 (float-time)))
+          (drgnx-perf-begin)
+          (add-hook 'post-gc-hook #'drgnx-perf--wl-gc)
+          (drgnx-perf--wl-wait 30)
+          (remove-hook 'post-gc-hook #'drgnx-perf--wl-gc)
+          (let* ((secs (- (float-time) t0)) (end (drgnx-perf-end))
+                 (draw (- (plist-get (drgnx-view-stats (drgnx-perf--work-view)) :draw-ms) (car drgnx-perf--wl-start)))
+                 (deltas (- (drgnx-perf--wl-updates) (cadr drgnx-perf--wl-start))))
+            (advice-remove 'drgnx-view--draw-buffer #'drgnx-perf--wl-slice)
+            (advice-remove 'drgnx-view-nav-class-step #'drgnx-perf--wl-class-step)
+            (when (< deltas 30) (error "Premise: the map got %d deltas in %.0f s" deltas secs))
+            (append (list :draw_ms_s (drgnx-perf--round2 (/ draw secs)) :deltas deltas
+                          :long (vconcat (mapcar (lambda (l) (format "%S" l)) (seq-take drgnx-perf--wl-long 12)))
+                          :slice_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats drgnx-perf--wl-slices))
+                          :draw_kb (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--wl-consed))
+                          :draw_mb_s (drgnx-perf--round2 (/ (apply #'+ 0.0 drgnx-perf--wl-consed) 1024 secs))
+                          :draws (length drgnx-perf--wl-slices) :draws_idle drgnx-perf--wl-idle
+                          :class_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats drgnx-perf--wl-class))
+                          :class_ms_total (drgnx-perf--round2 (apply #'+ 0.0 drgnx-perf--wl-class))
+                          :gcs (format "%S" drgnx-perf--wl-gcs)
+                          :gc_env (format "%S" (list :threshold gc-cons-threshold :daemon (and (daemonp) t)
+                                                     :clients (and (boundp 'server-clients) (length server-clients))
+                                                     :waits (and (fboundp 'drgnx-gc--someone-waits-p) (drgnx-gc--someone-waits-p))
+                                                     :idle-timer (and (fboundp 'drgnx-timer-active-p)
+                                                                      (drgnx-timer-active-p 'gc-idle)))))
+                    (list :stalls (plist-get end :stalls))))))
+      t))
+  "The live workload's session side.")
+
+(defconst drgnx-perf-work--trail-form
+  (prin1-to-string
+   '(progn
+      (defvar drgnx-perf--trail-session nil "The mirror of the 10,000-step session.")
+      (defvar drgnx-perf--trail-n 10000 "The steps of the turn.")
+      (defun drgnx-perf--trail-steps ()
+        "The program of a turn of 10,000 read steps."
+        ;; the offset differs each time: the supervisor's `repeat' rule pauses an agent that makes the same call
+        ;; three times in a turn, and the turn must not be cut short
+        (concat "say start\\n" (mapconcat (lambda (i) (format "provider:read README.md %d 1" i)) (number-sequence 1 drgnx-perf--trail-n) "\\n")))
+      (defun drgnx-perf--trail-newest ()
+        (plist-get (car (plist-get (drgnx-hub-call-sync "timeline/get" (list :scope "session"
+                                                                             :id (drgnx-agent-session-remote drgnx-perf--trail-session)
+                                                                             :limit 1)
+                                                        15)
+                                   :steps))
+                   :seq))
+      (defun drgnx-perf--trail-up ()
+        "A hub with one mock session whose turn took 10,000 steps; an error when it did not."
+        (drgnx-perf--hub-start (list (drgnx-perf--trail-steps)))
+        (setq drgnx-perf--trail-session (drgnx-agents-mirror-start "mock" temporary-file-directory))
+        (drgnx-perf--wait 10 (lambda () (eq (drgnx-agent-session-status drgnx-perf--trail-session) 'idle)))
+        (setq drgnx-perf--trail-t0 (float-time) drgnx-perf--trail-trace nil)
+        (drgnx-perf--send drgnx-perf--trail-session "go")
+        (drgnx-perf--trail-settle 100)
+        t)
+      (defvar drgnx-perf--trail-err nil "What the last newest-step question to the hub said.")
+      (defvar drgnx-perf--trail-t0 nil "When the turn was sent.")
+      (defvar drgnx-perf--trail-trace nil "Per question, newest first: (S STEP HUB-CPU-S EMACS-CPU-S ENTRIES).")
+      (defun drgnx-perf--trail-cpu (pid)
+        (let ((a (and pid (process-attributes pid))))
+          (if a (drgnx-perf--round (float-time (time-add (alist-get 'utime a 0) (alist-get 'stime a 0)))) -1)))
+      (defun drgnx-perf--trail-settle (secs)
+        "Wait up to SECS s for the hub to hold the 10,000 steps (its newest step 10,000 or more); whether it does.  The hub
+takes a 10,000-step turn in for minutes, and answers a question meanwhile only now and then: ask every 2 s, 15 s a call."
+        (let ((end (+ (float-time) secs)) (n nil))
+          (while (and (not (and (numberp n) (>= n drgnx-perf--trail-n))) (< (float-time) end))
+            (setq n (condition-case e (drgnx-perf--trail-newest) (error (setq drgnx-perf--trail-err e) nil)))
+            (push (list (round (- (float-time) (or drgnx-perf--trail-t0 (float-time)))) n
+                        (drgnx-perf--trail-cpu (and (process-live-p drgnx-perf--hub) (process-id drgnx-perf--hub)))
+                        (drgnx-perf--trail-cpu (emacs-pid))
+                        (length (drgnx-agent-session-entries drgnx-perf--trail-session)))
+                  drgnx-perf--trail-trace)
+            (unless (and (numberp n) (>= n drgnx-perf--trail-n)) (drgnx-perf--wait 2 #'ignore)))
+          (and (numberp n) (>= n drgnx-perf--trail-n))))
+      (defun drgnx-perf--trail-premise ()
+        "The turn took 10,000 steps (each call waits up to 100 s, the lab's calls allow 120, and the setup waited before)."
+        (unless (drgnx-perf--trail-settle 100)
+          (error "Premise: the hub does not hold the 10,000 steps (status %S, last answer %S; (s step hub-cpu emacs-cpu entries) %S)"
+                 (drgnx-agent-session-status drgnx-perf--trail-session) drgnx-perf--trail-err
+                 (seq-take drgnx-perf--trail-trace 40)))
+        t)
+      (defun drgnx-perf--trail-measure ()
+        "(:draw_ms MS :rows N): the trail opened on the session (on the hub's rows) until its first rows are drawn."
+        (when-let* ((old (get-buffer (format "*drgnx work trail: %s*" (drgnx-agent-session-remote drgnx-perf--trail-session)))))
+          (kill-buffer old))
+        (let* ((t0 (float-time))
+               (buf (drgnx-work-trail-open nil (drgnx-agent-session-remote drgnx-perf--trail-session))))
+          (set-window-buffer (selected-window) buf)
+          (unless (buffer-local-value 'drgnx-view-patch buf)
+            (error "Premise: the trail is not on the hub's rows (Sjá: %s)" (if (fboundp 'nidhogg-view--call) "yes" "no")))
+          (unless (drgnx-perf--wait 30 (lambda () (and (drgnx-view-patch-version (buffer-local-value 'drgnx-view-patch buf))
+                                                       (> (buffer-size buf) 0))))
+            (error "The trail's first rows did not come"))
+          (with-current-buffer buf
+            (drgnx-perf--trail-await drgnx-view)
+            (redisplay t))
+          (list :settled_s (car (car drgnx-perf--trail-trace))
+                :draw_ms (drgnx-perf--round (* 1000 (- (float-time) t0)))
+                :rows (drgnx-view-row-count (buffer-local-value 'drgnx-view buf)))))
+      (defun drgnx-perf--trail-await (view)
+        "One bounded wait (30 s) until VIEW has nothing pending: the draw that ends its work throws out of the wait."
+        (let ((ad (lambda (&rest _) (unless (drgnx-view-pending-p view) (throw 'drgnx-perf--drawn t))))
+              (deadline (+ (float-time) 30)))
+          (advice-add 'drgnx-view--draw-buffer :after ad)
+          (unwind-protect
+              (catch 'drgnx-perf--drawn
+                (while (and (drgnx-view-pending-p view) (< (float-time) deadline))
+                  (accept-process-output nil (max 0.001 (- deadline (float-time))))))
+            (advice-remove 'drgnx-view--draw-buffer ad))))
+      (defun drgnx-perf--trail-teardown ()
+        (dolist (b (buffer-list)) (when (string-prefix-p "*drgnx work trail: " (buffer-name b)) (kill-buffer b)))
+        (ignore-errors (drgnx-agents-kill drgnx-perf--trail-session))
+        (drgnx-perf--hub-stop))
+      t))
+  "The trail workload's session side.")
+
+(defconst drgnx-perf-work--view-patch-form
+  (prin1-to-string
+   '(progn
+      (require 'drgnx-view)
+      (defvar drgnx-perf--vp-buf nil "The hub-fed view's buffer.")
+      (defun drgnx-perf--vp-row (agent line version)
+        "Row LINE of AGENT's card at VERSION, shaped like a Work map card line: runs, an item id, two stops, an image."
+        (let ((text (format "agent %02d line %d: editing core/drgnx-file-%d.el v%d" agent line line version)))
+          (list :key (format "agent:%02d/%d" agent line) :text (concat " " text " " " 3 files")
+                :runs (vector (vector 1 9 "bold") (vector 9 (+ 1 (length text)) "shadow")
+                              (vector (+ 3 (length text)) (+ 10 (length text)) "drgnx-work-label"))
+                :props (vector (vector 0 (+ 10 (length text)) "drgnx-work-id" (format "agent:%02d" agent)))
+                :stops (vector (vector (+ 1 (length text)) 360) (vector (+ 2 (length text)) 420))
+                :images (vector (vector 0 (format "%016x-1" agent) "*")))))
+      (defun drgnx-perf--vp-json (ops base version images)
+        (json-serialize (list :view "work-map" :class "gui" :hub 7 :base base :version version :env_epoch 1
+                              :ops (vconcat ops) :images (vconcat images))))
+      (defun drgnx-perf--vp-parse (json)
+        (json-parse-string json :object-type 'plist :array-type 'list :null-object nil :false-object nil))
+      (defun drgnx-perf--vp-up ()
+        "A hub-fed view of 30 agents' cards (five rows each), its reset applied and drawn."
+        (setq drgnx-perf--vp-buf (get-buffer-create " *perf view-patch*"))
+        (switch-to-buffer drgnx-perf--vp-buf)
+        (drgnx-view-patch-attach "work-map" "gui" :epoch 1)
+        (let (rows images)
+          (dotimes (a 30)
+            (push (vector (format "%016x-1" a) "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"8\" height=\"8\"/>") images)
+            (dotimes (l 5) (push (drgnx-perf--vp-row a l 0) rows)))
+          (drgnx-view-apply-patch
+           (drgnx-perf--vp-parse (drgnx-perf--vp-json (list (list :reset (vconcat (nreverse rows)))) 0 1 images))))
+        (drgnx-view-draw-now drgnx-view)
+        t)
+      (defun drgnx-perf--vp-bytes (before after)
+        "Bytes allocated between two `memory-use-counts' readings (conses and floats 16, vector cells 8, symbols 48,
+string chars 1, intervals 56, strings 32)."
+        (let ((d (cl-mapcar #'- after before)))
+          (+ (* 16 (nth 0 d)) (* 16 (nth 1 d)) (* 8 (nth 2 d)) (* 48 (nth 3 d)) (nth 4 d) (* 56 (nth 5 d)) (* 32 (nth 6 d)))))
+      (defun drgnx-perf--vp-measure ()
+        "(:alloc STATS :draw_kb STATS :slices N :rows N): 100 patches, each replacing one row of every agent (30 rows),
+parsed from JSON, applied and drawn.  :alloc is the objects the parse, the apply and the draw made; :draw_kb the kB
+the draw alone made."
+        (with-current-buffer drgnx-perf--vp-buf
+          (let ((view drgnx-view) (version 1) allocs draws)
+            (dotimes (i 100)
+              (let* ((rows (let (r) (dotimes (a 30) (push (drgnx-perf--vp-row a (% i 5) (1+ i)) r)) (nreverse r)))
+                     (json (drgnx-perf--vp-json (list (list :replace (vconcat rows))) version (1+ version) nil))
+                     (a0 (drgnx-perf--alloc-sum)))
+                (drgnx-view-apply-patch (drgnx-perf--vp-parse json))
+                (let ((m0 (memory-use-counts)))
+                  (drgnx-view-draw-now view)
+                  (push (/ (drgnx-perf--vp-bytes m0 (memory-use-counts)) 1024.0) draws))
+                (push (- (drgnx-perf--alloc-sum) a0) allocs)
+                (setq version (1+ version))))
+            (unless (= version 101) (error "Premise: %d patches applied, not 100" (1- version)))
+            (list :alloc (drgnx-perf-stats allocs) :draw_kb (mapcar #'drgnx-perf--round2 (drgnx-perf-stats draws))
+                  :slices (plist-get (drgnx-view-stats view) :slices) :rows (drgnx-view-row-count view)))))
+      (defun drgnx-perf--vp-down ()
+        (when (buffer-live-p drgnx-perf--vp-buf) (kill-buffer drgnx-perf--vp-buf))
+        (setq drgnx-perf--vp-buf nil))
+      t))
+  "The `view-patch' workload's session side: no hub, a synthetic patch stream.")
+
+(defconst drgnx-perf-work--nav-rows-form
+  (prin1-to-string
+   '(progn
+      (require 'drgnx-view)
+      (require 'drgnx-view-nav)
+      (require 'nidhogg-views)
+      (defvar drgnx-perf--nr-buf nil "The map-shaped hub-fed view's buffer.")
+      (defvar drgnx-perf--nr-sent 0 "Hub calls the view made.")
+      (defun drgnx-perf--nr-id (kind i) (format "%s:%02d" kind i))
+      (defun drgnx-perf--nr-node (i kind label)
+        "Node KIND of agent I: an ask above it, the agent, a file below; agents linked left and right."
+        (let* ((id (drgnx-perf--nr-id kind i))
+               (nav (pcase kind
+                      ("ask" (list :down (drgnx-perf--nr-id "agent" i)))
+                      ("file" (list :up (drgnx-perf--nr-id "agent" i)))
+                      (_ (append (list :up (drgnx-perf--nr-id "ask" i) :down (drgnx-perf--nr-id "file" i))
+                                 (and (> i 0) (list :left (drgnx-perf--nr-id "agent" (1- i))))
+                                 (and (< i 29) (list :right (drgnx-perf--nr-id "agent" (1+ i)))))))))
+          (list :id id :kind kind :nav nav :fields (vector (vector "label" label) (vector "x" (* 12 i)) (vector "y" 0)
+                                                           (vector "w" 10) (vector "h" 6)))))
+      (defun drgnx-perf--nr-model ()
+        "The map model of 30 agents as the hub sends it: one JSON string."
+        (let (nodes edges agents)
+          (dotimes (i 30)
+            (push (drgnx-perf--nr-node i "ask" (format "ask %d" i)) nodes)
+            (push (drgnx-perf--nr-node i "agent" (format "agent %d" i)) nodes)
+            (push (drgnx-perf--nr-node i "file" (format "file %d" i)) nodes)
+            (push (vector (drgnx-perf--nr-id "ask" i) (drgnx-perf--nr-id "agent" i) "came-from") edges)
+            (push (vector (drgnx-perf--nr-id "agent" i) (drgnx-perf--nr-id "file" i) "edits") edges)
+            (push (drgnx-perf--nr-id "agent" i) agents))
+          (setq agents (vconcat (nreverse agents)))
+          (json-serialize
+           (list :ops (vector (list :reset
+                                    (list :descriptor (list :scheme "links" :chain_kinds ["came-from" "edits"]
+                                                            :match_fields ["label"] :lists ["team" "outline"]
+                                                            :classes ["selected" "match" "chain" "dim"] :start "team")
+                                          :nodes (vconcat (nreverse nodes)) :edges (vconcat edges)
+                                          :lists (vector (list :name "team" :ids agents)
+                                                         (list :name "outline" :ids agents)))))))))
+      (defun drgnx-perf--nr-rows ()
+        "Three rows per agent (its ask, its card, its file), each holding its node's span."
+        (let (rows)
+          (dotimes (i 30)
+            (dolist (kind '("ask" "agent" "file"))
+              (let ((text (format " %s %02d  working on core/drgnx-file-%d.el " kind i i)))
+                (push (list :key (format "%s/%02d" kind i) :text text
+                            :props (list (list 1 (1- (length text)) "drgnx-work-id" (drgnx-perf--nr-id kind i))))
+                      rows))))
+          (nreverse rows)))
+      (defun drgnx-perf--nr-up ()
+        "The map-shaped hub-fed view: its model and its 90 rows applied and drawn, agent 00 selected."
+        (setq drgnx-perf--nr-buf (get-buffer-create " *perf nav-rows*") drgnx-perf--nr-sent 0)
+        (switch-to-buffer drgnx-perf--nr-buf)
+        (drgnx-view-patch-attach "perf-nav" "gui" :epoch 1)
+        (setq-local drgnx-view-nav-notice-method "work/map/set")
+        (drgnx-view-model-event (list :view "perf-nav" :hub 7 :base 0 :version 1 :reset t :model (drgnx-perf--nr-model)))
+        (drgnx-view-apply-patch (list :view "perf-nav" :class "gui" :hub 7 :base 0 :version 1 :env_epoch 1 :model 1
+                                      :ops (list (list :reset (drgnx-perf--nr-rows)))))
+        (drgnx-view-draw-now drgnx-view)
+        (unless (equal "agent:00" (drgnx-view-nav 'select "agent:00")) (error "Premise: no model in Sjá"))
+        t)
+      (defun drgnx-perf--nr-apply-us (model times)
+        "Microseconds per model of MODEL (its JSON, a function of the version) into Sjá as the hub's line comes: the line
+pushed (`nidhogg-view-push') and drained (`nidhogg-view-drain'), TIMES times on one fresh view."
+        (let* ((view (format "perf-apply-%s" (random))) (h (nidhogg-view-open view)) out) ; Sjá queues for a shown view
+          (unwind-protect
+              (dotimes (v times)
+                (let* ((line (concat "{\"event\":\"view-model\",\"data\":{\"view\":\"" view "\",\"hub\":1,"
+                                     (format "\"base\":%d,\"version\":%d,%s\"model\":" v (1+ v) (if (= v 0) "\"reset\":true," ""))
+                                     (funcall model (1+ v)) "}}"))
+                       (t0 (float-time)))
+                  (nidhogg-view-push line)
+                  (unless (eql 1 (car (nidhogg-view-drain view))) (error "Premise: apply %d" v))
+                  (push (round (* 1e6 (- (float-time) t0))) out)))
+            (nidhogg-view-close h))   ; the view goes with its last instance
+          out))
+      (defun drgnx-perf--nr-measure ()
+        "(:alloc STATS :classed STATS :hub_calls N :reset_us STATS :field_us STATS): 100 keys held (no time passes
+between them: right and left, the team walk, up and down), the objects and the class step's overlays per key, the
+hub calls after the selection settles (the trailing notice: one), then Sjá's apply of a 30-agent reset and of a
+field patch."
+        (with-current-buffer drgnx-perf--nr-buf
+          (let ((drgnx-view-patch-send-function (lambda (_m _p) (cl-incf drgnx-perf--nr-sent)))
+                (state drgnx-view-patch) allocs classed)
+            (setq drgnx-perf--nr-sent 0)
+            (drgnx-view-nav 'select "agent:05")              ; room to move right and left without an end
+            (dotimes (i 100)
+              (let ((a0 (drgnx-perf--alloc-sum)) (c0 (drgnx-view-patch-classed state)))
+                (pcase (% i 10)
+                  ((or 0 1 2 3) (drgnx-view-nav 'follow "right"))
+                  ((or 4 5 6) (drgnx-view-nav 'follow "left"))
+                  (7 (drgnx-view-nav 'walk "team" 1))
+                  (8 (drgnx-view-nav 'follow "up"))          ; to the agent's ask, and back down: every key moves
+                  (_ (drgnx-view-nav 'follow "down")))
+                (push (- (drgnx-perf--alloc-sum) a0) allocs)
+                (push (- (drgnx-view-patch-classed state) c0) classed)))
+            (sit-for (* 3 drgnx-view-delay))
+            (let* ((reset (drgnx-perf--nr-model))
+                   (field (lambda (v)
+                            (if (= v 1) reset
+                              (json-serialize
+                               (list :ops (vector (list :nodes (vector (drgnx-perf--nr-node 3 "agent" (format "agent 3 v%d" v)))))))))))
+              (list :alloc (drgnx-perf-stats allocs) :classed (drgnx-perf-stats classed) :hub_calls drgnx-perf--nr-sent
+                    ;; a reset on a fresh view each time; field patches after one reset (its time left out: the last)
+                    :reset_us (drgnx-perf-stats (let (r) (dotimes (_ 20) (push (car (drgnx-perf--nr-apply-us (lambda (_v) reset) 1)) r)) r))
+                    :field_us (drgnx-perf-stats (butlast (drgnx-perf--nr-apply-us field 41))))))))
+      (defun drgnx-perf--nr-down ()
+        (when (buffer-live-p drgnx-perf--nr-buf) (kill-buffer drgnx-perf--nr-buf))
+        (setq drgnx-perf--nr-buf nil))
+      t))
+  "The `work-nav-rows' workload's session side: no hub, a map-shaped model and rows (30 agents), keys through Sjá.")
+
+(defconst drgnx-perf-work--trail-long-form
+  (prin1-to-string
+   '(progn
+      (require 'drgnx-view-nav)
+      (defvar drgnx-perf--tl-buf nil "The trail of the 2,000-step session, on the rows path.")
+      (defvar drgnx-perf--tl-line nil "When the hub's last model line came (`float-time').")
+      (defvar drgnx-perf--tl-handled 0.0 "The seconds the model lines' handler ran since it was cleared.")
+      (defun drgnx-perf--tl-line-ad (f &rest args)
+        (let ((t0 (float-time)))
+          (setq drgnx-perf--tl-line t0)
+          (prog1 (apply f args) (setq drgnx-perf--tl-handled (+ drgnx-perf--tl-handled (- (float-time) t0))))))
+      (defun drgnx-perf--tl-h () (drgnx-view-patch-handle (buffer-local-value 'drgnx-view-patch drgnx-perf--tl-buf)))
+      (defun drgnx-perf--tl-up ()
+        "A hub whose store holds session perf-long's 2,000 steps (seeded), and its trail open on the rows path, the model's
+window the last 500."
+        (drgnx-perf--hub-start nil)
+        ;; the session's data folder is the hub's (the harness sets DRGNX_DATA_DIR for both)
+        (let ((db (sqlite-open (expand-file-name "work.db" (drgnx-paths-dir 'data)))))
+          (unwind-protect
+              (sqlite-execute db (concat "insert into step (session, seq, class, start, end) with recursive n(i) as"
+                                         " (select 1 union all select i + 1 from n where i < 2000)"
+                                         " select 'session:perf-long', i, 'tool', i, i + 1 from n"))
+            (sqlite-close db)))
+        (setq drgnx-perf--tl-buf (get-buffer-create "*drgnx work trail: perf-long*"))
+        (switch-to-buffer drgnx-perf--tl-buf)
+        (with-current-buffer drgnx-perf--tl-buf
+          (drgnx-work-trail-mode)
+          (setq drgnx-work-trail--session "perf-long" drgnx-work-lens-nav #'drgnx-work-trail--nav)
+          (drgnx-work-trail--rows-attach "trail/perf-long" (list :session "perf-long")))
+        (unless (drgnx-perf--wait 30 (lambda () (equal (ignore-errors (nidhogg-view-get (drgnx-perf--tl-h) 'window "steps"))
+                                                       '(1500 500 2000))))
+          (error "Premise: the trail's model is not the last 500 of 2,000 steps (window %S)"
+                 (ignore-errors (nidhogg-view-get (drgnx-perf--tl-h) 'window "steps"))))
+        t)
+      (defun drgnx-perf--tl-measure ()
+        "(:key_ms STATS :page_ms STATS :pages N :list_max N :keys N :reached BOOL): from the newest step, `up' until the first
+step: each key's time, and for a key that stopped at the window's edge the time until it ran again in the next
+window (one `view/window' round trip and the model's apply); the longest list Sjá held.  An error when the first
+step is not reached or Sjá held more than the window."
+        (with-current-buffer drgnx-perf--tl-buf
+          (advice-add 'drgnx-hub--model-line :around #'drgnx-perf--tl-line-ad)
+          (advice-add 'drgnx-hub--model-pushed :around #'drgnx-perf--tl-line-ad)
+          (let ((h (drgnx-perf--tl-h)) keys pages lines handled (most 0) (n 0))
+            ;; each run starts from the last 500 (the run before paged to the first)
+            (funcall drgnx-view-patch-send-function "view/window" (list :view (drgnx-view-patch-view drgnx-view-patch)
+                                                                        :list "steps" :from 1500))
+            (unless (drgnx-perf--wait 20 (lambda () (equal (nidhogg-view-get h 'window "steps") '(1500 500 2000))))
+              (error "Premise: the window did not go back to the last 500 (%S)" (nidhogg-view-get h 'window "steps")))
+            (drgnx-view-nav 'select (car (last (nidhogg-view-get h 'list "steps"))))
+            (unless (eql (drgnx-view-nav-field "seq") 2000)
+              (error "Premise: the newest step is not selected (%S, seq %S; the list from %S to %S)"
+                     (drgnx-view-nav-selection) (drgnx-view-nav-field "seq")
+                     (car (nidhogg-view-get h 'list "steps")) (car (last (nidhogg-view-get h 'list "steps")))))
+            (while (and (< n 2100) (not (eql (drgnx-view-nav-field "seq") 1)))
+              (let ((t0 (float-time)))
+                (drgnx-work-trail--nav 'up)
+                (push (* 1000 (- (float-time) t0)) keys)
+                (when (drgnx-view-nav-paging-p)
+                  (setq drgnx-perf--tl-line nil drgnx-perf--tl-handled 0.0)
+                  (push (* 1000 (- (or (drgnx-perf--wait 20 (lambda () (not (drgnx-view-nav-paging-p))))
+                                       (error "Premise: the window asked at %s did not come" (drgnx-view-nav-selection)))
+                                   t0))
+                        pages)
+                  (when drgnx-perf--tl-line (push (* 1000 (- drgnx-perf--tl-line t0)) lines))
+                  (push (* 1000 drgnx-perf--tl-handled) handled)))
+              (setq most (max most (length (nidhogg-view-get h 'list "steps"))) n (1+ n)))
+            ;; the rows: every step reachable, and Sjá never holds more than the window
+            (unless (eql (drgnx-view-nav-field "seq") 1)
+              (error "Premise: %d keys up reached %s (seq %S), not the first step" n (drgnx-view-nav-selection)
+                     (drgnx-view-nav-field "seq")))
+            (when (> most 500) (error "Premise: Sjá held %d steps, more than the window's 500" most))
+            (list :key_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats keys))
+                  :page_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats pages))
+                  :line_ms (mapcar #'drgnx-perf--round2
+                                   (drgnx-perf-stats (prog1 lines
+                                                       (advice-remove 'drgnx-hub--model-line #'drgnx-perf--tl-line-ad)
+                                                       (advice-remove 'drgnx-hub--model-pushed #'drgnx-perf--tl-line-ad))))
+                  :handled_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats handled))
+                  :pages (length pages) :list_max most :keys n
+                  :reached t))))
+      (defun drgnx-perf--tl-down ()
+        (when (buffer-live-p drgnx-perf--tl-buf) (kill-buffer drgnx-perf--tl-buf))
+        (setq drgnx-perf--tl-buf nil)
+        (drgnx-perf--hub-stop))
+      t))
+  "The `trail-long' workload's session side: a hub whose store holds a 2,000-step session, its trail paged by keys.")
+
+(defconst drgnx-perf-work--board-form
+  (prin1-to-string
+   '(progn
+      (require 'drgnx-view-nav)
+      (unless (featurep 'drgnx-work-board) (load (expand-file-name "modules/tools/drgnx-work-board" drgnx-dir) nil t))
+      (defvar drgnx-perf--wb-buf nil "The Board of 200 cards.")
+      (defvar drgnx-perf--wb-send nil "`drgnx-view-patch-send-function' before the workload (nothing is sent in it).")
+      (defconst drgnx-perf--wb-statuses ["open" "running" "waiting" "needs-input" "in-review" "done"])
+      (defun drgnx-perf--wb-cards ()
+        "200 tasks, card I in column I mod 6, each a plan task with I mod 6 of 5 steps done."
+        (cl-loop for i below 200
+                 collect (list :id (format "task:%03d" i) :title (format "Task %03d: move the loader to the new store" i)
+                               :status (aref drgnx-perf--wb-statuses (% i 6)) :plan "plan:perf"
+                               :progress (list (% i 6) 5))))
+      (defun drgnx-perf--wb-cols ()
+        "The cards' ids by column (`work::trail::board's columns), a vector of 6 vectors."
+        (let ((cols (make-vector 6 nil)))
+          (dolist (c (reverse (drgnx-perf--wb-cards)))
+            (let ((k (seq-position drgnx-perf--wb-statuses (plist-get c :status))))
+              (aset cols k (cons c (aref cols k)))))
+          (vconcat (mapcar #'vconcat cols))))
+      (defun drgnx-perf--wb-model ()
+        "The Board's model as `work::trail::board' makes it: a card node per task, the `board' form's links."
+        (let ((cols (drgnx-perf--wb-cols)) nodes ids)
+          (dotimes (c 6)
+            (let ((col (aref cols c)))
+              (dotimes (i (length col))
+                (let* ((card (aref col i)) (links nil)
+                       (side (lambda (step) (let ((j (+ c step)))
+                                              (and (<= 0 j 5) (let ((o (aref cols j))) (aref o (min i (1- (length o))))))))))
+                  (when (> i 0) (setq links (plist-put links :up (plist-get (aref col (1- i)) :id))))
+                  (when (< (1+ i) (length col)) (setq links (plist-put links :down (plist-get (aref col (1+ i)) :id))))
+                  (when-let* ((l (funcall side -1))) (setq links (plist-put links :left (plist-get l :id))))
+                  (when-let* ((r (funcall side 1))) (setq links (plist-put links :right (plist-get r :id))))
+                  (push (plist-get card :id) ids)
+                  (push (list :id (plist-get card :id) :kind "card" :flags 0 :navs (list :board links)
+                              :fields (vector (vector "label" (plist-get card :title)) (vector "status" (plist-get card :status))))
+                        nodes)))))
+          (json-serialize
+           (list :ops (vector (list :reset
+                                    (list :descriptor (list :scheme "links" :chain_kinds [] :match_fields ["label"]
+                                                            :lists ["cards" "team"] :classes ["selected" "match" "lit" "dim"]
+                                                            :flags [] :forms (vector (list :name "board")) :start "cards")
+                                          :nodes (vconcat (nreverse nodes)) :edges []
+                                          :lists (vector (list :name "cards" :ids (vconcat (nreverse ids)))
+                                                         (list :name "team" :ids [])))))))))
+      (defun drgnx-perf--wb-rows ()
+        "The Board's rows as the hub sends them at 1200 px: the headings, then per card height the titles, the states and
+the progress bars (two spaces each, `spaces' entries)."
+        (let* ((cols (drgnx-perf--wb-cols)) (w 198) (rows nil)
+               (height (apply #'max (mapcar #'length cols))))
+          (push (list :key "head" :text "Queued  Running  Waiting  Needs you  Review  Done") rows)
+          (dotimes (i height)
+            (dotimes (line 3)
+              (let ((text "") stops runs props spaces)
+                (dotimes (c 6)
+                  (when-let* ((card (and (< i (length (aref cols c))) (aref (aref cols c) i))))
+                    (push (list (length text) (* c w)) stops)
+                    (setq text (concat text " "))
+                    (let ((at (length text))
+                          (s (pcase line
+                               (0 (concat "● " (plist-get card :title)))
+                               (1 (format "%s · %d/5" (plist-get card :status) (car (plist-get card :progress))))
+                               (_ "  "))))
+                      (setq text (concat text s))
+                      (if (= line 2)
+                          (let ((fill (round (* 182 (/ (car (plist-get card :progress)) 5.0)))))
+                            (push (list at fill 4) spaces) (push (list (1+ at) (- 182 fill) 4) spaces)
+                            (push (list at (1+ at) "drgnx-work-bar") runs) (push (list (1+ at) (+ 2 at) "drgnx-work-bar-rest") runs))
+                        (push (list at (length text) (if (= line 0) "drgnx-card-top" "drgnx-card-mid")) runs))
+                      (push (list at (length text) "drgnx-work-id" (plist-get card :id)) props))))
+                (push (list :key (format "cards:%d:%d" i line) :text text :runs (nreverse runs) :props (nreverse props)
+                            :stops (nreverse stops) :spaces (nreverse spaces))
+                      rows))))
+          (nreverse rows)))
+      (defun drgnx-perf--wb-up ()
+        "The Board of 200 cards in 6 columns on the hub's rows path, shown and selected: its model in Sjá, the rows
+above applied.  An error when it is not on the rows path."
+        (setq drgnx-perf--wb-send drgnx-view-patch-send-function drgnx-view-patch-send-function #'ignore
+              drgnx-perf--wb-buf (get-buffer-create "*drgnx work board: perf*"))
+        (switch-to-buffer drgnx-perf--wb-buf)
+        (delete-other-windows)
+        (drgnx-work-board-mode)
+        (setq drgnx-work-lens-nav #'drgnx-work-board--nav)
+        (drgnx-view-patch-attach "perf-board" "gui" :epoch 1)
+        (drgnx-view-model-event (list :view "perf-board" :hub 7 :base 0 :version 1 :reset t :model (drgnx-perf--wb-model)))
+        (drgnx-view-apply-patch (list :view "perf-board" :class "gui" :hub 7 :base 0 :version 1 :env_epoch 1 :model 1
+                                      :ops (list (list :reset (drgnx-perf--wb-rows)))))
+        (drgnx-view-draw-now drgnx-view)
+        (drgnx-work-board-rows-attached)
+        (unless (drgnx-work-board--rows-p)
+          (error "Premise: the Board is not on the hub's rows (Sjá: %s)" (if (fboundp 'nidhogg-view--call) "yes" "no")))
+        (unless (> (count-lines (point-min) (point-max)) 100) (error "Premise: the Board drew %d lines" (count-lines (point-min) (point-max))))
+        t)
+      (defun drgnx-perf--wb-each ()
+        "Each repeat starts from the first card."
+        (select-window (or (get-buffer-window drgnx-perf--wb-buf) (error "Premise: the Board is not shown")))
+        (with-current-buffer drgnx-perf--wb-buf
+          (drgnx-view-nav 'select "task:000"))
+        t)
+      (defun drgnx-perf--wb-check ()
+        (with-current-buffer drgnx-perf--wb-buf
+          (let ((sel (drgnx-view-nav-selection)))
+            (or (and sel (not (equal sel "task:000"))) (error "Premise: the keys moved nothing (selection %S)" sel)))))
+      (defun drgnx-perf--wb-down ()
+        (when (buffer-live-p drgnx-perf--wb-buf) (kill-buffer drgnx-perf--wb-buf))
+        (setq drgnx-perf--wb-buf nil drgnx-view-patch-send-function drgnx-perf--wb-send)
+        t)
+      t))
+  "The `work-board' workload's session side: no hub, the Board of 200 cards on the hub's rows path.")
+
+(defun drgnx-perf-work--board-keys ()
+  "40 moves on the Board: down, down, right, left and down, 8 times."
+  (cl-loop repeat 8 append (mapcar (lambda (k) (list :keys k)) '("<down>" "<down>" "<right>" "<left>" "<down>"))))
+
+(defun drgnx-perf-work-workloads (visit kill-fixture)
+  "The Work space's workloads (specs like `drgnx-perf-run--workloads'): VISIT is the form that visits the typing
+fixture, KILL-FIXTURE the form that kills its buffer.  `work-nav', `work-relayout', `work-live', `work-typing-shown',
+`work-typing-hidden', `view-patch', `work-nav-rows', `work-trail', `trail-long' and `work-board'.  The map, the
+trails and the Board are on the hub's rows (with Sjá; a workload without it fails its premise)."
+  (let* ((lib (drgnx-perf-work--lib-form))
+         (type (lambda (s) (list :type s)))
+         (typing (make-list 6 (funcall type "(let ((x 1)) (message \"%s\" x)) ")))
+         (up (lambda (shown extra)
+               (concat "(progn " lib " (drgnx-perf--work-up " (if shown "t" "nil") ") " extra " t)")))
+         (down (concat "(progn (drgnx-perf--work-down) " kill-fixture " t)"))
+         (typing-each (lambda (&optional extra)
+                        (concat "(progn " visit " (drgnx-perf--work-premise) " extra " t)")))
+         (typing-check "(and (drgnx-perf--work-premise) t)"))
+    `((work-nav :setup ,(funcall up t "")
+                :each "(progn (drgnx-perf--work-premise) (drgnx-perf--work-select-map) t)"
+                :actions ,(drgnx-perf-work--nav-keys)
+                :check "(and (drgnx-perf--work-premise) (buffer-local-value 'drgnx-work-map--selection drgnx-perf--work-buf) t)"
+                :teardown ,down)
+      (work-relayout :setup ,(funcall up t drgnx-perf-work--relayout-form)
+                     :each "(drgnx-perf--rl-guard (lambda () (drgnx-perf--rl-arm) (drgnx-perf--work-premise) (drgnx-perf--work-select-map) t))"
+                     :actions ,(drgnx-perf-work--relayout-keys)
+                     :measure "(drgnx-perf--rl-guard #'drgnx-perf--rl-measure)"
+                     :check "(and (drgnx-work-thirty-premise) (or (>= (length drgnx-perf--rl-ms) 100) (error \"Premise: %d layouts drawn; %d lost; changes (t0 layout timer) %S; %S\" (length drgnx-perf--rl-ms) (apply #'+ (mapcar #'cdr drgnx-perf--rl-lost)) (let (r) (dolist (f drgnx-perf--rl-frames r) (let ((c (assoc f r))) (if c (cl-incf (cdr c)) (push (cons f 1) r))))) (drgnx-perf--rl-diag))))"
+                     :teardown ,(concat "(progn (drgnx-perf--rl-teardown) " down ")"))
+      (work-live :setup ,(funcall up t drgnx-perf-work--live-form)
+                 :each "(progn (drgnx-perf--work-premise) (drgnx-perf--wl-arm) t)"
+                 :measure "(drgnx-perf--wl-measure)"
+                 :check ,typing-check
+                 :teardown ,down)
+      (work-typing-shown :setup ,(funcall up t "")
+                         :each ,(funcall typing-each)
+                         :actions ,typing :check ,typing-check :teardown ,down)
+      (work-typing-hidden :setup ,(funcall up nil "")
+                          :each ,(funcall typing-each)
+                          :actions ,typing :check ,typing-check :teardown ,down)
+      ;; inserting a hub-built row patch shaped like a 30-agent Work map update (report-only; docs/develop/perf.md)
+      (view-patch :setup ,(concat "(progn " drgnx-perf-work--view-patch-form " (drgnx-perf--vp-up))")
+                  :measure "(drgnx-perf--vp-measure)"
+                  :teardown "(progn (drgnx-perf--vp-down) t)")
+      ;; the map's keys through the native view model (report-only until the combined pass; docs/develop/perf.md)
+      (work-nav-rows :setup ,(concat "(progn " drgnx-perf-work--nav-rows-form " (drgnx-perf--nr-up))")
+                     :measure "(drgnx-perf--nr-measure)"
+                     :teardown "(progn (drgnx-perf--nr-down) t)")
+      ;; a 2,000-step trail on the rows path, paged up to its first step by keys (plan sja-complete W1)
+      (trail-long :setup ,(concat "(progn " (drgnx-perf-run--hub-form) " " drgnx-perf-work--trail-long-form " (drgnx-perf--tl-up))")
+                  :measure "(drgnx-perf--tl-measure)"
+                  :teardown ,(concat "(progn (drgnx-perf--tl-down) " kill-fixture " t)"))
+      ;; the Board's keys over 200 cards on the rows path (its old path, work-board-old, went in plan sja-complete B2)
+      (work-board :setup ,(concat "(progn " drgnx-perf-work--board-form " (drgnx-perf--wb-up))")
+                  :each "(drgnx-perf--wb-each)"
+                  :actions ,(drgnx-perf-work--board-keys)
+                  :check "(drgnx-perf--wb-check)"
+                  :teardown "(drgnx-perf--wb-down)")
+      (work-trail :setup ,(concat "(progn " (drgnx-perf-run--hub-form) " " drgnx-perf-work--trail-form " (drgnx-perf--trail-up) t)")
+                  :each "(progn (drgnx-perf--trail-premise) t)"
+                  :measure "(drgnx-perf--trail-measure)"
+                  :teardown ,(concat "(progn (drgnx-perf--trail-teardown) " kill-fixture " t)")))))
+
+(declare-function drgnx-perf-run--hub-form "drgnx-perf-run")
+
+(provide 'drgnx-perf-work)
+;;; drgnx-perf-work.el ends here

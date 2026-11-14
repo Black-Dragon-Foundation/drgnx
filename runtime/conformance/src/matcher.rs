@@ -3,7 +3,8 @@
 //! An object pattern matches an object that has every key of the pattern (extra keys are fine). An array pattern matches
 //! an array element by element and in length, unless the pattern is `{"$contains": [...]}` (every element of the
 //! list matches some element). Special strings: `"$any"`, `"$string"`, `"$number"`, `"$hex64"`, `"$absent"` (the key
-//! must be missing), `"$capture:NAME"` (match anything and remember it) and `"$NAME"` (equal to a value captured earlier);
+//! must be missing), `"$capture:NAME"` (match anything and remember it), `"$NAME"` (equal to a value captured earlier) and `"$not:NAME"` (any
+//! value but the one captured as NAME);
 //! `"$NAME#1"` (a captured string followed by more text, such as a task id `JOB#1`) matches the capture and that text.
 
 use serde_json::Value;
@@ -166,6 +167,16 @@ fn special(here: &str, s: &str, actual: &Value, caps: &mut Captures) -> Result<(
                 caps.0.insert(name.to_string(), actual.clone());
                 return Ok(());
             }
+            if let Some(name) = s.strip_prefix("$not:") {
+                return match caps.0.get(name) {
+                    Some(seen) if seen == actual => Err(format!(
+                        "{here}: wanted anything but the captured ${name}, got {}",
+                        show(actual)
+                    )),
+                    Some(_) => Ok(()),
+                    None => Err(format!("{here}: {s}: nothing was captured as {name}")),
+                };
+            }
             match caps.0.get(&s[1..]) {
                 Some(seen) if seen == actual => Ok(()),
                 Some(seen) => Err(format!(
@@ -219,6 +230,9 @@ mod tests {
         // a name that was never captured stays a literal
         assert!(matches(&json!("$nope#1"), &json!("$nope#1"), &mut caps).is_ok());
         assert!(matches(&json!("$job"), &json!("job-7"), &mut caps).is_ok());
+        assert!(matches(&json!("$not:job"), &json!("job-8"), &mut caps).is_ok());
+        assert!(matches(&json!("$not:job"), &json!("job-7"), &mut caps).is_err());
+        assert!(matches(&json!("$not:nope"), &json!("job-7"), &mut caps).is_err());
     }
 
     fn ok(p: Value, a: Value) -> bool {

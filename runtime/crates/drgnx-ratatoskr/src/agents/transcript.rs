@@ -196,6 +196,42 @@ impl Store {
             .unwrap_or_default();
         (q, v.get("paused").and_then(Value::as_bool).unwrap_or(false))
     }
+
+    /// The user holds SID's wheel (HELD), from the snapshot tree BASE when it is known: kept in `<sid>.wheel.json`
+    /// for a restart; not held removes it.
+    pub fn save_wheel(&self, sid: &str, held: bool, base: Option<&str>) -> std::io::Result<()> {
+        let path = self.file(sid, "wheel.json");
+        if !held {
+            return match std::fs::remove_file(path) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+                _ => Ok(()),
+            };
+        }
+        self.ensure()?;
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        f.write_all(
+            serde_json::json!({"held_by": "user", "base": base})
+                .to_string()
+                .as_bytes(),
+        )
+    }
+
+    /// Whether the user held SID's wheel when the hub ended, and the snapshot tree it is measured from.
+    pub fn load_wheel(&self, sid: &str) -> (bool, Option<String>) {
+        let Ok(text) = std::fs::read_to_string(self.file(sid, "wheel.json")) else {
+            return (false, None);
+        };
+        let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+        (
+            v.get("held_by").and_then(Value::as_str) == Some("user"),
+            v.get("base").and_then(Value::as_str).map(str::to_string),
+        )
+    }
 }
 
 #[cfg(test)]

@@ -15,6 +15,7 @@ use crate::coord::{self, Signals, ToolHub, Writer};
 use crate::dispatch::{self, Call, ErrorAnswerOrDrop, Refusals};
 use crate::gateway::Gate;
 use crate::hello::{self, Session};
+use crate::pair::open_set::OpenEv;
 use crate::sessions::{self, Sessions};
 use crate::store::WorkDb;
 use crate::version::COMMIT;
@@ -79,6 +80,22 @@ pub struct Front {
     pub settings: Arc<crate::settings::Settings>,
     /// The subscribers: the editors the agents' settings tools ask ([`crate::settings::agents`]).
     pub editors: Arc<crate::settings::agents::Editors>,
+    /// The pair door: a paired chat's reads and writes of your checkout, through the editor ([`crate::pair`]).
+    pub pair: Arc<crate::pair::door::Door>,
+    /// The follow feed: where each followed session is, to the follow views ([`crate::editor::follow`]).
+    pub follows: Arc<crate::editor::follow::Follows>,
+    /// Hrafn: the built-in model's worker, the open projects, the `search/*` methods ([`crate::search::methods`]).
+    pub search: crate::search::Hub,
+    /// The Extensions view's catalog, the lock and the module table, merged in memory ([`crate::extensions`]).
+    pub extensions: crate::extensions::Hub,
+    /// The runs the orchestration gates started, in flight ([`crate::orch::gates`]).
+    pub orch: crate::orch::gates::Runs,
+    /// The merge queue's ready tasks and batches, by job ([`crate::orch::queue`]).
+    pub queue: crate::orch::queue::Queue,
+    /// The affected groups each batch tree needs ([`crate::orch::groups`]).
+    pub groups: crate::orch::groups::Listed,
+    /// The debug sessions, the trusted roots and each root's last start ([`crate::debug::wire`]).
+    pub debug: crate::debug::wire::Hub,
     /// Test hooks (`--test-ignore-shutdown`): `shutdown` is answered and ignored, so `stop` reaches its signal.
     pub ignore_shutdown: AtomicBool,
     /// The store's other folders (home, config, `<state>/hub`), once the server opened it.
@@ -87,6 +104,9 @@ pub struct Front {
     pub shell_env: crate::shell_env::ShellEnv,
     /// The agent core's state ([`crate::agent_core`]): sessions, jobs, plan runs, the matrix, …
     pub core: crate::agent_core::Core,
+    /// What every browser session's web proxy treats as the host itself: the host's addresses and the hub's own
+    /// loopback ports ([`crate::browser::nevers`]), kept live once the hub starts its watches.
+    pub browser_nevers: crate::browser::nevers::Nevers,
     refusals: Mutex<Refusals>,
     /// work.db's `meta.schema` at the last look (0: none).
     schema: AtomicU32,
@@ -146,6 +166,10 @@ impl Front {
         let tool_list: Arc<[Box<dyn mimir::Tool<norn::tools::Ctx>>]> = norn::tools::tools().into();
         let matrix = crate::matrix_gate::MatrixGate::default();
         matrix.announce_to(editors.clone());
+        // one presence model: the door's writes show in it beside the sessions' own tool calls
+        let presence = Arc::<crate::work::presence::Live>::default();
+        let pair = crate::pair::door::Door::new(editors.clone(), presence.clone());
+        let follows = crate::editor::follow::Follows::new(editors.clone());
         Front {
             cap,
             pid: std::process::id(),
@@ -161,14 +185,24 @@ impl Front {
             gate,
             settings,
             editors,
+            pair,
+            follows,
+            search: crate::search::Hub::default(),
+            extensions: crate::extensions::Hub::default(),
+            orch: crate::orch::gates::Runs::default(),
+            queue: crate::orch::queue::Queue::default(),
+            groups: crate::orch::groups::Listed::default(),
+            debug: crate::debug::wire::Hub::default(),
             ignore_shutdown: AtomicBool::new(false),
             dirs: OnceLock::new(),
             shell_env: crate::shell_env::ShellEnv::default(),
             core: crate::agent_core::Core {
                 budgets,
                 matrix,
+                presence,
                 ..Default::default()
             },
+            browser_nevers: crate::browser::nevers::Nevers::default(),
             tools,
             tool_hub,
             tool_list,
@@ -281,12 +315,30 @@ impl Front {
     pub fn gone(&self, conn: u64) {
         lock_conns(&self.conns).remove(&conn);
         self.editors.gone(conn);
+        self.pair.editor_gone(conn);
+        self.follows.gone(conn);
+        self.core.presence.gone(conn);
+        self.core.map.gone(conn);
+        self.core.trails.gone(conn);
+        self.core.views.gone(conn);
+        self.core.buffers.gone(conn);
+        self.core.terms.gone(conn);
+        self.extensions.gone(conn);
     }
 
     /// EVENT with DATA to every subscribed connection: queued for each before any is written (a queue never waits),
     /// so a newer event never reaches one subscriber before an older one.
     pub fn broadcast(&self, event: &str, data: Value) {
+        // a revert or a fork changed which steps are undone: the agent panels' rows mark them
+        if event == "history/applied" {
+            self.core.views.panels.history_applied();
+        }
         self.editors.broadcast(event, data);
+    }
+
+    /// EVENT with DATA to connection CONN only (it must be subscribed); false when it took nothing.
+    pub fn send_to(&self, conn: u64, event: &str, data: Value) -> bool {
+        self.editors.send_to(conn, event, data)
     }
 
     /// `gateway/keys-changed` to the subscribers when the held keys' ids are no longer BEFORE (ids only).  A
@@ -323,18 +375,25 @@ impl Front {
             gateway_port: None,
             registrations: None,
             settings: Some(self.settings.current().status()),
+            recording: crate::recording::status(),
+            watch: Some(self.search.watch_status()),
         }
     }
 
     /// `settings.el` read again when its stamp changed (at start, and when a session starts); the problems the last
     /// read did not have go to the subscribers as notices.
     pub async fn refresh_settings(&self) {
+        let before = self.settings.current();
         for n in self.settings.refresh().await {
             self.broadcast("notice", n);
         }
         // a front with no config folder (a test's) keeps the table it was given
         if self.settings.is_open() {
             self.apply_settings();
+        }
+        // the matrix or the deny list may have changed: the browser sessions' web proxies read them again at once
+        if self.settings.current().loaded != before.loaded {
+            self.writer.signals.answers_changed();
         }
     }
 
@@ -359,7 +418,7 @@ impl Front {
     }
 
     /// `config/settings`: the editor's values of PROJECT (none: global) kept as last good and put to work.
-    async fn config_settings(
+    pub(crate) async fn config_settings(
         &self,
         p: runstav::methods::config::SettingsParams,
     ) -> Result<runstav::methods::config::SettingsApplied, Error> {
@@ -379,6 +438,9 @@ impl Front {
             .set_overrides(project.as_deref(), list)
             .await?;
         self.apply_settings();
+        // the plugin list is a setting: a running session's snapshot says when the set it started with has moved
+        self.mcp.plugins_refresh();
+        self.writer.signals.answers_changed();
         Ok(runstav::methods::config::SettingsApplied { applied })
     }
 
@@ -399,6 +461,7 @@ impl Front {
             wal_bytes: None,
             last_backup: None,
             backup_ok: None,
+            history_backup: crate::backup_timer::last_history().map(|(_, ok)| ok),
             denied_in,
             batches: None,
             replays: None,
@@ -480,12 +543,23 @@ impl Front {
         let result = match params {
             Params::Hello(p) => {
                 let schema = self.schema.load(Ordering::Relaxed);
-                hello::hello(s, &self.cap, &p, schema).map(|r| json!(r))
+                let r = hello::hello(s, &self.cap, &p, schema).map(|r| json!(r));
+                // the connection carries an editor session: its terminals draw on it once it subscribes
+                if r.is_ok()
+                    && let Some(session) = &p.session
+                {
+                    self.core.terms.note_session(s.conn, session.as_str());
+                }
+                r
             }
             Params::Ping(_) => Ok(json!({"pid": self.pid})),
             Params::Status(_) => Ok(json!(self.status())),
             Params::Subscribe(_) => {
                 self.editors.subscribe(s.conn, out.clone());
+                // the events reach this connection now: its session's terminals draw here, from a reset each
+                if let Some(session) = self.core.terms.session_of(s.conn) {
+                    self.core.terms.hello(s.conn, &session);
+                }
                 need_keys = self.gate.pending_need_keys();
                 settings_notices = self.settings.current().notices();
                 Ok(json!(true))
@@ -493,6 +567,10 @@ impl Front {
             Params::Shutdown(_) => {
                 stop = !self.ignore_shutdown.load(Ordering::Relaxed);
                 Ok(json!(true))
+            }
+            Params::BrowserCheck(_) => {
+                self.refresh_settings().await;
+                Ok(json!(crate::browser::check::run(self).await))
             }
             Params::Restart(_) => {
                 restart = true;
@@ -543,6 +621,12 @@ impl Front {
                 self.keys_changed(&before);
                 json!(true)
             }),
+            Params::GatewayRevokeKey(p) => {
+                let before = self.gate.keys_held();
+                let had = self.gate.revoke_key(p.provider.as_str());
+                self.keys_changed(&before);
+                Ok(json!(had))
+            }
             Params::GatewayEditorToken(_) => {
                 self.gate.editor_token(s.peer_pid).await.map(|r| json!(r))
             }
@@ -582,6 +666,133 @@ impl Front {
                     .collect();
                 Ok(json!(self.editors.explained(p.req, rows)))
             }
+            // the pair door: the editor's answers to pair-apply, pair-reconcile and pair-read (crate::pair::door)
+            Params::PairAnswer(p) => Ok(json!(self.pair.answer(s.conn, p))),
+            Params::PairReadAnswer(p) => Ok(json!(self.pair.read_answer(s.conn, p))),
+            // the files this editor has open (crate::pair::open_set)
+            Params::PairOpen(p) => Ok(json!(self.pair.open_ev(OpenEv::Open {
+                conn: s.conn,
+                file: opened(&p.file),
+                kind: p.kind,
+            }))),
+            Params::PairClosed(p) => Ok(json!(self.pair.open_ev(OpenEv::Closed {
+                conn: s.conn,
+                file: opened(&p.file),
+            }))),
+            Params::PairOpenSet(p) => Ok(json!(self.pair.open_ev(OpenEv::Set {
+                conn: s.conn,
+                files: p.files.iter().map(|o| (opened(&o.file), o.kind)).collect(),
+            }))),
+            // hub-built rows (`view/*`)
+            // a terminal's view (`term:<id>`): its worker keeps the rows, versions and acknowledgements
+            Params::ViewEnv(p) if crate::term::methods::view_id(&p.view).is_some() => {
+                let id = crate::term::methods::view_id(&p.view).unwrap_or_default();
+                Ok(json!(self.core.terms.env(id, p.epoch, p.rows_in_sja)))
+            }
+            Params::ViewResync(p) if crate::term::methods::view_id(&p.view).is_some() => {
+                let id = crate::term::methods::view_id(&p.view).unwrap_or_default();
+                Ok(json!(self.core.terms.send(
+                    id,
+                    &drgnx_term::proto::In::Resync { model: p.model }
+                )))
+            }
+            Params::ViewAck(p) if crate::term::methods::view_id(&p.view).is_some() => {
+                let id = crate::term::methods::view_id(&p.view).unwrap_or_default();
+                let msg = drgnx_term::proto::In::Ack { version: p.version };
+                Ok(json!(self.core.terms.send(id, &msg)))
+            }
+            p @ (Params::TermOpen(_)
+            | Params::TermConfig(_)
+            | Params::TermKey(_)
+            | Params::TermText(_)
+            | Params::TermPaste(_)
+            | Params::TermFocus(_)
+            | Params::TermClipboardReply(_)
+            | Params::TermVisible(_)
+            | Params::TermMouse(_)
+            | Params::TermResize(_)
+            | Params::TermScroll(_)
+            | Params::TermFetch(_)
+            | Params::TermSearch(_)
+            | Params::TermTextRange(_)
+            | Params::TermClose(_)
+            | Params::TermList(_)
+            | Params::TermSessionEnd(_)
+            | Params::TermAttach(_)) => {
+                crate::term::methods::serve(&self.core.terms, s.conn, p).await
+            }
+            Params::OrchEvidence(p) => crate::orch::evidence::list(self, &caller, p)
+                .await
+                .map(|b| json!(b)),
+            Params::ViewEnv(p) => crate::view::env(self, &caller, p).map(|b| json!(b)),
+            Params::ViewResync(p) => crate::view::resync(self, &caller, p).map(|b| json!(b)),
+            Params::ViewAck(p) => crate::view::ack(self, &caller, p).map(|b| json!(b)),
+            Params::ViewGlyphs(p) => crate::view::glyphs(self, &caller, p).map(|b| json!(b)),
+            Params::ViewMeasured(p) => crate::view::measured(self, &caller, p).map(|b| json!(b)),
+            Params::ViewClose(p) => crate::view::close(self, &caller, p).map(|b| json!(b)),
+            Params::ViewWindow(p) => crate::view::window(self, &caller, p)
+                .await
+                .map(|b| json!(b)),
+            Params::BuffersSet(p) => crate::view::buffers::set(self, &caller, p).map(|b| json!(b)),
+            Params::AgentsPanelLook(p) => {
+                crate::view::panel::look(self, &caller, p).map(|b| json!(b))
+            }
+            Params::GitLetters(p) => crate::view::git::letters(self, &caller, p).map(|b| json!(b)),
+            // the Search view's search streaming rows to it (`search/run`, `search/grep-*`)
+            Params::SearchRun(p) => crate::view::search::run(self, &caller, p).map(|r| json!(r)),
+            Params::SearchBuffer(p) => {
+                crate::view::search::buffer(self, &caller, p).map(|b| json!(b))
+            }
+            Params::SearchFiles(p) => crate::view::files::start(self, &caller, p).map(|r| json!(r)),
+            Params::SearchGrepReplace(p) => {
+                crate::view::search::replace(self, &caller, p).map(|b| json!(b))
+            }
+            Params::SearchGrepLook(p) => {
+                crate::view::search::look(self, &caller, p).map(|b| json!(b))
+            }
+            Params::SearchGroup(p) => crate::view::search::group(self, &caller, p)
+                .await
+                .map(|b| json!(b)),
+            Params::SearchFold(p) => crate::view::search::fold(self, &caller, p).map(|b| json!(b)),
+            Params::SearchGrepSkipped(p) => {
+                crate::view::search::skipped(self, &caller, p).map(|b| json!(b))
+            }
+            // the Search view's writes: edit sets, change sets, their apply and undo
+            Params::SearchEdits(p) => crate::view::search::edits(self, &caller, p)
+                .await
+                .map(|r| json!(r)),
+            Params::SearchEditDoc(p) => crate::view::search::edit_doc(self, &caller, p)
+                .await
+                .map(|r| json!(r)),
+            // Ask an Agent: the brief, the session it goes to, and how far it is
+            Params::SearchHandoff(p) => crate::view::search::handoff(self, &caller, p)
+                .await
+                .map(|r| json!(r)),
+            Params::SearchHandoffContext(p) => {
+                crate::view::search::handoff_context(self, &caller, p).map(|r| json!(r))
+            }
+            Params::SearchHandoffMark(p) => {
+                crate::view::search::handoff_mark(self, &caller, p).map(|b| json!(b))
+            }
+            Params::SearchHandoffState(p) => crate::view::search::handoff_state(self, &caller, p)
+                .await
+                .map(|r| json!(r)),
+            Params::SearchPreview(p) => crate::view::search::preview(self, &caller, p)
+                .await
+                .map(|r| json!(r)),
+            Params::SearchApply(p) => {
+                crate::view::search::apply_change(self, &caller, p).map(|b| json!(b))
+            }
+            Params::SearchApplied(p) => {
+                crate::view::search::applied(self, &caller, p).map(|b| json!(b))
+            }
+            Params::SearchUndo(p) => {
+                crate::view::search::undo_change(self, &caller, p).map(|b| json!(b))
+            }
+            // the Explorer's listing as a tree model and rows (`explorer/subscribe`)
+            Params::ExplorerSubscribe(p) => {
+                crate::view::explorer::subscribe(self, &caller, p).map(|r| json!(r))
+            }
             // the agent core's (`agents/*`, `job/*`, `exec/*`, …)
             p @ (Params::AgentsList(_)
             | Params::AgentsStart(_)
@@ -594,6 +805,26 @@ impl Front {
             | Params::AgentsMove(_)
             | Params::AgentsRole(_)
             | Params::AgentsSlice(_)
+            | Params::AgentsEntriesSubscribe(_)
+            | Params::AgentsEntriesUnsubscribe(_)
+            | Params::AgentsToolInput(_)
+            | Params::AgentsToolOutput(_)
+            | Params::AgentsPause(_)
+            | Params::AgentsContextDrop(_)
+            | Params::AgentsContextPin(_)
+            | Params::AgentsCompactPreview(_)
+            | Params::AgentsConfig(_)
+            | Params::AgentsExplain(_)
+            | Params::AgentsHuddleStart(_)
+            | Params::AgentsHuddleGet(_)
+            | Params::AgentsGrants(_)
+            | Params::AgentsGrantsRevoke(_)
+            | Params::AgentsWheelTake(_)
+            | Params::AgentsWheelGive(_)
+            | Params::AgentsWheelSaved(_)
+            | Params::AgentsPair(_)
+            | Params::AgentsFollow(_)
+            | Params::AgentsUnfollow(_)
             | Params::AgentsProbe(_)
             | Params::MessagesRetract(_)
             | Params::ExecStart(_)
@@ -601,6 +832,7 @@ impl Front {
             | Params::ExecList(_)
             | Params::ExecStop(_)
             | Params::ExecLog(_)
+            | Params::ExecBump(_)
             | Params::JobPropose(_)
             | Params::JobStartTask(_)
             | Params::JobApprove(_)
@@ -627,12 +859,161 @@ impl Front {
             | Params::BudgetGet(_)
             | Params::BudgetSet(_)
             | Params::PaceGet(_)
+            | Params::ForecastGet(_)
+            | Params::ForecastSession(_)
+            | Params::ForecastAccuracy(_)
+            | Params::SayStart(_)
+            | Params::SayRevise(_)
+            | Params::SayEnd(_)
             | Params::RecordsImport(_)
             | Params::RecordsStatus(_)
             | Params::RecordsProposals(_)
-            | Params::RecordsDecide(_)) => crate::agent_core::serve(self, &caller, p)
+            | Params::RecordsDecide(_)
+            | Params::MachinesReport(_)
+            | Params::MachinesList(_)
+            | Params::RunnersList(_)
+            | Params::RunnersProbeHost(_)
+            | Params::RunnersAdd(_)
+            | Params::RunnersCheck(_)
+            | Params::RunnersBench(_)
+            | Params::RunnersSet(_)
+            | Params::HistoryRegister(_)
+            | Params::HistoryBatch(_)
+            | Params::HistoryResync(_)
+            | Params::HistoryUnregister(_)
+            | Params::HistoryRevertPreview(_)
+            | Params::HistoryRevertApply(_)
+            | Params::HistoryFork(_)
+            | Params::HistoryForkDrop(_)
+            | Params::HistoryCompare(_)
+            | Params::HistoryBlame(_)
+            | Params::HistoryHunks(_)
+            | Params::GitBlame(_)
+            | Params::GitStageHunk(_)
+            | Params::HistoryHunksHead(_)
+            | Params::HistoryTake(_)
+            | Params::HistoryRedo(_)
+            | Params::HistoryOpHunks(_)
+            | Params::HistoryRevertHunk(_)
+            | Params::RunnersUnbench(_)
+            | Params::RunnersRemove(_)
+            | Params::PluginsList(_)
+            | Params::PluginsApprove(_)
+            | Params::PluginsDisable(_)
+            | Params::RunnersKeys(_)
+            | Params::RunnersKeysHeld(_)
+            | Params::RunnersAudit(_)
+            | Params::WorkConclusions(_)
+            | Params::AgentsPresenceSubscribe(_)
+            | Params::AgentsPresenceGet(_)
+            | Params::AgentsBufferWatch(_)
+            | Params::AgentsBufferUnwatch(_)
+            | Params::WorkMapSubscribe(_)
+            | Params::WorkMapSet(_)
+            | Params::WorkMapClose(_)
+            | Params::WorkTrailSubscribe(_)
+            | Params::WorkTrailClose(_)
+            | Params::WorkBoardSubscribe(_)
+            | Params::WorkFlowSubscribe(_)
+            | Params::WorkFiles(_)
+            | Params::WorkHunks(_)
+            | Params::WorkFileAt(_)) => crate::agent_core::serve(self, &caller, p)
                 .await
                 .unwrap_or_else(|_| unserved(method)),
+            // Hrafn's (`search/*`)
+            p @ (Params::SearchQuery(_)
+            | Params::SearchStatus(_)
+            | Params::SearchIndex(_)
+            | Params::SearchEmbedders(_)
+            | Params::SearchModelDownload(_)
+            | Params::SearchServerPlan(_)
+            | Params::SearchServerStart(_)
+            | Params::SearchServerStop(_)
+            | Params::SearchSymbolAt(_)
+            | Params::SearchSymbols(_)
+            | Params::SearchOutline(_)
+            | Params::SearchMap(_)
+            | Params::SearchUsages(_)
+            | Params::SearchRecent(_)
+            | Params::SearchSavedList(_)
+            | Params::SearchSavedPut(_)
+            | Params::SearchSavedDelete(_)
+            | Params::SearchSavedShare(_)
+            | Params::SearchScopeBases(_)
+            | Params::SearchTyping(_)) => crate::search::methods::serve(self, &caller, p)
+                .await
+                .unwrap_or_else(|_| unserved(method)),
+            // debugging (`debug/*`)
+            p @ (Params::DebugConfigs(_)
+            | Params::DebugStart(_)
+            | Params::DebugControl(_)
+            | Params::DebugSelect(_)
+            | Params::DebugTrust(_)
+            | Params::DebugInstall(_)
+            | Params::DebugSource(_)
+            | Params::DebugBreakpointLocations(_)
+            | Params::DebugCompletions(_)
+            | Params::DebugDisassemble(_)
+            | Params::DebugHotReload(_)
+            | Params::DebugReadMemory(_)
+            | Params::DebugWriteMemory(_)
+            | Params::DebugBreakpoints(_)
+            | Params::DebugRunToCursor(_)) => crate::debug::wire::serve(self, &caller, p)
+                .await
+                .unwrap_or_else(|_| unserved(method)),
+            // the Run and Debug view (`debug/view`, `debug/expand`, `debug/watch`, `debug/set-value`, `debug/evaluate`)
+            p @ (Params::DebugView(_)
+            | Params::DebugExpand(_)
+            | Params::DebugWatch(_)
+            | Params::DebugSetValue(_)
+            | Params::DebugDataBreakpoint(_)
+            | Params::DebugEvaluate(_)
+            | Params::DebugChildren(_)) => crate::view::debug::serve(self, &caller, p)
+                .await
+                .unwrap_or_else(|_| unserved(method)),
+            // what-if forks (`debug/fork*`, `debug/compare`)
+            p @ (Params::DebugFork(_)
+            | Params::DebugForkRun(_)
+            | Params::DebugForkDrop(_)
+            | Params::DebugCompare(_)) => crate::debug::fork_wire::serve(self, p).await,
+            // recorded runs and probes (`debug/run*`, `debug/probe/op`)
+            p @ (Params::DebugProbeOp(_)
+            | Params::DebugRunsList(_)
+            | Params::DebugRunGet(_)
+            | Params::DebugRunStop(_)
+            | Params::DebugRunPin(_)
+            | Params::DebugRunExport(_)
+            | Params::DebugRunImport(_)) => crate::debug::runs_wire::serve(self, &caller, p)
+                .await
+                .unwrap_or_else(|_| unserved(method)),
+            // bisect over the edit history (`debug/bisect*`)
+            p @ (Params::DebugBisect(_)
+            | Params::DebugBisectCancel(_)
+            | Params::DebugBisectNarrow(_)
+            | Params::DebugBisectStates(_)) => crate::debug::bisect_wire::serve(self, &caller, p)
+                .await
+                .unwrap_or_else(|_| unserved(method)),
+            // where a value came from (`debug/origin`)
+            p @ Params::DebugOrigin(_) => crate::debug::origin_wire::serve(self, &caller, p)
+                .await
+                .unwrap_or_else(|_| unserved(method)),
+            // the heap graph (`debug/heap`, `debug/heap/close`)
+            p @ (Params::DebugHeap(_) | Params::DebugHeapClose(_)) => {
+                crate::debug::heap_wire::serve(self, &caller, p)
+                    .await
+                    .unwrap_or_else(|_| unserved(method))
+            }
+            // the Extensions view's catalog (`extensions/*`)
+            p @ (Params::ExtensionsSearch(_)
+            | Params::ExtensionsDetails(_)
+            | Params::ExtensionsRows(_)
+            | Params::ExtensionsList(_)
+            | Params::ExtensionsModules(_)
+            | Params::ExtensionsRecommended(_)) => {
+                crate::extensions::methods::serve(self, &caller, p)
+                    .await
+                    .unwrap_or_else(|_| unserved(method))
+            }
             // the graph store's (`graph/*`, `tasks/*`); a settled card too (an access card becomes a grant)
             p @ (Params::GraphPutParsed(_)
             | Params::GraphRecord(_)
@@ -681,6 +1062,10 @@ impl Front {
         };
         if let (Some(card), Ok(_)) = (settled, &result) {
             self.core.agents.card_settled(card).await;
+            if let Some(me) = self.tool_hub.front() {
+                self.core.huddles.card_settled(&me, card).await;
+            }
+            self.core.plugins.card_settled(card);
         }
         if let Err(e) = &result
             && e.code != ErrorCode::Internal
@@ -716,6 +1101,11 @@ impl Front {
 fn unserved(method: &Method) -> Result<Value, Error> {
     tracing::error!(method = method.name, "a method reached no handler");
     Err(internal(format!("{} reached no handler", method.name)))
+}
+
+/// The file an editor names as open, resolved as the pair door resolves a write's path (a link to it is the file).
+fn opened(file: &runstav::types::AbsPath) -> PathBuf {
+    std::fs::canonicalize(file.as_str()).unwrap_or_else(|_| PathBuf::from(file.as_str()))
 }
 
 /// EVENT with DATA as the line a subscriber gets; none (logged) over 16 MiB.
@@ -847,12 +1237,12 @@ mod tests {
         let f = front(dir.path());
         f.set_schema(6);
         assert_eq!(f.read_only(), None);
-        f.set_schema(9);
-        assert_eq!(f.read_only(), Some(9));
+        f.set_schema(99);
+        assert_eq!(f.read_only(), Some(99));
         let v = serde_json::to_value(f.status()).unwrap();
         assert_eq!(
             (v["read_only"].clone(), v["schema"].clone()),
-            (json!(9), json!(9))
+            (json!(99), json!(99))
         );
         f.set_schema(6);
         assert_eq!(f.read_only(), None);

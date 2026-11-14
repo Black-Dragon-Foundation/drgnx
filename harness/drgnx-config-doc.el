@@ -33,7 +33,7 @@
     (require drgnx-ai)
     (require drgnx-pkg)
     (require drgnx-session)
-    (require drgnx-search-chunk)
+    (require drgnx-settings-runtime)
     (require drgnx-onboard)
     (require drgnx-face-state)
     (require drgnx-large-files)

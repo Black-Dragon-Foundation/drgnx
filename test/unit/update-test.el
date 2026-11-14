@@ -18,6 +18,7 @@
                 (concat "DRGNX_UPDATE_SYNC_CMD=echo sync $* >> " dir "/hooks.log")
                 (concat "DRGNX_UPDATE_BUILD_CMD=echo build $* >> " dir "/hooks.log")
                 "DRGNX_UPDATE_RUNTIME_CMD=:"   ; never a real Rust build; the runtime tests set their own hook
+                "DRGNX_UPDATE_PACKS_CMD=:"     ; never a real pack migration (a grammar build); its tests set their own hook
                 (concat "DRGNX_DATA_DIR=" dir "/data") (concat "XDG_CACHE_HOME=" dir "/cache")
                 (concat "DRGNX_UPDATE_UNIT_CMD=echo unit $* >> " dir "/unit.log"))))   ; never the real service-unit
 
@@ -404,16 +405,33 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
       (write-region "#!/bin/sh\necho \"$*\" >> '" nil f)
       (write-region (format "%s'\nexit 1\n" log) nil f t)
       (drgnx-update-test--push dir "README" "two\n" "second")
-      (let ((r (drgnx-update-test--run dir nil bin "update" "--restart")))
+      ;; Linux without drgnx.service (whatever the host): systemctl is never asked to restart
+      (let ((r (drgnx-update-test--run dir '("DRGNX_UPDATE_PLATFORM=Linux") bin "update" "--restart")))
         (should (eq 0 (car r)))
         (should (string-match-p "no drgnx service is installed" (cdr r)))
         (should-not (string-match-p "--user restart" (drgnx-update-test--slurp log))))
-      ;; macOS: no daemon service of drgnx's own exists, so launchctl is never called
+      ;; macOS without drgnx's launch agent: launchctl is never called
       (drgnx-update-test--push dir "README" "three\n" "third")
       (let ((r (drgnx-update-test--run dir '("DRGNX_UPDATE_PLATFORM=Darwin") bin "update" "--restart")))
         (should (eq 0 (car r)))
         (should (string-match-p "nothing was restarted" (cdr r)))
         (should-not (file-exists-p (expand-file-name "launchctl.log" dir)))))))
+
+(ert-deftest drgnx-update/restart-on-macos-reloads-the-launch-agent ()
+  (drgnx-update-test--with-install
+    (let ((plist (expand-file-name "Library/LaunchAgents/org.blackdragonfoundation.drgnx.plist" dir))
+          (ctl (expand-file-name "launchctl.log" dir)))
+      (make-directory (file-name-directory plist) t)
+      (write-region "<plist/>\n" nil plist nil 'silent)
+      (drgnx-update-test--push dir "README" "two\n" "second")
+      (let ((r (drgnx-update-test--run dir '("DRGNX_UPDATE_PLATFORM=Darwin") bin "update" "--restart")))
+        (should (eq 0 (car r)))
+        ;; out and in again: launchd reads the plist (refreshed by the update) and starts it (RunAtLoad)
+        (should (string-match-p (format "^bootout gui/[0-9]+/org\\.blackdragonfoundation\\.drgnx\nbootstrap gui/[0-9]+ %s$"
+                                        (regexp-quote plist))
+                                (drgnx-update-test--slurp ctl)))
+        (should (string-match-p "restarted the drgnx service" (cdr r)))
+        (should (string-match-p "windows closed" (cdr r)))))))
 
 ;;; update-test.el ends here
 
@@ -442,11 +460,12 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
       (should (eq (car r) 0))
       (should (string-search "could not check drgnx.service" (cdr r))))))
 
-(ert-deftest drgnx-update/no-unit-refresh-on-macos ()
+(ert-deftest drgnx-update/the-unit-refresh-runs-on-macos-too ()
+  ;; there it points drgnx's launch agent at the Emacs drgnx uses
   (drgnx-update-test--with-install
     (let ((r (drgnx-update-test--run dir (list "DRGNX_UPDATE_PLATFORM=Darwin") bin "update")))
       (should (eq (car r) 0))
-      (should-not (drgnx-update-test--unit-log dir)))))
+      (should (equal (drgnx-update-test--unit-log dir) '("unit --refresh"))))))
 
 ;;; Ratatoskr: the third step of an update, and `drgnx runtime' (Task 19)
 
@@ -478,6 +497,23 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
         (should (equal before (drgnx-update-test--slurp binary)))
         (should-not (file-exists-p (expand-file-name "previous" state)))))))
 
+(ert-deftest drgnx-update/the-language-packs-are-migrated-after-the-runtime-build ()
+  (drgnx-update-test--with-install
+    (drgnx-update-test--push dir "README" "two\n" "second")
+    (let ((r (drgnx-update-test--run dir (list (format "DRGNX_UPDATE_PACKS_CMD=echo packs $* >> %s/hooks.log" dir)) bin "update")))
+      (should (eq (car r) 0))
+      (should (equal "sync\nbuild\npacks migrate\n" (drgnx-update-test--hooks dir))))))
+
+(ert-deftest drgnx-update/a-failed-pack-migration-never-rolls-the-update-back ()
+  ;; no compiler, or offline: the old grammar folder stays on the load path, so the update stands
+  (drgnx-update-test--with-install
+    (let ((old (drgnx-update-test--head dir)))
+      (drgnx-update-test--push dir "README" "two\n" "second")
+      (let ((r (drgnx-update-test--run dir (list "DRGNX_UPDATE_PACKS_CMD=exit 3") bin "update")))
+        (should (eq (car r) 0))
+        (should-not (equal old (drgnx-update-test--head dir)))
+        (should (string-match-p "language packs were not migrated" (cdr r)))))))
+
 (ert-deftest drgnx-update/a-rollback-rebuilds-a-binary-of-another-commit ()
   (drgnx-update-test--with-install
     (drgnx-update-test--stub-binary (expand-file-name "data/bin/ratatoskr" dir) "0000000")
@@ -499,7 +535,12 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
        (expand-file-name "cargo" tc)
        (format (concat "#!/bin/sh\necho \"cargo $* RUSTUP_HOME=$RUSTUP_HOME CARGO_HOME=$CARGO_HOME TARGET=$CARGO_TARGET_DIR"
                        " COMMIT=$DRGNX_BUILD_COMMIT CHECKOUT=$DRGNX_CHECKOUT\" >> '%s'\n"
-                       "mkdir -p \"$CARGO_TARGET_DIR/release\" && cp \"$STUB_RATATOSKR\" \"$CARGO_TARGET_DIR/release/ratatoskr\"\n")
+                       "mkdir -p \"$CARGO_TARGET_DIR/release\" && cp \"$STUB_RATATOSKR\" \"$CARGO_TARGET_DIR/release/ratatoskr\"\n"
+                       ;; drgnx-key, native or for a --target: a script, so the install has one to copy
+                       "t=; p=; for a; do [ \"$p\" = --target ] && t=$a/; p=$a; done\n"
+                       "case \"$*\" in *'--bin drgnx-key'*) mkdir -p \"$CARGO_TARGET_DIR/${t}release\" &&"
+                       " echo \"#!/bin/sh\" > \"$CARGO_TARGET_DIR/${t}release/drgnx-key\" &&"
+                       " chmod 755 \"$CARGO_TARGET_DIR/${t}release/drgnx-key\";; esac\n")
                cargo-log))
       (set-file-modes (expand-file-name "cargo" tc) #o755)
       ;; the forwarder's musl target is added through the toolchain's rustup (a stub: never the host's)
@@ -518,12 +559,17 @@ bin/drgnx), the stubs, and BIN (the install's bin/drgnx).  Origin and the instal
             (log (drgnx-update-test--slurp cargo-log)))
         (should (eq (car r) 0))
         (should (string-search "cargo build --release --locked -j 4 --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr" log))
+        ;; drgnx-key: native next to the hub (a keyed job here runs behind it), static musl beside the relay's sidecar
+        ;; the Rust triple's arch: Apple Silicon's uname says arm64, Rust's triple aarch64
+        (let ((arch (string-replace "arm64" "aarch64" (string-trim (shell-command-to-string "uname -m")))))
+          (should (string-search "-j 4 --manifest-path runtime/Cargo.toml -p sleipnir --no-default-features --bin drgnx-key RUSTUP_HOME=" log))
+          (should (string-search (format "--target %s-unknown-linux-musl --manifest-path runtime/Cargo.toml -p sleipnir --no-default-features --bin drgnx-key" arch) log))
+          (should (file-executable-p (expand-file-name "data/bin/drgnx-key" dir)))
+          (should (file-executable-p (expand-file-name (format "data/bin/drgnx-key-%s-linux-musl" arch) dir)))
+          (should (string-search (format "rustup target add %s-unknown-linux-musl" arch) log)))
         (should (string-search (format "RUSTUP_HOME=%s/rh CARGO_HOME=%s/ch" dir dir) log))
         (should (string-search (format "TARGET=%s/cache/drgnx/ratatoskr-target COMMIT=%s CHECKOUT=%s/install" dir head dir) log))
         (should-not (string-search "WRONG" log))
-        (should (string-search (format "rustup target add %s-unknown-linux-musl"
-                                       (string-trim (shell-command-to-string "uname -m")))
-                               log))
         (should (string-search "--user --scope -q -p MemoryMax=7168M -p MemorySwapMax=0"
                                (drgnx-update-test--slurp (expand-file-name "sd.log" dir))))
         ;; installed: the built file under the data dir, by rename, no .new left, no links without --prefix
