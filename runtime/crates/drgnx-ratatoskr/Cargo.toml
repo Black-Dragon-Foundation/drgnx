@@ -72,7 +72,9 @@ regex.workspace = true
 drgnx-rows = { path = "../drgnx-rows", version = "0.1.0" }
 # the terminals (term): the worker's wire, records and scopes, without the engine
 drgnx-term = { path = "../drgnx-term", version = "0.1.0", default-features = false }
-getrandom.workspace = true   # the hub's instance id on view patches (view)
+getrandom.workspace = true   # the hub's instance id on view patches (view); a kernel connection's key (notebook)
+hmac.workspace = true         # a Jupyter message's signature, checked in constant time (notebook::wire)
+zeromq.workspace = true       # the Jupyter kernels' sockets (notebook), over ipc or loopback TCP
 notify.workspace = true      # the Explorer's listing watches the folders it read (view::explorer)
 draugr = { path = "../draugr", version = "0.1.0" }
 vor = { path = "../vor", version = "0.1.0" }

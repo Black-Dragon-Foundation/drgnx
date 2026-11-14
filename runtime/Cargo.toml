@@ -31,6 +31,8 @@ sha2 = "0.11"
 sha1 = "0.11"              # the socket name is sha1(data-dir)[0:8] (design 3.1); one addition to section 17
 subtle = "2.6"
 getrandom = "0.4"
+# Jupyter kernels (language packs Task 11b): the pure-Rust ZeroMQ client; only the features used (no async-std, no async-dispatcher)
+zeromq = { version = "0.7", default-features = false, features = ["tokio-runtime", "tcp-transport", "ipc-transport"] }
 rusqlite = { version = "0.41", default-features = false, features = ["bundled"] }
 # hrafn's structural chunker; the grammars arrive with the languages that use them
 tree-sitter = "0.27"   # 0.27 for ast-grep-core (the Search view's Pattern); needs Rust 1.90, under the MSRV (1.95)
