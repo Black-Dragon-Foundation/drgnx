@@ -161,4 +161,13 @@
   :by "2026-11-14-lisp-offload-rest:55" :since "2026-11-14"
   :tests (drgnx-look-bars/a-wide-bar-drops-without-copying)
   :keep ())
+ ("test/unit/look-palette-test.el"
+  :by "2026-11-14-lisp-offload-rest:67" :since "2026-11-14"
+  :tests (drgnx-look-palette/sort-reads-the-history-once)
+  :keep ())
+ ("test/unit/core-palette-test.el"
+  :by "2026-11-14-lisp-offload-rest:67" :since "2026-11-14"
+  :tests (drgnx-palette/groups-in-the-mockups-order
+          drgnx-palette/typed-text-ranks-by-match-then-recency)
+  :keep ())
 )

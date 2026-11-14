@@ -244,6 +244,7 @@ asks an agent with that text."
 (ert-deftest drgnx-palette/groups-in-the-mockups-order ()
   "palette.html's groups: Commands, then Files, then Agents.  The ask row is the fallback: last, never first while a
 command or a file matches; recent commands still lead their group."
+  :tags '(:frozen)                      ; the Lisp sort: Sjá's pick replaces it (palette-pick-test.el)
   (drgnx-test--palette-in-project
     (drgnx-command-define 'agents-ask :title "Ask an Agent…" :category "Agents" :command #'ignore)
     (drgnx-command-define 'run-file :title "Run Tests in This File" :category "Tests" :command #'ignore)
@@ -267,6 +268,7 @@ command or a file matches; recent commands still lead their group."
   "With text typed, how well a row matches ranks first (word starts, the words in order) and a recent run only
 breaks near-ties, as in VS Code: \"run te\" gives palette.html's order with Rerun run 2 minutes ago.  With nothing
 typed, recent first."
+  :tags '(:frozen)                      ; the Lisp sort: Sjá's pick replaces it (palette-pick-test.el)
   (drgnx-test--palette-in-project
     (pcase-dolist (`(,id ,title ,cat) '((run-file "Run Tests in This File" "Tests") (run-point "Run Test at Point" "Tests")
                                         (rerun "Rerun Last Tests" "Tests") (run-term "Run in Terminal…" "Terminal")

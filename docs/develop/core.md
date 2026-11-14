@@ -2284,7 +2284,12 @@ There are two recorded exceptions:
 
 - **Generic `completing-read` through Vertico** keeps `drgnx-completion--format-candidate`, which dresses each
   visible candidate in Lisp. There is no row seam of ours there: the candidates and the prompts are other packages'
-  as much as ours. The palette, which is ours, moves to Sjá.
+  as much as ours. The palette, which is ours, moves to Sjá: its candidates are loaded once per open
+  (`nidhogg-view-pick`), and each key is one call that filters, scores, sorts and groups them in Rust; Lisp maps the
+  answer's indices to labels and dresses each row once per open (`drgnx-palette--memo`, dropped at close, with the
+  list closed in Sjá). The palette still shows through Vertico, so the dressing of its visible rows on each exhibit
+  (`vertico--format-candidate` and our `drgnx-completion--format-candidate`, about ten rows) is part of this
+  exception. An Emacs without `nidhogg-view-pick` keeps the Lisp sort (`drgnx-palette-sort`, frozen).
 - **Your own terminal link patterns** (`drgnx-term-link`: an Emacs regexp and a target, or a Lisp function) run in
   Lisp over the text a draw changed, and only when you set some. The plain addresses (`drgnx-term-link-url`) are the
   worker's.
