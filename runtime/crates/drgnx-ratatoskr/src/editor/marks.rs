@@ -11,8 +11,27 @@ use runstav::methods::history::{AgentLines, BlameCommit, HeadHunk, HunkMark, Hun
 /// which a file opens lean or in chunks and draws none.  Large-files v2's cost registry replaces this one constant.
 pub const MAX_BYTES: usize = 50 * 1024 * 1024;
 
+#[cfg(test)]
+thread_local! {
+    /// A test's own limit (a test thread's, so parallel tests do not see it).
+    static TEST_LIMIT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// Run F with the limit at LIMIT bytes on this thread: a test of the guard needs no 50 MiB text.
+#[cfg(test)]
+pub fn with_limit<R>(limit: usize, f: impl FnOnce() -> R) -> R {
+    TEST_LIMIT.with(|l| l.set(Some(limit)));
+    let out = f();
+    TEST_LIMIT.with(|l| l.set(None));
+    out
+}
+
 /// Whether a text of LEN bytes gets marks: the one named check every mark builder asks.
 pub fn within_limit(len: usize) -> bool {
+    #[cfg(test)]
+    if let Some(limit) = TEST_LIMIT.with(std::cell::Cell::get) {
+        return len <= limit;
+    }
     len <= MAX_BYTES
 }
 
@@ -239,11 +258,14 @@ mod tests {
 
     #[test]
     fn a_text_over_the_limit_gets_no_marks() {
-        let big = "x\n".repeat(MAX_BYTES / 2 + 1);
-        assert!(!within_limit(big.len()));
-        assert!(hunk_marks(&big, &[hunk(1, 1, 1, 1)]).is_empty());
-        let edge = "x".repeat(MAX_BYTES);
-        assert!(within_limit(edge.len()));
-        assert_eq!(hunk_marks(&edge, &[hunk(1, 1, 1, 1)]).len(), 1);
+        // the limit itself is a constant; the check is tried at a small one
+        assert_eq!(MAX_BYTES, 50 * 1024 * 1024);
+        with_limit(8, || {
+            assert!(within_limit(8) && !within_limit(9));
+            assert!(hunk_marks("x\nx\nx\nx\nx\n", &[hunk(1, 1, 1, 1)]).is_empty());
+            assert_eq!(hunk_marks("x\nx\nx\nx", &[hunk(1, 1, 1, 1)]).len(), 1);
+        });
+        // and the override is gone after
+        assert!(within_limit(9));
     }
 }
