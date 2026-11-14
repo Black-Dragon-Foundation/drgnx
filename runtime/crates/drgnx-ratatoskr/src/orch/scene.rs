@@ -392,6 +392,19 @@ pub(crate) fn map_trail() -> (Vec<vegvisir::trail::Step>, Vec<vegvisir::trail::C
 
 /// Write the run into FRONT's store and its merge queue.  Each write is the hub's (class system), as the gates' are.
 pub async fn seed(front: &Front, map: bool) -> Result<(), String> {
+    if map {
+        // the Work map's scene is the map's graph, trail and strip alone: no plan run, so no held gate, no job and no
+        // queue beside the mockup's three cards
+        front.core.map.scene_graph(map_events());
+        let (steps, concs) = map_trail();
+        front.core.trails.scene("a1", steps, concs);
+        front
+            .core
+            .map
+            .scene_strip(vec!["wk 41 % ▲ Thu".into(), "$31 / $40".into()]);
+        front.writer.signals.wrote();
+        return Ok(());
+    }
     let r = run();
     let now = crate::clock::wall_secs();
     let meta = urdr::graph::TxMeta::new("hub", urdr::graph::Class::System, "orch/scene");
@@ -503,19 +516,7 @@ pub async fn seed(front: &Front, map: bool) -> Result<(), String> {
         );
         front.core.budgets.spend(&scope, Unit::Usd, 6.2);
     }
-    if map {
-        front.core.map.scene_graph(map_events());
-        {
-            let (steps, concs) = map_trail();
-            front.core.trails.scene("a1", steps, concs);
-        }
-        front
-            .core
-            .map
-            .scene_strip(vec!["wk 41 % ▲ Thu".into(), "$31 / $40".into()]);
-    } else {
-        front.core.map.scene(sessions());
-    }
+    front.core.map.scene(sessions());
     front.writer.signals.wrote();
     Ok(())
 }

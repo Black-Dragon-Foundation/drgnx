@@ -262,7 +262,7 @@ fn trail_rows_are_ui_text_with_lucide_icons_and_a_finding_card() {
     let p = Palette(vec![("chip-fg".into(), "#a2a5b2".into())]);
     let steps = vec![step(1, 1000.0)];
     let (rows, images) =
-        trail::trail_rows_with_images(&steps, &[conclusion(1, 1, &[1])], &env(&p), Zone(0));
+        trail::trail_rows_with_images(&steps, &[conclusion(1, 1, &[1])], &env(&p), Zone(0), None);
     fn faces(r: &Row) -> Vec<&str> {
         r.runs.iter().map(|x| x.2.as_str()).collect()
     }
@@ -496,4 +496,21 @@ fn a_finding_card_keeps_its_keys_and_a_filled_number() {
         sub.runs.iter().any(|r| r.2 == "drgnx-chip-quiet"),
         "{sub:?}"
     );
+}
+
+/// [D] A step still open shows how long it has run (`32 s…`, work-space-dark.html), from the clock it is given; a closed
+/// one shows its duration; with no clock an open step shows its time alone.
+#[test]
+fn an_open_step_shows_its_elapsed_seconds() {
+    let p = Palette::default();
+    let mut open = step(1, 1000.0);
+    open.end = None;
+    let (rows, _) =
+        trail::trail_rows_with_images(&[open.clone()], &[], &env(&p), Zone(0), Some(1032.4));
+    assert!(rows[0].text.contains("· 32 s…"), "{:?}", rows[0]);
+    let (rows, _) = trail::trail_rows_with_images(&[open], &[], &env(&p), Zone(0), None);
+    assert!(!rows[0].text.contains('…'), "{:?}", rows[0]);
+    let (rows, _) =
+        trail::trail_rows_with_images(&[step(2, 1000.0)], &[], &env(&p), Zone(0), Some(1500.0));
+    assert!(rows[0].text.contains("· 2 s"), "{:?}", rows[0]);
 }

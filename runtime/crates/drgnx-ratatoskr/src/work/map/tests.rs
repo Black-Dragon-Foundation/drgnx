@@ -887,9 +887,10 @@ fn the_strip_and_the_needs_you_list_line_up() {
     let chips = [
         at("gone  g1"),
         at("which?  g2"),
-        at("agent 3 needs you  g3"),
-        at("agent 4 needs you  g4"),
-        at("huddle: both edit a.rs  g5"),
+        // the chips share the row, so a long one is cut: its jump key is what is found
+        at("  g3"),
+        at("  g4"),
+        at("  g5"),
     ];
     assert!(chips.is_sorted(), "{}", rows[0].text);
     let d = model::doc(core.model(), v.layout.as_ref().expect("laid out"), &v.sent);

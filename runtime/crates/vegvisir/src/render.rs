@@ -499,8 +499,24 @@ fn state_word(f: &Fields) -> String {
     }
 }
 
+/// What an agent is doing, in words: a step class as its participle (`test` is `testing`), a finished run waiting
+/// for you as `done · ready`, else the class as it is, else the state's words.
 fn activity(f: &Fields) -> String {
-    f.activity.clone().unwrap_or_else(|| state_word(f))
+    if f.state == Some(State::Review) {
+        return "done · ready".into();
+    }
+    match f.activity.as_deref() {
+        Some(c) => match c {
+            "test" => "testing".into(),
+            "edit" => "editing".into(),
+            "think" => "thinking".into(),
+            "read" => "reading".into(),
+            "search" => "searching".into(),
+            "write" => "writing".into(),
+            other => other.to_owned(),
+        },
+        None => state_word(f),
+    }
 }
 
 /// The dot of IT's state in its face; a runner's follows the runner's own state.
@@ -566,6 +582,32 @@ fn badge(it: &Item) -> (String, &'static str) {
         format!(" {initial} "),
         WHO_FACES[usize::from(agent_number(it)) - 1],
     )
+}
+
+/// The name of the file both agents edit (their branches' changed files), if there is one: the first by name.
+pub fn shared_file(
+    edges: &[Edge],
+    items: &BTreeMap<ItemId, Item>,
+    a: &ItemId,
+    b: &ItemId,
+) -> Option<String> {
+    let edited = |agent: &ItemId| -> BTreeSet<ItemId> {
+        let branches: Vec<&ItemId> = edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::CameFrom && e.from == *agent)
+            .map(|e| &e.to)
+            .collect();
+        edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::Edits && branches.contains(&&e.from))
+            .map(|e| e.to.clone())
+            .collect()
+    };
+    let (mine, theirs) = (edited(a), edited(b));
+    mine.intersection(&theirs)
+        .filter_map(|id| items.get(id))
+        .map(|f| f.label.rsplit('/').next().unwrap_or(&f.label).to_owned())
+        .min()
 }
 
 /// The item an overlap edge joins ID to, as "model · label".
@@ -650,8 +692,19 @@ fn rich_lines(s: &Scene, it: &Item) -> Vec<Line> {
     }
     let flag = if it.warn {
         let mut l = Line::default();
-        let text = match partner(s, &it.id) {
-            Some(p) => format!("⚠ shares files with {p}"),
+        let other = s
+            .edges
+            .iter()
+            .find(|e| e.kind == EdgeKind::Overlap && (e.from == it.id || e.to == it.id))
+            .map(|e| if e.from == it.id { &e.to } else { &e.from });
+        let text = match other.and_then(|o| s.items.get(o).map(|oi| (o, oi))) {
+            Some((o, oi)) => {
+                let name = oi.label.rsplit(" · ").next().unwrap_or(&oi.label);
+                match shared_file(s.edges, s.items, &it.id, o) {
+                    Some(file) => format!("⚠ {file} with {name}"),
+                    None => format!("⚠ shares files with {name}"),
+                }
+            }
             None => "⚠ overlap".into(),
         };
         l.push(text, Some("drgnx-work-overlap"));
@@ -776,9 +829,11 @@ fn chip_line(it: &Item) -> Line {
     };
     // a file by its name (the path is its label's), a machine by its own name (only the strip abbreviates)
     let name = if it.kind == Kind::File {
-        it.label.rsplit('/').next().unwrap_or(&it.label)
+        it.label.rsplit('/').next().unwrap_or(&it.label).to_owned()
+    } else if it.kind == Kind::Ask {
+        format!("“{}”", it.label)
     } else {
-        &it.label
+        it.label.clone()
     };
     l.push(format!(" {name}"), None);
     if let (Kind::Branch, Some(tag)) = (it.kind, f.tag.as_ref()) {
@@ -1134,25 +1189,6 @@ pub fn strip(
         .into_iter()
         .map(|e| e.text)
         .collect();
-    let mut b = RowBuilder::new("strip");
-    for (i, e) in entries.iter().take(9).enumerate() {
-        if i > 0 {
-            b.push(" ", None);
-        }
-        let e = fit_px(m, e, (CHIP_MAX as f32 * env.scale).round() as u32);
-        let start = b.pos();
-        b.push(&format!(" ⚑ {e} "), Some("drgnx-work-needs-you"))
-            .push(&format!(" g{} ", i + 1), Some("drgnx-work-needs-you-key"))
-            .push(" ", Some("drgnx-work-needs-you"));
-        let end = b.pos();
-        b.face(start, end, "drgnx-chip");
-    }
-    if entries.len() > 9 {
-        b.push(
-            &format!(" +{} ", entries.len() - 9),
-            Some("drgnx-work-needs-you"),
-        );
-    }
     // a chip: its text and, for a machine, its Lucide icon (a monitor; a laptop for "laptop") before the text
     let icon_px = (ICON_PX as f32 * env.scale).round() as u32;
     let chips: Vec<(String, Option<&str>)> = extra
@@ -1187,7 +1223,34 @@ pub fn strip(
         .map(|(c, i)| fit::width(m, ROLE, c) + if i.is_some() { icon_px as f32 } else { 0.0 })
         .sum::<f32>()
         + fit::width(m, ROLE, " ") * chips.len().saturating_sub(1) as f32;
-    b.stop(env.width_px.saturating_sub(w.ceil() as u32));
+    // the needs-you chips share what the right-hand chips leave, each cut to its share (no chip runs under them)
+    let shown = entries.len().clamp(1, 9);
+    let spare = (env.width_px as f32 - w - 44.0 * env.scale) / shown as f32;
+    let overhead = fit::width(m, ROLE, " ⚑   g1  ") + 4.0 * env.scale;
+    let room = ((spare - overhead).max(40.0 * env.scale))
+        .min(CHIP_MAX as f32 * env.scale)
+        .round() as u32;
+    let mut b = RowBuilder::new("strip");
+    for (i, e) in entries.iter().take(9).enumerate() {
+        if i > 0 {
+            b.push(" ", None);
+        }
+        let e = fit_px(m, e, room);
+        let start = b.pos();
+        b.push(&format!(" ⚑ {e} "), Some("drgnx-work-needs-you"))
+            .push(&format!(" g{} ", i + 1), Some("drgnx-work-needs-you-key"))
+            .push(" ", Some("drgnx-work-needs-you"));
+        let end = b.pos();
+        b.face(start, end, "drgnx-chip");
+    }
+    if entries.len() > 9 {
+        b.push(
+            &format!(" +{} ", entries.len() - 9),
+            Some("drgnx-work-needs-you"),
+        );
+    }
+    // 20 px short of the edge: the window's fringe and its truncation glyph are not drawn on
+    b.stop(env.width_px.saturating_sub(w.ceil() as u32 + (20.0 * env.scale) as u32));
     let mut images = BTreeMap::new();
     for (i, (c, icon)) in chips.iter().enumerate() {
         if i > 0 {
@@ -1215,6 +1278,7 @@ pub fn strip(
     }
     let end = b.pos();
     b.face(0, end, "drgnx-work-card");
+    b.height(1, (30.0 * env.scale).round() as u32);
     (b.finish(), images.into_iter().collect())
 }
 

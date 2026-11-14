@@ -421,7 +421,8 @@ argument): without moving focus."
   "The tile's controls at the bar's right (work-space-dark.html): the grip (the tile layout's drag handle: not wired
 yet), maximise or restore, then the ⋯, shown while the bar is hovered, whose menu has the four lenses and the keys
 sheet."
-  (let ((menu (propertize (drgnx-look-hover-control (drgnx-look-icon 'ellipsis 'drgnx-text-subtle))
+  (let ((menu (propertize (let ((icon (drgnx-look-icon 'ellipsis 'drgnx-text-subtle))) ; shown at rest, as the design draws it
+                            (if (string-empty-p icon) (propertize "⋯" 'face 'drgnx-text-subtle) icon))
                           'drgnx-lens-menu t 'keymap drgnx-work-lens--menu-map 'help-echo "Work menu: the lenses, the keys"
                           'pointer 'hand))
         (grip (drgnx-work-lens--control 'grip-vertical "⠿" "Move this tile"))
@@ -436,22 +437,24 @@ CURRENT (`map', `board', `timeline' or `flow'; default `map') marked and the oth
 switch), then KEYS, the lens's own keys ((LABEL . KEY) …), as chips with their key badges."
   (let* ((current (or current 'map))
          (bar
-          (concat (propertize (concat " " (or (drgnx-face-glyph 'layers) "") " " (if name (concat "Work · " name) "Work") " ")
-                              'face 'drgnx-work-lens-title)
-                  "  "
-                  ;; the lens switch: a rail (the gap's colour) holding the labels, the shown one raised (look.css `.lens')
-                  (propertize " " 'face 'drgnx-work-lens-rail)
-                  (mapconcat (lambda (v)
-                               (propertize (format " %s " (cdr v))
-                                           'face (if (eq (car v) current) 'drgnx-work-lens-current 'drgnx-work-lens-seg)))
-                             '((map . "Map") (board . "Board") (timeline . "Timeline") (flow . "Flow"))
-                             (propertize " " 'face 'drgnx-work-lens-rail))
-                  (propertize " " 'face 'drgnx-work-lens-rail)
-                  (mapconcat (lambda (k)
-                               (concat "  " (propertize (format " %s " (car k)) 'face 'drgnx-work-chip)
-                                       (propertize (format " %s " (cdr k)) 'face 'drgnx-work-lens-key)))
-                             keys "")
-                  (drgnx-work-lens--controls))))
+          (concat ;; a row of its own, 34 px high (the design's tab row), so the strip below does not touch it
+           (propertize " " 'display `(space :width (1) :height (,(drgnx-px 34))))
+           (propertize (concat " " (or (drgnx-face-glyph 'layers) "") " " (if name (concat "Work · " name) "Work") " ")
+                       'face 'drgnx-work-lens-title)
+           "  "
+           ;; the lens switch: a rail (the gap's colour) holding the labels, the shown one raised (look.css `.lens')
+           (propertize " " 'face 'drgnx-work-lens-rail)
+           (mapconcat (lambda (v)
+                        (propertize (format " %s " (cdr v))
+                                    'face (if (eq (car v) current) 'drgnx-work-lens-current 'drgnx-work-lens-seg)))
+                      '((map . "Map") (board . "Board") (timeline . "Timeline") (flow . "Flow"))
+                      (propertize " " 'face 'drgnx-work-lens-rail))
+           (propertize " " 'face 'drgnx-work-lens-rail)
+           (mapconcat (lambda (k)
+                        (concat "  " (propertize (format " %s " (car k)) 'face 'drgnx-work-chip)
+                                (propertize (format " %s " (cdr k)) 'face 'drgnx-work-lens-key)))
+                      keys "")
+           (drgnx-work-lens--controls))))
     (add-text-properties 0 (length bar) '(mouse-face drgnx-hover-row) bar)   ; the ⋯ shows while the bar is hovered
     bar))
 

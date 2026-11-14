@@ -26,7 +26,7 @@
 
 (defconst drgnx-look-scenes
   '((window-dark :agent t)
-    (agent-panel)
+    (agent-panel :agent t)
     (palette :keys "C-S-p" :type "run te" :then "C-g")
     (palette-light :keys "C-S-p" :type "run te" :then "C-g")
     (palette-hc :keys "C-S-p" :type "run te" :then "C-g")

@@ -265,7 +265,7 @@ fn duration(s: &Step) -> Option<String> {
 /// conclusion resting on it, and its time and duration 14 columns from the right edge. A pause that ended is followed
 /// by a note row `resumed` at the time it ended.
 pub fn trail_rows(steps: &[Step], concs: &[Conclusion], env: &Env, zone: Zone) -> Vec<Row> {
-    build(steps, concs, env, zone).0
+    build(steps, concs, env, zone, None).0
 }
 
 fn build(
@@ -273,6 +273,7 @@ fn build(
     concs: &[Conclusion],
     env: &Env,
     zone: Zone,
+    now: Option<f64>,
 ) -> (
     Vec<Row>,
     std::collections::BTreeMap<drgnx_rows::ImageId, String>,
@@ -307,8 +308,14 @@ fn build(
         }
         let from = b.pos();
         b.stop(right).push(&zone.time(s.start), None);
-        if let Some(d) = duration(s) {
-            b.push(&format!(" · {d}"), None);
+        match (duration(s), now) {
+            (Some(d), _) => {
+                b.push(&format!(" · {d}"), None);
+            }
+            (None, Some(now)) if s.end.is_none() && now >= s.start => {
+                b.push(&format!(" · {:.0} s…", (now - s.start).floor()), None);
+            }
+            _ => {}
         }
         let end = b.pos();
         b.face(from, end, "drgnx-work-meta")
@@ -514,12 +521,15 @@ pub fn timeline_rows(lanes: &[Lane], env: &Env, m: &dyn Measure, zone: Zone) -> 
 }
 
 /// [`trail_rows`] and the images they name (the Lucide icons of the steps and the conclusions).
+/// As [`trail_rows`], with the images, and NOW (seconds since the epoch): a step still open shows how long it has run
+/// (`32 s…`).
 pub fn trail_rows_with_images(
     steps: &[Step],
     concs: &[Conclusion],
     env: &Env,
     zone: Zone,
+    now: Option<f64>,
 ) -> (Vec<Row>, Vec<(drgnx_rows::ImageId, String)>) {
-    let (rows, images) = build(steps, concs, env, zone);
+    let (rows, images) = build(steps, concs, env, zone, now);
     (rows, images.into_iter().collect())
 }

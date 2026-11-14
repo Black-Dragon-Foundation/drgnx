@@ -325,8 +325,12 @@ from 201."
 
 (defun drgnx-look-scene-agent (bin)
   "A mock agent (BIN: a test-hooks ratatoskr with ratatoskr-mock beside it) reads, runs, edits and asks."
-  (if (not (and bin (file-executable-p bin)))
-      (push "agent: no ratatoskr binary (DRGNX_RATATOSKR_BIN)" drgnx-look-scene--errors)
+  (cond
+   ;; a scene that needs the agent after another that started it (the panel after the window) finds it running
+   ((buffer-live-p drgnx-look-scene--panel))
+   ((not (and bin (file-executable-p bin)))
+    (push "agent: no ratatoskr binary (DRGNX_RATATOSKR_BIN)" drgnx-look-scene--errors))
+   (t
     (drgnx-look-scene--try "agent"
       (load (expand-file-name "test/fixtures/panel-replay-fixture" (bound-and-true-p drgnx-dir)) nil t)
       (setq drgnx-panel-replay-prefix 3)
@@ -348,7 +352,7 @@ from 201."
       ;; the turn runs on past the prefix to its ask: the scene shows every step's time and the open card
       (unless (drgnx-panel-replay--wait 30 (lambda () (with-current-buffer drgnx-look-scene--panel
                                                         (drgnx-agent-panel-cards--permissions))))
-        (push "agent: no permission card within 30 s" drgnx-look-scene--errors))))
+        (push "agent: no permission card within 30 s" drgnx-look-scene--errors)))))
   (drgnx-look-scene--answer :panel (if (buffer-live-p drgnx-look-scene--panel) (buffer-name drgnx-look-scene--panel) :null)))
 
 (defun drgnx-look-scene--editor ()

@@ -36,6 +36,15 @@ bar) that opens the tile menu: the four lenses, registered commands."
   (should (equal (mapcar #'cdr (drgnx-work-lens-menu-items))
                  '(work-view-map work-view-board work-view-timeline work-view-flow))))
 
+(ert-deftest drgnx-work-flow/the-lens-bar-is-a-row-of-its-own-with-its-controls-in-view ()
+  "work-space-dark.html: the tab row is 34 px high and its ⠿ ⛶ ⋯ show at rest (the bar's hover only highlights it)."
+  (let ((s (drgnx-work-lens-string 'map "drgnx")))
+    (should (cl-some (lambda (i) (let ((d (get-text-property i 'display s)))
+                                   (and (eq (car-safe d) 'space) (plist-get (cdr d) :height))))
+                     (number-sequence 0 (1- (length s)))))
+    (should-not (text-property-any 0 (length s) 'face 'drgnx-control-hidden s))
+    (should (cl-some (lambda (i) (eq (get-text-property i 'drgnx-lens-menu s) t)) (number-sequence 0 (1- (length s)))))))
+
 (ert-deftest drgnx-work-flow/the-lens-bar-keeps-the-grip-and-maximise-beside-the-menu ()
   "The bar's right is the grip, maximise and the ⋯ (work-space-dark.html): the ⋯ menu is the hover-revealed one, and its
 menu also holds the keys sheet, so both doors stay reachable."

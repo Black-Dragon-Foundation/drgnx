@@ -83,7 +83,15 @@ fn edge_lines(m: &Model, id: &ItemId) -> Vec<String> {
             ("reads", false) => Some(format!("read by\t{other}")),
             ("runs-on", true) => Some(format!("machine\t{other}")),
             ("runs-on", false) => Some(format!("runs here\t{other}")),
-            ("overlap", _) => Some(format!("overlap\t⚠ {other}")),
+            ("overlap", _) => {
+                // `⚠ session.rs with Sonnet · fx-sess`: the file both edit, when the model knows it
+                let items = m.items();
+                let file = vegvisir::render::shared_file(&m.edges(), &items, &e.from, &e.to);
+                Some(match file {
+                    Some(f) => format!("overlap\t⚠ {f} with {other}"),
+                    None => format!("overlap\t⚠ {other}"),
+                })
+            }
             ("based-on", true) => Some(format!("cut from\t{other}")),
             ("based-on", false) => Some(format!("cut here\t{other}")),
             _ => Some(format!("{kind}\t{other}")),

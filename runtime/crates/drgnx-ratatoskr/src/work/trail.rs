@@ -47,8 +47,9 @@ enum Sub {
 
 /// What a view's rows are built from, read once per refresh for every class.
 enum Data {
-    /// A window of the session's steps (all when they fit), its conclusions, how many steps it has.
-    Trail(Vec<trail::Step>, Vec<trail::Conclusion>, usize),
+    /// A window of the session's steps (all when they fit), its conclusions, how many steps it has, and the fixed clock
+    /// of a test hub's scene (none: the wall clock, which an open step's elapsed time follows).
+    Trail(Vec<trail::Step>, Vec<trail::Conclusion>, usize, Option<f64>),
     Timeline(Vec<trail::Lane>),
     Board(Vec<board::Card>),
     /// The lens's facts, and the part of the Flow the view is.
@@ -153,11 +154,17 @@ impl Trails {
                 let seeded: Option<(Vec<trail::Step>, Vec<trail::Conclusion>)> = None;
                 if let Some((steps, concs)) = seeded {
                     let total = steps.len();
-                    Data::Trail(steps, concs, total)
+                    // the scene's clock: the open step has run 32 s (work-space-dark.html: "32 s…")
+                    let clock = steps
+                        .iter()
+                        .rev()
+                        .find(|s| s.end.is_none())
+                        .map(|s| s.start + 32.0);
+                    Data::Trail(steps, concs, total, clock)
                 } else {
                     let from = f.core.views.window_from(key.0, &key.1, "steps");
                     let (steps, total) = trail_steps(f, &sid, from).await;
-                    Data::Trail(steps, conclusions(f, &sid).await, total)
+                    Data::Trail(steps, conclusions(f, &sid).await, total, None)
                 }
             }
             Sub::Timeline(lanes) => {
@@ -203,7 +210,7 @@ impl Trails {
 /// DATA's model, the lanes of the sessions NEAR lit.
 fn doc_of(data: &Data, near: &[String]) -> crate::view::model::Doc {
     match data {
-        Data::Trail(steps, concs, total) => model::trail_doc(steps, concs, *total),
+        Data::Trail(steps, concs, total, _) => model::trail_doc(steps, concs, *total),
         Data::Timeline(lanes) => model::timeline_doc(lanes, near),
         Data::Board(cards) => board::board_doc(cards),
         Data::Flow(flow, _) => flow::flow_doc(flow),
@@ -221,7 +228,13 @@ fn rows(
     let zone = Zone::parse(&env.tz);
     let only = |rows| (rows, Vec::new());
     match data {
-        Data::Trail(steps, concs, _) => trail::trail_rows_with_images(steps, concs, &renv, zone),
+        Data::Trail(steps, concs, _, clock) => trail::trail_rows_with_images(
+            steps,
+            concs,
+            &renv,
+            zone,
+            Some(clock.unwrap_or_else(crate::clock::wall_secs)),
+        ),
         Data::Timeline(lanes) => only(trail::timeline_rows(lanes, &renv, fonts, zone)),
         Data::Board(cards) => only(board::board_rows(cards, env)),
         Data::Flow(flow, flow::Part::Lens) => flow::flow_rows(flow, env, fonts),
@@ -657,7 +670,18 @@ pub async fn run(front: Arc<Front>) {
     let _ = front.core.trails.front.set(Arc::downgrade(&front));
     let signals = front.writer.signals.clone();
     loop {
-        signals.trail.notified().await;
+        // a trail with a step still open counts its seconds: drawn again each second, between the writes
+        let ticking = lock(&front.core.trails.data).values().any(|d| {
+            matches!(&**d, Data::Trail(steps, _, _, None) if steps.iter().any(|s| s.end.is_none()))
+        });
+        if ticking {
+            tokio::select! {
+                () = signals.trail.notified() => {}
+                () = crate::clock::sleep(std::time::Duration::from_secs(1)) => {}
+            }
+        } else {
+            signals.trail.notified().await;
+        }
         let keys: Vec<(u64, String)> = lock(&front.core.trails.views).keys().cloned().collect();
         for k in keys {
             front.core.trails.refresh(&front, &k).await;

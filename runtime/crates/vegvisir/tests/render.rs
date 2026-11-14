@@ -109,7 +109,7 @@ fn golden_rows_of_the_fixture() {
     let golden = [
         (
             "row:1:0:0",
-            "You asked<388><img> fix deferred testi…<580>\n",
+            "You asked<388><img> “fix deferred test…<580>\n",
         ),
         ("row:2:0:0", "Specs<420><img> race-proof tests<596>\n"),
         ("row:3:0:0", "Plans<232><img> deferred testing…<408>\n"),
@@ -119,7 +119,7 @@ fn golden_rows_of_the_fixture() {
              <84>SESSION-END-LOSES-STARTED-1<316><328>review item 3<560>\n\
              <84>testing · 32 min · $1.20 ·…<316><328>needs you · 5 min<560>\n\
              <84>→ turn_core drops the star…<316><328>→ fixed in seq<560>\n\
-             <84>⚠ shares files with Sonnet…<316><328>⚠ shares files with Opus ·…<560>\n",
+             <84>⚠ session.rs with fx-sess<316><328>⚠ session.rs with hub rows<560>\n",
         ),
         (
             "row:6:0:0",
@@ -449,7 +449,7 @@ fn strip_chips_rows() {
     let icons = row.images.iter().filter(|i| i.0 > pos).count() as u32;
     assert_eq!(
         px + 8 * tail.chars().count() as u32 + 8 * icons,
-        1000,
+        980,
         "{tail:?}"
     );
     // more than nine: the first nine and +N
@@ -704,7 +704,7 @@ fn the_selected_card_has_its_own_ring_faces() {
     };
     assert!(faces("row:4:0:0:0", "Opus").contains(&"drgnx-card-sel-top".to_owned()));
     assert!(faces("row:4:0:0:2", "testing").contains(&"drgnx-card-sel-mid".to_owned()));
-    assert!(faces("row:4:0:0:4", "shares").contains(&"drgnx-card-sel-bottom".to_owned()));
+    assert!(faces("row:4:0:0:4", "with").contains(&"drgnx-card-sel-bottom".to_owned()));
     assert!(faces("row:4:0:0:0", "Sonnet").contains(&"drgnx-card-top".to_owned()));
     assert!(faces("row:3:0:0:0", "deferred").contains(&"drgnx-card-single".to_owned()));
 }
