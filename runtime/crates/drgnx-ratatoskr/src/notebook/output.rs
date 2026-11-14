@@ -6,6 +6,7 @@
 //! - this module: the router that files iopub messages under the cell (the request's `msg_id`) they answer, the `display_id`
 //!   map, `clear_output`, the caps, and the kernel log for messages that answer nothing.
 
+pub mod file;
 pub mod mime;
 pub mod terminal;
 
@@ -119,6 +120,17 @@ impl CellRun {
             truncated: false,
             clear_pending: false,
             text: 0,
+        }
+    }
+
+    /// A run that is only outputs (read from a file, or set by the hub), in STATUS.
+    pub fn from_outputs(msg_id: &str, outputs: Vec<Output>, status: RunStatus) -> CellRun {
+        let text = outputs.iter().map(Output::text_len).sum();
+        CellRun {
+            outputs,
+            status,
+            text,
+            ..CellRun::new(msg_id)
         }
     }
 
