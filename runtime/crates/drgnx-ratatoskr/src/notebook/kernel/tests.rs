@@ -25,6 +25,7 @@ fn spec(script: &str, interrupt: Interrupt) -> Kernelspec {
         ],
         env: vec![],
         interrupt,
+        transport: crate::notebook::spec::Transport::Ipc,
         dir: PathBuf::from("/nowhere"),
     }
 }
@@ -521,4 +522,130 @@ async fn kill_and_the_wait_after_a_kill_are_bounded_by_exited_within() {
         BOUNDED_WAITS.load(std::sync::atomic::Ordering::SeqCst) > before,
         "the wait went through exited_within"
     );
+}
+
+// ----- the transport: ipc first, tcp for a kernel that cannot (design §5.2) -----
+
+use crate::notebook::spec::Transport;
+
+/// A kernel that writes the transport its connection file names to LOG, then ends with 3 (a refusal: no socket was made).
+fn recording(log: &Path, transport: Transport, tail: &str) -> Kernelspec {
+    let script = format!(
+        "grep -o '\"transport\":\"[a-z]*\"' \"$1\" >> {}; {tail}",
+        log.display()
+    );
+    let mut s = spec(&script, Interrupt::Signal);
+    s.transport = transport;
+    s
+}
+
+fn transports(log: &Path) -> Vec<String> {
+    std::fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .map(|l| l.replace("\"transport\":", "").replace('"', ""))
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_kernel_that_refuses_ipc_is_started_once_more_over_tcp_and_the_error_names_both() {
+    let d = tmp();
+    let folder = private_folder(&d.path().join("s")).unwrap();
+    let log = d.path().join("log");
+    let e = Kernel::start(
+        &recording(&log, Transport::Ipc, "echo no ipc >&2; exit 3"),
+        &folder,
+        "a",
+        d.path(),
+        quick(),
+    )
+    .await
+    .err()
+    .unwrap();
+    assert_eq!(
+        transports(&log),
+        ["ipc", "tcp"],
+        "one try each, in that order"
+    );
+    assert!(
+        e.contains("over ipc") && e.contains("over tcp") && e.contains("no ipc"),
+        "{e}"
+    );
+    assert!(!folder.join("kernel-a.json").exists());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_kernelspec_that_says_tcp_is_tried_over_tcp_only() {
+    let d = tmp();
+    let folder = private_folder(&d.path().join("s")).unwrap();
+    let log = d.path().join("log");
+    let e = Kernel::start(
+        &recording(&log, Transport::Tcp, "exit 3"),
+        &folder,
+        "a",
+        d.path(),
+        quick(),
+    )
+    .await
+    .err()
+    .unwrap();
+    assert_eq!(transports(&log), ["tcp"]);
+    assert!(!e.contains("over ipc"), "{e}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_kernel_that_started_and_was_not_ready_is_not_tried_over_tcp() {
+    // a kernel that made no refusal (it is alive, only silent) has nothing to do with the transport
+    let d = tmp();
+    let folder = private_folder(&d.path().join("s")).unwrap();
+    let log = d.path().join("log");
+    let t = Timeouts {
+        ready: Duration::from_millis(300),
+        ..quick()
+    };
+    let e = Kernel::start(
+        &recording(&log, Transport::Ipc, "sleep 600 & wait"),
+        &folder,
+        "a",
+        d.path(),
+        t,
+    )
+    .await
+    .err()
+    .unwrap();
+    assert_eq!(transports(&log), ["ipc"]);
+    assert!(e.contains("not ready within"), "{e}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_listener_that_is_not_the_kernels_is_an_error_naming_the_port_and_is_never_connected_to()
+{
+    let d = tmp();
+    let folder = private_folder(&d.path().join("s")).unwrap();
+    let block = crate::debug::ports::machine().claim().unwrap();
+    let port = block.ports()[0];
+    // a stranger (this process, not the kernel's group) listens on the shell port before the kernel does
+    let stranger = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
+    stranger.set_nonblocking(true).unwrap();
+    let log = d.path().join("log");
+    let e = Kernel::start_on(
+        &recording(&log, Transport::Tcp, "sleep 600 & wait"),
+        &folder,
+        "a",
+        d.path(),
+        quick(),
+        Some(block),
+    )
+    .await
+    .err()
+    .unwrap();
+    assert!(
+        e.contains(&format!("port {port}")) && e.contains("not the session's"),
+        "{e}"
+    );
+    assert!(
+        matches!(stranger.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock),
+        "the hub never connected to a port that is not the kernel's"
+    );
+    assert!(!folder.join("kernel-a.json").exists());
 }

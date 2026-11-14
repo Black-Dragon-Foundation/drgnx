@@ -91,7 +91,7 @@ pub struct Child {
 }
 
 /// Start `spec`'s program in a process group of its own (a session of its own with `new_session`), with exactly
-/// `spec.env` as its environment and SIGPIPE
+/// `spec.env` as its environment, SIGINT and SIGQUIT at their defaults (a background-job parent ignores them) and SIGPIPE
 /// ignored (std resets it to the default in a child; a child writing to a pipe whose reader left gets EPIPE
 /// instead of dying). No `PR_SET_PDEATHSIG`: it fires when the forking thread exits, and tokio's threads come and go.
 ///
@@ -228,6 +228,12 @@ fn start_with(spec: Spec, after_move: impl FnOnce(&mut Moved)) -> io::Result<Chi
                 }
                 if libc::signal(libc::SIGPIPE, libc::SIG_IGN) == libc::SIG_ERR {
                     return Err(io::Error::last_os_error());
+                }
+                // a parent run as a background job ignores these, and exec keeps an ignored signal ignored
+                for sig in [libc::SIGINT, libc::SIGQUIT] {
+                    if libc::signal(sig, libc::SIG_DFL) == libc::SIG_ERR {
+                        return Err(io::Error::last_os_error());
+                    }
                 }
                 child_fds(&pairs, &expect)
             });
@@ -799,6 +805,37 @@ mod tests {
         assert_ne!(pid, unsafe { libc::getpgrp() });
         drop(child.take_stdin());
         assert!(child.wait().await.unwrap().unwrap().success());
+    }
+
+    /// A parent started as a background job (`nohup`, a script's `&`) has SIGINT and SIGQUIT ignored, and a child
+    /// inherits that: a shell then cannot trap SIGINT and a kernel's interrupt would do nothing. The child gets both
+    /// at their defaults.
+    #[tokio::test]
+    async fn a_child_gets_sigint_and_sigquit_at_their_defaults_whatever_the_parent_ignores() {
+        // SAFETY: signal(2) on our own disposition, restored right after the spawn (the child has forked by then).
+        let (int, quit) = unsafe {
+            (
+                libc::signal(libc::SIGINT, libc::SIG_IGN),
+                libc::signal(libc::SIGQUIT, libc::SIG_IGN),
+            )
+        };
+        let child = spawn(sh(
+            "trap 'echo got-int' INT; trap 'echo got-quit' QUIT; kill -INT $$; kill -QUIT $$; echo done",
+            true,
+        ))
+        .await;
+        // SAFETY: as above
+        unsafe {
+            libc::signal(libc::SIGINT, int);
+            libc::signal(libc::SIGQUIT, quit);
+        }
+        let mut child = child.unwrap();
+        let mut lines = BufReader::new(child.take_stdout().unwrap()).lines();
+        let mut said = Vec::new();
+        while let Some(l) = lines.next_line().await.unwrap() {
+            said.push(l);
+        }
+        assert_eq!(said, ["got-int", "got-quit", "done"]);
     }
 
     /// `new_session`: the child leads a session of its own (so it can never take this process's terminal, and the

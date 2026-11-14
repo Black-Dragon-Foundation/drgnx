@@ -1482,7 +1482,7 @@ the client half of the `gated` pattern; the hub half is Ratatoskr's test clock a
 - **Gated connections hand parsed lines to the client's batch function.** The gate replaces the connection's filter
   (`set-process-filter`), which turns Nidhogg's reader off, so the gate cuts the lines itself and delivers each one as
   the reader would (`drgnx-test-gate--read`: parsed to plists and lists, a `view-model` line to
-  `drgnx-hub--model-line` whole, the rest as a batch of one for `drgnx-hub--client-batch`, inside the connection's
+  `drgnx-view-model-line` whole, the rest as a batch of one for `drgnx-hub--client-batch`, inside the connection's
   guard). Every hub connection is framed in the client ([hub.md](hub.md#the-clients-core)); the reader's own rows are
   `hub-client-frame-test.el`, the rows of `hub-client-shell-test.el` (whose peers use `drgnx-test-peer-send`), and
   `hub-client-framed-test.el`, which runs the client against the real Ratatoskr (a subscription and a burst of calls;

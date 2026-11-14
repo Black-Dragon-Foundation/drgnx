@@ -97,10 +97,6 @@ pub struct Session {
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 
-fn endpoint(prefix: &std::path::Path, n: usize) -> String {
-    format!("ipc://{}-{n}", prefix.display())
-}
-
 fn dealer(identity: &[u8]) -> Result<DealerSocket, String> {
     let mut o = SocketOptions::default();
     o.peer_identity(
@@ -131,7 +127,7 @@ impl Session {
         let mut stdin = dealer(identity.as_bytes())?;
         let mut control = DealerSocket::new();
         let mut iopub = SubSocket::new();
-        let at = |n| endpoint(&conn.prefix, n);
+        let at = |n| conn.endpoint(n);
         shell
             .connect(&at(1))
             .await

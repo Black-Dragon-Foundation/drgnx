@@ -204,6 +204,65 @@ fn a_listener_is_the_sessions_only_when_its_process_group_is() {
     drop(held);
 }
 
+/// A listening socket on 127.0.0.1:PORT (0: any) with SO_REUSEPORT as asked, and the port it got.
+fn listen(port: u16, reuseport: bool) -> (std::os::fd::OwnedFd, u16) {
+    use std::os::fd::{FromRawFd, OwnedFd};
+    // SAFETY: plain socket calls on a descriptor made here and owned by the returned OwnedFd; the sockaddr is zeroed then set.
+    unsafe {
+        let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0);
+        assert!(fd >= 0);
+        let owned = OwnedFd::from_raw_fd(fd);
+        let on: libc::c_int = i32::from(reuseport);
+        assert_eq!(
+            libc::setsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_REUSEPORT,
+                std::ptr::from_ref(&on).cast(),
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            ),
+            0
+        );
+        let mut a: libc::sockaddr_in = std::mem::zeroed();
+        a.sin_family = libc::AF_INET as libc::sa_family_t;
+        a.sin_port = port.to_be();
+        a.sin_addr.s_addr = u32::from_be_bytes([127, 0, 0, 1]).to_be();
+        let len = std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
+        assert_eq!(libc::bind(fd, std::ptr::from_ref(&a).cast(), len), 0);
+        assert_eq!(libc::listen(fd, 8), 0);
+        let mut got: libc::sockaddr_in = std::mem::zeroed();
+        let mut l = len;
+        assert_eq!(
+            libc::getsockname(fd, std::ptr::from_mut(&mut got).cast(), &mut l),
+            0
+        );
+        (owned, u16::from_be(got.sin_port))
+    }
+}
+
+/// A same-account process that binds the port after the check can take connections meant for the kernel if the kernel's
+/// listener allows it (SO_REUSEPORT): such a listener is refused, whoever owns it; one without it cannot be joined.
+#[test]
+fn a_listener_that_another_process_of_the_account_could_join_is_refused() {
+    let me = rustix::process::getpgrp().as_raw_nonzero().get();
+    let (plain, p) = listen(0, false);
+    assert_eq!(ports::exclusively_owned(p, &[me]), Ok(true));
+    // the port the kernel's own listener would hold: a second socket cannot bind it, with or without the option
+    drop(plain);
+    let (shared, p) = listen(0, true);
+    let e = ports::exclusively_owned(p, &[me]).unwrap_err();
+    assert!(
+        e.contains(&p.to_string()) && e.contains("SO_REUSEPORT"),
+        "{e}"
+    );
+    // a second same-uid listener on the port (it joined the group): the group's check names it as well, and it is refused too
+    let (second, _) = listen(p, true);
+    assert!(ports::exclusively_owned(p, &[me]).is_err());
+    // nothing listens: not yet
+    drop((shared, second));
+    assert_eq!(ports::exclusively_owned(p, &[me]), Ok(false));
+}
+
 /// A port check never outlasts its deadline: a command that does not exit is killed and the check fails, saying so
 /// (the macOS check's lsof, the fork row's sweep).
 #[test]

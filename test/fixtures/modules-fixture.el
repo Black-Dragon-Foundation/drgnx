@@ -232,13 +232,23 @@ library's; the recorder lists them in `drgnx-modules--left'.  Layer timers stay:
 test/leaks-allowed.eld): not a module's.  ` *work*' is the pool `with-work-buffer' reuses (shr's pixel widths).  Native compilation's log too: Emacs 31 compiles a trampoline the first
 time a primitive is advised (a test's advice on `y-or-n-p'), whichever body that is.")
 
+(defconst drgnx-test-modules--allowed-state
+  '(("nidhogg-workers-treesit--start-created"
+     . "Nidhogg's tree-sitter workers add this hook the first time a tree-sitter mode loads (a notebook's parser test loads python-ts-mode): a third-party mode's hook, not a module's")
+    ("\\`after-load .*\\(ffap\\|grep\\)"
+     . "python-ts-mode requires ffap and grep, whose after-load forms Emacs registers: loading a mode, not a module's setup"))
+  "What a fingerprint difference may hold after a module's teardown without being the module's: (REGEXP . REASON), a load a
+test caused of a third-party mode's or an Emacs library's own state.")
+
 (defun drgnx-test-modules--diff-lines (before after)
-  "Readable lines for what differs between the fingerprints BEFORE and AFTER, features and Emacs's own work
-buffers excepted."
+  "Readable lines for what differs between the fingerprints BEFORE and AFTER, features, Emacs's own work buffers and
+`drgnx-test-modules--allowed-state' excepted."
   (mapcar (lambda (d) (if (plist-get d :source) (format "%s (%s)" (plist-get d :what) (plist-get d :source))
                         (plist-get d :what)))
           (seq-remove (lambda (d) (or (string-prefix-p "feature " (plist-get d :what))
-                                      (string-match-p drgnx-test-modules--emacs-buffers (plist-get d :what))))
+                                      (string-match-p drgnx-test-modules--emacs-buffers (plist-get d :what))
+                                      (seq-some (lambda (a) (string-match-p (car a) (plist-get d :what)))
+                                                drgnx-test-modules--allowed-state)))
                       (drgnx-modules-fingerprint-diff before after))))
 
 (defun drgnx-test-modules--ran ()

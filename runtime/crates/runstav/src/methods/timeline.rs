@@ -131,6 +131,10 @@ pub struct Step {
     /// Whether "Revert to here" can act on the step: it has an edit history record and its checkpoint is kept.
     #[serde(default)]
     pub revertible: bool,
+    /// The tool call the step ran (the transcript's tool entry `id`), on the `agent-step` event of a tool step; the
+    /// `step` table keeps none, so `timeline/get` has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call: Option<String>,
     /// Its provenance: each hook point run on it, as the hub's own `hook` row records it (`{point, records:
     /// [{source, verdict, ms, reason?}], outcome, …}`), oldest first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

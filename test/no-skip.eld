@@ -51,6 +51,7 @@
   "drgnx-hub-client/the-update-notice-offers-restart-now"
   "drgnx-huginn/differential-fresh-seed"                ; skips without DRGNX_HUGINN_DUMP, which drgnx-tiers.yml's Linux jobs set
   "drgnx-live/the-work-tab-fills-in-and-opens-what-it-shows" ; skips without DRGNX_RATATOSKR_BIN, which drgnx-tiers.yml's ui job sets
+  "drgnx-notebook/a-parser-holds-the-included-ranges-of-its-cells"   ; skips without the pack job's python grammar, which `bin/drgnx test --container` builds (test/packs/ts-grammars.sh)
   "drgnx-onboard/chat-needs-its-module"
   "drgnx-onboard/openrouter-key-goes-to-the-keychain"
   "drgnx-portable/the-pre-commit-hook-knows-the-new-formats"

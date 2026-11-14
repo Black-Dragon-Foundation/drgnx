@@ -10,6 +10,7 @@
 //! sends its new steps alone. Every row names its step (`drgnx-work-id`).
 
 use super::model::Doc;
+use super::panel_top;
 use super::{Key, lock};
 use crate::agents::session::Session;
 use crate::agents::session::rows::{self, Cx, Facts, Look};
@@ -133,6 +134,7 @@ struct Cache {
 #[derive(Default)]
 struct Chosen {
     look: Look,
+    lens: panel_top::Lens,
     from: Option<usize>,
     version: u64,
     /// The (first entry, entry count) the last model sent was made of.
@@ -148,6 +150,8 @@ pub struct Panels {
     caches: Mutex<BTreeMap<Key, Cache>>,
     /// Session → (a number that changes with its facts, step seq → facts).
     facts: Mutex<BTreeMap<String, SessionFacts>>,
+    /// Session → when it began running (seconds since the epoch), while it runs: the header's "running N min".
+    busy: Mutex<BTreeMap<String, f64>>,
     front: OnceLock<Weak<Front>>,
 }
 
@@ -263,6 +267,12 @@ impl Panels {
             if let Some(rows) = p.rows {
                 c.look.rows = rows.into_iter().collect();
             }
+            if let Some(names) = p.lens {
+                c.lens.names = names.into_iter().map(|n| n.into_inner()).collect();
+            }
+            if let Some(on) = p.lens_on {
+                c.lens.on = on;
+            }
             if p.older == Some(true) {
                 c.from = c.from.map(|from| from.saturating_sub(WINDOW));
             }
@@ -346,7 +356,7 @@ impl Panels {
         }
         for key in keys {
             f.core.views.publish_built(f, &key, |env, fonts| {
-                (self.rows_for(s, &key, env, fonts, dirty), Vec::new())
+                self.rows_for(s, &key, env, fonts, dirty)
             });
         }
     }
@@ -415,7 +425,7 @@ impl Panels {
         env: &ViewEnv,
         fonts: &FontSet,
         dirty: Option<&BTreeSet<usize>>,
-    ) -> Vec<Row> {
+    ) -> (Vec<Row>, Vec<(drgnx_rows::ImageId, String)>) {
         let src = Source {
             sid: &s.id,
             n: s.entry_count(),
@@ -423,7 +433,35 @@ impl Panels {
             always: &|e: &runstav::methods::agents::Entry| s.always_covers(e),
             prov: &|e: &runstav::methods::agents::Entry| s.allowed_how(e),
         };
-        self.rows_of(&src, key, env, fonts, dirty)
+        // the header and the chips: built from the snapshot each time (two rows; the store sends what changed)
+        let snapshot = s.snapshot();
+        let now = crate::clock::wall_secs();
+        let busy_since = {
+            let mut busy = lock(&self.busy);
+            if snapshot.status == Some(runstav::methods::agents::SessionStatus::Busy) {
+                Some(*busy.entry(s.id.clone()).or_insert(now))
+            } else {
+                busy.remove(&s.id);
+                None
+            }
+        };
+        let (lens, open) = lock(&self.chosen)
+            .get(&(key.0, key.1.clone()))
+            .map(|c| (c.lens.clone(), c.look.open.clone()))
+            .unwrap_or_default();
+        let (mut rows, images) = panel_top::rows(
+            &snapshot,
+            &panel_top::Cx {
+                env,
+                fonts,
+                lens: &lens,
+                open: &open,
+                busy_since,
+                now,
+            },
+        );
+        rows.extend(self.rows_of(&src, key, env, fonts, dirty));
+        (rows, images)
     }
 
     /// KEY's rows now: the groups DIRTY touches built again (all of them when the env, the look or the facts changed),
@@ -519,6 +557,7 @@ impl Panels {
     /// The facts of sessions no panel shows any more are dropped.
     pub fn prune(&self, shown: &BTreeSet<String>) {
         lock(&self.facts).retain(|sid, _| shown.contains(sid));
+        lock(&self.busy).retain(|sid, _| shown.contains(sid));
     }
 }
 
