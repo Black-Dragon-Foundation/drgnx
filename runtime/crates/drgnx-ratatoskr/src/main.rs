@@ -107,8 +107,7 @@ fn main() -> ExitCode {
         // Test builds only: one command under the sandbox, judged by its --result file.
         #[cfg(feature = "test-hooks")]
         Command::SandboxRun(args) => return code(drgnx_ratatoskr::sandbox::run(args)),
-        // Test builds only: the mock debug adapter on stdio.
-        #[cfg(feature = "test-hooks")]
+        // Test builds only: the mock language server for the lsp-command debug rows.
         #[cfg(feature = "test-hooks")]
         Command::DebugLspMock { mode, arg } => {
             return code(drgnx_ratatoskr::debug::lsp_mock::main(
@@ -116,6 +115,8 @@ fn main() -> ExitCode {
                 arg.as_deref(),
             ));
         }
+        // Test builds only: the mock debug adapter on stdio.
+        #[cfg(feature = "test-hooks")]
         Command::DebugMock { script } => return drgnx_ratatoskr::debug::mock_main(&script),
         Command::Serve(args) => {
             let supervisor = args.supervisor;
