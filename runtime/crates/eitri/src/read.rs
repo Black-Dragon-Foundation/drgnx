@@ -100,7 +100,9 @@ mod tests {
     use std::fs;
     use std::os::fd::{AsFd, OwnedFd};
     use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::fs::{OpenOptionsExt, symlink};
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::fs::symlink;
     use std::sync::mpsc;
     use std::time::Duration;
 

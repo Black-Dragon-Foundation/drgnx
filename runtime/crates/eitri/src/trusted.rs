@@ -291,6 +291,7 @@ mod tests {
         assert_eq!(why(trusted_program(&[&prog])), WHY_WRITABLE);
     }
 
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     /// Sets `system.posix_acl_access` to: owner rwx, user `uid` rwx, group r-x, mask `mask`, other r-x. False when the
     /// filesystem takes no ACLs (the test is skipped, never passed).
     fn set_acl(p: &Path, uid: u32, mask: u16) -> bool {
@@ -313,6 +314,7 @@ mod tests {
         unsafe { libc::setxattr(c.as_ptr(), name.as_ptr(), v.as_ptr().cast(), v.len(), 0) == 0 }
     }
 
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     #[test]
     fn a_file_or_parent_whose_acl_grants_write_is_refused() {
         if !uid0("a_file_or_parent_whose_acl_grants_write_is_refused") {
