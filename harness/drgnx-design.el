@@ -25,6 +25,7 @@
 (require 'drgnx-icons)
 (add-to-list 'load-path (expand-file-name "wb" drgnx-dir))   ; the density module needs drgnx-state
 (require 'drgnx-look-density (expand-file-name "modules/ui/drgnx-look-density" drgnx-dir))
+(declare-function drgnx-design-site-build "drgnx-design-site" (out &optional root))
 (require 'drgnx-theme-gen (expand-file-name "themes/drgnx-theme-gen" drgnx-dir))
 
 (defconst drgnx-design-dir "docs/design/" "Where the design system lives, relative to the checkout.")
@@ -294,7 +295,8 @@ place of the real colours, so every colour a face names can be traced back to th
 
 (defun drgnx-design--icon-uses ()
   "Hash table icon name → the Lisp files that name it, sorted.
-A file names an icon when it writes the name as 'NAME, \"NAME\" or . NAME) within three lines of the word icon."
+A file names an icon when it writes the name quoted (a quote mark, or in double quotes, or after a dot and a space)
+within three lines of the word icon."
   (let ((names (make-hash-table :test #'equal)) (uses (make-hash-table :test #'equal)))
     (dolist (n (drgnx-design--icon-names)) (puthash n t names))
     (dolist (dir '("core" "wb" "modules" "harness"))
@@ -345,7 +347,8 @@ A file names an icon when it writes the name as 'NAME, \"NAME\" or . NAME) withi
     (concat
      "# Icons\n\n"
      (format "<!-- %s -->\n\n" (format drgnx-design--notice "etc/icons and the Lisp that names them"))
-     "drgnx's icons are [Lucide](https://lucide.dev) line icons (a few are Feather's), kept in `etc/icons/` as SVG with "
+     "drgnx's icons are [Lucide](https://lucide.dev) line icons (a few are Feather's), kept in `etc/icons/` "
+     "as SVG with "
      "`currentColor`. Rules:\n\n"
      (format "- 16 logical pixels (14 in dense rows), a stroke of %s in the 24-unit box, sized through `drgnx-px`.\n"
              drgnx-icons-stroke)
@@ -411,9 +414,55 @@ A file names an icon when it writes the name as 'NAME, \"NAME\" or . NAME) withi
           (push (car page) written))))
     (nreverse written)))
 
+;;;; Screenshots
+
+(defconst drgnx-design-shots
+  '(("cards" window-dark window-light 0 40 720 400)
+    ("chips-and-keys" palette palette-light 400 108 640 230)
+    ("title-row" palette palette-light 0 0 1440 40)
+    ("status-bar" palette palette-light 0 862 1440 38)
+    ("explorer" explorer-focused-dark explorer-focused-light 0 44 262 826)
+    ("palette" palette palette-light 390 105 660 360)
+    ("popups" debug-extras debug-extras-light 262 300 744 110)
+    ("lens-bar" work-space-dark work-space-light 0 42 1090 80)
+    ("detail-island" work-space-dark work-space-light 1092 42 348 430)
+    ("trail" work-space-dark work-space-light 0 614 1090 200)
+    ("empty-states" start-page start-page-light 262 80 1172 560))
+  "The component pages' pictures: (NAME DARK-SCENE LIGHT-SCENE X Y WIDTH HEIGHT).  The look scenes (`drgnx-look-scenes')
+draw each scene at scale 1 (1440x900 logical pixels); the box cut from the picture is docs/design/img/NAME-dark.png and
+NAME-light.png.  Scenes that need the Work space run on their own
+(DRGNX_LOOK_ONLY=work-space-dark\\|work-space-light).|work-space-light).")
+
+(defun drgnx-design--crop (source target box)
+  "Cut BOX (X Y WIDTH HEIGHT) out of the PNG SOURCE into TARGET, with ImageMagick."
+  (pcase-let ((`(,x ,y ,w ,h) box))
+    (let ((program (or (executable-find "magick") (executable-find "convert"))))
+      (unless program (error "drgnx design: no ImageMagick (magick) to cut the pictures"))
+      (make-directory (file-name-directory target) t)
+      (unless (zerop (call-process program nil nil nil source "-crop" (format "%dx%d+%d+%d" w h x y) "+repage"
+                                   "-strip" "-define" "png:compression-level=9" target))
+        (error "drgnx design: cutting %s failed" target)))))
+
+(defun drgnx-design-cut-shots (dirs &optional dir)
+  "Cut every picture of `drgnx-design-shots' from the look scenes' output in DIRS
+(`bin/drgnx ui look-scenes OUT', scale 1) into DIR (default the checkout's docs/design/img/).  A scene is looked for in
+each of DIRS in turn.  The paths written."
+  (let ((out (or dir (expand-file-name "docs/design/img/" drgnx-dir))) written)
+    (dolist (shot drgnx-design-shots)
+      (pcase-let ((`(,name ,dark ,light . ,box) shot))
+        (dolist (variant (list (cons "dark" dark) (cons "light" light)))
+          (let* ((file (format "%s-s1.png" (cdr variant)))
+                 (source (seq-some (lambda (d) (let ((f (expand-file-name file d))) (and (file-exists-p f) f))) dirs))
+                 (target (expand-file-name (format "%s-%s.png" name (car variant)) out)))
+            (unless source (error "drgnx design: no picture %s in %s" file (string-join dirs ", ")))
+            (drgnx-design--crop source target box)
+            (push target written)))))
+    (nreverse written)))
+
 (defun drgnx-design-cli-run (args)
-  "`drgnx design [--check]': write the generated pages, or with --check only say which are stale.
-Exit code: 0 current (or written), 1 with --check when a page is stale, 2 for an unknown argument."
+  "`drgnx design [--check | --site DIR | --shots SCENES-DIR...]': write the generated pages; with --check only say which
+are stale; with --site build the static site into DIR; with --shots cut the component pictures from the look scenes'
+output.  Exit code: 0 done (or current), 1 with --check when a page is stale, 2 for an unknown argument."
   (cond ((equal args '("--check"))
          (let ((stale (drgnx-design-stale)))
            (dolist (p stale) (princ (format "stale: %s%s\n" drgnx-design-dir p)))
@@ -421,7 +470,14 @@ Exit code: 0 current (or written), 1 with --check when a page is stale, 2 for an
         ((null args)
          (dolist (p (drgnx-design-regenerate)) (princ (format "wrote %s%s\n" drgnx-design-dir p)))
          0)
-        (t (princ "usage: drgnx design [--check]\n") 2)))
+        ((and (equal (car args) "--site") (= (length args) 2))
+         (require 'drgnx-design-site)
+         (dolist (p (drgnx-design-site-build (expand-file-name (cadr args)))) (princ (format "built %s\n" p)))
+         0)
+        ((and (equal (car args) "--shots") (cdr args))
+         (dolist (p (drgnx-design-cut-shots (mapcar #'expand-file-name (cdr args)))) (princ (format "wrote %s\n" p)))
+         0)
+        (t (princ "usage: drgnx design [--check | --site DIR | --shots SCENES-DIR...]\n") 2)))
 
 (defun drgnx-design-cli ()
   "bin/drgnx design: the arguments after --."

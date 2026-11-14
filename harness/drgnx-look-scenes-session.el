@@ -1419,13 +1419,21 @@ debugging-extras mockup's)."
 (defun drgnx-look-scene-heap-graph () "The heap graph, dark." (drgnx-look-scene--heap-graph 'drgnx-dark))
 (defun drgnx-look-scene-heap-graph-light () "The heap graph, light." (drgnx-look-scene--heap-graph 'drgnx-light))
 
-(defun drgnx-look-scene-start-page ()
-  "The start page in the editor, dark (no mockup: its buttons, keycaps and shield are the components of design §3.5)."
-  (drgnx-look-scene--theme 'drgnx-dark)
+(defun drgnx-look-scene--start-page (theme)
+  "The start page in the editor in THEME."
+  (drgnx-look-scene--theme theme)
   (drgnx-look-scene--try "start page"
     (drgnx-wb-focus-editor)
     (drgnx-start-show))
   (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-start-page ()
+  "The start page in the editor, dark (no mockup: its buttons, keycaps and shield are the components of design §3.5)."
+  (drgnx-look-scene--start-page 'drgnx-dark))
+
+(defun drgnx-look-scene-start-page-light ()
+  "The start page in the editor, light (the design system's empty-state shot)."
+  (drgnx-look-scene--start-page 'drgnx-light))
 
 (defun drgnx-look-scene-facts (file &optional scene)
   "Write what SCENE realised to FILE: what the line cannot show yet (`drgnx-look-scene-limits'), themes, fonts of the

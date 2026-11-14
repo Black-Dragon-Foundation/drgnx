@@ -107,3 +107,43 @@
           (should (equal (sort (drgnx-design-regenerate dir) #'string<) '("tokens.md" "type.md")))
           (should-not (drgnx-design-stale dir)))
       (delete-directory dir t))))
+
+;;; Screenshots: cut from the look scenes' pictures
+
+(ert-deftest drgnx-design/every-shot-comes-from-a-look-scene ()
+  (require 'drgnx-look-scenes)
+  (should drgnx-design-shots)
+  (dolist (shot drgnx-design-shots)
+    (pcase-let ((`(,name ,dark ,light . ,box) shot))
+      (should (stringp name))
+      (should (assq dark drgnx-look-scenes))
+      (should (assq light drgnx-look-scenes))
+      (should (= 4 (length box)))
+      (should (cl-every #'natnump box)))))
+
+(ert-deftest drgnx-design/every-component-page-shows-its-shots-dark-and-light ()
+  (let ((dir (expand-file-name "docs/design/components/" drgnx-dir)))
+    (dolist (page (directory-files dir t "\\.md\\'"))
+      (unless (equal (file-name-nondirectory page) "index.md")
+        (let ((text (with-temp-buffer (insert-file-contents page) (buffer-string)))
+              (name (file-name-sans-extension (file-name-nondirectory page))))
+          (should (assoc name drgnx-design-shots))
+          (dolist (variant '("dark" "light"))
+            (should (string-search (format "](../img/%s-%s.png)" name variant) text))
+            (should (file-exists-p (expand-file-name (format "docs/design/img/%s-%s.png" name variant) drgnx-dir)))))))
+    ;; and no shot without a page
+    (dolist (shot drgnx-design-shots)
+      (should (file-exists-p (expand-file-name (format "%s.md" (car shot)) dir))))))
+
+(ert-deftest drgnx-design/a-shot-is-cut-where-the-table-says ()
+  (skip-unless (executable-find "magick"))
+  (let* ((dir (make-temp-file "drgnx-design-shots" t))
+         (src (expand-file-name "scene.png" dir)) (out (expand-file-name "cut.png" dir)))
+    (unwind-protect
+        (progn
+          (call-process "magick" nil nil nil "-size" "40x30" "xc:gray" src)
+          (drgnx-design--crop src out '(5 6 20 10))
+          (with-temp-buffer
+            (call-process "magick" nil t nil "identify" "-format" "%wx%h" out)
+            (should (equal (buffer-string) "20x10"))))
+      (delete-directory dir t))))

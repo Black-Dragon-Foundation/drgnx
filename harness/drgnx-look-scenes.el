@@ -40,6 +40,7 @@
     (work-space-hc)
     (work-flow :mockup hub-orchestration)
     (start-page)
+    (start-page-light)
     (highlights-dark)
     (highlights-light)
     (highlights-hc)

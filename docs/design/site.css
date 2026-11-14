@@ -1,0 +1,41 @@
+/* The design system site's layout. Every colour is a custom property from the generated tokens.css; none is written here. */
+* { box-sizing: border-box; }
+html { background: var(--gap); color: var(--fg); }
+body {
+  margin: 0; display: grid; grid-template-columns: 15rem minmax(0, 1fr); min-height: 100vh;
+  background: var(--editor); color: var(--fg);
+  font: 15px/1.6 "Adwaita Sans", Inter, system-ui, sans-serif;
+}
+nav {
+  position: sticky; top: 0; align-self: start; height: 100vh; overflow: auto; padding: 1.25rem 1rem;
+  background: var(--panel); border-right: 1px solid var(--border);
+}
+nav .brand { margin: 0 0 1rem; font-weight: 600; color: var(--fg); }
+nav ul { list-style: none; margin: 0; padding: 0; }
+nav li a { display: block; padding: 0.3rem 0.6rem; border-radius: 6px; color: var(--muted); text-decoration: none; }
+nav li.sub a { margin-left: 0.9rem; font-size: 0.93em; }
+nav li a:hover { background: var(--hover); color: var(--fg); }
+nav li.here a { background: var(--sel); color: var(--fg); }
+nav :focus-visible, main :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+nav .theme { display: block; margin-top: 1.5rem; color: var(--subtle); font-size: 0.9em; }
+nav select { display: block; width: 100%; margin-top: 0.3rem; padding: 0.3rem; border-radius: 6px;
+  border: 1px solid var(--border-strong); background: var(--raised); color: var(--fg); }
+main { max-width: 56rem; padding: 2rem 2.5rem 4rem; }
+h1, h2, h3 { line-height: 1.25; }
+h1 { margin-top: 0; font-size: 1.9rem; }
+h2 { margin-top: 2.2rem; padding-top: 1rem; border-top: 1px solid var(--border-subtle); font-size: 1.4rem; }
+h3 { margin-top: 1.6rem; font-size: 1.1rem; }
+a { color: var(--accent); }
+code { padding: 0.1em 0.35em; border-radius: 4px; background: var(--sel-quiet); font: 0.9em "JetBrains Mono", ui-monospace, monospace; }
+pre { padding: 0.9rem 1rem; overflow: auto; border-radius: 8px; border: 1px solid var(--border); background: var(--panel); }
+pre code { padding: 0; background: none; }
+img { max-width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--border); }
+table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.93em; }
+th, td { padding: 0.45rem 0.7rem; text-align: left; vertical-align: top; border-bottom: 1px solid var(--border-subtle); overflow-wrap: anywhere; }
+th { color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--border); }
+@media (max-width: 760px) {
+  body { grid-template-columns: 1fr; }
+  nav { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--border); }
+  main { padding: 1.25rem 1rem 3rem; }
+  table { display: block; overflow-x: auto; }
+}
