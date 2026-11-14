@@ -203,6 +203,46 @@ js-debug, delve, lldb-dap), how to find it and how to start it:
   CodeLLDB are pinned archives (CodeLLDB started from its `extension/adapter/codelldb`; tested live in the adapter
   image, which carries the same pinned `.vsix`).
 
+- `:install` also takes `(:into DIR :parts (INSTALL …))`, each part a url/sha256 install into `DIR/<part's :into>`, and
+  `:file NAME` (the download is one file, such as a jar, kept under that bare name instead of unpacked). Parts are
+  all-or-none: they are staged beside each other and committed together, and a failed part rolls the rest back. A
+  `.drgnx-installed` marker in each folder records its `:version` and digest, so the doctor shows pinned and installed
+  versions side by side. A tar.gz may hold symlinks that stay inside its own root (a JDK's); any other link fails.
+  A link target may only start with `..` (never one after a name), so no chain of links leaves the root. Redirects are
+  followed up to five hops, https only; a relative `Location` (`b`, `../b`) and `//host/x` are resolved as RFC 3986 says.
+  Installs of one adapter take turns on an flock of `.DIR.lock` beside the target (the lock file stays).
+
+### The `lsp-command` start kind
+
+Some adapters are started by a language server, not by a command line: java-debug runs inside jdtls. An adapter with
+`:start (:lsp-command (…))` (`debug/lsp_command.rs`, `debug/lsp_client.rs`) is launched in these steps, each with a
+deadline and a named error (never a hang): spawn `:server` (stdio LSP, as its own process group); `initialize` with
+`:init-options` (the debug plugin's `:bundles`); `initialized`; wait for `language/status` `ServiceReady`; when `:open-file`
+is set, `textDocument/didOpen` of the launch's file; `workspace/executeCommand :debug-command`, whose answer is the DAP
+port; connect to it once the listener is owned by the server's process group (`blocked::wait_owned`; a stranger's port
+ends the start). An oversized frame, a server that exits during `initialize` and one that is never ready each end in an
+error naming the step, with the server's log tail. Killing the session kills the server's whole group.
+
+`:server` and `:debug-args` words: `{tools}`, `{root}`, `{root-uri}`, `{session}`, `{os}`, `{arch-suffix}` and
+`{glob:REL}` (exactly one file under the tools folder). Only a built-in or installed pack may use `lsp-command`
+(a fetched pack is refused by `skald::check`): it runs a program.
+
+`:fill` is a list of steps that complete the launch arguments from the server's answers before the DAP `launch`
+(`Launcher::fill`). Each step: `:command` and `:args` (executeCommand; retried while the answer is an empty list for
+`:retry-empty` seconds, as jdtls is still importing), `:select (:field F :equals V)` (pick the list item whose F is V),
+`:when-missing KEY` (skip the step when the launch already has KEY), and `:into` puts `(:key K :field F | :index N
+[:optional t])`. The argument language of `:args` and `:equals`: `${config:KEY}` (a string in the launch arguments; an
+error if missing), `${config:KEY?}` (the same, or null when the launch has no such key, for a value the server may
+legitimately not have, such as a lone file's project name), `${file}`, and the brace words above. A put whose field is
+missing from the answer is an error naming it, unless it is `:optional t`, which leaves the key out. An answer is put into
+the launch only when it is a plain string or a list of strings with no `${`: nothing else (an object, a nested list, a
+variable) is ever copied in, and a value put in is never read for variables again.
+
+`ratatoskr doctor` prints, per adapter, each part with its pinned and installed version (or what is missing). The
+Java adapter pins Temurin JDK 25, jdtls and java-debug by hash; nothing is looked up on the system. The live test
+(`java_breaks_steps_and_inspects_through_jdtls`, ignored; `DRGNX_DEBUG_LIVE_JAVA_TOOLS` names the installed tools) breaks,
+steps and inspects a small Java file.
+
 `debug/configs` marks a configuration whose adapter is not found here with `missing` `{adapter, name, install,
 command?}` (`wire::missing_of`; `install` is `download`, `pip`, `system` with its command, or `none`; a `debugServer`
 configuration and a compound carry none). The picker (`drgnx-debug-launch-read-config`) shows such a row as "not

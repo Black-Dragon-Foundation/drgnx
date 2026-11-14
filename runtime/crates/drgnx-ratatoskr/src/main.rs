@@ -109,6 +109,13 @@ fn main() -> ExitCode {
         Command::SandboxRun(args) => return code(drgnx_ratatoskr::sandbox::run(args)),
         // Test builds only: the mock debug adapter on stdio.
         #[cfg(feature = "test-hooks")]
+        #[cfg(feature = "test-hooks")]
+        Command::DebugLspMock { mode, arg } => {
+            return code(drgnx_ratatoskr::debug::lsp_mock::main(
+                &mode,
+                arg.as_deref(),
+            ));
+        }
         Command::DebugMock { script } => return drgnx_ratatoskr::debug::mock_main(&script),
         Command::Serve(args) => {
             let supervisor = args.supervisor;

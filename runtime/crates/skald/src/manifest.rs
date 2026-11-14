@@ -154,6 +154,15 @@ pub struct Install {
     /// A system package command: shown, never run.
     #[serde(default)]
     pub system: Option<String>,
+    /// The version this download is pinned at, for the doctor (`pinned 21.0.5, installed 21.0.4`).
+    #[serde(default)]
+    pub version: Option<String>,
+    /// A single file (a jar) instead of an archive: the download is written to `tools/INTO/FILE`.
+    #[serde(default)]
+    pub file: Option<String>,
+    /// Several downloads for one adapter (a JDK, a language server, a plugin): all or none.
+    #[serde(default)]
+    pub parts: Vec<Install>,
 }
 
 impl Install {
@@ -168,6 +177,8 @@ impl Install {
             ("pip", &self.pip),
             ("hash", &self.hash),
             ("system", &self.system),
+            ("file", &self.file),
+            ("version", &self.version),
         ] {
             if let Some(v) = v {
                 m.insert(k.into(), v.clone().into());
@@ -181,9 +192,18 @@ impl Install {
                 if let Some(h) = &p.sha256 {
                     r.insert("sha256".into(), h.clone().into());
                 }
+                if let Some(root) = &p.root {
+                    r.insert("root".into(), root.clone().into());
+                }
                 serde_json::Value::Object(r)
             });
             m.insert("platforms".into(), rows.collect());
+        }
+        if !self.parts.is_empty() {
+            m.insert(
+                "parts".into(),
+                self.parts.iter().map(Install::to_json).collect(),
+            );
         }
         serde_json::Value::Object(m)
     }
@@ -196,6 +216,9 @@ pub struct Platform {
     pub url: String,
     #[serde(default)]
     pub sha256: Option<String>,
+    /// The folder of the archive that becomes the install on this platform, when it differs (a JDK's `Contents/Home`).
+    #[serde(default)]
+    pub root: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -301,6 +324,85 @@ pub struct Start {
     pub stdio: Option<Vec<String>>,
     #[serde(default)]
     pub tcp: Option<Vec<String>>,
+    /// An adapter that lives inside a language server (java-debug in jdtls): the hub starts the server, asks it for the
+    /// adapter's port and connects DAP there. Built-in packs only (`check`).
+    #[serde(default)]
+    pub lsp_command: Option<LspCommand>,
+}
+
+/// How to reach a DAP server a language server opens (`docs/develop/debugging.md`, "The lsp-command start kind").
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct LspCommand {
+    /// The server's command line: `{tools}`, `{root}`, `{session}`, `{os}` and `{glob:DIR/PATTERN}` are filled in.
+    pub server: Vec<String>,
+    /// The LSP session's root folder (default `{root}`, the launch's project folder).
+    #[serde(default)]
+    pub root: Option<String>,
+    /// `initializationOptions`, as data; every string in it is filled in like the command line.
+    #[serde(default)]
+    pub init_options: Option<serde_json::Value>,
+    /// The `workspace/executeCommand` whose answer is the DAP server's TCP port.
+    pub debug_command: String,
+    #[serde(default)]
+    pub debug_args: Vec<String>,
+    /// Steps that complete the launch configuration from the server before the DAP `launch`.
+    #[serde(default)]
+    pub fill: Vec<Fill>,
+    /// Open the launch's file in the server (`textDocument/didOpen`) once it is ready: a server such as jdtls makes the
+    /// project of a lone file only when it is opened.
+    #[serde(default)]
+    pub open_file: Option<OpenFile>,
+}
+
+/// What `textDocument/didOpen` says of the file.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct OpenFile {
+    pub language_id: String,
+}
+
+/// One `:fill` step: a server command whose answer (strings only) goes into the launch configuration.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Fill {
+    pub command: String,
+    /// Strings: `${config:KEY}` is a key of the launch configuration, `${file}` the current file, `{root-uri}` the root.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// When the answer is a list of objects, the first whose FIELD equals the filled-in value.
+    #[serde(default)]
+    pub select: Option<Select>,
+    /// Run only when the launch configuration has no such key.
+    #[serde(default)]
+    pub when_missing: Option<String>,
+    /// While the answer is an empty list, ask again every half second for up to this many seconds (a project still
+    /// being imported lists nothing yet).
+    #[serde(default)]
+    pub retry_empty: Option<u64>,
+    #[serde(default)]
+    pub into: Vec<Put>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Select {
+    pub field: String,
+    pub equals: String,
+}
+
+/// Where a launch key's value lives in the (selected) answer: a field, an index, or the whole answer.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Put {
+    pub key: String,
+    #[serde(default)]
+    pub field: Option<String>,
+    #[serde(default)]
+    pub index: Option<usize>,
+    /// The answer may lack it (a lone file's project has no name): then the key is left out.
+    #[serde(default)]
+    pub optional: bool,
 }
 
 /// Inline values: node kinds, and a query for "not a value".
