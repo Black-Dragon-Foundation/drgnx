@@ -136,6 +136,7 @@ pub fn report(env: &Env, binary: &Path, running: Option<Running>, sandbox: &Chec
         "sandbox": sandbox_section(sandbox),
         "legacy": crate::legacy::section(env),
         "packs": packs_section(env),
+        "debug_adapters": debug_adapters_section(env),
     });
     if let Some(r) = running {
         v["running"] = json!({"pid": r.pid, "commit": r.commit});
@@ -719,6 +720,48 @@ fn packs_section(env: &Env) -> Value {
     )
 }
 
+/// The adapters that live inside a language server, each with the downloads it needs: what the table pins and what is
+/// installed (`[{adapter, parts: [{part, pinned, installed}]}]`; `installed: null` is a part that is not there).
+fn debug_adapters_section(env: &Env) -> Value {
+    let tools = paths::data_dir(env).join("debug-adapters");
+    Value::Array(
+        crate::debug::adapters::Table::builtin()
+            .0
+            .iter()
+            .filter(|a| a.start.as_ref().is_some_and(|s| s.lsp_command.is_some()))
+            .map(|a| {
+                let parts: Vec<Value> = crate::debug::adapters::parts(a, &tools)
+                    .into_iter()
+                    .map(|p| json!({"part": p.part, "pinned": p.pinned, "installed": p.installed}))
+                    .collect();
+                json!({"adapter": a.id, "parts": parts})
+            })
+            .collect(),
+    )
+}
+
+/// One line per part of an adapter that is missing or is not the pinned version.
+fn debug_adapter_lines(adapters: &Value) -> String {
+    let mut out = String::new();
+    for a in adapters.as_array().into_iter().flatten() {
+        let id = a["adapter"].as_str().unwrap_or("?");
+        for p in a["parts"].as_array().into_iter().flatten() {
+            let part = p["part"].as_str().unwrap_or("?");
+            let pinned = p["pinned"].as_str().unwrap_or("?");
+            match p["installed"].as_str() {
+                None => out.push_str(&format!(
+                    "\ndebug adapter {id}: {part} not installed (pinned {pinned}): Debug: Install Adapter"
+                )),
+                Some(have) if have != pinned => out.push_str(&format!(
+                    "\ndebug adapter {id}: {part} pinned {pinned}, installed {have}: Debug: Install Adapter"
+                )),
+                Some(_) => {}
+            }
+        }
+    }
+    out
+}
+
 /// One line per pack that is not built: `pack X not built (why)`.
 fn pack_lines(packs: &Value) -> String {
     let mut out = String::new();
@@ -784,6 +827,7 @@ fn text(v: &Value, sandbox: &Check) -> String {
     out.push_str(&watch_lines(&v["watch"]));
     out.push_str(&legacy_lines(&v["legacy"]));
     out.push_str(&pack_lines(&v["packs"]));
+    out.push_str(&debug_adapter_lines(&v["debug_adapters"]));
     out
 }
 

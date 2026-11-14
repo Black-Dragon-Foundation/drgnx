@@ -256,3 +256,124 @@ async fn a_system_package_is_named_not_installed() {
     .unwrap_err();
     assert!(e.contains("dnf install delve"), "{e}");
 }
+
+/// Several downloads for one adapter (a JDK, a language server, a plugin jar): every part is downloaded, checked and
+/// unpacked before any is put in place, so one wrong digest changes nothing; a `:file` part is one checked file.
+#[tokio::test]
+async fn an_install_of_parts_is_all_or_none_and_a_file_part_is_one_checked_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let (src, tools) = (dir.path().join("src"), dir.path().join("tools"));
+    std::fs::create_dir_all(&src).unwrap();
+    let jdk = tgz(&[("jdk-1/", b"", 0o755), ("jdk-1/bin/java", b"#!java", 0o755)]);
+    let jar = b"PK-the-plugin".to_vec();
+    std::fs::write(src.join("jdk.tar.gz"), &jdk).unwrap();
+    std::fs::write(src.join("plugin.jar"), &jar).unwrap();
+    let recipe = |jar_sha: &str| {
+        serde_json::json!({"parts": [
+            {"url": "https://example.invalid/jdk.tar.gz", "sha256": sha(&jdk), "into": "jdk", "root": "jdk-1"},
+            {"url": "https://example.invalid/plugin.jar", "sha256": jar_sha, "into": "jv", "file": "plugin.jar"},
+        ]})
+    };
+    let source = Source::Dir(src.clone());
+    // a wrong digest on the second part: nothing at all is installed, no scratch left behind
+    let bad = install::plan(&recipe(&"0".repeat(64)), "linux-x64").unwrap();
+    let e = install::install(&bad, &tools, &source, &[])
+        .await
+        .unwrap_err();
+    assert!(e.contains("digest") || e.contains("sha256"), "{e}");
+    assert!(
+        !tools.join("jdk").exists() && !tools.join("jv").exists(),
+        "{e}"
+    );
+    assert!(
+        std::fs::read_dir(&tools).map_or(true, |d| d.count() == 0),
+        "scratch left in {tools:?}"
+    );
+    // right digests: the folder and the file, and the file is exactly the download
+    let good = install::plan(&recipe(&sha(&jar)), "linux-x64").unwrap();
+    assert!(matches!(good, Plan::Parts(ref p) if p.len() == 2));
+    install::install(&good, &tools, &source, &[]).await.unwrap();
+    assert_eq!(
+        std::fs::read(tools.join("jdk/bin/java")).unwrap(),
+        b"#!java"
+    );
+    assert_eq!(std::fs::read(tools.join("jv/plugin.jar")).unwrap(), jar);
+    // it can be installed again over itself
+    install::install(&good, &tools, &source, &[]).await.unwrap();
+    // a part must be a download, and a file name is a name
+    assert!(
+        install::plan(
+            &serde_json::json!({"parts": [{"system": "dnf install x"}]}),
+            "linux-x64"
+        )
+        .is_err()
+    );
+    assert!(
+        install::plan(
+            &serde_json::json!({"url": "https://e/x.jar", "sha256": sha(&jar), "into": "jv", "file": "../x.jar"}),
+            "linux-x64"
+        )
+        .is_err()
+    );
+    // the pins of the recipe as the table reads them
+    let t = serde_json::json!({"parts": [{"into": "jdk", "platforms": [
+        {"platform": "linux-x64", "url": "https://e/a.tar.gz", "sha256": "a"},
+        {"platform": "darwin-arm64", "url": "https://e/b.tar.gz", "sha256": "b"}]}]});
+    assert!(install::plan(&t, "linux-arm64").is_err());
+}
+
+/// What the doctor says of an adapter's downloads: the pinned version and the installed one, per part.
+#[tokio::test]
+async fn the_parts_of_an_adapter_say_what_is_pinned_and_what_is_installed() {
+    use super::adapters::{self, Adapter, PartStatus};
+    let dir = tempfile::tempdir().unwrap();
+    let (src, tools) = (dir.path().join("src"), dir.path().join("tools"));
+    std::fs::create_dir_all(&src).unwrap();
+    let jar = b"jar".to_vec();
+    std::fs::write(src.join("p.jar"), &jar).unwrap();
+    let recipe = serde_json::json!({"parts": [
+        {"url": "https://example.invalid/p.jar", "sha256": sha(&jar), "into": "jv", "file": "p.jar", "version": "0.53.1"},
+        {"into": "jdk", "version": "21.0.5", "platforms": []},
+    ]});
+    let a = Adapter {
+        id: "java".into(),
+        name: "Java".into(),
+        types: vec!["java".into()],
+        languages: vec![],
+        tested: false,
+        find: None,
+        start: None,
+        defaults: vec![],
+        install: Some(recipe.clone()),
+        not_built_in: false,
+    };
+    let status = |tools: &Path| adapters::parts(&a, tools);
+    assert_eq!(
+        status(&tools),
+        [
+            PartStatus {
+                part: "jv".into(),
+                pinned: Some("0.53.1".into()),
+                installed: None
+            },
+            PartStatus {
+                part: "jdk".into(),
+                pinned: Some("21.0.5".into()),
+                installed: None
+            },
+        ]
+    );
+    // installing the jar part records its pin; a folder with no record is `unknown`
+    let plan = install::plan(
+        &serde_json::json!({"parts": [recipe["parts"][0].clone()]}),
+        "linux-x64",
+    )
+    .unwrap();
+    install::install(&plan, &tools, &Source::Dir(src), &[])
+        .await
+        .unwrap();
+    std::fs::create_dir_all(tools.join("jdk")).unwrap();
+    let s = status(&tools);
+    assert_eq!(s[0].installed.as_deref(), Some("0.53.1"));
+    assert_eq!(s[1].installed.as_deref(), Some("unknown"));
+}

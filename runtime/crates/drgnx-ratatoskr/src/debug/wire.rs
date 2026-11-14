@@ -231,7 +231,11 @@ fn missing_of(table: &Table, env: &adapters::Env, config: &Value) -> Option<Debu
     let (install, command) = match plan {
         Some(super::install::Plan::System(c)) => ("system", Some(c)),
         Some(super::install::Plan::Pip { .. }) => ("pip", None),
-        Some(super::install::Plan::Archive { .. }) => ("download", None),
+        Some(
+            super::install::Plan::Archive { .. }
+            | super::install::Plan::File { .. }
+            | super::install::Plan::Parts(_),
+        ) => ("download", None),
         None => ("none", None),
     };
     Some(DebugMissing {
@@ -404,6 +408,7 @@ pub(super) fn tools_dir(front: &Front) -> PathBuf {
 fn launcher(
     front: &Front,
     root: &str,
+    file: Option<&str>,
     config: &Value,
     adapter: &Adapter,
 ) -> Result<Arc<dyn Launcher>, String> {
@@ -418,6 +423,17 @@ fn launcher(
             adapter.name
         )
     })?;
+    if let Some(lsp) = adapter.start.as_ref().and_then(|s| s.lsp_command.clone()) {
+        let base = runstav::paths::data_dir(&front.shell_env.paths_env()).join("debug-lsp");
+        return Ok(Arc::new(super::lsp_command::LspLauncher::new(
+            lsp,
+            tools_dir(front),
+            PathBuf::from(root),
+            file.map(PathBuf::from),
+            base,
+            env_os,
+        )));
+    }
     let tcp = adapter.start.as_ref().is_some_and(|s| s.stdio.is_none());
     let port = if tcp {
         Some(adapters::free_port().map_err(|e| format!("no free port: {e}"))?)
@@ -481,7 +497,7 @@ async fn start(front: &Front, caller: &Caller, p: DebugStart) -> Result<DebugSta
         .await
         .map_err(err)?;
     // after the tasks: a TCP adapter's free port is picked just before it starts
-    let launcher = launcher(front, &p.root, &config, adapter).map_err(err)?;
+    let launcher = launcher(front, &p.root, p.file.as_deref(), &config, adapter).map_err(err)?;
     let start = Start {
         name: text(&config, "name"),
         adapter_id: ty,

@@ -28,7 +28,19 @@ pub enum Plan {
         into: String,
         /// The archive's folder that becomes it (none: the whole archive).
         root: Option<String>,
+        /// The pinned version, written beside what is installed for the doctor.
+        version: Option<String>,
     },
+    /// One downloaded file (a jar), checked against its digest, written as `tools/INTO/FILE`.
+    File {
+        url: String,
+        sha256: String,
+        into: String,
+        file: String,
+        version: Option<String>,
+    },
+    /// Several downloads for one adapter, all or none.
+    Parts(Vec<Plan>),
     Pip {
         requirement: String,
         hash: String,
@@ -69,6 +81,16 @@ pub fn plan(install: &Value, platform: &str) -> Result<Plan, String> {
     if let Some(c) = field(install, "system") {
         return Ok(Plan::System(c));
     }
+    if let Some(parts) = install.get("parts").and_then(Value::as_array) {
+        let mut plans = Vec::new();
+        for part in parts {
+            match plan(part, platform)? {
+                p @ (Plan::Archive { .. } | Plan::File { .. }) => plans.push(p),
+                _ => return Err("a part of an :install is a download".into()),
+            }
+        }
+        return Ok(Plan::Parts(plans));
+    }
     if let Some(requirement) = field(install, "pip") {
         let hash = field(install, "hash").ok_or("an :install with :pip needs its :hash")?;
         return Ok(Plan::Pip { requirement, hash });
@@ -87,15 +109,28 @@ pub fn plan(install: &Value, platform: &str) -> Result<Plan, String> {
         let p = Path::new(s);
         !s.is_empty() && p.components().all(|c| matches!(c, Component::Normal(_)))
     };
-    let root = field(install, "root");
+    let root = field(pin, "root").or_else(|| field(install, "root"));
     if !safe(&into) || root.as_deref().is_some_and(|r| !safe(r)) {
         return Err(format!("{into}: :into and :root are folder names"));
+    }
+    if let Some(file) = field(install, "file") {
+        if !safe(&file) || file.contains('/') {
+            return Err(format!("{into}: :file is a file name"));
+        }
+        return Ok(Plan::File {
+            url,
+            sha256,
+            into,
+            file,
+            version: field(install, "version"),
+        });
     }
     Ok(Plan::Archive {
         url,
         sha256,
         into,
         root,
+        version: field(install, "version"),
     })
 }
 
@@ -176,73 +211,176 @@ pub async fn install(
                 tools.join("venv").display()
             ))
         }
+        Plan::Archive { into, .. } | Plan::File { into, .. } => {
+            let staged = stage(plan, tools, source).await?;
+            commit(&staged)?;
+            Ok(format!("{into} installed in {}", staged.dest.display()))
+        }
+        Plan::Parts(parts) => {
+            let mut staged: Vec<Staged> = Vec::new();
+            for part in parts {
+                let (Plan::Archive { into, .. } | Plan::File { into, .. }) = part else {
+                    return Err("a part of an :install is a download".into());
+                };
+                if staged.iter().any(|s| &s.into == into) {
+                    return Err(format!("two parts of an :install go into {into}"));
+                }
+                // nothing is put in place until every part is downloaded, checked and unpacked
+                staged.push(stage(part, tools, source).await?);
+            }
+            let mut done: Vec<&Staged> = Vec::new();
+            for s in &staged {
+                if let Err(e) = commit(s) {
+                    for d in done.iter().rev() {
+                        rollback(d);
+                    }
+                    return Err(e);
+                }
+                done.push(s);
+            }
+            Ok(format!(
+                "{} installed in {}",
+                staged
+                    .iter()
+                    .map(|s| s.into.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                tools.display()
+            ))
+        }
+    }
+}
+
+/// The file in an installed folder that records the version and the digest it was installed from.
+pub const INSTALLED_MARKER: &str = ".drgnx-installed";
+
+/// A download that passed its digest and is unpacked beside its place: [`commit`] puts it there.
+struct Staged {
+    into: String,
+    made: PathBuf,
+    dest: PathBuf,
+    old: PathBuf,
+    /// Removed when the install ends, whichever way: the download, the unpacked folder, the replaced folder.
+    _guards: Vec<Gone>,
+}
+
+/// Downloads an archive or a file of PLAN (the digest checked before anything is read from it) and unpacks it into a
+/// scratch folder under TOOLS.
+async fn stage(plan: &Plan, tools: &Path, source: &Source) -> Result<Staged, String> {
+    let (url, sha256, into, root, file, version) = match plan {
         Plan::Archive {
             url,
             sha256,
             into,
             root,
-        } => {
-            fs::create_dir_all(tools).map_err(|e| io_err(tools, e))?;
-            let download = tools.join(format!(".{into}.download"));
-            let partial = tools.join(format!(".{into}.partial"));
-            let old = tools.join(format!(".{into}.old"));
-            for p in [&download, &partial, &old] {
-                drop(Gone(p.clone()));
-            }
-            let _d = Gone(download.clone());
-            let _p = Gone(partial.clone());
-            let limits = Limits::default();
-            let got = match source {
-                Source::Https => fetch(url, &download, limits)
-                    .await
-                    .map_err(|e| e.to_string())?,
-                Source::Dir(dir) => {
-                    let name = url.rsplit('/').next().unwrap_or(url);
-                    copy_hashed(&dir.join(name), &download)?
-                }
-            };
-            if &got != sha256 {
-                return Err(InstallError::DigestMismatch {
-                    expected: sha256.clone(),
-                    got,
-                }
-                .to_string());
-            }
-            fs::create_dir(&partial).map_err(|e| io_err(&partial, e))?;
-            let dl = download.clone();
-            let to = partial.clone();
-            let tarball = url.ends_with(".tar.gz") || url.ends_with(".tgz");
-            crate::clock::blocking(move || {
-                if tarball {
-                    unpack_tgz(&dl, &to, limits)
-                } else {
-                    unpack(&dl, &to, limits)
-                }
-            })
+            version,
+        } => (url, sha256, into, root.as_ref(), None, version),
+        Plan::File {
+            url,
+            sha256,
+            into,
+            file,
+            version,
+        } => (url, sha256, into, None, Some(file), version),
+        _ => return Err("not a download".into()),
+    };
+    fs::create_dir_all(tools).map_err(|e| io_err(tools, e))?;
+    let download = tools.join(format!(".{into}.download"));
+    let partial = tools.join(format!(".{into}.partial"));
+    let old = tools.join(format!(".{into}.old"));
+    for p in [&download, &partial, &old] {
+        drop(Gone(p.clone()));
+    }
+    let guards = vec![
+        Gone(download.clone()),
+        Gone(partial.clone()),
+        Gone(old.clone()),
+    ];
+    let limits = Limits::default();
+    let got = match source {
+        Source::Https => fetch(url, &download, limits)
             .await
-            .map_err(|e| e.to_string())?
-            .map_err(|e| e.to_string())?;
-            let made = match root {
-                Some(r) => partial.join(r),
-                None => partial.clone(),
-            };
-            if !made.is_dir() {
-                return Err(format!(
-                    "the archive has no folder {}",
-                    root.as_deref().unwrap_or_default()
-                ));
-            }
-            let dest = tools.join(into);
-            let _o = Gone(old.clone());
-            if dest.exists() {
-                fs::rename(&dest, &old).map_err(|e| io_err(&dest, e))?;
-            }
-            if let Err(e) = fs::rename(&made, &dest) {
-                let _ = fs::rename(&old, &dest);
-                return Err(io_err(&dest, e));
-            }
-            Ok(format!("{into} installed in {}", dest.display()))
+            .map_err(|e| e.to_string())?,
+        Source::Dir(dir) => {
+            let name = url.rsplit('/').next().unwrap_or(url);
+            copy_hashed(&dir.join(name), &download)?
         }
+    };
+    if &got != sha256 {
+        return Err(InstallError::DigestMismatch {
+            expected: sha256.clone(),
+            got,
+        }
+        .to_string());
+    }
+    fs::create_dir(&partial).map_err(|e| io_err(&partial, e))?;
+    let made = if let Some(file) = file {
+        // one file: the download itself, in a folder of its own
+        let to = partial.join(file);
+        fs::rename(&download, &to).map_err(|e| io_err(&to, e))?;
+        partial.clone()
+    } else {
+        let dl = download.clone();
+        let to = partial.clone();
+        let tarball = url.ends_with(".tar.gz") || url.ends_with(".tgz");
+        crate::clock::blocking(move || {
+            if tarball {
+                unpack_tgz(&dl, &to, limits)
+            } else {
+                unpack(&dl, &to, limits)
+            }
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+        let made = match root {
+            Some(r) => partial.join(r),
+            None => partial.clone(),
+        };
+        if !made.is_dir() {
+            return Err(format!(
+                "the archive has no folder {}",
+                root.map(String::as_str).unwrap_or_default()
+            ));
+        }
+        made
+    };
+    // what is installed says which pin it is, for the doctor: `VERSION`, then the digest
+    let marker = made.join(INSTALLED_MARKER);
+    fs::write(
+        &marker,
+        format!(
+            "{}\n{sha256}\n",
+            version.as_deref().unwrap_or("unversioned")
+        ),
+    )
+    .map_err(|e| io_err(&marker, e))?;
+    Ok(Staged {
+        into: into.clone(),
+        made,
+        dest: tools.join(into),
+        old,
+        _guards: guards,
+    })
+}
+
+/// Puts a staged folder in place, the one it replaces kept aside until the install ends.
+fn commit(s: &Staged) -> Result<(), String> {
+    if s.dest.exists() {
+        fs::rename(&s.dest, &s.old).map_err(|e| io_err(&s.dest, e))?;
+    }
+    if let Err(e) = fs::rename(&s.made, &s.dest) {
+        let _ = fs::rename(&s.old, &s.dest);
+        return Err(io_err(&s.dest, e));
+    }
+    Ok(())
+}
+
+/// Takes a committed folder out again and brings back the one it replaced.
+fn rollback(s: &Staged) {
+    let _ = fs::remove_dir_all(&s.dest);
+    if s.old.exists() {
+        let _ = fs::rename(&s.old, &s.dest);
     }
 }
 
