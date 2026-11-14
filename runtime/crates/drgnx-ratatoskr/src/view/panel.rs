@@ -10,6 +10,7 @@
 //! sends its new steps alone. Every row names its step (`drgnx-work-id`).
 
 use super::model::Doc;
+use super::panel_cards::{self, FileEdit};
 use super::panel_top;
 use super::{Key, lock};
 use crate::agents::session::Session;
@@ -135,12 +136,32 @@ struct Cache {
 struct Chosen {
     look: Look,
     lens: panel_top::Lens,
+    cards: CardState,
     from: Option<usize>,
     version: u64,
     /// The (first entry, entry count) the last model sent was made of.
     modeled: Option<(usize, usize)>,
     /// The steps of the last model sent; none when the next one goes whole.
     heads: Option<Vec<Head>>,
+}
+
+/// What the user chose of the cards: the pinned cards' texts, whether the ledger lists its files, and the entry index
+/// when it was last opened.
+#[derive(Clone, Default)]
+struct CardState {
+    pins: Vec<String>,
+    ledger_open: bool,
+    ledger_mark: Option<i64>,
+}
+
+/// A session's edits as the ledger shows them: the files (a worktree chat) or the hunks (a paired chat), read when
+/// the number of finished edits changed.
+#[derive(Default)]
+struct Edited {
+    /// How many finished edits it was read for.
+    count: Option<usize>,
+    files: Vec<FileEdit>,
+    paired: Vec<runstav::methods::history::OpHunk>,
 }
 
 /// The panels' state: the looks, the caches and the steps' facts.
@@ -152,6 +173,10 @@ pub struct Panels {
     facts: Mutex<BTreeMap<String, SessionFacts>>,
     /// Session → when it began running (seconds since the epoch), while it runs: the header's "running N min".
     busy: Mutex<BTreeMap<String, f64>>,
+    /// Session → its edits for the ledger.
+    edited: Mutex<BTreeMap<String, Edited>>,
+    /// Held while the panels are built.
+    building: Mutex<()>,
     front: OnceLock<Weak<Front>>,
 }
 
@@ -244,8 +269,61 @@ impl Panels {
         });
     }
 
+    /// Session SID's edits for the ledger read again (its finished edits are COUNT now): a worktree chat's files, a paired
+    /// chat's hunks, then its panels built again.
+    fn load_edits(self: &Arc<Self>, sid: &str, count: usize) {
+        let Some(f) = self.front() else { return };
+        lock(&self.edited).entry(sid.to_owned()).or_default().count = Some(count);
+        let (me, sid) = (self.clone(), sid.to_owned());
+        crate::clock::spawn("view:panel-edits", async move {
+            let hub = Caller {
+                class: runstav::registry::Class::Service,
+                sid: None,
+                job: None,
+                conn_id: 0,
+            };
+            let snapshot = f.core.agents.find(&sid).map(|s| s.snapshot()).ok();
+            let paired = snapshot.as_ref().is_some_and(|s| s.paired == Some(true));
+            let mut edited = Edited {
+                count: Some(count),
+                ..Edited::default()
+            };
+            if paired {
+                if let Some(cwd) = snapshot.as_ref().and_then(|s| s.cwd.clone())
+                    && let Ok(p) = serde_json::from_value(json!({"worktree": cwd, "session": sid}))
+                    && let Ok(a) = crate::history::hunk::op_hunks(&f, &hub, p).await
+                {
+                    edited.paired = a.hunks;
+                }
+            } else if let Ok(p) = serde_json::from_value(json!({"session": sid}))
+                && let Ok(a) = crate::work::edits::files(&f, &hub, p).await
+            {
+                edited.files = a
+                    .files
+                    .into_iter()
+                    .map(|e| FileEdit {
+                        path: e.path,
+                        plus: e.plus,
+                        minus: e.minus,
+                    })
+                    .collect();
+            }
+            lock(&me.edited).insert(sid.clone(), edited);
+            // the rows alone: no entry changed, so no model is made again; none while a connection's first build of
+            // the view is under way (it would start the model twice: its next build has these edits)
+            let built = lock(&me.caches).keys().any(|k| k.1 == view_of(&sid));
+            if built {
+                me.changed_in(&f, &sid, None, Some(&BTreeSet::new()));
+            }
+        });
+    }
+
     /// A revert or a fork was applied: the sessions shown read their facts again (which steps are undone).
     pub fn history_applied(self: &Arc<Self>) {
+        // the ledger's hunks too (a reverted hunk is undone): read again at the next build
+        for e in lock(&self.edited).values_mut() {
+            e.count = None;
+        }
         let shown: Vec<String> = lock(&self.facts).keys().cloned().collect();
         for sid in shown {
             self.load_facts(&sid);
@@ -266,6 +344,17 @@ impl Panels {
             }
             if let Some(rows) = p.rows {
                 c.look.rows = rows.into_iter().collect();
+            }
+            if let Some(pins) = p.pins {
+                c.cards.pins = pins.into_iter().map(|t| t.into_inner()).collect();
+            }
+            if let Some(open) = p.ledger_open {
+                if open && !c.cards.ledger_open {
+                    // looking at the ledger sets the mark: what comes after it is new
+                    let n = f.core.agents.find(sid).map_or(0, |s| s.entry_count());
+                    c.cards.ledger_mark = Some(n as i64 - 1);
+                }
+                c.cards.ledger_open = open;
             }
             if let Some(names) = p.lens {
                 c.lens.names = names.into_iter().map(|n| n.into_inner()).collect();
@@ -314,6 +403,9 @@ impl Panels {
         conn: Option<u64>,
         dirty: Option<&BTreeSet<usize>>,
     ) {
+        // one build of the panels at a time: a build made while another is between its model and its rows would start the
+        // model again or send rows that name no model
+        let _building = lock(&self.building);
         let keys: Vec<Key> = f
             .core
             .views
@@ -328,6 +420,14 @@ impl Panels {
         let first = !lock(&self.facts).contains_key(&sid);
         if first {
             f.core.views.panels.load_facts(&sid);
+        }
+        // the ledger's files and hunks, read again when the finished edits are not the ones they were read for
+        let edits = s.finished_edits().len();
+        if lock(&self.edited)
+            .get(&sid)
+            .is_none_or(|e| e.count != Some(edits))
+        {
+            f.core.views.panels.load_edits(&sid, edits);
         }
         // the model before the rows, which name its version; a connection's first rows of the view start it again
         let conns: BTreeSet<u64> = keys.iter().map(|k| k.0).collect();
@@ -460,6 +560,26 @@ impl Panels {
                 now,
             },
         );
+        let (cards, plan, finished) = {
+            let chosen = lock(&self.chosen);
+            let c = chosen.get(&(key.0, key.1.clone())).map(|c| c.cards.clone());
+            (c.unwrap_or_default(), s.plan_items(), s.finished_edits())
+        };
+        {
+            let edited = lock(&self.edited);
+            let none = Edited::default();
+            let e = edited.get(&s.id).unwrap_or(&none);
+            rows.extend(panel_cards::rows(&panel_cards::In {
+                env,
+                pins: &cards.pins,
+                plan: plan.as_deref(),
+                files: &e.files,
+                paired: &e.paired,
+                edits: &finished,
+                ledger_open: cards.ledger_open,
+                ledger_mark: cards.ledger_mark,
+            }));
+        }
         rows.extend(self.rows_of(&src, key, env, fonts, dirty));
         (rows, images)
     }
@@ -558,6 +678,7 @@ impl Panels {
     pub fn prune(&self, shown: &BTreeSet<String>) {
         lock(&self.facts).retain(|sid, _| shown.contains(sid));
         lock(&self.busy).retain(|sid, _| shown.contains(sid));
+        lock(&self.edited).retain(|sid, _| shown.contains(sid));
     }
 }
 

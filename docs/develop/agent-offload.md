@@ -75,3 +75,11 @@ wraps; `view/panel_top.rs`): the pills carry `drgnx-agent-panel-action` `type:NA
 come from the look the editor sent, and the width comes from the env, so a resize is the hub's rebuild and no Lisp
 measures a pill. `drgnx-agent-panel--strip-row` is gone; the one click dispatcher (`drgnx-agent-panel-act`) flips a type
 or makes the default.
+
+## The panel's cards (F1, cards)
+
+The pinned cards, the to-do list and the edits ledger are the hub's rows (hub.md "The agent panel's rows"). The state
+split: pins, the ledger's open flag and its mark are per-(connection, view) user state in the hub (`Chosen`), told by
+`agents/panel/look`; the plan, the finished edits, the edited files and a paired chat's hunks are read by the hub from the
+session. Lisp keeps the commands (`drgnx-agent-panel-pin`, `-ledger`, the click dispatcher's `card:*` actions) and, for a
+paired chat's ledger line, the revert; the Lisp row builders, the plan and hunk loads and the ledger mark are gone.

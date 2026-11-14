@@ -2744,6 +2744,41 @@ impl Session {
         crate::view::panel::heads_of(&tail)
     }
 
+    /// The latest plan entry's items as (status, content): the agent's to-do list; none when it made no plan.
+    pub(crate) fn plan_items(&self) -> Option<Vec<(String, String)>> {
+        let st = lock(&self.state);
+        let e = st
+            .entries
+            .iter()
+            .rev()
+            .find(|e| e.kind == EntryType::Plan)?;
+        let items = e.rest.get("entries")?.as_array()?;
+        Some(
+            items
+                .iter()
+                .map(|i| {
+                    let get = |k: &str| i.get(k).and_then(Value::as_str).unwrap_or("").to_owned();
+                    (get("status"), get("content"))
+                })
+                .collect(),
+        )
+    }
+
+    /// The indexes of the finished edits in the transcript (a tool call of kind `edit` that completed), ascending.
+    pub(crate) fn finished_edits(&self) -> Vec<usize> {
+        let st = lock(&self.state);
+        st.entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| {
+                e.kind == EntryType::Tool
+                    && e.rest.get("kind").and_then(Value::as_str) == Some("edit")
+                    && e.rest.get("status").and_then(Value::as_str) == Some("completed")
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
+
     /// The first of the entries at INDEXES that is a tool call.
     pub(crate) fn first_tool(&self, indexes: &BTreeSet<usize>) -> Option<usize> {
         let st = lock(&self.state);
