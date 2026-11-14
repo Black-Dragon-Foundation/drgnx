@@ -347,9 +347,9 @@ impl Kernel {
     /// The exit, waited for no longer than [`END_WITHIN`].
     async fn bounded_exit(&self) -> Exit {
         let mut exit = self.exit.clone();
-        crate::clock::timeout(END_WITHIN, exited(&mut exit))
+        exited_within(&mut exit, END_WITHIN)
             .await
-            .unwrap_or_else(|_| Exit {
+            .unwrap_or_else(|| Exit {
                 code: None,
                 signal: None,
                 stderr: "the kernel did not end".into(),
@@ -371,6 +371,14 @@ impl Drop for Kernel {
             kill_group_now(self.pid);
         }
     }
+}
+
+/// The exit if it happens within D (on the hub's clock), else None.
+pub(crate) async fn exited_within(
+    rx: &mut watch::Receiver<Option<Exit>>,
+    d: Duration,
+) -> Option<Exit> {
+    crate::clock::timeout(d, exited(rx)).await.ok()
 }
 
 /// The exit, whenever it has happened.

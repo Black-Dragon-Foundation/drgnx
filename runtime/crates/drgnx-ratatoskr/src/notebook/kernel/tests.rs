@@ -467,3 +467,33 @@ async fn workers_a_kernel_forked_go_with_it_and_nothing_is_signalled_after_it_is
         "no signal goes to a group whose leader is gone"
     );
 }
+
+#[cfg(feature = "test-hooks")]
+#[test]
+fn a_wait_for_an_exit_that_never_comes_ends_at_its_bound_on_the_virtual_clock() {
+    crate::clock::install_virtual();
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .on_thread_park(crate::clock::worker_parks)
+        .on_thread_unpark(crate::clock::worker_unparks)
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        // the sender stays: the exit is never sent, and the channel is not closed
+        let (_tx, mut rx) = watch::channel(None::<Exit>);
+        let waiting = crate::clock::spawn("test:exit-wait", async move {
+            exited_within(&mut rx, END_WITHIN).await
+        });
+        crate::clock::advance(END_WITHIN).await;
+        assert_eq!(waiting.await.unwrap(), None);
+        let (tx, mut rx) = watch::channel(None::<Exit>);
+        let exit = Exit {
+            code: Some(0),
+            signal: None,
+            stderr: String::new(),
+        };
+        tx.send(Some(exit.clone())).unwrap();
+        assert_eq!(exited_within(&mut rx, END_WITHIN).await, Some(exit));
+    });
+}
