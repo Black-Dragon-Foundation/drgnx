@@ -21,6 +21,7 @@
 - [The agent browser](guide/agent-browser.md)
 - [Semantic Search](guide/search.md)
 - [Editing code](guide/editing.md)
+- [Notebooks](guide/notebooks.md)
 - [Debugging](guide/debugging.md)
 - [Large files](guide/large-files.md)
 - [Git and review](guide/git.md)

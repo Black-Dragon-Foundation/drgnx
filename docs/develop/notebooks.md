@@ -46,3 +46,18 @@ Outputs are written the way nbformat's writer writes them: multiline text as a l
 sorted. A cell that was not run in this session keeps the outputs the file had, byte for byte. A notebook file is read up to 32 MiB;
 the outputs read from it go through the same limits as a kernel's (64 outputs and 1 MiB of text per cell, 16 MiB of images, 200
 traceback entries, an output larger than 8 MiB shown as a line saying so).
+
+## The buffer (Lisp)
+
+`modules/lang/drgnx-notebook.el` (module `lang/notebook`) is the editor's side. A cell in the buffer is a head, the source and a
+tail; the head and the tail are each one read-only newline carrying the text property `drgnx-cell` `(ID . head|tail)` and
+`drgnx-cell-type`, so undo, kill and yank move cells as text, and the cell ranges are read back from the property (a binary
+search over the cached ranges; a rescan walks the property's changes, never the text, after a quiet moment, never on a
+keystroke). The chrome is overlays on the boundary characters: the head's `before-string` (the header strip) and the tail's
+`after-string` (the output the hub built: `notebook-tail`, put as it came, its runs' roles as the faces
+`drgnx-notebook-fg-ROLE`/`-bg-ROLE`, with `overlay-put`, which writes no undo entry, sets no modified flag and runs no change
+function). A boundary that comes back by undo or yank has no overlay, and the rescan asks the hub for that cell's tail by id.
+
+The hub calls it makes (`drgnx-notebook--call`): `notebook/open {path, text}`, `/sync {id, cells}` then `/execute {id, cells}`
+(the cells to run), `/save {id, cells}`, `/kernels`, `/start {id, kernel}`, `/shutdown`, `/interrupt`, `/input`, `/tail {id,
+cell}`, `/output {id, cell}`, `/close`; it listens to `notebook-tail`, `notebook-status` and `notebook-input-request`.
