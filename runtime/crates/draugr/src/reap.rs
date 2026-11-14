@@ -162,10 +162,22 @@ fn group_left(sig: &dyn Signaller, pgid: i32) -> bool {
     }
 }
 
-/// Whether every process of group `pgid` is a zombie (or exited), read from `/proc`: `false` when `/proc` cannot be
-/// read, and on any other OS (the group is then waited for as before).
+/// Whether the leader of group `pgid` is an unreaped zombie and every other process of the group is a zombie too, read
+/// from `/proc`: `false` when `/proc` cannot be read, and on any other OS (the group is then waited for as before).
 #[cfg(target_os = "linux")]
 fn only_zombies(pgid: i32) -> bool {
+    // only a leader that is itself an unreaped zombie: a group whose members were killed and wait for init to reap them
+    // is still going (its leader is gone), and is waited for as before
+    let leader_is_zombie = std::fs::read_to_string(format!("/proc/{pgid}/stat"))
+        .ok()
+        .and_then(|s| {
+            s.rsplit_once(')')
+                .map(|(_, r)| r.trim_start().starts_with('Z'))
+        })
+        .unwrap_or(false);
+    if !leader_is_zombie {
+        return false;
+    }
     let Ok(dir) = std::fs::read_dir("/proc") else {
         return false;
     };

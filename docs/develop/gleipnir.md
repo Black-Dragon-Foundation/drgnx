@@ -1403,8 +1403,11 @@ ENOENT. Steps that belong to the sandboxed run (`swap-to-link`, `canary-fd`, the
 
 **Skips.** Only these reasons skip a row: "inside a container" (`/run/.containerenv`; for `bwrap` and `netns`; not
 with `--bwrap-in-container`),
-"needs macos", "needs linux", "needs x86_64", "x32 is off", "needs root" (uid 0 or `sudo -n true`), and "Landlock ABI
-N below M" (from the probe's `landlock-abi`). Any other cause is a **fail**, a sandbox refusal among them, so a
+"needs macos", "needs linux", "needs x86_64", "x32 is off", "the host blocks io_uring, the keyring calls or vsock" (a row with `needs: host_open`: the unfiltered probes of
+`io_uring_setup`, `keyctl`, `add_key` or `socket(AF_VSOCK)` fail, as they do in a podman container, whose own seccomp answers ENOSYS, so
+our filter's EPERM could not be told from it; only `seccomp-denies-host-open` carries it, the rest of
+`seccomp-denies` runs), "needs root" (uid 0 or `sudo -n true`), and "Landlock ABI N below M" (from the probe's
+`landlock-abi`). Any other cause is a **fail**, a sandbox refusal among them, so a
 regression that refuses every spec cannot look green.
 
 **What a run checks, in order:** no canary text in stdout, stderr or the result file; the sandbox's outcome from the
@@ -1635,6 +1638,8 @@ expects `EPERM` or `EACCES`: Seatbelt denies with EPERM, and a row that gets ano
 | `mac-writes` | (d) | writes work in the task folder, home, TMPDIR and `q"x\y`; they fail in a pinned `.git`, in `commondir`, outside every grant (`${FIXTURE}/outside`, under `/private/tmp`) and in `~`; the hidden `.env` is unreadable |
 | `mac-case` | (h), GL-T9-1 | `.GIT/config`, `.Git/hooks/x`, `COMMONDIR`, `.ENV` and `CONF/.env` are closed. The control run must reach them too (APFS ignores case), so this row needs the default case-insensitive volume |
 | `mac-case-kelvin`, `mac-case-long-s` | gate review S8 | a hidden `kube` read with the Kelvin sign (U+212A) for its `k` and a hidden `.secrets` as `.ſecrets` are closed; the control shows APFS takes those spellings for the file |
+| `proxy-refusal-reaches-a-flooding-client`, `mac-proxy-refusal-reaches-a-flooding-client` | GLP-T10-3 | a client sends its `CONNECT` for a refused target and then 4 MiB more without reading: the 403 must still reach it, not a reset (a proxy that closes with unread data in its socket resets the connection, and the client loses the refusal). Probe `http-connect-flood TARGET BYTES`. The Linux row runs where bwrap does; **the macOS row is written, not yet run on a Mac** (it needs a macOS run: the TCP listener is the one in question) |
+| `mac-nfd-spelling`, `mac-eszett-is-not-ss` | GL-T2-1, GL-T9-3 | **written, not yet run on a Mac** (they need a macOS run): a hidden `café` read with the decomposed spelling `cafe` + U+0301 is closed (the control shows APFS takes the decomposed spelling for the file), and a hidden `straße` read as `STRASSE` is a no-such-file in the control and in the sandbox (APFS folds simple case only, so there is no multi-character fold to match; if a Mac says otherwise the control fails and `case_regex` gets the fold) |
 | `mac-no-controlling-tty` | gate review S6 | with Ratatoskr on a terminal, the program has none (`/dev/tty`: ENXIO) |
 | `mac-leaves-group-the-gap` | gate review S1 | the recorded gap: the program can `setsid` and `setpgid` (DEFERRED: phase 6's lifecycle) |
 | `mac-rename-hidden-dir`, `-case`, `mac-rename-task-out`, `mac-rename-over-root`, `mac-rename-binds-out`, `mac-link-hidden-pinned` | (i) | `mv conf c2` and `mv CONF c2` (then the `.env` is still closed), the task folder moved out or replaced, `${W}` and the home moved, a hard link to the hidden `.env` and to the `.git` pin, and an APFS clone of the `.env` all fail. One row each for what changes the fixture, so the control run can do all of them |

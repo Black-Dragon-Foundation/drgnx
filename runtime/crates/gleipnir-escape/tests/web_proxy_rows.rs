@@ -24,6 +24,7 @@ fn web_proxy_rows_hold_without_the_sandbox() {
         root: false,
         landlock_abi: 0,
         x32: false,
+        host_open: false,
     };
     let mut failed = Vec::new();
     for mut r in rows {

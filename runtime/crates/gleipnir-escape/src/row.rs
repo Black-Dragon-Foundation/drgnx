@@ -98,6 +98,10 @@ pub enum Need {
     #[serde(rename = "x86_64")]
     X86_64,
     X32,
+    /// `io_uring_setup`, `keyctl`, `add_key` and `socket(AF_VSOCK)` work for an unfiltered process on this host (a container's own seccomp,
+    /// podman's default profile, answers ENOSYS to some): else our filter's refusal could not be told from it.
+    #[serde(rename = "host_open")]
+    HostOpen,
     /// The browser layer runs: Landlock ABI [`gleipnir::LANDLOCK_FLOOR_BROWSER`].
     Browser,
 }
