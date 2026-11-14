@@ -504,6 +504,22 @@ Returns (EXIT . OUTPUT), the output both streams' or, with STDOUT-ONLY, stdout's
       (should (string-search "echo \"DRGNX_PACK_LOCK=$DRGNX_PACK_LOCK\" >> \"$GITHUB_ENV\"" host))
       (should (string-search "echo \"DRGNX_PACK_GRAMMARS=$DRGNX_PACK_GRAMMARS\" >> \"$GITHUB_ENV\"" host)))))
 
+;; The macOS jobs run hrafn's and the hub's grammar-reading tests and conformance rows: they build the pack grammars from the
+;; build's own hub (RATATOSKR, which keeps its test-hooks build) and hand them on, or about twenty rows find no grammar.
+(ert-deftest drgnx-ci/the-macos-jobs-build-the-pack-grammars-before-their-tests ()
+  (let ((rt (drgnx-ci-test--yml "runtime.yml")))
+    (skip-unless rt)
+    (dolist (spec '(("macos" . "id: test") ("macos-conformance" . "- name: conformance")))
+      (let* ((job (drgnx-ci-test--job rt (car spec)))
+             (built (and job (string-search "bash test/packs/hub-grammars.sh" job)))
+             (ran (and job (string-search (cdr spec) job))))
+        (should built)
+        (should ran)
+        (should (< built ran))
+        (should (string-search "RATATOSKR=\"$PWD/runtime/target/debug/ratatoskr\"" job))
+        (should (string-search "echo \"DRGNX_PACK_LOCK=$DRGNX_PACK_LOCK\" >> \"$GITHUB_ENV\"" job))
+        (should (string-search "echo \"DRGNX_PACK_GRAMMARS=$DRGNX_PACK_GRAMMARS\" >> \"$GITHUB_ENV\"" job))))))
+
 (ert-deftest drgnx-ci/the-offline-build-row-runs-where-a-network-namespace-can-be-made ()
   ;; ghostty-vt-sys's builds_offline needs unshare(2): the Fedora job's Docker container refuses it, so its test says so
   ;; and stops; the escape-host job (a runner) runs it with DRGNX_REQUIRE_NETNS=1, where a missing namespace fails
