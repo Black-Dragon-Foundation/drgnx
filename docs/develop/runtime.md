@@ -668,7 +668,9 @@ virtual clock (`drgnx_ratatoskr::clock`, moved by `__test_advance`) installs its
 `test-hooks` feature `drgnx_clock::Manual` gives a crate's own test a clock it moves by hand (`advance`, `sleepers`) and
 `Manual::scope(future)` runs the code under test on it: only that future's timers read it, so no other test of the process
 sees it (a task it spawns is wrapped in `scope` too). The test waits for the timer
-it expects (`skuld::wait_until_async` on `sleepers()`), then advances: nothing in it depends on how fast the machine is. What a
+it expects (`skuld::wait_until_async` on `sleepers()`), then advances (draugr's kill grace is the exception for real
+processes: `RealSignaller::pause` waits in real time, so a hub on the test clock never parks a kill on a clock that stands
+still; a test's own signaller reads the installed clock): nothing in it depends on how fast the machine is. What a
 virtual clock cannot do is wait for something outside it (a child's exit, a socket): that is an event wait, with a deadline that
 only bounds a failure, and it stays real. A real performance budget lives in the perf lane (`test/timing-rust.txt`, which only
 shrinks: `skuld`'s `the_timing_lane_list_only_shrinks`), never in a unit suite. Plan: `docs/plans/drgnx/2026-11-14-virtual-clocks.md` (org folder).
