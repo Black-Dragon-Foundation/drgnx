@@ -158,10 +158,18 @@ fn targets(inv: &Invocation) -> Vec<i32> {
     inv.fds.iter().map(|(_, t)| *t).collect()
 }
 
-/// TARGETS, and the resolver file's fd after them when this host binds one (`host_resolver_fds`).
-fn with_host_resolver(mut targets: Vec<i32>) -> Vec<i32> {
+/// How many fds the host's resolver file adds (`host_resolver_fds`): it is bound first, so every source's fd and the
+/// helper's (the last) move up by it, and the targets run on one further.
+fn host_resolver() -> i32 {
     #[cfg(target_os = "linux")]
-    if linux::bwrap::host_resolver_fds() == 1 {
+    return linux::bwrap::host_resolver_fds() as i32;
+    #[cfg(not(target_os = "linux"))]
+    0
+}
+
+/// TARGETS, one further when this host binds a resolver file.
+fn with_host_resolver(mut targets: Vec<i32>) -> Vec<i32> {
+    if host_resolver() == 1 {
         targets.push(targets.last().unwrap() + 1);
     }
     targets
@@ -228,7 +236,11 @@ fn bwrap_invocation_has_spec_status_and_binds_at_3_4_6() {
         .windows(3)
         .position(|w| w[0] == "--ro-bind-fd" && w[2] == HELPER_INSIDE)
         .expect("the helper is bound");
-    assert_eq!(args[helper_at + 1], "9", "the helper's fd is the last");
+    assert_eq!(
+        args[helper_at + 1],
+        (9 + host_resolver()).to_string(),
+        "the helper's fd is the last"
+    );
     let tail: Vec<&str> = args[args.len() - 9..args.len() - 1]
         .iter()
         .map(String::as_str)
