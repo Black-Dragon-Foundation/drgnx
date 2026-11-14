@@ -149,30 +149,37 @@
            (delete-directory dir t))))))
 
 (defmacro drgnx-modal-panels-test--outline (&rest body)
-  "BODY with the Outline of a four-definition elisp buffer, shown in the selected window."
+  "BODY with the Outline of a four-definition Emacs Lisp file, shown in the selected window.  Its rows are a real hub's
+\(`drgnx-test-with-gated-hub'), drawn by Sjá."
   (declare (indent 0))
-  `(drgnx-test-with-state
-     (let ((drgnx-wb--sections nil)
-           (src (generate-new-buffer "outline-src.el")))
-       (delete-other-windows)
-       (with-current-buffer src
-         (insert "(defun alpha () 1)\n(defvar beta 2)\n(defun gamma () 3)\n(defun delta () 4)\n")
-         (emacs-lisp-mode))
-       (switch-to-buffer src)
-       (drgnx-test-use-editor (selected-window))
-       (drgnx-outline-setup)
-       (drgnx-wb-show-sidebar)
-       (unwind-protect
-           (progn
-             ;; `drgnx-outline-refresh' fills the Outline only while it is shown, and the test sidebar has no
-             ;; Outline section: index the editor's file directly, while the editor is still on screen, and draw
-             (drgnx-outline--refresh-1)
-             (with-current-buffer drgnx-outline-buffer-name (drgnx-view-draw-now drgnx-view))
-             (drgnx-modal-panels-test--show (get-buffer drgnx-outline-buffer-name) ,@body))
-         (drgnx-wb-hide-sidebar)
-         (delete-other-windows)
-         (kill-buffer src)
-         (when (get-buffer drgnx-outline-buffer-name) (kill-buffer drgnx-outline-buffer-name))))))
+  `(drgnx-test-with-gated-hub
+     (drgnx-test-with-state
+       (let* ((drgnx-wb--sections nil) (drgnx-wb--collapsed (list (cons 'outline nil)))
+              (dir (make-temp-file "drgnx-modal-outline" t)) (f (expand-file-name "outline-src.el" dir)) src)
+         (unwind-protect
+             (progn
+               (write-region "(defun alpha () 1)\n(defvar beta 2)\n(defun gamma () 3)\n(defun delta () 4)\n" nil f nil 'silent)
+               (setq src (find-file-noselect f))
+               (delete-other-windows)
+               (switch-to-buffer src)
+               (drgnx-test-use-editor (selected-window))
+               (drgnx-outline-setup)
+               (drgnx-wb-show-sidebar)
+               (drgnx-view-env-update drgnx-outline-hub-view)   ; a batch Emacs never redisplays: the shown class's env
+               (drgnx-outline-refresh)
+               (drgnx-signal--flush)
+               (drgnx-test-hub-settle
+                (lambda () (with-current-buffer drgnx-outline-buffer-name
+                             (drgnx-view-draw-now nil)
+                             (> (count-lines (point-min) (point-max)) 3)))
+                "the hub's four rows")
+               (drgnx-modal-panels-test--show (get-buffer drgnx-outline-buffer-name) ,@body))
+           (drgnx-outline--watch nil)
+           (drgnx-wb-hide-sidebar)
+           (delete-other-windows)
+           (when (buffer-live-p src) (kill-buffer src))
+           (when (get-buffer drgnx-outline-buffer-name) (kill-buffer drgnx-outline-buffer-name))
+           (delete-directory dir t))))))
 
 (defun drgnx-modal-panels-test--press (keys)
   "Press KEYS (a `kbd' string) in the selected window."

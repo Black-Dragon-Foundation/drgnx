@@ -393,6 +393,11 @@ pub(crate) fn entries(
             ))
         })?
         .collect::<Result<_, _>>()?;
+    Ok(nest(all))
+}
+
+/// ALL (in file order: by start, the longer first) as entries, each with the number of definitions around it.
+fn nest(all: Vec<OutlineRow>) -> Vec<OutlineEntry> {
     // the ends of the definitions around the current one
     let mut open: Vec<(i64, i64)> = Vec::new();
     let mut entries = Vec::with_capacity(all.len());
@@ -414,7 +419,37 @@ pub(crate) fn entries(
         });
         open.push((start, end));
     }
-    Ok(entries)
+    entries
+}
+
+/// PATH's definitions as TEXT has them (an editor's unsaved buffer, a file the index does not hold), as [`outline`]
+/// gives an indexed file's: the same parse, in file order, each with the number of definitions around it, and the
+/// language it was parsed as.  None for a language with no definitions to find (plain text).
+pub fn outline_text(path: &str, text: &str) -> Option<(crate::Lang, Vec<OutlineEntry>)> {
+    let (lang, _) = crate::files::classify(path, text.as_bytes());
+    if lang == crate::Lang::Text {
+        return None;
+    }
+    let (_, mut symbols) = crate::chunk::chunk_file(path, lang, false, text, crate::chunk::BUDGET);
+    // the index's order: by start, the longer first, else as found
+    symbols.sort_by(|a, b| a.start.cmp(&b.start).then(b.end.cmp(&a.end)));
+    let all = symbols
+        .into_iter()
+        .map(|s| {
+            let (start, end) = (i64::from(s.start), i64::from(s.end));
+            (
+                s.name,
+                s.kind,
+                start,
+                end,
+                s.line_start,
+                s.line_end,
+                s.sig,
+                s.doc1,
+            )
+        })
+        .collect();
+    Some((lang, nest(all)))
 }
 
 /// PATH's definitions in VIEW, in file order, each with the number of definitions around it.

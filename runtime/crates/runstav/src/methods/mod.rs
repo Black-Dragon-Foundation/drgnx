@@ -288,6 +288,8 @@ params! {
     ViewClose(view::ViewClose),
     ViewWindow(view::ViewWindow),
     BuffersSet(view::BuffersSet),
+    OutlineSet(view::OutlineSet),
+    OutlineScopes(view::OutlineScopesParams),
     TermOpen(term::TermOpen),
     TermConfig(term::TermConfig),
     TermKey(term::TermKey),

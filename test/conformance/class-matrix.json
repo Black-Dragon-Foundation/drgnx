@@ -202,6 +202,8 @@
   "notebook/sync": ["user"],
   "notebook/tail": ["user"],
   "orch/evidence": ["user"],
+  "outline/scopes": ["user"],
+  "outline/set": ["user"],
   "pace/get": ["user"],
   "pair/answer": ["user"],
   "pair/closed": ["user"],

@@ -1555,6 +1555,8 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `notebook/sync` | user | `{cells: [{id: string, source: string, type: string}], id: string}` | `boolean` | no |
 | `notebook/tail` | user | `{cell: string, id: string}` | `NotebookTail` | no |
 | `orch/evidence` | user | `{task: TaskRef}` | `{evidence: [any]}` | no |
+| `outline/scopes` | user | `{file?: string, line: natnum, path?: string, worktree_root?: string}` | `{scopes: [OutlineScope]}` | no |
+| `outline/set` | user | `{file?: string, view: string}` | `boolean` | no |
 | `pace/get` | user | `{provider?: string}` | `{meters?: [Pace]}` | no |
 | `pair/answer` | user | `{lines?: [natnum], not_saved?: Text, reason?: Text, result: "applied" \| "refused" \| "dropped", saved?: boolean, version?: natnum, write: natnum}` | `boolean` | no |
 | `pair/closed` | user | `{file: AbsPath}` | `boolean` | no |
@@ -2945,6 +2947,34 @@ the editor's side is `wb/drgnx-buffers.el`).
   connection's repositories read by `git/letters`, an ignored or untracked folder's around it; an ignored name is dimmed
   instead) and `drgnx-buffers-modified` while it has unsaved changes. A status read draws the connection's panels
   again. The editor draws the right edge (the letter, ● or ×, the hover) for the rows drawn near what a window shows.
+
+### The Outline panel's rows (`outline/set`)
+
+The Outline section's rows: the definitions of the file in the editor, built by the hub with Hrafn's parse
+(`hrafn::symbols::outline_text`; `runtime/crates/drgnx-ratatoskr/src/view/outline.rs`; the editor's side is
+`wb/drgnx-outline.el`).
+
+- `outline/set {view, file?}` says the (connection, view) shows FILE now (absolute, at most 4096 bytes; none: no file
+  the hub can read, such as a buffer without one or a remote file), outlines it and answers `true` once its model and
+  rows have gone. The editor sends it when the file it shows changes and after a save, never per keystroke.
+- **The text.** The editor's own text of the file where the edit history tracks the buffer (unsaved typing included,
+  from the mirror Search already reads), else the file on disk. An edit the history takes for a shown file outlines it
+  again once the edits pause for 500 ms of the hub's clock (`QUIET`); an answer for an ask a later one replaced is
+  dropped.
+- **The size guard.** One check, `too_large` (`OUTLINE_MAX`, 1 MiB, the Lisp Outline's limit), on both paths: a text or
+  a file past it is not parsed, and the view shows the notice "This file is too large for an outline".
+- **The model** is a node per definition with its `label` and its `line` (from 1) in the list `order`, in file order:
+  the editor asks Sjá which definition a line is in (`at-line`) to mark the current one, and a row's line to jump.
+- **A row** is the name, indented two columns plus two per definition around it, with control characters as `^X`;
+  its key (`DEPTH:N:NAME`, N counting the earlier definitions of that name and depth) is over it as `drgnx-work-id`, so a
+  definition that only moved keeps its row. A file with nothing to outline (plain text, a language with no definitions)
+  is one inert, muted notice row, "No outline for this file", after the info icon on a graphical display.
+- `outline/scopes {file | path + worktree_root, line}` answers `{scopes: [{name, line}]}`: the definitions that hold LINE
+  (from 1), outermost first, one that starts on it included, from the same text and the same size guard (past it,
+  none). The breadcrumb's symbol (the innermost, `wb/drgnx-chrome.el`) and sticky scroll's scopes in a buffer without
+  tree-sitter (those starting above the window's top line, `modules/editor/drgnx-sticky.el`) read it; a buffer the
+  edit history tracks asks through it (`drgnx-history-ask`: its changes go first), another by its file. The last
+  `PARSED_FILES` (8) parses are kept by file and a hash of their text, so a scroll or a moved point parses nothing again.
 
 ### The agent panel's rows
 

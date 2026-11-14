@@ -2,7 +2,7 @@
 //!
 //! test-pattern: pure (D): the store thread answers in order, nothing here has a clock or a timeout.
 
-use hrafn::symbols::{Find, Match, SymbolsError, find, outline};
+use hrafn::symbols::{Find, Match, SymbolsError, find, outline, outline_text};
 use hrafn::{CodeStore, DoorKind, FileRow, Listed, Scope, TreeId, View, classify, refresh};
 use std::collections::HashMap;
 use std::io;
@@ -319,6 +319,21 @@ async fn outline_is_in_file_order_with_nesting() {
         outline(&s, View::Base, "src/none.rs").await,
         Err(SymbolsError::NotIndexed)
     ));
+}
+
+/// An editor's text (unsaved, or never indexed) outlines as the index does the same text: the same entries in the same
+/// order and nesting; plain text has none to find.
+#[tokio::test]
+async fn a_text_outlines_as_the_indexed_file() {
+    let (_d, s, _t) = store().await;
+    let indexed = outline(&s, View::Base, "src/a.rs").await.unwrap();
+    let (lang, entries) = outline_text("src/a.rs", RS).expect("rust has definitions");
+    assert_eq!((lang.as_str(), &entries), ("rust", &indexed.entries));
+    let edited = format!("{RS}\nfn later() {{}}\n");
+    let (_, more) = outline_text("src/a.rs", &edited).unwrap();
+    assert_eq!(more.len(), entries.len() + 1);
+    assert_eq!((more[4].name.as_str(), more[4].depth), ("later", 0));
+    assert!(outline_text("notes.txt", "just words\n").is_none());
 }
 
 /// A store built before lines and signatures were stored (an older parse) is parsed again by the next tier 1, and
