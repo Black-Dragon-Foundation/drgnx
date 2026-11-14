@@ -212,7 +212,7 @@ pub async fn run(front: Arc<Front>, mut events: tokio::sync::broadcast::Receiver
                 front.core.manager.job_ended(&done);
                 if done.session.is_some() {
                     let front = front.clone();
-                    tokio::spawn(async move {
+                    crate::clock::spawn("wake:job-end", async move {
                         super::die_at("before-wake-row");
                         record(&front, &done).await;
                         deliver(&front, &done).await;
