@@ -41,6 +41,7 @@
   "brief/set": ["user"],
   "budget/get": ["user"],
   "budget/set": ["user"],
+  "buffers/set": ["user"],
   "cards/settle": ["user"],
   "config/changed": ["user"],
   "config/settings": ["user"],

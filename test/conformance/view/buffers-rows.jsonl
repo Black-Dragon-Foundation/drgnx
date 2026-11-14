@@ -1,0 +1,19 @@
+{"scenario": "view/buffers-rows", "requires": ["v1"], "doc": "The Buffers panel's rows are the hub's: buffers/set tells it the open buffers (put, modified, remove), the window's scope and the filter; the hub sends one row per buffer shown, in the order they were put, the id over the row and the unsaved flag over the name. Only what changed goes out."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "view/env", "params": {"view": "buffers", "class": "tty", "display": "tty", "scale": 1, "fonts": [], "cell": [1, 1], "width_px": 80, "palette": [], "epoch": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "buffers/set", "params": {"view": "buffers", "ops": [{"op": "reset"}, {"op": "put", "id": "b1", "name": "a.el", "file": "/nowhere/a.el", "modified": false}, {"op": "put", "id": "b2", "name": "b.txt", "file": "/nowhere/b.txt", "modified": true}]}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "buffers", "class": "tty", "hub": "$capture:hub", "base": 0, "version": 1, "env_epoch": 1, "ops": [{"reset": [{"key": "b1", "text": "  a.el", "props": [[0, 6, "drgnx-work-id", "b1"]]}, {"key": "b2", "text": "  b.txt", "props": [[2, 7, "drgnx-buffers-modified", true], [0, 7, "drgnx-work-id", "b2"]]}]}]}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "buffers/set", "params": {"view": "buffers", "ops": [{"op": "modified", "id": "b2", "modified": false}, {"op": "put", "id": "b3", "name": "c.md", "modified": false}]}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "buffers", "class": "tty", "hub": "$hub", "base": 1, "version": 2, "env_epoch": 1, "ops": {"$contains": [{"replace": [{"key": "b2", "text": "  b.txt", "props": [[0, 7, "drgnx-work-id", "b2"]]}]}, {"insert": {"after": "b2", "rows": [{"key": "b3", "text": "  c.md", "props": [[0, 6, "drgnx-work-id", "b3"]]}]}}]}}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "buffers/set", "params": {"view": "buffers", "ops": [{"op": "filter", "text": "B."}]}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "buffers", "class": "tty", "hub": "$hub", "base": 2, "version": 3, "env_epoch": 1, "ops": [{"remove": ["b1", "b3"]}]}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 5, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 6, "method": "buffers/set", "params": {"view": "buffers", "ops": [{"op": "filter", "text": null}, {"op": "scope", "ids": ["b3", "b1"]}, {"op": "remove", "id": "b3"}]}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "buffers", "class": "tty", "hub": "$hub", "base": 3, "version": 4, "env_epoch": 1, "ops": {"$contains": [{"remove": ["b2"]}, {"insert": {"after": null, "rows": [{"key": "b1", "text": "  a.el", "props": [[0, 6, "drgnx-work-id", "b1"]]}]}}]}}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 6, "result": true}}

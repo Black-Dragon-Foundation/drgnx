@@ -258,8 +258,8 @@
                      (buffer-substring-no-properties (point-min) (pos-eol)))
                  (when (get-buffer drgnx-replace-bar-buffer-name) (kill-buffer drgnx-replace-bar-buffer-name))))))
     (drgnx-ui-test--ascii
-     ;; the Buffers row's close is the `close' glyph on its right edge now, never a literal in the row
-     (with-temp-buffer (should-not (string-search "×" (drgnx-buffers--row (current-buffer)))))
+     ;; the Buffers row's close is the `close' glyph on its right edge (`drgnx-buffers--tail'), never a literal ×
+     (should-not (string-search "×" (drgnx-face-glyph 'close)))
      (should (string-search "[↓] [x]" (funcall bar))))
     (drgnx-ui-test--unicode
      (should (string-search "[↓] [×]" (funcall bar))))))

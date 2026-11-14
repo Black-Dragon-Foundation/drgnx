@@ -515,6 +515,7 @@ fn read_and_publish(
         .keep(conn, root.to_path_buf(), read, status)
     {
         f.core.views.explorer_decor_changed(f, conn);
+        f.core.views.buffers_decor_changed(f, conn);
     }
 }
 

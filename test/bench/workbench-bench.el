@@ -262,7 +262,7 @@ GC, another process — then does not decide the number."
     (setq mine (drgnx-bench--put mine :buffers-render
                                  (drgnx-bench--try "drgnx" "buffers render"
                                                    ;; Like ibuffer: a fresh panel buffer, its window and the render.
-                                                   (drgnx-bench--ms (lambda () (drgnx-wb-hide-sidebar) (setq drgnx-buffers--signature nil)
+                                                   (drgnx-bench--ms (lambda () (drgnx-wb-hide-sidebar)
                                                                       (kill-buffer drgnx-buffers-buffer-name))
                                                                     #'drgnx-wb-show-sidebar))))
     (setq mine (drgnx-bench--put mine :buffers-update

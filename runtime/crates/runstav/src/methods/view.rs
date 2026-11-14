@@ -181,6 +181,70 @@ fn check_env(p: &ViewEnv) -> Result<(), Error> {
     Ok(())
 }
 
+/// The most changes one `buffers/set` carries (a reset and thousands of open buffers fit).
+pub const BUFFER_OPS_MAX: usize = 50_000;
+
+/// `buffers/set`: changes to the Buffers panel's open buffers for the hub-fed VIEW, in order; the hub sends VIEW's
+/// rows that changed to every class of it (docs/develop/hub.md, "Rows"). The editor sends one when the set of open
+/// buffers, a name or an unsaved flag changed, or the window's scope or the filter did, never per keystroke.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BuffersSet {
+    pub view: String,
+    pub ops: Vec<BufferOp>,
+}
+
+/// One change of `buffers/set`.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(tag = "op", rename_all = "lowercase", deny_unknown_fields)]
+pub enum BufferOp {
+    /// No buffer is open (the editor puts its set again after it, in open order: a new hub, a reconnect).
+    Reset,
+    /// Buffer ID (the editor's, at most 64 bytes) is open with NAME, visiting FILE (none: no file, such as a folder's
+    /// listing), MODIFIED when it has unsaved changes: a new id goes last in the open order, a known one keeps its place.
+    Put {
+        id: String,
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        file: Option<String>,
+        #[serde(default)]
+        modified: bool,
+    },
+    /// Buffer ID's unsaved flag flipped.
+    Modified { id: String, modified: bool },
+    /// Buffer ID was closed.
+    Remove { id: String },
+    /// Only the buffers IDS are on rows (those of the window the user works in), in the open order; none: every one.
+    Scope {
+        #[serde(default)]
+        ids: Option<Vec<String>>,
+    },
+    /// Only the buffers whose names hold TEXT (any case) are on rows; none or empty: every one.
+    Filter {
+        #[serde(default)]
+        text: Option<String>,
+    },
+}
+
+fn check_buffers(p: &BuffersSet) -> Result<(), Error> {
+    check_ids(&p.view, None)?;
+    if p.ops.len() > BUFFER_OPS_MAX {
+        return Err(invalid("ops", "at most 50000 changes"));
+    }
+    let long = |id: &String| id.is_empty() || id.len() > VIEW_MAX;
+    let bad = p.ops.iter().any(|op| match op {
+        BufferOp::Put { id, .. } | BufferOp::Modified { id, .. } | BufferOp::Remove { id } => {
+            long(id)
+        }
+        BufferOp::Scope { ids: Some(ids) } => ids.iter().any(long),
+        _ => false,
+    });
+    if bad {
+        return Err(invalid("ops", "buffer ids of 1 to 64 bytes"));
+    }
+    Ok(())
+}
+
 pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
@@ -230,6 +294,12 @@ pub(crate) fn methods() -> Vec<Method> {
             classes: [User], writes: false,
             doc: "the editor shows a view no more: its envs and rows are forgotten (a connection's views end with it)",
             check: |p: &ViewClose| check_ids(&p.view, None),
+        ),
+        method!(
+            "buffers/set", BuffersSet(BuffersSet) -> bool,
+            classes: [User], writes: false,
+            doc: "changes to the Buffers panel's open buffers of a hub-fed view (put, modified, remove, the window's scope, the filter), in order: the hub sends the view's rows that changed to every class of it",
+            check: check_buffers,
         ),
     ]
 }

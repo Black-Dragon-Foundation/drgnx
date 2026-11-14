@@ -1015,24 +1015,10 @@ changes inside)."
       (overlay-put drgnx-explorer--hidden-line 'invisible t)
       (overlay-put drgnx-explorer--hidden-line 'evaporate t))))
 
-(defun drgnx-explorer--shown-spans ()
-  "Where this buffer's rows get tails: for each window showing it, (FROM . TO) from a page above its start to two pages
-below it; t when no window shows it (every row)."
-  (or (mapcar (lambda (w) (drgnx-explorer--span (window-start w) (window-body-height w)))
-              (get-buffer-window-list nil nil t))
-      t))
-
-(defun drgnx-explorer--span (start page)
-  "(FROM . TO): a PAGE of lines above START to two below it."
-  (save-excursion
-    (goto-char start)
-    (cons (progn (forward-line (- page)) (point))
-          (progn (goto-char start) (forward-line (* 2 page)) (point)))))
-
 (defun drgnx-explorer--rows-tails-in (window start)
-  "The rows near what WINDOW shows from START (`drgnx-explorer--span') that have no tail get one (after a scroll)."
+  "The rows near what WINDOW shows from START (`drgnx-wb-span') that have no tail get one (after a scroll)."
   (when drgnx-explorer--tails
-    (let ((span (drgnx-explorer--span start (window-body-height window))))
+    (let ((span (drgnx-wb-span start (window-body-height window))))
       (save-excursion
         (goto-char (car span))
         (while (< (point) (cdr span))
@@ -1049,7 +1035,7 @@ rather than made again.  A tail goes with its row's text (`evaporate'): a remove
 redrawn row gets a new one; a badge of a row that went is deleted here."
   (when drgnx-explorer--waiting (delete-overlay drgnx-explorer--waiting) (setq drgnx-explorer--waiting nil))
   (let ((tails (or drgnx-explorer--tails (setq drgnx-explorer--tails (make-hash-table :test #'equal))))
-        (spans (drgnx-explorer--shown-spans)))
+        (spans (drgnx-wb-shown-spans)))
     (dolist (key keys)
       (let ((beg (drgnx-view-row-start view key)) (o (gethash key tails)))
         (if (not beg)
