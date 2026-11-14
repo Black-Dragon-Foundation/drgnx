@@ -780,35 +780,30 @@ key seen %s, written %s, stats %S"
 (defvar drgnx-perf-w--qot-seen nil "(INPUT COUNT FIRST) of Quick Open after the last key, while it was open.")
 (defvar drgnx-perf-w--qot-listed nil "Non-nil once Quick Open had its first list before the first key.")
 (defvar drgnx-perf-w--qot-log nil "What the run saw, newest first (at most 40): opened, errors, each command.")
-(defvar drgnx-quick-open--state)
 (defvar drgnx-quick-open--current)
 (declare-function drgnx-quick-open "drgnx-quick-open")
-(declare-function drgnx-quick-open--candidates "drgnx-quick-open")
-(declare-function drgnx-quick-open--s-input "drgnx-quick-open")
-(declare-function drgnx-quick-open--s-done "drgnx-quick-open")
 (declare-function drgnx-quick-open--rows-candidates "drgnx-quick-open")
-(declare-function drgnx-file-stream-available-p "drgnx-file-stream")
 
 (defun drgnx-perf-w--qot-say (&rest item)
   (push item drgnx-perf-w--qot-log)
   (when (nthcdr 40 drgnx-perf-w--qot-log) (setcdr (nthcdr 39 drgnx-perf-w--qot-log) nil)))
 
-(defvar drgnx-perf-w--qot-path nil "Which path the keys reached: `hub' (the hub's rows) or `stream' (the listing, no hub).")
+(defvar drgnx-perf-w--qot-path nil "Which path the keys reached: `hub' (the hub's rows), or nil.")
 
 (defun drgnx-perf-w--qot-note ()
-  "Post-command: what Quick Open shows after the key (its state is bound only while it reads), on either path."
-  (let ((rows (bound-and-true-p drgnx-quick-open--current)) (state (bound-and-true-p drgnx-quick-open--state)))
-    (drgnx-perf-w--qot-say 'cmd this-command (and rows t) (and state t) (and (minibufferp) t) (point)
+  "Post-command: what Quick Open shows after the key (its rows are bound only while it reads)."
+  (let ((rows (bound-and-true-p drgnx-quick-open--current)))
+    (drgnx-perf-w--qot-say 'cmd this-command (and rows t) (and (minibufferp) t) (point)
                            (and (minibufferp) (minibuffer-prompt-end)) (buffer-name) (minibuffer-depth))
     (when (and (minibufferp) (eq this-command 'drgnx-quick-open))
       (drgnx-perf-w--qot-say 'prompt (buffer-substring-no-properties 1 (minibuffer-prompt-end))))
-    (when (and (or rows state) (minibufferp))
-      (let ((names (if rows (drgnx-quick-open--rows-candidates rows) (drgnx-quick-open--candidates state))))
+    (when (and rows (minibufferp))
+      (let ((names (drgnx-quick-open--rows-candidates rows)))
         (when (and (not drgnx-perf-w--qot-seen) (eq this-command 'self-insert-command))
           ;; the first typed key: was the first list there before it?
-          (setq drgnx-perf-w--qot-listed (if rows (> (length names) 0) (and (drgnx-quick-open--s-done state) t))))
+          (setq drgnx-perf-w--qot-listed (> (length names) 0)))
         (when (eq this-command 'self-insert-command)
-          (setq drgnx-perf-w--qot-path (if rows 'hub 'stream)
+          (setq drgnx-perf-w--qot-path 'hub
                 drgnx-perf-w--qot-seen (list (minibuffer-contents-no-properties) (length names) (car names))))))))
 
 (defconst drgnx-perf-w--qot-query "d012/f001.txt"
@@ -821,9 +816,7 @@ refuses a prompt from a timer or this call), and the lab's settle lets the first
   (setq drgnx-perf-w--qot-seen nil drgnx-perf-w--qot-listed nil drgnx-perf-w--qot-path nil drgnx-perf-w--qot-log nil)
   (switch-to-buffer (find-file-noselect (expand-file-name "big/d000/f000.txt" drgnx-perf-w--tmp)))
   (add-hook 'post-command-hook #'drgnx-perf-w--qot-note)
-  (drgnx-perf-w--qot-say 'each (drgnx-file-stream-available-p (expand-file-name "big" drgnx-perf-w--tmp))
-                         (bound-and-true-p nidhogg-workers-framing) (fboundp 'nidhogg-set-process-framing)
-                         (and (executable-find "git") t))
+  (drgnx-perf-w--qot-say 'each (and (executable-find "git") t))
   (setq unread-command-events (append unread-command-events (listify-key-sequence (kbd "C-p"))))
   t)
 
@@ -838,9 +831,8 @@ closed."
   "t when the run did what it measures, else an error that says what it saw."
   (or (drgnx-perf-w-quick-open-typing-done)
       (error "quick-open-typing: after the keys %S on %S, first list before the first key %S, minibuffer open %S, \
-streams %S, hub %S, C-p %S, saw %S, messages %S"
+hub %S, C-p %S, saw %S, messages %S"
              drgnx-perf-w--qot-seen drgnx-perf-w--qot-path drgnx-perf-w--qot-listed (and (active-minibuffer-window) t)
-             (drgnx-file-stream-available-p (expand-file-name "big" drgnx-perf-w--tmp))
              (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events) t)
              (key-binding (kbd "C-p"))
              (reverse drgnx-perf-w--qot-log)

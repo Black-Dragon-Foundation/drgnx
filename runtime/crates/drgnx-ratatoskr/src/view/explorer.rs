@@ -41,7 +41,7 @@ const SETTLE_MAX: Duration = Duration::from_millis(100);
 /// Names never shown by default (`drgnx-explorer-exclude-names`'s default).
 const EXCLUDED: [&str; 6] = [".git", ".hg", ".svn", ".DS_Store", "__pycache__", ".#*"];
 /// The most names `exclude` takes, and the most files `only` (Find) takes.
-const EXCLUDE_MAX: usize = 256;
+pub(super) const EXCLUDE_MAX: usize = 256;
 const ONLY_MAX: usize = 5000;
 
 /// Names a listing leaves out: exact names, or globs with `*` (any run) and `?` (one character).

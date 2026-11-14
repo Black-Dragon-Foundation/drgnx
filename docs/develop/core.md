@@ -1715,16 +1715,16 @@ render (an `mtime` check, then a directory read).
 framing in a repository, `nidhogg-directory-files-async` elsewhere), only with the feature and the switch on. The git
 processes of the listing and of the status run decode as `utf-8-unix` whatever the session's default: Nidhogg frames
 only a process whose own coding has no state, and a C locale's default (`undecided`) has, so the stream would be refused
-there and the synchronous path run instead. Quick Open
-(`core/drgnx-quick-open.el`) and Find in Explorer (`drgnx-explorer--find-load`, one generation per listing, a
-late batch is dropped) use it, and keep their synchronous path otherwise and for a remote folder. Quick Open's list and
-highlight are a pure core (`drgnx-quick-open--step`; events `batch`, `input`, `move`, `done`; the highlight is kept by the
-file's name and moves only on `input` and `move`), tested in every order (`test/unit/quick-open-stream-test.el`). The shell
-touches vertico's `vertico--input`, `vertico--candidates`, `vertico--index` and `vertico--exhibit` to show a batch with the
-highlight where the core says; a vertico update can break them, so `test/unit/quick-open-vertico-test.el` drives the command under real vertico (needs
-vertico and compat in `DRGNX_USER_ELPA`, else it skips). Quick Open reads with its own completion style, which keeps the
-core's candidates as they are (a user's prefix or orderless style would filter them a second time). Not checked under
-`vertico-buffer`.
+there and the synchronous path run instead. Find in Explorer (`drgnx-explorer--find-load`, one generation per listing,
+a late batch is dropped) uses it with no hub, and keeps its synchronous path otherwise and for a remote folder; with
+the hub up a local root's matches are the hub's (`search/files` by name, at most 1000 per root), filtered nowhere in
+Lisp.
+
+Quick Open (`core/drgnx-quick-open.el`) matches and ranks nothing in Lisp: the hub ranks the project's files
+(`search/files`) and the table shows its rows; with no hub, or on a remote folder, it is `project-find-file`. It
+touches vertico's `vertico--input` and `vertico--exhibit` to show a patch as it lands. It reads with its own completion
+style, which keeps the hub's candidates as they are (a user's prefix or orderless style would filter them a second
+time). Not checked under `vertico-buffer`.
 
 ### Declarations, activation and ownership
 
@@ -2288,6 +2288,10 @@ There are two recorded exceptions:
 - **Your own terminal link patterns** (`drgnx-term-link`: an Emacs regexp and a target, or a Lisp function) run in
   Lisp over the text a draw changed, and only when you set some. The plain addresses (`drgnx-term-link-url`) are the
   worker's.
+- **Find in Explorer on a root the hub cannot list** (a remote folder, or no hub running) lists and filters the files
+  in Lisp (`drgnx-explorer--root-files`, the name filter in `drgnx-explorer--find-apply`). There is no Rust process
+  to ask. A local root with the hub up is the hub's alone: `search/files` with `name` and the Explorer's `exclude`,
+  its rows shown as they come (`:found`).
 
 ### The status bar's layout in Sjá (`modules/ui/drgnx-statusbar.el`)
 
