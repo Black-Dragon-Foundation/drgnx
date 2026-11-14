@@ -424,15 +424,15 @@ pub(crate) fn rows(lines: &[Line], scale: f32, width_px: u32, m: &dyn Measure) -
                     let letter = badge.chars().next().unwrap_or('?');
                     let number = badge.chars().last().unwrap_or('1');
                     let from = b.pos();
-                    b.push(
-                        &format!(" {letter} "),
-                        Some(&format!("drgnx-work-agent-{number}")),
-                    );
+                    b.push(&format!(" {letter} "), None);
                     let to = b.pos();
                     b.face(
                         from,
                         to,
-                        &format!("drgnx-work-who-{}", number.to_digit(10).unwrap_or(1).clamp(1, 6)),
+                        &format!(
+                            "drgnx-work-who-{}",
+                            number.to_digit(10).unwrap_or(1).clamp(1, 6)
+                        ),
                     );
                     b.push(" ", None)
                         .push(parts.get(1).unwrap_or(&""), Some("drgnx-ui-heading"));

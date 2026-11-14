@@ -831,12 +831,29 @@ fn chips_show_the_file_name_and_its_change_and_the_badge_is_a_circle() {
     let palette = Palette::default();
     let s = scene(&items, &edges, &layout, &new);
     let drawn = render::rows(&s, &Index::of(&s), &gui(&palette), &Cols);
-    let files = drawn.rows.iter().find(|r| r.key == "row:6:0:0:0").expect("files");
+    let files = drawn
+        .rows
+        .iter()
+        .find(|r| r.key == "row:6:0:0:0")
+        .expect("files");
     assert!(files.text.contains("session.rs"), "{files:?}");
     assert!(!files.text.contains("crates/"), "{files:?}");
-    assert!(files.runs.iter().any(|r| r.2 == "drgnx-work-plus"), "{files:?}");
+    assert!(
+        files.runs.iter().any(|r| r.2 == "drgnx-work-plus"),
+        "{files:?}"
+    );
     assert!(files.text.contains("desktop 3/"), "{files:?}");
     assert!(!files.text.contains("desk "), "{files:?}");
-    let agent = drawn.rows.iter().find(|r| r.key == "row:4:0:0:0").expect("agents");
-    assert!(agent.runs.iter().any(|r| r.2.starts_with("drgnx-work-who-")), "{agent:?}");
+    let agent = drawn
+        .rows
+        .iter()
+        .find(|r| r.key == "row:4:0:0:0")
+        .expect("agents");
+    assert!(
+        agent
+            .runs
+            .iter()
+            .any(|r| r.2.starts_with("drgnx-work-who-")),
+        "{agent:?}"
+    );
 }

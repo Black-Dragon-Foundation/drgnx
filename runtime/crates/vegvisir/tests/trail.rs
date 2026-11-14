@@ -432,7 +432,10 @@ fn a_step_row_keeps_its_verb_and_colours_its_paths() {
     ];
     let rows = trail::trail_rows(&steps, &[], &env(&p), Zone(0));
     let face_of = |r: &Row, word: &str| {
-        let at = r.text.find(word).unwrap_or_else(|| panic!("{word} in {r:?}"));
+        let at = r
+            .text
+            .find(word)
+            .unwrap_or_else(|| panic!("{word} in {r:?}"));
         let at = r.text[..at].chars().count() as u32;
         r.runs
             .iter()
@@ -445,13 +448,23 @@ fn a_step_row_keeps_its_verb_and_colours_its_paths() {
     assert!(rows[0].text.contains("0.3 s"), "{:?}", rows[0]);
     assert!(rows[1].text.contains(" web Spec — x.org"), "{:?}", rows[1]);
     assert!(face_of(&rows[1], "Spec").contains(&"drgnx-text-muted".to_owned()));
-    assert!(rows[2].text.contains(" thought: the end handler…"), "{:?}", rows[2]);
+    assert!(
+        rows[2].text.contains(" thought: the end handler…"),
+        "{:?}",
+        rows[2]
+    );
     assert!(face_of(&rows[2], "thought").contains(&"drgnx-work-thought".to_owned()));
     assert!(rows[2].text.contains("6 s"), "{:?}", rows[2]);
     assert!(rows[3].text.contains(" edit s.rs +40 −3"), "{:?}", rows[3]);
     assert!(face_of(&rows[3], "+40").contains(&"drgnx-work-plus".to_owned()));
     assert!(face_of(&rows[3], "−3").contains(&"drgnx-work-minus".to_owned()));
-    assert!(rows[4].text.contains(" job bin/t · desktop slot 3 · running"), "{:?}", rows[4]);
+    assert!(
+        rows[4]
+            .text
+            .contains(" job bin/t · desktop slot 3 · running"),
+        "{:?}",
+        rows[4]
+    );
     assert!(face_of(&rows[4], "bin/t").contains(&"drgnx-accent".to_owned()));
 }
 
@@ -459,10 +472,28 @@ fn a_step_row_keeps_its_verb_and_colours_its_paths() {
 #[test]
 fn a_finding_card_keeps_its_keys_and_a_filled_number() {
     let p = Palette::default();
-    let rows = trail::trail_rows(&[step(1, 1000.0)], &[conclusion(1, 1, &[1])], &env(&p), Zone(0));
+    let rows = trail::trail_rows(
+        &[step(1, 1000.0)],
+        &[conclusion(1, 1, &[1])],
+        &env(&p),
+        Zone(0),
+    );
     let top = rows.iter().find(|r| r.key == "conc:1:0").expect("the card");
-    assert!(top.runs.iter().any(|r| r.2 == "drgnx-chip-solid"), "{top:?}");
-    let sub = rows.iter().find(|r| r.key == "conc:1:1").expect("its keys line");
-    assert!(sub.text.contains("based on 1 step ·  l  light them · ↵ sources"), "{sub:?}");
-    assert!(sub.runs.iter().any(|r| r.2 == "drgnx-chip-quiet"), "{sub:?}");
+    assert!(
+        top.runs.iter().any(|r| r.2 == "drgnx-chip-solid"),
+        "{top:?}"
+    );
+    let sub = rows
+        .iter()
+        .find(|r| r.key == "conc:1:1")
+        .expect("its keys line");
+    assert!(
+        sub.text
+            .contains("based on 1 step ·  l  light them · ↵ sources"),
+        "{sub:?}"
+    );
+    assert!(
+        sub.runs.iter().any(|r| r.2 == "drgnx-chip-quiet"),
+        "{sub:?}"
+    );
 }

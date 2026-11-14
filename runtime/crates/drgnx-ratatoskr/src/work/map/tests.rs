@@ -697,7 +697,8 @@ fn detail_rows_say_the_edges() {
     for e in edges.iter().filter(|e| came(e) && e.from == agent.id) {
         let to = m.item(&e.to).expect("its target").label;
         assert!(
-            text.iter().any(|t| t.ends_with(&format!("\t{to} — came from this"))
+            text.iter()
+                .any(|t| t.ends_with(&format!("\t{to} — came from this"))
                 // an agent's branch is the Touches' first line, its name alone
                 || *t == format!("branch\t{to}")),
             "{to} in {text:?}"
@@ -1225,7 +1226,7 @@ fn detail_rows_are_the_mockups_tile() {
     assert!(rows[0].text.contains("Opus · hub rows"), "{:?}", rows[0]);
     assert!(faces_of(&rows[0]).contains(&"drgnx-chip"), "{:?}", rows[0]);
     assert!(
-        faces_of(&rows[0]).contains(&"drgnx-work-agent-1"),
+        faces_of(&rows[0]).contains(&"drgnx-work-who-1"),
         "{:?}",
         rows[0]
     );
@@ -1304,6 +1305,10 @@ fn the_detail_subtitle_wraps_by_word_in_the_tile() {
     }
     // everything fits in the width, so nothing is dropped
     let roomy = detail::rows(&lines, 1.0, 900, &Cols);
-    assert!(roomy[1].text.contains("API prices"), "one row: {:?}", roomy[1]);
+    assert!(
+        roomy[1].text.contains("API prices"),
+        "one row: {:?}",
+        roomy[1]
+    );
     assert_ne!(roomy[2].key, "head/1.1");
 }
