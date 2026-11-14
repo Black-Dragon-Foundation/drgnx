@@ -259,6 +259,14 @@ pub async fn serve(
             views.changed(conn, &p.id);
             ok(r)
         }
+        Params::NotebookFocus(p) => {
+            if nb.owns(conn, &p.id) {
+                views.focus(conn, &p.id, p.cell.as_deref());
+                Ok(json!(true))
+            } else {
+                Err(err(format!("no open notebook {}", p.id)))
+            }
+        }
         Params::NotebookLog(p) => nb
             .kernel_log(conn, &p.id, p.since.unwrap_or(0))
             .map(|(entries, next, lost)| {

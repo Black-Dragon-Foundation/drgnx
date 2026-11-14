@@ -107,6 +107,8 @@ pub(super) struct Line {
     pub(super) text: String,
     pub(super) runs: Vec<Run>,
     pub(super) image: Option<(usize, String, u32, u32)>,
+    /// The line belongs to an error output (its name line or its traceback): the full-output view tints its row.
+    pub(super) error: bool,
 }
 
 /// The lines of text S: how many, and the first TAKE of them.
@@ -119,6 +121,7 @@ fn plain(s: &str, take: usize) -> (usize, Vec<Line>) {
             text: l.to_string(),
             runs: Vec::new(),
             image: None,
+            error: false,
         })
         .collect();
     (count, lines)
@@ -129,6 +132,7 @@ fn note(s: &str) -> Line {
         text: s.to_string(),
         runs: Vec::new(),
         image: None,
+        error: false,
     }
 }
 
@@ -140,6 +144,7 @@ fn styled(t: &super::output::terminal::Terminal, take: usize) -> (usize, Vec<Lin
             text,
             runs,
             image: None,
+            error: false,
         })
         .collect();
     (t.line_count(), lines)
@@ -162,6 +167,7 @@ fn part(i: usize, o: &Output, take: usize) -> (usize, Vec<Line>) {
                         text: IMAGE_CHAR.to_string(),
                         runs: Vec::new(),
                         image: Some((i, mime.to_string(), *width, *height)),
+                        error: false,
                     }]
                     .into_iter()
                     .take(take)
@@ -202,6 +208,9 @@ fn part(i: usize, o: &Output, take: usize) -> (usize, Vec<Line>) {
                 let (c, more) = styled(t, take.saturating_sub(lines.len()));
                 count += c;
                 lines.extend(more);
+            }
+            for l in &mut lines {
+                l.error = true;
             }
             (count, lines)
         }

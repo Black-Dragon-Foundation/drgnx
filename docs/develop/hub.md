@@ -1486,6 +1486,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `notebook/clear` | user | `{cell?: string, id: string}` | `boolean` | no |
 | `notebook/close` | user | `{id: string}` | `boolean` | no |
 | `notebook/execute` | user | `{cells: [{id: string, source: string, type: string}], id: string}` | `boolean` | no |
+| `notebook/focus` | user | `{cell?: string, id: string}` | `boolean` | no |
 | `notebook/input` | user | `{id: string, request: string, value: string}` | `boolean` | no |
 | `notebook/interrupt` | user | `{id: string}` | `boolean` | no |
 | `notebook/kernels` | user | `{}` | `{kernels: [NotebookKernel], skipped: [NotebookSkipped]}` | no |

@@ -27799,6 +27799,39 @@
       "classes": [
         "user"
       ],
+      "doc": "the editor is in this cell of the notebook (none: in none): the cell outline marks its row; sent when the cell changes",
+      "name": "notebook/focus",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`notebook/focus`: the editor is in cell CELL of notebook ID (none: in none of its cells, such as in a view of it). The outline marks\nthat cell's row (the property `drgnx-notebook-current`). The editor sends it when the cell changes, not on every move of point.",
+        "properties": {
+          "cell": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "NotebookFocusParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "answer a kernel's input request (the id notebook-input-request named)",
       "name": "notebook/input",
       "params": {
