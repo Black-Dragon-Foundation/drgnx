@@ -1389,6 +1389,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "drgnx-clock"
+version = "0.1.0"
+dependencies = [
+ "drgnx-clock",
+ "skuld",
+ "tokio",
+]
+
+[[package]]
 name = "drgnx-exe"
 version = "0.1.0"
 dependencies = [
