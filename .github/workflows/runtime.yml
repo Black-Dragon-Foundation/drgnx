@@ -473,6 +473,18 @@ jobs:
         run: bash .github/ci/commit-times.sh runtime/target/.drgnx-built-from
       # the seccomp real-install cases and everything else of the three Linux crates, on this architecture
       - run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p gleipnir -p draugr -p eitri -p gleipnir-escape
+      # ghostty-vt-sys's builds_offline builds the crate in a network namespace of its own (unshare --net): a runner can,
+      # Docker's default seccomp profile (the Fedora job's container) refuses it, so this is where the row runs;
+      # DRGNX_REQUIRE_NETNS=1 makes a namespace it cannot make a failure rather than a skip. (Zig is the terminal
+      # engine's build tool; the pinned tarballs come from fetch.sh)
+      - name: ghostty-vt-sys builds offline, in a network namespace
+        if: ${{ !cancelled() && matrix.os == 'ubuntu-24.04' }}
+        env:
+          DRGNX_REQUIRE_NETNS: "1"
+        run: |
+          sudo bash test/container/zig.sh linux
+          bash runtime/crates/ghostty-vt-sys/fetch.sh
+          cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p ghostty-vt-sys --test link_rows builds_offline -- --exact
       - id: build
         if: ${{ !cancelled() }}
         run: cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p gleipnir-escape --features drgnx-ratatoskr/test-hooks
