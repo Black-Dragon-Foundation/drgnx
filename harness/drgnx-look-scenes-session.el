@@ -220,9 +220,37 @@ changed to hide a gap: the gap is named here instead.")
          ,@body)
      (error (push (format "%s: %s" ,what (error-message-string err)) drgnx-look-scene--errors) nil)))
 
+(declare-function drgnx-view-env-classes "drgnx-view-env")
+(declare-function drgnx-view-patch-view "drgnx-view")
+(declare-function drgnx-view-patch-version "drgnx-view")
+(defvar drgnx-view-patch)
+
+(defun drgnx-look-scene--unfed ()
+  "The hub-fed views a window of the selected frame shows without the hub's rows, while the scenes' hub runs: one
+error each, naming the view, the display classes its env went out for (none: the hub never heard it is shown, so it
+builds nothing) and the version of the rows it applied (nil: none since the env last re-paired it).  A view with no
+env sent, or with no version and an empty buffer, has none; a view whose Lisp draws part of it (the agent panel) is
+caught by the first.  A redisplay first, as the shot's: it runs the window change hooks that send the env of a view
+a window has just started showing."
+  (redisplay)
+  (when (and (fboundp 'drgnx-hub-running-p) (drgnx-hub-running-p))
+    (let ((seen nil))
+      (dolist (w (window-list nil 'never))
+        (let* ((b (window-buffer w)) (state (buffer-local-value 'drgnx-view-patch b))
+               (view (and state (drgnx-view-patch-view state))))
+          (when (and view (not (member view seen)))
+            (push view seen)
+            (let ((classes (and (fboundp 'drgnx-view-env-classes) (drgnx-view-env-classes view))))
+              (unless (and classes (or (drgnx-view-patch-version state) (> (buffer-size b) 0)))
+                (push (format "%s: shown in %s with no rows from the hub (env sent for %S, rows version %S)"
+                              view (buffer-name b) classes (drgnx-view-patch-version state))
+                      drgnx-look-scene--errors)))))))))
+
 (defun drgnx-look-scene--answer (&rest more)
   "The step's JSON answer: its errors and MORE, then the echo area cleared, and the status bar's message with it (a
-message there lasts some seconds, so the previous scene's last one, its palette's \"Quit\", would show in this one's)."
+message there lasts some seconds, so the previous scene's last one, its palette's \"Quit\", would show in this one's).
+A hub-fed view shown without the hub's rows is one of the errors (`drgnx-look-scene--unfed')."
+  (drgnx-look-scene--unfed)
   (prog1 (drgnx-uitest--json (append (list :errors (vconcat (nreverse drgnx-look-scene--errors))) more))
     (setq drgnx-look-scene--errors nil)
     (message nil)
@@ -360,6 +388,10 @@ from 201."
 hub is started first and the shot waits for them (a session starts no hub: without one the section is empty)."
   (drgnx-look-scene--try "hub" (drgnx-look-scene--hub))
   (drgnx-look-scene--try "editor"
+    ;; a Work scene before this one left the Work layout, whose editor group is beside the map: the editor layout
+    ;; again (the Extensions list opened in the Work layout, out of sight, and its scene never saw its rows)
+    (when (and (fboundp 'drgnx-layouts-current) (drgnx-layouts-current) (not (eq (drgnx-layouts-current) 'editor)))
+      (drgnx-layouts-apply 'editor))
     (drgnx-wb-focus-editor)
     (drgnx-look-scene--goto "core/drgnx-gateway.el" 216 33 201))
   (drgnx-look-scene--until 20 "explorer files rows"

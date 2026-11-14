@@ -578,7 +578,14 @@ How it works:
   `drgnx-job.el`, Magit's status and the Explorer.
 - It calls each scene's `drgnx-look-scene-NAME`. The scenes, in order, are listed in `drgnx-look-scenes`.
   A scene on the editor starts the scenes' hub first (the session starts none) and waits (20 s at most, else an error)
-  for the Explorer's Files rows, which come from the hub: without it the section is empty.
+  for the Explorer's Files rows, which come from the hub: without it the section is empty. It goes back to the
+  editor layout first, because a Work scene before it leaves the Work layout.
+  Once the scenes' hub runs, every step's answer checks the hub-fed views that a window of the frame shows, after a
+  redisplay like the shot's. It reports an error, naming the view, the classes its env went out for and the version
+  of the rows it applied, in two cases:
+  - its env never reached the hub;
+  - it has no applied version and an empty buffer.
+  The first case also catches a view that Lisp partly draws, such as the agent panel.
   A scene that changes the theme waits (5 s at most, else an error) until no hub-fed view is drawn dimmed: its rows
   wait for the hub's reset to the new theme, and a shot taken before would show the stale shade. `window-dark`'s
   status bar has the mockup's facts: the seeded plan run counted from the hub (`1 job`), and the gateway file's two
