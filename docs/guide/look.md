@@ -1,6 +1,7 @@
 # The look
 
-How drgnx looks, and how to change it. The module `ui/look` ([modules](modules.md)) draws the colours, the type, the
+How drgnx looks, and how to change it. What it looks like, and why (the colour tokens, type, spacing, icons and a page per component), is the
+[design system](../design/index.md); this page is about the settings. The module `ui/look` ([modules](modules.md)) draws the colours, the type, the
 density and the icons. Everything here is a setting: change it in the settings page or in `settings.el`, and it
 applies at once to every frame, with no restart.
 
@@ -114,30 +115,8 @@ rather than in the selection colour, which a terminal can barely tell from the e
 
 ### For theme authors
 
-A theme of your own can set any of the semantic faces listed in [The face](face.md) ("Faces for theme authors"). The
-token table is `themes/drgnx-tokens.eld`; `(drgnx-look-token 'panel)` reads a token of the active variant, and
-`(drgnx-look-variant)` says which variant is on (`dark`, `light` or `hc`).
-
-### Under another theme
-
-With a theme that is not drgnx's (modus, leuven, Doom One, your own), the semantic faces that have no standard face
-to inherit get colours worked out from the theme, when ui/look turns on and every time a theme is enabled or disabled
-or the first graphical frame of a daemon appears:
-
-- **Surfaces.** The panel is the editor colour moved 3 % toward the text colour. On a dark theme the gap is the editor
-  moved toward black, on a light theme toward the text colour, only as far as the panel needs to stand out from it
-  (1.10:1 dark, 1.20:1 light); on a black editor the gap stays black and the panel moves on instead. Raised, popups and
-  the quiet selection are the panel moved another 3 %.
-- **Text.** Muted and subtle text take the theme's `shadow` colour, moved toward the text colour until it reads at 4.5:1
-  on the editor, the panel and raised surfaces.
-- **Accent and focus.** Both take the colour of `link`; the hidden control takes the panel colour.
-- **Agents.** Agents 1 to 6 take the foregrounds of the function, keyword, string, type, constant and builtin faces,
-  each only if it is at least 30 degrees of hue and a delta E of 15 away from the others and from the cursor (a grey
-  has no hue to compare); otherwise drgnx's own colour for that agent stands.
-- **More agents.** Each of the six also gets a variant of the same hue, 0.13 lighter on a dark theme and darker on a light
-  one (`drgnx-agent-7` to `drgnx-agent-12`), kept only if it reads at 3:1 on the editor and is a delta E of 12 from every
-  other agent colour and the cursor. A colour that sits on the cursor's gives its slot to its variant. How many colours a
-  theme gives (6 to 12) is in `drgnx doctor`.
+What a theme of your own can set, and the colours drgnx works out under a theme that is not its own (surfaces, muted
+text, the accent and the agents), are in [Writing a theme](../design/theme-authors.md) in the design system.
 
 ### Agent colours, marks and handles
 
@@ -149,11 +128,7 @@ of the least recently active one no buffer shows. `drgnx-agents-identity-walk` c
 default) or `colour-first` (the six colours as circles, marks from the seventh agent). For code,
 `(drgnx-agent-identity ORDINAL)` is `(:face F :mark M :glyph G)` for the selected frame's display.
 
-A face your theme or your Customize settings set is left as you set it; a theme that is loaded but not enabled does not
-count. Colours are worked out for a graphical display and a 256-colour terminal separately, so a terminal client of a
-daemon never reads a graphical frame's colours or the other way round. A colour the theme leaves unspecified falls back
-to the theme's default colours, and `drgnx-look-derive-gaps` lists the faces that could not be worked out (`drgnx doctor` shows them, in its `look-derive` row, under a theme that leaves some). Turning ui/look
-off puts every face back as drgnx defines it. A face set only by `set-face-attribute` (not a theme or Customize) is a frame's state, not a theme's, and derive does not read it.
+How a face your theme or Customize set is kept, and how colours are worked out under another theme, is in [Writing a theme](../design/theme-authors.md).
 
 ## Fonts
 
@@ -358,6 +333,8 @@ windows, buffers, selected window, size and place (a frame whose minibuffer is i
 frame keeps its row either way, and turning ui/look off gives every frame its row back.
 
 ## Icons
+
+The icon set, with where each icon is used, is generated in the design system ([Icons](../design/icons.md)).
 
 drgnx draws its marks with [Lucide](https://lucide.dev) line icons: tree rows, tab leading icons, panel headers, the
 status bar, the palette's rows, the Extensions list's kinds, the agent panel's steps and notices (never inside code). About 60 SVG files sit in

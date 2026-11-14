@@ -62,7 +62,8 @@
             (t target)))))
 
 (defun drgnx-design-site--image-src (target path)
-  "The src for the image TARGET written in the page PATH: the file itself, or its place on GitHub when it is not in docs/design/."
+  "The src for the image TARGET written in the page PATH: the file itself,
+or its place on GitHub when it is not in docs/design/."
   (let ((href (drgnx-design-site--link target path)))
     (if (string-match "\\`\\(.*\\)/blob/" href)
         (replace-regexp-in-string "\\`https://github.com/\\([^/]+/[^/]+\\)/blob/" "https://raw.githubusercontent.com/\\1/" href)
@@ -82,15 +83,18 @@
     (setq text (replace-regexp-in-string
                 "!\\[\\([^]]*\\)\\](\\([^)]+\\))"
                 (lambda (m)
-                  (string-match "!\\[\\([^]]*\\)\\](\\([^)]+\\))" m)
-                  (format "<img src=\"%s\" alt=\"%s\">"
-                          (drgnx-design-site--image-src (match-string 2 m) path) (match-string 1 m)))
+                  (save-match-data
+                    (string-match "!\\[\\([^]]*\\)\\](\\([^)]+\\))" m)
+                    (let ((alt (match-string 1 m)) (target (match-string 2 m)))
+                      (format "<img src=\"%s\" alt=\"%s\">" (drgnx-design-site--image-src target path) alt))))
                 text t t))
     (setq text (replace-regexp-in-string
                 "\\[\\([^]]+\\)\\](\\([^)]+\\))"
                 (lambda (m)
-                  (string-match "\\[\\([^]]+\\)\\](\\([^)]+\\))" m)
-                  (format "<a href=\"%s\">%s</a>" (drgnx-design-site--link (match-string 2 m) path) (match-string 1 m)))
+                  (save-match-data
+                    (string-match "\\[\\([^]]+\\)\\](\\([^)]+\\))" m)
+                    (let ((label (match-string 1 m)) (target (match-string 2 m)))
+                      (format "<a href=\"%s\">%s</a>" (drgnx-design-site--link target path) label))))
                 text t t))
     (setq text (replace-regexp-in-string "\\*\\*\\([^*]+\\)\\*\\*" "<strong>\\1</strong>" text))
     (setq text (replace-regexp-in-string "\\*\\([^* ][^*]*\\)\\*" "<em>\\1</em>" text))

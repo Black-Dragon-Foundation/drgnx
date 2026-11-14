@@ -65,8 +65,8 @@
     (dolist (md (directory-files-recursively root "\\.md\\'"))
       (with-temp-buffer
         (insert-file-contents md)
-        (while (re-search-forward "\\]\\(([^)#]+)" nil t)
-          (let* ((target (substring (match-string 0) 2))
+        (while (re-search-forward "\\](\\([^)#]+\\)\\(#[^)]*\\)?)" nil t)
+          (let* ((target (match-string 1))
                  (file (expand-file-name target (file-name-directory md))))
             (when (and (not (string-match-p "\\`[a-z]+:" target))
                        (string-prefix-p root file)
@@ -114,8 +114,8 @@
     (let ((file (expand-file-name rel drgnx-dir)) (problems nil))
       (with-temp-buffer
         (insert-file-contents file)
-        (while (re-search-forward "\\]\\(([^)#]+\\)\\(#[^)]*\\)?)" nil t)
-          (let ((target (substring (match-string 1) 1)))
+        (while (re-search-forward "\\](\\([^)#]+\\)\\(#[^)]*\\)?)" nil t)
+          (let ((target (match-string 1)))
             (unless (or (string-match-p "\\`[a-z]+:" target)
                         (file-exists-p (expand-file-name target (file-name-directory file))))
               (push target problems)))))
