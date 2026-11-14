@@ -103,7 +103,7 @@ impl PlanHooks {
     {
         self.st().working.insert(key.clone());
         let me = self.clone();
-        tokio::spawn(async move {
+        crate::clock::spawn("runner:review", async move {
             f.await;
             me.st().working.remove(&key);
         });

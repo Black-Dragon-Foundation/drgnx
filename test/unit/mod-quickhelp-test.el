@@ -4,6 +4,7 @@
 (require 'cl-lib)
 (require 'drgnx)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/measure-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/ui/drgnx-face" drgnx-dir) nil t)
@@ -122,35 +123,35 @@
 ;;;; Collecting docs (eldoc's functions)
 
 (ert-deftest drgnx-quickhelp/collect-gathers-every-backend-and-drops-stale-answers ()
-  :tags '(:cond)
-  (drgnx-quickhelp-test--with
-    (drgnx-quickhelp-test--elisp "(car x)\n(cdr y)\n"
-      (let* ((pending nil) (seen-point nil) (got1 :none) (got2 :none)
-             (sync (lambda (cb) (push (point) seen-point) (funcall cb "one" :thing 'car)))
-             (legacy (lambda (_cb) "two"))
-             (nothing (lambda (_cb) nil))
-             (broken (lambda (_cb) (error "A backend that fails")))
-             (async (lambda (cb) (push cb pending) t)))
-        (setq-local eldoc-documentation-functions (list sync legacy nothing broken async))
-        (goto-char (point-max))
-        (drgnx-quickhelp-collect 2 (selected-window) (lambda (docs) (setq got1 docs)))
-        ;; ran with point at POS, which is given back
-        (should (equal seen-point '(2)))
-        (should (= (point) (point-max)))
-        (should (eq got1 :none))                 ; still waiting on the async one
-        ;; a newer request: the older one never answers, even when its backend does
-        (drgnx-quickhelp-collect 10 (selected-window) (lambda (docs) (setq got2 docs)))
-        (should (= (length pending) 2))
-        (funcall (cadr pending) "stale" :thing 'old)
-        (should (eq got1 :none))
-        (should (eq got2 :none))
-        (funcall (car pending) "four")
-        (should (equal got2 '(("one" :thing car) ("two") ("four"))))
-        ;; a second answer from the same backend changes nothing
-        (funcall (car pending) "again")
-        (should (equal got2 '(("one" :thing car) ("two") ("four"))))
-        (drgnx-test-pause 1.2 "the older request's timeout may not fire its callback")
-        (should (eq got1 :none))))))
+  (drgnx-test-with-clock (:allow-pending t)
+    (drgnx-quickhelp-test--with
+      (drgnx-quickhelp-test--elisp "(car x)\n(cdr y)\n"
+        (let* ((pending nil) (seen-point nil) (got1 :none) (got2 :none)
+               (sync (lambda (cb) (push (point) seen-point) (funcall cb "one" :thing 'car)))
+               (legacy (lambda (_cb) "two"))
+               (nothing (lambda (_cb) nil))
+               (broken (lambda (_cb) (error "A backend that fails")))
+               (async (lambda (cb) (push cb pending) t)))
+          (setq-local eldoc-documentation-functions (list sync legacy nothing broken async))
+          (goto-char (point-max))
+          (drgnx-quickhelp-collect 2 (selected-window) (lambda (docs) (setq got1 docs)))
+          ;; ran with point at POS, which is given back
+          (should (equal seen-point '(2)))
+          (should (= (point) (point-max)))
+          (should (eq got1 :none))                 ; still waiting on the async one
+          ;; a newer request: the older one never answers, even when its backend does
+          (drgnx-quickhelp-collect 10 (selected-window) (lambda (docs) (setq got2 docs)))
+          (should (= (length pending) 2))
+          (funcall (cadr pending) "stale" :thing 'old)
+          (should (eq got1 :none))
+          (should (eq got2 :none))
+          (funcall (car pending) "four")
+          (should (equal got2 '(("one" :thing car) ("two") ("four"))))
+          ;; a second answer from the same backend changes nothing
+          (funcall (car pending) "again")
+          (should (equal got2 '(("one" :thing car) ("two") ("four"))))
+          (drgnx-test-advance 1.2)   ; the older request's timeout may not fire its callback
+          (should (eq got1 :none)))))))
 
 (defun drgnx-quickhelp-test--terse (_cb) "terse")
 (defun drgnx-quickhelp-test--full (_cb) "full")
@@ -372,21 +373,21 @@ idle for a while, a focused frame, and `drgnx-quickhelp--request' recording its 
           (should-not (drgnx-timer-active-p 'quickhelp-look)))))))
 
 (ert-deftest drgnx-quickhelp/a-quick-move-to-the-next-symbol-gets-its-card ()
-  :tags '(:cond)
-  (drgnx-quickhelp-test--with
-    (drgnx-quickhelp-test--elisp "(car x)\n(cdr y)\n"
-      (drgnx-quickhelp-test--pointer
-        (let ((drgnx-quickhelp-delay 0.05))
-          ;; a hover card is up for `car' (its state stands in for one); the pointer moves on to `cdr'
-          (setq drgnx-quickhelp--origin (list :window (selected-window) :buffer (current-buffer) :pos 2 :key nil)
-                symbol (cons (selected-window) 10))
-          (drgnx-quickhelp--hover-look)          ; the card for `car' goes, `cdr' starts resting
-          (should-not drgnx-quickhelp--origin)
-          (should-not requests)
-          ;; never too short: a pause lasts at least its length, so the rest is past the delay on any machine
-          (drgnx-test-pause 0.08 "the pointer may not move while it rests past the 0.05 s delay")
-          (drgnx-quickhelp--hover-look)          ; rested: its card, the pointer did not have to move again
-          (should (equal requests (list (list (selected-window) 10 nil)))))))))
+  (drgnx-test-with-clock (:allow-pending t)
+    (drgnx-quickhelp-test--with
+      (drgnx-quickhelp-test--elisp "(car x)\n(cdr y)\n"
+        (drgnx-quickhelp-test--pointer
+          (let ((drgnx-quickhelp-delay 0.05))
+            ;; a hover card is up for `car' (its state stands in for one); the pointer moves on to `cdr'
+            (setq drgnx-quickhelp--origin (list :window (selected-window) :buffer (current-buffer) :pos 2 :key nil)
+                  symbol (cons (selected-window) 10))
+            (drgnx-quickhelp--hover-look)          ; the card for `car' goes, `cdr' starts resting
+            (should-not drgnx-quickhelp--origin)
+            (should-not requests)
+            ;; never too short: a pause lasts at least its length, so the rest is past the delay on any machine
+            (drgnx-test-advance 0.08)   ; the pointer may not move while it rests past the 0.05 s delay
+            (drgnx-quickhelp--hover-look)          ; rested: its card, the pointer did not have to move again
+            (should (equal requests (list (list (selected-window) 10 nil))))))))))
 
 (ert-deftest drgnx-quickhelp/a-card-goes-when-its-window-scrolls-hover-or-not ()
   (drgnx-quickhelp-test--with

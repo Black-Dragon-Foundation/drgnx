@@ -3132,7 +3132,7 @@ INIT-DIR: drgnx's init/ (default).  (:server_ms STATS :modules_ms N)."
             (unwind-protect
                 (progn
                   (while (and (not served) (process-live-p p) (< (- (float-time) t0) 30))
-                    (if (eql 0 (car (drgnx-perf-run--client name 2 "-e" "t"))) (setq served t) (sleep-for 0.01)))
+                    (if (eql 0 (car (drgnx-perf-run--client name 2 "-e" "t"))) (setq served t) (drgnx-ui--poll-pause 0.01)))
                   (unless served (error "The daemon never answered (%s)" (if (process-live-p p) "30 s" "it exited")))
                   (when (or (> i 0) (= (or runs 4) 1)) (push (* 1000 (- (float-time) t0)) times))
                   (let ((m (drgnx-perf-run--client name 5 "-e" "(apply #'+ (mapcar (lambda (m) (or (plist-get (cdr m) :ms) 0)) (drgnx-modules-report)))")))
@@ -3140,7 +3140,7 @@ INIT-DIR: drgnx's init/ (default).  (:server_ms STATS :modules_ms N)."
                       (error "No module report from the daemon: %s" (cdr m)))
                     (setq modules (string-to-number (cdr m)))))
               (drgnx-perf-run--client name 3 "-e" "(kill-emacs)")
-              (let ((d (+ (float-time) 5))) (while (and (process-live-p p) (< (float-time) d)) (sleep-for 0.05)))
+              (let ((d (+ (float-time) 5))) (while (and (process-live-p p) (< (float-time) d)) (drgnx-ui--poll-pause 0.05)))
               (when (process-live-p p) (delete-process p)))))
       (delete-directory tmp t))
     (list :server_ms (mapcar #'drgnx-perf--round (drgnx-perf-stats times)) :modules_ms modules)))
@@ -3186,7 +3186,7 @@ session stays idle between the calls, so its idle poll and redisplay run as they
   (let ((deadline (+ (float-time) drgnx-perf-run-complete-wait)))
     (while (and (not (eq t (drgnx-perf-run--call sess "(and drgnx-perf--complete (nth 2 drgnx-perf--complete) t)")))
                 (< (float-time) deadline))
-      (sleep-for 0.05))))
+      (drgnx-ui--poll-pause 0.05))))
 
 (defun drgnx-perf-run--extras (sess spec)
   "What SPEC adds to a run, read in SESS after the actions: `:complete-ms' (`:complete-when', once it holds: see

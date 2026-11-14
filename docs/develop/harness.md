@@ -1301,9 +1301,11 @@ sees the runner's switches. CI's `unit` and `no-lisp-writes` jobs ([ci.md](ci.md
 
 A `cond` test is audited for `sleep-for` and `sit-for` only (with the audit failing, a real sleep fails it): it may wait for events and
 start processes, never wait on time. Only those two primitives are advised for it, so a test that stubs another one is
-not disturbed. A `sleep-for` that Emacs's own library makes to poll a child (`epg-wait-for-completion`: gpg's exit) is an event wait and
-not recorded; the seven `cond` tests that really sleep today are listed in `test/audit-cond-allowed.eld` (a reason and the slice that
-moves each to a virtual clock; `drgnx-lint/audit-cond-register` keeps the list honest, and it only shrinks).
+not disturbed. A `sleep-for` or `sit-for` that is a poll for an event is an event wait and not recorded: Emacs's own `epg-wait-for-completion` (gpg's exit),
+and the harness's pause between two looks (`drgnx-ui--poll-pause`: a file, a lock, a session group's end; `drgnx-file--sleep`: the file lock;
+`drgnx-perf--await-present`: a paint), named in `drgnx-run-ert--audit-event-polls`. A `cond` test that really sleeps on time is listed in
+`test/audit-cond-allowed.eld` (a reason and the slice that moves it to a virtual clock; `drgnx-lint/audit-cond-register` keeps the list
+honest, and it only shrinks); the list is empty.
 
 The audit also holds the patterns to their tools (`test/unit/run-ert-audit-test.el` has a row for each). With the audit
 on, the tests tagged `:gated` and `:handshake` ([Test patterns](#test-patterns)) run with these advised, again only

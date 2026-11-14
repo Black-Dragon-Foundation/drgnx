@@ -5,6 +5,7 @@
 (require 'drgnx-perf-run)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 
 (cl-defun drgnx-perf-ab-test--samples (base n &optional (spread 0.4))
   "N samples around BASE ms, a fixed pattern (no randomness in a test)."
@@ -174,20 +175,21 @@ B's is round 1 (+/-4 ms)."
         (remove-hook 'post-gc-hook #'drgnx-perf--gc)))))
 
 (ert-deftest drgnx-perf/present-is-the-first-after-paint-after-the-key ()
-  :tags '(:cond)
-  ;; stand-ins for Glitnir's clock and last paint: the command's paint reaches the compositor 4 ms after its start
-  (let ((now 1000000000) (present 999000000))
-    (cl-letf (((symbol-function 'glitnir--now-ns) (lambda () now))
-              ((symbol-function 'glitnir--last-paint) (lambda () (list :commit-ns 0 :paint-ns 0 :present-ns present))))
-      (drgnx-perf-begin)
-      (unwind-protect
-          (progn (run-hooks 'pre-command-hook)
-                 (run-at-time 0.01 nil (lambda () (setq present (+ now 4000000))))
-                 (run-hooks 'post-command-hook)
-                 (drgnx-test-wait (lambda () (= present (+ now 4000000))) :what "the stand-in paint"))
-        (let ((r (drgnx-perf-end)))
-          (should (equal (plist-get (plist-get r :present) :n) 1))
-          (should (equal (plist-get (plist-get r :present) :p50) 4.0)))))))
+  ;; stand-ins for Glitnir's clock and last paint: the command's paint reaches the compositor 4 ms after its start; the
+  ;; 10 ms timer that brings it runs in the wait for the present, on the virtual clock (no real 100 ms window)
+  (drgnx-test-with-clock ()
+    (let ((now 1000000000) (present 999000000))
+      (cl-letf (((symbol-function 'glitnir--now-ns) (lambda () now))
+                ((symbol-function 'glitnir--last-paint) (lambda () (list :commit-ns 0 :paint-ns 0 :present-ns present))))
+        (drgnx-perf-begin)
+        (unwind-protect
+            (progn (run-hooks 'pre-command-hook)
+                   (run-at-time 0.01 nil (lambda () (setq present (+ now 4000000))))
+                   (run-hooks 'post-command-hook)
+                   (should (= present (+ now 4000000))))
+          (let ((r (drgnx-perf-end)))
+            (should (equal (plist-get (plist-get r :present) :n) 1))
+            (should (equal (plist-get (plist-get r :present) :p50) 4.0))))))))
 
 (ert-deftest drgnx-perf/compose-probe-absent-on-stock ()
   (skip-unless (not (fboundp 'glitnir-stats)))                          ; a stock build: a Glitnir one has the probe
