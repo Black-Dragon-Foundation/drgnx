@@ -7813,6 +7813,26 @@
         "additionalProperties": false,
         "description": "`agents/panel/look`: what the user chose for an agent panel (docs/develop/hub.md, \"The agent panel's rows\").  Each\nfield given replaces the one before; none given builds the rows again.",
         "properties": {
+          "lens": {
+            "description": "The header's lens: the presets' names, in order.",
+            "items": {
+              "maxLength": 32,
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "lens_on": {
+            "description": "The preset in force, from 1 (0: none).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "older": {
             "description": "The rows go back one window further (the editor scrolled to their top).",
             "type": [

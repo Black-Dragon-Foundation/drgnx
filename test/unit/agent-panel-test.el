@@ -133,24 +133,6 @@ unanswered, and panel \"s1\" as `buf'."
         (should-not (string-match-p "raw \\*source\\*" text))
         (should (string-match-p "plain words" text))))))
 
-(ert-deftest drgnx-agent-panel/a-chip-without-a-feed-is-hidden ()
-  (drgnx-agent-panel-test--with
-    (with-current-buffer buf
-      (drgnx-agent-panel--take-snapshot (list :id "s1" :name "Claude" :status "idle" :profile "Claude" :mode "queue"))
-      (let ((text (drgnx-agent-panel-test--text buf)))
-        (should (string-match-p "queue" text))
-        (should-not (string-match-p "MCP" text))
-        (should-not (string-match-p "checkpoints" text))
-        (should-not (string-match-p "\\$" text))
-        (should-not (string-match-p "files" text)))
-      (drgnx-agent-panel--take-snapshot (list :id "s1" :name "Claude" :status "idle" :profile "Claude" :mode "queue"
-                                              :usage (list :used 50 :size 100 :cost 0.25) :files_edited 3 :mcp 2))
-      (let ((text (drgnx-agent-panel-test--text buf)))
-        (should (string-match-p "50%" text))
-        (should (string-match-p "\\$0.25" text))
-        (should (string-match-p "3 files" text))
-        (should (string-match-p "MCP 2" text))))))
-
 (ert-deftest drgnx-agent-panel/thinking-folds-under-its-step ()
   (drgnx-agent-panel-test--with
     (with-current-buffer buf
@@ -432,16 +414,6 @@ unanswered, and panel \"s1\" as `buf'."
         (should (string-match-p "undone" (seq-find (lambda (l) (string-match-p "Edit b.el" l)) lines)))
         (should-not (string-match-p "undone" (seq-find (lambda (l) (string-match-p "Edit a.el" l)) lines)))))))
 
-(ert-deftest drgnx-agent-panel/checkpoints-chip-names-the-restore-level ()
-  (drgnx-agent-panel-test--with
-    (with-current-buffer buf
-      (drgnx-agent-panel--take-snapshot (list :id "s1" :name "Claude" :status "idle" :checkpoints 3 :restore_level "message"))
-      (should (string-match-p "3 checkpoints · message" (drgnx-agent-panel-test--text buf)))
-      (drgnx-agent-panel--take-snapshot (list :id "s1" :name "Claude" :status "idle" :checkpoints 3))
-      (let ((text (drgnx-agent-panel-test--text buf)))
-        (should (string-match-p "3 checkpoints" text))
-        (should-not (string-match-p "checkpoints ·" text))))))
-
 (ert-deftest drgnx-agent-panel/an-applied-history-reloads-the-step-rows ()
   (drgnx-agent-panel-test--with
     (with-current-buffer buf
@@ -718,15 +690,16 @@ unanswered, and panel \"s1\" as `buf'."
         (should (string-match-p "What /compact keeps" (funcall text '("context" "compact-preview"))))))))
 
 (ert-deftest drgnx-agent-panel/a-chip-opens-its-facts-from-the-hub ()
+  "A chip (the hub's row, its text carrying `drgnx-agent-panel-chip') asks the hub for the facts behind it."
   (drgnx-agent-panel-test--with
     (with-current-buffer buf
-      (drgnx-agent-panel--take-snapshot (list :id "s1" :status "idle" :mcp 2 :mode "default"))
-      (let ((text (drgnx-agent-panel-test--text buf)))
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (propertize " MCP 2 " 'drgnx-agent-panel-chip "mcp"))
         (goto-char (point-min))
-        (search-forward "MCP 2")
-        (should (equal 'mcp (get-text-property (1- (point)) 'drgnx-agent-panel-chip)))
-        (should text))
-      (drgnx-agent-panel-chip 'mcp)
+        (let ((item (intern (get-text-property (point) 'drgnx-agent-panel-chip))))
+          (should (eq item 'mcp))
+          (drgnx-agent-panel-chip item)))
       (should (equal '("agents/explain" :id "s1" :item "mcp") (car drgnx-agent-panel-test--calls))))))
 
 ;;;; Task 43: subagents and huddle threads
@@ -925,38 +898,44 @@ panel."
   "The face list of the first character of TEXT in string S."
   (ensure-list (get-text-property (string-search text s) 'face s)))
 
-(ert-deftest drgnx-agent-panel/header-pin-and-more ()
-  "agent-panel.html `.agent .ph': after the lens, a pin button and ⋯; a press on either leaves point where it is (the
-pin takes the card at point), ⋯ opens the panel's actions.  A lens segment's name has room either side in its face."
+(defun drgnx-agent-panel-test--click (buf text)
+  "A mouse-1 event on the first TEXT of BUF, shown in the selected window."
+  (set-window-buffer (selected-window) buf)
+  (list 'mouse-1 (list (selected-window) (with-current-buffer buf (string-search text (buffer-string)))
+                       '(0 . 0) 0)))
+
+(ert-deftest drgnx-agent-panel/a-click-on-the-hubs-header-runs-its-action ()
+  "The header and the chips are the hub's rows, whose clickable parts carry `drgnx-agent-panel-action' (`lens:N', `pin',
+`more') or `drgnx-agent-panel-chip': one dispatcher runs the part's action, and a press on one leaves point where it is."
   (drgnx-agent-panel-test--with
     (with-current-buffer buf
-      (let* ((head (drgnx-agent-panel--header-row))
-             (maps (cl-loop for i below (length head) for m = (get-text-property i 'keymap head)
-                            when (and m (lookup-key m [down-mouse-1])) collect m)))
-        (should (member "Pin the card at point" (cl-loop for i below (length head) collect (get-text-property i 'help-echo head))))
-        (should (member "More actions" (cl-loop for i below (length head) collect (get-text-property i 'help-echo head))))
-        (should (cl-every (lambda (m) (eq (lookup-key m [down-mouse-1]) #'ignore)) maps))
-        (should (cl-some (lambda (m) (eq (lookup-key m [mouse-1]) #'drgnx-agent-panel-header-menu)) maps))
-        (dolist (c (mapcar #'cdr drgnx-agent-panel-header-menu)) (should (drgnx-commands-get c)))
-        ;; the room before \"watch\" is in the segment's face
-        (let ((i (string-search "watch" head)))
-          (should (equal (get-text-property (1- i) 'face head) (get-text-property i 'face head))))))))
+      (let ((inhibit-read-only t) ran)
+        (erase-buffer)
+        (insert (propertize " review " 'drgnx-agent-panel-action "lens:2") (propertize " P " 'drgnx-agent-panel-action "pin")
+                (propertize " M " 'drgnx-agent-panel-action "more") (propertize " 50% " 'drgnx-agent-panel-chip "context")
+                " plain")
+        (cl-letf (((symbol-function 'drgnx-agent-panel-preset) (lambda (n) (push (list 'preset n) ran)))
+                  ((symbol-function 'drgnx-ui-kit-run) (lambda (c) (push (list 'run c) ran)))
+                  ((symbol-function 'drgnx-agent-panel-header-menu) (lambda (_e) (push 'menu ran)))
+                  ((symbol-function 'drgnx-agent-panel-chip) (lambda (c) (push (list 'chip c) ran)))
+                  ((symbol-function 'mouse-drag-region) (lambda (_e) (push 'stock-press ran))))
+          (dolist (text '("review" "P " "M " "50%")) (drgnx-agent-panel-act (drgnx-agent-panel-test--click buf text)))
+          (should (equal (reverse ran) '((preset 2) (run agents-panel-pin) menu (chip context))))
+          (setq ran nil)
+          (drgnx-agent-panel-press (drgnx-agent-panel-test--click buf "P "))
+          (should-not ran)
+          (drgnx-agent-panel-press (drgnx-agent-panel-test--click buf "plain"))
+          (should (equal ran '(stock-press))))
+        (dolist (c '(agents-panel-act agents-panel-press)) (should (drgnx-commands-get c)))
+        (dolist (c (mapcar #'cdr drgnx-agent-panel-header-menu)) (should (drgnx-commands-get c)))))))
 
-(ert-deftest drgnx-agent-panel/header-lens-and-open-strip ()
-  "agent-panel.html: the header ends with the watch / review / debug lens, the preset in force raised; the strip
-under the chips reads \"Open:\" and its step types are pills, the open ones raised, no arrows."
+(ert-deftest drgnx-agent-panel/the-open-strip ()
+  "agent-panel.html: the strip under the chips reads \"Open:\" and its step types are pills, the open ones raised, no
+arrows."
   (drgnx-agent-panel-test--with
     (with-current-buffer buf
       (drgnx-agent-panel-preset 2)
-      (let ((head (drgnx-agent-panel--header-row)) (strip (drgnx-agent-panel--strip-row)))
-        (should (memq 'drgnx-agent-panel-lens-on (drgnx-agent-panel-test--face-at head "review")))
-        (dolist (off '("watch" "debug"))
-          (should (memq 'drgnx-agent-panel-lens (drgnx-agent-panel-test--face-at head off))))
-        ;; segments of one face are never adjacent (they would be one box): before debug's room, review's is apart
-        (drgnx-agent-panel-preset 1)
-        (let ((head (drgnx-agent-panel--header-row)))
-          (should-not (equal (get-text-property (- (string-search "debug" head) 2) 'face head)
-                             (get-text-property (string-search "debug" head) 'face head))))
+      (let ((strip (drgnx-agent-panel--strip-row)))
         (should (string-match-p "\\`[[:space:]]*Open:" strip))
         (should-not (string-match-p "[▸▾]" strip))
         (should (memq 'drgnx-agent-panel-tag-on (drgnx-agent-panel-test--face-at strip "edit")))
@@ -1053,25 +1032,12 @@ on the last, nothing past the edge; in a wide one it is one line.  A change of t
       (should (eql drgnx-agent-panel--strip-width (window-body-width (selected-window) t)))
       (should (gethash (list :strip) (drgnx-view--dirty drgnx-view))))))
 
-(ert-deftest drgnx-agent-panel/a-preset-redraws-the-header-lens ()
-  "Picking a preset draws the header again, so its lens shows the preset in force."
+(ert-deftest drgnx-agent-panel/a-preset-tells-the-hub-the-lens ()
+  "Picking a preset tells the hub which one is in force (`agents/panel/look' `lens_on'), so its header's lens shows it,
+and the presets' names it lays the lens out of."
   (drgnx-agent-panel-test--with
     (with-current-buffer buf
-      (drgnx-view-draw-now drgnx-view)
+      (let ((params (drgnx-agent-panel--look-params)))
+        (should (equal (append (plist-get params :lens) nil) (mapcar (lambda (p) (symbol-name (car p))) drgnx-agent-panel-presets))))
       (drgnx-agent-panel-preset 3)
-      (should (gethash (list :header) (drgnx-view--dirty drgnx-view))))))
-
-(ert-deftest drgnx-agent-panel/header-status-gives-way-to-the-lens ()
-  "In a narrow panel the header's status is cut (…) so it ends before the lens; nothing overlaps."
-  (drgnx-agent-panel-test--with
-    (with-current-buffer buf
-      (setq drgnx-agent-panel--snap (list :name "replay-46dd" :agent "replay" :status "running"))
-      (let* ((wide (cl-letf (((symbol-function 'drgnx-agent-panel--width) (lambda () 4000))) (drgnx-agent-panel--header-row)))
-             (lens (drgnx-agent-panel--lens))
-             (px (+ (string-pixel-width (car (split-string wide "·"))) (string-pixel-width lens) (drgnx-px 24) (string-pixel-width " · Ag")))
-             (narrow (cl-letf (((symbol-function 'drgnx-agent-panel--width) (lambda () px))) (drgnx-agent-panel--header-row))))
-        ;; the status, before the lens: the buttons after it may draw ⋯ as … (an icon's text fallback, as on macOS)
-        (cl-flet ((status (row) (substring row 0 (string-search lens row))))
-          (should-not (string-search "…" (status wide)))
-          (should (string-search "…" (status narrow))))
-        (should (string-search "watch" narrow))))))
+      (should (= 3 (plist-get (drgnx-agent-panel--look-params) :lens_on))))))

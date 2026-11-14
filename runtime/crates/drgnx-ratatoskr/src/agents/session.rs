@@ -4135,10 +4135,11 @@ impl Session {
             &self.id,
             json!({"id": self.id, "seq": seq, "session": snapshot}),
         );
+        // the panel's header and chips follow the snapshot, also when no entry changed
+        self.panels.changed(self, &dirty);
         if entries.is_empty() {
             return;
         }
-        self.panels.changed(self, &dirty);
         let subscribers = self.editors.entry_subscribers(&self.id);
         if subscribers.is_empty() {
             return;

@@ -1315,7 +1315,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `agents/list` | user, agent, service | `{}` | `{sessions?: [Snapshot]}` | no |
 | `agents/move` | user | `{id: Id, profile: string}` | `{id: string, name: string}` | yes |
 | `agents/pair` | user | `{id: Id, on: boolean}` | `boolean` | no |
-| `agents/panel/look` | user | `{older?: boolean, open?: [string], rows?: [[natnum, boolean]], view: string}` | `boolean` | no |
+| `agents/panel/look` | user | `{lens?: [string], lens_on?: natnum, older?: boolean, open?: [string], rows?: [[natnum, boolean]], view: string}` | `boolean` | no |
 | `agents/pause` | user | `{id: Id}` | `boolean` | yes |
 | `agents/permission` | user | `{id: Id, option?: string, request: RequestId}` | `boolean` | yes |
 | `agents/presence/get` | user | `{file: string}` | `{entries?: [PresenceEntry], file: string, rel?: string, repo?: string}` | no |
@@ -2924,6 +2924,16 @@ The Outline section's rows: the definitions of the file in the editor, built by 
   `PARSED_FILES` (8) parses are kept by file and a hash of their text, so a scroll or a moved point parses nothing again.
 
 ### The agent panel's rows
+
+
+**The header and the chips (offload step F1).** The panel's first rows are the hub's too (`view/panel_top.rs`): `p:head`
+(the agent's Lucide icon and name, what it is doing cut to the room the lens leaves, a stop, then the lens of presets and
+the pin and ⋯ buttons, 24 px around 16 px icons) and, when the snapshot feeds any, `p:chips` (the context used, the cost,
+the mode). They are built again from the session's snapshot at each `emit`, also when no entry changed, and the store sends
+only what changed. The lens is the editor's: `agents/panel/look` carries `lens` (the presets' names) and `lens_on` (the one
+in force, from 1, 0 none). A clickable part has the `drgnx-agent-panel-action` property (`lens:N`, `pin`, `more`) or
+`drgnx-agent-panel-chip` (`context`, `cost`, `mode`); the editor's `agents-panel-act` (a click) and `agents-panel-press`
+(a press keeps point) read them. The editor puts the rows whose key starts with `p:` above its own rows.
 
 The transcript of an agent session, as rows the panel only inserts (`runtime/crates/drgnx-ratatoskr/src/view/panel.rs`;
 the rows themselves are `agents/session/rows.rs`, pure).

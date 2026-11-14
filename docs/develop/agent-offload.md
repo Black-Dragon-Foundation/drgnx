@@ -58,3 +58,12 @@ the step's hook rows under it and no longer walks the transcript for the newest 
 The attention set holds permissions only because reviews have no source: the hub's snapshot has `reviews: []` always
 (`agents/session.rs`), and the Lisp runtime that made them (held agent writes, `agents/do` op `review`) was deleted with
 the Lisp agent runtime (87dab81fd); before the offload the mirror's `reviews` was filled only from that empty list.
+
+## The panel's header and chips (F1, first slice)
+
+Built in the hub (hub.md "The agent panel's rows"): the header's name, status text cut to the room, lens and buttons, and
+the chips. No `string-pixel-width` runs per character any more (`drgnx-agent-panel--fit` and the Lisp header and chips
+builders are gone). Lisp keeps `drgnx-agent-panel-act` and `drgnx-agent-panel-press` (one click dispatcher), the lens it
+tells the hub, and the header menu. Of the Lisp chips only the ones the hub's snapshot feeds are built: context, cost and
+mode (its snapshot has no model, sandbox, MCP, file or checkpoint count, so those chips were never fed in a real session).
+The hover highlight a row cannot set (`mouse-face` takes a symbol, a row carries a string) is the one thing the header lost.
