@@ -59,6 +59,7 @@
 (declare-function jsonrpc-request "jsonrpc")
 (declare-function project-root "project")
 (declare-function nidhogg-view-get "nidhogg-views" (h what &optional arg arg2))
+(declare-function nidhogg-view-rows "nidhogg-views" (h what &optional a b))
 (declare-function nidhogg-view-set "nidhogg-views" (h what value))
 (declare-function drgnx-hub--call-on "drgnx-hub-client")
 (declare-function drgnx-wb-place "drgnx-rules")
@@ -1434,7 +1435,8 @@ Nil when it sent edits; else the reason as a string (`nothing' when it sent none
 (defun drgnx-replace--busy-p ()
   "Non-nil while the view still has work: a pause to wait out, a search running, rows to draw."
   (or (drgnx-timer-active-p (cons 'replace-pause (current-buffer))) drgnx-replace--searching
-      (drgnx-view-pending-p drgnx-view) (drgnx-timer-active-p (cons 'replace-refresh (current-buffer)))))
+      (if drgnx-view (drgnx-view-pending-p drgnx-view) (drgnx-timer-active-p (cons 'drgnx-view-sja (current-buffer))))
+      (drgnx-timer-active-p (cons 'replace-refresh (current-buffer)))))
 
 (defun drgnx-replace--live-view ()
   "The Search view's buffer, or a user error when it was never opened."
@@ -1879,7 +1881,8 @@ of the rows, the model holds every match): its id, or nil when there is none."
 
 (defun drgnx-replace--reach (id)
   "Ask the hub for the row of match ID when the view does not have it, and put point on it when it comes."
-  (unless (gethash id (drgnx-view-patch-rows drgnx-view-patch))
+  (unless (if (drgnx-view-patch-sja drgnx-view-patch) (drgnx-view-row-start nil id)   ; the rows Sjá holds
+            (gethash id (drgnx-view-patch-rows drgnx-view-patch)))
     (setq drgnx-replace--reach-id id)
     (drgnx-replace--look (list :upto id))))
 
@@ -1909,7 +1912,9 @@ when it shows the gap row of a far jump, ask for the rows before the gap (once p
   (when-let* (((drgnx-replace--rows-p))
               (win (or window (get-buffer-window (current-buffer))))
               ((eq (window-buffer win) (current-buffer)))
-              (n (hash-table-count (drgnx-view-patch-rows drgnx-view-patch)))
+              (n (if (drgnx-view-patch-sja drgnx-view-patch)
+                     (nth 5 (nidhogg-view-rows (drgnx-view-patch-handle drgnx-view-patch) 'state))
+                   (hash-table-count (drgnx-view-patch-rows drgnx-view-patch))))
               ((not (eql n drgnx-replace--look-at)))
               ((save-excursion (goto-char (window-start win))
                                (/= 0 (forward-line (+ (window-body-height win) drgnx-replace-look-lines))))))
@@ -1983,7 +1988,7 @@ query on the header line; its keys move and visit (`drgnx-replace--twin-keys'), 
 (defun drgnx-replace--hub-attach ()
   "Make the view hub-fed (the hub's rows below the fields), when it is not; its env goes while a window shows it."
   (unless drgnx-view-patch
-    (drgnx-view-patch-attach drgnx-replace-view "unshown" :start drgnx-replace--results)
+    (drgnx-view-patch-attach drgnx-replace-view "unshown" :start drgnx-replace--results :sja t)
     (setq-local drgnx-view-patch-twin-function #'drgnx-replace--twin)
     (drgnx-replace-rows-attached)
     (add-hook 'drgnx-hub-event-functions #'drgnx-replace--hub-event)

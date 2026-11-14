@@ -1089,7 +1089,7 @@ Explorer buffer's: the twin's kill leaves them."
       (remove-hook 'kill-buffer-hook #'drgnx-explorer--unwatch-all t)
       (remove-hook 'kill-buffer-hook #'drgnx-explorer--forget-find t)
       (jit-lock-unregister #'drgnx-explorer--fontify)
-      (drgnx-view-patch-attach drgnx-explorer--hub-view class)
+      (drgnx-view-patch-attach drgnx-explorer--hub-view class :sja t)
       (dolist (f patched) (unless (eq f t) (add-hook 'drgnx-view-patch-patched-functions f nil t)))
       (setq-local drgnx-view-nav-faces drgnx-explorer--nav-faces)                 ; the marks, as in the Explorer
       (add-hook 'window-scroll-functions #'drgnx-explorer--rows-scrolled nil t)  ; its scroll pages the view's window
@@ -1107,7 +1107,7 @@ Explorer buffer's: the twin's kill leaves them."
   "Make the Explorer the hub-fed VIEW in display CLASS: the hub lists it, and its keys answer from Sjá."
   (with-current-buffer (drgnx-explorer--buffer)
     (jit-lock-unregister #'drgnx-explorer--fontify)   ; the hub's rows come with their faces
-    (drgnx-view-patch-attach view class)
+    (drgnx-view-patch-attach view class :sja t)
     (setq drgnx-explorer--hub-view view)
     (add-hook 'drgnx-view-patch-patched-functions #'drgnx-explorer--rows-patched nil t)
     (setq-local drgnx-view-nav-faces drgnx-explorer--nav-faces)

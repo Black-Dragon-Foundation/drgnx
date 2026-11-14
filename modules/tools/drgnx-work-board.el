@@ -158,7 +158,7 @@ so instead."
         (drgnx-work-board-mode)
         (setq drgnx-work-lens-nav #'drgnx-work-board--nav)
         (if rows
-            (progn (drgnx-view-patch-attach (car rows) (cdr rows))
+            (progn (drgnx-view-patch-attach (car rows) (cdr rows) :sja t)
                    (setq-local drgnx-view-patch-twin-function #'drgnx-work-board--twin)
                    (require 'drgnx-view-env)
                    (drgnx-view-env-register (car rows) buffer))

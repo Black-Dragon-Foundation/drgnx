@@ -386,8 +386,9 @@ it (its trail is made when there is none, the tile shows it when the layout is o
 workbench state store's window events (and by hand in tests); only calls the hub when a map's shown state changed."
   (dolist (buffer (drgnx-work-map-buffers))
     (when-let* ((id (buffer-local-value 'drgnx-work-space--view buffer))
-                (view (buffer-local-value 'drgnx-view buffer)))
-      (let ((shown (and (drgnx-view-shown-p view) t)))
+                ((or (buffer-local-value 'drgnx-view buffer) (buffer-local-value 'drgnx-view-patch buffer))))
+      (let* ((view (buffer-local-value 'drgnx-view buffer))
+             (shown (if view (and (drgnx-view-shown-p view) t) (and (get-buffer-window buffer 'visible) t))))
         (unless (eq shown (drgnx-work-client-shown-p id))
           (drgnx-work-client-set id :shown (if shown t :false)))))))
 
