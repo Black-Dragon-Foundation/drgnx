@@ -4,7 +4,7 @@ use std::cell::Cell;
 const CONN: u64 = 1;
 
 fn key(root: &str) -> ListKey {
-    (root.into(), false, vec![])
+    (root.into(), false, vec![], vec![])
 }
 
 fn view(v: &str) -> (u64, String) {
@@ -51,6 +51,21 @@ fn a_newer_query_stops_the_old_one() {
     assert_eq!(files.rows(CONN, "q").map(|r| r.len()), Some(1));
     files.stop(CONN, "q");
     assert_eq!(files.rows(CONN, "q"), None);
+}
+
+/// Pattern D. The Explorer's names leave a path out when any of its parts is one: a folder's name hides what is in it.
+#[test]
+fn an_excluded_name_hides_the_path() {
+    let x = Exclude::new(vec![".git".into(), "__pycache__".into(), ".#*".into()]);
+    let mut got = vec![
+        "a/__pycache__/x.pyc".to_string(),
+        "src/.#lock.rs".into(),
+        "src/a.rs".into(),
+        "sub/.git/HEAD".into(),
+        "my.git.rs".into(),
+    ];
+    keep_shown(&mut got, &x);
+    assert_eq!(got, ["src/a.rs", "my.git.rs"]);
 }
 
 /// Pattern D. A row is the path, keyed by it, the query's words in the match face.

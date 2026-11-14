@@ -8,7 +8,8 @@
 //!
 //! The ranking ([`NameList::top`], and [`rank`] for the overlay's view): every word of the query (case-insensitive) is
 //! in the path; a basename that starts with the first word and holds them all first, then a basename that holds them
-//! all, then a path that does; shorter, then by path, among equals.
+//! all, then a path that does; shorter, then by path, among equals. By name ([`NameList::top_names`]) the third tier
+//! is left out: only basenames that hold every word.
 //!
 //! In a worktree view (H16 overlay design §4) the file set is the base's paths, less the tree's tombstones, plus the
 //! tree's new paths. One base list is shared by every view; a tree adds a small delta.
@@ -160,13 +161,28 @@ impl NameList {
 
     /// The N best names for QUERY; none when CANCEL was set while it ran (a newer query took its place).
     pub fn top(&self, query: &str, n: usize, cancel: &AtomicBool) -> Option<Vec<Ranked>> {
+        self.top_by(query, n, false, cancel)
+    }
+
+    /// As [`NameList::top`], but only names whose basename holds every word (the Explorer's Find).
+    pub fn top_names(&self, query: &str, n: usize, cancel: &AtomicBool) -> Option<Vec<Ranked>> {
+        self.top_by(query, n, true, cancel)
+    }
+
+    fn top_by(
+        &self,
+        query: &str,
+        n: usize,
+        by_name: bool,
+        cancel: &AtomicBool,
+    ) -> Option<Vec<Ranked>> {
         let ws = words(query);
         let mut scored: Vec<(u8, usize, usize)> = Vec::new();
         for (i, lower) in self.lower.iter().enumerate() {
             if i % CANCEL_EVERY == 0 && cancel.load(Ordering::Relaxed) {
                 return None;
             }
-            if let Some(t) = tier(lower, &ws) {
+            if let Some(t) = tier(lower, &ws).filter(|&t| !by_name || t < 2) {
                 scored.push((t, self.names[i].len(), i));
             }
         }

@@ -104,12 +104,13 @@ paths, in order) and TEXT (KEY → the candidate, its words marked)."
 (defun drgnx-quick-open--rows-make (view root)
   (drgnx-quick-open--rows--make :view view :root root :rules (drgnx-view-patch--make :view view)))
 
-(defun drgnx-quick-open--rows-query (r input &optional n)
+(defun drgnx-quick-open--rows-query (r input &optional n more)
   "Ask the hub for R's N best rows (default `drgnx-quick-open-rows') for INPUT; the rows shown stay until the answer's
-patch."
+patch.  MORE is a plist of further `search/files' params (the Explorer's Find: `:name', `:exclude')."
   (funcall drgnx-quick-open-send-function "search/files"
-           (list :view (drgnx-quick-open--rows-view r) :root (drgnx-quick-open--rows-root r) :query input
-                 :n (or n drgnx-quick-open-rows))))
+           (append (list :view (drgnx-quick-open--rows-view r) :root (drgnx-quick-open--rows-root r) :query input
+                         :n (or n drgnx-quick-open-rows))
+                   more)))
 
 (defun drgnx-quick-open--rows-candidate (row)
   "ROW's candidate: its key, with its runs in `drgnx-quick-open-match'."
