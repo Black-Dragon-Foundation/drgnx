@@ -180,7 +180,7 @@ branch gateway-queue, staged file and history come with the Magit adapter (look 
                    "the picture is a gradient the scene makes (a PPM): in use, images are the hub's PNG or JPEG, fetched from notebook/output")
     (notebook-light "see notebook-dark")
     (notebook-views-light "see notebook-views")
-    (notebook-views "the approved mockup (notebook-views.html): its chips, cut-row tints and error tints are the hub's rows' faces (the notebook views agent), not the editor's; the three views are windows of the editor, not the mockup's cards"
+    (notebook-views "the approved mockup (notebook-views.html): the three views are windows of the editor, not the mockup's cards; with the image's kernel the outline shows a finished, a running and a failed cell, the log has no entries (the kernel logged nothing) and a running cell's full output reads `no output` here (the hub's output view of a running cell, to the views agent)"
                     "the notebook is a file the scene writes and the hub opens (no kernel: no running cell, no log entries), so the rows are the hub's own")
     (palette "the mockup's palette rows come from its own commands; the line lists the registry's")
     (explorer-focused-dark "no agent badges (C, R) in the Explorer: agent system part 3 (G9)")
@@ -1563,7 +1563,11 @@ and a kernelspec for it in a folder `JUPYTER_PATH' names (the image has none); e
         (make-directory dir t)
         (with-temp-file (expand-file-name "kernel.json" dir)
           (insert (format "{\"argv\": [\"%s\", \"-m\", \"ipykernel_launcher\", \"-f\", \"{connection_file}\"], \"display_name\": \"Python 3 (ipykernel)\", \"language\": \"python\"}\n" kernel)))
-        (setenv "JUPYTER_PATH" (expand-file-name "jupyter" temporary-file-directory))))
+        (setenv "JUPYTER_PATH" (expand-file-name "jupyter" temporary-file-directory))
+        ;; a kernel's socket path must fit a unix socket's 108 bytes: the harness's runtime folder is too long
+        (make-directory "/tmp/nbrt" t)
+        (set-file-modes "/tmp/nbrt" #o700)
+        (setenv "XDG_RUNTIME_DIR" "/tmp/nbrt")))
     (with-temp-file file
       (insert "{\"cells\": [\n"
               "{\"cell_type\": \"markdown\", \"id\": \"c0\", \"metadata\": {}, \"source\": [\"# Cache experiments\\n\", \"How the hit rate moves with the capacity.\"]},\n"
@@ -1619,8 +1623,9 @@ one fails and one keeps running; without it, the cells show what a finished run 
             (let ((end (+ (float-time) 1.5)))   ; the log's first entries and the output's second line
               (while (< (float-time) end) (accept-process-output nil 0.05) (redisplay))))
           (with-current-buffer buffer
-            (drgnx-notebook-outline)
             (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id (if kernel "c2" "c3")) :head)))
+            (drgnx-notebook--select-at (point))      ; no command ran: the hub is told which cell point is in
+            (drgnx-notebook-outline)
             (drgnx-notebook-open-output)
             (drgnx-notebook-kernel-log))
           (setq views (list (format "*Notebook outline: %s*" base) (format "*Notebook output: %s %s*" base (if kernel "c2" "c3"))
