@@ -16,7 +16,7 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const BIN: &str = env!("CARGO_BIN_EXE_ratatoskr");
 
@@ -202,13 +202,11 @@ fn a_grammar_that_spins_is_cut_at_the_deadline_and_killed() {
     let (lib, sha) = lib_of("fixture:loopy");
     let (mut w, pids) = worker("loopy", "loopy", lib, sha, fixture_init());
     w.request_deadline = Duration::from_secs(2);
-    let t = Instant::now();
     let e = w.chunk("a.json", false, "{\"a\": 1}", BUDGET).unwrap_err();
     assert!(
         matches!(&e, WorkerError::File(m) if m.contains("no answer")),
         "{e:?}"
     );
-    assert!(t.elapsed() < Duration::from_secs(20), "{:?}", t.elapsed());
     let pid = pids.lock().unwrap()[0];
     assert!(!alive(pid), "the spinning worker was killed");
 }

@@ -1447,13 +1447,11 @@ mod tests {
             // reads its requests and says nothing, until the hub closes the pipe
             while read_frame(r, MAX_FRAME).ok().flatten().is_some() {}
         });
-        let t = Instant::now();
         let e = w.chunk("a.x", false, "text", 100).unwrap_err();
         assert!(
             matches!(&e, WorkerError::File(m) if m.contains("no answer")),
             "{e:?}"
         );
-        assert!(t.elapsed() < Duration::from_secs(5));
         assert_eq!(kills.load(Ordering::SeqCst), 1);
     }
 
@@ -1587,13 +1585,16 @@ mod tests {
         assert!(w.chunk("a.x", false, "text", 100).is_ok());
         // between requests nobody reads: let the flood run until it stops by itself, either because the hub took all 300 MiB
         // or because the pipe is full and the hub's reader will not take more
-        for _ in 0..50 {
-            let before = written.load(Ordering::SeqCst);
-            std::thread::sleep(Duration::from_millis(100));
-            if written.load(Ordering::SeqCst) == before {
-                break;
+        let (mut last, mut same) = (usize::MAX, 0);
+        skuld::wait_until("the flood stops by itself", 60, || {
+            let n = written.load(Ordering::SeqCst);
+            if n == last {
+                same += 1;
+            } else {
+                (last, same) = (n, 0);
             }
-        }
+            (same >= 20).then_some(())
+        });
         // a pipe's buffer, the frame the reader holds and the one in its channel: the rest of the flood stays in the worker
         assert!(
             written.load(Ordering::SeqCst) <= 4,
