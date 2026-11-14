@@ -1140,7 +1140,13 @@ and only one; take it away when it should have none.  A window elsewhere that sh
   (when (frame-live-p frame)
     (let* ((wanted (drgnx-statusbar--frame-wanted-p frame))
            (root (frame-root-window frame))
-           (keep nil))
+           (keep nil)
+           ;; the bottom side windows (the panel) are as high after as before: the bar's row deleted and split
+           ;; again moves pixels between the windows above it, and the size Emacs preserves for the panel is its
+           ;; body as first estimated, stale once its tab row is drawn taller (a 16 px icon), so it does not hold
+           (bottoms (mapcan (lambda (w) (and (eq (window-parameter w 'window-side) 'bottom)
+                                             (list (cons w (window-pixel-height w)))))
+                            (window-list frame 'nomini))))
       (dolist (w (window-list frame 'nomini))
         (when (or (drgnx-statusbar--frame-window-p w)
                   (eq (window-buffer w) (get-buffer drgnx-statusbar--frame-buffer-name)))
@@ -1157,6 +1163,10 @@ and only one; take it away when it should have none.  A window elsewhere that sh
       (when (and wanted (not keep))
         (setq keep (drgnx-statusbar--frame-make frame)))
       (when keep (drgnx-statusbar--frame-fit keep))
+      (pcase-dolist (`(,w . ,px) bottoms)
+        (when (and (window-live-p w) (/= px (window-pixel-height w)))
+          (let ((window-resize-pixelwise t))
+            (ignore-errors (window-resize w (- px (window-pixel-height w)) nil t t)))))
       keep)))
 
 (defun drgnx-statusbar--frame-make (frame)

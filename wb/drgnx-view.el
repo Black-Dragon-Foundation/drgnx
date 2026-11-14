@@ -1669,11 +1669,15 @@ Returns what was done: `drop', `hold', `resync', `apply', `paused' (kept until t
 the hub client hands it whole to `drgnx-view-model-line'.)"
   (when (equal event "view-patch") (drgnx-view-apply-patch data)))
 
-(defun drgnx-view-patch-env-sent (view class epoch)
-  "This editor sent (VIEW, CLASS) the env EPOCH (`drgnx-view-env'): patches of an older one are held from now on."
+(defun drgnx-view-patch-env-sent (view class epoch &optional attach)
+  "This editor sent (VIEW, CLASS) the env EPOCH (`drgnx-view-env'): patches of an older one are held from now on.
+ATTACH: it went as a new pair (`:attach': a new buffer, or a view shown again after no window showed it), which the
+hub starts over at version 1, so the books of what was applied go (`drgnx-view-patch--forget') and its first reset
+is applied, not dropped as older; the rows stay on screen until it comes."
   (let ((buffer (gethash (cons view class) drgnx-view-patch--buffers)))
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
+        (when attach (drgnx-view-patch--forget drgnx-view-patch))
         (setf (drgnx-view-patch-epoch drgnx-view-patch) epoch)))))
 
 (defun drgnx-view-patch-reclass (buffer class)

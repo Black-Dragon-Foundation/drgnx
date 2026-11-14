@@ -10,7 +10,7 @@ restart.
 **How the dock looks.** The sidebar is one island on the panel surface (`drgnx-surface-panel`). Its top row is the
 island header: the Explorer's first folder's name, then **+** (New File), a magnifier (Find in Explorer) and **⋯**, a
 menu with Close Sidebar, Save All, Close Saved Editors and Close All Editors (`drgnx-wb-island-menu`). The three sections
-below it are headed **Open** (the Buffers panel), **Files** (the Explorer) and **Outline** (folded to its header at first; a click on a section's header folds or unfolds it, and focusing the Outline opens it): a chevron and the title in
+below it are headed **Open** (the Buffers panel), **Files** (the Explorer) and **Outline** (folded to its header at first; a click on a section's header folds or unfolds it, and focusing the Outline opens it; a second window's sidebar folds it there too, leaving the first window's as it was): a chevron and the title in
 `drgnx-wb-section` (small, semibold, muted), in sentence case, with nothing else on the row. **Open** is as tall as
 its rows (no empty rows under the last open buffer; with none open, the title and one blank line), at most 30% of the window, past
 which it scrolls; Files takes the rest, so its title stays put when the window is resized. Their rows are drawn in the UI font at the density's

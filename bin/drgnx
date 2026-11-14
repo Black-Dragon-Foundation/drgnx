@@ -659,8 +659,8 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--audit | --a
     case "$stalldir" in *:*) echo "drgnx: DRGNX_RATATOSKR_STALL_FILE must not be under a directory with ':' (it is mounted with -v): $stalldir" >&2; return 2 ;; esac
     args+=(-v "$stalldir:/stall" -e "DRGNX_RATATOSKR_STALL_FILE=/stall/$(basename "$stall")")
   fi
-  # the GUI tier's hub (`test_hub'), built here on the host; the run inside builds nothing
-  if [ "$tier" = ui ]; then test_hub || return 1; args+=(-e DRGNX_TEST_HUB_BUILD=0); fi
+  # the GUI and scenario tiers' hub (`test_hub'), built here on the host; the run inside builds nothing
+  if [ "$tier" = ui ] || [ "$tier" = scenario ]; then test_hub || return 1; args+=(-e DRGNX_TEST_HUB_BUILD=0); fi
   # Ratatoskr for the client's binary tests: one in this checkout is seen at /src, any other's directory is mounted
   # read-only (ratatoskr-mock and drgnx-term live beside it)
   if [ -n "${DRGNX_RATATOSKR_BIN:-}" ] && [ -x "$DRGNX_RATATOSKR_BIN" ]; then
@@ -1030,7 +1030,7 @@ test_stress() { # N [--load K] [--ui|--tty|--scenario [ARGS…]] — the selecte
   run_in_tmp stress_run "$n" "$load" "$@"
 }
 
-test_hub() { # the GUI and live tiers' hub: Ratatoskr (test hooks), ratatoskr-mock and drgnx-term from this checkout
+test_hub() { # the GUI, live and scenario tiers' hub: Ratatoskr (test hooks), ratatoskr-mock and drgnx-term from this checkout
   # (docs/develop/harness.md, "The test hub"). DRGNX_RATATOSKR_BIN already set to a binary (CI builds its own): used as
   # it is. DRGNX_TEST_HUB_BUILD=0: nothing is built (a run inside the test container: the host built it). Otherwise
   # libghostty-vt's pinned tarballs are fetched when missing (as install does: fetch.sh), the three binaries are built
@@ -1109,7 +1109,7 @@ cmd_test() {
           test_hub || exit 1
           run_in_tmp ui_exec test-ui ;;
     --bootstrap) shift; test_bootstrap "$@" ;;
-    --scenario) shift; run_in_tmp ui_exec test-scenario "$@" ;;
+    --scenario) shift; test_hub || exit 1; run_in_tmp ui_exec test-scenario "$@" ;;
     --bench) run_in_tmp ui_exec test-bench ;;
     --perf) shift
             case "${1:-}" in

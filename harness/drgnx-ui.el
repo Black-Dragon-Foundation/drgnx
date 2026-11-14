@@ -1972,6 +1972,8 @@ CONFIG (default drgnx) and print each scenario: green, red (known) with its trac
                    (drgnx-ui-run-ert-session
                     dir (string-to-number (or (getenv "DRGNX_SCENARIO_TIMEOUT") "300")) config
                     (append (list (concat "DRGNX_SCENARIO_CONFIG=" (drgnx-ui--config-name config)))
+                            ;; the hub: on a Nidhogg with Sjá the Explorer's rows are the hub's listing
+                            (drgnx-ui--hub-env)
                             ;; a narrowed run stays narrow in the session too (M12f-A3-1)
                             (let ((s (getenv "DRGNX_TEST_SELECTOR")))
                               (and s (not (string-empty-p s)) (list (concat "DRGNX_TEST_SELECTOR=" s))))))))

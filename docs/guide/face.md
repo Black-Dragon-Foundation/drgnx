@@ -165,7 +165,8 @@ In place of Emacs's raw mode line (`-:@--- file All L5 Git-main (YAML)`) the win
 the whole window under every pane, as in the design: what you need at a glance, nothing that shouts. It shows the
 editor you used last (the full bar for a file or code, the `mode` bar for Magit, Help and the like), and a click on
 one of its segments acts in that editor. The bar is a window of its own at the frame's bottom that drgnx keeps there
-(a side panel opened later still ends above it); the editors then have no mode line. `drgnx-statusbar-place` set to
+(a side panel opened later still ends above it, and the bottom panel keeps its height when the bar is put back under
+a right dock just opened); the editors then have no mode line. `drgnx-statusbar-place` set to
 `editors` puts one bar in each editor window instead, as Emacs's mode line is (the other editor groups show the
 compact bar). It is built from **segments**. Turn it off and on with **Toggle
 Status Bar** (View menu, palette); `drgnx-statusbar-mode` is the switch. While it is on, the mode line's own faces

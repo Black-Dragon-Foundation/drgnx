@@ -333,7 +333,7 @@ forgotten."
           (funcall drgnx-view-env-send-function "view/env"
                    (append params (list :epoch epoch) (and (null old) (list :attach t))))   ; a new buffer: the hub starts the pair over
           ;; the inserter holds patches of an older epoch from now on
-          (when (fboundp 'drgnx-view-patch-env-sent) (drgnx-view-patch-env-sent view (car c) epoch)))))
+          (when (fboundp 'drgnx-view-patch-env-sent) (drgnx-view-patch-env-sent view (car c) epoch (null old))))))
     (let ((gone nil))
       (maphash (lambda (k _) (when (and (equal (car k) view) (not (member k live))) (push k gone))) drgnx-view-env--sent)
       (dolist (k gone) (remhash k drgnx-view-env--sent)))))
