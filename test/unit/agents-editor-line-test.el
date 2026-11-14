@@ -108,6 +108,8 @@ scroll's providers registered beside it."
           (drgnx-sticky-mode 1)
           (goto-char (point-min))
           (set-window-start (selected-window) (save-excursion (forward-line 19) (point)))
+          ;; the scopes of a buffer without tree-sitter are the hub's (mod-sticky-hub-test.el): its answer for line 20
+          (drgnx-sticky--answered b (buffer-chars-modified-tick) 20 '((:name "drgnx-sticky-test-fn" :line 1)))
           (drgnx-chrome-add-tail-provider #'drgnx-sticky--tail 20)
           (should (equal " › drgnx-sticky-test-fn" (substring-no-properties (drgnx-chrome--tail-string (selected-window)))))
           (drgnx-sticky-mode -1)

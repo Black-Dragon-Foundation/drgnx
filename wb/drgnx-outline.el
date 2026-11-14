@@ -18,8 +18,10 @@
 (require 'drgnx-wb)
 (require 'drgnx-view)
 (require 'drgnx-icons)
+(require 'drgnx-history)                 ; `drgnx-history-ask': `outline/scopes' of a tracked buffer
 
 (declare-function drgnx-hub--call-on "drgnx-hub-client" (conn method params callback &rest keys))
+(declare-function drgnx-hub-call "drgnx-hub-client" (method params callback &rest keys))
 (declare-function drgnx-view-env-register "drgnx-view-env" (view buffer &optional resubscribe headless))
 (declare-function nidhogg-view-get "nidhogg-views" (h what &optional arg arg2))
 (defvar drgnx-hub--events)
@@ -85,6 +87,17 @@ sidebar's one selection stays the only one." :group 'drgnx)
                         (if file (list :view drgnx-outline-hub-view :file file) (list :view drgnx-outline-hub-view))
                         #'ignore)
     (setq drgnx-view-patch-hurry t)))
+
+(defun drgnx-outline-scopes (buffer line callback)
+  "Ask the hub for the definitions around LINE (from 1) of BUFFER's file (`outline/scopes': the Outline's parse of it,
+BUFFER's unsaved text where the edit history tracks it, its changes handed over first, else the disk).  CALLBACK gets
+them as a list of plists (:name :line), outermost first; nil for none or a failed question.  Nil when nothing was
+asked: no local file, or no hub."
+  (let ((cb (lambda (result _error) (funcall callback (plist-get result :scopes)))))
+    (or (drgnx-history-ask buffer "outline/scopes" cb (list :line line))
+        (when-let* ((file (drgnx-outline--file buffer)) ((drgnx-outline--hub-p)))
+          (drgnx-hub-call "outline/scopes" (list :file file :line line) cb)
+          t))))
 
 (defun drgnx-outline--resend (_view)
   "The hub is up again (`drgnx-view-env-register'): it gets the file again."

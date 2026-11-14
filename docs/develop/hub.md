@@ -1536,6 +1536,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `messages/retract` | user | `{id: natnum}` | `{retracted: boolean, status: string}` | yes |
 | `messages/send` | user | `{answers?: natnum, job?: Id, question?: boolean, recipient: AgentName, seen?: natnum, sender?: AgentName, text: Text}` | `SendResult` | yes |
 | `orch/evidence` | user | `{task: TaskRef}` | `{evidence: [any]}` | no |
+| `outline/scopes` | user | `{file?: string, line: natnum, path?: string, worktree_root?: string}` | `{scopes: [OutlineScope]}` | no |
 | `outline/set` | user | `{file?: string, view: string}` | `boolean` | no |
 | `pace/get` | user | `{provider?: string}` | `{meters?: [Pace]}` | no |
 | `pair/answer` | user | `{lines?: [natnum], not_saved?: Text, reason?: Text, result: "applied" \| "refused" \| "dropped", saved?: boolean, version?: natnum, write: natnum}` | `boolean` | no |
@@ -2907,6 +2908,12 @@ The Outline section's rows: the definitions of the file in the editor, built by 
   its key (`DEPTH:N:NAME`, N counting the earlier definitions of that name and depth) is over it as `drgnx-work-id`, so a
   definition that only moved keeps its row. A file with nothing to outline (plain text, a language with no definitions)
   is one inert, muted notice row, "No outline for this file", after the info icon on a graphical display.
+- `outline/scopes {file | path + worktree_root, line}` answers `{scopes: [{name, line}]}`: the definitions that hold LINE
+  (from 1), outermost first, one that starts on it included, from the same text and the same size guard (past it,
+  none). The breadcrumb's symbol (the innermost, `wb/drgnx-chrome.el`) and sticky scroll's scopes in a buffer without
+  tree-sitter (those starting above the window's top line, `modules/editor/drgnx-sticky.el`) read it; a buffer the
+  edit history tracks asks through it (`drgnx-history-ask`: its changes go first), another by its file. The last
+  `PARSED_FILES` (8) parses are kept by file and a hash of their text, so a scroll or a moved point parses nothing again.
 
 ### The agent panel's rows
 

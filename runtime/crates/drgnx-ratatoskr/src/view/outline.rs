@@ -13,10 +13,11 @@ use crate::dispatch::Caller;
 use crate::front::Front;
 use drgnx_rows::{ImageId, Row, RowBuilder};
 use hrafn::symbols::OutlineEntry;
-use runstav::methods::view::OutlineSet;
+use runstav::methods::view::{OutlineScope, OutlineScopes, OutlineScopesParams, OutlineSet};
 use runstav::wire::Error;
 use serde_json::json;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -55,7 +56,16 @@ struct One {
 #[derive(Default)]
 pub struct Outlines {
     views: Mutex<HashMap<(u64, String), One>>,
+    /// The latest parses `outline/scopes` made, newest last: (file, its text's hash, its definitions); at most
+    /// [`PARSED_FILES`], so a scroll or a moved point asks again without parsing again.
+    parsed: Mutex<VecDeque<Parsed>>,
 }
+
+/// One kept parse: the file, its text's hash, its definitions.
+type Parsed = (String, u64, Arc<Vec<OutlineEntry>>);
+
+/// How many files' parses `outline/scopes` keeps.
+pub const PARSED_FILES: usize = 8;
 
 impl Outlines {
     fn shown(&self, conn: u64, view: &str) -> Option<Arc<Shown>> {
@@ -283,6 +293,69 @@ pub fn touched(f: &Front, file: &str) {
             }
         });
     }
+}
+
+/// The definitions of ENTRIES (in file order, as [`hrafn::symbols::outline_text`] gives them) that hold LINE,
+/// outermost first: the ones that start on it or above and end on it or below.
+pub fn scopes_at(entries: &[OutlineEntry], line: u32) -> Vec<OutlineScope> {
+    entries
+        .iter()
+        .filter(|e| e.line_start <= line && line <= e.line_end)
+        .map(|e| OutlineScope {
+            name: e.name.clone(),
+            line: e.line_start,
+        })
+        .collect()
+}
+
+/// FILE's definitions for its text TEXT: the parse kept for that text, else a new one (kept, the oldest let go past
+/// [`PARSED_FILES`]).
+async fn parsed(f: &Front, file: &str, text: String) -> Arc<Vec<OutlineEntry>> {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut h);
+    let hash = h.finish();
+    {
+        let kept = lock(&f.core.views.outlines.parsed);
+        if let Some((_, _, e)) = kept.iter().find(|(p, t, _)| p == file && *t == hash) {
+            return e.clone();
+        }
+    }
+    let path = file.to_owned();
+    let entries = crate::clock::blocking(move || match shown_of(&path, &text) {
+        Shown::Entries(e) => e,
+        Shown::Notice(_) => Vec::new(),
+    })
+    .await
+    .unwrap_or_default();
+    let entries = Arc::new(entries);
+    let mut kept = lock(&f.core.views.outlines.parsed);
+    kept.retain(|(p, _, _)| p != file);
+    kept.push_back((file.to_owned(), hash, entries.clone()));
+    while kept.len() > PARSED_FILES {
+        kept.pop_front();
+    }
+    entries
+}
+
+/// `outline/scopes`: the definitions around P's line of its file, from the text the Outline reads (the size guard
+/// included: a file past it has none).
+pub async fn scopes(f: &Front, p: OutlineScopesParams) -> Result<OutlineScopes, Error> {
+    let file = match (&p.file, &p.worktree_root, &p.path) {
+        (Some(f), _, _) => f.clone(),
+        (None, Some(root), Some(path)) => std::path::Path::new(root)
+            .join(path)
+            .to_string_lossy()
+            .into_owned(),
+        _ => return Ok(OutlineScopes { scopes: Vec::new() }),
+    };
+    let file = crate::work::presence::true_name(&file);
+    let Ok(text) = text_of(f, &file).await else {
+        return Ok(OutlineScopes { scopes: Vec::new() });
+    };
+    let entries = parsed(f, &file, text).await;
+    Ok(OutlineScopes {
+        scopes: scopes_at(&entries, p.line),
+    })
 }
 
 #[cfg(test)]

@@ -68,6 +68,45 @@ fn rows_indent_by_the_definitions_around() {
 }
 
 #[test]
+fn the_scopes_of_a_line_are_the_definitions_around_it_outermost_first() {
+    // struct W (1-1), impl W (2-4) holding fn size (3-3), fn later (5-5)
+    let e = entries(RS);
+    let names = |line| {
+        scopes_at(&e, line)
+            .into_iter()
+            .map(|s| (s.name, s.line))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(names(3), vec![("W".into(), 2), ("size".into(), 3)]);
+    assert_eq!(names(4), vec![("W".into(), 2)]);
+    assert_eq!(names(5), vec![("later".into(), 5)]);
+    assert_eq!(names(6), Vec::<(String, u32)>::new());
+}
+
+#[test]
+fn a_long_python_method_is_in_its_class() {
+    let body: String = (1..=40).map(|i| format!("        a{i} = {i}\n")).collect();
+    let text = format!("import os\n\nclass Shape:\n    def area(self):\n{body}        return 0\n");
+    let e = match shown_of("/tmp/drgnx-sticky-x/shapes.py", &text) {
+        Shown::Entries(e) => e,
+        Shown::Notice(n) => panic!("a notice: {n}"),
+    };
+    let got: Vec<_> = e
+        .iter()
+        .map(|e| (e.name.as_str(), e.line_start, e.line_end, e.depth))
+        .collect();
+    let names: Vec<_> = scopes_at(&e, 20)
+        .into_iter()
+        .map(|s| (s.name, s.line))
+        .collect();
+    assert_eq!(
+        names,
+        vec![("Shape".into(), 3), ("area".into(), 4)],
+        "entries {got:?}"
+    );
+}
+
+#[test]
 fn the_size_guard_is_one_check_at_the_lisp_outlines_limit() {
     assert!(!too_large(OUTLINE_MAX as u64));
     assert!(too_large(OUTLINE_MAX as u64 + 1));

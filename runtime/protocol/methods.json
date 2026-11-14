@@ -27279,6 +27279,88 @@
       "classes": [
         "user"
       ],
+      "doc": "the definitions around a line of a file, outermost first, as the Outline reads it (the editor's unsaved text where its edit history tracks the buffer, else the disk): the breadcrumb's symbol and sticky scroll",
+      "name": "outline/scopes",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`outline/scopes`: the definitions around LINE (from 1) of a file, as the Outline reads it (the editor's unsaved text\nwhere its edit history tracks the buffer, else the disk): what the breadcrumb's symbol and sticky scroll show.  The\nfile is FILE (absolute), or PATH under WORKTREE_ROOT (the edit history's names: a tracked buffer asks through the\nhistory, its changes handed over first).",
+        "properties": {
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "line": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "worktree_root": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "line"
+        ],
+        "title": "OutlineScopesParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "OutlineScope": {
+            "additionalProperties": false,
+            "description": "One definition around a line: its NAME and the LINE (from 1) it starts on.",
+            "properties": {
+              "line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "line"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`outline/scopes`' answer: the definitions that hold the line, outermost first (one that starts on it included);\nempty for a file with none, one that cannot be read, or one past the Outline's size limit.",
+        "properties": {
+          "scopes": {
+            "items": {
+              "$ref": "#/$defs/OutlineScope"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "scopes"
+        ],
+        "title": "OutlineScopes",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the file the Outline panel's hub-fed view shows (none: no file): the hub outlines it (the editor's unsaved text where its edit history tracks the buffer, else the disk), again after edits pause, and sends the view's model and rows",
       "name": "outline/set",
       "params": {

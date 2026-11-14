@@ -263,12 +263,49 @@ pub struct OutlineSet {
 
 fn check_outline(p: &OutlineSet) -> Result<(), Error> {
     check_ids(&p.view, None)?;
-    match &p.file {
-        Some(f) if f.is_empty() || f.len() > OUTLINE_FILE_MAX || !f.starts_with('/') => Err(
-            invalid("file", "an absolute file name of at most 4096 bytes"),
-        ),
-        _ => Ok(()),
+    p.file.as_deref().map_or(Ok(()), check_outline_file)
+}
+
+/// `outline/scopes`: the definitions around LINE (from 1) of a file, as the Outline reads it (the editor's unsaved text
+/// where its edit history tracks the buffer, else the disk): what the breadcrumb's symbol and sticky scroll show.  The
+/// file is FILE (absolute), or PATH under WORKTREE_ROOT (the edit history's names: a tracked buffer asks through the
+/// history, its changes handed over first).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OutlineScopesParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_root: Option<String>,
+    pub line: u32,
+}
+
+/// One definition around a line: its NAME and the LINE (from 1) it starts on.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OutlineScope {
+    pub name: String,
+    pub line: u32,
+}
+
+/// `outline/scopes`' answer: the definitions that hold the line, outermost first (one that starts on it included);
+/// empty for a file with none, one that cannot be read, or one past the Outline's size limit.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OutlineScopes {
+    pub scopes: Vec<OutlineScope>,
+}
+
+fn check_outline_file(f: &str) -> Result<(), Error> {
+    if f.is_empty() || f.len() > OUTLINE_FILE_MAX || !f.starts_with('/') {
+        return Err(invalid(
+            "file",
+            "an absolute file name of at most 4096 bytes",
+        ));
     }
+    Ok(())
 }
 
 pub(crate) fn methods() -> Vec<Method> {
@@ -332,6 +369,27 @@ pub(crate) fn methods() -> Vec<Method> {
             classes: [User], writes: false,
             doc: "the file the Outline panel's hub-fed view shows (none: no file): the hub outlines it (the editor's unsaved text where its edit history tracks the buffer, else the disk), again after edits pause, and sends the view's model and rows",
             check: check_outline,
+        ),
+        method!(
+            "outline/scopes", OutlineScopes(OutlineScopesParams) -> OutlineScopes,
+            classes: [User], writes: false,
+            doc: "the definitions around a line of a file, outermost first, as the Outline reads it (the editor's unsaved text where its edit history tracks the buffer, else the disk): the breadcrumb's symbol and sticky scroll",
+            check: |p: &OutlineScopesParams| {
+                match (&p.file, &p.worktree_root, &p.path) {
+                    (Some(f), None, None) => check_outline_file(f)?,
+                    (None, Some(root), Some(path)) => {
+                        check_outline_file(root)?;
+                        if path.is_empty() || path.len() > OUTLINE_FILE_MAX || path.starts_with('/') {
+                            return Err(invalid("path", "a file name relative to worktree_root, at most 4096 bytes"));
+                        }
+                    }
+                    _ => return Err(invalid("file", "a file, or a path and its worktree_root")),
+                }
+                if p.line == 0 {
+                    return Err(invalid("line", "a line number from 1"));
+                }
+                Ok(())
+            },
         ),
     ]
 }
