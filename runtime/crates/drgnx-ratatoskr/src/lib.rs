@@ -107,6 +107,7 @@ pub mod log;
 pub mod machines_cli;
 pub mod manager;
 pub mod matrix_gate;
+pub mod notebook;
 pub mod orch;
 pub mod packs_cli;
 pub mod pair;

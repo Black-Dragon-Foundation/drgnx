@@ -126,6 +126,11 @@ impl Outbox {
         .contains(&ConnEffect::Queue)
     }
 
+    /// Bytes queued for this client and not yet written (a producer that can drop an event asks before it pushes).
+    pub fn queued_bytes(&self) -> usize {
+        self.lock().core.queued_bytes()
+    }
+
     /// Close the connection now (logged once, with WHY): nothing more is written, and its lines are no longer read.
     pub fn close(&self, why: &str) {
         self.step(ConnEvent::Close, why);

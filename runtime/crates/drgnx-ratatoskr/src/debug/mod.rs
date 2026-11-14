@@ -162,12 +162,30 @@ pub fn mock_main(script: &std::ffi::OsStr) -> std::process::ExitCode {
 /// A boxed future, for the traits below.
 pub type BoxFut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
+/// What became of an event sent to one editor by [`Sink::send_lossy`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Delivery {
+    Sent,
+    /// Its queue is backed up: the event was not queued and the connection is kept.
+    Dropped,
+    /// The connection is gone.
+    Gone,
+}
+
 /// Where the events go: the editors' connections.
 pub trait Sink: Send + Sync {
     /// EVENT with DATA to every editor but EXCEPT.
     fn broadcast(&self, event: &str, data: Value, except: Option<u64>);
     /// EVENT with DATA to connection CONN only.
     fn send(&self, conn: u64, event: &str, data: Value) -> bool;
+    /// [`Sink::send`] for a producer whose events can be dropped: a backed-up client costs the event, not its subscription.
+    fn send_lossy(&self, conn: u64, event: &str, data: Value) -> Delivery {
+        if self.send(conn, event, data) {
+            Delivery::Sent
+        } else {
+            Delivery::Gone
+        }
+    }
 }
 
 impl Sink for crate::settings::agents::Editors {
@@ -176,6 +194,9 @@ impl Sink for crate::settings::agents::Editors {
     }
     fn send(&self, conn: u64, event: &str, data: Value) -> bool {
         self.send_to(conn, event, data)
+    }
+    fn send_lossy(&self, conn: u64, event: &str, data: Value) -> Delivery {
+        self.send_to_lossy(conn, event, data)
     }
 }
 

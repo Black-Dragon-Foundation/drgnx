@@ -96,6 +96,8 @@ pub struct Front {
     pub groups: crate::orch::groups::Listed,
     /// The debug sessions, the trusted roots and each root's last start ([`crate::debug::wire`]).
     pub debug: crate::debug::wire::Hub,
+    /// The open notebooks and their kernels ([`crate::notebook::rpc`]).
+    pub notebooks: crate::notebook::rpc::Hub,
     /// Test hooks (`--test-ignore-shutdown`): `shutdown` is answered and ignored, so `stop` reaches its signal.
     pub ignore_shutdown: AtomicBool,
     /// The store's other folders (home, config, `<state>/hub`), once the server opened it.
@@ -193,6 +195,7 @@ impl Front {
             queue: crate::orch::queue::Queue::default(),
             groups: crate::orch::groups::Listed::default(),
             debug: crate::debug::wire::Hub::default(),
+            notebooks: crate::notebook::rpc::Hub::default(),
             ignore_shutdown: AtomicBool::new(false),
             dirs: OnceLock::new(),
             shell_env: crate::shell_env::ShellEnv::default(),
@@ -324,6 +327,7 @@ impl Front {
         self.core.buffers.gone(conn);
         self.core.terms.gone(conn);
         self.extensions.gone(conn);
+        self.notebooks.gone(conn);
     }
 
     /// EVENT with DATA to every subscribed connection: queued for each before any is written (a queue never waits),
@@ -998,6 +1002,23 @@ impl Front {
                 .unwrap_or_else(|_| unserved(method)),
             // where a value came from (`debug/origin`)
             p @ Params::DebugOrigin(_) => crate::debug::origin_wire::serve(self, &caller, p)
+                .await
+                .unwrap_or_else(|_| unserved(method)),
+            // the Jupyter notebooks (`notebook/*`)
+            p @ (Params::NotebookOpen(_)
+            | Params::NotebookSync(_)
+            | Params::NotebookExecute(_)
+            | Params::NotebookSave(_)
+            | Params::NotebookKernels(_)
+            | Params::NotebookStart(_)
+            | Params::NotebookRestart(_)
+            | Params::NotebookShutdown(_)
+            | Params::NotebookInterrupt(_)
+            | Params::NotebookInput(_)
+            | Params::NotebookTail(_)
+            | Params::NotebookOutput(_)
+            | Params::NotebookClear(_)
+            | Params::NotebookClose(_)) => crate::notebook::rpc::serve(self, &caller, p)
                 .await
                 .unwrap_or_else(|_| unserved(method)),
             // the heap graph (`debug/heap`, `debug/heap/close`)
