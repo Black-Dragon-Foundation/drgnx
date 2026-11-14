@@ -59,6 +59,9 @@ pub struct Limits {
     pub send_within: Duration,
     /// Messages waiting to be sent, per socket.
     pub send_queue: usize,
+    /// Messages that do not verify, within BAD_WINDOW, before the kernel counts as flooding.
+    pub bad_count: usize,
+    pub bad_window: Duration,
 }
 
 impl Default for Limits {
@@ -67,6 +70,8 @@ impl Default for Limits {
             flood_bytes: 64 << 20,
             send_within: Duration::from_secs(10),
             send_queue: 64,
+            bad_count: 1000,
+            bad_window: Duration::from_secs(10),
         }
     }
 }
@@ -270,6 +275,30 @@ impl Recv for SubSocket {
     }
 }
 
+/// What a value holds in memory, about: a node costs a few words however short its text.
+fn weigh(v: &serde_json::Value) -> usize {
+    use serde_json::Value;
+    const NODE: usize = 32;
+    match v {
+        Value::String(s) => NODE + s.len(),
+        Value::Array(a) => NODE + a.iter().map(weigh).sum::<usize>(),
+        Value::Object(o) => {
+            NODE + o
+                .iter()
+                .map(|(k, v)| NODE + k.len() + weigh(v))
+                .sum::<usize>()
+        }
+        _ => NODE,
+    }
+}
+
+fn weight(m: &Message) -> usize {
+    weigh(&m.content)
+        + weigh(&m.parent)
+        + weigh(&m.metadata)
+        + m.buffers.iter().map(Vec::len).sum::<usize>()
+}
+
 /// A reader task: RECV is asked for one message at a time and nothing else happens in the task.
 fn reader<R: Recv>(
     channel: Channel,
@@ -281,6 +310,8 @@ fn reader<R: Recv>(
     limits: Limits,
 ) -> tokio::task::JoinHandle<()> {
     crate::clock::spawn(format!("notebook-{}-reader", channel.name()), async move {
+        // the start of the window, the messages that did not verify in it, their bytes
+        let mut bad = (crate::clock::now(), 0usize, 0usize);
         loop {
             let frames = match socket.next().await {
                 Ok(f) => f,
@@ -289,9 +320,12 @@ fn reader<R: Recv>(
                     return;
                 }
             };
-            let bytes: usize = frames.iter().map(Vec::len).sum();
+            let wire_bytes: usize = frames.iter().map(Vec::len).sum();
+            let mut bytes = wire_bytes;
             match wire::decode(&key, &frames) {
                 Ok(message) => {
+                    // what it holds decoded, not what it took on the wire: a small message can be a large value
+                    bytes = bytes.max(weight(&message));
                     if queued.fetch_add(bytes, Ordering::SeqCst) + bytes > limits.flood_bytes {
                         let _ = events.send(Event::Flood);
                         return;
@@ -309,8 +343,14 @@ fn reader<R: Recv>(
                 }
                 Err(_) => {
                     dropped.bad.fetch_add(1, Ordering::SeqCst);
-                    // a flood of garbage is a flood too
-                    if queued.load(Ordering::SeqCst) + bytes > limits.flood_bytes {
+                    // a flood of garbage is a flood too: too many within a window, or too many bytes
+                    let now = crate::clock::now();
+                    if now.duration_since(bad.0) > limits.bad_window {
+                        bad = (now, 0, 0);
+                    }
+                    bad.1 += 1;
+                    bad.2 += bytes;
+                    if bad.1 > limits.bad_count || bad.2 > limits.flood_bytes {
                         let _ = events.send(Event::Flood);
                         return;
                     }

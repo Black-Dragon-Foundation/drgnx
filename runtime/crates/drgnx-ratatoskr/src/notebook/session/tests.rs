@@ -213,3 +213,81 @@ async fn a_flood_unread_stops_the_reader_and_is_reported() {
     }
     assert!(flooded, "the reader said so");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_flood_of_badly_signed_messages_is_a_flood_too() {
+    let p = peer().await;
+    let limits = Limits {
+        bad_count: 20,
+        ..Limits::default()
+    };
+    let s = Session::connect(&p.conn, "ident-5", limits).await.unwrap();
+    let other = Key::generate().unwrap();
+    let (p, s) = (Mutex::new(p), Mutex::new(s));
+    skuld::wait_until_async("the flood of bad messages", 30, || async {
+        let mut pp = p.lock().await;
+        for _ in 0..30 {
+            pp.iopub
+                .send(zmq(
+                    &other,
+                    &Message::request("kernel", "status", json!({})),
+                ))
+                .await
+                .unwrap();
+        }
+        drop(pp);
+        s.lock()
+            .await
+            .tasks
+            .iter()
+            .any(|t| t.is_finished())
+            .then_some(())
+    })
+    .await;
+    let mut ss = s.lock().await;
+    let mut flooded = false;
+    while let Some(e) = ss.try_next() {
+        flooded |= matches!(e, Event::Flood);
+    }
+    assert!(flooded);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_message_small_on_the_wire_but_large_decoded_is_counted_by_what_it_holds() {
+    let p = peer().await;
+    // 450 KB on the wire each: 37 of them would pass 16 MiB by wire bytes alone, four by what they hold
+    let limits = Limits {
+        flood_bytes: 16 << 20,
+        ..Limits::default()
+    };
+    let s = Session::connect(&p.conn, "ident-6", limits).await.unwrap();
+    let sent = std::sync::atomic::AtomicUsize::new(0);
+    let key = p.conn.key.clone();
+    let (p, s) = (Mutex::new(p), Mutex::new(s));
+    // `[],` is three bytes on the wire and a value of its own in memory
+    let content = json!({"a": vec![json!([]); 150_000]});
+    skuld::wait_until_async("the weighted flood", 30, || async {
+        sent.fetch_add(1, Ordering::SeqCst);
+        let mut pp = p.lock().await;
+        pp.iopub
+            .send(zmq(
+                &key,
+                &Message::request("kernel", "stream", content.clone()),
+            ))
+            .await
+            .unwrap();
+        drop(pp);
+        s.lock()
+            .await
+            .tasks
+            .iter()
+            .any(|t| t.is_finished())
+            .then_some(())
+    })
+    .await;
+    assert!(
+        sent.load(Ordering::SeqCst) <= 30,
+        "flooded by what it holds, not by wire bytes: {} sent",
+        sent.load(Ordering::SeqCst)
+    );
+}
