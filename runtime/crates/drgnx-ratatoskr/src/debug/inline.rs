@@ -17,11 +17,12 @@
 //! runs the saved file.
 
 use super::session::Stop;
+use hrafn::inline_scan::{Lists, scan};
 use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tree_sitter::{Node, Parser, Tree};
+use tree_sitter::{Parser, Tree};
 
 /// Values a line shows at most.
 pub const PER_LINE: usize = 3;
@@ -58,24 +59,14 @@ pub struct Inline {
 }
 
 /// The node kinds inline values look for, over every built-in pack's grammar: each pack's `:inline` (docs/develop/packs.md).
-struct Lists {
-    functions: Vec<&'static str>,
-    loops: Vec<&'static str>,
-    names: Vec<&'static str>,
-}
-
 fn lists() -> &'static Lists {
     static LISTS: std::sync::OnceLock<Lists> = std::sync::OnceLock::new();
     LISTS.get_or_init(|| {
-        let mut l = Lists {
-            functions: Vec::new(),
-            loops: Vec::new(),
-            names: Vec::new(),
-        };
-        let add = |to: &mut Vec<&'static str>, from: &'static [String]| {
+        let mut l = Lists::default();
+        let add = |to: &mut Vec<String>, from: &[String]| {
             for k in from {
-                if !to.contains(&k.as_str()) {
-                    to.push(k.as_str());
+                if !to.contains(k) {
+                    to.push(k.clone());
                 }
             }
         };
@@ -90,11 +81,6 @@ fn lists() -> &'static Lists {
     })
 }
 
-/// Function nodes, over every grammar Hrafn has.
-fn functions() -> &'static [&'static str] {
-    &lists().functions
-}
-
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
@@ -107,74 +93,6 @@ fn cut(text: &str, max: usize) -> String {
     let mut s: String = text.chars().take(max.saturating_sub(1)).collect();
     s.push('…');
     s
-}
-
-/// Whether N names no value: a call's callee, a macro's name, a function's (or its declarator's) name, a field after a
-/// dot.
-fn not_a_value(n: Node) -> bool {
-    let Some(p) = n.parent() else { return false };
-    let is = |field: &str| {
-        p.child_by_field_name(field)
-            .is_some_and(|c| c.id() == n.id())
-    };
-    let kind = p.kind();
-    (kind.contains("call") || kind.contains("invocation")) && (is("function") || is("name"))
-        || kind == "macro_invocation" && is("macro")
-        || kind == "attribute" && is("attribute")
-        || kind == "function_declarator" && is("declarator")
-        || functions().contains(&kind) && is("name")
-}
-
-/// The innermost node of KINDS holding ROW under NODE.
-fn innermost<'t>(node: Node<'t>, row: usize, kinds: &[&str]) -> Option<Node<'t>> {
-    let mut found = None;
-    let mut cur = node.walk();
-    let mut n = node;
-    loop {
-        if kinds.contains(&n.kind()) {
-            found = Some(n);
-        }
-        let next = n
-            .children(&mut cur)
-            .find(|c| c.start_position().row <= row && row <= c.end_position().row);
-        match next {
-            Some(c) => n = c,
-            None => return found,
-        }
-    }
-}
-
-/// The outermost loop under FUNCTION holding ROW.
-fn outer_loop<'t>(function: Node<'t>, row: usize) -> Option<Node<'t>> {
-    let mut cur = function.walk();
-    let mut n = function;
-    loop {
-        let next = n
-            .children(&mut cur)
-            .find(|c| c.start_position().row <= row && row <= c.end_position().row)?;
-        if lists().loops.contains(&next.kind()) {
-            return Some(next);
-        }
-        n = next;
-    }
-}
-
-/// The name nodes under NODE on rows FROM to TO: (row, column, name).
-fn names(node: Node, text: &str, from: usize, to: usize, out: &mut Vec<(usize, usize, String)>) {
-    if node.end_position().row < from || node.start_position().row > to {
-        return;
-    }
-    if lists().names.contains(&node.kind()) && !not_a_value(node) {
-        let p = node.start_position();
-        if let Ok(s) = node.utf8_text(text.as_bytes()) {
-            out.push((p.row, p.column, s.to_owned()));
-        }
-        return;
-    }
-    let mut cur = node.walk();
-    for c in node.children(&mut cur) {
-        names(c, text, from, to, out);
-    }
 }
 
 impl Inline {
@@ -230,16 +148,7 @@ impl Inline {
             return vec![];
         };
         let row = line.saturating_sub(1) as usize;
-        let root = tree.root_node();
-        let function = innermost(root, row, functions()).unwrap_or(root);
-        let from = if function.id() == root.id() {
-            0
-        } else {
-            function.start_position().row
-        };
-        let to = outer_loop(function, row).map_or(row, |l| l.end_position().row.max(row));
-        let mut found = vec![];
-        names(function, text, from, to, &mut found);
+        let found = scan(&tree, text, row, lists());
         // the value of each name: a local scope's first, else a global's
         let value = |name: &str| {
             vars.iter()
@@ -392,13 +301,16 @@ mod list_tests {
     /// The lists the module held before the packs carried them (over every grammar Hrafn had).
     #[test]
     fn the_packs_lists_are_the_ones_inline_values_had() {
+        fn strs(v: &[String]) -> Vec<&str> {
+            v.iter().map(String::as_str).collect()
+        }
         fn sorted<'a>(v: &[&'a str]) -> Vec<&'a str> {
             let mut v = v.to_vec();
             v.sort_unstable();
             v
         }
         assert_eq!(
-            sorted(&lists().functions),
+            sorted(&strs(&lists().functions)),
             sorted(&[
                 "function_definition",
                 "function_declaration",
@@ -419,7 +331,7 @@ mod list_tests {
             ])
         );
         assert_eq!(
-            sorted(&lists().loops),
+            sorted(&strs(&lists().loops)),
             sorted(&[
                 "for_statement",
                 "for_range_loop",    // C++ (language packs Task 9)
@@ -436,7 +348,7 @@ mod list_tests {
             ])
         );
         assert_eq!(
-            sorted(&lists().names),
+            sorted(&strs(&lists().names)),
             sorted(&[
                 "identifier",
                 "variable_name",

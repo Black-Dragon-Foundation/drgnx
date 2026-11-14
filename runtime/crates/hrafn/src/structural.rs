@@ -52,6 +52,18 @@ impl Grammar {
     }
 }
 
+impl Grammar {
+    /// A grammar the caller loaded (a fetched pack's, in its worker) with the character its metavariable sigil becomes;
+    /// its language reads as text to the messages.
+    pub fn from_parts(ts: tree_sitter::Language, expando: char) -> Grammar {
+        Grammar {
+            lang: Lang::Text,
+            ts,
+            expando,
+        }
+    }
+}
+
 /// LANG's tree-sitter language, for callers that walk the tree themselves (the debugger's inline values); none for
 /// Org, Markdown and text.
 pub fn language(lang: Lang) -> Option<tree_sitter::Language> {
@@ -168,7 +180,7 @@ impl Skip {
 
 /// One match: bytes `[start, end)` of the file; LINE and END_LINE from 1, COL and END_COL characters of their lines
 /// from 0; each named metavariable's text; and the template's expansion when the pattern has one.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Match {
     pub start: usize,
     pub end: usize,
@@ -191,17 +203,27 @@ pub struct Pattern {
 impl Pattern {
     /// PATTERN parsed as LANG, with the template REWRITE.
     pub fn new(lang: Lang, pattern: &str, rewrite: Option<&str>) -> Result<Pattern, PatternError> {
-        let refused = |col| PatternError {
-            lang,
-            col,
-            no_grammar: false,
-        };
         let Some(grammar) = Grammar::of(lang) else {
             return Err(PatternError {
                 lang,
                 col: None,
                 no_grammar: true,
             });
+        };
+        Pattern::in_grammar(grammar, pattern, rewrite)
+    }
+
+    /// PATTERN parsed in GRAMMAR, with the template REWRITE.
+    pub fn in_grammar(
+        grammar: Grammar,
+        pattern: &str,
+        rewrite: Option<&str>,
+    ) -> Result<Pattern, PatternError> {
+        let lang = grammar.lang;
+        let refused = |col| PatternError {
+            lang,
+            col,
+            no_grammar: false,
         };
         let processed = grammar.pre_process_pattern(pattern).into_owned();
         if let Some(col) = first_error(&grammar, &processed) {
