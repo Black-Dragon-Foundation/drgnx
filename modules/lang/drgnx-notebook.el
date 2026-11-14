@@ -85,7 +85,10 @@
   "ID → (:head OV :tail OV :body OV): the overlays of a cell.")
 (defvar-local drgnx-notebook--known (make-hash-table :test #'equal)
   "ID → t: cells the hub holds (a cell minted here is known after the first sync).")
-(defvar-local drgnx-notebook--prompts (make-hash-table :test #'equal) "ID → execution count (an integer), or nil.")
+(defvar-local drgnx-notebook--heads (make-hash-table :test #'equal)
+  "ID → the hub's head of the cell (:text :state :runs), from its last tail: the header strip after the button.")
+(defvar-local drgnx-notebook--selected-id nil "The selected cell's id: its output is tinted selected and has the add-cell row.")
+(defvar-local drgnx-notebook--queue 0 "How many cells wait for the kernel, as the hub last said.")
 (defvar-local drgnx-notebook--state "idle" "The kernel's state as the hub last said: idle, busy, starting, dead.")
 (defvar-local drgnx-notebook--running nil "The cell the kernel runs now, or nil.")
 (defvar-local drgnx-notebook--selected nil "The overlay that tints the selected cell.")
@@ -94,7 +97,7 @@
 (defvar-local drgnx-notebook--tails (make-hash-table :test #'equal) "ID → the version of the last tail put.")
 (defvar-local drgnx-notebook--outputs-hidden nil "Non-nil while the outputs are hidden.")
 (defvar-local drgnx-notebook--images (make-hash-table :test #'equal)
-  "(CELL OUTPUT MIME WIDTH HEIGHT) → the image spec drawn, or `pending' or `failed'; a cell's entries go when it runs again.")
+  "(CELL OUTPUT MIME WIDTH HEIGHT) → the image spec drawn, or `pending' or `failed'; dropped when the cell runs again.")
 (defvar-local drgnx-notebook--last-tails (make-hash-table :test #'equal) "ID → the last tail put, for the redraw an image fetch ends with.")
 (defvar-local drgnx-notebook--rescans 0 "How many rescans ran (for the tests).")
 
@@ -207,33 +210,55 @@ repeated id is re-minted (a second cell with an id the buffer already has gets a
 (defun drgnx-notebook-run-cell-at-mouse (event)
   "Run the cell whose run button EVENT clicked."
   (interactive "e")
-  (let* ((pos (posn-point (event-end event)))
-         (id (and pos (get-text-property pos 'drgnx-notebook-run))))
+  (let* ((ps (posn-string (event-end event)))
+         (id (and ps (get-text-property (cdr ps) 'drgnx-notebook-run (car ps)))))
     (when id (drgnx-notebook--run-ids (list id)))))
 
-(defun drgnx-notebook--prompt (id type)
-  "The prompt of cell ID: [n], [*] while it runs, [ ] before it ran; none for a markdown or raw cell."
-  (if (not (eq type 'code)) ""
-    (let ((n (gethash id drgnx-notebook--prompts)))
-      (cond ((equal id drgnx-notebook--running) "[*]")
-            (n (format "[%d]" n))
-            (t "[ ]")))))
+(defvar drgnx-notebook-add-map
+  (let ((m (make-sparse-keymap)))
+    (define-key m [mouse-1] #'drgnx-notebook-add-cell-at-mouse)
+    m)
+  "The keymap of the add-cell row's buttons.")
+
+(defun drgnx-notebook-add-cell-at-mouse (event)
+  "Add a cell below the selected one, of the type of the button EVENT clicked (+ Code, + Markdown)."
+  (interactive "e")
+  (let* ((ps (posn-string (event-end event))) (type (and ps (get-text-property (cdr ps) 'drgnx-notebook-add (car ps)))))
+    (when type (drgnx-notebook-add-cell-below type))))
+
+(defun drgnx-notebook--add-row ()
+  "The row under the selected cell: + Code and + Markdown, chips that add a cell below."
+  (concat (propertize "+ Code" 'face 'drgnx-notebook-chip 'drgnx-notebook-add 'code 'keymap drgnx-notebook-add-map
+                      'mouse-face 'drgnx-hover 'help-echo "Add a code cell below")
+          " "
+          (propertize "+ Markdown" 'face 'drgnx-notebook-chip 'drgnx-notebook-add 'markdown 'keymap drgnx-notebook-add-map
+                      'mouse-face 'drgnx-hover 'help-echo "Add a markdown cell below")
+          (propertize "\n" 'face 'drgnx-notebook-cell-selected)))
+
+(defun drgnx-notebook--styled (text runs &rest base)
+  "A copy of TEXT with the BASE faces on all of it and each of RUNS' faces (the hub's roles) on its stretch."
+  (let* ((s (copy-sequence text)) (n (length s)))
+    (when (> n 0)
+      (dolist (face base) (add-face-text-property 0 n face nil s))
+      (dolist (run runs)
+        (let ((start (min n (or (plist-get run :start) 0))) (end (min n (or (plist-get run :end) 0)))
+              (faces (drgnx-notebook--run-faces run)))
+          (when (< start end) (dolist (face faces) (add-face-text-property start end face nil s))))))
+    s))
 
 (defun drgnx-notebook--head-string (id type)
-  "The header strip of cell ID, built when something it shows changes (never while redisplay draws)."
-  (concat
-   (if (eq type 'code)
-       (propertize (drgnx-notebook--icon 'play 'drgnx-notebook-run-button)
-                   'drgnx-notebook-run id 'keymap drgnx-notebook-run-map 'mouse-face 'drgnx-hover
-                   'help-echo "Run this cell")
-     "")
-   (if (eq type 'code) " " "")
-   (propertize (drgnx-notebook--prompt id type) 'face 'drgnx-notebook-prompt)
-   " "
-   (propertize (format " %s " type) 'face 'drgnx-notebook-chip)
-   (if (and (eq type 'code) drgnx-notebook--language)
-       (propertize (format " %s " drgnx-notebook--language) 'face 'drgnx-notebook-chip) "")
-   (propertize " " 'face 'drgnx-notebook-head)))
+  "The header strip of cell ID: the run button (the editor's) and the head the hub built (`[3]  python'), else the type
+until the hub has sent a head (a new cell, a markdown cell).  Built when a head arrives, never while redisplay draws."
+  (let ((head (gethash id drgnx-notebook--heads)))
+    (concat
+     (if (eq type 'code)
+         (concat (propertize (drgnx-notebook--icon 'play 'drgnx-notebook-run-button)
+                             'drgnx-notebook-run id 'keymap drgnx-notebook-run-map 'mouse-face 'drgnx-hover
+                             'help-echo "Run this cell")
+                 " ")
+       "")
+     (drgnx-notebook--styled (or (plist-get head :text) (symbol-name type)) (plist-get head :runs) 'drgnx-notebook-head)
+     (propertize " " 'face 'drgnx-notebook-head))))
 
 (defun drgnx-notebook--chrome-of (id) (gethash id drgnx-notebook--chrome))
 
@@ -324,8 +349,15 @@ Idempotent; cheap when nothing changed."
     found))
 
 (defun drgnx-notebook--select-at (pos)
-  "Tint the cell at POS as the selected one (one overlay, moved)."
-  (let ((c (and drgnx-notebook--cells (drgnx-notebook--cell-at pos))))
+  "Tint the cell at POS as the selected one (one overlay, moved); its output takes the selected tint and the add row
+and the cell it left goes back (their strings are built again from their last tails: two cells, not a scan)."
+  (let* ((c (and drgnx-notebook--cells (drgnx-notebook--cell-at pos)))
+         (old drgnx-notebook--selected-id)
+         (new (and c (plist-get c :id))))
+    (setq drgnx-notebook--selected-id new)
+    (unless (equal old new)
+      (dolist (id (delq nil (list old new))) (drgnx-notebook--refresh-tail id))
+      (when (fboundp 'drgnx-statusbar-refresh) (drgnx-statusbar-refresh t)))
     (cond ((null c) (when drgnx-notebook--selected (delete-overlay drgnx-notebook--selected)))
           (t (unless drgnx-notebook--selected
                (setq drgnx-notebook--selected (make-overlay (plist-get c :head) (1+ (plist-get c :tail))))
@@ -355,22 +387,20 @@ Idempotent; cheap when nothing changed."
     (when (plist-get run :inverse) (push '(:inverse-video t) faces))
     faces))
 
-(defun drgnx-notebook--tail-string (tail)
+(defun drgnx-notebook--tail-string (tail &optional selected)
   "The string put after a cell's tail boundary, from the hub's TAIL (:text :runs :more_lines :stale): its text with the
-runs' faces on it, and a newline, since the next row is the next cell's header."
-  (let* ((text (or (plist-get tail :text) "")) (n (length text)))
-    (if (zerop n) ""
-      (let ((s (copy-sequence text)))
-        (add-face-text-property 0 n (if (plist-get tail :stale) '(drgnx-notebook-output drgnx-notebook-stale drgnx-notebook-cell) '(drgnx-notebook-output drgnx-notebook-cell)) nil s)
-        (dolist (run (plist-get tail :runs))
-          (let ((start (min n (or (plist-get run :start) 0))) (end (min n (or (plist-get run :end) 0)))
-                (faces (drgnx-notebook--run-faces run)))
-            (when (< start end) (dolist (face faces) (add-face-text-property start end face nil s)))))
-        (dolist (image (reverse (plist-get tail :images)))   ; last first: a label is longer than the character it replaces
-          (let ((at (plist-get image :at)))
-            (when (and at (< at n) (eq (aref s at) #xfffc))
-              (setq s (concat (substring s 0 at) (drgnx-notebook--image-piece tail image) (substring s (1+ at)))))))
-        (concat s (propertize "\n" 'face 'drgnx-notebook-cell))))))
+runs' faces on it and a newline (the next row is the next cell's header).  SELECTED: the selected tint and the
+and the add-cell row follows."
+  (let* ((text (or (plist-get tail :text) "")) (n (length text)) (cell (if selected 'drgnx-notebook-cell-selected 'drgnx-notebook-cell)))
+    (concat
+     (if (zerop n) ""
+       (let ((s (drgnx-notebook--styled text (plist-get tail :runs) (if (plist-get tail :stale) 'drgnx-notebook-stale 'drgnx-notebook-output) cell)))
+         (dolist (image (reverse (plist-get tail :images)))   ; last first: a label is longer than the character it replaces
+           (let ((at (plist-get image :at)))
+             (when (and at (< at n) (eq (aref s at) #xfffc))
+               (setq s (concat (substring s 0 at) (drgnx-notebook--image-piece tail image) (substring s (1+ at)))))))
+         (concat s (propertize "\n" 'face cell))))
+     (if selected (drgnx-notebook--add-row) ""))))
 
 ;;; Images (static PNG and JPEG; SVG is not in tier 1): one character each in the tail, drawn from the hub's full output
 
@@ -436,8 +466,15 @@ runs' faces on it, and a newline, since the next row is the next cell's header."
       (puthash id version drgnx-notebook--tails)
       (puthash id tail drgnx-notebook--last-tails)
       (drgnx-notebook--want-images tail)
-      (when-let* ((n (plist-get tail :execution_count))) (puthash id n drgnx-notebook--prompts) (drgnx-notebook--refresh-head id))
-      (overlay-put ov 'after-string (drgnx-notebook--tail-string tail)))))
+      (when-let* ((head (plist-get tail :head))) (puthash id head drgnx-notebook--heads) (drgnx-notebook--refresh-head id))
+      (overlay-put ov 'after-string (drgnx-notebook--tail-string tail (equal id drgnx-notebook--selected-id))))))
+
+(defun drgnx-notebook--refresh-tail (id)
+  "Build cell ID's output string again from its last tail (or none): the selection moved onto or off the cell."
+  (when-let* ((ov (plist-get (drgnx-notebook--chrome-of id) :tail)) ((overlay-buffer ov)))
+    (overlay-put ov 'after-string
+                 (drgnx-notebook--tail-string (or (gethash id drgnx-notebook--last-tails) (list :cell id))
+                                              (equal id drgnx-notebook--selected-id)))))
 
 (defun drgnx-notebook--request-tail (id)
   "Ask the hub for cell ID's tail (a boundary came back, or a cell moved): the string comes from the hub's state."
@@ -549,13 +586,15 @@ fails the notebook: a language without a grammar or a mode stays plain text."
           ("notebook-input-request" (drgnx-notebook--input-request data)))))))
 
 (defun drgnx-notebook--status (data)
-  "A kernel's state: the cell it runs, and the queue."
+  "A kernel's state (starting, idle, busy, dead), the cell it runs and the queue: the status bar shows them; heads
+come with their tails."
   (let ((old drgnx-notebook--running))
     (setq drgnx-notebook--state (or (plist-get data :state) "idle")
-          drgnx-notebook--running (and (member drgnx-notebook--state '("busy" "running")) (plist-get data :cell)))
-    (when (and drgnx-notebook--running (not (equal drgnx-notebook--running old))) (drgnx-notebook--forget-images drgnx-notebook--running))
-    (dolist (id (delq nil (list old drgnx-notebook--running))) (drgnx-notebook--refresh-head id))
-    (force-mode-line-update)))
+          drgnx-notebook--running (and (equal drgnx-notebook--state "busy") (plist-get data :cell))
+          drgnx-notebook--queue (or (plist-get data :queue) 0))
+    (when (and drgnx-notebook--running (not (equal drgnx-notebook--running old)))
+      (drgnx-notebook--forget-images drgnx-notebook--running))
+    (when (fboundp 'drgnx-statusbar-refresh) (drgnx-statusbar-refresh t))))
 
 (defun drgnx-notebook--input-request (data)
   "The kernel asked for a line (`input()'): the user is waiting, so it is asked now."
@@ -578,13 +617,12 @@ fails the notebook: a language without a grammar or a mode stays plain text."
   (let ((cells (plist-get result :cells)) (inhibit-read-only t) (inhibit-modification-hooks t))
     (setq drgnx-notebook--id (plist-get result :id)
           drgnx-notebook--language (plist-get result :language)
-          drgnx-notebook--kernel (plist-get result :kernelspec))
+          drgnx-notebook--kernel nil)   ; the kernelspec the file names is started on the first run; the segment shows the one started
     (puthash drgnx-notebook--id (current-buffer) drgnx-notebook--buffers)
     (erase-buffer)
     (dolist (c cells)
       (let ((id (plist-get c :id)) (type (intern (or (plist-get c :type) "code"))))
         (puthash id t drgnx-notebook--known)
-        (when-let* ((n (plist-get c :execution_count))) (puthash id n drgnx-notebook--prompts))
         (insert (drgnx-notebook--cell-text id type (or (plist-get c :source) "")))))
     (when (null cells) (insert (drgnx-notebook--cell-text (drgnx-notebook--mint) 'code "")))
     (setq buffer-undo-list nil buffer-read-only nil)
@@ -634,7 +672,7 @@ fails the notebook: a language without a grammar or a mode stays plain text."
               require-final-newline nil
               drgnx-notebook--chrome (make-hash-table :test #'equal)
               drgnx-notebook--known (make-hash-table :test #'equal)
-              drgnx-notebook--prompts (make-hash-table :test #'equal)
+              drgnx-notebook--heads (make-hash-table :test #'equal)
               drgnx-notebook--images (make-hash-table :test #'equal)
               drgnx-notebook--last-tails (make-hash-table :test #'equal)
               drgnx-notebook--tails (make-hash-table :test #'equal))
@@ -820,29 +858,57 @@ The first part keeps the id and the output."
                               (with-current-buffer buffer
                                 (cond ((and e (string-match "several kernels fit" e)) (drgnx-notebook-select-kernel ids))
                                       (e (message "drgnx notebook: %s" e))
-                                      (t (setq drgnx-notebook--kernel (or (plist-get r :kernel) r))
+                                      (t (setq drgnx-notebook--kernel (plist-get r :kernel))
                                          (drgnx-notebook--run-ids ids)))))))))
 
+(defun drgnx-notebook--kernel-candidates (result)
+  "The kernels of `notebook/kernels' RESULT as ((NAME . PLIST)…): an installed one with :display and :language, one
+the hub skipped with :why (shown in the picker with its reason, and refused when chosen)."
+  (append (mapcar (lambda (k) (cons (plist-get k :name) (list :display (plist-get k :display_name) :language (plist-get k :language))))
+                  (plist-get result :kernels))
+          (mapcar (lambda (k) (cons (plist-get k :name) (list :why (plist-get k :why))))
+                  (plist-get result :skipped))))
+
+(defun drgnx-notebook--choose-kernel (candidates)
+  "Ask for one of CANDIDATES (`drgnx-notebook--kernel-candidates'); a skipped one is a user-error saying why."
+  (let* ((completion-extra-properties
+          (list :annotation-function
+                (lambda (name)
+                  (let ((c (cdr (assoc name candidates))))
+                    (if (plist-get c :why) (format "  unavailable: %s" (plist-get c :why))
+                      (format "  %s (%s)" (plist-get c :display) (plist-get c :language)))))))
+         (name (completing-read "Kernel: " (mapcar #'car candidates) nil t))
+         (c (cdr (assoc name candidates))))
+    (when (plist-get c :why) (user-error "Kernel %s is not available: %s" name (plist-get c :why)))
+    name))
+
 (defun drgnx-notebook-select-kernel (&optional then-run)
-  "Choose the notebook's kernel from the installed kernelspecs and start it."
+  "Choose the notebook's kernel from the installed kernelspecs (the hub's skipped ones are listed with why); start it."
   (interactive)
   (drgnx-notebook--ensure)
   (let ((buffer (current-buffer)) (nb drgnx-notebook--id))
-    (drgnx-notebook--call "notebook/kernels" nil
-                          (lambda (r e)
-                            (when (buffer-live-p buffer)
-                              (with-current-buffer buffer
-                                (let* ((names (mapcar (lambda (k) (plist-get k :name)) (plist-get r :kernels))))
-                                  (cond (e (message "drgnx notebook: %s" e))
-                                        ((null names) (message "drgnx notebook: no kernelspec is installed"))
-                                        (t (let ((name (completing-read "Kernel: " names nil t)))
-                                             (drgnx-notebook--call "notebook/start" (list :id nb :kernel name)
-                                                                   (lambda (_r e2)
-                                                                     (when (and (buffer-live-p buffer))
-                                                                       (with-current-buffer buffer
-                                                                         (if e2 (message "drgnx notebook: %s" e2)
-                                                                           (setq drgnx-notebook--kernel name)
-                                                                           (when then-run (drgnx-notebook--run-ids then-run)))))))))))))))))
+    (drgnx-notebook--call
+     "notebook/kernels" nil
+     (lambda (r e)
+       (when (buffer-live-p buffer)
+         ;; the picker is the user's command asking, but it is not asked from inside the hub's process filter
+         (run-at-time
+          0 nil
+          (lambda ()
+            (when (buffer-live-p buffer)
+              (with-current-buffer buffer
+                (let ((candidates (and (not e) (drgnx-notebook--kernel-candidates r))))
+                  (cond (e (message "drgnx notebook: %s" e))
+                        ((null candidates) (message "drgnx notebook: no kernelspec is installed"))
+                        (t (let ((name (drgnx-notebook--choose-kernel candidates)))
+                             (drgnx-notebook--call
+                              "notebook/start" (list :id nb :kernel name)
+                              (lambda (r2 e2)
+                                (when (buffer-live-p buffer)
+                                  (with-current-buffer buffer
+                                    (if e2 (message "drgnx notebook: %s" e2)
+                                      (setq drgnx-notebook--kernel (or (plist-get r2 :kernel) name))
+                                      (when then-run (drgnx-notebook--run-ids then-run))))))))))))))))))))
 
 (defun drgnx-notebook-run-cell ()
   "Run this cell."
@@ -881,19 +947,18 @@ The first part keeps the id and the output."
   (drgnx-notebook--call "notebook/interrupt" (list :id drgnx-notebook--id) (lambda (_r e) (when e (message "drgnx notebook: %s" e)))))
 
 (defun drgnx-notebook-restart-kernel (&optional then-run-all)
-  "Restart the kernel: it ends and starts again, the outputs stay.  THEN-RUN-ALL: run every code cell once it is up."
+  "Restart the kernel (the hub's: it ends and a new one of the same kernelspec starts; queued cells show cancelled).
+THEN-RUN-ALL: run every code cell once it is up."
   (interactive)
   (drgnx-notebook--ensure)
-  (let ((buffer (current-buffer)) (nb drgnx-notebook--id) (name drgnx-notebook--kernel))
-    (drgnx-notebook--call "notebook/shutdown" (list :id nb)
-                          (lambda (_r _e)
+  (let ((buffer (current-buffer)))
+    (drgnx-notebook--call "notebook/restart" (list :id drgnx-notebook--id)
+                          (lambda (r e)
                             (when (buffer-live-p buffer)
-                              (drgnx-notebook--call "notebook/start" (append (list :id nb) (and name (list :kernel name)))
-                                                    (lambda (_r2 e2)
-                                                      (when (buffer-live-p buffer)
-                                                        (with-current-buffer buffer
-                                                          (cond (e2 (message "drgnx notebook: %s" e2))
-                                                                (then-run-all (drgnx-notebook-run-all))))))))))))
+                              (with-current-buffer buffer
+                                (cond (e (message "drgnx notebook: %s" e))
+                                      (t (setq drgnx-notebook--kernel (plist-get r :kernel))
+                                         (when then-run-all (drgnx-notebook-run-all))))))))))
 
 (defun drgnx-notebook-restart-and-run-all ()
   "Restart the kernel and run every code cell."
@@ -936,16 +1001,69 @@ The first part keeps the id and the output."
          (_ (let ((p (plist-get (plist-get o :data) :text/plain))) (if (listp p) (apply #'concat p) (or p "")))))))
    outputs ""))
 
-(defun drgnx-notebook-clear-outputs ()
-  "Clear every cell's output."
-  (interactive)
+(defun drgnx-notebook-clear-outputs (&optional this-cell)
+  "Clear every cell's output and execution count (a prefix argument: this cell's); a queued or running cell stays."
+  (interactive "P")
   (drgnx-notebook--ensure)
-  (user-error "Clearing outputs needs the hub's notebook/clear, which is not there yet"))
+  (let ((id (and this-cell (plist-get (drgnx-notebook--current) :id))))
+    (drgnx-notebook--call "notebook/clear" (append (list :id drgnx-notebook--id) (and id (list :cell id)))
+                          (lambda (_r e) (when e (message "drgnx notebook: %s" e))))))
 
 (defun drgnx-notebook-open-output ()
-  "Open this cell's full output in its own view."
+  "Open this cell's whole output (what the hub holds of it) as text in a buffer of its own."
   (interactive)
-  (user-error "The full-output view is a hub-fed Sjá view (not built yet): copy the output instead"))
+  (let ((c (drgnx-notebook--current)) (name (buffer-name)))
+    (drgnx-notebook--call "notebook/output" (list :id drgnx-notebook--id :cell (plist-get c :id))
+                          (lambda (r e)
+                            (if e (message "drgnx notebook: %s" e)
+                              (let ((text (drgnx-notebook--outputs-text (plist-get r :outputs)))
+                                    (buffer (get-buffer-create (format "*Output: %s %s*" name (plist-get c :id)))))
+                                (with-current-buffer buffer
+                                  (let ((inhibit-read-only t))
+                                    (erase-buffer)
+                                    (insert (if (string-empty-p text) "(no output)\n" text))
+                                    (goto-char (point-min)))
+                                  (special-mode))
+                                (pop-to-buffer buffer)))))))
+
+;;;; The status bar: which cell, and the kernel
+
+(declare-function drgnx-statusbar-define-segment "drgnx-statusbar")
+(declare-function drgnx-statusbar-refresh "drgnx-statusbar")
+(declare-function drgnx-module-set "drgnx-modules-helpers")
+(defvar drgnx-statusbar-left)
+(defvar drgnx-statusbar-right)
+
+(defun drgnx-notebook--segment-cell ()
+  "`cell 3 of 4 · python': the selected cell's place, from the cached ranges (a status bar reads only cached state)."
+  (when (and (derived-mode-p 'drgnx-notebook-mode) drgnx-notebook--cells)
+    (let ((i (seq-position drgnx-notebook--cells drgnx-notebook--selected-id
+                           (lambda (c id) (equal (plist-get c :id) id)))))
+      (format "cell %d of %d%s" (1+ (or i 0)) (length drgnx-notebook--cells)
+              (if drgnx-notebook--language (format " · %s" drgnx-notebook--language) "")))))
+
+(defun drgnx-notebook--segment-kernel ()
+  "`● python3 · busy': the kernel and what it is doing (the hub's `notebook-status'), `no kernel' before one starts."
+  (when (derived-mode-p 'drgnx-notebook-mode)
+    (if (null drgnx-notebook--kernel)
+        (propertize "no kernel" 'face 'drgnx-text-muted)
+      (concat (propertize "●" 'face (pcase drgnx-notebook--state ("busy" 'drgnx-status-warn) ("dead" 'drgnx-status-fail)
+                                           ("starting" 'drgnx-status-info) (_ 'drgnx-status-ok)))
+              (format " %s · %s" drgnx-notebook--kernel drgnx-notebook--state)))))
+
+(defun drgnx-notebook--segments-define ()
+  "Define the segments `notebook-cell' (before the left end of the bar) and `notebook-kernel' (before the language)."
+  (when (fboundp 'drgnx-statusbar-define-segment)
+    (drgnx-statusbar-define-segment 'notebook-cell :fn #'drgnx-notebook--segment-cell
+                                    :help "The selected cell's place in the notebook")
+    (drgnx-statusbar-define-segment 'notebook-kernel :fn #'drgnx-notebook--segment-kernel
+                                    :help "The notebook's kernel and its state")
+    (unless (memq 'notebook-cell drgnx-statusbar-left)
+      (drgnx-module-set 'drgnx-statusbar-left (append drgnx-statusbar-left '(notebook-cell))))
+    (unless (memq 'notebook-kernel drgnx-statusbar-right)
+      (let ((tail (memq 'language drgnx-statusbar-right)))
+        (drgnx-module-set 'drgnx-statusbar-right
+                          (append (butlast drgnx-statusbar-right (length tail)) '(notebook-kernel) tail))))))
 
 ;;;; The module
 
@@ -989,6 +1107,7 @@ The first part keeps the id and the output."
                      (lambda ()
                        (add-to-list 'auto-mode-alist '("\\.ipynb\\'" . drgnx-notebook-mode))
                        (add-hook 'drgnx-hub-event-functions #'drgnx-notebook--event)
+                       (drgnx-notebook--segments-define)
                        (advice-add 'kill-region :before #'drgnx-notebook-guard-kill)
                        (dolist (c drgnx-notebook--commands)
                          (drgnx-command-define (nth 0 c) :title (nth 1 c) :category "Notebook" :command (nth 2 c) :map 'drgnx-notebook-mode-map

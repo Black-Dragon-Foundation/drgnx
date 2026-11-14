@@ -22,7 +22,9 @@
         :cells ((:id "a" :type "code" :source "x = 1\nx" :execution_count 3)
                 (:id "b" :type "markdown" :source "# Title")
                 (:id "c" :type "code" :source "print(2)"))
-        :tails nil))
+        :tails ((:cell "a" :version 1 :text "2" :stale t :head (:text "[3]  python" :state "idle" :runs nil)
+                       :runs nil :images nil :more_lines 0)))
+  "What `notebook/open' answers: the cells, and each code cell's tail with the head the hub built.")
 
 (defmacro nb-test--with (&rest body)
   "BODY in a notebook buffer holding `nb-test--opened', the module on, the hub a recorder."
@@ -220,14 +222,36 @@
       (should (equal (delete "notebook/tail" (mapcar #'car (reverse nb-test--calls)))
                      '("notebook/sync" "notebook/execute" "notebook/start" "notebook/sync" "notebook/execute"))))))
 
-(ert-deftest drgnx-notebook/status-events-show-the-running-prompt ()
+(ert-deftest drgnx-notebook/the-head-is-the-hubs-and-comes-with-a-tail ()
   (nb-test--with
-    (drgnx-notebook--event "notebook-status" (list :id "nb1" :state "busy" :cell "c" :queue 0))
-    (should (string-search "[*]" (overlay-get (plist-get (drgnx-notebook--chrome-of "c") :head) 'before-string)))
-    (drgnx-notebook--event "notebook-status" (list :id "nb1" :state "idle" :cell nil :queue 0))
-    (should-not (string-search "[*]" (overlay-get (plist-get (drgnx-notebook--chrome-of "c") :head) 'before-string)))
-    (drgnx-notebook--event "notebook-tail" (append (list :cell "c" :execution_count 7) (nb-test--tail "7")))
-    (should (string-search "[7]" (overlay-get (plist-get (drgnx-notebook--chrome-of "c") :head) 'before-string)))))
+    (let ((head (lambda (id) (overlay-get (plist-get (drgnx-notebook--chrome-of id) :head) 'before-string))))
+      ;; the hub's text after the run button; the Lisp strip has no prompt or chips of its own
+      (should (string-search "[3]  python" (funcall head "a")))
+      (should-not (string-search " code " (funcall head "a")))
+      ;; a cell with no head from the hub yet shows its type
+      (should (string-search "markdown" (funcall head "b")))
+      (should (string-search "markdown" (funcall head "b")))
+      ;; a tail brings a new head, its runs' faces on it
+      (drgnx-notebook--event "notebook-tail"
+                             (append (list :cell "c" :head (list :text "[*]  python" :state "running"
+                                                                 :runs (list (list :start 0 :end 3 :fg 3 :bold t))))
+                                     (nb-test--tail "7")))
+      (let ((s (funcall head "c")))
+        (should (string-search "[*]  python" s))
+        (should (memq 'drgnx-notebook-fg-yellow (ensure-list (get-text-property (string-search "[*]" s) 'face s))))))))
+
+(ert-deftest drgnx-notebook/status-events-feed-the-status-bar ()
+  (nb-test--with
+    (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id "b") :head)))
+    (drgnx-notebook--select-at (point))
+    (should (equal (drgnx-notebook--segment-cell) "cell 2 of 3 · python"))
+    (should (equal (substring-no-properties (drgnx-notebook--segment-kernel)) "no kernel"))
+    (setq drgnx-notebook--kernel "python3")
+    (drgnx-notebook--event "notebook-status" (list :id "nb1" :state "busy" :cell "c" :queue 2))
+    (should (equal (substring-no-properties (drgnx-notebook--segment-kernel)) "● python3 · busy"))
+    (should (equal drgnx-notebook--queue 2))
+    (drgnx-notebook--event "notebook-status" (list :id "nb1" :state "dead" :queue 0))
+    (should (string-search "dead" (drgnx-notebook--segment-kernel)))))
 
 (ert-deftest drgnx-notebook/save-hands-the-cells-to-the-hub ()
   (nb-test--with
@@ -411,3 +435,77 @@
       (drgnx-notebook-change-cell-type 'raw)
       (drgnx-notebook--rescan)
       (should (equal (mapcar #'car (treesit-parser-list)) '(python))))))
+
+;;; The real shapes of the routed methods: restart, clear, kernels, output, the add row, the selected tint
+
+(ert-deftest drgnx-notebook/restart-is-the-hubs ()
+  (nb-test--with
+    (setq nb-test--answers (list (cons "notebook/restart" (lambda (_) (cons (list :kernel "python3") nil)))))
+    (setq nb-test--calls nil)
+    (drgnx-notebook-restart-kernel)
+    (should (equal (mapcar #'car (reverse nb-test--calls)) '("notebook/restart")))
+    (should (equal drgnx-notebook--kernel "python3"))
+    ;; and run all once it is up
+    (setq nb-test--calls nil)
+    (drgnx-notebook-restart-and-run-all)
+    (should (equal (delete "notebook/tail" (mapcar #'car (reverse nb-test--calls))) '("notebook/restart" "notebook/sync" "notebook/execute")))))
+
+(ert-deftest drgnx-notebook/clear-outputs-asks-the-hub-for-all-or-one ()
+  (nb-test--with
+    (setq nb-test--calls nil)
+    (drgnx-notebook-clear-outputs)
+    (should (equal (cdr (assoc "notebook/clear" nb-test--calls)) '(:id "nb1")))
+    (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id "c") :head)))
+    (drgnx-notebook-clear-outputs t)
+    (should (equal (cdr (assoc "notebook/clear" nb-test--calls)) '(:id "nb1" :cell "c")))))
+
+(ert-deftest drgnx-notebook/the-kernel-picker-lists-the-skipped-with-their-reason ()
+  (let* ((result (list :kernels (list (list :name "python3" :display_name "Python 3" :language "python" :interrupt "signal"))
+                       :skipped (list (list :name "broken" :why "its kernel.json is not JSON"))))
+         (candidates (drgnx-notebook--kernel-candidates result)))
+    (should (equal (mapcar #'car candidates) '("python3" "broken")))
+    (should (equal (plist-get (cdr (assoc "broken" candidates)) :why) "its kernel.json is not JSON"))
+    ;; the picker shows both with annotations, and a skipped one is refused with its reason
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (_prompt coll &rest _)
+                 (let ((note (funcall (plist-get completion-extra-properties :annotation-function) "broken")))
+                   (should (string-search "unavailable: its kernel.json is not JSON" note))
+                   (should (equal (funcall (plist-get completion-extra-properties :annotation-function) "python3") "  Python 3 (python)"))
+                   (car (member "broken" coll))))))
+      (should-error (drgnx-notebook--choose-kernel candidates) :type 'user-error))))
+
+(ert-deftest drgnx-notebook/open-output-shows-the-whole-output-in-a-buffer ()
+  (nb-test--with
+    (setq nb-test--answers
+          (list (cons "notebook/output" (lambda (_) (cons (list :outputs (list (list :output_type "stream" :text (list "one\n" "two\n")))) nil)))))
+    (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id "a") :head)))
+    (save-window-excursion
+      (drgnx-notebook-open-output)
+      (should (string-prefix-p "*Output: " (buffer-name)))
+      (should (equal (buffer-string) "one\ntwo\n"))
+      (kill-buffer (current-buffer)))))
+
+(ert-deftest drgnx-notebook/the-selected-cell-has-the-add-row-and-the-selected-tint-on-its-output ()
+  (nb-test--with
+    (drgnx-notebook--event "notebook-tail" (nb-test--tail "out"))
+    (let ((tail (lambda (id) (overlay-get (plist-get (drgnx-notebook--chrome-of id) :tail) 'after-string))))
+      (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id "a") :head)))
+      (drgnx-notebook--select-at (point))
+      (should (string-search "+ Code" (funcall tail "a")))
+      (should (string-search "+ Markdown" (funcall tail "a")))
+      (should (memq 'drgnx-notebook-cell-selected (ensure-list (get-text-property 0 'face (funcall tail "a")))))
+      ;; the selection moves: the row and the tint go with it
+      (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id "c") :head)))
+      (drgnx-notebook--select-at (point))
+      (should-not (string-search "+ Code" (funcall tail "a")))
+      (should (memq 'drgnx-notebook-cell (ensure-list (get-text-property 0 'face (funcall tail "a")))))
+      (should (string-search "+ Code" (funcall tail "c"))))))
+
+(ert-deftest drgnx-notebook/the-add-row-adds-a-cell-of-its-type ()
+  (nb-test--with
+    (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id "a") :head)))
+    (drgnx-notebook--select-at (point))
+    (let* ((row (drgnx-notebook--add-row)) (at (string-search "+ Markdown" row)))
+      (should (eq (get-text-property at 'drgnx-notebook-add row) 'markdown)))
+    (drgnx-notebook-add-cell-below 'markdown)
+    (should (eq (plist-get (drgnx-notebook--cell-by-id (nth 1 (nb-test--ids))) :type) 'markdown))))

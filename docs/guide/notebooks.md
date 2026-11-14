@@ -6,8 +6,7 @@ installed on your machine (the kernelspecs Jupyter would list); the kernel runs 
 
 ## What you see
 
-- **A header strip** on each cell: a run button, the prompt (`[3]` after a run, `[*]` while it runs, `[ ]` before), the
-  cell's type (`code`, `markdown`, `raw`) and, for code, the language.
+- **A header strip** on each cell: a run button, then what the hub says of the cell (`[3]  python` after a run, `[*]  python` while it runs, `[ ]  python` before; the cell's type for a markdown or new cell).
 - **The source** is ordinary text. Undo, search and replace, multiple cursors, completion and every other Emacs command
   work across cells.
 - **The output** sits under the cell: text, streams, errors and static images. Output from the file, not from a run in
@@ -15,6 +14,10 @@ installed on your machine (the kernelspecs Jupyter would list); the kernel runs 
   there are. **Copy Output** copies the whole text of the cell's output.
 - The cell you are in is tinted; the others are a step quieter. This is the band look (each cell's rows tinted, a chip
   for the run button and the type); it is also what a terminal shows.
+
+## The status bar
+
+In a notebook the bar shows the selected cell's place (`cell 3 of 4 · python`) and the kernel with its state (`● python3 · busy`; `no kernel` before the first run), as the hub reports them.
 
 ## Running
 
@@ -40,7 +43,8 @@ boundaries gives plain text.
 - **Add Cell Below / Above**, **Delete Cell**, **Move Cell Up / Down**, **Split Cell** (at point; the first part keeps the
   id and the output), **Merge Cell With the Next**, **Change Cell Type…**.
 - **Cut Cell, Copy Cell, Paste Cell**: a cell clipboard of its own (a pasted cell gets a new id).
-- **Toggle Outputs** hides or shows all outputs.
+- **Toggle Outputs** hides or shows all outputs; **Clear Outputs** clears them all in the hub (a prefix argument: only this cell's), leaving a queued or running cell alone.
+- Under the selected cell, a row of **+ Code** and **+ Markdown** buttons adds a cell below.
 
 ## Saving
 
@@ -56,4 +60,4 @@ PNG and JPEG outputs are drawn under the cell (at most 240 px tall, so a cell ne
 
 ## Not yet
 
-Clear Outputs, Open Output (the full output of a cell in its own view), the cell outline and the kernel's log wait for the hub's matching methods and views. The card look (each cell a rounded card with a shadow, as in the mockup) waits for the compositor's block primitive: until then each cell is a tinted band with a hairline over its header. Rich HTML and widget outputs show as their plain text.
+The cell outline and the kernel's log wait for the hub's views (an Sjá view each); until then **Open Output** shows the cell's whole output as text in a buffer of its own. The card look (each cell a rounded card with a shadow, as in the mockup) waits for the compositor's block primitive: until then each cell is a tinted band with a hairline over its header. There are no toolbar or hover icons yet; every command is in the palette. Rich HTML and widget outputs show as their plain text.

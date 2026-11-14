@@ -99,3 +99,9 @@ A cell is done when its `execute_reply` and its `idle` status have both come (th
 cells queued behind it (shown "aborted"), an interrupt or a restart cancels them ("cancelled"). Everything a kernel sends is held under
 the limits in the output model: 64 outputs and 1 MiB of text per cell, 16 MiB of images, a message of more than 16 MiB is a note, a flood
 (64 MiB unread, or 1000 messages that do not verify in 10 s) kills the kernel.
+
+**The real shapes (T11b routed).** The header is the hub's: each tail carries a `head` (`text`, `state`, `runs`); the editor draws the
+run button (and the add-cell buttons under the selected cell) and puts the hub's text after it, a cell with no head yet (new,
+markdown) showing its type. `notebook/restart` is the hub's. The picker for `notebook/kernels` lists the skipped kernelspecs with
+their reasons and refuses one. The notebook ids are the hub's to make (never parsed or built here), every method is checked against the
+buffer's connection, and a notebook ends with that connection.

@@ -1481,15 +1481,15 @@ would be (no kernel, no hub: the scene draws the buffer's own chrome)."
       (drgnx-notebook--install
        (list :id "nbscene" :language "python" :kernelspec "python3"
              :cells (list (list :id "c0" :type "markdown" :source "# Cache experiments\nHow the hit rate moves with the capacity.")
-                          (list :id "c1" :type "code" :execution_count 1
+                          (list :id "c1" :type "code"
                                 :source "import numpy as np\nrng = np.random.default_rng(7)\nhits = rng.random(10_000)")
                           (list :id "c2" :type "code"
                                 :source "for cap in (16, 64, 256):\n    print(cap, (hits < cap / 256).mean())")
-                          (list :id "c3" :type "code" :execution_count 3 :source "plot(missing)"))
-             :tails (list (list :cell "c1" :version 1 :text "done: 10000 samples")
-                          (list :cell "c2" :version 1 :text (concat "16 0.0612\n64 0.2487\n" (string #xfffc))
+                          (list :id "c3" :type "code" :source "plot(missing)"))
+             :tails (list (list :cell "c1" :version 1 :text "done: 10000 samples" :head (list :text "[1]  python" :state "idle"))
+                          (list :cell "c2" :version 1 :head (list :text "[*]  python" :state "running") :text (concat "16 0.0612\n64 0.2487\n" (string #xfffc))
                                 :images (list (list :at 20 :output 1 :mime "image/png" :width 640 :height 360)))
-                          (list :cell "c3" :version 1
+                          (list :cell "c3" :version 1 :head (list :text "[3]  python" :state "idle")
                                 :text "NameError: name 'missing' is not defined\n  Cell In[3], line 1"
                                 :runs (list (list :start 0 :end 9 :fg 1 :bold t))))))
       (drgnx-notebook--status (list :state "busy" :cell "c2" :queue 0))
