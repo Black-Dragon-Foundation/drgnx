@@ -1573,7 +1573,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `say/start` | user | `{profile?: string, project?: Id, repo: AbsPath, text: Text}` | `{id: string}` | yes |
 | `search/applied` | user | `{applied?: [string], change: natnum, inverse?: [{byte_end?: natnum, byte_start?: natnum, col: natnum, end_col: natnum, end_line: natnum, id: string, line: natnum, new: string, old: string}], not_open?: boolean, path: string, saved?: boolean, skipped?: [{id: string, why: string}], tick?: natnum}` | `boolean` | no |
 | `search/apply` | user | `{change: natnum, open?: [string], view: string}` | `boolean` | yes |
-| `search/buffer` | user | `{large?: boolean, path: AbsPath, text?: string, tick?: natnum, view: string}` | `boolean` | no |
+| `search/buffer` | user | `{large?: boolean, mirror?: boolean, path: AbsPath, text?: string, tick?: natnum, version?: natnum, view: string}` | `boolean` | no |
 | `search/edit-doc` | user | `{context?: natnum, max?: natnum, view: string}` | `{lines: [EditLine], over?: boolean, skipped?: [EditSkip], total: natnum}` | no |
 | `search/edits` | user | `{edits?: [{col: natnum, end_col: natnum, end_line?: natnum, line: natnum, new: string, old: string, path: AbsPath}], ids?: [string], lines?: [{eol?: boolean, line: natnum, line_id: string, new?: [string], old: string, path: AbsPath}], off?: [string], replace?: string, root?: AbsPath, view: string}` | `{change: natnum, files: [FileEdits], skipped: [EditSkip]}` | no |
 | `search/embedders` | user | `{}` | `{builtin: BuiltinInfo, prefer?: string, servers: [ServerInfo]}` | no |
@@ -2604,7 +2604,10 @@ snapshots; the search itself is `hrafn::grep`).
   skipped list of Replace All (`search/grep-skipped`) ends the carry.
 - **Snapshots:** the run records each file's size, modified time, inode and, up to 16 MiB, an xxh3 of its bytes, read
   in the search's thread outside every lock; for a buffer's text (below), its size, xxh3 and the buffer's tick.
-- **Open buffers:** `search/buffer {view, path, tick?, text?, large?}` → `true`. With `text`, the view's searches
+- **Open buffers:** `search/buffer {view, path, tick?, text?, large?, mirror?, version?}` → `true`. With `mirror` (and no
+  `text`) the editor sends no text: the hub reads the edit history's mirror of the tracked buffer
+  (`editor::mirror_of`), once the mirror's version has reached `version` (the editor's drain counter after it handed its
+  changes over); until then, or with no tracked buffer of the file, the answer is `false` and nothing changes. With `text`, the view's searches
   search it in place of the file at `path` (absolute) from now on: a run drops the file's matches on disk and, at its
   end, searches each such text (`hrafn::grep::search_text`, line by line with the fallbacks' regex) where the run
   would search its file (the File scope's one file, else under the root and searched by the ignore rules; the globs

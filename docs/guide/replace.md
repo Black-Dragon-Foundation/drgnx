@@ -376,9 +376,9 @@ base.  `search-run-done` ends the search and gives the count the status line sho
 "Searching…" until then.  Typing in the Replace field is `search/grep-replace`: the hub patches the previews and
 nothing is searched again.  Symbol mode (the language server's edits) keeps rows of Emacs's own (the `replace-results`
 view type), and the view changes between the two with each search.  The file watches stay Lisp: a listed file that changes on disk is searched again through the hub after half a second.  The hub reads the disk, so before each search, and half a second after an edit, the view sends it the text of each
-buffer under the folder that has unsaved edits (`search/buffer`, only what changed since): the hub searches that text
+buffer under the folder that has unsaved edits (`search/buffer`, only what changed since; for a buffer the edit history tracks it sends no text, the hub reads the text it already holds): the hub searches that text
 in place of the file, also when the file on disk has no match, and the search shown takes it at once.  Those matches
-are rows like any other, with tick boxes, in the model Next Match walks and Replace All writes.  A buffer over 4 MiB,
+are rows like any other, with tick boxes, in the model Next Match walks and Replace All writes.  A buffer the edit history does not track, over 256 KiB,
 or open as a large file, is not sent: its file is searched on disk and its header says "open in chunks: searched on
 disk".  A buffer saved or killed since is forgotten, and the hub reads its file again.
 `test/unit/replace-rows-test.el` covers the stream with no hub.
