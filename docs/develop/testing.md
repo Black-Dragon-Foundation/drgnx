@@ -73,8 +73,9 @@ wrapper's words come before every group's command.
 `notebook::kernel::tests_live` (ignored rows) start a real ipykernel, over ipc and over loopback tcp: ready, `print`, an error,
 `input()` through the stdin channel, interrupt, orderly shutdown. They read the kernel's python from `DRGNX_NB_KERNEL_PYTHON` and fail,
 saying where the kernel is, when it is missing. The kernel is the hash-pinned set in `test/container/ipykernel-requirements.txt`
-(every wheel checked, `--no-deps`, compiled for Python 3.15): the adapter image has it at `/opt/nb-kernel`, made with `python3.15`
-(its `ENV` sets the variable), and the rows run there only (`ci.md`, "The debug adapters"). Run them in the image with
+(every wheel checked, `--no-deps`, compiled for Python 3.15). The adapter image has it at `/opt/nb-kernel`, made with `python3.15`
+by `test/container/nb-kernel.sh` (its `ENV` sets the variable), and the rows run there only (`ci.md`, "The debug adapters"). The
+GUI test image has the same venv, made by the same step, for the notebook scenes' kernel. Run them in the image with
 `cargo test -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks --lib -- --ignored --test-threads 1 notebook::kernel::tests_live`.
 **ipykernel aborts in its own teardown (SIGABRT) about one run in five**, after an orderly shutdown and after doing everything asked
 of it, so the rows assert that the kernel ended by itself within the grace (not killed), not that its exit code is 0; they print the
