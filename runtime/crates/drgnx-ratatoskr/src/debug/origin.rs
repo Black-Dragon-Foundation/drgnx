@@ -486,6 +486,14 @@ pub fn stores(lang: hrafn::Lang, files: &[(String, String)], question: &str) -> 
         let decls = decls_of(lang);
         forms.extend(decls.iter().map(|d| (d.replace("{t}", question), true)));
     }
+    // a language whose top level takes statements only (C#) needs the `;`: each form is also tried with one (a line a
+    // form already found is not found twice)
+    let semi: Vec<(String, bool)> = forms
+        .iter()
+        .filter(|(f, _)| !f.ends_with(';'))
+        .map(|(f, plain)| (format!("{f};"), *plain))
+        .collect();
+    forms.extend(semi);
     let patterns: Vec<(Pattern, bool)> = forms
         .iter()
         .filter_map(|(f, plain)| Some((Pattern::new(lang, f, None).ok()?, *plain)))
@@ -809,6 +817,7 @@ mod pack_tests {
             ("a.hpp", Lang::Cpp),
             ("a.rs", Lang::Rust),
             ("a.java", Lang::Java),
+            ("A.cs", Lang::Csharp),
         ] {
             assert_eq!(lang_of(path), Some(lang), "{path}");
         }
@@ -827,6 +836,7 @@ mod pack_tests {
         assert_eq!(decls_of(Lang::C), ["$TY {t} = $V;"]);
         assert_eq!(decls_of(Lang::Cpp), ["$TY {t} = $V;"]);
         assert_eq!(decls_of(Lang::Java), ["$TY {t} = $V;"]);
+        assert_eq!(decls_of(Lang::Csharp), ["$TY {t} = $V;"]);
         assert_eq!(
             decls_of(Lang::TypeScript),
             ["const {t} = $V", "let {t} = $V", "var {t} = $V"]

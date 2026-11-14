@@ -415,13 +415,15 @@ mod list_tests {
                 "closure_expression",
                 "lambda",
                 "lambda_expression",
+                "local_function_statement", // C# (language packs Task 10b)
             ])
         );
         assert_eq!(
             sorted(&lists().loops),
             sorted(&[
                 "for_statement",
-                "for_range_loop", // C++ (language packs Task 9)
+                "for_range_loop",    // C++ (language packs Task 9)
+                "foreach_statement", // C# (language packs Task 10b)
                 "for_in_statement",
                 "enhanced_for_statement",
                 "c_style_for_statement",

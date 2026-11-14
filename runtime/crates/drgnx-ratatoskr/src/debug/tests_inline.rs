@@ -223,6 +223,12 @@ fn every_grammar_finds_the_function_and_its_names() {
             &[(5, "b = 2  a = 1")],
         ),
         (
+            "F.cs",
+            "class F {\n  int G(int a) {\n    int b = a + 1;\n    foreach (var k in new[] { 1, 2, 3 }) {\n      H();\n      b += k;\n    }\n    return b;\n  }\n}\n",
+            5,
+            &[(3, "b = 2  a = 1"), (4, "k = 3")],
+        ),
+        (
             "f.go",
             "package main\n\nfunc f(a int) int {\n\tb := a + 1\n\tfor k := 0; k < 3; k++ {\n\t\tg()\n\t\tb += k\n\t}\n\treturn b\n}\n",
             6,

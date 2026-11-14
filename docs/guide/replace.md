@@ -108,7 +108,7 @@ The mode chip says `Pattern` while it is on.
 
 - **Language.** A line over the status line names the pattern's language: the one of the file the view was opened
   from, else `any` (each file is parsed in its own language). Click it, or **Search: Pattern Language…**, to choose.
-  The languages are Hrafn's grammars: Emacs Lisp, Rust, C, C++, shell, Python, JavaScript, TypeScript, TSX, Go and Java.
+  The languages are Hrafn's grammars: Emacs Lisp, Rust, C, C++, shell, Python, JavaScript, TypeScript, TSX, Go, Java and C#.
 - **Rows.** A match over several lines shows its first line with `+N lines` after it, dim; hover a row for its
   metavariables (`$K = …`).
 - **A pattern that does not parse** in the language says so on the status line with the column

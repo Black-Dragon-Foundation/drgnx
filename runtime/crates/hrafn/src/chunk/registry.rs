@@ -28,6 +28,7 @@ fn source(kind: Kind) -> (&'static str, &'static str) {
         Kind::Tsx => pack!("tsx"),
         Kind::Go => pack!("go"),
         Kind::Java => pack!("java"),
+        Kind::Csharp => pack!("csharp"),
     }
 }
 
@@ -69,6 +70,7 @@ pub(super) fn grammar_name(kind: Kind) -> &'static str {
         Kind::Tsx => "tsx",
         Kind::Go => "go",
         Kind::Java => "java",
+        Kind::Csharp => "c-sharp",
     }
 }
 
@@ -84,6 +86,7 @@ pub(super) fn pack_name(kind: Kind) -> &'static str {
         Kind::Tsx => "tsx",
         Kind::Go => "go",
         Kind::Java => "java",
+        Kind::Csharp => "csharp",
     }
 }
 

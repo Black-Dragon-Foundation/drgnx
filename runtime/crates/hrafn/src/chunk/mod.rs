@@ -143,6 +143,7 @@ pub fn chunk_file_refs(
         Lang::Tsx => tree_sitter(ts::Kind::Tsx),
         Lang::Go => tree_sitter(ts::Kind::Go),
         Lang::Java => tree_sitter(ts::Kind::Java),
+        Lang::Csharp => tree_sitter(ts::Kind::Csharp),
         Lang::Org => Some(none(outline::chunk(
             outline::Flavor::Org,
             path,

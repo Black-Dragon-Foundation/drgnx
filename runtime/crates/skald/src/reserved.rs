@@ -9,6 +9,7 @@ pub const PACKS: &[&str] = &[
     "go",
     "rust",
     "java",
+    "csharp",
     "c",
     "cpp",
     "shell",
@@ -48,6 +49,7 @@ pub const LANGS: &[&str] = &[
     "tsx",
     "go",
     "java",
+    "csharp",
     "org",
     "markdown",
     "text",
@@ -71,6 +73,7 @@ pub const LANGS: &[&str] = &[
 pub const GRAMMARS: &[&str] = &[
     "bash",
     "c",
+    "c-sharp",
     "cpp",
     "css",
     "go",

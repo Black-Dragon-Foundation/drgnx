@@ -84,6 +84,18 @@ fn every_grammar_takes_a_metavariable() {
             "void g() { v.push_back(3); }",
             "v.push_back(3)",
         ),
+        (
+            Lang::Csharp,
+            "Foo($A)",
+            "class G { void M() { Foo(2); } }",
+            "Foo(2)",
+        ),
+        (
+            Lang::Csharp,
+            "$X.Add($A)",
+            "class G { void M() { items.Add(3); } }",
+            "items.Add(3)",
+        ),
         (Lang::Shell, "echo $A", "echo hi\n", "echo hi"),
         (Lang::Python, "f($A)", "x = f(2)\n", "f(2)"),
         (Lang::JavaScript, "f($A)", "const x = f(2);", "f(2)"),
