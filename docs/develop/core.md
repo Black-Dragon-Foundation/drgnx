@@ -2272,6 +2272,20 @@ Sjá handle) with the SJA slot set, and no `drgnx-view`. A view's own properties
 over the span it changed (`drgnx-view-sja-drawn-functions`). The terminal is the first view on it
 (`docs/develop/terminal.md`).
 
+**The other hub-fed views on it.** `drgnx-view-patch-attach` with `:sja t` holds the pair's rows in Sjá where this
+Emacs has them (`nidhogg-view-rows`); the Explorer, the Search view, the Work map, Board, Trail, Detail and Flow, the
+Extensions list and Run and Debug attach so. Sjá keeps one row store per display class, so a view's twins in two
+classes draw their own rows. A view's code calls the same helpers with VIEW nil (the buffer has no `drgnx-view`):
+`drgnx-view-row-start`, `drgnx-view-row-end`, `drgnx-view-row-count`, `drgnx-view-key-at`, `drgnx-view-draw-now`
+and `drgnx-view-hurry` answer from Sjá. After a draw the class step runs on what it drew: the draw names the rows
+and node ids it drew, `drgnx-view-nav-sja-step` asks Sjá for each changed node's pieces (`spans`: cut where the
+runs' faces change, so a boxed chip keeps its face) and for the dim runs (`dimruns`: consecutive rows whose every
+node is dim, and the dim nodes of the other rows), and puts only the overlays; then
+`drgnx-view-patch-patched-functions` runs with VIEW nil and the drawn rows' keys. A patch that reaches Lisp parsed
+(a test's, or one sent before the pair's env) goes to Sjá as the raw line would (`drgnx-view-apply-patch`). Views
+that read the hub's rows as data rather than draw them (the git letters, the agents' editor-here feed) and the agent
+panel (the hub's rows among its own) keep the Lisp path.
+
 **What stays in Lisp** (the user, 2026-11-14: nothing that does work per row or per update in Lisp, only commands,
 keymaps, settings and the final insert or draw call):
 

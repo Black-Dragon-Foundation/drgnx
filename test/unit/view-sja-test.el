@@ -184,4 +184,53 @@ decision."
     (should (drgnx-view-sja-held-p view "c"))
     (should-not (drgnx-view-sja-held-p view "other"))))
 
+;;;; The generic layer: a view's code runs on rows Sjá holds
+
+(require 'drgnx-view-nav)
+
+(ert-deftest rows-sja/the-row-helpers-take-a-nil-view ()
+  ;; a buffer whose rows Sjá holds has no `drgnx-view': the helpers a view's code calls answer from Sjá
+  (view-sja-test--with
+    (insert "head\n")
+    (set-marker (drgnx-view-patch-beg drgnx-view-patch) (point))
+    (view-sja-test--reset view '("a" "b"))
+    (should (equal "head\nrow a\nrow b\n" (view-sja-test--text)))
+    (should (= (drgnx-view-row-start nil "b") 12))
+    (should (= (drgnx-view-row-end nil "b") 18))
+    (should (equal (drgnx-view-key-at 13) "b"))
+    (should-not (drgnx-view-key-at 2))
+    (should-not (drgnx-view-row-start nil "z"))
+    (should (eql (drgnx-view-draw-now nil) 0))))
+
+(ert-deftest rows-sja/attach-with-sja-holds-the-rows-in-sja ()
+  (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-rows) "nidhogg-view-rows")
+  (let ((drgnx-view-patch--buffers (make-hash-table :test #'equal)) (drgnx-view-patch--hooked nil)
+        (drgnx-view-model--views (make-hash-table :test #'equal)))
+    (with-temp-buffer
+      (unwind-protect
+          (progn
+            (drgnx-view-patch-attach (format "sja-test-%d" (cl-incf view-sja-test--n)) "c" :sja t)
+            (should (drgnx-view-sja-p))
+            (should-not drgnx-view))
+        (drgnx-view-patch-teardown)))))
+
+(ert-deftest rows-sja/a-draw-tells-the-view-the-rows-and-nodes-it-drew ()
+  ;; the view's own marks go back on the rows drawn; a node's spans come from Sjá, its chips (boxed runs) left out
+  (view-sja-test--with
+    (let (got)
+      (add-hook 'drgnx-view-patch-patched-functions (lambda (v keys) (push (cons v keys) got)) nil t)
+      (view-sja-test--reset view '("a" "b"))
+      (view-sja-test--text)
+      (should (equal (car got) '(nil "a" "b")))
+      (view-sja-test--push view (list (list :replace (list (view-sja-test--row
+                                                            "b" "chip id" :runs [[0 4 "drgnx-view-sja-test-chip"]]
+                                                            :props [[0 7 "drgnx-work-id" "n1"]]))))
+                           :base 1 :version 2)
+      (view-sja-test--text)
+      (should (equal (car got) '(nil "b")))
+      (should (equal (drgnx-view-nav--sja-spans "n1" t) '((7 . 14))))
+      (should (equal (drgnx-view-nav--sja-spans "n1") '((11 . 14)))))))
+
+(defface drgnx-view-sja-test-chip '((t :box t)) "A boxed run, for the tests.")
+
 ;;; view-sja-test.el ends here
