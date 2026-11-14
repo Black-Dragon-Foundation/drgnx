@@ -497,3 +497,28 @@ fn a_wait_for_an_exit_that_never_comes_ends_at_its_bound_on_the_virtual_clock() 
         assert_eq!(exited_within(&mut rx, END_WITHIN).await, Some(exit));
     });
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn kill_and_the_wait_after_a_kill_are_bounded_by_exited_within() {
+    let d = tmp();
+    let folder = private_folder(&d.path().join("s")).unwrap();
+    let peer = bind(&folder, "bw").await;
+    let f2 = folder.clone();
+    tokio::spawn(async move { serve_ready(peer, key_of(&f2, "bw").await).await });
+    let k = Kernel::start(
+        &spec("sleep 600", Interrupt::Signal),
+        &folder,
+        "bw",
+        d.path(),
+        quick(),
+    )
+    .await
+    .unwrap();
+    let before = BOUNDED_WAITS.load(std::sync::atomic::Ordering::SeqCst);
+    let exit = k.kill().await;
+    assert!(exit.signal.is_some());
+    assert!(
+        BOUNDED_WAITS.load(std::sync::atomic::Ordering::SeqCst) > before,
+        "the wait went through exited_within"
+    );
+}
