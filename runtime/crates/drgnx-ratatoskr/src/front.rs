@@ -621,6 +621,12 @@ impl Front {
                 self.keys_changed(&before);
                 json!(true)
             }),
+            Params::GatewayRevokeKey(p) => {
+                let before = self.gate.keys_held();
+                let had = self.gate.revoke_key(p.provider.as_str());
+                self.keys_changed(&before);
+                Ok(json!(had))
+            }
             Params::GatewayEditorToken(_) => {
                 self.gate.editor_token(s.peer_pid).await.map(|r| json!(r))
             }

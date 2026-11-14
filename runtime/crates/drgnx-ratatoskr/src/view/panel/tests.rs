@@ -100,6 +100,7 @@ fn build(
         n: entries.len(),
         groups: &groups,
         always: &|_: &Entry| false,
+        prov: &|_: &Entry| None,
     };
     panels.rows_of(&src, &key(class), e, &FontSet::new(), dirty)
 }

@@ -217,7 +217,7 @@ error and warning counts (in `drgnx-status-fail` and `drgnx-status-warn`; a zero
 
 Windows that are not editors get the bar too: a buffer in a mode derived from one of `drgnx-statusbar-other-modes`
 (`special-mode`: Magit, Help, `*Messages*`; `dired-mode`) shows the segments of `drgnx-statusbar-other` (`mode`, the buffer's
-`mode-name`, then `misc`) on the left and no line and column.
+`mode-name`, then `misc`) on the left and no line and column, unless a buffer sets `drgnx-statusbar-other-right` (the Work map's bar has the branch, the jobs, the agents' dots and what needs you on the left, and `Work · Map · 4 agents · 1 overlap` on the right).
 
 The most recently used editor window shows the whole bar; the other editor groups show `drgnx-statusbar-compact`
 (position and language). The bar is for the buffers you edit: a buffer that visits a file, an editor made with
@@ -495,6 +495,8 @@ brings it back whenever you want it. The page is a tab only while it is shown, l
 (`drgnx-chrome-transient-tabs`), so it never lingers among your files.
 
 ## Faces
+
+The colours these faces take, in each variant, and the faces each colour token goes to, are generated in the design system ([colour tokens](../design/tokens.md)); how each piece of chrome is built is under [components](../design/components/index.md); the whole reference starts at the [design system](../design/index.md).
 
 drgnx draws with the theme's faces and none of its own colours: the dividers inherit `shadow`, so a theme that
 styles `window-divider` itself keeps its choice, and every colour you see comes from the theme you picked

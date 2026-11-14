@@ -25,6 +25,8 @@ pub enum Kind {
     Plugin,
     Module,
     Emacs,
+    /// A language pack (`pack:NAME`): a language's grammar, mode, server, formatter and debug adapter in one.
+    Pack,
 }
 
 /// Where a row stands.
@@ -117,6 +119,9 @@ pub struct Row {
     pub downloads: Option<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub why: Vec<Why>,
+    /// What a language pack gives (`grammar`, `mode`, `server`, `format`, `search`, `debug`): the layer chips.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub layers: Vec<String>,
 }
 
 /// What a search keeps; every field off or absent keeps everything.
@@ -136,6 +141,9 @@ pub struct Filters {
     pub builtin: bool,
     #[serde(default)]
     pub plugins: bool,
+    /// Language packs (`@packs`).
+    #[serde(default)]
+    pub packs: bool,
     /// Packages from an archive that does not sign.
     #[serde(default)]
     pub unsigned: bool,

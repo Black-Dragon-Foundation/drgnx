@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -176,6 +177,9 @@ impl Registry for Mem {
 struct Book {
     before: f64,
     rows: Mutex<Vec<SpendRow>>,
+    /// While set, a row's recording waits for `gate` (the commit that has not landed yet).
+    hold: std::sync::atomic::AtomicBool,
+    gate: tokio::sync::Notify,
 }
 
 impl Book {
@@ -197,8 +201,12 @@ impl Ledger for Book {
     }
 
     fn record(&self, row: SpendRow) -> BoxFuture<'_, ()> {
-        self.rows.lock().unwrap().push(row);
-        Box::pin(async {})
+        Box::pin(async move {
+            if self.hold.load(Ordering::SeqCst) {
+                self.gate.notified().await;
+            }
+            self.rows.lock().unwrap().push(row);
+        })
     }
 }
 
@@ -236,6 +244,7 @@ fn agent(chain: &[&str], budget: Option<f64>) -> Registration {
 
 struct Gw {
     gw: Arc<Gateway>,
+    keys: Arc<RwLock<Keys>>,
     port: u16,
     book: Arc<Book>,
     events: mpsc::UnboundedReceiver<GatewayEvent>,
@@ -268,10 +277,11 @@ impl Gw {
         // an empty matcher: the environment's proxy settings must not matter here
         let upstream =
             Upstream::with_proxy(UpstreamOpts::default(), Matcher::builder().build()).unwrap();
+        let keys = Arc::new(RwLock::new(held));
         let gw = Gateway::new(
             registry,
             providers,
-            Arc::new(RwLock::new(held)),
+            keys.clone(),
             book.clone(),
             tx,
             upstream,
@@ -281,6 +291,7 @@ impl Gw {
         let listener = tokio::spawn(listen::serve_tcp(gw.clone(), listener, port));
         Self {
             gw,
+            keys,
             port,
             book,
             events,
@@ -769,6 +780,51 @@ async fn budget_event_after_the_crossing_request() {
     assert_eq!(mock.requests().len(), 1);
 }
 
+/// The spend row is committed after the answer: a request that comes before that commit lands is judged against the
+/// budget with it (the check waits for the job's pending rows), so the budget is not exceeded by a request that raced the
+/// commit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_request_racing_the_spend_commit_sees_the_spend() {
+    let mock = Mock::start(json!([
+        {"path": "/a/", "body": "{\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"cost\":0.6}}"}
+    ]));
+    let gw = Gw::start(
+        vec![provider("a", Kind::Anthropic, &mock.url("/a"), Auth::None)],
+        vec![(AGENT, agent(&["a"], Some(1.0)))],
+        &[],
+        0.5,
+    )
+    .await;
+    gw.book.hold.store(true, Ordering::SeqCst);
+    assert_eq!(gw.call(AGENT, "/v1/messages", "{}").await.status, 200);
+    // the row of that request is not committed: a second request is asked now
+    let (port, token) = (gw.port, AGENT);
+    let second = tokio::spawn(async move {
+        let (mut sender, _conn) =
+            open(TcpStream::connect(("127.0.0.1", port)).await.unwrap()).await;
+        let request = Request::post("/v1/messages")
+            .header(HOST, format!("127.0.0.1:{port}"))
+            .header(AUTHORIZATION, format!("Bearer {token}"))
+            .header(CONTENT_TYPE, "application/json")
+            .body(Full::new(Bytes::from_static(b"{}")))
+            .unwrap();
+        let reply = read(sender.send_request(request).await.unwrap()).await;
+        (reply.status, reply.body)
+    });
+    // until it is answered, or it waits for the commit (which this test then lets land)
+    while !second.is_finished() && gw.gw.spend_waiting() == 0 {
+        tokio::task::yield_now().await;
+    }
+    gw.book.hold.store(false, Ordering::SeqCst);
+    gw.book.gate.notify_one();
+    let (status, body) = second.await.unwrap();
+    assert_eq!(
+        status, 429,
+        "the second request passed the budget before the first's row landed: {body}"
+    );
+    assert_eq!(mock.requests().len(), 1);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_hang_up_stops_the_upstream() {
     let mut chunks = vec![json!([0, MESSAGE_START])];
@@ -925,6 +981,49 @@ async fn a_refused_body_is_drained() {
     let answer = String::from_utf8_lossy(&answer);
     assert!(answer.starts_with("HTTP/1.1 401"), "{answer}");
     assert!(answer.contains("not a drgnx gateway token"), "{answer}");
+}
+
+/// A chunked body over the limit is answered 413 and the unread rest (up to the drain's 64 KiB) is read before the
+/// connection closes, so the client that is still sending is not reset under its answer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_chunked_body_over_the_limit_is_413_and_drained() {
+    let mock = Mock::start(json!([{"path": "/a/", "body": "{\"ok\":true}"}]));
+    let gw = Gw::start(
+        vec![provider("a", Kind::Anthropic, &mock.url("/a"), Auth::None)],
+        vec![(AGENT, agent(&["a"], None))],
+        &[],
+        0.0,
+    )
+    .await;
+    let s = TcpStream::connect(("127.0.0.1", gw.port)).await.unwrap();
+    let (mut rd, mut wr) = s.into_split();
+    let head = format!(
+        "POST /v1/messages HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAuthorization: Bearer {AGENT}\r\n\
+         Content-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n",
+        gw.port
+    );
+    wr.write_all(head.as_bytes()).await.unwrap();
+    // 32 MiB and 40 KiB over, in 8 KiB chunks: less than the drain's limit is left unread when the gateway answers
+    let writer = tokio::spawn(async move {
+        let chunk = [b"2000\r\n".as_slice(), &[b'x'; 8192], b"\r\n"].concat();
+        for _ in 0..(32 * 1024 / 8 + 5) {
+            if wr.write_all(&chunk).await.is_err() {
+                return;
+            }
+        }
+        let _ = wr.write_all(b"0\r\n\r\n").await;
+    });
+    let mut answer = Vec::new();
+    let read = tokio::time::timeout(Duration::from_secs(60), rd.read_to_end(&mut answer))
+        .await
+        .expect("the gateway closes within 60 s");
+    // a close with the body unread would reset the connection under the client
+    assert!(read.is_ok(), "{read:?}");
+    let answer = String::from_utf8_lossy(&answer);
+    assert!(answer.starts_with("HTTP/1.1 413"), "{answer}");
+    assert!(answer.contains("over 32 MiB"), "{answer}");
+    let _ = writer.await;
+    assert_eq!(mock.requests().len(), 0);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1143,6 +1242,44 @@ async fn the_editor_route_records_a_spend_row_with_no_job() {
     let book = gw.book.clone();
     gw.settled().await;
     assert_eq!(book.rows(), vec![row]);
+}
+
+/// A key the hub forgot (`Keys::remove`, `gateway/revoke-key`) is no key for the next request, whoever sends it; another
+/// provider's key keeps working.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_request_after_a_revoke_is_refused_and_another_providers_key_works() {
+    let mock = Mock::start(json!([{"path": "/", "body": "{}"}]));
+    let mut providers = editor_gw_providers(&mock.url("/api/v1"));
+    providers.push(provider(
+        "other",
+        Kind::Openai,
+        &mock.url("/api/v1"),
+        Auth::Bearer,
+    ));
+    let gw = Gw::start(
+        providers,
+        vec![(EDITOR, Registration::editor())],
+        &[("or", "sk-or"), ("other", "sk-other")],
+        0.0,
+    )
+    .await;
+    assert_eq!(
+        gw.call(EDITOR, "/p/or/chat/completions", "{}").await.status,
+        200
+    );
+    assert!(gw.keys.write().unwrap().remove("or"));
+    let reply = gw.call(EDITOR, "/p/or/chat/completions", "{}").await;
+    assert_eq!(reply.status, 503);
+    assert_eq!(
+        reply.json()["error"]["message"],
+        "no key for or in the drgnx hub"
+    );
+    assert_eq!(
+        gw.call(EDITOR, "/p/other/chat/completions", "{}")
+            .await
+            .status,
+        200
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

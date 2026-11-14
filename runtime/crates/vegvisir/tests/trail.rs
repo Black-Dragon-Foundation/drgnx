@@ -84,7 +84,12 @@ fn a_conclusion_dirties_only_its_steps() {
         "{ops:?}"
     );
     let s2 = after.iter().find(|r| r.key == "step:2").unwrap();
-    assert!(s2.text.contains("src/a2.rs [1]"), "{}", s2.text);
+    // the step a conclusion rests on starts with its number in a circle (a badge), the others with room for one
+    assert!(s2.text.contains(" 1 "), "{}", s2.text);
+    assert!(
+        s2.runs.iter().any(|r| r.2 == "drgnx-work-step-number"),
+        "{s2:?}"
+    );
 }
 
 /// [A] A step inside the Timeline's range redraws its own lane only; one past the range moves every lane's scale.
@@ -243,8 +248,269 @@ fn timestamps_use_the_env_time_zone() {
     let s = vec![step(1, 1_794_043_800.0)];
     let utc = trail::trail_rows(&s, &[], &env(&p), Zone::parse("+0000"));
     let ist = trail::trail_rows(&s, &[], &env(&p), Zone::parse("+0530"));
-    assert!(utc[0].text.contains("09:30:00 2.0s"), "{}", utc[0].text);
-    assert!(ist[0].text.contains("15:00:00 2.0s"), "{}", ist[0].text);
+    assert!(utc[0].text.contains("09:30:00 · 2 s"), "{}", utc[0].text);
+    assert!(ist[0].text.contains("15:00:00 · 2 s"), "{}", ist[0].text);
     assert_eq!(Zone::parse("-0800").time(1_794_043_800.0), "01:30:00");
     assert_eq!(Zone::parse("IST"), Zone(0), "a name is no offset");
+}
+
+/// [D] The trail is the mockup's tile (work-space-dark.html): rows in the UI font, each step's kind a Lucide icon in an
+/// image of its own, its time and duration muted in the code font, and a conclusion's card in the accent ring (the
+/// selected card's faces) with a lightbulb.
+#[test]
+fn trail_rows_are_ui_text_with_lucide_icons_and_a_finding_card() {
+    let p = Palette(vec![("chip-fg".into(), "#a2a5b2".into())]);
+    let steps = vec![step(1, 1000.0)];
+    let (rows, images) =
+        trail::trail_rows_with_images(&steps, &[conclusion(1, 1, &[1])], &env(&p), Zone(0), None);
+    fn faces(r: &Row) -> Vec<&str> {
+        r.runs.iter().map(|x| x.2.as_str()).collect()
+    }
+    let s = rows.iter().find(|r| r.key == "step:1").expect("the step");
+    assert_eq!(s.images.len(), 1, "{s:?}");
+    assert!(faces(s).contains(&"drgnx-work-pane"), "{s:?}");
+    assert!(faces(s).contains(&"drgnx-work-meta"), "{s:?}");
+    let svg_of = |r: &Row| {
+        images
+            .iter()
+            .find(|(id, _)| *id == r.images[0].1)
+            .map(|(_, s)| s.clone())
+            .expect("its image")
+    };
+    assert!(svg_of(s).contains("stroke=\"#a2a5b2\""), "{}", svg_of(s));
+    let top = rows.iter().find(|r| r.key == "conc:1:0").expect("the card");
+    let bottom = rows.iter().find(|r| r.key == "conc:1:1").expect("the card");
+    assert!(faces(top).contains(&"drgnx-card-sel-top"), "{top:?}");
+    assert!(
+        faces(bottom).contains(&"drgnx-card-sel-bottom"),
+        "{bottom:?}"
+    );
+    assert_eq!(top.images.len(), 1, "{top:?}");
+    assert!(top.text.contains("Finding"), "{:?}", top.text);
+}
+
+/// [D] A conclusion's card runs to the tile's right edge (a stop with the card's face at its end), as the mockup's
+/// Finding card does, not just as far as its text.
+#[test]
+fn a_conclusion_card_runs_to_the_right_edge() {
+    let p = Palette::default();
+    let steps = vec![step(1, 1000.0)];
+    let rows = trail::trail_rows(&steps, &[conclusion(1, 1, &[1])], &env(&p), Zone(0));
+    for key in ["conc:1:0", "conc:1:1"] {
+        let r = rows.iter().find(|r| r.key == key).expect(key);
+        let (pos, px) = *r.stops.last().expect("a stop at the card's right edge");
+        assert_eq!(
+            usize::try_from(pos).unwrap() + 1,
+            r.text.chars().count(),
+            "{r:?}"
+        );
+        assert!(px >= 900, "{px}");
+        assert!(
+            r.runs
+                .iter()
+                .any(|(s, e, f)| *s == 0 && *e > pos && f.starts_with("drgnx-card-sel-")),
+            "{r:?}"
+        );
+    }
+}
+
+/// [D] A step that a conclusion rests on starts with the conclusion's number in a circle, the others with the same room
+/// empty; the newest conclusion's card says `new` while it rests on one of the last three steps
+/// (work-space-dark.html `.cc .new`).
+#[test]
+fn numbered_circles_and_the_new_tag() {
+    let p = Palette::default();
+    let steps: Vec<Step> = (1..=6).map(|i| step(i, 1000.0 + 10.0 * i as f64)).collect();
+    let concs = vec![conclusion(1, 2, &[2]), conclusion(2, 5, &[4, 5])];
+    let rows = trail::trail_rows(&steps, &concs, &env(&p), Zone(0));
+    let row = |k: &str| rows.iter().find(|r| r.key == k).expect(k);
+    let badged = |r: &Row| r.runs.iter().any(|x| x.2 == "drgnx-work-step-number");
+    assert!(badged(row("step:2")) && row("step:2").text.contains(" 1 "));
+    assert!(badged(row("step:4")) && row("step:4").text.contains(" 2 "));
+    assert!(!badged(row("step:1")) && !badged(row("step:3")));
+    // the room is the same, so the icons line up
+    let icon_at = |r: &Row| r.images[0].0;
+    assert_eq!(icon_at(row("step:1")), icon_at(row("step:2")));
+    assert!(
+        row("conc:2:0").text.contains(" new "),
+        "{:?}",
+        row("conc:2:0")
+    );
+    assert!(
+        !row("conc:1:0").text.contains(" new "),
+        "{:?}",
+        row("conc:1:0")
+    );
+    // the tag is plain text in the card's ring: a box of its own would break the ring
+    assert!(
+        row("conc:2:0").runs.iter().all(|r| r.2 != "drgnx-chip"),
+        "{:?}",
+        row("conc:2:0")
+    );
+    // the icons start at one pixel column, whatever the circle before them says
+    assert!(!row("step:1").stops.is_empty());
+    assert_eq!(
+        row("step:1").stops.first().map(|s| s.1),
+        row("step:2").stops.first().map(|s| s.1)
+    );
+}
+
+/// [D] A step's row keeps its verb and its link colour on paths (work-space-dark.html `.trow`): `read PATH` with the
+/// path in the accent, `web TITLE — HOST` muted, `thought: TEXT` muted and italic, `edit PATH +P −M` with the change
+/// in the added and removed colours, `job PATH · WHERE`; durations have a space (`0.3 s`, `6 s`).
+#[test]
+fn a_step_row_keeps_its_verb_and_colours_its_paths() {
+    let p = Palette::default();
+    let mk = |id: i64, class: &str, kind: &str, d: Detail, took: f64| Step {
+        id,
+        seq: id as u64,
+        class: class.into(),
+        tool: None,
+        detail: Detail {
+            kind: Some(kind.into()),
+            ..d
+        },
+        start: 1000.0 + id as f64,
+        end: Some(1000.0 + id as f64 + took),
+    };
+    let steps = vec![
+        mk(
+            1,
+            "tool",
+            "read",
+            Detail {
+                path: Some("a/b.rs".into()),
+                line_start: Some(1),
+                line_end: Some(9),
+                ..Detail::default()
+            },
+            0.3,
+        ),
+        mk(
+            2,
+            "tool",
+            "fetch",
+            Detail {
+                url: Some("https://x.org/p".into()),
+                title: Some("Spec".into()),
+                ..Detail::default()
+            },
+            1.8,
+        ),
+        mk(
+            3,
+            "think",
+            "",
+            Detail {
+                title: Some("the end handler…".into()),
+                ..Detail::default()
+            },
+            6.0,
+        ),
+        mk(
+            4,
+            "tool",
+            "edit",
+            Detail {
+                path: Some("s.rs".into()),
+                title: Some("+40 −3".into()),
+                ..Detail::default()
+            },
+            2.0,
+        ),
+        mk(
+            5,
+            "job-wait",
+            "",
+            Detail {
+                path: Some("bin/t".into()),
+                title: Some("desktop slot 3 · running".into()),
+                ..Detail::default()
+            },
+            3.0,
+        ),
+    ];
+    let rows = trail::trail_rows(&steps, &[], &env(&p), Zone(0));
+    let face_of = |r: &Row, word: &str| {
+        let at = r
+            .text
+            .find(word)
+            .unwrap_or_else(|| panic!("{word} in {r:?}"));
+        let at = r.text[..at].chars().count() as u32;
+        r.runs
+            .iter()
+            .filter(|x| x.0 <= at && at < x.1)
+            .map(|x| x.2.clone())
+            .collect::<Vec<_>>()
+    };
+    assert!(rows[0].text.contains(" read a/b.rs:1–9"), "{:?}", rows[0]);
+    assert!(face_of(&rows[0], "a/b.rs").contains(&"drgnx-accent".to_owned()));
+    assert!(rows[0].text.contains("0.3 s"), "{:?}", rows[0]);
+    assert!(rows[1].text.contains(" web Spec — x.org"), "{:?}", rows[1]);
+    assert!(face_of(&rows[1], "Spec").contains(&"drgnx-text-muted".to_owned()));
+    assert!(
+        rows[2].text.contains(" thought: the end handler…"),
+        "{:?}",
+        rows[2]
+    );
+    assert!(face_of(&rows[2], "thought").contains(&"drgnx-work-thought".to_owned()));
+    assert!(rows[2].text.contains("6 s"), "{:?}", rows[2]);
+    assert!(rows[3].text.contains(" edit s.rs +40 −3"), "{:?}", rows[3]);
+    assert!(face_of(&rows[3], "+40").contains(&"drgnx-work-plus".to_owned()));
+    assert!(face_of(&rows[3], "−3").contains(&"drgnx-work-minus".to_owned()));
+    assert!(
+        rows[4]
+            .text
+            .contains(" job bin/t · desktop slot 3 · running"),
+        "{:?}",
+        rows[4]
+    );
+    assert!(face_of(&rows[4], "bin/t").contains(&"drgnx-accent".to_owned()));
+}
+
+/// [D] A finding's card keeps its keys line (`l light them · ↵ sources`) and its number is the filled circle.
+#[test]
+fn a_finding_card_keeps_its_keys_and_a_filled_number() {
+    let p = Palette::default();
+    let rows = trail::trail_rows(
+        &[step(1, 1000.0)],
+        &[conclusion(1, 1, &[1])],
+        &env(&p),
+        Zone(0),
+    );
+    let top = rows.iter().find(|r| r.key == "conc:1:0").expect("the card");
+    assert!(
+        top.runs.iter().any(|r| r.2 == "drgnx-chip-solid"),
+        "{top:?}"
+    );
+    let sub = rows
+        .iter()
+        .find(|r| r.key == "conc:1:1")
+        .expect("its keys line");
+    assert!(
+        sub.text
+            .contains("based on 1 step ·  l  light them · ↵ sources"),
+        "{sub:?}"
+    );
+    assert!(
+        sub.runs.iter().any(|r| r.2 == "drgnx-chip-quiet"),
+        "{sub:?}"
+    );
+}
+
+/// [D] A step still open shows how long it has run (`32 s…`, work-space-dark.html), from the clock it is given; a closed
+/// one shows its duration; with no clock an open step shows its time alone.
+#[test]
+fn an_open_step_shows_its_elapsed_seconds() {
+    let p = Palette::default();
+    let mut open = step(1, 1000.0);
+    open.end = None;
+    let (rows, _) =
+        trail::trail_rows_with_images(&[open.clone()], &[], &env(&p), Zone(0), Some(1032.4));
+    assert!(rows[0].text.contains("· 32 s…"), "{:?}", rows[0]);
+    let (rows, _) = trail::trail_rows_with_images(&[open], &[], &env(&p), Zone(0), None);
+    assert!(!rows[0].text.contains('…'), "{:?}", rows[0]);
+    let (rows, _) =
+        trail::trail_rows_with_images(&[step(2, 1000.0)], &[], &env(&p), Zone(0), Some(1500.0));
+    assert!(rows[0].text.contains("· 2 s"), "{:?}", rows[0]);
 }

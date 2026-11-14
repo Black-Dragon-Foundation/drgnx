@@ -11,6 +11,7 @@
 mod chain;
 #[cfg(feature = "fixture")]
 pub mod fixture;
+mod icons;
 pub mod layout;
 pub mod model;
 pub mod nav;

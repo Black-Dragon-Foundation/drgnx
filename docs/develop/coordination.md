@@ -805,7 +805,7 @@ reuses a live one, and `agents/stop` and `agents/kill` close it. Test builds run
   `body` is its section of the brief, before its steps and interfaces; a task's `profile` is the profile it runs on
   (the job's `data.profiles` entry for it, as a reassignment would be; none: its role's route). A plan an agent
   wrote can name it, so `job/propose` runs the check `job/reassign` and Say run (`review::profile_refusal`: a
-  profile the settings do not have, or Codex, whose lock is not proven) on every task's profile and refuses the
+  profile the settings do not have, or Codex: its lock is proven for chats and workers, but a job's agent on a runner is still refused until that path has its own proof) on every task's profile and refuses the
   proposal with `task N: …`; a task on another profile than its role's route is in the proposal's `warnings` as
   `task N runs on P, not the ROLE route's Q`, so the user reads it before the OK. Its `model` is only
   the forecast's hint when no profile is named: beside a profile, the profile runs its own model, and when that

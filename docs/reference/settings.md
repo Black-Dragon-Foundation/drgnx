@@ -478,26 +478,6 @@ OpenRouter agents do not start until it is fixed.
 | `:agents` | `never` |
 | `:schema` | `(pred drgnx-agents--openrouter-ok-p "not an OpenRouter restriction (:only :ignore :data-collection :zdr)")` |
 
-## drgnx-agents-own-env
-
-Each agent's own credentials and switches: (AGENT NAME…).  A profile without an `:ai' route runs on the user's
-own login, so the names of its agent (by its command: claude, codex, gemini) are exempt from
-`drgnx-agents-scrubbed-env' for it, and only for it.  `AWS_*' and `GOOGLE_APPLICATION_CREDENTIALS' are not scrubbed
-at all.
-
-| Key | Value |
-| --- | --- |
-| Default | `((claude "ANTHROPIC_API_KEY" "ANTHROPIC_AUTH_TOKEN" "ANTHROPIC_BASE_URL" "ANTHROPIC_MODEL" "ANTHROPIC_SMALL_FAST_MODEL" "ANTHROPIC_DEFAULT_HAIKU_MODEL" "ANTHROPIC_DEFAULT_SONNET_MODEL" "ANTHROPIC_DEFAULT_OPUS_MODEL" "ANTHROPIC_DEFAULT_FABLE_MODEL" "CLAUDE_CODE_SUBAGENT_MODEL" "CLAUDE_CODE_OAUTH_TOKEN" "CLAUDE_CODE_USE_BEDROCK" "CLAUDE_CODE_USE_VERTEX") (codex "OPENAI_API_KEY" "OPENAI_BASE_URL") (gemini "GEMINI_API_KEY" "GOOGLE_API_KEY"))` |
-| Type | `(alist :key-type symbol :value-type (repeat string))` |
-| `:scope` | `global` |
-| `:workspace` | `never` |
-| `:merge` | `replace` |
-| `:on-error` | `last-good` |
-| `:apply` | - |
-| `:runtime` | - |
-| `:agents` | `never` |
-| `:schema` | - |
-
 ## drgnx-agents-plugins
 
 The plugins that run, in hook order: a list of plugin names.  A plugin runs only when it is listed here and you
@@ -569,28 +549,6 @@ Which profiles do each job role: an alist ROLE → a profile's name, or a list o
 | `:runtime` | `"Vec<AgentRoute>"` |
 | `:agents` | `never` |
 | `:schema` | `(alist symbol (or string (list-of string)))` |
-
-## drgnx-agents-scrubbed-env
-
-Keys never inherited by agents: variables of Emacs's environment that an agent does not get.
-MCP Test and Hook Test on the Agent Settings page unset the same list (drgnx-agent-check.el).
-An agent gets the variables of its own route (the provider key or the gateway token, the model names) and
-nothing else from this list, so a Kimi agent never sees your DeepSeek or OpenRouter key.  A profile without a
-route (`:ai') is the user's own login and also keeps its own vendor's names (`drgnx-agents-own-env').  To pass
-another one on, remove it from this list (or set it in the profile's `:env').
-
-| Key | Value |
-| --- | --- |
-| Default | `("ANTHROPIC_API_KEY" "ANTHROPIC_AUTH_TOKEN" "ANTHROPIC_BASE_URL" "ANTHROPIC_MODEL" "ANTHROPIC_SMALL_FAST_MODEL" "ANTHROPIC_DEFAULT_HAIKU_MODEL" "ANTHROPIC_DEFAULT_SONNET_MODEL" "ANTHROPIC_DEFAULT_OPUS_MODEL" "ANTHROPIC_DEFAULT_FABLE_MODEL" "CLAUDE_CODE_SUBAGENT_MODEL" "CLAUDE_CODE_OAUTH_TOKEN" "CLAUDE_CODE_USE_BEDROCK" "CLAUDE_CODE_USE_VERTEX" "OPENAI_API_KEY" "OPENAI_BASE_URL" "OPENROUTER_API_KEY" "MOONSHOT_API_KEY" "DEEPSEEK_API_KEY" "GEMINI_API_KEY" "GOOGLE_API_KEY")` |
-| Type | `(repeat string)` |
-| `:scope` | `global` |
-| `:workspace` | `never` |
-| `:merge` | `replace` |
-| `:on-error` | `last-good` |
-| `:apply` | - |
-| `:runtime` | - |
-| `:agents` | `never` |
-| `:schema` | - |
 
 ## drgnx-agents-session-memory
 

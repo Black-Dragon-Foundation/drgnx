@@ -317,6 +317,15 @@ fn reduced_tier_says_it_cannot_pin() {
     let c = check(BackendKind::Reduced);
     assert_eq!(pins_note(BackendKind::Reduced), Some(REDUCED_CANNOT_PIN));
     assert!(REDUCED_CANNOT_PIN.contains("the review gate guards them"));
+    // GL-T8-2, GL-T5-3: the reduced tier's two accepted gaps are named in the same note
+    assert!(
+        REDUCED_CANNOT_PIN.contains("not isolated"),
+        "{REDUCED_CANNOT_PIN}"
+    );
+    assert!(
+        REDUCED_CANNOT_PIN.contains("command lines"),
+        "{REDUCED_CANNOT_PIN}"
+    );
     assert_eq!(
         crate::sandbox::check_text(&c),
         format!("{}\n{REDUCED_CANNOT_PIN}", c.text())

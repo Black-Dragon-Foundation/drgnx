@@ -109,7 +109,7 @@ impl Identity {
     pub fn me(&self) -> Result<&str, String> {
         self.check()?;
         self.id().ok_or_else(|| {
-            "This server has no agent identity (DRGNX_AGENT, or DRGNX_AGENT_KIND for an agent outside drgnx): it can only read"
+            "This server has no agent identity (it serves neither a drgnx session nor an outside agent that names its kind): it can only read"
                 .to_string()
         })
     }

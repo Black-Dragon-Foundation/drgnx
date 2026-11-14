@@ -578,7 +578,7 @@ How it works:
   status bar has the mockup's facts: the seeded plan run counted from the hub (`1 job`), and the gateway file's two
   problems from a stand-in Flymake backend (`✕ 1 ⚠ 1`), a stand-in eglot connection (`● eglot`; no language server
   runs) and the mock agent, which works in the scenes' project and edits a file there (`● replay-… editing`). The
-  mock agent's hub seeds the plan run too, so a Work scene after an agent scene finds it. `start-page` has no mockup: it is judged against the components' spec (buttons, keycaps, the shield). The
+  mock agent's hub seeds the plan run too, so a Work scene after an agent scene finds it. `start-page` and `start-page-light` have no mockup: they are judged against the components' spec (buttons, keycaps, the shield). The
   three highlights scenes, `highlights-dark`, `highlights-light` and `highlights-hc`, have none either: each puts every highlight in one
   shot, judged against the mockups' tokens. The editor holds the current line, isearch's current and other matches,
   show-paren, eglot's symbol highlight, Flymake's marks, a rectangle and a region. A second group beside it holds a
@@ -595,11 +595,22 @@ How it works:
   run into its fresh store (`orch::scene`, test-hooks only). It is a running job, `scene-run`, that the runner leaves alone (no agent starts for it), with a rule pack, tasks
   in each gate state and their evidence, a held `gate` card, a batch of three with its affected groups' runs on two
   machines, and the push tiers' runs at the line's head. Every map the hub opens also shows the held task's agent,
-  a seeded session that is not live ("Sonnet · search-quick", 41 min in its state, ≈$0.90, ctx 88%). `work-space-dark` and `work-flow` (mockup
-  `hub-orchestration`) open the Work map on that hub, then the Flow lens beside it, in the dark theme; `work-flow`
-  then selects the held task (its detail tile in the side panel) and opens the Rules tile below. Both need
-  Nidhogg's view model (Sjá; the line, not the tarball). A map or Flow drawn without the hub's rows shows only its
-  placeholder text, so it is an error of the scene, not a shot.
+  a seeded session that is not live ("Sonnet · search-quick", 41 min in its state, ≈$0.90, ctx 88%). `work-flow` (mockup
+  `hub-orchestration`) opens the Work map on that hub, then the Flow lens beside it, in the dark theme, then selects
+  the held task (its detail tile in the side panel) and opens the Rules tile below. It needs Nidhogg's view model (Sjá;
+  the line, not the tarball). A map or Flow drawn without the hub's rows shows only its placeholder text, so it is an
+  error of the scene, not a shot.
+- **The Work map's scenes** (`work-space-dark`, `work-space-light`, `work-space-hc`; mockups `work-space-dark.html`
+  and `-light.html`, the high-contrast one judged against the tokens) need the map's own seed: the hub started with
+  `RATATOSKR_SEED_SCENE=map` runs the same plan run (so its held gate is a card on the strip) and, in place of the
+  Flow's one agent, feeds every map it opens the mockup's graph (`test/fixtures/work-space/scene.json`, the prototype's
+  asks, specs, plans, four agents with their branches, files and an overlap, two machines, plus a push and a permission
+  card; the agents' minutes are counted from the hub's clock), the strip's forecast and cost chips and the first agent's
+  trail (six steps and a finding, `orch::scene::map_trail`, shown by its trail view in place of the timeline's). The
+  scenes open the Work layout (the Detail island at its right, the trail under the map). The session picks the seed from
+  `DRGNX_LOOK_ONLY`: draw
+  these scenes alone, `DRGNX_LOOK_ONLY=work-space` (it matches all three), never with `work-flow`. Each selects the
+  first agent (its chain lit, the cards off it dimmed, its detail in the side panel) and waits for its rows.
 - It writes `NAME-sN-facts.eld` beside each shot: the themes, the fonts the chrome faces got, the windows, the
   modules, the visible child frames, `:palette` while a minibuffer is open (whether the palette floats and why: its
   category's multiform entry, the display action, the frame), and `:limits`, what the line cannot show of that mockup yet (`drgnx-look-scene-limits`). A limit is

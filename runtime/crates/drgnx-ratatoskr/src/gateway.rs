@@ -732,6 +732,15 @@ impl Gate {
         }
     }
 
+    /// `gateway/revoke-key`: the hub forgets PROVIDER's key (zeroed); whether it held one.  The next request for that
+    /// provider finds no key (the editor's route says `no key`, an agent's chain moves on), and the hub asks again
+    /// only when an agent needs it (`gateway/need-keys`).  A request already sent upstream finished with the key.
+    pub fn revoke_key(&self, provider: &str) -> bool {
+        let had = write(&self.keys).remove(provider);
+        lock(&self.held).remove(provider);
+        had
+    }
+
     /// A registration for one of the hub's own sessions (booked under JOB): the token its agent gets, good on the
     /// loopback listener (the URL) or, with SID, on that session's `gateway.sock` only (the socket; its MCP session
     /// must be open), which a sandboxed agent reaches through its relay.  Owned by this hub process, so a restart
@@ -1946,6 +1955,33 @@ mod tests {
         // the answer passes the registry's check of gateway/keys-held's result
         let m = registry::find("gateway/keys-held").unwrap();
         assert_eq!((m.check_result)(&json!(held)).unwrap(), json!(held));
+    }
+
+    #[tokio::test]
+    async fn a_revoked_key_is_forgotten_and_the_others_stay() {
+        let h = hub().await;
+        let g = &h.front.gate;
+        let keys: runstav::methods::gateway::KeysParams = decoded(
+            "gateway/keys",
+            json!({"keys": {"openrouter": "canary-key-1", "anthropic": "canary-key-2"}}),
+        );
+        g.take_keys(keys.keys);
+        assert!(g.revoke_key("openrouter"));
+        let ids: Vec<String> = g
+            .keys_held()
+            .providers
+            .iter()
+            .map(|i| i.as_str().to_owned())
+            .collect();
+        assert_eq!(ids, ["anthropic"]);
+        assert!(read(&g.keys).get("openrouter").is_none());
+        assert!(read(&g.keys).get("anthropic").is_some());
+        // once; and a provider never held is no error, only false
+        assert!(!g.revoke_key("openrouter"));
+        assert!(!g.revoke_key("never-held"));
+        // the method's params and answer go through the registry
+        let m = registry::find("gateway/revoke-key").expect("registered");
+        assert!((m.check_result)(&json!(true)).is_ok());
     }
 
     #[tokio::test]

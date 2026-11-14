@@ -119,6 +119,7 @@
   "gateway/keys": ["user"],
   "gateway/keys-held": ["user"],
   "gateway/register": ["user"],
+  "gateway/revoke-key": ["user"],
   "gateway/set-budget": ["user"],
   "gateway/unregister": ["user"],
   "git/blame": ["user"],

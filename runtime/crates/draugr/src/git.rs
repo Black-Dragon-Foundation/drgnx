@@ -214,6 +214,8 @@ const OVERRIDES: [&str; 10] = [
 const WHY_CONFIG: &str = "sets config";
 const WHY_PROGRAM: &str = "runs a program";
 const WHY_FILE: &str = "writes a file or a template";
+const WHY_SUBCOMMAND: &str =
+    "not a listed git subcommand (an unknown name runs an alias or a git-NAME program)";
 const WHY_REPO: &str = "moves the repository (it would bypass check_trusted_repo)";
 
 /// Long options refused anywhere, also as `--NAME=VALUE` and as any abbreviation git would accept (a prefix).
@@ -248,6 +250,73 @@ const REFUSED_AFTER: [(&str, u8); 7] = [
     ("difftool", b'x'),
 ];
 
+/// The subcommands a call may run, each a git builtin that starts no program the repository's config names. Not here:
+/// aliases and `git-NAME` programs (any unknown name), `submodule`, `bisect`, `hook`, `filter-branch`, `maintenance`,
+/// `difftool`, `mergetool`, `config` (writes the config the overrides rely on), `help` and `daemon`.
+const SUBCOMMANDS: &[&str] = &[
+    "add",
+    "am",
+    "apply",
+    "archive",
+    "blame",
+    "branch",
+    "cat-file",
+    "check-attr",
+    "check-ignore",
+    "check-ref-format",
+    "checkout",
+    "checkout-index",
+    "cherry-pick",
+    "clean",
+    "clone",
+    "commit",
+    "commit-tree",
+    "count-objects",
+    "describe",
+    "diff",
+    "diff-files",
+    "diff-index",
+    "diff-tree",
+    "fetch",
+    "for-each-ref",
+    "format-patch",
+    "fsck",
+    "grep",
+    "hash-object",
+    "init",
+    "log",
+    "ls-files",
+    "ls-remote",
+    "ls-tree",
+    "merge",
+    "merge-base",
+    "mv",
+    "name-rev",
+    "notes",
+    "pull",
+    "push",
+    "range-diff",
+    "read-tree",
+    "rebase",
+    "reflog",
+    "remote",
+    "reset",
+    "restore",
+    "rev-list",
+    "rev-parse",
+    "revert",
+    "rm",
+    "shortlog",
+    "show",
+    "show-ref",
+    "sparse-checkout",
+    "stash",
+    "status",
+    "switch",
+    "symbolic-ref",
+    "tag",
+];
+
 /// Environment pairs, in order.
 pub type Env = Vec<(OsString, OsString)>;
 
@@ -264,6 +333,7 @@ pub fn command(call: &GitCall) -> Result<(Vec<OsString>, Env), GitRefusal> {
         }
     }
     let mut after: Vec<u8> = Vec::new();
+    let mut subcommand = false;
     for arg in &call.args {
         let bytes = arg.as_bytes();
         if let Some(why) = refused(bytes, &after) {
@@ -272,9 +342,24 @@ pub fn command(call: &GitCall) -> Result<(Vec<OsString>, Env), GitRefusal> {
                 why,
             });
         }
+        if !subcommand && !bytes.starts_with(b"-") {
+            if !SUBCOMMANDS.iter().any(|s| s.as_bytes() == bytes) {
+                return Err(GitRefusal::Arg {
+                    arg: arg.clone(),
+                    why: WHY_SUBCOMMAND,
+                });
+            }
+            subcommand = true;
+        }
         if let Some(&(_, letter)) = REFUSED_AFTER.iter().find(|(s, _)| s.as_bytes() == bytes) {
             after.push(letter);
         }
+    }
+    if !subcommand {
+        return Err(GitRefusal::Arg {
+            arg: OsString::new(),
+            why: WHY_SUBCOMMAND,
+        });
     }
     let mut argv: Vec<OsString> = OVERRIDES.iter().map(OsString::from).collect();
     if call.place == (Place::Trusted { read_only: true }) {
@@ -616,6 +701,39 @@ mod tests {
         ];
         for args in allowed {
             command(&call(Place::InSandbox, args)).unwrap_or_else(|e| panic!("{args:?}: {e}"));
+        }
+    }
+
+    #[test]
+    fn only_a_listed_subcommand_runs() {
+        // GL-T6-5: git runs a `git-NAME` program from its exec path or PATH, or an alias from the repository's config,
+        // for a name it does not know; a subcommand that runs programs from config (submodule, bisect run, hook run,
+        // filter-branch, maintenance) is not listed either.
+        let refused: &[&[&str]] = &[
+            &["foo"],
+            &["lfs", "ls-files"],
+            &["--no-pager", "pwn"],
+            &["--namespace", "x", "log"],
+            &["submodule", "update"],
+            &["bisect", "run", "sh"],
+            &["hook", "run", "pre-commit"],
+            &["filter-branch"],
+            &["maintenance", "run"],
+            &["config", "core.fsmonitor", "x"],
+            &["--no-pager"],
+            &[],
+        ];
+        for args in refused {
+            for place in [Place::Trusted { read_only: true }, Place::InSandbox] {
+                match command(&call(place, args)) {
+                    Err(GitRefusal::Arg { why, .. }) => assert_eq!(why, WHY_SUBCOMMAND, "{args:?}"),
+                    other => panic!("{args:?}: {other:?}"),
+                }
+            }
+        }
+        for sub in SUBCOMMANDS {
+            command(&call(Place::InSandbox, &["--no-pager", sub, "x"]))
+                .unwrap_or_else(|e| panic!("{sub}: {e}"));
         }
     }
 

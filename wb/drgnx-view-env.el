@@ -43,7 +43,8 @@
 (defconst drgnx-view-env-delay 0.1
   "Seconds of idleness after a width change before its env is sent.")
 
-(defconst drgnx-view-env-roles '((ui . default) (code . fixed-pitch) (card . variable-pitch) (caption . drgnx-ui-caption))
+(defconst drgnx-view-env-roles '((ui . default) (text . drgnx-ui-text) (code . fixed-pitch) (card . variable-pitch)
+                                 (caption . drgnx-ui-caption))
   "The font roles a view's rows use, and the face each is read from in the view's buffer.")
 
 (defconst drgnx-view-env-palette-roles
@@ -83,6 +84,7 @@ Pruned with its view.")
 (defvar drgnx-view-patch-patched-functions)
 (defvar drgnx-view-patch-id-prop)
 (defvar drgnx-view-nav-faces)
+(defvar drgnx-view-nav-through-faces)
 (defvar drgnx-view-nav-notice-method)
 (defvar drgnx-view-nav-list)
 (defvar drgnx-view-nav-paged-functions)
@@ -249,7 +251,7 @@ their facts (`drgnx-view-env--window-classes'), read again when not given."
 ;;;; Twins: one buffer per display class
 
 (defconst drgnx-view-env--twin-locals
-  '(drgnx-view-patch-id-prop drgnx-view-nav-faces drgnx-view-nav-notice-method drgnx-view-nav-list
+  '(drgnx-view-patch-id-prop drgnx-view-nav-faces drgnx-view-nav-through-faces drgnx-view-nav-notice-method drgnx-view-nav-list
                              drgnx-view-nav-paged-functions)
   "The view buffer's locals a twin takes as they are when it is made: how its keys and classes read the model.")
 

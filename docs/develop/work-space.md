@@ -97,17 +97,21 @@ labels' margin; a 1000 px tile is 226 units (1000 − 84 − 12 px of padding).
 
 | Thing | Units | px |
 |---|---|---|
-| rich agent card | 58 × 25 (5 lines) | 232 × 100 |
+| rich agent card | 54 × 25 (5 lines) | 216 × 100 |
 | compact agent card | 42 × 10 (2 lines) | 168 × 40 |
 | chip row (asks, specs, plans, branches, files, machines) | 7 high | 28 |
-| chip widths: ask, spec, plan, branch, file, machine | 48, 44, 44, 40, 36, 32 | 192 … 128 |
+| chip widths: ask, spec, plan, branch, file, machine | 58, 44, 54, 42, 52, 36 | 232 … 144 |
 | gap between cards | 3 | 12 |
 | band between rows | 8 | 32 |
 | band between an agent sub-row and its branches' sub-row | 3 | 12 |
 | gap between blocks | 6 | 24 |
 | a collapsed layer's row | 5 | 20 |
 
-The look's 19 px card lines round to 20 px on the grid. Compact and roomy densities scale these (`Metrics::of`).
+The look's 19 px card lines round to 20 px on the grid. Compact and roomy densities scale these (`Metrics::of`). The
+chips are as wide as the mockup's text needs in the UI font (an ask holds "fix deferred testing rows", a plan its title
+and its "3/6"), at most 58 units, so two fit at the narrowest width the map fits (120 units); a branch is at most as
+wide as a compact agent card (42), since a branch sits under its agent and the sub-row packs at the card's pitch. Four
+rich cards and their gaps fit a 1000 px tile in one row.
 
 ### The steps
 
@@ -159,7 +163,9 @@ leaves its gap or shares a slot with another bundle. Single cases pin the rules:
 the focused chain, a block compacting before its second sub-row, and the fit rule (width and lanes, never the
 height). Three goldens (`tests/golden/`) hold the prototype's data at
 226 units and the 30-agent fixture at 226 and 576 units (2400 px); `UPDATE_VEGVISIR_GOLDEN=1` rewrites them, and
-refuses one whose crossings are above the golden it replaces. `tests/timing.rs` holds `layout_200_items_within_2_ms`.
+refuses one whose crossings are above the golden it replaces (`UPDATE_VEGVISIR_GOLDEN=metrics` does not: a card or chip
+width moved on purpose; the 2026-11-13 widths moved the 1000 px golden from 393 to 412 crossings and the two larger ones
+down, 169 to 157 and 129 to 126). `tests/timing.rs` holds `layout_200_items_within_2_ms`.
 
 ### The 30-agent fixture
 
@@ -238,8 +244,8 @@ Nidhogg image, selects each item in Sjá and checks that the nodes it classes `c
 
 An item without a place has no arrows. `tests/nav.rs` checks every link of the 30-agent fixture at 1600 px against
 `tests/golden/nav-thirty-1600.json`, recorded once from the editor's navigation (now frozen) over the frame in
-`tests/golden/nav-thirty-1600-frame.json`; `UPDATE_VEGVISIR_GOLDEN=1` writes the frame again, and a frame that moved
-fails until the golden is recorded again.
+`tests/golden/nav-thirty-1600-frame.json`; `UPDATE_VEGVISIR_GOLDEN=1` writes the frame again and, since the editor's
+navigation is gone, the links from this crate (a layout metric moved); a frame that moved fails until they are written.
 
 ## The hub's facts
 
@@ -315,9 +321,16 @@ channel, session, message_id?}`) and `asked` links from it to specs, plans, task
 - A session's tool call answers only after its writes are linked: every tool on a session's socket is wrapped
   (`sessions::AfterTool`) to call `norn::tools::Hub::after_tool`, which waits for the shell to read the log. A live
   spec (`work::specs`) goes in as the scan, so its write is sent to the shell directly.
-- Current asks are kept in memory: after a hub restart a session has none until its next user message.
+- Current asks are kept in memory and **rebuilt when a session is resumed after a hub restart** (`relaunch` tells the
+  shell `Restoring`, then `Restore` before the session can write; what it writes meanwhile waits, in the core's `held`).
+  A session with a user message in its transcript takes the last one without an `origin` as its ask; the shell adopts the
+  `ask` entity an earlier hub made for exactly that message (the same `message_id`, else the same text, of the session's
+  newest ask), so a restart, a second restart or a crash in the middle never makes a second ask. A session with none
+  (a worker) takes the ask that dispatched it: the newest ask an `asked` link joins to `session:ID`, from data, with no
+  notice. With neither, its writes link to one ask that says "Ask before a hub restart: not recorded" (made at its first
+  write, the same entity at the next restart): never a guess. A message that reaches a session first is its ask instead.
 - Tests: `work::asks::tests` (`every_order_links_every_write`, pattern A over a manager, its worker, a chat and the
-  ends; the rest pattern D) and conformance `work/a-managers-later-turns-link-to-the-ask` (pattern B).
+  ends; the rest pattern D) and conformance `work/a-managers-later-turns-link-to-the-ask` (pattern B), `work/an-ask-survives-a-hub-restart`, `work/a-workers-ask-survives-a-hub-restart` and `work/a-session-with-no-recorded-ask-gets-one-line-after-a-restart`.
 
 ### Conclusions
 
@@ -508,7 +521,15 @@ and keeps no copy of the map. The map's rows come as `view-patch` events and its
 lays the map out and draws every row, the strip, the bands' edge tiles, the lanes and the outline ("The rows
 (`vegvisir::render`)", above), and sends the map's model to Sjá. The buffer is the hub-fed view of the map view's id
 (`drgnx-work-map-rows-attach`: `drgnx-view-patch-attach`, its env registered while a window shows it); the rows name
-faces only, so the editor keeps defining them: `drgnx-work-band`, the decoration faces (`drgnx-card-top`, `-mid`,
+faces only, so the editor keeps defining them. A card line's runs come in the order card box, then its text's own
+faces; each is appended below those before it (`drgnx-view-patch--dress`), so the text's faces (a state dot, an overlap
+mark) show and the card's box and `drgnx-work-card` (the UI font) are under them. The hub names `drgnx-work-title` on
+an agent's name (heading weight), `drgnx-work-meta` on its line of minutes and spend (the code font, no box: it
+would take the box off the run) and `drgnx-chip` under the strip's chips. The themes give the card faces a ring in the
+strong border with an explicit colour (a ring with none takes each run's foreground and the card breaks into boxes
+where the faces change). A class (the selection's tint, the dimming of the cards off its chain) goes through the
+cards' boxes (`drgnx-view-nav-through-faces`, set by `drgnx-work-map-rows-attach`); a chip elsewhere keeps its own
+face under a class. The faces: `drgnx-work-band`, the decoration faces (`drgnx-card-top`, `-mid`,
 `-bottom`, `-single`, loaded from `modules/ui/drgnx-decor.el`), `drgnx-runners-*`, `drgnx-work-seg-*`,
 `drgnx-work-agent-1` to `-6` and `drgnx-work-chain`, `-chip`, `-dim`, `-label`, `-needs-you`, `-new` and `-overlap`.
 
@@ -517,6 +538,54 @@ faces only, so the editor keeps defining them: `drgnx-work-band`, the decoration
   side panel, Board, Flow, trails and Timeline show the same notice, and a key that needs the model says it
   (`drgnx-work-map--require-sja`). The old Lisp drawing of the map, its edge tiles and its client-side frame went with
   render offload Task 34; there is no switch back to it.
+- **Text and icons.** The cards' text is the UI font, so the hub measures and fits it in the font role `text` (the face
+  `drgnx-ui-text`; `drgnx-view-env-roles`), not `ui` (the buffer's default, the code font). A chip's glyph is a Lucide
+  icon (`etc/icons`, read into `vegvisir::icons`, drawn at 1.6 stroke in the palette's `chip-fg`) in an image of its own,
+  one placeholder character at the line's start (its glyph on a terminal), 16 px; the trail's step kinds and its
+  conclusion cards use the same. The selected card is the hub's: `Scene::selected` draws its lines in
+  `drgnx-card-sel-top/-mid/-bottom/-single` (a 2 px accent ring, the themes give it), so a selection move is a redraw of
+  two cards, not an overlay; the class step only dims the cards off the chain. The strip carries, left of the machines',
+  the forecast and cost chips (`wk 41 % ▲ Thu`, `$31 / $40`); only a test hub's scene gives them yet
+  (`Map::scene_strip`; the real feed is DEFERRED MAP-STRIP-WK-COST-1).
+- **What is lit and what is dim.** With a selection, every item off its chain (neither it nor an end of an edge on its
+  chain) carries `drgnx-work-dim` in the hub's rows; the editor's class step dims nothing on the map. A machine on a chip is
+  its short name ("desk" for "desktop"); a branch's chip shows a tag, the machine its agent runs on and the slot it holds
+  (`Fields::tag`, from `SessionFact::machine` and `::slot`: "desk 3"; a hub session has no slot yet, so its tag is the
+  machine alone), in place of its edits count. A machine's chip on the strip starts with its Lucide monitor
+  (a laptop for "laptop"), an image in the strip's row that `render::strip` returns beside the row.
+- **The Detail head and the trail's numbers.** An agent's Detail starts with its badge, its name and its state as a chip
+  at the right edge, then the subtitle (task, "running N min", "≈$1.20 (API prices)"); `detail::rows` takes the tile's
+  width and the UI font's measure, and the subtitle never wraps (a wrapped line shows a continuation glyph): it drops
+  "(API prices)", then its parts from the end, then is cut with an ellipsis. A trail's step that a conclusion rests on
+  starts with the conclusion's number in a filled accent circle (`drgnx-work-step-number`, the solid chip
+  `drgnx-chip-solid` in the badge's pill), the
+  others keep the room; the newest conclusion's card says `new` while it is stamped on one of the last three steps.
+- **Cards, Detail and trail as the mockup draws them.** The Work layout's trail tile is 250 logical px tall (the mockup's), the lens switch is a rail with the shown lens raised on it (`drgnx-work-lens-rail`). A card line is as tall as its layout row says (a row's
+  `height` unit, px: `drgnx-view-patch` sets `line-height` from it; a row with no unit is that many default lines).
+  An agent's initial is a filled circle of its colour (`drgnx-work-who-N`), the going line is the UI font with its
+  numbers in the code font, the flag line carries the branch's totals (`edits N (+P −M)`, `Fields::edits` of an
+  agent). A file's chip is its name and its change (`session.rs +40 −3`), a machine's chip its own name; only the
+  strip abbreviates ("desk"). The Detail head's subtitle wraps by word into rows of its own (`head/1`, `head/1.1`);
+  its sections are "Why ↑", "Touches ↓" and "Conclusions" (no heading for the actions), an agent's Touches in the
+  order branch, machine ("desktop · slot 3"), edits (the file its branch changed most), reads, then the rest. A trail
+  step keeps its verb (`read PATH`, `web TITLE — HOST`, `edit PATH +P −M`, `job PATH · WHERE`), paths in the link
+  colour, a thought's text muted and italic; durations read `0.3 s`; a finding's card keeps its keys line.
+- **The Work map's bars.** The map buffer sets `drgnx-statusbar-other` (`branch jobs work-agents work-needs-you`) and
+  `drgnx-statusbar-other-right` (`work-lens`) locally; the three `work-*` segments read the map's model (`team`,
+  `needs-you` lists, the `overlaps` field). A card is the caption size (`drgnx-work-card`, 12 px, measured in the
+  `caption` role); the Detail island and the trail are the UI text size (`drgnx-work-pane`). An agent's Detail names
+  its worktree on the branch line (`Fields::worktree`). The look scene gives the title row's `N need you` and
+  `N agents` chips the counts of the map's model (`drgnx-look-scene--work-selected`).
+- **The lens bar's right** (`drgnx-work-lens--controls`): the grip (drawn; the tile layout's drag is not wired), maximise
+  (`drgnx-work-lens-maximize`: hides the Detail island and the trail, again shows them) and ⋯ (shown while the bar is hovered; its menu is the four lenses and the keys sheet). The lens
+  shown is a pill in a ring (the themes give `drgnx-work-lens-current` its box).
+- **The Work layout** (`drgnx-layouts`' `work`): the map full width, the Detail island at its right (340 logical px) and
+  the trail under the map. The Detail tile and the trail tile draw their own title row in the area's row
+  (`drgnx-area-own-title` as a string, with the area's close): "Detail", and "Trail · AGENT | Agent · AGENT | following ▾".
+  The trail follows the map's selection (`drgnx-work-space--follow-trail`: the trail of the selected agent, made when
+  there is none, shown in the panel under layout Work); the Flow still shows its Rules tile on demand. The lens bar is
+  pills and keycaps: the lens shown is `drgnx-pill-on`, the map's own keys (focus f, overlaps o) are `drgnx-pill` with a
+  `drgnx-keycap`.
 - **A hub restart:** the patches dim the view, the client subscribes again on the new connection, and the new hub's
   reset redraws it.
 - Tests: `test/unit/work-map-rows-test.el`, `test/unit/work-space-test.el`; the view rules on the 30-agent map and a
@@ -548,7 +617,12 @@ The selection, the keys and the commands are in `drgnx-work-map.el`; the side pa
   `work-detail` (home right) shows it. `drgnx-work-detail-buffer` attaches it as the hub-fed view `VIEW/detail` in the
   map view's class and registers its env. The hub (`work/map/detail.rs`) builds its rows from the map's model and the
   view's selection (head, why, touches, conclusions, a machine's queue, actions; one row per line, keyed `SECTION/N`, a
-  job's line carrying `drgnx-work-job` for `l`) whenever it publishes the map, and when the panel's env arrives; the
+  job's line carrying `drgnx-work-job` for `l`) whenever it publishes the map, and when the panel's env arrives. The
+  tile is the mockup's `.det`: the rows are in the UI font (`drgnx-work-card`), the head and the section names in the
+  heading face, a `KEY\tVALUE` line (the why-chain's you, spec, plan and task, a touch's branch, machine, edits, reads
+  and overlap) a muted key and its value in a column (`detail::rows` takes the display scale for the column), the
+  why-chain's values in the accent, an overlap in the warning colour, and the actions as buttons with their keycaps
+  (an agent's: Open, Files, Diffs, Trail, Steer, Pause, Review, in the default profile's keys); the
   selection reaches the hub as the map's `work/map/set`. Without Sjá the panel shows the map's notice. Tests:
   `detail_rows_say_the_edges` (Rust), `drgnx-work-detail/rows-follow-the-selection`.
 

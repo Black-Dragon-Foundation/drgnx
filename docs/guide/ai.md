@@ -282,6 +282,10 @@ key you gave onboarding works in the drgnx app; in a terminal (`drgnx onboard`, 
 environment variable. The one exception is `drgnx secrets` (below), which you run on a terminal to carry your keys
 to another machine.
 
+**AI: Remove Key…** (`drgnx-ai-remove-key`) deletes a provider's key: drgnx's item in the Keychain or keyring, this
+Emacs's copy, and the hub's, which forgets it at once (`gateway/revoke-key`; a request after it finds no key). It asks
+first. A key in your environment (`OPENROUTER_API_KEY`) stays where you put it: unset it yourself.
+
 ### Keys on a second machine
 
 `drgnx secrets export` puts the keys your keyring holds for the providers that take one (OpenRouter, Anthropic, any
@@ -327,16 +331,12 @@ these variables, so a model in that file's `env` would override them (the Claude
 Moonshot and DeepSeek carry no `:price`, so the gateway cannot price their answers and counts their spend as zero (a
 job's budget does not stop them). Give the provider a `:price (IN . OUT)` in your `drgnx-ai-providers` to count it.
 
-**Agents do not inherit other vendors' keys.** Whatever Emacs's environment holds, an agent gets only the variables
-of its own route (its provider key or the gateway's token, the model names). The others -- every vendor key and route
-variable, `drgnx-agents-scrubbed-env` -- are unset for it, so a Kimi agent never sees your DeepSeek or OpenRouter key,
-and a Claude agent never sees `OPENAI_API_KEY`. A profile with no `:ai` route is your own login, and keeps its own
-agent's names from the environment (`drgnx-agents-own-env`, found from the profile's command): Claude Code
-`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, the model names, `CLAUDE_CODE_OAUTH_TOKEN` and the
-Bedrock and Vertex switches (the `AWS_*` and `GOOGLE_APPLICATION_CREDENTIALS` they need are never scrubbed); Codex
-`OPENAI_API_KEY` and `OPENAI_BASE_URL`; Gemini `GEMINI_API_KEY` and `GOOGLE_API_KEY`. A profile with a route (Kimi,
-DeepSeek, OpenRouter, Ollama) gets none of these, only its route's. To pass any other variable on, remove it from
-`drgnx-agents-scrubbed-env` (Customize), or set it in the profile's `:env`.
+**Agents do not inherit keys from your shell.** Whatever Emacs's environment holds, an agent gets only what the hub gives
+it: an allowlist (`PATH`, `HOME`, `LANG`, `TMPDIR`), its route's variables (the gateway's token and the model names) and
+the profile's own `:env`. So a Kimi agent never sees your DeepSeek or OpenRouter key, and a Claude agent never sees
+`OPENAI_API_KEY`. A profile with no `:ai` route is your own login: it authenticates through its login files (Claude Code's
+`~/.claude`, Codex's `~/.codex`, Gemini's own), never through a key in your shell. To pass any other variable on, set it in
+the profile's `:env`.
 
 In a profile of `drgnx-agents-profiles`, `:ai claude-openrouter`, `claude-ollama`, `kimi-moonshot` or `dsh-deepseek` gives any profile
 that environment. Durable jobs get the keys they need in their environment too — never in a command line or a file (under systemd, the value travels in

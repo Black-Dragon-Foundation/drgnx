@@ -177,6 +177,19 @@ pub struct Rates {
     told: HashMap<String, f64>,
 }
 
+/// Past this many identities in [`Rates`], a report prunes what can no longer change an answer.
+const PRUNE_AT: usize = 256;
+
+impl Rates {
+    /// Forget the identities whose newest report is over a minute old (their count is zero again) and whose held
+    /// notice is over [`TELL_EVERY`] old: neither can change what a report is told.
+    fn prune(&mut self, now: f64) {
+        self.reports
+            .retain(|_, r| r.front().is_some_and(|&at| at > now - 60.0));
+        self.told.retain(|_, &mut at| now - at < TELL_EVERY);
+    }
+}
+
 /// The answer of a held report.
 fn held_text() -> String {
     format!(
@@ -196,6 +209,9 @@ impl Coord {
         let now = self.now();
         let tell = {
             let mut rates = self.rates.lock().unwrap();
+            if rates.reports.len() > PRUNE_AT {
+                rates.prune(now);
+            }
             let recent = rates.reports.entry(me.to_owned()).or_default();
             let keep = recent.iter().take_while(|&&at| at > now - 60.0).count();
             recent.truncate(keep);
@@ -406,6 +422,34 @@ mod tests {
             tool.call(&ctx, json!({})).await,
             ToolResult::Ok { .. }
         ));
+    }
+
+    /// The report limit's memory is bounded: past [`PRUNE_AT`] identities a report forgets those a minute quiet whose
+    /// notice has expired, and keeps a recent reporter and a recent notice.
+    #[tokio::test]
+    async fn the_report_memory_forgets_what_can_no_longer_matter() {
+        let dir = tempfile::tempdir().unwrap();
+        let coord = Coord::new(CoordDb::spawn(dir.path().join("work.db")), Arc::new(NoHub));
+        let now = coord.now();
+        {
+            let mut r = coord.rates.lock().unwrap();
+            for n in 0..=PRUNE_AT {
+                r.reports
+                    .insert(format!("old-{n}"), VecDeque::from([now - 3600.0]));
+                r.told.insert(format!("old-{n}"), now - 2.0 * TELL_EVERY);
+            }
+            r.reports.insert("busy".into(), VecDeque::from([now - 1.0]));
+            r.told.insert("busy".into(), now - 1.0);
+        }
+        assert!(coord.held_report("me", None).await.is_none());
+        let r = coord.rates.lock().unwrap();
+        let mut kept: Vec<&str> = r.reports.keys().map(String::as_str).collect();
+        kept.sort_unstable();
+        assert_eq!(kept, ["busy", "me"]);
+        assert_eq!(
+            r.told.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["busy"]
+        );
     }
 
     #[test]

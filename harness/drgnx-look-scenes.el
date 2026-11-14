@@ -26,7 +26,7 @@
 
 (defconst drgnx-look-scenes
   '((window-dark :agent t)
-    (agent-panel)
+    (agent-panel :agent t)
     (palette :keys "C-S-p" :type "run te" :then "C-g")
     (palette-light :keys "C-S-p" :type "run te" :then "C-g")
     (palette-hc :keys "C-S-p" :type "run te" :then "C-g")
@@ -36,8 +36,11 @@
     (org :mockup magit)
     (shell-heredoc)
     (work-space-dark)
+    (work-space-light)
+    (work-space-hc)
     (work-flow :mockup hub-orchestration)
     (start-page)
+    (start-page-light)
     (highlights-dark)
     (highlights-light)
     (highlights-hc)
@@ -103,6 +106,8 @@ of the scene, not of the run: the other scenes are still drawn."
                                       (drgnx-ui-el (expand-file-name "drgnx-look-scenes-session" drgnx-ui-harness-dir))))
           (when bin                       ; the session's own hub for the scenes that need one (the Search view's)
             (drgnx-look-scenes--call sess (format "(setenv \"DRGNX_RATATOSKR_BIN\" %s)" (drgnx-ui-el bin))))
+          (drgnx-look-scenes--call sess (format "(setenv \"DRGNX_LOOK_ONLY\" %s)"   ; which scenes: picks the hub's seed
+                                                (drgnx-ui-el (or (getenv "DRGNX_LOOK_ONLY") ""))))
           (let ((errs (drgnx-look-scenes--call sess (format "(drgnx-look-scene-setup %s)" (drgnx-ui-el elpa)) 120)))
             (when errs (drgnx-ui-screenshot sess (expand-file-name (format "setup-%s.png" tag) out)))   ; what stopped it
             (push (cons 'setup errs) errors))

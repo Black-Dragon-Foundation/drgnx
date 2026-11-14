@@ -326,6 +326,7 @@ impl Sess {
             model: s.profile.clone().unwrap_or_default(),
             state: self.state,
             since: self.since,
+            age: None,
             seq: self.seq * 1000,
             task: s.task.clone(),
             manager: s.parent.clone(),
@@ -333,6 +334,7 @@ impl Sess {
             worktree,
             base: None,
             machine: self.job.as_ref().and_then(|j| j.runner.clone()),
+            slot: None,
             spend,
             context,
             progress: None,
@@ -346,8 +348,10 @@ impl Sess {
                 model: String::new(),
                 state: self.state,
                 since: self.since,
+                age: None,
                 seq: self.seq * 1000 + i as u64 + 1,
                 task: None,
+                slot: None,
                 manager: None,
                 branch: None,
                 worktree: None,
@@ -416,6 +420,9 @@ const NEW_MS: u64 = 4_000;
 pub(crate) struct NewMarks {
     seen: BTreeMap<ItemId, Option<String>>,
     at: BTreeMap<ItemId, u64>,
+    /// A test hub's scene marks these always.
+    #[cfg(feature = "test-hooks")]
+    pinned: BTreeSet<ItemId>,
 }
 
 impl NewMarks {
@@ -443,7 +450,11 @@ impl NewMarks {
 
     /// The items marked now.
     pub(crate) fn ids(&self) -> BTreeSet<ItemId> {
-        self.at.keys().cloned().collect()
+        #[allow(unused_mut)]
+        let mut ids: BTreeSet<ItemId> = self.at.keys().cloned().collect();
+        #[cfg(feature = "test-hooks")]
+        ids.extend(self.pinned.iter().cloned());
+        ids
     }
 }
 
@@ -501,6 +512,12 @@ struct Inner {
     /// shows them.
     #[cfg(feature = "test-hooks")]
     scene: Vec<(Snapshot, u64)>,
+    /// The facts a test hub's map scene seeds (`orch::scene::map_events`): every map opened is fed them.
+    #[cfg(feature = "test-hooks")]
+    scene_graph: Vec<Event>,
+    /// The items a test hub's scene shows with a new conclusion (the mark never leaves).
+    #[cfg(feature = "test-hooks")]
+    scene_new: BTreeSet<ItemId>,
 }
 
 /// The hub's Work map (see the module).
@@ -509,6 +526,9 @@ pub struct Map {
     inner: Mutex<Inner>,
     /// Whether any view is open (read on every session snapshot).
     open: AtomicBool,
+    /// The chips a test hub's scene puts left of the machines' on the strip (`orch::scene`): the forecast and the cost.
+    #[cfg(feature = "test-hooks")]
+    strip: Mutex<Vec<String>>,
     /// The front, for a session a step or presence names before its first snapshot reached the map.
     front: OnceLock<Weak<Front>>,
     origin: OnceLock<tokio::time::Instant>,
@@ -620,6 +640,7 @@ fn view_rows(
     fonts: &dyn Measure,
     now: u64,
     new: &BTreeSet<ItemId>,
+    extra: &[String],
 ) -> (Vec<Row>, Vec<(ImageId, String)>) {
     let Some(l) = v.layout.as_ref() else {
         return (Vec::new(), Vec::new());
@@ -646,6 +667,7 @@ fn view_rows(
         new,
         chain: &chain,
         outline: v.outline,
+        selected: v.selected.as_ref(),
         now,
     };
     let palette = Palette(env.palette.clone());
@@ -656,23 +678,19 @@ fn view_rows(
         .into_values()
         .filter(|it| it.kind == Kind::Machine)
         .collect();
-    let mut rows = vec![render::strip(
-        &scene,
-        &m.needs_you(),
-        &machines,
-        &renv,
-        fonts,
-    )];
+    let (strip, mut images) = render::strip(&scene, &m.needs_you(), &machines, extra, &renv, fonts);
+    let mut rows = vec![strip];
     rows.extend(drawn.rows);
-    (rows, drawn.images)
+    images.extend(drawn.images);
+    (rows, images)
 }
 
-/// The renderer's view of ENV: a card line's height and ascent from the `ui` font (else the cell's, 80 % up).
+/// The renderer's view of ENV: a card line's height and ascent from the `caption` font (else the cell's, 80 % up).
 pub(crate) fn render_env<'a>(env: &'a ViewEnv, palette: &'a Palette) -> render::Env<'a> {
     let line = env
         .fonts
         .iter()
-        .find(|f| f.0 == "ui")
+        .find(|f| f.0 == "caption")
         .map(|f| (f.4 + f.5, f.4))
         .filter(|(h, _)| *h > 0.0)
         .map_or((env.cell.1, 80), |(h, a)| {
@@ -724,6 +742,36 @@ impl Map {
         lock(&self.inner).scene = sessions;
     }
 
+    /// The strip's forecast and cost chips of a test hub's scene.
+    #[cfg(feature = "test-hooks")]
+    pub fn scene_strip(&self, chips: Vec<String>) {
+        *self.strip.lock().unwrap_or_else(PoisonError::into_inner) = chips;
+    }
+
+    /// The chips left of the machines' on the strip: none yet outside a test hub's scene (DEFERRED MAP-STRIP-WK-COST-1).
+    fn strip_chips(&self) -> Vec<String> {
+        #[cfg(feature = "test-hooks")]
+        return self
+            .strip
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        #[cfg(not(feature = "test-hooks"))]
+        Vec::new()
+    }
+
+    /// A test hub's scene graph (`orch::scene::map_events`): EVENTS, fed to every map opened.
+    #[cfg(feature = "test-hooks")]
+    pub fn scene_graph(&self, events: Vec<Event>) {
+        lock(&self.inner).scene_graph = events;
+    }
+
+    /// The items IDS of a test hub's scene carry the `new` mark on their conclusions, whatever the time.
+    #[cfg(feature = "test-hooks")]
+    pub fn scene_new(&self, ids: &[&str]) {
+        lock(&self.inner).scene_new = ids.iter().map(|i| ItemId((*i).to_owned())).collect();
+    }
+
     /// What a map opening at NOW (the clock's minute) is fed after its sessions: the minute, so a card counts its
     /// minutes at once rather than from the next tick, and on a test hub the scene's sessions.
     fn opening(g: &mut Inner, now: u64) -> Vec<Event> {
@@ -746,6 +794,23 @@ impl Map {
             let s = g.sessions.get_mut(&snap.id).expect("just noted");
             s.since = now.saturating_sub(ago);
             out.extend(s.facts());
+        }
+        // the fixture counts minutes on its own clock (its `Tick`): a session began that many minutes before it, and
+        // began as many before NOW; the fixture's tick is dropped, the map's own was fed already
+        let fixture_now = g.scene_graph.iter().find_map(|e| match e {
+            Event::Tick { minute } => Some(*minute),
+            _ => None,
+        });
+        for ev in g.scene_graph.clone() {
+            match ev {
+                Event::Tick { .. } => {}
+                Event::Session(mut s) => {
+                    s.since =
+                        now.saturating_sub(fixture_now.unwrap_or(s.since).saturating_sub(s.since));
+                    out.push(Event::Session(s));
+                }
+                ev => out.push(ev),
+            }
         }
         out
     }
@@ -975,6 +1040,12 @@ impl Map {
             return;
         }
         let mut g = lock(&self.inner);
+        // a test hub's map scene has its own machines (desktop 3/16, laptop 1/2): the hub's registry, which reports
+        // later, does not replace them
+        #[cfg(feature = "test-hooks")]
+        if !g.scene_graph.is_empty() {
+            return;
+        }
         let keys: Vec<String> = g.spaces.keys().cloned().collect();
         for k in keys {
             self.feed(&mut g, &k, vec![Event::Machines(facts.clone())]);
@@ -1272,11 +1343,12 @@ impl Map {
         }
         // the job chips' elapsed time: whole seconds of the wall clock
         let now = crate::clock::wall_secs() as u64;
+        let extra = self.strip_chips();
         for class in f.core.views.classes(key.conn, &key.view) {
             let k3 = (key.conn, key.view.clone(), class);
-            f.core
-                .views
-                .publish_built(&f, &k3, |env, fonts| view_rows(m, v, env, fonts, now, &new));
+            f.core.views.publish_built(&f, &k3, |env, fonts| {
+                view_rows(m, v, env, fonts, now, &new, &extra)
+            });
         }
         Self::publish_detail(&f, m, v, key, None);
         if let Some(ms) = wake
@@ -1319,9 +1391,12 @@ impl Map {
                 continue;
             }
             let k3 = (key.conn, view.clone(), c);
-            f.core
-                .views
-                .publish_built(f, &k3, |_env, _fonts| (detail::rows(&lines), Vec::new()));
+            f.core.views.publish_built(f, &k3, |env, fonts| {
+                (
+                    detail::rows(&lines, env.scale, env.width_px, fonts),
+                    Vec::new(),
+                )
+            });
         }
     }
 
@@ -1605,6 +1680,8 @@ pub async fn subscribe(f: &Front, c: &Caller, p: MapSubscribe) -> Result<MapRows
     }
     seed.extend(Map::opening(&mut g, minute()));
     seed.extend(Map::presence_events(&mut g, &ws, &files));
+    #[cfg(feature = "test-hooks")]
+    let pinned = g.scene_new.clone();
     map.feed(&mut g, &ws, seed);
     let sp = g.spaces.get_mut(&ws).expect("the view's workspace");
     sp.core.step(Event::View(ViewOp::Open {
@@ -1622,7 +1699,11 @@ pub async fn subscribe(f: &Front, c: &Caller, p: MapSubscribe) -> Result<MapRows
         sent: BTreeSet::new(),
         co: Coalescer::default(),
         outline,
-        marks: NewMarks::default(),
+        marks: NewMarks {
+            #[cfg(feature = "test-hooks")]
+            pinned,
+            ..NewMarks::default()
+        },
         new_wake: None,
     };
     Map::relayout(sp.core.model(), &mut v);

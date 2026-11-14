@@ -26,8 +26,9 @@ use crate::{Edge, EdgeKind, Item, ItemId, Kind};
 pub const MARGIN: u32 = 84;
 /// The six layers' labels, sentence case; the last is short for "Files and machines".
 pub const LAYER_NAMES: [&str; 6] = ["You asked", "Specs", "Plans", "Agents", "Branches", "Files"];
-/// The font role card text and labels are measured in.
-const ROLE: &str = "ui";
+/// The font role card text and labels are measured in: the UI text face (`drgnx-ui-text`), which they are drawn in.
+/// The map's cards and chips are the caption size, 12 px (work-space-dark.html `.acardm`), its role in the editor.
+const ROLE: &str = "caption";
 
 /// Whether the map is drawn as an outline: by the layout (a terminal, or a layout that does not fit), or the user's
 /// `O` either way.
@@ -67,6 +68,8 @@ pub struct Scene<'a> {
     /// The edges on the selection's chain (drawn in the accent).
     pub chain: &'a [Edge],
     pub outline: Outline,
+    /// The selected item: its card is drawn in the ring faces.
+    pub selected: Option<&'a ItemId>,
     /// Seconds since the epoch, for the job chips' elapsed time.
     pub now: u64,
 }
@@ -295,7 +298,7 @@ fn card_rows(
                 match *part {
                     Part::Card(k) => {
                         let (id, lines) = &cards[k];
-                        segment(&mut b, s, id, lines, line as usize, g, m);
+                        segment(&mut b, s, id, lines, line as usize, g, m, e, images);
                     }
                     Part::Lane(k) => {
                         let (col, id, alt) = &lanes[k];
@@ -336,7 +339,11 @@ fn fit_px(m: &dyn Measure, text: &str, px: u32) -> String {
 
 /// One text line of a card: pieces, each in a face or none.
 #[derive(Clone, Debug, Default, PartialEq)]
-struct Line(Vec<(String, Option<&'static str>)>);
+struct Line(
+    Vec<(String, Option<&'static str>)>,
+    /// A Lucide icon (its name, and the glyph a terminal shows) before the text.
+    Option<(&'static str, &'static str)>,
+);
 
 impl Line {
     fn push(&mut self, text: impl Into<String>, face: Option<&'static str>) -> &mut Self {
@@ -384,6 +391,7 @@ impl Line {
 
 /// Line LINE of ID's card at its x, fitted to its width: a stop at its left, its text (the card's face under the
 /// text's own), a stop at its right; nothing when the card has fewer lines or no place.
+#[allow(clippy::too_many_arguments)] // a card line's row, its geometry, its fonts and the image table: one place, no struct for one caller
 fn segment(
     b: &mut RowBuilder,
     s: &Scene,
@@ -392,29 +400,86 @@ fn segment(
     line: usize,
     g: &Geo,
     m: &dyn Measure,
+    e: &Edges,
+    images: &mut BTreeMap<ImageId, String>,
 ) {
     let (Some(rect), Some(l)) = (s.layout.at.get(id), lines.get(line)) else {
         return;
     };
     let left = g.margin + g.px(rect.x);
     let right = g.margin + g.px(rect.x + rect.w);
-    let fitted = fit_px(m, &l.text(), (right - left).saturating_sub(10));
+    let icon_px = (ICON_PX as f32 * g.scale).round() as u32;
+    let icon = l.1.filter(|(name, _)| !name.is_empty());
+    // the text sits inside the card: 10 px from the border of an agent's, 8 px of a chip's
+    let pad = ((if lines.len() > 1 { 10.0 } else { 8.0 }) * g.scale).round() as u32;
+    let room = (right - left).saturating_sub(10 + pad);
+    // a `new` mark at the end of the line keeps its place: the text before it is what gets cut
+    let tail = l.0.last().filter(|(_, f)| *f == Some("drgnx-work-new")).cloned();
+    let body = match &tail {
+        Some(_) => Line(l.0[..l.0.len() - 1].to_vec(), l.1),
+        None => l.clone(),
+    };
+    let tail_px = tail
+        .as_ref()
+        .map_or(0, |(t, _)| fit::width(m, ROLE, t).ceil() as u32);
+    let fitted = fit_px(
+        m,
+        &body.text(),
+        room.saturating_sub(if icon.is_some() { icon_px } else { 0 } + tail_px),
+    );
     b.stop(left);
     let start = b.pos();
-    l.push_fitted(b, &fitted);
+    b.stop(left + pad);
+    if let Some((name, alt)) = icon {
+        match e.icon(name, icon_px) {
+            Some((id, svg)) => {
+                images.entry(id).or_insert(svg);
+                b.image(id, alt);
+            }
+            None => {
+                b.push(alt, None);
+            }
+        }
+    } else if let Some((_, alt)) = l.1 {
+        b.push(alt, None);
+    }
+    body.push_fitted(b, &fitted);
+    if let Some((t, f)) = &tail {
+        b.push(t, *f);
+    }
     b.stop(right);
     let end = b.pos();
-    b.face(start, end, card_face(lines.len(), line));
+    b.face(
+        start,
+        end,
+        card_face(lines.len(), line, s.selected == Some(id)),
+    );
+    // with a selection, what is off its chain is muted (the mockup's dimmed rest), under the text's own faces
+    if off_chain(s, id) {
+        b.face(start, end, "drgnx-work-dim");
+    }
+    b.face(start, end, "drgnx-work-card");
     b.prop(start, end, "drgnx-work-id", Value::String(id.0.clone()));
 }
 
-/// The decoration face of line I of a card of N lines.
-fn card_face(n: usize, i: usize) -> &'static str {
-    match (n, i) {
-        (1, _) => "drgnx-card-single",
-        (_, 0) => "drgnx-card-top",
-        (n, i) if i + 1 == n => "drgnx-card-bottom",
-        _ => "drgnx-card-mid",
+/// Whether ID is off the selection's chain: there is a selection, and ID is neither it nor an end of an edge on its
+/// chain.
+fn off_chain(s: &Scene, id: &ItemId) -> bool {
+    s.selected
+        .is_some_and(|sel| sel != id && !s.chain.iter().any(|e| &e.from == id || &e.to == id))
+}
+
+/// The decoration face of line I of a card of N lines; the selected card's is the ring's (`drgnx-card-sel-*`).
+fn card_face(n: usize, i: usize, selected: bool) -> &'static str {
+    match (selected, n, i) {
+        (false, 1, _) => "drgnx-card-single",
+        (false, _, 0) => "drgnx-card-top",
+        (false, n, i) if i + 1 == n => "drgnx-card-bottom",
+        (false, _, _) => "drgnx-card-mid",
+        (true, 1, _) => "drgnx-card-sel-single",
+        (true, _, 0) => "drgnx-card-sel-top",
+        (true, n, i) if i + 1 == n => "drgnx-card-sel-bottom",
+        (true, _, _) => "drgnx-card-sel-mid",
     }
 }
 
@@ -449,8 +514,24 @@ fn state_word(f: &Fields) -> String {
     }
 }
 
-fn activity(f: &Fields) -> String {
-    f.activity.clone().unwrap_or_else(|| state_word(f))
+/// What an agent is doing, in words: a step class as its participle (`test` is `testing`), a finished run waiting
+/// for you as `done · ready`, else the class as it is, else the state's words.
+pub fn activity(f: &Fields) -> String {
+    if f.state == Some(State::Review) {
+        return "done · ready".into();
+    }
+    match f.activity.as_deref() {
+        Some(c) => match c {
+            "test" => "testing".into(),
+            "edit" => "editing".into(),
+            "think" => "thinking".into(),
+            "read" => "reading".into(),
+            "search" => "searching".into(),
+            "write" => "writing".into(),
+            other => other.to_owned(),
+        },
+        None => state_word(f),
+    }
 }
 
 /// The dot of IT's state in its face; a runner's follows the runner's own state.
@@ -494,13 +575,14 @@ pub fn agent_number(it: &Item) -> u8 {
     u8::try_from((order - 1).rem_euclid(6) + 1).unwrap_or(1)
 }
 
-const AGENT_FACES: [&str; 6] = [
-    "drgnx-work-agent-1",
-    "drgnx-work-agent-2",
-    "drgnx-work-agent-3",
-    "drgnx-work-agent-4",
-    "drgnx-work-agent-5",
-    "drgnx-work-agent-6",
+/// The filled circle behind an agent's initial, by its number (work-space-dark.html `.who`).
+const WHO_FACES: [&str; 6] = [
+    "drgnx-work-who-1",
+    "drgnx-work-who-2",
+    "drgnx-work-who-3",
+    "drgnx-work-who-4",
+    "drgnx-work-who-5",
+    "drgnx-work-who-6",
 ];
 
 /// The agent badge: the model's initial in the agent's colour.
@@ -511,7 +593,36 @@ fn badge(it: &Item) -> (String, &'static str) {
         .as_deref()
         .and_then(|m| m.chars().next())
         .map_or("?".to_owned(), |c| c.to_uppercase().collect());
-    (initial, AGENT_FACES[usize::from(agent_number(it)) - 1])
+    (
+        format!(" {initial} "),
+        WHO_FACES[usize::from(agent_number(it)) - 1],
+    )
+}
+
+/// The name of the file both agents edit (their branches' changed files), if there is one: the first by name.
+pub fn shared_file(
+    edges: &[Edge],
+    items: &BTreeMap<ItemId, Item>,
+    a: &ItemId,
+    b: &ItemId,
+) -> Option<String> {
+    let edited = |agent: &ItemId| -> BTreeSet<ItemId> {
+        let branches: Vec<&ItemId> = edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::CameFrom && e.from == *agent)
+            .map(|e| &e.to)
+            .collect();
+        edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::Edits && branches.contains(&&e.from))
+            .map(|e| e.to.clone())
+            .collect()
+    };
+    let (mine, theirs) = (edited(a), edited(b));
+    mine.intersection(&theirs)
+        .filter_map(|id| items.get(id))
+        .map(|f| f.label.rsplit('/').next().unwrap_or(&f.label).to_owned())
+        .min()
 }
 
 /// The item an overlap edge joins ID to, as "model · label".
@@ -549,7 +660,8 @@ fn new_chip(s: &Scene, it: &Item, l: &mut Line) {
     }
 }
 
-/// The five lines of a rich agent card: who, its task, how it is going, its latest conclusion, the flag.
+/// The five lines of a rich agent card: who, its task, how it is going, its latest conclusion, the flag
+/// (work-space-dark.html `.acardm`: the going line in the UI font with its numbers in the code font).
 fn rich_lines(s: &Scene, it: &Item) -> Vec<Line> {
     let f = &it.fields;
     let (d, dface) = dot(it);
@@ -558,22 +670,56 @@ fn rich_lines(s: &Scene, it: &Item) -> Vec<Line> {
     who.push(d, Some(dface))
         .push(" ", None)
         .push(bdg, Some(bface))
-        .push("  ", None);
-    if let Some(m) = &f.model {
-        who.push(format!("{m} · "), None);
+        .push(" ", None);
+    if let Some(m) = f.model.as_ref().filter(|m| !names_model(&it.label, m)) {
+        who.push(format!("{m} · "), Some("drgnx-work-title"));
     }
-    who.push(it.label.clone(), None);
-    new_chip(s, it, &mut who);
-    let mut going = vec![activity(f)];
-    going.extend(f.minutes.map(|m| format!("{m} min")));
-    going.extend(f.spend.clone());
-    going.extend(f.progress.map(|(a, b)| format!("{a}/{b}")));
-    going.extend(f.context.filter(|c| *c > 80).map(|c| format!("ctx {c} %")));
-    going.extend(f.job.as_ref().map(|j| job_chip(j, s.now)));
+    who.push(it.label.clone(), Some("drgnx-work-title"));
+    // the going line: the activity, then each number (minutes, spend, progress) in the code font
+    let mut going = Line::default();
+    going.push(activity(f), Some("drgnx-text-muted"));
+    let numbers: Vec<String> = f
+        .minutes
+        .map(|m| format!("{m} min"))
+        .into_iter()
+        .chain(f.spend.clone())
+        .chain(f.progress.map(|(a, b)| format!("{a}/{b}")))
+        .collect();
+    for n in numbers {
+        going
+            .push(" · ", Some("drgnx-text-muted"))
+            .push(n, Some("drgnx-work-meta"));
+    }
+    if let Some(c) = f.context.filter(|c| *c > 80) {
+        going
+            .push(" · ", Some("drgnx-text-muted"))
+            .push(format!("ctx {c} %"), Some("drgnx-work-meta"));
+    }
+    if let Some(j) = &f.job {
+        going
+            .push(" · ", Some("drgnx-text-muted"))
+            .push(job_chip(j, s.now), Some("drgnx-text-muted"));
+    }
+    let mut concl = Line::default();
+    if let Some(c) = &f.conclusion {
+        concl.push(format!("→ {c}"), Some("drgnx-text-muted"));
+        new_chip(s, it, &mut concl);
+    }
     let flag = if it.warn {
         let mut l = Line::default();
-        let text = match partner(s, &it.id) {
-            Some(p) => format!("⚠ shares files with {p}"),
+        let other = s
+            .edges
+            .iter()
+            .find(|e| e.kind == EdgeKind::Overlap && (e.from == it.id || e.to == it.id))
+            .map(|e| if e.from == it.id { &e.to } else { &e.from });
+        let text = match other.and_then(|o| s.items.get(o).map(|oi| (o, oi))) {
+            Some((o, oi)) => {
+                let name = oi.label.rsplit(" · ").next().unwrap_or(&oi.label);
+                match shared_file(s.edges, s.items, &it.id, o) {
+                    Some(file) => format!("⚠ {file} with {name}"),
+                    None => format!("⚠ shares files with {name}"),
+                }
+            }
             None => "⚠ overlap".into(),
         };
         l.push(text, Some("drgnx-work-overlap"));
@@ -582,17 +728,15 @@ fn rich_lines(s: &Scene, it: &Item) -> Vec<Line> {
         let mut bits = Vec::new();
         bits.extend(f.reads.map(|r| format!("reads {r}")));
         bits.extend(f.edits.map(|(n, p, m)| format!("edits {n} (+{p} −{m})")));
-        Line::plain(bits.join(" · "))
+        let mut l = Line::default();
+        l.push(bits.join(" · "), Some("drgnx-text-subtle"));
+        l
     };
     vec![
         who,
         Line::plain(f.task.clone().unwrap_or_default()),
-        Line::plain(going.join(" · ")),
-        Line::plain(
-            f.conclusion
-                .as_ref()
-                .map_or(String::new(), |c| format!("→ {c}")),
-        ),
+        going,
+        concl,
         flag,
     ]
 }
@@ -607,10 +751,13 @@ fn compact_lines(s: &Scene, it: &Item) -> Vec<Line> {
         .push(" ", None)
         .push(bdg, Some(bface))
         .push(" ", None);
-    if let (Some(m), Kind::Agent) = (&f.model, it.kind) {
-        who.push(format!("{m} · "), None);
+    if let (Some(m), Kind::Agent) = (
+        f.model.as_ref().filter(|m| !names_model(&it.label, m)),
+        it.kind,
+    ) {
+        who.push(format!("{m} · "), Some("drgnx-work-title"));
     }
-    who.push(it.label.clone(), None);
+    who.push(it.label.clone(), Some("drgnx-work-title"));
     new_chip(s, it, &mut who);
     let mut bits = vec![activity(f)];
     bits.extend(f.minutes.map(|m| format!("{m}m")));
@@ -620,6 +767,18 @@ fn compact_lines(s: &Scene, it: &Item) -> Vec<Line> {
         going.push(" ⚠", Some("drgnx-work-overlap"));
     }
     vec![who, going]
+}
+
+/// A machine's name on a chip: "desk" for "desktop" (work-space-dark.html), else its own.
+fn short_machine(label: &str) -> &str {
+    if label == "desktop" { "desk" } else { label }
+}
+
+/// Whether LABEL already begins with MODEL and its separator (the model's own label for a session with a model).
+fn names_model(label: &str, model: &str) -> bool {
+    label
+        .strip_prefix(model)
+        .is_some_and(|r| r.starts_with(" · "))
 }
 
 /// A runner's icon by its kind (the default glyphs of `drgnx-face-glyphs`).
@@ -644,18 +803,18 @@ fn chip_line(it: &Item) -> Line {
         l.push(d, Some(dface))
             .push(format!(" {}", icon(&r.icon)), None);
     } else {
-        l.push(
-            match it.kind {
-                Kind::Ask => "❝",
-                Kind::Spec => "◫",
-                Kind::Plan => "☰",
-                Kind::Branch => "⑂",
-                Kind::File => "▭",
-                Kind::Machine => "▣",
-                _ => "·",
-            },
-            None,
-        );
+        // a Lucide icon in an image of its own (its glyph on a terminal): `segment` puts it first on the line
+        let (name, alt) = match it.kind {
+            Kind::Ask => ("message-square", "❝"),
+            Kind::Spec => ("file-text", "◫"),
+            Kind::Plan => ("list-checks", "☰"),
+            Kind::Branch => ("git-branch", "⑂"),
+            Kind::File => ("file-code", "▭"),
+            Kind::Machine if it.label == "laptop" => ("laptop", "▭"),
+            Kind::Machine => ("monitor", "▣"),
+            _ => ("", "·"),
+        };
+        l.1 = Some((name, alt));
     }
     let extra: Vec<String> = match it.kind {
         Kind::Plan => f
@@ -663,6 +822,8 @@ fn chip_line(it: &Item) -> Line {
             .map(|(a, b)| format!("{a}/{b}"))
             .into_iter()
             .collect(),
+        // a branch whose agent runs somewhere shows that as its tag (a chip of its own), else its edits
+        Kind::Branch if f.tag.is_some() => Vec::new(),
         Kind::Branch => f
             .edits
             .map(|e| format!("edits {}", e.0))
@@ -681,12 +842,42 @@ fn chip_line(it: &Item) -> Line {
             .collect(),
         _ => Vec::new(),
     };
-    l.push(format!(" {}", it.label), None);
+    // a file by its name (the path is its label's), a machine by its own name (only the strip abbreviates)
+    let name = if it.kind == Kind::File {
+        it.label.rsplit('/').next().unwrap_or(&it.label).to_owned()
+    } else if it.kind == Kind::Ask {
+        format!("“{}”", it.label)
+    } else {
+        it.label.clone()
+    };
+    l.push(format!(" {name}"), None);
+    if let (Kind::Branch, Some(tag)) = (it.kind, f.tag.as_ref()) {
+        l.push(" ", None)
+            .push(format!(" {tag} "), Some("drgnx-work-chip"));
+    }
     if runner.is_some_and(|r| r.mac) {
         l.push(" macOS", Some("drgnx-runners-os"));
     }
-    if !extra.is_empty() {
-        l.push(format!(" · {}", extra.join(" · ")), None);
+    match (it.kind, f.change) {
+        // a file's change: the added and the removed in their own colours (`session.rs +40 −3`)
+        (Kind::File, Some((p, m))) => {
+            l.push(" ", None)
+                .push(format!("+{p}"), Some("drgnx-work-plus"))
+                .push(" ", None)
+                .push(format!("−{m}"), Some("drgnx-work-minus"));
+        }
+        // a plan's progress is a chip of its own, a machine's slots follow its name
+        (Kind::Plan, _) if !extra.is_empty() => {
+            l.push(" ", None)
+                .push(format!(" {} ", extra.join(" · ")), Some("drgnx-work-chip"));
+        }
+        (Kind::Machine, _) if !extra.is_empty() => {
+            l.push(format!(" {}", extra.join(" · ")), None);
+        }
+        _ if !extra.is_empty() => {
+            l.push(format!(" · {}", extra.join(" · ")), None);
+        }
+        _ => {}
     }
     if it.warn {
         l.push(" ⚠", Some("drgnx-work-overlap"));
@@ -979,12 +1170,24 @@ impl<'a> Edges<'a> {
             .collect()
     }
 
+    /// Icon NAME at PX, stroked in the palette's chip text colour: its id and its SVG.
+    fn icon(&self, name: &str, px: u32) -> Option<(ImageId, String)> {
+        let svg = crate::icons::svg(name, self.palette.colour("chip-fg"), px)?;
+        Some((self.id(&svg), svg))
+    }
+
     fn id(&self, svg: &str) -> ImageId {
         ImageId::of(svg.as_bytes(), self.epoch)
     }
 }
 
 // ---- the strip ---------------------------------------------------------------------------------------------------
+
+/// A chip's icon, logical px.
+const ICON_PX: u32 = 16;
+
+/// The widest a strip chip's text is, logical px.
+const CHIP_MAX: u32 = 260;
 
 /// The needs-you strip (the header line), one row `strip`: a chip with its jump key for each of the first nine
 /// entries (`nav::strip_entries`: the cards, the agents that need you with no card, the open huddles), +N for the
@@ -993,22 +1196,67 @@ pub fn strip(
     s: &Scene,
     needs: &[crate::NeedsYou],
     machines: &[Item],
+    extra: &[String],
     env: &Env,
     m: &dyn Measure,
-) -> Row {
+) -> (Row, Vec<(ImageId, String)>) {
     let entries: Vec<String> = crate::nav::strip_entries(needs, s.items)
         .into_iter()
         .map(|e| e.text)
         .collect();
+    // a chip: its text and, for a machine, its Lucide icon (a monitor; a laptop for "laptop") before the text
+    let icon_px = (ICON_PX as f32 * env.scale).round() as u32;
+    let chips: Vec<(String, Option<&str>)> = extra
+        .iter()
+        .map(|c| (format!(" {c} "), None))
+        .chain(
+            machines
+                .iter()
+                .filter(|it| it.kind == Kind::Machine)
+                .map(|it| {
+                    let (used, total) = it.fields.slots.unwrap_or((0, 0));
+                    let cost = it
+                        .fields
+                        .runner
+                        .as_ref()
+                        .and_then(|r| r.cost.as_ref())
+                        .map_or(String::new(), |c| format!(" · cloud {c}"));
+                    let icon = if it.label == "laptop" {
+                        "laptop"
+                    } else {
+                        "monitor"
+                    };
+                    (
+                        format!(" {} {used}/{total}{cost} ", short_machine(&it.label)),
+                        Some(icon),
+                    )
+                }),
+        )
+        .collect();
+    let w: f32 = chips
+        .iter()
+        .map(|(c, i)| fit::width(m, ROLE, c) + if i.is_some() { icon_px as f32 } else { 0.0 })
+        .sum::<f32>()
+        + fit::width(m, ROLE, " ") * chips.len().saturating_sub(1) as f32;
+    // the needs-you chips share what the right-hand chips leave, each cut to its share (no chip runs under them)
+    let shown = entries.len().clamp(1, 9);
+    let spare = (env.width_px as f32 - w - 44.0 * env.scale) / shown as f32;
+    let overhead = fit::width(m, ROLE, " ⚑   g1  ") + 4.0 * env.scale;
+    let room = ((spare - overhead).max(40.0 * env.scale))
+        .min(CHIP_MAX as f32 * env.scale)
+        .round() as u32;
     let mut b = RowBuilder::new("strip");
     for (i, e) in entries.iter().take(9).enumerate() {
         if i > 0 {
             b.push(" ", None);
         }
-        b.push(
-            &format!(" ⚑ {e}  g{} ", i + 1),
-            Some("drgnx-work-needs-you"),
-        );
+        let e = fit_px(m, e, room);
+        let start = b.pos();
+        b.push(&format!(" ⚑ {e} "), Some("drgnx-work-needs-you"))
+            .push(&format!(" g{} ", i + 1), Some("drgnx-work-needs-you-key"))
+            .push(" ", Some("drgnx-work-needs-you"));
+        let end = b.pos();
+        b.face(start, end, "drgnx-chip");
     }
     if entries.len() > 9 {
         b.push(
@@ -1016,30 +1264,40 @@ pub fn strip(
             Some("drgnx-work-needs-you"),
         );
     }
-    let chips: Vec<String> = machines
-        .iter()
-        .filter(|it| it.kind == Kind::Machine)
-        .map(|it| {
-            let (used, total) = it.fields.slots.unwrap_or((0, 0));
-            let cost = it
-                .fields
-                .runner
-                .as_ref()
-                .and_then(|r| r.cost.as_ref())
-                .map_or(String::new(), |c| format!(" · cloud {c}"));
-            format!(" {} {used}/{total}{cost} ", it.label)
-        })
-        .collect();
-    let tail = chips.join(" ");
-    let w = fit::width(m, ROLE, &tail).ceil() as u32;
-    b.stop(env.width_px.saturating_sub(w));
-    for (i, c) in chips.iter().enumerate() {
+    // 20 px short of the edge: the window's fringe and its truncation glyph are not drawn on
+    b.stop(
+        env.width_px
+            .saturating_sub(w.ceil() as u32 + (20.0 * env.scale) as u32),
+    );
+    let mut images = BTreeMap::new();
+    for (i, (c, icon)) in chips.iter().enumerate() {
         if i > 0 {
             b.push(" ", None);
         }
-        b.push(c, Some("drgnx-work-chip"));
+        let start = b.pos();
+        let drawn = icon.and_then(|n| {
+            let svg = crate::icons::svg(n, env.palette.colour("chip-fg"), icon_px)?;
+            Some((ImageId::of(svg.as_bytes(), env.epoch), svg))
+        });
+        match drawn {
+            Some((id, svg)) => {
+                b.push(" ", Some("drgnx-work-chip"));
+                b.image(id, "▣");
+                images.insert(id, svg);
+                b.push(c.trim_start_matches(' '), Some("drgnx-work-chip"));
+                // the leading room is the chip's own: the image replaces the first space's width
+            }
+            None => {
+                b.push(c, Some("drgnx-work-chip"));
+            }
+        }
+        let end = b.pos();
+        b.face(start, end, "drgnx-chip");
     }
-    b.finish()
+    let end = b.pos();
+    b.face(0, end, "drgnx-work-card");
+    b.height(1, (30.0 * env.scale).round() as u32);
+    (b.finish(), images.into_iter().collect())
 }
 
 // ---- the outline -------------------------------------------------------------------------------------------------
@@ -1164,7 +1422,7 @@ fn outline_block(s: &Scene, id: &ItemId, cols: usize, env: &Env) -> Vec<Line> {
     let (d, dface) = dot(it);
     let mut head = Line::default();
     head.push(d, Some(dface)).push(" ", None);
-    if let Some(m) = &f.model {
+    if let Some(m) = f.model.as_ref().filter(|m| !names_model(&it.label, m)) {
         head.push(format!("{m} · "), None);
     }
     let mut bits = vec![activity(f)];
@@ -1233,7 +1491,7 @@ mod tests {
     #[test]
     fn a_mac_runner_has_the_macos_chip_and_a_sleeping_dot() {
         let l = chip_line(&machine("ready", true));
-        assert!(l.text().ends_with(" mini macOS · 1/2"), "{:?}", l.text());
+        assert!(l.text().ends_with(" mini macOS 1/2"), "{:?}", l.text());
         assert!(l.0.contains(&(" macOS".to_string(), Some("drgnx-runners-os"))));
         assert!(!chip_line(&machine("ready", false)).text().contains("macOS"));
         assert_eq!(dot(&machine("sleeping", true)).1, "drgnx-runners-subtle");

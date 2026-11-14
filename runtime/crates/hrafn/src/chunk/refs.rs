@@ -1,9 +1,9 @@
 //! References: the names a file uses, from the tree the chunker already parsed (no second parse).
 //!
-//! - **tree-sitter languages** run a tags query and keep the matches with a `@reference.*` capture, whose `@name` is
-//!   the name: the grammar crate's own `TAGS_QUERY` for Rust, Python, JavaScript, Go and Java; TypeScript's (types,
-//!   `new`) with the calls added; small ones of our own for C (calls; its query has definitions only) and shell
-//!   (commands; bash ships none).
+//! - **tree-sitter languages** run the pack's `queries/tags.scm` and keep the matches with a `@reference.*` capture,
+//!   whose `@name` is the name: the grammar's own tags query for Rust, Python, JavaScript, Go and Java; TypeScript's
+//!   (types, `new`) with the calls added; small ones of our own for C (calls; its query has definitions only) and
+//!   shell (commands; bash ships none).
 //! - **Emacs Lisp** takes the symbol atoms of each top-level form, minus the name the form defines, keywords, `&`
 //!   markers, `t`, `nil` and the special forms and core macros ([`LISP_SKIP`]).
 //! - Org, Markdown and text have none. A name shorter than 2 characters is dropped.
@@ -11,7 +11,7 @@
 use super::definers;
 use super::ts::Kind;
 use std::collections::BTreeMap;
-use std::sync::OnceLock;
+use std::sync::{Mutex, PoisonError};
 use tree_sitter::{CaptureQuantifier, Node, Query, QueryCursor, StreamingIterator, Tree};
 
 /// How many first lines a reference keeps.
@@ -24,16 +24,6 @@ pub struct Ref {
     pub n: u32,
     pub lines: Vec<u32>,
 }
-
-/// C: calls (the crate's tags query has definitions only).
-const C_REFS: &str = "(call_expression function: (identifier) @name) @reference.call";
-/// TypeScript and TSX: calls, added to the crate's query (types and `new`), as JavaScript's query has them.
-const TS_CALLS: &str = "
-(call_expression function: (identifier) @name) @reference.call
-(call_expression function: (member_expression property: (property_identifier) @name)) @reference.call
-";
-/// Shell: the commands run (bash ships no tags query).
-const SH_REFS: &str = "(command name: (command_name (word) @name)) @reference.call";
 
 /// Special forms and core macros, which a Lisp form uses but no project defines.
 const LISP_SKIP: &[&str] = &[
@@ -66,46 +56,57 @@ const LISP_SKIP: &[&str] = &[
     "while",
 ];
 
-/// KIND's reference query, compiled once; none when it does not compile against the grammar (a test pins that each
-/// one does).
+/// KIND's pack's `queries/tags.scm`, compiled into the hub.
+pub(super) fn tags_source(kind: Kind) -> &'static str {
+    macro_rules! tags {
+        ($p:literal) => {
+            include_str!(concat!("../../../../../packs/", $p, "/queries/tags.scm"))
+        };
+    }
+    match kind {
+        Kind::Rust => tags!("rust"),
+        Kind::C => tags!("c"),
+        Kind::Cpp => tags!("cpp"),
+        Kind::Shell => tags!("shell"),
+        Kind::Python => tags!("python"),
+        Kind::JavaScript => tags!("javascript"),
+        Kind::TypeScript => tags!("typescript"),
+        Kind::Tsx => tags!("tsx"),
+        Kind::Go => tags!("go"),
+        Kind::Java => tags!("java"),
+    }
+}
+
+/// KIND's reference query on its pack's grammar, compiled on first use; none while the grammar is not built or when
+/// the query does not compile against it (a test pins that each one does). Only a built one is kept.
+fn compile(kind: Kind) -> Option<Query> {
+    let mut q = Query::new(&super::registry::language(kind)?, tags_source(kind)).ok()?;
+    // the tags queries also match definitions (some with doc predicates): only references run
+    let refs: Vec<usize> = q
+        .capture_names()
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.starts_with("reference"))
+        .map(|(i, _)| i)
+        .collect();
+    for p in 0..q.pattern_count() {
+        let used = q.capture_quantifiers(p);
+        if !refs.iter().any(|&i| used[i] != CaptureQuantifier::Zero) {
+            q.disable_pattern(p);
+        }
+    }
+    Some(q)
+}
+
 fn query(kind: Kind) -> Option<&'static Query> {
-    static QUERIES: OnceLock<Vec<Option<Query>>> = OnceLock::new();
-    let all = QUERIES.get_or_init(|| {
-        Kind::ALL
-            .iter()
-            .map(|k| {
-                let src = match k {
-                    Kind::Rust => tree_sitter_rust::TAGS_QUERY.to_string(),
-                    Kind::C => C_REFS.to_string(),
-                    Kind::Shell => SH_REFS.to_string(),
-                    Kind::Python => tree_sitter_python::TAGS_QUERY.to_string(),
-                    Kind::JavaScript => tree_sitter_javascript::TAGS_QUERY.to_string(),
-                    Kind::TypeScript | Kind::Tsx => {
-                        format!("{}\n{TS_CALLS}", tree_sitter_typescript::TAGS_QUERY)
-                    }
-                    Kind::Go => tree_sitter_go::TAGS_QUERY.to_string(),
-                    Kind::Java => tree_sitter_java::TAGS_QUERY.to_string(),
-                };
-                let mut q = Query::new(&k.language(), &src).ok()?;
-                // the crates' tags queries also match definitions (some with doc predicates): only references run
-                let refs: Vec<usize> = q
-                    .capture_names()
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, c)| c.starts_with("reference"))
-                    .map(|(i, _)| i)
-                    .collect();
-                for p in 0..q.pattern_count() {
-                    let used = q.capture_quantifiers(p);
-                    if !refs.iter().any(|&i| used[i] != CaptureQuantifier::Zero) {
-                        q.disable_pattern(p);
-                    }
-                }
-                Some(q)
-            })
-            .collect()
-    });
-    all[Kind::ALL.iter().position(|k| *k == kind)?].as_ref()
+    static QUERIES: Mutex<Vec<(Kind, &'static Query)>> = Mutex::new(Vec::new());
+    let mut all = QUERIES.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((_, q)) = all.iter().find(|(k, _)| *k == kind) {
+        return Some(q);
+    }
+    let q: &'static Query = Box::leak(Box::new(compile(kind)?));
+    all.push((kind, q));
+    Some(q)
 }
 
 /// Names and their lines, counted.

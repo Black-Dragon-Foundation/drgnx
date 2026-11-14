@@ -125,6 +125,18 @@ above and below, the face's background between (Nidhogg's compositor).  Asked on
          (drgnx-chip-attention :foreground ,(c 'attention) :background ,(c 'attention-tint)
                                ,@(and hc '(:box (:line-width (-1 . -1)))))
          (drgnx-chip-accent :foreground ,(c 'accent) :background ,(c 'accent-tint) ,@(and hc '(:box (:line-width (-1 . -1)))))
+         ;; the solid chip: the accent's fill with its text colour (design: a step's number in the trail's circle)
+         (drgnx-chip-solid :foreground ,(c 'on-accent) :background ,(c 'accent-fill))
+         ;; an agent's initial: its colour filled, the editor's colour for the letter (work-space-dark.html `.who')
+         (drgnx-work-who-1 :inherit drgnx-badge :foreground ,(c 'editor) :background ,(c 'a1))
+         (drgnx-work-who-2 :inherit drgnx-badge :foreground ,(c 'editor) :background ,(c 'a2))
+         (drgnx-work-who-3 :inherit drgnx-badge :foreground ,(c 'editor) :background ,(c 'a3))
+         (drgnx-work-who-4 :inherit drgnx-badge :foreground ,(c 'editor) :background ,(c 'a4))
+         (drgnx-work-who-5 :inherit drgnx-badge :foreground ,(c 'editor) :background ,(c 'a5))
+         (drgnx-work-who-6 :inherit drgnx-badge :foreground ,(c 'editor) :background ,(c 'a6))
+         ;; the lens switch's rail (look.css `.lens'): the gap's colour behind the labels
+         (drgnx-work-lens-rail :inherit drgnx-work-label :background ,(c 'gap))
+         (drgnx-work-lens-seg :inherit drgnx-work-lens-rail)
          (drgnx-chip-ok :foreground ,(c 'ok) :background ,(c 'ok-tint) ,@(and hc '(:box (:line-width (-1 . -1)))))
          (drgnx-chip-warn :foreground ,(c 'warn) :background ,(c 'warn-tint) ,@(and hc '(:box (:line-width (-1 . -1)))))
          (drgnx-tint-warn :background ,(c 'warn-tint) ,@(and hc `(:box (:line-width (-1 . -1) :color ,(c 'warn)))))
@@ -207,6 +219,30 @@ above and below, the face's background between (Nidhogg's compositor).  Asked on
          (region :background ,(c 'sel) ,@(and hc `(:foreground ,(c 'sel-fg))) :extend nil
                  :box (:line-width (-1 . -1) :style flat-button ,@(and (featurep 'glitnir) '(:corner-radius 3))))
          (secondary-selection :background ,(c 'sel-quiet))
+         ;; a card's rows (work-space-dark.html `.card'): a 1 px ring in the strong border.  A ring with no colour takes
+         ;; each text run's own foreground, so a card whose runs differ (a state dot, an overlap mark) breaks into boxes
+         ,@(mapcar (lambda (row)
+                     `(,(car row) :inherit secondary-selection
+                       :box (:line-width 1 :color ,(c 'border-strong)
+                                         ,@(and (featurep 'glitnir) `(:corner-radius 8 ,@(cdr row))))))
+                   '((drgnx-card-top :open (bottom)) (drgnx-card-mid :open (top bottom))
+                     (drgnx-card-bottom :open (top)) (drgnx-card-single)))
+         ;; the selected card (`.card.sel'): the hub draws it in these, a 2 px ring in the accent
+         ,@(mapcar (lambda (row)
+                     `(,(car row) :inherit secondary-selection
+                       :box (:line-width 2 :color ,(c 'accent)
+                                         ,@(and (featurep 'glitnir) `(:corner-radius 8 ,@(cdr row))))))
+                   '((drgnx-card-sel-top :open (bottom)) (drgnx-card-sel-mid :open (top bottom))
+                     (drgnx-card-sel-bottom :open (top)) (drgnx-card-sel-single)))
+         ;; agent-panel.html: the permission card is ringed in the attention colour (a ring with no colour took the head's
+         ;; foreground, which the card faces' own explicit colour above now hides)
+         (drgnx-agent-panel-perm-head :inherit (drgnx-ui-text drgnx-chip-attention) :weight bold
+                                      :box (:line-width 1 :color ,(c 'attention)
+                                                        ,@(and (featurep 'glitnir) '(:corner-radius 8))))
+         ;; work-space-dark.html `.lens .on': the lens shown is a raised pill in a 1 px ring in the strong border
+         (drgnx-work-lens-current :inherit (bold drgnx-pill-on)
+                                  :box (:line-width 1 :color ,(c 'border-strong)
+                                                    ,@(and (featurep 'glitnir) '(:corner-radius 6))))
          (highlight :background ,(c 'hover))
          (hl-line :background ,(c 'current-line) :extend t)
          (fringe :foreground ,(c 'subtle) :background ,(c 'editor))

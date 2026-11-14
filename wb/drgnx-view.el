@@ -2044,8 +2044,14 @@ it changes is dressed again."
     (when-let* ((new (and stops (funcall drgnx-view-patch-guard-function state text stops))))
       (setq text (drgnx-view-patch--dress state key row new)))
     (when-let* ((h (plist-get row :height)))
+      ;; a row that names its unit (px) is that tall (the map's card lines and bands: the layout's own pitch); one that
+      ;; does not is as many default lines
       (put-text-property (1- (length text)) (length text) 'line-height
-                         (* (plist-get h :lines) (or drgnx-view--line-height (setq drgnx-view--line-height (default-line-height))))
+                         (* (plist-get h :lines)
+                            (let ((unit (plist-get h :unit)))
+                              (if (and (integerp unit) (> unit 0))
+                                  unit
+                                (or drgnx-view--line-height (setq drgnx-view--line-height (default-line-height))))))
                          text))
     text))
 
@@ -2057,7 +2063,8 @@ put on it, in STATE; returns TEXT."
       (when-let* ((name (nth 2 run))
                   (face (let ((id (drgnx-view-patch--style-id name)))
                           (if id (drgnx-view-patch--style-face state id) (drgnx-view-patch--face name)))))
-        (put-text-property (nth 0 run) (nth 1 run) 'face face text)))
+        ;; runs may overlap (a card's box under its text's faces): each is appended below those before it
+        (add-face-text-property (nth 0 run) (nth 1 run) face t text)))
     (dolist (p (plist-get row :props))
       (when-let* ((name (drgnx-view-patch--prop (nth 2 p))))
         (put-text-property (nth 0 p) (nth 1 p) name (nth 3 p) text)

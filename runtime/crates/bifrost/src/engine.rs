@@ -191,6 +191,8 @@ pub struct Gateway {
     /// The requests sent whose [`GatewayEvent::Request`] is not sent yet (test-hooks: [`Gateway::in_flight`]).
     #[cfg(feature = "test-hooks")]
     in_flight: InFlight,
+    /// The spend rows being committed, by job ([`Pending`]).
+    pending: Arc<Pending>,
 }
 
 /// How many requests the gateway sent whose [`GatewayEvent::Request`] (and [`GatewayEvent::Budget`]) is not sent yet
@@ -209,6 +211,77 @@ impl InFlight {
     fn count(&self) -> Counted {
         self.0.fetch_add(1, Ordering::SeqCst);
         Counted(self.0.clone())
+    }
+}
+
+/// The spend rows being committed, by job: a request's budget check waits for those of its job, so one that comes
+/// between an answer and its row's commit (a group commit's ~10 ms) is judged with that spend, not without it.
+#[derive(Default)]
+struct Pending {
+    jobs: Mutex<HashMap<String, usize>>,
+    done: tokio::sync::Notify,
+    /// How many checks wait now.
+    waiting: std::sync::atomic::AtomicUsize,
+}
+
+/// A spend row of JOB being committed, until this is dropped.
+struct Committing {
+    pending: Arc<Pending>,
+    job: String,
+}
+
+impl Pending {
+    fn begin(self: &Arc<Self>, job: &str) -> Committing {
+        *self
+            .jobs
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(job.to_owned())
+            .or_default() += 1;
+        Committing {
+            pending: self.clone(),
+            job: job.to_owned(),
+        }
+    }
+
+    /// Return once no spend row of JOB is being committed.
+    async fn settled(&self, job: &str) {
+        loop {
+            let note = self.done.notified();
+            let mut note = std::pin::pin!(note);
+            note.as_mut().enable();
+            let busy = self
+                .jobs
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .get(job)
+                .is_some_and(|n| *n > 0);
+            if !busy {
+                return;
+            }
+            self.waiting.fetch_add(1, Ordering::SeqCst);
+            note.await;
+            self.waiting.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+}
+
+impl Drop for Committing {
+    fn drop(&mut self) {
+        {
+            let mut jobs = self
+                .pending
+                .jobs
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if let Some(n) = jobs.get_mut(&self.job) {
+                *n -= 1;
+                if *n == 0 {
+                    jobs.remove(&self.job);
+                }
+            }
+        }
+        self.pending.done.notify_waiters();
     }
 }
 
@@ -248,12 +321,18 @@ impl Gateway {
             events,
             upstream,
             told: Mutex::new(HashMap::new()),
+            pending: Arc::new(Pending::default()),
             bytes_in: AtomicU64::new(0),
             bytes_out: Arc::new(AtomicU64::new(0)),
             tap: std::sync::OnceLock::new(),
             #[cfg(feature = "test-hooks")]
             in_flight: InFlight::default(),
         })
+    }
+
+    /// How many budget checks wait for a spend row of their job to commit now.
+    pub fn spend_waiting(&self) -> usize {
+        self.pending.waiting.load(Ordering::SeqCst)
     }
 
     /// Every attempt from now on is shown to TAP (once; a second tap is refused and logged).
@@ -342,6 +421,9 @@ impl Gateway {
         let reg = admitted.registration;
 
         if let (Some(job), Some(limit)) = (&reg.job, reg.budget) {
+            // a row of this job still being committed counts: the request that comes between an answer and its row
+            // is judged with that spend
+            self.pending.settled(job).await;
             match self.ledger.spent(job).await {
                 Ok(spent) if budget::over(spent, limit) => {
                     self.emit(GatewayEvent::Budget {
@@ -364,22 +446,26 @@ impl Gateway {
             }
         }
 
-        let body = match Limited::new(incoming, MAX_BODY as usize).collect().await {
+        let mut incoming = incoming;
+        let body = match Limited::new(&mut incoming, MAX_BODY as usize)
+            .collect()
+            .await
+        {
             Ok(collected) => {
                 let body = collected.to_bytes();
                 self.bytes_in
                     .fetch_add(body.len() as u64, Ordering::Relaxed);
                 body
             }
+            // answered like every refusal: the unread rest (up to the drain's limit) is read before the connection
+            // closes, so a client still sending is not reset under its answer
             Err(e) if e.downcast_ref::<LengthLimitError>().is_some() => {
-                return answer(
-                    &Refusal::new(
-                        413,
-                        "invalid_request_error",
-                        "the request body is over 32 MiB",
-                    ),
-                    true,
+                let r = Refusal::new(
+                    413,
+                    "invalid_request_error",
+                    "the request body is over 32 MiB",
                 );
+                return refuse(&r, &parts, incoming);
             }
             Err(_) => {
                 return answer(
@@ -607,6 +693,7 @@ impl Gateway {
             scanner: Scanner::new(),
             ledger: self.ledger.clone(),
             events: self.events.clone(),
+            pending: self.pending.clone(),
             armed: true,
             #[cfg(feature = "test-hooks")]
             counted: Some(self.in_flight.count()),
@@ -828,6 +915,9 @@ impl Body for Relay {
                         // a body of known length ends with its last frame: the client polls no more
                         if this.upstream.is_end_stream() {
                             this.end_tap(End::Complete);
+                            // the row is counted pending before the client can see the answer end: a request that
+                            // follows at once finds it (the guard's drop records it)
+                            this.spend = None;
                         }
                         return Poll::Ready(Some(Ok(Frame::data(data))));
                     }
@@ -866,6 +956,7 @@ struct Spend {
     scanner: Scanner,
     ledger: Arc<dyn Ledger>,
     events: mpsc::UnboundedSender<GatewayEvent>,
+    pending: Arc<Pending>,
     armed: bool,
     /// Counted in flight until its events are sent, or until it is dropped disarmed (test-hooks).
     #[cfg(feature = "test-hooks")]
@@ -897,12 +988,15 @@ impl Drop for Spend {
             return;
         };
         let (ledger, events, limit) = (self.ledger.clone(), self.events.clone(), self.budget);
+        // counted now, before the task runs: a request that comes next finds the row pending
+        let committing = row.job.as_deref().map(|j| self.pending.begin(j));
         #[cfg(feature = "test-hooks")]
         let counted = self.counted.take();
         runtime.spawn(async move {
             #[cfg(feature = "test-hooks")]
             let _counted = counted;
             ledger.record(row.clone()).await;
+            drop(committing);
             let job = row.job.clone();
             let _ = events.send(GatewayEvent::Request(row));
             // the request that spends the budget ends the job's work now, not at the next refusal

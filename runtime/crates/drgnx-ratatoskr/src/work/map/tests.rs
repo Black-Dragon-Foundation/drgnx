@@ -493,7 +493,7 @@ fn every_order_deltas_then_resync_converge() {
         .map(|n| {
             let core = core_with(n);
             let v = rows_view(core.model(), 226);
-            view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new())
+            view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new(), &[])
         })
         .collect();
     assert!(
@@ -693,14 +693,15 @@ fn detail_rows_say_the_edges() {
         .expect("an agent with a why and a branch");
     let lines = detail::lines(m, Some(&agent.id), 0);
     let text: Vec<&str> = lines.iter().map(|(_, t, _)| t.as_str()).collect();
-    assert!(
-        text[0].starts_with(&format!("{} · agent", agent.label)),
-        "{text:?}"
-    );
+    assert!(text[0].contains(&agent.label), "{text:?}");
     for e in edges.iter().filter(|e| came(e) && e.from == agent.id) {
         let to = m.item(&e.to).expect("its target").label;
         assert!(
-            text.contains(&format!("  {to} — came from this").as_str()),
+            text.iter()
+                .any(|t| t.ends_with(&format!("\t{to} — came from this"))
+                // an agent's branch is the Touches' first line, its name alone
+                || *t == format!("branch\t{to}")
+                || t.starts_with(&format!("branch\t{to} · worktree "))),
             "{to} in {text:?}"
         );
     }
@@ -712,12 +713,12 @@ fn detail_rows_say_the_edges() {
         .expect("a parent");
     let pl = m.item(&parent).expect("the parent").label;
     assert!(
-        text.iter()
-            .any(|t| t.starts_with("  › ") && t.contains(&pl)),
+        text.iter().any(|t| t.contains('\t') && t.contains(&pl)),
         "{pl} in {text:?}"
     );
-    let rows = detail::rows(&lines);
-    assert_eq!(rows.len(), lines.len());
+    let rows = detail::rows(&lines, 1.0, 340, &Cols);
+    // the head's subtitle wraps into rows of its own
+    assert!(rows.len() >= lines.len());
     assert_eq!(rows[0].key, "head/0");
     assert_eq!(detail::map_of(&detail::view_of("w-1")), Some("w-1"));
 }
@@ -876,7 +877,7 @@ fn the_strip_and_the_needs_you_list_line_up() {
         }));
     }
     let v = rows_view(core.model(), 226);
-    let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new());
+    let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new(), &[]);
     let at = |chip: &str| {
         rows[0]
             .text
@@ -886,9 +887,10 @@ fn the_strip_and_the_needs_you_list_line_up() {
     let chips = [
         at("gone  g1"),
         at("which?  g2"),
-        at("agent 3 needs you  g3"),
-        at("agent 4 needs you  g4"),
-        at("huddle: both edit a.rs  g5"),
+        // the chips share the row, so a long one is cut: its jump key is what is found
+        at("  g3"),
+        at("  g4"),
+        at("  g5"),
     ];
     assert!(chips.is_sorted(), "{}", rows[0].text);
     let d = model::doc(core.model(), v.layout.as_ref().expect("laid out"), &v.sent);
@@ -912,7 +914,7 @@ fn open_huddle_is_on_the_strip_and_the_needs_you_list() {
         true,
     )));
     let v = rows_view(core.model(), 226);
-    let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new());
+    let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new(), &[]);
     assert!(
         rows[0].text.contains("huddle: both edit a.rs"),
         "{}",
@@ -931,7 +933,7 @@ fn open_huddle_is_on_the_strip_and_the_needs_you_list() {
         false,
     )));
     let v = rows_view(core.model(), 226);
-    let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new());
+    let (rows, _) = view_rows(core.model(), &v, &env(), &Cols, 0, &BTreeSet::new(), &[]);
     assert!(!rows[0].text.contains("huddle:"), "{}", rows[0].text);
 }
 
@@ -943,7 +945,7 @@ fn outline_follows_the_users_choice() {
     let mut v = rows_view(core.model(), 226);
     assert!(v.layout.as_ref().expect("laid out").fits);
     let outlined = |v: &View| {
-        view_rows(core.model(), v, &env(), &Cols, 0, &BTreeSet::new())
+        view_rows(core.model(), v, &env(), &Cols, 0, &BTreeSet::new(), &[])
             .0
             .iter()
             .any(|r| r.key.starts_with("outline:"))
@@ -956,10 +958,18 @@ fn outline_follows_the_users_choice() {
     assert!(!narrow.layout.as_ref().expect("laid out").fits);
     narrow.outline = render::Outline::Off;
     assert!(
-        !view_rows(thirty.model(), &narrow, &env(), &Cols, 0, &BTreeSet::new())
-            .0
-            .iter()
-            .any(|r| r.key.starts_with("outline:")),
+        !view_rows(
+            thirty.model(),
+            &narrow,
+            &env(),
+            &Cols,
+            0,
+            &BTreeSet::new(),
+            &[]
+        )
+        .0
+        .iter()
+        .any(|r| r.key.starts_with("outline:")),
         "off: the cards"
     );
     assert_eq!(outline_of("on"), Some(render::Outline::On));
@@ -1094,4 +1104,254 @@ fn a_task_agent_is_on_its_sessions_task_without_a_plan() {
         agents[0].names(),
         ("Sonnet".to_owned(), Some("search-quick".to_owned()))
     );
+}
+
+/// [D] A test hub's map scene (`RATATOSKR_SEED_SCENE=map`) puts the mockup's whole graph on every map it opens: asks,
+/// specs, plans, four agents, their branches, files and machines, two open cards (a push and a
+/// permission; the hub scene's held gate is the third), and an overlap between two agents on one file (work-space-dark.html).
+#[cfg(feature = "test-hooks")]
+#[test]
+fn the_map_scene_has_every_layer_the_overlap_and_its_cards() {
+    let map = Map::default();
+    map.scene_graph(crate::orch::scene::map_events());
+    let mut g = lock(&map.inner);
+    let mut core = Core::new();
+    for ev in Map::opening(&mut g, 40) {
+        core.step(ev);
+    }
+    let items = core.model().items();
+    for (kind, at_least) in [
+        (Kind::Ask, 3),
+        (Kind::Spec, 2),
+        (Kind::Plan, 3),
+        (Kind::Agent, 4),
+        (Kind::Branch, 4),
+        (Kind::File, 2),
+        (Kind::Machine, 2),
+    ] {
+        let n = items.values().filter(|i| i.kind == kind).count();
+        assert!(n >= at_least, "{kind:?}: {n} < {at_least}");
+    }
+    // the model keeps a pair of agents and a pair of their branches: one overlap on the map, session.rs of two agents
+    let pairs = core.model().overlaps();
+    let agents = pairs
+        .iter()
+        .filter(|o| o.a.as_str().starts_with("agent:"))
+        .count();
+    assert_eq!(agents, 1, "{pairs:?}");
+    let kinds: Vec<CardKind> = core
+        .model()
+        .needs_you()
+        .into_iter()
+        .map(|n| n.kind)
+        .collect();
+    // the strip reads as the mockup's: the push first, then the permission
+    assert_eq!(
+        kinds[..2],
+        [CardKind::Push, CardKind::Permission],
+        "{kinds:?}"
+    );
+    // the first agent's branch carries the machine and slot its agent runs on, as its chip's tag
+    let branch = items
+        .get(&ItemId("branch:drgnx/rp-df-hub".into()))
+        .expect("the first agent's branch");
+    assert_eq!(branch.fields.tag.as_deref(), Some("desk 3"), "{branch:?}");
+    for k in [CardKind::Push, CardKind::Permission] {
+        assert_eq!(
+            kinds.iter().filter(|c| **c == k).count(),
+            1,
+            "{k:?} in {kinds:?}"
+        );
+    }
+}
+
+/// [D] The map scene's agents run for the minutes the fixture gives them before its own clock (minute 40), counted
+/// from the hub's clock when a map opens: "testing · 32 min", not the minutes since the epoch.
+#[cfg(feature = "test-hooks")]
+#[test]
+fn the_map_scenes_agents_run_for_their_fixture_minutes() {
+    let map = Map::default();
+    map.scene_graph(crate::orch::scene::map_events());
+    let mut g = lock(&map.inner);
+    let mut core = Core::new();
+    for ev in Map::opening(&mut g, 29_909_760) {
+        core.step(ev);
+    }
+    let mut minutes: Vec<(String, Option<u64>)> = core
+        .model()
+        .items()
+        .into_values()
+        .filter(|it| it.kind == Kind::Agent)
+        .map(|it| (it.label, it.fields.minutes))
+        .collect();
+    minutes.sort();
+    assert_eq!(
+        minutes,
+        [
+            ("Opus · I6".to_owned(), Some(12)),
+            ("Opus · hub rows".to_owned(), Some(32)),
+            ("Opus · jobq plan".to_owned(), Some(9)),
+            ("Sonnet · fx-sess".to_owned(), Some(14)),
+        ],
+        "the minutes of the agents the mockup shows"
+    );
+}
+
+/// [D] The Detail tile is the mockup's (work-space-dark.html `.det`): the head in the heading face, the sections' keys
+/// ("you", "spec", "plan", "task") muted in a column and their values in the accent, the actions as buttons with their
+/// keys, and every row in the card's UI font.
+#[test]
+fn detail_rows_are_the_mockups_tile() {
+    let mut core = vegvisir::Core::new();
+    for e in vegvisir::fixture::scene() {
+        core.step(e);
+    }
+    let m = core.model();
+    let agent = ItemId("agent:a1".into());
+    let rows = detail::rows(&detail::lines(m, Some(&agent), 0), 1.0, 340, &Cols);
+    fn faces_of(r: &Row) -> Vec<&str> {
+        r.runs.iter().map(|x| x.2.as_str()).collect()
+    }
+    assert!(
+        faces_of(&rows[0]).contains(&"drgnx-ui-heading"),
+        "{:?}",
+        rows[0]
+    );
+    let key = |k: &str| -> Row {
+        rows.iter()
+            .find(|r| r.text.trim_start().starts_with(k) && !r.stops.is_empty())
+            .unwrap_or_else(|| panic!("a `{k}` row with a key column in {rows:?}"))
+            .clone()
+    };
+    // the head: the agent's badge, its name and its state as a chip at the right; then the subtitle
+    // (work-space-dark.html `.det .hd`)
+    assert!(rows[0].text.contains("Opus · hub rows"), "{:?}", rows[0]);
+    assert!(faces_of(&rows[0]).contains(&"drgnx-chip"), "{:?}", rows[0]);
+    assert!(
+        faces_of(&rows[0]).contains(&"drgnx-work-who-1"),
+        "{:?}",
+        rows[0]
+    );
+    assert!(
+        !rows[0].stops.is_empty(),
+        "the chip is at the right edge: {:?}",
+        rows[0]
+    );
+    assert!(
+        rows[1].text.contains("SESSION-END-LOSES-STARTED-1"),
+        "{:?}",
+        rows[1]
+    );
+    assert!(
+        faces_of(&rows[1]).contains(&"drgnx-text-muted"),
+        "{:?}",
+        rows[1]
+    );
+    for k in ["you", "spec", "plan", "task"] {
+        let r = key(k);
+        assert!(faces_of(&r).contains(&"drgnx-text-muted"), "{r:?}");
+        assert!(faces_of(&r).contains(&"drgnx-accent"), "{r:?}");
+    }
+    let open = rows
+        .iter()
+        .find(|r| r.text.contains("Open"))
+        .expect("the Open action");
+    assert!(faces_of(open).contains(&"drgnx-button"), "{open:?}");
+    assert!(faces_of(open).contains(&"drgnx-keycap"), "{open:?}");
+    for r in &rows {
+        assert!(faces_of(r).contains(&"drgnx-work-pane"), "{r:?}");
+    }
+}
+
+/// [D] The map's text is the UI font at the caption size (`drgnx-work-card`): the card line's height and its fit are those of the
+/// editor's `caption` role (the UI caption face), not of `ui` (the buffer's default, the code font) that the rows used to be
+/// drawn in.
+#[test]
+fn the_card_line_is_measured_in_the_caption_role() {
+    let env: ViewEnv = serde_json::from_value(json!({
+        "view": "m", "class": "gui-1", "epoch": 1, "display": "gui", "scale": 1.0, "cell": [8, 16],
+        "width_px": 1000,
+        "fonts": [["ui", null, 0, 13.0, 11.0, 3.0, 8.0, 6.0],
+                  ["caption", null, 0, 12.0, 12.0, 4.0, 6.5, 3.0]]
+    }))
+    .expect("an env");
+    let palette = Palette(Vec::new());
+    assert_eq!(render_env(&env, &palette).line, (16, 75));
+}
+
+/// [D] The Detail head's subtitle wraps by word at the island's width (the mockup's is two lines), each part whole: no
+/// cut word and no continuation glyph.
+#[test]
+fn the_detail_subtitle_wraps_by_word_in_the_tile() {
+    let mut core = vegvisir::Core::new();
+    for e in vegvisir::fixture::scene() {
+        core.step(e);
+    }
+    let agent = ItemId("agent:a1".into());
+    let lines = detail::lines(core.model(), Some(&agent), 0);
+    for width in [340u32, 260] {
+        let rows = detail::rows(&lines, 1.0, width, &Cols);
+        // the subtitle is the rows keyed head/1, head/1.1, ...: each fits (8 px a column, 8 px of padding each side)
+        let sub: Vec<&drgnx_rows::Row> = rows
+            .iter()
+            .filter(|r| r.key == "head/1" || r.key.starts_with("head/1."))
+            .collect();
+        assert!(sub.len() >= 2, "{width}: wraps by word, {sub:?}");
+        for r in &sub {
+            let px = r.text.chars().count() as u32 * 8;
+            assert!(px <= width - 16, "{width}: {px} px, {:?}", r.text);
+            assert!(!r.text.contains('…'), "no cut word: {:?}", r.text);
+        }
+        let all: Vec<&str> = sub.iter().map(|r| r.text.as_str()).collect();
+        assert!(all.join(" ").contains("API prices"), "{all:?}");
+    }
+    // everything fits in the width, so nothing is dropped
+    let roomy = detail::rows(&lines, 1.0, 900, &Cols);
+    assert!(
+        roomy[1].text.contains("API prices"),
+        "one row: {:?}",
+        roomy[1]
+    );
+    assert_ne!(roomy[2].key, "head/1.1");
+}
+
+/// [D] An agent's Touches names its branch with its worktree, its machine with its slot and the file its branch
+/// changed most with the change (work-space-dark.html, the Detail: `rp-df-hub · worktree rp-df-hub`, `desktop · slot 3`,
+/// `session.rs +40 −3`), in that order, reads after them.
+#[test]
+fn an_agents_touches_are_the_mockups_lines_in_order() {
+    let mut core = vegvisir::Core::new();
+    for e in vegvisir::fixture::scene() {
+        core.step(e);
+    }
+    let lines = detail::lines(core.model(), Some(&ItemId("agent:a1".into())), 0);
+    let touches: Vec<&str> = lines
+        .iter()
+        .filter(|l| l.0 == "touches")
+        .map(|l| l.1.as_str())
+        .collect();
+    assert_eq!(touches[0], "Touches ↓");
+    assert_eq!(touches[1], "branch\trp-df-hub · worktree rp-df-hub");
+    assert_eq!(touches[2], "machine\tdesktop · slot 3");
+    assert_eq!(touches[3], "edits\tsession.rs +40 −3");
+    assert_eq!(touches[4], "reads\t14 files ▸");
+    let heads: Vec<&str> = lines
+        .iter()
+        .filter(|l| l.1.ends_with('↑') || l.1.ends_with('↓') || l.1 == "Conclusions")
+        .map(|l| l.1.as_str())
+        .collect();
+    assert_eq!(heads, ["Why ↑", "Touches ↓", "Conclusions"]);
+}
+
+/// [D] The Detail head says what the agent is doing as the card does (`testing`, not the class `test`) and how long the
+/// session has run (`running 47 min`, the feed's age; the card's 32 min are the minutes in its state).
+#[test]
+fn the_detail_head_says_testing_and_the_run_age() {
+    let mut core = vegvisir::Core::new();
+    for e in vegvisir::fixture::scene() {
+        core.step(e);
+    }
+    let lines = detail::lines(core.model(), Some(&ItemId("agent:a1".into())), 0);
+    assert!(lines[0].1.ends_with("\ttesting"), "{:?}", lines[0]);
+    assert!(lines[1].1.contains("running 47 min"), "{:?}", lines[1]);
 }

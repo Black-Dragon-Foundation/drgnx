@@ -72,6 +72,19 @@
         (drgnx-view-patch-test--draw)
         (should (= calls 2))))))
 
+(ert-deftest drgnx-view-patch/a-row-with-a-unit-is-that-many-px-tall ()
+  ;; work-space-dark.html: a card line is 19 px, whatever the default font's line is; a row with no unit keeps the lines
+  (drgnx-view-patch-test--with
+    (drgnx-view-apply-patch
+     (drgnx-view-patch-test--patch
+      (list (list :reset (list (drgnx-view-patch-test--row "a" "card line" :height (list :lines 1 :unit 19))
+                               (drgnx-view-patch-test--row "b" "two lines" :height (list :lines 2 :unit 10))
+                               (drgnx-view-patch-test--row "c" "plain" :height (list :lines 2)))))))
+    (let ((line (lambda (k) (let ((s (drgnx-view-patch-render k))) (get-text-property (1- (length s)) 'line-height s)))))
+      (should (= 19 (funcall line "a")))
+      (should (= 20 (funcall line "b")))
+      (should (= (* 2 (default-line-height)) (funcall line "c"))))))
+
 (ert-deftest drgnx-view-patch/a-row-is-copied-once ()
   ;; a row's text is copied once to be drawn, its newline with it: the characters a render allocates are the line's
   ;; own (the Extensions list's 404 lines were copied twice, the dressed text and then text plus newline)
@@ -582,3 +595,14 @@ the patch shows on the rows already inserted, with no new patch."
         (should-not (equal fg "#777777"))
         (should (>= (drgnx-color-contrast fg "#7a7a7a") 4.5)))
       (should (equal (plist-get (drgnx-view-patch--style-attrs far) :foreground) "#ffffff")))))
+
+(ert-deftest drgnx-view-patch/overlapping-runs-stack-the-earlier-above ()
+  ;; a card's text carries its own faces (a state dot, an overlap mark) and the card's box face over the same range:
+  ;; the runs come in that order and each is appended below those before it, so neither hides the other
+  (drgnx-view-patch-test--with
+    (drgnx-view-apply-patch
+     (drgnx-view-patch-test--patch
+      (list (list :reset (list (drgnx-view-patch-test--row "a" "ab cd" :runs '((0 2 "bold") (0 5 "italic") (0 5 "drgnx-ui-text"))))))))
+    (let ((line (drgnx-view-patch-render "a")))
+      (should (equal (get-text-property 0 'face line) '(bold italic drgnx-ui-text)))
+      (should (equal (get-text-property 3 'face line) '(italic drgnx-ui-text))))))

@@ -574,4 +574,17 @@ connects) goes on, anything else returns its first argument."
       ;; TRAMP was only asked whether the name is remote, which never connects
       (should (seq-every-p (lambda (op) (eq op 'file-remote-p)) drgnx-trust-test--tramp-ops)))))
 
+;; The hub reads this file too (`agents::trust' in runtime/crates/drgnx-ratatoskr): its Rust test parses the same
+;; fixture.  A change of the writer's form breaks this test, so the hub's reader is changed with it and never
+;; quietly trusts more (or less) than the editor wrote.
+(ert-deftest drgnx-trust/the-file-the-hub-reads ()
+  (drgnx-trust-test--with (dir)
+    (drgnx-trust--write (lambda (_) '("/srv/a/" "/srv/b/")))
+    (should (equal (with-temp-buffer
+                     (insert-file-contents (drgnx-trust-folders-file))
+                     (buffer-string))
+                   (with-temp-buffer
+                     (insert-file-contents (expand-file-name "test/fixtures/trusted-folders.eld" drgnx-dir))
+                     (buffer-string))))))
+
 ;;; trust-test.el ends here

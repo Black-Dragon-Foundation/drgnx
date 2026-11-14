@@ -48,6 +48,12 @@ impl Root {
         if let Ok(path) = std::env::var("PATH") {
             v.push(("PATH".into(), path));
         }
+        // the pack-built grammars the run was pointed at (test/packs/hub-grammars.sh): a hub parses code with them
+        for k in ["DRGNX_PACK_LOCK", "DRGNX_PACK_GRAMMARS"] {
+            if let Ok(x) = std::env::var(k) {
+                v.push((k.into(), x));
+            }
+        }
         v
     }
 

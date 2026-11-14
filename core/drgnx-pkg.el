@@ -94,6 +94,14 @@ still takes a lower priority archive's package when only it satisfies a requirem
                      :schema '(plist (:packages (list-of (pred drgnx-pkg--lock-entry-p
                                                                "(NAME :version :archive :kind :file :sha256 :size :requires :summary [:verified t] [:wanted user])"))
                                                 "What is installed: one entry per package" :required t)
+                                     (:packs (list-of (pred drgnx-pkg--lock-entry-p
+                                                            "(NAME :commit :tree-sha256 :source :wanted)"))
+                                             "Language packs installed: one entry per pack (drgnx packs sync)")
+                                     (:removed-packs (list-of symbol)
+                                                     "Language packs you removed: an update never installs these again (drgnx packs install brings one back)")
+                                     (:grammars (list-of (pred drgnx-pkg--lock-entry-p
+                                                               "(LANG :commit :tree-sha256 :lib-sha256 :owner)"))
+                                                "Tree-sitter grammars built for the packs: one entry per language")
                                      (:from-shipped boolean "Copied from the lock drgnx ships; the first sync completes it"))
                      :default '(:packages nil)
                      :on-mistake "drgnx sync stops until it is fixed; nothing is changed"
@@ -587,6 +595,9 @@ that are gone are deleted here).  Returns N."
           (delete-directory (drgnx-pkg--generation-dir (car g)) t))))
     n))
 
+(declare-function drgnx-packs-after-rollback "drgnx-packs" ())
+(declare-function drgnx-packs-cli "drgnx-packs" (args))
+
 (defun drgnx-pkg-rollback (&optional n)
   "Make generation N (default: the one before the current one) the packages directory again, with its
 lock.  Files come back at the same path, so their native code stays valid.  Returns N."
@@ -610,6 +621,7 @@ lock.  Files come back at the same path, so their native code stays valid.  Retu
             (when (file-exists-p (drgnx-pkg-lock-file)) (delete-file (drgnx-pkg-lock-file))))
           (drgnx-pkg-progress 'lock))
         (drgnx-pkg--set-current n)
+        (when (require 'drgnx-packs nil t) (drgnx-packs-after-rollback))   ; the packs' active.eld follows the lock
         n))))
 
 ;;;; Installing
@@ -1751,11 +1763,11 @@ On macOS FILE is the launch agent and its ProgramArguments take the ExecStart= l
         (_ (list :status 'foreign :file file :line (if macos "(no ProgramArguments)" "(no ExecStart= line)")))))))
 
 ;; Nidhogg's native shell names its windows `nidhogg': a desktop entry that does not claim that name leaves the app
-;; switcher with the bare name and no icon.  Nidhogg installs the logo under its own prefix as `emacs', where the
-;; desktop does not look (it finds the system's Emacs icon), so the entry's icon is a copy named `drgnx'.
+;; switcher with the bare name and no icon.  The desktop looks for the entry's icon in the hicolor theme, so drgnx's own
+;; app icon (etc/images/icon/drgnx-N.png) is copied there as `drgnx' at every size.
 
-(defconst drgnx-pkg-desktop-icon-sizes '(16 24 32 48 64 128 256 512)
-  "The sizes of Nidhogg's hicolor icons.")
+(defconst drgnx-pkg-desktop-icon-sizes '(16 24 32 48 64 128 256 512 1024)
+  "The sizes of drgnx's app icon, in the hicolor theme's folder names.")
 
 (defun drgnx-pkg-desktop-file ()
   "The user's desktop entry: $XDG_DATA_HOME/applications/drgnx.desktop, else ~/.local/share/applications/."
@@ -1764,14 +1776,15 @@ On macOS FILE is the launch agent and its ProgramArguments take the ExecStart= l
 
 (defun drgnx-pkg-desktop-refresh (&optional file icons from)
   "Give the desktop entry FILE (default `drgnx-pkg-desktop-file') drgnx's icon and the name of Nidhogg's windows.
-Returns `none' (no file: nothing is installed), `current' or `rewritten'.  The hicolor icons under FROM (default the
-running Emacs's) are copied into ICONS (default the user's) as `drgnx'.  Of FILE, only an `Icon=emacs' line changes,
-when there is an icon to name, and a `StartupWMClass=' line is added when it has none.  Never asks."
+Returns `none' (no file: nothing is installed), `current' or `rewritten'.  The app icons in FROM (default drgnx's
+`etc/images/icon', files drgnx-N.png) are copied into ICONS (default the user's hicolor theme) as `drgnx'.
+Of FILE, only an `Icon=emacs' line changes, when there is an icon to name,
+and a `StartupWMClass=' line is added when it has none.  Never asks."
   (let* ((case-fold-search nil)
          (default-directory "/")
          (file (or file (drgnx-pkg-desktop-file)))
          (icons (or icons (expand-file-name "../icons/hicolor/" (file-name-directory file))))
-         (from (or from (expand-file-name "../../../icons/hicolor/" data-directory)))
+         (from (or from (expand-file-name "etc/images/icon/" drgnx-dir)))
          (text (drgnx-file-read-bounded file))
          (installed nil)
          (copied nil))
@@ -1779,7 +1792,7 @@ when there is an icon to name, and a `StartupWMClass=' line is added when it has
         'none
       (dolist (n drgnx-pkg-desktop-icon-sizes)
         (let* ((dir (format "%dx%d/apps/" n n))
-               (source (expand-file-name (concat dir "emacs.png") from))
+               (source (expand-file-name (format "drgnx-%d.png" n) from))
                (target (expand-file-name (concat dir "drgnx.png") icons)))
           (when (file-newer-than-file-p source target)
             (make-directory (file-name-directory target) t)
@@ -1970,6 +1983,10 @@ FILE (`drgnx-pkg-progress'), from start to done."
                                         "nothing to stage")))
              (when (and (plist-get r :ok) (not stage)) (drgnx-pkg--after-change))
              (if (plist-get r :ok) 0 1))))
+        (`("packs" . ,flags)
+         (require 'drgnx-packs)
+         (condition-case err (drgnx-packs-cli flags)
+           (drgnx-packs-error (drgnx-pkg--print "%s" (cadr err)) 1)))
         (`("rollback" . ,n)
          (drgnx-pkg--print "generation %d restored" (drgnx-pkg-rollback (and n (string-to-number (car n)))))
          (drgnx-pkg--print "%s" drgnx-pkg--restart-note)

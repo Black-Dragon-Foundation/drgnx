@@ -21,6 +21,7 @@
 (declare-function drgnx-trust-folder "drgnx-trust")
 (declare-function drgnx-wb-view-explorer "drgnx-wb")
 (declare-function drgnx-wb-focus-editor "drgnx-wb")
+(declare-function drgnx-wb-editor-window "drgnx-wb")
 (declare-function drgnx-modules-retry-waiting "drgnx-modules")
 (declare-function drgnx-modules-report "drgnx-modules")
 (declare-function drgnx-panel-replay-up "panel-replay-fixture")
@@ -324,8 +325,12 @@ from 201."
 
 (defun drgnx-look-scene-agent (bin)
   "A mock agent (BIN: a test-hooks ratatoskr with ratatoskr-mock beside it) reads, runs, edits and asks."
-  (if (not (and bin (file-executable-p bin)))
-      (push "agent: no ratatoskr binary (DRGNX_RATATOSKR_BIN)" drgnx-look-scene--errors)
+  (cond
+   ;; a scene that needs the agent after another that started it (the panel after the window) finds it running
+   ((buffer-live-p drgnx-look-scene--panel))
+   ((not (and bin (file-executable-p bin)))
+    (push "agent: no ratatoskr binary (DRGNX_RATATOSKR_BIN)" drgnx-look-scene--errors))
+   (t
     (drgnx-look-scene--try "agent"
       (load (expand-file-name "test/fixtures/panel-replay-fixture" (bound-and-true-p drgnx-dir)) nil t)
       (setq drgnx-panel-replay-prefix 3)
@@ -347,7 +352,7 @@ from 201."
       ;; the turn runs on past the prefix to its ask: the scene shows every step's time and the open card
       (unless (drgnx-panel-replay--wait 30 (lambda () (with-current-buffer drgnx-look-scene--panel
                                                         (drgnx-agent-panel-cards--permissions))))
-        (push "agent: no permission card within 30 s" drgnx-look-scene--errors))))
+        (push "agent: no permission card within 30 s" drgnx-look-scene--errors)))))
   (drgnx-look-scene--answer :panel (if (buffer-live-p drgnx-look-scene--panel) (buffer-name drgnx-look-scene--panel) :null)))
 
 (defun drgnx-look-scene--editor ()
@@ -530,10 +535,53 @@ a map off the rows path or without a hub draws a placeholder, and a shot of that
                                   (lambda () (with-current-buffer map (drgnx-look-scene--row-ids ""))))
          map)))
 
-(defun drgnx-look-scene-work-space-dark ()
-  (drgnx-look-scene--theme 'drgnx-dark)
-  (drgnx-look-scene--try "work space" (drgnx-look-scene--work-map))
+(declare-function drgnx-work-detail-buffer "drgnx-work-detail")
+(declare-function drgnx-layouts-current "drgnx-layouts")
+(declare-function drgnx-layouts-apply "drgnx-layouts")
+(defvar drgnx-work-space--panel-trail)
+(defvar drgnx-notice--needs-you)
+(defvar drgnx-topline-agents-function)
+(declare-function drgnx-work-map--needs-you-count "drgnx-work-map")
+(declare-function drgnx-work-map--team "drgnx-work-map")
+
+(defun drgnx-look-scene--work-selected (theme)
+  "The Work map of work-space-*.html in THEME: the first agent selected, its chain lit and its detail in the side panel.
+Draw it without the other scenes (`DRGNX_LOOK_ONLY=work-space'): the hub then seeds the map's own graph
+(`drgnx-look-scene--seed')."
+  (drgnx-look-scene--theme theme)
+  (drgnx-look-scene--try "work space"
+    (when-let* ((map (drgnx-look-scene--work-map)))
+      ;; the Work layout (the design's §14): the map full width, the Detail island at its right, the trail under it; the
+      ;; layout follows a shown lens by itself, but not before the shot, so it is asked for and waited for
+      (unless (eq (drgnx-layouts-current) 'work) (drgnx-layouts-apply 'work))
+      (unless (get-buffer-window map) (set-window-buffer (drgnx-wb-editor-window) map))
+      (unless (drgnx-look-scene--until 15 "the map's seeded graph (the first agent, agent:a1)"
+                                       (lambda () (with-current-buffer map
+                                                    (member "agent:a1" (drgnx-look-scene--row-ids "agent:")))))
+        (error "The map has no seeded agent: is it the `map' seed (DRGNX_LOOK_ONLY=work-space)?"))
+      ;; the title row's chips (`3 need you', `4 agents') count what the map's model holds, as the notice model and the
+      ;; agents module would in a session that ran these agents
+      (with-current-buffer map
+        (let ((need (drgnx-work-map--needs-you-count)) (agents (length (drgnx-work-map--team))))
+          (setq drgnx-notice--needs-you need
+                drgnx-topline-agents-function (lambda () agents))))
+      (let ((win (get-buffer-window map)))
+        (with-selected-window win (drgnx-view-nav 'select "agent:a1")))
+      (drgnx-look-scene--until 15 "the side panel of the selected agent (Why, Touches)"
+                               (lambda ()
+                                 (with-current-buffer (drgnx-work-detail-buffer map)
+                                   (save-excursion (goto-char (point-min)) (search-forward "Touches" nil t)))))
+      ;; the trail tile follows the selection: its steps and the finding are drawn from the hub's rows
+      (drgnx-look-scene--until 15 "the trail under the map (its finding card)"
+                               (lambda ()
+                                 (and (buffer-live-p drgnx-work-space--panel-trail)
+                                      (with-current-buffer drgnx-work-space--panel-trail
+                                        (save-excursion (goto-char (point-min)) (search-forward "Finding" nil t))))))))
   (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-work-space-dark () (drgnx-look-scene--work-selected 'drgnx-dark))
+(defun drgnx-look-scene-work-space-light () (drgnx-look-scene--work-selected 'drgnx-light))
+(defun drgnx-look-scene-work-space-hc () (drgnx-look-scene--work-selected 'drgnx-high-contrast))
 
 (declare-function drgnx-work-flow-open "drgnx-work-flow")
 (declare-function drgnx-work-flow-detail-show "drgnx-work-flow")
@@ -786,6 +834,12 @@ editor, the Explorer's rows beside it."
       (redisplay))
     (or (funcall pred) (progn (push (format "%s: not within %d s" what secs) drgnx-look-scene--errors) nil))))
 
+(defun drgnx-look-scene--seed ()
+  "What the scenes' hub seeds (`RATATOSKR_SEED_SCENE`): `map', the Work map's graph of work-space-dark.html, when only
+the Work space's scene is drawn (`DRGNX_LOOK_ONLY'), else `1', the plan run with the Flow's one agent: the two seeds
+put different agents on the map, so they cannot share a hub."
+  (if (string-match-p "\\`work-space" (or (getenv "DRGNX_LOOK_ONLY") "")) "map" "1"))
+
 (defun drgnx-look-scene--hub ()
   "The scenes' hub, started once and connected.  A session starts no hub (DRGNX_NO_HUB_START): the scenes run the
 worktree's own ($DRGNX_RATATOSKR_BIN, a test-hooks build) in the foreground, as the perf workloads do, ended with the
@@ -793,7 +847,9 @@ session, with one plan run seeded into its fresh store (RATATOSKR_SEED_SCENE, th
 space's scenes."
   (unless (drgnx-hub-running-p)
     (let ((bin (getenv "DRGNX_RATATOSKR_BIN"))
-          (process-environment (append '("RATATOSKR_SUPERVISOR=none" "RATATOSKR_SEED_SCENE=1") process-environment)))
+          (process-environment (append (list "RATATOSKR_SUPERVISOR=none"
+                                             (concat "RATATOSKR_SEED_SCENE=" (drgnx-look-scene--seed)))
+                                       process-environment)))
       (unless (and bin (file-executable-p bin)) (error "No ratatoskr binary (DRGNX_RATATOSKR_BIN)"))
       (make-process :name "ratatoskr" :noquery t :connection-type 'pipe
                     :buffer (generate-new-buffer " *ratatoskr*")
@@ -1363,13 +1419,21 @@ debugging-extras mockup's)."
 (defun drgnx-look-scene-heap-graph () "The heap graph, dark." (drgnx-look-scene--heap-graph 'drgnx-dark))
 (defun drgnx-look-scene-heap-graph-light () "The heap graph, light." (drgnx-look-scene--heap-graph 'drgnx-light))
 
-(defun drgnx-look-scene-start-page ()
-  "The start page in the editor, dark (no mockup: its buttons, keycaps and shield are the components of design §3.5)."
-  (drgnx-look-scene--theme 'drgnx-dark)
+(defun drgnx-look-scene--start-page (theme)
+  "The start page in the editor in THEME."
+  (drgnx-look-scene--theme theme)
   (drgnx-look-scene--try "start page"
     (drgnx-wb-focus-editor)
     (drgnx-start-show))
   (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-start-page ()
+  "The start page in the editor, dark (no mockup: its buttons, keycaps and shield are the components of design §3.5)."
+  (drgnx-look-scene--start-page 'drgnx-dark))
+
+(defun drgnx-look-scene-start-page-light ()
+  "The start page in the editor, light (the design system's empty-state shot)."
+  (drgnx-look-scene--start-page 'drgnx-light))
 
 (defun drgnx-look-scene-facts (file &optional scene)
   "Write what SCENE realised to FILE: what the line cannot show yet (`drgnx-look-scene-limits'), themes, fonts of the
@@ -1391,6 +1455,7 @@ chrome faces, frame metrics, windows, modules."
                                 (list :text (buffer-substring-no-properties (point-min) (min (point-max) 600))
                                       :rows (and (fboundp 'drgnx-work-map-rows-p) (drgnx-work-map-rows-p))
                                       :hub (and (fboundp 'drgnx-hub-running-p) (drgnx-hub-running-p))
+                                      :line-spacing (list line-spacing (frame-parameter nil 'line-spacing) (default-line-height))
                                       :view (bound-and-true-p drgnx-work-space--view)
                                       :message (bound-and-true-p drgnx-work-space--message))))
                   ;; the Flow, where one is open: its first lines, with the text properties that hide or replace text

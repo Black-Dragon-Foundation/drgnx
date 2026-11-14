@@ -184,7 +184,8 @@ and no other tab left one."
     (drgnx-wb-area-hide area)))
 
 (defvar-local drgnx-area-own-title nil
-  "Non-nil in a buffer that draws its own title row (the Work space's tiles): an area shows no tab row over it.")
+  "Non-nil in a buffer that draws its own title row (the Work space's tiles): an area shows no tab row over it.  A
+string is the title the area draws itself, in its row with the area's close, in place of the tabs.")
 
 (defun drgnx-area--tab-row (area)
   "AREA's tab row, ending in the ✕ that hides it; set as a window parameter, so it is built when the tab changes.
@@ -196,7 +197,8 @@ its own title (`drgnx-area-own-title')."
          (w (drgnx-wb-area-window area)))
     (if (or (and w (buffer-local-value 'drgnx-area-own-title (window-buffer w)))
             (and (plist-get (alist-get area drgnx-wb--areas) :lone) (drgnx-area--lone-p area)))
-        'none
+        (let ((own (and w (buffer-local-value 'drgnx-area-own-title (window-buffer w)))))
+          (if (stringp own) (drgnx-area--row-with-close own area) 'none))
       (drgnx-area--row-with-close
        (concat
         (mapconcat (lambda (tab)

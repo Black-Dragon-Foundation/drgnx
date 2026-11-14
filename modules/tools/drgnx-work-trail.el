@@ -150,6 +150,24 @@ the map the trail is a view of.  Returns the buffer; it does not show itself."
       (setq drgnx-work-lens--map map-buffer drgnx-work-map--lens (drgnx-work-lens-string 'timeline)))
     buffer))
 
+(declare-function drgnx-face-glyph "drgnx-ui-kit")
+
+(defun drgnx-work-trail-panel-string (label)
+  "The tab line of the trail tile under the map (work-space-dark.html): the tab \"Trail · LABEL\" shown, \"Agent · LABEL\"
+quiet, and \"following\" at its right (the tile follows the map's selection)."
+  (concat (propertize (format " %s Trail · %s " (or (drgnx-face-glyph 'clock) "") label) 'face '(bold drgnx-pill-on))
+          " "
+          (propertize (format " Agent · %s " label) 'face 'drgnx-work-label)
+          "   "
+          (propertize " following ▾ " 'face 'drgnx-pill)))
+
+(defvar drgnx-area-own-title)
+
+(defun drgnx-work-trail-panel-title (label)
+  "In the current trail buffer, shown as the tile under the map: its own title row, the tabs of
+`drgnx-work-trail-panel-string' (the bottom dock's tabs stay off it)."
+  (setq-local drgnx-area-own-title (drgnx-work-trail-panel-string label)))
+
 ;;;; Lighting the steps behind a conclusion: the model's chain class
 
 (defun drgnx-work-trail--lit (kind)

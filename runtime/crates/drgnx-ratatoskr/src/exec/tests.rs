@@ -272,6 +272,23 @@ async fn bad_jobs_are_refused() {
     );
 }
 
+/// A job whose start time cannot be read is refused: the restart path tells a live job from a reused pid by that time,
+/// and a job saved without one is ended as lost by the next hub at once (`exec_survives_a_hub_restart` failed once so).
+#[test]
+fn a_start_time_that_cannot_be_read_refuses_the_job() {
+    assert!(start_time_or_refuse(Ok(42), 7).is_ok_and(|t| t == 42));
+    let e = start_time_or_refuse(
+        Err(std::io::Error::new(std::io::ErrorKind::NotFound, "gone")),
+        7,
+    )
+    .unwrap_err();
+    assert!(matches!(e.rule, Rule::Setup), "{e:?}");
+    assert!(
+        e.message.contains("start time") && e.message.contains('7'),
+        "{e:?}"
+    );
+}
+
 #[test]
 fn exec_survives_a_hub_restart() {
     let d = tempfile::tempdir().unwrap();

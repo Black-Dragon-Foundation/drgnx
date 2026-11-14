@@ -38,6 +38,7 @@ Using drgnx.
 - [Pair mode](guide/pair-mode.md): a chat edits your own checkout live, through your editor — the `chat.project-edit` row, the drgnx edit tools, writes applied whole or refused whole, the files it never writes.
 - [Agent settings](guide/agent-settings.md): one page per agent (Claude Code, Codex, Gemini, Kimi Code) — routes and billing, MCP servers, hooks and skills; add, edit, remove, Test.
 - [The face](guide/face.md): no light menu bar or scroll bar, thin themed dividers, line numbers in code that never shift sideways, problems at the end of their line, a top line (project, branch, the three keys that open everything), a status bar built from segments you can reorder, drop or add to, a dark title bar that follows the theme, glyphs with an ASCII form, quick help in a card beside the symbol (a strip in terminals), a × and Esc/q that close every help pane, popup and side pane, a start page in an empty editor; every choice a setting.
+- [The design system](design/index.md): how drgnx looks, in one reference: the colour tokens, type and spacing, the icon set (all generated from the code), a page per component, the app icon, and how to write a theme.
 - [The look](guide/look.md): drgnx Dark, Light and High Contrast, generated from one table of colours; what a theme paints, the terminal tier, the faces a theme author sets.
 - [Editor features vs VS Code, Zed and Cursor](guide/editor-matrix.md): what drgnx has, where it is described, its GUI test and perf workload.
 - [Trusted folders](guide/security.md): Trust This Folder, the Restricted Mode shield, what files from untrusted folders cannot make Emacs do.
@@ -62,12 +63,14 @@ Commands, options and the CLI, generated from the command registry — not writt
 How drgnx is built, tested and measured.
 
 - [Architecture overview](develop/architecture.md)
+- [Language packs](develop/packs.md): the `pack.eld` format, reserved names, and the rules a fetched pack must meet (`ratatoskr packs check`).
 - [Core](develop/core.md): paths, staged hooks, no-prompt guard, command registry, surfaces, palette, modules (every module turns off cleanly: the rule and its check).
 - [Harness](develop/harness.md): headless GUI test sessions, test tiers (each unit test file in an Emacs of its
   own), CLI and MCP tools for agents.
 - [Performance](develop/perf.md): the perf lab — input latency, frames, GC, startup, memory, budgets, the soak, tuning; the Extensions view's rows and its comparison with `list-packages`.
 - [Scenarios](develop/scenarios.md): behaviour scenarios and the evidence behind the workbench design.
 - [Formatting](develop/formatting.md): `bin/drgnx fmt` — the Emacs Lisp formatter, and where it is enforced.
+- [The design system](develop/design-system.md): `docs/design/`, the look's reference; which pages are generated from the code and `bin/drgnx design` (regenerate, `--check`).
 - [bin/drgnx check](develop/check.md): build and every test tier in one parallel run; shards, GUI slots, phases, the leak census, the shuffled test order and the polluter bisect.
 - [Testing a change](develop/testing.md): `bin/drgnx test --affected A..B` picks the test groups a git range can affect (the map `test/affected.eld`) and `--run` skips groups green on unchanged inputs (the result cache).
 - [CI](develop/ci.md): the GitHub Actions workflows — Emacs 31.1 suite, shellcheck, leak scan, nightly GUI tier.

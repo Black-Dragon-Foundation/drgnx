@@ -24,13 +24,6 @@
           (with-temp-buffer (fundamental-mode) (should-not (drgnx-lang-server-available-p))))
       (delete-directory dir t))))
 
-(ert-deftest drgnx-lang/tree-sitter-modes-when-the-grammar-is-there ()
-  (let ((major-mode-remap-alist nil))
-    (cl-letf (((symbol-function 'treesit-language-available-p) (lambda (lang &rest _) (eq lang 'python))))
-      (drgnx-lang-remap-modes)
-      (should (eq (alist-get 'python-mode major-mode-remap-alist) 'python-ts-mode))
-      (should-not (alist-get 'js-mode major-mode-remap-alist)))))
-
 (ert-deftest drgnx-terminal/a-new-terminal-opens-in-the-panel ()
   (drgnx-test-with-state
     (let ((display-buffer-alist nil) (drgnx-wb-unrouted nil))

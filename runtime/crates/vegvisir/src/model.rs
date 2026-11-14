@@ -69,6 +69,10 @@ pub struct SessionFact {
     /// The minute its current state began.
     #[serde(default)]
     pub since: u64,
+    /// How many minutes the session has run, when the feed knows (the Detail's `running 47 min`); else the minutes in
+    /// its state.
+    #[serde(default)]
+    pub age: Option<u64>,
     /// Start order (the team order inside a block).
     #[serde(default)]
     pub seq: u64,
@@ -89,6 +93,9 @@ pub struct SessionFact {
     /// The machine it holds a slot on, or waits for.
     #[serde(default)]
     pub machine: Option<String>,
+    /// The slot it holds on that machine (the mockup's "desk 3").
+    #[serde(default)]
+    pub slot: Option<u32>,
     /// Spend with its unit, as the card shows it (`$1.20`, `≈$1.20`, `2.1 % wk`).
     #[serde(default)]
     pub spend: Option<String>,
@@ -271,9 +278,18 @@ pub struct Fields {
     /// A branch's "edits N" chip: files, plus, minus.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub edits: Option<(u32, u32, u32)>,
+    /// A branch's tag: the machine its agent runs on, abbreviated, and the slot (`desk 3`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
     /// A file's `+/−` on the branch that changes it most.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub change: Option<(u32, u32)>,
+    /// How many minutes an agent has run, when its feed says.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub age: Option<u64>,
+    /// An agent's worktree, by its name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<String>,
     /// An agent's reads, counted.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reads: Option<u32>,
@@ -623,6 +639,12 @@ impl Model {
                 fields.minutes = Some(f.minute.saturating_sub(s.fact.since));
                 fields.model = (!s.fact.model.is_empty()).then(|| s.fact.model.clone());
                 fields.spend = s.fact.spend.clone();
+                fields.age = s.fact.age;
+                fields.worktree = s
+                    .fact
+                    .worktree
+                    .as_deref()
+                    .map(|w| w.rsplit('/').next().unwrap_or(w).to_owned());
                 fields.job = s.fact.job.clone();
                 fields.context = s.fact.context;
                 let task = s.task.or_else(|| {
@@ -648,6 +670,15 @@ impl Model {
                     .filter(|es| es.iter().any(|&(a, m, _)| a == y && !m.edits()))
                     .count();
                 fields.reads = Some(u32::try_from(reads).unwrap_or(u32::MAX));
+                // its branch's changes (the card's `edits N (+P −M)`)
+                if let Some(set) = s
+                    .branch
+                    .map(|b| self.branch_set(b))
+                    .filter(|s| !s.is_empty())
+                {
+                    let (p, m) = set.iter().fold((0, 0), |(p, m), &(_, a, b)| (p + a, m + b));
+                    fields.edits = Some((u32::try_from(set.len()).unwrap_or(u32::MAX), p, m));
+                }
                 if s.fact.model.is_empty() {
                     s.fact.name.clone()
                 } else {
@@ -658,6 +689,7 @@ impl Model {
                 let name = self.names.name(y).trim_start_matches("branch:");
                 let (repo, short) = name.split_once('/').unwrap_or(("", name));
                 fields.repo = Some(repo.to_string());
+                fields.tag = self.branch_tag(y);
                 let set = self.branch_set(y);
                 if !set.is_empty() {
                     let (p, m) = set.iter().fold((0, 0), |(p, m), &(_, a, b)| (p + a, m + b));
@@ -695,6 +727,29 @@ impl Model {
             shared: d.shared,
             fields,
         }
+    }
+
+    /// A branch's chip tag: the machine its agent runs on, abbreviated, and the slot it holds there (`desk 3`).
+    fn branch_tag(&self, b: Sym) -> Option<String> {
+        let owner = self
+            .facts
+            .sessions
+            .iter()
+            .filter(|(_, s)| s.parent.is_none() && s.branch == Some(b))
+            .min_by(|x, y| {
+                (x.1.fact.seq, self.names.name(*x.0)).cmp(&(y.1.fact.seq, self.names.name(*y.0)))
+            })?
+            .1;
+        let machine = owner.fact.machine.as_deref()?;
+        let short = if machine == "desktop" {
+            "desk"
+        } else {
+            machine
+        };
+        Some(match owner.fact.slot {
+            Some(n) => format!("{short} {n}"),
+            None => short.to_owned(),
+        })
     }
 
     /// A branch's changed files with counts, against its recorded base (for its chip).

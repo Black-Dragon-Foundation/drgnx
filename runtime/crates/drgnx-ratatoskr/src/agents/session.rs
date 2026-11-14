@@ -23,7 +23,7 @@ use super::transcript;
 use super::wheel::{self, Wheel};
 use crate::dispatch::Caller;
 use crate::front::Front;
-use crate::matrix_gate::{ActionCtx, Gate, MatrixGate};
+use crate::matrix_gate::{ActionCtx, AllowedBy, Gate, MatrixGate};
 use crate::settings::AgentProfile;
 use crate::settings::profiles::Mode as ProfileMode;
 use hermod::schema::v1::{ReadTextFileResponse, RequestPermissionResponse, WriteTextFileResponse};
@@ -42,7 +42,7 @@ use runstav::registry::Class;
 use runstav::types::RequestId;
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Map, Value, json};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -1067,6 +1067,9 @@ pub struct Session {
     closed: AtomicBool,
     /// The decision-log version the freshness gate last told this session of (Task 24).
     gated: AtomicU64,
+    /// How each allowed tool call was allowed, by `toolCallId`: the line its step's row shows ([`Session::allowed_how`]).
+    /// One short line per call, so it grows with the transcript and no faster.
+    allowed: Mutex<BTreeMap<String, String>>,
     state: Mutex<State>,
     /// Transcripts and the held queue on disk (none in unit tests).
     store: Option<transcript::Store>,
@@ -2152,11 +2155,32 @@ async fn launch(
     sid: &str,
     cwd: &Path,
     attach: &Attach,
+    plan: (Option<&str>, Option<&str>, &[(String, String)]),
+) -> Result<(Launched, tokio::sync::mpsc::Receiver<Event>), Error> {
+    // the session's MCP session is opened first (below); a launch that fails after that, at any step, closes the one
+    // it opened: its socket and dir go with it, not only when `prepare` fails
+    let opened = front.mcp.socket_of(sid).is_none();
+    let out = launch_steps(front, profile, role, sid, cwd, attach, plan, opened).await;
+    if out.is_err() && opened {
+        let _ = front.mcp.close(sid).await;
+    }
+    out
+}
+
+/// [`launch`]'s steps; OPENED: this launch opens the session's MCP session.
+#[allow(clippy::too_many_arguments)]
+async fn launch_steps(
+    front: &Front,
+    profile: &AgentProfile,
+    role: Role,
+    sid: &str,
+    cwd: &Path,
+    attach: &Attach,
     (task, job, module_env): (Option<&str>, Option<&str>, &[(String, String)]),
+    opened: bool,
 ) -> Result<(Launched, tokio::sync::mpsc::Receiver<Event>), Error> {
     // the session's MCP session first: a sandboxed gateway profile's token is registered on its gateway.sock, which
-    // needs it.  A launch refused before the spawn closes the one it opened (its socket and dir go with it)
-    let opened = front.mcp.socket_of(sid).is_none();
+    // needs it
     // a Codex session whose hooks subscribe to a kind: its socket serves `before_tool`, which its lock's managed hook
     // calls
     if opened && profile.provider() == Some(crate::settings::profiles::Provider::Codex) {
@@ -2176,12 +2200,7 @@ async fn launch(
     let mcp = bridge(front, profile, who_of(role, profile), sid, cwd, task, job).await;
     let prep = match prepare(front, profile, role, sid, cwd, job, module_env).await {
         Ok(p) => p,
-        Err(e) => {
-            if opened && !mcp.is_empty() {
-                let _ = front.mcp.close(sid).await;
-            }
-            return Err(e);
-        }
+        Err(e) => return Err(e),
     };
     // the provider proxy the spec's relay reaches, bound before the spawn; a start that fails below drops it, and its
     // socket with it.  So are the browser's web proxy and CDP broker, for a session with the browser
@@ -2488,6 +2507,7 @@ fn assemble(
         wait_refusals: AtomicU32::new(0),
         closed: AtomicBool::new(false),
         gated: AtomicU64::new(0),
+        allowed: Mutex::new(BTreeMap::new()),
         state: Mutex::new(State::new()),
         store: front.dirs.get().map(|d| transcript::Store::new(&d.hub)),
         disk: crate::disk::Ordered::new("session:disk"),
@@ -2731,6 +2751,57 @@ impl Session {
             .iter()
             .copied()
             .find(|&i| st.entries.get(i).is_some_and(|e| e.kind == EntryType::Tool))
+    }
+
+    /// The line for how tool call TOOL was allowed, kept for its step's row: `auto-allowed: <preset> · <scope>`
+    /// (the matrix's own cell) or `allowed by your earlier yes · <scope>`; the scope is the session's kind.
+    async fn note_allowed(&self, tool: Option<&Value>, action: Action, ctx: ActionCtx) {
+        let Some(id) = tool
+            .and_then(|t| t.get("toolCallId"))
+            .and_then(Value::as_str)
+        else {
+            return;
+        };
+        let scope = if self.role == Role::Chat {
+            "this chat"
+        } else {
+            "this task"
+        };
+        let how = match self
+            .gate
+            .allowed_by(&self.writer, self.who(), action, ctx)
+            .await
+        {
+            AllowedBy::Preset(p) => format!("auto-allowed: {p} \u{b7} {scope}"),
+            AllowedBy::Grant => format!("allowed by your earlier yes \u{b7} {scope}"),
+        };
+        lock(&self.allowed).insert(id.to_owned(), how);
+    }
+
+    /// The cached line for how tool entry E was allowed (read at render: no lookup beyond this map).
+    pub(crate) fn allowed_how(&self, e: &Entry) -> Option<String> {
+        let id = e.rest.get("id").and_then(Value::as_str)?;
+        lock(&self.allowed).get(id).cloned()
+    }
+
+    /// Whether the session's folder is one the user trusted (`trusted-folders.eld`, [`super::trust`]): fail closed.  A
+    /// problem with the file is said once per change to every editor.
+    fn cwd_trusted(&self) -> bool {
+        let env = runstav::paths::Env::process();
+        let Some(home) = env.vars.get("HOME") else {
+            return false;
+        };
+        let file = runstav::paths::state_dir(&env).join("trusted-folders.eld");
+        let answer = super::trust::trusts(&file, Path::new(home), &self.cwd);
+        if let (Some(problem), Some(front)) = (answer.problem, self.tool_hub.front()) {
+            tracing::warn!("{problem}");
+            front.broadcast(
+                "notice",
+                json!({"source": "hub", "severity": "warn", "id": "trusted-folders", "life": "event",
+                       "text": format!("no folder you trusted counts for git reads: {problem}")}),
+            );
+        }
+        answer.trusted
     }
 
     /// Whether a live Always grant of this session covers tool entry E (its kind, when both name one, and its title).
@@ -2991,6 +3062,14 @@ pub(crate) async fn relaunch(
         }
         None => None,
     };
+    // the ask it goes on under: its last user message (a worker has none: it takes the ask that dispatched it),
+    // told before the session can write (its first prompt, and what its jobs wake it with, come after this)
+    s.asks.restoring(&sid);
+    s.asks.restore(
+        &sid,
+        kept.as_ref()
+            .and_then(|(entries, _, _)| last_user_message(entries, s.ask_channel())),
+    );
     let (queue, paused, wheel) = match kept {
         Some((entries, (queue, paused), wheel)) => {
             // its steps go on from its last in the step table: an entry's `step` is that table's seq
@@ -3042,6 +3121,24 @@ pub(crate) async fn relaunch(
         None => s.next(),
     }
     Ok(level)
+}
+
+/// The last words the user said to a session, from its transcript ENTRIES: its current ask after a restart (CHANNEL is
+/// where they came from). None when there are none.
+fn last_user_message(entries: &[Entry], channel: &str) -> Option<crate::work::asks::LastMessage> {
+    let e = entries
+        .iter()
+        .rev()
+        .find(|e| e.kind == EntryType::User && e.rest.get("origin").is_none())?;
+    Some(crate::work::asks::LastMessage {
+        text: e.rest.get("text").and_then(Value::as_str)?.to_string(),
+        channel: channel.to_string(),
+        message_id: e
+            .rest
+            .get("key")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    })
 }
 
 /// The session SID if it was closed while it waited on a job: resumed now (its agent started again on the same
@@ -4671,7 +4768,7 @@ impl Session {
                 s.refuse_call(resp, pick_reject(&options), req.get("toolCall"));
                 return;
             }
-            let (action, facts) = classify(req.get("toolCall"));
+            let (action, facts) = classify(req.get("toolCall"), s.cwd_trusted());
             // the push gate: a job's push waits for one full run on each commit it sends (the matrix still decides
             // after)
             if matches!(action, Action::PushCi | Action::PushMain)
@@ -4712,6 +4809,7 @@ impl Session {
                 facts,
                 ..ActionCtx::of_session(&s.scopes, &s.id)
             };
+            let why_ctx = ctx.clone();
             let gate = s
                 .gate
                 .decide(&s.settings, &s.writer, s.who(), action, ctx)
@@ -4732,6 +4830,7 @@ impl Session {
                     if pick_allow(&options).is_some()
                         && !s.grants.revoked_covers(req.get("toolCall")) =>
                 {
+                    s.note_allowed(req.get("toolCall"), action, why_ctx).await;
                     reply(resp, pick_allow(&options))
                 }
                 gate => {
@@ -6400,9 +6499,11 @@ fn pick_allow(options: &[(String, String)]) -> Option<String> {
 /// Whether COMMAND is one plain read: a single command from a short list (`ls`, `cat`, `head`, `tail`, `wc`, `rg`,
 /// `grep`), with no shell syntax that could chain, redirect or substitute (`; | & ` $ ( ) < >`, a backslash or a line
 /// break) and no option that runs something (`--exec…`; rg's `--pre…`, `--search-zip` and `-z`).  Anything else is an
-/// edit, git too: git runs what the repository's own config names (`core.fsmonitor` on `git status`, `diff.external`,
-/// textconv drivers, the pager), and the hub does not know which folders the user trusts.
-fn is_plain_read(command: &str) -> bool {
+/// edit.  Git too, unless GIT_OK (the session's folder is one the user trusted, [`super::trust`]) and it is one of
+/// `status`, `log`, `diff`, `show` or `blame` straight after `git` (no global option such as `-c` or `--exec-path`) and
+/// with no option that writes or runs something (`-c`, `--output…`, `--ext-diff`, `--textconv`): git runs what the
+/// repository's own config names (`core.fsmonitor` on `git status`, `diff.external`, textconv drivers, the pager).
+fn is_plain_read(command: &str, git_ok: bool) -> bool {
     const SHELL: &[char] = &[
         ';', '|', '&', '`', '$', '(', ')', '<', '>', '\\', '\n', '\r',
     ];
@@ -6424,12 +6525,25 @@ fn is_plain_read(command: &str) -> bool {
         "rg" => !args
             .iter()
             .any(|a| a.starts_with("--pre") || a.starts_with("--search-zip") || short(a, 'z')),
+        "git" => {
+            git_ok
+                && args
+                    .first()
+                    .is_some_and(|s| matches!(*s, "status" | "log" | "diff" | "show" | "blame"))
+                && !args.iter().any(|a| {
+                    short(a, 'c')
+                        || a.starts_with("--output")
+                        || a.starts_with("--ext-diff")
+                        || a.starts_with("--textconv")
+                        || a.starts_with("--open-files-in-pager")
+                })
+        }
         _ => false,
     }
 }
 
 /// What a tool call is in the matrix's words, and the facts a card shows (the hub's own reading of it).
-fn classify(tool: Option<&Value>) -> (Action, runstav::methods::matrix::Facts) {
+fn classify(tool: Option<&Value>, git_ok: bool) -> (Action, runstav::methods::matrix::Facts) {
     let kind = tool
         .and_then(|t| t.get("kind"))
         .and_then(Value::as_str)
@@ -6462,7 +6576,7 @@ fn classify(tool: Option<&Value>) -> (Action, runstav::methods::matrix::Facts) {
                 }
             } else if c.contains("git commit") {
                 Action::Commit
-            } else if is_plain_read(c) {
+            } else if is_plain_read(c, git_ok) {
                 Action::CodeRead
             } else {
                 Action::CodeEdit
@@ -6910,6 +7024,41 @@ pub fn fuzz_context(params: &Value) {
 
 #[cfg(test)]
 mod tests {
+    /// A restart's ask is the user's last words: not a steer's origin tag, not an agent's text, none when there are none.
+    #[test]
+    fn the_ask_after_a_restart_is_the_last_user_message() {
+        let entry_of = |kind: EntryType, text: &str| {
+            let mut rest = Map::new();
+            rest.insert("text".into(), json!(text));
+            Entry { kind, rest }
+        };
+        let user = |text: &str, rest: &[(&str, &str)]| {
+            let mut e = entry_of(EntryType::User, text);
+            for (k, v) in rest {
+                e.rest.insert((*k).into(), json!(v));
+            }
+            e
+        };
+        let entries = vec![
+            user("first", &[("key", "message:1")]),
+            entry_of(EntryType::Agent, "an answer"),
+            user("second", &[("key", "message:2")]),
+            user("woken by a job", &[("origin", "job")]),
+            entry_of(EntryType::Agent, "an answer"),
+        ];
+        let got = last_user_message(&entries, "manager").unwrap();
+        assert_eq!(
+            (
+                got.text.as_str(),
+                got.channel.as_str(),
+                got.message_id.as_deref()
+            ),
+            ("second", "manager", Some("message:2"))
+        );
+        assert_eq!(last_user_message(&entries[1..2], "chat"), None);
+        assert_eq!(last_user_message(&[], "chat"), None);
+    }
+
     use super::*;
     use crate::budget::Budgets;
     use runstav::methods::agents::SessionStatus;
@@ -8305,7 +8454,7 @@ mod wait_tests {
             "rg -n foo src",
             "grep -rn foo src",
         ] {
-            assert_eq!(classify(Some(&exec(c))).0, Action::CodeRead, "{c}");
+            assert_eq!(classify(Some(&exec(c)), false).0, Action::CodeRead, "{c}");
         }
         // every way around the list stays an edit: chained, piped, substituted or redirected commands, rg's
         // preprocessor and decompression, anything not on the list; git always (a repository's core.fsmonitor runs on
@@ -8345,7 +8494,42 @@ mod wait_tests {
             "FOO=1 ls",
             "",
         ] {
-            assert_ne!(classify(Some(&exec(c))).0, Action::CodeRead, "{c:?}");
+            assert_ne!(classify(Some(&exec(c)), false).0, Action::CodeRead, "{c:?}");
+        }
+    }
+
+    /// In a folder the user trusted a chat's git status, log, diff, show and blame are reads; every other git
+    /// command, a global option and an option that writes or runs something stay edits, and so does every git
+    /// command elsewhere.
+    #[test]
+    fn git_reads_count_only_in_a_trusted_folder() {
+        for c in [
+            "git status",
+            "git log --oneline -5",
+            "git diff HEAD~1",
+            "git show abc123",
+            "git blame a.rs",
+        ] {
+            assert_eq!(classify(Some(&exec(c)), true).0, Action::CodeRead, "{c}");
+            assert_ne!(classify(Some(&exec(c)), false).0, Action::CodeRead, "{c}");
+        }
+        for c in [
+            "git -c core.pager=sh log",
+            "git --exec-path=/tmp log",
+            "git -C /x status",
+            "git log -c",
+            "git log -ic",
+            "git diff --output=x",
+            "git diff --ext-diff",
+            "git log --textconv",
+            "git show --open-files-in-pager",
+            "git commit -m x",
+            "git checkout .",
+            "git status; rm x",
+            "git log | sh",
+            "git",
+        ] {
+            assert_ne!(classify(Some(&exec(c)), true).0, Action::CodeRead, "{c:?}");
         }
     }
 }

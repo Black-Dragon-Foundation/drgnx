@@ -29,6 +29,7 @@ pub fn search(
         .iter()
         .enumerate()
         .filter(|(_, e)| keeps(e, filters, ids.as_ref()))
+        .filter(|(_, e)| packs_wanted(e, filters, &tokens))
         .filter(|(_, e)| recommended.is_none_or(|set| set.contains(&e.row.id)))
         .filter_map(|(i, e)| rank_of(e, &tokens).map(|r| (i, r)))
         .collect();
@@ -56,6 +57,17 @@ fn newest(e: &Entry) -> Option<&str> {
     e.row.latest.as_deref().or(e.row.version.as_deref())
 }
 
+/// A language pack's row is in a search only when the search asks for packs (their filter or kind), for what is installed,
+/// or names something: the 26 packs are not the catalog's rows in a plain listing of packages.
+fn packs_wanted(e: &Entry, f: &w::Filters, tokens: &[&str]) -> bool {
+    e.row.kind != w::Kind::Pack
+        || f.packs
+        || f.kind == Some(w::Kind::Pack)
+        || f.installed
+        || f.ids.is_some()
+        || !tokens.is_empty()
+}
+
 /// Whether FILTERS keep E.
 fn keeps(e: &Entry, f: &w::Filters, ids: Option<&HashSet<&str>>) -> bool {
     let row = &e.row;
@@ -65,6 +77,7 @@ fn keeps(e: &Entry, f: &w::Filters, ids: Option<&HashSet<&str>>) -> bool {
         && (!f.disabled || row.state == w::State::Off)
         && (!f.builtin || row.kind == w::Kind::Emacs)
         && (!f.plugins || row.kind == w::Kind::Plugin)
+        && (!f.packs || row.kind == w::Kind::Pack)
         && (!f.unsigned || row.signed == w::Signed::UnsignedArchive)
         && f.kind.is_none_or(|k| row.kind == k)
         && f.archive.as_ref().is_none_or(|a| row.source == *a)
@@ -130,6 +143,7 @@ mod tests {
                 latest: None,
                 downloads: (downloads > 0).then_some(downloads),
                 why: Vec::new(),
+                layers: Vec::new(),
             },
             keywords.iter().map(|k| k.to_string()).collect(),
             Detail::default(),
@@ -165,6 +179,34 @@ mod tests {
     }
 
     // pattern D
+    #[test]
+    fn language_packs_are_in_a_search_only_when_it_asks_for_them() {
+        let mut pack = entry("kotlin", "Kotlin language support", &[], false, 0);
+        pack.row.kind = w::Kind::Pack;
+        pack.row.id = "pack:kotlin".into();
+        let entries = vec![entry("magit", "A Git interface", &[], false, 0), pack];
+        let ids = |q: &str, f: &w::Filters| {
+            search(&entries, q, f, None, w::Sort::Name)
+                .into_iter()
+                .map(|i| entries[i].row.id.clone())
+                .collect::<Vec<_>>()
+        };
+        let plain = w::Filters::default();
+        // a plain listing is the packages; a query that names the pack, its filter, its kind and the installed ones find it
+        assert_eq!(ids("", &plain), ["pkg:magit"]);
+        assert_eq!(ids("kotlin", &plain), ["pack:kotlin"]);
+        let packs = w::Filters {
+            packs: true,
+            ..w::Filters::default()
+        };
+        assert_eq!(ids("", &packs), ["pack:kotlin"]);
+        let kind = w::Filters {
+            kind: Some(w::Kind::Pack),
+            ..w::Filters::default()
+        };
+        assert_eq!(ids("", &kind), ["pack:kotlin"]);
+    }
+
     #[test]
     fn search_ranks_exact_then_prefix_then_word_then_keyword_then_summary() {
         assert_eq!(

@@ -126,20 +126,49 @@ it (a notes repository with the code repositories inside it)."
 ;;;; Faces: they inherit the look's semantic faces (core/drgnx-faces.el)
 
 (defface drgnx-work-dim '((t :inherit drgnx-text-muted)) "Items off the selection's chain." :group 'drgnx-work-space)
-(defface drgnx-work-card '((t :inherit default)) "A card's text." :group 'drgnx-work-space)
+(defface drgnx-work-card '((t :inherit drgnx-ui-caption)) "A map card's text: the UI font at the caption size (12 px), under its box face and its runs' own faces."
+  :group 'drgnx-work-space)
+(defface drgnx-work-pane '((t :inherit drgnx-ui-text)) "The text of the Detail island and the trail: the UI font."
+  :group 'drgnx-work-space)
+(defface drgnx-work-title '((t :inherit drgnx-ui-caption :weight semibold)) "An agent card's name line." :group 'drgnx-work-space)
+(defface drgnx-work-meta '((t :inherit drgnx-code-small)) "An agent card's line of minutes, spend and progress: the code font (it names no box: a card's box runs on)."
+  :group 'drgnx-work-space)
 (defface drgnx-work-selected '((t :inherit drgnx-selected)) "The selected item." :group 'drgnx-work-space)
 (defface drgnx-work-chain '((t :inherit drgnx-accent)) "Items on the selection's chain." :group 'drgnx-work-space)
 (defface drgnx-work-overlap '((t :inherit warning)) "An overlap's flag and its edge." :group 'drgnx-work-space)
 (defface drgnx-work-needs-you '((t :inherit drgnx-status-attention)) "A thing that needs you." :group 'drgnx-work-space)
 (defface drgnx-work-edge '((t :inherit drgnx-text-subtle)) "An edge." :group 'drgnx-work-space)
 (defface drgnx-work-edge-strong '((t :inherit drgnx-text-muted :weight bold)) "An edge that edits." :group 'drgnx-work-space)
-(defface drgnx-work-label '((t :inherit drgnx-text-muted)) "A layer's label." :group 'drgnx-work-space)
+(defface drgnx-work-label '((t :inherit (drgnx-text-muted drgnx-ui-caption))) "A layer's label." :group 'drgnx-work-space)
 (defface drgnx-work-lens-title '((t :inherit (drgnx-ui-heading tab-line-tab-current)))
   "The Work space's tab on its lens bar." :group 'drgnx-work-space)
-(defface drgnx-work-lens-current '((t :inherit (bold drgnx-selected-quiet))) "The lens shown, on the lens bar."
+(defface drgnx-work-lens-rail '((t :inherit drgnx-work-label)) "The lens switch's rail: the gap's colour behind its labels."
+  :group 'drgnx-work-space)
+(defface drgnx-work-lens-seg '((t :inherit drgnx-work-lens-rail)) "A lens label that is not shown, on the rail."
+  :group 'drgnx-work-space)
+(defface drgnx-work-lens-current '((t :inherit (bold drgnx-pill-on))) "The lens shown, on the lens bar: a raised pill."
   :group 'drgnx-work-space)
 (defface drgnx-work-lens-key '((t :inherit drgnx-keycap)) "A key's badge on the lens bar." :group 'drgnx-work-space)
 (defface drgnx-work-chip '((t :inherit drgnx-selected-quiet)) "A chip." :group 'drgnx-work-space)
+(defface drgnx-work-step-number '((t :inherit (drgnx-chip-solid drgnx-badge)))
+  "A trail step's number: a filled circle in the accent's blue (work-space-dark.html `.mk')." :group 'drgnx-work-space)
+(defface drgnx-work-thought '((t :inherit (drgnx-text-muted italic))) "A thought step's text on the trail." :group 'drgnx-work-space)
+(defface drgnx-work-plus '((t :inherit success)) "The added lines of a change." :group 'drgnx-work-space)
+(defface drgnx-work-minus '((t :inherit error)) "The removed lines of a change." :group 'drgnx-work-space)
+(defface drgnx-work-needs-you-key '((t :inherit (drgnx-work-needs-you drgnx-keycap)))
+  "A needs-you chip's jump key (g1), boxed in the chip's colour." :group 'drgnx-work-space)
+(defface drgnx-work-who-1 '((t :inherit drgnx-badge))
+  "The filled circle of agent 1's initial (the theme gives its colour)." :group 'drgnx-work-space)
+(defface drgnx-work-who-2 '((t :inherit drgnx-badge))
+  "The filled circle of agent 2's initial (the theme gives its colour)." :group 'drgnx-work-space)
+(defface drgnx-work-who-3 '((t :inherit drgnx-badge))
+  "The filled circle of agent 3's initial (the theme gives its colour)." :group 'drgnx-work-space)
+(defface drgnx-work-who-4 '((t :inherit drgnx-badge))
+  "The filled circle of agent 4's initial (the theme gives its colour)." :group 'drgnx-work-space)
+(defface drgnx-work-who-5 '((t :inherit drgnx-badge))
+  "The filled circle of agent 5's initial (the theme gives its colour)." :group 'drgnx-work-space)
+(defface drgnx-work-who-6 '((t :inherit drgnx-badge))
+  "The filled circle of agent 6's initial (the theme gives its colour)." :group 'drgnx-work-space)
 (defface drgnx-work-new '((t :inherit success)) "The mark of a new conclusion." :group 'drgnx-work-space)
 (defface drgnx-work-agent-1 '((t :inherit drgnx-agent-1)) "The first agent colour." :group 'drgnx-work-space)
 (defface drgnx-work-agent-2 '((t :inherit drgnx-agent-2)) "The second agent colour." :group 'drgnx-work-space)
@@ -310,6 +339,40 @@ selects; nothing is approved, pushed, merged or answered."
   "The buffer pane kind `work-detail' shows: the side panel of the newest map."
   (if-let* ((map (car (drgnx-work-map-buffers)))) (drgnx-work-detail-buffer map) (get-buffer-create "*drgnx work detail*")))
 
+(defvar drgnx-work-space--panel-trail nil
+  "The trail buffer the Work layout's bottom tile shows: the one of the agent last selected on a map.")
+
+(defun drgnx-work-space--trail-buffer ()
+  "The buffer pane kind `work-trail' shows: the trail of the map's selected agent, else a line asking for one."
+  (if (buffer-live-p drgnx-work-space--panel-trail)
+      drgnx-work-space--panel-trail
+    (with-current-buffer (get-buffer-create "*drgnx work trail*")
+      (when (zerop (buffer-size)) (insert "Select an agent to follow its trail.\n"))
+      (current-buffer))))
+
+(declare-function drgnx-work-trail-open "drgnx-work-trail")
+(declare-function drgnx-wb-area-redraw "drgnx-area")
+(declare-function drgnx-work-map--sja "drgnx-work-map")
+(declare-function drgnx-work-trail--sid "drgnx-work-trail")
+(declare-function drgnx-work-trail-panel-title "drgnx-work-trail")
+(declare-function drgnx-layouts-current "drgnx-layouts")
+
+(defun drgnx-work-space--follow-trail (buffer id)
+  "`drgnx-view-selected-functions': with an agent ID selected on a map BUFFER, the trail tile of layout Work follows
+it (its trail is made when there is none, the tile shows it when the layout is on)."
+  (when (and id (string-prefix-p "agent:" id) (buffer-live-p buffer)
+             (eq (buffer-local-value 'major-mode buffer) 'drgnx-work-map-mode) (drgnx-work-map-rows-p))
+    (let* ((sid (drgnx-work-trail--sid id))
+           (label (or (with-current-buffer buffer
+                        (nidhogg-view-get (drgnx-work-map--sja) 'field "label" id))
+                      sid))
+           (trail (drgnx-work-trail-open buffer sid)))
+      (with-current-buffer trail (drgnx-work-trail-panel-title label))
+      (setq drgnx-work-space--panel-trail trail)
+      (when (and (fboundp 'drgnx-layouts-current) (eq (drgnx-layouts-current) 'work))
+        (drgnx-pane-show 'work-trail :buffer trail)
+        (drgnx-wb-area-redraw 'panel)))))
+
 (defun drgnx-work-space--rules-buffer ()
   "The buffer pane kind `work-rules' shows: the Rules tile of the newest Flow."
   (or (seq-some (lambda (flow) (drgnx-work-flow-rules-buffer flow)) (drgnx-work-flow-buffers))
@@ -457,10 +520,16 @@ windows; the commands."
     (drgnx-work-code--frame-replaced old new))
   (drgnx-module-hook 'drgnx-work-client-status-functions status (view status) (drgnx-work-space--show-status view status))
   (drgnx-module-hook 'find-file-hook live-file () (drgnx-work-live-file--maybe))
+  (drgnx-module-hook 'drgnx-view-selected-functions follow-trail (buffer id) (drgnx-work-space--follow-trail buffer id))
   (drgnx-command-define 'work-take-wheel :category "Work" :title "Take the Wheel from the Agent"
                         :command #'drgnx-work-take-wheel :map 'drgnx-work-live-file-mode-map
                         :doc "Pause the agent that is editing here and make this file editable; saving tells the agent")
   (drgnx-state-subscribe 'windows-changed #'drgnx-work-space--windows-changed)
+  (when (fboundp 'drgnx-statusbar-define-segment)
+    (drgnx-statusbar-define-segment 'work-agents :fn #'drgnx-work-map--seg-agents :help "The agents on the map")
+    (drgnx-statusbar-define-segment 'work-needs-you :fn #'drgnx-work-map--seg-needs-you :click #'drgnx-work-map-needs-you-here-next
+                                    :help "What needs you; click for the next")
+    (drgnx-statusbar-define-segment 'work-lens :fn #'drgnx-work-map--seg-lens :help "The view and its counts"))
   (drgnx-history-mode 1)                ; the editor's side of the edit history (stays off without Nidhogg's change hook)
   (when (fboundp 'drgnx-wb-place) (drgnx-wb-place 'drgnx-work-map-mode 'editor))
   (when (fboundp 'drgnx-wb-place) (drgnx-wb-place 'drgnx-work-files-mode 'popup))
@@ -486,7 +555,8 @@ windows; the commands."
                         :command #'drgnx-work-who-is-here
                         :doc "Name the agents in the file you are visiting, with their lines, and select it on the map")
   (when (fboundp 'drgnx-pane-define-kind)
-    (drgnx-pane-define-kind 'work-detail :title " WORK DETAIL" :home 'right :buffer #'drgnx-work-space--detail-buffer)
+    (drgnx-pane-define-kind 'work-detail :title " Detail" :home 'right :buffer #'drgnx-work-space--detail-buffer)
+    (drgnx-pane-define-kind 'work-trail :title " Trail" :home 'bottom :buffer #'drgnx-work-space--trail-buffer)
     (drgnx-pane-define-kind 'work-rules :title " RULES" :home 'bottom :buffer #'drgnx-work-space--rules-buffer))
   ;; layout Work's editor shape: the lens alone (tools/layouts follows a shown lens: `drgnx-work-space--follow-layout')
   (eval-after-load 'drgnx-layouts

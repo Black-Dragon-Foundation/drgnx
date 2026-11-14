@@ -156,17 +156,19 @@ impl Metrics {
                 band: 6,
                 inner_band: 2,
                 block_gap: 4,
-                chips: [44, 40, 40, 36, 32, 28],
+                chips: [50, 40, 46, 40, 44, 34],
             },
             Density::Comfortable => Metrics {
-                rich: (58, 25),
+                rich: (54, 25),
                 compact: (42, 10),
                 chip_h: 7,
                 gap: 3,
-                band: 8,
+                // the design's row pitch is 60 px: a chip row and a band come to 15 units here, and the editor's lines
+                // add about 9 px to the pair (their descent), so the band is 6 units
+                band: 6,
                 inner_band: 3,
                 block_gap: 6,
-                chips: [48, 44, 44, 40, 36, 32],
+                chips: [56, 44, 52, 42, 50, 36],
             },
             Density::Roomy => Metrics {
                 rich: (62, 30),
@@ -176,7 +178,7 @@ impl Metrics {
                 band: 10,
                 inner_band: 4,
                 block_gap: 8,
-                chips: [52, 48, 48, 44, 40, 36],
+                chips: [60, 48, 58, 46, 56, 42],
             },
         }
     }

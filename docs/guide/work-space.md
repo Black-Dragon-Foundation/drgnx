@@ -63,7 +63,7 @@ Everything here is computed in your Emacs from what the hub already sent, so a k
 | `s` (in the Flow) | a held task: send it back to its agent with what its gates hold it for |
 | `w` (in the Flow) | a held task: waive its gates once, for its tip, with a reason (yours only) |
 
-The lens bar ends in a **⋯** (shown while the bar is hovered). It opens a menu of the four lenses, Map, Board, Timeline and Flow, the same commands as the keys above. The card's grip and maximise buttons come with the grid's tiles.
+The lens bar ends in a grip (the tile layout's drag handle, not wired yet), a maximise button (hides the Detail island and the trail; again shows them) and a **⋯** (shown while the bar is hovered). The ⋯ opens a menu of the four lenses, Map, Board, Timeline and Flow, the same commands as the keys above, and **Keys**, this view's keys sheet.
 
 The **selected** card is raised; its **chain** (everything it came from, up, and everything it touches, down) keeps
 its normal look; everything else is dimmed. From any item, `↑` reaches the ask it came from in a handful of keys. If

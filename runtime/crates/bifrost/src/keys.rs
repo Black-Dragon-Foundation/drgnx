@@ -24,6 +24,12 @@ impl Keys {
         self.0.insert(id.into(), key);
     }
 
+    /// Forget the key held for provider `id` (zeroed as it drops): whether one was held.  A request after this finds no
+    /// key; one already sent upstream finished with it.
+    pub fn remove(&mut self, id: &str) -> bool {
+        self.0.remove(id).is_some()
+    }
+
     /// [`Keys::set`] for each pair.
     pub fn set_many(&mut self, keys: impl IntoIterator<Item = (String, SecretString)>) {
         for (id, key) in keys {
@@ -78,6 +84,18 @@ mod tests {
     use secrecy::ExposeSecret;
 
     use super::*;
+
+    #[test]
+    fn remove_forgets_one_key_and_says_whether_it_held_it() {
+        let mut keys = Keys::new();
+        keys.set("openrouter", SecretString::from("sk-or"));
+        keys.set("anthropic", SecretString::from("sk-ant"));
+        assert!(keys.remove("openrouter"));
+        assert!(keys.get("openrouter").is_none());
+        assert_eq!(keys.get("anthropic").unwrap().expose_secret(), "sk-ant");
+        assert!(!keys.remove("openrouter"), "once");
+        assert!(!keys.remove("never-held"));
+    }
 
     #[test]
     fn set_many_then_missing_names_the_rest() {

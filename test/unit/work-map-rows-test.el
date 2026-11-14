@@ -362,3 +362,149 @@ asks the hub nothing and its keys say the same."
             (dolist (b (cons buf others)) (when (buffer-live-p b) (kill-buffer b)))))))))
 
 ;;; work-map-rows-test.el ends here
+
+(ert-deftest drgnx-work-map-rows/card-text-is-the-ui-font-and-its-meta-line-the-code-font ()
+  ;; the hub names `drgnx-work-card' under every card line, `-title' on an agent's name and `-meta' on its minutes
+  ;; (vegvisir tests/render.rs); the editor defines them: the UI font under the box, the code font on the meta line
+  (let ((ui (face-attribute 'drgnx-ui-text :family nil t)))
+    (should (equal (face-attribute 'drgnx-work-card :family nil t) ui))
+    (should (equal (face-attribute 'drgnx-work-title :weight nil t) (face-attribute 'drgnx-ui-heading :weight nil t)))
+    (should-not (equal (face-attribute 'drgnx-work-meta :family nil t) ui))
+    (dolist (name '("drgnx-work-card" "drgnx-work-title" "drgnx-work-meta"))
+      (should (eq (drgnx-view-patch--face name) (intern name))))))
+
+(ert-deftest drgnx-work-map-rows/a-card-is-classed-through-its-box ()
+  ;; a chip keeps its own face under a class (its box would hide under the overlay), but a card's rows are boxed
+  ;; and must show the selection and the dimming: the map names its card faces as faces a class goes through
+  (let ((card '(drgnx-work-title drgnx-card-top drgnx-work-card)))
+    (should (drgnx-view-nav--boxed-p card))
+    (let ((drgnx-view-nav-through-faces drgnx-work-map--through-faces))
+      (should-not (drgnx-view-nav--boxed-p card))
+      (should-not (drgnx-view-nav--boxed-p 'drgnx-card-single))
+      (should (drgnx-view-nav--boxed-p 'drgnx-chip)))))   ; a strip chip is still a chip
+
+(ert-deftest drgnx-work-map-rows/the-selected-card-is-the-hubs-and-the-class-only-dims ()
+  ;; the hub draws the selected card in its ring faces and the editor goes through both sets of card faces; the
+  ;; class `selected' has no face of its own on the map (a tint over the ring would hide it), `dim' has the dim face
+  (dolist (face '(drgnx-card-top drgnx-card-single drgnx-card-sel-top drgnx-card-sel-mid drgnx-card-sel-bottom
+                                 drgnx-card-sel-single))
+    (should (memq face drgnx-work-map--through-faces)))
+  (should (equal '(("selected") ("chain") ("dim")) drgnx-work-map--nav-faces)))
+
+(ert-deftest drgnx-work-map-rows/the-lens-bar-is-pills-and-keycaps ()
+  ;; work-space-dark.html `.lens': the lens shown is a raised pill (the face inherits the pill that is on), the others
+  ;; quiet, and the map's own keys (focus f, overlaps o) chips with a keycap each
+  (let* ((s (drgnx-work-lens-string 'map "drgnx" drgnx-work-map--lens-keys))
+         (face-at (lambda (word) (get-text-property (string-match word s) 'face s))))
+    (should (eq 'drgnx-work-lens-current (funcall face-at "Map")))
+    (should (memq 'drgnx-pill-on (ensure-list (face-attribute 'drgnx-work-lens-current :inherit))))
+    (should-not (eq 'drgnx-work-lens-current (funcall face-at "Board")))
+    (should (eq 'drgnx-work-chip (funcall face-at "focus")))
+    (should (eq 'drgnx-work-lens-key (get-text-property (1+ (string-match " f " s)) 'face s)))
+    (should (string-match-p "overlaps" s))))
+
+(ert-deftest drgnx-work-map-rows/the-trail-tile-has-its-tabs ()
+  ;; work-space-dark.html: the trail under the map is a tile with the tabs "Trail · AGENT" (shown) and
+  ;; "Agent · AGENT", and "following" at its right
+  (let ((s (drgnx-work-trail-panel-string "Opus · hub rows")))
+    (should (string-match-p "Trail · Opus · hub rows" s))
+    (should (string-match-p "Agent · Opus · hub rows" s))
+    (should (string-match-p "following" s))
+    (should (memq 'drgnx-pill-on (ensure-list (get-text-property (string-match "Trail" s) 'face s))))
+    (should-not (memq 'drgnx-pill-on (ensure-list (get-text-property (string-match "Agent ·" s) 'face s))))))
+
+(ert-deftest drgnx-work-map-rows/the-detail-island-has-the-mockups-title ()
+  ;; work-space-dark.html `.det': the Detail island's header is "Detail" and nothing else (no tabs of the right dock),
+  ;; drawn by the tile: the buffer says it has its own title, and the trail tile under the map the same
+  (with-temp-buffer
+    (drgnx-work-detail-mode)
+    (should (stringp drgnx-area-own-title))
+    (should (string-match-p "Detail" drgnx-area-own-title))
+    (should-not (string-match-p "WORK DETAIL" drgnx-area-own-title)))
+  (with-temp-buffer
+    (drgnx-work-trail-panel-title "Opus · hub rows")
+    (should (stringp drgnx-area-own-title))
+    (should (string-match-p "Trail · Opus · hub rows" drgnx-area-own-title))))
+
+(ert-deftest drgnx-work-map-rows/the-text-role-is-the-ui-text-face ()
+  ;; the cards' text is drawn in the UI font, so the hub measures it in the role `text': the UI text face, not
+  ;; `ui', the buffer's default (the code font)
+  (require 'drgnx-view-env)
+  (should (eq (cdr (assq 'text drgnx-view-env-roles)) 'drgnx-ui-text))
+  (should (eq (cdr (assq 'ui drgnx-view-env-roles)) 'default))
+  ;; the map's cards and chips are 12 px, the caption role (work-space-dark.html `.acardm')
+  (should (eq (cdr (assq 'caption drgnx-view-env-roles)) 'drgnx-ui-caption)))
+
+(defun drgnx-work-map-rows-test--echoes (s)
+  "The distinct `help-echo' texts in string S."
+  (let (acc)
+    (dotimes (i (length s)) (when-let* ((h (get-text-property i 'help-echo s))) (cl-pushnew h acc :test #'equal)))
+    (nreverse acc)))
+
+(ert-deftest drgnx-work-map-rows/the-lens-bar-ends-in-the-tiles-controls ()
+  ;; work-space-dark.html: the grip, the maximise and the ⋯ at the lens bar's right
+  (let ((echoes (drgnx-work-map-rows-test--echoes (drgnx-work-lens-string 'map "drgnx" drgnx-work-map--lens-keys))))
+    (should (member "Move this tile" echoes))
+    (should (member "Maximise or restore this tile" echoes))
+    (should (member "Work menu: the lenses, the keys" echoes))))
+
+(ert-deftest drgnx-work-map-rows/maximise-hides-the-islands-and-restore-shows-them ()
+  ;; the maximise control hides the Detail island and the trail under the map; asked again it shows them
+  (let (calls)
+    (cl-letf (((symbol-function 'drgnx-wb-area-hide) (lambda (area &rest _) (push (list 'hide area) calls)))
+              ((symbol-function 'drgnx-wb-area-show) (lambda (area tab &rest _) (push (list 'show area tab) calls)))
+              (drgnx-work-lens--maximized nil))
+      (drgnx-work-lens-maximize)
+      (should (member '(hide right) calls))
+      (should (member '(hide panel) calls))
+      (setq calls nil)
+      (drgnx-work-lens-maximize)
+      (should (member '(show right work-detail) calls))
+      (should (member '(show panel work-trail) calls)))))
+
+(ert-deftest drgnx-work-map-rows/the-controls-sit-at-the-lens-bars-right-edge-in-pixels ()
+  ;; `:align-to' counts columns unless it is parenthesised: 70 columns put the controls mid-window (seen in the scene)
+  (let* ((s (drgnx-work-lens-string 'map "drgnx" drgnx-work-map--lens-keys))
+         (spacer (cl-some (lambda (i) (let ((d (get-text-property i 'display s)))
+                                        (and (eq (car-safe d) 'space) (plist-get (cdr d) :align-to) d)))
+                          (number-sequence 0 (1- (length s))))))
+    (should spacer)
+    ;; (- right (PX)): a parenthesised size, at least the room of the three controls
+    (let ((px (nth 2 (plist-get (cdr spacer) :align-to))))
+      (should (and (consp px) (null (cdr px)) (integerp (car px)) (> (car px) (drgnx-px 8)))))))
+
+(ert-deftest drgnx-work-map-rows/a-trail-step-number-is-a-filled-accent-circle ()
+  "The trail's step number (`drgnx-work-step-number') resolves, under the dark theme, to the accent's fill and its text colour."
+  (load-theme 'drgnx-dark t)
+  (unwind-protect
+      (progn
+        (should (facep 'drgnx-work-step-number))
+        (should (equal (face-attribute 'drgnx-work-step-number :background nil t)
+                       (face-attribute 'drgnx-chip-solid :background nil t)))
+        (should (stringp (face-attribute 'drgnx-work-step-number :background nil t)))
+        (should (equal (face-attribute 'drgnx-work-step-number :foreground nil t)
+                       (face-attribute 'drgnx-chip-solid :foreground nil t))))
+    (disable-theme 'drgnx-dark)))
+
+(ert-deftest drgnx-work-map-rows/the-status-line-names-the-agents-what-needs-you-and-the-view ()
+  ;; work-space-dark.html `.status': `● Opus ● Sonnet', `● 3 need you' on the left, `Work · Map · 2 agents · 1 overlap' at
+  ;; the right, all from the map's model
+  (cl-letf (((symbol-function 'drgnx-work-map--sja) (lambda () 'h))
+            ((symbol-function 'nidhogg-view-get)
+             (lambda (_h what name &optional id)
+               (pcase (list what name)
+                 ('(list "team") ["agent:a1" "agent:a2"])
+                 ('(list "needs-you") ["x" "y" "z"])
+                 ('(field "label") (if (equal id "agent:a1") "Opus · hub rows" "Sonnet · fx-sess"))
+                 ('(field "overlaps") (if (equal id "agent:a1") "agent:a2" "agent:a1"))))))
+    (should (equal (substring-no-properties (drgnx-work-map--seg-agents)) "● Opus ● Sonnet"))
+    (should (eq (get-text-property 0 'face (drgnx-work-map--seg-agents)) 'drgnx-work-agent-1))
+    (should (equal (substring-no-properties (drgnx-work-map--seg-needs-you)) "● 3 need you"))
+    (should (equal (drgnx-work-map--seg-lens) "Work · Map · 2 agents · 1 overlap")))
+  ;; the map's buffers get the bar of the Work view: segments on both sides
+  (with-temp-buffer
+    (drgnx-work-map-mode)
+    (should (memq 'work-agents drgnx-statusbar-other))
+    (should (equal drgnx-statusbar-other-right '(work-lens)))
+    ;; the rows' heights are the layout's: the look's line spacing is not added between them
+    (should (eql line-spacing 0))))

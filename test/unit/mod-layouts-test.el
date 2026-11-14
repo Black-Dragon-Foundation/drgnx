@@ -257,7 +257,7 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
   ;; tab, the sidebar and the right dock back as they were, as leaving Zen does
   (drgnx-layouts-test--with
     (drgnx-wb-define-tab 'right 'work-detail :title "Detail" :placeholder (lambda () (get-buffer-create "*drgnx-layouts-a*")))
-    (drgnx-wb-define-tab 'panel 'work-rules :title "Rules" :placeholder (lambda () (get-buffer-create "*drgnx-layouts-b*")))
+    (drgnx-wb-define-tab 'panel 'work-trail :title "Trail" :placeholder (lambda () (get-buffer-create "*drgnx-layouts-b*")))
     (drgnx-wb-show-sidebar)
     (drgnx-wb-area-show 'panel 'output (drgnx-layouts-test--output))
     (should-not (drgnx-layouts-current))
@@ -265,7 +265,7 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
     (should (eq (drgnx-layouts-current) 'work))
     (should-not (drgnx-wb-sidebar-showing-p))
     (should (eq (drgnx-wb-area-tab 'right) 'work-detail))
-    (should (eq (drgnx-wb-area-tab 'panel) 'work-rules))
+    (should (eq (drgnx-wb-area-tab 'panel) 'work-trail))
     (drgnx-layouts-back)
     (should-not (drgnx-layouts-current))
     (should (drgnx-wb-sidebar-showing-p))
@@ -277,7 +277,7 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
   ;; the frame goes back to where it came from; a layout picked while a lens is shown stays
   (drgnx-layouts-test--with
     (drgnx-wb-define-tab 'right 'work-detail :title "Detail" :placeholder (lambda () (get-buffer-create "*drgnx-layouts-a*")))
-    (drgnx-wb-define-tab 'panel 'work-rules :title "Rules" :placeholder (lambda () (get-buffer-create "*drgnx-layouts-b*")))
+    (drgnx-wb-define-tab 'panel 'work-trail :title "Trail" :placeholder (lambda () (get-buffer-create "*drgnx-layouts-b*")))
     (drgnx-wb-show-sidebar)
     (let ((lens (get-buffer-create "*drgnx-layouts-proc*")) (frame (selected-frame)))
       (with-current-buffer lens (drgnx-work-flow-mode))
@@ -502,3 +502,25 @@ problems.  The shape and filler registries are restored afterwards."
     (drgnx-layouts-test--with (ignore))
     (read-event nil nil 0.01)                           ; a terminal frame takes its new size at the next wait
     (should (equal (cons (frame-width) (frame-height)) size))))
+
+(ert-deftest drgnx-layouts/work-shows-the-trail-under-the-map ()
+  ;; work-space-dark.html: the Work layout is the map full width, the Detail island at its right and the trail
+  ;; under it (the Flow shows its Rules tile there on demand)
+  (let ((def (alist-get 'work drgnx-layouts)))
+    (should (eq (plist-get def :panel) 'work-trail))
+    (should (eq (plist-get def :right) 'work-detail))
+    (should-not (plist-get def :left))
+    ;; the Detail island is the mockup's 340 px, so the map has the width for four agents in a row
+    (should (equal '(logical 340) (plist-get (plist-get def :px) :right)))
+    (should (eql (drgnx-px 340) (plist-get (plist-get (drgnx-layouts--target def nil) :right) :px)))
+    ;; the trail tile is the mockup's 250 px tall, so the map keeps the rest and its rows fill it
+    (should (equal '(logical 250) (plist-get (plist-get def :px) :panel)))
+    (should (eql (drgnx-px 250) (plist-get (plist-get (drgnx-layouts--target def nil) :panel) :px)))))
+
+(ert-deftest drgnx-layouts/a-size-in-logical-pixels-is-scaled-to-the-frame ()
+  "A built-in layout may give an area's size as `(logical N)': it is N logical pixels, scaled to the frame
+\(`drgnx-px'); a plain number stays the device pixels it is."
+  (let* ((def '(:left nil :right some-tab :panel nil :px (:right (logical 100) :left 120)))
+         (target (drgnx-layouts--target def nil)))
+    (should (eql (drgnx-px 100) (plist-get (plist-get target :right) :px)))
+    (should (eql 120 (plist-get (plist-get target :left) :px)))))

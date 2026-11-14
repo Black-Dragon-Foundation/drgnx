@@ -168,7 +168,7 @@ fn codex_config_is_in_the_environment_not_argv() {
 }
 
 // [D] pure: the requirements layer the agent cannot edit pins the policy of the lock's mode (a turn in any other
-// codex-acp mode breaks one of them, and Codex refuses it), and Codex stays unenforced until proven.
+// codex-acp mode breaks one of them, and Codex refuses it), and its lock is enforced (proven on the sandboxed rows).
 #[test]
 fn codex_requirements_pin_the_policy() {
     let d = tempfile::tempdir().unwrap();
@@ -185,7 +185,7 @@ fn codex_requirements_pin_the_policy() {
         assert!(req.lines().any(|l| l == line), "{line} in {req}");
     }
     assert!(!req.contains("untrusted"), "{req}");
-    assert!(matches!(plan.enforced, Enforced::No(_)));
+    assert!(matches!(plan.enforced, Enforced::Yes));
 }
 
 // [D] pure: Codex's lock holds only in the mode the adapter says the session is in, and that is the mode the lock
@@ -630,11 +630,11 @@ fn kimi_and_dsh_gateway_profiles_get_the_session_token() {
 }
 
 #[test]
-fn codex_is_not_enforced_until_proven() {
+fn codex_is_enforced_once_proven() {
     let p = profile(&["codex-acp"], None, &[], Some(Provider::Codex));
     assert!(matches!(
         plan(&p, Role::Worker, &Effective::default()).enforced,
-        Enforced::No(_)
+        Enforced::Yes
     ));
 }
 

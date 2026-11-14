@@ -429,3 +429,24 @@ panel always has its row."
            (kill-buffer b)))
      (drgnx-wb-undefine-tab 'right 'area-test-a)
      (drgnx-wb-undefine-tab 'right 'area-test-b))))
+
+(ert-deftest drgnx-area/a-title-string-is-the-buffers-own-title-row-with-the-close ()
+  "A buffer whose `drgnx-area-own-title' is a string (the Work space's Detail island and trail tile) gets that string as
+the area's row, with the area's close, in place of the tabs."
+  (drgnx-area-test--with
+   (drgnx-wb-define-tab 'right 'area-test-a :title "A")
+   (drgnx-wb-define-tab 'right 'area-test-b :title "B")
+   (unwind-protect
+       (let ((a (get-buffer-create "*notes*")) (b (get-buffer-create " area-test b")))
+         (unwind-protect
+             (progn
+               (with-current-buffer b (setq-local drgnx-area-own-title " The Title "))
+               (drgnx-wb-area-show 'right 'area-test-a a)
+               (let ((row (window-parameter (drgnx-wb-area-show 'right 'area-test-b b) 'header-line-format)))
+                 (should (stringp row))
+                 (should (string-search "The Title" row))
+                 (should-not (string-search "A " (substring row 0 (string-search "The Title" row)))))
+               (should (string-search "A" (window-parameter (drgnx-wb-area-show 'right 'area-test-a) 'header-line-format))))
+           (kill-buffer b)))
+     (drgnx-wb-undefine-tab 'right 'area-test-a)
+     (drgnx-wb-undefine-tab 'right 'area-test-b))))

@@ -1,0 +1,15 @@
+chunk 0 1662 1 68 Some("CACHE_MAX_ENTRIES") true ae1dbcca824c6789c744af0bc8a2afc0de24ca80744f9fb0eea4d7b34b9c4b6f
+symbol CACHE_MAX_ENTRIES macro 180 211 0 preproc_def None
+symbol CACHE_MIN macro 211 259 0 preproc_function_def None
+symbol store namespace 260 1424 0 namespace_definition None
+symbol Key type 279 303 0 namespace_definition None
+symbol Policy enum 305 336 0 namespace_definition None
+symbol Cache class 389 1022 0 namespace_definition Some("A least-recently-used cache of values by key.")
+symbol Cache method 436 492 0 namespace_definition None
+symbol get method 541 676 0 namespace_definition Some("The value of KEY, or null.")
+symbol operator== method 717 799 0 namespace_definition None
+symbol Stats struct 803 866 0 namespace_definition None
+symbol ~Cache function 1024 1075 0 namespace_definition None
+symbol put function 1077 1421 0 namespace_definition None
+symbol describe function 1467 1607 0 function_definition Some("Prints the size.")
+symbol cache_version function 1622 1659 0 linkage_specification None

@@ -14,10 +14,6 @@
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-large-file)
-(defvar drgnx-grammars-modes)
-;; The language/mode table is lang/grammars's: one table for both modules (its file sits beside this one).
-(unless (featurep 'drgnx-grammars)
-  (load (expand-file-name "drgnx-grammars" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (defvar eglot-server-programs)
 (defvar warning-minimum-level)
 (defvar eglot--servers-by-project)
@@ -29,13 +25,6 @@
 (declare-function eglot-code-actions "eglot")
 (declare-function eglot-format-buffer "eglot")
 (declare-function eldoc-doc-buffer "eldoc")
-
-(defun drgnx-lang-remap-modes ()
-  "Use the tree-sitter mode of every language whose grammar is installed."
-  (when (fboundp 'treesit-language-available-p)
-    (pcase-dolist (`(,lang ,mode ,ts . ,_) drgnx-grammars-modes)
-      (when (and mode (treesit-language-available-p lang) (fboundp ts))
-        (drgnx-module-alist-put 'major-mode-remap-alist mode ts)))))
 
 (defun drgnx-lang--program (contact)
   "The program CONTACT (an `eglot-server-programs' value) runs, or nil.  A function (such as
@@ -419,7 +408,6 @@ server's log is shown; running a second time turns it off again."
                      :teardown #'drgnx-lang--shutdown-servers
                      :setup
                      (lambda ()
-                       (drgnx-lang-remap-modes)
                        (add-hook 'prog-mode-hook #'drgnx-lang--maybe-eglot)
                        ;; The options are set once their library is loaded: set before, the undo would leave them unbound
                        (eval-after-load 'eglot

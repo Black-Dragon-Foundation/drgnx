@@ -6,6 +6,10 @@ use serde_json::{Value, json};
 /// The drgnx commit this binary was built from.
 pub const COMMIT: &str = env!("DRGNX_BUILD_COMMIT");
 
+/// When this binary was compiled (unix seconds, from build.rs, which runs again when a source file changes): what
+/// tells two builds of one commit apart (`unknown`, the same `HEAD-dirty` while developing).
+pub const BUILD_ID: &str = env!("DRGNX_BUILD_ID");
+
 /// The checkout it was built in (empty when the builder did not say).
 pub const CHECKOUT: &str = env!("DRGNX_CHECKOUT");
 
@@ -26,6 +30,7 @@ pub fn json() -> Value {
     json!({
         "version": env!("CARGO_PKG_VERSION"),
         "commit": COMMIT,
+        "build_id": BUILD_ID,
         "proto": PROTO,
         "records": RECORDS,
         "sqlite": sqlite(),
@@ -46,6 +51,7 @@ mod tests {
         for k in [
             "version",
             "commit",
+            "build_id",
             "proto",
             "records",
             "sqlite",

@@ -26,7 +26,7 @@
   "In `core/drgnx-agents.el', the line from which the forms are the runtime half unless kept.")
 
 (defconst drgnx-lint-runtime--agents-kept
-  '(drgnx-agents-get drgnx-agents--remote drgnx-agents-sessions drgnx-agents-scrubbed-env drgnx-agents-own-env
+  '(drgnx-agents-get drgnx-agents--remote drgnx-agents-sessions
                      drgnx-agents-use-gateway drgnx-agents-env-functions drgnx-agents-answer-permission drgnx-agents-finish-review
                      drgnx-agents-send drgnx-agents-deliver-queue drgnx-agents-unqueue drgnx-agents-requeue drgnx-agents-stop
                      drgnx-agents-kill drgnx-agents-free-p drgnx-agents-deliver drgnx-agents-steer)
@@ -188,7 +188,7 @@ list of (FILE . HASH-OF-SYMBOLS) for the kept forms."
                   "keys-edit" "keys-modal"
                   "keys" "large-file" "lisp-index" "macos" "margins" "memo" "modal-choose" "modal" "modules-fingerprint"
                   "modules-helpers" "modules-record" "modules" "no-prompt" "notice-desktop" "notice-echo" "notice-save" "notice-toast" "notice"
-                  "notices" "onboard" "owner" "palette-frame" "palette" "paths" "pixels" "pkg-activate" "pkg-progress" "pkg-wants" "pkg" "platform"
+                  "notices" "onboard" "owner" "palette-frame" "palette" "paths" "pixels" "packs" "pkg-activate" "pkg-progress" "pkg-wants" "pkg" "platform"
                   "portable" "projects"
                   "quick-open" "record" "records-review" "records" "registry" "ruler" "restart" "sandbox-vc" "say" "schema" "search-setup" "secrets-scan" "secrets" "session" "setting"
                   "settings-agents" "settings-apply" "settings-area" "settings-defaults" "settings-described"
