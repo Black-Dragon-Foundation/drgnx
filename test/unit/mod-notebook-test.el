@@ -285,3 +285,83 @@
     (should (equal (nb-test--theme-attr variant 'drgnx-notebook-head :overline) (drgnx-look-token 'border-subtle variant)))
     (should (equal (nb-test--theme-attr variant 'drgnx-notebook-head :inherit)
                    (plist-get (cdr (car (get 'drgnx-notebook-head 'face-defface-spec))) :inherit)))))
+
+;;; Tree-sitter: one parser per language, its ranges the union of that language's cells
+
+(ert-deftest drgnx-notebook/the-ranges-of-a-language-are-its-cells-source ()
+  (nb-test--with
+    (let ((ranges (drgnx-notebook--language-ranges)))
+      (should (equal (mapcar #'car ranges) '("python" "markdown")))
+      (let ((a (drgnx-notebook--cell-by-id "a")) (c (drgnx-notebook--cell-by-id "c")) (b (drgnx-notebook--cell-by-id "b")))
+        (should (equal (cdr (assoc "python" ranges))
+                       (list (cons (1+ (plist-get a :head)) (plist-get a :tail)) (cons (1+ (plist-get c :head)) (plist-get c :tail)))))
+        (should (equal (cdr (assoc "markdown" ranges)) (list (cons (1+ (plist-get b :head)) (plist-get b :tail)))))))
+    ;; a raw cell has no language
+    (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id "b") :head)))
+    (drgnx-notebook-change-cell-type 'raw)
+    (should (equal (mapcar #'car (drgnx-notebook--language-ranges)) '("python")))))
+
+(ert-deftest drgnx-notebook/the-language-at-point-is-the-cells ()
+  (nb-test--with
+    (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id "a") :head)))
+    (should (eq (drgnx-notebook--language-at-point) 'python))
+    (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id "b") :head)))
+    (should (eq (drgnx-notebook--language-at-point) 'markdown))
+    ;; on a boundary: the neighbouring cell's, never an error
+    (goto-char (plist-get (drgnx-notebook--cell-by-id "c") :head))
+    (should (symbolp (drgnx-notebook--language-at-point)))))
+
+(ert-deftest drgnx-notebook/a-parser-holds-the-included-ranges-of-its-cells ()
+  (skip-unless (and (fboundp 'treesit-available-p) (treesit-available-p) (treesit-language-available-p 'python)))
+  (nb-test--with
+    (drgnx-notebook--sync-parsers)
+    (let* ((parsers (seq-filter (lambda (p) (eq (treesit-parser-language p) 'python)) (treesit-parser-list)))
+           (ranges (treesit-parser-included-ranges (car parsers))))
+      (should (= (length parsers) 1))
+      (should (= (length ranges) 2))
+      (should (equal (car ranges) (cons (1+ (plist-get (drgnx-notebook--cell-by-id "a") :head)) (plist-get (drgnx-notebook--cell-by-id "a") :tail)))))
+    ;; the same parser after an edit, not a second one
+    (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id "c") :head)))
+    (insert "y = 3\n")
+    (drgnx-notebook--rescan)
+    (should (= 1 (length (seq-filter (lambda (p) (eq (treesit-parser-language p) 'python)) (treesit-parser-list)))))))
+
+;;; Images: static PNG and JPEG outputs, fetched once from the hub's full output
+
+(defconst nb-test--png "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+
+(defun nb-test--image-tail (version)
+  (list :id "nb1" :cell "a" :version version :text (concat "a\n" (string #xfffc) "\nb") :runs nil :more_lines 0
+        :images (list (list :at 2 :output 1 :mime "image/png" :width 640 :height 360))))
+
+(ert-deftest drgnx-notebook/an-image-output-is-fetched-once-and-drawn-in-its-place ()
+  (nb-test--with
+    (setq nb-test--answers
+          (list (cons "notebook/output"
+                      (lambda (_p) (cons (list :outputs (list (list :output_type "stream" :text "a")
+                                                              (list :output_type "display_data" :data (list :image/png nb-test--png))))
+                                         nil)))))
+    (setq nb-test--calls nil)
+    (drgnx-notebook--event "notebook-tail" (nb-test--image-tail 1))
+    (let* ((s (overlay-get (plist-get (drgnx-notebook--chrome-of "a") :tail) 'after-string))
+           (display (get-text-property 2 'display s)))
+      (should (eq (car-safe display) 'image))
+      (should (eq (plist-get (cdr display) :type) 'png))
+      (should (> (length (plist-get (cdr display) :data)) 20))
+      (should (= (length (seq-filter (lambda (c) (equal (car c) "notebook/output")) nb-test--calls)) 1)))
+    ;; a newer tail with the same image uses what it has
+    (drgnx-notebook--event "notebook-tail" (nb-test--image-tail 2))
+    (should (= (length (seq-filter (lambda (c) (equal (car c) "notebook/output")) nb-test--calls)) 1))
+    (should (eq (car-safe (get-text-property 2 'display (overlay-get (plist-get (drgnx-notebook--chrome-of "a") :tail) 'after-string))) 'image))))
+
+(ert-deftest drgnx-notebook/an-image-that-is-not-there-yet-or-not-supported-is-a-label ()
+  (nb-test--with
+    (setq nb-test--answers (list (cons "notebook/output" (lambda (_p) (cons nil "no output")))))
+    (drgnx-notebook--event "notebook-tail" (nb-test--image-tail 1))
+    (let ((s (overlay-get (plist-get (drgnx-notebook--chrome-of "a") :tail) 'after-string)))
+      (should-not (get-text-property 2 'display s))
+      (should (string-search "image/png 640" s)))
+    (let ((s (drgnx-notebook--tail-string (list :text (string #xfffc)
+                                                :images (list (list :at 0 :output 0 :mime "image/svg+xml" :width 10 :height 10))))))
+      (should-not (get-text-property 0 'display s))
+      (should (string-search "image/svg+xml" s)))))

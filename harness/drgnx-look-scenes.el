@@ -41,6 +41,8 @@
     (work-flow :mockup hub-orchestration)
     (start-page)
     (start-page-light)
+    (notebook-dark :mockup notebook)
+    (notebook-light :mockup notebook)
     (highlights-dark)
     (highlights-light)
     (highlights-hc)

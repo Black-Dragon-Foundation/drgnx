@@ -48,8 +48,12 @@ Saving writes the notebook through the hub, which changes only what you edited: 
 bytes. A notebook with no cell ids gets them on the first saving edit. The file is never edited as text while its buffer
 is open; a file that is not a notebook opens as text.
 
+## Syntax colours and pictures
+
+A cell's source is coloured by its language's tree-sitter mode when the language has a grammar installed ([language packs](editing.md#language-support-tree-sitter)): one parser per language for the whole notebook, whose ranges are the union of that language's cells (a markdown cell uses the markdown grammar). Without a grammar the cell is plain text.
+
+PNG and JPEG outputs are drawn under the cell (at most 240 px tall, so a cell never scrolls past a window); the first draw fetches the image from the hub, and until it arrives a label (`[image/png 640×360]`) stands in. SVG is not drawn in this first version.
+
 ## Not yet
 
-Clear Outputs, Open Output (the full output of a cell in its own view), the cell outline, the kernel's log and the card
-look wait for the hub's matching methods and Sjá views. Rich HTML and widget outputs show as their plain text; SVG is not
-drawn in this first version.
+Clear Outputs, Open Output (the full output of a cell in its own view), the cell outline and the kernel's log wait for the hub's matching methods and views. The card look (each cell a rounded card with a shadow, as in the mockup) waits for the compositor's block primitive: until then each cell is a tinted band with a hairline over its header. Rich HTML and widget outputs show as their plain text.

@@ -93,6 +93,9 @@
 (defvar-local drgnx-notebook--kernel nil "The kernelspec the hub started, or nil.")
 (defvar-local drgnx-notebook--tails (make-hash-table :test #'equal) "ID → the version of the last tail put.")
 (defvar-local drgnx-notebook--outputs-hidden nil "Non-nil while the outputs are hidden.")
+(defvar-local drgnx-notebook--images (make-hash-table :test #'equal)
+  "(CELL OUTPUT MIME WIDTH HEIGHT) → the image spec drawn, or `pending' or `failed'; a cell's entries go when it runs again.")
+(defvar-local drgnx-notebook--last-tails (make-hash-table :test #'equal) "ID → the last tail put, for the redraw an image fetch ends with.")
 (defvar-local drgnx-notebook--rescans 0 "How many rescans ran (for the tests).")
 
 (defvar drgnx-notebook--buffers (make-hash-table :test #'equal :weakness 'value)
@@ -105,8 +108,10 @@
 ;;;; The hub
 
 (defun drgnx-notebook--call (method params callback)
-  "Ask the hub METHOD with PARAMS; CALLBACK gets (RESULT ERROR).  The one place the notebook buffer reaches the hub."
-  (drgnx-hub-call method params callback))
+  "Ask the hub METHOD with PARAMS; CALLBACK gets (RESULT ERROR).  The one place the notebook buffer reaches the hub.
+No hub to ask is an error for the callback, not for the caller (an open buffer must not fail because the hub is down)."
+  (condition-case err (drgnx-hub-call method params callback)
+    (error (funcall callback nil (error-message-string err)) nil)))
 
 (defun drgnx-notebook--call-sync (method params &optional timeout)
   "METHOD's result, waiting up to TIMEOUT seconds (a save is a command the user gave)."
@@ -291,7 +296,8 @@ Idempotent; cheap when nothing changed."
     (setq drgnx-notebook--dirty nil)
     (cl-incf drgnx-notebook--rescans)
     (setq drgnx-notebook--cells (drgnx-notebook--pair (drgnx-notebook--scan)))
-    (drgnx-notebook--sync-chrome))
+    (drgnx-notebook--sync-chrome)
+    (drgnx-notebook--sync-parsers))
   drgnx-notebook--cells)
 
 (defun drgnx-notebook--changed (&rest _)
@@ -355,12 +361,72 @@ runs' faces on it, and a newline, since the next row is the next cell's header."
   (let* ((text (or (plist-get tail :text) "")) (n (length text)))
     (if (zerop n) ""
       (let ((s (copy-sequence text)))
-        (add-face-text-property 0 n (if (plist-get tail :stale) '(drgnx-notebook-output drgnx-notebook-stale) 'drgnx-notebook-output) nil s)
+        (add-face-text-property 0 n (if (plist-get tail :stale) '(drgnx-notebook-output drgnx-notebook-stale drgnx-notebook-cell) '(drgnx-notebook-output drgnx-notebook-cell)) nil s)
         (dolist (run (plist-get tail :runs))
           (let ((start (min n (or (plist-get run :start) 0))) (end (min n (or (plist-get run :end) 0)))
                 (faces (drgnx-notebook--run-faces run)))
             (when (< start end) (dolist (face faces) (add-face-text-property start end face nil s)))))
-        (concat s "\n")))))
+        (dolist (image (reverse (plist-get tail :images)))   ; last first: a label is longer than the character it replaces
+          (let ((at (plist-get image :at)))
+            (when (and at (< at n) (eq (aref s at) #xfffc))
+              (setq s (concat (substring s 0 at) (drgnx-notebook--image-piece tail image) (substring s (1+ at)))))))
+        (concat s (propertize "\n" 'face 'drgnx-notebook-cell))))))
+
+;;; Images (static PNG and JPEG; SVG is not in tier 1): one character each in the tail, drawn from the hub's full output
+
+(defconst drgnx-notebook--image-types '(("image/png" . png) ("image/jpeg" . jpeg)) "The image MIME types drawn, with their image type.")
+(declare-function drgnx-px "drgnx-pixels" (logical &optional frame scale))
+
+(defun drgnx-notebook--image-key (tail image)
+  (list (plist-get tail :cell) (plist-get image :output) (plist-get image :mime) (plist-get image :width) (plist-get image :height)))
+
+(defun drgnx-notebook--image-piece (tail image)
+  "What replaces the image character of IMAGE in TAIL's text: the picture when it is here, else a label."
+  (let ((spec (gethash (drgnx-notebook--image-key tail image) drgnx-notebook--images)))
+    (if (consp spec)
+        (propertize " " 'display spec)
+      (propertize (format "[%s %s×%s]" (plist-get image :mime) (plist-get image :width) (plist-get image :height))
+                  'face 'drgnx-notebook-stale))))
+
+(defun drgnx-notebook--image-spec (bytes type)
+  "The image spec of BYTES of TYPE, no taller than a window's worth of rows (the inline cap of outputs)."
+  (list 'image :type type :data bytes :ascent 'center
+        :max-height (if (fboundp 'drgnx-px) (drgnx-px 240) 240) :max-width (if (fboundp 'drgnx-px) (drgnx-px 720) 720)))
+
+(defun drgnx-notebook--output-image (output mime)
+  "The bytes of the image of MIME in the nbformat OUTPUT, or nil."
+  (when-let* ((data (plist-get (plist-get output :data) (intern (concat ":" mime))))
+              (text (if (listp data) (apply #'concat data) data)))
+    (ignore-errors (base64-decode-string (replace-regexp-in-string "[ \t\r\n]" "" text)))))
+
+(defun drgnx-notebook--want-images (tail)
+  "Fetch what TAIL's images need that is not here: one `notebook/output' for the cell, however many images."
+  (let (wanted)
+    (dolist (image (plist-get tail :images))
+      (let ((key (drgnx-notebook--image-key tail image)))
+        (when (and (assoc (plist-get image :mime) drgnx-notebook--image-types) (null (gethash key drgnx-notebook--images)))
+          (puthash key 'pending drgnx-notebook--images)
+          (push (cons key image) wanted))))
+    (when (and wanted drgnx-notebook--id)
+      (let ((buffer (current-buffer)) (id (plist-get tail :cell)))
+        (drgnx-notebook--call
+         "notebook/output" (list :id drgnx-notebook--id :cell id)
+         (lambda (r e)
+           (when (buffer-live-p buffer)
+             (with-current-buffer buffer
+               (let ((outputs (and (not e) (plist-get r :outputs))))
+                 (dolist (w wanted)
+                   (let* ((image (cdr w)) (mime (plist-get image :mime))
+                          (bytes (and (listp outputs) (drgnx-notebook--output-image (nth (or (plist-get image :output) 0) outputs) mime))))
+                     (puthash (car w) (if bytes (drgnx-notebook--image-spec bytes (cdr (assoc mime drgnx-notebook--image-types))) 'failed)
+                              drgnx-notebook--images)))
+                 (when-let* ((last (gethash id drgnx-notebook--last-tails))) (drgnx-notebook--put-tail last)))))))))))
+
+(defun drgnx-notebook--forget-images (id)
+  "Forget the images of cell ID: it runs again, and an image at the same place may be another."
+  (let (gone)
+    (maphash (lambda (k _) (when (equal (car k) id) (push k gone))) drgnx-notebook--images)
+    (dolist (k gone) (remhash k drgnx-notebook--images))))
 
 (defun drgnx-notebook--put-tail (tail)
   "Put the hub's TAIL after its cell: only when it is newer than the one shown."
@@ -368,6 +434,8 @@ runs' faces on it, and a newline, since the next row is the next cell's header."
          (version (or (plist-get tail :version) 0)))
     (when (and ov (overlay-buffer ov) (>= version (or (gethash id drgnx-notebook--tails) 0)))
       (puthash id version drgnx-notebook--tails)
+      (puthash id tail drgnx-notebook--last-tails)
+      (drgnx-notebook--want-images tail)
       (when-let* ((n (plist-get tail :execution_count))) (puthash id n drgnx-notebook--prompts) (drgnx-notebook--refresh-head id))
       (overlay-put ov 'after-string (drgnx-notebook--tail-string tail)))))
 
@@ -379,6 +447,94 @@ runs' faces on it, and a newline, since the next row is the next cell's header."
                             (lambda (r e)
                               (when (and r (not e) (buffer-live-p buffer))
                                 (with-current-buffer buffer (drgnx-notebook--put-tail r))))))))
+
+;;;; Tree-sitter: one parser per language, its included ranges the union of that language's cells (design §4.6)
+
+(declare-function treesit-available-p "treesit.c")
+(declare-function treesit-language-available-p "treesit.c")
+(declare-function treesit-parser-create "treesit.c")
+(declare-function treesit-parser-list "treesit.c")
+(declare-function treesit-parser-language "treesit.c")
+(declare-function treesit-parser-set-included-ranges "treesit.c")
+(declare-function treesit-parser-delete "treesit.c")
+(declare-function treesit-major-mode-setup "treesit")
+(defvar treesit-font-lock-settings)
+(defvar treesit-font-lock-feature-list)
+(defvar treesit-language-at-point-function)
+
+(defvar-local drgnx-notebook--ranges nil "The language ranges the parsers hold now: ((NAME . RANGES)…).")
+
+(defun drgnx-notebook--cell-language (type)
+  "The language name of a cell of TYPE, or nil (raw cells have none)."
+  (pcase type ('code drgnx-notebook--language) ('markdown "markdown")))
+
+(defun drgnx-notebook--language-ranges (&optional cells)
+  "Each language of the notebook's cells with the source ranges of its cells: ((NAME (BEG . END)…)…), in the order the
+languages first appear.  An empty source has no range.
+CELLS: the cells to read (default the buffer's, found again when it changed)."
+  (let (result)
+    (dolist (c (or cells (drgnx-notebook--rescan)))
+      (when-let* ((lang (drgnx-notebook--cell-language (plist-get c :type)))
+                  (beg (1+ (plist-get c :head))) (end (plist-get c :tail)) ((< beg end)))
+        (let ((cell (or (assoc lang result) (car (push (list lang) result)))))
+          (setcdr cell (append (cdr cell) (list (cons beg end)))))))
+    (nreverse result)))
+
+(defun drgnx-notebook--language-at-point ()
+  "`treesit-language-at-point-function': the language of the cell at point, a symbol, or nil."
+  (when-let* ((c (drgnx-notebook--cell-at)) (lang (drgnx-notebook--cell-language (plist-get c :type))))
+    (intern lang)))
+
+(defun drgnx-notebook--sync-parsers (&optional cells)
+  "One parser for each language of the cells that has a grammar, its included ranges the union of its cells' sources;
+a parser of a language no cell has any more goes.  Does nothing when the ranges are as they were."
+  (when (and (fboundp 'treesit-available-p) (treesit-available-p))
+    (let ((want (drgnx-notebook--language-ranges cells)))
+      (unless (equal want drgnx-notebook--ranges)
+        (setq drgnx-notebook--ranges want)
+        (dolist (p (treesit-parser-list))
+          (unless (assoc (symbol-name (treesit-parser-language p)) want) (treesit-parser-delete p)))
+        (dolist (entry want)
+          (let ((lang (intern (car entry))))
+            (when (treesit-language-available-p lang)
+              (let ((parser (or (seq-find (lambda (p) (eq (treesit-parser-language p) lang)) (treesit-parser-list))
+                                (treesit-parser-create lang))))
+                (treesit-parser-set-included-ranges parser (cdr entry))))))))))
+
+(defun drgnx-notebook--ts-settings (lang)
+  "(FONT-LOCK-SETTINGS . FEATURE-LIST) of LANG's tree-sitter mode, read from a scratch buffer, or nil."
+  (let ((mode (intern (format "%s-ts-mode" lang))))
+    (when (and (fboundp mode) (treesit-language-available-p (intern lang)))
+      (condition-case nil
+          (with-temp-buffer
+            (delay-mode-hooks (funcall mode))
+            (cons treesit-font-lock-settings treesit-font-lock-feature-list))
+        (error nil)))))
+
+(defun drgnx-notebook--setup-treesit (&optional cells)
+  "Font-lock the cells by their languages' tree-sitter modes: their settings joined, the parsers' ranges set.  Never
+fails the notebook: a language without a grammar or a mode stays plain text."
+  (when (and (fboundp 'treesit-available-p) (treesit-available-p))
+    (condition-case nil
+        (let ((settings nil) (features nil))
+          (dolist (entry (drgnx-notebook--language-ranges cells))
+            (when-let* ((s (drgnx-notebook--ts-settings (car entry))))
+              (setq settings (append settings (car s)))
+              (let ((i 0))
+                (dolist (level (cdr s))
+                  (let ((have (nth i features)))
+                    (if (< i (length features))
+                        (setcar (nthcdr i features) (delete-dups (append have level)))
+                      (setq features (append features (list level)))))
+                  (cl-incf i)))))
+          (when settings
+            (setq-local treesit-font-lock-settings settings
+                        treesit-font-lock-feature-list features
+                        treesit-language-at-point-function #'drgnx-notebook--language-at-point)
+            (setq drgnx-notebook--ranges nil)
+            (drgnx-notebook--sync-parsers cells)
+            (treesit-major-mode-setup)))
+      (error nil))))
 
 ;;;; Hub events
 
@@ -397,6 +553,7 @@ runs' faces on it, and a newline, since the next row is the next cell's header."
   (let ((old drgnx-notebook--running))
     (setq drgnx-notebook--state (or (plist-get data :state) "idle")
           drgnx-notebook--running (and (member drgnx-notebook--state '("busy" "running")) (plist-get data :cell)))
+    (when (and drgnx-notebook--running (not (equal drgnx-notebook--running old))) (drgnx-notebook--forget-images drgnx-notebook--running))
     (dolist (id (delq nil (list old drgnx-notebook--running))) (drgnx-notebook--refresh-head id))
     (force-mode-line-update)))
 
@@ -433,6 +590,8 @@ runs' faces on it, and a newline, since the next row is the next cell's header."
     (setq buffer-undo-list nil buffer-read-only nil)
     (set-buffer-modified-p nil)
     (setq drgnx-notebook--dirty t drgnx-notebook--cells nil)
+    ;; the parsers and the font-lock settings first, from the cells as the text has them: the chrome is made after, once
+    (drgnx-notebook--setup-treesit (drgnx-notebook--pair (drgnx-notebook--scan)))
     (drgnx-notebook--rescan)
     (dolist (tail (plist-get result :tails)) (drgnx-notebook--put-tail tail))
     (goto-char (if drgnx-notebook--cells (1+ (plist-get (car drgnx-notebook--cells) :head)) (point-min)))
@@ -476,6 +635,8 @@ runs' faces on it, and a newline, since the next row is the next cell's header."
               drgnx-notebook--chrome (make-hash-table :test #'equal)
               drgnx-notebook--known (make-hash-table :test #'equal)
               drgnx-notebook--prompts (make-hash-table :test #'equal)
+              drgnx-notebook--images (make-hash-table :test #'equal)
+              drgnx-notebook--last-tails (make-hash-table :test #'equal)
               drgnx-notebook--tails (make-hash-table :test #'equal))
   (add-hook 'after-change-functions #'drgnx-notebook--changed nil t)
   (add-hook 'post-command-hook #'drgnx-notebook--post-command nil t)
@@ -634,6 +795,7 @@ The first part keeps the id and the output."
   (let* ((cells (drgnx-notebook--sync-cells))
          (run (seq-filter (lambda (c) (member (plist-get c :id) ids)) cells))
          (buffer (current-buffer)) (nb drgnx-notebook--id))
+    (dolist (id ids) (drgnx-notebook--forget-images id))
     (drgnx-notebook--mark-known)
     ;; the buffer's cells are the notebook's first (`notebook/sync'), then the cells to run are queued (`notebook/execute')
     (drgnx-notebook--call

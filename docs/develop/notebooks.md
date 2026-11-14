@@ -61,3 +61,17 @@ function). A boundary that comes back by undo or yank has no overlay, and the re
 The hub calls it makes (`drgnx-notebook--call`): `notebook/open {path, text}`, `/sync {id, cells}` then `/execute {id, cells}`
 (the cells to run), `/save {id, cells}`, `/kernels`, `/start {id, kernel}`, `/shutdown`, `/interrupt`, `/input`, `/tail {id,
 cell}`, `/output {id, cell}`, `/close`; it listens to `notebook-tail`, `notebook-status` and `notebook-input-request`.
+
+The header strip is a `before-string` on the head boundary (an `after-string` of a one-character head would land on the source's
+first row, so the strip would have no row of its own); the output is an `after-string` on the tail boundary, ending in the newline
+Lisp adds. The Lisp header is a stopgap: the hub is to build the head as it builds the tail, and the Lisp builder goes when it does.
+
+**Tree-sitter** (`drgnx-notebook--sync-parsers`): one parser per language for the buffer, its included ranges the union of the
+cells of that language (the notebook's language for code cells, `markdown` for markdown cells); the same rescan that finds the
+boundaries moves the ranges. Font-lock comes from the languages' `LANG-ts-mode` settings, read once from a scratch buffer and
+joined (`drgnx-notebook--setup-treesit`). **Order matters:** `treesit-major-mode-setup` deletes the buffer's overlays, so it runs
+on the inserted text before the first rescan makes the chrome.
+
+**Images**: a tail marks each image with one character (U+FFFC) and carries its output index, MIME type and size; Lisp fetches
+`notebook/output` once per cell (the cache is dropped when the cell runs again) and draws PNG and JPEG as an `image` display
+spec, a label until then.

@@ -71,3 +71,19 @@ words of its line pairs: `when' against `if', the faces `diff-refine-removed' an
 
 (provide 'look-scenes-test)
 ;;; look-scenes-test.el ends here
+
+(ert-deftest drgnx-look-scenes/the-notebook-scenes-are-the-notebook-mockups ()
+  (dolist (scene '(notebook-dark notebook-light))
+    (should (eq (plist-get (cdr (assq scene drgnx-look-scenes)) :mockup) 'notebook))
+    (should (fboundp (intern (format "drgnx-look-scene-%s" scene))))
+    (should (assq scene drgnx-look-scene-limits))))
+
+(ert-deftest drgnx-look-scenes/the-notebook-scene-holds-the-mockups-four-cells ()
+  (let ((buffer (drgnx-look-scene--notebook-buffer)))
+    (unwind-protect
+        (with-current-buffer buffer
+          (should (equal (mapcar (lambda (c) (plist-get c :type)) (drgnx-notebook--rescan)) '(markdown code code code)))
+          (should (string-search "[*]" (overlay-get (plist-get (drgnx-notebook--chrome-of "c2") :head) 'before-string)))
+          (should (string-search "NameError" (overlay-get (plist-get (drgnx-notebook--chrome-of "c3") :tail) 'after-string)))
+          (should (equal (buffer-name) "cache-experiments.ipynb")))
+      (kill-buffer buffer))))
