@@ -114,6 +114,7 @@ fn spec(name: &str, lang: &str) -> Kernelspec {
         argv: vec!["k".into(), "{connection_file}".into()],
         env: vec![],
         interrupt: Interrupt::Signal,
+        transport: Transport::Ipc,
         dir: PathBuf::from("/k"),
     }
 }
@@ -197,6 +198,61 @@ fn the_private_folder_is_made_0700_and_a_loose_or_foreign_one_is_refused() {
 }
 
 #[test]
+fn a_kernelspec_names_its_transport_ipc_unless_it_says_it_cannot() {
+    let t = tempfile::tempdir().unwrap();
+    let d = t.path();
+    let spec = |name: &str, meta: &str| {
+        put(
+            d,
+            name,
+            &format!(r#"{{"argv":["k","{{connection_file}}"],"language":"x"{meta}}}"#),
+        )
+    };
+    spec("plain", "");
+    spec("ipc", r#","metadata":{"drgnx_transport":"ipc"}"#);
+    spec(
+        "tcp",
+        r#","metadata":{"drgnx_transport":"tcp","debugger":true}"#,
+    );
+    spec("other-metadata", r#","metadata":{"debugger":true}"#);
+    spec("bad", r#","metadata":{"drgnx_transport":"carrier-pigeon"}"#);
+    spec("not-text", r#","metadata":{"drgnx_transport":3}"#);
+    let (specs, skipped) = discover_with_skips(&[d.to_path_buf()]);
+    let of = |n: &str| specs.iter().find(|s| s.name == n).map(|s| s.transport);
+    assert_eq!(of("plain"), Some(Transport::Ipc));
+    assert_eq!(of("ipc"), Some(Transport::Ipc));
+    assert_eq!(of("tcp"), Some(Transport::Tcp));
+    assert_eq!(of("other-metadata"), Some(Transport::Ipc));
+    // an unknown transport is a kernelspec not used, said so: never ipc by guess
+    assert_eq!(of("bad"), None);
+    assert_eq!(of("not-text"), None);
+    assert!(skipped.iter().any(|s| s.name == "bad"));
+}
+
+#[test]
+fn a_tcp_connection_file_names_loopback_and_its_five_ports_and_goes_with_the_connection() {
+    let t = tempfile::tempdir().unwrap();
+    let folder = private_folder(&t.path().join("s")).unwrap();
+    let ports = [47001, 47002, 47003, 47004, 47005];
+    let c = Connection::create_tcp(&folder, "k1", "python3", ports).unwrap();
+    assert_eq!(fs::metadata(&c.path).unwrap().mode() & 0o777, 0o600);
+    let v: serde_json::Value = serde_json::from_slice(&fs::read(&c.path).unwrap()).unwrap();
+    assert_eq!(v["transport"], "tcp");
+    assert_eq!(v["ip"], "127.0.0.1", "loopback only, never a wildcard");
+    for (ch, port) in CHANNELS.iter().zip(ports) {
+        assert_eq!(v[format!("{ch}_port")], port);
+    }
+    assert_eq!(v["key"], c.key.to_connection_file());
+    assert_eq!(c.endpoint(1), "tcp://127.0.0.1:47001");
+    assert_eq!(c.endpoint(4), "tcp://127.0.0.1:47004");
+    // a file that exists is never overwritten, as for ipc
+    assert!(Connection::create_tcp(&folder, "k1", "p", ports).is_err());
+    let path = c.path.clone();
+    drop(c);
+    assert!(!path.exists());
+}
+
+#[test]
 fn a_connection_file_is_0600_ipc_holds_the_key_and_goes_with_the_connection() {
     let t = tempfile::tempdir().unwrap();
     let folder = private_folder(&t.path().join("s")).unwrap();
@@ -224,6 +280,19 @@ fn a_connection_file_is_0600_ipc_holds_the_key_and_goes_with_the_connection() {
     let path = c.path.clone();
     drop(c);
     assert!(!path.exists(), "the file goes when the connection does");
+}
+
+#[test]
+fn the_ipc_socket_files_a_kernel_left_go_with_the_connection() {
+    let t = tempfile::tempdir().unwrap();
+    let folder = private_folder(&t.path().join("s")).unwrap();
+    let c = Connection::create(&folder, "k1", "python3").unwrap();
+    let socks: Vec<PathBuf> = CHANNELS.iter().filter_map(|ch| c.socket(ch)).collect();
+    for s in &socks {
+        fs::write(s, b"").unwrap();
+    }
+    drop(c);
+    assert!(socks.iter().all(|s| !s.exists()), "a socket file is left");
 }
 
 #[test]

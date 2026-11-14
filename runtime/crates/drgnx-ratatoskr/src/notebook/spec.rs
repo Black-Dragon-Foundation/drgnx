@@ -19,6 +19,15 @@ pub enum Interrupt {
     Message,
 }
 
+/// How the hub and a kernel talk (design §5.2): `ipc` (sockets in the session's 0700 folder) unless the kernel cannot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Transport {
+    Ipc,
+    /// Loopback ports the hub claimed for the kernel (`debug::ports`), each checked to be the kernel's own before the hub
+    /// connects to it.
+    Tcp,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Kernelspec {
     /// The folder's name.
@@ -28,6 +37,9 @@ pub struct Kernelspec {
     pub argv: Vec<String>,
     pub env: Vec<(String, String)>,
     pub interrupt: Interrupt,
+    /// The transport tried first: `ipc`, or `tcp` for a kernelspec that says `"metadata": {"drgnx_transport": "tcp"}` (its
+    /// kernel cannot use ipc). An ipc start that fails before the kernel made a socket is tried once over tcp as well.
+    pub transport: Transport,
     pub dir: PathBuf,
 }
 
@@ -183,24 +195,30 @@ pub fn private_folder(path: &Path) -> Result<PathBuf, String> {
 #[derive(Debug)]
 pub struct Connection {
     pub path: PathBuf,
+    /// For ipc, where the sockets are (`<prefix>-<n>`); for tcp, the connection id's would-be prefix, unused.
     pub prefix: PathBuf,
+    /// The five loopback ports of a tcp connection (shell, iopub, stdin, control, hb); none for ipc.
+    pub ports: Option<[u16; 5]>,
     pub key: Key,
 }
 
 pub const CHANNELS: [&str; 5] = ["shell", "iopub", "stdin", "control", "hb"];
 
+fn check_id(id: &str) -> Result<(), String> {
+    if id.is_empty()
+        || !id
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+    {
+        return Err(format!("{id:?} is not a connection id"));
+    }
+    Ok(())
+}
+
 impl Connection {
-    /// A new file `kernel-<id>.json` in FOLDER (which must be [`private_folder`]'s answer).
+    /// A new file `kernel-<id>.json` in FOLDER (which must be [`private_folder`]'s answer), over ipc.
     pub fn create(folder: &Path, id: &str, kernel_name: &str) -> Result<Connection, String> {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        if id.is_empty()
-            || !id
-                .bytes()
-                .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
-        {
-            return Err(format!("{id:?} is not a connection id"));
-        }
+        check_id(id)?;
         let prefix = folder.join(format!("k-{id}"));
         let prefix_text = prefix
             .to_str()
@@ -212,16 +230,65 @@ impl Connection {
                 folder.display()
             ));
         }
+        let mut ports = [0u16; 5];
+        for (i, p) in ports.iter_mut().enumerate() {
+            *p = u16::try_from(i + 1).unwrap_or(0);
+        }
+        Self::write(
+            folder,
+            id,
+            kernel_name,
+            "ipc",
+            &prefix_text,
+            ports,
+            prefix,
+            None,
+        )
+    }
+
+    /// A new file in FOLDER over tcp: loopback, PORTS (shell, iopub, stdin, control, hb) the hub claimed for this kernel.
+    pub fn create_tcp(
+        folder: &Path,
+        id: &str,
+        kernel_name: &str,
+        ports: [u16; 5],
+    ) -> Result<Connection, String> {
+        check_id(id)?;
+        Self::write(
+            folder,
+            id,
+            kernel_name,
+            "tcp",
+            "127.0.0.1",
+            ports,
+            folder.join(format!("k-{id}")),
+            Some(ports),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn write(
+        folder: &Path,
+        id: &str,
+        kernel_name: &str,
+        transport: &str,
+        ip: &str,
+        ports: [u16; 5],
+        prefix: PathBuf,
+        tcp: Option<[u16; 5]>,
+    ) -> Result<Connection, String> {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
         let key = Key::generate()?;
         let mut body = serde_json::json!({
-            "transport": "ipc",
-            "ip": prefix_text,
+            "transport": transport,
+            "ip": ip,
             "signature_scheme": "hmac-sha256",
             "key": key.to_connection_file(),
             "kernel_name": kernel_name,
         });
-        for (i, ch) in CHANNELS.iter().enumerate() {
-            body[format!("{ch}_port")] = (i + 1).into();
+        for (ch, port) in CHANNELS.iter().zip(ports) {
+            body[format!("{ch}_port")] = port.into();
         }
         let path = folder.join(format!("kernel-{id}.json"));
         let mut f = std::fs::OpenOptions::new()
@@ -234,7 +301,20 @@ impl Connection {
             let _ = std::fs::remove_file(&path);
             return Err(format!("cannot write {}: {e}", path.display()));
         }
-        Ok(Connection { path, prefix, key })
+        Ok(Connection {
+            path,
+            prefix,
+            ports: tcp,
+            key,
+        })
+    }
+
+    /// The endpoint the hub connects CHANNEL's socket (1 shell, 2 iopub, 3 stdin, 4 control) to.
+    pub fn endpoint(&self, n: usize) -> String {
+        match self.ports {
+            Some(ports) => format!("tcp://127.0.0.1:{}", ports[n - 1]),
+            None => format!("ipc://{}-{n}", self.prefix.display()),
+        }
     }
 
     /// The socket file of CHANNEL (`<prefix>-<n>`).
@@ -247,6 +327,14 @@ impl Connection {
 impl Drop for Connection {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
+        // a real kernel (ipykernel) leaves its ipc socket files behind when it ends
+        if self.ports.is_none() {
+            for ch in CHANNELS {
+                if let Some(s) = self.socket(ch) {
+                    let _ = std::fs::remove_file(s);
+                }
+            }
+        }
     }
 }
 
@@ -419,6 +507,15 @@ fn parse_spec(text: &[u8], name: &str, dir: &Path) -> Option<Kernelspec> {
         Some("message") => Interrupt::Message,
         Some(_) => return None,
     };
+    let transport = match v
+        .get("metadata")
+        .and_then(|m| m.get("drgnx_transport"))
+        .map(|t| t.as_str())
+    {
+        None | Some(Some("ipc")) => Transport::Ipc,
+        Some(Some("tcp")) => Transport::Tcp,
+        Some(_) => return None,
+    };
     let text_of = |k: &str| v.get(k).and_then(|x| x.as_str()).map(String::from);
     Some(Kernelspec {
         name: name.to_string(),
@@ -427,6 +524,7 @@ fn parse_spec(text: &[u8], name: &str, dir: &Path) -> Option<Kernelspec> {
         argv,
         env,
         interrupt,
+        transport,
         dir: dir.to_path_buf(),
     })
 }
