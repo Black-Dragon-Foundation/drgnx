@@ -200,7 +200,8 @@ fn public_v6(a: Ipv6Addr) -> bool {
     if w[0] == 0x2002 {
         return public_v4(inner(w[1], w[2]));
     }
-    let not_public = (w[0] & 0xfe00) == 0xfc00 // fc00::/7 unique local
+    let not_public = (w[0] & 0xe000) != 0x2000 // only 2000::/3 is global unicast: the rest is unrouted or reserved (GL-T10-4)
+        || (w[0] & 0xfe00) == 0xfc00 // fc00::/7 unique local
         || (w[0] & 0xffc0) == 0xfe80 // fe80::/10 link-local
         || (w[0] & 0xffc0) == 0xfec0 // fec0::/10 site-local
         || (w[0] & 0xff00) == 0xff00 // ff00::/8 multicast
@@ -584,6 +585,17 @@ mod tests {
             "64:ff9b:1:ffff::1",
             "100::1",
             "100::ffff:ffff:ffff:ffff",
+            // GL-T10-4: only 2000::/3 is global unicast; the rest is unrouted or reserved, listed or not
+            "fbff::1",
+            "fe00::1",
+            "64:ff9b:2::1",
+            "100:0:0:1::1",
+            "4000::1",
+            "8000::1",
+            "c000::1",
+            "e000::1",
+            "1fff::1",
+            "::ffff:0:808:808",
         ];
         for a in not_public6 {
             assert!(!is_public(v6(a)), "{a} counted as public");
@@ -593,11 +605,8 @@ mod tests {
             "2001:4860:4860::8888",
             "2001:1::1",
             "2001:db9::1",
-            "fbff::1",
-            "fe00::1",
-            "64:ff9b:2::1",
-            "100:0:0:1::1",
             "2a00:1450::1",
+            "3fff::1",
         ];
         for a in public6 {
             assert!(is_public(v6(a)), "{a} counted as not public");

@@ -444,7 +444,7 @@ asks the hub nothing and its keys say the same."
   (let ((echoes (drgnx-work-map-rows-test--echoes (drgnx-work-lens-string 'map "drgnx" drgnx-work-map--lens-keys))))
     (should (member "Move this tile" echoes))
     (should (member "Maximise or restore this tile" echoes))
-    (should (member "This view's keys" echoes))))
+    (should (member "Work menu: the lenses, the keys" echoes))))
 
 (ert-deftest drgnx-work-map-rows/maximise-hides-the-islands-and-restore-shows-them ()
   ;; the maximise control hides the Detail island and the trail under the map; asked again it shows them
@@ -466,7 +466,9 @@ asks the hub nothing and its keys say the same."
          (spacer (cl-some (lambda (i) (let ((d (get-text-property i 'display s))) (and (eq (car-safe d) 'space) d)))
                           (number-sequence 0 (1- (length s))))))
     (should spacer)
-    (should (equal (list (drgnx-px 70)) (nth 2 (plist-get (cdr spacer) :align-to))))))
+    ;; (- right (PX)): a parenthesised size, at least the room of the three controls
+    (let ((px (nth 2 (plist-get (cdr spacer) :align-to))))
+      (should (and (consp px) (null (cdr px)) (integerp (car px)) (> (car px) (drgnx-px 8)))))))
 
 (ert-deftest drgnx-work-map-rows/a-trail-step-number-is-a-filled-accent-circle ()
   "The trail's step number (`drgnx-work-step-number') resolves, under the dark theme, to the accent's fill and its text colour."

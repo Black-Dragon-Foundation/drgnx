@@ -1794,6 +1794,11 @@ update_apply() { # sync, build and the runtime build for the checkout as it is n
   # rolled back (the Lisp and the binary stay in lockstep)
   update_step runtime "${DRGNX_UPDATE_RUNTIME_CMD:-}" build --install ||
     { UPD_WHY="runtime build failed (see $(update_state_dir)/last.log; the toolchain: $(drgnx_dir data)/cargo)"; return 1; }
+  # language packs: the grammars the build before packs left become packs (a failure, with no compiler or offline,
+  # never rolls the update back: the old grammar folder stays on the load path)
+  update_step packs "${DRGNX_UPDATE_PACKS_CMD:-}" migrate ||
+    update_say "drgnx update: the language packs were not migrated (see $(update_state_dir)/last.log); drgnx packs migrate tries again"
+  return 0
 }
 
 update_binary_commit() { # the commit the installed Ratatoskr was built from; nothing when there is none
@@ -2300,7 +2305,7 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
                                the hub: the durable process behind agents and their gateway (docs/guide/agents.md)
        drgnx graph export|import|backup|revert|excise|scrub|grants|sql|compact|proposed …
                                the work store from the command line (docs/guide/work.md, "The graph from the command line")
-       drgnx job propose PLAN [--repo DIR] [--budget USD] [--auto]
+       drgnx job propose PLAN [--repo DIR] [--budget USD] [--auto] [--gate review|review+accept]
                                a job from a plan: tasks, routes, estimate; nothing starts before approve
        drgnx job approve|resume ID [--budget USD] | stop ID | status [ID] [--json]
                                run, pause and inspect jobs in the hub (docs/guide/jobs.md)
@@ -2308,6 +2313,9 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
                                the machines that run jobs: list, add, check, bench, trust, unbench, remove (docs/guide/runners.md)
        drgnx plugins install PATH [--replace] | list [--json] | remove NAME
                                the plugins drgnx runs (installing never approves one) (docs/guide/plugins.md)
+       drgnx packs list | install NAME… | remove NAME… | sync [--add NAME…] [--remove NAME…] | migrate | check DIR | pin REPO COMMIT
+                               language packs: what is installed, their grammars (built and checked), the pre-pack build
+                               migrated; check and pin are for pack authors
        drgnx browser install [--version V] [--json] | list [--json]
                                the browser sandboxed agents get: a sha256-pinned download, only when you run it
                                (docs/guide/agent-browser.md)
@@ -2361,6 +2369,18 @@ case "${1:-help}" in
   sync|upgrade|rollback|generations|lock|bisect|service-unit)
         "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-pkg -f drgnx-pkg-cli -- "$@" ;;
+  packs) shift   # language packs: check and pin are Ratatoskr's; list, sync and migrate are the lock's (core/drgnx-packs.el)
+        case "${1:-}" in
+          check|pin)
+            rtsk="${DRGNX_RATATOSKR_BIN:-}"
+            if [[ "$rtsk" != /* || ! -f "$rtsk" || ! -x "$rtsk" ]]; then rtsk="$(drgnx_dir data)/bin/ratatoskr"; fi
+            if [[ ! -f "$rtsk" || ! -x "$rtsk" ]]; then echo "drgnx: Ratatoskr is not built: run \`drgnx runtime build'" >&2; exit 1; fi
+            exec "$rtsk" packs "$@" ;;
+          list|install|remove|sync|migrate)
+            "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+                  -l drgnx-pkg -f drgnx-pkg-cli -- packs "$@" ;;
+          *) echo "usage: drgnx packs list | install NAME… | remove NAME… | sync [--add NAME…] [--remove NAME…] | migrate | check DIR [--builtin] | pin REPO COMMIT [--src DIR]" >&2; exit 2 ;;
+        esac ;;
   extensions) shift
         "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-extensions-refresh -f drgnx-extensions-refresh-cli -- "$@" ;;

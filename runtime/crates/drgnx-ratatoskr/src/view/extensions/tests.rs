@@ -13,6 +13,7 @@ fn row(id: &str, state: w::State) -> w::Row {
         latest: Some("1.3".into()),
         downloads: None,
         why: vec![],
+        layers: vec![],
     }
 }
 
@@ -183,6 +184,20 @@ fn extensions_rows_follow_the_explorer_and_say_missing_neutrally() {
         get("pkg:m").runs
     );
     assert!(!get("pkg:m").runs.iter().any(|r| r.2 == "drgnx-status-fail"));
+}
+
+/// A language pack's row shows what it brings, as chips after the name: grammar, mode, server...
+#[test]
+fn a_pack_row_shows_its_layers() {
+    let mut r = row("pack:kotlin", w::State::Installed);
+    r.kind = w::Kind::Pack;
+    r.layers = vec!["grammar".into(), "mode".into(), "search".into()];
+    let (b, _) = build(&params(false), vec![(1, vec![r])]);
+    let (rows, _) = rows(&b, GUI);
+    assert_eq!(
+        text(&rows, "pack:kotlin"),
+        "  pack:kotlin 1.2  grammar · mode · search"
+    );
 }
 
 /// Every column the list shows is in the hub's rows: the header's title and count, the glyph (the terminal's ASCII in

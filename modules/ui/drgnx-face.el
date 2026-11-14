@@ -459,6 +459,14 @@ the current line across the full width.  On `after-change-major-mode-hook'."
 (declare-function flymake--severity "flymake")
 (declare-function flymake--lookup-type-property "flymake")
 
+(declare-function flymake-diagnostic-beg "flymake")
+
+(defun drgnx-face--eol-fit (text column width)
+  "TEXT cut, with an ellipsis, to the room a window WIDTH columns wide has after COLUMN (the line's end) and a few
+columns of margin: an end-of-line problem that does not fit would wrap onto a second screen line.  At least 8 columns."
+  (let ((room (max 8 (- width column 4))))
+    (if (<= (string-width text) room) text (truncate-string-to-width text room nil nil "…"))))
+
 (defun drgnx-face--eol-icon (format diag destination face-prop)
   "Flymake's text for DIAG at DESTINATION by FORMAT, its own function: at a line's end (`:eol', Flymake 1.4's
 `:inline-…') a chip as window-dark.html's `.diag', opening with its kind's icon (`circle-x' for an error,
@@ -471,6 +479,9 @@ display specs (an image, a pixel space) Emacs does not draw."
       (let* ((type (flymake-diagnostic-type diag))
              (severity (flymake--severity type))
              (face (flymake--lookup-type-property type face-prop 'flymake-error)))
+        (setq text (drgnx-face--eol-fit text
+                                        (save-excursion (goto-char (flymake-diagnostic-beg diag)) (end-of-line) (current-column))
+                                        (let ((w (get-buffer-window (current-buffer)))) (if w (window-body-width w) 80))))
         (concat (propertize (drgnx-face-glyph (cond ((>= severity (flymake--severity :error)) 'circle-x)
                                                     ((>= severity (flymake--severity :warning)) 'triangle-alert)
                                                     (t 'info)))

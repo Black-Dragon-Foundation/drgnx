@@ -161,6 +161,46 @@ fn context_closes_data_state_config_and_sockets() {
     assert_eq!(r.rule, Rule::ProgramDir, "{}", r.message);
 }
 
+/// The hub counts a chat's git reads by `trusted-folders.eld` (`agents::trust`): the file lives in the state dir, which
+/// is closed, so no spec of an agent or a job can write it, nor read it, nor bind its folder.
+#[test]
+fn an_agent_cannot_write_the_trusted_folders_file() {
+    let fx = Fx::new();
+    let ctx = context_for(&fx.env(), Some(&fx.p("bin/ratatoskr")));
+    let file = fx.p("home/.local/state/drgnx/trusted-folders.eld");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, "(:version 2 :folders ())\n").unwrap();
+    let spec = |write: PathBuf, chdir: PathBuf| Spec {
+        read: vec![],
+        write: vec![write],
+        hide: vec![],
+        sockets: vec![],
+        binds: vec![],
+        home: None,
+        run: None,
+        env: vec![],
+        chdir,
+        net: Net::Shared,
+        tmp: None,
+        layers: Layers::for_target(Target::LinuxBwrap),
+        extra_tcp_ports: vec![],
+        trace: Default::default(),
+        browser: None,
+    };
+    for write in [file.clone(), file.parent().unwrap().to_path_buf()] {
+        let r = validate(
+            spec(write.clone(), fx.p("home/proj")),
+            &ctx,
+            Target::LinuxBwrap,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(r.rule, Rule::Closed | Rule::ExposesUser),
+            "{write:?}: {r:?}"
+        );
+    }
+}
+
 /// Review M10: what an agent session is given is its session dir (`s/SID`, from `paths::make_session_dir`), which
 /// Gleipnir takes as a run source; another directory beside the hub's socket (an older hub's `hub-HASH.d/`, say) is
 /// never one, nor can any other source reach it.
@@ -464,6 +504,120 @@ fn a_keyed_jobs_key_socket_is_allowed_by_its_path_alone() {
     }
 }
 
+// Kimi Code's and DeepSeek Harness's hub-owned homes (`<state>/agents/kimi-code`, `<state>/agents/dsh`) lie in the closed
+// state dir and are the sessions' own: exactly those two are open, a sibling stays closed, and the lock's
+// `config.toml` in the home is only the read-only copy bound over an empty file (P3-LOCK-ROWS-FULL-TIER-1).
+#[test]
+fn the_hub_owned_cli_homes_are_open_inside_the_closed_state_dir_and_nothing_beside_them() {
+    let fx = Fx::new();
+    fs::create_dir_all(fx.p("wt")).unwrap();
+    let env = fx.env();
+    let ctx = context_for(&env, None);
+    let agents = fx.p("home/.local/state/drgnx/agents");
+    for home in ["kimi-code", "dsh"] {
+        assert!(
+            ctx.open_inside_closed.contains(&agents.join(home)),
+            "{home}: {:?}",
+            ctx.open_inside_closed
+        );
+    }
+    assert!(
+        !ctx.open_inside_closed.contains(&agents),
+        "never the folder above"
+    );
+    assert!(
+        !ctx.open_inside_closed.contains(&agents.join("other")),
+        "{:?}",
+        ctx.open_inside_closed
+    );
+    let spec = |read: PathBuf| Spec {
+        read: vec![read],
+        write: vec![fx.p("wt")],
+        hide: vec![],
+        sockets: vec![],
+        binds: vec![],
+        home: None,
+        run: None,
+        env: vec![],
+        chdir: fx.p("wt"),
+        net: Net::Shared,
+        tmp: None,
+        layers: Layers::for_target(Target::LinuxBwrap),
+        extra_tcp_ports: vec![],
+        trace: Default::default(),
+        browser: None,
+    };
+    // strictly inside an open entry, never the entry itself
+    for ok in ["kimi-code/sessions", "dsh/profiles"] {
+        let p = agents.join(ok);
+        fs::create_dir_all(&p).unwrap();
+        validate(spec(p.clone()), &ctx, Target::LinuxBwrap)
+            .unwrap_or_else(|r| panic!("{ok} refused: {r}"));
+    }
+    let other = agents.join("other");
+    fs::create_dir_all(&other).unwrap();
+    let r = validate(spec(other), &ctx, Target::LinuxBwrap).unwrap_err();
+    assert_eq!(r.rule, Rule::Closed, "{}", r.message);
+}
+
+#[test]
+fn the_locks_config_toml_in_a_hub_home_stays_read_only_inside_the_session() {
+    let fx = Fx::new();
+    fs::create_dir_all(fx.p("wt")).unwrap();
+    let env = fx.env();
+    let ctx = context_for(&env, None);
+    let home = fx.p("home/.local/state/drgnx/agents/kimi-code");
+    let config = home.join("config.toml");
+    let mut plan = browser_plan(vec![]);
+    plan.login_dir = Some(home.clone());
+    plan.ro_files = vec![(config.clone(), b"default_yolo = false\n".to_vec())];
+    plan.make_home().unwrap();
+    let shape = SessionShape {
+        sid: "S5".into(),
+        cwd: fx.p("wt"),
+        write: vec![fx.p("wt")],
+        read: vec![],
+        net: crate::agents::launch::NetCell::ProviderOnly,
+        sockets: vec![],
+        browser: None,
+    };
+    let scratch = crate::agents::launch::scratch_dir(&env, "S5").unwrap();
+    let built = session_spec(
+        &env,
+        &ctx,
+        &plan,
+        &shape,
+        &scratch,
+        Tier::Full,
+        Target::LinuxBwrap,
+    )
+    .unwrap_or_else(|r| panic!("refused: {r}"));
+    let bind = built
+        .spec
+        .binds
+        .iter()
+        .find(|b| b.dest == config)
+        .expect("bound at its path");
+    assert_eq!(bind.mode, Mode::Ro);
+    assert_eq!(
+        fs::read_to_string(&bind.source).unwrap(),
+        "default_yolo = false\n"
+    );
+    // no write grant covers it, and the home's own state folders are the only writes there
+    assert!(
+        built.spec.write.iter().all(|w| !config.starts_with(w)),
+        "{:?}",
+        built.spec.write
+    );
+    assert!(
+        built.spec.write.contains(&home.join("sessions")),
+        "{:?}",
+        built.spec.write
+    );
+    // the spec as built validates (it was refused as "inside a closed directory")
+    validate(built.spec, &ctx, Target::LinuxBwrap).unwrap_or_else(|r| panic!("refused: {r}"));
+}
+
 #[test]
 fn browser_spec_shape() {
     let fx = Fx::new();
@@ -686,4 +840,63 @@ fn a_job_removes_the_stubs_its_launch_made() {
     // nothing missing: no list
     note_missing(&list, &wt, &protected[..1]).unwrap();
     assert!(!list.exists());
+}
+
+// GL-T12-4: `run_probe` reads the helper's status line without holding the runtime's thread. On a runtime of one
+// thread, a task that wakes only when the child signals (after the read has begun) writes the line the read waits
+// for. With the read on the thread itself the task never runs and the read times out.
+#[tokio::test(flavor = "current_thread")]
+async fn run_probe_reads_the_status_without_holding_the_runtime_thread() {
+    use std::io::Write;
+    use std::os::fd::OwnedFd;
+    let (status_r, mut status_w) = std::io::pipe().unwrap();
+    let (go_r, go_w) = std::io::pipe().unwrap();
+    let prepared = gleipnir::backend::Prepared {
+        invocation: gleipnir::backend::Invocation {
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), "sleep 0.3; echo go >&5; exec sleep 30".into()],
+            env: vec![("PATH".into(), "/usr/bin:/bin".into())],
+            cwd: None,
+            fds: vec![(OwnedFd::from(go_w), 5)],
+            new_session: false,
+        },
+        status: Some(OwnedFd::from(status_r)),
+        layers: None,
+        browser: false,
+    };
+    let task = tokio::spawn(async move {
+        let go =
+            tokio::net::unix::pipe::Receiver::from_file(std::fs::File::from(OwnedFd::from(go_r)))
+                .unwrap();
+        go.readable().await.unwrap();
+        status_w
+            .write_all(b"{\"ok\":false,\"error\":\"from the task\"}\n")
+            .unwrap();
+        status_w
+    });
+    let ran = run_probe(prepared, Duration::from_millis(2500)).await;
+    let _w = task.await.unwrap();
+    let why = ran.layers.expect_err("the line says ok false").message;
+    assert!(why.contains("from the task"), "{why}");
+}
+
+// GL-T15-4: a refused start's `exit` in the result file is the helper's setup failure, whichever of the helper and
+// the group's kill came first (it was 125 or 143 by race).
+#[cfg(feature = "test-hooks")]
+#[test]
+fn a_refused_starts_exit_is_always_the_setup_failure() {
+    use super::run::refused_start_exit;
+    assert_eq!(
+        refused_start_exit(Some(143)),
+        Some(gleipnir::inner::EXIT_SETUP)
+    );
+    assert_eq!(
+        refused_start_exit(Some(125)),
+        Some(gleipnir::inner::EXIT_SETUP)
+    );
+    assert_eq!(
+        refused_start_exit(Some(0)),
+        Some(gleipnir::inner::EXIT_SETUP)
+    );
+    assert_eq!(refused_start_exit(None), None);
 }

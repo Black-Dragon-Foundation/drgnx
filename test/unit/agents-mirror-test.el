@@ -430,7 +430,7 @@ snapshots then).  The test answers the fetch itself (`drgnx-hub-call' stubbed), 
             (drgnx-agents-mirror--hub-turns (make-hash-table :test #'equal))
             (snap (lambda (status count turns)
                     (list :id "h-t" :name "t" :profile "mock" :cwd "/w" :task "T#1" :status status
-                          :entries_count count :turns turns)))
+                          :entries-count count :turns turns)))
             (past '((0 (:type "user" :text "old")) (1 (:type "stop" :stop "EndTurn"))))
             (turn '((2 (:type "user" :text "new")) (3 (:type "stop" :stop "EndTurn")))))
         (when shown (puthash "h-t" t drgnx-agents-mirror--shown))

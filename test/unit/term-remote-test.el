@@ -169,6 +169,46 @@ run by SHELL with its script cut before the `cd' and printing the folder instead
               (should-not posted)))
         (kill-buffer b)))))
 
+(ert-deftest drgnx-term-remote/a-clipboard-read-asks-by-a-notice-and-answers-the-worker ()
+  ;; a program's read (OSC 52 ?, `drgnx-term-clipboard-read' `ask'): a notice naming the terminal and whether it is remote,
+  ;; never the text; Allow answers `term/clipboard-reply' with the kill ring's head, Deny with none; nothing is asked
+  ;; once answered, and an answer to nothing sends nothing
+  (let ((drgnx-term--buffers (make-hash-table :test #'equal)) (drgnx-term--notices nil) (drgnx-term--offered nil)
+        (posted nil) (sent nil) (kill-ring (list "from the ring" "older"))
+        (b (generate-new-buffer "*terminal*")))
+    (cl-letf (((symbol-function 'drgnx-notice-set) (lambda (_s items &rest _) (setq posted items)))
+              ((symbol-function 'drgnx-timer-start) #'ignore)
+              ((symbol-function 'drgnx-timer-cancel) #'ignore)
+              ((symbol-function 'drgnx-term-buffers) (lambda () (list b)))
+              ((symbol-function 'drgnx-term--send) (lambda (method params) (push (cons method params) sent))))
+      (unwind-protect
+          (with-current-buffer b
+            (setq drgnx-term--remote "/ssh:box:" drgnx-term--remote-host "box" drgnx-term--id "t9")
+            (drgnx-term--read-asked 5)
+            (let ((text (plist-get (car posted) :text)))
+              (should (string-search "(remote, on box)" text))
+              (should (string-search "*terminal*" text))
+              (should (eq (plist-get (car posted) :command) 'terminal-clipboard-read-answer)))
+            (drgnx-term--read-answered b t)
+            (should (equal sent '(("term/clipboard-reply" :req 5 :text "from the ring"))))
+            (should-not posted)
+            (setq sent nil)
+            (drgnx-term--read-answered b t)                       ; nothing is asked now
+            (should-not sent)
+            (setq drgnx-term--remote nil drgnx-term--remote-host nil)
+            (drgnx-term--read-asked 6)
+            (should (string-search "(local)" (plist-get (car posted) :text)))
+            (drgnx-term--read-answered b nil)
+            (should (equal sent '(("term/clipboard-reply" :req 6 :text nil))))
+            ;; the worker gave up (30 s): the notice goes, nothing is sent
+            (setq sent nil)
+            (drgnx-term--read-asked 7)
+            (drgnx-term--read-expired b 7)
+            (should-not posted)
+            (should-not sent)
+            (should-not drgnx-term--read-req))
+        (kill-buffer b)))))
+
 (ert-deftest drgnx-term-remote/a-lost-connection-keeps-the-buffer-with-reconnect ()
   (let ((drgnx-term--buffers (make-hash-table :test #'equal)) (opened nil)
         (b (generate-new-buffer "*terminal*")))

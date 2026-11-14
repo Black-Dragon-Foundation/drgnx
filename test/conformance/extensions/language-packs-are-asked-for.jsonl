@@ -1,0 +1,18 @@
+{"scenario": "extensions/language-packs-are-asked-for", "requires": ["v1", "test-hooks"], "doc": "The 26 built-in language packs are rows (pack:NAME) but not part of a plain listing: the user's search finds one by a word of its name, the packs filter and the pack kind list them, and an agent's search never returns one (extensions_suggest names packages and plugins only)."}
+{"do": "root"}
+{"do": "start", "hub": "h", "args": ["--agent-socket", "s1:j1"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "extensions/search", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"total": 0, "rows": []}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "extensions/search", "params": {"query": "kotlin"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"total": 1, "rows": [{"id": "pack:kotlin", "kind": "pack"}]}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "extensions/search", "params": {"filters": {"packs": true}}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"total": 26}}}
+{"do": "connect", "conn": "a", "hub": "h", "socket": "agent:s1", "as": "service"}
+{"do": "hello", "conn": "a", "proof": "valid", "expect_class": "agent"}
+{"do": "send", "conn": "a", "json": {"id": 1, "method": "extensions/search", "params": {"query": "kotlin"}}}
+{"do": "expect", "conn": "a", "json": {"id": 1, "result": {"total": 0, "rows": []}}}
+{"do": "send", "conn": "a", "json": {"id": 2, "method": "extensions/search", "params": {"filters": {"packs": true}}}}
+{"do": "expect", "conn": "a", "json": {"id": 2, "result": {"total": 0, "rows": []}}}
+{"do": "send", "conn": "a", "json": {"id": 3, "method": "extensions/details", "params": {"id": "pack:kotlin"}}}
+{"do": "expect", "conn": "a", "json": {"id": 3, "result": {"row": {"id": "pack:kotlin"}}}}

@@ -648,10 +648,13 @@ fn a_worktree_under_the_hub_run_root_launches_with_only_the_run_root_opened() {
         gleipnir::validate(spec, ctx, Target::LinuxReduced)
     };
     let ctx = context_for(&env, None);
-    // the run root, and the data dir's downloaded browsers: nothing of the state folder but the run root
+    // the run root, the data dir's downloaded browsers and the two hub-owned CLI homes: nothing else of the state folder
     let mut open = vec![
         fs::canonicalize(state.join("hub")).unwrap().join("runs"),
         crate::sandbox::true_name(&paths::data_dir(&env).join("browsers")).unwrap(),
+        // Kimi Code's and DeepSeek Harness's hub-owned homes
+        crate::sandbox::true_name(&state.join("agents").join("kimi-code")).unwrap(),
+        crate::sandbox::true_name(&state.join("agents").join("dsh")).unwrap(),
     ];
     open.sort();
     assert_eq!(ctx.open_inside_closed, open);

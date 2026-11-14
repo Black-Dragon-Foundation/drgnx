@@ -105,9 +105,10 @@ nil or the reason it failed) when it ends.")
 
 (defun drgnx-hub-socket ()
   "The hub's socket: $XDG_RUNTIME_DIR/drgnx/hub-HASH.sock (HASH of the data dir: one hub per data dir), else under
-the state dir; past 103 bytes, drgnx-hub-UID/ in the first of $TMPDIR, $TMP, $TEMP, else /tmp.  A function of the
-environment alone, as the Rust side computes it (test/fixtures/hub-socket-cases.json): never `temporary-file-directory',
-which macOS's Emacs takes from `getconf DARWIN_USER_TEMP_DIR' when none of the three is set, and a user can change."
+the state dir; past 103 bytes, drgnx-hub-UID/ in the first of $TMPDIR, $TMP, $TEMP that is absolute (a relative one
+counts for nothing), else /tmp.  A function of the environment alone, as the Rust side computes it
+\(test/fixtures/hub-socket-cases.json): never `temporary-file-directory', which macOS's Emacs takes from
+`getconf DARWIN_USER_TEMP_DIR' when none of the three is set, and a user can change."
   (let* ((name (format "hub-%s.sock" (substring (secure-hash 'sha1 (drgnx-data-dir)) 0 8)))
          (run (getenv "XDG_RUNTIME_DIR"))
          (path (if (and run (file-directory-p run))
@@ -116,7 +117,10 @@ which macOS's Emacs takes from `getconf DARWIN_USER_TEMP_DIR' when none of the t
     ;; a Unix socket's path ends with a NUL inside 104 bytes on macOS (108 on Linux): at most 103; a deep state
     ;; dir gets a short private one instead.  Counted as the system sees it: encoded (macOS decomposes "é" to 3 bytes)
     (if (<= (length (encode-coding-string path (or file-name-coding-system default-file-name-coding-system))) 103) path
-      (let ((tmp (file-name-as-directory (or (getenv "TMPDIR") (getenv "TMP") (getenv "TEMP") "/tmp"))))
+      ;; a relative value counts for nothing, as in Rust (it would be read against this Emacs's own folder)
+      (let ((tmp (file-name-as-directory
+                  (or (seq-find (lambda (v) (and v (string-prefix-p "/" v))) (list (getenv "TMPDIR") (getenv "TMP") (getenv "TEMP")))
+                      "/tmp"))))
         (expand-file-name name (expand-file-name (format "drgnx-hub-%d" (user-uid)) tmp))))))
 
 (defun drgnx-hub--private-dir (dir)
@@ -1010,6 +1014,18 @@ drops it (`drgnx-hub--drop-keys')."
     (drgnx-hub--drop-keys keys))
   (unless (eq drgnx-hub--keys-held :unknown)
     (cl-pushnew (symbol-name id) drgnx-hub--keys-held :test #'equal)))
+
+(defun drgnx-hub-revoke-key (id)
+  "Tell the hub to forget provider ID's key (`gateway/revoke-key'): a request after it finds no key, one already sent
+finishes.  Only a hub this Emacs is connected to and that proved itself, without waiting and without asking or starting
+anything (a daemon path may call it): the hub holds nothing else to forget.  A replaced key is this plus the hand-over
+\(`drgnx-hub-give-key', `drgnx-hub--send-keys').  Returns whether the call was made."
+  (when (and (processp drgnx-hub--events) (process-live-p drgnx-hub--events)
+             (process-get drgnx-hub--events :drgnx-proven))
+    (drgnx-hub-call "gateway/revoke-key" (list :provider (symbol-name id)) #'ignore)
+    (unless (eq drgnx-hub--keys-held :unknown)
+      (setq drgnx-hub--keys-held (delete (symbol-name id) drgnx-hub--keys-held)))
+    t))
 
 (defun drgnx-hub--hand-over ()
   "Hand the hub the runtime settings your Lisp holds (`drgnx-settings-runtime-send') and the keys this Emacs holds

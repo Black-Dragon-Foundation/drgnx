@@ -114,6 +114,14 @@ pub async fn serve(t: &Terms, conn: u64, p: Params) -> Result<Value, Error> {
         Params::TermText(p) => tell(t, &p.id, In::Text { text: p.text }),
         Params::TermPaste(p) => tell(t, &p.id, In::Paste { text: p.text }),
         Params::TermFocus(p) => tell(t, &p.id, In::Focus { gained: p.focus_in }),
+        Params::TermClipboardReply(p) => tell(
+            t,
+            &p.id,
+            In::ClipboardReply {
+                req: p.req,
+                text: p.text,
+            },
+        ),
         Params::TermVisible(p) => tell(t, &p.id, In::Visible { visible: p.visible }),
         Params::TermMouse(p) => tell(
             t,

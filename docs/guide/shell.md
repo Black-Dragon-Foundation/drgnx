@@ -47,6 +47,12 @@ the terminal says why in the echo area. So:
 - **Mouse** clicks and the wheel go to the program only while it asks for the mouse; otherwise they select text.
 - **Links** a program prints (OSC 8, `ls --hyperlink`) open on a click: a file in the other window, a URL in the
   browser, on the screen and in the rows scrolled off it alike.
+  An address in plain output (`https://…`, `file://…`) is a link too (`drgnx-term-link-url`, on by default), and
+  `drgnx-term-link` takes patterns of your own: `(("TICKET-\\([0-9]+\\)" "https://tracker.example/\\1"))` makes `TICKET-42` a link.
+  Your patterns come first; an OSC 8 link keeps its own address.
+- **A click at the prompt** moves the cursor there (`drgnx-term-cursor-click-to-move`, on by default): on the cursor's row, while the
+  shell's integration says it is at a prompt, the terminal sends as many Left or Right keys as the click is cells away.
+  Not while a command runs, in a full-screen program, or while a program tracks the mouse.
 - **Images** a program shows (`kitten icat`, `chafa`, `img2sixel`, `imgcat`, yazi's previews; the kitty graphics
   protocol, sixel and iTerm2 inline images) are drawn in the terminal, sharp at any scale, and scroll with the text;
   kitty animations play while a window shows the terminal (at most `drgnx-term-image-fps` frames a second). In a text
@@ -55,7 +61,9 @@ the terminal says why in the echo area. So:
   and `-image-file-medium` bound them. A program in a remote terminal can only send an image's data: it can never make
   drgnx read a file on your machine; one that saves a file (`inline=0`) is refused.
 - **Programs can copy to the clipboard** (OSC 52, as tmux and neovim over ssh do): the text lands in the kill ring.
-  The setting `drgnx-term-clipboard-write` turns that off. Reading the clipboard is always refused.
+  The setting `drgnx-term-clipboard-write` turns that off. A program that **reads** the clipboard gets an empty one
+  (`drgnx-term-clipboard-read` is `deny`); set it to `ask` and the terminal's output stops while a notice asks you, naming
+  the terminal and whether it is remote: Allow (it reads the newest kill) or Deny; with no answer in 30 seconds it is denied.
 - **The shell's directory** (OSC 7) is the buffer's directory, so `C-x C-f` starts where the shell is; the program's
   title names the buffer, a progress report (OSC 9;4) shows in the mode line, and a notification (OSC 9 / 777) is a
   drgnx notice.

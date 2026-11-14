@@ -120,7 +120,15 @@ pub async fn run(args: ServeArgs) -> Exit {
     // held until the run returns: dropped then, before `main` shuts the runtime down (`stall::Watchdog`)
     let _watchdog = stall.map(crate::stall::start);
     let lock_path = paths::lock_path(&socket);
-    let lock = match lock::acquire(&lock_path, &lock::System) {
+    // a hub a restart re-executed waits up to a second for the lock its predecessor's exec let go of
+    let tries = if std::env::var_os(lock::RESTARTED).is_some() {
+        20
+    } else {
+        0
+    };
+    let lock = match lock::acquire_retrying(&lock_path, &lock::System, tries, || {
+        std::thread::sleep(Duration::from_millis(50));
+    }) {
         Ok(l) => l,
         Err(LockError::LispHub { pid }) => {
             tracing::error!(pid, "{}", lock::LISP_HUB_SERVES);
@@ -329,6 +337,40 @@ pub async fn run(args: ServeArgs) -> Exit {
         .settings
         .open(paths::config_dir(&env), runtime.clone());
     front.refresh_settings().await;
+    // the matrix cards an earlier hub's sessions waited on: nobody waits any more (before any session resumes, so a
+    // card a resumed session raises is never taken for one of them)
+    {
+        let at = crate::clock::wall_secs();
+        let caller = crate::dispatch::Caller {
+            class: runstav::registry::Class::Service,
+            sid: None,
+            job: None,
+            conn_id: 0,
+        };
+        // only when there is something to withdraw: a start with nothing left over writes nothing
+        let any = front
+            .writer
+            .db
+            .read(|c| Ok(norn::write::cards::has_orphaned_matrix_cards(c).unwrap_or(false)))
+            .await
+            .unwrap_or(false);
+        match if any {
+            front
+                .writer
+                .write(&caller, "cards/withdraw", move |tx| {
+                    norn::write::cards::withdraw_orphaned_matrix_cards(tx, at)
+                })
+                .await
+        } else {
+            Ok(0)
+        } {
+            Ok(n) if n > 0 => {
+                tracing::info!("{n} matrix cards of an earlier hub's sessions withdrawn")
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!("matrix cards of an earlier hub not withdrawn: {e:?}"),
+        }
+    }
     // the sessions recorded before this start: resumed (their profiles are in the settings now), queues delivered
     // (in the background: a slow agent never delays serving)
     // The jobs a hub before this one left running are watched again first (a session resumed then knows it waits),

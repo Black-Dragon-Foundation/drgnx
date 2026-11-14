@@ -48,6 +48,12 @@ pub enum In {
         #[serde(rename = "in")]
         gained: bool,
     },
+    /// The editor's answer to `clipboard-read` REQ: the text the program may read, or none (denied).
+    ClipboardReply {
+        req: u64,
+        #[serde(default)]
+        text: Option<String>,
+    },
     /// `kind`: press, release or motion; `button` 1–11 (0: none); the cell, 0-based.
     Mouse {
         kind: String,
@@ -186,6 +192,12 @@ pub enum Out {
         primary: bool,
         mime: String,
         data: String,
+    },
+    /// A program asks to read the clipboard (OSC 52 `?`; PRIMARY: the selection): the worker waits for the editor's
+    /// `clipboard-reply` with the same REQ (`ask.rs`).
+    ClipboardRead {
+        req: u64,
+        primary: bool,
     },
     /// OSC 133: `kind` 1 prompt, 2 input, 3 output (a program runs), 4 command ended with `exit`.
     Prompt {

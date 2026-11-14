@@ -315,6 +315,7 @@ auth-source's cache is emptied.  The environment is left as it is: keys the user
 (declare-function drgnx-hub-editor-token "drgnx-hub-client")
 (declare-function drgnx-hub-keys-held "drgnx-hub-client")
 (declare-function drgnx-hub-give-key "drgnx-hub-client")
+(declare-function drgnx-hub-revoke-key "drgnx-hub-client")
 
 (defun drgnx-ai--waits-p (interactive &optional waits)
   "Whether a request may wait for the hub: a command the user ran (INTERACTIVE, or WAITS: a caller that waits for
@@ -550,7 +551,42 @@ reads it back, and a Keychain item that does not match is deleted (`drgnx-ai--ke
         (unless (equal back key)
           (user-error "The key was stored, but the %s did not give it back. %s" store advice))))
     (puthash id key drgnx-ai--keys)
+    ;; the key the hub holds for ID is the old one now: the hub forgets it (the new one goes with the next hand-over)
+    (when (fboundp 'drgnx-hub-revoke-key) (drgnx-hub-revoke-key id))
     (if mac 'keychain 'keyring)))
+
+(defun drgnx-ai-remove-key (id)
+  "Remove provider ID's key: drgnx's item in the macOS Keychain or the Linux keyring (what `drgnx-ai-store-key'
+wrote), this Emacs's copy, and the hub's, which forgets it at once (`drgnx-hub-revoke-key').  A key in your environment
+stays where you put it.  Asks first when run as a command; nothing else deletes a key."
+  (interactive
+   (list (intern (completing-read "Remove the key of: "
+                                  (mapcar (lambda (p) (symbol-name (car p)))
+                                          (seq-filter (lambda (p) (plist-get (cdr p) :key-env)) (drgnx-ai-providers)))
+                                  nil t))))
+  (let* ((p (drgnx-ai-provider id))
+         (env (plist-get p :key-env))
+         (host (and env (url-host (url-generic-parse-url (plist-get p :url)))))
+         (mac (eq system-type 'darwin))
+         (store (if mac "Keychain" "keyring")))
+    (unless host (user-error "Provider %s has no key to remove" id))
+    (when (and (called-interactively-p 'interactive)
+               (not (y-or-n-p (format "Remove the %s key from your %s and the drgnx hub? (A key in %s stays.) " id store env))))
+      (user-error "Not removed"))
+    (let ((status (if mac
+                      (car (drgnx-ai--security-call (list "delete-internet-password" "-a" "drgnx" "-s" host)))
+                    (if (executable-find "secret-tool")
+                        (call-process "secret-tool" nil nil nil "clear" "host" host "service" "drgnx")
+                      (user-error "No `secret-tool' found: nothing in the keyring was removed")))))
+      ;; 44: the Keychain had no item; the keyring answers 0 either way
+      (unless (memq status '(0 44))
+        (user-error "The %s did not remove the key (exit %s)" store status)))
+    (remhash id drgnx-ai--keys)
+    (when (featurep 'auth-source) (auth-source-forget-all-cached))
+    (when (fboundp 'drgnx-hub-revoke-key) (drgnx-hub-revoke-key id))
+    (when (called-interactively-p 'interactive)
+      (message "Removed the %s key from your %s and the drgnx hub" id store))
+    id))
 
 ;;;; Agent environments (agent profiles; M9b adds more kinds)
 

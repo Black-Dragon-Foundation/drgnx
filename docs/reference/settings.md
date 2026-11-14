@@ -478,26 +478,6 @@ OpenRouter agents do not start until it is fixed.
 | `:agents` | `never` |
 | `:schema` | `(pred drgnx-agents--openrouter-ok-p "not an OpenRouter restriction (:only :ignore :data-collection :zdr)")` |
 
-## drgnx-agents-own-env
-
-Each agent's own credentials and switches: (AGENT NAME…).  A profile without an `:ai' route runs on the user's
-own login, so the names of its agent (by its command: claude, codex, gemini) are exempt from
-`drgnx-agents-scrubbed-env' for it, and only for it.  `AWS_*' and `GOOGLE_APPLICATION_CREDENTIALS' are not scrubbed
-at all.
-
-| Key | Value |
-| --- | --- |
-| Default | `((claude "ANTHROPIC_API_KEY" "ANTHROPIC_AUTH_TOKEN" "ANTHROPIC_BASE_URL" "ANTHROPIC_MODEL" "ANTHROPIC_SMALL_FAST_MODEL" "ANTHROPIC_DEFAULT_HAIKU_MODEL" "ANTHROPIC_DEFAULT_SONNET_MODEL" "ANTHROPIC_DEFAULT_OPUS_MODEL" "ANTHROPIC_DEFAULT_FABLE_MODEL" "CLAUDE_CODE_SUBAGENT_MODEL" "CLAUDE_CODE_OAUTH_TOKEN" "CLAUDE_CODE_USE_BEDROCK" "CLAUDE_CODE_USE_VERTEX") (codex "OPENAI_API_KEY" "OPENAI_BASE_URL") (gemini "GEMINI_API_KEY" "GOOGLE_API_KEY"))` |
-| Type | `(alist :key-type symbol :value-type (repeat string))` |
-| `:scope` | `global` |
-| `:workspace` | `never` |
-| `:merge` | `replace` |
-| `:on-error` | `last-good` |
-| `:apply` | - |
-| `:runtime` | - |
-| `:agents` | `never` |
-| `:schema` | - |
-
 ## drgnx-agents-plugins
 
 The plugins that run, in hook order: a list of plugin names.  A plugin runs only when it is listed here and you
@@ -569,28 +549,6 @@ Which profiles do each job role: an alist ROLE → a profile's name, or a list o
 | `:runtime` | `"Vec<AgentRoute>"` |
 | `:agents` | `never` |
 | `:schema` | `(alist symbol (or string (list-of string)))` |
-
-## drgnx-agents-scrubbed-env
-
-Keys never inherited by agents: variables of Emacs's environment that an agent does not get.
-MCP Test and Hook Test on the Agent Settings page unset the same list (drgnx-agent-check.el).
-An agent gets the variables of its own route (the provider key or the gateway token, the model names) and
-nothing else from this list, so a Kimi agent never sees your DeepSeek or OpenRouter key.  A profile without a
-route (`:ai') is the user's own login and also keeps its own vendor's names (`drgnx-agents-own-env').  To pass
-another one on, remove it from this list (or set it in the profile's `:env').
-
-| Key | Value |
-| --- | --- |
-| Default | `("ANTHROPIC_API_KEY" "ANTHROPIC_AUTH_TOKEN" "ANTHROPIC_BASE_URL" "ANTHROPIC_MODEL" "ANTHROPIC_SMALL_FAST_MODEL" "ANTHROPIC_DEFAULT_HAIKU_MODEL" "ANTHROPIC_DEFAULT_SONNET_MODEL" "ANTHROPIC_DEFAULT_OPUS_MODEL" "ANTHROPIC_DEFAULT_FABLE_MODEL" "CLAUDE_CODE_SUBAGENT_MODEL" "CLAUDE_CODE_OAUTH_TOKEN" "CLAUDE_CODE_USE_BEDROCK" "CLAUDE_CODE_USE_VERTEX" "OPENAI_API_KEY" "OPENAI_BASE_URL" "OPENROUTER_API_KEY" "MOONSHOT_API_KEY" "DEEPSEEK_API_KEY" "GEMINI_API_KEY" "GOOGLE_API_KEY")` |
-| Type | `(repeat string)` |
-| `:scope` | `global` |
-| `:workspace` | `never` |
-| `:merge` | `replace` |
-| `:on-error` | `last-good` |
-| `:apply` | - |
-| `:runtime` | - |
-| `:agents` | `never` |
-| `:schema` | - |
 
 ## drgnx-agents-session-memory
 
@@ -2001,6 +1959,26 @@ and the program did not ask for bracketed paste (or `drgnx-term-clipboard-paste-
 | `:agents` | `never` |
 | `:schema` | `boolean` |
 
+## drgnx-term-clipboard-read
+
+Whether a program in a terminal may read the clipboard (OSC 52 with `?'): `deny' (the default) answers with an empty
+clipboard; `ask' stops that terminal's output while a notice asks you, naming the terminal and whether it is remote:
+Allow gives it the kill ring's head, Deny, 30 s without an answer or a closed terminal an empty clipboard.  Any program
+can ask, over ssh too, so `deny' is the safe choice.  Applies to every terminal at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `deny` |
+| Type | `(choice (const :tag "Deny every read" deny) (const :tag "Ask each time" ask))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-term--apply-config` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum deny ask)` |
+
 ## drgnx-term-clipboard-trim-trailing-spaces
 
 Whether text copied from a terminal loses the spaces at the end of each line.
@@ -2086,6 +2064,25 @@ Applies to every terminal at once.
 | `:merge` | `replace` |
 | `:on-error` | `last-good` |
 | `:apply` | `drgnx-term--apply-local` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `boolean` |
+
+## drgnx-term-cursor-click-to-move
+
+Whether a click at the shell's prompt, on the cursor's row, moves the cursor there (as Left or Right keys).  Needs
+the shell integration (it marks the prompt, OSC 133); nothing moves while a command runs, in a full-screen program
+or while the program tracks the mouse.  Applies at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `t` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
 | `:runtime` | - |
 | `:agents` | `never` |
 | `:schema` | `boolean` |
@@ -2305,6 +2302,43 @@ terminals.
 | `:runtime` | - |
 | `:agents` | `never` |
 | `:schema` | `(or null string)` |
+
+## drgnx-term-link
+
+Link patterns of your own: a list of (REGEXP TARGET).  Text in a terminal's output that REGEXP matches is a link
+to TARGET: a string, with `\&' and `\N' for the match and its groups ("https://github.com/\1"), or a function of the
+matched text that returns the address (a file name works too).  Case counts.  Applies to every terminal at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(repeat (list (regexp :tag "Matches") (choice :tag "Link to" string function)))` |
+| `:scope` | `global` |
+| `:workspace` | `code` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-term--theme-changed` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(list-of (list-of any))` |
+
+## drgnx-term-link-url
+
+Whether an address in a terminal's plain output (http, https, ftp, file) is a link: a middle click opens it, as an
+OSC 8 link does.  Your own patterns (`drgnx-term-link') come first.  Applies to every terminal at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `t` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-term--theme-changed` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `boolean` |
 
 ## drgnx-term-linux-cgroup-memory-limit
 

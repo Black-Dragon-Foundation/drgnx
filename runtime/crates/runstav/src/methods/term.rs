@@ -137,6 +137,26 @@ pub struct TermFocus {
     pub focus_in: bool,
 }
 
+/// `term/clipboard-reply`: the editor's answer to a `term/clipboard-read` event: TEXT is what the program may read
+/// (the kill ring's head); none: denied.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TermClipboardReply {
+    pub id: String,
+    pub req: u64,
+    pub text: Option<String>,
+}
+
+/// `term/clipboard-read`: a program asked to read the clipboard (OSC 52 `?`, with `clipboard-read` set to `ask`); the
+/// editor answers with `term/clipboard-reply` within about 30 s, else the read is denied.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TermClipboardRead {
+    pub id: String,
+    pub req: u64,
+    pub primary: bool,
+}
+
 /// `term/visible`: whether a window shows the terminal; image animations advance only while one does.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct TermVisible {
@@ -384,6 +404,7 @@ has_id!(
     TermKey,
     TermText,
     TermFocus,
+    TermClipboardReply,
     TermVisible,
     TermMouse,
     TermResize,
@@ -445,6 +466,14 @@ fn check_text(p: &TermText) -> Result<(), Error> {
     Ok(())
 }
 
+fn check_reply(p: &TermClipboardReply) -> Result<(), Error> {
+    check_id(p)?;
+    if p.text.as_ref().is_some_and(|t| t.len() > TEXT_MAX) {
+        return Err(invalid("text", "at most 1 MiB of text"));
+    }
+    Ok(())
+}
+
 fn check_resize(p: &TermResize) -> Result<(), Error> {
     check_id(p)?;
     if p.cols == 0 || p.rows == 0 {
@@ -498,6 +527,12 @@ pub(crate) fn methods() -> Vec<Method> {
             classes: [User], writes: false,
             doc: "the terminal's window gained or lost focus: reported to the program when it asked (mode 1004)",
             check: check_id,
+        ),
+        method!(
+            "term/clipboard-reply", TermClipboardReply(TermClipboardReply) -> bool,
+            classes: [User], writes: false,
+            doc: "the editor's answer to a program's clipboard read (term/clipboard-read): the text it may read, or none to deny",
+            check: check_reply,
         ),
         method!(
             "term/visible", TermVisible(TermVisible) -> bool,
@@ -602,7 +637,7 @@ mod tests {
             .collect();
         assert_eq!(
             methods.len(),
-            17,
+            18,
             "the term/ methods: {:?}",
             methods.iter().map(|m| m.name).collect::<Vec<_>>()
         );
@@ -625,7 +660,7 @@ mod tests {
             .collect();
         assert_eq!(
             events.len(),
-            9,
+            10,
             "the term/ events: {:?}",
             events.iter().map(|e| e.name).collect::<Vec<_>>()
         );

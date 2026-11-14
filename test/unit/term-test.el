@@ -261,6 +261,38 @@ hub or its worker."
                                                                w)))))
       (drgnx-term-test--settle (lambda () (drgnx-term-test--row-matching b "\\^\\[\\[M")) "the press reached the program"))))
 
+(defun drgnx-term-test--read-clipboard (answer)
+  "A terminal whose program sends OSC 52 `?' (`drgnx-term-clipboard-read' `ask', the kill ring \"hello\"): wait for the
+notice, answer it with ANSWER (?a allow, ?d deny) through its command, and return the terminal's buffer."
+  (let* ((kill-ring (list "hello")) (drgnx-term-clipboard-read 'ask) (posted nil)
+         (b (drgnx-term-test--start)))
+    (cl-letf (((symbol-function 'drgnx-notice-set) (lambda (_s items &rest _) (setq posted items)))
+              ((symbol-function 'read-multiple-choice) (lambda (&rest _) (list answer))))
+      ;; the tty echoes what the terminal answers with (cat -v shows its escapes)
+      (drgnx-term-test--run b "printf '\\033]52;c;?\\007'; cat -v")
+      (drgnx-term-test--settle (lambda () (seq-some (lambda (i) (string-search "wants to read the clipboard" (plist-get i :text))) posted))
+                               "the notice of the program's read")
+      (should (string-search "(local)" (plist-get (car posted) :text)))
+      (should (eq (plist-get (car posted) :command) 'terminal-clipboard-read-answer))
+      (drgnx-term-clipboard-read-answer)
+      (should-not (buffer-local-value 'drgnx-term--read-req b)))
+    b))
+
+(ert-deftest drgnx-term/a-clipboard-read-allowed-reaches-the-program ()
+  ;; a real hub, its worker and this Emacs: the program's OSC 52 read is asked of the editor (a notice), Allow gives it
+  ;; the kill ring's head (base64 of "hello" in the reply)
+  (drgnx-term-test--with
+    (let ((b (drgnx-term-test--read-clipboard ?a)))
+      (drgnx-term-test--settle (lambda () (drgnx-term-test--row-matching b "\\^\\[\\]52;c;aGVsbG8="))
+                               "the program read the kill ring's head"))))
+
+(ert-deftest drgnx-term/a-clipboard-read-denied-gets-nothing ()
+  ;; Deny: the program is answered with an empty clipboard, never the text
+  (drgnx-term-test--with
+    (let ((b (drgnx-term-test--read-clipboard ?d)))
+      (drgnx-term-test--settle (lambda () (drgnx-term-test--row-matching b "\\^\\[\\]52;c;")) "the program's reply")
+      (should-not (drgnx-term-test--row-matching b "aGVsbG8=")))))
+
 (ert-deftest drgnx-term/key-release-reaches-a-program-that-asks ()
   ;; CSI > 11 u: every key as an escape code, with its event type; the tty echoes what reached it
   (drgnx-term-test--with
@@ -295,6 +327,9 @@ hub or its worker."
       (drgnx-term-test--until-line b "during-copy" "the kept output drawn on leaving"))))
 
 (ert-deftest drgnx-term/find-in-terminal-jumps ()
+  ;; Find's matches are the view's model, which needs Sjá's queue (a Nidhogg with `nidhogg-view-push'): an Emacs without
+  ;; it never gets them, and the row would wait out its deadline
+  (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) "nidhogg-view-push")
   (drgnx-term-test--with
     (let ((b (drgnx-term-test--start)))
       (drgnx-term-test--run b "echo find-me-here")

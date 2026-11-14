@@ -174,7 +174,10 @@ until the debug console shows it.
 
 ## Adapters
 
-`etc/debug-adapters.eld` is the adapter table, read by the hub with huginn's reader as data only (strings, numbers,
+The adapter table is `etc/debug-adapters.eld` and the `:adapters` of the built-in packs (`packs/NAME/pack.eld`: debugpy in
+python, js-debug in javascript, delve in go, bash-debug in shell, rdbg in ruby, cpptools in cpp, java, flutter in dart,
+xdebug in php; `skald::builtin` compiles them in, `Table::with_pack` adds an installed or fixture pack's). The file keeps the
+adapters that serve no single language. Both have the same schema. `etc/debug-adapters.eld` is read by the hub with huginn's reader as data only (strings, numbers,
 symbols and lists; nothing is evaluated; an unknown key is an error). Each entry names the launch.json `type`s it
 serves, the languages whose default configurations it gives, whether drgnx's live tests run it (`:tested`: debugpy,
 js-debug, delve, lldb-dap), how to find it and how to start it:

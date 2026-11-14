@@ -1266,4 +1266,19 @@ token and the held keys at the end, and whether the token reached `drgnx-hub-edi
             (should-not (assq 169 (drgnx-hub--card-choices-live))))
         (delete-process conn)))))
 
+(ert-deftest drgnx-hub-client/the-socket-follows-the-shared-cases ()
+  ;; the Rust side reads the same file (runstav `paths::socket_cases_fixture'): a data dir or a state dir with a
+  ;; decomposed "é" (3 bytes, 1 character) is counted in bytes by both, so both fall back to the private tmp dir together
+  (let* ((file (expand-file-name "test/fixtures/hub-socket-cases.json" drgnx-dir))
+         (cases (with-temp-buffer
+                  (let ((coding-system-for-read 'utf-8-unix)) (insert-file-contents file))
+                  (goto-char (point-min))
+                  (json-parse-buffer :object-type 'alist :array-type 'list))))
+    (should (>= (length cases) 15))
+    (dolist (c cases)
+      (let* ((env (mapcar (lambda (kv) (format "%s=%s" (car kv) (cdr kv))) (alist-get 'env c)))
+             (process-environment env)
+             (want (string-replace "$UID" (number-to-string (user-uid)) (alist-get 'socket c))))
+        (should (equal (drgnx-hub-socket) want))))))
+
 ;;; hub-client-test.el ends here

@@ -59,5 +59,9 @@
  {"env":{"HOME":"/hm/u","DRGNX_DATA_DIR":"/a.a"},"data_dir":"/a.a/","socket":"/hm/u/.local/state/drgnx/hub/hub-54bac55d.sock"},
  {"env":{"HOME":"/hm/u","DRGNX_DATA_DIR":"//aa"},"data_dir":"//aa/","socket":"/hm/u/.local/state/drgnx/hub/hub-d08b8c9d.sock"},
  {"env":{"HOME":"/hm/u","DRGNX_DATA_DIR":"/.aa"},"data_dir":"/.aa/","socket":"/hm/u/.local/state/drgnx/hub/hub-79fd0915.sock"},
- {"env":{"HOME":"/hm/u","DRGNX_DATA_DIR":"/aaa"},"data_dir":"/aaa/","socket":"/hm/u/.local/state/drgnx/hub/hub-09955179.sock"}
+ {"env":{"HOME":"/hm/u","DRGNX_DATA_DIR":"/aaa"},"data_dir":"/aaa/","socket":"/hm/u/.local/state/drgnx/hub/hub-09955179.sock"},
+ {"env":{"HOME":"/hm/u","DRGNX_DATA_DIR":"/dd/é","XDG_STATE_HOME":"/s/éééééééééééééééééééé"},"data_dir":"/dd/é/","socket":"/s/éééééééééééééééééééé/drgnx/hub/hub-e316da72.sock"},
+ {"env":{"HOME":"/hm/u","DRGNX_DATA_DIR":"/dd/é","XDG_STATE_HOME":"/s/éééééééééééééééééééééééééééééé"},"data_dir":"/dd/é/","socket":"/tmp/drgnx-hub-$UID/hub-e316da72.sock"},
+ {"env":{"HOME":"/hm/u","XDG_STATE_HOME":"/srv/ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss","TMPDIR":"rel/t"},"data_dir":"/hm/u/.local/share/drgnx/","socket":"/tmp/drgnx-hub-$UID/hub-546b5fa5.sock"},
+ {"env":{"HOME":"/hm/u","XDG_STATE_HOME":"/srv/ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss","TMPDIR":"rel","TMP":"/var/tmp2"},"data_dir":"/hm/u/.local/share/drgnx/","socket":"/var/tmp2/drgnx-hub-$UID/hub-546b5fa5.sock"}
 ]

@@ -210,6 +210,19 @@ fn every_grammar_finds_the_function_and_its_names() {
             &[(3, "b = 2  a = 1"), (4, "k = 3")],
         ),
         (
+            "f.cpp",
+            "int g();\nint f(int a) {\n  int b = a + 1;\n  for (int k : {1, 2, 3}) {\n    g();\n    b += k;\n  }\n  return b;\n}\n",
+            5,
+            &[(3, "b = 2  a = 1"), (4, "k = 3")],
+        ),
+        (
+            "F.cc",
+            "class F {\n public:\n  int f(int a) {\n    auto inc = [&](int x) {\n      int b = x + a;\n      return b;\n    };\n    return inc(a);\n  }\n};\n",
+            5,
+            // the stop is inside the lambda: only the innermost function is read, and `a` is its capture
+            &[(5, "b = 2  a = 1")],
+        ),
+        (
             "f.go",
             "package main\n\nfunc f(a int) int {\n\tb := a + 1\n\tfor k := 0; k < 3; k++ {\n\t\tg()\n\t\tb += k\n\t}\n\treturn b\n}\n",
             6,

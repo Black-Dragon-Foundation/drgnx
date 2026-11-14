@@ -3958,6 +3958,35 @@
       "data": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
+        "description": "`term/clipboard-read`: a program asked to read the clipboard (OSC 52 `?`, with `clipboard-read` set to `ask`); the\neditor answers with `term/clipboard-reply` within about 30 s, else the read is denied.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "primary": {
+            "type": "boolean"
+          },
+          "req": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "req",
+          "primary"
+        ],
+        "title": "TermClipboardRead",
+        "type": "object"
+      },
+      "doc": "a terminal's program asked to read the clipboard (OSC 52 ?, with clipboard-read set to ask); answered with term/clipboard-reply, to its editor session's connection",
+      "name": "term/clipboard-read"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "description": "`term/clipboard-write`: the program wrote the clipboard (OSC 52, when `clipboard-write` allows); DATA is the text.",
         "properties": {
           "data": {
@@ -16532,13 +16561,22 @@
         "$defs": {
           "Kind": {
             "description": "What a row is.",
-            "enum": [
-              "package",
-              "plugin",
-              "module",
-              "emacs"
-            ],
-            "type": "string"
+            "oneOf": [
+              {
+                "enum": [
+                  "package",
+                  "plugin",
+                  "module",
+                  "emacs"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "pack",
+                "description": "A language pack (`pack:NAME`): a language's grammar, mode, server, formatter and debug adapter in one.",
+                "type": "string"
+              }
+            ]
           },
           "Requirement": {
             "additionalProperties": false,
@@ -16584,6 +16622,13 @@
                   "string",
                   "null"
                 ]
+              },
+              "layers": {
+                "description": "What a language pack gives (`grammar`, `mode`, `server`, `format`, `search`, `debug`): the layer chips.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               },
               "name": {
                 "type": "string"
@@ -16921,6 +16966,11 @@
                   }
                 ]
               },
+              "packs": {
+                "default": false,
+                "description": "Language packs (`@packs`).",
+                "type": "boolean"
+              },
               "plugins": {
                 "default": false,
                 "type": "boolean"
@@ -17028,13 +17078,22 @@
           },
           "Kind": {
             "description": "What a row is.",
-            "enum": [
-              "package",
-              "plugin",
-              "module",
-              "emacs"
-            ],
-            "type": "string"
+            "oneOf": [
+              {
+                "enum": [
+                  "package",
+                  "plugin",
+                  "module",
+                  "emacs"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "pack",
+                "description": "A language pack (`pack:NAME`): a language's grammar, mode, server, formatter and debug adapter in one.",
+                "type": "string"
+              }
+            ]
           },
           "ListSection": {
             "description": "One section of the list: a search, its header's title.",
@@ -17072,6 +17131,7 @@
                   "disabled": false,
                   "enabled": false,
                   "installed": false,
+                  "packs": false,
                   "plugins": false,
                   "unsigned": false,
                   "updates": false
@@ -17372,13 +17432,22 @@
         "$defs": {
           "Kind": {
             "description": "What a row is.",
-            "enum": [
-              "package",
-              "plugin",
-              "module",
-              "emacs"
-            ],
-            "type": "string"
+            "oneOf": [
+              {
+                "enum": [
+                  "package",
+                  "plugin",
+                  "module",
+                  "emacs"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "pack",
+                "description": "A language pack (`pack:NAME`): a language's grammar, mode, server, formatter and debug adapter in one.",
+                "type": "string"
+              }
+            ]
           },
           "Row": {
             "additionalProperties": false,
@@ -17405,6 +17474,13 @@
                   "string",
                   "null"
                 ]
+              },
+              "layers": {
+                "description": "What a language pack gives (`grammar`, `mode`, `server`, `format`, `search`, `debug`): the layer chips.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               },
               "name": {
                 "type": "string"
@@ -17687,6 +17763,11 @@
                   }
                 ]
               },
+              "packs": {
+                "default": false,
+                "description": "Language packs (`@packs`).",
+                "type": "boolean"
+              },
               "plugins": {
                 "default": false,
                 "type": "boolean"
@@ -17714,13 +17795,22 @@
           },
           "Kind": {
             "description": "What a row is.",
-            "enum": [
-              "package",
-              "plugin",
-              "module",
-              "emacs"
-            ],
-            "type": "string"
+            "oneOf": [
+              {
+                "enum": [
+                  "package",
+                  "plugin",
+                  "module",
+                  "emacs"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "pack",
+                "description": "A language pack (`pack:NAME`): a language's grammar, mode, server, formatter and debug adapter in one.",
+                "type": "string"
+              }
+            ]
           },
           "Sort": {
             "description": "How the rows are ordered.",
@@ -17755,6 +17845,7 @@
               "disabled": false,
               "enabled": false,
               "installed": false,
+              "packs": false,
               "plugins": false,
               "unsigned": false,
               "updates": false
@@ -17800,13 +17891,22 @@
         "$defs": {
           "Kind": {
             "description": "What a row is.",
-            "enum": [
-              "package",
-              "plugin",
-              "module",
-              "emacs"
-            ],
-            "type": "string"
+            "oneOf": [
+              {
+                "enum": [
+                  "package",
+                  "plugin",
+                  "module",
+                  "emacs"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "pack",
+                "description": "A language pack (`pack:NAME`): a language's grammar, mode, server, formatter and debug adapter in one.",
+                "type": "string"
+              }
+            ]
           },
           "Row": {
             "additionalProperties": false,
@@ -17833,6 +17933,13 @@
                   "string",
                   "null"
                 ]
+              },
+              "layers": {
+                "description": "What a language pack gives (`grammar`, `mode`, `server`, `format`, `search`, `debug`): the layer chips.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               },
               "name": {
                 "type": "string"
@@ -19356,6 +19463,41 @@
         ],
         "title": "Registration",
         "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the hub forgets one provider's key (true when it held one): the next request finds none, one already sent finishes",
+      "name": "gateway/revoke-key",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "The provider whose key the hub forgets (`gateway/revoke-key`).",
+        "properties": {
+          "provider": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "provider"
+        ],
+        "title": "RevokeKeyParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
       },
       "writes": false
     },
@@ -38233,6 +38375,46 @@
         ],
         "title": "TermOpened",
         "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the editor's answer to a program's clipboard read (term/clipboard-read): the text it may read, or none to deny",
+      "name": "term/clipboard-reply",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`term/clipboard-reply`: the editor's answer to a `term/clipboard-read` event: TEXT is what the program may read\n(the kill ring's head); none: denied.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "req": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "req"
+        ],
+        "title": "TermClipboardReply",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
       },
       "writes": false
     },

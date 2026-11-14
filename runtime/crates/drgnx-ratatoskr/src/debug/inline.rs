@@ -57,45 +57,43 @@ pub struct Inline {
     last: Mutex<HashMap<String, HashMap<String, String>>>,
 }
 
+/// The node kinds inline values look for, over every built-in pack's grammar: each pack's `:inline` (docs/develop/packs.md).
+struct Lists {
+    functions: Vec<&'static str>,
+    loops: Vec<&'static str>,
+    names: Vec<&'static str>,
+}
+
+fn lists() -> &'static Lists {
+    static LISTS: std::sync::OnceLock<Lists> = std::sync::OnceLock::new();
+    LISTS.get_or_init(|| {
+        let mut l = Lists {
+            functions: Vec::new(),
+            loops: Vec::new(),
+            names: Vec::new(),
+        };
+        let add = |to: &mut Vec<&'static str>, from: &'static [String]| {
+            for k in from {
+                if !to.contains(&k.as_str()) {
+                    to.push(k.as_str());
+                }
+            }
+        };
+        for m in skald::builtin::manifests() {
+            if let Some(i) = &m.inline {
+                add(&mut l.functions, &i.functions);
+                add(&mut l.loops, &i.loops);
+                add(&mut l.names, &i.names);
+            }
+        }
+        l
+    })
+}
+
 /// Function nodes, over every grammar Hrafn has.
-const FUNCTIONS: &[&str] = &[
-    "function_definition",
-    "function_declaration",
-    "function_expression",
-    "function_item",
-    "function",
-    "generator_function",
-    "generator_function_declaration",
-    "arrow_function",
-    "method_definition",
-    "method_declaration",
-    "constructor_declaration",
-    "func_literal",
-    "closure_expression",
-    "lambda",
-    "lambda_expression",
-];
-
-/// Loop nodes.
-const LOOPS: &[&str] = &[
-    "for_statement",
-    "for_in_statement",
-    "enhanced_for_statement",
-    "c_style_for_statement",
-    "while_statement",
-    "do_statement",
-    "until_statement",
-    "for_expression",
-    "while_expression",
-    "loop_expression",
-];
-
-/// Name nodes that may be variables.
-const NAMES: &[&str] = &[
-    "identifier",
-    "variable_name",
-    "shorthand_property_identifier",
-];
+fn functions() -> &'static [&'static str] {
+    &lists().functions
+}
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -124,7 +122,7 @@ fn not_a_value(n: Node) -> bool {
         || kind == "macro_invocation" && is("macro")
         || kind == "attribute" && is("attribute")
         || kind == "function_declarator" && is("declarator")
-        || FUNCTIONS.contains(&kind) && is("name")
+        || functions().contains(&kind) && is("name")
 }
 
 /// The innermost node of KINDS holding ROW under NODE.
@@ -154,7 +152,7 @@ fn outer_loop<'t>(function: Node<'t>, row: usize) -> Option<Node<'t>> {
         let next = n
             .children(&mut cur)
             .find(|c| c.start_position().row <= row && row <= c.end_position().row)?;
-        if LOOPS.contains(&next.kind()) {
+        if lists().loops.contains(&next.kind()) {
             return Some(next);
         }
         n = next;
@@ -166,7 +164,7 @@ fn names(node: Node, text: &str, from: usize, to: usize, out: &mut Vec<(usize, u
     if node.end_position().row < from || node.start_position().row > to {
         return;
     }
-    if NAMES.contains(&node.kind()) && !not_a_value(node) {
+    if lists().names.contains(&node.kind()) && !not_a_value(node) {
         let p = node.start_position();
         if let Ok(s) = node.utf8_text(text.as_bytes()) {
             out.push((p.row, p.column, s.to_owned()));
@@ -233,7 +231,7 @@ impl Inline {
         };
         let row = line.saturating_sub(1) as usize;
         let root = tree.root_node();
-        let function = innermost(root, row, FUNCTIONS).unwrap_or(root);
+        let function = innermost(root, row, functions()).unwrap_or(root);
         let from = if function.id() == root.id() {
             0
         } else {
@@ -384,5 +382,64 @@ impl Inline {
     /// SESSION has ended: its values go.
     pub fn forget(&self, session: &str) {
         lock(&self.last).remove(session);
+    }
+}
+
+#[cfg(test)]
+mod list_tests {
+    use super::*;
+
+    /// The lists the module held before the packs carried them (over every grammar Hrafn had).
+    #[test]
+    fn the_packs_lists_are_the_ones_inline_values_had() {
+        fn sorted<'a>(v: &[&'a str]) -> Vec<&'a str> {
+            let mut v = v.to_vec();
+            v.sort_unstable();
+            v
+        }
+        assert_eq!(
+            sorted(&lists().functions),
+            sorted(&[
+                "function_definition",
+                "function_declaration",
+                "function_expression",
+                "function_item",
+                "function",
+                "generator_function",
+                "generator_function_declaration",
+                "arrow_function",
+                "method_definition",
+                "method_declaration",
+                "constructor_declaration",
+                "func_literal",
+                "closure_expression",
+                "lambda",
+                "lambda_expression",
+            ])
+        );
+        assert_eq!(
+            sorted(&lists().loops),
+            sorted(&[
+                "for_statement",
+                "for_range_loop", // C++ (language packs Task 9)
+                "for_in_statement",
+                "enhanced_for_statement",
+                "c_style_for_statement",
+                "while_statement",
+                "do_statement",
+                "until_statement",
+                "for_expression",
+                "while_expression",
+                "loop_expression",
+            ])
+        );
+        assert_eq!(
+            sorted(&lists().names),
+            sorted(&[
+                "identifier",
+                "variable_name",
+                "shorthand_property_identifier"
+            ])
+        );
     }
 }

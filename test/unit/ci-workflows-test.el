@@ -993,3 +993,57 @@ Returns (EXIT . OUTPUT)."
 
 (provide 'ci-workflows-test)
 ;;; ci-workflows-test.el ends here
+
+;; GL-T9-4: a weekly job diffs gleipnir's `base.sbpl` (Codex's Seatbelt base, pinned to a commit) against Codex's
+;; upstream file and says so when they differ: the script compares from the `(version 1)` line on, so our licence
+;; header is not a difference.
+(defun drgnx-ci-test--sbpl (ours upstream)
+  "Run sbpl-upstream.sh on the text OURS and UPSTREAM (nil: no such file). Returns (EXIT . OUTPUT)."
+  (let* ((dir (make-temp-file "drgnx-sbpl" t))
+         (script (expand-file-name ".github/ci/sbpl-upstream.sh" drgnx-ci-test--root))
+         (o (expand-file-name "ours.sbpl" dir)) (u (expand-file-name "up.sbpl" dir)))
+    (unwind-protect
+        (progn
+          (when ours (with-temp-file o (insert ours)))
+          (when upstream (with-temp-file u (insert upstream)))
+          (with-temp-buffer
+            (let ((rc (call-process "bash" nil t nil script o u)))
+              (cons rc (buffer-string)))))
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-ci/the-sbpl-watch-says-when-codex-s-base-profile-changed ()
+  (skip-unless (drgnx-ci-test--file ".github/ci/sbpl-upstream.sh"))
+  (let ((body "(version 1)\n(deny default)\n(allow process-exec)\n"))
+    ;; the same policy under another header: no difference
+    (should (= 0 (car (drgnx-ci-test--sbpl (concat "; our header\n; licence\n\n" body) (concat "; theirs\n" body)))))
+    ;; one rule more upstream: exit 1 and the diff
+    (let ((r (drgnx-ci-test--sbpl (concat "; h\n" body) (concat "; h\n" body "(allow network-outbound)\n"))))
+      (should (= 1 (car r)))
+      (should (string-search "+(allow network-outbound)" (cdr r)))
+      (should (string-search "::error::" (cdr r))))
+    ;; a file with no `(version 1)` (a page that moved, an error body), or none at all: exit 2, never "same"
+    (should (= 2 (car (drgnx-ci-test--sbpl (concat "; h\n" body) "404: Not Found\n"))))
+    (should (= 2 (car (drgnx-ci-test--sbpl (concat "; h\n" body) nil))))))
+
+(ert-deftest drgnx/ci-sbpl-upstream-workflow-is-weekly-needs-no-secrets-and-alerts ()
+  (let ((yml (drgnx-ci-test--yml "sbpl-upstream.yml")))
+    (skip-unless yml)
+    (drgnx-ci-test--has yml "schedule:" "workflow_dispatch:" "permissions:\n  contents: read"
+                        "raw.githubusercontent.com/openai/codex/main/codex-rs/sandboxing/src/seatbelt_base_policy.sbpl"
+                        "runtime/crates/gleipnir/src/sbpl/base.sbpl" ".github/ci/sbpl-upstream.sh"
+                        "issues: write" "github.event_name == 'schedule'")
+    (should-not (string-search "secrets." yml))))
+
+;; AS1-REDUCED-TIER-CI-1: no runner's kernel has Landlock ABI 9, so a weekly job and any change to gleipnir or to the
+;; launch rows runs tests/launch_sandboxed.rs in the Fedora 45 VM (KVM on the runner), where the reduced tier is real.
+(ert-deftest drgnx-ci/the-reduced-tier-launch-rows-run-in-a-kvm-vm-weekly-and-on-gleipnir-changes ()
+  (let ((yml (drgnx-ci-test--yml "reduced-tier-vm.yml")))
+    (should yml)
+    (drgnx-ci-test--has yml "schedule:" "workflow_dispatch:" "permissions:\n  contents: read"
+                        "runtime/crates/gleipnir/**"
+                        "runtime/crates/drgnx-ratatoskr/tests/launch_sandboxed.rs"
+                        "runs-on: ubuntu-26.04" "/dev/kvm" ".github/ci/browser-vm.sh"
+                        "--test launch_sandboxed" "--ignored")
+    ;; the rows must have run on the reduced tier: a run that fell back to the full tier is red
+    (should (string-search "this row runs on the full tier" yml))
+    (should-not (string-search "secrets." yml))))

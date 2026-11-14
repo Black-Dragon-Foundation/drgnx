@@ -193,7 +193,7 @@ The editor talks to its terminals through the hub (`runstav/src/methods/term.rs`
 | `term/attach` | `id`, `cols`, `rows`, `cell_px?` | `{id, view}`: an orphaned or detached terminal now draws for this session, from a reset; refused for one another live session has |
 
 **Events**, to the connection of the editor session that opened the terminal: `term/exit {id, code, signal}`,
-`term/title`, `term/cwd`, `term/bell`, `term/notify`, `term/progress`, `term/clipboard-write` and `term/prompt` (the OSC
+`term/title`, `term/cwd`, `term/bell`, `term/notify`, `term/progress`, `term/clipboard-write`, `term/clipboard-read {id, req, primary}` and `term/prompt` (the OSC
 133 marks, for notify-on-command-finish). `term/detached {ids}` goes to every live session when terminals detach. The
 view's `view/env`, `view/ack` and `view/resync` go to the worker.
 
@@ -460,13 +460,14 @@ image) is drawn by the next Emacs pixel for pixel as before, the cursor's row as
 - **Links:** the worker sends an OSC 8 run as the row prop `drgnx-term-link`, on every row it sends: a screen cell's
   link is read through a viewport point, a row above the screen (scrolled off, a backfill, `term/fetch`) through a
   history point (row `scrollback rows - N` for viewport row `-N`: the engine's viewport never scrolls); PATCHED gives such runs `mouse-face` and a keymap, and `drgnx-term-open-link` opens a local `file://` URI with
-  `find-file-other-window`, anything else with `browse-url`.
+  `find-file-other-window`, anything else with `browse-url`. After it `drgnx-term--match-links` gives the same props to text with no
+  OSC 8 link that `drgnx-term-link` (your patterns, `(REGEXP TARGET)`) or, with `drgnx-term-link-url`, a plain URL matches, per patched row.
 - **Resize:** a window change (`drgnx-state` `windows-changed`) debounces 50 ms per buffer
   (`drgnx-timer-debounce`), then sends `term/resize` with the selected window's size.
 - **Events:** `term/cwd` sets `default-directory`, `term/title` renames the buffer, `term/progress` sets
   `mode-line-process`, `term/notify` is a notice of the source `term`, `term/clipboard-write` is a `kill-new` when
   `drgnx-term-clipboard-write` allows it (sent to the worker as `term/config` `clipboard-write`). Clipboard reads
-  (OSC 52 `?`) are refused by the engine. While the subscription is down, or before the terminal opened, input queues per buffer,
+  (OSC 52 `?`) are answered with an empty clipboard unless `drgnx-term-clipboard-read` is `ask`: then the worker (its read callback, installed only then: it also turns on kitty paste events) sends `clipboard-read {req, primary}` on its hub socket and waits there, at most 30 s (`ask.rs`; the terminal's output stops meanwhile, other lines from the hub are kept for its loop), for the hub's `clipboard-reply {req, text}`; the hub relays them as the event `term/clipboard-read` and the method `term/clipboard-reply {id, req, text?}` (none: denied). Lisp (`drgnx-term--read-asked`) posts a notice naming the terminal and whether it is remote, its command asks Allow or Deny (Allow: the kill ring's head), 30 s without an answer or a closed terminal deny. While the subscription is down, or before the terminal opened, input queues per buffer,
   at most `drgnx-term-queue-max` (4096) bytes, and goes on `drgnx-hub-connected-functions`.
 - **Session:** every hello carries `drgnx-hub-session`; the subscription re-attaches this Emacs's terminals after a
   dropped socket or a hub restart (see [Lifetime](#lifetime)).

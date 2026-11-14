@@ -172,7 +172,7 @@ fn targets_of(repo: &Path, git: &dyn Git, head: &Head, c: &Commit) -> Vec<(Strin
         let Ok(bytes) = git.show(repo, &c.id, &ch.path) else {
             continue;
         };
-        let (lang, _) = classify(&ch.path, &bytes[..bytes.len().min(256)]);
+        let (lang, _) = classify(&ch.path, &bytes[..bytes.len().min(64 * 1024)]);
         let mut add = |t: (String, String)| {
             if !out.contains(&t) {
                 out.push(t);

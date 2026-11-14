@@ -31,6 +31,7 @@ pub mod rewind;
 pub mod session;
 pub mod tool_output;
 pub mod transcript;
+pub mod trust;
 pub mod wake;
 pub mod wheel;
 pub mod wire;

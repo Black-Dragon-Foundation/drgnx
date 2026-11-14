@@ -49,6 +49,8 @@ pub const PLACEHOLDERS: &[&str] = &[
     "TCP_LO_PORT",
     // A debug session's own loopback port (`"net": "loopback"` rows).
     "FREE_PORT",
+    // The reduced or full tier's relay port in the row's default network (Linux rows).
+    "RELAY_PORT",
     // macOS: the active developer dir (xcode-select's link, by its true name), and where its LLDB.framework is
     // (an Xcode's `../SharedFrameworks`, the Command Line Tools' `Library/PrivateFrameworks`).
     "DEVELOPER_DIR",
@@ -96,6 +98,10 @@ pub enum Need {
     #[serde(rename = "x86_64")]
     X86_64,
     X32,
+    /// `io_uring_setup`, `keyctl`, `add_key` and `socket(AF_VSOCK)` work for an unfiltered process on this host (a container's own seccomp,
+    /// podman's default profile, answers ENOSYS to some): else our filter's refusal could not be told from it.
+    #[serde(rename = "host_open")]
+    HostOpen,
     /// The browser layer runs: Landlock ABI [`gleipnir::LANDLOCK_FLOOR_BROWSER`].
     Browser,
 }

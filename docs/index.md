@@ -62,6 +62,7 @@ Commands, options and the CLI, generated from the command registry — not writt
 How drgnx is built, tested and measured.
 
 - [Architecture overview](develop/architecture.md)
+- [Language packs](develop/packs.md): the `pack.eld` format, reserved names, and the rules a fetched pack must meet (`ratatoskr packs check`).
 - [Core](develop/core.md): paths, staged hooks, no-prompt guard, command registry, surfaces, palette, modules (every module turns off cleanly: the rule and its check).
 - [Harness](develop/harness.md): headless GUI test sessions, test tiers (each unit test file in an Emacs of its
   own), CLI and MCP tools for agents.

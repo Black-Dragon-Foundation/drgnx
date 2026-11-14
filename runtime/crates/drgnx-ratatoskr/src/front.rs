@@ -621,6 +621,12 @@ impl Front {
                 self.keys_changed(&before);
                 json!(true)
             }),
+            Params::GatewayRevokeKey(p) => {
+                let before = self.gate.keys_held();
+                let had = self.gate.revoke_key(p.provider.as_str());
+                self.keys_changed(&before);
+                Ok(json!(had))
+            }
             Params::GatewayEditorToken(_) => {
                 self.gate.editor_token(s.peer_pid).await.map(|r| json!(r))
             }
@@ -702,6 +708,7 @@ impl Front {
             | Params::TermText(_)
             | Params::TermPaste(_)
             | Params::TermFocus(_)
+            | Params::TermClipboardReply(_)
             | Params::TermVisible(_)
             | Params::TermMouse(_)
             | Params::TermResize(_)

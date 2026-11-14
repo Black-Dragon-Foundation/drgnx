@@ -564,7 +564,7 @@ face under a class. The faces: `drgnx-work-band`, the decoration faces (`drgnx-c
   step keeps its verb (`read PATH`, `web TITLE — HOST`, `edit PATH +P −M`, `job PATH · WHERE`), paths in the link
   colour, a thought's text muted and italic; durations read `0.3 s`; a finding's card keeps its keys line.
 - **The lens bar's right** (`drgnx-work-lens--controls`): the grip (drawn; the tile layout's drag is not wired), maximise
-  (`drgnx-work-lens-maximize`: hides the Detail island and the trail, again shows them) and ⋯ (the keys sheet). The lens
+  (`drgnx-work-lens-maximize`: hides the Detail island and the trail, again shows them) and ⋯ (shown while the bar is hovered; its menu is the four lenses and the keys sheet). The lens
   shown is a pill in a ring (the themes give `drgnx-work-lens-current` its box).
 - **The Work layout** (`drgnx-layouts`' `work`): the map full width, the Detail island at its right (340 logical px) and
   the trail under the map. The Detail tile and the trail tile draw their own title row in the area's row

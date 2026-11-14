@@ -45,6 +45,12 @@ matching request from then on. The agent keeps its own rule until it starts agai
 agent at its latest step (a new agent from there, which has no rule); the message after a revoke says when the rule is
 kept.
 
+A step the hub allowed without asking says how, in one quiet line under it: `auto-allowed: balanced · this chat` when
+the permission matrix's own cell allowed it (the preset in force, and the session's kind: "this chat" or "this task"),
+or `allowed by your earlier yes · this chat` when the matrix would have asked and an earlier answer of yours covers
+it. The hub writes the line when it decides, so the step shows the reason that applied then, even if you change the
+preset later.
+
 `i` on a chip (or anywhere, then pick one) opens its facts from the hub (`agents/explain`): the context breakdown with
 `[drop]` and `[pin]` only when the agent advertises them and `[What /compact keeps]` when it can say; the dearest
 steps and the cache hits; the mode, its lock and the row of the permissions matrix; what the agent waits for and the
@@ -113,7 +119,7 @@ What the agent changed and what it asks sit under the transcript as cards.
 
 - **Diff cards:** one for each hunk of each file the agent edited (flat, with a border). A header over it names the
   file, the lines and which hunk it is ("215–217 · hunk 1 of 1"), with **Reject** and **Accept** at the right; each line
-  shows its number (the new file's; a removed line, the old file's). `a` accepts the hunk: it writes
+  shows its number (the new file's; a removed line, the old file's). In a narrow panel the file name, then the hunk label, give way so Reject and Accept stay inside the edge, and long lines are cut to the panel's width. `a` accepts the hunk: it writes
   the review mark the merge gate compares, and nothing is merged. `D` rejects it: the file goes back to pending and the
   agent is told, in a queued message, to take it back. The panel never writes to an agent's worktree and keeps no queue
   of its own; both keys are the review view's own functions (module `tools/work-space`).

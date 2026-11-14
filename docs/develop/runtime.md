@@ -231,13 +231,17 @@ cap }`, `Escapes`, `Untrusted { path, why }`, `Unsupported` or `Io`.
   `open_beneath`; macOS uses `open`/`openat` with `O_NOFOLLOW_ANY | O_NONBLOCK | O_NOCTTY`. A `rel` that is absolute
   or has a `..` component is `Escapes` before any syscall. A kernel without `openat2` (before 5.6, or one that
   refuses its flags) gives `Unsupported`: there is no fallback that resolves by path. Any other OS is `Unsupported`.
-- **`read_regular(dir, rel, cap)`** opens `O_RDONLY | O_NONBLOCK | O_NOCTTY` with the same resolution, refuses
-  anything but a regular file (a FIFO opens at once and is never read) and reads at most `cap + 1` bytes; one more
-  than `cap` is `TooLarge`.
+- **`read_regular(dir, rel, cap)`** pins the file with `O_PATH` and the same resolution (that opens nothing: a FIFO,
+  a socket or a device node is refused as `NotRegular` before any open side effect), then, a regular file only,
+  opens that same inode `O_RDONLY | O_NONBLOCK | O_NOCTTY` through `/proc/self/fd/N`; without `/proc`, and on macOS,
+  it opens directly and refuses after the open. It reads at most `cap + 1` bytes; one more than `cap` is `TooLarge`.
 - **`write_regular(dir, rel, bytes, mode)`** opens the parent with `open_beneath`, creates `.eitri-<16 hex>` in it
   with `O_CREAT | O_EXCL | O_NOFOLLOW` and `mode` (at most 0o777, less the umask), writes, `fsync`s and `renameat`s
   it over `rel`. A link at `rel` is replaced, never followed; anything else that is not a regular file is
-  `NotRegular`. The temporary file is removed on every error.
+  `NotRegular`. The temporary file is removed on every error. After the rename the parent directory is `fsync`ed
+  (opened again through the held fd, which may be `O_PATH`), so a crash cannot lose it. Between the kind check and
+  the rename a target swapped for a FIFO or a socket is replaced by the new file, a directory fails with `EISDIR`:
+  accepted, since the rename never writes through anything and the agent could delete that entry anyway.
 - **`remove_beneath(dir, rel)`** opens the parent with `open_beneath` (a link in any component before the leaf is
   refused) and `unlinkat`s the leaf at the parent's held fd: a leaf that is a link goes as a link, and what it names
   is never touched. A leaf already gone is done; a directory is `NotRegular`.
@@ -249,6 +253,11 @@ cap }`, `Escapes`, `Untrusted { path, why }`, `Unsupported` or `Io`.
   path, dev, ino }`: an absolute path with no `.` or `..`, opened with `open_path`, a regular file with an execute
   bit, owned by uid 0 and not group- or world-writable, in directories up to `/` that are owned by uid 0 and not
   group- or world-writable (so never under `/tmp`). Otherwise the last candidate's `Untrusted { path, why }`.
+  POSIX ACLs need no check of their own: an ACL entry that grants write raises the ACL mask, and the mask is the
+  file's group bits in `st_mode`, so the group-writable test sees it (a test sets a real ACL and shows the refusal).
+  File capabilities are not examined: only root (`CAP_SETFCAP`) can set them, and root is who the program trusts.
+  `root_only_file(path)` is the same check without the execute bit, for data bound into a sandbox by path (the
+  resolver's file under `/run`).
   Callers pass fixed candidates (bwrap, `sandbox-exec`, git); `PATH` is never searched. A link in any component,
   the last one included, is refused even when root owns it: the candidates are the distributions' own regular files.
   Not every system program is one (Ubuntu 26.04's `coreutils-from-uutils` makes `/usr/bin/env` a link into
@@ -284,9 +293,12 @@ child gets exactly 0–2 and the targets, in this order:
 2. Every free number from 3 to the highest target is held with a close-on-exec copy until the child is started.
    std reports a failed exec over a socket it opens just before the fork, at the lowest free number; on a target
    the child's `dup2` would close it, and a failed exec would look like a start. Another thread that closes a low
-   descriptor during the spawn can still free a number for it. A failed exec then shows as a child that exits 1 at
-   once, and std's 8 bytes go to the passed descriptor at that number. The callers fail closed on both (no status
-   line from the helper).
+   descriptor during the spawn can free a number for it. So the parent records, for each target, the file open on
+   that number (`Moved::expect`), and the child checks that no target holds another file before any `dup2`; if one
+   does it stops with `EBUSY` through std's intact report socket and the parent holds the numbers anew and spawns
+   again (four tries). The test `a_failed_exec_is_reported_when_a_held_number_was_closed` closes every held number
+   and shows the guard fire and the exec failure reported as it is. (The clobber itself could not be reproduced on
+   this toolchain, so this is a guard, not a measured fix.)
 3. In the child (`pre_exec`, no allocation): every descriptor from 3 up is marked close-on-exec, with
    `close_range(3, ~0, CLOSE_RANGE_CLOEXEC)` on Linux and Android. Before Linux 5.11, and on macOS, an
    `fcntl(F_SETFD, FD_CLOEXEC)` loop up to `RLIMIT_NOFILE` (at most 2^20) does it. Then each source is `dup2`'d to
@@ -335,8 +347,13 @@ tier needs it: its helper starts a session itself (GL-T8-1). Either way the chil
     A short letter is refused alone, with a value attached (`-Ovim`) or in a cluster (`-iO`).
   - **Refused after a subcommand:** `-u` after `clone`, `fetch`, `pull`, `ls-remote` or `archive`; `-x` after
     `rebase` or `difftool`.
-  - **The rule for callers:** values that came from an agent go after `--`, or are checked as hex object ids. Phase 6
-    may narrow this to an allowlist of the subcommands it uses.
+  - **The subcommand is on a list** (`SUBCOMMANDS`): the first argument that does not start with `-` must be a listed
+    git builtin, and a call with none is refused. An unknown name would run an alias from the repository's config or
+    a `git-NAME` program from git's exec path or `PATH`; `submodule`, `bisect`, `hook`, `filter-branch`,
+    `maintenance`, `difftool`, `mergetool`, `config`, `help` and `daemon` are not listed. The option deny-list above
+    stays as it is (an allowlist of options per subcommand was judged not worth its breakage: the deny-list is the
+    stricter side for every option that names a program, a file or a repository).
+  - **The rule for callers:** values that came from an agent go after `--`, or are checked as hex object ids.
 - `git::check_trusted_repo(repo, in_ledger)` refuses `InLedger { path }` when any of these lies in a folder for which
   `in_ledger` is true (it is asked about the path and every folder above it):
   - the git dir: `repo/.git` as a directory, or what a `.git` file's `gitdir:` line names (read with `read_regular`,
@@ -1041,8 +1058,8 @@ silent limit, the idle close) and hold the build for a multiple of the limit ins
 
 | Row | Criterion | Fails when |
 |---|---|---|
-| `three-providers-one-plan-under-balanced` | 1, 3 | a task starts on the wrong profile; an in-matrix action makes a card or waits; an ask runs without a card or the user's answer, or never reaches the event stream; Codex starts as a worker. Three providers means Claude, Gemini and an API-key `:ai` profile (Codex stays refused until `CODEX_LOCK_PROVEN`) |
-| `a-manager-runs-the-plan` | 1 (the manager half) | the manager cannot start a worker per task through `agent_start`; a worker is not its child or not on its task; an in-matrix action makes a card or waits; the Gemini ask runs without a card or the user's answer; a worker the manager asks to fetch (network, which the manager lacks) is allowed or asked; Codex starts |
+| `three-providers-one-plan-under-balanced` | 1, 3 | a task starts on the wrong profile; an in-matrix action makes a card or waits; an ask runs without a card or the user's answer, or never reaches the event stream; Codex starts as a worker. Three providers means Claude, Gemini and an API-key `:ai` profile; Codex's lock is proven (`CODEX_LOCK_PROVEN`), so a Codex worker starts as a fourth, enforced) |
+| `a-manager-runs-the-plan` | 1 (the manager half) | the manager cannot start a worker per task through `agent_start`; a worker is not its child or not on its task; an in-matrix action makes a card or waits; the Gemini ask runs without a card or the user's answer; a worker the manager asks to fetch (network, which the manager lacks) is allowed or asked; Codex does not start (a fourth, enforced child) |
 | `mixed-providers-lease-clash-review-spend` | 7, 8 | a task is claimed by the wrong session; the overlap (an `overlap` card) is not carded once; a review is not handed to the reviewer profile; the job does not finish; a step lacks its turn id, log version, plan or task, or the two workers' steps do not name two providers; a worker's rollup differs from its step rows |
 | `ten-minute-build-zero-requests` | 4 | any model request (supervisor, reminder, heartbeat) during the wait; the waiting agent is judged silent; the wake opens a new session |
 | `stall-paused` | 5 | the stuck agent is not paused within its limit, or with the wrong rule or limit; the card names another session or is made twice; the waiting agent is judged, or its wait is not one `job-wait` step longer than the limit (steps are written when they close) |
@@ -1356,7 +1373,7 @@ the grammar's top-level spans to them.
 `hrafn::structural` matches a code pattern with metavariables (ast-grep's syntax) in a file's syntax tree, for the
 Search view's Pattern toggle. The engine is `ast-grep-core` (pinned exactly, its one feature `tree-sitter`), fed
 Hrafn's own grammars through its `Language` trait: `Grammar::of(Lang)` gives each grammar and the character a
-metavariable's `$` becomes before the pattern is parsed (`µ` where `$` cannot start a name: Rust, C, shell, Python,
+metavariable's `$` becomes before the pattern is parsed (`µ` where `$` cannot start a name: Rust, C, C++, shell, Python,
 Go). The engine stays behind the module, so a bump or a swap touches nothing else.
 
 - `Pattern::new(lang, pattern, rewrite)` parses the pattern once per language. An error node inside the pattern's own
@@ -1518,10 +1535,12 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   frozen once written. `eval run ROOT --model ID --device cpu|gpu:ADAPTER` indexes the project into a scratch store,
   embeds it in-process with the model, asks the set and prints MRR@10 and nDCG@10 (chunk level), recall@5/@10 and
   file MRR@10 (file level: the first hit in a target file, whatever its symbol) with bootstrap intervals per stratum,
-  and writes the run as JSON. `eval compare [--by chunk|file] A.json B.json` is the gate: the lower bound of the paired
-  difference of MRR@10 (or, `--by file`, of file MRR@10, which is fair to a chunker that gives a language no symbols)
-  must be at least -0.01 overall and -0.03 per stratum of 30 rows or more (a smaller stratum is reported, not gated),
-  the index has no coverage error and exact-symbol recall@1 is 1.0. A report from before file MRR was measured is
+  and writes the run as JSON. `eval compare [--by chunk|file|floor] A.json B.json` is the gate, as restated on 2026-11-10 (the hrafn-agent-tools
+  plan, Task 4) for every language added since: `--by chunk` passes when the paired difference of MRR@10 is at least 0,
+  `--by file` when the upper bound of the difference of file MRR@10 (fair to a chunker that gives a language no symbols)
+  is at least 0; the strata are printed and never gate. `--by floor` is the non-regression check of a language nothing was
+  added to (drgnx's own set): the lower bound of the MRR@10 difference at least -0.01 overall and -0.03 per stratum of 30
+  rows or more. Whatever the rule, the index has no coverage error and exact-symbol recall@1 is 1.0. A report from before file MRR was measured is
   refused by `--by file`. `eval run … --map TOKENS` also measures the repo map's yield at that budget, per question:
   def-yield (the share of its target definitions shown) and file-yield (the share of its target files), with
   intervals per stratum, for three contexts of the same token estimate: `map` (the global map, tests and docs

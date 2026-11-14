@@ -380,21 +380,29 @@ async fn probed_trail(
 /// What a trail traced by logpoints cannot see, said on its card.
 pub const PROBED: &str = "traced by logpoints: a store through another name, or in a file off the stop's stack, is not seen";
 
-/// The language of PATH's code, by its extension.
+/// The language of PATH's code, by its extension: the built-in packs whose `:origin` says trails work in their language
+/// (a pack with no `:origin` has none: shell and Lisp are not traced).
 pub fn lang_of(path: &str) -> Option<hrafn::Lang> {
-    use hrafn::Lang;
     let ext = Path::new(path).extension()?.to_str()?;
-    Some(match ext {
-        "py" => Lang::Python,
-        "js" | "mjs" | "cjs" | "jsx" => Lang::JavaScript,
-        "ts" | "mts" | "cts" => Lang::TypeScript,
-        "tsx" => Lang::Tsx,
-        "go" => Lang::Go,
-        "c" | "h" => Lang::C,
-        "rs" => Lang::Rust,
-        "java" => Lang::Java,
-        _ => return None,
-    })
+    skald::builtin::manifests()
+        .iter()
+        .filter(|m| m.origin.is_some())
+        .find(|m| m.files.extensions.iter().any(|e| e == ext))
+        .and_then(|m| m.hrafn.as_ref())
+        .map(|h| hrafn::Lang::parse(&h.lang))
+}
+
+/// The declaration templates of LANG's pack (`:origin :decls`, `{t}` the name asked about).
+fn decls_of(lang: hrafn::Lang) -> &'static [String] {
+    skald::builtin::manifests()
+        .iter()
+        .find(|m| {
+            m.hrafn
+                .as_ref()
+                .is_some_and(|h| hrafn::Lang::parse(&h.lang) == lang)
+        })
+        .and_then(|m| m.origin.as_ref())
+        .map_or(&[], |o| o.decls.as_slice())
 }
 
 /// Separates the values one logpoint logs (the unit separator: never in a value the adapters print).
@@ -465,7 +473,6 @@ impl StoreLine {
 /// The lines of FILES (in LANG) that store to QUESTION: a plain name's assignments and declarations, or (dotted) a
 /// store to its attribute on any object; plain or compound; in file order.
 pub fn stores(lang: hrafn::Lang, files: &[(String, String)], question: &str) -> Vec<StoreLine> {
-    use hrafn::Lang;
     use hrafn::structural::Pattern;
     let (target, attr) = match question.rsplit_once('.') {
         Some((_, attr)) => ("$O.".to_owned() + attr, Some(attr)),
@@ -476,15 +483,7 @@ pub fn stores(lang: hrafn::Lang, files: &[(String, String)], question: &str) -> 
         .map(|op| (format!("{target} {op} $V"), *op == "="))
         .collect();
     if attr.is_none() {
-        let decls: &[&str] = match lang {
-            Lang::JavaScript | Lang::TypeScript | Lang::Tsx => {
-                &["const {t} = $V", "let {t} = $V", "var {t} = $V"]
-            }
-            Lang::Go => &["{t} := $V", "var {t} = $V", "var {t} $TY = $V"],
-            Lang::Rust => &["let {t} = $V;", "let mut {t} = $V;", "let {t}: $TY = $V;"],
-            Lang::C | Lang::Java => &["$TY {t} = $V;"],
-            _ => &[],
-        };
+        let decls = decls_of(lang);
         forms.extend(decls.iter().map(|d| (d.replace("{t}", question), true)));
     }
     let patterns: Vec<(Pattern, bool)> = forms
@@ -783,4 +782,55 @@ pub fn rows(state: &Value) -> Vec<drgnx_rows::Row> {
         out.push(r.finish());
     }
     out
+}
+
+#[cfg(test)]
+mod pack_tests {
+    use super::*;
+    use hrafn::Lang;
+
+    #[test]
+    fn the_extensions_and_declarations_are_the_ones_trails_had() {
+        for (path, lang) in [
+            ("a.py", Lang::Python),
+            ("a.js", Lang::JavaScript),
+            ("a.mjs", Lang::JavaScript),
+            ("a.cjs", Lang::JavaScript),
+            ("a.jsx", Lang::JavaScript),
+            ("a.ts", Lang::TypeScript),
+            ("a.mts", Lang::TypeScript),
+            ("a.cts", Lang::TypeScript),
+            ("a.tsx", Lang::Tsx),
+            ("a.go", Lang::Go),
+            ("a.c", Lang::C),
+            ("a.h", Lang::C),
+            ("a.cc", Lang::Cpp),
+            ("a.cpp", Lang::Cpp),
+            ("a.hpp", Lang::Cpp),
+            ("a.rs", Lang::Rust),
+            ("a.java", Lang::Java),
+        ] {
+            assert_eq!(lang_of(path), Some(lang), "{path}");
+        }
+        // shell, Lisp, Org and unknown files are not traced
+        for path in ["a.sh", "a.el", "a.org", "a.md", "a.txt", "noext", "a.rb"] {
+            assert_eq!(lang_of(path), None, "{path}");
+        }
+        assert_eq!(
+            decls_of(Lang::Go),
+            ["{t} := $V", "var {t} = $V", "var {t} $TY = $V"]
+        );
+        assert_eq!(
+            decls_of(Lang::Rust),
+            ["let {t} = $V;", "let mut {t} = $V;", "let {t}: $TY = $V;"]
+        );
+        assert_eq!(decls_of(Lang::C), ["$TY {t} = $V;"]);
+        assert_eq!(decls_of(Lang::Cpp), ["$TY {t} = $V;"]);
+        assert_eq!(decls_of(Lang::Java), ["$TY {t} = $V;"]);
+        assert_eq!(
+            decls_of(Lang::TypeScript),
+            ["const {t} = $V", "let {t} = $V", "var {t} = $V"]
+        );
+        assert!(decls_of(Lang::Python).is_empty());
+    }
 }

@@ -286,6 +286,23 @@ fn what_is_in_flight_outside_is_waited_for() {
     });
 }
 
+/// A task spawned but not yet run when the settle ends is busy: a loaded host's worker had not run it, and the
+/// settle once found every task parked and every worker quiet and answered `Settled::default()`.
+#[test]
+fn a_task_spawned_but_not_yet_run_is_named_busy_when_the_settle_ends() {
+    on_virtual(async {
+        spawn_unrun("t");
+        assert_eq!(
+            settle_real(ms(50), &[]).await,
+            Settled {
+                waiting: vec![],
+                busy: vec!["t".into()],
+                sites: vec![]
+            }
+        );
+    });
+}
+
 #[test]
 fn a_task_still_running_after_the_settle_is_named_busy() {
     on_virtual(async {

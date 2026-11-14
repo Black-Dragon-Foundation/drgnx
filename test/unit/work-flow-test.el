@@ -19,13 +19,40 @@ marked, then the lens's own keys as chips with their key badges."
     (should (string-match-p "Work · drgnx.*Map.*Board.*Timeline.*Flow.*evidence.*e.*rules.*R" s))
     (should (eq (get-text-property (string-match "Work · drgnx" s) 'face s) 'drgnx-work-lens-title))
     (should (eq (get-text-property (string-match "Flow" s) 'face s) 'drgnx-work-lens-current))
-    (should (eq (get-text-property (string-match "Map" s) 'face s) 'drgnx-work-label))
+    (should (eq (get-text-property (string-match "Map" s) 'face s) 'drgnx-work-lens-seg))
     (should (eq (get-text-property (string-match "evidence" s) 'face s) 'drgnx-work-chip))
     (should (eq (get-text-property (string-search "R" s (string-search "rules" s)) 'face s) 'drgnx-work-lens-key)))
   ;; no name: the tab says Work alone; no keys: no chips
   (let ((s (drgnx-work-lens-string 'map)))
     (should (string-match-p "Work .*Map" s))
     (should-not (string-match-p "evidence" s))))
+
+(ert-deftest drgnx-work-flow/the-lens-bar-has-a-hover-revealed-menu ()
+  "LOOK-FIX-WORK-LENS-BAR-1: the bar ends in a ⋯ control (hidden until the bar is hovered, `mouse-face' on the whole
+bar) that opens the tile menu: the four lenses, registered commands."
+  (let ((s (drgnx-work-lens-string 'map "drgnx")))
+    (should (eq (get-text-property 0 'mouse-face s) 'drgnx-hover-row))
+    (should (text-property-any 0 (length s) 'drgnx-lens-menu t s)))
+  (should (equal (mapcar #'cdr (drgnx-work-lens-menu-items))
+                 '(work-view-map work-view-board work-view-timeline work-view-flow))))
+
+(ert-deftest drgnx-work-flow/the-lens-bar-keeps-the-grip-and-maximise-beside-the-menu ()
+  "The bar's right is the grip, maximise and the ⋯ (work-space-dark.html): the ⋯ menu is the hover-revealed one, and its
+menu also holds the keys sheet, so both doors stay reachable."
+  (let* ((s (drgnx-work-lens-string 'map "drgnx"))
+         (at (lambda (echo) (cl-find-if (lambda (i) (equal (get-text-property i 'help-echo s) echo))
+                                        (number-sequence 0 (1- (length s))))))
+         (grip (funcall at "Move this tile"))
+         (max (funcall at "Maximise or restore this tile"))
+         (menu (text-property-any 0 (length s) 'drgnx-lens-menu t s)))
+    (should (and grip max menu (< grip max menu)))
+    (should (eq (lookup-key (get-text-property max 'keymap s) [tab-line mouse-1]) #'drgnx-work-lens-maximize)))
+  ;; the menu is the four lenses and the keys sheet
+  (let (shown)
+    (cl-letf (((symbol-function 'x-popup-menu) (lambda (_e m) (setq shown (cdr (cadr m))) nil)))
+      (drgnx-work-lens-menu nil))
+    (should (equal (mapcar #'car shown) '("Map" "Board" "Timeline" "Flow" "Keys")))
+    (should (eq (cdr (car (last shown))) 'drgnx-work-keys-sheet))))
 
 (ert-deftest drgnx-work-flow/its-window-shows-the-lens-bar ()
   "The Flow's window shows the lens bar as its tab line (the chrome keeps a buffer's own) and no header: its strip

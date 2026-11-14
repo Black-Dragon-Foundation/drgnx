@@ -325,6 +325,14 @@ packages, t for any, nil for none)."
       ('plugin-remove
        (let ((name (car args)))
          (list (format "remove the plugin %s" name) (list "plugins" "remove" (funcall text name)) nil)))
+      ('pack-install
+       (let ((name (car args)))
+         (list (format "install the language pack %s" name) (list "packs" "sync" "--add" (funcall text name))
+               (list (concat "pack:" name)) nil)))
+      ('pack-remove
+       (let ((name (car args)))
+         (list (format "remove the language pack %s" name) (list "packs" "sync" "--remove" (funcall text name))
+               (list (concat "pack:" name)) nil)))
       (_ (error "No Extensions job %S" kind)))))
 
 (defun drgnx-extensions-jobs-run (kind &rest args)
@@ -340,6 +348,8 @@ WHY) once the hub answers (ID nil: it did not start, for WHY).  KIND and ARGS:
   fetch-readme ARCHIVE NAME             cache a package's readme
   plugin-install PATH [:replace t]      install the plugin at PATH, replacing one of its name with :replace
   plugin-remove NAME                    remove a plugin
+  pack-install NAME                     add the language pack NAME (`drgnx packs sync --add')
+  pack-remove NAME                      take the language pack NAME out (`drgnx packs sync --remove')
 The rows of NAMES are `busy' while it runs."
   (pcase-let* ((`(,name ,argv ,ids ,swaps) (drgnx-extensions-jobs--command kind args))
                (callback (plist-get (seq-drop-while (lambda (a) (not (keywordp a))) args) :callback))

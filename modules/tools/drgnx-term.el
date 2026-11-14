@@ -94,6 +94,8 @@ text scale or a font change never re-pairs the buffer.")
 (defvar-local drgnx-term--top-done nil "The first row's key when the worker last said nothing is missing above it.")
 (defvar-local drgnx-term--started nil "When this terminal's `term/open' was sent (`float-time').")
 (defvar-local drgnx-term--command-start nil "When the running command's output started (OSC 133 C), or nil.")
+(defvar-local drgnx-term--at-prompt nil
+  "Non-nil while the shell's integration says the terminal is at a prompt (OSC 133 A or B seen, no C since).")
 (defvar drgnx-chrome-tab-icon)
 (defvar-local drgnx-term--remote nil
   "A terminal in a remote folder: TRAMP's prefix of that folder (\"/ssh:host:\"); its folders and links are there.")
@@ -102,6 +104,8 @@ text scale or a font change never re-pairs the buffer.")
 followed.")
 (defvar-local drgnx-term--host-name nil "A remote terminal's host, as its name shows it (from its TRAMP folder).")
 (defvar-local drgnx-term--clipboard nil "The text a remote program last asked to put on the clipboard, while asked.")
+(defvar-local drgnx-term--read-req nil
+  "The id of the clipboard read this terminal's program waits on (`term/clipboard-read'), or nil.")
 
 (defun drgnx-term--up-p ()
   "Non-nil while this Emacs's subscribed connection to the hub is up."
@@ -384,7 +388,9 @@ events in DRGNX (those reach drgnx: their raw binding goes) and events bound to 
     ;; this map) is the terminal's Copy here, so `drgnx-term-selection-clear-on-copy' holds whichever key copies
     (define-key m [remap drgnx-editing-copy] #'drgnx-terminal-copy)
     (dolist (ev drgnx-term--mouse-events)
-      (define-key m (vector ev) '(menu-item "" drgnx-term-mouse :filter drgnx-term--mouse-filter))
+      (define-key m (vector ev) (if (eq ev 'mouse-1)
+                                    '(menu-item "" drgnx-term-mouse :filter drgnx-term--click-filter)
+                                  '(menu-item "" drgnx-term-mouse :filter drgnx-term--mouse-filter)))
       (define-key m (vector (event-convert-list (list 'shift ev)))
                   '(menu-item "" drgnx-term-mouse :filter drgnx-term--mouse-shift-filter)))
     (drgnx-term--fill-map m nil)
@@ -456,6 +462,36 @@ could run commands asks first (`drgnx-term-clipboard-paste-protection')."
            (row (- line (- last (nth 1 size)) 1)))
       (when (>= row 0)
         (cons (car (posn-col-row posn)) row)))))
+
+(defvar drgnx-term--cursor-marker)
+
+(defun drgnx-term--click-to-move-p ()
+  "Whether a click at the prompt moves the cursor here (`drgnx-term-cursor-click-to-move'): the shell's integration
+says it is at a prompt, and the program is on the main screen and does not track the mouse."
+  (and drgnx-term-cursor-click-to-move drgnx-term--at-prompt
+       (let ((term (and drgnx-view-patch (drgnx-view-patch-term drgnx-view-patch))))
+         (and (not (eq (plist-get term :mouse_tracking) t)) (not (eq (plist-get term :alt_screen) t))))))
+
+(defun drgnx-term--click-filter (cmd)
+  "The mouse-1 binding's filter: the program's mouse (`drgnx-term--mouse-filter') while it tracks the mouse, the
+click that moves the cursor at a prompt, else nil (Emacs's own binding)."
+  (or (drgnx-term--mouse-filter cmd)
+      (and (drgnx-term--click-to-move-p) #'drgnx-term-click-to-move)))
+
+(defun drgnx-term-click-to-move (event)
+  "A click at the shell's prompt, on the cursor's row: the cursor moves there, by as many Left or Right keys as the
+click is cells away (`drgnx-term-cursor-click-to-move'; the shell must send OSC 133).  Elsewhere the click is
+Emacs's own."
+  (interactive "e")
+  (let* ((posn (event-start event)) (pos (posn-point posn)) (cur drgnx-term--cursor-marker))
+    (if (and (integerp pos) cur (marker-position cur)
+             (eq (window-buffer (posn-window posn)) (current-buffer))
+             (= (save-excursion (goto-char pos) (line-beginning-position))
+                (save-excursion (goto-char cur) (line-beginning-position))))
+        (let ((delta (- pos (marker-position cur))))
+          (dotimes (_ (min 500 (abs delta)))
+            (drgnx-term-send-key (if (> delta 0) "right" "left"))))
+      (mouse-set-point event))))
 
 (defun drgnx-term-mouse (event)
   "Send the mouse EVENT to the terminal's program (it tracks the mouse: `drgnx-term--mouse-filter')."
@@ -594,6 +630,7 @@ one's images come only as direct data)."
           (vector "enquiry-response" drgnx-term-enquiry-response)
           (vector "title-report" (if drgnx-term-title-report t :false))
           (vector "grapheme-width-method" drgnx-term-grapheme-width-method)
+          (vector "clipboard-read" (symbol-name drgnx-term-clipboard-read))
           (vector "detached-keep" drgnx-term-detached-keep)
           (vector "colours" (drgnx-term--colours))))
 
@@ -672,8 +709,35 @@ window scrolled away from the cursor stays where it is unless ALL or `drgnx-term
     m)
   "The keymap on an OSC 8 link's text: a click opens it.")
 
+(defconst drgnx-term--url-regexp
+  "\\(?:https?\\|ftps?\\|file\\)://[^][ \t\n\"'<>(){}`]*[^][ \t\n\"'<>(){}`.,;:!?]"
+  "An address in plain output: a URL up to its first space or bracket, without the punctuation that ends a sentence.")
+
+(defun drgnx-term--link-props (uri)
+  "The text properties of a link to URI: a click opens it."
+  (list 'drgnx-term-link uri 'mouse-face 'highlight 'keymap drgnx-term-link-map 'follow-link t 'help-echo uri))
+
+(defun drgnx-term--match-links (beg end)
+  "Between BEG and END (one row), text with no OSC 8 link of its own that `drgnx-term-link' (your patterns, first)
+or, with `drgnx-term-link-url', a plain URL matches becomes a link, as an OSC 8 one."
+  (dolist (rule (append drgnx-term-link (and drgnx-term-link-url (list (list drgnx-term--url-regexp #'identity)))))
+    (save-excursion
+      (goto-char beg)
+      (let ((case-fold-search nil))
+        (while (re-search-forward (car rule) end t)
+          (let ((mb (match-beginning 0)) (me (match-end 0)))
+            (if (= mb me)
+                (forward-char 1)
+              (unless (text-property-not-all mb me 'drgnx-term-link nil)
+                (let ((uri (if (functionp (cadr rule)) (funcall (cadr rule) (match-string 0))
+                             (replace-regexp-in-string (car rule) (cadr rule) (match-string 0) t))))
+                  (when (stringp uri)
+                    (with-silent-modifications (add-text-properties mb me (drgnx-term--link-props uri))))))))))))
+  nil)
+
 (defun drgnx-term--buttons (view keys)
-  "The OSC 8 links of VIEW's rows KEYS (their `drgnx-term-link' text) become buttons."
+  "The OSC 8 links of VIEW's rows KEYS (their `drgnx-term-link' text) become buttons, and the text your link
+patterns and plain URLs match (`drgnx-term--match-links') becomes links."
   (dolist (key keys)
     (when-let* ((beg (drgnx-view-row-start view key)))
       (let ((end (save-excursion (goto-char beg) (line-end-position))) (pos beg))
@@ -683,7 +747,8 @@ window scrolled away from the cursor stays where it is unless ALL or `drgnx-term
               (with-silent-modifications
                 (add-text-properties pos next (list 'mouse-face 'highlight 'keymap drgnx-term-link-map 'follow-link t
                                                     'help-echo (get-text-property pos 'drgnx-term-link)))))
-            (setq pos next)))))))
+            (setq pos next)))
+        (drgnx-term--match-links beg end)))))
 
 (defconst drgnx-term--images-max 64 "The most images a terminal's buffer keeps made (an LRU).")
 
@@ -1150,6 +1215,7 @@ drgnx left running) asks what is offered now."
                            (drgnx-term--notify (plist-get data :title) (plist-get data :body))))
           ("term/bell" (ding t))
           ("term/prompt" (drgnx-term--prompt (plist-get data :kind)))
+          ("term/clipboard-read" (drgnx-term--read-asked (plist-get data :req)))
           ("term/clipboard-write"
            (when drgnx-term-clipboard-write
              (if drgnx-term--remote
@@ -1208,6 +1274,64 @@ dropped; `always' adds the host to `drgnx-term-remote-clipboard-hosts' (written 
                                                   `((?a "allow") (?l ,(format "always for %s" host)) (?d "deny"))))))
           (drgnx-term--clipboard-answered (current-buffer) (pcase answer (?a 'allow) (?l 'always) (_ 'deny))))))))
 
+;; A program reads the clipboard (OSC 52 `?'): with `drgnx-term-clipboard-read' `ask' the worker stops that terminal's output
+;; and asks (`term/clipboard-read'); a notice names the terminal and whether it is remote, and its command asks Allow
+;; or Deny.  Allow answers with the kill ring's head, Deny, 30 s without an answer, or a closed terminal, with a denial
+;; (the worker's own wait ends the same way).  Never a prompt of its own: the question is the user's command.
+
+(defconst drgnx-term--read-wait 30 "Seconds a program's clipboard read waits for the answer (the worker's wait).")
+
+(defun drgnx-term--read-name ()
+  "This terminal as the clipboard read's notice names it: its buffer, and local or remote (with its host)."
+  (if drgnx-term--remote
+      (format "%s (remote, on %s)" (buffer-name) (drgnx-term--clipboard-host))
+    (format "%s (local)" (buffer-name))))
+
+(defun drgnx-term--read-asked (req)
+  "The program asked to read the clipboard (request REQ): a notice, and the worker's own wait ends it after
+`drgnx-term--read-wait' seconds."
+  (setq drgnx-term--read-req req)
+  (setf (alist-get (concat "read:" drgnx-term--id) drgnx-term--notices nil nil #'equal)
+        (list :id (concat "term:read:" drgnx-term--id) :command 'terminal-clipboard-read-answer
+              :text (format "%s wants to read the clipboard" (drgnx-term--read-name))))
+  (drgnx-term--post-notices)
+  (drgnx-timer-start (cons 'drgnx-term-read (current-buffer)) drgnx-term--read-wait #'drgnx-term--read-expired
+                     :args (list (current-buffer) req) :owner (current-buffer)))
+
+(defun drgnx-term--read-done (buffer)
+  "BUFFER's clipboard read is over: its notice and timer go."
+  (with-current-buffer buffer
+    (setq drgnx-term--read-req nil
+          drgnx-term--notices (cl-remove (concat "read:" drgnx-term--id) drgnx-term--notices :key #'car :test #'equal))
+    (drgnx-timer-cancel (cons 'drgnx-term-read buffer))
+    (drgnx-term--post-notices)))
+
+(defun drgnx-term--read-expired (buffer req)
+  "The worker gave up on request REQ (it denied it after `drgnx-term--read-wait' seconds): the notice goes."
+  (when (and (buffer-live-p buffer) (eql (buffer-local-value 'drgnx-term--read-req buffer) req))
+    (drgnx-term--read-done buffer)))
+
+(defun drgnx-term--read-answered (buffer allow)
+  "ALLOW (non-nil) or deny BUFFER's program's clipboard read: Allow answers with the kill ring's head (empty when the
+ring is), Deny with none; either way the question is over."
+  (when-let* (((buffer-live-p buffer)) (req (buffer-local-value 'drgnx-term--read-req buffer)))
+    (with-current-buffer buffer
+      (drgnx-term--send "term/clipboard-reply"
+                        (list :req req :text (and allow (if kill-ring (substring-no-properties (car kill-ring)) ""))))
+      (drgnx-term--read-done buffer))))
+
+(defun drgnx-term-clipboard-read-answer ()
+  "Answer a program that asked to read the clipboard: Allow (it reads the kill ring's head) or Deny."
+  (interactive)
+  (let ((asking (seq-filter (lambda (b) (buffer-local-value 'drgnx-term--read-req b)) (drgnx-term-buffers))))
+    (if (null asking)
+        (message "No program is waiting to read the clipboard")
+      (with-current-buffer (car asking)
+        (let* ((use-dialog-box nil)
+               (answer (car (read-multiple-choice (format "%s wants to read the clipboard: " (drgnx-term--read-name))
+                                                  '((?a "allow") (?d "deny"))))))
+          (drgnx-term--read-answered (current-buffer) (eq answer ?a)))))))
+
 (defun drgnx-term--remote-cwd (cwd)
   "A remote terminal's CWD (as `drgnx-term--cwd' takes it) as a TRAMP folder on its host, or nil: the first host an
 OSC 7 names is learned as the terminal's own; one naming another host (an ssh typed inside) is not followed."
@@ -1259,7 +1383,8 @@ terminal's name starts with its host."
   "An OSC 133 mark of KIND: 3 a command's output starts, 4 it ended.  A command that ran at least
 `drgnx-term-notify-on-command-finish-after' seconds is told as `drgnx-term-notify-on-command-finish' says."
   (pcase kind
-    (3 (setq drgnx-term--command-start (float-time)))
+    ((or 1 2) (setq drgnx-term--at-prompt t))
+    (3 (setq drgnx-term--command-start (float-time) drgnx-term--at-prompt nil))
     (4 (when-let* ((start drgnx-term--command-start))
          (setq drgnx-term--command-start nil)
          (let ((took (- (float-time) start)))
@@ -1733,6 +1858,9 @@ them all here, choose some, or close them.  A terminal another running drgnx sho
                        (drgnx-command-define 'terminal-reconnect :category "Terminal" :title "Reconnect Terminal"
                                              :command #'drgnx-term-reconnect :scope 'editing
                                              :doc "Run a remote terminal's command again after its connection was lost")
+                       (drgnx-command-define 'terminal-clipboard-read-answer :category "Terminal"
+                                             :title "Answer Clipboard Read" :command #'drgnx-term-clipboard-read-answer
+                                             :doc "Allow or deny a program that asked to read the clipboard")
                        (drgnx-command-define 'terminal-clipboard-answer :category "Terminal"
                                              :title "Answer Clipboard Request" :command #'drgnx-term-clipboard-answer
                                              :doc "Allow or deny a remote program that asked to set the clipboard")

@@ -200,19 +200,15 @@ pub fn cache_dir(env: &Env) -> PathBuf {
 }
 
 /// `<tmp>`, Emacs's `temporary-file-directory` on Linux and macOS: the first of TMPDIR, TMP, TEMP that is set, else
-/// /tmp (a relative one is out of scope).
+/// /tmp.  A relative value counts for nothing, as a relative XDG variable does (the editor would read it against its
+/// own folder, the hub against its own).
 fn temporary_file_directory(env: &Env) -> String {
     let t = ["TMPDIR", "TMP", "TEMP"]
         .iter()
-        .find_map(|n| env.get(n))
+        .filter_map(|n| env.get(n))
+        .find(|t| t.starts_with('/'))
         .unwrap_or("/tmp");
-    if t.is_empty() {
-        "./".to_string()
-    } else if t.starts_with('/') {
-        as_directory(&normalize(t))
-    } else {
-        as_directory(t)
-    }
+    as_directory(&normalize(t))
 }
 
 /// `<tmp>/drgnx-hub-UID/`: where a socket goes whose usual path is too long.

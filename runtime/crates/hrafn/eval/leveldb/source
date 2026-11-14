@@ -1,0 +1,5 @@
+url https://github.com/google/leveldb
+commit 29465588d3dfdc80fba5e198037582b8fdb5dd60
+language C++
+licence BSD-3-Clause
+fetched at test time by commit; never vendored

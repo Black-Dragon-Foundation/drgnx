@@ -29,7 +29,14 @@ fn explain_table() {
     };
     let (reason, fix) = why(Some("bwrap: setting up uid map: Permission denied"), &f);
     assert!(reason.starts_with("inside a container"), "{reason}");
+    // GL-T12-2: the first line of what the start said stays beside the container reason
+    assert!(
+        reason.ends_with("(it said: bwrap: setting up uid map: Permission denied)"),
+        "{reason}"
+    );
     assert_eq!(fix, None);
+    let (reason, _) = why(None, &f);
+    assert!(!reason.contains("it said"), "{reason}");
 
     // macOS without a trusted sandbox-exec
     let f = HostFacts {

@@ -74,6 +74,8 @@ pub struct Cx<'a> {
     pub facts: &'a BTreeMap<u64, Facts>,
     /// Whether a live Always grant covers a tool entry.
     pub always: &'a dyn Fn(&Entry) -> bool,
+    /// The line the hub cached for how a tool entry was allowed (its permission request's decision), if it was.
+    pub prov: &'a dyn Fn(&Entry) -> Option<String>,
     /// The px a right-aligned text starts at.
     pub right: &'a dyn Fn(&str) -> u32,
 }
@@ -440,6 +442,8 @@ fn tool_rows(idx: usize, e: &Entry, thoughts: &[&Entry], cx: &Cx) -> Vec<Row> {
             "drgnx-agent-panel-subtle",
             None,
         ));
+    } else if let Some(how) = (cx.prov)(e) {
+        under.push((how, "drgnx-agent-panel-subtle", None));
     }
     for (n, (text, face, hook)) in under.into_iter().enumerate() {
         let mut l = Line::new(format!("{key}/p:{n}"), idx);

@@ -350,35 +350,67 @@ argument): without moving focus."
            (and command
                 (list 'keymap (let ((m (make-sparse-keymap))) (define-key m [tab-line mouse-1] command) m))))))
 
+(defconst drgnx-work-lens-menu-labels
+  '(("Map" . work-view-map) ("Board" . work-view-board) ("Timeline" . work-view-timeline) ("Flow" . work-view-flow))
+  "The lens bar's ⋯ menu: (LABEL . COMMAND), the four lenses, registered commands.")
+
+(defun drgnx-work-lens-menu-items ()
+  "The ⋯ menu's lens items, (LABEL . COMMAND); the menu adds the keys sheet after them."
+  drgnx-work-lens-menu-labels)
+
+(defun drgnx-work-lens-menu (event)
+  "A click on the lens bar's ⋯: the menu of the four lenses and this view's keys at EVENT; run the one chosen."
+  (interactive "e")
+  (when-let* ((choice (x-popup-menu event (list "Work" (cons "" (append (drgnx-work-lens-menu-items)
+                                                                        '(("Keys" . drgnx-work-keys-sheet))))))))
+    (if (eq choice 'drgnx-work-keys-sheet)
+        (drgnx-work-keys-sheet)
+      (drgnx-ui-kit-run choice))))
+
+(defvar drgnx-work-lens--menu-map
+  (let ((m (make-sparse-keymap)))
+    (define-key m [tab-line mouse-1] #'drgnx-work-lens-menu)
+    (define-key m [header-line mouse-1] #'drgnx-work-lens-menu)
+    m)
+  "The keymap of the lens bar's ⋯ control.")
+
 (defun drgnx-work-lens--controls ()
-  "The tile's controls (work-space-dark.html): the grip (the tile layout's drag handle: not wired yet), maximise or
-restore, and the menu of keys."
-  (concat (propertize " " 'display `(space :align-to (- right (,(drgnx-px 70)))))   ; a parenthesised size is pixels
-          (drgnx-work-lens--control 'grip-vertical "⠿" "Move this tile") " "
-          (drgnx-work-lens--control 'maximize-2 "⛶" "Maximise or restore this tile" #'drgnx-work-lens-maximize) " "
-          (drgnx-work-lens--control 'ellipsis "⋯" "This view's keys" #'drgnx-work-keys-sheet)))
+  "The tile's controls at the bar's right (work-space-dark.html): the grip (the tile layout's drag handle: not wired
+yet), maximise or restore, then the ⋯, shown while the bar is hovered, whose menu has the four lenses and the keys
+sheet."
+  (let ((menu (propertize (drgnx-look-hover-control (drgnx-look-icon 'ellipsis 'drgnx-text-subtle))
+                          'drgnx-lens-menu t 'keymap drgnx-work-lens--menu-map 'help-echo "Work menu: the lenses, the keys"
+                          'pointer 'hand))
+        (grip (drgnx-work-lens--control 'grip-vertical "⠿" "Move this tile"))
+        (maximize (drgnx-work-lens--control 'maximize-2 "⛶" "Maximise or restore this tile" #'drgnx-work-lens-maximize)))
+    (let ((tail (concat grip " " maximize " " menu)))
+      (concat (propertize " " 'display `(space :align-to (- right (,(+ (string-pixel-width tail) (drgnx-px 8))))))   ; a parenthesised size is pixels
+              tail))))
 
 (defun drgnx-work-lens-string (&optional current name keys)
   "The lens bar: the Work space's tab (Work · NAME, the workspace's name), then Map · Board · Timeline · Flow with
 CURRENT (`map', `board', `timeline' or `flow'; default `map') marked and the others in the label face (`m' `b' `t' `F'
 switch), then KEYS, the lens's own keys ((LABEL . KEY) …), as chips with their key badges."
-  (let ((current (or current 'map)))
-    (concat (propertize (concat " " (or (drgnx-face-glyph 'layers) "") " " (if name (concat "Work · " name) "Work") " ")
-                        'face 'drgnx-work-lens-title)
-            "  "
-            ;; the lens switch: a rail (the gap's colour) holding the labels, the shown one raised (look.css `.lens')
-            (propertize " " 'face 'drgnx-work-lens-rail)
-            (mapconcat (lambda (v)
-                         (propertize (format " %s " (cdr v))
-                                     'face (if (eq (car v) current) 'drgnx-work-lens-current 'drgnx-work-lens-seg)))
-                       '((map . "Map") (board . "Board") (timeline . "Timeline") (flow . "Flow"))
-                       (propertize " " 'face 'drgnx-work-lens-rail))
-            (propertize " " 'face 'drgnx-work-lens-rail)
-            (mapconcat (lambda (k)
-                         (concat "  " (propertize (format " %s " (car k)) 'face 'drgnx-work-chip)
-                                 (propertize (format " %s " (cdr k)) 'face 'drgnx-work-lens-key)))
-                       keys "")
-            (drgnx-work-lens--controls))))
+  (let* ((current (or current 'map))
+         (bar
+          (concat (propertize (concat " " (or (drgnx-face-glyph 'layers) "") " " (if name (concat "Work · " name) "Work") " ")
+                              'face 'drgnx-work-lens-title)
+                  "  "
+                  ;; the lens switch: a rail (the gap's colour) holding the labels, the shown one raised (look.css `.lens')
+                  (propertize " " 'face 'drgnx-work-lens-rail)
+                  (mapconcat (lambda (v)
+                               (propertize (format " %s " (cdr v))
+                                           'face (if (eq (car v) current) 'drgnx-work-lens-current 'drgnx-work-lens-seg)))
+                             '((map . "Map") (board . "Board") (timeline . "Timeline") (flow . "Flow"))
+                             (propertize " " 'face 'drgnx-work-lens-rail))
+                  (propertize " " 'face 'drgnx-work-lens-rail)
+                  (mapconcat (lambda (k)
+                               (concat "  " (propertize (format " %s " (car k)) 'face 'drgnx-work-chip)
+                                       (propertize (format " %s " (cdr k)) 'face 'drgnx-work-lens-key)))
+                             keys "")
+                  (drgnx-work-lens--controls))))
+    (add-text-properties 0 (length bar) '(mouse-face drgnx-hover-row) bar)   ; the ⋯ shows while the bar is hovered
+    bar))
 
 (defun drgnx-work-lens-name (&optional map)
   "The workspace's name on the lens bar: the folder name of MAP's (default: the current buffer's) first root."

@@ -205,7 +205,7 @@ impl Watcher {
 }
 
 /// `<path> version --json` against COMMIT, the running build's.
-pub async fn build_at(path: &Path, commit: &str) -> Build {
+pub async fn build_at(path: &Path, commit: &str, build_id: &str) -> Build {
     let mut child = match tokio::process::Command::new(path)
         .args(["version", "--json"])
         .stdin(std::process::Stdio::null())
@@ -244,11 +244,20 @@ pub async fn build_at(path: &Path, commit: &str) -> Build {
             return Build::Unknown;
         }
     };
-    let found = serde_json::from_str::<Value>(&text)
-        .ok()
+    let json = serde_json::from_str::<Value>(&text).ok();
+    let found = json
+        .as_ref()
         .and_then(|v| v.get("commit")?.as_str().map(str::to_string));
+    let id = json
+        .as_ref()
+        .and_then(|v| v.get("build_id")?.as_str().map(str::to_string));
     match found {
-        Some(c) if c == commit => Build::Same,
+        // the commit alone cannot tell a rebuild of the same checkout (`unknown`, the same `HEAD-dirty`): the build
+        // id, made at compile time, can; a file that names none is from before it, so another build
+        Some(c) if c == commit && id.as_deref() == Some(build_id) => Build::Same,
+        Some(c) if c == commit => {
+            Build::Other(format!("{c} (build {})", id.as_deref().unwrap_or("?")))
+        }
         Some(c) => Build::Other(c),
         None => {
             tracing::warn!("{} version said no commit", path.display());
@@ -290,7 +299,12 @@ impl Source for Real {
     }
 
     async fn build(&self) -> Build {
-        build_at(&self.watch.path, crate::version::COMMIT).await
+        build_at(
+            &self.watch.path,
+            crate::version::COMMIT,
+            crate::version::BUILD_ID,
+        )
+        .await
     }
 
     async fn busy(&self) -> Option<u64> {
@@ -339,6 +353,29 @@ pub async fn run(front: Arc<Front>, tick: Duration) {
 mod tests {
     use super::*;
     use std::cell::Cell;
+
+    /// A program that answers `version --json` with TEXT.
+    fn version_program(dir: &Path, text: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let p = dir.join("ratatoskr");
+        std::fs::write(&p, format!("#!/bin/sh\ncat <<'E'\n{text}\nE\n")).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        p
+    }
+
+    /// The same commit is another build when its build id differs (a rebuild that says `unknown` or the same
+    /// `HEAD-dirty`), or when the file names none (a build from before the id); only the same pair is the same build.
+    #[tokio::test]
+    async fn the_same_commit_with_another_build_id_is_another_build() {
+        let dir = tempfile::tempdir().unwrap();
+        let said = |text: &str| version_program(dir.path(), text);
+        let p = said(r#"{"commit":"abc","build_id":"7"}"#);
+        assert_eq!(build_at(&p, "abc", "7").await, Build::Same);
+        assert!(matches!(build_at(&p, "abc", "6").await, Build::Other(_)));
+        assert!(matches!(build_at(&p, "xyz", "7").await, Build::Other(_)));
+        let p = said(r#"{"commit":"abc"}"#);
+        assert!(matches!(build_at(&p, "abc", "7").await, Build::Other(_)));
+    }
 
     /// A source the test drives: the stamp, what the build says and the turns.
     struct Fake {

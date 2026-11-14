@@ -289,11 +289,14 @@ Data only: a value that is not a plain string finds nothing."
         (:tools (let ((f (expand-file-name v (expand-file-name "debug-adapters" (drgnx-data-dir)))))
                   (and (file-exists-p f) f)))))))
 
+(declare-function drgnx-packs-adapters "drgnx-packs" ())
 (defun drgnx-doctor--debug-adapters (&optional table)
-  "The built-in debug adapters of TABLE (default etc/debug-adapters.eld), read as data: (:id :name :tested :found
-:install) each, `:found' where it is or nil.  Entries marked `:not-built-in' are left out."
+  "The built-in debug adapters of TABLE (default etc/debug-adapters.eld and the built-in packs' `:adapters'), read
+as data: (:id :name :tested :found :install) each, `:found' where it is or nil.  Entries marked `:not-built-in' are
+left out."
   (let* ((r (drgnx-file-read (or table (expand-file-name "etc/debug-adapters.eld" drgnx-dir))))
-         (rows (if (eq (plist-get r :status) 'ok) (plist-get r :data)
+         (rows (if (eq (plist-get r :status) 'ok)
+                   (append (plist-get r :data) (and (null table) (progn (require 'drgnx-packs) (drgnx-packs-adapters))))
                  (error "%s" (or (plist-get (plist-get r :problem) :text) (plist-get r :status))))))
     (delq nil
           (mapcar (lambda (a)

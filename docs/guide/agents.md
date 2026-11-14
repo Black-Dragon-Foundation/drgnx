@@ -112,8 +112,12 @@ A step an agent asked for can be refused before you see it:
   allowed here)"). A chat's change of a file, which the presets never allow (a chat edits your checkout only through
   pair mode), waits on a card instead when you may turn Pair on: a yes pairs the chat and it makes the change again
   through pair mode ([pair-mode.md](pair-mode.md)). A shell command a chat runs counts as a change unless it is one
-  plain read (`ls`, `cat`, `head`, `tail`, `wc`, `rg`, `grep`, with no `;`, `|`, `>`, `$(` or the like); git always
-  counts as a change, since a repository's own git config can run commands;
+  plain read (`ls`, `cat`, `head`, `tail`, `wc`, `rg`, `grep`, with no `;`, `|`, `>`, `$(` or the like). Git counts as a
+  read (`git status`, `log`, `diff`, `show`, `blame`, straight after `git` and with no `-c`, `--output`, `--ext-diff`
+  or `--textconv`) only in a folder you trusted with Trust This Folder, since a repository's own git config can run
+  commands; the hub reads `trusted-folders.eld` for that, treats a file it cannot use as trusting nothing (a notice
+  names the problem once), and compares real paths, so a link or `..` never climbs into a trusted folder. Anywhere
+  else git is a change;
 - **by the freshness check**, when the agent of a job has not read the job's decision log;
 - **by a rule or a plugin's hook** before the tool call ([plugins.md](plugins.md#before-a-tool-call)). The agent is
   told in drgnx's words, with the rule's or hook's quoted ("drgnx refused Bash; the hook deny-rm-hook said: «no rm
@@ -293,8 +297,8 @@ the key. Without a key the session does not start and the message names the vari
 under. Each session gets its route in its own environment (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, the model
 names); inside the sandbox the base URL is a local port that leads to the hub's gateway only, and the token works
 there alone; drgnx writes nothing to `~/.claude/settings.json`, so the plain `claude` profile keeps using your login. No
-agent inherits the other vendors' keys from Emacs's environment (`drgnx-agents-scrubbed-env`; the plain `claude`
-profile keeps Claude Code's own variables). The API keys are billed
+agent inherits the other vendors' keys from Emacs's environment (the hub builds an agent's environment from an
+allowlist; the plain `claude` profile uses its login files). The API keys are billed
 per token; Kimi's coding membership is a different endpoint these profiles do not use. Moonshot and DeepSeek have no
 `:price`, so the gateway counts their spend as zero. Details and the model names: [AI](ai.md#agents).
 

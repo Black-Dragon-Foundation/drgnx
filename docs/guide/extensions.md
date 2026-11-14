@@ -7,6 +7,13 @@ The editor never installs anything by itself and never waits for the network. A 
 Uninstall is queued and run by a background job; the row shows how it goes (`◎ native 14/37 · 12s`) and what came of
 it. `C-g` never stops a job; **Cancel** (`k`, Vim `x`) does.
 
+## Language packs
+
+Each language pack (`pack:NAME`) is a row too: Python, Kotlin, Zig and the other built-in languages. A pack row carries
+chips for what it brings: grammar, mode, server, format, search and debug. The page has **Install**, which runs
+`drgnx packs sync --add NAME`, and **Remove**, which runs `drgnx packs sync --remove NAME`, as background jobs like any
+other. A pack with a mode of its own (Python, Go, PHP, Elixir and most others) also has **Turn off in this project**: its files then open in the classic mode there. Kotlin, Swift, Zig and SQL share one mode and have no such toggle. The filter `packs` shows only these rows. See [language packs](../develop/packs.md).
+
 ## The list
 
 Rows are grouped in sections: **Installed**, **Updates**, **Recommended** (below), **Plugins**, **Built-in** and **Generations**. Each row has the kind's mark,

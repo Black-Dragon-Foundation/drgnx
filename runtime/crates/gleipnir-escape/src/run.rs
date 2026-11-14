@@ -35,6 +35,9 @@ pub struct Host {
     pub root: bool,
     pub landlock_abi: u8,
     pub x32: bool,
+    /// `io_uring_setup` works for an unfiltered process here: a container's own seccomp (podman's default profile
+    /// answers ENOSYS) or `kernel.io_uring_disabled` can say no, and then our filter's refusal cannot be told from it.
+    pub host_open: bool,
 }
 
 /// The only reasons a row may be skipped (review B2).
@@ -45,6 +48,7 @@ pub enum Skip {
     NeedsLinux,
     NeedsX86_64,
     X32Off,
+    HostFilterBlocks,
     NeedsRoot,
     LandlockBelow { have: u8, need: u8 },
 }
@@ -57,6 +61,9 @@ impl fmt::Display for Skip {
             Skip::NeedsLinux => f.write_str("needs linux"),
             Skip::NeedsX86_64 => f.write_str("needs x86_64"),
             Skip::X32Off => f.write_str("x32 is off"),
+            Skip::HostFilterBlocks => {
+                f.write_str("the host blocks io_uring, the keyring calls or vsock")
+            }
             Skip::NeedsRoot => f.write_str("needs root"),
             Skip::LandlockBelow { have, need } => write!(f, "Landlock ABI {have} below {need}"),
         }
@@ -90,6 +97,7 @@ pub fn skip_reason(row: &Row, host: &Host) -> Option<Skip> {
             Need::Seccomp,
             Need::Netns,
             Need::X32,
+            Need::HostOpen,
             Need::Browser,
         ]
         .into_iter()
@@ -102,6 +110,9 @@ pub fn skip_reason(row: &Row, host: &Host) -> Option<Skip> {
     }
     if needs(Need::X32) && !host.x32 {
         return Some(Skip::X32Off);
+    }
+    if needs(Need::HostOpen) && !host.host_open {
+        return Some(Skip::HostFilterBlocks);
     }
     if needs(Need::Root) && !host.root {
         return Some(Skip::NeedsRoot);
@@ -143,6 +154,9 @@ pub fn detect_host(probe: &Path) -> Host {
         .and_then(|l| l.detail?.parse().ok())
         .unwrap_or(0);
     let x32 = probe_one(&["syscall", "x32-getpid"]).is_some_and(|l| l.result == "reached");
+    let host_open = ["io-uring", "keyctl", "add-key", "vsock"]
+        .iter()
+        .all(|p| probe_one(&["syscall", p]).is_some_and(|l| l.result == "reached"));
     let root = rustix::process::geteuid().is_root()
         || Command::new("sudo")
             .args(["-n", "true"])
@@ -156,6 +170,7 @@ pub fn detect_host(probe: &Path) -> Host {
         root,
         landlock_abi,
         x32,
+        host_open,
     }
 }
 
@@ -492,6 +507,7 @@ pub fn build_spec_for(fx: &Fixture, row: &Row, bin: &Path, linux: bool) -> Resul
             if linux {
                 let port = gleipnir::backend::relay_ports(tier, &[wanted])
                     .map_err(|e| format!("relay port: {e}"))?[0];
+                fx.set_relay_port(port);
                 m.insert(
                     "net".into(),
                     serde_json::json!({"isolated": {"relay": [{"port": port, "socket": socket}]}}),

@@ -112,7 +112,12 @@ log when the wait timed out, and the log's directory); **3** when a Lisp hub fro
 |---|---|---|
 | Linux with a user systemd (the manager's `systemd` directory in `XDG_RUNTIME_DIR`) | `systemd-run --user --unit=ratatoskr-HASH --collect -p Restart=on-failure -p RestartForceExitStatus=75 -p "RestartPreventExitStatus=1 2 3" -p KillMode=mixed --setenv=NAME… ratatoskr serve`; "unit already exists" counts as success (two `ensure`s racing both then ping) | on a crash and on 75; never on 1, 2, 3 (`Restart=on-failure` alone restarts every non-zero exit until the start limit) |
 | macOS with a `gui/UID` domain | `<state>/hub/launchd.plist` (0600; label `org.blackdragonfoundation.ratatoskr.HASH`; `KeepAlive {SuccessfulExit: false}`, `ProcessType Background`; `serve --supervisor launchd`), then `launchctl bootstrap gui/UID <plist>`, or `kickstart` when `launchctl print gui/UID/LABEL` finds it loaded (a second `bootstrap` fails); a loaded label whose plist text changed (a new `DRGNX_EMACS`, a new `SSH_AUTH_SOCK`) gets `bootout`, then `bootstrap`, since `kickstart` would keep the old arguments and environment until logout. No domain (an SSH session): the self-detach row, with a line on stderr saying why | on a crash and on 75; `serve --supervisor launchd` maps exits 1, 2 and 3 to 0 after logging the real code, because launchd restarts on every non-zero exit |
-| none (`RATATOSKR_SUPERVISOR=none`, containers, no user manager) | the binary starts itself: `serve --supervisor self` in a session of its own (`setsid`), stdio on `/dev/null`; every descriptor is close-on-exec | no: a `restart` re-executes the binary instead |
+| none (`RATATOSKR_SUPERVISOR=none`, containers, no user manager) | the binary starts itself: `serve --supervisor self` in a session of its own (`setsid`), stdio on `/dev/null`; every descriptor from 3 up is close-on-exec in the child, whatever the caller left inheritable | no: a `restart` re-executes the binary instead |
+
+A hub that re-executes itself for a restart sets `RATATOSKR_RESTARTED=1` for the new image, which then tries the lock
+again for up to a second (20 × 50 ms) if it finds it held: the exec lets go of the predecessor's descriptor an instant
+before the image takes it, and an `ensure` landing in that instant could take it first (the loser exits 3, one hub
+serves). A start without it never waits.
 
 Only variable *names* go to a supervisor (`--setenv=NAME`, the plist's environment from the same names), each only
 when set: `DRGNX_DATA_DIR DRGNX_CONFIG_DIR XDG_RUNTIME_DIR XDG_STATE_HOME XDG_DATA_HOME XDG_CONFIG_HOME XDG_CACHE_HOME
@@ -190,10 +195,12 @@ close-on-exec, so the new image takes the lock at the exec).
 at start names the file on disk; macOS `_NSGetExecutablePath` and `realpath`) and records that path's device, inode
 and mtime. Every 2 s it `stat`s **that path**, never `/proc/self/exe`: the link follows the running inode, which a
 rename-replace (an update) leaves alone, so it would never change. A changed stamp runs `<path> version --json` with a
-5 s deadline; only an answer with another `commit` counts, and a missing, half-written or failing file is logged and
-looked at again at the next tick (the same commit under a new stamp becomes the baseline, so a rebuild that says the
-same commit — `unknown`, a build without `DRGNX_BUILD_COMMIT`, the same `HEAD-dirty` while developing — is never
-picked up: `drgnx hub stop` by hand, and the next start runs the new build). Once another build is confirmed, the `notice` event
+5 s deadline; only an answer with another `commit` or another `build_id` counts (`build_id` is the unix second build.rs
+ran, which it does again whenever a source file of the crate changes, so a rebuild that says the same commit —
+`unknown`, a build without `DRGNX_BUILD_COMMIT`, the same `HEAD-dirty` while developing — is another build; a file with
+no `build_id` is from before it and counts as another build too), and a missing, half-written or failing file is logged
+and looked at again at the next tick (the same commit and build id under a new stamp, a touch or a re-install of the same
+build, becomes the baseline). Once another build is confirmed, the `notice` event
 `{source: "hub", severity: "warn", id: "restart-when-idle", life: "condition", text: "drgnx was updated; the hub
 restarts when its N running turns finish", command: "hub-restart-now"}` is sent (again when N changes), and the hub
 exits 75 the first time nothing is busy: **idle** is none of the hub's own sessions running a turn (an idle chat does
@@ -960,7 +967,9 @@ Gemini's admin policy, named by the first 16 hex digits of its content's SHA-256
 by file name, `Admin: <name>`, are drgnx's and no system policy's; `lock/dsh-overlay.yml`) is written there, and the agent reads that dir and never writes it on every target; one at a
 fixed path (`/etc/codex/requirements.toml`, `/etc/codex/config.toml`, Kimi Code's `config.toml` in its home) is
 written to the session's scratch and bound read-only at that path, which only the full tier can do: elsewhere the
-launch is refused (`Rule::Setup`). The user's own `/etc` is never touched. A gateway plan's `gateway_url_env` names the
+launch is refused (`Rule::Setup`). The user's own `/etc` is never touched. Kimi Code's and DeepSeek Harness's hub-owned homes (`<state>/agents/kimi-code`, `<state>/agents/dsh`) lie in the closed state
+folder: `sandbox::context` opens exactly those two inside it (`open_inside_closed`), never `<state>/agents` or a sibling, and
+the lock's files in a home are the read-only copies bound over empty files there. A gateway plan's `gateway_url_env` names the
 variables that get the relay's URL beside `ANTHROPIC_BASE_URL` (Kimi Code's, DeepSeek Harness's).
 
 **The `before_tool` tool** (`agents/before_tool_tool.rs`): a Codex session whose hooks subscribe to a kind other than
@@ -1449,11 +1458,11 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes |
 | `explorer/subscribe` | user | `{around?: AbsPath, compact?: boolean, exclude?: [string], expanded?: [AbsPath], indent?: natnum, only?: [AbsPath], roots: [AbsPath], view: string, window?: natnum}` | `{listing: natnum}` | no |
 | `extensions/details` | user, agent | `{id: string}` | `DetailsResult` | no |
-| `extensions/list` | user | `{dense?: boolean, generations?: [{copies?: string, current?: boolean, differs?: [string], in_use?: boolean, n: natnum, note?: string, size?: string, time?: string}], glyphs?: [{gui: string, kind: string, tty: string}], restart?: [string], sections: [{minus_updates?: boolean, name: string, search: {filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs", plugins?: boolean, recommended?: natnum, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}, title: string}], view: string}` | `{sections: [ListTotal]}` | no |
+| `extensions/list` | user | `{dense?: boolean, generations?: [{copies?: string, current?: boolean, differs?: [string], in_use?: boolean, n: natnum, note?: string, size?: string, time?: string}], glyphs?: [{gui: string, kind: string, tty: string}], restart?: [string], sections: [{minus_updates?: boolean, name: string, search: {filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs" \| "pack", packs?: boolean, plugins?: boolean, recommended?: natnum, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}, title: string}], view: string}` | `{sections: [ListTotal]}` | no |
 | `extensions/modules` | user | `{modules: [{doc?: string, flags?: [string], name: string, packages?: [string], state: "on" \| "off" \| "needs-package" \| "failed"}]}` | `{}` | no |
 | `extensions/recommended` | user | `{ids: [string], version: natnum}` | `{}` | no |
 | `extensions/rows` | user | `{ids: [string]}` | `{rows: [Row]}` | no |
-| `extensions/search` | user, agent | `{filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs", plugins?: boolean, recommended?: natnum, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}` | `{rows: [Row], total: natnum}` | no |
+| `extensions/search` | user, agent | `{filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs" \| "pack", packs?: boolean, plugins?: boolean, recommended?: natnum, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}` | `{rows: [Row], total: natnum}` | no |
 | `forecast/accuracy` | user | `{profile?: Text, role?: Text}` | `{rows?: [AccuracyRow]}` | no |
 | `forecast/get` | user | `{job: Id}` | `Forecast` | no |
 | `forecast/session` | user | `{profile?: string, session: Id}` | `Forecast` | no |
@@ -1461,6 +1470,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `gateway/keys` | user | `{keys: ProviderKeys}` | `boolean` | no |
 | `gateway/keys-held` | user | `{}` | `{providers?: [Id]}` | no |
 | `gateway/register` | user | `{agent?: AgentName, budget?: Usd, chain: [[string \| null]], job?: Id, keys?: ProviderKeys, openrouter?: {data-collection?: "deny" \| "allow", ignore?: [string], only?: [string], zdr?: boolean}, owner?: natnum, sid?: SessionId, task?: TaskRef}` | `{openrouter?: any, socket?: string, token: string, url?: string}` | no |
+| `gateway/revoke-key` | user | `{provider: Id}` | `boolean` | no |
 | `gateway/set-budget` | user | `{budget: Usd, job: Id}` | `boolean` | no |
 | `gateway/unregister` | user | `{token: string}` | `boolean` | no |
 | `git/blame` | user | `{path: string, worktree_root: string}` | `{agents: [AgentLines], commits: [BlameCommit], head?: string, lines: [natnum]}` | no |
@@ -1608,6 +1618,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `tasks/ready` | user | `{labels?: [string], limit?: natnum, project?: string}` | `{cursor?: natnum, tasks?: [any]}` | no |
 | `tasks/write` | user | `{acceptance?: Text, add?: [string], body?: Text, cwd?: AbsPath, dst?: string, id?: string, kind?: string, labels?: [string], lease?: integer, mode?: "children" \| "replace", note?: Text, op: "create" \| "update" \| "claim" \| "heartbeat" \| "release" \| "handoff" \| "reassign" \| "split" \| "complete" \| "link" \| "unlink" \| "label" \| "tools", parent?: string, parts?: [Text], priority?: integer, project?: string, remove?: [string], src?: string, status?: Status, title?: Text, to?: string, tracker?: boolean, ver?: integer}` | `any` | yes |
 | `term/attach` | user | `{cell_px?: [natnum, natnum], cols: natnum, id: string, rows: natnum}` | `{id: string, view: string}` | no |
+| `term/clipboard-reply` | user | `{id: string, req: natnum, text?: string}` | `boolean` | no |
 | `term/close` | user | `{id: string, signal?: integer}` | `boolean` | no |
 | `term/config` | user | `{config: [[string, SettingValue]], id: string}` | `boolean` | no |
 | `term/fetch` | user | `{before_key?: string, id: string, max_bytes?: natnum}` | `{version?: natnum}` | no |
@@ -1872,7 +1883,7 @@ and name. The session is recorded in `runtime.db` (`asession`, migration 5) and 
   arrives, whichever the mirror sees first: the hub sends a session's state at most every 50 ms, so a short turn can
   go by with no `busy` snapshot. Each turn runs its hooks once (the mirror counts turns per session), a snapshot or
   entries sent again run nothing, and a fetched transcript's turns that had ended when the editor last heard of the
-  session (within the `entries_count` of the last snapshot it applied) run none. A turn that ended after that runs
+  session (within the `entries-count` of the last snapshot it applied) run none. A turn that ended after that runs
   its hooks once, even when it ended before the fetch's answer and its own events were dropped as older than it. The
   work tracker records a task's commits from `turn-end`.
 
@@ -1959,7 +1970,10 @@ What the core keeps:
   the card before the exit. A request the matrix decides on after its turn was cancelled or ended is answered
   cancelled at once: the agent no longer waits on it. A matrix card that no request waits on any more after such a
   cancel is withdrawn (`Withdraw`: `norn::write::cards::card_withdraw`, state `withdrawn` with a `card` event), so it
-  leaves the open cards and the needs-you lists; a card the user settled first stays settled.
+  leaves the open cards and the needs-you lists; a card the user settled first stays settled. A hub that crashed took
+  its sessions' agents with it, so at the next start, before any session resumes, every open matrix card with a
+  session (`norn::write::cards::withdraw_orphaned_matrix_cards`) is withdrawn the same way; a resumed session that
+  asks again gets a new card, and a matrix card with no session (a job's spending limit) stays.
 - One event pair is armed at a time; the timer's tick sends it. While the hub ends none is armed or sent: the shell
   reads the snapshot when it sends a pair, so one sent then could show the session's own exit, and an editor that read
   it before its connection's end of file would keep that reason instead of the hub's.
@@ -3275,6 +3289,14 @@ user subscribers get the event `gateway/keys-changed {providers}` whenever that 
 registration's `keys`; a key replaced for a provider already held changes nothing). Never a key. The editor judges a
 provider usable from these, not from a key of its own. A restarted hub holds none: a reconnecting editor asks
 `gateway/keys-held`, and hears `gateway/keys-changed` when its handover fills the set again.
+
+**Forgetting a key.** `gateway/revoke-key {provider}` (user) makes the hub forget that provider's key (zeroed) and
+answers whether it held one; a provider it never held is `false`, not an error. The next request for the provider finds
+no key (the editor's route answers 503 `no key for P in the drgnx hub`, an agent's chain moves on and the hub asks again
+with `gateway/need-keys` when an agent needs it); a request already sent upstream finishes with the key it used. The set
+changes, so `gateway/keys-changed` follows. The editor calls it when a key it stored replaces the old one
+(`drgnx-ai-store-key` → `drgnx-hub-revoke-key`; the new key goes with the next hand-over): a replaced key is revoke plus
+set. It only asks a connection that proved itself and starts nothing.
 
 ## Settings
 

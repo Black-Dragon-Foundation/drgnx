@@ -25,6 +25,9 @@ const FILE_BATCH: usize = 64;
 const META_CHUNKER: &str = "chunker_version";
 /// The parse whose symbols (and later references) the stored rows hold ([`PARSE_VERSION`]).
 const META_PARSE: &str = "parse_version";
+/// The language stamp the stored rows were parsed under ([`crate::chunk::lang_stamp`]): a pack changed or a grammar
+/// was built since.
+const META_LANGS: &str = "lang_stamp";
 /// The commit the index was last built from (the hub writes it).
 pub const META_BUILT_FROM: &str = "built_from";
 /// Files known changed on disk and not yet rebuilt (the hub writes it).
@@ -218,19 +221,22 @@ async fn refresh_files(
     read: &(dyn Fn(&str) -> io::Result<Vec<u8>> + Sync),
     models: &[(&str, usize)],
 ) -> Result<Refresh, StoreError> {
-    let (known, chunker, parse) = store
+    let stamp = crate::chunk::lang_stamp();
+    let (known, chunker, parse, langs) = store
         .handle()
         .read(|c| {
             Ok((
                 known_blobs(c)?,
                 urdr::meta(c, META_CHUNKER)?,
                 urdr::meta(c, META_PARSE)?,
+                urdr::meta(c, META_LANGS)?,
             ))
         })
         .await?;
     // a new parse rebuilds like a new chunker; the chunks' keys stay, so the vectors do too
     let rebuild = chunker.as_deref() != Some(CHUNKER_VERSION.to_string().as_str())
-        || parse.as_deref() != Some(PARSE_VERSION.to_string().as_str());
+        || parse.as_deref() != Some(PARSE_VERSION.to_string().as_str())
+        || langs.as_deref() != Some(stamp.as_str());
     let names: HashSet<&str> = listed.iter().map(|l| l.path.as_str()).collect();
     let mut gone: Vec<String> = known
         .keys()
@@ -326,6 +332,7 @@ async fn refresh_files(
         store
             .meta_set(META_PARSE, &PARSE_VERSION.to_string())
             .await?;
+        store.meta_set(META_LANGS, &stamp).await?;
     }
     let models: Vec<String> = models.iter().map(|(m, _)| m.to_string()).collect();
     out.keys_missing = store
@@ -491,8 +498,8 @@ pub async fn reset(store: &CodeStore) -> Result<(), StoreError> {
                 [],
             )?;
             c.execute(
-                "delete from meta where key in (?1, ?2, ?3)",
-                [META_CHUNKER, META_BUILT_FROM, META_PARSE],
+                "delete from meta where key in (?1, ?2, ?3, ?4)",
+                [META_CHUNKER, META_BUILT_FROM, META_PARSE, META_LANGS],
             )?;
             Ok(())
         })

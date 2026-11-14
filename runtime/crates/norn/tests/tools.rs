@@ -200,6 +200,8 @@ async fn none_identity_reads_but_never_writes() {
                 error && text.contains("no agent identity"),
                 "{name}: {text}"
             );
+            // the hub takes identity from the session socket, never from an environment variable
+            assert!(!text.contains("DRGNX_AGENT"), "{name}: {text}");
         }
     }
     assert_eq!(w.written(), 0);

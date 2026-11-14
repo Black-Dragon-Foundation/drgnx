@@ -42,7 +42,12 @@
             (should toast)
             (should (frame-visible-p toast))
             (should (eq (frame-parent toast) root))
-            (should (<= (nth 3 e) mode-line-top))
+            (unless (<= (nth 3 e) mode-line-top)
+              (ert-fail (format "toast edges %S, mode-line-top %S, anchor %S, windows %S, mlh %S, scale %S, root %S, placed-h/border/height/height-param/top/win %S"
+                                e mode-line-top (drgnx-notice-toast--anchor root)
+                                (mapcar #'window-pixel-edges (window-list root 'nomini)) (window-mode-line-height win)
+                                (frame-scale-factor root) (list (frame-pixel-width root) (frame-pixel-height root))
+                                (list (frame-parameter toast (quote drgnx-toast-placed-h)) (frame-parameter toast (quote internal-border-width)) (frame-pixel-height toast) (frame-parameter toast (quote height)) (frame-parameter toast (quote top)) (window-pixel-height (frame-root-window toast))))))
             (should (<= (nth 2 e) (- (frame-pixel-width root) (frame-parameter root 'internal-border-width))))
             (should (frame-parameter toast 'no-accept-focus))
             (should (eq (selected-frame) root))))

@@ -135,6 +135,7 @@ pub fn report(env: &Env, binary: &Path, running: Option<Running>, sandbox: &Chec
         "job_agents": JOB_AGENTS,
         "sandbox": sandbox_section(sandbox),
         "legacy": crate::legacy::section(env),
+        "packs": packs_section(env),
     });
     if let Some(r) = running {
         v["running"] = json!({"pid": r.pid, "commit": r.commit});
@@ -648,6 +649,40 @@ fn summary(v: &Value) -> String {
     out
 }
 
+/// A check running on a thread of its own, awaited by [`BoundedCheck::wait`] for at most what is left of `limit`
+/// since it started: the facts it gathers first (`bwrap --version`, up to 2 s) are inside the bound too, and a
+/// check that does not answer is a failed one (GL-T12-1), never a doctor that is late. The thread is not joined: a
+/// hung one ends with the process.
+struct BoundedCheck {
+    rx: std::sync::mpsc::Receiver<Check>,
+    started: std::time::Instant,
+    limit: Duration,
+}
+
+fn bounded(limit: Duration, f: impl FnOnce() -> Check + Send + 'static) -> BoundedCheck {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let started = crate::clock::real_now();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    BoundedCheck { rx, started, limit }
+}
+
+impl BoundedCheck {
+    fn wait(self) -> Check {
+        let left = self.limit.saturating_sub(self.started.elapsed());
+        self.rx.recv_timeout(left).unwrap_or_else(|_| {
+            Check::failed(
+                format!(
+                    "the sandbox check did not answer within {} ms",
+                    self.limit.as_millis()
+                ),
+                None,
+            )
+        })
+    }
+}
+
 /// `doctor`: `--json` is the report; without it, a few lines of text. The sandbox check runs beside the hub ask, so
 /// the two together stay under the editor's 2 s.
 pub fn doctor(env: &Env, json_out: bool) -> i32 {
@@ -657,35 +692,32 @@ pub fn doctor(env: &Env, json_out: bool) -> i32 {
         .unwrap_or_default();
     let deadline = crate::clock::real_now() + DOCTOR_ASK;
     let left = || deadline.saturating_duration_since(crate::clock::real_now());
-    let (running, sandbox) = std::thread::scope(|s| {
-        let check = s.spawn(|| sandbox::check_blocking(Tier::Full, None, DOCTOR_CHECK));
-        let running = Client::user(env, left())
-            .and_then(|mut c| c.call("status", json!({}), left()))
-            .ok()
-            .map(|s| Running {
-                pid: s["pid"]
-                    .as_u64()
-                    .and_then(|p| u32::try_from(p).ok())
-                    .unwrap_or(0),
-                commit: s["runtime"]["commit"].as_str().map(str::to_string),
-                gateway: s.get("gateway").cloned(),
-                store: s.get("store").cloned(),
-                watch: s.get("watch").cloned(),
-            })
-            .or_else(|| {
-                client::ping(&socket, left().max(DOCTOR_PING)).map(|pid| Running {
-                    pid,
-                    commit: None,
-                    gateway: None,
-                    store: None,
-                    watch: None,
-                })
-            });
-        let check = check
-            .join()
-            .unwrap_or_else(|_| Check::failed("the check panicked".into(), None));
-        (running, check)
+    let check = bounded(DOCTOR_CHECK, || {
+        sandbox::check_blocking(Tier::Full, None, DOCTOR_CHECK)
     });
+    let running = Client::user(env, left())
+        .and_then(|mut c| c.call("status", json!({}), left()))
+        .ok()
+        .map(|s| Running {
+            pid: s["pid"]
+                .as_u64()
+                .and_then(|p| u32::try_from(p).ok())
+                .unwrap_or(0),
+            commit: s["runtime"]["commit"].as_str().map(str::to_string),
+            gateway: s.get("gateway").cloned(),
+            store: s.get("store").cloned(),
+            watch: s.get("watch").cloned(),
+        })
+        .or_else(|| {
+            client::ping(&socket, left().max(DOCTOR_PING)).map(|pid| Running {
+                pid,
+                commit: None,
+                gateway: None,
+                store: None,
+                watch: None,
+            })
+        });
+    let sandbox = check.wait();
     let v = report(env, &binary, running, &sandbox);
     if json_out {
         println!("{v}");
@@ -693,6 +725,53 @@ pub fn doctor(env: &Env, json_out: bool) -> i32 {
         println!("{}", text(&v, &sandbox));
     }
     0
+}
+
+/// The packs whose grammar the hub parses with and whether each library is built and loads: `[{pack, built, why?,
+/// removed?}]`. A pack that is not built reads as text until `drgnx packs sync` has built it; one you removed stays
+/// removed (`removed: true`).
+fn packs_section(env: &Env) -> Value {
+    let removed = std::fs::read(paths::config_dir(env).join("drgnx.lock.eld"))
+        .map(|b| skald::registry::removed_from_lock(&b))
+        .unwrap_or_default();
+    Value::Array(
+        hrafn::chunk::hub_grammars()
+            .into_iter()
+            .map(|(pack, grammar)| {
+                if removed.iter().any(|r| r == pack) {
+                    return json!({"pack": pack, "built": false, "removed": true});
+                }
+                match skald::registry::language(grammar) {
+                    Ok(_) => json!({"pack": pack, "built": true}),
+                    Err(e) => json!({"pack": pack, "built": false, "why": e.reason}),
+                }
+            })
+            .collect(),
+    )
+}
+
+/// One line per pack that is not built: `pack X not built (why)`.
+fn pack_lines(packs: &Value) -> String {
+    let mut out = String::new();
+    for p in packs
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|p| p["built"] == false)
+    {
+        let name = p["pack"].as_str().unwrap_or("?");
+        if p["removed"] == true {
+            out.push_str(&format!(
+                "\npack {name} removed by you; `drgnx packs install {name}` to get it back: its files read as text"
+            ));
+            continue;
+        }
+        out.push_str(&format!(
+            "\npack {name} not built ({}): its files read as text",
+            p["why"].as_str().unwrap_or("?")
+        ));
+    }
+    out
 }
 
 /// The lines `doctor` prints without `--json`.
@@ -735,6 +814,7 @@ fn text(v: &Value, sandbox: &Check) -> String {
     ));
     out.push_str(&watch_lines(&v["watch"]));
     out.push_str(&legacy_lines(&v["legacy"]));
+    out.push_str(&pack_lines(&v["packs"]));
     out
 }
 
@@ -806,6 +886,35 @@ pub fn restart(env: &Env) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// GL-T12-1: a check that does not answer in time (its facts included) is a failed check at the bound, not a
+    /// doctor that is late.
+    #[test]
+    #[ignore = "timing: a check that does not answer is a failed one at the bound"]
+    fn a_slow_check_is_a_failed_one_at_the_bound() {
+        let began = std::time::Instant::now();
+        let slow = bounded(Duration::from_millis(300), || {
+            std::thread::sleep(Duration::from_secs(4));
+            Check::failed("late".into(), None)
+        })
+        .wait();
+        assert!(
+            began.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            began.elapsed()
+        );
+        assert!(!slow.ok);
+        assert!(
+            slow.reason
+                .unwrap()
+                .contains("did not answer within 300 ms")
+        );
+        let fast = bounded(Duration::from_secs(5), || {
+            Check::failed("quick".into(), None)
+        })
+        .wait();
+        assert_eq!(fast.reason.as_deref(), Some("quick"));
+    }
 
     #[test]
     fn doctor_names_the_networked_jobs_check() {
@@ -1084,6 +1193,18 @@ mod tests {
             version: Some("157.0.8103.38".into()),
             source,
         }
+    }
+
+    #[test]
+    fn a_removed_pack_is_said_removed_not_not_built() {
+        let lines = pack_lines(&json!([
+            {"pack": "go", "built": false, "removed": true},
+            {"pack": "java", "built": false, "why": "no lock"},
+            {"pack": "c", "built": true}
+        ]));
+        assert!(lines.contains("pack go removed by you; `drgnx packs install go` to get it back"));
+        assert!(lines.contains("pack java not built (no lock)"));
+        assert!(!lines.contains("pack c"));
     }
 
     #[test]

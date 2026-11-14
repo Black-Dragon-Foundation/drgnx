@@ -299,24 +299,28 @@ pub const STRATUM_FLOOR: f64 = -0.03;
 /// A stratum of fewer rows is reported but does not gate: its interval is too wide for the floor to mean anything.
 pub const GATED_STRATUM_ROWS: usize = 30;
 
-/// What the gate compares: chunk-level MRR@10 (a target's symbol must match), or file MRR@10 (any hit in a target
-/// file), which is fair to a chunker that gives a language no symbols.
+/// What the gate compares, and the rule. The restated gate (hrafn-agent-tools Task 4, the manager, 2026-11-10; it applies to
+/// every language added since) is [`Gate::Chunk`] (chunk-level MRR@10: a target's symbol must match; the difference is at
+/// least 0) and [`Gate::File`] (file MRR@10: any hit in a target file, which is fair to a chunker that gives a language no
+/// symbols; the difference's upper bound is at least 0); the strata are reported and do not gate. [`Gate::Floor`] is the
+/// non-regression check of a language nothing was added to (drgnx's own set): chunk MRR@10 with the interval's lower bound
+/// at least [`OVERALL_FLOOR`] overall and [`STRATUM_FLOOR`] in every stratum of [`GATED_STRATUM_ROWS`] rows or more.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Gate {
     Chunk,
     File,
+    Floor,
 }
 
-/// B against A on the same queries, on chunk-level MRR@10: [`compare_on`] with [`Gate::Chunk`].
+/// B against A on the same queries, on chunk-level MRR@10 under the non-regression floors: [`compare_on`] with
+/// [`Gate::Floor`].
 pub fn compare(a: &Report, b: &Report) -> Result<Verdict, String> {
-    compare_on(a, b, Gate::Chunk)
+    compare_on(a, b, Gate::Floor)
 }
 
-/// B against A on the same queries: paired bootstrap of the difference of GATE's metric. B passes when the interval's
-/// lower bound is at least [`OVERALL_FLOOR`] overall and [`STRATUM_FLOOR`] in every stratum of at least
-/// [`GATED_STRATUM_ROWS`] rows (smaller ones are reported only), B's index has no coverage
-/// error and its exact-symbol recall (when measured) is 1.0. Reports over different queries are refused, and so is the
-/// file gate over a report that has no file ranks.
+/// B against A on the same queries: paired bootstrap of the difference of GATE's metric, under GATE's rule. Whatever the
+/// rule, B's index must have no coverage error and its exact-symbol recall (when measured) must be 1.0. Reports over
+/// different queries are refused, and so is the file gate over a report that has no file ranks.
 pub fn compare_on(a: &Report, b: &Report, gate: Gate) -> Result<Verdict, String> {
     if a.rows.keys().ne(b.rows.keys()) {
         return Err(format!(
@@ -334,7 +338,7 @@ pub fn compare_on(a: &Report, b: &Report, gate: Gate) -> Result<Verdict, String>
         return Err("a report has no file MRR (made before it was measured): run it again".into());
     }
     let (metric, label): (fn(&Judged) -> f64, &str) = match gate {
-        Gate::Chunk => (|j| j.rr, "MRR@10"),
+        Gate::Chunk | Gate::Floor => (|j| j.rr, "MRR@10"),
         Gate::File => (|j| j.file_rr.unwrap_or(0.0), "file MRR@10"),
     };
     let pair = |filter: &dyn Fn(&RowScore) -> bool| {
@@ -349,16 +353,25 @@ pub fn compare_on(a: &Report, b: &Report, gate: Gate) -> Result<Verdict, String>
     };
     let overall = pair(&|_| true);
     let mut reasons = Vec::new();
-    if overall.lo < OVERALL_FLOOR {
-        reasons.push(format!(
+    match gate {
+        Gate::Chunk if overall.mean < 0.0 => reasons.push(format!(
+            "overall: the {label} difference is {:+.4}, below 0",
+            overall.mean
+        )),
+        Gate::File if overall.hi < 0.0 => reasons.push(format!(
+            "overall: the upper bound of the {label} difference is {:+.4}, below 0",
+            overall.hi
+        )),
+        Gate::Floor if overall.lo < OVERALL_FLOOR => reasons.push(format!(
             "overall: the lower bound of the {label} difference is {:.4}, below {OVERALL_FLOOR}",
             overall.lo
-        ));
+        )),
+        _ => {}
     }
     let mut strata = BTreeMap::new();
     for s in a.strata.keys() {
         let d = pair(&|r| &r.stratum == s);
-        if d.n >= GATED_STRATUM_ROWS && d.lo < STRATUM_FLOOR {
+        if gate == Gate::Floor && d.n >= GATED_STRATUM_ROWS && d.lo < STRATUM_FLOOR {
             reasons.push(format!(
                 "stratum {s}: the lower bound of the {label} difference is {:.4}, below {STRATUM_FLOOR}",
                 d.lo

@@ -315,23 +315,31 @@ pub fn choose(env: &Env) -> Mode {
 }
 
 /// Start this binary detached from the caller: a session of its own (`setsid`), stdio on `/dev/null`, running `serve
-/// --supervisor self`.  Every descriptor Rust opens is close-on-exec, so nothing else is inherited.  The child is
-/// handed back so the caller can see it end early.
+/// --supervisor self`.  Nothing above stderr is inherited, a descriptor a caller left inheritable included
+/// ([`isolate`]).  The child is handed back so the caller can see it end early.
 pub fn detach(exe: &Path) -> io::Result<std::process::Child> {
     let mut cmd = Command::new(exe);
     cmd.args(["serve", "--supervisor", "self"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    // SAFETY: only `setsid(2)`, which is async-signal-safe, runs between fork and exec.
+    isolate(&mut cmd);
+    cmd.spawn()
+}
+
+/// CMD's child is a session of its own (`setsid`).  What it inherits stops at stderr: every descriptor from 3 up is
+/// close-on-exec in the child, whatever the caller left inheritable.
+fn isolate(cmd: &mut Command) {
+    // SAFETY: `close_range(2)` or `fcntl(2)` and `setsid(2)`, all async-signal-safe and allocation-free, run between
+    // fork and exec.
     unsafe {
         cmd.pre_exec(|| {
+            draugr::spawn::cloexec_from(3);
             rustix::process::setsid()
                 .map(|_| ())
                 .map_err(io::Error::from)
         });
     }
-    cmd.spawn()
 }
 
 /// What `ensure` runs once nothing answers.  Err is the reason it could not start one.
@@ -670,6 +678,41 @@ fn stop_lisp(socket: &Path, lock_dir: &Path, pid: Option<u32>, timeout: Duration
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What a detached child inherits stops at stderr: a descriptor the caller left inheritable (here a high one, so
+    /// the child's own numbers cannot be mistaken for it) is not in the child's table.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_detached_child_inherits_nothing_above_stderr() {
+        let mut p = [0; 2];
+        // SAFETY: pipe(2) fills the two integers; fcntl(2) and close(2) take descriptors this test owns.
+        let leaked = unsafe {
+            assert_eq!(libc::pipe(p.as_mut_ptr()), 0);
+            let high = libc::fcntl(p[0], libc::F_DUPFD, 200);
+            libc::close(p[0]);
+            libc::close(p[1]);
+            high
+        };
+        assert!(leaked >= 200);
+        let mut cmd = Command::new("/bin/sh");
+        cmd.args(["-c", "ls /proc/self/fd"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        isolate(&mut cmd);
+        let out = cmd.output().unwrap();
+        // SAFETY: closing the descriptor made above.
+        unsafe { libc::close(leaked) };
+        let seen: Vec<i32> = String::from_utf8_lossy(&out.stdout)
+            .split_whitespace()
+            .filter_map(|w| w.parse().ok())
+            .collect();
+        assert!(!seen.is_empty(), "the child listed nothing");
+        assert!(
+            !seen.contains(&leaked),
+            "the child holds {leaked}: {seen:?}"
+        );
+    }
     use std::cell::RefCell;
 
     fn env(vars: &[(&str, &str)]) -> Env {

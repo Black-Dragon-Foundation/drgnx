@@ -184,7 +184,8 @@ The hub holds your provider keys, in its memory only (above). What else gets nea
   and an agent of a keyed profile (OpenRouter, Anthropic, Kimi, DeepSeek) does not start without the hub: "the drgnx
   hub is not running; agents reach providers through it".
 - **Which keys the hub holds** is all anyone can ask of it: the provider names (`ratatoskr doctor`, and the hub's
-  `gateway/keys-held`), never a key. Your editor judges a provider usable from that list.
+  `gateway/keys-held`), never a key. Your editor judges a provider usable from that list. When you store a new key
+  for a provider, the hub forgets the old one at once (`gateway/revoke-key`).
 - **Keys in your environment** (`OPENROUTER_API_KEY` and the like) stay where you put them: drgnx never unsets them,
   so the programs your Emacs starts (shells, `compile`) still see them; agents do not (their environment drops every
   provider key) and use the copy the hub holds. `drgnx doctor` notes such a key ("OPENROUTER_API_KEY is set in this
@@ -615,6 +616,9 @@ and locks.
 The files a lock binds at a fixed path (Codex's `/etc/codex` pair, Kimi Code's `config.toml`) need the sandbox's
 full tier: on another, such a session is not started. The files drgnx writes for one session (Gemini's admin policy,
 DeepSeek's overlay) live in that session's own folder, which its agent reads and never writes.
+For Codex's `/etc/codex` pair the session sees the host's `/etc` as it was when the session started: the sandbox builds
+it from the host's top-level entries, so a file the host adds to `/etc` while the session runs is not visible in it, and
+the host's own `/etc/codex` (if there is one) is replaced by the lock's two files.
 
 **A hook never misses a step it subscribes to.** When a before-tool hook or rule subscribes to a kind, the lock makes
 the agent ask about it, or the agent's own hook calls drgnx (Codex's managed hook, which fails open on a timeout:

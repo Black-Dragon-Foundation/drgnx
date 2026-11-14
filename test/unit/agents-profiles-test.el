@@ -135,7 +135,7 @@ registration (:url :token)."
 
 (ert-deftest drgnx-agents-profiles/runner-unsets-the-new-keys ()
   (skip-unless (getenv "DRGNX_TEST_ISOLATED"))
-  (dolist (v (append drgnx-agents-scrubbed-env '("CLAUDE_CONFIG_DIR" "CODEX_HOME" "KIMI_CODE_HOME")))
+  (dolist (v (append drgnx-agent-config-vendor-env '("CLAUDE_CONFIG_DIR" "CODEX_HOME" "KIMI_CODE_HOME")))
     (should-not (getenv v))))
 
 ;; [D] pure: a vendor with an agent of its own runs it: the built-ins have Kimi Code and DeepSeek Harness, never
