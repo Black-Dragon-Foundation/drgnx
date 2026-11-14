@@ -507,8 +507,11 @@ jobs:
       # bubblewrap (exec runs in the starter's sandbox). The provider and gateway rows of tests/launch_sandboxed.rs
       # run domr's ratatoskr-mock (the mock LLM), which they find beside the ratatoskr binary: built first.
       # The debug adapters the ignored debug rows (tests_blocked_live, tests_fork_live) run against, at the hub's pins:
-      # the lane runs every ignored test of the crate, so it has them (a lane without them reads red on them)
+      # the lane runs every ignored test of the crate, so it has them (a lane without them reads red on them). Not
+      # skipped by an earlier step's failure (the unit step above): the rows would then fail on a missing adapter that
+      # is no fault of theirs.
       - name: debug adapters (debugpy and js-debug at the hub's pins)
+        if: ${{ !cancelled() }}
         run: bash .github/ci/debug-adapters.sh "$RUNNER_TEMP/debug-adapters" >> "$GITHUB_ENV"
       - name: build the agent core's tests (test hooks)
         id: core-build
@@ -533,6 +536,9 @@ jobs:
           # the Mac runner's end-to-end rows (tests/mac_runner.rs) need a Mac's ssh account (DRGNX_TEST_MAC_RUNNER): the
           # macOS lane's `mac-runner` job runs them
           skips="$skips --skip mac_runner::"
+          # the generated ssh config against a localhost sshd (tests/macos.rs) needs the macOS lane's Remote Login
+          # (DRGNX_TEST_SSHD_HOST, .github/ci/macos-sshd.sh): that lane runs it
+          skips="$skips --skip macos::the_generated_config_against_a_localhost_sshd"
           # the debug rows that run in the `debug-live` job instead (the adapter image's adapters, CAP_SYS_PTRACE, a
           # network namespace of its own): tests_live_adapters and tests_blocked_live. tests_fork_live, the Python and JS
           # forks in the sandbox, runs here against the adapters installed above
