@@ -240,6 +240,15 @@ pub struct NotebookLogParams {
     pub since: Option<u64>,
 }
 
+/// `notebook/focus`: the editor is in cell CELL of notebook ID (none: in none of its cells, such as in a view of it). The outline marks
+/// that cell's row (the property `drgnx-notebook-current`). The editor sends it when the cell changes, not on every move of point.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct NotebookFocusParams {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cell: Option<String>,
+}
+
 /// One entry of a kernel's log: a message that answered no cell (the kernel's own logging, a message from another client). SEQ
 /// counts from 1; TYPE is the message type (`stream`, `error`, ...); TEXT is what it says, cut at 4096 characters.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -327,6 +336,11 @@ fn check_input(p: &NotebookInput) -> Result<(), Error> {
 fn check_cell(p: &NotebookCellRef) -> Result<(), Error> {
     name("id", &p.id)?;
     name("cell", &p.cell)
+}
+
+fn check_focus(p: &NotebookFocusParams) -> Result<(), Error> {
+    name("id", &p.id)?;
+    p.cell.as_deref().map_or(Ok(()), |c| name("cell", c))
 }
 
 fn check_log(p: &NotebookLogParams) -> Result<(), Error> {
@@ -430,6 +444,12 @@ pub(crate) fn methods() -> Vec<Method> {
             check: check_view,
         ),
         method!(
+            "notebook/focus", NotebookFocus(NotebookFocusParams) -> bool,
+            classes: [User], writes: false,
+            doc: "the editor is in this cell of the notebook (none: in none): the cell outline marks its row; sent when the cell changes",
+            check: check_focus,
+        ),
+        method!(
             "notebook/log", NotebookLog(NotebookLogParams) -> NotebookLog,
             classes: [User], writes: false,
             doc: "the kernel's log of a notebook after entry `since`: the messages that answered no cell (the kernel's own logging, messages from other clients), the last 500, each cut at 4096 characters",
@@ -471,6 +491,7 @@ mod tests {
             "tail",
             "output",
             "view",
+            "focus",
             "log",
             "clear",
             "close",
@@ -512,6 +533,8 @@ mod tests {
         ));
         assert!(ok("notebook/view", json!({"id": "nb1", "kind": "log"})));
         assert!(ok("notebook/log", json!({"id": "nb1"})));
+        assert!(ok("notebook/focus", json!({"id": "nb1"})));
+        assert!(ok("notebook/focus", json!({"id": "nb1", "cell": "a"})));
         assert!(ok("notebook/log", json!({"id": "nb1", "since": 4})));
         assert!(ok("notebook/tail", json!({"id": "nb1", "cell": "a"})));
     }
@@ -568,6 +591,12 @@ mod tests {
             err("notebook/log", json!({"id": "nb1", "since": -1}))
                 .path
                 .is_some()
+        );
+        assert_eq!(
+            err("notebook/focus", json!({"id": "nb1", "cell": ""}))
+                .path
+                .as_deref(),
+            Some("cell")
         );
         assert_eq!(
             err("notebook/view", json!({"id": "nb1", "kind": "output"}))
