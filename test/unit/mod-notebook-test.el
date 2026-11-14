@@ -258,3 +258,30 @@
 
 (provide 'mod-notebook-test)
 ;;; mod-notebook-test.el ends here
+
+;;; The look: the terminal roles and the hairline are the themes' (colours only in themes/)
+
+(defun nb-test--theme-attr (variant face attr)
+  "ATTR of FACE in the first clause of VARIANT's theme spec."
+  (let ((clause (cadr (assq face (drgnx-theme--specs variant)))))
+    (plist-get (cdr (car clause)) attr)))
+
+(ert-deftest drgnx-notebook/every-terminal-role-has-a-foreground-and-a-background-face-in-every-theme ()
+  (require 'drgnx-theme-gen (expand-file-name "themes/drgnx-theme-gen" drgnx-dir))
+  (dolist (variant '(dark light hc))
+    (let ((i 0))
+      (while (< i 16)
+        (let ((name (aref drgnx-notebook--ansi-names i)))
+          (should (stringp (nb-test--theme-attr variant (intern (format "drgnx-notebook-fg-%s" name)) :foreground)))
+          (should (stringp (nb-test--theme-attr variant (intern (format "drgnx-notebook-bg-%s" name)) :background))))
+        (cl-incf i)))
+    ;; red is the error token, as the terminal's red is
+    (should (equal (nb-test--theme-attr variant 'drgnx-notebook-fg-red :foreground) (drgnx-look-token 'error variant)))
+    (should (equal (nb-test--theme-attr variant 'drgnx-notebook-fg-green :foreground) (drgnx-look-token 'ok variant)))))
+
+(ert-deftest drgnx-notebook/the-cell-header-has-the-border-hairline-and-keeps-its-parents ()
+  (require 'drgnx-theme-gen (expand-file-name "themes/drgnx-theme-gen" drgnx-dir))
+  (dolist (variant '(dark light hc))
+    (should (equal (nb-test--theme-attr variant 'drgnx-notebook-head :overline) (drgnx-look-token 'border-subtle variant)))
+    (should (equal (nb-test--theme-attr variant 'drgnx-notebook-head :inherit)
+                   (plist-get (cdr (car (get 'drgnx-notebook-head 'face-defface-spec))) :inherit)))))

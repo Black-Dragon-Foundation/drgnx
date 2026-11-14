@@ -78,7 +78,7 @@ drgnx's icons are [Lucide](https://lucide.dev) line icons (a few are Feather's),
 | `pause` | `modules/tools/drgnx-agent-panel-composer.el` |
 | `pencil` | `core/drgnx-palette.el` |
 | `pin` | `modules/tools/drgnx-agent-panel-steps.el` |
-| `play` | `core/drgnx-palette.el`, `modules/extra/drgnx-debug-toolbar.el`, `modules/extra/drgnx-debug-view.el` |
+| `play` | `core/drgnx-palette.el`, `modules/extra/drgnx-debug-toolbar.el`, `modules/extra/drgnx-debug-view.el`, `modules/lang/drgnx-notebook.el` |
 | `plug` | - |
 | `plus` | - |
 | `redo-dot` | - |
