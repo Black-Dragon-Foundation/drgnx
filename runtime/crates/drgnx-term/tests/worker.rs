@@ -932,17 +932,21 @@ fn a_clipboard_read_is_asked_of_the_hub_and_answered_with_its_text() {
 }
 
 #[test]
-fn an_unanswered_clipboard_read_times_out_denied() {
+fn a_clipboard_read_waits_for_the_hub_and_its_end_denies() {
+    // the worker times nothing: the hub answers (its own "no" once the read waited long enough on its clock), or it
+    // goes, and the read is denied
     use drgnx_term::ask::Asker;
     use std::io::Read;
     use std::os::unix::net::UnixStream;
-    use std::time::Duration;
     let (a, mut b) = UnixStream::pair().unwrap();
+    let hub = std::thread::spawn(move || {
+        let mut line = [0u8; 64];
+        let n = b.read(&mut line).unwrap();
+        String::from_utf8_lossy(&line[..n]).into_owned()
+    });
     let mut asker = Asker::new(a);
-    assert_eq!(asker.ask(true, Duration::from_millis(100)), None);
-    let mut line = [0u8; 64];
-    let n = b.read(&mut line).unwrap();
-    assert!(String::from_utf8_lossy(&line[..n]).contains("\"t\":\"clipboard-read\""));
+    assert_eq!(asker.ask(true), None);
+    assert!(hub.join().unwrap().contains("\"t\":\"clipboard-read\""));
 }
 
 #[test]
