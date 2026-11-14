@@ -59,6 +59,16 @@ process group killed after the grace) and starts a new one with a new connection
 `notebook/interrupt`, `notebook/input`, `notebook/clear`, `notebook/tail`, `notebook/output` (the whole output as nbformat objects)
 and `notebook/close` are what they say.
 
+**How the hub reaches a kernel.** Over ipc by default: the connection file (0600, in the session's 0700 folder) names socket files
+beside it, and they go with the kernel (the hub removes any a kernel leaves; ipykernel leaves them). A kernel that cannot use ipc is
+started once more over loopback tcp, and the error, if that fails too, names both attempts; a kernelspec can say it only works over
+tcp (`"metadata": {"drgnx_transport": "tcp"}` in its `kernel.json`; `"ipc"` is the default and any other value makes the kernelspec
+unusable). Only a start whose process ended before it made any socket counts as a refusal: a kernel that started and was not ready is
+not tried again. Over tcp the hub claims a block of ports (`debug::ports`, held for the kernel's life), writes `127.0.0.1` and those
+ports into the connection file, and before it connects to a port it asks `debug::ports::owned` whether the kernel's own process (or
+its children) listens there: a listener that is someone else's is an error naming the port, and nothing is sent to it. The HMAC key
+signs every message either way. The heartbeat channel is not used; the process's end is the death signal.
+
 The hub sends the editor that opened a notebook three events, only for what changed:
 
 - `notebook-tail`: a cell's tail, built whole (text, style runs as terminal face roles, images, `more_lines`, `version`, `stale`,

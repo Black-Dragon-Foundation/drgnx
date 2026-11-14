@@ -624,6 +624,14 @@ namespace and never on a shared runner; the Python and JS fork rows (`debug::tes
 the escape legs' sandbox lane. `drgnx-ci/the-debug-rows-the-escape-lane-skips-run-in-debug-live` holds that no
 skipped debug module goes unrun.
 
+The live notebook rows (`notebook::kernel::tests_live`, [testing.md](testing.md), "Live notebook kernels") need a real ipykernel.
+The escape legs' sandbox lane runs every ignored row of the crate, so a Linux-only step before it,
+`bash .github/ci/notebook-kernel.sh "$RUNNER_TEMP/nb-kernel" >> "$GITHUB_ENV"`, installs the hash-pinned set
+(`test/container/ipykernel-requirements.txt`) and names its python as `DRGNX_NB_KERNEL_PYTHON`; the `debug-live` job runs the rows by
+name against the image's `/opt/nb-kernel` (`debug-adapters-image.sh` makes it from the same file). The ci-workflows test
+`the-live-notebook-rows-have-their-ipykernel-where-they-run` holds the step order, the variable and the image's `ENV`. The set
+was compiled on Linux for the image's Python; a runner whose Python lacks a wheel the set names fails at the install step's import check, not in a row.
+
 ## The reduced tier's launch rows in a VM
 
 `tests/launch_sandboxed.rs` runs its reduced-tier rows on the reduced tier only on a kernel with Landlock ABI 9 or
