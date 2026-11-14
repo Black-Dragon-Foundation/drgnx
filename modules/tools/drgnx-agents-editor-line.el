@@ -51,8 +51,8 @@
   (propertize text 'face 'drgnx-chrome-crumb 'mouse-face 'mode-line-highlight 'help-echo help
               'drgnx-agents-editor-line kind 'local-map drgnx-agents-editor-line--map))
 
-(defun drgnx-agents-editor-line--string (agent pos buffer others)
-  "The agent line for AGENT (at POS in BUFFER), OTHERS more agents in the buffer."
+(defun drgnx-agents-editor-line--string (agent pos others)
+  "The agent line for AGENT (at POS in the buffer), OTHERS more agents in the buffer."
   (let* ((ord (plist-get agent :ordinal))
          (mode (or (cdr (assoc (plist-get agent :mode) drgnx-agents-editor-draw--modes)) (plist-get agent :mode) "here"))
          (where (plist-get (plist-get agent :projected) :worktree_label))
@@ -82,7 +82,7 @@
         (dolist (a agents)
           (let ((pos (min (plist-get a :line_pos) (point-max))))
             (push (list pos (plist-get a :ordinal) (plist-get a :session)
-                        (drgnx-agents-editor-line--string a pos buffer (1- n)))
+                        (drgnx-agents-editor-line--string a pos (1- n)))
                   entries)))
         (setq drgnx-agents-editor-line--entries (nreverse entries))
         (force-mode-line-update)
