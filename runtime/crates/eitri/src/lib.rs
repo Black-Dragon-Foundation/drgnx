@@ -21,7 +21,9 @@ mod write;
 
 pub use open::{Kind, Meta, Pinned, open_beneath, open_path, stat_beneath, stat_in};
 pub use read::read_regular;
-pub use trusted::{TrustedProgram, root_only_file, trusted_program};
+pub use trusted::{
+    TrustedProgram, pin_system_owned_file, root_only_file, system_owned_file, trusted_program,
+};
 pub use write::{remove_beneath, symlink_beneath, write_regular};
 
 /// Why an eitri call refused or failed. Nothing here is ever retried by resolving the path another way.

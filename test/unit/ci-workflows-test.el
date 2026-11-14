@@ -1203,6 +1203,10 @@ Returns (EXIT . OUTPUT), the output both streams' or, with STDOUT-ONLY, stdout's
                         "--test launch_sandboxed" "--ignored")
     ;; the rows must have run on the reduced tier: a run that fell back to the full tier is red
     (should (string-search "this row runs on the full tier" yml))
+    ;; what the rows read on the host that the VM lacks (CI run 43562883339): the mock LLM's script fixtures (two rows
+    ;; panicked "ratatoskr-mock: script ...: No such file"), `git` (the project-chat row runs it), and room in /tmp
+    ;; (a row copies the hub binary into its fixture there: "Disk quota exceeded" on the VM's half-of-RAM tmpfs)
+    (drgnx-ci-test--has yml "\"$PWD/test/conformance/fixtures\"" "dnf -y install git" "remount,size=")
     (should-not (string-search "secrets." yml))))
 
 ;; The Mac runner's end-to-end rows (tests/mac_runner.rs) belong to the macOS lane: they need DRGNX_TEST_MAC_RUNNER, an
@@ -1278,3 +1282,12 @@ Returns (EXIT . OUTPUT), the output both streams' or, with STDOUT-ONLY, stdout's
             ;; the installer's failure stops the step: its output is read into a variable first, not through a pipe
             (should (string-search "adapters=$(" step))))
       (delete-directory dir t))))
+
+;; eitri's trust tests (trusted.rs) chown their fixtures and skip without uid 0, which would pass silently on a runner's
+;; unprivileged user: the escape legs run them under sudo, and DRGNX_REQUIRE_ROOT_TESTS makes a skip a failure.
+(ert-deftest drgnx-ci/eitri-s-root-tests-run-as-root-and-a-skip-fails ()
+  (let ((rt (drgnx-ci-test--yml "runtime.yml")) (src (drgnx-ci-test--file "runtime/crates/eitri/src/trusted.rs")))
+    (should (and rt src))
+    (drgnx-ci-test--has (drgnx-ci-test--job rt "escape-host")
+                        "sudo env" "DRGNX_REQUIRE_ROOT_TESTS=1" "-p eitri --target-dir")
+    (drgnx-ci-test--has src "DRGNX_REQUIRE_ROOT_TESTS")))

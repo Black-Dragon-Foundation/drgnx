@@ -258,7 +258,8 @@ cap }`, `Escapes`, `Untrusted { path, why }`, `Unsupported` or `Io`.
   file's group bits in `st_mode`, so the group-writable test sees it (a test sets a real ACL and shows the refusal).
   File capabilities are not examined: only root (`CAP_SETFCAP`) can set them, and root is who the program trusts.
   `root_only_file(path)` is the same check without the execute bit, for data bound into a sandbox by path (the
-  resolver's file under `/run`).
+  resolver's file under `/run`). `system_owned_file(path, max_uid)` widens the owners to uids of at most `max_uid` (a system
+  account's), and `pin_system_owned_file` returns the fd it checked, so the caller binds the fd and not the path again.
   Callers pass fixed candidates (bwrap, `sandbox-exec`, git); `PATH` is never searched. A link in any component,
   the last one included, is refused even when root owns it: the candidates are the distributions' own regular files.
   Not every system program is one (Ubuntu 26.04's `coreutils-from-uutils` makes `/usr/bin/env` a link into

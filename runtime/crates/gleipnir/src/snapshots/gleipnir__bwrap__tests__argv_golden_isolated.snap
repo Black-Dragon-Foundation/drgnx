@@ -23,22 +23,22 @@ expression: "render(&argv, &fds)"
 --tmpfs /tmp
 --tmpfs /run
 --tmpfs /var/tmp
---ro-bind-try /run/systemd/resolve/stub-resolv.conf /run/systemd/resolve/stub-resolv.conf
---bind-fd 6 /agent
---ro-bind-fd 7 /work/docs
---ro-bind-fd 8 /tools/node
---bind-fd 9 /work/task
---ro-bind-fd 10 /run/drgnx
---ro-bind-fd 11 /work/task/.git
---bind-fd 12 /mnt/out
+--ro-bind-fd 6 /run/systemd/resolve/stub-resolv.conf
+--bind-fd 7 /agent
+--ro-bind-fd 8 /work/docs
+--ro-bind-fd 9 /tools/node
+--bind-fd 10 /work/task
+--ro-bind-fd 11 /run/drgnx
+--ro-bind-fd 12 /work/task/.git
+--bind-fd 13 /mnt/out
 --ro-bind /dev/null /work/task/.env
 --tmpfs /state/home-1/.cache/creds
 --tmpfs /agent/.cache/creds
---ro-bind-fd 13 /run/gleipnir/helper
+--ro-bind-fd 14 /run/gleipnir/helper
 --chdir /work/task
 -- /run/gleipnir/helper sandbox-inner
 --spec-fd 3
 -- /usr/bin/agent
 --x
 
-fds passed: 6 7 8 9 10 11 12 13
+fds passed: 6 7 8 9 10 11 12 13 14
