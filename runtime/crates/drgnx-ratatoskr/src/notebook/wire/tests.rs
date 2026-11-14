@@ -187,3 +187,25 @@ fn a_key_prints_nothing_and_is_random_and_round_trips() {
         "an empty key would switch signing off"
     );
 }
+
+#[test]
+fn an_identity_over_255_bytes_and_a_header_field_over_a_few_kib_are_refused() {
+    let frames = encode(&key(), &msg());
+    let mut t = frames.clone();
+    t[0] = vec![b'i'; 256];
+    assert_eq!(decode(&key(), &t), Err(WireError::TooLarge("identity")));
+    let mut ok = frames.clone();
+    ok[0] = vec![b'i'; 255];
+    assert!(decode(&key(), &ok).is_ok());
+    let k = key();
+    let long = format!(
+        r#"{{"msg_id":"a","msg_type":"{}"}}"#,
+        "t".repeat(MAX_FIELD + 1)
+    );
+    let f = signed(&k, long.as_bytes(), b"{}", b"{}", b"{}");
+    assert_eq!(decode(&k, &f), Err(WireError::Json("header")));
+    // a signature that is not exactly 64 hex characters is refused, however long
+    let mut s = frames;
+    s[2] = vec![b'a'; 1 << 20];
+    assert_eq!(decode(&key(), &s), Err(WireError::BadSignature));
+}

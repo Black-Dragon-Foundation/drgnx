@@ -22,6 +22,10 @@ pub const MAX_CONTENT: usize = 16 << 20;
 /// Binary buffers: how many, and how many bytes in all.
 pub const MAX_BUFFERS: usize = 64;
 pub const MAX_BUFFER_BYTES: usize = 16 << 20;
+/// A header's string fields (msg_id, msg_type, ...): none is longer.
+pub const MAX_FIELD: usize = 4096;
+/// One routing identity (ZeroMQ's own limit).
+pub const MAX_IDENT: usize = 255;
 /// Routing identities before the delimiter.
 pub const MAX_IDENTS: usize = 8;
 
@@ -181,6 +185,9 @@ pub fn decode(key: &Key, frames: &[Vec<u8>]) -> Result<Message, WireError> {
     if at > MAX_IDENTS {
         return Err(WireError::TooManyFrames);
     }
+    if frames[..at].iter().any(|f| f.len() > MAX_IDENT) {
+        return Err(WireError::TooLarge("identity"));
+    }
     let rest = &frames[at + 1..];
     if rest.len() < 5 {
         return Err(WireError::TooFewFrames);
@@ -203,6 +210,10 @@ pub fn decode(key: &Key, frames: &[Vec<u8>]) -> Result<Message, WireError> {
     {
         return Err(WireError::TooLarge("buffers"));
     }
+    // an HMAC-SHA256 in hex is exactly 64 characters: nothing longer is decoded
+    if sig.len() != 64 {
+        return Err(WireError::BadSignature);
+    }
     let want = unhex(sig).ok_or(WireError::BadSignature)?;
     let mut mac = key.mac();
     for p in [header, parent, meta, content] {
@@ -211,6 +222,20 @@ pub fn decode(key: &Key, frames: &[Vec<u8>]) -> Result<Message, WireError> {
     mac.verify_slice(&want)
         .map_err(|_| WireError::BadSignature)?;
     let header: Header = serde_json::from_slice(header).map_err(|_| WireError::Json("header"))?;
+    let h = &header;
+    if [
+        &h.msg_id,
+        &h.session,
+        &h.username,
+        &h.date,
+        &h.msg_type,
+        &h.version,
+    ]
+    .iter()
+    .any(|f| f.len() > MAX_FIELD)
+    {
+        return Err(WireError::Json("header"));
+    }
     Ok(Message {
         idents: frames[..at].to_vec(),
         header,
