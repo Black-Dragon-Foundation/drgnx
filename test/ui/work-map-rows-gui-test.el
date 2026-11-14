@@ -105,27 +105,28 @@ class fills it again, while the agents stream."
   "The map shown in a second frame whose default font is twice the first's: one env per class, each class starts with
 its own reset, and the buffer keeps the class it is paired with, never stale."
   (drgnx-work-map-rows-gui--with
-    (let* ((view (drgnx-view-patch-view (drgnx-work-map-rows-gui--state buf))) (resets nil)
-           (count (lambda (event data)
-                    (when (and (equal event "view-patch") (equal (plist-get data :view) view)
-                               (drgnx-view-patch--reset-p data))
-                      (push (plist-get data :class) resets))))
+    (let* ((view (drgnx-view-patch-view (drgnx-work-map-rows-gui--state buf)))
            (frame (make-frame '((width . 80) (height . 20))))
-           (paired (drgnx-view-patch-class (drgnx-work-map-rows-gui--state buf))))
+           (paired (drgnx-view-patch-class (drgnx-work-map-rows-gui--state buf)))
+           ;; Sjá applies a pair's first patch only when it is a reset (else it asks for one): a version held for a
+           ;; class other than the paired one is that class's own reset
+           (other (lambda ()
+                    (seq-some (lambda (c)
+                                (let ((b (gethash (cons view c) drgnx-view-patch--buffers)))
+                                  (and (not (equal c paired)) (buffer-live-p b)
+                                       (drgnx-view-patch-version (buffer-local-value 'drgnx-view-patch b)))))
+                              (drgnx-view-env-classes view)))))
       (unwind-protect
           (progn
-            (add-hook 'drgnx-hub-event-functions count)
             (set-face-attribute 'default frame :height (* 2 (face-attribute 'default :height)))
             (set-window-buffer (frame-root-window frame) buf)
             (drgnx-test-wait (lambda () (eq t (frame-visible-p frame))) :secs 10 :what "the second frame shown")
             (drgnx-view-env-update view)
-            (drgnx-test-wait (lambda () (seq-some (lambda (c) (not (equal c paired))) resets)) :secs 30
-                             :what "the second class's reset")
+            (drgnx-test-wait other :secs 30 :what "the second class's reset")
             (should (= 2 (length (drgnx-view-env-classes view))))
             (drgnx-work-map-rows-gui--settle buf)
             (should (member (drgnx-view-patch-class (drgnx-work-map-rows-gui--state buf))
                             (drgnx-view-env-classes view))))
-        (remove-hook 'drgnx-hub-event-functions count)
         (delete-frame frame)))))
 
 (ert-deftest drgnx-work-map-rows-gui/a-theme-change-mid-stream-leaves-no-old-epoch ()
