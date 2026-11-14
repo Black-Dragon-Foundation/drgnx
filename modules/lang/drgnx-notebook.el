@@ -650,6 +650,43 @@ come with their tails."
                                              (fundamental-mode))
                                     (drgnx-notebook--install r)))))))))
 
+(defun drgnx-notebook--reopened (result)
+  "The new hub's RESULT of `notebook/open' for this buffer's file: take its id, forget what belonged to the old hub (the
+kernel, the tails' versions) and give it the buffer's cells, unsaved edits included, which the file does not have."
+  (remhash drgnx-notebook--id drgnx-notebook--buffers)
+  (setq drgnx-notebook--id (plist-get result :id)
+        drgnx-notebook--kernel nil drgnx-notebook--running nil drgnx-notebook--state "idle" drgnx-notebook--queue 0)
+  (puthash drgnx-notebook--id (current-buffer) drgnx-notebook--buffers)
+  (clrhash drgnx-notebook--known)
+  (clrhash drgnx-notebook--tails)
+  (let ((id drgnx-notebook--id) (buffer (current-buffer)))
+    (drgnx-notebook--call "notebook/sync" (list :id id :cells (drgnx-notebook--sync-cells))
+                          (lambda (_r e)
+                            (when (buffer-live-p buffer)
+                              (with-current-buffer buffer
+                                (if e (message "drgnx notebook: the hub did not take the cells: %s" e)
+                                  (when (equal drgnx-notebook--id id) (drgnx-notebook--mark-known))))))))
+  (dolist (tail (plist-get result :tails)) (drgnx-notebook--put-tail tail))
+  (when (fboundp 'drgnx-statusbar-refresh) (drgnx-statusbar-refresh t)))
+
+(defun drgnx-notebook--reconnect ()
+  "In this notebook buffer: the hub is a new one, which holds no notebook: open the file again by its path, then give it
+the buffer's cells.  A refusal leaves the buffer as it is; nothing in it is lost either way."
+  (when (and drgnx-notebook--id buffer-file-name)
+    (let ((buffer (current-buffer)))
+      (drgnx-notebook--call "notebook/open" (list :path (expand-file-name buffer-file-name))
+                            (lambda (r e)
+                              (when (buffer-live-p buffer)
+                                (with-current-buffer buffer
+                                  (if (or e (null r))
+                                      (message "drgnx notebook: %s is not open on the new hub: %s" buffer-file-name (or e "no answer"))
+                                    (drgnx-notebook--reopened r)))))))))
+
+(defun drgnx-notebook--reconnect-all ()
+  "`drgnx-hub-connected-functions': every open notebook goes to the hub that came up."
+  (dolist (b (buffer-list))
+    (with-current-buffer b (when (derived-mode-p 'drgnx-notebook-mode) (drgnx-notebook--reconnect)))))
+
 (defun drgnx-notebook--write ()
   "`write-contents-functions': the hub writes the file (the cells' text goes along); the buffer is not written as text."
   (when drgnx-notebook--id
@@ -1102,11 +1139,13 @@ THEN-RUN-ALL: run every code cell once it is up."
                      :teardown (lambda ()
                                  (setq auto-mode-alist (rassq-delete-all 'drgnx-notebook-mode auto-mode-alist))
                                  (remove-hook 'drgnx-hub-event-functions #'drgnx-notebook--event)
+                                 (remove-hook 'drgnx-hub-connected-functions #'drgnx-notebook--reconnect-all)
                                  (advice-remove 'kill-region #'drgnx-notebook-guard-kill))
                      :setup
                      (lambda ()
                        (add-to-list 'auto-mode-alist '("\\.ipynb\\'" . drgnx-notebook-mode))
                        (add-hook 'drgnx-hub-event-functions #'drgnx-notebook--event)
+                       (add-hook 'drgnx-hub-connected-functions #'drgnx-notebook--reconnect-all)
                        (drgnx-notebook--segments-define)
                        (advice-add 'kill-region :before #'drgnx-notebook-guard-kill)
                        (dolist (c drgnx-notebook--commands)

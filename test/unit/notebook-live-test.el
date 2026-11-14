@@ -95,5 +95,37 @@ gated tests use them, but without their need for Sjá (a notebook is not a hub-f
             (with-current-buffer buffer (set-buffer-modified-p nil))
             (kill-buffer buffer)))))))
 
+;; A hub that came back holds no notebook: the old id is refused, the file is opened again and the buffer's cells (the unsaved edit) go to it.
+(ert-deftest drgnx-notebook-live/a-hub-that-forgot-the-notebook-gets-it-again-with-the-unsaved-edit ()
+  (notebook-live-test--with-hub
+    (drgnx-test-with-modules '(lang/notebook)
+      (let* ((file (expand-file-name "nb2.ipynb" root)) buffer)
+        (with-temp-file file (insert notebook-live-test--file))
+        (setq buffer (find-file-noselect file))
+        (unwind-protect
+            (with-current-buffer buffer
+              (drgnx-test-hub-settle (lambda () drgnx-notebook--id) "the notebook opened")
+              (let ((old drgnx-notebook--id))
+                (goto-char (plist-get (drgnx-notebook--cell-by-id "calc") :tail))
+                (insert "\ny = 2")
+                ;; the hub forgets the notebook, as a restarted one does
+                (should (equal (notebook-live-test--ask "notebook/close" (list :id old)) '(t)))
+                (should (cdr (notebook-live-test--ask "notebook/tail" (list :id old :cell "calc"))))
+                (drgnx-notebook--reconnect)
+                (drgnx-test-hub-settle (lambda () (not (equal drgnx-notebook--id old))) "the notebook opened again")
+                (should (eq (gethash drgnx-notebook--id drgnx-notebook--buffers) buffer))
+                (drgnx-test-hub-settle (lambda () (gethash "calc" drgnx-notebook--known)) "the cells taken")
+                (should (buffer-modified-p))
+                (should (equal (drgnx-notebook--cell-source (drgnx-notebook--cell-by-id "calc")) "x = 1\ny = 2"))
+                ;; the new hub has the unsaved text: a save writes it
+                (let ((saved nil))
+                  (drgnx-notebook--call "notebook/save" (list :id drgnx-notebook--id) (lambda (r e) (setq saved (list r e))))
+                  (drgnx-test-hub-settle (lambda () saved) "the save")
+                  (should (equal saved '(t nil))))
+                (should (string-search "\"x = 1\\n\",\n    \"y = 2\"" (with-temp-buffer (insert-file-contents file) (buffer-string))))))
+          (when (buffer-live-p buffer)
+            (with-current-buffer buffer (set-buffer-modified-p nil))
+            (kill-buffer buffer)))))))
+
 (provide 'notebook-live-test)
 ;;; notebook-live-test.el ends here

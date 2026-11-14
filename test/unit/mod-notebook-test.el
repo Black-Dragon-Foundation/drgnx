@@ -513,3 +513,63 @@
       (should (eq (get-text-property at 'drgnx-notebook-add row) 'markdown)))
     (drgnx-notebook-add-cell-below 'markdown)
     (should (eq (plist-get (drgnx-notebook--cell-by-id (nth 1 (nb-test--ids))) :type) 'markdown))))
+
+;;; A hub that came back: the notebook is opened again by its path and the buffer's cells go to it
+
+(defconst nb-test--reopened
+  '(:id "nb2" :language "python" :kernelspec "python3"
+        :cells ((:id "a" :type "code" :source "x = 1\nx" :execution_count 3)
+                (:id "b" :type "markdown" :source "# Title")
+                (:id "c" :type "code" :source "print(2)"))
+        :tails ((:cell "a" :version 1 :text "from the file" :stale t :head (:text "[3]  python" :state "idle" :runs nil)
+                       :runs nil :images nil :more_lines 0)))
+  "What the new hub answers to `notebook/open' for the same path: the file's cells, a new id.")
+
+(defmacro nb-test--reconnecting (&rest body)
+  "BODY in a notebook that visits a file, the new hub answering `nb-test--reopened'."
+  (declare (indent 0))
+  `(nb-test--with
+     (setq buffer-file-name "/nonexistent/nb-test.ipynb"
+           nb-test--answers (list (cons "notebook/open" (lambda (_) (cons nb-test--reopened nil)))
+                                  (cons "notebook/sync" (lambda (_) (cons t nil)))))
+     (unwind-protect (progn ,@body) (setq buffer-file-name nil))))
+
+(ert-deftest drgnx-notebook/a-new-hub-gets-the-notebook-again-with-the-unsaved-edits ()
+  (nb-test--reconnecting
+    (goto-char (plist-get (drgnx-notebook--cell-by-id "c") :tail))
+    (insert "\nprint(3)")
+    (should (buffer-modified-p))
+    (drgnx-notebook--reconnect)
+    (let ((open (assoc "notebook/open" nb-test--calls)) (sync (assoc "notebook/sync" nb-test--calls)))
+      (should (equal (plist-get (cdr open) :path) "/nonexistent/nb-test.ipynb"))
+      (should (equal (plist-get (cdr sync) :id) "nb2"))
+      ;; the hub gets the buffer's text, not the file's
+      (should (equal (plist-get (aref (plist-get (cdr sync) :cells) 2) :source) "print(2)\nprint(3)")))
+    (should (equal drgnx-notebook--id "nb2"))
+    (should (eq (gethash "nb2" drgnx-notebook--buffers) (current-buffer)))
+    (should-not (gethash "nb1" drgnx-notebook--buffers))
+    (should (buffer-modified-p))
+    (should (equal (nb-test--source "c") "print(2)\nprint(3)"))
+    (should (string-match-p "from the file" (overlay-get (plist-get (drgnx-notebook--chrome-of "a") :tail) 'after-string)))))
+
+(ert-deftest drgnx-notebook/a-reopened-notebook-has-no-kernel-until-one-starts ()
+  (nb-test--reconnecting
+    (setq drgnx-notebook--kernel "python3" drgnx-notebook--state "busy" drgnx-notebook--running "a")
+    (drgnx-notebook--reconnect)
+    (should-not drgnx-notebook--kernel)
+    (should-not drgnx-notebook--running)
+    (should (equal drgnx-notebook--state "idle"))))
+
+(ert-deftest drgnx-notebook/a-refused-reopen-keeps-the-buffer-as-it-is ()
+  (nb-test--reconnecting
+    (setq nb-test--answers (list (cons "notebook/open" (lambda (_) (cons nil "not a notebook path")))))
+    (goto-char (plist-get (drgnx-notebook--cell-by-id "c") :tail))
+    (insert "!")
+    (drgnx-notebook--reconnect)
+    (should (equal drgnx-notebook--id "nb1"))
+    (should (equal (nb-test--source "c") "print(2)!"))
+    (should-not (assoc "notebook/sync" nb-test--calls))))
+
+(ert-deftest drgnx-notebook/the-reconnect-hook-is-the-modules ()
+  (nb-test--with
+    (should (memq #'drgnx-notebook--reconnect-all drgnx-hub-connected-functions))))

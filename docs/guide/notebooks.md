@@ -52,6 +52,10 @@ Saving writes the notebook through the hub, which changes only what you edited: 
 bytes. A notebook with no cell ids gets them on the first saving edit. The file is never edited as text while its buffer
 is open; a file that is not a notebook opens as text.
 
+If the hub restarts, every open notebook is opened again on the new hub by its file and given your cells, so unsaved edits stay
+in the buffer and the next save writes them. The kernel is gone with the old hub: it starts again on the next run, and the
+buffer shows no kernel until then. Outputs come back from the file.
+
 ## Syntax colours and pictures
 
 A cell's source is coloured by its language's tree-sitter mode when the language has a grammar installed ([language packs](editing.md#language-support-tree-sitter)): one parser per language for the whole notebook, whose ranges are the union of that language's cells (a markdown cell uses the markdown grammar). Without a grammar the cell is plain text.

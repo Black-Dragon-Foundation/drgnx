@@ -76,6 +76,15 @@ on the inserted text before the first rescan makes the chrome.
 `notebook/output` once per cell (the cache is dropped when the cell runs again) and draws PNG and JPEG as an `image` display
 spec, a label until then.
 
+## A hub that came back
+
+The hub keeps notebooks in memory, so a restarted hub holds none, and the ids of the old one mean nothing (the editor never builds or
+parses an id; it keeps the one it was given). `drgnx-hub-connected-functions` runs `drgnx-notebook--reconnect-all`: each notebook
+buffer that visits a file asks `notebook/open` by its path (no text: the file is the hub's), takes the new id (the buffer table, the
+status, no kernel), forgets the tails' versions (the new hub counts from the start), then sends `notebook/sync` with its cells as they
+are at the time the answer arrives and puts the tails the open returned. The buffer's text is never replaced, so unsaved edits stay and
+are the hub's after the sync. An open the hub refuses leaves the buffer and its id as they are, with a message.
+
 ## The hub's notebooks and kernels
 
 `notebook/*` (the table in `hub.md`) is the editor's door; every method is the user's (an agent cannot start a kernel), and a kernel is
