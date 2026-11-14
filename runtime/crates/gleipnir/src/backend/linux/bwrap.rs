@@ -314,6 +314,19 @@ pub fn host_layout() -> HostLayout {
     }
 }
 
+/// How many fds the host's resolver file adds to an invocation (the first of the binds, so the sources' and the helper's
+/// numbers move up by it): one when this host's `/etc/resolv.conf`
+/// is a bindable, system-owned file (a runner whose resolver is systemd-resolved's stub), else none.  The tests that
+/// count an invocation's fds add it, so they hold on every host.
+#[cfg(test)]
+pub(crate) fn host_resolver_fds() -> usize {
+    usize::from(
+        host_layout()
+            .resolver
+            .is_some_and(|r| eitri::pin_system_owned_file(&r, sys_uid_max()).is_ok()),
+    )
+}
+
 fn malformed(message: String) -> Refusal {
     Refusal {
         rule: Rule::Malformed,
@@ -608,7 +621,7 @@ mod tests {
         assert_eq!(fd_id(&w.fd), before);
         assert_ne!(fd_id(&w.fd), id(&fx.p("canary")));
 
-        let n = opened.mounts().len() + 1;
+        let n = opened.mounts().len() + 1 + usize::from(opened.resolver.is_some());
         let (argv, fds) = argv(&valid, opened, &["/bin/true".into()]);
         let argv = strings(&argv);
         let opts = options(&argv);

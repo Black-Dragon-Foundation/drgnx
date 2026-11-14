@@ -42,7 +42,7 @@ not hold."
        (defun drgnx-perf--work-down ()
          (when (buffer-live-p drgnx-perf--work-buf) (kill-buffer drgnx-perf--work-buf))
          (setq drgnx-perf--work-buf nil)
-         (advice-remove 'drgnx-view--draw-buffer #'drgnx-perf--wl-slice)
+         (drgnx-perf-unadvise-draws #'drgnx-perf--wl-slice)
          (when (fboundp 'drgnx-perf--wl-class-step) (advice-remove 'drgnx-view-nav-class-step #'drgnx-perf--wl-class-step))
          (ignore-errors (delete-other-windows))
          (drgnx-work-thirty-stop))
@@ -96,20 +96,20 @@ second for the layout before it to be drawn."
       (defvar drgnx-perf--rl-lost nil "Per command: how many asked for a layout and got no frame with one.")
       (defun drgnx-perf--rl-poll ()
         (when (or (null drgnx-perf--rl-t0) (not (buffer-live-p drgnx-perf--work-buf))
-                  (not (drgnx-view-pending-p (drgnx-perf--work-view))))
+                  (not (drgnx-perf-view-pending-p drgnx-perf--work-buf)))
           (when drgnx-perf--rl-t0
             (push (* 1000 (- (float-time) drgnx-perf--rl-t0)) drgnx-perf--rl-ms)
             (setq drgnx-perf--rl-t0 nil))
           (setq drgnx-perf--rl-timer nil)))
       (defvar drgnx-perf--rl-sent nil "Non-nil from the layout's `work/map/set' until its answer.")
       (defvar drgnx-perf--rl-patched nil "The ms from the command to the first patch applied since its set was sent.")
-      (defun drgnx-perf--rl-applied (orig patch)
-        "A patch came for the map.  The hub sends a layout's rows before it answers the set that asked for it (one
-connection, in order), so the first patch applied while the set waits for its answer is the layout's."
-        (prog1 (funcall orig patch)
-          (when (and drgnx-perf--rl-sent drgnx-perf--rl-t0 (not drgnx-perf--rl-patched))
-            (drgnx-perf--rl-note 'layout-patch)
-            (setq drgnx-perf--rl-patched (* 1000 (- (float-time) drgnx-perf--rl-t0))))))
+      (defun drgnx-perf--rl-applied (&rest _)
+        "A patch came for a view (`drgnx-perf-patch-functions').  The hub sends a layout's rows before it answers the
+set that asked for it (one connection, in order), so the first patch applied while the set waits for its answer is
+the layout's."
+        (when (and drgnx-perf--rl-sent drgnx-perf--rl-t0 (not drgnx-perf--rl-patched))
+          (drgnx-perf--rl-note 'layout-patch)
+          (setq drgnx-perf--rl-patched (* 1000 (- (float-time) drgnx-perf--rl-t0)))))
       (defun drgnx-perf--rl-drawn (&rest _)
         "After each draw of the map's view, its timer's and the motion's (`drgnx-view-draw-now'; no timer of the lab's
 own to wake every millisecond): the layout is drawn when the view has nothing pending."
@@ -168,8 +168,8 @@ none, the layout changed no row: it counts as lost and no command waits for it."
       (advice-add 'drgnx-work-client--call :around #'drgnx-perf--rl-call)
       (add-hook 'pre-command-hook #'drgnx-perf--rl-pre)
       (advice-add 'drgnx-work-map--send-filters :before #'drgnx-perf--rl-begin)
-      (advice-add 'drgnx-view-apply-patch :around #'drgnx-perf--rl-applied)
-      (advice-add 'drgnx-view--draw-buffer :after #'drgnx-perf--rl-drawn)
+      (add-hook 'drgnx-perf-patch-functions #'drgnx-perf--rl-applied) (drgnx-perf-watch-patches t)
+      (drgnx-perf-advise-draws :after #'drgnx-perf--rl-drawn)
       (advice-add 'drgnx-view-draw-now :after #'drgnx-perf--rl-drawn)
       (defun drgnx-perf--rl-measure ()
         (drgnx-perf--rl-idle)
@@ -185,8 +185,8 @@ none, the layout changed no row: it counts as lost and no command waits for it."
         (advice-remove 'drgnx-work-map--send-filters #'drgnx-perf--rl-begin)
         (advice-remove 'drgnx-work-client--call #'drgnx-perf--rl-call)
         (remove-hook 'pre-command-hook #'drgnx-perf--rl-pre)
-        (advice-remove 'drgnx-view-apply-patch #'drgnx-perf--rl-applied)
-        (advice-remove 'drgnx-view--draw-buffer #'drgnx-perf--rl-drawn)
+        (remove-hook 'drgnx-perf-patch-functions #'drgnx-perf--rl-applied) (drgnx-perf-watch-patches nil)
+        (drgnx-perf-unadvise-draws #'drgnx-perf--rl-drawn)
         (advice-remove 'drgnx-view-draw-now #'drgnx-perf--rl-drawn)
         (setq drgnx-perf--rl-timer nil drgnx-perf--rl-t0 nil drgnx-perf--rl-sent nil)
         (when drgnx-perf--rl-bt (error "BT %s" (substring drgnx-perf--rl-bt 0 (min 3000 (length drgnx-perf--rl-bt))))))
@@ -207,33 +207,49 @@ asked for drawn (the view has nothing pending).")
         (let* ((o (or (bound-and-true-p nidhogg-watchdog-gc-origin) 'auto)) (c (assq o drgnx-perf--wl-gcs)))
           (if c (cl-incf (cdr c)) (push (cons o 1) drgnx-perf--wl-gcs))))
       (defun drgnx-perf--wl-slice (orig buffer)
-        (let* ((t0 (float-time)) (v (and (eq buffer drgnx-perf--work-buf) (buffer-local-value 'drgnx-view buffer)))
+        ;; the map's draws: the inserter's (its view's marks and rows drawn recorded) or Sjá's (neither)
+        (let* ((t0 (float-time)) (map (eq buffer drgnx-perf--work-buf))
+               (v (and map (drgnx-view-p (buffer-local-value 'drgnx-view buffer)) (buffer-local-value 'drgnx-view buffer)))
                (gc0 gc-elapsed) (c0 (drgnx-gc--consed))
                (touched (and v (drgnx-view--touched v))) (rows (and v (plist-get (drgnx-view-stats v) :rows-drawn))))
           (prog1 (funcall orig buffer)
-            (when v
+            (when map
               (let ((ms (* 1000 (- (float-time) t0))))
                 (push (/ (- (drgnx-gc--consed) c0) 1024.0) drgnx-perf--wl-consed)
                 (when (current-idle-time) (cl-incf drgnx-perf--wl-idle))
                 (push ms drgnx-perf--wl-slices)
                 (when (> ms 4)
-                  (push (list (drgnx-perf--round ms) (and touched t) (- (plist-get (drgnx-view-stats v) :rows-drawn) rows)
+                  (push (list (drgnx-perf--round ms) (and touched t) (and v (- (plist-get (drgnx-view-stats v) :rows-drawn) rows))
                               (drgnx-perf--round (* 1000 (- gc-elapsed gc0))))
                         drgnx-perf--wl-long)))))))
       (defvar drgnx-perf--wl-class nil "Wall ms of each class step (`drgnx-view-nav-class-step') since the arm.")
       (defun drgnx-perf--wl-class-step (orig &rest args)
         (let ((t0 (float-time)))
           (prog1 (apply orig args) (push (* 1000 (- (float-time) t0)) drgnx-perf--wl-class))))
+      (defvar drgnx-perf--wl-model 0 "The newest model version of the map's view the hub sent (Sjá's queue).")
+      (defun drgnx-perf--wl-got-model (view version)
+        "A model of VIEW queued at VERSION (`drgnx-view-model-functions'): the map's newest, kept."
+        (when (and (integerp version) (> version drgnx-perf--wl-model)
+                   (equal view (drgnx-view-patch-view (buffer-local-value 'drgnx-view-patch drgnx-perf--work-buf))))
+          (setq drgnx-perf--wl-model version)))
       (defun drgnx-perf--wl-updates ()
-        "The map's updates so far: its patches' version."
-        (or (drgnx-view-patch-version (buffer-local-value 'drgnx-view-patch drgnx-perf--work-buf)) 0))
+        "The map's updates so far: the newest version the hub sent it, its patches' or (where Sjá holds the rows) its
+model's, whichever is newer (the rows' version moves only when a card's text changes; the agents' streaming moves the
+model far more often)."
+        (max drgnx-perf--wl-model
+             (or (drgnx-view-patch-version (buffer-local-value 'drgnx-view-patch drgnx-perf--work-buf)) 0)))
+      (defun drgnx-perf--wl-draw-ms ()
+        "The ms the map's draws took so far: its inserter's view's count, or (Sjá's draws) the slices timed since the arm."
+        (let ((v (drgnx-perf--work-view)))
+          (if (drgnx-view-p v) (plist-get (drgnx-view-stats v) :draw-ms) (apply #'+ 0.0 drgnx-perf--wl-slices))))
       (defun drgnx-perf--wl-arm ()
         (setq drgnx-perf--wl-slices nil drgnx-perf--wl-long nil drgnx-perf--wl-consed nil drgnx-perf--wl-idle 0
-              drgnx-perf--wl-gcs nil drgnx-perf--wl-class nil
-              drgnx-perf--wl-start (list (plist-get (drgnx-view-stats (drgnx-perf--work-view)) :draw-ms)
+              drgnx-perf--wl-gcs nil drgnx-perf--wl-class nil drgnx-perf--wl-model 0
+              drgnx-perf--wl-start (list (drgnx-perf--wl-draw-ms)
                                          (drgnx-perf--wl-updates)))
-        (advice-add 'drgnx-view--draw-buffer :around #'drgnx-perf--wl-slice)
-        (advice-add 'drgnx-view-nav-class-step :around #'drgnx-perf--wl-class-step))
+        (drgnx-perf-advise-draws :around #'drgnx-perf--wl-slice)
+        (advice-add 'drgnx-view-nav-class-step :around #'drgnx-perf--wl-class-step)
+        (add-hook 'drgnx-view-model-functions #'drgnx-perf--wl-got-model))
       (defun drgnx-perf--wl-wait (secs)
         "Let the session run for SECS: one wait to the deadline, waking only for process output."
         (let ((deadline (+ (float-time) secs)))
@@ -246,10 +262,11 @@ asked for drawn (the view has nothing pending).")
           (drgnx-perf--wl-wait 30)
           (remove-hook 'post-gc-hook #'drgnx-perf--wl-gc)
           (let* ((secs (- (float-time) t0)) (end (drgnx-perf-end))
-                 (draw (- (plist-get (drgnx-view-stats (drgnx-perf--work-view)) :draw-ms) (car drgnx-perf--wl-start)))
+                 (draw (- (drgnx-perf--wl-draw-ms) (car drgnx-perf--wl-start)))
                  (deltas (- (drgnx-perf--wl-updates) (cadr drgnx-perf--wl-start))))
-            (advice-remove 'drgnx-view--draw-buffer #'drgnx-perf--wl-slice)
+            (drgnx-perf-unadvise-draws #'drgnx-perf--wl-slice)
             (advice-remove 'drgnx-view-nav-class-step #'drgnx-perf--wl-class-step)
+            (remove-hook 'drgnx-view-model-functions #'drgnx-perf--wl-got-model)
             (when (< deltas 30) (error "Premise: the map got %d deltas in %.0f s" deltas secs))
             (append (list :draw_ms_s (drgnx-perf--round2 (/ draw secs)) :deltas deltas
                           :long (vconcat (mapcar (lambda (l) (format "%S" l)) (seq-take drgnx-perf--wl-long 12)))
@@ -334,21 +351,21 @@ takes a 10,000-step turn in for minutes, and answers a question meanwhile only n
                                                        (> (buffer-size buf) 0))))
             (error "The trail's first rows did not come"))
           (with-current-buffer buf
-            (drgnx-perf--trail-await drgnx-view)
+            (drgnx-perf--trail-await buf)
             (redisplay t))
           (list :settled_s (car (car drgnx-perf--trail-trace))
                 :draw_ms (drgnx-perf--round (* 1000 (- (float-time) t0)))
-                :rows (drgnx-view-row-count (buffer-local-value 'drgnx-view buf)))))
-      (defun drgnx-perf--trail-await (view)
-        "One bounded wait (30 s) until VIEW has nothing pending: the draw that ends its work throws out of the wait."
-        (let ((ad (lambda (&rest _) (unless (drgnx-view-pending-p view) (throw 'drgnx-perf--drawn t))))
+                :rows (drgnx-perf-view-rows buf))))
+      (defun drgnx-perf--trail-await (buf)
+        "One bounded wait (30 s) until BUF's view has nothing pending: the draw that ends its work throws out of the wait."
+        (let ((ad (lambda (&rest _) (unless (drgnx-perf-view-pending-p buf) (throw 'drgnx-perf--drawn t))))
               (deadline (+ (float-time) 30)))
-          (advice-add 'drgnx-view--draw-buffer :after ad)
+          (drgnx-perf-advise-draws :after ad)
           (unwind-protect
               (catch 'drgnx-perf--drawn
-                (while (and (drgnx-view-pending-p view) (< (float-time) deadline))
+                (while (and (drgnx-perf-view-pending-p buf) (< (float-time) deadline))
                   (accept-process-output nil (max 0.001 (- deadline (float-time))))))
-            (advice-remove 'drgnx-view--draw-buffer ad))))
+            (drgnx-perf-unadvise-draws ad))))
       (defun drgnx-perf--trail-teardown ()
         (dolist (b (buffer-list)) (when (string-prefix-p "*drgnx work trail: " (buffer-name b)) (kill-buffer b)))
         (ignore-errors (drgnx-agents-kill drgnx-perf--trail-session))
@@ -570,7 +587,6 @@ step: each key's time, and for a key that stopped at the window's edge the time 
 window (one `view/window' round trip and the model's apply); the longest list Sjá held.  An error when the first
 step is not reached or Sjá held more than the window."
         (with-current-buffer drgnx-perf--tl-buf
-          (advice-add 'drgnx-hub--model-line :around #'drgnx-perf--tl-line-ad)
           (advice-add 'drgnx-hub--model-pushed :around #'drgnx-perf--tl-line-ad)
           (let ((h (drgnx-perf--tl-h)) keys pages lines handled (most 0) (n 0))
             ;; each run starts from the last 500 (the run before paged to the first)
@@ -605,7 +621,6 @@ step is not reached or Sjá held more than the window."
                   :page_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats pages))
                   :line_ms (mapcar #'drgnx-perf--round2
                                    (drgnx-perf-stats (prog1 lines
-                                                       (advice-remove 'drgnx-hub--model-line #'drgnx-perf--tl-line-ad)
                                                        (advice-remove 'drgnx-hub--model-pushed #'drgnx-perf--tl-line-ad))))
                   :handled_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats handled))
                   :pages (length pages) :list_max most :keys n

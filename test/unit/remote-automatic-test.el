@@ -197,7 +197,7 @@
       (redisplay t)
       (drgnx-remote-auto--none 'mode-line)
       ;; 7. the idle time passes: the timers the work above armed run too
-      (drgnx-test-pause 0.3 "nothing may reach the remote")
+      (drgnx-test-wait (lambda () (not (drgnx-test-wait--due-p))) :what "the timers due now have run")   ; nothing may reach the remote meanwhile
       (dolist (timer (append (copy-sequence timer-list) (copy-sequence timer-idle-list)))
         (condition-case nil (timer-event-handler timer) (error nil)))
       (drgnx-remote-auto--none 'idle-time))))

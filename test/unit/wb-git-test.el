@@ -8,7 +8,6 @@
 (require 'drgnx-git)
 (require 'drgnx-explorer)
 (setq drgnx-explorer--lisp-listing t)       ; the Lisp listing (a remote root's, plan sja-complete Q3): on local folders here
-(require 'drgnx-buffers)
 
 (ert-deftest drgnx-git/parse-porcelain-v2 ()
   (let ((h (drgnx-git-parse
@@ -91,29 +90,6 @@ build/ ignored (with build/out.o)."
           (drgnx-wb-hide-sidebar)
           (drgnx-explorer-set-roots nil)                ; its watches go: no events from the folder's removal
           (kill-buffer drgnx-explorer-buffer-name))))))
-
-(ert-deftest drgnx-git/the-buffers-panel-shows-letters ()
-  (skip-unless (executable-find "git"))
-  (drgnx-git-test--repo root
-    (drgnx-test-with-state
-      (let ((drgnx-wb--sections nil)
-            (drgnx-buffers--order nil) (drgnx-buffers--signature nil)
-            (b (find-file-noselect (expand-file-name "src/b.txt" root))))
-        (unwind-protect
-            (progn
-              (delete-other-windows)
-              (drgnx-buffers-setup)
-              (drgnx-git-refresh root t)
-              (drgnx-signal--flush)
-              (drgnx-wb-show-sidebar)
-              (with-current-buffer drgnx-buffers-buffer-name
-                (drgnx-buffers--fontify (point-min) (point-max))
-                (goto-char (drgnx-buffers--row-pos b))
-                (should (string-search "M" (mapconcat (lambda (o) (or (overlay-get o 'after-string) ""))
-                                                      (overlays-in (pos-bol) (1+ (pos-eol))) "")))))
-          (drgnx-wb-hide-sidebar)
-          (kill-buffer b)
-          (when (get-buffer drgnx-buffers-buffer-name) (kill-buffer drgnx-buffers-buffer-name)))))))
 
 (ert-deftest drgnx-git/an-ignored-file-has-a-letter-only-on-the-linux-console ()
   ;; the console draws no italic, so the ignored cue there is a trailing I (M12b-7-2); elsewhere none

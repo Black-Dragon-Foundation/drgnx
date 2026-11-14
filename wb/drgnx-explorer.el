@@ -1015,24 +1015,10 @@ changes inside)."
       (overlay-put drgnx-explorer--hidden-line 'invisible t)
       (overlay-put drgnx-explorer--hidden-line 'evaporate t))))
 
-(defun drgnx-explorer--shown-spans ()
-  "Where this buffer's rows get tails: for each window showing it, (FROM . TO) from a page above its start to two pages
-below it; t when no window shows it (every row)."
-  (or (mapcar (lambda (w) (drgnx-explorer--span (window-start w) (window-body-height w)))
-              (get-buffer-window-list nil nil t))
-      t))
-
-(defun drgnx-explorer--span (start page)
-  "(FROM . TO): a PAGE of lines above START to two below it."
-  (save-excursion
-    (goto-char start)
-    (cons (progn (forward-line (- page)) (point))
-          (progn (goto-char start) (forward-line (* 2 page)) (point)))))
-
 (defun drgnx-explorer--rows-tails-in (window start)
-  "The rows near what WINDOW shows from START (`drgnx-explorer--span') that have no tail get one (after a scroll)."
+  "The rows near what WINDOW shows from START (`drgnx-wb-span') that have no tail get one (after a scroll)."
   (when drgnx-explorer--tails
-    (let ((span (drgnx-explorer--span start (window-body-height window))))
+    (let ((span (drgnx-wb-span start (window-body-height window))))
       (save-excursion
         (goto-char (car span))
         (while (< (point) (cdr span))
@@ -1049,7 +1035,7 @@ rather than made again.  A tail goes with its row's text (`evaporate'): a remove
 redrawn row gets a new one; a badge of a row that went is deleted here."
   (when drgnx-explorer--waiting (delete-overlay drgnx-explorer--waiting) (setq drgnx-explorer--waiting nil))
   (let ((tails (or drgnx-explorer--tails (setq drgnx-explorer--tails (make-hash-table :test #'equal))))
-        (spans (drgnx-explorer--shown-spans)))
+        (spans (drgnx-wb-shown-spans)))
     (dolist (key keys)
       (let ((beg (drgnx-view-row-start view key)) (o (gethash key tails)))
         (if (not beg)
@@ -1089,7 +1075,7 @@ Explorer buffer's: the twin's kill leaves them."
       (remove-hook 'kill-buffer-hook #'drgnx-explorer--unwatch-all t)
       (remove-hook 'kill-buffer-hook #'drgnx-explorer--forget-find t)
       (jit-lock-unregister #'drgnx-explorer--fontify)
-      (drgnx-view-patch-attach drgnx-explorer--hub-view class)
+      (drgnx-view-patch-attach drgnx-explorer--hub-view class :sja t)
       (dolist (f patched) (unless (eq f t) (add-hook 'drgnx-view-patch-patched-functions f nil t)))
       (setq-local drgnx-view-nav-faces drgnx-explorer--nav-faces)                 ; the marks, as in the Explorer
       (add-hook 'window-scroll-functions #'drgnx-explorer--rows-scrolled nil t)  ; its scroll pages the view's window
@@ -1107,7 +1093,7 @@ Explorer buffer's: the twin's kill leaves them."
   "Make the Explorer the hub-fed VIEW in display CLASS: the hub lists it, and its keys answer from Sjá."
   (with-current-buffer (drgnx-explorer--buffer)
     (jit-lock-unregister #'drgnx-explorer--fontify)   ; the hub's rows come with their faces
-    (drgnx-view-patch-attach view class)
+    (drgnx-view-patch-attach view class :sja t)
     (setq drgnx-explorer--hub-view view)
     (add-hook 'drgnx-view-patch-patched-functions #'drgnx-explorer--rows-patched nil t)
     (setq-local drgnx-view-nav-faces drgnx-explorer--nav-faces)
@@ -1501,6 +1487,8 @@ the rows come as patches (`drgnx-explorer--find-event')."
   (dolist (v drgnx-explorer--find-views)
     (drgnx-quick-open--rows-query (cdr v) query drgnx-explorer--find-limit
                                   (list :name t :exclude (vconcat drgnx-explorer-exclude-names)))))
+
+(put 'drgnx-explorer--find-event 'hub-events-taken '("view-patch"))
 
 (defun drgnx-explorer--find-event (event data)
   "A `drgnx-hub-event-functions' handler while Find runs: a Find view's patch makes its rows Find's :found, shown as

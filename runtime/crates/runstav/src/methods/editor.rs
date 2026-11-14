@@ -79,6 +79,21 @@ pub struct BufferAgent {
     /// The plan entry it works on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_entry: Option<String>,
+    /// The buffer position (Emacs's: 1-based, in characters) of `line_end` at `col`, clamped to the line: where an
+    /// editing agent's bar sits.  Positions are of the text the hub holds (`doc_version`); none for a text over the
+    /// marks' limit or an agent with no line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pos: Option<i64>,
+    /// The position `line` starts at: where a projected agent's tag goes and where a ring begins.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_pos: Option<i64>,
+    /// The position `line_end` (else `line`) starts at: where a ring's last row begins.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_pos: Option<i64>,
+    /// The innermost symbol that defines the line (hrafn's outline of the text the hub holds); none when none does,
+    /// for a projected agent, or for a text over 2 MB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
 }
 
 /// What a gutter range says.
@@ -107,6 +122,12 @@ pub struct GutterRange {
     pub projected: Option<Projected>,
     /// The hover text ("Opus · changed in step 14 · 2 min ago").
     pub help: String,
+    /// The positions `start` and `end` begin at (Emacs's, in the text the hub holds): a range is the rows whose line
+    /// starts lie from `start_pos` to `end_pos`.  None for a text over the marks' limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_pos: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_pos: Option<i64>,
 }
 
 /// A view's frame: `agents/buffer/watch`'s answer, and the data of `agent-buffer`.

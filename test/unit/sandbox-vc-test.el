@@ -54,7 +54,7 @@ again.  Runs without a hub: no process of the user's, no `~'."
       (should (file-exists-p canary))
       (delete-file canary)
       (drgnx-sandbox-vc-register folder)
-      (let ((file (concat folder "a")) (vc-handled-backends '(Git)) (buf nil))
+      (let ((file (concat folder "a")) (vc-handled-backends '(Git)) (buf nil) (before (process-list)))
         (unwind-protect
             (progn
               (ignore-errors (setq buf (find-file-noselect file)))
@@ -63,7 +63,9 @@ again.  Runs without a hub: no process of the user's, no `~'."
               (ignore-errors (let ((default-directory folder)) (vc-refresh-state)))
               (when (locate-library "magit")
                 (ignore-errors (require 'magit) (let ((default-directory folder)) (magit-status-setup-buffer folder))))
-              (drgnx-test-pause 0.3 "nothing may run git")
+              ;; every git the visit started has ended and every timer due has run: only then is "no git ran the hook" said
+              (drgnx-test-wait-ended (cl-set-difference (process-list) before) :what "the visit's git processes")
+              (drgnx-test-wait (lambda () (not (drgnx-test-wait--due-p))) :what "the visit's timers")
               (should-not (file-exists-p canary)))
           (when (buffer-live-p buf) (kill-buffer buf))
           (when-let* ((b (get-buffer "*vc-dir*"))) (kill-buffer b)))))))

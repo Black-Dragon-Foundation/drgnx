@@ -279,7 +279,7 @@ with no row left the register, and must leave the constant too, so it cannot com
 
 (defconst drgnx-lint-patterns--gate-exempt-allowed
   '(drgnx-hub-client/a-current-hello-clears-the-restart-notice
-    drgnx-hub-client/a-failing-callback-does-not-drop-the-rest-of-the-chunk
+    drgnx-hub-client/a-failing-callback-does-not-drop-the-rest-of-the-batch
     drgnx-hub-client/a-hub-that-says-nothing-is-closed-not-legacy
     drgnx-hub-client/a-key-found-again-quietly-raises-no-notice
     drgnx-hub-client/a-key-the-hub-lost-is-a-notice

@@ -69,9 +69,15 @@ place of the real colours, so every colour a face names can be traced back to th
   (cond ((stringp value) (when-let* ((token (gethash value back))) (list token)))
         ((consp value) (append (drgnx-design--collect (car value) back) (drgnx-design--collect (cdr value) back)))))
 
+(defvar drgnx-theme--box-fit)
+(defvar drgnx-theme--box-fit-pad)
+
 (defun drgnx-design-faces (variant)
-  "What the theme generator makes for VARIANT: ((FACE :inherit INHERIT :tokens TOKENS)…), in its order."
-  (let* ((maps (drgnx-design--sentinels (drgnx-design--tokens variant)))
+  "What the theme generator makes for VARIANT: ((FACE :inherit INHERIT :tokens TOKENS)…), in its order.
+The generator leaves a face's box out on an Emacs that cannot draw `:fit' boxes (Nidhogg's compositor can), and the
+tokens in it with it; the pages must not depend on the Emacs that makes them, so it is asked as Nidhogg does."
+  (let* ((drgnx-theme--box-fit t) (drgnx-theme--box-fit-pad t)
+         (maps (drgnx-design--sentinels (drgnx-design--tokens variant)))
          (forward (car maps)) (back (cdr maps)))
     (mapcar (lambda (spec)
               (let ((attrs (cdr spec)))

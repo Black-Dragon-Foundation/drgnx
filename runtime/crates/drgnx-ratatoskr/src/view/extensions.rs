@@ -423,7 +423,7 @@ impl Views {
         if let Some(look) = look {
             let (rows, images) = rows(&b, look);
             if let Some(p) = lock(&self.store).publish(key, rows, &images) {
-                f.send_to(key.0, "view-patch", json!(p));
+                f.core.views.send_patch(f, key.0, &p);
             }
         }
         true
@@ -451,7 +451,7 @@ pub fn list(
         };
         let (rows, images) = rows(&built, look);
         if let Some(patch) = store.publish(&key, rows, &images) {
-            f.send_to(conn, "view-patch", json!(patch));
+            f.core.views.send_patch(f, conn, &patch);
         }
     }
     w::ListResult { sections: totals }

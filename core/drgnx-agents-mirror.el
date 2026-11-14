@@ -348,32 +348,29 @@ no window shows a mirrored transcript."
 
 (defconst drgnx-agents-mirror--hook-steps-max 100 "How many steps' hook rows a mirror keeps (the newest).")
 
-(defun drgnx-agents-mirror--last-tool-id (m)
-  "The `:id' of the newest top-level tool entry of mirror M's transcript, or nil."
-  (let (id)
-    (dolist (e (drgnx-agent-session-entries m))
-      (when (eq (plist-get e :type) 'tool) (setq id (plist-get e :id))))
-    id))
-
 (defun drgnx-agents-mirror--step (data)
   "An `agent-step' event (DATA `{session, step}') whose step carries hook rows (`hooks': each hook point run on it):
-mirror M of that session keeps them as (STEP TOOL-ID ROWS), TOOL-ID being the tool entry that was the newest when the
-rows first arrived (the hook ran on that step's call; a step has no id in the transcript).  A step seen again
-replaces its rows and keeps its tool entry.  Only the newest `drgnx-agents-mirror--hook-steps-max' steps are kept."
+mirror M of that session keeps them as (STEP TOOL-ID ROWS), TOOL-ID being the tool call the hub names on the step
+(`call', the transcript's tool entry `id'); no entry is walked.  A step seen again replaces its rows.  Only the
+newest `drgnx-agents-mirror--hook-steps-max' steps are kept."
   (let* ((step (plist-get data :step)) (rows (append (plist-get step :hooks) nil)))
     (when-let* ((rows rows) (seq (plist-get step :seq))
                 (m (drgnx-agents-mirror--find (plist-get step :session))))
       (let* ((old (assq seq (drgnx-agent-session-hooks m)))
-             (entry (list seq (if old (nth 1 old) (drgnx-agents-mirror--last-tool-id m)) rows)))
+             (entry (list seq (or (plist-get step :call) (nth 1 old)) rows)))
         (setf (drgnx-agent-session-hooks m)
               (seq-take (cons entry (seq-remove (lambda (e) (eql (car e) seq)) (drgnx-agent-session-hooks m)))
                         drgnx-agents-mirror--hook-steps-max))
         (drgnx-agents--changed m)))))
 
+(put 'drgnx-agents-mirror--event 'hub-events-taken '("agent-step" "agents-attention" "agent" "agent-entries"))
+
 (defun drgnx-agents-mirror--event (event data)
   "An event from the hub (`drgnx-hub-event-functions')."
   (when (and (equal event "agent-step") (not drgnx-agents-mirror--paused))
     (drgnx-agents-mirror--step data))
+  (when (and (equal event "agents-attention") (not drgnx-agents-mirror--paused))
+    (drgnx-agents--take-attention data))
   (when (and (member event '("agent" "agent-entries")) (not drgnx-agents-mirror--paused))
     (let ((id (plist-get data :id)) (seq (or (plist-get data :seq) 0)))
       (cond
@@ -400,7 +397,8 @@ replaces its rows and keeps its tool entry.  Only the newest `drgnx-agents-mirro
     (when (and (drgnx-agent-session-remote m) (not (eq (drgnx-agent-session-status m) 'exited)))
       (setf (drgnx-agent-session-status m) 'exited (drgnx-agent-session-permissions m) nil (drgnx-agent-session-reviews m) nil
             (drgnx-agent-session-stderr m) "the agent hub ended; its sessions end with it")
-      (drgnx-agents--changed m))))
+      (drgnx-agents--changed m)))
+  (drgnx-agents--take-attention nil))
 
 (defun drgnx-agents-mirror-sync ()
   "Mirror the hub's agent sessions here, and keep them current.  Asynchronous; never starts a hub."

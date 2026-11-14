@@ -14,6 +14,7 @@
 //! - [`rewind`]: the restore level a provider gives and where a conversation is cut for a step.
 //! - [`wheel`]: the user takes an agent's wheel and gives it back with what they changed.
 
+pub mod attention;
 pub mod before_tool_tool;
 pub mod config;
 pub mod deliver;

@@ -313,6 +313,8 @@ files hash differently now)."
 
 (defun drgnx-plugins--on-page-p () (derived-mode-p 'drgnx-plugins-page-mode))
 
+(put 'drgnx-plugins--event 'hub-events-taken '("plugin"))
+
 (defun drgnx-plugins--event (event _data)
   "A `drgnx-hub-event-functions' handler: a `plugin' event draws the open plugins pages again from the hub's list."
   (when (and (equal event "plugin")

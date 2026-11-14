@@ -62,7 +62,7 @@ tail of fewer samples is the maximum or next to it, and says nothing about the c
 (defvar drgnx-perf--gc-last 0.0 "`gc-elapsed' after the last collection seen.")
 
 (defvar drgnx-perf-row-counters
-  '(drgnx-explorer--renders drgnx-buffers--renders)
+  '(drgnx-explorer--renders)
   "Counters of rows drawn; the run's `:rows' is the growth of their sum.  A counter whose library is not
 loaded counts 0.  The render pipeline's `drgnx-view-stats' joins them when it exists (DEFERRED).")
 
@@ -70,6 +70,64 @@ loaded counts 0.  The render pipeline's `drgnx-view-stats' joins them when it ex
   (let ((sum 0))
     (dolist (s drgnx-perf-row-counters sum)
       (when (and (boundp s) (numberp (symbol-value s))) (setq sum (+ sum (symbol-value s)))))))
+
+;;;; Hub-fed views
+;; A view's rows are drawn by Lisp's inserter (the buffer's `drgnx-view') or held and drawn by Sjá (the buffer has no
+;; `drgnx-view'; `drgnx-view-sja').  Workloads count, wait on and time a view's draws through these, whichever holds it.
+
+(defvar drgnx-view)
+(declare-function drgnx-view-p "drgnx-view")
+(declare-function drgnx-view-row-count "drgnx-view")
+(declare-function drgnx-view-pending-p "drgnx-view")
+(declare-function drgnx-timer-active-p "drgnx-timer")
+
+(defconst drgnx-perf-view-draws '(drgnx-view--draw-buffer drgnx-view-sja-draw)
+  "The functions that draw a hub-fed view's buffer, each called with the BUFFER: the inserter's and Sjá's.")
+
+(defun drgnx-perf-advise-draws (how fn)
+  "Advise every view draw (`drgnx-perf-view-draws') with FN, HOW (as `advice-add')."
+  (dolist (d drgnx-perf-view-draws) (advice-add d how fn)))
+
+(defun drgnx-perf-unadvise-draws (fn)
+  "Remove FN from every view draw."
+  (dolist (d drgnx-perf-view-draws) (advice-remove d fn)))
+
+(defvar drgnx-perf-patch-functions nil
+  "Called with (VIEW KIND) as a view takes a hub row patch: KIND `reset' or `rows' for one parsed in Lisp
+\(`drgnx-view-apply-patch', before it applies), `sja' for one the reader pushed to Sjá and Sjá applied (after it
+applied; Sjá does not say whether it was a reset).  `drgnx-perf-watch-patches' installs the doors.")
+
+(declare-function drgnx-view-patch--reset-p "drgnx-view")
+
+(defun drgnx-perf--patch-lisp (patch)
+  "Before `drgnx-view-apply-patch': PATCH to `drgnx-perf-patch-functions'."
+  (run-hook-with-args 'drgnx-perf-patch-functions (plist-get patch :view)
+                      (if (drgnx-view-patch--reset-p patch) 'reset 'rows)))
+
+(defun drgnx-perf--patch-sja (r)
+  "After `drgnx-view-sja-pushed': R, (VIEW VERSION DECISION CLASS), to `drgnx-perf-patch-functions' when applied."
+  (when (eq (nth 2 r) 'apply) (run-hook-with-args 'drgnx-perf-patch-functions (nth 0 r) 'sja)))
+
+(defun drgnx-perf-watch-patches (on)
+  "Run `drgnx-perf-patch-functions' for every row patch a view takes (ON), or stop."
+  (if on
+      (progn (advice-add 'drgnx-view-apply-patch :before #'drgnx-perf--patch-lisp)
+             (advice-add 'drgnx-view-sja-pushed :before #'drgnx-perf--patch-sja))
+    (advice-remove 'drgnx-view-apply-patch #'drgnx-perf--patch-lisp)
+    (advice-remove 'drgnx-view-sja-pushed #'drgnx-perf--patch-sja)))
+
+(defun drgnx-perf-view-rows (&optional buffer)
+  "The rows BUFFER's (default: the current one's) hub-fed view holds: its inserter's, or Sjá's."
+  (with-current-buffer (or buffer (current-buffer))
+    (drgnx-view-row-count (and (drgnx-view-p drgnx-view) drgnx-view))))
+
+(defun drgnx-perf-view-pending-p (&optional buffer)
+  "Non-nil while BUFFER's (default: the current one's) hub-fed view has rows to draw: the inserter's marks, or Sjá's
+draw armed."
+  (let* ((b (or buffer (current-buffer))) (v (buffer-local-value 'drgnx-view b)))
+    (if (drgnx-view-p v)
+        (drgnx-view-pending-p v)
+      (drgnx-timer-active-p (cons 'drgnx-view-sja b)))))
 
 (defun drgnx-perf--alloc-sum ()
   "Everything allocated so far: the seven `memory-use-counts' added (the reading's own list is 7 conses)."

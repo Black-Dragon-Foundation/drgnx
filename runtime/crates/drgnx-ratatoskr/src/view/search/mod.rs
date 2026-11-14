@@ -811,7 +811,7 @@ impl Views {
                 self.publish_model(f, key.0, &key.1, run_doc(run, from));
                 let rows = view_rows(run);
                 if let Some(p) = lock(&self.store).publish(key, rows, &[]) {
-                    f.send_to(key.0, "view-patch", json!(p));
+                    f.core.views.send_patch(f, key.0, &p);
                 }
             })
             .is_some()
@@ -843,7 +843,7 @@ impl Views {
                     f.send_to(conn, "view-model", super::Store::model_data(m));
                 }
                 for patch in start_patches(&mut store, conn, view) {
-                    f.send_to(conn, "view-patch", json!(patch));
+                    f.core.views.send_patch(f, conn, &patch);
                 }
             })
             .is_some()
@@ -886,7 +886,7 @@ impl Views {
                     f.send_to(conn, "view-model", super::Store::model_data(m));
                 }
                 for patch in patches {
-                    f.send_to(conn, "view-patch", json!(patch));
+                    f.core.views.send_patch(f, conn, &patch);
                 }
             })
             .is_some()
@@ -916,7 +916,7 @@ impl Views {
                     f.send_to(conn, "view-model", super::Store::model_data(m));
                 }
                 for p in patches {
-                    f.send_to(conn, "view-patch", json!(p));
+                    f.core.views.send_patch(f, conn, &p);
                 }
             })
             .is_some()
@@ -946,7 +946,7 @@ impl Views {
                     f.send_to(conn, "view-model", super::Store::model_data(m));
                 }
                 for p in patches.into_iter().filter(|_| !run.count) {
-                    f.send_to(conn, "view-patch", json!(p));
+                    f.core.views.send_patch(f, conn, &p);
                 }
                 if run.done {
                     // the totals changed after the end: they go again (the unticks went with the end)
@@ -971,7 +971,7 @@ impl Views {
                     f.send_to(conn, "view-model", super::Store::model_data(m));
                 }
                 for p in patches {
-                    f.send_to(conn, "view-patch", json!(p));
+                    f.core.views.send_patch(f, conn, &p);
                 }
             }
             // the model is whole before the search is done: what waits goes now
@@ -1359,19 +1359,29 @@ pub fn run(f: &Front, c: &Caller, p: RunParams) -> Result<RunStarted, Error> {
 }
 
 /// `search/buffer`: VIEW's searches search the buffer's text in place of its file from now on (or the file on disk,
-/// saying the buffer is too large; neither: the file again); the current search takes it at once. True.
-pub fn buffer(f: &Front, c: &Caller, p: BufferParams) -> Result<bool, Error> {
+/// saying the buffer is too large; neither: the file again); the current search takes it at once. The text is the
+/// request's, or, with `mirror`, the edit history's mirror of the editor's tracked buffer (the editor sends no text):
+/// then the answer is false, and nothing changes, while no buffer of the file is tracked or the mirror is behind
+/// `version`. Otherwise true.
+pub async fn buffer(f: &Front, c: &Caller, p: BufferParams) -> Result<bool, Error> {
     let views = &f.core.views;
     if p.view.is_empty() || p.view.len() > runstav::methods::view::VIEW_MAX {
         return Err(invalid("view", "a view id of 1 to 64 bytes"));
     }
     let (conn, file) = (c.conn_id, p.path.as_str().to_owned());
-    let buf = match (p.text, p.large) {
-        (Some(text), _) => Some(Buffer {
+    let buf = match (p.text, p.mirror, p.large) {
+        (Some(text), _, _) => Some(Buffer {
             tick: p.tick,
             text: Some(text.into()),
         }),
-        (None, Some(true)) => Some(Buffer {
+        (None, Some(true), _) => match crate::editor::mirror_of(f, &file).await {
+            Some((text, version)) if version >= p.version => Some(Buffer {
+                tick: p.tick,
+                text: Some(text.into()),
+            }),
+            _ => return Ok(false),
+        },
+        (None, _, Some(true)) => Some(Buffer {
             tick: p.tick,
             text: None,
         }),
@@ -1407,7 +1417,7 @@ pub fn look(f: &Front, c: &Caller, p: GrepLookParams) -> Result<bool, Error> {
         .greps
         .current(c.conn_id, &p.view, |run| {
             for patch in look_patches(&mut lock(&views.store), c.conn_id, &p.view, run, ask) {
-                f.send_to(c.conn_id, "view-patch", json!(patch));
+                f.core.views.send_patch(f, c.conn_id, &patch);
             }
         })
         .is_some())
@@ -1470,7 +1480,7 @@ pub async fn group(f: &Front, c: &Caller, p: GroupParams) -> Result<bool, Error>
                 f.send_to(c.conn_id, "view-model", super::Store::model_data(m));
             }
             for patch in patches {
-                f.send_to(c.conn_id, "view-patch", json!(patch));
+                f.core.views.send_patch(f, c.conn_id, &patch);
             }
         })
         .is_some())
@@ -1486,7 +1496,7 @@ pub fn fold(f: &Front, c: &Caller, p: FoldParams) -> Result<bool, Error> {
             let patches = fold_patches(&mut store, c.conn_id, &p.view, run, &p.node, p.open)?;
             drop(store);
             for patch in patches {
-                f.send_to(c.conn_id, "view-patch", json!(patch));
+                f.core.views.send_patch(f, c.conn_id, &patch);
             }
             Some(())
         })
@@ -1535,7 +1545,7 @@ pub fn skipped(f: &Front, c: &Caller, p: GrepSkippedParams) -> Result<bool, Erro
                 f.send_to(c.conn_id, "view-model", super::Store::model_data(m));
             }
             for patch in patches {
-                f.send_to(c.conn_id, "view-patch", json!(patch));
+                f.core.views.send_patch(f, c.conn_id, &patch);
             }
         })
         .is_some())
@@ -1549,7 +1559,7 @@ pub fn replace(f: &Front, c: &Caller, p: GrepReplaceParams) -> Result<bool, Erro
         .current(c.conn_id, &p.view, |run| {
             run.replace = p.replace.clone();
             for patch in rebuild_patches(&mut lock(&views.store), c.conn_id, &p.view, run) {
-                f.send_to(c.conn_id, "view-patch", json!(patch));
+                f.core.views.send_patch(f, c.conn_id, &patch);
             }
         })
         .is_some())
@@ -2253,7 +2263,7 @@ fn mark_handed(
             run.handed.insert(i.clone(), mark.clone());
         }
         for patch in rebuild_patches(&mut lock(&views.store), c.conn_id, view, run) {
-            f.send_to(c.conn_id, "view-patch", json!(patch));
+            f.core.views.send_patch(f, c.conn_id, &patch);
         }
     });
 }
@@ -2270,7 +2280,7 @@ pub(super) fn handoff_progress(f: &Front, conn: u64, state: &HandoffState) {
             },
         );
         for patch in rebuild_patches(&mut lock(&views.store), conn, &state.view, run) {
-            f.send_to(conn, "view-patch", json!(patch));
+            f.core.views.send_patch(f, conn, &patch);
         }
     });
 }

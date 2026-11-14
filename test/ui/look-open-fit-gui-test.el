@@ -20,6 +20,7 @@
 (require 'drgnx)
 (require 'drgnx-state)
 (require 'drgnx-buffers)
+(load (expand-file-name "test/fixtures/ui-hub-fixture" drgnx-ui-look-open-fit--repo) nil t)   ; the hub builds the Open rows
 (require 'drgnx-explorer)
 (load (expand-file-name "modules/ui/drgnx-look-fonts" drgnx-ui-look-open-fit--repo) nil t)
 (load (expand-file-name "modules/ui/drgnx-look-density" drgnx-ui-look-open-fit--repo) nil t)
@@ -42,7 +43,7 @@ that fit in 0.3 of the frame, and growing or shrinking the frame by one pixel le
          (dir (file-name-as-directory (make-temp-file "look-open-fit" t)))
          (size (list (frame-pixel-width root) (frame-pixel-height root)))
          (config (with-selected-frame root (current-window-configuration)))
-         (drgnx-wb--sections nil) (drgnx-buffers--order nil) (drgnx-buffers--signature nil)
+         (drgnx-wb--sections nil)
          (drgnx-explorer--roots (list dir)) opened want)
     (unwind-protect
         (with-selected-frame root
@@ -51,6 +52,7 @@ that fit in 0.3 of the frame, and growing or shrinking the frame by one pixel le
           (load-theme 'drgnx-dark t)
           (drgnx-look-density-on)
           (drgnx-state-mode 1)
+          (drgnx-ui-hub-start drgnx-ui-look-open-fit--repo)
           ;; set up as a module's setup does, so their hooks, subscriptions and focus functions are recorded and undone
           (let ((drgnx-modules--current 'look-open-fit-row) (drgnx-modules--setup-load load-file-name))
             (drgnx-buffers-setup)
@@ -61,6 +63,11 @@ that fit in 0.3 of the frame, and growing or shrinking the frame by one pixel le
               (push (find-file-noselect f) opened)))
           (drgnx-signal--flush)                       ; the store has seen the frame: the sidebar is a change
           (drgnx-wb-show-sidebar)
+          ;; the env goes out on an idle timer after a window change; a test's wait never idles
+          (drgnx-view-env-update drgnx-buffers-hub-view)
+          (drgnx-test-wait (lambda () (with-current-buffer drgnx-buffers-buffer-name
+                                        (>= (count-lines (point-min) (point-max)) 4)))
+                           :what "the hub's Open rows")
           (drgnx-ui-look-open-fit--settle)
           (let* ((open (get-buffer-window drgnx-buffers-buffer-name root))
                  (explorer (get-buffer-window drgnx-explorer-buffer-name root))
@@ -83,6 +90,7 @@ that fit in 0.3 of the frame, and growing or shrinking the frame by one pixel le
       (dolist (u (alist-get 'look-open-fit-row drgnx-modules--stacks)) (funcall (cdr u)))
       (setf (alist-get 'look-open-fit-row drgnx-modules--stacks nil t) nil)
       (drgnx-state-mode -1)
+      (drgnx-ui-hub-stop)
       (drgnx-look-density-off)
       (mapc #'disable-theme custom-enabled-themes)
       (set-frame-size root (car size) (cadr size) t)

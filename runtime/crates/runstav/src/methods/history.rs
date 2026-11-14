@@ -154,6 +154,21 @@ pub(crate) fn methods() -> Vec<Method> {
             doc: "git's blame of a whole file in one answer: per line the commit that last changed it, for the text of the editor's tracked buffer (unsaved typing included) or else the file; lines an agent wrote ride along; cached by path, HEAD and text",
         ),
         method!(
+            "history/line-positions", HistoryLinePositions(LinePositionsParams) -> LinePositions,
+            classes: [User], writes: false,
+            doc: "where the given lines of the editor's tracked buffer start in the text the hub holds (and just after them): the editor moves a mark to them without counting lines; none when the buffer is not tracked or the text is over the marks' limit",
+        ),
+        method!(
+            "history/eol-fit", HistoryEolFit(EolFitParams) -> EolFits,
+            classes: [User], writes: false,
+            doc: "end-of-line diagnostics fitted: each text cut with an ellipsis to the room its window has after the end of its line in the text the hub holds of the editor's tracked buffer (tabs counted); the editor shows the fitted strings and fits nothing itself",
+        ),
+        method!(
+            "git/blame/line", GitBlameLine(GitBlameLineParams) -> BlamedLine,
+            classes: [User], writes: false,
+            doc: "the inline blame text of one line of the editor's tracked buffer (git/blame's answer for the text the hub holds), fitted to the columns the editor has room for: author, age, commit subject; no text when the buffer is not tracked, the line has none or there is no room",
+        ),
+        method!(
             "history/hunks/head", HistoryHunksHead(HeadHunksParams) -> HeadHunks,
             classes: [User], writes: false,
             doc: "what the editor's tracked buffer of a file changed against the last commit (HEAD), as hunks numbered as git diff --unified=0 numbers them; for the change marks in the margin",
@@ -474,6 +489,107 @@ pub struct GitBlamed {
     pub agents: Vec<AgentLines>,
 }
 
+/// `history/line-positions`: where LINES (1-based) of the editor's tracked buffer of PATH of the worktree at
+/// WORKTREE_ROOT start, in the text the hub holds (the editor hands its changes over first: `drgnx-history-ask`).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LinePositionsParams {
+    /// Relative to the worktree.
+    pub path: String,
+    pub worktree_root: String,
+    pub lines: Vec<u32>,
+}
+
+/// One line's place in the buffer: where it starts and just after it, its line break included.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LinePosition {
+    pub line: u32,
+    pub pos: i64,
+    pub end: i64,
+}
+
+/// `history/line-positions`' answer: none (`tracked` false, or `positions` empty) when no buffer of the file is
+/// tracked or its text is over the marks' limit.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LinePositions {
+    pub tracked: bool,
+    pub positions: Vec<LinePosition>,
+}
+
+/// `history/eol-fit`: the end-of-line diagnostics of the editor's tracked buffer of PATH of the worktree at
+/// WORKTREE_ROOT, each to be cut to the room a window WIDTH columns wide has after the end of its line (TAB_WIDTH
+/// columns to a tab).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EolFitParams {
+    /// Relative to the worktree.
+    pub path: String,
+    pub worktree_root: String,
+    /// The window's body width in columns.
+    pub width: u32,
+    pub tab_width: u32,
+    pub items: Vec<EolItem>,
+}
+
+/// One diagnostic: the client's KEY for it, the buffer POSITION (Emacs's) it starts at, and its TEXT.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EolItem {
+    pub key: u64,
+    pub pos: i64,
+    pub text: String,
+}
+
+/// A diagnostic's TEXT fitted: whole when it fits, else cut with an ellipsis (at least 8 columns).
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EolFitted {
+    pub key: u64,
+    pub text: String,
+}
+
+/// `history/eol-fit`'s answer: `items` empty (and `tracked` false) when no buffer of the file is tracked or its text
+/// is over the marks' limit.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EolFits {
+    pub tracked: bool,
+    pub items: Vec<EolFitted>,
+}
+
+/// `git/blame/line`: the blame text of the line POS is on, in the text the hub holds of the editor's tracked buffer of
+/// PATH of the worktree at WORKTREE_ROOT, fitted to WIDTH columns.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GitBlameLineParams {
+    /// Relative to the worktree.
+    pub path: String,
+    pub worktree_root: String,
+    /// The buffer position (Emacs's: 1-based, in characters) of the line.
+    pub pos: i64,
+    /// The columns the text may take; under 20 nothing is answered, over 80 it is cut to 80.
+    pub width: i64,
+}
+
+/// `git/blame/line`'s answer: none of the fields when the buffer is not tracked, the line has no blame (the empty last
+/// line) or WIDTH is too small for a line of it.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BlamedLine {
+    /// "Ada, 3 days ago · Fix the parser", "You · Uncommitted changes" or "agent s1 · …", cut with an ellipsis to the
+    /// width.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// The commit that last changed the line (the zero one when it is not committed): Show Commit of Line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha: Option<String>,
+    /// The commit's author time; none for a line not committed yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time: Option<i64>,
+}
+
 /// `history/hunks/head`: PATH of the worktree at WORKTREE_ROOT, the editor's tracked buffer against HEAD.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -502,6 +618,32 @@ pub struct HeadHunk {
 pub struct HeadHunks {
     pub tracked: bool,
     pub hunks: Vec<HeadHunk>,
+    /// The gutter marks the hunks make, sorted by position, in the coordinates of the buffer text the hub holds (the
+    /// text the edit history was last told): empty for a text over the marks' size limit.
+    pub marks: Vec<HunkMark>,
+}
+
+/// What a gutter mark says.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum HunkMarkKind {
+    /// A line the buffer added.
+    Added,
+    /// A line the buffer changed.
+    Changed,
+    /// Where lines were deleted (the line after them carries it).
+    Deleted,
+}
+
+/// One gutter mark: the line (1-based) and the position (Emacs's, 1-based, in characters) the line starts at.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HunkMark {
+    pub line: i64,
+    pub pos: i64,
+    pub kind: HunkMarkKind,
 }
 
 /// `git/stage-hunk`: stage one hunk of the tracked buffer's change against HEAD (as `history/hunks/head` numbered it)

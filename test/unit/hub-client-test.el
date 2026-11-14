@@ -191,7 +191,8 @@
             (drgnx-hub-call "gateway/keys" (list :keys (list :openrouter "sk-never-sent")) (cdr keys))
             (drgnx-hub-call "agents/list" nil (cdr other))
             (drgnx-hub-client-test--wait (lambda () (and (car (car keys)) (car (car other)))) "both calls fail")
-            (drgnx-test-pause 0.2 "no call may fail twice")
+            ;; the connection is closed (its sentinel has run): every failure a close can bring has come
+            (drgnx-test-wait-ended drgnx-hub--client :what "the refused connection closed")
             (dolist (c (list keys other))
               (should (= (length (car (car c))) 1))
               (should (string-match-p "did not prove it read .*\\.cap" (format "%s" (cadr (car (car (car c))))))))
@@ -228,7 +229,8 @@
     (let ((got (drgnx-hub-client-test--calls)))
       (drgnx-hub-call "agents/list" nil (cdr got))
       (drgnx-hub-client-test--wait (lambda () (member "hello" (drgnx-fake-hub-methods hub))) "the hello")
-      (drgnx-test-pause 0.3 "no call may go before the hello's answer")
+      ;; the call is waiting in the connection's queue (the effect of "no call goes before the hello's answer")
+      (drgnx-test-wait (lambda () (process-get drgnx-hub--client :drgnx-queue)) :what "the call queued behind the hello")
       (should (equal (drgnx-fake-hub-methods hub) '("ping" "hello")))
       (should-not (car (car got)))
       (drgnx-fake-hub-release hub)
@@ -386,66 +388,20 @@
             (should-not drgnx-agents-mirror--paused))
         (drgnx-agents-mirror-stop)))))
 
-;;;; The line reader
-
-(defvar drgnx-hub-client-test--searched 0 "Characters `string-search' and `string-match' were given to look through.")
-
-(defun drgnx-hub-client-test--count-search (orig needle haystack &optional start)
-  (cl-incf drgnx-hub-client-test--searched (- (length haystack) (or start 0)))
-  (funcall orig needle haystack start))
-
-(defun drgnx-hub-client-test--count-match (orig regexp string &optional start inhibit-modify)
-  (cl-incf drgnx-hub-client-test--searched (- (length string) (or start 0)))
-  (funcall orig regexp string start inhibit-modify))
-
-(ert-deftest drgnx-hub-client/only-the-new-chunk-is-searched ()
-  ;; HUB-LINES-1, PERF-M3: a long line in many chunks is searched once per chunk, never from its start again
-  (let ((p (make-pipe-process :name "drgnx-lines" :noquery t)) (got nil) (drgnx-hub-client-test--searched 0)
-        (chunk (make-string 1000 ?x)) (n 300))
-    (unwind-protect
-        (progn
-          (advice-add 'string-search :around #'drgnx-hub-client-test--count-search)
-          (advice-add 'string-match :around #'drgnx-hub-client-test--count-match)
-          (unwind-protect
-              (progn (dotimes (_ n) (drgnx-hub--lines p chunk (lambda (j) (push j got))))
-                     (drgnx-hub--lines p "\n{\"a\":1}\n{\"b\":" (lambda (j) (push j got)))
-                     (drgnx-hub--lines p "2}\n" (lambda (j) (push j got))))
-            (advice-remove 'string-search #'drgnx-hub-client-test--count-search)
-            (advice-remove 'string-match #'drgnx-hub-client-test--count-match))
-          (should (equal (nreverse got) '((:a 1) (:b 2))))
-          (should (< drgnx-hub-client-test--searched (* 2 n (length chunk)))))
-      (delete-process p))))
-
-(ert-deftest drgnx-hub-client/a-chunk-inside-a-long-line-is-held-not-copied ()
-  ;; SJA T3: a model line of megabytes arrives in many chunks with no newline; each is held as it came (the filter's
-  ;; string is the line's only copy until the join), and only an open line's first piece is cut from its chunk
-  (let ((p (make-pipe-process :name "drgnx-lines" :noquery t)) (got nil)
-        (head "{\"a\":1}\n{\"b\":") (middle (make-string 1000 ?x)))
-    (unwind-protect
-        (progn
-          (drgnx-hub--lines p head (lambda (j) (push j got)))
-          (drgnx-hub--lines p middle (lambda (j) (push j got)))
-          (should (eq middle (car (process-get p :pending))))
-          (should (equal "{\"b\":" (cadr (process-get p :pending))))
-          (drgnx-hub--lines p "\"y\"}\n" (lambda (j) (push j got)) (lambda (_) nil))
-          (should (equal (nreverse got) '((:a 1))))
-          (should-not (process-get p :pending)))
-      (delete-process p))))
-
 (load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
 
-(ert-deftest drgnx-hub-client/a-failing-callback-does-not-drop-the-rest-of-the-chunk ()
-  ;; each answer's callback runs in the guard: the answers after it in the chunk, and its open line, still go on
+(ert-deftest drgnx-hub-client/a-failing-callback-does-not-drop-the-rest-of-the-batch ()
+  ;; each answer's callback runs in the guard: the answers after it in the batch still go on
   (drgnx-notice-test-with-model
     (let ((p (make-pipe-process :name "drgnx-settle" :noquery t)) (drgnx-hub--pending (make-hash-table)) (got nil))
       (unwind-protect
           (progn
             (puthash 1 (list :cb (lambda (_r _e) (error "Bad data")) :conn p :method "job/status") drgnx-hub--pending)
             (dolist (id '(2 3)) (puthash id (list :cb (lambda (r _e) (push r got)) :conn p :method "ping") drgnx-hub--pending))
-            (funcall (drgnx-guard-wrap #'drgnx-hub--client-filter "hub connection") p
-                     "{\"id\":1,\"result\":{\"x\":1}}\n{\"id\":2,\"result\":{\"a\":2}}\n{\"id\":3,\"res")
+            (drgnx-hub--client-batch p (list (list '(:id 1 :result (:x 1)) nil nil)
+                                             (list '(:id 2 :result (:a 2)) nil nil)))
             (should (equal got '((:a 2))))
-            (drgnx-hub--client-filter p "ult\":{\"b\":3}}\n")
+            (drgnx-hub--client-batch p (list (list '(:id 3 :result (:b 3)) nil nil)))
             (should (equal got '((:b 3) (:a 2))))
             (should (equal (mapcar (lambda (n) (plist-get n :text)) (drgnx-notices :source 'guard))
                            '("hub answer job/status: Bad data"))))

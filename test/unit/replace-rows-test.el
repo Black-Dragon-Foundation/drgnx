@@ -163,6 +163,62 @@ again, and a buffer saved since is forgotten (its path alone): the hub searches 
         (delete-directory dir t)
         (delete-directory out t)))))
 
+(ert-deftest drgnx-replace-rows/a-tracked-buffer-sends-no-text ()
+  "Pattern D: a modified buffer the edit history tracks goes as `search/buffer' with `mirror' and the version its
+changes reached (handed to the hub first): no text, at any size.  A modified buffer the history does not track, above
+the bound (256 KiB), goes as `large' with no text."
+  (drgnx-replace-rows-test--with
+    (let* ((dir (file-name-as-directory (make-temp-file "replace-rows-mirror" t)))
+           (a (expand-file-name "a.txt" dir)) (u (expand-file-name "u.txt" dir)) (drained nil) bufs)
+      (unwind-protect
+          (progn
+            (dolist (f (list a u)) (write-region "nothing\n" nil f nil 'silent))
+            (setq bufs (mapcar #'find-file-noselect (list a u)) drgnx-replace--root dir)
+            (with-current-buffer (nth 0 bufs) (insert (make-string (* 300 1024) ?x) "\n"))
+            (with-current-buffer (nth 1 bufs) (insert (make-string (* 300 1024) ?y) "\n"))
+            (drgnx-replace--fill 'find "x")
+            (cl-letf (((symbol-function 'drgnx-history-tracked-p) (lambda (&optional b) (eq b (nth 0 bufs))))
+                      ((symbol-function 'drgnx-history-drain-now) (lambda (&optional b) (push b drained) 7)))
+              (drgnx-replace--search-now))
+            (should (equal (list (nth 0 bufs)) drained))
+            (should (equal (list (list a :tick (buffer-chars-modified-tick (nth 0 bufs)) :mirror t :version 7)
+                                 (list u :tick (buffer-chars-modified-tick (nth 1 bufs)) :large t))
+                           (sort (drgnx-replace-rows-test--buffer-calls) (lambda (x y) (string< (car x) (car y)))))))
+        (dolist (x bufs) (with-current-buffer x (set-buffer-modified-p nil)) (kill-buffer x))
+        (delete-directory dir t)))))
+
+(ert-deftest drgnx-replace-rows/a-mirror-the-hub-did-not-take-goes-once-more ()
+  "Pattern D: when the hub answers false to a `mirror' call (its mirror was behind), the buffer goes once more after
+the pause, and then not again until it changes."
+  (drgnx-replace-rows-test--with
+    (let* ((dir (file-name-as-directory (make-temp-file "replace-rows-behind" t)))
+           (a (expand-file-name "a.txt" dir)) (cbs nil) buf)
+      (unwind-protect
+          (progn
+            (write-region "nothing\n" nil a nil 'silent)
+            (setq buf (find-file-noselect a) drgnx-replace--root dir)
+            (with-current-buffer buf (insert "one needle\n"))
+            (drgnx-replace--fill 'find "needle")
+            (cl-letf (((symbol-function 'drgnx-history-tracked-p) (lambda (&optional _b) t))
+                      ((symbol-function 'drgnx-history-drain-now) (lambda (&optional _b) 2))
+                      ((symbol-function 'drgnx-hub--call-on)
+                       (lambda (_conn method params &optional cb &rest _)
+                         (push (cons method params) drgnx-replace-rows-test--calls)
+                         (when (equal method "search/buffer") (push cb cbs)) nil)))
+              (drgnx-replace--search-now)
+              (should (= 1 (length (drgnx-replace-rows-test--buffer-calls))))
+              (funcall (car cbs) nil nil)                       ; the hub's answer: not taken
+              (should (drgnx-timer-active-p (cons 'replace-buffers (current-buffer))))
+              (drgnx-timer-cancel (cons 'replace-buffers (current-buffer)))   ; the pause is over: run by hand
+              (drgnx-replace--buffers-timer (current-buffer))
+              (should (= 2 (length (drgnx-replace-rows-test--buffer-calls))))
+              (funcall (car cbs) nil nil)                       ; not taken again: no third call
+              (should-not (drgnx-timer-active-p (cons 'replace-buffers (current-buffer))))
+              (drgnx-replace--buffers-timer (current-buffer))
+              (should (= 2 (length (drgnx-replace-rows-test--buffer-calls))))))
+        (when buf (with-current-buffer buf (set-buffer-modified-p nil)) (kill-buffer buf))
+        (delete-directory dir t)))))
+
 (defun drgnx-replace-rows-test--buffer-calls ()
   "The `search/buffer' calls made, oldest first: (PATH . the rest of its params but the view)."
   (mapcar (lambda (c) (let ((p (cdr c))) (cons (plist-get p :path) (cl-loop for (k v) on p by #'cddr

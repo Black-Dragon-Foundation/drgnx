@@ -330,7 +330,7 @@ fn walk(
 }
 
 /// NAME as one row shows it: control characters (a newline in a file name) as `^X`, as `drgnx-wb-display-name`.
-fn display(name: &str) -> String {
+pub(super) fn display(name: &str) -> String {
     let mut s = String::with_capacity(name.len());
     for c in name.chars() {
         match c {

@@ -6,6 +6,7 @@
 (load (expand-file-name "modules/core/drgnx-basics" drgnx-dir) nil t)   ; New Untitled
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/measure-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (defvar drgnx-untitled-p)
 
 (defvar drgnx-face-test--state nil "The temp directory that is the state directory while a test runs.")
@@ -273,6 +274,73 @@ error's, with `short' (the default) and `t'; nil underlines only."
           (should (eq (and (string-search "e-two" text) t) (and setting t)))
           (should (eq (and (string-search "w-one" text) t) (and setting t))))
         (flymake-mode -1)))))
+
+;; The fit of an end-of-line problem is the hub's (`history/eol-fit'): the editor asks once for what it has not been
+;; answered for, shows the words whole until then, and cuts nothing itself while the hub tracks the buffer.
+(defmacro drgnx-face-test--eol-hub (asked &rest body)
+  "BODY in a buffer of \"one\\ntwo\\n\" the hub tracks, `drgnx-history-ask' recording its questions in ASKED as
+\(METHOD PARAMS CALLBACK), newest first, with a long problem on each line."
+  (declare (indent 1))
+  `(progn
+     (require 'flymake)
+     (drgnx-test-with-clock ()
+       (drgnx-face-test--with
+         (setopt drgnx-face-inline-problems t)
+         (with-temp-buffer
+           (insert "one\ntwo\n")
+           (setq-local trusted-content :all)
+           (cl-letf (((symbol-function 'drgnx-history-tracked-p) (lambda (&rest _) t))
+                     ((symbol-function 'drgnx-history-ask)
+                      (lambda (_b method callback &optional params) (push (list method params callback) ,asked) t))
+                     ((symbol-function 'drgnx-face--eol-fit) (lambda (&rest _) (error "Lisp fitted a problem")))
+                     ((symbol-function 'current-column) (lambda (&rest _) (error "counted a column"))))
+             (setq-local flymake-diagnostic-functions
+                         (list (lambda (report &rest _)
+                                 (funcall report (list (flymake-make-diagnostic (current-buffer) 1 4 :warning "w-one-long-words")
+                                                       (flymake-make-diagnostic (current-buffer) 5 8 :error "e-two"))))))
+             (flymake-mode 1)
+             (unwind-protect (progn (flymake-start) ,@body) (flymake-mode -1))))))))
+
+(ert-deftest drgnx-face/the-hub-fits-the-end-of-line-problems ()
+  (let (asked)
+    (drgnx-face-test--eol-hub asked
+      ;; whole until the hub answers, and one question (after the pause) for both problems
+      (should (string-search "w-one-long-words" (drgnx-face-test--eol-text)))
+      (drgnx-test-advance 0.1)
+      (should (= 1 (length asked)))
+      (let* ((q (car asked)) (params (nth 1 q)) (items (append (plist-get params :items) nil)))
+        (should (equal (car q) "history/eol-fit"))
+        (should (equal (mapcar (lambda (i) (plist-get i :pos)) items) '(1 5)))
+        (should (equal (mapcar (lambda (i) (plist-get i :text)) items) '("w-one-long-words" "e-two")))
+        (should (integerp (plist-get params :width)))
+        (should (integerp (plist-get params :tab_width)))
+        ;; the hub's answer is what is shown: its fitted strings, the overlays made again
+        (funcall (nth 2 q) (list :tracked t :items (mapcar (lambda (i) (list :key (plist-get i :key) :text "FITTED")) items)) nil)
+        (let ((text (drgnx-face-test--eol-text)))
+          (should (string-search "FITTED" text))
+          (should-not (string-search "w-one-long-words" text)))))))
+
+(ert-deftest drgnx-face/an-answer-for-text-typed-since-is-dropped-and-asked-for-again ()
+  (let (asked)
+    (drgnx-face-test--eol-hub asked
+      (drgnx-face-test--eol-text)
+      (drgnx-test-advance 0.1)
+      (let ((q (car asked)))
+        (goto-char (point-max)) (insert "x")             ; typed before the answer: its positions are of older text
+        (funcall (nth 2 q) (list :tracked t :items (list (list :key 1 :text "STALE"))) nil)
+        (should-not (string-search "STALE" (drgnx-face-test--eol-text)))
+        (drgnx-test-advance 0.1)
+        (should (= 2 (length asked)))))))                ; the problems are asked for again
+
+(ert-deftest drgnx-face/a-hub-that-cannot-answer-leaves-the-fit-to-lisp ()
+  (let (asked)
+    (drgnx-face-test--eol-hub asked
+      (cl-letf (((symbol-function 'drgnx-history-ask) (lambda (&rest _) nil))
+                ((symbol-function 'current-column) (lambda (&rest _) 0))
+                ((symbol-function 'drgnx-face--eol-fit) (lambda (text &rest _) (concat "LISP:" text))))
+        (drgnx-face-test--eol-text)
+        (drgnx-test-advance 0.1)
+        (should (string-search "LISP:" (drgnx-face-test--eol-text)))))))
 
 (ert-deftest drgnx-face/an-end-of-line-problem-opens-with-its-icon ()
   "window-dark.html `.diag': the chip opens with its kind's icon (`circle-x', `triangle-alert') in the chip's face, then

@@ -1,8 +1,8 @@
-;;; hub-client-frame-test.el --- the hub client's framed lines give the core the events its filter gives -*- lexical-binding: t -*-
+;;; hub-client-frame-test.el --- the hub client's framed lines give the core the events the hub wrote -*- lexical-binding: t -*-
 ;; test-class: det
 ;; Pattern D (pure): no process.  Nidhogg's real framer (`nidhogg-workers--test-frame', the reader's own code) cuts
-;; recorded hub streams into messages; `drgnx-hub--client-batch' turns them into the core's events, and
-;; `drgnx-hub--lines' (the filter's splitter) does the same for the unframed path.  Both must agree.
+;; recorded hub streams into messages; `drgnx-hub--client-batch' turns them into the core's events.  Every hub connection
+;; is framed: there is no filter that reads a line in Lisp.
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-paths)
@@ -27,10 +27,6 @@
         (setq i (+ i len))))
     (nreverse out)))
 
-(defun drgnx-hub-client-frame-test--raw (line)
-  "(:raw BYTES): LINE as Sjá reads it, its UTF-8 bytes (a unibyte line is already that)."
-  (list :raw (if (multibyte-string-p line) (encode-coding-string line 'utf-8 t) line)))
-
 (defun drgnx-hub-client-frame-test--require-raw-prefix ()
   "Skip without Nidhogg's reader; on one older than `:raw-to-sja' (the reader's push to Sjá, `nidhogg-view--pushed':
 an older nh-io refuses the keyword, and the client then stays unframed), skip by name, or fail on the line (strict)."
@@ -50,18 +46,6 @@ them; a `view-model' line, which the reader pushes to Sjá, as (:pushed . SJÁ'S
                                              :raw-prefix drgnx-hub--model-prefix :raw-to-sja t))))
     (nreverse got)))
 
-(defun drgnx-hub-client-frame-test--unframed (chunks)
-  "The same through the filter's splitter, as the client's filter calls it."
-  (let (got (conn (make-symbol "conn")))
-    (cl-letf (((symbol-function 'process-live-p) (lambda (_) nil))
-              (process-get-table (make-hash-table)))
-      (cl-letf (((symbol-function 'process-get) (lambda (_c k) (gethash k process-get-table)))
-                ((symbol-function 'process-put) (lambda (_c k v) (puthash k v process-get-table))))
-        (dolist (c chunks)
-          (drgnx-hub--lines conn c (lambda (j) (push j got)) nil nil
-                            (lambda (line) (push (drgnx-hub-client-frame-test--raw line) got))))))
-    (nreverse got)))
-
 (defconst drgnx-hub-client-frame-test--model-line
   "{\"event\":\"view-model\",\"data\":{\"base\":0,\"hub\":1,\"model\":{\"ops\":[{\"remove\":[\"é\U0001F409\"]}]},\"reset\":true,\"version\":1,\"view\":\"v\"}}"
   "A hub's `view-model' line, non-ASCII inside.")
@@ -72,10 +56,9 @@ them; a `view-model' line, which the reader pushes to Sjá, as (:pushed . SJÁ'S
   (when (string-prefix-p drgnx-hub--model-prefix string) (cl-incf drgnx-hub-client-frame-test--parsed))
   (apply fn string args))
 
-(ert-deftest drgnx-hub-client-frame/a-view-model-line-goes-whole-and-unparsed-both-ways ()
-  "A `view-model' line between other events, cut anywhere (split over many chunks): the filter hands it whole to the
-model, the reader pushes it to Sjá itself (its answer comes, never the line as a string), each in its place among the
-events, and neither parses it in Lisp."
+(ert-deftest drgnx-hub-client-frame/a-view-model-line-goes-unparsed-to-sja ()
+  "A `view-model' line between other events, cut anywhere (split over many chunks): the reader pushes it to Sjá itself
+\(its answer comes, never the line as a string), in its place among the events, and nothing parses it in Lisp."
   (drgnx-hub-client-frame-test--require-raw-prefix)
   (let ((stream (concat "{\"event\":\"notice\",\"data\":{\"a\":1}}\n" drgnx-hub-client-frame-test--model-line "\n"
                         "{\"id\":3,\"result\":true}\n"))
@@ -86,8 +69,6 @@ events, and neither parses it in Lisp."
           (let ((chunks (drgnx-hub-client-frame-test--chunks stream seed))
                 (want (lambda (model) (list '(:event "notice" :data (:a 1)) model '(:id 3 :result t)))))
             (should (> (length chunks) 3))
-            (should (equal (funcall want (drgnx-hub-client-frame-test--raw drgnx-hub-client-frame-test--model-line))
-                           (drgnx-hub-client-frame-test--unframed chunks)))
             ;; no instance of view "v" is open: Sjá answers `none' for it
             (should (equal (funcall want '(:pushed "v" 1 none)) (drgnx-hub-client-frame-test--framed chunks t)))))
       (advice-remove 'json-parse-string #'drgnx-hub-client-frame-test--count-parse))
@@ -95,7 +76,7 @@ events, and neither parses it in Lisp."
 
 (ert-deftest drgnx-hub-client-frame/frames-with-the-model-prefix-pushed-to-sja ()
   "The reader is asked to push a `view-model' line to Sjá itself: there is no framing that hands it to Lisp."
-  (let (args (nidhogg-workers-framing t))
+  (let (args)
     (cl-letf (((symbol-function 'nidhogg-set-process-framing) (lambda (&rest a) (setq args a))))
       (drgnx-hub--frame 'conn))
     (should (equal drgnx-hub--model-prefix (plist-get (cddr args) :raw-prefix)))
@@ -122,28 +103,25 @@ through the connection's guard, and the batch goes on."
     (should (equal got '((:id 2))))
     (should (equal recorded '(("hub connection" error "Sjá refused a model line (-1)"))))))
 
-(ert-deftest drgnx-hub-client-frame/same-events-both-ways ()
+(ert-deftest drgnx-hub-client-frame/the-events-the-hub-wrote ()
   (drgnx-hub-client-frame-test--require-raw-prefix)
   (dolist (seed '(1 7 42 1000 31337))
-    (let ((chunks (drgnx-hub-client-frame-test--chunks drgnx-hub-client-frame-test--stream seed)))
-      (let ((framed (drgnx-hub-client-frame-test--framed chunks t))
-            (plain (drgnx-hub-client-frame-test--unframed chunks)))
-        (should (= 3 (length plain)))
-        (should (equal framed plain))
-        (should (equal (plist-get (plist-get (nth 1 framed) :result) :text) "日本 \U0001F409"))))))
+    (let* ((chunks (drgnx-hub-client-frame-test--chunks drgnx-hub-client-frame-test--stream seed))
+           (framed (drgnx-hub-client-frame-test--framed chunks t)))
+      (should (= 3 (length framed)))
+      (should (equal (plist-get (plist-get (nth 1 framed) :result) :text) "日本 \U0001F409")))))
 
 (ert-deftest drgnx-hub-client-frame/eof-without-newline ()
-  "A last line with no newline when the stream ends: framed, it is a message (the reader flushes it at the end);
-the filter drops it, as it always did.  Pinned so a change of either side shows."
+  "A last line with no newline when the stream ends is a message (the reader flushes it at the end)."
   (drgnx-hub-client-frame-test--require-raw-prefix)
   (let ((chunks (list "{\"id\":2,\"result\":{}}")))
     (should (equal (drgnx-hub-client-frame-test--framed chunks t) '((:id 2 :result nil))))
     (should (null (drgnx-hub-client-frame-test--framed chunks nil)))
-    (should (null (drgnx-hub-client-frame-test--unframed chunks)))))
+    ))
 
 (ert-deftest drgnx-hub-client-frame/stops-after-close ()
   (let (got (conn (make-symbol "dead")))
-    ;; dead before the batch began: like `drgnx-hub--lines', the batch is still read
+    ;; dead before the batch began: the batch is still read
     (cl-letf (((symbol-function 'process-live-p) (lambda (_) nil))
               ((symbol-function 'drgnx-hub--client-line) (lambda (_c j) (push j got))))
       (drgnx-hub--client-batch conn '(((:id 1) "" nil))))
@@ -163,26 +141,36 @@ the filter drops it, as it always did.  Pinned so a change of either side shows.
       (drgnx-hub--client-batch nil '(((:id 1) "" nil) ((:id 2) "" nil))))
     (should (equal got '((:id 2))))))
 
-(ert-deftest drgnx-hub-client-frame/off-without-switch ()
-  (let (called (nidhogg-workers-framing nil))
-    (cl-letf (((symbol-function 'nidhogg-set-process-framing) (lambda (&rest _) (setq called t))))
-      (drgnx-hub--frame 'conn))
-    (should-not called)))
+(ert-deftest drgnx-hub-client-frame/every-connection-is-framed ()
+  "`drgnx-hub--frame' frames whatever `nidhogg-workers-framing' says: it is the only way a hub's lines are read."
+  (dolist (switch '(nil t))
+    (let (args (nidhogg-workers-framing switch))
+      (cl-letf (((symbol-function 'nidhogg-set-process-framing) (lambda (&rest a) (setq args a))))
+        (drgnx-hub--frame 'conn))
+      (should (eq (nth 1 args) 'lines))
+      (should-not (memq :max-message args)))))
 
-(ert-deftest drgnx-hub-client-frame/off-without-feature ()
-  (let (called (nidhogg-workers-framing t))
-    (cl-letf (((symbol-function 'nidhogg-set-process-framing) nil))
-      (should-not (fboundp 'nidhogg-set-process-framing))
-      (drgnx-hub--frame 'conn)
-      (setq called (fboundp 'nidhogg-set-process-framing)))
-    (should-not called)))
+(ert-deftest drgnx-hub-client-frame/a-framing-that-fails-is-signalled ()
+  "There is no unframed fallback: a connection nothing reads is an error."
+  (cl-letf (((symbol-function 'nidhogg-set-process-framing) (lambda (&rest _) (error "no framing"))))
+    (should-error (drgnx-hub--frame 'conn))))
 
-(ert-deftest drgnx-hub-client-frame/on-with-switch-and-error-falls-back ()
-  (let (args (nidhogg-workers-framing t))
-    (cl-letf (((symbol-function 'nidhogg-set-process-framing)
-               (lambda (&rest a) (setq args a) (signal 'nidhogg-framing-unsupported nil))))
-      (drgnx-hub--frame 'conn))
-    (should (eq (nth 1 args) 'lines))
-    (should-not (memq :max-message args))))
+(ert-deftest drgnx-hub-client-frame/no-line-is-parsed-by-a-filter ()
+  "The unframed reader is gone: no splitter and no client filter, so no `json-parse-string' on the main thread for a hub
+line."
+  (should-not (fboundp 'drgnx-hub--lines))
+  (should-not (fboundp 'drgnx-hub--client-filter))
+  (should-not (fboundp 'drgnx-hub--model-line-p))
+  (should-not (fboundp 'drgnx-hub--model-line)))
+
+(ert-deftest drgnx-hub-client-frame/the-perf-harness-measures-where-framed-lines-are-handled ()
+  "A framed `view-model' line is handled by `drgnx-hub--model-pushed' and the batch (`drgnx-hub--client-batch'): the
+perf harness advises those, no function the client never calls."
+  (dolist (file '("harness/drgnx-perf-run.el" "harness/drgnx-perf-work.el"))
+    (with-temp-buffer
+      (insert-file-contents (expand-file-name file drgnx-dir))
+      (should-not (search-forward "drgnx-hub--model-line" nil t))
+      (goto-char (point-min))
+      (should (search-forward "'drgnx-hub--model-pushed" nil t)))))
 
 ;;; hub-client-frame-test.el ends here

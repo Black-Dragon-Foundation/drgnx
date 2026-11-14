@@ -855,17 +855,20 @@ hub %S, C-p %S, saw %S, messages %S"
 (defvar drgnx-perf-w--al-buf nil "The file the agents are in.")
 (defvar drgnx-perf-w--al-frames 0 "The agent frames applied since the run began.")
 (defvar drgnx-agents-editor-line--entries)
-(defvar drgnx-agents-editor-line--names)
+(defvar drgnx-perf-w--al-positions nil "The hub's positions for the three agents' lines: ((ORDINAL . LINE-POS)...).")
 (declare-function drgnx-agents-editor-line--apply "drgnx-agents-editor-line")
 
 (defun drgnx-perf-w--al-frame ()
-  "Post-command: the hub's next frame for the file (three agents on their lines), as the agent line takes it."
+  "Post-command: the hub's next frame for the file (three agents on their lines, with the positions and symbol names
+the hub puts on them), as the agent line takes it."
   (when (eq (current-buffer) drgnx-perf-w--al-buf)
     (cl-incf drgnx-perf-w--al-frames)
     (drgnx-agents-editor-line--apply
      drgnx-perf-w--al-buf
      (list :agents (mapcar (lambda (o) (list :ordinal o :session (format "s%d" o) :handle (format "Agent%d" o)
-                                             :mode "editing" :line (* o 300) :line_end (* o 300) :col 0))
+                                             :mode "editing" :line (* o 300) :line_end (* o 300) :col 0
+                                             :line_pos (cdr (assq o drgnx-perf-w--al-positions))
+                                             :symbol (format "fn-%d" o)))
                            '(1 2 3))))))
 
 (defun drgnx-perf-w-agents-line-setup ()
@@ -880,7 +883,9 @@ hub %S, C-p %S, saw %S, messages %S"
   (setq drgnx-perf-w--al-frames 0
         drgnx-perf-w--al-buf (find-file-noselect (expand-file-name "view.el" drgnx-perf-w--tmp)))
   (switch-to-buffer drgnx-perf-w--al-buf)
-  (setq drgnx-agents-editor-line--names nil)
+  (setq drgnx-perf-w--al-positions
+        (mapcar (lambda (o) (cons o (save-excursion (goto-char (point-min)) (forward-line (1- (* o 300))) (point))))
+                '(1 2 3)))
   (goto-char (point-min)) (forward-line 100)
   (add-hook 'post-command-hook #'drgnx-perf-w--al-frame)
   t)

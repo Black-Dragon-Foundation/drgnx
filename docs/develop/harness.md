@@ -127,6 +127,12 @@ A hub that does not build stops the run with the reason before any session start
 
 The helpers of the hub-client tests (`test/fixtures/hub-client-fixture.el`) are a fixture so that loading them registers
 no test: a test file that loaded `hub-client-test.el` whole ran its 54 tests again in its own session.
+`test/fixtures/gated-hub-fixture.el` builds on them for a panel whose rows a real hub builds (the Buffers panel):
+`drgnx-test-with-gated-hub` runs its body on the manual clock with a gated hub this Emacs is connected to, and
+`drgnx-test-hub-settle` waits for a condition, moving the hub's clock and releasing what it wrote before each look. A
+GUI row gets a hub of its own from `test/fixtures/ui-hub-fixture.el` (`drgnx-ui-hub-start`, `drgnx-ui-hub-stop`).
+Batch Emacs never redisplays and a test's wait never idles, so such a test sends the panel's env itself
+(`drgnx-view-env-update`) once the panel is shown.
 
 ### Native trampolines
 
@@ -572,7 +578,14 @@ How it works:
   `drgnx-job.el`, Magit's status and the Explorer.
 - It calls each scene's `drgnx-look-scene-NAME`. The scenes, in order, are listed in `drgnx-look-scenes`.
   A scene on the editor starts the scenes' hub first (the session starts none) and waits (20 s at most, else an error)
-  for the Explorer's Files rows, which come from the hub: without it the section is empty.
+  for the Explorer's Files rows, which come from the hub: without it the section is empty. It goes back to the
+  editor layout first, because a Work scene before it leaves the Work layout.
+  Once the scenes' hub runs, every step's answer checks the hub-fed views that a window of the frame shows, after a
+  redisplay like the shot's. It reports an error, naming the view, the classes its env went out for and the version
+  of the rows it applied, in two cases:
+  - its env never reached the hub;
+  - it has no applied version and an empty buffer.
+  The first case also catches a view that Lisp partly draws, such as the agent panel.
   A scene that changes the theme waits (5 s at most, else an error) until no hub-fed view is drawn dimmed: its rows
   wait for the hub's reset to the new theme, and a shot taken before would show the stale shade. `window-dark`'s
   status bar has the mockup's facts: the seeded plan run counted from the hub (`1 job`), and the gateway file's two
@@ -1295,15 +1308,17 @@ sees the runner's switches. CI's `unit` and `no-lisp-writes` jobs ([ci.md](ci.md
 
 A `cond` test is audited for `sleep-for` and `sit-for` only (with the audit failing, a real sleep fails it): it may wait for events and
 start processes, never wait on time. Only those two primitives are advised for it, so a test that stubs another one is
-not disturbed. A `sleep-for` that Emacs's own library makes to poll a child (`epg-wait-for-completion`: gpg's exit) is an event wait and
-not recorded; the seven `cond` tests that really sleep today are listed in `test/audit-cond-allowed.eld` (a reason and the slice that
-moves each to a virtual clock; `drgnx-lint/audit-cond-register` keeps the list honest, and it only shrinks).
+not disturbed. A `sleep-for` or `sit-for` that is a poll for an event is an event wait and not recorded: Emacs's own `epg-wait-for-completion` (gpg's exit),
+and the harness's pause between two looks (`drgnx-ui--poll-pause`: a file, a lock, a session group's end; `drgnx-file--sleep`: the file lock;
+`drgnx-perf--await-present`: a paint), named in `drgnx-run-ert--audit-event-polls`. A `cond` test that really sleeps on time is listed in
+`test/audit-cond-allowed.eld` (a reason and the slice that moves it to a virtual clock; `drgnx-lint/audit-cond-register` keeps the list
+honest, and it only shrinks); the list is empty.
 
 The audit also holds the patterns to their tools (`test/unit/run-ert-audit-test.el` has a row for each). With the audit
 on, the tests tagged `:gated` and `:handshake` ([Test patterns](#test-patterns)) run with these advised, again only
 while they run, and each failure names the test and carries one of these messages:
 
-- `gated test saw a hub line the gate did not release`: a line reached `drgnx-hub--client-filter` while
+- `gated test saw a hub line the gate did not release`: a line reached `drgnx-hub--client-batch` while
   `drgnx-test-gate--releasing` was nil. The gate's own connection (the barrier and the clock) has its own filter, and a
   line the gate delivers runs with the flag bound, so neither counts.
 - `gated test opened a hub connection outside the gate`: `drgnx-hub--open` ran while `drgnx-test-gate--active` was nil.
@@ -1464,12 +1479,15 @@ the client half of the `gated` pattern; the hub half is Ratatoskr's test clock a
   held the connection reads as open (`process-status`), so no close is seen before the data. The client's own
   `delete-process` runs the client's sentinel at once and drops what was held; `set-process-sentinel` and
   `process-sentinel` on a gated connection reach the client's sentinel behind the gate's.
-- **Gated connections are unframed.** The gate replaces the connection's filter (`set-process-filter`), which turns
-  Nidhogg's framing off ([hub.md](hub.md#the-clients-core)): a gated test always runs the client's filter path, whatever
-  `nidhogg-workers-framing` says. The framed path has its own rows (`hub-client-frame-test.el`, and the framed rows of
-  `hub-client-shell-test.el`, whose peers use `drgnx-test-peer-send`), and `hub-client-framed-test.el` runs the framed
-client against the real Ratatoskr (a subscription and a burst of calls; `handshake`, waiting on the hub's answers).
-`NIDHOGG_WORKERS` (for example `+nidhogg-workers-framing`) is passed into the test container, so a run can set the
+- **Gated connections hand parsed lines to the client's batch function.** The gate replaces the connection's filter
+  (`set-process-filter`), which turns Nidhogg's reader off, so the gate cuts the lines itself and delivers each one as
+  the reader would (`drgnx-test-gate--read`: parsed to plists and lists, a `view-model` line to
+  `drgnx-view-model-line` whole, the rest as a batch of one for `drgnx-hub--client-batch`, inside the connection's
+  guard). Every hub connection is framed in the client ([hub.md](hub.md#the-clients-core)); the reader's own rows are
+  `hub-client-frame-test.el`, the rows of `hub-client-shell-test.el` (whose peers use `drgnx-test-peer-send`), and
+  `hub-client-framed-test.el`, which runs the client against the real Ratatoskr (a subscription and a burst of calls;
+  `handshake`, waiting on the hub's answers).
+`NIDHOGG_WORKERS` (for example `+nidhogg-workers-treesit`) is passed into the test container, so a run can set the
 switches for the whole suite.
 - **The schedule** is given up front: `(CONN :answer METHOD)`, `(CONN :event NAME)`, `(CONN :line)`, `(CONN :eof)`
   and `(:pause LABEL)`. A step releases its connection's lines up to its own, in order: the gate reorders lines across

@@ -90,12 +90,12 @@ hello's answer) and the subscribe answer is held: the two come in either real or
         (should (eq drgnx-hub--events (drgnx-test-gate-conn 'sub-1)))))))
 
 (ert-deftest drgnx-delivery-gate/a-chunk-of-two-lines-is-two-releases ()
-  "What Emacs reads in one chunk (here two lines, the second split over two reads) reaches the client's filter one whole
+  "What Emacs reads in one chunk (here two lines, the second split over two reads) reaches the client's reader one whole
 line per call, each at its own step; so does everything the real hub sends."
   (drgnx-delivery-gate-test--with-hub
     (let* ((chunks nil) (events nil)
            (record (lambda (orig conn chunk) (push (cons conn chunk) chunks) (funcall orig conn chunk))))
-      (advice-add 'drgnx-hub--client-filter :around record)
+      (advice-add 'drgnx-test-gate--read :around record)
       (unwind-protect
           (drgnx-test-gated '((sub-1 :answer "subscribe") (:pause "inject")
                               (sub-1 :event "drgnx-gate-a") (sub-1 :event "drgnx-gate-b"))
@@ -114,7 +114,7 @@ line per call, each at its own step; so does everything the real hub sends."
             (should (cl-every (lambda (c) (let ((s (cdr c)))
                                             (and (string-suffix-p "\n" s) (= 1 (cl-count ?\n s)))))
                               chunks)))
-        (advice-remove 'drgnx-hub--client-filter record)))))
+        (advice-remove 'drgnx-test-gate--read record)))))
 
 (ert-deftest drgnx-delivery-gate/eof-comes-after-the-connections-held-lines ()
   "The hub stops while the subscribe answer is held: the client sees that answer, then the end, and the connection is

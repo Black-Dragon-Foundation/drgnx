@@ -82,6 +82,7 @@ Pruned with its view.")
 (defvar drgnx-view-patch-twin-of)
 (declare-function drgnx-view-patch-attach "drgnx-view")
 (declare-function drgnx-view-patch-view "drgnx-view")
+(declare-function drgnx-view-patch-sja "drgnx-view")
 (defvar drgnx-view-patch-patched-functions)
 (defvar drgnx-view-patch-id-prop)
 (defvar drgnx-view-nav-faces)
@@ -276,10 +277,11 @@ buffer has as its own \(`drgnx-view-patch...')."
   "A twin of the current buffer, a hub-fed view's, for display CLASS (what a `drgnx-view-patch-twin-function' returns):
 a new buffer in the same major mode, the view's nav locals (`drgnx-view-env--twin-locals') and its locals whose names
 start with one of PREFIXES (a module's state, read again before each command in the twin), attached to (view, CLASS),
-with the view buffer's handlers after a draw; SETUP then runs in it (a module removes what its mode added that only
-the view's buffer may do: a kill hook that ends the hub's view).  Nothing is subscribed: the hub sends every class its
-env named."
+with the view buffer's handlers after a draw, its rows held where the view buffer's are (Sjá or Lisp); SETUP then
+runs in it (a module removes what its mode added that only the view's buffer may do: a kill hook that ends the hub's
+view).  Nothing is subscribed: the hub sends every class its env named."
   (let* ((from (current-buffer)) (mode major-mode) (view (drgnx-view-patch-view drgnx-view-patch))
+         (sja (drgnx-view-patch-sja drgnx-view-patch))
          (patched (and (local-variable-p 'drgnx-view-patch-patched-functions)
                        drgnx-view-patch-patched-functions))
          (locals (mapcar (lambda (v) (cons v (and (boundp v) (symbol-value v)))) drgnx-view-env--twin-locals)))
@@ -288,7 +290,7 @@ env named."
       (setq-local drgnx-view-patch-twin-of from drgnx-view-env--twin-prefix prefixes)
       (dolist (l locals) (set (make-local-variable (car l)) (cdr l)))
       (drgnx-view-env--twin-copy from prefixes)
-      (drgnx-view-patch-attach view class)
+      (drgnx-view-patch-attach view class :sja (and sja t))     ; held where the view's own buffer holds its rows
       (dolist (f patched) (unless (eq f t) (add-hook 'drgnx-view-patch-patched-functions f nil t)))
       (add-hook 'pre-command-hook #'drgnx-view-env--twin-sync nil t)
       (when setup (funcall setup))
@@ -369,6 +371,22 @@ forgotten."
   "A window's size or a frame's windows changed: the width, once Emacs is idle (never inside a follow)."
   (drgnx-timer-debounce 'drgnx-view-env drgnx-view-env-delay #'drgnx-view-env--update-all :idle t :owner :core))
 
+(defun drgnx-view-env--send-unsent ()
+  "The env of each view a window now shows that the hub has no env for (a view opened by a command, or shown again
+after no window showed it): the hub builds nothing for a view until it hears where it shows."
+  (maphash (lambda (view v)
+             (when (and (buffer-live-p (car v)) (not (drgnx-view-env-classes view))
+                        (drgnx-view-env--window-classes view))
+               (drgnx-view-env-update view)))
+           (copy-hash-table drgnx-view-env--views)))
+
+(defun drgnx-view-env--buffer-changed (&optional frame)
+  "A window shows another buffer: a view now shown with no env sent gets it here, as redisplay runs this hook after
+the command, not once Emacs is idle (a command that opens a view and waits for its rows never idles; no timer, so
+nothing runs inside a follow); the widths as on a resize."
+  (drgnx-view-env--send-unsent)
+  (drgnx-view-env--size-changed frame))
+
 (defun drgnx-view-env--text-scale ()
   "`text-scale' changed in a view's buffer (buffer-local `text-scale-mode-hook'): its class changed."
   (maphash (lambda (view v) (when (eq (car v) (current-buffer)) (drgnx-view-env-update view)))
@@ -413,7 +431,7 @@ cache, each (font, char) measured once."
     (funcall f 'enable-theme-functions #'drgnx-view-env--theme-changed)
     (funcall f 'disable-theme-functions #'drgnx-view-env--theme-changed)
     (funcall f 'window-size-change-functions #'drgnx-view-env--size-changed)
-    (funcall f 'window-buffer-change-functions #'drgnx-view-env--size-changed)
+    (funcall f 'window-buffer-change-functions #'drgnx-view-env--buffer-changed)
     (funcall f 'drgnx-hub-connected-functions #'drgnx-view-env--reconnected)
     (funcall f 'drgnx-hub-event-functions #'drgnx-view-env-event))
   (setq drgnx-view-env--hooked on))

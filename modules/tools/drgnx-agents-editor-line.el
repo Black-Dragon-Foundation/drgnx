@@ -22,7 +22,6 @@
 (declare-function drgnx-chrome-add-tail-provider "drgnx-chrome")
 (declare-function drgnx-chrome-remove-tail-provider "drgnx-chrome")
 (declare-function drgnx-chrome-apply "drgnx-chrome")
-(declare-function drgnx-agents-editor-draw--line-pos "drgnx-agents-editor-draw")
 (declare-function drgnx-work-who-is-here "drgnx-work-code")
 (declare-function drgnx-agents-follow-start "drgnx-agents-follow")
 (declare-function drgnx-agents-follow-stop "drgnx-agents-follow")
@@ -32,11 +31,6 @@
 (defvar drgnx-agents-editor-followed)
 (defvar drgnx-chrome-short-breadcrumb-functions)
 (defvar drgnx-agents-editor-draw--modes)
-(declare-function drgnx-hub-call "drgnx-hub-client")
-(declare-function project-root "project")
-
-(defvar drgnx-agents-editor-line-symbol-function nil
-  "A function of (BUFFER POS) returning the name of the symbol at POS, or nil; the default asks `add-log-current-defun'.")
 
 (defvar-local drgnx-agents-editor-line--entries nil
   "This buffer's agent line entries from the last frame: ((POS ORDINAL SESSION STRING)...), in agent order.")
@@ -53,66 +47,16 @@
   "S safe for the mode line."
   (string-replace "%" "%%" s))
 
-(defvar drgnx-agents-editor-line-ask-function #'drgnx-agents-editor-line--ask
-  "A function of (ROOT FILE LINE CALLBACK) that asks the hub's outline for the symbol at LINE of FILE (relative to
-ROOT, as saved) and later calls CALLBACK with its name or nil; it returns nil when it could not ask (no hub).")
-
-(defvar-local drgnx-agents-editor-line--names nil
-  "This buffer's symbol names by line: (TICK (LINE . NAME)...), NAME nil while the hub's answer is awaited.  Dropped
-when the buffer's modification tick moves, so it holds at most one entry per line of the buffer.")
-
-(defun drgnx-agents-editor-line--ask (root file line callback)
-  "Ask the hub (`search/symbol-at') for the symbol at LINE of FILE in ROOT; CALLBACK takes the name.  Nil without a hub."
-  (when (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events))
-    (drgnx-hub-call "search/symbol-at" (list :root root :file file :line line)
-                    (lambda (result _error) (funcall callback (plist-get result :name))))
-    t))
-
-(defun drgnx-agents-editor-line--defun (buffer pos)
-  "The symbol at POS in BUFFER as `add-log-current-defun' finds it, or nil for a buffer of 2 MB or more."
-  (and (< (buffer-size buffer) 2000000)
-       (with-current-buffer buffer (save-excursion (goto-char pos) (add-log-current-defun)))))
-
-(defun drgnx-agents-editor-line--named (buffer pos)
-  "The symbol at POS in BUFFER, once per (modification tick, line): a saved local file's from the hub's outline
-\(nil until it answers), else computed here."
-  (with-current-buffer buffer
-    (let ((tick (buffer-chars-modified-tick)) (line (line-number-at-pos pos)))
-      (unless (eql (car drgnx-agents-editor-line--names) tick) (setq drgnx-agents-editor-line--names (list tick)))
-      (let ((names drgnx-agents-editor-line--names))
-        (if-let* ((cell (assq line (cdr names))))
-            (cdr cell)
-          (let ((cell (list line)) (file buffer-file-name))
-            (setcdr names (cons cell (cdr names)))
-            (unless (and file (not (buffer-modified-p)) (not (file-remote-p file))
-                         (let ((root (expand-file-name (if-let* ((p (progn (require 'project) (project-current nil)))) (project-root p)
-                                                         (file-name-directory file)))))
-                           (funcall drgnx-agents-editor-line-ask-function root (file-relative-name file root) line
-                                    (lambda (name)
-                                      (when (and (buffer-live-p buffer)
-                                                 (eq (buffer-local-value 'drgnx-agents-editor-line--names buffer) names))
-                                        (setcdr cell name))))))
-              (setcdr cell (drgnx-agents-editor-line--defun buffer pos)))
-            (cdr cell)))))))
-
-(defun drgnx-agents-editor-line--symbol (buffer pos)
-  "The symbol at POS in BUFFER, or nil.  Asked once per frame, never in redisplay; the name is kept per line
-\(`drgnx-agents-editor-line--named')."
-  (condition-case nil
-      (cond (drgnx-agents-editor-line-symbol-function (funcall drgnx-agents-editor-line-symbol-function buffer pos))
-            (t (drgnx-agents-editor-line--named buffer pos)))
-    (error nil)))
-
 (defun drgnx-agents-editor-line--chip (text kind help)
   (propertize text 'face 'drgnx-chrome-crumb 'mouse-face 'mode-line-highlight 'help-echo help
               'drgnx-agents-editor-line kind 'local-map drgnx-agents-editor-line--map))
 
-(defun drgnx-agents-editor-line--string (agent pos buffer others)
-  "The agent line for AGENT (at POS in BUFFER), OTHERS more agents in the buffer."
+(defun drgnx-agents-editor-line--string (agent pos others)
+  "The agent line for AGENT (at POS in the buffer), OTHERS more agents in the buffer."
   (let* ((ord (plist-get agent :ordinal))
          (mode (or (cdr (assoc (plist-get agent :mode) drgnx-agents-editor-draw--modes)) (plist-get agent :mode) "here"))
          (where (plist-get (plist-get agent :projected) :worktree_label))
-         (sym (and pos (not where) (drgnx-agents-editor-line--symbol buffer pos)))
+         (sym (and pos (not where) (plist-get agent :symbol)))       ; the hub's: hrafn's outline of its text
          (title (or (plist-get agent :plan_entry) (plist-get agent :step_title)))
          (face (plist-get (drgnx-agent-identity ord) :face)))
     (concat
@@ -133,12 +77,12 @@ when the buffer's modification tick moves, so it holds at most one entry per lin
   "Cache BUFFER's agent line entries from FRAME."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
-      (let* ((agents (cl-remove-if-not (lambda (a) (plist-get a :line)) (plist-get frame :agents)))
+      (let* ((agents (cl-remove-if-not (lambda (a) (plist-get a :line_pos)) (plist-get frame :agents)))
              (n (length agents)) (had (and drgnx-agents-editor-line--entries t)) entries)
         (dolist (a agents)
-          (let ((pos (drgnx-agents-editor-draw--line-pos (plist-get a :line) 0)))
+          (let ((pos (min (plist-get a :line_pos) (point-max))))
             (push (list pos (plist-get a :ordinal) (plist-get a :session)
-                        (drgnx-agents-editor-line--string a pos buffer (1- n)))
+                        (drgnx-agents-editor-line--string a pos (1- n)))
                   entries)))
         (setq drgnx-agents-editor-line--entries (nreverse entries))
         (force-mode-line-update)

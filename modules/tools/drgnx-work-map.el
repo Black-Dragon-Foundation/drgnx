@@ -156,7 +156,7 @@ chain dim (`drgnx-work-dim' in its rows), so no class has a face of the editor's
 (defun drgnx-work-map-rows-attach (view)
   "Make the current map buffer the hub-fed view VIEW (the map view's id): its rows come as patches for the classes
 whose env this Emacs sends while a window shows it; the selection goes to the hub by the trailing notice."
-  (drgnx-view-patch-attach view "unshown")
+  (drgnx-view-patch-attach view "unshown" :sja t)
   (setq-local drgnx-view-patch-twin-function #'drgnx-work-map--twin
               drgnx-view-nav-through-faces drgnx-work-map--through-faces
               drgnx-view-nav-faces drgnx-work-map--nav-faces)
@@ -522,7 +522,7 @@ per `drgnx-view-delay')."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (setq drgnx-work-map--asked nil)
-      (when (and (not err) drgnx-view-patch (drgnx-view-p drgnx-view))
+      (when (and (not err) drgnx-view-patch)
         ;; the layout the user asked for moves (`drgnx-work-map--motion-frame'); live patches never call this
         (if drgnx-work-map--motion (drgnx-work-map--motion-frame) (drgnx-view-hurry drgnx-view))))))
 
@@ -672,7 +672,7 @@ nothing.  Nil when WINDOW scrolls sideways."
   "A layout the user asked for is on its way (the hub's patches and answer come): each window showing the map asks
 the compositor for the picture of the layout it shows now, and remembers where its cards are.  Nothing when the map
 cannot move here (`drgnx-work-map--motion-p') or shows no card (the outline): the new layout then jumps."
-  (when (and drgnx-work-space--view (drgnx-view-p drgnx-view) (drgnx-work-map--sja) (drgnx-work-map--motion-p))
+  (when (and drgnx-work-space--view drgnx-view-patch (drgnx-work-map--sja) (drgnx-work-map--motion-p))
     (let ((windows nil))
       (dolist (w (get-buffer-window-list (current-buffer) nil t))
         (when-let* ((rects (drgnx-work-map--item-rects w)))

@@ -1274,6 +1274,8 @@ does a shell's that failed at once (`drgnx-term-abnormal-command-exit-runtime'),
                           (format "exit %s" (plist-get data :code)))))
     (force-mode-line-update))))
 
+(put 'drgnx-term--event 'hub-events-taken '("term/*"))
+
 (defun drgnx-term--event (event data)
   "`drgnx-hub-event-functions': a `term/*' event goes to its terminal's buffer; `term/detached' (terminals another
 drgnx left running) asks what is offered now."

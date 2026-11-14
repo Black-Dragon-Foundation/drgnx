@@ -1478,6 +1478,8 @@ regexp of yours) is recorded as `tests' in `drgnx-statusbar--errors', never sign
     (error (setq drgnx-statusbar--errors (assq-delete-all 'tests drgnx-statusbar--errors))
            (drgnx-statusbar--note-error 'tests err))))
 
+(put 'drgnx-statusbar--hub-tests 'hub-events-taken '("events"))
+
 (defun drgnx-statusbar--hub-tests (event data)
   "On `drgnx-hub-event-functions': the test runs among the `events' the hub sent reach the `tests' segment
 \(`drgnx-statusbar-note-tests')."

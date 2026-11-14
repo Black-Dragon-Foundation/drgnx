@@ -116,7 +116,7 @@ read again before each command there; a Timeline's lit lanes on its own instance
 
 (defun drgnx-work-trail--rows-attach (view params)
   "Make the current buffer the hub-fed trail or Timeline VIEW and ask the hub for it with PARAMS."
-  (drgnx-view-patch-attach view "unshown")
+  (drgnx-view-patch-attach view "unshown" :sja t)
   (setq-local drgnx-view-patch-twin-function #'drgnx-work-trail--twin)
   (setq drgnx-work-trail--hub-params params)
   (require 'drgnx-view-env)

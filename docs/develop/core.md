@@ -1632,7 +1632,7 @@ What redisplay reads, built once per change (PERF-L L6):
 
 | Memo | On | Rebuilt when | Epoch |
 | --- | --- | --- | --- |
-| `sticky-segment` (`drgnx-sticky.el`) | window | the window's start moves, it shows another buffer, or the epoch `sticky` of its buffer moves | `sticky` (per buffer), bumped by an edit at or above the start of a window showing the buffer |
+| `sticky-segment` (`drgnx-sticky.el`) | window | the window's start moves, it shows another buffer, or the epoch `sticky` of its buffer moves | `sticky` (per buffer), bumped by an edit at or above the start of a window showing the buffer, by the hub's answer for its scopes and once its tree-sitter parse lands |
 | `live-header` (`drgnx-live.el`) | buffer | the epoch `live-tabs` of the view moves | `live-tabs` (per buffer), bumped where the tabs, the watched tab or driving change (`drgnx-live--tabs-changed`) |
 | `statusbar-bar` (`drgnx-statusbar.el`) | window | one of six epochs moves, or a plain value: the position the bar shows (not point: the text of `statusbar-position`, nil for a bar with no position), the change tick, the narrowing, width, full or compact, the selection, the buffer, `default-directory`, `mode-line-process`, a macro being recorded, keycast's keys, which-function's name, the text of other packages' entries this redisplay, the count of toasts waiting (24 keys). Built again, it measures only texts it has not met: the cache `statusbar-widths` (256, least recently used out) keeps each width per text, face properties, face and layout key, so a cursor move measures the new position alone, and a long branch is cut by halving. A segment that says the same again gives the same string (`drgnx-statusbar--texts`, per segment id), whose width is kept by the string object (`drgnx-statusbar--width-of`, weak), so the fit's repeated widths allocate nothing; a bar too wide drops its segments into one list of cells and makes its lists once; the row's font height comes from `drgnx-pixels-font-metrics` (one `font-info` per font name) |
 | `statusbar-position` (`drgnx-statusbar.el`) | window | the point it shows (the window's, or the buffer's when the window shows another), the change tick, the narrowing, the selection, whether you are in it or the large-file flag (7 keys) |
@@ -1677,7 +1677,7 @@ names, and on every bar it allocated more than the other segments together. Test
 
 Each module activates its memo in its `:setup` (`drgnx-memo-activate`), so turning the module off empties it. The Live
 view bumps by hand rather than by `:watch`: its tests and its use do not wait for the module's setup, and the sites are
-all in one file. The segment and the header are read per redisplay; a hit allocates 0 (tests: `mod-sticky-test.el`,
+all in one file. The segment and the header are read per redisplay; a hit allocates 0 (tests: `mod-sticky-hub-test.el`,
 `mod-live-test.el`).
 
 ### Caches
@@ -1916,7 +1916,9 @@ a window change. The store observes at the end of each command and on window cha
 shown again by the window manager alone is seen at the next command in it. With the store off (core/workbench
 turned off), the answer is the live windows': the frames `next-frame` reaches from the selected one (that
 terminal's) and their window trees, as `get-buffer-window` with `'visible` answers but without its window list;
-then a stale view wakes only on its next mark. Either way the answer allocates nothing. A timer draw of a hidden
+then a stale view wakes only on its next mark. Either way the answer allocates nothing. A buffer whose rows Sjá holds
+has no view: `(drgnx-view-buffer-shown-p BUFFER)` answers for it from the same source (the store's recorded windows
+while the store is on, else the live windows), never `get-buffer-window`. A timer draw of a hidden
 view sets `stale`, adds 1 to `:stale-skips` and returns: **a hidden view draws nothing and allocates nothing**.
 While it is stale its marks arm no timer (they cost a hash put and the visibility read). No view adds a function to
 a window-change hook.
@@ -2046,6 +2048,11 @@ through `core/drgnx-color.el`), the terminal's width table, the time zone and re
 - **One message per kind of change.** A theme change sends each (view, class) one env (`enable-theme-functions`,
   `disable-theme-functions`); a resize is debounced through `drgnx-timer-debounce` (0.1 s idle: never inside a follow); `text-scale` in the view's
   buffer makes a new class, and the class it left is forgotten.
+- **A view a window starts showing sends its env at once.** A view registered before any window shows it (a command
+  makes its buffer, then shows it) has no env, and the hub builds nothing for it. When a window starts showing it
+  (`window-buffer-change-functions`, which redisplay runs after the command), its env goes from that hook, not after
+  0.1 s idle. A command that opens a view and waits for its rows never idles. No timer is used, so nothing runs
+  inside a follow.
 - **Reconnect:** on `drgnx-hub-connected-functions` every live (view, class)'s env is sent again, then the view's
   RESUBSCRIBE runs: a restarted hub holds no env and builds nothing until then.
 - **Glyph asks:** the hub's `view-glyphs` (chars its font file lacks, or a role with no file) is answered with
@@ -2143,17 +2150,14 @@ most `drgnx-view-patch-paused-max` (256), and applied in order on resume; past t
 
 **The native view model.** A view whose keys move a selection also gets its model (`view-model`, docs/develop/hub.md
 "The native view model"), which Sjá, in Nidhogg (`nidhogg-views.el`, loaded by `require`), holds and answers keys
-from. drgnx never parses it: the hub client routes a line that starts `{"event":"view-model"` before any parse
-(`drgnx-hub--model-line-p`, a compare in place). Framed (`nidhogg-workers-framing`), Nidhogg's reader pushes the line
-to Sjá itself (`:raw-prefix` with `:raw-to-sja`), so it never becomes a Lisp string; there is no framed path that
-hands it to Lisp. A Search window move's line was 1.2 MB, 87 % of what a page consed, and the reason the full
+from. drgnx never parses it: Nidhogg's reader pushes a line that starts `{"event":"view-model"`
+to Sjá itself (`:raw-prefix` with `:raw-to-sja`), so it never becomes a Lisp string; there is no path that hands it to
+Lisp. A Search window move's line was 1.2 MB, 87 % of what a page consed, and the reason the full
 collection came every ~42 pages (with the push and the match nodes' paths cut, 2026-11-11, pinned, release hub, 3
-runs: a page conses 224 kB, was 1540; page p50 24.6 ms, was 36.6; no page with a collection, was 1 in 12). Unframed,
-the filter routes the line to `drgnx-view-model-line`, which hands it whole to Sjá (`nidhogg-view-push`); without
-Sjá it is dropped. Its batch entry carries Sjá's answer, which goes to
+runs: a page conses 224 kB, was 1540; page p50 24.6 ms, was 36.6; no page with a collection, was 1 in 12). Its batch entry carries Sjá's answer, which goes to
 `drgnx-view-model--pushed` (the same decisions as after `nidhogg-view-push`); Sjá's refusal is reported by the
 connection's guard, as a failed push is. The reader ends a batch before such a line, so it reaches Sjá after every
-message before it, as in the filter's order.
+message before it.
 - **Instances:** every hub-fed buffer opens an instance of its view in Sjá at attach (`drgnx-view-patch-handle`),
   closed with the buffer or at teardown; the view (its queue and stream in Sjá, and `drgnx-view-model--views`, the
   editor's side: an outstanding resync) goes with its last buffer.
@@ -2263,7 +2267,9 @@ The draw (`drgnx-view-sja-draw`) asks Sjá for the edits that turn the region in
 - it confirms the batch with `drawn`. A batch never confirmed, or a region whose length is not Sjá's drawn state, is
   drawn whole next time;
 - the windows keep their place, turned into (ROW . OFFSET) with `place` and back with `pos`. A window whose point
-  was at the region's end follows the tail;
+  was at the region's end follows the tail, once rows are drawn there (the first rows leave point at the region's
+  start, so a view opens at its top). A window whose row went falls to the row now in its place (a marker put
+  there before the edits, released after), not to the top;
 - the text is read-only unless the buffer is.
 
 The buffer keeps its `drgnx-view-patch` state (the pairing, epoch, styles and their faces, images, stale shade and
@@ -2272,6 +2278,21 @@ Sjá handle) with the SJA slot set, and no `drgnx-view`. A view's own properties
 over the span it changed (`drgnx-view-sja-drawn-functions`). The terminal is the first view on it
 (`docs/develop/terminal.md`).
 
+**The other hub-fed views on it.** `drgnx-view-patch-attach` with `:sja t` holds the pair's rows in Sjá where this
+Emacs has them (`nidhogg-view-rows`); the Explorer, the Search view, the Work map, Board, Trail, Detail and Flow, the
+Extensions list and Run and Debug attach so. Sjá keeps one row store per display class, so a view's twins in two
+classes draw their own rows. A view's code calls the same helpers with VIEW nil (the buffer has no `drgnx-view`):
+`drgnx-view-row-start`, `drgnx-view-row-end`, `drgnx-view-row-count`, `drgnx-view-key-at`, `drgnx-view-draw-now`
+and `drgnx-view-hurry` answer from Sjá. After a draw the class step runs on what it drew: the draw names the rows
+and node ids it drew, `drgnx-view-nav-sja-step` asks Sjá for each changed node's pieces (`spans`: cut where the
+runs' faces change, so a boxed chip keeps its face) and for the dim runs (`dimruns`: consecutive rows whose every
+node is dim, and the dim nodes of the other rows), and puts only the overlays; then
+`drgnx-view-patch-patched-functions` runs with VIEW nil and the drawn rows' keys. A patch that reaches Lisp parsed
+(a test's, or one sent before the pair's env) goes to Sjá as the raw line would (`drgnx-view-apply-patch`). The git
+letters are rows read as data: `:sja 'data` holds them in Sjá and never draws them, and `drgnx-git-status` and the
+branch read a row's property there (`prop`), with no row table in Lisp. The agents' editor-here feed and the agent
+panel (the hub's rows among its own) keep the Lisp path for now.
+
 **What stays in Lisp** (the user, 2026-11-14: nothing that does work per row or per update in Lisp, only commands,
 keymaps, settings and the final insert or draw call):
 
@@ -2279,6 +2300,11 @@ keymaps, settings and the final insert or draw call):
 - an image for an SVG (once per image);
 - the insert itself and the windows' places;
 - the messages to the hub.
+
+A dock section is as tall as its rows (`drgnx-wb--fit-window`, `window-resize` only); the count is the view's own,
+`drgnx-wb--section-rows`: the rows Sjá holds (`drgnx-view-row-count nil`, which a draw of the window's slice does not
+all put in the buffer) or the inserter's, and no line of the buffer is counted for a view. A buffer that is not a view
+keeps `count-lines`.
 
 There are two recorded exceptions:
 

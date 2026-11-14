@@ -3,34 +3,28 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; A dock section below the Explorer listing the definitions of the file in the editor (imenu),
-;; nested as imenu nests them.  A click shows the definition in the editor and keeps you in the
-;; Outline (browse on); RET goes there.  It follows the editor (the bus's `editor-changed' edge)
-;; and, half a second after you stop typing, the file's changes.  Files without an index, remote
-;; files and very large buffers get a one-line notice instead — computing an index never blocks
-;; typing.  The definition the editor's point is in is marked with an overlay (the Outline's own point is
-;; yours and never moves), on the bus's `editor-point-changed' edge.
-;;
-;; The Outline is a view (wb/drgnx-view.el): a refresh syncs the keyed rows (NAME DEPTH ORDINAL), so an edit that only
-;; moves definitions redraws no row, and the positions are integers (the imenu markers are released at once).
-;; See docs/guide/workbench.md.
+;; A dock section below the Explorer listing the definitions of the file in the editor, nested by the definitions
+;; around them.  The hub builds the list (`outline/set', docs/develop/hub.md, "The Outline panel's rows"): it outlines
+;; the file with Hrafn's parse, from the editor's unsaved text where the edit history tracks the buffer, else from the
+;; disk, again once the edits pause, and sends the rows, which Sjá draws.  Lisp sends the file the editor shows (when
+;; that changes, and after a save) and nothing per keystroke.  A click shows the definition in the editor and keeps
+;; you in the Outline (browse on); RET goes there.  The definition the editor's point is in is marked with an overlay
+;; (the Outline's own point is yours and never moves): Sjá names it (`at-line'), on the bus's `editor-point-changed'
+;; edge.  A file with nothing to outline, a remote file or one past a megabyte gets a one-line notice; with the hub
+;; down the section says it waits for it.  See docs/guide/workbench.md.
 
 ;;; Code:
 (require 'cl-lib)
-(require 'seq)
-(require 'imenu)
 (require 'drgnx-wb)
-(require 'drgnx-timer)
 (require 'drgnx-view)
-(require 'drgnx-large-file)
 (require 'drgnx-icons)
+(require 'drgnx-history)                 ; `drgnx-history-ask': `outline/scopes' of a tracked buffer
 
-(defface drgnx-outline-group '((t :inherit shadow)) "A group of definitions (imenu submenu)." :group 'drgnx)
-
-(defcustom drgnx-outline-max-size (* 1024 1024)
-  "Buffers larger than this (characters) get no outline." :type 'integer :group 'drgnx)
-(defcustom drgnx-outline-delay 0.5 "Idle seconds after an edit before the Outline follows it."
-  :type 'number :group 'drgnx)
+(declare-function drgnx-hub--call-on "drgnx-hub-client" (conn method params callback &rest keys))
+(declare-function drgnx-hub-call "drgnx-hub-client" (method params callback &rest keys))
+(declare-function drgnx-view-env-register "drgnx-view-env" (view buffer &optional resubscribe headless))
+(declare-function nidhogg-view-get "nidhogg-views" (h what &optional arg arg2))
+(defvar drgnx-hub--events)
 
 (defface drgnx-outline-current '((t :inherit drgnx-accent))
   "The definition the editor's point is in: a marker of where you are, its text in the accent, never a fill, so the
@@ -38,10 +32,12 @@ sidebar's one selection stays the only one." :group 'drgnx)
 
 (defconst drgnx-outline-title "Outline" "The Outline section's title.")
 (defconst drgnx-outline-buffer-name" *drgnx outline*" "Internal (a leading space): not in C-x b or ibuffer.")
-(defvar drgnx-outline--rows [] "Per line: [NAME DEPTH POSITION-or-nil KEY]; POSITION is an integer.")
-(defvar drgnx-outline--table (make-hash-table :test #'equal) "KEY -> the row of `drgnx-outline--rows' it names.")
+(defconst drgnx-outline-hub-view "outline" "The Outline's hub-fed view (`outline/set').")
 (defvar drgnx-outline--source nil "The buffer the Outline shows.")
-(defvar drgnx-outline--reveal nil "Non-nil: a new file's rows are marked; their first draw shows the current definition.")
+(defvar drgnx-outline--sent :none "The file last sent to the hub (nil: none), or :none before the first.")
+(defvar drgnx-outline--reveal nil "Non-nil: a new file's first rows show the current definition.")
+(defvar drgnx-outline--mark nil "The overlay that marks the current definition, or nil.")
+(defvar drgnx-outline--waiting nil "The overlay saying the Outline waits for the hub, or nil.")
 
 (defvar drgnx-outline-mode-map
   (let ((m (make-sparse-keymap)))
@@ -54,148 +50,135 @@ sidebar's one selection stays the only one." :group 'drgnx)
   (setq-local truncate-lines t cursor-type nil mode-line-format nil)
   (drgnx-wb-rows-setup))
 
+(defun drgnx-outline--hub-p ()
+  "Non-nil when the hub's subscribed connection is up (the hub sends the rows there)."
+  (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events)))
+
 (defun drgnx-outline--buffer ()
+  "The Outline's buffer, made a hub-fed view when it is not."
   (or (get-buffer drgnx-outline-buffer-name)
       (with-current-buffer (get-buffer-create drgnx-outline-buffer-name)
         (drgnx-outline-mode)
-        (drgnx-view-attach 'outline)
+        (drgnx-view-patch-attach drgnx-outline-hub-view "unshown" :sja t)
+        (add-hook 'drgnx-view-patch-patched-functions #'drgnx-outline--patched nil t)
+        (require 'drgnx-view-env)
+        (drgnx-view-env-register drgnx-outline-hub-view (current-buffer) #'drgnx-outline--resend)
         (current-buffer))))
 
-(defun drgnx-outline--position (pos)
-  "POS (an imenu position: a marker, an overlay or an integer) as an integer; a marker is released."
-  (cond ((markerp pos) (prog1 (marker-position pos) (set-marker pos nil)))
-        ((overlayp pos) (overlay-start pos))
-        (t pos)))
+(defun drgnx-outline--file (src)
+  "The file the hub outlines for SRC: its local file's name, or nil (no file, a remote one)."
+  (when-let* (((buffer-live-p src)) (f (buffer-file-name src)) ((not (file-remote-p f))))
+    (expand-file-name f)))
 
-(defun drgnx-outline--flatten (index depth)
-  "IMENU INDEX as rows [NAME DEPTH POSITION], POSITION an integer: no imenu marker stays in the source buffer."
-  (cl-loop for (name . rest) in index
-           when (and (stringp name)                     ; imenu answers (nil) when it found nothing
-                     (not (equal name (car imenu--rescan-item))))
-           append (if (imenu--subalist-p (cons name rest))
-                      (cons (vector name depth nil) (drgnx-outline--flatten rest (1+ depth)))
-                    (list (vector name depth (drgnx-outline--position rest))))))
+(defun drgnx-outline--wait-for-hub ()
+  "With the hub not up, show the line saying the Outline waits for it; its first rows take the line away."
+  (with-current-buffer (drgnx-outline--buffer)
+    (unless (or (drgnx-outline--hub-p) (overlayp drgnx-outline--waiting))
+      (setq drgnx-outline--waiting (make-overlay (point-min) (point-min)))
+      (overlay-put drgnx-outline--waiting 'before-string
+                   (propertize "  Waiting for the hub to outline this file…\n" 'face 'shadow)))))
 
-(defun drgnx-outline--index (src)
-  "SRC's rows, or a notice string."
-  (with-current-buffer src
-    (cond ((and buffer-file-name (file-remote-p buffer-file-name)) "Outline is off for remote files")
-          ((or (drgnx-large-file-p) (> (buffer-size) drgnx-outline-max-size))   ; a chunk is small, its file is not
-           "This file is too large for an outline")
-          (t (let ((rows (while-no-input            ; a key pressed meanwhile wins: try again later
-                           (ignore-errors
-                             (let ((imenu-auto-rescan t) (imenu--index-alist nil) (non-essential t))
-                               (drgnx-outline--flatten (imenu--make-index-alist t) 0))))))
-               (cond ((eq rows t) 'interrupted)
-                     (rows)
-                     (t "No outline for this file")))))))
+(defun drgnx-outline--send (file)
+  "Tell the hub the Outline shows FILE (nil: no file)."
+  (setq drgnx-outline--sent file)
+  (if (not (drgnx-outline--hub-p))
+      (drgnx-outline--wait-for-hub)
+    (drgnx-hub--call-on drgnx-hub--events "outline/set"
+                        (if file (list :view drgnx-outline-hub-view :file file) (list :view drgnx-outline-hub-view))
+                        #'ignore)
+    (setq drgnx-view-patch-hurry t)))
+
+(defun drgnx-outline-scopes (buffer line callback)
+  "Ask the hub for the definitions around LINE (from 1) of BUFFER's file (`outline/scopes': the Outline's parse of it,
+BUFFER's unsaved text where the edit history tracks it, its changes handed over first, else the disk).  CALLBACK gets
+them as a list of plists (:name :line), outermost first; nil for none or a failed question.  Nil when nothing was
+asked: no local file, or no hub."
+  (let ((cb (lambda (result _error) (funcall callback (plist-get result :scopes)))))
+    (or (drgnx-history-ask buffer "outline/scopes" cb (list :line line))
+        (when-let* ((file (drgnx-outline--file buffer)) ((drgnx-outline--hub-p)))
+          (drgnx-hub-call "outline/scopes" (list :file file :line line) cb)
+          t))))
+
+(defun drgnx-outline--resend (_view)
+  "The hub is up again (`drgnx-view-env-register'): it gets the file again."
+  (unless (eq drgnx-outline--sent :none) (drgnx-outline--send drgnx-outline--sent)))
+
+(defun drgnx-outline--saved ()
+  "`after-save-hook' of the source: the hub reads the file again (the name too: a `write-file')."
+  (when (eq (current-buffer) drgnx-outline--source)
+    (drgnx-outline--send (drgnx-outline--file (current-buffer)))))
 
 (defun drgnx-outline--watch (src)
-  "Follow SRC's edits (and stop following the previous source)."
+  "Follow SRC's saves (and stop following the previous source)."
   (unless (eq src drgnx-outline--source)
     (when (buffer-live-p drgnx-outline--source)
-      (with-current-buffer drgnx-outline--source (remove-hook 'after-change-functions #'drgnx-outline--changed t)))
+      (with-current-buffer drgnx-outline--source (remove-hook 'after-save-hook #'drgnx-outline--saved t)))
     (setq drgnx-outline--source src)
     (when (buffer-live-p src)
-      (with-current-buffer src (add-hook 'after-change-functions #'drgnx-outline--changed nil t)))))
-
-(defun drgnx-outline--changed (&rest _)
-  "An edit in the source: refresh once typing pauses."
-  (drgnx-timer-soon 'outline-refresh drgnx-outline-delay #'drgnx-outline--idle :idle t
-                    :owner (get-buffer drgnx-outline-buffer-name)))
-
-(defun drgnx-outline--idle ()
-  (drgnx-outline-refresh))
+      (with-current-buffer src (add-hook 'after-save-hook #'drgnx-outline--saved nil t)))))
 
 (defun drgnx-outline-refresh (&rest _)
-  "Show the definitions of the file in the editor — only while the Outline is shown (showing it
-refreshes it): an index can take most of a second to build.  Hidden, it stops following edits."
-  (if (get-buffer-window drgnx-outline-buffer-name t)
+  "Show the definitions of the file in the editor, while the Outline is shown (showing it refreshes it); hidden, it
+stops following the editor's saves."
+  (if (and (get-buffer drgnx-outline-buffer-name) (drgnx-view-buffer-shown-p (get-buffer drgnx-outline-buffer-name)))
       (drgnx-outline--refresh-1)
     (drgnx-outline--watch nil)))
 
-(defun drgnx-outline--keyed (rows)
-  "Make ROWS (vectors [NAME DEPTH POSITION]) `drgnx-outline--rows', each with its key (NAME DEPTH ORDINAL) added:
-ORDINAL counts the earlier rows with that name and depth.  Fills `drgnx-outline--table'; returns the keys in order."
-  (let ((seen (make-hash-table :test #'equal)) (keyed nil))
-    (clrhash drgnx-outline--table)
-    (dolist (r rows)
-      (let* ((nd (cons (aref r 0) (aref r 1))) (n (gethash nd seen 0)) (key (list (aref r 0) (aref r 1) n))
-             (row (vector (aref r 0) (aref r 1) (aref r 2) key)))
-        (puthash nd (1+ n) seen)
-        (puthash key row drgnx-outline--table)
-        (push row keyed)))
-    (setq keyed (nreverse keyed)
-          drgnx-outline--rows (vconcat keyed))
-    (mapcar (lambda (r) (aref r 3)) keyed)))
-
-(defun drgnx-outline--sig (key)
-  "KEY's signature: whether its row is a group.  A definition that moved has the same signature."
-  (let ((r (gethash key drgnx-outline--table))) (and r (null (aref r 2)) t)))
-
-(defun drgnx-outline--render-row (key)
-  "The text of KEY's row: a notice, a group or a definition, from the column of the section's title (2)."
-  (if (eq (car-safe key) :notice)
-      ;; an empty state, not a row: the icon and the text in the muted colour, never selected
-      (propertize (concat "  " (drgnx-look-icon 'info 'drgnx-text-muted) " " (cadr key) "\n")
-                  'face 'drgnx-text-muted 'drgnx-row-inert t)
-    (let* ((r (gethash key drgnx-outline--table))
-           (text (concat (make-string (+ 2 (* 2 (nth 1 key))) ?\s) (drgnx-wb-display-name (car key)) "\n")))
-      (if (and r (null (aref r 2))) (propertize text 'face 'drgnx-outline-group) text))))
-
-(drgnx-view-define 'outline :render #'drgnx-outline--render-row :delay 0 :key-test 'equal
-                   :patched #'drgnx-outline--mark-current)
-
 (defun drgnx-outline--refresh-1 ()
-  "Sync the rows to the editor's file.  A new file replaces every row (two files can share a key, a group like
-\"Variables\"), so the Outline starts at its top, and its next draw shows the current definition."
+  "Tell the hub the editor's file when it is not the one it has.  A new file starts the Outline at its top, and its
+first rows show the current definition."
   (let* ((editor (drgnx-wb-editor-window)) (src (and editor (window-buffer editor)))
-         (rows (and src (drgnx-outline--index src))) (new (not (eq src drgnx-outline--source))))
-    (if (eq rows 'interrupted)
-        (drgnx-outline--changed)                     ; you typed meanwhile: at the next pause
-      (drgnx-outline--watch src)
-      (with-current-buffer (drgnx-outline--buffer)
-        (let ((keys (if (stringp (or rows ""))
-                        (progn (setq drgnx-outline--rows [])
-                               (clrhash drgnx-outline--table)
-                               (list (list :notice (or rows ""))))
-                      (drgnx-outline--keyed rows))))
-          (when new
-            (drgnx-view-reset drgnx-view nil)
-            (setq drgnx-outline--reveal t))
-          (drgnx-view-sync-rows drgnx-view keys #'drgnx-outline--sig))
-        (drgnx-outline--mark-current)))))
+         (new (not (eq src drgnx-outline--source))) (file (drgnx-outline--file src)))
+    (drgnx-outline--buffer)
+    (drgnx-outline--watch src)
+    (when new (setq drgnx-outline--reveal t))
+    (when (or new (not (equal file drgnx-outline--sent)))
+      (drgnx-outline--send file))))
+
+(defun drgnx-outline--handle ()
+  "The Sjá instance of the Outline's model, or nil."
+  (and drgnx-view-patch (drgnx-view-patch-handle drgnx-view-patch)))
+
+(defun drgnx-outline--patched (_view _keys)
+  "`drgnx-view-patch-patched-functions': the rows changed; the mark, the notice's quiet and a new file's reveal follow."
+  (when drgnx-outline--waiting (delete-overlay drgnx-outline--waiting) (setq drgnx-outline--waiting nil))
+  (drgnx-outline--mark-current))
+
+(defun drgnx-outline--current-start ()
+  "Where the row of the definition the editor's point is in starts in the Outline (the current buffer), or nil."
+  (when-let* ((h (drgnx-outline--handle)) ((buffer-live-p drgnx-outline--source))
+              (editor (drgnx-wb-editor-window)) ((eq (window-buffer editor) drgnx-outline--source))
+              (line (with-current-buffer drgnx-outline--source (line-number-at-pos (window-point editor) t)))
+              (id (nidhogg-view-get h 'at-line "order" line)))
+    (drgnx-view-row-start nil id)))
 
 (defun drgnx-outline--mark-current (&rest _)
-  "Mark, in the Outline, the last definition that starts at or before the editor's point (an overlay: the
-Outline's point and window are not touched, except by the first draw of a new file, which shows the marked row:
-`drgnx-outline--reveal').  Nothing when the Outline is hidden or point is above them all."
+  "Mark, in the Outline, the definition the editor's point is in (an overlay: the Outline's point and window are not
+touched, except by the first rows of a new file, which show the marked row: `drgnx-outline--reveal').  Nothing when
+the Outline is hidden or point is above every definition."
   (when-let* ((buf (get-buffer drgnx-outline-buffer-name)))
     (with-current-buffer buf
-      (mapc (lambda (o) (when (overlay-get o 'drgnx-outline-current) (delete-overlay o))) (overlays-in (point-min) (point-max)))
-      (when (and (zerop (length drgnx-outline--rows)) (not (drgnx-view-pending-p drgnx-view))) (drgnx-outline--quiet))
-      (let ((reveal (and drgnx-outline--reveal (not (drgnx-view-pending-p drgnx-view)))))
-        (when reveal (setq drgnx-outline--reveal nil))
-        (when-let* ((window (get-buffer-window buf t)) ((buffer-live-p drgnx-outline--source))
-                    (editor (drgnx-wb-editor-window)) ((eq (window-buffer editor) drgnx-outline--source))
-                    (point (window-point editor))
-                    (best (let ((best nil) (best-pos -1))
-                            (seq-doseq (r drgnx-outline--rows)
-                              (when-let* ((p (aref r 2)))
-                                (when (and (<= p point) (>= p best-pos)) (setq best r best-pos p))))
-                            best))
-                    (start (drgnx-view-row-start drgnx-view (aref best 3))))
-          (save-excursion
-            (goto-char start)
-            (let ((o (make-overlay (pos-bol) (pos-eol))))
-              (overlay-put o 'drgnx-outline-current t)
-              (overlay-put o 'face 'drgnx-outline-current)))
-          (when reveal (drgnx-outline--reveal-row window start)))))))
+      (let* ((rows (and (drgnx-outline--handle) (nidhogg-view-get (drgnx-outline--handle) 'list "order")))
+             (window (get-buffer-window buf t))
+             (start (and window rows (drgnx-outline--current-start)))
+             (reveal (and drgnx-outline--reveal (or rows (drgnx-view-key-at (point-min))))))
+        (if (not start)
+            (when drgnx-outline--mark (delete-overlay drgnx-outline--mark))
+          (let ((end (save-excursion (goto-char start) (pos-eol))))
+            (if (overlayp drgnx-outline--mark)
+                (move-overlay drgnx-outline--mark start end)
+              (setq drgnx-outline--mark (make-overlay start end))
+              (overlay-put drgnx-outline--mark 'drgnx-outline-current t)
+              (overlay-put drgnx-outline--mark 'face 'drgnx-outline-current))))
+        (when (and (not rows) (drgnx-view-key-at (point-min))) (drgnx-outline--quiet))
+        (when reveal
+          (setq drgnx-outline--reveal nil)
+          (when window (drgnx-outline--reveal-row window (or start (point-min)))))))))
 
 (defun drgnx-outline--quiet ()
-  "An Outline without rows (its notice): no row stays selected, and the windows showing it are at its start, not
-scrolled sideways.  The selection of the rows it replaced would otherwise outlive them: an empty overlay whose fill
-stretches to the right edge before the notice, which pushes it off the window."
+  "An Outline without definitions (its notice): no row stays selected, and the windows showing it are at its start,
+not scrolled sideways.  The selection of the rows it replaced would otherwise outlive them: an empty overlay whose
+fill stretches to the right edge before the notice, which pushes it off the window."
   (save-excursion (goto-char (point-min)) (drgnx-wb-selection-sync))
   (let ((ws (get-buffer-window-list (current-buffer) nil t)))
     (drgnx-wb-with-owned-windows ws               ; the Outline's own windows, moved by its draw (I9)
@@ -204,26 +187,33 @@ stretches to the right edge before the notice, which pushes it off the window."
         (set-window-hscroll w 0)))))
 
 (defun drgnx-outline--reveal-row (window start)
-  "Put WINDOW's point (and the buffer's) on the row at START; a row below the first screen gets a third of the
-window above it."
+  "Put WINDOW's point (and the buffer's) on the row at START, the window at the top; a row below the first screen
+gets a third of the window above it."
   (goto-char start)
   (drgnx-wb-with-owned-windows (list window)
     (set-window-point window start)
     (let ((height (window-body-height window)))
-      (when (>= (count-lines (point-min) start) height)
-        (set-window-start window (save-excursion (forward-line (- (/ height 3))) (point)) t)))))
+      (set-window-start window (if (>= (count-lines (point-min) start) height)
+                                   (save-excursion (forward-line (- (/ height 3))) (point))
+                                 (point-min))
+                        t))))
 
-(defun drgnx-outline-jump (i &optional select)
-  "Show row I's definition in the editor (SELECT: and go there)."
-  (when-let* ((r (and (< -1 i (length drgnx-outline--rows)) (aref drgnx-outline--rows i)))
-              (pos (aref r 2)) (editor (drgnx-wb-editor-window)) ((buffer-live-p drgnx-outline--source)))
+(defun drgnx-outline-line-at (&optional pos)
+  "The line (from 1) of the definition on the Outline's row at POS (default point), or nil."
+  (when-let* ((h (drgnx-outline--handle)) (id (drgnx-view-key-at (or pos (point)))))
+    (nidhogg-view-get h 'field "line" id)))
+
+(defun drgnx-outline-jump (line &optional select)
+  "Show the definition at LINE (from 1) of the Outline's file in the editor (SELECT: and go there)."
+  (when-let* ((line) (editor (drgnx-wb-editor-window)) ((buffer-live-p drgnx-outline--source)))
     (unless (eq (window-buffer editor) drgnx-outline--source) (set-window-buffer editor drgnx-outline--source))
-    (set-window-point editor pos)
+    (set-window-point editor (with-current-buffer drgnx-outline--source
+                               (save-restriction (widen) (goto-char (point-min)) (forward-line (1- line)) (point))))
     (with-selected-window editor (recenter 3))
     (when select (select-window editor))))
 
 (defun drgnx-outline-open () "Go to the definition at point." (interactive)
-       (drgnx-outline-jump (1- (line-number-at-pos)) t))
+       (drgnx-outline-jump (drgnx-outline-line-at) t))
 
 (defun drgnx-outline-mouse-jump (event)
   "Show the clicked definition; stay in the Outline."
@@ -231,7 +221,7 @@ window above it."
   (when-let* ((posn (event-start event)) (pos (posn-point posn)))
     (with-selected-window (posn-window posn)
       (goto-char pos)
-      (drgnx-outline-jump (1- (line-number-at-pos pos))))))
+      (drgnx-outline-jump (drgnx-outline-line-at pos)))))
 
 (defun drgnx-outline-focus () "Show the sidebar and focus the Outline." (interactive) (drgnx-wb-focus-section 'outline))
 

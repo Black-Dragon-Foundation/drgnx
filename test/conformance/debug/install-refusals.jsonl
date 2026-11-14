@@ -3,7 +3,7 @@
 {"do": "connect", "conn": "e", "hub": "h"}
 {"do": "send", "conn": "e", "json": {"id": 1, "method": "debug/install", "params": {"adapter": "delve"}}}
 {"do": "expect", "conn": "e", "json": {"id": 1, "error": {"code": "internal", "message": "this adapter comes from a system package: install it with `dnf install delve`"}}}
-{"do": "send", "conn": "e", "json": {"id": 2, "method": "debug/install", "params": {"adapter": "java"}}}
-{"do": "expect", "conn": "e", "json": {"id": 2, "error": {"code": "internal", "message": "drgnx cannot install Java (jdtls): add it yourself (the setting debug.adapters)"}}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "debug/install", "params": {"adapter": "rdbg"}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "error": {"code": "internal", "message": "drgnx cannot install Ruby (rdbg): add it yourself (the setting debug.adapters)"}}}
 {"do": "send", "conn": "e", "json": {"id": 3, "method": "debug/install", "params": {"adapter": "nope"}}}
 {"do": "expect", "conn": "e", "json": {"id": 3, "error": {"code": "invalid-params"}}}

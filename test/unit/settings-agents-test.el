@@ -164,6 +164,14 @@
         (apply (car cmd) (cdr cmd))
         (should-not (drgnx-settings-agents--entry file 'drgnx-workspace-settings 'drgnx-sat-width))))))
 
+(ert-deftest drgnx-settings-agents/explaining-every-setting-fits-the-hubs-window ()
+  :tags '(:timing)                ; a budget: the perf lane's, judged against the runner's calibration
+  ;; The hub waits `norn::tools::settings::EXPLAIN_WAIT' (2 s) for the editor's rows of an explain with no names, and
+  ;; answers without them after it: explaining all the settings this Emacs knows must stay well inside that window.
+  (let ((t0 (float-time)))
+    (should (> (length (drgnx-settings-agents-explain '(:scope "global"))) 0))
+    (should (< (- (float-time) t0) 1.0))))           ; half the hub's 2 s window
+
 (ert-deftest drgnx-settings-agents/explain-answers ()
   (drgnx-sat--with
     (drgnx-settings-agents--event "settings/explain" '(:req 4 :scope "global" :names ["drgnx-sat-width"]))

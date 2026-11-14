@@ -61,7 +61,7 @@ drgnx's icons are [Lucide](https://lucide.dev) line icons (a few are Feather's),
 | `grip-vertical` | `modules/extra/drgnx-debug-toolbar.el`, `modules/tools/drgnx-work-map.el` |
 | `hexagon` | - |
 | `inbox` | `modules/extra/drgnx-debug-timeline.el` |
-| `info` | `core/drgnx-notice-toast.el`, `core/drgnx-palette.el`, `wb/drgnx-outline.el` |
+| `info` | `core/drgnx-notice-toast.el`, `core/drgnx-palette.el` |
 | `key` | `wb/drgnx-chrome.el` |
 | `laptop` | - |
 | `layers` | `core/drgnx-palette.el`, `modules/tools/drgnx-jobs.el` |

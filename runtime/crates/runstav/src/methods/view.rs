@@ -65,7 +65,7 @@ pub struct ViewEnv {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub attach: bool,
     /// The editor holds this view's rows in Sjá: its patches come as a `view-model` line's `rows` (`{view, rows}`),
-    /// which Sjá takes whole. Only a terminal's view reads it so far.
+    /// which Sjá takes whole, for any view (a terminal's from `term/open` and `term/attach` too).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub rows_in_sja: bool,
 }
@@ -181,6 +181,133 @@ fn check_env(p: &ViewEnv) -> Result<(), Error> {
     Ok(())
 }
 
+/// The most changes one `buffers/set` carries (a reset and thousands of open buffers fit).
+pub const BUFFER_OPS_MAX: usize = 50_000;
+
+/// `buffers/set`: changes to the Buffers panel's open buffers for the hub-fed VIEW, in order; the hub sends VIEW's
+/// rows that changed to every class of it (docs/develop/hub.md, "Rows"). The editor sends one when the set of open
+/// buffers, a name or an unsaved flag changed, or the window's scope or the filter did, never per keystroke.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BuffersSet {
+    pub view: String,
+    pub ops: Vec<BufferOp>,
+}
+
+/// One change of `buffers/set`.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(tag = "op", rename_all = "lowercase", deny_unknown_fields)]
+pub enum BufferOp {
+    /// No buffer is open (the editor puts its set again after it, in open order: a new hub, a reconnect).
+    Reset,
+    /// Buffer ID (the editor's, at most 64 bytes) is open with NAME, visiting FILE (none: no file, such as a folder's
+    /// listing), MODIFIED when it has unsaved changes: a new id goes last in the open order, a known one keeps its place.
+    Put {
+        id: String,
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        file: Option<String>,
+        #[serde(default)]
+        modified: bool,
+    },
+    /// Buffer ID's unsaved flag flipped.
+    Modified { id: String, modified: bool },
+    /// Buffer ID was closed.
+    Remove { id: String },
+    /// Only the buffers IDS are on rows (those of the window the user works in), in the open order; none: every one.
+    Scope {
+        #[serde(default)]
+        ids: Option<Vec<String>>,
+    },
+    /// Only the buffers whose names hold TEXT (any case) are on rows; none or empty: every one.
+    Filter {
+        #[serde(default)]
+        text: Option<String>,
+    },
+}
+
+fn check_buffers(p: &BuffersSet) -> Result<(), Error> {
+    check_ids(&p.view, None)?;
+    if p.ops.len() > BUFFER_OPS_MAX {
+        return Err(invalid("ops", "at most 50000 changes"));
+    }
+    let long = |id: &String| id.is_empty() || id.len() > VIEW_MAX;
+    let bad = p.ops.iter().any(|op| match op {
+        BufferOp::Put { id, .. } | BufferOp::Modified { id, .. } | BufferOp::Remove { id } => {
+            long(id)
+        }
+        BufferOp::Scope { ids: Some(ids) } => ids.iter().any(long),
+        _ => false,
+    });
+    if bad {
+        return Err(invalid("ops", "buffer ids of 1 to 64 bytes"));
+    }
+    Ok(())
+}
+
+/// The longest file name `outline/set` takes, in bytes.
+pub const OUTLINE_FILE_MAX: usize = 4096;
+
+/// `outline/set`: the Outline panel's hub-fed VIEW now shows FILE (absolute; none: the editor shows no file the hub
+/// can read, such as a buffer without one or a remote file).  The hub outlines the file as the editor's tracked buffer
+/// of it has it (unsaved typing included), else as it is on disk, keeps it per (connection, view), outlines it again
+/// after the editor's edits pause, and sends the view's model and rows (docs/develop/hub.md, "The Outline panel's
+/// rows").  Sent again when the editor shows another file or saves this one, never per keystroke.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OutlineSet {
+    pub view: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+}
+
+fn check_outline(p: &OutlineSet) -> Result<(), Error> {
+    check_ids(&p.view, None)?;
+    p.file.as_deref().map_or(Ok(()), check_outline_file)
+}
+
+/// `outline/scopes`: the definitions around LINE (from 1) of a file, as the Outline reads it (the editor's unsaved text
+/// where its edit history tracks the buffer, else the disk): what the breadcrumb's symbol and sticky scroll show.  The
+/// file is FILE (absolute), or PATH under WORKTREE_ROOT (the edit history's names: a tracked buffer asks through the
+/// history, its changes handed over first).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OutlineScopesParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_root: Option<String>,
+    pub line: u32,
+}
+
+/// One definition around a line: its NAME and the LINE (from 1) it starts on.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OutlineScope {
+    pub name: String,
+    pub line: u32,
+}
+
+/// `outline/scopes`' answer: the definitions that hold the line, outermost first (one that starts on it included);
+/// empty for a file with none, one that cannot be read, or one past the Outline's size limit.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OutlineScopes {
+    pub scopes: Vec<OutlineScope>,
+}
+
+fn check_outline_file(f: &str) -> Result<(), Error> {
+    if f.is_empty() || f.len() > OUTLINE_FILE_MAX || !f.starts_with('/') {
+        return Err(invalid(
+            "file",
+            "an absolute file name of at most 4096 bytes",
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
@@ -230,6 +357,39 @@ pub(crate) fn methods() -> Vec<Method> {
             classes: [User], writes: false,
             doc: "the editor shows a view no more: its envs and rows are forgotten (a connection's views end with it)",
             check: |p: &ViewClose| check_ids(&p.view, None),
+        ),
+        method!(
+            "buffers/set", BuffersSet(BuffersSet) -> bool,
+            classes: [User], writes: false,
+            doc: "changes to the Buffers panel's open buffers of a hub-fed view (put, modified, remove, the window's scope, the filter), in order: the hub sends the view's rows that changed to every class of it",
+            check: check_buffers,
+        ),
+        method!(
+            "outline/set", OutlineSet(OutlineSet) -> bool,
+            classes: [User], writes: false,
+            doc: "the file the Outline panel's hub-fed view shows (none: no file): the hub outlines it (the editor's unsaved text where its edit history tracks the buffer, else the disk), again after edits pause, and sends the view's model and rows",
+            check: check_outline,
+        ),
+        method!(
+            "outline/scopes", OutlineScopes(OutlineScopesParams) -> OutlineScopes,
+            classes: [User], writes: false,
+            doc: "the definitions around a line of a file, outermost first, as the Outline reads it (the editor's unsaved text where its edit history tracks the buffer, else the disk): the breadcrumb's symbol and sticky scroll",
+            check: |p: &OutlineScopesParams| {
+                match (&p.file, &p.worktree_root, &p.path) {
+                    (Some(f), None, None) => check_outline_file(f)?,
+                    (None, Some(root), Some(path)) => {
+                        check_outline_file(root)?;
+                        if path.is_empty() || path.len() > OUTLINE_FILE_MAX || path.starts_with('/') {
+                            return Err(invalid("path", "a file name relative to worktree_root, at most 4096 bytes"));
+                        }
+                    }
+                    _ => return Err(invalid("file", "a file, or a path and its worktree_root")),
+                }
+                if p.line == 0 {
+                    return Err(invalid("line", "a line number from 1"));
+                }
+                Ok(())
+            },
         ),
     ]
 }

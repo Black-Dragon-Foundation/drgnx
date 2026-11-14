@@ -167,6 +167,8 @@ patch.  MORE is a plist of further `search/files' params (the Explorer's Find: `
           ((null action) (try-completion string names pred))
           ((eq action 'lambda) (test-completion string names pred)))))
 
+(put 'drgnx-quick-open--rows-event 'hub-events-taken '("view-patch"))
+
 (defun drgnx-quick-open--rows-event (event data)
   "A `drgnx-hub-event-functions' handler while Quick Open reads: its view's patches change the table."
   (when (and (equal event "view-patch") drgnx-quick-open--current

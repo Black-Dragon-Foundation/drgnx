@@ -131,6 +131,20 @@ process group killed after the grace) and starts a new one with a new connection
 `notebook/interrupt`, `notebook/input`, `notebook/clear`, `notebook/tail`, `notebook/output` (the whole output as nbformat objects)
 and `notebook/close` are what they say.
 
+**How the hub reaches a kernel.** Over ipc by default: the connection file (0600, in the session's 0700 folder) names socket files
+beside it, and they go with the kernel (the hub removes any a kernel leaves; ipykernel leaves them). A kernel that cannot use ipc is
+started once more over loopback tcp, and the error, if that fails too, names both attempts; a kernelspec can say it only works over
+tcp (`"metadata": {"drgnx_transport": "tcp"}` in its `kernel.json`; `"ipc"` is the default and any other value makes the kernelspec
+unusable). Only a start whose process ended before it made any socket counts as a refusal: a kernel that started and was not ready is
+not tried again. Over tcp the hub claims a block of ports (`debug::ports`, held for the kernel's life), writes `127.0.0.1` and those
+ports into the connection file, and before it connects to a port it asks `debug::ports::exclusively_owned` whether the kernel's own
+process (or its children) listens there: a listener that is someone else's is an error naming the port, and nothing is sent to it.
+A same-user process that binds the port after that check could share a listener that set SO_REUSEPORT and take its connections, so a
+listener that set it is refused too (a second socket asks to bind the port with SO_REUSEPORT: the system grants that only when every
+listener on it set the option, on Linux and macOS alike, and the socket is dropped at once), and the check is made again once the hub
+is connected. A listener without the option cannot be joined, so a kernel that does not set it (ipykernel and libzmq do not) is safe
+from that race. The HMAC key signs every message either way. The heartbeat channel is not used; the process's end is the death signal.
+
 The hub sends the editor that opened a notebook these events, only for what changed:
 
 - `notebook-tail`: a cell's tail, built whole (text, style runs as terminal face roles, images, `more_lines`, `version`, `stale`,

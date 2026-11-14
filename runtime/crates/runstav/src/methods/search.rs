@@ -440,7 +440,10 @@ pub struct RunStarted {
 /// `search/buffer`: the editor's buffer of PATH holds unsaved edits: VIEW's searches search TEXT in place of the file
 /// from now on, and the current one takes its matches at once. A buffer over the editor's large-file threshold sends
 /// `large` and no text: the file is searched on disk, its header saying the buffer is open in chunks. Neither: the
-/// buffer was saved or killed, and the next search reads the file again.
+/// buffer was saved or killed, and the next search reads the file again. `mirror` sends no text: the hub takes the
+/// text of the editor's tracked buffer from the edit history's mirror, once the mirror's version is at least `version`
+/// (the editor's drain counter after it handed its changes over); until then, or with no tracked buffer of the file,
+/// the answer is false and nothing changes.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BufferParams {
@@ -453,6 +456,11 @@ pub struct BufferParams {
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub large: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mirror: Option<bool>,
+    /// With `mirror`: the version the editor's changes to the buffer have reached.
+    #[serde(default)]
+    pub version: u64,
 }
 
 /// `search/grep-replace`: VIEW's rows preview REPLACE now (no new search).
@@ -1518,7 +1526,7 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "search/buffer", SearchBuffer(BufferParams) -> bool,
             classes: [User], writes: false,
-            doc: "an editor buffer with unsaved edits: the Search view's searches search its text in place of its file (the current search at once), or say the buffer is too large and is searched on disk; without text or large the file is searched again",
+            doc: "an editor buffer with unsaved edits: the Search view's searches search its text in place of its file (the current search at once), the text sent or, with mirror, the edit history's mirror of the tracked buffer (false while it is behind version or no buffer is tracked), or say the buffer is too large and is searched on disk; without text, mirror or large the file is searched again",
         ),
         method!(
             "search/files", SearchFiles(FilesParams) -> FilesStarted,

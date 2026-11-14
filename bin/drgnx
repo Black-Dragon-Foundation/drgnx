@@ -683,6 +683,17 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--audit | --a
       *) args+=(-v "$rdir:/opt/ratatoskr:ro" -e "DRGNX_RATATOSKR_BIN=/opt/ratatoskr/$(basename "$rbin")") ;;
     esac
   fi
+  # the pack-built grammars a hub parses code with (test/packs/hub-grammars.sh prints the two variables): the lock's
+  # folder and the grammars' folder are mounted read-only, so the hub of a run (Search's Pattern and Symbol modes read
+  # Rust files with them) finds them; without them its code files read as text
+  if [ -n "${DRGNX_PACK_LOCK:-}" ] && [ -n "${DRGNX_PACK_GRAMMARS:-}" ]; then
+    local plock pgram
+    plock="$(cd "$(dirname "$DRGNX_PACK_LOCK")" && pwd -P)" && pgram="$(cd "$DRGNX_PACK_GRAMMARS" && pwd -P)" ||
+      { echo "drgnx: DRGNX_PACK_LOCK or DRGNX_PACK_GRAMMARS names a folder that is not there" >&2; return 2; }
+    case "$plock$pgram" in *:*) echo "drgnx: DRGNX_PACK_LOCK and DRGNX_PACK_GRAMMARS must not contain ':' (mounted with -v)" >&2; return 2 ;; esac
+    args+=(-v "$plock:/opt/packs/lock:ro" -v "$pgram:/opt/packs/grammars:ro"
+           -e "DRGNX_PACK_LOCK=/opt/packs/lock/$(basename "$DRGNX_PACK_LOCK")" -e DRGNX_PACK_GRAMMARS=/opt/packs/grammars)
+  fi
   # huginn's dump example for the differential test: always mounted read-only, wherever it was built
   if [ -n "${DRGNX_HUGINN_DUMP:-}" ] && [ -x "$DRGNX_HUGINN_DUMP" ]; then
     local hbin; hbin="$(cd "$(dirname "$DRGNX_HUGINN_DUMP")" && pwd -P)/$(basename "$DRGNX_HUGINN_DUMP")"

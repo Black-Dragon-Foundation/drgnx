@@ -391,7 +391,7 @@ pub async fn run(args: ServeArgs) -> Exit {
     front.core.runs.set_recovering(true);
     {
         let f = front.clone();
-        tokio::spawn(async move {
+        crate::clock::spawn("server:recover", async move {
             // who was in which file, from the recorded sessions' steps, before they run again
             f.core.presence.rebuild_from_store(&f).await;
             f.core.agents.resume_all(&f).await;
@@ -976,7 +976,7 @@ fn embed_idle(front: &Arc<Front>, timer: &Arc<std::sync::Mutex<crate::embed::Tim
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone(),
     );
-    tokio::spawn(async move {
+    crate::clock::spawn("server:embed", async move {
         let each: Vec<&dyn urdr::graph::search::Embedder> =
             embedders.iter().map(|e| e.as_ref()).collect();
         let out = crate::embed::run(&front.writer.db, &each, &deny, probe).await;
@@ -1013,9 +1013,12 @@ fn nightly_backup(front: &Front) {
     }
     let g = g.clone();
     let hub = front.dirs.get().map(|d| d.hub.clone());
-    tokio::spawn(crate::backup_timer::guarded(async move {
-        crate::graph::run_backup(&g, hub.as_deref()).await;
-    }));
+    crate::clock::spawn(
+        "server:backup",
+        crate::backup_timer::guarded(async move {
+            crate::graph::run_backup(&g, hub.as_deref()).await;
+        }),
+    );
 }
 
 /// Under the lock: agent socket A at `hub.sock` in its session dir, `<socket dir>/s/SID/` (`paths::make_session_dir`:

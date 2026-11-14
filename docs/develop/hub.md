@@ -836,73 +836,16 @@ hello (the cap is read there; the core gets the proof the hub must give back, ne
 before giving up on a challenge, run the event, skew, disconnect and connected hooks, the hand-over, presence, the
 jobs' cache, and dial.
 
-**Who splits the lines.** The shell does, in one of two ways, and the core gets the same events from both. By default
-the connection's filter (`drgnx-hub--client-filter`, through `drgnx-hub--lines`) cuts the chunks into lines and parses
-them. With Nidhogg's `nidhogg-workers-framing` on, `drgnx-hub--open` hands the connection to Nidhogg's reader
-(`drgnx-hub--frame`: `lines` framing, parsed there, no line limit, as the client has none today), and the main thread
-gets batches (`drgnx-hub--client-batch`) of parsed messages; a line that is not JSON, or is `null`, is dropped on both
-paths. The connection is `(binary . utf-8-unix)`: bytes in, which framing needs, UTF-8 out. One difference: a last line
-with no newline before the end of the stream is a message when framed, and dropped by the filter. Without the feature
-or the switch, or when the framing is refused, the filter reads. The probe (`drgnx-hub--ping-socket`) is never framed.
-`test/unit/hub-client-frame-test.el` checks that both paths give the same events, over Nidhogg's own framer.
-
-**The shell's edges**, which the every-order tests assume and `test/unit/hub-client-shell-test.el` checks with
-scripted peers: a connection's lines reach the core in the order they were written (so the challenge, Ratatoskr's
-first line, comes first), whatever the chunks; its `closed` comes once, after everything read before the end, and
-nothing of it comes after. A `subscribe` answer precedes that connection's events, and an answer its call: both are
-the hub's order on one connection.
-
-`drgnx-hub-settled-p` (`drgnx-hub-core-settled-p`) says the editor is subscribed and no call waits: no hand-over
-answer can still change the editor token or the held keys. A test that changes them waits for it first. A token and
-held keys alone are not that: a command's `drgnx-hub-ensure` hands over on the call connection, and when the hub
-answers it before the `subscribe`, both are set while the subscription's own hand-over, which rotates the token, is
-still to come (`test/unit/ai-gateway-test.el`'s `:ensure` fixture gives the gate that order).
-
-### Starting the hub, and Hub: Restart Now
-
-`drgnx-hub--ensure-running CALLBACK` starts **one asynchronous `ratatoskr ensure --timeout 5`** (no batch Emacs;
-`DRGNX_EMACS` and `DRGNX_DIR` from `(drgnx-emacs-program)` and `drgnx-dir`; provider-key variable names unset). It
-never waits: CALLBACK gets nil when a hub answers, or the reason (the process's output) when `ensure` fails or passes
-`drgnx-hub-ensure-deadline` (10 s, a layer timer `hub-ensure`). A second call while it runs joins it. `drgnx-hub-ensure`
-(commands, the CLI) waits for that and then hands over the provider table and the keys ([Keys](#keys)); in a daemon
-path (`inhibit-interaction`) it returns at once and they go, or a `hub` notice `start` is posted, when the start ends. `DRGNX_NO_HUB_START` is honoured; with
-no binary every caller says "Ratatoskr is not built: run `drgnx runtime build`".
-
-**A command that needs the subscription.** `drgnx-hub-start-for-command ON-FAIL` is for commands the user invoked whose
-answer comes on the subscribed connection: New Terminal and Reconnect (`drgnx-term`), the Search view's key, `RET` and
-Search in Files, and the Work space. With no subscription up or being made it calls `drgnx-hub--ensure-running` (not
-waited for) and connects when the hub answers; ON-FAIL gets the reason when no hub can be had (the terminal fails and
-says it in the echo area, the Search view on its status line). In a daemon path (`inhibit-interaction`) it starts
-nothing and only connects to a hub already there: timers, hooks, sentinels and startup never start one. Before it,
-these only connected, so with no hub running they waited for good. The Extensions view and Debug's commands ask the hub
-by call, which signals "no hub" and shows the reason; they do not start it.
-
-**At daemon start.** The nightly graph backup (`backup_timer.rs`) runs inside the hub, so a daemon must not wait for AI
-to start one. `drgnx-hub-ask-at-daemon-start` (core, on `emacs-startup-hook`) schedules the layer timer
-`hub-daemon-start` (2 s, owner `:core`) in a daemon only: not in batch, not in a plain Emacs, not with
-`DRGNX_NO_HUB_START`. The timer calls `drgnx-hub--ensure-running` without waiting; a missing binary is silent, a failed
-start is a `hub` warning notice. It does not connect and hands over no keys or settings: a key-less hub starts no
-provider; keys arrive with the first AI use (`drgnx-hub-hand-over-keys`) or when the hub asks (`gateway/need-keys`).
-`drgnx doctor` (the `store` check) says the hub is down, and the nightly cannot run, when the last backup is old and no
-hub runs. The copy runs on its own task through `backup_timer::guarded`, which clears the running flag on every way
-out, a panic included, so one failed night never stops the next. `test/live/hub-daemon-start-test.el` starts a real daemon
-session with a real hub (`DRGNX_RATATOSKR_BIN`), sees the hub come up and the nightly copy appear, and reads the idle
-hub's CPU and resident memory from `/proc` (about 0.1 % CPU and 63 MB for a debug build).
-
-The hub's `notice` event (sent when the binary on disk changed) is posted by `drgnx-hub--note-notice` (an editor's
-subscription) as a notice of source `hub`, a condition with command `hub-restart-now`. A hello that finds the hub
-current (`ok`) clears it. A `legacy` hub (the Lisp hub of an install updated while it ran) gets the same notice with
-its own text, from the hello, in an editor only. **`hub-restart-now`** ("Hub: Restart Now", category Agents, no key in
-any profile; `drgnx-hub-restart-now`) asks no one: on Ratatoskr it calls `restart` (its supervisor, or its own
-re-execution, brings it back); on a legacy hub it calls `shutdown` (protocol 0 has no `restart`), waits up to 5 s for
-`<socket>.lock` to go, and runs `ratatoskr ensure`; with no hub it just starts one. Agent sessions end.
+**Who splits the lines.** Nidhogg's reader, for every connection (G1 of the Lisp offload: there is no filter that reads
+a line, and no switch). `drgnx-hub--open` hands the connection to the reader (`drgnx-hub--frame`: `lines` framing,
+parsed there, no line limit, as the client has none), and the main thread gets batches (`drgnx-hub--client-batch`) of
+parsed messages; a line that is not JSON, or is `null`, is dropped, and a last line with no newline before the end of the
+stream is a message. The connection is `(binary . utf-8-unix)`: bytes in, which framing needs, UTF-8 out. A framing the
+reader refuses is an error: a connection nothing reads is of no use. The probe (`drgnx-hub--ping-socket`) is no client
+connection: it sends one `ping` and a filter of its own parses the two lines it reads. `test/unit/hub-client-frame-test.el` checks the batch over Nidhogg's own framer.
 
 **Probes.** `drgnx-hub--ping-socket` (`drgnx-hub-running-p`) sends a raw `ping` and reads lines until one is not an
 event, so Ratatoskr's challenge is skipped. It sends no hello: a probe is `service` class, which `ping` allows.
-
-**The line reader** (`drgnx-hub--lines`) searches only the chunk that came for a newline.
-The start of a line still open waits in a list of pieces, joined once its newline comes, so a 16 MiB snapshot in 8 KB
-chunks costs its length, not its length times its chunks (HUB-LINES-1, PERF-M3).
 
 **Tests:** `test/unit/hub-client-test.el` (prefix `drgnx-hub-client/`). Fake hubs that lie (a wrong proof, no proof,
 protocol 0, a held hello) are in `test/fixtures/fake-hub.el`. The tests marked "binary" run against Ratatoskr:
@@ -1372,7 +1315,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `agents/list` | user, agent, service | `{}` | `{sessions?: [Snapshot]}` | no |
 | `agents/move` | user | `{id: Id, profile: string}` | `{id: string, name: string}` | yes |
 | `agents/pair` | user | `{id: Id, on: boolean}` | `boolean` | no |
-| `agents/panel/look` | user | `{older?: boolean, open?: [string], rows?: [[natnum, boolean]], view: string}` | `boolean` | no |
+| `agents/panel/look` | user | `{lens?: [string], lens_on?: natnum, older?: boolean, open?: [string], rows?: [[natnum, boolean]], view: string}` | `boolean` | no |
 | `agents/pause` | user | `{id: Id}` | `boolean` | yes |
 | `agents/permission` | user | `{id: Id, option?: string, request: RequestId}` | `boolean` | yes |
 | `agents/presence/get` | user | `{file: string}` | `{entries?: [PresenceEntry], file: string, rel?: string, repo?: string}` | no |
@@ -1394,6 +1337,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `browser/check` | user | `{}` | `BrowserCheckResult` | no |
 | `budget/get` | user | `{scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}}` | `{limits?: [Limit], remaining?: [Limit], scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}, spent?: [Limit]}` | no |
 | `budget/set` | user | `{limits?: [{amount: number, unit: "tokens" \| "count" \| "usd" \| "usd-est" \| "limit-share"}], scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}}` | `{limits?: [Limit], remaining?: [Limit], scope: {project: string} \| {plan: string} \| {manager: Id} \| {worker: Id}, spent?: [Limit]}` | yes |
+| `buffers/set` | user | `{ops: [{op: "reset"} \| {file?: string, id: string, modified?: boolean, name: string, op: "put"} \| {id: string, modified: boolean, op: "modified"} \| {id: string, op: "remove"} \| {ids?: [string], op: "scope"} \| {op: "filter", text?: string}], view: string}` | `boolean` | no |
 | `cards/settle` | user | `{card: natnum, choice: Text}` | `{settled: boolean}` | yes |
 | `config/changed` | user | `{}` | `boolean` | no |
 | `config/settings` | user | `{overrides: [{name: string, source: string, value: SettingValue}], project?: string}` | `{applied: natnum}` | no |
@@ -1476,6 +1420,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `gateway/set-budget` | user | `{budget: Usd, job: Id}` | `boolean` | no |
 | `gateway/unregister` | user | `{token: string}` | `boolean` | no |
 | `git/blame` | user | `{path: string, worktree_root: string}` | `{agents: [AgentLines], commits: [BlameCommit], head?: string, lines: [natnum]}` | no |
+| `git/blame/line` | user | `{path: string, pos: integer, width: integer, worktree_root: string}` | `{sha?: string, text?: string, time?: integer}` | no |
 | `git/letters` | user | `{root: AbsPath, shown?: [string], view: string}` | `boolean` | no |
 | `git/stage-hunk` | user | `{new_start: integer, path: string, worktree_root: string}` | `{staged: boolean}` | yes |
 | `graph/backup` | user | `{}` | `BackupAnswer` | no |
@@ -1500,10 +1445,12 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `history/batch` | user | `{buffer_id: string, changes: [{inserted: string, old_len: natnum, origin?: string, start: natnum}], region_hash?: string, version: natnum}` | `{ok?: boolean, resync?: boolean}` | yes |
 | `history/blame` | user | `{end: integer, path: string, start: integer, worktree_root: string}` | `{spans: [BlameSpan]}` | no |
 | `history/compare` | user | `{a: string, b: string}` | `{files: [ComparedFile]}` | no |
+| `history/eol-fit` | user | `{items: [{key: natnum, pos: integer, text: string}], path: string, tab_width: natnum, width: natnum, worktree_root: string}` | `{items: [EolFitted], tracked: boolean}` | no |
 | `history/fork` | user | `{message: string, profile?: string, seq: integer, session: string}` | `{branch: string, id: string, level: "message" \| "turn" \| "summary", path: string, source_branch: string}` | yes |
 | `history/fork/drop` | user | `{id: string}` | `{ok: boolean}` | yes |
 | `history/hunks` | user | `{branch: string, since: integer}` | `{files: [FileHunks]}` | no |
-| `history/hunks/head` | user | `{path: string, worktree_root: string}` | `{hunks: [HeadHunk], tracked: boolean}` | no |
+| `history/hunks/head` | user | `{path: string, worktree_root: string}` | `{hunks: [HeadHunk], marks: [HunkMark], tracked: boolean}` | no |
+| `history/line-positions` | user | `{lines: [natnum], path: string, worktree_root: string}` | `{positions: [LinePosition], tracked: boolean}` | no |
 | `history/op/hunks` | user | `{op?: integer, session?: string, worktree: string}` | `{hunks: [OpHunk]}` | no |
 | `history/redo` | user | `{op: integer, session: string}` | `{commit?: string, op: integer, skipped: [RevertSkipped], written: [string]}` | yes |
 | `history/register` | user | `{buffer_id: string, path: string, worktree_root: string}` | `{doc: integer, reason?: string, tracked: boolean}` | yes |
@@ -1553,6 +1500,8 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `notebook/tail` | user | `{cell: string, id: string}` | `NotebookTail` | no |
 | `notebook/view` | user | `{cell?: string, id: string, kind: "outline" \| "output" \| "log"}` | `{view: string}` | no |
 | `orch/evidence` | user | `{task: TaskRef}` | `{evidence: [any]}` | no |
+| `outline/scopes` | user | `{file?: string, line: natnum, path?: string, worktree_root?: string}` | `{scopes: [OutlineScope]}` | no |
+| `outline/set` | user | `{file?: string, view: string}` | `boolean` | no |
 | `pace/get` | user | `{provider?: string}` | `{meters?: [Pace]}` | no |
 | `pair/answer` | user | `{lines?: [natnum], not_saved?: Text, reason?: Text, result: "applied" \| "refused" \| "dropped", saved?: boolean, version?: natnum, write: natnum}` | `boolean` | no |
 | `pair/closed` | user | `{file: AbsPath}` | `boolean` | no |
@@ -1589,7 +1538,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `say/start` | user | `{profile?: string, project?: Id, repo: AbsPath, text: Text}` | `{id: string}` | yes |
 | `search/applied` | user | `{applied?: [string], change: natnum, inverse?: [{byte_end?: natnum, byte_start?: natnum, col: natnum, end_col: natnum, end_line: natnum, id: string, line: natnum, new: string, old: string}], not_open?: boolean, path: string, saved?: boolean, skipped?: [{id: string, why: string}], tick?: natnum}` | `boolean` | no |
 | `search/apply` | user | `{change: natnum, open?: [string], view: string}` | `boolean` | yes |
-| `search/buffer` | user | `{large?: boolean, path: AbsPath, text?: string, tick?: natnum, view: string}` | `boolean` | no |
+| `search/buffer` | user | `{large?: boolean, mirror?: boolean, path: AbsPath, text?: string, tick?: natnum, version?: natnum, view: string}` | `boolean` | no |
 | `search/edit-doc` | user | `{context?: natnum, max?: natnum, view: string}` | `{lines: [EditLine], over?: boolean, skipped?: [EditSkip], total: natnum}` | no |
 | `search/edits` | user | `{edits?: [{col: natnum, end_col: natnum, end_line?: natnum, line: natnum, new: string, old: string, path: AbsPath}], ids?: [string], lines?: [{eol?: boolean, line: natnum, line_id: string, new?: [string], old: string, path: AbsPath}], off?: [string], replace?: string, root?: AbsPath, view: string}` | `{change: natnum, files: [FileEdits], skipped: [EditSkip]}` | no |
 | `search/embedders` | user | `{}` | `{builtin: BuiltinInfo, prefer?: string, servers: [ServerInfo]}` | no |
@@ -1743,6 +1692,7 @@ result is (`event(NAME).check`):
 |---|---|---|
 | `agent` | sessions | `{id, seq, session: Snapshot}` |
 | `agent-entries` | sessions | `{id, seq, entries: [[index, Entry]]}` |
+| `agents-attention` | sessions (derived from their snapshots: `agents::attention`) | `{at_work, items: [{kind: "permission", session, id, text, job}]}`: how many sessions run a turn or wait on a permission, and one item per pending permission with the text the editor shows; sent to every subscriber when either changes (not per chunk), and to a connection that subscribes while one is non-empty |
 | `events` | the event log (the front's writer: [Events](#events)) | `{since, last, events: [{id, at, agent, job, task, kind, summary, data?}]}` |
 | `lease-released` | the hub's housekeeping | `{task, agent, job}` |
 | `fallback` | the gateway (the front), jobs (the backend) | `{agent, from, to, why}`, from a job with `job` and `task` too |
@@ -1756,7 +1706,7 @@ result is (`event(NAME).check`):
 | `notice` | the front | `{source, severity, id, life, text, command?}` |
 | `settings/proposed` | the front (`settings_change`) | `{tx, scope, name, value, root?, agent, reason}`: the editor checks it, writes the file, answers `settings/confirm` ([Agents change settings](#agents-change-settings)) |
 | `settings/explain` | the front (`settings_get`) | `{req, scope, names?, root?}`: the editor answers `settings/explained` with the same `req` |
-| `agent-step` | sessions (the front) | `{session, step: Step}`: a step opened or closed, with its class, the hub's stamps and its anchors |
+| `agent-step` | sessions (the front) | `{session, step: Step}`: a step opened or closed, with its class, the hub's stamps and its anchors; a tool step names its tool call (`call`, the transcript tool entry's `id`), which the editor files the step's hook rows under |
 | `exec-done` | jobs (the front) | `{id, session?, status, exit?, summary: {exit?, failing, lines, log}}` |
 | `exec-progress` | jobs (the front) | `{id, file, plan}` or `{id, file, step}`: a `--progress` job's plan or step file changed ([Jobs](#jobs-exec), "Progress") |
 | `plugin` | plugins (the front) | `{name, state}`: a plugin's state changed (`unapproved`, `approved`, `changed`, `disabled`, `broken`, or `removed` when its folder is gone) |
@@ -2152,6 +2102,48 @@ names and colours an agent the same way:
   Claude subagent's id (`agent:SID/TOOLID`, as the Work map names it) an identity of its own and frees it with its
   parent's; subagents have no snapshot, so none is shown yet.
 
+### Editor marks
+
+The marks in a buffer's gutter (changed lines, blame, an agent's strip, breakpoints, end-of-line diagnostics) are the
+hub's arithmetic (Lisp offload step E): the hub holds the buffer's text (the edit history's mirror), counts its lines
+and answers in **positions**, the buffer's own (1-based, in characters); Lisp keeps the overlays, and an answer
+deletes or makes only the overlays whose mark changed. No line is counted or walked to per keystroke. An answer is sent
+on a change only (the history's drain, then a debounce through `drgnx-timer`), never per keystroke, and the hub being
+down leaves the marks as they are and asks nothing of the user. An answer is for the text the hub held when it was asked:
+the client keeps it only if the buffer has not changed since (`buffer-chars-modified-tick`); the drain that follows an
+edit asks again.
+
+`editor::marks` (pure) is the one place the arithmetic lives: `line_starts` (positions by characters, not bytes) and
+`hunk_marks`. Every mark builder asks `marks::within_limit` first: a text over `marks::MAX_BYTES` (50 MiB, the
+large-files module's default `:ask-above`, the size from which a file opens lean or in chunks) gets no marks, as
+`drgnx-large-file-p` kept them from large buffers in Lisp. Large-files v2's cost registry replaces this one constant.
+
+- The `debug-breakpoints` event and `debug/breakpoints`' answer give each breakpoint `pos` and `end` (the positions its
+  line starts at and just after it, `marks::place_breakpoints`, from the edit history's mirror; none without a tracked
+  buffer or over the limit). `Debug::on_lines` is the hook the hub binds to give a file's `marks::Lines`.
+- `history/eol-fit {path, worktree_root, width, tab_width, items: [{key, pos, text}]}` answers `{tracked, items:
+  [{key, text}]}`: each end-of-line problem's text cut with an ellipsis to the room `width` columns leave after the end
+  of its line in the text the hub holds (`marks::eol_columns` counts tabs, `marks::eol_fit` cuts: room is `width` less
+  the column less 4, at least 8). Flymake builds the string synchronously, so `drgnx-face--eol-text` shows the words
+  whole, asks once (after 50 ms, through `drgnx-history-ask`, for all the problems it has no fit for) and makes the
+  overlays again from the answers; an answer for text typed since is dropped and the problems are asked for again.
+  A buffer the hub does not track, or a hub that fails the question, gets Lisp's cut (`drgnx-face--eol-fit`) for 5 s.
+- `history/line-positions {path, worktree_root, lines}` answers `{tracked, positions: [{line, pos, end}]}`: where those
+  lines of the editor's tracked buffer start and just after them, in the text the hub holds (asked through
+  `drgnx-history-ask`, so after the buffer's changes were handed over); none past the limit.
+- `git/blame/line {path, worktree_root, pos, width}` answers the inline blame of the line the position is on, as
+  `{text?, sha?, time?}`: `marks::blame_text` words it ("Ada, 3 days ago · Fix the parser", "You · Uncommitted
+  changes", "agent s1 · …") and cuts it to `width` columns (`BLAME_MIN_WIDTH` 20: none under it, `BLAME_MAX_WIDTH` 80),
+  from `git/blame`'s cached answer for the text the hub holds; none for an untracked buffer, a text over the limit or
+  the empty last line. The client asks once per line change at idle (`drgnx-blame-delay`) and again on a resize.
+- The buffer view's frame (`agents/buffer/watch`, the `agent-buffer` event) carries positions beside its lines
+  (`marks::place`, text: the edit history's mirror, else the file; none over the limit): an agent's `pos` (line_end at
+  col, clamped), `line_pos`, `end_pos` and `symbol` (hrafn's `symbol_at_line` of the text, 2 MB at most, kept per file,
+  text and line), a range's `start_pos` and `end_pos`. Positions are the text the frame's `doc_version` names; the client
+  drops a frame older than the buffer's last change sent.
+- `history/hunks/head` answers `marks: [{line, pos, kind}]` (`kind` `added`, `changed` or `deleted`; a deletion marks
+  the line after it) beside the hunks, which Show, Revert and Stage Change still use.
+
 ### The buffer view
 
 What an editor draws in a buffer comes from one frame per visible buffer (`editor`, part 3; Lisp only moves
@@ -2365,8 +2357,9 @@ All of it is in memory only.
   drop a pair it already holds for the connection, with no `view/close` between (a buffer killed without its hook, an
   Emacs restarted on the same connection), and start over: the rows go out whole, a reset from version 1.
   `rows_in_sja: true` says the editor holds the view's rows in Sjá, where they are drawn: the patches then go out on the
-  raw `view-model` line as `{view, rows: PATCH}` (the patch whole), which Sjá's push takes without Lisp reading it; so
-  far only a terminal's view (`term:<id>`) reads it. `view/resync {view, class, version}` answers a reset (with `model: true`, a reset
+  raw `view-model` line as `{view, rows: PATCH}` (the patch whole), which Sjá's push takes without Lisp reading it, for
+  every view (a terminal's view, `term:<id>`, says it on `term/open` and `term/attach`); the env of the pair decides
+  each patch, so an env without it puts the pair back on `view-patch` events. `view/resync {view, class, version}` answers a reset (with `model: true`, a reset
   of the view's model: below). `view/glyphs {view, class,
   glyphs: [[role, char, px]]}` answers the event `view-glyphs {view, class, ask: [[role, char]]}`. `view/measured
   {view, class, measured: [[role, string, px]]}` is the editor's fit guard's report. `view/ack {view, class,
@@ -2590,7 +2583,10 @@ snapshots; the search itself is `hrafn::grep`).
   skipped list of Replace All (`search/grep-skipped`) ends the carry.
 - **Snapshots:** the run records each file's size, modified time, inode and, up to 16 MiB, an xxh3 of its bytes, read
   in the search's thread outside every lock; for a buffer's text (below), its size, xxh3 and the buffer's tick.
-- **Open buffers:** `search/buffer {view, path, tick?, text?, large?}` → `true`. With `text`, the view's searches
+- **Open buffers:** `search/buffer {view, path, tick?, text?, large?, mirror?, version?}` → `true`. With `mirror` (and no
+  `text`) the editor sends no text: the hub reads the edit history's mirror of the tracked buffer
+  (`editor::mirror_of`), once the mirror's version has reached `version` (the editor's drain counter after it handed its
+  changes over); until then, or with no tracked buffer of the file, the answer is `false` and nothing changes. With `text`, the view's searches
   search it in place of the file at `path` (absolute) from now on: a run drops the file's matches on disk and, at its
   end, searches each such text (`hrafn::grep::search_text`, line by line with the fallbacks' regex) where the run
   would search its file (the File scope's one file, else under the root and searched by the ignore rules; the globs
@@ -2879,7 +2875,67 @@ The Explorer's folders, listed by the hub as a model and rows (`runtime/crates/d
   again. The editor makes the badge (`drgnx-explorer-badge-functions`: the marks and colours of an ordinal are the
   display's) and draws it after the name.
 
+### The Buffers panel's rows (`buffers/set`)
+
+The Open list's rows, built by the hub from what the editor says is open (`runtime/crates/drgnx-ratatoskr/src/view/buffers.rs`;
+the editor's side is `wb/drgnx-buffers.el`).
+
+- `buffers/set {view, ops}` applies OPS in order to the (connection, view)'s open buffers and answers `true`; every class
+  of the view then gets the rows that changed (the first set a reset). An op is `{op: "reset"}` (none open: the editor
+  puts its whole set after it, at attach and after a reconnect), `{op: "put", id, name, file?, modified?}` (a new id goes
+  last in the open order, a known one keeps its place: a rename or a save never moves a row), `{op: "modified", id,
+  modified}`, `{op: "remove", id}`, `{op: "scope", ids}` (only those buffers on rows, in the open order; `null`: all)
+  and `{op: "filter", text}` (only names holding TEXT in any case; `null` or empty: all). At most 50,000 ops; ids are 1
+  to 64 bytes (the editor's `bN`, N counting up as buffers are first seen).
+- **When it is sent.** From the change bus's edges only (`buffer-set-changed`, `modified-changed`, a window or tab
+  change for the scope), coalesced into one call when the command loop is next idle; an unsaved flag goes as a
+  `modified` op on its flips, never per keystroke. Nothing goes while a mouse button pressed in the panel is held.
+- **A row** is two characters of room (on a graphical display a space, then the file's icon, chosen by the file's name
+  or else the buffer's, with 6 px either side, as the Explorer's top files), then the name with control characters as
+  `^X`. `drgnx-work-id` (the id) is over the row; over the name `drgnx-git-status` (the file's status in the
+  connection's repositories read by `git/letters`, an ignored or untracked folder's around it; an ignored name is dimmed
+  instead) and `drgnx-buffers-modified` while it has unsaved changes. A status read draws the connection's panels
+  again. The editor draws the right edge (the letter, ● or ×, the hover) for the rows drawn near what a window shows.
+
+### The Outline panel's rows (`outline/set`)
+
+The Outline section's rows: the definitions of the file in the editor, built by the hub with Hrafn's parse
+(`hrafn::symbols::outline_text`; `runtime/crates/drgnx-ratatoskr/src/view/outline.rs`; the editor's side is
+`wb/drgnx-outline.el`).
+
+- `outline/set {view, file?}` says the (connection, view) shows FILE now (absolute, at most 4096 bytes; none: no file
+  the hub can read, such as a buffer without one or a remote file), outlines it and answers `true` once its model and
+  rows have gone. The editor sends it when the file it shows changes and after a save, never per keystroke.
+- **The text.** The editor's own text of the file where the edit history tracks the buffer (unsaved typing included,
+  from the mirror Search already reads), else the file on disk. An edit the history takes for a shown file outlines it
+  again once the edits pause for 500 ms of the hub's clock (`QUIET`); an answer for an ask a later one replaced is
+  dropped.
+- **The size guard.** One check, `too_large` (`OUTLINE_MAX`, 1 MiB, the Lisp Outline's limit), on both paths: a text or
+  a file past it is not parsed, and the view shows the notice "This file is too large for an outline".
+- **The model** is a node per definition with its `label` and its `line` (from 1) in the list `order`, in file order:
+  the editor asks Sjá which definition a line is in (`at-line`) to mark the current one, and a row's line to jump.
+- **A row** is the name, indented two columns plus two per definition around it, with control characters as `^X`;
+  its key (`DEPTH:N:NAME`, N counting the earlier definitions of that name and depth) is over it as `drgnx-work-id`, so a
+  definition that only moved keeps its row. A file with nothing to outline (plain text, a language with no definitions)
+  is one inert, muted notice row, "No outline for this file", after the info icon on a graphical display.
+- `outline/scopes {file | path + worktree_root, line}` answers `{scopes: [{name, line}]}`: the definitions that hold LINE
+  (from 1), outermost first, one that starts on it included, from the same text and the same size guard (past it,
+  none). The breadcrumb's symbol (the innermost, `wb/drgnx-chrome.el`) and sticky scroll's scopes in a buffer without
+  tree-sitter (those starting above the window's top line, `modules/editor/drgnx-sticky.el`) read it; a buffer the
+  edit history tracks asks through it (`drgnx-history-ask`: its changes go first), another by its file. The last
+  `PARSED_FILES` (8) parses are kept by file and a hash of their text, so a scroll or a moved point parses nothing again.
+
 ### The agent panel's rows
+
+
+**The header and the chips (offload step F1).** The panel's first rows are the hub's too (`view/panel_top.rs`): `p:head`
+(the agent's Lucide icon and name, what it is doing cut to the room the lens leaves, a stop, then the lens of presets and
+the pin and ⋯ buttons, 24 px around 16 px icons) and, when the snapshot feeds any, `p:chips` (the context used, the cost,
+the mode). They are built again from the session's snapshot at each `emit`, also when no entry changed, and the store sends
+only what changed. The lens is the editor's: `agents/panel/look` carries `lens` (the presets' names) and `lens_on` (the one
+in force, from 1, 0 none). A clickable part has the `drgnx-agent-panel-action` property (`lens:N`, `pin`, `more`) or
+`drgnx-agent-panel-chip` (`context`, `cost`, `mode`); the editor's `agents-panel-act` (a click) and `agents-panel-press`
+(a press keeps point) read them. The editor puts the rows whose key starts with `p:` above its own rows.
 
 The transcript of an agent session, as rows the panel only inserts (`runtime/crates/drgnx-ratatoskr/src/view/panel.rs`;
 the rows themselves are `agents/session/rows.rs`, pure).

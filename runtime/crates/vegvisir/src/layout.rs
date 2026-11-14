@@ -266,9 +266,17 @@ pub fn place_live(v: &ViewState, prev: &Layout, new: &[ItemId], gone: &[ItemId])
             Some((y, x)) => (x, y),
             None => {
                 let y = out.height_units + mx.band;
+                // the next block line of its layer: (layer, block line, sub) names the row's rows on the wire
+                let block_line = out
+                    .rows
+                    .iter()
+                    .filter(|r| r.layer == layer)
+                    .map(|r| r.block_line + 1)
+                    .max()
+                    .unwrap_or(0);
                 out.rows.push(Row {
                     layer,
-                    block_line: 0,
+                    block_line,
                     sub: 0,
                     y,
                     height_units: h,

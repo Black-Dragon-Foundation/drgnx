@@ -200,7 +200,7 @@ afterwards.  The product's view is dormant, so the tests connect the frozen clie
           (should-not (string-search "DRIVING" (substring-no-properties (drgnx-live--header))))
           (should-not (eq (key-binding "a") #'drgnx-live-key))
           (drgnx-live-mouse (drgnx-live-test--event 'down-mouse-1 10 10 640 400)))
-        (drgnx-test-pause 0.1 "no further input may arrive")
+        (drgnx-mock-cdp-barrier)                       ; everything sent so far has reached the browser: no further input may be in it
         (should (= 3 (length (drgnx-mock-cdp-received "Input.dispatchMouseEvent"))))))))
 
 (ert-deftest drgnx-live/the-module-turns-off ()
@@ -278,7 +278,7 @@ afterwards.  The product's view is dormant, so the tests connect the frozen clie
   (drgnx-live-test--with
     (drgnx-live-test--open)
     (should (drgnx-mock-cdp-wait (lambda () (with-current-buffer "*drgnx live*" (= 2 (length drgnx-live--targets))))))
-    (drgnx-test-pause 0.3 "no second attach and no second screencast may start")
+    (drgnx-mock-cdp-barrier)                       ; everything sent so far has reached the browser: no second attach, no second screencast
     (should (equal (mapcar (lambda (m) (plist-get (plist-get m :params) :targetId)) (drgnx-mock-cdp-received "Target.attachToTarget"))
                    '("T1")))
     (should (= 1 (length (drgnx-mock-cdp-received "Page.startScreencast"))))
@@ -375,7 +375,7 @@ afterwards.  The product's view is dormant, so the tests connect the frozen clie
            (widths (lambda () (mapcar (lambda (m) (plist-get (plist-get m :params) :maxWidth))
                                       (drgnx-mock-cdp-received "Page.startScreencast")))))
       (drgnx-state-sync) (drgnx-state--deliver-idle)
-      (drgnx-test-pause 0.1 "no second screencast may start")
+      (drgnx-mock-cdp-barrier)                       ; no second screencast reached the browser
       (should (equal (funcall widths) (list before)))
       (unwind-protect
           (progn

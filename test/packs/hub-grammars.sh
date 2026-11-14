@@ -4,12 +4,15 @@
 # prints the two variables a test run needs. An unchanged set of pins reuses the folder; a pin change builds a new one.
 # Needs network, git and a C compiler: run it in a container (never on the host). Usage:
 #   eval "$(bash test/packs/hub-grammars.sh CACHE)"      # sets DRGNX_PACK_LOCK and DRGNX_PACK_GRAMMARS
+# On macOS too (a CI job): RATATOSKR=path/to/ratatoskr names the hub binary to sync with, so a job does not rebuild it.
 set -euo pipefail
 here="$(cd "$(dirname "$0")/../.." && pwd)"
 cache=${1:?usage: hub-grammars.sh CACHE}
 packs="rust c cpp shell python javascript typescript tsx go java csharp"
 # fixtures5: the fixture grammars below are part of the folder, so a change to them is a new key
-key=$({ echo fixtures5; for p in $packs json; do grep -ho ':\(commit\|tree-sha256\|src\) "[^"]*"' "$here/packs/$p/pack.eld"; done; } | sha256sum | cut -c1-16)
+# sha256sum on Linux, shasum on macOS
+sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi; }
+key=$({ echo fixtures5; for p in $packs json; do grep -ho ':\(commit\|tree-sha256\|src\) "[^"]*"' "$here/packs/$p/pack.eld"; done; } | sha256 | cut -c1-16)
 dir="$cache/$key"
 
 # Two broken grammars for the parse worker's tests (language packs Task 6b): the JSON grammar at its pinned commit with its
@@ -95,6 +98,9 @@ __attribute__((constructor)) static void probe(void) {
 EOF
 }
 
+# the linker's flag for a shared library (the pack job's own: a dylib on macOS)
+shared=-shared
+[ "$(uname -s)" = Darwin ] && shared=-dynamiclib
 fixtures() {
   out=$1
   mkdir -p "$out" "$out/src"
@@ -110,7 +116,7 @@ fixtures() {
     sed "s|^  START_LEXER();\$|  START_LEXER(); $body|" "$out/src/src/parser.c" > "$out/$kind.c"
     [ $kind = probe ] || grep -q "START_LEXER(); " "$out/$kind.c"
     if [ $kind = probe ]; then probe_c >> "$out/$kind.c"; fi
-    cc -shared -fPIC -O1 -D_GNU_SOURCE -I"$out/src/src" -Dtree_sitter_json=tree_sitter_$kind -o "$out/lib$kind.so" "$out/$kind.c" -ldl
+    cc "$shared" -fPIC -O1 -D_GNU_SOURCE -I"$out/src/src" -Dtree_sitter_json=tree_sitter_$kind -o "$out/lib$kind.so" "$out/$kind.c" -ldl
   done
   rm -rf "$out/src" "$out/loopy.c" "$out/crashy.c"
 }
@@ -118,9 +124,14 @@ if [ ! -f "$dir/drgnx.lock.eld" ]; then
   mkdir -p "$cache"
   tmp="$(mktemp -d "$cache/.build.XXXXXX")"
   trap 'rm -rf -- "$tmp"' EXIT
-  (cd "$here/runtime" && cargo run --locked -q -p drgnx-ratatoskr --bin ratatoskr -- packs sync --builtin "$tmp" $packs) >&2
+  # RATATOSKR: a hub binary already built (a job that built it with its own features keeps that build), else cargo's
+  if [ -n "${RATATOSKR:-}" ]; then
+    "$RATATOSKR" packs sync --builtin "$tmp" $packs >&2
+  else
+    (cd "$here/runtime" && cargo run --locked -q -p drgnx-ratatoskr --bin ratatoskr -- packs sync --builtin "$tmp" $packs) >&2
+  fi
   fixtures "$tmp/fixtures"
   # a run that built the same key at the same time wins; ours is dropped
-  mv -T "$tmp" "$dir" 2>/dev/null || true
+  [ -e "$dir" ] || mv "$tmp" "$dir" 2>/dev/null || true
 fi
 echo "export DRGNX_PACK_LOCK='$dir/drgnx.lock.eld' DRGNX_PACK_GRAMMARS='$dir/grammars'"

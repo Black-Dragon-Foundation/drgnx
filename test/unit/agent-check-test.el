@@ -815,6 +815,13 @@ nothing and the fake `systemctl' (SYSTEMCTL-BODY, a shell command) is the only p
   "Start a check of a hanging server (the child's own timeout is 3 s, this Emacs ends it after 1)."
   (drgnx-agent-check-mcp (drgnx-agent-check-test--stdio-item "fork-child" marker) default-directory callback))
 
+(defun drgnx-agent-check-test--no-timer-left ()
+  "Wait until no timer of a check is pending.  A second result could only come from one (the limit, the backstop, the
+kill, the tree or the finish timer), so once none is left and the check has answered, no other answer can follow."
+  (drgnx-test-wait (lambda () (not (seq-find (lambda (k) (string-prefix-p "agent-check" (symbol-name (car-safe k))))
+                                             (mapcar #'car (drgnx-timer-pending)))))
+                   :secs 10 :what "no check timer pending"))
+
 (ert-deftest drgnx-agent-check/a-systemctl-that-hangs-does-not-hang-the-check ()
   :tags '(:timing)                                      ; wall-clock budget: the :timing group runs alone
   (drgnx-agent-check-test-env
@@ -830,7 +837,7 @@ nothing and the fake `systemctl' (SYSTEMCTL-BODY, a shell command) is the only p
         (should (drgnx-agent-check-test--gone-p marker))
         ;; the hanging systemctl was deleted
         (should (drgnx-agent-check-test--gone-p "sleep 3176"))
-        (drgnx-test-pause 0.5 "no second result")
+        (drgnx-agent-check-test--no-timer-left)
         (should (= calls 1))))))
 
 (ert-deftest drgnx-agent-check/a-systemctl-that-cannot-be-started-falls-back-to-the-tree ()
@@ -851,7 +858,7 @@ nothing and the fake `systemctl' (SYSTEMCTL-BODY, a shell command) is the only p
         ;; at the timer's 1 s plus the child's start, long before the 3 s backstop
         (should (< (plist-get result :time) 2.8))
         (should (drgnx-agent-check-test--gone-p marker))
-        (drgnx-test-pause 0.5 "no second result")
+        (drgnx-agent-check-test--no-timer-left)
         (should (= calls 1))))))
 
 (ert-deftest drgnx-agent-check/a-timer-in-a-buffer-with-no-directory-still-ends-the-check ()
@@ -873,7 +880,7 @@ nothing and the fake `systemctl' (SYSTEMCTL-BODY, a shell command) is the only p
         (should (< (plist-get result :time) 2.8))
         (should (drgnx-agent-check-test--gone-p marker))
         (should (member "--user kill --signal=KILL drgnx-check-fake.scope" (drgnx-agent-check-test--systemctl-log)))
-        (drgnx-test-pause 0.5 "no second result")
+        (drgnx-agent-check-test--no-timer-left)
         (should (= calls 1))))))
 
 (ert-deftest drgnx-agent-check/a-finished-check-asks-systemd-to-clear-its-scope ()

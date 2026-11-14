@@ -397,8 +397,10 @@ start processes, but a real `sleep-for' or `sit-for' is a wait on time.")
   "The watched waits: under the clock fixture they move virtual time, so they are not recorded there.")
 
 ;; Emacs's own libraries poll a child with `sleep-for' (epg waits for gpg that way): a wait for an event, not for time.
-(defconst drgnx-run-ert--audit-event-polls '(epg-wait-for-completion)
-  "Functions whose `sleep-for' is a poll of a child process: a `cond' test that goes through one is not sleeping on time.")
+(defconst drgnx-run-ert--audit-event-polls
+  '(epg-wait-for-completion drgnx-ui--poll-pause drgnx-file--sleep drgnx-perf--await-present)
+  "Functions whose `sleep-for' or `sit-for' is a poll for an event (a child process, a lock, a file, a paint): a `cond'
+test that goes through one is not sleeping on time.")
 
 (defun drgnx-run-ert--audit-in-event-poll-p ()
   "Whether the call that is being recorded runs inside one of `drgnx-run-ert--audit-event-polls'."
@@ -530,7 +532,7 @@ never entered the gate and is listed as exempt.")
   (unless (member message drgnx-run-ert--audit-gate-held) (push message drgnx-run-ert--audit-gate-held)))
 
 (defun drgnx-run-ert--audit-filter-around (fn conn chunk)
-  "Around `drgnx-hub--client-filter': a line that arrives while the gate is not releasing is held for the record."
+  "Around `drgnx-hub--client-batch': a line that arrives while the gate is not releasing is held for the record."
   (unless (and (boundp 'drgnx-test-gate--releasing) drgnx-test-gate--releasing)
     (drgnx-run-ert--audit-gated-hold "gated test saw a hub line the gate did not release"))
   (funcall fn conn chunk))
@@ -555,7 +557,7 @@ never entered the gate and is listed as exempt.")
   "Advise what the pattern checks of TAGS (`:gated', `:handshake') watch."
   (when (memq :gated tags)
     (add-variable-watcher 'drgnx-test-gate--active #'drgnx-run-ert--audit-gate-watch)
-    (advice-add 'drgnx-hub--client-filter :around #'drgnx-run-ert--audit-filter-around '((name . drgnx-run-ert-audit)))
+    (advice-add 'drgnx-hub--client-batch :around #'drgnx-run-ert--audit-filter-around '((name . drgnx-run-ert-audit)))
     (advice-add 'drgnx-hub--open :around #'drgnx-run-ert--audit-open-around '((name . drgnx-run-ert-audit))))
   (when (memq :handshake tags)
     (dolist (s drgnx-run-ert--audit-signals)
@@ -564,7 +566,7 @@ never entered the gate and is listed as exempt.")
 (defun drgnx-run-ert--audit-pattern-unadvise ()
   "Remove the pattern checks' advice."
   (remove-variable-watcher 'drgnx-test-gate--active #'drgnx-run-ert--audit-gate-watch)
-  (dolist (s (append '(drgnx-hub--client-filter drgnx-hub--open) drgnx-run-ert--audit-signals))
+  (dolist (s (append '(drgnx-hub--client-batch drgnx-hub--open) drgnx-run-ert--audit-signals))
     (advice-remove s 'drgnx-run-ert-audit)))
 
 (defun drgnx-run-ert--audit-cond-allowed-p (name)

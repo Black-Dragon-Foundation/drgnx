@@ -654,6 +654,14 @@
                   "null"
                 ]
               },
+              "end_pos": {
+                "description": "The position `line_end` (else `line`) starts at: where a ring's last row begins.",
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "handle": {
                 "type": [
                   "string",
@@ -671,6 +679,14 @@
               "line_end": {
                 "format": "uint32",
                 "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "line_pos": {
+                "description": "The position `line` starts at: where a projected agent's tag goes and where a ring begins.",
+                "format": "int64",
                 "type": [
                   "integer",
                   "null"
@@ -699,6 +715,14 @@
                   "null"
                 ]
               },
+              "pos": {
+                "description": "The buffer position (Emacs's: 1-based, in characters) of `line_end` at `col`, clamped to the line: where an\nediting agent's bar sits.  Positions are of the text the hub holds (`doc_version`); none for a text over the\nmarks' limit or an agent with no line.",
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "projected": {
                 "anyOf": [
                   {
@@ -718,6 +742,13 @@
               },
               "step_title": {
                 "description": "Its current step's title (the agent's own words).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "symbol": {
+                "description": "The innermost symbol that defines the line (hrafn's outline of the text the hub holds); none when none does,\nfor a projected agent, or for a text over 2 MB.",
                 "type": [
                   "string",
                   "null"
@@ -760,6 +791,13 @@
                 "minimum": 0,
                 "type": "integer"
               },
+              "end_pos": {
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "help": {
                 "description": "The hover text (\"Opus · changed in step 14 · 2 min ago\").",
                 "type": "string"
@@ -784,6 +822,14 @@
                 "format": "uint32",
                 "minimum": 0,
                 "type": "integer"
+              },
+              "start_pos": {
+                "description": "The positions `start` and `end` begin at (Emacs's, in the text the hub holds): a range is the rows whose line\nstarts lie from `start_pos` to `end_pos`.  None for a text over the marks' limit.",
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -1323,6 +1369,13 @@
                 "minimum": 0,
                 "type": [
                   "integer",
+                  "null"
+                ]
+              },
+              "call": {
+                "description": "The tool call the step ran (the transcript's tool entry `id`), on the `agent-step` event of a tool step; the\n`step` table keeps none, so `timeline/get` has none.",
+                "type": [
+                  "string",
                   "null"
                 ]
               },
@@ -4977,6 +5030,14 @@
                   "null"
                 ]
               },
+              "end_pos": {
+                "description": "The position `line_end` (else `line`) starts at: where a ring's last row begins.",
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "handle": {
                 "type": [
                   "string",
@@ -4994,6 +5055,14 @@
               "line_end": {
                 "format": "uint32",
                 "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "line_pos": {
+                "description": "The position `line` starts at: where a projected agent's tag goes and where a ring begins.",
+                "format": "int64",
                 "type": [
                   "integer",
                   "null"
@@ -5022,6 +5091,14 @@
                   "null"
                 ]
               },
+              "pos": {
+                "description": "The buffer position (Emacs's: 1-based, in characters) of `line_end` at `col`, clamped to the line: where an\nediting agent's bar sits.  Positions are of the text the hub holds (`doc_version`); none for a text over the\nmarks' limit or an agent with no line.",
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "projected": {
                 "anyOf": [
                   {
@@ -5041,6 +5118,13 @@
               },
               "step_title": {
                 "description": "Its current step's title (the agent's own words).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "symbol": {
+                "description": "The innermost symbol that defines the line (hrafn's outline of the text the hub holds); none when none does,\nfor a projected agent, or for a text over 2 MB.",
                 "type": [
                   "string",
                   "null"
@@ -5083,6 +5167,13 @@
                 "minimum": 0,
                 "type": "integer"
               },
+              "end_pos": {
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "help": {
                 "description": "The hover text (\"Opus · changed in step 14 · 2 min ago\").",
                 "type": "string"
@@ -5107,6 +5198,14 @@
                 "format": "uint32",
                 "minimum": 0,
                 "type": "integer"
+              },
+              "start_pos": {
+                "description": "The positions `start` and `end` begin at (Emacs's, in the text the hub holds): a range is the rows whose line\nstarts lie from `start_pos` to `end_pos`.  None for a text over the marks' limit.",
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -7714,6 +7813,26 @@
         "additionalProperties": false,
         "description": "`agents/panel/look`: what the user chose for an agent panel (docs/develop/hub.md, \"The agent panel's rows\").  Each\nfield given replaces the one before; none given builds the rows again.",
         "properties": {
+          "lens": {
+            "description": "The header's lens: the presets' names, in order.",
+            "items": {
+              "maxLength": 32,
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "lens_on": {
+            "description": "The preset in force, from 1 (0: none).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "older": {
             "description": "The rows go back one window further (the editor scrolled to their top).",
             "type": [
@@ -8597,6 +8716,13 @@
                 "minimum": 0,
                 "type": [
                   "integer",
+                  "null"
+                ]
+              },
+              "call": {
+                "description": "The tool call the step ran (the transcript's tool entry `id`), on the `agent-step` event of a tool step; the\n`step` table keeps none, so `timeline/get` has none.",
+                "type": [
+                  "string",
                   "null"
                 ]
               },
@@ -10205,6 +10331,179 @@
         "type": "object"
       },
       "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "changes to the Buffers panel's open buffers of a hub-fed view (put, modified, remove, the window's scope, the filter), in order: the hub sends the view's rows that changed to every class of it",
+      "name": "buffers/set",
+      "params": {
+        "$defs": {
+          "BufferOp": {
+            "description": "One change of `buffers/set`.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "description": "No buffer is open (the editor puts its set again after it, in open order: a new hub, a reconnect).",
+                "properties": {
+                  "op": {
+                    "const": "reset",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "op"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Buffer ID (the editor's, at most 64 bytes) is open with NAME, visiting FILE (none: no file, such as a folder's\nlisting), MODIFIED when it has unsaved changes: a new id goes last in the open order, a known one keeps its place.",
+                "properties": {
+                  "file": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "modified": {
+                    "default": false,
+                    "type": "boolean"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "op": {
+                    "const": "put",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "op",
+                  "id",
+                  "name"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Buffer ID's unsaved flag flipped.",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "modified": {
+                    "type": "boolean"
+                  },
+                  "op": {
+                    "const": "modified",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "op",
+                  "id",
+                  "modified"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Buffer ID was closed.",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "op": {
+                    "const": "remove",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "op",
+                  "id"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Only the buffers IDS are on rows (those of the window the user works in), in the open order; none: every one.",
+                "properties": {
+                  "ids": {
+                    "default": null,
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "op": {
+                    "const": "scope",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "op"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Only the buffers whose names hold TEXT (any case) are on rows; none or empty: every one.",
+                "properties": {
+                  "op": {
+                    "const": "filter",
+                    "type": "string"
+                  },
+                  "text": {
+                    "default": null,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "op"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`buffers/set`: changes to the Buffers panel's open buffers for the hub-fed VIEW, in order; the hub sends VIEW's\nrows that changed to every class of it (docs/develop/hub.md, \"Rows\"). The editor sends one when the set of open\nbuffers, a name or an unsaved flag changed, or the window's scope or the filter did, never per keystroke.",
+        "properties": {
+          "ops": {
+            "items": {
+              "$ref": "#/$defs/BufferOp"
+            },
+            "type": "array"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "ops"
+        ],
+        "title": "BuffersSet",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
     },
     {
       "classes": [
@@ -19707,6 +20006,77 @@
       "classes": [
         "user"
       ],
+      "doc": "the inline blame text of one line of the editor's tracked buffer (git/blame's answer for the text the hub holds), fitted to the columns the editor has room for: author, age, commit subject; no text when the buffer is not tracked, the line has none or there is no room",
+      "name": "git/blame/line",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`git/blame/line`: the blame text of the line POS is on, in the text the hub holds of the editor's tracked buffer of\nPATH of the worktree at WORKTREE_ROOT, fitted to WIDTH columns.",
+        "properties": {
+          "path": {
+            "description": "Relative to the worktree.",
+            "type": "string"
+          },
+          "pos": {
+            "description": "The buffer position (Emacs's: 1-based, in characters) of the line.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "width": {
+            "description": "The columns the text may take; under 20 nothing is answered, over 80 it is cut to 80.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "worktree_root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "worktree_root",
+          "pos",
+          "width"
+        ],
+        "title": "GitBlameLineParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`git/blame/line`'s answer: none of the fields when the buffer is not tracked, the line has no blame (the empty last\nline) or WIDTH is too small for a line of it.",
+        "properties": {
+          "sha": {
+            "description": "The commit that last changed the line (the zero one when it is not committed): Show Commit of Line.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "description": "\"Ada, 3 days ago · Fix the parser\", \"You · Uncommitted changes\" or \"agent s1 · …\", cut with an ellipsis to the\nwidth.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "time": {
+            "description": "The commit's author time; none for a line not committed yet.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "title": "BlamedLine",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "read a repository's git status on a thread and give a hub-fed view its rows (a letter per changed path, a mark per shown folder with a change, the branch): the view-patch follows, only what changed after the first",
       "name": "git/letters",
       "params": {
@@ -22473,6 +22843,123 @@
       "classes": [
         "user"
       ],
+      "doc": "end-of-line diagnostics fitted: each text cut with an ellipsis to the room its window has after the end of its line in the text the hub holds of the editor's tracked buffer (tabs counted); the editor shows the fitted strings and fits nothing itself",
+      "name": "history/eol-fit",
+      "params": {
+        "$defs": {
+          "EolItem": {
+            "additionalProperties": false,
+            "description": "One diagnostic: the client's KEY for it, the buffer POSITION (Emacs's) it starts at, and its TEXT.",
+            "properties": {
+              "key": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "pos": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "key",
+              "pos",
+              "text"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`history/eol-fit`: the end-of-line diagnostics of the editor's tracked buffer of PATH of the worktree at\nWORKTREE_ROOT, each to be cut to the room a window WIDTH columns wide has after the end of its line (TAB_WIDTH\ncolumns to a tab).",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/EolItem"
+            },
+            "type": "array"
+          },
+          "path": {
+            "description": "Relative to the worktree.",
+            "type": "string"
+          },
+          "tab_width": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "width": {
+            "description": "The window's body width in columns.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "worktree_root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "worktree_root",
+          "width",
+          "tab_width",
+          "items"
+        ],
+        "title": "EolFitParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "EolFitted": {
+            "additionalProperties": false,
+            "description": "A diagnostic's TEXT fitted: whole when it fits, else cut with an ellipsis (at least 8 columns).",
+            "properties": {
+              "key": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "key",
+              "text"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`history/eol-fit`'s answer: `items` empty (and `tracked` false) when no buffer of the file is tracked or its text\nis over the marks' limit.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/EolFitted"
+            },
+            "type": "array"
+          },
+          "tracked": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "tracked",
+          "items"
+        ],
+        "title": "EolFits",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "fork from a step: a second agent in its own tree at the step's checkpoint, its conversation forked there (or told a labelled summary), started with the user's message; no task, no job, no approval",
       "name": "history/fork",
       "params": {
@@ -22745,6 +23232,49 @@
               "old_lines"
             ],
             "type": "object"
+          },
+          "HunkMark": {
+            "additionalProperties": false,
+            "description": "One gutter mark: the line (1-based) and the position (Emacs's, 1-based, in characters) the line starts at.",
+            "properties": {
+              "kind": {
+                "$ref": "#/$defs/HunkMarkKind"
+              },
+              "line": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "pos": {
+                "format": "int64",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "line",
+              "pos",
+              "kind"
+            ],
+            "type": "object"
+          },
+          "HunkMarkKind": {
+            "description": "What a gutter mark says.",
+            "oneOf": [
+              {
+                "const": "added",
+                "description": "A line the buffer added.",
+                "type": "string"
+              },
+              {
+                "const": "changed",
+                "description": "A line the buffer changed.",
+                "type": "string"
+              },
+              {
+                "const": "deleted",
+                "description": "Where lines were deleted (the line after them carries it).",
+                "type": "string"
+              }
+            ]
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -22757,15 +23287,109 @@
             },
             "type": "array"
           },
+          "marks": {
+            "description": "The gutter marks the hunks make, sorted by position, in the coordinates of the buffer text the hub holds (the\ntext the edit history was last told): empty for a text over the marks' size limit.",
+            "items": {
+              "$ref": "#/$defs/HunkMark"
+            },
+            "type": "array"
+          },
           "tracked": {
             "type": "boolean"
           }
         },
         "required": [
           "tracked",
-          "hunks"
+          "hunks",
+          "marks"
         ],
         "title": "HeadHunks",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "where the given lines of the editor's tracked buffer start in the text the hub holds (and just after them): the editor moves a mark to them without counting lines; none when the buffer is not tracked or the text is over the marks' limit",
+      "name": "history/line-positions",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`history/line-positions`: where LINES (1-based) of the editor's tracked buffer of PATH of the worktree at\nWORKTREE_ROOT start, in the text the hub holds (the editor hands its changes over first: `drgnx-history-ask`).",
+        "properties": {
+          "lines": {
+            "items": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "path": {
+            "description": "Relative to the worktree.",
+            "type": "string"
+          },
+          "worktree_root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "worktree_root",
+          "lines"
+        ],
+        "title": "LinePositionsParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "LinePosition": {
+            "additionalProperties": false,
+            "description": "One line's place in the buffer: where it starts and just after it, its line break included.",
+            "properties": {
+              "end": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "pos": {
+                "format": "int64",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "line",
+              "pos",
+              "end"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`history/line-positions`' answer: none (`tracked` false, or `positions` empty) when no buffer of the file is\ntracked or its text is over the marks' limit.",
+        "properties": {
+          "positions": {
+            "items": {
+              "$ref": "#/$defs/LinePosition"
+            },
+            "type": "array"
+          },
+          "tracked": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "tracked",
+          "positions"
+        ],
+        "title": "LinePositions",
         "type": "object"
       },
       "writes": false
@@ -28279,6 +28903,122 @@
       "classes": [
         "user"
       ],
+      "doc": "the definitions around a line of a file, outermost first, as the Outline reads it (the editor's unsaved text where its edit history tracks the buffer, else the disk): the breadcrumb's symbol and sticky scroll",
+      "name": "outline/scopes",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`outline/scopes`: the definitions around LINE (from 1) of a file, as the Outline reads it (the editor's unsaved text\nwhere its edit history tracks the buffer, else the disk): what the breadcrumb's symbol and sticky scroll show.  The\nfile is FILE (absolute), or PATH under WORKTREE_ROOT (the edit history's names: a tracked buffer asks through the\nhistory, its changes handed over first).",
+        "properties": {
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "line": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "worktree_root": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "line"
+        ],
+        "title": "OutlineScopesParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "OutlineScope": {
+            "additionalProperties": false,
+            "description": "One definition around a line: its NAME and the LINE (from 1) it starts on.",
+            "properties": {
+              "line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "line"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`outline/scopes`' answer: the definitions that hold the line, outermost first (one that starts on it included);\nempty for a file with none, one that cannot be read, or one past the Outline's size limit.",
+        "properties": {
+          "scopes": {
+            "items": {
+              "$ref": "#/$defs/OutlineScope"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "scopes"
+        ],
+        "title": "OutlineScopes",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the file the Outline panel's hub-fed view shows (none: no file): the hub outlines it (the editor's unsaved text where its edit history tracks the buffer, else the disk), again after edits pause, and sends the view's model and rows",
+      "name": "outline/set",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`outline/set`: the Outline panel's hub-fed VIEW now shows FILE (absolute; none: the editor shows no file the hub\ncan read, such as a buffer without one or a remote file).  The hub outlines the file as the editor's tracked buffer\nof it has it (unsaved typing included), else as it is on disk, keeps it per (connection, view), outlines it again\nafter the editor's edits pause, and sends the view's model and rows (docs/develop/hub.md, \"The Outline panel's\nrows\").  Sent again when the editor shows another file or saves this one, never per keystroke.",
+        "properties": {
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "OutlineSet",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the subscriptions' meters: share used, rate per hour and when it runs out at that rate (estimates)",
       "name": "pace/get",
       "params": {
@@ -32935,7 +33675,7 @@
       "classes": [
         "user"
       ],
-      "doc": "an editor buffer with unsaved edits: the Search view's searches search its text in place of its file (the current search at once), or say the buffer is too large and is searched on disk; without text or large the file is searched again",
+      "doc": "an editor buffer with unsaved edits: the Search view's searches search its text in place of its file (the current search at once), the text sent or, with mirror, the edit history's mirror of the tracked buffer (false while it is behind version or no buffer is tracked), or say the buffer is too large and is searched on disk; without text, mirror or large the file is searched again",
       "name": "search/buffer",
       "params": {
         "$defs": {
@@ -32948,9 +33688,15 @@
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "description": "`search/buffer`: the editor's buffer of PATH holds unsaved edits: VIEW's searches search TEXT in place of the file\nfrom now on, and the current one takes its matches at once. A buffer over the editor's large-file threshold sends\n`large` and no text: the file is searched on disk, its header saying the buffer is open in chunks. Neither: the\nbuffer was saved or killed, and the next search reads the file again.",
+        "description": "`search/buffer`: the editor's buffer of PATH holds unsaved edits: VIEW's searches search TEXT in place of the file\nfrom now on, and the current one takes its matches at once. A buffer over the editor's large-file threshold sends\n`large` and no text: the file is searched on disk, its header saying the buffer is open in chunks. Neither: the\nbuffer was saved or killed, and the next search reads the file again. `mirror` sends no text: the hub takes the\ntext of the editor's tracked buffer from the edit history's mirror, once the mirror's version is at least `version`\n(the editor's drain counter after it handed its changes over); until then, or with no tracked buffer of the file,\nthe answer is false and nothing changes.",
         "properties": {
           "large": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "mirror": {
             "type": [
               "boolean",
               "null"
@@ -32968,6 +33714,13 @@
           "tick": {
             "default": 0,
             "description": "The buffer's `buffer-chars-modified-tick`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "version": {
+            "default": 0,
+            "description": "With `mirror`: the version the editor's changes to the buffer have reached.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -40716,6 +41469,13 @@
                   "null"
                 ]
               },
+              "call": {
+                "description": "The tool call the step ran (the transcript's tool entry `id`), on the `agent-step` event of a tool step; the\n`step` table keeps none, so `timeline/get` has none.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "class": {
                 "$ref": "#/$defs/StepClass"
               },
@@ -41294,7 +42054,7 @@
             "type": "boolean"
           },
           "rows_in_sja": {
-            "description": "The editor holds this view's rows in Sjá: its patches come as a `view-model` line's `rows` (`{view, rows}`),\nwhich Sjá takes whole. Only a terminal's view reads it so far.",
+            "description": "The editor holds this view's rows in Sjá: its patches come as a `view-model` line's `rows` (`{view, rows}`),\nwhich Sjá takes whole, for any view (a terminal's from `term/open` and `term/attach` too).",
             "type": "boolean"
           },
           "scale": {

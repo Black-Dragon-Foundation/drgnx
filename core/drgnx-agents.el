@@ -348,14 +348,11 @@ applies through the gateway only."
                (list :data-collection (symbol-name (plist-get restrictions :data-collection))))
           (and (plist-get restrictions :zdr) (list :zdr t))))
 
-(defvar drgnx-agents--at-work 0 "How many mirrored sessions work (`drgnx-agents-at-work'), counted on each change.")
+(defvar drgnx-agents--at-work 0 "How many mirrored sessions work (`drgnx-agents-at-work'), as the hub last counted them.")
 
 (defun drgnx-agents--changed (s)
-  (drgnx-agents--note-attention)
-  (let ((n 0))
-    (dolist (x drgnx-agents--sessions)
-      (when (or (eq (drgnx-agent-session-status x) 'busy) (drgnx-agent-session-permissions x)) (setq n (1+ n))))
-    (setq drgnx-agents--at-work n))
+  "Mirror S changed: run `drgnx-agents-changed-functions'.  What waits on you and the count of sessions at work are
+the hub's (`agents-attention', `drgnx-agents--take-attention'), not made from the sessions here."
   (run-hook-with-args 'drgnx-agents-changed-functions s))
 
 (defun drgnx-agents-at-work ()
@@ -365,53 +362,27 @@ tools/agents sets `drgnx-topline-agents-function'); it reads a variable, so redi
 
 ;;;; What waits on you: the `agents' set of the one "needs you" count
 
-(defvar drgnx-agents--attention-seen nil
-  "What `drgnx-agents--note-attention' last noted: one (SESSION PERMS . REVIEWS) per session, in the order of
-`drgnx-agents--sessions'; PERMS and REVIEWS are copies of its lists (nil for an exited session).")
+(defvar drgnx-agents--attention nil
+  "The notice items the hub last named (`agents-attention'), in the notice model's shape: one per pending permission.")
 
-(defun drgnx-agents--same-items-p (a b)
-  "Non-nil if lists A and B hold the same objects (`eq'), in order; allocates nothing."
-  (while (and a b (eq (car a) (car b))) (setq a (cdr a) b (cdr b)))
-  (and (null a) (null b)))
+(defun drgnx-agents--take-attention (data)
+  "DATA, the hub's `agents-attention' event (`{at_work, items}', derived there from every session's snapshot): the
+count of sessions at work, and the `agents' set of the notice model, one item per pending permission.  A lookup and a
+map over the few items, made when the list changes."
+  (setq drgnx-agents--at-work (or (plist-get data :at_work) 0))
+  (setq drgnx-agents--attention
+        (mapcar (lambda (i)
+                  (list :id (cons 'permission (cons (plist-get i :session) (plist-get i :id)))
+                        :text (plist-get i :text) :command 'agents-answer :scope (plist-get i :job)))
+                (append (plist-get data :items) nil)))
+  (drgnx-notice-set 'agents drgnx-agents--attention))
 
-(defun drgnx-agents--attention-same-p ()
-  "Non-nil if no session came or went, and none's permissions or edits to review changed, since the last note."
-  (let ((ss drgnx-agents--sessions) (seen drgnx-agents--attention-seen) (same t))
-    (while (and same ss seen)
-      (let* ((s (car ss)) (e (car seen)) (live (not (eq (drgnx-agent-session-status s) 'exited))))
-        (setq same (and (eq s (car e))
-                        (drgnx-agents--same-items-p (and live (drgnx-agent-session-permissions s)) (cadr e))
-                        (drgnx-agents--same-items-p (and live (drgnx-agent-session-reviews s)) (cddr e)))
-              ss (cdr ss) seen (cdr seen))))
-    (and same (null ss) (null seen))))
-
-(defun drgnx-agents--note-attention ()
-  "Give the notice model the `agents' set: each live session's pending permissions and edits to review.
-Called on every change of a session (`drgnx-agents--changed', a mirror's too), so a streamed chunk costs a walk that
-allocates nothing; the set is built only when a list changed.  A review's path is the agent's: it is abbreviated
-with no file name handler."
-  (unless (drgnx-agents--attention-same-p)
-    (let ((seen nil) (items nil))
-      (dolist (s drgnx-agents--sessions)
-        (let* ((live (not (eq (drgnx-agent-session-status s) 'exited)))
-               (perms (and live (drgnx-agent-session-permissions s)))
-               (reviews (and live (drgnx-agent-session-reviews s)))
-               (sid (drgnx-agent-session-id s)) (name (drgnx-agent-session-name s)) (job (drgnx-agent-session-job s)))
-          (push (cons s (cons (copy-sequence perms) (copy-sequence reviews))) seen)
-          (dolist (p perms)
-            (push (list :id (cons 'permission (cons sid (plist-get p :id)))
-                        :text (format "%s asks: %s" name (or (plist-get p :title) "permission"))
-                        :command 'agents-answer :scope job)
-                  items))
-          (dolist (r reviews)
-            (push (list :id (cons 'review (cons sid (plist-get r :id)))
-                        :text (format "%s wants to write %s" name
-                                      (let ((path (plist-get r :path)) (file-name-handler-alist nil))
-                                        (if (stringp path) (abbreviate-file-name path) "a file")))
-                        :command 'agents-view :scope job)
-                  items))))
-      (setq drgnx-agents--attention-seen (nreverse seen))
-      (drgnx-notice-set 'agents (nreverse items)))))
+(defun drgnx-agents--attention-answered (s item)
+  "The permission ITEM of session S was answered here: its notice leaves the set at once (the hub's list follows)."
+  (let ((id (cons 'permission (cons (drgnx-agent-session-id s) (plist-get item :id)))))
+    (when (seq-find (lambda (i) (equal (plist-get i :id) id)) drgnx-agents--attention)
+      (setq drgnx-agents--attention (seq-remove (lambda (i) (equal (plist-get i :id) id)) drgnx-agents--attention))
+      (drgnx-notice-set 'agents drgnx-agents--attention))))
 
 ;;;; Transcript
 
@@ -540,6 +511,7 @@ the hub answered without an error."
   "Answer the pending permission ITEM of session S with OPTION-ID (nil: cancelled): it leaves S's list at once, and
 the hub hears the answer when S is its session's mirror."
   (setf (drgnx-agent-session-permissions s) (delq item (drgnx-agent-session-permissions s)))
+  (drgnx-agents--attention-answered s item)
   (drgnx-agents--changed s)
   (when (drgnx-agent-session-remote s)
     (drgnx-agents--remote s "agents/permission" (list :request (plist-get item :id) :option option-id))))

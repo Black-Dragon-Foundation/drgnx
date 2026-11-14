@@ -142,7 +142,7 @@ the loop and sets `kx-returned' when it ends."
     (should-not (drgnx-tty-session-eval s '(plist-get (terminal-parameter nil 'drgnx-tty-caps) :osc52)))
     (drgnx-tty-tmux-test--copy s "stays here")
     (should (equal (drgnx-tty-session-eval s '(car kill-ring)) "stays here"))
-    (drgnx-test-pause 0.5 "no copy may reach the clipboard")
+    (drgnx-tty-session-pty-barrier s)               ; tmux has read all the terminal output: no copy reached its buffer
     (should-not (drgnx-tty-session-clipboard s))))
 
 (ert-deftest drgnx-tty-tmux/focus-events-reach-drgnx ()

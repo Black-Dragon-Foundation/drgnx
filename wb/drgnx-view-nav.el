@@ -224,30 +224,157 @@ its dim nodes' spans are drawn dim.  The rows go in buffer order, a stretch of c
 
 (defun drgnx-view-nav-class-step (view &optional keys)
   "The class step of VIEW, in its buffer: the nodes whose class changed in Sjá get it on their spans; with KEYS (rows a
-draw replaced), every node drawn in them gets its current class again and the overlays left empty go."
-  (when-let* ((h (drgnx-view-patch-handle drgnx-view-patch)))
-    (drgnx-view-nav--face-of nil)                       ; the faces, and the class `dim', for this model
-    (let ((changes (nidhogg-view-get h 'classes)) (done (and keys (make-hash-table :test #'equal))) (i 0)
-          (rows (if drgnx-view-nav--rows (clrhash drgnx-view-nav--rows)
-                  (setq drgnx-view-nav--rows (make-hash-table :test #'equal)))))
+draw replaced), every node drawn in them gets its current class again and the overlays left empty go.  A view whose
+rows Sjá holds takes `drgnx-view-nav-sja-step' (its draw runs that with the nodes it drew)."
+  (if (and drgnx-view-patch (drgnx-view-patch-sja drgnx-view-patch))
+      (drgnx-view-nav-sja-step)
+    (when-let* ((h (drgnx-view-patch-handle drgnx-view-patch)))
+      (drgnx-view-nav--face-of nil)                       ; the faces, and the class `dim', for this model
+      (let ((changes (nidhogg-view-get h 'classes)) (done (and keys (make-hash-table :test #'equal))) (i 0)
+            (rows (if drgnx-view-nav--rows (clrhash drgnx-view-nav--rows)
+                    (setq drgnx-view-nav--rows (make-hash-table :test #'equal)))))
+        (while (< i (length changes))
+          (when done (puthash (aref changes i) t done))     ; a key's step makes no table: only a draw's reads it
+          (drgnx-view-nav--put-class view (aref changes i) (aref changes (1+ i)) rows)
+          (setq i (+ i 2)))
+        (when keys
+          ;; the nodes drawn in the replaced rows, by the row → ids index: never a walk of every node drawn
+          (let ((index (drgnx-view-patch-keys drgnx-view-patch)))
+            (dolist (k keys)
+              (puthash k t rows)                            ; drawn again: in or out of its dim run afresh
+              (dolist (id (gethash k index))
+                (unless (gethash id done)
+                  (puthash id t done)
+                  (drgnx-view-nav--put-class view id (nidhogg-view-get h 'class id) rows))))))
+        (drgnx-view-nav--dim-rows view rows)
+        (when keys
+          ;; a draw may have deleted text under an overlay: the empty ones go (a key alone deletes no text; dim runs
+          ;; evaporate)
+          (let ((table (drgnx-view-patch-spans drgnx-view-patch)))
+            (maphash (lambda (id ovs)
+                       (let ((live (cl-remove-if (lambda (o)
+                                                   (when (= (overlay-start o) (overlay-end o)) (delete-overlay o) t))
+                                                 ovs)))
+                         (if live (puthash id live table) (remhash id table))))
+                     table))
+          (when drgnx-view-nav--place-after-draw
+            (setq drgnx-view-nav--place-after-draw nil)
+            (when-let* ((id (nidhogg-view-get h 'selection))) (drgnx-view-nav--place-point view id))))))))
+
+;;;; The class step of a view whose rows Sjá holds (`drgnx-view-sja')
+;;
+;; Sjá drew the rows, so it answers where a node is: its spans (`spans', cut where the runs' faces change) and the dim
+;; runs (`dimruns': consecutive drawn rows whose every node is dim, and the dim nodes of the other rows).  Lisp puts
+;; the overlays, and asks once per face name whether it draws a box.
+
+(declare-function drgnx-view-sja--face "drgnx-view-sja" (s name))
+
+(defvar-local drgnx-view-nav--sja-boxed nil
+  "(FACES . TABLE): run face name → whether it draws a box, learned once per name for the class faces FACES (a new
+model or theme makes them again, and the table with them).  Bounded by the face names the rows use.")
+
+(defvar-local drgnx-view-nav--sja-dim nil
+  "The dim runs as drawn: (RUNS OVERLAYS LONE), RUNS Sjá's vector, LONE a table of the dim nodes drawn by their spans.")
+
+(defun drgnx-view-nav--sja-boxed-p (names)
+  "Whether one of the run face NAMES (a vector, or nil) draws a box (`drgnx-view-nav--boxed-p')."
+  (let* ((s drgnx-view-patch) (faces (drgnx-view-patch-class-faces s)) (memo drgnx-view-nav--sja-boxed) (boxed nil))
+    (unless (and memo (eq (car memo) faces))
+      (setq memo (setq drgnx-view-nav--sja-boxed (cons faces (make-hash-table :test #'equal)))))
+    (dotimes (i (length names))
+      (let* ((name (aref names i)) (v (gethash name (cdr memo) 'unknown)))
+        (when (eq v 'unknown)
+          (setq v (and (drgnx-view-nav--boxed-p (if (integerp name) (drgnx-view-patch--style-face s name)
+                                                  (drgnx-view-sja--face s name)))
+                       t))
+          (puthash name v (cdr memo)))
+        (when v (setq boxed t))))
+    boxed))
+
+(defun drgnx-view-nav--sja-spans (id &optional whole)
+  "The (BEG . END) spans of node ID in the rows Sjá drew, less their boxed runs (WHOLE: with them)."
+  (let* ((s drgnx-view-patch) (beg (drgnx-view-patch-beg s))
+         (v (nidhogg-view-rows (drgnx-view-patch-handle s) 'spans nil (concat (symbol-name drgnx-view-patch-id-prop) "\t" id)))
+         (i 0) spans)
+    (while (< i (length v))
+      (let ((from (+ beg (aref v i))) (to (+ beg (aref v (1+ i)))))
+        (unless (and (not whole) (drgnx-view-nav--sja-boxed-p (aref v (+ i 2))))
+          (if (and spans (= (cdar spans) from)) (setcdr (car spans) to) (push (cons from to) spans))))
+      (setq i (+ i 3)))
+    (nreverse spans)))
+
+(defun drgnx-view-nav--sja-overlays (id face)
+  "FACE over node ID's spans, as ID's overlays in the spans table (its old ones go first); FACE nil: none."
+  (let* ((state drgnx-view-patch) (table (drgnx-view-patch-spans state)) (old (gethash id table)))
+    (mapc #'delete-overlay old)
+    (remhash id table)
+    (when face
+      (let (ovs)
+        (dolist (span (drgnx-view-nav--sja-spans id))
+          (let ((ov (make-overlay (car span) (cdr span))))
+            (overlay-put ov 'face face)
+            (overlay-put ov 'priority 10)
+            (push ov ovs)))
+        (when ovs (puthash id ovs table))))))
+
+(defun drgnx-view-nav--sja-dim (h dim redrawn)
+  "The dim runs and the lone dim nodes of H's rows as Sjá answers them for class DIM; REDRAWN: the nodes a draw drew
+again (a table), whose lone overlays are made again."
+  (let* ((s drgnx-view-patch) (beg (drgnx-view-patch-beg s)) (face (drgnx-view-nav--face-of dim))
+         (d (nidhogg-view-rows h 'dimruns dim (symbol-name drgnx-view-patch-id-prop)))
+         (runs (car d)) (lone (cadr d)) (was drgnx-view-nav--sja-dim)
+         (ovs (nth 1 was)) (old (or (nth 2 was) (make-hash-table :test #'equal))) (now (make-hash-table :test #'equal)))
+    (unless (equal runs (car was))
+      (mapc #'delete-overlay ovs)
+      (setq ovs nil)
+      (let ((i 0))
+        (while (< i (length runs))
+          (let ((ov (make-overlay (+ beg (aref runs i)) (+ beg (aref runs (1+ i))) nil t nil)))
+            (overlay-put ov 'drgnx-view-dim-run t)
+            (overlay-put ov 'face face)
+            (overlay-put ov 'priority 10)
+            (overlay-put ov 'evaporate t)
+            (push ov ovs))
+          (setq i (+ i 2)))))
+    (dotimes (i (length lone))
+      (let ((id (aref lone i)))
+        (puthash id t now)
+        (when (or (not (gethash id old)) (gethash id redrawn)) (drgnx-view-nav--sja-overlays id face))))
+    ;; a node no longer lone and still dim is in a run now: its own overlays go
+    (maphash (lambda (id _)
+               (unless (or (gethash id now) (not (eql dim (nidhogg-view-get h 'class id))))
+                 (drgnx-view-nav--sja-overlays id nil)))
+             old)
+    (setq drgnx-view-nav--sja-dim (list runs ovs now))))
+
+(defun drgnx-view-nav-sja-step (&optional ids)
+  "The class step of the current buffer's view, whose rows Sjá holds: the nodes whose class changed in Sjá, and IDS
+\(a vector: the nodes a draw drew), get their class on their spans; the dim runs are Sjá's."
+  (when-let* ((s drgnx-view-patch) (h (drgnx-view-patch-handle s))
+              (faces (progn (drgnx-view-nav--face-of nil) (drgnx-view-patch-class-faces s)))
+              ((> (length faces) 0)))
+    (let* ((changes (nidhogg-view-get h 'classes)) (dim (drgnx-view-patch-dim-class s))
+           (done (make-hash-table :test #'equal)) (i 0))
       (while (< i (length changes))
-        (when done (puthash (aref changes i) t done))     ; a key's step makes no table: only a draw's reads it
-        (drgnx-view-nav--put-class view (aref changes i) (aref changes (1+ i)) rows)
+        (let ((id (aref changes i)) (class (aref changes (1+ i))))
+          (puthash id t done)
+          (drgnx-view-nav--sja-overlays id (and class (not (eql class dim)) (drgnx-view-nav--face-of class))))
         (setq i (+ i 2)))
-      (when keys
-        ;; the nodes drawn in the replaced rows, by the row → ids index: never a walk of every node drawn
-        (let ((index (drgnx-view-patch-keys drgnx-view-patch)))
-          (dolist (k keys)
-            (puthash k t rows)                            ; drawn again: in or out of its dim run afresh
-            (dolist (id (gethash k index))
-              (unless (gethash id done)
-                (puthash id t done)
-                (drgnx-view-nav--put-class view id (nidhogg-view-get h 'class id) rows))))))
-      (drgnx-view-nav--dim-rows view rows)
-      (when keys
-        ;; a draw may have deleted text under an overlay: the empty ones go (a key alone deletes no text; dim runs
-        ;; evaporate)
-        (let ((table (drgnx-view-patch-spans drgnx-view-patch)))
+      (dotimes (j (length ids))
+        (let ((id (aref ids j)))
+          (unless (gethash id done)
+            (puthash id t done)
+            (let ((class (nidhogg-view-get h 'class id)))
+              (drgnx-view-nav--sja-overlays id (and class (not (eql class dim)) (drgnx-view-nav--face-of class)))))))
+      (if dim
+          (drgnx-view-nav--sja-dim h dim done)
+        (when drgnx-view-nav--sja-dim
+          (mapc #'delete-overlay (nth 1 drgnx-view-nav--sja-dim))
+          (maphash (lambda (id _) (drgnx-view-nav--sja-overlays id nil)) (nth 2 drgnx-view-nav--sja-dim))
+          (setq drgnx-view-nav--sja-dim nil)))
+      (when (> (length ids) 0)
+        ;; a draw may have deleted text under an overlay: the empty ones go
+        (let ((table (drgnx-view-patch-spans s)))
           (maphash (lambda (id ovs)
                      (let ((live (cl-remove-if (lambda (o)
                                                  (when (= (overlay-start o) (overlay-end o)) (delete-overlay o) t))
@@ -256,13 +383,14 @@ draw replaced), every node drawn in them gets its current class again and the ov
                    table))
         (when drgnx-view-nav--place-after-draw
           (setq drgnx-view-nav--place-after-draw nil)
-          (when-let* ((id (nidhogg-view-get h 'selection))) (drgnx-view-nav--place-point view id)))))))
+          (when-let* ((id (nidhogg-view-get h 'selection))) (drgnx-view-nav--place-point nil id)))))))
 
 ;;;; Point, the notice, the broken view
 
 (defun drgnx-view-nav--place-point (view id)
   "Point to the start of ID's first span, in every window that shows VIEW's buffer."
-  (when-let* ((span (car (drgnx-view-nav--spans view id t))))
+  (when-let* ((span (car (if (drgnx-view-patch-sja drgnx-view-patch) (drgnx-view-nav--sja-spans id t)
+                           (drgnx-view-nav--spans view id t)))))
     (goto-char (car span))
     (dolist (w (get-buffer-window-list (current-buffer) nil t))
       (set-window-point w (car span)))))

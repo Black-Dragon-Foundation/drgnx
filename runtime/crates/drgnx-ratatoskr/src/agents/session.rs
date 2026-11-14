@@ -3406,6 +3406,7 @@ async fn write_steps(
                 history_op: history_op.map(|op| op as u64),
                 undone_by: None,
                 revertible: history_op.is_some(),
+                call: c.open.tool_id.clone(),
                 hooks: Vec::new(),
             };
             // the files the step was in: the presence model (a shell step's command looked up off the async threads).  A
@@ -4134,10 +4135,11 @@ impl Session {
             &self.id,
             json!({"id": self.id, "seq": seq, "session": snapshot}),
         );
+        // the panel's header and chips follow the snapshot, also when no entry changed
+        self.panels.changed(self, &dirty);
         if entries.is_empty() {
             return;
         }
-        self.panels.changed(self, &dirty);
         let subscribers = self.editors.entry_subscribers(&self.id);
         if subscribers.is_empty() {
             return;
@@ -4734,7 +4736,7 @@ impl Session {
         // The matrix decides, after the before-tool hooks where any subscribe: allowed answers at once, never refuses
         // at once, an ask waits for the user.
         let s = self.clone();
-        tokio::spawn(async move {
+        crate::clock::spawn("session:permission", async move {
             if s.has_jobs() && is_wait_loop(req.get("toolCall")) {
                 let n = s.refuse_wait();
                 {
@@ -6348,7 +6350,7 @@ impl Session {
                 self.task.clone(),
                 self.job.clone(),
             );
-            tokio::spawn(async move {
+            crate::clock::spawn("session:submit-fallback", async move {
                 if let Some(Err(e)) = crate::runner::effects::submit_fallback(
                     &w,
                     &sid,

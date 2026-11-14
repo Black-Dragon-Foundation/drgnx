@@ -100,29 +100,39 @@ the code font looks the size it does on Linux; elsewhere 13.5 px stays 101."
   (cl-letf (((symbol-function 'drgnx-look-fonts--points-p) (lambda () nil)))
     (should (= 101 (drgnx-look-fonts-px-to-height 13.5)))))
 
-(ert-deftest drgnx-look-fonts/setting-beats-a-theme ()
-  "Pattern D: a theme that names a family wins over the default; a setting wins over the theme and writes only the
-attributes the user set, as the face's override spec."
-  (drgnx-look-fonts-test--clean
-    (deftheme drgnx-fonts-test "A theme that names a UI family.")
-    (custom-theme-set-faces 'drgnx-fonts-test '(drgnx-ui-text ((t :family "Theme Sans"))))
-    (provide-theme 'drgnx-fonts-test)
-    (enable-theme 'drgnx-fonts-test)
-    (let ((r (drgnx-look-fonts-resolve 'ui)))
-      (should (equal "Theme Sans" (plist-get r :family)))
-      (should (eq 'theme (plist-get r :source))))
-    (let ((drgnx-look-font-ui '(:family "Setting Sans" :fallback ("Inter" "sans-serif") :size 0.963 :weight regular)))
-      (drgnx-look-fonts-apply)
+(defun drgnx-look-fonts-test--setting-beats-a-theme (points height)
+  "A theme that names a family wins over the default; a setting wins over the theme and writes only the attributes the
+user set, as the face's override spec.  POINTS: whether a logical pixel is a point (Naglfar) or 3/4 of one (elsewhere);
+HEIGHT: the role's 13 px as a `:height' there."
+  (cl-letf (((symbol-function 'drgnx-look-fonts--points-p) (lambda () points)))
+    (drgnx-look-fonts-test--clean
+      (deftheme drgnx-fonts-test "A theme that names a UI family.")
+      (custom-theme-set-faces 'drgnx-fonts-test '(drgnx-ui-text ((t :family "Theme Sans"))))
+      (provide-theme 'drgnx-fonts-test)
+      (enable-theme 'drgnx-fonts-test)
       (let ((r (drgnx-look-fonts-resolve 'ui)))
-        (should (equal "Setting Sans" (plist-get r :family)))
-        (should (eq 'setting (plist-get r :source))))
-      (should (equal "Setting Sans" (face-attribute 'drgnx-ui-text :family nil)))
-      ;; the theme hides the defface spec, so the role's size and weight ride in the override with the family
-      (should (equal '((t :family "Setting Sans" :height 97 :weight regular)) (get 'drgnx-ui-text 'face-override-spec))))
-    ;; the setting back to its default: the override goes, the theme shows again
-    (drgnx-look-fonts-apply)
-    (should (equal '((t :height 97 :weight regular)) (get 'drgnx-ui-text 'face-override-spec)))   ; the role's defaults only
-    (should (equal "Theme Sans" (face-attribute 'drgnx-ui-text :family nil)))))
+        (should (equal "Theme Sans" (plist-get r :family)))
+        (should (eq 'theme (plist-get r :source))))
+      (let ((drgnx-look-font-ui '(:family "Setting Sans" :fallback ("Inter" "sans-serif") :size 0.963 :weight regular)))
+        (drgnx-look-fonts-apply)
+        (let ((r (drgnx-look-fonts-resolve 'ui)))
+          (should (equal "Setting Sans" (plist-get r :family)))
+          (should (eq 'setting (plist-get r :source))))
+        (should (equal "Setting Sans" (face-attribute 'drgnx-ui-text :family nil)))
+        ;; the theme hides the defface spec, so the role's size and weight ride in the override with the family
+        (should (equal `((t :family "Setting Sans" :height ,height :weight regular)) (get 'drgnx-ui-text 'face-override-spec))))
+      ;; the setting back to its default: the override goes, the theme shows again
+      (drgnx-look-fonts-apply)
+      (should (equal `((t :height ,height :weight regular)) (get 'drgnx-ui-text 'face-override-spec)))   ; the role's defaults only
+      (should (equal "Theme Sans" (face-attribute 'drgnx-ui-text :family nil))))))
+
+(ert-deftest drgnx-look-fonts/setting-beats-a-theme ()
+  "Pattern D: elsewhere than Naglfar a 13 px role is :height 97."
+  (drgnx-look-fonts-test--setting-beats-a-theme nil 97))
+
+(ert-deftest drgnx-look-fonts/setting-beats-a-theme-on-naglfar ()
+  "Pattern D: on Naglfar a logical pixel is a point, so the same role is :height 130; the setting still wins."
+  (drgnx-look-fonts-test--setting-beats-a-theme t 130))
 
 (ert-deftest drgnx-look-fonts/a-type-face-a-theme-styles-keeps-its-roles-family ()
   "LOOK-TYPE-FACES-UNDER-THEME-1: a theme that styles a type face without a family (only a colour) leaves the role's

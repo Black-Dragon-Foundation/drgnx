@@ -121,7 +121,7 @@ pub async fn step(front: &Arc<Front>, id: &str) -> Result<(), crate::runner::Err
                 if let (Some(why), Some(tr)) = (fallback::exit_limit(&snap, tr.as_ref()), tr) {
                     let mark = super::BusyMark::set(front, &tid, "starting");
                     let (f, job, task) = (front.clone(), id.to_owned(), t.clone());
-                    tokio::spawn(async move {
+                    crate::clock::spawn("runner:fallback", async move {
                         if let Err(e) = fallback::worker(&f, &job, &task, &snap, &tr, &why).await {
                             tracing::warn!("plan run {job}: fallback: {}", e.message);
                         }
@@ -188,7 +188,7 @@ pub async fn step(front: &Arc<Front>, id: &str) -> Result<(), crate::runner::Err
         {
             let mark = super::BusyMark::set(front, &t.row.id, "starting");
             let (f, job, task) = (front.clone(), id.to_owned(), t.clone());
-            tokio::spawn(async move {
+            crate::clock::spawn("runner:start", async move {
                 if let Err(e) = start(&f, &job, &task, None, None).await {
                     tracing::warn!(
                         "plan run {job}: task {} did not start: {}",

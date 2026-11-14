@@ -155,3 +155,14 @@
       (let ((hex (drgnx-look-token token 'dark)))
         (should (string-match-p (format "^| <span class=\"swatch\" style=\"background: %s\"></span> | `%s` |" hex token)
                                 section))))))
+
+(defvar drgnx-theme--box-fit)
+(defvar drgnx-theme--box-fit-pad)
+
+(ert-deftest drgnx-design/the-faces-do-not-depend-on-the-emacs-it-runs-in ()
+  ;; The theme generator gives a face its box only where the Emacs draws `:fit' boxes (Nidhogg's compositor); a stock
+  ;; Emacs (CI) leaves those boxes, and so the tokens in them, out.  The generated pages are the same in both.
+  (let ((nidhogg (let ((drgnx-theme--box-fit t) (drgnx-theme--box-fit-pad t)) (drgnx-design-pages)))
+        (stock (let ((drgnx-theme--box-fit nil) (drgnx-theme--box-fit-pad nil)) (drgnx-design-pages))))
+    (should (equal nidhogg stock))
+    (should (string-search "`drgnx-work-flow-button`" (cdr (assoc "tokens.md" stock))))))

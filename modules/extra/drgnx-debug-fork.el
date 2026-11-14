@@ -226,6 +226,8 @@ fork at that pass again, anyway.  The new fork's id."
       (goto-char (point-min)))
     (current-buffer)))
 
+(put 'drgnx-debug-fork--event 'hub-events-taken '("debug-fork"))
+
 (defun drgnx-debug-fork--event (event data)
   "`drgnx-hub-event-functions': a fork changed (`debug-fork')."
   (when (equal event "debug-fork")

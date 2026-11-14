@@ -208,7 +208,7 @@ bar at the left edge of its task row (the row `task:ID', not the strip's chip) i
                    ,@(if ring `(:radius ,(drgnx-px 8) :ring drgnx-border :beneath default)
                        '(:ring drgnx-border-subtle)))))
              (nreverse order))
-     (when-let* ((id drgnx-work-flow--selected) ((drgnx-view-p drgnx-view))
+     (when-let* ((id drgnx-work-flow--selected) ((or drgnx-view drgnx-view-patch))
                  (at (drgnx-view-row-start drgnx-view (concat "task:" id))))
        (list `(bar ,at ,(1- (drgnx-view-row-end drgnx-view (concat "task:" id)))
                    :x0 0 :x1 ,(drgnx-px 2) :ring drgnx-focus-line))))))
@@ -256,7 +256,7 @@ map without Sjá it says so instead."
         (drgnx-work-flow-mode)
         (setq drgnx-work-lens-nav #'drgnx-work-flow--nav)
         (if rows
-            (progn (drgnx-view-patch-attach (car rows) (cdr rows))
+            (progn (drgnx-view-patch-attach (car rows) (cdr rows) :sja t)
                    (setq-local drgnx-view-patch-twin-function #'drgnx-work-flow--twin)
                    (require 'drgnx-view-env)
                    (drgnx-view-env-register (car rows) buffer)

@@ -89,6 +89,7 @@
 - [Plugins: the plugin host (`brokkr`)](develop/plugins.md)
 - [Gleipnir: the sandbox](develop/gleipnir.md)
 - [Agents in the editor: drawing developer notes](develop/agents-editor.md)
+- [The agent system and the hub client: what the hub computes](develop/agent-offload.md)
 - [Pair mode: how each agent's edits reach the door](develop/pair-routing.md)
 
 # Design

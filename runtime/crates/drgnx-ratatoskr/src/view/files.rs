@@ -18,7 +18,7 @@ use hrafn::grep::Ignore;
 use hrafn::rank::{NameList, Ranked, names};
 use runstav::methods::search::{FilesParams, FilesStarted, GrepIgnore};
 use runstav::wire::{Error, ErrorCode};
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -230,7 +230,7 @@ impl Views {
             return false;
         };
         if let Some(p) = lock(&self.store).publish(key, rows, &[]) {
-            f.send_to(key.0, "view-patch", json!(p));
+            f.core.views.send_patch(f, key.0, &p);
         }
         true
     }
@@ -242,7 +242,7 @@ impl Views {
             for class in store.classes(conn, view) {
                 let key = (conn, view.to_owned(), class);
                 if let Some(p) = store.publish(&key, rows.to_vec(), &[]) {
-                    f.send_to(conn, "view-patch", json!(p));
+                    f.core.views.send_patch(f, conn, &p);
                 }
             }
         });

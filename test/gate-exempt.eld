@@ -11,7 +11,7 @@
 ;; `drgnx-lint/the-registers-equal-their-constants' holds them equal to it (a removed row leaves the constant too).
 (
  (drgnx-hub-client/a-current-hello-clears-the-restart-notice :why "fake hub: pure against a lying peer")
- (drgnx-hub-client/a-failing-callback-does-not-drop-the-rest-of-the-chunk :why "pure: a pipe process stands in for the hub's connection")
+ (drgnx-hub-client/a-failing-callback-does-not-drop-the-rest-of-the-batch :why "pure: a pipe process stands in for the hub's connection")
  (drgnx-hub-client/a-hub-that-says-nothing-is-closed-not-legacy :why "fake hub: pure against a lying peer")
  (drgnx-hub-client/a-key-found-again-quietly-raises-no-notice :why "fake hub: pure against a lying peer")
  (drgnx-hub-client/a-key-the-hub-lost-is-a-notice :why "fake hub: pure against a lying peer")

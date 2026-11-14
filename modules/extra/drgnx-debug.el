@@ -47,6 +47,8 @@
   "The id of the session picked on the toolbar's chip (`drgnx-debug-toolbar-pick-session'), or nil: the commands act
 on it while it lives.")
 
+(put 'drgnx-debug--event 'hub-events-taken '("debug-state" "debug-output" "debug-heap" "debug-frame" "debug-breakpoints" "debug-inline" "debug-ended" "debug-terminal"))
+
 (defun drgnx-debug--event (event data)
   "`drgnx-hub-event-functions': `debug-state' gives the sessions (the session keys, the toolbar and the status bar
 follow them, a running session's stop marks go), `debug-frame' marks and opens a stop's line, `debug-inline' shows

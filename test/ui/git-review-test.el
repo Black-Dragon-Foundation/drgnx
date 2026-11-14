@@ -10,6 +10,8 @@
 ;; loaded before the test stubs `drgnx-agents-mirror-start': `drgnx-review-branch' requires it, and a first load
 ;; inside the stub's `cl-letf' would put the real function (a hub call) back
 (require 'drgnx-agents-mirror)
+(require 'drgnx-history)
+(load (expand-file-name "test/fixtures/ui-hub-fixture" drgnx-git-ui-test--repo) nil t)   ; inline blame is the hub's answer
 (load (expand-file-name "test/fixtures/git-fixture" drgnx-git-ui-test--repo) nil t)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-git-ui-test--repo) nil t)
 (dolist (m '("tools/drgnx-diff" "extra/drgnx-blame" "tools/drgnx-review" "tools/drgnx-prs"))
@@ -51,8 +53,11 @@
                 (drgnx-diff-collapse-all)
                 (should-not (string-search "faster" (buffer-string)))
                 (kill-buffer buf))
-              ;; inline blame on line 5
+              ;; inline blame on line 5: the hub answers for a buffer its history tracks
+              (drgnx-ui-hub-start drgnx-git-ui-test--repo)
+              (drgnx-history-mode 1)
               (find-file (expand-file-name "src/parser.el" repo))
+              (should (drgnx-git-ui-test--wait #'drgnx-history-tracked-p))
               (drgnx-blame-mode 1)
               (goto-char (point-min)) (forward-line 4)
               (drgnx-blame--update)
@@ -85,6 +90,8 @@
                 (should (get-buffer-window "*drgnx pull requests*" root))
                 (should (string-search "└ Docs for the steps" (with-current-buffer "*drgnx pull requests*" (buffer-string))))))))
       (dolist (b '("*drgnx review*" "*drgnx pull requests*")) (when (get-buffer b) (kill-buffer b)))
+      (drgnx-history-mode -1)
+      (drgnx-ui-hub-stop)
       (delete-directory dir t))))
 
 ;;; git-review-test.el ends here

@@ -79,9 +79,11 @@ status colour of its kind, in the three themes; the line after has none."
             (erase-buffer) (insert drgnx-ui-hunks--code) (emacs-lisp-mode)
             (setq-local display-line-numbers t)
             (set-window-fringes nil 8 8)
-            (setq drgnx-hunks--data
-                  (list (list :old-start 3 :old-count 1 :new-start 3 :new-count 1 :old-lines '("x\n"))        ; line 3 changed
-                        (list :old-start 4 :old-count 0 :new-start 5 :new-count 1 :old-lines nil)))          ; line 5 added
+            ;; the marks as the hub's answer would give them: (POS LINE . KIND)
+            (setq drgnx-hunks--marks
+                  (cl-flet ((at (line kind) (cons (save-excursion (goto-char (point-min)) (forward-line (1- line)) (point))
+                                                  (cons line kind))))
+                    (list (at 3 'changed) (at 5 'added))))
             (setq drgnx-hunks-mode t)
             (drgnx-hunks--draw))
           (drgnx-test-wait-presented)

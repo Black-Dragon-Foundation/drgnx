@@ -873,7 +873,9 @@ while marked fails the run, so the mark goes as soon as its task lands. A row is
 **Variables** in strings: `$HUB_BIN` (the hub under test), `$MOCK $ROOT $HOME $RUN $STATE $DATA $CONFIG $SOCKET $SOCKET_DIR $BACKEND_SOCKET $CAP $LOCK $PID(hub)
 $HARNESS_PID` (of the step's `hub`, else the latest started; `$BACKEND_SOCKET` is where an older hub's Emacs child
 kept its socket, for a row that plants its leftovers), `$SCENARIOS` (the scenarios' directory, absolute: its
-`fixtures/`), and `$NAME` for a capture. A string that is just `$PID(hub)`,
+`fixtures/`), and `$NAME` for a capture. The root's variables (`$ROOT $HOME $RUN $STATE $DATA $CONFIG $SOCKET $SOCKET_DIR
+$BACKEND_SOCKET $CAP $LOCK`) exist once a `root` or `start` step made the root: a step before one that names them fails the row
+(it would take the text literally, and a file step would make a directory called `$ROOT`). A string that is just `$PID(hub)`,
 `$HARNESS_PID` or a capture keeps its JSON type (a number stays a number). Agent sockets are
 `$SOCKET_DIR/s/SID/hub.sock` (`paths::session_dir`).
 

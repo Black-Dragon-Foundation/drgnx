@@ -96,7 +96,6 @@
                            (format "the hub rows are %S, not the new hub's" hub))
                           ((not (equal (seq-subseq keys first (+ first 4)) hub))
                            (format "the hub rows are not together: %S" keys))
-                          ((not (equal (car keys) '(:header))) (format "the header is not first: %S" keys))
                           ((not (equal (nth (+ first 4) keys) '(:rows-end)))
                            (format "the panel's own rows below the transcript are not after it: %S" keys))
                           ((not (equal (plist-get look :view) "agent-panel/s1")) "no look sent for the panel")))))
@@ -161,15 +160,11 @@ change asked for in the twin reaches the panel; not a panel of its own (no subsc
               (drgnx-view-apply-patch (plist-put (cadr (drgnx-agent-panel-rows-test--reset 7 '("e:0" "e:1")))
                                                  :class "c2")))
             (let ((keys (drgnx-agent-panel-rows-test--keys tw)))
-              (should (equal (car keys) '(:header)))
+              (should (equal (car keys) "e:0"))
               (should (equal (seq-filter #'stringp keys) '("e:0" "e:1")))
               (should (equal (nth (1+ (seq-position keys "e:1")) keys) '(:rows-end)))
               (should (member '(:composer) keys)))
             (should (equal (seq-filter #'stringp (drgnx-agent-panel-rows-test--keys buf)) '("e:0")))
-            ;; the panel's state changes: the twin's header follows
-            (with-current-buffer buf (drgnx-agent-panel--take-snapshot (list :id "s1" :status "busy" :name "Twin title")))
-            (should (equal (drgnx-agent-panel-rows-test--line tw '(:header)) (drgnx-agent-panel-rows-test--line buf '(:header))))
-            (should (string-match-p "Twin title" (drgnx-agent-panel-rows-test--line tw '(:header))))
             ;; a row the panel adds (a plan's card) shows in the twin too
             (with-current-buffer buf
               (drgnx-agent-panel--take-entries

@@ -90,8 +90,10 @@ wall-clock timer (`drgnx-lint-bt--timer-start-p')."
   ;; trailing notice (`drgnx-view-nav--arm-notice') only tells the hub the selection: it follows nothing.
   ;; The Explorer's held click (`drgnx-explorer--rows-hold') looks again while a mouse button is down, to let the
   ;; hub's row patches in once it is up: it moves no window.  The draw of rows held in Sjá (`drgnx-view-sja--arm')
-  ;; is a view's draw too: only the windows of its own buffer move.
-  '(("wb/drgnx-explorer.el" drgnx-explorer--file-event drgnx-explorer--apply-file-events drgnx-explorer--rows-hold)
+  ;; is a view's draw too: only the windows of its own buffer move.  The Buffers panel's send (`drgnx-buffers--queue')
+  ;; coalesces a command's set changes into one `buffers/set' to the hub: it changes no buffer and moves no window.
+  '(("wb/drgnx-buffers.el" drgnx-buffers--queue)
+    ("wb/drgnx-explorer.el" drgnx-explorer--file-event drgnx-explorer--apply-file-events drgnx-explorer--rows-hold)
     ("wb/drgnx-monitors.el" drgnx-monitors--later)
     ("wb/drgnx-view.el" drgnx-view--arm drgnx-view--spend drgnx-view--draw-buffer drgnx-view-model--arm)
     ("wb/drgnx-view-nav.el" drgnx-view-nav--arm-notice)

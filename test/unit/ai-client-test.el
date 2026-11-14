@@ -125,7 +125,7 @@ keyless, so asked directly — and `k' (openai, key in K_KEY), which only the hu
       (cl-letf (((symbol-function 'drgnx-ai-role) (lambda (_r) '((a . "m")))))
         (setq h (drgnx-ai-request 'test 'chat '(:messages [(:role "user" :content "x")]) (lambda (&rest _) (setq called t)))))
       (drgnx-ai-cancel h)
-      (drgnx-test-pause 2 "an answer from the cancelled request")   ; no answer may come: the server's delay is 1 s
+      ;; a deleted process runs no filter and no sentinel (asserted below): the late answer cannot reach the callback
       (should-not called)
       ;; `drgnx-ai-cancel' ran `delete-process', which sets the status at once
       (should-not (memq (process-status (drgnx-ai-request-process h)) '(run open))))))

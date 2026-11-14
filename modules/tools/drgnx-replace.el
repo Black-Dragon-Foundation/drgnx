@@ -59,6 +59,7 @@
 (declare-function jsonrpc-request "jsonrpc")
 (declare-function project-root "project")
 (declare-function nidhogg-view-get "nidhogg-views" (h what &optional arg arg2))
+(declare-function nidhogg-view-rows "nidhogg-views" (h what &optional a b))
 (declare-function nidhogg-view-set "nidhogg-views" (h what value))
 (declare-function drgnx-hub--call-on "drgnx-hub-client")
 (declare-function drgnx-wb-place "drgnx-rules")
@@ -514,8 +515,9 @@ asks for the whole window once its rows are drawn (`drgnx-replace--grow-window')
 (defvar drgnx-replace-refresh-delay 0.5 "Seconds after a listed file changes before its rows are searched again.")
 (defvar drgnx-replace-watch-limit 200
   "The most listed files whose folders are watched for changes on disk (more: searched again when the view shows).")
-(defvar drgnx-replace-refresh-max-bytes (* 4 1024 1024)
-  "A modified buffer bigger than this is not sent to the hub: its file is searched on disk (`search/buffer' `large').")
+(defvar drgnx-replace-refresh-max-bytes (* 256 1024)
+  "A modified buffer the edit history does not track, bigger than this, is not sent to the hub: its file is searched on
+disk (`search/buffer' `large').  The same bound as `drgnx-history-large-size'.  A tracked buffer sends no text at all.")
 (defvar-local drgnx-replace--listed nil "Hash FILE → t: the files the search listed, watched for changes.")
 (defvar-local drgnx-replace--watches nil "The file-notify watches on the listed files' folders.")
 (defvar-local drgnx-replace--changed nil "Listed files changed since the last refresh.")
@@ -1434,7 +1436,8 @@ Nil when it sent edits; else the reason as a string (`nothing' when it sent none
 (defun drgnx-replace--busy-p ()
   "Non-nil while the view still has work: a pause to wait out, a search running, rows to draw."
   (or (drgnx-timer-active-p (cons 'replace-pause (current-buffer))) drgnx-replace--searching
-      (drgnx-view-pending-p drgnx-view) (drgnx-timer-active-p (cons 'replace-refresh (current-buffer)))))
+      (if drgnx-view (drgnx-view-pending-p drgnx-view) (drgnx-timer-active-p (cons 'drgnx-view-sja (current-buffer))))
+      (drgnx-timer-active-p (cons 'replace-refresh (current-buffer)))))
 
 (defun drgnx-replace--live-view ()
   "The Search view's buffer, or a user error when it was never opened."
@@ -1879,7 +1882,8 @@ of the rows, the model holds every match): its id, or nil when there is none."
 
 (defun drgnx-replace--reach (id)
   "Ask the hub for the row of match ID when the view does not have it, and put point on it when it comes."
-  (unless (gethash id (drgnx-view-patch-rows drgnx-view-patch))
+  (unless (if (drgnx-view-patch-sja drgnx-view-patch) (drgnx-view-row-start nil id)   ; the rows Sjá holds
+            (gethash id (drgnx-view-patch-rows drgnx-view-patch)))
     (setq drgnx-replace--reach-id id)
     (drgnx-replace--look (list :upto id))))
 
@@ -1909,7 +1913,9 @@ when it shows the gap row of a far jump, ask for the rows before the gap (once p
   (when-let* (((drgnx-replace--rows-p))
               (win (or window (get-buffer-window (current-buffer))))
               ((eq (window-buffer win) (current-buffer)))
-              (n (hash-table-count (drgnx-view-patch-rows drgnx-view-patch)))
+              (n (if (drgnx-view-patch-sja drgnx-view-patch)
+                     (nth 5 (nidhogg-view-rows (drgnx-view-patch-handle drgnx-view-patch) 'state))
+                   (hash-table-count (drgnx-view-patch-rows drgnx-view-patch))))
               ((not (eql n drgnx-replace--look-at)))
               ((save-excursion (goto-char (window-start win))
                                (/= 0 (forward-line (+ (window-body-height win) drgnx-replace-look-lines))))))
@@ -1983,7 +1989,7 @@ query on the header line; its keys move and visit (`drgnx-replace--twin-keys'), 
 (defun drgnx-replace--hub-attach ()
   "Make the view hub-fed (the hub's rows below the fields), when it is not; its env goes while a window shows it."
   (unless drgnx-view-patch
-    (drgnx-view-patch-attach drgnx-replace-view "unshown" :start drgnx-replace--results)
+    (drgnx-view-patch-attach drgnx-replace-view "unshown" :start drgnx-replace--results :sja t)
     (setq-local drgnx-view-patch-twin-function #'drgnx-replace--twin)
     (drgnx-replace-rows-attached)
     (add-hook 'drgnx-hub-event-functions #'drgnx-replace--hub-event)
@@ -2005,18 +2011,20 @@ query on the header line; its keys move and visit (`drgnx-replace--twin-keys'), 
     (drgnx-view-attach 'replace-results :start drgnx-replace--results))
   nil)
 
-(defun drgnx-replace--hub-call (method params)
-  "METHOD with PARAMS to the hub, without waiting; a failure is the status line's."
+(defun drgnx-replace--hub-call (method params &optional on-result)
+  "METHOD with PARAMS to the hub, without waiting; a failure is the status line's.  ON-RESULT, when given, is called in
+this buffer with the answer of a call that did not fail."
   (let ((buf (current-buffer)))
     (condition-case err
         (progn (unless (fboundp 'drgnx-hub--call-on) (require 'drgnx-hub-client))
                ;; on the subscribed connection: the rows and the end event go to the connection that asks
                (drgnx-hub--call-on drgnx-hub--events method params
-                                   (lambda (_result error)
-                                     (when (and error (buffer-live-p buf))
+                                   (lambda (result error)
+                                     (when (buffer-live-p buf)
                                        (with-current-buffer buf
-                                         (setq drgnx-replace--searching nil)
-                                         (drgnx-replace--message "%s" error))))))
+                                         (cond (error (setq drgnx-replace--searching nil)
+                                                      (drgnx-replace--message "%s" error))
+                                               (on-result (funcall on-result result))))))))
       (error (setq drgnx-replace--searching nil)
              (drgnx-replace--message "%s" (error-message-string err))))))
 
@@ -2323,6 +2331,8 @@ view shows.  A timer: never signals."
                  ((equal (plist-get data :view) drgnx-replace-view)) (buf (get-buffer drgnx-replace-buffer-name)))
        (with-current-buffer buf (drgnx-replace--change-done data))))))
 
+(put 'drgnx-replace--hub-event 'hub-events-taken '("search-run-done" "search-apply" "search-change" "search-handoff-state" "agent"))
+
 (defun drgnx-replace--hub-event (event data)
   "`drgnx-hub-event-functions': `search-run-done' ends the Search view's search, counts what it found and unticks
 the matches the user had unticked before it (`:off'); `search-apply' and `search-change' are the view's writes
@@ -2374,28 +2384,53 @@ the matches the user had unticked before it (`:off'); `search-apply' and `search
         (push (cons f b) out)))
     out))
 
+(declare-function drgnx-history-tracked-p "drgnx-history")
+(declare-function drgnx-history-drain-now "drgnx-history")
+
 (defun drgnx-replace--send-buffers ()
-  "Send the hub the modified buffers it has not had as they are now, and forget the ones saved or killed (see above)."
+  "Send the hub the modified buffers it has not had as they are now, and forget the ones saved or killed (see above).
+A buffer the edit history tracks sends no text: its changes are handed to the hub first and the call names the version
+they reached (`search/buffer' `mirror'), the hub reading the text it holds.  Another buffer's text goes up to
+`drgnx-replace-refresh-max-bytes'."
   (unless (or (drgnx-replace--opt :symbol) (not drgnx-view-patch))
     (unless drgnx-replace--sent (setq drgnx-replace--sent (make-hash-table :test #'equal)))
     (let ((dirty (drgnx-replace--dirty-buffers)) gone)
       (dolist (fb dirty)
         (let* ((b (cdr fb)) (tick (buffer-chars-modified-tick b))
-               (large (or (drgnx-large-file-p b) (> (buffer-size b) drgnx-replace-refresh-max-bytes)))
-               (now (if large 'large tick)))
-          (unless (equal now (gethash (car fb) drgnx-replace--sent))
-            (puthash (car fb) now drgnx-replace--sent)
+               (file (car fb))
+               (large (drgnx-large-file-p b))
+               (version (and (not large) (fboundp 'drgnx-history-tracked-p) (drgnx-history-tracked-p b)
+                             (drgnx-history-drain-now b)))
+               (large (or large (and (not version) (> (buffer-size b) drgnx-replace-refresh-max-bytes))))
+               (now (cond (large 'large) (version (list tick version)) (t tick))))
+          (unless (let ((prev (gethash file drgnx-replace--sent)))
+                    (or (equal now prev)
+                        ;; the hub did not take this text twice: not asked again until the buffer changes
+                        (and (eq (car-safe prev) 'unmirrored) (eql (nth 1 prev) tick) (>= (nth 2 prev) 2))))
+            (let ((prev (gethash file drgnx-replace--sent)))
+              (unless (and (eq (car-safe prev) 'unmirrored) (eql (nth 1 prev) tick))   ; a retry keeps its count
+                (puthash file now drgnx-replace--sent)))
             (drgnx-replace--hub-call
              "search/buffer"
-             (append (list :view drgnx-replace-view :path (car fb) :tick tick)
-                     (if large
-                         (list :large t)
-                       (list :text (with-current-buffer b
-                                     (save-restriction (widen) (buffer-substring-no-properties (point-min) (point-max)))))))))))
+             (append (list :view drgnx-replace-view :path file :tick tick)
+                     (cond (large (list :large t))
+                           (version (list :mirror t :version version))
+                           (t (list :text (with-current-buffer b
+                                            (save-restriction (widen) (buffer-substring-no-properties (point-min) (point-max))))))))
+             (and version (apply-partially #'drgnx-replace--mirror-answered file tick))))))
       (maphash (lambda (f _) (unless (assoc f dirty) (push f gone))) drgnx-replace--sent)
       (dolist (f gone)
         (remhash f drgnx-replace--sent)
         (drgnx-replace--hub-call "search/buffer" (list :view drgnx-replace-view :path f))))))
+
+(defun drgnx-replace--mirror-answered (file tick result)
+  "The hub's answer RESULT to `search/buffer' `mirror' for FILE at TICK: false means it did not take the buffer (its
+mirror was behind, or it tracks none): the buffer goes once more after the pause, and not again until it changes."
+  (unless (or result (not drgnx-replace--sent))
+    (let* ((prev (gethash file drgnx-replace--sent))
+           (n (if (and (eq (car-safe prev) 'unmirrored) (eql (nth 1 prev) tick)) (1+ (nth 2 prev)) 1)))
+      (puthash file (list 'unmirrored tick n) drgnx-replace--sent)
+      (when (< n 2) (drgnx-replace--buffers-later)))))
 
 (defun drgnx-replace--buffers-later ()
   "A buffer was edited: send the modified buffers after a pause."

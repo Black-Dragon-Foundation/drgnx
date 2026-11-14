@@ -1,0 +1,20 @@
+{"scenario": "view/outline-follows-edits", "requires": ["v1", "test-hooks"], "doc": "The Outline follows the editor's unsaved text: a file the edit history tracks is outlined from the tracked buffer, and an edit to it (a history/batch) outlines it again once the edits pause (500 ms of the hub's clock), with no outline/set; the new definition's row goes in after the one above it. Pattern B on the hub's virtual clock."}
+{"do": "root"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q -b main && printf '(defun alpha () 1)\\n(defun gamma () 3)\\n' > a.el && git add a.el && git -c user.email=t@example.invalid -c user.name=t commit -qm base"], "expect_code": 0}
+{"do": "start", "hub": "h", "args": ["--test-clock"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "history/register", "params": {"path": "a.el", "worktree_root": "$ROOT/repo", "buffer_id": "b1"}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"tracked": true}}, "within_ms": 30000}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "view/env", "params": {"view": "outline", "class": "tty", "display": "tty", "scale": 1, "fonts": [], "cell": [1, 1], "width_px": 80, "palette": [], "epoch": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "outline/set", "params": {"view": "outline", "file": "$ROOT/repo/a.el"}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "outline", "class": "tty", "hub": "$capture:hub", "base": 0, "version": 1, "ops": [{"reset": [{"key": "0:0:alpha", "text": "  alpha", "props": [[0, 7, "drgnx-work-id", "0:0:alpha"]]}, {"key": "0:0:gamma", "text": "  gamma", "props": [[0, 7, "drgnx-work-id", "0:0:gamma"]]}]}]}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "history/batch", "params": {"buffer_id": "b1", "changes": [{"start": 19, "old_len": 0, "inserted": "(defun beta () 2)\n"}], "version": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 5, "result": {"ok": true}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "__test_advance", "params": {"ms": 600}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "outline", "class": "tty", "hub": "$hub", "base": 1, "version": 2, "ops": [{"insert": {"after": "0:0:alpha", "rows": [{"key": "0:0:beta", "text": "  beta", "props": [[0, 6, "drgnx-work-id", "0:0:beta"]]}]}}]}}, "within_ms": 30000}

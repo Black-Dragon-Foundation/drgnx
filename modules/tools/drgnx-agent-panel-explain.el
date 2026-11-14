@@ -239,7 +239,8 @@ own part drawn from SNAP and the steps loaded here."
 
 (defun drgnx-agent-panel-chip (item)
   "Open the facts behind chip ITEM (context, cost, mode, model, waiting or mcp): the chip at point, else you choose."
-  (interactive (list (or (get-text-property (point) 'drgnx-agent-panel-chip)
+  (interactive (list (or (let ((chip (get-text-property (point) 'drgnx-agent-panel-chip)))
+                           (and chip (intern (format "%s" chip))))
                          (intern (completing-read "Chip: " (mapcar #'symbol-name drgnx-agent-panel-explain-items) nil t)))))
   (let ((buffer (current-buffer)))
     (drgnx-agent-panel--ask "agents/explain" (list :id drgnx-agent-panel--session :item (symbol-name item))

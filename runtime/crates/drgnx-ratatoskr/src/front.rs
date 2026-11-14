@@ -737,15 +737,22 @@ impl Front {
             Params::ViewWindow(p) => crate::view::window(self, &caller, p)
                 .await
                 .map(|b| json!(b)),
+            Params::BuffersSet(p) => crate::view::buffers::set(self, &caller, p).map(|b| json!(b)),
+            Params::OutlineSet(p) => crate::view::outline::set(self, &caller, p)
+                .await
+                .map(|b| json!(b)),
+            Params::OutlineScopes(p) => crate::view::outline::scopes(self, p)
+                .await
+                .map(|r| json!(r)),
             Params::AgentsPanelLook(p) => {
                 crate::view::panel::look(self, &caller, p).map(|b| json!(b))
             }
             Params::GitLetters(p) => crate::view::git::letters(self, &caller, p).map(|b| json!(b)),
             // the Search view's search streaming rows to it (`search/run`, `search/grep-*`)
             Params::SearchRun(p) => crate::view::search::run(self, &caller, p).map(|r| json!(r)),
-            Params::SearchBuffer(p) => {
-                crate::view::search::buffer(self, &caller, p).map(|b| json!(b))
-            }
+            Params::SearchBuffer(p) => crate::view::search::buffer(self, &caller, p)
+                .await
+                .map(|b| json!(b)),
             Params::SearchFiles(p) => crate::view::files::start(self, &caller, p).map(|r| json!(r)),
             Params::SearchGrepReplace(p) => {
                 crate::view::search::replace(self, &caller, p).map(|b| json!(b))
@@ -892,6 +899,9 @@ impl Front {
             | Params::HistoryBlame(_)
             | Params::HistoryHunks(_)
             | Params::GitBlame(_)
+            | Params::GitBlameLine(_)
+            | Params::HistoryLinePositions(_)
+            | Params::HistoryEolFit(_)
             | Params::GitStageHunk(_)
             | Params::HistoryHunksHead(_)
             | Params::HistoryTake(_)

@@ -573,7 +573,7 @@ async fn accept<C, F, Fut>(
             sid.clone(),
             live.clone(),
         );
-        tokio::spawn(async move {
+        crate::clock::spawn("sessions:mcp-connection", async move {
             let _counted = counted;
             let (r, w) = stream.into_split();
             let served = async {

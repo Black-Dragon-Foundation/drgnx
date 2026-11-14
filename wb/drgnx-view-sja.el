@@ -16,7 +16,8 @@
 ;;   batch, and a batch never confirmed is drawn whole the next time.  A region whose length is not Sjá's drawn state
 ;;   is drawn whole too, so a stray edit cannot leave the rows wrong for long.
 ;; - Each window's start and point are turned into (ROW . OFFSET) before the batch and back after it, so the windows
-;;   stay on their rows; a window whose point was at the region's end follows the tail.
+;;   stay on their rows; a window whose point was at the region's end follows the tail (one of rows already drawn:
+;;   at the first rows, point stays at the region's start).
 ;; - The read-only text, the region markers (the end's insertion type t), the stops and images, the faces of styles
 ;;   (an LRU shared with the Lisp inserter's) are as `drgnx-view-patch-render' draws them.
 ;; - A view's own text properties go on through `drgnx-view-sja-prop-functions' (a terminal's links and images) and
@@ -29,6 +30,7 @@
 (require 'drgnx-view)
 
 (declare-function nidhogg-view-rows "nidhogg-views" (h what &optional a b))
+(declare-function drgnx-view-nav-sja-step "drgnx-view-nav" (&optional ids))
 (defvar nidhogg-view--row-decisions)
 
 (defvar-local drgnx-view-sja-prop-functions nil
@@ -61,11 +63,11 @@ the link patterns the user set).")
   (let ((b (gethash (cons view class) drgnx-view-patch--buffers)))
     (and (buffer-live-p b) (drgnx-view-sja-p b))))
 
-(cl-defun drgnx-view-sja-attach (view class &key buffer epoch ack (delay drgnx-view-first-delay) epoch-reset)
-  "Make BUFFER (default: the current one) show the rows of (VIEW, CLASS) as Sjá holds them.  EPOCH: the env epoch
-sent for the pair.  ACK: each applied patch is acknowledged (`view/ack').  DELAY: seconds from a patch to its draw (0:
-the next timer pass).  EPOCH-RESET: a patch of an older env epoch is held until a reset (else applied: a terminal's
-faces repaint in place).  Returns the state."
+(cl-defun drgnx-view-sja-attach (view class &key buffer start epoch ack (delay drgnx-view-first-delay) epoch-reset)
+  "Make BUFFER (default: the current one) show the rows of (VIEW, CLASS) as Sjá holds them, from START (default: the
+buffer's start) to its end.  EPOCH: the env epoch sent for the pair.  ACK: each applied patch is acknowledged
+\(`view/ack').  DELAY: seconds from a patch to its draw (0: the next timer pass).  EPOCH-RESET: a patch of an older env
+epoch is held until a reset (else applied: a terminal's faces repaint in place).  Returns the state."
   (with-current-buffer (or buffer (current-buffer))
     (when drgnx-view-patch (drgnx-view-sja--release drgnx-view-patch))
     (setq-local drgnx-view nil)
@@ -73,8 +75,8 @@ faces repaint in place).  Returns the state."
                                      :sja delay)))
       (setq-local drgnx-view-patch s)
       (drgnx-view-model--open s)
-      (nidhogg-view-rows (drgnx-view-patch-handle s) 'on (if epoch-reset 1 0))
-      (setf (drgnx-view-patch-beg s) (copy-marker (point-min))
+      (nidhogg-view-rows (drgnx-view-patch-handle s) 'on (if epoch-reset 1 0) class)
+      (setf (drgnx-view-patch-beg s) (copy-marker (or start (point-min)))
             (drgnx-view-patch-end s) (copy-marker (point-max) t))
       (setq-local bidi-paragraph-direction 'left-to-right)
       (puthash (cons view class) (current-buffer) drgnx-view-patch--buffers)
@@ -88,10 +90,11 @@ faces repaint in place).  Returns the state."
   (dolist (m (list (drgnx-view-patch-beg s) (drgnx-view-patch-end s))) (when m (set-marker m nil)))
   (drgnx-view-model--close s))
 
-(defun drgnx-view-sja--restart (s forget &optional epoch)
+(defun drgnx-view-sja--restart (s forget &optional epoch class)
   "S's pair in Sjá: with FORGET, it starts afresh (a new pair, a new class: the books of what was applied go); with
-EPOCH, the env epoch its patches must carry is that."
+EPOCH, the env epoch its patches must carry is that; with CLASS, its rows are that display class's from now on."
   (when-let* ((h (drgnx-view-patch-handle s)))
+    (when class (nidhogg-view-rows h 'on (if (drgnx-view-patch-epoch-reset s) 1 0) class))
     (when forget (nidhogg-view-rows h 'forget))
     (when epoch (nidhogg-view-rows h 'epoch epoch))))
 
@@ -146,11 +149,20 @@ and acknowledges the last, or asks for a reset when too many came."
         (when (memq 'apply ds) (drgnx-view-sja--decided s 'apply (nth 1 (nidhogg-view-rows h 'state))))))))
 
 (defun drgnx-view-sja--arm (s)
-  "S's draw, DELAY (its SJA slot) after the patch, and no sooner than one throttle after the last."
-  (let ((delay (drgnx-view-patch-sja s)))
-    (drgnx-timer-soon (cons 'drgnx-view-sja (current-buffer)) delay #'drgnx-view-sja-draw
-                      :args (list (current-buffer)) :owner :core
-                      :min-interval (and (> delay 0) drgnx-view-delay))))
+  "S's draw, DELAY (its SJA slot) after the patch, and no sooner than one throttle after the last; at the next timer
+pass when the view asked for a change the user waits to see (`drgnx-view-patch-hurry', cleared)."
+  (let ((delay (if drgnx-view-patch-hurry 0 (drgnx-view-patch-sja s))))
+    (setq drgnx-view-patch-hurry nil)
+    (unless (eq (drgnx-view-patch-sja s) 'data)   ; rows read as data (`drgnx-view-patch-attach' :sja `data'): never drawn
+      (drgnx-timer-soon (cons 'drgnx-view-sja (current-buffer)) delay #'drgnx-view-sja-draw
+                        :args (list (current-buffer)) :owner :core
+                        :min-interval (and (> delay 0) drgnx-view-delay)))))
+
+(defun drgnx-view-sja-hurry ()
+  "Draw the current buffer's rows at the next timer pass, not after their throttle (`drgnx-view-hurry')."
+  (when-let* ((s drgnx-view-patch) ((drgnx-view-patch-sja s)))
+    (setq drgnx-view-patch-hurry t)
+    (drgnx-view-sja--arm s)))
 
 (defun drgnx-view-sja-redraw (buffer &optional refresh)
   "BUFFER's rows drawn again from the faces as they are now (a theme change): with REFRESH, Sjá gives every style and
@@ -231,10 +243,13 @@ asked again the next time (it may be defined later)."
   "POS turned into Sjá's (ROW . OFFSET) of H, or POS itself when it is outside BEG..END or past the rows."
   (or (and (<= beg pos) (< pos end) (nidhogg-view-rows h 'place (- pos beg))) pos))
 
-(defun drgnx-view-sja--pos (h beg place)
-  "PLACE (from `drgnx-view-sja--place') back to a position: its row's start plus its offset, or the position."
+(defun drgnx-view-sja--pos (h beg place &optional marker)
+  "PLACE (from `drgnx-view-sja--place') back to a position: its row's start plus its offset, or the position.  A row
+that went: MARKER's position (a marker put where PLACE was before the draw, which the edits moved to the row now in
+its place), else BEG."
   (if (consp place)
-      (let ((p (nidhogg-view-rows h 'pos (cdr place) (car place)))) (if p (+ beg p) beg))
+      (let ((p (nidhogg-view-rows h 'pos (cdr place) (car place))))
+        (cond (p (+ beg p)) (marker (marker-position marker)) (t beg)))
     (min place (point-max))))
 
 (defun drgnx-view-sja-draw (buffer)
@@ -244,16 +259,19 @@ asked again the next time (it may be defined later)."
       (let* ((s drgnx-view-patch) (h (drgnx-view-patch-handle s))
              (beg (drgnx-view-patch-beg s)) (end (drgnx-view-patch-end s))
              (inhibit-quit t) (inhibit-read-only t) (inhibit-modification-hooks t) (buffer-undo-list t)
-             lo hi)
+             lo hi drawn)
         (save-restriction
           (widen)
-          (let* ((wins (mapcar (lambda (w) (list w (drgnx-view-sja--place h beg end (window-start w))
+          (let* ((tail (< beg end))             ; an empty region has no tail to follow: point stays at its start
+                 (wins (mapcar (lambda (w) (list w (drgnx-view-sja--place h beg end (window-start w))
                                                  (drgnx-view-sja--place h beg end (window-point w))
-                                                 (= (window-point w) end)))
+                                                 (and tail (= (window-point w) end))
+                                                 (copy-marker (window-start w)) (copy-marker (window-point w))))
                                (get-buffer-window-list buffer nil t)))
                  (pt (drgnx-view-sja--place h beg end (point)))
-                 (pt-end (= (point) end))
-                 (d (nidhogg-view-rows h 'draw (- end beg))))
+                 (pt-end (and tail (= (point) end)))
+                 (d (progn (nidhogg-view-rows h 'idprop nil (symbol-name drgnx-view-patch-id-prop)) ; the nodes drawn
+                           (nidhogg-view-rows h 'draw (- end beg)))))
             (when d
               (drgnx-view-sja--take s (nth 3 d) (nth 4 d))
               (when-let* ((term (nth 5 d)))
@@ -269,14 +287,22 @@ asked again the next time (it may be defined later)."
                     (insert (drgnx-view-sja--dress s (nth 2 e) (nth 3 e) (nth 4 e) (nth 5 e)))
                     (setq lo (if lo (min lo at) at) hi (max (or hi 0) (point))))))
               (nidhogg-view-rows h 'drawn (nth 0 d))
+              (setq drawn d)
               (cl-incf (drgnx-view-patch-draws s))
               (dolist (w wins)
                 (when (window-live-p (nth 0 w))
-                  (set-window-start (nth 0 w) (drgnx-view-sja--pos h beg (nth 1 w)) t)
-                  (set-window-point (nth 0 w) (if (nth 3 w) end (drgnx-view-sja--pos h beg (nth 2 w))))))
+                  ;; a window whose row went falls to the row now in its place, not to the top
+                  (set-window-start (nth 0 w) (drgnx-view-sja--pos h beg (nth 1 w) (nth 4 w)) t)
+                  (set-window-point (nth 0 w) (if (nth 3 w) end (drgnx-view-sja--pos h beg (nth 2 w) (nth 5 w))))))
               (goto-char (if pt-end end (drgnx-view-sja--pos h beg pt)))
-              (when-let* ((o (drgnx-view-patch-stale-overlay s))) (move-overlay o (point-min) (point-max))))))
-        (when lo (run-hook-with-args 'drgnx-view-sja-drawn-functions lo hi))))))
+              (when-let* ((o (drgnx-view-patch-stale-overlay s))) (move-overlay o (point-min) (point-max))))
+            (dolist (w wins) (set-marker (nth 4 w) nil) (set-marker (nth 5 w) nil))))
+        (when lo (run-hook-with-args 'drgnx-view-sja-drawn-functions lo hi))
+        (when drawn
+          ;; the model's classes on what was drawn, then the view's own marks over the rows drawn (KEYS)
+          (let ((keys (append (nth 7 drawn) nil)))
+            (when (fboundp 'drgnx-view-nav-sja-step) (drgnx-view-nav-sja-step (nth 8 drawn)))
+            (run-hook-with-args 'drgnx-view-patch-patched-functions nil keys)))))))
 
 (defun drgnx-view-sja-draw-now (&optional buffer)
   "Draw BUFFER's (default: the current one's) rows now, not at the next timer pass."

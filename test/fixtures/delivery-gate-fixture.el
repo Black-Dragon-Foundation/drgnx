@@ -247,13 +247,27 @@ the hub is asked for barriers meanwhile (`drgnx-test-gate--poke'), for an item i
   (let ((v (getenv "DRGNX_TEST_GATE_SWAP")))
     (and v (string-match-p "\\`[0-9]+\\'" v) (string-to-number v))))
 
+(defun drgnx-test-gate--read (proc line)
+  "LINE as the client's reader hands it over (`drgnx-hub--frame'): a `view-model' line whole to the model, any other
+parsed as the reader parses (plists and lists) into a batch of one for `drgnx-hub--client-batch', inside its guard.
+A line that is not JSON, or is `null' or `false', is skipped, as the reader's batch skips it."
+  (let ((text (string-trim-right line "\r?\n")))
+    (if (string-prefix-p drgnx-hub--model-prefix text)
+        (when (fboundp 'drgnx-view-model-line)
+          (funcall (drgnx-guard-wrap #'drgnx-view-model-line "hub connection") text))
+      (let ((message (condition-case nil
+                         (json-parse-string text :object-type 'plist :array-type 'list :null-object nil :false-object nil)
+                       (error nil))))
+        (when message
+          (funcall (drgnx-guard-wrap #'drgnx-hub--client-batch "hub connection") proc (list (list message nil nil))))))))
+
 (defun drgnx-test-gate--hand (c line)
-  "Hand LINE to C's filter, as the transcript's next delivery.  Nothing when the client deleted C meanwhile."
+  "Hand LINE to the client as C's reader would, as the transcript's next delivery.  Nothing when the client deleted C
+meanwhile."
   (unless (drgnx-test-gate--conn-deleted c)
     (let* ((name (drgnx-test-gate--conn-name c)) (drgnx-test-gate--releasing name))
       (push (cons name (string-trim-right line "\n")) drgnx-test-gate--transcript)
-      (when (drgnx-test-gate--conn-filter c)
-        (funcall (drgnx-test-gate--conn-filter c) (drgnx-test-gate--conn-proc c) line)))))
+      (drgnx-test-gate--read (drgnx-test-gate--conn-proc c) line))))
 
 (defun drgnx-test-gate--flush ()
   "Hand over the line the swap holds back, if any."

@@ -28,6 +28,8 @@ pub struct Editors {
     /// The gives waiting for the editor's `agents/wheel/saved`, by request.
     saves: Mutex<HashMap<u64, oneshot::Sender<Vec<String>>>>,
     next: AtomicU64,
+    /// What waits on the user across the sessions, derived from their snapshots (`agents-attention`).
+    attention: Mutex<crate::agents::attention::Attention>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -40,6 +42,13 @@ pub const LOSSY_BACKLOG: usize = 4 << 20;
 impl Editors {
     /// Connection CONN gets the events from now on.
     pub fn subscribe(&self, conn: u64, out: Arc<Outbox>) {
+        // what waits on the user now, when anything does: the editor starts from it
+        if let Some(line) = lock(&self.attention)
+            .current()
+            .and_then(|d| crate::front::event_line("agents-attention", d))
+        {
+            out.push(line);
+        }
         lock(&self.subscribers).insert(conn, out);
     }
 
@@ -112,6 +121,11 @@ impl Editors {
     /// its entries) gets it at once; any other gets at most [`SNAPSHOTS_PER_WINDOW`] a window of the sessions it does
     /// not show, the latest state of each when the window opens (on the hub's clock).
     pub fn broadcast_agent(self: &Arc<Self>, sid: &str, data: Value) {
+        // the derived list, told whenever it changes (not paced: it changes with a permission, not a chunk)
+        let changed = lock(&self.attention).note(sid, &data["session"]);
+        if let Some(d) = changed {
+            self.broadcast("agents-attention", d);
+        }
         let Some(line) = crate::front::event_line("agent", data) else {
             return;
         };

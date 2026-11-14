@@ -254,6 +254,110 @@ impl Hub {
         Ok(out)
     }
 
+    /// ITEMS (end-of-line diagnostics of the editor's tracked buffer of REL of TREE) fitted for a window WIDTH columns
+    /// wide (`editor::marks::eol_fit`, the column of each one's line end counting tabs of TAB columns); none when no
+    /// buffer of it is tracked or the text is over the marks' limit.
+    pub fn eol_fit(
+        &self,
+        tree: &Tree,
+        rel: &str,
+        width: usize,
+        tab: u32,
+        items: &[w::EolItem],
+    ) -> verdandi::Result<Option<Vec<w::EolFitted>>> {
+        use crate::editor::marks;
+        let Some(text) = self.mirror_text(tree, rel)? else {
+            return Ok(None);
+        };
+        let positions: Vec<i64> = items.iter().map(|i| i.pos).collect();
+        let Some(columns) = marks::eol_columns(&text, &positions, tab) else {
+            return Ok(None);
+        };
+        Ok(Some(
+            items
+                .iter()
+                .zip(columns)
+                .map(|(i, column)| w::EolFitted {
+                    key: i.key,
+                    text: marks::eol_fit(&i.text, column, width),
+                })
+                .collect(),
+        ))
+    }
+
+    /// Where LINES of the editor's tracked buffer of REL of TREE start in the text the hub holds, and just after them
+    /// (`editor::marks::Lines`); none when no buffer of it is tracked or the text is over the marks' limit.
+    pub fn line_positions(
+        &self,
+        tree: &Tree,
+        rel: &str,
+        lines: &[u32],
+    ) -> verdandi::Result<Option<Vec<w::LinePosition>>> {
+        let Some(text) = self.mirror_text(tree, rel)? else {
+            return Ok(None);
+        };
+        let Some(at) = crate::editor::marks::Lines::of(&text) else {
+            return Ok(None);
+        };
+        Ok(Some(
+            lines
+                .iter()
+                .map(|l| w::LinePosition {
+                    line: *l,
+                    pos: at.start(*l),
+                    end: at.after(*l),
+                })
+                .collect(),
+        ))
+    }
+
+    /// The inline blame of the line the position POS (Emacs's) is on in the editor's tracked buffer of REL of TREE,
+    /// fitted to WIDTH columns (`editor::marks::blame_text`); empty when no buffer of it is tracked, the text is over
+    /// the marks' limit, the line is the empty last one, or there is no room.
+    pub fn blame_line(
+        &self,
+        tree: &Tree,
+        rel: &str,
+        pos: i64,
+        width: usize,
+        now: f64,
+    ) -> verdandi::Result<w::BlamedLine> {
+        use crate::editor::marks;
+        let none = w::BlamedLine {
+            text: None,
+            sha: None,
+            time: None,
+        };
+        let Some(text) = self.mirror_text(tree, rel)? else {
+            return Ok(none);
+        };
+        if !marks::within_limit(text.len()) {
+            return Ok(none);
+        }
+        let line = marks::line_number_at(&text, pos);
+        // the empty line after the last line break has no blame
+        if line > line_count(&text) {
+            return Ok(none);
+        }
+        let blamed = self.git_blame(tree, rel)?;
+        let Some(commit) = blamed
+            .lines
+            .get(line - 1)
+            .and_then(|i| blamed.commits.get(*i as usize))
+        else {
+            return Ok(none);
+        };
+        let agent = blamed
+            .agents
+            .iter()
+            .find(|a| (a.from..=a.to).contains(&n(line)));
+        Ok(w::BlamedLine {
+            text: marks::blame_text(commit, agent, now, width),
+            sha: Some(commit.sha.clone()),
+            time: commit.time,
+        })
+    }
+
     /// The lines of TEXT (REL's document of TREE) that agents wrote, from the history's blame.
     fn agent_lines(
         &self,
@@ -306,6 +410,24 @@ impl Hub {
             .map(|b| String::from_utf8_lossy(&b).into_owned())
             .unwrap_or_default();
         Ok(Some(head_hunks(&old, &now)?))
+    }
+
+    /// [`Hub::hunks_head`] and the gutter marks the hunks make in the buffer's text (`editor::marks`).
+    #[allow(clippy::type_complexity)]
+    pub fn hunks_marked(
+        &self,
+        tree: &Tree,
+        rel: &str,
+    ) -> verdandi::Result<Option<(Vec<w::HeadHunk>, Vec<w::HunkMark>)>> {
+        let Some(now) = self.mirror_text(tree, rel)? else {
+            return Ok(None);
+        };
+        let old = super::blob::text_at(&tree.git_dir, &tree.root, "HEAD", rel)
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+            .unwrap_or_default();
+        let hunks = head_hunks(&old, &now)?;
+        let marks = crate::editor::marks::hunk_marks(&now, &hunks);
+        Ok(Some((hunks, marks)))
     }
 
     /// Stage the hunk of the tracked buffer of REL that starts at line NEW_START: the index gets its text with that
@@ -557,6 +679,76 @@ pub async fn git_blame(f: &Front, c: &Caller, p: w::GitBlameParams) -> Result<w:
         .map_err(store)
 }
 
+/// `history/eol-fit`.
+pub async fn eol_fit(f: &Front, c: &Caller, p: w::EolFitParams) -> Result<w::EolFits, Error> {
+    super::revert::user_only(c)?;
+    let (hub, tree) = f
+        .core
+        .history
+        .of_tree(&hub_dir(f)?, Path::new(&p.worktree_root))?;
+    let (width, tab) = (p.width as usize, p.tab_width);
+    let found = crate::clock::blocking(move || hub.eol_fit(&tree, &p.path, width, tab, &p.items))
+        .await
+        .map_err(|e| internal(e.to_string()))?
+        .map_err(store)?;
+    Ok(match found {
+        Some(items) => w::EolFits {
+            tracked: true,
+            items,
+        },
+        None => w::EolFits {
+            tracked: false,
+            items: Vec::new(),
+        },
+    })
+}
+
+/// `history/line-positions`.
+pub async fn line_positions(
+    f: &Front,
+    c: &Caller,
+    p: w::LinePositionsParams,
+) -> Result<w::LinePositions, Error> {
+    super::revert::user_only(c)?;
+    let (hub, tree) = f
+        .core
+        .history
+        .of_tree(&hub_dir(f)?, Path::new(&p.worktree_root))?;
+    let found = crate::clock::blocking(move || hub.line_positions(&tree, &p.path, &p.lines))
+        .await
+        .map_err(|e| internal(e.to_string()))?
+        .map_err(store)?;
+    Ok(match found {
+        Some(positions) => w::LinePositions {
+            tracked: true,
+            positions,
+        },
+        None => w::LinePositions {
+            tracked: false,
+            positions: Vec::new(),
+        },
+    })
+}
+
+/// `git/blame/line`.
+pub async fn git_blame_line(
+    f: &Front,
+    c: &Caller,
+    p: w::GitBlameLineParams,
+) -> Result<w::BlamedLine, Error> {
+    super::revert::user_only(c)?;
+    let (hub, tree) = f
+        .core
+        .history
+        .of_tree(&hub_dir(f)?, Path::new(&p.worktree_root))?;
+    let width = usize::try_from(p.width).unwrap_or(0);
+    let now = crate::clock::wall_secs();
+    crate::clock::blocking(move || hub.blame_line(&tree, &p.path, p.pos, width, now))
+        .await
+        .map_err(|e| internal(e.to_string()))?
+        .map_err(store)
+}
+
 /// `git/stage-hunk`.
 pub async fn stage_hunk(f: &Front, c: &Caller, p: w::StageHunkParams) -> Result<w::Staged, Error> {
     super::revert::user_only(c)?;
@@ -582,18 +774,20 @@ pub async fn hunks_head(
         .core
         .history
         .of_tree(&hub_dir(f)?, Path::new(&p.worktree_root))?;
-    let found = crate::clock::blocking(move || hub.hunks_head(&tree, &p.path))
+    let found = crate::clock::blocking(move || hub.hunks_marked(&tree, &p.path))
         .await
         .map_err(|e| internal(e.to_string()))?
         .map_err(store)?;
     Ok(match found {
-        Some(hunks) => w::HeadHunks {
+        Some((hunks, marks)) => w::HeadHunks {
             tracked: true,
             hunks,
+            marks,
         },
         None => w::HeadHunks {
             tracked: false,
             hunks: Vec::new(),
+            marks: Vec::new(),
         },
     })
 }
@@ -880,6 +1074,166 @@ mod tests {
         assert_eq!(olds, vec![vec!["b\n".to_owned()], Vec::<String>::new()]);
         // no buffer of a file: nothing computed
         assert!(f.hub.hunks_head(&f.tree, "other.txt").unwrap().is_none());
+    }
+
+    // pattern: D
+    #[test]
+    fn end_of_line_diagnostics_come_back_fitted_for_the_unsaved_text() {
+        use crate::editor::marks;
+        let f = fx("a\n");
+        tracked(&f, "a.txt", "ab\nlong line of code here\n", "user");
+        let item = |key, pos, text: &str| runstav::methods::history::EolItem {
+            key,
+            pos,
+            text: text.into(),
+        };
+        // a long text on the short first line fits more than on the second, whose end is at column 22
+        let long = "x".repeat(60);
+        let got = f
+            .hub
+            .eol_fit(
+                &f.tree,
+                "a.txt",
+                50,
+                8,
+                &[item(1, 1, &long), item(2, 8, &long), item(3, 4, "ok")],
+            )
+            .unwrap()
+            .expect("tracked");
+        let len = |i: usize| got[i].text.chars().count();
+        assert_eq!((got[0].key, got[1].key, got[2].key), (1, 2, 3));
+        assert_eq!(len(0), 44); // 50 - 2 - 4
+        assert_eq!(len(1), 24); // 50 - 22 - 4
+        assert_eq!(got[2].text, "ok");
+        assert!(
+            f.hub
+                .eol_fit(&f.tree, "other.txt", 50, 8, &[])
+                .unwrap()
+                .is_none()
+        );
+        marks::with_limit(3, || {
+            assert!(
+                f.hub
+                    .eol_fit(&f.tree, "a.txt", 50, 8, &[item(1, 1, "x")])
+                    .unwrap()
+                    .is_none()
+            );
+        });
+    }
+
+    // pattern: D
+    #[test]
+    fn lines_of_the_unsaved_text_come_as_positions() {
+        use crate::editor::marks;
+        let f = fx("a\nb\nc\n");
+        // the buffer holds text the file does not: its lines are the ones asked for
+        tracked(&f, "a.txt", "one\ntwo\nthree\nfour", "user");
+        let got = f
+            .hub
+            .line_positions(&f.tree, "a.txt", &[1, 3, 4, 9])
+            .unwrap()
+            .expect("tracked");
+        let got: Vec<_> = got.iter().map(|p| (p.line, p.pos, p.end)).collect();
+        // the last line ends at the end of the text; a line past it is the last
+        assert_eq!(got, [(1, 1, 5), (3, 9, 15), (4, 15, 19), (9, 15, 19)]);
+        assert!(
+            f.hub
+                .line_positions(&f.tree, "other.txt", &[1])
+                .unwrap()
+                .is_none()
+        );
+        marks::with_limit(3, || {
+            assert!(
+                f.hub
+                    .line_positions(&f.tree, "a.txt", &[1])
+                    .unwrap()
+                    .is_none()
+            );
+        });
+    }
+
+    // pattern: D
+    #[test]
+    fn a_line_asks_for_its_blame_text_by_position() {
+        let f = fx("one\ntwo\n");
+        // the buffer: line 2 changed since the commit
+        tracked(&f, "a.txt", "one\nTWO\n", "user");
+        let now = 4_000_000_000.0;
+        // position 1 is line 1, committed by "t" (the fixture's author); position 5 is line 2, not committed
+        let l1 = f.hub.blame_line(&f.tree, "a.txt", 1, 60, now).unwrap();
+        assert!(l1.text.as_deref().unwrap().starts_with("t, "), "{l1:?}");
+        assert!(l1.text.as_deref().unwrap().ends_with("· base"), "{l1:?}");
+        assert!(l1.time.is_some());
+        let l2 = f.hub.blame_line(&f.tree, "a.txt", 5, 60, now).unwrap();
+        assert_eq!(l2.text.as_deref(), Some("You · Uncommitted changes"));
+        assert!(l2.time.is_none());
+        // the empty line after the last break, too little room, an untracked file: no text
+        assert!(
+            f.hub
+                .blame_line(&f.tree, "a.txt", 9, 60, now)
+                .unwrap()
+                .text
+                .is_none()
+        );
+        assert!(
+            f.hub
+                .blame_line(&f.tree, "a.txt", 1, 10, now)
+                .unwrap()
+                .text
+                .is_none()
+        );
+        assert!(
+            f.hub
+                .blame_line(&f.tree, "other.txt", 1, 60, now)
+                .unwrap()
+                .sha
+                .is_none()
+        );
+    }
+
+    // pattern: D
+    #[test]
+    fn a_buffer_over_the_marks_limit_gets_no_marks_and_no_blame() {
+        use crate::editor::marks;
+        let f = fx("a\nb\nc\nd\n");
+        let now = "a\nB\nc\nd\ne\n";
+        tracked(&f, "a.txt", now, "user");
+        // under the limit: marks and blame come
+        assert!(
+            !f.hub
+                .hunks_marked(&f.tree, "a.txt")
+                .unwrap()
+                .unwrap()
+                .1
+                .is_empty()
+        );
+        assert!(
+            f.hub
+                .blame_line(&f.tree, "a.txt", 1, 60, 4e9)
+                .unwrap()
+                .text
+                .is_some()
+        );
+        // one byte under the text's size: both are empty, the hunks (Show, Revert, Stage Change) still come
+        marks::with_limit(now.len() - 1, || {
+            let (hunks, m) = f.hub.hunks_marked(&f.tree, "a.txt").unwrap().unwrap();
+            assert_eq!(hunks.len(), 2);
+            assert!(m.is_empty());
+            let l = f.hub.blame_line(&f.tree, "a.txt", 1, 60, 4e9).unwrap();
+            assert!(l.text.is_none() && l.sha.is_none());
+        });
+    }
+
+    // pattern: D
+    #[test]
+    fn the_hunks_answer_carries_the_marks_in_the_buffers_positions() {
+        let f = fx("a\nb\nc\nd\n");
+        tracked(&f, "a.txt", "a\nB\nc\nd\ne\n", "user");
+        let (hunks, marks) = f.hub.hunks_marked(&f.tree, "a.txt").unwrap().unwrap();
+        assert_eq!(hunks.len(), 2);
+        let got: Vec<_> = marks.iter().map(|m| (m.line, m.pos)).collect();
+        assert_eq!(got, [(2, 3), (5, 9)]);
+        assert!(f.hub.hunks_marked(&f.tree, "other.txt").unwrap().is_none());
     }
 
     // pattern: D
