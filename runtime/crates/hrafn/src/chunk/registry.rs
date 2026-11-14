@@ -20,6 +20,7 @@ fn source(kind: Kind) -> (&'static str, &'static str) {
     match kind {
         Kind::Rust => pack!("rust"),
         Kind::C => pack!("c"),
+        Kind::Cpp => pack!("cpp"),
         Kind::Shell => pack!("shell"),
         Kind::Python => pack!("python"),
         Kind::JavaScript => pack!("javascript"),
@@ -60,6 +61,7 @@ pub(super) fn grammar_name(kind: Kind) -> &'static str {
     match kind {
         Kind::Rust => "rust",
         Kind::C => "c",
+        Kind::Cpp => "cpp",
         Kind::Shell => "bash",
         Kind::Python => "python",
         Kind::JavaScript => "javascript",
@@ -74,6 +76,7 @@ pub(super) fn pack_name(kind: Kind) -> &'static str {
     match kind {
         Kind::Rust => "rust",
         Kind::C => "c",
+        Kind::Cpp => "cpp",
         Kind::Shell => "shell",
         Kind::Python => "python",
         Kind::JavaScript => "javascript",
@@ -154,4 +157,23 @@ pub fn hub_grammars() -> Vec<(&'static str, &'static str)> {
         .iter()
         .map(|k| (pack_name(*k), grammar_name(*k)))
         .collect()
+}
+
+/// A hash of what the chunker derives from the packs: each tree-sitter language's pack (manifest, `chunks.scm`,
+/// `tags.scm`, the grammar's commit is in the manifest) and whether its grammar is built. It moves when a pack changes
+/// or a grammar is built (or lost); the index then parses its files again, and a chunk whose text did not change keeps
+/// its key and its vector.
+pub fn stamp() -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(crate::files::LANG_RULES.to_le_bytes());
+    for k in Kind::ALL {
+        let (manifest, chunks) = source(k);
+        for part in [pack_name(k), manifest, chunks, super::refs::tags_source(k)] {
+            h.update(part.as_bytes());
+            h.update([0]);
+        }
+        h.update([u8::from(skald::registry::language(grammar_name(k)).is_ok())]);
+    }
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }

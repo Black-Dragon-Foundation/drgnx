@@ -9,8 +9,11 @@
 //!   JSON. With `--map`, also the repo map's yield at that budget: the share of each question's target definitions and
 //!   files that the global map shows, that the top 5 hits followed by the map focused on their files show, and that
 //!   search hits packed in rank order show (each in the same token estimate).
-//! - `eval compare [--by chunk|file] A.json B.json`: B against A, paired, on chunk-level MRR@10 (the default) or on
-//!   file MRR@10 (fair to a chunker that gives a language no symbols); exit 0 when B passes the gate, 1 when it does not.
+//! - `eval compare [--by chunk|file|floor] A.json B.json`: B against A, paired. The restated gate (2026-11-10): `chunk` (the
+//!   default) passes when the chunk-level MRR@10 difference is at least 0, `file` (fair to a chunker that gives a language
+//!   no symbols) when the upper bound of the file MRR@10 difference is; strata are printed, never gating. `floor` is the
+//!   non-regression check of an unchanged language (lower bound -0.01 overall, -0.03 per stratum of 30 rows or more).
+//!   Exit 0 when B passes, 1 when it does not.
 
 use crate::clock;
 use hrafn::eval::{self, EvalRow, Report};
@@ -73,7 +76,8 @@ pub fn parse(args: Vec<OsString>) -> Result<EvalCommand, String> {
                 by = match p.value().map_err(e)?.string().map_err(e)?.as_str() {
                     "chunk" => eval::Gate::Chunk,
                     "file" => eval::Gate::File,
-                    other => return Err(format!("--by is chunk or file, not {other:?}")),
+                    "floor" => eval::Gate::Floor,
+                    other => return Err(format!("--by is chunk, file or floor, not {other:?}")),
                 }
             }
             Long("model") if name == "run" => {
@@ -691,7 +695,7 @@ fn compare_files(a: &Path, b: &Path, by: eval::Gate) -> Result<(String, bool), S
     let (fa, fb) = (load(a)?, load(b)?);
     let v = eval::compare_on(&fa.report, &fb.report, by)?;
     let label = match by {
-        eval::Gate::Chunk => "MRR@10",
+        eval::Gate::Chunk | eval::Gate::Floor => "MRR@10",
         eval::Gate::File => "file MRR@10",
     };
     let mut s = format!(

@@ -177,7 +177,7 @@ the same path and `DRGNX_TEST_SELECTOR='"drgnx-packs-gui"'`.
 
 Hrafn's chunker takes what a top-level form defines from the pack's `queries/chunks.scm` (compiled into the hub with the
 manifest, `hrafn::chunk::registry`), under rules fixed in `hrafn::chunk::engine`, in place of a Rust walker per language
-(Rust, C, shell, Python, JavaScript, TypeScript, TSX, Go and Java; Emacs Lisp, Org and Markdown keep their chunkers).
+(Rust, C, C++, shell, Python, JavaScript, TypeScript, TSX, Go and Java; Emacs Lisp, Org and Markdown keep their chunkers).
 A pattern captures `@definition.KIND` (the node that defines; the kind is the suffix) with `@name`; `@container` on a node
 whose `body` field holds members; `@transparent` on a node a definition may sit inside that is itself the member (a `const`
 statement, a C `declaration`, a Go `var` declaration); `@skip` on a go-between (a Java enum's declarations, Go's `var (...)`
@@ -223,16 +223,34 @@ fallback to a crate.
 A grammar that is not built, does not match the lock or does not load is not an error the hub dies of: its files read as
 text (no symbols, references or highlights), the first miss of each pack is one log line naming it, and `ratatoskr
 doctor` prints `pack X not built (why)`. The registry looks again on the next use, so a grammar built after the hub
-started is found without a restart. `install.sh` and `drgnx update` run `drgnx packs migrate`, which installs the nine
-packs the hub parses with (`drgnx-packs-hub-defaults`: rust, c, shell, python, javascript, typescript, tsx, go, java);
+started is found without a restart. `install.sh` and `drgnx update` run `drgnx packs migrate`, which installs the ten
+packs the hub parses with (`drgnx-packs-hub-defaults`: rust, c, cpp, shell, python, javascript, typescript, tsx, go, java);
 until that job finishes, code files read as text. A pack you remove (`drgnx packs remove NAME`, the Remove button) is
 recorded in the lock's `:removed-packs`: `packs migrate` never installs it again, its files read as text, and `ratatoskr
 doctor` says `pack X removed by you; drgnx packs install X to get it back`. `drgnx packs install NAME` (or `sync --add`)
 forgets the record.
 
-**Tests** parse with the same loader. `test/packs/hub-grammars.sh CACHE` builds those nine packs' grammars with the pack
+**Tests** parse with the same loader. `test/packs/hub-grammars.sh CACHE` builds those ten packs' grammars with the pack
 job (`ratatoskr packs sync --builtin OUT [PACK...]`) into `CACHE/KEY` (KEY: a hash of their commits, tree hashes and
 sources) and prints `DRGNX_PACK_LOCK` and `DRGNX_PACK_GRAMMARS`; before the hub installs anything, the registry reads
 those two variables. An unchanged set of pins reuses the folder; a pin change builds a new one. Run it in a container
 (it needs network, git and a C compiler); `chunk_golden.rs` and the other Hrafn goldens run on these libraries, so a
 golden that changes points at a pin or ABI mismatch between a pack and its mode's pin, not at the loader.
+
+## C++
+
+The `cpp` pack (`.cc .cpp .cxx .hpp .hh .h++`; a `.h` is C++ when its text is, `hrafn::files::looks_cpp`: the same rule for the index, the
+debugger's inline values and search, in a pure C project or a mixed one) is Hrafn's `cpp` language: `queries/chunks.scm` makes classes,
+structs, unions and namespaces (and `extern "C"` blocks) containers, so a class's inline members are methods and nested
+types are members; `template <...>` is a wrapper, so a templated class or function is one form with its template line;
+`c-declarator-name` finds the name of `Cache<V>::put` (`put`), `~Cache`, `operator==` and `T& f()`. `queries/tags.scm`
+holds the references (calls, `new T`, base classes). `/** */` and `///` comments are the docs. The pack also carries its
+`:inline` lists (lambdas, range-for) and `:origin` declarations, so inline values and origin trails work in C++;
+debugging reuses lldb-dap and CodeLLDB by adapter id.
+
+## The language stamp
+
+The code index records the stamp the files were parsed under (`hrafn::chunk::lang_stamp`: a hash of every tree-sitter
+language's pack data, its manifest, `chunks.scm` and `tags.scm`, and whether its grammar is built). When it moves (a
+pack changed, a grammar was built after the hub indexed the files as text, or one went missing), the next refresh parses
+every file again; a chunk whose text did not change keeps its key and so its vector, so nothing is embedded twice.

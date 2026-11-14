@@ -19,7 +19,7 @@ use crate::files::Lang;
 pub use definers::{Definer, definer};
 pub use elisp::top_level_forms;
 pub use refs::Ref;
-pub use registry::{MissingHook, hub_grammars, on_missing};
+pub use registry::{MissingHook, hub_grammars, on_missing, stamp as lang_stamp};
 
 /// The chunk budget, in non-whitespace characters (the eval tunes it).
 pub const BUDGET: usize = 1800;
@@ -135,6 +135,7 @@ pub fn chunk_file_refs(
         Lang::Elisp => Some(elisp::chunk(path, generated, text, budget)),
         Lang::Rust => tree_sitter(ts::Kind::Rust),
         Lang::C => tree_sitter(ts::Kind::C),
+        Lang::Cpp => tree_sitter(ts::Kind::Cpp),
         Lang::Shell => tree_sitter(ts::Kind::Shell),
         Lang::Python => tree_sitter(ts::Kind::Python),
         Lang::JavaScript => tree_sitter(ts::Kind::JavaScript),

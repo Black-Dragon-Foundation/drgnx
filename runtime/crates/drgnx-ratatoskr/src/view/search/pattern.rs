@@ -80,7 +80,7 @@ pub(super) fn run(
         let Ok(bytes) = std::fs::read(file) else {
             return;
         };
-        let (lang, _) = classify(file, &bytes[..bytes.len().min(512)]);
+        let (lang, _) = classify(file, &bytes[..bytes.len().min(64 * 1024)]);
         if find.lang.is_some_and(|l| l != lang) || structural::Grammar::of(lang).is_none() {
             return;
         }

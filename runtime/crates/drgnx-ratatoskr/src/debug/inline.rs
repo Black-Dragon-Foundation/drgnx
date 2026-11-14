@@ -421,6 +421,7 @@ mod list_tests {
             sorted(&lists().loops),
             sorted(&[
                 "for_statement",
+                "for_range_loop", // C++ (language packs Task 9)
                 "for_in_statement",
                 "enhanced_for_statement",
                 "c_style_for_statement",

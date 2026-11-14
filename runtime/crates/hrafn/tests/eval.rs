@@ -305,6 +305,7 @@ fn compare_on_file_mrr() {
         }])
     });
     assert!(!compare_on(&base, &cand, Gate::Chunk).unwrap().pass);
+    assert!(!compare_on(&base, &cand, Gate::Floor).unwrap().pass);
     let v = compare_on(&base, &cand, Gate::File).unwrap();
     assert!(v.pass, "{v:?}");
     assert_eq!(v.overall.mean, 0.0);
@@ -379,6 +380,84 @@ fn compare_noninferiority_rule() {
     // different queries: refused
     let other = rows_of(&[("symbol", 399), ("docs", 20)]);
     assert!(compare(&base, &report(&other, &[])).is_err());
+}
+
+/// Pattern D. The restated gate (hrafn-agent-tools Task 4, 2026-11-10): the chunk difference is at least 0, the file
+/// difference's upper bound is at least 0, and the strata are reported but do not gate.
+#[test]
+fn the_restated_gate() {
+    let rows = rows_of(&[("symbol", 400), ("docs", 30)]);
+    let base = report(&rows, &[]);
+    let plain = |p: &str| Hit {
+        symbol: None,
+        ..hit(p, "")
+    };
+    // chunk: no worse passes, a slip fails (no interval: the point difference)
+    assert!(
+        compare_on(&base, &report(&rows, &[]), Gate::Chunk)
+            .unwrap()
+            .pass
+    );
+    let slip = compare_on(&base, &report(&rows, &["symbol-000"]), Gate::Chunk).unwrap();
+    assert!(
+        !slip.pass && slip.reasons[0].contains("below 0"),
+        "{slip:?}"
+    );
+    // file: a candidate that finds the file one place lower on one row of 430 is inside its interval: passes by the upper bound
+    let few: Vec<String> = rows.iter().take(1).map(|r| r.query.clone()).collect();
+    let cand = run(&rows, &|q: &Query| {
+        if few.contains(&q.text) {
+            answer(vec![plain("b.el"), plain("a.el")])
+        } else {
+            answer(vec![plain("a.el")])
+        }
+    });
+    let v = compare_on(&base, &cand, Gate::File).unwrap();
+    assert!(
+        v.pass && v.overall.mean < 0.0 && v.overall.hi >= 0.0,
+        "{v:?}"
+    );
+    // everything one place lower: the upper bound is below 0
+    let cand = run(&rows, &|_q: &Query| {
+        answer(vec![plain("b.el"), plain("a.el")])
+    });
+    let v = compare_on(&base, &cand, Gate::File).unwrap();
+    assert!(
+        !v.pass && v.reasons.iter().any(|r| r.contains("upper bound")),
+        "{v:?}"
+    );
+    // strata are reported, never gating: the base finds 60 rows one place lower, the candidate fixes them and loses a whole
+    // 30-row stratum: the overall difference is a gain, the stratum's interval is below 0, and the gate passes
+    let slow: Vec<String> = rows
+        .iter()
+        .filter(|r| r.stratum == "symbol")
+        .take(60)
+        .map(|r| r.query.clone())
+        .collect();
+    let docs: Vec<String> = rows
+        .iter()
+        .filter(|r| r.stratum == "docs")
+        .map(|r| r.query.clone())
+        .collect();
+    let base = run(&rows, &|q: &Query| {
+        if slow.contains(&q.text) {
+            answer(vec![plain("b.el"), plain("a.el")])
+        } else {
+            answer(vec![plain("a.el")])
+        }
+    });
+    let cand = run(&rows, &|q: &Query| {
+        if docs.contains(&q.text) {
+            answer(vec![plain("b.el"), plain("a.el")])
+        } else {
+            answer(vec![plain("a.el")])
+        }
+    });
+    let v = compare_on(&base, &cand, Gate::File).unwrap();
+    assert!(
+        v.pass && v.overall.mean > 0.0 && v.strata["docs"].hi < 0.0,
+        "{v:?}"
+    );
 }
 
 /// Pattern D. A candidate with a coverage failure, or an exact-symbol recall below 1.0, fails whatever its ranks.

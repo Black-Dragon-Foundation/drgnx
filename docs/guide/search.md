@@ -168,8 +168,9 @@ An agent has no other way in: the hub's `search/*` methods are the editor's.
   catches up after a branch switch once git's lock is gone. Tier 2 makes the vectors, with the built-in model and with
   each server that answers, in the background: capped in memory, at low priority, paced so that typing keeps its
   frame, and held back on battery until AC (Index Project with `--now` overrides that).
-- **Languages.** Emacs Lisp, Rust, C, shell, Python, JavaScript, TypeScript, TSX, Go and Java are parsed: their chunks follow
-  definitions, and their definitions are what `symbols` and `outline` list. Org and Markdown follow headings; other
+- **Languages.** Emacs Lisp, Rust, C, C++, shell, Python, JavaScript, TypeScript, TSX, Go and Java are parsed: their chunks follow
+  definitions, and their definitions are what `symbols` and `outline` list. C++ is `.cc .cpp .cxx .hpp .hh .h++`; a `.h` is judged by its own text: C++ when it holds a `namespace`, a `template`, a
+  `class`, an access label, a `::` between names or a standard include with no `.h` (`<vector>`), else C: classes, structs, namespaces, templates, methods (with `~Name` and `operator==`), enums, aliases, concepts and macros. Org and Markdown follow headings; other
   text is cut into windows of lines, with no definitions.
 - **Content-keyed.** A vector belongs to the text of its chunk (and the chunker's version), so a file that changed only
   re-embeds the chunks that changed, and switching to another branch and back embeds nothing.
@@ -283,8 +284,8 @@ the `embed` role (`(ollama . "qwen3-embedding:0.6b")`).
 
 ## Language grammars
 
-The index reads code through the language packs' grammars (Rust, C, shell, Python, JavaScript, TypeScript, TSX, Go and
-Java; Emacs Lisp, Org and Markdown need none). `install.sh` and `drgnx update` build them with `drgnx packs migrate`,
+The index reads code through the language packs' grammars (Rust, C, C++, shell, Python, JavaScript, TypeScript, TSX, Go
+and Java; Emacs Lisp, Org and Markdown need none). `install.sh` and `drgnx update` build them with `drgnx packs migrate`,
 which takes a few minutes and a C compiler. **Until that job has finished, those files are indexed as plain text**: no
 symbols, no references, no structural search or inline values for them. `ratatoskr doctor` says `pack X not built` for a
 pack whose library is missing; running `drgnx packs migrate` fixes it, with no restart.

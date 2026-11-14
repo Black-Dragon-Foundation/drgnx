@@ -29,6 +29,7 @@ pub enum Lang {
     Elisp,
     Rust,
     C,
+    Cpp,
     Shell,
     Python,
     JavaScript,
@@ -57,6 +58,7 @@ impl Lang {
             Lang::Elisp => "elisp",
             Lang::Rust => "rust",
             Lang::C => "c",
+            Lang::Cpp => "cpp",
             Lang::Shell => "shell",
             Lang::Python => "python",
             Lang::JavaScript => "javascript",
@@ -72,10 +74,11 @@ impl Lang {
 
     /// The language a stored name (`as_str`) names; anything else is text.
     pub fn parse(name: &str) -> Lang {
-        const ALL: [Lang; 13] = [
+        const ALL: [Lang; 14] = [
             Lang::Elisp,
             Lang::Rust,
             Lang::C,
+            Lang::Cpp,
             Lang::Shell,
             Lang::Python,
             Lang::JavaScript,
@@ -592,7 +595,15 @@ fn lang_of(path: &str, head: &[u8]) -> Lang {
     match name.rsplit_once('.').map(|(_, e)| e) {
         Some("el") => Lang::Elisp,
         Some("rs") => Lang::Rust,
-        Some("c" | "h") => Lang::C,
+        Some("c") => Lang::C,
+        Some("h") => {
+            if looks_cpp(head) {
+                Lang::Cpp
+            } else {
+                Lang::C
+            }
+        }
+        Some("cc" | "cpp" | "cxx" | "hpp" | "hh" | "h++") => Lang::Cpp,
         Some("sh" | "bash" | "zsh") => Lang::Shell,
         Some("py" | "pyi") => Lang::Python,
         Some("js" | "mjs" | "cjs" | "jsx") => Lang::JavaScript,
@@ -606,6 +617,76 @@ fn lang_of(path: &str, head: &[u8]) -> Lang {
         None => shebang_lang(head),
     }
 }
+
+/// Whether the text of a `.h` is C++: a `namespace`, a `template <`, a `class NAME`, an access label (`public:`), a `::`
+/// between names, or a standard include with no `.h` (`<vector>`), outside comments and preprocessor lines. One rule for
+/// every reader of the file (the index, the debugger's inline values, search): a `.h` of a pure C project has none of
+/// these and stays C; a header of a mixed project is judged on its own text. At most [`CPP_PROBE`] bytes are read.
+fn looks_cpp(text: &[u8]) -> bool {
+    let text = &text[..text.len().min(CPP_PROBE)];
+    let text = String::from_utf8_lossy(text);
+    let mut in_block = false;
+    for raw in text.lines() {
+        let mut line = raw.trim();
+        if in_block {
+            match line.find("*/") {
+                Some(i) => {
+                    line = line[i + 2..].trim();
+                    in_block = false;
+                }
+                None => continue,
+            }
+        }
+        if line.starts_with("/*") {
+            if !line.contains("*/") {
+                in_block = true;
+            }
+            continue;
+        }
+        if line.starts_with("//") || line.starts_with('*') {
+            continue;
+        }
+        if let Some(inc) = line.strip_prefix('#') {
+            let inc = inc.trim_start();
+            if let Some(rest) = inc.strip_prefix("include") {
+                let name = rest.trim().trim_start_matches(['<', '"']);
+                let name = name.split(['>', '"']).next().unwrap_or("");
+                if rest.trim().starts_with('<') && !name.is_empty() && !name.contains('.') {
+                    return true;
+                }
+            }
+            continue;
+        }
+        let code = line.split("//").next().unwrap_or(line);
+        let word = |w: &str| {
+            code.strip_prefix(w)
+                .is_some_and(|r| r.starts_with(|c: char| c.is_whitespace() || c == '{' || c == '<'))
+        };
+        if word("namespace") || word("template") || word("class") || word("extern \"C++\"") {
+            return true;
+        }
+        if matches!(code, "public:" | "private:" | "protected:") {
+            return true;
+        }
+        let b = code.as_bytes();
+        if (0..b.len().saturating_sub(2)).any(|i| {
+            &b[i..i + 2] == b"::"
+                && i > 0
+                && (b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_')
+                && (b[i + 2].is_ascii_alphabetic() || b[i + 2] == b'_' || b[i + 2] == b'~')
+        }) {
+            return true;
+        }
+    }
+    false
+}
+
+/// The version of the rules that give a file its language (`lang_of`): part of the index's language stamp, so a change to
+/// those rules (an extension, the `.h` test) re-parses the files that were classified under the old ones. Bump it with them.
+pub const LANG_RULES: u32 = 2;
+
+/// How much of a `.h` the C++ test reads.
+const CPP_PROBE: usize = 64 * 1024;
 
 /// An extensionless file's language from its `#!` line.
 fn shebang_lang(head: &[u8]) -> Lang {
@@ -753,7 +834,13 @@ impl Read {
     fn of(path: &str, blob: String, bytes: &[u8]) -> Read {
         Read {
             blob,
-            lang: lang_of(path, &bytes[..bytes.len().min(256)]),
+            // a `.h` is judged on its text, the others on a `#!` line at most
+            lang: lang_of(
+                path,
+                &bytes[..bytes
+                    .len()
+                    .min(if path.ends_with(".h") { CPP_PROBE } else { 256 })],
+            ),
             marked: generated_by_marker(bytes),
             size: bytes.len() as u64,
         }

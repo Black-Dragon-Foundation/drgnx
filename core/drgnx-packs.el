@@ -353,7 +353,7 @@ everything as it was.  Returns (:ok t :packs NAMES :built LANGS :generation N)."
 
 (defun drgnx-packs--legacy-dir () (expand-file-name "tree-sitter/" (drgnx-data-dir)))
 
-(defvar drgnx-packs-hub-defaults '("rust" "c" "shell" "python" "javascript" "typescript" "tsx" "go" "java")
+(defvar drgnx-packs-hub-defaults '("rust" "c" "cpp" "shell" "python" "javascript" "typescript" "tsx" "go" "java")
   "The packs the hub parses code with (Hrafn's chunker, structural search, inline values): installed by default.  Until
 their grammars are built, those files read as text.")
 
