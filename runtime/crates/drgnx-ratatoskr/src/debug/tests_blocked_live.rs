@@ -1,7 +1,8 @@
 //! Live: debugpy and js-debug inside a port block, through the hub's sessions (spec §21). Each program starts a
 //! child at once (js-debug: before its bootloader reaches the parent, unless the preload makes the fork wait for it;
-//! spike runs 10 and 11), the breakpoint is in the child, and while it is stopped every TCP listener in the network
-//! namespace is one of the block's ports. Run alone, in the adapter image (`test/container/Containerfile.debug`):
+//! spike runs 10 and 11), the breakpoint is in the child, and while it is stopped every TCP listener of the container's
+//! processes in the network namespace is one of the block's ports (a listener nobody here owns, as Docker's embedded
+//! DNS is, is not the debuggee's). Run alone, in the adapter image (`test/container/Containerfile.debug`):
 //! `nextest run -p drgnx-ratatoskr --lib --features test-hooks --run-ignored only debug::tests_blocked_live`.
 //! `DRGNX_DEBUG_LIVE_PYTHON` (default `python3`, with debugpy) and `DRGNX_DEBUG_LIVE_JS_DEBUG` (default
 //! `/opt/js-debug/src/dapDebugServer.js`) say where the adapters are.
@@ -43,8 +44,45 @@ impl Terminals for NoTerms {
     }
 }
 
-/// Every TCP port listening in this network namespace (the test runs alone in its container).
+/// The socket inodes held open by the processes this container can see (the test, the adapter and the debuggee's whole
+/// tree): what `/proc/<pid>/fd` names as `socket:[INODE]`.
+fn owned_sockets() -> std::collections::HashSet<u64> {
+    let mut out = std::collections::HashSet::new();
+    let Ok(procs) = std::fs::read_dir("/proc") else {
+        return out;
+    };
+    for p in procs.flatten() {
+        if !p
+            .file_name()
+            .to_string_lossy()
+            .bytes()
+            .all(|b| b.is_ascii_digit())
+        {
+            continue;
+        }
+        let Ok(fds) = std::fs::read_dir(p.path().join("fd")) else {
+            continue;
+        };
+        for fd in fds.flatten() {
+            if let Ok(link) = std::fs::read_link(fd.path())
+                && let Some(inode) = link
+                    .to_string_lossy()
+                    .strip_prefix("socket:[")
+                    .and_then(|i| i.strip_suffix(']'))
+                    .and_then(|i| i.parse().ok())
+            {
+                out.insert(inode);
+            }
+        }
+    }
+    out
+}
+
+/// Every TCP port listening in this network namespace that a process of this container holds: a listener of the
+/// namespace that none of them owns is somebody else's (Docker's embedded DNS answers on a high port in the netns of a
+/// job container on a user network), and no debuggee of the block's.
 fn listeners() -> Vec<u16> {
+    let owned = owned_sockets();
     let mut out = vec![];
     for f in ["/proc/net/tcp", "/proc/net/tcp6"] {
         let Ok(t) = std::fs::read_to_string(f) else {
@@ -54,6 +92,10 @@ fn listeners() -> Vec<u16> {
             let cols: Vec<&str> = line.split_whitespace().collect();
             // state 0A: LISTEN
             if cols.get(3) == Some(&"0A")
+                && cols
+                    .get(9)
+                    .and_then(|i| i.parse::<u64>().ok())
+                    .is_some_and(|i| owned.contains(&i))
                 && let Some(port) = cols[1].rsplit(':').next()
                 && let Ok(p) = u16::from_str_radix(port, 16)
             {
