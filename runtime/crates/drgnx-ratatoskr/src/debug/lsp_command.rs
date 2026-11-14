@@ -169,6 +169,18 @@ fn expand_value(value: &Value, v: &Vars) -> Result<Value, String> {
     })
 }
 
+/// A fill argument that is exactly `${config:KEY?}`: the launch's string KEY, or null when the launch has none.
+fn optional_config(s: &str, arguments: &Value) -> Option<Value> {
+    let key = s.strip_prefix("${config:")?.strip_suffix("?}")?;
+    Some(
+        arguments
+            .get(key)
+            .filter(|v| v.is_string())
+            .cloned()
+            .unwrap_or(Value::Null),
+    )
+}
+
 /// A fill argument: `${config:KEY}` (a string key of the launch arguments), `${file}`, then [`expand`]'s braces. A value
 /// put in is never read for variables again.
 fn fill_arg(s: &str, arguments: &Value, v: &Vars) -> Result<Value, String> {
@@ -267,16 +279,29 @@ pub async fn fill_arguments(
         let args = step
             .args
             .iter()
-            .map(|a| fill_arg(a, &arguments, v))
+            .map(|a| match optional_config(a, &arguments) {
+                Some(x) => Ok(x),
+                None => fill_arg(a, &arguments, v),
+            })
             .collect::<Result<Vec<_>, _>>()?;
-        let answer = client
-            .command(
-                &step.command,
-                json!({"command": step.command, "arguments": args}),
-                within,
-            )
-            .await
-            .map_err(|f| format!("{}: {f}", step.command))?;
+        let started = crate::clock::now();
+        let answer = loop {
+            let answer = client
+                .command(
+                    &step.command,
+                    json!({"command": step.command, "arguments": args}),
+                    within,
+                )
+                .await
+                .map_err(|f| format!("{}: {f}", step.command))?;
+            let empty = answer.as_array().is_some_and(Vec::is_empty);
+            match step.retry_empty {
+                Some(secs) if empty && started.elapsed() < Duration::from_secs(secs) => {
+                    crate::clock::sleep(Duration::from_millis(500)).await;
+                }
+                _ => break answer,
+            }
+        };
         let picked = match &step.select {
             Some(sel) => {
                 let want = fill_arg(&sel.equals, &arguments, v)?;
@@ -289,7 +314,24 @@ pub async fn fill_arguments(
                     })
                     .cloned()
                     .ok_or_else(|| {
-                        format!("{}: nothing for {} = {want}", step.command, sel.field)
+                        let listed: Vec<String> = answer
+                            .as_array()
+                            .map(|l| {
+                                l.iter()
+                                    .take(5)
+                                    .map(|o| o.get(&sel.field).map_or("-".into(), ToString::to_string))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        format!(
+                            "{}: nothing for {} = {want} (the server listed {} item(s) [{}]; it announced {:?}; it logged {:?})",
+                            step.command,
+                            sel.field,
+                            answer.as_array().map_or(0, Vec::len),
+                            listed.join(", "),
+                            client.statuses(),
+                            client.log_tail().iter().rev().take(3).collect::<Vec<_>>(),
+                        )
                     })?
             }
             None => answer,
@@ -300,7 +342,13 @@ pub async fn fill_arguments(
                 (None, Some(i)) => picked.get(i),
                 (None, None) => Some(&picked),
             }
-            .ok_or_else(|| format!("{}: the answer has no {}", step.command, put.key))?;
+            .filter(|v| !v.is_null());
+            let Some(value) = value else {
+                if put.optional {
+                    continue;
+                }
+                return Err(format!("{}: the answer has no {}", step.command, put.key));
+            };
             let value = plain(&put.key, value)?;
             if let Some(o) = arguments.as_object_mut() {
                 o.insert(put.key.clone(), value);
@@ -529,6 +577,21 @@ impl LspLauncher {
             .wait_ready(self.within.ready)
             .await
             .map_err(step("start"))?;
+        if let (Some(open), Some(file)) = (&self.spec.open_file, &self.file) {
+            // the file as it is on disk (at most 1 MiB): a server makes a lone file's project when the file is opened
+            let text = std::fs::read(file)
+                .ok()
+                .filter(|b| b.len() <= 1 << 20)
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .unwrap_or_default();
+            client
+                .notify(
+                    "textDocument/didOpen",
+                    json!({"textDocument": {"uri": file_uri(file), "languageId": open.language_id, "version": 1, "text": text}}),
+                )
+                .await
+                .map_err(step("didOpen"))?;
+        }
         let args = self
             .spec
             .debug_args

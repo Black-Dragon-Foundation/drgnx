@@ -469,6 +469,9 @@ fn plain(base: &Base) -> bool {
     }
 }
 
+/// How many redirects a pinned download may follow.
+const MAX_HOPS: usize = 5;
+
 /// URL's body into SINK, over https (or http when PLAIN), through the same client the gateway uses (so the proxy
 /// variables and the platform's certificate store apply).
 async fn over_http(
@@ -480,19 +483,55 @@ async fn over_http(
     if !url.starts_with("https://") && !plain {
         return Err(InstallError::NotHttps(url.into()));
     }
-    let uri: bifrost::Uri = url
-        .parse()
-        .map_err(|_| InstallError::Network(format!("not a URL: {url}")))?;
     let up = Upstream::new(UpstreamOpts::default())
         .map_err(|e| InstallError::Network(format!("{e:?}")))?;
-    let req = http::Request::get(uri)
-        .header("user-agent", "drgnx-browser-install")
-        .body(Full::new(Bytes::new()))
-        .map_err(|e| InstallError::Network(e.to_string()))?;
-    let resp = up
-        .send(req)
-        .await
-        .map_err(|e| InstallError::Network(format!("{e:?}")))?;
+    // a pinned download may be redirected (a release asset to its storage, a mirror): at most MAX_HOPS hops, each over
+    // https (or http for a test's server), and what arrives is checked against the pinned digest either way
+    let mut at = url.to_owned();
+    let mut hops = 0;
+    let resp = loop {
+        let uri: bifrost::Uri = at
+            .parse()
+            .map_err(|_| InstallError::Network(format!("not a URL: {at}")))?;
+        let req = http::Request::get(uri)
+            .header("user-agent", "drgnx-browser-install")
+            .body(Full::new(Bytes::new()))
+            .map_err(|e| InstallError::Network(e.to_string()))?;
+        let resp = up
+            .send(req)
+            .await
+            .map_err(|e| InstallError::Network(format!("{e:?}")))?;
+        if !resp.status().is_redirection() || resp.status() == http::StatusCode::NOT_MODIFIED {
+            break resp;
+        }
+        hops += 1;
+        let next = resp
+            .headers()
+            .get(http::header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .ok_or_else(|| {
+                InstallError::Network(format!(
+                    "the server said {} with no Location",
+                    resp.status()
+                ))
+            })?
+            .to_owned();
+        if hops > MAX_HOPS {
+            return Err(InstallError::Network(format!(
+                "more than {MAX_HOPS} redirects from {url}"
+            )));
+        }
+        at = if next.starts_with("https://") || (plain && next.starts_with("http://")) {
+            next
+        } else if next.starts_with('/') {
+            // the same server: the scheme and authority of the URL just asked
+            let (scheme, rest) = at.split_once("://").unwrap_or(("https", &at));
+            let authority = rest.split('/').next().unwrap_or(rest);
+            format!("{scheme}://{authority}{next}")
+        } else {
+            return Err(InstallError::NotHttps(next));
+        };
+    };
     if resp.status() != http::StatusCode::OK {
         return Err(InstallError::Network(format!(
             "the server said {}",
@@ -937,6 +976,90 @@ mod tests {
         older.version = "99.0.0.1".into();
         two.insert(0, older);
         assert_eq!(run(tmp.path(), &two, &base, None).await.unwrap().version, V);
+    }
+
+    /// A pinned download may be redirected, a few hops, and only to https (or, for a test's server, http): the digest is
+    /// what holds the content, the redirect only says where it is.
+    #[tokio::test]
+    async fn a_download_follows_redirects_a_few_hops_and_refuses_the_rest() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((mut s, _)) = listener.accept().await {
+                let mut buf = [0u8; 2048];
+                let n = s.read(&mut buf).await.unwrap_or(0);
+                let path = String::from_utf8_lossy(&buf[..n])
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or("/")
+                    .to_owned();
+                let reply = match path.as_str() {
+                    "/a" => format!("HTTP/1.1 302 Found\r\nlocation: http://127.0.0.1:{port}/b\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"),
+                    "/b" => "HTTP/1.1 301 Moved\r\nlocation: /c\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".to_owned(),
+                    "/c" => "HTTP/1.1 200 OK\r\ncontent-length: 5\r\nconnection: close\r\n\r\nhello".to_owned(),
+                    "/loop" => format!("HTTP/1.1 302 Found\r\nlocation: http://127.0.0.1:{port}/loop\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"),
+                    "/ftp" => "HTTP/1.1 302 Found\r\nlocation: ftp://x/y\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".to_owned(),
+                    _ => "HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".to_owned(),
+                };
+                let _ = s.write_all(reply.as_bytes()).await;
+            }
+        });
+        let get = |path: &'static str| async move {
+            let dir = tempfile::tempdir().unwrap();
+            let file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(dir.path().join("d"))
+                .unwrap();
+            let mut sink = Sink {
+                file,
+                hasher: Sha256::new(),
+                written: 0,
+                max: 1 << 20,
+            };
+            over_http(
+                &format!("http://127.0.0.1:{port}{path}"),
+                true,
+                &mut sink,
+                Limits::default(),
+            )
+            .await
+            .map(|()| sink.finish())
+        };
+        // two hops (an absolute http one, a relative one) reach the body
+        assert_eq!(get("/a").await.unwrap(), sha(b"hello"));
+        assert!(
+            get("/loop")
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("redirects")
+        );
+        assert!(matches!(get("/ftp").await, Err(InstallError::NotHttps(_))));
+        // without the test's plain http an `http://` start is refused before any request
+        let dir = tempfile::tempdir().unwrap();
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(dir.path().join("d"))
+            .unwrap();
+        let mut sink = Sink {
+            file,
+            hasher: Sha256::new(),
+            written: 0,
+            max: 1 << 20,
+        };
+        assert!(matches!(
+            over_http(
+                &format!("http://127.0.0.1:{port}/a"),
+                false,
+                &mut sink,
+                Limits::default()
+            )
+            .await,
+            Err(InstallError::NotHttps(_))
+        ));
     }
 
     /// The network path, against a local plain-HTTP server.

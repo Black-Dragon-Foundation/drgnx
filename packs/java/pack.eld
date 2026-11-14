@@ -19,32 +19,33 @@
                      "-jar" "{glob:jdtls/plugins/org.eclipse.equinox.launcher_*.jar}"
                      "-configuration" "{tools}/jdtls/config_{os}{arch-suffix}" "-data" "{session}/workspace")
             :init-options (:bundles ("{tools}/java-debug/plugin.jar"))
+            :open-file (:language-id "java")
             :debug-command "vscode.java.startDebugSession"
-            :fill ((:command "vscode.java.resolveMainClass" :args ("{root-uri}")
+            :fill ((:command "vscode.java.resolveMainClass" :args ("{root-uri}") :retry-empty 120
                     :select (:field "filePath" :equals "${file}") :when-missing "mainClass"
-                    :into ((:key "mainClass" :field "mainClass") (:key "projectName" :field "projectName")))
+                    :into ((:key "mainClass" :field "mainClass") (:key "projectName" :field "projectName" :optional t)))
                    (:command "vscode.java.resolveMainClass" :args ("{root-uri}")
                     :select (:field "mainClass" :equals "${config:mainClass}") :when-missing "projectName"
-                    :into ((:key "projectName" :field "projectName")))
-                   (:command "vscode.java.resolveClasspath" :args ("${config:mainClass}" "${config:projectName}")
+                    :into ((:key "projectName" :field "projectName" :optional t)))
+                   (:command "vscode.java.resolveClasspath" :args ("${config:mainClass}" "${config:projectName?}")
                     :into ((:key "modulePaths" :index 0) (:key "classPaths" :index 1)))
-                   (:command "vscode.java.resolveJavaExecutable" :args ("${config:mainClass}" "${config:projectName}")
+                   (:command "vscode.java.resolveJavaExecutable" :args ("${config:mainClass}" "${config:projectName?}")
                     :into ((:key "javaExec"))))))
    :defaults ((:name "Java: Current File" :type "java" :request "launch" :cwd "${workspaceFolder}"
                :console "internalConsole"))
-   :install (:parts ((:into "jdk" :version "21.0.13+9" :root "jdk-21.0.13+9"
+   :install (:parts ((:into "jdk" :version "25.0.5+8" :root "jdk-25.0.5+8"
                       :platforms ((:platform "linux-x64"
-                                   :url "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.13%2B9/OpenJDK21U-jdk_x64_linux_hotspot_21.0.13_9.tar.gz"
-                                   :sha256 "d7f5d5cf865a2902b70ff549b97586a7d3f234e016f041ab447ea740c7d66d1c")
+                                   :url "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.5%2B8/OpenJDK25U-jdk_x64_linux_hotspot_25.0.5_8.tar.gz"
+                                   :sha256 "68982529869257d0ee6b824ec5aa270ff8b118bb438670da0b97ebdab178d7fb")
                                   (:platform "linux-arm64"
-                                   :url "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.13%2B9/OpenJDK21U-jdk_aarch64_linux_hotspot_21.0.13_9.tar.gz"
-                                   :sha256 "e3522e707fc7dbe2a72c30746b1e7068301a0213ecd213d4491f35a14eb55578")
-                                  (:platform "darwin-x64" :root "jdk-21.0.13+9/Contents/Home"
-                                   :url "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.13%2B9/OpenJDK21U-jdk_x64_mac_hotspot_21.0.13_9.tar.gz"
-                                   :sha256 "9aa1d1c17ae5467a022679e7e0af5c00797d94ac462ed1a46f4db07a8a34a6dd")
-                                  (:platform "darwin-arm64" :root "jdk-21.0.13+9/Contents/Home"
-                                   :url "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.13%2B9/OpenJDK21U-jdk_aarch64_mac_hotspot_21.0.13_9.tar.gz"
-                                   :sha256 "bf036b35b071bfb2f54f2c0af8ee8d88afa95ee6eb3dce02c0f94cfc2524d04a")))
+                                   :url "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.5%2B8/OpenJDK25U-jdk_aarch64_linux_hotspot_25.0.5_8.tar.gz"
+                                   :sha256 "bb5b2ded252f21c6090cf780b0a408ad0d83bbb557e702955643557f13231880")
+                                  (:platform "darwin-x64" :root "jdk-25.0.5+8/Contents/Home"
+                                   :url "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.5%2B8/OpenJDK25U-jdk_x64_mac_hotspot_25.0.5_8.tar.gz"
+                                   :sha256 "32cd4d2151c91aa00d0fc911edfd05245ed40fa6b1aa894d5f35c928cd67a59d")
+                                  (:platform "darwin-arm64" :root "jdk-25.0.5+8/Contents/Home"
+                                   :url "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.5%2B8/OpenJDK25U-jdk_aarch64_mac_hotspot_25.0.5_8.tar.gz"
+                                   :sha256 "36dc14d797aaff6d89aab302cd053fdba6207dfdcf772052fa7b023a94b0e857")))
                      (:into "jdtls" :version "1.63.0"
                       :url "https://download.eclipse.org/jdtls/milestones/1.63.0/jdt-language-server-1.63.0-202610191322.tar.gz"
                       :sha256 "b1f2abe0b3cccb462cf64fb4a5587c7d09df60cf8be7748b152cbd89d018bdc4")

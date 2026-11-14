@@ -69,6 +69,8 @@ pub async fn read_frame<R: AsyncBufRead + Unpin>(
     let mut length: Option<usize> = None;
     let mut header_bytes = 0usize;
     let mut first = true;
+    // what came before the end, for the error (a server that prints a message instead of a frame)
+    let mut seen = String::new();
     loop {
         let mut line = String::new();
         // a header line is read one byte at a time past its cap check: `read_line` would buffer without a limit
@@ -79,10 +81,14 @@ pub async fn read_frame<R: AsyncBufRead + Unpin>(
             return if first {
                 Ok(None)
             } else {
-                Err(Failure::Closed("the input ended inside a header".into()))
+                Err(Failure::Closed(format!(
+                    "the input ended inside a header (after {:?})",
+                    seen.chars().take(200).collect::<String>()
+                )))
             };
         }
         first = false;
+        seen.push_str(&line);
         header_bytes += n;
         if header_bytes > MAX_HEADER {
             return Err(Failure::TooLarge(header_bytes));
@@ -148,6 +154,8 @@ async fn read_line_capped<R: AsyncBufRead + Unpin>(
 struct Side {
     ready: bool,
     log: Vec<String>,
+    /// The `language/status` types the server announced, in order.
+    statuses: Vec<String>,
 }
 
 /// A connection to a language server.
@@ -243,6 +251,12 @@ impl Client {
                 match method.as_str() {
                     "language/status" => {
                         let t = params.and_then(|p| p.get("type")).and_then(Value::as_str);
+                        if let Some(t) = t {
+                            let mut s = lock(&self.side);
+                            if s.statuses.len() < 64 {
+                                s.statuses.push(t.to_owned());
+                            }
+                        }
                         if matches!(t, Some("ServiceReady" | "Started")) {
                             lock(&self.side).ready = true;
                             let _ = ready.send(true);
@@ -368,6 +382,11 @@ impl Client {
                 secs: within.as_secs(),
             }),
         }
+    }
+
+    /// The `language/status` types the server has announced so far (for an error message).
+    pub fn statuses(&self) -> Vec<String> {
+        lock(&self.side).statuses.clone()
     }
 
     /// What the server logged last, newest last (for an error message).

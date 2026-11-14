@@ -1796,3 +1796,147 @@ async fn a_frames_locals_are_a_heap_graph() {
     );
     d.shutdown().await;
 }
+
+const JAVA: &str = r#"public class Main {
+    static int add(int a, int b) {
+        int s = a + b;
+        return s;
+    }
+    public static void main(String[] args) {
+        int total = 0;
+        for (int i = 0; i < 5; i++) {
+            total = add(total, i);
+        }
+        System.out.println("done " + total);
+    }
+}
+"#;
+
+/// The Java adapter's parts in TOOLS, installed through the production installer (the pack's pinned downloads) unless they
+/// already are at their pinned versions. `DRGNX_DEBUG_LIVE_JAVA_TOOLS` names a folder that is kept between runs (the
+/// `lp-java-live.sh` script keys it by the pins); without it they are downloaded into this run's own.
+async fn java_tools() -> PathBuf {
+    let tools = std::env::var_os("DRGNX_DEBUG_LIVE_JAVA_TOOLS")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| live_dir("java-tools"));
+    let table = Table::builtin();
+    let a = table.by_id("java").unwrap();
+    let ok = adapters::parts(a, &tools)
+        .iter()
+        .all(|p| p.installed.is_some() && p.installed == p.pinned);
+    if !ok {
+        let plan =
+            super::install::plan(a.install.as_ref().unwrap(), &super::install::platform_key())
+                .unwrap();
+        let env: Vec<(OsString, OsString)> = std::env::vars_os().collect();
+        let said = super::install::install(&plan, &tools, &super::install::Source::Https, &env)
+            .await
+            .unwrap_or_else(|e| panic!("the Java adapter's install: {e}"));
+        eprintln!("T10-JAVA {said}");
+    }
+    tools
+}
+
+/// Java: break, step and inspect through jdtls and java-debug (the `lsp-command` start kind), with the pack's pinned
+/// JDK, jdtls and plugin: a breakpoint in a loop, Variables, step in, step out, and the program ends on Continue.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "live: the pinned JDK, jdtls and java-debug downloaded (see the module's doc and lp-java-live.sh)"]
+async fn java_breaks_steps_and_inspects_through_jdtls() {
+    let tools = java_tools().await;
+    let dir = live_dir("java");
+    let file = write(&dir, "Main.java", JAVA);
+    let table = Table::builtin();
+    let adapter = table.by_id("java").unwrap();
+    let spec = adapter.start.as_ref().unwrap().lsp_command.clone().unwrap();
+    let mut launcher = super::lsp_command::LspLauncher::new(
+        spec,
+        tools,
+        dir.clone(),
+        Some(file.clone()),
+        dir.join(".sessions"),
+        std::env::vars_os().collect(),
+    );
+    launcher.within = super::lsp_command::Within {
+        init: Duration::from_secs(120),
+        ready: Duration::from_secs(480),
+        command: Duration::from_secs(300),
+        port: Duration::from_secs(30),
+    };
+    let ev = Arc::new(Events::default());
+    let terms = Arc::new(Procs::default());
+    let d = Debug::new(ev.clone(), terms);
+    let root = dir.display().to_string();
+    let bp = add(&d, &root, &file, 9, None, None, None).await;
+    let config = json!({"type": "java", "request": "launch", "name": "java", "cwd": dir, "console": "internalConsole"});
+    let start = Start {
+        name: "java".into(),
+        adapter_id: "java".into(),
+        request: Request::Launch,
+        arguments: super::launch::adapter_arguments(&config),
+        breakpoints: vec![],
+        functions: vec![],
+        exception_filters: None,
+    };
+    let t0 = crate::clock::now();
+    let sid_root = d
+        .start(1, &root, start, Arc::new(launcher))
+        .await
+        .unwrap_or_else(|e| panic!("the start: {e}"));
+    // break at `total = add(total, i)` the first time round the loop
+    let (c, f) = ev.stop(0).await;
+    eprintln!("T10-JAVA first stop after {} ms", t0.elapsed().as_millis());
+    assert!(path_is(&f, &file) && line_of(&f) == 9, "break: {f}");
+    let sid = f["session"].as_str().unwrap().to_owned();
+    let stop = d.stop_of(&sid).unwrap();
+    assert_eq!(int_of(&local(&stop, "i").0), 0, "i");
+    assert_eq!(int_of(&local(&stop, "total").0), 0, "total");
+    // step in: `add`'s first line, with its arguments as locals
+    d.control(&sid, Op::StepIn { thread: None }).await.unwrap();
+    let (c, f) = ev.stop(c).await;
+    assert!(
+        path_is(&f, &file)
+            && (line_of(&f) == 3 || line_of(&f) == 2)
+            && f["name"].as_str().is_some_and(|n| n.contains("add")),
+        "step in: {f}"
+    );
+    let inside = d.stop_of(&sid).unwrap();
+    assert_eq!(int_of(&local(&inside, "b").0), 0, "b");
+    // step out: back in main
+    d.control(&sid, Op::StepOut { thread: None }).await.unwrap();
+    let (c, f) = ev.stop(c).await;
+    assert!(
+        path_is(&f, &file) && (8..=10).contains(&line_of(&f)),
+        "step out: {f}"
+    );
+    // the breakpoint again on the next turn: i is 1; then take it away and run to the end
+    d.control(&sid, Op::Continue { thread: None })
+        .await
+        .unwrap();
+    let (_, f) = ev.stop(c).await;
+    assert_eq!(line_of(&f), 9, "second break: {f}");
+    assert_eq!(
+        int_of(&local(&d.stop_of(&sid).unwrap(), "i").0),
+        1,
+        "i on the next turn"
+    );
+    remove(&d, &root, bp).await;
+    d.control(&sid, Op::Continue { thread: None })
+        .await
+        .unwrap();
+    for _ in 0..1500 {
+        if d.list().is_empty() {
+            break;
+        }
+        crate::clock::sleep(Duration::from_millis(20)).await;
+    }
+    d.control(
+        &sid_root,
+        Op::Stop {
+            kill_debuggee: None,
+        },
+    )
+    .await
+    .ok();
+    d.shutdown().await;
+    assert!(d.list().is_empty(), "sessions left: {:?}", d.list());
+}

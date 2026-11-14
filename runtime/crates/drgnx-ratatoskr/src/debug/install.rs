@@ -323,9 +323,10 @@ async fn stage(plan: &Plan, tools: &Path, source: &Source) -> Result<Staged, Str
         let dl = download.clone();
         let to = partial.clone();
         let tarball = url.ends_with(".tar.gz") || url.ends_with(".tgz");
+        let root_dir = root.map(PathBuf::from);
         crate::clock::blocking(move || {
             if tarball {
-                unpack_tgz(&dl, &to, limits)
+                unpack_tgz(&dl, &to, limits, root_dir.as_deref())
             } else {
                 unpack(&dl, &to, limits)
             }
@@ -408,13 +409,19 @@ fn copy_hashed(from: &Path, to: &Path) -> Result<String, String> {
 
 /// The tar.gz TGZ into DEST, by the zip unpacker's rules: only regular files and folders, no entry absolute or
 /// climbing, no name twice, files created new, sizes counted as written.
-fn unpack_tgz(tgz: &Path, dest: &Path, limits: Limits) -> Result<(), InstallError> {
+fn unpack_tgz(
+    tgz: &Path,
+    dest: &Path,
+    limits: Limits,
+    root: Option<&Path>,
+) -> Result<(), InstallError> {
     let file = File::open(tgz).map_err(|e| InstallError::Io(format!("{}: {e}", tgz.display())))?;
     let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(file));
     let entries = archive
         .entries()
         .map_err(|e| InstallError::Archive(e.to_string()))?;
     let mut seen = std::collections::HashSet::new();
+    let mut links: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     let (mut total, mut count) = (0u64, 0usize);
     for entry in entries {
         let mut entry = entry.map_err(|e| InstallError::Archive(e.to_string()))?;
@@ -438,6 +445,12 @@ fn unpack_tgz(tgz: &Path, dest: &Path, limits: Limits) -> Result<(), InstallErro
         {
             return Err(unsafe_name());
         }
+        // nothing is written through a link an earlier entry made: what a link names is then exactly its place in the archive
+        if name.ancestors().skip(1).any(|a| links.contains(a)) {
+            return Err(InstallError::Unsafe(format!(
+                "entry {raw:?} is inside a link"
+            )));
+        }
         let target = dest.join(&name);
         let kind = entry.header().entry_type();
         if kind.is_dir() {
@@ -445,8 +458,56 @@ fn unpack_tgz(tgz: &Path, dest: &Path, limits: Limits) -> Result<(), InstallErro
                 .map_err(|e| InstallError::Io(format!("{}: {e}", target.display())))?;
             continue;
         }
-        if kind.is_symlink() || kind.is_hard_link() {
-            return Err(InstallError::Unsafe(format!("entry {raw:?} is a link")));
+        if kind.is_symlink() {
+            // a relative link that stays inside the archive's tree (a JDK's `legal/…` files point at each other)
+            let to = entry
+                .link_name()
+                .map_err(|e| InstallError::Archive(e.to_string()))?
+                .map(|t| t.into_owned())
+                .ok_or_else(|| {
+                    InstallError::Unsafe(format!("entry {raw:?} is a link with no target"))
+                })?;
+            // a link in the folder that becomes the install stays inside it (the rest of the archive is dropped)
+            let base = root
+                .filter(|r| name.starts_with(r))
+                .map_or(0, |r| r.components().count());
+            let mut depth =
+                name.parent().map_or(0, |p| p.components().count()) as i64 - base as i64;
+            for c in to.components() {
+                match c {
+                    Component::Normal(_) => depth += 1,
+                    Component::ParentDir => depth -= 1,
+                    Component::CurDir => {}
+                    _ => {
+                        return Err(InstallError::Unsafe(format!(
+                            "entry {raw:?} links to {}",
+                            to.display()
+                        )));
+                    }
+                }
+                if depth < 0 {
+                    return Err(InstallError::Unsafe(format!(
+                        "entry {raw:?} links out of the archive ({})",
+                        to.display()
+                    )));
+                }
+            }
+            if !seen.insert(name.clone()) {
+                return Err(InstallError::Unsafe(format!("entry {raw:?} appears twice")));
+            }
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|e| InstallError::Io(format!("{}: {e}", parent.display())))?;
+            }
+            std::os::unix::fs::symlink(&to, &target)
+                .map_err(|e| InstallError::Io(format!("{}: {e}", target.display())))?;
+            links.insert(name);
+            continue;
+        }
+        if kind.is_hard_link() {
+            return Err(InstallError::Unsafe(format!(
+                "entry {raw:?} is a hard link"
+            )));
         }
         if !kind.is_file() {
             return Err(InstallError::Unsafe(format!(

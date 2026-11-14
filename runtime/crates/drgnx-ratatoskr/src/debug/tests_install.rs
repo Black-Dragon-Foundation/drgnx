@@ -182,6 +182,57 @@ async fn an_archive_that_climbs_or_links_installs_nothing() {
     assert!(!tools.path().parent().unwrap().join("evil").exists());
 }
 
+/// A relative link that stays inside the archive's tree is made (a JDK's `legal/` files point at each other); one that is
+/// absolute, climbs out of the tree, is a hard link or is written through, is not.
+#[tokio::test]
+async fn a_link_inside_the_archive_is_made_and_one_that_leaves_it_is_not() {
+    let src = tempfile::tempdir().unwrap();
+    let tools = tempfile::tempdir().unwrap();
+    let good = tgz(&[
+        ("jdk/legal/a/", b"", 0o755),
+        ("jdk/legal/a/LICENSE", b"text", 0o644),
+        ("jdk/legal/b/", b"", 0o755),
+        ("jdk/legal/b/LICENSE", b"../a/LICENSE", 0o120777),
+    ]);
+    std::fs::write(src.path().join("ok.tgz"), &good).unwrap();
+    let plan = archive("ok.tgz", &sha(&good), "jdk", Some("jdk"));
+    install::install(&plan, tools.path(), &Source::Dir(src.path().into()), &[])
+        .await
+        .unwrap();
+    let link = tools.path().join("jdk/legal/b/LICENSE");
+    assert!(link.is_symlink());
+    assert_eq!(std::fs::read(&link).unwrap(), b"text");
+    for (name, entries) in [
+        ("up.tgz", vec![("jdk/l", &b"../../outside"[..], 0o120777)]),
+        ("deep.tgz", vec![("jdk/a/l", &b"../../x"[..], 0o120777)]),
+        ("abs.tgz", vec![("jdk/l", &b"/etc/passwd"[..], 0o120777)]),
+        (
+            "through.tgz",
+            vec![
+                ("jdk/d", &b"."[..], 0o120777),
+                ("jdk/d/d/d/l", &b"../../../../x"[..], 0o120777),
+            ],
+        ),
+        (
+            "write.tgz",
+            vec![
+                ("jdk/d", &b"."[..], 0o120777),
+                ("jdk/d/f", &b"x"[..], 0o644),
+            ],
+        ),
+    ] {
+        let bytes = tgz(&entries);
+        std::fs::write(src.path().join(name), &bytes).unwrap();
+        let t2 = tempfile::tempdir().unwrap();
+        let plan = archive(name, &sha(&bytes), "jdk", Some("jdk"));
+        let e = install::install(&plan, t2.path(), &Source::Dir(src.path().into()), &[])
+            .await
+            .unwrap_err();
+        assert!(e.contains("unsafe"), "{name}: {e}");
+        assert_eq!(std::fs::read_dir(t2.path()).unwrap().count(), 0, "{name}");
+    }
+}
+
 #[tokio::test]
 async fn installing_again_replaces_the_folder_whole() {
     let src = tempfile::tempdir().unwrap();

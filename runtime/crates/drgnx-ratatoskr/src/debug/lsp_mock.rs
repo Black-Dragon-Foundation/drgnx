@@ -119,6 +119,9 @@ pub fn main(mode: &str, arg: Option<&str>) -> i32 {
                     "vscode.java.resolveMainClass" if hostile => {
                         json!([{"mainClass": {"nested": 1}, "projectName": "p", "filePath": file}])
                     }
+                    "vscode.java.resolveMainClass" if mode == "no-project" => {
+                        json!([{"mainClass": "app.Main", "filePath": file}])
+                    }
                     "vscode.java.resolveMainClass" => {
                         json!([{"mainClass": "app.Main", "projectName": "app", "filePath": file},
                                {"mainClass": "app.Other", "projectName": "app", "filePath": "/other/Other.java"}])

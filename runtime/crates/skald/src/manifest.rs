@@ -349,6 +349,17 @@ pub struct LspCommand {
     /// Steps that complete the launch configuration from the server before the DAP `launch`.
     #[serde(default)]
     pub fill: Vec<Fill>,
+    /// Open the launch's file in the server (`textDocument/didOpen`) once it is ready: a server such as jdtls makes the
+    /// project of a lone file only when it is opened.
+    #[serde(default)]
+    pub open_file: Option<OpenFile>,
+}
+
+/// What `textDocument/didOpen` says of the file.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct OpenFile {
+    pub language_id: String,
 }
 
 /// One `:fill` step: a server command whose answer (strings only) goes into the launch configuration.
@@ -365,6 +376,10 @@ pub struct Fill {
     /// Run only when the launch configuration has no such key.
     #[serde(default)]
     pub when_missing: Option<String>,
+    /// While the answer is an empty list, ask again every half second for up to this many seconds (a project still
+    /// being imported lists nothing yet).
+    #[serde(default)]
+    pub retry_empty: Option<u64>,
     #[serde(default)]
     pub into: Vec<Put>,
 }
@@ -385,6 +400,9 @@ pub struct Put {
     pub field: Option<String>,
     #[serde(default)]
     pub index: Option<usize>,
+    /// The answer may lack it (a lone file's project has no name): then the key is left out.
+    #[serde(default)]
+    pub optional: bool,
 }
 
 /// Inline values: node kinds, and a query for "not a value".

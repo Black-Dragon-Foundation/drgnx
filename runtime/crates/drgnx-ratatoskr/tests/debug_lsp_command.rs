@@ -20,6 +20,7 @@ fn put(key: &str, field: Option<&str>, index: Option<usize>) -> Put {
         key: key.into(),
         field: field.map(str::to_owned),
         index,
+        optional: false,
     }
 }
 
@@ -34,6 +35,7 @@ fn fills() -> Vec<Fill> {
                 equals: "${file}".into(),
             }),
             when_missing: Some("mainClass".into()),
+            retry_empty: None,
             into: vec![
                 put("mainClass", Some("mainClass"), None),
                 put("projectName", Some("projectName"), None),
@@ -44,6 +46,7 @@ fn fills() -> Vec<Fill> {
             args: vec!["${config:mainClass}".into(), "${config:projectName}".into()],
             select: None,
             when_missing: None,
+            retry_empty: None,
             into: vec![
                 put("modulePaths", None, Some(0)),
                 put("classPaths", None, Some(1)),
@@ -54,6 +57,7 @@ fn fills() -> Vec<Fill> {
             args: vec!["${config:mainClass}".into()],
             select: None,
             when_missing: None,
+            retry_empty: None,
             into: vec![put("javaExec", None, None)],
         },
     ]
@@ -74,6 +78,10 @@ struct Rig {
 
 /// A launcher whose server is `debug-lsp-mock MODE [ARG]`. ARG `FILE` is the launch's file.
 fn rig(mode: &str, port: Option<u16>) -> Rig {
+    rig_with(mode, port, fills())
+}
+
+fn rig_with(mode: &str, port: Option<u16>, fill: Vec<Fill>) -> Rig {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("project");
     std::fs::create_dir_all(&root).unwrap();
@@ -98,7 +106,8 @@ fn rig(mode: &str, port: Option<u16>) -> Rig {
         init_options: Some(json!({"bundles": ["{tools}/ratatoskr"]})),
         debug_command: "vscode.java.startDebugSession".into(),
         debug_args: vec![],
-        fill: fills(),
+        fill,
+        open_file: None,
     };
     let mut launcher = LspLauncher::new(
         spec,
@@ -288,4 +297,39 @@ async fn a_hostile_answer_is_refused_whether_nested_objects_a_list_in_a_list_or_
         "{e}"
     );
     let _: Value = json!(null);
+}
+
+/// The mock's answer to `resolveMainClass` has a main class and no project name.
+async fn fill_without_project(optional: bool) -> Result<serde_json::Value, String> {
+    let mut steps = fills();
+    steps[0].into[1].optional = optional;
+    steps[1].args[1] = if optional {
+        "${config:projectName?}".into()
+    } else {
+        "${config:projectName}".into()
+    };
+    let r = rig_with("no-project", None, steps);
+    let _c = bounded("the start", r.launcher.connect())
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    bounded(
+        "the fill",
+        r.launcher
+            .fill(json!({"type": "java", "request": "launch"})),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn an_optional_key_the_answer_lacks_is_left_out_and_its_config_word_reads_null() {
+    let args = fill_without_project(true).await.unwrap();
+    assert_eq!(args["mainClass"], "app.Main");
+    assert!(args.get("projectName").is_none(), "{args}");
+    assert_eq!(args["javaExec"], "/jdk/bin/java");
+}
+
+#[tokio::test]
+async fn a_key_that_is_not_optional_still_errors_when_the_answer_lacks_it() {
+    let e = fill_without_project(false).await.unwrap_err();
+    assert!(e.contains("the answer has no projectName"), "{e}");
 }
