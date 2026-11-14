@@ -110,6 +110,8 @@ to its top.  The hub gives at most 50."
 
 (defvar drgnx-agent-panel--disclosure)
 (defvar drgnx-agent-panel--strip-width)   ; drgnx-agent-panel-steps.el
+(defvar drgnx-agent-panel--by-session (make-hash-table :test #'equal :weakness 'value)
+  "Hub session id → its panel's buffer.  Weak in the buffers: a killed panel's entry goes with it.")
 (defvar drgnx-agent-panel--stats-render 0 "Rows rendered since Emacs started (a test reads the difference).")
 
 (declare-function drgnx-agent-panel--header-row "drgnx-agent-panel-steps")
@@ -604,7 +606,10 @@ signal when no hub serves)."
   (add-hook 'window-scroll-functions #'drgnx-agent-panel--scrolled nil t)
   (add-hook 'kill-buffer-hook #'drgnx-agent-panel--killed nil t))
 
-(defun drgnx-agent-panel--killed () (drgnx-agent-panel--unsubscribe))
+(defun drgnx-agent-panel--killed ()
+  (when (eq (gethash drgnx-agent-panel--session drgnx-agent-panel--by-session) (current-buffer))
+    (remhash drgnx-agent-panel--session drgnx-agent-panel--by-session))
+  (drgnx-agent-panel--unsubscribe))
 
 (defun drgnx-agent-panel-buffers ()
   "The panels: one per session (a panel's buffer in another display class is not one, `drgnx-agent-panel--twin')."
@@ -617,6 +622,7 @@ signal when no hub serves)."
     (with-current-buffer buffer
       (unless (derived-mode-p 'drgnx-agent-panel-mode)
         (drgnx-agent-panel-mode)
+        (puthash session buffer drgnx-agent-panel--by-session)
         (setq drgnx-agent-panel--session session
               drgnx-agent-panel--entries (make-hash-table :test #'eql) drgnx-agent-panel--live (make-hash-table :test #'eql)
               drgnx-agent-panel--steps (make-hash-table :test #'eql) drgnx-agent-panel--shown-keys (make-hash-table :test #'equal)
@@ -668,7 +674,9 @@ signal when no hub serves)."
 ;;;; Events
 
 (defun drgnx-agent-panel--panel-for (id)
-  (seq-find (lambda (b) (equal (buffer-local-value 'drgnx-agent-panel--session b) id)) (drgnx-agent-panel-buffers)))
+  "The panel of session ID, or nil: a lookup in `drgnx-agent-panel--by-session', no walk over the buffers."
+  (let ((b (gethash id drgnx-agent-panel--by-session)))
+    (and (buffer-live-p b) b)))
 
 (defun drgnx-agent-panel--refresh-steps ()
   "Ask the hub again for the step rows this panel holds (a revert or fork changed `revertible' and `undone_by')."
