@@ -2427,7 +2427,7 @@ mod tests {
         };
         let early = crate::scenario::parse(
             "{\"scenario\": \"t/early\"}\n\
-             {\"do\": \"run\", \"bin\": \"/bin/true\", \"args\": [\"$ROOT/a\"], \"expect_code\": 0}\n",
+             {\"do\": \"run\", \"bin\": \"/bin/sh\", \"args\": [\"-c\", \"exit 0\", \"x\", \"$ROOT/a\"], \"expect_code\": 0}\n",
         )
         .unwrap();
         let e = run_scenario(&cfg, &early, &mut Vec::new()).unwrap_err();
@@ -2437,7 +2437,7 @@ mod tests {
         );
         let after = crate::scenario::parse(
             "{\"scenario\": \"t/after\"}\n{\"do\": \"root\"}\n\
-             {\"do\": \"run\", \"bin\": \"/bin/true\", \"args\": [\"$ROOT/a\"], \"expect_code\": 0}\n",
+             {\"do\": \"run\", \"bin\": \"/bin/sh\", \"args\": [\"-c\", \"exit 0\", \"x\", \"$ROOT/a\"], \"expect_code\": 0}\n",
         )
         .unwrap();
         run_scenario(&cfg, &after, &mut Vec::new()).unwrap();
