@@ -9,6 +9,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-ui)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 
 (defun drgnx-echo-swap-test--eval (sess form)
   "FORM's value (any Lisp value, printed) from the session."
@@ -95,7 +96,17 @@
               (drgnx-echo-swap-test--eval
                sess (format "(progn (setq drgnx-look-echo-row '%s) (drgnx-look-echo-apply) t)" setting))
               (drgnx-ui-measure sess nil)
-              (let ((after (drgnx-echo-swap-test--eval sess "(kx-probe)")))
+              ;; the new frame reaches the old frame's layout (its size comes from the compositor, after the swap): wait
+              ;; for that event; the last probe is in the failure when it never does
+              (let ((after nil))
+                (condition-case err
+                    (drgnx-test-wait
+                     (lambda ()
+                       (setq after (drgnx-echo-swap-test--eval sess "(kx-probe)"))
+                       (and (eq (plist-get after :box) box)
+                            (equal (plist-put (copy-sequence after) :box nil) (plist-put (copy-sequence before) :box nil))))
+                     :secs 20 :what "the swapped frame's layout is the old one's")
+                  (ert-test-failed nil))
                 (let ((print-length nil) (print-level nil))
                   (message "echo-swap %s before %S\n after %S" setting before after))
                 (should (eq (plist-get after :box) box))
