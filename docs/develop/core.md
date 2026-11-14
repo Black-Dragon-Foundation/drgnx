@@ -2245,6 +2245,47 @@ ID). `drgnx-view-nav-selection` and `drgnx-view-nav-field NAME &optional ID` rea
   listing's tests set `drgnx-explorer--lisp-listing` to run it on local folders. Tests:
   `test/unit/explorer-rows-nav-test.el`.
 
+### Hub-fed views: rows held in Sjá (`wb/drgnx-view-sja.el`)
+
+A view whose rows Sjá holds never reads a patch in Lisp. The editor asks for it with `rows_in_sja` (`term/open` and
+`term/attach` for a terminal, `view/env` for the others), and the hub sends each patch on the raw `view-model` line
+`{view, rows: PATCH}`. Sjá's push decides it by the rows' rules and keeps the rows, styles and images; its answer
+`(VIEW VERSION DECISION CLASS)` goes to `drgnx-view-sja-pushed`. An applied patch arms the draw and is acknowledged,
+a resync is asked for, a held one dims the view, and a broken store fails a `render` condition.
+
+The draw (`drgnx-view-sja-draw`) asks Sjá for the edits that turn the region into the rows, `nidhogg-view-rows`
+`draw`, and inserts them in one batch:
+
+- it runs widened, with `inhibit-quit` bound;
+- it confirms the batch with `drawn`. A batch never confirmed, or a region whose length is not Sjá's drawn state, is
+  drawn whole next time;
+- the windows keep their place, turned into (ROW . OFFSET) with `place` and back with `pos`. A window whose point
+  was at the region's end follows the tail;
+- the text is read-only unless the buffer is.
+
+The buffer keeps its `drgnx-view-patch` state (the pairing, epoch, styles and their faces, images, stale shade and
+Sjá handle) with the SJA slot set, and no `drgnx-view`. A view's own properties go on per property the draw puts
+(`drgnx-view-sja-prop-functions`), its own fit per stop (`drgnx-view-sja-stop-function`), and what follows a draw
+over the span it changed (`drgnx-view-sja-drawn-functions`). The terminal is the first view on it
+(`docs/develop/terminal.md`).
+
+**What stays in Lisp** (the user, 2026-11-14: nothing that does work per row or per update in Lisp, only commands,
+keymaps, settings and the final insert or draw call):
+
+- a face for a style (once per style, from an LRU);
+- an image for an SVG (once per image);
+- the insert itself and the windows' places;
+- the messages to the hub.
+
+There are two recorded exceptions:
+
+- **Generic `completing-read` through Vertico** keeps `drgnx-completion--format-candidate`, which dresses each
+  visible candidate in Lisp. There is no row seam of ours there: the candidates and the prompts are other packages'
+  as much as ours. The palette, which is ours, moves to Sjá.
+- **Your own terminal link patterns** (`drgnx-term-link`: an Emacs regexp and a target, or a Lisp function) run in
+  Lisp over the text a draw changed, and only when you set some. The plain addresses (`drgnx-term-link-url`) are the
+  worker's.
+
 ## Modal core (`drgnx-modal.el`)
 
 The engine-neutral half of modal editing; evil plugs into it (the `editor/evil` module, below), another engine could.

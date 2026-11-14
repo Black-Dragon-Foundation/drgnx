@@ -225,14 +225,14 @@ async fn an_attached_terminal_is_not_offered() {
     assert!(matches!(next(&mut rx).await, In::Attach { .. }));
     t.hello(9, "s2");
     assert!(
-        t.attach_to(9, "aa", 80, 24, (8, 16)).is_err(),
+        t.attach_to(9, "aa", 80, 24, (8, 16), false).is_err(),
         "no stealing from a live Emacs"
     );
     // the hub's clock, as above
     let at = mono_ms();
     t.gone_at(3, at);
     assert!(matches!(next(&mut rx).await, In::Detach));
-    let rec = t.attach_to(9, "aa", 80, 24, (8, 16)).unwrap();
+    let rec = t.attach_to(9, "aa", 80, 24, (8, 16), false).unwrap();
     assert_eq!(
         rec.session.as_deref(),
         Some("s2"),

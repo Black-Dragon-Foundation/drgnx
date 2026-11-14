@@ -70,6 +70,9 @@ pub struct TermOpen {
     /// A terminal in a remote folder: TRAMP's prefix of it (`/ssh:host:`), kept for a reattach.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote: Option<String>,
+    /// The editor holds the view's rows in Sjá: its patches go on the raw `view-model` line (`{view, rows}`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rows_in_sja: bool,
 }
 
 /// `term/open`'s answer.
@@ -287,6 +290,9 @@ pub struct TermAttach {
     pub rows: u16,
     #[serde(default)]
     pub cell_px: (u32, u32),
+    /// As `term/open`'s.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rows_in_sja: bool,
 }
 
 /// One terminal in `term/list`: whether a program runs in it (a worker that does not answer within 200 ms counts as

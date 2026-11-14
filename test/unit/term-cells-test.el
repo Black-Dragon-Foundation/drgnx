@@ -95,5 +95,15 @@ glyph, scaled to 16 px or less, and nothing becomes an ellipsis."
                    (number-sequence 1 30)))
     (should (<= drgnx-term-cells-test--measures 3))))
 
+(ert-deftest drgnx-term-cells/a-stop-of-rows-held-in-sja-fits-its-emoji ()
+  "Rows held in Sjá: each stop a draw puts (`drgnx-term--sja-stop') draws the wide cluster before it within its two
+cells, as the cell guard does, and leaves the letters before it alone."
+  (drgnx-term-cells-test--with
+    (let ((s (concat "ab" (string #x1f600) " |")))
+      (drgnx-term--sja-stop s 0 3)
+      (should (eq 'height (car (get-text-property 2 'display s))))
+      (should-not (get-text-property 1 'display s))
+      (should (<= 31 (drgnx-term-cells-test--measure (substring s 0 3)) 32)))))
+
 (provide 'term-cells-test)
 ;;; term-cells-test.el ends here

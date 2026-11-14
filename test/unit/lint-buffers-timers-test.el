@@ -89,11 +89,13 @@ wall-clock timer (`drgnx-lint-bt--timer-start-p')."
   ;; hands a model no row patch named to Sjá a throttle later: it changes no buffer and moves no window.  A view's
   ;; trailing notice (`drgnx-view-nav--arm-notice') only tells the hub the selection: it follows nothing.
   ;; The Explorer's held click (`drgnx-explorer--rows-hold') looks again while a mouse button is down, to let the
-  ;; hub's row patches in once it is up: it moves no window.
+  ;; hub's row patches in once it is up: it moves no window.  The draw of rows held in Sjá (`drgnx-view-sja--arm')
+  ;; is a view's draw too: only the windows of its own buffer move.
   '(("wb/drgnx-explorer.el" drgnx-explorer--file-event drgnx-explorer--apply-file-events drgnx-explorer--rows-hold)
     ("wb/drgnx-monitors.el" drgnx-monitors--later)
     ("wb/drgnx-view.el" drgnx-view--arm drgnx-view--spend drgnx-view--draw-buffer drgnx-view-model--arm)
-    ("wb/drgnx-view-nav.el" drgnx-view-nav--arm-notice))
+    ("wb/drgnx-view-nav.el" drgnx-view-nav--arm-notice)
+    ("wb/drgnx-view-sja.el" drgnx-view-sja--arm))
   "Workbench definitions allowed to start a timer: (FILE NAME…).  Idle timers are not listed: they
 run after input, never in the middle of a follow.")
 

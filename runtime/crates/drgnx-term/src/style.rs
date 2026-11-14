@@ -86,6 +86,61 @@ pub struct Built {
 /// The text property of an OSC 8 link's characters: its URI (the editor makes them a button).
 pub const LINK_PROP: &str = "drgnx-term-link";
 
+/// The characters that end an address in plain output (and never start its last character).
+fn url_stop(c: char) -> bool {
+    matches!(
+        c,
+        '[' | ']' | ' ' | '\t' | '\n' | '"' | '\'' | '<' | '>' | '(' | ')' | '{' | '}' | '`'
+    )
+}
+
+/// The schemes an address in plain output may have.
+const URL_SCHEMES: [&str; 5] = ["https://", "http://", "ftps://", "ftp://", "file://"];
+
+/// The addresses (http, https, ftp, ftps, file) in ROW's plain text become links, as an OSC 8 one is ([`LINK_PROP`]):
+/// a scheme, then everything up to the first space, quote or bracket, without the punctuation that ends a sentence
+/// (`.,;:!?`). Text an OSC 8 link already covers is left alone.
+pub fn link_urls(row: &mut Row) {
+    let chars: Vec<char> = row.text.chars().collect();
+    let linked = |a: usize, b: usize, props: &[(u32, u32, String, serde_json::Value)]| {
+        props
+            .iter()
+            .any(|p| p.2 == LINK_PROP && (p.0 as usize) < b && a < p.1 as usize)
+    };
+    let mut found = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let scheme = URL_SCHEMES.iter().find(|s| {
+            let n = s.len();
+            i + n <= chars.len() && chars[i..i + n].iter().copied().eq(s.chars())
+        });
+        let Some(scheme) = scheme else {
+            i += 1;
+            continue;
+        };
+        let mut end = i + scheme.len();
+        while end < chars.len() && !url_stop(chars[end]) {
+            end += 1;
+        }
+        while end > i + scheme.len() && matches!(chars[end - 1], '.' | ',' | ';' | ':' | '!' | '?')
+        {
+            end -= 1;
+        }
+        if end > i + scheme.len() && !linked(i, end, &row.props) {
+            found.push((i, end, chars[i..end].iter().collect::<String>()));
+        }
+        i = end.max(i + 1);
+    }
+    for (a, b, uri) in found {
+        row.props.push((
+            a as u32,
+            b as u32,
+            LINK_PROP.into(),
+            serde_json::Value::String(uri),
+        ));
+    }
+}
+
 /// The row KEY of CELLS: one character per cell (a blank is a space), trailing default blanks dropped, a wide
 /// character followed by a stop at the next column's pixel (CELL_PX wide cells; none when 0), runs naming styles, and
 /// each OSC 8 link's characters a [`LINK_PROP`].

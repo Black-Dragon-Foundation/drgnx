@@ -38348,6 +38348,10 @@
             "maximum": 65535,
             "minimum": 0,
             "type": "integer"
+          },
+          "rows_in_sja": {
+            "description": "As `term/open`'s.",
+            "type": "boolean"
           }
         },
         "required": [
@@ -38950,6 +38954,10 @@
             "maximum": 65535,
             "minimum": 0,
             "type": "integer"
+          },
+          "rows_in_sja": {
+            "description": "The editor holds the view's rows in Sjá: its patches go on the raw `view-model` line (`{view, rows}`).",
+            "type": "boolean"
           },
           "tasks_max": {
             "type": [

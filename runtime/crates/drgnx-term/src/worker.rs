@@ -82,6 +82,8 @@ pub struct Worker {
     meta: Option<TermMeta>,
     window: usize,
     scrollback_bytes: usize,
+    /// Plain addresses in the output are links (`link-url`).
+    link_url: bool,
     out: Vec<Out>,
     pty: Vec<u8>,
     closing: Option<i32>,
@@ -128,6 +130,7 @@ impl Worker {
             meta: None,
             window: opts.window,
             scrollback_bytes: opts.scrollback_bytes,
+            link_url: true,
             out: Vec::new(),
             pty: Vec::new(),
             closing: None,
@@ -498,6 +501,7 @@ impl Worker {
                         .set_scrollback(self.window.max(ENGINE_LINES_MIN), self.scrollback_bytes);
                 }
             }
+            "link-url" => self.link_url = value.as_bool().unwrap_or(true),
             "clipboard-write" => {
                 self.engine.sink().clipboard_write = value.as_bool().unwrap_or(false)
             }
@@ -657,6 +661,9 @@ impl Worker {
     /// patch.
     fn build(&mut self, key: &str, cells: &[Cell], slices: &[Slice]) -> Row {
         let mut built = build(key, cells, self.engine.size().2.0, &mut self.styles);
+        if self.link_url {
+            crate::style::link_urls(&mut built.row);
+        }
         with_slices(&mut built, slices);
         self.gallery.note(&built.row, slices, self.version + 1);
         self.sent

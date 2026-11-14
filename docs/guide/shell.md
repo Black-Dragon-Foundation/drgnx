@@ -49,7 +49,7 @@ the terminal says why in the echo area. So:
   browser, on the screen and in the rows scrolled off it alike.
   An address in plain output (`https://…`, `file://…`) is a link too (`drgnx-term-link-url`, on by default), and
   `drgnx-term-link` takes patterns of your own: `(("TICKET-\\([0-9]+\\)" "https://tracker.example/\\1"))` makes `TICKET-42` a link.
-  Your patterns come first; an OSC 8 link keeps its own address.
+  An OSC 8 link keeps its own address, and so does a plain address your pattern also matches.
 - **A click at the prompt** moves the cursor there (`drgnx-term-cursor-click-to-move`, on by default): on the cursor's row, while the
   shell's integration says it is at a prompt, the terminal sends as many Left or Right keys as the click is cells away.
   Not while a command runs, in a full-screen program, or while a program tracks the mouse.

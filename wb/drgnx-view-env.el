@@ -34,6 +34,7 @@
 (defvar text-scale-mode-step)
 (declare-function drgnx-hub--call-on "drgnx-hub-client")
 (declare-function drgnx-view-patch-env-sent "drgnx-view")
+(declare-function drgnx-view-sja-held-p "drgnx-view-sja" (view class))
 (declare-function drgnx-view-patch-reclass "drgnx-view")
 (defvar drgnx-view-patch)
 (defvar drgnx-view-patch--buffers)
@@ -331,7 +332,10 @@ forgotten."
         (when (or force (null old) (/= epoch (nth 0 old)) (not (equal (plist-get params :width_px) (nth 2 old))))
           (puthash key (list epoch look (plist-get params :width_px)) drgnx-view-env--sent)
           (funcall drgnx-view-env-send-function "view/env"
-                   (append params (list :epoch epoch) (and (null old) (list :attach t))))   ; a new buffer: the hub starts the pair over
+                   (append params (list :epoch epoch) (and (null old) (list :attach t))   ; a new buffer: the hub starts the pair over
+                           ;; the buffer holds its rows in Sjá: the hub sends them on the raw `view-model' line
+                           (and (fboundp 'drgnx-view-sja-held-p) (drgnx-view-sja-held-p view (car c))
+                                (list :rows_in_sja t))))
           ;; the inserter holds patches of an older epoch from now on
           (when (fboundp 'drgnx-view-patch-env-sent) (drgnx-view-patch-env-sent view (car c) epoch (null old))))))
     (let ((gone nil))

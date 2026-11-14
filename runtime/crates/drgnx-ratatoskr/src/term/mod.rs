@@ -58,6 +58,8 @@ pub struct Spawn {
     pub place: Option<String>,
     /// TRAMP's prefix of a remote terminal's folder.
     pub remote: Option<String>,
+    /// The editor holds the rows in Sjá: the patches go on the raw `view-model` line.
+    pub rows_in_sja: bool,
 }
 
 /// What `term/list` tells of a terminal.
@@ -296,6 +298,9 @@ impl Terms {
             lock(&self.inner.state).sessions.insert(conn, sess.clone());
         }
         self.serve(rec.clone(), r, w, Some(conn), hello.old());
+        if let Some(t) = lock(&self.inner.state).terms.get_mut(&id) {
+            t.rows_in_sja = s.rows_in_sja;
+        }
         if !s.config.is_empty() {
             self.send(&id, &In::Config { config: s.config });
         }
@@ -568,6 +573,7 @@ impl Terms {
         cols: u16,
         rows: u16,
         cell_px: (u32, u32),
+        rows_in_sja: bool,
     ) -> Result<Record, String> {
         let rec = {
             let mut st = lock(&self.inner.state);
@@ -597,6 +603,7 @@ impl Terms {
             t.rec.session = Some(session);
             t.rec.detached_at = None;
             t.owner = Some(conn);
+            t.rows_in_sja = rows_in_sja;
             t.rec.clone()
         };
         if let Some(dir) = self.dir() {
