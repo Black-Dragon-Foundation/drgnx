@@ -5,6 +5,8 @@
 (require 'face-remap)
 (require 'drgnx-view-env)
 (require 'drgnx-view)                   ; the patch books' accessors, set below
+(require 'drgnx-paths)
+(load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 
 (defvar drgnx-view-env-test--sent nil "What the module sent, newest first: (METHOD . PARAMS).")
 (defvar drgnx-view-env-test--palette '(("edge" "#111111")) "The palette the stubbed reader returns.")
@@ -217,6 +219,21 @@ applied, not dropped as older than what it holds (the Explorer stopped changing 
       (should (eq 'apply (drgnx-view-patch--decide
                           state (list :hub 7 :version 1 :base 0 :env_epoch 1 :ops (list (list :reset nil)))))))))
 
+(ert-deftest drgnx-view-env/a-view-a-command-shows-sends-its-env-without-idling ()
+  "A view registered before any window shows it (a command makes the buffer, then shows it) sends its env when a
+window starts showing it, not once Emacs is idle: a command that waits for the view's rows never idles, and the hub
+builds nothing for a view before its env (the look scenes' Extensions list stayed empty)."
+  (drgnx-test-with-clock ()
+    (drgnx-view-env-test--with
+      (set-window-buffer (selected-window) (messages-buffer))
+      (drgnx-view-env-register "v" buf)
+      (should-not (drgnx-view-env-test--envs))
+      (set-window-buffer (selected-window) buf)
+      (run-hook-with-args 'window-buffer-change-functions (selected-frame))   ; what redisplay runs
+      (drgnx-test-advance 0.01)                                               ; wall timers run; no idle pause
+      (should (= 1 (length (drgnx-view-env-test--envs))))
+      (should (plist-get (car (drgnx-view-env-test--envs)) :attach)))))
+
 (ert-deftest drgnx-view-env/glyph-asks-are-cached-per-font ()
   (drgnx-view-env-test--with
     (drgnx-view-env-register "v" buf)
@@ -238,6 +255,7 @@ applied, not dropped as older than what it holds (the Explorer stopped changing 
                                         window-buffer-change-functions drgnx-hub-connected-functions drgnx-hub-event-functions))
       (should-not (memq #'drgnx-view-env--theme-changed (default-value h)))
       (should-not (memq #'drgnx-view-env--size-changed (default-value h)))
+      (should-not (memq #'drgnx-view-env--buffer-changed (default-value h)))
       (should-not (memq #'drgnx-view-env--reconnected (default-value h)))
       (should-not (memq #'drgnx-view-env-event (default-value h))))
     (with-current-buffer buf

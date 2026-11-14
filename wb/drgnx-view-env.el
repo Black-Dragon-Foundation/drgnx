@@ -371,6 +371,22 @@ forgotten."
   "A window's size or a frame's windows changed: the width, once Emacs is idle (never inside a follow)."
   (drgnx-timer-debounce 'drgnx-view-env drgnx-view-env-delay #'drgnx-view-env--update-all :idle t :owner :core))
 
+(defun drgnx-view-env--send-unsent ()
+  "The env of each view a window now shows that the hub has no env for (a view opened by a command, or shown again
+after no window showed it): the hub builds nothing for a view until it hears where it shows."
+  (maphash (lambda (view v)
+             (when (and (buffer-live-p (car v)) (not (drgnx-view-env-classes view))
+                        (drgnx-view-env--window-classes view))
+               (drgnx-view-env-update view)))
+           (copy-hash-table drgnx-view-env--views)))
+
+(defun drgnx-view-env--buffer-changed (&optional frame)
+  "A window shows another buffer: a view now shown with no env sent gets it here, as redisplay runs this hook after
+the command, not once Emacs is idle (a command that opens a view and waits for its rows never idles; no timer, so
+nothing runs inside a follow); the widths as on a resize."
+  (drgnx-view-env--send-unsent)
+  (drgnx-view-env--size-changed frame))
+
 (defun drgnx-view-env--text-scale ()
   "`text-scale' changed in a view's buffer (buffer-local `text-scale-mode-hook'): its class changed."
   (maphash (lambda (view v) (when (eq (car v) (current-buffer)) (drgnx-view-env-update view)))
@@ -415,7 +431,7 @@ cache, each (font, char) measured once."
     (funcall f 'enable-theme-functions #'drgnx-view-env--theme-changed)
     (funcall f 'disable-theme-functions #'drgnx-view-env--theme-changed)
     (funcall f 'window-size-change-functions #'drgnx-view-env--size-changed)
-    (funcall f 'window-buffer-change-functions #'drgnx-view-env--size-changed)
+    (funcall f 'window-buffer-change-functions #'drgnx-view-env--buffer-changed)
     (funcall f 'drgnx-hub-connected-functions #'drgnx-view-env--reconnected)
     (funcall f 'drgnx-hub-event-functions #'drgnx-view-env-event))
   (setq drgnx-view-env--hooked on))
