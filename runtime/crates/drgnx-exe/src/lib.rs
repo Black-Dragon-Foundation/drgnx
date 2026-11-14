@@ -165,7 +165,10 @@ fn wait_unshared_within(path: &Path, within: std::time::Duration) -> std::io::Re
         if std::time::Instant::now() >= deadline {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
-                format!("{}: still open for writing in another process after {within:?}", path.display()),
+                format!(
+                    "{}: still open for writing in another process after {within:?}",
+                    path.display()
+                ),
             ));
         }
         std::thread::sleep(std::time::Duration::from_millis(1));
@@ -369,7 +372,7 @@ mod tests {
         writeln!(holder.stdin.take().unwrap(), "go").unwrap();
         holder.wait().unwrap();
         assert!(!held_for_writing(id), "seen after the child is gone");
-        wait_unshared(&p);
+        wait_unshared(&p).unwrap();
         assert!(
             std::process::Command::new(&p).status().unwrap().success(),
             "busy after the wait"
@@ -392,7 +395,9 @@ mod tests {
             .spawn()
             .unwrap();
         let mut line = String::new();
-        std::io::BufReader::new(holder.stdout.take().unwrap()).read_line(&mut line).unwrap();
+        std::io::BufReader::new(holder.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
         let e = wait_unshared_within(&p, std::time::Duration::from_millis(30)).unwrap_err();
         assert_eq!(e.kind(), std::io::ErrorKind::TimedOut);
         assert!(e.to_string().contains("held.sh"), "{e}");
