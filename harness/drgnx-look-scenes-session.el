@@ -216,18 +216,37 @@ changed to hide a gap: the gap is named here instead.")
   "A prompt in a scene's setup is an error naming it (ARGS: the prompt's), not a session waiting for an answer."
   (error "Prompted: %S" (substring-no-properties (format "%s" (car args)))))
 
+(defvar drgnx-look-scene--backtrace nil "The backtrace of the error being handled, when DRGNX_LOOK_BT=1.")
+
+(defun drgnx-look-scene--note-backtrace (_err)
+  "With DRGNX_LOOK_BT=1, keep the first lines of the backtrace of the error being signalled (they name its caller)."
+  (when (equal (getenv "DRGNX_LOOK_BT") "1")
+    (setq drgnx-look-scene--backtrace
+          (mapconcat #'identity
+                     (seq-take (seq-remove (lambda (l) (string-match-p "backtrace\\|handler-bind\\|note-backtrace" l))
+                                           (split-string (with-output-to-string (backtrace)) "\n" t))
+                               14)
+                     " | "))))
+
 (defmacro drgnx-look-scene--try (what &rest body)
-  "Run BODY; an error, a prompt included, is kept in `drgnx-look-scene--errors' under WHAT, not raised."
+  "Run BODY; an error, a prompt included, is kept in `drgnx-look-scene--errors' under WHAT, not raised (with
+DRGNX_LOOK_BT=1 its backtrace follows)."
   (declare (indent 1))
   `(condition-case err
-       (cl-letf (((symbol-function 'yes-or-no-p) #'drgnx-look-scene--no-prompt)
-                 ((symbol-function 'y-or-n-p) #'drgnx-look-scene--no-prompt)
-                 ((symbol-function 'read-from-minibuffer) #'drgnx-look-scene--no-prompt)
-                 ((symbol-function 'completing-read) #'drgnx-look-scene--no-prompt)
-                 ((symbol-function 'read-char-choice) #'drgnx-look-scene--no-prompt)
-                 ((symbol-function 'read-key) #'drgnx-look-scene--no-prompt))
-         ,@body)
-     (error (push (format "%s: %s" ,what (error-message-string err)) drgnx-look-scene--errors) nil)))
+       (handler-bind ((error #'drgnx-look-scene--note-backtrace))
+         (cl-letf (((symbol-function 'yes-or-no-p) #'drgnx-look-scene--no-prompt)
+                   ((symbol-function 'y-or-n-p) #'drgnx-look-scene--no-prompt)
+                   ((symbol-function 'read-from-minibuffer) #'drgnx-look-scene--no-prompt)
+                   ((symbol-function 'completing-read) #'drgnx-look-scene--no-prompt)
+                   ((symbol-function 'read-char-choice) #'drgnx-look-scene--no-prompt)
+                   ((symbol-function 'read-key) #'drgnx-look-scene--no-prompt))
+           ,@body))
+     (error (push (format "%s: %s%s" ,what (error-message-string err)
+                          (if drgnx-look-scene--backtrace (format " [%s]" (prog1 drgnx-look-scene--backtrace
+                                                                            (setq drgnx-look-scene--backtrace nil)))
+                            ""))
+                  drgnx-look-scene--errors)
+            nil)))
 
 (declare-function drgnx-view-env-classes "drgnx-view-env")
 (declare-function drgnx-view-patch-view "drgnx-view")
@@ -392,6 +411,12 @@ from 201."
         (push "agent: no permission card within 30 s" drgnx-look-scene--errors)))))
   (drgnx-look-scene--answer :panel (if (buffer-live-p drgnx-look-scene--panel) (buffer-name drgnx-look-scene--panel) :null)))
 
+(defun drgnx-look-scene--editor-layout ()
+  "The editor layout, when an earlier scene left another (the Work layout's editor group sits beside the map, and the
+send-run scenes' layout has none): a scene that focuses the editor starts here, or has no editor window to focus."
+  (when (and (fboundp 'drgnx-layouts-current) (drgnx-layouts-current) (not (eq (drgnx-layouts-current) 'editor)))
+    (drgnx-layouts-apply 'editor)))
+
 (defun drgnx-look-scene--editor ()
   "The editor on the gateway file, with the Explorer's Files section drawn: its rows come from the hub, so the scenes'
 hub is started first and the shot waits for them (a session starts no hub: without one the section is empty)."
@@ -399,8 +424,7 @@ hub is started first and the shot waits for them (a session starts no hub: witho
   (drgnx-look-scene--try "editor"
     ;; a Work scene before this one left the Work layout, whose editor group is beside the map: the editor layout
     ;; again (the Extensions list opened in the Work layout, out of sight, and its scene never saw its rows)
-    (when (and (fboundp 'drgnx-layouts-current) (drgnx-layouts-current) (not (eq (drgnx-layouts-current) 'editor)))
-      (drgnx-layouts-apply 'editor))
+    (drgnx-look-scene--editor-layout)
     (drgnx-wb-focus-editor)
     (drgnx-look-scene--goto "core/drgnx-gateway.el" 216 33 201))
   (drgnx-look-scene--until 20 "explorer files rows"
@@ -435,16 +459,19 @@ call on line 229, `old' on line 208)."
 
 (defvar eglot--managed-mode)
 (defvar eglot--cached-server)
+(declare-function eieio-oset "eieio-core")
 
 (defun drgnx-look-scene--eglot ()
-  "The current buffer managed by a stand-in eglot (window-dark.html's `● eglot'): its server a JSON-RPC connection to
-`cat', no language server, so the status bar's `lsp' segment draws it by its own code."
+  "The current buffer managed by a stand-in eglot (window-dark.html's `● eglot'): its server an `eglot-lsp-server' on a
+JSON-RPC connection to `cat', no language server, so the status bar's `lsp' segment draws it by its own code.  It is
+a whole server of its kind with no capabilities, as one that has not answered `initialize' is: the product asks a
+server what it can do (`eglot-server-capable', the Search view's rename), and a bare connection has no answer."
   (require 'eglot)
-  (setq-local eglot--managed-mode t
-              eglot--cached-server
-              (make-instance 'jsonrpc-process-connection :name "eglot"
-                             :process (make-process :name "look-scene-lsp" :command '("cat") :noquery t
-                                                    :connection-type 'pipe)))
+  (let ((server (make-instance 'eglot-lsp-server :name "eglot"
+                               :process (make-process :name "look-scene-lsp" :command '("cat") :noquery t
+                                                      :connection-type 'pipe))))
+    (eieio-oset server 'project-nickname "drgnx")
+    (setq-local eglot--managed-mode t eglot--cached-server server))
   (run-hooks 'eglot-managed-mode-hook))
 
 (defun drgnx-look-scene-window-dark ()
@@ -967,6 +994,8 @@ match on line 209 (the `puthash' line) unticked; the view's buffer, or nil."
     (drgnx-look-scene--answer)))
 
 (declare-function drgnx-search-to-agent "drgnx-search-handoff")
+(declare-function drgnx-settings-runtime-send "drgnx-settings-runtime")
+(defvar drgnx-agents-profiles)
 (defvar drgnx-search-handoff-buffer-name)
 (defvar drgnx-search-handoff--ask)
 
@@ -989,23 +1018,43 @@ project, the fn chip on."
   "The Search view with four matches handed to an agent (search-view.html's results, `Ada 9/14'): a pair of a
 mock profile (the scenes' ratatoskr-mock, written into the settings before the hub starts) in the project; its rows'
 colour bar and the file's chip."
-  (unless (drgnx-hub-running-p)
-    (drgnx-look-scene--try "profile"
-      (drgnx-settings-file-put (expand-file-name "settings.el" (drgnx-user-dir)) 'drgnx-settings nil
-                               'drgnx-agents-profiles
-                               `(("mock-claude" :provider claude
-                                  :command (,(expand-file-name "ratatoskr-mock"
-                                                               (file-name-directory (getenv "DRGNX_RATATOSKR_BIN")))
-                                            "acp" "--as" "claude"))))))
+  (drgnx-look-scene--try "profile"
+    (let ((profile `(("mock-claude" :provider claude
+                      :command (,(expand-file-name "ratatoskr-mock"
+                                                   (file-name-directory (getenv "DRGNX_RATATOSKR_BIN")))
+                                "acp" "--as" "claude")))))
+      (if (drgnx-hub-running-p)
+          ;; an earlier scene started the hub: the editor's value of the setting goes to it, as it does when the user sets it
+          (progn (setq drgnx-agents-profiles profile) (drgnx-settings-runtime-send))
+        (drgnx-settings-file-put (expand-file-name "settings.el" (drgnx-user-dir)) 'drgnx-settings nil
+                                 'drgnx-agents-profiles profile))))
   (when-let* ((view (drgnx-look-scene--search)))
     (drgnx-look-scene--try "hand off"
-      (with-current-buffer view
-        (let ((ids (seq-take (drgnx-look-scene--row-ids "m:") 4)))
-          (drgnx-hub--call-on drgnx-hub--events "search/handoff"
-                              (list :view drgnx-replace-view :instruction "Rename it." :ids (vconcat ids)
-                                    :to '(:pair (:profile "mock-claude"))
-                                    :mark '(:face "drgnx-agent-2" :glyph "◆" :name "Ada"))
-                              (lambda (_ err) (when err (push (format "hand off: %S" err) drgnx-look-scene--errors))))))
+      ;; the rows' ids are of the run that drew them: a search the view ran again since (the scenes before this one leave
+      ;; the view's fields as they were set, and a run that finishes after the rows were read) has the hub answer "no
+      ;; match" for them, so the ids are read again and asked again until a run answers for them
+      (let (answered pending)
+        (drgnx-look-scene--until
+         20 "hand-off ids of the current run"
+         (lambda ()
+           (or answered
+               (progn
+                 (unless pending
+                   (let ((ids (with-current-buffer view (seq-take (drgnx-look-scene--row-ids "m:") 4))))
+                     (when ids
+                       (setq pending t)
+                       (drgnx-hub--call-on
+                        drgnx-hub--events "search/handoff"
+                        (list :view drgnx-replace-view :instruction "Rename it." :ids (vconcat ids)
+                              :to '(:pair (:profile "mock-claude"))
+                              :mark '(:face "drgnx-agent-2" :glyph "◆" :name "Ada"))
+                        (lambda (_ err)
+                          (setq pending nil)
+                          (cond ((null err) (setq answered t))
+                                ((string-search "no match to hand off" (format "%s" err)))
+                                (t (setq answered t)
+                                   (push (format "hand off: %S" err) drgnx-look-scene--errors))))))))
+                 nil)))))
       (drgnx-look-scene--until 20 "chip" (lambda () (with-current-buffer view
                                                       (text-property-not-all (point-min) (point-max)
                                                                              'drgnx-search-agent nil)))))
@@ -1253,6 +1302,9 @@ the breakpoints in the store, three watches, launch.json's configuration started
 and Debug view in the sidebar and the Debug Console in the panel.  EXTRAS: the extras mockup's script.  Nil when
 there is no hub to run it."
   (when-let* ((bin (getenv "DRGNX_RATATOSKR_BIN")) ((file-executable-p bin)))
+    ;; the stop's inline values are the hub's, read with the Python pack's grammar: a hub with none shows no value at all
+    (unless (getenv "DRGNX_PACK_LOCK")
+      (error "No pack grammars for the hub: DRGNX_PACK_LOCK and DRGNX_PACK_GRAMMARS (test/packs/hub-grammars.sh)"))
     (drgnx-look-scene--hub)
     (unless (drgnx-modules--ok-p 'extra/debug)
       (drgnx-modules--run-one 'extra/debug (alist-get 'extra/debug drgnx-modules--table) 'idle))
@@ -1441,6 +1493,10 @@ debugging-extras mockup's)."
     ;; the Graph tab is extra/debug's: set it up when the session has not (its tab in the panel's strip)
     (unless (drgnx-modules--ok-p 'extra/debug)
       (drgnx-modules--run-one 'extra/debug (alist-get 'extra/debug drgnx-modules--table) 'idle))
+    ;; the Send Run scenes before this one leave their card where the editor was: closed first, as they close each other's
+    (when-let* ((b (get-buffer drgnx-debug-share-buffer)))
+      (with-current-buffer b (drgnx-debug-share--close)))
+    (drgnx-look-scene--editor-layout)
     (drgnx-wb-focus-editor)
     (let ((f (expand-file-name "inventory.py" drgnx-look-scene--project)))
       (unless (file-exists-p f) (with-temp-file f (insert drgnx-look-scene--inventory)))
