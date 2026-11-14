@@ -705,7 +705,10 @@ mod tests {
             }
         }
         assert_eq!(with, expected);
-        assert!(with > 0, "no method refused {{}}: the schema read found no required params");
+        assert!(
+            with > 0,
+            "no method refused {{}}: the schema read found no required params"
+        );
     }
 
     #[test]
