@@ -156,7 +156,7 @@ class's overlay would hide."
 
 (defun drgnx-view-nav--put-class (view id class rows)
   "Show node ID in CLASS (an index, or nil: none) over its spans; its old overlays go.  `dim' is noted, not drawn: the
-rows that hold ID are put in ROWS (a table of row keys) for `drgnx-view-nav--dim-row'."
+rows that hold ID are put in ROWS (a table of row keys) for `drgnx-view-nav--dim-rows'."
   (let* ((dims (drgnx-view-patch-dims drgnx-view-patch))
          (dim (and class (eql class (drgnx-view-patch-dim-class drgnx-view-patch)))))
     (unless (eq dim (gethash id dims))
@@ -164,49 +164,63 @@ rows that hold ID are put in ROWS (a table of row keys) for `drgnx-view-nav--dim
       (dolist (k (gethash id (drgnx-view-patch-ids drgnx-view-patch))) (puthash k t rows)))
     (drgnx-view-nav--span-overlays view id (and (not dim) (drgnx-view-nav--face-of class)))))
 
-(defun drgnx-view-nav--run-at (pos)
-  "The dim run over POS, or nil."
-  (seq-find (lambda (o) (overlay-get o 'drgnx-view-dim-run)) (overlays-at pos)))
+(defun drgnx-view-nav--runs-by (beg end)
+  "The dim runs over BEG..END or touching it at either edge."
+  (let (runs)
+    (dolist (o (overlays-in (max (point-min) (1- beg)) (min (point-max) (1+ end))))
+      (when (overlay-get o 'drgnx-view-dim-run) (push o runs)))
+    runs))
 
 (defun drgnx-view-nav--run-on (beg end face)
-  "The rows from BEG to END in a dim run of FACE: joined to the runs that end at BEG or start at END."
-  (unless (drgnx-view-nav--run-at beg)
-    (let ((prev (and (> beg (point-min)) (drgnx-view-nav--run-at (1- beg))))
-          (next (drgnx-view-nav--run-at end)))
-      (when (and prev (/= (overlay-end prev) beg)) (setq prev nil))
-      (when (and next (/= (overlay-start next) end)) (setq next nil))
-      (cond ((and prev next) (move-overlay prev (overlay-start prev) (overlay-end next)) (delete-overlay next))
-            (prev (move-overlay prev (overlay-start prev) end))
-            (next (move-overlay next beg (overlay-end next)))
-            (t (let ((ov (make-overlay beg end nil t nil)))  ; rows inserted at its edges stay out of it
-                 (overlay-put ov 'drgnx-view-dim-run t)
-                 (overlay-put ov 'face face)
-                 (overlay-put ov 'priority 10)
-                 (overlay-put ov 'evaporate t)
-                 (cl-incf (drgnx-view-patch-classed drgnx-view-patch))))))))
+  "The rows from BEG to END in a dim run of FACE: one run with the runs over them or touching their edges."
+  (let ((runs (drgnx-view-nav--runs-by beg end)) (a beg) (b end))
+    (dolist (o runs) (setq a (min a (overlay-start o)) b (max b (overlay-end o))))
+    (if runs
+        (progn (move-overlay (car runs) a b) (mapc #'delete-overlay (cdr runs)))
+      (let ((ov (make-overlay beg end nil t nil)))        ; rows inserted at its edges stay out of it
+        (overlay-put ov 'drgnx-view-dim-run t)
+        (overlay-put ov 'face face)
+        (overlay-put ov 'priority 10)
+        (overlay-put ov 'evaporate t)
+        (cl-incf (drgnx-view-patch-classed drgnx-view-patch))))))
 
 (defun drgnx-view-nav--run-off (beg end)
-  "The rows from BEG to END out of the dim run over them: the run is cut around them."
-  (when-let* ((ov (drgnx-view-nav--run-at beg)))
-    (let ((a (overlay-start ov)) (b (overlay-end ov)))
-      (cond ((and (< a beg) (< end b))
-             (move-overlay ov a beg)
-             (let ((tail (copy-overlay ov))) (move-overlay tail end b)))
-            ((< a beg) (move-overlay ov a beg))
-            ((< end b) (move-overlay ov end b))
-            (t (delete-overlay ov))))))
+  "The rows from BEG to END out of the dim runs over them: each run is cut around them."
+  (dolist (o (overlays-in beg end))
+    (when (overlay-get o 'drgnx-view-dim-run)
+      (let ((a (overlay-start o)) (b (overlay-end o)))
+        (cond ((and (< a beg) (< end b))
+               (move-overlay o a beg)
+               (move-overlay (copy-overlay o) end b))
+              ((< a beg) (move-overlay o a beg))
+              ((< end b) (move-overlay o end b))
+              (t (delete-overlay o)))))))
 
-(defun drgnx-view-nav--dim-row (view key)
-  "Row KEY in or out of a dim run: in when every node it holds is dim; else its dim nodes' spans are drawn dim."
-  (when-let* ((beg (drgnx-view-row-start view key)) (end (drgnx-view-row-end view key)))
-    (let* ((dims (drgnx-view-patch-dims drgnx-view-patch)) (ids (gethash key (drgnx-view-patch-keys drgnx-view-patch)))
-           (face (drgnx-view-nav--face-of (drgnx-view-patch-dim-class drgnx-view-patch))))
-      (if (and ids face (cl-every (lambda (id) (gethash id dims)) ids))
-          (progn (drgnx-view-nav--run-on beg end face)
-                 (dolist (id ids) (drgnx-view-nav--span-overlays view id nil)))
-        (drgnx-view-nav--run-off beg end)
+(defvar-local drgnx-view-nav--rows nil
+  "The rows a class step puts in or out of the dim runs, a table of row keys kept from step to step and cleared, so a
+step over thousands of rows grows no table (the perf row `view-select-dim').  Bounded by the view's rows.")
+
+(defun drgnx-view-nav--dim-rows (view rows)
+  "The rows ROWS (a table of row keys) of VIEW in or out of the dim runs: in when every node a row holds is dim, else
+its dim nodes' spans are drawn dim.  The rows go in buffer order, a stretch of consecutive rows in or out at a time
+(the perf row `view-select-dim': a run looked up per row allocated enough for GC pauses over its 50 ms)."
+  (let* ((state drgnx-view-patch) (dims (drgnx-view-patch-dims state)) (index (drgnx-view-patch-keys state))
+         (face (drgnx-view-nav--face-of (drgnx-view-patch-dim-class state))) marks on b0 e0)
+    (maphash (lambda (key _)
+               (when-let* ((beg (drgnx-view-row-start view key)) ((drgnx-view-row-end view key)))
+                 (push (cons beg key) marks)))
+             rows)
+    (dolist (m (sort marks (lambda (x y) (< (car x) (car y)))))
+      (let* ((beg (car m)) (end (drgnx-view-row-end view (cdr m))) (ids (gethash (cdr m) index))
+             (in (and ids face (let ((all t)) (dolist (id ids) (unless (gethash id dims) (setq all nil))) all))))
         (dolist (id ids)
-          (when (gethash id dims) (drgnx-view-nav--span-overlays view id face)))))))
+          (cond (in (drgnx-view-nav--span-overlays view id nil))
+                ((gethash id dims) (drgnx-view-nav--span-overlays view id face))))
+        (if (and b0 (eq in on) (= e0 beg))
+            (setq e0 end)
+          (when b0 (if on (drgnx-view-nav--run-on b0 e0 face) (drgnx-view-nav--run-off b0 e0)))
+          (setq on in b0 beg e0 end))))
+    (when b0 (if on (drgnx-view-nav--run-on b0 e0 face) (drgnx-view-nav--run-off b0 e0)))))
 
 (defun drgnx-view-nav-class-step (view &optional keys)
   "The class step of VIEW, in its buffer: the nodes whose class changed in Sjá get it on their spans; with KEYS (rows a
@@ -214,7 +228,8 @@ draw replaced), every node drawn in them gets its current class again and the ov
   (when-let* ((h (drgnx-view-patch-handle drgnx-view-patch)))
     (drgnx-view-nav--face-of nil)                       ; the faces, and the class `dim', for this model
     (let ((changes (nidhogg-view-get h 'classes)) (done (and keys (make-hash-table :test #'equal))) (i 0)
-          (rows (make-hash-table :test #'equal)))
+          (rows (if drgnx-view-nav--rows (clrhash drgnx-view-nav--rows)
+                  (setq drgnx-view-nav--rows (make-hash-table :test #'equal)))))
       (while (< i (length changes))
         (when done (puthash (aref changes i) t done))     ; a key's step makes no table: only a draw's reads it
         (drgnx-view-nav--put-class view (aref changes i) (aref changes (1+ i)) rows)
@@ -228,7 +243,7 @@ draw replaced), every node drawn in them gets its current class again and the ov
               (unless (gethash id done)
                 (puthash id t done)
                 (drgnx-view-nav--put-class view id (nidhogg-view-get h 'class id) rows))))))
-      (maphash (lambda (k _) (drgnx-view-nav--dim-row view k)) rows)
+      (drgnx-view-nav--dim-rows view rows)
       (when keys
         ;; a draw may have deleted text under an overlay: the empty ones go (a key alone deletes no text; dim runs
         ;; evaporate)
