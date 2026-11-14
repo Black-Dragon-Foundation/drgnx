@@ -655,13 +655,12 @@ async fn an_unanswered_clipboard_read_is_denied_on_the_hubs_clock() {
     let (_t, _ev) = open(tmp.path()).await;
     let t0 = crate::clock::now();
     let reply = loop {
-        match crate::clock::timeout(Duration::from_secs(3600), rx.recv())
+        let m = crate::clock::timeout(Duration::from_secs(3600), rx.recv())
             .await
             .expect("the hub never answered the read")
-            .expect("the hub dropped the worker")
-        {
-            m @ In::ClipboardReply { .. } => break m,
-            _ => {}
+            .expect("the hub dropped the worker");
+        if let In::ClipboardReply { .. } = m {
+            break m;
         }
     };
     assert!(
