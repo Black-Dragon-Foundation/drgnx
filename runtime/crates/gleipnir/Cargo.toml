@@ -21,6 +21,7 @@ eitri = { path = "../eitri", version = "0.1.0" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+drgnx-clock = { path = "../drgnx-clock", version = "0.1.0" }  # the proxy's head and idle timeouts wait on the installed clock
 rustix.workspace = true
 libc.workspace = true
 
@@ -30,6 +31,7 @@ landlock.workspace = true
 seccompiler.workspace = true
 
 [dev-dependencies]
+drgnx-clock = { path = "../drgnx-clock", version = "0.1.0", features = ["test-hooks"] }
 skuld = { path = "../skuld", version = "0.1.0" }
 insta.workspace = true
 proptest.workspace = true
