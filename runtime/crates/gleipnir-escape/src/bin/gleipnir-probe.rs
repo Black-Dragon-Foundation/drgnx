@@ -294,7 +294,16 @@ fn probe(name: &str, a: &[String]) -> Full {
         "spawn-sleep" => spawn_sleep(&need(name, a, 1)[0], false),
         "spawn-sleep-setsid" => spawn_sleep(&need(name, a, 1)[0], true),
         "kill" => kill(&need(name, a, 2)[0], &a[1]),
-        "http-connect" => http_connect(&need(name, a, 1)[0]),
+        "http-connect" => http_connect(&need(name, a, 1)[0], 0),
+        // As http-connect, but the client keeps sending (`BYTES` of filler) after its head, so a proxy that refuses it
+        // and closes with unread data in its socket resets the connection (GLP-T10-3): the refusal must still arrive.
+        "http-connect-flood" => {
+            let v = need(name, a, 2);
+            http_connect(
+                &v[0],
+                v[1].parse().unwrap_or_else(|_| usage("BYTES is a number")),
+            )
+        }
         "http-get" => http_get(&need(name, a, 1)[0]),
         "landlock-abi" => landlock_abi(),
         "serve-http" => serve_http(need(name, a, 3)),
@@ -805,9 +814,14 @@ fn http_get(url: &str) -> Res {
 }
 
 /// A CONNECT through `$HTTPS_PROXY`; the detail is the status code.
-fn http_connect(target: &str) -> Res {
+fn http_connect(target: &str, flood: usize) -> Res {
     let mut s = to_proxy()?;
     write!(s, "CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n").map_err(os)?;
+    // the filler goes in one write, whatever the proxy does meanwhile: a reset or a broken pipe on it is not the
+    // probe's answer, the status line is (or the reset it reads instead)
+    if flood > 0 {
+        let _ = s.write_all(&vec![b'x'; flood]);
+    }
     let mut head = Vec::new();
     let mut b = [0u8; 1];
     while !head.ends_with(b"\n") && head.len() < 256 {
