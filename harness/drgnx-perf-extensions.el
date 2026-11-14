@@ -399,6 +399,7 @@ apply (the stub's build left out) and the draws it arms are timed apart, as slic
      (defun drgnx-perf-extensions-open-setup () (drgnx-perf-extensions--common-setup))
      (defun drgnx-perf-extensions-open-each () (drgnx-perf-extensions--common-each))
      (defun drgnx-perf-extensions-open-measure ()
+       (require 'drgnx-view-sja)                       ; `drgnx-view-sja-p' below: nothing else in this session loads it
        (let ((r (drgnx-perf-extensions--open-ms)))
          (unless (and (drgnx-extensions-list--hub-fed-p) (> (drgnx-perf-extensions--drawn (drgnx-perf-extensions--list)) 0))
            (error "the list opened with no rows"))

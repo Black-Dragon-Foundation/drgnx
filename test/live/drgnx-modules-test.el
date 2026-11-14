@@ -33,14 +33,24 @@
     (drgnx-ui-measure sess (list (list :keys "C-}")))
     (should-not (drgnx-live-mod--q sess "(with-current-buffer (window-buffer (selected-window)) (and (invisible-p (line-end-position)) t))"))))
 
+(defun drgnx-live-mod--settle (sess)
+  "SESS's dock settled: what the store's idle `windows-changed' does after a key (sections fitted to their rows and
+showing whole ones), done now so a layout is read once it has settled, as a user sees it."
+  (drgnx-live-mod--q sess "(progn (drgnx-wb--rows-frame-changed (list :frame (selected-frame))) t)"))
+
 (ert-deftest drgnx-live/zen-by-keys-gives-the-layout-back ()
   (drgnx-live-mod--with sess
+    ;; the sections are as tall as the rows the hub gave them: the session has a hub, so that count is the same each time
+    (drgnx-live-mod--q sess "(progn (load (expand-file-name \"test/fixtures/ui-hub-fixture\" drgnx-dir) nil t) (drgnx-ui-hub-start drgnx-dir) t)")
+    (drgnx-ui-measure sess nil)
     (drgnx-ui-measure sess (list (list :keys "C-b") (list :keys "M-j")))
+    (drgnx-live-mod--settle sess)
     (let ((before (drgnx-live-mod--q sess "(sort (mapcar #'window-pixel-edges (window-list nil 'nomini)) (lambda (a b) (or (< (car a) (car b)) (and (= (car a) (car b)) (< (cadr a) (cadr b))))))")))
       (drgnx-ui-measure sess (list (list :keys "C-k z")))
       ;; one editor window; the status bar is the frame's, not an area zen hides
       (should (= 1 (drgnx-live-mod--q sess "(length (seq-remove (lambda (w) (eq (window-parameter w 'drgnx-role) 'statusbar)) (window-list nil 'nomini)))")))
       (drgnx-ui-measure sess (list (list :keys "C-k z")))
+      (drgnx-live-mod--settle sess)
       (should (equal before (drgnx-live-mod--q sess "(sort (mapcar #'window-pixel-edges (window-list nil 'nomini)) (lambda (a b) (or (< (car a) (car b)) (and (= (car a) (car b)) (< (cadr a) (cadr b))))))"))))))
 
 (defun drgnx-live-mod--found (also)
