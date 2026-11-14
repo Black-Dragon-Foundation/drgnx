@@ -388,7 +388,7 @@ workbench state store's window events (and by hand in tests); only calls the hub
     (when-let* ((id (buffer-local-value 'drgnx-work-space--view buffer))
                 ((or (buffer-local-value 'drgnx-view buffer) (buffer-local-value 'drgnx-view-patch buffer))))
       (let* ((view (buffer-local-value 'drgnx-view buffer))
-             (shown (if view (and (drgnx-view-shown-p view) t) (and (get-buffer-window buffer 'visible) t))))
+             (shown (and (if view (drgnx-view-shown-p view) (drgnx-view-buffer-shown-p buffer)) t)))
         (unless (eq shown (drgnx-work-client-shown-p id))
           (drgnx-work-client-set id :shown (if shown t :false)))))))
 

@@ -272,15 +272,34 @@ live windows, as `get-buffer-window' with `visible' answers, without its window 
 from the selected one (that terminal's) and their window trees.  Allocates nothing."
   (if drgnx-state-mode
       (drgnx-view--shown view)
-    (let* ((buffer (drgnx-view--buffer view)) (start (selected-frame))
-           (found (drgnx-view--frame-shows-p start buffer)))
-      (unless found
-        (let* ((first (next-frame start t)) (frame first))
-          (while (and (not found) (not (eq frame start))
-                      (progn (setq found (drgnx-view--frame-shows-p frame buffer))
-                             (setq frame (next-frame frame t))
-                             (not (eq frame first)))))))
-      (setf (drgnx-view--shown view) found))))
+    (setf (drgnx-view--shown view) (drgnx-view--windows-show-p (drgnx-view--buffer view)))))
+
+(defun drgnx-view--windows-show-p (buffer)
+  "Non-nil if a live window on a visible frame shows BUFFER, as `get-buffer-window' with `visible' answers, without
+its window list: the frames `next-frame' reaches from the selected one (that terminal's) and their window trees."
+  (let* ((start (selected-frame)) (found (drgnx-view--frame-shows-p start buffer)))
+    (unless found
+      (let* ((first (next-frame start t)) (frame first))
+        (while (and (not found) (not (eq frame start))
+                    (progn (setq found (drgnx-view--frame-shows-p frame buffer))
+                           (setq frame (next-frame frame t))
+                           (not (eq frame first)))))))
+    found))
+
+(defun drgnx-view-buffer-shown-p (buffer)
+  "Non-nil if a window on a visible frame shows BUFFER, a buffer with no `drgnx-view' (its rows held in Sjá).  As
+`drgnx-view-shown-p': while `drgnx-state-mode' is on, the windows the workbench state store recorded (every
+terminal's frames), else the live windows.  Allocates nothing."
+  (if drgnx-state-mode
+      (let ((found nil) (frames (drgnx-state-frames)))
+        (while (and frames (not found))
+          (when (eq (frame-visible-p (car frames)) t)
+            (let ((ws (drgnx-state-windows (car frames))))
+              (while (and ws (not found))
+                (setq found (eq (window-buffer (car ws)) buffer) ws (cdr ws)))))
+          (setq frames (cdr frames)))
+        found)
+    (drgnx-view--windows-show-p buffer)))
 
 ;;;; Marks: a hash put or a queue push, then `drgnx-view--arm'
 
