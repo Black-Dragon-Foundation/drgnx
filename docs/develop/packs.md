@@ -261,7 +261,12 @@ types sit at the top); delegates, enums and operators are symbols too. `queries/
 `new T`, base types). `///` and `/** */` comments are the docs (the XML tags stay in the first line). The pack carries
 its `:inline` lists (local functions, lambdas, `foreach`) and `:origin` declarations (`$TY {t} = $V;`; the store forms are
 tried with a closing `;` too, since C# has no bare expression at the top). `:format` names CSharpier
-(`csharpier format --write-stdout`, a .NET tool the user installs; the marker files are `.csharpierrc*`).
+(`csharpier format --write-stdout`, a .NET tool the user installs, tested against 1.4.0; the marker files are `.csharpierrc*`).
+The debugger is netcoredbg 3.2.0-1092 (`:adapters`, launch types `coreclr` and `netcoredbg`): a pinned, hashed download
+(linux-x64, linux-arm64, darwin-arm64) into the tools folder, started as `netcoredbg --interpreter=vscode`. It needs the
+.NET runtime to run the program (`dotnet` on the PATH or `DOTNET_ROOT`); a build puts the dll in `bin/Debug/netN.0/`, which
+the default launch configuration names. The live test (`csharp_breaks_steps_and_inspects_through_netcoredbg`, in the adapter
+image whose .NET SDK is pinned by SHA-512 in `test/container/debug-adapters-image.sh`) breaks, steps and inspects.
 
 ## The language stamp
 

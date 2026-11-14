@@ -38,9 +38,6 @@
   :find (:path "gdb")
   :start (:stdio ("{program}" "--interpreter=dap"))
   :install (:system "dnf install gdb"))
- (:id "netcoredbg" :name ".NET (netcoredbg)" :types ("coreclr" "netcoredbg") :languages () :tested nil
-  :find (:path "netcoredbg")
-  :start (:stdio ("{program}" "--interpreter=vscode")))
  (:id "codelldb" :name "C, C++, Rust (CodeLLDB)" :types ("lldb") :languages () :tested t
   :find (:tools "codelldb/extension/adapter/codelldb")
   :start (:tcp ("{program}" "--port" "{port}"))

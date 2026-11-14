@@ -13,5 +13,6 @@
 ARG BASE=localhost/drgnx-test:f45
 FROM ${BASE}
 ENV DRGNX_EMACS=/opt/nidhogg/31.1-nidhogg.5/bin/nidhogg
+ENV DOTNET_ROOT=/opt/dotnet DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
 COPY debug-adapters-image.sh /tmp/
 RUN bash /tmp/debug-adapters-image.sh && rm /tmp/debug-adapters-image.sh
