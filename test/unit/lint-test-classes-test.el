@@ -390,6 +390,17 @@ a test reaches by a call: a command a test binds to a key is named by `function'
 (ert-deftest drgnx-lint/event-waits-are-bounded-and-measure-nothing ()
   (should-not (drgnx-lint-classes--wait-violations)))
 
+(ert-deftest drgnx-lint/audit-cond-register ()
+  ;; test/audit-cond-allowed.eld: each row names a test that exists, with a reason and the slice that converts it
+  (let ((rows (with-temp-buffer (insert-file-contents (expand-file-name "test/audit-cond-allowed.eld" drgnx-dir))
+                                (read (current-buffer))))
+        (text (mapconcat (lambda (f) (with-temp-buffer (insert-file-contents (expand-file-name f drgnx-dir)) (buffer-string)))
+                         (drgnx-lint-classes--files) "\n")))
+    (dolist (r rows)
+      (should (string-search (format "(ert-deftest %s " (car r)) text))
+      (should (stringp (plist-get (cdr r) :why)))
+      (should (stringp (plist-get (cdr r) :slice))))))
+
 (ert-deftest drgnx-lint/event-wait-lint-bites ()
   (dolist (bad '("(drgnx-test-wait (lambda () t) :secs nil)" "(drgnx-test-wait (lambda () t) :secs 0)"
                  "(drgnx-test-wait (lambda () t) :secs 100000)"
