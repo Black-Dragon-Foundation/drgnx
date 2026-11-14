@@ -950,27 +950,19 @@ mod tests {
     use super::*;
 
     /// GL-T12-1: a check that does not answer in time (its facts included) is a failed check at the bound, not a
-    /// doctor that is late.
+    /// doctor that is late.  The check here blocks until the test lets it go, so the answer can only have come from
+    /// the bound, with the check still running: no elapsed time is asserted.
     #[test]
-    #[ignore = "timing: a check that does not answer is a failed one at the bound"]
     fn a_slow_check_is_a_failed_one_at_the_bound() {
-        let began = std::time::Instant::now();
-        let slow = bounded(Duration::from_millis(300), || {
-            std::thread::sleep(Duration::from_secs(4));
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let slow = bounded(Duration::from_millis(20), move || {
+            let _ = held.recv();
             Check::failed("late".into(), None)
         })
         .wait();
-        assert!(
-            began.elapsed() < Duration::from_secs(2),
-            "{:?}",
-            began.elapsed()
-        );
         assert!(!slow.ok);
-        assert!(
-            slow.reason
-                .unwrap()
-                .contains("did not answer within 300 ms")
-        );
+        assert!(slow.reason.unwrap().contains("did not answer within 20 ms"));
+        drop(release);
         let fast = bounded(Duration::from_secs(5), || {
             Check::failed("quick".into(), None)
         })

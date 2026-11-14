@@ -39,6 +39,27 @@ fn virtual_time_moves_only_on_advance() {
     });
 }
 
+/// A timer in another crate (draugr's grace, ...) waits through drgnx-clock: on the virtual clock it ends only when an
+/// advance moves it, and is counted among the woken.
+#[test]
+fn a_timer_through_drgnx_clock_moves_with_the_hubs_clock() {
+    on_virtual(async {
+        let l = log();
+        let mine = l.clone();
+        spawn("other-crate", async move {
+            drgnx_clock::sleep(ms(50)).await;
+            mine.lock().unwrap().push("woke");
+        });
+        advance(Duration::ZERO).await;
+        let a = advance(ms(49)).await;
+        assert_eq!((a.now_ms, a.woken), (49, 0));
+        assert!(seen(&l).is_empty());
+        let a = advance(ms(1)).await;
+        assert_eq!((a.now_ms, a.woken), (50, 1), "{a:?}");
+        assert_eq!(seen(&l), ["woke"]);
+    });
+}
+
 #[test]
 fn due_sleepers_wake_in_deadline_then_registration_order() {
     on_virtual(async {

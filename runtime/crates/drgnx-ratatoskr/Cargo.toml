@@ -117,6 +117,7 @@ serde.workspace = true
 serde_json.workspace = true
 rustix.workspace = true
 libc.workspace = true
+drgnx-clock = { path = "../drgnx-clock", version = "0.1.0" }  # the crates' timers read the hub's virtual clock through it
 drgnx-exe = { path = "../drgnx-exe", version = "0.1.0" }  # files written or copied and then run, never busy (ETXTBSY)
 tracing.workspace = true
 tracing-subscriber.workspace = true

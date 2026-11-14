@@ -1293,6 +1293,12 @@ audited, and the three variables are read once and removed from the environment,
 sees the runner's switches. CI's `unit` and `no-lisp-writes` jobs ([ci.md](ci.md)) and `bin/drgnx test --preflight`'s
 `det` step run with the audit on and failing.
 
+A `cond` test is audited for `sleep-for` and `sit-for` only (with the audit failing, a real sleep fails it): it may wait for events and
+start processes, never wait on time. Only those two primitives are advised for it, so a test that stubs another one is
+not disturbed. A `sleep-for` that Emacs's own library makes to poll a child (`epg-wait-for-completion`: gpg's exit) is an event wait and
+not recorded; the seven `cond` tests that really sleep today are listed in `test/audit-cond-allowed.eld` (a reason and the slice that
+moves each to a virtual clock; `drgnx-lint/audit-cond-register` keeps the list honest, and it only shrinks).
+
 The audit also holds the patterns to their tools (`test/unit/run-ert-audit-test.el` has a row for each). With the audit
 on, the tests tagged `:gated` and `:handshake` ([Test patterns](#test-patterns)) run with these advised, again only
 while they run, and each failure names the test and carries one of these messages:
@@ -1315,6 +1321,12 @@ entered the gate (a watcher on `drgnx-test-gate--active` notes the entry) and is
 STRING)`; see [Test patterns](#test-patterns) for what holds the register.
 
 Without `DRGNX_TEST_AUDIT_FAIL=1` they are only reported as `drgnx-audit:` lines.
+
+**Event waits.** A `drgnx-test-wait` waits for an event (a child's output, a socket) and measures nothing:
+`drgnx-lint/event-waits-are-bounded-and-measure-nothing` (every non-`:timing` test file) fails a wait whose `:secs` is
+`nil`, 0 or over 300 (a deadline is a failure message, never a hang), a predicate that reads the wall clock (an elapsed
+wait hidden in an event wait), and a result compared against a duration or a clock reading. What depends on time moves to
+the clock fixture or the hub's `__test_advance`; a real "did not happen" window is `drgnx-test-pause` with its reason.
 
 ### Test patterns
 

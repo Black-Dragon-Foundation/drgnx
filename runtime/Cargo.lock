@@ -1380,11 +1380,21 @@ dependencies = [
 name = "draugr"
 version = "0.1.0"
 dependencies = [
+ "drgnx-clock",
  "drgnx-exe",
  "eitri",
  "libc",
  "skuld",
  "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "drgnx-clock"
+version = "0.1.0"
+dependencies = [
+ "drgnx-clock",
+ "skuld",
  "tokio",
 ]
 
@@ -1422,6 +1432,7 @@ dependencies = [
  "brokkr",
  "bytes",
  "draugr",
+ "drgnx-clock",
  "drgnx-exe",
  "drgnx-px",
  "drgnx-rows",
@@ -2934,6 +2945,7 @@ dependencies = [
 name = "gleipnir"
 version = "0.1.0"
 dependencies = [
+ "drgnx-clock",
  "eitri",
  "insta",
  "landlock",

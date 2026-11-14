@@ -234,16 +234,18 @@ async fn terminate(pgid: i32, grace: Duration, sig: &dyn Signaller) -> ReapOutco
     }
 }
 
-/// Probe the group until it is gone (true) or `limit` has passed (false).
+/// Probe the group until it is gone (true) or `limit` has passed (false).  The wait is counted in probes (POLL each on
+/// the installed clock), so a virtual clock decides when the limit is reached.
 async fn wait_gone(sig: &dyn Signaller, pgid: i32, limit: Duration) -> bool {
-    let deadline = tokio::time::Instant::now() + limit;
+    let mut waited = Duration::ZERO;
     loop {
         if !group_left(sig, pgid) {
             return true;
         }
-        if tokio::time::Instant::now() >= deadline {
+        if waited >= limit {
             return false;
         }
-        tokio::time::sleep(POLL).await;
+        drgnx_clock::sleep(POLL).await;
+        waited += POLL;
     }
 }
