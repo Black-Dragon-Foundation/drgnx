@@ -564,7 +564,7 @@ Returns (EXIT . OUTPUT), the output both streams' or, with STDOUT-ONLY, stdout's
                           (and (string-match-p "-p drgnx-term\\b" line)
                                (not (string-search "--no-default-features" line)))))
                  (string-match-p "^ *term: \"true\"" line)
-                 (string-match-p "bin/drgnx test .*--ui\\b" line)))
+                 (string-match-p "bin/drgnx test .*--\\(?:ui\\|scenario\\)\\b" line)))
            (split-string job "\n")))
 
 (ert-deftest drgnx-ci/every-job-that-builds-the-terminal-engine-has-zig ()
@@ -579,9 +579,9 @@ Returns (EXIT . OUTPUT), the output both streams' or, with STDOUT-ONLY, stdout's
                 (push (format "%s:%s" file id) seen)
                 (should (equal (list file id (and (string-search "test/container/zig.sh" job) t))
                                (list file id t)))))))))
-    ;; the check finds the jobs it is about: the tiers' test binaries, the GUI tier, the remote-terminal rows and the
-    ;; runtime's Linux and macOS workspace runs
-    (dolist (job '("drgnx-tiers.yml:bins-linux" "drgnx-tiers.yml:ui" "drgnx-tiers.yml:ssh"
+    ;; the check finds the jobs it is about: the tiers' test binaries, the GUI and scenario tiers, the remote-terminal
+    ;; rows and the runtime's Linux and macOS workspace runs
+    (dolist (job '("drgnx-tiers.yml:bins-linux" "drgnx-tiers.yml:ui" "drgnx-tiers.yml:scenario" "drgnx-tiers.yml:ssh"
                    "runtime.yml:linux" "runtime.yml:macos"))
       (should (member job seen)))
     ;; and leaves out what builds no engine: the Android check builds drgnx-term without it

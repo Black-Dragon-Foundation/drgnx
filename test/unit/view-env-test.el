@@ -4,6 +4,7 @@
 (require 'cl-lib)
 (require 'face-remap)
 (require 'drgnx-view-env)
+(require 'drgnx-view)                   ; the patch books' accessors, set below
 
 (defvar drgnx-view-env-test--sent nil "What the module sent, newest first: (METHOD . PARAMS).")
 (defvar drgnx-view-env-test--palette '(("edge" "#111111")) "The palette the stubbed reader returns.")
@@ -197,6 +198,24 @@ state (the locals of the prefixes, a marker left out) as made and again before e
         (let ((last (car (last (drgnx-view-env-test--envs)))))
           (should (= 2 (plist-get last :epoch)))
           (should (= (window-body-width (selected-window) t) (plist-get last :width_px))))))))
+
+(ert-deftest drgnx-view-env/a-view-shown-again-starts-its-pair-over ()
+  "A view no window showed (the sidebar hidden) is shown again: its env goes as a new pair (`:attach'), for which the
+hub starts the pair's versions over, so the buffer forgets the versions it applied and the hub's first reset is
+applied, not dropped as older than what it holds (the Explorer stopped changing after the sidebar was shown again)."
+  (drgnx-view-env-test--with
+    (with-current-buffer buf (drgnx-view-patch-attach "v" "none"))
+    (drgnx-view-env-register "v" buf)
+    (let ((state (buffer-local-value 'drgnx-view-patch buf)))
+      (setf (drgnx-view-patch-hub state) 7 (drgnx-view-patch-version state) 4)
+      (set-window-buffer (selected-window) (messages-buffer))
+      (drgnx-view-env-update "v")
+      (should-not (drgnx-view-env-classes "v"))
+      (set-window-buffer (selected-window) buf)
+      (drgnx-view-env-update "v")
+      (should (plist-get (car (last (drgnx-view-env-test--envs))) :attach))
+      (should (eq 'apply (drgnx-view-patch--decide
+                          state (list :hub 7 :version 1 :base 0 :env_epoch 1 :ops (list (list :reset nil)))))))))
 
 (ert-deftest drgnx-view-env/glyph-asks-are-cached-per-font ()
   (drgnx-view-env-test--with

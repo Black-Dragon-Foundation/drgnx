@@ -109,7 +109,7 @@ Ratatoskr fails the row (`drgnx-test-no-hub`) instead of skipping it.
 
 #### The test hub
 
-`bin/drgnx test --ui` (and `--container --ui`, on the host before the container starts) gives every contributor the same
+`bin/drgnx test --ui` and `--scenario` (and `--container --ui` / `--scenario`, on the host before the container starts) give every contributor the same
 hub: `test_hub` fetches libghostty-vt's pinned tarballs when they are missing (`runtime/crates/ghostty-vt-sys/fetch.sh`,
 as `install.sh` sets the terminal's engine up; Zig 0.17 builds it), builds `cargo build --locked -p drgnx-ratatoskr -p
 domr -p drgnx-term --bins --features drgnx-ratatoskr/test-hooks` (cargo builds nothing when the binaries are current) and
@@ -1006,6 +1006,13 @@ Scenarios are ERT tests named `drgnx-scenario/…` in `test/scenario/` that stat
 Code's behaviour is the reference) and run inside a session of the configuration under test. They use only the
 harness API and a per-configuration **driver** (`test/scenario/drivers/<config>.el`: how to open the Explorer,
 open a file, find a row, …); a configuration without a driver skips them.
+
+**The hub.** On a Nidhogg with Sjá the Explorer's rows are the hub's listing, so `bin/drgnx test --scenario` (and
+`--container --scenario`, on the host) builds the test hub as the GUI tier does (`test_hub`, below) and the session
+gets `DRGNX_RATATOSKR_BIN`. A session starts no hub (`DRGNX_NO_HUB_START`): drgnx's driver runs that binary in the
+foreground once (`serve --foreground --parent-pid`, ended with the session), connects, and before a scenario acts
+waits for the hub's rows of the new fixture's root with the editor's file revealed (30 s, setup only: the error names
+the root, the file and the rows drawn). Without a hub binary the driver says so instead of drawing nothing.
 
 **Known reds.** `test/scenario/known-red.eld` lists, per configuration, scenarios expected to fail
 (`((gryphn drgnx-scenario/explorer-click-stays …))`). Such a scenario counts as expected only if it fails an

@@ -1921,10 +1921,24 @@ is read.  File events and timers read none."
         (when (and (consp v) (nth 3 v) (> (nth 3 v) 0))
           (set-window-vscroll w (+ (window-vscroll w t) (nth 3 v)) t))))))
 
+(defun drgnx-explorer--rows-hold ()
+  "On the rows path, the hub's patches wait while a button pressed in the Explorer is held, as the Lisp listing's file
+events do (`drgnx-explorer--apply-file-events'): the tree does not change under a held button, so the release is a
+click on the row pressed.  The view is paused (`drgnx-view-patch-pause') and checked again every
+`drgnx-explorer-event-delay'; once the button counts as released (`drgnx-explorer--held-p') it resumes, the patches
+kept applied in order."
+  (when-let* ((buf (get-buffer drgnx-explorer-buffer-name)))
+    (if (and (drgnx-explorer--held-p) (drgnx-explorer--rows-p))
+        (progn (drgnx-view-patch-pause buf t)
+               (drgnx-timer-soon 'explorer-held drgnx-explorer-event-delay #'drgnx-explorer--rows-hold :owner buf))
+      (drgnx-timer-cancel 'explorer-held)
+      (drgnx-view-patch-pause buf nil))))
+
 (defun drgnx-explorer-mouse-press (event)
   "Press: select the row under EVENT (and the Explorer); nothing else happens until release."
   (interactive "e")
   (setq drgnx-explorer--pressed num-input-keys)       ; the release is the next key sequence
+  (drgnx-explorer--rows-hold)
   (let* ((posn (event-start event)) (w (posn-window posn)) (pos (posn-point posn)))
     (when (window-live-p w)
       (unless (eq w (selected-window)) (select-window w))
@@ -1960,6 +1974,13 @@ is read.  File events and timers read none."
   (setq drgnx-explorer--pressed nil)
   (drgnx-explorer--clear-selection)
   (let ((pos (posn-point (event-end event))))
+    ;; the patches kept while the button was held go in now: the click acts on the row it was released on, found
+    ;; again by its key where they moved it (the same place in it)
+    (let* ((id (and (integer-or-marker-p pos) (drgnx-explorer--rows-p) (drgnx-explorer-node-at pos)))
+           (before (and id (drgnx-view-row-start drgnx-view id))))
+      (drgnx-explorer--rows-hold)
+      (when-let* ((before) (after (drgnx-view-row-start drgnx-view id)))
+        (setq pos (+ pos (- after before)))))
     (when (integer-or-marker-p pos)
       (drgnx-explorer--goto-in-place pos)
       (let ((drgnx-explorer--await t)) (drgnx-explorer-activate pos t)))))

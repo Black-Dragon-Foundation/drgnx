@@ -429,7 +429,7 @@ jobs:
 
   scenario:
     name: Scenario tier, frame budget reported (headless mutter)
-    needs: nidhogg-line
+    needs: [bins-linux, nidhogg-line]
     if: ${{ !cancelled() && needs.nidhogg-line.result != 'failure' && contains(format(' {0} ', inputs.tiers), ' scenario ') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -453,13 +453,22 @@ jobs:
           git clone -q --bare --no-tags --filter=tree:0 https://github.com/Black-Dragon-Foundation/drgnx.git "$RUNNER_TEMP/drgnx-branches"
           [ -n "$(git -C "$RUNNER_TEMP/drgnx-branches" branch --contains "$sha" 2>/dev/null)" ] ||
             { echo "::error::drgnx_ref $ASKED ($sha) is on none of drgnx's branches (a fork's or a pull request's commit)"; exit 1; }
-      - uses: ./drgnx/.github/actions/test-image
+      # the Explorer's rows come from the hub on a Nidhogg with Sjá: the run's test hub, as the GUI tier's
+      - uses: ./drgnx/.github/actions/fetch-test-bins
+      - if: ${{ !cancelled() }}
+        uses: ./drgnx/.github/actions/test-image
         with:
           containerfile: Containerfile.gui
           image: drgnx-test-gui
           variable: DRGNX_TEST_GUI_IMAGE
           nidhogg-artifact: ${{ (inputs.nidhogg == 'artifact' || inputs.nidhogg == 'line') && 'tarball-fedora-45' || '' }}
+      # `bin/drgnx test --scenario` builds the test hub when bins-linux's is missing: drgnx-term's engine needs Zig
+      - name: Zig (drgnx-term's engine, for a test hub built here)
+        if: ${{ !cancelled() }}
+        working-directory: drgnx
+        run: sudo bash test/container/zig.sh linux
       - name: Scenario tier in test/container/Containerfile.gui (the frame budget reported, not judged)
+        if: ${{ !cancelled() }}
         working-directory: drgnx
         env:
           DRGNX_CONTAINER: podman

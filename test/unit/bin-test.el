@@ -893,7 +893,9 @@ than any `drgnx-test-wait', so only the signal can end it while a test waits)."
           (list (concat "HOME=" dir) (concat "DRGNX_CONFIG_DIR=" dir "/config") (concat "TMPDIR=" parent)
                 "DRGNX_TEST_SELECTOR=\"tmp-probe/leaks\"" "DRGNX_TEST_RESULTS" "DRGNX_RUN_TMP" "DRGNX_TEST_SHUFFLE"
                 ;; the outer run's file choice (a run of this file alone sets it) would replace the nested run's suite
-                "DRGNX_TEST_ONLY")))
+                "DRGNX_TEST_ONLY"
+                ;; a GUI or scenario run builds no test hub (`test_hub'): a fake Emacs needs none
+                "DRGNX_TEST_HUB_BUILD=0")))
 
 (defun drgnx-bin-test--spawn (env &rest args)
   "Start bin/drgnx ARGS with ENV; return the process."
@@ -2002,6 +2004,14 @@ cargo (DRGNX_TEST_CARGO) and Emacs (DRGNX_EMACS: logs its DRGNX_RATATOSKR_BIN), 
       (should (equal (seq-remove (lambda (l) (string-prefix-p "curl " l)) lines)
                      (list "cargo build -p drgnx-ratatoskr -p domr -p drgnx-term --bins --features drgnx-ratatoskr/test-hooks"
                            (concat "emacs hub=" drgnx-bin-test--root "runtime/target/debug/ratatoskr")))))))
+
+(ert-deftest drgnx-bin/test-scenario-builds-the-test-hub-first ()
+  ;; the Explorer's rows are the hub's on a Nidhogg with Sjá: the scenario tier gets the GUI tier's hub
+  (drgnx-bin-test--with-hub-fakes ()
+    (should (eql 0 (car (drgnx-bin-test--call drgnx-bin-test--bin env "test" "--scenario"))))
+    (should (equal (seq-remove (lambda (l) (string-prefix-p "curl " l)) (split-string (drgnx-bin-test--slurp log) "\n" t))
+                   (list "cargo build -p drgnx-ratatoskr -p domr -p drgnx-term --bins --features drgnx-ratatoskr/test-hooks"
+                         (concat "emacs hub=" drgnx-bin-test--root "runtime/target/debug/ratatoskr"))))))
 
 (ert-deftest drgnx-bin/test-ui-stops-when-the-test-hub-cannot-be-built ()
   (drgnx-bin-test--with-hub-fakes ()

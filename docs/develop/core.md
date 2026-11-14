@@ -1340,7 +1340,10 @@ keep no timer), the map's motion timers are owned by its buffer, and the module'
 
 The Explorer's three timers are owned by its buffer, so killing it ends them (and with no Explorer none starts):
 `explorer-file-events` (`drgnx-timer-soon`, a wall timer `drgnx-explorer-event-delay` after a burst's first file event;
-while a button is held or Find is on it waits again, so a redraw never lands under a press), `explorer-git` (soon, 0.05 s
+while a button is held or Find is on it waits again, so a redraw never lands under a press; on the rows path the hub
+watches the folders itself, so a press pauses the view instead, `drgnx-explorer--rows-hold`, `explorer-held` (soon,
+`drgnx-explorer-event-delay`): the hub's patches are kept, checked again each delay, and go in once the button counts
+as released, a click first finding its row again by key), `explorer-git` (soon, 0.05 s
 into a pause: the git status of every root, read once the tree is on screen) and `explorer-find` (Find's idle debounce,
 0.1 s after typing pauses; the command cancels it when the minibuffer ends).
 
@@ -2069,7 +2072,10 @@ most `drgnx-view-patch-paused-max` (256), and applied in order on resume; past t
   this editor sent (`drgnx-view-patch-env-sent`, called by `drgnx-view-env`) is held (at most 64) and the view dims
   without a layout change; a reset at the current epoch drops every held patch; a `base` older than the version is
   dropped silently; a newer `base`, or a row naming an image the view lacks, sends `view/resync`, at most one
-  outstanding. On `drgnx-hub-disconnect-functions` every hub-fed view dims (`drgnx-view-stale`; keys still work) and
+  outstanding. An env sent as a new pair (`:attach`: a new buffer, or a view shown again after no window showed it,
+  whose class `drgnx-view-env` forgot) makes the hub start the pair over at version 1, so `drgnx-view-patch-env-sent`
+  forgets the buffer's version and hub then too: the hub's first reset is applied, not dropped as older (the Explorer
+  stopped changing once the sidebar was hidden and shown again). On `drgnx-hub-disconnect-functions` every hub-fed view dims (`drgnx-view-stale`; keys still work) and
   forgets its version and hub.
 - **Rendering a row:** faces only when interned, a face, and `drgnx-` or one of `drgnx-view-patch-faces`; text
   properties only `drgnx-` ones and `drgnx-view-patch-props` (`help-echo`, `mouse-face`, `invisible`; `intern-soft`,
