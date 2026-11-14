@@ -524,6 +524,8 @@ the editor does not know is dropped, never interned."
   "Why SESSION was not recorded (the hub's whole reason), or nil when it was."
   (cdr (assoc session drgnx-debug-timeline--unrecorded)))
 
+(put 'drgnx-debug-timeline--event 'hub-events-taken '("debug-recording-off" "debug-run" "debug-probe-hits"))
+
 (defun drgnx-debug-timeline--event (event data)
   "`drgnx-hub-event-functions': a run started, stopped or ended (`debug-run'); probe hits came (`debug-probe-hits');
 a session was not recorded (`debug-recording-off': the keyring is locked or absent)."

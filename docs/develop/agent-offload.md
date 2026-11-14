@@ -27,3 +27,13 @@ walk over the sessions is made per streamed chunk any more: `drgnx-agents--chang
 permission here (`drgnx-agents-answer-permission`) takes its item out of the set at once, and the hub's next list
 agrees. The hub being gone clears both. Edits to review (`reviews`) have no source in the hub (its snapshot lists none),
 so the set holds permissions only.
+
+## The hub's events go through a table
+
+`drgnx-hub-event-functions` handlers name the events they take with the `hub-events-taken` property of their function (a
+list of names; one ending in `*` is a prefix, as `term/*`); `drgnx-module-hook` takes `:events '(...)` for the
+function it defines. `drgnx-hub--event-handlers` looks an event name up in `drgnx-hub--handler-table`, made once per name
+from the hook's value and made again when a handler is added or removed, and the hook effect runs only those functions
+(`drgnx-guard-run-functions`, each in its own guard, in the hook's order). A handler with no property takes every event
+(`drgnx-exec--event`, which also refreshes a stale job list on any event). A new handler declares its events; one
+that does not is called for each, as before.

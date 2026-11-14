@@ -125,6 +125,8 @@ question's answer counts: a late answer to an older one never overwrites a newer
                         (drgnx-plugins--listed result err)
                         (unless err (drgnx-extensions-plugins--redraw)))))))
 
+(put 'drgnx-extensions-plugins--event 'hub-events-taken '("plugin"))
+
 (defun drgnx-extensions-plugins--event (event _data)
   "A `drgnx-hub-event-functions' handler: a `plugin' event reads the plugins again while the view shows any."
   (when (and (equal event "plugin")

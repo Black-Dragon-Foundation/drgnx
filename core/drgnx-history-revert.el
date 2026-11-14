@@ -354,6 +354,8 @@ Bounded: `drgnx-history-revert--waiting-max' newest, dead buffers dropped at eac
     (when (file-exists-p buffer-file-name)
       (drgnx-history-with-origin "revert" (revert-buffer t t t)))))
 
+(put 'drgnx-history-revert--event 'hub-events-taken '("history/applied"))
+
 (defun drgnx-history-revert--event (event data)
   "`drgnx-hub-event-functions': after `history/applied' from a hub that proved itself, clean buffers of the written
 files revert quietly; a buffer with unsaved changes waits behind a notice (never a prompt)."

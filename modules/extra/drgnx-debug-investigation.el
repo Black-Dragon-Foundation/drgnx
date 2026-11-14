@@ -51,6 +51,8 @@ most 20.")
                                         drgnx-debug-investigation--hypotheses))
                     200))))
 
+(put 'drgnx-debug-investigation--event 'hub-events-taken '("debug-probes" "debug-investigation"))
+
 (defun drgnx-debug-investigation--event (event data)
   "`drgnx-hub-event-functions': the agent's investigation (`debug-investigation') and its probes (`debug-probes')."
   (pcase event

@@ -103,6 +103,8 @@ then finds the first state where ARGV fails, a few at once, and names who made i
         (insert (drgnx-debug-timeline--row-string row) "\n"))
       (goto-char (min at (point-max))))))
 
+(put 'drgnx-debug-bisect--event 'hub-events-taken '("debug-bisect"))
+
 (defun drgnx-debug-bisect--event (event data)
   "`drgnx-hub-event-functions': the bisect the card follows moved on (`debug-bisect')."
   (when (and (equal event "debug-bisect") drgnx-debug-bisect--id

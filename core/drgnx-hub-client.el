@@ -39,8 +39,11 @@
 
 (defvar drgnx-hub-event-functions nil
   "Functions called with (EVENT DATA) for each event the hub sends this Emacs (after `drgnx-hub-connect'); EVENT a
-string (\"request\", \"fallback\", \"budget\"), DATA a plist.  Each runs inside the guard (`drgnx-guard-run-hook'):
-one that fails or asks is recorded as a notice, and the next still runs.")
+string (\"request\", \"fallback\", \"budget\"), DATA a plist.  Each runs inside the guard (`drgnx-guard-run-functions'):
+one that fails or asks is recorded as a notice, and the next still runs.  A handler names the events it takes with
+the `hub-events-taken' property of its function (a list of names, one ending in `*' a prefix; `drgnx-module-hook'
+takes `:events'): the hub's events go through a table from each event name to those handlers
+\(`drgnx-hub--event-handlers'); a handler with no property takes every event.")
 
 (defvar drgnx-hub-disconnect-functions nil
   "Called when this Emacs's event connection to the hub closes (the hub ended, or `drgnx-hub-disconnect'); each
@@ -609,6 +612,38 @@ effect that comes back (a sentinel, a callback that calls the hub) steps from it
     (`(notify ,severity ,text ,id . ,props) (apply #'drgnx-notify 'hub severity text :id id props))
     (_ (error "drgnx hub: no effect %S" effect))))
 
+;;;; Which handler takes which event
+
+(defvar drgnx-hub--handler-table nil
+  "(SOURCE . TABLE): TABLE maps an event name to the functions of `drgnx-hub-event-functions' that take it, in the
+hook's order, made once per name (when the first such event comes) from the hook's value SOURCE (compared by `eq':
+adding or removing a handler makes the table again).  Bounded by the hub's event names.")
+
+(defun drgnx-hub--handler-takes-p (fn name)
+  "Whether handler FN takes event NAME: FN's `hub-events-taken' property lists the names it takes (one ending in `*'
+is a prefix); with no property it takes every event."
+  (let ((events (and (symbolp fn) (get fn 'hub-events-taken))))
+    (or (null events)
+        (seq-some (lambda (e) (if (string-suffix-p "*" e) (string-prefix-p (substring e 0 -1) name) (equal e name)))
+                  events))))
+
+(defun drgnx-hub--event-handlers (name)
+  "The functions of `drgnx-hub-event-functions' that take event NAME, a lookup in `drgnx-hub--handler-table'."
+  (let ((source (cons (default-value 'drgnx-hub-event-functions) drgnx-hub-event-functions)))
+    (unless (and drgnx-hub--handler-table
+                 (eq (car (car drgnx-hub--handler-table)) (car source))
+                 (eq (cdr (car drgnx-hub--handler-table)) (cdr source)))
+      (setq drgnx-hub--handler-table (cons source (make-hash-table :test #'equal))))
+    (let* ((table (cdr drgnx-hub--handler-table))
+           (fns (or (gethash name table)
+                    (puthash name
+                             (let (fns)
+                               (run-hook-wrapped 'drgnx-hub-event-functions
+                                                 (lambda (fn) (when (drgnx-hub--handler-takes-p fn name) (push fn fns)) nil))
+                               (or (nreverse fns) 'none))
+                             table))))
+      (unless (eq fns 'none) fns))))
+
 (defun drgnx-hub--run-hook (name &rest args)
   "The core's effect (hook NAME . ARGS): what only the shell can do — read, wait, start, run the hooks."
   (pcase name
@@ -623,7 +658,8 @@ effect that comes back (a sentinel, a callback that calls the hub) steps from it
     ('skew (drgnx-guard-run-hook 'drgnx-hub-skew-functions (nth 0 args) (nth 1 args))
            (drgnx-hub--skew-notice (nth 0 args) (nth 1 args)))
     ('events (let ((drgnx-hub--event-conn (nth 0 args)))
-               (drgnx-guard-run-hook 'drgnx-hub-event-functions (nth 1 args) (nth 2 args))))
+               (drgnx-guard-run-functions 'drgnx-hub-event-functions (drgnx-hub--event-handlers (nth 1 args))
+                                          (nth 1 args) (nth 2 args))))
     ('disconnected (drgnx-guard-run-hook 'drgnx-hub-disconnect-functions))
     ('presence-start (drgnx-hub--presence-start))
     ('presence-stop (drgnx-hub--presence-stop))
@@ -874,6 +910,8 @@ that follows takes them.  Signals when no hub can be had (Ratatoskr not built, s
 
 ;;;; The provider table, and keys the hub asks for again
 
+(put 'drgnx-hub--need-keys 'hub-events-taken '("gateway/need-keys"))
+
 (defun drgnx-hub--need-keys (event data)
   "`gateway/need-keys' (DATA (:providers [ID…])): agents need the keys of these providers and the hub holds none (it
 restarted; keys live in its memory only).  Only for a hub that proved itself (`:drgnx-proven' of the connection the
@@ -951,6 +989,8 @@ order, so the call connection's answers can come after the subscription's end; t
   (let ((sub drgnx-hub--events))
     (list (drgnx-hub--call "gateway/editor-token" nil nil :role 'token :under sub)
           (drgnx-hub--call "gateway/keys-held" nil nil :role 'keys-held :under sub))))
+
+(put 'drgnx-hub--keys-changed 'hub-events-taken '("gateway/keys-changed"))
 
 (defun drgnx-hub--keys-changed (event data)
   "`gateway/keys-changed' (DATA (:providers [ID…])) from a hub that proved itself: the keys it holds now."
@@ -1260,6 +1300,8 @@ timer.  A hub starts with you back, so nothing goes now unless you are away alre
   (remove-hook 'pre-command-hook #'drgnx-hub--presence-back)
   (setq drgnx-hub--presence-sent :unknown))
 
+(put 'drgnx-hub--note-notice 'hub-events-taken '("notice"))
+
 (defun drgnx-hub--note-notice (event data)
   "In an editor: a `notice' the hub sent (it is not the version on disk any more) becomes a notice of source `hub', with
 the command it names (Hub: Restart Now).  A condition: the hub, or the next hello from a current one, takes it away."
@@ -1339,6 +1381,8 @@ settled one takes its notice away."
                                          (plist-get (plist-get data :data) :why) "; ")
                       :command (list 'drgnx-extensions-show-suggestion id))))))
 
+(put 'drgnx-hub--note-card 'hub-events-taken '("card"))
+
 (defun drgnx-hub--note-card (event data)
   "In an editor: a `matrix' card (the permission matrix asks), an `extension' card (an agent's suggestion:
 `drgnx-hub--note-extension-card') or a `supervisor' pause from a hub that proved itself is a notice.  Nothing asks
@@ -1365,6 +1409,8 @@ Answer Permission Card with the card's id; the agent panel's cards answer the ot
 (defun drgnx-hub--plugin-notice-id (name)
   "The notice id of plugin NAME."
   (intern (format "plugin-%s" name)))
+
+(put 'drgnx-hub--note-plugin 'hub-events-taken '("plugin" "card"))
 
 (defun drgnx-hub--note-plugin (event data)
   "In an editor: a `plugin' event from a hub that proved itself, or a `card' of kind `plugin', becomes a notice of

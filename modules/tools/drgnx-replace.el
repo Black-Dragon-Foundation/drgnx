@@ -2331,6 +2331,8 @@ view shows.  A timer: never signals."
                  ((equal (plist-get data :view) drgnx-replace-view)) (buf (get-buffer drgnx-replace-buffer-name)))
        (with-current-buffer buf (drgnx-replace--change-done data))))))
 
+(put 'drgnx-replace--hub-event 'hub-events-taken '("search-run-done" "search-apply" "search-change" "search-handoff-state" "agent"))
+
 (defun drgnx-replace--hub-event (event data)
   "`drgnx-hub-event-functions': `search-run-done' ends the Search view's search, counts what it found and unticks
 the matches the user had unticked before it (`:off'); `search-apply' and `search-change' are the view's writes

@@ -295,7 +295,7 @@ When it made none, run REMOVE unless another claim stands."
   "Split BODY into leading `:module' and `:depth' pairs and the rest: (OPTIONS . REST).
 OPTIONS is a plist; a `:module' value loses its quote."
   (let (opts)
-    (while (memq (car-safe body) '(:module :depth))
+    (while (memq (car-safe body) '(:module :depth :events))
       (setq opts (plist-put opts (car body) (cadr body)) body (cddr body)))
     (when (eq (car-safe (plist-get opts :module)) 'quote)
       (setq opts (plist-put opts :module (cadr (plist-get opts :module)))))
@@ -376,7 +376,8 @@ run; cached by mtime."
   "Define `drgnx-<module>--NAME' as (lambda ARGLIST BODY...) and add it to HOOK; the undo removes it.
 HOOK is evaluated: a hook symbol, or a list of them.  The module is the one the file's
 `drgnx-module-define' names, or `:module NAME' (a symbol) first in BODY; `:depth N' there is
-passed to `add-hook'.  Running it again changes nothing.  The undo removes the function only when
+passed to `add-hook'; `:events LIST' (a quoted list of names) sets the function's `hub-events-taken' property
+(`drgnx-hub-event-functions').  Running it again changes nothing.  The undo removes the function only when
 no other claim on it stands (two modules adding the same function tear down in either order), and
 keeps it when it was on the hook before.  NAME is used once per module file (an error otherwise).
 `drgnx-module-unhook' removes it early."
@@ -384,6 +385,7 @@ keeps it when it was on the hook before.  NAME is used once per module file (an 
   (pcase-let* ((`(,module ,opts . ,rest) (drgnx-module--resolve body))
                (fn (drgnx-module--unique-function module name)))
     `(progn (defun ,fn ,arglist ,@rest)
+            ,@(and (plist-get opts :events) `((put ',fn 'hub-events-taken ,(plist-get opts :events))))
             (drgnx-module--hook-add ,hook ',fn ,(plist-get opts :depth)))))
 
 (defmacro drgnx-module-unhook (hook name &rest options)

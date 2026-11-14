@@ -129,6 +129,11 @@ that fails or asks is recorded, and the next still runs.  Returns nil."
   (run-hook-wrapped hook #'drgnx-guard--run-one hook args)
   nil)
 
+(defun drgnx-guard-run-functions (hook fns &rest args)
+  "Call each of FNS (a list of functions of HOOK, which labels them) with ARGS, each as `drgnx-guard-run-hook' does."
+  (dolist (fn fns) (drgnx-guard--run-one fn hook args))
+  nil)
+
 (define-minor-mode drgnx-guard-mode
   "Signal instead of prompting in automatic paths (timers, `drgnx-automatic', daemon startup)."
   :global t :group 'drgnx

@@ -456,6 +456,7 @@ the editor's `agents/wheel/saved', which comes in on that one and would queue be
     (drgnx-agents-follow--frame-replaced old new))
   (drgnx-module-hook 'drgnx-hub-event-functions follow-event (event data)
     :module 'tools/agents-in-editor
+    :events '("agent" "agent-follow" "agent-wheel" "wheel-save")
     (drgnx-agents-follow--event event data))
   (drgnx-module-hook 'drgnx-hub-connected-functions follow-reconnect ()
     :module 'tools/agents-in-editor

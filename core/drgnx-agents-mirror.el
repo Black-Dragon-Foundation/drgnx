@@ -370,6 +370,8 @@ replaces its rows and keeps its tool entry.  Only the newest `drgnx-agents-mirro
                         drgnx-agents-mirror--hook-steps-max))
         (drgnx-agents--changed m)))))
 
+(put 'drgnx-agents-mirror--event 'hub-events-taken '("agent-step" "agents-attention" "agent" "agent-entries"))
+
 (defun drgnx-agents-mirror--event (event data)
   "An event from the hub (`drgnx-hub-event-functions')."
   (when (and (equal event "agent-step") (not drgnx-agents-mirror--paused))

@@ -537,6 +537,8 @@ any job."
     (when-let* ((token) (step (plist-get data :step)))
       (drgnx-extensions-jobs--changed (drgnx-extensions-jobs--take-step token step)))))
 
+(put 'drgnx-extensions-jobs--event 'hub-events-taken '("exec-done" "exec-progress"))
+
 (defun drgnx-extensions-jobs--event (event data)
   "An event from the hub (`drgnx-hub-event-functions'): an Extensions job this session follows ended, or a job's
 progress (`exec-progress': the hub reads the progress files and sends the steps)."
