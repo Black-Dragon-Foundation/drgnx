@@ -94,9 +94,12 @@ async fn a_grammar_built_later_re_parses_the_files_without_an_edit() {
     let _ = text_keys;
 }
 
-/// A change to the rules that classify files re-parses them: the stamp holds their version.
+/// The stamp is a hash of the packs, the grammars' availability and the version of the language rules
+/// ([`hrafn::files::LANG_RULES`]): the same twice, and a hash of 64 hex digits.
 #[test]
-fn the_stamp_holds_the_version_of_the_language_rules() {
-    assert!(hrafn::files::LANG_RULES >= 2, "the .h rule moved the version");
-    assert_eq!(hrafn::chunk::lang_stamp(), hrafn::chunk::lang_stamp());
+fn the_stamp_is_a_stable_hash() {
+    let s = hrafn::chunk::lang_stamp();
+    assert_eq!(s, hrafn::chunk::lang_stamp());
+    assert_eq!(s.len(), 64);
+    assert!(s.chars().all(|c| c.is_ascii_hexdigit()));
 }

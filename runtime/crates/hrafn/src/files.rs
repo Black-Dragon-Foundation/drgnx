@@ -837,7 +837,9 @@ impl Read {
             // a `.h` is judged on its text, the others on a `#!` line at most
             lang: lang_of(
                 path,
-                &bytes[..bytes.len().min(if path.ends_with(".h") { CPP_PROBE } else { 256 })],
+                &bytes[..bytes
+                    .len()
+                    .min(if path.ends_with(".h") { CPP_PROBE } else { 256 })],
             ),
             marked: generated_by_marker(bytes),
             size: bytes.len() as u64,

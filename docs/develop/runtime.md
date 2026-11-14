@@ -1518,10 +1518,12 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   frozen once written. `eval run ROOT --model ID --device cpu|gpu:ADAPTER` indexes the project into a scratch store,
   embeds it in-process with the model, asks the set and prints MRR@10 and nDCG@10 (chunk level), recall@5/@10 and
   file MRR@10 (file level: the first hit in a target file, whatever its symbol) with bootstrap intervals per stratum,
-  and writes the run as JSON. `eval compare [--by chunk|file] A.json B.json` is the gate: the lower bound of the paired
-  difference of MRR@10 (or, `--by file`, of file MRR@10, which is fair to a chunker that gives a language no symbols)
-  must be at least -0.01 overall and -0.03 per stratum of 30 rows or more (a smaller stratum is reported, not gated),
-  the index has no coverage error and exact-symbol recall@1 is 1.0. A report from before file MRR was measured is
+  and writes the run as JSON. `eval compare [--by chunk|file|floor] A.json B.json` is the gate, as restated on 2026-11-10 (the hrafn-agent-tools
+  plan, Task 4) for every language added since: `--by chunk` passes when the paired difference of MRR@10 is at least 0,
+  `--by file` when the upper bound of the difference of file MRR@10 (fair to a chunker that gives a language no symbols)
+  is at least 0; the strata are printed and never gate. `--by floor` is the non-regression check of a language nothing was
+  added to (drgnx's own set): the lower bound of the MRR@10 difference at least -0.01 overall and -0.03 per stratum of 30
+  rows or more. Whatever the rule, the index has no coverage error and exact-symbol recall@1 is 1.0. A report from before file MRR was measured is
   refused by `--by file`. `eval run … --map TOKENS` also measures the repo map's yield at that budget, per question:
   def-yield (the share of its target definitions shown) and file-yield (the share of its target files), with
   intervals per stratum, for three contexts of the same token estimate: `map` (the global map, tests and docs

@@ -112,8 +112,14 @@ fn cpp_symbols_classes_templates_namespaces_methods_and_macros() {
 fn a_template_specializations_name_is_the_templates() {
     let text = "template <typename T>\nstruct Hash {};\n\ntemplate <>\nstruct Hash<int*> {\n  int v;\n};\n\ntemplate <typename P, typename D>\nclass Random<Ptr<P>*, D> {};\n";
     let (_, symbols) = chunk_file("a.cc", Lang::Cpp, false, text, BUDGET);
-    let got: Vec<(&str, &str)> = symbols.iter().map(|s| (s.name.as_str(), s.kind.as_str())).collect();
-    assert_eq!(got, [("Hash", "struct"), ("Hash", "struct"), ("Random", "class")]);
+    let got: Vec<(&str, &str)> = symbols
+        .iter()
+        .map(|s| (s.name.as_str(), s.kind.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        [("Hash", "struct"), ("Hash", "struct"), ("Random", "class")]
+    );
 }
 
 #[test]
