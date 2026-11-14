@@ -55,6 +55,22 @@ pub enum AskEv {
     },
     /// SESSION ended.
     SessionGone { session: String },
+    /// SESSION is being resumed after a restart: its writes wait for its ask ([`AskEv::Restore`],
+    /// [`AskEv::NoRestore`]), and a message that reaches it first is its ask instead.
+    Restoring { session: String },
+    /// SESSION's last user message (TEXT, of CHANNEL, with MESSAGE_ID when it had one) is its current ask again.
+    /// ADOPT is the entity of the ask an earlier hub made for exactly that message, when there is one: it is adopted,
+    /// never made again.  Ignored when the session has a current ask already.
+    Restore {
+        session: String,
+        text: String,
+        channel: String,
+        message_id: Option<String>,
+        at: f64,
+        adopt: Option<String>,
+    },
+    /// SESSION has no user message to restore from: what it wrote while resuming links to nothing.
+    NoRestore { session: String },
 }
 
 /// What to write.
@@ -71,6 +87,8 @@ pub enum AskOut {
     },
     /// Link the ask KEY `asked` to TO (an entity id).
     Link { ask_key: u64, to: String },
+    /// The ask KEY is the entity ID an earlier hub made: nothing is made for it.
+    Adopt { key: u64, id: String },
 }
 
 /// An ask the core knows: a session's current one, made or not yet.
@@ -94,6 +112,9 @@ pub struct AskCore {
     /// Each session's channel, from its last user message (a steer keeps it).
     channel: BTreeMap<String, String>,
     linked: BTreeSet<(u64, String)>,
+    /// The sessions being resumed, whose writes wait for their ask, and what they wrote meanwhile.
+    restoring: BTreeSet<String>,
+    held: BTreeMap<String, Vec<String>>,
 }
 
 impl AskCore {
@@ -110,11 +131,13 @@ impl AskCore {
                 message_id,
                 at,
             } => {
+                self.settle_restore(&session);
                 self.channel.insert(session.clone(), channel.clone());
                 self.open(session, text, channel, message_id, at);
                 Vec::new()
             }
             AskEv::SteerDelivered { session, text, at } => {
+                self.settle_restore(&session);
                 let channel = self
                     .channel
                     .get(&session)
@@ -127,10 +150,18 @@ impl AskCore {
                 session,
                 entity,
                 kind,
-            } => match self.current.get(&session) {
-                Some(&key) if LINKED.contains(&kind.as_str()) => self.link(key, entity),
-                _ => Vec::new(),
-            },
+            } => {
+                if self.restoring.contains(&session) {
+                    if LINKED.contains(&kind.as_str()) {
+                        self.held.entry(session).or_default().push(entity);
+                    }
+                    return Vec::new();
+                }
+                match self.current.get(&session) {
+                    Some(&key) if LINKED.contains(&kind.as_str()) => self.link(key, entity),
+                    _ => Vec::new(),
+                }
+            }
             AskEv::AgentStart { starter, new } => {
                 let Some(&key) = starter.as_ref().and_then(|s| self.current.get(s)) else {
                     return Vec::new();
@@ -141,7 +172,48 @@ impl AskCore {
                 }
                 out
             }
+            AskEv::Restoring { session } => {
+                if !self.current.contains_key(&session) {
+                    self.restoring.insert(session);
+                }
+                Vec::new()
+            }
+            AskEv::Restore {
+                session,
+                text,
+                channel,
+                message_id,
+                at,
+                adopt,
+            } => {
+                // a message that came first, or an earlier restore, is the current ask: this changes nothing
+                if !self.restoring.remove(&session) || self.current.contains_key(&session) {
+                    self.held.remove(&session);
+                    return Vec::new();
+                }
+                self.channel
+                    .entry(session.clone())
+                    .or_insert_with(|| channel.clone());
+                self.open(session.clone(), text, channel, message_id, at);
+                let key = self.next;
+                let mut out = Vec::new();
+                if let Some(id) = adopt {
+                    if let Some(a) = self.asks.get_mut(&key) {
+                        a.created = true;
+                    }
+                    out.push(AskOut::Adopt { key, id });
+                }
+                for entity in self.held.remove(&session).unwrap_or_default() {
+                    out.extend(self.link(key, entity));
+                }
+                out
+            }
+            AskEv::NoRestore { session } => {
+                self.settle_restore(&session);
+                Vec::new()
+            }
             AskEv::SessionGone { session } => {
+                self.settle_restore(&session);
                 self.channel.remove(&session);
                 if let Some(old) = self.current.remove(&session) {
                     self.forget_unused(old);
@@ -149,6 +221,13 @@ impl AskCore {
                 Vec::new()
             }
         }
+    }
+
+    /// SESSION is no longer being restored: what it wrote meanwhile is dropped (a message came first, or there was none
+    /// to restore from, or it is gone): never linked to a guess.
+    fn settle_restore(&mut self, session: &str) {
+        self.restoring.remove(session);
+        self.held.remove(session);
     }
 
     /// TEXT becomes SESSION's current ask (made at its first link).
@@ -252,6 +331,29 @@ enum Input {
     },
     /// Read the sessions' writes so far, link them, then answer.
     Flush(tokio::sync::oneshot::Sender<()>),
+    /// SESSION is being resumed after a restart.
+    Restoring {
+        session: String,
+    },
+    /// SESSION's last user message, when the transcript has one: its current ask again.
+    Restore {
+        session: String,
+        last: Option<LastMessage>,
+    },
+}
+
+/// The text of the ask a session gets when a hub restart left no message to take it from: the Work map's one line for
+/// it, made at the session's first write after the restart (and the same entity at every restart after).
+pub const UNKNOWN_ASK: &str = "Ask before a hub restart: not recorded";
+
+/// A session's last user message as its transcript holds it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LastMessage {
+    pub text: String,
+    /// `say`, `chat`, `manager` or `brainstorm`.
+    pub channel: String,
+    /// The hub's key of the message (`message:ID`), when it had one.
+    pub message_id: Option<String>,
 }
 
 /// The hub's door to the shell: cheap to clone, never blocks the caller (but [`AskTx::flush`]).
@@ -272,6 +374,22 @@ impl AskTx {
             new: new.to_string(),
             parent: parent.map(str::to_string),
             job: job.map(str::to_string),
+        });
+    }
+
+    /// Session SESSION is being resumed after a restart: what it writes waits for [`AskTx::restore`].
+    pub fn restoring(&self, session: &str) {
+        let _ = self.tx.send(Input::Restoring {
+            session: session.to_string(),
+        });
+    }
+
+    /// Session SESSION's last user message (none: it has none, or its transcript cannot be read) is its current ask
+    /// again; the ask entity an earlier hub made for it is adopted.
+    pub fn restore(&self, session: &str, last: Option<LastMessage>) {
+        let _ = self.tx.send(Input::Restore {
+            session: session.to_string(),
+            last,
         });
     }
 
@@ -465,6 +583,49 @@ impl Shell {
         let mut evs = self.tail(front).await;
         let mut reply = None;
         match i {
+            // told before the log's writes are read as events: what the session writes after its prompt is held
+            Input::Restoring { session } => evs.insert(0, AskEv::Restoring { session }),
+            // no user message of its own (a worker, or a transcript that cannot be read): the ask that started it,
+            // from the `asked` link that dispatched it; else a line that says the ask was not recorded
+            Input::Restore {
+                session,
+                last: None,
+            } => {
+                let (last, adopt) = match self.dispatching_ask(w, &session).await {
+                    Some((id, last)) => (last, Some(id)),
+                    None => {
+                        let last = LastMessage {
+                            text: UNKNOWN_ASK.to_string(),
+                            channel: "chat".to_string(),
+                            message_id: None,
+                        };
+                        let adopt = self.earlier_ask(w, &session, &last).await;
+                        (last, adopt)
+                    }
+                };
+                evs.push(AskEv::Restore {
+                    session,
+                    text: last.text,
+                    channel: last.channel,
+                    message_id: last.message_id,
+                    at: crate::clock::wall_secs(),
+                    adopt,
+                });
+            }
+            Input::Restore {
+                session,
+                last: Some(last),
+            } => {
+                let adopt = self.earlier_ask(w, &session, &last).await;
+                evs.push(AskEv::Restore {
+                    session,
+                    text: last.text,
+                    channel: last.channel,
+                    message_id: last.message_id,
+                    at: crate::clock::wall_secs(),
+                    adopt,
+                });
+            }
             Input::Ev(e) => evs.push(e),
             Input::Start { new, parent, job } => {
                 let starter = match (parent, job) {
@@ -491,6 +652,83 @@ impl Shell {
         if let Some(tx) = reply {
             let _ = tx.send(());
         }
+    }
+
+    /// The newest ask that an `asked` link joins to SESSION (the link that dispatched it: its manager's or its plan
+    /// run's starter's ask), as its entity id and the message it holds. None when no ask links to it.
+    async fn dispatching_ask(&self, w: &Writer, session: &str) -> Option<(String, LastMessage)> {
+        let to = format!("session:{session}");
+        w.db.read(move |c| {
+            let Some((_, ask)) = norn::read::work::asks_of(c, &[to.as_str()])?
+                .into_iter()
+                .next_back()
+            else {
+                return Ok(None);
+            };
+            let row = c.query_row(
+                "select json_extract(data, '$.text'), json_extract(data, '$.channel'), json_extract(data, '$.message_id') \
+                 from entity where id = ?1",
+                [&ask],
+                |r| {
+                    Ok((
+                        r.get::<_, Option<String>>(0)?,
+                        r.get::<_, Option<String>>(1)?,
+                        r.get::<_, Option<String>>(2)?,
+                    ))
+                },
+            )?;
+            Ok::<_, CoordError>(row.0.map(|text| {
+                (
+                    ask,
+                    LastMessage {
+                        text,
+                        channel: row.1.unwrap_or_else(|| "chat".to_string()),
+                        message_id: row.2,
+                    },
+                )
+            }))
+        })
+        .await
+        .ok()
+        .flatten()
+    }
+
+    /// The `ask` entity an earlier hub made for SESSION's last message LAST, when it is the session's newest ask and
+    /// says the same: by message id when both have one, else by text.  None when there is none (or it cannot be read):
+    /// then the ask is made at its first link, as ever; never one that only looks alike.
+    async fn earlier_ask(&self, w: &Writer, session: &str, last: &LastMessage) -> Option<String> {
+        let sid = session.to_string();
+        let newest = w
+            .db
+            .read(move |c| {
+                let row = c.query_row(
+                    "select id, json_extract(data, '$.text'), json_extract(data, '$.message_id') from entity \
+                     where kind = 'ask' and json_extract(data, '$.session') = ?1 order by n desc limit 1",
+                    [&sid],
+                    |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            r.get::<_, Option<String>>(1)?,
+                            r.get::<_, Option<String>>(2)?,
+                        ))
+                    },
+                );
+                match row {
+                    Ok(r) => Ok(Some(r)),
+                    Err(urdr::SqliteError::QueryReturnedNoRows) => Ok(None),
+                    Err(e) => Err(e.into()),
+                }
+            })
+            .await
+            .ok()
+            .flatten()?;
+        let (id, text, message_id) = newest;
+        let same = match (&last.message_id, &message_id) {
+            (Some(a), Some(b)) => a == b,
+            (None, None) => text.as_deref() == Some(last.text.as_str()),
+            _ => false,
+        };
+        same.then_some(id)
     }
 
     /// O, written as the hub. Best effort: a store that is not ready loses it, and a link to an entity that is gone is
@@ -524,6 +762,9 @@ impl Shell {
                     }
                     Err(e) => tracing::warn!("an ask not recorded: {e}"),
                 }
+            }
+            AskOut::Adopt { key, id } => {
+                self.ids.insert(key, id);
             }
             AskOut::Link { ask_key, to } => {
                 let Some(id) = self.ids.get(&ask_key).cloned() else {

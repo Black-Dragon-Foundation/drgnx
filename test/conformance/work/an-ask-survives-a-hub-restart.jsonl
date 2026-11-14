@@ -1,0 +1,48 @@
+{"scenario": "work/an-ask-survives-a-hub-restart", "requires": ["v1", "test-hooks"], "doc": "AS2-ASKS-RESTART-1: a session's current ask is rebuilt on a hub restart from its last user message in its transcript, and the ask entity the earlier hub made is adopted, never made again: a task a manager writes after one restart, and another after a second restart in a row, link to the same ask as the task written before them, and there is one ask."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && cd $ROOT/work && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000000 +0000' GIT_COMMITTER_DATE='@1700000000 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h", "env": {"RATATOSKR_TEST_ASK_DELAY_MS": "1500"}}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/role", "params": {"id": "$sid", "role": "manager"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}, "within_ms": 30000}
+{"do": "send", "conn": "e", "json": {"id": 901, "method": "agents/entries/subscribe", "params": {"session": "$sid"}}}
+{"do": "expect", "conn": "e", "json": {"id": 901, "result": {"seq": "$number"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$sid", "text": "plan the cache"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-entries", "data": {"id": "$sid", "entries": {"$contains": [["$any", {"type": "agent", "text": "You said: plan the cache"}]]}}}, "within_ms": 30000}
+{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$SOCKET_DIR/s/$sid/mcp.sock", "as": "raw"}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "task_write", "arguments": {"op": "create", "title": "alpha"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": "$any"}}
+{"do": "sql_expect", "sql": "select a.title, json_extract(a.data, '$.channel'), json_extract(a.data, '$.by'), t.title from link l join entity a on a.n = l.src join entity t on t.n = l.dst where l.kind = 'asked' order by t.title", "rows": [["plan the cache", "manager", "user", "alpha"]]}
+{"do": "kill", "hub": "h", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h", "code": 0, "within_ms": 15000}
+{"do": "start", "hub": "h2", "same_root_as": "h"}
+{"do": "connect", "conn": "ch2", "hub": "h2"}
+{"do": "poll", "conn": "ch2", "json": {"id": 1, "method": "agents/list"}, "expect": {"id": 1, "result": {"sessions": {"$contains": [{"id": "$sid"}]}}}, "within_ms": 30000, "every_ms": 100}
+{"do": "connect", "conn": "m2", "hub": "h2", "socket": "path:$SOCKET_DIR/s/$sid/mcp.sock", "as": "raw"}
+{"do": "send", "conn": "m2", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m2", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
+{"do": "send", "conn": "m2", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "task_write", "arguments": {"op": "create", "title": "beta"}}}}
+{"do": "expect", "conn": "m2", "json": {"jsonrpc": "2.0", "id": 2, "result": "$any"}, "within_ms": 30000}
+{"do": "sql_expect", "sql": "select a.title, t.title from link l join entity a on a.n = l.src join entity t on t.n = l.dst where l.kind = 'asked' order by t.title", "rows": [["plan the cache", "alpha"], ["plan the cache", "beta"]]}
+{"do": "kill", "hub": "h2", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h2", "code": 0, "within_ms": 15000}
+{"do": "start", "hub": "h3", "same_root_as": "h2"}
+{"do": "connect", "conn": "ch3", "hub": "h3"}
+{"do": "poll", "conn": "ch3", "json": {"id": 2, "method": "agents/list"}, "expect": {"id": 2, "result": {"sessions": {"$contains": [{"id": "$sid"}]}}}, "within_ms": 30000, "every_ms": 100}
+{"do": "connect", "conn": "m3", "hub": "h3", "socket": "path:$SOCKET_DIR/s/$sid/mcp.sock", "as": "raw"}
+{"do": "send", "conn": "m3", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m3", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
+{"do": "send", "conn": "m3", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "task_write", "arguments": {"op": "create", "title": "gamma"}}}}
+{"do": "expect", "conn": "m3", "json": {"jsonrpc": "2.0", "id": 2, "result": "$any"}, "within_ms": 30000}
+{"do": "sql_expect", "sql": "select a.title, t.title from link l join entity a on a.n = l.src join entity t on t.n = l.dst where l.kind = 'asked' order by t.title", "rows": [["plan the cache", "alpha"], ["plan the cache", "beta"], ["plan the cache", "gamma"]]}
+{"do": "sql_expect", "sql": "select count(*) from entity where kind = 'ask'", "rows": [[1]]}
