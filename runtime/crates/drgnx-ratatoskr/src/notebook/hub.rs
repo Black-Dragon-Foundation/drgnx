@@ -776,16 +776,9 @@ impl Pump {
 
     fn count_held(&self) {
         self.open.held.store(
-            self.cells.len() + self.latest.len() + self.router_runs(),
+            self.cells.len() + self.latest.len() + self.router.held(),
             Ordering::SeqCst,
         );
-    }
-
-    fn router_runs(&self) -> usize {
-        self.cells
-            .keys()
-            .filter(|m| self.router.run(m).is_some())
-            .count()
     }
 
     /// The queued cells that will not run: shown as ABORTED or CANCELLED (what output they had stays).

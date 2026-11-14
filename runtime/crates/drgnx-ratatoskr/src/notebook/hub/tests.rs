@@ -179,7 +179,7 @@ fn kernel_side(folder: &Path, id: &str, nth: u32, seen: Arc<Seen>) -> tokio::tas
                 continue;
             }
             let mut text = code.clone();
-            if code.starts_with("ASK") {
+            if matches!(code.as_str(), "ASK" | "ASKLONG" | "ASKTWICE") {
                 let prompt = if code == "ASKLONG" {
                     format!("{}\u{202e}\x1b[31m", "p".repeat(5000))
                 } else {
@@ -227,6 +227,16 @@ fn kernel_side(folder: &Path, id: &str, nth: u32, seen: Arc<Seen>) -> tokio::tas
             rep.idents = vec![f[0].clone()];
             shell.send(zmq(&key, &rep)).await.unwrap();
             iopub.send(status("idle")).await.unwrap();
+            if code == "ASKLATE" {
+                // a question after the run is over: the cell is not running, nobody is to be asked
+                let mut late = reply_to(
+                    &req,
+                    "input_request",
+                    json!({"prompt": "too late? ", "password": false}),
+                );
+                late.idents = vec![f[0].clone()];
+                stdin.send(zmq(&key, &late)).await.unwrap();
+            }
         }
     })
 }
@@ -889,4 +899,29 @@ fn a_backed_up_editor_loses_events_not_its_subscription() {
         Delivery::Gone,
         "no such editor"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_question_after_the_run_is_over_is_not_forwarded() {
+    let w = world("signal");
+    let (id, seen) = started(&w).await;
+    w.hub
+        .execute(7, &id, &[sync("a", "ASKLATE")])
+        .await
+        .unwrap();
+    skuld::wait_until("a done", 30, || {
+        w.events
+            .tail("a")
+            .filter(|t| t["head"]["state"] == "idle" && t["text"] == "ASKLATE")
+    });
+    // the next run is answered after the late question was sent: the question has been through the hub by then
+    w.hub.execute(7, &id, &[sync("b", "ok")]).await.unwrap();
+    skuld::wait_until("b done", 30, || {
+        w.events
+            .tail("b")
+            .filter(|t| t["head"]["state"] == "idle" && t["text"] == "ok")
+    });
+    assert_eq!(*seen.executed.lock().unwrap(), ["ASKLATE", "ok"]);
+    assert!(w.events.of("notebook-input-request").is_empty());
+    w.hub.close(7, &id).await;
 }

@@ -223,6 +223,11 @@ impl Router {
         self.runs.get(msg_id)
     }
 
+    /// How many runs are held.
+    pub(crate) fn held(&self) -> usize {
+        self.runs.len()
+    }
+
     pub fn run_mut(&mut self, msg_id: &str) -> Option<&mut CellRun> {
         self.runs.get_mut(msg_id)
     }
