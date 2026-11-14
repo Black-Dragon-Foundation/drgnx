@@ -166,6 +166,7 @@ pub fn hub_grammars() -> Vec<(&'static str, &'static str)> {
 pub fn stamp() -> String {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
+    h.update(crate::files::LANG_RULES.to_le_bytes());
     for k in Kind::ALL {
         let (manifest, chunks) = source(k);
         for part in [pack_name(k), manifest, chunks, super::refs::tags_source(k)] {

@@ -681,6 +681,10 @@ fn looks_cpp(text: &[u8]) -> bool {
     false
 }
 
+/// The version of the rules that give a file its language (`lang_of`): part of the index's language stamp, so a change to
+/// those rules (an extension, the `.h` test) re-parses the files that were classified under the old ones. Bump it with them.
+pub const LANG_RULES: u32 = 2;
+
 /// How much of a `.h` the C++ test reads.
 const CPP_PROBE: usize = 64 * 1024;
 

@@ -52,7 +52,7 @@ TypeScript and CSS, gofmt, rustfmt, clang-format, … (apheleia's list) — when
 background, after the save, keeping the point and the view where they were. It formats only code whose project
 formats it: Go, Rust, Zig, Elixir, Terraform and Dart always (their formatter is their standard); other languages
 only under a formatter's config — `.prettierrc*`, `prettier.config.*`, `.clang-format`, `ruff.toml`, a
-`pyproject.toml` with `[tool.black]` or `[tool.ruff]`, `biome.json`, `deno.json`, `stylua.toml`, … — so saving a file
+`pyproject.toml` with `[tool.black]` or `[tool.ruff]`, `biome.json`, `deno.json`, `stylua.toml`, a `.google-java-format` marker file for Java (google-java-format reads no config of its own: an empty file of that name in the project root says "this project formats this way"), … — so saving a file
 in someone else's repository never rewrites it in a style it does not use. Lisp and BibTeX files are never
 re-indented on save. A formatter that is not installed, or fails, leaves the file as you saved it; nothing asks.
 **Toggle Format on Save** turns it off or on in this buffer (with `C-u`, everywhere). Module `extra/format`, package

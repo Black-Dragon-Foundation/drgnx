@@ -93,3 +93,10 @@ async fn a_grammar_built_later_re_parses_the_files_without_an_edit() {
     // (the text chunks' keys are the whole file's text; the parsed file may chunk the same text, so keys may match)
     let _ = text_keys;
 }
+
+/// A change to the rules that classify files re-parses them: the stamp holds their version.
+#[test]
+fn the_stamp_holds_the_version_of_the_language_rules() {
+    assert!(hrafn::files::LANG_RULES >= 2, "the .h rule moved the version");
+    assert_eq!(hrafn::chunk::lang_stamp(), hrafn::chunk::lang_stamp());
+}
