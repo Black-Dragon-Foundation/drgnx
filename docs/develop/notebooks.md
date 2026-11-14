@@ -47,6 +47,78 @@ sorted. A cell that was not run in this session keeps the outputs the file had, 
 the outputs read from it go through the same limits as a kernel's (64 outputs and 1 MiB of text per cell, 16 MiB of images, 200
 traceback entries, an output larger than 8 MiB shown as a line saying so).
 
+## The buffer (Lisp)
+
+`modules/lang/drgnx-notebook.el` (module `lang/notebook`) is the editor's side. A cell in the buffer is a head, the source and a
+tail; the head and the tail are each one read-only newline carrying the text property `drgnx-cell` `(ID . head|tail)` and
+`drgnx-cell-type`, so undo, kill and yank move cells as text, and the cell ranges are read back from the property (a binary
+search over the cached ranges; a rescan walks the property's changes, never the text, after a quiet moment, never on a
+keystroke). The chrome is overlays on the boundary characters: the head's `before-string` (the header strip) and the tail's
+`after-string` (the output the hub built: `notebook-tail`, put as it came, its runs' roles as the faces
+`drgnx-notebook-fg-ROLE`/`-bg-ROLE`, with `overlay-put`, which writes no undo entry, sets no modified flag and runs no change
+function). A boundary that comes back by undo or yank has no overlay, and the rescan asks the hub for that cell's tail by id.
+
+The hub calls it makes (`drgnx-notebook--call`): `notebook/open {path, text}`, `/sync {id, cells}` then `/execute {id, cells}`
+(the cells to run), `/save {id, cells}`, `/kernels`, `/start {id, kernel}`, `/shutdown`, `/interrupt`, `/input`, `/tail {id,
+cell}`, `/output {id, cell}`, `/close`; it listens to `notebook-tail`, `notebook-status` and `notebook-input-request`.
+
+The header strip is a `before-string` on the head boundary (an `after-string` of a one-character head would land on the source's
+first row, so the strip would have no row of its own); the output is an `after-string` on the tail boundary, ending in the newline
+Lisp adds. The Lisp header is a stopgap: the hub is to build the head as it builds the tail, and the Lisp builder goes when it does.
+
+**Tree-sitter** (`drgnx-notebook--sync-parsers`): one parser per language for the buffer, its included ranges the union of the
+cells of that language (the notebook's language for code cells, `markdown` for markdown cells); the same rescan that finds the
+boundaries moves the ranges. Font-lock comes from the languages' `LANG-ts-mode` settings, read once from a scratch buffer and
+joined (`drgnx-notebook--setup-treesit`). **Order matters:** `treesit-major-mode-setup` deletes the buffer's overlays, so it runs
+on the inserted text before the first rescan makes the chrome.
+
+**Images**: a tail marks each image with one character (U+FFFC) and carries its output index, MIME type and size; Lisp fetches
+`notebook/output` once per cell (the cache is dropped when the cell runs again) and draws PNG and JPEG as an `image` display
+spec, a label until then.
+
+## The card
+
+On a graphical frame with Glitnir's blocks (`glitnir--block-vector` bound) each cell is a `ring` block (`glitnir-blocks` window
+parameter, `drgnx-notebook--blocks-update`): START the head boundary, END one past the tail boundary, radius 10, `:beneath` `default`,
+the rows' own fill carved by the corners. The fringes (16 px) are the card's side inset. The ring face is `drgnx-border-subtle`, the
+selected cell's `drgnx-border-strong`, and `drgnx-focus-line` for the selected cell of the selected window. The parameter is a list
+kept per focus state with markers, the same object while nothing changed; it is updated after a rescan, when the selection moves and
+on the state store's `windows-changed` and `selected-changed` events (idle lane), and cleared with the buffer. The head has no overline on
+a card. A block takes the rows whose start position lies in START..END, and a tail's `after-string` rows start where the next cell's
+header does, so the output rows are outside the ring until Glitnir counts the overlay-string rows at END (an `after-string` stays: with
+the output as the tail's `before-string` the cursor at the end of the source draws after the output, and the `cursor` property is not
+honoured for a before-string).
+
+## The views in Lisp
+
+`drgnx-notebook-outline`, `drgnx-notebook-open-output` and `drgnx-notebook-kernel-log` ask `notebook/view {id, kind, cell?}` and get `{view}`.
+The editor makes a buffer (`*Notebook outline: NAME*`, `*Notebook output: NAME CELL*`, `*Notebook log: NAME*`; asking again shows the one
+there is) in `drgnx-notebook-outline-mode`, `-output-mode` or `-log-mode`, attaches it with `drgnx-view-patch-attach` (class `unshown`, a
+twin per display class), registers its env (`drgnx-view-env-register`), and sends `view/close` when it is killed. Rows are the hub's; the
+editor has registry commands for them, keys in the profiles: Go to Cell on the outline (the row's `drgnx-notebook-cell` property is the cell's id), Output: Later and Earlier Lines on the output
+(`view/window {view, list: "lines", from}`, half a window, from the `drgnx-notebook-line` property of the rows shown). The faces are Lisp's:
+`drgnx-notebook-prompt`, `-stale`, `-inverse` and the role faces; a view's text carries them, never a colour. A view is asked for again, its
+old id unregistered, when the notebook is opened again on a new hub (`drgnx-notebook--reask-views`), and killed with the notebook.
+
+**The notebook's connection.** The hub keeps a notebook, its events and its views per connection, and `view/env` and `view/window` come on the
+subscribed connection (`drgnx-view-env--send`). So every notebook call goes on `drgnx-hub--events` (`drgnx-notebook--call`,
+`--call-sync`), never the call connection: a notebook opened on the call connection is refused on the events connection ("no open
+notebook"), and its events and view rows would go to a connection nobody reads. No subscription yet is an error for the caller's
+callback, which a first open treats as no answer and asks again at the next connect.
+
+## A hub that came back
+
+The hub keeps notebooks in memory, so a restarted hub holds none, and the ids of the old one mean nothing (the editor never builds or
+parses an id; it keeps the one it was given). `drgnx-hub-connected-functions` runs `drgnx-notebook--reconnect-all`: each notebook
+buffer that visits a file asks `notebook/open` by its path (no text: the file is the hub's), takes the new id (the buffer table, the
+status, no kernel), forgets the tails' versions (the new hub counts from the start), then sends `notebook/sync` with its cells as they
+are at the time the answer arrives and puts the tails the open returned. The buffer's text is never replaced, so unsaved edits stay and
+are the hub's after the sync. An open the hub refuses leaves the buffer and its id as they are, with a message.
+
+An open that got no answer because there was no hub, or it went away first (the error is this side's string; a refusal is the hub's
+plist, asked for with `:full`), leaves the buffer a read-only notebook buffer holding the file's text, marked `drgnx-notebook--retry`;
+the same hook asks that open again, with the text, at the next connect. Only a refusal turns the buffer into plain text.
+
 ## The hub's notebooks and kernels
 
 `notebook/*` (the table in `hub.md`) is the editor's door; every method is the user's (an agent cannot start a kernel), and a kernel is
@@ -86,6 +158,12 @@ A cell is done when its `execute_reply` and its `idle` status have both come (th
 cells queued behind it (shown "aborted"), an interrupt or a restart cancels them ("cancelled"). Everything a kernel sends is held under
 the limits in the output model: 64 outputs and 1 MiB of text per cell, 16 MiB of images, a message of more than 16 MiB is a note, a flood
 (64 MiB unread, or 1000 messages that do not verify in 10 s) kills the kernel.
+
+**The real shapes (T11b routed).** The header is the hub's: each tail carries a `head` (`text`, `state`, `runs`); the editor draws the
+run button (and the add-cell buttons under the selected cell) and puts the hub's text after it, a cell with no head yet (new,
+markdown) showing its type. `notebook/restart` is the hub's. The picker for `notebook/kernels` lists the skipped kernelspecs with
+their reasons and refuses one. The notebook ids are the hub's to make (never parsed or built here), every method is checked against the
+buffer's connection, and a notebook ends with that connection.
 
 ## The views
 

@@ -172,6 +172,15 @@ named as drgnx names every session (its profile, `replay', and an id)")
     (magit "the scene's repository is the window mockups' (main, nothing staged, one commit); the Magit mockup's
 branch gateway-queue, staged file and history come with the Magit adapter (look step 7)"
            "the mockup's right-hand org card and floating transient are not opened by the scene")
+    (notebook-dark "the card is a Glitnir ring block (radius 10, the cell faces' band as its fill) on a line that has blocks, the band look elsewhere; against the mockup: (1) the output rows sit outside the ring, because a block takes the rows by their start position and a tail's rows start where the next cell's header does (Glitnir needs to count the rows of overlay strings at the block's END), (2) no card shadow (a ring is one 1 px line), (3) no 8 px gap between cards (a block has no inset above or below), (4) the focused card has one ring, not the mockup's inner focus ring and outer border step"
+                   "the mockup's notebook toolbar (Run all, Restart, Clear outputs, the kernel's state) and the cell's hover icons (up, down, delete) are not drawn: the commands are in the palette and keys"
+                   "the header is the Lisp stopgap (a chip for the run button and the type); the hub's head string replaces it"
+                   "the source takes its syntax colours from tree-sitter where the language has a grammar and a tree-sitter mode (the scene's image may have none)"
+                   "the error output is the hub's red bold first line, not the mockup's error-tint block (the tail carries styles, not a kind)"
+                   "the picture is a gradient the scene makes (a PPM): in use, images are the hub's PNG or JPEG, fetched from notebook/output")
+    (notebook-light "see notebook-dark")
+    (notebook-views "no mockup yet: the three views are the hub's rows in Sjá (outline shown, beside the notebook); a mockup comes before any look judgment"
+                    "the notebook is a file the scene writes and the hub opens (no kernel: no prompts or states yet), so the rows are the hub's own")
     (palette "the mockup's palette rows come from its own commands; the line lists the registry's")
     (explorer-focused-dark "no agent badges (C, R) in the Explorer: agent system part 3 (G9)")
     (explorer-focused-light "no agent badges (C, R) in the Explorer: agent system part 3 (G9)")
@@ -824,6 +833,10 @@ editor, the Explorer's rows beside it."
 (declare-function drgnx-replace-all "drgnx-replace")
 (declare-function drgnx-replace--hub-ready-p "drgnx-replace")
 (declare-function drgnx-hub-running-p "drgnx-hub-client")
+(declare-function drgnx-view-draw-now "drgnx-view")
+(declare-function drgnx-view-p "drgnx-view")
+(declare-function drgnx-notebook-outline "drgnx-notebook")
+(defvar drgnx-view)
 (declare-function drgnx-hub-connect "drgnx-hub-client")
 
 (defun drgnx-look-scene--until (secs what pred)
@@ -1435,6 +1448,104 @@ debugging-extras mockup's)."
   "The start page in the editor, light (the design system's empty-state shot)."
   (drgnx-look-scene--start-page 'drgnx-light))
 
+;;;; The notebook (the-look/notebook.html: a markdown cell, a finished code cell, the selected cell running, a failed cell)
+
+(declare-function drgnx-notebook-mode "drgnx-notebook")
+(declare-function drgnx-notebook--install "drgnx-notebook" (result))
+(declare-function drgnx-notebook--status "drgnx-notebook" (data))
+(declare-function drgnx-notebook--cell-by-id "drgnx-notebook" (id))
+(declare-function drgnx-notebook--select-at "drgnx-notebook" (pos))
+(defvar drgnx-notebook--images)
+(defvar drgnx-notebook--cells)
+
+(defun drgnx-look-scene--gradient-image (width height)
+  "An image spec of a WIDTH by HEIGHT diagonal gradient (a binary PPM, which Emacs draws without a decoder): the
+notebook scene's picture output."
+  (let ((rows nil))
+    (dotimes (y height)
+      (let ((row (make-string (* 3 width) 0)))
+        (dotimes (x width)
+          (let ((tt (/ (float (+ x y)) (+ width height))))
+            (aset row (* 3 x) (round (+ 40 (* 60 tt))))
+            (aset row (+ 1 (* 3 x)) (round (+ 80 (* 70 (- 1.0 tt)))))
+            (aset row (+ 2 (* 3 x)) (round (+ 120 (* 90 tt))))))
+        (push row rows)))
+    (list 'image :type 'pbm :data (concat (format "P6\n%d %d\n255\n" width height) (apply #'concat (nreverse rows)))
+          :ascent 'center :max-height (if (fboundp 'drgnx-px) (drgnx-px 160) 160))))
+
+(defun drgnx-look-scene--notebook-buffer ()
+  "A notebook buffer, `cache-experiments.ipynb', with the mockup's four cells and their outputs put as the hub's tails
+would be (no kernel, no hub: the scene draws the buffer's own chrome)."
+  (load (expand-file-name "modules/lang/drgnx-notebook" (bound-and-true-p drgnx-dir)) nil t)
+  (when-let* ((old (get-buffer "cache-experiments.ipynb")))   ; the dark scene's, when the light one follows
+    (with-current-buffer old (set-buffer-modified-p nil))
+    (kill-buffer old))
+  (let ((buffer (generate-new-buffer "cache-experiments.ipynb")))
+    (with-current-buffer buffer
+      (drgnx-notebook-mode)
+      (puthash (list "c2" 1 "image/png" 640 360) (drgnx-look-scene--gradient-image 640 360) drgnx-notebook--images)
+      (drgnx-notebook--install
+       (list :id "nbscene" :language "python" :kernelspec "python3"
+             :cells (list (list :id "c0" :type "markdown" :source "# Cache experiments\nHow the hit rate moves with the capacity.")
+                          (list :id "c1" :type "code"
+                                :source "import numpy as np\nrng = np.random.default_rng(7)\nhits = rng.random(10_000)")
+                          (list :id "c2" :type "code"
+                                :source "for cap in (16, 64, 256):\n    print(cap, (hits < cap / 256).mean())")
+                          (list :id "c3" :type "code" :source "plot(missing)"))
+             :tails (list (list :cell "c1" :version 1 :text "done: 10000 samples" :head (list :text "[1]  python" :state "idle"))
+                          (list :cell "c2" :version 1 :head (list :text "[*]  python" :state "running") :text (concat "16 0.0612\n64 0.2487\n" (string #xfffc))
+                                :images (list (list :at 20 :output 1 :mime "image/png" :width 640 :height 360)))
+                          (list :cell "c3" :version 1 :head (list :text "[3]  python" :state "idle")
+                                :text "NameError: name 'missing' is not defined\n  Cell In[3], line 1"
+                                :runs (list (list :start 0 :end 9 :fg 1 :bold t))))))
+      (drgnx-notebook--status (list :state "busy" :cell "c2" :queue 0))
+      (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id "c2") :head)))
+      (drgnx-notebook--select-at (point)))
+    buffer))
+
+(defun drgnx-look-scene--notebook (theme)
+  "The notebook in THEME, in the editor."
+  (drgnx-look-scene--theme theme)
+  (drgnx-look-scene--try "notebook"
+    (drgnx-wb-focus-editor)
+    (drgnx-look-scene--show (drgnx-look-scene--notebook-buffer)))
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene--notebook-file ()
+  "A `.ipynb' the scene writes: the mockup's four cells, no outputs."
+  (let ((file (expand-file-name "cache-experiments.ipynb" temporary-file-directory)))
+    (with-temp-file file
+      (insert "{\"cells\": [\n"
+              "{\"cell_type\": \"markdown\", \"id\": \"c0\", \"metadata\": {}, \"source\": [\"# Cache experiments\\n\", \"How the hit rate moves with the capacity.\"]},\n"
+              "{\"cell_type\": \"code\", \"id\": \"c1\", \"metadata\": {}, \"execution_count\": 1, \"outputs\": [{\"output_type\": \"stream\", \"name\": \"stdout\", \"text\": [\"done: 10000 samples\"]}], \"source\": [\"import numpy as np\\n\", \"rng = np.random.default_rng(7)\"]},\n"
+              "{\"cell_type\": \"code\", \"id\": \"c2\", \"metadata\": {}, \"execution_count\": null, \"outputs\": [], \"source\": [\"for cap in (16, 64, 256):\\n\", \"    print(cap)\"]},\n"
+              "{\"cell_type\": \"code\", \"id\": \"c3\", \"metadata\": {}, \"execution_count\": 3, \"outputs\": [{\"output_type\": \"error\", \"ename\": \"NameError\", \"evalue\": \"name 'missing' is not defined\", \"traceback\": []}], \"source\": [\"plot(missing)\"]}\n"
+              "], \"metadata\": {\"kernelspec\": {\"display_name\": \"Python 3\", \"language\": \"python\", \"name\": \"python3\"}}, \"nbformat\": 4, \"nbformat_minor\": 5}\n"))
+    file))
+
+(defun drgnx-look-scene--notebook-views (theme)
+  "The notebook opened through the hub (a real file), its outline view beside it, in THEME."
+  (drgnx-look-scene--theme theme)
+  (drgnx-look-scene--try "notebook-views"
+    (drgnx-wb-focus-editor)
+    (drgnx-look-scene--hub)
+    (load (expand-file-name "modules/lang/drgnx-notebook" (bound-and-true-p drgnx-dir)) nil t)
+    (let ((buffer (find-file-noselect (drgnx-look-scene--notebook-file))))
+      (drgnx-look-scene--show buffer)
+      (when (drgnx-look-scene--until 30 "the notebook opens" (lambda () (buffer-local-value 'drgnx-notebook--id buffer)))
+        (with-current-buffer buffer (drgnx-notebook-outline))
+        (let ((name (format "*Notebook outline: %s*" (buffer-name buffer))))
+          (drgnx-look-scene--until 30 "the outline's rows"
+                                   (lambda () (and (get-buffer name)
+                                                   (with-current-buffer name
+                                                     (when (drgnx-view-p drgnx-view) (drgnx-view-draw-now drgnx-view))
+                                                     (> (buffer-size) 0)))))))))
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-notebook-views () "The notebook and its outline view." (drgnx-look-scene--notebook-views 'drgnx-dark))
+(defun drgnx-look-scene-notebook-dark () "The notebook, dark." (drgnx-look-scene--notebook 'drgnx-dark))
+(defun drgnx-look-scene-notebook-light () "The notebook, light." (drgnx-look-scene--notebook 'drgnx-light))
+
 (defun drgnx-look-scene-facts (file &optional scene)
   "Write what SCENE realised to FILE: what the line cannot show yet (`drgnx-look-scene-limits'), themes, fonts of the
 chrome faces, frame metrics, windows, modules."
@@ -1458,6 +1569,16 @@ chrome faces, frame metrics, windows, modules."
                                       :line-spacing (list line-spacing (frame-parameter nil 'line-spacing) (default-line-height))
                                       :view (bound-and-true-p drgnx-work-space--view)
                                       :message (bound-and-true-p drgnx-work-space--message))))
+                  ;; the notebook, where one is open: what its chrome is made of
+                  :notebook (when-let* ((b (seq-find (lambda (b) (eq (buffer-local-value 'major-mode b) 'drgnx-notebook-mode))
+                                                     (buffer-list))))
+                              (with-current-buffer b
+                                (list :overlays (length (overlays-in (point-min) (point-max)))
+                                      :heads (length (seq-filter (lambda (o) (overlay-get o 'before-string)) (overlays-in (point-min) (point-max))))
+                                      :tails (length (seq-filter (lambda (o) (overlay-get o 'after-string)) (overlays-in (point-min) (point-max))))
+                                      :cells (length drgnx-notebook--cells) :text-length (- (point-max) (point-min))
+                                      :parsers (and (fboundp 'treesit-parser-list) (mapcar #'treesit-parser-language (treesit-parser-list)))
+                                      :font-lock font-lock-mode :undo (length buffer-undo-list))))
                   ;; the Flow, where one is open: its first lines, with the text properties that hide or replace text
                   :work-flow (when-let* ((b (seq-find (lambda (b) (eq (buffer-local-value 'major-mode b)
                                                                       'drgnx-work-flow-mode))
