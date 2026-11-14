@@ -1274,8 +1274,9 @@ Returns (EXIT . OUTPUT), the output both streams' or, with STDOUT-ONLY, stdout's
     (should (string-search "this row runs on the full tier" yml))
     ;; what the rows read on the host that the VM lacks (CI run 43562883339): the mock LLM's script fixtures (two rows
     ;; panicked "ratatoskr-mock: script ...: No such file"), `git` (the project-chat row runs it), and room in /tmp
-    ;; (a row copies the hub binary into its fixture there: "Disk quota exceeded" on the VM's half-of-RAM tmpfs)
-    (drgnx-ci-test--has yml "\"$PWD/test/conformance/fixtures\"" "dnf -y install git" "remount,size=")
+    ;; (a row copies the 800 MB hub binary into its fixture there: "Disk quota exceeded" on the VM's /tmp, a tmpfs with user quotas
+    ;; that stops near 1.6 GB of its 4 GB of RAM whatever its size= says, so /tmp is the disk's /var/tmp)
+    (drgnx-ci-test--has yml "\"$PWD/test/conformance/fixtures\"" "dnf -y install git" "mount --bind /var/tmp /tmp")
     (should-not (string-search "secrets." yml))))
 
 ;; The Mac runner's end-to-end rows (tests/mac_runner.rs) belong to the macOS lane: they need DRGNX_TEST_MAC_RUNNER, an

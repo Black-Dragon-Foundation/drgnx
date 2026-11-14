@@ -30,6 +30,7 @@
 (require 'subr-x)
 (require 'drgnx-modules)
 (require 'drgnx-view)
+(require 'drgnx-wb)                       ; windows the panel moves as its own
 (require 'drgnx-hub-client)
 (require 'drgnx-panes)                   ; the right island the panel opens in
 (require 'drgnx-view-nav)                ; the moves between steps of a kind, through the replica
@@ -251,10 +252,30 @@ folds under it."
     (:rows-end "\n")
     (_ "\n")))
 
+(defvar-local drgnx-agent-panel--top-windows nil
+  "The windows that showed the panel from its first row when the hub's top rows were last patched in.")
+
 (defun drgnx-agent-panel--patched (view keys)
   "PATCHED of the panel's view: the hub rows among KEYS get the inserter's last step (the stale shade, the classes)."
   (when drgnx-view-patch
-    (when-let* ((rows (seq-filter #'stringp keys))) (drgnx-view-patch--patched view rows))))
+    (when-let* ((rows (seq-filter #'stringp keys)))
+      (drgnx-agent-panel--restore-top-windows rows)
+      (drgnx-view-patch--patched view rows))))
+
+(defun drgnx-agent-panel--keep-top-windows ()
+  "Note the windows of this panel that start at its first row: the hub's top rows (the header, the chips, the strip)
+come in above it, and a window keeps its start on its row, so it would start below them."
+  (setq drgnx-agent-panel--top-windows
+        (seq-filter (lambda (w) (= (window-start w) (point-min))) (get-buffer-window-list (current-buffer) nil t))))
+
+(defun drgnx-agent-panel--restore-top-windows (keys)
+  "The top rows among KEYS were drawn: the windows noted by `drgnx-agent-panel--keep-top-windows' start at the top."
+  (when (and drgnx-agent-panel--top-windows (seq-some (lambda (k) (string-prefix-p "p:" k)) keys))
+    (drgnx-wb-with-owned-windows drgnx-agent-panel--top-windows
+      (dolist (w drgnx-agent-panel--top-windows)
+        (when (and (window-live-p w) (eq (window-buffer w) (current-buffer)))
+          (set-window-start w (point-min) t))))
+    (setq drgnx-agent-panel--top-windows nil)))
 
 (defun drgnx-agent-panel--sync (view)
   "SYNC of the panel's view: with the hub's rows, the models their patches named go to Sjá before they are drawn."
@@ -298,6 +319,9 @@ inserts its own at the top, an insert after no row goes there too."
        ((and (plist-member op :insert) (null (plist-get (plist-get op :insert) :after)))
         (dolist (o (drgnx-agent-panel--insert-ops (plist-get (plist-get op :insert) :rows))) (push o ops)))
        (t (push op ops))))
+    (with-current-buffer (drgnx-view--buffer view)
+      (when (seq-some (lambda (o) (or (plist-member o :reset) (plist-member o :insert))) ops)
+        (drgnx-agent-panel--keep-top-windows)))
     (drgnx-view-patch--apply-ops state view (append (list :ops (nreverse ops)) patch))))
 
 (defun drgnx-agent-panel--look-params ()
