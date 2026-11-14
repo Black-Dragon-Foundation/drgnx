@@ -289,12 +289,20 @@ fn stub(m: Message, weight: usize, limit: usize) -> Option<Message> {
     let keep = |k: &str| m.content.get(k).cloned();
     let content = match m.header.msg_type.as_str() {
         "stream" => {
-            serde_json::json!({"name": keep("name").unwrap_or_else(|| "stdout".into()), "text": note})
+            // what the note carries of the original is short and plain: a name of 64 characters at most
+            let name: String = keep("name")
+                .and_then(|n| n.as_str().map(|n| n.chars().take(64).collect()))
+                .unwrap_or_else(|| "stdout".into());
+            serde_json::json!({"name": name, "text": note})
         }
         "display_data" | "update_display_data" | "execute_result" => serde_json::json!({
             "data": {"text/plain": note}, "metadata": {},
-            "transient": keep("transient").unwrap_or(serde_json::json!({})),
-            "execution_count": keep("execution_count").unwrap_or(serde_json::Value::Null),
+            // the display id only if it is short, the execution count only if it is an integer
+            "transient": match keep("transient").and_then(|t| t.get("display_id").cloned()) {
+                Some(serde_json::Value::String(id)) if id.chars().count() <= 128 => serde_json::json!({"display_id": id}),
+                _ => serde_json::json!({}),
+            },
+            "execution_count": keep("execution_count").filter(|n| n.is_i64()).unwrap_or(serde_json::Value::Null),
         }),
         "error" => serde_json::json!({"ename": "OutputTooLarge", "evalue": note, "traceback": []}),
         _ => return None,
