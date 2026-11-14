@@ -155,18 +155,18 @@ a line in any order of the event, and one whose changed marks differ, is still r
   "Blame on a line that gets values goes, and is not shown there again while they are; other lines keep it."
   (debug-inline-test--with
     (with-current-buffer buf
-      (let ((info (list :author "Ada" :summary "Fix the parser")))
-        (cl-letf (((symbol-function 'drgnx-blame--room) (lambda () 60)))
-          (goto-char (point-min)) (forward-line 3)
-          (drgnx-blame--show info)
-          (should (overlay-buffer drgnx-blame--overlay))
-          (debug-inline-test--send 1 '(4 "b = 2" nil))
-          (should-not (and drgnx-blame--overlay (overlay-buffer drgnx-blame--overlay)))
-          (drgnx-blame--show info)                    ; asked again on that line
-          (should-not (and drgnx-blame--overlay (overlay-buffer drgnx-blame--overlay)))
-          (forward-line 1)
-          (drgnx-blame--show info)
-          (should (overlay-buffer drgnx-blame--overlay))
-          (drgnx-blame--hide))))))
+      ;; the hub's answer for a line: its text, already fitted (`git/blame/line')
+      (let ((info (list :text "Ada · Fix the parser" :sha (make-string 40 ?a))))
+        (goto-char (point-min)) (forward-line 3)
+        (drgnx-blame--show info)
+        (should (overlay-buffer drgnx-blame--overlay))
+        (debug-inline-test--send 1 '(4 "b = 2" nil))
+        (should-not (and drgnx-blame--overlay (overlay-buffer drgnx-blame--overlay)))
+        (drgnx-blame--show info)                    ; answered again for that line
+        (should-not (and drgnx-blame--overlay (overlay-buffer drgnx-blame--overlay)))
+        (forward-line 1)
+        (drgnx-blame--show info)
+        (should (overlay-buffer drgnx-blame--overlay))
+        (drgnx-blame--hide)))))
 
 ;;; debug-inline-test.el ends here
