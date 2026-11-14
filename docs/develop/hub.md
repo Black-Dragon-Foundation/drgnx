@@ -1550,6 +1550,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `notebook/start` | user | `{id: string, kernel?: string}` | `{kernel: string}` | no |
 | `notebook/sync` | user | `{cells: [{id: string, source: string, type: string}], id: string}` | `boolean` | no |
 | `notebook/tail` | user | `{cell: string, id: string}` | `NotebookTail` | no |
+| `notebook/view` | user | `{id: string, kind: "outline"}` | `{view: string}` | no |
 | `orch/evidence` | user | `{task: TaskRef}` | `{evidence: [any]}` | no |
 | `pace/get` | user | `{provider?: string}` | `{meters?: [Pace]}` | no |
 | `pair/answer` | user | `{lines?: [natnum], not_saved?: Text, reason?: Text, result: "applied" \| "refused" \| "dropped", saved?: boolean, version?: natnum, write: natnum}` | `boolean` | no |

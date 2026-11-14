@@ -533,6 +533,31 @@ impl Notebooks {
         }
     }
 
+    /// Whether notebook ID is CONN's.
+    pub fn owns(&self, conn: u64, id: &str) -> bool {
+        self.get(conn, id).is_ok()
+    }
+
+    /// The first LIMIT cells of notebook ID for its outline, and how many cells there are.
+    pub async fn outline(
+        &self,
+        conn: u64,
+        id: &str,
+        limit: usize,
+    ) -> Result<(usize, Vec<super::views::OutlineCell>), String> {
+        let open = self.get(conn, id)?;
+        let book = open.book.lock().await;
+        let (total, mut cells) = book.outline(limit);
+        for c in &mut cells {
+            match open.state_of(&c.id) {
+                "queued" => c.state = "queued",
+                "running" => c.state = "running",
+                _ => {}
+            }
+        }
+        Ok((total, cells))
+    }
+
     /// How many runs the notebook's kernel task still holds (none when nothing is queued or running).
     pub fn held_runs(&self, conn: u64, id: &str) -> Option<usize> {
         Some(self.get(conn, id).ok()?.held.load(Ordering::SeqCst))

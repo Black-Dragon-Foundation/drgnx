@@ -197,6 +197,7 @@
   "notebook/start": ["user"],
   "notebook/sync": ["user"],
   "notebook/tail": ["user"],
+  "notebook/view": ["user"],
   "orch/evidence": ["user"],
   "pace/get": ["user"],
   "pair/answer": ["user"],

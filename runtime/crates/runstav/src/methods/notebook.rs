@@ -203,6 +203,27 @@ pub struct NotebookEnded {
     pub stderr: String,
 }
 
+/// What one of a notebook's Sjá views shows (docs/develop/notebooks.md, "The views"): `outline` is one row per cell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum NotebookViewKind {
+    Outline,
+}
+
+/// `notebook/view`: the hub view of KIND for notebook ID. The answer names the view; the editor then sends `view/env` for it like
+/// any hub-fed view and gets its rows as `view-patch` events.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct NotebookViewParams {
+    pub id: String,
+    pub kind: NotebookViewKind,
+}
+
+/// `notebook/view`'s answer: the view's id (at most 64 bytes, what `view/env` and `view/close` name).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct NotebookViewName {
+    pub view: String,
+}
+
 /// `notebook/output`'s answer: the cell's whole output as nbformat objects (within the hub's limits).
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct NotebookOutput {
@@ -271,6 +292,10 @@ fn check_input(p: &NotebookInput) -> Result<(), Error> {
 fn check_cell(p: &NotebookCellRef) -> Result<(), Error> {
     name("id", &p.id)?;
     name("cell", &p.cell)
+}
+
+fn check_view(p: &NotebookViewParams) -> Result<(), Error> {
+    name("id", &p.id)
 }
 
 fn check_clear(p: &NotebookClear) -> Result<(), Error> {
@@ -352,6 +377,12 @@ pub(crate) fn methods() -> Vec<Method> {
             check: check_cell,
         ),
         method!(
+            "notebook/view", NotebookView(NotebookViewParams) -> NotebookViewName,
+            classes: [User], writes: false,
+            doc: "the hub view of a notebook (the cell outline: one row per cell with its index, type, first line, prompt and state) for the editor to show in Sjá; the answer names the view, rows follow its view/env",
+            check: check_view,
+        ),
+        method!(
             "notebook/clear", NotebookClear(NotebookClear) -> bool,
             classes: [User], writes: false,
             doc: "clear one cell's output and execution count, or every code cell's; a queued or running cell is left as it is",
@@ -386,6 +417,7 @@ mod tests {
             "input",
             "tail",
             "output",
+            "view",
             "clear",
             "close",
         ] {
@@ -419,6 +451,7 @@ mod tests {
             json!({"id": "nb1", "request": "r", "value": "x"})
         ));
         assert!(ok("notebook/clear", json!({"id": "nb1"})));
+        assert!(ok("notebook/view", json!({"id": "nb1", "kind": "outline"})));
         assert!(ok("notebook/tail", json!({"id": "nb1", "cell": "a"})));
     }
 
@@ -465,6 +498,11 @@ mod tests {
             Some("value")
         );
         assert!(err("notebook/tail", json!({"id": "nb1"})).path.is_some());
+        assert!(
+            err("notebook/view", json!({"id": "nb1", "kind": "chart"}))
+                .path
+                .is_some()
+        );
         assert!(err("notebook/shutdown", json!({})).path.is_some());
     }
 }

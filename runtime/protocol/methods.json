@@ -28086,6 +28086,55 @@
       "classes": [
         "user"
       ],
+      "doc": "the hub view of a notebook (the cell outline: one row per cell with its index, type, first line, prompt and state) for the editor to show in Sjá; the answer names the view, rows follow its view/env",
+      "name": "notebook/view",
+      "params": {
+        "$defs": {
+          "NotebookViewKind": {
+            "description": "What one of a notebook's Sjá views shows (docs/develop/notebooks.md, \"The views\"): `outline` is one row per cell.",
+            "enum": [
+              "outline"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`notebook/view`: the hub view of KIND for notebook ID. The answer names the view; the editor then sends `view/env` for it like\nany hub-fed view and gets its rows as `view-patch` events.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/$defs/NotebookViewKind"
+          }
+        },
+        "required": [
+          "id",
+          "kind"
+        ],
+        "title": "NotebookViewParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`notebook/view`'s answer: the view's id (at most 64 bytes, what `view/env` and `view/close` name).",
+        "properties": {
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "NotebookViewName",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "a task's evidence (its jobs' rows on their facts, the gates' findings), oldest first",
       "name": "orch/evidence",
       "params": {

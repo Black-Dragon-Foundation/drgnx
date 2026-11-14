@@ -70,3 +70,21 @@ A cell is done when its `execute_reply` and its `idle` status have both come (th
 cells queued behind it (shown "aborted"), an interrupt or a restart cancels them ("cancelled"). Everything a kernel sends is held under
 the limits in the output model: 64 outputs and 1 MiB of text per cell, 16 MiB of images, a message of more than 16 MiB is a note, a flood
 (64 MiB unread, or 1000 messages that do not verify in 10 s) kills the kernel.
+
+## The views
+
+A notebook has Sjá views the hub builds (`notebook/views.rs`): the editor only inserts the rows and binds keys, as for any hub-fed
+view. `notebook/view {id, kind}` names the view of that kind for a notebook the connection owns (`{view}`); the editor then sends
+`view/env` for it, gets `view-patch` events, and ends it with `view/close`. A view is rebuilt when the notebook changes (a tail, the
+kernel's state, `notebook/sync`, `execute`, `save`, `clear`), at most once in 100 ms, and only while the editor shows it in some
+display class; a closed notebook, or a gone connection, forgets its views. Nobody but the connection that opened a notebook can ask
+for its views.
+
+- **The cell outline** (`kind: "outline"`, view `notebook-outline:ID`): one row per cell, key `cell:CELLID`, text
+  `INDEX  type  [n]  first line  state` (`[*]` while queued or running, `[ ]` before a run, nothing for a markdown or raw cell; the
+  state word `queued`, `running`, `error`, `aborted` or `cancelled` ends the row). The whole row carries the text property
+  `drgnx-notebook-cell` (the cell's id): selecting a row jumps to that cell. The first line is the first one with anything on it,
+  without control or direction-changing characters, cut at 80 characters. It shows the cells as the hub has them, which are the
+  editor's as of its last `notebook/sync`, `execute` or `save`. At most 2000 cells are listed; a last row `more` says how many are
+  not. Faces: `shadow`, `drgnx-notebook-prompt`, `drgnx-notebook-stale` (the output is the file's own), `drgnx-status-warn`,
+  `drgnx-status-fail`.

@@ -603,6 +603,7 @@ impl Views {
             || self.extensions_build(f, key)
             || self.debugs.env_build(f, key)
             || f.core.presence.here_build(f, key.0, &key.1)
+            || f.notebooks.views.env_build(key.0, &key.1)
         {
             return;
         }
