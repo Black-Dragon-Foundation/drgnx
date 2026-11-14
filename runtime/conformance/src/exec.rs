@@ -143,7 +143,12 @@ fn proc_waits(pid: u32) -> String {
     if let Ok(load) = std::fs::read_to_string("/proc/loadavg") {
         out.push_str(&format!("load average: {}\n", load.trim()));
     }
-    let read = |p: String| std::fs::read_to_string(p).unwrap_or_default().trim().to_owned();
+    let read = |p: String| {
+        std::fs::read_to_string(p)
+            .unwrap_or_default()
+            .trim()
+            .to_owned()
+    };
     let Ok(tasks) = std::fs::read_dir(format!("/proc/{pid}/task")) else {
         return out;
     };
