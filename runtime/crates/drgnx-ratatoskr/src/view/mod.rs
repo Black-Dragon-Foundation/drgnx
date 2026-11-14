@@ -630,6 +630,7 @@ impl Views {
             || self.outline_build(f, key)
             || self.debugs.env_build(f, key)
             || f.core.presence.here_build(f, key.0, &key.1)
+            || f.notebooks.views.env_build(key.0, &key.1)
         {
             return;
         }
@@ -965,6 +966,7 @@ pub async fn window(f: &Front, c: &Caller, p: ViewWindow) -> Result<bool, Error>
     lock(&views.store).set_window(c.conn_id, &p.view, &p.list, from);
     Ok(views.grep_window(f, c.conn_id, &p.view)
         || views.explorer_window(f, c.conn_id, &p.view)
+        || f.notebooks.views.window(c.conn_id, &p.view)
         || f.core.trails.window(f, c.conn_id, &p.view).await)
 }
 
@@ -1034,6 +1036,7 @@ pub fn close(f: &Front, c: &Caller, p: ViewClose) -> Result<bool, Error> {
     views.buffers.stop(c.conn_id, &p.view);
     views.outlines.stop(c.conn_id, &p.view);
     views.debugs.stop(c.conn_id, &p.view);
+    f.notebooks.views.view_closed(c.conn_id, &p.view);
     views.panels.gone(c.conn_id, Some(&p.view));
     lock(&views.sja).retain(|(c2, v, _)| !(*c2 == c.conn_id && *v == p.view));
     let closed = lock(&views.store).close(c.conn_id, &p.view);

@@ -281,7 +281,9 @@ open one, two spaces a file).  The hub's rows draw the chevron as an image, so i
             (drgnx-modal-session-act sess "SPC SPC" '(:type "jjk"))
             (should (equal (drgnx-modal-session-eval sess '(minibuffer-contents-no-properties)) "jjk"))
             (drgnx-modal-session-act sess "C-g")
-            ;; a terminal
+            ;; a terminal (the hub starts drgnx-term from its own folder: without it the terminal never opens)
+            (unless (file-executable-p (expand-file-name "drgnx-term" (file-name-directory (drgnx-test-ratatoskr-bin))))
+              (ert-fail "no drgnx-term beside the test hub: build it (cargo build -p drgnx-term --bins)"))
             (drgnx-modal-session-act sess "SPC t n")
             (should (equal (drgnx-modal-session-eval sess '(list major-mode evil-state)) '(drgnx-term-mode insert)))
             (drgnx-modal-session-until sess '(eq drgnx-term--state 'open) 30)

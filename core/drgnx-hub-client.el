@@ -441,11 +441,12 @@ becomes a Lisp string: up to megabytes a window move."
 
 (defun drgnx-hub--client-batch (conn batch)
   "BATCH, a list of (MESSAGE RAW ERROR) from CONN's reader, in the order the hub wrote them, through
-`drgnx-hub--client-line'.  One whose line is not JSON (ERROR), or is JSON `null' or `false' (no MESSAGE), is skipped.  Nothing is read once CONN, live when the batch
-began, is not any more (nothing after `closed').  Each message runs in a guard of its own: one that fails never drops
-the rest of the batch.  A last line with no newline before the end of the stream is a message here, where the filter
-drops it.  A `view-model' line the reader pushed to Sjá (`:raw-to-sja') comes as (ANSWER sja ERROR): Sjá's answer
-goes to its view's model, and an ERROR (Sjá refused the line) is reported as a failed push is."
+`drgnx-hub--client-line'.  One whose line is not JSON (ERROR), or is JSON `null' or `false' (no MESSAGE), is
+skipped.  Nothing is read once CONN, live when the batch began, is not any more (nothing after `closed').  Each
+message runs in a guard of its own: one that fails never drops the rest of the batch.  A last line with no newline
+before the end of the stream is a message here, where the filter drops it.  A `view-model' line the reader pushed to
+Sjá (`:raw-to-sja') comes as (ANSWER sja ERROR): Sjá's answer goes to its view's model, and an ERROR (Sjá refused the
+line) is reported as a failed push is."
   (let ((live (process-live-p conn)) (one (drgnx-guard-wrap #'drgnx-hub--client-line "hub connection"))
         (pushed (drgnx-guard-wrap #'drgnx-hub--model-pushed "hub connection")))
     (dolist (entry batch)

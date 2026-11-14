@@ -9,6 +9,8 @@ use crate::notebook::session::frames;
 use crate::notebook::spec::private_folder;
 use crate::notebook::wire::{self, Key};
 
+mod views;
+
 const NB: &str = r##"{
  "cells": [
   {"cell_type": "code", "id": "a", "metadata": {}, "execution_count": null, "outputs": [{"output_type": "stream", "name": "stdout", "text": ["old\n"]}], "source": ["ok"]},
@@ -197,6 +199,15 @@ fn kernel_side(folder: &Path, id: &str, nth: u32, seen: Arc<Seen>) -> tokio::tas
             iopub.send(status("busy")).await.unwrap();
             if code == "SLOW" {
                 continue;
+            }
+            if code == "LOGIT" {
+                // a message of the kernel's own: no parent header
+                let own = Message::request(
+                    "kernel",
+                    "stream",
+                    json!({"name": "stderr", "text": "kernel log line\nsecond"}),
+                );
+                iopub.send(zmq(&key, &own)).await.unwrap();
             }
             let mut text = code.clone();
             if matches!(code.as_str(), "ASK" | "ASKLONG" | "ASKTWICE") {
@@ -865,7 +876,7 @@ async fn a_cell_that_never_started_keeps_its_outputs_in_the_notebook_and_the_fil
 
 #[test]
 fn at_most_a_hundred_tails_a_second_go_for_a_notebook() {
-    let t0 = tokio::time::Instant::now();
+    let t0 = crate::clock::now();
     let mut b = Budget::new(t0);
     for i in 0..TAILS_PER_SEC {
         assert!(b.allowed(t0 + Duration::from_millis(i as u64)), "{i}");
