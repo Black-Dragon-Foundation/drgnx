@@ -19,7 +19,7 @@ use crate::files::Lang;
 
 pub use definers::{Definer, definer};
 pub use elisp::top_level_forms;
-pub use refs::Ref;
+pub use refs::{LINES as REF_LINES, Ref};
 pub use registry::{MissingHook, hub_grammars, on_missing, stamp as lang_stamp};
 
 /// The chunk budget, in non-whitespace characters (the eval tunes it).
@@ -168,6 +168,7 @@ pub fn chunk_file_refs(
             text,
             budget,
         ))),
+        Lang::Notebook => crate::notebook::chunk(path, generated, text, budget),
         Lang::Text => None,
     }
     .unwrap_or_else(|| none(text::chunk(path, generated, text, budget)))

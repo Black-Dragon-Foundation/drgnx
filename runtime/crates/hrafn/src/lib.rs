@@ -16,6 +16,7 @@ pub mod index;
 pub mod inline_scan;
 pub mod map;
 mod memo;
+pub mod notebook;
 pub mod overlay;
 pub mod query;
 pub mod rank;

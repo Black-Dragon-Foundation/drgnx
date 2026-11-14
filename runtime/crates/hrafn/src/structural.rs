@@ -48,7 +48,7 @@ impl Grammar {
             Lang::Go => ("go", 'µ'),
             Lang::Java => ("java", '$'),
             Lang::Csharp => ("c-sharp", 'µ'),
-            Lang::Org | Lang::Markdown | Lang::Text => return None,
+            Lang::Org | Lang::Markdown | Lang::Notebook | Lang::Text => return None,
         };
         let ts = skald::registry::language(name).ok()?;
         Some(Grammar {
@@ -169,6 +169,7 @@ pub fn lang_name(lang: Lang) -> &'static str {
         Lang::Csharp => "C#",
         Lang::Org => "Org",
         Lang::Markdown => "Markdown",
+        Lang::Notebook => "Jupyter notebook",
         Lang::Text => "text",
     }
 }

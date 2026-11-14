@@ -64,6 +64,7 @@ How drgnx is built, tested and measured.
 
 - [Architecture overview](develop/architecture.md)
 - [Language packs](develop/packs.md): the `pack.eld` format, reserved names, and the rules a fetched pack must meet (`ratatoskr packs check`).
+- [Jupyter notebooks](develop/notebooks.md): `.ipynb` read and written byte-faithfully, the notebook buffer's text, and the per-cell chunker.
 - [Core](develop/core.md): paths, staged hooks, no-prompt guard, command registry, surfaces, palette, modules (every module turns off cleanly: the rule and its check).
 - [Harness](develop/harness.md): headless GUI test sessions, test tiers (each unit test file in an Emacs of its
   own), CLI and MCP tools for agents.

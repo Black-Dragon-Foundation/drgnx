@@ -40,6 +40,7 @@ pub enum Lang {
     Csharp,
     Org,
     Markdown,
+    Notebook,
     Text,
 }
 
@@ -70,13 +71,14 @@ impl Lang {
             Lang::Csharp => "csharp",
             Lang::Org => "org",
             Lang::Markdown => "markdown",
+            Lang::Notebook => "notebook",
             Lang::Text => "text",
         }
     }
 
     /// The language a stored name (`as_str`) names; anything else is text.
     pub fn parse(name: &str) -> Lang {
-        const ALL: [Lang; 15] = [
+        const ALL: [Lang; 16] = [
             Lang::Elisp,
             Lang::Rust,
             Lang::C,
@@ -91,6 +93,7 @@ impl Lang {
             Lang::Csharp,
             Lang::Org,
             Lang::Markdown,
+            Lang::Notebook,
             Lang::Text,
         ];
         ALL.into_iter()
@@ -617,6 +620,7 @@ fn lang_of(path: &str, head: &[u8]) -> Lang {
         Some("cs") => Lang::Csharp,
         Some("org") => Lang::Org,
         Some("md" | "markdown") => Lang::Markdown,
+        Some("ipynb") => Lang::Notebook,
         Some(_) => Lang::Text,
         None => shebang_lang(head),
     }
@@ -687,7 +691,7 @@ fn looks_cpp(text: &[u8]) -> bool {
 
 /// The version of the rules that give a file its language (`lang_of`): part of the index's language stamp, so a change to
 /// those rules (an extension, the `.h` test) re-parses the files that were classified under the old ones. Bump it with them.
-pub const LANG_RULES: u32 = 3;
+pub const LANG_RULES: u32 = 4;
 
 /// How much of a `.h` the C++ test reads.
 const CPP_PROBE: usize = 64 * 1024;

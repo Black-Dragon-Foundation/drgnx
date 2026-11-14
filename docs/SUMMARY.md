@@ -58,6 +58,7 @@
 
 - [Architecture overview](develop/architecture.md)
 - [Language packs](develop/packs.md)
+- [Jupyter notebooks](develop/notebooks.md)
 - [The drgnx core](develop/core.md)
 - [The drgnx harness](develop/harness.md)
 - [Performance](develop/perf.md)
