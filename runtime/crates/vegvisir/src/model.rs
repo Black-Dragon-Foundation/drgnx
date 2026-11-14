@@ -654,6 +654,15 @@ impl Model {
                     .filter(|es| es.iter().any(|&(a, m, _)| a == y && !m.edits()))
                     .count();
                 fields.reads = Some(u32::try_from(reads).unwrap_or(u32::MAX));
+                // its branch's changes (the card's `edits N (+P −M)`)
+                if let Some(set) = s
+                    .branch
+                    .map(|b| self.branch_set(b))
+                    .filter(|s| !s.is_empty())
+                {
+                    let (p, m) = set.iter().fold((0, 0), |(p, m), &(_, a, b)| (p + a, m + b));
+                    fields.edits = Some((u32::try_from(set.len()).unwrap_or(u32::MAX), p, m));
+                }
                 if s.fact.model.is_empty() {
                     s.fact.name.clone()
                 } else {

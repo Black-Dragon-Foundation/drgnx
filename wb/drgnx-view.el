@@ -2044,8 +2044,14 @@ it changes is dressed again."
     (when-let* ((new (and stops (funcall drgnx-view-patch-guard-function state text stops))))
       (setq text (drgnx-view-patch--dress state key row new)))
     (when-let* ((h (plist-get row :height)))
+      ;; a row that names its unit (px) is that tall (the map's card lines and bands: the layout's own pitch); one that
+      ;; does not is as many default lines
       (put-text-property (1- (length text)) (length text) 'line-height
-                         (* (plist-get h :lines) (or drgnx-view--line-height (setq drgnx-view--line-height (default-line-height))))
+                         (* (plist-get h :lines)
+                            (let ((unit (plist-get h :unit)))
+                              (if (and (integerp unit) (> unit 0))
+                                  unit
+                                (or drgnx-view--line-height (setq drgnx-view--line-height (default-line-height))))))
                          text))
     text))
 

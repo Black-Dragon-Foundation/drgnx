@@ -190,11 +190,70 @@ pub fn title(s: &Step) -> String {
     }
 }
 
-/// How long a step took: `1.5s` or `2m05s`; nothing while it is open.
+/// A step's row text as pieces and their faces (work-space-dark.html `.trow`): the verb plain, a path in the link
+/// colour, a web page's title muted, a thought's text muted and italic, an edit's change in the added and removed
+/// colours.
+fn segments(s: &Step) -> Vec<(String, Option<&'static str>)> {
+    let d = &s.detail;
+    let plain = |t: String| (t, None);
+    let path = |t: String| (t, Some("drgnx-accent"));
+    match kind(s) {
+        "read" => {
+            let mut out = vec![plain("read ".into())];
+            out.push(path(title(s)));
+            out
+        }
+        "web" => {
+            let host = d.url.as_deref().and_then(|u| {
+                let rest = u.split_once("://")?.1;
+                rest.split(['/', '?', '#']).next().map(str::to_owned)
+            });
+            let text = match (&d.title, host) {
+                (Some(t), Some(h)) => format!("{t} — {h}"),
+                (Some(t), None) => t.clone(),
+                (None, Some(h)) => h,
+                (None, None) => title(s),
+            };
+            vec![plain("web ".into()), (text, Some("drgnx-text-muted"))]
+        }
+        "thought" => match &d.title {
+            Some(t) => vec![(format!("thought: {t}"), Some("drgnx-work-thought"))],
+            None => vec![("thinking".into(), Some("drgnx-work-thought"))],
+        },
+        "edit" => {
+            let mut out = vec![plain("edit ".into()), path(title(s))];
+            for w in d.title.iter().flat_map(|t| t.split(' ')) {
+                out.push(plain(" ".into()));
+                let face = if w.starts_with('+') {
+                    "drgnx-work-plus"
+                } else {
+                    "drgnx-work-minus"
+                };
+                out.push((w.to_owned(), Some(face)));
+            }
+            out
+        }
+        "job" => match &d.path {
+            Some(p) => {
+                let mut out = vec![plain("job ".into()), path(p.clone())];
+                out.extend(d.title.iter().map(|t| plain(format!(" · {t}"))));
+                out
+            }
+            None => vec![plain(title(s))],
+        },
+        _ => vec![plain(title(s))],
+    }
+}
+
+/// How long a step took: `1.5 s` (`6 s` when whole) or `2m05s`; nothing while it is open.
 fn duration(s: &Step) -> Option<String> {
     let d = s.end? - s.start;
     Some(if d < 60.0 {
-        format!("{d:.1}s")
+        if (d - d.round()).abs() < 0.05 {
+            format!("{d:.0} s")
+        } else {
+            format!("{d:.1} s")
+        }
     } else {
         let w = d.floor() as u64;
         format!("{}m{:02}s", w / 60, w % 60)
@@ -242,7 +301,10 @@ fn build(
         };
         b.stop((30.0 * env.scale) as u32);
         put_icon(&mut b, env, k, &mut images);
-        b.push(&format!(" {}", title(s)), None);
+        b.push(" ", None);
+        for (text, face) in segments(s) {
+            b.push(&text, face);
+        }
         let from = b.pos();
         b.stop(right).push(&zone.time(s.start), None);
         if let Some(d) = duration(s) {
@@ -316,7 +378,7 @@ fn conclusion_rows(
             if i == 0 {
                 put_icon(&mut b, env, &c.kind, images);
                 b.push(&format!(" {name} "), Some("drgnx-work-title"))
-                    .push(&format!(" {} ", c.n), Some("drgnx-work-chip"))
+                    .push(&format!(" {} ", c.n), Some("drgnx-work-step-number"))
                     .push(&format!(" {}", c.text), Some("drgnx-work-title"));
                 if new {
                     // `new`, plain text at the card's right: a box of its own would break the ring
@@ -325,9 +387,11 @@ fn conclusion_rows(
                 }
             } else {
                 b.push(
-                    &format!("   based on {based}{unmatched}"),
+                    &format!("   based on {based}{unmatched} · "),
                     Some("drgnx-text-muted"),
-                );
+                )
+                .push(" l ", Some("drgnx-keycap"))
+                .push(" light them · ↵ sources", Some("drgnx-text-muted"));
             }
             // the card runs to the tile's right edge: a stop, in the card's face
             b.stop(env.width_px.saturating_sub((8.0 * env.scale) as u32));

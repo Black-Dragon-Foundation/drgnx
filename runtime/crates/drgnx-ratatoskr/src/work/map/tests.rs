@@ -697,8 +697,9 @@ fn detail_rows_say_the_edges() {
     for e in edges.iter().filter(|e| came(e) && e.from == agent.id) {
         let to = m.item(&e.to).expect("its target").label;
         assert!(
-            text.iter()
-                .any(|t| t.ends_with(&format!("\t{to} — came from this"))),
+            text.iter().any(|t| t.ends_with(&format!("\t{to} — came from this"))
+                // an agent's branch is the Touches' first line, its name alone
+                || *t == format!("branch\t{to}")),
             "{to} in {text:?}"
         );
     }
@@ -714,7 +715,8 @@ fn detail_rows_say_the_edges() {
         "{pl} in {text:?}"
     );
     let rows = detail::rows(&lines, 1.0, 340, &Cols);
-    assert_eq!(rows.len(), lines.len());
+    // the head's subtitle wraps into rows of its own
+    assert!(rows.len() >= lines.len());
     assert_eq!(rows[0].key, "head/0");
     assert_eq!(detail::map_of(&detail::view_of("w-1")), Some("w-1"));
 }
@@ -1274,26 +1276,34 @@ fn the_card_line_is_measured_in_the_text_role() {
     assert_eq!(render_env(&env, &palette).line, (16, 75));
 }
 
-/// [D] The Detail head's subtitle never wraps at the island's width: parts go by priority ("(API prices)", then the cost,
-/// then the run's time) and what is left is cut with an ellipsis, so there is no continuation glyph at the window's edge.
+/// [D] The Detail head's subtitle wraps by word at the island's width (the mockup's is two lines), each part whole: no
+/// cut word and no continuation glyph.
 #[test]
-fn the_detail_subtitle_is_fitted_to_the_tile() {
+fn the_detail_subtitle_wraps_by_word_in_the_tile() {
     let mut core = vegvisir::Core::new();
     for e in vegvisir::fixture::scene() {
         core.step(e);
     }
     let agent = ItemId("agent:a1".into());
     let lines = detail::lines(core.model(), Some(&agent), 0);
-    for width in [340u32, 260, 140] {
+    for width in [340u32, 260] {
         let rows = detail::rows(&lines, 1.0, width, &Cols);
-        let sub = &rows[1];
-        // the fixed advance of the test measure is 8 px a column; the tile has 8 px of padding each side
-        let px = sub.text.chars().count() as u32 * 8;
-        assert!(px <= width - 16, "{width}: {px} px, {:?}", sub.text);
+        // the subtitle is the rows keyed head/1, head/1.1, ...: each fits (8 px a column, 8 px of padding each side)
+        let sub: Vec<&drgnx_rows::Row> = rows
+            .iter()
+            .filter(|r| r.key == "head/1" || r.key.starts_with("head/1."))
+            .collect();
+        assert!(sub.len() >= 2, "{width}: wraps by word, {sub:?}");
+        for r in &sub {
+            let px = r.text.chars().count() as u32 * 8;
+            assert!(px <= width - 16, "{width}: {px} px, {:?}", r.text);
+            assert!(!r.text.contains('…'), "no cut word: {:?}", r.text);
+        }
+        let all: Vec<&str> = sub.iter().map(|r| r.text.as_str()).collect();
+        assert!(all.join(" ").contains("API prices"), "{all:?}");
     }
-    let wide = detail::rows(&lines, 1.0, 340, &Cols);
-    assert!(!wide[1].text.contains("API prices"), "{:?}", wide[1]);
     // everything fits in the width, so nothing is dropped
     let roomy = detail::rows(&lines, 1.0, 900, &Cols);
-    assert!(roomy[1].text.contains("API prices"), "{:?}", roomy[1]);
+    assert!(roomy[1].text.contains("API prices"), "one row: {:?}", roomy[1]);
+    assert_ne!(roomy[2].key, "head/1.1");
 }

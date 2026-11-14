@@ -674,6 +674,11 @@
         "activity": "edit",
         "conclusion": "lanes share a slot per source",
         "context": 41,
+        "edits": [
+          7,
+          1532,
+          0
+        ],
         "minutes": 40,
         "model": "Opus",
         "reads": 1,
@@ -732,6 +737,11 @@
       "fields": {
         "activity": "test",
         "conclusion": "schema 11 is free after parts 4 and 5",
+        "edits": [
+          5,
+          322,
+          17
+        ],
         "minutes": 25,
         "model": "Sonnet",
         "reads": 0,
@@ -752,6 +762,11 @@
     {
       "block": "plan:agent-system-p2",
       "fields": {
+        "edits": [
+          5,
+          822,
+          3
+        ],
         "minutes": 19,
         "model": "Sonnet",
         "reads": 0,
@@ -772,6 +787,11 @@
     {
       "block": "plan:agent-system-p2",
       "fields": {
+        "edits": [
+          5,
+          118,
+          20
+        ],
         "minutes": 5,
         "model": "Sonnet",
         "reads": 0,
@@ -792,6 +812,11 @@
     {
       "block": "plan:agent-system-p2",
       "fields": {
+        "edits": [
+          5,
+          490,
+          18
+        ],
         "minutes": 30,
         "model": "Sonnet",
         "reads": 0,
@@ -812,6 +837,11 @@
     {
       "block": "plan:agent-system-p2",
       "fields": {
+        "edits": [
+          4,
+          560,
+          4
+        ],
         "minutes": 10,
         "model": "Opus",
         "reads": 0,
@@ -832,6 +862,11 @@
     {
       "block": "plan:agent-system-p2",
       "fields": {
+        "edits": [
+          5,
+          302,
+          8
+        ],
         "minutes": 16,
         "model": "Sonnet",
         "reads": 0,
@@ -854,6 +889,11 @@
       "fields": {
         "activity": "test",
         "conclusion": "counts come from the base snapshot, never main",
+        "edits": [
+          4,
+          390,
+          10
+        ],
         "minutes": 2,
         "model": "Sonnet",
         "reads": 0,
@@ -874,6 +914,11 @@
     {
       "block": "plan:agent-system-p2",
       "fields": {
+        "edits": [
+          4,
+          574,
+          1
+        ],
         "minutes": 35,
         "model": "Opus",
         "reads": 0,
@@ -894,6 +939,11 @@
     {
       "block": "plan:agent-system-p2",
       "fields": {
+        "edits": [
+          4,
+          332,
+          9
+        ],
         "minutes": 1,
         "model": "Opus",
         "reads": 0,
@@ -915,6 +965,11 @@
       "fields": {
         "activity": "build",
         "context": 86,
+        "edits": [
+          6,
+          560,
+          27
+        ],
         "minutes": 45,
         "model": "Opus",
         "reads": 0,
@@ -953,6 +1008,11 @@
     {
       "block": "plan:glitnir-p2-p4",
       "fields": {
+        "edits": [
+          5,
+          532,
+          19
+        ],
         "minutes": 38,
         "model": "Opus",
         "reads": 1,
@@ -973,6 +1033,11 @@
     {
       "block": "plan:glitnir-p2-p4",
       "fields": {
+        "edits": [
+          5,
+          460,
+          14
+        ],
         "minutes": 20,
         "model": "Sonnet",
         "reads": 0,
@@ -993,6 +1058,11 @@
     {
       "block": "plan:glitnir-p2-p4",
       "fields": {
+        "edits": [
+          4,
+          300,
+          29
+        ],
         "minutes": 27,
         "model": "Sonnet",
         "reads": 0,
@@ -1013,6 +1083,11 @@
     {
       "block": "plan:glitnir-p2-p4",
       "fields": {
+        "edits": [
+          4,
+          276,
+          31
+        ],
         "minutes": 48,
         "model": "Sonnet",
         "reads": 0,
@@ -1033,6 +1108,11 @@
     {
       "block": "plan:glitnir-p2-p4",
       "fields": {
+        "edits": [
+          4,
+          330,
+          56
+        ],
         "minutes": 13,
         "model": "Sonnet",
         "reads": 0,
@@ -1053,6 +1133,11 @@
     {
       "block": "plan:glitnir-p2-p4",
       "fields": {
+        "edits": [
+          4,
+          150,
+          26
+        ],
         "minutes": 22,
         "model": "Sonnet",
         "reads": 0,
@@ -1075,6 +1160,11 @@
       "fields": {
         "activity": "edit",
         "conclusion": "turn_core drops the started flag on a session end",
+        "edits": [
+          6,
+          234,
+          24
+        ],
         "minutes": 50,
         "model": "Opus",
         "reads": 0,
@@ -1113,6 +1203,11 @@
     {
       "block": "plan:race-proof",
       "fields": {
+        "edits": [
+          4,
+          184,
+          21
+        ],
         "minutes": 32,
         "model": "Sonnet",
         "reads": 0,
@@ -1133,6 +1228,11 @@
     {
       "block": "plan:race-proof",
       "fields": {
+        "edits": [
+          4,
+          27,
+          22
+        ],
         "minutes": 8,
         "model": "Sonnet",
         "reads": 0,
@@ -1153,6 +1253,11 @@
     {
       "block": "plan:race-proof",
       "fields": {
+        "edits": [
+          4,
+          52,
+          8
+        ],
         "minutes": 14,
         "model": "Sonnet",
         "reads": 0,
@@ -1175,6 +1280,11 @@
       "fields": {
         "activity": "test",
         "conclusion": "install rows pass on Fedora 45",
+        "edits": [
+          4,
+          76,
+          13
+        ],
         "minutes": 3,
         "model": "Sonnet",
         "reads": 0,
@@ -1195,6 +1305,11 @@
     {
       "block": "plan:jobq",
       "fields": {
+        "edits": [
+          5,
+          590,
+          0
+        ],
         "minutes": 12,
         "model": "Opus",
         "reads": 0,
@@ -1215,6 +1330,11 @@
     {
       "block": "plan:jobq",
       "fields": {
+        "edits": [
+          5,
+          262,
+          0
+        ],
         "manager": "agent:s23",
         "minutes": 7,
         "model": "Sonnet",
@@ -1236,6 +1356,11 @@
     {
       "block": null,
       "fields": {
+        "edits": [
+          6,
+          1421,
+          40
+        ],
         "minutes": 55,
         "model": "Opus",
         "reads": 0,
@@ -1255,6 +1380,11 @@
     {
       "block": null,
       "fields": {
+        "edits": [
+          5,
+          53,
+          4
+        ],
         "minutes": 4,
         "model": "Sonnet",
         "reads": 0,

@@ -93,6 +93,77 @@ fn edge_lines(m: &Model, id: &ItemId) -> Vec<String> {
     out
 }
 
+/// The Touches lines of IT. An agent's, in the mockup's order: its branch, its machine and slot, what it edits (the
+/// branch's file that changed most, with its change), what it reads, then the rest (overlaps...); another item's
+/// are its edges, then its own counts.
+fn touches(m: &Model, it: &Item) -> Vec<String> {
+    let f = &it.fields;
+    let mut edges = edge_lines(m, &it.id);
+    if word(&it.kind) != "agent" {
+        if let Some(r) = f.reads {
+            edges.push(format!("reads\t{r} files"));
+        }
+        if let Some((n, plus, minus)) = f.edits {
+            edges.push(format!("edits\t{n} files +{plus} −{minus}"));
+        }
+        return edges;
+    }
+    let take = |edges: &mut Vec<String>, key: &str| -> Option<String> {
+        let at = edges
+            .iter()
+            .position(|l| l.split('\t').next() == Some(key))?;
+        Some(edges.remove(at))
+    };
+    let mut out = Vec::new();
+    let branch = take(&mut edges, "branch");
+    let branch_item = m
+        .edges()
+        .into_iter()
+        .filter(|e| e.from == it.id && word(&e.kind) == "came-from")
+        .filter_map(|e| m.item(&e.to))
+        .find(|b| word(&b.kind) == "branch");
+    out.extend(branch.map(|l| {
+        let name = l.split_once('\t').map_or("", |(_, v)| v);
+        format!("branch\t{}", name.split(" — ").next().unwrap_or(name))
+    }));
+    // "desktop · slot 3": the machine, and the slot its branch's tag ends in
+    let machine = take(&mut edges, "machine");
+    let slot = branch_item
+        .as_ref()
+        .and_then(|b| b.fields.tag.as_deref())
+        .and_then(|t| t.rsplit(' ').next())
+        .filter(|n| n.chars().all(|c| c.is_ascii_digit()));
+    out.extend(machine.map(|l| {
+        let name = l.split_once('\t').map_or("", |(_, v)| v);
+        match slot {
+            Some(n) => format!("machine\t{name} · slot {n}"),
+            None => l.clone(),
+        }
+    }));
+    // edits: the file its branch changed most, with its change (`edits\tNAME +P −M`, the value's parts in faces)
+    let top = branch_item.as_ref().and_then(|b| {
+        m.edges()
+            .into_iter()
+            .filter(|e| e.from == b.id && word(&e.kind) == "edits")
+            .filter_map(|e| m.item(&e.to))
+            .filter_map(|file| file.fields.change.map(|(p, d)| (file.label, p, d)))
+            .max_by_key(|(_, p, d)| p + d)
+    });
+    if let Some((path, plus, minus)) = top {
+        let name = path.rsplit('/').next().unwrap_or(&path);
+        out.push(format!("edits\t{name} +{plus} −{minus}"));
+    }
+    while take(&mut edges, "edits").is_some() {}
+    out.extend(
+        f.reads
+            .filter(|r| *r > 0)
+            .map(|r| format!("reads\t{r} files ▸")),
+    );
+    while take(&mut edges, "reads").is_some() {}
+    out.extend(edges);
+    out
+}
+
 /// What an item is, as a key: "branch", "file", "machine"…
 fn kind_key(m: &Model, id: &ItemId) -> String {
     m.item(id).map_or_else(String::new, |it| word(&it.kind))
@@ -234,32 +305,25 @@ fn text_lines(m: &Model, it: &Item) -> Vec<Line> {
     if !bits.is_empty() && word(&it.kind) != "agent" {
         out.push(("head", bits.join(" · ")));
     }
-    out.push(("why", "why ↑".into()));
+    out.push(("why", "Why ↑".into()));
     let w = why(m, it);
     if w.is_empty() {
         out.push(("why", "  no ask, spec or plan recorded".into()));
     }
     out.extend(w.into_iter().map(|(k, l)| ("why", format!("{k}\t{l}"))));
-    out.push(("touches", "touches ↓".into()));
-    let t = edge_lines(m, &it.id);
+    out.push(("touches", "Touches ↓".into()));
+    let t = touches(m, it);
     if t.is_empty() {
         out.push(("touches", "  nothing yet".into()));
     }
     out.extend(t.into_iter().map(|l| ("touches", l)));
-    if let Some(r) = f.reads {
-        out.push(("touches", format!("reads\t{r} files")));
-    }
-    if let Some((n, plus, minus)) = f.edits {
-        out.push(("touches", format!("edits\t{n} files +{plus} −{minus}")));
-    }
-    out.push(("conclusions", "conclusions".into()));
+    out.push(("conclusions", "Conclusions".into()));
     out.push((
         "conclusions",
         f.conclusion
             .as_ref()
             .map_or_else(|| "  none recorded".into(), |c| format!("  → {c}")),
     ));
-    out.push(("actions", "actions".into()));
     // the keys of the default profile, as the mockup shows them; an agent has the rest
     let acts: &[(&str, &str)] = if word(&it.kind) == "agent" {
         &[
@@ -290,24 +354,20 @@ fn text_lines(m: &Model, it: &Item) -> Vec<Line> {
 /// The UI font role the Detail text is measured in.
 const ROLE: &str = "text";
 
-/// The subtitle TEXT (`PART · PART · …`, the most important first) in ROOM px: whole when it fits, else without
-/// "(API prices)", then the parts dropped from the end, and what is left of the first cut with an ellipsis. It
-/// never wraps (a wrapped line shows a continuation glyph at the window's edge).
-fn subtitle(text: &str, room: f32, m: &dyn Measure) -> String {
-    let fits = |t: &str| fit::width(m, ROLE, t) <= room - fit::SLACK;
-    if fits(text) {
-        return text.to_owned();
-    }
-    let mut parts: Vec<String> = text.split(" · ").map(str::to_owned).collect();
-    for p in &mut parts {
-        if let Some(cut) = p.strip_suffix(" (API prices)") {
-            *p = cut.to_owned();
+/// TEXT wrapped by word into lines of at most ROOM px, none cut and no continuation glyph (the mockup's subtitle
+/// is two lines at the tile's width).
+fn wrap(text: &str, room: f32, m: &dyn Measure) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for word in text.split(' ') {
+        match lines.last_mut() {
+            Some(last) if fit::width(m, ROLE, &format!("{last} {word}")) <= room - fit::SLACK => {
+                last.push(' ');
+                last.push_str(word);
+            }
+            _ => lines.push(word.to_owned()),
         }
     }
-    while parts.len() > 1 && !fits(&parts.join(" · ")) {
-        parts.pop();
-    }
-    fit::fit(m, ROLE, &parts.join(" · "), room)
+    lines
 }
 
 /// The width of the key column, logical px.
@@ -320,10 +380,30 @@ const KEY_PX: f32 = 66.0;
 /// `drgnx-work-job`.
 pub(crate) fn rows(lines: &[Line], scale: f32, width_px: u32, m: &dyn Measure) -> Vec<Row> {
     let key_px = (KEY_PX * scale).round() as u32;
+    let room = width_px as f32 - 16.0 * scale;
     lines
         .iter()
         .enumerate()
-        .map(|(i, (section, text, job))| {
+        .flat_map(|(i, (section, text, job))| {
+            // the head's subtitle (its second line) wraps by word into rows of its own, no continuation glyph
+            if *section == "head" && i == 1 && !text.contains('\t') {
+                return wrap(text, room, m)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(k, line)| {
+                        let key = if k == 0 {
+                            format!("head/{i}")
+                        } else {
+                            format!("head/{i}.{k}")
+                        };
+                        let mut b = RowBuilder::new(key);
+                        b.push(&line, Some("drgnx-text-muted"));
+                        let end = b.pos();
+                        b.face(0, end, "drgnx-work-card");
+                        b.finish()
+                    })
+                    .collect::<Vec<_>>();
+            }
             let mut b = RowBuilder::new(format!("{section}/{i}"));
             match (*section, text.split_once('\t')) {
                 // an agent's head: its badge, its name and its state as a chip at the right edge
@@ -364,6 +444,20 @@ pub(crate) fn rows(lines: &[Line], scale: f32, width_px: u32, m: &dyn Measure) -
                             );
                     }
                 }
+                ("touches", Some(("edits", value))) => {
+                    // `NAME +P −M`: the file in the code font, its change in the added and removed colours
+                    b.push("edits", Some("drgnx-text-muted")).stop(key_px);
+                    let mut it = value.split(' ');
+                    b.push(it.next().unwrap_or(""), Some("drgnx-work-meta"));
+                    for w in it {
+                        let face = if w.starts_with('+') {
+                            "drgnx-work-plus"
+                        } else {
+                            "drgnx-work-minus"
+                        };
+                        b.push(" ", None).push(w, Some(face));
+                    }
+                }
                 (s, Some((key, value))) => {
                     b.push(key, Some("drgnx-text-muted")).stop(key_px);
                     let face = match (s, key) {
@@ -377,8 +471,7 @@ pub(crate) fn rows(lines: &[Line], scale: f32, width_px: u32, m: &dyn Measure) -
                     b.push(text, Some("drgnx-ui-heading"));
                 }
                 ("head", None) => {
-                    let room = width_px as f32 - 16.0 * scale;
-                    b.push(&subtitle(text, room, m), Some("drgnx-text-muted"));
+                    b.push(text, Some("drgnx-text-muted"));
                 }
                 (_, None) if !text.starts_with(' ') => {
                     b.push(text, Some("drgnx-ui-heading"));
@@ -392,7 +485,7 @@ pub(crate) fn rows(lines: &[Line], scale: f32, width_px: u32, m: &dyn Measure) -
             if let Some(id) = job {
                 b.prop(0, end, "drgnx-work-job", Value::String(id.clone()));
             }
-            b.finish()
+            vec![b.finish()]
         })
         .collect()
 }

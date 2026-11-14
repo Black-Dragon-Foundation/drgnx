@@ -115,7 +115,7 @@ fn golden_rows_of_the_fixture() {
         ("row:3:0:0", "Plans<232><img> deferred testing…<408>\n"),
         (
             "row:4:0:0",
-            "Agents<84>● O  Opus · hub rows<316><328>● S  Sonnet · fx-sess<560>\n\
+            "Agents<84>●  O  Opus · hub rows<316><328>●  S  Sonnet · fx-sess<560>\n\
              <84>SESSION-END-LOSES-STARTED-1<316><328>review item 3<560>\n\
              <84>testing · 32 min · $1.20 ·…<316><328>needs you · 5 min<560>\n\
              <84>→ turn_core drops the star…<316><328>→ fixed in seq<560>\n\
@@ -123,7 +123,7 @@ fn golden_rows_of_the_fixture() {
         ),
         (
             "row:6:0:0",
-            "Files<248><img> session.rs ·…<392><404><img> desk · 3/16<532>\n",
+            "Files<248><img> session.rs +…<392><404><img> desktop 3/…<532>\n",
         ),
     ];
     let bad: Vec<String> = golden
@@ -342,7 +342,7 @@ fn lanes_on_one_column_are_one_image() {
     );
     assert_eq!(
         layout_row(&drawn.rows, "row:4:0:1"),
-        "<116>● O explore<284><291><img><403><img>\n<116>running 2m<284><291><img><403><img>\n"
+        "<116>●  O  explore<284><291><img><403><img>\n<116>running 2m<284><291><img><403><img>\n"
     );
     // every image a row names is drawn
     for r in &drawn.rows {
@@ -570,6 +570,12 @@ fn card_text_names_the_ui_font_the_title_and_the_meta_line() {
     );
     assert!(
         faces_at("row:4:0:0:2", "testing")
+            .iter()
+            .any(|f| f == "drgnx-text-muted")
+    );
+    // the numbers of the going line are the code font, the words the UI font (work-space-dark.html `.meta2 .n`)
+    assert!(
+        faces_at("row:4:0:0:2", "32")
             .iter()
             .any(|f| f == "drgnx-work-meta")
     );
@@ -814,4 +820,23 @@ fn a_machine_chip_on_the_strip_has_its_icon() {
         .map(|(_, s)| s.as_str())
         .expect("its image");
     assert!(svg.contains("<svg") && svg.contains("stroke=\""), "{svg}");
+}
+
+/// [D] A file's chip shows its name and its change in the added and removed colours (`session.rs +40 −3`), a machine's
+/// its own name (only the strip abbreviates), an agent's initial sits in a filled circle of its colour.
+#[test]
+fn chips_show_the_file_name_and_its_change_and_the_badge_is_a_circle() {
+    let (items, edges, layout) = frame();
+    let new = BTreeSet::new();
+    let palette = Palette::default();
+    let s = scene(&items, &edges, &layout, &new);
+    let drawn = render::rows(&s, &Index::of(&s), &gui(&palette), &Cols);
+    let files = drawn.rows.iter().find(|r| r.key == "row:6:0:0:0").expect("files");
+    assert!(files.text.contains("session.rs"), "{files:?}");
+    assert!(!files.text.contains("crates/"), "{files:?}");
+    assert!(files.runs.iter().any(|r| r.2 == "drgnx-work-plus"), "{files:?}");
+    assert!(files.text.contains("desktop 3/"), "{files:?}");
+    assert!(!files.text.contains("desk "), "{files:?}");
+    let agent = drawn.rows.iter().find(|r| r.key == "row:4:0:0:0").expect("agents");
+    assert!(agent.runs.iter().any(|r| r.2.starts_with("drgnx-work-who-")), "{agent:?}");
 }

@@ -349,7 +349,10 @@ pub(crate) fn map_trail() -> (Vec<vegvisir::trail::Step>, Vec<vegvisir::trail::C
         step(
             4,
             "think",
-            Detail::default(),
+            Detail {
+                title: Some("the end handler clears started before the turn's last write…".into()),
+                ..Detail::default()
+            },
             at(10.0, 5.0, 31.0),
             Some(6.0),
         ),
@@ -358,12 +361,23 @@ pub(crate) fn map_trail() -> (Vec<vegvisir::trail::Step>, Vec<vegvisir::trail::C
             "tool",
             Detail {
                 path: Some("session.rs".into()),
+                title: Some("+40 −3".into()),
                 ..kind("edit")
             },
             at(10.0, 6.0, 2.0),
             Some(2.0),
         ),
-        step(6, "job-wait", Detail::default(), at(10.0, 6.0, 10.0), None),
+        step(
+            6,
+            "job-wait",
+            Detail {
+                path: Some("bin/drgnx test session".into()),
+                title: Some("desktop slot 3 · running".into()),
+                ..Detail::default()
+            },
+            at(10.0, 6.0, 10.0),
+            None,
+        ),
     ];
     let finding = Conclusion {
         n: 1,

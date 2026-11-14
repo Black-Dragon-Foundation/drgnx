@@ -356,13 +356,6 @@ impl Line {
         l
     }
 
-    /// A line of numbers and times: the code font.
-    fn meta(text: impl Into<String>) -> Line {
-        let mut l = Line::default();
-        l.push(text, Some("drgnx-work-meta"));
-        l
-    }
-
     fn text(&self) -> String {
         self.0.iter().map(|(t, _)| t.as_str()).collect()
     }
@@ -550,13 +543,14 @@ pub fn agent_number(it: &Item) -> u8 {
     u8::try_from((order - 1).rem_euclid(6) + 1).unwrap_or(1)
 }
 
-const AGENT_FACES: [&str; 6] = [
-    "drgnx-work-agent-1",
-    "drgnx-work-agent-2",
-    "drgnx-work-agent-3",
-    "drgnx-work-agent-4",
-    "drgnx-work-agent-5",
-    "drgnx-work-agent-6",
+/// The filled circle behind an agent's initial, by its number (work-space-dark.html `.who`).
+const WHO_FACES: [&str; 6] = [
+    "drgnx-work-who-1",
+    "drgnx-work-who-2",
+    "drgnx-work-who-3",
+    "drgnx-work-who-4",
+    "drgnx-work-who-5",
+    "drgnx-work-who-6",
 ];
 
 /// The agent badge: the model's initial in the agent's colour.
@@ -567,7 +561,10 @@ fn badge(it: &Item) -> (String, &'static str) {
         .as_deref()
         .and_then(|m| m.chars().next())
         .map_or("?".to_owned(), |c| c.to_uppercase().collect());
-    (initial, AGENT_FACES[usize::from(agent_number(it)) - 1])
+    (
+        format!(" {initial} "),
+        WHO_FACES[usize::from(agent_number(it)) - 1],
+    )
 }
 
 /// The item an overlap edge joins ID to, as "model · label".
@@ -605,7 +602,8 @@ fn new_chip(s: &Scene, it: &Item, l: &mut Line) {
     }
 }
 
-/// The five lines of a rich agent card: who, its task, how it is going, its latest conclusion, the flag.
+/// The five lines of a rich agent card: who, its task, how it is going, its latest conclusion, the flag
+/// (work-space-dark.html `.acardm`: the going line in the UI font with its numbers in the code font).
 fn rich_lines(s: &Scene, it: &Item) -> Vec<Line> {
     let f = &it.fields;
     let (d, dface) = dot(it);
@@ -614,18 +612,41 @@ fn rich_lines(s: &Scene, it: &Item) -> Vec<Line> {
     who.push(d, Some(dface))
         .push(" ", None)
         .push(bdg, Some(bface))
-        .push("  ", None);
+        .push(" ", None);
     if let Some(m) = f.model.as_ref().filter(|m| !names_model(&it.label, m)) {
         who.push(format!("{m} · "), Some("drgnx-work-title"));
     }
     who.push(it.label.clone(), Some("drgnx-work-title"));
-    new_chip(s, it, &mut who);
-    let mut going = vec![activity(f)];
-    going.extend(f.minutes.map(|m| format!("{m} min")));
-    going.extend(f.spend.clone());
-    going.extend(f.progress.map(|(a, b)| format!("{a}/{b}")));
-    going.extend(f.context.filter(|c| *c > 80).map(|c| format!("ctx {c} %")));
-    going.extend(f.job.as_ref().map(|j| job_chip(j, s.now)));
+    // the going line: the activity, then each number (minutes, spend, progress) in the code font
+    let mut going = Line::default();
+    going.push(activity(f), Some("drgnx-text-muted"));
+    let numbers: Vec<String> = f
+        .minutes
+        .map(|m| format!("{m} min"))
+        .into_iter()
+        .chain(f.spend.clone())
+        .chain(f.progress.map(|(a, b)| format!("{a}/{b}")))
+        .collect();
+    for n in numbers {
+        going
+            .push(" · ", Some("drgnx-text-muted"))
+            .push(n, Some("drgnx-work-meta"));
+    }
+    if let Some(c) = f.context.filter(|c| *c > 80) {
+        going
+            .push(" · ", Some("drgnx-text-muted"))
+            .push(format!("ctx {c} %"), Some("drgnx-work-meta"));
+    }
+    if let Some(j) = &f.job {
+        going
+            .push(" · ", Some("drgnx-text-muted"))
+            .push(job_chip(j, s.now), Some("drgnx-text-muted"));
+    }
+    let mut concl = Line::default();
+    if let Some(c) = &f.conclusion {
+        concl.push(format!("→ {c}"), Some("drgnx-text-muted"));
+        new_chip(s, it, &mut concl);
+    }
     let flag = if it.warn {
         let mut l = Line::default();
         let text = match partner(s, &it.id) {
@@ -638,17 +659,15 @@ fn rich_lines(s: &Scene, it: &Item) -> Vec<Line> {
         let mut bits = Vec::new();
         bits.extend(f.reads.map(|r| format!("reads {r}")));
         bits.extend(f.edits.map(|(n, p, m)| format!("edits {n} (+{p} −{m})")));
-        Line::plain(bits.join(" · "))
+        let mut l = Line::default();
+        l.push(bits.join(" · "), Some("drgnx-text-subtle"));
+        l
     };
     vec![
         who,
         Line::plain(f.task.clone().unwrap_or_default()),
-        Line::meta(going.join(" · ")),
-        Line::plain(
-            f.conclusion
-                .as_ref()
-                .map_or(String::new(), |c| format!("→ {c}")),
-        ),
+        going,
+        concl,
         flag,
     ]
 }
@@ -754,8 +773,9 @@ fn chip_line(it: &Item) -> Line {
             .collect(),
         _ => Vec::new(),
     };
-    let name = if it.kind == Kind::Machine {
-        short_machine(&it.label)
+    // a file by its name (the path is its label's), a machine by its own name (only the strip abbreviates)
+    let name = if it.kind == Kind::File {
+        it.label.rsplit('/').next().unwrap_or(&it.label)
     } else {
         &it.label
     };
@@ -767,8 +787,26 @@ fn chip_line(it: &Item) -> Line {
     if runner.is_some_and(|r| r.mac) {
         l.push(" macOS", Some("drgnx-runners-os"));
     }
-    if !extra.is_empty() {
-        l.push(format!(" · {}", extra.join(" · ")), None);
+    match (it.kind, f.change) {
+        // a file's change: the added and the removed in their own colours (`session.rs +40 −3`)
+        (Kind::File, Some((p, m))) => {
+            l.push(" ", None)
+                .push(format!("+{p}"), Some("drgnx-work-plus"))
+                .push(" ", None)
+                .push(format!("−{m}"), Some("drgnx-work-minus"));
+        }
+        // a plan's progress is a chip of its own, a machine's slots follow its name
+        (Kind::Plan, _) if !extra.is_empty() => {
+            l.push(" ", None)
+                .push(format!(" {} ", extra.join(" · ")), Some("drgnx-work-chip"));
+        }
+        (Kind::Machine, _) if !extra.is_empty() => {
+            l.push(format!(" {}", extra.join(" · ")), None);
+        }
+        _ if !extra.is_empty() => {
+            l.push(format!(" · {}", extra.join(" · ")), None);
+        }
+        _ => {}
     }
     if it.warn {
         l.push(" ⚠", Some("drgnx-work-overlap"));
@@ -1102,10 +1140,9 @@ pub fn strip(
         }
         let e = fit_px(m, e, (CHIP_MAX as f32 * env.scale).round() as u32);
         let start = b.pos();
-        b.push(
-            &format!(" ⚑ {e}  g{} ", i + 1),
-            Some("drgnx-work-needs-you"),
-        );
+        b.push(&format!(" ⚑ {e} "), Some("drgnx-work-needs-you"))
+            .push(&format!(" g{} ", i + 1), Some("drgnx-work-needs-you-key"))
+            .push(" ", Some("drgnx-work-needs-you"));
         let end = b.pos();
         b.face(start, end, "drgnx-chip");
     }
@@ -1371,7 +1408,7 @@ mod tests {
     #[test]
     fn a_mac_runner_has_the_macos_chip_and_a_sleeping_dot() {
         let l = chip_line(&machine("ready", true));
-        assert!(l.text().ends_with(" mini macOS · 1/2"), "{:?}", l.text());
+        assert!(l.text().ends_with(" mini macOS 1/2"), "{:?}", l.text());
         assert!(l.0.contains(&(" macOS".to_string(), Some("drgnx-runners-os"))));
         assert!(!chip_line(&machine("ready", false)).text().contains("macOS"));
         assert_eq!(dot(&machine("sleeping", true)).1, "drgnx-runners-subtle");

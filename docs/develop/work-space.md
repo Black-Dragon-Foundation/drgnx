@@ -553,6 +553,16 @@ face under a class. The faces: `drgnx-work-band`, the decoration faces (`drgnx-c
   starts with the conclusion's number in a filled accent circle (`drgnx-work-step-number`, the solid chip
   `drgnx-chip-solid` in the badge's pill), the
   others keep the room; the newest conclusion's card says `new` while it is stamped on one of the last three steps.
+- **Cards, Detail and trail as the mockup draws them.** A card line is as tall as its layout row says (a row's
+  `height` unit, px: `drgnx-view-patch` sets `line-height` from it; a row with no unit is that many default lines).
+  An agent's initial is a filled circle of its colour (`drgnx-work-who-N`), the going line is the UI font with its
+  numbers in the code font, the flag line carries the branch's totals (`edits N (+P −M)`, `Fields::edits` of an
+  agent). A file's chip is its name and its change (`session.rs +40 −3`), a machine's chip its own name; only the
+  strip abbreviates ("desk"). The Detail head's subtitle wraps by word into rows of its own (`head/1`, `head/1.1`);
+  its sections are "Why ↑", "Touches ↓" and "Conclusions" (no heading for the actions), an agent's Touches in the
+  order branch, machine ("desktop · slot 3"), edits (the file its branch changed most), reads, then the rest. A trail
+  step keeps its verb (`read PATH`, `web TITLE — HOST`, `edit PATH +P −M`, `job PATH · WHERE`), paths in the link
+  colour, a thought's text muted and italic; durations read `0.3 s`; a finding's card keeps its keys line.
 - **The lens bar's right** (`drgnx-work-lens--controls`): the grip (drawn; the tile layout's drag is not wired), maximise
   (`drgnx-work-lens-maximize`: hides the Detail island and the trail, again shows them) and ⋯ (the keys sheet). The lens
   shown is a pill in a ring (the themes give `drgnx-work-lens-current` its box).

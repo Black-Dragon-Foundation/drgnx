@@ -248,8 +248,8 @@ fn timestamps_use_the_env_time_zone() {
     let s = vec![step(1, 1_794_043_800.0)];
     let utc = trail::trail_rows(&s, &[], &env(&p), Zone::parse("+0000"));
     let ist = trail::trail_rows(&s, &[], &env(&p), Zone::parse("+0530"));
-    assert!(utc[0].text.contains("09:30:00 · 2.0s"), "{}", utc[0].text);
-    assert!(ist[0].text.contains("15:00:00 · 2.0s"), "{}", ist[0].text);
+    assert!(utc[0].text.contains("09:30:00 · 2 s"), "{}", utc[0].text);
+    assert!(ist[0].text.contains("15:00:00 · 2 s"), "{}", ist[0].text);
     assert_eq!(Zone::parse("-0800").time(1_794_043_800.0), "01:30:00");
     assert_eq!(Zone::parse("IST"), Zone(0), "a name is no offset");
 }
@@ -353,4 +353,116 @@ fn numbered_circles_and_the_new_tag() {
         row("step:1").stops.first().map(|s| s.1),
         row("step:2").stops.first().map(|s| s.1)
     );
+}
+
+/// [D] A step's row keeps its verb and its link colour on paths (work-space-dark.html `.trow`): `read PATH` with the
+/// path in the accent, `web TITLE — HOST` muted, `thought: TEXT` muted and italic, `edit PATH +P −M` with the change
+/// in the added and removed colours, `job PATH · WHERE`; durations have a space (`0.3 s`, `6 s`).
+#[test]
+fn a_step_row_keeps_its_verb_and_colours_its_paths() {
+    let p = Palette::default();
+    let mk = |id: i64, class: &str, kind: &str, d: Detail, took: f64| Step {
+        id,
+        seq: id as u64,
+        class: class.into(),
+        tool: None,
+        detail: Detail {
+            kind: Some(kind.into()),
+            ..d
+        },
+        start: 1000.0 + id as f64,
+        end: Some(1000.0 + id as f64 + took),
+    };
+    let steps = vec![
+        mk(
+            1,
+            "tool",
+            "read",
+            Detail {
+                path: Some("a/b.rs".into()),
+                line_start: Some(1),
+                line_end: Some(9),
+                ..Detail::default()
+            },
+            0.3,
+        ),
+        mk(
+            2,
+            "tool",
+            "fetch",
+            Detail {
+                url: Some("https://x.org/p".into()),
+                title: Some("Spec".into()),
+                ..Detail::default()
+            },
+            1.8,
+        ),
+        mk(
+            3,
+            "think",
+            "",
+            Detail {
+                title: Some("the end handler…".into()),
+                ..Detail::default()
+            },
+            6.0,
+        ),
+        mk(
+            4,
+            "tool",
+            "edit",
+            Detail {
+                path: Some("s.rs".into()),
+                title: Some("+40 −3".into()),
+                ..Detail::default()
+            },
+            2.0,
+        ),
+        mk(
+            5,
+            "job-wait",
+            "",
+            Detail {
+                path: Some("bin/t".into()),
+                title: Some("desktop slot 3 · running".into()),
+                ..Detail::default()
+            },
+            3.0,
+        ),
+    ];
+    let rows = trail::trail_rows(&steps, &[], &env(&p), Zone(0));
+    let face_of = |r: &Row, word: &str| {
+        let at = r.text.find(word).unwrap_or_else(|| panic!("{word} in {r:?}"));
+        let at = r.text[..at].chars().count() as u32;
+        r.runs
+            .iter()
+            .filter(|x| x.0 <= at && at < x.1)
+            .map(|x| x.2.clone())
+            .collect::<Vec<_>>()
+    };
+    assert!(rows[0].text.contains(" read a/b.rs:1–9"), "{:?}", rows[0]);
+    assert!(face_of(&rows[0], "a/b.rs").contains(&"drgnx-accent".to_owned()));
+    assert!(rows[0].text.contains("0.3 s"), "{:?}", rows[0]);
+    assert!(rows[1].text.contains(" web Spec — x.org"), "{:?}", rows[1]);
+    assert!(face_of(&rows[1], "Spec").contains(&"drgnx-text-muted".to_owned()));
+    assert!(rows[2].text.contains(" thought: the end handler…"), "{:?}", rows[2]);
+    assert!(face_of(&rows[2], "thought").contains(&"drgnx-work-thought".to_owned()));
+    assert!(rows[2].text.contains("6 s"), "{:?}", rows[2]);
+    assert!(rows[3].text.contains(" edit s.rs +40 −3"), "{:?}", rows[3]);
+    assert!(face_of(&rows[3], "+40").contains(&"drgnx-work-plus".to_owned()));
+    assert!(face_of(&rows[3], "−3").contains(&"drgnx-work-minus".to_owned()));
+    assert!(rows[4].text.contains(" job bin/t · desktop slot 3 · running"), "{:?}", rows[4]);
+    assert!(face_of(&rows[4], "bin/t").contains(&"drgnx-accent".to_owned()));
+}
+
+/// [D] A finding's card keeps its keys line (`l light them · ↵ sources`) and its number is the filled circle.
+#[test]
+fn a_finding_card_keeps_its_keys_and_a_filled_number() {
+    let p = Palette::default();
+    let rows = trail::trail_rows(&[step(1, 1000.0)], &[conclusion(1, 1, &[1])], &env(&p), Zone(0));
+    let top = rows.iter().find(|r| r.key == "conc:1:0").expect("the card");
+    assert!(top.runs.iter().any(|r| r.2 == "drgnx-work-step-number"), "{top:?}");
+    let sub = rows.iter().find(|r| r.key == "conc:1:1").expect("its keys line");
+    assert!(sub.text.contains("based on 1 step ·  l  light them · ↵ sources"), "{sub:?}");
+    assert!(sub.runs.iter().any(|r| r.2 == "drgnx-keycap"), "{sub:?}");
 }
