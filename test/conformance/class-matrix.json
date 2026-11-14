@@ -126,6 +126,7 @@
   "git/blame": ["user"],
   "git/blame/line": ["user"],
   "history/line-positions": ["user"],
+  "history/eol-fit": ["user"],
   "git/letters": ["user"],
   "git/stage-hunk": ["user"],
   "graph/backup": ["user"],

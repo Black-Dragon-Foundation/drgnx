@@ -187,6 +187,46 @@ pub fn place(
     }
 }
 
+/// An end-of-line diagnostic's TEXT cut, with an ellipsis, to the room a window WIDTH columns wide has after COLUMN (the
+/// line's end) and a few columns of margin (one that does not fit would wrap onto a second screen line): at least 8
+/// columns.
+pub fn eol_fit(text: &str, column: usize, width: usize) -> String {
+    let room = width.saturating_sub(column).saturating_sub(4).max(8);
+    drgnx_rows::fit_tty::fit(text, room, &[])
+}
+
+/// The display column of the end of the line each position of POSITIONS (Emacs's, in characters) is on in TEXT, a tab
+/// taking it to the next multiple of TAB columns; none when TEXT is over the limit.
+pub fn eol_columns(text: &str, positions: &[i64], tab: u32) -> Option<Vec<usize>> {
+    if !within_limit(text.len()) {
+        return None;
+    }
+    let tab = usize::try_from(tab.max(1)).unwrap_or(8);
+    // each line: where it starts (in characters) and its end column, one pass
+    let mut starts = vec![1i64];
+    let mut ends = Vec::new();
+    let (mut pos, mut col) = (1i64, 0usize);
+    for c in text.chars() {
+        pos += 1;
+        if c == '\n' {
+            ends.push(col);
+            col = 0;
+            starts.push(pos);
+        } else if c == '\t' {
+            col += tab - col % tab;
+        } else {
+            col += drgnx_rows::fit_tty::char_width(c, &[]);
+        }
+    }
+    ends.push(col);
+    Some(
+        positions
+            .iter()
+            .map(|p| ends[starts.partition_point(|s| s <= p).max(1) - 1])
+            .collect(),
+    )
+}
+
 /// Fewer columns than this left for the blame: none (a stump says nothing).
 pub const BLAME_MIN_WIDTH: usize = 20;
 /// The blame is never wider than this.
@@ -365,6 +405,31 @@ mod tests {
         let mut none = serde_json::json!({"path": "p"});
         place_breakpoints(&mut none, &lines);
         assert_eq!(none, serde_json::json!({"path": "p"}));
+    }
+
+    #[test]
+    fn an_end_of_line_text_is_cut_to_the_room_after_its_line() {
+        // the Lisp it replaces: room = max(8, width - column - 4), whole when it fits
+        assert_eq!(eol_fit("short", 20, 60), "short");
+        let cut = eol_fit(&"x".repeat(80), 20, 60);
+        assert_eq!(cut.chars().count(), 36);
+        assert!(cut.ends_with('…'));
+        // never nothing at all
+        assert_eq!(eol_fit(&"x".repeat(80), 58, 60).chars().count(), 8);
+        // wide characters count by columns
+        let wide = eol_fit(&"漢".repeat(40), 20, 60);
+        assert_eq!(drgnx_rows::fit_tty::width(&wide, &[]), 35);
+    }
+
+    #[test]
+    fn the_column_of_a_lines_end_counts_tabs() {
+        // "ab\n\tc\nde": the first line ends at column 2 (its break is position 3), the second at 4 + 1 with tab 4
+        // (positions 4 to 6), the last at 2 (7, 8)
+        let cols = eol_columns("ab\n\tc\nde", &[1, 3, 4, 5, 8], 4).unwrap();
+        assert_eq!(cols, [2, 2, 5, 5, 2]);
+        // a position on the empty last line after a final break
+        assert_eq!(eol_columns("ab\n", &[4], 8).unwrap(), [0]);
+        with_limit(2, || assert!(eol_columns("ab\ncd", &[1], 8).is_none()));
     }
 
     #[test]

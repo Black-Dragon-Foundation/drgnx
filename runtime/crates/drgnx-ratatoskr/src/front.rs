@@ -891,6 +891,7 @@ impl Front {
             | Params::GitBlame(_)
             | Params::GitBlameLine(_)
             | Params::HistoryLinePositions(_)
+            | Params::HistoryEolFit(_)
             | Params::GitStageHunk(_)
             | Params::HistoryHunksHead(_)
             | Params::HistoryTake(_)
