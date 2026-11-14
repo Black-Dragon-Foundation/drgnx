@@ -1916,7 +1916,9 @@ a window change. The store observes at the end of each command and on window cha
 shown again by the window manager alone is seen at the next command in it. With the store off (core/workbench
 turned off), the answer is the live windows': the frames `next-frame` reaches from the selected one (that
 terminal's) and their window trees, as `get-buffer-window` with `'visible` answers but without its window list;
-then a stale view wakes only on its next mark. Either way the answer allocates nothing. A timer draw of a hidden
+then a stale view wakes only on its next mark. Either way the answer allocates nothing. A buffer whose rows Sjá holds
+has no view: `(drgnx-view-buffer-shown-p BUFFER)` answers for it from the same source (the store's recorded windows
+while the store is on, else the live windows), never `get-buffer-window`. A timer draw of a hidden
 view sets `stale`, adds 1 to `:stale-skips` and returns: **a hidden view draws nothing and allocates nothing**.
 While it is stale its marks arm no timer (they cost a hash put and the visibility read). No view adds a function to
 a window-change hook.
