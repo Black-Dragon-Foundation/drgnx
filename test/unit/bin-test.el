@@ -1535,7 +1535,7 @@ macOS (no /proc there)."
          (pids (expand-file-name "pids" dir))
          (emacs (drgnx-bin-test--fake-emacs
                  (expand-file-name "fake-emacs" dir)
-                 (format "trap '' TERM\nsleep 300 &\necho \"$$ $!\" > %s.tmp && mv %s.tmp %s\nwait" pids pids pids)))
+                 (format "trap ': > %s.termed' TERM\nsleep 300 &\necho \"$$ $!\" > %s.tmp && mv %s.tmp %s\nwait" pids pids pids pids)))
          proc)
     (unwind-protect
         (progn
@@ -1547,8 +1547,9 @@ macOS (no /proc there)."
                  (alive (lambda () (seq-filter #'drgnx-bin-test--pid-alive-p ids))))
             (should (= 2 (length (funcall alive))))
             (signal-process proc 'TERM)
-            ;; the first TERM is taken before the second arrives; too short only merges the two (a missed case)
-            (drgnx-test-pause 0.5 "the cleanup may not end the run inside the grace period")
+            ;; the first TERM is taken before the second arrives (too early only merges the two: a missed case): the
+            ;; cleanup has begun once its group TERM reached the fake emacs, which says so
+            (should (drgnx-bin-test--wait-for (lambda () (file-exists-p (concat pids ".termed"))) 30))
             (signal-process proc 'TERM)
             (should (drgnx-bin-test--wait-exit proc 30))
             (should-not (funcall alive))
