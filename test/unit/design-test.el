@@ -88,3 +88,22 @@
   ;; the icons the Explorer and Quick Open pick by file name come from etc/icons/files.eld
   (let ((row (design-test--row-of (design-test--page "icons.md") 'file-archive)))
     (should (string-search "file kind" row))))
+
+(ert-deftest drgnx-design/the-generated-pages-are-current ()
+  ;; A token, face, font role, density value or icon changed without `bin/drgnx design' fails here.
+  (let ((stale (drgnx-design-stale)))
+    (should-not (when stale (ert-fail (format "stale pages under docs/design/: %s; run bin/drgnx design"
+                                              (string-join stale ", ")))))))
+
+(ert-deftest drgnx-design/a-changed-or-missing-page-is-stale ()
+  (let ((dir (make-temp-file "drgnx-design-test" t)))
+    (unwind-protect
+        (progn
+          (drgnx-design-regenerate dir)
+          (should-not (drgnx-design-stale dir))
+          (with-temp-file (expand-file-name "tokens.md" dir) (insert "edited by hand\n"))
+          (delete-file (expand-file-name "type.md" dir))
+          (should (equal (sort (drgnx-design-stale dir) #'string<) '("tokens.md" "type.md")))
+          (should (equal (sort (drgnx-design-regenerate dir) #'string<) '("tokens.md" "type.md")))
+          (should-not (drgnx-design-stale dir)))
+      (delete-directory dir t))))
