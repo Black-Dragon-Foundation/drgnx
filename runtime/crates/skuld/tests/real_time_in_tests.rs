@@ -541,6 +541,28 @@ fn no_real_time_in_test_code() {
     );
 }
 
+/// `test/timing-rust.txt` lists the Rust rows that run in the timing lane (`#[ignore = "timing: ..."]`): real time on purpose.
+/// The list only shrinks: a row that is a timer's behaviour moves to the virtual clock and leaves it (docs/develop/
+/// runtime.md, "Virtual clocks"); a real performance budget is the one thing that stays. A new row, or one that stays when
+/// its crate has the virtual clock, is a decision: this count goes down with the list, never up.
+const TIMING_ROWS_AT_MOST: usize = 35;
+
+#[test]
+fn the_timing_lane_list_only_shrinks() {
+    let list = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../test/timing-rust.txt");
+    let rows = fs::read_to_string(&list)
+        .unwrap_or_else(|e| panic!("{}: {e}", list.display()))
+        .lines()
+        .map(|l| l.split('#').next().unwrap_or("").trim())
+        .filter(|l| !l.is_empty())
+        .count();
+    assert!(
+        rows <= TIMING_ROWS_AT_MOST,
+        "test/timing-rust.txt has {rows} rows, {TIMING_ROWS_AT_MOST} at most: a timer's behaviour goes on the virtual clock, \
+         only a performance budget joins this list (and lowers TIMING_ROWS_AT_MOST when a row leaves)"
+    );
+}
+
 fn sites_of(src: &str, whole: bool) -> Vec<(usize, Kind)> {
     scan(src, whole, &mut Vec::new())
 }
