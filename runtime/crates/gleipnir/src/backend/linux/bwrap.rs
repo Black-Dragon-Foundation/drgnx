@@ -314,7 +314,8 @@ pub fn host_layout() -> HostLayout {
     }
 }
 
-/// How many fds the host's resolver file adds to an invocation (the last one): one when this host's `/etc/resolv.conf`
+/// How many fds the host's resolver file adds to an invocation (the first of the binds, so the sources' and the helper's
+/// numbers move up by it): one when this host's `/etc/resolv.conf`
 /// is a bindable, system-owned file (a runner whose resolver is systemd-resolved's stub), else none.  The tests that
 /// count an invocation's fds add it, so they hold on every host.
 #[cfg(test)]

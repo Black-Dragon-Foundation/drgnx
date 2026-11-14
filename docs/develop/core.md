@@ -2048,6 +2048,11 @@ through `core/drgnx-color.el`), the terminal's width table, the time zone and re
 - **One message per kind of change.** A theme change sends each (view, class) one env (`enable-theme-functions`,
   `disable-theme-functions`); a resize is debounced through `drgnx-timer-debounce` (0.1 s idle: never inside a follow); `text-scale` in the view's
   buffer makes a new class, and the class it left is forgotten.
+- **A view a window starts showing sends its env at once.** A view registered before any window shows it (a command
+  makes its buffer, then shows it) has no env, and the hub builds nothing for it. When a window starts showing it
+  (`window-buffer-change-functions`, which redisplay runs after the command), its env goes from that hook, not after
+  0.1 s idle. A command that opens a view and waits for its rows never idles. No timer is used, so nothing runs
+  inside a follow.
 - **Reconnect:** on `drgnx-hub-connected-functions` every live (view, class)'s env is sent again, then the view's
   RESUBSCRIBE runs: a restarted hub holds no env and builds nothing until then.
 - **Glyph asks:** the hub's `view-glyphs` (chars its font file lacks, or a role with no file) is answered with

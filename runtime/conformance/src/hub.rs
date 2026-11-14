@@ -94,11 +94,20 @@ impl Root {
     }
 
     /// The whole environment a hub or a CLI run gets (nothing else is inherited but `PATH`, `DRGNX_EMACS` (the
-    /// editor's own CLIs that a row runs need it), `DBUS_SESSION_BUS_ADDRESS` and `DRGNX_RATATOSKR_LOG`, [`HUB_LOG`]
-    /// when unset): every directory points into this root, so nothing reaches `~`.  The session bus is
+    /// editor's own CLIs that a row runs need it), `DBUS_SESSION_BUS_ADDRESS`, `DRGNX_PACK_LOCK` and
+    /// `DRGNX_PACK_GRAMMARS` (the grammars a run was pointed at) and `DRGNX_RATATOSKR_LOG`, [`HUB_LOG`] when unset): every directory points into this root, so nothing reaches `~`.  The session bus is
     /// how a container job's podman reaches the user's systemd, which enforces the job's caps (the hub refuses the job
     /// without it; `XDG_RUNTIME_DIR` here is the root's, so podman cannot find the bus there).  `extra` wins.
     pub fn base_env(&self, extra: Vec<(String, String)>) -> BTreeMap<String, String> {
+        self.base_env_from(extra, |k| std::env::var(k).ok())
+    }
+
+    /// [`Root::base_env`] with the caller's environment read through GET.
+    fn base_env_from(
+        &self,
+        extra: Vec<(String, String)>,
+        get: impl Fn(&str) -> Option<String>,
+    ) -> BTreeMap<String, String> {
         let dir = |s: &str| self.path().join(s).to_string_lossy().into_owned();
         let mut vars: BTreeMap<String, String> = BTreeMap::new();
         for k in [
@@ -106,8 +115,10 @@ impl Root {
             "DRGNX_EMACS",
             "DBUS_SESSION_BUS_ADDRESS",
             "DRGNX_RATATOSKR_STALL_FILE",
+            "DRGNX_PACK_LOCK",
+            "DRGNX_PACK_GRAMMARS",
         ] {
-            if let Ok(v) = std::env::var(k) {
+            if let Some(v) = get(k) {
                 vars.insert(k.into(), v);
             }
         }
@@ -860,6 +871,26 @@ mod tests {
     const CAP: &str = "abababababababababababababababababababababababababababababababab";
     const HUB: &str = "00112233445566778899aabbccddeeff";
     const CLIENT: &str = "000102030405060708090a0b0c0d0e0f";
+
+    #[test]
+    fn the_pack_grammars_a_run_was_pointed_at_reach_its_hubs() {
+        // the hub parses code with them (`test/packs/hub-grammars.sh`); without them a Pattern or Symbol search says
+        // "no grammar for rust" (the macOS conformance run's search/run-pattern)
+        let root = Root::new().unwrap();
+        let caller = |k: &str| match k {
+            "DRGNX_PACK_LOCK" => Some("/packs/drgnx.lock.eld".to_owned()),
+            "DRGNX_PACK_GRAMMARS" => Some("/packs/grammars".to_owned()),
+            _ => None,
+        };
+        let env = root.base_env_from(vec![], caller);
+        assert_eq!(
+            (env.get("DRGNX_PACK_LOCK"), env.get("DRGNX_PACK_GRAMMARS")),
+            (
+                Some(&"/packs/drgnx.lock.eld".to_owned()),
+                Some(&"/packs/grammars".to_owned())
+            )
+        );
+    }
 
     #[test]
     fn a_scenario_hub_logs_the_turn_stages_unless_told_otherwise() {

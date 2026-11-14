@@ -441,7 +441,16 @@ above and below, the face's background between (Nidhogg's compositor).  Asked on
                 append (list `(,(intern (format "ansi-color-%s" name)) :foreground ,(c token) :background ,(c token))
                              `(,(intern (format "ansi-color-bright-%s" name))
                                :foreground ,(drgnx-color-mix (c token) (c 'fg) 0.15)
-                               :background ,(drgnx-color-mix (c token) (c 'fg) 0.15))))))))
+                               :background ,(drgnx-color-mix (c token) (c 'fg) 0.15))))
+       ;; a notebook's output: the same sixteen roles as a foreground face and a background face each (the hub sends
+       ;; roles, never colours; `ansi-color-*' sets both at once, which would hide the text), and the hairline over a cell
+       (list `(drgnx-notebook-head :inherit (drgnx-ui-caption drgnx-text-muted) :overline ,(c 'border-subtle) :extend t))
+       (cl-loop for (name . token) in drgnx-theme--ansi
+                append (let ((bright (drgnx-color-mix (c token) (c 'fg) 0.15)))
+                         (list `(,(intern (format "drgnx-notebook-fg-%s" name)) :foreground ,(c token))
+                               `(,(intern (format "drgnx-notebook-bg-%s" name)) :background ,(c token))
+                               `(,(intern (format "drgnx-notebook-fg-bright-%s" name)) :foreground ,bright)
+                               `(,(intern (format "drgnx-notebook-bg-bright-%s" name)) :background ,bright))))))))
 
 (defun drgnx-theme--tty-token (tok)
   "TOK for a terminal: the gap and the panel are the editor's colour."

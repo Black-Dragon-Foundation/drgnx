@@ -68,6 +68,20 @@ one test file in the container. Rust and `domr` groups run `cargo`, which never 
 `ratatoskr-cargo.sh`, or a slot script); without it `--run` refuses those groups (exit 2, nothing cached). The
 wrapper's words come before every group's command.
 
+## Live notebook kernels
+
+`notebook::kernel::tests_live` (ignored rows) start a real ipykernel, over ipc and over loopback tcp: ready, `print`, an error,
+`input()` through the stdin channel, interrupt, orderly shutdown. They read the kernel's python from `DRGNX_NB_KERNEL_PYTHON` and fail,
+saying where the kernel is, when it is missing. The kernel is the hash-pinned set in `test/container/ipykernel-requirements.txt`
+(every wheel checked, `--no-deps`, compiled for Python 3.15). The adapter image has it at `/opt/nb-kernel`, made with `python3.15`
+by `test/container/nb-kernel.sh` (its `ENV` sets the variable), and the rows run there only (`ci.md`, "The debug adapters"). The
+GUI test image has the same venv, made by the same step, for the notebook scenes' kernel. Run them in the image with
+`cargo test -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks --lib -- --ignored --test-threads 1 notebook::kernel::tests_live`.
+**ipykernel aborts in its own teardown (SIGABRT) about one run in five**, after an orderly shutdown and after doing everything asked
+of it, so the rows assert that the kernel ended by itself within the grace (not killed), not that its exit code is 0; they print the
+exit status whenever it is not 0 (`--nocapture`, or the failing run's output), so a pattern shows. The unit tests of the kernel module run under nextest (a
+process each: their virtual-clock rows share process-wide state under plain `cargo test`).
+
 ## The result cache
 
 `--run` skips a group whose key is already recorded and says so (`skipped X: inputs unchanged since its last green
@@ -88,3 +102,13 @@ read changed*, never *probably fine*.
 
 The tests (`test/unit/affected-test.el`) hold fixed fake diffs against the table and the cache's hit, miss and
 red-is-never-cached cases.
+
+## A real tree-sitter grammar in the unit tier
+
+A test that needs a real parser (the notebook's, which gives each language one parser over its cells' ranges) cannot rely on
+the image having a grammar. `bin/drgnx test --container` therefore runs `test/packs/ts-grammars.sh` inside the container before
+the suite: the pack job (`ratatoskr packs sync --builtin`, from the hub binary at `runtime/target/debug/ratatoskr`) builds the
+python grammar at the pack's pin into a host cache (`DRGNX_TEST_TS_CACHE`, default `test-ts-grammars` in drgnx's cache folder, keyed by the
+pin) and the suite gets `DRGNX_TEST_TS_GRAMMARS`. Without the hub binary the test skips; CI sets `DRGNX_TEST_TS_REQUIRED=1`, which
+fails the run when no grammar was built, and `test/no-skip.eld` lists the test. The container needs network, git and a C compiler,
+which the test image has.

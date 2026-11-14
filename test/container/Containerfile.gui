@@ -14,4 +14,10 @@ RUN bash /tmp/nidhogg.sh fedora-45 && rm /tmp/nidhogg.sh
 COPY childframe-packages.eld childframe-elpa.sh /tmp/childframe/
 RUN echo "dc2200b525282f1543664979adec716bb922d82eec3087b89f199f89d3580be0  /tmp/childframe/childframe-packages.eld" | sha256sum -c - \
     && sh /tmp/childframe/childframe-elpa.sh /opt/childframe-elpa && rm -r /tmp/childframe
+# The notebook kernel the notebook scenes run (running and queued cells, error output, log entries): the venv at
+# /opt/nb-kernel from the hash-pinned set, by the same step as the adapter image (nb-kernel.sh), at build, so a scene
+# downloads nothing.
+COPY nb-kernel.sh ipykernel-requirements.txt /tmp/nb-kernel/
+RUN bash /tmp/nb-kernel/nb-kernel.sh && rm -r /tmp/nb-kernel
+ENV DRGNX_NB_KERNEL_PYTHON=/opt/nb-kernel/bin/python3
 ENV DRGNX_EMACS=/opt/nidhogg/31.1-nidhogg.5/bin/nidhogg

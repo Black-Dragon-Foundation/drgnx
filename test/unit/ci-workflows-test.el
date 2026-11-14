@@ -520,6 +520,46 @@ Returns (EXIT . OUTPUT), the output both streams' or, with STDOUT-ONLY, stdout's
         (should (string-search "echo \"DRGNX_PACK_LOCK=$DRGNX_PACK_LOCK\" >> \"$GITHUB_ENV\"" job))
         (should (string-search "echo \"DRGNX_PACK_GRAMMARS=$DRGNX_PACK_GRAMMARS\" >> \"$GITHUB_ENV\"" job))))))
 
+;; The live notebook rows (notebook::kernel::tests_live) start a real ipykernel, hash-pinned for the adapter image's Python 3.15,
+;; and read its python from DRGNX_NB_KERNEL_PYTHON; without it they fail by design. A runner's Python is not 3.15: the escape
+;; suite's sandbox lane (which runs every ignored row of the crate) skips them, and the debug-live job runs them in the image,
+;; whose script makes the venv from python3.15 and whose ENV names it.
+(ert-deftest drgnx-ci/the-live-notebook-rows-run-in-the-adapter-image-and-nowhere-else ()
+  (let ((rt (drgnx-ci-test--yml "runtime.yml"))
+        (image (drgnx-ci-test--file "test/container/Containerfile.debug"))
+        (script (drgnx-ci-test--file "test/container/debug-adapters-image.sh")))
+    (skip-unless (and rt image script))
+    (should (file-exists-p (expand-file-name "test/container/ipykernel-requirements.txt" drgnx-ci-test--root)))
+    (should (string-search "--skip notebook::kernel::tests_live" (drgnx-ci-test--job rt "escape-host")))
+    (let ((live (drgnx-ci-test--job rt "debug-live")))
+      (should (string-match-p "-- --ignored .*notebook::kernel::tests_live" live))
+      (should (string-search "DRGNX_NB_KERNEL_PYTHON: /opt/nb-kernel/bin/python3" live))
+      (should (string-search "test/container/debug-adapters-image.sh" live)))
+    (should (string-match-p "ENV DRGNX_NB_KERNEL_PYTHON=/opt/nb-kernel/bin/python3" image))
+    (should (string-search "bash \"$(dirname \"$0\")/nb-kernel.sh\"" script))))
+
+;; The kernel is installed by one step, nb-kernel.sh, in both images that have it: the adapter image (through its script)
+;; and the GUI test image, which the notebook scenes run in (the Nidhogg line's GUI images are built on it). Each image
+;; copies the step and the pinned set, runs it at build and names the venv's python; the step alone makes the venv.
+(ert-deftest drgnx-ci/the-adapter-and-gui-images-get-the-kernel-from-one-step ()
+  (let ((step (drgnx-ci-test--file "test/container/nb-kernel.sh"))
+        (debug (drgnx-ci-test--file "test/container/Containerfile.debug"))
+        (gui (drgnx-ci-test--file "test/container/Containerfile.gui"))
+        (script (drgnx-ci-test--file "test/container/debug-adapters-image.sh")))
+    (skip-unless (and debug gui script))
+    (should step)
+    (should (string-search "python3.15 -m venv /opt/nb-kernel" step))
+    (should (string-search "--require-hashes --no-deps -r \"$(dirname \"$0\")/ipykernel-requirements.txt\"" step))
+    (should (string-search "import ipykernel, ipykernel_launcher" step))
+    (dolist (f (list script debug gui))   ; nobody else makes the venv: a copy of the step would drift
+      (should-not (string-search "-m venv" f)))
+    (should (string-search "bash \"$(dirname \"$0\")/nb-kernel.sh\"" script))
+    (should (string-match-p "^COPY debug-adapters-image.sh nb-kernel.sh ipykernel-requirements.txt /tmp/$" debug))
+    (should (string-match-p "^COPY nb-kernel.sh ipykernel-requirements.txt /tmp/nb-kernel/$" gui))
+    (should (string-match-p "^RUN bash /tmp/nb-kernel/nb-kernel.sh" gui))
+    (dolist (f (list debug gui))
+      (should (string-match-p "^ENV DRGNX_NB_KERNEL_PYTHON=/opt/nb-kernel/bin/python3$" f)))))
+
 (ert-deftest drgnx-ci/the-offline-build-row-runs-where-a-network-namespace-can-be-made ()
   ;; ghostty-vt-sys's builds_offline needs unshare(2): the Fedora job's Docker container refuses it, so its test says so
   ;; and stops; the escape-host job (a runner) runs it with DRGNX_REQUIRE_NETNS=1, where a missing namespace fails

@@ -556,6 +556,9 @@ jobs:
           # network namespace of its own): tests_live_adapters and tests_blocked_live. tests_fork_live, the Python and JS
           # forks in the sandbox, runs here against the adapters installed above
           skips="$skips --skip debug::tests_live_adapters --skip debug::tests_blocked_live"
+          # the live notebook rows (a real ipykernel, hash-pinned for the adapter image's Python 3.15, which a runner's
+          # Python is not) run in the `debug-live` job as well
+          skips="$skips --skip notebook::kernel::tests_live"
           cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks -- --ignored --test-threads 1 $skips
       # The agent browser's rows where they can run: a Fedora 45 VM on the x64 runners (Linux 7.1 or later, Landlock ABI 9
       # or later, as the Fedora hosts drgnx supports have), booted under QEMU with KVM by .github/ci/browser-vm.sh, with
@@ -660,8 +663,11 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: bash test/container/debug-adapters-image.sh
       # lldb-dap's launches set disableASLR: false, since a container may not turn address randomisation off
-      - name: debug::tests_live_adapters and debug::tests_blocked_live (--ignored)
-        run: cargo test --locked --no-fail-fast --manifest-path Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks --lib -- --ignored --test-threads 1 debug::tests_live_adapters debug::tests_blocked_live
+      # the adapter image's ipykernel (the step above makes /opt/nb-kernel) is the live notebook rows' kernel
+      - name: debug::tests_live_adapters, debug::tests_blocked_live and notebook::kernel::tests_live (--ignored)
+        env:
+          DRGNX_NB_KERNEL_PYTHON: /opt/nb-kernel/bin/python3
+        run: cargo test --locked --no-fail-fast --manifest-path Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks --lib -- --ignored --test-threads 1 debug::tests_live_adapters debug::tests_blocked_live notebook::kernel::tests_live
 
   agent-containers:
     name: agent core container rows (podman)

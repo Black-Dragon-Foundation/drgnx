@@ -14,8 +14,9 @@ use serde_json::json;
 use tokio::sync::watch;
 
 use super::session::{Channel, Event, Limits, Session};
-use super::spec::{Connection, Interrupt, Kernelspec, private_folder};
+use super::spec::{Connection, Interrupt, Kernelspec, Transport, private_folder};
 use super::wire::Message;
+use crate::debug::ports::Block;
 
 /// The hub's variables a kernel inherits (a kernel is an ordinary session program, like the terminal's shell).
 const ENV_ALLOW: &[&str] = &[
@@ -118,6 +119,8 @@ pub struct Kernel {
     session: Session,
     /// Its drop deletes the connection file.
     _conn: Connection,
+    /// The loopback ports a tcp kernel was given: held while it lives, given back with it.
+    _block: Option<Block>,
     pid: i32,
     exit: watch::Receiver<Option<Exit>>,
     interrupt: Interrupt,
@@ -160,9 +163,33 @@ fn kill_group_now(pid: i32) {
     }
 }
 
+/// How one start talks to its kernel.
+enum Wire {
+    Ipc,
+    /// Over loopback ports: the block a test claimed, else one claimed here.
+    Tcp(Option<Block>),
+}
+
+/// Why a start failed; REFUSED: the kernel's process ended before it made any socket (it could not bind what the connection
+/// file asked for), so a start over another transport is worth one try.
+struct Fail {
+    why: String,
+    refused: bool,
+}
+
+impl From<String> for Fail {
+    fn from(why: String) -> Fail {
+        Fail {
+            why,
+            refused: false,
+        }
+    }
+}
+
 impl Kernel {
     /// Start SPEC's kernel with the connection id ID (a file `kernel-ID.json` in FOLDER, the session's private folder) in CWD, and
-    /// return when it is ready, or why it is not (the process and the file are gone then).
+    /// return when it is ready, or why it is not (the process and the file are gone then). Over ipc unless the kernelspec says tcp;
+    /// an ipc start whose kernel ended before it made a socket is made once more over tcp (the error then names both).
     pub async fn start(
         spec: &Kernelspec,
         folder: &Path,
@@ -170,15 +197,71 @@ impl Kernel {
         cwd: &Path,
         t: Timeouts,
     ) -> Result<Kernel, String> {
+        Self::start_on(spec, folder, id, cwd, t, None).await
+    }
+
+    /// [`Kernel::start`], over tcp on CLAIMED (ports a test claimed itself) when given.
+    pub(crate) async fn start_on(
+        spec: &Kernelspec,
+        folder: &Path,
+        id: &str,
+        cwd: &Path,
+        t: Timeouts,
+        claimed: Option<Block>,
+    ) -> Result<Kernel, String> {
+        if claimed.is_some() || spec.transport == Transport::Tcp {
+            return Self::attempt(spec, folder, id, cwd, t, Wire::Tcp(claimed))
+                .await
+                .map_err(|f| f.why);
+        }
+        match Self::attempt(spec, folder, id, cwd, t, Wire::Ipc).await {
+            Ok(k) => Ok(k),
+            Err(ipc) if ipc.refused => {
+                tracing::info!(target: "drgnx::notebook", "kernel {} refused ipc ({}); trying tcp", spec.name, ipc.why);
+                match Self::attempt(spec, folder, id, cwd, t, Wire::Tcp(None)).await {
+                    Ok(k) => Ok(k),
+                    Err(tcp) => Err(format!("over ipc: {}; over tcp: {}", ipc.why, tcp.why)),
+                }
+            }
+            Err(ipc) => Err(ipc.why),
+        }
+    }
+
+    async fn attempt(
+        spec: &Kernelspec,
+        folder: &Path,
+        id: &str,
+        cwd: &Path,
+        t: Timeouts,
+        wire: Wire,
+    ) -> Result<Kernel, Fail> {
         use std::os::unix::process::ExitStatusExt;
         // the folder is checked here, not trusted from the caller: a kernel's sockets and key live in it
         let folder = private_folder(folder)?;
         let folder = folder.as_path();
         let session_id = random_hex(8)?;
         let identity = format!("drgnx-{}", random_hex(8)?);
-        let conn = Connection::create(folder, id, &spec.name)?;
+        let (conn, block) = match wire {
+            Wire::Ipc => (Connection::create(folder, id, &spec.name)?, None),
+            Wire::Tcp(claimed) => {
+                // ports nobody else on this machine holds (`debug::ports`' machine-wide locks); each is checked to be the
+                // kernel's own before the hub connects to it
+                let block = match claimed {
+                    Some(b) => b,
+                    None => crate::debug::ports::machine().claim()?,
+                };
+                let p = block.ports();
+                let ports = [p[0], p[1], p[2], p[3], p[4]];
+                (
+                    Connection::create_tcp(folder, id, &spec.name, ports)?,
+                    Some(block),
+                )
+            }
+        };
         let argv = spec.argv_for(&conn.path);
-        let program = argv.first().ok_or("the kernelspec has no command")?;
+        let program = argv
+            .first()
+            .ok_or_else(|| "the kernelspec has no command".to_string())?;
         let runtime_dir: &OsStr = folder.as_os_str();
         let mut set: Vec<(&str, &OsStr)> = vec![("JUPYTER_RUNTIME_DIR", runtime_dir)];
         for (k, v) in &spec.env {
@@ -217,10 +300,19 @@ impl Kernel {
             }));
         });
         let bring_up = async {
-            wait_endpoints(&conn, &mut exit.clone()).await?;
+            wait_endpoints(&conn, pid, &mut exit.clone()).await?;
             let mut session = Session::connect(&conn, &identity, t.limits).await?;
+            // asked again once connected: the listeners are still the kernel's alone (a listener that took the port
+            // between the first check and the connect is named, and nothing more is sent)
+            if let Some(ports) = conn.ports
+                && !tcp_listeners_are_the_kernels(ports, pid).await?
+            {
+                return Err("the kernel's ports have no listener after the connect"
+                    .to_string()
+                    .into());
+            }
             ready(&mut session, &session_id, &mut exit.clone(), t.ping).await?;
-            Ok::<Session, String>(session)
+            Ok::<Session, Fail>(session)
         };
         match crate::clock::timeout(t.ready, bring_up).await {
             Ok(Ok(session)) => {
@@ -229,6 +321,7 @@ impl Kernel {
                     name: spec.name.clone(),
                     session,
                     _conn: conn,
+                    _block: block,
                     pid,
                     exit,
                     interrupt: spec.interrupt,
@@ -246,7 +339,8 @@ impl Kernel {
                     "the kernel {} was not ready within {} s",
                     spec.name,
                     t.ready.as_secs_f64()
-                ))
+                )
+                .into())
             }
         }
     }
@@ -404,20 +498,50 @@ async fn exited(rx: &mut watch::Receiver<Option<Exit>>) -> Exit {
     }
 }
 
-/// Wait until the kernel's four socket files exist and are sockets of ours, or the process has ended.
+/// Wait until the kernel's four sockets are there, or the process has ended (a refusal: it made none). Over ipc they are files that
+/// are sockets of ours. Over tcp they are loopback ports whose every listener is in the kernel's process group
+/// (`debug::ports::owned`): the hub never connects to a port on a probe, because the port the hub claimed and the bind the
+/// kernel makes are apart, and a listener that is not the kernel's is an error naming the port, never connected to.
+/// Whether the four channels' ports each have listeners that are the kernel's own (its process or group PID) and that no other
+/// process of this account can join (`Ok(true)` for all), not all there yet (`Ok(false)`), or one that is not (an error
+/// naming the port: nothing is connected to it).
+async fn tcp_listeners_are_the_kernels(ports: [u16; 5], pid: i32) -> Result<bool, String> {
+    let four = [ports[0], ports[1], ports[2], ports[3]];
+    crate::clock::blocking(move || {
+        let mut all = true;
+        for p in four {
+            match crate::debug::ports::exclusively_owned(p, &[pid]) {
+                Ok(true) => {}
+                Ok(false) => all = false,
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(all)
+    })
+    .await
+    .map_err(|e| format!("the port check failed: {e}"))?
+}
+
 async fn wait_endpoints(
     conn: &Connection,
+    pid: i32,
     exit: &mut watch::Receiver<Option<Exit>>,
-) -> Result<(), String> {
+) -> Result<(), Fail> {
     loop {
-        let all = ["shell", "iopub", "stdin", "control"]
-            .iter()
-            .all(|c| conn.socket(c).is_some_and(|p| is_our_socket(&p)));
+        let all = match conn.ports {
+            None => ["shell", "iopub", "stdin", "control"]
+                .iter()
+                .all(|c| conn.socket(c).is_some_and(|p| is_our_socket(&p))),
+            Some(ports) => tcp_listeners_are_the_kernels(ports, pid).await?,
+        };
         if all {
             return Ok(());
         }
         if let Some(e) = exit.borrow().clone() {
-            return Err(format!("the kernel {e} before it was ready"));
+            return Err(Fail {
+                why: format!("the kernel {e} before it was ready"),
+                refused: true,
+            });
         }
         crate::clock::sleep(Duration::from_millis(25)).await;
     }
@@ -457,3 +581,5 @@ async fn ready(
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_live;

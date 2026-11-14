@@ -11,6 +11,8 @@
  (:file "wb/drgnx-explorer.el" :in drgnx-explorer--find-draw-old :what erase-buffer :kind listing :why "the find-in-tree result is the same listing, built whole (spec non-goal)")
  (:file "wb/drgnx-view.el" :in drgnx-view--remove-rows :what delete-region :kind recovery :why "the fallback when the row starts no longer match the text (a foreign edit); the normal path removes rows in slices")
  (:file "wb/drgnx-view.el" :in drgnx-view--self-check :what delete-region :kind recovery :why "a view whose region is not as long as its entries resets it, then draws every row again")
+ (:file "modules/lang/drgnx-notebook.el" :in drgnx-notebook--install :what erase-buffer :kind document :why "the notebook's text is built once, when the hub has opened the file")
+ (:file "modules/lang/drgnx-notebook.el" :in drgnx-notebook-open-output :what erase-buffer :kind document :why "a cell's whole output is shown when the user opens it")
  (:file "modules/lang/drgnx-markdown.el" :in drgnx-markdown--insert-html :what erase-buffer :kind document :why "the html preview is built when the user opens it")
  (:file "modules/lang/drgnx-markdown.el" :in drgnx-markdown--render :what erase-buffer :kind document :why "the markdown view is built when the user opens it")
  (:file "modules/tools/drgnx-agent-settings.el" :in drgnx-agent-settings--render :what erase-buffer :kind document :why "the settings page is drawn on the user's action")

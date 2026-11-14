@@ -628,6 +628,21 @@ without it the trail comes back empty (`drgnx-ci/the-sandbox-lane-builds-the-pac
 `drgnx-ci/the-debug-rows-the-escape-lane-skips-run-in-debug-live` holds that no
 skipped debug module goes unrun.
 
+The live notebook rows (`notebook::kernel::tests_live`, [testing.md](testing.md), "Live notebook kernels") need a real ipykernel.
+The kernel is installed by one step, `test/container/nb-kernel.sh`. It makes `/opt/nb-kernel` from the hash-pinned set
+`test/container/ipykernel-requirements.txt` with `python3.15`. The set was compiled for Python 3.15, Fedora 45's `python3`, and the
+step stops if that interpreter is not there, so the install never meets another Python. Two images run the step at build:
+- the adapter image (`drgnx-debug-adapters:f45`, `Containerfile.debug`), through `test/container/debug-adapters-image.sh`, which
+  the `debug-live` job also runs;
+- the GUI test image (`Containerfile.gui`), for the notebook scenes' running kernel. The Nidhogg line's GUI images are built on it.
+
+Both images set `DRGNX_NB_KERNEL_PYTHON=/opt/nb-kernel/bin/python3`, and nothing downloads after the build. The ci-workflows test
+`the-adapter-and-gui-images-get-the-kernel-from-one-step` holds that both images run the step and that no other file makes the venv. The job runs the rows by name with
+`DRGNX_NB_KERNEL_PYTHON=/opt/nb-kernel/bin/python3`, and the image's `ENV` sets the same. The escape legs' sandbox lane, which runs
+every other ignored row of the crate on runners whose Python is not 3.15, skips `notebook::kernel::tests_live`. The ci-workflows test
+`the-live-notebook-rows-run-in-the-adapter-image-and-nowhere-else` holds the skip, the job's line and variable, the image's `ENV` and
+the `python3.15` venv.
+
 ## The reduced tier's launch rows in a VM
 
 `tests/launch_sandboxed.rs` runs its reduced-tier rows on the reduced tier only on a kernel with Landlock ABI 9 or
