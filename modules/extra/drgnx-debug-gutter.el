@@ -436,11 +436,15 @@ text may differ), or the positions are not a whole line of this text."
          (or (= end (point-max)) (eq (char-before end) ?\n))
          (cons pos end))))
 
-(defun drgnx-debug-gutter--place (bp)
-  "Put BP's mark on its line (the adapter's line where it bound it elsewhere): at the hub's positions, else where
-counting lines finds it."
-  (let* ((line (or (plist-get bp :bound_line) (plist-get bp :line)))
-         (b (or (drgnx-debug-gutter--hub-bounds bp) (drgnx-debug-gutter--line-bounds line)))
+(defun drgnx-debug-gutter--line-of (bp)
+  "The line BP's mark sits on: the adapter's where it bound the breakpoint elsewhere."
+  (or (plist-get bp :bound_line) (plist-get bp :line)))
+
+(defun drgnx-debug-gutter--place (bp &optional bounds)
+  "Put BP's mark on its line at BOUNDS (BEG . END), else the hub's positions that came with it, else where counting
+lines finds it."
+  (let* ((line (drgnx-debug-gutter--line-of bp))
+         (b (or bounds (drgnx-debug-gutter--hub-bounds bp) (drgnx-debug-gutter--line-bounds line)))
          (col (plist-get bp :column))
          (o (if col
                 (let ((at (drgnx-debug-gutter--column-pos (car b) col)))
@@ -471,9 +475,11 @@ counting lines finds it."
 
 (defun drgnx-debug-gutter--draw ()
   "Draw `drgnx-debug-gutter--bps': marks moved by edits stay where the text put them while the buffer has unsaved
-changes (drafts); otherwise each sits on the store's line."
+changes (drafts); otherwise each sits on the store's line.  A mark that needs placing goes to the positions the hub
+sent with it, or (a buffer with unsaved changes) to those it answers for the buffer's text as it is now; lines are
+counted only when the hub cannot say."
   (drgnx-debug-gutter--claim)
-  (let ((ids (mapcar (lambda (bp) (plist-get bp :id)) drgnx-debug-gutter--bps)))
+  (let ((ids (mapcar (lambda (bp) (plist-get bp :id)) drgnx-debug-gutter--bps)) pending)
     (dolist (e drgnx-debug-gutter--overlays)
       (unless (and (memq (car e) ids) (overlay-buffer (cdr e)))
         (delete-overlay (cdr e))))
@@ -482,13 +488,55 @@ changes (drafts); otherwise each sits on the store's line."
     (dolist (bp drgnx-debug-gutter--bps)
       (let ((o (cdr (assq (plist-get bp :id) drgnx-debug-gutter--overlays))))
         (when (and o (not (buffer-modified-p))
-                   (/= (overlay-get o 'drgnx-debug-drawn) (or (plist-get bp :bound_line) (plist-get bp :line))))
+                   (/= (overlay-get o 'drgnx-debug-drawn) (drgnx-debug-gutter--line-of bp)))
           (delete-overlay o)
           (setq drgnx-debug-gutter--overlays (assq-delete-all (plist-get bp :id) drgnx-debug-gutter--overlays))
           (setq o nil))
-        (drgnx-debug-gutter--dress (or o (drgnx-debug-gutter--place bp)) bp))))
+        (cond (o (drgnx-debug-gutter--dress o bp))
+              ((drgnx-debug-gutter--hub-bounds bp) (drgnx-debug-gutter--dress (drgnx-debug-gutter--place bp) bp))
+              (t (push bp pending)))))
+    (when pending (drgnx-debug-gutter--place-asking (nreverse pending))))
   (drgnx-debug-gutter--ruler-later)
   (drgnx-debug-gutter--candidates-refresh))
+
+(defun drgnx-debug-gutter--place-counting (bps)
+  "Put the marks of BPS on their lines, counting lines (the hub is down, the buffer is not tracked or is over its
+limit)."
+  (dolist (bp bps)
+    (unless (assq (plist-get bp :id) drgnx-debug-gutter--overlays)
+      (drgnx-debug-gutter--dress (drgnx-debug-gutter--place bp) bp))))
+
+(defun drgnx-debug-gutter--place-asking (bps)
+  "Place the marks of BPS from the hub's positions for the buffer's text as it is now (`history/line-positions', the
+buffer's changes handed over first); no line is counted unless the hub cannot answer."
+  (let ((buffer (current-buffer)) (tick (buffer-chars-modified-tick)))
+    (unless (condition-case nil
+                (drgnx-history-ask buffer "history/line-positions"
+                                   (lambda (result error) (drgnx-debug-gutter--placed buffer tick bps result error))
+                                   (list :lines (vconcat (mapcar #'drgnx-debug-gutter--line-of bps))))
+              (error nil))
+      (drgnx-debug-gutter--place-counting bps))))
+
+(defun drgnx-debug-gutter--placed (buffer tick bps result error)
+  "The hub's RESULT (or ERROR) for the marks BPS of BUFFER, asked at modification TICK."
+  (when (and (buffer-live-p buffer) (buffer-local-value 'drgnx-debug-gutter-mode buffer))
+    (with-current-buffer buffer
+      (let ((want (seq-filter (lambda (bp) (and (not (assq (plist-get bp :id) drgnx-debug-gutter--overlays))
+                                                (memq bp drgnx-debug-gutter--bps)))
+                              bps))
+            (positions (append (plist-get result :positions) nil)))
+        (cond ((or error (not (plist-get result :tracked)) (null positions))
+               (drgnx-debug-gutter--place-counting want))
+              ;; typed since the question: the positions are of the older text, and the marks come again
+              ((/= tick (buffer-chars-modified-tick))
+               (when want (drgnx-debug-gutter--draw)))
+              (t
+               (dolist (bp want)
+                 (let ((p (seq-find (lambda (p) (eql (plist-get p :line) (drgnx-debug-gutter--line-of bp))) positions)))
+                   (drgnx-debug-gutter--dress
+                    (drgnx-debug-gutter--place bp (and p (cons (plist-get p :pos) (plist-get p :end))))
+                    bp)))
+               (drgnx-debug-gutter--ruler-later)))))))
 
 (defun drgnx-debug-gutter--restring (buffer)
   "`drgnx-margins-changed-functions': the column moved in BUFFER's margin; its marks take the new pad."

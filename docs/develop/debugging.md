@@ -434,7 +434,11 @@ only). Each breakpoint of that view and event carries `pos` and `end` (offload s
 positions where its line (the adapter's, when it bound it elsewhere) starts and just after it, counted by the hub in
 the text of the editor's tracked buffer (`editor::marks::place_breakpoints`; none when no buffer of the file is
 tracked or its text is over the marks' limit). The editor lays a mark at them, counting no line, when the buffer has no
-unsaved changes and they bound a whole line of its text; otherwise it counts lines as before.
+unsaved changes and they bound a whole line of its text. A buffer with unsaved changes asks the hub instead
+(`history/line-positions {path, worktree_root, lines}` through `drgnx-history-ask`, which hands the buffer's changes
+over first, so the hub's text is the buffer's), one question for all the marks that need placing; an answer for text
+typed since is dropped and the marks are asked for again. Lines are counted only when the hub cannot say: it is down,
+the buffer is not tracked, or its text is over the limit.
 
 - Glyphs follow the mockup's legend (`docs/specs/drgnx/the-look/debugging.html`): ten kinds (`bp`, `unverified`,
   `cond`, `log`, `off`, `hover`, `stop`, `stop-bp`, `frame`, `exception`) as SVGs coloured from the role faces

@@ -352,19 +352,56 @@ it on again with the store's lines."
           (drgnx-debug-gutter--event "debug-breakpoints" view))
         (should (equal (debug-gutter-test--marks) '((5 . bp) (8 . bp))))))))
 
-(ert-deftest drgnx-debug-gutter/unsaved-changes-and-odd-positions-fall-back-to-the-lines ()
+(ert-deftest drgnx-debug-gutter/odd-positions-and-a-silent-hub-fall-back-to-the-lines ()
   (let ((debug-gutter-test--store nil) (debug-gutter-test--next 0))
     (debug-gutter-test--with 10
       (let ((view (lambda (v bps) (list :root "/r" :path buffer-file-name :version v :breakpoints bps))))
         ;; positions that are not a whole line of this text: the line's number decides
         (drgnx-debug-gutter--event "debug-breakpoints"
                                    (funcall view 1 (list (list :id 1 :line 5 :enabled t :verified t :pos 3 :end 4))))
-        (should (equal (debug-gutter-test--marks) '((5 . bp))))
-        ;; unsaved changes: the hub's text may differ from this one, so its positions are not used
-        (insert "x")
+        (should (equal (debug-gutter-test--marks) '((5 . bp))))))))
+
+;; A buffer with unsaved changes: the hub holds its text (the history drains it first), so the hub says where the
+;; line is: `history/line-positions', asked through `drgnx-history-ask'.  No line is counted.
+(ert-deftest drgnx-debug-gutter/a-modified-buffers-marks-are-placed-by-the-hub-without-counting-lines ()
+  (let ((debug-gutter-test--store nil) (debug-gutter-test--next 0) (asked nil))
+    (debug-gutter-test--with 10
+      (insert "x")                                           ; unsaved: the positions of the event are not used
+      (cl-letf (((symbol-function 'drgnx-history-ask)
+                 (lambda (_buffer method callback &optional params)
+                   (push (cons method params) asked)
+                   (funcall callback
+                            (list :tracked t
+                                  :positions (mapcar (lambda (l)
+                                                       (save-excursion
+                                                         (goto-char (point-min)) (forward-line (1- l))
+                                                         (let ((pos (point))) (forward-line 1) (list :line l :pos pos :end (point)))))
+                                                     (append (plist-get params :lines) nil)))
+                            nil)
+                   t))
+                ((symbol-function 'drgnx-debug-gutter--line-bounds) (lambda (&rest _) (error "counted lines"))))
         (drgnx-debug-gutter--event "debug-breakpoints"
-                                   (funcall view 2 (list (list :id 2 :line 6 :enabled t :verified t :pos 1 :end 8))))
-        (should (equal (debug-gutter-test--marks) '((6 . bp))))))))
+                                   (list :root "/r" :path buffer-file-name :version 1
+                                         :breakpoints (list (list :id 1 :line 5 :enabled t :verified t :pos 1 :end 8)
+                                                            (list :id 2 :line 7 :enabled t :verified t)))))
+      (should (equal (car (car asked)) "history/line-positions"))
+      (should (equal (append (plist-get (cdr (car asked)) :lines) nil) '(5 7)))   ; one question for both
+      (should (equal (debug-gutter-test--marks) '((5 . bp) (7 . bp)))))))
+
+(ert-deftest drgnx-debug-gutter/an-answer-for-text-typed-since-is-asked-for-again ()
+  (let ((debug-gutter-test--store nil) (debug-gutter-test--next 0) (callbacks nil))
+    (debug-gutter-test--with 10
+      (insert "x")
+      (cl-letf (((symbol-function 'drgnx-history-ask)
+                 (lambda (_buffer _method callback &optional _params) (setq callbacks (append callbacks (list callback))) t)))
+        (drgnx-debug-gutter--event "debug-breakpoints"
+                                   (list :root "/r" :path buffer-file-name :version 1
+                                         :breakpoints (list (list :id 1 :line 5 :enabled t :verified t))))
+        (should (= (length callbacks) 1))
+        (insert "y")                                         ; typed before the answer: its positions are of older text
+        (funcall (pop callbacks) (list :tracked t :positions (list (list :line 5 :pos 1 :end 2))) nil)
+        (should-not (debug-gutter-test--marks))              ; nothing placed at stale positions
+        (should (= (length callbacks) 1))))))                ; the marks are asked for again
 
 (ert-deftest drgnx-debug-gutter/terminal-characters-follow-the-claim ()
   (let ((debug-gutter-test--store nil) (debug-gutter-test--next 0))

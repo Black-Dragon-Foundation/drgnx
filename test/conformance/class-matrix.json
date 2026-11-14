@@ -125,6 +125,7 @@
   "gateway/unregister": ["user"],
   "git/blame": ["user"],
   "git/blame/line": ["user"],
+  "history/line-positions": ["user"],
   "git/letters": ["user"],
   "git/stage-hunk": ["user"],
   "graph/backup": ["user"],
