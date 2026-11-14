@@ -24,6 +24,10 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::{mpsc, oneshot};
 
+/// How long a program's clipboard read waits for the editor's answer, on the hub's clock: then the hub answers the
+/// worker "no" itself (the worker waits for the hub, never on the wall).
+pub const CLIPBOARD_WAIT: Duration = Duration::from_secs(30);
+
 /// Where the terminals' events go: the editors' connections.
 pub trait Sink: Send + Sync {
     /// EVENT with DATA to connection CONN; false when it took nothing.
@@ -400,10 +404,22 @@ impl Terms {
                 "term/clipboard-write",
                 json!({"primary": primary, "mime": mime, "data": data}),
             ),
-            Out::ClipboardRead { req, primary } => ev(
-                "term/clipboard-read",
-                json!({"req": req, "primary": primary}),
-            ),
+            Out::ClipboardRead { req, primary } => {
+                ev(
+                    "term/clipboard-read",
+                    json!({"req": req, "primary": primary}),
+                );
+                // unanswered by then, the read is denied: the worker takes the first answer for REQ, the editor's or
+                // this one, and drops the other
+                let weak = Arc::downgrade(&self.inner);
+                let id = id.to_owned();
+                crate::clock::spawn("term:clipboard-wait", async move {
+                    crate::clock::sleep(CLIPBOARD_WAIT).await;
+                    if let Some(inner) = weak.upgrade() {
+                        Terms { inner }.send(&id, &In::ClipboardReply { req, text: None });
+                    }
+                });
+            }
             Out::Prompt { kind, exit } => {
                 // kind 4: a command ended (OSC 133 D)
                 if kind == 4 && exit.is_some() {

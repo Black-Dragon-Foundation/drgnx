@@ -1132,13 +1132,17 @@ OWN-HUB: the workload started the hub (`drgnx-perf--hub-start'), and the teardow
       (defun drgnx-perf--term-open ()
         ,(if (not flood)
              `(setq drgnx-perf--term (drgnx-perf--term-start ',argv))
-           ;; the Work map holds the panel: both terminals open in the editor area, the typed one above, the flood below
-           `(let ((display-buffer-overriding-action '((display-buffer-same-window)))
-                  (top (selected-window)))
-              (setq drgnx-perf--term (drgnx-perf--term-start ',argv))
-              (select-window (split-window top nil 'below))
-              (setq drgnx-perf--term2 (drgnx-perf--term-start ',flood))
-              (select-window top))))
+           ;; the map stays shown: a frame showing it is in layout Work, which the bus moves it into, and out of once no
+           ;; window shows it (`drgnx-work-space--follow-layout'), so the bus is settled first and nothing opens over
+           ;; the map: the typed terminal below the editor window, the flood in the panel (the display rules)
+           `(progn
+              (drgnx-signal--flush)
+              (select-window (split-window (drgnx-wb-editor-window) nil 'below))
+              (let ((display-buffer-overriding-action '((display-buffer-same-window))))
+                (setq drgnx-perf--term (drgnx-perf--term-start ',argv)))
+              (let ((typed (selected-window)))
+                (setq drgnx-perf--term2 (drgnx-perf--term-start ',flood))
+                (select-window typed)))))
       (defun drgnx-perf--term-show ()
         "The terminal in the panel (the display rules choose where), the editor window selected."
         (let ((win (selected-window)))

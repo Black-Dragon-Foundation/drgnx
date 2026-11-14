@@ -226,20 +226,30 @@ asked for drawn (the view has nothing pending).")
       (defun drgnx-perf--wl-class-step (orig &rest args)
         (let ((t0 (float-time)))
           (prog1 (apply orig args) (push (* 1000 (- (float-time) t0)) drgnx-perf--wl-class))))
+      (defvar drgnx-perf--wl-model 0 "The newest model version of the map's view the hub sent (Sjá's queue).")
+      (defun drgnx-perf--wl-got-model (view version)
+        "A model of VIEW queued at VERSION (`drgnx-view-model-functions'): the map's newest, kept."
+        (when (and (integerp version) (> version drgnx-perf--wl-model)
+                   (equal view (drgnx-view-patch-view (buffer-local-value 'drgnx-view-patch drgnx-perf--work-buf))))
+          (setq drgnx-perf--wl-model version)))
       (defun drgnx-perf--wl-updates ()
-        "The map's updates so far: its patches' version."
-        (or (drgnx-view-patch-version (buffer-local-value 'drgnx-view-patch drgnx-perf--work-buf)) 0))
+        "The map's updates so far: the newest version the hub sent it, its patches' or (where Sjá holds the rows) its
+model's, whichever is newer (the rows' version moves only when a card's text changes; the agents' streaming moves the
+model far more often)."
+        (max drgnx-perf--wl-model
+             (or (drgnx-view-patch-version (buffer-local-value 'drgnx-view-patch drgnx-perf--work-buf)) 0)))
       (defun drgnx-perf--wl-draw-ms ()
         "The ms the map's draws took so far: its inserter's view's count, or (Sjá's draws) the slices timed since the arm."
         (let ((v (drgnx-perf--work-view)))
           (if (drgnx-view-p v) (plist-get (drgnx-view-stats v) :draw-ms) (apply #'+ 0.0 drgnx-perf--wl-slices))))
       (defun drgnx-perf--wl-arm ()
         (setq drgnx-perf--wl-slices nil drgnx-perf--wl-long nil drgnx-perf--wl-consed nil drgnx-perf--wl-idle 0
-              drgnx-perf--wl-gcs nil drgnx-perf--wl-class nil
+              drgnx-perf--wl-gcs nil drgnx-perf--wl-class nil drgnx-perf--wl-model 0
               drgnx-perf--wl-start (list (drgnx-perf--wl-draw-ms)
                                          (drgnx-perf--wl-updates)))
         (drgnx-perf-advise-draws :around #'drgnx-perf--wl-slice)
-        (advice-add 'drgnx-view-nav-class-step :around #'drgnx-perf--wl-class-step))
+        (advice-add 'drgnx-view-nav-class-step :around #'drgnx-perf--wl-class-step)
+        (add-hook 'drgnx-view-model-functions #'drgnx-perf--wl-got-model))
       (defun drgnx-perf--wl-wait (secs)
         "Let the session run for SECS: one wait to the deadline, waking only for process output."
         (let ((deadline (+ (float-time) secs)))
@@ -256,6 +266,7 @@ asked for drawn (the view has nothing pending).")
                  (deltas (- (drgnx-perf--wl-updates) (cadr drgnx-perf--wl-start))))
             (drgnx-perf-unadvise-draws #'drgnx-perf--wl-slice)
             (advice-remove 'drgnx-view-nav-class-step #'drgnx-perf--wl-class-step)
+            (remove-hook 'drgnx-view-model-functions #'drgnx-perf--wl-got-model)
             (when (< deltas 30) (error "Premise: the map got %d deltas in %.0f s" deltas secs))
             (append (list :draw_ms_s (drgnx-perf--round2 (/ draw secs)) :deltas deltas
                           :long (vconcat (mapcar (lambda (l) (format "%S" l)) (seq-take drgnx-perf--wl-long 12)))

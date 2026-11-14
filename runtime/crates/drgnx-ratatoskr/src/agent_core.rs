@@ -203,6 +203,10 @@ pub async fn serve(
         Params::HistoryHunks(p) => answer(crate::history::views::hunks(f, c, p).await),
         Params::GitBlame(p) => answer(crate::history::views::git_blame(f, c, p).await),
         Params::GitBlameLine(p) => answer(crate::history::views::git_blame_line(f, c, p).await),
+        Params::HistoryEolFit(p) => answer(crate::history::views::eol_fit(f, c, p).await),
+        Params::HistoryLinePositions(p) => {
+            answer(crate::history::views::line_positions(f, c, p).await)
+        }
         Params::GitStageHunk(p) => answer(crate::history::views::stage_hunk(f, c, p).await),
         Params::HistoryHunksHead(p) => answer(crate::history::views::hunks_head(f, c, p).await),
         Params::HistoryTake(p) => answer(crate::history::branches::take(f, c, p).await),

@@ -404,6 +404,8 @@ params! {
     HistoryHunks(history::BranchHunksParams),
     GitBlame(history::GitBlameParams),
     GitBlameLine(history::GitBlameLineParams),
+    HistoryLinePositions(history::LinePositionsParams),
+    HistoryEolFit(history::EolFitParams),
     GitStageHunk(history::StageHunkParams),
     HistoryHunksHead(history::HeadHunksParams),
     HistoryTake(history::TakeParams),
