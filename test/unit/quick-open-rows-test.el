@@ -95,18 +95,17 @@ already.  No file is opened."
     (should (eq called #'project-find-file))
     (should-not sent)))
 
-(ert-deftest drgnx-quick-open/hub-down-lists-the-folder-by-stream ()
-  "With no hub connection a local folder is listed by the stream, and the hub is never asked."
-  (let ((sent nil) started (drgnx-hub--events nil) (dir (file-name-as-directory (make-temp-file "drgnx-qo" t))))
+(ert-deftest drgnx-quick-open/hub-down-is-project-find-file ()
+  "With no hub connection a local folder is `project-find-file' too: nothing is listed or ranked in Lisp, and the hub
+is never asked."
+  (let ((sent nil) called (drgnx-hub--events nil) (dir (file-name-as-directory (make-temp-file "drgnx-qo" t))))
     (unwind-protect
         (cl-letf (((symbol-function 'drgnx-quick-open--root) (lambda () dir))
-                  ((symbol-function 'drgnx-file-stream-start)
-                   (lambda (root &rest _) (setq started root) nil))   ; no stream: falls on `project-find-file'
-                  ((symbol-function 'call-interactively) #'ignore))
+                  ((symbol-function 'call-interactively) (lambda (f &rest _) (setq called f))))
           (should-not (drgnx-quick-open--hub-p dir))
           (let ((drgnx-quick-open-send-function (lambda (m p) (push (list m p) sent))))
             (drgnx-quick-open))
-          (should (equal started dir))
+          (should (eq called #'project-find-file))
           (should-not sent))
       (delete-directory dir t))))
 
