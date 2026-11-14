@@ -2145,17 +2145,14 @@ most `drgnx-view-patch-paused-max` (256), and applied in order on resume; past t
 
 **The native view model.** A view whose keys move a selection also gets its model (`view-model`, docs/develop/hub.md
 "The native view model"), which Sjá, in Nidhogg (`nidhogg-views.el`, loaded by `require`), holds and answers keys
-from. drgnx never parses it: the hub client routes a line that starts `{"event":"view-model"` before any parse
-(`drgnx-hub--model-line-p`, a compare in place). Framed (`nidhogg-workers-framing`), Nidhogg's reader pushes the line
-to Sjá itself (`:raw-prefix` with `:raw-to-sja`), so it never becomes a Lisp string; there is no framed path that
-hands it to Lisp. A Search window move's line was 1.2 MB, 87 % of what a page consed, and the reason the full
+from. drgnx never parses it: Nidhogg's reader pushes a line that starts `{"event":"view-model"`
+to Sjá itself (`:raw-prefix` with `:raw-to-sja`), so it never becomes a Lisp string; there is no path that hands it to
+Lisp. A Search window move's line was 1.2 MB, 87 % of what a page consed, and the reason the full
 collection came every ~42 pages (with the push and the match nodes' paths cut, 2026-11-11, pinned, release hub, 3
-runs: a page conses 224 kB, was 1540; page p50 24.6 ms, was 36.6; no page with a collection, was 1 in 12). Unframed,
-the filter routes the line to `drgnx-view-model-line`, which hands it whole to Sjá (`nidhogg-view-push`); without
-Sjá it is dropped. Its batch entry carries Sjá's answer, which goes to
+runs: a page conses 224 kB, was 1540; page p50 24.6 ms, was 36.6; no page with a collection, was 1 in 12). Its batch entry carries Sjá's answer, which goes to
 `drgnx-view-model--pushed` (the same decisions as after `nidhogg-view-push`); Sjá's refusal is reported by the
 connection's guard, as a failed push is. The reader ends a batch before such a line, so it reaches Sjá after every
-message before it, as in the filter's order.
+message before it.
 - **Instances:** every hub-fed buffer opens an instance of its view in Sjá at attach (`drgnx-view-patch-handle`),
   closed with the buffer or at teardown; the view (its queue and stream in Sjá, and `drgnx-view-model--views`, the
   editor's side: an outstanding resync) goes with its last buffer.

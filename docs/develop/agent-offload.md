@@ -37,3 +37,12 @@ from the hook's value and made again when a handler is added or removed, and the
 (`drgnx-guard-run-functions`, each in its own guard, in the hook's order). A handler with no property takes every event
 (`drgnx-exec--event`, which also refreshes a stale job list on any event). A new handler declares its events; one
 that does not is called for each, as before.
+
+## Every hub connection is framed
+
+Nidhogg's reader splits and parses every hub connection's input (`drgnx-hub--frame`); `drgnx-hub--lines`,
+`drgnx-hub--client-filter` and the `nidhogg-workers-framing` condition on the hub client are gone, and so is the
+unframed `json-parse-string` on the main thread. The probe (`drgnx-hub--ping-socket`) is no client connection (one `ping`, two lines, a filter of its own). A framing the
+reader refuses is an error. The delivery gate, which replaces a connection's filter, parses each held line itself in
+the fixture and hands it to `drgnx-hub--client-batch`. `drgnx-hub--model-line` stays for the gate and the perf harness's
+advice.

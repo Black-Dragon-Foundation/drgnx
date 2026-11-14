@@ -245,19 +245,9 @@ Emacs connects again)."
                   (process-put below :sending (+ since (- (float-time) t0))))))))
       (process-put conn :sending nil))))
 
-(defun drgnx-hub--line-too-long (conn limit)
-  (message "drgnx hub: a line over %d characters; its connection is closed" limit)
-  (process-put conn :pending nil)
-  (delete-process conn))
-
 (defconst drgnx-hub--model-prefix "{\"event\":\"view-model\""
   "How a hub's `view-model' line starts (the hub writes `event' first): such a line goes to Sjá whole, never parsed
-here (`drgnx-hub--model-line-p', `:raw-prefix' on the framed path).")
-
-(defsubst drgnx-hub--model-line-p (line)
-  "Non-nil when LINE starts with `drgnx-hub--model-prefix' (a compare in place: nothing is allocated)."
-  (and (>= (length line) (length drgnx-hub--model-prefix))
-       (eq t (compare-strings line 0 (length drgnx-hub--model-prefix) drgnx-hub--model-prefix nil nil))))
+here (`:raw-prefix' of the framing).")
 
 (declare-function drgnx-view-model-line "drgnx-view" (line))
 
@@ -272,55 +262,31 @@ views are not loaded."
   (when error (signal (car error) (cdr error)))
   (when (fboundp 'drgnx-view-model--pushed) (drgnx-view-model--pushed (nidhogg-view--pushed answer))))
 
-(defun drgnx-hub--lines (conn chunk fn &optional bad limit raw)
-  "Split CONN's input into lines; FN gets each parsed JSON object, BAD (when given) each line that is not JSON.
-With LIMIT, a line longer than LIMIT closes CONN: nothing after it is read, nor after FN or BAD closed CONN.
-With RAW, a line that starts with `drgnx-hub--model-prefix' goes to RAW whole, never parsed.
-Only CHUNK is searched for a newline: the start of a line still open waits in CONN's list of pieces (`:pending'),
-joined once when its newline comes, so a long line in many chunks costs its length (HUB-LINES-1); a chunk with no
-newline is held as it came, not copied."
-  (let ((start 0) (n (length chunk)) (live (process-live-p conn)) nl)
-    (while (and (setq nl (string-search "\n" chunk start)) (or (not live) (process-live-p conn)))
-      (let* ((pending (process-get conn :pending))
-             (line (if pending (apply #'concat (nreverse (cons (substring chunk start nl) pending)))
-                     (substring chunk start nl))))
-        (process-put conn :pending nil)
-        (process-put conn :pending-length 0)
-        (setq start (1+ nl))
-        (cond
-         ((and limit (> (length line) limit))
-          (setq start n) (drgnx-hub--line-too-long conn limit))
-         ((and raw (drgnx-hub--model-line-p line)) (funcall raw line))
-         (t
-          (let ((json (condition-case nil
-                          (json-parse-string line :object-type 'plist :array-type 'list :null-object nil :false-object nil)
-                        (error :bad))))
-            (cond ((eq json :bad) (when bad (funcall bad line)))
-                  (json (funcall fn json))))))))
-    (when (and (< start n) (or (not live) (process-live-p conn)))
-      (let ((length (+ (or (process-get conn :pending-length) 0) (- n start))))
-        (if (and limit (> length limit))
-            (drgnx-hub--line-too-long conn limit)
-          ;; a chunk with no newline is held as it came (the filter's string is fresh per call): a line of megabytes
-          ;; (a view model) costs its chunks and the join, not a copy of each chunk as well
-          (process-put conn :pending (cons (if (= start 0) chunk (substring chunk start)) (process-get conn :pending)))
-          (process-put conn :pending-length length))))))
 
 ;;;; The client side
 
 (defun drgnx-hub--ping-socket (socket)
   "Does a hub answer on SOCKET?  (At most a second; never an error.)  One where it is not private to this user is
-never asked.  Event lines (Ratatoskr's challenge comes first) are skipped: the first other line is the answer."
+never asked.  Event lines (Ratatoskr's challenge comes first) are skipped: the first other line is the answer.  The
+probe is one `ping' and its answer, read by a filter of its own that parses the lines of those two exchanges; it is no
+hub connection of the client (nothing is subscribed, no event is handled)."
   (condition-case nil
       (when (and (file-exists-p socket) (not (drgnx-hub--untrusted socket)))
-        (let* ((answer nil)
-               (c (make-network-process :name "drgnx-hub-probe" :family 'local :service socket :noquery t
-                                        :coding 'utf-8-unix
-                                        :filter (drgnx-guard-wrap
-                                                 (lambda (p s)
-                                                   (drgnx-hub--lines p s (lambda (j) (unless (or answer (plist-get j :event))
-                                                                                       (setq answer j)))))
-                                                 "hub probe"))))
+        (let* ((answer nil) (partial "")
+               (c (make-network-process
+                   :name "drgnx-hub-probe" :family 'local :service socket :noquery t :coding 'utf-8-unix
+                   :filter (drgnx-guard-wrap
+                            (lambda (_p chunk)
+                              (let ((text (concat partial chunk)) (start 0) nl)
+                                (while (setq nl (string-search "\n" text start))
+                                  (let ((j (condition-case nil
+                                               (json-parse-string (substring text start nl) :object-type 'plist
+                                                                  :array-type 'list :null-object nil :false-object nil)
+                                             (error nil))))
+                                    (unless (or answer (not (consp j)) (plist-get j :event)) (setq answer j)))
+                                  (setq start (1+ nl)))
+                                (setq partial (substring text start))))
+                            "hub probe"))))
           (unwind-protect
               (progn (process-send-string c "{\"id\":0,\"method\":\"ping\"}\n")
                      (let ((deadline (+ (float-time) 1)))
@@ -341,15 +307,15 @@ error."
                   t))
     (error nil)))
 
-(defun drgnx-hub--connect-socket (filter)
-  "A connection to the hub's socket — never one that is not private to this user (`drgnx-hub--untrusted')."
+(defun drgnx-hub--connect-socket ()
+  "A connection to the hub's socket — never one that is not private to this user (`drgnx-hub--untrusted').  Its input
+is read and parsed by Nidhogg's reader (`drgnx-hub--frame'), never by a filter."
   (let ((socket (drgnx-hub-socket)))
     (when-let* ((why (drgnx-hub--untrusted socket)))
       (error "Not connecting to the drgnx hub: %s" why))
+    ;; binary in, UTF-8 out: Nidhogg's `lines' framing needs a decoding without state
     (make-network-process :name "drgnx-hub-client" :family 'local :service socket :noquery t
-                          ;; binary in, UTF-8 out: Nidhogg's `lines' framing needs a decoding without state; the
-                          ;; filter's `drgnx-hub--lines' parses UTF-8 bytes as well as characters
-                          :coding '(binary . utf-8-unix) :filter (drgnx-guard-wrap filter "hub connection"))))
+                          :coding '(binary . utf-8-unix) :filter #'ignore)))
 
 ;;;; Proofs and the binary on disk
 
@@ -461,35 +427,28 @@ path: a filter, a timer) never waits: the cached value, or nil while the read it
 
 ;;;; Connections: the challenge, hello, the queue, deadlines
 
-(defun drgnx-hub--client-filter (conn chunk)
-  "A client connection's filter: the challenge starts the hello, an answer settles its call, an event (on the
-subscribed connection) goes to `drgnx-hub-event-functions', a `view-model' line whole to its view's model."
-  (drgnx-hub--lines conn chunk (lambda (json) (drgnx-hub--client-line conn json)) nil nil #'drgnx-hub--model-line))
-
-(defvar nidhogg-workers-framing)
 (declare-function nidhogg-set-process-framing "nidhogg-io.c")
 (declare-function nidhogg-view--pushed "nidhogg-views" (r))
 (declare-function drgnx-view-model--pushed "drgnx-view" (r))
 
+(defun drgnx-hub--frame-with (conn batch-function)
+  "Have Nidhogg's reader thread split CONN's input into lines and parse them (JSON objects as plists, arrays as lists):
+the main thread gets batches of (MESSAGE RAW ERROR) at BATCH-FUNCTION, called with CONN and the batch.  There is no
+line limit.  An error from the framing is signalled: a connection nothing reads is of no use."
+  (nidhogg-set-process-framing conn 'lines :parse 'string :object-type 'plist :array-type 'list
+                               :null-object nil :false-object nil
+                               :raw-prefix drgnx-hub--model-prefix :raw-to-sja t
+                               :batch-function batch-function))
+
 (defun drgnx-hub--frame (conn)
-  "Have Nidhogg's reader thread split CONN's input into lines and parse them, when `nidhogg-workers-framing' is on:
-the main thread then gets batches (`drgnx-hub--client-batch') where it gets chunks (`drgnx-hub--client-filter').
-Without the feature or the switch, or on an error from the framing, the filter reads, as it always did.  No
-`:max-message': the client has no line limit.  A `view-model' line the reader pushes to Sjá itself (`:raw-prefix'
-with `:raw-to-sja'): the line, up to megabytes a window move, never becomes a Lisp string.  A connection whose
-filter is replaced (the delivery gate's, in tests) is unframed again by the reader itself."
-  (when (and (fboundp 'nidhogg-set-process-framing) (bound-and-true-p nidhogg-workers-framing))
-    (condition-case nil
-        (nidhogg-set-process-framing conn 'lines :parse 'string :object-type 'plist :array-type 'list
-                                     :null-object nil :false-object nil
-                                     :raw-prefix drgnx-hub--model-prefix :raw-to-sja t
-                                     :batch-function (drgnx-guard-wrap #'drgnx-hub--client-batch "hub connection"))
-      (error nil))))
+  "Frame CONN, a hub client connection (`drgnx-hub--frame-with'): its batches go to `drgnx-hub--client-batch'.  Every
+hub connection is framed.  A `view-model' line the reader pushes to Sjá itself (`:raw-prefix' with `:raw-to-sja') never
+becomes a Lisp string: up to megabytes a window move."
+  (drgnx-hub--frame-with conn (drgnx-guard-wrap #'drgnx-hub--client-batch "hub connection")))
 
 (defun drgnx-hub--client-batch (conn batch)
-  "The framed counterpart of `drgnx-hub--lines' with `drgnx-hub--client-line': BATCH is a list of (MESSAGE RAW ERROR)
-from CONN's reader, in the order the hub wrote them.  One whose line is not JSON (ERROR), or is JSON `null' or
-`false' (no MESSAGE), is skipped as `drgnx-hub--lines' skips it.  Nothing is read once CONN, live when the batch
+  "BATCH, a list of (MESSAGE RAW ERROR) from CONN's reader, in the order the hub wrote them, through
+`drgnx-hub--client-line'.  One whose line is not JSON (ERROR), or is JSON `null' or `false' (no MESSAGE), is skipped.  Nothing is read once CONN, live when the batch
 began, is not any more (nothing after `closed').  Each message runs in a guard of its own: one that fails never drops
 the rest of the batch.  A last line with no newline before the end of the stream is a message here, where the filter
 drops it.  A `view-model' line the reader pushed to Sjá (`:raw-to-sja') comes as (ANSWER sja ERROR): Sjá's answer
@@ -701,7 +660,7 @@ wait in its queue until it is proven or `legacy' (`drgnx-hub--hello').  A `ping'
 protocol 1 answers it, where Ratatoskr's challenge always comes first, so such a hub is not waited for.  None of the
 two within `drgnx-hub--challenge-wait' closes the connection (`drgnx-hub--challenge-late'): only the probe's answer
 makes a hub `legacy'.  The process."
-  (let ((c (drgnx-hub--connect-socket #'drgnx-hub--client-filter)))
+  (let ((c (drgnx-hub--connect-socket)))
     (set-process-sentinel c (drgnx-guard-wrap #'drgnx-hub--client-sentinel "hub connection"))
     (drgnx-hub--frame c)
     (drgnx-hub-client-binary-version t)        ; read now, never waiting: for this hello and the skew

@@ -12,7 +12,6 @@
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/ratatoskr-fixture" drgnx-dir) nil t)
 
-(defvar nidhogg-workers-framing)
 (declare-function nidhogg-process-framing "nidhogg-io.c")
 
 (defvar drgnx-view-model-hub-test--models nil
@@ -34,12 +33,10 @@ one Nidhogg's reader pushed to Sjá itself (framed).")
   (when (string-prefix-p "{\"event\":\"view-model\"" string) (cl-incf drgnx-view-model-hub-test--parsed))
   (apply fn string args))
 
-(defmacro drgnx-view-model-hub-test--with (framing &rest body)
-  "BODY with Ratatoskr serving a temp root, this Emacs connected with `nidhogg-workers-framing' FRAMING, and its
-`view-model' events recorded."
-  (declare (indent 1))
+(defmacro drgnx-view-model-hub-test--with (&rest body)
+  "BODY with Ratatoskr serving a temp root, this Emacs connected, and its `view-model' events recorded."
+  (declare (indent 0))
   `(let* ((root (file-name-as-directory (make-temp-file "drgnx-vm" t)))
-          (nidhogg-workers-framing ,framing)
           (drgnx-view-model-hub-test--models nil) (drgnx-view-model-hub-test--events nil)
           (drgnx-view-model-hub-test--parsed 0)
           (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" root "config") (concat "DRGNX_DATA_DIR=" root "data")
@@ -74,38 +71,24 @@ one Nidhogg's reader pushed to Sjá itself (framed).")
     (drgnx-test-wait (lambda () answer) :secs 30 :what "the map subscription's answer")
     (should-not (nth 1 answer))))
 
-(defun drgnx-view-model-hub-test--unparsed (framing)
-  "With FRAMING, the subscribe's `view-model' line reaches Sjá whole, never parsed in Lisp nor seen as an event:
-framed, Nidhogg's reader pushes it and only Sjá's answer for view \"vm\" comes to Lisp; unframed, the filter hands
-the line (the event first, the model an object) to the model."
-  (drgnx-view-model-hub-test--with framing
-    (if framing
-        (should (nidhogg-process-framing drgnx-hub--events))
-      (should-not (and (fboundp 'nidhogg-process-framing) (nidhogg-process-framing drgnx-hub--events))))
+(defun drgnx-view-model-hub-test--unparsed ()
+  "The subscribe's `view-model' line reaches Sjá whole, never parsed in Lisp nor seen as an event: Nidhogg's reader
+pushes it and only Sjá's answer for view \"vm\" comes to Lisp."
+  (drgnx-view-model-hub-test--with
+    (should (nidhogg-process-framing drgnx-hub--events))
     (drgnx-view-model-hub-test--subscribe root)
     (drgnx-test-wait (lambda () drgnx-view-model-hub-test--models) :secs 30 :what "the map's first view-model")
     (let ((line (car (last drgnx-view-model-hub-test--models))))
-      (if framing
-          (progn (should (eq :pushed (car-safe line))) (should (equal "vm" (nth 1 line)))
-                 (should-not (cl-some #'stringp drgnx-view-model-hub-test--models)))
-        (should (stringp line))
-        (should (string-prefix-p "{\"event\":\"view-model\",\"data\":{" line))
-        (should (string-search "\"model\":{\"ops\":[" line))
-        (should (string-search "\"view\":\"vm\"" line))))
+      (should (eq :pushed (car-safe line))) (should (equal "vm" (nth 1 line)))
+      (should-not (cl-some #'stringp drgnx-view-model-hub-test--models)))
     (should-not drgnx-view-model-hub-test--events)
     (should (= 0 drgnx-view-model-hub-test--parsed))))
 
-(ert-deftest drgnx-view-model/reaches-sja-unparsed-framed ()
+(ert-deftest drgnx-view-model/reaches-sja-unparsed ()
   (skip-unless (drgnx-test-ratatoskr-bin))
-  ;; the reader's push to Sjá (`:raw-to-sja') came with `nidhogg-view--pushed': an older nh-io refuses the keyword and
-  ;; the client stays unframed
   (require 'nidhogg-views nil t)
   (drgnx-test-require-nidhogg (and (fboundp 'nidhogg-set-process-framing) (fboundp 'nidhogg-view--pushed))
                               ":raw-to-sja framing (nidhogg-view--pushed)")
-  (drgnx-view-model-hub-test--unparsed t))
-
-(ert-deftest drgnx-view-model/reaches-sja-unparsed-unframed ()
-  (skip-unless (drgnx-test-ratatoskr-bin))
-  (drgnx-view-model-hub-test--unparsed nil))
+  (drgnx-view-model-hub-test--unparsed))
 
 ;;; view-model-hub-test.el ends here

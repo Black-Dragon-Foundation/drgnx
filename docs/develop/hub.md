@@ -836,73 +836,16 @@ hello (the cap is read there; the core gets the proof the hub must give back, ne
 before giving up on a challenge, run the event, skew, disconnect and connected hooks, the hand-over, presence, the
 jobs' cache, and dial.
 
-**Who splits the lines.** The shell does, in one of two ways, and the core gets the same events from both. By default
-the connection's filter (`drgnx-hub--client-filter`, through `drgnx-hub--lines`) cuts the chunks into lines and parses
-them. With Nidhogg's `nidhogg-workers-framing` on, `drgnx-hub--open` hands the connection to Nidhogg's reader
-(`drgnx-hub--frame`: `lines` framing, parsed there, no line limit, as the client has none today), and the main thread
-gets batches (`drgnx-hub--client-batch`) of parsed messages; a line that is not JSON, or is `null`, is dropped on both
-paths. The connection is `(binary . utf-8-unix)`: bytes in, which framing needs, UTF-8 out. One difference: a last line
-with no newline before the end of the stream is a message when framed, and dropped by the filter. Without the feature
-or the switch, or when the framing is refused, the filter reads. The probe (`drgnx-hub--ping-socket`) is never framed.
-`test/unit/hub-client-frame-test.el` checks that both paths give the same events, over Nidhogg's own framer.
-
-**The shell's edges**, which the every-order tests assume and `test/unit/hub-client-shell-test.el` checks with
-scripted peers: a connection's lines reach the core in the order they were written (so the challenge, Ratatoskr's
-first line, comes first), whatever the chunks; its `closed` comes once, after everything read before the end, and
-nothing of it comes after. A `subscribe` answer precedes that connection's events, and an answer its call: both are
-the hub's order on one connection.
-
-`drgnx-hub-settled-p` (`drgnx-hub-core-settled-p`) says the editor is subscribed and no call waits: no hand-over
-answer can still change the editor token or the held keys. A test that changes them waits for it first. A token and
-held keys alone are not that: a command's `drgnx-hub-ensure` hands over on the call connection, and when the hub
-answers it before the `subscribe`, both are set while the subscription's own hand-over, which rotates the token, is
-still to come (`test/unit/ai-gateway-test.el`'s `:ensure` fixture gives the gate that order).
-
-### Starting the hub, and Hub: Restart Now
-
-`drgnx-hub--ensure-running CALLBACK` starts **one asynchronous `ratatoskr ensure --timeout 5`** (no batch Emacs;
-`DRGNX_EMACS` and `DRGNX_DIR` from `(drgnx-emacs-program)` and `drgnx-dir`; provider-key variable names unset). It
-never waits: CALLBACK gets nil when a hub answers, or the reason (the process's output) when `ensure` fails or passes
-`drgnx-hub-ensure-deadline` (10 s, a layer timer `hub-ensure`). A second call while it runs joins it. `drgnx-hub-ensure`
-(commands, the CLI) waits for that and then hands over the provider table and the keys ([Keys](#keys)); in a daemon
-path (`inhibit-interaction`) it returns at once and they go, or a `hub` notice `start` is posted, when the start ends. `DRGNX_NO_HUB_START` is honoured; with
-no binary every caller says "Ratatoskr is not built: run `drgnx runtime build`".
-
-**A command that needs the subscription.** `drgnx-hub-start-for-command ON-FAIL` is for commands the user invoked whose
-answer comes on the subscribed connection: New Terminal and Reconnect (`drgnx-term`), the Search view's key, `RET` and
-Search in Files, and the Work space. With no subscription up or being made it calls `drgnx-hub--ensure-running` (not
-waited for) and connects when the hub answers; ON-FAIL gets the reason when no hub can be had (the terminal fails and
-says it in the echo area, the Search view on its status line). In a daemon path (`inhibit-interaction`) it starts
-nothing and only connects to a hub already there: timers, hooks, sentinels and startup never start one. Before it,
-these only connected, so with no hub running they waited for good. The Extensions view and Debug's commands ask the hub
-by call, which signals "no hub" and shows the reason; they do not start it.
-
-**At daemon start.** The nightly graph backup (`backup_timer.rs`) runs inside the hub, so a daemon must not wait for AI
-to start one. `drgnx-hub-ask-at-daemon-start` (core, on `emacs-startup-hook`) schedules the layer timer
-`hub-daemon-start` (2 s, owner `:core`) in a daemon only: not in batch, not in a plain Emacs, not with
-`DRGNX_NO_HUB_START`. The timer calls `drgnx-hub--ensure-running` without waiting; a missing binary is silent, a failed
-start is a `hub` warning notice. It does not connect and hands over no keys or settings: a key-less hub starts no
-provider; keys arrive with the first AI use (`drgnx-hub-hand-over-keys`) or when the hub asks (`gateway/need-keys`).
-`drgnx doctor` (the `store` check) says the hub is down, and the nightly cannot run, when the last backup is old and no
-hub runs. The copy runs on its own task through `backup_timer::guarded`, which clears the running flag on every way
-out, a panic included, so one failed night never stops the next. `test/live/hub-daemon-start-test.el` starts a real daemon
-session with a real hub (`DRGNX_RATATOSKR_BIN`), sees the hub come up and the nightly copy appear, and reads the idle
-hub's CPU and resident memory from `/proc` (about 0.1 % CPU and 63 MB for a debug build).
-
-The hub's `notice` event (sent when the binary on disk changed) is posted by `drgnx-hub--note-notice` (an editor's
-subscription) as a notice of source `hub`, a condition with command `hub-restart-now`. A hello that finds the hub
-current (`ok`) clears it. A `legacy` hub (the Lisp hub of an install updated while it ran) gets the same notice with
-its own text, from the hello, in an editor only. **`hub-restart-now`** ("Hub: Restart Now", category Agents, no key in
-any profile; `drgnx-hub-restart-now`) asks no one: on Ratatoskr it calls `restart` (its supervisor, or its own
-re-execution, brings it back); on a legacy hub it calls `shutdown` (protocol 0 has no `restart`), waits up to 5 s for
-`<socket>.lock` to go, and runs `ratatoskr ensure`; with no hub it just starts one. Agent sessions end.
+**Who splits the lines.** Nidhogg's reader, for every connection (G1 of the Lisp offload: there is no filter that reads
+a line, and no switch). `drgnx-hub--open` hands the connection to the reader (`drgnx-hub--frame`: `lines` framing,
+parsed there, no line limit, as the client has none), and the main thread gets batches (`drgnx-hub--client-batch`) of
+parsed messages; a line that is not JSON, or is `null`, is dropped, and a last line with no newline before the end of the
+stream is a message. The connection is `(binary . utf-8-unix)`: bytes in, which framing needs, UTF-8 out. A framing the
+reader refuses is an error: a connection nothing reads is of no use. The probe (`drgnx-hub--ping-socket`) is no client
+connection: it sends one `ping` and a filter of its own parses the two lines it reads. `test/unit/hub-client-frame-test.el` checks the batch over Nidhogg's own framer.
 
 **Probes.** `drgnx-hub--ping-socket` (`drgnx-hub-running-p`) sends a raw `ping` and reads lines until one is not an
 event, so Ratatoskr's challenge is skipped. It sends no hello: a probe is `service` class, which `ping` allows.
-
-**The line reader** (`drgnx-hub--lines`) searches only the chunk that came for a newline.
-The start of a line still open waits in a list of pieces, joined once its newline comes, so a 16 MiB snapshot in 8 KB
-chunks costs its length, not its length times its chunks (HUB-LINES-1, PERF-M3).
 
 **Tests:** `test/unit/hub-client-test.el` (prefix `drgnx-hub-client/`). Fake hubs that lie (a wrong proof, no proof,
 protocol 0, a held hello) are in `test/fixtures/fake-hub.el`. The tests marked "binary" run against Ratatoskr:
