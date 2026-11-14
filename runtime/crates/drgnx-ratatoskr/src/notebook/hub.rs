@@ -326,7 +326,7 @@ impl Notebooks {
             Some(t) => t,
             None => {
                 let p = path.to_path_buf();
-                tokio::task::spawn_blocking(move || read_notebook(&p))
+                crate::clock::blocking(move || read_notebook(&p))
                     .await
                     .map_err(|e| e.to_string())??
             }

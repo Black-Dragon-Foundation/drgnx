@@ -865,7 +865,7 @@ async fn a_cell_that_never_started_keeps_its_outputs_in_the_notebook_and_the_fil
 
 #[test]
 fn at_most_a_hundred_tails_a_second_go_for_a_notebook() {
-    let t0 = tokio::time::Instant::now();
+    let t0 = crate::clock::now();
     let mut b = Budget::new(t0);
     for i in 0..TAILS_PER_SEC {
         assert!(b.allowed(t0 + Duration::from_millis(i as u64)), "{i}");
