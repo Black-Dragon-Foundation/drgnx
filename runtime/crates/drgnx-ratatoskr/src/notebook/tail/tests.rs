@@ -150,3 +150,48 @@ fn an_error_has_its_head_row_and_traceback_and_an_aborted_or_cancelled_cell_says
     r.cancel("q");
     assert_eq!(build("c", r.run("q").unwrap(), 1).text, "cancelled");
 }
+
+#[test]
+fn half_a_million_styled_lines_cost_only_the_rows_shown() {
+    let text = "\x1b[31mx\x1b[0m\n".repeat(400_000);
+    let run = run_with(|f| f("stream", json!({"name": "stdout", "text": text})));
+    let t = build("c", &run, 1);
+    assert_eq!(t.more_lines, 400_001 - MAX_ROWS);
+    assert!(
+        t.text
+            .ends_with(&format!("{} more lines: open output", 400_001 - MAX_ROWS))
+    );
+    assert_eq!(t.runs.len(), MAX_ROWS);
+    assert_eq!(
+        t.runs[1].start, 2,
+        "the second row's run starts after the first row and its newline"
+    );
+}
+
+#[test]
+fn an_error_value_of_many_lines_is_capped_like_any_other_row_and_its_text_is_clean() {
+    let evalue = (0..60)
+        .map(|i| format!("line {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let run = run_with(|f| {
+        f(
+            "error",
+            json!({"ename": "E", "evalue": evalue, "traceback": []}),
+        )
+    });
+    let t = build("c", &run, 1);
+    assert_eq!(
+        t.text.split('\n').count(),
+        MAX_ROWS + 1,
+        "twenty rows and the more-lines row"
+    );
+    assert_eq!(t.more_lines, 40);
+    let run = run_with(|f| {
+        f(
+            "error",
+            json!({"ename": "E\u{202e}", "evalue": "v\u{fffc}\x1b[0m", "traceback": []}),
+        )
+    });
+    assert_eq!(build("c", &run, 1).text, "E: v[0m");
+}

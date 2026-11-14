@@ -574,7 +574,11 @@ fn a_cell_holds_at_most_64_outputs_and_a_megabyte_of_text_and_says_so() {
         .map(Output::to_nbformat)
         .map(|o| o["text"].as_str().unwrap().len())
         .sum();
-    assert_eq!(held, MAX_TEXT, "cut at the cap, not past it");
+    assert_eq!(
+        held,
+        MAX_TEXT - "stdout".len(),
+        "cut at the cap, not past it"
+    );
     assert!(run.truncated);
     // a result too big for what is left is dropped whole
     iopub(
@@ -584,4 +588,242 @@ fn a_cell_holds_at_most_64_outputs_and_a_megabyte_of_text_and_says_so() {
         json!({"data": {"text/plain": "y".repeat(1000)}, "execution_count": 1}),
     );
     assert_eq!(r.run("text").unwrap().outputs.len(), 1);
+}
+
+// ---- the security review's findings (T11b, 2026-11-14) ----
+
+fn png_of(w: u32, h: u32, size: usize) -> String {
+    let mut b = png(w, h);
+    b.resize(size, 0);
+    b64(&b)
+}
+
+#[test]
+fn every_retained_string_counts_toward_the_text_cap() {
+    let big = "m".repeat(600_000);
+    let mut r = Router::new();
+    // metadata: two displays of 600 KB metadata do not both fit in a megabyte
+    r.begin("meta");
+    for _ in 0..2 {
+        iopub(
+            &mut r,
+            "display_data",
+            "meta",
+            json!({"data": {"text/plain": "x"}, "metadata": {"k": big}}),
+        );
+    }
+    assert_eq!(r.run("meta").unwrap().outputs.len(), 1);
+    assert!(r.run("meta").unwrap().truncated);
+    // the display id is held twice (in the output and in the map): counted
+    r.begin("ids");
+    for i in 0..4 {
+        let id = format!("{i}{}", "d".repeat(300_000));
+        iopub(
+            &mut r,
+            "display_data",
+            "ids",
+            json!({"data": {"text/plain": "x"}, "transient": {"display_id": id}}),
+        );
+    }
+    assert!(
+        r.run("ids").unwrap().outputs.len() <= 3,
+        "{}",
+        r.run("ids").unwrap().outputs.len()
+    );
+    assert!(r.run("ids").unwrap().truncated);
+    // error name and value
+    r.begin("err");
+    for _ in 0..2 {
+        iopub(
+            &mut r,
+            "error",
+            "err",
+            json!({"ename": big, "evalue": "v", "traceback": []}),
+        );
+    }
+    assert_eq!(r.run("err").unwrap().outputs.len(), 1);
+    // a stream's name is short
+    r.begin("name");
+    iopub(
+        &mut r,
+        "stream",
+        "name",
+        json!({"name": "n".repeat(10_000), "text": "t"}),
+    );
+    let nb = r.run("name").unwrap().to_nbformat();
+    assert_eq!(nb[0]["name"].as_str().unwrap().len(), 64);
+}
+
+#[test]
+fn images_are_capped_per_cell_in_total() {
+    let mut r = Router::new();
+    r.begin("img");
+    // 4.5 MiB each (under the single-image cap): two fit in 16 MiB, not three
+    let img = png_of(100, 100, 4_718_592);
+    for _ in 0..4 {
+        iopub(
+            &mut r,
+            "display_data",
+            "img",
+            json!({"data": {"image/png": img.clone(), "text/plain": "p"}}),
+        );
+    }
+    let run = r.run("img").unwrap();
+    assert_eq!(run.outputs.len(), 2);
+    assert!(run.truncated);
+}
+
+#[test]
+fn an_update_cannot_grow_a_display_past_the_caps_and_a_smaller_one_gives_the_room_back() {
+    let mut r = Router::new();
+    r.begin("u");
+    let with =
+        |text: String| json!({"data": {"text/plain": text}, "transient": {"display_id": "d"}});
+    iopub(&mut r, "display_data", "u", with("small".into()));
+    iopub(
+        &mut r,
+        "update_display_data",
+        "u",
+        with("x".repeat(600_000)),
+    );
+    let run = r.run("u").unwrap();
+    assert_eq!(
+        run.to_nbformat()[0]["data"]["text/plain"],
+        "small",
+        "the old one stays"
+    );
+    assert!(run.truncated);
+    // grow to near the cap, shrink, and a second big display fits
+    r.begin("v");
+    iopub(&mut r, "display_data", "v", with("y".repeat(400_000)));
+    iopub(&mut r, "update_display_data", "v", with("tiny".into()));
+    iopub(
+        &mut r,
+        "display_data",
+        "v",
+        json!({"data": {"text/plain": "z".repeat(400_000)}}),
+    );
+    assert_eq!(r.run("v").unwrap().outputs.len(), 2);
+}
+
+#[test]
+fn a_traceback_of_a_million_empty_entries_is_cut_to_a_few_hundred() {
+    let mut r = Router::new();
+    r.begin("t");
+    let tb: Vec<Value> = (0..1_000_000).map(|_| json!("")).collect();
+    iopub(
+        &mut r,
+        "error",
+        "t",
+        json!({"ename": "E", "evalue": "v", "traceback": tb}),
+    );
+    let nb = r.run("t").unwrap().to_nbformat();
+    assert!(nb[0]["traceback"].as_array().unwrap().len() <= MAX_TRACEBACK);
+}
+
+#[test]
+fn the_kernel_log_keeps_a_short_message_type() {
+    let mut r = Router::new();
+    let mut m = Message::request("k", "stream", json!({"name": "stdout", "text": "x"}));
+    m.header.msg_type = "t".repeat(1_000_000);
+    r.apply(Channel::Iopub, &m);
+    assert_eq!(r.log().next().unwrap().msg_type.len(), LOG_TYPE);
+}
+
+#[test]
+fn erasing_gives_the_text_budget_back() {
+    let mut r = Router::new();
+    r.begin("e");
+    iopub(
+        &mut r,
+        "stream",
+        "e",
+        json!({"name": "stdout", "text": "x".repeat(900_000)}),
+    );
+    // a progress bar redrawn: erase the line each time
+    iopub(
+        &mut r,
+        "stream",
+        "e",
+        json!({"name": "stdout", "text": "\r\x1b[K"}),
+    );
+    iopub(
+        &mut r,
+        "stream",
+        "e",
+        json!({"name": "stdout", "text": "y".repeat(500_000)}),
+    );
+    let nb = r.run("e").unwrap().to_nbformat();
+    assert_eq!(
+        nb[0]["text"].as_str().unwrap().len(),
+        500_000,
+        "the new chunk was kept whole"
+    );
+    assert!(!r.run("e").unwrap().truncated);
+}
+
+#[test]
+fn a_huge_number_of_lines_is_counted_not_walked_and_unsafe_characters_never_reach_the_view() {
+    let t = term(&"\x1b[31mx\x1b[0m\n".repeat(400_000));
+    assert_eq!(t.line_count(), 400_001);
+    let head = t.head(3);
+    assert_eq!(head.len(), 3);
+    assert_eq!(head[0].0, "x");
+    assert_eq!(
+        head[0].1,
+        [Run {
+            start: 0,
+            end: 1,
+            style: Style {
+                fg: Some(1),
+                ..Style::default()
+            }
+        }]
+    );
+    // bidi controls and the object replacement character are dropped from terminal text
+    assert_eq!(term("a\u{202e}b\u{fffc}c\u{2066}d").text(), "abcd");
+}
+
+#[test]
+fn an_image_over_sixteen_megapixels_is_refused_even_when_each_side_is_allowed() {
+    let b = Bundle::from_message(&display(
+        json!({"image/png": b64(&png(8000, 8000)), "text/plain": "t"}),
+    ));
+    assert!(matches!(b.shown(), Shown::Text { .. }));
+    assert!(
+        b.note.as_deref().unwrap().contains("megapixel"),
+        "{:?}",
+        b.note
+    );
+    let ok = Bundle::from_message(&display(json!({"image/png": b64(&png(4000, 4000))})));
+    assert!(matches!(ok.shown(), Shown::Image { .. }));
+}
+
+#[test]
+fn the_svg_note_offers_a_save_only_when_the_svg_was_kept() {
+    let big = "s".repeat(2_000_000);
+    let b = Bundle::from_message(&display(json!({"image/svg+xml": big, "text/plain": "t"})));
+    assert_eq!(b.svg(), None);
+    assert_eq!(b.note.as_deref(), Some("SVG output too large to keep"));
+    let ok = Bundle::from_message(&display(
+        json!({"image/svg+xml": "<svg/>", "text/plain": "t"}),
+    ));
+    assert_eq!(
+        ok.note.as_deref(),
+        Some("SVG output not shown: save as file")
+    );
+}
+
+#[test]
+fn text_shown_has_no_control_or_bidi_characters_but_the_file_keeps_what_the_kernel_sent() {
+    let raw = "a\u{202e}b\u{fffc}c\x1b[31m\u{200f}d";
+    let b = Bundle::from_message(&display(json!({"text/plain": raw})));
+    assert_eq!(
+        b.shown(),
+        &Shown::Text {
+            text: "abc[31md".into(),
+            markdown: false
+        }
+    );
+    assert_eq!(b.data()["text/plain"], raw);
 }

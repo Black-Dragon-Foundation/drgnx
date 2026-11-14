@@ -23,9 +23,17 @@ use super::wire::Message;
 pub const MAX_TEXT: usize = 1 << 20;
 /// Outputs held per cell.
 pub const MAX_OUTPUTS: usize = 64;
+/// Encoded bytes of images held per cell, in all.
+pub const MAX_IMAGES: usize = 16 << 20;
+/// The longest stream name kept.
+pub const MAX_NAME: usize = 64;
 /// Entries of the kernel log, and the text of one.
 pub const LOG_ENTRIES: usize = 500;
 pub const LOG_TEXT: usize = 4096;
+/// The longest message type the log keeps.
+pub const LOG_TYPE: usize = 64;
+/// Traceback entries held per error.
+pub const MAX_TRACEBACK: usize = 200;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RunStatus {
@@ -85,13 +93,28 @@ impl Output {
         }
     }
 
+    /// Every string this output holds, in bytes: the cell's text cap counts all of them.
     fn text_len(&self) -> usize {
         match self {
-            Output::Stream { text, .. } => text.len(),
-            Output::Display { bundle, .. } | Output::Result { bundle, .. } => bundle.text_len(),
+            Output::Stream { name, text } => name.len() + text.len(),
+            // the id is held again in the router's map
+            Output::Display { display_id, bundle } => {
+                2 * display_id.as_ref().map_or(0, String::len) + bundle.text_len()
+            }
+            Output::Result { bundle, .. } => bundle.text_len(),
             Output::Error {
-                evalue, traceback, ..
-            } => evalue.len() + traceback.iter().map(Terminal::len).sum::<usize>(),
+                ename,
+                evalue,
+                traceback,
+            } => ename.len() + evalue.len() + traceback.iter().map(Terminal::len).sum::<usize>(),
+        }
+    }
+
+    /// Encoded bytes of the images held: the cell's image total counts them.
+    fn image_len(&self) -> usize {
+        match self {
+            Output::Display { bundle, .. } | Output::Result { bundle, .. } => bundle.image_len(),
+            _ => 0,
         }
     }
 }
@@ -108,6 +131,7 @@ pub struct CellRun {
     /// `clear_output(wait=True)`: the next output clears first.
     clear_pending: bool,
     text: usize,
+    images: usize,
 }
 
 impl CellRun {
@@ -120,16 +144,19 @@ impl CellRun {
             truncated: false,
             clear_pending: false,
             text: 0,
+            images: 0,
         }
     }
 
     /// A run that is only outputs (read from a file, or set by the hub), in STATUS.
     pub fn from_outputs(msg_id: &str, outputs: Vec<Output>, status: RunStatus) -> CellRun {
         let text = outputs.iter().map(Output::text_len).sum();
+        let images = outputs.iter().map(Output::image_len).sum();
         CellRun {
             outputs,
             status,
             text,
+            images,
             ..CellRun::new(msg_id)
         }
     }
@@ -227,15 +254,17 @@ impl Router {
                     c.get("execution_count").and_then(Value::as_i64);
             }
             (Channel::Iopub, "stream") => {
-                let (name, text) = (str_of("name"), str_of("text"));
+                let name: String = str_of("name").chars().take(MAX_NAME).collect();
+                let text = str_of("text");
                 let r = self.runs.get_mut(&parent)?;
                 Self::start_output(r, &mut self.displays);
                 if let Some(Output::Stream { name: n, text: t }) = r.outputs.last_mut()
                     && *n == name
                 {
+                    // the text can shrink (a carriage return and an erase): the budget follows the text both ways
                     let before = t.len();
                     t.push(&text);
-                    r.text += t.len().saturating_sub(before);
+                    r.text = (r.text + t.len()).saturating_sub(before);
                     Self::cap_text(r);
                 } else {
                     let mut term = Terminal::default();
@@ -255,8 +284,20 @@ impl Router {
                 let id = display_id(m)?;
                 let (run, at) = self.displays.get(&id)?.clone();
                 let r = self.runs.get_mut(&run)?;
+                let new = Bundle::from_message(c);
                 if let Some(Output::Display { bundle, .. }) = r.outputs.get_mut(at) {
-                    *bundle = Bundle::from_message(c);
+                    // an update is held to the same caps as an addition, counting what it replaces as given back
+                    let (text, images) = (
+                        r.text.saturating_sub(bundle.text_len()),
+                        r.images.saturating_sub(bundle.image_len()),
+                    );
+                    if text + new.text_len() > MAX_TEXT || images + new.image_len() > MAX_IMAGES {
+                        r.truncated = true;
+                    } else {
+                        r.text = text + new.text_len();
+                        r.images = images + new.image_len();
+                        *bundle = new;
+                    }
                 }
                 return Some(Change::Run(run));
             }
@@ -275,6 +316,7 @@ impl Router {
                     .map(|a| {
                         a.iter()
                             .filter_map(Value::as_str)
+                            .take(MAX_TRACEBACK)
                             .map(|l| {
                                 let mut t = Terminal::default();
                                 t.push(l);
@@ -307,6 +349,7 @@ impl Router {
     fn clear(r: &mut CellRun, displays: &mut HashMap<String, (String, usize)>) {
         r.outputs.clear();
         r.text = 0;
+        r.images = 0;
         r.clear_pending = false;
         displays.retain(|_, (m, _)| *m != r.msg_id);
     }
@@ -331,11 +374,15 @@ impl Router {
 
     /// Whether the output was kept (the caps drop it, and the run says so).
     fn add(r: &mut CellRun, out: Output) -> bool {
-        if r.outputs.len() >= MAX_OUTPUTS || r.text + out.text_len() > MAX_TEXT {
+        if r.outputs.len() >= MAX_OUTPUTS
+            || r.text + out.text_len() > MAX_TEXT
+            || r.images + out.image_len() > MAX_IMAGES
+        {
             r.truncated = true;
             return false;
         }
         r.text += out.text_len();
+        r.images += out.image_len();
         r.outputs.push(out);
         true
     }
@@ -373,7 +420,7 @@ impl Router {
             self.log.pop_front();
         }
         self.log.push_back(LogEntry {
-            msg_type: m.header.msg_type.clone(),
+            msg_type: m.header.msg_type.chars().take(LOG_TYPE).collect(),
             text,
         });
         Some(Change::Log)

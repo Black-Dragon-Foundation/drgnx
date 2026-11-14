@@ -5,8 +5,12 @@
 use base64::Engine as _;
 use serde_json::{Map, Value};
 
+use super::terminal::clean;
+
 pub const MAX_IMAGE: usize = 5 << 20;
 pub const MAX_SIDE: u32 = 8192;
+/// An image's area: 16 megapixels, however its sides are shared.
+pub const MAX_PIXELS: u64 = 16_000_000;
 /// The text of one representation held (the cell's cap is in the router).
 const MAX_REPR: usize = 1 << 20;
 
@@ -117,6 +121,9 @@ fn check_image(mime: &'static str, s: &str) -> Result<(u32, u32), String> {
             "image not shown: {w} x {h} is over {MAX_SIDE} x {MAX_SIDE}"
         ));
     }
+    if u64::from(w) * u64::from(h) > MAX_PIXELS {
+        return Err(format!("image not shown: {w} x {h} is over 16 megapixels"));
+    }
     Ok((w, h))
 }
 
@@ -179,7 +186,12 @@ impl Bundle {
             data.insert("application/json".into(), j.clone());
         }
         if svg.is_some() {
-            notes.push("SVG output not shown: save as file".into());
+            // a save is offered only for an SVG that was kept
+            notes.push(if data.contains_key("image/svg+xml") {
+                "SVG output not shown: save as file".into()
+            } else {
+                "SVG output too large to keep".into()
+            });
         }
         let shown = if let Some((mime, width, height)) = image {
             Shown::Image {
@@ -189,17 +201,17 @@ impl Bundle {
             }
         } else if let Some(s) = data.get("text/markdown").and_then(Value::as_str) {
             Shown::Text {
-                text: s.into(),
+                text: clean(s),
                 markdown: true,
             }
         } else if let Some(s) = data.get("text/plain").and_then(Value::as_str) {
             Shown::Text {
-                text: s.into(),
+                text: clean(s),
                 markdown: false,
             }
         } else if let Some(j) = data.get("application/json") {
             Shown::Text {
-                text: serde_json::to_string_pretty(j).unwrap_or_default(),
+                text: clean(&serde_json::to_string_pretty(j).unwrap_or_default()),
                 markdown: false,
             }
         } else {
@@ -247,9 +259,10 @@ impl Bundle {
         self.data.get("image/svg+xml")?.as_str()
     }
 
-    /// Bytes of text this holds (images count by their encoded size against the image cap, not the text cap).
+    /// Bytes of text this holds: every representation kept except images, the metadata, the note and the copy the view shows.
     pub fn text_len(&self) -> usize {
-        self.data
+        let held: usize = self
+            .data
             .iter()
             .filter(|(k, _)| !k.starts_with("image/png") && !k.starts_with("image/jpeg"))
             .map(|(_, v)| {
@@ -257,6 +270,21 @@ impl Bundle {
                     .map(str::len)
                     .unwrap_or_else(|| v.to_string().len())
             })
+            .sum();
+        let shown = match &self.shown {
+            Shown::Text { text, .. } => text.len(),
+            Shown::Note(n) => n.len(),
+            Shown::Image { .. } => 0,
+        };
+        held + shown + self.metadata.to_string().len() + self.note.as_ref().map_or(0, String::len)
+    }
+
+    /// Bytes of the images held (encoded), which count against the cell's image total.
+    pub fn image_len(&self) -> usize {
+        ["image/png", "image/jpeg"]
+            .iter()
+            .filter_map(|k| self.data.get(*k)?.as_str())
+            .map(str::len)
             .sum()
     }
 }

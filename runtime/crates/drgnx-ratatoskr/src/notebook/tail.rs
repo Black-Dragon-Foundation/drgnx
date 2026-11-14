@@ -1,9 +1,12 @@
 //! The tail of a cell: the string the editor puts after the cell's boundary character (design §4.2). The hub builds it whole, the
 //! text, its runs (theme roles, never colours) and its images; Lisp only puts it. Inline output is capped below a window's height
 //! (20 rows and 8 KiB); what is cut is one row, "N more lines: open output".
+//!
+//! The work is the rows' and not the output's: each output is counted (its lines) and only as many of its first lines as can still
+//! be shown are built, so half a million styled lines cost the twenty that are shown.
 
 use super::output::mime::Shown;
-use super::output::terminal::{Run, Style};
+use super::output::terminal::{Run, Style, clean};
 use super::output::{CellRun, Output, RunStatus};
 
 pub const MAX_ROWS: usize = 20;
@@ -39,66 +42,73 @@ struct Line {
     image: Option<(usize, String, u32, u32)>,
 }
 
-fn plain(s: &str) -> Vec<Line> {
-    s.split('\n')
+/// The lines of text S: how many, and the first TAKE of them.
+fn plain(s: &str, take: usize) -> (usize, Vec<Line>) {
+    let count = s.bytes().filter(|b| *b == b'\n').count() + 1;
+    let lines = s
+        .split('\n')
+        .take(take)
         .map(|l| Line {
             text: l.to_string(),
             runs: Vec::new(),
             image: None,
         })
-        .collect()
+        .collect();
+    (count, lines)
 }
 
-fn lines_of_output(i: usize, o: &Output) -> Vec<Line> {
-    let mut out = Vec::new();
-    let styled = |t: &super::output::terminal::Terminal| -> Vec<Line> {
-        let (text, runs) = t.render();
-        // split the rendered text into lines, giving each line the runs that fall in it
-        let mut lines = Vec::new();
-        let mut start = 0;
-        for l in text.split('\n') {
-            let len = l.chars().count();
-            let rs = runs
-                .iter()
-                .filter(|r| r.start < start + len && r.end > start)
-                .map(|r| Run {
-                    start: r.start.max(start) - start,
-                    end: r.end.min(start + len) - start,
-                    style: r.style,
-                })
-                .collect();
-            lines.push(Line {
-                text: l.to_string(),
-                runs: rs,
-                image: None,
-            });
-            start += len + 1;
-        }
-        lines
-    };
+fn note(s: &str) -> Line {
+    Line {
+        text: s.to_string(),
+        runs: Vec::new(),
+        image: None,
+    }
+}
+
+fn styled(t: &super::output::terminal::Terminal, take: usize) -> (usize, Vec<Line>) {
+    let lines = t
+        .head(take)
+        .into_iter()
+        .map(|(text, runs)| Line {
+            text,
+            runs,
+            image: None,
+        })
+        .collect();
+    (t.line_count(), lines)
+}
+
+/// The count of OUTPUT's lines and the first TAKE of them.
+fn part(i: usize, o: &Output, take: usize) -> (usize, Vec<Line>) {
     match o {
-        Output::Stream { text, .. } => out.extend(styled(text)),
+        Output::Stream { text, .. } => styled(text, take),
         Output::Display { bundle, .. } | Output::Result { bundle, .. } => {
-            match bundle.shown() {
-                Shown::Text { text, .. } => out.extend(plain(text)),
+            let (mut count, mut lines) = match bundle.shown() {
+                Shown::Text { text, .. } => plain(text, take),
                 Shown::Image {
                     mime,
                     width,
                     height,
-                } => out.push(Line {
-                    text: IMAGE_CHAR.to_string(),
-                    runs: Vec::new(),
-                    image: Some((i, mime.to_string(), *width, *height)),
-                }),
-                Shown::Note(n) => out.extend(plain(n)),
-            }
+                } => (
+                    1,
+                    vec![Line {
+                        text: IMAGE_CHAR.to_string(),
+                        runs: Vec::new(),
+                        image: Some((i, mime.to_string(), *width, *height)),
+                    }]
+                    .into_iter()
+                    .take(take)
+                    .collect(),
+                ),
+                Shown::Note(n) => (1, vec![note(n)].into_iter().take(take).collect()),
+            };
             if let Some(n) = &bundle.note {
-                out.push(Line {
-                    text: n.clone(),
-                    runs: Vec::new(),
-                    image: None,
-                });
+                count += 1;
+                if lines.len() < take {
+                    lines.push(note(n));
+                }
             }
+            (count, lines)
         }
         Output::Error {
             ename,
@@ -110,42 +120,51 @@ fn lines_of_output(i: usize, o: &Output) -> Vec<Line> {
                 bold: true,
                 ..Style::default()
             };
-            let head = format!("{ename}: {evalue}");
-            let n = head.chars().count();
-            out.push(Line {
-                text: head,
-                runs: vec![Run {
-                    start: 0,
-                    end: n,
-                    style: red,
-                }],
-                image: None,
-            });
-            for t in traceback {
-                out.extend(styled(t));
+            let (mut count, mut lines) = plain(&clean(&format!("{ename}: {evalue}")), take);
+            for l in &mut lines {
+                let n = l.text.chars().count();
+                if n > 0 {
+                    l.runs.push(Run {
+                        start: 0,
+                        end: n,
+                        style: red,
+                    });
+                }
             }
+            for t in traceback {
+                let (c, more) = styled(t, take.saturating_sub(lines.len()));
+                count += c;
+                lines.extend(more);
+            }
+            (count, lines)
         }
     }
-    out
 }
 
 /// The tail of RUN for the cell CELL, as its VERSION-th state.
 pub fn build(cell: &str, run: &CellRun, version: u64) -> Tail {
     let mut lines: Vec<Line> = Vec::new();
+    let mut total = 0;
     for (i, o) in run.outputs.iter().enumerate() {
-        lines.extend(lines_of_output(i, o));
+        let (count, mut more) = part(i, o, MAX_ROWS.saturating_sub(lines.len()));
+        total += count;
+        lines.append(&mut more);
     }
+    let mut tail_notes = Vec::new();
     if run.truncated {
-        lines.extend(plain(
-            "output cut at the limit: open output for what is held",
-        ));
+        tail_notes.push("output cut at the limit: open output for what is held");
     }
     match run.status {
-        RunStatus::Aborted => lines.extend(plain("aborted")),
-        RunStatus::Cancelled => lines.extend(plain("cancelled")),
+        RunStatus::Aborted => tail_notes.push("aborted"),
+        RunStatus::Cancelled => tail_notes.push("cancelled"),
         _ => {}
     }
-    let total = lines.len();
+    for n in tail_notes {
+        total += 1;
+        if lines.len() < MAX_ROWS {
+            lines.push(note(n));
+        }
+    }
     let (mut kept, mut bytes) = (0, 0);
     for l in &lines {
         // a row too long for the byte cap is cut, never skipped whole

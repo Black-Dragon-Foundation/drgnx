@@ -23,6 +23,19 @@ pub struct Run {
 
 type Cell = (char, Style);
 
+/// Characters that change how text reads or is laid out, not what it says: bidirectional controls (they reorder what follows) and
+/// the object replacement character (the tail's mark for an image). They never reach a view.
+pub fn is_unsafe(c: char) -> bool {
+    matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{fffc}')
+}
+
+/// S without its control characters (but newlines and tabs) and its [`is_unsafe`] ones.
+pub fn clean(s: &str) -> String {
+    s.chars()
+        .filter(|c| !is_unsafe(*c) && (!c.is_control() || *c == '\n' || *c == '\t'))
+        .collect()
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Terminal {
     done: Vec<Vec<Cell>>,
@@ -72,7 +85,7 @@ impl Terminal {
                 }
                 '\r' => self.col = 0,
                 '\x08' => self.col = self.col.saturating_sub(1),
-                c if c.is_control() && c != '\t' => {}
+                c if (c.is_control() && c != '\t') || is_unsafe(c) => {}
                 c => {
                     if self.col < self.line.len() {
                         self.bytes = self.bytes - size(self.line[self.col].0) + size(c);
@@ -212,6 +225,36 @@ impl Terminal {
             }
         }
         (text, runs)
+    }
+
+    /// How many lines the text has (a final empty line counts).
+    pub fn line_count(&self) -> usize {
+        self.done.len() + 1
+    }
+
+    /// The first ROWS lines, each with its runs (offsets within the line, in characters): the work is the rows', however many
+    /// lines there are.
+    pub fn head(&self, rows: usize) -> Vec<(String, Vec<Run>)> {
+        self.lines()
+            .take(rows)
+            .map(|line| {
+                let (mut text, mut runs) = (String::new(), Vec::<Run>::new());
+                for (at, (c, st)) in line.iter().enumerate() {
+                    text.push(*c);
+                    if *st != Style::default() {
+                        match runs.last_mut() {
+                            Some(r) if r.end == at && r.style == *st => r.end += 1,
+                            _ => runs.push(Run {
+                                start: at,
+                                end: at + 1,
+                                style: *st,
+                            }),
+                        }
+                    }
+                }
+                (text, runs)
+            })
+            .collect()
     }
 
     pub fn text(&self) -> String {
