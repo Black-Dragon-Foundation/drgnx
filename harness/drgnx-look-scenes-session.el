@@ -179,8 +179,9 @@ branch gateway-queue, staged file and history come with the Magit adapter (look 
                    "the error output is the hub's red bold first line, not the mockup's error-tint block (the tail carries styles, not a kind)"
                    "the picture is a gradient the scene makes (a PPM): in use, images are the hub's PNG or JPEG, fetched from notebook/output")
     (notebook-light "see notebook-dark")
-    (notebook-views "no mockup yet: the three views are the hub's rows in Sjá (outline shown, beside the notebook); a mockup comes before any look judgment"
-                    "the notebook is a file the scene writes and the hub opens (no kernel: no prompts or states yet), so the rows are the hub's own")
+    (notebook-views-light "see notebook-views")
+    (notebook-views "the approved mockup (notebook-views.html): the three views are windows of the editor, not the mockup's cards; with the image's kernel the outline shows a finished, a running and a failed cell, the log has no entries (the kernel logged nothing) and a running cell's full output reads `no output` here (the hub's output view of a running cell, to the views agent)"
+                    "the notebook is a file the scene writes and the hub opens (no kernel: no running cell, no log entries), so the rows are the hub's own")
     (palette "the mockup's palette rows come from its own commands; the line lists the registry's")
     (explorer-focused-dark "no agent badges (C, R) in the Explorer: agent system part 3 (G9)")
     (explorer-focused-light "no agent badges (C, R) in the Explorer: agent system part 3 (G9)")
@@ -913,6 +914,11 @@ editor, the Explorer's rows beside it."
 (declare-function drgnx-view-draw-now "drgnx-view")
 (declare-function drgnx-view-p "drgnx-view")
 (declare-function drgnx-notebook-outline "drgnx-notebook")
+(declare-function drgnx-notebook-open-output "drgnx-notebook")
+(declare-function drgnx-notebook-run-cell "drgnx-notebook")
+(declare-function drgnx-notebook-kernel-log "drgnx-notebook")
+(declare-function drgnx-view-env-update "drgnx-view-env")
+(defvar drgnx-notebook-view--id)
 (defvar drgnx-view)
 (declare-function drgnx-hub-connect "drgnx-hub-client")
 
@@ -1617,37 +1623,102 @@ would be (no kernel, no hub: the scene draws the buffer's own chrome)."
     (drgnx-look-scene--show (drgnx-look-scene--notebook-buffer)))
   (drgnx-look-scene--answer))
 
-(defun drgnx-look-scene--notebook-file ()
-  "A `.ipynb' the scene writes: the mockup's four cells, no outputs."
+(defun drgnx-look-scene--kernel-python ()
+  "The pinned kernel venv's python of the GUI test image: `DRGNX_NB_KERNEL_PYTHON', which the harness's Emacs does not
+inherit, else the image's own path; nil without one."
+  (seq-find #'file-executable-p (delq nil (list (getenv "DRGNX_NB_KERNEL_PYTHON") "/opt/nb-kernel/bin/python3"))))
+
+(defun drgnx-look-scene--notebook-file (&optional kernel)
+  "A `.ipynb' the scene writes: the mockup's four cells.  With KERNEL (a python): three code cells to run, no outputs,
+and a kernelspec for it in a folder `JUPYTER_PATH' names (the image has none); else the cells a finished run left."
   (let ((file (expand-file-name "cache-experiments.ipynb" temporary-file-directory)))
+    (when kernel
+      (let ((dir (expand-file-name "jupyter/kernels/python3" temporary-file-directory)))
+        (make-directory dir t)
+        (with-temp-file (expand-file-name "kernel.json" dir)
+          (insert (format "{\"argv\": [\"%s\", \"-m\", \"ipykernel_launcher\", \"-f\", \"{connection_file}\"], \"display_name\": \"Python 3 (ipykernel)\", \"language\": \"python\"}\n" kernel)))
+        (setenv "JUPYTER_PATH" (expand-file-name "jupyter" temporary-file-directory))
+        ;; a kernel's socket path must fit a unix socket's 108 bytes: the harness's runtime folder is too long
+        (make-directory "/tmp/nbrt" t)
+        (set-file-modes "/tmp/nbrt" #o700)
+        (setenv "XDG_RUNTIME_DIR" "/tmp/nbrt")))
     (with-temp-file file
       (insert "{\"cells\": [\n"
               "{\"cell_type\": \"markdown\", \"id\": \"c0\", \"metadata\": {}, \"source\": [\"# Cache experiments\\n\", \"How the hit rate moves with the capacity.\"]},\n"
-              "{\"cell_type\": \"code\", \"id\": \"c1\", \"metadata\": {}, \"execution_count\": 1, \"outputs\": [{\"output_type\": \"stream\", \"name\": \"stdout\", \"text\": [\"done: 10000 samples\"]}], \"source\": [\"import numpy as np\\n\", \"rng = np.random.default_rng(7)\"]},\n"
-              "{\"cell_type\": \"code\", \"id\": \"c2\", \"metadata\": {}, \"execution_count\": null, \"outputs\": [], \"source\": [\"for cap in (16, 64, 256):\\n\", \"    print(cap)\"]},\n"
-              "{\"cell_type\": \"code\", \"id\": \"c3\", \"metadata\": {}, \"execution_count\": 3, \"outputs\": [{\"output_type\": \"error\", \"ename\": \"NameError\", \"evalue\": \"name 'missing' is not defined\", \"traceback\": []}], \"source\": [\"plot(missing)\"]}\n"
-              "], \"metadata\": {\"kernelspec\": {\"display_name\": \"Python 3\", \"language\": \"python\", \"name\": \"python3\"}}, \"nbformat\": 4, \"nbformat_minor\": 5}\n"))
+              (if kernel
+                  (concat
+                   "{\"cell_type\": \"code\", \"id\": \"c1\", \"metadata\": {}, \"execution_count\": null, \"outputs\": [], \"source\": [\"hits = [i % 7 for i in range(10_000)]\\n\", \"print('done:', len(hits), 'samples')\"]},\n"
+                   "{\"cell_type\": \"code\", \"id\": \"c2\", \"metadata\": {}, \"execution_count\": null, \"outputs\": [], \"source\": [\"import time\\n\", \"for cap in (16, 64, 256):\\n\", \"    print(cap, sum(h < 3 for h in hits) / cap, flush=True)\\n\", \"    time.sleep(60)\"]},\n"
+                   "{\"cell_type\": \"code\", \"id\": \"c3\", \"metadata\": {}, \"execution_count\": null, \"outputs\": [], \"source\": [\"plot(missing)\"]}\n")
+                (concat
+                 "{\"cell_type\": \"code\", \"id\": \"c1\", \"metadata\": {}, \"execution_count\": 1, \"outputs\": [{\"output_type\": \"stream\", \"name\": \"stdout\", \"text\": [\"done: 10000 samples\"]}], \"source\": [\"import numpy as np\\n\", \"rng = np.random.default_rng(7)\"]},\n"
+                 "{\"cell_type\": \"code\", \"id\": \"c2\", \"metadata\": {}, \"execution_count\": null, \"outputs\": [], \"source\": [\"for cap in (16, 64, 256):\\n\", \"    print(cap)\"]},\n"
+                 "{\"cell_type\": \"code\", \"id\": \"c3\", \"metadata\": {}, \"execution_count\": 3, \"outputs\": [{\"output_type\": \"error\", \"ename\": \"NameError\", \"evalue\": \"name 'missing' is not defined\", \"traceback\": []}], \"source\": [\"plot(missing)\"]}\n"))
+              "], \"metadata\": {\"kernelspec\": {\"display_name\": \"Python 3 (ipykernel)\", \"language\": \"python\", \"name\": \"python3\"}}, \"nbformat\": 4, \"nbformat_minor\": 5}\n"))
     file))
 
+(defun drgnx-look-scene--run-cell (buffer id done secs)
+  "Run cell ID of notebook BUFFER and wait up to SECS until DONE (a function of the cell's last tails) holds.  A scene
+command must answer the harness within 20 s, so the waits are short and a miss is an error, not a hang."
+  (with-current-buffer buffer
+    (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id id) :head)))
+    (drgnx-notebook-run-cell))
+  (drgnx-look-scene--until secs (format "cell %s runs" id)
+                           (lambda () (funcall done (buffer-local-value 'drgnx-notebook--last-tails buffer) id))))
+
 (defun drgnx-look-scene--notebook-views (theme)
-  "The notebook opened through the hub (a real file), its outline view beside it, in THEME."
+  "The notebook opened through the hub (a real file), its three views side by side in the editor, in THEME: the
+outline, the full output of the running cell, the kernel's log.  With the image's kernel the cells run: one finishes,
+one fails and one keeps running; without it, the cells show what a finished run left."
   (drgnx-look-scene--theme theme)
   (drgnx-look-scene--try "notebook-views"
     (drgnx-wb-focus-editor)
-    (drgnx-look-scene--hub)
-    (load (expand-file-name "modules/lang/drgnx-notebook" (bound-and-true-p drgnx-dir)) nil t)
-    (let ((buffer (find-file-noselect (drgnx-look-scene--notebook-file))))
-      (drgnx-look-scene--show buffer)
-      (when (drgnx-look-scene--until 30 "the notebook opens" (lambda () (buffer-local-value 'drgnx-notebook--id buffer)))
-        (with-current-buffer buffer (drgnx-notebook-outline))
-        (let ((name (format "*Notebook outline: %s*" (buffer-name buffer))))
-          (drgnx-look-scene--until 30 "the outline's rows"
-                                   (lambda () (and (get-buffer name)
-                                                   (with-current-buffer name
-                                                     (when (drgnx-view-p drgnx-view) (drgnx-view-draw-now drgnx-view))
-                                                     (> (buffer-size) 0)))))))))
+    (let ((kernel (drgnx-look-scene--kernel-python)))
+      (unless kernel
+        (push "notebook-views: no kernel (DRGNX_NB_KERNEL_PYTHON is unset or not executable): the cells show a finished run's, nothing runs"
+              drgnx-look-scene--errors))
+      (drgnx-look-scene--notebook-file kernel)       ; first: it sets JUPYTER_PATH, which the hub's process inherits
+      (drgnx-look-scene--hub)
+      (load (expand-file-name "modules/lang/drgnx-notebook" (bound-and-true-p drgnx-dir)) nil t)
+      ;; the dark scene's notebook and views, when the light one follows
+      (dolist (b (buffer-list))
+        (when (string-prefix-p "*Notebook " (buffer-name b)) (let ((kill-buffer-query-functions nil)) (kill-buffer b))))
+      (when-let* ((old (get-buffer "cache-experiments.ipynb")))
+        (with-current-buffer old (set-buffer-modified-p nil))
+        (kill-buffer old))
+      (let* ((buffer (find-file-noselect (drgnx-look-scene--notebook-file kernel))) (base (buffer-name buffer)) views)
+        (drgnx-look-scene--show buffer)
+        (when (drgnx-look-scene--until 30 "the notebook opens" (lambda () (buffer-local-value 'drgnx-notebook--id buffer)))
+          (when kernel
+            (let ((ran (lambda (tails id) (let ((h (plist-get (gethash id tails) :head))) (and h (not (equal (plist-get h :state) "queued")) (string-match-p "\\[[0-9]+\\]" (or (plist-get h :text) "")))))))
+              (drgnx-look-scene--run-cell buffer "c1" ran 7)
+              (drgnx-look-scene--run-cell buffer "c3" ran 3)
+              (drgnx-look-scene--run-cell buffer "c2" (lambda (tails id) (string-search "16" (or (plist-get (gethash id tails) :text) ""))) 3))
+            (let ((end (+ (float-time) 1.5)))   ; the log's first entries and the output's second line
+              (while (< (float-time) end) (accept-process-output nil 0.05) (redisplay))))
+          (with-current-buffer buffer
+            (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id (if kernel "c2" "c3")) :head)))
+            (drgnx-notebook--select-at (point))      ; no command ran: the hub is told which cell point is in
+            (drgnx-notebook-outline)
+            (drgnx-notebook-open-output)
+            (drgnx-notebook-kernel-log))
+          (setq views (list (format "*Notebook outline: %s*" base) (format "*Notebook output: %s %s*" base (if kernel "c2" "c3"))
+                            (format "*Notebook log: %s*" base)))
+          (drgnx-look-scene--until 30 "the views' buffers" (lambda () (seq-every-p #'get-buffer views)))
+          (delete-other-windows)
+          (let* ((w1 (selected-window)) (w2 (split-window-right)) (w3 (with-selected-window w2 (split-window-right))))
+            (cl-loop for w in (list w1 w2 w3) for name in views
+                     do (set-window-buffer w (get-buffer name))
+                     (with-current-buffer name (drgnx-view-env-update drgnx-notebook-view--id))))
+          (drgnx-look-scene--until 30 "the views' rows"
+                                   (lambda () (seq-every-p (lambda (name)
+                                                             (with-current-buffer name
+                                                               (when (drgnx-view-p drgnx-view) (drgnx-view-draw-now drgnx-view))
+                                                               (> (buffer-size) 0)))
+                                                           views)))))))
   (drgnx-look-scene--answer))
 
+(defun drgnx-look-scene-notebook-views-light () "The three notebook views, light." (drgnx-look-scene--notebook-views 'drgnx-light))
 (defun drgnx-look-scene-notebook-views () "The notebook and its outline view." (drgnx-look-scene--notebook-views 'drgnx-dark))
 (defun drgnx-look-scene-notebook-dark () "The notebook, dark." (drgnx-look-scene--notebook 'drgnx-dark))
 (defun drgnx-look-scene-notebook-light () "The notebook, light." (drgnx-look-scene--notebook 'drgnx-light))

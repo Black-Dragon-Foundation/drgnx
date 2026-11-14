@@ -64,6 +64,12 @@
   "A cell's error output." :group 'drgnx-notebook)
 (defface drgnx-notebook-stale '((t :inherit drgnx-text-subtle))
   "An output that came from the file, not from a run in this session." :group 'drgnx-notebook)
+(defface drgnx-notebook-cut '((t :inherit (drgnx-text-muted drgnx-selected-quiet) :extend t))
+  "A view's cut row (`N lines above' and `below'): a quiet tint across the row." :group 'drgnx-notebook)
+(defface drgnx-notebook-error-row '((t :inherit drgnx-chip-error :extend t))
+  "An error's rows in a view: the error tint across the row, never a solid block." :group 'drgnx-notebook)
+(defface drgnx-notebook-current-row '((t :inherit drgnx-selected-quiet :extend t))
+  "The outline's row of the cell point is in: the selected row's look." :group 'drgnx-notebook)
 (defface drgnx-notebook-inverse '((t :inverse-video t))
   "Output text the terminal showed in reverse video (the hub's views name it, never a colour)." :group 'drgnx-notebook)
 
@@ -394,6 +400,11 @@ Idempotent; cheap when nothing changed."
               (t (setq found c)))))
     found))
 
+(defun drgnx-notebook--focus (cell)
+  "Tell the hub which CELL point is in (none: omitted), so its outline marks the row; asked when it changes, not per move."
+  (when drgnx-notebook--id
+    (drgnx-notebook--call "notebook/focus" (append (list :id drgnx-notebook--id) (and cell (list :cell cell))) #'ignore)))
+
 (defun drgnx-notebook--select-at (pos)
   "Tint the cell at POS as the selected one (one overlay, moved); its output takes the selected tint and the add row
 and the cell it left goes back (their strings are built again from their last tails: two cells, not a scan)."
@@ -404,6 +415,7 @@ and the cell it left goes back (their strings are built again from their last ta
     (unless (equal old new)
       (dolist (id (delq nil (list old new))) (drgnx-notebook--refresh-tail id))
       (drgnx-notebook--blocks-update)
+      (drgnx-notebook--focus new)
       (when (fboundp 'drgnx-statusbar-refresh) (drgnx-statusbar-refresh t)))
     (cond ((null c) (when drgnx-notebook--selected (delete-overlay drgnx-notebook--selected)))
           (t (unless drgnx-notebook--selected
@@ -789,6 +801,7 @@ kernel, the tails' versions) and give it the buffer's cells, unsaved edits inclu
                                   (when (equal drgnx-notebook--id id) (drgnx-notebook--mark-known))))))))
   (dolist (tail (plist-get result :tails)) (drgnx-notebook--put-tail tail))
   (drgnx-notebook--reask-views)
+  (drgnx-notebook--focus drgnx-notebook--selected-id)
   (when (fboundp 'drgnx-statusbar-refresh) (drgnx-statusbar-refresh t)))
 
 (defun drgnx-notebook--reconnect ()
@@ -1230,11 +1243,14 @@ THEN-RUN-ALL: run every code cell once it is up."
 
 (define-derived-mode drgnx-notebook-view-mode special-mode "Notebook view"
   "A notebook's Sjá view: rows the hub builds."
-  (setq-local truncate-lines t cursor-type nil))
+  (setq-local truncate-lines t cursor-type nil header-line-format '(" " (:eval drgnx-notebook-view--header)))
+  (add-hook 'drgnx-view-patch-patched-functions #'drgnx-notebook-view--refresh nil t))
 (define-derived-mode drgnx-notebook-outline-mode drgnx-notebook-view-mode "Notebook outline"
   "The cell outline: one row per cell; Go to Cell (the key profiles' RET) goes to the cell.")
 (define-derived-mode drgnx-notebook-output-mode drgnx-notebook-view-mode "Notebook output"
-  "The whole output of one cell, a window of 1000 lines at a time; Output Later and Earlier Lines move it.")
+  "The whole output of one cell, a window of 1000 lines at a time; Output Later and Earlier Lines move it."
+  (setq-local display-line-numbers t)
+  (face-remap-add-relative 'line-number 'drgnx-text-subtle))
 (define-derived-mode drgnx-notebook-log-mode drgnx-notebook-view-mode "Notebook log"
   "What the kernel says that answers no cell.")
 
@@ -1356,6 +1372,105 @@ THEN-RUN-ALL: run every code cell once it is up."
   (interactive)
   (drgnx-notebook--output-move -500))
 
+;;; The foot line of a view: what the status bar says (the approved mockup), computed from the rows when a patch draws, never at redisplay
+
+(defvar-local drgnx-notebook-view--foot nil "In a view buffer: the status bar's line about its rows (`9 of 2 000 listed').")
+(defvar-local drgnx-notebook-view--hint nil "In a view buffer: the key hint at the bar's other end.")
+(defvar-local drgnx-notebook-view--header nil "In a view buffer: its pane title, the name, what it is of and a count chip.")
+
+(defun drgnx-notebook--key-word (label)
+  "A key's LABEL as a hint says it: the Return key is `Enter'."
+  (if (equal label "RET") "Enter" label))
+
+(defun drgnx-notebook-view--title (name subtitle chip &optional accent)
+  "The pane title: NAME, the muted SUBTITLE and a CHIP at the right end (in the accent when ACCENT)."
+  (concat (propertize name 'face 'drgnx-text) "  " (propertize (or subtitle "") 'face 'drgnx-text-subtle)
+          (when chip
+            (concat (propertize " " 'display `(space :align-to (- right ,(+ 2 (string-width chip)))))
+                    (propertize (concat " " chip " ") 'face (if accent 'drgnx-chip-accent 'drgnx-chip-quiet))))))
+
+(defun drgnx-notebook-view--notebook-name ()
+  (if (buffer-live-p drgnx-notebook-view--notebook) (buffer-name drgnx-notebook-view--notebook) ""))
+
+(defun drgnx-notebook--group (n)
+  "N with its thousands set off by a space, as the mockup writes them (`1 240')."
+  (let ((s (number-to-string n)))
+    (while (string-match "\\`\\([0-9]+\\)\\([0-9]\\{3\\}\\)" s)
+      (setq s (replace-match "\\1 \\2" nil nil s)))
+    s))
+
+(defun drgnx-notebook-view--rows-count (property)
+  "How many distinct values PROPERTY has over the buffer's rows, and the count of rows that carry it."
+  (let ((pos (point-min)) seen (rows 0))
+    (while (< pos (point-max))
+      (when-let* ((v (get-text-property pos property)))
+        (cl-incf rows) (cl-pushnew v seen :test #'equal))
+      (setq pos (or (save-excursion (goto-char pos) (and (zerop (forward-line 1)) (point))) (point-max))))
+    (cons (length seen) rows)))
+
+(defun drgnx-notebook-view--prop (property)
+  "The number the hub put in PROPERTY on a row (`drgnx-notebook-more', `-above', `-below', `-lost'), or 0 without one."
+  (let ((pos (text-property-not-all (point-min) (point-max) property nil)))
+    (or (and pos (let ((v (get-text-property pos property))) (and (numberp v) v))) 0)))
+
+(defun drgnx-notebook-view--output-title ()
+  "`Output  cell 3 · [*] · running', with `follows the run' while the cell runs."
+  (let* ((nb drgnx-notebook-view--notebook) (cell drgnx-notebook-view--cell)
+         (index (and (buffer-live-p nb)
+                     (with-current-buffer nb
+                       (seq-position drgnx-notebook--cells cell (lambda (c id) (equal (plist-get c :id) id))))))
+         (head (and (buffer-live-p nb) (gethash cell (buffer-local-value 'drgnx-notebook--heads nb))))
+         (running (and (buffer-live-p nb) (equal (buffer-local-value 'drgnx-notebook--running nb) cell))))
+    (drgnx-notebook-view--title "Output"
+                                (string-join (delq nil (list (and index (format "cell %d" (1+ index)))
+                                                             (and head (plist-get head :text) (string-trim (plist-get head :text)))))
+                                             " · ")
+                                (and running "follows the run") t)))
+
+(defun drgnx-notebook-view--refresh (&optional _view _keys)
+  "Compute this view buffer's foot line, key hint and gutter from its rows (a draw just changed them)."
+  (when (derived-mode-p 'drgnx-notebook-view-mode)
+    (pcase major-mode
+      ('drgnx-notebook-outline-mode
+       (let* ((listed (cdr (drgnx-notebook-view--rows-count 'drgnx-notebook-cell)))
+              (more (drgnx-notebook-view--prop 'drgnx-notebook-more)))
+         (setq drgnx-notebook-view--foot (format "%s of %s listed" (drgnx-notebook--group listed) (drgnx-notebook--group (+ listed more)))
+               drgnx-notebook-view--header (drgnx-notebook-view--title "Outline" (drgnx-notebook-view--notebook-name)
+                                                                       (format "%s cells" (drgnx-notebook--group (+ listed more))))
+               drgnx-notebook-view--hint
+               (and (fboundp 'drgnx-surfaces-key-label)
+                    (when-let* ((k (drgnx-surfaces-key-label 'notebook-outline-visit :short t)))
+                      (format "%s goes to the cell" (drgnx-notebook--key-word k)))))))
+      ('drgnx-notebook-output-mode
+       (let ((lines (drgnx-notebook--output-lines)))
+         (if (null lines)
+             (setq drgnx-notebook-view--foot "no output")
+           (let* ((above (drgnx-notebook-view--prop 'drgnx-notebook-above))
+                  (below (drgnx-notebook-view--prop 'drgnx-notebook-below)))
+             (setq drgnx-notebook-view--header (drgnx-notebook-view--output-title)
+                   drgnx-notebook-view--foot (format "lines %s–%s of %s" (drgnx-notebook--group (car lines)) (drgnx-notebook--group (cdr lines))
+                                                     (drgnx-notebook--group (+ (cdr lines) below)))
+                   ;; the gutter counts the cell's lines: a row above is the line before the first shown
+                   display-line-numbers t
+                   display-line-numbers-offset (- (car lines) 1 (if (> above 0) 1 0)))))))
+      ('drgnx-notebook-log-mode
+       (let ((entries (car (drgnx-notebook-view--rows-count 'drgnx-notebook-log)))
+             (lost (drgnx-notebook-view--prop 'drgnx-notebook-lost)))
+         (setq drgnx-notebook-view--header (drgnx-notebook-view--title "Kernel log" (or (and (buffer-live-p drgnx-notebook-view--notebook)
+                                                                                             (buffer-local-value 'drgnx-notebook--kernel drgnx-notebook-view--notebook))
+                                                                                        (drgnx-notebook-view--notebook-name))
+                                                                       (and (> lost 0) (format "%d earlier entries dropped" lost)))
+               drgnx-notebook-view--foot (format "%d entries%s" entries (if (> lost 0) (format " · %d dropped" lost) ""))
+               drgnx-notebook-view--hint "answers no cell"))))
+    (when (fboundp 'drgnx-statusbar-refresh) (drgnx-statusbar-refresh t))))
+
+(defun drgnx-notebook--segment-view ()
+  "A view's foot line (a status bar reads only what was computed)."
+  (and (derived-mode-p 'drgnx-notebook-view-mode) drgnx-notebook-view--foot))
+
+(defun drgnx-notebook--segment-view-hint ()
+  (and (derived-mode-p 'drgnx-notebook-view-mode) drgnx-notebook-view--hint))
+
 ;;;; The status bar: which cell, and the kernel
 
 (declare-function drgnx-statusbar-define-segment "drgnx-statusbar")
@@ -1363,6 +1478,8 @@ THEN-RUN-ALL: run every code cell once it is up."
 (declare-function drgnx-module-set "drgnx-modules-helpers")
 (defvar drgnx-statusbar-left)
 (defvar drgnx-statusbar-right)
+(defvar drgnx-statusbar-other)
+(defvar drgnx-statusbar-other-right)
 
 (defun drgnx-notebook--segment-cell ()
   "`cell 3 of 4 · python': the selected cell's place, from the cached ranges (a status bar reads only cached state)."
@@ -1388,6 +1505,13 @@ THEN-RUN-ALL: run every code cell once it is up."
                                     :help "The selected cell's place in the notebook")
     (drgnx-statusbar-define-segment 'notebook-kernel :fn #'drgnx-notebook--segment-kernel
                                     :help "The notebook's kernel and its state")
+    (drgnx-statusbar-define-segment 'notebook-view :fn #'drgnx-notebook--segment-view :help "What a notebook view shows")
+    (drgnx-statusbar-define-segment 'notebook-view-hint :fn #'drgnx-notebook--segment-view-hint :help "A notebook view's key")
+    ;; a view is a special-mode buffer: the bar for those is `drgnx-statusbar-other' (left) and `-other-right'
+    (unless (memq 'notebook-view drgnx-statusbar-other)
+      (drgnx-module-set 'drgnx-statusbar-other (append drgnx-statusbar-other '(notebook-view))))
+    (unless (memq 'notebook-view-hint drgnx-statusbar-other-right)
+      (drgnx-module-set 'drgnx-statusbar-other-right (append drgnx-statusbar-other-right '(notebook-view-hint))))
     (unless (memq 'notebook-cell drgnx-statusbar-left)
       (drgnx-module-set 'drgnx-statusbar-left (append drgnx-statusbar-left '(notebook-cell))))
     (unless (memq 'notebook-kernel drgnx-statusbar-right)
