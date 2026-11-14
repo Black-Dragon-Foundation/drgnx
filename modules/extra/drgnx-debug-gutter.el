@@ -26,6 +26,7 @@
 (require 'drgnx-faces)
 (require 'drgnx-color)
 (declare-function drgnx-hub-call "drgnx-hub-client")
+(declare-function drgnx-history-ask "drgnx-history")
 (require 'drgnx-debug-launch (expand-file-name "drgnx-debug-launch" (file-name-directory (macroexp-file-name))))
 (defvar drgnx-hub-event-functions)
 (declare-function drgnx-debug-disassembly-show "drgnx-debug-disassembly" (data))
