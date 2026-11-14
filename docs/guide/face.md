@@ -372,7 +372,8 @@ comfortable), on the gap colour behind the cards: the drgnx mark and the project
 Open's key in your key profile as a keycap, `Ctrl P` in the VS Code profile; a click opens Quick Open, `>` for
 commands), the two chips, and the window controls. The search box sits where the design has it: centred between the
 left items and the right ones with both chips counted, so it stays put when a chip comes or goes, and leaves when the
-window is too narrow for it. At any display scale or UI scale every part takes a whole number of device pixels
+window is too narrow for it. A window too narrow even for the items without the box drops them from the right end
+(the window controls first), so the row never wraps or runs past the edge. At any display scale or UI scale every part takes a whole number of device pixels
 (rounded half up: a 26 pixel control is 33 at 125 %), so the row adds up to what is drawn and stays one line.
 Under the mouse a window control gets a round hover, 26 pixels across. Chips, the search box,
 the mark and the buttons are small images drawn from the theme's faces (a text background would fill the whole row
