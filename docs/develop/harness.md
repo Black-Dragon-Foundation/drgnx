@@ -1316,6 +1316,12 @@ STRING)`; see [Test patterns](#test-patterns) for what holds the register.
 
 Without `DRGNX_TEST_AUDIT_FAIL=1` they are only reported as `drgnx-audit:` lines.
 
+**Event waits.** A `drgnx-test-wait` waits for an event (a child's output, a socket) and measures nothing:
+`drgnx-lint/event-waits-are-bounded-and-measure-nothing` (every non-`:timing` test file) fails a wait whose `:secs` is
+`nil`, 0 or over 300 (a deadline is a failure message, never a hang), a predicate that reads the wall clock (an elapsed
+wait hidden in an event wait), and a result compared against a duration or a clock reading. What depends on time moves to
+the clock fixture or the hub's `__test_advance`; a real "did not happen" window is `drgnx-test-pause` with its reason.
+
 ### Test patterns
 
 A `cond` test file names how its tests keep a race out, on a `;; test-pattern: P…` line within its first 15 lines,
