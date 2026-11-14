@@ -229,6 +229,7 @@ changed to hide a gap: the gap is named here instead.")
          ,@body)
      (error (push (format "%s: %s" ,what (error-message-string err)) drgnx-look-scene--errors) nil)))
 
+(declare-function drgnx-view-patch-rows "drgnx-view")
 (declare-function drgnx-view-env-classes "drgnx-view-env")
 (declare-function drgnx-view-patch-view "drgnx-view")
 (declare-function drgnx-view-patch-version "drgnx-view")
@@ -475,8 +476,25 @@ counted from the hub), the file's problems (`drgnx-look-scene--problems') and it
     (if-let* ((w (get-buffer-window drgnx-look-scene--panel)))
         (select-window w)
       ;; an earlier scene put the editor back: the panel opens again where opening it puts it, the right island
-      (drgnx-pane-show 'agent-panel :buffer drgnx-look-scene--panel :select t)))
+      (drgnx-pane-show 'agent-panel :buffer drgnx-look-scene--panel :select t))
+    (drgnx-look-scene--panel-top drgnx-look-scene--panel))
   (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene--panel-top (buffer)
+  "An error unless BUFFER, the agent panel, holds the hub's header row (`p:head') as its first row and its window
+starts at the buffer's top: what the panel opened by its command path shows first."
+  (let* ((state (buffer-local-value 'drgnx-view-patch buffer))
+         (rows (and state (drgnx-view-patch-rows state))))
+    (unless (drgnx-look-scene--until 10 "the panel's header row from the hub"
+                                     (lambda () (and rows (gethash "p:head" rows))))
+      (push (format "agent-panel: no `p:head' row; rows %S, version %S, env classes %S, first line %S"
+                    (and rows (seq-take (hash-table-keys rows) 8)) (and state (drgnx-view-patch-version state))
+                    (and state (drgnx-view-env-classes (drgnx-view-patch-view state)))
+                    (with-current-buffer buffer (buffer-substring (point-min) (min (point-max) (+ (point-min) 60)))))
+            drgnx-look-scene--errors))
+    (when-let* ((w (get-buffer-window buffer)))
+      (unless (= (window-start w) (with-current-buffer buffer (point-min)))
+        (push (format "agent-panel: its window starts at %d, not the top" (window-start w)) drgnx-look-scene--errors)))))
 
 (defun drgnx-look-scene--palette-commands ()
   "palette.html's commands for \"run te\": the test runner's three and the terminal's, with the mockup's keys, first in
