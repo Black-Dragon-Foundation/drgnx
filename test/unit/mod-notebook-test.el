@@ -200,7 +200,7 @@
   (nb-test--with
     (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id "c") :head)))
     (drgnx-notebook-run-cell)
-    (let ((calls (reverse nb-test--calls)))
+    (let ((calls (cl-remove "notebook/focus" (reverse nb-test--calls) :key #'car :test #'equal)))
       (should (equal (mapcar #'car calls) '("notebook/sync" "notebook/execute")))
       (should (= 3 (length (plist-get (cdar calls) :cells))))
       (should (equal (mapcar (lambda (c) (plist-get c :id)) (plist-get (cdr (cadr calls)) :cells)) '("c")))
@@ -219,7 +219,7 @@
                   (cons "notebook/start" (lambda (_) (cons (list :kernel "python3") nil)))))
       (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id "a") :head)))
       (drgnx-notebook-run-cell)
-      (should (equal (delete "notebook/tail" (mapcar #'car (reverse nb-test--calls)))
+      (should (equal (delete "notebook/focus" (delete "notebook/tail" (mapcar #'car (reverse nb-test--calls))))
                      '("notebook/sync" "notebook/execute" "notebook/start" "notebook/sync" "notebook/execute"))))))
 
 (ert-deftest drgnx-notebook/the-head-is-the-hubs-and-comes-with-a-tail ()
@@ -453,7 +453,7 @@
     ;; and run all once it is up
     (setq nb-test--calls nil)
     (drgnx-notebook-restart-and-run-all)
-    (should (equal (delete "notebook/tail" (mapcar #'car (reverse nb-test--calls))) '("notebook/restart" "notebook/sync" "notebook/execute")))))
+    (should (equal (delete "notebook/focus" (delete "notebook/tail" (mapcar #'car (reverse nb-test--calls)))) '("notebook/restart" "notebook/sync" "notebook/execute")))))
 
 (ert-deftest drgnx-notebook/clear-outputs-asks-the-hub-for-all-or-one ()
   (nb-test--with
@@ -596,14 +596,14 @@
                                      (should-not drgnx-notebook--id)
                                      (setq hub-up t)
                                      (drgnx-notebook--reconnect-all)
-                                     (should (equal (plist-get (cdr (car calls)) :text) "{\"cells\": []}"))
+                                     (should (equal (plist-get (cdr (assoc "notebook/open" calls)) :text) "{\"cells\": []}"))
                                      (should (equal drgnx-notebook--id "nb1"))
                                      (should-not buffer-read-only)
                                      (should (equal (nb-test--ids) '("a" "b" "c")))
                                      ;; opened now: the next connect takes the reconnect path, not another first open
                                      (setq calls nil)
                                      (drgnx-notebook--reconnect-all)
-                                     (should (equal (mapcar #'car (reverse calls)) '("notebook/open" "notebook/sync")))
+                                     (should (equal (delete "notebook/focus" (mapcar #'car (reverse calls))) '("notebook/open" "notebook/sync")))
                                      (should-not (plist-member (cdr (car (reverse calls))) :text)))
                                  (with-current-buffer buffer (set-buffer-modified-p nil) (setq buffer-file-name nil))
                                  (kill-buffer buffer)
@@ -845,7 +845,7 @@
   (nb-test--with
     (let ((b (nb-test--view-buffer 'drgnx-notebook-outline-mode
                                    '(("1  markdown  # T" drgnx-notebook-cell "a") ("2  code      [1] x" drgnx-notebook-cell "b")
-                                     ("1 991 more cells")))))
+                                     ("more: 1 991 cells are not listed" drgnx-notebook-more 1991)))))
       (unwind-protect
           (with-current-buffer b
             (should (equal drgnx-notebook-view--foot "2 of 1 993 listed")))
@@ -854,8 +854,9 @@
 (ert-deftest drgnx-notebook/the-outputs-foot-says-which-lines-of-how-many ()
   (nb-test--with
     (let ((b (nb-test--view-buffer 'drgnx-notebook-output-mode
-                                   '(("1 240 lines above") ("epoch 41" drgnx-notebook-line 1241) ("epoch 42" drgnx-notebook-line 1242)
-                                     ("310 lines below")))))
+                                   '(("▲ 1240 lines above   M-p earlier lines" drgnx-notebook-above 1240) ("epoch 41" drgnx-notebook-line 1241)
+                                     ("epoch 42" drgnx-notebook-line 1242)
+                                     ("▼ 310 lines below   M-n later lines" drgnx-notebook-below 310)))))
       (unwind-protect
           (with-current-buffer b
             (should (equal drgnx-notebook-view--foot "lines 1 241–1 242 of 1 552"))
@@ -867,7 +868,7 @@
 (ert-deftest drgnx-notebook/the-logs-foot-counts-entries ()
   (nb-test--with
     (let ((b (nb-test--view-buffer 'drgnx-notebook-log-mode
-                                   '(("12 earlier entries dropped") ("stream  hello" drgnx-notebook-log 1) ("error   boom" drgnx-notebook-log 2)
+                                   '(("lost  12 earlier entries" drgnx-notebook-lost 12) ("stream  hello" drgnx-notebook-log 1) ("error   boom" drgnx-notebook-log 2)
                                      ("        more" drgnx-notebook-log 2)))))
       (unwind-protect
           (with-current-buffer b (should (equal drgnx-notebook-view--foot "2 entries · 12 dropped")))
@@ -887,7 +888,7 @@
 (ert-deftest drgnx-notebook/the-outlines-title-names-the-notebook-and-counts-its-cells ()
   (nb-test--with
     (let ((b (nb-test--view-buffer 'drgnx-notebook-outline-mode
-                                   '(("1  markdown  # T" drgnx-notebook-cell "a") ("1 991 more cells")))))
+                                   '(("1  markdown  # T" drgnx-notebook-cell "a") ("more: 1 991 cells are not listed" drgnx-notebook-more 1991)))))
       (unwind-protect
           (with-current-buffer b
             (setq drgnx-notebook-view--notebook (get-buffer "*nb-test*"))
@@ -916,7 +917,7 @@
 
 (ert-deftest drgnx-notebook/the-logs-title-counts-what-was-dropped ()
   (nb-test--with
-    (let ((b (nb-test--view-buffer 'drgnx-notebook-log-mode '(("12 earlier entries dropped") ("stream  hi" drgnx-notebook-log 1)))))
+    (let ((b (nb-test--view-buffer 'drgnx-notebook-log-mode '(("lost  12 earlier entries" drgnx-notebook-lost 12) ("stream  hi" drgnx-notebook-log 1)))))
       (unwind-protect
           (with-current-buffer b
             (should (string-search "Kernel log" drgnx-notebook-view--header))
@@ -926,3 +927,35 @@
 (ert-deftest drgnx-notebook/the-hint-says-enter-not-ret ()
   (should (equal (drgnx-notebook--key-word "RET") "Enter"))
   (should (equal (drgnx-notebook--key-word "C-c C-j") "C-c C-j")))
+
+;;; The views' faces and the current cell (the hub half: notebook views a to d)
+
+(ert-deftest drgnx-notebook/the-views-new-faces-are-lisps-and-extend-without-a-colour ()
+  (dolist (face '(drgnx-notebook-cut drgnx-notebook-error-row drgnx-notebook-current-row))
+    (should (facep face))
+    (should (eq (face-attribute face :extend nil t) t))
+    (should (eq (face-attribute face :background nil nil) 'unspecified))))        ; their colours are inherited, themes own them
+
+(ert-deftest drgnx-notebook/the-hub-is-told-which-cell-point-is-in-when-it-changes ()
+  (nb-test--with
+    (setq nb-test--calls nil)
+    (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id "b") :head)))
+    (drgnx-notebook--select-at (point))
+    (let ((call (assoc "notebook/focus" nb-test--calls)))
+      (should (equal (plist-get (cdr call) :id) "nb1"))
+      (should (equal (plist-get (cdr call) :cell) "b")))
+    ;; moving inside the cell says nothing
+    (setq nb-test--calls nil)
+    (goto-char (+ 2 (plist-get (drgnx-notebook--cell-by-id "b") :head)))
+    (drgnx-notebook--select-at (point))
+    (should-not (assoc "notebook/focus" nb-test--calls))))
+
+(ert-deftest drgnx-notebook/point-in-no-cell-leaves-the-cell-out ()
+  (nb-test--with
+    (setq nb-test--calls nil)
+    (goto-char (point-min))
+    (cl-letf (((symbol-function 'drgnx-notebook--cell-at) (lambda (&optional _) nil)))
+      (drgnx-notebook--select-at (point)))
+    (let ((call (assoc "notebook/focus" nb-test--calls)))
+      (should call)
+      (should-not (plist-member (cdr call) :cell)))))

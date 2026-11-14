@@ -97,7 +97,7 @@ there is) in `drgnx-notebook-outline-mode`, `-output-mode` or `-log-mode`, attac
 twin per display class), registers its env (`drgnx-view-env-register`), and sends `view/close` when it is killed. Rows are the hub's; the
 editor has registry commands for them, keys in the profiles: Go to Cell on the outline (the row's `drgnx-notebook-cell` property is the cell's id), Output: Later and Earlier Lines on the output
 (`view/window {view, list: "lines", from}`, half a window, from the `drgnx-notebook-line` property of the rows shown). The faces are Lisp's:
-`drgnx-notebook-prompt`, `-stale`, `-inverse` and the role faces; a view's text carries them, never a colour. A view is asked for again, its
+`drgnx-notebook-prompt`, `-stale`, `-inverse`, the role faces and, from the hub's rows, `drgnx-notebook-cut` (the ▲ ▼ rows), `-error-row` (an error's rows, an error tint) and `-current-row` (the outline's row of the cell point is in: the selected row's look), all `:extend`, none with a colour of its own; a view's text carries them, never a colour. The editor sends `notebook/focus {id, cell?}` when the cell point is in changes (`drgnx-notebook--select-at`; no `cell` for none) and again after a reopen. The status line reads the rows' integer properties (`drgnx-notebook-more`, `-above`, `-below`, `-lost`), never their text. A view is asked for again, its
 old id unregistered, when the notebook is opened again on a new hub (`drgnx-notebook--reask-views`), and killed with the notebook.
 
 **The notebook's connection.** The hub keeps a notebook, its events and its views per connection, and `view/env` and `view/window` come on the
