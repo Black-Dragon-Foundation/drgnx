@@ -16,7 +16,8 @@
 ;;   batch, and a batch never confirmed is drawn whole the next time.  A region whose length is not Sjá's drawn state
 ;;   is drawn whole too, so a stray edit cannot leave the rows wrong for long.
 ;; - Each window's start and point are turned into (ROW . OFFSET) before the batch and back after it, so the windows
-;;   stay on their rows; a window whose point was at the region's end follows the tail.
+;;   stay on their rows; a window whose point was at the region's end follows the tail (one of rows already drawn:
+;;   at the first rows, point stays at the region's start).
 ;; - The read-only text, the region markers (the end's insertion type t), the stops and images, the faces of styles
 ;;   (an LRU shared with the Lisp inserter's) are as `drgnx-view-patch-render' draws them.
 ;; - A view's own text properties go on through `drgnx-view-sja-prop-functions' (a terminal's links and images) and
@@ -261,13 +262,14 @@ its place), else BEG."
              lo hi drawn)
         (save-restriction
           (widen)
-          (let* ((wins (mapcar (lambda (w) (list w (drgnx-view-sja--place h beg end (window-start w))
+          (let* ((tail (< beg end))             ; an empty region has no tail to follow: point stays at its start
+                 (wins (mapcar (lambda (w) (list w (drgnx-view-sja--place h beg end (window-start w))
                                                  (drgnx-view-sja--place h beg end (window-point w))
-                                                 (= (window-point w) end)
+                                                 (and tail (= (window-point w) end))
                                                  (copy-marker (window-start w)) (copy-marker (window-point w))))
                                (get-buffer-window-list buffer nil t)))
                  (pt (drgnx-view-sja--place h beg end (point)))
-                 (pt-end (= (point) end))
+                 (pt-end (and tail (= (point) end)))
                  (d (progn (nidhogg-view-rows h 'idprop nil (symbol-name drgnx-view-patch-id-prop)) ; the nodes drawn
                            (nidhogg-view-rows h 'draw (- end beg)))))
             (when d

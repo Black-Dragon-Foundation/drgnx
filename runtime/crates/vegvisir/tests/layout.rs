@@ -807,6 +807,15 @@ fn live_arrivals_and_departures_move_nothing() {
         prev.rows[..],
         "the rows above stay"
     );
+    // a row's (layer, block line, sub) names its rows on the wire: a new row at the bottom takes a block line of its
+    // own (one once took its layer's first, and the editor's row store found the key twice)
+    let mut keys = std::collections::BTreeSet::new();
+    for row in &l.rows {
+        assert!(
+            keys.insert((row.layer, row.block_line, row.sub)),
+            "row {row:?} has the key of a row before it"
+        );
+    }
 }
 
 /// [D] A chip is as wide as the mockup's (work-space-dark.html): an ask holds “fix deferred testing rows”, a plan its

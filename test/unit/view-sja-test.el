@@ -97,6 +97,18 @@ decision."
         (should (= (window-point w1) (+ (drgnx-view-sja-row-start "b") 2)))
         (should (= (window-point w2) (point-max)))))))
 
+(ert-deftest rows-sja/the-first-rows-keep-point-at-the-top ()
+  ;; an empty region has no tail to follow: the first draw leaves the window and the buffer at its first row (a map
+  ;; once opened showing its bottom, as the window's point, at the empty region's end, followed the rows in)
+  (view-sja-test--with
+    (save-window-excursion
+      (delete-other-windows)
+      (set-window-buffer (selected-window) buf)
+      (view-sja-test--reset view '("a" "b" "c"))
+      (drgnx-view-sja-draw-now)
+      (should (= (point) (point-min)))
+      (should (= (window-point (selected-window)) (point-min))))))
+
 (ert-deftest rows-sja/read-only-region ()
   ;; the rows are read-only text in a buffer that is not
   (view-sja-test--with

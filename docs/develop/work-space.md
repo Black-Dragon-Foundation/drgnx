@@ -198,6 +198,9 @@ layer's first row, each layer's count); `render::rows` only reads it. One row pe
   the text's own faces, and `drgnx-work-id` names the item over the text and the right stop.
 - `band:LAYER:BLOCK-LINE:SUB`: the band above that row, as high as the band: each 192 px tile (at the scale) that a
   curve or a port chip crosses is an image at its column, else the row is blank.
+
+Every layout row's (LAYER, BLOCK-LINE, SUB) is its own, so no two rows share a key: a row a live arrival adds at the
+bottom (`layout::place_live`) takes the next block line of its layer. The editor's row store refuses a key twice.
 - Lanes: each line of a card row carries the row's lanes as images among its cards, by column; lanes at one x are one
   image (the widest stroke's: the chain's when one is on it) whose words name them all, so an image never takes the
   gap and pushes the next card right.
