@@ -386,7 +386,7 @@ unanswered, and panel \"s1\" as `buf'."
         (cl-letf (((symbol-function 'drgnx-view-key-at) (lambda (&rest _) '(:e 1)))
                   ((symbol-function 'drgnx-history-revert-to-here) (lambda (&rest _) (error "must not be called"))))
           (should-error (drgnx-agent-panel-revert-here) :type 'user-error))
-        (cl-letf (((symbol-function 'drgnx-view-key-at) (lambda (&rest _) '(:strip))))
+        (cl-letf (((symbol-function 'drgnx-view-key-at) (lambda (&rest _) '(:rows-end))))
           (should-error (drgnx-agent-panel-revert-here) :type 'user-error))))))
 
 (ert-deftest drgnx-agent-panel/fork-here-shows-the-forecast-line ()
@@ -901,7 +901,7 @@ panel."
 (defun drgnx-agent-panel-test--click (buf text)
   "A mouse-1 event on the first TEXT of BUF, shown in the selected window."
   (set-window-buffer (selected-window) buf)
-  (list 'mouse-1 (list (selected-window) (with-current-buffer buf (string-search text (buffer-string)))
+  (list 'mouse-1 (list (selected-window) (with-current-buffer buf (1+ (string-search text (buffer-string))))
                        '(0 . 0) 0)))
 
 (ert-deftest drgnx-agent-panel/a-click-on-the-hubs-header-runs-its-action ()
@@ -929,18 +929,21 @@ panel."
         (dolist (c '(agents-panel-act agents-panel-press)) (should (drgnx-commands-get c)))
         (dolist (c (mapcar #'cdr drgnx-agent-panel-header-menu)) (should (drgnx-commands-get c)))))))
 
-(ert-deftest drgnx-agent-panel/the-open-strip ()
-  "agent-panel.html: the strip under the chips reads \"Open:\" and its step types are pills, the open ones raised, no
-arrows."
+(ert-deftest drgnx-agent-panel/the-strips-pills-and-make-default-are-clicks ()
+  "The strip is the hub's rows: a pill carries `type:NAME' and \"make default\" `default'; the dispatcher flips the type
+or makes the default."
   (drgnx-agent-panel-test--with
     (with-current-buffer buf
-      (drgnx-agent-panel-preset 2)
-      (let ((strip (drgnx-agent-panel--strip-row)))
-        (should (string-match-p "\\`[[:space:]]*Open:" strip))
-        (should-not (string-match-p "[▸▾]" strip))
-        (should (memq 'drgnx-agent-panel-tag-on (drgnx-agent-panel-test--face-at strip "edit")))
-        (should (memq 'drgnx-agent-panel-tag (drgnx-agent-panel-test--face-at strip "read")))
-        ;; every pill is ringed (`.disc .t'), the open ones on the quiet selection
+      (let ((inhibit-read-only t) ran)
+        (erase-buffer)
+        (insert (propertize " edit " 'drgnx-agent-panel-action "type:edit")
+                (propertize "make default" 'drgnx-agent-panel-action "default"))
+        (cl-letf (((symbol-function 'drgnx-agent-panel-toggle-type) (lambda (ty) (push (list 'type ty) ran)))
+                  ((symbol-function 'drgnx-agent-panel-make-default) (lambda () (push 'default ran))))
+          (dolist (text '("edit" "make")) (drgnx-agent-panel-act (drgnx-agent-panel-test--click buf text)))
+          (should (equal (reverse ran) '((type edit) default))))
+        (dolist (face '(drgnx-agent-panel-tag drgnx-agent-panel-tag-on))
+          (should (facep face)))
         (should (drgnx-agent-panel-test--inherits-p 'drgnx-agent-panel-tag 'drgnx-pill))
         (should (drgnx-agent-panel-test--inherits-p 'drgnx-agent-panel-tag-on 'drgnx-pill-on))))))
 
@@ -1003,34 +1006,6 @@ outside the card faces, which extend: in them the ring ran on to the window's ed
                    (cl-letf (((symbol-function 'drgnx-px) #'identity))
                      (let ((c (drgnx-agent-panel-cards--box '("x") nil)))
                        (get-text-property (1- (string-search "\n" c)) 'display c)))))))
-
-(ert-deftest drgnx-agent-panel/strip-wraps-to-the-panel-width ()
-  "The strip fits the panel's width: in a narrow panel its pills go on as many lines as they need, \"make default\"
-on the last, nothing past the edge; in a wide one it is one line.  A change of the panel's width draws it again."
-  (drgnx-agent-panel-test--with
-    (with-current-buffer buf
-      (let* ((wide (cl-letf (((symbol-function 'drgnx-agent-panel--width) (lambda () 4000)))
-                     (drgnx-agent-panel--strip-row)))
-             (narrow-px (/ (string-pixel-width wide) 2))
-             (narrow (cl-letf (((symbol-function 'drgnx-agent-panel--width) (lambda () narrow-px)))
-                       (drgnx-agent-panel--strip-row))))
-        (should (= 1 (cl-count ?\n wide)))
-        (should (< 1 (cl-count ?\n narrow)))
-        (dolist (line (split-string narrow "\n" t))
-          ;; measured without the stretch that puts "make default" at the right end (it ends where the window does)
-          (let (parts)
-            (dotimes (i (length line))
-              (let* ((c (substring line i (1+ i))) (d (get-text-property 0 'display c)))
-                (unless (and (eq (car-safe d) 'space) (plist-get (cdr d) :align-to)) (push c parts))))
-            (should (<= (string-pixel-width (apply #'concat (nreverse parts))) narrow-px))))
-        (should (string-search "make default" (car (last (split-string narrow "\n" t))))))
-      ;; the store's event about the panel's window lays the strip out for its width
-      (set-window-buffer (selected-window) buf)
-      (drgnx-view-draw-now drgnx-view)
-      (setq drgnx-agent-panel--strip-width nil)
-      (drgnx-agent-panel--resized (list :window (selected-window)))
-      (should (eql drgnx-agent-panel--strip-width (window-body-width (selected-window) t)))
-      (should (gethash (list :strip) (drgnx-view--dirty drgnx-view))))))
 
 (ert-deftest drgnx-agent-panel/a-preset-tells-the-hub-the-lens ()
   "Picking a preset tells the hub which one is in force (`agents/panel/look' `lens_on'), so its header's lens shows it,

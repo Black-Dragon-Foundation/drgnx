@@ -11,7 +11,7 @@
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
 {"do": "send", "conn": "e", "json": {"id": 2, "method": "view/env", "params": {"view": "agent-panel/$sid", "class": "gui-1", "display": "gui", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 7, 4]], "cell": [8, 17], "width_px": 400, "palette": [], "epoch": 1}}}
 {"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
-{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"class": "gui-1", "base": 0, "version": 1, "ops": [{"reset": {"$contains": [{"key": "p:head", "text": "$string"}]}}]}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"class": "gui-1", "base": 0, "version": 1, "ops": [{"reset": {"$contains": [{"key": "p:head", "text": "$string"}, {"key": "p:strip", "text": "$string"}]}}]}}, "within_ms": 10000}
 {"do": "send", "conn": "e", "json": {"id": 3, "method": "agents/panel/look", "params": {"view": "agent-panel/$sid", "lens": ["watch", "review", "debug"], "lens_on": 2}}}
 {"do": "expect", "conn": "e", "json": {"id": 3, "result": true}}
 {"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"class": "gui-1", "version": 2, "ops": "$any"}}, "within_ms": 10000}

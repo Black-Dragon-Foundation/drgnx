@@ -77,8 +77,9 @@
     (drgnx-ui-kit-run choice)))
 
 (defun drgnx-agent-panel-act (event)
-  "Run the header or chip part the click EVENT is on: the lens segment (`lens:N'), the pin or the ⋯ menu
-\(`drgnx-agent-panel-action' of the text, which the hub's header row sets), or the chip (`drgnx-agent-panel-chip')."
+  "Run the header, strip or chip part the click EVENT is on: the lens segment (`lens:N'), the pin or the ⋯ menu, a
+step type's pill (`type:NAME') or `make default' (`drgnx-agent-panel-action' of the text, which the hub's rows set), or
+the chip (`drgnx-agent-panel-chip')."
   (interactive "e")
   (let* ((end (event-end event)) (pos (posn-point end)) (win (posn-window end))
          (buf (and (windowp win) (window-buffer win))))
@@ -90,6 +91,9 @@
                  (drgnx-agent-panel-preset (string-to-number (substring action 5))))
                 ((equal action "pin") (drgnx-ui-kit-run 'agents-panel-pin))
                 ((equal action "more") (drgnx-agent-panel-header-menu event))
+                ((and (stringp action) (string-prefix-p "type:" action))
+                 (drgnx-agent-panel-toggle-type (intern (substring action 5))))
+                ((equal action "default") (drgnx-agent-panel-make-default))
                 ((stringp chip) (drgnx-agent-panel-chip (intern chip)))))))))
 
 (defun drgnx-agent-panel-press (event)
@@ -178,11 +182,10 @@ else when the chat's toggle for its type is on."
     (if (drgnx-agent-panel--rows-p) (drgnx-agent-panel--send-look) (drgnx-view-dirty drgnx-view (list key)))))
 
 (defun drgnx-agent-panel--redraw-steps ()
-  "Every step row and the strip are drawn again."
+  "Every step row is drawn again."
   (when (drgnx-view-p drgnx-view)
     (drgnx-view-dirty drgnx-view
-                      (cons (list :strip)
-                            (seq-filter (lambda (k) (eq (car-safe k) :e)) (hash-table-keys drgnx-agent-panel--shown-keys))))))
+                      (seq-filter (lambda (k) (eq (car-safe k) :e)) (hash-table-keys drgnx-agent-panel--shown-keys)))))
 
 (defun drgnx-agent-panel--set-disclosure (types)
   "TYPES are the open step types of this chat; rows you opened or folded by hand are back under the toggles."
@@ -250,40 +253,7 @@ changed lays its strip out again."
               (unless (eql width drgnx-agent-panel--strip-width)
                 (setq drgnx-agent-panel--strip-width width)
                 (when (drgnx-view-p drgnx-view)
-                  (drgnx-view-dirty drgnx-view (cons (list :strip) (and (fboundp 'drgnx-agent-panel-cards-keys) (drgnx-agent-panel-cards-keys)))))))))))))
-
-(defun drgnx-agent-panel--strip-row ()
-  "The disclosure strip (agent-panel.html `.disc'): \"Open:\" and a pill for each step type, the open ones raised, a
-click flips one; \"make default\" at the end.  The pills go on as many lines as the panel's width needs.  The presets
-are the header's lens."
-  (let* ((open (propertize " Open: " 'face 'drgnx-agent-panel-subtle))
-         (pills (mapcar (lambda (ty)
-                          (let ((map (make-sparse-keymap)))
-                            (define-key map [mouse-1] (lambda () (interactive) (drgnx-agent-panel-toggle-type ty)))
-                            (propertize (format " %s " ty)
-                                        'face (if (memq ty drgnx-agent-panel--disclosure) 'drgnx-agent-panel-tag-on
-                                                'drgnx-agent-panel-tag)
-                                        'mouse-face 'drgnx-hover 'keymap map)))
-                        drgnx-agent-panel-step-types))
-         (default (let ((map (make-sparse-keymap)))
-                    (define-key map [mouse-1] #'drgnx-agent-panel-make-default)
-                    (propertize "make default" 'face 'drgnx-accent 'mouse-face 'drgnx-hover 'keymap map
-                                'help-echo "M: what is open now is what new panels open")))
-         (room (let ((w (drgnx-agent-panel--width))) (and w (- w (drgnx-px 12)))))
-         (indent (propertize " " 'display `(space :width (,(string-pixel-width open)))))
-         (line open) (lines nil))
-    (dolist (part (append pills (list default)))
-      (let ((next (concat line " " part)))
-        (cond ((and room (> (string-pixel-width next) room))
-               (push line lines)
-               (setq line (concat indent part)))
-              ;; "make default" sits at the right end of the line it fits on (`margin-left: auto')
-              ((eq part default)
-               (setq line (concat line (propertize " " 'display `(space :align-to (- right (,(+ (string-pixel-width default) (drgnx-px 12))))))
-                                  part)))
-              (t (setq line next)))))
-    (push line lines)
-    (mapconcat (lambda (l) (concat l "\n")) (nreverse lines) "")))
+                  (drgnx-view-dirty drgnx-view (and (fboundp 'drgnx-agent-panel-cards-keys) (drgnx-agent-panel-cards-keys))))))))))))
 
 (defun drgnx-agent-panel-steps-setup ()
   (drgnx-command-define 'agents-panel-toggle-type :category "Agents" :title "Open or Close a Step Type"

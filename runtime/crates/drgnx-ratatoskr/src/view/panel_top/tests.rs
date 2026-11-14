@@ -1,5 +1,6 @@
 use super::*;
 use runstav::methods::agents::Snapshot;
+use std::collections::BTreeSet;
 
 fn snap(extra: Value) -> Snapshot {
     let mut v = json!({"id": "s1", "name": "Fix the tests", "profile": "Claude", "status": "idle"});
@@ -51,6 +52,7 @@ fn build(s: &Snapshot, width: u32, busy: Option<f64>) -> (Vec<Row>, Vec<(ImageId
             env: &e,
             fonts: &f,
             lens: &l,
+            open: &BTreeSet::from(["edit".to_owned()]),
             busy_since: busy,
             now: 1000.0,
         },
@@ -165,7 +167,10 @@ fn a_narrow_panel_cuts_what_the_agent_does_and_keeps_the_buttons() {
 #[test]
 fn the_chips_are_what_the_snapshot_feeds() {
     let none = build(&snap(json!({})), 600, None).0;
-    assert_eq!(none.len(), 1, "no usage, no mode: no chips row");
+    assert!(
+        none.iter().all(|r| r.key != CHIPS),
+        "no usage, no mode: no chips row"
+    );
     let s = snap(json!({"usage": {"used": 50.0, "size": 100.0, "cost": 1.234}, "mode": "steer"}));
     let rows = build(&s, 600, None).0;
     let chips = &rows[1];
@@ -194,10 +199,63 @@ fn a_terminal_header_has_no_images() {
             env: &e,
             fonts: &f,
             lens: &l,
+            open: &BTreeSet::new(),
             busy_since: None,
             now: 0.0,
         },
     );
     assert!(images.len() == 3 || images.is_empty());
     assert!(rows[0].text.contains("Fix the tests"));
+}
+
+// pattern: D
+#[test]
+fn the_strip_has_a_pill_per_step_type_the_open_ones_raised() {
+    let rows = build(&snap(json!({})), 1000, None).0;
+    let strip = rows.iter().find(|r| r.key == STRIP).expect("the strip");
+    assert!(strip.text.starts_with(" Open: "), "{:?}", strip.text);
+    for t in STEP_TYPES {
+        assert!(strip.text.contains(&format!(" {t} ")), "{:?}", strip.text);
+    }
+    let actions: Vec<_> = props(strip, "drgnx-agent-panel-action")
+        .into_iter()
+        .map(|(v, _)| v.as_str().unwrap_or("").to_owned())
+        .collect();
+    assert_eq!(actions.first().map(String::as_str), Some("type:thinking"));
+    assert_eq!(actions.last().map(String::as_str), Some("default"));
+    let raised: Vec<String> = strip
+        .runs
+        .iter()
+        .filter(|(_, _, f)| f == "drgnx-agent-panel-tag-on")
+        .map(|(a, b, _)| {
+            strip
+                .text
+                .chars()
+                .skip(*a as usize)
+                .take((b - a) as usize)
+                .collect()
+        })
+        .collect();
+    assert_eq!(raised, [" edit "]);
+    // make default sits at a stop of the line it is on
+    assert_eq!(strip.stops.len(), 1);
+}
+
+// pattern: D
+#[test]
+fn a_narrow_panel_wraps_the_strip_under_its_first_pill() {
+    let rows = build(&snap(json!({})), 300, None).0;
+    let strips: Vec<&Row> = rows.iter().filter(|r| r.key.starts_with(STRIP)).collect();
+    assert!(strips.len() > 1, "{} rows", strips.len());
+    assert_eq!(strips[1].key, "p:strip:1");
+    // every pill is somewhere, in order, once
+    let all: String = strips
+        .iter()
+        .map(|r| r.text.as_str())
+        .collect::<Vec<_>>()
+        .join("");
+    for t in STEP_TYPES {
+        assert_eq!(all.matches(&format!(" {t} ")).count(), 1, "{all:?}");
+    }
+    assert!(all.contains("make default"));
 }

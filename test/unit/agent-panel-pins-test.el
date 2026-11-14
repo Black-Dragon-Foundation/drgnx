@@ -49,7 +49,7 @@
       (drgnx-agent-panel-pin)
       (should-not (string-match-p "⚑" (drgnx-agent-panel-pins-test--text buf)))
       ;; something that is not a card cannot be pinned
-      (goto-char (drgnx-view-row-start drgnx-view '(:strip)))
+      (goto-char (drgnx-view-row-start drgnx-view '(:composer)))
       (should-error (drgnx-agent-panel-pin) :type 'user-error))))
 
 (ert-deftest drgnx-agent-panel/todo-list-from-plan-entries ()

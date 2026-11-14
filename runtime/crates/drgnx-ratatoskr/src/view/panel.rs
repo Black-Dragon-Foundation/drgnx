@@ -445,9 +445,9 @@ impl Panels {
                 None
             }
         };
-        let lens = lock(&self.chosen)
+        let (lens, open) = lock(&self.chosen)
             .get(&(key.0, key.1.clone()))
-            .map(|c| c.lens.clone())
+            .map(|c| (c.lens.clone(), c.look.open.clone()))
             .unwrap_or_default();
         let (mut rows, images) = panel_top::rows(
             &snapshot,
@@ -455,6 +455,7 @@ impl Panels {
                 env,
                 fonts,
                 lens: &lens,
+                open: &open,
                 busy_since,
                 now,
             },

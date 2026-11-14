@@ -67,3 +67,11 @@ builders are gone). Lisp keeps `drgnx-agent-panel-act` and `drgnx-agent-panel-pr
 tells the hub, and the header menu. Of the Lisp chips only the ones the hub's snapshot feeds are built: context, cost and
 mode (its snapshot has no model, sandbox, MCP, file or checkpoint count, so those chips were never fed in a real session).
 The hover highlight a row cannot set (`mouse-face` takes a symbol, a row carries a string) is the one thing the header lost.
+
+## The panel's strip (F1, second slice)
+
+The disclosure strip ("Open:", a pill per step type, "make default") is the hub's rows too (`p:strip`, `p:strip:N` when it
+wraps; `view/panel_top.rs`): the pills carry `drgnx-agent-panel-action` `type:NAME` and `default`, the open step types
+come from the look the editor sent, and the width comes from the env, so a resize is the hub's rebuild and no Lisp
+measures a pill. `drgnx-agent-panel--strip-row` is gone; the one click dispatcher (`drgnx-agent-panel-act`) flips a type
+or makes the default.

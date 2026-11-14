@@ -5,15 +5,18 @@
 //! the hub holds (`icons::svg`), sized for the env's scale.
 
 use super::icons;
+use crate::agents::session::rows::STEP_TYPES;
 use drgnx_rows::fit::{self, FontSet};
 use drgnx_rows::{ImageId, Row, RowBuilder};
 use runstav::methods::agents::{SessionStatus, Snapshot};
 use runstav::methods::view::{Display, ViewEnv};
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 
 /// The keys of the rows (the editor places the rows whose key starts with `p:` above the panel's own).
 pub const HEAD: &str = "p:head";
 pub const CHIPS: &str = "p:chips";
+pub const STRIP: &str = "p:strip";
 
 /// What the editor chose for the lens: the presets' names and the one in force (1-based), none in force: 0.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -27,6 +30,8 @@ pub struct Cx<'a> {
     pub env: &'a ViewEnv,
     pub fonts: &'a FontSet,
     pub lens: &'a Lens,
+    /// The step types whose detail is open (the strip's raised pills).
+    pub open: &'a BTreeSet<String>,
     /// When the session began running (seconds since the epoch), none when it is not; and now.
     pub busy_since: Option<f64>,
     pub now: f64,
@@ -74,6 +79,7 @@ pub fn rows(s: &Snapshot, cx: &Cx) -> (Vec<Row>, Vec<(ImageId, String)>) {
     if let Some(chips) = chips(s) {
         rows.push(chips);
     }
+    rows.extend(strip(cx));
     (rows, images)
 }
 
@@ -240,6 +246,93 @@ fn header(s: &Snapshot, cx: &Cx, images: &mut Vec<(ImageId, String)>) -> Row {
         b.prop(start, end, "help-echo", json!(help));
     }
     b.finish()
+}
+
+/// The disclosure strip (agent-panel.html `.disc`): "Open:" and a pill for each step type, the open ones raised, a click
+/// flips one (`type:NAME`); "make default" at the right end of the line it fits on (`default`).  The pills go on as many
+/// rows as the width needs, the later ones indented under the first pill.
+fn strip(cx: &Cx) -> Vec<Row> {
+    let env = cx.env;
+    let gui = env.display == Display::Gui;
+    let cell = env.cell.0.max(1);
+    let open = " Open: ";
+    let default = "make default";
+    let width = |t: &str| text_width(cx, t);
+    let room = i64::from(env.width_px) - i64::from(px(env, 12.0));
+    let indent_px = width(open);
+    // the parts, each a (text, face, action)
+    let mut parts: Vec<(String, &str, String)> = STEP_TYPES
+        .iter()
+        .map(|t| {
+            (
+                format!(" {t} "),
+                if cx.open.contains(*t) {
+                    "drgnx-agent-panel-tag-on"
+                } else {
+                    "drgnx-agent-panel-tag"
+                },
+                format!("type:{t}"),
+            )
+        })
+        .collect();
+    parts.push((default.to_owned(), "drgnx-accent", "default".to_owned()));
+    let mut lines: Vec<Vec<(String, &str, String)>> = vec![Vec::new()];
+    let mut line_w = i64::from(indent_px);
+    for part in parts {
+        let w = i64::from(width(&part.0)) + i64::from(width(" "));
+        let first = lines.last().is_some_and(Vec::is_empty);
+        if !first && env.width_px > 0 && line_w + w > room {
+            lines.push(Vec::new());
+            line_w = i64::from(indent_px);
+        }
+        line_w += w;
+        if let Some(l) = lines.last_mut() {
+            l.push(part);
+        }
+    }
+    let mut rows = Vec::new();
+    for (n, l) in lines.iter().enumerate() {
+        let key = if n == 0 {
+            STRIP.to_owned()
+        } else {
+            format!("{STRIP}:{n}")
+        };
+        let mut b = RowBuilder::new(key);
+        if n == 0 {
+            b.push(open, Some("drgnx-agent-panel-subtle"));
+        } else if gui {
+            b.space(indent_px, 1, "default");
+        } else {
+            b.push(&" ".repeat((indent_px / cell) as usize), None);
+        }
+        for (i, (text, face, action)) in l.iter().enumerate() {
+            if action == "default" {
+                // at the right end of the line it fits on
+                let stop = env.width_px.saturating_sub(width(text) + px(env, 12.0));
+                if env.width_px > 0 {
+                    b.stop(stop);
+                } else {
+                    b.push(" ", None);
+                }
+            } else if i > 0 {
+                b.push(" ", None);
+            }
+            let start = b.pos();
+            b.push(text, Some(face));
+            let end = b.pos();
+            b.prop(start, end, "drgnx-agent-panel-action", json!(action));
+            if action == "default" {
+                b.prop(
+                    start,
+                    end,
+                    "help-echo",
+                    json!("M: what is open now is what new panels open"),
+                );
+            }
+        }
+        rows.push(b.finish());
+    }
+    rows
 }
 
 /// The chips the snapshot feeds (the context the agent has used, what the session cost, its mode); none when it
