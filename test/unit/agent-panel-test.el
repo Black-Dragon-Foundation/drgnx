@@ -1053,3 +1053,19 @@ and the presets' names it lays the lens out of."
       (cl-letf (((symbol-function 'drgnx-ui-kit-run) (lambda (id) (setq ran id))))
         (with-current-buffer buf (drgnx-agent-panel-act event)))
       (should (eq ran 'agents-panel-pin)))))
+
+(declare-function drgnx-agent-panel--end-shown-p "drgnx-agent-panel")
+
+(ert-deftest drgnx-agent-panel/the-end-is-shown-only-with-its-whole-row ()
+  "A row cut by one pixel at the bottom (or the top) is not shown: plain `pos-visible-in-window-p' says it is, redisplay
+does not, and the window scrolled again after the panel had followed its tail."
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (let ((w (selected-window)))
+        (cl-letf (((symbol-function 'pos-visible-in-window-p) (lambda (&rest _) (list 0 802 0 0 21 30))))
+          (should (drgnx-agent-panel--end-shown-p w)))
+        (cl-letf (((symbol-function 'pos-visible-in-window-p) (lambda (&rest _) (list 0 802 0 1 21 30))))
+          (should-not (drgnx-agent-panel--end-shown-p w)))
+        (cl-letf (((symbol-function 'pos-visible-in-window-p) (lambda (&rest _) nil))
+                  )
+          (should-not (drgnx-agent-panel--end-shown-p w)))))))

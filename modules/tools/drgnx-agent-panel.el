@@ -309,6 +309,12 @@ the panel's scroll follows its tail."
       (drgnx-agent-panel--pin-update)
       (drgnx-agent-panel--follow-tail))))
 
+(defun drgnx-agent-panel--end-shown-p (window)
+  "Whether the panel's end is in WINDOW with its whole row: a row cut by one pixel at the bottom is not shown (plain
+`pos-visible-in-window-p' takes it for shown, redisplay does not, and the window scrolls again)."
+  (when-let* ((v (pos-visible-in-window-p (point-max) window t)))
+    (and (zerop (or (nth 2 v) 0)) (zerop (or (nth 3 v) 0)))))
+
 (defun drgnx-agent-panel--tail-start (window)
   "Where WINDOW should start for the panel's end to sit at its bottom: the earliest line from which the end is still in
 view.  Lines are tried by the window itself (rows differ in height, and a pixel measure of text is not the window's);
@@ -322,7 +328,7 @@ the pinned rows are shown over each try, and no try starts before their end."
                          (goto-char start) (vertical-motion -1 window) (and (< (point) start) (>= (point) floor)))
                   (progn (set-window-start window (point) t)
                          (drgnx-agent-panel--pin-at window (point))
-                         (pos-visible-in-window-p (point-max) window)))
+                         (drgnx-agent-panel--end-shown-p window)))
         (setq start (point))))
     start))
 
