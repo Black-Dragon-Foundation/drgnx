@@ -171,9 +171,13 @@
           (drgnx-test-wait-presented)
           (should (drgnx-quickhelp-shown-p))
           (let* ((card drgnx-quickhelp--frame) (s (drgnx-uitest-device-scale root))
-                 (e (frame-edges card 'outer-edges)) (p (frame-edges root 'native-edges))
-                 (l (round (* s (- (nth 0 e) (nth 0 p))))) (tp (round (* s (- (nth 1 e) (nth 1 p)))))
-                 (r (round (* s (- (nth 2 e) (nth 0 p))))) (b (round (* s (- (nth 3 e) (nth 1 p)))))
+                 ;; the card's place in the root's pixels (`frame-position') as the shell puts it: on the scale's
+                 ;; grid, a logical pixel rounded half up (Nidhogg's `nhwl_to_logical'), so 407 at 2 is drawn at 408
+                 (pos (frame-position card)) (g (frame-scale-factor root))
+                 (grid (lambda (v) (round (* g (floor (+ (/ v g) 0.5))))))
+                 (l (round (* s (funcall grid (car pos))))) (tp (round (* s (funcall grid (cdr pos)))))
+                 (r (round (* s (+ (car pos) (frame-pixel-width card)))))
+                 (b (round (* s (+ (cdr pos) (frame-pixel-height card)))))
                  (snap (drgnx-uitest-snapshot root))
                  (border (cdr (drgnx-quickhelp-colors root))))
             ;; rounded: the corner pixel is what lies beneath (the picture without the card, at most darkened by the
@@ -184,8 +188,7 @@
               (should (<= (- n 24) c n))
               (should (> c (+ in 40))))
             (should (drgnx-uitest-darker-p snap none (+ r 3) (/ (+ tp b) 2)))
-            ;; the ring's middle row: a 2 device px ring (1 logical at 2) is drawn on the two rows under the edge
-            (let ((px (drgnx-uitest-pixel snap (/ (+ l r) 2) (+ tp (/ (frame-child-frame-border-width card) 2))))
+            (let ((px (drgnx-uitest-pixel snap (/ (+ l r) 2) tp))
                   (want (mapcar (lambda (c) (/ c 256)) (color-values border))))
               (should (equal (cdr px) want)))))
       (drgnx-quickhelp-hide)

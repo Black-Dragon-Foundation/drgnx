@@ -3,7 +3,7 @@
 
 ;; Nidhogg's shells take `child-frame-border-width' and `internal-border-width' in logical pixels and draw them at the
 ;; display scale, as they take a face's `:box' widths.  Each of drgnx's own child frames (the palette's box, a lane's
-;; modal frame, a toast, the debug toolbar's card) is made from its parameters under the root frame with
+;; modal frame, a toast, the debug toolbar's card, the echo box) is made from its parameters under the root frame with
 ;; a ring in its chrome, and the ring it draws (`frame-child-frame-border-width', device pixels) is the line rule's
 ;; width of the look's ring (`drgnx-px-line'), never that times the scale again.  Pattern D: the widths are read from
 ;; the made frame, nothing is timed.  Meaningful at a scale above 1 (`DRGNX_UI_SCALE=2'); the rows skip unless
@@ -24,8 +24,11 @@
 (require 'drgnx-popup)
 (require 'drgnx-notice-toast)
 (load (expand-file-name "modules/extra/drgnx-debug" drgnx-ui-frame-borders--repo) nil t)
+(load (expand-file-name "modules/ui/drgnx-look-echo" drgnx-ui-frame-borders--repo) nil t)
 
 (declare-function drgnx-debug-toolbar--params "drgnx-debug-toolbar" (parent))
+(declare-function drgnx-look-echo--params "drgnx-look-echo" ())
+(declare-function drgnx-look-echo--place "drgnx-look-echo" (box))
 
 (defmacro drgnx-ui-frame-borders--with-rings (&rest body)
   "BODY with the look's rings set: the palette's (modal) 2 logical px, the popup chrome's 1."
@@ -45,6 +48,28 @@
         (should (equal (list :ring (frame-child-frame-border-width f) :scale (frame-scale-factor root))
                        (list :ring (drgnx-px-line ring root) :scale (frame-scale-factor root))))
       (delete-frame f))))
+
+(ert-deftest drgnx-ui-frame-borders/a-border-parameter-reads-back-what-was-set ()
+  "A child frame given `child-frame-border-width' 2, and another given `internal-border-width' 3 (no ring), read
+those back from `frame-parameter' (the logical px given), and draw them at the scale: the drawn widths are
+`frame-child-frame-border-width''s and `frame-internal-border-width''s.  Compare-then-set code (the palette's box,
+the cards' edge, posframe) relies on the parameter reading back what it set."
+  (skip-unless (drgnx-uitest-glitnir-p))
+  (let* ((root (drgnx-uitest-root-frame)) (s (frame-scale-factor root))
+         (at (lambda (n) (max 1 (floor (+ (* n s) 0.5)))))
+         (make (lambda (params)
+                 (let ((after-make-frame-functions nil) (before-make-frame-hook nil))
+                   (make-frame (append `((parent-frame . ,root) (minibuffer . nil) (visibility . nil)) params)))))
+         (ring (funcall make '((child-frame-border-width . 2) (internal-border-width . 0))))
+         (pad (funcall make '((internal-border-width . 3)))))
+    (unwind-protect
+        (should (equal (list :ring (frame-parameter ring 'child-frame-border-width)
+                             (frame-child-frame-border-width ring)
+                             :pad (frame-parameter pad 'internal-border-width) (frame-internal-border-width pad)
+                             :scale s)
+                       (list :ring 2 (funcall at 2) :pad 3 (funcall at 3) :scale s)))
+      (delete-frame ring)
+      (delete-frame pad))))
 
 (ert-deftest drgnx-ui-frame-borders/the-palette-s-box ()
   "The palette's box (`drgnx-palette-frame--params', the modal chrome) draws the look's 2 px ring by the line rule,
@@ -86,6 +111,24 @@ and so does the box made and reused by `drgnx-palette-frame--ensure'."
   (drgnx-ui-frame-borders--with-rings
     (drgnx-ui-frame-borders--check
      (seq-remove (lambda (p) (eq (car p) 'parent-frame)) (drgnx-debug-toolbar--params (drgnx-uitest-root-frame))) 1)))
+
+(ert-deftest drgnx-ui-frame-borders/the-echo-box ()
+  "The echo box, placed (`drgnx-look-echo--place'), draws the palette's 2 px ring by the line rule, at its parent's
+scale."
+  (drgnx-ui-frame-borders--with-rings
+    (let* ((root (drgnx-uitest-root-frame))
+           (box (let ((after-make-frame-functions nil) (before-make-frame-hook nil))
+                  (make-frame (append `((parent-frame . ,root) (minibuffer . nil)) (drgnx-look-echo--params))))))
+      (unwind-protect
+          (progn
+            (drgnx-look-echo--place box)
+            (should (= (frame-child-frame-border-width box) (drgnx-px-line 2 root)))
+            ;; at its parent's scale (a box made before its window takes the scale's widths with the scale)
+            (should (= (frame-scale-factor box) (frame-scale-factor root)))
+            ;; placed again, the ring stays: what the box is given is compared with what it was given
+            (drgnx-look-echo--place box)
+            (should (= (frame-child-frame-border-width box) (drgnx-px-line 2 root))))
+        (delete-frame box)))))
 
 (provide 'frame-borders-gui-test)
 ;;; frame-borders-gui-test.el ends here
