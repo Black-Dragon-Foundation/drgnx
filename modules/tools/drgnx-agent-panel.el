@@ -37,7 +37,6 @@
 (require 'text-property-search)          ; the moves look through the drawn rows
 
 (declare-function drgnx-hub--call-on "drgnx-hub-client")
-(declare-function nidhogg-view-rows "nidhogg-views" (h what &optional a b))
 (declare-function drgnx-view-env-register "drgnx-view-env")
 (declare-function drgnx-view-env-update "drgnx-view-env")
 (defvar drgnx-hub--events)
@@ -247,22 +246,21 @@ folds under it."
 
 (defvar-local drgnx-agent-panel--pin nil
   "The panel's pinned rows: (END . STRING), END the position after the hub's leading rows that carry `drgnx-pinned'
-\(the header, chips and strip) and STRING a copy of them, or nil when the hub pinned none.")
+\(the header, chips and strip) and STRING a copy of them, or nil when the hub pinned none.  The panel's rows are drawn by
+Lisp (no Sjá store holds them), so the mark is read from the drawn text.")
 
 (defvar-local drgnx-agent-panel--pin-overlays nil "Each window's overlay that shows the pinned rows: ((WINDOW . OVERLAY) ...).")
 
-(defun drgnx-agent-panel--pinned-chars ()
-  "How many characters of the hub's rows, from their start, the hub pinned (Sjá's `pinned'): 0 when none."
-  (or (when-let* ((s drgnx-view-patch) ((drgnx-view-patch-sja s)) (h (drgnx-view-patch-handle s)))
-        (nidhogg-view-rows h 'pinned nil "drgnx-pinned"))
-      0))
+(defun drgnx-agent-panel--pinned-end ()
+  "The position after the panel's leading rows the hub marked `drgnx-pinned' (a row property over its whole text), or
+nil when the first row is not one."
+  (and (< (point-min) (point-max)) (eq 1 (get-text-property (point-min) 'drgnx-pinned))
+       (or (text-property-not-all (point-min) (point-max) 'drgnx-pinned 1) (point-max))))
 
 (defun drgnx-agent-panel--pin-update ()
   "The hub's rows were patched: the pinned rows are copied again when they changed, and every window shows them."
-  (let* ((n (drgnx-agent-panel--pinned-chars))
-         (beg (if drgnx-view-patch (marker-position (drgnx-view-patch-beg drgnx-view-patch)) (point-min)))
-         (end (and (> n 0) (+ beg n)))
-         (string (and end (buffer-substring beg end))))
+  (let* ((end (drgnx-agent-panel--pinned-end))
+         (string (and end (buffer-substring (point-min) end))))
     (unless (and (equal end (car drgnx-agent-panel--pin))
                  (equal-including-properties string (cdr drgnx-agent-panel--pin)))
       (setq drgnx-agent-panel--pin (and end (cons end string))))

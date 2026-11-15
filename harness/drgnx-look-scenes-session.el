@@ -552,8 +552,8 @@ top or shows its tail: what the panel opened by its command path shows first."
       (let ((at (with-current-buffer buffer (pos-visible-in-window-p (point-max) w t)))
             (top (= (window-start w) (with-current-buffer buffer (or (car-safe drgnx-agent-panel--pin) (point-min))))))
         (unless (or top (and at (> (cadr at) (- (window-body-height w t) (* 4 (frame-char-height))))))
-          (push (format "agent-panel: its end is not at the bottom of its window (start %d, end at %S)"
-                        (window-start w) at)
+          (push (format "agent-panel: its end is not at the bottom of its window (start %d, end at %S, pin end %S)"
+                        (window-start w) at (with-current-buffer buffer (car-safe drgnx-agent-panel--pin)))
                 drgnx-look-scene--errors))))))
 
 (defun drgnx-look-scene--palette-commands ()

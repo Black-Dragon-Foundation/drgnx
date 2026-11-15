@@ -1004,28 +1004,27 @@ and the presets' names it lays the lens out of."
 (defvar drgnx-agent-panel--pin)
 
 (defmacro drgnx-agent-panel-test--pinned (&rest body)
-  "BODY in panel s1, shown in the selected window, its text two pinned rows then ten more; Sjá says 14 characters are pinned."
+  "BODY in panel s1, shown in the selected window, its text two pinned rows (the hub's `drgnx-pinned') then ten more."
   (declare (indent 0))
   `(drgnx-agent-panel-test--with
      (with-current-buffer buf
        (let ((inhibit-read-only t))
          (erase-buffer)
-         (insert (propertize "HEAD row\n" 'drgnx-agent-panel-action "pin") "chips\n")
+         (insert (propertize "HEAD row\n" 'drgnx-agent-panel-action "pin" 'drgnx-pinned 1) (propertize "chips\n" 'drgnx-pinned 1))
          (dotimes (i 10) (insert (format "step %d\n" i))))
        (set-window-buffer (selected-window) buf)
-       (cl-letf (((symbol-function 'drgnx-agent-panel--pinned-chars) (lambda () 14)))
-         ,@body))))
+       ,@body)))
 
 (ert-deftest drgnx-agent-panel/the-pinned-rows-show-over-the-window-start-and-it-never-starts-before-them ()
   (drgnx-agent-panel-test--pinned
     (let ((w (selected-window)))
       (set-window-start w (point-min))
       (drgnx-agent-panel--pin-update)
-      (should (equal (cons 15 (buffer-substring 1 15)) (cons (car drgnx-agent-panel--pin) (cdr drgnx-agent-panel--pin))))
+      (should (equal (cons 16 (buffer-substring 1 16)) (cons (car drgnx-agent-panel--pin) (cdr drgnx-agent-panel--pin))))
       ;; the window starts after the pinned rows and the overlay over its first line carries them
-      (should (= 15 (window-start w)))
+      (should (= 16 (window-start w)))
       (let ((ov (cdr (assq w drgnx-agent-panel--pin-overlays))))
-        (should (= 15 (overlay-start ov)))
+        (should (= 16 (overlay-start ov)))
         (should (equal (overlay-get ov 'before-string) (cdr drgnx-agent-panel--pin)))
         (should (eq w (overlay-get ov 'window))))
       ;; a scroll to a later line moves the overlay with it
@@ -1033,15 +1032,15 @@ and the presets' names it lays the lens out of."
       (drgnx-agent-panel--pin-place w)
       (should (= 30 (overlay-start (cdr (assq w drgnx-agent-panel--pin-overlays)))))
       ;; and the tail's start is never inside the pinned rows
-      (should (>= (drgnx-agent-panel--tail-start w) 15)))))
+      (should (>= (drgnx-agent-panel--tail-start w) 16)))))
 
 (ert-deftest drgnx-agent-panel/no-pinned-rows-no-overlay ()
   (drgnx-agent-panel-test--pinned
     (progn
       (drgnx-agent-panel--pin-update)
       (should drgnx-agent-panel--pin-overlays)
-      (cl-letf (((symbol-function 'drgnx-agent-panel--pinned-chars) (lambda () 0)))
-        (drgnx-agent-panel--pin-update))
+      (let ((inhibit-read-only t)) (remove-text-properties (point-min) (point-max) '(drgnx-pinned nil)))
+      (drgnx-agent-panel--pin-update)
       (should-not drgnx-agent-panel--pin)
       (should-not drgnx-agent-panel--pin-overlays))))
 
