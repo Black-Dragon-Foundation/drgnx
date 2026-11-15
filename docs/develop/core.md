@@ -3106,8 +3106,9 @@ its own: FN takes the tab's buffer and returns `(ABOVE BELOW)`, each a buffer or
 and composer around its transcript). They are side windows of the area's side at slots -1 and +1, dedicated, of the
 area's role (`right`), with the window parameter `drgnx-area-part` `above` or `below` (the main window has none, so
 `drgnx-wb-area-window` and `drgnx-pane-window` stay the tab's, and the store counts only the main window as the
-kind's pane), no mode line and width preserved. The area's tab row goes on the topmost window
-(`drgnx-area--top-window`); the main window under a companion has none. Each companion is fitted to its lines and its
+kind's pane), no mode line and width preserved. The area's tab row (`drgnx-area--tab-row`, so `none` in the lone right
+area while its tab is the only one with content) goes on the topmost window (`drgnx-area--top-window`); the main window
+under a companion has none. Each companion is fitted to its lines and its
 header line, pixelwise (`fit-window-to-buffer`), at most 45% of the area's height in whole lines, and its height is
 then preserved, so a frame resize goes to the main window. It is fitted again when its size changes
 (`window-size-change-functions` in its buffer) and when its owner calls `(drgnx-wb-area-fit-companions AREA

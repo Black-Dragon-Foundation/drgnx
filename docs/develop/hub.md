@@ -2928,43 +2928,48 @@ The Outline section's rows: the definitions of the file in the editor, built by 
 
 ### The agent panel's rows
 
+**Two views.** A panel is two hub views of one session (`view/panel.rs`): `agent-panel-top/SID` (`view_of_top`), the
+header, the chips and the strip, which the editor shows in the panel's header window; and `agent-panel/SID`
+(`view_of`), the cards, the transcript and the review cards, which it shows in the transcript window. `session_of`
+takes either prefix, so building, pruning and a connection's close treat both as the session's. They share one look:
+the editor sends `agents/panel/look` to `agent-panel/SID` only, and the top view reads that view's choices
+(`look_view`; a look sent for the top view is stored under the transcript view). A change of the session's entries
+builds the changed groups of the transcript view and the top view whole (a few rows; the store sends only what
+changed); `build_session` builds both. The top view has no model.
+
 **The thresholds.** A step's time and cost are drawn in `drgnx-agent-panel-warn` over the editor's
 `drgnx-agent-panel-slow-seconds` and `drgnx-agent-panel-expensive-cost`: every `agents/panel/look` carries them
 (`slow_secs`, `dear_cost`; one not given keeps the one before, 10 s and 0.5 until the first), and setting either option
 sends every open panel's look again, so the rows are built again at once.
 
-**The header and the chips (offload step F1).** The panel's first rows are the hub's too (`view/panel_top.rs`): `p:head`
+**The header and the chips (offload step F1).** The top view's rows are the hub's (`view/panel_top.rs`): `p:head`
 (the agent's Lucide icon and name, what it is doing cut to the room the lens leaves, a stop, then the lens of presets and
 the pin and ⋯ buttons, 24 px around 16 px icons) and, when the snapshot feeds any, `p:chips` (the context used, the cost,
 the mode). They are built again from the session's snapshot at each `emit`, also when no entry changed, and the store sends
 only what changed. The lens is the editor's: `agents/panel/look` carries `lens` (the presets' names) and `lens_on` (the one
 in force, from 1, 0 none). A clickable part has the `drgnx-agent-panel-action` property (`lens:N`, `pin`, `more`) or
-`drgnx-agent-panel-chip` (`context`, `cost`, `mode`); the editor's `agents-panel-act` (a click) and `agents-panel-press`
-(a press keeps point) read them, and `agents-panel-drag` takes a drag from the pinned copy to it for a click (the copy's
-buffer position is the window start, which a followed tail moves between the press and the release, so Emacs makes the
-click a drag; a copy is known by its first row's `drgnx-pinned` mark, since the same patch can copy the rows again). The editor puts the rows whose key starts with `p:` above its own rows.
-The panel owns its scroll (`drgnx-agent-panel--follow-tail`, after each draw of hub rows): a window whose point is at
-the panel's end shows the end (the composer) at its bottom, whatever came in above it, so a panel shorter than its window
-starts at its header and a taller one shows its last page; a window the user moved point in is left alone. The look
-scenes check `p:head` and that the end is at the window's bottom (or the panel fits and starts at the top).
+`drgnx-agent-panel-chip` (`context`, `cost`, `mode`); the editor's `agents-panel-act` (a click, `<mouse-1>` in the key
+profiles) reads them from the buffer text under the click and runs the part's command.
 
-**Pinned rows.** Every row of `panel_top::rows` (the header, the chips, the strip) carries `drgnx-pinned` (value 1, over the
-row's text, as every row property does, so not over its newline). The editor keeps the leading rows that carry it at the
-top of each window: `drgnx-agent-panel--pin-update` (after each draw of hub rows) copies them, and a per-window overlay
-whose `before-string` is the copy sits over the window's first line, which is never before the pinned rows' end (the
-`window-scroll-functions` hook and `--follow-tail` keep it so). The copy is replaced only when the rows changed, faces
-included, and the overlay takes the new string (`eq`, since a change of faces alone is `equal`); a dead window's overlay
-is deleted. The transcript scrolls between them and the composer. A click on the copy reads its property from the
-overlay's string only (`drgnx-agent-panel--prop-at`: the click's buffer position is the window start, under the copy),
-and a press anywhere on it leaves point alone, as on a header line. The tail is followed after each patch, when the
-store says the window changed size (`pane-resized`) and when the fonts were written again
-(`drgnx-look-fonts-applied-hook`: a theme or font change makes the rows taller with no patch). The end counts as shown
-only with its whole row. A reset of the hub's rows (the panel's width or the theme changed) removes every row and
-inserts the new ones, which would put the start and point of a window the user scrolled back below them: the panel keeps
-those by row key (`drgnx-view-save-places`) and puts them back when the reset is drawn. The wheel scrolls by lines in a panel (`pixel-scroll-precision-mode`'s pixels would go into the
-first line's vscroll and carry the copy out of the window), and a wheel down adds the copy's lines, which `scroll-up`
-counts as the window's first. A header line cannot do this: Emacs draws it as one glyph row. The panel's rows are drawn
-by Lisp, so no Sjá store holds them.
+**Three windows.** The editor shows the two views and the composer in three windows of the right area, its area
+companions ([core.md](core.md), "Area companions"): the header window (the top view), the transcript window (the
+transcript view, the panel's main buffer) and the composer window under it. The header and composer are fitted to their
+lines and never scroll; the transcript scrolls between them as any Emacs buffer does: it is a Sjá view
+(`drgnx-view-patch-attach` with `:sja t`, the generic twin `drgnx-view-env-twin`), its buffer sets
+`scroll-conservatively` 101 and `scroll-margin` 0, so a window whose point is at the end keeps the end in view as rows
+come in, and a window scrolled back stays on its row (Sjá keeps its start and point by row across patches and resets).
+No panel code follows the tail, copies rows or handles the wheel. Scrolling the transcript to its top loads the page
+before (the `--scrolled` hook). Until the first patch of the transcript view, a panel shows a waiting line (an overlay,
+"Waiting for the hub to send the agent's steps…"); with the hub down it stays, and the panel draws no rows of its own.
+The header window shows a buffer of its own (`modules/tools/drgnx-agent-panel-header.el`; the panel's buffer name and
+" header"), made by `drgnx-agent-panel--header-of`, the ABOVE of the kind's `:companions`. It is in
+`drgnx-agent-panel-header-mode` (derived from `special-mode`, truncated lines, no cursor, the panel's map as its keymap's
+parent) and attached with `:sja t` to `agent-panel-top/SID`, with the generic twin; it sends no look of its own (the hub
+reads the transcript view's). It works on the panel's state as a companion (`drgnx-agent-panel--companion-sync`: the
+transcript buffer's `drgnx-agent-panel-` locals are copied in before each command and the changed ones back after it),
+so a click on the lens, the pin or a pill runs `drgnx-agent-panel-act` on the session's state. After each draw of its
+rows (`drgnx-view-sja-drawn-functions`) the windows showing it are fitted again (`drgnx-wb-area-fit-companions`).
+Killing the panel's buffer kills its header. The look scenes check the three windows ([harness.md](harness.md)).
 
 The chips beyond the snapshot's usage and mode come from state the hub holds: the model (`Snapshot.model`: the one the
 agent reported in its `session/new` (or load, resume, fork) answer, `models.currentModelId`, which hermod keeps per
@@ -2973,9 +2978,7 @@ session (`Conn::reported_model`) and each accepted `session/set_model` or `model
 session at its start: `drgnx`, `drgnx-search` and `drgnx-plugins`; the agent's own servers are its business and are not
 counted), `N files` from the ledger's edited files and `N checkpoints` from the steps' facts. The model and MCP chips
 explain themselves on a click; the restore level has no source in the hub, so no chip is drawn for it. Every clickable part (an action or a chip) carries
-`mouse-face` `drgnx-hover`: the row names the face, and the editor's row dressing maps the name to the face symbol. A panel
-made while the hub is down draws its transcript itself and has one quiet row (`:nohub`) saying the header, strip and cards
-come from the hub.
+`mouse-face` `drgnx-hover`: the row names the face, and the editor's row dressing maps the name to the face symbol.
 
 **The cards (offload step F1, cards).** The pinned cards (`p:pinN:0`), the agent's to-do list (`p:todo:N`) and the edits
 ledger (`p:ledger:N`) are the hub's rows too (`view/panel_cards.rs`), each a card in the card faces to the right edge less
@@ -2998,8 +3001,8 @@ a `card:accept:PATH:I`, `card:reject:PATH:I`, `card:allow:ID`, `card:always:ID` 
 which the keys (`a`, `D`, `RET`, `A`) and the click dispatcher read at point to run the existing commands. The editor keeps
 no diffs: Accept and Reject ask `work/hunks` for the file first, for the review mark's hash.
 A note queued for the agent is a row there too (`c:q:N`, "queued N  text   (e edit · d drop)", with
-`drgnx-agent-panel-queued` N, which the edit and drop commands read at point); the composer's input row, the only row the
-editor still draws, comes after the hub's rows.
+`drgnx-agent-panel-queued` N, which the edit and drop commands read at point). The composer is not a row: it is a
+buffer of its own in the window under the transcript.
 
 The transcript of an agent session, as rows the panel only inserts (`runtime/crates/drgnx-ratatoskr/src/view/panel.rs`;
 the rows themselves are `agents/session/rows.rs`, pure).

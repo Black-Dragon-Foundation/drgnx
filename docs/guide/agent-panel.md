@@ -1,15 +1,19 @@
 # The agent panel
 
-The agent panel shows one agent session in the right dock, beside the editor and never as one of its tabs: who it is and what it is doing, a row of chips, and the
-conversation as rows. Open it with **Agents: Open the Agent Panel** (`C-k p` in the VS Code profile, `SPC a p` in Vim).
+The agent panel shows one agent session in the right dock, beside the editor and never as one of its tabs, in three
+windows: the header at the top (who it is and what it is doing, a row of chips, the disclosure strip), the transcript
+(the conversation as rows) and the composer at the bottom, where you write to the agent. Open it with **Agents: Open
+the Agent Panel** (`C-k p` in the VS Code profile, `SPC a p` in Vim).
 There is one tab for each open agent.
 
 Turn it off with the module `tools/agent-panel` (see [modules](modules.md)); every panel goes with it.
 
 ## What you see
 
-On a long conversation the header, the chips and the disclosure strip stay at the top of the panel while the steps scroll
-between them and the composer, which stays at the bottom and follows the latest message. Their buttons work from there.
+The header and the composer are fitted to what they hold and never scroll; only the transcript between them does, as
+any Emacs buffer: while point is at its end it keeps the latest step in view, and once you scroll back it stays where
+you put it as new steps come in. The header's buttons work whatever the transcript shows. When the strip wraps to more
+lines or the draft grows, its window grows with it, up to 45% of the dock; the transcript gives the room.
 
 Open the panel in a second frame and that frame's right dock gets its own header, transcript and composer on the same
 session: a draft you type in one composer is in the other, and each transcript scrolls on its own. A terminal frame
@@ -88,8 +92,11 @@ fork at a step; `/commands` complete in the composer.
 
 A panel asks the hub for the session's entries only while a window shows it, and lets them go when none does. It opens
 on the last page of steps (`drgnx-agent-panel-page-steps`, 50) and loads the page before when you scroll to the top
-(or run **Load Earlier Steps**). New entries are added at the end and changed ones are patched in place; what is
-already on screen is never drawn again, and rows are drawn in slices of 4 ms or less that stop when you type.
+(or run **Load Earlier Steps**). The rows come from the hub: new entries are added at the end and changed ones are
+patched in place, so what is already on screen is never drawn again.
+
+While the hub is not running the transcript says "Waiting for the hub to send the agent's steps…"; the line goes
+when the hub sends the first rows. The panel draws no steps of its own.
 
 ## What opens
 
@@ -108,10 +115,10 @@ answer at once, without asking the hub. With nothing at point, `TAB` opens or fo
 
 ## Steering
 
-Under the transcript are the notes waiting for the agent's turn to end, one row each, and the composer: a buffer of its
-own where you write the message ("Steer the agent… (@ file, / command)" while it is empty), and under it a bar with the
-model and mode chips and three buttons: **Fork** (**Fork the Chat**: a second agent from the chat's last step), the
-pause icon (stop after this step, as `p`) and Send, an arrow (as `RET`). The bar takes no typing; the message is an
+At the end of the transcript are the notes waiting for the agent's turn to end, one row each. Under it, in a window
+of its own, is the composer: a buffer where you write the message ("Steer the agent… (@ file, / command)" while it is
+empty), and under it a bar with the model and mode chips and three buttons: **Fork** (**Fork the Chat**: a second
+agent from the chat's last step), the pause icon (stop after this step, as `p`) and Send, an arrow (as `RET`). The bar takes no typing; the message is an
 ordinary text you can edit, move in and complete in. A draft stays until you send it.
 
 | | VS Code | Emacs | Vim |
@@ -162,7 +169,7 @@ O open in a buffer". When the hub kept only the ends of a huge output the count 
 
 ## Pins, the to-do list and the edits ledger
 
-- `P` on a step or a card pins it under the chips, for this chat; `P` on the pinned card unpins it.
+- `P` on a step or a card pins it at the top of the transcript, for this chat; `P` on the pinned card unpins it.
 - The agent's plan shows inline as a to-do list ("To do · 1 of 3 done"), replaced as the agent updates it, from its plan
   entries. It is there only when the agent made a plan.
 - The **edits ledger** lists the files the agent edited with their added and removed lines (`L` lists or folds it). The
