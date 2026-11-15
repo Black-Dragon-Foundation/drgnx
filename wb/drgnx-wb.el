@@ -661,9 +661,13 @@ edge moves (the section below takes the rest).  A second call changes nothing."
               ((> row 0))
               ((window-in-direction 'below w t)))
     (let* ((rows (drgnx-wb--section-rows (window-buffer w)))
-           (chrome (- (window-pixel-height w) (window-body-height w t)))
+           ;; the window's lines as they are drawn, not its height less its body: a window squeezed below its tab and
+           ;; header lines (fitted before its island header's font was measured, which made the header taller) has no
+           ;; body, so that would be its whole height, and the fit would leave it short by what its lines lack
+           (chrome (+ (window-tab-line-height w) (window-header-line-height w) (window-mode-line-height w)
+                      (window-scroll-bar-height w) (window-bottom-divider-width w)))
            (most (* row (max 0 (/ (- (floor (* cap (frame-inner-height frame))) chrome) row))))
-           (delta (- (min most (* rows row)) (window-body-height w t)))
+           (delta (- (+ chrome (min most (* rows row))) (window-pixel-height w)))
            (window-resize-pixelwise t)
            (window-min-height 1))                       ; no rows: the header and one line, not four
       (unless (zerop delta)

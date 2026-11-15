@@ -33,5 +33,38 @@
                 ((symbol-function 'count-lines) (lambda (&rest _) (error "counted the buffer's lines"))))
         (should (= 40 (drgnx-wb--section-rows (current-buffer))))))))
 
+(defvar drgnx-wb--sections)
+
+(defun drgnx-wb-test--fit-delta (pixel body)
+  "The edge move `drgnx-wb--fit-window' asks of a section window PIXEL pixels tall whose body Emacs reports as BODY: an
+island header (tab line) of 26 and a header line of 22, 3 rows of 22, the section's cap 0.3 of a 900-pixel frame."
+  (let ((drgnx-wb--sections '((open :fit 0.3))) moved)
+    (cl-letf (((symbol-function 'window-live-p) (lambda (_) t))
+              ((symbol-function 'window-parameter) (lambda (_w p) (and (eq p 'drgnx-section) 'open)))
+              ((symbol-function 'window-frame) (lambda (&optional _) 'frame))
+              ((symbol-function 'drgnx-wb--row-px) (lambda (_) 22))
+              ((symbol-function 'window-in-direction) (lambda (&rest _) t))
+              ((symbol-function 'window-buffer) (lambda (&optional _) (current-buffer)))
+              ((symbol-function 'drgnx-wb--section-rows) (lambda (_) 3))
+              ((symbol-function 'frame-inner-height) (lambda (&optional _) 900))
+              ((symbol-function 'window-pixel-height) (lambda (&optional _) pixel))
+              ((symbol-function 'window-body-height) (lambda (&rest _) body))
+              ((symbol-function 'window-tab-line-height) (lambda (&optional _) 26))
+              ((symbol-function 'window-header-line-height) (lambda (&optional _) 22))
+              ((symbol-function 'window-mode-line-height) (lambda (&optional _) 0))
+              ((symbol-function 'window-scroll-bar-height) (lambda (&optional _) 0))
+              ((symbol-function 'window-bottom-divider-width) (lambda (&optional _) 0))
+              ((symbol-function 'adjust-window-trailing-edge) (lambda (_w delta &rest _) (setq moved delta))))
+      (drgnx-wb--fit-window 'window))
+    moved))
+
+(ert-deftest drgnx-wb/a-section-squeezed-below-its-header-grows-to-its-rows-in-one-fit ()
+  "A section fitted before its island header was measured is shorter than its tab and header lines once the header
+grows (30 pixels, the body Emacs reports 0): one fit makes it hold them and its rows (48 + 66 = 114 pixels).  Its
+chrome read as its height less its body (30) left it 18 pixels short, its header line past its bottom."
+  (should (= 84 (drgnx-wb-test--fit-delta 30 0)))
+  ;; fitted already: a second call changes nothing
+  (should-not (drgnx-wb-test--fit-delta 114 66)))
+
 (provide 'wb-dock-rows-test)
 ;;; wb-dock-rows-test.el ends here

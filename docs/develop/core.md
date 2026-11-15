@@ -2316,7 +2316,9 @@ and header lines once the header grows: its header line is drawn past its bottom
 that part. When the section grows to its rows, Nidhogg draws its tab and header lines again (stock Emacs keeps the old
 pixels, since the rows' glyphs and places did not change: the notebook scene showed the Explorer's "Files" half
 covered by the Open rows). `drgnx-ui-look-open-fit/a-squeezed-window-draws-its-header-line-when-it-grows` checks it
-against a full redraw.
+against a full redraw. The fit counts the window's chrome as its lines are drawn (tab, header and mode line, scroll bar
+and divider), not as its height less its body: a squeezed window has no body, so that would take its whole height for
+chrome and leave it short of its lines; one fit makes it hold them and its rows.
 
 There are two recorded exceptions:
 
