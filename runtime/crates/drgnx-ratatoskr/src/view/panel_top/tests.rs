@@ -289,3 +289,19 @@ fn the_chips_say_the_sandbox_the_files_and_the_checkpoints_when_the_hub_knows() 
     // only the context chip explains itself on a click
     assert_eq!(props(chips, "drgnx-agent-panel-chip").len(), 1);
 }
+
+// pattern: D
+#[test]
+fn every_top_row_is_pinned_so_the_editor_keeps_them_at_the_window_top() {
+    // a wide panel (one strip row) and a narrow one (the strip wraps): each row carries `drgnx-pinned` over its whole text
+    for width in [900, 300] {
+        let rows = build(&snap(json!({})), width, None).0;
+        assert!(rows.len() >= 2, "{} rows", rows.len());
+        for r in &rows {
+            let pinned = props(r, "drgnx-pinned");
+            assert_eq!(pinned.len(), 1, "{}: {:?}", r.key, r.props);
+            assert_eq!(pinned[0].0, &json!(1));
+            assert_eq!(pinned[0].1, r.text, "{}", r.key);
+        }
+    }
+}

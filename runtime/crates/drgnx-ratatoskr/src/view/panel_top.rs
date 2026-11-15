@@ -83,7 +83,19 @@ pub fn rows(s: &Snapshot, cx: &Cx) -> (Vec<Row>, Vec<(ImageId, String)>) {
         rows.push(chips);
     }
     rows.extend(strip(cx));
+    for r in &mut rows {
+        pin(r);
+    }
     (rows, images)
+}
+
+/// The prop that marks a row the editor keeps at the window top (Sjá's `pinned` verb counts the leading rows that
+/// carry it): the header, chips and strip stay in view while the transcript scrolls under them.
+pub const PINNED: &str = "drgnx-pinned";
+
+fn pin(r: &mut Row) {
+    let n = r.text.chars().count() as u32;
+    r.props.push((0, n, PINNED.to_owned(), json!(1)));
 }
 
 fn px(env: &ViewEnv, v: f32) -> u32 {
