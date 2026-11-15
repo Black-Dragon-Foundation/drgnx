@@ -367,8 +367,13 @@ not undo it: it is still pinned after one more command."
             ;; in the terminal frame: the twin transcript's window selected, its point on its second step; the panel
             ;; holds its own pins (as after a pin and an unpin in the graphical frame)
             (let* ((key-desc (drgnx-tty-session-eval
-                              gui '(let ((k (where-is-internal 'drgnx-agent-panel-pin (list drgnx-agent-panel-mode-map) t)))
-                                     (and k (key-description k)))))
+                              ;; the key a profile gives the pin (no session key of its own: the profile's, put back
+                              ;; after)
+                              gui '(progn
+                                     (drgnx-keys-use '((vscode app editing window)))
+                                     (let ((k (where-is-internal 'drgnx-agent-panel-pin (list drgnx-agent-panel-mode-map)
+                                                                 t)))
+                                       (and k (key-description k))))))
                    (key (drgnx-tty-session-eval
                          gui `(with-selected-frame ,tty-frame
                                 (let* ((tw (get-buffer-window (plist-get (nth 1 (drgnx-tty-ap--area ,tty-frame)) :buffer)
@@ -391,18 +396,26 @@ not undo it: it is still pinned after one more command."
               (should key-desc)
               (should key)
               (drgnx-tty-session-key tty key-desc 'legacy)
-              (drgnx-tty-session-wait
-               gui `(member ',key (mapcar #'car (buffer-local-value 'drgnx-agent-panel--pins drgnx-tty-ap--panel))) 10)
+              ;; (`drgnx-test-wait' around the eval: `drgnx-tty-session-wait' reads the screen of the session it is
+              ;; given when it times out, and the graphical session has none)
+              (drgnx-test-wait
+               (lambda ()
+                 (drgnx-tty-session-eval
+                  gui `(member ',key (mapcar #'car (buffer-local-value 'drgnx-agent-panel--pins drgnx-tty-ap--panel)))))
+               :secs 10 :what (list "the panel's pins after the pin key" key))
               ;; one more command in the twin: the pin stays the panel's
               (drgnx-tty-session-key tty "C-l" 'legacy)
-              (drgnx-tty-session-wait
-               gui `(let ((twin (get-buffer (plist-get (nth 1 (drgnx-tty-ap--area ,tty-frame)) :buffer))))
-                      (member ',key (mapcar #'car (buffer-local-value 'drgnx-agent-panel--pins twin))))
-               10)
+              (drgnx-test-wait
+               (lambda ()
+                 (drgnx-tty-session-eval
+                  gui `(let ((twin (get-buffer (plist-get (nth 1 (drgnx-tty-ap--area ,tty-frame)) :buffer))))
+                         (member ',key (mapcar #'car (buffer-local-value 'drgnx-agent-panel--pins twin))))))
+               :secs 10 :what (list "the twin's pins after one more command" key))
               (should (drgnx-tty-session-eval
                        gui `(and (member ',key (mapcar #'car (buffer-local-value 'drgnx-agent-panel--pins
                                                                                  drgnx-tty-ap--panel)))
                                  t)))))
+        (ignore-errors (drgnx-tty-session-eval gui '(progn (drgnx-keys--restore) t) 30))
         (ignore-errors (drgnx-tty-session-eval gui '(progn (drgnx-panel-replay-down) t) 30))
         (when tty (drgnx-tty-session-stop tty))
         (drgnx-ui-stop (plist-get gui :name))

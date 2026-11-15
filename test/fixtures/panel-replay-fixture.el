@@ -28,6 +28,7 @@
 (defvar drgnx-panel-replay--mirror nil "The session's mirror.")
 (defvar drgnx-panel-replay--panel nil "The panel's buffer.")
 (defvar drgnx-panel-replay--module nil "Whether tools/agent-panel ran before the workload.")
+(defvar drgnx-panel-replay--module-set nil "Whether the up chose tools/agent-panel on, for the down to put back.")
 (defvar drgnx-panel-replay--allocs nil "Objects each update's events made (newest first), while armed.")
 (defvar drgnx-panel-replay--draws nil "kB each draw of the panel made (newest first), while armed.")
 (defvar drgnx-panel-replay--armed nil "Non-nil while the updates are measured.")
@@ -98,7 +99,8 @@ its whole stage's, which would set up again a module that runs already), and `dr
 what it set up."
   ;; the module is defined when its file loads (a module of an idle stage: its setup runs here, not at the first idle)
   (require 'drgnx-agent-panel)
-  (setq drgnx-panel-replay--module (drgnx-module-running-p 'tools/agent-panel))
+  (setq drgnx-panel-replay--module (drgnx-module-running-p 'tools/agent-panel)
+        drgnx-panel-replay--module-set t)
   (drgnx-modules-set-enabled 'tools/agent-panel t)
   (unless drgnx-panel-replay--module
     (drgnx-modules--run-one 'tools/agent-panel (cdr (assq 'tools/agent-panel drgnx-modules--table)) 'idle))
@@ -262,14 +264,19 @@ measure with no draw or no patch measured nothing: an error, as a premise that f
   (when (and drgnx-panel-replay--hub (buffer-live-p (process-buffer drgnx-panel-replay--hub)))
     (kill-buffer (process-buffer drgnx-panel-replay--hub)))
   (when (buffer-live-p drgnx-panel-replay--panel) (kill-buffer drgnx-panel-replay--panel))
-  (setq drgnx-panel-replay--hub nil drgnx-panel-replay--mirror nil drgnx-panel-replay--panel nil
-        drgnx-agents--sessions (seq-remove #'drgnx-agent-session-remote drgnx-agents--sessions))
+  (setq drgnx-panel-replay--hub nil drgnx-panel-replay--mirror nil drgnx-panel-replay--panel nil)
+  ;; only what the up did: an up that failed before it loaded the agents or chose the module leaves both alone (the
+  ;; row's own error stays the one reported, not this unwind's)
+  (when (boundp 'drgnx-agents--sessions)
+    (setq drgnx-agents--sessions (seq-remove #'drgnx-agent-session-remote drgnx-agents--sessions)))
   ;; the module back as it was: torn down when the up turned it on (its setup's hooks, commands and kind go), as
   ;; `drgnx-modules-turn-off' does
-  (unless drgnx-panel-replay--module
-    (drgnx-module-teardown 'tools/agent-panel)
-    (run-hooks 'drgnx-modules-after-teardown-functions))
-  (drgnx-modules-set-enabled 'tools/agent-panel drgnx-panel-replay--module)
+  (when drgnx-panel-replay--module-set
+    (unless drgnx-panel-replay--module
+      (drgnx-module-teardown 'tools/agent-panel)
+      (run-hooks 'drgnx-modules-after-teardown-functions))
+    (drgnx-modules-set-enabled 'tools/agent-panel drgnx-panel-replay--module)
+    (setq drgnx-panel-replay--module-set nil))
   (when drgnx-panel-replay--dir
     (ignore-errors (delete-directory drgnx-panel-replay--dir t))
     (setq drgnx-panel-replay--dir nil))

@@ -182,15 +182,15 @@ that, within a character.  A size that does not take fails the test (a fullscree
   "Make FRAME's `fullscreen' parameter STATE (nil, `fullboth') and wait until the compositor answered and the size
 settled; return the state it had.  The GUI sessions' root frame is fullscreen, which keeps its output's size: a row that
 resizes the frame leaves fullscreen first and puts the state back after.  The parameter changes at once, the size only
-when the compositor's configure arrives, so the wait is for the size to change, then to hold."
-  (let ((was (frame-parameter frame 'fullscreen))
-        (size (lambda () (list (frame-pixel-width frame) (frame-pixel-height frame)))))
+when the compositor's configure arrives, in order with the paints: the wait is for the size to hold over presented
+frames (`drgnx-test-wait-presented').  It is not for the size to change: a frame with no tool bar or menu bar (the card
+rows' bare frame) leaves fullscreen maximized at the output's size, the size it had.  Whether a resize after it took is
+`drgnx-test-frame-text-size''s check."
+  (let ((was (frame-parameter frame 'fullscreen)))
     (unless (eq state was)
-      (let ((before (funcall size)))
-        (set-frame-parameter frame 'fullscreen state)
-        (drgnx-test-wait (lambda () (redisplay t) (not (equal before (funcall size))))
-                         :secs 8 :what (list "the frame's size after fullscreen" state :was before))
-        (drgnx-test-wait-presented :frame frame :value size)))
+      (set-frame-parameter frame 'fullscreen state)
+      (drgnx-test-wait-presented :frame frame
+                                 :value (lambda () (list (frame-pixel-width frame) (frame-pixel-height frame)))))
     was))
 
 (defun drgnx-test-buffer-list ()

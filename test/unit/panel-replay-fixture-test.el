@@ -52,5 +52,20 @@ guard wraps it, so the hook's printed form is searched)."
       (should (drgnx-module-running-p 'tools/agent-panel))
       (should (drgnx-panel-replay-test--hooked-p)))))
 
+(ert-deftest drgnx-panel-replay/a-down-after-an-up-that-never-started-keeps-the-rows-error ()
+  "A row whose setup fails before the up loads the agents (its frame step, say) runs the down in its unwind: the down
+must not fail on the agents' unbound list, or its error replaces the row's own.  A child Emacs: the agents unloaded."
+  (let* ((emacs (expand-file-name invocation-name invocation-directory))
+         (out (with-temp-buffer
+                (list (call-process emacs nil t nil "-Q" "--batch" "-L" (expand-file-name "core" drgnx-dir)
+                                    "-l" (expand-file-name "test/fixtures/panel-replay-fixture" drgnx-dir)
+                                    "--eval" "(progn (require 'drgnx-modules)
+                                                    (when (featurep 'drgnx-agents) (error \"Premise: agents loaded\"))
+                                                    (drgnx-panel-replay-down)
+                                                    (princ \"down-ok\"))")
+                      (buffer-string)))))
+    (ert-info ((cadr out) :prefix "the child's output: ")
+      (should (equal (list 0 t) (list (car out) (and (string-match-p "down-ok\\'" (string-trim (cadr out))) t)))))))
+
 (provide 'panel-replay-fixture-test)
 ;;; panel-replay-fixture-test.el ends here

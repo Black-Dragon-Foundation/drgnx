@@ -3677,8 +3677,9 @@ timer; when nothing can run and nothing is left to wait for it fails at once, wi
   that skipped by name (`  SKIP NAME`), so a green tier shows what it did not run.
 - **A frame resized.** The GUI sessions' root frame is fullscreen, and a fullscreen frame keeps its output's size: a
   `set-frame-size` there does nothing, and a row that checked the windows after it passed on the size it had. A row
-  that resizes leaves fullscreen first with `(drgnx-test-frame-fullscreen FRAME nil)` (it waits for the compositor's
-  new size and returns the state to put back), then resizes with `(drgnx-test-frame-text-size FRAME WIDTH HEIGHT)`,
+  that resizes leaves fullscreen first with `(drgnx-test-frame-fullscreen FRAME nil)` (it waits until the size holds
+  over presented frames, not for it to change: a frame with no bars leaves fullscreen maximized at the size it had,
+  and returns the state to put back), then resizes with `(drgnx-test-frame-text-size FRAME WIDTH HEIGHT)`,
   which fails the test unless the text size took (within a character); its failure names the size the frame has, its
   fullscreen state and its windows' least height, under which a compositor may drop the request entirely.
 - **A window for what must not happen.** A test that asserts something does *not* happen (a second answer, a tick
