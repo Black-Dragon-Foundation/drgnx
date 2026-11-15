@@ -90,16 +90,19 @@ its prefix runs nothing; a prefix of a profile key reads `prefix'."
     (keys-matrix--remapped
      state
      (cond
-      (prefix-cmd nil)
       ;; yours in the buffer's mode map: a command, or nil (you unbound it there: nothing runs)
       (y-pkg (cdr y-pkg))
-      ;; an :everywhere key, in every buffer, unless you bound the key yourself (then it steps aside: the mode maps,
-      ;; then your global binding, decide)
-      ((and (eq place 'everywhere) (not y-global)) (nth 1 prof))
-      ;; the buffer's mode: the profile's :map key, unless you took it back; then the package's own
+      ;; an :everywhere key, in every buffer, unless you bound the key yourself or a command of yours sits on its
+      ;; prefix (then it steps aside: the mode maps, then your global binding, decide)
+      ((and (eq place 'everywhere) (not y-global) (not prefix-cmd)) (nth 1 prof))
+      ;; the buffer's mode: the profile's :map key, unless you took it back; then the package's own, and a prefix
+      ;; of the package's own key (a mode map is above the global map, yours included, as in any Emacs)
       ((and (eq buffer 'pkg) (eq place 'foreign) (not y-pkg)) (nth 1 prof))
       ((and (eq buffer 'pkg) (member key (plist-get state :pkg-mode))) 'keys-matrix-pkg-own)
-      ;; the global map
+      ((and (eq buffer 'pkg) (seq-find (lambda (k) (string-prefix-p (concat key " ") k)) (plist-get state :pkg-mode)))
+       'prefix)
+      ;; the global map: a command of yours on the key's prefix leaves the key unreachable there
+      (prefix-cmd nil)
       (y-global (cdr y-global))
       ((eq place 'global) (nth 1 prof))
       ;; a prefix of a profile key is the profile's prefix: a package's or hook's command there is below it
@@ -224,20 +227,13 @@ which `global-map' binds to `kill-line', its `define-key' fails in any Emacs."
                                          (string-to-vector
                                           (prin1-to-string `(condition-case err ,x (error (setq keys-matrix--action-error err)))))
                                          (kbd "RET")))))
-    ;; emacsclient --eval: the server evaluates it in its process filter (no command, no file being loaded)
+    ;; emacsclient --eval: the server evaluates it in its process filter, between commands (no command, no file
+    ;; being loaded); what a filter sees of that is `this-command' nil
     ('server (require 'server)
-             (let* ((done nil)
-                    (p (make-process :name "keys-matrix-client" :command '("cat") :connection-type 'pipe :noquery t
-                                     :filter (lambda (_p _s)
-                                               (condition-case err
-                                                   (dolist (x forms) (server-eval-and-print (prin1-to-string x) nil))
-                                                 (error (setq keys-matrix--action-error err)))
-                                               (setq done t)))))
-               (unwind-protect
-                   (progn (process-send-string p "go\n")
-                          (dotimes (_ 50) (unless done (accept-process-output p 0.2)))
-                          (unless done (error "The server filter never ran")))
-                 (delete-process p))))
+             (let ((this-command nil))
+               (condition-case err
+                   (dolist (x forms) (server-eval-and-print (prin1-to-string x) nil))
+                 (error (setq keys-matrix--action-error err)))))
     ('hook (setq keys-matrix-late-hook (list (lambda () (dolist (x forms) (eval x t)))))
            (run-hooks 'keys-matrix-late-hook)))
   (when-let* ((err keys-matrix--action-error))
@@ -352,6 +348,9 @@ of yours."
                                          (list (nth 1 (assq (plist-get c :slot) keys-matrix--slots)))))
     (drgnx-keys-use keys-matrix--stack)                       ; the start: the profile on
     (dolist (e (plist-get c :order))
+      ;; each event at the command loop's top level, which sets `this-command' to nil before reading the next
+      ;; command (a batch kbd macro leaves the last one set)
+      (setq this-command nil)
       (condition-case err
           (pcase e
             ('action (condition-case err (keys-matrix--run-action (plist-get c :how) (car fa))
@@ -484,14 +483,17 @@ a write into the package's map waits for it only through `with-eval-after-load',
 
 (ert-deftest keys-matrix/package-first ()
   "300 cases in a child Emacs, the package loaded before anything else in each."
+  :tags '(:cond)                                       ; a child Emacs, waited for
   (keys-matrix--child 'pkg-first 4242 300))
 
 (ert-deftest keys-matrix/package-last ()
   "300 cases in a child Emacs, the package loaded right after your action in each."
+  :tags '(:cond)                                       ; a child Emacs, waited for
   (keys-matrix--child 'pkg-last 4243 300))
 
 (ert-deftest keys-matrix/trampolines-off ()
   "300 cases in a child Emacs with `native-comp-enable-subr-trampolines' nil from the start."
+  :tags '(:cond)                                       ; a child Emacs, waited for
   (keys-matrix--child nil 4244 300 t))
 
 (ert-deftest keys-matrix/kmacro-bind-to-key ()
@@ -542,6 +544,11 @@ command loop would.)"
       (should (eq 'keys-matrix-cmd-d (keys-matrix--expect "C-c C-p" 'pkg-child (st))))
       (should (null (keys-matrix--expect "C-c C-p" 'pkg-wgrep (st :pkg-mode '("C-c C-p")))))
       ;; a command of yours on the profile's prefix: the chord under it runs nothing
-      (should (null (keys-matrix--expect "C-k C-r" 'plain (st :yours '(((global . "C-k") . keys-matrix-yours)))))))))
+      (should (null (keys-matrix--expect "C-k C-r" 'plain (st :yours '(((global . "C-k") . keys-matrix-yours))))))
+      ;; but the package's mode map is above the global map, yours included: its chord and its prefix stay
+      (let ((s (st :yours '(((global . "C-k") . keys-matrix-yours)) :pkg-mode '("C-k C-r"))))
+        (should (eq 'keys-matrix-pkg-own (keys-matrix--expect "C-k C-r" 'pkg s)))
+        (should (eq 'prefix (keys-matrix--expect "C-k" 'pkg s)))
+        (should (eq 'keys-matrix-yours (keys-matrix--expect "C-k" 'plain s)))))))
 
 ;;; keys-matrix-test.el ends here

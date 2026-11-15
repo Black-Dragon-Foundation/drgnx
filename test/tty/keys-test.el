@@ -241,5 +241,29 @@ sets `kx-returned' when it ends (C-g ends it early)."
         ;; nothing went wrong on the way (no errors from either terminal's setup)
         (should (equal (drgnx-tty-session-eval s 'drgnx-hooks-problems) problems))))))
 
+;; Nidhogg's define-key redirect sees C's `define-key' too: a tty frame's set-up (term.c) defines the terminal's function
+;; keys in its `input-decode-map' under a handler that drops errors.  drgnx's redirect must leave that map alone.
+(ert-deftest drgnx-tty-keys/a-tty-frame-keeps-its-function-keys-under-the-redirect ()
+  (drgnx-tty-session-with (s :daemon t :keys 'vscode :size "120x28")
+    ;; the keys were applied: the redirect is on before the client's terminal is set up
+    (should (drgnx-tty-session-eval s '(and (boundp 'nidhogg-define-key-redirect-function)
+                                            (eq nidhogg-define-key-redirect-function #'drgnx-keys--redirect))))
+    (let ((c (drgnx-tty-session-client s)))
+      (drgnx-tty-session-wait-screen c "\\*scratch\\*" 20)
+      ;; the terminal's arrow keys are in its input-decode-map: some sequence there decodes to <up> and <down>
+      (should (equal (drgnx-tty-session-eval
+                      s `(with-selected-frame ,(drgnx-tty-keys-test--frame c)
+                           (let (found)
+                             (cl-labels ((walk (m) (map-keymap (lambda (_e d)
+                                                                 (cond ((member d '([up] [down])) (push d found))
+                                                                       ((keymapp d) (walk d))))
+                                                               m)))
+                               (walk input-decode-map))
+                             (sort (mapcar (lambda (v) (symbol-name (aref v 0))) (delete-dups found)) #'string<))))
+                     '("down" "up")))
+      ;; and the redirect recorded no trouble
+      (should-not (seq-filter (lambda (p) (string-search "could not be placed" p))
+                              (drgnx-tty-session-eval s 'drgnx-keys-problems))))))
+
 (provide 'keys-test)
 ;;; keys-test.el ends here

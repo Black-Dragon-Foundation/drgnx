@@ -527,13 +527,22 @@ line (`C-k … 12 keys over kill-line (C-k)`, then each key). Conflicts and prob
 `keys.eld`). A key in the keymap of a package that loads later is bound when it loads; what that finds (a key that
 cannot be bound, a prefix it replaces) joins the list and the report then.
 
-**Your own bindings always win.** A key you bind yourself in Lisp (`keymap-global-set` or `keymap-set` in
-`config.el`, at any time in a running Emacs) is yours, also when the profile claims it: drgnx applies the keys again
-whenever a group of modules starts (at idle, at the first file, at the first key you press) and every time it
-leaves your key alone. The sheet lists it as `F9 my-command (your own binding, kept) over Toggle Breakpoint
-(vscode)`. In the global map, a key is yours when it holds a command other than Emacs' own and other than the
-profile's; in a mode's keymap, when you changed it after drgnx bound it. Bind it back to Emacs' default (or unbind
-it in the mode's keymap) and the profile's key returns at the next apply. A key in `settings.el` (below) is the way
+**Your own bindings always win.** A global key is yours when you bind it: in `config.el` or another Lisp file of yours
+while it loads (`keymap-global-set`, `global-set-key`, `define-key` on `global-map` or `ctl-x-map`, use-package's
+`:bind`), in a `with-eval-after-load` body of yours when it runs, from the keyboard (`M-x global-set-key`, `M-:`,
+`kmacro-bind-to-key`) or with `emacsclient --eval`. Unbinding a key to nil the same ways counts too: the key then
+runs nothing, whatever the profile or Emacs bind there. Yours sits above the profile's keys and survives every apply
+and profile switch; the sheet lists it as `F9 my-command (your own binding, kept) over Toggle Breakpoint (vscode)`.
+Take it away (`keymap-global-unset` with REMOVE, or `define-key … nil t`) and the profile's key is back at once.
+
+What is not yours: keys a package binds when it loads, and keys bound later by a hook or a timer, even one you wrote
+(a hook runs outside your file and your command; bind such keys at the top of `config.el` instead). A package's
+global key stays below the profile's. Two cases work as in any Emacs: a key a package (or a hook) binds under a
+prefix the profile owns, where Emacs binds a command (`C-k x` while Emacs's `C-k` is `kill-line`), fails with
+"starts with non-prefix key"; and a global `[remap]` that is not yours still turns the profile's command into its own.
+
+In a mode's keymap, a key is yours when you changed it after drgnx bound it; unbind it there and the profile's key
+returns at the next apply. A key in `settings.el` (below) is the way
 to give a key to a drgnx command.
 
 With Vim keys the sheet shows leader keys plain (`SPC f f`) and a key that works in one state with it (`g d (normal state)`); the Leader Menu on `M-SPC` over Emacs' `cycle-spacing` is listed with the conflicts; which-key labels the leader keys and their prefixes (`SPC f` is `+File`); `drgnx doctor` (`modal`) warns when the engine is missing.
@@ -636,10 +645,13 @@ profile has no natural key for it. Profiles ship as data in `keys/<profile>.eld`
 `core/drgnx-keys.el`: `drgnx-keys-resolve` is a pure function — commands, profiles, layers, `keys.eld`, platform and
 Emacs' default bindings in; winning bindings, conflicts and problems out (`drgnx-platform` names the platform:
 `macos` or `linux`; on macOS Emacs' defaults include its Mac port's `s-` keys, so taking `s-k` for VS Code's
-Cmd+K chords is a reported prefix conflict, as `C-k` over `kill-line` is on Linux). `drgnx-keys-apply` binds the result and
-remembers what each binding replaced, so the next switch restores Emacs' own bindings first (and leaves alone a
-binding someone else changed since); a prefix a binding made (`s-k` for the Cmd+K chords where Emacs binds no `s-k`,
-as in a terminal) goes again once it is empty. The active keys of each command are in its `bound` slot, which every surface
+Cmd+K chords is a reported prefix conflict, as `C-k` over `kill-line` is on Linux). `drgnx-keys-apply` puts the global keys into their own layer: the
+global map is composed of your keys (`drgnx-keys-user-map`), the profile's (refilled at every apply, without your
+keys) and `global-map`, which drgnx never writes. Nidhogg's `nidhogg-define-key-redirect-function` sees every
+`define-key`, from Lisp or native code, and sends a write into these layers to yours or to `global-map`
+(`drgnx doctor`'s `keys-redirect` row says whether this Emacs has it). In mode maps drgnx still binds in place and
+remembers what each binding replaced, so the next switch restores the mode's own bindings first (and leaves alone a
+binding someone else changed since). The active keys of each command are in its `bound` slot, which every surface
 reads. Tests: `test/unit/core-keys-test.el` (resolution, switching, keys.eld, surfaces) and
 `test/live/drgnx-keys-test.el` (real key presses in a headless session).
 

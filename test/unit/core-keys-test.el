@@ -156,7 +156,12 @@ keys); every binding is undone after."
         (let* ((drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-profiles nil)
                (drgnx-keys-problems nil) (drgnx-keys-last nil))
           (unwind-protect (progn ,@body)
+            (drgnx-keys-forget-yours)
             (drgnx-keys--restore)))))))
+
+(defmacro drgnx-keys-test--as-you (&rest body)
+  "BODY as a keyboard command of yours (M-: say): its global writes are yours (`drgnx-keys--yours-p')."
+  `(let ((this-command 'eval-expression)) ,@body))
 
 (defun drgnx-keys-test--write-user (form)
   "settings.el holds the entries the old keys.eld plist FORM maps to; nothing is applied (as in a batch command)."
@@ -167,19 +172,56 @@ keys); every binding is undone after."
   (let ((before (copy-keymap global-map)))
     (drgnx-keys-test--live
      (drgnx-keys-use '((vscode app editing window)))
-     (should (eq (keymap-lookup global-map "C-o") #'find-file))
-     (should (eq (keymap-lookup global-map "C-k C-r") #'drgnx-surfaces-cheatsheet))
-     (should (eq (keymap-lookup global-map "<f1>") #'drgnx-palette))
+     (should (eq (keymap-lookup (current-global-map) "C-o") #'find-file))
+     (should (eq (keymap-lookup (current-global-map) "C-k C-r") #'drgnx-surfaces-cheatsheet))
+     (should (eq (keymap-lookup (current-global-map) "<f1>") #'drgnx-palette))
      (drgnx-keys-use '((emacs app editing window)))
-     (should (eq (keymap-lookup global-map "C-o") #'open-line))
-     (should (eq (keymap-lookup global-map "C-k") #'kill-line))
-     (should (keymapp (keymap-lookup global-map "<f1>")))
-     (should (eq (keymap-lookup global-map "C-h C-k") #'drgnx-surfaces-cheatsheet))
+     (should (eq (keymap-lookup (current-global-map) "C-o") #'open-line))
+     (should (eq (keymap-lookup (current-global-map) "C-k") #'kill-line))
+     (should (keymapp (keymap-lookup (current-global-map) "<f1>")))
+     (should (eq (keymap-lookup (current-global-map) "C-h C-k") #'drgnx-surfaces-cheatsheet))
      (drgnx-keys-use '((vscode app editing window)))
-     (should (eq (keymap-lookup global-map "C-o") #'find-file)))
+     (should (eq (keymap-lookup (current-global-map) "C-o") #'find-file)))
     ;; Everything drgnx bound is gone again (the menu bar keeps the generated menus).
     (cl-flet ((strip (m) (let ((c (copy-keymap m))) (define-key c [menu-bar] nil) c)))
       (should (equal (strip global-map) (strip before))))))
+
+(defmacro drgnx-keys-test--with-feature-file (feature &rest body)
+  "BODY with FILE bound to a temp Lisp file that provides FEATURE; the feature and its after-load entries gone after."
+  (declare (indent 1))
+  `(let* ((dir (make-temp-file "drgnx-keys-al" t)) (file (expand-file-name (format "%s.el" ,feature) dir)))
+     (unwind-protect
+         (progn (with-temp-file file (insert (format "(provide '%s)\n" ,feature))) ,@body)
+       (setq features (delq ,feature features)
+             after-load-alist (seq-remove (lambda (e) (eq (car e) ,feature)) after-load-alist))
+       (delete-directory dir t))))
+
+(ert-deftest drgnx-keys/after-load-a-packages-body-is-not-yours ()
+  "A package's after-load body runs once its file has loaded, after `load' unbound `load-file-name': loaded by a
+command of yours, it is the package's all the same.  Its global write lands in `global-map', under the profile's key."
+  (drgnx-keys-test--live
+   (drgnx-keys-use '((vscode app editing window)))
+   (drgnx-keys-test--with-feature-file 'drgnx-keys-test-al-pkg
+     (unwind-protect
+         (progn
+           (let ((this-command nil))                ; registered by a package (no command, no file of yours)
+             (with-eval-after-load 'drgnx-keys-test-al-pkg (keymap-global-set "C-o" #'ignore)))
+           (drgnx-keys-test--as-you (load file nil t))   ; M-x load-file: a command of yours loads it
+           (should (eq (keymap-lookup global-map "C-o") #'ignore))
+           (should (eq (keymap-lookup (current-global-map) "C-o") #'find-file))
+           (should-not (gethash "C-o" drgnx-keys--yours)))
+       (let ((this-command nil)) (keymap-set global-map "C-o" #'open-line))))))
+
+(ert-deftest drgnx-keys/after-load-your-body-is-yours ()
+  "An after-load body you registered is yours when it runs, whoever loads the file (a timer, an autoload)."
+  (drgnx-keys-test--live
+   (drgnx-keys-use '((vscode app editing window)))
+   (drgnx-keys-test--with-feature-file 'drgnx-keys-test-al-mine
+     (drgnx-keys-test--as-you
+      (with-eval-after-load 'drgnx-keys-test-al-mine (keymap-global-set "C-o" #'ignore)))
+     (let ((this-command nil)) (load file nil t))
+     (should (eq (keymap-lookup (current-global-map) "C-o") #'ignore))
+     (should (eq (keymap-lookup global-map "C-o") #'open-line)))))
 
 (ert-deftest drgnx-keys/a-binding-changed-by-someone-else-is-kept ()
   (drgnx-keys-test--live
@@ -187,7 +229,7 @@ keys); every binding is undone after."
    (keymap-set global-map "C-o" #'ignore)
    (unwind-protect
        (progn (drgnx-keys-use '((emacs app editing window)))
-              (should (eq (keymap-lookup global-map "C-o") #'ignore)))
+              (should (eq (keymap-lookup (current-global-map) "C-o") #'ignore)))
      (keymap-set global-map "C-o" #'open-line))))
 
 (defvar drgnx-keys--kept)
@@ -195,34 +237,36 @@ keys); every binding is undone after."
 (ert-deftest drgnx-keys/your-own-global-binding-survives-a-later-apply ()
   "A key the profile claims, bound by you in the global map (config.el's `keymap-global-set', which loads after the
 modules' first stage), stays yours through every later apply (each module stage ends with one): it is reported as
-your own binding, kept.  Put back to Emacs' default, the profile's key comes back."
+your own binding, kept.  Unset with REMOVE (handed back), the profile's key comes back at once."
   (drgnx-keys-test--live
    (let ((drgnx-keys--kept nil))
      (drgnx-keys-use '((vscode app editing window)))
-     (should (eq (keymap-lookup global-map "C-o") #'find-file))
-     (keymap-global-set "C-o" #'ignore)
+     (should (eq (keymap-lookup (current-global-map) "C-o") #'find-file))
+     (drgnx-keys-test--as-you (keymap-global-set "C-o" #'ignore))
+     (should (eq (keymap-lookup (current-global-map) "C-o") #'ignore))   ; at once, no apply between
      (unwind-protect
          (progn
            (drgnx-keys-apply)                       ; a module stage ends
-           (should (eq (keymap-lookup global-map "C-o") #'ignore))
+           (should (eq (keymap-lookup (current-global-map) "C-o") #'ignore))
            (drgnx-keys-apply)
-           (should (eq (keymap-lookup global-map "C-o") #'ignore))
+           (should (eq (keymap-lookup (current-global-map) "C-o") #'ignore))
            (let ((c (drgnx-keys-test--conflict drgnx-keys-last "C-o")))
              (should c)
              (should (equal "your own binding, kept" (plist-get (plist-get c :winner) :layer)))))
-       (keymap-global-set "C-o" #'open-line))
+       (drgnx-keys-test--as-you (keymap-global-unset "C-o" t)))
+     (should (eq (keymap-lookup (current-global-map) "C-o") #'find-file))
      (drgnx-keys-apply)
-     (should (eq (keymap-lookup global-map "C-o") #'find-file)))))
+     (should (eq (keymap-lookup (current-global-map) "C-o") #'find-file))
+     (should (eq (keymap-lookup global-map "C-o") #'open-line)))))   ; drgnx never wrote global-map
 
 (ert-deftest drgnx-keys/your-own-binding-before-the-first-apply-is-kept ()
   "A key the profile claims that you bound in the global map before drgnx applied any keys is kept as well."
   (drgnx-keys-test--live
    (let ((drgnx-keys--kept nil))
-     (keymap-global-set "C-o" #'ignore)
-     (unwind-protect
-         (progn (drgnx-keys-use '((vscode app editing window)))
-                (should (eq (keymap-lookup global-map "C-o") #'ignore)))
-       (keymap-global-set "C-o" #'open-line)))))
+     (drgnx-keys-test--as-you (keymap-global-set "C-o" #'ignore))
+     (should (eq (keymap-lookup global-map "C-o") #'open-line))   ; into your map, not Emacs's
+     (drgnx-keys-use '((vscode app editing window)))
+     (should (eq (keymap-lookup (current-global-map) "C-o") #'ignore)))))
 
 (ert-deftest drgnx-keys/your-own-binding-in-a-mode-map-survives-a-later-apply ()
   "A profile key in a mode map that you rebound after drgnx bound it stays yours through later applies."
@@ -281,15 +325,15 @@ your own binding, kept.  Put back to Emacs' default, the profile's key comes bac
     (map-keymap (lambda (_ item)
                   (when (and (eq (car-safe item) 'menu-item) (equal (nth 1 item) title))
                     (setq found (plist-get (nthcdr 3 item) :keys))))
-                (keymap-lookup global-map "<menu-bar> <View>"))
+                (keymap-lookup (current-global-map) "<menu-bar> <View>"))
     found))
 
 (ert-deftest drgnx-keys/a-keys-eld-override-shows-on-every-surface ()
   (drgnx-keys-test--live
    (drgnx-keys-test--write-user '(:bind ((palette "C-c p"))))
    (drgnx-keys-apply)
-   (should (eq (keymap-lookup global-map "C-c p") #'drgnx-palette))
-   (should (null (keymap-lookup global-map "C-S-p")))
+   (should (eq (keymap-lookup (current-global-map) "C-c p") #'drgnx-palette))
+   (should (null (keymap-lookup (current-global-map) "C-S-p")))
    (should (equal (drgnx-surfaces-key (drgnx-commands-get 'palette)) "C-c p"))
    (should (seq-find (lambda (r) (and (equal (nth 2 r) "Command Palette") (equal (nth 1 r) "C-c p")))
                      (drgnx-surfaces-sheet-rows)))
@@ -309,7 +353,7 @@ your own binding, kept.  Put back to Emacs' default, the profile's key comes bac
   (drgnx-keys-test--live
    (drgnx-test-areas-put "(drgnx-settings :version 1 (drgnx-keys-bind ((palette \"C-c p\")")
    (should (drgnx-keys-apply))
-   (should (eq (keymap-lookup global-map "C-o") #'find-file))))
+   (should (eq (keymap-lookup (current-global-map) "C-o") #'find-file))))
 
 (load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
 
@@ -408,7 +452,7 @@ your own binding, kept.  Put back to Emacs' default, the profile's key comes bac
      (drgnx-keys-test--write-user form)
      (should (equal (list form :ok) (list form (and (drgnx-keys-apply) :ok))))
      ;; The default stack still applies.
-     (should (equal (list form #'find-file) (list form (keymap-lookup global-map "C-o" nil t)))))))
+     (should (equal (list form #'find-file) (list form (keymap-lookup (current-global-map) "C-o" nil t)))))))
 
 (ert-deftest drgnx-keys/an-internal-error-is-a-problem-not-a-crash ()
   (drgnx-keys-test--live
@@ -430,8 +474,8 @@ your own binding, kept.  Put back to Emacs' default, the profile's key comes bac
            (use-local-map local)
            (drgnx-keys-use '((vscode app editing window)))
            (drgnx-keys-use '((emacs app editing window)))))
-       (should (eq (keymap-lookup global-map "C-o" nil t) #'open-line))
-       (should (eq (keymap-lookup global-map "C-k" nil t) #'kill-line)))
+       (should (eq (keymap-lookup (current-global-map) "C-o" nil t) #'open-line))
+       (should (eq (keymap-lookup (current-global-map) "C-k" nil t) #'kill-line)))
     (keymap-unset global-map "<remap> <find-file>" t)))
 
 (ert-deftest drgnx-keys/modules-add-to-the-shipped-profiles ()
@@ -440,8 +484,8 @@ your own binding, kept.  Put back to Emacs' default, the profile's key comes bac
    (drgnx-keys-define 'vscode '((test-git "C-c g")))
    (drgnx-keys-define 'vim '((test-git "SPC g g")))
    (drgnx-keys-apply)
-   (should (eq (keymap-lookup global-map "C-S-p" nil t) #'drgnx-palette))
-   (should (eq (keymap-lookup global-map "C-c g" nil t) #'drgnx-keys-test--other))
+   (should (eq (keymap-lookup (current-global-map) "C-S-p" nil t) #'drgnx-palette))
+   (should (eq (keymap-lookup (current-global-map) "C-c g" nil t) #'drgnx-keys-test--other))
    (let ((r (drgnx-keys-resolve :commands (drgnx-commands-all) :profiles drgnx-keys-profiles
                                 :layers '((vim app editing window)) :defaults drgnx-keys-test--defaults)))
      (should (equal (plist-get (seq-find (lambda (b) (eq (plist-get b :id) 'test-git)) (plist-get r :bindings)) :map)
@@ -667,7 +711,7 @@ your own binding, kept.  Put back to Emacs' default, the profile's key comes bac
        (should (null (plist-get drgnx-keys-last :problems)))
        (should (eq (key-binding (kbd "C-j")) panel))
        (should (eq (key-binding (kbd "C-c j")) panel))
-       (should (eq (keymap-lookup global-map "C-j") panel))
+       (should (eq (keymap-lookup (current-global-map) "C-j") panel))
        (should (memq 'drgnx-keys--everywhere-alist emulation-mode-map-alists))
        ;; not in the minibuffer, where C-j means something else: the layer steps aside, the local map answers
        (cl-letf (((symbol-function 'minibufferp) (lambda (&rest _) t)))
@@ -779,7 +823,7 @@ your own binding, kept.  Put back to Emacs' default, the profile's key comes bac
      (drgnx-keys-use '((emacs editing) (vscode app window)))
      (should (eq (key-binding (kbd "C-j")) 'eval-print-last-sexp))
      (should-not (memq 'drgnx-keys--everywhere-alist emulation-mode-map-alists))
-     (should (eq (keymap-lookup global-map "C-j") (drgnx-cmd-command (drgnx-commands-get 'toggle-panel)))))))
+     (should (eq (keymap-lookup (current-global-map) "C-j") (drgnx-cmd-command (drgnx-commands-get 'toggle-panel)))))))
 
 (ert-deftest drgnx-keys/restore-removes-the-everywhere-layer ()
   (drgnx-keys-test--live

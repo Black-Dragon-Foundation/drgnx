@@ -150,7 +150,7 @@ started by an apply (the after-apply functions are off)."
             (drgnx-keys-apply)
             (should (eq (keymap-lookup evil-normal-state-map "C-p") #'drgnx-keys-claims-evil-test--mine))
             (should (eq (keymap-lookup evil-insert-state-map "C-p") #'drgnx-quick-open))   ; evil's own: replaced
-            (should (eq (keymap-lookup global-map "C-p") #'drgnx-quick-open))
+            (should (eq (keymap-lookup (current-global-map) "C-p") #'drgnx-quick-open))
             (should-not (member '("C-p" . (evil . evil-normal-state-map))
                                 (drgnx-cmd-bound (drgnx-commands-get 'go-quick-open))))
             (let ((c (seq-find (lambda (c) (and (equal (plist-get c :key) "C-p") (eq (plist-get c :map) 'evil-normal-state-map)))
@@ -168,7 +168,7 @@ started by an apply (the after-apply functions are off)."
       (should (eq (keymap-lookup evil-normal-state-map "C-p") 'evil-paste-pop))
       (drgnx-keys-apply)
       (should (eq (keymap-lookup evil-normal-state-map "C-p") #'drgnx-quick-open))
-      (should (eq (keymap-lookup global-map "C-p") #'drgnx-quick-open))
+      (should (eq (keymap-lookup (current-global-map) "C-p") #'drgnx-quick-open))
       (should (member '("C-p" . (evil . evil-normal-state-map)) (drgnx-cmd-bound (drgnx-commands-get 'go-quick-open))))
       (let ((c (seq-find (lambda (c) (and (equal (plist-get c :key) "C-p") (plist-get c :states)))
                          (plist-get drgnx-keys-last :conflicts))))

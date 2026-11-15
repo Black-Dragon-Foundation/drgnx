@@ -534,8 +534,9 @@ stay Vim's in normal and visual state, as in VSCodeVim; VS Code's keys still wor
 adds `drgnx-modal-sync-engine' so a runtime switch starts and stops the engine.  An error in one is said in
 *Messages* and does not stop the others.")
 
-(defvar drgnx-keys--defaults (copy-keymap global-map)
-  "Emacs' own global bindings, taken before drgnx binds anything.")
+(defvar drgnx-keys--defaults global-map
+  "Emacs's and the packages' global bindings: `global-map' itself, read live.  drgnx never writes it: the profile's
+keys and yours are layers of their own above it (`drgnx-keys--global-map').")
 
 (defvar drgnx-keys--applied nil "What drgnx bound, newest first: (MAPSYM KEY PREVIOUS OURS).")
 (defvar drgnx-keys--evil-aux nil
@@ -631,6 +632,234 @@ was lifted, \"COMMAND (PREFIX)\", or nil."
     (define-key map (key-parse key) def)
     lifted))
 
+;;;; The global layers: yours, then the profile's, then `global-map'
+
+;; The global map is composed: `drgnx-keys-user-map' (your keys), `drgnx-keys--profile-map' (the profile's global
+;; keys, refilled by every apply) and `global-map' (Emacs's and the packages', never written by drgnx).  Nidhogg's
+;; `nidhogg-define-key-redirect-function' sees every `define-key', from Lisp or native code: one of yours goes into
+;; your map, any other goes into `global-map', and none lands in the composed map or a profile prefix map.
+
+(defvar nidhogg-define-key-redirect-function)
+
+(defvar drgnx-keys-user-map (make-sparse-keymap)
+  "Your own global keys: what your Lisp files (config.el, its `with-eval-after-load' bodies) and your keyboard
+commands, M-: and emacsclient --eval bind in the global map.  Above the profile's keys, kept through applies and
+profile switches.  A nil here (you unbound a key) shadows the profile's key and Emacs's.")
+
+(defvar drgnx-keys--profile-map (make-sparse-keymap)
+  "The profile's global keys, refilled by every apply; without the keys of yours (`drgnx-keys--yours').")
+
+(defvar drgnx-keys--global-map (make-composed-keymap (list drgnx-keys-user-map drgnx-keys--profile-map) global-map)
+  "The global map drgnx installs: your keys, then the profile's, then `global-map'.")
+
+(defvar drgnx-keys--yours (make-hash-table :test #'equal)
+  "Your global keys: key description → (DEF . SOURCE), SOURCE `lisp' (a Lisp file of yours) or `command' (a keyboard
+command, M-:, emacsclient --eval).  DEF nil: you unbound the key.")
+
+(defvar drgnx-keys--profile-keys nil "The profile's global keys of the last apply: ((KEY . DEF) …), KEY a description.")
+
+(defvar drgnx-keys--paths (make-hash-table :test #'eq :weakness 'key)
+  "Keymap → (LAYER . PREFIX): the prefix maps of `global-map' (LAYER `global'), of the profile map (`profile') and
+of your map (`user'), and the three maps themselves, PREFIX the key vector that reaches the map.")
+
+(defvar drgnx-keys--after-load nil
+  "Non-nil while a file's after-load bodies run (`do-after-load-evaluation').  `load' has unbound `load-file-name' by
+then, so the file rule cannot tell them apart: only a body you registered is yours (`drgnx-keys--yours-body').")
+(defvar drgnx-keys--yours-body nil "Non-nil while an after-load body you registered runs (`drgnx-keys--after-load-yours').")
+(defvar drgnx-keys--server-eval nil "Non-nil while the server evaluates an emacsclient --eval.")
+
+(defun drgnx-keys-redirect-available-p ()
+  "Non-nil when this Emacs has Nidhogg's define-key redirect, which tells your bindings from packages'."
+  (boundp 'nidhogg-define-key-redirect-function))
+
+(defun drgnx-keys--note-paths (map layer prefix)
+  "Record MAP and its prefix maps (to depth 4) as LAYER's, MAP reached by PREFIX."
+  (puthash map (cons layer prefix) drgnx-keys--paths)
+  (when (< (length prefix) 4)
+    (map-keymap (lambda (ev def)
+                  (let ((sub (and (not (memq ev '(menu-bar tool-bar tab-bar remap))) (keymapp def)
+                                  (not (functionp def)) (drgnx-keys--keymap-of def))))
+                    (when (and sub (not (gethash sub drgnx-keys--paths)))
+                      (drgnx-keys--note-paths sub layer (vconcat prefix (vector ev))))))
+                map)))
+
+(defun drgnx-keys--keymap-of (def)
+  "DEF's keymap when it is a keymap or a symbol whose function is one, else nil."
+  (cond ((and (consp def) (eq (car def) 'keymap)) def)
+        ((and (symbolp def) (fboundp def) (keymapp (symbol-function def))) (symbol-function def))))
+
+(defun drgnx-keys--refresh-paths ()
+  "Record the three layers' maps and their prefix maps afresh."
+  (clrhash drgnx-keys--paths)
+  (drgnx-keys--note-paths drgnx-keys-user-map 'user [])
+  (drgnx-keys--note-paths drgnx-keys--profile-map 'profile [])
+  (drgnx-keys--note-paths global-map 'global [])
+  (puthash drgnx-keys--global-map '(composed . []) drgnx-keys--paths))
+
+(defun drgnx-keys--yours-p ()
+  "Whether a write into the global map now is yours: from a Lisp file of yours while it loads, an after-load body
+you registered (not a file it loads in turn), emacsclient --eval, or a keyboard command (no file loading, no
+after-load body running)."
+  (cond (load-file-name
+         (and (bound-and-true-p drgnx-settings-prov--loading)
+              (fboundp 'drgnx-settings-prov--user-file-p)
+              (drgnx-settings-prov--user-file-p load-file-name)))
+        (drgnx-keys--yours-body t)
+        (drgnx-keys--after-load nil)
+        (drgnx-keys--server-eval t)
+        (t (and this-command t))))
+
+(defun drgnx-keys--submap (map prefix)
+  "MAP's prefix map at PREFIX (a vector), made when there is none; recorded in `drgnx-keys--paths'."
+  (if (= (length prefix) 0) map
+    (let ((sub (lookup-key map prefix)))
+      (unless (keymapp sub)
+        (setq sub (make-sparse-keymap))
+        (let ((nidhogg-define-key-redirect-function nil)) (define-key map prefix sub)))
+      (unless (gethash sub drgnx-keys--paths)
+        (puthash sub (cons (car (gethash map drgnx-keys--paths)) prefix) drgnx-keys--paths))
+      sub)))
+
+(defun drgnx-keys--global-at (prefix)
+  "`global-map''s prefix map at PREFIX, for a write under it that is not yours.  Where `global-map' binds a command on
+PREFIX it gives `:non-prefix' (the write must fail as it would in any Emacs); where it binds nothing, the prefix map is
+made."
+  (if (= (length prefix) 0) global-map
+    (let ((sub (lookup-key global-map prefix)))
+      (cond ((keymapp sub) sub)
+            ((null sub) (drgnx-keys--submap global-map prefix))
+            (t :non-prefix)))))
+
+(defun drgnx-keys--key-text (prefix key)
+  "PREFIX (a vector) and KEY as one key description."
+  (string-trim (concat (key-description prefix) " " (key-description key))))
+
+(defun drgnx-keys--take (text def remove)
+  "Your write of DEF (or a REMOVE) on the global key TEXT: record it, and take the key out of the profile's layers
+at once, or give it back to them."
+  (let ((nidhogg-define-key-redirect-function nil) (k (key-parse text)))
+    (if remove
+        (progn (remhash text drgnx-keys--yours)
+               (when-let* ((d (assoc text drgnx-keys--profile-keys))) (define-key drgnx-keys--profile-map k (cdr d))))
+      (puthash text (cons def (if (and load-file-name (not drgnx-keys--server-eval)) 'lisp 'command)) drgnx-keys--yours)
+      (when (lookup-key drgnx-keys--profile-map k) (ignore-errors (define-key drgnx-keys--profile-map k nil t))))
+    (drgnx-keys--set-everywhere (plist-get drgnx-keys-last :bindings))))
+
+(defun drgnx-keys--yours-at-p (key)
+  "Whether the global KEY (a description) is yours: bound or unbound by you, or under a command of yours on one of
+its prefixes (which makes it unreachable)."
+  (or (gethash key drgnx-keys--yours)
+      (let ((events (key-parse key)) found)
+        (dotimes (i (1- (length events)))
+          (unless found
+            (setq found (car (gethash (key-description (seq-take events (1+ i))) drgnx-keys--yours)))))
+        found)))
+
+(defconst drgnx-keys--chrome-events
+  '(menu-bar tool-bar tab-bar tab-line mode-line header-line left-fringe right-fringe left-margin right-margin
+             vertical-line vertical-scroll-bar horizontal-scroll-bar)
+  "Events of the frame's chrome: a write of a key starting with one is never redirected (menus are not keys).")
+
+(defun drgnx-keys--redirect (map key def remove)
+  "`nidhogg-define-key-redirect-function': a write into the global map's layers goes to your map when it is yours
+\(`drgnx-keys--yours-p'), else to `global-map'; any other write stays where it was asked for (one hash lookup: C
+calls `define-key' too, on a tty's `input-decode-map' at its set-up).  It never signals for its own trouble, which
+it records as a problem and leaves the write where it was asked for; the one error it gives is the one any Emacs
+gives, for a key under a prefix `global-map' binds to a command (`drgnx-keys--global-at')."
+  (when-let* ((path (gethash map drgnx-keys--paths))
+              ((not (and (> (length key) 0) (memq (aref key 0) drgnx-keys--chrome-events)))))
+    (let* ((layer (car path)) (prefix (cdr path))
+           (to (condition-case err
+                   (if (drgnx-keys--yours-p)
+                       (prog1 (unless (eq layer 'user) (drgnx-keys--submap drgnx-keys-user-map prefix))
+                         (drgnx-keys--take (drgnx-keys--key-text prefix key) def remove))
+                     (unless (eq layer 'global) (drgnx-keys--global-at prefix)))
+                 (error (push (format "the global key %s could not be placed: %s"
+                                      (ignore-errors (drgnx-keys--key-text prefix key)) (error-message-string err))
+                              drgnx-keys-problems)
+                        nil))))
+      (if (eq to :non-prefix)
+          (error "Key sequence %s starts with non-prefix key %s"
+                 (key-description (vconcat prefix (if (stringp key) (listify-key-sequence key) key)))
+                 (key-description prefix))
+        to))))
+
+(defun drgnx-keys--after-load-yours (args)
+  "Filter of `eval-after-load''s ARGS: a body you register (`drgnx-keys--yours-p') makes writes that are yours when
+it runs (not those of a file it loads in turn, nor of that file's after-load bodies)."
+  (let ((form (nth 1 args)))
+    (if (and (functionp form) (drgnx-keys--yours-p))
+        (list (car args) (lambda () (let ((drgnx-keys--yours-body t)) (funcall form))))
+      args)))
+
+(defun drgnx-keys--after-load-scope (fn &rest args)
+  "Around `do-after-load-evaluation' (FN, ARGS): the after-load bodies of a file are not yours unless you
+registered them (`drgnx-keys--after-load-yours'), whatever command or body loaded the file."
+  (let ((drgnx-keys--after-load t) (drgnx-keys--yours-body nil)) (apply fn args)))
+
+(defun drgnx-keys--server-eval-yours (fn &rest args)
+  "Around `server-eval-and-print' (FN, ARGS): emacsclient --eval is you."
+  (let ((drgnx-keys--server-eval t)) (apply fn args)))
+
+(defvar drgnx-keys--guard-said nil "Non-nil once the guard said a command replaced the global map.")
+
+(defun drgnx-keys--guard-global-map ()
+  "On `post-command-hook': put the composed global map back if a command left another one current, saying so once.
+Not while the minibuffer reads or a keyboard macro runs or is recorded (a command there may swap maps on purpose)."
+  (unless (or (eq (current-global-map) drgnx-keys--global-map) (minibufferp) executing-kbd-macro defining-kbd-macro)
+    (unless drgnx-keys--guard-said
+      (setq drgnx-keys--guard-said t)
+      (push (format "%s made another keymap the global map: drgnx's keys were put back" this-command)
+            drgnx-keys-problems))
+    (use-global-map drgnx-keys--global-map)))
+
+(defun drgnx-keys--install-redirect ()
+  "Turn the redirect on, when the keys core loads: config.el and your Lisp files load before the first apply, and
+their global keys must already land in your map.  Without the redirect (an Emacs that is not Nidhogg) your
+bindings cannot be told from packages': the first apply says so as a problem (`drgnx-keys--install-global')."
+  (drgnx-keys--refresh-paths)
+  (advice-add 'eval-after-load :filter-args #'drgnx-keys--after-load-yours)
+  (advice-add 'do-after-load-evaluation :around #'drgnx-keys--after-load-scope)
+  (advice-add 'server-eval-and-print :around #'drgnx-keys--server-eval-yours)
+  (when (drgnx-keys-redirect-available-p)
+    (setq nidhogg-define-key-redirect-function #'drgnx-keys--redirect)))
+
+(defun drgnx-keys--install-global ()
+  "Make the composed map the global map, with its guard, at every apply."
+  (drgnx-keys--refresh-paths)
+  (unless (eq (current-global-map) drgnx-keys--global-map) (use-global-map drgnx-keys--global-map))
+  (add-hook 'post-command-hook #'drgnx-keys--guard-global-map)
+  (unless (drgnx-keys-redirect-available-p)
+    (push "this Emacs has no define-key redirect (Nidhogg's): bindings from your config cannot be told from packages'"
+          drgnx-keys-problems)))
+
+(defun drgnx-keys--uninstall-global ()
+  "Undo `drgnx-keys--install-global': `global-map' current again, the profile's keys gone.  Your map keeps your
+keys (they come back with the next apply), and the redirect stays on to record them."
+  (remove-hook 'post-command-hook #'drgnx-keys--guard-global-map)
+  (when (eq (current-global-map) drgnx-keys--global-map) (use-global-map global-map))
+  (setcdr drgnx-keys--profile-map nil)
+  (setq drgnx-keys--profile-keys nil))
+
+(defun drgnx-keys-forget-yours ()
+  "Forget every global key of yours: your map emptied, the profile's keys back on them."
+  (let ((nidhogg-define-key-redirect-function nil))
+    (setcdr drgnx-keys-user-map nil)
+    (clrhash drgnx-keys--yours)
+    (pcase-dolist (`(,k . ,d) drgnx-keys--profile-keys) (define-key drgnx-keys--profile-map (key-parse k) d))
+    (drgnx-keys--set-everywhere (plist-get drgnx-keys-last :bindings))))
+
+(defun drgnx-keys--fill-profile (bindings)
+  "Put the global keys of BINDINGS (resolution bindings with commands) into the profile map, leaving out your keys."
+  (let ((nidhogg-define-key-redirect-function nil))
+    (setcdr drgnx-keys--profile-map nil)
+    (setq drgnx-keys--profile-keys nil)
+    (dolist (b bindings)
+      (push (cons (car b) (cdr b)) drgnx-keys--profile-keys)
+      (unless (gethash (car b) drgnx-keys--yours)
+        (define-key drgnx-keys--profile-map (key-parse (car b)) (cdr b))))
+    (setq drgnx-keys--profile-keys (nreverse drgnx-keys--profile-keys))))
+
 (defvar drgnx-keys--kept nil
   "Bindings someone else made over drgnx's in a keymap other than the global map, which has no defaults to compare
 with (`drgnx-keys--defaults'): ((MAPSYM . KEY) . DEFINITION) each, found by `drgnx-keys--restore'.  The next applies
@@ -651,6 +880,7 @@ leave KEY to its owner while it is still DEFINITION (`drgnx-keys--yours').")
   (setq drgnx-keys--evil-aux nil)
   (drgnx-keys--set-everywhere nil)
   (drgnx-keys--profile-indent nil)
+  (drgnx-keys--uninstall-global)
   (setq drgnx-keys--applied nil))
 
 (defvar drgnx-keys--indent-orig 'unset
@@ -688,6 +918,7 @@ emptied and leaves the list, so a profile switch leaves nothing behind."
   (setq drgnx-keys--everywhere-on nil)
   (dolist (b bindings)
     (when-let* (((plist-get b :everywhere))
+                ((not (drgnx-keys--yours-at-p (plist-get b :key))))   ; a key of yours: it steps aside
                 (cmd (drgnx-commands-get (plist-get b :id))))
       (define-key drgnx-keys--everywhere-map (key-parse (plist-get b :key))
                   `(menu-item "" ,(drgnx-cmd-command cmd) :filter drgnx-keys--everywhere-filter))
@@ -753,16 +984,15 @@ after `drgnx-keys--restore', so drgnx's own bindings are gone."
 
 (defun drgnx-keys--yours (spec key command)
   "What you bound on KEY in the main keymap SPEC yourself, which the profile's COMMAND does not replace: its
-definition now, or nil.  Called after `drgnx-keys--restore', so drgnx's own bindings are gone.  In the global map,
-a command on KEY other than Emacs' default there (`drgnx-keys--defaults') and other than COMMAND: config.el's
-`keymap-global-set' loads after the modules' first stage, and every later stage ends with an apply.  In another
-keymap, a definition someone put over drgnx's and still there (`drgnx-keys--kept')."
+definition, or nil.  In the global map, a key of yours (`drgnx-keys--yours'; a key you unbound reads as text).
+In another keymap, a definition someone put over drgnx's and still there (`drgnx-keys--kept'), until the layer
+for mode maps replaces this."
   (let ((sym (cdr (drgnx-commands--keymap-spec spec))))
-    (when (and (boundp sym) (keymapp (symbol-value sym)))
-      (let ((now (drgnx-keys--lookup (symbol-value sym) key)))
-        (when (and now (not (keymapp now)) (not (numberp now)) (not (eq now command)))
-          (if (eq sym 'global-map)
-              (and (not (equal now (drgnx-keys--lookup drgnx-keys--defaults key))) now)
+    (if (eq sym 'global-map)
+        (when-let* ((cell (gethash key drgnx-keys--yours))) (or (car cell) "nothing (you unbound it)"))
+      (when (and (boundp sym) (keymapp (symbol-value sym)))
+        (let ((now (drgnx-keys--lookup (symbol-value sym) key)))
+          (when (and now (not (keymapp now)) (not (numberp now)) (not (eq now command)))
             ;; changed again since: still yours (unbound, KEY is the profile's again)
             (when-let* ((cell (assoc (cons sym key) drgnx-keys--kept)))
               (setcdr cell now)
@@ -791,7 +1021,7 @@ Keys problems are `warn', so they never echo.  Never signals."
 the profile's command for it (Replace in File) means nothing while the minibuffer reads, and C-h f there is
 the way to look something up.  Undone with the profile's other keys by `drgnx-keys--restore'."
   (let ((key (key-description (vector help-char))))
-    (unless (memq (lookup-key global-map (key-parse key)) '(help-command nil))
+    (unless (memq (lookup-key drgnx-keys--global-map (key-parse key)) '(help-command nil))
       (drgnx-keys--bind 'minibuffer-local-map key 'help-command))))
 
 (defun drgnx-keys-apply ()
@@ -804,7 +1034,7 @@ Never prompts: problems are collected in `drgnx-keys-last'.  Returns the resolut
         ;; Restore first: resolution then sees Emacs' own bindings, not drgnx's previous ones.
         (drgnx-keys--restore)
         (cl-incf drgnx-keys--generation)
-        (let* ((user (drgnx-keys-read-user))
+        (let* ((user (drgnx-keys-read-user)) (globals nil)
                (layers (or drgnx-keys--session-layers (plist-get user :layers) (drgnx-keys--layers)))
                (r (drgnx-keys-resolve :commands (drgnx-commands-all) :profiles drgnx-keys-profiles :layers layers
                                       :user user :platform (drgnx-platform) :defaults drgnx-keys--defaults
@@ -817,6 +1047,10 @@ Never prompts: problems are collected in `drgnx-keys-last'.  Returns the resolut
           (dolist (c (drgnx-commands-all)) (setf (drgnx-cmd-bound c) nil))
           (dolist (b (plist-get r :bindings))
             (let ((cmd (drgnx-commands-get (plist-get b :id))))
+              ;; the global map's keys go into the profile's layer (all of them: a key of yours is left out there, and
+              ;; comes back when you take yours away)
+              (when (and cmd (eq (cdr (drgnx-commands--keymap-spec (plist-get b :map))) 'global-map))
+                (push (cons (plist-get b :key) (drgnx-cmd-command cmd)) globals))
               ;; A key that beats the modal engine's in some states is bound in the engine's keymaps too (:also);
               ;; `drgnx-keys--restore' puts the engine's own key back on the next apply.  A key the user bound in
               ;; such a keymap (config.el), or in the main keymap (`drgnx-keys--yours'), is left alone and said.
@@ -825,13 +1059,21 @@ Never prompts: problems are collected in `drgnx-keys-last'.  Returns the resolut
                                       (drgnx-keys--yours map (plist-get b :key) (drgnx-cmd-command cmd))
                                     (drgnx-keys--theirs map (plist-get b :key)))))
                     (setq r (plist-put r :conflicts
-                                       (append (plist-get r :conflicts)
+                                       (append (if (eq map (plist-get b :map))   ; one verdict for the key: yours
+                                                   (seq-remove (lambda (c) (and (equal (plist-get c :key) (plist-get b :key))
+                                                                                (eq (plist-get c :map)
+                                                                                    (cdr (drgnx-commands--keymap-spec map)))))
+                                                               (plist-get r :conflicts))
+                                                 (plist-get r :conflicts))
                                                (list (list :key (plist-get b :key)
                                                            :map (cdr (drgnx-commands--keymap-spec map)) :kind 'claim
                                                            :winner (list :claim (format "%s" theirs) :layer "your own binding, kept")
                                                            :losers (list (list :id (plist-get b :id) :layer (plist-get b :layer))))))))
                   (setf (drgnx-cmd-bound cmd) (append (drgnx-cmd-bound cmd) (list (cons (plist-get b :key) map))))
-                  (drgnx-keys--apply-binding (plist-put (copy-sequence b) :map map) cmd drgnx-keys--generation)))))
+                  (unless (eq (cdr (drgnx-commands--keymap-spec map)) 'global-map)
+                    (drgnx-keys--apply-binding (plist-put (copy-sequence b) :map map) cmd drgnx-keys--generation))))))
+          (drgnx-keys--fill-profile (nreverse globals))
+          (drgnx-keys--install-global)
           (drgnx-keys--set-everywhere (plist-get r :bindings))
           (drgnx-keys--help-in-minibuffer)
           (setq drgnx-keys-last (append (list :layers layers
@@ -1015,6 +1257,8 @@ sync and the next start.  Until then the current stack stays and the message say
                (if-let* ((n (length (drgnx-keys-conflict-lines))) ((> n 0)))
                    (format " — %d conflict%s, see Keyboard Shortcuts" n (if (= n 1) "" "s"))
                  "")))))
+
+(drgnx-keys--install-redirect)
 
 (provide 'drgnx-keys)
 ;;; drgnx-keys.el ends here

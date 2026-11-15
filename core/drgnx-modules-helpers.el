@@ -196,6 +196,8 @@ wiped.  Two modules that set the same FACE may be torn down in either order."
     (unwind-protect (let ((b (lookup-key map key))) (and (not (numberp b)) b))
       (set-keymap-parent map parent))))
 
+(defvar nidhogg-define-key-redirect-function)
+
 (defun drgnx-module-define-key (map-symbol key def)
   "Bind KEY to DEF in the keymap that is the value of MAP-SYMBOL; the module's undo puts back the old binding.
 For remaps (`[remap CMD]') and mouse and chrome events (`[mode-line mouse-1]', `[menu-bar ...]')
@@ -208,7 +210,9 @@ be torn down in either order."
     (unless (drgnx-module--chrome-key-p key)
       (error "Keyboard key %S: bind it through the key profiles; helpers take remaps and mouse/chrome events" key))
     (let ((rec (drgnx-modules--recording-p))
-          (old (drgnx-module--own-binding map key)))
+          (old (drgnx-module--own-binding map key))
+          ;; a module's binding is never yours, even when a command of yours turns the module on (core/drgnx-keys.el)
+          (nidhogg-define-key-redirect-function nil))
       (define-key map key def)
       (when rec
         (let* ((target (list 'key map-symbol key))
@@ -219,7 +223,7 @@ be torn down in either order."
              (drgnx-module--release
               target box
               (lambda () (equal (drgnx-module--own-binding map key) def))
-              (lambda (prev) (define-key map key prev (null prev)))))))))))
+              (lambda (prev) (let ((nidhogg-define-key-redirect-function nil)) (define-key map key prev (null prev))))))))))))
 
 ;;; Hooks and advice: named functions, paired with their removal
 

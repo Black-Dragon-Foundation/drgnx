@@ -169,7 +169,7 @@
           (drgnx-keys--applied nil) (drgnx-keys-problems nil) (drgnx-keys-last nil)
           (drgnx-keys--session-layers '((test app)))
           (drgnx-keys-profiles '((test :name "Test" :bind ((demo "C-c y") (other "C-c z")))))
-          (before (keymap-lookup global-map "C-c y")))
+          (before (keymap-lookup (current-global-map) "C-c y")))
      (unwind-protect
          (progn
            (drgnx-command-define 'other :title "Other" :category "Test" :command #'drgnx-test--cmd)
@@ -177,12 +177,12 @@
                                                                                  :command #'ignore)))
            (drgnx-modules-run 'startup)
            (drgnx-keys-apply)
-           (should (eq (keymap-lookup global-map "C-c y") #'ignore))
-           (should (eq (keymap-lookup global-map "C-c z") #'drgnx-test--cmd))
+           (should (eq (keymap-lookup (current-global-map) "C-c y") #'ignore))
+           (should (eq (keymap-lookup (current-global-map) "C-c z") #'drgnx-test--cmd))
            (drgnx-module-teardown 'test/a)
            (run-hooks 'drgnx-modules-after-teardown-functions)
-           (should (eq (keymap-lookup global-map "C-c y") before))
-           (should (eq (keymap-lookup global-map "C-c z") #'drgnx-test--cmd))   ; another command's key stays
+           (should (eq (keymap-lookup (current-global-map) "C-c y") before))
+           (should (eq (keymap-lookup (current-global-map) "C-c z") #'drgnx-test--cmd))   ; another command's key stays
            (should-not (drgnx-commands-get 'demo)))
        (drgnx-keys--restore)
        (delete-directory dir t)))))

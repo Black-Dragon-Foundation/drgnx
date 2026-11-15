@@ -160,9 +160,9 @@ Skipped without evil otherwise."
             (should-not (seq-find (lambda (p) (string-match-p "could not be applied" p)) (plist-get drgnx-keys-last :problems)))
             (should (equal (plist-get drgnx-keys-last :layers) drgnx-modal-choose-test--vim))
             (should-not drgnx-modal-running)
-            (should (eq (keymap-lookup global-map "C-S-p") #'drgnx-palette))
-            (should (eq (keymap-lookup global-map "<f1>") #'drgnx-palette))
-            (should (eq (keymap-lookup global-map "M-SPC") #'drgnx-modal-leader-menu))))
+            (should (eq (keymap-lookup (current-global-map) "C-S-p") #'drgnx-palette))
+            (should (eq (keymap-lookup (current-global-map) "<f1>") #'drgnx-palette))
+            (should (eq (keymap-lookup (current-global-map) "M-SPC") #'drgnx-modal-leader-menu))))
       (advice-remove 'drgnx-evil-doctor count))))
 
 (provide 'modal-choose-isolated)
