@@ -1010,7 +1010,7 @@ and the presets' names it lays the lens out of."
      (with-current-buffer buf
        (let ((inhibit-read-only t))
          (erase-buffer)
-         (insert (propertize "HEAD row\n" 'drgnx-agent-panel-action "pin" 'drgnx-pinned 1) (propertize "chips\n" 'drgnx-pinned 1))
+         (insert (propertize "HEAD row" 'drgnx-agent-panel-action "pin" 'drgnx-pinned 1) "\n" (propertize "chips" 'drgnx-pinned 1) "\n")
          (dotimes (i 10) (insert (format "step %d\n" i))))
        (set-window-buffer (selected-window) buf)
        ,@body)))

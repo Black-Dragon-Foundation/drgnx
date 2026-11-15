@@ -252,10 +252,12 @@ Lisp (no Sjá store holds them), so the mark is read from the drawn text.")
 (defvar-local drgnx-agent-panel--pin-overlays nil "Each window's overlay that shows the pinned rows: ((WINDOW . OVERLAY) ...).")
 
 (defun drgnx-agent-panel--pinned-end ()
-  "The position after the panel's leading rows the hub marked `drgnx-pinned' (a row property over its whole text), or
-nil when the first row is not one."
-  (and (< (point-min) (point-max)) (eq 1 (get-text-property (point-min) 'drgnx-pinned))
-       (or (text-property-not-all (point-min) (point-max) 'drgnx-pinned 1) (point-max))))
+  "The position after the panel's leading rows the hub marked `drgnx-pinned' (a row property over its text, not its
+newline), or nil when the first row is not one."
+  (let ((pos (point-min)))
+    (while (and (< pos (point-max)) (eq 1 (get-text-property pos 'drgnx-pinned)))
+      (setq pos (save-excursion (goto-char pos) (forward-line 1) (point))))
+    (and (> pos (point-min)) pos)))
 
 (defun drgnx-agent-panel--pin-update ()
   "The hub's rows were patched: the pinned rows are copied again when they changed, and every window shows them."
