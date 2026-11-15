@@ -751,13 +751,17 @@ again (a new width, a click's look), so they are looked for again until they are
     (if (and (consp str) (stringp (car str))) (get-text-property (cdr str) 'drgnx-agent-panel-action (car str))
       (get-text-property (posn-point posn) 'drgnx-agent-panel-action (window-buffer window)))))
 
-(defun drgnx-look-scene--entry-in (window buffer)
-  "The first position in WINDOW, which shows BUFFER, at a step's row (`drgnx-agent-panel-entry'), or nil."
+(defun drgnx-look-scene--entry-in (window buffer &optional n)
+  "The position in WINDOW, which shows BUFFER, of the Nth (from 0, default 0) step's row (`drgnx-agent-panel-entry')
+from its start, or nil."
   (with-current-buffer buffer
-    (let ((pos (window-start window)) (end (min (point-max) (or (window-end window t) (point-max)))))
-      (while (and pos (< pos end) (not (get-text-property pos 'drgnx-agent-panel-entry)))
-        (setq pos (next-single-property-change pos 'drgnx-agent-panel-entry nil end)))
-      (and pos (< pos end) pos))))
+    (let ((pos (window-start window)) (end (min (point-max) (or (window-end window t) (point-max))))
+          (n (or n 0)) (found nil))
+      (while (and pos (< pos end) (not found))
+        (if (and (get-text-property pos 'drgnx-agent-panel-entry) (< (cl-decf n) 0))
+            (setq found pos)
+          (setq pos (next-single-property-change pos 'drgnx-agent-panel-entry nil end))))
+      found)))
 
 (defun drgnx-look-scene--panel-header-clicks (buffer)
   "Scroll the transcript up a page, then click the header window's pin button, a lens segment and a strip pill through
@@ -774,12 +778,21 @@ The transcript is left scrolled up: the picture is the scrolled panel."
     (let ((header (drgnx-look-scene--edges h)) (targets (drgnx-look-scene--header-targets-wait h)))
       ;; each click runs its command for real, on the session's state (the panel's buffer): the pin pins the step
       ;; at the transcript's point, a lens segment sets its preset's disclosure, a pill turns its type's detail over
-      (let ((pos (drgnx-look-scene--entry-in w buffer)))
-        (unless pos (error "no step's row in the transcript's window to pin"))
+      ;; the step pinned is the window's second, not its first row's; the transcript is not the selected window and
+      ;; the panel buffer's own point is on its first row, so only the window's point names it
+      (let ((first (drgnx-look-scene--entry-in w buffer)) (pos (drgnx-look-scene--entry-in w buffer 1)))
+        (unless pos (error "no second step's row in the transcript's window to pin"))
+        (when (equal (get-text-property pos 'drgnx-agent-panel-entry buffer)
+                     (get-text-property first 'drgnx-agent-panel-entry buffer))
+          (error "the transcript window's first and second step rows are one step"))
+        (select-window h)
+        (with-current-buffer buffer (goto-char (point-min)))
         (set-window-point w pos)
         (let ((key (list :e (get-text-property pos 'drgnx-agent-panel-entry buffer)))
               (pins (lambda () (mapcar #'car (buffer-local-value 'drgnx-agent-panel--pins buffer)))))
           (when (member key (funcall pins)) (error "the step %S is pinned before the click" key))
+          (when (or (eq w (selected-window)) (= pos (with-current-buffer buffer (point))))
+            (error "premise: the transcript is selected, or the panel buffer's point is the step's"))
           (drgnx-uitest-run (drgnx-uitest-click-events (alist-get 'pin targets)))
           (redisplay t)
           (unless (member key (funcall pins))

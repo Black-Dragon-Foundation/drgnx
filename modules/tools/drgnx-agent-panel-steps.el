@@ -39,6 +39,7 @@
 (declare-function drgnx-agent-panel-always "drgnx-agent-panel-cards")
 (declare-function drgnx-agent-panel-reject "drgnx-agent-panel-cards")
 (declare-function drgnx-wb-area-window "drgnx-area" (area &optional frame))
+(declare-function drgnx-agent-panel--main-of "drgnx-agent-panel-composer")
 
 (defface drgnx-agent-panel-lens '((t :inherit (drgnx-ui-caption drgnx-text-muted drgnx-surface-gap)
                                      :box (:line-width (2 . 8) :style flat-button)))
@@ -67,10 +68,15 @@
 
 (defun drgnx-agent-panel--pin-from (window)
   "The pin button clicked in WINDOW: pin the step or card at the transcript's point.  In a companion (the header
-window above the transcript) the transcript is its area's main window, whose point and buffer the pin reads."
-  (let ((tw (if-let* (((window-parameter window 'drgnx-area-part)) (area (window-parameter window 'drgnx-role)))
-                (drgnx-wb-area-window area (window-frame window))
-              window)))
+window above the transcript) the transcript is its area's main window, whose point and buffer (the panel or its twin
+of the frame's display class) the pin reads; the pin itself goes to the panel (`drgnx-agent-panel-pin').  No
+transcript window, or one of another chat, is a user error."
+  (let* ((main (drgnx-agent-panel--main-of (window-buffer window)))
+         (tw (if-let* (((window-parameter window 'drgnx-area-part)) (area (window-parameter window 'drgnx-role)))
+                 (drgnx-wb-area-window area (window-frame window))
+               window)))
+    (unless (and main (window-live-p tw) (eq main (drgnx-agent-panel--main-of (window-buffer tw))))
+      (user-error "No transcript of this chat under its header to pin from"))
     (with-current-buffer (window-buffer tw)
       (save-excursion
         (goto-char (window-point tw))

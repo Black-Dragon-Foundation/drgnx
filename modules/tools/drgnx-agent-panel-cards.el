@@ -20,6 +20,7 @@
 
 (declare-function drgnx-agent-panel--send-look "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--key-at "drgnx-agent-panel")
+(declare-function drgnx-agent-panel--main-of "drgnx-agent-panel-composer")
 (declare-function drgnx-agent-panel-explain-note-always "drgnx-agent-panel-explain")
 (defvar drgnx-agent-panel--session)
 (defvar drgnx-agent-panel--snap)
@@ -181,15 +182,29 @@ On a paired chat's ledger line: take that hunk back through the edit history, ke
   "Pin the card or step at point under the strip; again to unpin it.  A pinned card is the hub's row: its text goes
 to the hub with the look (`agents/panel/look' `pins'), which builds the card."
   (interactive)
+  (let ((main (or (drgnx-agent-panel--main-of (current-buffer)) (current-buffer))))
+    (drgnx-agent-panel--pin-toggle main (drgnx-agent-panel--pin-at main))))
+
+(defun drgnx-agent-panel--pin-at (main)
+  "What a pin at point does on the panel MAIN (point in MAIN, its twin or a companion): (:unpin . N) on the Nth pinned
+card, else (KEY . TEXT) of the card or step here; a user error on anything else."
   (let ((n (get-text-property (point) 'drgnx-agent-panel-pin)))
-    (if (integerp n)
-        (setq drgnx-agent-panel--pins (append (seq-take drgnx-agent-panel--pins n) (nthcdr (1+ n) drgnx-agent-panel--pins)))
+    (if (integerp n) (cons :unpin n)
       (let* ((card (drgnx-agent-panel-cards--card-here))
-             (key (if card (cons :card card) (drgnx-agent-panel--key-at))) (text (and key (drgnx-agent-panel--pin-text key))))
+             (key (if card (cons :card card) (drgnx-agent-panel--key-at)))
+             (text (and key (with-current-buffer main (drgnx-agent-panel--pin-text key)))))
         (unless text (user-error "Point is not on something to pin"))
-        (if (assoc key drgnx-agent-panel--pins)
-            (setq drgnx-agent-panel--pins (assoc-delete-all key drgnx-agent-panel--pins))
-          (setq drgnx-agent-panel--pins (append drgnx-agent-panel--pins (list (cons key text)))))))
+        (cons key text)))))
+
+(defun drgnx-agent-panel--pin-toggle (main what)
+  "Pin or unpin WHAT (`drgnx-agent-panel--pin-at''s) on the panel MAIN itself, whose state its twins and companions
+take before their next command, and tell the hub."
+  (with-current-buffer main
+    (setq drgnx-agent-panel--pins
+          (cond ((eq (car what) :unpin)
+                 (append (seq-take drgnx-agent-panel--pins (cdr what)) (nthcdr (1+ (cdr what)) drgnx-agent-panel--pins)))
+                ((assoc (car what) drgnx-agent-panel--pins) (assoc-delete-all (car what) drgnx-agent-panel--pins))
+                (t (append drgnx-agent-panel--pins (list what)))))
     (drgnx-agent-panel--send-look)))
 
 (defun drgnx-agent-panel-ledger ()

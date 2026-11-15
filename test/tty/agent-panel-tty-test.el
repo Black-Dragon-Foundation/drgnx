@@ -238,4 +238,91 @@ transcript are views of the hub in its own class, neither stale, and each header
         (drgnx-ui-stop (plist-get gui :name))
         (delete-directory root t)))))
 
+;; The header's pin in a terminal frame beside a graphical one: there the transcript is the panel's twin of the
+;; terminal's class, and the pin goes to the panel itself (the twin takes the panel's state at its next command, so a
+;; pin left on the twin alone is lost).
+
+(ert-deftest drgnx-tty-agent-panel/the-headers-pin-in-a-terminal-frame-reaches-the-panel ()
+  "In an `emacsclient -t' frame beside a graphical frame, the header's pin pins the step at the twin transcript's
+point on the panel's own state, and it stays pinned through a command in the twin."
+  (skip-unless (executable-find "mutter"))
+  (let ((bin (getenv "DRGNX_RATATOSKR_BIN")))
+    (skip-unless (and bin (file-executable-p bin)))
+    (let* ((root (make-temp-file "/tmp/dgap" t))
+           (process-environment (cons (concat "DRGNX_UI_STATE=" root) process-environment))
+           (gui (drgnx-ui-start "drgnx" nil 60 t)) (tty nil)
+           (gui-frame '(seq-find (lambda (f) (and (display-graphic-p f) (not (frame-parent f)))) (frame-list)))
+           (tty-frame '(seq-find (lambda (f) (and (not (display-graphic-p f)) (not (frame-parent f))
+                                                  (frame-parameter f 'client)))
+                                 (frame-list))))
+      (unwind-protect
+          (progn
+            (should (eql 0 (plist-get (drgnx-ui-new-frame gui) :exit)))
+            (setq tty (drgnx-tty-session-start
+                       :size "120x40"
+                       :command (format "%s -a false -t -s %s; echo \"[emacsclient exited $?]\"; sh"
+                                        (drgnx-ui--emacsclient) (shell-quote-argument (plist-get gui :socket)))))
+            (drgnx-tty-session-wait gui `(and ,tty-frame t) 30)
+            (should (drgnx-tty-session-eval gui `(with-selected-frame ,gui-frame ,drgnx-tty-agent-panel-test--helpers)))
+            (drgnx-tty-session-eval
+             gui `(with-selected-frame ,gui-frame
+                    (load (expand-file-name "test/fixtures/panel-replay-fixture" drgnx-dir) nil t)
+                    (setq drgnx-panel-replay-prefix 3)
+                    (condition-case e (setq drgnx-tty-ap--panel (drgnx-panel-replay-up ,bin))
+                      (error (setq drgnx-tty-ap--err (format "%S" e))))
+                    t)
+             180)
+            (should-not (drgnx-tty-session-eval gui 'drgnx-tty-ap--err))
+            (drgnx-tty-session-eval
+             gui `(with-selected-frame ,tty-frame
+                    (drgnx-agent-panel-open (buffer-local-value 'drgnx-agent-panel--session drgnx-tty-ap--panel))
+                    (drgnx-view-env-update (drgnx-view-patch-view (buffer-local-value 'drgnx-view-patch drgnx-tty-ap--panel)))
+                    t))
+            (drgnx-tty-session-wait gui `(drgnx-tty-ap--ready ,gui-frame) 60)
+            (drgnx-tty-session-wait gui `(drgnx-tty-ap--ready ,tty-frame) 60)
+            ;; in the terminal frame: the transcript is a twin; its window's point on its second step, then the
+            ;; header's pin
+            (let ((key (drgnx-tty-session-eval
+                        gui `(let* ((parts (drgnx-tty-ap--area ,tty-frame))
+                                    (hw (get-buffer-window (plist-get (nth 0 parts) :buffer) ,tty-frame))
+                                    (tw (get-buffer-window (plist-get (nth 1 parts) :buffer) ,tty-frame))
+                                    (twin (window-buffer tw)) (pos nil) (seen nil))
+                               (unless (eq twin drgnx-tty-ap--panel)
+                                 (with-current-buffer twin
+                                   (setq pos (point-min))
+                                   (while (and pos (< pos (point-max)) (< (length seen) 2))
+                                     (let ((e (get-text-property pos 'drgnx-agent-panel-entry)))
+                                       (when (and e (not (memq e seen))) (push e seen)))
+                                     (when (< (length seen) 2)
+                                       (setq pos (next-single-property-change pos 'drgnx-agent-panel-entry nil (point-max))))))
+                                 (when (= 2 (length seen))
+                                   ;; the panel holds its own pins (as after a pin and an unpin in the graphical
+                                   ;; frame): the value the twin takes before its next command
+                                   (with-current-buffer drgnx-tty-ap--panel (setq drgnx-agent-panel--pins nil))
+                                   (set-window-point tw pos)
+                                   (drgnx-agent-panel--pin-from hw)
+                                   (list :e (car seen))))))))
+              (should key)
+              ;; the pin is the panel's at once, not the twin's alone
+              (should (drgnx-tty-session-eval
+                       gui `(and (member ',key (mapcar #'car (buffer-local-value 'drgnx-agent-panel--pins
+                                                                                 drgnx-tty-ap--panel)))
+                                 t)))
+              ;; a command in the twin's window (the twin takes the panel's state again)
+              (should (drgnx-tty-session-eval
+                       gui `(with-selected-frame ,tty-frame
+                              (let ((w (get-buffer-window (plist-get (nth 1 (drgnx-tty-ap--area ,tty-frame)) :buffer)
+                                                          ,tty-frame)))
+                                (and w (select-window w) t)))))
+              (drgnx-tty-session-key tty "C-l" 'legacy)
+              (drgnx-tty-session-wait
+               gui `(let ((twin (get-buffer (plist-get (nth 1 (drgnx-tty-ap--area ,tty-frame)) :buffer))))
+                      (and (member ',key (mapcar #'car (buffer-local-value 'drgnx-agent-panel--pins drgnx-tty-ap--panel)))
+                           (member ',key (mapcar #'car (buffer-local-value 'drgnx-agent-panel--pins twin)))))
+               10)))
+        (ignore-errors (drgnx-tty-session-eval gui '(progn (drgnx-panel-replay-down) t) 30))
+        (when tty (drgnx-tty-session-stop tty))
+        (drgnx-ui-stop (plist-get gui :name))
+        (delete-directory root t)))))
+
 ;;; agent-panel-tty-test.el ends here

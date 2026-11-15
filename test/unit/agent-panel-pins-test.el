@@ -72,5 +72,84 @@ carries `drgnx-agent-panel-pin'), it goes; what is not a step or a card cannot b
       (drgnx-agent-panel-ledger)
       (should (eq :false (plist-get (drgnx-agent-panel--look-params) :ledger_open))))))
 
+;;; the header's pin button (`drgnx-agent-panel--pin-from'): it pins at the point of the transcript under the header,
+;;; on the header's own panel, and nowhere else
+
+(defvar drgnx-agent-companion--main)
+(declare-function drgnx-agent-panel--pin-from "drgnx-agent-panel-steps")
+
+(defun drgnx-agent-panel-pins-test--steps (buffer)
+  "Give BUFFER, a panel, two steps and the hub's rows for them; point on the second."
+  (with-current-buffer buffer
+    (drgnx-agent-panel--take-entries
+     (list (list 0 (list :type "tool" :id "t1" :title "Read the spec" :kind "read" :status "completed"))
+           (list 1 (list :type "tool" :id "t2" :title "Run the tests" :kind "execute" :status "completed"))))
+    (let ((inhibit-read-only t))
+      (erase-buffer)
+      (insert (propertize "  ● Read the spec\n" 'drgnx-agent-panel-entry 0)
+              (propertize "  ● Run the tests\n" 'drgnx-agent-panel-entry 1)))
+    (goto-char (point-min))
+    (forward-line 1)))
+
+(defmacro drgnx-agent-panel-pins-test--header (vars &rest body)
+  "BODY with VARS (HEADER-WINDOW HEADER) bound: a window split off the selected one, the `above' companion of the
+right area, showing HEADER, a buffer whose panel is the current `buf'."
+  (declare (indent 1))
+  `(let* ((,(nth 1 vars) (generate-new-buffer " pin header"))
+          (,(car vars) (split-window (selected-window) nil 'above)))
+     (unwind-protect
+         (progn
+           (with-current-buffer ,(nth 1 vars) (setq-local drgnx-agent-companion--main buf))
+           (set-window-buffer ,(car vars) ,(nth 1 vars))
+           (set-window-parameter ,(car vars) 'drgnx-role 'right)
+           (set-window-parameter ,(car vars) 'drgnx-area-part 'above)
+           ,@body)
+       (when (window-live-p ,(car vars)) (delete-window ,(car vars)))
+       (kill-buffer ,(nth 1 vars)))))
+
+(ert-deftest drgnx-agent-panel/the-headers-pin-wants-its-transcript ()
+  "With no transcript window under the header (its area has no main window on the frame), the header's pin is a
+user error and pins nothing: not the step at the point of whatever window is selected."
+  (drgnx-agent-panel-pins-test--with
+    (drgnx-agent-panel-pins-test--steps buf)
+    (set-window-buffer (selected-window) buf)
+    (set-window-point (selected-window) (with-current-buffer buf (point)))
+    (drgnx-agent-panel-pins-test--header (hw _h)
+      (cl-letf (((symbol-function 'drgnx-wb-area-window) (lambda (&rest _) nil)))
+        (should-error (drgnx-agent-panel--pin-from hw) :type 'user-error))
+      (should-not (buffer-local-value 'drgnx-agent-panel--pins buf)))))
+
+(ert-deftest drgnx-agent-panel/the-headers-pin-is-its-own-panels ()
+  "When the area's main window shows another chat's panel, the header's pin is a user error and pins in neither."
+  (drgnx-agent-panel-pins-test--with
+    (let ((other (drgnx-agent-panel-buffer "s2")))
+      (unwind-protect
+          (progn
+            (drgnx-agent-panel-pins-test--steps buf)
+            (drgnx-agent-panel-pins-test--steps other)
+            (set-window-buffer (selected-window) other)
+            (set-window-point (selected-window) (with-current-buffer other (point)))
+            (drgnx-agent-panel-pins-test--header (hw _h)
+              (let ((tw (selected-window)))
+                (cl-letf (((symbol-function 'drgnx-wb-area-window) (lambda (&rest _) tw)))
+                  (should-error (drgnx-agent-panel--pin-from hw) :type 'user-error)))
+              (should-not (buffer-local-value 'drgnx-agent-panel--pins buf))
+              (should-not (buffer-local-value 'drgnx-agent-panel--pins other))))
+        (kill-buffer other)))))
+
+(ert-deftest drgnx-agent-panel/the-headers-pin-pins-at-the-transcripts-point ()
+  "The header's pin pins the step at its transcript window's point, not at the panel buffer's own point, on the panel."
+  (drgnx-agent-panel-pins-test--with
+    (drgnx-agent-panel-pins-test--steps buf)
+    (set-window-buffer (selected-window) buf)
+    (let ((tw (selected-window)))
+      (set-window-point tw (with-current-buffer buf (point)))           ; the second step
+      (drgnx-agent-panel-pins-test--header (hw _h)
+        (select-window hw)                                              ; the transcript is not selected
+        (with-current-buffer buf (goto-char (point-min)))              ; the buffer's own point on the first step
+        (cl-letf (((symbol-function 'drgnx-wb-area-window) (lambda (&rest _) tw)))
+          (drgnx-agent-panel--pin-from hw))
+        (should (equal '((:e 1)) (mapcar #'car (buffer-local-value 'drgnx-agent-panel--pins buf))))))))
+
 (provide 'agent-panel-pins-test)
 ;;; agent-panel-pins-test.el ends here

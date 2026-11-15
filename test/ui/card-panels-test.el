@@ -22,11 +22,14 @@
 (require 'drgnx-color)
 (require 'drgnx-faces)
 (load (expand-file-name "modules/ui/drgnx-look" drgnx-card-panels-ui-test--repo) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-card-panels-ui-test--repo) nil t)
 
 (defvar drgnx-look-card)
 (declare-function drgnx-look-cards-apply "drgnx-look")
 (declare-function drgnx-look-cards-clear "drgnx-look")
 (declare-function glitnir-refresh "glitnir")
+(declare-function drgnx-state-mode "drgnx-state" (&optional arg))
+(defvar drgnx-state-mode)
 
 (defmacro drgnx-card-panels-ui-test--with-explorer (&rest body)
   "BODY with a one-section dock showing, cards applied, and the picture presented.  Everything undone after."
@@ -247,42 +250,48 @@ divider (#9f9f9f stripes): the margin, the dock's cut corner and the editor's ar
 
 (ert-deftest drgnx-ui-card-panels/focused-tile-ring-is-accent ()
   "With two editor groups the selected one's card ring is the accent, the other's and the dock's the border blend;
-with one editor group no card is ringed in the accent (tiling.html, window-dark.html: `drgnx-look--card-tiled-p').
-A ring pixel just outside the card's left edge, halfway down.  Pattern D (read after `drgnx-test-wait-presented')."
-  (drgnx-card-panels-ui-test--with-explorer
-    (let* ((dock (car (drgnx-wb--dock-windows))) (editor (drgnx-card-panels-ui-test--editor))
-           (ring-pixel (lambda (w)
-                         (let ((r (drgnx-card-panels-ui-test--rect w)))
-                           (drgnx-uitest-pixel (drgnx-uitest-snapshot) (1- (nth 0 r)) (/ (+ (nth 1 r) (nth 3 r)) 2)))))
-           (accent (face-foreground 'drgnx-accent nil t))
-           (blend (drgnx-color-over (face-foreground 'drgnx-border nil t)
-                                    (face-background 'drgnx-surface-gap nil t) 0.6))
-           (other nil))
-      ;; the premise: the accent and the blend are told apart at this tolerance
-      (should-not (drgnx-card-panels-ui-test--near-p (drgnx-card-panels-ui-test--rgb accent) blend))
-      ;; one editor group: selected, and not ringed in the accent
-      (select-window editor)
-      (drgnx-test-wait-presented)
-      (should-not (drgnx-card-panels-ui-test--near-p (funcall ring-pixel editor) accent))
-      (unwind-protect
-          (progn
-            ;; two editor groups: the selected one is ringed in the accent, the other and the dock in the blend
-            ;; (the cards are applied by hand after each change, as the macro does: ui/look is off in this session)
-            (setq other (split-window editor nil 'right))
-            (select-window editor)
-            (drgnx-look-cards-apply)
-            (drgnx-test-wait-presented)
-            (should (drgnx-card-panels-ui-test--near-p (funcall ring-pixel editor) accent))
-            (should (drgnx-card-panels-ui-test--near-p (funcall ring-pixel other) blend))
-            (should (drgnx-card-panels-ui-test--near-p (funcall ring-pixel dock) blend))
-            ;; the selection moves: so does the accent
-            (select-window other)
-            (drgnx-look-cards-apply)
-            (drgnx-test-wait-presented)
-            (should (drgnx-card-panels-ui-test--near-p (funcall ring-pixel other) accent))
-            (should (drgnx-card-panels-ui-test--near-p (funcall ring-pixel editor) blend)))
-        (when (window-live-p other) (delete-window other))
-        (drgnx-test-wait-presented)))))
+with one editor group its ring is the blend, the hairline every card has (tiling.html, window-dark.html:
+`drgnx-look--card-tiled-p').  ui/look runs: the rings follow the selection and the split through the store's
+`selected-changed' and `windows-changed', nothing applied by hand.  A ring pixel just outside the card's left edge,
+halfway down.  The store runs (`drgnx-state-mode', as the workbench has it).  Pattern D (read after
+`drgnx-test-wait-presented')."
+  (skip-unless (drgnx-uitest-glitnir-p))
+  (let ((state-was (bound-and-true-p drgnx-state-mode)))
+    (drgnx-state-mode 1)
+    (unwind-protect
+        (drgnx-test-with-modules '(ui/look)
+          (drgnx-card-panels-ui-test--with-explorer
+            (let* ((dock (car (drgnx-wb--dock-windows))) (editor (drgnx-card-panels-ui-test--editor))
+                   (ring-pixel (lambda (w)
+                                 (let ((r (drgnx-card-panels-ui-test--rect w)))
+                                   (drgnx-uitest-pixel (drgnx-uitest-snapshot) (1- (nth 0 r)) (/ (+ (nth 1 r) (nth 3 r)) 2)))))
+                   (accent (face-foreground 'drgnx-accent nil t))
+                   (blend (drgnx-color-over (face-foreground 'drgnx-border nil t)
+                                            (face-background 'drgnx-surface-gap nil t) 0.6))
+                   (other nil))
+              ;; the premise: the accent and the blend are told apart at this tolerance
+              (should-not (drgnx-card-panels-ui-test--near-p (drgnx-card-panels-ui-test--rgb accent) blend))
+              ;; one editor group: selected, and ringed in the blend, the hairline (not the accent)
+              (select-window editor)
+              (drgnx-test-wait-presented)
+              (should (drgnx-card-panels-ui-test--near-p (funcall ring-pixel editor) blend))
+              (unwind-protect
+                  (progn
+                    ;; two editor groups: the selected one is ringed in the accent, the other and the dock in the blend
+                    (setq other (split-window editor nil 'right))
+                    (select-window editor)
+                    (drgnx-test-wait-presented)
+                    (should (drgnx-card-panels-ui-test--near-p (funcall ring-pixel editor) accent))
+                    (should (drgnx-card-panels-ui-test--near-p (funcall ring-pixel other) blend))
+                    (should (drgnx-card-panels-ui-test--near-p (funcall ring-pixel dock) blend))
+                    ;; the selection moves: so does the accent
+                    (select-window other)
+                    (drgnx-test-wait-presented)
+                    (should (drgnx-card-panels-ui-test--near-p (funcall ring-pixel other) accent))
+                    (should (drgnx-card-panels-ui-test--near-p (funcall ring-pixel editor) blend)))
+                (when (window-live-p other) (delete-window other))
+                (drgnx-test-wait-presented)))))
+      (drgnx-state-mode (if state-was 1 -1)))))
 
 (ert-deftest drgnx-ui-card-panels/four-themes-cards ()
   "The corner pixel of a card is the gap under each of the four test themes.  Pattern D (read after

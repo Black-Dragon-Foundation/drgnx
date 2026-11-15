@@ -31,7 +31,7 @@
 (defvar drgnx-panel-replay--allocs nil "Objects each update's events made (newest first), while armed.")
 (defvar drgnx-panel-replay--draws nil "kB each draw of the panel made (newest first), while armed.")
 (defvar drgnx-panel-replay--armed nil "Non-nil while the updates are measured.")
-(defvar drgnx-panel-replay--patches 0 "Row patches the session's views took while armed (Lisp's or Sjá's).")
+(defvar drgnx-panel-replay--patches 0 "Row patches the session's transcript view took while armed (Lisp's or Sjá's).")
 
 (declare-function drgnx-agents-mirror-start "drgnx-agents-mirror")
 (declare-function drgnx-agents-send "drgnx-agents")
@@ -178,9 +178,10 @@ The panel inserts the rows the hub builds."
         (push (- (apply #'+ (memory-use-counts)) a0) drgnx-panel-replay--allocs)))))
 
 (defun drgnx-panel-replay--patch (view _kind)
-  "`drgnx-perf-patch-functions': a row patch VIEW took (one parsed in Lisp, or one Sjá applied), while armed."
-  (when (and drgnx-panel-replay--armed (stringp view)
-             (string-search (drgnx-agent-session-remote drgnx-panel-replay--mirror) view))
+  "`drgnx-perf-patch-functions': a row patch VIEW took (one parsed in Lisp, or one Sjá applied), while armed, when VIEW
+is the session's transcript (agent-panel/SESSION; not its header, agent-panel-top/SESSION)."
+  (when (and drgnx-panel-replay--armed
+             (equal view (concat "agent-panel/" (drgnx-agent-session-remote drgnx-panel-replay--mirror))))
     (cl-incf drgnx-panel-replay--patches)))
 
 (defun drgnx-panel-replay--draw (orig buffer &rest args)
@@ -216,7 +217,7 @@ that failed."
 (defun drgnx-panel-replay-measure ()
   "(:alloc STATS :draw_kb STATS :updates N :patches N :entries N :rows N :hub_rows N): `drgnx-panel-replay-measured'
 updates of the stream (at most 40 s), each update's events and each draw of the panel; PATCHES the row patches the
-session's views took (`drgnx-perf-patch-functions': Lisp's or Sjá's), HUB_ROWS the hub's rows it holds at the end.  A
+session's transcript view took (`drgnx-perf-patch-functions': Lisp's or Sjá's), HUB_ROWS the hub's rows it holds at the end.  A
 measure with no draw or no patch measured nothing: an error, as a premise that failed."
   (require 'drgnx-gc)
   (setq drgnx-panel-replay--allocs nil drgnx-panel-replay--draws nil drgnx-panel-replay--patches 0 drgnx-panel-replay--armed t)
