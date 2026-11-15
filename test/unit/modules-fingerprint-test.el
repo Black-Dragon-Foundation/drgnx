@@ -258,6 +258,18 @@ not a hook, so a library that defines one leaks nothing (the census named each n
           (should-not (drgnx-fp-test--whats (drgnx-modules-fingerprint-diff before (drgnx-modules-fingerprint t)))))
       (makunbound 'drgnx-fp-test-quiet-hooks))))
 
+(ert-deftest drgnx-fingerprint/an-autoloaded-prefix-map-is-not-loaded-by-the-scan ()
+  ;; global-map binds `kmacro-keymap' and `2C-command', autoloaded keymaps: a scan that walked them loaded their
+  ;; libraries, and the next scan showed the features as a leak
+  (autoload 'drgnx-fp-test-auto-map "drgnx-fp-test-no-such-library" nil nil 'keymap)
+  (unwind-protect
+      (let ((map (make-sparse-keymap)))
+        (define-key map (kbd "C-c a") 'drgnx-fp-test-auto-map)
+        (should (equal (list (cons (list 'fp-test "C-c a") 'drgnx-fp-test-auto-map))
+                       (mapcar (lambda (i) (cons (car i) (cdr i))) (drgnx-modules-fingerprint--keymap-items 'fp-test map))))
+        (should (autoloadp (symbol-function 'drgnx-fp-test-auto-map))))
+    (fmakunbound 'drgnx-fp-test-auto-map)))
+
 (ert-deftest drgnx-fingerprint/a-dotted-list-in-a-hook-variable-does-not-stop-the-scan ()
   (let ((before (drgnx-modules-fingerprint t)))
     (unwind-protect
@@ -342,7 +354,9 @@ An absolute bound holds for one obarray, so it is measured in an Emacs of its ow
 
 (ert-deftest drgnx-fingerprint/the-full-scan-allocates-what-it-did ()
   ;; A scan that reads every hook twice, or builds a list per hook, passes the bound only by shrinking the hooks.
-  (should (<= (drgnx-fingerprint-test--child-alloc '(drgnx-modules-fingerprint t)) 111557)))
+  ;; 111557 (1.25 x the 89245 measured then) plus the 27681 the session items (`drgnx-modules-fingerprint--session-items':
+  ;; the global map's bindings, frame, window, faces, themes, line formats) measured when they came.
+  (should (<= (drgnx-fingerprint-test--child-alloc '(drgnx-modules-fingerprint t)) 139238)))
 
 (ert-deftest drgnx-fingerprint/the-first-scan-of-drgnx-symbols-allocates-what-it-did ()
   ;; One `apropos-internal' over the obarray.
