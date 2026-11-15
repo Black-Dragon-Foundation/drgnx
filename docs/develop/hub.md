@@ -2503,7 +2503,10 @@ with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an est
   roles key, its text and its runs from its start), which draws it in the view's buffer with those faces
   (`drgnx-view-env-measure`) and answers with `view/measured`; the rows are built again, and that width decides from
   then on. The text asked is the segment's without its images' and spaces' placeholders (their widths are known and
-  added), its runs moved to match.
+  added), its runs moved to match. A builder's own cut (`fit::fit_in`: a Flow card's footer, a Run and Debug frame)
+  asks the same when its sum comes within twice the slack of its budget, either side (a 90-char caption summed 9 px
+  wider than Emacs drew it kerned, and was cut with room to spare); a face with a box is left to the row's fit. A text
+  no wider than the ellipsis is never cut (the cut would draw no narrower).
 
 - **Per grapheme cluster.** A cut never splits a cluster (a letter and its combining marks, an emoji ZWJ sequence, a
   flag). In a row, a cluster of several chars is asked of the editor whole (`view-glyphs`' `measure`: its roles key,

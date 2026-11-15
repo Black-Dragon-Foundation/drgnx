@@ -441,3 +441,15 @@ fn a_joined_cluster_is_measured_by_the_editor() {
     assert!(fitted(&mut row, 95, &s));
     assert!(row.text.ends_with('…'), "{}", row.text);
 }
+
+/// [D] A text no wider than the ellipsis is never cut to it: the cut would draw no narrower and lose the text (a
+/// debug value `8` drawn as `…` in a narrow Locals row).
+#[test]
+fn a_text_no_wider_than_the_ellipsis_stays_whole() {
+    let s = set(14.0);
+    let ell = fit::width(&s, "code", &ELLIPSIS.to_string());
+    assert!(fit::width(&s, "code", "8") <= ell);
+    assert_eq!(fit::fit(&s, "code", "8", SLACK + ell / 2.0), "8");
+    // wider than the ellipsis: cut as before
+    assert_eq!(fit::fit(&s, "code", "88", SLACK + ell / 2.0), "…");
+}
