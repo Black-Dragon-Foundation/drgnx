@@ -782,44 +782,40 @@ else what it shows."
 
 (defun drgnx-look-scene--frame-height (frame height)
   "Make FRAME's text HEIGHT px tall (`frame-text-height', which `set-frame-size' sets) and wait (2 s at most) until the
-compositor gave it that height; an error naming the height it has otherwise.  A fullscreen frame keeps its output's
-size, so the scene's frame leaves fullscreen first (`drgnx-look-scene--frame-restore' puts it back)."
-  (when (frame-parameter frame 'fullscreen) (set-frame-parameter frame 'fullscreen nil))
+compositor gave it that height; an error naming the height it has otherwise.  The scenes' frame is fullscreen, and a
+fullscreen frame keeps its output's size: this error is what the scenes' session says until the harness can resize
+its output.  The frame does not leave fullscreen for it: that moves the docks and spoils the picture."
   (set-frame-size frame (frame-text-width frame) height t)
   (let ((end (+ (float-time) 2)))
     (while (and (> (abs (- (frame-text-height frame) height)) (frame-char-height frame)) (< (float-time) end))
       (accept-process-output nil 0.02)
       (redisplay t)))
   (when (> (abs (- (frame-text-height frame) height)) (frame-char-height frame))
-    (error "the frame's text did not take the height %d px: it is %d px" height (frame-text-height frame)))
+    (error "the frame's text did not take the height %d px: it is %d px (fullscreen %S)" height
+           (frame-text-height frame) (frame-parameter frame 'fullscreen)))
   (redisplay t) (accept-process-output nil 0.05) (redisplay t))
 
-(defun drgnx-look-scene--frame-restore (frame size fullscreen)
-  "FRAME back to its text SIZE (WIDTH HEIGHT) and its FULLSCREEN parameter, waiting (2 s at most) for the size."
-  (if fullscreen (set-frame-parameter frame 'fullscreen fullscreen) (apply #'set-frame-size frame (append size '(t))))
-  (let ((end (+ (float-time) 2)))
-    (while (and (not (equal (list (frame-text-width frame) (frame-text-height frame)) size)) (< (float-time) end))
-      (accept-process-output nil 0.02)
-      (redisplay t)))
+(defun drgnx-look-scene--frame-restore (frame size)
+  "FRAME back to its text SIZE (WIDTH HEIGHT)."
+  (apply #'set-frame-size frame (append size '(t)))
   (redisplay t) (accept-process-output nil 0.05) (redisplay t))
 
 (defun drgnx-look-scene--panel-docks-resize (buffer)
   "Shrink the frame by 250 px and grow it back: after each the transcript, point at its end, shows its end at its
 bottom, and the header and composer windows are fitted."
   (pcase-let* ((`(,h ,w ,c) (drgnx-look-scene--docks buffer))
-               (frame (window-frame w)) (size (list (frame-text-width frame) (frame-text-height frame)))
-               (fullscreen (frame-parameter frame 'fullscreen)))
+               (frame (window-frame w)) (size (list (frame-text-width frame) (frame-text-height frame))))
     (select-window w)
     (with-current-buffer buffer (goto-char (point-max)))
     (set-window-point w (with-current-buffer buffer (point-max)))
     (unwind-protect
         (dolist (step '(shrunk back))
           (if (eq step 'shrunk) (drgnx-look-scene--frame-height frame (- (cadr size) 250))
-            (drgnx-look-scene--frame-restore frame size fullscreen))
+            (drgnx-look-scene--frame-restore frame size))
           (when-let* ((e (or (drgnx-look-scene--end-at-bottom-error buffer w)
                              (drgnx-look-scene--fit-error h "header") (drgnx-look-scene--fit-error c "composer"))))
             (error "with the frame %s (its text %d px): %s" step (frame-text-height frame) e)))
-      (drgnx-look-scene--frame-restore frame size fullscreen))))
+      (drgnx-look-scene--frame-restore frame size))))
 
 (defun drgnx-look-scene--panel-short (buffer)
   "The frame shrunk until the transcript's window is two lines tall (the area: the header, two lines and the composer):
@@ -827,7 +823,6 @@ the transcript, point at its end, still shows its end, and the header still hold
 back after."
   (pcase-let* ((`(,h ,w ,_) (drgnx-look-scene--docks buffer))
                (frame (window-frame w)) (size (list (frame-text-width frame) (frame-text-height frame)))
-               (fullscreen (frame-parameter frame 'fullscreen))
                (lines (* 2 (window-default-line-height w))))
     (select-window w)
     (with-current-buffer buffer (goto-char (point-max)))
@@ -844,7 +839,7 @@ back after."
           (unless (drgnx-look-scene--has-row-p (window-buffer h) "p:head")
             (error "the short area's header window has no `p:head'"))
           (when-let* ((e (drgnx-look-scene--fit-error h "header"))) (error "in the short area: %s" e)))
-      (drgnx-look-scene--frame-restore frame size fullscreen))))
+      (drgnx-look-scene--frame-restore frame size))))
 
 (defun drgnx-look-scene-agent-panel ()
   (drgnx-look-scene--theme 'drgnx-dark)

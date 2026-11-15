@@ -616,6 +616,10 @@ How it works:
     end at its bottom, and the header and composer are fitted;
   - **short:** the frame shrunk until the transcript is two lines tall; it still shows its end, and the header still
     holds `p:head`, fitted;
+
+    both first check that the frame took the height (its text height, within a line). The scenes' frame is
+    fullscreen and keeps its output's size, so today both report "the frame's text did not take the height";
+    leaving fullscreen for them would move the docks and spoil the picture;
   - **clicks:** the transcript scrolled up a page, then the header window's pin button, a lens segment and a strip pill
     clicked through the event loop, each running its command; the header does not move. The picture is this
     scrolled panel.
