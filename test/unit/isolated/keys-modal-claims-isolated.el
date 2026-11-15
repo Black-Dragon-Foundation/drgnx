@@ -56,7 +56,7 @@ started by an apply (the after-apply functions are off)."
 
 (defun drgnx-keys-claims-evil-test--resolve (layers &rest args)
   (apply #'drgnx-keys-resolve :commands (drgnx-commands-all) :layers layers
-         :defaults drgnx-keys--defaults (append args (list :profiles drgnx-keys-claims-evil-test--profiles))))
+         (append args (list :profiles drgnx-keys-claims-evil-test--profiles))))
 
 (defun drgnx-keys-claims-evil-test--leaves (map &optional prefix)
   "Every key sequence under MAP (prefix maps followed, three events deep at most), as vectors."
@@ -111,10 +111,10 @@ started by an apply (the after-apply functions are off)."
       (cl-flet ((claim-on (r key) (seq-find (lambda (c) (and (equal (plist-get c :key) key) (plist-get c :states)))
                                             (plist-get r :conflicts))))
         (let ((with (drgnx-keys-resolve :commands (drgnx-commands-all) :profiles bare
-                                        :layers drgnx-keys-claims-evil-test--mixed :defaults drgnx-keys--defaults
+                                        :layers drgnx-keys-claims-evil-test--mixed
                                         :snapshots drgnx-keys-modal-snapshots))
               (without (drgnx-keys-resolve :commands (drgnx-commands-all) :profiles bare
-                                           :layers drgnx-keys-claims-evil-test--mixed :defaults drgnx-keys--defaults)))
+                                           :layers drgnx-keys-claims-evil-test--mixed)))
           (should (equal (plist-get (claim-on with "C-b") :states) '(normal visual motion)))
           (should-not (claim-on without "C-b")))))
     ;; A key the hand list lacks (C-^, evil-buffer in the motion map), bound by a lower layer: a state conflict.
@@ -126,7 +126,7 @@ started by an apply (the after-apply functions are off)."
                                                                         '(test-caret :none "test")))))))
                              drgnx-keys-claims-evil-test--profiles))
            (r (drgnx-keys-resolve :commands (drgnx-commands-all) :profiles profiles
-                                  :layers drgnx-keys-claims-evil-test--mixed :defaults drgnx-keys--defaults
+                                  :layers drgnx-keys-claims-evil-test--mixed
                                   :snapshots drgnx-keys-modal-snapshots))
            (c (seq-find (lambda (c) (equal (plist-get c :key) "C-^")) (plist-get r :conflicts))))
       (should (seq-find (lambda (b) (and (eq (plist-get b :id) 'test-caret) (equal (plist-get b :key) "C-^")))

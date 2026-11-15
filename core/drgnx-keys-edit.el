@@ -283,7 +283,7 @@ terminal, not already another chord's fallback in `drgnx-keys-tty-fallback'."
                             (drgnx-tty-fallback--overrides))))
     (if (not (seq-some (lambda (c) (drgnx-keys-edit--same-key-p c chord)) needed))
         (format "%s needs no fallback: the profile has no such key, or a plain terminal sends it" chord)
-      (drgnx-tty-fallback--why-not key (or (bound-and-true-p drgnx-keys--defaults) global-map) keys takes taken))))
+      (drgnx-tty-fallback--why-not key (drgnx-tty-fallback-global-map) keys takes taken))))
 
 ;;;###autoload
 (defun drgnx-keys-edit-set-tty-fallback (chord key)

@@ -541,11 +541,45 @@ loaded again, the keys it bound the last time and not this time go, so a key you
 profile's again; if the file stops with an error, its keys stay as they were. Keys you bound from the keyboard stay
 until you take them away.
 
+The sheet says one thing for each key, and it is what `key-binding` answers: yours is the top layer of the resolver,
+so a key of yours (or a key under a command of yours, `C-k x` when `C-k` is yours) is one line, never a profile key
+shown winning while yours wins. A lambda or closure is printed as `a lambda`, never its body. A key a minor mode's map
+takes over in a buffer (tab-bar-mode's `C-<tab>`) is not covered yet.
+
+Keys you bound from the keyboard, `M-:` or `emacsclient --eval` stay for the session, as in any Emacs; they are never
+written to a file. **Keyboard Shortcuts** lists your keys on their
+command's line as `yours (config.el)` or `yours (this session)`; they are read-only there (Change refuses them, a new
+key cannot take theirs, Reset says it cannot remove a line of `config.el`): edit the file. The terminal fallback
+(Alt+Shift keys) and that page treat your keys as taken, like Emacs's own.
+
+Examples, all yours:
+
+```elisp
+;; config.el
+(keymap-global-set "C-c t" #'my-toggle)             ; a key of yours
+(keymap-global-set "C-o" #'ignore)                  ; over the profile's Open File
+(keymap-global-set "F9" nil)                        ; the key does nothing, whatever the profile binds
+(with-eval-after-load 'org (keymap-global-set "C-c o" #'org-capture))
+(use-package magit :bind ("C-c g" . magit-status))
+```
+
+and from the keyboard: `M-x global-set-key`, `M-:`, `kmacro-bind-to-key`, `emacsclient --eval`.
+
 What is not yours: keys a package binds when it loads (its `with-eval-after-load` bodies too, even when your command
 loaded it), and keys bound later by a hook, a timer or a process's output handler, even one you wrote (a hook runs
 outside your file and your command; bind such keys at the top of `config.el` instead). A timer counts for as long as
 it runs: if a timer of yours asks a question (`y-or-n-p`) and you bind a key with `M-:` while it waits, that key is
-not yours either. A package's
+not yours either.
+
+Wrap such a write in `drgnx-keys-mine` to make it yours (in `config.el` its keys go with a reload of the file, like
+the file's own); a package the wrapped code loads still binds as a package:
+
+```elisp
+(add-hook 'my-mode-hook
+          (lambda () (drgnx-keys-mine (keymap-global-set "C-c m" #'my-mode-command))))
+```
+
+A package's
 global key stays below the profile's. Two cases work as in any Emacs: a key a package (or a hook) binds under a
 prefix the profile owns, where Emacs binds a command (`C-k x` while Emacs's `C-k` is `kill-line`), fails with
 "starts with non-prefix key"; and a global `[remap]` that is not yours still turns the profile's command into its own.
@@ -662,7 +696,9 @@ keys) and `global-map`, which drgnx never writes. Nidhogg's `nidhogg-define-key-
 `define-key`, from Lisp or native code, and sends a write into these layers to yours or to `global-map`
 (`drgnx doctor`'s `keys-redirect` row says whether this Emacs has it). In mode maps drgnx still binds in place and
 remembers what each binding replaced, so the next switch restores the mode's own bindings first (and leaves alone a
-binding someone else changed since). The active keys of each command are in its `bound` slot, which every surface
+binding someone else changed since). A few Emacs functions read the variable `global-map` as "the global binding"
+(comint's `C-d` and mouse paste, message's `TAB`, the tutorial's changed keys): drgnx runs them with it bound to the
+composed map, so the profile's keys count there (`drgnx-keys--global-readers`). The active keys of each command are in its `bound` slot, which every surface
 reads. Tests: `test/unit/core-keys-test.el` (resolution, switching, keys.eld, surfaces) and
 `test/live/drgnx-keys-test.el` (real key presses in a headless session).
 

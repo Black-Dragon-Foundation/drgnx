@@ -22,7 +22,8 @@
 (require 'subr-x)
 (require 'drgnx-tty)
 (defvar drgnx-keys-last)
-(defvar drgnx-keys--defaults)
+(defvar drgnx-keys-user-map)
+(declare-function drgnx-keys-settle "drgnx-keys")
 (defvar drgnx-keys-problems)
 (declare-function drgnx-keys-read-user "drgnx-keys")
 (declare-function drgnx-tty-fallback-apply "drgnx-tty-fallback-layer")
@@ -247,13 +248,23 @@ terminals' stay.  Never signals."
   (when (fboundp 'drgnx-keys-read-user)
     (let ((drgnx-keys-problems nil)) (plist-get (drgnx-keys-read-user) :tty-fallback))))
 
+(defun drgnx-tty-fallback-global-map ()
+  "Emacs's own global bindings as they are now, for the taken sets of the fallback and of the Keyboard Shortcuts
+editor: your keys (`drgnx-keys-user-map') over `global-map', read live.  The profile's keys are checked on their own
+\(its list of keys), so a message says whose key it is."
+  (if (and (boundp 'drgnx-keys-user-map) (keymapp drgnx-keys-user-map))
+      (make-composed-keymap drgnx-keys-user-map global-map)
+    global-map))
+
 (defun drgnx-tty-fallback-active-table ()
-  "The table (`drgnx-tty-fallback-table') of the active key profile and keys.eld, made once per key apply."
+  "The table (`drgnx-tty-fallback-table') of the active key profile and keys.eld, made once per key apply (a key of
+yours that changed since is applied first, `drgnx-keys-settle': the table is made over the keys as they are)."
+  (when (fboundp 'drgnx-keys-settle) (drgnx-keys-settle))
   (let ((last (bound-and-true-p drgnx-keys-last)))
     (if (and drgnx-tty-fallback--cache (eq (car drgnx-tty-fallback--cache) last) last)
         (cdr drgnx-tty-fallback--cache)
       (let* ((keys (drgnx-tty-fallback--profile-keys))
-             (table (drgnx-tty-fallback-table keys :global (or (bound-and-true-p drgnx-keys--defaults) global-map)
+             (table (drgnx-tty-fallback-table keys :global (drgnx-tty-fallback-global-map)
                                               :profile keys :overrides (drgnx-tty-fallback--overrides))))
         (setq drgnx-tty-fallback--cache (cons last table))
         table))))

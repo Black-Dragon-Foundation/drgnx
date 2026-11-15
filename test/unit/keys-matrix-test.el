@@ -299,6 +299,17 @@ but `global-map' binds to `kill-line', fails as it would in any Emacs; the write
                                  (not (string-match-p " keys over " l))))
                 (drgnx-keys-conflict-lines))))
 
+(defun keys-matrix--verdict-disagreements ()
+  "The sheet's verdicts (`:verdict' of the last apply's conflicts in the global map) that `key-binding' in a plain
+buffer does not answer: (KEY SHEET-SAYS KEY-BINDING-SAYS) each."
+  (let (bad)
+    (dolist (c (plist-get drgnx-keys-last :conflicts))
+      (when-let* ((v (plist-get c :verdict)))
+        (let* ((b (with-temp-buffer (key-binding (key-parse (plist-get c :key)) nil t)))   ; a [remap] is its own row
+               (says (drgnx-keys--def-text (and (not (numberp b)) b))))
+          (unless (equal v says) (push (list (plist-get c :key) v says) bad)))))
+    (nreverse bad)))
+
 (defconst keys-matrix--all-keys
   (append '("C-o" "C-k C-r" "C-k x" "C-k" "C-j" "C-c C-p" "C-x g")
           (mapcar (lambda (s) (format "<remap> <%s>" (nth 2 s))) keys-matrix--slots))
@@ -376,7 +387,8 @@ of yours."
               (unless (eq want got)
                 (push (list round key buffer :want want :got got) problems))))
           (let ((lines (keys-matrix--sheet-lines key)))
-            (when (cdr lines) (push (list round key :sheet-lines lines) problems))))))
+            (when (cdr lines) (push (list round key :sheet-lines lines) problems))))
+        (dolist (d (keys-matrix--verdict-disagreements)) (push (list round :sheet-verdict d) problems))))
     (and problems (list :case c :problems (nreverse problems)))))
 
 (defmacro keys-matrix--with (&rest body)
@@ -415,7 +427,12 @@ of yours."
         (maphash (lambda (k v) (push (cons k v) cells)) tally)
         (message "keys-matrix: %d of %d cases fail; failing cells (slot action how pkg): %S"
                  (length bad) (length cases) (sort cells (lambda (a b) (> (cdr a) (cdr b)))))
-        (ert-fail (list :failing (length bad) :of (length cases) :first (seq-take (nreverse bad) 15)))))))
+        ;; the count by slot, and the cells outside the foreign slot (those are the bugs no known task owns)
+        (let (by-slot)
+          (maphash (lambda (k v) (cl-incf (alist-get (car k) by-slot 0) v)) tally)
+          (ert-fail (list :failing (length bad) :of (length cases) :by-slot (sort by-slot (lambda (a b) (string< (car a) (car b))))
+                          :non-foreign (- (length bad) (or (alist-get 'foreign by-slot) 0))
+                          :first (seq-take (nreverse bad) 15))))))))
 
 ;;;; The tests
 

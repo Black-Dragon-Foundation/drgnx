@@ -265,5 +265,26 @@ sets `kx-returned' when it ends (C-g ends it early)."
       (should-not (seq-filter (lambda (p) (string-search "could not be placed" p))
                               (drgnx-tty-session-eval s 'drgnx-keys-problems))))))
 
+;; The spike's open rows (keymap redesign, T12): keys that stay Emacs's own under the composed global map.
+
+(ert-deftest drgnx-tty-keys/m-x-after-the-ready-barrier ()
+  (drgnx-tty-session-with (s :daemon t :keys 'vscode :size "120x28")
+    (let ((c (drgnx-tty-session-client s)))
+      (drgnx-tty-session-wait-screen c "\\*scratch\\*" 20)
+      (drgnx-tty-session-wait-stages s)
+      (drgnx-tty-session-key c "M-x")
+      (should (equal (drgnx-tty-session-wait s '(minibuffer-prompt)) "M-x ")))))
+
+(ert-deftest drgnx-tty-keys/isearch-keeps-its-own-keys-under-the-composed-map ()
+  ;; the Emacs profile leaves C-s to isearch: it starts, and a typed character goes to the search string
+  (drgnx-tty-session-with (s :daemon t :keys 'emacs :size "120x28")
+    (let ((c (drgnx-tty-session-client s)))
+      (drgnx-tty-session-wait-screen c "\\*scratch\\*" 20)
+      (drgnx-tty-session-wait-stages s)
+      (drgnx-tty-session-key c "C-s")
+      (drgnx-tty-session-wait-screen c "I-search:" 10)
+      (drgnx-tty-session-key c "s")
+      (drgnx-tty-session-wait-screen c "I-search: s" 10))))
+
 (provide 'keys-test)
 ;;; keys-test.el ends here
