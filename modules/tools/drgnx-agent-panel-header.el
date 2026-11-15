@@ -23,6 +23,9 @@
 (declare-function drgnx-agent-panel--companion-sync "drgnx-agent-panel-composer" (main))
 (declare-function drgnx-view-env-register "drgnx-view-env" (view buffer &optional resubscribe headless))
 (declare-function drgnx-view-env-twin "drgnx-view-env" (class prefixes &optional setup))
+(declare-function drgnx-view-env--twins "drgnx-view-env" (view))
+(defvar drgnx-view-patch)
+(defvar drgnx-view-patch-twin-function)
 (declare-function drgnx-wb-area-fit-companions "drgnx-area" (area &optional frame))
 
 (defvar-local drgnx-agent-companion--header nil "In a panel's buffer: its header, once made.")
@@ -54,6 +57,22 @@ panel's mode is defined).")
   "The header's buffer in display CLASS (`drgnx-view-patch-twin-function'): the generic twin of its rows."
   (require 'drgnx-view-env)
   (drgnx-view-env-twin class '("drgnx-agent-panel-") #'drgnx-agent-panel-header--twin-setup))
+
+(defun drgnx-agent-panel-header--for (header buffer)
+  "HEADER as the area shows it above BUFFER, the transcript's buffer in a window: HEADER itself, or, when BUFFER is the
+transcript's twin in another display class (a terminal frame beside a graphical one), HEADER's twin of that class,
+made as the env's routing makes one (`drgnx-view-env--route'), so the area never puts the header's other class there
+for the routing to swap out again."
+  (let ((class (and (drgnx-view-patch-twin-p buffer)
+                    (drgnx-view-patch-class (buffer-local-value 'drgnx-view-patch buffer)))))
+    (if (or (null class) (not (buffer-live-p header))
+            (equal class (drgnx-view-patch-class (buffer-local-value 'drgnx-view-patch header))))
+        header
+      (let ((view (drgnx-view-patch-view (buffer-local-value 'drgnx-view-patch header))))
+        (or (cdr (assoc class (drgnx-view-env--twins view)))
+            (let ((tw (with-current-buffer header (funcall drgnx-view-patch-twin-function class))))
+              (when (buffer-live-p tw) (with-current-buffer tw (setq-local drgnx-view-patch-twin-of header)))
+              (or tw header)))))))
 
 (defun drgnx-agent-panel-header--main-killed ()
   "`kill-buffer-hook' of a panel's buffer: its header goes with it."

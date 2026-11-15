@@ -15,6 +15,12 @@ any Emacs buffer: while point is at its end it keeps the latest step in view, an
 you put it as new steps come in. The header's buttons work whatever the transcript shows. When the strip wraps to more
 lines or the draft grows, its window grows with it, up to 45% of the dock; the transcript gives the room.
 
+Open the panel in a second frame and that frame's right dock gets its own header, transcript and composer on the same
+session: a draft you type in one composer is in the other, and each transcript scrolls on its own. A terminal frame
+draws its own header and transcript for the terminal. Switching the right dock to another tab and back puts the panel
+back where you left it. Opening another session's panel swaps all three. Closing the session's panel closes its header
+and composer with it.
+
 - **Header:** the agent's icon and name, then what it is doing: "Claude · running 6 min", "held by you" (you paused
   it) or "Pair · editing your checkout"; on the right the **watch · review · debug** lens, the preset in force raised, then a pin button (pins the card at
   point; a click leaves point where it is) and **⋯**, a menu of Fork the Chat, Compact the Context, Switch the Model,
