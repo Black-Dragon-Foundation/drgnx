@@ -651,7 +651,7 @@ Both images set `DRGNX_NB_KERNEL_PYTHON=/opt/nb-kernel/bin/python3`, and nothing
 `DRGNX_NB_KERNEL_PYTHON=/opt/nb-kernel/bin/python3`, and the image's `ENV` sets the same. The escape legs' sandbox lane, which runs
 every other ignored row of the crate on runners whose Python is not 3.15, skips `notebook::kernel::tests_live`. The ci-workflows test
 `the-live-notebook-rows-run-in-the-adapter-image-and-nowhere-else` holds the skip, the job's line and variable, the image's `ENV` and
-the `python3.15` venv.
+that the adapter script runs the step; the `python3.15` venv itself is `the-adapter-and-gui-images-get-the-kernel-from-one-step`'s.
 
 ## The reduced tier's launch rows in a VM
 

@@ -9,8 +9,9 @@ use std::sync::OnceLock;
 /// The file-kind table: a plist of `:names` and `:extensions`, each a list of `(ICON "word" ...)`.
 const FILES: &str = include_str!("../../../../../etc/icons/files.eld");
 
-/// The icons a row can show, by name: the Explorer's, the Work space's Flow (its columns and chips), the Extensions
-/// list's kinds, the Outline's notice.
+/// The icons a row can show, by name: the Explorer's and the Buffers list's (file kinds), the Work space's Flow (its
+/// columns and chips), the Extensions list's kinds, the Outline's notice, the agent panel's header and review rows, and
+/// the debug views' rows.
 const SVGS: [(&str, &str); 31] = [
     ("bot", include_str!("../../../../../etc/icons/bot.svg")),
     ("pin", include_str!("../../../../../etc/icons/pin.svg")),

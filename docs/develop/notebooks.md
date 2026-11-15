@@ -59,8 +59,8 @@ keystroke). The chrome is overlays on the boundary characters: the head's `befor
 function). A boundary that comes back by undo or yank has no overlay, and the rescan asks the hub for that cell's tail by id.
 
 The hub calls it makes (`drgnx-notebook--call`): `notebook/open {path, text}`, `/sync {id, cells}` then `/execute {id, cells}`
-(the cells to run), `/save {id, cells}`, `/kernels`, `/start {id, kernel}`, `/shutdown`, `/interrupt`, `/input`, `/tail {id,
-cell}`, `/output {id, cell}`, `/close`; it listens to `notebook-tail`, `notebook-status` and `notebook-input-request`.
+(the cells to run), `/save {id, cells}`, `/kernels`, `/start {id, kernel}`, `/restart`, `/shutdown`, `/interrupt`, `/input`,
+`/clear`, `/tail {id, cell}`, `/output {id, cell}`, `/view {id, kind}`, `/focus`, `/log {id, since?}`, `/close`; it listens to `notebook-tail`, `notebook-status` and `notebook-input-request`.
 
 The header strip is a `before-string` on the head boundary (an `after-string` of a one-character head would land on the source's
 first row, so the strip would have no row of its own); the output is an `after-string` on the tail boundary, ending in the newline
@@ -168,7 +168,7 @@ editor draws the button with the icon `play` (`square` for `stop`; a click runs 
 **selected cell** the editor adds a right-aligned toolbar of icons, each a registry command (`drgnx-notebook--tools`): `chevron-up`
 Move Cell Up, `chevron-down` Move Cell Down, `trash-2` Delete Cell and `ellipsis` Cell Menu (a choice of copy, cut, paste, add
 above, split, merge, change type, clear outputs, run above or below); the header is built again when the selection moves.
-The add-cell buttons are under the selected cell's output. `notebook/restart` is the hub's. The picker for `notebook/kernels` lists the skipped kernelspecs with
+The add-cell buttons are under the selected cell's output. The picker for `notebook/kernels` lists the skipped kernelspecs with
 their reasons and refuses one. The notebook ids are the hub's to make (never parsed or built here), every method is checked against the
 buffer's connection, and a notebook ends with that connection.
 
