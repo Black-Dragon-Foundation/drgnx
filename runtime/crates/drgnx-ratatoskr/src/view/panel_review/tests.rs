@@ -62,6 +62,7 @@ fn a_hunk_is_a_header_over_numbered_lines_in_card_faces() {
         fonts: &fonts,
         diffs: &diffs,
         permissions: &[],
+        queue: &[],
     });
     let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
     assert_eq!(
@@ -129,6 +130,7 @@ fn a_request_is_a_ringed_line_over_allow_always_and_deny() {
         fonts: &fonts,
         diffs: &[],
         permissions: &p,
+        queue: &[],
     });
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].key, "c:perm:7:0");
@@ -160,8 +162,33 @@ fn a_narrow_panel_drops_the_label_before_the_buttons() {
         fonts: &fonts,
         diffs: &diffs,
         permissions: &[],
+        queue: &[],
     });
     let head = text(&rows[0]);
     assert!(!head.contains("hunk 1 of"), "{head}");
     assert!(head.contains("Reject") && head.contains("Accept"));
+}
+
+// pattern: D
+#[test]
+fn a_queued_note_is_a_row_that_names_its_number() {
+    let e = env(400);
+    let fonts = fonts();
+    let q = ["first".to_owned(), "second".to_owned()];
+    let (rows, _) = rows(&In {
+        env: &e,
+        fonts: &fonts,
+        diffs: &[],
+        permissions: &[],
+        queue: &q,
+    });
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[1].key, "c:q:1");
+    assert!(text(&rows[1]).contains("queued 2  second"));
+    assert!(
+        rows[1]
+            .props
+            .iter()
+            .any(|(_, _, n, v)| n == "drgnx-agent-panel-queued" && *v == json!(1))
+    );
 }

@@ -92,3 +92,17 @@ finished edit) are gone, and so is `drgnx-agent-panel--diffs`: the panel reads n
 one file. Lisp keeps the commands (accept, reject, allow, always), which read the card at point
 (`drgnx-agent-panel-card`), and the click dispatcher's `card:*` buttons. The editor puts a hub patch's rows in the hub's
 order: `drgnx-agent-panel--insert-ops` and the `p:` placement rule are gone with the special case.
+
+## The composer's queue (F1, queue)
+
+The notes queued for the agent are the hub's rows (`c:q:N`, from the snapshot's `queue`); `drgnx-agent-panel-composer--queue-row`
+and the `:q` row keys are gone. The composer's input row stays Lisp (the field is the editor's: the user types in it); it
+is the only row the panel draws itself under the transcript. The edit and drop commands read the note's number from the row
+at point.
+
+## The panel's width (F1, last slice)
+
+No Lisp tracks the panel's width any more: `drgnx-agent-panel--width`, `--strip-width` and `--resized` are gone, with the
+module's subscriptions to the state store's `windows-changed` and `pane-resized` and a twin's copy of the width. The hub
+lays every row out for the width in the view's env, which the editor already sends when a window shows the view or is
+resized (`view/env`), so a resize is the hub's rebuild and no Lisp measures anything.

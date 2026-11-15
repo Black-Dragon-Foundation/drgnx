@@ -109,7 +109,6 @@ to its top.  The hub gives at most 50."
 (defvar-local drgnx-agent-panel--open nil "A hash: row key → non-nil when its row is open (thinking and detail shown).")
 
 (defvar drgnx-agent-panel--disclosure)
-(defvar drgnx-agent-panel--strip-width)   ; drgnx-agent-panel-steps.el
 (defvar drgnx-agent-panel--by-session (make-hash-table :test #'equal :weakness 'value)
   "Hub session id → its panel's buffer.  Weak in the buffers: a killed panel's entry goes with it.")
 (defvar drgnx-agent-panel--stats-render 0 "Rows rendered since Emacs started (a test reads the difference).")
@@ -122,7 +121,6 @@ to its top.  The hub gives at most 50."
 (defvar drgnx-agent-panel--ledger-open)
 (declare-function drgnx-agent-panel--preset-in-force "drgnx-agent-panel-steps")
 (defvar drgnx-agent-panel-presets)
-(declare-function drgnx-agent-panel--resized "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel-steps-init "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel-steps-teardown "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel-steps-setup "drgnx-agent-panel-steps")
@@ -137,7 +135,6 @@ to its top.  The hub gives at most 50."
 (declare-function drgnx-agent-panel-composer-keys "drgnx-agent-panel-composer")
 (declare-function drgnx-agent-panel-composer-redraw "drgnx-agent-panel-composer")
 (declare-function drgnx-agent-panel-composer-setup "drgnx-agent-panel-composer")
-(declare-function drgnx-agent-panel-composer--queue-row "drgnx-agent-panel-composer")
 (declare-function drgnx-agent-panel-composer--row "drgnx-agent-panel-composer")
 
 (declare-function drgnx-agent-panel-cards-setup "drgnx-agent-panel-cards")
@@ -239,7 +236,6 @@ folds under it."
     (:more (propertize "  ↑ earlier steps load when you scroll up\n" 'face 'drgnx-agent-panel-subtle))
     (:e (drgnx-agent-panel--entry-row (cadr key)))
     (:b (drgnx-agent-panel--block-row (cadr key) (nth 2 key)))
-    (:q (drgnx-agent-panel-composer--queue-row (cadr key)))
     (:composer (drgnx-agent-panel-composer--row))
     (:rows-end "\n")
     (_ "\n")))
@@ -351,11 +347,8 @@ transcript itself: no row is placed by its key)."
   (and drgnx-view-patch-twin-of (buffer-live-p drgnx-view-patch-twin-of) drgnx-view-patch-twin-of))
 
 (defun drgnx-agent-panel--twin-copy (from)
-  "The panel's state (its `drgnx-agent-panel-' locals; the tables shared) from FROM into the current buffer, but the
-width its window lays the strip out for, which is each buffer's own."
-  (let ((width drgnx-agent-panel--strip-width))
-    (drgnx-view-env--twin-copy from '("drgnx-agent-panel-"))
-    (setq drgnx-agent-panel--strip-width width)))
+  "The panel's state (its `drgnx-agent-panel-' locals; the tables shared) from FROM into the current buffer."
+  (drgnx-view-env--twin-copy from '("drgnx-agent-panel-")))
 
 (defun drgnx-agent-panel--twin-take ()
   "In a twin: the panel's state as it is now (before a row of its own is drawn, before a command)."
@@ -723,9 +716,6 @@ stays in it.  Every fifth update opens a new block, the others grow the last one
 ;;;; The module
 
 (defun drgnx-agent-panel--setup ()
-  ;; the strip follows the panel's width through the state store
-  (drgnx-state-subscribe 'windows-changed #'drgnx-agent-panel--resized)
-  (drgnx-state-subscribe 'pane-resized #'drgnx-agent-panel--resized)
   (drgnx-command-define 'agents-panel :category "Agents" :title "Open the Agent Panel"
                         :command #'drgnx-agent-panel-open
                         :doc "One agent session's steps, live, in the right dock")

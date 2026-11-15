@@ -151,12 +151,14 @@ session.  The module's own setup is not used: the module fixture moves the confi
       (drgnx-agents-mirror-test--settle (lambda () (equal '("keep me" "drop me") (drgnx-agent-panel-hub-test--queue buf)))
                                         "both notes queued in the panel's snapshot")
       (with-current-buffer buf
-        (goto-char (point-min))
-        (drgnx-view-draw-now drgnx-view)
-        (goto-char (drgnx-view-row-start drgnx-view '(:q 0)))
+        ;; the notes are the hub's rows, whose number the commands read at point
+        (let ((inhibit-read-only t))
+          (goto-char (point-max))
+          (insert (propertize "q0" 'drgnx-agent-panel-queued 0) (propertize "q1" 'drgnx-agent-panel-queued 1)))
+        (goto-char (- (point-max) 3))
         (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "kept and edited")))
           (drgnx-agent-panel-edit-queued))
-        (goto-char (drgnx-view-row-start drgnx-view '(:q 1)))
+        (goto-char (1- (point-max)))
         (drgnx-agent-panel-drop-queued))
       (drgnx-agents-mirror-test--settle (lambda () (equal '("kept and edited") (drgnx-agent-panel-hub-test--queue buf)))
                                         "the edit and the drop in the snapshot")

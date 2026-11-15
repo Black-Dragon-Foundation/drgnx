@@ -602,6 +602,7 @@ impl Panels {
                 fonts,
                 diffs: &e.diffs,
                 permissions: &snapshot.permissions,
+                queue: &snapshot.queue,
             })
         };
         rows.extend(cards);
