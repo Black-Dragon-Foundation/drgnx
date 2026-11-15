@@ -249,6 +249,14 @@ appends, and gone when no profile key needs it."
       (goto-char 2)
       (should-not (key-binding (kbd "C-c y a"))))))
 
+(ert-deftest drgnx-keys/terminal-key-split-lists-the-keys-of-its-own-map ()
+  "The profile's keys in the terminal's keymap (Paste on C-y) reach drgnx, not the program, and the split says so."
+  (load (expand-file-name "modules/tools/drgnx-term" drgnx-dir) nil t)
+  (keys-lay--with ((lay-a "C-y" :map (drgnx-term . drgnx-term-mode-map)))
+    (let ((split (drgnx-terminal-key-split)))
+      (should (member "C-y" (plist-get split :to-drgnx)))
+      (should-not (member "C-y" (plist-get split :to-shell))))))
+
 (ert-deftest drgnx-keys/foreign-layer-prefix-hides-nothing-where-it-is-inactive ()
   "A layer key under C-c does not turn a local command on C-c itself into a prefix in other buffers; two targets may
 share a key."

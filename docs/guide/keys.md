@@ -484,6 +484,8 @@ decides which keys it gets, the way VS Code's terminal does:
   to keys the active profile binds: in the Emacs and Vim profiles nothing is bound to these keys, so `C-p` (previous
   history entry), `C-b`, `C-k` (kill to end of line) and `C-f` all reach the shell. In the VS Code profile `C-k` is a
   chord prefix, so it does not kill to the end of the line in a terminal.
+  The keys a profile gives the terminal itself (Find on `C-f`, Paste on `C-y` in the Emacs profile) reach drgnx as well,
+  and the key sheet's "In the terminal" section lists them: in a terminal `C-y` pastes instead of yanking in readline.
 
 On a Mac the profile's keys are `Cmd` keys, which no shell uses, so those reach drgnx; the Alt aliases the VS Code
 profile also has there (such as `M-j` for the panel) are Alt keys and go to the shell.
