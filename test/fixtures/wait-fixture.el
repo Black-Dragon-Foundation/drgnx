@@ -162,6 +162,35 @@ with Emacs's own call and virtual time keeps step with the real (`drgnx-test-wai
   '("*Native-compile-Log*" "*Async-native-compile-log*" "*Warnings*" "*Compile-Log*")
   "Buffers Emacs's native compiler creates on its own.")
 
+(defun drgnx-test-frame-text-size (frame width height)
+  "Give FRAME's text WIDTH x HEIGHT px (`set-frame-size' pixelwise) and wait until the compositor did: its text size is
+that, within a character.  A size that does not take fails the test (a fullscreen frame keeps its output's size: see
+`drgnx-test-frame-fullscreen'), so a row that resizes never passes on the size it had."
+  (set-frame-size frame width height t)
+  (drgnx-test-wait (lambda ()
+                     (redisplay t)
+                     (and (<= (abs (- (frame-text-width frame) width)) (frame-char-width frame))
+                          (<= (abs (- (frame-text-height frame) height)) (frame-char-height frame))))
+                   :secs 8
+                   :what (list "the frame's text size" (list width height) :has
+                               (list (frame-text-width frame) (frame-text-height frame))
+                               :fullscreen (frame-parameter frame 'fullscreen))))
+
+(defun drgnx-test-frame-fullscreen (frame state)
+  "Make FRAME's `fullscreen' parameter STATE (nil, `fullboth') and wait until the compositor answered and the size
+settled; return the state it had.  The GUI sessions' root frame is fullscreen, which keeps its output's size: a row that
+resizes the frame leaves fullscreen first and puts the state back after.  The parameter changes at once, the size only
+when the compositor's configure arrives, so the wait is for the size to change, then to hold."
+  (let ((was (frame-parameter frame 'fullscreen))
+        (size (lambda () (list (frame-pixel-width frame) (frame-pixel-height frame)))))
+    (unless (eq state was)
+      (let ((before (funcall size)))
+        (set-frame-parameter frame 'fullscreen state)
+        (drgnx-test-wait (lambda () (redisplay t) (not (equal before (funcall size))))
+                         :secs 8 :what (list "the frame's size after fullscreen" state :was before))
+        (drgnx-test-wait-presented :frame frame :value size)))
+    was))
+
 (defun drgnx-test-buffer-list ()
   "`buffer-list' without the buffers native compilation creates (`drgnx-test-native-comp-buffer-names')."
   (cl-remove-if (lambda (b) (member (buffer-name b) drgnx-test-native-comp-buffer-names)) (buffer-list)))

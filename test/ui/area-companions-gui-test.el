@@ -92,11 +92,11 @@ earlier row left shrinks to one), so the heights are compared through their sum.
               (should (apply #'= (drgnx-ui-area-companions--fitted top)))
               (should (apply #'= (drgnx-ui-area-companions--fitted bottom)))
               ;; the window manager makes the frame shorter, then gives it back
-              (set-frame-size root (car size) (- (cadr size) 200) t)
+              (drgnx-test-frame-text-size root (car size) (- (cadr size) 200))
               (drgnx-ui-area-companions--settle)
               (should (apply #'= (drgnx-ui-area-companions--fitted top)))
               (should (apply #'= (drgnx-ui-area-companions--fitted bottom)))
-              (set-frame-size root (car size) (cadr size) t)
+              (drgnx-test-frame-text-size root (car size) (cadr size))
               (drgnx-ui-area-companions--settle)
               (should (apply #'= (drgnx-ui-area-companions--fitted top)))
               (should (apply #'= (drgnx-ui-area-companions--fitted bottom)))
