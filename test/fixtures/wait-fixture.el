@@ -174,7 +174,9 @@ that, within a character.  A size that does not take fails the test (a fullscree
                    :secs 8
                    :what (list "the frame's text size" (list width height) :has
                                (list (frame-text-width frame) (frame-text-height frame))
-                               :fullscreen (frame-parameter frame 'fullscreen))))
+                               :fullscreen (frame-parameter frame 'fullscreen)
+                               ;; a height under the windows' minimum is one the frame cannot take
+                               :windows-min-height (window-min-size (frame-root-window frame) nil nil t))))
 
 (defun drgnx-test-frame-fullscreen (frame state)
   "Make FRAME's `fullscreen' parameter STATE (nil, `fullboth') and wait until the compositor answered and the size

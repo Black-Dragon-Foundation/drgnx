@@ -71,9 +71,14 @@ earlier row left shrinks to one), so the heights are compared through their sum.
          (saved (mapcar (lambda (p) (cons p (frame-parameter root p))) '(drgnx-wb-areas drgnx-wb-right-px)))
          (main (get-buffer-create "*companions main*"))
          (above (drgnx-ui-area-companions--buffer "*companions above*" 3))
-         (below (drgnx-ui-area-companions--buffer "*companions below*" 1)))
+         (below (drgnx-ui-area-companions--buffer "*companions below*" 1))
+         (full (frame-parameter root 'fullscreen)) (base nil))
     (unwind-protect
         (with-selected-frame root
+          ;; the session's root is fullscreen, which keeps its output's size: out of it, 100 px smaller each way
+          (setq full (drgnx-test-frame-fullscreen root nil)
+                base (list (- (car size) 100) (- (cadr size) 100)))
+          (drgnx-test-frame-text-size root (car base) (cadr base))
           (delete-other-windows)
           (drgnx-state-mode 1)
           (set-frame-parameter root 'drgnx-wb-areas nil)
@@ -92,11 +97,11 @@ earlier row left shrinks to one), so the heights are compared through their sum.
               (should (apply #'= (drgnx-ui-area-companions--fitted top)))
               (should (apply #'= (drgnx-ui-area-companions--fitted bottom)))
               ;; the window manager makes the frame shorter, then gives it back
-              (drgnx-test-frame-text-size root (car size) (- (cadr size) 200))
+              (drgnx-test-frame-text-size root (car base) (- (cadr base) 200))
               (drgnx-ui-area-companions--settle)
               (should (apply #'= (drgnx-ui-area-companions--fitted top)))
               (should (apply #'= (drgnx-ui-area-companions--fitted bottom)))
-              (drgnx-test-frame-text-size root (car size) (cadr size))
+              (drgnx-test-frame-text-size root (car base) (cadr base))
               (drgnx-ui-area-companions--settle)
               (should (apply #'= (drgnx-ui-area-companions--fitted top)))
               (should (apply #'= (drgnx-ui-area-companions--fitted bottom)))
@@ -115,6 +120,7 @@ earlier row left shrinks to one), so the heights are compared through their sum.
       (drgnx-state-mode -1)
       (pcase-dolist (`(,p . ,v) saved) (set-frame-parameter root p v))
       (set-frame-size root (car size) (cadr size) t)
+      (drgnx-test-frame-fullscreen root full)
       (with-selected-frame root (set-window-configuration config))
       (dolist (b (list main above below)) (when (buffer-live-p b) (kill-buffer b))))))
 
