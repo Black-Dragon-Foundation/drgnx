@@ -267,17 +267,20 @@ most 5 rounds)."
 
 (defun drgnx-panel-docks-ui-test--end-error (panel window)
   "Nil when WINDOW, point at PANEL's end, shows the end whole at its bottom (or the whole transcript, when it fits);
-else where the end is.  Emacs scrolls by whole rows: under the end's row (a line) there is less space than the screen
-line before the start would take, else the window could show one more row and has blank space."
-  (let* ((at (pos-visible-in-window-p (with-current-buffer panel (point-max)) window t))
-         (body (window-body-height window t)) (line (window-default-line-height window))
+else where the end is.  Emacs scrolls by whole rows: under the end's row (its bottom: the rows' height from the start to
+the end, the end's row included) there is less space than the screen line before the start would take, else the window
+could show one more row and has blank space."
+  (let* ((end (with-current-buffer panel (point-max)))
+         (at (pos-visible-in-window-p end window t))
+         (body (window-body-height window t))
+         (bottom (cdr (window-text-pixel-size window (window-start window) end)))
          (above (and at (> (window-start window) (with-current-buffer panel (point-min)))
                      (drgnx-panel-docks-ui-test--above-start window))))
     (cond ((or (not at) (nth 2 at))
            (list :end-not-shown-whole :at at :body body :start (window-start window)))
-          ((and above (>= (- body (+ (cadr at) line)) above))
-           (list :end-not-at-bottom :y (cadr at) :body body :line line :above above :start (window-start window)
-                 :point (window-point window) :max (with-current-buffer panel (point-max)))))))
+          ((and above (>= (- body bottom) above))
+           (list :end-not-at-bottom :y (cadr at) :bottom bottom :body body :above above :start (window-start window)
+                 :point (window-point window) :max end)))))
 
 (ert-deftest drgnx-ui-panel-docks/through-a-resize-the-end-stays-and-the-docks-fit ()
   "The frame shrunk by 250 px and grown back: after each, the transcript with point at its end shows the end at its
