@@ -695,6 +695,13 @@ pub struct PanelLook {
     /// Whether the edits ledger lists its files; opening it sets the mark the "new since you looked" counts from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ledger_open: Option<bool>,
+    /// A step that took longer than this many seconds shows its time in the warning face
+    /// (`drgnx-agent-panel-slow-seconds`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slow_secs: Option<f64>,
+    /// A step that cost more than this shows its cost in the warning face (`drgnx-agent-panel-expensive-cost`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dear_cost: Option<f64>,
 }
 
 /// The change number a subscription to a session's entries continues from.

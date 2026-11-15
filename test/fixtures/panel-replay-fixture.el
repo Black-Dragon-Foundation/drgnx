@@ -48,9 +48,14 @@
 (declare-function drgnx-hub-disconnect "drgnx-hub-client")
 (declare-function drgnx-modules-report "drgnx-modules")
 (declare-function drgnx-modules-set-enabled "drgnx-modules")
-(declare-function drgnx-modules-run "drgnx-modules")
+(declare-function drgnx-module-running-p "drgnx-modules")
+(declare-function drgnx-modules--run-one "drgnx-modules")
+(declare-function drgnx-module-teardown "drgnx-modules-record")
+(defvar drgnx-modules--table)
 (declare-function drgnx-gc--consed "drgnx-gc")
 (declare-function drgnx-perf-stats "drgnx-perf")
+(declare-function drgnx-perf-advise-draws "drgnx-perf")
+(declare-function drgnx-perf-unadvise-draws "drgnx-perf")
 (declare-function drgnx-view-patch-rows "drgnx-view")
 (defvar drgnx-view-patch)
 (defvar drgnx-agents--sessions)
@@ -85,6 +90,20 @@
 (defun drgnx-panel-replay--entries ()
   (length (drgnx-agent-session-entries drgnx-panel-replay--mirror)))
 
+(defun drgnx-panel-replay--module-on ()
+  "Turn the module tools/agent-panel on for the workload, noting whether it ran before: only its setup runs, once (not
+its whole stage's, which would set up again a module that runs already), and `drgnx-panel-replay-down' tears down
+what it set up."
+  ;; the module is defined when its file loads (a module of an idle stage: its setup runs here, not at the first idle)
+  (require 'drgnx-agent-panel)
+  (setq drgnx-panel-replay--module (drgnx-module-running-p 'tools/agent-panel))
+  (drgnx-modules-set-enabled 'tools/agent-panel t)
+  (unless drgnx-panel-replay--module
+    (drgnx-modules--run-one 'tools/agent-panel (cdr (assq 'tools/agent-panel drgnx-modules--table)) 'idle))
+  (let ((r (cdr (assq 'tools/agent-panel (drgnx-modules-report)))))
+    (unless (eq 'ok (plist-get r :status))
+      (error "The module tools/agent-panel is not running: %S" r))))
+
 (defun drgnx-panel-replay-up (bin)
   "Start a hub of BIN and the mock agent, wait for the prefix, open the panel on the session; the panel's buffer.
 The panel inserts the rows the hub builds."
@@ -95,14 +114,7 @@ The panel inserts the rows the hub builds."
   (let ((mock (and bin (expand-file-name "ratatoskr-mock" (file-name-directory bin)))))
     (unless (and mock (file-executable-p bin) (file-executable-p mock))
       (error "panel-replay needs DRGNX_RATATOSKR_BIN (a test-hooks ratatoskr) with ratatoskr-mock beside it"))
-    ;; the module is defined when its file loads (a module of an idle stage: its setup runs here, not at the first idle)
-    (require 'drgnx-agent-panel)
-    (setq drgnx-panel-replay--module (eq 'ok (plist-get (cdr (assq 'tools/agent-panel (drgnx-modules-report))) :status)))
-    (drgnx-modules-set-enabled 'tools/agent-panel t)
-    (drgnx-modules-run 'idle)
-    (let ((r (cdr (assq 'tools/agent-panel (drgnx-modules-report)))))
-      (unless (eq 'ok (plist-get r :status))
-        (error "The module tools/agent-panel is not running: %S" r)))
+    (drgnx-panel-replay--module-on)
     (setq drgnx-panel-replay--dir (make-temp-file "drgnx-panel-replay" t))
     (let* ((dir drgnx-panel-replay--dir) (project (or drgnx-panel-replay-project (expand-file-name "project" dir)))
            (config (expand-file-name "config" dir)) (script (expand-file-name "replay.txt" config)))
@@ -165,7 +177,7 @@ The panel inserts the rows the hub builds."
         (push (- (apply #'+ (memory-use-counts)) a0) drgnx-panel-replay--allocs)))))
 
 (defun drgnx-panel-replay--draw (orig buffer &rest args)
-  "Around `drgnx-view--draw-buffer': the kB a draw of the panel makes, while armed."
+  "Around each view draw (`drgnx-perf-view-draws': Sjá's for the panel): the kB a draw of the panel makes, while armed."
   (if (not (and drgnx-panel-replay--armed (eq buffer drgnx-panel-replay--panel)))
       (apply orig buffer args)
     (let ((c0 (drgnx-gc--consed)))
@@ -201,14 +213,14 @@ the panel's row patches, HUB_ROWS the hub's rows it holds at the end."
   (require 'drgnx-gc)
   (setq drgnx-panel-replay--allocs nil drgnx-panel-replay--draws nil drgnx-panel-replay--patches 0 drgnx-panel-replay--armed t)
   (advice-add 'drgnx-hub--run-hook :around #'drgnx-panel-replay--event)
-  (advice-add 'drgnx-view--draw-buffer :around #'drgnx-panel-replay--draw)
+  (drgnx-perf-advise-draws :around #'drgnx-panel-replay--draw)
   ;; the second turn: the recording streams
   (drgnx-agents-send drgnx-panel-replay--mirror "stream")
   (unwind-protect
       (drgnx-panel-replay--wait 40 (lambda () (>= (length drgnx-panel-replay--allocs) drgnx-panel-replay-measured)))
     (setq drgnx-panel-replay--armed nil)
     (advice-remove 'drgnx-hub--run-hook #'drgnx-panel-replay--event)
-    (advice-remove 'drgnx-view--draw-buffer #'drgnx-panel-replay--draw))
+    (drgnx-perf-unadvise-draws #'drgnx-panel-replay--draw))
   (when (< (length drgnx-panel-replay--allocs) 200)
     (error "Premise: %d updates measured, not 200 (status %s, %d entries; the hub: %s; the mock's log ends: %s)"
            (length drgnx-panel-replay--allocs)
@@ -236,6 +248,11 @@ the panel's row patches, HUB_ROWS the hub's rows it holds at the end."
   (when (buffer-live-p drgnx-panel-replay--panel) (kill-buffer drgnx-panel-replay--panel))
   (setq drgnx-panel-replay--hub nil drgnx-panel-replay--mirror nil drgnx-panel-replay--panel nil
         drgnx-agents--sessions (seq-remove #'drgnx-agent-session-remote drgnx-agents--sessions))
+  ;; the module back as it was: torn down when the up turned it on (its setup's hooks, commands and kind go), as
+  ;; `drgnx-modules-turn-off' does
+  (unless drgnx-panel-replay--module
+    (drgnx-module-teardown 'tools/agent-panel)
+    (run-hooks 'drgnx-modules-after-teardown-functions))
   (drgnx-modules-set-enabled 'tools/agent-panel drgnx-panel-replay--module)
   (when drgnx-panel-replay--dir
     (ignore-errors (delete-directory drgnx-panel-replay--dir t))

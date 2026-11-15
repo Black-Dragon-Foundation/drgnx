@@ -26,6 +26,7 @@
 (require 'subr-x)
 (require 'drgnx-modules)
 (require 'drgnx-view)
+(defvar drgnx-view-sja-tail)                  ; drgnx-view-sja, loaded when Sjá holds the rows
 (require 'drgnx-hub-client)
 (require 'drgnx-panes)                   ; the right island the panel opens in
 (require 'drgnx-view-nav)                ; the moves between steps of a kind, through the replica
@@ -45,13 +46,22 @@
 to its top.  The hub gives at most 50."
   :type 'integer :group 'drgnx-agent-panel)
 
+(defun drgnx-agent-panel--threshold-set (symbol value)
+  "Set SYMBOL to VALUE; every open panel tells the hub at once, which draws its rows again (`agents/panel/look')."
+  (set-default symbol value)
+  (when (featurep 'drgnx-agent-panel)
+    (dolist (b (drgnx-agent-panel-buffers))
+      (with-current-buffer b (drgnx-agent-panel--send-look)))))
+
 (defcustom drgnx-agent-panel-slow-seconds 10
-  "A step that took longer than this many seconds shows its time in the warning face."
-  :type 'number :group 'drgnx-agent-panel)
+  "A step that took longer than this many seconds shows its time in the warning face.
+Set with `setopt' or Customize, open panels draw again at once."
+  :type 'number :set #'drgnx-agent-panel--threshold-set :group 'drgnx-agent-panel)
 
 (defcustom drgnx-agent-panel-expensive-cost 0.5
-  "A step that cost more than this (in the step's own unit) shows its cost in the warning face."
-  :type 'number :group 'drgnx-agent-panel)
+  "A step that cost more than this (in the step's own unit) shows its cost in the warning face.
+Set with `setopt' or Customize, open panels draw again at once."
+  :type 'number :set #'drgnx-agent-panel--threshold-set :group 'drgnx-agent-panel)
 
 ;;;; Faces: all inherit the look's semantic faces
 
@@ -200,8 +210,10 @@ to its top.  The hub gives at most 50."
     (setq drgnx-agent-panel--waiting nil)))
 
 (defun drgnx-agent-panel--look-params ()
-  "What this panel tells the hub about its rows: the step types open and the rows opened or folded by hand."
-  (list :open (vconcat (mapcar #'symbol-name drgnx-agent-panel--disclosure))
+  "What this panel tells the hub about its rows: the step types open, the rows opened or folded by hand, and when a
+step's time or cost is drawn as a warning."
+  (list :slow_secs drgnx-agent-panel-slow-seconds :dear_cost drgnx-agent-panel-expensive-cost
+        :open (vconcat (mapcar #'symbol-name drgnx-agent-panel--disclosure))
         :lens (vconcat (mapcar (lambda (p) (symbol-name (car p))) drgnx-agent-panel-presets))
         :lens_on (or (drgnx-agent-panel--preset-in-force) 0)
         :pins (vconcat (mapcar #'cdr drgnx-agent-panel--pins))
@@ -376,6 +388,8 @@ signal when no hub serves)."
   ;; Emacs keeps the end in view: a window whose point is at the end (Sjá keeps it there through a draw) scrolls by
   ;; as little as the appended rows need, never recentring
   (setq-local scroll-conservatively 101 scroll-margin 0)
+  ;; it opens at its end: its first rows leave point there (Sjá's draw), so it opens on the latest step
+  (setq-local drgnx-view-sja-tail t)
   (add-hook 'window-scroll-functions #'drgnx-agent-panel--scrolled nil t)
   (add-hook 'kill-buffer-hook #'drgnx-agent-panel--killed nil t))
 
@@ -487,11 +501,14 @@ commands on the step at point read; the hub draws its rows again itself)."
 
 (declare-function drgnx-agent-panel--composer-of "drgnx-agent-panel-composer")
 (declare-function drgnx-agent-panel--header-of "drgnx-agent-panel-header")
+(declare-function drgnx-agent-panel-header--for "drgnx-agent-panel-header" (header buffer))
 
 (defun drgnx-agent-panel--companions (buffer)
   "The area companions of panel BUFFER (`drgnx-pane-define-kind' :companions): (ABOVE BELOW), the header above and the
-composer below."
-  (list (drgnx-agent-panel--header-of buffer) (drgnx-agent-panel--composer-of buffer)))
+composer below.  BUFFER may be the transcript's twin in another display class: the header is then its twin of that
+class (`drgnx-agent-panel-header--for'); the composer, plain text, is the same buffer in every class."
+  (list (drgnx-agent-panel-header--for (drgnx-agent-panel--header-of buffer) buffer)
+        (drgnx-agent-panel--composer-of buffer)))
 
 (defun drgnx-agent-panel--setup ()
   (drgnx-command-define 'agents-panel :category "Agents" :title "Open the Agent Panel"

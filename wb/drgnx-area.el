@@ -138,11 +138,16 @@ Returns non-nil when TAB was defined."
       (car (car (plist-get (alist-get area drgnx-wb--areas) :tabs)))))
 
 (defun drgnx-area--remember (area window)
-  "Remember the buffer, start and point WINDOW shows, for AREA's shown tab."
+  "Remember the buffer, start and point WINDOW shows, for AREA's shown tab, and, when that buffer is a hub view's twin
+in another display class (`drgnx-view-patch-twin-of'), the view's own buffer: the twin goes when no window shows its
+class, and the tab then comes back with the view's buffer (the env's routing makes the twin again where it is needed)."
   (when (window-live-p window)
-    (let* ((state (drgnx-area--state area)) (tabs (copy-alist (plist-get state :tabs))))
+    (let* ((state (drgnx-area--state area)) (tabs (copy-alist (plist-get state :tabs)))
+           (buffer (window-buffer window)))
       (setf (alist-get (drgnx-wb-area-tab area) tabs)
-            (list (window-buffer window) (window-start window) (window-point window)))
+            (list buffer (window-start window) (window-point window)
+                  (and (local-variable-p 'drgnx-view-patch-twin-of buffer)
+                       (buffer-local-value 'drgnx-view-patch-twin-of buffer))))
       (drgnx-area--set-state area (plist-put (copy-sequence state) :tabs tabs)))))
 
 (defvar-local drgnx-area--placeholder-p nil "Non-nil in a buffer an area shows for a tab that has none of its own.")
@@ -166,8 +171,15 @@ Returns non-nil when TAB was defined."
 and no other tab left one."
   (let ((shown (drgnx-wb-area-tab area)) (w (drgnx-wb-area-window area)))
     (and w (drgnx-area--content-p (window-buffer w))
-         (not (seq-some (lambda (saved) (and (not (eq (car saved) shown)) (drgnx-area--content-p (nth 1 saved))))
+         (not (seq-some (lambda (saved) (and (not (eq (car saved) shown))
+                                             (drgnx-area--content-p (drgnx-area--saved-buffer (cdr saved)))))
                         (plist-get (drgnx-area--state area) :tabs))))))
+
+(defun drgnx-area--saved-buffer (saved)
+  "The buffer a tab's SAVED place (BUFFER START POINT VIEW-BUFFER, `drgnx-area--remember') shows again: BUFFER while
+it lives, else the view's buffer of the twin it was, else nil."
+  (cond ((buffer-live-p (car saved)) (car saved))
+        ((buffer-live-p (nth 3 saved)) (nth 3 saved))))
 
 ;;;; The tab row
 
@@ -318,7 +330,7 @@ Returns the window — the same one across tab switches."
   (let* ((w (drgnx-wb-area-window area)) (tab (or tab (drgnx-wb-area-tab area))))
     (when w (drgnx-area--remember area w))
     (let* ((saved (alist-get tab (plist-get (drgnx-area--state area) :tabs)))
-           (buffer (or buffer (and (buffer-live-p (car saved)) (car saved)) (drgnx-area--placeholder area tab))))
+           (buffer (or buffer (drgnx-area--saved-buffer saved) (drgnx-area--placeholder area tab))))
       (if w (drgnx-wb-set-area-buffer w buffer)
         (setq w (drgnx-area--create area buffer)))
       (when (eq (car saved) buffer)

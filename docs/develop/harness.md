@@ -418,6 +418,9 @@ skip redisplay and hide the very jank we want to see.
   `bin/drgnx ui measure S '[{"drag":{"from":[401,100],"to":[601,100],"steps":6}}]'` or the MCP tool `ui_drag`.
   Every mouse event symbol the harness makes (clicks too) carries `event-kind` `mouse-click`, which Emacs needs
   to look a press on a header line, mode line or divider up under its area (`[header-line down-mouse-1]`).
+  A click runs what the keymaps bind: drgnx's own `<mouse-1>` bindings (the agent panel's `agents-panel-act`, for
+  one) come from the key profiles, so a UI test that clicks them applies a profile first (`drgnx-keys-use`); without
+  one, `mouse-1` is Emacs's `mouse-set-point`.
 - **Keys** use `kbd` syntax (`"C-x b"`, `"M-x"`, `"RET"`); typed text is one event per character.
 - **Settled** = no queued or unread input and nothing visibly changed for 300 ms (`drgnx-uitest-quiet`).
 
@@ -601,7 +604,7 @@ How it works:
   `agent-panel`) needs a transcript longer than its window: the session gives the mock agent 17 more steps when
   `DRGNX_LOOK_ONLY` names it, so draw it alone (`DRGNX_LOOK_ONLY='^agent-panel-long$'`); with the others the transcript
   fits and the scene says so. It resizes the frame, wheels the transcript both ways with `pixel-scroll-precision-mode`
-  on and off, and clicks the pinned header's parts (through the event loop too).
+  on and off, and clicks the header window's parts (through the event loop too).
   Both panel scenes also check the panel's three windows in the right area: a header window (window parameter
   `drgnx-area-part` `above`) showing the hub's `agent-panel-top/SID` view with its `p:head` row, fitted to its text
   (±1 px) and carrying the area's tab row; the transcript (the panel's main buffer, `agent-panel/SID`) without
@@ -613,6 +616,10 @@ How it works:
     end at its bottom, and the header and composer are fitted;
   - **short:** the frame shrunk until the transcript is two lines tall; it still shows its end, and the header still
     holds `p:head`, fitted;
+
+    both first check that the frame took the height (its text height, within a line). The scenes' frame is
+    fullscreen and keeps its output's size, so today both report "the frame's text did not take the height";
+    leaving fullscreen for them would move the docks and spoil the picture;
   - **clicks:** the transcript scrolled up a page, then the header window's pin button, a lens segment and a strip pill
     clicked through the event loop, each running its command; the header does not move. The picture is this
     scrolled panel.

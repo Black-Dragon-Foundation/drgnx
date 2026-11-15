@@ -16,6 +16,7 @@
 (declare-function drgnx-agent-panel-buffer "drgnx-agent-panel")
 (declare-function drgnx-agent-panel-toggle-type "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel-buffers "drgnx-agent-panel")
+(declare-function drgnx-agent-panel--send-look "drgnx-agent-panel")
 (defvar drgnx-agent-panel--disclosure)
 (defvar drgnx-agent-panel--session)
 (defvar drgnx-agent-panel--subscribed)
@@ -216,5 +217,36 @@ place when the reset of the frame's resize came in during it)."
                                    (save-excursion (goto-char (window-point w)) (drgnx-view-key-at)))
                              '("e:20" "e:22")))))
         (kill-buffer buf)))))
+
+;;;; The thresholds the hub's rows warn at
+
+(defvar drgnx-agent-panel-slow-seconds)
+(defvar drgnx-agent-panel-expensive-cost)
+
+(ert-deftest drgnx-agent-panel-rows/the-slow-and-expensive-settings-reach-the-hub-at-once ()
+  "The hub draws a step's time and cost in the warning face over `drgnx-agent-panel-slow-seconds' and
+`drgnx-agent-panel-expensive-cost': the look carries both (`slow_secs', `dear_cost'), and setting either sends every
+panel's look again at once."
+  (let ((slow drgnx-agent-panel-slow-seconds) (dear drgnx-agent-panel-expensive-cost))
+    (drgnx-agent-panel-rows-test--with t
+      (let ((buf (drgnx-agent-panel-rows-test--fresh)))
+        (unwind-protect
+            (progn
+              (with-current-buffer buf
+                (drgnx-agent-panel--send-look))
+              (let ((look (cdr (assoc "agents/panel/look" drgnx-agent-panel-rows-test--sent))))
+                (should (equal slow (plist-get look :slow_secs)))
+                (should (equal dear (plist-get look :dear_cost))))
+              (setq drgnx-agent-panel-rows-test--sent nil)
+              (setopt drgnx-agent-panel-slow-seconds 3)
+              (let ((look (cdr (assoc "agents/panel/look" drgnx-agent-panel-rows-test--sent))))
+                (should (equal "agent-panel/s1" (plist-get look :view)))
+                (should (equal 3 (plist-get look :slow_secs))))
+              (setq drgnx-agent-panel-rows-test--sent nil)
+              (setopt drgnx-agent-panel-expensive-cost 2.5)
+              (should (equal 2.5 (plist-get (cdr (assoc "agents/panel/look" drgnx-agent-panel-rows-test--sent)) :dear_cost))))
+          (kill-buffer buf)
+          (setopt drgnx-agent-panel-slow-seconds slow)
+          (setopt drgnx-agent-panel-expensive-cost dear))))))
 
 ;;; agent-panel-rows-test.el ends here

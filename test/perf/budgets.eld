@@ -275,7 +275,8 @@
  ;; over 410 updates (272 of them row patches), 1956 entries, 1956 hub rows, 2152 lines.  The alloc budget is a tenth of
  ;; before.  draw_kb stays at before's: after, the draws ran as 5 slice chains of about 76 kB (only a chain's first slice
  ;; is counted), so it is read in the combined pass.  The paired old-path row (alloc p50 20293, a draw 14.82 kB p50) is
- ;; retired with the path.
+ ;; retired with the path.  2026-11-15, the transcript a Sjá view (r6-docks): draw_kb counts Sjá's draws
+ ;; (`drgnx-perf-view-draws'; the Lisp draw it counted is gone): p50 2.99 kB (p90 5.71) over 251 draws, alloc p50 184.
  (panel-replay (:alloc :p50) 2030 :report-only ot5) (panel-replay (:draw_kb :p50) 18.5 :report-only ot5)
  (quick-open-large (:complete-ms) 100 :report-only ot5)        ; first candidates within 100 ms
  (quick-open-large (:stalls-ge16) 0 :report-only ot5)

@@ -363,13 +363,14 @@ impl Panels {
     /// `agents/panel/look`: CONN's choices for VIEW (a top view's are its transcript view's), and its panel's rows
     /// built again.
     pub fn look(&self, f: &Front, conn: u64, p: PanelLook) -> bool {
-        let view = look_view(&p.view.into_inner());
+        let view = look_view(&p.view);
         let Some(sid) = view.strip_prefix(PREFIX) else {
             return false;
         };
         {
             let mut chosen = lock(&self.chosen);
             let c = chosen.entry((conn, view.clone())).or_default();
+            take_thresholds(&mut c.look, &p);
             if let Some(open) = p.open {
                 c.look.open = open.into_iter().map(|t| t.into_inner()).collect();
             }
@@ -784,6 +785,17 @@ impl Panels {
 pub fn session_of(view: &str) -> Option<&str> {
     view.strip_prefix(PREFIX)
         .or_else(|| view.strip_prefix(PREFIX_TOP))
+}
+
+/// The look P's thresholds for a slow step and an expensive one, into LOOK; one not given (or not a finite number) keeps
+/// the one before.
+fn take_thresholds(look: &mut Look, p: &PanelLook) {
+    if let Some(s) = p.slow_secs.filter(|s| s.is_finite()) {
+        look.slow_secs = s;
+    }
+    if let Some(c) = p.dear_cost.filter(|c| c.is_finite()) {
+        look.dear_cost = c;
+    }
 }
 
 /// `agents/panel/look`.

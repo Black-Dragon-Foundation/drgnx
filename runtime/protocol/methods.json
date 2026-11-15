@@ -7924,6 +7924,14 @@
         "additionalProperties": false,
         "description": "`agents/panel/look`: what the user chose for an agent panel (docs/develop/hub.md, \"The agent panel's rows\").  Each\nfield given replaces the one before; none given builds the rows again.",
         "properties": {
+          "dear_cost": {
+            "description": "A step that cost more than this shows its cost in the warning face (`drgnx-agent-panel-expensive-cost`).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
           "ledger_open": {
             "description": "Whether the edits ledger lists its files; opening it sets the mark the \"new since you looked\" counts from.",
             "type": [
@@ -7999,6 +8007,14 @@
             },
             "type": [
               "array",
+              "null"
+            ]
+          },
+          "slow_secs": {
+            "description": "A step that took longer than this many seconds shows its time in the warning face\n(`drgnx-agent-panel-slow-seconds`).",
+            "format": "double",
+            "type": [
+              "number",
               "null"
             ]
           },
