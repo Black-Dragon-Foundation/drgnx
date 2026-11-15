@@ -665,11 +665,16 @@ How it works:
   errors.
 - **No hub-fed row wider than its window** (`drgnx-look-scene-widths`, after each scene's shot): every window of a
   visible frame whose buffer holds a hub-fed view is measured as drawn, then narrower (by a third of its body, at
-  most 300 px) and wider (300 px), and put back. At each width the env goes out at once and the rows settle (their
-  buffer changed, then 0.3 s quiet, 3 s at most); each row (a line starting at a row key) is measured with
-  `window-text-pixel-size`, and one wider than the body is an error naming the view, its buffer, its class, the width
-  and an example. A window that cannot move 40 px says so (`:not-resizable`). What was measured goes to
-  `NAME-sN-widths.eld`.
+  most 300 px) and wider (300 px), and put back. At each width the env goes out at once and the rows settle: a `ping`
+  round trip on the subscribed connection (the hub handles a connection's lines in order, so its patches for the env
+  came before the answer), the patches drawn, again until a round trip changes nothing (10 s at most, else an error).
+  Each row (a line starting at a row key) is measured with `window-text-pixel-size`, and one wider than the body is an
+  error naming the view, its buffer, its class, the width and an example. **No row cut where its full text fits:** a
+  `…` at the drawn or narrow width is checked against the same row at the wide width; the text it cut off (measured
+  in the buffer with its faces), less the `…`, plus the hub's 10 px slack, must not fit the px free after the `…`
+  (blanks, a stop's space, the body past the row's end). A window the frame cannot move 40 px is an error
+  (`:not-resizable` in the log) unless its buffer is named in `drgnx-look-scene-widths-fixed`. What was measured goes
+  to `NAME-sN-widths.eld`.
 
 What it reads from the environment:
 - `DRGNX_LOOK_ELPA`: a package directory to activate (Magit, Vertico, …). A session has no packages of its
