@@ -259,6 +259,55 @@ your own binding, kept.  Unset with REMOVE (handed back), the profile's key come
      (should (eq (keymap-lookup (current-global-map) "C-o") #'find-file))
      (should (eq (keymap-lookup global-map "C-o") #'open-line)))))   ; drgnx never wrote global-map
 
+;;; One verdict (T10): the sheet says what `key-binding' answers.
+
+(defun drgnx-keys-test--sheet-disagreements ()
+  "What the sheet says that `key-binding' (in a plain buffer) does not: each conflict's :verdict against the key's
+binding, and each command's first global key against the command.  A list of (KEY SHEET-SAYS KEY-BINDING-SAYS)."
+  (let (bad)
+    (cl-flet ((got (key) (let ((b (with-temp-buffer (key-binding (key-parse key) nil t)))) (and (not (numberp b)) b))))
+      (dolist (c (plist-get drgnx-keys-last :conflicts))
+        (when-let* ((v (plist-get c :verdict)))
+          (let ((says (drgnx-keys--def-text (got (plist-get c :key)))))
+            (unless (equal v says) (push (list (plist-get c :key) v says) bad)))))
+      (dolist (cmd (drgnx-commands-all))
+        (pcase-dolist (`(,key . ,map) (drgnx-cmd-bound cmd))
+          ;; a minor mode's map over the global one (tab-bar-mode's C-<tab>) is the foreign layer's business (T6/T8)
+          (when (and (eq (cdr (drgnx-commands--keymap-spec map)) 'global-map)
+                     (not (cl-some (lambda (m) (lookup-key m (key-parse key) t)) (current-minor-mode-maps))))
+            (unless (equal (drgnx-keys--def-text (drgnx-cmd-command cmd)) (drgnx-keys--def-text (got key)))
+              (push (list key (drgnx-cmd-id cmd) (drgnx-keys--def-text (got key))) bad))))))
+    (nreverse bad)))
+
+(ert-deftest drgnx-keys/the-sheet-says-what-key-binding-answers ()
+  "A key of yours (a command, a lambda, an unbind, a command on a prefix of profile keys) is the top layer of the
+resolver: its conflict is the only line for the key, the verdict equals `key-binding', and the sheet prints a lambda
+as \"a lambda\", never its body."
+  (drgnx-keys-test--live
+   (drgnx-keys-use '((vscode app editing window)))
+   (should-not (drgnx-keys-test--sheet-disagreements))
+   (let ((n0 (length (seq-filter (lambda (c) (plist-get c :verdict)) (plist-get drgnx-keys-last :conflicts)))))
+     (should (> n0 3))                         ; the profile's own claims over Emacs's: not vacuous
+     (drgnx-keys-test--as-you
+      (keymap-global-set "C-o" #'ignore)       ; a command over the profile's find-file
+      (keymap-global-set "C-s" (lambda () (interactive) (message "a closure body that must not print")))
+      (keymap-global-set "C-S-p" nil)          ; unbound by you: nothing, the profile's key steps aside
+      (keymap-global-set "C-k" #'ignore))      ; a command on the profile's C-k prefix: C-k C-r is unreachable
+     (drgnx-keys-apply)
+     (should-not (drgnx-keys-test--sheet-disagreements))
+     (let* ((verdicts (mapcar (lambda (c) (cons (plist-get c :key) (plist-get c :verdict)))
+                              (plist-get drgnx-keys-last :conflicts))))
+       (should (equal (alist-get "C-o" verdicts nil nil #'equal) "ignore"))
+       (should (equal (alist-get "C-s" verdicts nil nil #'equal) "a lambda"))
+       (should (equal (alist-get "C-S-p" verdicts nil nil #'equal) "nothing"))
+       (should (equal (alist-get "C-k C-r" verdicts nil nil #'equal) "nothing")))
+     (let ((lines (drgnx-keys-conflict-lines)))
+       (should-not (seq-find (lambda (l) (string-match-p "closure body\\|(lambda\\|#\\[" l)) lines))
+       (should (seq-find (lambda (l) (string-match-p "\\`C-s .*a lambda" l)) lines))
+       ;; one line per key
+       (dolist (k '("C-o" "C-s" "C-S-p" "C-k C-r"))
+         (should (= 1 (length (seq-filter (lambda (l) (string-prefix-p (concat k " ") l)) lines)))))))))
+
 (ert-deftest drgnx-keys/your-own-binding-before-the-first-apply-is-kept ()
   "A key the profile claims that you bound in the global map before drgnx applied any keys is kept as well."
   (drgnx-keys-test--live
