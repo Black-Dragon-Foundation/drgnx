@@ -539,6 +539,24 @@ is kitty's screen (`drgnx-tty-session-kitty-screen'; ESCAPES is not for it)."
       (sleep-for 0.05))
     pos))
 
+(defun drgnx-tty-session-find-below (sess heading regexp)
+  "(COL . ROW) of REGEXP's first match on SESS's screen in a line below the first that matches HEADING, or nil."
+  (let* ((lines (split-string (drgnx-tty-session-screen sess) "\n"))
+         (top (cdr (drgnx-tty-session--find-in (mapconcat #'identity lines "\n") heading)))
+         (pos (and top (drgnx-tty-session--find-in (mapconcat #'identity (nthcdr top lines) "\n") regexp))))
+    (and pos (cons (car pos) (+ top (cdr pos))))))
+
+(defun drgnx-tty-session-wait-screen-below (sess heading regexp &optional timeout)
+  "(COL . ROW) of REGEXP once it is on SESS's screen below HEADING's line (TIMEOUT s, default 5); else signal with the
+screen.  A text in two places (a file in the Open section and in the Files section) is found in the one under HEADING."
+  (let ((deadline (+ (float-time) (or timeout 5))) pos)
+    (while (not (setq pos (drgnx-tty-session-find-below sess heading regexp)))
+      (when (> (float-time) deadline)
+        (drgnx-ui--fail "%s: %S not on screen below %S within %ss:\n%s"
+                        (plist-get sess :name) regexp heading (or timeout 5) (drgnx-tty-session-screen sess)))
+      (sleep-for 0.05))
+    pos))
+
 (defun drgnx-tty-session-quiet (sess)
   "The screen of SESS once two captures 100 ms apart are identical (at most 10 s, else signal)."
   (let ((deadline (+ (float-time) 10)) (a (drgnx-tty-session-screen sess)) b)

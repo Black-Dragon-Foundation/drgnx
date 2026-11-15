@@ -1130,7 +1130,8 @@ dirs) and drive the session through `harness/drgnx-tty-session.el`:
   ESC, DEL, and the arrows, Home, End, PgUp, PgDn and F1–F12 with modifiers as xterm sends them. Text given as a
   multibyte string goes as UTF-8. Mouse input uses
   SGR reports on 1-based cells (`-click`, `-wheel`, `-drag`).
-- **Output:** the screen comes from `capture-pane` (`-screen`, `-find`, `-wait-screen`, `-quiet`). The paste buffer
+- **Output:** the screen comes from `capture-pane` (`-screen`, `-find`, `-wait-screen`, `-quiet`; `-find-below` and
+  `-wait-screen-below` look only under a heading's line, for a text shown in two places). The paste buffer
   shows what OSC 52 copied (`-clipboard`), and `-pane-flags` reports the pane's mouse and key modes. The inner Emacs's
   state comes through its socket (`-eval`, `-wait`).
 - **kitty, the exit test** (`test/tty/kitty-test.el`): a real terminal emulator instead of tmux.

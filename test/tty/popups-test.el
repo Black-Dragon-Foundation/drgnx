@@ -234,7 +234,7 @@ Lisp file in the editor."
                                         (with-current-buffer "a.txt" (insert "z"))
                                         t))
       (drgnx-tty-session-wait-screen s "a\\.txt \\* x")                ; tab: name, changed mark, close mark
-      (drgnx-tty-session-wait-screen s "^v PROJECT")                   ; Explorer: open root
+      (drgnx-tty-session-wait-screen s "^ v Files")                    ; the Explorer's section, open (one root: no root row)
       (drgnx-tty-session-wait-screen s "^> src")                       ; …closed folder
       (drgnx-tty-session-wait-screen s "| [a-z]+ > [a-zA-Z0-9.-]+ > ")  ; breadcrumb (cut off at the window's edge)
       (drgnx-tty-popups-test--bordered-child s)

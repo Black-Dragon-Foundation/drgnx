@@ -27,8 +27,11 @@ a.txt in the editor, wait until both are on the screen.  Returns the project dir
     dir))
 
 (defun drgnx-tty-mouse-test--click-on (sess regexp &rest args)
-  "Click at the first match of REGEXP on SESS's screen, ARGS (:dx N :mods … :double …) as `drgnx-tty-session-click'."
-  (let* ((pos (drgnx-tty-session-wait-screen sess regexp))
+  "Click at the first match of REGEXP on SESS's screen, ARGS (:dx N :mods … :double …) as `drgnx-tty-session-click';
+with :below HEADING, the first match in a line below HEADING's."
+  (let* ((pos (if (plist-get args :below)
+                  (drgnx-tty-session-wait-screen-below sess (plist-get args :below) regexp)
+                (drgnx-tty-session-wait-screen sess regexp)))
          (dx (or (plist-get args :dx) 0)))
     (drgnx-tty-session-send sess (drgnx-tty-session--click-bytes (+ (car pos) dx) (cdr pos)
                                                                  :mods (plist-get args :mods)
@@ -80,8 +83,9 @@ a.txt in the editor, wait until both are on the screen.  Returns the project dir
            (before (funcall width))
            (border (drgnx-tty-session-eval s '(nth 2 (window-edges (car (drgnx-wb--dock-windows))))))
            (row 10))
-      ;; the border is the character right of the dock's text, on the screen
-      (should (string-match-p "|" (nth (1- row) (split-string (drgnx-tty-session-screen s) "\n"))))
+      ;; the border is the character right of the dock's text, on the screen: │ on this UTF-8 terminal (a C locale's |
+      ;; is drgnx-tty-popups/a-c-locale-gets-ascii's)
+      (should (string-match-p (string #x2502) (nth (1- row) (split-string (drgnx-tty-session-screen s) "\n"))))
       (drgnx-tty-session-drag s (cons border row) (cons (+ border 6) row))
       (should (= (drgnx-tty-session-wait s `(let ((w (window-total-width (car (drgnx-wb--dock-windows)))))
                                               (and (/= w ,before) w)))
@@ -99,19 +103,20 @@ a.txt in the editor, wait until both are on the screen.  Returns the project dir
   (drgnx-tty-session-with (s :size "120x40")
     (drgnx-tty-mouse-test--project s)
     ;; A Ctrl-click selects from the focused row: that is a.txt only once the follower revealed it, on the bus's idle
-    ;; flush (wb/drgnx-signal.el).  Clicks sent before it start from the PROJECT row and select it too.
+    ;; flush (wb/drgnx-signal.el).  Clicks sent before it start from the first row and select it too.  The clicks go to
+    ;; the Files section's rows: the Open section above lists a.txt too.
     (drgnx-tty-session-wait s '(let ((w (drgnx-wb-section-window 'explorer)))
                                  (equal (with-current-buffer (window-buffer w) (drgnx-explorer-node-at (window-point w)))
                                         (buffer-file-name (get-buffer "a.txt")))))
-    (drgnx-tty-mouse-test--click-on s "^  a\\.txt" :mods '(control))
-    (drgnx-tty-mouse-test--click-on s "^  b\\.txt" :mods '(control))
+    (drgnx-tty-mouse-test--click-on s "^  a\\.txt" :mods '(control) :below drgnx-tty-session-explorer-heading)
+    (drgnx-tty-mouse-test--click-on s "^  b\\.txt" :mods '(control) :below drgnx-tty-session-explorer-heading)
     (should (equal (drgnx-tty-session-wait
                     s '(with-current-buffer (window-buffer (drgnx-wb-section-window 'explorer))
                          (and (= (length drgnx-explorer--selection) 2)
                               (mapcar #'file-name-nondirectory drgnx-explorer--selection))))
                    '("a.txt" "b.txt")))
     ;; a Ctrl-click on a selected row takes it out
-    (drgnx-tty-mouse-test--click-on s "^  a\\.txt" :mods '(control))
+    (drgnx-tty-mouse-test--click-on s "^  a\\.txt" :mods '(control) :below drgnx-tty-session-explorer-heading)
     (should (equal (drgnx-tty-session-wait
                     s '(with-current-buffer (window-buffer (drgnx-wb-section-window 'explorer))
                          (and (= (length drgnx-explorer--selection) 1)
