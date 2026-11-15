@@ -23,6 +23,7 @@
 (defvar vertico-multiform-categories)
 (defvar vertico-count)
 (defvar vertico--candidates-ov)
+(defvar vertico--candidates)
 (declare-function drgnx-look-palette-current "drgnx-look" ())
 (defvar drgnx-palette-float-test--ran nil "The command the palette ran.")
 (declare-function glitnir-active-p "glitnir")
@@ -226,38 +227,50 @@ the box's sizes for a frame there are that monitor's."
   "palette.html: in the box the prompt is a search icon, a hint follows the typed text and the mode line is a footer
 of keys; those belong to the box's window alone, and C-g takes them all off the minibuffer."
   (drgnx-palette-float-test--with-palette
-    (let ((mb nil) (win nil))
-      (drgnx-palette-float-test--reading
-       "Test"
-       (lambda ()
-         (let ((f (drgnx-test-wait (lambda () (drgnx-palette-float-test--palette-frame)) :what "the palette's frame")))
-           (drgnx-palette-float-test--wait-shown f)
-           (setq mb (current-buffer) win (frame-root-window f))
-           (should (string-search "move" (format "%s" (window-parameter win 'mode-line-format))))
-           ;; the box fits its rows: the input row, the group's title and the two commands, then the gap and the
-           ;; footer, `drgnx-palette-frame-footer-px' high within the pads' rounding
-           (let ((parent (frame-parent f)))
-             (should (<= (abs (- (window-pixel-height win)
-                                 (+ (* (default-line-height) (+ 1 3))
-                                    (drgnx-palette-frame--px parent drgnx-palette-frame-footer-gap-px)
-                                    (drgnx-palette-frame--px parent drgnx-palette-frame-footer-px))))
-                         1))
-             ;; the footer as drawn (the glyph matrix's mode line row, not an estimate from the face)
-             (redisplay t)
-             (should (<= (abs (- (car (window-line-height 'mode-line win))
-                                 (drgnx-palette-frame--px parent drgnx-palette-frame-footer-px)))
-                         1)))
-           (should (< 3 (default-value 'vertico-count)))
-           (let ((ovs (seq-filter (lambda (o) (eq (overlay-get o 'window) win))
-                                  (overlays-in (point-min) (point-max)))))
-             (should (seq-find (lambda (o) (overlay-get o 'invisible)) ovs))
-             ;; the hint ends the input row: after vertico's cursor space, before the rows
-             (should (string-search "code" (substring (overlay-get vertico--candidates-ov 'before-string) 1
-                                                      (string-search "Do " (overlay-get vertico--candidates-ov
-                                                                                        'before-string)))))))))
-      (should-not (window-parameter win 'mode-line-format))
-      (with-current-buffer mb
-        (should-not (seq-find (lambda (o) (eq (overlay-get o 'window) win)) (overlays-in (point-min) (point-max))))))))
+    ;; from a folder of no project: the palette lists the project's files too (`drgnx-palette-files'), and "Test" would
+    ;; match a checkout's test files: the rows would fill `vertico-count' and leave the box nothing to fit
+    (let* ((mb nil) (win nil) (noproject (file-name-as-directory (make-temp-file "palette-float-noproject" t)))
+           (default-directory noproject))
+      (unwind-protect
+          (progn
+            (drgnx-palette-float-test--reading
+             "Test"
+             (lambda ()
+               (let ((f (drgnx-test-wait (lambda () (drgnx-palette-float-test--palette-frame)) :what "the palette's frame")))
+                 (drgnx-palette-float-test--wait-shown f)
+                 (setq mb (current-buffer) win (frame-root-window f))
+                 (should (string-search "move" (format "%s" (window-parameter win 'mode-line-format))))
+                 ;; the premise: fewer rows than `vertico-count' (the two commands, their group's title and any file a
+                 ;; buffer of the session visits), so the box has to fit them; the rows are the lines vertico draws
+                 ;; after the input row (each ends in a newline, and so does the input row, the hint at its end)
+                 (let ((shown (1- (cl-count ?\n (overlay-get vertico--candidates-ov 'before-string))))
+                       (parent (frame-parent f)))
+                   (unless (< 0 shown (default-value 'vertico-count))
+                     (ert-fail (list "not fewer rows than vertico-count" shown (seq-take vertico--candidates 5))))
+                   ;; the box fits its rows: the input row and those rows, then the gap and the footer,
+                   ;; `drgnx-palette-frame-footer-px' high within the pads' rounding
+                   (should (<= (abs (- (window-pixel-height win)
+                                       (+ (* (default-line-height) (+ 1 shown))
+                                          (drgnx-palette-frame--px parent drgnx-palette-frame-footer-gap-px)
+                                          (drgnx-palette-frame--px parent drgnx-palette-frame-footer-px))))
+                               1))
+                   ;; the footer as drawn (the glyph matrix's mode line row, not an estimate from the face)
+                   (redisplay t)
+                   (should (<= (abs (- (car (window-line-height 'mode-line win))
+                                       (drgnx-palette-frame--px parent drgnx-palette-frame-footer-px)))
+                               1)))
+                 (should (< 3 (default-value 'vertico-count)))
+                 (let ((ovs (seq-filter (lambda (o) (eq (overlay-get o 'window) win))
+                                        (overlays-in (point-min) (point-max)))))
+                   (should (seq-find (lambda (o) (overlay-get o 'invisible)) ovs))
+                   ;; the hint ends the input row: after vertico's cursor space, before the rows
+                   (should (string-search "code" (substring (overlay-get vertico--candidates-ov 'before-string) 1
+                                                            (string-search "Do " (overlay-get vertico--candidates-ov
+                                                                                              'before-string)))))))))
+            (should-not (window-parameter win 'mode-line-format))
+            (with-current-buffer mb
+              (should-not (seq-find (lambda (o) (eq (overlay-get o 'window) win)) (overlays-in (point-min) (point-max))))))
+        (delete-directory noproject t)))))
 
 (ert-deftest palette-float-typing-and-ret-runs-command ()
   (drgnx-palette-float-test--with-palette

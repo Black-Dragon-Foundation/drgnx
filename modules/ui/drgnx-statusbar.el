@@ -451,13 +451,14 @@ the bar would be drawn smaller than it was measured."
 
 (defun drgnx-statusbar--row (w)
   "(HEIGHT TEXT BOX LEFTOVER) for window W's bar, in device pixels: the row's HEIGHT (`status-bar' at the frame's
-scale), the TEXT height of the bar's font, the BOX width above and below the text that makes up the difference, and
-the LEFTOVER pixel (0 or 1) an odd difference leaves."
+scale), the TEXT height of the bar's font, the BOX width drawn above and below the text that makes up the
+difference, and the LEFTOVER pixels it leaves: 1 when the difference is odd, more where the scale cannot draw the
+box's exact width (`drgnx-pixels-box-fit': the widest it draws that fits)."
   (let* ((frame (window-frame w))
          (height (drgnx-statusbar--row-height frame))
          ;; the font's height, read once per font: `window-font-height' made a new `font-info' vector at every build
          (text (or (car (drgnx-pixels-font-metrics drgnx-statusbar--bar-face frame)) (frame-char-height frame)))
-         (box (max 0 (/ (- height text) 2))))
+         (box (drgnx-pixels-box-fit (max 0 (/ (- height text) 2)) frame)))
     (list height text box (max 0 (- height text (* 2 box))))))
 
 (defun drgnx-statusbar--row-face (w)
@@ -465,20 +466,22 @@ the LEFTOVER pixel (0 or 1) an odd difference leaves."
 `status-bar' high (24 logical pixels at the comfortable density, at the frame's scale).  A flat box is drawn in the
 face's own background, so no colour is named."
   ;; the box first: the mode line's own box, which `drgnx-statusbar' inherits, would win otherwise
-  (list (list :box (list :line-width (cons 0 (nth 2 (drgnx-statusbar--row w))) :style 'flat-button))
+  (list (list :box (list :line-width (cons 0 (drgnx-pixels-box-width (nth 2 (drgnx-statusbar--row w)) (window-frame w)))
+                         :style 'flat-button))
         drgnx-statusbar--bar-face))
 
 (defun drgnx-statusbar--lead (w pad)
-  "The padding at the left end of window W's bar, PAD pixels wide.  When the row is a pixel short of its height (the
-difference between the row and the text is odd) it is also a spacer of the whole height, whose ascent takes the
-pixel: the text then sits a pixel lower, and the row is exactly `status-bar' high."
+  "The padding at the left end of window W's bar, PAD pixels wide.  When the row is short of its height by LEFTOVER
+pixels (`drgnx-statusbar--row': an odd difference between the row and the text, and the widths the box cannot draw
+at the frame's scale) it is also a spacer of the whole height, whose ascent takes half of them: the text stays in the
+middle, and the row is exactly `status-bar' high."
   (let* ((row (drgnx-statusbar--row w)) (height (nth 0 row)) (box (nth 2 row)) (leftover (nth 3 row)))
     (propertize
      " " 'face drgnx-statusbar--bar-face
      'display
      (if-let* (((> leftover 0))
                (extent (drgnx-pixels-font-extent drgnx-statusbar--bar-face (window-frame w))))
-         (let ((target (+ (car extent) box leftover)))
+         (let ((target (+ (car extent) box (/ leftover 2))))
            `(space :width (,pad) :height (,height) :ascent ,(min 100 (ceiling (* 100.0 target) height))))
        `(space :width (,pad))))))
 
@@ -1614,7 +1617,8 @@ moves, so other packages' entries are formatted again, once per buffer the bars 
     (drgnx-statusbar--misc-forget)
     (drgnx-statusbar--forget-edits)
     (clrhash drgnx-statusbar--git-branches)
-    (when (fboundp 'drgnx-modal-indicator-on) (drgnx-modal-indicator-on)))
+    ;; back to the default mode line only for an engine that runs (its stop takes it out again)
+    (when (and (fboundp 'drgnx-modal-indicator-on) (bound-and-true-p drgnx-modal-running)) (drgnx-modal-indicator-on)))
   (drgnx-statusbar--frame-apply)             ; the editors' mode line, and the bar's windows
   (drgnx-statusbar--bump)
   (dolist (f (frame-list)) (drgnx-chrome-apply f))

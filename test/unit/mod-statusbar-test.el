@@ -1723,7 +1723,9 @@ own cache), evil's state tag, other entries of `mode-line-misc-info'; each chang
           (drgnx-statusbar-mode (if was 1 -1)))))))
 
 (ert-deftest drgnx-statusbar/the-modal-indicator-moves-into-the-bar ()
-  (let (calls (drgnx-chrome-editor-mode-line drgnx-chrome-editor-mode-line))
+  ;; an engine runs: the bar gives the indicator back when it goes (without one it does not: the next row)
+  (require 'drgnx-modal)
+  (let (calls (drgnx-chrome-editor-mode-line drgnx-chrome-editor-mode-line) (drgnx-modal-running 'evil))
     (cl-letf (((symbol-function 'drgnx-modal-indicator-on) (lambda () (push 'on calls)))
               ((symbol-function 'drgnx-modal-indicator-off) (lambda () (push 'off calls)))
               ((symbol-function 'drgnx-chrome-apply) #'ignore))
@@ -2219,6 +2221,26 @@ makes the next redisplay build the bar again."
 
 (ert-deftest drgnx-statusbar/the-segments-are-in-the-fingerprint ()
   (should (memq 'drgnx-statusbar--segments drgnx-modules-fingerprint-registries)))
+
+(ert-deftest drgnx-statusbar/off-gives-the-modal-indicator-back-only-to-a-running-engine ()
+  "The bar takes the modal indicator out of the default mode line while it is on (it shows the state itself); off,
+it puts it back only when a modal engine runs: without one, the default `mode-line-format' is what it was before."
+  (require 'drgnx-modal)
+  (let ((before (default-value 'mode-line-format)) (entry '(:eval (drgnx-modal-mode-line))))
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-chrome-apply) #'ignore))
+          (let ((drgnx-modal-running nil))
+            (drgnx-statusbar-mode 1)
+            (drgnx-statusbar-mode -1)
+            (should (equal (default-value 'mode-line-format) before)))
+          (let ((drgnx-modal-running 'evil))
+            (drgnx-modal-indicator-on)
+            (drgnx-statusbar-mode 1)
+            (should-not (member entry (default-value 'mode-line-format)))
+            (drgnx-statusbar-mode -1)
+            (should (member entry (default-value 'mode-line-format)))))
+      (drgnx-statusbar-mode -1)
+      (setq-default mode-line-format before))))
 
 (provide 'mod-statusbar-test)
 ;;; mod-statusbar-test.el ends here

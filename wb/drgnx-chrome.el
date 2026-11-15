@@ -184,7 +184,7 @@ underline in `drgnx-border-subtle' on the row's last pixels, or nil when the the
   (let* ((frame (nth 2 rows))
          (row-bg (face-background 'drgnx-chrome-tab frame t))
          (rule (face-foreground 'drgnx-border-subtle frame t)))
-    (cons (list :box `(:line-width (0 . ,(drgnx-px drgnx-chrome--tab-lift frame))
+    (cons (list :box `(:line-width (0 . ,(drgnx-pixels-box-width (drgnx-px drgnx-chrome--tab-lift frame) frame))
                                    ,@(if (stringp row-bg) (list :color row-bg) '(:style flat-button))
                                    ,@(when (and (fboundp 'glitnir-active-p) (glitnir-active-p))   ; drawing, not just loaded
                                        `(:corner-radius ,drgnx-chrome--tab-top-radius :open (bottom)))))
