@@ -2942,6 +2942,15 @@ the panel's end shows the end (the composer) at its bottom, whatever came in abo
 starts at its header and a taller one shows its last page; a window the user moved point in is left alone. The look
 scenes check `p:head` and that the end is at the window's bottom (or the panel fits and starts at the top).
 
+**Pinned rows.** Every row of `panel_top::rows` (the header, the chips, the strip) carries `drgnx-pinned` (value 1, over the
+row's text, as every row property does, so not over its newline). The editor keeps the leading rows that carry it at the
+top of each window: `drgnx-agent-panel--pin-update` (after each draw of hub rows) copies them, and a per-window overlay
+whose `before-string` is the copy sits over the window's first line, which is never before the pinned rows' end (the
+`window-scroll-functions` hook and `--follow-tail` keep it so). The transcript scrolls between them and the composer; a
+click on the copy reads its property from the overlay's string (`drgnx-agent-panel--prop-at`). A header line cannot do
+this: Emacs draws it as one glyph row. The panel's rows are drawn by Lisp, so no Sjá store holds them; a view whose rows
+Sjá holds asks the store for the pinned prefix with `nidhogg-view-rows` `pinned` (Nidhogg's sja README, "Pinned rows").
+
 The chips beyond the snapshot's usage and mode come from state the hub holds: `sandboxed` or `not enforced` from the
 session's `enforced`, `N files` from the ledger's edited files and `N checkpoints` from the steps' facts. The model, the
 MCP count and the restore level have no source in the hub (it never reads the model the agent reports, and passes the

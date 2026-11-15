@@ -8,6 +8,9 @@ Turn it off with the module `tools/agent-panel` (see [modules](modules.md)); eve
 
 ## What you see
 
+On a long conversation the header, the chips and the disclosure strip stay at the top of the panel while the steps scroll
+between them and the composer, which stays at the bottom and follows the latest message. Their buttons work from there.
+
 - **Header:** the agent's icon and name, then what it is doing: "Claude · running 6 min", "held by you" (you paused
   it) or "Pair · editing your checkout"; on the right the **watch · review · debug** lens, the preset in force raised, then a pin button (pins the card at
   point; a click leaves point where it is) and **⋯**, a menu of Fork the Chat, Compact the Context, Switch the Model,
