@@ -874,6 +874,7 @@ Never signals."
 (defun drgnx-uitest-device-scale (frame)
   "Device pixels per unit of FRAME's Lisp coordinates, as a snapshot counts them: `frame-scale-factor' under GTK,
 which works in logical pixels, and 1 on the native shell, whose frames are in device pixels at any scale."
+  (require 'drgnx-pixels)   ; a file run in a session of its own has not loaded it through another
   (if (drgnx-pixels-device-p) 1 (frame-scale-factor frame)))
 
 (defun drgnx-uitest--png-raw (png)

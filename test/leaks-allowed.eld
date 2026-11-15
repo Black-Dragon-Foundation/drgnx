@@ -70,6 +70,17 @@ string-pixel-width uses)")
   :why "Emacs's tooltip timer: one is pending after a tip was shown, gone after it fired")
  (:what "\\`frame-param \\(?:font-parameter\\|nidhogg--font-height\\|nidhogg-text-zoom\\|line-spacing\\|toplevel-chrome\\|tab-bar-lines-keep-state\\|drgnx-topline-lines\\) "
   :why "parameters the renderer and the font code derive from `font' and the bars: the look rows' clean check reads the parameters themselves (font, line-spacing, bars)")
- (:what "\\`face [^ ]+ [+-]\\\\(unspecified\\\\ \\.\\\\ unspecified\\\\)\\'"
+ (:what "\\`face [^ ]+ [+-]\\\\(unspecified\\\\ \\.\\\\ \\(?:unspecified\\|reset\\)\\\\)\\'"
   :why "a face with no colour of its own on the frame: defined (or first realised) by a library that loaded, or gone back to that; a colour a test sets and leaves is still named")
+ (:what "\\`global-map "
+  :source "/emacs/[0-9.]+/lisp/\\|/Contents/Resources/lisp/"
+  :why "keys an Emacs library (tab-line, help, kmacro) binds in the global map when it loads")
+ (:what "\\`\\(?:hook \\(?:hack-dir-local-get-variables-functions\\|drgnx-settings-[a-z-]+\\|drgnx-keys-after-apply-functions\\)\\|advice \\(?:hack-local-variables-filter\\|hack-dir-local--get-variables\\)\\) \\+"
+  :source "\\`\\(?:core\\|wb\\|modules\\)/"
+  :why "drgnx's settings and keys libraries wiring themselves into Emacs's file-local variable machinery and their own hooks when they load; a library is never unloaded")
+ (:what "\\`advice drgnx-hub--connect-socket \\+"
+  :source "\\`harness/"
+  :why "the harness's own hub-caller bookkeeping, installed when drgnx-uitest loads")
+ (:what "\\`hook \\(?:drgnx-guard-prompt-functions\\|describe-widget-functions\\) \\+"
+  :why "the prompt guard's list of prompt functions and the widget describer, filled when their libraries load")
 )
