@@ -2247,17 +2247,6 @@ roles the hub measured it in.  The number of rows measured is in `drgnx-look-sce
     (setq drgnx-look-scene--rows-measured rows)
     (nreverse wide)))
 
-(defun drgnx-look-scene--hub-caught-up ()
-  "Non-nil once a `ping' on the subscribed connection is answered (3 s at most): the hub handles a connection's lines
-in order, so every line this Emacs sent before it (an env, a measurement, an ack) has been handled, and what the hub
-sent for them came before the answer and has been read."
-  (let ((done nil) (end (+ (float-time) 3)))
-    (when (process-live-p drgnx-hub--events)
-      (drgnx-hub--call-on drgnx-hub--events "ping" nil (lambda (&rest _) (setq done t)))
-      (while (and (not done) (< (float-time) end))
-        (accept-process-output drgnx-hub--events 0.02)))
-    done))
-
 (defun drgnx-look-scene--rows-settle (buffer how)
   "Wait for BUFFER's rows after its window's width changed (HOW names the width): its env goes out now (not after the
 idle debounce), then a round trip to the hub (`drgnx-look-scene--hub-caught-up') and the patches it sent drawn, again
