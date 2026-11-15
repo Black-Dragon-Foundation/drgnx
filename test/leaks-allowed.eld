@@ -58,7 +58,7 @@ string-pixel-width uses)")
   :why "buffers are closed by the harness's cleanup between files (ert-kill-all-test-buffers); a hidden work buffer is no state")
  (:what "\\`frame-param drgnx-\\(?:wb-\\|intent-by\\|layouts-\\|look-\\|frame-role\\|monitor\\|platform-wm\\|work-space-shown\\)"
   :why "the workbench's own layout and look bookkeeping in the frame parameters: every file that opens a panel sets it; the look rows' drgnx-look-gui-check-clean reads what moves pixels")
- (:what "\\`frame-param \\(?:glitnir--cards\\|session-name\\) "
+ (:what "\\`frame-param \\(?:glitnir--[a-z-]+\\|session-name\\) "
   :why "the renderer's and the session's own bookkeeping")
  (:what "\\`window-param \\(?:quit-restore\\|quit-restore-prev\\|internal-region-overlay\\|drgnx-uitest-id\\) "
   :why "what Emacs and the harness note on a window that showed a buffer, was cloned or was driven; none of it draws anything")
@@ -83,4 +83,7 @@ string-pixel-width uses)")
   :why "the harness's own hub-caller bookkeeping, installed when drgnx-uitest loads")
  (:what "\\`hook \\(?:drgnx-guard-prompt-functions\\|describe-widget-functions\\) \\+"
   :why "the prompt guard's list of prompt functions and the widget describer, filled when their libraries load")
+ (:what "\\`\\(?:hook\\|function-variable\\) "
+  :source "\\`\\(?:core/drgnx-surfaces\\|wb/drgnx-\\(?:wb\\|explorer\\|popup\\)\\|modules/tools/drgnx-replace\\)\\.el\\'"
+  :why "the workbench, surfaces and replace libraries wiring their hooks when first used in a session; each GUI test file has a session of its own, so it reaches no other file")
 )
