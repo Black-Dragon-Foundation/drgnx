@@ -60,6 +60,9 @@
   "An icon of the selected cell's toolbar." :group 'drgnx-notebook)
 (defface drgnx-notebook-chip '((t :inherit drgnx-chip-quiet))
   "A cell's type, and the kernel's state, in its header." :group 'drgnx-notebook)
+(defface drgnx-notebook-panel '((t :inherit default))
+  "An output panel's fill: its foreground is the colour the panel is drawn in (a darker step than the card), at the
+theme's own opacity; the theme sets it from the gap token." :group 'drgnx-notebook)
 (defface drgnx-notebook-chip-type '((t :height 0.92))
   "The type of a cell header's chip: the mockup's 11 px under the row's 12." :group 'drgnx-notebook)
 (defface drgnx-notebook-output '((t :inherit (drgnx-code-small) :extend t))
@@ -305,14 +308,18 @@ of the notebook (`drgnx-notebook--commands').")
     (when type (drgnx-notebook-add-cell-below type))))
 
 (defun drgnx-notebook--add-row ()
-  "The row between cells: `+ Code' and `+ Markdown', two chips centred, that add a cell below the selected one."
-  (concat (propertize " " 'display `(space :align-to (- (0.5 . text) ,(drgnx-px 62))))
-          (propertize "+ Code" 'face '(drgnx-notebook-chip drgnx-chip) 'drgnx-notebook-add 'code 'keymap drgnx-notebook-add-map
-                      'mouse-face 'drgnx-hover 'help-echo "Add a code cell below")
-          " "
-          (propertize "+ Markdown" 'face '(drgnx-notebook-chip drgnx-chip) 'drgnx-notebook-add 'markdown 'keymap drgnx-notebook-add-map
-                      'mouse-face 'drgnx-hover 'help-echo "Add a markdown cell below")
-          "\n"))
+  "The row between cells: `+ Code' and `+ Markdown', two chips centred in the window's text width (in pixels, as the
+window is now; the row is built again when the windows change), that add a cell below the selected one."
+  (let* ((chips (concat "+ Code" " " "+ Markdown"))
+         (chips-px (if (fboundp 'string-pixel-width) (string-pixel-width (propertize chips 'face '(drgnx-notebook-chip drgnx-chip))) 0))
+         (at (max 0 (/ (- (window-body-width nil t) chips-px) 2))))
+    (concat (propertize " " 'display `(space :align-to (,at)))
+            (propertize "+ Code" 'face '(drgnx-notebook-chip drgnx-chip) 'drgnx-notebook-add 'code 'keymap drgnx-notebook-add-map
+                        'mouse-face 'drgnx-hover 'help-echo "Add a code cell below")
+            " "
+            (propertize "+ Markdown" 'face '(drgnx-notebook-chip drgnx-chip) 'drgnx-notebook-add 'markdown
+                        'keymap drgnx-notebook-add-map 'mouse-face 'drgnx-hover 'help-echo "Add a markdown cell below")
+            "\n")))
 
 (defun drgnx-notebook--styled (text runs &rest base)
   "A copy of TEXT with the BASE faces on all of it and each of RUNS' faces (the hub's roles) on its stretch."
@@ -440,7 +447,8 @@ cell, gone when it is not, so it stands between cells and not inside the output.
           (setq ov (drgnx-notebook--overlay tail (1+ tail) 'add id))
           (overlay-put ov 'priority -20)   ; after the output's string at the same position
           (puthash id (plist-put set :add ov) drgnx-notebook--chrome))
-        (overlay-put ov 'after-string (drgnx-notebook--add-row))))))
+        (let ((row (drgnx-notebook--add-row)))   ; built again for the window's width now, put only when it changed
+          (unless (equal-including-properties (overlay-get ov 'after-string) row) (overlay-put ov 'after-string row)))))))
 
 (defun drgnx-notebook--refresh-head (id)
   "Build cell ID's header strip again (its type, prompt or the running cell changed)."
@@ -532,6 +540,14 @@ and the cell it left goes back (their strings are built again from their last ta
     faces))
 
 (defun drgnx-notebook--tail-string (tail &optional selected)
+  "`drgnx-notebook--tail-string-1' with the card's pad on every row: an output at the end of the buffer has no text after
+it to take the `line-prefix' of the cell's body from."
+  (let ((s (drgnx-notebook--tail-string-1 tail selected)))
+    (when (and (> (length s) 0) (drgnx-notebook--cards-p))
+      (add-text-properties 0 (length s) (list 'line-prefix (drgnx-notebook--card-pad)) s))
+    s))
+
+(defun drgnx-notebook--tail-string-1 (tail &optional selected)
   "The string put after a cell's tail boundary, from the hub's TAIL (:text :runs :more_lines :stale): its text with the
 runs' faces on it and a newline (the next row is the next cell's header).  SELECTED: the selected tint."
   (let* ((text (or (plist-get tail :text) "")) (n (length text)) (cell (if selected 'drgnx-notebook-cell-selected 'drgnx-notebook-cell)))
@@ -555,7 +571,7 @@ subtle face; none for a tail that names no stream."
   (let ((stream (plist-get tail :stream)))
     (if (or (null stream) (equal stream "")) ""
       (propertize (concat stream (if (equal (plist-get (plist-get tail :head) :state) "running") " · running" "") "\n")
-                  'face (list 'drgnx-text-subtle 'drgnx-code-small cell)))))
+                  'face (list 'drgnx-text-subtle 'drgnx-ui-caption 'drgnx-notebook-chip-type cell)))))
 
 ;;; Images (static PNG and JPEG; SVG is not in tier 1): one character each in the tail, drawn from the hub's full output
 
@@ -789,7 +805,7 @@ output, the inner block under its hairline: the card's span inset by 8 px, a tin
           ;; the panel: a darker translucent step (the gap's colour; the error tint for a failed run), a border, rounded 6
           (push (append (list 'inner end end :x0 inset :x1 (max inset (- width inset)) :top 'drgnx-border-subtle
                               :ring 'drgnx-border-subtle :radius (drgnx-px 6)
-                              :fill (if (eq out 'error) (cons 'error 0.14) (cons 'child-frame-shadow 0.35))
+                              :fill (if (eq out 'error) (cons 'error 0.14) (cons 'drgnx-notebook-panel (if (eq (frame-parameter nil 'background-mode) 'dark) 0.6 0.4)))
                               :overlay (plist-get (drgnx-notebook--chrome-of (plist-get c :id)) :tail))
                         nil)
                 keys))))
@@ -814,6 +830,7 @@ while nothing changed."
   (when (drgnx-notebook--cards-p)
     (let ((inset (drgnx-px drgnx-notebook--card-inset)) (pad (drgnx-notebook--card-pad)))
       (setq-local left-fringe-width inset right-fringe-width inset)
+      (when drgnx-notebook--selected-id (drgnx-notebook--sync-add drgnx-notebook--selected-id))
       (dolist (c drgnx-notebook--cells)
         (when-let* ((body (plist-get (drgnx-notebook--chrome-of (plist-get c :id)) :body)))
           (unless (equal-including-properties (overlay-get body 'line-prefix) pad) (overlay-put body 'line-prefix pad))))

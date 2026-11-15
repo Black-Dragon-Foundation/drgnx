@@ -765,7 +765,12 @@
                                                    blocks))))
            (tail (lambda (id) (overlay-get (plist-get (drgnx-notebook--chrome-of id) :tail) 'after-string))))
       ;; every output panel: a darker fill, a border, rounded
-      (should (consp (plist-get (funcall inner "a") :fill)))
+      (should (eq (car (plist-get (funcall inner "a") :fill)) 'drgnx-notebook-panel))
+      ;; the label is the look's small UI type, not the code font
+      (should (memq 'drgnx-ui-caption (ensure-list (get-text-property 0 'face (funcall tail "a")))))
+      (should-not (memq 'drgnx-code-small (ensure-list (get-text-property 0 'face (funcall tail "a")))))
+      ;; the last cell's rows have no buffer text after them to take the card's pad from: the string carries it
+      (should (get-text-property 0 'line-prefix (funcall tail "c")))
       (should (eq (plist-get (funcall inner "a") :ring) 'drgnx-border-subtle))
       (should (= (plist-get (funcall inner "a") :radius) (drgnx-px 6)))
       ;; the first row is the label in the subtle face: the stream, and the run's state
@@ -780,7 +785,9 @@
   (nb-test--with
     (let ((row (drgnx-notebook--add-row)))
       (should (eq (car (get-text-property 0 'display row)) 'space))
-      (should (plist-get (cdr (get-text-property 0 'display row)) :align-to))
+      ;; centred: a pixel position inside the window, from its text width and the chips' own
+      (let ((at (plist-get (cdr (get-text-property 0 'display row)) :align-to)))
+        (should (and (consp at) (integerp (car at)) (< 0 (car at) (window-body-width nil t)))))
       (should (memq 'drgnx-chip (ensure-list (get-text-property (string-search "+ Code" row) 'face row))))
       ;; no tinted band across the row
       (should-not (memq 'drgnx-notebook-cell-selected (ensure-list (get-text-property (1- (length row)) 'face row)))))))
