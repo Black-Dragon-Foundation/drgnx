@@ -98,7 +98,8 @@ order: `drgnx-agent-panel--insert-ops` and the `p:` placement rule are gone with
 The notes queued for the agent are the hub's rows (`c:q:N`, from the snapshot's `queue`); `drgnx-agent-panel-composer--queue-row`
 and the `:q` row keys are gone. The composer's input row stays Lisp (the field is the editor's: the user types in it); it
 is the only row the panel draws itself under the transcript. The edit and drop commands read the note's number from the row
-at point.
+at point. Since then the composer is no row: it is a buffer of its own in the window under the transcript
+([hub.md](hub.md), "Three windows").
 
 ## The panel's width (F1, last slice)
 
@@ -116,4 +117,6 @@ The chips for the sandbox, the files edited and the checkpoints are the hub's (f
 facts), and since the next slice the model (hermod keeps the model an agent reports and each accepted switch) and
 the MCP servers the hub gave the session (`Snapshot.model`, `Snapshot.mcp`); the restore level has no source in the hub. The hover face goes on every
 clickable part by the hub (`mouse-face` `drgnx-hover`, mapped to the face symbol by `drgnx-view-patch--dress`). A panel
-made without the hub has one quiet row saying where the header and cards come from.
+made without the hub has one quiet row saying where the header and cards come from. Both are gone since: the panel is
+three windows, the transcript a Sjá view that Emacs scrolls with no follow code, and without the hub it shows the
+waiting line ([hub.md](hub.md), "Three windows").

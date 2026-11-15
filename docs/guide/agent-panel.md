@@ -10,7 +10,6 @@ Turn it off with the module `tools/agent-panel` (see [modules](modules.md)); eve
 
 ## What you see
 
-<!-- The header window (T4) is in progress: owner to confirm this paragraph. -->
 The header and the composer are fitted to what they hold and never scroll; only the transcript between them does, as
 any Emacs buffer: while point is at its end it keeps the latest step in view, and once you scroll back it stays where
 you put it as new steps come in. The header's buttons work whatever the transcript shows. When the strip wraps to more

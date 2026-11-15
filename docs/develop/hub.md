@@ -2956,11 +2956,15 @@ come in, and a window scrolled back stays on its row (Sjá keeps its start and p
 No panel code follows the tail, copies rows or handles the wheel. Scrolling the transcript to its top loads the page
 before (the `--scrolled` hook). Until the first patch of the transcript view, a panel shows a waiting line (an overlay,
 "Waiting for the hub to send the agent's steps…"); with the hub down it stays, and the panel draws no rows of its own.
-<!-- T4, in progress: owner to confirm. --> The header window shows its own buffer (the panel's buffer name and " header") in
-`drgnx-agent-panel-header-mode` (derived from `special-mode`, with the panel's map as its parent), attached with
-`:sja t` to `agent-panel-top/SID`. It works on the panel's state through the state twin (the transcript buffer's
-`drgnx-agent-panel-` locals copied in before each command and back after it) and is fitted again when Sjá draws its
-rows. The look scenes check the three windows ([harness.md](harness.md)).
+The header window shows a buffer of its own (`modules/tools/drgnx-agent-panel-header.el`; the panel's buffer name and
+" header"), made by `drgnx-agent-panel--header-of`, the ABOVE of the kind's `:companions`. It is in
+`drgnx-agent-panel-header-mode` (derived from `special-mode`, truncated lines, no cursor, the panel's map as its keymap's
+parent) and attached with `:sja t` to `agent-panel-top/SID`, with the generic twin; it sends no look of its own (the hub
+reads the transcript view's). It works on the panel's state as a companion (`drgnx-agent-panel--companion-sync`: the
+transcript buffer's `drgnx-agent-panel-` locals are copied in before each command and the changed ones back after it),
+so a click on the lens, the pin or a pill runs `drgnx-agent-panel-act` on the session's state. After each draw of its
+rows (`drgnx-view-sja-drawn-functions`) the windows showing it are fitted again (`drgnx-wb-area-fit-companions`).
+Killing the panel's buffer kills its header. The look scenes check the three windows ([harness.md](harness.md)).
 
 The chips beyond the snapshot's usage and mode come from state the hub holds: the model (`Snapshot.model`: the one the
 agent reported in its `session/new` (or load, resume, fork) answer, `models.currentModelId`, which hermod keeps per
