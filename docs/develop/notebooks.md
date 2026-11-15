@@ -198,8 +198,8 @@ for its views.
   image is a row `[image/png image, WxH: save output as file]` and is never drawn; a kernel's SVG is never rendered (its row says
   so, as the inline output does). The lines of an error output (its `ENAME: EVALUE` line and its traceback, an empty line as one
   space) have the face `drgnx-notebook-error-row` over the whole row, under the text's own faces: the error tint, never a solid block.
-  While the cell runs the hub copies its output into the notebook once a second, so the view
-  follows at that pace.
+  While the cell runs the hub copies its output into the notebook once a second, and with every tail while a
+  full-output view of the cell is open (a view asked for later gets it at the next tick), so the view follows what the cell prints.
 - **The kernel log** (`kind: "log"`, view `notebook-log:ID`): what the kernel sends that answers no cell: a message with an empty
   parent header (its own logging) or one whose request the hub no longer tracks (another client's). They never reach a cell. The hub
   keeps the last 500 entries (a `stream`'s or an `error`'s text, cut at 4096 characters; any other message type is an entry with no

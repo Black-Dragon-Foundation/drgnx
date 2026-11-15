@@ -561,6 +561,10 @@ impl NbViews {
                     },
                 };
                 w.outputs[n] = Some(cell.to_owned());
+                drop(s);
+                if let Some(nb) = self.nb.get().and_then(Weak::upgrade) {
+                    nb.watch_output(conn, id, cell, true);
+                }
                 Ok(output_view(id, n))
             }
         }
@@ -696,14 +700,19 @@ impl NbViews {
 
     /// The editor ended VIEW: a full-output view's number is free again.
     pub fn view_closed(&self, conn: u64, view: &str) {
-        if let Some((id, n)) = output_of(view)
-            && let Some(slot) = self
-                .lock()
-                .watch
-                .get_mut(&(conn, id.to_owned()))
-                .and_then(|w| w.outputs.get_mut(n))
+        let Some((id, n)) = output_of(view) else {
+            return;
+        };
+        let cell = self
+            .lock()
+            .watch
+            .get_mut(&(conn, id.to_owned()))
+            .and_then(|w| w.outputs.get_mut(n))
+            .and_then(Option::take);
+        if let Some(cell) = cell
+            && let Some(nb) = self.nb.get().and_then(Weak::upgrade)
         {
-            *slot = None;
+            nb.watch_output(conn, id, &cell, false);
         }
     }
 
