@@ -534,6 +534,11 @@ counted from the hub), the file's problems (`drgnx-look-scene--problems') and it
 at the bottom.  Then the transcript is scrolled up a page and the pinned header's pin button and a chip are clicked:
 the picture is the scrolled panel."
   (prog1 (drgnx-look-scene-agent-panel)
+    (drgnx-look-scene--try "panel long"
+      (when-let* ((w (get-buffer-window drgnx-look-scene--panel)))
+        (when (= (window-start w) (with-current-buffer drgnx-look-scene--panel
+                                    (or (car-safe drgnx-agent-panel--pin) (point-min))))
+          (error "The transcript fits the panel's window: draw this scene alone (DRGNX_LOOK_ONLY='^agent-panel-long$'), which gives the mock agent its long transcript"))))
     (drgnx-look-scene--try "panel resize" (drgnx-look-scene--panel-resize drgnx-look-scene--panel))
     (drgnx-look-scene--try "panel wheel" (drgnx-look-scene--panel-wheel drgnx-look-scene--panel))
     (drgnx-look-scene--try "pinned clicks" (drgnx-look-scene--panel-clicks drgnx-look-scene--panel))))
