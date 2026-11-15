@@ -53,6 +53,7 @@
 (declare-function diff-refine-hunk "diff-mode")
 (declare-function diff-hunk-next "diff-mode")
 (defvar drgnx-explorer-buffer-name)
+(defvar drgnx-start-buffer-name)
 
 ;; drgnx-gateway.el's lines 201-232 as the mockups show them (window-dark.html), the working copy; the committed copy
 ;; has the two lines the agent changed (215-217) as they were before
@@ -450,6 +451,19 @@ from 201."
 send-run scenes' layout has none): a scene that focuses the editor starts here, or has no editor window to focus."
   (when (and (fboundp 'drgnx-layouts-current) (drgnx-layouts-current) (not (eq (drgnx-layouts-current) 'editor)))
     (drgnx-layouts-apply 'editor)))
+
+(defun drgnx-look-scene--shown (what &rest buffers)
+  "An error under WHAT unless the frame is in the editor layout and a window of it shows each of BUFFERS (buffers or
+names): a scene drawn after another that left its own layout (the Work map's) must still show its own buffers."
+  (redisplay)
+  (when (and (fboundp 'drgnx-layouts-current) (drgnx-layouts-current) (not (eq (drgnx-layouts-current) 'editor)))
+    (push (format "%s: the frame is in the %s layout, not the editor's" what (drgnx-layouts-current))
+          drgnx-look-scene--errors))
+  (dolist (b buffers)
+    (unless (and (get-buffer b) (get-buffer-window b))
+      (push (format "%s: no window shows %s; the frame shows %S" what (if (bufferp b) (buffer-name b) b)
+                    (mapcar (lambda (w) (buffer-name (window-buffer w))) (window-list nil 'never)))
+            drgnx-look-scene--errors))))
 
 (defun drgnx-look-scene--editor ()
   "The editor on the gateway file, with the Explorer's Files section drawn: its rows come from the hub, so the scenes'
@@ -1718,6 +1732,7 @@ debugging-extras mockup's)."
   (drgnx-look-scene--try "start page"
     (drgnx-wb-focus-editor)
     (drgnx-start-show))
+  (drgnx-look-scene--shown "start page" drgnx-start-buffer-name)
   (drgnx-look-scene--answer))
 
 (defun drgnx-look-scene-start-page ()
@@ -1808,6 +1823,7 @@ Explorer's rows, not \"Waiting for the hub\"."
                                                                                                        unless (eq k :overlay) append (list k v))))))
                             (window-parameter (get-buffer-window "cache-experiments.ipynb" t) 'glitnir-blocks)))
             drgnx-look-scene--errors)))
+  (drgnx-look-scene--shown "notebook" "cache-experiments.ipynb")
   (drgnx-look-scene--answer))
 
 (defun drgnx-look-scene--kernel-python ()
@@ -1910,6 +1926,7 @@ a finished run left."
                                                                (when (drgnx-view-p drgnx-view) (drgnx-view-draw-now drgnx-view))
                                                                (> (buffer-size) 0)))
                                                            views)))
+          (apply #'drgnx-look-scene--shown "notebook-views" views)
           (when (and kernel (not running))
             (with-current-buffer (cadr views) (drgnx-notebook-output-later))
             (drgnx-look-scene--until 12 "the output's window moves"
