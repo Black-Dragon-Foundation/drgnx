@@ -140,12 +140,18 @@ Returns non-nil when TAB was defined."
 (defun drgnx-area--remember (area window)
   "Remember the buffer, start and point WINDOW shows, for AREA's shown tab, and, when that buffer is a hub view's twin
 in another display class (`drgnx-view-patch-twin-of'), the view's own buffer: the twin goes when no window shows its
-class, and the tab then comes back with the view's buffer (the env's routing makes the twin again where it is needed)."
+class, and the tab then comes back with the view's buffer (the env's routing makes the twin again where it is needed).
+A view that opens at its tail (`drgnx-view-sja-tail') left with point at its end is remembered at `end': it comes
+back at the end it has then, so it follows again."
   (when (window-live-p window)
     (let* ((state (drgnx-area--state area)) (tabs (copy-alist (plist-get state :tabs)))
            (buffer (window-buffer window)))
       (setf (alist-get (drgnx-wb-area-tab area) tabs)
-            (list buffer (window-start window) (window-point window)
+            (list buffer (window-start window)
+                  (if (with-current-buffer buffer
+                        (and (bound-and-true-p drgnx-view-sja-tail) (= (window-point window) (point-max))))
+                      'end
+                    (window-point window))
                   (and (local-variable-p 'drgnx-view-patch-twin-of buffer)
                        (buffer-local-value 'drgnx-view-patch-twin-of buffer))))
       (drgnx-area--set-state area (plist-put (copy-sequence state) :tabs tabs)))))
@@ -335,7 +341,7 @@ Returns the window — the same one across tab switches."
         (setq w (drgnx-area--create area buffer)))
       (when (eq (car saved) buffer)
         (set-window-start w (nth 1 saved) t)
-        (set-window-point w (nth 2 saved)))
+        (set-window-point w (if (eq (nth 2 saved) 'end) (with-current-buffer buffer (point-max)) (nth 2 saved))))
       (drgnx-area--set-state area (plist-put (copy-sequence (drgnx-area--state area)) :tab tab))
       (drgnx-area--companions area w buffer)
       (drgnx-area--put-row area w)
@@ -466,9 +472,29 @@ difference.  The height is then preserved, so a frame resize goes to the main wi
       ;; `fit-window-to-buffer' reads a preserved width as a fixed size (it asks `window-size-fixed-p' with
       ;; `preserved' as HORIZONTAL) and fits nothing: the width is let go for the fit and kept again after it
       (window-preserve-size w t nil)
-      (unwind-protect (fit-window-to-buffer w (max 1 (floor (* drgnx-area--companion-most total) line)) 1 nil nil t)
-        (window-preserve-size w t t))
+      (let ((most (max 1 (floor (* drgnx-area--companion-most total) line)))
+            ;; never under the window's least height (its header line and a line): a resize under it is refused whole,
+            ;; and an empty companion (a header before its rows) would keep its split height
+            (least (max 1 (ceiling (window-min-size w nil w t) line)))
+            (was (window-pixel-height w)))
+        (unwind-protect (fit-window-to-buffer w most least nil nil t)
+          (window-preserve-size w t t))
+        (drgnx-area--fit-report w was most least))
       (window-preserve-size w nil t))))                ; also when the fit changed nothing
+
+(defun drgnx-area--fit-report (w was most least)
+  "Record on companion window W whether the fit to MOST and LEAST lines took: the window parameter
+`drgnx-area-unfitted' is (:height H :want WANT) when W's height is still WAS though its lines want another, else
+nil.  A window a popup borrows keeps its size (`drgnx-popup--fit'): nothing to report."
+  (set-window-parameter
+   w 'drgnx-area-unfitted
+   (and (= was (window-pixel-height w))
+        (not (plist-get (window-parameter w 'drgnx-popup) :borrowed))
+        (let* ((line (window-default-line-height w))
+               (text (+ (cdr (window-text-pixel-size w nil t nil (frame-pixel-height (window-frame w)) t))
+                        (window-scroll-bar-height w) (window-bottom-divider-width w)))
+               (want (max (* least line) (min (* most line) text))))
+          (and (> (abs (- want was)) 1) (list :height was :want want))))))
 
 (defun drgnx-area--companion-resized (w)
   "`window-size-change-functions' in a companion's buffer: a companion window whose size changed (a frame resize, a

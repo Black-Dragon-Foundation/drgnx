@@ -18,6 +18,9 @@
 ;; - Each window's start and point are turned into (ROW . OFFSET) before the batch and back after it, so the windows
 ;;   stay on their rows; a window whose point was at the region's end follows the tail (one of rows already drawn:
 ;;   at the first rows, point stays at the region's start, unless the view opens at its tail, `drgnx-view-sja-tail').
+;; - In a view that opens at its tail, a window with its point at the end that grew, or that redisplay gave a new start
+;;   leaving space under the end, gets the end's row back on its last line (`drgnx-view-sja--pin-end'): the one rule
+;;   that moves a start besides the draw.
 ;; - The read-only text, the region markers (the end's insertion type t), the stops and images, the faces of styles
 ;;   (an LRU shared with the Lisp inserter's) are as `drgnx-view-patch-render' draws them.
 ;; - A view's own text properties go on through `drgnx-view-sja-prop-functions' (a terminal's links and images) and
@@ -86,8 +89,33 @@ epoch is held until a reset (else applied: a terminal's faces repaint in place).
       (setq-local bidi-paragraph-direction 'left-to-right)
       (puthash (cons view class) (current-buffer) drgnx-view-patch--buffers)
       (add-hook 'kill-buffer-hook #'drgnx-view-patch--killed nil t)
+      (add-hook 'window-size-change-functions #'drgnx-view-sja--pin-end nil t)
+      (add-hook 'window-scroll-functions #'drgnx-view-sja--pin-end nil t)
       (drgnx-view-patch--hooks)
       s)))
+
+(defun drgnx-view-sja--pin-end (w &optional start)
+  "Keep the end's row of a view that opens at its tail (`drgnx-view-sja-tail') on the last line of W, a window showing
+its buffer with point at the region's end: a window that grew (Emacs keeps its start: `window-size-change-functions')
+and a new START redisplay chose (`window-scroll-functions': Emacs scrolling to a point at the end leaves space under
+it past rows taller than a line, cards scrolled out at the top) get the start moved back while one more screen line
+fits above the end's row.  A window whose point is elsewhere (scrolled back by its user) is left as it is.  Memoized on
+W's start and point, the end and W's size (the window parameter `drgnx-view-sja-pinned'): no work when none changed."
+  (with-current-buffer (window-buffer w)
+    (when-let* ((s (and drgnx-view-sja-tail drgnx-view-patch)) (end (drgnx-view-patch-end s))
+                (start (or start (window-start w)))
+                (key (list start (window-point w) (marker-position end) (window-pixel-height w) (window-pixel-width w)))
+                ((not (equal key (window-parameter w 'drgnx-view-sja-pinned))))
+                ((progn (set-window-parameter w 'drgnx-view-sja-pinned key) (= (window-point w) end)))
+                (body (window-body-height w t)) (line (window-default-line-height w)) (top start))
+      ;; the rows from TOP to the end's row, its bottom included (the end's own row is not in the measure); at most a
+      ;; body and a line measured
+      (while (and (> top (point-min))
+                  (let ((prev (save-excursion (goto-char top) (vertical-motion -1 w) (point))))
+                    (and (< prev top)
+                         (<= (+ (cdr (window-text-pixel-size w prev end nil (+ body line))) line) body)
+                         (setq top prev)))))
+      (when (< top start) (set-window-start w top t)))))
 
 (defun drgnx-view-sja--release (s)
   "S's instance in Sjá closed, its draw timer and markers gone."

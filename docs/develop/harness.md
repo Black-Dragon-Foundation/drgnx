@@ -612,8 +612,13 @@ How it works:
   Both panel scenes also check the panel's three windows in the right area: a header window (window parameter
   `drgnx-area-part` `above`) showing the hub's `agent-panel-top/SID` view with its `p:head` row, fitted to its text
   (±1 px) and carrying the area's tab row; the transcript (the panel's main buffer, `agent-panel/SID`) without
-  `p:head`; and the composer (`below`), the area's bottom window, fitted. `agent-panel-long` then checks, in the three
-  windows:
+  `p:head`; and the composer (`below`), the area's bottom window, fitted. Before the checks and the shot they wait for
+  the rows the hub settles on: round trips to the hub (a `ping` on the subscribed connection, answered after every line
+  sent before it) until one changes none of the three windows' texts (the hub's first fit of a row comes before the
+  editor's glyph widths, its refit one round trip later); one more round trip that changes them is an error, and so is
+  a hub that does not answer. The transcript's opening check: point at its end, and the end whole on its last line
+  (under the end's row as redisplay drew it there is less space than the screen line before the start), or the whole
+  transcript when it fits. `agent-panel-long` then checks, in the three windows:
   - **wheel:** the transcript wheeled up and down, with `pixel-scroll-precision-mode` on and off, moves each way while
     the header window keeps its edges, start and vscroll;
   - **clicks:** the transcript scrolled up a page, then the header window's pin button, a lens segment and a strip pill

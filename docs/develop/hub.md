@@ -2996,7 +2996,14 @@ lines and never scroll; the transcript scrolls between them as any Emacs buffer 
 come in, and a window scrolled back stays on its row (Sjá keeps its start and point by row across patches and resets).
 It opens at its end: it sets `drgnx-view-sja-tail`, so Sjá's draw counts its empty region as at its end and the first
 rows leave point there (a Sjá view otherwise opens on its first rows), whether a window showed it before them or after.
-No panel code follows the tail, copies rows or handles the wheel. Scrolling the transcript to its top loads the page
+Emacs keeps the start of a window that grows, and scrolling to a point at the end past rows taller than a line (cards
+scrolled out at the top) leaves space under the end, so the same flag gives the buffer Sjá's one tail rule
+(`drgnx-view-sja--pin-end`, a buffer-local `window-size-change-functions` and `window-scroll-functions`): a window with
+its point at the end and room for one more screen line above the end's row gets the end's row on its last line (at
+open, when the header's rows come and the header is fitted; a frame that grows; the composer shrinking after a send;
+the header's strip unwrapping; a new start redisplay chose). It is memoized on the window's start and point, the end
+and the window's size. A window scrolled back (its point off the end) is never moved. A tab switch away and back with point at the end comes back at the new end (the area remembers `end`,
+[core.md](core.md), "Area companions"). No panel code follows the tail, copies rows or handles the wheel. Scrolling the transcript to its top loads the page
 before (the `--scrolled` hook). Until the first patch of the transcript view, a panel shows a waiting line (an overlay,
 "Waiting for the hub to send the agent's steps…"); with the hub down it stays, and the panel draws no rows of its own.
 The header window shows a buffer of its own (`modules/tools/drgnx-agent-panel-header.el`; the panel's buffer name and
