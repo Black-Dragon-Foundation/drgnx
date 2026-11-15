@@ -142,8 +142,8 @@ The features come back after (unless BODY loaded them again)."
 ;;;; What the product's after-teardown leaves behind
 
 (defconst drgnx-test-modules--ui-variables
-  '(drgnx-keys--applied drgnx-keys--profile-keys drgnx-keys-last drgnx-keys--generation drgnx-keys--saved-modifiers drgnx-keys-problems
-                        drgnx-surfaces--which-key-entries which-key-replacement-alist)
+  '(drgnx-keys--profile-keys drgnx-keys-last drgnx-keys--generation drgnx-keys--saved-modifiers drgnx-keys-problems
+                             drgnx-surfaces--which-key-entries which-key-replacement-alist)
   "Variables `drgnx-keys-apply' and `drgnx-surfaces-refresh' (the after-teardown function) write.")
 
 (defun drgnx-test-modules--ui-snapshot ()
@@ -167,8 +167,7 @@ The features come back after (unless BODY loaded them again)."
 applied before; when some were, the after-teardown function's re-application stays, as it would in a session.
 The everywhere alist goes back in its place in `emulation-mode-map-alists' when it was there."
   (let ((variables (plist-get snap :variables)))
-    (when (and (fboundp 'drgnx-keys--restore) (null (alist-get 'drgnx-keys--applied variables))
-               (null (alist-get 'drgnx-keys--profile-keys variables)))
+    (when (and (fboundp 'drgnx-keys--restore) (null (alist-get 'drgnx-keys--profile-keys variables)))
       (drgnx-keys--restore))
     ;; the menus the registry built: with an empty registry all of them are stale, so the build retracts them
     (when (and (eql (plist-get snap :menu-items) 0) (fboundp 'drgnx-surfaces-build-menus))

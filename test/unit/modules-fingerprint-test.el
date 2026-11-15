@@ -5,7 +5,6 @@
 (require 'drgnx-modules-fingerprint)
 (require 'drgnx-timer)
 
-(defvar drgnx-keys--applied)                  ; let-bound by one test
 (defvar drgnx-fp-test-hook nil "A hook the fingerprint reads in these tests.")
 (defvar drgnx-fp-test-registry nil "An alist registry the fingerprint reads in these tests.")
 (defvar drgnx-fp-test-subscribers nil "An EVENT → functions registry.")
@@ -178,15 +177,12 @@
       (when (get-buffer "drgnx-fp-proc") (kill-buffer "drgnx-fp-proc")))
     (should-not (drgnx-fp-test--ours (drgnx-modules-fingerprint-diff before (drgnx-modules-fingerprint))))))
 
-(ert-deftest drgnx-fingerprint/applied-keys-and-add-function-on-a-function-variable-show ()
-  (let ((drgnx-keys--applied (list '(m k p o)))
-        (drgnx-modules-fingerprint-function-variables '(drgnx-fp-test-function))
+(ert-deftest drgnx-fingerprint/add-function-on-a-function-variable-shows ()
+  (let ((drgnx-modules-fingerprint-function-variables '(drgnx-fp-test-function))
         (drgnx-fp-test-function nil))
     (let ((before (drgnx-modules-fingerprint)))
-      (push '(m2 k2 p2 o2) drgnx-keys--applied)
       (add-function :after (default-value 'drgnx-fp-test-function) #'drgnx-fp-test-fn)
       (let ((whats (drgnx-fp-test--whats (drgnx-modules-fingerprint-diff before (drgnx-modules-fingerprint)))))
-        (should (member "drgnx-keys--applied length 1 -> 2" whats))
         (should (member "function-variable drgnx-fp-test-function +drgnx-fp-test-fn" whats))))))
 
 (ert-deftest drgnx-fingerprint/full-finds-advice-on-any-function ()

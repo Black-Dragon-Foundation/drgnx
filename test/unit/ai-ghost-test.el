@@ -119,7 +119,7 @@ LLM answering SPEC; `o' found running."
      (let* ((dir (make-temp-file "drgnx-ai-keys" t))
             (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" dir) (concat "XDG_STATE_HOME=" dir "/state"))
                                          process-environment))
-            (drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-profiles nil)
+            (drgnx-keys--session-layers nil) (drgnx-keys-profiles nil)
             (drgnx-keys-problems nil) (drgnx-keys-last nil))
        (unwind-protect
            (drgnx-test-with-modules '(tools/ai) :strict t

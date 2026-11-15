@@ -5,7 +5,7 @@
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
-(defvar drgnx-keys--applied)
+(defvar drgnx-keys--profile-keys)
 (defvar drgnx-layouts-pane-fillers)
 (defvar drgnx-layouts-shapes)
 (defvar drgnx-persist-state-functions)
@@ -272,14 +272,14 @@ another order, which `equal' on two keymaps sees."
           (context context-menu-mode)
           (menu-hook (default-value 'menu-bar-update-hook))
           (context-fns (default-value 'context-menu-functions))
-          (applied drgnx-keys--applied))
+          (profile-keys drgnx-keys--profile-keys))
       (drgnx-test-with-modules '(tools/browser) :strict t (ignore))
       (should (> (hash-table-count drgnx-commands--table) 4))
       (should (equal (drgnx-fixture-test--bindings map) (drgnx-fixture-test--bindings global-map)))
       (should (eq context context-menu-mode))
       (should (equal menu-hook (default-value 'menu-bar-update-hook)))
       (should (equal context-fns (default-value 'context-menu-functions)))
-      (should (equal applied drgnx-keys--applied)))))
+      (should (equal profile-keys drgnx-keys--profile-keys)))))
 
 (ert-deftest drgnx-test-modules/a-teardown-problem-is-kept-when-the-body-signals ()
   (ert-with-temp-directory dir

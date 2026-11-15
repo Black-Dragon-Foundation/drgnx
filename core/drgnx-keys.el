@@ -598,7 +598,6 @@ stay Vim's in normal and visual state, as in VSCodeVim; VS Code's keys still wor
 adds `drgnx-modal-sync-engine' so a runtime switch starts and stops the engine.  An error in one is said in
 *Messages* and does not stop the others.")
 
-(defvar drgnx-keys--applied nil "What drgnx bound, newest first: (MAPSYM KEY PREVIOUS OURS).")
 (defvar drgnx-keys--generation 0 "Incremented by every apply; stale deferred bindings check it.")
 (defvar drgnx-keys--session-layers nil "Layers chosen in this session; win over keys.eld and the default.")
 (defvar drgnx-keys-last nil "The last applied resolution, plus :layers, :problems from loading too.")
@@ -1159,8 +1158,7 @@ drgnx writes no other map, so there is nothing else to undo."
   (drgnx-keys--fill-foreign nil)
   (drgnx-keys--detach-all)
   (drgnx-keys--profile-indent nil)
-  (drgnx-keys--uninstall-global)
-  (setq drgnx-keys--applied nil))
+  (drgnx-keys--uninstall-global))
 
 (defvar drgnx-keys--indent-orig 'unset
   "The default `indent-tabs-mode' before a profile set it (`unset': none did).")

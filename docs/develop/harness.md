@@ -208,8 +208,8 @@ and third-party hooks, by hand), `unload-feature-special-hooks` and every bound 
 or `-functions` (a `-hooks` name holds hook names, as `unload-feature-special-hooks` does: no hook) (found once per Emacs with one `apropos-internal`, about 10 ms, and again by every full
 scan, so a new drgnx hook needs no line anywhere), the `add-function` advice on
 `drgnx-modules-fingerprint-function-variables`, `global-mode-string`, `auto-mode-alist`, `major-mode-remap-alist`,
-`after-load-alist`, `emulation-mode-map-alists`, `default-frame-alist`, `global-minor-modes`, the length of
-`drgnx-keys--applied`, and the keys of every registry in `drgnx-modules-fingerprint-registries` (data: a branch that
+`after-load-alist`, `emulation-mode-map-alists`, `default-frame-alist`, `global-minor-modes`,
+and the keys of every registry in `drgnx-modules-fingerprint-registries` (data: a branch that
 adds a registry adds one symbol). With a non-nil argument it adds a `mapatoms` scan of every bound `*-hook`,
 `*-hooks`, `*-functions` and `*-function` variable (an alias is read once, under its base name; a value that is not a
 proper list is skipped) and every advised function (`advice-mapc`), which finds what the lists miss; a diff of two

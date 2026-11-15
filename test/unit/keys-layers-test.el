@@ -37,7 +37,7 @@ applied on Linux; `lay-empty' is a profile with no keys.  Undone after."
      (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'linux)))
        (drgnx-test-with-areas
          (let* ((drgnx-keys-profiles (list (list 'lay :name "Lay" :bind ',bind) (list 'lay-empty :name "Empty" :bind nil)))
-                (drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-problems nil) (drgnx-keys-last nil)
+                (drgnx-keys--session-layers nil) (drgnx-keys-problems nil) (drgnx-keys-last nil)
                 (drgnx-keys--yours-in-maps (make-hash-table :test #'equal)) (drgnx-keys--yours-everywhere nil))
            (set-keymap-parent drgnx-keys-test-lder-mode-map nil)
            (set-keymap-parent drgnx-keys-test-lbase-mode-map nil)

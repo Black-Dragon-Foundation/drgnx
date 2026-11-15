@@ -48,7 +48,7 @@ registered and the keys applied, no engine registered.  Skipped where evil can b
             (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
             (drgnx-modules--table nil) (drgnx-modules--report nil)
             (drgnx-modules--state nil) (drgnx-modal-engines nil) (drgnx-modal-running nil)
-            (drgnx-keys--applied nil) (drgnx-keys-profiles nil) (drgnx-keys-problems nil) (drgnx-keys-last nil)
+            (drgnx-keys-profiles nil) (drgnx-keys-problems nil) (drgnx-keys-last nil)
             (drgnx-keys--session-layers nil) (drgnx-onboard--restart-needed nil)
             (drgnx-settings-apply--entries nil))
        (make-directory (concat dir "config") t)

@@ -27,7 +27,7 @@ The keys are resolved for `drgnx-terminal-keys-test--platform'."
           (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" dir) (concat "XDG_STATE_HOME=" dir "/state"))
                                        process-environment))
           (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-          (drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-profiles nil)
+          (drgnx-keys--session-layers nil) (drgnx-keys-profiles nil)
           (drgnx-keys-problems nil) (drgnx-keys-last nil)
           (ring-bell-function ring-bell-function) (use-dialog-box use-dialog-box)
           (use-short-answers use-short-answers) (inhibit-startup-screen inhibit-startup-screen))

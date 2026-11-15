@@ -153,7 +153,7 @@ keys); every binding is undone after."
   `(drgnx-keys-test--with-core-commands
     (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'linux)))
       (drgnx-test-with-areas
-        (let* ((drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-profiles nil)
+        (let* ((drgnx-keys--session-layers nil) (drgnx-keys-profiles nil)
                (drgnx-keys-problems nil) (drgnx-keys-last nil))
           (unwind-protect (progn ,@body)
             (drgnx-keys-forget-yours)

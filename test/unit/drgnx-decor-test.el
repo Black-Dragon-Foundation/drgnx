@@ -110,7 +110,7 @@ terminal, plus the box's 1 px).  Pattern D (the frame's kind is stubbed)."
                      (insert-file-contents (expand-file-name (format "keys/%s.eld" profile) drgnx-dir))
                      (goto-char (point-min)) (read (current-buffer))))
              (row (assq 'decor-activate (plist-get spec :bind)))
-             (drgnx-keys--applied nil) (drgnx-keys-problems nil) (drgnx-keys-last nil)
+             (drgnx-keys-problems nil) (drgnx-keys-last nil)
              (drgnx-keys--session-layers `((,profile app)))
              (drgnx-keys-profiles `((,profile :name "Test" :bind (,row))))
              (ran 0))

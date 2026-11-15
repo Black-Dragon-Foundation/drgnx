@@ -434,7 +434,7 @@ binding are taken off afterwards."
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
         (ring-bell-function ring-bell-function) (use-dialog-box use-dialog-box)
         (use-short-answers use-short-answers) (inhibit-startup-screen inhibit-startup-screen)
-        (drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-profiles nil)
+        (drgnx-keys--session-layers nil) (drgnx-keys-profiles nil)
         (drgnx-keys-problems nil) (drgnx-keys-last nil))
     (drgnx--core-commands)
     (unwind-protect

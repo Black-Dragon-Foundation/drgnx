@@ -20,8 +20,6 @@
 (require 'timer)
 (require 'loadhist)
 
-(defvar drgnx-keys--applied)            ; drgnx-keys, when loaded
-
 (defvar drgnx-modules-fingerprint-hooks
   '(kill-buffer-hook kill-emacs-hook after-change-functions window-buffer-change-functions
                      window-size-change-functions window-selection-change-functions window-state-change-functions
@@ -258,7 +256,6 @@ function (about 12 ms): once per test file.  The diff of two full ones reads `:a
                  (drgnx-modules-fingerprint--alist-items 'frame-parameter 'default-frame-alist)
                  :global-minor-modes
                  (drgnx-modules-fingerprint--list-items 'minor-mode 'global-minor-modes)
-                 :keys-applied (and (boundp 'drgnx-keys--applied) (length drgnx-keys--applied))
                  :registries regs)))
       (if full (append cheap (drgnx-modules-fingerprint--full-items)) cheap))))
 
@@ -358,10 +355,6 @@ of the two fingerprints has (FULL against cheap) are skipped."
                          out
                          (pcase field
                            (:features (drgnx-modules-fingerprint--diff-features b a))
-                           (:keys-applied
-                            (unless (equal a b)
-                              (list (list :what (format "drgnx-keys--applied length %s -> %s" b a)
-                                          :source nil))))
                            (_ (drgnx-modules-fingerprint--diff-items b a)))))))
     out))
 

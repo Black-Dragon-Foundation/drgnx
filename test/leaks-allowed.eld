@@ -34,6 +34,4 @@
 string-pixel-width uses)")
  (:what "\\`buffer \\+\\*\\(?:Compile-Log\\|Native-compile-Log\\|Warnings\\)\\*\\'"
   :why "the logs byte and native compilation, and warnings, write to")
- (:what "\\`drgnx-keys--applied length nil -> 0\\'"
-  :why "the variable became bound because the library loaded: a load, not a change")
 )

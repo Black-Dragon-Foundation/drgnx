@@ -45,7 +45,7 @@ started by an apply (the after-apply functions are off)."
   `(let* ((dir (make-temp-file "drgnx-keys-claims" t))
           (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" dir) (concat "XDG_STATE_HOME=" dir "/state"))
                                        process-environment))
-          (drgnx-keys--applied nil) (drgnx-keys-profiles nil) (drgnx-keys-problems nil) (drgnx-keys-last nil)
+          (drgnx-keys-profiles nil) (drgnx-keys-problems nil) (drgnx-keys-last nil)
           (drgnx-keys--session-layers nil) (drgnx-keys-after-apply-functions nil))
      (unwind-protect (progn ,@body)
        (drgnx-keys--restore)

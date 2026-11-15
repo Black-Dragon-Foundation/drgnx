@@ -39,7 +39,7 @@ the usage counts go there, never the user's), no usage counted, and every bindin
                                        process-environment))
           (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
           (drgnx-keys-profiles (copy-tree drgnx-shortcuts-test--profiles))
-          (drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-problems nil) (drgnx-keys-last nil)
+          (drgnx-keys--session-layers nil) (drgnx-keys-problems nil) (drgnx-keys-last nil)
           (drgnx-keys-presets '(("Alpha" . ((alpha app editing window))) ("Beta" . ((beta app editing window)))))
           (drgnx-surfaces--usage nil) (drgnx-surfaces--usage-dirty nil)
           (drgnx-settings-apply--entries nil)
