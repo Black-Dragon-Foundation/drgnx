@@ -2005,7 +2005,7 @@ session's (\"ui ERT: P/T passed\", a FAIL line each, SKIP lines).  Return an exi
                               (plist-get meta :report)
                               (if (and child-out (not (string-empty-p (string-trim child-out))))
                                   (concat "  the session's Emacs said:\n"
-                                          (mapconcat (lambda (l) (concat "    " l "\n")) (last (split-string (string-trim child-out) "\n") 12) ""))
+                                          (mapconcat (lambda (l) (concat "    " l "\n")) (seq-take (split-string (string-trim child-out) "\n") 10) ""))
                                 "")
                               (mapconcat (lambda (l) (concat "  " l "\n")) (plist-get meta :lines) ""))
                       fails))
