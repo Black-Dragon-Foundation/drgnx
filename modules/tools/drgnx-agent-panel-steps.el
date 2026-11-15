@@ -81,11 +81,21 @@
     (drgnx-ui-kit-run choice)))
 
 (defun drgnx-agent-panel--prop-at (event prop)
-  "Property PROP of the text EVENT is on: in the string it is over (the pinned rows are an overlay's), else the
-buffer's."
+  "Property PROP of the text EVENT is on: the string's when it is over one (the pinned rows are an overlay's), else
+the buffer's.  A string's position in the buffer is the window start, under the copy: never read there."
   (let* ((end (event-end event)) (pos (posn-point end)) (win (posn-window end)) (str (posn-string end)))
-    (or (and (stringp (car-safe str)) (get-text-property (cdr str) prop (car str)))
-        (and pos (windowp win) (get-text-property pos prop (window-buffer win))))))
+    (if (stringp (car-safe str))
+        (get-text-property (cdr str) prop (car str))
+      (and pos (windowp win) (get-text-property pos prop (window-buffer win))))))
+
+(defvar drgnx-agent-panel--pin)
+
+(defun drgnx-agent-panel--on-pin-p (event)
+  "Whether EVENT is on the pinned copy (`drgnx-agent-panel--pin'), the string of the overlay over the window's first
+line."
+  (let ((str (posn-string (event-end event))) (win (posn-window (event-end event))))
+    (and (stringp (car-safe str)) (windowp win)
+         (eq (car str) (cdr (buffer-local-value 'drgnx-agent-panel--pin (window-buffer win)))))))
 
 (defun drgnx-agent-panel-act (event)
   "Run the header, strip, chip or card part the click EVENT is on: the lens segment (`lens:N'), the pin or the ⋯ menu, a
@@ -117,12 +127,14 @@ step type's pill (`type:NAME') or `make default', the ledger or a card's button 
                 ((stringp chip) (drgnx-agent-panel-chip (intern chip)))))))))
 
 (defun drgnx-agent-panel-press (event)
-  "Press EVENT: on a header or chip part nothing moves point (so the pin takes the card at point, not the header);
-anywhere else the press is the stock one."
+  "Press EVENT: on a header or chip part nothing moves point (so the pin takes the card at point, not the header), nor
+anywhere on the pinned copy, as on a header line (point would go to the window start, under it, and a window at the
+panel's end would stop following it); anywhere else the press is the stock one."
   (interactive "e")
   (let* ((end (event-end event)) (pos (posn-point end)) (win (posn-window end))
          (buf (and (windowp win) (window-buffer win))))
-    (unless (and pos buf (or (drgnx-agent-panel--prop-at event 'drgnx-agent-panel-action)
+    (unless (and pos buf (or (drgnx-agent-panel--on-pin-p event)
+                             (drgnx-agent-panel--prop-at event 'drgnx-agent-panel-action)
                              (drgnx-agent-panel--prop-at event 'drgnx-agent-panel-chip)))
       (mouse-drag-region event))))
 

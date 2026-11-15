@@ -1056,20 +1056,17 @@ and the presets' names it lays the lens out of."
 
 (declare-function drgnx-agent-panel--end-shown-p "drgnx-agent-panel")
 
-(ert-deftest drgnx-agent-panel/the-end-is-shown-only-with-its-whole-row-and-a-line-of-room ()
-  "A row cut at the bottom (or the top), or one with no room for the line under it, is not shown: plain
-`pos-visible-in-window-p' says it is, redisplay does not, and the window scrolled again after the panel had followed
-its tail."
+(ert-deftest drgnx-agent-panel/the-end-is-shown-only-with-its-whole-row ()
+  "A row cut at the bottom (or the top) is not shown: plain `pos-visible-in-window-p' says it is, redisplay does not,
+and the window scrolled again after the panel had followed its tail.  The last whole row is."
   (drgnx-agent-panel-test--with
     (with-current-buffer buf
       (let ((w (selected-window)))
-        (cl-letf (((symbol-function 'window-body-height) (lambda (&rest _) 820))
-                  ((symbol-function 'frame-char-height) (lambda (&rest _) 20)))
+        (progn
           (cl-letf (((symbol-function 'pos-visible-in-window-p) (lambda (&rest _) (list 0 700))))
             (should (drgnx-agent-panel--end-shown-p w)))
-          ;; the row's top is in, its line under it is not
           (cl-letf (((symbol-function 'pos-visible-in-window-p) (lambda (&rest _) (list 0 795))))
-            (should-not (drgnx-agent-panel--end-shown-p w)))
+            (should (drgnx-agent-panel--end-shown-p w)))
           (cl-letf (((symbol-function 'pos-visible-in-window-p) (lambda (&rest _) (list 0 700 0 1 21 30))))
             (should-not (drgnx-agent-panel--end-shown-p w)))
           (cl-letf (((symbol-function 'pos-visible-in-window-p) (lambda (&rest _) nil)))
@@ -1093,4 +1090,67 @@ away from."
           (should (= 1 tails))
           (set-window-point w (point-min))
           (drgnx-agent-panel--pane-resized (list :window w))
+          (should (= 1 tails)))))))
+
+(declare-function drgnx-agent-panel-press "drgnx-agent-panel-steps")
+(defvar drgnx-agent-panel--pin-overlays)
+
+(ert-deftest drgnx-agent-panel/a-click-on-the-pinned-copy-reads-only-the-copy ()
+  "A click on a part of the pinned copy that does nothing runs nothing, though the transcript row under the copy (at the
+window start, the click's buffer position) has a button there; a press there does not move point into the transcript
+(the window at the panel's end would stop following it)."
+  (drgnx-agent-panel-test--pinned
+    (let ((inhibit-read-only t))
+      (put-text-property 16 22 'drgnx-agent-panel-action "pin"))
+    (drgnx-agent-panel--pin-update)
+    (let* ((w (selected-window)) (ran nil)
+           ;; the newline after "HEAD row": no action in the copy
+           (posn (list w 16 '(0 . 0) 0 (cons (cdr drgnx-agent-panel--pin) 8))))
+      (cl-letf (((symbol-function 'drgnx-ui-kit-run) (lambda (id) (push id ran)))
+                ((symbol-function 'mouse-drag-region) (lambda (_e) (push 'stock-press ran))))
+        (with-current-buffer buf
+          (drgnx-agent-panel-act (list 'mouse-1 posn))
+          (drgnx-agent-panel-press (list 'down-mouse-1 posn))))
+      (should-not ran))))
+
+(ert-deftest drgnx-agent-panel/a-dead-windows-pinned-overlay-goes-with-it ()
+  "Each window that showed the panel had an overlay for the pinned rows; one whose window was deleted is deleted too, not
+only forgotten (a dock shown again makes new windows)."
+  (drgnx-agent-panel-test--pinned
+    (let ((w2 (split-window)))
+      (set-window-buffer w2 buf)
+      (drgnx-agent-panel--pin-update)
+      (let ((pinned (lambda () (seq-filter (lambda (o) (overlay-get o 'before-string))
+                                           (overlays-in (point-min) (point-max))))))
+        (should (= 2 (length (funcall pinned))))
+        (delete-window w2)
+        (drgnx-agent-panel--pin-update)
+        (should (= 1 (length (funcall pinned))))
+        (should (= 1 (length drgnx-agent-panel--pin-overlays)))))))
+
+(ert-deftest drgnx-agent-panel/a-pinned-row-whose-faces-change-is-copied-again ()
+  "The hub draws the header again with the same text and other faces (the lens's preset in force raised, a pill on):
+the overlay shows the new copy, not the old one, which `equal' takes for the same."
+  (drgnx-agent-panel-test--pinned
+    (drgnx-agent-panel--pin-update)
+    (let ((inhibit-read-only t)) (put-text-property 1 5 'face 'bold))
+    (drgnx-agent-panel--pin-update)
+    (let ((shown (overlay-get (cdr (assq (selected-window) drgnx-agent-panel--pin-overlays)) 'before-string)))
+      (should (eq 'bold (get-text-property 0 'face shown)))
+      (should (eq shown (cdr drgnx-agent-panel--pin))))))
+
+(ert-deftest drgnx-agent-panel/new-fonts-make-a-window-at-the-end-follow-it-again ()
+  "Fonts written again (`drgnx-look-fonts-applied-hook': a theme change, a font setting) change the rows' heights with
+no hub patch: a panel window at the panel's end follows its tail again; one the user moved point in stays."
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (let ((w (selected-window)) (tails 0))
+        (let ((inhibit-read-only t)) (erase-buffer) (insert "header\nstep\ncomposer\n"))
+        (set-window-buffer w buf)
+        (cl-letf (((symbol-function 'drgnx-agent-panel--tail-start) (lambda (_w) (cl-incf tails) (point-min))))
+          (set-window-point w (point-max))
+          (run-hooks 'drgnx-look-fonts-applied-hook)
+          (should (= 1 tails))
+          (set-window-point w (point-min))
+          (run-hooks 'drgnx-look-fonts-applied-hook)
           (should (= 1 tails)))))))

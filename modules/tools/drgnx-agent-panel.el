@@ -272,9 +272,11 @@ newline), or nil when the first row is not one."
       (drgnx-agent-panel--pin-place w))))
 
 (defun drgnx-agent-panel--pin-overlay (window)
-  "WINDOW's overlay for the pinned rows, made when it has none."
-  (setq drgnx-agent-panel--pin-overlays
-        (seq-filter (lambda (c) (and (window-live-p (car c)) (overlay-buffer (cdr c)))) drgnx-agent-panel--pin-overlays))
+  "WINDOW's overlay for the pinned rows, made when it has none.  A dead window's overlay is deleted."
+  (dolist (c drgnx-agent-panel--pin-overlays)
+    (unless (and (window-live-p (car c)) (overlay-buffer (cdr c)))
+      (delete-overlay (cdr c))
+      (setq drgnx-agent-panel--pin-overlays (delq c drgnx-agent-panel--pin-overlays))))
   (or (cdr (assq window drgnx-agent-panel--pin-overlays))
       (let ((ov (make-overlay (point-min) (point-min) (current-buffer))))
         (overlay-put ov 'window window)
@@ -288,7 +290,8 @@ rows the window's overlay is gone."
   (if-let* ((pin drgnx-agent-panel--pin))
       (let ((start (if away start (max start (car pin)))) (ov (drgnx-agent-panel--pin-overlay window)))
         (move-overlay ov start start)
-        (unless (equal (overlay-get ov 'before-string) (cdr pin)) (overlay-put ov 'before-string (cdr pin)))
+        ;; `eq': the copy is replaced only when it changed, and a change of faces alone is `equal'
+        (unless (eq (overlay-get ov 'before-string) (cdr pin)) (overlay-put ov 'before-string (cdr pin)))
         start)
     (when-let* ((c (assq window drgnx-agent-panel--pin-overlays)))
       (delete-overlay (cdr c))
@@ -312,13 +315,11 @@ the panel's scroll follows its tail."
       (drgnx-agent-panel--follow-tail))))
 
 (defun drgnx-agent-panel--end-shown-p (window)
-  "Whether the panel's end is in WINDOW with its whole row and a line of room under it.  The panel's end is a position
-on the empty line under the composer, and redisplay wants that line (the cursor's) whole: `pos-visible-in-window-p' says
-the end is shown when the position's row is, a row short of it, and the window then scrolled again, to a start that
-left the end out (the long-transcript look scene, scale 1)."
+  "Whether the panel's end is in WINDOW with its whole row.  The panel's end is a position on the empty line under the
+composer, and redisplay wants that line (the cursor's) whole: plain `pos-visible-in-window-p' takes a row cut by a
+pixel for shown, and the window then scrolled again, to a start that left the end out."
   (when-let* ((v (pos-visible-in-window-p (point-max) window t)))
-    (and (zerop (or (nth 2 v) 0)) (zerop (or (nth 3 v) 0))
-         (<= (+ (nth 1 v) (* 2 (frame-char-height (window-frame window)))) (window-body-height window t)))))
+    (and (zerop (or (nth 2 v) 0)) (zerop (or (nth 3 v) 0)))))
 
 (defun drgnx-agent-panel--tail-start (window)
   "Where WINDOW should start for the panel's end to sit at its bottom: the earliest line from which the end is still in
@@ -374,6 +375,14 @@ the end at its bottom again at once, not at the next hub patch.  A window the us
   (when-let* ((w (plist-get data :window)) ((window-live-p w))
               (b (window-buffer w)) ((eq (buffer-local-value 'major-mode b) 'drgnx-agent-panel-mode)))
     (with-current-buffer b (drgnx-agent-panel--follow-window w))))
+
+(defun drgnx-agent-panel--fonts-applied ()
+  "`drgnx-look-fonts-applied-hook' (a theme change, a font setting, the scale): the rows are as tall as their new
+fonts make them, with no hub patch to follow the tail, so every panel window at the panel's end shows the end at its
+bottom again (the long look scene's theme made its rows 2 pixels taller and the end went out of the window)."
+  (dolist (b (buffer-list))             ; a panel's twin in another display class too
+    (when (eq (buffer-local-value 'major-mode b) 'drgnx-agent-panel-mode)
+      (with-current-buffer b (drgnx-agent-panel--follow-tail)))))
 
 (defun drgnx-agent-panel--sync (view)
   "SYNC of the panel's view: with the hub's rows, the models their patches named go to Sjá before they are drawn."
@@ -859,6 +868,7 @@ stays in it.  Every fifth update opens a new block, the others grow the last one
     (drgnx-agent-panel--event event data))
   (drgnx-module-hook 'drgnx-hub-connected-functions panel-resubscribe () (drgnx-agent-panel--resubscribe))
   (drgnx-module-hook 'window-buffer-change-functions panel-windows (frame) (drgnx-agent-panel-sync-windows frame))
+  (drgnx-module-hook 'drgnx-look-fonts-applied-hook panel-fonts () (drgnx-agent-panel--fonts-applied))
   (drgnx-agent-panel-steps-setup)
   (drgnx-agent-panel-composer-setup)
   (drgnx-agent-panel-explain-setup)

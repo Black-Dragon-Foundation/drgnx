@@ -2946,9 +2946,17 @@ scenes check `p:head` and that the end is at the window's bottom (or the panel f
 row's text, as every row property does, so not over its newline). The editor keeps the leading rows that carry it at the
 top of each window: `drgnx-agent-panel--pin-update` (after each draw of hub rows) copies them, and a per-window overlay
 whose `before-string` is the copy sits over the window's first line, which is never before the pinned rows' end (the
-`window-scroll-functions` hook and `--follow-tail` keep it so). The transcript scrolls between them and the composer; a
-click on the copy reads its property from the overlay's string (`drgnx-agent-panel--prop-at`). A header line cannot do
-this: Emacs draws it as one glyph row. The panel's rows are drawn by Lisp, so no Sjá store holds them.
+`window-scroll-functions` hook and `--follow-tail` keep it so). The copy is replaced only when the rows changed, faces
+included, and the overlay takes the new string (`eq`, since a change of faces alone is `equal`); a dead window's overlay
+is deleted. The transcript scrolls between them and the composer. A click on the copy reads its property from the
+overlay's string only (`drgnx-agent-panel--prop-at`: the click's buffer position is the window start, under the copy),
+and a press anywhere on it leaves point alone, as on a header line. The tail is followed after each patch, when the
+store says the window changed size (`pane-resized`) and when the fonts were written again
+(`drgnx-look-fonts-applied-hook`: a theme or font change makes the rows taller with no patch). The end counts as shown
+only with its whole row. The wheel scrolls by lines in a panel (`pixel-scroll-precision-mode`'s pixels would go into the
+first line's vscroll and carry the copy out of the window), and a wheel down adds the copy's lines, which `scroll-up`
+counts as the window's first. A header line cannot do this: Emacs draws it as one glyph row. The panel's rows are drawn
+by Lisp, so no Sjá store holds them.
 
 The chips beyond the snapshot's usage and mode come from state the hub holds: the model (`Snapshot.model`: the one the
 agent reported in its `session/new` (or load, resume, fork) answer, `models.currentModelId`, which hermod keeps per
