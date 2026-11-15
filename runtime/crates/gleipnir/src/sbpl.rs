@@ -562,11 +562,17 @@ fn deny_any_case(ops: &str, filter: &str, paths: &[&str]) -> Result<Option<Strin
     let mut r = format!("(deny {ops}");
     for p in paths {
         let re = case_regex(p, filter == "subpath");
-        r.push_str(&format!(
-            "\n  ({filter} {})\n  (regex {})",
-            quote(p)?,
-            quote(&re)?
-        ));
+        // a path whose every-case form does not fit one Seatbelt string is refused by name, never left open
+        let re = quote(&re).map_err(|_| {
+            let short: String = p.chars().take(40).collect();
+            malformed(
+                format!(
+                    "sbpl: the any-case form of {short:?}… is longer than a Seatbelt string may be ({MAX_LITERAL} bytes)"
+                ),
+                None,
+            )
+        })?;
+        r.push_str(&format!("\n  ({filter} {})\n  (regex {re})", quote(p)?));
     }
     r.push(')');
     Ok(Some(r))
@@ -577,102 +583,142 @@ fn deny_any_case(ops: &str, filter: &str, paths: &[&str]) -> Result<Option<Strin
 /// `.secrets` must also hold for `.ſecrets` (gate review S8), whichever spelling Seatbelt compares.
 const FOLDS_TO: &[(char, char)] = &[('k', '\u{212A}'), ('s', '\u{17F}'), ('å', '\u{212B}')];
 
-/// The one letter case-insensitive APFS folds to two: `ß` and `ẞ` are `ss` (CaseFolding.txt's full fold; GL-T9-3: the
-/// macOS 27 runner's control reached a hidden `straße` as `STRASSE`). Other one-to-many folds are taken only once a
-/// Mac's control shows APFS takes them ([`LIGATURES`]; `İ` is not one: its control found no file).
-const ESZETT: [char; 2] = ['ß', '\u{1E9E}'];
+/// The letters that case-insensitive APFS folds to several: Unicode's full case folding (CaseFolding.txt, status F,
+/// Unicode 16.0; © Unicode, Inc., under the Unicode License v3), the entries whose result is ASCII letters: `ß` and `ẞ`
+/// (`ss`) and the Latin ligatures U+FB00 to U+FB06. The macOS 27 runner's controls reached a hidden `straße` as
+/// `STRASSE`, `config` as `conﬁg` and `flags` as `ﬂags`, and not a hidden `id` as `İd` (`İ` folds to `i` and a
+/// combining dot, which is no ASCII letters, so it is no entry here), the pattern of full folding: so every entry is
+/// taken, each folded text with its spellings. The other F entries end in a combining mark or a non-ASCII letter
+/// (`ŉ`, `ǰ`, `ẖ`, Greek, Armenian), which no ASCII path holds.
+const FULL_FOLDS: &[(&str, &[char])] = &[
+    ("ss", &['\u{DF}', '\u{1E9E}']),
+    ("ff", &['\u{FB00}']),
+    ("fi", &['\u{FB01}']),
+    ("fl", &['\u{FB02}']),
+    ("ffi", &['\u{FB03}']),
+    ("ffl", &['\u{FB04}']),
+    ("st", &['\u{FB05}', '\u{FB06}']),
+];
 
-/// The ligatures case-insensitive APFS folds to two letters, with those letters: the macOS 27 runner's control reached
-/// a hidden `config` as `conﬁg` and `flags` as `ﬂags`. `ﬀ`, `ﬃ`, `ﬄ`, `ﬅ` and `ﬆ` are not taken until a control shows
-/// them (their `-is-not-` rows).
-const LIGATURES: [(char, [char; 2]); 2] = [('\u{FB01}', ['f', 'i']), ('\u{FB02}', ['f', 'l'])];
+/// More than this many bytes of regex while building one: the path is refused (see [`case_regex`]).
+const REGEX_BUDGET: usize = 16 * 1024;
 
-/// The ligature that `cs` starts with the letters of (in any case), if any.
-fn ligature_at(cs: &[char]) -> Option<char> {
-    let [a, b, ..] = cs else {
-        return None;
-    };
-    LIGATURES
+/// `c` as the letters it stands for, lowercase ASCII: a [`FULL_FOLDS`] letter as its folded text, `ſ` as `s`, an ASCII
+/// letter lowercased; any other character as itself.
+fn fold_letters(c: char) -> Vec<char> {
+    if let Some((text, _)) = FULL_FOLDS
         .iter()
-        .find(|(_, [x, y])| a.to_ascii_lowercase() == *x && b.to_ascii_lowercase() == *y)
-        .map(|&(l, _)| l)
+        .find(|(_, spellings)| spellings.contains(&c))
+    {
+        text.chars().collect()
+    } else if c == '\u{17F}' {
+        vec!['s']
+    } else {
+        vec![c.to_ascii_lowercase()]
+    }
 }
 
 /// `path` as a regex that matches it in any case: an ASCII letter as a class of both cases (`[Gg]`), a letter with
 /// more spellings ([`FOLDS_TO`]: `(k|K|K)`) or a non-ASCII letter with case variants as a group of them (`(é|É)`), a
-/// regex metacharacter escaped. A run of s's and [`ESZETT`]s, which fold to s's two at a time, as one group for
-/// every spelling of its length ([`s_run`]: `ß` and `ss` both give `((s|S|ſ)(s|S|ſ)|(ß|ẞ))`), so a hidden `straße` is closed as
-/// `STRASSE` and a hidden `.ssh` as `.ßh`. A [`LIGATURES`] ligature, or its two letters, as a group of both spellings
-/// (`(ﬁ|[Ff][Ii])`: a pair's group stands for those two letters alone, as no pair ends with a letter another starts
-/// with, so the regex grows with the path). No `(?i)`, which SBPL is not known to support. `whole`: the path and
-/// everything under it (as `subpath`); else the path alone (as `literal`).
+/// regex metacharacter escaped. Letters that [`FULL_FOLDS`] folds to several are matched by their folded text: each
+/// stretch of the path where a folded text can start (`ss`, `ff`, `fi`, `fl`, `ffi`, `ffl`, `st`, overlapping ones
+/// together) is a group of every way to spell it ([`fold_zone`]: `ß` and `ss` both give
+/// `((s|S|ſ)(s|S|ſ)|(ß|ẞ))`), so a hidden `straße` is closed as `STRASSE`, a hidden `.ssh` as `.ßh`, `config` as
+/// `conﬁg` and `office` as `oﬃce`. No `(?i)`, which SBPL is not known to support. `whole`: the path and everything under
+/// it (as `subpath`); else the path alone (as `literal`). A path whose regex outgrows [`REGEX_BUDGET`] gets one longer
+/// than [`MAX_LITERAL`], which [`quote`] refuses: it is never cut short.
 fn case_regex(path: &str, whole: bool) -> String {
+    let cs: Vec<char> = path.chars().flat_map(fold_letters).collect();
+    // where a folded text starts, and where it ends
+    let mut spans: Vec<(usize, usize)> = Vec::new();
+    for i in 0..cs.len() {
+        for (text, _) in FULL_FOLDS {
+            let n = text.chars().count();
+            if cs.len() - i >= n && text.chars().zip(&cs[i..]).all(|(a, &b)| a == b) {
+                spans.push((i, i + n));
+            }
+        }
+    }
     let mut re = String::from("^");
-    // each ligature as its letters, so `conﬁg` and `config` give the same regex
-    let cs: Vec<char> = path
-        .chars()
-        .flat_map(|c| match LIGATURES.iter().find(|(l, _)| *l == c) {
-            Some((_, pair)) => pair.to_vec(),
-            None => vec![c],
-        })
-        .collect();
     let mut i = 0;
     while i < cs.len() {
-        let c = cs[i];
-        i += 1;
-        if let Some(l) = ligature_at(&cs[i - 1..]) {
-            re.push_str(&format!("({l}|{}{})", letter_regex(c), letter_regex(cs[i])));
+        // the zone starting here: the spans that overlap, joined
+        let mut end = spans
+            .iter()
+            .filter(|&&(a, _)| a == i)
+            .map(|&(_, b)| b)
+            .max()
+            .unwrap_or(i);
+        if end == i {
+            re.push_str(&letter_regex(cs[i]));
             i += 1;
             continue;
         }
-        let mut run = s_weight(c);
-        if run == 0 {
-            re.push_str(&letter_regex(c));
-            continue;
+        let mut grown = true;
+        while grown {
+            grown = false;
+            for &(a, b) in &spans {
+                if a < end && b > end {
+                    end = b;
+                    grown = true;
+                }
+            }
         }
-        while let Some(w) = cs.get(i).map(|&c| s_weight(c)).filter(|&w| w > 0) {
-            run += w;
-            i += 1;
+        match fold_zone(&cs, &spans, i, end) {
+            Some(z) => re.push_str(&z),
+            None => return format!("^{}", "x".repeat(MAX_LITERAL + 1)),
         }
-        if run == 1 {
-            re.push_str(&letter_regex(c));
-        } else {
-            re.push_str(&s_run(run));
+        i = end;
+        if re.len() > REGEX_BUDGET {
+            return format!("^{}", "x".repeat(MAX_LITERAL + 1));
         }
     }
     re.push_str(if whole { "(/.*)?$" } else { "$" });
     re
 }
 
-/// How many s's `c` folds to: 1 for `s`, `S` and the long `ſ`, 2 for an [`ESZETT`], else 0.
-fn s_weight(c: char) -> usize {
-    match c {
-        's' | 'S' | '\u{17F}' => 1,
-        c if ESZETT.contains(&c) => 2,
-        _ => 0,
+/// Every spelling of the folded letters `cs[lo..hi]` as one regex: the letters one by one, or a [`FULL_FOLDS`] character
+/// for the letters of a span. Split at the middle: a spelling either has a boundary there (the first half's spellings,
+/// then the second's) or a span across it (the letters either side, and the span's characters in between). Exact, and
+/// its size grows as a power of the length (15 s's: 919 bytes), where listing every spelling grows as their number does.
+/// `None` once it outgrows [`REGEX_BUDGET`].
+fn fold_zone(cs: &[char], spans: &[(usize, usize)], lo: usize, hi: usize) -> Option<String> {
+    match hi - lo {
+        0 => return Some(String::new()),
+        1 => return Some(letter_regex(cs[lo])),
+        _ => {}
     }
-}
-
-/// Every spelling of `n` s's as one regex: the sequences of one-s groups and two-s [`ESZETT`] groups whose s count is
-/// `n`. Split at the middle s: a spelling either has a boundary there (the first half's spellings, then the second's)
-/// or an [`ESZETT`] across it (`n / 2 - 1` s's, the ß, the rest). Exact, and its size grows with the square of `n`
-/// (15 s's: 919 bytes), where listing every spelling grows as their number does, Fibonacci's (15 s's: 87 KB).
-fn s_run(n: usize) -> String {
-    match n {
-        0 => String::new(),
-        1 => letter_regex('s'),
-        _ => {
-            let m = n / 2;
-            let two = format!("({})", ESZETT.map(String::from).join("|"));
-            format!(
-                "({}{}|{}{two}{})",
-                s_run(m),
-                s_run(n - m),
-                s_run(m - 1),
-                s_run(n - m - 1)
-            )
+    let m = lo + (hi - lo) / 2;
+    let mut alts = vec![format!(
+        "{}{}",
+        fold_zone(cs, spans, lo, m)?,
+        fold_zone(cs, spans, m, hi)?
+    )];
+    for &(a, b) in spans {
+        if lo <= a && a < m && m < b && b <= hi {
+            let text: String = cs[a..b].iter().collect();
+            let spellings = FULL_FOLDS.iter().find(|(t, _)| *t == text)?.1;
+            let own = if spellings.len() == 1 {
+                spellings[0].to_string()
+            } else {
+                format!(
+                    "({})",
+                    spellings
+                        .iter()
+                        .map(char::to_string)
+                        .collect::<Vec<_>>()
+                        .join("|")
+                )
+            };
+            alts.push(format!(
+                "{}{own}{}",
+                fold_zone(cs, spans, lo, a)?,
+                fold_zone(cs, spans, b, hi)?
+            ));
         }
     }
+    let re = format!("({})", alts.join("|"));
+    (re.len() <= REGEX_BUDGET).then_some(re)
 }
 
 /// `c` in each of its cases, as a regex: `[Gg]`, `(k|K|K)`, `(é|É)`, or `c` itself, escaped if a metacharacter.
@@ -1696,6 +1742,88 @@ mod tests {
         }
         // a pair's group stands for its two letters alone: the regex grows with the path
         assert!(case_regex(&"fi".repeat(40), false).len() < 40 * 32);
+        // Unicode's full case folding (CaseFolding.txt, status F) maps every Latin ligature U+FB00..FB06 and ß to ASCII
+        // letters, and APFS takes ß, ﬁ and ﬂ (not İ, whose fold has a combining dot): so the others are taken too, each
+        // spelling standing for every other, whatever the letters round it and however they are split into ligatures.
+        for (path, hits, misses) in [
+            (
+                "/w/o\u{FB00}",
+                &["/w/off", "/w/OFF", "/w/o\u{FB00}", "/w/oFf"][..],
+                &["/w/of", "/w/o\u{FB01}"][..],
+            ),
+            (
+                "/w/office",
+                &[
+                    "/w/o\u{FB03}ce",
+                    "/w/o\u{FB00}ice",
+                    "/w/of\u{FB01}ce",
+                    "/w/OFFICE",
+                ][..],
+                &["/w/o\u{FB04}ce", "/w/ofce"][..],
+            ),
+            (
+                "/w/waffle",
+                &["/w/wa\u{FB04}e", "/w/wa\u{FB00}le", "/w/waf\u{FB02}e"][..],
+                &["/w/wa\u{FB03}e"][..],
+            ),
+            (
+                "/w/list",
+                &["/w/li\u{FB05}", "/w/li\u{FB06}", "/w/liST", "/w/li\u{17F}t"][..],
+                &["/w/lit", "/w/li\u{FB05}t"][..],
+            ),
+            (
+                "/w/last",
+                &["/w/la\u{FB06}", "/w/la\u{FB05}", "/w/LAST"][..],
+                &["/w/las"][..],
+            ),
+            // ß and the st ligatures share s's: "sst" is ßt, sﬅ and ßt alike
+            (
+                "/w/\u{DF}t",
+                &["/w/sst", "/w/s\u{FB05}", "/w/s\u{FB06}", "/w/\u{1E9E}T"][..],
+                &["/w/st", "/w/\u{FB05}"][..],
+            ),
+            (
+                "/w/s\u{FB05}",
+                &["/w/sst", "/w/\u{DF}t", "/w/\u{17F}\u{FB06}"][..],
+                &["/w/sts"][..],
+            ),
+            // f's run into ligatures: "fff" is ﬀf and fﬀ; "ffff" is ﬀﬀ
+            (
+                "/w/ffff",
+                &["/w/\u{FB00}\u{FB00}", "/w/f\u{FB00}f", "/w/FF\u{FB00}"][..],
+                &["/w/fff"][..],
+            ),
+            ("/w/\u{130}", &["/w/\u{130}"][..], &["/w/i", "/w/I"][..]),
+        ] {
+            let re = case_regex(path, false);
+            for hit in hits {
+                assert!(re_match(&re, hit), "{hit} by {re}");
+            }
+            for miss in misses {
+                assert!(!re_match(&re, miss), "{miss} by {re}");
+            }
+        }
+        // a ligature's group stands for the folded letters alone: the regex grows with the path, and a path near the
+        // limit still fits whole
+        assert!(case_regex(&"\u{FB03}".repeat(40), false).len() < 40 * 160);
+        let near = format!("/{}", "f".repeat(15));
+        assert!(
+            case_regex(&near, false).len() <= MAX_LITERAL,
+            "{}",
+            case_regex(&near, false).len()
+        );
+        // a path whose regex cannot fit is refused by name, quickly (never cut short, never a hidden name dropped)
+        for long in [
+            "f".repeat(400),
+            "s\u{FB05}".repeat(300),
+            "/w/".to_owned() + &"a".repeat(1100),
+        ] {
+            let e = deny_any_case("file-read*", "subpath", &[long.as_str()]).unwrap_err();
+            assert!(
+                format!("{e:?}").contains("longer than a Seatbelt string"),
+                "{e:?}"
+            );
+        }
         assert_eq!(case_regex("/\u{212A}", false), "^/(\u{212A}|k|K)$");
         assert_eq!(case_regex("/g", false), "^/[Gg]$");
         // Homebrew's data, in every case too.
