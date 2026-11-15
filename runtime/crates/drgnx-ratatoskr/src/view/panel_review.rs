@@ -18,6 +18,9 @@ use serde_json::{Value, json};
 /// The most files that get diff cards, and the most lines of a hunk a card shows.
 pub const MAX_FILES: usize = 20;
 const MAX_LINES: usize = 30;
+/// The most chars of a diff line a row carries (a minified file's line would make rows of megabytes); the window's
+/// width cuts it well before.
+const MAX_CHARS: usize = 400;
 
 /// What the cards read.
 pub struct In<'a> {
@@ -82,16 +85,8 @@ fn text_width(i: &In, face: Option<&str>, text: &str) -> u32 {
     }
 }
 
-/// How many code columns a card line has: the panel's width less the card's 12 px either side and the line number, or
-/// 100 when the width is not known.
-fn columns(env: &ViewEnv) -> usize {
-    if env.width_px == 0 {
-        return 100;
-    }
-    let room = env.width_px.saturating_sub(2 * px(env, 12.0)) / env.cell.0.max(1);
-    (room.saturating_sub(6) as usize).clamp(8, 100)
-}
-
+/// TEXT kept to COLS chars (the last an ellipsis): a bound on a row's size, not its fit (the hub fits each row to its
+/// window, in the fonts it draws in).
 fn cut(text: &str, cols: usize) -> String {
     if text.chars().count() <= cols {
         text.to_owned()
@@ -257,7 +252,6 @@ fn diff_card(
     )];
     let (mut old, _) = range(&h.header, '-');
     let (mut new, _) = range(&h.header, '+');
-    let cols = columns(env);
     let body: Vec<&String> = h.lines.iter().take(MAX_LINES).collect();
     let count = body.len();
     for (k, l) in body.into_iter().enumerate() {
@@ -290,7 +284,8 @@ fn diff_card(
         b.push(&format!("{num:4} "), Some("drgnx-text-muted"));
         let gutter_end = b.pos();
         b.face(gutter, gutter_end, face);
-        b.push(&format!("{sign}{}", cut(rest, cols)), Some(face));
+        // cut at the card's edge by the row fit, which measures the line in its font
+        b.push(&format!("{sign}{}", cut(rest, MAX_CHARS)), Some(face));
         b.stop(env.width_px.saturating_sub(px(env, 12.0)));
         let end = b.pos();
         b.face(0, end, shape(count, k));
