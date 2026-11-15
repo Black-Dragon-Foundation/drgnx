@@ -1,0 +1,164 @@
+;;; wb-area-companions-test.el --- batch tests: an area tab's companion windows above and below it -*- lexical-binding: t -*-
+;; test-class: det
+(require 'ert)
+(require 'drgnx-paths)
+(load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
+(require 'drgnx-area)
+(require 'drgnx-panes)
+
+(defvar drgnx-area-companions-test--parts nil
+  "What the test tab's companion function returns for its main buffer: (ABOVE BELOW).")
+
+(defun drgnx-area-companions-test--parts (_main) drgnx-area-companions-test--parts)
+
+(defun drgnx-area-companions-test--buffer (name lines)
+  (with-current-buffer (get-buffer-create name)
+    (let ((inhibit-read-only t)) (erase-buffer) (dotimes (i lines) (insert (format "%s %d\n" name i))))
+    (current-buffer)))
+
+(defmacro drgnx-area-companions-test--with (&rest body)
+  "BODY with rules on, one editor window, the right dock hidden, fresh area state, and two tabs in the right dock:
+`withparts' (companions from `drgnx-area-companions-test--parts') and `plain' (none)."
+  `(drgnx-test-with-state
+     (let ((drgnx-wb-unrouted nil)
+           (display-buffer-alist nil) (display-buffer-overriding-action '(nil))
+           (drgnx-area-companions-test--parts nil))
+       (delete-other-windows)
+       (set-frame-parameter nil 'drgnx-wb-areas nil)
+       (set-frame-parameter nil 'drgnx-wb-right-px nil)
+       (drgnx-rules-mode 1)
+       (drgnx-wb-define-tab 'right 'withparts :title "With" :companions #'drgnx-area-companions-test--parts)
+       (drgnx-wb-define-tab 'right 'plain :title "Plain")
+       (unwind-protect (progn ,@body)
+         (drgnx-rules-mode -1)
+         (drgnx-wb-area-hide 'right)
+         (drgnx-wb-undefine-tab 'right 'withparts)
+         (drgnx-wb-undefine-tab 'right 'plain)
+         (delete-other-windows)
+         (dolist (b '("*main*" "*above*" "*below*" "*other*")) (when (get-buffer b) (kill-buffer b)))))))
+
+(defun drgnx-area-companions-test--right-windows ()
+  "The right side's windows, top to bottom."
+  (sort (seq-filter (lambda (w) (eq (window-parameter w 'window-side) 'right)) (window-list nil 'nomini))
+        (lambda (a b) (< (nth 1 (window-edges a)) (nth 1 (window-edges b))))))
+
+(ert-deftest drgnx-area-companions/a-tab-shows-its-companions-above-and-below-it ()
+  (drgnx-area-companions-test--with
+   (let* ((main (drgnx-area-companions-test--buffer "*main*" 50))
+          (above (drgnx-area-companions-test--buffer "*above*" 2))
+          (below (drgnx-area-companions-test--buffer "*below*" 1)))
+     (setq drgnx-area-companions-test--parts (list above below))
+     (let* ((w (drgnx-wb-area-show 'right 'withparts main)) (ws (drgnx-area-companions-test--right-windows)))
+       (should (equal (mapcar #'window-buffer ws) (list above main below)))
+       (should (eq w (nth 1 ws)))
+       (should (eq (drgnx-wb-area-window 'right) w))
+       (should (equal (mapcar (lambda (x) (window-parameter x 'drgnx-area-part)) ws) '(above nil below)))
+       (dolist (x ws)
+         (should (window-dedicated-p x))
+         (should (eq 'right (window-parameter x 'drgnx-role)))
+         (should (eq 'none (window-parameter x 'mode-line-format))))
+       ;; the store reads the main window as the tab's pane, the companions as no pane of their own
+       (drgnx-state-sync)
+       (should (eq w (drgnx-state-pane-window 'withparts)))
+       ;; the tab row is the topmost window's, and only its
+       (should (memq (window-parameter (nth 0 ws) 'header-line-format) '(none)))
+       (should (or (eq (window-parameter w 'header-line-format) 'none) (null (window-parameter w 'header-line-format))))
+       (should (eq (drgnx-area--top-window 'right) (nth 0 ws)))))))
+
+(ert-deftest drgnx-area-companions/the-tab-row-goes-on-the-topmost-window ()
+  "With two tabs of content the right dock draws its tab row (not `lone'): on the companion above when there is one."
+  (drgnx-area-companions-test--with
+   (let ((main (drgnx-area-companions-test--buffer "*main*" 5)) (other (drgnx-area-companions-test--buffer "*other*" 5))
+         (above (drgnx-area-companions-test--buffer "*above*" 2)))
+     (drgnx-wb-area-show 'right 'plain other)
+     (setq drgnx-area-companions-test--parts (list above nil))
+     (let* ((w (drgnx-wb-area-show 'right 'withparts main)) (top (car (drgnx-area-companions-test--right-windows))))
+       (should (eq (window-buffer top) above))
+       (should (stringp (window-parameter top 'header-line-format)))   ; the row is a string (`drgnx-wb-bar')
+       (should (eq 'none (window-parameter w 'header-line-format)))
+       ;; a redraw of the row (a tab's actions changed) puts it there again
+       (drgnx-wb-area-redraw 'right)
+       (should (stringp (window-parameter top 'header-line-format)))
+       (should (eq 'none (window-parameter w 'header-line-format)))))))
+
+(ert-deftest drgnx-area-companions/a-tab-without-them-takes-them-away-and-back ()
+  (drgnx-area-companions-test--with
+   (let ((main (drgnx-area-companions-test--buffer "*main*" 50)) (other (drgnx-area-companions-test--buffer "*other*" 5))
+         (above (drgnx-area-companions-test--buffer "*above*" 2)) (below (drgnx-area-companions-test--buffer "*below*" 1)))
+     (setq drgnx-area-companions-test--parts (list above below))
+     (drgnx-wb-area-show 'right 'withparts main)
+     (drgnx-wb-area-show 'right 'plain other)
+     (should (equal (mapcar #'window-buffer (drgnx-area-companions-test--right-windows)) (list other)))
+     (drgnx-wb-area-show 'right 'withparts)
+     (should (equal (mapcar #'window-buffer (drgnx-area-companions-test--right-windows)) (list above main below))))))
+
+(ert-deftest drgnx-area-companions/hiding-the-area-deletes-them-and-a-nil-part-shows-none ()
+  (drgnx-area-companions-test--with
+   (let ((main (drgnx-area-companions-test--buffer "*main*" 50)) (below (drgnx-area-companions-test--buffer "*below*" 1)))
+     (setq drgnx-area-companions-test--parts (list nil below))
+     (drgnx-wb-area-show 'right 'withparts main)
+     (should (equal (mapcar #'window-buffer (drgnx-area-companions-test--right-windows)) (list main below)))
+     (drgnx-wb-area-hide 'right)
+     (should-not (drgnx-area-companions-test--right-windows))
+     (drgnx-wb-area-show 'right)
+     (should (equal (mapcar #'window-buffer (drgnx-area-companions-test--right-windows)) (list main below))))))
+
+(ert-deftest drgnx-area-companions/killing-the-main-buffer-takes-its-companions ()
+  (drgnx-area-companions-test--with
+   (let ((main (drgnx-area-companions-test--buffer "*main*" 50))
+         (above (drgnx-area-companions-test--buffer "*above*" 2)) (below (drgnx-area-companions-test--buffer "*below*" 1)))
+     (setq drgnx-area-companions-test--parts (list above below))
+     (drgnx-wb-area-show 'right 'withparts main)
+     (kill-buffer main)
+     (let ((ws (drgnx-area-companions-test--right-windows)))
+       (should (= 1 (length ws)))
+       (should (buffer-local-value 'drgnx-area--placeholder-p (window-buffer (car ws))))))))
+
+(ert-deftest drgnx-area-companions/killing-a-companion-buffer-takes-only-its-window ()
+  "A companion's buffer killed: its window goes and the area stays (a dedicated side window would otherwise be
+deleted through the area's `delete-window', which hides the whole area)."
+  (drgnx-area-companions-test--with
+   (let ((main (drgnx-area-companions-test--buffer "*main*" 50))
+         (above (drgnx-area-companions-test--buffer "*above*" 2)) (below (drgnx-area-companions-test--buffer "*below*" 1)))
+     (setq drgnx-area-companions-test--parts (list above below))
+     (drgnx-wb-area-show 'right 'withparts main)
+     (kill-buffer below)
+     (should (equal (mapcar #'window-buffer (drgnx-area-companions-test--right-windows)) (list above main))))))
+
+(ert-deftest drgnx-area-companions/a-pane-kind-passes-its-companions-to-the-tab ()
+  (drgnx-area-companions-test--with
+   (let ((drgnx-pane--kinds nil) (drgnx-pane-backend 'areas))
+     (drgnx-pane-define-kind 'companions-kind :title "K" :home 'right
+                             :companions #'drgnx-area-companions-test--parts)
+     (unwind-protect
+         (progn
+           (should (eq #'drgnx-area-companions-test--parts (plist-get (drgnx-pane-kind 'companions-kind) :companions)))
+           (should (eq #'drgnx-area-companions-test--parts
+                       (plist-get (alist-get 'companions-kind (plist-get (alist-get 'right drgnx-wb--areas) :tabs))
+                                  :companions))))
+       (drgnx-pane-undefine-kind 'companions-kind)))))
+
+(ert-deftest drgnx-area-companions/a-companion-is-fitted-to-its-lines ()
+  (drgnx-area-companions-test--with
+   (let ((main (drgnx-area-companions-test--buffer "*main*" 50))
+         (above (drgnx-area-companions-test--buffer "*above*" 3)) (below (drgnx-area-companions-test--buffer "*below*" 2)))
+     (with-current-buffer above (goto-char (point-max)) (delete-char -1))   ; 3 lines, no empty last line
+     (with-current-buffer below (goto-char (point-max)) (delete-char -1))
+     (setq drgnx-area-companions-test--parts (list above below))
+     (drgnx-wb-area-show 'right 'withparts main)
+     (let ((ws (drgnx-area-companions-test--right-windows)))
+       (should (= 3 (window-body-height (nth 0 ws))))
+       (should (= 2 (window-body-height (nth 2 ws))))
+       ;; a companion that grew is fitted again when asked
+       (with-current-buffer below (goto-char (point-max)) (insert "\nmore"))
+       (drgnx-wb-area-fit-companions 'right)
+       (should (= 3 (window-body-height (nth 2 ws))))
+       ;; a long one stops at 45% of the area
+       (with-current-buffer below (goto-char (point-max)) (dotimes (_ 200) (insert "\nmore")))
+       (drgnx-wb-area-fit-companions 'right)
+       (let ((area (apply #'+ (mapcar #'window-pixel-height ws))))
+         (should (<= (window-pixel-height (nth 2 ws)) (* 0.45 area)))
+         (should (> (window-pixel-height (nth 2 ws)) (* 0.3 area))))))))
+
+(provide 'wb-area-companions-test)
+;;; wb-area-companions-test.el ends here

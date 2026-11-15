@@ -3086,7 +3086,7 @@ its arguments, prints the recorded reply a regexp picks (`DRGNX_FAKE_WM_MAP`) an
 ## Pane kinds (`wb/drgnx-panes.el`)
 
 Every pane (Explorer, agents, terminal, help, …) is one data definition, a kind, made with
-`(drgnx-pane-define-kind KIND :title :buffer :placeholder :home :size :view :slot :height :fill :on-show :on-focus :stack)`.
+`(drgnx-pane-define-kind KIND :title :buffer :placeholder :home :size :view :slot :height :fill :on-show :on-focus :stack :companions)`.
 `:home` is `left`, `bottom`, `right` or `editor`; `:title` may be left out (a `left` kind's section header then shows
 only its ✕). Callers show and find panes by kind and never use the dock, area
 or section API directly: `drgnx-pane-show` (`:buffer`, `:select`), `drgnx-pane-hide`, `drgnx-pane-toggle`,
@@ -3100,6 +3100,22 @@ row is a string built when it is drawn, so the tab's module calls `drgnx-wb-area
 defined with `:icon` (a `drgnx-look-icon` name) shows it at 14 px before its title (the Debug Console's terminal);
 the row's close is the kit's close button drawn as the Lucide x at 16 px, 8 px from the edge. A backend is an entry in `drgnx-pane--backends` (the functions for `:define`, `:show`,
 `:hide`, `:window`, `:focus`, `:resize`, `:move`, `:stack`); the tiled grid registers `grid` there.
+
+**Area companions.** A `right` kind (or a tab, `drgnx-wb-define-tab … :companions FN`) may show two more buffers with
+its own: FN takes the tab's buffer and returns `(ABOVE BELOW)`, each a buffer or nil for none (the agent panel's header
+and composer around its transcript). They are side windows of the area's side at slots -1 and +1, dedicated, of the
+area's role (`right`), with the window parameter `drgnx-area-part` `above` or `below` (the main window has none, so
+`drgnx-wb-area-window` and `drgnx-pane-window` stay the tab's, and the store counts only the main window as the
+kind's pane), no mode line and width preserved. The area's tab row goes on the topmost window
+(`drgnx-area--top-window`); the main window under a companion has none. Each companion is fitted to its lines and its
+header line, pixelwise (`fit-window-to-buffer`), at most 45% of the area's height in whole lines, and its height is
+then preserved, so a frame resize goes to the main window. It is fitted again when its size changes
+(`window-size-change-functions` in its buffer) and when its owner calls `(drgnx-wb-area-fit-companions AREA
+&optional FRAME)` after its lines changed. FN runs whenever the area shows the tab's buffer (show, tab switch,
+`drgnx-wb-area-put-buffer`); a placeholder has no companions, and an area at the bottom has none. A tab switch to a
+kind without them, `drgnx-wb-area-hide` and killing the main buffer delete them; killing a companion's buffer deletes
+only its window, and `delete-window` on one (C-x 0) hides the area as on the main window. `drgnx-pane-resize` keeps
+all three widths preserved. Test: `test/unit/wb-area-companions-test.el`, `test/ui/area-companions-gui-test.el`.
 
 **Ownership.** `drgnx-pane-define-kind` records the module whose setup runs as the kind's owner
 (`(drgnx-state-kind-owner KIND)`; nil for a kind defined at load, which is core's and stays until restart) and, in a

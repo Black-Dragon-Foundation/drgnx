@@ -32,11 +32,13 @@ row while the shown tab is the only one with content (`drgnx-area--lone-p')."
         (list :side side :size size :lone lone :tabs (plist-get (alist-get area drgnx-wb--areas) :tabs)))
   area)
 
-(cl-defun drgnx-wb-define-tab (area tab &key title icon placeholder actions)
+(cl-defun drgnx-wb-define-tab (area tab &key title icon placeholder actions companions)
   "Add TAB to AREA, titled TITLE; ICON (an icon name, `drgnx-look-icon') shows before the title; PLACEHOLDER returns
 the buffer shown while the tab has none.
 ACTIONS, a function of no arguments, returns the tab's own pieces (a string, or nil for none), drawn at the right of
 the tab row before its ✕ while the tab is shown; the tab's module calls `drgnx-wb-area-redraw' when they change.
+COMPANIONS, a function of the tab's buffer, returns (ABOVE BELOW): the buffers shown in windows of their own above
+and below it, each nil for none (an area on the left or right only; see \"Companions\" below).
 Called from a module's setup, the definition claims the tab and records its undo: the tab it
 replaced put back in the same place, or `drgnx-wb-undefine-tab' — only while the tab is still the one
 defined here.  Two modules defining the same tab may be torn down in either order."
@@ -44,7 +46,7 @@ defined here.  Two modules defining the same tab may be torn down in either orde
          (spec (alist-get area drgnx-wb--areas)) (tabs (copy-alist (plist-get spec :tabs)))
          (previous (cdr (assq tab tabs)))
          (props (list :title (or title (capitalize (symbol-name tab))) :icon icon :placeholder placeholder
-                      :actions actions)))
+                      :actions actions :companions companions)))
     (if (assq tab tabs) (setf (alist-get tab tabs) props)
       (setq tabs (append tabs (list (cons tab props)))))         ; in the order they are defined
     (setf (alist-get area drgnx-wb--areas) (plist-put spec :tabs tabs))
@@ -76,15 +78,17 @@ A window that shows the tab's current placeholder (the module's) shows the resto
       (setf (alist-get tab tabs) props)
       (setf (alist-get area drgnx-wb--areas) (plist-put spec :tabs tabs)))
     (pcase-dolist (`(,frame . ,w) swap)
-      (with-selected-frame frame (drgnx-wb-set-area-buffer w (drgnx-area--placeholder area tab))))
+      (with-selected-frame frame
+        (let ((placeholder (drgnx-area--placeholder area tab)))
+          (drgnx-wb-set-area-buffer w placeholder)
+          (drgnx-area--companions area w placeholder))))
     (drgnx-area--redraw-rows area)))
 
 (defun drgnx-area--redraw-rows (area)
   "Redraw AREA's tab row in every frame that shows it."
   (dolist (frame (frame-list))
     (when-let* ((w (drgnx-wb-area-window area frame)))
-      (with-selected-frame frame
-        (set-window-parameter w 'header-line-format (drgnx-area--tab-row area))))))
+      (with-selected-frame frame (drgnx-area--put-row area w)))))
 
 (defun drgnx-wb-area-redraw (area)
   "Draw AREA's tab row again in every frame that shows it: its shown tab's actions changed."
@@ -114,8 +118,9 @@ Returns non-nil when TAB was defined."
     (and pos t)))
 
 (defun drgnx-wb-area-window (area &optional frame)
-  "The window showing AREA on FRAME (default: `drgnx-wb-frame'), or nil."
-  (seq-find (lambda (w) (eq (window-parameter w 'drgnx-role) area)) (window-list (or frame (drgnx-wb-frame)) 'nomini)))
+  "The window showing AREA on FRAME (default: `drgnx-wb-frame'), or nil: its tab's buffer, never a companion."
+  (seq-find (lambda (w) (and (eq (window-parameter w 'drgnx-role) area) (not (window-parameter w 'drgnx-area-part))))
+            (window-list (or frame (drgnx-wb-frame)) 'nomini)))
 
 ;;;; Per-frame state: the shown tab, and each tab's buffer, start and point
 
@@ -301,8 +306,10 @@ the close's, then the pieces."
   "Show BUFFER in WINDOW, an area's window, keeping the shown tab: its tab row follows the buffer (one with its own
 title has none)."
   (drgnx-wb-set-area-buffer window buffer)
-  (when-let* ((area (window-parameter window 'drgnx-role)) ((alist-get area drgnx-wb--areas)))
-    (set-window-parameter window 'header-line-format (drgnx-area--tab-row area))))
+  (when-let* ((area (window-parameter window 'drgnx-role)) ((alist-get area drgnx-wb--areas))
+              ((not (window-parameter window 'drgnx-area-part))))
+    (drgnx-area--companions area window buffer)
+    (drgnx-area--put-row area window)))
 
 (defun drgnx-wb-area-show (area &optional tab buffer)
   "Show AREA's TAB (default: the shown one) with BUFFER (default: the tab's last); never select it.
@@ -318,7 +325,8 @@ Returns the window — the same one across tab switches."
         (set-window-start w (nth 1 saved) t)
         (set-window-point w (nth 2 saved)))
       (drgnx-area--set-state area (plist-put (copy-sequence (drgnx-area--state area)) :tab tab))
-      (set-window-parameter w 'header-line-format (drgnx-area--tab-row area))
+      (drgnx-area--companions area w buffer)
+      (drgnx-area--put-row area w)
       ;; After the tab row: Emacs keeps the size only while it equals the body size it recorded (I11)
       (window-preserve-size w (drgnx-area--horizontal-p area) t)
       (with-current-buffer buffer (add-hook 'kill-buffer-hook #'drgnx-area--killed nil t))
@@ -329,13 +337,18 @@ Returns the window — the same one across tab switches."
   (let ((dying (current-buffer)))
     (dolist (f (frame-list))
       (dolist (w (window-list f 'nomini))
-        (when-let* ((area (window-parameter w 'drgnx-role))
+        (when-let* (((window-live-p w))          ; a companion deleted on this walk
+                    (area (window-parameter w 'drgnx-role))
                     ((alist-get area drgnx-wb--areas))
                     ((eq (window-buffer w) dying)))
           (with-selected-frame f
-            (let ((tab (drgnx-wb-area-tab area)))
-              (drgnx-wb-set-area-buffer w (drgnx-area--placeholder area tab))
-              (drgnx-area--remember area w))))))))
+            (if (window-parameter w 'drgnx-area-part)
+                (drgnx-area--delete-companion w)  ; a companion's buffer: only its window goes
+              (let ((tab (drgnx-wb-area-tab area)) (placeholder nil))
+                (drgnx-wb-set-area-buffer w (setq placeholder (drgnx-area--placeholder area tab)))
+                (drgnx-area--remember area w)
+                (drgnx-area--companions area w placeholder)
+                (drgnx-area--put-row area w)))))))))
 
 (defun drgnx-wb-area-hide (area)
   "Hide AREA, remembering its pixel size and its tabs.
@@ -348,7 +361,8 @@ kept instead of the one a popup squeezed the area to."
       (if (memq area '(panel right))                  ; the areas intent knows (homes `bottom' and `right')
           (drgnx-state-note-intent nil :sizes area px :by 'auto)
         (set-frame-parameter nil (drgnx-area--px-param area) px)))
-    (when (eq (selected-window) w) (drgnx-wb-focus-editor))
+    (when (memq (selected-window) (cons w (drgnx-area--companion-windows area))) (drgnx-wb-focus-editor))
+    (mapc #'drgnx-area--delete-companion (drgnx-area--companion-windows area))
     (set-window-parameter w 'delete-window nil)
     (delete-window w)))
 
@@ -357,6 +371,103 @@ kept instead of the one a popup squeezed the area to."
 area, so its size and tabs are kept."
   (with-selected-frame (window-frame window)     ; the frame it is on, not the selected one
     (drgnx-wb-area-hide (window-parameter window 'drgnx-role))))
+
+;;;; Companions: windows above and below a tab's buffer
+
+;; A tab defined with :companions shows up to two more buffers with the one it shows, in side windows of the same
+;; side at slots -1 (above) and +1 (below): the agent panel's header and composer around its transcript.  They are
+;; dedicated, of the area's role, with the window parameter `drgnx-area-part' `above' or `below' (the main window has
+;; none, so `drgnx-wb-area-window' is still the tab's), no mode line, and fitted to their lines.  The tab row goes on
+;; the topmost window.  A tab switch, a hide or the main buffer's kill takes them away; a placeholder has none.
+
+(defconst drgnx-area--companion-most 0.45 "The most of its area's height a companion window is fitted to.")
+
+(defun drgnx-area--companion-windows (area &optional frame)
+  "AREA's companion windows on FRAME (default: `drgnx-wb-frame'), top to bottom."
+  (let ((frame (or frame (drgnx-wb-frame))))
+    (seq-filter (lambda (w) (and (eq (window-parameter w 'drgnx-role) area) (window-parameter w 'drgnx-area-part)))
+                (window-list frame 'nomini (frame-first-window frame)))))
+
+(defun drgnx-area--companion (area part &optional frame)
+  "AREA's companion window PART (`above' or `below') on FRAME, or nil."
+  (seq-find (lambda (w) (eq (window-parameter w 'drgnx-area-part) part)) (drgnx-area--companion-windows area frame)))
+
+(defun drgnx-area--top-window (area &optional frame)
+  "AREA's topmost window on FRAME, which carries its tab row: the companion above its tab's buffer when there is one,
+else its window; nil while it is hidden."
+  (or (drgnx-area--companion area 'above frame) (drgnx-wb-area-window area frame)))
+
+(defun drgnx-area--put-row (area w)
+  "Set AREA's tab row on its topmost window; W, its main window, has none when a companion is above it."
+  (let ((top (or (drgnx-area--companion area 'above (window-frame w)) w)))
+    (set-window-parameter top 'header-line-format (drgnx-area--tab-row area))
+    (unless (eq top w) (set-window-parameter w 'header-line-format 'none))))
+
+(defun drgnx-area--delete-companion (w)
+  "Delete companion window W itself: not through the area's `delete-window', which hides the whole area."
+  (when (window-live-p w)
+    (set-window-parameter w 'delete-window nil)
+    (delete-window w)))
+
+(defun drgnx-area--make-companion (area part buffer)
+  "A new companion window PART of AREA showing BUFFER, split from the area's side, dedicated as the area's window is."
+  (let ((w (let ((drgnx-rules--placing t))           ; ours: not redirected by the rules
+             (display-buffer-in-side-window
+              buffer `((side . ,(plist-get (alist-get area drgnx-wb--areas) :side)) (slot . ,(if (eq part 'above) -1 1))
+                       (dedicated . drgnx)
+                       (window-parameters . ((drgnx-role . ,area) (drgnx-area-part . ,part)
+                                             (no-delete-other-windows . t) (no-other-window . t)
+                                             (mode-line-format . none) (header-line-format . none)
+                                             (delete-window . drgnx-area--delete-window))))))))
+    (set-window-parameter w 'quit-restore nil)
+    (set-window-scroll-bars w nil nil nil nil t)
+    (window-preserve-size w t t)                       ; the width, as the area's window keeps it
+    w))
+
+(defun drgnx-area--companions (area w buffer)
+  "Show the companions AREA's shown tab gives BUFFER, which its main window W shows, and fit them; delete those it has
+none for.  A placeholder has none, nor has an area at the top or bottom."
+  (let* ((fn (and (drgnx-area--horizontal-p area) (drgnx-area--content-p buffer)
+                  (plist-get (alist-get (drgnx-wb-area-tab area) (plist-get (alist-get area drgnx-wb--areas) :tabs))
+                             :companions)))
+         (parts (and fn (funcall fn buffer)))
+         (frame (window-frame w)))
+    (cl-loop for part in '(above below) for want in (list (nth 0 parts) (nth 1 parts))
+             for have = (drgnx-area--companion area part frame)
+             do (cond ((not (buffer-live-p want)) (drgnx-area--delete-companion have))
+                      (t (if have (drgnx-wb-set-area-buffer have want) (drgnx-area--make-companion area part want))
+                         (with-current-buffer want
+                           (add-hook 'kill-buffer-hook #'drgnx-area--killed nil t)
+                           (add-hook 'window-size-change-functions #'drgnx-area--companion-resized nil t)))))
+    (drgnx-wb-area-fit-companions area frame)))
+
+(defun drgnx-area--fit-companion (w)
+  "Fit companion window W to its buffer's lines and its header line, pixelwise, at most `drgnx-area--companion-most'
+of its area's height (its main window and companions together), in whole lines; the main window gives or takes the
+difference.  The height is then preserved, so a frame resize goes to the main window.  A second call changes nothing."
+  (when-let* (((window-live-p w)) ((window-parameter w 'drgnx-area-part))
+              (area (window-parameter w 'drgnx-role)) (frame (window-frame w))
+              (main (drgnx-wb-area-window area frame)))
+    (let* ((total (apply #'+ (mapcar #'window-pixel-height (cons main (drgnx-area--companion-windows area frame)))))
+           (line (window-default-line-height w))
+           (window-resize-pixelwise t))
+      ;; `fit-window-to-buffer' reads a preserved width as a fixed size (it asks `window-size-fixed-p' with
+      ;; `preserved' as HORIZONTAL) and fits nothing: the width is let go for the fit and kept again after it
+      (window-preserve-size w t nil)
+      (unwind-protect (fit-window-to-buffer w (max 1 (floor (* drgnx-area--companion-most total) line)) 1 nil nil t)
+        (window-preserve-size w t t))
+      (window-preserve-size w nil t))))                ; also when the fit changed nothing
+
+(defun drgnx-area--companion-resized (w)
+  "`window-size-change-functions' in a companion's buffer: a companion window whose size changed (a frame resize, a
+header line measured after the first redisplay) is fitted again."
+  (when (window-parameter w 'drgnx-area-part) (drgnx-area--fit-companion w)))
+
+(defun drgnx-wb-area-fit-companions (area &optional frame)
+  "Fit AREA's companion windows to their lines on FRAME, or on every frame when FRAME is nil.  A companion's owner
+calls it when the companion's lines change (its rows were drawn, a draft grew); never from redisplay."
+  (dolist (f (if frame (list frame) (frame-list)))
+    (mapc #'drgnx-area--fit-companion (drgnx-area--companion-windows area f))))
 
 (defun drgnx-wb-area-toggle (area)
   "Show or hide AREA."
