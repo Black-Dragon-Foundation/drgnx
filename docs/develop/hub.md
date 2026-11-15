@@ -2998,7 +2998,7 @@ It opens at its end: it sets `drgnx-view-sja-tail`, so Sjá's draw counts its em
 rows leave point there (a Sjá view otherwise opens on its first rows), whether a window showed it before them or after.
 Emacs keeps the start of a window that grows, and scrolling to a point at the end past rows taller than a line (cards
 scrolled out at the top) leaves space under the end, so the same flag gives the buffer Sjá's one tail rule
-(`drgnx-view-sja--pin-end`, a buffer-local `window-size-change-functions` and `window-scroll-functions`): a window with
+(`drgnx-view-sja--pin-end`, a buffer-local `window-size-change-functions`, `window-scroll-functions` and `pre-redisplay-functions`, the last for a start set from Lisp, which runs no scroll functions): a window with
 its point at the end and room for one more screen line above the end's row gets the end's row on its last line (at
 open, when the header's rows come and the header is fitted; a frame that grows; the composer shrinking after a send;
 the header's strip unwrapping; a new start redisplay chose). It is memoized on the window's start and point, the end

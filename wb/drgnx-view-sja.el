@@ -91,15 +91,19 @@ epoch is held until a reset (else applied: a terminal's faces repaint in place).
       (add-hook 'kill-buffer-hook #'drgnx-view-patch--killed nil t)
       (add-hook 'window-size-change-functions #'drgnx-view-sja--pin-end nil t)
       (add-hook 'window-scroll-functions #'drgnx-view-sja--pin-end nil t)
+      ;; a start set from Lisp (`set-window-start', a scroll command) runs no `window-scroll-functions': the window's
+      ;; redisplay comes next, and the pin before it, in the window's buffer
+      (add-hook 'pre-redisplay-functions #'drgnx-view-sja--pin-end nil t)
       (drgnx-view-patch--hooks)
       s)))
 
 (defun drgnx-view-sja--pin-end (w &optional start)
   "Keep the end's row of a view that opens at its tail (`drgnx-view-sja-tail') on the last line of W, a window showing
-its buffer with point at the region's end: a window that grew (Emacs keeps its start: `window-size-change-functions')
-and a new START redisplay chose (`window-scroll-functions': Emacs scrolling to a point at the end leaves space under
-it past rows taller than a line, cards scrolled out at the top) get the start moved back while one more screen line
-fits above the end's row.  A window whose point is elsewhere (scrolled back by its user) is left as it is.  Memoized on
+its buffer with point at the region's end: a window that grew (Emacs keeps its start: `window-size-change-functions'),
+a new START redisplay chose (`window-scroll-functions': Emacs scrolling to a point at the end leaves space under it
+past rows taller than a line, cards scrolled out at the top) and a start set from Lisp, which runs no scroll functions
+\(`pre-redisplay-functions', before the window's redisplay) get the start moved back while one more screen line fits
+above the end's row.  A window whose point is elsewhere (scrolled back by its user) is left as it is.  Memoized on
 W's start and point, the end and W's size (the window parameter `drgnx-view-sja-pinned'): no work when none changed."
   (with-current-buffer (window-buffer w)
     (when-let* ((s (and drgnx-view-sja-tail drgnx-view-patch)) (end (drgnx-view-patch-end s))
