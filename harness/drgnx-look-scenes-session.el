@@ -465,10 +465,24 @@ from 201."
         (push "agent: no permission card within 30 s" drgnx-look-scene--errors)))))
   (drgnx-look-scene--answer :panel (if (buffer-live-p drgnx-look-scene--panel) (buffer-name drgnx-look-scene--panel) :null)))
 
+(defvar drgnx-look-scene--windows-rearranged nil
+  "Non-nil once a scene took the windows apart by hand (`delete-other-windows', its own splits) while the layout's name
+still said `editor': the next scene's start puts the layout back (`drgnx-look-scene--editor-layout').")
+
 (defun drgnx-look-scene--editor-layout ()
   "The editor layout, when an earlier scene left another (the Work layout's editor group sits beside the map, and the
-send-run scenes' layout has none): a scene that focuses the editor starts here, or has no editor window to focus."
-  (when (and (fboundp 'drgnx-layouts-current) (drgnx-layouts-current) (not (eq (drgnx-layouts-current) 'editor)))
+send-run scenes' layout has none) or took the windows apart by hand (the notebook views' three panes: the scenes after
+it had no docks and no margins, and the debugging scene's hover dot read `(car (window-margins))' as nil): a scene that
+focuses the editor starts here, or has no editor window to focus."
+  (when (or drgnx-look-scene--windows-rearranged
+            (and (fboundp 'drgnx-layouts-current) (drgnx-layouts-current) (not (eq (drgnx-layouts-current) 'editor))))
+    (when drgnx-look-scene--windows-rearranged
+      ;; the notebook views' three panes sit in the editor group: their buffers go (the next notebook scene makes its own),
+      ;; and the layout is rebuilt from one window
+      (dolist (b (buffer-list))
+        (when (string-prefix-p "*Notebook " (buffer-name b)) (let ((kill-buffer-query-functions nil)) (kill-buffer b))))
+      (delete-other-windows))
+    (setq drgnx-look-scene--windows-rearranged nil)
     (drgnx-layouts-apply 'editor)))
 
 (defun drgnx-look-scene-begin ()
@@ -2069,6 +2083,7 @@ a finished run left."
                             (format "*Notebook log: %s*" base)))
           (drgnx-look-scene--until 30 "the views' buffers" (lambda () (seq-every-p #'get-buffer views)))
           (delete-other-windows)
+          (setq drgnx-look-scene--windows-rearranged t)
           (let* ((w1 (selected-window)) (w2 (split-window-right)) (w3 (with-selected-window w2 (split-window-right))))
             (cl-loop for w in (list w1 w2 w3) for name in views
                      do (set-window-buffer w (get-buffer name))
