@@ -130,6 +130,22 @@ directories in the run directory, TERM, a UTF-8 locale unless one is set; then E
         (seq-some (lambda (kv) (and (string-prefix-p "DRGNX_UI_RUN=" kv) (substring kv 13)))
                   (split-string (buffer-string) "\0" t))))))
 
+(defun drgnx-tty-session--run-pids (run)
+  "This user's processes of the session in RUN (their DRGNX_UI_RUN is RUN), never this one: the session's Emacs and
+what it started, a hub (`ratatoskr ensure' detaches it) or any other child whose command line names no part of RUN."
+  (seq-filter (lambda (pid) (and (/= pid (emacs-pid)) (equal (drgnx-tty-session--run-of pid) run)))
+              (mapcar #'string-to-number (directory-files "/proc" nil "\\`[0-9]+\\'"))))
+
+(defun drgnx-tty-session--end-run-processes (run)
+  "KILL the processes still in the session in RUN (`drgnx-tty-session--run-pids') and return once they are gone, so
+nothing writes into RUN while it is removed.  Signal if one is still there after 10 s."
+  (let ((deadline (+ (float-time) 10)) pids)
+    (while (setq pids (drgnx-tty-session--run-pids run))
+      (when (> (float-time) deadline)
+        (drgnx-ui--fail "%s: processes %S still run after 10 s" run pids))
+      (dolist (pid pids) (ignore-errors (signal-process pid 'KILL)))
+      (sleep-for 0.05))))
+
 (defun drgnx-tty-session--remove-stale (name run)
   "End what session NAME (run directory RUN, or nil) left running, then remove its run and socket directories."
   (drgnx-tty-session--kill-pattern (drgnx-tty-session--pattern name (or run (concat "/" name))))
@@ -386,7 +402,8 @@ sets it; the pty is 120x40.  Returns the process; `drgnx-tty-session-stop' delet
 
 (defun drgnx-tty-session-stop (sess)
   "Stop SESS: its Emacs asked to exit, its tmux server killed with everything in it, its pty clients
-deleted; then its run and socket directories removed."
+deleted, and every process still in the session ended and gone (a hub it started writes into the run directory);
+then its run and socket directories removed."
   (let ((run (plist-get sess :run))
         (socket (plist-get sess :socket)))
     (setq drgnx-tty-session--live (seq-remove (lambda (s) (equal (plist-get s :run) run)) drgnx-tty-session--live))
@@ -395,6 +412,7 @@ deleted; then its run and socket directories removed."
     (when (plist-get sess :nested) (ignore-errors (drgnx-tty-session-inner-tmux sess "kill-server")))
     (ignore-errors (drgnx-tty-session-tmux sess "kill-server"))
     (drgnx-tty-session--kill-pattern (drgnx-tty-session--pattern (plist-get sess :name) run))
+    (drgnx-tty-session--end-run-processes run)
     (when (file-directory-p run) (delete-directory run t))
     (let ((sock-dir (and socket (file-name-directory socket))))
       (when (and sock-dir (file-directory-p sock-dir))

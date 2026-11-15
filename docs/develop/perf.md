@@ -38,7 +38,7 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 | debug-ruler-baseline | debug-ruler-scroll with the ruler off (`drgnx-debug-overview-ruler`): the same narrowing, breakpoints, column and keys (see "The overview ruler" below) | — (the ruler's rule's base) |
 | debug-ruler-scroll | the fixture narrowed to its first 10,000 lines with 200 breakpoints (one every 50 lines) in the column and the overview ruler (Nidhogg's `glitnir-ruler`: its check needs the feature), scrolled as debug-gutter-scroll | input latency; p50 at most the larger of 5 % and 0.3 ms over debug-ruler-baseline in the same run |
 | debug-edges-scroll | debug-gutter-baseline's file and keys with 200 edges in the window's `glitnir-edges` (Nidhogg's edges: one every 50 lines, three lines down with two bends and an arrow; its check needs Nidhogg's `glitnir--edges`) | input latency; p50 at most the larger of 5 % and 0.3 ms over debug-gutter-baseline in the same run |
-| debug-breakpoint-click | F9 then `<down>`, 20 times: each a `debug/breakpoints` add answered at once and the column redrawn | input latency |
+| debug-breakpoint-click | the breakpoint toggle (bound to `<f7>` for the workload, a key no profile claims) then `<down>`, 20 times: each a `debug/breakpoints` add answered at once and the column redrawn | input latency |
 | debug-step-line | the 12k-line fixture, then F10 120 times: each one `debug-frame` (a step's stop, sent to the starting editor) for the next line, the arrow and band moved, point placed, the window scrolled only when the line left it | input latency; within 16 ms p95 (spec §5) |
 | debug-inline | the 12k-line fixture with five breakpoints (three on the lines shown), the column and the overview ruler on, stopped at line 200, then F10 120 times: each one `debug-inline` as the hub sends it for a step (twelve lines' values, two changed), the lines that keep values updated in place, the next added, the oldest gone | input latency; within 2 ms p95 (spec §8, §12) |
 | debug-inline-heavy | debug-inline in the fixture with 200 breakpoints (one every 60 lines): the column's hover pool and the ruler's 200 marks drawn again with each step | input latency; within 4 ms p95 |
@@ -419,7 +419,7 @@ sets `glitnir-enable` in the session when recording begins (any other value leav
 passes it on to the session.
 
 **The P1 workloads.** `popup-typing` (corfu open, 200+ characters), `popup-churn` (a posframe shown, moved and
-hidden 200 times; the hides are measured), `scroll-under-popup` (an eldoc-box at point, 60 `<next>` then 60
+hidden 200 times on `<f7>`, a key no profile claims; the hides are measured), `scroll-under-popup` (an eldoc-box at point, 60 `<next>` then 60
 `<prior>`: 120 samples, above the 100 that make p95 non-null) and `scroll-full-window` (one window filling the frame,
 `<down>` 300 times (C-n is File > New)). The first three need the pinned child-frame packages: set `DRGNX_CHILDFRAME_ELPA`
 ([harness.md](harness.md), "Child-frame packages"); without it `--perf` prints `perf: popup workloads skipped` and

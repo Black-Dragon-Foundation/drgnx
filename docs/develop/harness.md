@@ -1151,7 +1151,9 @@ dirs) and drive the session through `harness/drgnx-tty-session.el`:
   `drgnx-tty-session-stop` and the sweep of sessions whose runner died kill it (its command line names the run
   directory).
 - **Cleanup:** `drgnx-tty-session-stop` asks Emacs to exit, kills the tmux server and anything still running from the
-  run directory, then removes the run and socket directories. `drgnx-tty-session-with` stops the session even when
+  run directory, then ends every process whose environment names the run (`DRGNX_UI_RUN`), such as the hub that
+  `ratatoskr ensure` detaches and that keeps writing into `drgnx-data`, and waits until they are gone (an error after
+  10 s). Only then does it remove the run and socket directories. `drgnx-tty-session-with` stops the session even when
   the test fails, and `kill-emacs-hook` stops any session a test left running. A runner killed with SIGKILL runs
   no hook, so two more things cover it. The server runs as `setsid timeout -s TERM -k 10 BUDGET tmux … -D` and ends
   after `$DRGNX_TTY_MAX_RUNTIME` seconds (default 1800) with everything in it. Each start also sweeps the sessions
@@ -1174,8 +1176,11 @@ dirs) and drive the session through `harness/drgnx-tty-session.el`:
 - **C-g only when the row is about C-g:** C-g typed into a terminal is Emacs's interrupt whenever the daemon is not
   waiting for input (a redisplay, a timer, the test's own eval): it quits whatever runs and never reaches a popup's
   map as a key. A row that only needs a popup closed closes it by a call in that frame (the mixed rows:
-  `transient--emergency-exit`, `corfu-quit`). A row that tests C-g itself sends it after a barrier and judges it by
-  what ran (`kx-seen`), not by a screen a quit could leave as it was.
+  `transient--emergency-exit`, `corfu-quit`). A row that tests C-g itself sends it after a barrier (no input pending, no
+  timer due within 1 s, tmux has read the screen) and judges it by what ran (`kx-seen`), not by a screen a quit could
+  leave as it was. Process output can still run Lisp in that moment, which no form sees coming: such a C-g is a
+  quit, and the row fails by name instead of passing. A row about a quit makes one on purpose: a timer that keeps
+  the daemon busy until `quit-flag` is set (`drgnx-tty-popups/completion-popup-goes-on-a-quit`).
 - **Output:** the screen comes from `capture-pane` (`-screen`, `-find`, `-wait-screen`, `-quiet`; `-find-below` and
   `-wait-screen-below` look only under a heading's line, for a text shown in two places). The paste buffer
   shows what OSC 52 copied (`-clipboard`), and `-pane-flags` reports the pane's mouse and key modes. The inner Emacs's
