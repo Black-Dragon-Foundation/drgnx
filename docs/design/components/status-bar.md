@@ -1,7 +1,8 @@
 # Status bar
 
 One quiet bar across the bottom of the window, under every pane. It is a window of its own that drgnx keeps at the
-frame's bottom; the editors have no mode line. What you need at a glance, nothing that shouts.
+frame's bottom; the editors have no mode line. What you need at a glance, nothing that shouts. In a terminal frame
+each editor keeps its own bar instead (a one-line window draws no mode line, and a terminal has no row to spare).
 
 ![The status bar, dark](../img/status-bar-dark.png)
 
