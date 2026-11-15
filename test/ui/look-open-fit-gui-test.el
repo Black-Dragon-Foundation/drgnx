@@ -99,12 +99,10 @@ that fit in 0.3 of the frame, and growing or shrinking the frame by one pixel le
       (dolist (b (list drgnx-buffers-buffer-name drgnx-explorer-buffer-name)) (when (get-buffer b) (kill-buffer b)))
       (delete-directory dir t))))
 
-(drgnx-look-gui-deftest drgnx-ui-look-open-fit/a-squeezed-window-draws-its-header-line-when-it-grows ()
+(defun drgnx-ui-look-open-fit--squeezed-grows (rows)
   "A dock window squeezed below its tab line (the island header, taller once its font is measured) and header line,
-drawn so, then grown (the Open rows arrived): its header line is drawn where it belongs, as a full redraw draws it.
-The notebook scene kept the pixels of the Explorer's header line there, half covered by the Open rows: the squeezed
-window drew its header past its bottom, the window below drew over it, and growing changed neither the row's glyphs
-nor its place, so it was not drawn again."
+drawn so, then grown, with ROWS (the Open rows arrived) or with its buffer as it was (a fit after the header grew): an
+error unless its header line is drawn where it belongs, as a full redraw draws it."
   (let* ((root (drgnx-uitest-root-frame))
          (config (with-selected-frame root (current-window-configuration)))
          (buf (get-buffer-create " *open-fit-squeezed*")))
@@ -136,8 +134,9 @@ nor its place, so it was not drawn again."
             (with-current-buffer (window-buffer below) (force-mode-line-update))
             (drgnx-test-wait-presented)
             ;; the rows arrive and the section grows to them
-            (with-current-buffer buf (insert "one\ntwo\nthree"))
-            (set-window-point top 1)
+            (when rows
+              (with-current-buffer buf (insert "one\ntwo\nthree"))
+              (set-window-point top 1))
             (adjust-window-trailing-edge top (+ (- (+ (window-tab-line-height top) (window-header-line-height top))
                                                    (window-pixel-height top))
                                                 (* 3 (default-line-height)))
@@ -153,6 +152,17 @@ nor its place, so it was not drawn again."
               (should (drgnx-uitest-region-equal-p drawn (drgnx-uitest-snapshot root) rect :ignore-alpha t)))))
       (with-selected-frame root (set-window-configuration config))
       (kill-buffer buf))))
+
+(drgnx-look-gui-deftest drgnx-ui-look-open-fit/a-squeezed-window-draws-its-header-line-when-it-grows ()
+  "The notebook scene kept the pixels of the Explorer's header line where the Open section's belongs, half covered by
+the Open rows: the section, squeezed below its island header, drew its header line past its bottom, the Explorer drew
+over it, and growing to its rows changed neither the row's glyphs nor its place, so it was not drawn again."
+  (drgnx-ui-look-open-fit--squeezed-grows t))
+
+(drgnx-look-gui-deftest drgnx-ui-look-open-fit/a-squeezed-window-grown-with-no-new-rows-draws-its-header-line ()
+  "As above, grown with its buffer unchanged (no mode line, nothing modified): its header line is drawn again all the
+same."
+  (drgnx-ui-look-open-fit--squeezed-grows nil))
 
 (provide 'look-open-fit-gui-test)
 ;;; look-open-fit-gui-test.el ends here
