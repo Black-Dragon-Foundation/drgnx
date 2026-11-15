@@ -632,6 +632,20 @@
           (should (= (plist-get (nthcdr 3 b) :radius) (drgnx-px 10)))
           (should (eq (plist-get (nthcdr 3 b) :beneath) 'default)))))))
 
+(ert-deftest drgnx-notebook/a-card-stands-in-a-gap-with-the-card-shadow-and-the-outer-ring ()
+  (nb-test--with-cards
+    (let* ((blocks (window-parameter (selected-window) 'glitnir-blocks))
+           (plist (lambda (id) (nthcdr 3 (seq-find (lambda (b) (= (nth 1 b) (plist-get (drgnx-notebook--cell-by-id id) :head)))
+                                                   blocks)))))
+      (dolist (id '("a" "b"))
+        (let ((p (funcall plist id)))
+          (should (= (plist-get p :gap) (drgnx-px 4)))       ; two cards stand 8 px apart
+          (should (consp (plist-get p :shadow)))
+          (should (consp (plist-get p :shadow-ring)))))
+      ;; the focused, selected cell: the focus ring inside, the border step outside
+      (should (equal (plist-get (funcall plist "a") :outer) '(drgnx-border-subtle . 1.0)))
+      (should-not (plist-get (funcall plist "b") :outer)))))
+
 (ert-deftest drgnx-notebook/the-focus-ring-is-the-selected-cells-in-the-focused-window-only ()
   (nb-test--with-cards
     (let* ((window (selected-window))
@@ -860,9 +874,39 @@
       (unwind-protect
           (with-current-buffer b
             (should (equal drgnx-notebook-view--foot "lines 1 241–1 242 of 1 552"))
-            ;; the gutter counts the cell's lines: the row above is line 1240 of the cell
-            (should (eq display-line-numbers t))
-            (should (= display-line-numbers-offset 1239)))
+            ;; the gutter is the lines' own numbers (a line-prefix), blank on the cut rows, as the mockup has it
+            (should-not display-line-numbers)
+            (let ((prefix (lambda (n) (goto-char (point-min)) (forward-line n)
+                            (substring-no-properties (get-text-property (point) 'line-prefix)))))
+              (should (equal (string-trim (funcall prefix 1)) "1 241"))
+              (should (string-blank-p (funcall prefix 0)))
+              (should (string-blank-p (funcall prefix 3)))
+              (should (= (length (funcall prefix 0)) (length (funcall prefix 1))))))
+        (kill-buffer b)))))
+
+(ert-deftest drgnx-notebook/a-narrow-cut-row-keeps-its-key-chip-whole ()
+  (nb-test--with
+    (let ((b (nb-test--view-buffer 'drgnx-notebook-output-mode
+                                   `((,(concat "▲ 1240 lines above   " (propertize "M-p" 'face 'drgnx-chip-quiet) " earlier lines")
+                                      drgnx-notebook-above 1240)
+                                     ("epoch 41" drgnx-notebook-line 1241)))))
+      (unwind-protect
+          (with-current-buffer b
+            (let ((visible (lambda ()
+                             (goto-char (point-min))
+                             (let ((out "") (pos (point)))
+                               (while (< pos (line-end-position))
+                                 (unless (get-text-property pos 'invisible) (setq out (concat out (string (char-after pos)))))
+                                 (cl-incf pos))
+                               (string-trim out)))))
+              (drgnx-notebook-view--fit-cut-rows 60)       ; wide: all of it
+              (should (equal (funcall visible) "▲ 1240 lines above   M-p earlier lines"))
+              (drgnx-notebook-view--fit-cut-rows 30)       ; narrow: the text before the chip gives way first
+              (should (equal (funcall visible) "▲ 1240   M-p earlier lines"))
+              (drgnx-notebook-view--fit-cut-rows 14)       ; narrower: the label after it goes, the chip stays whole
+              (should (equal (funcall visible) "▲ 1240   M-p"))
+              (drgnx-notebook-view--fit-cut-rows 60)       ; the pane grows again: all of it
+              (should (equal (funcall visible) "▲ 1240 lines above   M-p earlier lines"))))
         (kill-buffer b)))))
 
 (ert-deftest drgnx-notebook/the-logs-foot-counts-entries ()

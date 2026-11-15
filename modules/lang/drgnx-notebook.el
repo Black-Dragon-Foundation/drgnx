@@ -638,7 +638,8 @@ fails the notebook: a language without a grammar or a mode stays plain text."
 ;; (the cell faces' `:extend' band), the fringes are the card's side insets.  The ring is `drgnx-border-subtle', the
 ;; selected cell's `drgnx-border-strong', and `drgnx-focus-line' only on the selected cell of the selected window.  The
 ;; window parameter is set only when the blocks changed (a rescan, the selection, the focus), never per redisplay; Glitnir
-;; takes the faces' colours again on a theme change.  Without Glitnir (a terminal) the band look stays.
+;; takes the faces' colours again on a theme change.  A card stands in a 4 px gap each side (two are 8 px apart), casts the look's
+;; card shadow, and the focused selected one has the border step as an outer ring.  Without Glitnir (a terminal) the band look stays.
 
 (defconst drgnx-notebook--card-inset 16 "The card's inset from the window's sides, logical pixels (the mockup's body padding).")
 
@@ -649,14 +650,25 @@ fails the notebook: a language without a grammar or a mode stays plain text."
   "Non-nil when cells are drawn as cards: a graphical frame with Glitnir's blocks."
   (and (display-graphic-p) (fboundp 'glitnir--block-vector)))
 
+(defun drgnx-notebook--card-shadow ()
+  "The card's shadow as the look has it (`--sh-card'): (BLUR . LINE), each (FACE . OPACITY).  The blur is the
+gap's dark, the line a faint step of the text colour (the mockup's 3.5 % to 5 %); the opacities follow the theme's mode."
+  (let ((dark (eq (frame-parameter nil 'background-mode) 'dark)))
+    (cons (cons 'child-frame-shadow (if dark 0.45 0.08))
+          (cons 'default (if dark 0.035 0.05)))))
+
 (defun drgnx-notebook--blocks-key (focused)
-  "What the blocks of a window are (FOCUSED: it is the selected one): one entry per cell, its positions and ring face."
-  (let ((radius (drgnx-px 10)))
+  "What the blocks of a window are (FOCUSED: it is the selected one): one entry per cell, its positions, ring face and
+whether the focus ring has the border step outside it, then the shadow and the gap."
+  (let ((radius (drgnx-px 10)) (gap (drgnx-px 4)) (shadow (drgnx-notebook--card-shadow)))
     (mapcar (lambda (c)
-              (list (plist-get c :head) (1+ (plist-get c :tail)) radius
-                    (cond ((not (equal (plist-get c :id) drgnx-notebook--selected-id)) 'drgnx-border-subtle)
-                          (focused 'drgnx-focus-line)
-                          (t 'drgnx-border-strong))))
+              (let ((selected (equal (plist-get c :id) drgnx-notebook--selected-id)))
+                (list (plist-get c :head) (1+ (plist-get c :tail)) radius
+                      (cond ((not selected) 'drgnx-border-subtle)
+                            (focused 'drgnx-focus-line)
+                            (t 'drgnx-border-strong))
+                      (and selected focused)
+                      gap shadow)))
             drgnx-notebook--cells)))
 
 (defun drgnx-notebook--blocks-for (focused)
@@ -668,7 +680,9 @@ fails the notebook: a language without a grammar or a mode stays plain text."
       (dolist (b (cdr entry)) (set-marker (nth 1 b) nil) (set-marker (nth 2 b) nil))
       (setf (alist-get focused drgnx-notebook--blocks)
             (cons key (mapcar (lambda (k) (list 'ring (copy-marker (nth 0 k)) (copy-marker (nth 1 k))
-                                                :radius (nth 2 k) :ring (nth 3 k) :beneath 'default))
+                                                :radius (nth 2 k) :ring (nth 3 k) :beneath 'default :gap (nth 5 k)
+                                                :shadow (car (nth 6 k)) :shadow-ring (cdr (nth 6 k))
+                                                :outer (and (nth 4 k) (cons 'drgnx-border-subtle 1.0))))
                               key))))
     (cdr (alist-get focused drgnx-notebook--blocks))))
 
@@ -1248,9 +1262,7 @@ THEN-RUN-ALL: run every code cell once it is up."
 (define-derived-mode drgnx-notebook-outline-mode drgnx-notebook-view-mode "Notebook outline"
   "The cell outline: one row per cell; Go to Cell (the key profiles' RET) goes to the cell.")
 (define-derived-mode drgnx-notebook-output-mode drgnx-notebook-view-mode "Notebook output"
-  "The whole output of one cell, a window of 1000 lines at a time; Output Later and Earlier Lines move it."
-  (setq-local display-line-numbers t)
-  (face-remap-add-relative 'line-number 'drgnx-text-subtle))
+  "The whole output of one cell, a window of 1000 lines at a time; Output Later and Earlier Lines move it.")
 (define-derived-mode drgnx-notebook-log-mode drgnx-notebook-view-mode "Notebook log"
   "What the kernel says that answers no cell.")
 
@@ -1427,6 +1439,52 @@ THEN-RUN-ALL: run every code cell once it is up."
                                              " · ")
                                 (and running "follows the run") t)))
 
+(defun drgnx-notebook-view--gutter ()
+  "Give the output's rows their gutter: the number of the cell's line in the subtle face, as a
+`line-prefix'; the cut rows and any other row get a blank of the same width (Emacs's own line numbers would count them)."
+  (let* ((lines (drgnx-notebook--output-lines))
+         (width (if lines (length (drgnx-notebook--group (cdr lines))) 0))
+         (blank (make-string (+ width 2) ?\s))
+         (inhibit-read-only t) (inhibit-modification-hooks t))
+    (save-excursion
+      (goto-char (point-min))
+      (while (not (eobp))
+        (let* ((beg (point)) (end (min (point-max) (1+ (line-end-position))))
+               (n (get-text-property beg 'drgnx-notebook-line)))
+          (put-text-property beg end 'line-prefix
+                             (if (numberp n)
+                                 (propertize (concat (make-string (- width (length (drgnx-notebook--group n))) ?\s)
+                                                     (drgnx-notebook--group n) "  ")
+                                             'face 'drgnx-text-subtle)
+                               blank))
+          (goto-char end))))
+    (+ width 2)))
+
+(defun drgnx-notebook-view--fit-cut-rows (width)
+  "Make the cut rows (`N lines above   M-p earlier lines') fit WIDTH columns, the key chip whole: the text before
+the chip gives way first (` lines above'), then the label after it.  A row that fits shows all of it (the pane may
+have grown)."
+  (let ((inhibit-read-only t) (inhibit-modification-hooks t))
+    (save-excursion
+      (goto-char (point-min))
+      (while (not (eobp))
+        (let ((beg (point)) (end (line-end-position)))
+          (when (or (get-text-property beg 'drgnx-notebook-above) (get-text-property beg 'drgnx-notebook-below))
+            (remove-text-properties beg end '(invisible nil))
+            (when (> (- end beg) width)
+              (let* ((lead (and (string-match " lines \\(?:above\\|below\\)" (buffer-substring-no-properties beg end))
+                                (cons (+ beg (match-beginning 0)) (+ beg (match-end 0)))))
+                     (chip-end (let ((p beg) (found nil))
+                                 (while (and (< p end) (not found))
+                                   (let ((next (or (next-single-property-change p 'face nil end) end)))
+                                     (when (eq (get-text-property p 'face) 'drgnx-chip-quiet) (setq found next))
+                                     (setq p next)))
+                                 found)))
+                (when lead (put-text-property (car lead) (cdr lead) 'invisible t))
+                (when (and chip-end (> (- end beg (if lead (- (cdr lead) (car lead)) 0)) width))
+                  (put-text-property chip-end end 'invisible t))))))
+        (forward-line 1)))))
+
 (defun drgnx-notebook-view--refresh (&optional _view _keys)
   "Compute this view buffer's foot line, key hint and gutter from its rows (a draw just changed them)."
   (when (derived-mode-p 'drgnx-notebook-view-mode)
@@ -1445,14 +1503,14 @@ THEN-RUN-ALL: run every code cell once it is up."
        (let ((lines (drgnx-notebook--output-lines)))
          (if (null lines)
              (setq drgnx-notebook-view--foot "no output")
-           (let* ((above (drgnx-notebook-view--prop 'drgnx-notebook-above))
-                  (below (drgnx-notebook-view--prop 'drgnx-notebook-below)))
+           (let ((below (drgnx-notebook-view--prop 'drgnx-notebook-below)))
              (setq drgnx-notebook-view--header (drgnx-notebook-view--output-title)
                    drgnx-notebook-view--foot (format "lines %s–%s of %s" (drgnx-notebook--group (car lines)) (drgnx-notebook--group (cdr lines))
-                                                     (drgnx-notebook--group (+ (cdr lines) below)))
-                   ;; the gutter counts the cell's lines: a row above is the line before the first shown
-                   display-line-numbers t
-                   display-line-numbers-offset (- (car lines) 1 (if (> above 0) 1 0)))))))
+                                                     (drgnx-notebook--group (+ (cdr lines) below))))
+             ;; the gutter: the cell's own line numbers, blank on the cut rows; the cut rows fit the pane by the chip
+             (let ((gutter (drgnx-notebook-view--gutter)))
+               (when-let* ((w (car (get-buffer-window-list nil nil t))))
+                 (drgnx-notebook-view--fit-cut-rows (- (window-body-width w) gutter))))))))
       ('drgnx-notebook-log-mode
        (let ((entries (car (drgnx-notebook-view--rows-count 'drgnx-notebook-log)))
              (lost (drgnx-notebook-view--prop 'drgnx-notebook-lost)))
