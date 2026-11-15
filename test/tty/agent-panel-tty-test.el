@@ -95,6 +95,13 @@ header and the transcript are the hub's two views in a terminal class."
         (should-not (plist-get below :view))          ; the composer is text, not a view
         (should (< (plist-get above :top) (plist-get main :top) (plist-get below :top)))))))
 
+(defun drgnx-tty-agent-panel-test--head-re (above)
+  "A regexp for the first line of the header part ABOVE as the terminal shows it: its first two words of three or more
+characters, any spaces between (the rows' aligned spacing is not one space a column)."
+  (let ((words (seq-filter (lambda (w) (>= (length w) 3))
+                           (split-string (car (split-string (plist-get above :text) "\n")) "[ \t]+" t))))
+    (mapconcat #'regexp-quote (seq-take words 2) " +")))
+
 (ert-deftest drgnx-tty-agent-panel/the-header-holds-the-strip ()
   "The header window shows the hub's top rows from their first line, and that line is on the terminal's screen above
 the transcript's."
@@ -104,8 +111,7 @@ the transcript's."
       (should above)
       (should (= (plist-get above :start) (plist-get above :min)))
       (should (> (length (plist-get above :text)) 0))
-      (let ((head (drgnx-tty-session-wait-screen s (regexp-quote (substring (plist-get above :text) 0
-                                                                            (min 16 (length (plist-get above :text)))))
+      (let ((head (drgnx-tty-session-wait-screen s (drgnx-tty-agent-panel-test--head-re above)
                                                  10)))
         (should (< (cdr head) (1+ (plist-get main :top))))))))
 
@@ -138,8 +144,7 @@ screen do not move."
              s '(let ((w (get-buffer-window drgnx-tty-ap--panel)))
                   (and w (select-window w) (set-window-point w (with-current-buffer (window-buffer w) (point-max))) t))))
     (let* ((above (drgnx-tty-session-eval s '(drgnx-tty-ap--part (selected-frame) 'above)))
-           (head (and above (drgnx-tty-session-find s (regexp-quote (substring (plist-get above :text) 0
-                                                                               (min 16 (length (plist-get above :text))))))))
+           (head (and above (drgnx-tty-session-find s (drgnx-tty-agent-panel-test--head-re above))))
            (start (plist-get (drgnx-tty-session-eval s '(drgnx-tty-ap--part (selected-frame) 'main)) :start)))
       (should above)
       (should head)
@@ -149,8 +154,7 @@ screen do not move."
                               10)
                              :start)))
         (should (equal above (drgnx-tty-session-eval s '(drgnx-tty-ap--part (selected-frame) 'above))))
-        (should (equal head (drgnx-tty-session-find s (regexp-quote (substring (plist-get above :text) 0
-                                                                               (min 16 (length (plist-get above :text))))))))
+        (should (equal head (drgnx-tty-session-find s (drgnx-tty-agent-panel-test--head-re above))))
         (drgnx-tty-session-key s "<next>" 'legacy)
         (drgnx-tty-session-wait
          s `(let ((m (drgnx-tty-ap--part (selected-frame) 'main))) (> (plist-get m :start) ,back)) 10)
@@ -163,8 +167,10 @@ is in the other."
   (skip-unless (executable-find "mutter"))
   (let ((bin (getenv "DRGNX_RATATOSKR_BIN")))
     (skip-unless (and bin (file-executable-p bin)))
-    ;; the runner's own DRGNX_UI_STATE: a deeper one puts the hub's socket path over 103 bytes
-    (let* ((gui (drgnx-ui-start "drgnx" nil 60 t)) (tty nil)
+    ;; a short state directory: under the runner's, the hub's socket path in the session's TMPDIR is over 103 bytes
+    (let* ((root (make-temp-file "/tmp/dgap" t))
+           (process-environment (cons (concat "DRGNX_UI_STATE=" root) process-environment))
+           (gui (drgnx-ui-start "drgnx" nil 60 t)) (tty nil)
            (gui-frame '(seq-find (lambda (f) (and (display-graphic-p f) (not (frame-parent f)))) (frame-list)))
            (tty-frame '(seq-find (lambda (f) (and (not (display-graphic-p f)) (not (frame-parent f))
                                                   (frame-parameter f 'client)))
@@ -216,6 +222,7 @@ is in the other."
              10))
         (ignore-errors (drgnx-tty-session-eval gui '(progn (drgnx-panel-replay-down) t) 30))
         (when tty (drgnx-tty-session-stop tty))
-        (drgnx-ui-stop (plist-get gui :name))))))
+        (drgnx-ui-stop (plist-get gui :name))
+        (delete-directory root t)))))
 
 ;;; agent-panel-tty-test.el ends here
