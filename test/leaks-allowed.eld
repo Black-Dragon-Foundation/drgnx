@@ -70,4 +70,6 @@ string-pixel-width uses)")
   :why "Emacs's tooltip timer: one is pending after a tip was shown, gone after it fired")
  (:what "\\`frame-param \\(?:font-parameter\\|nidhogg--font-height\\|nidhogg-text-zoom\\|line-spacing\\|toplevel-chrome\\|tab-bar-lines-keep-state\\|drgnx-topline-lines\\) "
   :why "parameters the renderer and the font code derive from `font' and the bars: the look rows' clean check reads the parameters themselves (font, line-spacing, bars)")
+ (:what "\\`face [^ ]+ [+-]\\\\(unspecified\\\\ \\.\\\\ unspecified\\\\)\\'"
+  :why "a face with no colour of its own on the frame: defined (or first realised) by a library that loaded, or gone back to that; a colour a test sets and leaves is still named")
 )
