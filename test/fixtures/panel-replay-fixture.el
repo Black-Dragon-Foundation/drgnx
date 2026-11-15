@@ -220,7 +220,7 @@ the panel's row patches, HUB_ROWS the hub's rows it holds at the end."
         :entries (drgnx-panel-replay--entries)
         :rows (with-current-buffer drgnx-panel-replay--panel (count-lines (point-min) (point-max)))
         :hub_rows (with-current-buffer drgnx-panel-replay--panel
-                    (if (bound-and-true-p drgnx-view-patch) (hash-table-count (drgnx-view-patch-rows drgnx-view-patch)) 0))))
+                    (if (bound-and-true-p drgnx-view-patch) (drgnx-view-row-count drgnx-view) 0))))
 
 (defun drgnx-panel-replay-down ()
   "End the agent and the hub; drop the mirror, the panel and the fixture's folder; the module back as it was."

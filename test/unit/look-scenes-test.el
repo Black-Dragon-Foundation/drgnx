@@ -133,6 +133,21 @@ an error while the hub's rows are on their way: the step waits for them, as the 
        (should (= 1 (length drgnx-look-scene--errors)))
        (should (string-match-p "\\`unfed-test: shown in .* with no rows from the hub" (car drgnx-look-scene--errors)))))))
 
+(ert-deftest drgnx-look-scenes/the-theme-switch-names-one-theme-for-every-scene ()
+  ;; DRGNX_LOOK_THEME: unset, each scene's own theme; set, the one every scene draws in
+  (dolist (c '((nil . nil) ("" . nil) ("light" . drgnx-light) ("dark" . drgnx-dark) ("hc" . drgnx-high-contrast)
+               ("high-contrast" . drgnx-high-contrast) ("drgnx-light" . drgnx-light)))
+    (let ((process-environment (cons (if (car c) (concat "DRGNX_LOOK_THEME=" (car c)) "DRGNX_LOOK_THEME")
+                                     process-environment)))
+      (should (eq (drgnx-look-scene--forced-theme) (cdr c))))))
+
+(ert-deftest drgnx-look-scenes/the-work-map-scenes-get-a-session-of-their-own ()
+  ;; their hub seeds the map's graph, which the other scenes' hub (the plan run's Flow agent) cannot share: a full
+  ;; run draws them in a second session (`drgnx-look-scenes-run' groups the scenes by :seed)
+  (should (equal (mapcar #'car (seq-filter (lambda (s) (equal (plist-get (cdr s) :seed) "map")) drgnx-look-scenes))
+                 '(work-space-dark work-space-light work-space-hc)))
+  (should-not (seq-find (lambda (s) (and (plist-get (cdr s) :seed) (plist-get (cdr s) :agent))) drgnx-look-scenes)))
+
 ;; The scenes that follow one another share a session: what a scene leaves is what the next one starts from.
 (ert-deftest drgnx-look-scenes/the-popup-scenes-are-closed-with-the-popups-own-key ()
   ;; the Replace All sheet and the Ask an Agent card end on Esc (the popup lane's key; C-g is the palette's): a

@@ -1,4 +1,4 @@
-{"scenario": "panel/pinned-cards-are-rows", "requires": ["v1", "test-hooks"], "doc": "A card the user pinned (agents/panel/look pins: the cards' texts, oldest first) is a hub row under the strip, keyed p:pin0:0, in the card face with its text and the pin's number as a property; unpinning (an empty list) takes it away again."}
+{"scenario": "panel/pinned-cards-are-rows", "requires": ["v1", "test-hooks"], "doc": "A card the user pinned (agents/panel/look pins: the cards' texts, oldest first) is a hub row at the top of the transcript view (the header window holds the strip), keyed p:pin0:0, in the card face with its text and the pin's number as a property; unpinning (an empty list) takes it away again."}
 {"do": "root"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
 {"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
@@ -14,7 +14,7 @@
 {"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"class": "gui-1", "base": 0, "version": 1, "ops": [{"reset": "$any"}]}}, "within_ms": 10000}
 {"do": "send", "conn": "e", "json": {"id": 3, "method": "agents/panel/look", "params": {"view": "agent-panel/$sid", "pins": ["Run the tests"]}}}
 {"do": "expect", "conn": "e", "json": {"id": 3, "result": true}}
-{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"class": "gui-1", "ops": {"$contains": [{"insert": {"after": "$string", "rows": {"$contains": [{"key": "p:pin0:0", "text": "$string"}]}}}]}}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"class": "gui-1", "ops": {"$contains": [{"insert": {"after": "$any", "rows": {"$contains": [{"key": "p:pin0:0", "text": "$string"}]}}}]}}}, "within_ms": 10000}
 {"do": "send", "conn": "e", "json": {"id": 4, "method": "agents/panel/look", "params": {"view": "agent-panel/$sid", "pins": []}}}
 {"do": "expect", "conn": "e", "json": {"id": 4, "result": true}}
 {"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"class": "gui-1", "ops": {"$contains": [{"remove": {"$contains": ["p:pin0:0"]}}]}}}, "within_ms": 10000}

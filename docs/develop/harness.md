@@ -578,8 +578,12 @@ How it works:
   `drgnx-job.el`, Magit's status and the Explorer.
 - It calls each scene's `drgnx-look-scene-NAME`. The scenes, in order, are listed in `drgnx-look-scenes`.
   A scene on the editor starts the scenes' hub first (the session starts none) and waits (20 s at most, else an error)
-  for the Explorer's Files rows, which come from the hub: without it the section is empty. It goes back to the
-  editor layout first, because a Work scene before it leaves the Work layout.
+  for the Explorer's Files rows, which come from the hub: without it the section is empty. Every scene starts in the
+  editor layout (`drgnx-look-scene-begin`, called before each), because a Work scene before it leaves the Work layout;
+  a scene in another layout applies it itself. The start page and notebook scenes report an error when their buffers
+  are not shown in the editor layout. The setup writes the notebook scenes' kernelspec and its environment
+  (`JUPYTER_PATH`, a short `XDG_RUNTIME_DIR`) before any hub starts, because the hub that runs the kernel is the one
+  an earlier scene started.
   Once the scenes' hub runs, every step's answer checks the hub-fed views that a window of the frame shows, after a
   redisplay like the shot's. It first waits (20 s at most, `drgnx-look-scene-rows-wait`) for their rows, as the user
   does: a view the step has just shown, or whose display class the step changed (a font or scale change pairs the
@@ -597,7 +601,22 @@ How it works:
   `agent-panel`) needs a transcript longer than its window: the session gives the mock agent 17 more steps when
   `DRGNX_LOOK_ONLY` names it, so draw it alone (`DRGNX_LOOK_ONLY='^agent-panel-long$'`); with the others the transcript
   fits and the scene says so. It resizes the frame, wheels the transcript both ways with `pixel-scroll-precision-mode`
-  on and off, and clicks the pinned header's parts (through the event loop too). `start-page` and `start-page-light` have no mockup: they are judged against the components' spec (buttons, keycaps, the shield). The
+  on and off, and clicks the pinned header's parts (through the event loop too).
+  Both panel scenes also check the panel's three windows in the right area: a header window (window parameter
+  `drgnx-area-part` `above`) showing the hub's `agent-panel-top/SID` view with its `p:head` row, fitted to its text
+  (±1 px) and carrying the area's tab row; the transcript (the panel's main buffer, `agent-panel/SID`) without
+  `p:head`; and the composer (`below`), the area's bottom window, fitted. `agent-panel-long` then checks, in the three
+  windows:
+  - **wheel:** the transcript wheeled up and down, with `pixel-scroll-precision-mode` on and off, moves each way while
+    the header window keeps its edges, start and vscroll;
+  - **resize:** the frame shrunk by 250 px and grown back; after each, the transcript with point at its end shows its
+    end at its bottom, and the header and composer are fitted;
+  - **short:** the frame shrunk until the transcript is two lines tall; it still shows its end, and the header still
+    holds `p:head`, fitted;
+  - **clicks:** the transcript scrolled up a page, then the header window's pin button, a lens segment and a strip pill
+    clicked through the event loop, each running its command; the header does not move. The picture is this
+    scrolled panel.
+  `start-page` and `start-page-light` have no mockup: they are judged against the components' spec (buttons, keycaps, the shield). The
   three highlights scenes, `highlights-dark`, `highlights-light` and `highlights-hc`, have none either: each puts every highlight in one
   shot, judged against the mockups' tokens. The editor holds the current line, isearch's current and other matches,
   show-paren, eglot's symbol highlight, Flymake's marks, a rectangle and a region. A second group beside it holds a
@@ -628,10 +647,10 @@ How it works:
   asks, specs, plans, four agents with their branches, files and an overlap, two machines, plus a push and a permission
   card; the agents' minutes are counted from the hub's clock), the strip's forecast and cost chips and the first agent's
   trail (six steps and a finding, `orch::scene::map_trail`, shown by its trail view in place of the timeline's). The
-  scenes open the Work layout (the Detail island at its right, the trail under the map). The session picks the seed from
-  `DRGNX_LOOK_ONLY`: draw
-  these scenes alone, `DRGNX_LOOK_ONLY=work-space` (it matches all three), never with `work-flow`. Each selects the
-  first agent (its chain lit, the cards off it dimmed, its detail in the side panel) and waits for its rows.
+  scenes open the Work layout (the Detail island at its right, the trail under the map). The two seeds put different
+  agents on the map and cannot share a hub, so these scenes carry `:seed "map"` in `drgnx-look-scenes`: a run draws
+  them in a second session of their own (with its own setup), after the other scenes, and its hub seeds the map's
+  graph (`drgnx-look-scene-seed`). Each selects the first agent (its chain lit, the cards off it dimmed, its detail in the side panel) and waits for its rows.
 - It writes `NAME-sN-facts.eld` beside each shot: the themes, the fonts the chrome faces got, the windows, the
   modules, the visible child frames, `:palette` while a minibuffer is open (whether the palette floats and why: its
   category's multiform entry, the display action, the frame), and `:limits`, what the line cannot show of that mockup yet (`drgnx-look-scene-limits`). A limit is
@@ -651,6 +670,11 @@ What it reads from the environment:
 - `DRGNX_RATATOSKR_BIN`: a `test-hooks` ratatoskr with `ratatoskr-mock` beside it, for the agent panel, the Search
   and the Work space scenes. Without it, those scenes record what is missing.
 - `DRGNX_LOOK_ONLY`: a regexp; only the scenes whose names match it run (`^search-`).
+- `DRGNX_LOOK_THEME`: one theme for every scene, `light`, `dark`, `hc` (or a theme's name). Each scene then draws in
+  it, also the scenes named for another theme (`window-light` draws dark with `DRGNX_LOOK_THEME=dark`) and those that
+  set none (Magit, Org). Unset, each scene loads its own. Use it to draw a dark-only mockup's scene in light:
+  `DRGNX_LOOK_THEME=light DRGNX_LOOK_ONLY='^agent-panel'`. The shots keep their names, so draw each theme into its
+  own OUT. `scenes-sN.eld` records the theme (`:theme`), and each scene's facts list the themes it ran under.
 
 Apart from the widths check, nothing in the command asserts a pixel. **A look change is done only when its scene sits beside its mockup at scales 1
 and 2, someone has looked at both, and the remaining differences are written down.** `test/unit/look-scenes-test.el`

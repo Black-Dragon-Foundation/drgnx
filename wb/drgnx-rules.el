@@ -244,7 +244,7 @@ left and right docks run the frame's full height, the panel sits under the edito
   "While reading, the minibuffer may grow (icomplete-vertical, fido-vertical); the echo area may not."
   (setq-local resize-mini-windows 'grow-only))
 (defconst drgnx-rules--entry '(drgnx-rules--condition (drgnx-rules--display)))
-(defconst drgnx-rules--persistent '(drgnx-role drgnx-section)
+(defconst drgnx-rules--persistent '(drgnx-role drgnx-section drgnx-area-part)
   "Window parameters a saved window state keeps (`window-toggle-side-windows', `window-state-put').")
 
 (define-minor-mode drgnx-rules-mode

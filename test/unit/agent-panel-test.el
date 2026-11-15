@@ -1,4 +1,4 @@
-;;; agent-panel-test.el --- the agent panel: rows, steps, patches, chips -*- lexical-binding: t -*-
+;;; agent-panel-test.el --- the agent panel: its state, commands and clicks -*- lexical-binding: t -*-
 ;; test-class: det
 ;; Pattern D: pure.  No hub: the panel is fed snapshots and entries by hand, and the hub client's calls are recorded.
 (require 'ert)
@@ -13,8 +13,14 @@
 (load(expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (drgnx-test-modules-preload '(tools/agent-panel))
 
-(defvar drgnx-agent-panel--stats-render)
-(declare-function drgnx-agent-panel-composer--row "drgnx-agent-panel-composer")
+(declare-function drgnx-agent-panel-composer--bar "drgnx-agent-panel-composer")
+(declare-function drgnx-agent-panel--composer-of "drgnx-agent-panel-composer")
+(declare-function drgnx-agent-panel--look-params "drgnx-agent-panel")
+(declare-function drgnx-agent-panel--key-at "drgnx-agent-panel")
+(defvar drgnx-agent-panel--open)
+(defvar drgnx-agent-panel--waiting)
+(defvar drgnx-agent-panel--steps)
+(defvar drgnx-agent-panel--grants)
 (defvar drgnx-agent-panel--subscribed)
 (defvar drgnx-hub--events)
 (declare-function drgnx-agent-panel-buffer "drgnx-agent-panel")
@@ -26,11 +32,6 @@
 (defvar drgnx-history--buffers)
 (declare-function drgnx-history--st-make "drgnx-history")
 (declare-function drgnx-agent-panel-reject "drgnx-agent-panel-cards")
-(declare-function drgnx-agent-panel--follow-tail "drgnx-agent-panel")
-(declare-function drgnx-agent-panel--tail-start "drgnx-agent-panel")
-(declare-function drgnx-agent-panel--wanted-keys "drgnx-agent-panel")
-(declare-function drgnx-agent-panel--own-row "drgnx-agent-panel")
-(declare-function drgnx-agent-panel--rows-p "drgnx-agent-panel")
 (declare-function drgnx-agent-panel-ledger "drgnx-agent-panel-cards")
 (declare-function drgnx-agent-panel-revert-here "drgnx-agent-panel")
 (declare-function drgnx-agent-panel-fork-here "drgnx-agent-panel")
@@ -59,120 +60,6 @@ unanswered, and panel \"s1\" as `buf'."
 (defun drgnx-agent-panel-test--tool (id title status &rest more)
   (append (list :type "tool" :id id :title title :kind "read" :status status) more))
 
-(ert-deftest drgnx-agent-panel/appends-and-patches-never-rerenders ()
-  (drgnx-agent-panel-test--with
-    (with-current-buffer buf
-      (drgnx-agent-panel--take-entries (list (list 0 (list :type "user" :text "go"))
-                                             (list 1 (drgnx-agent-panel-test--tool "t1" "Read a.el" "pending"))))
-      (drgnx-agent-panel-test--text buf)
-      (let ((rendered nil))
-        (cl-letf* ((orig (symbol-function 'drgnx-agent-panel--render))
-                   ((symbol-function 'drgnx-agent-panel--render)
-                    (lambda (key) (push key rendered) (funcall orig key))))
-          ;; an entry appended: only its row is drawn
-          (drgnx-agent-panel--take-entries (list (list 2 (drgnx-agent-panel-test--tool "t2" "Read b.el" "pending"))))
-          (drgnx-agent-panel-test--text buf)
-          (should (equal '((:e 2)) rendered))
-          ;; an entry changed in place: only its row is drawn again
-          (setq rendered nil)
-          (drgnx-agent-panel--take-entries (list (list 1 (drgnx-agent-panel-test--tool "t1" "Read a.el" "completed"))))
-          (drgnx-agent-panel-test--text buf)
-          (should (equal '((:e 1)) rendered))
-          ;; the same entry again changes nothing
-          (setq rendered nil)
-          (drgnx-agent-panel--take-entries (list (list 1 (drgnx-agent-panel-test--tool "t1" "Read a.el" "completed"))))
-          (drgnx-agent-panel-test--text buf)
-          (should-not rendered)))
-      (should (string-match-p "Read a.el" (drgnx-agent-panel-test--text buf)))
-      (should (string-match-p "Read b.el" (drgnx-agent-panel-test--text buf))))))
-
-(defun drgnx-agent-panel-test--block (n kind &rest spans)
-  (list :block n :kind kind :spans (vconcat (mapcar (lambda (s) (list :text (car s) :style (cdr s))) spans))))
-
-(ert-deftest drgnx-agent-panel/markdown-patches-draw-only-their-blocks ()
-  (drgnx-agent-panel-test--with
-    (with-current-buffer buf
-      (drgnx-agent-panel--take-entries
-       (list (list 0 (list :type "agent" :text "# Title\n\npara"
-                           :blocks (vector (drgnx-agent-panel-test--block 0 "heading" '("Title" . "h1"))
-                                           (drgnx-agent-panel-test--block 1 "paragraph" '("para" . "text")))))))
-      (let ((text (drgnx-agent-panel-test--text buf)) (rendered nil))
-        (should (string-match-p "Title\n  para" text))
-        (cl-letf* ((orig (symbol-function 'drgnx-agent-panel--render))
-                   ((symbol-function 'drgnx-agent-panel--render)
-                    (lambda (key) (push key rendered) (funcall orig key))))
-          ;; a patch: block 1 grows and takes a style; block 2 is new (its `kind' creates it); block 0 is not drawn
-          (drgnx-agent-panel--take-entries
-           (list (list 0 (list :type "agent" :text "# Title\n\npara more\n\n```\nx"
-                               :patch (vector (drgnx-agent-panel-test--block 1 "paragraph" '("para " . "text") '("more" . "strong"))
-                                              (drgnx-agent-panel-test--block 2 "code" '("x" . "code")))))))
-          (setq text (drgnx-agent-panel-test--text buf))
-          (should (equal '((:b 0 2) (:b 0 1)) (sort rendered (lambda (a b) (> (nth 2 a) (nth 2 b))))))
-          (should (string-match-p "para more\n  x" text))
-          ;; an event with neither blocks nor patch keeps the blocks it has, and draws nothing
-          (setq rendered nil)
-          (drgnx-agent-panel--take-entries (list (list 0 (list :type "agent" :text "# Title\n\npara more\n\n```\nx"))))
-          (drgnx-agent-panel-test--text buf)
-          (should-not rendered))
-        (goto-char (point-min))
-        (search-forward "more")
-        (should (memq 'drgnx-agent-panel-md-strong (ensure-list (get-text-property (1- (point)) 'face))))
-        (goto-char (point-min))
-        (search-forward "Title")
-        (should (memq 'drgnx-agent-panel-md-heading (ensure-list (get-text-property (1- (point)) 'face))))))))
-
-(ert-deftest drgnx-agent-panel/a-message-without-blocks-falls-back-to-its-text ()
-  (drgnx-agent-panel-test--with
-    (with-current-buffer buf
-      ;; a message with blocks is drawn from them, not from its raw text
-      (drgnx-agent-panel--take-entries
-       (list (list 0 (list :type "agent" :text "raw *source*"
-                           :blocks (vector (drgnx-agent-panel-test--block 0 "paragraph" '("styled" . "emph")))))))
-      ;; one without draws its text
-      (drgnx-agent-panel--take-entries (list (list 1 (list :type "agent" :text "plain words"))))
-      (let ((text (drgnx-agent-panel-test--text buf)))
-        (should (string-match-p "styled" text))
-        (should-not (string-match-p "raw \\*source\\*" text))
-        (should (string-match-p "plain words" text))))))
-
-(ert-deftest drgnx-agent-panel/thinking-folds-under-its-step ()
-  (drgnx-agent-panel-test--with
-    (with-current-buffer buf
-      (drgnx-agent-panel--take-entries
-       (list (list 0 (drgnx-agent-panel-test--tool "t1" "Grep foo" "completed"))
-             (list 1 (list :type "thought" :text "first idea\nsecond idea"))))
-      (let ((text (drgnx-agent-panel-test--text buf)))
-        (should (string-match-p "▸ thinking · 2 lines" text))
-        (should-not (string-match-p "first idea" text))
-        ;; the thought is not a row of its own
-        (should-not (drgnx-view-row-start drgnx-view '(:e 1))))
-      (goto-char (drgnx-view-row-start drgnx-view '(:e 0)))
-      (drgnx-agent-panel-toggle)
-      (should (string-match-p "first idea" (drgnx-agent-panel-test--text buf)))
-      ;; a thought that arrives later patches its step's row
-      (drgnx-agent-panel--take-entries (list (list 2 (list :type "thought" :text "third"))))
-      (should (string-match-p "third" (drgnx-agent-panel-test--text buf)))
-      ;; a thought with no step before it is a row
-      (drgnx-agent-panel--take-entries (list (list 3 (list :type "user" :text "x")) (list 4 (list :type "thought" :text "alone"))))
-      (drgnx-agent-panel-test--text buf)
-      (should (with-current-buffer buf (drgnx-view-row-start drgnx-view '(:e 4)))))))
-
-(ert-deftest drgnx-agent-panel/time-and-cost-are-in-warn-when-slow-or-dear ()
-  (drgnx-agent-panel-test--with
-    (with-current-buffer buf
-      (drgnx-agent-panel--take-steps (list (list :seq 1 :start 0.0 :end 0.5 :cost 0.01)
-                                           (list :seq 2 :start 0.0 :end 30.0 :cost 2.0)))
-      (drgnx-agent-panel--take-entries
-       (list (list 0 (drgnx-agent-panel-test--tool "t1" "Quick" "completed" :step 1))
-             (list 1 (drgnx-agent-panel-test--tool "t2" "Slow" "completed" :step 2))))
-      (let ((text (drgnx-agent-panel-test--text buf)))
-        (should (string-match-p "500 ms" text))
-        (should (string-match-p "\\$2.00" text)))
-      (let* ((s (with-current-buffer buf (buffer-string)))
-             (pos (string-search "30.0 s" s)))
-        (should (memq 'drgnx-agent-panel-warn (ensure-list (get-text-property pos 'face s))))
-        (should-not (memq 'drgnx-agent-panel-warn (ensure-list (get-text-property (string-search "500 ms" s) 'face s))))))))
-
 (ert-deftest drgnx-agent-panel/off-leaves-no-panel-and-no-hooks ()
   (let ((before (list window-buffer-change-functions drgnx-hub-event-functions drgnx-hub-connected-functions)))
     (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (&rest _) 1)))
@@ -188,42 +75,27 @@ unanswered, and panel \"s1\" as `buf'."
 (declare-function drgnx-agent-panel-make-default "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel-toggle-type "drgnx-agent-panel-steps")
 
-(ert-deftest drgnx-agent-panel/a-failed-step-opens ()
-  (drgnx-agent-panel-test--with
-    (with-current-buffer buf
-      (drgnx-agent-panel--take-entries
-       (list (list 0 (drgnx-agent-panel-test--tool "t1" "Run ok" "completed" :content (list (list :text "r\nfine output"))))
-             (list 1 (drgnx-agent-panel-test--tool "t2" "Run bad" "failed" :content (list (list :text "r\nboom output"))))))
-      (let ((text (drgnx-agent-panel-test--text buf)))
-        (should (string-match-p "boom output" text))
-        (should-not (string-match-p "fine output" text)))
-      ;; folding a failed step by hand wins over the outcome
-      (goto-char (drgnx-view-row-start drgnx-view '(:e 1)))
-      (drgnx-agent-panel-toggle)
-      (should-not (string-match-p "boom output" (drgnx-agent-panel-test--text buf))))))
+(defun drgnx-agent-panel-test--open-types ()
+  "The step types the panel tells the hub are open (`agents/panel/look' `open'), sorted."
+  (sort (append (plist-get (drgnx-agent-panel--look-params) :open) nil) #'string<))
 
 (ert-deftest drgnx-agent-panel/presets-switch-disclosure ()
+  "A preset is the step types open in the chat, which the hub hears; a hand fold goes back under the toggles."
   (drgnx-agent-panel-test--with
     (with-current-buffer buf
-      (drgnx-agent-panel--take-entries
-       (list (list 0 (drgnx-agent-panel-test--tool "t1" "Read it" "completed" :content (list (list :text "r\nread body"))))
-             (list 1 (list :type "tool" :id "t2" :title "Edit it" :kind "edit" :status "completed" :content (list (list :text "r\nedit body"))))
-             (list 2 (list :type "thought" :text "deep thought"))))
-      (should-not (string-match-p "body" (drgnx-agent-panel-test--text buf)))
+      (should-not (drgnx-agent-panel-test--open-types))
       (drgnx-agent-panel-preset 2)
-      (let ((text (drgnx-agent-panel-test--text buf)))
-        (should (string-match-p "edit body" text))
-        (should-not (string-match-p "read body" text))
-        (should-not (string-match-p "deep thought" text)))
+      (should (equal '("edit" "execute") (drgnx-agent-panel-test--open-types)))
+      (should (= 2 (plist-get (drgnx-agent-panel--look-params) :lens_on)))
       (drgnx-agent-panel-preset 3)
-      (let ((text (drgnx-agent-panel-test--text buf)))
-        (should (string-match-p "read body" text))
-        (should (string-match-p "deep thought" text)))
+      (should (equal '("edit" "execute" "fetch" "other" "read" "search" "thinking") (drgnx-agent-panel-test--open-types)))
+      (puthash '(:e 0) 'closed drgnx-agent-panel--open)
       (drgnx-agent-panel-preset 1)
-      (should-not (string-match-p "body" (drgnx-agent-panel-test--text buf)))
+      (should-not (drgnx-agent-panel-test--open-types))
+      (should (zerop (hash-table-count drgnx-agent-panel--open)))
       ;; one toggle: a type opens on its own
       (drgnx-agent-panel-toggle-type 'read)
-      (should (string-match-p "read body" (drgnx-agent-panel-test--text buf))))))
+      (should (equal '("read") (drgnx-agent-panel-test--open-types))))))
 
 (ert-deftest drgnx-agent-panel/make-default-persists ()
   (drgnx-agent-panel-test--with
@@ -251,15 +123,15 @@ unanswered, and panel \"s1\" as `buf'."
     (with-current-buffer buf
       (drgnx-agent-panel--take-snapshot (list :id "s1" :status "busy" :mode "queue"))
       (setq drgnx-agent-panel-test--calls nil)
-      (cl-letf (((symbol-function 'drgnx-agent-panel-composer--read) (lambda (_) " go on ")))
-        (drgnx-agent-panel-send))
+      (with-current-buffer (drgnx-agent-panel--composer-of buf) (insert " go on "))
+      (drgnx-agent-panel-send)
       ;; one send, and nothing that ends the turn
       (should (equal '(("agents/send" :id "s1" :text "go on")) (reverse drgnx-agent-panel-test--calls)))
       ;; a mode that would cancel is refused, nothing is sent
       (setq drgnx-agent-panel-test--calls nil)
       (drgnx-agent-panel--take-snapshot (list :id "s1" :status "busy" :mode "interrupt"))
-      (cl-letf (((symbol-function 'drgnx-agent-panel-composer--read) (lambda (_) "stop now")))
-        (should-error (drgnx-agent-panel-send) :type 'user-error))
+      (with-current-buffer (drgnx-agent-panel--composer-of buf) (insert "stop now"))
+      (should-error (drgnx-agent-panel-send) :type 'user-error)
       (should-not drgnx-agent-panel-test--calls))))
 
 (ert-deftest drgnx-agent-panel/a-queued-note-is-editable-until-sent ()
@@ -288,11 +160,11 @@ unanswered, and panel \"s1\" as `buf'."
   (drgnx-agent-panel-test--with
     (with-current-buffer buf
       (drgnx-agent-panel--take-snapshot (list :id "s1" :status "idle" :paired t :waiting t))
-      (should-not (string-match-p "Pair · waiting" (drgnx-agent-panel-test--text buf)))
+      (should-not (string-match-p "Pair · waiting" (drgnx-agent-panel-composer--bar)))
       (drgnx-command-define 'agents-pair :category "Agents" :title "Pair" :command #'ignore :doc "test")
       (unwind-protect
           (progn (drgnx-agent-panel--take-snapshot (list :id "s1" :status "idle" :paired t :waiting t))
-                 (should (string-match-p "Pair · waiting for you" (drgnx-agent-panel-test--text buf))))
+                 (should (string-match-p "Pair · waiting for you" (drgnx-agent-panel-composer--bar))))
         (drgnx-command-undefine 'agents-pair)))))
 
 (declare-function drgnx-agent-panel-allow "drgnx-agent-panel-cards")
@@ -372,34 +244,6 @@ and queues the take-it-back message: the panel keeps no diffs, so it asks `work/
           (should (string-prefix-p "I reject your change to a.txt (the hunk @@ -1 +1 @@)"
                                    (plist-get (cdr (assoc "agents/send" drgnx-agent-panel-test--calls)) :text))))))))
 
-;; pattern D: pure rendering of a made-up entry
-(ert-deftest drgnx-agent-panel/large-output-shows-head-and-tail ()
-  (drgnx-agent-panel-test--with
-    (with-current-buffer buf
-      (let ((text (mapconcat (lambda (i) (format "line %d" i)) (number-sequence 1 100) "\n")))
-        (drgnx-agent-panel--take-entries
-         (list (list 0 (drgnx-agent-panel-test--tool "t1" "Run it" "completed" :content (list (list :text text))))))
-        (with-current-buffer buf (drgnx-agent-panel-preset-3))
-        (let ((shown (drgnx-agent-panel-test--text buf)))
-          (should (string-match-p "line 1$" shown))
-          (should (string-match-p "line 10$" shown))
-          (should (string-match-p "line 91$" shown))
-          (should (string-match-p "line 100$" shown))
-          (should-not (string-match-p "line 11$" shown))
-          (should-not (string-match-p "line 90$" shown))
-          (should (string-match-p "80 lines hidden · / search · O open in a buffer" shown)))
-        ;; the hub kept only the ends of a huge output: the count is an estimate
-        (drgnx-agent-panel--take-entries
-         (list (list 0 (drgnx-agent-panel-test--tool "t1" "Run it" "completed" :content (list (list :text text))
-                                                     :outputBytes (* 10 (string-bytes text))))))
-        (should (string-match-p "~980 lines hidden" (drgnx-agent-panel-test--text buf)))
-        ;; a short output is shown whole, with nothing hidden
-        (drgnx-agent-panel--take-entries
-         (list (list 0 (drgnx-agent-panel-test--tool "t1" "Run it" "completed" :content (list (list :text "a\nb\nc"))))))
-        (let ((shown (drgnx-agent-panel-test--text buf)))
-          (should (string-match-p "c$" shown))
-          (should-not (string-match-p "hidden" shown)))))))
-
 ;;;; Task 39: checkpoints (revert and fork at a step)
 
 (defun drgnx-agent-panel-test--with-steps ()
@@ -409,29 +253,40 @@ and queues the take-it-back message: the panel keeps no diffs, so it asks `work/
    (list (list 0 (drgnx-agent-panel-test--tool "t1" "Edit a.el" "completed" :step 4))
          (list 1 (drgnx-agent-panel-test--tool "t2" "Edit b.el" "completed" :step 5)))))
 
+(defun drgnx-agent-panel-test--on-entry (buf idx)
+  "Put BUF's point on a row drawing entry IDX, as the hub's step rows carry it (`drgnx-agent-panel-entry'); IDX nil: a
+row that draws no entry."
+  (with-current-buffer buf
+    (let ((inhibit-read-only t))
+      (erase-buffer)
+      (insert (if idx (propertize "  ● a step\n" 'drgnx-agent-panel-entry idx) "  a card\n"))
+      (goto-char (+ (point-min) 3)))))
+
 (ert-deftest drgnx-agent-panel/revert-here-calls-the-history ()
   (drgnx-agent-panel-test--with
     (with-current-buffer buf
       (drgnx-agent-panel-test--with-steps)
       (let (called)
-        (cl-letf (((symbol-function 'drgnx-view-key-at) (lambda (&rest _) '(:e 0)))
-                  ((symbol-function 'drgnx-history-revert-to-here) (lambda (s q) (setq called (list s q)))))
+        (drgnx-agent-panel-test--on-entry buf 0)
+        (should (equal '(:e 0) (drgnx-agent-panel--key-at)))
+        (cl-letf (((symbol-function 'drgnx-history-revert-to-here) (lambda (s q) (setq called (list s q)))))
           (drgnx-agent-panel-revert-here)
           (should (equal called '("s1" 4))))
         ;; a step with no history record is refused, and so is a row that is not a step
-        (cl-letf (((symbol-function 'drgnx-view-key-at) (lambda (&rest _) '(:e 1)))
-                  ((symbol-function 'drgnx-history-revert-to-here) (lambda (&rest _) (error "must not be called"))))
+        (drgnx-agent-panel-test--on-entry buf 1)
+        (cl-letf (((symbol-function 'drgnx-history-revert-to-here) (lambda (&rest _) (error "must not be called"))))
           (should-error (drgnx-agent-panel-revert-here) :type 'user-error))
-        (cl-letf (((symbol-function 'drgnx-view-key-at) (lambda (&rest _) '(:rows-end))))
-          (should-error (drgnx-agent-panel-revert-here) :type 'user-error))))))
+        (drgnx-agent-panel-test--on-entry buf nil)
+        (should-not (drgnx-agent-panel--key-at))
+        (should-error (drgnx-agent-panel-revert-here) :type 'user-error)))))
 
 (ert-deftest drgnx-agent-panel/fork-here-shows-the-forecast-line ()
   (drgnx-agent-panel-test--with
     (with-current-buffer buf
       (drgnx-agent-panel-test--with-steps)
+      (drgnx-agent-panel-test--on-entry buf 0)
       (let (prompt fork)
-        (cl-letf (((symbol-function 'drgnx-view-key-at) (lambda (&rest _) '(:e 0)))
-                  ((symbol-function 'drgnx-forecast-line) (lambda (_) "about $0.40 and 6 min"))
+        (cl-letf (((symbol-function 'drgnx-forecast-line) (lambda (_) "about $0.40 and 6 min"))
                   ((symbol-function 'drgnx-hub-call-sync)
                    (lambda (method params &rest _)
                      (if (equal method "history/fork") (progn (setq fork params) (list :id "s2")) (list :cost 0.4))))
@@ -442,15 +297,8 @@ and queues the take-it-back message: the panel keeps no diffs, so it asks `work/
           (should (equal (list (plist-get fork :session) (plist-get fork :seq) (plist-get fork :message))
                          '("s1" 4 "try again"))))))))
 
-(ert-deftest drgnx-agent-panel/undone-steps-are-marked ()
-  (drgnx-agent-panel-test--with
-    (with-current-buffer buf
-      (drgnx-agent-panel-test--with-steps)
-      (let ((lines (split-string (drgnx-agent-panel-test--text buf) "\n")))
-        (should (string-match-p "undone" (seq-find (lambda (l) (string-match-p "Edit b.el" l)) lines)))
-        (should-not (string-match-p "undone" (seq-find (lambda (l) (string-match-p "Edit a.el" l)) lines)))))))
-
-(ert-deftest drgnx-agent-panel/an-applied-history-reloads-the-step-rows ()
+(ert-deftest drgnx-agent-panel/an-applied-history-reloads-the-steps ()
+  "A revert or fork elsewhere (`history/applied') reloads the steps the panel holds: what revert and fork at point read."
   (drgnx-agent-panel-test--with
     (with-current-buffer buf
       (drgnx-agent-panel-test--with-steps)
@@ -465,9 +313,8 @@ and queues the take-it-back message: the panel keeps no diffs, so it asks `work/
           (funcall cb (list :steps (vector (list :seq 4 :revertible :json-false :undone_by 11)
                                            (list :seq 5 :revertible t)))
                    nil))
-        (let ((lines (split-string (drgnx-agent-panel-test--text buf) "\n")))
-          (should (string-match-p "undone" (seq-find (lambda (l) (string-match-p "Edit a.el" l)) lines)))
-          (should-not (string-match-p "undone" (seq-find (lambda (l) (string-match-p "Edit b.el" l)) lines))))))))
+        (should (eql 11 (plist-get (gethash 4 drgnx-agent-panel--steps) :undone_by)))
+        (should (eq t (plist-get (gethash 5 drgnx-agent-panel--steps) :revertible)))))))
 
 ;;;; Task 39a: a paired chat's hunks
 
@@ -586,32 +433,18 @@ and queues the take-it-back message: the panel keeps no diffs, so it asks `work/
       (should (string-match-p "tool-output +1000 tokens" text))
       (should (string-match-p "/compact would free 300 tokens" text)))))
 
-(ert-deftest drgnx-agent-panel/the-panel-follows-its-tail-and-leaves-a-moved-point-alone ()
-  "The panel owns its scroll: a window whose point is at the panel's end starts where the end sits at its bottom, whatever
-came in above it; a window the user moved point in is left alone."
+(ert-deftest drgnx-agent-panel/a-panel-waits-for-the-hubs-rows ()
+  "The panel is the hub's view from the start, the hub up or not; until its first rows are drawn one line says it
+waits for the hub, and it draws no row of its own."
   (drgnx-agent-panel-test--with
     (with-current-buffer buf
-      (let ((inhibit-read-only t))
-        (erase-buffer)
-        (dotimes (i 200) (insert (format "row %d\n" i)))
-        (set-window-buffer (selected-window) buf)
-        (set-window-start (selected-window) (point-min))
-        (cl-letf (((symbol-function 'drgnx-agent-panel--tail-start) (lambda (_w) 500)))
-          (set-window-point (selected-window) (point-max))
-          (drgnx-agent-panel--follow-tail)
-          (should (= 500 (window-start (selected-window))))
-          (set-window-start (selected-window) 7)
-          (set-window-point (selected-window) 10)
-          (drgnx-agent-panel--follow-tail)
-          (should (= 7 (window-start (selected-window)))))))))
-
-(ert-deftest drgnx-agent-panel/a-panel-made-without-the-hub-says-so ()
-  "With the hub down the panel has no header, strip or cards: one quiet row says why."
-  (drgnx-agent-panel-test--with
-    (with-current-buffer buf
-      (should-not (drgnx-agent-panel--rows-p))
-      (should (member '(:nohub) (drgnx-agent-panel--wanted-keys)))
-      (should (string-search "hub is not running" (drgnx-agent-panel--own-row '(:nohub)))))))
+      (should (equal "agent-panel/s1" (drgnx-view-patch-view drgnx-view-patch)))
+      (should (overlayp drgnx-agent-panel--waiting))
+      (should (string-search "Waiting for the hub" (overlay-get drgnx-agent-panel--waiting 'before-string)))
+      (should (= (point-min) (point-max)))
+      ;; the first rows drawn take the line away
+      (run-hook-with-args 'drgnx-view-patch-patched-functions nil '("e:0"))
+      (should-not drgnx-agent-panel--waiting))))
 
 (provide 'agent-panel-test)
 ;;; agent-panel-test.el ends here
@@ -620,33 +453,6 @@ came in above it; a window the user moved point in is left alone."
 
 (declare-function drgnx-agent-panel-explain--popup-text "drgnx-agent-panel-explain")
 (declare-function drgnx-agent-panel-revoke-always "drgnx-agent-panel-explain")
-
-(ert-deftest drgnx-agent-panel/provenance-under-its-step ()
-  (drgnx-agent-panel-test--with
-    (with-current-buffer buf
-      (drgnx-agent-panel--take-steps
-       (list (list :seq 3 :hooks (vector (list :point "before-tool" :outcome "deny" :tool "rm"
-                                               :records (vector (list :source "rule:no-rm" :verdict "deny" :ms 1
-                                                                      :reason "never rm")))))
-             (list :seq 4)))
-      (drgnx-agent-panel--take-entries
-       (list (list 0 (drgnx-agent-panel-test--tool "t1" "Run rm" "failed" :step 3))
-             (list 1 (drgnx-agent-panel-test--tool "t2" "Read a" "completed" :step 4))))
-      (let* ((text (drgnx-agent-panel-test--text buf))
-             (at (string-search "refused by rule no-rm" text)))
-        (should at)
-        (should (string-match-p "\"never rm\"" text))
-        ;; the line sits under its own step, above the next one
-        (should (< (string-search "Run rm" text) at (string-search "Read a" text))))
-      ;; a click on the line shows the provenance: who, what, how long
-      (goto-char (point-min))
-      (search-forward "refused by")
-      (backward-char 3)
-      (push-button)
-      (with-current-buffer "*agent hook*"
-        (should (string-match-p "Source:   rule no-rm" (buffer-string)))
-        (should (string-match-p "Time:     1 ms" (buffer-string))))
-      (kill-buffer "*agent hook*"))))
 
 (declare-function drgnx-agent-panel-explain-take-grants "drgnx-agent-panel-explain")
 
@@ -668,33 +474,21 @@ came in above it; a window the user moved point in is left alone."
       (should (assoc "agents/permission" drgnx-agent-panel-test--calls))
       (should (equal '(:id "s1") (cdr (assoc "agents/grants" drgnx-agent-panel-test--calls)))))))
 
-(ert-deftest drgnx-agent-panel/the-always-line-reads-the-hubs-grants ()
-  (drgnx-agent-panel-test--with
-    (with-current-buffer buf
-      (drgnx-agent-panel--take-entries (list (list 0 (drgnx-agent-panel-test--tool "t1" "Run make" "completed"))))
-      (should-not (string-match-p "Always" (drgnx-agent-panel-test--text buf)))
-      (drgnx-agent-panel-explain-take-grants (list :grants (list (drgnx-agent-panel-test--grant))))
-      (should (string-match-p "allowed by your Always · V revokes" (drgnx-agent-panel-test--text buf)))
-      ;; a grant the hub says is revoked is no line
-      (drgnx-agent-panel-explain-take-grants (list :grants (list (drgnx-agent-panel-test--grant t))))
-      (should-not (string-match-p "Always" (drgnx-agent-panel-test--text buf))))))
-
 (ert-deftest drgnx-agent-panel/revoke-an-always ()
   (drgnx-agent-panel-test--with
     (with-current-buffer buf
       (drgnx-agent-panel--take-entries (list (list 0 (drgnx-agent-panel-test--tool "t1" "Run make" "completed"))))
       (drgnx-agent-panel-explain-take-grants (list :grants (list (drgnx-agent-panel-test--grant))))
-      (drgnx-agent-panel-test--text buf)
+      (drgnx-agent-panel-test--on-entry buf 0)
       (let (asked forked)
-        (cl-letf (((symbol-function 'drgnx-view-key-at) (lambda (&rest _) '(:e 0)))
-                  ((symbol-function 'completing-read) (lambda (&rest _) (setq asked t) "Take back, keep running"))
+        (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) (setq asked t) "Take back, keep running"))
                   ((symbol-function 'drgnx-history-fork-here) (lambda (&rest a) (setq forked a))))
           (drgnx-agent-panel-revoke-always))
         ;; the hub is asked to take the grant back; the panel does not forget it by itself
         (should asked)
         (should (equal '(:id "s1" :grant "always:s1:read-1") (cdr (assoc "agents/grants/revoke" drgnx-agent-panel-test--calls))))
         (should-not forked)
-        (should (string-match-p "Always" (drgnx-agent-panel-test--text buf)))))))
+        (should (equal "always:s1:read-1" (plist-get (car drgnx-agent-panel--grants) :id)))))))
 
 (ert-deftest drgnx-agent-panel/revoke-and-restart-forks-at-the-latest-step ()
   (drgnx-agent-panel-test--with
@@ -702,10 +496,9 @@ came in above it; a window the user moved point in is left alone."
       (drgnx-agent-panel--take-steps (list (list :seq 4) (list :seq 9)))
       (drgnx-agent-panel--take-entries (list (list 0 (drgnx-agent-panel-test--tool "t1" "Run make" "completed"))))
       (drgnx-agent-panel-explain-take-grants (list :grants (list (drgnx-agent-panel-test--grant))))
-      (drgnx-agent-panel-test--text buf)
+      (drgnx-agent-panel-test--on-entry buf 0)
       (let (forked)
-        (cl-letf (((symbol-function 'drgnx-view-key-at) (lambda (&rest _) '(:e 0)))
-                  ((symbol-function 'completing-read) (lambda (&rest _) "Take back and restart at the latest step"))
+        (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "Take back and restart at the latest step"))
                   ((symbol-function 'drgnx-history-fork-here) (lambda (&rest a) (setq forked a))))
           (drgnx-agent-panel-revoke-always))
         (should (equal '("s1" 9) forked))))))
@@ -749,21 +542,6 @@ came in above it; a window the user moved point in is left alone."
 (declare-function drgnx-agent-panel-huddle--take "drgnx-agent-panel-huddle")
 (declare-function drgnx-agent-panel-huddle-send "drgnx-agent-panel-huddle")
 (declare-function drgnx-agent-panel-huddle-of "drgnx-agent-panel-huddle")
-
-(ert-deftest drgnx-agent-panel/subagent-steps-indent-in-their-colour ()
-  (drgnx-agent-panel-test--with
-    (with-current-buffer buf
-      (drgnx-agent-panel--take-steps (list (list :seq 1) (list :seq 2 :detail (list :parent_tool "task-1"))))
-      (drgnx-agent-panel--take-entries
-       (list (list 0 (drgnx-agent-panel-test--tool "task-1" "Task: explore" "completed" :step 1))
-             (list 1 (drgnx-agent-panel-test--tool "c1" "Read b.el" "completed" :step 2))))
-      (let ((text (drgnx-agent-panel-test--text buf)))
-        (should (string-match-p "^  [●○] Task: explore" text))
-        (should (string-match-p "^      [●○] Read b.el" text)))
-      (goto-char (point-min))
-      (search-forward "Read b.el")
-      (let ((faces (ensure-list (get-text-property (match-beginning 0) 'face))))
-        (should (seq-some (lambda (f) (string-match-p "\\`drgnx-agent-[0-9]+\\'" (symbol-name f))) faces))))))
 
 (defun drgnx-agent-panel-test--huddle ()
   (list :id "huddle:1" :clash "src/a.el" :participants (vector "s1" "s2") :state "open"
@@ -915,7 +693,7 @@ and code in the code font."
 
 (ert-deftest drgnx-agent-panel/a-click-on-the-hubs-header-runs-its-action ()
   "The header and the chips are the hub's rows, whose clickable parts carry `drgnx-agent-panel-action' (`lens:N', `pin',
-`more') or `drgnx-agent-panel-chip': one dispatcher runs the part's action, and a press on one leaves point where it is."
+`more') or `drgnx-agent-panel-chip': one dispatcher runs the part's action; a click on plain text runs nothing."
   (drgnx-agent-panel-test--with
     (with-current-buffer buf
       (let ((inhibit-read-only t) ran)
@@ -926,16 +704,12 @@ and code in the code font."
         (cl-letf (((symbol-function 'drgnx-agent-panel-preset) (lambda (n) (push (list 'preset n) ran)))
                   ((symbol-function 'drgnx-ui-kit-run) (lambda (c) (push (list 'run c) ran)))
                   ((symbol-function 'drgnx-agent-panel-header-menu) (lambda (_e) (push 'menu ran)))
-                  ((symbol-function 'drgnx-agent-panel-chip) (lambda (c) (push (list 'chip c) ran)))
-                  ((symbol-function 'mouse-drag-region) (lambda (_e) (push 'stock-press ran))))
-          (dolist (text '("review" "P " "M " "50%")) (drgnx-agent-panel-act (drgnx-agent-panel-test--click buf text)))
-          (should (equal (reverse ran) '((preset 2) (run agents-panel-pin) menu (chip context))))
-          (setq ran nil)
-          (drgnx-agent-panel-press (drgnx-agent-panel-test--click buf "P "))
-          (should-not ran)
-          (drgnx-agent-panel-press (drgnx-agent-panel-test--click buf "plain"))
-          (should (equal ran '(stock-press))))
-        (dolist (c '(agents-panel-act agents-panel-press)) (should (drgnx-commands-get c)))
+                  ((symbol-function 'drgnx-agent-panel-chip) (lambda (c) (push (list 'chip c) ran))))
+          (dolist (text '("review" "P " "M " "50%" "plain")) (drgnx-agent-panel-act (drgnx-agent-panel-test--click buf text)))
+          (should (equal (reverse ran) '((preset 2) (run agents-panel-pin) menu (chip context)))))
+        (should (drgnx-commands-get 'agents-panel-act))
+        (should-not (drgnx-commands-get 'agents-panel-press))
+        (should-not (drgnx-commands-get 'agents-panel-drag))
         (dolist (c (mapcar #'cdr drgnx-agent-panel-header-menu)) (should (drgnx-commands-get c)))))))
 
 (ert-deftest drgnx-agent-panel/the-strips-pills-and-make-default-are-clicks ()
@@ -956,20 +730,14 @@ or makes the default."
         (should (drgnx-agent-panel-test--inherits-p 'drgnx-agent-panel-tag 'drgnx-pill))
         (should (drgnx-agent-panel-test--inherits-p 'drgnx-agent-panel-tag-on 'drgnx-pill-on))))))
 
-(ert-deftest drgnx-agent-panel/composer-is-a-field-card ()
-  "agent-panel.html `.composer': the field's card (\"Steer the agent…\", a click writes to the agent) and the bar:
-the model and the mode as chips that switch them, Fork, the pause icon and Send (an arrow) as buttons."
+(ert-deftest drgnx-agent-panel/the-composers-bar-has-its-chips-and-buttons ()
+  "agent-panel.html `.composer': the bar under the field (the field is the composer's buffer,
+agent-panel-composer-test): the model and the mode as chips that switch them, Fork, the pause icon and Send (an
+arrow) as buttons."
   (drgnx-agent-panel-test--with
     (with-current-buffer buf
       (setq drgnx-agent-panel--snap (list :model "opus" :mode "accept edits"))
-      (let ((row (drgnx-agent-panel-composer--row)))
-        (should (string-search "Steer the agent" row))
-        (should (eq 'drgnx-agent-panel-send
-                    (lookup-key (get-text-property (string-search "Steer" row) 'keymap row) [mouse-1])))
-        (should (memq 'drgnx-card-single (drgnx-agent-panel-test--face-at row "Steer")))
-        ;; the field's card is one run of one face to its end (a box is drawn per run)
-        (let ((eol (string-search "\n" row)))
-          (should (equal (get-text-property 1 'face row) (get-text-property (1- eol) 'face row))))
+      (let ((row (drgnx-agent-panel-composer--bar)))
         (should (memq 'drgnx-agent-panel-chip (drgnx-agent-panel-test--face-at row "opus")))
         (should (eq 'drgnx-agent-panel-switch-model
                     (lookup-key (get-text-property (string-search "opus" row) 'keymap row) [mouse-1])))
@@ -993,193 +761,3 @@ and the presets' names it lays the lens out of."
         (should (equal (append (plist-get params :lens) nil) (mapcar (lambda (p) (symbol-name (car p))) drgnx-agent-panel-presets))))
       (drgnx-agent-panel-preset 3)
       (should (= 3 (plist-get (drgnx-agent-panel--look-params) :lens_on))))))
-
-;;;; The pinned rows: the header, chips and strip stay at the window top
-
-(declare-function drgnx-agent-panel--pin-update "drgnx-agent-panel")
-(declare-function drgnx-agent-panel--pin-at "drgnx-agent-panel")
-(declare-function drgnx-agent-panel--pin-place "drgnx-agent-panel")
-(declare-function drgnx-agent-panel--tail-start "drgnx-agent-panel")
-(declare-function drgnx-agent-panel-act "drgnx-agent-steps")
-(defvar drgnx-agent-panel--pin)
-
-(defmacro drgnx-agent-panel-test--pinned (&rest body)
-  "BODY in panel s1, shown in the selected window, its text two pinned rows (the hub's `drgnx-pinned') then ten more."
-  (declare (indent 0))
-  `(drgnx-agent-panel-test--with
-     (with-current-buffer buf
-       (let ((inhibit-read-only t))
-         (erase-buffer)
-         (insert (propertize "HEAD row" 'drgnx-agent-panel-action "pin" 'drgnx-pinned 1) "\n" (propertize "chips" 'drgnx-pinned 1) "\n")
-         (dotimes (i 10) (insert (format "step %d\n" i))))
-       (set-window-buffer (selected-window) buf)
-       ,@body)))
-
-(ert-deftest drgnx-agent-panel/the-pinned-rows-show-over-the-window-start-and-it-never-starts-before-them ()
-  (drgnx-agent-panel-test--pinned
-    (let ((w (selected-window)))
-      (set-window-start w (point-min))
-      (drgnx-agent-panel--pin-update)
-      (should (equal (cons 16 (buffer-substring 1 16)) (cons (car drgnx-agent-panel--pin) (cdr drgnx-agent-panel--pin))))
-      ;; the window starts after the pinned rows and the overlay over its first line carries them
-      (should (= 16 (window-start w)))
-      (let ((ov (cdr (assq w drgnx-agent-panel--pin-overlays))))
-        (should (= 16 (overlay-start ov)))
-        (should (equal (overlay-get ov 'before-string) (cdr drgnx-agent-panel--pin)))
-        (should (eq w (overlay-get ov 'window))))
-      ;; a scroll to a later line moves the overlay with it
-      (set-window-start w 30)
-      (drgnx-agent-panel--pin-place w)
-      (should (= 30 (overlay-start (cdr (assq w drgnx-agent-panel--pin-overlays)))))
-      ;; and the tail's start is never inside the pinned rows
-      (should (>= (drgnx-agent-panel--tail-start w) 16)))))
-
-(ert-deftest drgnx-agent-panel/no-pinned-rows-no-overlay ()
-  (drgnx-agent-panel-test--pinned
-    (progn
-      (drgnx-agent-panel--pin-update)
-      (should drgnx-agent-panel--pin-overlays)
-      (let ((inhibit-read-only t)) (remove-text-properties (point-min) (point-max) '(drgnx-pinned nil)))
-      (drgnx-agent-panel--pin-update)
-      (should-not drgnx-agent-panel--pin)
-      (should-not drgnx-agent-panel--pin-overlays))))
-
-(ert-deftest drgnx-agent-panel/a-click-on-the-pinned-copy-runs-its-action ()
-  "The pinned rows are an overlay's string: the click's action is read from that string, not from the buffer under it."
-  (drgnx-agent-panel-test--pinned
-    (drgnx-agent-panel--pin-update)
-    (let* ((w (selected-window)) (ran nil)
-           (event (list 'mouse-1 (list w 20 '(0 . 0) 0 (cons (cdr drgnx-agent-panel--pin) 2)))))
-      (cl-letf (((symbol-function 'drgnx-ui-kit-run) (lambda (id) (setq ran id))))
-        (with-current-buffer buf (drgnx-agent-panel-act event)))
-      (should (eq ran 'agents-panel-pin)))))
-
-(declare-function drgnx-agent-panel--end-shown-p "drgnx-agent-panel")
-
-(ert-deftest drgnx-agent-panel/the-end-is-shown-only-with-its-whole-row ()
-  "A row cut at the bottom (or the top) is not shown: plain `pos-visible-in-window-p' says it is, redisplay does not,
-and the window scrolled again after the panel had followed its tail.  The last whole row is."
-  (drgnx-agent-panel-test--with
-    (with-current-buffer buf
-      (let ((w (selected-window)))
-        (progn
-          (cl-letf (((symbol-function 'pos-visible-in-window-p) (lambda (&rest _) (list 0 700))))
-            (should (drgnx-agent-panel--end-shown-p w)))
-          (cl-letf (((symbol-function 'pos-visible-in-window-p) (lambda (&rest _) (list 0 795))))
-            (should (drgnx-agent-panel--end-shown-p w)))
-          (cl-letf (((symbol-function 'pos-visible-in-window-p) (lambda (&rest _) (list 0 700 0 1 21 30))))
-            (should-not (drgnx-agent-panel--end-shown-p w)))
-          (cl-letf (((symbol-function 'pos-visible-in-window-p) (lambda (&rest _) nil)))
-            (should-not (drgnx-agent-panel--end-shown-p w))))))))
-
-(declare-function drgnx-agent-panel--pane-resized "drgnx-agent-panel")
-(defvar drgnx-state--idle)
-
-(ert-deftest drgnx-agent-panel/a-resized-window-at-the-end-follows-it-at-once-and-one-moved-away-stays ()
-  "The store's `pane-resized' moves a panel window at the panel's end to the tail and leaves one the user scrolled
-away from."
-  (drgnx-agent-panel-test--with
-    (with-current-buffer buf
-      (should (memq #'drgnx-agent-panel--pane-resized (cdr (assq 'pane-resized drgnx-state--idle))))
-      (let ((w (selected-window)) (tails 0))
-        (let ((inhibit-read-only t)) (erase-buffer) (insert "header\nstep\ncomposer\n"))
-        (set-window-buffer w buf)
-        (cl-letf (((symbol-function 'drgnx-agent-panel--tail-start) (lambda (_w) (cl-incf tails) (point-min))))
-          (set-window-point w (point-max))
-          (drgnx-agent-panel--pane-resized (list :window w))
-          (should (= 1 tails))
-          (set-window-point w (point-min))
-          (drgnx-agent-panel--pane-resized (list :window w))
-          (should (= 1 tails)))))))
-
-(declare-function drgnx-agent-panel-press "drgnx-agent-panel-steps")
-(defvar drgnx-agent-panel--pin-overlays)
-
-(ert-deftest drgnx-agent-panel/a-click-on-the-pinned-copy-reads-only-the-copy ()
-  "A click on a part of the pinned copy that does nothing runs nothing, though the transcript row under the copy (at the
-window start, the click's buffer position) has a button there; a press there does not move point into the transcript
-(the window at the panel's end would stop following it)."
-  (drgnx-agent-panel-test--pinned
-    (let ((inhibit-read-only t))
-      (put-text-property 16 22 'drgnx-agent-panel-action "pin"))
-    (drgnx-agent-panel--pin-update)
-    (let* ((w (selected-window)) (ran nil)
-           ;; the newline after "HEAD row": no action in the copy
-           (posn (list w 16 '(0 . 0) 0 (cons (cdr drgnx-agent-panel--pin) 8))))
-      (cl-letf (((symbol-function 'drgnx-ui-kit-run) (lambda (id) (push id ran)))
-                ((symbol-function 'mouse-drag-region) (lambda (_e) (push 'stock-press ran))))
-        (with-current-buffer buf
-          (drgnx-agent-panel-act (list 'mouse-1 posn))
-          (drgnx-agent-panel-press (list 'down-mouse-1 posn))))
-      (should-not ran))))
-
-(ert-deftest drgnx-agent-panel/a-dead-windows-pinned-overlay-goes-with-it ()
-  "Each window that showed the panel had an overlay for the pinned rows; one whose window was deleted is deleted too, not
-only forgotten (a dock shown again makes new windows)."
-  (drgnx-agent-panel-test--pinned
-    (let ((w2 (split-window)))
-      (set-window-buffer w2 buf)
-      (drgnx-agent-panel--pin-update)
-      (let ((pinned (lambda () (seq-filter (lambda (o) (overlay-get o 'before-string))
-                                           (overlays-in (point-min) (point-max))))))
-        (should (= 2 (length (funcall pinned))))
-        (delete-window w2)
-        (drgnx-agent-panel--pin-update)
-        (should (= 1 (length (funcall pinned))))
-        (should (= 1 (length drgnx-agent-panel--pin-overlays)))))))
-
-(ert-deftest drgnx-agent-panel/a-pinned-row-whose-faces-change-is-copied-again ()
-  "The hub draws the header again with the same text and other faces (the lens's preset in force raised, a pill on):
-the overlay shows the new copy, not the old one, which `equal' takes for the same."
-  (drgnx-agent-panel-test--pinned
-    (drgnx-agent-panel--pin-update)
-    (let ((inhibit-read-only t)) (put-text-property 1 5 'face 'bold))
-    (drgnx-agent-panel--pin-update)
-    (let ((shown (overlay-get (cdr (assq (selected-window) drgnx-agent-panel--pin-overlays)) 'before-string)))
-      (should (eq 'bold (get-text-property 0 'face shown)))
-      (should (eq shown (cdr drgnx-agent-panel--pin))))))
-
-(ert-deftest drgnx-agent-panel/new-fonts-make-a-window-at-the-end-follow-it-again ()
-  "Fonts written again (`drgnx-look-fonts-applied-hook': a theme change, a font setting) change the rows' heights with
-no hub patch: a panel window at the panel's end follows its tail again; one the user moved point in stays."
-  (drgnx-agent-panel-test--with
-    (with-current-buffer buf
-      (let ((w (selected-window)) (tails 0))
-        (let ((inhibit-read-only t)) (erase-buffer) (insert "header\nstep\ncomposer\n"))
-        (set-window-buffer w buf)
-        (cl-letf (((symbol-function 'drgnx-agent-panel--tail-start) (lambda (_w) (cl-incf tails) (point-min))))
-          (set-window-point w (point-max))
-          (run-hooks 'drgnx-look-fonts-applied-hook)
-          (should (= 1 tails))
-          (set-window-point w (point-min))
-          (run-hooks 'drgnx-look-fonts-applied-hook)
-          (should (= 1 tails)))))))
-
-(declare-function drgnx-agent-panel-drag "drgnx-agent-panel-steps")
-
-(ert-deftest drgnx-agent-panel/a-click-on-the-pinned-copy-that-emacs-made-a-drag-is-a-click ()
-  "A patch moved the window start under the copy between the press and the release (a window following the tail): the
-release's buffer position is not the press's, so Emacs makes the click a drag.  On the copy it is a click on the part
-pressed; a drag from the copy into the transcript is the stock one."
-  (drgnx-agent-panel-test--pinned
-    (drgnx-agent-panel--pin-update)
-    (let* ((w (selected-window)) (ran nil) (copy (cdr drgnx-agent-panel--pin))
-           (from (list w 16 '(10 . 4) 0 (cons copy 2)))
-           (to (list w 30 '(10 . 4) 0 (cons copy 2))))
-      (cl-letf (((symbol-function 'drgnx-ui-kit-run) (lambda (id) (push id ran)))
-                ((symbol-function 'mouse-set-region) (lambda (_e) (push 'stock-drag ran))))
-        (with-current-buffer buf
-          ;; the key profiles bind it (core-keys-test), applied by the keys module, not set up here
-          (should (drgnx-commands-get 'agents-panel-drag))
-          (drgnx-agent-panel-drag (list 'drag-mouse-1 from to))
-          (should (equal ran '(agents-panel-pin)))
-          (setq ran nil)
-          ;; the patch that moved the start also copied the pinned rows again (the strip's clock): the press is on the
-          ;; old copy, the release on the new one
-          (setcdr drgnx-agent-panel--pin (copy-sequence copy))
-          (drgnx-agent-panel-drag
-           (list 'drag-mouse-1 from (list w 30 '(10 . 4) 0 (cons (cdr drgnx-agent-panel--pin) 2))))
-          (should (equal ran '(agents-panel-pin)))
-          (setq ran nil)
-          (drgnx-agent-panel-drag (list 'drag-mouse-1 from (list w 40 '(10 . 200) 0 nil)))
-          (should (equal ran '(stock-drag))))))))

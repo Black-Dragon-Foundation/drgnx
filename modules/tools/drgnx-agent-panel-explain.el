@@ -3,9 +3,8 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; Why a step was allowed, and what each chip means.  Under a step: the hooks' verdict lines (refused, changed,
-;; failed, busy; RET on one shows its provenance) from the hook rows the step carries, and a line for a request you
-;; answered Always.  A chip opens a popup of the hub's facts (`agents/explain') and the one action that helps: the
+;; Why a step was allowed, and what each chip means.  The lines under a step (the hooks' verdicts, the Always that
+;; allowed it) are the hub's rows; here the Always grants are kept for revoking one.  A chip opens a popup of the hub's facts (`agents/explain') and the one action that helps: the
 ;; context breakdown with drop and pin where the agent advertises them and what /compact keeps, the cost per step with
 ;; the cache hits, the modes you may switch to, what the agent waits for, the MCP servers.  Nothing here is guessed: a
 ;; fact the hub does not know is not listed.  Loaded by tools/agent-panel (drgnx-agent-panel.el); defines no module.
@@ -15,7 +14,6 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'subr-x)
-(require 'drgnx-view)
 (require 'drgnx-registry)
 (require 'drgnx-agents-hooks)
 
@@ -25,8 +23,6 @@
 (declare-function drgnx-agent-panel--key-at "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--ask "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--entry "drgnx-agent-panel")
-(declare-function drgnx-agent-panel--stats-render "drgnx-agent-panel")
-(declare-function drgnx-agents-hooks-show-provenance "drgnx-agents-hooks")
 (declare-function drgnx-agents-hooks--preview-text "drgnx-agents-hooks")
 
 (defconst drgnx-agent-panel-explain-items '(context cost mode model waiting mcp)
@@ -57,33 +53,9 @@
                          (equal (format "%s" (plist-get e :kind)) (plist-get g :tool)))))
               drgnx-agent-panel--grants))
 
-(defun drgnx-agent-panel-explain-step-lines (e)
-  "The lines under tool entry E: the hooks' verdicts on its step (a button each, its provenance) and the Always that
-allowed it.  Empty when there is nothing to say."
-  (let* ((step (and (plist-get e :step) (gethash (plist-get e :step) drgnx-agent-panel--steps)))
-         (lines (drgnx-agents-hooks-lines (append (plist-get step :hooks) nil))))
-    (concat
-     (mapconcat (lambda (l)
-                  (let ((row (plist-get l :row)) (rec (plist-get l :record)))
-                    (concat "    "
-                            (if rec
-                                (drgnx-agent-panel-explain--button
-                                 (plist-get l :text) (lambda () (drgnx-agents-hooks-show-provenance row rec)))
-                              (plist-get l :text))
-                            "\n")))
-                lines "")
-     (and (drgnx-agent-panel-explain--always-of e)
-          (propertize "    allowed by your Always · V revokes\n" 'face 'drgnx-agent-panel-subtle)))))
-
-(defun drgnx-agent-panel-explain--redraw-tools ()
-  "Draw the tool rows again: their Always lines changed."
-  (when (and (drgnx-view-p drgnx-view) (hash-table-p drgnx-agent-panel--entries))
-    (drgnx-view-dirty drgnx-view (let (keys) (maphash (lambda (i _) (push (list :e i) keys)) drgnx-agent-panel--entries) keys))))
-
 (defun drgnx-agent-panel-explain-take-grants (result)
-  "The hub's answer RESULT of `agents/grants': the ledger the Always lines read."
-  (setq drgnx-agent-panel--grants (append (plist-get result :grants) nil))
-  (drgnx-agent-panel-explain--redraw-tools))
+  "The hub's answer RESULT of `agents/grants': the ledger revoking an Always reads."
+  (setq drgnx-agent-panel--grants (append (plist-get result :grants) nil)))
 
 (defun drgnx-agent-panel-explain-load-grants ()
   "Ask the hub for this session's Always grants; the lines under the steps follow its answer."

@@ -1,48 +1,36 @@
-;;; drgnx-agent-panel-steps.el --- The agent panel's rows: header, chips, steps, messages (library of tools/agent-panel) -*- lexical-binding: t -*-
+;;; drgnx-agent-panel-steps.el --- The agent panel's steps: clicks, disclosure, outputs, checkpoints (library of tools/agent-panel) -*- lexical-binding: t -*-
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; How the panel's rows look.  A tool call is a step on one line: a dot for its state, its title, its result after `·',
-;; its time and cost right-aligned in the code face (the warning face when slow or expensive).  Thinking folds under
-;; its step.  Loaded by tools/agent-panel (drgnx-agent-panel.el); defines no module.  See docs/guide/agent-panel.md.
+;; What the panel's rows do; the hub draws them (docs/develop/hub.md, "The agent panel's rows").  A click on the header,
+;; the strip, a chip or a card runs the part's action (`drgnx-agent-panel-act'); the strip and the lens choose which
+;; step types show their detail, which the hub hears (`agents/panel/look'); a large output is searched or opened range
+;; by range; a step with a checkpoint is reverted or forked.  Loaded by tools/agent-panel (drgnx-agent-panel.el);
+;; defines no module.  See docs/guide/agent-panel.md.
 
 ;;; Code:
 (require 'cl-lib)
 (require 'seq)
 (require 'subr-x)
 (require 'drgnx-setting)
-(require 'drgnx-view)
 (require 'drgnx-registry)
-(require 'drgnx-icons)
 (require 'drgnx-ui-kit)                 ; the header's buttons
-(require 'drgnx-pixels)
 
 (defvar drgnx-agent-panel--session)
-(defvar drgnx-agent-panel--shown-keys)
 (defvar drgnx-agent-panel--snap)
 (defvar drgnx-agent-panel--entries)
 (defvar drgnx-agent-panel--steps)
 (defvar drgnx-agent-panel--open)
-(defvar drgnx-agent-panel-slow-seconds)
-(defvar drgnx-agent-panel-expensive-cost)
 (defvar drgnx-agent-panel--disclosure)      ; below: the header's lens reads them first
 (defvar drgnx-agent-panel-presets)
 (declare-function drgnx-agent-panel--key-at "drgnx-agent-panel")
-(declare-function drgnx-agent-panel--rows-p "drgnx-agent-panel")
 (declare-function drgnx-agent-panel-chip "drgnx-agent-panel-explain")
 (declare-function drgnx-agent-panel--send-look "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--entry "drgnx-agent-panel")
-(declare-function drgnx-agent-panel--blocks "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--ask "drgnx-agent-panel")
-(declare-function drgnx-agent-panel--thoughts-of "drgnx-agent-panel")
-(declare-function drgnx-agent-panel--duration-string "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--type "drgnx-agent-panel")
-(declare-function drgnx-agent-panel--text-of "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--one-line "drgnx-agent-panel")
-(declare-function drgnx-agent-panel--seconds "drgnx-agent-panel")
-(declare-function drgnx-agent-panel--cost-of "drgnx-agent-panel")
-(declare-function drgnx-agent-panel-explain-step-lines "drgnx-agent-panel-explain")
 (declare-function drgnx-history-revert-to-here "drgnx-history-revert")
 (declare-function drgnx-history-fork-here "drgnx-history-revert")
 (declare-function drgnx-agent-panel-ledger "drgnx-agent-panel-cards")
@@ -50,10 +38,6 @@
 (declare-function drgnx-agent-panel-allow "drgnx-agent-panel-cards")
 (declare-function drgnx-agent-panel-always "drgnx-agent-panel-cards")
 (declare-function drgnx-agent-panel-reject "drgnx-agent-panel-cards")
-
-(defun drgnx-agent-panel--align (meta)
-  "A space that pushes META to the right edge, then META."
-  (concat (propertize " " 'display `(space :align-to (- right ,(1+ (string-width meta))))) meta))
 
 (defface drgnx-agent-panel-lens '((t :inherit (drgnx-ui-caption drgnx-text-muted drgnx-surface-gap)
                                      :box (:line-width (2 . 8) :style flat-button)))
@@ -81,31 +65,9 @@
     (drgnx-ui-kit-run choice)))
 
 (defun drgnx-agent-panel--prop-at (event prop)
-  "Property PROP of the text EVENT is on: the string's when it is over one (the pinned rows are an overlay's), else
-the buffer's.  A string's position in the buffer is the window start, under the copy: never read there."
-  (let* ((end (event-end event)) (pos (posn-point end)) (win (posn-window end)) (str (posn-string end)))
-    (if (stringp (car-safe str))
-        (get-text-property (cdr str) prop (car str))
-      (and pos (windowp win) (get-text-property pos prop (window-buffer win))))))
-
-(defvar drgnx-agent-panel--pin)
-
-(defun drgnx-agent-panel--on-pin-p (posn)
-  "Whether POSN is on a pinned copy (`drgnx-agent-panel--pin'), the string of the overlay over the window's first
-line.  The copy is known by its first row's `drgnx-pinned' mark, not by `eq' to the current copy: a patch between the
-press and the release can copy the rows again."
-  (let ((str (posn-string posn)))
-    (and (stringp (car-safe str)) (windowp (posn-window posn))
-         (eq 1 (get-text-property 0 'drgnx-pinned (car str))))))
-
-(defun drgnx-agent-panel-drag (event)
-  "Drag EVENT: from the pinned copy to it, a click on the part pressed.  The copy's buffer position is the window
-start, and a patch that moves the start between the press and the release (a window following the tail) makes Emacs
-take the click for a drag.  Any other drag is the stock one (`mouse-set-region')."
-  (interactive "e")
-  (if (and (drgnx-agent-panel--on-pin-p (event-start event)) (drgnx-agent-panel--on-pin-p (event-end event)))
-      (drgnx-agent-panel-act (list 'mouse-1 (event-start event)))
-    (mouse-set-region event)))
+  "Property PROP of the buffer text EVENT is on, or nil."
+  (let* ((end (event-end event)) (pos (posn-point end)) (win (posn-window end)))
+    (and pos (windowp win) (get-text-property pos prop (window-buffer win)))))
 
 (defun drgnx-agent-panel-act (event)
   "Run the header, strip, chip or card part the click EVENT is on: the lens segment (`lens:N'), the pin or the ⋯ menu, a
@@ -135,44 +97,6 @@ step type's pill (`type:NAME') or `make default', the ledger or a card's button 
                    ("always" (drgnx-agent-panel-always))
                    ((or "reject" "deny") (drgnx-agent-panel-reject))))
                 ((stringp chip) (drgnx-agent-panel-chip (intern chip)))))))))
-
-(defun drgnx-agent-panel-press (event)
-  "Press EVENT: on a header or chip part nothing moves point (so the pin takes the card at point, not the header), nor
-anywhere on the pinned copy, as on a header line (point would go to the window start, under it, and a window at the
-panel's end would stop following it); anywhere else the press is the stock one."
-  (interactive "e")
-  (let* ((end (event-end event)) (pos (posn-point end)) (win (posn-window end))
-         (buf (and (windowp win) (window-buffer win))))
-    (unless (and pos buf (or (drgnx-agent-panel--on-pin-p end)
-                             (drgnx-agent-panel--prop-at event 'drgnx-agent-panel-action)
-                             (drgnx-agent-panel--prop-at event 'drgnx-agent-panel-chip)))
-      (mouse-drag-region event))))
-
-(defun drgnx-agent-panel--dot (status)
-  (pcase status
-    ((or "completed" "done") (propertize "●" 'face 'drgnx-agent-panel-ok))
-    ("failed" (propertize "●" 'face 'drgnx-agent-panel-fail))
-    (_ (propertize "○" 'face 'drgnx-agent-panel-run))))
-
-(defun drgnx-agent-panel--meta (entry)
-  "The right-hand time and cost of tool ENTRY, a propertized string, or nil."
-  (when-let* ((seq (plist-get entry :step)) (step (gethash seq drgnx-agent-panel--steps)))
-    (let* ((secs (drgnx-agent-panel--seconds step)) (cost (drgnx-agent-panel--cost-of step))
-           (slow (and secs (> secs drgnx-agent-panel-slow-seconds)))
-           (dear (and cost (> cost drgnx-agent-panel-expensive-cost)))
-           (parts (delq nil (list (and secs (propertize (drgnx-agent-panel--duration-string secs)
-                                                        'face (if slow '(drgnx-agent-panel-warn drgnx-agent-panel-code)
-                                                                'drgnx-agent-panel-code)))
-                                  (and cost (propertize (format "$%.2f" cost)
-                                                        'face (if dear '(drgnx-agent-panel-warn drgnx-agent-panel-code)
-                                                                'drgnx-agent-panel-code)))))))
-      (and parts (mapconcat #'identity parts (propertize " · " 'face 'drgnx-agent-panel-code))))))
-
-(defun drgnx-agent-panel--indented (text face &optional limit)
-  "TEXT as lines indented by four columns in FACE, at most LIMIT lines (default 40)."
-  (let* ((lines (split-string (string-trim-right (or text "")) "\n")) (limit (or limit 40)))
-    (mapconcat (lambda (l) (propertize (concat "    " l "\n") 'face face))
-               (append (seq-take lines limit) (and (> (length lines) limit) (list "…"))) "")))
 
 ;;;; Disclosure: which steps show their detail
 
@@ -221,20 +145,13 @@ else when the chat's toggle for its type is on."
   (let* ((e (drgnx-agent-panel--entry (cadr key)))
          (now (or (drgnx-agent-panel--thinking-open-p key) (and e (drgnx-agent-panel--detail-open-p key e)))))
     (puthash key (if now 'closed 'open) drgnx-agent-panel--open)
-    (if (drgnx-agent-panel--rows-p) (drgnx-agent-panel--send-look) (drgnx-view-dirty drgnx-view (list key)))))
-
-(defun drgnx-agent-panel--redraw-steps ()
-  "Every step row is drawn again."
-  (when (drgnx-view-p drgnx-view)
-    (drgnx-view-dirty drgnx-view
-                      (seq-filter (lambda (k) (eq (car-safe k) :e)) (hash-table-keys drgnx-agent-panel--shown-keys)))))
+    (drgnx-agent-panel--send-look)))
 
 (defun drgnx-agent-panel--set-disclosure (types)
   "TYPES are the open step types of this chat; rows you opened or folded by hand are back under the toggles."
   (setq drgnx-agent-panel--disclosure (copy-sequence types))
   (clrhash drgnx-agent-panel--open)
-  (drgnx-agent-panel--send-look)
-  (drgnx-agent-panel--redraw-steps))
+  (drgnx-agent-panel--send-look))
 
 (defun drgnx-agent-panel-toggle-type (type)
   "Open or close the detail of every step of TYPE in this chat."
@@ -282,12 +199,6 @@ else when the chat's toggle for its type is on."
   (drgnx-command-define 'agents-panel-act :category "Agents" :title "Panel Header: Click"
                         :command #'drgnx-agent-panel-act :map 'drgnx-agent-panel-mode-map
                         :doc "A click on the header's lens, pin or ⋯, or on a chip: what that part does")
-  (drgnx-command-define 'agents-panel-press :category "Agents" :title "Panel Header: Press"
-                        :command #'drgnx-agent-panel-press :map 'drgnx-agent-panel-mode-map
-                        :doc "A press on the header or a chip leaves point where it is; anywhere else it is the stock press")
-  (drgnx-command-define 'agents-panel-drag :category "Agents" :title "Panel Header: Drag"
-                        :command #'drgnx-agent-panel-drag :map 'drgnx-agent-panel-mode-map
-                        :doc "A click on the pinned header that the transcript's scroll made a drag is still a click; any other drag is the stock one")
   (drgnx-command-define 'agents-panel-preset-1 :category "Agents" :title "Panel View: Watch"
                         :command #'drgnx-agent-panel-preset-1 :map 'drgnx-agent-panel-mode-map
                         :doc "Steps as titles only")
@@ -328,29 +239,6 @@ else when the chat's toggle for its type is on."
 (defconst drgnx-agent-panel-output-max-hits 200 "Matching lines a search of an output lists.")
 
 (defun drgnx-agent-panel--utf8-length (text) (length (encode-coding-string text 'utf-8)))
-
-(defun drgnx-agent-panel--large-p (e lines)
-  "Whether tool entry E's output, LINES in the text the panel holds, is larger than head and tail show."
-  (or (> (length lines) (* 2 drgnx-agent-panel-output-edge))
-      (let ((total (plist-get e :outputBytes)))
-        (and (numberp total) (> total (drgnx-agent-panel--utf8-length (string-join lines "\n")))))))
-
-(defun drgnx-agent-panel--detail (e)
-  "The detail of tool entry E: its output, or for a large one its first and last lines and a line saying what is
-hidden (an estimate, marked ~, when the hub kept only the ends of a huge output)."
-  (let* ((text (string-trim-right (drgnx-agent-panel--text-of (plist-get e :content))))
-         (lines (split-string text "\n")))
-    (if (not (drgnx-agent-panel--large-p e lines))
-        (drgnx-agent-panel--indented text 'default 12)
-      (let* ((n drgnx-agent-panel-output-edge) (have (length lines))
-             (bytes (max 1 (drgnx-agent-panel--utf8-length text))) (total (plist-get e :outputBytes))
-             (whole (if (and (numberp total) (> total bytes)) (ceiling (* have (/ (float total) bytes))) have))
-             (hidden (max 0 (- whole (* 2 n)))))
-        (concat (drgnx-agent-panel--indented (string-join (seq-take lines n) "\n") 'default n)
-                (propertize (format "    %s%d lines hidden · / search · O open in a buffer\n"
-                                    (if (= whole have) "" "~") hidden)
-                            'face 'drgnx-agent-panel-subtle)
-                (drgnx-agent-panel--indented (string-join (last lines n) "\n") 'default n))))))
 
 (defun drgnx-agent-panel--output-fetch (session tool from callback)
   "Ask the hub for the page of TOOL's output in SESSION that starts at byte FROM; CALLBACK gets (TEXT TOTAL ERROR)."
@@ -466,10 +354,6 @@ hidden (an estimate, marked ~, when the hub kept only the ends of a huge output)
   "The hub's timeline row of the step that entry E names, or nil."
   (when-let* ((seq (plist-get e :step))) (gethash seq drgnx-agent-panel--steps)))
 
-(defun drgnx-agent-panel--undone-p (e)
-  "Whether a revert undid the step of tool entry E."
-  (integerp (plist-get (drgnx-agent-panel--step-row e) :undone_by)))
-
 (defun drgnx-agent-panel--step-at-point ()
   "The timeline row of the step at point, or a user error."
   (let* ((key (drgnx-agent-panel--key-at))
@@ -492,94 +376,6 @@ hidden (an estimate, marked ~, when the hub kept only the ends of a huge output)
   (let ((step (drgnx-agent-panel--step-at-point)))
     (require 'drgnx-history-revert)
     (drgnx-history-fork-here drgnx-agent-panel--session (plist-get step :seq))))
-
-(defun drgnx-agent-panel--parent-tool (e)
-  "The `Task' call that E's step ran under (a subagent's step), or nil."
-  (when-let* ((seq (plist-get e :step)) (step (gethash seq drgnx-agent-panel--steps)))
-    (plist-get (plist-get step :detail) :parent_tool)))
-
-(defun drgnx-agent-panel--child-face (parent)
-  "The agent colour a subagent's steps (those under PARENT) are drawn in."
-  (intern (format "drgnx-agent-%d" (1+ (mod (sxhash-equal parent) 6)))))
-
-(defun drgnx-agent-panel--tool-row (idx e)
-  (let* ((key (list :e idx)) (status (format "%s" (or (plist-get e :status) "")))
-         (title (drgnx-agent-panel--one-line (or (plist-get e :title) (plist-get e :kind) "tool") 50))
-         (result (drgnx-agent-panel--one-line (drgnx-agent-panel--text-of (plist-get e :content)) 40))
-         (meta (drgnx-agent-panel--meta e))
-         (parent (drgnx-agent-panel--parent-tool e))
-         (thoughts (drgnx-agent-panel--thoughts-of idx))
-         (open-thinking (drgnx-agent-panel--thinking-open-p key))
-         (open-detail (drgnx-agent-panel--detail-open-p key e)))
-    (concat (format "%s%s %s" (if parent "      " "  ") (drgnx-agent-panel--dot status)
-                    (if parent (propertize title 'face (drgnx-agent-panel--child-face parent)) title))
-            (if (string-empty-p result) ""
-              (propertize (concat "  · " result) 'face 'drgnx-agent-panel-subtle))
-            (if (drgnx-agent-panel--undone-p e) (propertize "  ↶ undone" 'face 'drgnx-agent-panel-subtle) "")
-            (if meta (drgnx-agent-panel--align meta) "")
-            "\n"
-            (drgnx-agent-panel-explain-step-lines e)
-            (when thoughts
-              (let ((text (mapconcat (lambda (th) (or (plist-get th :text) "")) thoughts "\n")))
-                (if open-thinking
-                    (concat (propertize "    ▾ thinking\n" 'face 'drgnx-agent-panel-subtle)
-                            (drgnx-agent-panel--indented text 'drgnx-agent-panel-subtle))
-                  (propertize (format "    ▸ thinking · %d lines\n" (length (split-string (string-trim-right text) "\n")))
-                              'face 'drgnx-agent-panel-subtle))))
-            (when (and open-detail (drgnx-agent-panel--text-of (plist-get e :content)))
-              (drgnx-agent-panel--detail e)))))
-
-;;;; Agent messages as Markdown blocks
-
-(defun drgnx-agent-panel--style-face (style)
-  "The faces for STYLE, `text' or a space-joined mix of emph, strong, strike, link, code and h1..h6."
-  (let (faces)
-    (dolist (s (split-string (or style "text")))
-      (when-let* ((f (cond ((equal s "emph") 'drgnx-agent-panel-md-emph)
-                           ((equal s "strong") 'drgnx-agent-panel-md-strong)
-                           ((equal s "strike") 'drgnx-agent-panel-md-strike)
-                           ((equal s "link") 'drgnx-agent-panel-md-link)
-                           ((equal s "code") 'drgnx-agent-panel-md-code)
-                           ((string-match-p "\\`h[1-6]\\'" s) 'drgnx-agent-panel-md-heading))))
-        (push f faces)))
-    (nreverse faces)))
-
-(defun drgnx-agent-panel--block-row (idx n)
-  "Block N of the agent message at IDX, one row: its spans in their faces, indented two columns."
-  (let* ((block (let ((bs (drgnx-agent-panel--blocks idx))) (and bs (< n (length bs)) (aref bs n))))
-         (kind (plist-get block :kind))
-         (base (pcase kind
-                 ("code" 'drgnx-agent-panel-md-code)
-                 ("quote" 'drgnx-agent-panel-md-quote)
-                 ("heading" 'drgnx-agent-panel-md-heading)))
-         (pad (if (equal kind "quote") (propertize "  ▎ " 'face 'drgnx-agent-panel-md-quote) "  ")))
-    (if (equal kind "rule")
-        (concat "  " (propertize (make-string 24 ?─) 'face 'drgnx-agent-panel-md-rule) "\n")
-      (let ((text (mapconcat
-                   (lambda (span)
-                     (let ((faces (drgnx-agent-panel--style-face (plist-get span :style))))
-                       (propertize (replace-regexp-in-string "\n" (concat "\n" pad) (or (plist-get span :text) ""))
-                                   'face (delq nil (append faces (list base))))))
-                   (plist-get block :spans) "")))
-        (concat pad text "\n")))))
-
-(defun drgnx-agent-panel--entry-row (idx)
-  (let ((e (drgnx-agent-panel--entry idx)))
-    (pcase (drgnx-agent-panel--type e)
-      ('tool (drgnx-agent-panel--tool-row idx e))
-      ('user (concat (propertize "  ▍ you  " 'face 'drgnx-agent-panel-you)
-                     (drgnx-agent-panel--one-line (plist-get e :text) 70) "\n"))
-      ('agent (concat (propertize (concat "  " (replace-regexp-in-string "\n" "\n  " (string-trim-right (or (plist-get e :text) ""))))
-                                  'face 'default)
-                      "\n"))
-      ('thought (concat (propertize "  ▸ thinking\n" 'face 'drgnx-agent-panel-subtle)
-                        (if (drgnx-agent-panel--thinking-open-p (list :e idx))
-                            (drgnx-agent-panel--indented (plist-get e :text) 'drgnx-agent-panel-subtle) "")))
-      ('stop (propertize "  — turn ended\n" 'face 'drgnx-agent-panel-subtle))
-      ('error (propertize (format "  ✗ %s\n" (drgnx-agent-panel--one-line (or (plist-get e :text) (plist-get e :title) "error") 80))
-                          'face 'drgnx-agent-panel-fail))
-      ('compaction (propertize "  — context compacted\n" 'face 'drgnx-agent-panel-subtle))
-      (_ (propertize (format "  %s\n" (drgnx-agent-panel--one-line (plist-get e :text) 80)) 'face 'drgnx-agent-panel-subtle)))))
 
 
 (provide 'drgnx-agent-panel-steps)
