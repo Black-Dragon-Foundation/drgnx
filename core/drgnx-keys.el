@@ -1002,6 +1002,14 @@ child's parent meanwhile (the layer is then left out of the chain until the next
   (mapc #'drgnx-keys--detach drgnx-keys--attached)
   (setq drgnx-keys--attached nil))
 
+(defun drgnx-keys--resolver-map (sym)
+  "Keymap SYM as the resolver reads it: drgnx's own maps without their parents, because the profile's layer sits above
+the parent on purpose (a parent's command on a prefix is not a clash to lift); any other map as it is."
+  (let ((map (symbol-value sym)))
+    (if (drgnx-keys--own-map-p sym)
+        (let ((copy (copy-keymap map))) (set-keymap-parent copy nil) copy)
+      map)))
+
 (defun drgnx-keys--fill-own (sym items)
   "Fill SYM's layer with ITEMS ((KEY . COMMAND) …) and insert it between the keymap and its parent: child → layer →
 old parent, or the parent the derived mode will take.  Called after the mode is defined (its map exists)."
@@ -1215,7 +1223,7 @@ Never prompts: problems are collected in `drgnx-keys-last'.  Returns the resolut
                (layers (or drgnx-keys--session-layers (plist-get user :layers) (drgnx-keys--layers)))
                (r (drgnx-keys-resolve :commands (drgnx-commands-all) :profiles drgnx-keys-profiles :layers layers
                                       :user user :platform (drgnx-platform) :defaults drgnx-keys--defaults
-                                      :maps (lambda (m) (and (boundp m) (keymapp (symbol-value m)) (symbol-value m)))
+                                      :maps (lambda (m) (and (boundp m) (keymapp (symbol-value m)) (drgnx-keys--resolver-map m)))
                                       :snapshots (or (and drgnx-keys-modal-snapshots (featurep 'evil)
                                                           (drgnx-keys-modal-read-snapshots 'evil drgnx-keys-profiles))
                                                      drgnx-keys-modal-snapshots))))
