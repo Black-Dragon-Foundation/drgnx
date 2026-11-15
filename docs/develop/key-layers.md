@@ -9,7 +9,7 @@ write cannot leave it behind or overwrite it. Which layer depends on whose map i
 | the global map | `drgnx-keys--profile-map`, composed under your keys | `drgnx-keys--fill-profile` |
 | one of drgnx's own (`drgnx-…`) | the map's parent: child → layer → old parent | `drgnx-keys--fill-own` |
 | any other (a package's, wgrep's) | the foreign layer: one global minor mode, filtered entries | `drgnx-keys--fill-foreign` |
-| the modal engine's (evil's state maps) | still written, with a ledger (`drgnx-keys--applied`) | `drgnx-keys--apply-binding` |
+| the modal engine's (evil's state maps) | the profile map's auxiliary keymap for the state (`[normal-state]` …) | `drgnx-keys--fill-profile` |
 
 ## Parent layers for drgnx's own maps
 
@@ -68,4 +68,31 @@ A buffer-local `minor-mode-map-alist` does not see the layer's entry.
   is active.
 - **The minibuffer's C-h** (the profile's global C-h gives way to `help-command` there) is a foreign entry for
   `minibuffer-local-map`.
-- **Evil.** `drgnx-keys--bind-evil-aux` still binds the keys in evil's auxiliary maps of the target when evil is loaded.
+- **Evil.** Under evil a state map sits above every mode map, so a mode map's key of a layer without modal keys goes in
+  the layer's auxiliary keymaps for normal and motion state too (`drgnx-keys--evil-aux-p`; next section).
+
+## evil's states
+
+drgnx never writes evil's state maps. evil looks, in each state, for an auxiliary keymap in every active map (the event
+`normal-state`, `motion-state` … bound to a keymap whose prompt starts "Auxiliary keymap"), mode maps first, the global
+map last, all of them above evil's own state maps.
+
+- **The profile's keys for a state** (an entry whose map is `evil-normal-state-map`, or a key that beats evil's in some
+  states, `:also`) go in the profile map's auxiliary keymap for that state, as the key text `<normal-state> g d`
+  (`drgnx-keys--fill-profile`, `drgnx-keys--define`). So they beat evil's own key there, and a mode's auxiliary keymap
+  (evil-collection's dired keys, its `gx` too) beats them.
+- **Your evil writes** (`evil-global-set-key`, `evil-define-key 'normal 'global`, a `define-key` on
+  `evil-normal-state-map`) are watched (`drgnx-keys--watch-evil`): yours go to your map's auxiliary keymap for the state
+  (`drgnx-keys--redirect-evil`) and are recorded like a global key of yours, `<normal-state> g d` in
+  `drgnx-keys--yours`, so the profile's key there is taken out while yours stands (a nil of yours in an auxiliary
+  keymap would not hide it) and comes back when you take yours away. A package's write stays in evil's map, below the
+  profile's key. Your key in a mode map's auxiliary keymap (`evil-define-key 'normal dired-mode-map …`) is a write
+  into a watched map (its auxiliary keymap is watched as evil makes it): the foreign layer steps aside for it.
+- **A mode map's keys** for normal and motion state sit in auxiliary keymaps of the map's layer: of the parent layer
+  for drgnx's own maps, of the foreign layer (`drgnx-keys--foreign-aux`, entries filtered as the layer's) for the
+  others.
+- **Made once, emptied in place.** evil collects the auxiliary keymaps per buffer when it normalizes, so drgnx never
+  replaces one (`drgnx-keys--empty` keeps them, emptied); when one is made, every evil buffer normalizes once
+  (`drgnx-keys--normalize-evil`).
+- **evil's own keys** are read live for the claims per state (`drgnx-keys-modal-engine-maps`): nothing of drgnx's is
+  in them.

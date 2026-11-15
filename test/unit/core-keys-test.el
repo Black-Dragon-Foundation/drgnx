@@ -386,14 +386,12 @@ forgets its keys."
               (should (eq (keymap-lookup (current-global-map) "C-o") #'ignore)))
      (keymap-set global-map "C-o" #'open-line))))
 
-(defvar drgnx-keys--kept)
-
 (ert-deftest drgnx-keys/your-own-global-binding-survives-a-later-apply ()
   "A key the profile claims, bound by you in the global map (config.el's `keymap-global-set', which loads after the
 modules' first stage), stays yours through every later apply (each module stage ends with one): it is reported as
 your own binding, kept.  Unset with REMOVE (handed back), the profile's key comes back at once."
   (drgnx-keys-test--live
-   (let ((drgnx-keys--kept nil))
+   (progn
      (drgnx-keys-use '((vscode app editing window)))
      (should (eq (keymap-lookup (current-global-map) "C-o") #'find-file))
      (drgnx-keys-test--as-you (keymap-global-set "C-o" #'ignore))
@@ -608,7 +606,7 @@ from `where-is-internal' over the active maps (keyboard.c's menu items), which s
 (ert-deftest drgnx-keys/your-own-binding-before-the-first-apply-is-kept ()
   "A key the profile claims that you bound in the global map before drgnx applied any keys is kept as well."
   (drgnx-keys-test--live
-   (let ((drgnx-keys--kept nil))
+   (progn
      (drgnx-keys-test--as-you (keymap-global-set "C-o" #'ignore))
      (should (eq (keymap-lookup global-map "C-o") #'open-line))   ; into your map, not Emacs's
      (drgnx-keys-use '((vscode app editing window)))
@@ -617,8 +615,7 @@ from `where-is-internal' over the active maps (keyboard.c's menu items), which s
 (ert-deftest drgnx-keys/your-own-binding-in-a-mode-map-survives-a-later-apply ()
   "A profile key in a mode map that you rebound after drgnx bound it stays yours through later applies."
   (drgnx-keys-test--live
-   (let* ((drgnx-keys--kept nil)
-          (b (seq-find (lambda (b)
+   (let* ((b (seq-find (lambda (b)
                          (let ((sym (cdr (drgnx-commands--keymap-spec (plist-get b :map)))))
                            (and (not (eq sym 'global-map)) (boundp sym) (keymapp (symbol-value sym))
                                 (not (plist-get b :also)))))
@@ -634,7 +631,7 @@ from `where-is-internal' over the active maps (keyboard.c's menu items), which s
                 (should (eq (drgnx-keys--lookup (symbol-value sym) key) #'ignore))
                 (drgnx-keys-apply)
                 (should (eq (drgnx-keys--lookup (symbol-value sym) key) #'ignore)))
-       (drgnx-keys--set (symbol-value sym) key prev)))))
+       (if prev (keymap-set (symbol-value sym) key prev) (keymap-unset (symbol-value sym) key t))))))
 
 (ert-deftest drgnx-keys/the-vscode-profile-indents-with-spaces ()
   "VS Code's default is spaces (M12f-AF-3): the profile sets `indent-tabs-mode' nil, the other profiles leave it."
@@ -864,8 +861,7 @@ from `where-is-internal' over the active maps (keyboard.c's menu items), which s
 (ert-deftest drgnx-keys/which-key-labels-follow-switches ()
   (skip-unless (require 'which-key nil t))
   (let ((which-key-replacement-alist which-key-replacement-alist)
-        (after-load-alist after-load-alist) (features features)
-        (drgnx-keys-modal-snapshots drgnx-keys-modal-snapshots))   ; this fake evil's snapshot stays here
+        (after-load-alist after-load-alist) (features features))
     (defvar evil-normal-state-map)
     (let ((evil-normal-state-map (make-sparse-keymap)))
       (drgnx-keys-test--live
@@ -934,27 +930,6 @@ from `where-is-internal' over the active maps (keyboard.c's menu items), which s
                                 :layers '((vim app editing window)) :defaults drgnx-keys-test--defaults
                                 :maps (lambda (m) (symbol-value m)))))
      (should-not (drgnx-keys-test--conflict r "g o")))))
-
-(defvar drgnx-keys-test-empty-map (make-sparse-keymap))
-
-(ert-deftest drgnx-keys/binding-into-an-empty-map-lifts-nothing ()
-  ;; `keymap-lookup' answers 1 for "SPC f f" in an empty map (SPC is unbound, not a command): no prefix is lifted;
-  ;; the prefix maps made are recorded with no command, and the restore takes them out, so the first apply records
-  ;; what every later one does.  A command on the prefix is still lifted.
-  (let ((drgnx-keys--applied nil) (record '((drgnx-keys-test-empty-map "SPC f f" nil ignore)
-                                            (drgnx-keys-test-empty-map "SPC f" nil :prefix)
-                                            (drgnx-keys-test-empty-map "SPC" nil :prefix))))
-    (setq drgnx-keys-test-empty-map (make-sparse-keymap))
-    (should (null (drgnx-keys--bind 'drgnx-keys-test-empty-map "SPC f f" #'ignore)))
-    (should (equal drgnx-keys--applied record))
-    (drgnx-keys--restore)
-    (should (equal drgnx-keys-test-empty-map '(keymap)))
-    (should (null (drgnx-keys--bind 'drgnx-keys-test-empty-map "SPC f f" #'ignore)))
-    (should (equal drgnx-keys--applied record))
-    (setq drgnx-keys--applied nil drgnx-keys-test-empty-map (make-sparse-keymap))
-    (keymap-set drgnx-keys-test-empty-map "SPC" #'forward-char)
-    (should (equal (drgnx-keys--bind 'drgnx-keys-test-empty-map "SPC f f" #'ignore) "forward-char (SPC)"))
-    (should (equal (assoc-default "SPC" (mapcar #'cdr drgnx-keys--applied)) '(forward-char :prefix)))))
 
 (ert-deftest drgnx-keys/buffers-panel-has-a-right-click-menu ()
   ;; The keys tables say "right-click" for these; the menu must exist.
@@ -1180,24 +1155,6 @@ from `where-is-internal' over the active maps (keyboard.c's menu items), which s
    (should-not (memq 'drgnx-keys--everywhere-alist emulation-mode-map-alists))
    (should-not (cdr drgnx-keys--everywhere-map))
    (should-not drgnx-keys--everywhere-on)))
-
-(defvar drgnx-keys-test--map nil)
-
-(ert-deftest drgnx-keys/a-prefix-made-for-a-key-goes-with-it ()
-  ;; VS Code's Cmd chords on macOS (s-k s-r …) make the prefix s-k where Emacs has none (a batch or terminal Emacs:
-  ;; ns-win's s-k is not there); restoring takes it out again, and one lifted from a command goes back as before
-  (let ((drgnx-keys-test--map (make-sparse-keymap)) (drgnx-keys--applied nil))
-    (keymap-set drgnx-keys-test--map "C-k" #'kill-line)
-    (let ((before (copy-keymap drgnx-keys-test--map)))
-      (drgnx-keys--bind 'drgnx-keys-test--map "s-k s-r" #'forward-char)
-      (drgnx-keys--bind 'drgnx-keys-test--map "s-k s-0" #'backward-char)
-      (drgnx-keys--bind 'drgnx-keys-test--map "C-k C-r" #'forward-word)
-      (should (eq (keymap-lookup drgnx-keys-test--map "s-k s-0") #'backward-char))
-      (should (eq (keymap-lookup drgnx-keys-test--map "C-k C-r") #'forward-word))
-      (drgnx-keys--restore)
-      (should (equal (keymap-lookup drgnx-keys-test--map "C-k") #'kill-line))
-      (should-not (keymap-lookup drgnx-keys-test--map "s-k"))
-      (should (= (length drgnx-keys-test--map) (length before))))))
 
 ;;;; macOS (M12a)
 

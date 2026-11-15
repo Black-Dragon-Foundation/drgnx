@@ -75,42 +75,18 @@ or nil if no layer's profile has `:modal'."
   "MODAL's `:maps' entries of drgnx's own modal keymaps (the leader and panel maps): (KEYMAP-SYMBOL STATE…)."
   (cl-remove-if (lambda (m) (consp (car m))) (plist-get modal :maps)))
 
-(defvar drgnx-keys-modal-snapshots nil
-  "Alist KEYMAP-SYMBOL → a copy of that keymap of the modal engine, taken when the engine's feature loads and before
-drgnx binds anything in it: what the engine itself binds, for the claims per state.  Nil until the engine loads.
-Its size is fixed: one copy per keymap the profiles' `:modal' `:maps' name.")
-
-(defun drgnx-keys-modal-take-snapshots (feature profiles)
-  "Copy the keymaps of FEATURE that the `:modal' `:maps' of PROFILES (alist PROFILE → plist) name into
-`drgnx-keys-modal-snapshots'; a keymap not defined (yet) is skipped.  Returns the snapshots."
-  (setq drgnx-keys-modal-snapshots (drgnx-keys-modal-read-snapshots feature profiles)))
-
-(defun drgnx-keys-modal-read-snapshots (feature profiles)
-  "Copies of the keymaps of FEATURE that the `:modal' `:maps' of PROFILES name, as they are now (alist
-KEYMAP-SYMBOL → keymap); a keymap not defined (yet) is skipped.  `drgnx-keys-apply' reads them again once its own
-bindings are out, so the claims see what a config.el bound in evil's maps since evil loaded."
+(defun drgnx-keys-modal-engine-maps (feature profiles)
+  "The keymaps of FEATURE that the `:modal' `:maps' of PROFILES (alist PROFILE → plist) name, as they are now (alist
+KEYMAP-SYMBOL → keymap): what the engine itself binds, for the claims per state.  drgnx never writes them (a profile's
+keys for a state sit in the profile map's auxiliary keymaps, yours in your map's), so they are read live.  A keymap
+not defined (yet) is skipped."
   (let (out)
     (dolist (p profiles)
       (dolist (m (drgnx-keys-modal--engine-maps (plist-get (cdr p) :modal)))
         (let ((sym (cdar m)))
           (when (and (eq (caar m) feature) (not (assq sym out)) (boundp sym) (keymapp (symbol-value sym)))
-            (push (cons sym (copy-keymap (symbol-value sym))) out)))))
+            (push (cons sym (symbol-value sym)) out)))))
     (nreverse out)))
-
-(defun drgnx-keys-modal--snapshot-evil ()
-  "When evil has loaded: snapshot its state maps (`drgnx-keys-modal-take-snapshots').  Never an error."
-  (with-demoted-errors "drgnx: evil's keymaps not read: %S"
-    (when (fboundp 'drgnx-keys--ensure-profiles)
-      (drgnx-keys--ensure-profiles)
-      (drgnx-keys-modal-take-snapshots 'evil drgnx-keys-profiles))))
-
-(defvar drgnx-keys-modal--snapshot-registered nil
-  "Non-nil once `drgnx-keys-modal--snapshot-evil' waits for evil (a reload of this file registers it once).")
-
-;; Registered as this file loads, before any binding drgnx defers to evil's load, so it runs first.
-(unless drgnx-keys-modal--snapshot-registered
-  (setq drgnx-keys-modal--snapshot-registered t)
-  (eval-after-load 'evil #'drgnx-keys-modal--snapshot-evil))
 
 (defun drgnx-keys-modal-mixed-p (layers profiles)
   "Non-nil when LAYERS has a layer of a profile in PROFILES (alist PROFILE → plist) without `:modal': a modal

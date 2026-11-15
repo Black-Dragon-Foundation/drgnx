@@ -14,6 +14,9 @@
 (defvar evil-motion-state-map)
 (defvar evil-visual-state-map)
 (defvar evil-insert-state-map)
+(declare-function evil-local-mode "evil-core")
+(declare-function evil-normal-state "evil-states")
+(declare-function evil-insert-state "evil-states")
 
 (defconst drgnx-keys-claims-evil-test--profiles
   (drgnx-keys-load-profiles (expand-file-name "keys" drgnx-dir))
@@ -54,6 +57,17 @@ started by an apply (the after-apply functions are off)."
   (make-directory (drgnx-user-dir) t)
   (drgnx-test-areas-put-old 'keys (format "%S" plist)))
 
+(defun drgnx-keys-claims-evil-test--maps ()
+  "evil's state maps the shipped profiles name, live (`drgnx-keys-modal-engine-maps')."
+  (drgnx-keys-modal-engine-maps 'evil drgnx-keys-claims-evil-test--profiles))
+
+(defun drgnx-keys-claims-evil-test--in (state key)
+  "What KEY runs in a temp buffer with evil on, in STATE (normal or insert)."
+  (with-temp-buffer
+    (evil-local-mode 1)
+    (if (eq state 'insert) (evil-insert-state) (evil-normal-state))
+    (key-binding (kbd key))))
+
 (defun drgnx-keys-claims-evil-test--resolve (layers &rest args)
   (apply #'drgnx-keys-resolve :commands (drgnx-commands-all) :layers layers
          (append args (list :profiles drgnx-keys-claims-evil-test--profiles))))
@@ -71,21 +85,21 @@ started by an apply (the after-apply functions are off)."
     out))
 
 (defun drgnx-keys-claims-evil-test--record ()
-  "What evil's four state maps bind on every key of the snapshots: ((MAPSYM KEY . DEF)…)."
+  "What evil's four state maps bind on every key they hold: ((MAPSYM KEY . DEF)…)."
   (let (out)
-    (pcase-dolist (`(,sym . ,snap) drgnx-keys-modal-snapshots)
+    (pcase-dolist (`(,sym . ,snap) (mapcar (lambda (m) (cons (car m) (copy-keymap (cdr m)))) (drgnx-keys-claims-evil-test--maps)))
       (dolist (k (drgnx-keys-claims-evil-test--leaves snap))
         (let ((def (lookup-key (symbol-value sym) k)))
           (push (cons sym (cons k (if (keymapp def) 'prefix def))) out))))
     (nreverse out)))
 
-(ert-deftest drgnx-keys-claims/snapshots-replace-the-hand-list ()
+(ert-deftest drgnx-keys-claims/evils-maps-replace-the-hand-list ()
   (drgnx-keys-claims-evil-test--with
-    (should (equal (sort (mapcar #'car drgnx-keys-modal-snapshots) #'string<)
+    (should (equal (sort (mapcar #'car (drgnx-keys-claims-evil-test--maps)) #'string<)
                    '(evil-insert-state-map evil-motion-state-map evil-normal-state-map evil-visual-state-map)))
     (let* ((modal (plist-get (alist-get 'vim drgnx-keys-claims-evil-test--profiles) :modal))
            (b (list :id 'toggle-sidebar :key "C-b" :map 'global-map :layer 'vscode :rank 1))
-           (cls (drgnx-keys-modal-claims (list b) modal 'vim 2 drgnx-keys-modal-snapshots nil)))
+           (cls (drgnx-keys-modal-claims (list b) modal 'vim 2 (drgnx-keys-claims-evil-test--maps) nil)))
       ;; C-b is evil's in its motion map (Task 1's recon), and only there
       (should (equal (mapcar (lambda (c) (cdr (drgnx-commands--keymap-spec (plist-get c :map)))) cls)
                      '(evil-motion-state-map)))
@@ -93,7 +107,7 @@ started by an apply (the after-apply functions are off)."
     ;; The mixed preset read from evil's maps: VS Code's six Ctrl keys stay global; C-p is evil's in its normal map,
     ;; which evil's visual state enables too.
     (let ((r (drgnx-keys-claims-evil-test--resolve drgnx-keys-claims-evil-test--mixed
-                                                   :snapshots drgnx-keys-modal-snapshots)))
+                                                   :snapshots (drgnx-keys-claims-evil-test--maps))))
       (pcase-dolist (`(,id ,key) '((open-file "C-o") (close-tab "C-w") (toggle-sidebar "C-b") (go-quick-open "C-p")
                                    (file-new "C-n") (go-symbol-project "C-t")))
         (should (equal (list id key t)
@@ -105,14 +119,14 @@ started by an apply (the after-apply functions are off)."
                                           (plist-get r :conflicts))
                                 :states)
                      '(normal visual))))
-    ;; With no hand list at all, the snapshot still claims C-b; without the snapshot, nothing does.
+    ;; With no hand list at all, evil's maps still claim C-b; without them, nothing does.
     (let ((bare (mapcar (lambda (p) (if (eq (car p) 'vim) (cons 'vim (plist-put (copy-sequence (cdr p)) :claims nil)) p))
                         drgnx-keys-claims-evil-test--profiles)))
       (cl-flet ((claim-on (r key) (seq-find (lambda (c) (and (equal (plist-get c :key) key) (plist-get c :states)))
                                             (plist-get r :conflicts))))
         (let ((with (drgnx-keys-resolve :commands (drgnx-commands-all) :profiles bare
                                         :layers drgnx-keys-claims-evil-test--mixed
-                                        :snapshots drgnx-keys-modal-snapshots))
+                                        :snapshots (drgnx-keys-claims-evil-test--maps)))
               (without (drgnx-keys-resolve :commands (drgnx-commands-all) :profiles bare
                                            :layers drgnx-keys-claims-evil-test--mixed)))
           (should (equal (plist-get (claim-on with "C-b") :states) '(normal visual motion)))
@@ -127,7 +141,7 @@ started by an apply (the after-apply functions are off)."
                              drgnx-keys-claims-evil-test--profiles))
            (r (drgnx-keys-resolve :commands (drgnx-commands-all) :profiles profiles
                                   :layers drgnx-keys-claims-evil-test--mixed
-                                  :snapshots drgnx-keys-modal-snapshots))
+                                  :snapshots (drgnx-keys-claims-evil-test--maps)))
            (c (seq-find (lambda (c) (equal (plist-get c :key) "C-^")) (plist-get r :conflicts))))
       (should (seq-find (lambda (b) (and (eq (plist-get b :id) 'test-caret) (equal (plist-get b :key) "C-^")))
                         (plist-get r :bindings)))
@@ -140,34 +154,36 @@ started by an apply (the after-apply functions are off)."
   (interactive))
 
 (ert-deftest drgnx-keys-claims/your-own-key-in-evils-map-is-kept ()
-  ;; config.el bound C-p in evil's normal-state map after evil loaded: a winning key is not bound over it; it is said.
+  ;; you bound C-p in evil's normal-state map after evil loaded: it goes to your map's normal-state auxiliary keymap
+  ;; and wins over the profile's key there, which is said; evil's own map is never written.
   (drgnx-keys-claims-evil-test--with
     (drgnx-keys-claims-evil-test--live
-      (keymap-set evil-normal-state-map "C-p" #'drgnx-keys-claims-evil-test--mine)
       (unwind-protect
           (progn
+            (let ((this-command 'eval-expression)) (keymap-set evil-normal-state-map "C-p" #'drgnx-keys-claims-evil-test--mine))
             (drgnx-keys-claims-evil-test--user '(:layers ((vim app editing window)) :bind ((go-quick-open "C-p"))))
             (drgnx-keys-apply)
-            (should (eq (keymap-lookup evil-normal-state-map "C-p") #'drgnx-keys-claims-evil-test--mine))
-            (should (eq (keymap-lookup evil-insert-state-map "C-p") #'drgnx-quick-open))   ; evil's own: replaced
+            (should (eq (keymap-lookup evil-normal-state-map "C-p") 'evil-paste-pop))
+            (should (eq (drgnx-keys-claims-evil-test--in 'normal "C-p") #'drgnx-keys-claims-evil-test--mine))
+            (should (eq (drgnx-keys-claims-evil-test--in 'insert "C-p") #'drgnx-quick-open))   ; evil's own: beaten
             (should (eq (keymap-lookup (current-global-map) "C-p") #'drgnx-quick-open))
             (should-not (member '("C-p" . (evil . evil-normal-state-map))
                                 (drgnx-cmd-bound (drgnx-commands-get 'go-quick-open))))
-            (let ((c (seq-find (lambda (c) (and (equal (plist-get c :key) "C-p") (eq (plist-get c :map) 'evil-normal-state-map)))
+            (let ((c (seq-find (lambda (c) (and (equal (plist-get c :key) "C-p") (eq (plist-get c :map) 'evil-normal-state-map)
+                                                (equal (plist-get (plist-get c :winner) :layer) "your own binding, kept")))
                                (plist-get drgnx-keys-last :conflicts))))
               (should (equal (drgnx-keys-conflict-text c)
-                             "C-p drgnx-keys-claims-evil-test--mine (your own binding, kept) over Quick Open (user) [claim, in evil-normal-state-map]")))
-            (drgnx-keys--restore)
-            (should (eq (keymap-lookup evil-normal-state-map "C-p") #'drgnx-keys-claims-evil-test--mine)))
-        (keymap-set evil-normal-state-map "C-p" #'evil-paste-pop)))))
+                             "C-p drgnx-keys-claims-evil-test--mine (your own binding, kept) over Quick Open (user) [claim, in evil-normal-state-map]"))))
+        (drgnx-keys-forget-yours)
+        (should (eq (keymap-lookup evil-normal-state-map "C-p") 'evil-paste-pop))))))
 
 (ert-deftest drgnx-keys-claims/user-key-wins-in-evils-map ()
   (drgnx-keys-claims-evil-test--with
     (drgnx-keys-claims-evil-test--live
       (drgnx-keys-claims-evil-test--user '(:layers ((vim app editing window)) :bind ((go-quick-open "C-p"))))
-      (should (eq (keymap-lookup evil-normal-state-map "C-p") 'evil-paste-pop))
       (drgnx-keys-apply)
-      (should (eq (keymap-lookup evil-normal-state-map "C-p") #'drgnx-quick-open))
+      (should (eq (keymap-lookup evil-normal-state-map "C-p") 'evil-paste-pop))     ; never written
+      (should (eq (drgnx-keys-claims-evil-test--in 'normal "C-p") #'drgnx-quick-open))
       (should (eq (keymap-lookup (current-global-map) "C-p") #'drgnx-quick-open))
       (should (member '("C-p" . (evil . evil-normal-state-map)) (drgnx-cmd-bound (drgnx-commands-get 'go-quick-open))))
       (let ((c (seq-find (lambda (c) (and (equal (plist-get c :key) "C-p") (plist-get c :states)))
@@ -175,10 +191,11 @@ started by an apply (the after-apply functions are off)."
         (should (eq (plist-get (plist-get c :winner) :layer) 'user))
         (should (memq 'normal (plist-get c :states)))
         (should (string-search "Quick Open (user) over" (drgnx-keys-conflict-text c))))
-      (drgnx-keys--restore)
-      (should (eq (keymap-lookup evil-normal-state-map "C-p") 'evil-paste-pop)))))
+      (drgnx-keys-claims-evil-test--user '(:bind ()))
+      (drgnx-keys-apply)
+      (should (eq (drgnx-keys-claims-evil-test--in 'normal "C-p") 'evil-paste-pop)))))
 
-(ert-deftest drgnx-keys-claims/switches-restore-evils-maps ()
+(ert-deftest drgnx-keys-claims/switches-leave-evils-maps-alone ()
   (drgnx-keys-claims-evil-test--with
     (drgnx-keys-claims-evil-test--live
       (let ((record (drgnx-keys-claims-evil-test--record))
@@ -186,9 +203,10 @@ started by an apply (the after-apply functions are off)."
         (should (> (length record) 100))
         (drgnx-keys-claims-evil-test--user '(:bind ((go-quick-open "C-p"))))
         (drgnx-keys-use '((vim app editing window)))
-        (should (eq (keymap-lookup evil-normal-state-map "C-p") #'drgnx-quick-open))
-        (should (eq (keymap-lookup evil-insert-state-map "C-p") #'drgnx-quick-open))
-        ;; VS Code: nothing of drgnx's is left in evil's maps or the leader map
+        (should (eq (drgnx-keys-claims-evil-test--in 'normal "C-p") #'drgnx-quick-open))
+        (should (eq (drgnx-keys-claims-evil-test--in 'insert "C-p") #'drgnx-quick-open))
+        (should (equal (funcall changed record) nil))         ; evil's maps never written
+        ;; VS Code: nothing of drgnx's is left for evil's states or in the leader map
         (drgnx-keys-use '((vscode app editing window)))
         (should (equal (funcall changed record) nil))
         (should-not (seq-filter (lambda (k) (let ((def (lookup-key drgnx-modal-leader-map k)))
@@ -197,13 +215,11 @@ started by an apply (the after-apply functions are off)."
         (drgnx-keys-use drgnx-keys-claims-evil-test--mixed)
         (drgnx-keys-claims-evil-test--user '(:bind ()))
         (drgnx-keys-use '((vim app editing window)))
-        (should (eq (keymap-lookup evil-normal-state-map "C-p") 'evil-paste-pop))
+        (should (eq (drgnx-keys-claims-evil-test--in 'normal "C-p") 'evil-paste-pop))
         (drgnx-keys--restore)
         (should (equal (funcall changed record) nil))))))
 
 (defvar evil-state)
-(declare-function evil-local-mode "evil-core")
-(declare-function evil-normal-state "evil-states")
 
 (ert-deftest drgnx-keys-claims/a-key-in-a-mode-map-works-in-evils-normal-state ()
   ;; evil's normal state sits above every mode map: a key another layer (here keys.eld) binds in a mode map has
@@ -227,7 +243,7 @@ started by an apply (the after-apply functions are off)."
         (should (eq (key-binding "j") #'evil-next-line))))))
 
 (ert-deftest drgnx-keys-claims/a-binding-in-evils-maps-after-it-loaded-is-claimed ()
-  ;; the snapshot is read again at every apply: a config.el binding made after evil loaded is in the claims
+  ;; evil's maps are read live at every apply: a package's binding made after evil loaded is in the claims
   (drgnx-keys-claims-evil-test--with
     (drgnx-keys-claims-evil-test--live
       (let ((evil-key (lookup-key evil-normal-state-map (kbd "C-s"))))

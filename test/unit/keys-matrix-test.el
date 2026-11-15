@@ -329,7 +329,6 @@ buffer does not answer: (KEY SHEET-SAYS KEY-BINDING-SAYS) each."
 of yours."
   (drgnx-keys-use '((mx-empty app editing window)))
   (when (fboundp 'drgnx-keys-forget-yours) (drgnx-keys-forget-yours))
-  (when (boundp 'drgnx-keys--kept) (set 'drgnx-keys--kept nil))
   (pcase-dolist (`(,k . ,def) (plist-get keys-matrix--fresh :global))
     (if def (define-key global-map (kbd k) def)
       (ignore-errors (define-key global-map (kbd k) nil t))))

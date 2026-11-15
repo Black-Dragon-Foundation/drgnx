@@ -2453,18 +2453,17 @@ for those layers, however often the keys are applied again (Toggle Modal Editing
   A modal profile's entries for commands outside its layer's scopes are **extras**: their keys in a `:maps` keymap
   are bound next to the command's own layer's keys, never replacing them. `drgnx-keys-after-apply-functions` (abnormal
   hook, the layers) runs at the end of every `drgnx-keys-apply`; the core adds `drgnx-modal-sync-engine` to it.
-- **Claims per state** (`drgnx-keys-modal-claims`). When `drgnx-keys-modal` loads it registers
-  `(eval-after-load 'evil …)`, which copies evil's state maps named in `:maps` into `drgnx-keys-modal-snapshots`
-  before any binding drgnx defers to evil's load (a map not defined is skipped). `drgnx-keys-resolve :snapshots`
-  (`drgnx-keys-apply` passes that variable) meets every other layer's `global-map` binding with what a snapshot binds
+- **Claims per state** (`drgnx-keys-modal-claims`). Once evil is loaded, `drgnx-keys-apply` reads evil's state maps
+  named in `:maps` live (`drgnx-keys-modal-engine-maps`; drgnx never writes them, a map not defined is skipped) and
+  passes them as `drgnx-keys-resolve :snapshots`, which meets every other layer's `global-map` binding with what a snapshot binds
   on its key (or a prefix of it, or keys under it), and every `global-map` or panel-map binding
   (`drgnx-keys-modal-panel-maps`) with the leader and panel maps' bindings of the resolution; without snapshots the
   `:claims` with STATES stand in, each on the engine maps whose states it covers. In a mixed stack there is no
   insert-state claim (Vim's insert keys are off there). The binding is kept; the conflict carries `:states` and
-  `:elsewhere t`. A binding of a higher rank gets `:also` (the engine maps), which `drgnx-keys-apply` binds through
-  `drgnx-keys--apply-binding` and records in `drgnx-cmd-bound`, so `drgnx-keys--restore` undoes it — unless the
-  engine map's key now differs from the snapshot and is not empty (`drgnx-keys--theirs`: the user's own binding, kept
-  and reported as a conflict); leader or panel keys it beats are dropped and each named among the losers. In panels the leader and panel maps always win (they are above the panel's own map).
+  `:elsewhere t`. A binding of a higher rank gets `:also` (the engine maps), which `drgnx-keys-apply` puts in the
+  profile map's auxiliary keymap for each map's state (`docs/develop/key-layers.md`, "evil's states") and records in
+  `drgnx-cmd-bound` — unless you bound the key for that state yourself (`<normal-state> C-p` in `drgnx-keys--yours`):
+  then yours wins and is reported as your own binding, kept; leader or panel keys it beats are dropped and each named among the losers. In panels the leader and panel maps always win (they are above the panel's own map).
 - **Commands.** `modal-leader` (Leader Menu) reads the leader's keys from any state: a transient map holding the
   leader's `SPC`, and `SPC` read again as if typed (`(no-record . 32)` in `unread-command-events`: in the command
   keys which-key reads, but not in a keyboard macro being recorded, which would replay `SPC SPC`), so which-key shows the `SPC` popup with the leader's labels (`+File`, the command titles).
