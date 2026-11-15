@@ -357,6 +357,14 @@ failed load's keys are not taken for the new load's)."
      (should (eq (keymap-lookup (current-global-map) "C-o") #'find-file))
      (should-not (gethash "C-o" drgnx-keys--yours)))))
 
+(ert-deftest drgnx-keys/yours-a-load-with-no-keys-of-yours-reads-no-file ()
+  "With no key of yours recorded, a load that ends asks nothing of the file system (no truename): tramp loading for a
+remote name, say, is no business of the keys."
+  (let ((drgnx-keys--yours (make-hash-table :test #'equal)) (drgnx-keys--yours-in-maps (make-hash-table :test #'equal))
+        (drgnx-keys--loading (make-hash-table :test #'equal)))
+    (cl-letf (((symbol-function 'file-truename) (lambda (&rest _) (error "Asked for a truename"))))
+      (drgnx-keys--loaded "/ssh:host.invalid:/no/such/file.el"))))
+
 (ert-deftest drgnx-keys/yours-a-native-load-records-the-source ()
   "A file of yours loaded natively compiled (its .eln found for its .elc) records the source, so a reload of the .el
 forgets its keys."

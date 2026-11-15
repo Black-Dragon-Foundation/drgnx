@@ -971,11 +971,14 @@ wait (`sit-for', `accept-process-output')."
 (defun drgnx-keys--loaded (file)
   "On `after-load-functions': FILE has loaded (whatever loaded it: the start, M-x load-file, a `load' in config.el).
 The keys it bound in an earlier load and not in this one leave your map, and the profile's key comes back on each.
-Keys you bound by command stay.  A load that fails midway does not get here, so nothing is forgotten then."
-  (let* ((base (file-name-sans-extension (file-truename file)))
-         (kept (cdr (gethash base drgnx-keys--loading))))
-    (remhash base drgnx-keys--loading)
-    (drgnx-keys--forget-file base kept)))
+Keys you bound by command stay.  A load that fails midway does not get here, so nothing is forgotten then.  With no
+key of yours recorded there is nothing to forget, and the file system is not asked (a load of tramp for a remote name)."
+  (unless (and (hash-table-empty-p drgnx-keys--loading) (hash-table-empty-p drgnx-keys--yours)
+               (hash-table-empty-p drgnx-keys--yours-in-maps))
+    (let* ((base (file-name-sans-extension (file-truename file)))
+           (kept (cdr (gethash base drgnx-keys--loading))))
+      (remhash base drgnx-keys--loading)
+      (drgnx-keys--forget-file base kept))))
 
 (defun drgnx-keys--forget-file (base &optional kept)
   "Forget the keys of yours whose source is BASE (a file's truename without its extension), except those in KEPT
