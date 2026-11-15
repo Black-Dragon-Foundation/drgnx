@@ -17,7 +17,6 @@
 (require 'drgnx-icons)
 (require 'drgnx-ui-kit)                 ; the header's buttons
 (require 'drgnx-pixels)
-(require 'drgnx-state)                  ; the panel's width, from the store's events
 
 (defvar drgnx-agent-panel--session)
 (defvar drgnx-agent-panel--shown-keys)
@@ -246,26 +245,6 @@ else when the chat's toggle for its type is on."
   "A step type of the strip whose detail is closed." :group 'drgnx-agent-panel)
 (defface drgnx-agent-panel-tag-on '((t :inherit drgnx-pill-on))
   "A step type of the strip whose detail is open (agent-panel.html `.disc .t.open')." :group 'drgnx-agent-panel)
-
-(defvar-local drgnx-agent-panel--strip-width nil
-  "The width in pixels of the window that last showed this panel (the state store's events), or nil.")
-
-(defun drgnx-agent-panel--width ()
-  "The width in pixels the strip is laid out for: the panel's window's, as the state store last told, or nil."
-  drgnx-agent-panel--strip-width)
-
-(defun drgnx-agent-panel--resized (data)
-  "A window of DATA's frame shows a panel or changed size (`windows-changed', `pane-resized'): a panel whose width
-changed lays its strip out again."
-  (let ((frame (plist-get data :frame)))
-    (dolist (w (append (or (plist-get data :windows) (list (plist-get data :window)))
-                       (and (frame-live-p frame) (drgnx-state-windows frame))))
-      (when (window-live-p w)
-        (with-current-buffer (window-buffer w)
-          (when (derived-mode-p 'drgnx-agent-panel-mode)
-            (let ((width (window-body-width w t)))
-              (unless (eql width drgnx-agent-panel--strip-width)
-                (setq drgnx-agent-panel--strip-width width)))))))))
 
 (defun drgnx-agent-panel-steps-setup ()
   (drgnx-command-define 'agents-panel-toggle-type :category "Agents" :title "Open or Close a Step Type"
