@@ -18,7 +18,6 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'subr-x)
-(require 'drgnx-view)
 (require 'drgnx-registry)
 (require 'drgnx-ui-kit)                 ; the bar's buttons
 (require 'drgnx-pixels)
@@ -31,7 +30,6 @@
 
 (defvar drgnx-agent-panel--session)
 (defvar drgnx-agent-panel--snap)
-(defvar drgnx-agent-panel--shown-keys)
 (defvar drgnx-agent-panel-mode-map)
 (defvar drgnx-work-resume-text)
 (declare-function drgnx-agent-panel--ask "drgnx-agent-panel")
@@ -44,10 +42,6 @@
 (defun drgnx-agent-panel-composer--queue ()
   "The notes waiting in the snapshot, a list of strings."
   (append (plist-get drgnx-agent-panel--snap :queue) nil))
-
-(defun drgnx-agent-panel-composer-keys ()
-  "The panel's own row under the transcript: the composer.  The queued notes are the hub's rows (`c:q:N')."
-  (list (list :composer)))
 
 ;;;; Rows
 
@@ -67,14 +61,6 @@
     (when face (add-face-text-property 0 (length s) face nil s))
     (add-text-properties 0 (length s) (list 'mouse-face 'drgnx-hover 'keymap map 'help-echo help) s)
     s))
-
-(defun drgnx-agent-panel-composer--field ()
-  "The composer's field: one card line to the panel's right edge (12 px in), in one face, since a box is drawn per run
-of one face; a click writes to the agent."
-  (let ((s (concat " Steer the agent…  (@ file, / command)"
-                   (propertize " " 'display `(space :align-to (- right (,(drgnx-px 12))))))))
-    (add-face-text-property 0 (length s) '(drgnx-agent-panel-subtle drgnx-card-single) nil s)
-    (concat (drgnx-agent-panel-composer--click s #'drgnx-agent-panel-send nil "s: write to the agent") "\n")))
 
 (defun drgnx-agent-panel-fork ()
   "Start a second agent from the chat's last step: the composer's Fork (Fork from the Step at Point picks another)."
@@ -115,12 +101,6 @@ a command, then Fork, the pause icon (stop after this step) and Send, an arrow, 
               "")
             (propertize " " 'display `(space :align-to (- right (,(+ (string-pixel-width buttons) (drgnx-px 20))))))
             buttons)))
-
-(defun drgnx-agent-panel-composer--row ()
-  "The composer as a row of the transcript (until the transcript drops it): the field's card, where a click writes to
-the agent, and under it the bar (`drgnx-agent-panel-composer--bar').
-The bar sits under the card, not in it: its chips and buttons have boxes of their own."
-  (concat (drgnx-agent-panel-composer--field) " " (drgnx-agent-panel-composer--bar) "\n"))
 
 ;;;; Completion in the composer
 
@@ -285,9 +265,7 @@ its end, and is a field of its own (line moves stop at it); typing at the field'
   (drgnx-agent-panel-composer--refit))   ; a chip more or less may wrap the bar
 
 (defun drgnx-agent-panel-composer-redraw ()
-  "The snapshot changed: the composer is drawn again (the transcript's row, and the composer's buffer's bar)."
-  (when (drgnx-view-p drgnx-view)
-    (drgnx-view-dirty drgnx-view (list (list :composer))))
+  "The snapshot changed: the composer's bar is drawn again."
   (when-let* ((c drgnx-agent-companion--composer) ((buffer-live-p c)))
     (with-current-buffer c
       (drgnx-agent-panel--companion-take)

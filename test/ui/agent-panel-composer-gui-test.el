@@ -103,7 +103,7 @@ header line's height is known after the first redisplay; at most 5 rounds)."
             (dolist (profile '(vscode emacs))
               (drgnx-keys-use `((,profile app editing window)))
               (let* ((key (where-is-internal #'drgnx-agent-panel-compose (list drgnx-agent-panel-mode-map) t))
-                     (pos (with-current-buffer panel (drgnx-view-row-start drgnx-view '(:rows-end))))
+                     (pos (window-start tw))   ; a row of the transcript (Sjá's, the hub's) that the window shows
                      (posn (posn-at-point pos tw)))
                 (should (equal (list profile "s") (list profile (and key (key-description key)))))
                 (should posn)

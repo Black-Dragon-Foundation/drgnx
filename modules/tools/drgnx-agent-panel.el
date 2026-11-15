@@ -125,6 +125,7 @@ to its top.  The hub gives at most 50."
 (declare-function drgnx-agent-panel-huddle-teardown "drgnx-agent-panel-huddle")
 (declare-function drgnx-agent-panel-huddle--event "drgnx-agent-panel-huddle")
 (declare-function drgnx-agent-panel-composer-setup "drgnx-agent-panel-composer")
+(declare-function drgnx-agent-panel-composer-redraw "drgnx-agent-panel-composer")
 
 (declare-function drgnx-agent-panel-cards-setup "drgnx-agent-panel-cards")
 
@@ -269,7 +270,8 @@ nothing."
 (defun drgnx-agent-panel--take-snapshot (snap)
   "SNAP, the session's snapshot, is the latest: what the commands, the composer and the cards read.  The header and the
 chips are the hub's rows, which it builds from its own snapshot."
-  (setq drgnx-agent-panel--snap snap))
+  (setq drgnx-agent-panel--snap snap)
+  (drgnx-agent-panel-composer-redraw))
 
 (defun drgnx-agent-panel--take-entries (pairs &optional from-slice)
   "PAIRS, (INDEX ENTRY) as the hub sends them, are kept for the cards, the pins and the step at point; the hub draws

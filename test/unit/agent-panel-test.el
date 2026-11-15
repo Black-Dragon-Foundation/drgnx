@@ -13,7 +13,7 @@
 (load(expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (drgnx-test-modules-preload '(tools/agent-panel))
 
-(declare-function drgnx-agent-panel-composer--row "drgnx-agent-panel-composer")
+(declare-function drgnx-agent-panel-composer--bar "drgnx-agent-panel-composer")
 (declare-function drgnx-agent-panel--composer-of "drgnx-agent-panel-composer")
 (declare-function drgnx-agent-panel--look-params "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--key-at "drgnx-agent-panel")
@@ -160,11 +160,11 @@ unanswered, and panel \"s1\" as `buf'."
   (drgnx-agent-panel-test--with
     (with-current-buffer buf
       (drgnx-agent-panel--take-snapshot (list :id "s1" :status "idle" :paired t :waiting t))
-      (should-not (string-match-p "Pair · waiting" (drgnx-agent-panel-composer--row)))
+      (should-not (string-match-p "Pair · waiting" (drgnx-agent-panel-composer--bar)))
       (drgnx-command-define 'agents-pair :category "Agents" :title "Pair" :command #'ignore :doc "test")
       (unwind-protect
           (progn (drgnx-agent-panel--take-snapshot (list :id "s1" :status "idle" :paired t :waiting t))
-                 (should (string-match-p "Pair · waiting for you" (drgnx-agent-panel-composer--row))))
+                 (should (string-match-p "Pair · waiting for you" (drgnx-agent-panel-composer--bar))))
         (drgnx-command-undefine 'agents-pair)))))
 
 (declare-function drgnx-agent-panel-allow "drgnx-agent-panel-cards")
@@ -730,20 +730,14 @@ or makes the default."
         (should (drgnx-agent-panel-test--inherits-p 'drgnx-agent-panel-tag 'drgnx-pill))
         (should (drgnx-agent-panel-test--inherits-p 'drgnx-agent-panel-tag-on 'drgnx-pill-on))))))
 
-(ert-deftest drgnx-agent-panel/composer-is-a-field-card ()
-  "agent-panel.html `.composer': the field's card (\"Steer the agent…\", a click writes to the agent) and the bar:
-the model and the mode as chips that switch them, Fork, the pause icon and Send (an arrow) as buttons."
+(ert-deftest drgnx-agent-panel/the-composers-bar-has-its-chips-and-buttons ()
+  "agent-panel.html `.composer': the bar under the field (the field is the composer's buffer,
+agent-panel-composer-test): the model and the mode as chips that switch them, Fork, the pause icon and Send (an
+arrow) as buttons."
   (drgnx-agent-panel-test--with
     (with-current-buffer buf
       (setq drgnx-agent-panel--snap (list :model "opus" :mode "accept edits"))
-      (let ((row (drgnx-agent-panel-composer--row)))
-        (should (string-search "Steer the agent" row))
-        (should (eq 'drgnx-agent-panel-send
-                    (lookup-key (get-text-property (string-search "Steer" row) 'keymap row) [mouse-1])))
-        (should (memq 'drgnx-card-single (drgnx-agent-panel-test--face-at row "Steer")))
-        ;; the field's card is one run of one face to its end (a box is drawn per run)
-        (let ((eol (string-search "\n" row)))
-          (should (equal (get-text-property 1 'face row) (get-text-property (1- eol) 'face row))))
+      (let ((row (drgnx-agent-panel-composer--bar)))
         (should (memq 'drgnx-agent-panel-chip (drgnx-agent-panel-test--face-at row "opus")))
         (should (eq 'drgnx-agent-panel-switch-model
                     (lookup-key (get-text-property (string-search "opus" row) 'keymap row) [mouse-1])))
