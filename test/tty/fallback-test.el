@@ -45,7 +45,9 @@
 (defun drgnx-tty-fallback-test--barrier (s c)
   "Wait until the daemon has read and run everything sent to client C before this call: one more key, F9 (a command that
 only notes itself), goes down the same input stream, and keys are read in order.  What \"nothing else may follow\"
-means is then settled, with no time passed; the note is taken out of the record."
+means is then settled, with no time passed; the note is taken out of the record.  F9 is a VS Code key: the module
+stages are over first, so none rebinds it."
+  (drgnx-tty-session-wait-stages s)
   (drgnx-tty-session-eval s '(progn (unless (fboundp 'kx-sentinel) (defun kx-sentinel () (interactive) nil))
                                     (global-set-key (kbd "<f9>") #'kx-sentinel) t))
   (drgnx-tty-session-eval s '(setq kx-seen (assq-delete-all 'kx-sentinel kx-seen)))

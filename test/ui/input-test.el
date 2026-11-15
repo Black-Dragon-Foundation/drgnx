@@ -2,6 +2,7 @@
 ;; test-class: cond
 (require 'ert)
 (require 'drgnx-uitest)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 
 (defun drgnx-test--lines-buffer ()
   "Show a fresh buffer with 60 numbered lines in a single window; return it."
@@ -155,6 +156,7 @@ clicked on that glyph, not on the next one.  Pattern D (one redisplayed frame re
 (ert-deftest drgnx-ui-input/driven-commands-are-not-timer-code-for-the-guard ()
   ;; GUI suites start from a timer; commands driven by drgnx-uitest-run must not inherit
   ;; that timer context (drgnx's no-prompt guard would refuse their prompts).
+  (drgnx-test-wait-stages)
   (keymap-global-set "C-c g" #'drgnx-test--record-guard-context)
   (unwind-protect
       (let ((drgnx-guard--timer-fn 'outer-timer))

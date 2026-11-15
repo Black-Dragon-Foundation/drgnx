@@ -174,6 +174,7 @@ sets `kx-returned' when it ends (C-g ends it early)."
             t))
       (let ((c (drgnx-tty-session-client s :env '("TERM=xterm-256color"))))
         (drgnx-tty-keys-test--answer-kkp s c)
+        (drgnx-tty-session-wait-stages s)
         (drgnx-tty-session-key c "<f12>" 'kkp)
         (drgnx-test-wait (lambda () (file-exists-p started)) :secs 10 :what "the program to start")
         ;; a kkp terminal sends C-g as a raw byte only once the program set its flags to 0 (CSI = 0 ; 1 u);

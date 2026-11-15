@@ -58,6 +58,7 @@ at the deadline (the caller says what is off)."
             (should (eq (drgnx-frame-role aux) 'aux))
             (should (equal (drgnx-frame-buffers aux) (list shown mine1 mine2)))   ; the premise: three buffers are this window's
             (add-hook 'minibuffer-exit-hook grab -90)
+            (drgnx-test-wait-stages)
             (unwind-protect
                 (drgnx-uitest-run (drgnx-uitest-key-events "C-x b TAB C-g"))
               (remove-hook 'minibuffer-exit-hook grab)))

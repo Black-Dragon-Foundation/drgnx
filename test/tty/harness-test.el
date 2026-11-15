@@ -205,6 +205,7 @@
                    "é1\n2"))
     (drgnx-tty-session-key s "<up>")
     (should (eq (drgnx-tty-session-wait s '(with-current-buffer "*scratch*" (and (= (line-number-at-pos) 1) 1))) 1))
+    (drgnx-tty-session-wait-stages s)
     (drgnx-tty-session-key s "C-x")
     (drgnx-tty-session-key s "b")
     (should (string-prefix-p "Switch to buffer" (drgnx-tty-session-wait s '(minibuffer-prompt))))

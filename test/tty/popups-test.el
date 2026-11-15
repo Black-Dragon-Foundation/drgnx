@@ -55,6 +55,7 @@ frame count is what it was."
   (declare (indent 1))
   `(drgnx-tty-session-with ,spec
      (drgnx-tty-popups-test--ready ,(car spec))
+     (drgnx-tty-session-wait-stages ,(car spec))   ; no module stage rebinds <f9> or eats a C-g mid-row
      ,@body))
 
 ;;;; The popups drgnx owns or routes (wb/drgnx-rules.el): each shows, and leaves no trace

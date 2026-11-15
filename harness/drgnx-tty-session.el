@@ -572,10 +572,38 @@ screen.  A text in two places (a file in the Open section and in the Files secti
   (let ((r (drgnx-tty-session-tmux sess "show-buffer")))
     (and (eq (car r) 0) (cdr r))))
 
+(defconst drgnx-tty-session-stages-pending-form
+  '(and (fboundp 'drgnx-timer-pending)
+        (seq-find (lambda (k) (eq (car-safe (car k)) 'modules-idle-step)) (drgnx-timer-pending))
+        t)
+  "Non-nil while the modules' idle stage still has steps to run (`drgnx-modules-start': one idle timer each, the last
+ends the stage and applies the keys).")
+
+(defconst drgnx-tty-session-stages-reach-form
+  '(progn (when (memq 'drgnx-hooks--first-input (default-value 'pre-command-hook)) (drgnx-hooks--first-input))
+          (when (memq 'drgnx-hooks--first-file (default-value 'find-file-hook)) (drgnx-hooks--first-file))
+          (when-let* (((memq 'drgnx-hooks--gui-frame (default-value 'after-make-frame-functions)))
+                      (f (seq-find #'display-graphic-p (frame-list))))
+            (drgnx-hooks--gui-frame f))
+          t)
+  "Reach the once-only stages still armed (`drgnx-hooks-install': first input, first file, first graphical frame)
+through their own triggers: each runs its modules and, when one ran, applies the keys now
+\(`drgnx-modules-after-stage-functions'), not in the middle of a row.  An Emacs that armed none is left as it is.")
+
+(defun drgnx-tty-session-wait-stages (sess &optional timeout)
+  "Return once SESS's Emacs (a tty session or a `drgnx-ui' daemon) has ended its last module stage: its idle stage's
+steps all ran (TIMEOUT s, default 30, else signal) and the once-only stages left are reached now.  Every stage ends
+with `drgnx-keys-apply', which rebinds the profile's keys: a row that binds a key or sends C-g calls this first, so no
+stage ends while it runs.  Cheap once done."
+  (drgnx-tty-session-wait sess `(not ,drgnx-tty-session-stages-pending-form) (or timeout 30))
+  (drgnx-tty-session-eval sess drgnx-tty-session-stages-reach-form))
+
 (defun drgnx-tty-session-key-barrier (sess &optional target)
   "Wait until SESS's Emacs has read and run every key sent to TARGET (a session or a client; default SESS) before this
 call: F9, a command that only counts itself, goes down the same input stream and keys are read in order.  What \"no
-command ran from these bytes\" means is then settled, with no time passed."
+command ran from these bytes\" means is then settled, with no time passed.  F9 is a key the VS Code profile claims:
+the module stages are over first (`drgnx-tty-session-wait-stages'), so none rebinds it under the barrier."
+  (drgnx-tty-session-wait-stages sess)
   (let ((n (drgnx-tty-session-eval sess '(progn (defvar kx-sentinel-n 0)
                                                 (unless (fboundp 'kx-sentinel) (defun kx-sentinel () (interactive) (cl-incf kx-sentinel-n)))
                                                 (global-set-key (kbd "<f9>") #'kx-sentinel)

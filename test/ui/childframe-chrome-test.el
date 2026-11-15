@@ -697,6 +697,7 @@ scale 1 and at scale 2 (one call in eight took 4), so MP-23 is needed; the asser
                  (rects (drgnx-test-chrome--shown root popups none)))
             (should (= 1 (length popups)))
             (should (drgnx-test-chrome--centred-p (car rects) root))
+            (drgnx-test-wait-stages)
             (drgnx-uitest-run (drgnx-uitest-key-events "C-g") 10) ; through the command loop: transient's keymap
             (should (drgnx-test-chrome--wait-for (lambda () (null (drgnx-test-chrome--children root)))))
             (drgnx-test-chrome--hidden root rects none)))

@@ -68,7 +68,9 @@
   "Call `drgnx-palette' while TYPED arrives as keys; PROBE runs once the minibuffer holds them.
 ENDING is the key list that ends the read after the probe (default C-g).  Return PROBE's value; an error it
 signalled (a failed `should') is signalled again.  Handshake: the keys go in when the palette's minibuffer is set up,
-and the probe runs from that minibuffer's `post-command-hook' once the last of them is in; no timer, no delay."
+and the probe runs from that minibuffer's `post-command-hook' once the last of them is in; no timer, no delay.  The
+module stages are over first: C-g ends the read."
+  (drgnx-test-wait-stages)
   (let* ((result nil) (stage 'open) (after nil)
          (drgnx-jank-guard--timer-fn nil) (drgnx-guard--timer-fn nil)
          (drgnx-uitest--queue (list 'typed-from-the-minibuffer-hooks-below))

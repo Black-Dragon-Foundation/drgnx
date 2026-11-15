@@ -66,6 +66,7 @@ later row (the look rows' clean-session check) finds the session as it was."
 (drgnx-attr--deftest drgnx-ui-attribution/timer-during-a-command ()
   (let ((other (drgnx-attr--two-windows)))
     (setq drgnx-attr--other other)
+    (drgnx-test-wait-stages)
     (keymap-global-set "C-c z" #'drgnx-attr--slow-command)
     (unwind-protect
         (progn
@@ -86,6 +87,7 @@ later row (the look rows' clean-session check) finds the session as it was."
   ;; The poll and other timers run inside the command's sit-for; the command's own change
   ;; must still be attributed to the command.
   (drgnx-attr--two-windows)
+  (drgnx-test-wait-stages)
   (keymap-global-set "C-c y" #'drgnx-attr--move-then-wait)
   (unwind-protect
       (let* ((r (drgnx-uitest-run (drgnx-uitest-key-events "C-c y")))

@@ -50,7 +50,9 @@ afterwards.  (cdr SPEC) :kkp t: skip unless kkp is there; :size: kitty's size in
                           10))
 
 (defun drgnx-tty-kitty-test--quit (s)
-  "ctrl+g through kitty until the minibuffer is gone (a C-g while the palette fills its list quits only that)."
+  "ctrl+g through kitty until the minibuffer is gone (a C-g while the palette fills its list quits only that).  The
+module stages are over first."
+  (drgnx-tty-session-wait-stages s)
   (let ((tries 0))
     (while (and (drgnx-tty-session-eval s '(and (active-minibuffer-window) t)) (< tries 5))
       (drgnx-tty-session-kitty-key s "ctrl+g")
@@ -147,6 +149,7 @@ afterwards.  (cdr SPEC) :kkp t: skip unless kkp is there; :size: kitty's size in
   :tags '(:timing)
   (drgnx-tty-kitty-test--with (s :kkp t)
     (drgnx-tty-kitty-test--kkp-on s)
+    (drgnx-tty-session-wait-stages s)
     (let ((started (expand-file-name "block-started" (plist-get s :run))))
       (drgnx-tty-session-eval
        s `(progn

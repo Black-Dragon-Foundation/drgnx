@@ -60,6 +60,7 @@ frame and an `emacsclient -t' client of one daemon.  Both are stopped afterwards
                                      (drgnx-ui--emacsclient) (shell-quote-argument (plist-get ,(nth 0 spec) :socket)))))
              (drgnx-tty-session-wait-screen ,(nth 1 spec) "\\*\\(?:scratch\\|drgnx start\\)\\*" 30)
              (drgnx-tty-session-wait ,(nth 0 spec) '(seq-some (lambda (f) (and (frame-parameter f 'client) (not (display-graphic-p f)))) (frame-list)) 30)
+             (drgnx-tty-session-wait-stages ,(nth 0 spec))   ; no module stage rebinds <f9> or eats a C-g mid-row
              ,@body)
          (when ,(nth 1 spec) (drgnx-tty-session-stop ,(nth 1 spec)))
          (drgnx-ui-stop (plist-get ,(nth 0 spec) :name))
