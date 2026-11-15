@@ -794,13 +794,14 @@ its top, when it fits): what the panel opened by its command path shows first, o
       ;; the header's fit after its rows changed the transcript's height: the windows as they are drawn now
       (redisplay t)
       ;; the first rows leave point at the end (`drgnx-view-sja-tail'); Emacs scrolls by whole rows, so under the end's
-      ;; row (its bottom: the rows' height from the start to the end) there is less space than the screen line before
-      ;; the start would take.  A start at the top passes only when the end is shown whole, that is when the transcript
-      ;; fits
+      ;; row (the bottom of the window's last text line as redisplay drew it, a card or image included) there is less
+      ;; space than the screen line before the start would take.  A start at the top passes only when the end is shown
+      ;; whole, that is when the transcript fits
       (let* ((end (with-current-buffer buffer (point-max)))
              (at (pos-visible-in-window-p end w t))
              (body (window-body-height w t)) (start (window-start w))
-             (bottom (cdr (window-text-pixel-size w start end)))
+             (last (window-line-height -1 w))
+             (bottom (if last (+ (nth 2 last) (car last)) (+ (or (cadr at) 0) (window-default-line-height w))))
              (above (and at (> start (with-current-buffer buffer (point-min)))
                          (let ((prev (with-selected-window w (save-excursion (goto-char start) (vertical-motion -1) (point)))))
                            (if (< prev start) (cdr (window-text-pixel-size w prev start)) 0))))

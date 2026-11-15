@@ -267,19 +267,22 @@ most 5 rounds)."
 
 (defun drgnx-panel-docks-ui-test--end-error (panel window)
   "Nil when WINDOW, point at PANEL's end, shows the end whole at its bottom (or the whole transcript, when it fits);
-else where the end is.  Emacs scrolls by whole rows: under the end's row (its bottom: the rows' height from the start to
-the end, the end's row included) there is less space than the screen line before the start would take, else the window
-could show one more row and has blank space."
+else where the end is.  Emacs scrolls by whole rows: under the end's row (the bottom of the window's last text line as
+redisplay drew it, a card or image included) there is less space than the screen line before the start would take,
+else the window could show one more row and has blank space."
+  (redisplay t)
   (let* ((end (with-current-buffer panel (point-max)))
          (at (pos-visible-in-window-p end window t))
          (body (window-body-height window t))
-         (bottom (cdr (window-text-pixel-size window (window-start window) end)))
+         (last (window-line-height -1 window))
+         (bottom (if last (+ (nth 2 last) (car last)) (+ (or (cadr at) 0) (window-default-line-height window))))
          (above (and at (> (window-start window) (with-current-buffer panel (point-min)))
                      (drgnx-panel-docks-ui-test--above-start window))))
     (cond ((or (not at) (nth 2 at))
            (list :end-not-shown-whole :at at :body body :start (window-start window)))
           ((and above (>= (- body bottom) above))
-           (list :end-not-at-bottom :y (cadr at) :bottom bottom :body body :above above :start (window-start window)
+           (list :end-not-at-bottom :y (cadr at) :bottom bottom :last last :body body :above above
+                 :start (window-start window)
                  :point (window-point window) :max end)))))
 
 (ert-deftest drgnx-ui-panel-docks/through-a-resize-the-end-stays-and-the-docks-fit ()
