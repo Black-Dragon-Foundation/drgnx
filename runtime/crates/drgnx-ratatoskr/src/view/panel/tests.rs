@@ -560,3 +560,20 @@ fn a_clickable_part_gets_the_hover_face_by_name() {
         1
     );
 }
+
+// pattern: D
+#[test]
+fn the_look_carries_the_slow_and_expensive_thresholds() {
+    // `drgnx-agent-panel-slow-seconds' and `drgnx-agent-panel-expensive-cost' reach the rows' look; a look without
+    // them keeps the ones given before
+    let p: runstav::methods::agents::PanelLook =
+        serde_json::from_value(json!({"view": "agent-panel/s1", "slow_secs": 3, "dear_cost": 2.5}))
+            .expect("a look with thresholds");
+    let mut look = rows::Look::default();
+    super::take_thresholds(&mut look, &p);
+    assert_eq!((look.slow_secs, look.dear_cost), (3.0, 2.5));
+    let p: runstav::methods::agents::PanelLook =
+        serde_json::from_value(json!({"view": "agent-panel/s1", "pins": []})).unwrap();
+    super::take_thresholds(&mut look, &p);
+    assert_eq!((look.slow_secs, look.dear_cost), (3.0, 2.5));
+}
