@@ -76,6 +76,48 @@ at 11-16 px, the hub's sum against `string-pixel-width'.  Both modes' largest er
       (when out (write-region line nil out t)))
     (should (<= (min frac round) 10))))
 
+(ert-deftest drgnx-ui-rows-fit/an-advance-is-measured-with-the-buffer-s-remaps ()
+  "The editor's answer to the hub's glyph ask is the advance the view's buffer draws: its `default' remapped (the agent
+panel's is `drgnx-ui-text'), not the frame's default (the code font).  The ask's answer, measured through
+`drgnx-view-env--measure', equals the char drawn in that buffer, and differs from the frame's default when the remap
+changes the font."
+  (skip-unless (display-graphic-p))
+  (should (drgnx-rows-fit-ui-test--install))
+  (require 'drgnx-view-env)
+  (let ((b (generate-new-buffer " *remapped*")) (font (face-attribute 'default :font (selected-frame))))
+    (unwind-protect
+        (progn
+          (set-face-attribute 'default (selected-frame) :font (font-spec :family "JetBrains Mono" :size 13))
+          (with-current-buffer b (face-remap-add-relative 'default :family "Inter" :height 2.0))
+          (set-window-buffer (selected-window) b)
+          (let ((drawn (with-current-buffer b (string-pixel-width "m" b)))
+                (plain (string-pixel-width "m"))
+                (asked (drgnx-view-env--measure b 'default ?m)))
+            (should (/= drawn plain))
+            (should (= asked drawn))))
+      (set-face-attribute 'default (selected-frame) :font font)
+      (kill-buffer b))))
+
+(ert-deftest drgnx-ui-rows-fit/a-colour-face-draws-in-the-buffer-s-remapped-default ()
+  "A face that sets only colours draws in its buffer's `default', remapped (the agent panel's `drgnx-ui-text'): the
+answer to the hub's face ask names the `ui' role, not the role whose font is the frame's default (`code', when the
+frame's default is the code font)."
+  (skip-unless (display-graphic-p))
+  (should (drgnx-rows-fit-ui-test--install))
+  (require 'drgnx-view-env)
+  (let ((b (generate-new-buffer " *remapped*")) (font (face-attribute 'default :font (selected-frame)))
+        (fixed (face-attribute 'fixed-pitch :family nil)))
+    (unwind-protect
+        (progn
+          (set-face-attribute 'default (selected-frame) :font (font-spec :family "JetBrains Mono" :size 13))
+          (set-face-attribute 'fixed-pitch nil :family "JetBrains Mono")
+          (with-current-buffer b (face-remap-add-relative 'default :family "Inter"))
+          (set-window-buffer (selected-window) b)
+          (should (equal (plist-get (drgnx-view-env-face "shadow" b) :role) "ui")))
+      (set-face-attribute 'default (selected-frame) :font font)
+      (set-face-attribute 'fixed-pitch nil :family fixed)
+      (kill-buffer b))))
+
 ;;;; The fit check row and row heights: the fixture view `rows-demo' fed by a real hub (test/fixtures/rows-demo-fixture.el)
 
 (defconst drgnx-rows-fit-ui-test--labels
@@ -96,9 +138,21 @@ at 11-16 px, the hub's sum against `string-pixel-width'.  Both modes' largest er
                        (and (getenv "DRGNX_UI_EVIDENCE") (expand-file-name "rows-fit.txt" (getenv "DRGNX_UI_EVIDENCE"))))))
     (write-region (concat line "\n") nil out t 'silent)))
 
+(defun drgnx-rows-fit-ui-test--clusters (text)
+  "TEXT's grapheme clusters, as far as the labels need: a char, the marks after it, and a ZWJ with the char it joins."
+  (let ((out nil) (i 0) (n (length text)))
+    (while (< i n)
+      (let ((j (1+ i)))
+        (while (and (< j n) (or (memq (get-char-code-property (aref text j) 'general-category) '(Mn Me))
+                                (eq (aref text j) ?\N{ZERO WIDTH JOINER})))
+          (setq j (if (eq (aref text j) ?\N{ZERO WIDTH JOINER}) (min n (+ j 2)) (1+ j))))
+        (push (substring text i j) out)
+        (setq i j)))
+    (nreverse out)))
+
 (defun drgnx-rows-fit-ui-test--check-rows (buffer)
   "Each label row of BUFFER: (KEY PX WIDTH CUT MAX-CHAR), PX the label's width in the frame's pixels (`drgnx-px'),
-WIDTH the drawn segment's before its stop."
+WIDTH the drawn segment's before its stop, MAX-CHAR the widest grapheme cluster of the label as drawn."
   (with-current-buffer buffer
     (let ((state drgnx-view-patch) out)
       (dolist (l drgnx-rows-fit-ui-test--labels)
@@ -107,15 +161,16 @@ WIDTH the drawn segment's before its stop."
                  (beg (drgnx-view-row-start drgnx-view key)) (stop (car (car (plist-get row :stops))))
                  (seg (buffer-substring beg (+ beg stop))))
             (push (list key (drgnx-px px) (string-pixel-width seg) (and (string-search "…" seg) t)
-                        (apply #'max (mapcar (lambda (c) (string-pixel-width (string c))) (cdr l))))
+                        ;; the widest cluster as drawn (a ZWJ sequence the font does not join is several glyphs)
+                        (apply #'max (mapcar #'string-pixel-width (drgnx-rows-fit-ui-test--clusters (cdr l)))))
                   out))))
       out)))
 
 (ert-deftest drgnx-ui-rows-fit/no-fitted-segment-overflows-its-stop ()
   "The fit check row: the hub fits each label (Latin, ligatures, ZWJ, combining, RTL) in Inter and JetBrains Mono at
 11-16 px to 80, 160 and 240 px, each char at the editor's advance and each cluster of several chars as the editor
-measured it; after the editor's fit guard no segment runs past its stop, and none is cut more than the slack and one
-glyph short (joined right-to-left text in a fallback font, whose per-char sum runs wide, is reported instead).  The
+measured it; after the editor's fit guard no segment runs past its stop, and none is cut more than the slack and its
+widest cluster short (joined right-to-left text in a fallback font, whose per-char sum runs wide, is reported instead).  The
 guard's re-fits are reported."
   (skip-unless (display-graphic-p))
   (should (drgnx-rows-fit-ui-test--install))

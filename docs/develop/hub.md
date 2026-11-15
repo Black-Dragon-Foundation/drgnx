@@ -2477,7 +2477,9 @@ with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an est
 - **Measured in the face it is drawn in.** A builder names the face, never a role: `fit::width_in` and `fit::fit_in`
   measure text in the font the editor says the face draws in. The hub asks once per (pair, face) in `view-glyphs`'
   `faces`; the editor answers with the role whose font the face resolves to in the view's buffer (`ui`, `text`,
-  `caption`, `code`, `heading`, …: `drgnx-view-env-roles`), or, for a face with a font of its own, that font's file,
+  `caption`, `code`, `heading`, …: `drgnx-view-env-roles`; the role whose face draws a probe text as wide in that
+  buffer, so a face that sets only colours draws in the buffer's remapped `default`, which `face-font` does not see),
+  or, for a face with a font of its own, that font's file,
   index, px, average and `wght` (the face's weight, for a variable font) under a role named after the face; and the
   ends of its box (`pad`, a positive `:line-width`), which a run adds at each end. Until the answer comes a face
   measures as `ui`, and the rows are built again when it does.
@@ -2518,7 +2520,8 @@ with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an est
   font's can be a pixel wider than the file's (Adwaita Sans at 12 px: a Flow button 6 px wider, a row 12 px, past the
   slack), so it wins over the file's sum, which stands in until it comes. A char with no glyph, or a role with no
   font file (as `font-info` often has on macOS), measures as the role's average until then. The editor measures each
-  in the asked class's buffer, keyed by the font its face resolves to there (a buffer's remaps change it). Caches are bounded: 4096 chars per font and per set, 1024 measured strings.
+  in the asked class's buffer on the frame that shows it, keyed by the font its face resolves to there (a buffer's
+  remaps change it, and so does a frame of another scale or default font). Caches are bounded: 4096 chars per font and per set, 1024 measured strings.
 - **The editor's measurement wins.** The fit guard reports a line it measured wider than the hub fitted it
   (`view/measured`); from then on that width is used for that string instead of the sum (least recently used out).
 - **The fit check row** (`test/ui/rows-fit-gui-test.el`, on the fixture view `rows-demo`, whose labels the hub
@@ -2526,7 +2529,8 @@ with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an est
   sequence, combining marks and Arabic in Inter and JetBrains Mono at 11 to 16 px, fitted to 80, 160 and 240 px. A
   label's width is logical, as every view's sizes are: a GUI class fits it, and puts its stop, at the env's scale in
   device px, rounded half up as `drgnx-px` does (160 is 320 at 2, 200 at 1.25). No
-  segment runs past its stop after the guard, and none is cut more than the slack and one glyph short, except joined
+  segment runs past its stop after the guard, and none is cut more than the slack and one cluster (its widest, as
+  drawn: an unjoined ZWJ sequence is several glyphs) short, except joined
   Arabic in a font without it: its letters come per char from the editor's fallback font, whose shaped (joined) forms
   are narrower, so the sum runs wide and the label may be cut up to about 26 px short at 80 px. That is reported, not
   failed (first runs, 2026-11-07: 180 rows, 0 to 1 re-fit by the guard).

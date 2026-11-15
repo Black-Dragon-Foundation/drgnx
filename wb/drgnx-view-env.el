@@ -406,10 +406,16 @@ nothing runs inside a follow); the widths as on a resize."
                (when (cdr v) (funcall (cdr v) view))))
            (copy-hash-table drgnx-view-env--views)))
 
+(defun drgnx-view-env--frame (buffer)
+  "The frame BUFFER draws on: a window's that shows it, else the selected one.  Faces' fonts are per frame (a frame of
+another scale or default font draws the same buffer in another font), so BUFFER's text is measured there."
+  (let ((w (get-buffer-window buffer t))) (if w (window-frame w) (selected-frame))))
+
 (defun drgnx-view-env--measure (buffer face char)
-  "CHAR's advance in px in FACE, measured in BUFFER."
-  (with-current-buffer buffer
-    (string-pixel-width (propertize (string char) 'face face))))
+  "CHAR's advance in px in FACE, measured in BUFFER (with its face remaps: the agent panel's `default' is
+`drgnx-ui-text') on its frame (`drgnx-view-env--frame')."
+  (with-selected-frame (drgnx-view-env--frame buffer)
+    (string-pixel-width (propertize (string char) 'face face) buffer)))
 
 (defconst drgnx-view-env--weights
   '((thin . 100) (ultra-light . 200) (extra-light . 200) (light . 300) (semi-light . 350) (demi-light . 350)
@@ -427,10 +433,14 @@ drawn inside the text), else none."
                   (t 0))))
     (max 0 w)))
 
+(defconst drgnx-view-env--probe "Hamburgefonstiv 0123456789 WMmw.,"
+  "The text a face's drawn width is compared on with each role's (`drgnx-view-env-face').")
+
 (defun drgnx-view-env-face (face-name buffer)
   "How the face FACE-NAME (a string the hub's rows name) draws in BUFFER, a hub-fed view's, on the frame of a window
 that shows it: a plist for `view/glyphs' faces, :role the role whose font it is (`drgnx-view-env-roles', read in
-BUFFER as the env's are), else FACE-NAME itself with its font's :file :px :avg and :wght; :pad its box's ends.  A
+BUFFER as the env's are: the role whose face draws `drgnx-view-env--probe' as wide in BUFFER, else whose font has
+the same name), else FACE-NAME itself with its font's :file :px :avg and :wght; :pad its box's ends.  A
 name that is no face, or a terminal, draws in `ui'."
   (let* ((face (intern-soft face-name))
          (window (or (get-buffer-window buffer t) (selected-window)))
@@ -440,10 +450,19 @@ name that is no face, or a terminal, draws in `ui'."
       (with-current-buffer buffer
         (let* ((factor (drgnx-view-env--scale-factor buffer))
                (mine (drgnx-view-env--font face frame factor))
-               (role (and mine (cl-some (lambda (r)
-                                          (let ((f (drgnx-view-env--font (cdr r) frame factor)))
-                                            (and f (equal (car (last f)) (car (last mine))) (symbol-name (car r)))))
-                                        drgnx-view-env-roles)))
+               ;; drawn in BUFFER, FACE merges over its remapped `default' (the agent panel's `drgnx-ui-text'), which
+               ;; `face-font' does not see: a face that sets only colours draws in the buffer's `default', not the
+               ;; frame's.  A role whose face draws a probe as wide is FACE's role.
+               (probe (lambda (f) (with-selected-frame frame
+                                    (string-pixel-width (propertize drgnx-view-env--probe 'face f) buffer))))
+               (drawn (funcall probe face))
+               (role (or (cl-some (lambda (r) (and (= drawn (funcall probe (cdr r))) (symbol-name (car r))))
+                                  drgnx-view-env-roles)
+                         (and mine (cl-some (lambda (r)
+                                              (let ((f (drgnx-view-env--font (cdr r) frame factor)))
+                                                (and f (equal (car (last f)) (car (last mine)))
+                                                     (symbol-name (car r)))))
+                                            drgnx-view-env-roles))))
                (pad (drgnx-view-env--box-pad face frame)))
           (cond ((or role (null mine)) (list :face face-name :role (or role "ui") :pad pad))
                 (t (list :face face-name :role face-name :pad pad :file (nth 0 mine) :index (nth 1 mine)
@@ -466,8 +485,10 @@ buffer of the asked display class."
                            (let ((f (intern-soft role))) (and f (facep f) f))
                            'default))
                  ;; the font the face resolves to in the class's buffer (its remaps: the agent panel's `default' is
-                 ;; `drgnx-ui-text', the Flow's the code font), which is what the cache is keyed by
-                 (font (or (ignore-errors (with-current-buffer class-buffer (face-font face))) (symbol-name face)))
+                 ;; `drgnx-ui-text', the Flow's the code font) on its frame, which is what the cache is keyed by
+                 (font (or (ignore-errors (with-current-buffer class-buffer
+                                            (face-font face (drgnx-view-env--frame class-buffer))))
+                           (symbol-name face)))
                  (key (cons font char))
                  (px (or (gethash key drgnx-view-env--glyphs)
                          (progn (when (>= (hash-table-count drgnx-view-env--glyphs) drgnx-view-env-glyph-cache-max)
@@ -488,13 +509,14 @@ buffer of the asked display class."
 
 (defun drgnx-view-env-measure (text runs buffer)
   "TEXT's width in px as BUFFER draws it in RUNS, ([START END FACE] ...) over its chars, an earlier run above a later
-one (the hub's `view-glyphs' `measure': a row segment whose sum came too close to its end to decide)."
+one (the hub's `view-glyphs' `measure': a row segment whose sum came too close to its end to decide, or a cluster of
+several chars), on BUFFER's frame (`drgnx-view-env--frame')."
   (let ((s (copy-sequence text)))
     (dolist (r (reverse runs))
       (let ((face (intern-soft (nth 2 r))))
         (when (and face (<= 0 (nth 0 r) (nth 1 r) (length s)))
           (add-face-text-property (nth 0 r) (nth 1 r) face nil s))))
-    (string-pixel-width s buffer)))
+    (with-selected-frame (drgnx-view-env--frame buffer) (string-pixel-width s buffer))))
 
 (defun drgnx-view-env--hook (on)
   "Add the global hooks (ON) or remove them."
