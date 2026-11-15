@@ -239,7 +239,7 @@ Every module must turn off cleanly: its setup changes global state only through 
 | `extra/keycast` | idle | Show Keys As I Type (needs keycast): the key and command in the status bar's `misc` segment (in the stock mode line elsewhere) |
 | `extra/windows` | idle | Pick Window: a letter on every window, type it to go there (needs ace-window) |
 | `extra/magit` | idle | Source Control opens magit (needs magit) |
-| `extra/completion` | idle | vertical minibuffer lists, any-order matching, completion popups as you type (needs vertico, orderless, marginalia, corfu) |
+| `extra/completion` | idle | vertical minibuffer lists, any-order matching, completion popups as you type (needs vertico, orderless, marginalia, corfu); C-g hides the popup, as Esc does in VS Code, even when it arrives as a quit while Emacs is busy |
 | `tools/browser` | idle | the browser pane ([browser.md](browser.md)): a web page beside the editor (WebKit, else your system browser), Browser: Test Report (Playwright), Browser: Agent's Page |
 | `tools/agents-in-editor` | idle | The editor watches the file buffers its windows show and keeps the agent hub's view of each (where agents are working in it); a buffer no window shows is not watched and costs nothing. Turned off, it unwatches everything ([agents-in-the-editor.md](agents-in-the-editor.md)) |
 | `tools/agent-panel` | idle | The agent panel ([agent-panel.md](agent-panel.md)): one agent session's steps, live, in the right dock. Turned off, every panel closes and its subscription to the hub ends |
