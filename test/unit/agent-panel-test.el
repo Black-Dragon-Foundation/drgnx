@@ -1074,3 +1074,23 @@ its tail."
             (should-not (drgnx-agent-panel--end-shown-p w)))
           (cl-letf (((symbol-function 'pos-visible-in-window-p) (lambda (&rest _) nil)))
             (should-not (drgnx-agent-panel--end-shown-p w))))))))
+
+(declare-function drgnx-agent-panel--pane-resized "drgnx-agent-panel")
+(defvar drgnx-state--idle)
+
+(ert-deftest drgnx-agent-panel/a-resized-window-at-the-end-follows-it-at-once-and-one-moved-away-stays ()
+  "The store's `pane-resized' moves a panel window at the panel's end to the tail and leaves one the user scrolled
+away from."
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (should (memq #'drgnx-agent-panel--pane-resized (cdr (assq 'pane-resized drgnx-state--idle))))
+      (let ((w (selected-window)) (tails 0))
+        (let ((inhibit-read-only t)) (erase-buffer) (insert "header\nstep\ncomposer\n"))
+        (set-window-buffer w buf)
+        (cl-letf (((symbol-function 'drgnx-agent-panel--tail-start) (lambda (_w) (cl-incf tails) (point-min))))
+          (set-window-point w (point-max))
+          (drgnx-agent-panel--pane-resized (list :window w))
+          (should (= 1 tails))
+          (set-window-point w (point-min))
+          (drgnx-agent-panel--pane-resized (list :window w))
+          (should (= 1 tails)))))))
