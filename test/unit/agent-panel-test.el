@@ -14,8 +14,6 @@
 (drgnx-test-modules-preload '(tools/agent-panel))
 
 (defvar drgnx-agent-panel--stats-render)
-(defvar drgnx-agent-panel--diffs)
-(declare-function drgnx-agent-panel-cards--diff-row "drgnx-agent-panel-cards")
 (declare-function drgnx-agent-panel-composer--row "drgnx-agent-panel-composer")
 (defvar drgnx-agent-panel--subscribed)
 (defvar drgnx-hub--events)
@@ -27,7 +25,6 @@
 (declare-function drgnx-agent-panel--ask "drgnx-agent-panel")
 (defvar drgnx-history--buffers)
 (declare-function drgnx-history--st-make "drgnx-history")
-(declare-function drgnx-agent-panel-cards-load "drgnx-agent-panel-cards")
 (declare-function drgnx-agent-panel-reject "drgnx-agent-panel-cards")
 (declare-function drgnx-agent-panel--keep-top-windows "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--restore-top-windows "drgnx-agent-panel")
@@ -298,7 +295,16 @@ unanswered, and panel \"s1\" as `buf'."
 (declare-function drgnx-agent-panel-reject "drgnx-agent-panel-cards")
 (declare-function drgnx-agent-panel-accept "drgnx-agent-panel-cards")
 
+(defun drgnx-agent-panel-test--on-card (buf card)
+  "Put BUF's point on a row that carries CARD (a vector, as the hub's rows do): what the card commands read."
+  (with-current-buffer buf
+    (let ((inhibit-read-only t))
+      (erase-buffer)
+      (insert (propertize "a card row" 'drgnx-agent-panel-card card))
+      (goto-char (point-min)))))
+
 (ert-deftest drgnx-agent-panel/permission-card-keys ()
+  "The permission card is the hub's rows; its keys and buttons answer the request the row names (the id arrives as text)."
   (drgnx-agent-panel-test--with
     (with-current-buffer buf
       (drgnx-agent-panel--take-snapshot
@@ -307,26 +313,7 @@ unanswered, and panel \"s1\" as `buf'."
                                       :options (list (list :optionId "allow" :kind "allow_once")
                                                      (list :optionId "always" :kind "allow_always")
                                                      (list :optionId "reject" :kind "reject_once"))))))
-      ;; window-dark.html `.acard.perm': a card ringed in the attention colour, its head on the attention tint
-      ;; asking (one line), then Allow (the primary), Always and Deny as buttons with their keys, under the card (a button's own
-      ;; box inside the card would cut its ring); every card line is one face
-      (let* ((card (drgnx-agent-panel-cards--perm-row 7))
-             (lines (split-string card "\n" t))
-             (head (car lines)))
-        (should (string-search "Run rm -rf build?" head))
-        (should (equal (list (get-text-property 2 'face head))
-                       (seq-uniq (mapcar (lambda (i) (get-text-property i 'face head)) (number-sequence 0 (1- (length head)))))))
-        (should (memq 'drgnx-card-single (ensure-list (get-text-property 2 'face head))))
-        (should (memq 'drgnx-agent-panel-perm-head (ensure-list (get-text-property 2 'face head))))
-        (should (eq 'drgnx-agent-panel-allow
-                    (lookup-key (get-text-property (string-search "Allow ↵" card) 'keymap card) [mouse-1])))
-        (should (eq 'drgnx-ui-button-primary (get-text-property (string-search "Allow ↵" card) 'face card)))
-        (should (eq 'drgnx-agent-panel-always
-                    (lookup-key (get-text-property (string-search "Always A" card) 'keymap card) [mouse-1])))
-        (should (eq 'drgnx-agent-panel-reject
-                    (lookup-key (get-text-property (string-search "Deny D" card) 'keymap card) [mouse-1]))))
-      (should (string-search "Allow ↵" (drgnx-agent-panel-test--text buf)))
-      (goto-char (drgnx-view-row-start drgnx-view '(:perm 7)))
+      (drgnx-agent-panel-test--on-card buf ["perm" "7"])
       (drgnx-agent-panel-allow)
       (should (equal '("agents/permission" :id "s1" :request 7 :option "allow") (car drgnx-agent-panel-test--calls)))
       (drgnx-agent-panel-always)
@@ -334,10 +321,51 @@ unanswered, and panel \"s1\" as `buf'."
       (drgnx-agent-panel-reject)
       (should (equal '("agents/permission" :id "s1" :request 7 :option "reject") (car drgnx-agent-panel-test--calls)))
       ;; a permission card is not a diff card
-      (should-error (drgnx-agent-panel-accept) :type 'user-error)
-      ;; answered: the hub's next snapshot has no request and the card goes
-      (drgnx-agent-panel--take-snapshot (list :id "s1" :status "busy"))
-      (should-not (string-match-p "Allow" (drgnx-agent-panel-test--text buf))))))
+      (should-error (drgnx-agent-panel-accept) :type 'user-error))))
+
+(ert-deftest drgnx-agent-panel/a-click-on-a-cards-button-runs-the-cards-command ()
+  "The one click dispatcher: a card's button (`card:allow:7', `card:deny:7', `card:accept:PATH:0') runs the command for
+the card its row names, point on that row."
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel--take-snapshot
+       (list :id "s1" :status "waiting"
+             :permissions (list (list :id 7 :title "Run make"
+                                      :options (list (list :optionId "allow" :kind "allow_once")
+                                                     (list :optionId "reject" :kind "reject_once"))))))
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (propertize " Allow " 'drgnx-agent-panel-action "card:allow:7" 'drgnx-agent-panel-card ["perm" "7"])
+                (propertize " Deny " 'drgnx-agent-panel-action "card:deny:7" 'drgnx-agent-panel-card ["perm" "7"])))
+      (let ((click (drgnx-agent-panel-test--click buf " Deny ")))
+        (drgnx-agent-panel-act click))
+      (should (equal '("agents/permission" :id "s1" :request 7 :option "reject") (car drgnx-agent-panel-test--calls)))
+      (let ((click (drgnx-agent-panel-test--click buf " Allow ")))
+        (drgnx-agent-panel-act click))
+      (should (equal '("agents/permission" :id "s1" :request 7 :option "allow") (car drgnx-agent-panel-test--calls))))))
+
+(ert-deftest drgnx-agent-panel/accept-and-reject-ask-the-hub-for-the-diff-first ()
+  "A diff card's Accept writes the review mark with the hash of the diff the hub holds, and Reject marks the file pending
+and queues the take-it-back message: the panel keeps no diffs, so it asks `work/hunks' for the file first."
+  (drgnx-agent-panel-test--with
+    (load (expand-file-name "modules/tools/drgnx-work-review" drgnx-dir) nil t)
+    (let ((diff "@@ -1 +1 @@\n-a\n+b\n"))
+      (with-current-buffer buf
+        (cl-letf (((symbol-function 'drgnx-hub-call)
+                   (lambda (method params cb &rest _)
+                     (push (cons method params) drgnx-agent-panel-test--calls)
+                     (when (equal method "work/hunks") (funcall cb (list :diff diff) nil))
+                     1)))
+          (drgnx-agent-panel-test--on-card buf ["diff" "a.txt" 0])
+          (drgnx-agent-panel-accept)
+          (let ((mark (cdr (assoc "review/mark" drgnx-agent-panel-test--calls))))
+            (should (equal "accepted" (plist-get mark :state)))
+            (should (equal (secure-hash 'sha1 diff) (plist-get mark :hash))))
+          (setq drgnx-agent-panel-test--calls nil)
+          (drgnx-agent-panel-reject)
+          (should (equal "pending" (plist-get (cdr (assoc "review/mark" drgnx-agent-panel-test--calls)) :state)))
+          (should (string-prefix-p "I reject your change to a.txt (the hunk @@ -1 +1 @@)"
+                                   (plist-get (cdr (assoc "agents/send" drgnx-agent-panel-test--calls)) :text))))))))
 
 ;; pattern D: pure rendering of a made-up entry
 (ert-deftest drgnx-agent-panel/large-output-shows-head-and-tail ()
@@ -447,17 +475,6 @@ unanswered, and panel \"s1\" as `buf'."
       (erase-buffer)
       (insert (propertize " a.el  3–4" 'drgnx-agent-panel-op-hunk (list 7 "a.el" 0)))
       (goto-char (point-min)))))
-
-(ert-deftest drgnx-agent-panel/a-paired-chat-loads-no-worktree-diffs ()
-  "A paired chat has no `work/hunks': its ledger is the hub's card, read from the user's history there."
-  (drgnx-agent-panel-test--with
-    (with-current-buffer buf
-      (drgnx-agent-panel--take-snapshot (list :id "s1" :name "Pair" :status "idle" :paired t :cwd "/w"))
-      (let (asked)
-        (cl-letf (((symbol-function 'drgnx-hub-call)
-                   (lambda (method params _cb &rest _) (push (cons method params) asked) 1)))
-          (drgnx-agent-panel-cards-load buf))
-        (should-not asked)))))
 
 (ert-deftest drgnx-agent-panel/reject-on-a-paired-hunk-reverts-that-operation ()
   (drgnx-agent-panel-test--with
@@ -645,7 +662,7 @@ before the hub's rows came) would leave it starting below them: a window that st
                                       :options (list (list :optionId "allow" :kind "allow_once")
                                                      (list :optionId "always" :kind "allow_always"))))))
       (drgnx-agent-panel-test--text buf)
-      (goto-char (drgnx-view-row-start drgnx-view '(:perm 7)))
+      (drgnx-agent-panel-test--on-card buf ["perm" "7"])
       (drgnx-agent-panel-always)
       (should (assoc "agents/permission" drgnx-agent-panel-test--calls))
       (should (equal '(:id "s1") (cdr (assoc "agents/grants" drgnx-agent-panel-test--calls)))))))
@@ -876,39 +893,7 @@ and code in the code font."
     (dolist (f '(drgnx-agent-panel-output drgnx-agent-panel-context drgnx-agent-panel-added drgnx-agent-panel-removed
                                           drgnx-agent-panel-code drgnx-agent-panel-md-code))
       (should (facep f))
-      (should (drgnx-agent-panel-test--inherits-p f 'drgnx-code-small)))
-    ;; a diff card's lines too
-    (load (expand-file-name "modules/tools/drgnx-work-review" drgnx-dir) nil t)
-    (with-current-buffer buf
-      (setq drgnx-agent-panel--diffs (list (cons "a.txt" "@@ -1,2 +1,2 @@\n ctx\n-a\n+b\n")))
-      (let ((card (drgnx-agent-panel-cards--diff-row "a.txt" 0)))
-        (dolist (line '("+b" "-a" " ctx"))
-          (let ((face (get-text-property (1+ (string-search line card)) 'face card)))
-            (should (seq-some (lambda (f) (drgnx-agent-panel-test--inherits-p f 'drgnx-code-small))
-                              (ensure-list face)))))))))
-
-(ert-deftest drgnx-agent-panel/a-diff-card-fits-a-narrow-panel ()
-  "LOOK-FIX-AGENT-PANEL-NARROW-1: in a panel 320 px wide (8 px a column) the card's header leaves room for Reject and
-Accept (they are not pushed past the edge: the name and the hunk label give way) and no code line is wider than the
-panel."
-  (drgnx-agent-panel-test--with
-    (load (expand-file-name "modules/tools/drgnx-work-review" drgnx-dir) nil t)
-    (with-current-buffer buf
-      (setq drgnx-agent-panel--strip-width 320
-            drgnx-agent-panel--diffs
-            (list (cons "core/a-very-long-directory-name/drgnx-gateway-with-a-long-name.el"
-                        (concat "@@ -1,2 +1,2 @@\n ctx\n-a\n+"
-                                (make-string 90 ?x) "\n")))))
-    (with-current-buffer buf
-      (cl-letf (((symbol-function 'string-pixel-width) (lambda (s &rest _) (* 8 (string-width s))))
-                ((symbol-function 'frame-char-width) (lambda (&rest _) 8)))
-        (let* ((card (drgnx-agent-panel-cards--diff-row "core/a-very-long-directory-name/drgnx-gateway-with-a-long-name.el" 0))
-               (lines (split-string card "\n" t))
-               (head (car lines)))
-          (should (< (* 8 (string-width (replace-regexp-in-string "Reject  Accept" "" head))) 320))
-          (should (string-search "Reject" head))
-          (dolist (l (cdr lines))
-            (should (<= (* 8 (string-width l)) 320))))))))
+      (should (drgnx-agent-panel-test--inherits-p f 'drgnx-code-small)))))
 
 (defun drgnx-agent-panel-test--inherits-p (face target)
   "Whether FACE is TARGET or inherits it, through any depth."
@@ -997,38 +982,6 @@ the model and the mode as chips that switch them, Fork, the pause icon and Send 
           (should (eq 'drgnx-agent-panel-pause (lookup-key (get-text-property pause 'keymap row) [mouse-1]))))
         (should (eq 'drgnx-agent-panel-fork
                     (lookup-key (get-text-property (string-search "Fork" row) 'keymap row) [mouse-1])))))))
-
-(ert-deftest drgnx-agent-panel/diff-card-as-the-mockup ()
-  "agent-panel.html `.acard': a header with the file's name, its lines and \"hunk 1 of 1\", and Reject and Accept that
-answer it; the body's lines numbered (the new file's numbers, a removed line the old's), in the code font."
-  (drgnx-agent-panel-test--with
-    (load (expand-file-name "modules/tools/drgnx-work-review" drgnx-dir) nil t)
-    (with-current-buffer buf
-      (setq drgnx-agent-panel--diffs (list (cons "a.el" "@@ -215,2 +215,3 @@\n-  (when p\n+  (if p\n     (send p)\n+    (queue p)\n")))
-      (let ((card (drgnx-agent-panel-cards--diff-row "a.el" 0)))
-        (should (string-match-p "a\\.el +215–217 · hunk 1 of 1" card))
-        (should (eq 'drgnx-agent-panel-accept
-                    (lookup-key (get-text-property (string-search "Accept" card) 'keymap card) [mouse-1])))
-        (should (eq 'drgnx-agent-panel-reject
-                    (lookup-key (get-text-property (string-search "Reject" card) 'keymap card) [mouse-1])))
-        (should (string-match-p " 215 -  (when p" card))
-        (should (string-match-p " 215 \\+  (if p" card))
-        (should (string-match-p " 216      (send p)" card))
-        (should (string-match-p " 217 \\+    (queue p)" card))
-        (should (seq-some (lambda (f) (drgnx-agent-panel-test--inherits-p f 'drgnx-code-small))
-                          (drgnx-agent-panel-test--face-at card "216")))))))
-
-(ert-deftest drgnx-agent-panel/a-card-closes-before-the-window-edge ()
-  "A card's rows (the Edits ledger, the plan) end in a space to the panel's right edge, 12 px in; their newlines are
-outside the card faces, which extend: in them the ring ran on to the window's edge, open there (the Edits banner)."
-  (let ((card (drgnx-agent-panel-cards--box '("Edits · 1 file" ("a.el" . bold)) nil)))
-    (dotimes (i (length card))
-      (when (eq (aref card i) ?\n)
-        (should-not (get-text-property i 'face card))))
-    (should (equal '(space :align-to (- right (12)))
-                   (cl-letf (((symbol-function 'drgnx-px) #'identity))
-                     (let ((c (drgnx-agent-panel-cards--box '("x") nil)))
-                       (get-text-property (1- (string-search "\n" c)) 'display c)))))))
 
 (ert-deftest drgnx-agent-panel/a-preset-tells-the-hub-the-lens ()
   "Picking a preset tells the hub which one is in force (`agents/panel/look' `lens_on'), so its header's lens shows it,

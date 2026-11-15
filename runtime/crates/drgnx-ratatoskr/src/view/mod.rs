@@ -29,6 +29,7 @@ pub mod model;
 pub mod outline;
 pub mod panel;
 pub mod panel_cards;
+pub mod panel_review;
 pub mod panel_top;
 pub mod search;
 #[cfg(test)]

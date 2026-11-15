@@ -47,6 +47,10 @@
 (declare-function drgnx-history-revert-to-here "drgnx-history-revert")
 (declare-function drgnx-history-fork-here "drgnx-history-revert")
 (declare-function drgnx-agent-panel-ledger "drgnx-agent-panel-cards")
+(declare-function drgnx-agent-panel-accept "drgnx-agent-panel-cards")
+(declare-function drgnx-agent-panel-allow "drgnx-agent-panel-cards")
+(declare-function drgnx-agent-panel-always "drgnx-agent-panel-cards")
+(declare-function drgnx-agent-panel-reject "drgnx-agent-panel-cards")
 
 (defun drgnx-agent-panel--align (meta)
   "A space that pushes META to the right edge, then META."
@@ -78,9 +82,9 @@
     (drgnx-ui-kit-run choice)))
 
 (defun drgnx-agent-panel-act (event)
-  "Run the header, strip or chip part the click EVENT is on: the lens segment (`lens:N'), the pin or the ⋯ menu, a
-step type's pill (`type:NAME') or `make default' (`drgnx-agent-panel-action' of the text, which the hub's rows set), or
-the chip (`drgnx-agent-panel-chip')."
+  "Run the header, strip, chip or card part the click EVENT is on: the lens segment (`lens:N'), the pin or the ⋯ menu, a
+step type's pill (`type:NAME') or `make default', the ledger or a card's button (`card:*'): the
+`drgnx-agent-panel-action' of the text, which the hub's rows set; or the chip (`drgnx-agent-panel-chip')."
   (interactive "e")
   (let* ((end (event-end event)) (pos (posn-point end)) (win (posn-window end))
          (buf (and (windowp win) (window-buffer win))))
@@ -96,6 +100,14 @@ the chip (`drgnx-agent-panel-chip')."
                  (drgnx-agent-panel-toggle-type (intern (substring action 5))))
                 ((equal action "default") (drgnx-agent-panel-make-default))
                 ((equal action "card:ledger") (drgnx-agent-panel-ledger))
+                ((and (stringp action) (string-prefix-p "card:" action))
+                 ;; a card's button: the card's own commands read the card at point
+                 (goto-char pos)
+                 (pcase (nth 1 (split-string action ":"))
+                   ("accept" (drgnx-agent-panel-accept))
+                   ("allow" (drgnx-agent-panel-allow))
+                   ("always" (drgnx-agent-panel-always))
+                   ((or "reject" "deny") (drgnx-agent-panel-reject))))
                 ((stringp chip) (drgnx-agent-panel-chip (intern chip)))))))))
 
 (defun drgnx-agent-panel-press (event)
@@ -253,9 +265,7 @@ changed lays its strip out again."
           (when (derived-mode-p 'drgnx-agent-panel-mode)
             (let ((width (window-body-width w t)))
               (unless (eql width drgnx-agent-panel--strip-width)
-                (setq drgnx-agent-panel--strip-width width)
-                (when (drgnx-view-p drgnx-view)
-                  (drgnx-view-dirty drgnx-view (and (fboundp 'drgnx-agent-panel-cards-keys) (drgnx-agent-panel-cards-keys))))))))))))
+                (setq drgnx-agent-panel--strip-width width)))))))))
 
 (defun drgnx-agent-panel-steps-setup ()
   (drgnx-command-define 'agents-panel-toggle-type :category "Agents" :title "Open or Close a Step Type"

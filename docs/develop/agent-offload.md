@@ -83,3 +83,12 @@ split: pins, the ledger's open flag and its mark are per-(connection, view) user
 `agents/panel/look`; the plan, the finished edits, the edited files and a paired chat's hunks are read by the hub from the
 session. Lisp keeps the commands (`drgnx-agent-panel-pin`, `-ledger`, the click dispatcher's `card:*` actions) and, for a
 paired chat's ledger line, the revert; the Lisp row builders, the plan and hunk loads and the ledger mark are gone.
+
+## The diff and permission cards (F1, cards)
+
+Built in the hub too (hub.md "The agent panel's rows"). `drgnx-agent-panel-cards--diff-row`, `--perm-row`, `--box`,
+the `:diff` and `:perm` row keys and the Lisp loads of `work/files` and `work/hunks` (`cards-load`, which ran after each
+finished edit) are gone, and so is `drgnx-agent-panel--diffs`: the panel reads no diff until Accept or Reject asks for the
+one file. Lisp keeps the commands (accept, reject, allow, always), which read the card at point
+(`drgnx-agent-panel-card`), and the click dispatcher's `card:*` buttons. The editor puts a hub patch's rows in the hub's
+order: `drgnx-agent-panel--insert-ops` and the `p:` placement rule are gone with the special case.
