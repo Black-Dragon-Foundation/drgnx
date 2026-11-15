@@ -17,6 +17,7 @@
 (require 'drgnx-wb)
 (require 'drgnx-area)
 (require 'drgnx-view)
+(require 'drgnx-view-env)   ; the test binds its send function: a session of this file alone has not loaded it
 (require 'drgnx-popup)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-search-ui-test--repo) nil t)
 (load (expand-file-name "modules/tools/drgnx-replace" drgnx-search-ui-test--repo) nil t)

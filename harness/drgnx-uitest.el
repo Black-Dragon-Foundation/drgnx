@@ -23,6 +23,8 @@
 (declare-function x-export-frames "xfns.c" (&optional frames type))
 (declare-function glitnir-snapshot "glitnir")
 (declare-function drgnx-pixels-device-p "drgnx-pixels" ())
+(defconst drgnx-uitest--core-dir (expand-file-name "../core/" (file-name-directory (or load-file-name buffer-file-name)))
+  "drgnx's core/ beside this harness: the session's load path need not have it.")
 
 (defvar drgnx-uitest-session-id nil
   "This session's id (DRGNX_UI_NAME, set by harness/init/prelude.el): `drgnx-uitest-api-as' runs only for it.")
@@ -874,7 +876,7 @@ Never signals."
 (defun drgnx-uitest-device-scale (frame)
   "Device pixels per unit of FRAME's Lisp coordinates, as a snapshot counts them: `frame-scale-factor' under GTK,
 which works in logical pixels, and 1 on the native shell, whose frames are in device pixels at any scale."
-  (require 'drgnx-pixels)   ; a file run in a session of its own has not loaded it through another
+  (require 'drgnx-pixels (expand-file-name "drgnx-pixels" drgnx-uitest--core-dir)) ; a session of one file has not loaded it through another
   (if (drgnx-pixels-device-p) 1 (frame-scale-factor frame)))
 
 (defun drgnx-uitest--png-raw (png)
