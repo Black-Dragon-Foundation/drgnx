@@ -161,4 +161,130 @@ rows (the text scale: a new display class)."
               (drgnx-panel-docks-ui-test--start-is panel w key :after-reset))
           (with-current-buffer panel (text-scale-set 0)))))))
 
+;;;; The three windows through a resize: the header, the transcript and the composer of the right area, on a frame
+;;;; out of fullscreen (a fullscreen frame keeps its output's size).  Every size is checked to have taken
+;;;; (`drgnx-test-frame-text-size'): a resize that did not take fails the row.
+
+(defmacro drgnx-panel-docks-ui-test--in-area (vars prefix &rest body)
+  "Run BODY with VARS, a list (PANEL HEADER TRANSCRIPT COMPOSER), bound to a mock session's panel whose first turn made
+PREFIX answers and reads, open in the right area, and its three windows; the root frame out of fullscreen, 100 px
+smaller than its fullscreen size each way, with point at the transcript's end.  The frame's size and fullscreen state are put back after."
+  (declare (indent 2))
+  (pcase-let ((`(,panel ,hw ,tw ,cw) vars))
+    `(progn
+       (skip-unless (and (display-graphic-p) (fboundp 'nidhogg-view-rows)))
+       (load (expand-file-name "test/fixtures/panel-replay-fixture" drgnx-panel-docks-ui-test--repo) nil t)
+       (let* ((load-path (cons (expand-file-name "modules/tools" drgnx-panel-docks-ui-test--repo) load-path))
+              (drgnx-view-patch--buffers (make-hash-table :test #'equal)) (drgnx-view-patch--hooked nil)
+              (drgnx-view-env--views (make-hash-table :test #'equal)) (drgnx-view-env--sent (make-hash-table :test #'equal))
+              (drgnx-view-env--glyphs (make-hash-table :test #'equal)) (drgnx-view-env--hooked nil)
+              (drgnx-panel-replay-prefix ,prefix) (,panel nil)
+              (root (drgnx-uitest-root-frame)) (full (frame-parameter root 'fullscreen)) (size nil))
+         (unwind-protect
+             (save-window-excursion
+               ;; out of fullscreen the compositor gives the frame a small default size: the fullscreen one less 100 px
+               (setq size (list (frame-text-width root) (frame-text-height root))
+                     full (drgnx-test-frame-fullscreen root nil))
+               (drgnx-test-frame-text-size root (- (car size) 100) (- (cadr size) 100))
+               (delete-other-windows)
+               (setq ,panel (drgnx-panel-replay-up (drgnx-rows-demo--bin)))
+               (drgnx-panel-docks-ui-test--settle ,panel)
+               (let* ((,tw (get-buffer-window ,panel)) (area (window-parameter ,tw 'drgnx-role)) ,hw ,cw)
+                 (should area)
+                 (drgnx-panel-docks-ui-test--settle-area)
+                 (setq ,hw (drgnx-panel-docks-ui-test--part area 'above) ,cw (drgnx-panel-docks-ui-test--part area 'below))
+                 (should (window-live-p ,hw))
+                 (should (window-live-p ,cw))
+                 ;; the editor's window selected: the settle's C-l recenters it, not the transcript, whose window point
+                 ;; stays at its end
+                 (select-window (or (seq-find (lambda (w) (not (window-parameter w 'drgnx-role))) (window-list nil 'nomini))
+                                    ,tw))
+                 (with-current-buffer ,panel (goto-char (point-max)))
+                 (set-window-point ,tw (with-current-buffer ,panel (point-max)))
+                 (drgnx-panel-docks-ui-test--settle-area)
+                 ,@body))
+           (drgnx-panel-replay-down)
+           (drgnx-view-env-teardown)
+           (drgnx-view-patch-teardown)
+           (when size (set-frame-size root (car size) (cadr size) t))
+           (drgnx-test-frame-fullscreen root full))))))
+
+(defun drgnx-panel-docks-ui-test--part (area part)
+  "AREA's window that is its PART (`above', `below'), or nil."
+  (seq-find (lambda (w) (and (eq area (window-parameter w 'drgnx-role)) (eq part (window-parameter w 'drgnx-area-part))))
+            (window-list nil 'nomini)))
+
+(defun drgnx-panel-docks-ui-test--settle-area ()
+  "Let redisplay, the size-change functions and the store's idle calls run until the area's companions stop moving (at
+most 5 rounds)."
+  (let ((edges nil) (n 0))
+    (while (and (< n 5)
+                (not (equal edges (setq edges (mapcar #'window-pixel-edges
+                                                      (seq-filter (lambda (w) (window-parameter w 'drgnx-area-part))
+                                                                  (window-list nil 'nomini)))))))
+      (setq n (1+ n))
+      (drgnx-uitest-run (drgnx-uitest-key-events "C-l"))
+      (drgnx-test-wait-presented))))
+
+(defun drgnx-panel-docks-ui-test--fit (window)
+  "WINDOW against its buffer: (:start-at-top :vscroll :body :text), the body and its text in pixels."
+  (let ((b (window-buffer window)))
+    (list :start-at-top (= (window-start window) (with-current-buffer b (point-min)))
+          :vscroll (window-vscroll window t)
+          :body (window-body-height window t)
+          :text (cdr (window-text-pixel-size window (with-current-buffer b (point-min))
+                                             (with-current-buffer b (point-max)))))))
+
+(defun drgnx-panel-docks-ui-test--fitted-p (window)
+  "Whether WINDOW starts at its buffer's top, unscrolled, its body its text's height (within a pixel)."
+  (let ((f (drgnx-panel-docks-ui-test--fit window)))
+    (and (plist-get f :start-at-top) (= 0 (plist-get f :vscroll))
+         (<= (abs (- (plist-get f :body) (plist-get f :text))) 1))))
+
+(defun drgnx-panel-docks-ui-test--end-error (panel window)
+  "Nil when WINDOW, point at PANEL's end, shows the end whole at its bottom (or the whole transcript, when it fits);
+else where the end is.  Emacs scrolls by whole rows: below the end's row there may be up to the first row's height
+\(and the end's own row)."
+  (let ((at (pos-visible-in-window-p (with-current-buffer panel (point-max)) window t))
+        (body (window-body-height window t)) (line (window-default-line-height window)))
+    (cond ((or (not at) (nth 2 at))
+           (list :end-not-shown-whole :at at :body body :start (window-start window)))
+          ((and (> (window-start window) (with-current-buffer panel (point-min)))
+                (< (cadr at) (- body line (or (car (window-line-height 0 window)) line))))
+           (list :end-not-at-bottom :y (cadr at) :body body :line line :start (window-start window)
+                 :point (window-point window) :max (with-current-buffer panel (point-max)))))))
+
+(ert-deftest drgnx-ui-panel-docks/through-a-resize-the-end-stays-and-the-docks-fit ()
+  "The frame shrunk by 250 px and grown back: after each, the transcript with point at its end shows the end at its
+bottom, and the header and the composer are fitted to their text."
+  (drgnx-panel-docks-ui-test--in-area (panel hw tw cw) 20
+    (let* ((root (window-frame tw)) (size (list (frame-text-width root) (frame-text-height root))))
+      (should (> (with-current-buffer panel (- (point-max) (window-start tw))) 0))
+      (dolist (step (list (list :shrunk (- (cadr size) 250)) (list :back (cadr size))))
+        (drgnx-test-frame-text-size root (car size) (cadr step))
+        (drgnx-panel-docks-ui-test--settle-area)
+        (should (equal (list (car step) nil t t)
+                       (list (car step) (drgnx-panel-docks-ui-test--end-error panel tw)
+                             (drgnx-panel-docks-ui-test--fitted-p hw) (drgnx-panel-docks-ui-test--fitted-p cw))))))))
+
+(ert-deftest drgnx-ui-panel-docks/a-short-frame-keeps-the-header-and-the-end ()
+  "The frame shrunk until the transcript is two lines tall, or as short as its windows let it be (a window is at least
+`window-min-height' lines; the area: the header, the transcript and the composer): the transcript, point at its end,
+still shows its end, and the header still holds `p:head', fitted."
+  (drgnx-panel-docks-ui-test--in-area (panel hw tw _cw) 20
+    (let* ((root (window-frame tw)) (line (window-default-line-height tw))
+           (chrome (- (window-pixel-height tw) (window-body-height tw t)))
+           ;; the transcript's body: two lines, or its least
+           (want (max (* 2 line) (- (window-min-size tw nil nil t) chrome)))
+           ;; the frame: shorter by what the transcript gives up, never under its windows' least (and the echo area's)
+           (least (+ (window-min-size (frame-root-window root) nil nil t)
+                     (- (frame-text-height root) (window-pixel-height (frame-root-window root)))))
+           (height (max least (- (frame-text-height root) (- (window-body-height tw t) want)))))
+      (drgnx-test-frame-text-size root (frame-text-width root) height)
+      (drgnx-panel-docks-ui-test--settle-area)
+      (should (<= (window-body-height tw t) (+ want line)))
+      (should (pos-visible-in-window-p (with-current-buffer panel (point-max)) tw))
+      (should (with-current-buffer (window-buffer hw) (drgnx-view-sja-row-start "p:head")))
+      (should (drgnx-panel-docks-ui-test--fitted-p hw)))))
+
 ;;; agent-panel-docks-gui-test.el ends here

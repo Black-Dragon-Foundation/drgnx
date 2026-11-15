@@ -603,8 +603,8 @@ How it works:
   mock agent's hub seeds the plan run too, so a Work scene after an agent scene finds it. `agent-panel-long` (mockup
   `agent-panel`) needs a transcript longer than its window: the session gives the mock agent 17 more steps when
   `DRGNX_LOOK_ONLY` names it, so draw it alone (`DRGNX_LOOK_ONLY='^agent-panel-long$'`); with the others the transcript
-  fits and the scene says so. It resizes the frame, wheels the transcript both ways with `pixel-scroll-precision-mode`
-  on and off, and clicks the header window's parts (through the event loop too).
+  fits and the scene says so. It wheels the transcript both ways with `pixel-scroll-precision-mode` on and off, and
+  clicks the header window's parts (through the event loop too).
   Both panel scenes also check the panel's three windows in the right area: a header window (window parameter
   `drgnx-area-part` `above`) showing the hub's `agent-panel-top/SID` view with its `p:head` row, fitted to its text
   (±1 px) and carrying the area's tab row; the transcript (the panel's main buffer, `agent-panel/SID`) without
@@ -612,17 +612,17 @@ How it works:
   windows:
   - **wheel:** the transcript wheeled up and down, with `pixel-scroll-precision-mode` on and off, moves each way while
     the header window keeps its edges, start and vscroll;
-  - **resize:** the frame shrunk by 250 px and grown back; after each, the transcript with point at its end shows its
-    end at its bottom, and the header and composer are fitted;
-  - **short:** the frame shrunk until the transcript is two lines tall; it still shows its end, and the header still
-    holds `p:head`, fitted;
-
-    both first check that the frame took the height (its text height, within a line). The scenes' frame is
-    fullscreen and keeps its output's size, so today both report "the frame's text did not take the height";
-    leaving fullscreen for them would move the docks and spoil the picture;
   - **clicks:** the transcript scrolled up a page, then the header window's pin button, a lens segment and a strip pill
     clicked through the event loop, each running its command; the header does not move. The picture is this
     scrolled panel.
+
+  The three windows through a frame resize are GUI-tier rows, not scene checks: the scenes' frame is fullscreen, which
+  keeps its output's size, and leaving fullscreen moves the docks and spoils the picture.
+  `test/ui/agent-panel-docks-gui-test.el` leaves fullscreen for them (`drgnx-test-frame-fullscreen`), resizes through
+  `drgnx-test-frame-text-size` (a size that does not take fails the row) and checks: the frame shrunk by 250 px and grown
+  back, the transcript with point at its end shows its end at its bottom and the header and composer are fitted; the
+  frame as short as the transcript's two lines (or its windows' least) allow, the transcript still shows its end and the
+  header still holds `p:head`, fitted.
   `start-page` and `start-page-light` have no mockup: they are judged against the components' spec (buttons, keycaps, the shield). The
   three highlights scenes, `highlights-dark`, `highlights-light` and `highlights-hc`, have none either: each puts every highlight in one
   shot, judged against the mockups' tokens. The editor holds the current line, isearch's current and other matches,
