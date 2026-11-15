@@ -190,6 +190,62 @@ keys); every binding is undone after."
               (should (eq (keymap-lookup global-map "C-o") #'ignore)))
      (keymap-set global-map "C-o" #'open-line))))
 
+(defvar drgnx-keys--kept)
+
+(ert-deftest drgnx-keys/your-own-global-binding-survives-a-later-apply ()
+  "A key the profile claims, bound by you in the global map (config.el's `keymap-global-set', which loads after the
+modules' first stage), stays yours through every later apply (each module stage ends with one): it is reported as
+your own binding, kept.  Put back to Emacs' default, the profile's key comes back."
+  (drgnx-keys-test--live
+   (let ((drgnx-keys--kept nil))
+     (drgnx-keys-use '((vscode app editing window)))
+     (should (eq (keymap-lookup global-map "C-o") #'find-file))
+     (keymap-global-set "C-o" #'ignore)
+     (unwind-protect
+         (progn
+           (drgnx-keys-apply)                       ; a module stage ends
+           (should (eq (keymap-lookup global-map "C-o") #'ignore))
+           (drgnx-keys-apply)
+           (should (eq (keymap-lookup global-map "C-o") #'ignore))
+           (let ((c (drgnx-keys-test--conflict drgnx-keys-last "C-o")))
+             (should c)
+             (should (equal "your own binding, kept" (plist-get (plist-get c :winner) :layer)))))
+       (keymap-global-set "C-o" #'open-line))
+     (drgnx-keys-apply)
+     (should (eq (keymap-lookup global-map "C-o") #'find-file)))))
+
+(ert-deftest drgnx-keys/your-own-binding-before-the-first-apply-is-kept ()
+  "A key the profile claims that you bound in the global map before drgnx applied any keys is kept as well."
+  (drgnx-keys-test--live
+   (let ((drgnx-keys--kept nil))
+     (keymap-global-set "C-o" #'ignore)
+     (unwind-protect
+         (progn (drgnx-keys-use '((vscode app editing window)))
+                (should (eq (keymap-lookup global-map "C-o") #'ignore)))
+       (keymap-global-set "C-o" #'open-line)))))
+
+(ert-deftest drgnx-keys/your-own-binding-in-a-mode-map-survives-a-later-apply ()
+  "A profile key in a mode map that you rebound after drgnx bound it stays yours through later applies."
+  (drgnx-keys-test--live
+   (let* ((drgnx-keys--kept nil)
+          (b (seq-find (lambda (b)
+                         (let ((sym (cdr (drgnx-commands--keymap-spec (plist-get b :map)))))
+                           (and (not (eq sym 'global-map)) (boundp sym) (keymapp (symbol-value sym))
+                                (not (plist-get b :also)))))
+                       (plist-get (drgnx-keys-test--resolve '((vscode app editing window))) :bindings)))
+          (sym (cdr (drgnx-commands--keymap-spec (plist-get b :map))))
+          (key (plist-get b :key))
+          (prev (drgnx-keys--lookup (symbol-value sym) key)))
+     (should b)
+     (drgnx-keys-use '((vscode app editing window)))
+     (keymap-set (symbol-value sym) key #'ignore)
+     (unwind-protect
+         (progn (drgnx-keys-apply)
+                (should (eq (drgnx-keys--lookup (symbol-value sym) key) #'ignore))
+                (drgnx-keys-apply)
+                (should (eq (drgnx-keys--lookup (symbol-value sym) key) #'ignore)))
+       (drgnx-keys--set (symbol-value sym) key prev)))))
+
 (ert-deftest drgnx-keys/the-vscode-profile-indents-with-spaces ()
   "VS Code's default is spaces (M12f-AF-3): the profile sets `indent-tabs-mode' nil, the other profiles leave it."
   (drgnx-keys-test--live
