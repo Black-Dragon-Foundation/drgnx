@@ -2398,7 +2398,9 @@ Nothing in it needs evil, and `test/unit/modal-core-test.el` drives it with a fa
   `drgnx-modal-normal`, `-insert`, `-visual` or `-emacs`, which inherit theme faces. It is one self-contained
   construct, `(:eval (drgnx-modal-mode-line))`, that any mode-line layout can place;
   `drgnx-modal-indicator-on` / `-off` add and remove it at the front of the default `mode-line-format`. The strings
-  are made once (`drgnx-modal--indicator-texts`); redisplay only looks one up.
+  are made once (`drgnx-modal--indicator-texts`); redisplay only looks one up. The status bar takes the indicator out
+  while it is on (it shows the state itself) and, turned off, puts it back only when an engine runs
+  (`drgnx-modal-running`): with none, the default `mode-line-format` is left as it was before the bar.
 - **Typing.** `(drgnx-modal-typing-p)` says whether a printable key types in this buffer: no engine runs here, or
   the state is insert, replace or emacs. Code that passes a key on to the buffer (a closing key) asks it instead of
   naming an engine.
