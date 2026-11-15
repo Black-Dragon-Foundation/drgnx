@@ -16,6 +16,11 @@
 (declare-function drgnx-pkg-jit-guard "drgnx-pkg-activate")
 (declare-function drgnx-panel-replay--wait "panel-replay-fixture")
 (declare-function drgnx-agent-panel-act "drgnx-agent-panel-steps")
+(declare-function drgnx-agent-panel--end-shown-p "drgnx-agent-panel")
+(declare-function drgnx-uitest-run "drgnx-uitest")
+(declare-function drgnx-uitest-click-events "drgnx-uitest")
+(defvar pixel-scroll-precision-mode)
+(declare-function pixel-scroll-precision-mode "pixel-scroll")
 (declare-function drgnx-agent-panel-chip "drgnx-agent-panel-explain")
 (declare-function drgnx-agent-panel-preset "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel-toggle-type "drgnx-agent-panel-steps")
@@ -528,7 +533,67 @@ counted from the hub), the file's problems (`drgnx-look-scene--problems') and it
 at the bottom.  Then the transcript is scrolled up a page and the pinned header's pin button and a chip are clicked:
 the picture is the scrolled panel."
   (prog1 (drgnx-look-scene-agent-panel)
+    (drgnx-look-scene--try "panel resize" (drgnx-look-scene--panel-resize drgnx-look-scene--panel))
+    (drgnx-look-scene--try "panel wheel" (drgnx-look-scene--panel-wheel drgnx-look-scene--panel))
     (drgnx-look-scene--try "pinned clicks" (drgnx-look-scene--panel-clicks drgnx-look-scene--panel))))
+
+(defun drgnx-look-scene--panel-resize (buffer)
+  "Shrink the frame by 250 px and grow it back: after each, with no hub patch in between, BUFFER's window at the panel's
+end shows the end whole."
+  (let* ((w (get-buffer-window buffer)) (frame (and w (window-frame w))) (h (and frame (frame-pixel-height frame))))
+    (unless w (error "no window shows the panel"))
+    (select-window w)
+    (with-current-buffer buffer (goto-char (point-max)) (set-window-point w (point-max)))
+    (dolist (step (list (- h 250) h))
+      (set-frame-size frame (frame-pixel-width frame) step t)
+      (redisplay t)
+      (unless (with-current-buffer buffer
+                (and (drgnx-agent-panel--end-shown-p w)
+                     ;; at the window's bottom, not centred where redisplay puts a point it had to find
+                     (> (cadr (pos-visible-in-window-p (point-max) w t)) (- (window-body-height w t) (* 4 (frame-char-height))))))
+        (error "after the frame went to %d px the panel's end is not shown (window body %d px, start %d, end at %S)"
+               step (window-body-height w t) (window-start w)
+               (with-current-buffer buffer (pos-visible-in-window-p (point-max) w t)))))))
+
+(defun drgnx-look-scene--panel-top-shown-p (window)
+  "Whether WINDOW's top rows are the pinned copy, whole: the pin button is over its first pixels."
+  (let ((pin (alist-get 'pin (drgnx-look-scene--panel-click-targets window))))
+    (and pin (< (cdr (posn-x-y pin)) 40))))
+
+(defun drgnx-look-scene--panel-wheel (buffer)
+  "Wheel the transcript up and down over BUFFER's window, with `pixel-scroll-precision-mode' on and off: the transcript
+moves each way and the pinned rows stay whole at the top."
+  (let ((w (get-buffer-window buffer)) (was (bound-and-true-p pixel-scroll-precision-mode)))
+    (unless w (error "no window shows the panel"))
+    (select-window w)
+    (unwind-protect
+        (dolist (precise '(nil t))
+          (pixel-scroll-precision-mode (if precise 1 -1))
+          (set-window-point w (window-start w))
+          (let* ((posn (posn-at-x-y 40 400 w))
+                 (dist (lambda () (with-current-buffer buffer (- (point-max) (window-start w)))))
+                 (wheel (lambda (head n delta)
+                          (put head 'event-kind 'mouse-click)
+                          ;; a plain wheel click, or with a pixel delta when the mode reads one
+                          (drgnx-uitest-run (make-list n (if precise
+                                                             (list head posn 1 (cons 0 (if (eq head 'wheel-up) -1 1))
+                                                                   (cons 0.0 (float (- delta))))   ; the mode's sign: a positive delta shows earlier text
+                                                           (list head posn))))
+                          (redisplay t)))
+                 (start (funcall dist)))
+            (funcall wheel 'wheel-up 6 -40)
+            (let ((up (funcall dist)))
+              (unless (> up start) (error "wheel up (pixel precision %S) did not move the transcript (%d, was %d)" precise up start))
+              (unless (drgnx-look-scene--panel-top-shown-p w)
+                (error "wheel up (pixel precision %S): the pinned rows are not whole at the top (vscroll %S, start %d)"
+                       precise (window-vscroll w t) (window-start w)))
+              ;; the older page loads at the top and puts rows above the start: down is measured on the start itself
+              (let ((from (window-start w)) (pt (window-point w)))
+                (funcall wheel 'wheel-down 6 40)
+                (unless (> (window-start w) from)
+                  (error "wheel down (pixel precision %S) did not move the transcript back (start %d, was %d; point %d, was %d; last command %S)"
+                         precise (window-start w) from (window-point w) pt last-command))))))
+      (pixel-scroll-precision-mode (if was 1 -1)))))
 
 (defun drgnx-look-scene--panel-click-targets (window)
   "The first posn in WINDOW's top 300 px over each kind of clickable part of the pinned copy: an alist of (KIND . POSN),
@@ -575,10 +640,15 @@ still be at the top, and each click must run its command."
                 ((symbol-function 'drgnx-agent-panel-chip) (lambda (item) (push (list 'chip item) ran))))
         (with-current-buffer buffer
           (dolist (kind '(pin lens pill chip))
-            (when-let* ((p (alist-get kind targets))) (drgnx-agent-panel-act (list 'mouse-1 p))))))
-      (dolist (want '(agents-panel-pin lens type))
-        (unless (seq-find (lambda (r) (or (eq r want) (eq (car-safe r) want))) ran)
-          (error "the clicks ran %S, not %S" ran want))))))
+            (when-let* ((p (alist-get kind targets))) (drgnx-agent-panel-act (list 'mouse-1 p))))
+          (dolist (want '(agents-panel-pin lens type))
+            (unless (seq-find (lambda (r) (or (eq r want) (eq (car-safe r) want))) ran)
+              (error "the clicks ran %S, not %S" ran want)))
+          ;; and one click through the event loop, as a pointer's press and release arrive
+          (setq ran nil)
+          (drgnx-uitest-run (drgnx-uitest-click-events (alist-get 'pin targets)))
+          (unless (memq 'agents-panel-pin ran)
+            (error "a mouse-1 click on the pin button through the event loop ran %S" ran)))))))
 
 (defun drgnx-look-scene-agent-panel ()
   (drgnx-look-scene--theme 'drgnx-dark)

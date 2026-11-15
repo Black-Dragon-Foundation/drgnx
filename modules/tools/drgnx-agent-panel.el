@@ -36,6 +36,7 @@
 (require 'drgnx-view-nav)                ; the moves between steps of a kind, through the replica
 (require 'text-property-search)          ; the moves look through the drawn rows
 
+(defvar mwheel-scroll-up-function)
 (declare-function drgnx-hub--call-on "drgnx-hub-client")
 (declare-function drgnx-view-env-register "drgnx-view-env")
 (declare-function drgnx-view-env-update "drgnx-view-env")
@@ -335,15 +336,42 @@ the pinned rows are shown over each try, and no try starts before their end."
         (setq start (point))))
     start))
 
+;; `pixel-scroll-precision-mode' scrolls by pixels, which the first line of the window takes as its own `vscroll': the
+;; pinned rows (an overlay's string over that line) would slide out of the window with it, and the start would not move
+;; until the whole of them had.  In a panel the wheel scrolls by lines, as `mwheel-scroll' does.
+(defvar drgnx-agent-panel--wheel-map
+  (let ((m (make-sparse-keymap)))
+    (define-key m [wheel-up] #'mwheel-scroll)
+    (define-key m [wheel-down] #'mwheel-scroll)
+    m)
+  "The wheel in a panel, over `pixel-scroll-precision-mode''s.")
+
+(defun drgnx-agent-panel--scroll-up (&optional n)
+  "`mwheel-scroll-up-function' of a panel: `scroll-up' N lines.  The pinned rows are the first lines of the window's
+first line (an overlay's string over it), and `scroll-up' counts them: the lines it takes through them leave the start
+where it is, so a wheel down would not move the transcript until it had gone through all of them.  They are added."
+  (scroll-up (and n (+ n (if drgnx-agent-panel--pin (cl-count ?\n (cdr drgnx-agent-panel--pin)) 0)))))
+
+(defun drgnx-agent-panel--follow-window (w)
+  "Window W, when its point is at the panel's end (the composer), shows the end at its bottom, the pinned rows over its
+first line.  A window the user moved point in is left alone."
+  (when (= (window-point w) (point-max))
+    (drgnx-wb-with-owned-windows (list w)
+      (set-window-start w (drgnx-agent-panel--tail-start w) t)
+      (drgnx-agent-panel--pin-place w))))
+
 (defun drgnx-agent-panel--follow-tail ()
   "The panel owns its scroll: a window whose point is at the panel's end (the composer) shows the end at its bottom,
 whatever came in above it.  A panel shorter than its window starts at its top (the header); a taller one shows its
 last page.  A window the user moved point in is left alone."
   (dolist (w (get-buffer-window-list (current-buffer) nil t))
-    (when (= (window-point w) (point-max))
-      (drgnx-wb-with-owned-windows (list w)
-        (set-window-start w (drgnx-agent-panel--tail-start w) t)
-        (drgnx-agent-panel--pin-place w)))))
+    (drgnx-agent-panel--follow-window w)))
+
+(defun drgnx-agent-panel--resized (window)
+  "`window-size-change-functions' (buffer-local, so it gets the window showing the buffer, once for each change of its
+size, of its buffer or when it is new): a window at the panel's end shows the end at its bottom again at once, not
+at the next hub patch."
+  (drgnx-agent-panel--follow-window window))
 
 (defun drgnx-agent-panel--sync (view)
   "SYNC of the panel's view: with the hub's rows, the models their patches named go to Sjá before they are drawn."
@@ -667,6 +695,9 @@ signal when no hub serves)."
   ;; the panel's text in the UI font (agent-panel.html); output, diffs and code name the code font's faces
   (face-remap-add-relative 'default 'drgnx-ui-text)
   (add-hook 'window-scroll-functions #'drgnx-agent-panel--scrolled nil t)
+  (setq-local mwheel-scroll-up-function #'drgnx-agent-panel--scroll-up)
+  (setq-local minor-mode-overriding-map-alist (list (cons 'pixel-scroll-precision-mode drgnx-agent-panel--wheel-map)))
+  (add-hook 'window-size-change-functions #'drgnx-agent-panel--resized nil t)
   (add-hook 'kill-buffer-hook #'drgnx-agent-panel--killed nil t))
 
 (defun drgnx-agent-panel--killed ()
