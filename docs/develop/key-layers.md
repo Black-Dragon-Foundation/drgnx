@@ -46,7 +46,8 @@ symbol when a key is pressed, so a map made later or replaced needs nothing.
 The target is active (`drgnx-keys--foreign-active-p`) when the buffer's local map is or inherits it, or a minor mode's
 map is or inherits it (`current-minor-mode-maps`: `minor-mode-map-alist`, `minor-mode-overriding-map-alist` and the
 emulation alists; vlf's `vlf-prefix-map` is such a map), or the `keymap` or `local-map` property at point is or inherits it
-(an overlay's or a button's). Text-property keymaps outrank the minor-mode alist, so a button's own map beats a profile key.
+(an overlay's or a button's). A `local-map` property replaces the buffer's local map, so the local map does not count
+where one is at point. Text-property keymaps outrank the minor-mode alist, so a button's own map beats a profile key.
 A buffer-local `minor-mode-map-alist` does not see the layer's entry.
 
 - **By local map, not by mode.** wgrep switches maps with `use-local-map` and keeps `major-mode`; a mode derived from a
@@ -55,8 +56,16 @@ A buffer-local `minor-mode-map-alist` does not see the layer's entry.
 - **Prefixes are filtered too.** A prefix entry (`C-c` of `C-c y a`) is a filtered item as well: a plain prefix map in the
   layer would turn a command bound on `C-c` in another buffer into a prefix there.
 - **The target map is never written.** What the package, a hook or you put in it stays, and the layer is above it.
-  Keys of yours in a foreign map step aside once the watched set records them (the keymap redesign's T6); until
-  then a profile `:map` key wins over your binding in that map.
+- **The watched set.** Every map the last apply's profile and settings keys name, drgnx's own and foreign
+  (`drgnx-keys--named-maps`), is watched by identity with its own prefix maps (`drgnx-keys--watch-named`, again before
+  each load's after-load bodies, so a map a package makes afresh is watched before your `with-eval-after-load` writes
+  into it). A write of yours there stays in the map and is recorded (`drgnx-keys--yours-in-maps`); the foreign layer
+  leaves out every profile key that is your key, a prefix of it or under it (`drgnx-keys--yours-blocks-p`), and takes
+  it back when you remove yours or a reload of your file drops it. A drgnx map needs no step aside: your key there
+  shadows the layer, its parent.
+- **`:everywhere` keys** are watched by key in every map (one stroke: a hash-free `memq` on the event): your binding
+  of one in a mode map is recorded (`drgnx-keys--yours-everywhere`), and the entry's filter steps aside wherever that map
+  is active.
 - **The minibuffer's C-h** (the profile's global C-h gives way to `help-command` there) is a foreign entry for
   `minibuffer-local-map`.
 - **Evil.** `drgnx-keys--bind-evil-aux` still binds the keys in evil's auxiliary maps of the target when evil is loaded.

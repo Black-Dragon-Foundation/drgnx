@@ -23,6 +23,7 @@
 (defvar keys-lay-pkg-mode-map (let ((m (make-sparse-keymap))) (define-key m (kbd "C-c y o") #'keys-lay-own) m))
 (define-derived-mode keys-lay-pkg-mode fundamental-mode "KP")
 (define-derived-mode keys-lay-child-mode keys-lay-pkg-mode "KC")
+(defvar keys-lay-late-pkg-mode-map)   ; made by a package file a row writes, unbound until it loads
 (defvar keys-lay-edit-map (let ((m (make-sparse-keymap))) (set-keymap-parent m keys-lay-pkg-mode-map) m))
 (defvar keys-lay-other-map (make-sparse-keymap) "A second package map.")
 (defvar keys-lay-minor-mode-map (make-sparse-keymap))
@@ -36,7 +37,8 @@ applied on Linux; `lay-empty' is a profile with no keys.  Undone after."
      (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'linux)))
        (drgnx-test-with-areas
          (let* ((drgnx-keys-profiles (list (list 'lay :name "Lay" :bind ',bind) (list 'lay-empty :name "Empty" :bind nil)))
-                (drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-problems nil) (drgnx-keys-last nil))
+                (drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-problems nil) (drgnx-keys-last nil)
+                (drgnx-keys--yours-in-maps (make-hash-table :test #'equal)) (drgnx-keys--yours-everywhere nil))
            (set-keymap-parent drgnx-keys-test-lder-mode-map nil)
            (set-keymap-parent drgnx-keys-test-lbase-mode-map nil)
            (set-keymap-parent drgnx-keys-test-llate-mode-map nil)
@@ -275,6 +277,95 @@ share a key."
     (should-not drgnx-keys--foreign-on)
     (should-not (memq drgnx-keys--foreign-entry minor-mode-map-alist))
     (should-not (keys-lay--bound "C-c y a" keys-lay-pkg-mode-map))))
+
+;;;; T6: your writes into the maps the profile names
+
+(defmacro keys-lay--as-you (&rest body)
+  "BODY as a keyboard command of yours (M-:): its key writes are yours."
+  `(let ((this-command 'eval-expression)) ,@body))
+
+(ert-deftest drgnx-keys/foreign-your-key-in-the-map-beats-the-profile ()
+  "Your binding in a map the profile names (a package's mode map) beats the profile's key there, after an apply too;
+take it away and the profile's key is back."
+  (keys-lay--with ((lay-a "C-c y a" :map keys-lay-pkg-mode-map))
+    (unwind-protect
+        (progn
+          (keys-lay--as-you (keymap-set keys-lay-pkg-mode-map "C-c y a" #'keys-lay-z))
+          (should (eq (keys-lay--bound "C-c y a" keys-lay-pkg-mode-map) #'keys-lay-z))
+          (drgnx-keys-apply)
+          (should (eq (keys-lay--bound "C-c y a" keys-lay-pkg-mode-map) #'keys-lay-z))
+          (keys-lay--as-you (keymap-unset keys-lay-pkg-mode-map "C-c y a" t))
+          (should (eq (keys-lay--bound "C-c y a" keys-lay-pkg-mode-map) #'keys-lay-a)))
+      (keymap-unset keys-lay-pkg-mode-map "C-c y a" t))))
+
+(ert-deftest drgnx-keys/foreign-your-key-in-a-map-its-package-makes-later-beats-the-profile ()
+  "The profile names a map its package has not made yet; your after-load body binds a key there when the package
+loads: yours beats the profile's key."
+  (keys-lay--with ((lay-a "C-c y a" :map keys-lay-late-pkg-mode-map))
+    (let* ((dir (make-temp-file "keys-lay-late" t)) (load-path (cons dir load-path)))
+      (unwind-protect
+          (progn
+            (with-temp-file (expand-file-name "keys-lay-late-pkg.el" dir)
+              (insert "(defvar keys-lay-late-pkg-mode-map (make-sparse-keymap))\n(provide 'keys-lay-late-pkg)\n"))
+            (keys-lay--as-you
+             (with-eval-after-load 'keys-lay-late-pkg
+               (keymap-set keys-lay-late-pkg-mode-map "C-c y a" #'keys-lay-z)))
+            (let ((this-command nil)) (require 'keys-lay-late-pkg))
+            (should (eq (keys-lay--bound "C-c y a" keys-lay-late-pkg-mode-map) #'keys-lay-z)))
+        (makunbound 'keys-lay-late-pkg-mode-map)
+        (setq features (delq 'keys-lay-late-pkg features)
+              after-load-alist (seq-remove (lambda (e) (equal (car e) 'keys-lay-late-pkg)) after-load-alist))
+        (delete-directory dir t)))))
+
+(ert-deftest drgnx-keys/foreign-your-nil-in-the-map-leaves-the-key-empty ()
+  "You unbind the key in the map the profile names: nothing runs there (the profile's key steps aside too)."
+  (keys-lay--with ((lay-a "C-c y a" :map keys-lay-pkg-mode-map))
+    (unwind-protect
+        (progn (keys-lay--as-you (keymap-set keys-lay-pkg-mode-map "C-c y a" nil))
+               (should-not (keys-lay--bound "C-c y a" keys-lay-pkg-mode-map)))
+      (keymap-unset keys-lay-pkg-mode-map "C-c y a" t))))
+
+(ert-deftest drgnx-keys/foreign-your-command-on-a-prefix-beats-a-layer-key-under-it ()
+  "Your command on C-c y in the map beats the profile's C-c y a there (the layer's prefix would hide it)."
+  (keys-lay--with ((lay-a "C-c y a" :map keys-lay-pkg-mode-map))
+    (let ((own (lookup-key keys-lay-pkg-mode-map (kbd "C-c y"))))
+      (unwind-protect
+          (progn (keys-lay--as-you (keymap-set keys-lay-pkg-mode-map "C-c y" #'keys-lay-z))
+                 (should (eq (keys-lay--bound "C-c y" keys-lay-pkg-mode-map) #'keys-lay-z)))
+        (define-key keys-lay-pkg-mode-map (kbd "C-c y") own)))))
+
+(ert-deftest drgnx-keys/foreign-a-packages-write-stays-below-the-profile ()
+  "A write into the map that is not yours (a package's, a hook's) stays below the profile's key."
+  (keys-lay--with ((lay-a "C-c y a" :map keys-lay-pkg-mode-map))
+    (unwind-protect
+        (progn (let ((this-command nil)) (keymap-set keys-lay-pkg-mode-map "C-c y a" #'keys-lay-z))
+               (should (eq (keys-lay--bound "C-c y a" keys-lay-pkg-mode-map) #'keys-lay-a)))
+      (keymap-unset keys-lay-pkg-mode-map "C-c y a" t))))
+
+(ert-deftest drgnx-keys/foreign-a-local-map-property-replaces-the-local-map ()
+  "A `local-map' property at point replaces the buffer's local map: the target map is not active there."
+  (keys-lay--with ((lay-a "C-c y a" :map keys-lay-pkg-mode-map))
+    (with-temp-buffer
+      (keys-lay-pkg-mode)
+      (insert (propertize "x" 'local-map (make-sparse-keymap)) "y")
+      (goto-char 1)
+      (should-not (key-binding (kbd "C-c y a")))
+      (goto-char 2)
+      (should (eq (key-binding (kbd "C-c y a")) #'keys-lay-a)))))
+
+(ert-deftest drgnx-keys/everywhere-key-steps-aside-for-yours-in-a-mode-map ()
+  "An `:everywhere' key is above every mode map, but your binding of it in a mode map wins in that mode's buffers
+\(and only there); a package's binding there does not."
+  (keys-lay--with ((lay-a "C-c y e" :everywhere "M-o"))
+    (unwind-protect
+        (progn
+          (should (eq (keys-lay--bound "M-o" keys-lay-pkg-mode-map) #'keys-lay-a))
+          (let ((this-command nil)) (keymap-set keys-lay-pkg-mode-map "M-o" #'keys-lay-own))
+          (should (eq (keys-lay--bound "M-o" keys-lay-pkg-mode-map) #'keys-lay-a))
+          (keys-lay--as-you (keymap-set keys-lay-pkg-mode-map "M-o" #'keys-lay-z))
+          (should (eq (keys-lay--bound "M-o" keys-lay-pkg-mode-map) #'keys-lay-z))
+          (should (eq (keys-lay--bound "M-o" (make-sparse-keymap)) #'keys-lay-a)))
+      (keymap-unset keys-lay-pkg-mode-map "M-o" t))))
 
 (provide 'keys-layers-test)
 ;;; keys-layers-test.el ends here

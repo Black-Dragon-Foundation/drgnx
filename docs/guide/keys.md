@@ -550,8 +550,10 @@ global key stays below the profile's. Two cases work as in any Emacs: a key a pa
 prefix the profile owns, where Emacs binds a command (`C-k x` while Emacs's `C-k` is `kill-line`), fails with
 "starts with non-prefix key"; and a global `[remap]` that is not yours still turns the profile's command into its own.
 
-In a mode's keymap, a key is yours when you changed it after drgnx bound it; unbind it there and the profile's key
-returns at the next apply. A key in `settings.el` (below) is the way
+In a mode's keymap the same holds for the keymaps a profile or `settings.el` names: drgnx never writes them, and
+your binding there (or your `nil`) beats the profile's key in that mode, as does a command of yours on its prefix;
+take yours away (`keymap-unset … t`) and the profile's key is back at once. A key a profile has in every mode
+(`:everywhere`, such as `C-j` for the panel) gives way in a mode where you bound it yourself. A key in `settings.el` (below) is the way
 to give a key to a drgnx command.
 
 With Vim keys the sheet shows leader keys plain (`SPC f f`) and a key that works in one state with it (`g d (normal state)`); the Leader Menu on `M-SPC` over Emacs' `cycle-spacing` is listed with the conflicts; which-key labels the leader keys and their prefixes (`SPC f` is `+File`); `drgnx doctor` (`modal`) warns when the engine is missing.

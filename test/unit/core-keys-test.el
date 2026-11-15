@@ -320,6 +320,41 @@ longer binds is the profile's again."
      (should (eq (keymap-lookup (current-global-map) "C-o") #'find-file))
      (should-not (gethash "C-o" drgnx-keys--yours)))))
 
+(ert-deftest drgnx-keys/yours-an-after-load-body-belongs-to-the-file-that-registered-it ()
+  "Your after-load body that runs while another file of yours loads (it requires the package) is the registering
+file's, not the loading one's: reloading the loading file without the `require' keeps the key."
+  (drgnx-keys-test--live
+   (drgnx-keys-use '((vscode app editing window)))
+   (let* ((dir (make-temp-file "kx-pkg" t))
+          (load-path (cons dir load-path))
+          (f (drgnx-keys-test--user-file "kx-reg.el" "(with-eval-after-load 'kx-pkg (keymap-global-set \"C-o\" #'ignore))\n"))
+          (g (drgnx-keys-test--user-file "kx-req.el" "(require 'kx-pkg)\n")))
+     (unwind-protect
+         (progn
+           (with-temp-file (expand-file-name "kx-pkg.el" dir) (insert "(provide 'kx-pkg)\n"))
+           (let ((this-command nil)) (load f nil t t) (load g nil t t))
+           (should (equal (cdr (gethash "C-o" drgnx-keys--yours)) (file-name-sans-extension (file-truename f))))
+           (should-not (gethash (file-name-sans-extension (file-truename f)) drgnx-keys--loading)) ; not F's own load
+           (drgnx-keys-test--user-file "kx-req.el" ";; no require now\n")
+           (let ((this-command nil)) (load g nil t t))
+           (should (eq (keymap-lookup (current-global-map) "C-o") #'ignore)))
+       (setq features (delq 'kx-pkg features)
+             after-load-alist (seq-remove (lambda (e) (equal (car e) 'kx-pkg)) after-load-alist))
+       (delete-directory dir t)))))
+
+(ert-deftest drgnx-keys/yours-a-failed-load-leaves-no-list-for-the-next ()
+  "A load of your file that stops with an error keeps its keys; when the file then loads without them, they go (the
+failed load's keys are not taken for the new load's)."
+  (drgnx-keys-test--live
+   (drgnx-keys-use '((vscode app editing window)))
+   (let ((f (drgnx-keys-test--user-file "kx-fail.el" "(keymap-global-set \"C-o\" #'ignore)\n(error \"boom\")\n")))
+     (let ((this-command nil)) (ignore-errors (load f nil t t)))
+     (should (eq (keymap-lookup (current-global-map) "C-o") #'ignore))
+     (drgnx-keys-test--user-file "kx-fail.el" ";; fixed: no key now\n")
+     (let ((this-command nil)) (load f nil t t))
+     (should (eq (keymap-lookup (current-global-map) "C-o") #'find-file))
+     (should-not (gethash "C-o" drgnx-keys--yours)))))
+
 (ert-deftest drgnx-keys/yours-a-native-load-records-the-source ()
   "A file of yours loaded natively compiled (its .eln found for its .elc) records the source, so a reload of the .el
 forgets its keys."
