@@ -402,11 +402,21 @@ profile has reach drgnx (`drgnx-term-apply-keys'); the mouse goes to it while it
 
 (defun drgnx-term-apply-keys (&rest _)
   "The terminal's keymap follows the key profile: the first events of the keys that reach drgnx
-\(`drgnx-terminal-key-split') are no longer sent to the program; the others are again.  Runs at the module's setup
+\(`drgnx-terminal-key-split') and of the profile's keys in this map (its key layer) are no longer sent to the
+program; the others are again.  Runs at the module's setup
 and after `drgnx-keys-apply'."
   (drgnx-term--fill-map drgnx-term-mode-map
-                        (mapcar (lambda (k) (aref (key-parse k) 0))
-                                (plist-get (drgnx-terminal-key-split) :to-drgnx))))
+                        (append (mapcar (lambda (k) (aref (key-parse k) 0))
+                                        (plist-get (drgnx-terminal-key-split) :to-drgnx))
+                                (drgnx-term--layer-events))))
+
+(defun drgnx-term--layer-events ()
+  "The first events of the keys the profile binds in `drgnx-term-mode-map', whose key layer sits above the map's own
+keys (`drgnx-keys-own-layer'): a raw binding in the map itself would shadow them."
+  (let (events)
+    (when-let* ((layer (drgnx-keys-own-layer 'drgnx-term-mode-map)))
+      (map-keymap (lambda (ev def) (when (and def (not (eq ev 'remap))) (push ev events))) layer))
+    events))
 
 ;;;; Copy, paste, the mouse, focus
 

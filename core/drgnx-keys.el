@@ -879,6 +879,7 @@ leave KEY to its owner while it is still DEFINITION (`drgnx-keys--yours').")
     (drgnx-keys--set aux key prev))
   (setq drgnx-keys--evil-aux nil)
   (drgnx-keys--set-everywhere nil)
+  (drgnx-keys--detach-all)
   (drgnx-keys--profile-indent nil)
   (drgnx-keys--uninstall-global)
   (setq drgnx-keys--applied nil))
@@ -926,6 +927,127 @@ emptied and leaves the list, so a profile switch leaves nothing behind."
   (if drgnx-keys--everywhere-on
       (add-to-list 'emulation-mode-map-alists 'drgnx-keys--everywhere-alist)
     (setq emulation-mode-map-alists (delq 'drgnx-keys--everywhere-alist emulation-mode-map-alists))))
+
+;;;; Layers for other keymaps
+;; A profile's key in a map other than the global map is never written into that map.  drgnx's own maps get a
+;; layer as their parent (child -> layer -> old parent).  Foreign maps (a package's, wgrep's) get entries in one
+;; global layer that is active only while the buffer's local map is, or inherits, the target map.  The modal
+;; engine's maps (evil's state maps) keep the ledger of `drgnx-keys--bind' until their layer exists.
+
+(defvar drgnx-keys--own-layers (make-hash-table :test #'eq)
+  "MAPSYM → the profile layer of drgnx's own keymap MAPSYM: a sparse keymap, the child's parent while attached.")
+
+(defvar drgnx-keys--attached nil
+  "The layers inserted by the last apply: (MAPSYM CHILD . LAYER) each, CHILD the keymap MAPSYM held then.")
+
+(defun drgnx-keys--own-map-p (mapsym)
+  "Whether MAPSYM names one of drgnx's own keymaps."
+  (string-prefix-p "drgnx-" (symbol-name mapsym)))
+
+(defun drgnx-keys--problem (text late)
+  "Record TEXT as a keys problem; LATE (a binding made after the apply, when a feature loaded): also on the report."
+  (push text drgnx-keys-problems)
+  (when late
+    (setq drgnx-keys-last (plist-put drgnx-keys-last :problems (append (plist-get drgnx-keys-last :problems) (list text))))
+    (drgnx-keys--notify-problems (plist-get drgnx-keys-last :problems))
+    (drgnx-keys--write-report)))
+
+(defun drgnx-keys--when-map-ready (feature sym generation fn)
+  "Call FN (with LATE, whether it runs after the apply) once keymap SYM exists: now, or when FEATURE loads.
+A stale GENERATION never runs; an error is a problem."
+  (let ((run (lambda (late)
+               (when (= generation drgnx-keys--generation)
+                 (condition-case err (funcall fn late)
+                   (error (drgnx-keys--problem (format "cannot layer the keys of %s: %s" sym (error-message-string err))
+                                               late)))))))
+    (cond ((and feature (not (featurep feature))) (with-eval-after-load feature (funcall run t)))
+          ((and (boundp sym) (keymapp (symbol-value sym))) (funcall run nil))
+          (t (push (format "no keymap %s" sym) drgnx-keys-problems)))))
+
+;;;;; Parent layers for drgnx's own maps
+
+(defun drgnx-keys--natural-parent (sym)
+  "The parent `define-derived-mode' gives keymap SYM when its mode first runs, when SYM is a derived mode's map and
+has none yet (derived.el sets one only `unless (keymap-parent map)'): the parent mode's map, else nil."
+  (let ((name (symbol-name sym)))
+    (when (string-suffix-p "-map" name)
+      (when-let* ((parent (get (intern (string-remove-suffix "-map" name)) 'derived-mode-parent))
+                  (pmap (intern (format "%s-map" parent)))
+                  ((boundp pmap)) ((keymapp (symbol-value pmap))))
+        (symbol-value pmap)))))
+
+(defun drgnx-keys-own-layer (sym)
+  "The profile's layer of drgnx's own keymap SYM while it is inserted above the map, else nil."
+  (cddr (assq sym drgnx-keys--attached)))
+
+(defun drgnx-keys--detach (entry)
+  "Take layer ENTRY (`drgnx-keys--attached') out of its child's chain again, saying so when someone else set the
+child's parent meanwhile (the layer is then left out of the chain until the next apply puts it back)."
+  (pcase-let ((`(,sym ,child . ,layer) entry))
+    (if (eq (keymap-parent child) layer)
+        (set-keymap-parent child (keymap-parent layer))
+      (when (and (boundp sym) (eq (symbol-value sym) child))
+        (push (format "%s: its parent was replaced after drgnx's keys were put above it; they are put back" sym)
+              drgnx-keys-problems)))
+    (setcdr layer nil)))
+
+(defun drgnx-keys--detach-all ()
+  "Take every layer out of its child's chain."
+  (mapc #'drgnx-keys--detach drgnx-keys--attached)
+  (setq drgnx-keys--attached nil))
+
+(defun drgnx-keys--fill-own (sym items)
+  "Fill SYM's layer with ITEMS ((KEY . COMMAND) …) and insert it between the keymap and its parent: child → layer →
+old parent, or the parent the derived mode will take.  Called after the mode is defined (its map exists)."
+  (let* ((child (symbol-value sym))
+         (layer (or (gethash sym drgnx-keys--own-layers) (puthash sym (make-sparse-keymap) drgnx-keys--own-layers)))
+         (nidhogg-define-key-redirect-function nil))
+    (when-let* ((old (assq sym drgnx-keys--attached))) (drgnx-keys--detach old) (setq drgnx-keys--attached (delq old drgnx-keys--attached)))
+    (setcdr layer nil)
+    (dolist (item items)
+      (condition-case err (define-key layer (key-parse (car item)) (cdr item))
+        (error (drgnx-keys--problem (format "cannot bind %s in %s: %s" (car item) sym (error-message-string err)) nil))))
+    (set-keymap-parent layer (or (keymap-parent child) (drgnx-keys--natural-parent sym)))
+    (set-keymap-parent child layer)
+    (push (cons sym (cons child layer)) drgnx-keys--attached)))
+
+(defun drgnx-keys--layer-keys (map &optional prefix)
+  "The key vectors MAP binds to a command, prefix maps walked."
+  (let (keys)
+    (map-keymap (lambda (ev def)
+                  (let ((k (vconcat prefix (vector ev))))
+                    (if (keymapp def) (setq keys (nconc (drgnx-keys--layer-keys def k) keys)) (push k keys))))
+                map)
+    keys))
+
+(defun drgnx-keys-lint-children ()
+  "Profile keys that sit in a drgnx map itself instead of in its layer, (\"MAPSYM KEY\" …) for each: the layer is the
+map's parent, so such a key would shadow it, and a profile switch would leave it behind."
+  (let (found)
+    (pcase-dolist (`(,sym ,child . ,layer) drgnx-keys--attached)
+      (let ((own (copy-keymap child)))
+        (set-keymap-parent own nil)
+        (dolist (k (drgnx-keys--layer-keys layer))
+          (let ((d (lookup-key own k)))
+            (when (and d (not (numberp d))) (push (format "%s %s" sym (key-description k)) found))))))
+    (nreverse found)))
+
+(defun drgnx-keys--set-layers (entries generation)
+  "Put ENTRIES ((SPEC COMMAND BINDING) …), the profile's keys in drgnx's own maps, into layers: parents of the maps."
+  (let (own features)
+    (dolist (e entries)
+      (pcase-let* ((`(,spec ,command ,b) e) (`(,feature . ,sym) (drgnx-commands--keymap-spec spec))
+                   (row (list b (cons (plist-get b :key) command))))
+        (setf (alist-get sym features) feature)
+        (push row (alist-get sym own))))
+    (pcase-dolist (`(,sym . ,rows) own)
+      (let ((rows (reverse rows)))
+        (drgnx-keys--when-map-ready
+         (alist-get sym features) sym generation
+         (lambda (_late)
+           (drgnx-keys--fill-own sym (mapcar #'cadr rows))
+           (dolist (r rows)
+             (drgnx-keys--bind-evil-aux (car r) sym (car (cadr r)) (cdr (cadr r))))))))))
 
 (defun drgnx-keys--bind-evil-aux (b mapsym key def)
   "When evil is loaded: also bind KEY to DEF in evil's auxiliary maps of MAPSYM's keymap (normal and motion state),
@@ -1034,7 +1156,7 @@ Never prompts: problems are collected in `drgnx-keys-last'.  Returns the resolut
         ;; Restore first: resolution then sees Emacs' own bindings, not drgnx's previous ones.
         (drgnx-keys--restore)
         (cl-incf drgnx-keys--generation)
-        (let* ((user (drgnx-keys-read-user)) (globals nil)
+        (let* ((user (drgnx-keys-read-user)) (globals nil) (layered nil)
                (layers (or drgnx-keys--session-layers (plist-get user :layers) (drgnx-keys--layers)))
                (r (drgnx-keys-resolve :commands (drgnx-commands-all) :profiles drgnx-keys-profiles :layers layers
                                       :user user :platform (drgnx-platform) :defaults drgnx-keys--defaults
@@ -1071,10 +1193,14 @@ Never prompts: problems are collected in `drgnx-keys-last'.  Returns the resolut
                                                            :losers (list (list :id (plist-get b :id) :layer (plist-get b :layer))))))))
                   (setf (drgnx-cmd-bound cmd) (append (drgnx-cmd-bound cmd) (list (cons (plist-get b :key) map))))
                   (unless (eq (cdr (drgnx-commands--keymap-spec map)) 'global-map)
-                    (drgnx-keys--apply-binding (plist-put (copy-sequence b) :map map) cmd drgnx-keys--generation))))))
+                    ;; the engine's maps and the :also maps keep the ledger; every other map gets a layer
+                    (if (and (eq map (plist-get b :map)) (drgnx-keys--own-map-p (cdr (drgnx-commands--keymap-spec map))))
+                        (push (list map (drgnx-cmd-command cmd) b) layered)
+                      (drgnx-keys--apply-binding (plist-put (copy-sequence b) :map map) cmd drgnx-keys--generation)))))))
           (drgnx-keys--fill-profile (nreverse globals))
           (drgnx-keys--install-global)
           (drgnx-keys--set-everywhere (plist-get r :bindings))
+          (drgnx-keys--set-layers (nreverse layered) drgnx-keys--generation)
           (drgnx-keys--help-in-minibuffer)
           (setq drgnx-keys-last (append (list :layers layers
                                               :problems (append (reverse drgnx-keys-problems) (plist-get r :problems)))
