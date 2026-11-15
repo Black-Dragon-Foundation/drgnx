@@ -20,6 +20,10 @@
 # run in (DRGNX_TEST_IMAGE, which CI's test-image step sets, else the local drgnx-test:TAG `bin/drgnx test --container`
 # builds, TAG from test/container/image-tag.sh; DRGNX_CONTAINER, else podman), so the
 # calibration and the samples share one Emacs and one runtime; the workload times itself, the container's start is out.
+# A checkout whose container checks wait in a queue (the local slot) sets DRGNX_TIMING_TEST_CMD to the queue's wrapper
+# (`slot.sh bin/drgnx test`: words) so the samples go through it, and DRGNX_TIMING_CALIB_CMD to a command that runs
+# "$TIMING_WORKLOAD" (the workload's Lisp) in the same image.  A run that gives no time is no time: it counts as a failed
+# sample and is left out of the median (all of them: `median=none`, red), never a 0 that reads as fast.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/.." && pwd)
@@ -46,7 +50,7 @@ workload='(let ((n 0.0) (t0 (float-time))) (dotimes (_ 1500000) (setq n (+ n (st
 default_sample() {
   local t=$1 sel log rc secs
   if [ "$t" = calibration ]; then
-    if [ -n "${DRGNX_TIMING_CALIB_CMD:-}" ]; then bash -c "$DRGNX_TIMING_CALIB_CMD"
+    if [ -n "${DRGNX_TIMING_CALIB_CMD:-}" ]; then TIMING_WORKLOAD="$workload" bash -c "$DRGNX_TIMING_CALIB_CMD"
     else "${DRGNX_CONTAINER:-podman}" run --rm --memory 1g --memory-swap 1g \
            "${DRGNX_TEST_IMAGE:-drgnx-test:$(bash "$root/test/container/image-tag.sh" "$root/test/container/Containerfile")}" \
            /usr/local/bin/emacs --batch -Q --eval "$workload" </dev/null; fi
@@ -54,10 +58,19 @@ default_sample() {
   fi
   if [ "$t" = all ]; then sel='(tag :timing)'; else sel="(and (tag :timing) \"^$t\")"; fi
   log=$(mktemp)
-  env -u DRGNX_TEST_NO_TIMING DRGNX_TEST_TIME_FACTOR="$factor" DRGNX_TEST_SELECTOR="$sel" \
-    "$root/bin/drgnx" test --container >"$log" 2>&1 </dev/null; rc=$?
+  # DRGNX_TIMING_TEST_CMD: the command that runs the tests (words); default bin/drgnx test --container, which a CI job runs
+  # as it is.  A checkout where every container check waits in a queue sets it to its queue's wrapper (the local slot)
+  # and so goes through its image handling: a raw container run outside it is refused or fails there.
+  # shellcheck disable=SC2086
+  # DRGNX_NO_RESULT_CACHE=1: a queue wrapper that reuses a green run (the local slot's result cache) prints no time for it
+  env -u DRGNX_TEST_NO_TIMING DRGNX_NO_RESULT_CACHE=1 DRGNX_TEST_TIME_FACTOR="$factor" DRGNX_TEST_SELECTOR="$sel" \
+    ${DRGNX_TIMING_TEST_CMD:-"$root/bin/drgnx" test --container} >"$log" 2>&1 </dev/null; rc=$?
   secs=$(sed -nE 's/^drgnx: [0-9]+ test files.*\(([0-9.]+) s\)$/\1/p' "$log" | tail -n 1)
-  rm -f "$log"; echo "${secs:-0}"; return "$rc"
+  # DRGNX_TIMING_DEBUG=FILE: what a sample printed last and how it ended, kept for a row that reads no time
+  [ -z "${DRGNX_TIMING_DEBUG:-}" ] || { echo "== $t rc=$rc secs=${secs:-none}"; tail -n 15 "$log"; } >> "$DRGNX_TIMING_DEBUG"
+  rm -f "$log"
+  # no time is no time: nothing is printed (a failed run, or a log with no summary line), never a 0 that reads as fast
+  [ -n "$secs" ] && echo "$secs"; return "$rc"
 }
 sample() { if [ -n "$runner" ]; then "$runner" "$1"; else default_sample "$1"; fi; }
 
@@ -72,16 +85,18 @@ attempt() { # ROW BUDGET
   for ((i = 0; i < samples; i++)); do
     s=$(sample "$row" 2>/dev/null); rc=$?
     s=$(tail -n 1 <<<"$s")
-    [ "$rc" = 0 ] || fails=$((fails + 1))
-    vals+="${s:-0}"$'\n'
+    if [ "$rc" = 0 ] && [ -n "$s" ]; then vals+="$s"$'\n'; else fails=$((fails + 1)); fi
   done
   c2=$(calib)
   dev=$(awk -v a="$c1" -v b="$c2" 'BEGIN {m = (a < b) ? a : b; if (m <= 0) print 99; else printf "%.4f", ((a > b ? a : b) - m) / m}')
   cal=$(awk -v a="$c1" -v b="$c2" 'BEGIN {printf "%.4f", (a + b) / 2}')
-  med=$(printf '%s' "$vals" | median)
-  ratio=$(awk -v m="$med" -v c="$cal" 'BEGIN {if (c <= 0) print 0; else printf "%.3f", m / c}')
+  if [ -z "$vals" ]; then med=none ratio=none; else
+    med=$(printf '%s' "$vals" | median)
+    ratio=$(awk -v m="$med" -v c="$cal" 'BEGIN {if (c <= 0) print 0; else printf "%.3f", m / c}')
+  fi
   if awk -v d="$dev" 'BEGIN {exit !(d > 0.25)}'; then echo "void $med $ratio $cal $fails"; return; fi
-  if awk -v r="$ratio" -v b="$budget" 'BEGIN {exit !(r > b)}' || [ $((fails * 2)) -gt "$samples" ]; then echo "red $med $ratio $cal $fails"
+  # no sample gave a time (all failed): red, with no median to read as a fast one
+  if [ "$med" = none ] || awk -v r="$ratio" -v b="$budget" 'BEGIN {exit !(r > b)}' || [ $((fails * 2)) -gt "$samples" ]; then echo "red $med $ratio $cal $fails"
   else echo "pass $med $ratio $cal $fails"; fi
 }
 
@@ -123,7 +138,7 @@ self_test() {
 d=$(dirname "$0"); n=$(cat "$d/n" 2>/dev/null || echo 1)
 line=$(sed -n "${n}p" "$d/script"); echo $((n + 1)) > "$d/n"
 [ -n "$line" ] || line="1.0 0"
-set -- $line; echo "$1"; exit "$2"
+set -- $line; [ "$1" = NONE ] || echo "$1"; exit "$2"
 EOF
   chmod +x "$d/run"
   printf 'row-a 2.0\n' > "$d/rows"
@@ -183,6 +198,24 @@ EOF
 3.0 0
 1.0 0
 EOF
+  # no sample gives a time: red, and the median says none, not a 0 that reads as fast
+  cat > "$d/script" <<'EOT'
+1.0 0
+NONE 1
+NONE 1
+NONE 1
+NONE 1
+1.0 0
+1.0 0
+NONE 1
+NONE 1
+NONE 1
+NONE 1
+1.0 0
+EOT
+  rm -f "$d/n"
+  out=$(bash "$0" --runner "$d/run" --rows "$d/rows" --samples 4 --report "$d/rep")
+  if ! grep -q "^row-a red median=none " <<<"$out"; then echo "FAIL: no-time: wanted red with median=none, got: $out"; rc=1; fi
   # over half the samples failing: red (two of four is not over half, three is)
   try failing-samples red <<'EOF'
 1.0 0

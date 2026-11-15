@@ -5,13 +5,14 @@
 # times 1.25: what two calibrations of one run may differ before it is void).  A new :timing test whose name no row
 # starts with is in no row: drgnx-lint/every-timing-test-is-in-a-row fails then.
 # island-calibration 1
+# drgnx-explorer and drgnx-settings: one slot sample each on 2026-11-15 (a row is the whole run, 496 Emacs starts included: medians 110 s and 148 s, ratios 146 and 192), budgets 1.5 times that; the others are still placeholders
 drgnx-agent 100
 drgnx-ai 100
 drgnx-bin 100
 drgnx-bootstrap 100
 drgnx-check 100
 drgnx-chrome 100
-drgnx-explorer 100
+drgnx-explorer 220
 drgnx-file 100
 drgnx-history 100
 drgnx-lang 100
@@ -25,7 +26,7 @@ drgnx-remote 100
 drgnx-run-ert 100
 drgnx-sandbox 100
 drgnx-search 100
-drgnx-settings 100
+drgnx-settings 290
 drgnx-shell 100
 drgnx-state 100
 drgnx-statusbar 100

@@ -403,6 +403,10 @@ image the tests run in, `DRGNX_TEST_IMAGE`, never a host Emacs, which a CI runne
 and passes `DRGNX_TEST_TIME_FACTOR` = calibration / the budgets' reference calibration (`# island-calibration` in the rows
 file) to the tests. A row is `void` when the two calibrations differ by over 25 % (retried once), `red` when its median
 time exceeds the ratio times the calibration or over half the samples fail (rerun once; a pass on the rerun is `flaky`).
+A sample that gives no time (the run failed, or printed no summary line) counts as a failed sample and is left out of the
+median; when none gives one the row reads `median=none` and is red, never a median of 0.  `DRGNX_TIMING_TEST_CMD` replaces the
+command that runs the tests (default `bin/drgnx test --container`; a checkout whose container checks wait in a queue puts its
+wrapper there) and `DRGNX_TIMING_CALIB_CMD` the calibration (it reads the workload from `$TIMING_WORKLOAD`).
 `test/timing-lane.sh --self-test` checks the verdicts and where the calibration runs (`drgnx-ci/the-timing-lane-judges-and-calibrates-in-the-image`
 runs it with the unit suite).
 
