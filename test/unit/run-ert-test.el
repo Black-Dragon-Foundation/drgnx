@@ -931,6 +931,12 @@ suite, with the per-file leak check on.  Return (EXIT RESULTS-PLIST OUTPUT)."
     (should (eql 0 (or exit -1)))
     (should-not (string-match-p "left global state behind" log))))
 
+(ert-deftest drgnx-run-ert/a-file-that-leaves-a-face-colour-on-the-frame-fails-and-names-it ()
+  (pcase-let ((`(,exit ,r ,_log) (drgnx-run-ert-test--file-leak-run '("leaky-face"))))
+    (should (eql 1 exit))
+    (should (string-match-p "face drgnx-file-leak-fixture-face"
+                            (or (drgnx-run-ert-test--failure r "leak leaky-face-test.el") "")))))
+
 (ert-deftest drgnx-run-ert/the-leak-check-is-per-file-not-per-run ()
   ;; a clean file beside a leaky one still passes: each file's own Emacs, one failure for the one that leaks
   (pcase-let ((`(,_exit ,r ,_log) (drgnx-run-ert-test--file-leak-run '("leaky-mode-line" "clean"))))

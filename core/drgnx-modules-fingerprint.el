@@ -264,15 +264,31 @@ its printed text), and the number of frames."
     items))
 
 (defun drgnx-modules-fingerprint--window-items ()
-  "Items for the selected window (and the frame's window count): the window itself, its parameters, and how many
-windows the frame has.  A test that leaves a clone of the window selected, or a window with a `quit-restore'
+  "Items for the selected window's parameters, the frame's focus state and how many windows the frame has.  A test that leaves a clone of the window selected, or a window with a `quit-restore'
 parameter, moves where the next file's first window is."
   (let ((w (selected-window)) (items nil))
-    (push (cons (list 'selected-window) w) items)
+    ;; not the window object: the workbench rebuilds its windows, and a clone selected where the original was draws the same
+    (push (cons (list 'selected-frame-focus) (intern (format "%S" (frame-focus-state)))) items)
     (push (cons (list 'window-count) (length (window-list nil 'nomini))) items)
     (dolist (p (window-parameters w))
       (push (drgnx-modules-fingerprint--item (list 'window-param) (car p) (intern (format "%S" (cdr p)))) items))
     items))
+
+(defun drgnx-modules-fingerprint--face-items ()
+  "Items for drgnx's faces as the selected frame shows them (foreground, background): a colour a test set on the frame
+with `set-face-background' and did not give back (`face-spec-recalc') shows as the old pair gone and the new one there."
+  (let ((f (selected-frame)) items)
+    (dolist (face (face-list))
+      (when (string-prefix-p "drgnx-" (symbol-name face))
+        (push (drgnx-modules-fingerprint--item
+               (list 'face) face
+               (intern (format "%S" (cons (face-attribute face :foreground f) (face-attribute face :background f)))))
+              items)))
+    items))
+
+(defun drgnx-modules-fingerprint--frame-list-items ()
+  "Items for the frames themselves (by object): a root frame swapped for another, or a child frame left, shows by name."
+  (mapcar (lambda (fr) (cons (list 'frame (frame-parameter fr 'name)) fr)) (frame-list)))
 
 (defun drgnx-modules-fingerprint--session-items ()
   "What a GUI test file can change in the session besides hooks and timers: the default line formats, the global
@@ -283,7 +299,8 @@ keymap (and the one in use), the minor mode maps, the selected frame's parameter
                             (unless (eq (current-global-map) global-map)
                               (drgnx-modules-fingerprint--keymap-items 'global-map global-map)))
         :minor-mode-maps (drgnx-modules-fingerprint--alist-items 'minor-mode-map 'minor-mode-map-alist)
-        :frame (drgnx-modules-fingerprint--frame-items)
+        :frame (append (drgnx-modules-fingerprint--frame-items) (drgnx-modules-fingerprint--frame-list-items))
+        :faces (drgnx-modules-fingerprint--face-items)
         :window (drgnx-modules-fingerprint--window-items)))
 
 (defun drgnx-modules-fingerprint--full-items ()

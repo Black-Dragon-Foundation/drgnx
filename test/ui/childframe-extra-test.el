@@ -240,6 +240,9 @@ child takes it) and after, the typed text arrives, and the popups have chrome."
           (pcase pkg
             ('vertico-posframe (vertico-posframe-mode -1) (vertico-mode -1))
             ('mini-frame (mini-frame-mode -1)))
+          ;; posframe wraps the focus function when it loads and never unwraps it: a later file's frame is then not "as it was"
+          (when (fboundp 'posframe--redirect-posframe-focus)
+            (remove-function after-focus-change-function #'posframe--redirect-posframe-focus))
           (when (get-buffer "*chrome-scratch*") (kill-buffer "*chrome-scratch*")))))))
 
 ;;;; IME preedit in a child frame

@@ -103,6 +103,11 @@ A macro: `skip-unless' exists only inside the body of `ert-deftest'."
        ;; a failed scenario leaves no popup shown for the next one
        (dolist (c (drgnx-uitest-child-frames (drgnx-uitest-root-frame)))
          (make-frame-invisible c))
+       ;; a key map a popup's command left waiting for its next key (which-key, transient): no next command runs here,
+       ;; and `clear-transient-map' on the global `pre-command-hook' would stay for every later file
+       (while (memq 'clear-transient-map (default-value 'pre-command-hook))
+         (remove-hook 'pre-command-hook #'clear-transient-map))
+       (setq overriding-terminal-local-map nil)
        (drgnx-test-chrome--settle))))
 
 (defun drgnx-test-chrome--settle (&optional root)

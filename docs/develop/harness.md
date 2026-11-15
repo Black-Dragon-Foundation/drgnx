@@ -38,7 +38,7 @@ The GUI tests (`--ui`) are the exception: one session runs them all, so a row th
 tab or header line, a mode or a default mode line behind breaks a later row with pixels that are merely elsewhere.
 The look's rows are defined with `drgnx-look-gui-deftest` (`test/fixtures/look-gui-fixture.el`), an `ert-deftest`
 that starts with `drgnx-look-gui-check-clean`: the session must be as it was before the first row (frame size, scale,
-font and the parameters that move pixels, the selected window and its parameters, focus, modes, themes, global hooks
+font and the parameters that move pixels, the selected window's buffer and its parameters (not the window object, which the workbench rebuilds, nor `quit-restore`, which draws nothing; the leak check names a left `clone-of`), focus, modes, themes, global hooks
 and mode lines). A failure names what differs, and the row that left it puts it back in its own unwind. Rows are never
 reordered or rerun to pass.
 

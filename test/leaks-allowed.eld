@@ -52,8 +52,6 @@ string-pixel-width uses)")
   :why "the one-shot idle timer that kills a buffer a library displayed: one fired and another is pending, a rolling pair")
  (:what "\\`timer [+-]surfaces-usage "
   :why "the layer's idle flush of the usage counters: re-armed by every use, a rolling pair")
- (:what "\\`hook pre-command-hook [+-]clear-transient-map\\'"
-  :why "Emacs's own transient map: set by a key the test sent, gone with the next command")
  (:what "\\`global-map [^ ]+ [^ ]* ?\\+nil\\'"
   :why "a key set to nil: no binding, only the entry; a prefix map created on the way stays")
  (:what "\\`buffer "
@@ -62,4 +60,14 @@ string-pixel-width uses)")
   :why "the workbench's own layout and look bookkeeping in the frame parameters: every file that opens a panel sets it; the look rows' drgnx-look-gui-check-clean reads what moves pixels")
  (:what "\\`frame-param \\(?:glitnir--cards\\|session-name\\) "
   :why "the renderer's and the session's own bookkeeping")
+ (:what "\\`window-param \\(?:quit-restore\\|quit-restore-prev\\|internal-region-overlay\\|drgnx-uitest-id\\) "
+  :why "what Emacs and the harness note on a window that showed a buffer, was cloned or was driven; none of it draws anything")
+ (:what "\\`window-param [^ ]+ \\+nil\\'"
+  :why "a parameter set to nil: absent, as Emacs cannot remove one")
+ (:what "\\`hook mini-frame-advice-functions \\+"
+  :why "mini-frame's defcustom list of functions it advises, filled when the library loads")
+ (:what "\\`timer [+-]x-hide-tip "
+  :why "Emacs's tooltip timer: one is pending after a tip was shown, gone after it fired")
+ (:what "\\`frame-param \\(?:font-parameter\\|nidhogg--font-height\\|nidhogg-text-zoom\\|line-spacing\\|toplevel-chrome\\|tab-bar-lines-keep-state\\|drgnx-topline-lines\\) "
+  :why "parameters the renderer and the font code derive from `font' and the bars: the look rows' clean check reads the parameters themselves (font, line-spacing, bars)")
 )

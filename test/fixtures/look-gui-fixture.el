@@ -33,9 +33,13 @@ rows turn on, off; no theme; the default height; the global hooks and mode lines
                                                              pre-command-hook focus-in-hook tab-bar-format mode-line-format header-line-format
                                                              global-mode-string after-make-frame-functions))
           :focus (format "%S" after-focus-change-function)
-          :sel (list (selected-window) (frame-focus-state f))
-          ;; the harness's own label of a window it drove keys in (`drgnx-uitest-id') draws nothing
-          :window-params (seq-remove (lambda (c) (or (null (cdr c)) (eq (car c) 'drgnx-uitest-id)))
+          ;; not the window object: the workbench rebuilds its windows (hiding a sidebar leaves a clone selected where the
+          ;; original was), and the clone draws the same; what matters is that one window is selected and the frame focused
+          :sel (list (window-buffer (selected-window)) (frame-focus-state f))
+          ;; the harness's own label of a window it drove keys in (`drgnx-uitest-id'), and what Emacs notes on a window that showed
+          ;; a buffer or was cloned (`quit-restore', `clone-of', the region overlay), draw nothing
+          :window-params (seq-remove (lambda (c) (or (null (cdr c)) (memq (car c) '(drgnx-uitest-id clone-of quit-restore quit-restore-prev
+                                                                                                    internal-region-overlay))))
                                      (window-parameters (frame-selected-window f)))
           :scale (list (and (fboundp 'frame-scale-factor) (frame-scale-factor f))
                        (and (fboundp 'glitnir-active-p) (glitnir-active-p))
