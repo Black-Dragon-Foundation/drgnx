@@ -28352,6 +28352,11 @@
               "stale": {
                 "type": "boolean"
               },
+              "stream": {
+                "default": "",
+                "description": "What the output is, for its panel's label: `stream`, `stderr`, `display`, `result` or `error` (none without output).",
+                "type": "string"
+              },
               "text": {
                 "type": "string"
               },
@@ -28918,6 +28923,11 @@
           },
           "stale": {
             "type": "boolean"
+          },
+          "stream": {
+            "default": "",
+            "description": "What the output is, for its panel's label: `stream`, `stderr`, `display`, `result` or `error` (none without output).",
+            "type": "string"
           },
           "text": {
             "type": "string"

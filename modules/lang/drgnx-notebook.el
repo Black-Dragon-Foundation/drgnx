@@ -305,13 +305,14 @@ of the notebook (`drgnx-notebook--commands').")
     (when type (drgnx-notebook-add-cell-below type))))
 
 (defun drgnx-notebook--add-row ()
-  "The row under the selected cell: + Code and + Markdown, chips that add a cell below."
-  (concat (propertize "+ Code" 'face 'drgnx-notebook-chip 'drgnx-notebook-add 'code 'keymap drgnx-notebook-add-map
+  "The row between cells: `+ Code' and `+ Markdown', two chips centred, that add a cell below the selected one."
+  (concat (propertize " " 'display `(space :align-to (- (0.5 . text) ,(drgnx-px 62))))
+          (propertize "+ Code" 'face '(drgnx-notebook-chip drgnx-chip) 'drgnx-notebook-add 'code 'keymap drgnx-notebook-add-map
                       'mouse-face 'drgnx-hover 'help-echo "Add a code cell below")
           " "
-          (propertize "+ Markdown" 'face 'drgnx-notebook-chip 'drgnx-notebook-add 'markdown 'keymap drgnx-notebook-add-map
+          (propertize "+ Markdown" 'face '(drgnx-notebook-chip drgnx-chip) 'drgnx-notebook-add 'markdown 'keymap drgnx-notebook-add-map
                       'mouse-face 'drgnx-hover 'help-echo "Add a markdown cell below")
-          (propertize "\n" 'face 'drgnx-notebook-cell-selected)))
+          "\n"))
 
 (defun drgnx-notebook--styled (text runs &rest base)
   "A copy of TEXT with the BASE faces on all of it and each of RUNS' faces (the hub's roles) on its stretch."
@@ -536,13 +537,25 @@ runs' faces on it and a newline (the next row is the next cell's header).  SELEC
   (let* ((text (or (plist-get tail :text) "")) (n (length text)) (cell (if selected 'drgnx-notebook-cell-selected 'drgnx-notebook-cell)))
     (concat
      (if (zerop n) ""
+       (drgnx-notebook--output-label tail cell))
+     (if (zerop n) ""
        (let ((s (drgnx-notebook--styled text (plist-get tail :runs) (if (plist-get tail :stale) 'drgnx-notebook-stale 'drgnx-notebook-output) cell)))
          (dolist (image (reverse (plist-get tail :images)))   ; last first: a label is longer than the character it replaces
            (let ((at (plist-get image :at)))
              (when (and at (< at n) (eq (aref s at) #xfffc))
                (setq s (concat (substring s 0 at) (drgnx-notebook--image-piece tail image) (substring s (1+ at)))))))
-         (concat s (propertize "\n" 'face cell))))
+         (concat s (propertize "\n" 'face cell)
+                 ;; 8 px under the last row, inside the card
+                 (propertize " " 'display `(space :width (1) :height (,(drgnx-px 8))) 'face cell) (propertize "\n" 'face cell))))
      "")))
+
+(defun drgnx-notebook--output-label (tail cell)
+  "The first row of an output's panel: what it is (`stream', `error' ...) and `· running' while its cell runs, in the
+subtle face; none for a tail that names no stream."
+  (let ((stream (plist-get tail :stream)))
+    (if (or (null stream) (equal stream "")) ""
+      (propertize (concat stream (if (equal (plist-get (plist-get tail :head) :state) "running") " · running" "") "\n")
+                  'face (list 'drgnx-text-subtle 'drgnx-code-small cell)))))
 
 ;;; Images (static PNG and JPEG; SVG is not in tier 1): one character each in the tail, drawn from the hub's full output
 
@@ -752,7 +765,7 @@ gap's dark, the line a faint step of the text colour (the mockup's 3.5 % to 5 %)
   "Cell ID's output as the blocks need it: nil without one, else `error' (the failed run's tint) or `out'."
   (let ((tail (gethash id drgnx-notebook--last-tails)))
     (and tail (> (length (or (plist-get tail :text) "")) 0)
-         (if (equal (plist-get (plist-get tail :head) :state) "error") 'error 'out))))
+         (if (or (equal (plist-get tail :stream) "error") (equal (plist-get (plist-get tail :head) :state) "error")) 'error 'out))))
 
 (defun drgnx-notebook--blocks-key (focused width)
   "What the blocks of a window are (FOCUSED: it is the selected one; WIDTH: its text area's pixels): per cell the card
@@ -773,9 +786,12 @@ output, the inner block under its hairline: the card's span inset by 8 px, a tin
               keys)
         (when out
           ;; START = END: the rows of the after-string at the cell's end, the output
+          ;; the panel: a darker translucent step (the gap's colour; the error tint for a failed run), a border, rounded 6
           (push (append (list 'inner end end :x0 inset :x1 (max inset (- width inset)) :top 'drgnx-border-subtle
+                              :ring 'drgnx-border-subtle :radius (drgnx-px 6)
+                              :fill (if (eq out 'error) (cons 'error 0.14) (cons 'child-frame-shadow 0.35))
                               :overlay (plist-get (drgnx-notebook--chrome-of (plist-get c :id)) :tail))
-                        (and (eq out 'error) (list :radius (drgnx-px 6) :fill (cons 'error 0.14))))
+                        nil)
                 keys))))
     (nreverse keys)))
 

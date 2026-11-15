@@ -313,3 +313,20 @@ fn a_head_chip_is_short_and_a_tail_carries_a_bounded_number_of_runs() {
     let t = build("c", &run, 1);
     assert_eq!(t.runs.len(), MAX_RUNS);
 }
+
+#[test]
+fn a_tail_names_the_stream_of_its_output() {
+    let stdout = run_with(|f| f("stream", json!({"name": "stdout", "text": "ok"})));
+    assert_eq!(build("c", &stdout, 1).stream, "stream");
+    let stderr = run_with(|f| f("stream", json!({"name": "stderr", "text": "warn"})));
+    assert_eq!(build("c", &stderr, 1).stream, "stderr");
+    // a failed run is `error` whatever came before it
+    let failed = run_with(|f| {
+        f("stream", json!({"name": "stdout", "text": "ok"}));
+        f(
+            "error",
+            json!({"ename": "NameError", "evalue": "x", "traceback": []}),
+        )
+    });
+    assert_eq!(build("c", &failed, 1).stream, "error");
+}

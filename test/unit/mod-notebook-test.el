@@ -731,8 +731,7 @@
         (should b)
         (should (= (nth 1 b) (nth 2 b)))
         (should (= (plist-get (nthcdr 3 b) :x0) (drgnx-px 8)))
-        (should (eq (plist-get (nthcdr 3 b) :top) 'drgnx-border-subtle))
-        (should-not (plist-get (nthcdr 3 b) :fill)))
+        (should (eq (plist-get (nthcdr 3 b) :top) 'drgnx-border-subtle)))
       ;; a failed run: a tint and a radius too
       (let ((b (funcall inner "c")))
         (should (consp (plist-get (nthcdr 3 b) :fill)))
@@ -752,6 +751,39 @@
                                             (= (nth 1 b) (plist-get (drgnx-notebook--cell-by-id "a") :head))))
                            blocks)))
       (should (eq (plist-get (nthcdr 3 ring) :overlay) (plist-get (drgnx-notebook--chrome-of "a") :tail))))))
+
+(ert-deftest drgnx-notebook/the-output-panel-has-a-fill-a-border-a-label-row-and-a-bottom-pad ()
+  (nb-test--with-cards
+    (drgnx-notebook--event "notebook-tail" (list :id "nb1" :cell "c" :text "boom" :version 1 :runs nil :images nil :more_lines 0
+                                                 :stream "error" :head (list :state "idle" :text "[3]")))
+    (drgnx-notebook--event "notebook-tail" (list :id "nb1" :cell "a" :text "out" :version 1 :runs nil :images nil :more_lines 0
+                                                 :stream "stream" :head (list :state "running" :text "[*]")))
+    (drgnx-notebook--blocks-update)
+    (let* ((blocks (window-parameter (selected-window) 'glitnir-blocks))
+           (inner (lambda (id) (nthcdr 3 (seq-find (lambda (b) (and (eq (car b) 'inner)
+                                                                    (= (nth 1 b) (1+ (plist-get (drgnx-notebook--cell-by-id id) :tail)))))
+                                                   blocks))))
+           (tail (lambda (id) (overlay-get (plist-get (drgnx-notebook--chrome-of id) :tail) 'after-string))))
+      ;; every output panel: a darker fill, a border, rounded
+      (should (consp (plist-get (funcall inner "a") :fill)))
+      (should (eq (plist-get (funcall inner "a") :ring) 'drgnx-border-subtle))
+      (should (= (plist-get (funcall inner "a") :radius) (drgnx-px 6)))
+      ;; the first row is the label in the subtle face: the stream, and the run's state
+      (should (string-prefix-p "stream · running\n" (funcall tail "a")))
+      (should (memq 'drgnx-text-subtle (ensure-list (get-text-property 0 'face (funcall tail "a")))))
+      (should (string-prefix-p "error\n" (funcall tail "c")))
+      ;; 8 px of padding under the last row
+      (should (equal (get-text-property (- (length (funcall tail "a")) 2) 'display (funcall tail "a"))
+                     `(space :width (1) :height (,(drgnx-px 8))))))))
+
+(ert-deftest drgnx-notebook/the-add-row-is-two-centred-chips-between-cards ()
+  (nb-test--with
+    (let ((row (drgnx-notebook--add-row)))
+      (should (eq (car (get-text-property 0 'display row)) 'space))
+      (should (plist-get (cdr (get-text-property 0 'display row)) :align-to))
+      (should (memq 'drgnx-chip (ensure-list (get-text-property (string-search "+ Code" row) 'face row))))
+      ;; no tinted band across the row
+      (should-not (memq 'drgnx-notebook-cell-selected (ensure-list (get-text-property (1- (length row)) 'face row)))))))
 
 (ert-deftest drgnx-notebook/the-header-row-is-26-px-and-its-chips-are-boxed ()
   (nb-test--with

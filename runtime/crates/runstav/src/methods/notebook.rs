@@ -161,6 +161,9 @@ pub struct NotebookTail {
     pub runs: Vec<NotebookRun>,
     pub images: Vec<NotebookImage>,
     pub more_lines: u32,
+    /// What the output is, for its panel's label: `stream`, `stderr`, `display`, `result` or `error` (none without output).
+    #[serde(default)]
+    pub stream: String,
 }
 
 /// `notebook/open`'s answer: the notebook's ID, its CELLS, the kernelspec name and language it names, and the TAILS of the code cells that
