@@ -1165,6 +1165,10 @@ dirs) and drive the session through `harness/drgnx-tty-session.el`:
   ESC, DEL, and the arrows, Home, End, PgUp, PgDn and F1–F12 with modifiers as xterm sends them. Text given as a
   multibyte string goes as UTF-8. Mouse input uses
   SGR reports on 1-based cells (`-click`, `-wheel`, `-drag`).
+- **Module stages first:** every module stage that ends applies the keys again (`drgnx-keys-apply`), so a row that
+  binds a key, or sends C-g, first waits for the daemon's stages: `drgnx-tty-session-wait-stages` (the GUI tier's
+  `drgnx-test-wait-stages`) waits until no idle step is pending, then reaches the once-only stages still armed
+  (first input, first file, first graphical frame). `drgnx-tty-session-key-barrier` does it before binding `<f9>`.
 - **Output:** the screen comes from `capture-pane` (`-screen`, `-find`, `-wait-screen`, `-quiet`; `-find-below` and
   `-wait-screen-below` look only under a heading's line, for a text shown in two places). The paste buffer
   shows what OSC 52 copied (`-clipboard`), and `-pane-flags` reports the pane's mouse and key modes. The inner Emacs's
