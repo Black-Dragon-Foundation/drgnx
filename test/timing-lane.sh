@@ -3,11 +3,14 @@
 #   test/timing-lane.sh --report F [--rows FILE] [--samples N] [--runner EXE]
 #   test/timing-lane.sh --self-test
 #   test/timing-lane.sh --calibrate          (one calibration: its seconds)
+#   test/timing-lane.sh --files ROW [DIR]    (the test files a sample of ROW loads, from DIR: test/unit)
 # Every CI tier sets DRGNX_TEST_NO_TIMING=1, so the tests tagged :timing (wall-clock assertions) run nowhere else; this
 # lane is their one place.  Each row of timing-rows.txt (`NAME BUDGET-RATIO`) is a set of them: NAME `all` is every
 # :timing test of the live files (exempt files carry no class, so no tag), any other NAME the :timing tests whose name
 # starts with it: the rows are the areas' prefixes, so each area is judged on its own time.  A row takes N (20) samples,
-# each one `bin/drgnx test --container` run with DRGNX_TEST_TIME_FACTOR = calibration / reference calibration (at
+# each one `bin/drgnx test --container` run of only the files that hold the row's tests (DRGNX_TEST_ONLY: a file's
+# `;; test-class: timing' line, or a test of the row's prefix whose `:tags' line names :timing), so a sample's time is
+# the row's own tests, not an Emacs start for each of the suite's files; with DRGNX_TEST_TIME_FACTOR = calibration / reference calibration (at
 # least 1), and is judged on the MEDIAN of the samples' times divided by the calibration: the time a fixed ~1 s workload
 # takes on this runner, measured before and after the row.  Rules (Nidhogg's):
 #   - the two calibrations differ by over 25 %: the attempt is void and retried once; void twice prints `void`, never red;
@@ -27,10 +30,11 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/.." && pwd)
-rows="$here/timing-rows.txt" samples=20 runner="" report="" self=0 calonly=0
+rows="$here/timing-rows.txt" samples=20 runner="" report="" self=0 calonly=0 files=""
 while [ $# -gt 0 ]; do
   case $1 in
     --calibrate) calonly=1; shift ;;
+    --files) files=${2:?}; shift 2; filesdir=${1:-test/unit}; break ;;
     --report) report=${2:?}; shift 2 ;;
     --rows) rows=${2:?}; shift 2 ;;
     --samples) samples=${2:?}; shift 2 ;;
@@ -47,8 +51,24 @@ factor=1
 
 workload='(let ((n 0.0) (t0 (float-time))) (dotimes (_ 1500000) (setq n (+ n (string-to-number "12345.678")))) (with-temp-buffer (dotimes (i 300000) (insert (number-to-string i) "\n"))) (princ (format "%.4f" (- (float-time) t0))))'
 
+# the test files (under DIR, relative to the checkout) that hold a :timing test of ROW (`all`: any), one a line, sorted:
+# a file whose class line is timing, or one with an `(ert-deftest NAME' (or a test macro's: `(…-deftest NAME') of the
+# row followed, before the next test, by a `:tags' line that names :timing (drgnx-lint/the-timing-lane-loads-every-file-of-a-row
+# holds this reading to the lint's).  A file with more than the row's tests is loaded whole; the selector picks the row's.
+timing_files() { # DIR ROW
+  local f
+  for f in "$1"/*.el; do
+    [ -f "$f" ] || continue
+    awk -v row="$2" '
+      FNR <= 15 && /^;; test-class: timing$/ { cls = 1 }
+      /^\((ert|[^ ()]*-)deftest / { name = $2; mine = (row == "all" || index(name, row) == 1); if (cls && mine) { hit = 1; exit } }
+      mine && /:tags/ && /:timing/ { hit = 1; exit }
+      END { exit !hit }' "$f" && echo "$f"
+  done
+}
+
 default_sample() {
-  local t=$1 sel log rc secs
+  local t=$1 sel log rc secs only
   if [ "$t" = calibration ]; then
     if [ -n "${DRGNX_TIMING_CALIB_CMD:-}" ]; then TIMING_WORKLOAD="$workload" bash -c "$DRGNX_TIMING_CALIB_CMD"
     else "${DRGNX_CONTAINER:-podman}" run --rm --memory 1g --memory-swap 1g \
@@ -57,14 +77,19 @@ default_sample() {
     return $?
   fi
   if [ "$t" = all ]; then sel='(tag :timing)'; else sel="(and (tag :timing) \"^$t\")"; fi
+  # a row no file holds is no time (an empty DRGNX_TEST_ONLY would run the whole suite)
+  only=$(cd "$root" && timing_files test/unit "$t" | tr '\n' ' '); only=${only% }
+  [ -n "$only" ] || { [ -z "${DRGNX_TIMING_DEBUG:-}" ] || echo "== $t: no test file holds it" >> "$DRGNX_TIMING_DEBUG"; return 1; }
   log=$(mktemp)
   # DRGNX_TIMING_TEST_CMD: the command that runs the tests (words); default bin/drgnx test --container, which a CI job runs
   # as it is.  A checkout where every container check waits in a queue sets it to its queue's wrapper (the local slot)
   # and so goes through its image handling: a raw container run outside it is refused or fails there.
   # shellcheck disable=SC2086
   # DRGNX_NO_RESULT_CACHE=1: a queue wrapper that reuses a green run (the local slot's result cache) prints no time for it
-  env -u DRGNX_TEST_NO_TIMING DRGNX_NO_RESULT_CACHE=1 DRGNX_TEST_TIME_FACTOR="$factor" DRGNX_TEST_SELECTOR="$sel" \
-    ${DRGNX_TIMING_TEST_CMD:-"$root/bin/drgnx" test --container} >"$log" 2>&1 </dev/null; rc=$?
+  # The files are relative to the checkout (a container sees it elsewhere), so the run starts there.
+  (cd "$root" && env -u DRGNX_TEST_NO_TIMING DRGNX_NO_RESULT_CACHE=1 DRGNX_TEST_TIME_FACTOR="$factor" \
+    DRGNX_TEST_SELECTOR="$sel" DRGNX_TEST_ONLY="$only" \
+    ${DRGNX_TIMING_TEST_CMD:-"$root/bin/drgnx" test --container}) >"$log" 2>&1 </dev/null; rc=$?
   secs=$(sed -nE 's/^drgnx: [0-9]+ test files.*\(([0-9.]+) s\)$/\1/p' "$log" | tail -n 1)
   # DRGNX_TIMING_DEBUG=FILE: what a sample printed last and how it ended, kept for a row that reads no time
   [ -z "${DRGNX_TIMING_DEBUG:-}" ] || { echo "== $t rc=$rc secs=${secs:-none}"; tail -n 15 "$log"; } >> "$DRGNX_TIMING_DEBUG"
@@ -242,12 +267,29 @@ EOF
     echo "FAIL: calibration: wanted a run of drgnx-test:probe's /usr/local/bin/emacs, got $out: $(tr '\n' ' ' < "$d/ctr-args" 2>/dev/null)"
     rc=1
   fi
+  # a row's files: a timing-class file, a :timing test of the row, never the row's untimed tests or another row's
+  mkdir -p "$d/t"
+  printf ';; x -*- lexical-binding: t -*-\n;; test-class: timing\n(ert-deftest drgnx-b/one () t)\n' > "$d/t/a-test.el"
+  printf ';; test-class: det\n(ert-deftest drgnx-a/plain () t)\n(ert-deftest drgnx-a/slow ()\n  :tags (quote (:timing))\n  t)\n' > "$d/t/b-test.el"
+  printf ';; test-class: det\n(ert-deftest drgnx-a/plain2 () t)\n(ert-deftest drgnx-b/slow ()\n  :tags (quote (:timing))\n  t)\n' > "$d/t/c-test.el"
+  printf ';; test-class: det\n(ert-deftest drgnx-a/x () t)\n' > "$d/t/d-test.el"
+  printf ';; test-class: det\n(drgnx-x-test--deftest drgnx-c/slow ()\n    :tags (quote (:timing))\n  t)\n' > "$d/t/e-test.el"
+  out=$(bash "$0" --files drgnx-c "$d/t" | tr '\n' ' ')
+  [ "$out" = "$d/t/e-test.el " ] || { echo "FAIL: files of drgnx-c (a test macro's): wanted e-test.el, got: $out"; rc=1; }
+  out=$(bash "$0" --files drgnx-a "$d/t" | tr '\n' ' ')
+  [ "$out" = "$d/t/b-test.el " ] || { echo "FAIL: files of drgnx-a: wanted b-test.el, got: $out"; rc=1; }
+  out=$(bash "$0" --files drgnx-b "$d/t" | tr '\n' ' ')
+  [ "$out" = "$d/t/a-test.el $d/t/c-test.el " ] || { echo "FAIL: files of drgnx-b: wanted a- and c-test.el, got: $out"; rc=1; }
+  out=$(bash "$0" --files all "$d/t" | tr '\n' ' ')
+  [ "$out" = "$d/t/a-test.el $d/t/b-test.el $d/t/c-test.el $d/t/e-test.el " ] || { echo "FAIL: files of all: wanted a- b- c- e-test.el, got: $out"; rc=1; }
+  [ -z "$(bash "$0" --files drgnx-z "$d/t")" ] || { echo "FAIL: files of drgnx-z: wanted none"; rc=1; }
   [ "$rc" != 0 ] || echo "timing-lane self-test: ok"
   return "$rc"
 }
 
 if [ "$self" = 1 ]; then self_test; exit $?; fi
 if [ "$calonly" = 1 ]; then default_sample calibration; exit $?; fi
+if [ -n "$files" ]; then timing_files "$filesdir" "$files"; exit 0; fi
 [ -n "$report" ] || { sed -n '2,3p' "$0" >&2; exit 2; }
 run_lane
 exit 0

@@ -420,6 +420,12 @@ test_batch_emacs() { # [FUNCTION ARGS…] — SIGPIPE ignored, as the hub runs (
   # address, so nothing answers), no display or compositor socket, a runtime directory of its own.
   # (The runner binds the same inside Emacs, for Lisp code and the children it starts.)
   local run="${TMPDIR:-/tmp}/run"; mkdir -p "$run" && chmod 700 "$run"
+  # what runs: the arguments, else DRGNX_TEST_ONLY (one file or several, split at blanks: the timing lane passes a
+  # row's files), else the suite's folder
+  local what=("$@")
+  if [ ${#what[@]} -eq 0 ]; then
+    if [ -n "${DRGNX_TEST_ONLY:-}" ]; then read -r -a what <<< "$DRGNX_TEST_ONLY"; else what=("${DRGNX_TEST_DIR:-$here/test/unit}"); fi
+  fi
   # NIDHOGG_TEST_CLOCK: drgnx-test-with-clock runs on Nidhogg's test clock (with 0 it refuses to start where /proc is;
   # macOS has none and runs on the fixture's advice)
   # DRGNX_TEST_DIR: a smaller suite (the test of the temp-dir cleanup runs one)
@@ -428,7 +434,7 @@ test_batch_emacs() { # [FUNCTION ARGS…] — SIGPIPE ignored, as the hub runs (
        NIDHOGG_TEST_CLOCK="${NIDHOGG_TEST_CLOCK:-1}" \
        "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -L "$here/core" -L "$here/wb" \
        -l "$here/harness/run-ert.el" \
-       -f "$fn" "${@:-${DRGNX_TEST_ONLY:-${DRGNX_TEST_DIR:-$here/test/unit}}}"
+       -f "$fn" "${what[@]}"
 }
 
 test_batch() { run_in_tmp test_batch_emacs; }

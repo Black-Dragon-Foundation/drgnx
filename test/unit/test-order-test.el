@@ -116,6 +116,21 @@
         (should (equal "1234" (plist-get (drgnx-test-order-test--json results) :seed)))
         (should (string-match-p "shuffle seed 1234" (cdr r)))))))
 
+(ert-deftest drgnx-test-order/test-only-names-several-files ()
+  ;; DRGNX_TEST_ONLY is one file or several, split at blanks (the timing lane passes a row's files): only those run
+  (drgnx-test-order-test--with-suite '(("a-test.el" . "(ert-deftest iso-only/a () (should t))")
+                                       ("b-test.el" . "(ert-deftest iso-only/b () (should t))")
+                                       ("c-test.el" . "(ert-deftest iso-only/c () (should t))"))
+    (let* ((process-environment (cons (concat "DRGNX_TEST_ONLY=" (expand-file-name "a-test.el" suite) " "
+                                              (expand-file-name "c-test.el" suite))
+                                      process-environment))
+           (r (drgnx-test-order-test--bin tmp suite "test")))
+      (should (eql 0 (car r)))
+      (should (string-match-p "^drgnx: 2 test files" (cdr r)))
+      (should (string-match-p "passed .*iso-only/a" (cdr r)))
+      (should (string-match-p "passed .*iso-only/c" (cdr r)))
+      (should-not (string-match-p "iso-only/b" (cdr r))))))
+
 (ert-deftest drgnx-test-order/finds-the-polluter ()
   (drgnx-test-order-test--with-suite drgnx-test-order-test--polluted
     ;; the polluted run fails ...

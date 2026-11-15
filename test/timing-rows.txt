@@ -7,7 +7,6 @@
 # island-calibration 1
 # drgnx-explorer and drgnx-settings: one slot sample each on 2026-11-15 (a row is the whole run, 496 Emacs starts included: medians 110 s and 148 s, ratios 146 and 192), budgets 1.5 times that; the others are still placeholders
 drgnx-agent 100
-drgnx-ai 100
 drgnx-bin 100
 drgnx-bootstrap 100
 drgnx-check 100
@@ -26,7 +25,6 @@ drgnx-remote 100
 drgnx-run-ert 100
 drgnx-sandbox 100
 drgnx-search 100
-drgnx-ui-chrome 100
 drgnx-settings 290
 drgnx-shell 100
 drgnx-state 100
