@@ -6,6 +6,11 @@
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defvar drgnx-keys--profile-keys)
+(defvar drgnx-keys--yours)
+(defvar drgnx-keys-user-map)
+(defvar drgnx-keys--pending-parents)
+(defvar nidhogg-define-key-redirect-function)
+(declare-function drgnx-keys--define "drgnx-keys" (map key def))
 (defvar drgnx-layouts-pane-fillers)
 (defvar drgnx-layouts-shapes)
 (defvar drgnx-persist-state-functions)
@@ -280,6 +285,23 @@ another order, which `equal' on two keymaps sees."
       (should (equal menu-hook (default-value 'menu-bar-update-hook)))
       (should (equal context-fns (default-value 'context-menu-functions)))
       (should (equal profile-keys drgnx-keys--profile-keys)))))
+
+(ert-deftest drgnx-test-modules/your-keys-bound-in-the-body-are-put-back ()
+  ;; the body binds as you and leaves it: your record, your map's key (in an auxiliary keymap too) and a layer waiting
+  ;; for its parent go with the helper, so the next test starts without them
+  (require 'drgnx-keys)
+  (let ((nidhogg-define-key-redirect-function nil) (pending drgnx-keys--pending-parents)
+        (mine (drgnx-test-modules--map-leaves drgnx-keys-user-map)))
+    (should-not (gethash "C-c C-M-y" drgnx-keys--yours))
+    (drgnx-test-with-modules '(tools/browser)
+      (puthash "C-c C-M-y" (cons #'ignore 'command) drgnx-keys--yours)
+      (define-key drgnx-keys-user-map (kbd "C-c C-M-y") #'ignore)
+      (drgnx-keys--define drgnx-keys-user-map (vector 'normal-state ?y) #'ignore)
+      (push 'drgnx-fixture-test-map drgnx-keys--pending-parents))
+    (should-not (gethash "C-c C-M-y" drgnx-keys--yours))
+    (should (equal mine (drgnx-test-modules--map-leaves drgnx-keys-user-map)))
+    (should-not (assoc (vconcat (kbd "C-c C-M-y")) mine))
+    (should (equal pending drgnx-keys--pending-parents))))
 
 (ert-deftest drgnx-test-modules/a-teardown-problem-is-kept-when-the-body-signals ()
   (ert-with-temp-directory dir

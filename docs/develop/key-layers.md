@@ -85,9 +85,13 @@ map last, all of them above evil's own state maps.
   `evil-normal-state-map`) are watched (`drgnx-keys--watch-evil`): yours go to your map's auxiliary keymap for the state
   (`drgnx-keys--redirect-evil`) and are recorded like a global key of yours, `<normal-state> g d` in
   `drgnx-keys--yours`, so the profile's key there is taken out while yours stands (a nil of yours in an auxiliary
-  keymap would not hide it) and comes back when you take yours away. A package's write stays in evil's map, below the
-  profile's key. Your key in a mode map's auxiliary keymap (`evil-define-key 'normal dired-mode-map …`) is a write
-  into a watched map (its auxiliary keymap is watched as evil makes it): the foreign layer steps aside for it.
+  keymap would not hide it) and comes back when you take yours away. Your nil or removal also goes on into evil's own
+  map, as in plain evil (freeing RET in motion state); drgnx never puts evil's key back. A package's write stays in
+  evil's map, below the profile's key. Your key in a mode map's auxiliary keymap (`evil-define-key 'normal
+  dired-mode-map …`) is a write into a watched map (its auxiliary keymap is watched as evil makes it): the foreign
+  layer steps aside for it. In a drgnx map that auxiliary keymap sits in the map itself, its layer's below it: a
+  lookup of `[normal-state]` finds both and composes them, so the profile's keys for the mode stay beside yours.
+- **The sheet** (`drgnx-keys-resolve` `:yours`) lists your global keys only; your evil keys are not there yet.
 - **A mode map's keys** for normal and motion state sit in auxiliary keymaps of the map's layer: of the parent layer
   for drgnx's own maps, of the foreign layer (`drgnx-keys--foreign-aux`, entries filtered as the layer's) for the
   others.

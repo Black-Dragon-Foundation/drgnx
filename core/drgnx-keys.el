@@ -899,14 +899,19 @@ where it was asked for and is recorded (`drgnx-keys--take-in', `drgnx-keys--take
 
 (defun drgnx-keys--redirect-evil (path key def remove)
   "`drgnx-keys--redirect' for a write into evil's state map of PATH ((evil . STATE) . PREFIX): yours goes to your map's
-auxiliary keymap for STATE (key text \"<normal-state> g d\", `drgnx-keys--take'), any other stays in evil's map."
+auxiliary keymap for STATE (key text \"<normal-state> g d\", `drgnx-keys--take'), any other stays in evil's map.
+Your nil or removal is recorded and written in your auxiliary keymap, and goes on into evil's map too: a nil there
+hides nothing below it, and freeing evil's own key (RET in motion state) is what you asked for."
   (condition-case err
       (when (drgnx-keys--yours-p)
         (let ((prefix (vconcat (vector (drgnx-keys--state-event (cdar path))) (cdr path))))
           (drgnx-keys--aux drgnx-keys-user-map (aref prefix 0))
-          (prog1 (drgnx-keys--submap drgnx-keys-user-map prefix)
+          (let ((to (drgnx-keys--submap drgnx-keys-user-map prefix)))
             (drgnx-keys--take (drgnx-keys--key-text prefix key) def remove)
-            (drgnx-keys--normalize-evil))))
+            (drgnx-keys--normalize-evil)
+            (if def to
+              (let ((nidhogg-define-key-redirect-function nil)) (define-key to key nil remove))
+              nil))))
     (error (push (format "your evil key %s could not be placed: %s"
                          (ignore-errors (drgnx-keys--key-text (cdr path) key)) (error-message-string err))
                  drgnx-keys-problems)

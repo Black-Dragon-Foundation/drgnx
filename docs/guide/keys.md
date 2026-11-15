@@ -127,11 +127,13 @@ later (Meow is the candidate):
   mixed in (VS Code's app and window keys with Vim's editing, say) those keys stay Emacs' own, so the other
   profile's keys keep working while you type; switching back to the pure stack restores them. Replace state (`R`)
   keeps Vim's keys in a mixed stack. A key you rebound in `evil-insert-state-map` is never touched.
-- **Your own evil keys.** drgnx never writes evil's maps. A key you bind for a state (`evil-global-set-key`,
+- **Your own evil keys.** drgnx's keys never go into evil's maps. A key you bind for a state (`evil-global-set-key`,
   `evil-define-key 'normal 'global`, or `evil-define-key` in a mode's map) beats the profile's key in that state, after
-  every apply and profile switch; a `nil` of yours takes the profile's key off that state (the key is evil's own again).
-  Take yours away (`define-key … nil t` on the same map) and the profile's key is back. The profile's keys for a state
-  beat evil's own keys but not a mode's Vim keys from evil-collection (dired's `gx` stays dired's).
+  every apply and profile switch. A `nil` of yours takes the profile's key off that state and, as in plain evil, evil's
+  own key too: `(define-key evil-motion-state-map (kbd "RET") nil)` frees RET for dired or org. Take yours away
+  (`define-key … nil t` on the same map) and the profile's key is back. The profile's keys for a state beat evil's own
+  keys but not a mode's Vim keys from evil-collection (dired's `gx` stays dired's). The keyboard shortcuts sheet lists
+  your global keys as yours, not yet your evil keys: they work as described, the sheet shows the profile's.
 - **Unimpaired keys.** evil-collection adds Vim unimpaired's bracket pairs in normal state: `[b` `]b` previous / next
   buffer, `[e` `]e` move the line (or selection) up / down, `[q` `]q` and `[l` `]l` previous / next error (`[Q` `]Q`
   first / last), `[n` `]n` previous / next conflict marker, `[p` `]p` paste above / below, `[ SPC` `] SPC` insert a

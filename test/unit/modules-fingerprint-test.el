@@ -5,6 +5,12 @@
 (require 'drgnx-modules-fingerprint)
 (require 'drgnx-timer)
 
+(defvar drgnx-keys--yours)
+(defvar drgnx-keys-user-map)
+(defvar nidhogg-define-key-redirect-function)
+(declare-function drgnx-keys--define "drgnx-keys" (map key def))
+(declare-function drgnx-keys--empty "drgnx-keys" (map))
+
 (defvar drgnx-fp-test-hook nil "A hook the fingerprint reads in these tests.")
 (defvar drgnx-fp-test-registry nil "An alist registry the fingerprint reads in these tests.")
 (defvar drgnx-fp-test-subscribers nil "An EVENT → functions registry.")
@@ -184,6 +190,24 @@
       (add-function :after (default-value 'drgnx-fp-test-function) #'drgnx-fp-test-fn)
       (let ((whats (drgnx-fp-test--whats (drgnx-modules-fingerprint-diff before (drgnx-modules-fingerprint)))))
         (should (member "function-variable drgnx-fp-test-function +drgnx-fp-test-fn" whats))))))
+
+(ert-deftest drgnx-fingerprint/a-key-of-yours-left-behind-shows ()
+  ;; a test that binds as you and never cleans up: your key's record and your map's binding (in an auxiliary keymap
+  ;; too) show; gone again, nothing does
+  (require 'drgnx-keys)
+  (let ((before (drgnx-modules-fingerprint)) (nidhogg-define-key-redirect-function nil))
+    (unwind-protect
+        (progn
+          (puthash "C-c C-M-z" (cons #'ignore 'command) drgnx-keys--yours)
+          (define-key drgnx-keys-user-map (kbd "C-c C-M-z") #'ignore)
+          (drgnx-keys--define drgnx-keys-user-map (vector 'normal-state ?z) #'ignore)
+          (drgnx-keys--define drgnx-keys-user-map (vector 'normal-state ?y) #'ignore)
+          (let ((whats (drgnx-fp-test--whats (drgnx-modules-fingerprint-diff before (drgnx-modules-fingerprint)))))
+            (should (member "keys yours +1" whats))
+            (should (member "keys user-map +3" whats))))
+      (remhash "C-c C-M-z" drgnx-keys--yours)
+      (drgnx-keys--empty drgnx-keys-user-map))
+    (should-not (drgnx-fp-test--whats (drgnx-modules-fingerprint-diff before (drgnx-modules-fingerprint))))))
 
 (ert-deftest drgnx-fingerprint/full-finds-advice-on-any-function ()
   (let ((before (drgnx-modules-fingerprint t)))

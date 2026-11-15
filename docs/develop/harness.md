@@ -208,8 +208,9 @@ and third-party hooks, by hand), `unload-feature-special-hooks` and every bound 
 or `-functions` (a `-hooks` name holds hook names, as `unload-feature-special-hooks` does: no hook) (found once per Emacs with one `apropos-internal`, about 10 ms, and again by every full
 scan, so a new drgnx hook needs no line anywhere), the `add-function` advice on
 `drgnx-modules-fingerprint-function-variables`, `global-mode-string`, `auto-mode-alist`, `major-mode-remap-alist`,
-`after-load-alist`, `emulation-mode-map-alists`, `default-frame-alist`, `global-minor-modes`,
-and the keys of every registry in `drgnx-modules-fingerprint-registries` (data: a branch that
+`after-load-alist`, `emulation-mode-map-alists`, `default-frame-alist`, `global-minor-modes`, what drgnx-keys holds of yours (the counts of your keys, the bindings of your map with its
+auxiliary keymaps, the layers attached, the foreign layer when on, a global map other than `global-map` with no profile
+applied: `keys yours +1`), and the keys of every registry in `drgnx-modules-fingerprint-registries` (data: a branch that
 adds a registry adds one symbol). With a non-nil argument it adds a `mapatoms` scan of every bound `*-hook`,
 `*-hooks`, `*-functions` and `*-function` variable (an alias is read once, under its base name; a value that is not a
 proper list is skipped) and every advised function (`advice-mapc`), which finds what the lists miss; a diff of two
@@ -263,7 +264,8 @@ Inside BODY, `drgnx-modules--table` holds only the selected modules and the modu
   module's teardown too. The product's after-teardown function re-applies the keys and menus from the registry; the
   helper puts what it changed back (the applied keys, the menu items, the which-key labels, `menu-bar-update-hook`,
   `context-menu-functions`, `context-menu-mode`, and the everywhere alist's place in `emulation-mode-map-alists`,
-  which the modal core keeps there even while it holds no key) before the `:strict` comparison, provided none of the keys or menus
+  which the modal core keeps there even while it holds no key, and your keys as drgnx-keys records them: its tables
+  of yours, the layers waiting for a parent and their hook, your map in place) before the `:strict` comparison, provided none of the keys or menus
   were applied before the helper ran (in a live session they were: then the re-application stays). A teardown problem (an undo that failed, named by its label) fails the test. A module that
   is `:teardown 'restart`, which stays on in a session, is unwound all the same (its cleanup stack, newest first):
   its record must be exact.

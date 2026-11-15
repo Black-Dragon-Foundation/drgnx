@@ -116,6 +116,45 @@ the key is evil's own again, as with no profile."
     (keys-ev--in 'normal (should (eq (key-binding (kbd "g d")) #'evil-goto-definition)))
     (should (gethash "<normal-state> g d" drgnx-keys--yours))))
 
+(ert-deftest drgnx-keys/evil-your-nil-in-evils-map-frees-the-key ()
+  "Your nil on a key evil binds in its own state map (RET in motion state, x in normal state, as you free them for
+dired or org) takes evil's binding away, as in plain evil: a mode map's RET shows through.  The nil is yours."
+  (keys-ev--with ((ev-a "g d" :map (evil . evil-normal-state-map)))
+    (let ((ret (lookup-key evil-motion-state-map (kbd "RET"))) (x (lookup-key evil-normal-state-map "x"))
+          (map (make-sparse-keymap)))
+      (should (commandp ret))
+      (should (commandp x))
+      (let ((nidhogg-define-key-redirect-function nil)) (define-key map (kbd "RET") #'keys-ev-pkg))
+      (unwind-protect
+          (progn
+            (keys-ev--as-you (define-key evil-motion-state-map (kbd "RET") nil)
+                             (evil-define-key* 'normal 'global "x" nil))
+            (keys-ev--in 'motion (use-local-map map) (should (eq (key-binding (kbd "RET")) #'keys-ev-pkg)))
+            (keys-ev--in 'normal (should-not (eq (key-binding "x") x)))
+            (should (gethash "<motion-state> RET" drgnx-keys--yours))
+            (drgnx-keys-apply)
+            (keys-ev--in 'motion (use-local-map map) (should (eq (key-binding (kbd "RET")) #'keys-ev-pkg))))
+        (let ((nidhogg-define-key-redirect-function nil))
+          (define-key evil-motion-state-map (kbd "RET") ret)
+          (define-key evil-normal-state-map "x" x))))))
+
+(ert-deftest drgnx-keys/evil-your-key-in-a-drgnx-mode-map-leaves-the-profiles-there ()
+  "Your `evil-define-key' in a drgnx mode map makes an auxiliary keymap in the map itself; the profile's keys for that
+map (in its layer's auxiliary keymap) still work beside yours, after an apply too."
+  (keys-ev--with ((ev-a "g d" :map drgnx-keys-test-evown-mode-map))
+    (unwind-protect
+        (progn
+          (keys-ev--as-you (evil-define-key* 'normal drgnx-keys-test-evown-mode-map (kbd "g y") #'keys-ev-mine))
+          (dotimes (_ 2)
+            (with-temp-buffer
+              (drgnx-keys-test-evown-mode)
+              (evil-local-mode 1) (evil-normal-state)
+              (should (eq (key-binding (kbd "g y")) #'keys-ev-mine))
+              (should (eq (key-binding (kbd "g d")) #'keys-ev-a)))
+            (drgnx-keys-apply)))
+      (let ((nidhogg-define-key-redirect-function nil))
+        (define-key drgnx-keys-test-evown-mode-map [normal-state] nil t)))))
+
 (ert-deftest drgnx-keys/evil-a-packages-write-stays-in-evils-map-below-the-profile ()
   "A package's write into evil's normal state map stays there, below the profile's key."
   (keys-ev--with ((ev-a "g d" :map (evil . evil-normal-state-map)))
