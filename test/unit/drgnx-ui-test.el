@@ -924,28 +924,62 @@ wrong-number-of-arguments (19 rows of this file, once a row loaded the kit)."
       (should (member "DRGNX_TEST_SELECTOR=\"^drgnx-scn/\"" env))
       (should (member "DRGNX_SCENARIO_CONFIG=minimal" env)))))
 
+(defun drgnx-ui-test--file-sessions-here (files _jobs out-dir)
+  "`drgnx-ui--run-file-sessions' in this Emacs, no child Emacs: each of FILES through `drgnx-ui-run-ui-file-session',
+so through `drgnx-ui-test-session-function', which a row binds to a stand-in."
+  (let ((i 0))
+    (mapcar (lambda (f)
+              (let ((out (expand-file-name (format "%d.json" (cl-incf i)) out-dir)))
+                (drgnx-ui-run-ui-file-session f out)
+                (list f out 0 0.0 nil)))
+            files)))
+
+(defmacro drgnx-ui-test--with-ui-repo (repo &rest body)
+  "Run BODY with REPO bound to a fresh checkout holding one GUI test file (test/ui/a-test.el) and `drgnx-ui-repo-dir'
+bound to it; the per-file runner's sessions run in this Emacs (`drgnx-ui-test--file-sessions-here')."
+  (declare (indent 1))
+  `(let ((,repo (make-temp-file "duir" t)))
+     (unwind-protect
+         (progn
+           (make-directory (expand-file-name "test/ui" ,repo) t)
+           (write-region "" nil (expand-file-name "test/ui/a-test.el" ,repo) nil 'silent)
+           (cl-letf (((symbol-function 'drgnx-ui--run-file-sessions) #'drgnx-ui-test--file-sessions-here))
+             (let ((drgnx-ui-repo-dir ,repo)
+                   (process-environment (append '("DRGNX_UI_LAUNCHER" "DRGNX_UI_ONE_SESSION" "DRGNX_TEST_SELECTOR")
+                                                process-environment)))
+               ,@body)))
+       (delete-directory ,repo t))))
+
 (ert-deftest drgnx-ui/the-gui-suite-gets-the-hub-and-requires-it ()
   ;; a hub row in the session never skips: it gets the hub (the inherited one, else the checkout's build) and
-  ;; DRGNX_TEST_HUB_REQUIRED=1, under which a hub fixture that finds none fails
+  ;; DRGNX_TEST_HUB_REQUIRED=1, under which a hub fixture that finds none fails; in a session per file (the default,
+  ;; through `drgnx-ui-test-session-function') and in one session (DRGNX_UI_ONE_SESSION=1)
   (drgnx-ui-test--with-state
-    (let* ((repo (make-temp-file "duir" t)) (bin (expand-file-name "runtime/target/debug/ratatoskr" repo)) env)
-      (unwind-protect
-          (cl-letf (((symbol-function 'drgnx-ui-run-ert-session)
-                     (lambda (_dir &optional _timeout _config extra-env) (setq env extra-env) (list 1 nil root))))
-            (let ((drgnx-ui-repo-dir repo) (standard-output #'ignore)
-                  (process-environment (cons "DRGNX_RATATOSKR_BIN" process-environment)))
-              (drgnx-ui-run-ui-session-tests)
-              (should (member "DRGNX_TEST_HUB_REQUIRED=1" env))
-              (should-not (drgnx-ui-test--env-value env "DRGNX_RATATOSKR_BIN"))
-              (make-directory (file-name-directory bin) t)
-              (write-region "" nil bin nil 'silent)
-              (set-file-modes bin #o755)
-              (drgnx-ui-run-ui-session-tests)
-              (should (equal (drgnx-ui-test--env-value env "DRGNX_RATATOSKR_BIN") bin))
-              (let ((process-environment (cons "DRGNX_RATATOSKR_BIN=/opt/hub/ratatoskr" process-environment)))
-                (drgnx-ui-run-ui-session-tests)
-                (should (equal (drgnx-ui-test--env-value env "DRGNX_RATATOSKR_BIN") "/opt/hub/ratatoskr")))))
-        (delete-directory repo t)))))
+    (drgnx-ui-test--with-ui-repo repo
+      (let* ((bin (expand-file-name "runtime/target/debug/ratatoskr" repo)) (env nil) (envs nil)
+             (stand-in (lambda (_dir &optional _timeout _config extra-env) (setq env extra-env) (list 1 nil root)))
+             (drgnx-ui-test-session-function stand-in)
+             (run (lambda ()
+                    (setq envs nil)
+                    (dolist (one '(nil "DRGNX_UI_ONE_SESSION=1") envs)
+                      (setq env 'not-started)
+                      (let ((process-environment (if one (cons one process-environment) process-environment)))
+                        (drgnx-ui-run-ui-session-tests))
+                      (push env envs)))))
+        (cl-letf (((symbol-function 'drgnx-ui-run-ert-session) stand-in))
+          (let ((standard-output #'ignore) (process-environment (cons "DRGNX_RATATOSKR_BIN" process-environment)))
+            (funcall run)
+            (dolist (e envs)
+              (should (member "DRGNX_TEST_HUB_REQUIRED=1" e))
+              (should-not (drgnx-ui-test--env-value e "DRGNX_RATATOSKR_BIN")))
+            (make-directory (file-name-directory bin) t)
+            (write-region "" nil bin nil 'silent)
+            (set-file-modes bin #o755)
+            (funcall run)
+            (dolist (e envs) (should (equal (drgnx-ui-test--env-value e "DRGNX_RATATOSKR_BIN") bin)))
+            (let ((process-environment (cons "DRGNX_RATATOSKR_BIN=/opt/hub/ratatoskr" process-environment)))
+              (funcall run)
+              (dolist (e envs) (should (equal (drgnx-ui-test--env-value e "DRGNX_RATATOSKR_BIN") "/opt/hub/ratatoskr"))))))))))
 
 (ert-deftest drgnx-ui/a-hub-row-with-no-hub-fails-when-the-hub-is-required ()
   (load (expand-file-name "test/fixtures/ratatoskr-fixture" drgnx-dir) nil t)
@@ -1138,17 +1172,23 @@ wrong-number-of-arguments (19 rows of this file, once a row loaded the kit)."
 
 (ert-deftest drgnx-ui/a-session-killed-at-its-deadline-says-why-and-how-far-it-got ()
   "A GUI session killed at DRGNX_UI_TEST_TIMEOUT (exit 124) writes no results; the tier says the cause, the tests
-that ended (a failure by name) and the one running, from the session's progress file, never a bare \"no results\"."
-  (let* ((run (make-temp-file "drgnx-ui-run" t)) (process-environment (cons "DRGNX_UI_EVIDENCE" process-environment)))
-    (unwind-protect
-        (progn
-          (write-region "start a/one\nend a/one passed\nstart a/two\nend a/two failed\nstart a/three\n" nil
-                        (expand-file-name "results.json.progress" run))
-          (let ((out (with-output-to-string
-                       (cl-letf (((symbol-function 'drgnx-ui-run-ert-session) (lambda (&rest _) (list 124 nil run))))
-                         (drgnx-ui-run-ui-session-tests)))))
-            (should (equal (list t t t t)
-                           (mapcar (lambda (re) (and (string-match-p re out) t))
-                                   (list "TIMEOUT.*DRGNX_UI_TEST_TIMEOUT" "a/three was running" "FAILED a/two"
-                                         "passed before the timeout: 1"))))))
-      (delete-directory run t))))
+that ended (a failure by name) and the one running, from the session's progress file, never a bare \"no results\".
+In a session per file (the default, through `drgnx-ui-test-session-function') and in one (DRGNX_UI_ONE_SESSION=1)."
+  (drgnx-ui-test--with-ui-repo _repo
+    (let* ((run (make-temp-file "drgnx-ui-run" t)) (process-environment (cons "DRGNX_UI_EVIDENCE" process-environment))
+           (killed (lambda (&rest _) (list 124 nil run)))
+           (drgnx-ui-test-session-function killed))
+      (unwind-protect
+          (progn
+            (write-region "start a/one\nend a/one passed\nstart a/two\nend a/two failed\nstart a/three\n" nil
+                          (expand-file-name "results.json.progress" run))
+            (dolist (one '(nil "DRGNX_UI_ONE_SESSION=1"))
+              (let ((out (with-output-to-string
+                           (cl-letf (((symbol-function 'drgnx-ui-run-ert-session) killed))
+                             (let ((process-environment (if one (cons one process-environment) process-environment)))
+                               (drgnx-ui-run-ui-session-tests))))))
+                (should (equal (list one t t t t)
+                               (cons one (mapcar (lambda (re) (and (string-match-p re out) t))
+                                                 (list "TIMEOUT.*DRGNX_UI_TEST_TIMEOUT" "a/three was running"
+                                                       "FAILED a/two" "passed before the timeout: 1"))))))))
+        (delete-directory run t)))))
