@@ -547,21 +547,25 @@
         (should (equal (buffer-string) "one\ntwo\n"))
         (kill-buffer (current-buffer))))))
 
-(ert-deftest drgnx-notebook/the-selected-cell-has-the-add-row-and-the-selected-tint-on-its-output ()
+(ert-deftest drgnx-notebook/the-add-row-is-an-overlay-of-its-own-after-the-selected-cell ()
   (nb-test--with
     (drgnx-notebook--event "notebook-tail" (nb-test--tail "out"))
-    (let ((tail (lambda (id) (overlay-get (plist-get (drgnx-notebook--chrome-of id) :tail) 'after-string))))
+    (let ((tail (lambda (id) (overlay-get (plist-get (drgnx-notebook--chrome-of id) :tail) 'after-string)))
+          (add (lambda (id) (when-let* ((ov (plist-get (drgnx-notebook--chrome-of id) :add))) (overlay-get ov 'after-string)))))
       (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id "a") :head)))
       (drgnx-notebook--select-at (point))
-      (should (string-search "+ Code" (funcall tail "a")))
-      (should (string-search "+ Markdown" (funcall tail "a")))
+      ;; not in the output's string: its own overlay, at the cell's end
+      (should-not (string-search "+ Code" (funcall tail "a")))
+      (should (string-search "+ Code" (funcall add "a")))
+      (should (string-search "+ Markdown" (funcall add "a")))
+      (should (= (overlay-start (plist-get (drgnx-notebook--chrome-of "a") :add)) (plist-get (drgnx-notebook--cell-by-id "a") :tail)))
       (should (memq 'drgnx-notebook-cell-selected (ensure-list (get-text-property 0 'face (funcall tail "a")))))
       ;; the selection moves: the row and the tint go with it
       (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id "c") :head)))
       (drgnx-notebook--select-at (point))
-      (should-not (string-search "+ Code" (funcall tail "a")))
+      (should-not (funcall add "a"))
       (should (memq 'drgnx-notebook-cell (ensure-list (get-text-property 0 'face (funcall tail "a")))))
-      (should (string-search "+ Code" (funcall tail "c"))))))
+      (should (string-search "+ Code" (funcall add "c"))))))
 
 (ert-deftest drgnx-notebook/the-add-row-adds-a-cell-of-its-type ()
   (nb-test--with
@@ -679,9 +683,9 @@
 (ert-deftest drgnx-notebook/each-cell-is-a-ring-block-radius-10 ()
   (nb-test--with-cards
     (let ((blocks (window-parameter (selected-window) 'glitnir-blocks)))
-      (should (= (length blocks) 3))
+      (should (= (length (seq-filter (lambda (b) (eq (car b) (quote ring))) blocks)) 3))
       (dolist (c (drgnx-notebook--rescan))
-        (let ((b (seq-find (lambda (b) (= (nth 1 b) (plist-get c :head))) blocks)))
+        (let ((b (seq-find (lambda (b) (and (eq (car b) (quote ring)) (= (nth 1 b) (plist-get c :head)))) blocks)))
           (should (eq (car b) 'ring))
           (should (= (nth 2 b) (1+ (plist-get c :tail))))       ; END exclusive: the tail's newline is the card's last row
           (should (= (plist-get (nthcdr 3 b) :radius) (drgnx-px 10)))
@@ -690,7 +694,7 @@
 (ert-deftest drgnx-notebook/a-card-stands-in-a-gap-with-the-card-shadow-and-the-outer-ring ()
   (nb-test--with-cards
     (let* ((blocks (window-parameter (selected-window) 'glitnir-blocks))
-           (plist (lambda (id) (nthcdr 3 (seq-find (lambda (b) (= (nth 1 b) (plist-get (drgnx-notebook--cell-by-id id) :head)))
+           (plist (lambda (id) (nthcdr 3 (seq-find (lambda (b) (and (eq (car b) (quote ring)) (= (nth 1 b) (plist-get (drgnx-notebook--cell-by-id id) :head))))
                                                    blocks)))))
       (dolist (id '("a" "b"))
         (let ((p (funcall plist id)))
@@ -712,11 +716,35 @@
         (drgnx-notebook--put-tail (nb-test--tail "one\ntwo\nthree" 2)))
       (should (> redraws 0)))))
 
+(ert-deftest drgnx-notebook/an-output-is-an-inner-block-under-a-hairline-inset-from-the-card ()
+  (nb-test--with-cards
+    (drgnx-notebook--event "notebook-tail" (nb-test--tail "out"))
+    (drgnx-notebook--event "notebook-tail" (list :id "nb1" :cell "c" :text "boom" :version 1 :runs nil :images nil :more_lines 0
+                                                 :head (list :state "error" :text "[3]")))
+    (drgnx-notebook--blocks-update)
+    (let* ((blocks (window-parameter (selected-window) 'glitnir-blocks))
+           (inner (lambda (id) (seq-find (lambda (b) (and (eq (car b) 'inner)
+                                                          (= (nth 1 b) (1+ (plist-get (drgnx-notebook--cell-by-id id) :tail)))))
+                                         blocks))))
+      ;; the rows of the after-string at the cell's end (START = END), inset 8 px each side, a hairline on top, no fill
+      (let ((b (funcall inner "a")))
+        (should b)
+        (should (= (nth 1 b) (nth 2 b)))
+        (should (= (plist-get (nthcdr 3 b) :x0) (drgnx-px 8)))
+        (should (eq (plist-get (nthcdr 3 b) :top) 'drgnx-border-subtle))
+        (should-not (plist-get (nthcdr 3 b) :fill)))
+      ;; a failed run: a tint and a radius too
+      (let ((b (funcall inner "c")))
+        (should (consp (plist-get (nthcdr 3 b) :fill)))
+        (should (= (plist-get (nthcdr 3 b) :radius) (drgnx-px 6))))
+      ;; a cell with no output has none
+      (should-not (funcall inner "b")))))
+
 (ert-deftest drgnx-notebook/the-focus-ring-is-the-selected-cells-in-the-focused-window-only ()
   (nb-test--with-cards
     (let* ((window (selected-window))
            (ring (lambda (id) (let ((c (drgnx-notebook--cell-by-id id)))
-                                (plist-get (nthcdr 3 (seq-find (lambda (b) (= (nth 1 b) (plist-get c :head)))
+                                (plist-get (nthcdr 3 (seq-find (lambda (b) (and (eq (car b) (quote ring)) (= (nth 1 b) (plist-get c :head))))
                                                                (window-parameter window 'glitnir-blocks)))
                                            :ring)))))
       (should (equal drgnx-notebook--selected-id "a"))

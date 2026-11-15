@@ -60,6 +60,8 @@
   "An icon of the selected cell's toolbar." :group 'drgnx-notebook)
 (defface drgnx-notebook-chip '((t :inherit drgnx-chip-quiet))
   "A cell's type, and the kernel's state, in its header." :group 'drgnx-notebook)
+(defface drgnx-notebook-chip-type '((t :height 0.92))
+  "The type of a cell header's chip: the mockup's 11 px under the row's 12." :group 'drgnx-notebook)
 (defface drgnx-notebook-output '((t :inherit (drgnx-code-small) :extend t))
   "A cell's output." :group 'drgnx-notebook)
 (defface drgnx-notebook-error '((t :inherit drgnx-chip-error :extend t))
@@ -341,9 +343,12 @@ the run (or stop) button, or a chip of the part's text."
           (propertize (drgnx-notebook--icon (if stop 'square 'play) 'drgnx-notebook-run-button)
                       'drgnx-notebook-run id 'drgnx-notebook-action (plist-get part :action) 'keymap drgnx-notebook-run-map
                       'mouse-face 'drgnx-hover 'help-echo (if stop "Stop the kernel's run" "Run this cell")))
-      (propertize (concat " " (plist-get part :text) " ")
-                  'face (list (or (cdr (assoc (plist-get part :chip) drgnx-notebook--chip-faces)) 'drgnx-chip-quiet)
-                              'drgnx-notebook-head)))))
+      (let ((face (list (or (cdr (assoc (plist-get part :chip) drgnx-notebook--chip-faces)) 'drgnx-chip-quiet)
+                        'drgnx-notebook-head)))
+        ;; the mockup's chip: 6 px padding either side, the type a size under the row's
+        (concat (propertize " " 'face face 'display `(space :width (,(drgnx-px 6))))
+                (propertize (plist-get part :text) 'face (append face '(drgnx-notebook-chip-type)))
+                (propertize " " 'face face 'display `(space :width (,(drgnx-px 6)))))))))
 
 (defun drgnx-notebook--toolbar (id)
   "The selected cell's toolbar, right-aligned: an icon for each of `drgnx-notebook--tools',
@@ -414,12 +419,27 @@ of it was ever shown."
         (puthash id set drgnx-notebook--chrome)))
     (maphash (lambda (id set)
                (unless (gethash id ids)
-                 (dolist (k '(:head :tail :body)) (when-let* ((ov (plist-get set k))) (delete-overlay ov)))
+                 (dolist (k '(:head :tail :body :add)) (when-let* ((ov (plist-get set k))) (delete-overlay ov)))
                  (remhash id drgnx-notebook--chrome)))
              drgnx-notebook--chrome)
     (dolist (id (nreverse restored)) (drgnx-notebook--request-tail id))
     (drgnx-notebook--select-at (point))
+    (when drgnx-notebook--selected-id (drgnx-notebook--sync-add drgnx-notebook--selected-id))
     (drgnx-notebook--blocks-update)))
+
+(defun drgnx-notebook--sync-add (id)
+  "Cell ID's add row (`+ Code  + Markdown') is its own overlay after the cell's output: there while ID is the selected
+cell, gone when it is not, so it stands between cells and not inside the output."
+  (when-let* ((c (drgnx-notebook--cell-by-id id)) (set (drgnx-notebook--chrome-of id)))
+    (let ((ov (plist-get set :add)) (tail (plist-get c :tail)))
+      (if (not (equal id drgnx-notebook--selected-id))
+          (when ov (delete-overlay ov) (puthash id (plist-put set :add nil) drgnx-notebook--chrome))
+        (unless (drgnx-notebook--live-at-p ov tail)
+          (when ov (delete-overlay ov))
+          (setq ov (drgnx-notebook--overlay tail (1+ tail) 'add id))
+          (overlay-put ov 'priority -20)   ; after the output's string at the same position
+          (puthash id (plist-put set :add ov) drgnx-notebook--chrome))
+        (overlay-put ov 'after-string (drgnx-notebook--add-row))))))
 
 (defun drgnx-notebook--refresh-head (id)
   "Build cell ID's header strip again (its type, prompt or the running cell changed)."
@@ -476,7 +496,8 @@ and the cell it left goes back (their strings are built again from their last ta
          (new (and c (plist-get c :id))))
     (setq drgnx-notebook--selected-id new)
     (unless (equal old new)
-      (dolist (id (delq nil (list old new))) (drgnx-notebook--refresh-tail id) (drgnx-notebook--refresh-head id))
+      (dolist (id (delq nil (list old new)))
+        (drgnx-notebook--refresh-tail id) (drgnx-notebook--refresh-head id) (drgnx-notebook--sync-add id))
       (drgnx-notebook--blocks-update)
       (drgnx-notebook--focus new)
       (when (fboundp 'drgnx-statusbar-refresh) (drgnx-statusbar-refresh t)))
@@ -511,8 +532,7 @@ and the cell it left goes back (their strings are built again from their last ta
 
 (defun drgnx-notebook--tail-string (tail &optional selected)
   "The string put after a cell's tail boundary, from the hub's TAIL (:text :runs :more_lines :stale): its text with the
-runs' faces on it and a newline (the next row is the next cell's header).  SELECTED: the selected tint and the
-and the add-cell row follows."
+runs' faces on it and a newline (the next row is the next cell's header).  SELECTED: the selected tint."
   (let* ((text (or (plist-get tail :text) "")) (n (length text)) (cell (if selected 'drgnx-notebook-cell-selected 'drgnx-notebook-cell)))
     (concat
      (if (zerop n) ""
@@ -522,7 +542,7 @@ and the add-cell row follows."
              (when (and at (< at n) (eq (aref s at) #xfffc))
                (setq s (concat (substring s 0 at) (drgnx-notebook--image-piece tail image) (substring s (1+ at)))))))
          (concat s (propertize "\n" 'face cell))))
-     (if selected (drgnx-notebook--add-row) ""))))
+     "")))
 
 ;;; Images (static PNG and JPEG; SVG is not in tier 1): one character each in the tail, drawn from the hub's full output
 
@@ -596,6 +616,7 @@ and the add-cell row follows."
   "The rows of a card changed (its output grew): the windows showing the notebook draw again, so each ring is sized to
 the rows now there."
   (when (drgnx-notebook--cards-p)
+    (drgnx-notebook--blocks-update)
     (dolist (w (get-buffer-window-list nil nil t)) (force-window-update w))))
 
 (defun drgnx-notebook--refresh-tail (id)
@@ -727,34 +748,47 @@ gap's dark, the line a faint step of the text colour (the mockup's 3.5 % to 5 %)
     (cons (cons 'child-frame-shadow (if dark 0.45 0.08))
           (cons 'default (if dark 0.035 0.05)))))
 
-(defun drgnx-notebook--blocks-key (focused)
-  "What the blocks of a window are (FOCUSED: it is the selected one): one entry per cell, its positions, ring face and
-whether the focus ring has the border step outside it, then the shadow and the gap."
-  (let ((radius (drgnx-px 10)) (gap (drgnx-px 4)) (shadow (drgnx-notebook--card-shadow)))
-    (mapcar (lambda (c)
-              (let ((selected (equal (plist-get c :id) drgnx-notebook--selected-id)))
-                (list (plist-get c :head) (1+ (plist-get c :tail)) radius
-                      (cond ((not selected) 'drgnx-border-subtle)
-                            (focused 'drgnx-focus-line)
-                            (t 'drgnx-border-strong))
-                      (and selected focused)
-                      gap shadow)))
-            drgnx-notebook--cells)))
+(defun drgnx-notebook--output-state (id)
+  "Cell ID's output as the blocks need it: nil without one, else `error' (the failed run's tint) or `out'."
+  (let ((tail (gethash id drgnx-notebook--last-tails)))
+    (and tail (> (length (or (plist-get tail :text) "")) 0)
+         (if (equal (plist-get (plist-get tail :head) :state) "error") 'error 'out))))
 
-(defun drgnx-notebook--blocks-for (focused)
-  "The `glitnir-blocks' value for a window (FOCUSED: the selected one).  The same object while nothing changed."
-  (let* ((key (drgnx-notebook--blocks-key focused)) (entry (alist-get focused drgnx-notebook--blocks)))
+(defun drgnx-notebook--blocks-key (focused width)
+  "What the blocks of a window are (FOCUSED: it is the selected one; WIDTH: its text area's pixels): per cell the card
+\(its positions, ring face, whether the focus ring has the border step outside it, the shadow and the gap) and, with an
+output, the inner block under its hairline: the card's span inset by 8 px, a tint and radius for a failed run."
+  (let ((radius (drgnx-px 10)) (gap (drgnx-px 4)) (shadow (drgnx-notebook--card-shadow))
+        (inset (drgnx-px 8)) keys)
+    (dolist (c drgnx-notebook--cells)
+      (let ((selected (equal (plist-get c :id) drgnx-notebook--selected-id))
+            (out (drgnx-notebook--output-state (plist-get c :id))) (end (1+ (plist-get c :tail))))
+        (push (list 'ring (plist-get c :head) end
+                    :radius radius
+                    :ring (cond ((not selected) 'drgnx-border-subtle) (focused 'drgnx-focus-line) (t 'drgnx-border-strong))
+                    :beneath 'default :gap gap :shadow (car shadow) :shadow-ring (cdr shadow)
+                    :outer (and selected focused (cons 'drgnx-border-subtle 1.0)))
+              keys)
+        (when out
+          ;; START = END: the rows of the after-string at the cell's end, the output
+          (push (append (list 'inner end end :x0 inset :x1 (max inset (- width inset)) :top 'drgnx-border-subtle)
+                        (and (eq out 'error) (list :radius (drgnx-px 6) :fill (cons 'error 0.14))))
+                keys))))
+    (nreverse keys)))
+
+(defun drgnx-notebook--blocks-for (focused width)
+  "The `glitnir-blocks' value for a window (FOCUSED: the selected one; WIDTH: its text area's pixels).  The same object
+while nothing changed."
+  (let* ((key (drgnx-notebook--blocks-key focused width)) (cache (cons focused width))
+         (entry (alist-get cache drgnx-notebook--blocks nil nil #'equal)))
     (if (equal key (car entry))
         (cl-loop for b in (cdr entry) for k in key
-                 do (set-marker (nth 1 b) (nth 0 k)) (set-marker (nth 2 b) (nth 1 k)))
+                 do (set-marker (nth 1 b) (nth 1 k)) (set-marker (nth 2 b) (nth 2 k)))
       (dolist (b (cdr entry)) (set-marker (nth 1 b) nil) (set-marker (nth 2 b) nil))
-      (setf (alist-get focused drgnx-notebook--blocks)
-            (cons key (mapcar (lambda (k) (list 'ring (copy-marker (nth 0 k)) (copy-marker (nth 1 k))
-                                                :radius (nth 2 k) :ring (nth 3 k) :beneath 'default :gap (nth 5 k)
-                                                :shadow (car (nth 6 k)) :shadow-ring (cdr (nth 6 k))
-                                                :outer (and (nth 4 k) (cons 'drgnx-border-subtle 1.0))))
+      (setf (alist-get cache drgnx-notebook--blocks nil nil #'equal)
+            (cons key (mapcar (lambda (k) (append (list (nth 0 k) (copy-marker (nth 1 k)) (copy-marker (nth 2 k))) (nthcdr 3 k)))
                               key))))
-    (cdr (alist-get focused drgnx-notebook--blocks))))
+    (cdr (alist-get cache drgnx-notebook--blocks nil nil #'equal))))
 
 (defun drgnx-notebook--blocks-update ()
   "Give the windows showing this buffer their cards (and the fringes that inset them), when they changed."
@@ -767,7 +801,7 @@ whether the focus ring has the border step outside it, then the shadow and the g
       (dolist (w (get-buffer-window-list nil nil t))
         (unless (equal (window-fringes w) (list inset inset nil nil))
           (set-window-fringes w inset inset))
-        (let ((blocks (drgnx-notebook--blocks-for (eq w (selected-window)))))
+        (let ((blocks (drgnx-notebook--blocks-for (eq w (selected-window)) (window-body-width w t))))
           (unless (eq (window-parameter w 'glitnir-blocks) blocks)
             (set-window-parameter w 'glitnir-blocks blocks)))))))
 
