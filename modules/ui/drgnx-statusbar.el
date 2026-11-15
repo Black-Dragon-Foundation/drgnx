@@ -1616,7 +1616,8 @@ moves, so other packages' entries are formatted again, once per buffer the bars 
     (drgnx-statusbar--misc-forget)
     (drgnx-statusbar--forget-edits)
     (clrhash drgnx-statusbar--git-branches)
-    (when (fboundp 'drgnx-modal-indicator-on) (drgnx-modal-indicator-on)))
+    ;; back to the default mode line only for an engine that runs (its stop takes it out again)
+    (when (and (fboundp 'drgnx-modal-indicator-on) (bound-and-true-p drgnx-modal-running)) (drgnx-modal-indicator-on)))
   (drgnx-statusbar--frame-apply)             ; the editors' mode line, and the bar's windows
   (drgnx-statusbar--bump)
   (dolist (f (frame-list)) (drgnx-chrome-apply f))
