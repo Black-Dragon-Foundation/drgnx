@@ -314,16 +314,30 @@ fn cut_row(
     key: &str,
     arrow: &str,
     n: usize,
-    where_: &str,
     prop: &str,
     keys: &str,
     label: &str,
+    room: usize,
 ) -> Row {
+    // the key chip stays whole: in a narrow pane the words before it give way first, then the label after it
+    let chars = |s: &str| s.chars().count();
+    let long = format!("{arrow} {n} lines {key}");
+    let short = format!("{arrow} {n}");
+    let tail = format!(" {label}");
+    let (lead, label_shown) = if chars(&long) + 3 + chars(keys) + chars(&tail) <= room {
+        (long, true)
+    } else if chars(&short) + 3 + chars(keys) + chars(&tail) <= room {
+        (short, true)
+    } else {
+        (short, false)
+    };
     let mut b = RowBuilder::new(key);
-    b.push(&format!("{arrow} {n} lines {where_}"), None)
+    b.push(&lead, None)
         .push("   ", None)
-        .push(keys, Some("drgnx-chip-quiet"))
-        .push(&format!(" {label}"), Some("shadow"));
+        .push(keys, Some("drgnx-chip-quiet"));
+    if label_shown {
+        b.push(&tail, Some("shadow"));
+    }
     let end = b.pos();
     b.prop(0, end, prop, json!(n))
         .face(0, end, "drgnx-notebook-cut");
@@ -365,23 +379,31 @@ fn run_faces(b: &mut RowBuilder, r: &Run, len: usize) {
 
 /// The rows of CELL's full output, the [`OUTPUT_WINDOW`] lines from line FROM (0-based; what is past the end is brought back to the
 /// last line): a row `above` and one `below` count the lines outside the window. An image is a row that says what it is.
-pub fn output_rows(cell: &str, run: &CellRun, from: usize) -> Vec<Row> {
+pub fn output_rows(cell: &str, run: &CellRun, from: usize, cols: usize) -> Vec<Row> {
     let (total, lines) = tail::lines(run, from.saturating_add(OUTPUT_WINDOW));
     if total == 0 {
         return vec![note_row("none", "no output")];
     }
     let from = from.min(total - 1);
     let end = total.min(from + OUTPUT_WINDOW);
+    // the columns a cut row has: the pane's, less the gutter (the last line's number with a space set off every
+    // thousand, as the editor writes it, and two)
+    let room = if cols == 0 {
+        usize::MAX
+    } else {
+        let digits = end.to_string().len();
+        cols.saturating_sub(digits + (digits - 1) / 3 + 2)
+    };
     let mut rows = Vec::new();
     if from > 0 {
         rows.push(cut_row(
             "above",
             "▲",
             from,
-            "above",
             "drgnx-notebook-above",
             "M-p",
             "earlier lines",
+            room,
         ));
     }
     for (i, l) in lines.iter().enumerate().skip(from).take(end - from) {
@@ -419,10 +441,10 @@ pub fn output_rows(cell: &str, run: &CellRun, from: usize) -> Vec<Row> {
             "below",
             "▼",
             total - end,
-            "below",
             "drgnx-notebook-below",
             "M-n",
             "later lines",
+            room,
         ));
     }
     rows
@@ -436,6 +458,8 @@ pub trait Stage: Send + Sync {
     fn publish(&self, conn: u64, view: &str, rows: Vec<Row>);
     /// The first line of VIEW's window the editor asked for (0 before it asked).
     fn window(&self, conn: u64, view: &str) -> usize;
+    /// The columns of VIEW's narrowest window, from the editor's env (0 before it sent one).
+    fn columns(&self, conn: u64, view: &str) -> usize;
 }
 
 /// The hub's views as the stage.
@@ -459,6 +483,12 @@ impl Stage for FrontStage {
             .upgrade()
             .and_then(|f| f.core.views.window_from(conn, view, "lines"))
             .unwrap_or(0)
+    }
+
+    fn columns(&self, conn: u64, view: &str) -> usize {
+        self.0
+            .upgrade()
+            .map_or(0, |f| f.core.views.columns(conn, view))
     }
 }
 
@@ -764,7 +794,12 @@ impl NbViews {
                     continue;
                 }
                 let rows = match nb.run_of(conn, &id, cell).await {
-                    Ok(run) => output_rows(cell, &run, stage.window(conn, &view)),
+                    Ok(run) => output_rows(
+                        cell,
+                        &run,
+                        stage.window(conn, &view),
+                        stage.columns(conn, &view),
+                    ),
                     Err(_) => vec![note_row("none", "the cell is gone")],
                 };
                 stage.publish(conn, &view, rows);

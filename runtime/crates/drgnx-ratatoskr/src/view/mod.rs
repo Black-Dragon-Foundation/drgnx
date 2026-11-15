@@ -808,6 +808,19 @@ impl Views {
         lock(&self.store).window_from(conn, view, list)
     }
 
+    /// The columns of CONN's narrowest window showing VIEW, from its envs' width and cell (0 before one was sent).
+    pub fn columns(&self, conn: u64, view: &str) -> usize {
+        let store = lock(&self.store);
+        store
+            .classes(conn, view)
+            .iter()
+            .filter_map(|k| store.env_of(&(conn, view.to_owned(), k.clone())))
+            .filter(|e| e.width_px > 0)
+            .map(|e| (e.width_px / e.cell.0.max(1)) as usize)
+            .min()
+            .unwrap_or(0)
+    }
+
     /// KEY's font set, for a builder to measure with (none before its `view/env`).
     pub fn with_fonts<R>(&self, key: &Key, then: impl FnOnce(&FontSet) -> R) -> Option<R> {
         lock(&self.fonts).sets.get(key).map(then)

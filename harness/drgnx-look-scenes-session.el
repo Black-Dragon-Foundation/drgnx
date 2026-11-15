@@ -180,7 +180,8 @@ branch gateway-queue, staged file and history come with the Magit adapter (look 
                    "the picture is a gradient the scene makes (a PPM): in use, images are the hub's PNG or JPEG, fetched from notebook/output")
     (notebook-light "see notebook-dark")
     (notebook-views-light "see notebook-views")
-    (notebook-views "the approved mockup (notebook-views.html): the three views are windows of the editor, not the mockup's cards; with the image's kernel the outline shows a finished, a running and a failed cell, the log has no entries (the kernel logged nothing) and a running cell's full output reads `no output` here (the hub's output view of a running cell, to the views agent); the output shown is a 2 500-line cell, moved half a window on, so the cut rows show"
+    (notebook-views-running "see notebook-views; the output shown is the running cell's, which reads what it has printed so far")
+    (notebook-views "the approved mockup (notebook-views.html): the three views are windows of the editor, not the mockup's cards; with the image's kernel the outline shows a finished, a running and a failed cell and the log has no entries (the kernel logged nothing); the output shown is a 2 500-line cell, moved half a window on, so the cut rows show; the focused outline row has no focus ring (Sjá has no focus-following class)"
                     "the notebook is a file the scene writes and the hub opens (no kernel: no running cell, no log entries), so the rows are the hub's own")
     (palette "the mockup's palette rows come from its own commands; the line lists the registry's")
     (explorer-focused-dark "no agent badges (C, R) in the Explorer: agent system part 3 (G9)")
@@ -1684,10 +1685,11 @@ command must answer the harness within 20 s, so the waits are short and a miss i
   (drgnx-look-scene--until secs (format "cell %s runs" id)
                            (lambda () (funcall done (buffer-local-value 'drgnx-notebook--last-tails buffer) id))))
 
-(defun drgnx-look-scene--notebook-views (theme)
+(defun drgnx-look-scene--notebook-views (theme &optional running)
   "The notebook opened through the hub (a real file), its three views side by side in the editor, in THEME: the
-outline, the full output of the running cell, the kernel's log.  With the image's kernel the cells run: one finishes,
-one fails and one keeps running; without it, the cells show what a finished run left."
+outline, the full output of a cell (RUNNING: the one that keeps running; else the 2 500-line one), the kernel's log.
+With the image's kernel the cells run: one finishes, one fails and one keeps running; without it, the cells show what
+a finished run left."
   (drgnx-look-scene--theme theme)
   (drgnx-look-scene--try "notebook-views"
     (drgnx-wb-focus-editor)
@@ -1720,12 +1722,12 @@ one fails and one keeps running; without it, the cells show what a finished run 
             (drgnx-notebook--select-at (point))      ; no command ran: the hub is told which cell point is in
             (drgnx-notebook-outline)
             ;; the output shown is the long one (2 500 lines), moved half a window on below: rows above and below
-            (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id (if kernel "c4" "c3")) :head)))
+            (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id (if kernel (if running "c2" "c4") "c3")) :head)))
             (drgnx-notebook-open-output)
             (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id (if kernel "c2" "c3")) :head)))
             (drgnx-notebook--select-at (point))
             (drgnx-notebook-kernel-log))
-          (setq views (list (format "*Notebook outline: %s*" base) (format "*Notebook output: %s %s*" base (if kernel "c4" "c3"))
+          (setq views (list (format "*Notebook outline: %s*" base) (format "*Notebook output: %s %s*" base (if kernel (if running "c2" "c4") "c3"))
                             (format "*Notebook log: %s*" base)))
           (drgnx-look-scene--until 30 "the views' buffers" (lambda () (seq-every-p #'get-buffer views)))
           (delete-other-windows)
@@ -1739,7 +1741,7 @@ one fails and one keeps running; without it, the cells show what a finished run 
                                                                (when (drgnx-view-p drgnx-view) (drgnx-view-draw-now drgnx-view))
                                                                (> (buffer-size) 0)))
                                                            views)))
-          (when kernel
+          (when (and kernel (not running))
             (with-current-buffer (cadr views) (drgnx-notebook-output-later))
             (drgnx-look-scene--until 12 "the output's window moves"
                                      (lambda () (with-current-buffer (cadr views)
@@ -1752,6 +1754,7 @@ one fails and one keeps running; without it, the cells show what a finished run 
               (set-window-start w (point-min))))))))
   (drgnx-look-scene--answer))
 
+(defun drgnx-look-scene-notebook-views-running () "The three notebook views, the output of the running cell." (drgnx-look-scene--notebook-views 'drgnx-dark t))
 (defun drgnx-look-scene-notebook-views-light () "The three notebook views, light." (drgnx-look-scene--notebook-views 'drgnx-light))
 (defun drgnx-look-scene-notebook-views () "The notebook and its outline view." (drgnx-look-scene--notebook-views 'drgnx-dark))
 (defun drgnx-look-scene-notebook-dark () "The notebook, dark." (drgnx-look-scene--notebook 'drgnx-dark))
