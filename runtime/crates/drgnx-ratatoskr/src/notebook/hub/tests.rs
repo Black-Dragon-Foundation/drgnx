@@ -200,6 +200,12 @@ fn kernel_side(folder: &Path, id: &str, nth: u32, seen: Arc<Seen>) -> tokio::tas
             if code == "SLOW" {
                 continue;
             }
+            if code == "PRINTHOLD" {
+                // prints, then keeps running: no reply, no idle
+                let out = reply_to(&req, "stream", json!({"name": "stdout", "text": code}));
+                iopub.send(zmq(&key, &out)).await.unwrap();
+                continue;
+            }
             if code == "LOGIT" {
                 // a message of the kernel's own: no parent header
                 let own = Message::request(

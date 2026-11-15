@@ -94,6 +94,10 @@ struct Open {
     held: std::sync::atomic::AtomicUsize,
     /// What the kernel said that answered no cell (the Sjá log view).
     log: Mutex<super::views::KernelLog>,
+    /// The cells whose full output a view shows: their running output is copied into the notebook with every tail, not once a second.
+    watched: Mutex<HashSet<String>>,
+    /// Watched cells whose running output is to be copied again at the next tick (a view was asked for after the output came).
+    resync: Mutex<HashSet<String>>,
 }
 
 impl Open {
@@ -353,6 +357,8 @@ impl Notebooks {
             live: Mutex::new(HashMap::new()),
             held: std::sync::atomic::AtomicUsize::new(0),
             log: Mutex::new(super::views::KernelLog::default()),
+            watched: Mutex::new(HashSet::new()),
+            resync: Mutex::new(HashSet::new()),
         });
         let (tails, more_tails) = {
             let book = open.book.lock().await;
@@ -639,6 +645,23 @@ impl Notebooks {
         Ok((entries, log.last_seq(), lost))
     }
 
+    /// A full-output view of CELL of notebook ID is (ON) or is no more shown: while it is, a running cell's output reaches the notebook
+    /// (what `run_of` and the view read) with every tail, and once now.
+    pub fn watch_output(&self, conn: u64, id: &str, cell: &str, on: bool) {
+        let Ok(open) = self.get(conn, id) else { return };
+        let (mut watched, mut resync) = (
+            open.watched.lock().expect("watched"),
+            open.resync.lock().expect("resync"),
+        );
+        if on {
+            watched.insert(cell.to_owned());
+            resync.insert(cell.to_owned());
+        } else {
+            watched.remove(cell);
+            resync.remove(cell);
+        }
+    }
+
     /// Whether notebook ID is CONN's.
     pub fn owns(&self, conn: u64, id: &str) -> bool {
         self.get(conn, id).is_ok()
@@ -878,6 +901,7 @@ impl Pump {
                 let t = tail::build(cell, run, version);
                 // the notebook gets a copy of the output now and then and when the cell is done, not with every tail
                 if finished
+                    || self.open.watched.lock().expect("watched").contains(cell)
                     || self
                         .shown_at
                         .get(cell)
@@ -1117,6 +1141,13 @@ impl Pump {
                 },
                 _ = tick.tick() => {
                     self.resend();
+                    // a view asked for after the output came: the cell's tail is built again, which copies the output
+                    let again: Vec<String> = self.open.resync.lock().expect("resync").drain().collect();
+                    for cell in again {
+                        if self.latest.contains_key(&cell) {
+                            self.dirty.insert(cell);
+                        }
+                    }
                     let due: Vec<String> = self.dirty.iter().cloned().collect();
                     for cell in due {
                         if self.allowed() {
