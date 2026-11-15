@@ -370,6 +370,13 @@
                   "null"
                 ]
               },
+              "mcp": {
+                "description": "The MCP servers the hub gave it at its start: the coordination tools (`drgnx`), the search tool\n(`drgnx-search`) and the plugins' abilities (`drgnx-plugins`).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
               "mode": {
                 "anyOf": [
                   {
@@ -378,6 +385,13 @@
                   {
                     "type": "null"
                   }
+                ]
+              },
+              "model": {
+                "description": "The model it uses, as its agent reported it when the session opened and as each accepted switch changed it\n(none: the agent reported none).",
+                "type": [
+                  "string",
+                  "null"
                 ]
               },
               "monogram": {
@@ -6323,6 +6337,13 @@
                   "null"
                 ]
               },
+              "mcp": {
+                "description": "The MCP servers the hub gave it at its start: the coordination tools (`drgnx`), the search tool\n(`drgnx-search`) and the plugins' abilities (`drgnx-plugins`).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
               "mode": {
                 "anyOf": [
                   {
@@ -6331,6 +6352,13 @@
                   {
                     "type": "null"
                   }
+                ]
+              },
+              "model": {
+                "description": "The model it uses, as its agent reported it when the session opened and as each accepted switch changed it\n(none: the agent reported none).",
+                "type": [
+                  "string",
+                  "null"
                 ]
               },
               "monogram": {
@@ -7451,6 +7479,13 @@
                   "null"
                 ]
               },
+              "mcp": {
+                "description": "The MCP servers the hub gave it at its start: the coordination tools (`drgnx`), the search tool\n(`drgnx-search`) and the plugins' abilities (`drgnx-plugins`).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
               "mode": {
                 "anyOf": [
                   {
@@ -7459,6 +7494,13 @@
                   {
                     "type": "null"
                   }
+                ]
+              },
+              "model": {
+                "description": "The model it uses, as its agent reported it when the session opened and as each accepted switch changed it\n(none: the agent reported none).",
+                "type": [
+                  "string",
+                  "null"
                 ]
               },
               "monogram": {

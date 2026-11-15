@@ -34,6 +34,9 @@ pub(crate) struct Shared {
     cwds: Mutex<HashMap<String, PathBuf>>,
     /// The mode each session is in, as the answer that opened it reported it (`modes.currentModeId`).
     modes: Mutex<HashMap<String, String>>,
+    /// The model each session uses: the one the answer that opened it reported (`models.currentModelId`), then each
+    /// `session/set_model` the agent accepted.
+    models: Mutex<HashMap<String, String>>,
 }
 
 impl Shared {
@@ -83,6 +86,7 @@ impl Conn {
             next: AtomicI64::new(1),
             cwds: Mutex::new(HashMap::new()),
             modes: Mutex::new(HashMap::new()),
+            models: Mutex::new(HashMap::new()),
         });
         let (tx, mut wrx) = mpsc::unbounded_channel::<String>();
         let (etx, erx) = mpsc::channel(EVENT_QUEUE);
@@ -245,7 +249,9 @@ impl Conn {
     ) -> Result<SessionId, Error> {
         let mut params = json!({"cwd": cwd, "mcpServers": mcp});
         set_meta(&mut params, meta);
-        let r: acp::NewSessionResponse = self.typed("session/new", params).await?;
+        let v: Value = self.typed("session/new", params).await?;
+        let r: acp::NewSessionResponse = decode(v.clone())?;
+        self.note_model(&r.session_id, reported_model(&v));
         self.remember(&r.session_id, cwd);
         self.note_mode(
             &r.session_id,
@@ -267,6 +273,7 @@ impl Conn {
         let r = self.typed::<Value>("session/load", params).await?;
         self.remember(sid, cwd);
         self.note_mode(sid, reported_mode(&r));
+        self.note_model(sid, reported_model(&r));
         Ok(())
     }
 
@@ -283,7 +290,19 @@ impl Conn {
         let r = self.typed::<Value>("session/resume", params).await?;
         self.remember(sid, cwd);
         self.note_mode(sid, reported_mode(&r));
+        self.note_model(sid, reported_model(&r));
         Ok(())
+    }
+
+    /// The model session SID uses: the one the answer that opened it on this connection reported, then each
+    /// `session/set_model` (or `model` config option) the agent accepted; `None` when it reported none.
+    pub fn reported_model(&self, sid: &SessionId) -> Option<String> {
+        self.shared
+            .models
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&*sid.0)
+            .cloned()
     }
 
     /// The mode session SID is in, as the agent's answer that opened it on this connection (`session/new`,
@@ -331,7 +350,11 @@ impl Conn {
             json!({"sessionId": sid, "configId": config_id, "value": value}),
         )
         .await
-        .map(drop)
+        .map(|_| {
+            if config_id == "model" {
+                self.note_model(sid, Some(value.to_owned()));
+            }
+        })
     }
 
     /// Switch the session's model (`session/set_model`).
@@ -341,7 +364,7 @@ impl Conn {
             json!({"sessionId": sid, "modelId": model}),
         )
         .await
-        .map(drop)
+        .map(|_| self.note_model(sid, Some(model.to_owned())))
     }
 
     /// Run one turn.  No deadline: the turn ends by the agent's answer, [`Conn::cancel`] or the child's exit.
@@ -405,7 +428,9 @@ impl Conn {
         }
         let mut params = json!({"sessionId": f.source, "cwd": f.cwd, "mcpServers": f.mcp});
         set_meta(&mut params, meta);
-        let r: acp::ForkSessionResponse = self.typed("session/fork", params).await?;
+        let v: Value = self.typed("session/fork", params).await?;
+        let r: acp::ForkSessionResponse = decode(v.clone())?;
+        self.note_model(&r.session_id, reported_model(&v));
         self.remember(&r.session_id, &f.cwd);
         self.note_mode(
             &r.session_id,
@@ -441,6 +466,25 @@ impl Conn {
             None => modes.remove(&*sid.0),
         };
     }
+}
+
+impl Conn {
+    /// SID's reported MODEL (none: forgotten, as [`Conn::note_mode`] forgets a mode).
+    fn note_model(&self, sid: &SessionId, model: Option<String>) {
+        let mut models = self.shared.models.lock().unwrap_or_else(|e| e.into_inner());
+        match model {
+            Some(m) => models.insert(sid.0.to_string(), m),
+            None => models.remove(&*sid.0),
+        };
+    }
+}
+
+/// `models.currentModelId` of an answer that opened a session.
+fn reported_model(answer: &Value) -> Option<String> {
+    answer
+        .pointer("/models/currentModelId")
+        .and_then(Value::as_str)
+        .map(String::from)
 }
 
 /// `modes.currentModeId` of an answer that opened a session.

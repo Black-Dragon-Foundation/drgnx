@@ -289,3 +289,33 @@ fn the_chips_say_the_sandbox_the_files_and_the_checkpoints_when_the_hub_knows() 
     // only the context chip explains itself on a click
     assert_eq!(props(chips, "drgnx-agent-panel-chip").len(), 1);
 }
+
+// pattern: D
+#[test]
+fn the_chips_say_the_model_and_the_mcp_servers_and_both_explain_themselves() {
+    let (e, f, l) = (env(400), fonts(), lens());
+    let s = snap(json!({"model": "opus", "mcp": ["drgnx", "drgnx-search"]}));
+    let (rows, _) = rows(
+        &s,
+        &Cx {
+            env: &e,
+            fonts: &f,
+            lens: &l,
+            open: &BTreeSet::new(),
+            busy_since: None,
+            now: 0.0,
+            files_edited: None,
+            checkpoints: None,
+        },
+    );
+    let chips = rows.iter().find(|r| r.key == CHIPS).expect("chips");
+    assert!(chips.text.contains(" opus "), "{}", chips.text);
+    assert!(chips.text.contains("MCP 2"), "{}", chips.text);
+    let kinds: Vec<String> = props(chips, "drgnx-agent-panel-chip")
+        .into_iter()
+        .map(|(v, _)| v.as_str().unwrap_or_default().to_owned())
+        .collect();
+    assert_eq!(kinds, ["model", "mcp"]);
+    // the model comes first, as the mockup has it
+    assert!(chips.text.find("opus") < chips.text.find("MCP"));
+}
