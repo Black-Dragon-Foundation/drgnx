@@ -43,6 +43,12 @@ symbol when a key is pressed, so a map made later or replaced needs nothing.
 - **By local map, not by mode.** wgrep switches maps with `use-local-map` and keeps `major-mode`; a mode derived from a
   covered one inherits the map by keymap parent. Both are the local map reaching the target, so both work; an unrelated
   local map (wgrep's `wgrep-mode-map` over a grep buffer, for the grep map's key) does not.
+The target is active (`drgnx-keys--foreign-active-p`) when the buffer's local map is or inherits it, or a minor mode's
+map is or inherits it (`current-minor-mode-maps`: `minor-mode-map-alist`, `minor-mode-overriding-map-alist` and the
+emulation alists; vlf's `vlf-prefix-map` is such a map), or the `keymap` or `local-map` property at point is or inherits it
+(an overlay's or a button's). Text-property keymaps outrank the minor-mode alist, so a button's own map beats a profile key.
+A buffer-local `minor-mode-map-alist` does not see the layer's entry.
+
 - **Prefixes are filtered too.** A prefix entry (`C-c` of `C-c y a`) is a filtered item as well: a plain prefix map in the
   layer would turn a command bound on `C-c` in another buffer into a prefix there.
 - **The target map is never written.** What the package, a hook or you put in it stays, and the layer is above it.

@@ -1064,9 +1064,8 @@ map's parent, so such a key would shadow it, and a profile switch would leave it
     hit))
 
 (defun drgnx-keys--foreign-filter (sym def)
-  "DEF while the buffer's local map is, or inherits, keymap SYM (wgrep's `use-local-map' swap, a mode derived from
-SYM's), else nil: the key is not the layer's here."
-  (and (boundp sym) (keymapp (symbol-value sym)) (drgnx-keys--map-reaches-p (current-local-map) (symbol-value sym)) def))
+  "DEF while keymap SYM is active here (`drgnx-keys--foreign-active-p'), else nil: the key is not the layer's here."
+  (and (boundp sym) (keymapp (symbol-value sym)) (drgnx-keys--foreign-active-p (symbol-value sym)) def))
 
 (defun drgnx-keys--foreign-keep-last ()
   "Put the layer's entry last in `minor-mode-map-alist' (out of it while the layer is empty)."
@@ -1090,6 +1089,18 @@ when a key is pressed, so a map that is made later, or replaced, needs nothing h
     (setcdr drgnx-keys--foreign-map (nreverse wrapped-maps))
     (setq drgnx-keys--foreign-on (and wrapped-maps t))
     (drgnx-keys--foreign-keep-last)))
+(defun drgnx-keys--foreign-active-p (target)
+  "Whether keymap TARGET is active here: the buffer's local map is, or inherits, it (wgrep's `use-local-map' swap, a
+mode derived from the target's), or a minor mode's map does (`current-minor-mode-maps': `minor-mode-map-alist', the
+overriding and the emulation alists), or the `keymap' or `local-map' property at point does (an overlay, a button)."
+  (or (drgnx-keys--map-reaches-p (current-local-map) target)
+      (let (hit)
+        (dolist (m (current-minor-mode-maps))
+          (when (and (not hit) (drgnx-keys--map-reaches-p m target)) (setq hit t)))
+        hit)
+      (let ((km (or (get-char-property (point) 'keymap) (get-char-property (point) 'local-map))))
+        (and km (keymapp km) (drgnx-keys--map-reaches-p (if (symbolp km) (symbol-function km) km) target)))))
+
 
 (defun drgnx-keys--set-layers (entries generation)
   "Put ENTRIES ((SPEC COMMAND BINDING) …), the profile's keys in maps that are neither the global map nor the

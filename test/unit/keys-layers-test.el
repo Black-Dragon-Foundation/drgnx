@@ -199,6 +199,32 @@ appends, and gone when no profile key needs it."
           (should-not (key-binding (kbd "C-c y a"))))
       (setq minor-mode-map-alist (assq-delete-all 'keys-lay-minor-mode minor-mode-map-alist)))))
 
+(defvar keys-lay-m2-map (make-sparse-keymap) "The map of a minor mode whose keys a profile binds (as vlf's `vlf-prefix-map').")
+(defvar keys-lay-m2-mode nil)
+
+(ert-deftest drgnx-keys/foreign-layer-follows-a-minor-modes-map ()
+  "A target that is a minor mode's map (vlf's `vlf-prefix-map'), or inherited by one, is active while the mode is on."
+  (keys-lay--with ((lay-a "C-c y a" :map keys-lay-m2-map))
+    (setf (alist-get 'keys-lay-m2-mode minor-mode-map-alist) (make-composed-keymap nil keys-lay-m2-map))
+    (unwind-protect
+        (with-temp-buffer
+          (should-not (key-binding (kbd "C-c y a")))
+          (setq-local keys-lay-m2-mode t)
+          (should (eq (key-binding (kbd "C-c y a")) #'keys-lay-a))
+          (setq-local keys-lay-m2-mode nil)
+          (should-not (key-binding (kbd "C-c y a"))))
+      (setq minor-mode-map-alist (assq-delete-all 'keys-lay-m2-mode minor-mode-map-alist)))))
+
+(ert-deftest drgnx-keys/foreign-layer-follows-a-keymap-property-at-point ()
+  "A text property's or an overlay's keymap (a button's) that is, or inherits, the target makes it active at point."
+  (keys-lay--with ((lay-a "C-c y a" :map keys-lay-other-map))
+    (with-temp-buffer
+      (insert (propertize "x" 'keymap (make-composed-keymap nil keys-lay-other-map)) "y")
+      (goto-char 1)
+      (should (eq (key-binding (kbd "C-c y a")) #'keys-lay-a))
+      (goto-char 2)
+      (should-not (key-binding (kbd "C-c y a"))))))
+
 (ert-deftest drgnx-keys/foreign-layer-prefix-hides-nothing-where-it-is-inactive ()
   "A layer key under C-c does not turn a local command on C-c itself into a prefix in other buffers; two targets may
 share a key."
