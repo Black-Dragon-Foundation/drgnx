@@ -173,7 +173,8 @@ step is left (`drgnx-modules-start'; one left fails the test, since a row's wait
 the once-only stages still armed (first input, first file, first graphical frame) are reached now through their own
 triggers, each ending with `drgnx-keys-apply'.  The GUI suite's session starts no modules and arms none, so there
 this only proves none can end mid-row.
-The tty tier's `drgnx-tty-session-wait-stages' is the same in a session."
+The tty tier's `drgnx-tty-session-wait-stages' does this in a drgnx session, and also requires the idle stage to have
+run."
   (drgnx-test-wait (lambda () (not (and (fboundp 'drgnx-timer-pending)
                                         (seq-find (lambda (k) (eq (car-safe (car k)) 'modules-idle-step))
                                                   (drgnx-timer-pending)))))

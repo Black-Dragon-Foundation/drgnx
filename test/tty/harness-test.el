@@ -205,7 +205,6 @@
                    "é1\n2"))
     (drgnx-tty-session-key s "<up>")
     (should (eq (drgnx-tty-session-wait s '(with-current-buffer "*scratch*" (and (= (line-number-at-pos) 1) 1))) 1))
-    (drgnx-tty-session-wait-stages s)
     (drgnx-tty-session-key s "C-x")
     (drgnx-tty-session-key s "b")
     (should (string-prefix-p "Switch to buffer" (drgnx-tty-session-wait s '(minibuffer-prompt))))
@@ -216,5 +215,24 @@
     (drgnx-tty-session-eval s '(send-string-to-terminal (concat "\e]52;c;" (base64-encode-string "hello") "\a")))
     (drgnx-test-wait (lambda () (drgnx-tty-session-clipboard s)) :what "the OSC 52 copy in the paste buffer")
     (should (equal (drgnx-tty-session-clipboard s) "hello"))))
+
+;;;; The module stages are over
+
+(ert-deftest drgnx-tty-harness/no-keys-apply-after-the-stage-wait ()
+  "Once `drgnx-tty-session-wait-stages' returns, no module stage applies the keys again: the keys' generation stays
+the same through an idle spell longer than the idle stage's schedule (its last step comes 1 s + 0.05 s a step into
+idleness, `drgnx-modules-start').  Called right after the session starts, while that stage is still to come."
+  (drgnx-tty-session-with (s)
+    (drgnx-tty-session-wait-stages s)
+    (let ((gen (drgnx-tty-session-eval s 'drgnx-keys--generation))
+          (schedule (drgnx-tty-session-eval s '(+ 1 (* 0.05 (+ 2 (length (drgnx-modules--in-order 'idle))))))))
+      (sleep-for (1+ schedule))   ; the daemon idles: a stage still to come would end here
+      (should (= gen (drgnx-tty-session-eval s 'drgnx-keys--generation))))))
+
+(ert-deftest drgnx-tty-harness/the-stage-wait-refuses-an-emacs-without-stages ()
+  "An Emacs whose idle stage never comes (here stock Emacs: no drgnx) makes `drgnx-tty-session-wait-stages' signal,
+never return as if the stages were over."
+  (drgnx-tty-session-with (s :config "minimal")
+    (should-error (drgnx-tty-session-wait-stages s 2) :type 'drgnx-ui-error)))
 
 ;;; harness-test.el ends here

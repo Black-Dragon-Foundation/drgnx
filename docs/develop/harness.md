@@ -1167,8 +1167,11 @@ dirs) and drive the session through `harness/drgnx-tty-session.el`:
   SGR reports on 1-based cells (`-click`, `-wheel`, `-drag`).
 - **Module stages first:** every module stage that ends applies the keys again (`drgnx-keys-apply`), so a row that
   binds a key, or sends C-g, first waits for the daemon's stages: `drgnx-tty-session-wait-stages` (the GUI tier's
-  `drgnx-test-wait-stages`) waits until no idle step is pending, then reaches the once-only stages still armed
-  (first input, first file, first graphical frame). `drgnx-tty-session-key-barrier` does it before binding `<f7>`.
+  `drgnx-test-wait-stages`) waits until the idle stage has run to its end (no step pending, every idle module
+  reported), then reaches the once-only stages still armed: first input, first file, and first graphical frame when
+  one exists. It signals for an Emacs whose idle stage never comes (no drgnx, safe mode, an error at start), and when
+  a graphical frame's stage did not run. In a terminal-only Emacs the first-frame stage stays armed, so a row that
+  makes a graphical frame waits again after it. `drgnx-tty-session-key-barrier` does it before binding `<f7>`.
   A row that binds a key of its own uses one no key profile claims (`<f7>`; never `<f9>`, VS Code's breakpoint key),
   or a keymap of its own on `emulation-mode-map-alists`.
 - **C-g only when the row is about C-g:** C-g typed into a terminal is Emacs's interrupt whenever the daemon is not

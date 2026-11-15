@@ -572,12 +572,16 @@ screen.  A text in two places (a file in the Open section and in the Files secti
   (let ((r (drgnx-tty-session-tmux sess "show-buffer")))
     (and (eq (car r) 0) (cdr r))))
 
-(defconst drgnx-tty-session-stages-pending-form
-  '(and (fboundp 'drgnx-timer-pending)
-        (seq-find (lambda (k) (eq (car-safe (car k)) 'modules-idle-step)) (drgnx-timer-pending))
+(defconst drgnx-tty-session-stages-idle-over-form
+  '(and (fboundp 'drgnx-modules--in-order) (fboundp 'drgnx-timer-pending)
+        (not (seq-find (lambda (k) (eq (car-safe (car k)) 'modules-idle-step)) (drgnx-timer-pending)))
+        (let ((idle (drgnx-modules--in-order 'idle)))
+          (and idle (seq-every-p (lambda (m) (eq (plist-get (alist-get (car m) drgnx-modules--report) :stage) 'idle))
+                                 idle)))
         t)
-  "Non-nil while the modules' idle stage still has steps to run (`drgnx-modules-start': one idle timer each, the last
-ends the stage and applies the keys).")
+  "Non-nil once the modules' idle stage has run to its end (`drgnx-modules-start': one idle timer each, the last ends
+the stage and applies the keys): no step left, and every idle module has its report entry.  An Emacs whose idle steps
+were never armed (no drgnx, safe mode, an error at start) never gets there.")
 
 (defconst drgnx-tty-session-stages-reach-form
   '(progn (when (memq 'drgnx-hooks--first-input (default-value 'pre-command-hook)) (drgnx-hooks--first-input))
@@ -585,18 +589,24 @@ ends the stage and applies the keys).")
           (when-let* (((memq 'drgnx-hooks--gui-frame (default-value 'after-make-frame-functions)))
                       (f (seq-find #'display-graphic-p (frame-list))))
             (drgnx-hooks--gui-frame f))
-          t)
+          (or (not (seq-find #'display-graphic-p (frame-list)))
+              (and (memq 'drgnx-first-gui-frame-hook drgnx-hooks--done) t)))
   "Reach the once-only stages still armed (`drgnx-hooks-install': first input, first file, first graphical frame)
 through their own triggers: each runs its modules and, when one ran, applies the keys now
-\(`drgnx-modules-after-stage-functions'), not in the middle of a row.  An Emacs that armed none is left as it is.")
+\(`drgnx-modules-after-stage-functions'), not in the middle of a row.  The first-frame stage needs a graphical frame:
+with none it stays armed.  Non-nil unless there is a graphical frame and its stage has not run.")
 
 (defun drgnx-tty-session-wait-stages (sess &optional timeout)
-  "Return once SESS's Emacs (a tty session or a `drgnx-ui' daemon) has ended its last module stage: its idle stage's
-steps all ran (TIMEOUT s, default 30, else signal) and the once-only stages left are reached now.  Every stage ends
-with `drgnx-keys-apply', which rebinds the profile's keys: a row that binds a key or sends C-g calls this first, so no
-stage ends while it runs.  Cheap once done."
-  (drgnx-tty-session-wait sess `(not ,drgnx-tty-session-stages-pending-form) (or timeout 30))
-  (drgnx-tty-session-eval sess drgnx-tty-session-stages-reach-form))
+  "Return once SESS's Emacs (a tty session or a `drgnx-ui' daemon, with drgnx) has ended its module stages: its idle
+stage ran to its end (TIMEOUT s, default 30), then the first-input and first-file stages are reached through their
+own triggers, and the first-frame stage too when a graphical frame exists.  Signal when the idle stage never ends
+\(no drgnx, safe mode, an error at start: steps never armed) or a graphical frame's stage did not run.
+Every stage ends with `drgnx-keys-apply', which rebinds the profile's keys: a row that binds a key or sends C-g calls
+this first, so no stage ends while it runs.  In a terminal-only Emacs the first-frame stage stays armed: a row that
+makes a graphical frame calls this again after it.  Cheap once done."
+  (drgnx-tty-session-wait sess drgnx-tty-session-stages-idle-over-form (or timeout 30))
+  (unless (drgnx-tty-session-eval sess drgnx-tty-session-stages-reach-form)
+    (drgnx-ui--fail "%s: a graphical frame exists and its first-frame stage did not run" (plist-get sess :name))))
 
 (defun drgnx-tty-session-key-barrier (sess &optional target)
   "Wait until SESS's Emacs has read and run every key sent to TARGET (a session or a client; default SESS) before this
