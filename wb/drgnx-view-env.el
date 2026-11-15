@@ -434,9 +434,11 @@ asks how a face draws would start over)."
 
 (defun drgnx-view-env--measure (buffer face char)
   "CHAR's advance in px in FACE, measured in BUFFER (with its face remaps: the agent panel's `default' is
-`drgnx-ui-text') on its frame (`drgnx-view-env--frame')."
+`drgnx-ui-text') on its frame (`drgnx-view-env--frame'), without FACE's box: the hub adds its ends once per run (the
+face's :pad, `drgnx-view-env-face')."
   (drgnx-view-env--on-frame (drgnx-view-env--frame buffer)
-                            (lambda () (string-pixel-width (propertize (string char) 'face face) buffer))))
+                            (lambda () (string-pixel-width (propertize (string char) 'face (list '(:box nil) face))
+                                                           buffer))))
 
 (defconst drgnx-view-env--weights
   '((thin . 100) (ultra-light . 200) (extra-light . 200) (light . 300) (semi-light . 350) (demi-light . 350)

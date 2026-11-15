@@ -98,6 +98,26 @@ changes the font."
       (set-face-attribute 'default (selected-frame) :font font)
       (kill-buffer b))))
 
+(defface drgnx-rows-fit-ui-test-boxed '((t :box (:line-width 6)))
+  "A chip's face for the row below: a box whose ends are 6 px each.")
+
+(ert-deftest drgnx-ui-rows-fit/a-boxed-face-s-advance-leaves-out-its-box ()
+  "A face with a box (the Work flow's chips) answers the hub's glyph ask with the char's advance alone: the hub adds
+the box's ends once per run (`view-glyphs' faces' :pad).  Red first: each char came with both ends (an `o' 19 px in
+a 7 px font), and the flow's run line was cut with half the window free."
+  (skip-unless (display-graphic-p))
+  (require 'drgnx-view-env)
+  (let ((b (generate-new-buffer " *boxed*")))
+    (unwind-protect
+        (progn
+          (set-window-buffer (selected-window) b)
+          (let ((bare (string-pixel-width (propertize "o" 'face '((:box nil) drgnx-rows-fit-ui-test-boxed)) b))
+                (boxed (string-pixel-width (propertize "o" 'face 'drgnx-rows-fit-ui-test-boxed) b)))
+            ;; the premise: the box draws
+            (should (> boxed bare))
+            (should (= bare (drgnx-view-env--measure b 'drgnx-rows-fit-ui-test-boxed ?o)))))
+      (kill-buffer b))))
+
 (ert-deftest drgnx-ui-rows-fit/a-measure-on-another-frame-keeps-the-buffer-s-point ()
   "The hub's asks are measured on the frame of a window showing the view's buffer; with another frame selected (a
 sheet, a second frame), selecting that frame selects its selected window, which put the buffer's point at the

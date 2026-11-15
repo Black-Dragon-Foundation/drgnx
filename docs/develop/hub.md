@@ -2525,7 +2525,8 @@ with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an est
   in the asked class's buffer on the frame that shows it, keyed by the font its face resolves to there (a buffer's
   remaps change it, and so does a frame of another scale or default font). Measuring on a frame other than the
   selected one keeps every buffer's point (`drgnx-view-env--on-frame`): selecting that frame selects its selected
-  window, which would put its buffer's point at the window's. Caches are bounded: 4096 chars per font and per set, 1024 measured strings.
+  window, which would put its buffer's point at the window's. An advance is measured without the face's box (a chip's
+  face): the hub adds the box's ends once per run, from the face's `:pad`. Caches are bounded: 4096 chars per font and per set, 1024 measured strings.
 - **The editor's measurement wins.** The fit guard reports a line it measured wider than the hub fitted it
   (`view/measured`); from then on that width is used for that string instead of the sum (least recently used out).
 - **The fit check row** (`test/ui/rows-fit-gui-test.el`, on the fixture view `rows-demo`, whose labels the hub
