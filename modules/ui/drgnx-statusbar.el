@@ -471,16 +471,17 @@ face's own background, so no colour is named."
         drgnx-statusbar--bar-face))
 
 (defun drgnx-statusbar--lead (w pad)
-  "The padding at the left end of window W's bar, PAD pixels wide.  When the row is a pixel short of its height (the
-difference between the row and the text is odd) it is also a spacer of the whole height, whose ascent takes the
-pixel: the text then sits a pixel lower, and the row is exactly `status-bar' high."
+  "The padding at the left end of window W's bar, PAD pixels wide.  When the row is short of its height by LEFTOVER
+pixels (`drgnx-statusbar--row': an odd difference between the row and the text, and the widths the box cannot draw
+at the frame's scale) it is also a spacer of the whole height, whose ascent takes half of them: the text stays in the
+middle, and the row is exactly `status-bar' high."
   (let* ((row (drgnx-statusbar--row w)) (height (nth 0 row)) (box (nth 2 row)) (leftover (nth 3 row)))
     (propertize
      " " 'face drgnx-statusbar--bar-face
      'display
      (if-let* (((> leftover 0))
                (extent (drgnx-pixels-font-extent drgnx-statusbar--bar-face (window-frame w))))
-         (let ((target (+ (car extent) box leftover)))
+         (let ((target (+ (car extent) box (/ leftover 2))))
            `(space :width (,pad) :height (,height) :ascent ,(min 100 (ceiling (* 100.0 target) height))))
        `(space :width (,pad))))))
 
