@@ -655,8 +655,12 @@ profile switches.  A nil here (you unbound a key) shadows the profile's key and 
 (defvar drgnx-keys--yours (make-hash-table :test #'equal)
   "Your global keys: key description → (DEF . SOURCE), SOURCE the Lisp file of yours that bound it (its name without
 the extension: .el, .elc and .eln are one file; an after-load body counts as the file that registered it) or
-`command' (a keyboard command, M-:, emacsclient --eval).  DEF nil: you unbound the key.  A file's entries go when it
-loads again (`drgnx-keys--forget-file'); a command's stay.")
+`command' (a keyboard command, M-:, emacsclient --eval).  DEF nil: you unbound the key.  When a file of yours has
+loaded again, its entries that load did not write go (`drgnx-keys--loaded'); a command's stay.")
+
+(defvar drgnx-keys--loading (make-hash-table :test #'equal)
+  "SOURCE (a file of yours, as in `drgnx-keys--yours') → (LOAD . KEYS): the keys its load now running wrote, LOAD that
+load's `load-file-name' (a new string per load, so a load that failed midway is not counted with the next).")
 
 (defvar drgnx-keys--profile-keys nil "The profile's global keys of the last apply: ((KEY . DEF) …), KEY a description.")
 
@@ -704,13 +708,14 @@ then, so the file rule cannot tell them apart: only a body you registered is you
 (defun drgnx-keys--yours-p ()
   "Whether a write into the global map now is yours: from a Lisp file of yours while it loads (whatever loads it:
 startup, M-x load-file), an after-load body you registered (not a file it loads in turn), emacsclient --eval, or a
-keyboard command (no file loading, no after-load body, no timer running).  A process filter run while a command
-waits counts as the command (Emacs does not show Lisp that a filter runs)."
+keyboard command (no file loading, no after-load body, no timer, process filter or sentinel running: Emacs binds
+`last-nonmenu-event' to t around a filter and a sentinel, emacsclient's own included, so that test comes after it)."
   (cond (load-file-name
          (and (fboundp 'drgnx-settings-prov--user-file-p) (drgnx-settings-prov--user-file-p load-file-name)))
         (drgnx-keys--yours-body t)
         (drgnx-keys--after-load nil)
         (drgnx-keys--server-eval t)
+        ((eq last-nonmenu-event t) nil)
         (drgnx-keys--in-timer nil)
         (t (and this-command t))))
 
@@ -747,11 +752,16 @@ made."
 (defun drgnx-keys--take (text def remove)
   "Your write of DEF (or a REMOVE) on the global key TEXT: record it, and take the key out of the profile's layers
 at once, or give it back to them."
-  (let ((nidhogg-define-key-redirect-function nil) (k (key-parse text)))
+  (let ((nidhogg-define-key-redirect-function nil) (k (key-parse text)) (src (drgnx-keys--source)))
+    (when (and load-file-name (stringp src))
+      (let ((cell (gethash src drgnx-keys--loading)))
+        (unless (eq (car cell) load-file-name) (setq cell (list load-file-name)))
+        (push text (cdr cell))
+        (puthash src cell drgnx-keys--loading)))
     (if remove
         (progn (remhash text drgnx-keys--yours)
                (when-let* ((d (assoc text drgnx-keys--profile-keys))) (define-key drgnx-keys--profile-map k (cdr d))))
-      (puthash text (cons def (drgnx-keys--source)) drgnx-keys--yours)
+      (puthash text (cons def src) drgnx-keys--yours)
       (when (lookup-key drgnx-keys--profile-map k) (ignore-errors (define-key drgnx-keys--profile-map k nil t))))
     (drgnx-keys--set-everywhere (plist-get drgnx-keys-last :bindings))))
 
@@ -803,11 +813,20 @@ registered them (`drgnx-keys--after-load-yours'), whatever command or body loade
 wait (`sit-for', `accept-process-output')."
   (let ((drgnx-keys--in-timer t)) (apply fn args)))
 
-(defun drgnx-keys--forget-file (file)
-  "Forget the global keys FILE of yours bound (it is about to load again): each leaves your map, and the profile's
-key comes back on it.  Keys you bound by command stay."
-  (let ((base (file-name-sans-extension (file-truename file))) gone)
-    (maphash (lambda (k v) (when (equal (cdr v) base) (push k gone))) drgnx-keys--yours)
+(defun drgnx-keys--loaded (file)
+  "On `after-load-functions': FILE has loaded (whatever loaded it: the start, M-x load-file, a `load' in config.el).
+The keys it bound in an earlier load and not in this one leave your map, and the profile's key comes back on each.
+Keys you bound by command stay.  A load that fails midway does not get here, so nothing is forgotten then."
+  (let* ((base (file-name-sans-extension (file-truename file)))
+         (kept (cdr (gethash base drgnx-keys--loading))))
+    (remhash base drgnx-keys--loading)
+    (drgnx-keys--forget-file base kept)))
+
+(defun drgnx-keys--forget-file (base &optional kept)
+  "Forget the global keys of yours whose source is BASE (a file's truename without its extension), except those in
+KEPT (key descriptions): each leaves your map, and the profile's key comes back on it."
+  (let (gone)
+    (maphash (lambda (k v) (when (and (equal (cdr v) base) (not (member k kept))) (push k gone))) drgnx-keys--yours)
     (when gone
       (let ((nidhogg-define-key-redirect-function nil))
         (dolist (k gone)
@@ -840,7 +859,7 @@ bindings cannot be told from packages': the first apply says so as a problem (`d
   (advice-add 'eval-after-load :filter-args #'drgnx-keys--after-load-yours)
   (advice-add 'do-after-load-evaluation :around #'drgnx-keys--after-load-scope)
   (advice-add 'timer-event-handler :around #'drgnx-keys--timer-scope)
-  (add-hook 'drgnx-settings-prov-load-functions #'drgnx-keys--forget-file)
+  (add-hook 'after-load-functions #'drgnx-keys--loaded)
   (advice-add 'server-eval-and-print :around #'drgnx-keys--server-eval-yours)
   (when (drgnx-keys-redirect-available-p)
     (setq nidhogg-define-key-redirect-function #'drgnx-keys--redirect)))
@@ -867,6 +886,7 @@ keys (they come back with the next apply), and the redirect stays on to record t
   (let ((nidhogg-define-key-redirect-function nil))
     (setcdr drgnx-keys-user-map nil)
     (clrhash drgnx-keys--yours)
+    (clrhash drgnx-keys--loading)
     (pcase-dolist (`(,k . ,d) drgnx-keys--profile-keys) (define-key drgnx-keys--profile-map (key-parse k) d))
     (drgnx-keys--set-everywhere (plist-get drgnx-keys-last :bindings))))
 

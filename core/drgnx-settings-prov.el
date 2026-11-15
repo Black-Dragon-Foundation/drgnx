@@ -216,14 +216,8 @@ line is recorded (Move into Settings needs it)."
           (when (and v (symbolp v) (not (keywordp v)) (not (eq v t))) (push v vars)))))
     (delete-dups vars)))
 
-(defvar drgnx-settings-prov-load-functions nil
-  "Functions called with FILE (your Lisp) before it loads through `drgnx-settings-prov-with-load', nested loads too:
-the keys core forgets the keys the file bound last time (`drgnx-keys--forget-file').  An error in one is ignored.")
-
 (defun drgnx-settings-prov--call-with-load (file body)
   "Run BODY (a function) that loads FILE, recording who sets which variable (`drgnx-settings-prov-with-load')."
-  (when (stringp file)
-    (dolist (f drgnx-settings-prov-load-functions) (ignore-errors (funcall f file))))
   (if drgnx-settings-prov--loading
       (funcall body)
     (condition-case nil

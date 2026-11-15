@@ -274,6 +274,72 @@ a key you bound by command stays."
          (should-not (gethash "C-o" drgnx-keys--yours)))
      (let ((this-command nil)) (keymap-set global-map "C-o" #'open-line)))))
 
+(ert-deftest drgnx-keys/yours-a-process-filter-in-a-commands-wait-is-not-yours ()
+  "A process filter or sentinel that runs inside a command's wait is not you: Emacs binds `last-nonmenu-event' to t
+around it (as here), and its global write is a package's."
+  (drgnx-keys-test--live
+   (drgnx-keys-use '((vscode app editing window)))
+   (unwind-protect
+       (progn
+         (drgnx-keys-test--as-you
+          (let ((last-nonmenu-event t)) (funcall (lambda (_proc _out) (keymap-global-set "C-o" #'ignore)) nil "")))
+         (should (eq (keymap-lookup global-map "C-o") #'ignore))
+         (should (eq (keymap-lookup (current-global-map) "C-o") #'find-file))
+         (should-not (gethash "C-o" drgnx-keys--yours)))
+     (let ((this-command nil)) (keymap-set global-map "C-o" #'open-line)))))
+
+(ert-deftest drgnx-keys/yours-load-file-again-forgets-the-keys-it-no-longer-binds ()
+  "M-x load-file of a file of yours a second time: a key it no longer binds is the profile's again; one it binds
+again stays yours."
+  (drgnx-keys-test--live
+   (drgnx-keys-use '((vscode app editing window)))
+   (let ((f (drgnx-keys-test--user-file "kx-loadfile.el"
+                                        "(keymap-global-set \"C-o\" #'ignore)\n(keymap-global-set \"C-c x\" #'ignore)\n")))
+     (let ((this-command nil)) (load-file f))
+     (should (eq (keymap-lookup (current-global-map) "C-o") #'ignore))
+     (drgnx-keys-test--user-file "kx-loadfile.el" "(keymap-global-set \"C-c x\" #'ignore)\n")
+     (let ((this-command nil)) (load-file f))
+     (should (eq (keymap-lookup (current-global-map) "C-o") #'find-file))
+     (should-not (gethash "C-o" drgnx-keys--yours))
+     (should (eq (keymap-lookup (current-global-map) "C-c x") #'ignore))
+     (should (gethash "C-c x" drgnx-keys--yours)))))
+
+(ert-deftest drgnx-keys/yours-a-config-reload-forgets-the-keys-of-a-file-it-loads ()
+  "config.el loads another file of yours with a plain `load': when config.el loads again, a key the other file no
+longer binds is the profile's again."
+  (drgnx-keys-test--live
+   (drgnx-keys-use '((vscode app editing window)))
+   (let* ((sub (drgnx-keys-test--user-file "lisp/kx-sub.el" "(keymap-global-set \"C-o\" #'ignore)\n"))
+          (cfg (drgnx-keys-test--user-file "kx-cfg.el" (format "(load %S nil t t)\n" sub)))
+          (load (lambda () (let ((this-command nil))
+                             (drgnx-settings-prov--call-with-load cfg (lambda () (load cfg nil t t)))))))
+     (funcall load)
+     (should (eq (keymap-lookup (current-global-map) "C-o") #'ignore))
+     (drgnx-keys-test--user-file "lisp/kx-sub.el" ";; the key went\n")
+     (funcall load)
+     (should (eq (keymap-lookup (current-global-map) "C-o") #'find-file))
+     (should-not (gethash "C-o" drgnx-keys--yours)))))
+
+(ert-deftest drgnx-keys/yours-a-native-load-records-the-source ()
+  "A file of yours loaded natively compiled (its .eln found for its .elc) records the source, so a reload of the .el
+forgets its keys."
+  (skip-unless (native-comp-available-p))
+  (drgnx-keys-test--live
+   (drgnx-keys-use '((vscode app editing window)))
+   (let* ((eln (make-temp-file "kx-eln" t))
+          (native-comp-eln-load-path (cons eln native-comp-eln-load-path))
+          (native-comp-jit-compilation nil)
+          (f (drgnx-keys-test--user-file "kx-native.el"
+                                         "(defun kx-native-probe () 1)\n(keymap-global-set \"C-o\" #'ignore)\n")))
+     (unwind-protect
+         (progn
+           (byte-compile-file f)
+           (native-compile f)
+           (let ((this-command nil)) (load (file-name-sans-extension f) nil t))
+           (should (native-comp-function-p (symbol-function 'kx-native-probe)))   ; the .eln ran
+           (should (equal (cdr (gethash "C-o" drgnx-keys--yours)) (file-name-sans-extension (file-truename f)))))
+       (delete-directory eln t)))))
+
 (ert-deftest drgnx-keys/a-binding-changed-by-someone-else-is-kept ()
   (drgnx-keys-test--live
    (drgnx-keys-use '((vscode app editing window)))

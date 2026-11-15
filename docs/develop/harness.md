@@ -1184,7 +1184,9 @@ dirs) and drive the session through `harness/drgnx-tty-session.el`:
   was. Every eval leaves Lisp behind it (its connection's sentinel, a redisplay), so a C-g sent right after one can
   land in it. The barrier's eval only arms a timer in the daemon, which waits until no server connection is left, no
   native compilation runs and no timer is due within 1 s (a repeating one: within 0.25 s, since one that repeats every
-  second is always due within 1 s). The barrier stops JIT native compilation from taking more files, so it waits only
+  second is always due within 1 s). So the quiet it promises is a margin, not a lock: at least 0.25 s before a
+  repeating timer runs (1 s before a one-shot), in which the C-g must reach the key reader after the title, which
+  tmux's round trip of milliseconds does with room to spare. The barrier stops JIT native compilation from taking more files, so it waits only
   for the compilations already running (a cold eln cache would otherwise keep it busy for minutes); the rest of the
   row runs without JIT compilation. It then writes a window title, and the barrier returns when tmux reports that
   title. The stage wait keeps the same rule (`kx-unsettled`), on its idle steps; on a timeout both say what was still

@@ -534,14 +534,16 @@ while it loads (`keymap-global-set`, `global-set-key`, `define-key` on `global-m
 runs nothing, whatever the profile or Emacs bind there. Yours sits above the profile's keys and survives every apply
 and profile switch; the sheet lists it as `F9 my-command (your own binding, kept) over Toggle Breakpoint (vscode)`.
 Take it away (`keymap-global-unset` with REMOVE, or `define-key … nil t`) and the profile's key is back at once.
-A Lisp file of yours is yours whatever loads it (the start, `M-x load-file`). When it loads again, the keys it bound
-the last time go first, so a key you deleted from the file is the profile's again; keys you bound from the keyboard
-stay until you take them away.
+A Lisp file of yours is yours whatever loads it (the start, `M-x load-file`, a `load` in `config.el`). When it has
+loaded again, the keys it bound the last time and not this time go, so a key you deleted from the file is the
+profile's again; if the file stops with an error, its keys stay as they were. Keys you bound from the keyboard stay
+until you take them away.
 
 What is not yours: keys a package binds when it loads (its `with-eval-after-load` bodies too, even when your command
-loaded it), and keys bound later by a hook or a timer, even one you wrote (a hook runs outside your file and your
-command; bind such keys at the top of `config.el` instead). One exception Emacs cannot show drgnx: a process's output
-handler that binds a key while one of your commands waits for it counts as that command. A package's
+loaded it), and keys bound later by a hook, a timer or a process's output handler, even one you wrote (a hook runs
+outside your file and your command; bind such keys at the top of `config.el` instead). A timer counts for as long as
+it runs: if a timer of yours asks a question (`y-or-n-p`) and you bind a key with `M-:` while it waits, that key is
+not yours either. A package's
 global key stays below the profile's. Two cases work as in any Emacs: a key a package (or a hook) binds under a
 prefix the profile owns, where Emacs binds a command (`C-k x` while Emacs's `C-k` is `kill-line`), fails with
 "starts with non-prefix key"; and a global `[remap]` that is not yours still turns the profile's command into its own.
