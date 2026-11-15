@@ -709,7 +709,10 @@ moves each way, and the header window does not move (edges, start, vscroll)."
                 (error "wheel down (pixel precision %S) did not move the transcript back (start %d, was %d)"
                        precise (window-start w) from)))
             (funcall still "down")))
-      (pixel-scroll-precision-mode (if was 1 -1)))))
+      (pixel-scroll-precision-mode (if was 1 -1))
+      ;; the precise wheel leaves a pixel vscroll (15 px at s1 in a transcript shown whole from its start): with it,
+      ;; the next check's `scroll-down' did not move the window's start
+      (set-window-vscroll w 0 t))))
 
 (defun drgnx-look-scene--header-targets (window)
   "The first posn in WINDOW (the header window) over each kind of clickable part: an alist (KIND . POSN), KIND `pin',
