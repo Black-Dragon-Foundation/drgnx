@@ -103,8 +103,9 @@ opens).  A window scrolled back, one that shrank and one showing the buffer's to
                 ((> (window-pixel-height w) (window-old-pixel-height w)))
                 ((= (window-point w) end))
                 ((> (window-start w) (point-min)))
-                (at (pos-visible-in-window-p end w t))
-                ((<= (+ (cadr at) (* 2 (window-default-line-height w))) (window-body-height w t))))
+                (body (window-body-height w t)) (line (window-default-line-height w))
+                ;; the rows from the start to the end's row, its bottom included; at most a body and a line measured
+                ((<= (+ (cdr (window-text-pixel-size w (window-start w) end nil (+ body line))) line) body)))
       (with-selected-window w (save-excursion (goto-char end) (recenter -1))))))
 
 (defun drgnx-view-sja--release (s)
