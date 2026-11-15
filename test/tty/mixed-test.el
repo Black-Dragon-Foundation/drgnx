@@ -60,22 +60,22 @@ frame and an `emacsclient -t' client of one daemon.  Both are stopped afterwards
                                      (drgnx-ui--emacsclient) (shell-quote-argument (plist-get ,(nth 0 spec) :socket)))))
              (drgnx-tty-session-wait-screen ,(nth 1 spec) "\\*\\(?:scratch\\|drgnx start\\)\\*" 30)
              (drgnx-tty-session-wait ,(nth 0 spec) '(seq-some (lambda (f) (and (frame-parameter f 'client) (not (display-graphic-p f)))) (frame-list)) 30)
-             (drgnx-tty-session-wait-stages ,(nth 0 spec))   ; no module stage rebinds <f9> or eats a C-g mid-row
+             (drgnx-tty-session-wait-stages ,(nth 0 spec))   ; no module stage rebinds a key or eats a C-g mid-row
              ,@body)
          (when ,(nth 1 spec) (drgnx-tty-session-stop ,(nth 1 spec)))
          (drgnx-ui-stop (plist-get ,(nth 0 spec) :name))
          (delete-directory root t)))))
 
 (defun drgnx-tty-mixed-test--transient (gui)
-  "A one-key transient on <f9> in the daemon."
+  "A one-key transient on <f7> (a key no key profile claims) in the daemon."
   (should (drgnx-tty-session-eval
            gui '(progn (require 'transient)
                        ;; the graphical window is driven by calls, so its focus reaches the daemon as a `switch-frame'
                        ;; after the call, which a menu would take for the user's command and close on: it stays
                        (transient-define-prefix drgnx-tty-mixed-tr () :transient-non-suffix #'transient--do-stay
                                                 [("a" "Do A" ignore)])
-                       (keymap-global-set "<f9>" #'drgnx-tty-mixed-tr)
-                       (eq (key-binding (kbd "<f9>")) 'drgnx-tty-mixed-tr)))))
+                       (keymap-global-set "<f7>" #'drgnx-tty-mixed-tr)
+                       (eq (key-binding (kbd "<f7>")) 'drgnx-tty-mixed-tr)))))
 
 (defconst drgnx-tty-mixed-test--gui-frame
   '(seq-find (lambda (f) (and (display-graphic-p f) (not (frame-parent f)))) (frame-list))
@@ -108,7 +108,7 @@ window is driven by calls, the terminal window by real keys."
       (drgnx-tty-mixed-test--wait gui '(null (get-buffer-window " *transient*" t)))
       (should (equal (drgnx-tty-mixed-test--state gui) before))
       ;; in the terminal window
-      (drgnx-tty-session-key tty "<f9>" 'legacy)
+      (drgnx-tty-session-key tty "<f7>" 'legacy)
       (drgnx-tty-mixed-test--wait gui '(and (get-buffer-window " *transient*" t) t))
       (let ((during (drgnx-tty-mixed-test--state gui)))
         (should (eq (plist-get during :transient) 'tty))

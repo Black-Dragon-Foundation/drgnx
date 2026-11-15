@@ -43,15 +43,15 @@
   (drgnx-tty-session-wait s `(and (assq ',command kx-seen) t) 10))
 
 (defun drgnx-tty-fallback-test--barrier (s c)
-  "Wait until the daemon has read and run everything sent to client C before this call: one more key, F9 (a command that
+  "Wait until the daemon has read and run everything sent to client C before this call: one more key, F7 (a command that
 only notes itself), goes down the same input stream, and keys are read in order.  What \"nothing else may follow\"
-means is then settled, with no time passed; the note is taken out of the record.  F9 is a VS Code key: the module
-stages are over first, so none rebinds it."
+means is then settled, with no time passed; the note is taken out of the record.  F7 is a key no key profile claims,
+so no stage rebinds it; the module stages are over first all the same."
   (drgnx-tty-session-wait-stages s)
   (drgnx-tty-session-eval s '(progn (unless (fboundp 'kx-sentinel) (defun kx-sentinel () (interactive) nil))
-                                    (global-set-key (kbd "<f9>") #'kx-sentinel) t))
+                                    (global-set-key (kbd "<f7>") #'kx-sentinel) t))
   (drgnx-tty-session-eval s '(setq kx-seen (assq-delete-all 'kx-sentinel kx-seen)))
-  (drgnx-tty-session-send c "\e[20~")
+  (drgnx-tty-session-send c "\e[18~")
   (drgnx-tty-session-wait s '(assq 'kx-sentinel kx-seen) 10)
   (drgnx-tty-session-eval s '(progn (setq kx-seen (assq-delete-all 'kx-sentinel kx-seen)) t)))
 

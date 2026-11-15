@@ -600,15 +600,16 @@ stage ends while it runs.  Cheap once done."
 
 (defun drgnx-tty-session-key-barrier (sess &optional target)
   "Wait until SESS's Emacs has read and run every key sent to TARGET (a session or a client; default SESS) before this
-call: F9, a command that only counts itself, goes down the same input stream and keys are read in order.  What \"no
-command ran from these bytes\" means is then settled, with no time passed.  F9 is a key the VS Code profile claims:
-the module stages are over first (`drgnx-tty-session-wait-stages'), so none rebinds it under the barrier."
+call: F7, a command that only counts itself, goes down the same input stream and keys are read in order.  What \"no
+command ran from these bytes\" means is then settled, with no time passed.  F7 is a key no key profile claims, so no
+stage's keys apply rebinds it under the barrier; the module stages are over first all the same
+\(`drgnx-tty-session-wait-stages')."
   (drgnx-tty-session-wait-stages sess)
   (let ((n (drgnx-tty-session-eval sess '(progn (defvar kx-sentinel-n 0)
                                                 (unless (fboundp 'kx-sentinel) (defun kx-sentinel () (interactive) (cl-incf kx-sentinel-n)))
-                                                (global-set-key (kbd "<f9>") #'kx-sentinel)
+                                                (global-set-key (kbd "<f7>") #'kx-sentinel)
                                                 kx-sentinel-n))))
-    (drgnx-tty-session-send (or target sess) "\e[20~")
+    (drgnx-tty-session-send (or target sess) "\e[18~")
     (drgnx-tty-session-wait sess `(> kx-sentinel-n ,n) 10)))
 
 (defvar drgnx-tty-session--barriers 0)

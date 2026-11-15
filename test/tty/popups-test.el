@@ -55,23 +55,23 @@ frame count is what it was."
   (declare (indent 1))
   `(drgnx-tty-session-with ,spec
      (drgnx-tty-popups-test--ready ,(car spec))
-     (drgnx-tty-session-wait-stages ,(car spec))   ; no module stage rebinds <f9> or eats a C-g mid-row
+     (drgnx-tty-session-wait-stages ,(car spec))   ; no module stage rebinds a key or eats a C-g mid-row
      ,@body))
 
 ;;;; The popups drgnx owns or routes (wb/drgnx-rules.el): each shows, and leaves no trace
 
 (defun drgnx-tty-popups-test--transient (s)
-  "Define a one-key transient on <f9> in SESS and open it by that key."
+  "Define a one-key transient on <f7> (a key no key profile claims) in SESS and open it by that key."
   (should (drgnx-tty-session-eval
            s '(progn (require 'transient)
                      (transient-define-prefix drgnx-tty-popups-test-tr () [("a" "Do A" ignore)])
-                     (keymap-global-set "<f9>" #'drgnx-tty-popups-test-tr)
-                     (eq (key-binding (kbd "<f9>")) 'drgnx-tty-popups-test-tr)))))
+                     (keymap-global-set "<f7>" #'drgnx-tty-popups-test-tr)
+                     (eq (key-binding (kbd "<f7>")) 'drgnx-tty-popups-test-tr)))))
 
 (ert-deftest drgnx-tty-popups/transient-shows-and-leaves-no-trace ()
   (drgnx-tty-popups-test--with (s :size "80x24")
     (drgnx-tty-popups-test--transient s)
-    (drgnx-tty-popups-test--round s (lambda () (drgnx-tty-popups-test--key s "<f9>"))
+    (drgnx-tty-popups-test--round s (lambda () (drgnx-tty-popups-test--key s "<f7>"))
                                   '(and (get-buffer-window " *transient*") t)
                                   (lambda () (drgnx-tty-popups-test--key s "C-g")))))
 
@@ -172,7 +172,7 @@ Lisp file in the editor."
         (should (drgnx-tty-session-eval s visible))
         ;; the probe tells: the first line of the file is off the screen
         (should-not (drgnx-tty-session-eval s '(let ((w (get-buffer-window "big.txt"))) (pos-visible-in-window-p (point-min) w))))
-        (dolist (popup `(("transient" ,(lambda () (drgnx-tty-popups-test--key s "<f9>")) (get-buffer-window " *transient*")
+        (dolist (popup `(("transient" ,(lambda () (drgnx-tty-popups-test--key s "<f7>")) (get-buffer-window " *transient*")
                           ,(lambda () (drgnx-tty-popups-test--key s "C-g")))
                          ("which-key" ,(lambda () (drgnx-tty-popups-test--key s "C-x")) (get-buffer-window " *which-key*")
                           ,(lambda () (drgnx-tty-popups-test--key s "C-g")))
