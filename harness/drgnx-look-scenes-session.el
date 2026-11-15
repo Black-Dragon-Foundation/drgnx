@@ -526,8 +526,8 @@ counted from the hub), the file's problems (`drgnx-look-scene--problems') and it
   (drgnx-look-scene--answer))
 
 (defun drgnx-look-scene--panel-top (buffer)
-  "An error unless BUFFER, the agent panel, holds the hub's header row (`p:head') as its first row and its window
-starts at the buffer's top: what the panel opened by its command path shows first."
+  "An error unless BUFFER, the agent panel, holds the hub's header row (`p:head') and its window starts at the buffer's
+top or shows its tail: what the panel opened by its command path shows first."
   (let* ((state (buffer-local-value 'drgnx-view-patch buffer))
          (rows (and state (drgnx-view-patch-rows state))))
     (unless (drgnx-look-scene--until 10 "the panel's header row from the hub"
@@ -538,7 +538,10 @@ starts at the buffer's top: what the panel opened by its command path shows firs
                     (with-current-buffer buffer (buffer-substring (point-min) (min (point-max) (+ (point-min) 60)))))
             drgnx-look-scene--errors))
     (when-let* ((w (get-buffer-window buffer)))
-      (unless (= (window-start w) (with-current-buffer buffer (point-min)))
+      ;; at the top, unless the panel holds more than the window does (then the redisplay keeps the tail in view)
+      (unless (or (= (window-start w) (with-current-buffer buffer (point-min)))
+                  (> (cdr (window-text-pixel-size w (with-current-buffer buffer (point-min)) (with-current-buffer buffer (point-max)) nil 100000))
+                     (window-body-height w t)))
         (push (format "agent-panel: its window starts at %d, not the top" (window-start w)) drgnx-look-scene--errors)))))
 
 (defun drgnx-look-scene--palette-commands ()

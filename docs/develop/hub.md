@@ -2952,7 +2952,8 @@ count of finished edits changes. A card's buttons are `card:*` values of `drgnx-
 click dispatcher (`drgnx-agent-panel-act`) answers by calling the existing command. The hub orders every row of the
 panel; the editor inserts them in that order, with no key prefix or special case.
 
-The cards under the transcript are the hub's too (`view/panel_review.rs`): a diff card for each hunk of each file the
+The cards under the transcript are the hub's too (`view/panel_review.rs`; Reject and Accept
+are boxed buttons, the line numbers muted): a diff card for each hunk of each file the
 agent edited (`c:diff:PATH:I:h` the header with the file's icon, name, which lines and hunk, Reject and Accept; then
 `c:diff:PATH:I:N` the numbered lines in the added, removed and context faces, 30 at most) and a permission card for each
 request in the snapshot (`c:perm:ID:0` the ringed line, `c:perm:ID:1` Allow, Always and Deny). The hub reads each file's
