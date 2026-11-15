@@ -324,8 +324,9 @@ fields are the ones its docstring lists; the vector gives each field a value of 
 
 (ert-deftest drgnx-look-bars/lead-takes-the-font-ascent ()
   "Pattern D: when the row less the text is odd (compact: 22 pixels on a 17 pixel font), the bar's lead is a spacer
-whose ascent is the font's ASCENT (`drgnx-pixels-font-extent'), the box (2) and the leftover pixel (1), of the row:
-not the font's MAX-WIDTH, which put the spacer wholly above the baseline and grew the bar by the descent."
+whose ascent is the font's ASCENT (`drgnx-pixels-font-extent'), the box (2) and half the leftover pixels (1: none),
+of the row, so the text stays in the middle (aba937994): not the font's MAX-WIDTH, which put the spacer wholly above
+the baseline and grew the bar by the descent."
   (drgnx-statusbar-test--with
     (let* ((fields drgnx-look-bars-test--font-info-fields)
            (info (apply #'vector (number-sequence 100 (+ 99 (length fields)))))
@@ -339,7 +340,7 @@ not the font's MAX-WIDTH, which put the spacer wholly above the baseline and gre
                 ((symbol-function 'drgnx-pixels-scale) (lambda (&optional _f) 1.0)))
         (let ((spec (get-text-property 0 'display (drgnx-statusbar--lead (selected-window) 12))))
           (should (equal '(22) (plist-get (cdr spec) :height)))
-          (should (equal (ceiling (* 100.0 (+ 13 2 1)) 22) (plist-get (cdr spec) :ascent))))))))
+          (should (equal (ceiling (* 100.0 (+ 13 2 (/ 1 2))) 22) (plist-get (cdr spec) :ascent))))))))
 
 (ert-deftest drgnx-look-bars/a-font-is-read-once ()
   "Pattern D: the bars and the tab rows ask for a font's metrics at every build, and `font-info' makes a new vector
