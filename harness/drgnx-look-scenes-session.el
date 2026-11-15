@@ -15,6 +15,11 @@
 (declare-function drgnx-pane-show "drgnx-panes")
 (declare-function drgnx-pkg-jit-guard "drgnx-pkg-activate")
 (declare-function drgnx-panel-replay--wait "panel-replay-fixture")
+(declare-function drgnx-agent-panel-act "drgnx-agent-panel-steps")
+(declare-function drgnx-agent-panel-chip "drgnx-agent-panel-explain")
+(declare-function drgnx-agent-panel-preset "drgnx-agent-panel-steps")
+(declare-function drgnx-agent-panel-toggle-type "drgnx-agent-panel-steps")
+(declare-function drgnx-ui-kit-run "drgnx-ui-kit")
 (declare-function drgnx-agent-panel-cards--permissions "drgnx-agent-panel-cards")
 
 (declare-function drgnx-uitest--json "drgnx-uitest")
@@ -520,8 +525,60 @@ counted from the hub), the file's problems (`drgnx-look-scene--problems') and it
 
 (defun drgnx-look-scene-agent-panel-long ()
   "The agent panel with a transcript longer than its window: the header, chips and strip stay at the top, the composer
-at the bottom."
-  (drgnx-look-scene-agent-panel))
+at the bottom.  Then the transcript is scrolled up a page and the pinned header's pin button and a chip are clicked:
+the picture is the scrolled panel."
+  (prog1 (drgnx-look-scene-agent-panel)
+    (drgnx-look-scene--try "pinned clicks" (drgnx-look-scene--panel-clicks drgnx-look-scene--panel))))
+
+(defun drgnx-look-scene--panel-click-targets (window)
+  "The first posn in WINDOW's top 300 px over each kind of clickable part of the pinned copy: an alist of (KIND . POSN),
+KIND `pin', `lens', `pill' or `chip', and only the kinds found.  Found by asking the drawn window (`posn-at-x-y'), as a
+pointer would."
+  (let (found)
+    (cl-loop for y from 4 below 300 by 4
+             do (cl-loop for x from 4 below (window-body-width window t) by 4
+                         do (let* ((p (posn-at-x-y x y window)) (str (posn-string p)))
+                              (when (and (consp str) (stringp (car str)))
+                                (let* ((a (get-text-property (cdr str) 'drgnx-agent-panel-action (car str)))
+                                       (c (get-text-property (cdr str) 'drgnx-agent-panel-chip (car str)))
+                                       (kind (cond ((equal a "pin") 'pin)
+                                                   ((and (stringp a) (string-prefix-p "lens:" a)) 'lens)
+                                                   ((and (stringp a) (string-prefix-p "type:" a)) 'pill)
+                                                   ((stringp c) 'chip))))
+                                  (when (and kind (not (assq kind found))) (push (cons kind p) found)))))))
+    found))
+
+(defun drgnx-look-scene--panel-clicks (buffer)
+  "In BUFFER's window scroll the transcript up a page, then click the pinned copy's parts: the pin button, a lens segment,
+a strip pill (and a chip, when the session has one that does something: the mock agent has none).  The header must
+still be at the top, and each click must run its command."
+  (let ((w (get-buffer-window buffer)) ran)
+    (unless w (error "no window shows the panel"))
+    (select-window w)
+    ;; point leaves the panel's end, as it does for a reader going back up (a window at the end follows the tail); the
+    ;; scroll is measured from the end, as the older page loads at the top
+    (set-window-point w (window-start w))
+    (let ((back (with-current-buffer buffer (- (point-max) (window-start w)))))
+      (scroll-down 15)
+      (redisplay t)
+      (unless (> (with-current-buffer buffer (- (point-max) (window-start w))) back)
+        (error "the transcript did not scroll up (start %d)" (window-start w))))
+    (let ((targets (drgnx-look-scene--panel-click-targets w)))
+      (dolist (kind '(pin lens pill))
+        (unless (assq kind targets)
+          (error "no %s over the pinned header after the scroll (start %d, found %S)" kind (window-start w) (mapcar #'car targets))))
+      (unless (eq (with-current-buffer buffer (key-binding [mouse-1])) 'drgnx-agent-panel-act)
+        (error "mouse-1 in the panel is %S, not the panel's click command" (with-current-buffer buffer (key-binding [mouse-1]))))
+      (cl-letf (((symbol-function 'drgnx-ui-kit-run) (lambda (id) (push id ran)))
+                ((symbol-function 'drgnx-agent-panel-preset) (lambda (n) (push (list 'lens n) ran)))
+                ((symbol-function 'drgnx-agent-panel-toggle-type) (lambda (ty) (push (list 'type ty) ran)))
+                ((symbol-function 'drgnx-agent-panel-chip) (lambda (item) (push (list 'chip item) ran))))
+        (with-current-buffer buffer
+          (dolist (kind '(pin lens pill chip))
+            (when-let* ((p (alist-get kind targets))) (drgnx-agent-panel-act (list 'mouse-1 p))))))
+      (dolist (want '(agents-panel-pin lens type))
+        (unless (seq-find (lambda (r) (or (eq r want) (eq (car-safe r) want))) ran)
+          (error "the clicks ran %S, not %S" ran want))))))
 
 (defun drgnx-look-scene-agent-panel ()
   (drgnx-look-scene--theme 'drgnx-dark)
