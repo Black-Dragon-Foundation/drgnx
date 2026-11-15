@@ -220,7 +220,16 @@ taller than the cap and that is at the cap (another line would pass it), its fir
                  (was (memq type (buffer-local-value 'drgnx-agent-panel--disclosure panel))))
             (drgnx-uitest-run (drgnx-uitest-click-events pill))
             (should (eq (not was) (and (memq type (buffer-local-value 'drgnx-agent-panel--disclosure panel)) t))))
-          ;; a lens segment: its preset's disclosure is the panel's
+          ;; a lens segment: its preset's disclosure is the panel's.  The pill's click changed the strip, and the hub's
+          ;; patch for it moves the header's text: the lens is found again once that patch is drawn
+          (drgnx-ui-panel-header--settle area)
+          (let ((hb (window-buffer hw)) (tick nil) (end (+ (float-time) 5)))
+            (while (and (not (eql tick (buffer-chars-modified-tick hb))) (< (float-time) end))
+              (setq tick (buffer-chars-modified-tick hb))
+              (accept-process-output nil 0.3)
+              (drgnx-test-wait-presented)))
+          (setq lens (drgnx-ui-panel-header--target hw (lambda (a) (and (stringp a) (string-prefix-p "lens:" a)))))
+          (should lens)
           (let* ((action (get-text-property (posn-point lens) 'drgnx-agent-panel-action (window-buffer hw)))
                  (n (string-to-number (substring action 5))))
             (drgnx-uitest-run (drgnx-uitest-click-events lens))
