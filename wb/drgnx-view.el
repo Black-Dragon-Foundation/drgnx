@@ -2164,7 +2164,10 @@ put on it, in STATE; returns TEXT."
         (add-face-text-property (nth 0 run) (nth 1 run) face t text)))
     (dolist (p (plist-get row :props))
       (when-let* ((name (drgnx-view-patch--prop (nth 2 p))))
-        (put-text-property (nth 0 p) (nth 1 p) name (nth 3 p) text)
+        ;; `mouse-face' takes a face symbol: a row names it, as it names a run's face
+        (put-text-property (nth 0 p) (nth 1 p) name
+                           (if (eq name 'mouse-face) (and (stringp (nth 3 p)) (drgnx-view-patch--face (nth 3 p))) (nth 3 p))
+                           text)
         (when (eq name drgnx-view-patch-id-prop)        ; the rows that hold a node, for the class step
           (let ((ids (drgnx-view-patch-ids state)) (keys (drgnx-view-patch-keys state)))
             (unless (member key (gethash (nth 3 p) ids)) (push key (gethash (nth 3 p) ids)))

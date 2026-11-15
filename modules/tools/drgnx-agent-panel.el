@@ -237,35 +237,38 @@ folds under it."
     (:e (drgnx-agent-panel--entry-row (cadr key)))
     (:b (drgnx-agent-panel--block-row (cadr key) (nth 2 key)))
     (:composer (drgnx-agent-panel-composer--row))
+    (:nohub (propertize "  the hub is not running: the header, the strip and the cards come from it\n"
+                        'face 'drgnx-agent-panel-subtle))
     (:rows-end "\n")
     (_ "\n")))
 
-(defvar-local drgnx-agent-panel--top-windows nil
-  "The windows that showed the panel from its first row when the hub's top rows were last patched in.")
-
 (defun drgnx-agent-panel--patched (view keys)
-  "PATCHED of the panel's view: the hub rows among KEYS get the inserter's last step (the stale shade, the classes)."
+  "PATCHED of the panel's view: the hub rows among KEYS get the inserter's last step (the stale shade, the classes), then
+the panel's scroll follows its tail."
   (when drgnx-view-patch
     (when-let* ((rows (seq-filter #'stringp keys)))
-      (drgnx-agent-panel--restore-top-windows rows)
-      (drgnx-view-patch--patched view rows))))
+      (drgnx-view-patch--patched view rows)
+      (drgnx-agent-panel--follow-tail))))
 
-(defun drgnx-agent-panel--keep-top-windows ()
-  "Note the windows of this panel that start at its first row: the hub's top rows (the header, the chips, the strip)
-come in above it, and a window keeps its start on its row, so it would start below them."
-  (setq drgnx-agent-panel--top-windows
-        (seq-filter (lambda (w) (= (window-start w) (point-min))) (get-buffer-window-list (current-buffer) nil t))))
+(defun drgnx-agent-panel--tail-start (window)
+  "Where WINDOW should start for the panel's end to sit at its bottom: the earliest line from which the end is still in
+view.  Lines are tried by the window itself (rows differ in height, and a pixel measure of text is not the window's)."
+  (let ((start (point-max)))
+    (save-excursion
+      (while (and (> start (point-min))
+                  (progn (goto-char start) (vertical-motion -1 window) (< (point) start))
+                  (progn (set-window-start window (point) t) (pos-visible-in-window-p (point-max) window)))
+        (setq start (point))))
+    start))
 
-(defun drgnx-agent-panel--restore-top-windows (keys)
-  "Rows were drawn (KEYS): the windows noted by `drgnx-agent-panel--keep-top-windows' start at the top again, wherever
-the insertion left them.  (A panel that holds more than its window does is left to the redisplay, which keeps point, at
-the tail, in view.)"
-  (when (and drgnx-agent-panel--top-windows keys)
-    (drgnx-wb-with-owned-windows drgnx-agent-panel--top-windows
-      (dolist (w drgnx-agent-panel--top-windows)
-        (when (and (window-live-p w) (eq (window-buffer w) (current-buffer)))
-          (set-window-start w (point-min) t))))
-    (setq drgnx-agent-panel--top-windows nil)))
+(defun drgnx-agent-panel--follow-tail ()
+  "The panel owns its scroll: a window whose point is at the panel's end (the composer) shows the end at its bottom,
+whatever came in above it.  A panel shorter than its window starts at its top (the header); a taller one shows its
+last page.  A window the user moved point in is left alone."
+  (dolist (w (get-buffer-window-list (current-buffer) nil t))
+    (when (= (window-point w) (point-max))
+      (drgnx-wb-with-owned-windows (list w)
+        (set-window-start w (drgnx-agent-panel--tail-start w) t)))))
 
 (defun drgnx-agent-panel--sync (view)
   "SYNC of the panel's view: with the hub's rows, the models their patches named go to Sjá before they are drawn."
@@ -295,9 +298,6 @@ transcript itself: no row is placed by its key)."
           (when old (push (list :remove old) ops))
           (when (plist-get op :reset) (push (list :insert (list :after nil :rows (plist-get op :reset))) ops))))
        (t (push op ops))))
-    (with-current-buffer (drgnx-view--buffer view)
-      (when (seq-some (lambda (o) (or (plist-member o :reset) (plist-member o :insert))) ops)
-        (drgnx-agent-panel--keep-top-windows)))
     (drgnx-view-patch--apply-ops state view (append (list :ops (nreverse ops)) patch))))
 
 (defun drgnx-agent-panel--look-params ()
@@ -420,7 +420,8 @@ OLD's, and an event with neither keeps OLD's.  The result has no `patch'."
 (defun drgnx-agent-panel--wanted-keys ()
   "Every row key of the panel's own it should hold now, in order (the hub's rows go before `(:rows-end)')."
   (append (if (drgnx-agent-panel--rows-p) (list (list :rows-end))
-            (append (and drgnx-agent-panel--more drgnx-agent-panel--loaded (list (list :more)))
+            (append (list (list :nohub))
+                    (and drgnx-agent-panel--more drgnx-agent-panel--loaded (list (list :more)))
                     (let ((idxs (sort (hash-table-keys drgnx-agent-panel--entries) #'<)))
                       (mapcan #'drgnx-agent-panel--row-keys (seq-filter #'drgnx-agent-panel--row-p idxs)))))
           (drgnx-agent-panel-composer-keys)))

@@ -55,6 +55,8 @@ fn build(s: &Snapshot, width: u32, busy: Option<f64>) -> (Vec<Row>, Vec<(ImageId
             open: &BTreeSet::from(["edit".to_owned()]),
             busy_since: busy,
             now: 1000.0,
+            files_edited: None,
+            checkpoints: None,
         },
     )
 }
@@ -202,6 +204,8 @@ fn a_terminal_header_has_no_images() {
             open: &BTreeSet::new(),
             busy_since: None,
             now: 0.0,
+            files_edited: None,
+            checkpoints: None,
         },
     );
     assert!(images.len() == 3 || images.is_empty());
@@ -258,4 +262,30 @@ fn a_narrow_panel_wraps_the_strip_under_its_first_pill() {
         assert_eq!(all.matches(&format!(" {t} ")).count(), 1, "{all:?}");
     }
     assert!(all.contains("make default"));
+}
+
+// pattern: D
+#[test]
+fn the_chips_say_the_sandbox_the_files_and_the_checkpoints_when_the_hub_knows() {
+    let (e, f, l) = (env(400), fonts(), lens());
+    let s = snap(json!({"enforced": true, "usage": {"used": 100, "size": 1000}}));
+    let (rows, _) = rows(
+        &s,
+        &Cx {
+            env: &e,
+            fonts: &f,
+            lens: &l,
+            open: &BTreeSet::new(),
+            busy_since: None,
+            now: 0.0,
+            files_edited: Some(3),
+            checkpoints: Some(1),
+        },
+    );
+    let chips = rows.iter().find(|r| r.key == CHIPS).expect("chips");
+    assert!(chips.text.contains("sandboxed"), "{}", chips.text);
+    assert!(chips.text.contains("3 files"), "{}", chips.text);
+    assert!(chips.text.contains("1 checkpoint "), "{}", chips.text);
+    // only the context chip explains itself on a click
+    assert_eq!(props(chips, "drgnx-agent-panel-chip").len(), 1);
 }

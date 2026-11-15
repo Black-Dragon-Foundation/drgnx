@@ -560,6 +560,21 @@ impl Panels {
             .get(&(key.0, key.1.clone()))
             .map(|c| (c.lens.clone(), c.look.open.clone()))
             .unwrap_or_default();
+        // the chips the snapshot does not carry: the files edited (the ledger's) and the steps holding a checkpoint
+        let files_edited = lock(&self.edited).get(&s.id).map(|e| {
+            if e.files.is_empty() {
+                e.paired
+                    .iter()
+                    .map(|h| h.path.as_str())
+                    .collect::<BTreeSet<_>>()
+                    .len()
+            } else {
+                e.files.len()
+            }
+        });
+        let checkpoints = lock(&self.facts)
+            .get(&s.id)
+            .map(|(_, map)| map.values().filter(|f| f.revertible && !f.undone).count());
         let (mut rows, mut images) = panel_top::rows(
             &snapshot,
             &panel_top::Cx {
@@ -569,6 +584,8 @@ impl Panels {
                 open: &open,
                 busy_since,
                 now,
+                files_edited,
+                checkpoints,
             },
         );
         let (cards, plan, finished) = {
@@ -607,6 +624,7 @@ impl Panels {
         };
         rows.extend(cards);
         images.extend(card_images);
+        hover(&mut rows);
         (rows, images)
     }
 
@@ -721,3 +739,20 @@ pub fn look(f: &Front, c: &Caller, p: PanelLook) -> Result<bool, Error> {
 #[cfg(test)]
 #[path = "panel/tests.rs"]
 mod tests;
+
+/// Every clickable part of the panel's rows (an action or a chip) gets the hover face: `mouse-face` takes a symbol, and a
+/// row carries the face's name, which the editor maps to the face.
+fn hover(rows: &mut [Row]) {
+    for r in rows {
+        let spans: Vec<(u32, u32)> = r
+            .props
+            .iter()
+            .filter(|(_, _, n, _)| n == "drgnx-agent-panel-action" || n == "drgnx-agent-panel-chip")
+            .map(|(a, b, _, _)| (*a, *b))
+            .collect();
+        for (a, b) in spans {
+            r.props
+                .push((a, b, "mouse-face".to_owned(), json!("drgnx-hover")));
+        }
+    }
+}

@@ -538,11 +538,14 @@ top or shows its tail: what the panel opened by its command path shows first."
                     (with-current-buffer buffer (buffer-substring (point-min) (min (point-max) (+ (point-min) 60)))))
             drgnx-look-scene--errors))
     (when-let* ((w (get-buffer-window buffer)))
-      ;; at the top, unless the panel holds more than the window does (then the redisplay keeps the tail in view)
-      (unless (or (= (window-start w) (with-current-buffer buffer (point-min)))
-                  (> (cdr (window-text-pixel-size w (with-current-buffer buffer (point-min)) (with-current-buffer buffer (point-max)) nil 100000))
-                     (window-body-height w t)))
-        (push (format "agent-panel: its window starts at %d, not the top" (window-start w)) drgnx-look-scene--errors)))))
+      ;; the panel owns its scroll: its end (the composer) at the bottom of the window, and, when the panel fits,
+      ;; its top (the header) at the top
+      (let ((at (with-current-buffer buffer (pos-visible-in-window-p (point-max) w t)))
+            (top (= (window-start w) (with-current-buffer buffer (point-min)))))
+        (unless (or top (and at (> (cadr at) (- (window-body-height w t) (* 4 (frame-char-height))))))
+          (push (format "agent-panel: its end is not at the bottom of its window (start %d, end at %S)"
+                        (window-start w) at)
+                drgnx-look-scene--errors))))))
 
 (defun drgnx-look-scene--palette-commands ()
   "palette.html's commands for \"run te\": the test runner's three and the terminal's, with the mockup's keys, first in
