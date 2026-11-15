@@ -393,16 +393,6 @@ pub(crate) fn flow_doc(flow: &Flow) -> Doc {
     d
 }
 
-/// TEXT cut to CHARS characters, an ellipsis last when cut.
-fn fit(text: &str, chars: usize) -> String {
-    if text.chars().count() <= chars {
-        return text.to_owned();
-    }
-    let mut s: String = text.chars().take(chars.saturating_sub(1)).collect();
-    s.push('…');
-    s
-}
-
 /// TEXT's width in device px drawn in FACE, in the font the editor says FACE draws in (M measures).
 fn text_px(m: &dyn Measure, face: &str, text: &str) -> u32 {
     drgnx_rows::fit::width_in(m, Some(face), text).ceil() as u32
@@ -1146,8 +1136,8 @@ pub(crate) fn rules_rows(
     flow: &Flow,
     task: Option<&str>,
     env: &ViewEnv,
+    fonts: &dyn Measure,
 ) -> (Vec<Row>, Vec<(ImageId, String)>) {
-    let cell_w = env.cell.0.max(1);
     let mut pics = Pics::new(env);
     let (kind_at, how_at) = (env.width_px * 2 / 5, env.width_px * 2 / 5 + dpx(env, 100.0));
     let mut head = RowBuilder::new("rules-head");
@@ -1175,7 +1165,7 @@ pub(crate) fn rules_rows(
     for r in &p.rules {
         let mut b = RowBuilder::new(format!("rule:{}", r.id));
         b.push(
-            &fit(&r.doc, (kind_at.saturating_sub(8) / cell_w) as usize),
+            &fit_px(fonts, TEXT, &r.doc, kind_at.saturating_sub(8)),
             Some(TEXT),
         )
         .stop(kind_at);
@@ -1187,9 +1177,11 @@ pub(crate) fn rules_rows(
         };
         chip(&mut b, &mut pics, lock, &r.kind, face);
         b.stop(how_at).push(
-            &fit(
+            &fit_px(
+                fonts,
+                LABEL,
                 how(&r.id),
-                (env.width_px.saturating_sub(how_at) / cell_w) as usize,
+                env.width_px.saturating_sub(how_at),
             ),
             Some(LABEL),
         );
@@ -1198,22 +1190,23 @@ pub(crate) fn rules_rows(
     (rows, pics.out)
 }
 
-/// TEXT in lines of at most CHARS characters, broken at spaces (a word longer than a line is cut).
-fn wrap(text: &str, chars: usize) -> Vec<String> {
-    let chars = chars.max(8);
+/// TEXT drawn in FACE in lines at most PX device px wide as FONTS measure them (less the fit's slack), broken at
+/// spaces (a word longer than a line is cut).
+fn wrap(fonts: &dyn Measure, face: Option<&str>, text: &str, px: u32) -> Vec<String> {
+    let room = px as f32 - drgnx_rows::fit::SLACK;
+    let wide = |s: &str| drgnx_rows::fit::width_in(fonts, face, s) > room;
     let mut out: Vec<String> = Vec::new();
     let mut line = String::new();
     for word in text.split_whitespace() {
-        let n = line.chars().count();
-        if n > 0 && n + 1 + word.chars().count() > chars {
+        if !line.is_empty() && wide(&format!("{line} {word}")) {
             out.push(std::mem::take(&mut line));
         }
         if !line.is_empty() {
             line.push(' ');
         }
         line.push_str(word);
-        if line.chars().count() > chars {
-            out.push(fit(&line, chars));
+        if wide(&line) {
+            out.push(drgnx_rows::fit::fit_in(fonts, face, &line, px as f32));
             line.clear();
         }
     }
@@ -1263,7 +1256,7 @@ fn run_cell(e: &Evidence) -> String {
 
 /// The commits block of task FACTS for a tile CHARS wide: its base .. tip and each commit (its number, short sha,
 /// tests or code, subject), as the merge gate last checked them.
-fn commits_lines(facts: &TaskFacts, chars: usize) -> Vec<String> {
+fn commits_lines(facts: &TaskFacts, px: u32, fonts: &dyn Measure) -> Vec<String> {
     let short = |s: &str| s.chars().take(7).collect::<String>();
     let Some(base) = &facts.base else {
         return Vec::new();
@@ -1280,9 +1273,11 @@ fn commits_lines(facts: &TaskFacts, chars: usize) -> Vec<String> {
     )];
     for (i, c) in facts.commits.iter().enumerate() {
         let kind = if c.tests { "tests" } else { "code" };
-        out.push(fit(
+        out.push(fit_px(
+            fonts,
+            LABEL,
             &format!("{} {} {kind} · {}", i + 1, short(&c.sha), c.subject),
-            chars,
+            px,
         ));
     }
     out
@@ -1321,8 +1316,8 @@ pub(crate) fn detail_tile(
     flow: &Flow,
     task: &str,
     env: &ViewEnv,
+    fonts: &dyn Measure,
 ) -> (Vec<Row>, Vec<(ImageId, String)>) {
-    let chars = (env.width_px / env.cell.0.max(1)) as usize;
     let Some((facts, t)) = flow
         .tasks
         .iter()
@@ -1336,7 +1331,7 @@ pub(crate) fn detail_tile(
     };
     let mut rows = Vec::new();
     let mut line = |key: String, text: &str, face: Option<&str>| {
-        for (i, l) in wrap(text, chars).iter().enumerate() {
+        for (i, l) in wrap(fonts, face, text, env.width_px).iter().enumerate() {
             let mut b = RowBuilder::new(if i == 0 {
                 key.clone()
             } else {
@@ -1377,7 +1372,15 @@ pub(crate) fn detail_tile(
         Some(session) if t.agent.is_some() => format!("{agent} · {session}"),
         _ => agent.to_owned(),
     };
-    head.push(&fit(&who, chars.saturating_sub(10)), Some(AGENT));
+    head.push(
+        &fit_px(
+            fonts,
+            AGENT,
+            &who,
+            env.width_px.saturating_sub(env.cell.0 * 10),
+        ),
+        Some(AGENT),
+    );
     if t.held.is_some() {
         head.stop(env.width_px.saturating_sub(env.cell.0 * 7));
         head.push(" held ", Some(Chip::Held.face()));
@@ -1405,11 +1408,16 @@ pub(crate) fn detail_tile(
     let mut sub = RowBuilder::new("d:sub");
     // the task's words give way first: the time, spend and context stay whole
     let said = format!(" · {}", said.join(" · "));
-    let task = fit(
+    let task = fit_px(
+        fonts,
+        LABEL,
         &format!("{} {}", t.label, t.title),
-        chars.saturating_sub(said.chars().count()),
+        env.width_px.saturating_sub(text_px(fonts, LABEL, &said)),
     );
-    sub.push(&fit(&format!("{task}{said}"), chars), Some(LABEL));
+    sub.push(
+        &fit_px(fonts, LABEL, &format!("{task}{said}"), env.width_px),
+        Some(LABEL),
+    );
     out.push(sub.finish());
     let held_gates: Vec<(&str, &Cell)> = GATES
         .iter()
@@ -1417,7 +1425,7 @@ pub(crate) fn detail_tile(
         .filter(|(_, c)| c.chip == Chip::Held)
         .map(|(g, c)| (*g, c))
         .collect();
-    let commits = commits_lines(facts, chars);
+    let commits = commits_lines(facts, env.width_px, fonts);
     if let Some(why) = &t.held {
         line("d:gap1".into(), " ", None);
         line("d:why-h".into(), "Why it is held", Some(SECTION));
@@ -1501,7 +1509,10 @@ pub(crate) fn detail_tile(
     for (label, (value, face)) in table {
         let mut b = RowBuilder::new(format!("d:ev:{label}"));
         b.push(label, Some(LABEL)).stop(col);
-        b.push(&fit(&value, chars.saturating_sub(7)), Some(face));
+        b.push(
+            &fit_px(fonts, face, &value, env.width_px.saturating_sub(col)),
+            Some(face),
+        );
         out.push(b.finish());
     }
     for (i, e) in facts
@@ -1513,7 +1524,12 @@ pub(crate) fn detail_tile(
         let mut b = RowBuilder::new(format!("d:ev:waiver:{i}"));
         b.push("waiver", Some(LABEL)).stop(col);
         b.push(
-            &fit(e.note.as_deref().unwrap_or(""), chars.saturating_sub(7)),
+            &fit_px(
+                fonts,
+                DTEXT,
+                e.note.as_deref().unwrap_or(""),
+                env.width_px.saturating_sub(col),
+            ),
             Some(DTEXT),
         );
         out.push(b.finish());
@@ -1543,8 +1559,10 @@ pub(crate) fn detail_tile(
     out.push(act.finish());
     if t.card.is_some() {
         for (i, l) in wrap(
+            fonts,
+            Some(LABEL),
             "Waiving is yours only (a user-only rule); it is recorded on the task.",
-            chars,
+            env.width_px,
         )
         .iter()
         .enumerate()
@@ -2330,7 +2348,7 @@ mod tests {
     fn the_rules_tile_lists_the_pack() {
         let mut f = flow();
         f.pack.as_mut().unwrap().rules[2].kind = "routing".into();
-        let (rows, images) = rules_rows(&f, None, &env(1.0));
+        let (rows, images) = rules_rows(&f, None, &env(1.0), &fonts());
         let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
         assert_eq!(
             keys,
@@ -2346,7 +2364,7 @@ mod tests {
         assert!(!rows[0].text.contains("Evidence"));
         assert!(rows[1].text.contains("How the hub holds it"));
         // the tile's tabs as the mockup's: the Rules tab, then the selected task's Evidence, muted
-        let (rows, _) = rules_rows(&f, Some("task:J#5"), &env(1.0));
+        let (rows, _) = rules_rows(&f, Some("task:J#5"), &env(1.0), &fonts());
         assert!(rows[0].text.ends_with("Evidence · T5"), "{}", rows[0].text);
         assert!(
             rows[0].runs.iter().any(|r| r.2 == LABEL),
@@ -2365,9 +2383,48 @@ mod tests {
             pack: None,
             ..flow()
         };
-        let (rows, _) = rules_rows(&none, None, &env(1.0));
+        let (rows, _) = rules_rows(&none, None, &env(1.0), &fonts());
         assert_eq!(rows.len(), 1);
         assert!(rows[0].text.contains("no rule pack"));
+    }
+
+    /// [D] The Rules and Detail tiles cut their words by what the fonts measure, not by the cell: in a font narrower
+    /// than the cell (7 px for 8) a cut text fills its room, short of it by at most the fit's slack, a glyph and the
+    /// ellipsis (a scene's check: "rows cut with … whose full text fits").
+    #[test]
+    fn the_rules_and_detail_rows_are_cut_by_measure() {
+        let fs = fonts();
+        let drawn = |text: &str| {
+            let cut: String = text.chars().take_while(|c| *c != '…').collect();
+            assert!(text.contains('…'), "not cut: {text}");
+            text_px(&fs, LABEL, &cut) + 7
+        };
+        let mut f = flow();
+        f.pack.as_mut().unwrap().rules[0].doc = "word ".repeat(80);
+        let e = env(1.0);
+        let (rows, _) = rules_rows(&f, None, &e, &fs);
+        let room = e.width_px * 2 / 5 - 8;
+        let px = drawn(&rows[2].text);
+        assert!(px + 10 + 7 >= room && px <= room, "{px} of {room}");
+        f.tasks[1].base = Some("4fe72a5aa1".into());
+        f.tasks[1].commits = vec![CommitFact {
+            sha: "a90e3f1aa".into(),
+            subject: "search: scope tests ".repeat(10),
+            tests: true,
+        }];
+        let mut tile = env(1.0);
+        tile.width_px = 400;
+        let rows = detail_tile(&f, "task:J#5", &tile, &fs).0;
+        let line = rows
+            .iter()
+            .find(|r| r.key == "d:commits:1")
+            .expect("the commit's row");
+        let px = drawn(&line.text);
+        assert!(
+            px + 10 + 7 >= 400 && px <= 400,
+            "{px} of 400: {}",
+            line.text
+        );
     }
 
     /// [D] The detail tile of a held task: its head (id and card on it), why it is held (the card's words and the
@@ -2401,7 +2458,7 @@ mod tests {
         f.tasks[1].evidence = vec![green];
         let mut tile = env(1.0);
         tile.width_px = 400;
-        let rows = detail_tile(&f, "task:J#5", &tile).0;
+        let rows = detail_tile(&f, "task:J#5", &tile, &fonts()).0;
         let all: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();
         let all = all.join("\n");
         assert!(
@@ -2445,7 +2502,7 @@ mod tests {
         // the tile's width: 50 cells
         let mut tile = env(1.0);
         tile.width_px = 400;
-        let rows = detail_tile(&f, "task:J#5", &tile).0;
+        let rows = detail_tile(&f, "task:J#5", &tile, &fonts()).0;
         let text: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();
         let all = text.join("\n");
         assert!(
@@ -2500,9 +2557,13 @@ mod tests {
                 row.runs
             );
         }
-        // the lines fit the tile: none longer than its width in cells
-        assert!(text.iter().all(|t| t.chars().count() <= 50), "{all}");
-        let free = detail_tile(&f, "task:J#1", &tile).0;
+        // the lines fit the tile: none wider than it, as the fonts measure them
+        assert!(
+            text.iter()
+                .all(|t| text_px(&fonts(), LABEL, t) <= tile.width_px),
+            "{all}"
+        );
+        let free = detail_tile(&f, "task:J#1", &tile, &fonts()).0;
         let free_all: Vec<&str> = free.iter().map(|r| r.text.as_str()).collect();
         let free_all = free_all.join("\n");
         assert!(
@@ -2510,7 +2571,7 @@ mod tests {
             "{free_all}"
         );
         assert!(free_all.contains("Evidence  e") && free_all.contains("none recorded"));
-        let none = detail_tile(&f, "task:J#99", &tile).0;
+        let none = detail_tile(&f, "task:J#99", &tile, &fonts()).0;
         assert_eq!(none.len(), 2);
         assert!(none[1].text.contains("Select a task"));
     }
@@ -2525,7 +2586,7 @@ mod tests {
         f.tasks[1].minutes = Some(41);
         f.tasks[1].spend = Some("$0.90".into());
         f.tasks[1].context = Some(88);
-        let (rows, _) = detail_tile(&f, "task:J#5", &env(1.0));
+        let (rows, _) = detail_tile(&f, "task:J#5", &env(1.0), &fonts());
         assert!(
             rows[1].text.contains("Sonnet · search-quick"),
             "{}",
@@ -2536,11 +2597,11 @@ mod tests {
             "{}",
             rows[2].text
         );
-        let (rows, _) = detail_tile(&flow(), "task:J#5", &env(1.0));
+        let (rows, _) = detail_tile(&flow(), "task:J#5", &env(1.0), &fonts());
         assert!(rows[2].text.ends_with("· in-review"), "{}", rows[2].text);
         // a title too long for the tile is cut, never the time, spend and context after it
         f.tasks[1].title = "Git scopes and changed lines ".repeat(8);
-        let (rows, _) = detail_tile(&f, "task:J#5", &env(1.0));
+        let (rows, _) = detail_tile(&f, "task:J#5", &env(1.0), &fonts());
         assert!(
             rows[2].text.ends_with("· 41 min · ≈$0.90 · ctx 88%"),
             "{}",
@@ -2552,14 +2613,14 @@ mod tests {
     /// task's id, in the heading face; with no task selected, "Detail" alone.
     #[test]
     fn the_detail_tile_is_titled_with_its_task() {
-        let (rows, images) = detail_tile(&flow(), "task:J#5", &env(2.0));
+        let (rows, images) = detail_tile(&flow(), "task:J#5", &env(2.0), &fonts());
         let title = &rows[0];
         assert_eq!(title.key, "d:title");
         assert!(title.text.ends_with("Detail · T5"), "{}", title.text);
         assert_eq!(title.images.len(), 1);
         assert!(images.iter().any(|(id, _)| *id == title.images[0].1));
         assert!(title.runs.iter().any(|r| r.2 == HEAD), "{:?}", title.runs);
-        let (rows, _) = detail_tile(&flow(), "task:nope", &env(1.0));
+        let (rows, _) = detail_tile(&flow(), "task:nope", &env(1.0), &fonts());
         assert!(rows[0].text.ends_with("Detail"), "{}", rows[0].text);
     }
 
@@ -2568,7 +2629,7 @@ mod tests {
     #[test]
     fn the_detail_s_action_rows_are_tall_enough_for_the_buttons() {
         for scale in [1.0, 2.0] {
-            let (rows, _) = detail_tile(&flow(), "task:J#5", &env(scale));
+            let (rows, _) = detail_tile(&flow(), "task:J#5", &env(scale), &fonts());
             for key in ["d:act", "d:act2"] {
                 let r = rows.iter().find(|r| r.key == key).expect(key);
                 assert_eq!(
@@ -2580,7 +2641,7 @@ mod tests {
         }
         let mut tty = env(1.0);
         tty.display = Display::Tty;
-        let (rows, _) = detail_tile(&flow(), "task:J#5", &tty);
+        let (rows, _) = detail_tile(&flow(), "task:J#5", &tty, &fonts());
         assert!(
             rows.iter()
                 .filter(|r| r.key.starts_with("d:act"))
@@ -2591,7 +2652,7 @@ mod tests {
     #[test]
     fn the_detail_s_actions_are_buttons_the_first_one_primary() {
         // hub-orchestration.html `.acts`: `.btn.pri` Run the red, then `.btn`s; the primary's key in its own colour
-        let (rows, _) = detail_tile(&flow(), "task:J#5", &env(1.0));
+        let (rows, _) = detail_tile(&flow(), "task:J#5", &env(1.0), &fonts());
         // the row's faces after its strut (the 1 px space in the text's face)
         let faces = |key: &str| -> Vec<&str> {
             let r = rows.iter().find(|r| r.key == key).expect(key);
@@ -2629,7 +2690,7 @@ mod tests {
         let mut tile = env(2.0);
         tile.width_px = 800;
         tile.palette = vec![("agent-1".into(), "#c6a0ff".into())];
-        let (rows, images) = detail_tile(&flow(), "task:J#5", &tile);
+        let (rows, images) = detail_tile(&flow(), "task:J#5", &tile, &fonts());
         let all: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();
         let all = all.join("\n");
         let head = &rows[1];

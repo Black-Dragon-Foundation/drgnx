@@ -2474,6 +2474,10 @@ A builder fits each label to its segment's width with `drgnx_rows::fit` (the ter
 hub sums the advances of the font file Emacs uses for the role (`view/env`'s `fonts`), read with skrifa, and trims
 with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an estimate: no shaping, kerning or hinting.
 
+- **Cut and wrapped by measure, never by the cell.** A builder that cuts or wraps a text to its room does it in px
+  with `fit::fit_in` (and wraps by `fit::width_in`), never by a count of chars at the cell's width: in a font
+  narrower than the cell a char count leaves room free beside the `…`, which the scenes' width check reports as a row
+  cut whose full text fits (the Flow's Rules and Detail tiles did).
 - **Measured in the face it is drawn in.** A builder names the face, never a role: `fit::width_in` and `fit::fit_in`
   measure text in the font the editor says the face draws in. The hub asks once per (pair, face) in `view-glyphs`'
   `faces`; the editor answers with the role whose font the face resolves to in the view's buffer (`ui`, `text`,
