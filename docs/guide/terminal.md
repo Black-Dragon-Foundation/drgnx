@@ -235,7 +235,8 @@ The first time a kind of terminal with the layer connects, one message says so: 
 keys: use Alt+Shift (or F6 then the key). drgnx doctor has details." It is never a question, and it is said once per
 kind of terminal, ever (`terminal-report.eld` remembers it as `:hinted`). It comes half a second after the window
 opens, and only if the layer is still on then: a kitty has no kitty keyboard protocol for the moment before its answer
-arrives, and gets no message.
+arrives, and gets no message. If F6 is waiting for its key then, the message waits too and comes half a second after
+the key, so `Ctrl+Shift+…` stays in the echo area.
 
 `terminal-report.eld` keeps the 16 terminals set up most recently (one entry per terminal device). It has, for each
 terminal, `:fallback` (the layer is on) and `:fallbacks`: every chord of your

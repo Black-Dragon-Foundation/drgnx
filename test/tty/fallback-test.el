@@ -184,6 +184,34 @@ means is then settled, with no time passed; the note is taken out of the record.
       (drgnx-tty-keys-test--ran s 'drgnx-palette "C-S-p")
       (drgnx-tty-keys-test--quit s c 'legacy))))
 
+(ert-deftest drgnx-tty-fallback/the-hint-waits-while-f6-waits ()
+  ;; the hint's timer comes due while F6 waits for its key: the prompt stays, and the hint is said once the key is in.
+  ;; The order is the test's: the client's hint is held when its frame is set up, and armed only once F6 waits.
+  (drgnx-tty-session-with (s :daemon t :keys 'vscode :size "120x28" :options '(("set" "-s" "extended-keys" "off")))
+    (drgnx-tty-session-eval s '(progn (defvar kx-held-hint nil)
+                                      (advice-add 'drgnx-tty-fallback--hint :override
+                                                  (lambda (&rest args) (setq kx-held-hint args)) '((name . kx-hold)))
+                                      t))
+    (let* ((c (drgnx-tty-fallback-test--legacy s))
+           (frame (drgnx-tty-keys-test--frame c))
+           (hinted '(memq 'vte (plist-get (drgnx-tty--read-report) :hinted))))
+      (should (drgnx-tty-session-eval s 'kx-held-hint))
+      (drgnx-tty-session-eval s drgnx-tty-keys-test--record)
+      (drgnx-tty-session-send c (drgnx-tty-session-encode "<f6>" 'legacy))
+      (drgnx-tty-session-wait-screen c "Ctrl\\+Shift\\+…")
+      ;; F6 waits: the hint's timer is armed now, and runs while F6 still waits
+      (drgnx-tty-session-eval s `(progn (advice-remove 'drgnx-tty-fallback--hint 'kx-hold)
+                                        (apply #'drgnx-tty-fallback--hint kx-held-hint)
+                                        (drgnx-timer-active-p (cons 'tty-fallback-hint ,frame))))
+      (drgnx-tty-session-wait s `(not (drgnx-timer-active-p (cons 'tty-fallback-hint ,frame))))
+      (should (equal "Ctrl+Shift+…" (drgnx-tty-session-eval s `(with-selected-frame ,frame (current-message)))))
+      (should-not (drgnx-tty-session-eval s hinted))
+      ;; …the key: the chord runs, then the hint is said
+      (drgnx-tty-session-send c ".")
+      (drgnx-tty-keys-test--ran s 'drgnx-lang-quick-fix "C-.")
+      (drgnx-tty-session-wait s hinted)
+      (drgnx-tty-session-wait-screen c "This terminal can't send Ctrl\\+Shift keys"))))
+
 (ert-deftest drgnx-tty-fallback/a-mode-that-binds-alt-shift-f-keeps-it ()
   ;; Alt+Shift+P is reserved (ESC P), so the mode here binds M-F: in its buffer, Alt+Shift+F is the mode's;
   ;; elsewhere it is Search; F6 f is Search everywhere
