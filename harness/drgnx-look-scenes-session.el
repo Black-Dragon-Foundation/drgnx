@@ -939,6 +939,7 @@ editor, the Explorer's rows beside it."
 (declare-function drgnx-notebook-outline "drgnx-notebook")
 (declare-function drgnx-notebook-open-output "drgnx-notebook")
 (declare-function drgnx-notebook-run-cell "drgnx-notebook")
+(declare-function drgnx-notebook--blocks-update "drgnx-notebook")
 (declare-function drgnx-notebook-output-later "drgnx-notebook")
 (declare-function drgnx-notebook-kernel-log "drgnx-notebook")
 (declare-function drgnx-view-env-update "drgnx-view-env")
@@ -1635,10 +1636,10 @@ would be (no kernel, no hub: the scene draws the buffer's own chrome)."
                           (list :id "c2" :type "code"
                                 :source "for cap in (16, 64, 256):\n    print(cap, (hits < cap / 256).mean())")
                           (list :id "c3" :type "code" :source "plot(missing)"))
-             :tails (list (list :cell "c1" :version 1 :text "done: 10000 samples" :head (list :text "[1]  python" :state "idle" :parts (drgnx-look--nb-parts "[1]" "python" nil)))
-                          (list :cell "c2" :version 1 :head (list :text "[*]  python" :state "running" :parts (drgnx-look--nb-parts "[*]" "python" t)) :text (concat "16 0.0612\n64 0.2487\n" (string #xfffc))
+             :tails (list (list :cell "c1" :version 1 :stream "stream" :text "done: 10000 samples" :head (list :text "[1]  python" :state "idle" :parts (drgnx-look--nb-parts "[1]" "python" nil)))
+                          (list :cell "c2" :version 1 :stream "stream" :head (list :text "[*]  python" :state "running" :parts (drgnx-look--nb-parts "[*]" "python" t)) :text (concat "16 0.0612\n64 0.2487\n" (string #xfffc))
                                 :images (list (list :at 20 :output 1 :mime "image/png" :width 640 :height 360)))
-                          (list :cell "c3" :version 1 :head (list :text "[3]  python" :state "idle" :parts (drgnx-look--nb-parts "[3]" "python" nil))
+                          (list :cell "c3" :version 1 :stream "error" :head (list :text "[3]  python" :state "idle" :parts (drgnx-look--nb-parts "[3]" "python" nil))
                                 :text "NameError: name 'missing' is not defined\n  Cell In[3], line 1"
                                 :runs (list (list :start 0 :end 9 :fg 1 :bold t))))))
       (drgnx-notebook--status (list :state "busy" :cell "c2" :queue 0))
@@ -1653,7 +1654,17 @@ Explorer's rows, not \"Waiting for the hub\"."
   (drgnx-look-scene--try "hub" (drgnx-look-scene--hub))
   (drgnx-look-scene--try "notebook"
     (drgnx-wb-focus-editor)
-    (drgnx-look-scene--show (drgnx-look-scene--notebook-buffer)))
+    (drgnx-look-scene--show (drgnx-look-scene--notebook-buffer))
+    ;; what the card's window holds, for a look that does not match the blocks: kind, rows, spans, colours (a note, not an error)
+    (with-current-buffer "cache-experiments.ipynb"
+      (drgnx-notebook--blocks-update)
+      (redisplay)
+      (push (format "notebook blocks: %S"
+                    (mapcar (lambda (b) (cons (car b) (cons (marker-position (nth 1 b)) (cons (marker-position (nth 2 b))
+                                                                                              (cl-loop for (k v) on (nthcdr 3 b) by #'cddr
+                                                                                                       unless (eq k :overlay) append (list k v))))))
+                            (window-parameter (get-buffer-window "cache-experiments.ipynb" t) 'glitnir-blocks)))
+            drgnx-look-scene--errors)))
   (drgnx-look-scene--answer))
 
 (defun drgnx-look-scene--kernel-python ()

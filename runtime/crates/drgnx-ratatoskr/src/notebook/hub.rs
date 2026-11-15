@@ -186,7 +186,7 @@ pub fn tail_json(id: &str, t: &Tail, stale: bool, head: &Head) -> Value {
         "runs": t.runs.iter().map(style_json).collect::<Vec<_>>(),
         "images": t.images.iter().map(|i| json!({"at": i.at, "output": i.output, "mime": i.mime,
                                                   "width": i.width, "height": i.height})).collect::<Vec<_>>(),
-        "more_lines": t.more_lines,
+        "more_lines": t.more_lines, "stream": t.stream,
     })
 }
 

@@ -37,6 +37,27 @@ pub struct Tail {
     pub version: u64,
     /// The cell's execution count (the number of its prompt), when it has run.
     pub execution_count: Option<i64>,
+    /// What the output is, for the label of its panel: `stream`, `stderr`, `display`, `result`, or `error` (a failed run, whatever
+    /// else it printed first).
+    pub stream: String,
+}
+
+/// What RUN's output is called: `error` when it failed, else its first output's kind.
+fn stream_of(run: &CellRun) -> &'static str {
+    if run
+        .outputs
+        .iter()
+        .any(|o| matches!(o, Output::Error { .. }))
+    {
+        return "error";
+    }
+    match run.outputs.first() {
+        Some(Output::Stream { name, .. }) if name == "stderr" => "stderr",
+        Some(Output::Stream { .. }) => "stream",
+        Some(Output::Display { .. }) => "display",
+        Some(Output::Result { .. }) => "result",
+        _ => "",
+    }
 }
 
 /// One part of a cell's head, for the editor to draw as the part it is: ROLE `run` (the run button: ACTION `run` or `stop`), `count`
@@ -317,6 +338,7 @@ pub fn build(cell: &str, run: &CellRun, version: u64) -> Tail {
         more_lines,
         version,
         execution_count: run.execution_count,
+        stream: stream_of(run).to_string(),
     }
 }
 
