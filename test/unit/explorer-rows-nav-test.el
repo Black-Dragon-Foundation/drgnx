@@ -123,6 +123,16 @@ a row's node is its path; a refresh asks again and draws nothing itself."
         (push (list (1- (line-number-at-pos (overlay-start o))) (nth 0 tail) (nth 1 tail)) out)))
     (sort out (lambda (a b) (< (car a) (car b))))))
 
+(ert-deftest drgnx-explorer-rows/new-roots-get-their-git-status-read ()
+  "Pattern D: the hub marks the rows from the statuses read on the subscribed connection (`git/letters'), so roots set
+on the rows path (Open Folder, `drgnx open') have their repositories' status read, not only the roots at attach."
+  (drgnx-explorer-rows-nav-test--with
+    (let ((drgnx-explorer-git t) (read nil))
+      (cl-letf (((symbol-function 'drgnx-git-refresh) (lambda (path &rest _) (push path read))))
+        (drgnx-explorer-set-roots '("/s/"))
+        (should (equal '("/s/") read))
+        (should (equal "explorer/subscribe" (car (car calls))))))))
+
 (ert-deftest drgnx-explorer-rows/marks-and-the-control-at-the-right-edge ()
   "Pattern D (plan sja-complete E2): on the rows path each drawn row gets the old path's tail at the right edge (the
 ⋯ control, the hover's mouse face), with the git mark of the status the hub put on its name: a file's letter in its

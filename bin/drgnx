@@ -671,8 +671,8 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--audit | --a
     case "$stalldir" in *:*) echo "drgnx: DRGNX_RATATOSKR_STALL_FILE must not be under a directory with ':' (it is mounted with -v): $stalldir" >&2; return 2 ;; esac
     args+=(-v "$stalldir:/stall" -e "DRGNX_RATATOSKR_STALL_FILE=/stall/$(basename "$stall")")
   fi
-  # the GUI and scenario tiers' hub (`test_hub'), built here on the host; the run inside builds nothing
-  if [ "$tier" = ui ] || [ "$tier" = scenario ]; then test_hub || return 1; args+=(-e DRGNX_TEST_HUB_BUILD=0); fi
+  # the GUI, scenario and terminal tiers' hub (`test_hub'), built here on the host; the run inside builds nothing
+  if [ "$tier" = ui ] || [ "$tier" = scenario ] || [ "$tier" = tty ]; then test_hub || return 1; args+=(-e DRGNX_TEST_HUB_BUILD=0); fi
   # Ratatoskr for the client's binary tests: one in this checkout is seen at /src, any other's directory is mounted
   # read-only (ratatoskr-mock and drgnx-term live beside it)
   if [ -n "${DRGNX_RATATOSKR_BIN:-}" ] && [ -x "$DRGNX_RATATOSKR_BIN" ]; then
@@ -1127,7 +1127,7 @@ cmd_test() {
     --stress) shift; test_stress "$@" ;;
     --preflight) shift; test_preflight "$@" ;;
     --install) shift; test_install "$@" ;;
-    --tty) test_tty ;;
+    --tty) test_hub || exit 1; test_tty ;;
     --ui) if [ "${2:-}" = --compositor ]; then ui_compositor_ok "${3:-}" || exit 2; export DRGNX_UI_COMPOSITOR="$3"; fi
           test_hub || exit 1
           run_in_tmp ui_exec test-ui ;;

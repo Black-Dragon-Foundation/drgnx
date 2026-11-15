@@ -140,7 +140,7 @@ jobs:
   # the test binaries, built once for every Linux job that needs them (fetch-test-bins)
   bins-linux:
     name: Test binaries (Linux)
-    if: ${{ contains(format(' {0} ', inputs.tiers), ' unit ') || contains(format(' {0} ', inputs.tiers), ' no-lisp-writes ') || contains(format(' {0} ', inputs.tiers), ' hub-chaos ') || contains(format(' {0} ', inputs.tiers), ' ui ') || contains(format(' {0} ', inputs.tiers), ' perf ') }}
+    if: ${{ contains(format(' {0} ', inputs.tiers), ' unit ') || contains(format(' {0} ', inputs.tiers), ' no-lisp-writes ') || contains(format(' {0} ', inputs.tiers), ' hub-chaos ') || contains(format(' {0} ', inputs.tiers), ' ui ') || contains(format(' {0} ', inputs.tiers), ' perf ') || contains(format(' {0} ', inputs.tiers), ' tty ') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -531,7 +531,7 @@ jobs:
   # The terminal tier: Emacs in tmux sessions, in test/container/Containerfile.tty (Fedora 45). Needs no test binaries
   tty:
     name: Terminal tests (Fedora 45, tmux)
-    needs: nidhogg-line
+    needs: [bins-linux, nidhogg-line]
     if: ${{ !cancelled() && needs.nidhogg-line.result != 'failure' && contains(format(' {0} ', inputs.tiers), ' tty ') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -555,15 +555,24 @@ jobs:
           git clone -q --bare --no-tags --filter=tree:0 https://github.com/Black-Dragon-Foundation/drgnx.git "$RUNNER_TEMP/drgnx-branches"
           [ -n "$(git -C "$RUNNER_TEMP/drgnx-branches" branch --contains "$sha" 2>/dev/null)" ] ||
             { echo "::error::drgnx_ref $ASKED ($sha) is on none of drgnx's branches (a fork's or a pull request's commit)"; exit 1; }
-      - uses: ./drgnx/.github/actions/test-image
+      # the test hub (the Explorer's rows are its listing): bins-linux's, else `bin/drgnx test --tty` builds it
+      - uses: ./drgnx/.github/actions/fetch-test-bins
+      - name: Zig (drgnx-term's engine, for a test hub built here)
+        if: ${{ !cancelled() }}
+        working-directory: drgnx
+        run: sudo bash test/container/zig.sh linux
+      - if: ${{ !cancelled() }}
+        uses: ./drgnx/.github/actions/test-image
         with:
           containerfile: Containerfile.tty
           image: drgnx-test-tty
           variable: DRGNX_TEST_TTY_IMAGE
           nidhogg-artifact: ${{ (inputs.nidhogg == 'artifact' || inputs.nidhogg == 'line') && 'tarball-fedora-45' || '' }}
       - name: The pinned kkp, for the kitty and keys tests (they skip without it)
+        if: ${{ !cancelled() }}
         uses: ./drgnx/.github/actions/test-elpa
       - name: Terminal tier in test/container/Containerfile.tty
+        if: ${{ !cancelled() }}
         working-directory: drgnx
         env:
           DRGNX_CONTAINER: podman
