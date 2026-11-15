@@ -217,4 +217,24 @@
     (drgnx-test-wait (lambda () (drgnx-tty-session-clipboard s)) :what "the OSC 52 copy in the paste buffer")
     (should (equal (drgnx-tty-session-clipboard s) "hello"))))
 
+(ert-deftest drgnx-tty-harness/stop-ends-what-still-writes-into-the-run ()
+  "A process the session's Emacs started and detached, as `ratatoskr ensure' starts the hub, that keeps writing into
+the run directory (its drgnx-data) is ended before the directory goes: the stop removes the directory whole and no
+writer is left.  Its command line names no part of the run directory, so only the session's environment tells."
+  (let* ((s (drgnx-tty-session-start))
+         (run (plist-get s :run))
+         (dir (expand-file-name "drgnx-data/kx-writer" run)))
+    (unwind-protect
+        (progn
+          (should (drgnx-tty-session-eval
+                   s '(progn (make-process :name "kx-writer" :noquery t :connection-type 'pipe
+                                           :command (list "setsid" "sh" "-c"
+                                                          "d=$DRGNX_DATA_DIR/kx-writer; mkdir -p $d; while :; do : > $d/f; rm -f $d/f; done"))
+                             t)))
+          (drgnx-test-wait (lambda () (file-directory-p dir)) :what "the writer's directory")
+          (drgnx-tty-session-stop s)
+          (should-not (file-exists-p run))
+          (should-not (eq 0 (car (drgnx-ui--run "pgrep" "-u" (number-to-string (user-uid)) "-f" "--" "kx-writer; mkdir")))))
+      (drgnx-ui--run "pkill" "-KILL" "-u" (number-to-string (user-uid)) "-f" "--" "kx-writer; mkdir"))))
+
 ;;; harness-test.el ends here

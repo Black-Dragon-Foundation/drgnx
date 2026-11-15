@@ -1151,7 +1151,9 @@ dirs) and drive the session through `harness/drgnx-tty-session.el`:
   `drgnx-tty-session-stop` and the sweep of sessions whose runner died kill it (its command line names the run
   directory).
 - **Cleanup:** `drgnx-tty-session-stop` asks Emacs to exit, kills the tmux server and anything still running from the
-  run directory, then removes the run and socket directories. `drgnx-tty-session-with` stops the session even when
+  run directory, then ends every process whose environment names the run (`DRGNX_UI_RUN`), such as the hub that
+  `ratatoskr ensure` detaches and that keeps writing into `drgnx-data`, and waits until they are gone (an error after
+  10 s). Only then does it remove the run and socket directories. `drgnx-tty-session-with` stops the session even when
   the test fails, and `kill-emacs-hook` stops any session a test left running. A runner killed with SIGKILL runs
   no hook, so two more things cover it. The server runs as `setsid timeout -s TERM -k 10 BUDGET tmux … -D` and ends
   after `$DRGNX_TTY_MAX_RUNTIME` seconds (default 1800) with everything in it. Each start also sweeps the sessions
