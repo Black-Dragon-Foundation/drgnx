@@ -3123,7 +3123,10 @@ area while its tab is the only one with content) goes on the topmost window (`dr
 under a companion has none. Each companion is fitted to its lines and its
 header line, pixelwise (`fit-window-to-buffer`), at most 45% of the area's height in whole lines and never under the
 window's least height rounded up to whole lines (an empty companion, such as a header before its rows, would ask for
-one line, under its least height, and Emacs refuses such a resize whole), and its height is then preserved, so a frame
+one line, under its least height, and Emacs refuses such a resize whole). Emacs draws a header line only in a window
+with room for it and a line, and the least height of a window too small for it counts none, so a companion that wants a
+header line it does not draw grows a line at a time until it does; the companion that gets the tab row is fitted again
+with it (`drgnx-area--put-row`: the companions are fitted before the row is placed). Its height is then preserved, so a frame
 resize goes to the main window. A fit that does not take (the height unchanged while the lines want another) is
 recorded in the window parameter `drgnx-area-unfitted` as `(:height H :want WANT)`; the next fit that takes clears it. It is fitted again when its size changes
 (`window-size-change-functions` in its buffer) and when its owner calls `(drgnx-wb-area-fit-companions AREA

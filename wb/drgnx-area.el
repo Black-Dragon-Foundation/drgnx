@@ -419,7 +419,10 @@ else its window; nil while it is hidden."
   "Set AREA's tab row on its topmost window; W, its main window, has none when a companion is above it."
   (let ((top (or (drgnx-area--companion area 'above (window-frame w)) w)))
     (set-window-parameter top 'header-line-format (drgnx-area--tab-row area))
-    (unless (eq top w) (set-window-parameter w 'header-line-format 'none))))
+    (unless (eq top w)
+      (set-window-parameter w 'header-line-format 'none)
+      ;; the companion was fitted before it had the row (`drgnx-area--companions'): fitted again with it
+      (drgnx-area--fit-companion top))))
 
 (defun drgnx-area--delete-companion (w)
   "Delete companion window W itself: not through the area's `delete-window', which hides the whole area."
@@ -477,10 +480,23 @@ difference.  The height is then preserved, so a frame resize goes to the main wi
             ;; and an empty companion (a header before its rows) would keep its split height
             (least (max 1 (ceiling (window-min-size w nil w t) line)))
             (was (window-pixel-height w)))
-        (unwind-protect (fit-window-to-buffer w most least nil nil t)
+        (unwind-protect
+            (progn
+              (fit-window-to-buffer w most least nil nil t)
+              ;; Emacs draws a header line only in a window with room for it and a line, and `window-min-size' of a
+              ;; window too small for it counts none: one that wants a row it cannot draw grows a line at a time
+              (while (and (< least most) (drgnx-area--header-wanted-p w) (= 0 (window-header-line-height w)))
+                (setq least (1+ least))
+                (fit-window-to-buffer w most least nil nil t)))
           (window-preserve-size w t t))
         (drgnx-area--fit-report w was most least))
       (window-preserve-size w nil t))))                ; also when the fit changed nothing
+
+(defun drgnx-area--header-wanted-p (w)
+  "Non-nil when window W has a header line to draw: its `header-line-format' parameter, unless `none', else its
+buffer's."
+  (let ((f (window-parameter w 'header-line-format)))
+    (and (not (eq f 'none)) (or f (buffer-local-value 'header-line-format (window-buffer w))))))
 
 (defun drgnx-area--fit-report (w was most least)
   "Record on companion window W whether the fit to MOST and LEAST lines took: the window parameter

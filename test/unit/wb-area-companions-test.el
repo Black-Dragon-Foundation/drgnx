@@ -226,5 +226,31 @@ point at the end it has now, after lines came while it was hidden; one left else
        (drgnx-wb-area-fit-companions 'right)
        (should-not (window-parameter w 'drgnx-area-unfitted))))))
 
+;; Red first for the agent panel's blank space under its end (r6-docks-open): its header is empty until the hub's rows
+;; come, and an empty companion's fit asked for less than the window's minimum, so `fit-window-to-buffer' resized
+;; nothing and the header kept its split size (264 px at s1).  When its rows came it shrank to them and the transcript,
+;; which had followed its end in the smaller window, grew with its start kept: blank space under the end.
+;; The companion carries the dock's tab row (two tabs of content).  It was fitted before the row was put on it, to one
+;; line, where Emacs draws no header line (and `window-min-size' counts none): the row was lost until its rows came.
+(ert-deftest drgnx-area-companions/an-empty-companion-is-fitted-to-its-least-height ()
+  (drgnx-area-companions-test--with
+   (let ((main (drgnx-area-companions-test--buffer "*main*" 50)) (other (drgnx-area-companions-test--buffer "*other*" 5))
+         (above (drgnx-area-companions-test--buffer "*above*" 0)) (below (drgnx-area-companions-test--buffer "*below*" 2)))
+     (with-current-buffer below (goto-char (point-max)) (delete-char -1))
+     (drgnx-wb-area-show 'right 'plain other)
+     (setq drgnx-area-companions-test--parts (list above below))
+     (drgnx-wb-area-show 'right 'withparts main)
+     (let* ((ws (drgnx-area-companions-test--right-windows)) (top (nth 0 ws)))
+       (should (eq (window-buffer top) above))
+       ;; the row is drawn, and with it one line is under the least height
+       (should (> (window-header-line-height top) 0))
+       (should (> (window-min-size top nil top) 1))
+       ;; about as small as the window can be (its least size, rounded up to a whole line), not its split size
+       (should (<= (window-total-height top) (1+ (window-min-size top nil top))))
+       ;; its rows come: it grows to them
+       (with-current-buffer above (insert "one\ntwo"))
+       (drgnx-wb-area-fit-companions 'right)
+       (should (= 2 (window-body-height top)))))))
+
 (provide 'wb-area-companions-test)
 ;;; wb-area-companions-test.el ends here

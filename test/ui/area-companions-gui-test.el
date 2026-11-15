@@ -132,7 +132,7 @@ window kept half the area."
   (let* ((root (drgnx-uitest-root-frame))
          (config (with-selected-frame root (current-window-configuration)))
          (saved (mapcar (lambda (p) (cons p (frame-parameter root p))) '(drgnx-wb-areas drgnx-wb-right-px)))
-         (main (get-buffer-create "*companions main*"))
+         (main (get-buffer-create "*companions main*")) (other (get-buffer-create "*companions other*"))
          (above (drgnx-ui-area-companions--buffer "*companions above*" 0))
          (below (drgnx-ui-area-companions--buffer "*companions below*" 1)))
     ;; a row on the companion (a title of the buffer's own, as the panel's header carries the area's tab row): the
@@ -145,9 +145,14 @@ window kept half the area."
           (set-frame-parameter root 'drgnx-wb-areas nil)
           (set-frame-parameter root 'drgnx-wb-right-px nil)
           (drgnx-wb-define-tab 'right 'ui-companions :title "Companions" :companions #'drgnx-ui-area-companions--parts)
+          ;; two tabs of content: the dock draws its tab row, on the companion above
+          (drgnx-wb-define-tab 'right 'ui-companions-plain :title "Plain")
+          (drgnx-wb-area-show 'right 'ui-companions-plain other)
           (setq drgnx-ui-area-companions--parts (list above below))
           (drgnx-wb-area-show 'right 'ui-companions main)
-          (should-not (eq 'none (window-parameter (drgnx-ui-area-companions--part 'above) 'header-line-format)))
+          ;; the premise: a row drawn on the companion (the parameter alone draws none when the title is the dock's lone
+          ;; row), so a fit to one line is under its least height
+          (should (> (window-header-line-height (drgnx-ui-area-companions--part 'above)) 0))
           (drgnx-ui-area-companions--settle)
           (let* ((top (drgnx-ui-area-companions--part 'above)) (line (window-default-line-height top))
                  (least (* line (ceiling (window-min-size top nil top t) line))))
@@ -161,10 +166,11 @@ window kept half the area."
             (should-not (window-parameter top 'drgnx-area-unfitted))))
       (ignore-errors (with-selected-frame root (drgnx-wb-area-hide 'right)))
       (drgnx-wb-undefine-tab 'right 'ui-companions)
+      (drgnx-wb-undefine-tab 'right 'ui-companions-plain)
       (drgnx-state-mode -1)
       (pcase-dolist (`(,p . ,v) saved) (set-frame-parameter root p v))
       (with-selected-frame root (set-window-configuration config))
-      (dolist (b (list main above below)) (when (buffer-live-p b) (kill-buffer b))))))
+      (dolist (b (list main other above below)) (when (buffer-live-p b) (kill-buffer b))))))
 
 (provide 'area-companions-gui-test)
 ;;; area-companions-gui-test.el ends here
