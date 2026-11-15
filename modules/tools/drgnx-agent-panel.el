@@ -3,44 +3,39 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; The agent panel shows one session of the hub: a header (who, and what it is doing), a row of chips (only the ones
-;; the hub feeds), then the transcript as rows, one per entry: a tool call is a step on one line, its thinking folded
-;; under it.  It is a `drgnx-view' (wb/drgnx-view.el): a new entry is appended and a changed one is patched in place,
-;; so a stream never re-renders what is already there.  Rows are drawn visible first, in slices of at most 4 ms that
-;; stop on input.
+;; The agent panel shows one session of the hub in three windows of the right area: the header (who, what it is doing,
+;; the lens, the chips and the strip), the transcript and the composer.  This file is the transcript's buffer, the
+;; panel's main one: the cards, then a row per entry (a tool call is a step on one line, its thinking folded under it),
+;; then the review cards.  Every row is the hub's (docs/develop/hub.md, "The agent panel's rows"): the buffer is the
+;; hub-fed view `agent-panel/SESSION', held in Sjá where this Emacs has it (`drgnx-view-patch-attach' with SJA), so a
+;; stream never re-renders what is already there.  Emacs scrolls it as any buffer: a window whose point is at the end
+;; keeps the end in view (`scroll-conservatively'), a window scrolled back stays on its row (Sjá keeps it there).
 ;;
 ;; A panel is a buffer per session.  It asks the hub for the session's entries (`agents/entries/subscribe') only
 ;; while a window shows it, and takes the last page of steps (`drgnx-agent-panel-page-steps', 50) from the hub with
-;; the entries of their messages (`timeline/get', then `agents/slice'); older pages come when the view scrolls to its
-;; top.  The snapshot comes from the `agent' event.  Nothing here writes to an agent's worktree or builds a queue of
-;; its own: the composer, the cards and the pinned cards are in the sibling files, loaded from here.
-;;
-;; The transcript's rows are the hub's (docs/develop/hub.md, "The agent panel's rows"): the panel is the hub-fed view
-;; `agent-panel/SESSION' too (`drgnx-view-patch-attach' with KEEP), and its patches go between the rows above the
-;; transcript and the `(:rows-end)' row (`drgnx-agent-panel--apply-rows').  The header, the chips, the strip, the cards
-;; and the composer stay the panel's own rows.  Which step types are open, the rows opened by hand and how far back the
-;; rows go are told to the hub (`agents/panel/look').  The entries still come (the cards, the pins and the step at
-;; point read them), but draw nothing.  A panel made while the hub is down draws
-;; every row itself.
+;; the entries of their messages (`timeline/get', then `agents/slice'); older rows come when the window scrolls to its
+;; top.  The entries draw nothing: the cards, the pins and the commands on the step at point read them.  The snapshot
+;; comes from the `agent' event.  Which step types are open, the rows opened by hand and how far back the rows go are
+;; told to the hub (`agents/panel/look').  Until the hub sends the first rows the buffer says it waits for it.  Nothing
+;; here writes to an agent's worktree or builds a queue of its own: the composer, the cards and the pinned cards are in
+;; the sibling files, loaded from here.
 ;; See docs/guide/agent-panel.md.
 
 ;;; Code:
-(require 'cl-lib)
 (require 'seq)
 (require 'subr-x)
 (require 'drgnx-modules)
 (require 'drgnx-view)
-(require 'drgnx-wb)                       ; windows the panel moves as its own
 (require 'drgnx-hub-client)
 (require 'drgnx-panes)                   ; the right island the panel opens in
 (require 'drgnx-view-nav)                ; the moves between steps of a kind, through the replica
 (require 'text-property-search)          ; the moves look through the drawn rows
 
-(defvar mwheel-scroll-up-function)
-(declare-function drgnx-state-subscribe "drgnx-state")
 (declare-function drgnx-hub--call-on "drgnx-hub-client")
 (declare-function drgnx-view-env-register "drgnx-view-env")
 (declare-function drgnx-view-env-update "drgnx-view-env")
+(declare-function drgnx-view-env-twin "drgnx-view-env" (class prefixes &optional setup))
+(declare-function drgnx-view-env--twin-copy "drgnx-view-env" (from prefixes))
 (defvar drgnx-hub--events)
 
 (defgroup drgnx-agent-panel nil "The agent panel." :group 'drgnx)
@@ -107,18 +102,13 @@ to its top.  The hub gives at most 50."
 (defvar-local drgnx-agent-panel--loading nil "Non-nil while a page is being asked for.")
 (defvar-local drgnx-agent-panel--loaded nil "Non-nil once the first page has come.")
 (defvar-local drgnx-agent-panel--subscribed nil "Non-nil while the hub sends this session's entries here.")
-(defvar-local drgnx-agent-panel--shown-keys nil "A hash: the row keys the view has been told about.")
 (defvar-local drgnx-agent-panel--open nil "A hash: row key → non-nil when its row is open (thinking and detail shown).")
 
 (defvar drgnx-agent-panel--disclosure)
 (defvar drgnx-agent-panel--by-session (make-hash-table :test #'equal :weakness 'value)
   "Hub session id → its panel's buffer.  Weak in the buffers: a killed panel's entry goes with it.")
-(defvar drgnx-agent-panel--stats-render 0 "Rows rendered since Emacs started (a test reads the difference).")
 
-(declare-function drgnx-agent-panel--entry-row "drgnx-agent-panel-steps")
-(declare-function drgnx-agent-panel--block-row "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel--row-toggle "drgnx-agent-panel-steps")
-(declare-function drgnx-agent-panel--redraw-steps "drgnx-agent-panel-steps")
 (defvar drgnx-agent-panel--pins)
 (defvar drgnx-agent-panel--ledger-open)
 (declare-function drgnx-agent-panel--preset-in-force "drgnx-agent-panel-steps")
@@ -134,10 +124,7 @@ to its top.  The hub gives at most 50."
 (defvar drgnx-agent-panel-list-buffer-name)
 (declare-function drgnx-agent-panel-huddle-teardown "drgnx-agent-panel-huddle")
 (declare-function drgnx-agent-panel-huddle--event "drgnx-agent-panel-huddle")
-(declare-function drgnx-agent-panel-composer-keys "drgnx-agent-panel-composer")
-(declare-function drgnx-agent-panel-composer-redraw "drgnx-agent-panel-composer")
 (declare-function drgnx-agent-panel-composer-setup "drgnx-agent-panel-composer")
-(declare-function drgnx-agent-panel-composer--row "drgnx-agent-panel-composer")
 
 (declare-function drgnx-agent-panel-cards-setup "drgnx-agent-panel-cards")
 
@@ -187,248 +174,27 @@ to its top.  The hub gives at most 50."
 (defun drgnx-agent-panel--cost-of (step)
   (let ((c (plist-get step :cost))) (and (numberp c) (> c 0) c)))
 
-;;;; Which entries are rows
+;;;; Entries
 
 (defun drgnx-agent-panel--entry (idx) (gethash idx drgnx-agent-panel--entries))
 
-(defun drgnx-agent-panel--host-of (idx)
-  "The index of the tool entry a thought at IDX folds under: the nearest tool entry before it with only thoughts
-between, else nil."
-  (let ((i (1- idx)) host stop)
-    (while (and (not stop) (>= i 0) (drgnx-agent-panel--entry i))
-      (pcase (drgnx-agent-panel--type (drgnx-agent-panel--entry i))
-        ('thought (cl-decf i))
-        ('tool (setq host i stop t))
-        (_ (setq stop t))))
-    host))
-
-(defun drgnx-agent-panel--thoughts-of (idx)
-  "The thought entries right after the tool entry IDX, in order."
-  (let ((i (1+ idx)) out)
-    (while (and (drgnx-agent-panel--entry i) (eq (drgnx-agent-panel--type (drgnx-agent-panel--entry i)) 'thought))
-      (push (drgnx-agent-panel--entry i) out)
-      (cl-incf i))
-    (nreverse out)))
-
-(defun drgnx-agent-panel--row-p (idx)
-  "Non-nil when entry IDX is a row of its own: plans go to the to-do list, usage is a chip, a thought with a step
-folds under it."
-  (let ((e (drgnx-agent-panel--entry idx)))
-    (and e (pcase (drgnx-agent-panel--type e)
-             ((or 'plan 'usage) nil)
-             ('thought (not (drgnx-agent-panel--host-of idx)))
-             (_ t)))))
-
-(defun drgnx-agent-panel--row-key-of (idx)
-  "The key of the row entry IDX is drawn in."
-  (if (and (eq (drgnx-agent-panel--type (drgnx-agent-panel--entry idx)) 'thought) (drgnx-agent-panel--host-of idx))
-      (list :e (drgnx-agent-panel--host-of idx))
-    (list :e idx)))
-
-(defun drgnx-agent-panel--render (key)
-  "The row of KEY (the view type's RENDER): a hub row (a string key) as the hub built it, else the panel's own."
-  (cl-incf drgnx-agent-panel--stats-render)
-  (cond ((stringp key) (drgnx-view-patch-render key))
-        ((drgnx-agent-panel--twin-from) (drgnx-agent-panel--twin-take) (drgnx-agent-panel--own-row key))
-        (t (drgnx-agent-panel--own-row key))))
-
-(defun drgnx-agent-panel--own-row (key)
-  "The panel's own row of KEY."
-  (pcase (car-safe key)
-    (:more (propertize "  ↑ earlier steps load when you scroll up\n" 'face 'drgnx-agent-panel-subtle))
-    (:e (drgnx-agent-panel--entry-row (cadr key)))
-    (:b (drgnx-agent-panel--block-row (cadr key) (nth 2 key)))
-    (:composer (drgnx-agent-panel-composer--row))
-    (:nohub (propertize "  the hub is not running: the header, the strip and the cards come from it\n"
-                        'face 'drgnx-agent-panel-subtle))
-    (:rows-end "\n")
-    (_ "\n")))
-
-;;;; The pinned rows
-
-(defvar-local drgnx-agent-panel--pin nil
-  "The panel's pinned rows: (END . STRING), END the position after the hub's leading rows that carry `drgnx-pinned'
-\(the header, chips and strip) and STRING a copy of them, or nil when the hub pinned none.  The panel's rows are drawn by
-Lisp (no Sjá store holds them), so the mark is read from the drawn text.")
-
-(defvar-local drgnx-agent-panel--reset-places nil
-  "The point and the places of the windows not at the panel's end, kept by row key across a reset of the hub's rows
-until it is drawn (`drgnx-view-save-places'), or nil.")
-
-(defvar-local drgnx-agent-panel--pin-overlays nil "Each window's overlay that shows the pinned rows: ((WINDOW . OVERLAY) ...).")
-
-(defun drgnx-agent-panel--pinned-end ()
-  "The position after the panel's leading rows the hub marked `drgnx-pinned' (a row property over its text, not its
-newline), or nil when the first row is not one."
-  (let ((pos (point-min)))
-    (while (and (< pos (point-max)) (eq 1 (get-text-property pos 'drgnx-pinned)))
-      (setq pos (save-excursion (goto-char pos) (forward-line 1) (point))))
-    (and (> pos (point-min)) pos)))
-
-(defun drgnx-agent-panel--pin-update ()
-  "The hub's rows were patched: the pinned rows are copied again when they changed, and every window shows them."
-  (let* ((end (drgnx-agent-panel--pinned-end))
-         (string (and end (buffer-substring (point-min) end))))
-    (unless (and (equal end (car drgnx-agent-panel--pin))
-                 (equal-including-properties string (cdr drgnx-agent-panel--pin)))
-      (setq drgnx-agent-panel--pin (and end (cons end string))))
-    (dolist (w (get-buffer-window-list (current-buffer) nil t))
-      (drgnx-agent-panel--pin-place w))))
-
-(defun drgnx-agent-panel--pin-overlay (window)
-  "WINDOW's overlay for the pinned rows, made when it has none.  A dead window's overlay is deleted."
-  (dolist (c drgnx-agent-panel--pin-overlays)
-    (unless (and (window-live-p (car c)) (overlay-buffer (cdr c)))
-      (delete-overlay (cdr c))
-      (setq drgnx-agent-panel--pin-overlays (delq c drgnx-agent-panel--pin-overlays))))
-  (or (cdr (assq window drgnx-agent-panel--pin-overlays))
-      (let ((ov (make-overlay (point-min) (point-min) (current-buffer))))
-        (overlay-put ov 'window window)
-        (push (cons window ov) drgnx-agent-panel--pin-overlays)
-        ov)))
-
-(defun drgnx-agent-panel--pin-at (window start &optional away)
-  "Show the pinned rows at the top of WINDOW, over START, which is never before their end; START as it stands.  With
-AWAY the rows are taken off the window (the overlay goes to the buffer's start) and START is as given.  With no pinned
-rows the window's overlay is gone."
-  (if-let* ((pin drgnx-agent-panel--pin))
-      (let ((start (if away start (max start (car pin)))) (ov (drgnx-agent-panel--pin-overlay window)))
-        (move-overlay ov start start)
-        ;; `eq': the copy is replaced only when it changed, and a change of faces alone is `equal'
-        (unless (eq (overlay-get ov 'before-string) (cdr pin)) (overlay-put ov 'before-string (cdr pin)))
-        start)
-    (when-let* ((c (assq window drgnx-agent-panel--pin-overlays)))
-      (delete-overlay (cdr c))
-      (setq drgnx-agent-panel--pin-overlays (delq c drgnx-agent-panel--pin-overlays)))
-    start))
-
-(defun drgnx-agent-panel--pin-place (window)
-  "WINDOW starts after the pinned rows, which show over its first line, and its point is not among them."
-  (let* ((start (window-start window)) (at (drgnx-agent-panel--pin-at window start)))
-    (unless (= at start) (set-window-start window at t))
-    (when (and drgnx-agent-panel--pin (< (window-point window) (car drgnx-agent-panel--pin)))
-      (set-window-point window (car drgnx-agent-panel--pin)))))
-
-(defun drgnx-agent-panel--patched (view keys)
-  "PATCHED of the panel's view: the hub rows among KEYS get the inserter's last step (the stale shade, the classes), then
-the panel's scroll follows its tail."
-  (when drgnx-view-patch
-    (when-let* ((rows (seq-filter #'stringp keys)))
-      (drgnx-view-patch--patched view rows)
-      (when-let* ((kept drgnx-agent-panel--reset-places))
-        (setq drgnx-agent-panel--reset-places nil)
-        (drgnx-view-restore-places (cdr kept) (lambda (key) (drgnx-view-row-start view key)))
-        (when (car kept) (goto-char (point-max))))   ; point at the end stays there: its windows follow the tail
-      (drgnx-agent-panel--pin-update)
-      (drgnx-agent-panel--follow-tail))))
-
-(defun drgnx-agent-panel--end-shown-p (window)
-  "Whether the panel's end is in WINDOW with its whole row.  The panel's end is a position on the empty line under the
-composer, and redisplay wants that line (the cursor's) whole: plain `pos-visible-in-window-p' takes a row cut by a
-pixel for shown, and the window then scrolled again, to a start that left the end out."
-  (when-let* ((v (pos-visible-in-window-p (point-max) window t)))
-    (and (zerop (or (nth 2 v) 0)) (zerop (or (nth 3 v) 0)))))
-
-(defun drgnx-agent-panel--tail-start (window)
-  "Where WINDOW should start for the panel's end to sit at its bottom: the earliest line from which the end is still in
-view.  Lines are tried by the window itself (rows differ in height, and a pixel measure of text is not the window's);
-the pinned rows are shown over each try, and no try starts before their end."
-  (let ((start (point-max)) (floor (if drgnx-agent-panel--pin (car drgnx-agent-panel--pin) (point-min))))
-    (save-excursion
-      (while (and (> start floor)
-                  ;; the pinned rows are not over START while it moves up a line: the overlay's lines would be the
-                  ;; line above it, at the same position
-                  (progn (when drgnx-agent-panel--pin (drgnx-agent-panel--pin-at window (point-min) t))
-                         (goto-char start) (vertical-motion -1 window) (and (< (point) start) (>= (point) floor)))
-                  (progn (set-window-start window (point) t)
-                         (drgnx-agent-panel--pin-at window (point))
-                         (drgnx-agent-panel--end-shown-p window)))
-        (setq start (point))))
-    start))
-
-;; `pixel-scroll-precision-mode' scrolls by pixels, which the first line of the window takes as its own `vscroll': the
-;; pinned rows (an overlay's string over that line) would slide out of the window with it, and the start would not move
-;; until the whole of them had.  In a panel the wheel scrolls by lines, as `mwheel-scroll' does.
-(defvar drgnx-agent-panel--wheel-map
-  (let ((m (make-sparse-keymap)))
-    (define-key m [wheel-up] #'mwheel-scroll)
-    (define-key m [wheel-down] #'mwheel-scroll)
-    m)
-  "The wheel in a panel, over `pixel-scroll-precision-mode''s.")
-
-(defun drgnx-agent-panel--scroll-up (&optional n)
-  "`mwheel-scroll-up-function' of a panel: `scroll-up' N lines.  The pinned rows are the first lines of the window's
-first line (an overlay's string over it), and `scroll-up' counts them: the lines it takes through them leave the start
-where it is, so a wheel down would not move the transcript until it had gone through all of them.  They are added."
-  (scroll-up (and n (+ n (if drgnx-agent-panel--pin (cl-count ?\n (cdr drgnx-agent-panel--pin)) 0)))))
-
-(defun drgnx-agent-panel--follow-window (w)
-  "Window W, when its point is at the panel's end (the composer), shows the end at its bottom, the pinned rows over its
-first line.  A window the user moved point in is left alone."
-  (when (= (window-point w) (point-max))
-    (drgnx-wb-with-owned-windows (list w)
-      (set-window-start w (drgnx-agent-panel--tail-start w) t)
-      (drgnx-agent-panel--pin-place w))))
-
-(defun drgnx-agent-panel--follow-tail ()
-  "The panel owns its scroll: a window whose point is at the panel's end (the composer) shows the end at its bottom,
-whatever came in above it.  A panel shorter than its window starts at its top (the header); a taller one shows its
-last page.  A window the user moved point in is left alone."
-  (dolist (w (get-buffer-window-list (current-buffer) nil t))
-    (drgnx-agent-panel--follow-window w)))
-
-(defun drgnx-agent-panel--pane-resized (data)
-  "The store's `pane-resized' (idle lane, subscribed in the module's setup): a panel window that changed size shows
-the end at its bottom again at once, not at the next hub patch.  A window the user scrolled away from stays."
-  (when-let* ((w (plist-get data :window)) ((window-live-p w))
-              (b (window-buffer w)) ((eq (buffer-local-value 'major-mode b) 'drgnx-agent-panel-mode)))
-    (with-current-buffer b (drgnx-agent-panel--follow-window w))))
-
-(defun drgnx-agent-panel--fonts-applied ()
-  "`drgnx-look-fonts-applied-hook' (a theme change, a font setting, the scale): the rows are as tall as their new
-fonts make them, with no hub patch to follow the tail, so every panel window at the panel's end shows the end at its
-bottom again (the long look scene's theme made its rows 2 pixels taller and the end went out of the window)."
-  (dolist (b (buffer-list))             ; a panel's twin in another display class too
-    (when (eq (buffer-local-value 'major-mode b) 'drgnx-agent-panel-mode)
-      (with-current-buffer b (drgnx-agent-panel--follow-tail)))))
-
-(defun drgnx-agent-panel--sync (view)
-  "SYNC of the panel's view: with the hub's rows, the models their patches named go to Sjá before they are drawn."
-  (when drgnx-view-patch (drgnx-view-patch--sync view)))
-
-(drgnx-view-define 'agent-panel :render #'drgnx-agent-panel--render :follow-tail t :slice drgnx-view-slice
-                   :patched #'drgnx-agent-panel--patched :sync #'drgnx-agent-panel--sync)
-
 ;;;; The hub's rows
 
-(defun drgnx-agent-panel--rows-p ()
-  "Whether this panel's transcript is the hub's rows (it is not when the panel was made while the hub was down)."
-  (and drgnx-view-patch t))
+(defvar-local drgnx-agent-panel--waiting nil
+  "The overlay of the line saying the panel waits for the hub, until its first rows are drawn.")
 
-(defun drgnx-agent-panel--apply-rows (state view patch)
-  "`drgnx-view-patch-apply-function' of a panel: PATCH applied as `drgnx-view-patch--apply-ops' does, with its rows
-placed above `(:rows-end)' (the panel's own rows below the transcript): a reset removes the hub rows there were and
-inserts its own at the top, in the order the hub gave them (the header, the cards above and below the transcript and the
-transcript itself: no row is placed by its key)."
-  (let (ops)
-    (dolist (op (plist-get patch :ops))
-      (cond
-       ((plist-member op :reset)
-        ;; the reset's rows replace every hub row: a window the user scrolled back would go below them (its start and
-        ;; point were on rows the removal took), so its places are kept by row key for the draw (`--patched')
-        (unless drgnx-agent-panel--reset-places
-          (setq drgnx-agent-panel--reset-places
-                (let ((places (drgnx-view-save-places #'drgnx-view-key-at)))
-                  (cons (= (point) (point-max))   ; (AT-END POINT-PLACE (WINDOW START-PLACE POINT-PLACE)...)
-                        (cons (car places)
-                              (seq-remove (lambda (e) (= (window-point (car e)) (point-max))) (cdr places)))))))
-        (let ((old (hash-table-keys (drgnx-view-patch-rows state))))
-          (clrhash (drgnx-view-patch-images state))
-          (clrhash (drgnx-view-patch-ids state))
-          (when old (push (list :remove old) ops))
-          (when (plist-get op :reset) (push (list :insert (list :after nil :rows (plist-get op :reset))) ops))))
-       (t (push op ops))))
-    (drgnx-view-patch--apply-ops state view (append (list :ops (nreverse ops)) patch))))
+(defun drgnx-agent-panel--wait-for-hub ()
+  "Show the line saying the panel waits for the hub; the first rows it sends take the line away."
+  (unless (overlayp drgnx-agent-panel--waiting)
+    (setq drgnx-agent-panel--waiting (make-overlay (point-min) (point-min)))
+    (overlay-put drgnx-agent-panel--waiting 'before-string
+                 (propertize "  Waiting for the hub to send the agent's steps…\n" 'face 'shadow))))
+
+(defun drgnx-agent-panel--patched (_view _keys)
+  "`drgnx-view-patch-patched-functions' of a panel: the hub's rows are drawn, the waiting line goes."
+  (when drgnx-agent-panel--waiting
+    (delete-overlay drgnx-agent-panel--waiting)
+    (setq drgnx-agent-panel--waiting nil)))
 
 (defun drgnx-agent-panel--look-params ()
   "What this panel tells the hub about its rows: the step types open and the rows opened or folded by hand."
@@ -442,9 +208,14 @@ transcript itself: no row is placed by its key)."
                          drgnx-agent-panel--open)
                 (vconcat rows))))
 
+(defun drgnx-agent-panel--hub-up-p ()
+  "Whether this Emacs's subscribed connection to the hub is up."
+  (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events)))
+
 (defun drgnx-agent-panel--send-look (&optional older)
-  "Tell the hub what this panel shows (`agents/panel/look'); OLDER: one window further back."
-  (when (drgnx-agent-panel--rows-p)
+  "Tell the hub what this panel shows (`agents/panel/look'); OLDER: one window further back.  With the hub down
+nothing is sent: it hears the look when it connects (`drgnx-agent-panel--look-again')."
+  (when (and drgnx-view-patch (drgnx-agent-panel--hub-up-p))
     (funcall drgnx-view-patch-send-function "agents/panel/look"
              (append (list :view (drgnx-view-patch-view drgnx-view-patch)) (drgnx-agent-panel--look-params)
                      (and older (list :older t))))))
@@ -454,145 +225,55 @@ transcript itself: no row is placed by its key)."
   (when-let* ((b (drgnx-agent-panel--panel-for (string-remove-prefix "agent-panel/" view))))
     (with-current-buffer b (drgnx-agent-panel--send-look))))
 
-(defun drgnx-agent-panel--hub-up-p ()
-  "Whether this Emacs's subscribed connection to the hub is up: a panel made without it draws its rows itself."
-  (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events)))
-
 (defun drgnx-agent-panel--rows-attach (session)
-  "Make this panel the hub-fed view of SESSION's rows: its env goes out while a window shows it."
+  "Make this panel the hub-fed view of SESSION's transcript, held in Sjá where this Emacs has it: its env goes out
+while a window shows it, and it says it waits for the hub until the first rows are drawn."
   (let ((view (concat "agent-panel/" session)))
-    (drgnx-view-patch-attach view "unshown" :keep t)
-    (setq-local drgnx-view-patch-apply-function #'drgnx-agent-panel--apply-rows
-                drgnx-view-patch-twin-function #'drgnx-agent-panel--twin)
+    (drgnx-view-patch-attach view "unshown" :sja t)
+    (setq-local drgnx-view-patch-twin-function #'drgnx-agent-panel--twin)
+    (add-hook 'drgnx-view-patch-patched-functions #'drgnx-agent-panel--patched nil t)
+    (drgnx-agent-panel--wait-for-hub)
     (require 'drgnx-view-env)
     (drgnx-view-env-register view (current-buffer) #'drgnx-agent-panel--look-again)
     (drgnx-agent-panel--send-look)))
-
-(declare-function drgnx-view-env--twin-copy "drgnx-view-env" (from prefixes))
-
-(defun drgnx-agent-panel--own-key-p (key)
-  "Whether KEY is one of the panel's own rows (not one the hub built, which each class has of its own)."
-  (not (stringp key)))
 
 (defun drgnx-agent-panel--twin-from ()
   "In a panel's twin: the panel's buffer, whose state it shows; else nil."
   (and drgnx-view-patch-twin-of (buffer-live-p drgnx-view-patch-twin-of) drgnx-view-patch-twin-of))
 
-(defun drgnx-agent-panel--twin-copy (from)
-  "The panel's state (its `drgnx-agent-panel-' locals; the tables shared) from FROM into the current buffer."
-  (drgnx-view-env--twin-copy from '("drgnx-agent-panel-")))
-
-(defun drgnx-agent-panel--twin-take ()
-  "In a twin: the panel's state as it is now (before a row of its own is drawn, before a command)."
-  (when-let* ((from (drgnx-agent-panel--twin-from))) (drgnx-agent-panel--twin-copy from)))
-
 (defun drgnx-agent-panel--twin-give ()
-  "`post-command-hook' of a twin: what the command changed of the state goes back to the panel."
+  "`post-command-hook' of a twin: what the command changed of the panel's state goes back to the panel."
   (when-let* ((from (drgnx-agent-panel--twin-from)))
-    (let ((twin (current-buffer))) (with-current-buffer from (drgnx-agent-panel--twin-copy twin)))))
+    (let ((twin (current-buffer)))
+      (with-current-buffer from (drgnx-view-env--twin-copy twin '("drgnx-agent-panel-"))))))
+
+(defun drgnx-agent-panel--twin-setup ()
+  "In a new twin: killing it leaves the session's entries coming to the panel, and its commands give the panel's state
+back."
+  (remove-hook 'kill-buffer-hook #'drgnx-agent-panel--killed t)
+  (add-hook 'post-command-hook #'drgnx-agent-panel--twin-give nil t))
 
 (defun drgnx-agent-panel--twin (class)
-  "The panel's buffer in display CLASS (`drgnx-view-patch-twin-function'): the hub's rows of CLASS between the
-panel's own rows, which it draws from the panel's state and keeps in step with the panel's through
-`drgnx-view-mirror'.  Its commands work on that state, given back after each.  It subscribes nothing, and killing it
-leaves the session's entries coming to the panel."
-  (let ((from (current-buffer)) (view (drgnx-view-patch-view drgnx-view-patch))
-        (own (seq-filter #'drgnx-agent-panel--own-key-p (drgnx-agent-panel--wanted-keys))))
-    (with-current-buffer (generate-new-buffer (format "%s <%s>" (buffer-name from) class))
-      (drgnx-agent-panel-mode)
-      (remove-hook 'kill-buffer-hook #'drgnx-agent-panel--killed t)
-      (setq-local drgnx-view-patch-twin-of from)
-      (drgnx-agent-panel--twin-copy from)
-      (drgnx-view-attach 'agent-panel)
-      (drgnx-view-insert drgnx-view own)
-      (drgnx-view-mirror (buffer-local-value 'drgnx-view from) drgnx-view #'drgnx-agent-panel--own-key-p)
-      (drgnx-view-patch-attach view class :keep t)
-      (setq-local drgnx-view-patch-apply-function #'drgnx-agent-panel--apply-rows)
-      (add-hook 'pre-command-hook #'drgnx-agent-panel--twin-take nil t)
-      (add-hook 'post-command-hook #'drgnx-agent-panel--twin-give nil t)
-      (current-buffer))))
+  "The panel's buffer in display CLASS (`drgnx-view-patch-twin-function'): the generic twin (`drgnx-view-env-twin')
+of the hub's rows of CLASS, the panel's state read before each command and given back after it.  It subscribes
+nothing."
+  (require 'drgnx-view-env)
+  (drgnx-view-env-twin class '("drgnx-agent-panel-") #'drgnx-agent-panel--twin-setup))
 
 (defun drgnx-agent-panel--key-at ()
-  "The key of the row at point, a hub row read as the `(:e INDEX)' of the entry it draws."
-  (let ((key (and (drgnx-view-p drgnx-view) (drgnx-view-key-at))))
-    (if (stringp key)
-        (when-let* ((i (get-text-property (pos-bol) 'drgnx-agent-panel-entry))) (list :e i))
-      key)))
-
-;;;; Keeping the view's rows in step with the model
-
-(defun drgnx-agent-panel--blocks (idx)
-  "The Markdown blocks of the agent message at IDX (a vector), or nil when the hub sent none."
-  (let ((e (drgnx-agent-panel--entry idx)))
-    (and e (eq (drgnx-agent-panel--type e) 'agent)
-         (let ((b (plist-get e :blocks))) (and (> (length b) 0) b)))))
-
-(defun drgnx-agent-panel--row-keys (idx)
-  "The keys of the rows entry IDX is drawn in: one per Markdown block of an agent message, else one."
-  (if-let* ((blocks (drgnx-agent-panel--blocks idx)))
-      (cl-loop for n below (length blocks) collect (list :b idx n))
-    (list (list :e idx))))
-
-(defun drgnx-agent-panel--merge-blocks (old new)
-  "NEW, an entry as the hub sent it, with its `blocks' complete: the hub's `patch' replaces (or adds) only its blocks of
-OLD's, and an event with neither keeps OLD's.  The result has no `patch'."
-  (let* ((blocks (if (plist-member new :blocks) (plist-get new :blocks) (plist-get old :blocks)))
-         (patch (plist-get new :patch)))
-    (when (> (length patch) 0)
-      (setq blocks (append blocks nil))
-      (seq-doseq (p patch)
-        (let ((n (plist-get p :block)))
-          (while (< (length blocks) n) (setq blocks (append blocks (list nil))))
-          (if (< n (length blocks)) (setcar (nthcdr n blocks) p) (setq blocks (append blocks (list p)))))))
-    (let ((out (cl-loop for (k v) on new by #'cddr unless (memq k '(:patch :blocks)) append (list k v))))
-      (if blocks (append out (list :blocks (vconcat blocks))) out))))
-
-(defun drgnx-agent-panel--wanted-keys ()
-  "Every row key of the panel's own it should hold now, in order (the hub's rows go before `(:rows-end)')."
-  (append (if (drgnx-agent-panel--rows-p) (list (list :rows-end))
-            (append (list (list :nohub))
-                    (and drgnx-agent-panel--more drgnx-agent-panel--loaded (list (list :more)))
-                    (let ((idxs (sort (hash-table-keys drgnx-agent-panel--entries) #'<)))
-                      (mapcan #'drgnx-agent-panel--row-keys (seq-filter #'drgnx-agent-panel--row-p idxs)))))
-          (drgnx-agent-panel-composer-keys)))
-
-(defun drgnx-agent-panel--reconcile ()
-  "Tell the view which rows appeared or went: new keys go in after the key before them, none is drawn again."
-  (when (drgnx-view-p drgnx-view)
-    (let* ((wanted (drgnx-agent-panel--wanted-keys)) (shown drgnx-agent-panel--shown-keys)
-           (want-set (make-hash-table :test #'equal)) prev run run-after)
-      (dolist (k wanted) (puthash k t want-set))
-      (let (gone) (maphash (lambda (k _) (unless (gethash k want-set) (push k gone))) shown)
-           (when gone (drgnx-view-remove drgnx-view gone) (dolist (k gone) (remhash k shown))))
-      (dolist (k wanted)
-        (if (gethash k shown)
-            (progn (when run (drgnx-view-insert drgnx-view (nreverse run) :after run-after) (setq run nil)))
-          (unless run (setq run-after prev))
-          (push k run) (puthash k t shown))
-        (setq prev k))
-      (when run (drgnx-view-insert drgnx-view (nreverse run) :after run-after)))))
-
-(defun drgnx-agent-panel--dirty (&rest keys)
-  (when (drgnx-view-p drgnx-view) (drgnx-view-dirty drgnx-view keys)))
+  "The key of the step at point: `(:e INDEX)' of the entry the hub's row there draws, or nil."
+  (when-let* ((i (get-text-property (pos-bol) 'drgnx-agent-panel-entry))) (list :e i)))
 
 ;;;; Taking snapshots and entries
 
 (defun drgnx-agent-panel--take-snapshot (snap)
   "SNAP, the session's snapshot, is the latest: what the commands, the composer and the cards read.  The header and the
 chips are the hub's rows, which it builds from its own snapshot."
-  (setq drgnx-agent-panel--snap snap)
-  (drgnx-agent-panel--reconcile)
-  (drgnx-agent-panel-composer-redraw))
+  (setq drgnx-agent-panel--snap snap))
 
 (defun drgnx-agent-panel--take-entries (pairs &optional from-slice)
-  "PAIRS, (INDEX ENTRY) as the hub sends them, are in the transcript: a new entry is appended, a changed one patched.
-FROM-SLICE: they come from a page, which never overwrites an entry the hub sent live.  With the hub's rows the entries
-are only kept (`drgnx-agent-panel--keep-entries')."
-  (if (drgnx-agent-panel--rows-p) (drgnx-agent-panel--keep-entries pairs from-slice)
-    (drgnx-agent-panel--take-entries-old pairs from-slice)))
-
-(defun drgnx-agent-panel--keep-entries (pairs from-slice)
-  "PAIRS are kept for the pins and the step at point; the hub draws them, and the cards with them."
+  "PAIRS, (INDEX ENTRY) as the hub sends them, are kept for the cards, the pins and the step at point; the hub draws
+them.  FROM-SLICE: they come from a page, which never overwrites an entry the hub sent live.  Returns the indexes kept."
   (let (touched)
     (seq-doseq (pair pairs)
       (let ((idx (elt pair 0)) (e (elt pair 1)))
@@ -601,33 +282,6 @@ are only kept (`drgnx-agent-panel--keep-entries')."
           (puthash idx e drgnx-agent-panel--entries)
           (push idx touched))))
     touched))
-
-(defun drgnx-agent-panel--take-entries-old (pairs from-slice)
-  "`drgnx-agent-panel--take-entries' of a panel made while the hub is down: every row drawn here."
-  (let (touched block-keys)
-    (seq-doseq (pair pairs)
-      (let ((idx (elt pair 0)) (e (elt pair 1)))
-        (unless (and from-slice (gethash idx drgnx-agent-panel--live))
-          (unless from-slice (puthash idx t drgnx-agent-panel--live))
-          (let* ((old (gethash idx drgnx-agent-panel--entries))
-                 (e (if (eq (drgnx-agent-panel--type e) 'agent) (drgnx-agent-panel--merge-blocks old e) e)))
-            (puthash idx e drgnx-agent-panel--entries)
-            ;; a message's block rows that differ from the ones drawn are the ones to draw again
-            (dotimes (n (length (plist-get e :blocks)))
-              (unless (equal (aref (plist-get e :blocks) n) (and (< n (length (plist-get old :blocks)))
-                                                                 (aref (plist-get old :blocks) n)))
-                (push (list :b idx n) block-keys)))
-            (when (or (not old) (not (equal old e))) (push idx touched))))))
-    (when touched
-      (drgnx-agent-panel--reconcile)
-      (let ((keys block-keys))
-        (dolist (idx touched)
-          (cl-pushnew (drgnx-agent-panel--row-key-of idx) keys :test #'equal)
-          (when (eq (drgnx-agent-panel--type (drgnx-agent-panel--entry idx)) 'tool)
-            (cl-pushnew (list :e idx) keys :test #'equal)))
-        (when (drgnx-view-p drgnx-view)
-          (drgnx-view-dirty drgnx-view (seq-filter (lambda (k) (gethash k drgnx-agent-panel--shown-keys)) keys))))
-      touched)))
 
 (defun drgnx-agent-panel--take-steps (steps)
   (dolist (s steps)
@@ -659,8 +313,7 @@ are only kept (`drgnx-agent-panel--keep-entries')."
              (let* ((steps (and (not err) (append (plist-get r :steps) nil))) (first (car steps)))
                (setq drgnx-agent-panel--more (and first (>= (length steps) n)))
                (if (null first)
-                   (progn (setq drgnx-agent-panel--loading nil drgnx-agent-panel--loaded t drgnx-agent-panel--more nil)
-                          (drgnx-agent-panel--reconcile))
+                   (setq drgnx-agent-panel--loading nil drgnx-agent-panel--loaded t drgnx-agent-panel--more nil)
                  (drgnx-agent-panel--ask
                   "agents/slice" (list :id id :from_step (plist-get first :seq) :n n)
                   (lambda (r2 err2)
@@ -668,34 +321,29 @@ are only kept (`drgnx-agent-panel--keep-entries')."
                       (with-current-buffer buf
                         (setq drgnx-agent-panel--loading nil drgnx-agent-panel--loaded t)
                         (drgnx-agent-panel--take-steps (append (if err2 steps (or (plist-get r2 :steps) steps)) nil))
-                        (unless err2 (drgnx-agent-panel--take-entries (plist-get r2 :entries) t))
-                        (drgnx-agent-panel--reconcile))))))))))))))
+                        (unless err2 (drgnx-agent-panel--take-entries (plist-get r2 :entries) t)))))))))))))))
 
 (defun drgnx-agent-panel-older ()
-  "Load the page of steps before the first one shown, when the hub has one; with the hub's rows, they go one window
-further back too."
+  "Show the rows of one window further back, and load the page of steps before the first one held when the hub has
+one."
   (interactive)
-  (when (drgnx-agent-panel--rows-p) (drgnx-agent-panel--send-look t))
+  (drgnx-agent-panel--send-look t)
   (when (and drgnx-agent-panel--more (not drgnx-agent-panel--loading)) (drgnx-agent-panel--load t)))
 
 (defun drgnx-agent-panel--scrolled (window start)
-  "The window scrolled to START: at the top of the transcript, the page before is asked for."
+  "`window-scroll-functions': WINDOW scrolled to START, at the hub's `more' row (the top of the transcript): the rows
+before are asked for.  It moves no window."
   (with-current-buffer (window-buffer window)
-    (when drgnx-agent-panel--pin
-      (setq start (drgnx-agent-panel--pin-at window start))
-      (drgnx-agent-panel--pin-place window))
-    (let ((rows (drgnx-agent-panel--rows-p)))
-      (when (and (or rows drgnx-agent-panel--more) (not drgnx-agent-panel--loading) (drgnx-view-p drgnx-view))
-        (let ((more (drgnx-view-row-start drgnx-view (if rows "more" (list :more)))))
-          (when (and more (<= start (1+ more)))
-            (with-current-buffer (or (drgnx-agent-panel--twin-from) (current-buffer)) (drgnx-agent-panel-older))))))))
+    (unless drgnx-agent-panel--loading
+      (when-let* ((more (drgnx-view-row-start drgnx-view "more")) ((<= start (1+ more))))
+        (with-current-buffer (or (drgnx-agent-panel--twin-from) (current-buffer)) (drgnx-agent-panel-older))))))
 
 (defun drgnx-agent-panel--subscribe ()
   "This panel is shown: the hub sends the session's entries here; the last page comes when it has answered."
   (unless drgnx-agent-panel--subscribed
     (setq drgnx-agent-panel--subscribed t)
     ;; the hub's rows follow the env of the window that now shows them
-    (when (drgnx-agent-panel--rows-p) (drgnx-view-env-update (drgnx-view-patch-view drgnx-view-patch)))
+    (drgnx-view-env-update (drgnx-view-patch-view drgnx-view-patch))
     (let ((buf (current-buffer)))
       (drgnx-agent-panel--ask
        "agents/entries/subscribe" (list :session drgnx-agent-panel--session)
@@ -721,9 +369,10 @@ signal when no hub serves)."
   (setq-local truncate-lines t cursor-type nil)
   ;; the panel's text in the UI font (agent-panel.html); output, diffs and code name the code font's faces
   (face-remap-add-relative 'default 'drgnx-ui-text)
+  ;; Emacs keeps the end in view: a window whose point is at the end (Sjá keeps it there through a draw) scrolls by
+  ;; as little as the appended rows need, never recentring
+  (setq-local scroll-conservatively 101 scroll-margin 0)
   (add-hook 'window-scroll-functions #'drgnx-agent-panel--scrolled nil t)
-  (setq-local mwheel-scroll-up-function #'drgnx-agent-panel--scroll-up)
-  (setq-local minor-mode-overriding-map-alist (list (cons 'pixel-scroll-precision-mode drgnx-agent-panel--wheel-map)))
   (add-hook 'kill-buffer-hook #'drgnx-agent-panel--killed nil t))
 
 (defun drgnx-agent-panel--killed ()
@@ -745,12 +394,10 @@ signal when no hub serves)."
         (puthash session buffer drgnx-agent-panel--by-session)
         (setq drgnx-agent-panel--session session
               drgnx-agent-panel--entries (make-hash-table :test #'eql) drgnx-agent-panel--live (make-hash-table :test #'eql)
-              drgnx-agent-panel--steps (make-hash-table :test #'eql) drgnx-agent-panel--shown-keys (make-hash-table :test #'equal)
+              drgnx-agent-panel--steps (make-hash-table :test #'eql)
               drgnx-agent-panel--open (make-hash-table :test #'equal))
-        (drgnx-view-attach 'agent-panel)
         (drgnx-agent-panel-steps-init)
-        (when (drgnx-agent-panel--hub-up-p) (drgnx-agent-panel--rows-attach session))
-        (drgnx-agent-panel--reconcile)
+        (drgnx-agent-panel--rows-attach session)
         (drgnx-agent-panel--ask "agents/list" nil
                                 (lambda (r _err)
                                   (when-let* (((buffer-live-p buffer))
@@ -799,7 +446,8 @@ signal when no hub serves)."
     (and (buffer-live-p b) b)))
 
 (defun drgnx-agent-panel--refresh-steps ()
-  "Ask the hub again for the step rows this panel holds (a revert or fork changed `revertible' and `undone_by')."
+  "Ask the hub again for the steps this panel holds (a revert or fork changed `revertible' and `undone_by', which the
+commands on the step at point read; the hub draws its rows again itself)."
   (when (and drgnx-agent-panel--first-step (> (hash-table-count drgnx-agent-panel--steps) 0))
     (let ((buf (current-buffer)))
       (drgnx-agent-panel--ask
@@ -809,8 +457,7 @@ signal when no hub serves)."
        (lambda (r err)
          (when (and (not err) (buffer-live-p buf))
            (with-current-buffer buf
-             (drgnx-agent-panel--take-steps (append (plist-get r :steps) nil))
-             (drgnx-agent-panel--redraw-steps))))))))
+             (drgnx-agent-panel--take-steps (append (plist-get r :steps) nil)))))))))
 
 (defun drgnx-agent-panel--event (event data)
   "An event from the hub (`drgnx-hub-event-functions'): a snapshot or entries of a session whose panel exists;
@@ -832,29 +479,9 @@ signal when no hub serves)."
       (setq drgnx-agent-panel--subscribed nil drgnx-agent-panel--loaded nil drgnx-agent-panel--loading nil)
       (when (get-buffer-window b 'visible) (drgnx-agent-panel--subscribe)))))
 
-;;;; The probe
-
-(defun drgnx-agent-panel-stream-probe (buffer n)
-  "Time N updates of one agent message arriving in BUFFER as markdown patches (20 a second), each taken and drawn:
-a list of milliseconds (the probe for `agent-panel-stream-tick').  BUFFER is a panel; the message is made up and
-stays in it.  Every fifth update opens a new block, the others grow the last one."
-  (with-current-buffer buffer
-    (let ((idx (hash-table-count drgnx-agent-panel--entries)) ms)
-      (dotimes (u n)
-        (let* ((b (/ u 5)) (words (1+ (% u 5)))
-               (block (list :block b :kind "paragraph"
-                            :spans (vector (list :text (mapconcat #'identity (make-list words "word") " ") :style "text")
-                                           (list :text " tail" :style "strong"))))
-               (e (list :type "agent" :text (format "message %d" u) :patch (vector block))))
-          (push (* 1000 (car (benchmark-run 1 (drgnx-agent-panel--take-entries (list (list idx e)))
-                                            (drgnx-view-draw-now drgnx-view))))
-                ms)))
-      (nreverse ms))))
-
 ;;;; The module
 
 (defun drgnx-agent-panel--setup ()
-  (drgnx-state-subscribe 'pane-resized #'drgnx-agent-panel--pane-resized)
   (drgnx-command-define 'agents-panel :category "Agents" :title "Open the Agent Panel"
                         :command #'drgnx-agent-panel-open
                         :doc "One agent session's steps, live, in the right dock")
@@ -884,7 +511,6 @@ stays in it.  Every fifth update opens a new block, the others grow the last one
     (drgnx-agent-panel--event event data))
   (drgnx-module-hook 'drgnx-hub-connected-functions panel-resubscribe () (drgnx-agent-panel--resubscribe))
   (drgnx-module-hook 'window-buffer-change-functions panel-windows (frame) (drgnx-agent-panel-sync-windows frame))
-  (drgnx-module-hook 'drgnx-look-fonts-applied-hook panel-fonts () (drgnx-agent-panel--fonts-applied))
   (drgnx-agent-panel-steps-setup)
   (drgnx-agent-panel-composer-setup)
   (drgnx-agent-panel-explain-setup)
@@ -904,12 +530,12 @@ stays in it.  Every fifth update opens a new block, the others grow the last one
   (dolist (b (drgnx-agent-panel-buffers)) (kill-buffer b)))
 
 (defun drgnx-agent-panel-toggle ()
-  "Open or fold the thinking and the detail of the step at point (with the hub's rows, off a step: the selected one).
-A fold is this panel's own state at once; the hub hears it after (`agents/panel/look') and draws the rows again."
+  "Open or fold the thinking and the detail of the step at point (off a step: the selected one).  A fold is this
+panel's own state at once; the hub hears it after (`agents/panel/look') and draws the rows again."
   (interactive)
   (let ((key (drgnx-agent-panel--key-at)))
     (unless (eq (car-safe key) :e)
-      (when-let* (((drgnx-agent-panel--rows-p)) (id (drgnx-view-nav-selection)))
+      (when-let* ((id (drgnx-view-nav-selection)))
         (setq key (list :e (drgnx-view-nav-field "entry" id)))))
     (unless (eq (car-safe key) :e) (user-error "Point is not on a step"))
     (drgnx-agent-panel--row-toggle key)))
@@ -942,7 +568,6 @@ past the ends; nil when none is drawn."
   "Select the next (STEP 1) or previous (STEP -1) step of KIND from point and put point on it, wrapping: KIND
 `tool', `hunk' (a step with an edit) or `ask' (your message).  Each step's kind comes from the panel's model in Sjá,
 which then selects it."
-  (unless (drgnx-agent-panel--rows-p) (user-error "The panel moves between steps with the hub's rows only"))
   (let* ((h (drgnx-view-patch-handle drgnx-view-patch))
          (to (and h (drgnx-agent-panel--find-step h kind step (get-text-property (point) 'drgnx-work-id)))))
     (if to (drgnx-view-nav 'select to) (message "No step of that kind"))))

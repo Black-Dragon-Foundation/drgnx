@@ -1,4 +1,4 @@
-;;; agent-panel-rows-test.el --- the agent panel inserts the rows the hub builds; the mirror patches in place -*- lexical-binding: t -*-
+;;; agent-panel-rows-test.el --- the agent panel is the rows the hub builds; the mirror patches in place -*- lexical-binding: t -*-
 ;; test-class: det
 ;; Pattern A: every order of the hub's patches, a key and a reconnect (orders-fixture.el).  Pattern D: pure.  No hub:
 ;; the hub connection reads as up, and what the panel sends is recorded.
@@ -14,8 +14,11 @@
 (drgnx-test-modules-preload '(tools/agent-panel))
 
 (declare-function drgnx-agent-panel-buffer "drgnx-agent-panel")
-(declare-function drgnx-agent-panel--take-entries "drgnx-agent-panel")
 (declare-function drgnx-agent-panel-toggle-type "drgnx-agent-panel-steps")
+(declare-function drgnx-agent-panel-buffers "drgnx-agent-panel")
+(defvar drgnx-agent-panel--disclosure)
+(defvar drgnx-agent-panel--session)
+(defvar drgnx-agent-panel--subscribed)
 
 (defvar drgnx-agent-panel-rows-test--sent nil "What the panel sent the hub, newest first: (METHOD . PARAMS).")
 
@@ -88,63 +91,20 @@
          :init (lambda () (list :buf (drgnx-agent-panel-rows-test--fresh)))
          :step #'drgnx-agent-panel-rows-test--step
          :check (lambda (s _)
-                  (let* ((keys (drgnx-agent-panel-rows-test--keys (plist-get s :buf)))
-                         (hub (seq-filter #'stringp keys))
-                         (first (seq-position keys (car hub) #'equal))
-                         (look (cdr (assoc "agents/panel/look" drgnx-agent-panel-rows-test--sent))))
-                    (cond ((not (equal hub '("e:3" "e:0" "e:1" "e:2")))
-                           (format "the hub rows are %S, not the new hub's" hub))
-                          ((not (equal (seq-subseq keys first (+ first 4)) hub))
-                           (format "the hub rows are not together: %S" keys))
-                          ((not (equal (nth (+ first 4) keys) '(:rows-end)))
-                           (format "the panel's own rows below the transcript are not after it: %S" keys))
+                  (let ((keys (drgnx-agent-panel-rows-test--keys (plist-get s :buf)))
+                        (look (cdr (assoc "agents/panel/look" drgnx-agent-panel-rows-test--sent))))
+                    ;; the buffer is the hub's rows and nothing else
+                    (cond ((not (equal keys '("e:3" "e:0" "e:1" "e:2")))
+                           (format "the rows are %S, not the new hub's" keys))
                           ((not (equal (plist-get look :view) "agent-panel/s1")) "no look sent for the panel")))))
       (when-let* ((b (get-buffer "*drgnx agent: s1*"))) (kill-buffer b)))))
 
-(ert-deftest drgnx-agent-panel-rows/composer-keys-unchanged ()
-  (let (bindings)
-    (dolist (up '(nil t))
-      (drgnx-agent-panel-rows-test--with up
-        (let ((buf (drgnx-agent-panel-rows-test--fresh)))
-          (unwind-protect
-              (with-current-buffer buf
-                (should (eq up (and drgnx-view-patch t)))
-                (drgnx-view-draw-now drgnx-view)
-                (goto-char (point-min))
-                (while (and (not (eobp)) (not (equal (drgnx-view-key-at) '(:composer)))) (forward-line 1))
-                (should (equal (drgnx-view-key-at) '(:composer)))
-                (push (mapcar (lambda (k) (key-binding (kbd k))) '("RET" "TAB" "C-c C-c" "M-p")) bindings))
-            (kill-buffer buf)))))
-    (should (equal (car bindings) (cadr bindings)))))
-
-(ert-deftest drgnx-agent-panel-rows/hub-down-panel-draws-every-row-itself ()
-  (drgnx-agent-panel-rows-test--with nil
-    (let* ((buf (drgnx-agent-panel-rows-test--fresh)))
-      (unwind-protect
-          (with-current-buffer buf
-            (should-not drgnx-view-patch)
-            (drgnx-agent-panel--take-entries
-             (list (list 0 (list :type "user" :text "go"))
-                   (list 1 (list :type "tool" :id "t1" :title "Read a.el" :kind "read" :status "completed"))))
-            (drgnx-view-draw-now drgnx-view)
-            (should (string-match-p "Read a.el" (buffer-string)))
-            (should-not (assoc "agents/panel/look" drgnx-agent-panel-rows-test--sent)))
-        (kill-buffer buf)))))
-
 ;;;; A panel in two display classes
 
-(defun drgnx-agent-panel-rows-test--line (buf key)
-  "The text of BUF's row KEY, drawn."
-  (with-current-buffer buf
-    (drgnx-view-draw-now drgnx-view)
-    (goto-char (point-min))
-    (while (and (not (eobp)) (not (equal (drgnx-view-key-at) key))) (forward-line 1))
-    (and (equal (drgnx-view-key-at) key) (buffer-substring-no-properties (pos-bol) (pos-eol)))))
-
 (ert-deftest drgnx-agent-panel-rows/a-twin-shows-the-panels-state-with-its-class-rows ()
-  "The panel's buffer in a second display class (RRO-PANEL-TWIN-1): the hub's rows of its own class between the
-panel's rows; the header, cards and composer drawn from the panel's state, and drawn again when it changes; a
-change asked for in the twin reaches the panel; not a panel of its own (no subscription, not in the finders)."
+  "The panel's buffer in a second display class (RRO-PANEL-TWIN-1): the hub's rows of its own class; its commands read
+the panel's state and what they change reaches the panel; not a panel of its own (no subscription, not in the
+finders)."
   (drgnx-agent-panel-rows-test--with t
     (let* ((buf (drgnx-agent-panel-rows-test--fresh)) tw)
       (unwind-protect
@@ -159,24 +119,22 @@ change asked for in the twin reaches the panel; not a panel of its own (no subsc
             (with-current-buffer tw
               (drgnx-view-apply-patch (plist-put (cadr (drgnx-agent-panel-rows-test--reset 7 '("e:0" "e:1")))
                                                  :class "c2")))
-            (let ((keys (drgnx-agent-panel-rows-test--keys tw)))
-              (should (equal (car keys) "e:0"))
-              (should (equal (seq-filter #'stringp keys) '("e:0" "e:1")))
-              (should (equal (nth (1+ (seq-position keys "e:1")) keys) '(:rows-end)))
-              (should (member '(:composer) keys)))
-            (should (equal (seq-filter #'stringp (drgnx-agent-panel-rows-test--keys buf)) '("e:0")))
-            ;; a row the panel adds (a plan's card) shows in the twin too
-            (with-current-buffer buf
-              (drgnx-agent-panel--take-entries
-               (list (list 0 (list :type "plan" :entries (vector (list :content "first step" :status "pending")))))))
-            (should (equal (seq-remove #'stringp (drgnx-agent-panel-rows-test--keys tw))
-                           (seq-remove #'stringp (drgnx-agent-panel-rows-test--keys buf))))
+            (should (equal (drgnx-agent-panel-rows-test--keys tw) '("e:0" "e:1")))
+            (should (equal (drgnx-agent-panel-rows-test--keys buf) '("e:0")))
+            (should (equal "s1" (buffer-local-value 'drgnx-agent-panel--session tw)))
+            ;; a command in the twin works on the panel's state: read before it, given back after it
+            (with-current-buffer buf (setq drgnx-agent-panel--disclosure '(edit)))
+            (with-current-buffer tw
+              (run-hooks 'pre-command-hook)
+              (should (equal '(edit) drgnx-agent-panel--disclosure))
+              (drgnx-agent-panel-toggle-type 'read)
+              (run-hooks 'post-command-hook))
+            (should (equal '(read edit) (buffer-local-value 'drgnx-agent-panel--disclosure buf)))
             ;; killing the twin leaves the panel's subscription alone
             (with-current-buffer buf (setq drgnx-agent-panel--subscribed t))
             (kill-buffer tw)
             (should (buffer-local-value 'drgnx-agent-panel--subscribed buf))
-            (should-not (assoc "agents/entries/unsubscribe" drgnx-agent-panel-rows-test--sent))
-            (with-current-buffer buf (drgnx-agent-panel--dirty (list :header)) (drgnx-view-draw-now drgnx-view)))
+            (should-not (assoc "agents/entries/unsubscribe" drgnx-agent-panel-rows-test--sent)))
         (when (buffer-live-p tw) (kill-buffer tw))
         (kill-buffer buf)))))
 

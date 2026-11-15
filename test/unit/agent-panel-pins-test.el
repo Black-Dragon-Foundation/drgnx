@@ -23,11 +23,6 @@
          (unwind-protect (progn (setq buf (drgnx-agent-panel-buffer "s1")) ,@body)
            (when (buffer-live-p buf) (kill-buffer buf)))))))
 
-(defun drgnx-agent-panel-pins-test--text (buf)
-  (with-current-buffer buf
-    (drgnx-view-draw-now drgnx-view)
-    (buffer-substring-no-properties (point-min) (point-max))))
-
 ;;; hub rows: the pinned cards, the to-do list and the ledger are the hub's (view/panel_cards.rs).  What stays here is
 ;;; the state the editor keeps and sends: what is pinned, and whether the ledger is open.
 
@@ -43,8 +38,14 @@ carries `drgnx-agent-panel-pin'), it goes; what is not a step or a card cannot b
       (drgnx-agent-panel--take-entries
        (list (list 0 (list :type "tool" :id "t1" :title "Read the spec" :kind "read" :status "completed"))
              (list 1 (list :type "tool" :id "t2" :title "Run the tests" :kind "execute" :status "completed"))))
-      (drgnx-agent-panel-pins-test--text buf)
-      (goto-char (drgnx-view-row-start drgnx-view '(:e 1)))
+      ;; the hub's step rows, each naming its entry
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (propertize "  ● Read the spec\n" 'drgnx-agent-panel-entry 0)
+                (propertize "  ● Run the tests\n" 'drgnx-agent-panel-entry 1)
+                "  a row that is no step\n"))
+      (goto-char (point-min))
+      (forward-line 1)
       (drgnx-agent-panel-pin)
       (should (equal '("Run the tests") (append (plist-get (drgnx-agent-panel--look-params) :pins) nil)))
       ;; pinned again from the step: gone; and pinned, then unpinned from the card
@@ -57,8 +58,9 @@ carries `drgnx-agent-panel-pin'), it goes; what is not a step or a card cannot b
         (goto-char (- (point-max) 2)))
       (drgnx-agent-panel-pin)
       (should-not drgnx-agent-panel--pins)
-      ;; something that is not a card cannot be pinned
-      (goto-char (drgnx-view-row-start drgnx-view '(:composer)))
+      ;; something that is not a step or a card cannot be pinned
+      (goto-char (point-min))
+      (forward-line 2)
       (should-error (drgnx-agent-panel-pin) :type 'user-error))))
 
 (ert-deftest drgnx-agent-panel/the-ledger-open-flag-goes-to-the-hub ()

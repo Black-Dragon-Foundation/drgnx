@@ -317,11 +317,11 @@ reset, neither stale; with the doubled font each holds its own fit of the label 
 (declare-function drgnx-panel-replay-up "panel-replay-fixture" (bin &optional old))
 (declare-function drgnx-panel-replay-down "panel-replay-fixture" ())
 
-(ert-deftest drgnx-ui-rows-fit/the-agent-panel-in-two-classes-keeps-its-cards-and-composer ()
+(ert-deftest drgnx-ui-rows-fit/the-agent-panel-in-two-classes-keeps-its-rows ()
   "The agent panel shown in a second class (RRO-PANEL-TWIN-1), as the user's external monitor does: a real hub and a
 mock agent (test/fixtures/panel-replay-fixture.el, a short turn); the second frame's window shows the panel's twin,
-paired with its class, its hub rows that class's, its own rows (the header, the chips, the cards, the composer) the
-panel's, neither stale; the twin is no panel of its own."
+paired with its class, its hub rows that class's and the same keys as the panel's, neither stale, and no rows of its
+own (every row is the hub's); the twin is no panel of its own."
   (skip-unless (display-graphic-p))
   (require 'drgnx-pixels)
   (load (expand-file-name "test/fixtures/panel-replay-fixture" drgnx-rows-fit-ui-test--repo) nil t)
@@ -346,9 +346,10 @@ panel's, neither stale; the twin is no panel of its own."
             (should-not (memq tw (drgnx-agent-panel-buffers)))
             (dolist (b (list panel tw))
               (drgnx-test-wait (lambda () (with-current-buffer b
-                                            (and (> (hash-table-count (drgnx-view-patch-rows drgnx-view-patch)) 0)
+                                            ;; Sjá holds the rows (no patch table); without Sjá, the Lisp view
+                                            (and (> (drgnx-view-row-count drgnx-view) 0)
                                                  (not (drgnx-view-patch-stale drgnx-view-patch)))))
-                               :secs 20 :what (list "the hub's rows of the class" b)))
+                               :secs 20 :what (list "the hub's rows of the class" (buffer-name b))))
             (let ((sp (buffer-local-value 'drgnx-view-patch panel)) (st (buffer-local-value 'drgnx-view-patch tw)))
               (should-not (equal (drgnx-view-patch-class sp) (drgnx-view-patch-class st)))
               (should (equal (sort (list (drgnx-view-patch-class sp) (drgnx-view-patch-class st)) #'string<)
@@ -357,54 +358,10 @@ panel's, neither stale; the twin is no panel of its own."
               (drgnx-rows-fit-ui-test--report (format "agent panel in two classes (%s): own rows %S, hub rows %d | %d"
                                                       (cadr made) (seq-remove #'stringp kp)
                                                       (length (seq-filter #'stringp kp)) (length (seq-filter #'stringp kt))))
-              (should (equal (seq-remove #'stringp kp) (seq-remove #'stringp kt)))
-              (should (member '(:composer) kt))
+              (should-not (seq-remove #'stringp kp))
+              (should-not (seq-remove #'stringp kt))
               (should (equal (seq-filter #'stringp kp) (seq-filter #'stringp kt))))))
       (when (frame-live-p frame) (delete-frame frame))
-      (drgnx-panel-replay-down)
-      (drgnx-view-env-teardown)
-      (drgnx-view-patch-teardown))))
-
-(ert-deftest drgnx-ui-rows-fit/the-agent-panels-header-and-strip-are-the-hubs-rows ()
-  "The agent panel's header, chips and strip come from the hub (offload F1) and are the first rows, each with its own
-key; the lens in the header is the editor's presets with the one in force raised; a click on a lens segment (the
-editor's one dispatcher) makes the hub send the header again with the new preset raised."
-  (skip-unless (display-graphic-p))
-  (load (expand-file-name "test/fixtures/panel-replay-fixture" drgnx-rows-fit-ui-test--repo) nil t)
-  (let* ((load-path (cons (expand-file-name "modules/tools" drgnx-rows-fit-ui-test--repo) load-path))
-         (drgnx-view-patch--buffers (make-hash-table :test #'equal)) (drgnx-view-patch--hooked nil)
-         (drgnx-view-env--views (make-hash-table :test #'equal)) (drgnx-view-env--sent (make-hash-table :test #'equal))
-         (drgnx-view-env--glyphs (make-hash-table :test #'equal)) (drgnx-view-env--hooked nil)
-         (drgnx-panel-replay-prefix 3) (panel nil))
-    (unwind-protect
-        (save-window-excursion
-          (setq panel (drgnx-panel-replay-up (drgnx-rows-demo--bin)))
-          (set-window-buffer (selected-window) panel)
-          (drgnx-view-env-update (with-current-buffer panel (drgnx-view-patch-view drgnx-view-patch)))
-          (drgnx-test-wait (lambda () (with-current-buffer panel
-                                        (and (> (hash-table-count (drgnx-view-patch-rows drgnx-view-patch)) 2)
-                                             (not (drgnx-view-patch-stale drgnx-view-patch)))))
-                           :secs 20 :what "the hub's rows of the panel")
-          (drgnx-rows-demo-settle panel)
-          (let ((keys (drgnx-rows-fit-ui-test--panel-keys panel)) (text (drgnx-rows-demo-text panel)))
-            (should (member "p:strip" keys))
-            (should (< (seq-position keys "p:head") (seq-position keys "p:strip")))
-            (should (equal (car keys) "p:head"))
-            (should (= (window-start (selected-window)) (with-current-buffer panel (point-min))))
-            (should (string-match-p "Open:" text))
-            (dolist (w '("watch" "review" "debug" "thinking" "make default")) (should (string-match-p w text))))
-          (with-current-buffer panel
-            (let ((pos (save-excursion (goto-char (point-min)) (search-forward "debug") (match-beginning 0))))
-              (should (eq 'drgnx-agent-panel-lens (car (ensure-list (get-text-property pos 'face)))))
-              (should (equal "lens:3" (get-text-property pos 'drgnx-agent-panel-action)))
-              (set-window-buffer (selected-window) panel)
-              (drgnx-agent-panel-act (list 'mouse-1 (list (selected-window) pos '(0 . 0) 0)))))
-          (drgnx-test-wait (lambda () (with-current-buffer panel
-                                        (drgnx-view-draw-now drgnx-view)
-                                        (let ((pos (save-excursion (goto-char (point-min)) (search-forward "debug" nil t)
-                                                                   (match-beginning 0))))
-                                          (memq 'drgnx-agent-panel-lens-on (ensure-list (get-text-property pos 'face))))))
-                           :secs 20 :what "the lens showing debug in force"))
       (drgnx-panel-replay-down)
       (drgnx-view-env-teardown)
       (drgnx-view-patch-teardown))))
