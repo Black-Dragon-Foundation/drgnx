@@ -184,6 +184,29 @@ row's text carries the one mouse face that lights the control."
           (should (eq (get-text-property (1+ a) 'mouse-face)
                       (get-text-property (1- (save-excursion (goto-char a) (pos-eol))) 'mouse-face))))))))
 
+(ert-deftest drgnx-look-explorer/no-rows-no-selection ()
+  "Pattern D: the empty line after the last row (all a hub-fed view has before its first rows) is no row: nothing is
+selected on it, so its waiting line (an overlay string there) is not pushed off the window by the selection's stretch
+to the right edge.  A row's selection still comes back when point is on one."
+  (drgnx-look-explorer-test--as 'gui nil
+    (let ((buf (get-buffer-create "*look-explorer-no-rows*")))
+      (unwind-protect
+          (with-current-buffer buf
+            (set-window-buffer (selected-window) buf)
+            (let ((waiting (make-overlay (point-min) (point-min))))
+              (overlay-put waiting 'before-string "  Waiting for the hub to list the folders…\n"))
+            (cl-letf (((symbol-function 'drgnx-wb--focused-p) #'always))
+              (drgnx-wb-selection-sync)
+              (should-not (drgnx-look-explorer-test--selected buf))
+              (insert "row\n")
+              (goto-char (point-min))
+              (drgnx-wb-selection-sync)
+              (should (drgnx-look-explorer-test--selected buf))
+              (goto-char (point-max))
+              (drgnx-wb-selection-sync)
+              (should-not (drgnx-look-explorer-test--selected buf))))
+        (kill-buffer buf)))))
+
 (ert-deftest drgnx-look-explorer/the-selected-row-is-one-run ()
   "Pattern D, window-dark.html `.row.sel': the selection is one fill from the row's start to its right edge: the
 overlay on the row's text (not its newline: no fill past the row) and the same face on the tail at the right edge
