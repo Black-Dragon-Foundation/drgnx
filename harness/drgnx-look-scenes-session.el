@@ -1117,6 +1117,10 @@ gate state, the held one, the batch.  A Flow without the run's task rows (its wa
     (when-let* ((map (drgnx-look-scene--work-map))
                 (flow (drgnx-work-flow-open map)))
       (pop-to-buffer-same-window flow)
+      ;; the Work layout, as a shown lens enters it (`drgnx-work-space--follow-layout'), but now: left to its hook, the
+      ;; shot drew the Flow beside the Explorer (758 px) or in the layout (1074 px) from run to run
+      (unless (eq (drgnx-layouts-current) 'work) (drgnx-layouts-apply 'work))
+      (unless (get-buffer-window flow) (set-window-buffer (drgnx-wb-editor-window) flow))
       ;; the held task's row (its `drgnx-work-id' is the task's id) and the batch's heading
       (drgnx-look-scene--until 15 "the seeded run's Flow rows (scene-run#5, the batch)"
                                (lambda ()
@@ -2448,16 +2452,21 @@ Nil when the row changed otherwise, or is cut there at that width too.  Else CUT
 drawn only); any other fed window that cannot be resized fails the width check.")
 
 (defvar drgnx-look-scene--asks (make-hash-table :test #'equal)
-  "VIEW → (EVENTS GLYPHS FACES MEASURES): what the hub asked this Emacs about VIEW's rows (`view-glyphs'), for the
-widths file (bounded by the views the scenes open).")
+  "VIEW → (EVENTS GLYPHS FACES MEASURES ASKED): what the hub asked this Emacs about VIEW's rows (`view-glyphs'), for
+the widths file (bounded by the views the scenes open); ASKED the last 16 texts it asked to measure, each its roles key
+and its first 40 chars.")
 
 (defun drgnx-look-scene--count-asks (event data)
   "Count a `view-glyphs' EVENT's asks (DATA) under its view in `drgnx-look-scene--asks'."
   (when (equal event "view-glyphs")
-    (let ((c (or (gethash (plist-get data :view) drgnx-look-scene--asks) (list 0 0 0 0))))
+    (let ((c (or (gethash (plist-get data :view) drgnx-look-scene--asks) (list 0 0 0 0 nil))))
       (puthash (plist-get data :view)
                (list (1+ (nth 0 c)) (+ (nth 1 c) (length (plist-get data :ask)))
-                     (+ (nth 2 c) (length (plist-get data :faces))) (+ (nth 3 c) (length (plist-get data :measure))))
+                     (+ (nth 2 c) (length (plist-get data :faces))) (+ (nth 3 c) (length (plist-get data :measure)))
+                     (seq-take (append (mapcar (lambda (m) (list (nth 0 m) (truncate-string-to-width (nth 1 m) 40)))
+                                               (reverse (append (plist-get data :measure) nil)))
+                                       (nth 4 c))
+                               16))
                drgnx-look-scene--asks))))
 
 (with-eval-after-load 'drgnx-view-env
