@@ -236,8 +236,8 @@
   (nb-test--with
     (let ((s (nb-test--head "a")))
       ;; the run button first, a play icon that runs; then the count and the language as chips of the look
-      (should (equal (get-text-property 0 'drgnx-notebook-run s) "a"))
-      (should (equal (get-text-property 0 'drgnx-notebook-action s) "run"))
+      (should (equal (get-text-property 1 'drgnx-notebook-run s) "a"))
+      (should (equal (get-text-property 1 'drgnx-notebook-action s) "run"))
       (should (< 0 (string-search "[3]" s) (string-search "python" s)))
       (should (memq 'drgnx-chip-quiet (nb-test--faces-at s "[3]")))
       (should (memq 'drgnx-chip-quiet (nb-test--faces-at s "python")))
@@ -253,7 +253,7 @@
                                                                             (list :role "language" :text "python" :chip "quiet"))))
                                    (nb-test--tail "7")))
     (let ((s (nb-test--head "c")))
-      (should (equal (get-text-property 0 'drgnx-notebook-action s) "stop"))
+      (should (equal (get-text-property 1 'drgnx-notebook-action s) "stop"))
       (should (memq 'drgnx-chip-accent (nb-test--faces-at s "[*]")))
       (should (memq 'drgnx-chip-quiet (nb-test--faces-at s "python"))))))
 
@@ -737,8 +737,22 @@
       (let ((b (funcall inner "c")))
         (should (consp (plist-get (nthcdr 3 b) :fill)))
         (should (= (plist-get (nthcdr 3 b) :radius) (drgnx-px 6))))
+      ;; the block holds exactly the output's string: the output overlay is named, so the add row stays out
+      (should (eq (plist-get (nthcdr 3 (funcall inner "a")) :overlay)
+                  (plist-get (drgnx-notebook--chrome-of "a") :tail)))
       ;; a cell with no output has none
       (should-not (funcall inner "b")))))
+
+(ert-deftest drgnx-notebook/the-header-row-is-26-px-and-its-chips-are-boxed ()
+  (nb-test--with
+    (let ((s (drgnx-notebook--head-strip "a" 'code)))
+      ;; a spacer at the row's start makes the row the mockup's 26 px, the toolbar clear of the ring's edge
+      (should (equal (get-text-property 0 'display s) `(space :width (1) :height (,(drgnx-px 26)) :ascent 70))))
+    ;; a chip is one run in the decor chip's box, the tint over it
+    (let* ((chip (drgnx-notebook--head-part "a" (list :role "kind" :text "python" :chip "quiet")))
+           (faces (ensure-list (get-text-property 1 'face chip))))
+      (should (memq 'drgnx-chip faces))
+      (should (equal (substring-no-properties chip) " python ")))))
 
 (ert-deftest drgnx-notebook/the-focus-ring-is-the-selected-cells-in-the-focused-window-only ()
   (nb-test--with-cards
