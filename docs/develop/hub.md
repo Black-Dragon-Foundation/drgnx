@@ -2474,12 +2474,17 @@ A builder fits each label to its segment's width with `drgnx_rows::fit` (the ter
 hub sums the advances of the font file Emacs uses for the role (`view/env`'s `fonts`), read with skrifa, and trims
 with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an estimate: no shaping, kerning or hinting.
 
+- **Cut and wrapped by measure, never by the cell.** A builder that cuts or wraps a text to its room does it in px
+  with `fit::fit_in` (and wraps by `fit::width_in`), never by a count of chars at the cell's width: in a font
+  narrower than the cell a char count leaves room free beside the `…`, which the scenes' width check reports as a row
+  cut whose full text fits (the Flow's Rules and Detail tiles did).
 - **Measured in the face it is drawn in.** A builder names the face, never a role: `fit::width_in` and `fit::fit_in`
   measure text in the font the editor says the face draws in. The hub asks once per (pair, face) in `view-glyphs`'
   `faces`; the editor answers with the role whose font the face resolves to in the view's buffer (`ui`, `text`,
   `caption`, `code`, `heading`, …: `drgnx-view-env-roles`; the role whose face draws a probe text as wide in that
   buffer, so a face that sets only colours draws in the buffer's remapped `default`, which `face-font` does not see),
-  or, for a face with a font of its own, that font's file,
+  or, for a face with a font of its own, that font's file (as it draws merged over the buffer's remapped `default`:
+  `bold` in the agent panel is the UI family's bold, not the frame's code font's),
   index, px, average and `wght` (the face's weight, for a variable font) under a role named after the face; and the
   ends of its box (`pad`: half what the box adds to the probe as drawn, so a frame that scales boxes is counted),
   which a run adds at each end. Until the answer comes a face
@@ -2498,7 +2503,10 @@ with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an est
   roles key, its text and its runs from its start), which draws it in the view's buffer with those faces
   (`drgnx-view-env-measure`) and answers with `view/measured`; the rows are built again, and that width decides from
   then on. The text asked is the segment's without its images' and spaces' placeholders (their widths are known and
-  added), its runs moved to match.
+  added), its runs moved to match. A builder's own cut (`fit::fit_in`: a Flow card's footer, a Run and Debug frame)
+  asks the same when its sum comes within twice the slack of its budget, either side (a 90-char caption summed 9 px
+  wider than Emacs drew it kerned, and was cut with room to spare); a face with a box is left to the row's fit. A text
+  no wider than the ellipsis is never cut (the cut would draw no narrower).
 
 - **Per grapheme cluster.** A cut never splits a cluster (a letter and its combining marks, an emoji ZWJ sequence, a
   flag). In a row, a cluster of several chars is asked of the editor whole (`view-glyphs`' `measure`: its roles key,
@@ -2522,7 +2530,10 @@ with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an est
   slack), so it wins over the file's sum, which stands in until it comes. A char with no glyph, or a role with no
   font file (as `font-info` often has on macOS), measures as the role's average until then. The editor measures each
   in the asked class's buffer on the frame that shows it, keyed by the font its face resolves to there (a buffer's
-  remaps change it, and so does a frame of another scale or default font). Caches are bounded: 4096 chars per font and per set, 1024 measured strings.
+  remaps change it, and so does a frame of another scale or default font). Measuring on a frame other than the
+  selected one keeps every buffer's point (`drgnx-view-env--on-frame`): selecting that frame selects its selected
+  window, which would put its buffer's point at the window's. An advance is measured without the face's box (a chip's
+  face): the hub adds the box's ends once per run, from the face's `:pad`. Caches are bounded: 4096 chars per font and per set, 1024 measured strings.
 - **The editor's measurement wins.** The fit guard reports a line it measured wider than the hub fitted it
   (`view/measured`); from then on that width is used for that string instead of the sum (least recently used out).
 - **The fit check row** (`test/ui/rows-fit-gui-test.el`, on the fixture view `rows-demo`, whose labels the hub
@@ -2995,7 +3006,14 @@ lines and never scroll; the transcript scrolls between them as any Emacs buffer 
 come in, and a window scrolled back stays on its row (Sjá keeps its start and point by row across patches and resets).
 It opens at its end: it sets `drgnx-view-sja-tail`, so Sjá's draw counts its empty region as at its end and the first
 rows leave point there (a Sjá view otherwise opens on its first rows), whether a window showed it before them or after.
-No panel code follows the tail, copies rows or handles the wheel. Scrolling the transcript to its top loads the page
+Emacs keeps the start of a window that grows, and scrolling to a point at the end past rows taller than a line (cards
+scrolled out at the top) leaves space under the end, so the same flag gives the buffer Sjá's one tail rule
+(`drgnx-view-sja--pin-end`, a buffer-local `window-size-change-functions`, `window-scroll-functions` and `pre-redisplay-functions`, the last for a start set from Lisp, which runs no scroll functions): a window with
+its point at the end and room for one more screen line above the end's row gets the end's row on its last line (at
+open, when the header's rows come and the header is fitted; a frame that grows; the composer shrinking after a send;
+the header's strip unwrapping; a new start redisplay chose). It is memoized on the window's start and point, the end
+and the window's size. A window scrolled back (its point off the end) is never moved. A tab switch away and back with point at the end comes back at the new end (the area remembers `end`,
+[core.md](core.md), "Area companions"). No panel code follows the tail, copies rows or handles the wheel. Scrolling the transcript to its top loads the page
 before (the `--scrolled` hook). Until the first patch of the transcript view, a panel shows a waiting line (an overlay,
 "Waiting for the hub to send the agent's steps…"); with the hub down it stays, and the panel draws no rows of its own.
 The header window shows a buffer of its own (`modules/tools/drgnx-agent-panel-header.el`; the panel's buffer name and

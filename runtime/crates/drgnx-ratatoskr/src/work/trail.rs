@@ -238,8 +238,10 @@ fn rows(
         Data::Timeline(lanes) => only(trail::timeline_rows(lanes, &renv, fonts, zone)),
         Data::Board(cards) => only(board::board_rows(cards, env)),
         Data::Flow(flow, flow::Part::Lens) => flow::flow_rows(flow, env, fonts),
-        Data::Flow(flow, flow::Part::Detail(task)) => flow::detail_tile(flow, task, env),
-        Data::Flow(flow, flow::Part::Rules(task)) => flow::rules_rows(flow, task.as_deref(), env),
+        Data::Flow(flow, flow::Part::Detail(task)) => flow::detail_tile(flow, task, env, fonts),
+        Data::Flow(flow, flow::Part::Rules(task)) => {
+            flow::rules_rows(flow, task.as_deref(), env, fonts)
+        }
     }
 }
 

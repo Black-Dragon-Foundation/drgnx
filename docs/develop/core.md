@@ -1504,6 +1504,21 @@ function and one rounding rule:
   `drgnx-pixels/the-scale-conses-nothing` holds.
 - A size made of parts adds the rounded parts (`(+ (drgnx-px 26) (drgnx-px 6))`), never `drgnx-px` of the sum, so a
   row and its gap add up to what is drawn.
+- A face's `:box` line widths are the exception: Nidhogg's shells take them in logical pixels and draw them at the
+  display scale themselves (as NS takes points), so a width made in frame pixels doubles at scale 2 if given as it is.
+  Every computed `:box` width goes through `(drgnx-pixels-box-width PX &optional FRAME)`, which divides by the scale
+  there (half up, at least 1, sign kept) and returns PX elsewhere. A box that makes up an exact height (the status
+  bar's row, the palette's footer) takes `(drgnx-pixels-box-fit PX FRAME)`, the widest width the scale draws that is
+  at most PX (at 2 a 15 px pad is drawn as 14), and fills the pixels left over with a spacer of the row's whole height (a box adds to the text's height, not to a
+  spacer's). Corner radii are not scaled by Nidhogg: they stay `drgnx-px`. Theme
+  literals (`:line-width 1`) are logical already. `test/ui/look-box-widths-gui-test.el` reads the drawn widths.
+- A frame's `internal-border-width` and `child-frame-border-width` are the same: Nidhogg's shells take them in logical
+  pixels and draw them at the display scale (a third-party child frame, such as posframe's `:border-width 2`, draws
+  4 device px at 2). A width made in frame pixels (`drgnx-px`, `drgnx-px-line`: the palette's ring, a toast's pad, the
+  cards' edge) is given through `(drgnx-pixels-border-width PX &optional FRAME)` (`drgnx-pixels-box-width`'s
+  conversion); a literal (`(child-frame-border-width . 1)`) is logical already. The parameter gives back what was
+  set: code that sizes a frame by its border reads the drawn width, `frame-internal-border-width` (a child frame's
+  ring when it has one) or `frame-child-frame-border-width`. `test/ui/frame-borders-gui-test.el` reads them.
 - An image already sized in device pixels (the hub's row images, `drgnx-view-patch--image`) is made with `:scale 1`;
   without it Emacs applies `image-scaling-factor`, a guess from the font (1.6 at scale 2), on top.
 
@@ -3113,8 +3128,14 @@ area's role (`right`), with the window parameter `drgnx-area-part` `above` or `b
 kind's pane), no mode line and width preserved. The area's tab row (`drgnx-area--tab-row`, so `none` in the lone right
 area while its tab is the only one with content) goes on the topmost window (`drgnx-area--top-window`); the main window
 under a companion has none. Each companion is fitted to its lines and its
-header line, pixelwise (`fit-window-to-buffer`), at most 45% of the area's height in whole lines, and its height is
-then preserved, so a frame resize goes to the main window. It is fitted again when its size changes
+header line, pixelwise (`fit-window-to-buffer`), at most 45% of the area's height in whole lines and never under the
+window's least height rounded up to whole lines (an empty companion, such as a header before its rows, would ask for
+one line, under its least height, and Emacs refuses such a resize whole). Emacs draws a header line only in a window
+with room for it and a line, and the least height of a window too small for it counts none, so a companion that wants a
+header line it does not draw grows a line at a time until it does; the companion that gets the tab row is fitted again
+with it (`drgnx-area--put-row`: the companions are fitted before the row is placed). Its height is then preserved, so a frame
+resize goes to the main window. A fit that does not take (the height unchanged while the lines want another) is
+recorded in the window parameter `drgnx-area-unfitted` as `(:height H :want WANT)`; the next fit that takes clears it. It is fitted again when its size changes
 (`window-size-change-functions` in its buffer) and when its owner calls `(drgnx-wb-area-fit-companions AREA
 &optional FRAME)` after its lines changed. FN runs whenever the area shows the tab's buffer (show, tab switch,
 `drgnx-wb-area-put-buffer`); a placeholder has no companions, and an area at the bottom has none. A tab switch to a
@@ -3124,7 +3145,9 @@ all three widths preserved. FN also gets a hub view's twin in another display cl
 a terminal frame beside a graphical one) when the env's routing put it in the area's window; FN returns that class's
 companions (the agent panel: its header's twin of the class). A tab left on a twin remembers the view's own buffer too,
 so once the twin is gone (no window shows its class) the tab comes back with the view's buffer and its companions,
-not a placeholder. Test: `test/unit/wb-area-companions-test.el`, `test/ui/area-companions-gui-test.el`.
+not a placeholder. A tab left on a view that opens at its tail (`drgnx-view-sja-tail`, the agent panel's transcript)
+with its window's point at the end remembers the point as `end` and comes back at the end the buffer has then, so it
+follows the rows again. Test: `test/unit/wb-area-companions-test.el`, `test/ui/area-companions-gui-test.el`.
 
 **Ownership.** `drgnx-pane-define-kind` records the module whose setup runs as the kind's owner
 (`(drgnx-state-kind-owner KIND)`; nil for a kind defined at load, which is core's and stays until restart) and, in a
@@ -3682,8 +3705,11 @@ timer; when nothing can run and nothing is left to wait for it fails at once, wi
   that resizes leaves fullscreen first with `(drgnx-test-frame-fullscreen FRAME nil)` (it waits until the size holds
   over presented frames, not for it to change: a frame with no bars leaves fullscreen maximized at the size it had,
   and returns the state to put back), then resizes with `(drgnx-test-frame-text-size FRAME WIDTH HEIGHT)`,
-  which fails the test unless the text size took (within a character); its failure names the size the frame has, its
-  fullscreen state and its windows' least height, under which a compositor may drop the request entirely.
+  which fails the test unless the text size took (within a character) and still holds over presented frames (a late
+  configure would size the frame again under the row); its failure names the size the frame has, its fullscreen state
+  and its windows' least height, under which a compositor may drop the request entirely. Going back to fullscreen
+  waits for the size the frame had there when the helper left it. `test/ui/frame-size-helpers-gui-test.el` checks
+  both against a late answer.
 - **A window for what must not happen.** A test that asserts something does *not* happen (a second answer, a tick
   that starts nothing) lets processes and timers run with `(drgnx-test-pause SECS)` and then asserts. It is the only
   fixed real-time window in a test, and it can only miss a bug on a loaded machine, never fail a correct one. Not

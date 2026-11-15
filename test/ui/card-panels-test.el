@@ -183,12 +183,35 @@ two cards has their shadows in it, the margin none).  Pattern D."
            (r (drgnx-card-panels-ui-test--rect dock))
            (between (cons 255 (mapcar (lambda (v) (ash v -8))
                                       (color-values (face-foreground 'window-divider nil t))))))
-      (should (eql (frame-parameter nil 'internal-border-width) want))
+      ;; drawn that wide: Nidhogg takes the parameter in logical px, so it is never that times the scale again
+      (should (equal (list :edge (frame-internal-border-width) :scale (frame-scale-factor))
+                     (list :edge want :scale (frame-scale-factor))))
       (should (>= (nth 0 r) want))
       (should (>= (nth 1 r) want))
       (should (equal (drgnx-uitest-pixel snap 0 0) between))
       (should (equal (drgnx-uitest-pixel snap (1- want) (1- want)) between))
       (should (equal (drgnx-uitest-pixel snap (/ (+ (nth 0 r) (nth 2 r)) 2) (/ want 2)) between)))))
+
+(ert-deftest drgnx-ui-card-panels/cards-off-give-the-edge-back ()
+  "Cards on, then off: the frame's edge is drawn as wide as before and its parameter reads what was set before.  The
+cards save the edge from the parameter and give it back as it was; on Nidhogg the parameter is logical px and is
+drawn at the scale, so a parameter that read back the drawn width doubled the edge at 2.  Pattern D."
+  (skip-unless (drgnx-uitest-glitnir-p))
+  (let* ((f (selected-frame)) (was (frame-parameter f 'internal-border-width)))
+    (unwind-protect
+        (progn
+          (set-frame-parameter f 'internal-border-width 3)
+          (drgnx-test-wait-presented)
+          (let ((drawn (frame-internal-border-width f)))
+            ;; on: the edge is the gap (a compare with the parameter read back as drawn kept the old edge)
+            (drgnx-card-panels-ui-test--with-explorer
+              (should (equal (list :on (frame-internal-border-width f))
+                             (list :on (round (* (drgnx-look-density-value 'gap) (frame-scale-factor f)))))))
+            (should (equal (list :param (frame-parameter f 'internal-border-width) :drawn (frame-internal-border-width f)
+                                 :scale (frame-scale-factor f))
+                           (list :param 3 :drawn drawn :scale (frame-scale-factor f))))))
+      (set-frame-parameter f 'internal-border-width was)
+      (drgnx-test-wait-presented))))
 
 (ert-deftest drgnx-ui-card-panels/a-divider-colour-set-on-the-frame-reaches-the-corners ()
   "A divider colour set on the frame outside a theme reaches the card's corners when the cards are applied again:
@@ -230,23 +253,26 @@ reads a card's colours when it resolves the card).  Pattern D (read after `drgnx
 divider (#9f9f9f stripes): the margin, the dock's cut corner and the editor's are all `drgnx-surface-gap'.  Pattern D
 \(read after `drgnx-test-wait-presented')."
   (drgnx-card-panels-ui-test--with-explorer
-    (unwind-protect
-        (progn
-          (mapc #'disable-theme custom-enabled-themes)
-          (load-theme 'modus-operandi t)
-          (drgnx-look-derive-on)
-          (drgnx-look-cards-apply)
-          (drgnx-test-wait-presented)
-          (let* ((gap (drgnx-card-panels-ui-test--rgb (drgnx-face-color 'drgnx-surface-gap :background 'gui)))
-                 (dock (car (drgnx-wb--dock-windows)))
-                 (snap (drgnx-uitest-snapshot))
-                 (r (drgnx-card-panels-ui-test--rect dock)))
-            (should (equal (drgnx-uitest-pixel snap 0 0) gap))
-            (should (equal (drgnx-uitest-pixel snap (nth 0 r) (nth 1 r)) gap))
-            (should (equal (drgnx-uitest-pixel snap (/ (+ (nth 0 r) (nth 2 r)) 2) 0) gap))
-            (should-not (equal (drgnx-uitest-pixel snap 0 0) (drgnx-card-panels-ui-test--rgb "#9f9f9f")))))
-      (drgnx-look-derive-off)
-      (mapc #'disable-theme custom-enabled-themes))))
+    (let ((themes custom-enabled-themes))
+      (unwind-protect
+          (progn
+            (mapc #'disable-theme custom-enabled-themes)
+            (load-theme 'modus-operandi t)
+            (drgnx-look-derive-on)
+            (drgnx-look-cards-apply)
+            (drgnx-test-wait-presented)
+            (let* ((gap (drgnx-card-panels-ui-test--rgb (drgnx-face-color 'drgnx-surface-gap :background 'gui)))
+                   (dock (car (drgnx-wb--dock-windows)))
+                   (snap (drgnx-uitest-snapshot))
+                   (r (drgnx-card-panels-ui-test--rect dock)))
+              (should (equal (drgnx-uitest-pixel snap 0 0) gap))
+              (should (equal (drgnx-uitest-pixel snap (nth 0 r) (nth 1 r)) gap))
+              (should (equal (drgnx-uitest-pixel snap (/ (+ (nth 0 r) (nth 2 r)) 2) 0) gap))
+              (should-not (equal (drgnx-uitest-pixel snap 0 0) (drgnx-card-panels-ui-test--rgb "#9f9f9f")))))
+        (drgnx-look-derive-off)
+        ;; the session's themes back: left with none, the rows after read the default faces' colours
+        (mapc #'disable-theme custom-enabled-themes)
+        (dolist (th (reverse themes)) (enable-theme th))))))
 
 (ert-deftest drgnx-ui-card-panels/focused-tile-ring-is-accent ()
   "With two editor groups the selected one's card ring is the accent, the other's and the dock's the border blend;
@@ -303,19 +329,21 @@ ring.  The store runs (`drgnx-state-mode', as the workbench has it).  Pattern D 
   "The corner pixel of a card is the gap under each of the four test themes.  Pattern D (read after
 `drgnx-test-wait-presented')."
   (drgnx-card-panels-ui-test--with-explorer
-    (unwind-protect
-        (dolist (theme '(drgnx-dark drgnx-light drgnx-high-contrast modus-operandi))
-          (mapc #'disable-theme custom-enabled-themes)
-          (load-theme theme t)
-          (drgnx-look-derive-on)
-          (drgnx-look-cards-apply)
-          (drgnx-test-wait-presented)
-          (let* ((dock (car (drgnx-wb--dock-windows)))
-                 (r (drgnx-card-panels-ui-test--rect dock))
-                 (gap (drgnx-card-panels-ui-test--rgb (drgnx-face-color 'drgnx-surface-gap :background 'gui))))
-            (should (equal (drgnx-uitest-pixel (drgnx-uitest-snapshot) (nth 0 r) (nth 1 r)) gap))))
-      (drgnx-look-derive-off)
-      (mapc #'disable-theme custom-enabled-themes))))
+    (let ((themes custom-enabled-themes))
+      (unwind-protect
+          (dolist (theme '(drgnx-dark drgnx-light drgnx-high-contrast modus-operandi))
+            (mapc #'disable-theme custom-enabled-themes)
+            (load-theme theme t)
+            (drgnx-look-derive-on)
+            (drgnx-look-cards-apply)
+            (drgnx-test-wait-presented)
+            (let* ((dock (car (drgnx-wb--dock-windows)))
+                   (r (drgnx-card-panels-ui-test--rect dock))
+                   (gap (drgnx-card-panels-ui-test--rgb (drgnx-face-color 'drgnx-surface-gap :background 'gui))))
+              (should (equal (drgnx-uitest-pixel (drgnx-uitest-snapshot) (nth 0 r) (nth 1 r)) gap))))
+        (drgnx-look-derive-off)
+        (mapc #'disable-theme custom-enabled-themes)
+        (dolist (th (reverse themes)) (enable-theme th))))))
 
 (ert-deftest drgnx-ui-card-panels/a-drag-released-over-a-fringe-ends ()
   "Dragging the dock card's side edge (its right fringe, `drgnx-look-edge-drag') 60 px to the right widens the dock,

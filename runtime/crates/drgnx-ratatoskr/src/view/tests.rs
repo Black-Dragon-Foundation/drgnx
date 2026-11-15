@@ -436,6 +436,43 @@ fn fixture_labels_are_fitted_per_class() {
     assert_eq!(t[0].text, "abcde… |");
 }
 
+/// [D] A builder's own cut (`fit::fit_in`) whose sum comes within twice the slack of the budget asks the editor to
+/// measure the text in its face, once; the editor's width then decides (the Flow card's 90-char footer summed over its
+/// budget and was cut, while drawn kerned it had 8 px to spare).
+#[test]
+fn a_builder_s_cut_too_close_to_call_is_measured_by_the_editor() {
+    use drgnx_rows::fit::{self, FontSet, SLACK};
+    let mut set = FontSet::new();
+    set.set_role("ui", None, 10.0);
+    let answers: Vec<(String, char, f32)> = "abcdefghij…"
+        .chars()
+        .map(|c| ("ui".to_owned(), c, 10.0))
+        .collect();
+    set.glyphs(&answers);
+    // 100 px summed in 100 px: over the budget (less the slack) by the slack, so cut, and asked once
+    let width = 100.0;
+    assert!(fit::fit_in(&set, Some("f"), "abcdefghij", width).ends_with('…'));
+    assert_eq!(
+        set.take_measure_asks(),
+        vec![(
+            "ui".to_owned(),
+            "abcdefghij".to_owned(),
+            vec![(0, 10, "f".to_owned())]
+        )]
+    );
+    assert!(fit::fit_in(&set, Some("f"), "abcdefghij", width).ends_with('…'));
+    assert!(set.take_measure_asks().is_empty());
+    // far over: cut, not asked
+    assert!(fit::fit_in(&set, Some("f"), "abcdefghij", 40.0).ends_with('…'));
+    assert!(set.take_measure_asks().is_empty());
+    // the editor drew it 88 px wide: within the budget, whole
+    set.measured("ui", "abcdefghij", width - SLACK - 2.0);
+    assert_eq!(
+        fit::fit_in(&set, Some("f"), "abcdefghij", width),
+        "abcdefghij"
+    );
+}
+
 /// A label's PX is logical, as every view's sizes are: a GUI class at scale 2 fits it, and puts its stop, at twice
 /// that in device px (its fonts' px), rounded half up as `drgnx-px` does.
 #[test]

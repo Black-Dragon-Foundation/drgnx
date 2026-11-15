@@ -118,8 +118,9 @@
     ;; the input row and 10 rows of 20 px, then 6 + 30 logical pixels of gap and footer
     (should (equal (drgnx-test--palette-placed 3000) '(1280 292)))
     (should (equal (drgnx-test--palette-placed 1000) '(936 292)))
+    ;; a border is given in logical px there (Nidhogg draws it at the scale: 16 device px)
     (cl-letf (((symbol-function 'frame-scale-factor) (lambda (_) 2.0)))
-      (should (= 16 (alist-get 'internal-border-width (drgnx-palette-frame--params 'parent))))))
+      (should (= 8 (alist-get 'internal-border-width (drgnx-palette-frame--params 'parent))))))
   ;; elsewhere a frame counts logical pixels already
   (cl-letf (((symbol-function 'drgnx-pixels-device-p) #'ignore)
             ((symbol-function 'drgnx-pixels-ui-scale) (lambda (&optional _f) 1.0)))

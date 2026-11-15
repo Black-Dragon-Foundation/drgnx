@@ -98,6 +98,60 @@ changes the font."
       (set-face-attribute 'default (selected-frame) :font font)
       (kill-buffer b))))
 
+(defface drgnx-rows-fit-ui-test-boxed '((t :box (:line-width 6)))
+  "A chip's face for the row below: a box whose ends are 6 px each.")
+
+(ert-deftest drgnx-ui-rows-fit/a-boxed-face-s-advance-leaves-out-its-box ()
+  "A face with a box (the Work flow's chips) answers the hub's glyph ask with the char's advance alone: the hub adds
+the box's ends once per run (`view-glyphs' faces' :pad).  Red first: each char came with both ends (an `o' 19 px in
+a 7 px font), and the flow's run line was cut with half the window free."
+  (skip-unless (display-graphic-p))
+  (require 'drgnx-view-env)
+  (let ((b (generate-new-buffer " *boxed*")))
+    (unwind-protect
+        (progn
+          (set-window-buffer (selected-window) b)
+          (let ((bare (string-pixel-width (propertize "o" 'face '((:box nil) drgnx-rows-fit-ui-test-boxed)) b))
+                (boxed (string-pixel-width (propertize "o" 'face 'drgnx-rows-fit-ui-test-boxed) b)))
+            ;; the premise: the box draws
+            (should (> boxed bare))
+            (should (= bare (drgnx-view-env--measure b 'drgnx-rows-fit-ui-test-boxed ?o)))))
+      (kill-buffer b))))
+
+(ert-deftest drgnx-ui-rows-fit/a-measure-on-another-frame-keeps-the-buffer-s-point ()
+  "The hub's asks are measured on the frame of a window showing the view's buffer; with another frame selected (a
+sheet, a second frame), selecting that frame selects its selected window, which put the buffer's point at the
+window's: a scan of the buffer's rows that asked how a face draws (the look scenes' widths check) started over, for
+ever.  The glyph advance, the face and the run measures keep the buffer's point.  Red first: each moved it to 1."
+  (skip-unless (display-graphic-p))
+  (require 'drgnx-view-env)
+  (let* ((root (selected-frame)) (w (frame-selected-window root)) (was (window-buffer w))
+         (b (generate-new-buffer " *measured elsewhere*"))
+         (frame (make-frame '((width . 40) (height . 8) (title . "drgnx-rows-measure-elsewhere")))))
+    (unwind-protect
+        (progn
+          (drgnx-test-wait (lambda () (eq t (frame-visible-p frame))) :secs 10 :what "the second frame shown")
+          (with-current-buffer b (insert (make-string 60 ?x) "\n" (make-string 60 ?y) "\n"))
+          (set-window-buffer w b)
+          (set-window-point w 1)
+          (select-frame frame 'norecord)
+          (with-current-buffer b
+            (let ((points nil))
+              (goto-char 30)
+              (drgnx-view-env--measure b 'bold ?m)
+              (push (cons :glyph (point)) points)
+              (goto-char 30)
+              (drgnx-view-env-face "bold" b)
+              (push (cons :face (point)) points)
+              (goto-char 30)
+              (drgnx-view-env-measure "mmm" '((0 3 "bold")) b)
+              (push (cons :measured (point)) points)
+              (should (equal '((:glyph . 30) (:face . 30) (:measured . 30)) (nreverse points))))))
+      (select-frame root 'norecord)
+      (when (frame-live-p frame) (delete-frame frame))
+      (set-window-buffer w was)
+      (kill-buffer b))))
+
 (ert-deftest drgnx-ui-rows-fit/a-colour-face-draws-in-the-buffer-s-remapped-default ()
   "A face that sets only colours draws in its buffer's `default', remapped (the agent panel's `drgnx-ui-text'): the
 answer to the hub's face ask names the `ui' role, not the role whose font is the frame's default (`code', when the
@@ -129,6 +183,25 @@ frame's default is the code font)."
             (should (>= (plist-get a :pad) 2))))
       (set-face-attribute 'default (selected-frame) :font font)
       (set-face-attribute 'fixed-pitch nil :family fixed)
+      (kill-buffer b))))
+
+(ert-deftest drgnx-ui-rows-fit/a-bold-face-draws-in-the-buffer-s-remapped-family ()
+  "A face with a font of its own that takes its family from `default' (`bold') draws in the buffer's remapped
+`default' family: the answer to the hub's face ask names that family's file, not the frame's default's."
+  (skip-unless (display-graphic-p))
+  (should (drgnx-rows-fit-ui-test--install))
+  (require 'drgnx-view-env)
+  (let ((b (generate-new-buffer " *remapped*")) (font (face-attribute 'default :font (selected-frame))))
+    (unwind-protect
+        (progn
+          (set-face-attribute 'default (selected-frame) :font (font-spec :family "JetBrains Mono" :size 13))
+          (with-current-buffer b (face-remap-add-relative 'default :family "Inter"))
+          (set-window-buffer (selected-window) b)
+          (let ((a (drgnx-view-env-face "bold" b)))
+            (should (equal (list (plist-get a :role) (and (plist-get a :file) (string-match-p "Inter" (plist-get a :file))
+                                                          t))
+                           '("bold" t)))))
+      (set-face-attribute 'default (selected-frame) :font font)
       (kill-buffer b))))
 
 ;;;; The fit check row and row heights: the fixture view `rows-demo' fed by a real hub (test/fixtures/rows-demo-fixture.el)

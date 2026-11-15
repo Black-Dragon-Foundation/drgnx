@@ -14,6 +14,8 @@
   (expand-file-name "../../" (file-name-as-directory (or (getenv "DRGNX_UI_TEST") default-directory))))
 (add-to-list 'load-path (expand-file-name "core" drgnx-pass-a-ui-test--repo))
 (add-to-list 'load-path (expand-file-name "wb" drgnx-pass-a-ui-test--repo))
+(add-to-list 'load-path (expand-file-name "harness" drgnx-pass-a-ui-test--repo))
+(load (expand-file-name "test/fixtures/rows-demo-fixture" drgnx-pass-a-ui-test--repo) nil t)
 (require 'drgnx)
 (require 'drgnx-wb)
 (require 'drgnx-area)
@@ -21,6 +23,7 @@
 (require 'drgnx-rules)
 (require 'drgnx-frames)
 (require 'drgnx-explorer)
+(declare-function nidhogg-view-get "nidhogg-views" (h what &optional arg arg2))
 
 (defun drgnx-pass-a-ui-test--wait (pred &optional secs)
   "Wait (SECS, default 15) until PRED holds; `drgnx-test-wait' runs the process sentinels and timers.  PRED's value, nil
@@ -73,10 +76,19 @@ at the deadline (the caller says what is off)."
       (mapc #'kill-buffer (list shown mine1 mine2 stranger)))))
 
 ;;;; The Explorer on a real frame, rooted in a temp dir
+;; With Sjá (Nidhogg's line) the hub lists the folders (`drgnx-explorer--hub-lists-p'): the Explorer is a hub-fed view
+;; whose rows come from a real hub (`drgnx-rows-demo-with', a test-hooks build) some time after each change, so every
+;; row of these tests waits for the rows it expects; and the hub draws a view only where a window shows it, so the
+;; Explorer is shown (SHOW) in every row.  Without Sjá the Explorer lists in Lisp, at once.
+
+(defun drgnx-pass-a-ui-test--hub-p ()
+  "Whether the Explorer is to be the hub's view here: this Emacs has Sjá."
+  (fboundp 'nidhogg-view--call))
 
 (defmacro drgnx-pass-a-ui-test--with-explorer (root dir show &rest body)
   "BODY with ROOT bound to the Explorer's root, the temp directory DIR (a function of nothing returning it).
-SHOW non-nil: the sidebar is open in the root frame, whose window layout is restored after."
+SHOW non-nil: the sidebar is open in the root frame, whose window layout is restored after.  With Sjá, a real hub
+lists the folders and the Explorer is its view (BODY fails at once otherwise)."
   (declare (indent 3))
   `(let* ((,root (file-name-as-directory (funcall ,dir)))
           (frame (drgnx-uitest-root-frame))
@@ -84,14 +96,21 @@ SHOW non-nil: the sidebar is open in the root frame, whose window layout is rest
           (drgnx-wb--sections nil) (drgnx-explorer--pressed nil)
           (drgnx-explorer--selection nil) (drgnx-explorer--anchor nil) (drgnx-explorer--focused-before nil)
           (drgnx-explorer--roots nil) (_cleared (drgnx-cache--clear 'explorer-listing))
-          (drgnx-explorer--expanded (make-hash-table :test #'equal)))
+          (drgnx-explorer--hub-view nil) (drgnx-explorer--window-asker nil)
+          (drgnx-explorer--expanded (make-hash-table :test #'equal))
+          (run (lambda ()
+                 (with-selected-frame frame
+                   (delete-other-windows)
+                   (drgnx-explorer-setup)
+                   (drgnx-explorer-set-roots (list ,root))
+                   (when ,show (drgnx-wb-show-sidebar) (redisplay t))
+                   (when (drgnx-pass-a-ui-test--hub-p)
+                     (with-current-buffer (drgnx-explorer--buffer) (drgnx-explorer--render))   ; attaches, subscribes
+                     (unless (drgnx-explorer--rows-p) (ert-fail "with Sjá the Explorer is not the hub's view"))
+                     (drgnx-view-env-update drgnx-explorer-hub-view-name))
+                   ,@body))))
      (unwind-protect
-         (with-selected-frame frame
-           (delete-other-windows)
-           (drgnx-explorer-setup)
-           (drgnx-explorer-set-roots (list ,root))
-           (when ,show (drgnx-wb-show-sidebar) (redisplay t))
-           ,@body)
+         (if (drgnx-pass-a-ui-test--hub-p) (drgnx-rows-demo-with (funcall run)) (funcall run))
        (with-selected-frame frame
          (when ,show (ignore-errors (drgnx-wb-hide-sidebar)))
          (delete-other-windows)
@@ -110,6 +129,14 @@ SHOW non-nil: the sidebar is open in the root frame, whose window layout is rest
 
 ;;;; (3) A chain of open single folders is one row (M3b-1)
 
+(defun drgnx-pass-a-ui-test--depth (pos)
+  "The depth of the Explorer's row at POS (0 for a root), or nil off a row.  On the hub's view, the row's ancestors
+in the model (a joined chain of folders is one node, the last folder's)."
+  (if (drgnx-explorer--rows-p)
+      (when-let* ((id (drgnx-explorer-node-at pos)) (h (drgnx-view-patch-handle drgnx-view-patch)))
+        (let ((d 0)) (while (setq id (nidhogg-view-get h 'parent id)) (setq d (1+ d))) d))
+    (drgnx-explorer-depth-at pos)))
+
 (defun drgnx-pass-a-ui-test--rows ()
   "The Explorer's rows below the root, as (DEPTH TEXT): the text the row shows, without its chevron."
   (with-current-buffer drgnx-explorer-buffer-name
@@ -117,11 +144,21 @@ SHOW non-nil: the sidebar is open in the root frame, whose window layout is rest
       (goto-char (point-min))
       (let (rows)
         (while (not (eobp))
-          (when-let* ((depth (drgnx-explorer-depth-at (point))) ((> depth 0)))
+          (when-let* ((depth (drgnx-pass-a-ui-test--depth (point))) ((> depth 0)))
             (push (list depth (string-trim (replace-regexp-in-string "\\`[│ ]*[▸▾]?" "" (buffer-substring-no-properties (pos-bol) (pos-eol)))))
                   rows))
           (forward-line 1))
         (nreverse rows)))))
+
+(defun drgnx-pass-a-ui-test--rows-are (want)
+  "The Explorer's rows (`drgnx-pass-a-ui-test--rows') become WANT: waited for (the hub's come later), then checked."
+  (drgnx-pass-a-ui-test--wait (lambda () (equal (drgnx-pass-a-ui-test--rows) want)))
+  (should (equal (drgnx-pass-a-ui-test--rows) want)))
+
+(defun drgnx-pass-a-ui-test--row-shown (path)
+  "Wait until the Explorer has a row for PATH; fail if it does not come."
+  (unless (drgnx-pass-a-ui-test--wait (lambda () (with-current-buffer (drgnx-explorer--buffer) (drgnx-explorer--row-start path))))
+    (ert-fail (list "no row for" path :rows (drgnx-pass-a-ui-test--rows)))))
 
 (defun drgnx-pass-a-ui-test--click (text)
   "Click the row showing TEXT in the Explorer window, as a person would; wait until it settles."
@@ -136,19 +173,19 @@ SHOW non-nil: the sidebar is open in the root frame, whose window layout is rest
           (drgnx-explorer-refresh)
           (redisplay t)
           (should drgnx-explorer-compact-folders)
-          (should (equal (drgnx-pass-a-ui-test--rows) '((1 "docs") (1 "src") (1 "README.md"))))
+          (drgnx-pass-a-ui-test--rows-are '((1 "docs") (1 "src") (1 "README.md")))
           ;; each click opens the folder shown last, and the next folder joins its row
           (drgnx-pass-a-ui-test--click "src")
-          (should (equal (drgnx-pass-a-ui-test--rows) '((1 "docs") (1 "src/app") (1 "README.md"))))
+          (drgnx-pass-a-ui-test--rows-are '((1 "docs") (1 "src/app") (1 "README.md")))
           (drgnx-pass-a-ui-test--click "src/app")
-          (should (equal (drgnx-pass-a-ui-test--rows) '((1 "docs") (1 "src/app/deep") (1 "README.md"))))
+          (drgnx-pass-a-ui-test--rows-are '((1 "docs") (1 "src/app/deep") (1 "README.md")))
           (drgnx-pass-a-ui-test--click "src/app/deep")
-          (should (equal (drgnx-pass-a-ui-test--rows) '((1 "docs") (1 "src/app/deep/a") (1 "README.md"))))
+          (drgnx-pass-a-ui-test--rows-are '((1 "docs") (1 "src/app/deep/a") (1 "README.md")))
           (redisplay t)
           (should (drgnx-uitest-target-xy drgnx-explorer-buffer-name "src/app/deep/a"))   ; it is on screen, as one line
           ;; the last folder opens: its file is a row below the one chain row
           (drgnx-pass-a-ui-test--click "src/app/deep/a")
-          (should (equal (drgnx-pass-a-ui-test--rows) '((1 "docs") (1 "src/app/deep/a") (2 "leaf.txt") (1 "README.md"))))
+          (drgnx-pass-a-ui-test--rows-are '((1 "docs") (1 "src/app/deep/a") (2 "leaf.txt") (1 "README.md")))
           (drgnx-pass-a-ui-test--shot shots "pass-a-compact-folders.png"))
       (delete-directory shots t))))
 
@@ -192,9 +229,11 @@ of the test's own making, not a race with a delay."
     (let ((kill-buffer-query-functions nil)) (kill-buffer b))))
 
 (defun drgnx-pass-a-ui-test--delete (path)
-  "Delete PATH from the Explorer as the Delete command does (the prompt answered yes)."
+  "Delete PATH from the Explorer as the Delete command does on its row (the prompt answered yes), once the row is there."
+  (drgnx-pass-a-ui-test--row-shown path)
   (with-current-buffer (drgnx-explorer--buffer)
-    (goto-char (or (drgnx-explorer--row-pos path) (error "No row for %s" path)))
+    (goto-char (drgnx-explorer--row-start path))
+    (should (equal (drgnx-explorer-node-at (point)) path))           ; the command acts on this row's file
     (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
       (drgnx-explorer-delete))))
 
@@ -205,7 +244,7 @@ of the test's own making, not a race with a delay."
   (drgnx-pass-a-ui-test--with-temp-home home
     (let* ((shm (drgnx-pass-a-ui-test--shm-dir)) (bin (make-temp-file "drgnx-pass-a-bin" t)))
       (unwind-protect
-          (drgnx-pass-a-ui-test--with-explorer root (lambda () shm) nil
+          (drgnx-pass-a-ui-test--with-explorer root (lambda () shm) t
             (drgnx-pass-a-ui-test--fake-gio bin t)
             (let* ((exec-path (cons bin exec-path))
                    (process-environment (cons (concat "PATH=" bin ":" (getenv "PATH")) process-environment))
@@ -229,6 +268,7 @@ of the test's own making, not a race with a delay."
               (should (drgnx-pass-a-ui-test--wait (lambda () (not (buffer-live-p buf)))))
               (should-not (file-exists-p file))
               (should (directory-files (expand-file-name ".local/share/Trash/files" home) nil "notes\\.txt"))
+              (drgnx-pass-a-ui-test--wait (lambda () (not (member "notes.txt" (mapcar #'cadr (drgnx-pass-a-ui-test--rows))))))
               (should-not (member "notes.txt" (mapcar #'cadr (drgnx-pass-a-ui-test--rows))))))
         (drgnx-pass-a-ui-test--kill-visiting (expand-file-name "notes.txt" shm))
         (delete-directory bin t)))))
@@ -238,7 +278,7 @@ of the test's own making, not a race with a delay."
     (let* ((shm (drgnx-pass-a-ui-test--shm-dir)) (bin (make-temp-file "drgnx-pass-a-bin" t)))
       (ignore home)
       (unwind-protect
-          (drgnx-pass-a-ui-test--with-explorer root (lambda () shm) nil
+          (drgnx-pass-a-ui-test--with-explorer root (lambda () shm) t
             (drgnx-pass-a-ui-test--fake-gio bin)
             (let* ((exec-path (cons bin exec-path))
                    (process-environment (cons (concat "PATH=" bin ":" (getenv "PATH")) process-environment))
@@ -268,7 +308,7 @@ of the test's own making, not a race with a delay."
            (had-mount-trash (file-exists-p mount-trash))
            (before (and had-mount-trash (directory-files-recursively mount-trash "real"))))
       (unwind-protect
-          (drgnx-pass-a-ui-test--with-explorer root (lambda () shm) nil
+          (drgnx-pass-a-ui-test--with-explorer root (lambda () shm) t
             (let* ((file (expand-file-name "real.txt" root)) (buf nil))
               (write-region "x\n" nil file nil 'silent)
               (drgnx-explorer-refresh)

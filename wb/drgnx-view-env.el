@@ -116,6 +116,18 @@ nil on a terminal or when FACE has no font."
       (list (aref info 12) 0 (funcall s (aref info 2)) (funcall s (aref info 8)) (funcall s (aref info 9))
             (funcall s (aref info 11)) (funcall s (aref info 10)) (aref info 0)))))
 
+(defun drgnx-view-env--drawn-font (face buffer window)
+  "FACE's font as it draws in BUFFER in WINDOW's frame, as `drgnx-view-env--font' gives it: FACE merged over BUFFER's
+remapped `default' (its family, its `text-scale' height), which `face-font' does not see; nil on a terminal."
+  (when-let* (((display-graphic-p (window-frame window)))
+              (remap (cdr (assq 'default (buffer-local-value 'face-remapping-alist buffer))))
+              (specs (if (and (consp remap) (not (keywordp (car remap)))) remap (list remap)))
+              (font (with-current-buffer buffer
+                      (ignore-errors (font-at 0 window (propertize "x" 'face (cons face specs))))))
+              (q (query-font font)))
+    ;; `query-font': [NAME FILENAME PIXEL-SIZE SIZE ASCENT DESCENT SPACE-WIDTH AVERAGE-WIDTH CAPABILITY]
+    (list (aref q 1) 0 (aref q 2) (aref q 4) (aref q 5) (aref q 7) (aref q 6) (aref q 0))))
+
 (defun drgnx-view-env--window-facts (window &optional buffer)
   "The facts of the display class WINDOW shows BUFFER in (default: its buffer; a twin is measured as its view's
 buffer): a plist :display :scale :fonts :cell.  FONTS is a list of (ROLE FILE INDEX PX ASCENT DESCENT AVG SPACE NAME),
@@ -412,11 +424,21 @@ nothing runs inside a follow); the widths as on a resize."
 another scale or default font draws the same buffer in another font), so BUFFER's text is measured there."
   (let ((w (get-buffer-window buffer t))) (if w (window-frame w) (selected-frame))))
 
+(defun drgnx-view-env--on-frame (frame fn)
+  "FN called with FRAME selected (a face's font is per frame), every buffer's point kept: selecting another frame
+selects its selected window, which puts that window's buffer's point at the window's (a scan of a view's rows that
+asks how a face draws would start over)."
+  (if (eq frame (selected-frame)) (funcall fn)
+    (with-current-buffer (window-buffer (frame-selected-window frame))
+      (save-excursion (with-selected-frame frame (funcall fn))))))
+
 (defun drgnx-view-env--measure (buffer face char)
   "CHAR's advance in px in FACE, measured in BUFFER (with its face remaps: the agent panel's `default' is
-`drgnx-ui-text') on its frame (`drgnx-view-env--frame')."
-  (with-selected-frame (drgnx-view-env--frame buffer)
-    (string-pixel-width (propertize (string char) 'face face) buffer)))
+`drgnx-ui-text') on its frame (`drgnx-view-env--frame'), without FACE's box: the hub adds its ends once per run (the
+face's :pad, `drgnx-view-env-face')."
+  (drgnx-view-env--on-frame (drgnx-view-env--frame buffer)
+                            (lambda () (string-pixel-width (propertize (string char) 'face (list '(:box nil) face))
+                                                           buffer))))
 
 (defconst drgnx-view-env--weights
   '((thin . 100) (ultra-light . 200) (extra-light . 200) (light . 300) (semi-light . 350) (demi-light . 350)
@@ -440,12 +462,14 @@ name that is no face, or a terminal, draws in `ui'."
         (list :face face-name :role "ui")
       (with-current-buffer buffer
         (let* ((factor (drgnx-view-env--scale-factor buffer))
-               (mine (drgnx-view-env--font face frame factor))
+               ;; a face with a font of its own (`bold') takes its family from the remapped `default' too
+               (mine (or (drgnx-view-env--drawn-font face buffer window) (drgnx-view-env--font face frame factor)))
                ;; drawn in BUFFER, FACE merges over its remapped `default' (the agent panel's `drgnx-ui-text'), which
                ;; `face-font' does not see: a face that sets only colours draws in the buffer's `default', not the
                ;; frame's.  A role whose face draws a probe as wide (FACE's box left out) is FACE's role.
-               (probe (lambda (f) (with-selected-frame frame
-                                    (string-pixel-width (propertize drgnx-view-env--probe 'face f) buffer))))
+               (probe (lambda (f) (drgnx-view-env--on-frame
+                                   frame (lambda () (string-pixel-width (propertize drgnx-view-env--probe 'face f)
+                                                                        buffer)))))
                (drawn (funcall probe (list '(:box nil) face)))
                ;; the box's ends as drawn (a negative line width is drawn inside the text; a scaled frame scales it)
                (pad (max 0 (/ (- (funcall probe face) drawn) 2.0)))
@@ -509,7 +533,7 @@ several chars), on BUFFER's frame (`drgnx-view-env--frame')."
       (let ((face (intern-soft (nth 2 r))))
         (when (and face (<= 0 (nth 0 r) (nth 1 r) (length s)))
           (add-face-text-property (nth 0 r) (nth 1 r) face nil s))))
-    (with-selected-frame (drgnx-view-env--frame buffer) (string-pixel-width s buffer))))
+    (drgnx-view-env--on-frame (drgnx-view-env--frame buffer) (lambda () (string-pixel-width s buffer)))))
 
 (defun drgnx-view-env--hook (on)
   "Add the global hooks (ON) or remove them."

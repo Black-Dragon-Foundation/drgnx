@@ -5,6 +5,7 @@
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (require 'drgnx-chrome)
+(declare-function drgnx-pixels-border-width "drgnx-pixels")
 
 (defmacro drgnx-chrome-test--with (dir &rest body)
   "BODY with chrome on, one editor window, a temp DIR for files."
@@ -516,11 +517,12 @@ scale re-applies it.  Race-proof pattern D (pure: the scale is stubbed)."
         (drgnx-look--card-frame f)
         (should (eql (frame-parameter f 'right-divider-width) 12))
         (should (eql (frame-parameter f 'bottom-divider-width) 12))
-        (should (eql (frame-parameter f 'internal-border-width) 12)) ; the frame's outer gap
+        ;; the frame's outer gap: a border, given in logical px on Nidhogg (`drgnx-pixels-border-width')
+        (should (eql (frame-parameter f 'internal-border-width) (drgnx-pixels-border-width 12 f)))
         (setq scale 1.25)
         (drgnx-look--card-follow-scale f)
         (should (eql (frame-parameter f 'right-divider-width) (round (* gap 1.25))))
-        (should (eql (frame-parameter f 'internal-border-width) (round (* gap 1.25))))
+        (should (eql (frame-parameter f 'internal-border-width) (drgnx-pixels-border-width (round (* gap 1.25)) f)))
         (drgnx-look--card-restore f)
         (should (eql (frame-parameter f 'internal-border-width) (or border 0)))))))
 
@@ -596,12 +598,14 @@ at once (the density's changed hook).  Race-proof pattern D (the scale is stubbe
               (should (eql (frame-parameter f 'right-divider-width) 12))
               (setq drgnx-look-density 'roomy)
               (run-hooks 'drgnx-look-density-changed-hook)
-              (dolist (p '(right-divider-width bottom-divider-width internal-border-width))
+              (dolist (p '(right-divider-width bottom-divider-width))
                 (should (eql (frame-parameter f p) 16)))
+              (should (eql (frame-parameter f 'internal-border-width) (drgnx-pixels-border-width 16 f)))
               (setq drgnx-look-density 'compact)
               (run-hooks 'drgnx-look-density-changed-hook)
-              (dolist (p '(right-divider-width bottom-divider-width internal-border-width))
-                (should (eql (frame-parameter f p) 8))))
+              (dolist (p '(right-divider-width bottom-divider-width))
+                (should (eql (frame-parameter f p) 8)))
+              (should (eql (frame-parameter f 'internal-border-width) (drgnx-pixels-border-width 8 f))))
           (drgnx-look--islands-off)
           (drgnx-look--card-restore f))))))
 

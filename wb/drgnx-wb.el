@@ -265,7 +265,7 @@ no gap or padding."
 flat button: only its rounded corners show), or with RING (a colour) a 1 px ring in it; rounded where Glitnir draws.
 A ring needs Glitnir: Nidhogg closes a box at a line's end on the tail's last stretch, and the selection puts its face
 on the row's newline too (`drgnx-wb-selection-sync'), so text and tail are one run."
-  (let ((w (- (drgnx-px-line 1))) (glitnir (and (fboundp 'glitnir-active-p) (glitnir-active-p))))
+  (let ((w (drgnx-pixels-box-width (- (drgnx-px-line 1)))) (glitnir (and (fboundp 'glitnir-active-p) (glitnir-active-p))))
     `(:line-width (,w . ,w) ,@(if (and ring glitnir) (list :color ring) '(:style flat-button))
                   ,@(and glitnir (list :corner-radius (drgnx-px drgnx-wb--row-radius))))))
 

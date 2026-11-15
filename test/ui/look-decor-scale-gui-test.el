@@ -19,15 +19,30 @@
   '((1.0 1 2 8) (1.25 1 3 10) (1.3333333333333333 1 3 11) (1.5 1 3 12) (2.0 2 4 16))
   "Per scale: a card's edge, the focus ring's width, a card's radius, in device pixels.")
 
+(defun drgnx-look-decor-scale-ui-test--drawn (face)
+  "The width FACE's box is drawn at in the selected window, in device pixels: half of what it adds to a line's height
+\(a positive width is drawn outside the glyphs, above and below).  Read from the glyph rows, not the face: the shell
+may scale a face's width when it realizes it."
+  (let ((b (get-buffer-create " *look-decor-drawn*")))
+    (with-current-buffer b
+      (erase-buffer)
+      (insert "x\n" (propertize "x" 'face face) "\n")
+      (set-window-buffer (selected-window) b)
+      (redisplay t)
+      (save-excursion
+        (goto-char (point-min))
+        (let ((plain (line-pixel-height)))
+          (forward-line 1)
+          (/ (- (line-pixel-height) plain) 2))))))
+
 (defun drgnx-look-decor-scale-ui-test--check (frame)
-  "The boxes on FRAME are the table's at FRAME's whole scale."
+  "The boxes on FRAME are drawn at the table's widths for FRAME's whole scale, and the radius is the table's."
   (let* ((s (drgnx-pixels-scale frame))
          (want (cdr (seq-find (lambda (r) (< (abs (- (car r) s)) 0.001)) drgnx-look-decor-scale-ui-test--want)))
-         (card (face-attribute 'drgnx-card-single :box frame))
-         (ring (face-attribute 'drgnx-focus-ring :box frame)))
+         (card (face-attribute 'drgnx-card-single :box frame)))
     (should want)
-    (should (equal (plist-get card :line-width) (nth 0 want)))
-    (should (equal (plist-get ring :line-width) (nth 1 want)))
+    (should (equal (list 'card (drgnx-look-decor-scale-ui-test--drawn 'drgnx-card-single)) (list 'card (nth 0 want))))
+    (should (equal (list 'ring (drgnx-look-decor-scale-ui-test--drawn 'drgnx-focus-ring)) (list 'ring (nth 1 want))))
     (when (featurep 'glitnir)
       (should (equal (plist-get card :corner-radius) (nth 2 want))))))
 
@@ -56,7 +71,8 @@ logical boxes come back."
           (should (equal (plist-get (face-attribute 'drgnx-card-single :box f) :line-width) 1)))
       (drgnx-pixels-set-ui-scale f nil)
       (drgnx-decor-scale-off)
-      (dolist (face faces) (face-spec-set face (get face 'face-defface-spec))))))
+      (dolist (face faces) (face-spec-set face (get face 'face-defface-spec)))
+      (when (get-buffer " *look-decor-drawn*") (kill-buffer " *look-decor-drawn*")))))
 
 (provide 'look-decor-scale-gui-test)
 ;;; look-decor-scale-gui-test.el ends here

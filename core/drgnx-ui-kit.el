@@ -156,7 +156,7 @@ a graphical frame as tall as `drgnx-ui-button-height', the text centred in it."
 (defun drgnx-ui-button-focus-box ()
   "The box of a button that has the focus (look.css `.btn.focus'): the theme's `drgnx-focus' ring, 2 px inside, with
 the button's corners where Glitnir rounds them; nil when the theme gives no ring."
-  (let ((ring (face-attribute 'drgnx-focus :box nil t)) (w (- (drgnx-px-line 2))))
+  (let ((ring (face-attribute 'drgnx-focus :box nil t)) (w (drgnx-pixels-box-width (- (drgnx-px-line 2)))))
     (when (stringp (plist-get ring :color))
       `(:line-width (,w . ,w) :color ,(plist-get ring :color)
                     ,@(and (fboundp 'glitnir-active-p) (glitnir-active-p) (list :corner-radius (drgnx-px 6)))))))

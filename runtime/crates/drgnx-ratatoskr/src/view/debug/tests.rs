@@ -575,6 +575,48 @@ fn rows_draw_names_values_chevrons_and_places() {
     assert_eq!(obj.spaces.len(), 3, "two levels and the gap");
 }
 
+/// [D] A value no wider than the ellipsis is drawn whole in a row too narrow for it: cut, it would be the `…`, no
+/// narrower (a narrow Run and Debug pane drew a local's `8` as `…`).
+#[test]
+fn a_value_no_wider_than_the_ellipsis_is_never_cut_to_it() {
+    use super::rows::{Room, rows};
+    use crate::view::explorer::RowLook;
+    let sessions = [session(2, vec![v("n", "8", 0)])];
+    let ls = lines(&Input {
+        sessions: &sessions,
+        selected: None,
+        watches: &[],
+        bps: &Bps::default(),
+        opened: &Opened::default(),
+        prev: &HashMap::new(),
+    })
+    .0;
+    let gui = RowLook {
+        gui: Some((12, 16, 6)),
+        one_root: false,
+    };
+    // every char 8 px, the ellipsis too
+    let mut fonts = drgnx_rows::fit::FontSet::new();
+    fonts.set_role(drgnx_rows::fit::UI, None, 8.0);
+    let row = |width: u32| {
+        let room = Room {
+            width,
+            cell: None,
+            fonts: &fonts,
+        };
+        let (rs, _) = rows(&ls, &gui, &room);
+        rs.into_iter()
+            .find(|r| r.key == "v:s1:Locals/n")
+            .unwrap()
+            .text
+    };
+    // every width, down to one whose value room is under the ellipsis: the name and the whole value
+    for width in (1..=400).rev() {
+        let text = row(width);
+        assert!(text.ends_with("n: 8"), "{width} px: {text:?}");
+    }
+}
+
 /// Filter on typing: only the rows whose name or value contains the text (any case), with the rows above them and
 /// every section's header.
 #[test]

@@ -48,7 +48,7 @@
                                 (mapcar #'window-pixel-edges (window-list root 'nomini)) (window-mode-line-height win)
                                 (frame-scale-factor root) (list (frame-pixel-width root) (frame-pixel-height root))
                                 (list (frame-parameter toast (quote drgnx-toast-placed-h)) (frame-parameter toast (quote internal-border-width)) (frame-pixel-height toast) (frame-parameter toast (quote height)) (frame-parameter toast (quote top)) (window-pixel-height (frame-root-window toast))))))
-            (should (<= (nth 2 e) (- (frame-pixel-width root) (frame-parameter root 'internal-border-width))))
+            (should (<= (nth 2 e) (- (frame-pixel-width root) (frame-internal-border-width root))))
             (should (frame-parameter toast 'no-accept-focus))
             (should (eq (selected-frame) root))))
       (drgnx-notice-toast-delete-all))))

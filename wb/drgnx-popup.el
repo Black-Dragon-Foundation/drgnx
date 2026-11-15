@@ -145,7 +145,7 @@ clears.")
 else plain (no pad, no ring)."
   (let* ((root (or (frame-parent child) child))
          (look (and modal (fboundp 'drgnx-palette-frame--look) (drgnx-palette-frame--look)))
-         (want `((internal-border-width . ,(if modal (drgnx-px 12 root) 0))
+         (want `((internal-border-width . ,(if modal (drgnx-pixels-border-width (drgnx-px 12 root) root) 0))
                  ;; the box's text starts at its padding, as the palette's
                  (left-fringe . ,(and modal 0)) (right-fringe . ,(and modal 0))
                  (child-frame-border-width . ,(if (and modal (fboundp 'drgnx-palette-frame-ring))

@@ -84,10 +84,27 @@ pub fn width_in(m: &dyn Measure, face: Option<&str>, text: &str) -> f32 {
     width(m, &ink.role, text) + 2.0 * ink.pad
 }
 
-/// TEXT drawn in FACE fitted to WIDTH px ([`fit`] in FACE's font, less its box's ends).
+/// TEXT drawn in FACE fitted to WIDTH px ([`fit`] in FACE's font, less its box's ends). A sum that comes within the
+/// slack of the budget, or over it by up to a tenth and the slack, may be off by that much (no shaping or kerning,
+/// hinted advances a fraction of a pixel wide each: a 90-char caption summed 10 to 15 px wider than drawn): the editor
+/// is asked to measure TEXT in FACE, once, and its width decides from then on (a face with a box is left to the row's
+/// fit, as the editor's width includes the box).
 pub fn fit_in(m: &dyn Measure, face: Option<&str>, text: &str, width_px: f32) -> String {
     let ink = ink_of(m, face);
-    fit(m, &ink.role, text, width_px - 2.0 * ink.pad)
+    let width_px = width_px - 2.0 * ink.pad;
+    if ink.pad == 0.0 && m.measured(&ink.role, text).is_none() {
+        let sum = width(m, &ink.role, text);
+        let budget = width_px - SLACK;
+        if sum > budget - SLACK && sum <= budget * 1.1 + SLACK {
+            let runs: Vec<(u32, u32, String)> = face
+                .filter(|f| !f.starts_with("s:"))
+                .map(|f| (0, text.chars().count() as u32, f.to_owned()))
+                .into_iter()
+                .collect();
+            m.measure_ask(&ink.role, text, &runs);
+        }
+    }
+    fit(m, &ink.role, text, width_px)
 }
 
 /// How advances are summed (decided by the measurement against Emacs: docs/develop/hub.md, "Rows: fitting").
@@ -345,13 +362,15 @@ pub(crate) fn advance(m: &dyn Measure, role: &str, c: char) -> f32 {
 }
 
 /// TEXT in ROLE fitted to WIDTH px minus [`SLACK`]: whole when it fits, else cut with an ellipsis between grapheme
-/// clusters.
+/// clusters; whole too when it is no wider than the ellipsis (a cut would draw no narrower).
 pub fn fit(m: &dyn Measure, role: &str, text: &str, width_px: f32) -> String {
     let budget = width_px - SLACK;
-    if width(m, role, text) <= budget {
+    let whole = width(m, role, text);
+    let ellipsis = advance(m, role, ELLIPSIS);
+    if whole <= budget || whole <= ellipsis {
         return text.to_owned();
     }
-    let room = budget - advance(m, role, ELLIPSIS);
+    let room = budget - ellipsis;
     let mut used = 0.0;
     let mut out = String::new();
     for g in text.graphemes(true) {

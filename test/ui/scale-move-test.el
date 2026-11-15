@@ -53,7 +53,10 @@
     (list (floor (+ (/ (* (/ h 10.0) 96.0 s) 72.0) 0.5))
           (funcall px 21) (funcall px 24) (funcall px (drgnx-look-density-value 'gap))
           (and (featurep 'glitnir) (funcall px 8))
-          (drgnx-px-line 2 nil s))))
+          ;; the ring's `:box' width: logical on Nidhogg's shells, which draw it at the display scale, so the
+          ;; `drgnx-px-line' 2 of total scale S over the frame's display scale, half up
+          (let ((ring (drgnx-px-line 2 nil s)) (d (frame-scale-factor frame)))
+            (if (drgnx-pixels-device-p) (max 1 (floor (+ (/ ring d) 0.5 1e-9))) ring)))))
 
 (ert-deftest drgnx-ui-scale/screen-move-keeps-every-size ()
   "Pattern D: the monitor goes 1.25 → 1 → 2 → 1.25 under the frame; at each step the default font, the code line,

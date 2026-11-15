@@ -596,7 +596,9 @@ composer) replace the old pinned-copy checks (Task 8 of the docks plan)."
           (error "The transcript fits the panel's window: draw this scene alone (DRGNX_LOOK_ONLY='^agent-panel-long$'), which gives the mock agent its long transcript"))))
     ;; the three windows' checks (docks plan, Task 8); the header clicks leave the transcript scrolled up a page
     (drgnx-look-scene--try "docks wheel" (drgnx-look-scene--panel-docks-wheel drgnx-look-scene--panel))
-    (drgnx-look-scene--try "header clicks" (drgnx-look-scene--panel-header-clicks drgnx-look-scene--panel))))
+    (drgnx-look-scene--try "header clicks" (drgnx-look-scene--panel-header-clicks drgnx-look-scene--panel))
+    ;; the clicks changed the header's state: the shot shows the rows the hub settles on
+    (drgnx-look-scene--try "settled after the clicks" (drgnx-look-scene--panel-settle drgnx-look-scene--panel))))
 
 ;;;; The panel's three windows (the docks plan, 2026-11-15-agent-panel-docks.md, Task 8): a header window (hub view
 ;;;; `agent-panel-top/SID', fitted, never scrolled), the transcript (`agent-panel/SID', the panel's main buffer) and the
@@ -719,7 +721,11 @@ moves each way, and the header window does not move (edges, start, vscroll)."
                 (error "wheel down (pixel precision %S) did not move the transcript back (start %d, was %d)"
                        precise (window-start w) from)))
             (funcall still "down")))
-      (pixel-scroll-precision-mode (if was 1 -1)))))
+      (pixel-scroll-precision-mode (if was 1 -1))
+      ;; Emacs's behaviour: `pixel-scroll-precision-mode' leaves a pixel vscroll (`window-vscroll', 15 px at s1 in a
+      ;; transcript shown whole from its start), and a later `scroll-down' in that window leaves its start where it
+      ;; was, with no error (the header clicks' check then saw no scroll)
+      (set-window-vscroll w 0 t))))
 
 (defun drgnx-look-scene--header-targets (window &optional panel)
   "The first posn in WINDOW (the header window) over each kind of clickable part: an alist (KIND . POSN), KIND `pin',
@@ -831,6 +837,82 @@ The transcript is left scrolled up: the picture is the scrolled panel."
       (unless (equal (drgnx-look-scene--edges h) header)
         (error "the clicks moved the header window: %S, was %S" (drgnx-look-scene--edges h) header)))))
 
+(defvar drgnx-hub--events)
+(declare-function drgnx-hub--call-on "drgnx-hub-client")
+(declare-function drgnx-view-sja-p "drgnx-view-sja")
+(declare-function drgnx-view-sja-draw-now "drgnx-view-sja")
+
+(defun drgnx-look-scene--hub-caught-up ()
+  "Non-nil once a `ping' on the subscribed connection is answered (3 s at most): the hub handles a connection's lines
+in order, so every line this Emacs sent before it (an env, a measurement, an ack) has been handled, and what the hub
+sent for them came before the answer and has been read."
+  (let ((done nil) (end (+ (float-time) 3)))
+    (when (process-live-p drgnx-hub--events)
+      (drgnx-hub--call-on drgnx-hub--events "ping" nil (lambda (&rest _) (setq done t)))
+      (while (and (not done) (< (float-time) end))
+        (accept-process-output drgnx-hub--events 0.02)))
+    done))
+
+(defvar drgnx-look-scene--asks-open 0
+  "The hub's `view-glyphs' asks this session has seen less its `view/glyphs' answers: the hub refits a row after the
+answer, so a round trip while one is open proves nothing settled.  A plain count, as an answer sent at once goes out
+from the event's handlers before or after the counting one, by their order.")
+
+(defun drgnx-look-scene--ask-seen (event _data)
+  "A `drgnx-hub-event-functions' handler: count a `view-glyphs' ask as open."
+  (when (equal event "view-glyphs") (setq drgnx-look-scene--asks-open (1+ drgnx-look-scene--asks-open))))
+
+(defun drgnx-look-scene--answer-sent (send method params)
+  "Around `drgnx-view-env-send-function' (SEND): a `view/glyphs' METHOD closes an open ask, whenever it is sent."
+  (when (equal method "view/glyphs")
+    (setq drgnx-look-scene--asks-open (1- drgnx-look-scene--asks-open)))
+  (funcall send method params))
+
+;; the whole session: the asks come from the panel's first fit, before any settle
+(add-hook 'drgnx-hub-event-functions #'drgnx-look-scene--ask-seen)
+(defvar drgnx-view-env-send-function)
+(with-eval-after-load 'drgnx-view-env
+  (add-function :around drgnx-view-env-send-function #'drgnx-look-scene--answer-sent))
+
+(defun drgnx-look-scene--hub-round (buffers)
+  "One round trip to the hub (`drgnx-look-scene--hub-caught-up') and what it sent drawn in BUFFERS, Sjá views; non-nil
+when the round trip changed none of their texts and no ask of the hub's is still unanswered
+\(`drgnx-look-scene--asks-open': an answer sent later, on a timer, comes after the ping, and so does its refit),
+`no-answer' when the hub did not answer."
+  (let ((ticks (mapcar #'buffer-chars-modified-tick buffers)))
+    (if (not (drgnx-look-scene--hub-caught-up)) 'no-answer
+      (accept-process-output nil 0.05)
+      (dolist (b buffers) (when (drgnx-view-sja-p b) (drgnx-view-sja-draw-now b)))
+      (redisplay t)
+      (and (<= drgnx-look-scene--asks-open 0)
+           (equal ticks (mapcar #'buffer-chars-modified-tick buffers))))))
+
+(defun drgnx-look-scene--panel-buffers (buffer)
+  "The live buffers of the agent panel BUFFER's windows: the transcript, the header and the composer shown with it."
+  (let ((w (get-buffer-window buffer)))
+    (seq-filter #'buffer-live-p
+                (cons buffer (and w (mapcar (lambda (e) (window-buffer (car e))) (drgnx-look-scene--area-windows w)))))))
+
+(defun drgnx-look-scene--panel-settle (buffer)
+  "Round trips to the hub until one changes none of the agent panel BUFFER's windows' texts: the hub's first fit of a
+row comes before the editor's answers to its asks (the glyph widths), and the refit after them one round trip later.
+An error when the hub does not answer, or when the rows still change after 10 s."
+  (let ((buffers (drgnx-look-scene--panel-buffers buffer)) (end (+ (float-time) 10)) (r nil))
+    (while (and (not (eq r t)) (not (eq r 'no-answer)) (< (float-time) end))
+      (setq r (drgnx-look-scene--hub-round buffers)))
+    (cond ((eq r 'no-answer) (push "agent-panel: the hub did not answer a ping" drgnx-look-scene--errors))
+          ((not r) (push "agent-panel: the panel's rows still changed after 10 s of hub round trips"
+                         drgnx-look-scene--errors)))))
+
+(defun drgnx-look-scene--panel-unsettled (buffer)
+  "An error when one more hub round trip changes the agent panel BUFFER's windows' texts: the shot would show the
+hub's first fit (a chip cut before the editor's glyph widths came), not the rows the hub settles on."
+  (let ((r (drgnx-look-scene--hub-round (drgnx-look-scene--panel-buffers buffer))))
+    (unless (eq r t)
+      (push (if (eq r 'no-answer) "agent-panel: the hub did not answer a ping"
+              "agent-panel: one more hub round trip changed the panel's rows: the shot shows the hub's first fit")
+            drgnx-look-scene--errors))))
+
 (defun drgnx-look-scene-agent-panel ()
   (drgnx-look-scene--theme 'drgnx-dark)
   (drgnx-look-scene--try "panel"
@@ -839,14 +921,17 @@ The transcript is left scrolled up: the picture is the scrolled panel."
         (select-window w)
       ;; an earlier scene put the editor back: the panel opens again where opening it puts it, the right island
       (drgnx-pane-show 'agent-panel :buffer drgnx-look-scene--panel :select t))
+    ;; the rows the hub settles on, not its first fit (the checks and the shot read them)
+    (drgnx-look-scene--panel-settle drgnx-look-scene--panel)
     (drgnx-look-scene--panel-top drgnx-look-scene--panel))
   (drgnx-look-scene--try "three windows" (drgnx-look-scene--panel-three-windows drgnx-look-scene--panel))
+  (drgnx-look-scene--try "settled" (drgnx-look-scene--panel-unsettled drgnx-look-scene--panel))
   (drgnx-look-scene--answer))
 
 (defun drgnx-look-scene--panel-top (buffer)
   "An error unless the header window above BUFFER, the agent panel's transcript, holds the hub's header row (`p:head')
-and the transcript's window starts at the buffer's top or shows its tail: what the panel opened by its command path
-shows first."
+and the transcript's window, its point at the end, shows the end whole on its last line (or the whole transcript at
+its top, when it fits): what the panel opened by its command path shows first, once the header is fitted to its rows."
   (let* ((w (get-buffer-window buffer))
          (h (and w (car (seq-find (lambda (e) (eq (nth 1 e) 'above)) (drgnx-look-scene--area-windows w)))))
          (hb (and h (window-buffer h)))
@@ -859,13 +944,30 @@ shows first."
                     (and state (drgnx-view-env-classes (drgnx-view-patch-view state))))
             drgnx-look-scene--errors))
     (when w
-      ;; Emacs keeps the transcript's end in view (`scroll-conservatively'): its end at the bottom of the window, and,
-      ;; when the transcript fits, its top at the top
-      (let ((at (with-current-buffer buffer (pos-visible-in-window-p (point-max) w t)))
-            (top (= (window-start w) (with-current-buffer buffer (point-min)))))
-        (unless (or top (and at (> (cadr at) (- (window-body-height w t) (* 4 (frame-char-height))))))
-          (push (format "agent-panel: its end is not at the bottom of its window (start %d, end at %S)"
-                        (window-start w) at)
+      ;; the header's fit after its rows changed the transcript's height: the windows as they are drawn now
+      (redisplay t)
+      ;; the first rows leave point at the end (`drgnx-view-sja-tail'); Emacs scrolls by whole rows, so under the end's
+      ;; row (its bottom as redisplay drew it, a card or image included) there is less
+      ;; space than the screen line before the start would take.  A start at the top passes only when the end is shown
+      ;; whole, that is when the transcript fits
+      (let* ((end (with-current-buffer buffer (point-max)))
+             (at (pos-visible-in-window-p end w t))
+             (body (window-body-height w t)) (start (window-start w))
+             ;; the bottom of the screen line redisplay drew at the end's y (its drawn height)
+             (bottom (and at (let ((y (cadr at)) (n 0) r b)
+                               (while (and (not b) (setq r (window-line-height n w)))
+                                 (when (and (<= (nth 2 r) y) (< y (+ (nth 2 r) (car r)))) (setq b (+ (nth 2 r) (car r))))
+                                 (setq n (1+ n)))
+                               (or b (+ y (window-default-line-height w))))))
+             (above (and at (> start (with-current-buffer buffer (point-min)))
+                         (let ((prev (with-selected-window w (save-excursion (goto-char start) (vertical-motion -1) (point)))))
+                           (if (< prev start) (cdr (window-text-pixel-size w prev start)) 0))))
+             (why (cond ((/= (window-point w) end) (format "its point %d is not its end %d" (window-point w) end))
+                        ((or (not at) (nth 2 at)) "its end is not shown whole")
+                        ((and above (>= (- body bottom) above))
+                         (format "its end is not at the bottom of its window (a row of %d px more would fit)" above)))))
+        (when why
+          (push (format "agent-panel: %s (start %d, end at %S, its row's bottom %d, body %d)" why start at bottom body)
                 drgnx-look-scene--errors))))))
 
 (defun drgnx-look-scene--palette-commands ()
@@ -2184,17 +2286,6 @@ roles the hub measured it in.  The number of rows measured is in `drgnx-look-sce
     (setq drgnx-look-scene--rows-measured rows)
     (nreverse wide)))
 
-(defun drgnx-look-scene--hub-caught-up ()
-  "Non-nil once a `ping' on the subscribed connection is answered (3 s at most): the hub handles a connection's lines
-in order, so every line this Emacs sent before it (an env, a measurement, an ack) has been handled, and what the hub
-sent for them came before the answer and has been read."
-  (let ((done nil) (end (+ (float-time) 3)))
-    (when (process-live-p drgnx-hub--events)
-      (drgnx-hub--call-on drgnx-hub--events "ping" nil (lambda (&rest _) (setq done t)))
-      (while (and (not done) (< (float-time) end))
-        (accept-process-output drgnx-hub--events 0.02)))
-    done))
-
 (defun drgnx-look-scene--rows-settle (buffer how)
   "Wait for BUFFER's rows after its window's width changed (HOW names the width): its env goes out now (not after the
 idle debounce), then a round trip to the hub (`drgnx-look-scene--hub-caught-up') and the patches it sent drawn, again
@@ -2246,20 +2337,56 @@ sizes ignored (a dock's side window keeps its width otherwise); the pixels it mo
 (defconst drgnx-look-scene-widths-slack 10
   "The px the hub keeps short of a segment's end (`drgnx_rows::fit::SLACK').")
 
+(defconst drgnx-look-scene-widths-gap 10
+  "The logical px a view keeps between a cut text and a text after it on its row (the Flow's column gap, the Run and
+Debug rows' two gaps before a frame's place).")
+
+(defun drgnx-look-scene--blank-p (q)
+  "Non-nil when the char at Q is a blank: a space, a tab or a stop's space."
+  (or (memq (char-after q) '(?\s ?\t)) (eq (car-safe (get-text-property q 'display)) 'space)))
+
+(defun drgnx-look-scene--filled-p (q frame)
+  "Non-nil when the char at Q is drawn in a face with a box or a background of its own on FRAME: part of a block (a
+card, a chip), whose width its row's layout sets, not the text's."
+  (let ((faces (get-text-property q 'face)) (bg (face-background 'default frame)))
+    (setq faces (if (or (not (listp faces)) (keywordp (car faces))) (list faces) faces))
+    (seq-some (lambda (f)
+                (if (and (consp f) (keywordp (car f)))
+                    (or (plist-get f :box) (plist-get f :background))
+                  (and f (facep f)
+                       (or (not (memq (face-attribute f :box frame t) '(nil unspecified)))
+                           (let ((b (face-attribute f :background frame t)))
+                             (and (stringp b) (not (equal b bg))))))))
+              faces)))
+
 (defun drgnx-look-scene--free-after (window bol pos eol)
   "The px free after POS on its row BOL..EOL in WINDOW: the blanks and stops' spaces from POS on, and, when they reach
-EOL, the body's px past the row's end."
-  (let ((q pos))
-    (while (and (< q eol) (or (memq (char-after q) '(?\s ?\t))
-                              (eq (car-safe (get-text-property q 'display)) 'space)))
-      (setq q (1+ q)))
-    (+ (if (> q pos) (car (window-text-pixel-size window pos q)) 0)
-       (if (< q eol) 0 (max 0 (- (window-body-width window t) (car (window-text-pixel-size window bol eol))))))))
+EOL, the body's px past the row's end.  A blank in a block's face (`drgnx-look-scene--filled-p': a card's fill or
+edge) ends the count: when the row ends in that block, its end pad less the row's start pad in the same face (the
+block's own padding, kept on both sides) counts, and the px past the block are not the text's."
+  (let ((q pos) (frame (window-frame window)) (block nil))
+    (while (and (< q eol) (drgnx-look-scene--blank-p q) (not block))
+      (if (drgnx-look-scene--filled-p q frame) (setq block q) (setq q (1+ q))))
+    (let ((free (if (> q pos) (car (window-text-pixel-size window pos q)) 0)))
+      (cond
+       ((not block)
+        (+ free (if (< q eol) 0
+                  (max 0 (- (window-body-width window t) (car (window-text-pixel-size window bol eol)))))))
+       (t
+        (let ((e block) (face (get-text-property block 'face)) (s bol))
+          (while (and (< e eol) (drgnx-look-scene--blank-p e) (equal (get-text-property e 'face) face))
+            (setq e (1+ e)))
+          (while (and (< s pos) (drgnx-look-scene--blank-p s) (equal (get-text-property s 'face) face))
+            (setq s (1+ s)))
+          (if (< e eol) free
+            (+ free (max 0 (- (car (window-text-pixel-size window block eol))
+                              (if (> s bol) (car (window-text-pixel-size window bol s)) 0)))))))))))
 
 (defun drgnx-look-scene--cut-rows (window how)
   "Each cut in the hub's rows in WINDOW's buffer: (KEY HOW BODY-PX PREFIX AFTER FREE ELLIPSIS-PX ROW-PARTS FONTS),
 PREFIX the row's text before the `…', AFTER its text after it, FREE the px free after it
-\(`drgnx-look-scene--free-after'), FONTS the roles the hub measured the row in."
+\(`drgnx-look-scene--free-after', less `drgnx-look-scene-widths-gap' when a text follows), FONTS the roles
+the hub measured the row in."
   (let ((out nil) (n 0))
     (with-current-buffer (window-buffer window)
       (save-excursion
@@ -2275,8 +2402,17 @@ PREFIX the row's text before the `…', AFTER its text after it, FREE the px fre
                   (push (list key how (window-body-width window t)
                               (buffer-substring-no-properties bol (1- (point)))
                               (buffer-substring-no-properties (point) eol)
-                              (drgnx-look-scene--free-after window bol (point) eol)
-                              (car (window-text-pixel-size window (1- (point)) (point)))
+                              ;; a text after the cut on the row keeps the hub's gap from it (a column's, a
+                              ;; place's at the right edge): not the cut text's room
+                              (let ((free (drgnx-look-scene--free-after window bol (point) eol)))
+                                (if (string-blank-p (buffer-substring-no-properties (point) eol)) free
+                                  (max 0 (- free (drgnx-px drgnx-look-scene-widths-gap (window-frame window))))))
+                              ;; with its faces, as the cut text is measured (`drgnx-look-scene--over-cut'):
+                              ;; `window-text-pixel-size' of a char past the body's edge gives the whole line's
+                              (string-pixel-width (let ((e (buffer-substring (1- (point)) (point))))
+                                                    (remove-text-properties 0 1 '(read-only nil front-sticky nil) e)
+                                                    e)
+                                                  (current-buffer))
                               (drgnx-look-scene--row-parts window bol eol)
                               (ignore-errors (plist-get (gethash key (drgnx-view-patch-rows drgnx-view-patch)) :fonts)))
                         out))))
@@ -2314,7 +2450,11 @@ Nil when the row changed otherwise, or is cut there at that width too.  Else CUT
                       (string-search (substring next 0 (min 4 (length next))) (substring-no-properties rest))))
                 (gone (string-trim-right (substring rest 0 to)))
                 ((not (string-empty-p gone)))
-                (px (string-pixel-width gone buffer))
+                ;; its faces kept, not the view's `read-only' (`string-pixel-width' inserts it in a work buffer)
+                (px (string-pixel-width (let ((s (copy-sequence gone)))
+                                          (remove-text-properties 0 (length s) '(read-only nil front-sticky nil) s)
+                                          s)
+                                        buffer))
                 ((<= (+ (- px ell) drgnx-look-scene-widths-slack) (1- free))))
       (append cut (list :cut-off (substring-no-properties gone) :cut-off-px px)))))
 
