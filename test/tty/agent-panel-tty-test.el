@@ -325,4 +325,88 @@ point on the panel's own state, and it stays pinned through a command in the twi
         (drgnx-ui-stop (plist-get gui :name))
         (delete-directory root t)))))
 
+(ert-deftest drgnx-tty-agent-panel/the-pin-key-in-the-terminal-twin-stays-pinned ()
+  "In an `emacsclient -t' frame beside a graphical frame, the pin key pressed in the twin transcript's window (a real
+command, through the terminal) pins the step at point on the panel, and the twin's hand-back after the command does
+not undo it: it is still pinned after one more command."
+  (skip-unless (executable-find "mutter"))
+  (let ((bin (getenv "DRGNX_RATATOSKR_BIN")))
+    (skip-unless (and bin (file-executable-p bin)))
+    (let* ((root (make-temp-file "/tmp/dgap" t))
+           (process-environment (cons (concat "DRGNX_UI_STATE=" root) process-environment))
+           (gui (drgnx-ui-start "drgnx" nil 60 t)) (tty nil)
+           (gui-frame '(seq-find (lambda (f) (and (display-graphic-p f) (not (frame-parent f)))) (frame-list)))
+           (tty-frame '(seq-find (lambda (f) (and (not (display-graphic-p f)) (not (frame-parent f))
+                                                  (frame-parameter f 'client)))
+                                 (frame-list))))
+      (unwind-protect
+          (progn
+            (should (eql 0 (plist-get (drgnx-ui-new-frame gui) :exit)))
+            (setq tty (drgnx-tty-session-start
+                       :size "120x40"
+                       :command (format "%s -a false -t -s %s; echo \"[emacsclient exited $?]\"; sh"
+                                        (drgnx-ui--emacsclient) (shell-quote-argument (plist-get gui :socket)))))
+            (drgnx-tty-session-wait gui `(and ,tty-frame t) 30)
+            (should (drgnx-tty-session-eval gui `(with-selected-frame ,gui-frame ,drgnx-tty-agent-panel-test--helpers)))
+            (drgnx-tty-session-eval
+             gui `(with-selected-frame ,gui-frame
+                    (load (expand-file-name "test/fixtures/panel-replay-fixture" drgnx-dir) nil t)
+                    (setq drgnx-panel-replay-prefix 3)
+                    (condition-case e (setq drgnx-tty-ap--panel (drgnx-panel-replay-up ,bin))
+                      (error (setq drgnx-tty-ap--err (format "%S" e))))
+                    t)
+             180)
+            (should-not (drgnx-tty-session-eval gui 'drgnx-tty-ap--err))
+            (drgnx-tty-session-eval
+             gui `(with-selected-frame ,tty-frame
+                    (drgnx-agent-panel-open (buffer-local-value 'drgnx-agent-panel--session drgnx-tty-ap--panel))
+                    (drgnx-view-env-update (drgnx-view-patch-view (buffer-local-value 'drgnx-view-patch drgnx-tty-ap--panel)))
+                    t))
+            (drgnx-tty-session-wait gui `(drgnx-tty-ap--ready ,gui-frame) 60)
+            (drgnx-tty-session-wait gui `(drgnx-tty-ap--ready ,tty-frame) 60)
+            ;; in the terminal frame: the twin transcript's window selected, its point on its second step; the panel
+            ;; holds its own pins (as after a pin and an unpin in the graphical frame)
+            (let* ((key-desc (drgnx-tty-session-eval
+                              gui '(let ((k (where-is-internal 'drgnx-agent-panel-pin (list drgnx-agent-panel-mode-map) t)))
+                                     (and k (key-description k)))))
+                   (key (drgnx-tty-session-eval
+                         gui `(with-selected-frame ,tty-frame
+                                (let* ((tw (get-buffer-window (plist-get (nth 1 (drgnx-tty-ap--area ,tty-frame)) :buffer)
+                                                              ,tty-frame))
+                                       (twin (window-buffer tw)) (pos nil) (seen nil))
+                                  (unless (eq twin drgnx-tty-ap--panel)
+                                    (with-current-buffer twin
+                                      (setq pos (point-min))
+                                      (while (and pos (< pos (point-max)) (< (length seen) 2))
+                                        (let ((e (get-text-property pos 'drgnx-agent-panel-entry)))
+                                          (when (and e (not (memq e seen))) (push e seen)))
+                                        (when (< (length seen) 2)
+                                          (setq pos (next-single-property-change pos 'drgnx-agent-panel-entry nil
+                                                                                 (point-max))))))
+                                    (when (= 2 (length seen))
+                                      (with-current-buffer drgnx-tty-ap--panel (setq drgnx-agent-panel--pins nil))
+                                      (select-window tw)
+                                      (set-window-point tw pos)
+                                      (list :e (car seen)))))))))
+              (should key-desc)
+              (should key)
+              (drgnx-tty-session-key tty key-desc 'legacy)
+              (drgnx-tty-session-wait
+               gui `(member ',key (mapcar #'car (buffer-local-value 'drgnx-agent-panel--pins drgnx-tty-ap--panel))) 10)
+              ;; one more command in the twin: the pin stays the panel's
+              (drgnx-tty-session-key tty "C-l" 'legacy)
+              (drgnx-tty-session-wait
+               gui `(let ((twin (get-buffer (plist-get (nth 1 (drgnx-tty-ap--area ,tty-frame)) :buffer))))
+                      (member ',key (mapcar #'car (buffer-local-value 'drgnx-agent-panel--pins twin))))
+               10)
+              (should (drgnx-tty-session-eval
+                       gui `(and (member ',key (mapcar #'car (buffer-local-value 'drgnx-agent-panel--pins
+                                                                                 drgnx-tty-ap--panel)))
+                                 t)))))
+        (ignore-errors (drgnx-tty-session-eval gui '(progn (drgnx-panel-replay-down) t) 30))
+        (when tty (drgnx-tty-session-stop tty))
+        (drgnx-ui-stop (plist-get gui :name))
+        (delete-directory root t)))))
+
+
 ;;; agent-panel-tty-test.el ends here

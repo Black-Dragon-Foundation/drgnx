@@ -168,14 +168,20 @@ files of its folder (looked through only then)."
   "`post-command-hook' of a companion: what the command changed of the state goes back to the panel (only that: a
 snapshot the panel took meanwhile is not overwritten by the older copy)."
   (when (buffer-live-p drgnx-agent-companion--main)
-    (let (changed)
-      (dolist (c (drgnx-agent-panel--companion-state))
-        (unless (let ((was (assq (car c) drgnx-agent-companion--taken))) (and was (eq (cdr was) (cdr c))))
-          (push c changed)))
-      (setq drgnx-agent-companion--taken (drgnx-agent-panel--companion-state))
-      (when changed
-        (with-current-buffer drgnx-agent-companion--main
-          (dolist (c changed) (set (make-local-variable (car c)) (cdr c))))))))
+    (drgnx-agent-panel--give-changed drgnx-agent-companion--main)))
+
+(defun drgnx-agent-panel--give-changed (main)
+  "Give MAIN, the panel's buffer, the current buffer's state the command changed since it was taken
+\(`drgnx-agent-companion--taken'): only that, so a value the command set on MAIN itself, or a snapshot MAIN took
+meanwhile, is not overwritten by the older copy.  A companion's and a display-class twin's hand-back."
+  (let (changed)
+    (dolist (c (drgnx-agent-panel--companion-state))
+      (unless (let ((was (assq (car c) drgnx-agent-companion--taken))) (and was (eq (cdr was) (cdr c))))
+        (push c changed)))
+    (setq drgnx-agent-companion--taken (drgnx-agent-panel--companion-state))
+    (when changed
+      (with-current-buffer main
+        (dolist (c changed) (set (make-local-variable (car c)) (cdr c)))))))
 
 (defun drgnx-agent-panel--companion-sync (main)
   "Make the current buffer a companion of MAIN, a panel's buffer: it works on MAIN's state, copied in before each

@@ -22,8 +22,9 @@ back where you left it. Opening another session's panel swaps all three. Closing
 and composer with it.
 
 - **Header:** the agent's icon and name, then what it is doing: "Claude · running 6 min", "held by you" (you paused
-  it) or "Pair · editing your checkout"; on the right the **watch · review · debug** lens, the preset in force raised, then a pin button (pins the card at
-  point; a click leaves point where it is) and **⋯**, a menu of Fork the Chat, Compact the Context, Switch the Model,
+  it) or "Pair · editing your checkout"; on the right the **watch · review · debug** lens, the preset in force raised, then a pin button (pins the step or card at
+  the transcript's point, or its last step while the transcript follows its end; with no transcript of this chat under
+  the header it says so; a click leaves point where it is) and **⋯**, a menu of Fork the Chat, Compact the Context, Switch the Model,
   Switch the Mode, List the Edits and Stop the Agent.
 - **Chips:** model, context ring, cost, mode, sandbox, MCP servers, files edited, checkpoints. A chip appears only when
   the hub reports it; none is made up.

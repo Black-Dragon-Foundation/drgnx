@@ -252,8 +252,10 @@ divider (#9f9f9f stripes): the margin, the dock's cut corner and the editor's ar
   "With two editor groups the selected one's card ring is the accent, the other's and the dock's the border blend;
 with one editor group its ring is the blend, the hairline every card has (tiling.html, window-dark.html:
 `drgnx-look--card-tiled-p').  ui/look runs: the rings follow the selection and the split through the store's
-`selected-changed' and `windows-changed', nothing applied by hand.  A ring pixel just outside the card's left edge,
-halfway down.  The store runs (`drgnx-state-mode', as the workbench has it).  Pattern D (read after
+`selected-changed' and `windows-changed', nothing applied by hand.  A ring pixel halfway down, just outside the card
+on the side that faces a divider: an editor's left (the divider before it), the dock's right (its own divider, inside
+its window's edges).  Glitnir draws no ring over the frame's edge, so the dock's left would read the gap whatever its
+ring.  The store runs (`drgnx-state-mode', as the workbench has it).  Pattern D (read after
 `drgnx-test-wait-presented')."
   (skip-unless (drgnx-uitest-glitnir-p))
   (let ((state-was (bound-and-true-p drgnx-state-mode)))
@@ -263,14 +265,18 @@ halfway down.  The store runs (`drgnx-state-mode', as the workbench has it).  Pa
           (drgnx-card-panels-ui-test--with-explorer
             (let* ((dock (car (drgnx-wb--dock-windows))) (editor (drgnx-card-panels-ui-test--editor))
                    (ring-pixel (lambda (w)
-                                 (let ((r (drgnx-card-panels-ui-test--rect w)))
-                                   (drgnx-uitest-pixel (drgnx-uitest-snapshot) (1- (nth 0 r)) (/ (+ (nth 1 r) (nth 3 r)) 2)))))
+                                 (let* ((r (drgnx-card-panels-ui-test--rect w)) (y (/ (+ (nth 1 r) (nth 3 r)) 2))
+                                        (div (round (* (drgnx-uitest-device-scale (window-frame w))
+                                                       (frame-parameter (window-frame w) 'right-divider-width)))))
+                                   (drgnx-uitest-pixel (drgnx-uitest-snapshot)
+                                                       (if (eq w dock) (- (nth 2 r) div) (1- (nth 0 r))) y))))
                    (accent (face-foreground 'drgnx-accent nil t))
-                   (blend (drgnx-color-over (face-foreground 'drgnx-border nil t)
-                                            (face-background 'drgnx-surface-gap nil t) 0.6))
+                   (gap (face-background 'drgnx-surface-gap nil t))
+                   (blend (drgnx-color-over (face-foreground 'drgnx-border nil t) gap 0.6))
                    (other nil))
-              ;; the premise: the accent and the blend are told apart at this tolerance
+              ;; the premises: the accent, the blend and the gap (no ring) are told apart at this tolerance
               (should-not (drgnx-card-panels-ui-test--near-p (drgnx-card-panels-ui-test--rgb accent) blend))
+              (should-not (drgnx-card-panels-ui-test--near-p (drgnx-card-panels-ui-test--rgb gap) blend))
               ;; one editor group: selected, and ringed in the blend, the hairline (not the accent)
               (select-window editor)
               (drgnx-test-wait-presented)

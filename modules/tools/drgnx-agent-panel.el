@@ -136,6 +136,9 @@ Set with `setopt' or Customize, open panels draw again at once."
 (declare-function drgnx-agent-panel-huddle--event "drgnx-agent-panel-huddle")
 (declare-function drgnx-agent-panel-composer-setup "drgnx-agent-panel-composer")
 (declare-function drgnx-agent-panel-composer-redraw "drgnx-agent-panel-composer")
+(declare-function drgnx-agent-panel--companion-state "drgnx-agent-panel-composer")
+(declare-function drgnx-agent-panel--give-changed "drgnx-agent-panel-composer")
+(defvar drgnx-agent-companion--taken)
 
 (declare-function drgnx-agent-panel-cards-setup "drgnx-agent-panel-cards")
 
@@ -256,16 +259,23 @@ while a window shows it, and it says it waits for the hub until the first rows a
   "In a panel's twin: the panel's buffer, whose state it shows; else nil."
   (and drgnx-view-patch-twin-of (buffer-live-p drgnx-view-patch-twin-of) drgnx-view-patch-twin-of))
 
+(defun drgnx-agent-panel--twin-take ()
+  "`pre-command-hook' of a twin, after the view's copy-in (`drgnx-view-env--twin-sync'): the state as taken, so the
+hand-back gives only what the command changed."
+  (setq drgnx-agent-companion--taken (drgnx-agent-panel--companion-state)))
+
 (defun drgnx-agent-panel--twin-give ()
-  "`post-command-hook' of a twin: what the command changed of the panel's state goes back to the panel."
+  "`post-command-hook' of a twin: what the command changed of the panel's state goes back to the panel (only that: a
+command that set the panel itself, as a pin does, is not undone by the twin's older copy)."
   (when-let* ((from (drgnx-agent-panel--twin-from)))
-    (let ((twin (current-buffer)))
-      (with-current-buffer from (drgnx-view-env--twin-copy twin '("drgnx-agent-panel-"))))))
+    (drgnx-agent-panel--give-changed from)))
 
 (defun drgnx-agent-panel--twin-setup ()
   "In a new twin: killing it leaves the session's entries coming to the panel, and its commands give the panel's state
 back."
   (remove-hook 'kill-buffer-hook #'drgnx-agent-panel--killed t)
+  (drgnx-agent-panel--twin-take)
+  (add-hook 'pre-command-hook #'drgnx-agent-panel--twin-take 90 t)
   (add-hook 'post-command-hook #'drgnx-agent-panel--twin-give nil t))
 
 (defun drgnx-agent-panel--twin (class)

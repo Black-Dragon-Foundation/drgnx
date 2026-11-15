@@ -151,5 +151,19 @@ user error and pins nothing: not the step at the point of whatever window is sel
           (drgnx-agent-panel--pin-from hw))
         (should (equal '((:e 1)) (mapcar #'car (buffer-local-value 'drgnx-agent-panel--pins buf))))))))
 
+(ert-deftest drgnx-agent-panel/the-headers-pin-at-the-end-pins-the-last-step ()
+  "A transcript that follows its end keeps its window's point after its last row: the header's pin there pins the last
+step, not a user error about a point the user never placed."
+  (drgnx-agent-panel-pins-test--with
+    (drgnx-agent-panel-pins-test--steps buf)
+    (set-window-buffer (selected-window) buf)
+    (let ((tw (selected-window)))
+      (set-window-point tw (with-current-buffer buf (point-max)))
+      (drgnx-agent-panel-pins-test--header (hw _h)
+        (select-window hw)
+        (cl-letf (((symbol-function 'drgnx-wb-area-window) (lambda (&rest _) tw)))
+          (drgnx-agent-panel--pin-from hw))
+        (should (equal '((:e 1)) (mapcar #'car (buffer-local-value 'drgnx-agent-panel--pins buf))))))))
+
 (provide 'agent-panel-pins-test)
 ;;; agent-panel-pins-test.el ends here

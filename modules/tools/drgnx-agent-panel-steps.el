@@ -69,8 +69,8 @@
 (defun drgnx-agent-panel--pin-from (window)
   "The pin button clicked in WINDOW: pin the step or card at the transcript's point.  In a companion (the header
 window above the transcript) the transcript is its area's main window, whose point and buffer (the panel or its twin
-of the frame's display class) the pin reads; the pin itself goes to the panel (`drgnx-agent-panel-pin').  No
-transcript window, or one of another chat, is a user error."
+of the frame's display class) the pin reads, the last step when that point is at the transcript's end; the pin itself
+goes to the panel (`drgnx-agent-panel-pin').  No transcript window, or one of another chat, is a user error."
   (let* ((main (drgnx-agent-panel--main-of (window-buffer window)))
          (tw (if-let* (((window-parameter window 'drgnx-area-part)) (area (window-parameter window 'drgnx-role)))
                  (drgnx-wb-area-window area (window-frame window))
@@ -80,6 +80,10 @@ transcript window, or one of another chat, is a user error."
     (with-current-buffer (window-buffer tw)
       (save-excursion
         (goto-char (window-point tw))
+        ;; a transcript that follows its end keeps its point after its last row: the pin is the last step's
+        (when (eobp)
+          (while (and (not (bobp)) (not (get-text-property (pos-bol) 'drgnx-agent-panel-entry)))
+            (forward-line -1)))
         (drgnx-ui-kit-run 'agents-panel-pin)))))
 
 (defun drgnx-agent-panel--prop-at (event prop)
