@@ -2390,7 +2390,11 @@ Nil when the row changed otherwise, or is cut there at that width too.  Else CUT
                       (string-search (substring next 0 (min 4 (length next))) (substring-no-properties rest))))
                 (gone (string-trim-right (substring rest 0 to)))
                 ((not (string-empty-p gone)))
-                (px (string-pixel-width gone buffer))
+                ;; its faces kept, not the view's `read-only' (`string-pixel-width' inserts it in a work buffer)
+                (px (string-pixel-width (let ((s (copy-sequence gone)))
+                                          (remove-text-properties 0 (length s) '(read-only nil front-sticky nil) s)
+                                          s)
+                                        buffer))
                 ((<= (+ (- px ell) drgnx-look-scene-widths-slack) (1- free))))
       (append cut (list :cut-off (substring-no-properties gone) :cut-off-px px)))))
 
