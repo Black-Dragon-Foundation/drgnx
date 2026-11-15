@@ -223,6 +223,57 @@ command of yours, it is the package's all the same.  Its global write lands in `
      (should (eq (keymap-lookup (current-global-map) "C-o") #'ignore))
      (should (eq (keymap-lookup global-map "C-o") #'open-line)))))
 
+(defun drgnx-keys-test--user-file (name text)
+  "A Lisp file NAME of yours (in your config dir) holding TEXT; its name."
+  (let ((f (expand-file-name name (drgnx-user-dir))))
+    (make-directory (file-name-directory f) t)
+    (with-temp-file f (insert ";;; -*- lexical-binding: t -*-\n" text))
+    f))
+
+(ert-deftest drgnx-keys/yours-a-file-of-yours-loaded-later-is-yours ()
+  "A Lisp file of yours is yours whatever loads it (M-x load-file, a timer), not only at startup; the key records
+the file."
+  (drgnx-keys-test--live
+   (drgnx-keys-use '((vscode app editing window)))
+   (let ((f (drgnx-keys-test--user-file "kx-later.el" "(keymap-global-set \"C-o\" #'ignore)\n")))
+     (let ((this-command nil)) (load f nil t t))
+     (should (eq (keymap-lookup (current-global-map) "C-o") #'ignore))
+     (should (eq (keymap-lookup global-map "C-o") #'open-line))
+     (should (equal (cdr (gethash "C-o" drgnx-keys--yours)) (file-name-sans-extension (file-truename f)))))))
+
+(ert-deftest drgnx-keys/yours-a-reload-forgets-only-that-files-keys ()
+  "Loading a file of yours again forgets the keys it bound last time (one it no longer binds is the profile's again);
+a key you bound by command stays."
+  (drgnx-keys-test--live
+   (drgnx-keys-use '((vscode app editing window)))
+   (let ((f (drgnx-keys-test--user-file "kx-reload.el" "(keymap-global-set \"C-o\" #'ignore)\n"))
+         (load (lambda (f) (let ((this-command nil)) (drgnx-settings-prov--call-with-load f (lambda () (load f nil t t)))))))
+     (funcall load f)
+     (drgnx-keys-test--as-you (keymap-global-set "C-c y" #'ignore))
+     (should (eq (keymap-lookup (current-global-map) "C-o") #'ignore))
+     (drgnx-keys-test--user-file "kx-reload.el" "(keymap-global-set \"C-c x\" #'ignore)\n")
+     (funcall load f)
+     (should (eq (keymap-lookup (current-global-map) "C-o") #'find-file))
+     (should (eq (keymap-lookup (current-global-map) "C-c x") #'ignore))
+     (should (eq (keymap-lookup (current-global-map) "C-c y") #'ignore))
+     (should-not (gethash "C-o" drgnx-keys--yours)))))
+
+(ert-deftest drgnx-keys/yours-a-timer-in-a-commands-wait-is-not-yours ()
+  "A timer that runs inside a command's wait (`sit-for') is not you: its global write is a package's."
+  (drgnx-keys-test--live
+   (drgnx-keys-use '((vscode app editing window)))
+   (unwind-protect
+       (let ((tm (timer-create)))
+         (timer-set-time tm (time-add nil 100))
+         (timer-set-function tm (lambda () (keymap-global-set "C-o" #'ignore)))
+         ;; as `sit-for' would run it, a command current; the handler runs only a queued timer, so queue it in a
+         ;; `timer-list' of its own (nothing real is scheduled)
+         (let ((timer-list (list tm))) (drgnx-keys-test--as-you (timer-event-handler tm)))
+         (should (eq (keymap-lookup global-map "C-o") #'ignore))
+         (should (eq (keymap-lookup (current-global-map) "C-o") #'find-file))
+         (should-not (gethash "C-o" drgnx-keys--yours)))
+     (let ((this-command nil)) (keymap-set global-map "C-o" #'open-line)))))
+
 (ert-deftest drgnx-keys/a-binding-changed-by-someone-else-is-kept ()
   (drgnx-keys-test--live
    (drgnx-keys-use '((vscode app editing window)))

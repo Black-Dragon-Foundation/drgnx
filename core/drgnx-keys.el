@@ -653,8 +653,10 @@ profile switches.  A nil here (you unbound a key) shadows the profile's key and 
   "The global map drgnx installs: your keys, then the profile's, then `global-map'.")
 
 (defvar drgnx-keys--yours (make-hash-table :test #'equal)
-  "Your global keys: key description → (DEF . SOURCE), SOURCE `lisp' (a Lisp file of yours) or `command' (a keyboard
-command, M-:, emacsclient --eval).  DEF nil: you unbound the key.")
+  "Your global keys: key description → (DEF . SOURCE), SOURCE the Lisp file of yours that bound it (its name without
+the extension: .el, .elc and .eln are one file; an after-load body counts as the file that registered it) or
+`command' (a keyboard command, M-:, emacsclient --eval).  DEF nil: you unbound the key.  A file's entries go when it
+loads again (`drgnx-keys--forget-file'); a command's stay.")
 
 (defvar drgnx-keys--profile-keys nil "The profile's global keys of the last apply: ((KEY . DEF) …), KEY a description.")
 
@@ -665,8 +667,11 @@ of your map (`user'), and the three maps themselves, PREFIX the key vector that 
 (defvar drgnx-keys--after-load nil
   "Non-nil while a file's after-load bodies run (`do-after-load-evaluation').  `load' has unbound `load-file-name' by
 then, so the file rule cannot tell them apart: only a body you registered is yours (`drgnx-keys--yours-body').")
-(defvar drgnx-keys--yours-body nil "Non-nil while an after-load body you registered runs (`drgnx-keys--after-load-yours').")
+(defvar drgnx-keys--yours-body nil
+  "While an after-load body you registered runs (`drgnx-keys--after-load-yours'): the file that registered it, or t.")
 (defvar drgnx-keys--server-eval nil "Non-nil while the server evaluates an emacsclient --eval.")
+(defvar drgnx-keys--in-timer nil
+  "Non-nil while a timer runs (`drgnx-keys--timer-scope'): a timer is never you, even inside a command's wait.")
 
 (defun drgnx-keys-redirect-available-p ()
   "Non-nil when this Emacs has Nidhogg's define-key redirect, which tells your bindings from packages'."
@@ -697,17 +702,22 @@ then, so the file rule cannot tell them apart: only a body you registered is you
   (puthash drgnx-keys--global-map '(composed . []) drgnx-keys--paths))
 
 (defun drgnx-keys--yours-p ()
-  "Whether a write into the global map now is yours: from a Lisp file of yours while it loads, an after-load body
-you registered (not a file it loads in turn), emacsclient --eval, or a keyboard command (no file loading, no
-after-load body running)."
+  "Whether a write into the global map now is yours: from a Lisp file of yours while it loads (whatever loads it:
+startup, M-x load-file), an after-load body you registered (not a file it loads in turn), emacsclient --eval, or a
+keyboard command (no file loading, no after-load body, no timer running).  A process filter run while a command
+waits counts as the command (Emacs does not show Lisp that a filter runs)."
   (cond (load-file-name
-         (and (bound-and-true-p drgnx-settings-prov--loading)
-              (fboundp 'drgnx-settings-prov--user-file-p)
-              (drgnx-settings-prov--user-file-p load-file-name)))
+         (and (fboundp 'drgnx-settings-prov--user-file-p) (drgnx-settings-prov--user-file-p load-file-name)))
         (drgnx-keys--yours-body t)
         (drgnx-keys--after-load nil)
         (drgnx-keys--server-eval t)
+        (drgnx-keys--in-timer nil)
         (t (and this-command t))))
+
+(defun drgnx-keys--source ()
+  "Where a write of yours now comes from: the Lisp file (without its extension) or `command'."
+  (let ((file (cond (load-file-name) ((stringp drgnx-keys--yours-body) drgnx-keys--yours-body))))
+    (if (and file (not drgnx-keys--server-eval)) (file-name-sans-extension (file-truename file)) 'command)))
 
 (defun drgnx-keys--submap (map prefix)
   "MAP's prefix map at PREFIX (a vector), made when there is none; recorded in `drgnx-keys--paths'."
@@ -741,7 +751,7 @@ at once, or give it back to them."
     (if remove
         (progn (remhash text drgnx-keys--yours)
                (when-let* ((d (assoc text drgnx-keys--profile-keys))) (define-key drgnx-keys--profile-map k (cdr d))))
-      (puthash text (cons def (if (and load-file-name (not drgnx-keys--server-eval)) 'lisp 'command)) drgnx-keys--yours)
+      (puthash text (cons def (drgnx-keys--source)) drgnx-keys--yours)
       (when (lookup-key drgnx-keys--profile-map k) (ignore-errors (define-key drgnx-keys--profile-map k nil t))))
     (drgnx-keys--set-everywhere (plist-get drgnx-keys-last :bindings))))
 
@@ -779,13 +789,32 @@ gives, for a key under a prefix `global-map' binds to a command (`drgnx-keys--gl
 it runs (not those of a file it loads in turn, nor of that file's after-load bodies)."
   (let ((form (nth 1 args)))
     (if (and (functionp form) (drgnx-keys--yours-p))
-        (list (car args) (lambda () (let ((drgnx-keys--yours-body t)) (funcall form))))
+        (let ((from (if (stringp (drgnx-keys--source)) (or load-file-name drgnx-keys--yours-body) t)))
+          (list (car args) (lambda () (let ((drgnx-keys--yours-body from)) (funcall form)))))
       args)))
 
 (defun drgnx-keys--after-load-scope (fn &rest args)
   "Around `do-after-load-evaluation' (FN, ARGS): the after-load bodies of a file are not yours unless you
 registered them (`drgnx-keys--after-load-yours'), whatever command or body loaded the file."
   (let ((drgnx-keys--after-load t) (drgnx-keys--yours-body nil)) (apply fn args)))
+
+(defun drgnx-keys--timer-scope (fn &rest args)
+  "Around `timer-event-handler' (FN, ARGS): what a timer binds is not yours, even when it runs inside a command's
+wait (`sit-for', `accept-process-output')."
+  (let ((drgnx-keys--in-timer t)) (apply fn args)))
+
+(defun drgnx-keys--forget-file (file)
+  "Forget the global keys FILE of yours bound (it is about to load again): each leaves your map, and the profile's
+key comes back on it.  Keys you bound by command stay."
+  (let ((base (file-name-sans-extension (file-truename file))) gone)
+    (maphash (lambda (k v) (when (equal (cdr v) base) (push k gone))) drgnx-keys--yours)
+    (when gone
+      (let ((nidhogg-define-key-redirect-function nil))
+        (dolist (k gone)
+          (remhash k drgnx-keys--yours)
+          (ignore-errors (define-key drgnx-keys-user-map (key-parse k) nil t))
+          (when-let* ((d (assoc k drgnx-keys--profile-keys))) (define-key drgnx-keys--profile-map (key-parse k) (cdr d)))))
+      (drgnx-keys--set-everywhere (plist-get drgnx-keys-last :bindings)))))
 
 (defun drgnx-keys--server-eval-yours (fn &rest args)
   "Around `server-eval-and-print' (FN, ARGS): emacsclient --eval is you."
@@ -810,6 +839,8 @@ bindings cannot be told from packages': the first apply says so as a problem (`d
   (drgnx-keys--refresh-paths)
   (advice-add 'eval-after-load :filter-args #'drgnx-keys--after-load-yours)
   (advice-add 'do-after-load-evaluation :around #'drgnx-keys--after-load-scope)
+  (advice-add 'timer-event-handler :around #'drgnx-keys--timer-scope)
+  (add-hook 'drgnx-settings-prov-load-functions #'drgnx-keys--forget-file)
   (advice-add 'server-eval-and-print :around #'drgnx-keys--server-eval-yours)
   (when (drgnx-keys-redirect-available-p)
     (setq nidhogg-define-key-redirect-function #'drgnx-keys--redirect)))
