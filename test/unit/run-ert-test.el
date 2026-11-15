@@ -963,7 +963,7 @@ suite, with the per-file leak check on.  Return (EXIT RESULTS-PLIST OUTPUT)."
 
 ;;;; The GUI tier's per-file sessions (harness/drgnx-ui.el), through a stand-in launcher
 
-(defconst drgnx-run-ert-test--ui-selector "^drgnx-ui-look-fonts/\\|^drgnx-ui-look-tabs/"
+(defconst drgnx-run-ert-test--ui-selector "^drgnx-ui-look-fonts/\\\\|^drgnx-ui-look-tabs/"
   "Picks two files of test/ui (their names are in the files' index).")
 
 (defun drgnx-run-ert-test--ui-tier (jobs &rest env)
