@@ -1056,16 +1056,21 @@ and the presets' names it lays the lens out of."
 
 (declare-function drgnx-agent-panel--end-shown-p "drgnx-agent-panel")
 
-(ert-deftest drgnx-agent-panel/the-end-is-shown-only-with-its-whole-row ()
-  "A row cut by one pixel at the bottom (or the top) is not shown: plain `pos-visible-in-window-p' says it is, redisplay
-does not, and the window scrolled again after the panel had followed its tail."
+(ert-deftest drgnx-agent-panel/the-end-is-shown-only-with-its-whole-row-and-a-line-of-room ()
+  "A row cut at the bottom (or the top), or one with no room for the line under it, is not shown: plain
+`pos-visible-in-window-p' says it is, redisplay does not, and the window scrolled again after the panel had followed
+its tail."
   (drgnx-agent-panel-test--with
     (with-current-buffer buf
       (let ((w (selected-window)))
-        (cl-letf (((symbol-function 'pos-visible-in-window-p) (lambda (&rest _) (list 0 802 0 0 21 30))))
-          (should (drgnx-agent-panel--end-shown-p w)))
-        (cl-letf (((symbol-function 'pos-visible-in-window-p) (lambda (&rest _) (list 0 802 0 1 21 30))))
-          (should-not (drgnx-agent-panel--end-shown-p w)))
-        (cl-letf (((symbol-function 'pos-visible-in-window-p) (lambda (&rest _) nil))
-                  )
-          (should-not (drgnx-agent-panel--end-shown-p w)))))))
+        (cl-letf (((symbol-function 'window-body-height) (lambda (&rest _) 820))
+                  ((symbol-function 'frame-char-height) (lambda (&rest _) 20)))
+          (cl-letf (((symbol-function 'pos-visible-in-window-p) (lambda (&rest _) (list 0 700))))
+            (should (drgnx-agent-panel--end-shown-p w)))
+          ;; the row's top is in, its line under it is not
+          (cl-letf (((symbol-function 'pos-visible-in-window-p) (lambda (&rest _) (list 0 795))))
+            (should-not (drgnx-agent-panel--end-shown-p w)))
+          (cl-letf (((symbol-function 'pos-visible-in-window-p) (lambda (&rest _) (list 0 700 0 1 21 30))))
+            (should-not (drgnx-agent-panel--end-shown-p w)))
+          (cl-letf (((symbol-function 'pos-visible-in-window-p) (lambda (&rest _) nil)))
+            (should-not (drgnx-agent-panel--end-shown-p w))))))))

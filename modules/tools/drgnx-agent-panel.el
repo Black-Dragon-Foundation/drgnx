@@ -310,10 +310,13 @@ the panel's scroll follows its tail."
       (drgnx-agent-panel--follow-tail))))
 
 (defun drgnx-agent-panel--end-shown-p (window)
-  "Whether the panel's end is in WINDOW with its whole row: a row cut by one pixel at the bottom is not shown (plain
-`pos-visible-in-window-p' takes it for shown, redisplay does not, and the window scrolls again)."
+  "Whether the panel's end is in WINDOW with its whole row and a line of room under it.  The panel's end is a position
+on the empty line under the composer, and redisplay wants that line (the cursor's) whole: `pos-visible-in-window-p' says
+the end is shown when the position's row is, a row short of it, and the window then scrolled again, to a start that
+left the end out (the long-transcript look scene, scale 1)."
   (when-let* ((v (pos-visible-in-window-p (point-max) window t)))
-    (and (zerop (or (nth 2 v) 0)) (zerop (or (nth 3 v) 0)))))
+    (and (zerop (or (nth 2 v) 0)) (zerop (or (nth 3 v) 0))
+         (<= (+ (nth 1 v) (* 2 (frame-char-height (window-frame window)))) (window-body-height window t)))))
 
 (defun drgnx-agent-panel--tail-start (window)
   "Where WINDOW should start for the panel's end to sit at its bottom: the earliest line from which the end is still in
