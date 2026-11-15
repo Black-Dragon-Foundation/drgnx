@@ -93,9 +93,9 @@ current row: subtle is under 4.5:1 on the selection.  Runs on the current row on
 (defun drgnx-completion--quit-hides-popup (data &rest _)
   "`command-error-function' (before): a C-g that arrives as a quit hides corfu's popup, as Esc does in VS Code.
 C-g typed while Lisp runs (a timer, a redisplay) is a quit, not a key, so corfu's own C-g (`corfu-quit') never runs;
-DATA is the error, (quit) for one.  Added to the global value."
+DATA is the error, (quit) for one.  Added to the global value.  An error in corfu never replaces the one reported."
   (when (and (eq (car-safe data) 'quit) (bound-and-true-p completion-in-region-mode) (fboundp 'corfu-quit))
-    (corfu-quit)))
+    (ignore-errors (corfu-quit))))
 
 (defun drgnx-completion--teardown ()
   "extra/completion's teardown: the quit handler off `command-error-function', and the palette's frame deleted."
