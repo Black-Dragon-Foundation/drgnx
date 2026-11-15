@@ -1028,7 +1028,9 @@ child's parent meanwhile (the layer is then left out of the chain until the next
 the parent on purpose (a parent's command on a prefix is not a clash to lift); any other map as it is."
   (let ((map (symbol-value sym)))
     (if (drgnx-keys--own-map-p sym)
-        (let ((copy (copy-keymap map))) (set-keymap-parent copy nil) copy)
+        (let (cells (tail (cdr map)))              ; the map's own cells, up to the parent (a tail that is a keymap)
+          (while (and (consp tail) (not (eq (car tail) 'keymap))) (push (pop tail) cells))
+          (cons 'keymap (nreverse cells)))
       map)))
 
 (defun drgnx-keys--fill-own (sym items)
@@ -1088,6 +1090,18 @@ map's parent, so such a key would shadow it, and a profile switch would leave it
         (setq map (keymap-parent map))))
     hit))
 
+(defun drgnx-keys--foreign-active-p (target)
+  "Whether keymap TARGET is active here: the buffer's local map is, or inherits, it (wgrep's `use-local-map' swap, a
+mode derived from the target's), or a minor mode's map does (`current-minor-mode-maps': `minor-mode-map-alist', the
+overriding and the emulation alists), or the `keymap' or `local-map' property at point does (an overlay, a button)."
+  (or (drgnx-keys--map-reaches-p (current-local-map) target)
+      (let (hit)
+        (dolist (m (current-minor-mode-maps))
+          (when (and (not hit) (drgnx-keys--map-reaches-p m target)) (setq hit t)))
+        hit)
+      (let ((km (or (get-char-property (point) 'keymap) (get-char-property (point) 'local-map))))
+        (and km (keymapp km) (drgnx-keys--map-reaches-p (if (symbolp km) (symbol-function km) km) target)))))
+
 (defun drgnx-keys--foreign-filter (sym def)
   "DEF while keymap SYM is active here (`drgnx-keys--foreign-active-p'), else nil: the key is not the layer's here."
   (and (boundp sym) (keymapp (symbol-value sym)) (drgnx-keys--foreign-active-p (symbol-value sym)) def))
@@ -1114,18 +1128,6 @@ when a key is pressed, so a map that is made later, or replaced, needs nothing h
     (setcdr drgnx-keys--foreign-map (nreverse wrapped-maps))
     (setq drgnx-keys--foreign-on (and wrapped-maps t))
     (drgnx-keys--foreign-keep-last)))
-(defun drgnx-keys--foreign-active-p (target)
-  "Whether keymap TARGET is active here: the buffer's local map is, or inherits, it (wgrep's `use-local-map' swap, a
-mode derived from the target's), or a minor mode's map does (`current-minor-mode-maps': `minor-mode-map-alist', the
-overriding and the emulation alists), or the `keymap' or `local-map' property at point does (an overlay, a button)."
-  (or (drgnx-keys--map-reaches-p (current-local-map) target)
-      (let (hit)
-        (dolist (m (current-minor-mode-maps))
-          (when (and (not hit) (drgnx-keys--map-reaches-p m target)) (setq hit t)))
-        hit)
-      (let ((km (or (get-char-property (point) 'keymap) (get-char-property (point) 'local-map))))
-        (and km (keymapp km) (drgnx-keys--map-reaches-p (if (symbolp km) (symbol-function km) km) target)))))
-
 
 (defun drgnx-keys--set-layers (entries generation)
   "Put ENTRIES ((SPEC COMMAND BINDING) …), the profile's keys in maps that are neither the global map nor the
