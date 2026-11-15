@@ -1,5 +1,6 @@
 ;;; agent-panel-composer-gui-test.el --- GUI tests: the agent panel's composer under the transcript (run by `drgnx test --ui') -*- lexical-binding: t -*-
 ;; test-class: cond
+;; test-pattern: handshake
 
 ;; A real hub and a mock agent (test/fixtures/panel-replay-fixture.el, a short turn) and the panel open in the right
 ;; area.  Run at each scale (s1, s2): the composer is the area's window below the transcript, fitted to its lines; a
@@ -16,6 +17,7 @@
 (dolist (d '("core" "wb" "harness"))
   (add-to-list 'load-path (expand-file-name d drgnx-ui-agent-panel-composer--repo)))
 (load (expand-file-name "test/fixtures/rows-demo-fixture" drgnx-ui-agent-panel-composer--repo) nil t)
+(require 'drgnx-keys)
 
 (defvar drgnx-panel-replay-prefix)
 (defvar drgnx-agent-panel-mode-map)
@@ -35,6 +37,8 @@
 (declare-function drgnx-agent-panel--composer-of "drgnx-agent-panel-composer" (buffer))
 (declare-function drgnx-agent-panel-composer--field-end "drgnx-agent-panel-composer" ())
 (declare-function drgnx-agent-panel-compose "drgnx-agent-panel-composer" ())
+(declare-function drgnx-keys-use "drgnx-keys" (layers &optional save))
+(declare-function drgnx-keys--restore "drgnx-keys" ())
 
 (defun drgnx-ui-agent-panel-composer--settle (area)
   "Let redisplay, the size-change functions and the store's idle calls run until AREA's companions stop moving (a
@@ -94,19 +98,24 @@ header line's height is known after the first redisplay; at most 5 rounds)."
             (with-current-buffer comp (delete-region (point-min) (drgnx-agent-panel-composer--field-end)) (insert "half"))
             (drgnx-ui-agent-panel-composer--settle area)
             (should (apply #'= (drgnx-ui-agent-panel-composer--fitted cw)))
-            ;; a click in the transcript, then the profile's key: point at the end of the message
-            (let* ((key (where-is-internal #'drgnx-agent-panel-compose (list drgnx-agent-panel-mode-map) t))
-                   (pos (with-current-buffer panel (drgnx-view-row-start drgnx-view '(:rows-end))))
-                   (posn (posn-at-point pos tw)))
-              (should key)
-              (should posn)
-              (select-window (frame-first-window))
-              (drgnx-uitest-run (append (drgnx-uitest-click-events posn) (listify-key-sequence key)))
-              (should (eq cw (selected-window)))
-              (should (eq comp (window-buffer (selected-window))))
-              (should (= (window-point cw) (with-current-buffer comp (drgnx-agent-panel-composer--field-end))))
-              (should (equal "half" (with-current-buffer comp
-                                      (buffer-substring-no-properties (point-min) (window-point cw))))))))
+            ;; in each profile without a modal engine: a click in the transcript, then the profile's key: point at the
+            ;; end of the message
+            (dolist (profile '(vscode emacs))
+              (drgnx-keys-use `((,profile app editing window)))
+              (let* ((key (where-is-internal #'drgnx-agent-panel-compose (list drgnx-agent-panel-mode-map) t))
+                     (pos (with-current-buffer panel (drgnx-view-row-start drgnx-view '(:rows-end))))
+                     (posn (posn-at-point pos tw)))
+                (should (equal (list profile "s") (list profile (and key (key-description key)))))
+                (should posn)
+                (select-window (frame-first-window))
+                (with-current-buffer comp (goto-char (point-min)))
+                (drgnx-uitest-run (append (drgnx-uitest-click-events posn) (listify-key-sequence key)))
+                (should (equal (list profile cw) (list profile (selected-window))))
+                (should (eq comp (window-buffer (selected-window))))
+                (should (= (window-point cw) (with-current-buffer comp (drgnx-agent-panel-composer--field-end))))
+                (should (equal "half" (with-current-buffer comp
+                                        (buffer-substring-no-properties (point-min) (window-point cw)))))))))
+      (drgnx-keys--restore)
       (drgnx-panel-replay-down)
       (drgnx-view-env-teardown)
       (drgnx-view-patch-teardown))))
