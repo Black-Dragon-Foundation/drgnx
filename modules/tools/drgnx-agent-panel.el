@@ -853,6 +853,12 @@ stays in it.  Every fifth update opens a new block, the others grow the last one
 
 ;;;; The module
 
+(declare-function drgnx-agent-panel--composer-of "drgnx-agent-panel-composer")
+
+(defun drgnx-agent-panel--companions (buffer)
+  "The area companions of panel BUFFER (`drgnx-pane-define-kind' :companions): (ABOVE BELOW), the composer below."
+  (list nil (drgnx-agent-panel--composer-of buffer)))
+
 (defun drgnx-agent-panel--setup ()
   (drgnx-state-subscribe 'pane-resized #'drgnx-agent-panel--pane-resized)
   (drgnx-command-define 'agents-panel :category "Agents" :title "Open the Agent Panel"
@@ -878,7 +884,8 @@ stays in it.  Every fifth update opens a new block, the others grow the last one
                                              "Go to your previous message in the panel, wrapping")))
     (drgnx-command-define (nth 0 c) :category "Agents" :title (nth 1 c) :command (nth 2 c)
                           :map 'drgnx-agent-panel-mode-map :doc (nth 3 c)))
-  (drgnx-pane-define-kind 'agent-panel :title " AGENT" :home 'right :buffer #'drgnx-agent-panel--current-buffer)
+  (drgnx-pane-define-kind 'agent-panel :title " AGENT" :home 'right :buffer #'drgnx-agent-panel--current-buffer
+                          :companions #'drgnx-agent-panel--companions)
   (drgnx-module-hook 'drgnx-hub-event-functions panel-event (event data)
     :events '("history/applied" "agent" "agent-entries")
     (drgnx-agent-panel--event event data))

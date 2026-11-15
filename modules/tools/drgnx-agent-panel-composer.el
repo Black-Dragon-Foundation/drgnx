@@ -27,6 +27,7 @@
 
 (defvar drgnx-view-patch-twin-of)
 (declare-function drgnx-view-env--twin-copy "drgnx-view-env" (from prefixes))
+(declare-function drgnx-wb-area-fit-companions "drgnx-area" (area &optional frame))
 
 (defvar drgnx-agent-panel--session)
 (defvar drgnx-agent-panel--snap)
@@ -252,9 +253,16 @@ to, or nil."
                       (put-text-property 0 1 'cursor t s)    ; the cursor at its start, not after it
                       s))))
 
+(defun drgnx-agent-panel-composer--refit ()
+  "The composer's lines changed: each area window that shows it below a panel is fitted to them again."
+  (dolist (w (get-buffer-window-list (current-buffer) nil t))
+    (when-let* (((window-parameter w 'drgnx-area-part)) (area (window-parameter w 'drgnx-role)))
+      (drgnx-wb-area-fit-companions area (window-frame w)))))
+
 (defun drgnx-agent-panel-composer--changed (&rest _)
-  "`after-change-functions' of the composer."
-  (when (overlayp drgnx-agent-companion--placeholder) (drgnx-agent-panel-composer--placehold)))
+  "`after-change-functions' of the composer: the placeholder, and the window's fit."
+  (when (overlayp drgnx-agent-companion--placeholder) (drgnx-agent-panel-composer--placehold))
+  (drgnx-agent-panel-composer--refit))
 
 (defun drgnx-agent-panel-composer--draw-bar ()
   "Draw the composer's bar again from the panel's state, after the field.  The bar is read-only, takes no typing at
@@ -273,7 +281,8 @@ its end, and is a field of its own (line moves stop at it); typing at the field'
     (save-excursion
       (delete-region (drgnx-agent-panel-composer--field-end) (point-max))
       (goto-char (point-max))
-      (insert bar))))
+      (insert bar)))
+  (drgnx-agent-panel-composer--refit))   ; a chip more or less may wrap the bar
 
 (defun drgnx-agent-panel-composer-redraw ()
   "The snapshot changed: the composer is drawn again (the transcript's row, and the composer's buffer's bar)."
