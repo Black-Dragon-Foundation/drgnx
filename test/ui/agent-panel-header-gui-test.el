@@ -11,12 +11,12 @@
 (require 'cl-lib)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-uitest)
-(require 'drgnx-keys)
 
 (defconst drgnx-ui-panel-header--repo
   (expand-file-name "../../" (file-name-as-directory (or (getenv "DRGNX_UI_TEST") default-directory))))
 (dolist (d '("core" "wb" "harness"))
   (add-to-list 'load-path (expand-file-name d drgnx-ui-panel-header--repo)))
+(require 'drgnx-keys)
 (load (expand-file-name "test/fixtures/rows-demo-fixture" drgnx-ui-panel-header--repo) nil t)
 
 (defvar drgnx-panel-replay-prefix)
@@ -28,6 +28,8 @@
 (defvar drgnx-view-env--hooked)
 (defvar drgnx-agent-panel--session)
 (defvar drgnx-agent-panel--disclosure)
+(defvar drgnx-agent-panel--pins)
+(defvar drgnx-area--companion-most)
 (declare-function drgnx-panel-replay-up "panel-replay-fixture" (bin &optional old))
 (declare-function drgnx-panel-replay-down "panel-replay-fixture" ())
 (declare-function drgnx-rows-demo--bin "rows-demo-fixture" ())
@@ -115,6 +117,35 @@ most 5 rounds)."
   "Whether W's body is its text's height, to a pixel."
   (pcase-let ((`(,body ,text) (drgnx-ui-panel-header--fit w))) (<= (abs (- body text)) 1)))
 
+(defun drgnx-ui-panel-header--facts (w area)
+  "W's fit in AREA as a plist, for `drgnx-ui-panel-header--fitted-or-capped-p' (and the failure's report): BODY and
+TEXT (`drgnx-ui-panel-header--fit'), its PIXEL height, its default LINE height, the CAP (the most of the area's
+height a companion is fitted to, `drgnx-area--companion-most') and whether its START is its buffer's start."
+  (pcase-let ((`(,body ,text) (drgnx-ui-panel-header--fit w))
+              (total (apply #'+ (mapcar #'window-pixel-height
+                                        (seq-filter (lambda (x) (eq area (window-parameter x 'drgnx-role)))
+                                                    (window-list (window-frame w) 'nomini))))))
+    (list :body body :text text :pixel (window-pixel-height w) :line (window-default-line-height w)
+          :cap (* drgnx-area--companion-most total)
+          :start (= (window-start w) (with-current-buffer (window-buffer w) (point-min))))))
+
+(defun drgnx-ui-panel-header--fitted-or-capped-p (facts)
+  "Whether FACTS (`drgnx-ui-panel-header--facts') are a window fitted to its text to a pixel, or one whose text is
+taller than the cap and that is at the cap (another line would pass it), its first row at its start."
+  (let ((body (plist-get facts :body)) (text (plist-get facts :text)))
+    (or (<= (abs (- body text)) 1)
+        (and (> text body)
+             (> (+ (plist-get facts :pixel) (plist-get facts :line)) (plist-get facts :cap))
+             (plist-get facts :start)))))
+
+(defun drgnx-ui-panel-header--entry-pos (panel window)
+  "The first position in WINDOW, which shows PANEL, at a step's row (`drgnx-agent-panel-entry'), or nil."
+  (with-current-buffer panel
+    (let ((pos (window-start window)) (end (min (point-max) (or (window-end window t) (point-max)))))
+      (while (and pos (< pos end) (not (get-text-property pos 'drgnx-agent-panel-entry)))
+        (setq pos (next-single-property-change pos 'drgnx-agent-panel-entry nil end)))
+      (and pos (< pos end) pos))))
+
 (defun drgnx-ui-panel-header--target (window pred)
   "The first posn in WINDOW over text whose `drgnx-agent-panel-action' satisfies PRED, found as a pointer would."
   (catch 'found
@@ -164,22 +195,25 @@ most 5 rounds)."
       (should (drgnx-ui-panel-header--fitted-p hw)))))
 
 (ert-deftest drgnx-ui-panel-header/its-pin-lens-and-pills-run-on-the-sessions-state ()
-  (drgnx-ui-panel-header--with (panel hw _tw area)
+  (drgnx-ui-panel-header--with (panel hw tw area)
     (drgnx-keys-use '((vscode app editing window)))   ; the profile binds mouse-1 to the panel's dispatcher
     (unwind-protect
         (let ((lens (drgnx-ui-panel-header--target hw (lambda (a) (and (stringp a) (string-prefix-p "lens:" a)))))
               (pill (drgnx-ui-panel-header--target hw (lambda (a) (and (stringp a) (string-prefix-p "type:" a)))))
-              (pin (drgnx-ui-panel-header--target hw (lambda (a) (equal a "pin"))))
-              (ran nil))
+              (pin (drgnx-ui-panel-header--target hw (lambda (a) (equal a "pin")))))
           (should lens)
           (should pill)
           (should pin)
           ;; mouse-1 in the header is the panel's dispatcher (the profile binds it in the panel's map, the header's parent)
           (should (eq 'drgnx-agent-panel-act (with-current-buffer (window-buffer hw) (key-binding [mouse-1]))))
-          ;; the pin through the registry, as the header's button runs it
-          (cl-letf (((symbol-function 'drgnx-ui-kit-run) (lambda (id) (push id ran))))
-            (drgnx-uitest-run (drgnx-uitest-click-events pin)))
-          (should (equal '(agents-panel-pin) ran))
+          ;; the pin: the step at the transcript's point is pinned, in the session's state (the panel's)
+          (let* ((pos (drgnx-ui-panel-header--entry-pos panel tw))
+                 (key (and pos (list :e (get-text-property pos 'drgnx-agent-panel-entry panel)))))
+            (should pos)
+            (set-window-point tw pos)
+            (should-not (assoc key (buffer-local-value 'drgnx-agent-panel--pins panel)))
+            (drgnx-uitest-run (drgnx-uitest-click-events pin))
+            (should (equal (list key) (mapcar #'car (buffer-local-value 'drgnx-agent-panel--pins panel)))))
           ;; a pill: its type's detail opens in the session's state, the panel's
           (let* ((action (get-text-property (posn-point pill) 'drgnx-agent-panel-action (window-buffer hw)))
                  (type (intern (substring action 5)))
@@ -196,11 +230,14 @@ most 5 rounds)."
       (drgnx-keys--restore))))
 
 (ert-deftest drgnx-ui-panel-header/a-strip-that-wraps-refits-the-header ()
-  (drgnx-ui-panel-header--with (_panel hw _tw area)
+  (drgnx-ui-panel-header--with (_panel hw tw area)
     (let* ((hb (window-buffer hw)) (lines (with-current-buffer hb (count-lines (point-min) (point-max))))
            (h (window-body-height hw t)) (class (with-current-buffer hb (drgnx-view-patch-class drgnx-view-patch))))
       (unwind-protect
           (progn
+            ;; the transcript scrolled back to its first row: the header's start and fit are its own
+            (set-window-start tw (with-current-buffer (window-buffer tw) (point-min)))
+            (set-window-point tw (with-current-buffer (window-buffer tw) (point-min)))
             ;; a bigger font: fewer columns, the strip wraps; the hub sends the rows of the new class
             (with-current-buffer hb (text-scale-increase 3))
             (drgnx-test-wait (lambda () (with-current-buffer hb
@@ -211,7 +248,10 @@ most 5 rounds)."
             (drgnx-ui-panel-header--settle area)
             (should (> (with-current-buffer hb (count-lines (point-min) (point-max))) lines))
             (should (> (window-body-height hw t) h))
-            (should (drgnx-ui-panel-header--fitted-p hw)))
+            ;; fitted, or (s2: the wrapped strip is taller than the cap) at the cap from its first row
+            (should (drgnx-ui-panel-header--fitted-or-capped-p (drgnx-ui-panel-header--facts hw area)))
+            (should (= (window-start hw) (with-current-buffer hb (point-min))))
+            (should (= (window-start tw) (with-current-buffer (window-buffer tw) (point-min)))))
         (with-current-buffer hb (text-scale-set 0)))
       ;; back to one row of strip: the header shrinks to its rows again
       (drgnx-test-wait (lambda () (with-current-buffer hb (equal class (drgnx-view-patch-class drgnx-view-patch))))

@@ -17,9 +17,6 @@
 (declare-function drgnx-panel-replay--wait "panel-replay-fixture")
 (declare-function drgnx-agent-panel-cards--permissions "drgnx-agent-panel-cards")
 (declare-function drgnx-agent-panel-act "drgnx-agent-panel-steps")
-(declare-function drgnx-agent-panel-preset "drgnx-agent-panel-steps")
-(declare-function drgnx-agent-panel-toggle-type "drgnx-agent-panel-steps")
-(declare-function drgnx-ui-kit-run "drgnx-ui-kit")
 (declare-function drgnx-uitest-run "drgnx-uitest")
 (declare-function drgnx-uitest-click-events "drgnx-uitest")
 (defvar pixel-scroll-precision-mode)
@@ -709,9 +706,10 @@ moves each way, and the header window does not move (edges, start, vscroll)."
             (funcall still "down")))
       (pixel-scroll-precision-mode (if was 1 -1)))))
 
-(defun drgnx-look-scene--header-targets (window)
+(defun drgnx-look-scene--header-targets (window &optional panel)
   "The first posn in WINDOW (the header window) over each kind of clickable part: an alist (KIND . POSN), KIND `pin',
-`lens' or `pill', from the drawn window (`posn-at-x-y'), reading the buffer's text (or a string, should one be shown)."
+`lens' or `pill', from the drawn window (`posn-at-x-y'), reading the buffer's text (or a string, should one be shown).
+With PANEL, the lens is a segment whose preset is not PANEL's disclosure now (a click on it changes the disclosure)."
   (let ((b (window-buffer window)) found)
     (cl-loop for y from 2 below (window-body-height window t) by 3
              do (cl-loop for x from 2 below (window-body-width window t) by 3
@@ -720,10 +718,46 @@ moves each way, and the header window does not move (edges, start, vscroll)."
                                              (get-text-property (cdr str) 'drgnx-agent-panel-action (car str)))
                                             (pt (get-text-property pt 'drgnx-agent-panel-action b))))
                                    (kind (cond ((equal a "pin") 'pin)
-                                               ((and (stringp a) (string-prefix-p "lens:" a)) 'lens)
+                                               ((and (stringp a) (string-prefix-p "lens:" a)
+                                                     (not (and panel
+                                                               (equal (cdr (nth (1- (string-to-number (substring a 5)))
+                                                                                (symbol-value 'drgnx-agent-panel-presets)))
+                                                                      (buffer-local-value 'drgnx-agent-panel--disclosure
+                                                                                          panel)))))
+                                                'lens)
                                                ((and (stringp a) (string-prefix-p "type:" a)) 'pill))))
                               (when (and kind (not (assq kind found))) (push (cons kind p) found)))))
     found))
+
+(defun drgnx-look-scene--header-targets-wait (window &optional panel)
+  "`drgnx-look-scene--header-targets' of WINDOW (and PANEL) once it has all three parts: the hub may draw the header
+again (a new width, a click's look), so they are looked for again until they are there (at most 5 s)."
+  (let ((end (+ (float-time) 5)) targets)
+    (while (progn (setq targets (drgnx-look-scene--header-targets window panel))
+                  (and (not (and (assq 'pin targets) (assq 'lens targets) (assq 'pill targets)))
+                       (< (float-time) end)))
+      (accept-process-output nil 0.05)
+      (redisplay t))
+    (dolist (kind '(pin lens pill) targets)
+      (unless (assq kind targets)
+        (error "no %s in the header window within 5 s (found %S; the header's first line %S)" kind
+               (mapcar #'car targets)
+               (with-current-buffer (window-buffer window)
+                 (buffer-substring-no-properties (point-min) (line-end-position))))))))
+
+(defun drgnx-look-scene--action-at (window posn)
+  "The `drgnx-agent-panel-action' at POSN in WINDOW's buffer (or in the string POSN is over)."
+  (let ((str (posn-string posn)))
+    (if (and (consp str) (stringp (car str))) (get-text-property (cdr str) 'drgnx-agent-panel-action (car str))
+      (get-text-property (posn-point posn) 'drgnx-agent-panel-action (window-buffer window)))))
+
+(defun drgnx-look-scene--entry-in (window buffer)
+  "The first position in WINDOW, which shows BUFFER, at a step's row (`drgnx-agent-panel-entry'), or nil."
+  (with-current-buffer buffer
+    (let ((pos (window-start window)) (end (min (point-max) (or (window-end window t) (point-max)))))
+      (while (and pos (< pos end) (not (get-text-property pos 'drgnx-agent-panel-entry)))
+        (setq pos (next-single-property-change pos 'drgnx-agent-panel-entry nil end)))
+      (and pos (< pos end) pos))))
 
 (defun drgnx-look-scene--panel-header-clicks (buffer)
   "Scroll the transcript up a page, then click the header window's pin button, a lens segment and a strip pill through
@@ -737,29 +771,35 @@ The transcript is left scrolled up: the picture is the scrolled panel."
       (redisplay t)
       (unless (> (with-current-buffer buffer (- (point-max) (window-start w))) back)
         (error "the transcript did not scroll up (start %d)" (window-start w))))
-    (let ((header (drgnx-look-scene--edges h)) targets)
-      ;; the hub may draw the header again (a new width): wait for all three parts
-      (let ((end (+ (float-time) 5)))
-        (while (progn (setq targets (drgnx-look-scene--header-targets h))
-                      (and (not (and (assq 'pin targets) (assq 'lens targets) (assq 'pill targets)))
-                           (< (float-time) end)))
-          (accept-process-output nil 0.05)
-          (redisplay t)))
-      (dolist (kind '(pin lens pill))
-        (unless (assq kind targets)
-          (error "no %s in the header window within 5 s (found %S; the header's first line %S)" kind
-                 (mapcar #'car targets)
-                 (with-current-buffer (window-buffer h)
-                   (buffer-substring-no-properties (point-min) (line-end-position))))))
-      (pcase-dolist (`(,kind . ,want) '((pin . agents-panel-pin) (lens . lens) (pill . type)))
-        (let (ran)
-          (cl-letf (((symbol-function 'drgnx-ui-kit-run) (lambda (id) (push id ran)))
-                    ((symbol-function 'drgnx-agent-panel-preset) (lambda (n) (push (list 'lens n) ran)))
-                    ((symbol-function 'drgnx-agent-panel-toggle-type) (lambda (ty) (push (list 'type ty) ran))))
-            (drgnx-uitest-run (drgnx-uitest-click-events (alist-get kind targets)))
-            (redisplay t))
-          (unless (seq-find (lambda (r) (or (eq r want) (eq (car-safe r) want))) ran)
-            (error "a click on the header's %s through the event loop ran %S, not %S" kind ran want))))
+    (let ((header (drgnx-look-scene--edges h)) (targets (drgnx-look-scene--header-targets-wait h)))
+      ;; each click runs its command for real, on the session's state (the panel's buffer): the pin pins the step
+      ;; at the transcript's point, a lens segment sets its preset's disclosure, a pill turns its type's detail over
+      (let ((pos (drgnx-look-scene--entry-in w buffer)))
+        (unless pos (error "no step's row in the transcript's window to pin"))
+        (set-window-point w pos)
+        (let ((key (list :e (get-text-property pos 'drgnx-agent-panel-entry buffer)))
+              (pins (lambda () (mapcar #'car (buffer-local-value 'drgnx-agent-panel--pins buffer)))))
+          (when (member key (funcall pins)) (error "the step %S is pinned before the click" key))
+          (drgnx-uitest-run (drgnx-uitest-click-events (alist-get 'pin targets)))
+          (redisplay t)
+          (unless (member key (funcall pins))
+            (error "a click on the header's pin through the event loop did not pin %S (pins %S)" key (funcall pins)))))
+      (setq targets (drgnx-look-scene--header-targets-wait h))
+      (let* ((type (intern (substring (drgnx-look-scene--action-at h (alist-get 'pill targets)) 5)))
+             (on (lambda () (and (memq type (buffer-local-value 'drgnx-agent-panel--disclosure buffer)) t)))
+             (was (funcall on)))
+        (drgnx-uitest-run (drgnx-uitest-click-events (alist-get 'pill targets)))
+        (redisplay t)
+        (unless (eq (funcall on) (not was))
+          (error "a click on the header's pill %s through the event loop left its detail %s" type (if was "on" "off"))))
+      (setq targets (drgnx-look-scene--header-targets-wait h buffer))
+      (let* ((n (string-to-number (substring (drgnx-look-scene--action-at h (alist-get 'lens targets)) 5)))
+             (want (cdr (nth (1- n) (symbol-value 'drgnx-agent-panel-presets)))))
+        (drgnx-uitest-run (drgnx-uitest-click-events (alist-get 'lens targets)))
+        (redisplay t)
+        (unless (equal want (buffer-local-value 'drgnx-agent-panel--disclosure buffer))
+          (error "a click on the header's lens %d through the event loop left the disclosure %S, not %S" n
+                 (buffer-local-value 'drgnx-agent-panel--disclosure buffer) want)))
       (unless (equal (drgnx-look-scene--edges h) header)
         (error "the clicks moved the header window: %S, was %S" (drgnx-look-scene--edges h) header)))))
 

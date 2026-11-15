@@ -38,6 +38,7 @@
 (declare-function drgnx-agent-panel-allow "drgnx-agent-panel-cards")
 (declare-function drgnx-agent-panel-always "drgnx-agent-panel-cards")
 (declare-function drgnx-agent-panel-reject "drgnx-agent-panel-cards")
+(declare-function drgnx-wb-area-window "drgnx-area" (area &optional frame))
 
 (defface drgnx-agent-panel-lens '((t :inherit (drgnx-ui-caption drgnx-text-muted drgnx-surface-gap)
                                      :box (:line-width (2 . 8) :style flat-button)))
@@ -64,6 +65,17 @@
   (when-let* ((choice (x-popup-menu event (list "Agent" (cons "" drgnx-agent-panel-header-menu)))))
     (drgnx-ui-kit-run choice)))
 
+(defun drgnx-agent-panel--pin-from (window)
+  "The pin button clicked in WINDOW: pin the step or card at the transcript's point.  In a companion (the header
+window above the transcript) the transcript is its area's main window, whose point and buffer the pin reads."
+  (let ((tw (if-let* (((window-parameter window 'drgnx-area-part)) (area (window-parameter window 'drgnx-role)))
+                (drgnx-wb-area-window area (window-frame window))
+              window)))
+    (with-current-buffer (window-buffer tw)
+      (save-excursion
+        (goto-char (window-point tw))
+        (drgnx-ui-kit-run 'agents-panel-pin)))))
+
 (defun drgnx-agent-panel--prop-at (event prop)
   "Property PROP of the buffer text EVENT is on, or nil."
   (let* ((end (event-end event)) (pos (posn-point end)) (win (posn-window end)))
@@ -82,7 +94,7 @@ step type's pill (`type:NAME') or `make default', the ledger or a card's button 
         (with-current-buffer buf
           (cond ((and (stringp action) (string-prefix-p "lens:" action))
                  (drgnx-agent-panel-preset (string-to-number (substring action 5))))
-                ((equal action "pin") (drgnx-ui-kit-run 'agents-panel-pin))
+                ((equal action "pin") (drgnx-agent-panel--pin-from win))
                 ((equal action "more") (drgnx-agent-panel-header-menu event))
                 ((and (stringp action) (string-prefix-p "type:" action))
                  (drgnx-agent-panel-toggle-type (intern (substring action 5))))
