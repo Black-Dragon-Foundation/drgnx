@@ -584,7 +584,9 @@ composer) replace the old pinned-copy checks (Task 8 of the docks plan)."
           (error "The transcript fits the panel's window: draw this scene alone (DRGNX_LOOK_ONLY='^agent-panel-long$'), which gives the mock agent its long transcript"))))
     ;; the three windows' checks (docks plan, Task 8); the header clicks leave the transcript scrolled up a page
     (drgnx-look-scene--try "docks wheel" (drgnx-look-scene--panel-docks-wheel drgnx-look-scene--panel))
-    (drgnx-look-scene--try "header clicks" (drgnx-look-scene--panel-header-clicks drgnx-look-scene--panel))))
+    (drgnx-look-scene--try "header clicks" (drgnx-look-scene--panel-header-clicks drgnx-look-scene--panel))
+    ;; the clicks changed the header's state: the shot shows the rows the hub settles on
+    (drgnx-look-scene--try "settled after the clicks" (drgnx-look-scene--panel-settle drgnx-look-scene--panel))))
 
 ;;;; The panel's three windows (the docks plan, 2026-11-15-agent-panel-docks.md, Task 8): a header window (hub view
 ;;;; `agent-panel-top/SID', fitted, never scrolled), the transcript (`agent-panel/SID', the panel's main buffer) and the
@@ -763,6 +765,58 @@ The transcript is left scrolled up: the picture is the scrolled panel."
       (unless (equal (drgnx-look-scene--edges h) header)
         (error "the clicks moved the header window: %S, was %S" (drgnx-look-scene--edges h) header)))))
 
+(defvar drgnx-hub--events)
+(declare-function drgnx-hub--call-on "drgnx-hub-client")
+(declare-function drgnx-view-sja-p "drgnx-view-sja")
+(declare-function drgnx-view-sja-draw-now "drgnx-view-sja")
+
+(defun drgnx-look-scene--hub-caught-up ()
+  "Non-nil once a `ping' on the subscribed connection is answered (3 s at most): the hub handles a connection's lines
+in order, so every line this Emacs sent before it (an env, a measurement, an ack) has been handled, and what the hub
+sent for them came before the answer and has been read."
+  (let ((done nil) (end (+ (float-time) 3)))
+    (when (process-live-p drgnx-hub--events)
+      (drgnx-hub--call-on drgnx-hub--events "ping" nil (lambda (&rest _) (setq done t)))
+      (while (and (not done) (< (float-time) end))
+        (accept-process-output drgnx-hub--events 0.02)))
+    done))
+
+(defun drgnx-look-scene--hub-round (buffers)
+  "One round trip to the hub (`drgnx-look-scene--hub-caught-up') and what it sent drawn in BUFFERS, Sjá views; non-nil
+when the round trip changed none of their texts, `no-answer' when the hub did not answer."
+  (let ((ticks (mapcar #'buffer-chars-modified-tick buffers)))
+    (if (not (drgnx-look-scene--hub-caught-up)) 'no-answer
+      (accept-process-output nil 0.05)
+      (dolist (b buffers) (when (drgnx-view-sja-p b) (drgnx-view-sja-draw-now b)))
+      (redisplay t)
+      (equal ticks (mapcar #'buffer-chars-modified-tick buffers)))))
+
+(defun drgnx-look-scene--panel-buffers (buffer)
+  "The live buffers of the agent panel BUFFER's windows: the transcript, the header and the composer shown with it."
+  (let ((w (get-buffer-window buffer)))
+    (seq-filter #'buffer-live-p
+                (cons buffer (and w (mapcar (lambda (e) (window-buffer (car e))) (drgnx-look-scene--area-windows w)))))))
+
+(defun drgnx-look-scene--panel-settle (buffer)
+  "Round trips to the hub until one changes none of the agent panel BUFFER's windows' texts: the hub's first fit of a
+row comes before the editor's answers to its asks (the glyph widths), and the refit after them one round trip later.
+An error when the hub does not answer, or when the rows still change after 10 s."
+  (let ((buffers (drgnx-look-scene--panel-buffers buffer)) (end (+ (float-time) 10)) (r nil))
+    (while (and (not (eq r t)) (not (eq r 'no-answer)) (< (float-time) end))
+      (setq r (drgnx-look-scene--hub-round buffers)))
+    (cond ((eq r 'no-answer) (push "agent-panel: the hub did not answer a ping" drgnx-look-scene--errors))
+          ((not r) (push "agent-panel: the panel's rows still changed after 10 s of hub round trips"
+                         drgnx-look-scene--errors)))))
+
+(defun drgnx-look-scene--panel-unsettled (buffer)
+  "An error when one more hub round trip changes the agent panel BUFFER's windows' texts: the shot would show the
+hub's first fit (a chip cut before the editor's glyph widths came), not the rows the hub settles on."
+  (let ((r (drgnx-look-scene--hub-round (drgnx-look-scene--panel-buffers buffer))))
+    (unless (eq r t)
+      (push (if (eq r 'no-answer) "agent-panel: the hub did not answer a ping"
+              "agent-panel: one more hub round trip changed the panel's rows: the shot shows the hub's first fit")
+            drgnx-look-scene--errors))))
+
 (defun drgnx-look-scene-agent-panel ()
   (drgnx-look-scene--theme 'drgnx-dark)
   (drgnx-look-scene--try "panel"
@@ -771,8 +825,11 @@ The transcript is left scrolled up: the picture is the scrolled panel."
         (select-window w)
       ;; an earlier scene put the editor back: the panel opens again where opening it puts it, the right island
       (drgnx-pane-show 'agent-panel :buffer drgnx-look-scene--panel :select t))
+    ;; the rows the hub settles on, not its first fit (the checks and the shot read them)
+    (drgnx-look-scene--panel-settle drgnx-look-scene--panel)
     (drgnx-look-scene--panel-top drgnx-look-scene--panel))
   (drgnx-look-scene--try "three windows" (drgnx-look-scene--panel-three-windows drgnx-look-scene--panel))
+  (drgnx-look-scene--try "settled" (drgnx-look-scene--panel-unsettled drgnx-look-scene--panel))
   (drgnx-look-scene--answer))
 
 (defun drgnx-look-scene--panel-top (buffer)

@@ -374,8 +374,9 @@ meanwhile (its status) must not leave space under the end."
     (should (drgnx-panel-docks-ui-test--long-p panel tw))
     (drgnx-panel-docks-ui-test--stream)
     (dotimes (i 10)
+      ;; drawn and presented, no settle of the companions per step: the stream lasts about 30 s
       (drgnx-panel-docks-ui-test--steps panel 1 (list :append (1+ i)))
-      (drgnx-panel-docks-ui-test--settle-area)
+      (drgnx-test-wait-presented)
       (drgnx-panel-docks-ui-test--at-end panel tw (list :after-append (1+ i))))))
 
 (declare-function drgnx-agent-panel-send "drgnx-agent-panel-composer" ())

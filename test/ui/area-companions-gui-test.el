@@ -135,9 +135,9 @@ window kept half the area."
          (main (get-buffer-create "*companions main*"))
          (above (drgnx-ui-area-companions--buffer "*companions above*" 0))
          (below (drgnx-ui-area-companions--buffer "*companions below*" 1)))
-    ;; no tab row (a buffer with its own title, as the lone right area's panel has none): the empty companion's text is
-    ;; then no height at all, its fit one line, under the window's least height
-    (with-current-buffer main (setq-local drgnx-area-own-title t))
+    ;; a row on the companion (a title of the buffer's own, as the panel's header carries the area's tab row): the
+    ;; empty companion's least height is the row and a line, and its fit asks one line with the row, under that
+    (with-current-buffer main (setq-local drgnx-area-own-title "Companions"))
     (unwind-protect
         (with-selected-frame root
           (delete-other-windows)
@@ -147,7 +147,7 @@ window kept half the area."
           (drgnx-wb-define-tab 'right 'ui-companions :title "Companions" :companions #'drgnx-ui-area-companions--parts)
           (setq drgnx-ui-area-companions--parts (list above below))
           (drgnx-wb-area-show 'right 'ui-companions main)
-          (should (eq 'none (window-parameter (drgnx-ui-area-companions--part 'above) 'header-line-format)))
+          (should-not (eq 'none (window-parameter (drgnx-ui-area-companions--part 'above) 'header-line-format)))
           (drgnx-ui-area-companions--settle)
           (let* ((top (drgnx-ui-area-companions--part 'above)) (line (window-default-line-height top))
                  (least (* line (ceiling (window-min-size top nil top t) line))))
