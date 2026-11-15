@@ -11,7 +11,7 @@ Turn it off with the module `tools/agent-panel` (see [modules](modules.md)); eve
 ## What you see
 
 The header and the composer are fitted to what they hold and never scroll; only the transcript between them does, as
-any Emacs buffer: it opens at its end, and while point is there it keeps the latest step at its bottom, also when its
+any Emacs buffer: it opens at its end, and while point is there it keeps the latest step at its bottom, with no blank space under it (also past tall cards), also when its
 window grows (a bigger frame, a sent draft, a shorter header) and when you switch to another tab and back; once you
 scroll back it stays where you put it as new steps come in. The header's buttons work whatever the transcript shows. When the strip wraps to more
 lines or the draft grows, its window grows with it, up to 45% of the dock; the transcript gives the room.

@@ -710,8 +710,9 @@ moves each way, and the header window does not move (edges, start, vscroll)."
                        precise (window-start w) from)))
             (funcall still "down")))
       (pixel-scroll-precision-mode (if was 1 -1))
-      ;; the precise wheel leaves a pixel vscroll (15 px at s1 in a transcript shown whole from its start): with it,
-      ;; the next check's `scroll-down' did not move the window's start
+      ;; Emacs's behaviour: `pixel-scroll-precision-mode' leaves a pixel vscroll (`window-vscroll', 15 px at s1 in a
+      ;; transcript shown whole from its start), and a later `scroll-down' in that window leaves its start where it
+      ;; was, with no error (the header clicks' check then saw no scroll)
       (set-window-vscroll w 0 t))))
 
 (defun drgnx-look-scene--header-targets (window)
