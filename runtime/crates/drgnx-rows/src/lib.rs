@@ -11,6 +11,7 @@
 
 mod builder;
 pub mod fit;
+pub mod fit_row;
 pub mod fit_tty;
 pub mod image;
 mod patch;

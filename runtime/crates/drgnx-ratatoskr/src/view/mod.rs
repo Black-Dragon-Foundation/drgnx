@@ -40,8 +40,8 @@ use drgnx_rows::fit_tty;
 use drgnx_rows::image::ImageSet;
 use drgnx_rows::{ImageId, Op, Patch, Row, RowBuilder};
 use runstav::methods::view::{
-    Display, ViewAck, ViewClose, ViewEnv, ViewGlyphs, ViewGlyphsAsk, ViewMeasured, ViewModel,
-    ViewResync, ViewWindow,
+    Display, ViewAck, ViewClose, ViewEnv, ViewFace, ViewGlyphs, ViewGlyphsAsk, ViewMeasured,
+    ViewModel, ViewResync, ViewWindow,
 };
 use runstav::wire::Error;
 use serde_json::json;
@@ -64,6 +64,8 @@ struct Pair {
     reset_due: bool,
     acked: u64,
     pending: Option<Vec<Row>>,
+    /// The fonts of the pair's env: every row published is fitted to the env's width with them.
+    fonts: Option<Arc<FontSet>>,
 }
 
 /// How a view's patches go, set by its builder: ACK, at most one unacknowledged patch per (view, class);
@@ -324,9 +326,45 @@ impl Store {
                         reset_due: true,
                         acked: 0,
                         pending: None,
+                        fonts: None,
                     },
                 );
             }
+        }
+    }
+
+    /// KEY's fonts, made from its env: the rows published to KEY are fitted with them.
+    pub fn set_fonts(&mut self, key: &Key, fonts: Arc<FontSet>) {
+        if let Some(p) = self.pairs.get_mut(key) {
+            p.fonts = Some(fonts);
+        }
+    }
+
+    /// ROWS fitted to P's window ([`drgnx_rows::fit_row`]): a row that would run past the window's body (or a
+    /// segment past its next stop) cut there, measured in the fonts its faces draw in; IMAGES: the pictures the patch
+    /// brings, besides those P holds.
+    fn fit(p: &Pair, rows: &mut [Row], images: &[(ImageId, String)]) {
+        let empty = FontSet::new();
+        let fonts: &FontSet = p.fonts.as_deref().unwrap_or(&empty);
+        let image_px = |id: &ImageId| {
+            images
+                .iter()
+                .find(|(i, _)| i == id)
+                .map(|(_, svg)| svg.as_str())
+                .or_else(|| p.images.svg(id))
+                .and_then(drgnx_rows::image::svg_width)
+        };
+        let room = drgnx_rows::fit_row::Room {
+            width_px: p.env.width_px,
+            tty: matches!(p.env.display, Display::Tty)
+                .then_some((p.env.cell.0.max(1), p.env.tty_widths.as_slice())),
+            image_px: &image_px,
+        };
+        if p.env.width_px == 0 || p.env.headless {
+            return;
+        }
+        for r in rows {
+            drgnx_rows::fit_row::fit_row(r, fonts, &room);
         }
     }
 
@@ -363,6 +401,8 @@ impl Store {
             return None;
         }
         p.pending = None;
+        let mut rows = rows;
+        Self::fit(p, &mut rows, images);
         let ops = if p.reset_due {
             vec![Op::Reset(rows.clone())]
         } else {
@@ -416,7 +456,8 @@ impl Store {
             return Some(None);
         }
         let mut ops = Vec::new();
-        for (at, remove, rows) in spans {
+        for (at, remove, mut rows) in spans {
+            Self::fit(p, &mut rows, images);
             let mut span = drgnx_rows::diff(&p.rows[at..at + remove], &rows);
             if span.iter().any(|o| matches!(o, Op::Reset(_))) {
                 return None;
@@ -479,8 +520,9 @@ impl Store {
     pub fn resync(&mut self, key: &Key, images: &[(ImageId, String)]) -> Option<Patch> {
         let model = self.model_version(key);
         let p = self.pairs.get_mut(key)?;
-        // the rows waiting for an ack go with it: the reset is what is in flight now
-        if let Some(rows) = p.pending.take() {
+        // the rows waiting for an ack go with it: the reset is what is in flight now (fitted, as every published row)
+        if let Some(mut rows) = p.pending.take() {
+            Self::fit(p, &mut rows, images);
             p.rows = rows;
         }
         let ops = vec![Op::Reset(p.rows.clone())];
@@ -530,7 +572,7 @@ pub fn label_rows(labels: &[Label], env: &ViewEnv, fonts: &FontSet) -> Vec<Row> 
                 Display::Gui => {
                     let s = if env.scale > 0.0 { env.scale } else { 1.0 };
                     let dev = (f64::from(*px) * f64::from(s) + 0.5 + 1e-9).floor() as u32;
-                    (fit::fit(fonts, "ui", text, dev as f32), dev)
+                    (fit::fit_in(fonts, None, text, dev as f32), dev)
                 }
                 Display::Tty => {
                     let cols = (*px / env.cell.0.max(1)) as usize;
@@ -548,7 +590,8 @@ pub fn label_rows(labels: &[Label], env: &ViewEnv, fonts: &FontSet) -> Vec<Row> 
 #[derive(Default)]
 struct Fonts {
     files: fonts::Files,
-    sets: BTreeMap<Key, FontSet>,
+    /// Each pair's font set, shared with the store's pair (which fits the rows published with it).
+    sets: BTreeMap<Key, Arc<FontSet>>,
 }
 
 /// The shell: the store, the fonts, the rows the test fixture view is given (test hooks), and the sending.
@@ -613,11 +656,14 @@ impl Views {
     /// nothing.
     pub fn send_patch(&self, f: &Front, conn: u64, p: &Patch) -> bool {
         let key = (conn, p.view.clone(), p.class.clone());
-        if lock(&self.sja).contains(&key) {
+        let sent = if lock(&self.sja).contains(&key) {
             f.send_to(conn, "view-model", json!({"view": p.view, "rows": p}))
         } else {
             f.send_to(conn, "view-patch", json!(p))
-        }
+        };
+        // what the rows' fit did not know (a face, a glyph) is asked after every patch, whichever builder sent it
+        self.ask(f, &key);
+        sent
     }
 
     /// Builds (CONN, VIEW, CLASS)'s rows again and sends what changed. The builders: the test fixture view (its
@@ -823,33 +869,69 @@ impl Views {
 
     /// KEY's font set, for a builder to measure with (none before its `view/env`).
     pub fn with_fonts<R>(&self, key: &Key, then: impl FnOnce(&FontSet) -> R) -> Option<R> {
-        lock(&self.fonts).sets.get(key).map(then)
+        let set = lock(&self.fonts).sets.get(key).cloned();
+        set.map(|s| then(&s))
     }
 
-    /// Asks KEY's editor for the advances its builders missed (`view-glyphs`), each (role, char) once.
+    /// Asks KEY's editor for the advances its builders and the row fit missed, each (role, char) once, how the faces
+    /// its rows name draw, each once, and the widths of the segments the row fit could not decide (`view-glyphs`).
     fn ask(&self, f: &Front, key: &Key) {
-        let asks = self.with_fonts(key, FontSet::take_asks).unwrap_or_default();
-        if !asks.is_empty() {
+        let Some((asks, faces, measure)) = self.with_fonts(key, |s| {
+            (s.take_asks(), s.take_face_asks(), s.take_measure_asks())
+        }) else {
+            return;
+        };
+        if !asks.is_empty() || !faces.is_empty() || !measure.is_empty() {
             let ask: Vec<(String, String)> =
                 asks.into_iter().map(|(r, c)| (r, c.to_string())).collect();
             let ask = ViewGlyphsAsk {
                 view: key.1.clone(),
                 class: key.2.clone(),
                 ask,
+                faces,
+                measure,
             };
             f.send_to(key.0, "view-glyphs", json!(ask));
         }
     }
 
-    /// KEY's env arrived: its font set is made again when the fonts it names changed (the editor's answers kept
-    /// otherwise), and the files no env names any more are dropped.
-    fn env_fonts(&self, key: &Key, env: &ViewEnv, old: Option<&ViewEnv>) {
+    /// KEY's env arrived: its font set is made again when the fonts it names or its look (the epoch: a theme may
+    /// change a face's font) changed (the editor's answers kept otherwise), and the files no env names any more are
+    /// dropped.  The store's pair fits its rows with the set.
+    fn env_fonts(&self, key: &Key, env: &ViewEnv, old: Option<&ViewEnv>) -> Arc<FontSet> {
         let mut fonts = lock(&self.fonts);
-        if old.is_some_and(|o| o.fonts == env.fonts) && fonts.sets.contains_key(key) {
-            return;
+        if old.is_some_and(|o| o.fonts == env.fonts && o.epoch == env.epoch)
+            && let Some(s) = fonts.sets.get(key)
+        {
+            return s.clone();
         }
-        let set = fonts.files.font_set(env);
-        fonts.sets.insert(key.clone(), set);
+        let set = Arc::new(fonts.files.font_set(env));
+        fonts.sets.insert(key.clone(), set.clone());
+        set
+    }
+
+    /// The editor's answers for the faces KEY's rows name (`view/glyphs`' faces): a face of a font of its own gets
+    /// that font, read here.
+    fn face_answers(&self, key: &Key, faces: &[ViewFace]) -> bool {
+        let mut fonts = lock(&self.fonts);
+        let Some(set) = fonts.sets.get(key).cloned() else {
+            return false;
+        };
+        for a in faces {
+            let ink = fit::Ink {
+                role: a.role.clone(),
+                pad: a.pad.max(0.0),
+            };
+            let own = (a.role == a.face).then(|| {
+                let font = a
+                    .file
+                    .as_deref()
+                    .and_then(|file| fonts.files.own_font(file, a.index, a.px, a.wght));
+                (font, a.avg)
+            });
+            set.face_answer(&a.face, ink, own);
+        }
+        true
     }
 
     /// Forget the font sets of the keys the store no longer holds, and the files no env names.
@@ -944,13 +1026,17 @@ pub fn env(f: &Front, c: &Caller, p: ViewEnv) -> Result<bool, Error> {
     let views = &f.core.views;
     let key = (c.conn_id, p.view.clone(), p.class.clone());
     let old = lock(&views.store).env_of(&key).cloned();
-    views.env_fonts(&key, &p, old.as_ref());
+    let set = views.env_fonts(&key, &p, old.as_ref());
     if p.rows_in_sja {
         lock(&views.sja).insert(key.clone());
     } else {
         lock(&views.sja).remove(&key);
     }
-    lock(&views.store).env(c.conn_id, p);
+    {
+        let mut store = lock(&views.store);
+        store.env(c.conn_id, p);
+        store.set_fonts(&key, set);
+    }
     views.prune_fonts();
     views.build(f, &key);
     Ok(true)
@@ -1016,7 +1102,9 @@ pub fn glyphs(f: &Front, c: &Caller, p: ViewGlyphs) -> Result<bool, Error> {
             }
         })
         .collect();
-    if views.with_fonts(&key, |set| set.glyphs(&answers)).is_none() {
+    if views.with_fonts(&key, |set| set.glyphs(&answers)).is_none()
+        || !views.face_answers(&key, &p.faces)
+    {
         return Ok(false);
     }
     views.build(f, &key);

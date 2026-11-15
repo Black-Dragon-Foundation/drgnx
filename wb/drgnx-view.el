@@ -1727,7 +1727,7 @@ hub's raw line would bring it (`drgnx-view-model-line'; the hub sends that line 
               what)))))))
 
 (defconst drgnx-view-patch--json-lists
-  '(:ops :reset :replace :remove :rows :runs :props :stops :images :spaces :styles)
+  '(:ops :reset :replace :remove :rows :runs :props :stops :images :spaces :styles :fonts)
   "The keys of a row patch whose value is a list: an empty one is an empty array, not null.")
 
 (defun drgnx-view-patch--json (v)
@@ -2113,11 +2113,29 @@ foreground, before it the style's other attributes as one anonymous face, shared
           (setq hi (1- mid)))))
     (concat (substring seg 0 lo) "…")))
 
+(defvar drgnx-view-patch--fonts nil
+  "While a row is rendered: its `fonts' ([START END ROLE] ...), the roles the hub measured its text in.")
+
+(defun drgnx-view-patch--roles-key (fonts end)
+  "The roles of a row's chars before END, in the order they first appear, joined by \"+\": FONTS are the row's
+\(`drgnx-view-patch--fonts'), a char in none of them is `ui'.  The key the hub keeps a measured segment under, as its
+row fit computes it (`drgnx_rows::fit_row::roles_key')."
+  (let ((seen nil) (pos 0))
+    (while (< pos end)
+      (let* ((span (seq-find (lambda (f) (and (<= (nth 0 f) pos) (< pos (nth 1 f)))) fonts))
+             (role (if span (nth 2 span) "ui"))
+             (next (if span (nth 1 span)
+                     (seq-min (cons end (delq nil (mapcar (lambda (f) (and (> (nth 0 f) pos) (nth 0 f))) fonts)))))))
+        (unless (member role seen) (push role seen))
+        (setq pos (min end next))))
+    (if seen (string-join (nreverse seen) "+") "ui")))
+
 (defun drgnx-view-patch--fit-guard (state text stops)
   "The fit guard: one measure of TEXT's segment before its first stop of STOPS (none: nothing measured), with the
 row's faces and images on it (RENDER dresses TEXT first), so a proportional face measures as it is drawn.  When it runs
 past that stop's PX, the segment is fitted again (`drgnx-view-patch--fit-faced'), padded so later positions keep their
-place, and the measure reported (`view/measured').  Returns the new text, or nil when TEXT fits."
+place (the padding displayed as nothing), and the measure reported (`view/measured', under the roles the hub measured
+the segment in).  Returns the new text, or nil when TEXT fits."
   (when-let* ((stop (car stops)))
     (let* ((end (car stop)) (limit (cadr stop)) (seg (substring text 0 end))
            (w (funcall drgnx-view-patch-measure-function seg)))
@@ -2126,9 +2144,12 @@ place, and the measure reported (`view/measured').  Returns the new text, or nil
         (cl-incf (drgnx-view-patch-refits state))
         (funcall drgnx-view-patch-send-function "view/measured"
                  (list :view (drgnx-view-patch-view state) :class (drgnx-view-patch-class state)
-                       :measured (list (list "ui" (substring-no-properties seg) w))))
+                       :measured (list (list (drgnx-view-patch--roles-key drgnx-view-patch--fonts end)
+                                             (substring-no-properties seg) w))))
         (let ((fit (drgnx-view-patch--fit-faced seg limit)))
-          (concat fit (make-string (max 0 (- end (length fit))) ?\s) (substring text end)))))))
+          ;; the padding draws nothing: drawn, it would end the segment past its stop, whose `:align-to' would then
+          ;; take no width and push the text after it past the window's edge
+          (concat fit (propertize (make-string (max 0 (- end (length fit))) ?\s) 'display "") (substring text end)))))))
 
 (defun drgnx-view-patch-render (key)
   "RENDER of `drgnx-view-rows': KEY's stored row as text, in the current (the view's) buffer.  The guard
@@ -2136,7 +2157,7 @@ place, and the measure reported (`view/measured').  Returns the new text, or nil
 it changes is dressed again."
   ;; the row's one copy holds its newline too (no second copy to add it); the row's runs and properties end before it
   (let* ((state drgnx-view-patch) (row (gethash key (drgnx-view-patch-rows state)))
-         (stops (plist-get row :stops))
+         (stops (plist-get row :stops)) (drgnx-view-patch--fonts (plist-get row :fonts))
          (text (drgnx-view-patch--dress state key row (concat (plist-get row :text) "\n"))))
     (when-let* ((new (and stops (funcall drgnx-view-patch-guard-function state text stops))))
       (setq text (drgnx-view-patch--dress state key row new)))

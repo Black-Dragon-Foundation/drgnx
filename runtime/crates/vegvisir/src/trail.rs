@@ -483,7 +483,12 @@ pub fn timeline_rows(lanes: &[Lane], env: &Env, m: &dyn Measure, zone: Zone) -> 
     let mut out = vec![axis.finish()];
     for lane in lanes {
         let mut b = RowBuilder::new(format!("lane:{}", lane.id));
-        let label = drgnx_rows::fit::fit(m, "ui", &lane.label, 130.0 + drgnx_rows::fit::SLACK);
+        let label = drgnx_rows::fit::fit_in(
+            m,
+            Some("drgnx-work-label"),
+            &lane.label,
+            130.0 + drgnx_rows::fit::SLACK,
+        );
         b.push(&label, Some("drgnx-work-label"));
         let end = b.pos();
         b.prop(

@@ -35,6 +35,7 @@
 (declare-function magit-status-setup-buffer "magit-status")
 (declare-function drgnx-area--tab-row "drgnx-area" (area))
 (defvar drgnx-panel-replay-prefix)
+(declare-function drgnx-view-env--envs "drgnx-view-env")
 (defvar drgnx-panel-replay-project)
 (defvar package-directory-list)
 (defvar magit-save-repository-buffers)
@@ -2098,6 +2099,296 @@ a finished run left."
 (defun drgnx-look-scene-notebook-views () "The notebook and its outline view." (drgnx-look-scene--notebook-views 'drgnx-dark))
 (defun drgnx-look-scene-notebook-dark () "The notebook, dark." (drgnx-look-scene--notebook 'drgnx-dark))
 (defun drgnx-look-scene-notebook-light () "The notebook, light." (drgnx-look-scene--notebook 'drgnx-light))
+
+;;;; Widths: no hub-fed row wider than its window
+
+(declare-function drgnx-view-patch-class "drgnx-view")
+(declare-function drgnx-view-key-at "drgnx-view")
+(declare-function drgnx-view-env-face "drgnx-view-env")
+
+(defvar drgnx-look-scene--widths-log nil
+  "What the current scene's width check measured, newest first: (VIEW BUFFER HOW BODY-PX ROWS WIDE) per window and
+width, written to the scene's widths file.")
+
+(defvar drgnx-look-scene--widths-seen (make-hash-table :test #'equal)
+  "(BUFFER-NAME CHARS-TICK BODY-PX) → t for the view states already checked narrow and wide, so a view no scene changed
+is not resized again (bounded by the scenes: one entry per view per scene at most).")
+
+(defconst drgnx-look-scene-widths-max-rows 4000
+  "The most lines of a view's buffer `drgnx-look-scene--wide-rows' measures.")
+
+(defvar drgnx-look-scene--rows-measured 0 "How many rows the last `drgnx-look-scene--wide-rows' measured.")
+
+(defun drgnx-look-scene--fed-windows ()
+  "The live windows of the visible frames that show a hub-fed view (a buffer with a `drgnx-view-patch')."
+  (cl-remove-if-not (lambda (w) (and (boundp 'drgnx-view-patch) (buffer-local-value 'drgnx-view-patch (window-buffer w))))
+                    (cl-mapcan (lambda (f) (and (eq (frame-visible-p f) t) (window-list f 'never))) (frame-list))))
+
+(defun drgnx-look-scene--row-parts (window bol eol)
+  "The parts of the row BOL..EOL in WINDOW's buffer as drawn, for the log of a row wider than its window: ((TEXT FACE
+PX HOW) ...), one per stretch of one face, PX its width in WINDOW and HOW the face's answer to the hub
+\(`drgnx-view-env-face'), so a wrong guess shows where it is."
+  (let ((pos bol) parts)
+    (while (< pos eol)
+      (let* ((next (min eol (next-single-property-change pos 'face nil eol)))
+             (face (get-text-property pos 'face))
+             (top (if (consp face) (car face) face)))
+        (push (list (buffer-substring-no-properties pos next) face
+                    (car (window-text-pixel-size window pos next))
+                    (and (symbolp top) top (drgnx-view-env-face (symbol-name top) (current-buffer))))
+              parts)
+        (setq pos next)))
+    (nreverse parts)))
+
+(defun drgnx-look-scene--wide-rows (window)
+  "The hub's rows in WINDOW's buffer (lines that start a row with a string key: a Lisp-drawn line, such as the agent
+panel's composer, is not one) drawn wider than WINDOW's body: ((PX LINE TEXT PARTS FONTS) ...), TEXT the row's
+first 60 characters, LINE its line number, PARTS its stretches as drawn (`drgnx-look-scene--row-parts') and FONTS the
+roles the hub measured it in.  The number of rows measured is in `drgnx-look-scene--rows-measured'."
+  (let ((body (window-body-width window t)) (n 0) (rows 0) wide)
+    (with-current-buffer (window-buffer window)
+      (save-excursion
+        (save-restriction
+          (widen)
+          (goto-char (point-min))
+          (while (and (not (eobp)) (< n drgnx-look-scene-widths-max-rows))
+            (setq n (1+ n))
+            (let* ((bol (point)) (eol (line-end-position)))
+              (when (stringp (ignore-errors (drgnx-view-key-at bol)))
+                (setq rows (1+ rows))
+                (let ((px (car (window-text-pixel-size window bol eol))))
+                  (when (> px body)
+                    (push (list px n (buffer-substring-no-properties bol (min eol (+ bol 60)))
+                                (drgnx-look-scene--row-parts window bol eol)
+                                ;; the roles the hub measured the row in
+                                (ignore-errors
+                                  (plist-get (gethash (drgnx-view-key-at bol) (drgnx-view-patch-rows drgnx-view-patch))
+                                             :fonts)))
+                          wide)))))
+            (forward-line 1)))))
+    (setq drgnx-look-scene--rows-measured rows)
+    (nreverse wide)))
+
+(defun drgnx-look-scene--hub-caught-up ()
+  "Non-nil once a `ping' on the subscribed connection is answered (3 s at most): the hub handles a connection's lines
+in order, so every line this Emacs sent before it (an env, a measurement, an ack) has been handled, and what the hub
+sent for them came before the answer and has been read."
+  (let ((done nil) (end (+ (float-time) 3)))
+    (when (process-live-p drgnx-hub--events)
+      (drgnx-hub--call-on drgnx-hub--events "ping" nil (lambda (&rest _) (setq done t)))
+      (while (and (not done) (< (float-time) end))
+        (accept-process-output drgnx-hub--events 0.02)))
+    done))
+
+(defun drgnx-look-scene--rows-settle (buffer how)
+  "Wait for BUFFER's rows after its window's width changed (HOW names the width): its env goes out now (not after the
+idle debounce), then a round trip to the hub (`drgnx-look-scene--hub-caught-up') and the patches it sent drawn, again
+until a round trip changes nothing (the editor's answers to the hub's asks, a refit, go out in between).  An error
+when the hub does not answer, or when its rows still change after 10 s."
+  (let ((view (drgnx-view-patch-view (buffer-local-value 'drgnx-view-patch buffer)))
+        (end (+ (float-time) 10)) (settled nil))
+    (redisplay t)
+    (drgnx-view-env-update view)
+    (while (and (not settled) (< (float-time) end))
+      (let ((tick (buffer-chars-modified-tick buffer)))
+        (unless (drgnx-look-scene--hub-caught-up)
+          (push (format "widths: %s (%s) %s: the hub did not answer a ping" view (buffer-name buffer) how)
+                drgnx-look-scene--errors)
+          (setq end 0))
+        ;; the patches it sent, drawn (a coalescing timer runs here)
+        (accept-process-output nil 0.05)
+        (with-current-buffer buffer (when (drgnx-view-p drgnx-view) (drgnx-view-draw-now drgnx-view)))
+        (redisplay t)
+        (setq settled (= tick (buffer-chars-modified-tick buffer)))))
+    (unless (or settled (zerop end))
+      (push (format "widths: %s (%s) %s: the rows still changed after 10 s" view (buffer-name buffer) how)
+            drgnx-look-scene--errors))))
+
+(defun drgnx-look-scene--widths-check (window how)
+  "One error per WINDOW whose hub rows are wider than its body, HOW naming the width (as drawn, narrow, wide)."
+  (let* ((wide (drgnx-look-scene--wide-rows window))
+         (buffer (window-buffer window)) (state (buffer-local-value 'drgnx-view-patch buffer))
+         (view (drgnx-view-patch-view state)))
+    (push (list view (buffer-name buffer) how (window-body-width window t) drgnx-look-scene--rows-measured
+                (length wide) (seq-take wide 4))
+          drgnx-look-scene--widths-log)
+    (when wide
+      (push (format "widths: %s (%s, class %s) %s at %d px (env width %S): %d rows wider than the body, e.g. %S"
+                    view (buffer-name buffer) (drgnx-view-patch-class state) how (window-body-width window t)
+                    (mapcar (lambda (c) (plist-get (cdr c) :width_px)) (drgnx-view-env--envs view))
+                    (length wide) (seq-take wide 4))
+            drgnx-look-scene--errors))))
+
+(defun drgnx-look-scene--resize (window delta)
+  "Make WINDOW DELTA pixels wider (narrower when negative), as far as the frame allows, its neighbours' preserved
+sizes ignored (a dock's side window keeps its width otherwise); the pixels it moved."
+  (let* ((d (if (> delta 0) (min delta (window-max-delta window t t nil nil nil t))
+              (- (min (- delta) (window-min-delta window t t nil nil nil t)))))
+         (from (window-pixel-width window)))
+    (unless (zerop d) (window-resize window d t t t))
+    (- (window-pixel-width window) from)))
+
+(defconst drgnx-look-scene-widths-slack 10
+  "The px the hub keeps short of a segment's end (`drgnx_rows::fit::SLACK').")
+
+(defun drgnx-look-scene--free-after (window bol pos eol)
+  "The px free after POS on its row BOL..EOL in WINDOW: the blanks and stops' spaces from POS on, and, when they reach
+EOL, the body's px past the row's end."
+  (let ((q pos))
+    (while (and (< q eol) (or (memq (char-after q) '(?\s ?\t))
+                              (eq (car-safe (get-text-property q 'display)) 'space)))
+      (setq q (1+ q)))
+    (+ (if (> q pos) (car (window-text-pixel-size window pos q)) 0)
+       (if (< q eol) 0 (max 0 (- (window-body-width window t) (car (window-text-pixel-size window bol eol))))))))
+
+(defun drgnx-look-scene--cut-rows (window how)
+  "Each cut in the hub's rows in WINDOW's buffer: (KEY HOW BODY-PX PREFIX AFTER FREE ELLIPSIS-PX ROW-PARTS FONTS),
+PREFIX the row's text before the `…', AFTER its text after it, FREE the px free after it
+\(`drgnx-look-scene--free-after'), FONTS the roles the hub measured the row in."
+  (let ((out nil) (n 0))
+    (with-current-buffer (window-buffer window)
+      (save-excursion
+        (save-restriction
+          (widen)
+          (goto-char (point-min))
+          (while (and (not (eobp)) (< n drgnx-look-scene-widths-max-rows))
+            (setq n (1+ n))
+            (let* ((bol (point)) (eol (line-end-position)) (key (ignore-errors (drgnx-view-key-at bol))))
+              (when (stringp key)
+                (goto-char bol)
+                (while (search-forward "…" eol t)
+                  (push (list key how (window-body-width window t)
+                              (buffer-substring-no-properties bol (1- (point)))
+                              (buffer-substring-no-properties (point) eol)
+                              (drgnx-look-scene--free-after window bol (point) eol)
+                              (car (window-text-pixel-size window (1- (point)) (point)))
+                              (drgnx-look-scene--row-parts window bol eol)
+                              (ignore-errors (plist-get (gethash key (drgnx-view-patch-rows drgnx-view-patch)) :fonts)))
+                        out))))
+            (goto-char (line-end-position))
+            (forward-line 1)))))
+    (nreverse out)))
+
+(defun drgnx-look-scene--row-texts (window)
+  "KEY → the hub row's text as drawn in WINDOW's buffer (with its faces), for the rows with a string key."
+  (let ((rows (make-hash-table :test #'equal)) (n 0))
+    (with-current-buffer (window-buffer window)
+      (save-excursion
+        (save-restriction
+          (widen)
+          (goto-char (point-min))
+          (while (and (not (eobp)) (< n drgnx-look-scene-widths-max-rows))
+            (setq n (1+ n))
+            (let ((key (ignore-errors (drgnx-view-key-at (point)))))
+              (when (stringp key) (puthash key (buffer-substring (point) (line-end-position)) rows)))
+            (forward-line 1)))))
+    rows))
+
+(defun drgnx-look-scene--over-cut (cut wide buffer)
+  "CUT (one of `drgnx-look-scene--cut-rows') when the text it cut off fits the px free after its `…': the same row's
+text WIDE (from `drgnx-look-scene--row-texts' at the widest width) gives what was cut (from the end of its prefix to
+the text after the `…', blanks trimmed), measured in BUFFER with its faces; the hub keeps the slack short of an end.
+Nil when the row changed otherwise, or is cut there at that width too.  Else CUT with the cut text and its px."
+  (pcase-let ((`(,key ,_how ,_body ,prefix ,after ,free ,ell . ,_) cut))
+    (when-let* ((full (gethash key wide))
+                ((string-prefix-p prefix (substring-no-properties full)))
+                (rest (substring full (length prefix)))
+                ((not (string-prefix-p "…" rest)))
+                (next (string-trim-left after))
+                (to (if (string-empty-p next) (length rest)
+                      (string-search (substring next 0 (min 4 (length next))) (substring-no-properties rest))))
+                (gone (string-trim-right (substring rest 0 to)))
+                ((not (string-empty-p gone)))
+                (px (string-pixel-width gone buffer))
+                ((<= (+ (- px ell) drgnx-look-scene-widths-slack) (1- free))))
+      (append cut (list :cut-off (substring-no-properties gone) :cut-off-px px)))))
+
+(defvar drgnx-look-scene-widths-fixed nil
+  "Regexps of the buffer names whose windows a scene may show at a width the frame cannot change by 40 px (measured as
+drawn only); any other fed window that cannot be resized fails the width check.")
+
+(defvar drgnx-look-scene--asks (make-hash-table :test #'equal)
+  "VIEW → (EVENTS GLYPHS FACES MEASURES): what the hub asked this Emacs about VIEW's rows (`view-glyphs'), for the
+widths file (bounded by the views the scenes open).")
+
+(defun drgnx-look-scene--count-asks (event data)
+  "Count a `view-glyphs' EVENT's asks (DATA) under its view in `drgnx-look-scene--asks'."
+  (when (equal event "view-glyphs")
+    (let ((c (or (gethash (plist-get data :view) drgnx-look-scene--asks) (list 0 0 0 0))))
+      (puthash (plist-get data :view)
+               (list (1+ (nth 0 c)) (+ (nth 1 c) (length (plist-get data :ask)))
+                     (+ (nth 2 c) (length (plist-get data :faces))) (+ (nth 3 c) (length (plist-get data :measure))))
+               drgnx-look-scene--asks))))
+
+(with-eval-after-load 'drgnx-view-env
+  (advice-add 'drgnx-view-env-event :before #'drgnx-look-scene--count-asks))
+
+(defun drgnx-look-scene-widths (file)
+  "No hub-fed view's row is wider than its window's body, and none is cut with `…' where its full text fits: every
+window of the visible frames that shows one, as the shot drew it, then narrower (by a third, at most 300 px) and
+wider (300 px, as far as the frame allows), each once the hub's rows for that width came
+\(`drgnx-look-scene--rows-settle'), then back.  A cut row at the drawn and narrow widths is checked against the same
+row at the wide one (`drgnx-look-scene--over-cut').  A window the frame cannot resize by 40 px fails, unless its
+buffer is named in `drgnx-look-scene-widths-fixed'.  A view state already checked (same text, same width) is not
+resized again.  What was measured goes to FILE."
+  (setq drgnx-look-scene--widths-log nil)
+  (drgnx-look-scene--try "widths"
+    (dolist (w (drgnx-look-scene--fed-windows))
+      (drgnx-look-scene--widths-check w "as drawn")
+      (let* ((buffer (window-buffer w))
+             (key (list (buffer-name buffer) (buffer-chars-modified-tick buffer) (window-body-width w t)))
+             (view (drgnx-view-patch-view (buffer-local-value 'drgnx-view-patch buffer)))
+             (cuts (drgnx-look-scene--cut-rows w "as drawn")))
+        ;; the same width once a round trip to the hub drew what it still had for it.  When that changed the rows, the
+        ;; shot was taken before the hub's refit (the scene's wait is short): its cuts are logged with the rows the
+        ;; hub settled on, and those are checked instead
+        (drgnx-look-scene--rows-settle buffer "settled")
+        (unless (= (nth 1 key) (buffer-chars-modified-tick buffer))
+          (push (list view (buffer-name buffer) :changed-after-the-shot :cuts-in-the-shot cuts)
+                drgnx-look-scene--widths-log)
+          (drgnx-look-scene--widths-check w "settled")
+          (setq cuts (drgnx-look-scene--cut-rows w "settled")))
+        (unless (gethash key drgnx-look-scene--widths-seen)
+          (puthash key t drgnx-look-scene--widths-seen)
+          (let ((moved 0) (wide nil))
+            (unwind-protect
+                (pcase-dolist (`(,how . ,delta) (list (cons "narrow" (- (min 300 (/ (window-body-width w t) 3))))
+                                                      (cons "wide" 300)))
+                  (when (/= moved 0) (window-resize w (- moved) t t t) (setq moved 0))
+                  (setq moved (drgnx-look-scene--resize w delta))
+                  (if (< (abs moved) 40)
+                      (progn
+                        (push (list (buffer-name buffer) how :not-resizable moved) drgnx-look-scene--widths-log)
+                        (unless (seq-some (lambda (re) (string-match-p re (buffer-name buffer)))
+                                          drgnx-look-scene-widths-fixed)
+                          (push (format "widths: %s (%s) %s: the window moved %d px, not 40 (a scene must leave room \
+to resize a fed window, or name it in `drgnx-look-scene-widths-fixed')" view (buffer-name buffer) how moved)
+                                drgnx-look-scene--errors)))
+                    (drgnx-look-scene--rows-settle buffer how)
+                    (drgnx-look-scene--widths-check w how)
+                    (if (equal how "wide") (setq wide (drgnx-look-scene--row-texts w))
+                      (setq cuts (append cuts (drgnx-look-scene--cut-rows w how))))))
+              (unless (zerop moved) (window-resize w (- moved) t t t))
+              (drgnx-look-scene--rows-settle buffer "back"))
+            (when wide
+              (let ((over (delq nil (mapcar (lambda (c) (drgnx-look-scene--over-cut c wide buffer)) cuts))))
+                (push (list view (buffer-name buffer) :cuts (length cuts) :over-cut (length over) (seq-take over 4)
+                            ;; what the hub measures with: the env's fonts, and what it asked of this Emacs
+                            :env-fonts (mapcar (lambda (c) (cons (car c) (plist-get (cdr c) :fonts)))
+                                               (drgnx-view-env--envs view))
+                            :asks (gethash view drgnx-look-scene--asks))
+                      drgnx-look-scene--widths-log)
+                (when over
+                  (push (format "widths: %s (%s): %d rows cut with … whose full text fits, e.g. %S"
+                                view (buffer-name buffer) (length over)
+                                (mapcar (lambda (o) (list (nth 0 o) (nth 1 o) (nth 2 o) (nth 3 o)
+                                                          (plist-get (nthcdr 9 o) :cut-off)
+                                                          (plist-get (nthcdr 9 o) :cut-off-px) (nth 5 o)))
+                                        (seq-take over 4)))
+                        drgnx-look-scene--errors)))))))))
+  (let ((print-length nil) (print-level nil))
+    (with-temp-file file (pp (reverse drgnx-look-scene--widths-log) (current-buffer))))
+  (drgnx-look-scene--answer))
 
 (defun drgnx-look-scene-facts (file &optional scene)
   "Write what SCENE realised to FILE: what the line cannot show yet (`drgnx-look-scene-limits'), themes, fonts of the

@@ -52,6 +52,14 @@ impl Files {
         set
     }
 
+    /// The font of a face's own role (`view/glyphs`' faces): face INDEX of FILE at PX, at weight WGHT (a variable
+    /// font's axis; a static file is its weight already); none when it cannot be read.
+    pub fn own_font(&mut self, file: &str, index: u32, px: f32, wght: Option<f32>) -> Option<Font> {
+        let axes: Vec<(&str, f32)> = wght.map(|w| ("wght", w)).into_iter().collect();
+        self.get(file)
+            .and_then(|b| Font::new(b, index, px, &axes).ok())
+    }
+
     /// Drop the files no env in ENVS names.
     pub fn keep_only<'a>(&mut self, envs: impl Iterator<Item = &'a ViewEnv>) {
         let named: std::collections::BTreeSet<&str> = envs

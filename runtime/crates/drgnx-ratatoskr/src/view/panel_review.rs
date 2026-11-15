@@ -18,6 +18,9 @@ use serde_json::{Value, json};
 /// The most files that get diff cards, and the most lines of a hunk a card shows.
 pub const MAX_FILES: usize = 20;
 const MAX_LINES: usize = 30;
+/// The most chars of a diff line a row carries (a minified file's line would make rows of megabytes); the window's
+/// width cuts it well before.
+const MAX_CHARS: usize = 400;
 
 /// What the cards read.
 pub struct In<'a> {
@@ -74,23 +77,16 @@ fn px(env: &ViewEnv, v: f32) -> u32 {
     (f64::from(v) * f64::from(scale) + 0.5 + 1e-9).floor() as u32
 }
 
-fn text_width(i: &In, text: &str) -> u32 {
+/// TEXT's width drawn in FACE (none: the panel's default), in the font the editor says FACE draws in.
+fn text_width(i: &In, face: Option<&str>, text: &str) -> u32 {
     match i.env.display {
-        Display::Gui => fit::width(i.fonts, "ui", text).ceil() as u32,
+        Display::Gui => fit::width_in(i.fonts, face, text).ceil() as u32,
         Display::Tty => text.chars().count() as u32 * i.env.cell.0.max(1),
     }
 }
 
-/// How many code columns a card line has: the panel's width less the card's 12 px either side and the line number, or
-/// 100 when the width is not known.
-fn columns(env: &ViewEnv) -> usize {
-    if env.width_px == 0 {
-        return 100;
-    }
-    let room = env.width_px.saturating_sub(2 * px(env, 12.0)) / env.cell.0.max(1);
-    (room.saturating_sub(6) as usize).clamp(8, 100)
-}
-
+/// TEXT kept to COLS chars (the last an ellipsis): a bound on a row's size, not its fit (the hub fits each row to its
+/// window, in the fonts it draws in).
 fn cut(text: &str, cols: usize) -> String {
     if text.chars().count() <= cols {
         text.to_owned()
@@ -174,28 +170,32 @@ fn diff_header(
         "drgnx-text-muted",
     );
     b.push(" ", None);
-    let actions = " Reject   Accept ";
-    let actions_w = text_width(i, actions);
+    let button = Some("drgnx-ui-button");
+    let actions_w = text_width(i, button, " Reject ")
+        + text_width(i, None, " ")
+        + text_width(i, button, " Accept ");
     // what is left for the name and the label: the icon, then the buttons and 20 px of margin
     let room = i64::from(env.width_px)
         - i64::from(icon_px)
-        - i64::from(text_width(i, "   "))
+        - i64::from(text_width(i, None, "   "))
         - i64::from(actions_w)
         - i64::from(px(env, 20.0));
     let name = one_line(path, 50);
-    let (name, label) =
-        if env.width_px == 0 || i64::from(text_width(i, &format!("{name} {label}"))) <= room {
-            (name, label)
-        } else if room > 0 {
-            let name = if i64::from(text_width(i, &name)) <= room {
-                name
-            } else {
-                fit::fit(i.fonts, "ui", &name, room as f32)
-            };
-            (name, String::new())
+    let both = text_width(i, Some("bold"), &name)
+        + text_width(i, None, " ")
+        + text_width(i, Some("drgnx-agent-panel-subtle"), &label);
+    let (name, label) = if env.width_px == 0 || i64::from(both) <= room {
+        (name, label)
+    } else if room > 0 {
+        let name = if i64::from(text_width(i, Some("bold"), &name)) <= room {
+            name
         } else {
-            (String::new(), String::new())
+            fit::fit_in(i.fonts, Some("bold"), &name, room as f32)
         };
+        (name, String::new())
+    } else {
+        (String::new(), String::new())
+    };
     b.push(&name, Some("bold"));
     b.push(" ", None);
     b.push(&label, Some("drgnx-agent-panel-subtle"));
@@ -252,7 +252,6 @@ fn diff_card(
     )];
     let (mut old, _) = range(&h.header, '-');
     let (mut new, _) = range(&h.header, '+');
-    let cols = columns(env);
     let body: Vec<&String> = h.lines.iter().take(MAX_LINES).collect();
     let count = body.len();
     for (k, l) in body.into_iter().enumerate() {
@@ -285,7 +284,8 @@ fn diff_card(
         b.push(&format!("{num:4} "), Some("drgnx-text-muted"));
         let gutter_end = b.pos();
         b.face(gutter, gutter_end, face);
-        b.push(&format!("{sign}{}", cut(rest, cols)), Some(face));
+        // cut at the card's edge by the row fit, which measures the line in its font
+        b.push(&format!("{sign}{}", cut(rest, MAX_CHARS)), Some(face));
         b.stop(env.width_px.saturating_sub(px(env, 12.0)));
         let end = b.pos();
         b.face(0, end, shape(count, k));

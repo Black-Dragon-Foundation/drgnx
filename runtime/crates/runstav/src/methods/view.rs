@@ -68,6 +68,10 @@ pub struct ViewEnv {
     /// which Sjá takes whole, for any view (a terminal's from `term/open` and `term/attach` too).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub rows_in_sja: bool,
+    /// The view is in no window: its rows are read, never drawn (the git letters), so the hub does not fit them to
+    /// `width_px`, the selected window's.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub headless: bool,
 }
 
 /// `view/resync`: the editor's rows of (VIEW, CLASS) are not what the hub thinks (a patch's base it does not hold, an
@@ -116,12 +120,35 @@ pub struct ViewAck {
     pub version: u64,
 }
 
-/// `view/glyphs`: the editor's answer to `view-glyphs`, `[role, char, px]` each.
+/// `view/glyphs`: the editor's answer to `view-glyphs`, `[role, char, px]` each, and the faces it asked about.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct ViewGlyphs {
     pub view: String,
     pub class: String,
     pub glyphs: Vec<(String, String, f32)>,
+    #[serde(default)]
+    pub faces: Vec<ViewFace>,
+}
+
+/// How FACE draws in the view's buffer: in ROLE's font (one of the env's roles whose font it is; else FACE itself, a
+/// role of its own, with its font FILE, INDEX, PX, AVG and weight WGHT, as the env's `fonts` say them), its box adding
+/// PAD px at each end of a run.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ViewFace {
+    pub face: String,
+    pub role: String,
+    #[serde(default)]
+    pub pad: f32,
+    #[serde(default)]
+    pub file: Option<String>,
+    #[serde(default)]
+    pub index: u32,
+    #[serde(default)]
+    pub px: f32,
+    #[serde(default)]
+    pub avg: f32,
+    #[serde(default)]
+    pub wght: Option<f32>,
 }
 
 /// `view/measured`: the fit guard measured these strings wider than the hub fitted them, `[role, string, px]` each.
@@ -148,14 +175,24 @@ pub struct ViewWindow {
     pub from: u64,
 }
 
-/// `view-glyphs`: the hub asks the editor for advances it cannot read from the font, `[role, char]` each.
+/// `view-glyphs`: the hub asks the editor for advances it cannot read from the font, `[role, char]` each, and how
+/// the FACES its rows name draw (answered by `view/glyphs`' `faces`), and to MEASURE strings as drawn, `[key, text,
+/// runs]` each, the runs `[start, end, face]` over the text's chars, an earlier above a later (answered by
+/// `view/measured`, `[key, text, px]`): a row segment whose sum came too close to its end to decide.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ViewGlyphsAsk {
     pub view: String,
     pub class: String,
     pub ask: Vec<(String, String)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub faces: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub measure: Vec<MeasureAsk>,
 }
+
+/// A string `view-glyphs` asks the editor to measure: its key, its text, its runs `[start, end, face]`.
+pub type MeasureAsk = (String, String, Vec<(u32, u32, String)>);
 
 fn check_ids(view: &str, class: Option<&str>) -> Result<(), Error> {
     if view.is_empty() || view.len() > VIEW_MAX {

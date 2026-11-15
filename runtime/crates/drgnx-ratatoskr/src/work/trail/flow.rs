@@ -72,8 +72,6 @@ const CARD_CODE: &str = "drgnx-work-flow-card-code";
 /// The text property that marks a block Glitnir draws over the rows (`glitnir-blocks`): `["ring", ID, X0, X1]` on a
 /// card's span of each of its rows, `["rule", KEY, X0, X1]` on a row with a hairline under it (device px).
 const BLOCK: &str = "drgnx-work-flow-block";
-/// The font role the Flow's text is measured in (`drgnx-ui-caption`, the table's 12 px: `drgnx-view-env-roles`).
-const ROLE: &str = "caption";
 
 impl Chip {
     /// The chip's face.
@@ -405,20 +403,34 @@ fn fit(text: &str, chars: usize) -> String {
     s
 }
 
-/// TEXT's width in device px in the Flow's font (M measures).
-fn text_px(m: &dyn Measure, text: &str) -> u32 {
-    drgnx_rows::fit::width(m, ROLE, text).ceil() as u32
+/// TEXT's width in device px drawn in FACE, in the font the editor says FACE draws in (M measures).
+fn text_px(m: &dyn Measure, face: &str, text: &str) -> u32 {
+    drgnx_rows::fit::width_in(m, Some(face), text).ceil() as u32
+}
+
+/// TEXT drawn in FACE cut with an ellipsis to PX device px.
+fn fit_px(m: &dyn Measure, face: &str, text: &str, px: u32) -> String {
+    drgnx_rows::fit::fit_in(m, Some(face), text, px as f32)
+}
+
+/// The face C's text is drawn in ([`draw_cell`]): a gate the pack lacks in the label face, else on its chip's.
+fn cell_face(c: &Cell) -> &'static str {
+    match c.chip {
+        Chip::Na => LABEL,
+        _ => c.chip.face(),
+    }
 }
 
 /// The width CELL of GATE takes as [`draw_cell`] draws it, ICON the icons' size.
 fn cell_px(m: &dyn Measure, icon: u32, gate: &str, c: &Cell) -> u32 {
-    let sp = text_px(m, " ");
+    let face = cell_face(c);
+    let sp = text_px(m, face, " ");
     match c.chip {
         Chip::Wait if c.text == "—" => icon,
-        Chip::Na => text_px(m, &c.text),
-        Chip::Held => 3 * sp + icon + text_px(m, &c.text),
-        Chip::Ok if gate == "Author check" => 3 * sp + icon + text_px(m, &c.text),
-        _ => 2 * sp + text_px(m, &c.text),
+        Chip::Na => text_px(m, face, &c.text),
+        Chip::Held => 3 * sp + icon + text_px(m, face, &c.text),
+        Chip::Ok if gate == "Author check" => 3 * sp + icon + text_px(m, face, &c.text),
+        _ => 2 * sp + text_px(m, face, &c.text),
     }
 }
 
@@ -437,7 +449,7 @@ fn columns(ts: &[Task], env: &ViewEnv, m: &dyn Measure) -> (Vec<u32>, Vec<u32>) 
     let (icon, gap) = (dpx(env, 14.0), dpx(env, 10.0));
     let mut gates: Vec<u32> = GATES
         .iter()
-        .map(|g| icon + text_px(m, " ") + text_px(m, g))
+        .map(|g| icon + text_px(m, LABEL, " ") + text_px(m, LABEL, g))
         .collect();
     for t in ts {
         for (i, c) in t.cells.iter().enumerate() {
@@ -446,14 +458,14 @@ fn columns(ts: &[Task], env: &ViewEnv, m: &dyn Measure) -> (Vec<u32>, Vec<u32>) 
     }
     let agent = ts
         .iter()
-        .map(|t| text_px(m, t.agent.as_deref().unwrap_or("—")))
-        .chain([text_px(m, "Agent")])
+        .map(|t| text_px(m, LABEL, t.agent.as_deref().unwrap_or("—")))
+        .chain([text_px(m, LABEL, "Agent")])
         .max()
         .unwrap_or(0);
     let fixed = agent + gap + gap * gates.len() as u32;
     let title = ts
         .iter()
-        .map(|t| text_px(m, &format!("{}  ", t.label)) + text_px(m, &t.title) + gap)
+        .map(|t| text_px(m, LABEL, &format!("{}  ", t.label)) + text_px(m, TEXT, &t.title) + gap)
         .max()
         .unwrap_or(0)
         .min(env.width_px / 3)
@@ -492,9 +504,10 @@ fn fit_cell(m: &dyn Measure, icon: u32, gate: &str, c: &Cell, w: u32) -> Cell {
     if px <= w || (c.chip == Chip::Wait && c.text == "—") {
         return c.clone();
     }
-    let room = w.saturating_sub(px - text_px(m, &c.text));
+    let face = cell_face(c);
+    let room = w.saturating_sub(px - text_px(m, face, &c.text));
     Cell {
-        text: drgnx_rows::fit::fit(m, ROLE, &c.text, room as f32),
+        text: fit_px(m, face, &c.text, room),
         ..c.clone()
     }
 }
@@ -576,30 +589,36 @@ fn strip_row(
         .iter()
         .map(|(label, used, total)| format!("{label} {used}/{total}"))
         .collect();
-    let (sp, gap) = (text_px(fonts, " "), dpx(env, 6.0));
-    // a chip's width as `chip' draws it: its spaces, its icon (its placeholder counted too) and its text
-    let chip_px = |text: &str, icon: bool| {
-        2 * sp + text_px(fonts, text) + if icon { 2 * sp + pics.px } else { 0 }
+    let (sp, gap) = (text_px(fonts, LABEL, " "), dpx(env, 6.0));
+    let (held_face, wait_face) = (Chip::Held.face(), Chip::Wait.face());
+    // a chip's width as `chip' draws it in FACE: its spaces, its icon (its placeholder counted too) and its text
+    let chip_px = |text: &str, icon: bool, face: &str| {
+        let csp = text_px(fonts, face, " ");
+        2 * csp + text_px(fonts, face, text) + if icon { 2 * csp + pics.px } else { 0 }
     };
-    let mut width = cost.as_ref().map_or(0, |c| chip_px(c, false) + sp + gap)
+    let mut width = cost
+        .as_ref()
+        .map_or(0, |c| chip_px(c, false, wait_face) + sp + gap)
         + machines
             .iter()
-            .map(|m| chip_px(m, true) + sp + gap)
+            .map(|m| chip_px(m, true, wait_face) + sp + gap)
             .sum::<u32>();
     // the left part fits before it: the push's words stay whole, the held tasks' reasons share what is left (each
     // keeps room for a word and its ellipsis); when even that does not fit, the right part gives way
     let push = push_green.then(|| format!("push job/{}? gate green", flow.job));
-    let fixed = push.as_ref().map_or(0, |p| chip_px(p, true) + 2 * sp)
+    let fixed = push
+        .as_ref()
+        .map_or(0, |p| chip_px(p, true, held_face) + 2 * sp)
         + held
             .iter()
             .enumerate()
             .map(|(i, t)| {
-                chip_px(&format!("{} held: ", t.label), true)
-                    + text_px(fonts, &format!(" g{} ", i + 1))
+                chip_px(&format!("{} held: ", t.label), true, held_face)
+                    + text_px(fonts, KEY, &format!(" g{} ", i + 1))
                     + 2 * sp
             })
             .sum::<u32>();
-    let least = u32::try_from(held.len()).unwrap_or(0) * text_px(fonts, "word…");
+    let least = u32::try_from(held.len()).unwrap_or(0) * text_px(fonts, held_face, "word…");
     let room_with = |width: u32| {
         if width > 0 {
             env.width_px.saturating_sub(width + dpx(env, 4.0) + gap)
@@ -620,7 +639,7 @@ fn strip_row(
         }
         let start = b.pos();
         let why = t.held.as_deref().unwrap_or_default();
-        let why = drgnx_rows::fit::fit(fonts, ROLE, why, each as f32);
+        let why = fit_px(fonts, held_face, why, each);
         chip(
             &mut b,
             pics,
@@ -762,14 +781,11 @@ pub(crate) fn flow_rows(
             cols.push(" ", None);
             let end = cols.pos();
             cols.face(start, end, LABEL);
-            let room = widths[i - 2].saturating_sub(icon + text_px(fonts, " "));
-            if text_px(fonts, name) <= room {
+            let room = widths[i - 2].saturating_sub(icon + text_px(fonts, LABEL, " "));
+            if text_px(fonts, LABEL, name) <= room {
                 cols.push(name, Some(LABEL));
             } else {
-                cols.push(
-                    &drgnx_rows::fit::fit(fonts, ROLE, name, room as f32),
-                    Some(LABEL),
-                );
+                cols.push(&fit_px(fonts, LABEL, name, room), Some(LABEL));
             }
         } else {
             cols.push(name, Some(LABEL));
@@ -787,11 +803,9 @@ pub(crate) fn flow_rows(
         strut(&mut b, env, 30.0);
         let start = b.pos();
         let label = format!("{}  ", t.label);
-        let room = at[1].saturating_sub(text_px(fonts, &label) + gap);
-        b.push(&label, Some(LABEL)).push(
-            &drgnx_rows::fit::fit(fonts, ROLE, &t.title, room as f32),
-            Some(TEXT),
-        );
+        let room = at[1].saturating_sub(text_px(fonts, LABEL, &label) + gap);
+        b.push(&label, Some(LABEL))
+            .push(&fit_px(fonts, TEXT, &t.title, room), Some(TEXT));
         b.stop(at[1])
             .push(t.agent.as_deref().unwrap_or("—"), Some(LABEL));
         for (i, c) in t.cells.iter().enumerate() {
@@ -959,11 +973,13 @@ fn batch_lines(flow: &Flow, cw: u32, fonts: &dyn Measure) -> Vec<Vec<Piece>> {
     }
     let mut out = vec![head];
     let (tip_at, said_at) = (cw * 2 / 5, cw * 3 / 5);
-    let fit = |s: &str, px: u32| drgnx_rows::fit::fit(fonts, ROLE, s, px as f32);
-    let tip_w = text_px(fonts, "tip 0000000  ");
+    let fit = |s: &str, px: u32| fit_px(fonts, LABEL, s, px);
+    let tip_w = text_px(fonts, LABEL, "tip ")
+        + text_px(fonts, CODE, "0000000")
+        + text_px(fonts, LABEL, "  ");
     for m in &flow.batch {
         let label = format!("{}  ", m.label);
-        let room = tip_at.saturating_sub(text_px(fonts, &label) + 8);
+        let room = tip_at.saturating_sub(text_px(fonts, TEXT, &label) + 8);
         let mut line = vec![
             Piece::Text(label, TEXT),
             Piece::Text(fit(&m.title, room), LABEL),
@@ -973,7 +989,7 @@ fn batch_lines(flow: &Flow, cw: u32, fonts: &dyn Measure) -> Vec<Vec<Piece>> {
         ];
         if let Some(said) = &m.said {
             let said = fit(said, cw.saturating_sub(said_at.max(tip_at + tip_w)));
-            line.push(Piece::At(cw.saturating_sub(text_px(fonts, &said))));
+            line.push(Piece::At(cw.saturating_sub(text_px(fonts, LABEL, &said))));
             line.push(Piece::Text(said, LABEL));
         }
         out.push(line);
@@ -1012,10 +1028,7 @@ fn line_lines(flow: &Flow, cw: u32, fonts: &dyn Measure) -> Vec<Vec<Piece>> {
     let mut out = vec![head];
     out.extend(machine_lines(p));
     let note = "Pushing needs you (push.ci, Ask): the gate only refuses an early push.";
-    out.push(vec![Piece::Text(
-        drgnx_rows::fit::fit(fonts, ROLE, note, cw as f32),
-        LABEL,
-    )]);
+    out.push(vec![Piece::Text(fit_px(fonts, LABEL, note, cw), LABEL)]);
     out
 }
 
@@ -1741,7 +1754,7 @@ mod tests {
 
     fn fonts() -> drgnx_rows::fit::FontSet {
         let mut f = drgnx_rows::fit::FontSet::new();
-        f.set_role(ROLE, None, 7.0);
+        f.set_role(drgnx_rows::fit::UI, None, 7.0);
         f
     }
 
@@ -1806,7 +1819,7 @@ mod tests {
             let mut e = env(scale);
             // the env's fonts are its scale's (device px)
             let mut m = drgnx_rows::fit::FontSet::new();
-            m.set_role(ROLE, None, 7.0 * scale);
+            m.set_role(drgnx_rows::fit::UI, None, 7.0 * scale);
             let mut wide = e.clone();
             wide.width_px = 100_000;
             let natural = 100_000 - columns(&tasks(&f), &wide, &m).0[1];
@@ -1816,7 +1829,7 @@ mod tests {
             let stops: Vec<u32> = t1.stops.iter().map(|s| s.1).collect();
             assert!(stops.windows(2).all(|w| w[0] < w[1]), "{stops:?}");
             // the last column's widest cell ends inside the window
-            let review = drgnx_rows::fit::width(&m, ROLE, " at plan end ") as u32;
+            let review = drgnx_rows::fit::width(&m, drgnx_rows::fit::UI, " at plan end ") as u32;
             assert!(
                 stops[6] + review <= e.width_px,
                 "scale {scale}: {stops:?} + {review} > {}",
@@ -1847,9 +1860,11 @@ mod tests {
         for scale in [1.0, 2.0] {
             let mut e = env(scale);
             let mut m = drgnx_rows::fit::FontSet::new();
-            m.set_role(ROLE, None, 7.0 * scale);
+            m.set_role(drgnx_rows::fit::UI, None, 7.0 * scale);
             // the natural cells and the whole title don't both fit here
-            let title = drgnx_rows::fit::width(&m, ROLE, "T1  Open buffers in the model") as u32;
+            let title =
+                drgnx_rows::fit::width(&m, drgnx_rows::fit::UI, "T1  Open buffers in the model")
+                    as u32;
             let natural = {
                 let mut wide = e.clone();
                 wide.width_px = 100_000;
@@ -1887,7 +1902,7 @@ mod tests {
                         .skip(from)
                         .take(upto.saturating_sub(from))
                         .collect();
-                    let w = drgnx_rows::fit::width(&m, ROLE, cell.trim_end()) as u32;
+                    let w = drgnx_rows::fit::width(&m, drgnx_rows::fit::UI, cell.trim_end()) as u32;
                     assert!(
                         s.1 + w <= next,
                         "scale {scale}: {cell:?} at {} + {w} > {next}",
@@ -2119,6 +2134,7 @@ mod tests {
             reduced_motion: false,
             attach: false,
             rows_in_sja: false,
+            headless: false,
         }
     }
 
@@ -2282,7 +2298,7 @@ mod tests {
         let (at, stop) = *strip.stops.last().expect("a stop");
         let left: String = strip.text.chars().take(at as usize).collect();
         let icons = strip.images.iter().filter(|i| i.0 < at).count() as u32;
-        let px = text_px(&fs, &left) + icons * dpx(&e, 14.0);
+        let px = text_px(&fs, LABEL, &left) + icons * dpx(&e, 14.0);
         assert!(px <= stop, "{px} > {stop}: {left}");
         // narrower still: the cost and the machines give way to what needs you
         e.width_px = 400;
@@ -2700,7 +2716,11 @@ mod tests {
             [Piece::At(x), Piece::Text(t, LABEL)] => (*x, t.clone()),
             _ => panic!("the note last, at a stop"),
         };
-        assert_eq!(at + text_px(&fonts(), &said), cw, "right-aligned: {said}");
+        assert_eq!(
+            at + text_px(&fonts(), LABEL, &said),
+            cw,
+            "right-aligned: {said}"
+        );
         let last = lines.last().expect("a footer");
         assert!(
             last.iter()

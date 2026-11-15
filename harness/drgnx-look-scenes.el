@@ -5,8 +5,8 @@
 ;;; Commentary:
 ;; `drgnx ui look-scenes OUT' starts a session with the drgnx configuration at the mockups' 1440x900 logical pixels
 ;; (times $DRGNX_UI_SCALE), sets up the mockups' git project and files in it, and takes one screenshot per scene into OUT, named after the approved
-;; mockup it is compared with (`drgnx-look-scenes'), plus the scene's facts (NAME-facts.eld).  No pixel is asserted:
-;; a look task is done only when its scene has been put beside its mockup at scales 1 and 2 and looked at
+;; mockup it is compared with (`drgnx-look-scenes'), plus the scene's facts (NAME-facts.eld).  One pixel rule is
+;; asserted, no hub-fed row wider than its window nor cut where its full text fits (NAME-widths.eld); beyond it a look task is done only when its scene has been put beside its mockup at scales 1 and 2 and looked at
 ;; (docs/develop/harness.md, "Look scenes").  Packages come from $DRGNX_LOOK_ELPA (a package directory), the mock
 ;; agent from $DRGNX_RATATOSKR_BIN (a test-hooks ratatoskr); without them those scenes say what is missing.
 
@@ -142,6 +142,12 @@ OUT at SCALE (TAG: `s1', `s2'); return (SHOTS . ERRORS), each in drawing order, 
                                                     (drgnx-ui-el (expand-file-name (format "%s-%s-facts.eld" name tag)
                                                                                    out))
                                                     name))))
+              ;; no hub-fed row wider than its window, as drawn, narrower and wider (after the shot: it resizes)
+              (setq errs (append errs (drgnx-look-scenes--call
+                                       sess (format "(drgnx-look-scene-widths %s)"
+                                                    (drgnx-ui-el (expand-file-name (format "%s-%s-widths.eld" name tag)
+                                                                                   out)))
+                                       180)))
               (when-let* ((k (plist-get plist :then))) (drgnx-ui-act sess (list :keys k)) (sleep-for 1))
               (push (cons name errs) errors))))
       (when sess (ignore-errors (drgnx-ui-stop (plist-get sess :name)))))

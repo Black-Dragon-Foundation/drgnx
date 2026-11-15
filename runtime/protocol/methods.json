@@ -4273,7 +4273,7 @@
       "data": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "description": "`view-glyphs`: the hub asks the editor for advances it cannot read from the font, `[role, char]` each.",
+        "description": "`view-glyphs`: the hub asks the editor for advances it cannot read from the font, `[role, char]` each, and how\nthe FACES its rows name draw (answered by `view/glyphs`' `faces`), and to MEASURE strings as drawn, `[key, text,\nruns]` each, the runs `[start, end, face]` over the text's chars, an earlier above a later (answered by\n`view/measured`, `[key, text, px]`): a row segment whose sum came too close to its end to decide.",
         "properties": {
           "ask": {
             "items": {
@@ -4293,6 +4293,51 @@
           },
           "class": {
             "type": "string"
+          },
+          "faces": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "measure": {
+            "items": {
+              "maxItems": 3,
+              "minItems": 3,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "items": {
+                    "maxItems": 3,
+                    "minItems": 3,
+                    "prefixItems": [
+                      {
+                        "format": "uint32",
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "format": "uint32",
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
+                    "type": "array"
+                  },
+                  "type": "array"
+                }
+              ],
+              "type": "array"
+            },
+            "type": "array"
           },
           "view": {
             "type": "string"
@@ -4499,6 +4544,30 @@
           "Row": {
             "description": "One row: its key (unique in the view), its text and what lies on it. Every position is a scalar index into\n`text`; ranges are `[start, end)`.",
             "properties": {
+              "fonts": {
+                "description": "`[start, end, role]`: the font role the text over `[start, end)` is drawn and measured in, where it is not the\nbuffer's default (`ui`): each run's face's, as the editor reported it. Set by the hub when it fits the row to\nits window ([`crate::fit_row`]); a builder never sets it.",
+                "items": {
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "prefixItems": [
+                    {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "type": "array"
+                },
+                "type": "array"
+              },
               "height": {
                 "anyOf": [
                   {
@@ -42206,6 +42275,10 @@
             },
             "type": "array"
           },
+          "headless": {
+            "description": "The view is in no window: its rows are read, never drawn (the git letters), so the hub does not fit them to\n`width_px`, the selected window's.",
+            "type": "boolean"
+          },
           "palette": {
             "default": [],
             "description": "`[role, colour]`: the SVG writer's colours, from the theme.",
@@ -42305,11 +42378,72 @@
       "doc": "the editor's advances for the glyphs a view-glyphs asked for, [role, char, px] each",
       "name": "view/glyphs",
       "params": {
+        "$defs": {
+          "ViewFace": {
+            "description": "How FACE draws in the view's buffer: in ROLE's font (one of the env's roles whose font it is; else FACE itself, a\nrole of its own, with its font FILE, INDEX, PX, AVG and weight WGHT, as the env's `fonts` say them), its box adding\nPAD px at each end of a run.",
+            "properties": {
+              "avg": {
+                "default": 0.0,
+                "format": "float",
+                "type": "number"
+              },
+              "face": {
+                "type": "string"
+              },
+              "file": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "index": {
+                "default": 0,
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "pad": {
+                "default": 0.0,
+                "format": "float",
+                "type": "number"
+              },
+              "px": {
+                "default": 0.0,
+                "format": "float",
+                "type": "number"
+              },
+              "role": {
+                "type": "string"
+              },
+              "wght": {
+                "default": null,
+                "format": "float",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "face",
+              "role"
+            ],
+            "type": "object"
+          }
+        },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "description": "`view/glyphs`: the editor's answer to `view-glyphs`, `[role, char, px]` each.",
+        "description": "`view/glyphs`: the editor's answer to `view-glyphs`, `[role, char, px]` each, and the faces it asked about.",
         "properties": {
           "class": {
             "type": "string"
+          },
+          "faces": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/ViewFace"
+            },
+            "type": "array"
           },
           "glyphs": {
             "items": {

@@ -27,7 +27,7 @@ fn rows_with(
 ) -> Vec<Row> {
     let always = move |_: &Entry| always;
     let prov = move |_: &Entry| prov.map(str::to_owned);
-    let right = |_: &str| 300;
+    let right = |_: &[(&str, &str)]| 300;
     let cx = Cx {
         look,
         facts,
@@ -164,6 +164,49 @@ fn undone_steps_are_marked() {
         false,
     );
     assert!(!rows[0].text.contains("undone"));
+}
+
+#[test]
+fn a_steps_time_and_cost_are_measured_in_the_fonts_they_are_drawn_in() {
+    // a slow step that cost little: the time in the warning face, the separator and the cost in the code face, each
+    // part named by the face it is drawn in (the hub measures it in that face's font, as the editor reports it)
+    let facts = BTreeMap::from([(
+        7,
+        Facts {
+            start: Some(10.0),
+            end: Some(25.0),
+            cost: Some(0.05),
+            ..Facts::default()
+        },
+    )]);
+    let seen = std::cell::RefCell::new(Vec::new());
+    let right = |parts: &[(&str, &str)]| {
+        seen.borrow_mut().extend(
+            parts
+                .iter()
+                .map(|(t, r)| ((*t).to_owned(), (*r).to_owned())),
+        );
+        300
+    };
+    let (always, prov) = (|_: &Entry| false, |_: &Entry| None);
+    let look = Look::default();
+    let cx = Cx {
+        look: &look,
+        facts: &facts,
+        always: &always,
+        prov: &prov,
+        right: &right,
+    };
+    group_rows(3, &stepped("completed"), &[], None, &cx);
+    let want: Vec<(String, String)> = [
+        ("15.0 s", "drgnx-agent-panel-warn"),
+        (" · ", "drgnx-agent-panel-code"),
+        ("$0.05", "drgnx-agent-panel-code"),
+    ]
+    .iter()
+    .map(|(t, r)| ((*t).to_owned(), (*r).to_owned()))
+    .collect();
+    assert_eq!(*seen.borrow(), want);
 }
 
 #[test]

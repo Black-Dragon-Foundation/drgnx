@@ -1606,8 +1606,8 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `timeline/get` | user | `{before?: natnum, id: string, limit?: natnum, rollup?: boolean, scope: "session" \| "task" \| "plan" \| "project", since?: natnum}` | `{next?: natnum, rollup?: Rollup, steps?: [Step]}` | no |
 | `view/ack` | user | `{class: string, version: natnum, view: string}` | `boolean` | no |
 | `view/close` | user | `{view: string}` | `boolean` | no |
-| `view/env` | user | `{attach?: boolean, cell: [natnum, natnum], class: string, display: "gui" \| "tty", epoch: natnum, fonts?: [[string, string \| null, natnum, number, number, number, number, number]], palette?: [[string, string]], reduced_motion?: boolean, rows_in_sja?: boolean, scale: number, tty_widths?: [[natnum, natnum, natnum]], tz?: string, view: string, width_px: natnum}` | `boolean` | no |
-| `view/glyphs` | user | `{class: string, glyphs: [[string, string, number]], view: string}` | `boolean` | no |
+| `view/env` | user | `{attach?: boolean, cell: [natnum, natnum], class: string, display: "gui" \| "tty", epoch: natnum, fonts?: [[string, string \| null, natnum, number, number, number, number, number]], headless?: boolean, palette?: [[string, string]], reduced_motion?: boolean, rows_in_sja?: boolean, scale: number, tty_widths?: [[natnum, natnum, natnum]], tz?: string, view: string, width_px: natnum}` | `boolean` | no |
+| `view/glyphs` | user | `{class: string, faces?: [{avg?: number, face: string, file?: string, index?: natnum, pad?: number, px?: number, role: string, wght?: number}], glyphs: [[string, string, number]], view: string}` | `boolean` | no |
 | `view/measured` | user | `{class: string, measured: [[string, string, number]], view: string}` | `boolean` | no |
 | `view/resync` | user | `{class?: string, model?: boolean, version?: natnum, view: string}` | `boolean` | no |
 | `view/window` | user | `{from: natnum, list: string, view: string}` | `boolean` | no |
@@ -2353,8 +2353,9 @@ All of it is in memory only.
 
 - **Methods** (user connections, sent on the editor's subscribed connection, which the patches come back on).
   `view/env {view, class, epoch, display, scale, fonts: [[role, file, index, px, ascent, descent, avg, space]], cell,
-  width_px, palette: [[role, colour]], tty_widths: [[from, to, width]], tz, reduced_motion, attach?, rows_in_sja?}` keeps the env of (view,
-  class) and builds its rows again.  `attach: true` (the editor sends it with the first env of a new buffer) makes the hub
+  width_px, palette: [[role, colour]], tty_widths: [[from, to, width]], tz, reduced_motion, attach?, rows_in_sja?,
+  headless?}` keeps the env of (view, class) and builds its rows again. `headless: true` marks a view that Lisp only
+  reads and never draws (git's letters): its rows are fitted to no window.  `attach: true` (the editor sends it with the first env of a new buffer) makes the hub
   drop a pair it already holds for the connection, with no `view/close` between (a buffer killed without its hook, an
   Emacs restarted on the same connection), and start over: the rows go out whole, a reset from version 1.
   `rows_in_sja: true` says the editor holds the view's rows in Sjá, where they are drawn: the patches then go out on the
@@ -2362,8 +2363,9 @@ All of it is in memory only.
   every view (a terminal's view, `term:<id>`, says it on `term/open` and `term/attach`); the env of the pair decides
   each patch, so an env without it puts the pair back on `view-patch` events. `view/resync {view, class, version}` answers a reset (with `model: true`, a reset
   of the view's model: below). `view/glyphs {view, class,
-  glyphs: [[role, char, px]]}` answers the event `view-glyphs {view, class, ask: [[role, char]]}`. `view/measured
-  {view, class, measured: [[role, string, px]]}` is the editor's fit guard's report. `view/ack {view, class,
+  glyphs: [[role, char, px]], faces?}` answers the event `view-glyphs {view, class, ask: [[role, char]], faces?:
+  [face], measure?: [[key, text, runs]]}`: `faces` says how each face asked draws (`{face, role, pad, file?, index?,
+  px?, avg?, wght?}`, Fitting below); each `measure` is answered by `view/measured` with `[key, text, px]`. `view/measured {view, class, measured: [[roles, string, px]]}` is the editor's fit guard's report. `view/ack {view, class,
   version}` says the editor applied that patch (sent by a view type with `:ack t`; others may ignore it).
   `view/close {view}` forgets the view; a connection's views end with it.
 - **The event** `view-patch` (a patch, above) goes by `Front::send_to` to the view's connection only.
@@ -2472,11 +2474,39 @@ A builder fits each label to its segment's width with `drgnx_rows::fit` (the ter
 hub sums the advances of the font file Emacs uses for the role (`view/env`'s `fonts`), read with skrifa, and trims
 with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an estimate: no shaping, kerning or hinting.
 
-- **Per grapheme cluster.** A cluster (a letter and its combining marks, an emoji ZWJ sequence, a flag) counts its
-  first char's advance, and a cut never splits one. The marks and joined chars after it are drawn into that glyph;
-  asked of the editor one by one (no font file, as on macOS) each had a width of its own, and the combining and ZWJ
-  labels were cut 21 to 35 px short. A cluster the font draws wider than its first char (an unjoined ZWJ sequence)
-  runs over, and the fit guard measures it.
+- **Measured in the face it is drawn in.** A builder names the face, never a role: `fit::width_in` and `fit::fit_in`
+  measure text in the font the editor says the face draws in. The hub asks once per (pair, face) in `view-glyphs`'
+  `faces`; the editor answers with the role whose font the face resolves to in the view's buffer (`ui`, `text`,
+  `caption`, `code`, `heading`, …: `drgnx-view-env-roles`; the role whose face draws a probe text as wide in that
+  buffer, so a face that sets only colours draws in the buffer's remapped `default`, which `face-font` does not see),
+  or, for a face with a font of its own, that font's file,
+  index, px, average and `wght` (the face's weight, for a variable font) under a role named after the face; and the
+  ends of its box (`pad`: half what the box adds to the probe as drawn, so a frame that scales boxes is counted),
+  which a run adds at each end. Until the answer comes a face
+  measures as `ui`, and the rows are built again when it does.
+- **No row wider than its window.** The hub fits every row it publishes (`drgnx_rows::fit_row`, in `Store::publish`
+  and `publish_splice`), whatever its builder did: each segment (the text before the first stop, between two stops,
+  after the last) is measured as drawn, each char in the font of the topmost run whose face sets one (a face that sets
+  only colours draws in the font of the faces under it), images at their SVG's width, spaces at theirs, boxes'
+  ends; a segment that runs past the next stop (the last: past `width_px`) is cut with `…` between grapheme clusters,
+  to the stop less the slack (a terminal: in columns, no slack). The row then carries `fonts: [[start, end, role]]`,
+  the roles its chars were measured in (`ui` left out), and the editor's fit guard reports under the same key: the
+  segment's roles in the order they first appear, joined by `+` (`fit_row::roles_key`,
+  `drgnx-view-patch--roles-key`). A headless env (`view/env`'s `headless`) or a width of 0 fits nothing.
+- **Too close to call, the editor measures.** A segment whose sum fits but comes within the slack of its end (the sum
+  can be off by a few px: no shaping, kerning or hinting) is asked of the editor once (`view-glyphs`' `measure`: its
+  roles key, its text and its runs from its start), which draws it in the view's buffer with those faces
+  (`drgnx-view-env-measure`) and answers with `view/measured`; the rows are built again, and that width decides from
+  then on. The text asked is the segment's without its images' and spaces' placeholders (their widths are known and
+  added), its runs moved to match.
+
+- **Per grapheme cluster.** A cut never splits a cluster (a letter and its combining marks, an emoji ZWJ sequence, a
+  flag). In a row, a cluster of several chars is asked of the editor whole (`view-glyphs`' `measure`: its roles key,
+  its text, the row's runs over it), and its answer is its width from then on; until it comes, the cluster counts its
+  first char's advance. Its chars' own advances would be wrong both ways: asked one by one (no font file, as on macOS)
+  each had a width of its own, and the combining and ZWJ labels were cut 21 to 35 px short; the first char's alone
+  ran 1 to 8 px over when the font did not join a ZWJ sequence. Outside rows (`fit::fit`, `fit::width_in`, a builder's
+  own placing) the first char's advance stands; the row's fit corrects it.
 
 - **Measured against Emacs.** `test/ui/rows-fit-gui-test.el` compares the sums (`test/fixtures/rows-fit-sums.eld`,
   written by `drgnx-rows`' `fit_sums`) with `string-pixel-width` for 40-char Latin, digit and punctuation strings in
@@ -2486,9 +2516,13 @@ with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an est
 - **No I/O in the crate.** `drgnx-rows` measures through the `Measure` trait over bytes handed in, so the builders
   (vegvisir too) stay testable in every order. The hub's `view/fonts.rs` reads each file once when a `view/env`
   names it (at most 64 files, none over 64 MiB), and drops it when no env names it.
-- **What the font lacks, the editor answers.** A char with no glyph, or a role with no font file (as `font-info`
-  often has on macOS), is asked of the editor once per (role, char) in `view-glyphs`; its `view/glyphs` answers are
-  kept and the rows built again. Caches are bounded: 4096 chars per font and per set, 1024 measured strings.
+- **The editor's advances win.** Every char measured is asked of the editor once per (role, char) in `view-glyphs`;
+  its `view/glyphs` answers are kept and the rows built again. The editor's advance is the one it draws: a hinted
+  font's can be a pixel wider than the file's (Adwaita Sans at 12 px: a Flow button 6 px wider, a row 12 px, past the
+  slack), so it wins over the file's sum, which stands in until it comes. A char with no glyph, or a role with no
+  font file (as `font-info` often has on macOS), measures as the role's average until then. The editor measures each
+  in the asked class's buffer on the frame that shows it, keyed by the font its face resolves to there (a buffer's
+  remaps change it, and so does a frame of another scale or default font). Caches are bounded: 4096 chars per font and per set, 1024 measured strings.
 - **The editor's measurement wins.** The fit guard reports a line it measured wider than the hub fitted it
   (`view/measured`); from then on that width is used for that string instead of the sum (least recently used out).
 - **The fit check row** (`test/ui/rows-fit-gui-test.el`, on the fixture view `rows-demo`, whose labels the hub
@@ -2496,7 +2530,8 @@ with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an est
   sequence, combining marks and Arabic in Inter and JetBrains Mono at 11 to 16 px, fitted to 80, 160 and 240 px. A
   label's width is logical, as every view's sizes are: a GUI class fits it, and puts its stop, at the env's scale in
   device px, rounded half up as `drgnx-px` does (160 is 320 at 2, 200 at 1.25). No
-  segment runs past its stop after the guard, and none is cut more than the slack and one glyph short, except joined
+  segment runs past its stop after the guard, and none is cut more than the slack and one cluster (its widest, as
+  drawn: an unjoined ZWJ sequence is several glyphs) short, except joined
   Arabic in a font without it: its letters come per char from the editor's fallback font, whose shaped (joined) forms
   are narrower, so the sum runs wide and the label may be cut up to about 26 px short at 80 px. That is reported, not
   failed (first runs, 2026-11-07: 180 rows, 0 to 1 re-fit by the guard).

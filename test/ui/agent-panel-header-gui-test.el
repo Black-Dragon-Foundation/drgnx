@@ -17,6 +17,8 @@
 (dolist (d '("core" "wb" "harness"))
   (add-to-list 'load-path (expand-file-name d drgnx-ui-panel-header--repo)))
 (require 'drgnx-keys)
+(defvar drgnx-hub--events)
+(declare-function drgnx-hub--call-on "drgnx-hub-client")
 (load (expand-file-name "test/fixtures/rows-demo-fixture" drgnx-ui-panel-header--repo) nil t)
 
 (defvar drgnx-panel-replay-prefix)
@@ -74,6 +76,21 @@ the right area, its header's rows in."
   "AREA's window that is its PART (`above', `below'), or nil."
   (seq-find (lambda (w) (and (eq area (window-parameter w 'drgnx-role)) (eq part (window-parameter w 'drgnx-area-part))))
             (window-list nil 'nomini)))
+
+(defun drgnx-ui-panel-header--rows-settle (buffer)
+  "Wait until the hub has nothing more for BUFFER's rows: a `ping' round trip on the subscribed connection (the hub
+handles a connection's lines in order, so the patches it sent before the answer have been read: a refit after the
+editor's answers to its glyph asks is one), the patches drawn, again until a round trip changes nothing (10 s at
+most)."
+  (let ((end (+ (float-time) 10)) (tick nil))
+    (while (and (not (eql tick (buffer-chars-modified-tick buffer))) (< (float-time) end))
+      (setq tick (buffer-chars-modified-tick buffer))
+      (let ((done nil))
+        (drgnx-hub--call-on drgnx-hub--events "ping" nil (lambda (&rest _) (setq done t)))
+        (drgnx-test-wait (lambda () done) :secs 3 :what "the hub's answer to a ping"))
+      (with-current-buffer buffer (drgnx-view-draw-now nil))
+      (drgnx-test-wait-presented))
+    (should (eql tick (buffer-chars-modified-tick buffer)))))
 
 (defun drgnx-ui-panel-header--settle (area)
   "Let redisplay, the size-change functions and the store's idle calls run until AREA's companions stop moving (at
@@ -241,8 +258,8 @@ from its start, or nil."
             (drgnx-uitest-run (drgnx-uitest-click-events pin))
             (should (equal (list key) (mapcar #'car (buffer-local-value 'drgnx-agent-panel--pins panel)))))
           ;; a pill (found again: the hub redrew the header for the pin): its type's detail opens in the session's state
-          (drgnx-ui-panel-header--rows-in (window-buffer hw))
           (drgnx-ui-panel-header--settle area)
+          (drgnx-ui-panel-header--rows-settle (window-buffer hw))
           (let* ((pill (drgnx-ui-panel-header--target hw (lambda (a) (and (stringp a) (string-prefix-p "type:" a)))))
                  (action (and pill (get-text-property (posn-point pill) 'drgnx-agent-panel-action (window-buffer hw))))
                  (type (and action (intern (substring action 5))))
@@ -250,9 +267,11 @@ from its start, or nil."
             (should pill)
             (drgnx-uitest-run (drgnx-uitest-click-events pill))
             (should (eq (not was) (and (memq type (buffer-local-value 'drgnx-agent-panel--disclosure panel)) t))))
-          ;; a lens segment (found again) whose preset is not the disclosure now: after the click it is
-          (drgnx-ui-panel-header--rows-in (window-buffer hw))
+          ;; a lens segment whose preset is not the disclosure now: after the click it is.  The pill's click changed
+          ;; the strip, and the hub's patch for it moves the header's text: the lens is found again once that patch is
+          ;; drawn
           (drgnx-ui-panel-header--settle area)
+          (drgnx-ui-panel-header--rows-settle (window-buffer hw))
           (let* ((lens (drgnx-ui-panel-header--target
                         hw (lambda (a) (and (stringp a) (string-prefix-p "lens:" a)
                                             (drgnx-ui-panel-header--preset-differs-p (string-to-number (substring a 5))
@@ -283,7 +302,8 @@ from its start, or nil."
                                             (and (not (equal class (drgnx-view-patch-class drgnx-view-patch)))
                                                  (not (drgnx-view-patch-stale drgnx-view-patch)))))
                                :secs 20 :what "the header's rows at the bigger font")
-              (with-current-buffer hb (drgnx-view-draw-now nil))
+              ;; and the refit after the editor's answers for the new class's fonts
+              (drgnx-ui-panel-header--rows-settle hb)
               (drgnx-ui-panel-header--settle area)
               (should (> (with-current-buffer hb (count-lines (point-min) (point-max))) lines))
               (should (> (window-body-height hw t) h))
@@ -297,7 +317,7 @@ from its start, or nil."
         ;; back to one row of strip: the header shrinks to its rows again
         (drgnx-test-wait (lambda () (with-current-buffer hb (equal class (drgnx-view-patch-class drgnx-view-patch))))
                          :secs 20 :what "the header's rows at the font again")
-        (with-current-buffer hb (drgnx-view-draw-now nil))
+        (drgnx-ui-panel-header--rows-settle hb)
         (drgnx-ui-panel-header--settle area)
         (should (= lines (with-current-buffer hb (count-lines (point-min) (point-max)))))
         (should (drgnx-ui-panel-header--fitted-p hw))))))

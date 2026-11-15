@@ -663,6 +663,20 @@ How it works:
   category's multiform entry, the display action, the frame), and `:limits`, what the line cannot show of that mockup yet (`drgnx-look-scene-limits`). A limit is
   written down, never hidden by changing the scene. It also writes `scenes-sN.eld`, with the shots and each scene's
   errors.
+- **No hub-fed row wider than its window** (`drgnx-look-scene-widths`, after each scene's shot): every window of a
+  visible frame whose buffer holds a hub-fed view is measured as drawn, then narrower (by a third of its body, at
+  most 300 px) and wider (300 px), and put back. At each width the env goes out at once and the rows settle: a `ping`
+  round trip on the subscribed connection (the hub handles a connection's lines in order, so its patches for the env
+  came before the answer), the patches drawn, again until a round trip changes nothing (10 s at most, else an error).
+  Each row (a line starting at a row key) is measured with `window-text-pixel-size`, and one wider than the body is an
+  error naming the view, its buffer, its class, the width and an example. **No row cut where its full text fits:** a
+  `…` at the drawn or narrow width is checked against the same row at the wide width; the text it cut off (measured
+  in the buffer with its faces), less the `…`, plus the hub's 10 px slack, must not fit the px free after the `…`
+  (blanks, a stop's space, the body past the row's end). The drawn width is measured as the shot drew it, then
+  again after a round trip; when that changed the rows (the shot came before the hub's refit), the shot's cuts are
+  logged (`:changed-after-the-shot`) and the settled rows are checked instead. A window the frame cannot move 40 px is an error
+  (`:not-resizable` in the log) unless its buffer is named in `drgnx-look-scene-widths-fixed`. What was measured goes
+  to `NAME-sN-widths.eld`.
 
 What it reads from the environment:
 - `DRGNX_LOOK_ELPA`: a package directory to activate (Magit, Vertico, …). A session has no packages of its
@@ -676,7 +690,7 @@ What it reads from the environment:
   `DRGNX_LOOK_THEME=light DRGNX_LOOK_ONLY='^agent-panel'`. The shots keep their names, so draw each theme into its
   own OUT. `scenes-sN.eld` records the theme (`:theme`), and each scene's facts list the themes it ran under.
 
-Nothing in the command asserts a pixel. **A look change is done only when its scene sits beside its mockup at scales 1
+Apart from the widths check, nothing in the command asserts a pixel. **A look change is done only when its scene sits beside its mockup at scales 1
 and 2, someone has looked at both, and the remaining differences are written down.** `test/unit/look-scenes-test.el`
 checks that every mockup has a scene and that the project is set up correctly.
 

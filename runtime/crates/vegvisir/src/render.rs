@@ -26,9 +26,9 @@ use crate::{Edge, EdgeKind, Item, ItemId, Kind};
 pub const MARGIN: u32 = 84;
 /// The six layers' labels, sentence case; the last is short for "Files and machines".
 pub const LAYER_NAMES: [&str; 6] = ["You asked", "Specs", "Plans", "Agents", "Branches", "Files"];
-/// The font role card text and labels are measured in: the UI text face (`drgnx-ui-text`), which they are drawn in.
-/// The map's cards and chips are the caption size, 12 px (work-space-dark.html `.acardm`), its role in the editor.
-const ROLE: &str = "caption";
+/// The face that gives a card's text (and the strip's chips) its font, under the pieces' own faces: each is measured
+/// in the font the editor says its face draws in (work-space-dark.html `.acardm`, the caption size).
+const CARD_FONT: &str = "drgnx-work-card";
 
 /// Whether the map is drawn as an outline: by the layout (a terminal, or a layout that does not fit), or the user's
 /// `O` either way.
@@ -291,7 +291,12 @@ fn card_rows(
         .map(|line| {
             let mut b = RowBuilder::new(format!("row:{}:{line}", row_key(s, i)));
             if line == 0 && !label.is_empty() {
-                let text = fit_px(m, &label, g.margin.saturating_sub(8));
+                let text = fit_px(
+                    m,
+                    Some("drgnx-work-label"),
+                    &label,
+                    g.margin.saturating_sub(8),
+                );
                 b.push(&text, Some("drgnx-work-label"));
             }
             for (_, part) in &parts {
@@ -332,9 +337,9 @@ fn layer_label(s: &Scene, index: &Index, i: usize) -> String {
     }
 }
 
-/// TEXT cut with an ellipsis to at most PX wide (the editor's `drgnx-view-fit`: no slack of its own).
-fn fit_px(m: &dyn Measure, text: &str, px: u32) -> String {
-    fit::fit(m, ROLE, text, px as f32 + fit::SLACK)
+/// TEXT drawn in FACE cut with an ellipsis to at most PX wide (the editor's `drgnx-view-fit`: no slack of its own).
+fn fit_px(m: &dyn Measure, face: Option<&str>, text: &str, px: u32) -> String {
+    fit::fit_in(m, face, text, px as f32 + fit::SLACK)
 }
 
 /// One text line of a card: pieces, each in a face or none.
@@ -422,11 +427,12 @@ fn segment(
         Some(_) => Line(l.0[..l.0.len() - 1].to_vec(), l.1),
         None => l.clone(),
     };
-    let tail_px = tail
-        .as_ref()
-        .map_or(0, |(t, _)| fit::width(m, ROLE, t).ceil() as u32);
+    let tail_px = tail.as_ref().map_or(0, |(t, f)| {
+        fit::width_in(m, Some(f.unwrap_or(CARD_FONT)), t).ceil() as u32
+    });
     let fitted = fit_px(
         m,
+        Some(CARD_FONT),
         &body.text(),
         room.saturating_sub(if icon.is_some() { icon_px } else { 0 } + tail_px),
     );
@@ -1238,13 +1244,18 @@ pub fn strip(
         .collect();
     let w: f32 = chips
         .iter()
-        .map(|(c, i)| fit::width(m, ROLE, c) + if i.is_some() { icon_px as f32 } else { 0.0 })
+        .map(|(c, i)| {
+            fit::width_in(m, Some(CARD_FONT), c) + if i.is_some() { icon_px as f32 } else { 0.0 }
+        })
         .sum::<f32>()
-        + fit::width(m, ROLE, " ") * chips.len().saturating_sub(1) as f32;
+        + fit::width_in(m, Some(CARD_FONT), " ") * chips.len().saturating_sub(1) as f32;
     // the needs-you chips share what the right-hand chips leave, each cut to its share (no chip runs under them)
     let shown = entries.len().clamp(1, 9);
     let spare = (env.width_px as f32 - w - 44.0 * env.scale) / shown as f32;
-    let overhead = fit::width(m, ROLE, " ⚑   g1  ") + 4.0 * env.scale;
+    let overhead = fit::width_in(m, Some("drgnx-work-needs-you"), " ⚑   ")
+        + fit::width_in(m, Some("drgnx-work-needs-you-key"), " g1 ")
+        + fit::width_in(m, Some("drgnx-work-needs-you"), " ")
+        + 4.0 * env.scale;
     let room = ((spare - overhead).max(40.0 * env.scale))
         .min(CHIP_MAX as f32 * env.scale)
         .round() as u32;
@@ -1253,7 +1264,7 @@ pub fn strip(
         if i > 0 {
             b.push(" ", None);
         }
-        let e = fit_px(m, e, room);
+        let e = fit_px(m, Some("drgnx-work-needs-you"), e, room);
         let start = b.pos();
         b.push(&format!(" ⚑ {e} "), Some("drgnx-work-needs-you"))
             .push(&format!(" g{} ", i + 1), Some("drgnx-work-needs-you-key"))
@@ -1315,6 +1326,7 @@ fn outline_rows(s: &Scene, env: &Env, m: &dyn Measure) -> Vec<Row> {
         } else {
             fit_px(
                 m,
+                None,
                 &l.text(),
                 u32::try_from(cols).unwrap_or(u32::MAX) * env.cell.0.max(1),
             )
