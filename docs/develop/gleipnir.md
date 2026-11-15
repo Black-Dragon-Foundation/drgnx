@@ -960,14 +960,18 @@ policy:
   `.ſecrets` is `.secrets` on disk). It also folds `ß` and `ẞ` to `ss`, one letter to two (GL-T9-3: the macOS 27
   runner reached a hidden `straße` as `STRASSE`), so a run of s's and ß's becomes a group of every spelling of its
   length: `ß` and `ss` both give `((s|S|ſ)(s|S|ſ)|(ß|ẞ))`, and a hidden `.ssh` is closed as `.ßh` too. It folds the
-  ligatures `ﬁ` and `ﬂ` to `fi` and `fl` as well (the macOS 27 runner reached a hidden `config` as `conﬁg` and `flags`
-  as `ﬂags`), so an `f` followed by an `i` or `l`, in any case, or the ligature itself, becomes a group of both
-  spellings: `config` and `conﬁg` both give `[Cc][Oo][Nn](ﬁ|[Ff][Ii])[Gg]`. No other one-to-many fold is taken until a
-  Mac's control shows APFS takes it (the `-is-not-` rows below; `İ` is not one). Allows stay exact: a path spelled
+  Latin ligatures too (the macOS 27 runner reached a hidden `config` as `conﬁg` and `flags` as `ﬂags`), and so does all
+  of Unicode's full case folding (CaseFolding.txt, status F) whose result is ASCII letters: `ß` and `ẞ` (`ss`), `ﬀ` (`ff`),
+  `ﬁ` (`fi`), `ﬂ` (`fl`), `ﬃ` (`ffi`), `ﬄ` (`ffl`), `ﬅ` and `ﬆ` (`st`). Each stretch of a path where one of those folded
+  texts can start (overlapping ones together) becomes a group of every way to spell it, split at its middle: `config` and
+  `conﬁg` both give `[Cc][Oo][Nn]([Ff][Ii]|ﬁ)[Gg]`, `office` and `oﬃce` match each other and `oﬀice` and `offﬁce`, and `ßt` is
+  `sst`, `sﬅ` and `sﬆ`. `İ` is no entry (its fold ends in a combining dot, and the macOS 27 control found no file). The
+  table is `FULL_FOLDS` in `sbpl.rs` (Unicode 16.0 rows, Unicode License v3). Allows stay exact: a path spelled
   otherwise is simply not allowed, which fails closed. The regex is about four times its path (seven for an `fi` or
   `fl`), and more for a run of s's (the group for `ss` is 27 bytes, for 15
   s's 919: it grows with the square of the run, split at its middle s), so a deny path of more than about 250 bytes,
-  or any with a run of 16 or more s's and ß's counted as two, refuses the profile (1024 bytes, below).
+  or any with a run of 16 or more s's and ß's counted as two (the same for f's and the other folded texts), refuses the profile
+  by name (1024 bytes, below); one whose regex outgrows 16 KiB while it is built is refused the same, never cut short.
 - **`/tmp`, `/var` and `/etc` are links into `/private`.** Seatbelt matches the resolved path, so every rule names
   `/private/…`. Spec paths are true names already (validation), and the links themselves get their metadata only.
 - **No escape through other processes.** No `appleevent-send` (an AppleEvent to Terminal runs anything), no `lsopen`
@@ -1655,7 +1659,7 @@ expects `EPERM` or `EACCES`: Seatbelt denies with EPERM, and a row that gets ano
 | `mac-case-eszett` | GL-T9-3 | **written, not yet run on a Mac** (it needs a macOS run): a hidden `straße` read as `STRASSE` and as `strasse`, and a hidden `.ssh` read as `.ßh`, are closed; the control shows APFS takes those spellings for the file (the macOS 27 runner's control reached `STRASSE`, so `case_regex` folds ß to `ss`) |
 | `mac-case-fi-ligature`, `mac-case-fl-ligature` | GL-T9-3 | **written, not yet run on a Mac** (it needs a macOS run): a hidden `config` read as `conﬁg` (U+FB01) and as `CONFIG`, a hidden `ﬁles` as `files` and `FILES`, and the same for `flags` as `ﬂags` (U+FB02) and `ﬂow` as `flow`, are closed; the control shows APFS takes those spellings for the file (the macOS 27 runner's control reached `conﬁg` and `ﬂags` when they were `-is-not-` rows, so `case_regex` folds the two ligatures) |
 | `mac-dotted-i-is-not-i` | GL-T9-3 | a hidden `id` read as `İd` (U+0130) is a no-such-file in the control and in the sandbox (the macOS 27 runner's control found no file: APFS does not fold `İ`) |
-| `mac-ff-ligature-is-not-ff`, `mac-ffi-ligature-is-not-ffi`, `mac-ffl-ligature-is-not-ffl`, `mac-long-st-ligature-is-not-st`, `mac-st-ligature-is-not-st` | GL-T9-3 | **written, not yet run on a Mac**: a hidden `off`, `office`, `waffle`, `list` and `last` read as `oﬀ` (U+FB00), `oﬃce` (U+FB03), `waﬄe` (U+FB04), `liﬅ` (U+FB05) and `laﬆ` (U+FB06) are a no-such-file in the control and in the sandbox. If a Mac's control reaches one, APFS folds that ligature and `case_regex` gets the fold, as it did for ß, `ﬁ` and `ﬂ` |
+| `mac-case-ff-ligature`, `mac-case-ffi-ligature`, `mac-case-ffl-ligature`, `mac-case-long-st-ligature`, `mac-case-st-ligature` | GL-T9-3 | **written, not yet run on a Mac**: a hidden `off`, `office`, `waffle`, `list` and `last` read as `oﬀ` (U+FB00), `oﬃce` (U+FB03), `waﬄe` (U+FB04), `liﬅ` (U+FB05) and `laﬆ` (U+FB06) are closed (EPERM or EACCES). They began as `-is-not-` rows expecting a no-such-file, on the guess that APFS folds only `ﬁ` and `ﬂ`; full case folding takes all of U+FB00 to U+FB06, so they expect blocked, and the control must reach the file |
 | `mac-no-controlling-tty` | gate review S6 | with Ratatoskr on a terminal, the program has none (`/dev/tty`: ENXIO) |
 | `mac-leaves-group-the-gap` | gate review S1 | the recorded gap: the program can `setsid` and `setpgid` (DEFERRED: phase 6's lifecycle) |
 | `mac-rename-hidden-dir`, `-case`, `mac-rename-task-out`, `mac-rename-over-root`, `mac-rename-binds-out`, `mac-link-hidden-pinned` | (i) | `mv conf c2` and `mv CONF c2` (then the `.env` is still closed), the task folder moved out or replaced, `${W}` and the home moved, a hard link to the hidden `.env` and to the `.git` pin, and an APFS clone of the `.env` all fail. One row each for what changes the fixture, so the control run can do all of them |
