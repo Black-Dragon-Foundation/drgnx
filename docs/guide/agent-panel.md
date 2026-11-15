@@ -11,6 +11,12 @@ Turn it off with the module `tools/agent-panel` (see [modules](modules.md)); eve
 On a long conversation the header, the chips and the disclosure strip stay at the top of the panel while the steps scroll
 between them and the composer, which stays at the bottom and follows the latest message. Their buttons work from there.
 
+Open the panel in a second frame and that frame's right dock gets its own header, transcript and composer on the same
+session: a draft you type in one composer is in the other, and each transcript scrolls on its own. A terminal frame
+draws its own header and transcript for the terminal. Switching the right dock to another tab and back puts the panel
+back where you left it. Opening another session's panel swaps all three. Closing the session's panel closes its header
+and composer with it.
+
 - **Header:** the agent's icon and name, then what it is doing: "Claude · running 6 min", "held by you" (you paused
   it) or "Pair · editing your checkout"; on the right the **watch · review · debug** lens, the preset in force raised, then a pin button (pins the card at
   point; a click leaves point where it is) and **⋯**, a menu of Fork the Chat, Compact the Context, Switch the Model,
