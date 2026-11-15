@@ -16,6 +16,7 @@ a.txt in the editor, wait until both are on the screen.  Returns the project dir
       (dotimes (i 300) (insert (format "line %d\n" (1+ i)))))
     (with-temp-file (expand-file-name "src/c.el" dir) (insert "(defun c () 1)\n"))
     (drgnx-tty-session-wait-screen sess "\\*scratch\\* ×" 20)
+    (drgnx-tty-session-hub sess)                  ; the Explorer's rows are the hub's listing
     (drgnx-tty-session-eval sess `(progn (drgnx-explorer-set-roots (list ,dir))
                                          (drgnx-wb-show-sidebar)
                                          (drgnx-wb-show-in-editor (find-file-noselect ,(expand-file-name "a.txt" dir)) t)

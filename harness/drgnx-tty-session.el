@@ -480,11 +480,35 @@ else signal with the last screen."
       (sleep-for 0.05))
     v))
 
+(defun drgnx-tty-session-hub (sess)
+  "Start the test hub in SESS's Emacs and connect it, for a test that reads hub-fed rows (the Explorer's folders, the
+Open section): a session starts none by itself (DRGNX_NO_HUB_START; the sidebar its startup shows is no command, so it
+waits for the hub, `drgnx-explorer-start-hub').  `ratatoskr serve --foreground' of the runner's hub
+\(`drgnx-ui--hub-env': DRGNX_RATATOSKR_BIN, which `bin/drgnx test --tty' builds, else the checkout's debug build), on
+the session's own runtime folder, ended with the session's Emacs.  No hub binary fails the test."
+  (let ((bin (seq-some (lambda (kv) (and (string-prefix-p "DRGNX_RATATOSKR_BIN=" kv) (substring kv 20)))
+                       (drgnx-ui--hub-env))))
+    (unless (and bin (file-executable-p bin))
+      (ert-fail "needs the test hub: DRGNX_RATATOSKR_BIN (`bin/drgnx test --tty' builds it)"))
+    (drgnx-tty-session-eval
+     sess `(progn (require 'drgnx-hub-client)
+                  (unless (drgnx-hub-running-p)
+                    (let ((process-environment (cons "RATATOSKR_SUPERVISOR=none" process-environment)))
+                      (make-process :name "ratatoskr-test" :noquery t :connection-type 'pipe
+                                    :buffer (generate-new-buffer " *ratatoskr-test*")
+                                    :command (list ,bin "serve" "--foreground"
+                                                   "--parent-pid" (number-to-string (emacs-pid))))))
+                  t)))
+  (drgnx-tty-session-wait sess '(drgnx-hub-running-p) 30)
+  (drgnx-tty-session-eval sess '(progn (drgnx-hub-connect) t))
+  (drgnx-tty-session-wait sess '(and drgnx-hub--events (eq (process-status drgnx-hub--events) 'open)) 30))
+
 ;;;; The screen
 
-(defconst drgnx-tty-session-explorer-heading "× \\(?:⌄ \\)?Files"
-  "The Explorer's section heading on a terminal screen (the dock's ×, the chevron, `Files'): the sidebar is drawn.
-The × keeps it off the title bar's `C-p files' (`string-match' folds case).")
+(defconst drgnx-tty-session-explorer-heading "^ [⌄›v>] Files"
+  "The Explorer's section heading on a terminal screen (a line of its own: the chevron, open or closed, then `Files';
+v and > in the ASCII a C locale gets): the sidebar is drawn.  The line's start keeps it off the title bar's `C-p
+files' (`string-match' folds case).")
 
 (defun drgnx-tty-session-screen (sess &optional escapes)
   "The text of SESS's pane (`capture-pane -p'; with ESCAPES, its attributes as escape sequences).  A kitty session's

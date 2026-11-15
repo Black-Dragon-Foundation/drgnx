@@ -227,6 +227,7 @@ Lisp file in the editor."
       (make-directory (expand-file-name "src" dir) t)
       (with-temp-file (expand-file-name "a.txt" dir) (insert "alpha\n"))
       (with-temp-file (expand-file-name "src/c.el" dir) (insert "(x)\n"))
+      (drgnx-tty-session-hub s)                   ; the Explorer's rows are the hub's listing
       (drgnx-tty-session-eval s `(progn (drgnx-explorer-set-roots (list ,dir))
                                         (drgnx-wb-show-sidebar)
                                         (drgnx-wb-show-in-editor (find-file-noselect ,(expand-file-name "a.txt" dir)) t)

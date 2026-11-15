@@ -54,7 +54,8 @@ esac"
 (defconst tty-bin-test--defaults
   '(("DISPLAY" . ":99") ("WAYLAND_DISPLAY") ("SSH_CONNECTION") ("SSH_TTY") ("VTE_VERSION") ("TERM_PROGRAM")
     ("TERM" . "xterm-256color") ("DRGNX_EMACS") ("DRGNX_OPEN_WAIT" . "5")
-    ("DRGNX_MODAL_ELPA"))   ; a machine that runs the modal tests has it set; `test --container' would mount it
+    ("DRGNX_MODAL_ELPA")    ; a machine that runs the modal tests has it set; `test --container' would mount it
+    ("DRGNX_TEST_HUB_BUILD" . "0") ("DRGNX_RATATOSKR_BIN"))   ; `test --tty' builds no test hub here
   "What a test starts from: a graphical, local terminal; a cons without a value unsets the variable.")
 
 (defmacro tty-bin-test--with (&rest body)
@@ -347,7 +348,9 @@ script exits, so once none runs, an absent kitty.log is final."
             (dolist (s '("--memory 3g" "seccomp=unconfined" "label=disable"))
               (should (string-search s run)))
             (should (string-suffix-p (format " %s bin/drgnx test --tty" image) run))
-            (should (string-search "DRGNX_TEST_SELECTOR=\"x\"" run)))))
+            (should (string-search "DRGNX_TEST_SELECTOR=\"x\"" run))
+            ;; the test hub is the host's (`test_hub'): the run inside builds none
+            (should (string-search "DRGNX_TEST_HUB_BUILD=0" run)))))
       ;; a Fedora we have no image for is refused, and --fedora belongs to --tty
       (should (eql 2 (car (call '("test" "--container" "--ui" "--tty") `(("DRGNX_CONTAINER" . ,(expand-file-name "fake-rt" dir)))))))
       (should (eql 2 (car (call '("test" "--container" "--tty" "--ui") `(("DRGNX_CONTAINER" . ,(expand-file-name "fake-rt" dir)))))))

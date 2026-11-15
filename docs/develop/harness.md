@@ -109,7 +109,7 @@ Ratatoskr fails the row (`drgnx-test-no-hub`) instead of skipping it.
 
 #### The test hub
 
-`bin/drgnx test --ui` and `--scenario` (and `--container --ui` / `--scenario`, on the host before the container starts) give every contributor the same
+`bin/drgnx test --ui`, `--scenario` and `--tty` (and `--container --ui` / `--scenario` / `--tty`, on the host before the container starts) give every contributor the same
 hub: `test_hub` fetches libghostty-vt's pinned tarballs when they are missing (`runtime/crates/ghostty-vt-sys/fetch.sh`,
 as `install.sh` sets the terminal's engine up; Zig 0.17 builds it), builds `cargo build --locked -p drgnx-ratatoskr -p
 domr -p drgnx-term --bins --features drgnx-ratatoskr/test-hooks` (cargo builds nothing when the binaries are current) and
@@ -1168,7 +1168,12 @@ test. It runs with the GUI tier's security options (`seccomp=unconfined`, `label
 `DRGNX_USER_ELPA` (a directory holding the pinned kkp, and corfu, unpacked) is mounted read-only as `/elpa`, so the
 kkp tests and the kitty exit test run there too; without it they skip. Every `--container` tier mounts it the same
 way, so the batch tests that load a package (the extras teardown) run in a container too.
-`DRGNX_TEST_TTY_IMAGE` uses a prebuilt image. `bin/drgnx check` runs the tier as the `tty` job (a GUI job for the memory
+`DRGNX_TEST_TTY_IMAGE` uses a prebuilt image. The tier gets the test hub ([The test hub](#the-test-hub)): a session
+starts none by itself, so a test that reads hub-fed rows (the Explorer's folders and git letters, the Open section)
+starts one in its session with `drgnx-tty-session-hub` (`ratatoskr serve --foreground` on the session's runtime
+folder, connected, ended with the session's Emacs); the others see the Explorer's "Waiting for the hub" line.
+`drgnx-tty-session-explorer-heading` (a line starting with the Files section's chevron) says the sidebar is drawn.
+`bin/drgnx check` runs the tier as the `tty` job (a GUI job for the memory
 accounting, in the parallel phase) when tmux is installed; `--no-gui` leaves it out. The `Terminal tier` workflow runs
 the two container runs nightly ([ci.md](ci.md)).
 

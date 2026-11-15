@@ -181,6 +181,7 @@ screen.  Returns its directory."
     (make-directory dir t)
     (with-temp-file (expand-file-name "a.txt" dir) (insert "alpha beta gamma\n"))
     (with-temp-file (expand-file-name "b.txt" dir) (dotimes (i 300) (insert (format "line %d\n" (1+ i)))))
+    (drgnx-tty-session-hub s)                     ; the Explorer's rows are the hub's listing
     (drgnx-tty-kitty-test--in s `(progn (drgnx-explorer-set-roots (list ,dir))
                                         (drgnx-wb-show-sidebar)
                                         (drgnx-wb-show-in-editor (find-file-noselect ,(expand-file-name "a.txt" dir)) t)

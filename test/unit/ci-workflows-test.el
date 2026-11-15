@@ -87,10 +87,10 @@ there, so what a job does includes them (and theirs)."
       (should (= 12 (funcall count "          path: drgnx\n")))
       (should (= 12 (funcall count "          ref: ${{ inputs.drgnx_ref || github.event.pull_request.head.sha }}\n"))))
     ;; the Linux jobs that run Ratatoskr fetch the binaries the run built once; macOS builds its own
-    (dolist (job '("unit" "no-lisp-writes" "hub-chaos" "ui" "perf"))
+    (dolist (job '("unit" "no-lisp-writes" "hub-chaos" "ui" "perf" "tty"))
       (drgnx-ci-test--has (drgnx-ci-test--job tiers job) "needs: [bins-linux, nidhogg-line]" "uses: ./drgnx/.github/actions/fetch-test-bins"))
     ;; and bins-linux runs for each of them
-    (dolist (tier '("unit" "no-lisp-writes" "hub-chaos" "ui" "perf"))
+    (dolist (tier '("unit" "no-lisp-writes" "hub-chaos" "ui" "perf" "tty"))
       (should (string-search (format "contains(format(' {0} ', inputs.tiers), ' %s ')" tier)
                              (drgnx-ci-test--job tiers "bins-linux"))))
     (drgnx-ci-test--has (drgnx-ci-test--job tiers "bins-linux")
