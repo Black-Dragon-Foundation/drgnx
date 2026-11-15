@@ -332,6 +332,22 @@ skip would hide a stale or wrong Nidhogg build.  A function, not a macro: test f
         (ert-fail (format "DRGNX_NIDHOGG_STRICT=1: this Emacs has no %s (is it Nidhogg's integration line?)" what))
       (ert-skip (format "this Emacs has no Nidhogg %s" what)))))
 
+(defun drgnx-run-ert--sja-p ()
+  "Non-nil when this Emacs has Sjá, Nidhogg's row store: its primitive and its Lisp door."
+  (and (fboundp 'nidhogg-view--call) (require 'nidhogg-views nil t) (fboundp 'nidhogg-view-rows)))
+
+(defun drgnx-run-ert--strict-sja-failures (skipped sja)
+  "Under DRGNX_NIDHOGG_STRICT=1, failures (:name :condition) for the SKIPPED entries (:name :reason) that skipped
+for a Sjá primitive (`nidhogg-view-…') when SJA is nil (this Emacs has no Sjá, `drgnx-run-ert--sja-p'): on
+Nidhogg's line such a skip hides a stale or wrong build.  With Sjá the skip had another reason (no display), and
+stays a skip."
+  (when (and (equal (drgnx-run-ert--env "DRGNX_NIDHOGG_STRICT") "1") (not sja))
+    (cl-loop for s in skipped
+             when (string-match-p "nidhogg-view-" (or (plist-get s :reason) ""))
+             collect (list :name (plist-get s :name)
+                           :condition (format "DRGNX_NIDHOGG_STRICT=1: skipped for Sjá, which this Emacs has not: %s"
+                                              (plist-get s :reason))))))
+
 (defun drgnx-run-ert--flaky-file ()
   "The listed flakes: DRGNX_TEST_FLAKY (a file), else test/flaky.eld of this checkout."
   (let ((given (drgnx-run-ert--env "DRGNX_TEST_FLAKY")))
@@ -849,6 +865,9 @@ summary to RESULTS-FILE.  Return t if every test passed."
     ;; a test the must-run list names that skipped: a full or a class run (a per-file Emacs leaves it to its parent)
     (when (and (drgnx-run-ert--must-run-p selector) (not drgnx-run-ert--order-in) (not drgnx-run-ert--file-child))
       (setq load-failures (append load-failures (drgnx-run-ert--no-skip-failures skipped))))
+    ;; a strict run's skip for Sjá in an Emacs with none (a per-file Emacs leaves it to its parent)
+    (unless drgnx-run-ert--file-child
+      (setq load-failures (append load-failures (drgnx-run-ert--strict-sja-failures skipped (drgnx-run-ert--sja-p)))))
     (setq skipped (append skipped (drgnx-run-ert--timing-skipped selector) (drgnx-run-ert--gate-skipped selector)))
     (unless drgnx-run-ert--file-child (drgnx-run-ert--say-skipped skipped))
     (setq failures (append load-failures (nreverse failures) (drgnx-run-ert--audit-failures)))
@@ -1263,6 +1282,11 @@ file passed."
           (setq summary (plist-put (plist-put (plist-put summary :total (+ (plist-get summary :total) (length more)))
                                               :failed (+ (plist-get summary :failed) (length more)))
                                    :failures (vconcat (plist-get summary :failures) more)))))
+      ;; a strict run's skip for Sjá in an Emacs with none (the files' own Emacsen leave it to this one)
+      (when-let* ((more (drgnx-run-ert--strict-sja-failures (append (plist-get summary :skipped) nil) (drgnx-run-ert--sja-p))))
+        (setq summary (plist-put (plist-put (plist-put summary :total (+ (plist-get summary :total) (length more)))
+                                            :failed (+ (plist-get summary :failed) (length more)))
+                                 :failures (vconcat (plist-get summary :failures) more))))
       (when seed (setq summary (append summary (list :seed seed))))
       ;; the time in hundredths: the timing lane (test/timing-lane.sh) reads it, and a row's run can take under a second
       (message "\ndrgnx: %d test files, each in an Emacs of its own: %d tests, %d as expected, %d unexpected (%.2f s)"

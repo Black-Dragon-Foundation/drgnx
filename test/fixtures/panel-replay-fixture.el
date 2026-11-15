@@ -31,7 +31,7 @@
 (defvar drgnx-panel-replay--allocs nil "Objects each update's events made (newest first), while armed.")
 (defvar drgnx-panel-replay--draws nil "kB each draw of the panel made (newest first), while armed.")
 (defvar drgnx-panel-replay--armed nil "Non-nil while the updates are measured.")
-(defvar drgnx-panel-replay--patches 0 "Row patches of the panel among the updates measured.")
+(defvar drgnx-panel-replay--patches 0 "Row patches the session's views took while armed (Lisp's or Sjá's).")
 
 (declare-function drgnx-agents-mirror-start "drgnx-agents-mirror")
 (declare-function drgnx-agents-send "drgnx-agents")
@@ -56,6 +56,8 @@
 (declare-function drgnx-perf-stats "drgnx-perf")
 (declare-function drgnx-perf-advise-draws "drgnx-perf")
 (declare-function drgnx-perf-unadvise-draws "drgnx-perf")
+(declare-function drgnx-perf-watch-patches "drgnx-perf")
+(defvar drgnx-perf-patch-functions)
 (declare-function drgnx-view-patch-rows "drgnx-view")
 (defvar drgnx-view-patch)
 (defvar drgnx-agents--sessions)
@@ -172,9 +174,14 @@ The panel inserts the rows the hub builds."
   (if (not (and drgnx-panel-replay--armed (eq name 'events) (drgnx-panel-replay--update-p (nth 1 args) (nth 2 args))))
       (apply orig name args)
     (let ((a0 (apply #'+ (memory-use-counts))))
-      (when (equal (nth 1 args) "view-patch") (cl-incf drgnx-panel-replay--patches))
       (prog1 (apply orig name args)
         (push (- (apply #'+ (memory-use-counts)) a0) drgnx-panel-replay--allocs)))))
+
+(defun drgnx-panel-replay--patch (view _kind)
+  "`drgnx-perf-patch-functions': a row patch VIEW took (one parsed in Lisp, or one Sjá applied), while armed."
+  (when (and drgnx-panel-replay--armed (stringp view)
+             (string-search (drgnx-agent-session-remote drgnx-panel-replay--mirror) view))
+    (cl-incf drgnx-panel-replay--patches)))
 
 (defun drgnx-panel-replay--draw (orig buffer &rest args)
   "Around each view draw (`drgnx-perf-view-draws': Sjá's for the panel): the kB a draw of the panel makes, while armed."
@@ -208,19 +215,27 @@ that failed."
 
 (defun drgnx-panel-replay-measure ()
   "(:alloc STATS :draw_kb STATS :updates N :patches N :entries N :rows N :hub_rows N): `drgnx-panel-replay-measured'
-updates of the stream (at most 40 s), each update's events and each draw of the panel; PATCHES of the updates were
-the panel's row patches, HUB_ROWS the hub's rows it holds at the end."
+updates of the stream (at most 40 s), each update's events and each draw of the panel; PATCHES the row patches the
+session's views took (`drgnx-perf-patch-functions': Lisp's or Sjá's), HUB_ROWS the hub's rows it holds at the end.  A
+measure with no draw or no patch measured nothing: an error, as a premise that failed."
   (require 'drgnx-gc)
   (setq drgnx-panel-replay--allocs nil drgnx-panel-replay--draws nil drgnx-panel-replay--patches 0 drgnx-panel-replay--armed t)
   (advice-add 'drgnx-hub--run-hook :around #'drgnx-panel-replay--event)
   (drgnx-perf-advise-draws :around #'drgnx-panel-replay--draw)
+  (drgnx-perf-watch-patches t)
+  (add-hook 'drgnx-perf-patch-functions #'drgnx-panel-replay--patch)
   ;; the second turn: the recording streams
   (drgnx-agents-send drgnx-panel-replay--mirror "stream")
   (unwind-protect
       (drgnx-panel-replay--wait 40 (lambda () (>= (length drgnx-panel-replay--allocs) drgnx-panel-replay-measured)))
     (setq drgnx-panel-replay--armed nil)
     (advice-remove 'drgnx-hub--run-hook #'drgnx-panel-replay--event)
-    (drgnx-perf-unadvise-draws #'drgnx-panel-replay--draw))
+    (drgnx-perf-unadvise-draws #'drgnx-panel-replay--draw)
+    (remove-hook 'drgnx-perf-patch-functions #'drgnx-panel-replay--patch)
+    (drgnx-perf-watch-patches nil))
+  (when (or (null drgnx-panel-replay--draws) (zerop drgnx-panel-replay--patches))
+    (error "Premise: %d draws of the panel and %d row patches of the session measured (a metric that measures nothing)"
+           (length drgnx-panel-replay--draws) drgnx-panel-replay--patches))
   (when (< (length drgnx-panel-replay--allocs) 200)
     (error "Premise: %d updates measured, not 200 (status %s, %d entries; the hub: %s; the mock's log ends: %s)"
            (length drgnx-panel-replay--allocs)
