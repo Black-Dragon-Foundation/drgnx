@@ -145,5 +145,78 @@ by that raw binding in the map itself; `drgnx-term-apply-keys' frees the layer's
     (should (> checked 20))
     (should (null bad))))
 
+;;;; T8: the foreign layer
+
+(ert-deftest drgnx-keys/foreign-layer-is-active-only-under-the-target-map ()
+  "The key works where the local map is the target, never writes into it, and is not there elsewhere."
+  (keys-lay--with ((lay-a "C-c y a" :map keys-lay-pkg-mode-map))
+    (should (eq (keys-lay--bound "C-c y a" keys-lay-pkg-mode-map) #'keys-lay-a))
+    (should (eq (keys-lay--bound "C-c y o" keys-lay-pkg-mode-map) #'keys-lay-own))
+    (should-not (keys-lay--bound "C-c y a" (make-sparse-keymap)))
+    (should-not (lookup-key keys-lay-pkg-mode-map (kbd "C-c y a")))
+    (should (eq (car (last minor-mode-map-alist)) drgnx-keys--foreign-entry))))
+
+(ert-deftest drgnx-keys/foreign-layer-follows-the-local-map-not-the-mode ()
+  "wgrep swaps the local map with `use-local-map' and keeps the major mode: the target is wgrep's own map, or
+the major mode's map as the new map's parent; an unrelated map has neither.  A derived mode inherits."
+  (keys-lay--with ((lay-a "C-c y a" :map keys-lay-pkg-mode-map) (lay-b "C-c y b" :map keys-lay-edit-map))
+    (with-temp-buffer
+      (keys-lay-pkg-mode)
+      (should (eq (key-binding (kbd "C-c y a")) #'keys-lay-a))
+      (should-not (key-binding (kbd "C-c y b")))
+      (use-local-map keys-lay-edit-map)                  ; the swap: still keys-lay-pkg-mode
+      (should (eq major-mode 'keys-lay-pkg-mode))
+      (should (eq (key-binding (kbd "C-c y b")) #'keys-lay-b))
+      (should (eq (key-binding (kbd "C-c y a")) #'keys-lay-a))
+      (use-local-map (make-sparse-keymap))               ; an unrelated map: nothing of the mode's
+      (should-not (key-binding (kbd "C-c y a")))
+      (should-not (key-binding (kbd "C-c y b"))))
+    (with-temp-buffer
+      (keys-lay-child-mode)
+      (should (eq (key-binding (kbd "C-c y a")) #'keys-lay-a))
+      (should-not (key-binding (kbd "C-c y b"))))
+    (with-temp-buffer
+      (use-local-map (make-composed-keymap nil keys-lay-pkg-mode-map))
+      (should (eq (key-binding (kbd "C-c y a")) #'keys-lay-a)))))
+
+(ert-deftest drgnx-keys/foreign-layer-steps-below-other-minor-modes-and-stays-last ()
+  "Another minor mode's key beats the layer's; the layer's alist entry is last after another mode pushes or
+appends, and gone when no profile key needs it."
+  (keys-lay--with ((lay-a "C-c y a" :map keys-lay-pkg-mode-map))
+    (setf (alist-get 'keys-lay-minor-mode minor-mode-map-alist) keys-lay-minor-mode-map)
+    (define-key keys-lay-minor-mode-map (kbd "C-c y a") #'keys-lay-b)
+    (unwind-protect
+        (with-temp-buffer
+          (keys-lay-pkg-mode)
+          (setq-local keys-lay-minor-mode t)
+          (should (eq (key-binding (kbd "C-c y a")) #'keys-lay-b))
+          (setq-local keys-lay-minor-mode nil)
+          (should (eq (key-binding (kbd "C-c y a")) #'keys-lay-a))
+          (drgnx-keys-apply)
+          (should (eq (car (last minor-mode-map-alist)) drgnx-keys--foreign-entry))
+          (keys-lay--empty)
+          (should-not (memq drgnx-keys--foreign-entry minor-mode-map-alist))
+          (should-not (key-binding (kbd "C-c y a"))))
+      (setq minor-mode-map-alist (assq-delete-all 'keys-lay-minor-mode minor-mode-map-alist)))))
+
+(ert-deftest drgnx-keys/foreign-layer-prefix-hides-nothing-where-it-is-inactive ()
+  "A layer key under C-c does not turn a local command on C-c itself into a prefix in other buffers; two targets may
+share a key."
+  (keys-lay--with ((lay-a "C-c y a" :map keys-lay-pkg-mode-map) (lay-b "C-c y a" :map keys-lay-other-map))
+    (let ((m (make-sparse-keymap)))
+      (define-key m (kbd "C-c") #'keys-lay-z)
+      (should (eq (keys-lay--bound "C-c" m) #'keys-lay-z)))
+    (should (eq (keys-lay--bound "C-c y a" keys-lay-pkg-mode-map) #'keys-lay-a))
+    (should (eq (keys-lay--bound "C-c y a" keys-lay-other-map) #'keys-lay-b))))
+
+(ert-deftest drgnx-keys/foreign-layer-goes-with-the-restore ()
+  "Restoring (a module's teardown) leaves no layer and no entry behind."
+  (keys-lay--with ((lay-a "C-c y a" :map keys-lay-pkg-mode-map))
+    (should drgnx-keys--foreign-on)
+    (drgnx-keys--restore)
+    (should-not drgnx-keys--foreign-on)
+    (should-not (memq drgnx-keys--foreign-entry minor-mode-map-alist))
+    (should-not (keys-lay--bound "C-c y a" keys-lay-pkg-mode-map))))
+
 (provide 'keys-layers-test)
 ;;; keys-layers-test.el ends here

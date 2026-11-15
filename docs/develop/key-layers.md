@@ -1,14 +1,15 @@
 # Key layers for other keymaps
 
-A profile's key in the global map goes into the profile's layer (`drgnx-keys--profile-map`). A profile key in one of
-drgnx's own maps (an entry's `:map`) is not written into that map either: it goes into a layer of its own, so a profile
-switch or a reload cannot leave it behind. Which layer depends on whose map it is.
+A profile's key in the global map goes into the profile's layer (`drgnx-keys--profile-map`). A profile key in any other keymap (an entry's `:map`)
+is not written into that map either: it goes into a layer of its own, so a profile switch, a reload or a package's later
+write cannot leave it behind or overwrite it. Which layer depends on whose map it is.
 
 | The map | The layer | Code |
 |---|---|---|
 | the global map | `drgnx-keys--profile-map`, composed under your keys | `drgnx-keys--fill-profile` |
 | one of drgnx's own (`drgnx-…`) | the map's parent: child → layer → old parent | `drgnx-keys--fill-own` |
-| any other map (a package's, the modal engine's) | still written, with a ledger (`drgnx-keys--applied`) | `drgnx-keys--apply-binding` |
+| any other (a package's, wgrep's) | the foreign layer: one global minor mode, filtered entries | `drgnx-keys--fill-foreign` |
+| the modal engine's (evil's state maps) | still written, with a ledger (`drgnx-keys--applied`) | `drgnx-keys--apply-binding` |
 
 ## Parent layers for drgnx's own maps
 
@@ -29,3 +30,24 @@ map's old parent.
 - **Modules never put profile keys in their maps.** `drgnx-keys-lint-children` lists the profile keys that also sit in a
   child map itself (they would shadow the layer and survive a profile switch); the lint test `drgnx-keys/layers-lint-…`
   holds it to nothing.
+
+## The foreign layer
+
+`drgnx-keys--fill-foreign` makes one keymap, `drgnx-keys--foreign-map`, with one wrapped keymap per target map. Its switch
+`drgnx-keys--foreign-on` and the map are one entry (`drgnx-keys--foreign-entry`) of `minor-mode-map-alist`, kept last
+(`drgnx-keys--foreign-keep-last`, at every apply): another minor mode's key beats a profile key, which beats the major
+mode's own. Every entry is `(menu-item "" DEF :filter FILTER)`, where FILTER (`drgnx-keys--foreign-filter`) gives DEF only
+while the buffer's local map is, or inherits (parents, composed maps), the target map. The target is looked up by its
+symbol when a key is pressed, so a map made later or replaced needs nothing.
+
+- **By local map, not by mode.** wgrep switches maps with `use-local-map` and keeps `major-mode`; a mode derived from a
+  covered one inherits the map by keymap parent. Both are the local map reaching the target, so both work; an unrelated
+  local map (wgrep's `wgrep-mode-map` over a grep buffer, for the grep map's key) does not.
+- **Prefixes are filtered too.** A prefix entry (`C-c` of `C-c y a`) is a filtered item as well: a plain prefix map in the
+  layer would turn a command bound on `C-c` in another buffer into a prefix there.
+- **The target map is never written.** What the package, a hook or you put in it stays, and the layer is above it.
+  Keys of yours in a foreign map step aside once the watched set records them (the keymap redesign's T6); until
+  then a profile `:map` key wins over your binding in that map.
+- **The minibuffer's C-h** (the profile's global C-h gives way to `help-command` there) is a foreign entry for
+  `minibuffer-local-map`.
+- **Evil.** `drgnx-keys--bind-evil-aux` still binds the keys in evil's auxiliary maps of the target when evil is loaded.

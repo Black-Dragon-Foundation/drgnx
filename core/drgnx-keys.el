@@ -879,6 +879,7 @@ leave KEY to its owner while it is still DEFINITION (`drgnx-keys--yours').")
     (drgnx-keys--set aux key prev))
   (setq drgnx-keys--evil-aux nil)
   (drgnx-keys--set-everywhere nil)
+  (drgnx-keys--fill-foreign nil)
   (drgnx-keys--detach-all)
   (drgnx-keys--profile-indent nil)
   (drgnx-keys--uninstall-global)
@@ -943,6 +944,11 @@ emptied and leaves the list, so a profile switch leaves nothing behind."
 (defun drgnx-keys--own-map-p (mapsym)
   "Whether MAPSYM names one of drgnx's own keymaps."
   (string-prefix-p "drgnx-" (symbol-name mapsym)))
+
+(defun drgnx-keys--engine-spec-p (spec)
+  "Whether keymap SPEC belongs to the modal engine (evil's state maps), which has no layer yet."
+  (let ((feature (car (drgnx-commands--keymap-spec spec))) (sym (cdr (drgnx-commands--keymap-spec spec))))
+    (or (eq feature 'evil) (string-suffix-p "-state-map" (symbol-name sym)))))
 
 (defun drgnx-keys--problem (text late)
   "Record TEXT as a keys problem; LATE (a binding made after the apply, when a feature loaded): also on the report."
@@ -1032,22 +1038,71 @@ map's parent, so such a key would shadow it, and a profile switch would leave it
             (when (and d (not (numberp d))) (push (format "%s %s" sym (key-description k)) found))))))
     (nreverse found)))
 
+;;;;; The foreign layer
+
+(defvar drgnx-keys--foreign-map (make-sparse-keymap)
+  "The foreign layer: one wrapped keymap per target map, entries filtered by `drgnx-keys--foreign-filter'.")
+(defvar drgnx-keys--foreign-on nil "Non-nil while the foreign layer has entries (its switch in `minor-mode-map-alist').")
+(defvar drgnx-keys--foreign-entry (cons 'drgnx-keys--foreign-on drgnx-keys--foreign-map)
+  "The layer's `minor-mode-map-alist' entry, kept last: another minor mode's key beats a profile key in the major map.")
+
+(defun drgnx-keys--map-reaches-p (map target)
+  "Whether keymap MAP is TARGET or inherits it (parents, and the keymaps a composed map holds)."
+  (let (hit)
+    (while (and map (not hit))
+      (if (eq map target) (setq hit t)
+        (dolist (m (cdr-safe map)) (when (and (not hit) (eq (car-safe m) 'keymap)) (setq hit (drgnx-keys--map-reaches-p m target))))
+        (setq map (keymap-parent map))))
+    hit))
+
+(defun drgnx-keys--foreign-filter (sym def)
+  "DEF while the buffer's local map is, or inherits, keymap SYM (wgrep's `use-local-map' swap, a mode derived from
+SYM's), else nil: the key is not the layer's here."
+  (and (boundp sym) (keymapp (symbol-value sym)) (drgnx-keys--map-reaches-p (current-local-map) (symbol-value sym)) def))
+
+(defun drgnx-keys--foreign-keep-last ()
+  "Put the layer's entry last in `minor-mode-map-alist' (out of it while the layer is empty)."
+  (setq minor-mode-map-alist (delq drgnx-keys--foreign-entry (copy-sequence minor-mode-map-alist)))
+  (when drgnx-keys--foreign-on
+    (setq minor-mode-map-alist (append minor-mode-map-alist (list drgnx-keys--foreign-entry)))))
+
+(defun drgnx-keys--fill-foreign (targets)
+  "Make the layer from TARGETS, ((MAPSYM (KEY . COMMAND) …) …): nil empties it.  The target keymaps are looked up
+when a key is pressed, so a map that is made later, or replaced, needs nothing here."
+  (let ((nidhogg-define-key-redirect-function nil) wrapped-maps)
+    (dolist (target targets)
+      (let ((layer (make-sparse-keymap)) (wrapped (make-sparse-keymap))
+            (filter (apply-partially #'drgnx-keys--foreign-filter (car target))))
+        (dolist (item (cdr target))
+          (condition-case err (define-key layer (key-parse (car item)) (cdr item))
+            (error (push (format "cannot bind %s in %s: %s" (car item) (car target) (error-message-string err))
+                         drgnx-keys-problems))))
+        (map-keymap (lambda (ev def) (define-key wrapped (vector ev) `(menu-item "" ,def :filter ,filter))) layer)
+        (push wrapped wrapped-maps)))
+    (setcdr drgnx-keys--foreign-map (nreverse wrapped-maps))
+    (setq drgnx-keys--foreign-on (and wrapped-maps t))
+    (drgnx-keys--foreign-keep-last)))
+
 (defun drgnx-keys--set-layers (entries generation)
-  "Put ENTRIES ((SPEC COMMAND BINDING) …), the profile's keys in drgnx's own maps, into layers: parents of the maps."
-  (let (own features)
+  "Put ENTRIES ((SPEC COMMAND BINDING) …), the profile's keys in maps that are neither the global map nor the
+engine's, into layers: parents of drgnx's own maps, the foreign layer for the others."
+  (let (own foreign features)
     (dolist (e entries)
       (pcase-let* ((`(,spec ,command ,b) e) (`(,feature . ,sym) (drgnx-commands--keymap-spec spec))
                    (row (list b (cons (plist-get b :key) command))))
         (setf (alist-get sym features) feature)
-        (push row (alist-get sym own))))
-    (pcase-dolist (`(,sym . ,rows) own)
-      (let ((rows (reverse rows)))
+        (if (drgnx-keys--own-map-p sym) (push row (alist-get sym own)) (push row (alist-get sym foreign)))))
+    (when-let* ((help (drgnx-keys--help-in-minibuffer))) (push (list nil help) (alist-get 'minibuffer-local-map foreign)))
+    (pcase-dolist (`(,sym . ,rows) (append own (and (featurep 'evil) foreign)))
+      (let ((rows (reverse rows)) (own-p (drgnx-keys--own-map-p sym)))
         (drgnx-keys--when-map-ready
          (alist-get sym features) sym generation
          (lambda (_late)
-           (drgnx-keys--fill-own sym (mapcar #'cadr rows))
+           (when own-p (drgnx-keys--fill-own sym (mapcar #'cadr rows)))
            (dolist (r rows)
-             (drgnx-keys--bind-evil-aux (car r) sym (car (cadr r)) (cdr (cadr r))))))))))
+             (when (car r) (drgnx-keys--bind-evil-aux (car r) sym (car (cadr r)) (cdr (cadr r)))))))))
+    (drgnx-keys--fill-foreign
+     (mapcar (lambda (f) (cons (car f) (mapcar #'cadr (reverse (cdr f))))) (reverse foreign)))))
 
 (defun drgnx-keys--bind-evil-aux (b mapsym key def)
   "When evil is loaded: also bind KEY to DEF in evil's auxiliary maps of MAPSYM's keymap (normal and motion state),
@@ -1139,12 +1194,12 @@ Keys problems are `warn', so they never echo.  Never signals."
     (error (message "drgnx: key problems not recorded as notices: %s" (error-message-string err)))))
 
 (defun drgnx-keys--help-in-minibuffer ()
-  "When a profile took the help key (`help-char', C-h) from the global map, give it back in the minibuffer:
-the profile's command for it (Replace in File) means nothing while the minibuffer reads, and C-h f there is
-the way to look something up.  Undone with the profile's other keys by `drgnx-keys--restore'."
+  "When a profile took the help key (`help-char', C-h) from the global map, the item (KEY . help-command) that gives
+it back in the minibuffer, for the foreign layer: the profile's command for it (Replace in File) means nothing while the
+minibuffer reads, and C-h f there is the way to look something up.  Else nil."
   (let ((key (key-description (vector help-char))))
     (unless (memq (lookup-key drgnx-keys--global-map (key-parse key)) '(help-command nil))
-      (drgnx-keys--bind 'minibuffer-local-map key 'help-command))))
+      (cons key 'help-command))))
 
 (defun drgnx-keys-apply ()
   "Bind the keys of the active stack and keys.eld, replacing what drgnx bound before.
@@ -1194,14 +1249,13 @@ Never prompts: problems are collected in `drgnx-keys-last'.  Returns the resolut
                   (setf (drgnx-cmd-bound cmd) (append (drgnx-cmd-bound cmd) (list (cons (plist-get b :key) map))))
                   (unless (eq (cdr (drgnx-commands--keymap-spec map)) 'global-map)
                     ;; the engine's maps and the :also maps keep the ledger; every other map gets a layer
-                    (if (and (eq map (plist-get b :map)) (drgnx-keys--own-map-p (cdr (drgnx-commands--keymap-spec map))))
+                    (if (and (eq map (plist-get b :map)) (not (drgnx-keys--engine-spec-p map)))
                         (push (list map (drgnx-cmd-command cmd) b) layered)
                       (drgnx-keys--apply-binding (plist-put (copy-sequence b) :map map) cmd drgnx-keys--generation)))))))
           (drgnx-keys--fill-profile (nreverse globals))
           (drgnx-keys--install-global)
           (drgnx-keys--set-everywhere (plist-get r :bindings))
           (drgnx-keys--set-layers (nreverse layered) drgnx-keys--generation)
-          (drgnx-keys--help-in-minibuffer)
           (setq drgnx-keys-last (append (list :layers layers
                                               :problems (append (reverse drgnx-keys-problems) (plist-get r :problems)))
                                         r))))
