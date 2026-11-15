@@ -400,6 +400,8 @@ events in DRGNX (those reach drgnx: their raw binding goes) and events bound to 
   "A terminal's raw input: every key goes to the program, but for `drgnx-term-reserved-keys' and the keys the key
 profile has reach drgnx (`drgnx-term-apply-keys'); the mouse goes to it while it tracks the mouse.")
 
+(declare-function drgnx-keys-own-layer "drgnx-keys" (sym))
+
 (defun drgnx-term-apply-keys (&rest _)
   "The terminal's keymap follows the key profile: the first events of the keys that reach drgnx
 \(`drgnx-terminal-key-split') and of the profile's keys in this map (its key layer) are no longer sent to the
