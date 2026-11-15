@@ -45,13 +45,22 @@
 to its top.  The hub gives at most 50."
   :type 'integer :group 'drgnx-agent-panel)
 
+(defun drgnx-agent-panel--threshold-set (symbol value)
+  "Set SYMBOL to VALUE; every open panel tells the hub at once, which draws its rows again (`agents/panel/look')."
+  (set-default symbol value)
+  (when (featurep 'drgnx-agent-panel)
+    (dolist (b (drgnx-agent-panel-buffers))
+      (with-current-buffer b (drgnx-agent-panel--send-look)))))
+
 (defcustom drgnx-agent-panel-slow-seconds 10
-  "A step that took longer than this many seconds shows its time in the warning face."
-  :type 'number :group 'drgnx-agent-panel)
+  "A step that took longer than this many seconds shows its time in the warning face.
+Set with `setopt' or Customize, open panels draw again at once."
+  :type 'number :set #'drgnx-agent-panel--threshold-set :group 'drgnx-agent-panel)
 
 (defcustom drgnx-agent-panel-expensive-cost 0.5
-  "A step that cost more than this (in the step's own unit) shows its cost in the warning face."
-  :type 'number :group 'drgnx-agent-panel)
+  "A step that cost more than this (in the step's own unit) shows its cost in the warning face.
+Set with `setopt' or Customize, open panels draw again at once."
+  :type 'number :set #'drgnx-agent-panel--threshold-set :group 'drgnx-agent-panel)
 
 ;;;; Faces: all inherit the look's semantic faces
 
@@ -200,8 +209,10 @@ to its top.  The hub gives at most 50."
     (setq drgnx-agent-panel--waiting nil)))
 
 (defun drgnx-agent-panel--look-params ()
-  "What this panel tells the hub about its rows: the step types open and the rows opened or folded by hand."
-  (list :open (vconcat (mapcar #'symbol-name drgnx-agent-panel--disclosure))
+  "What this panel tells the hub about its rows: the step types open, the rows opened or folded by hand, and when a
+step's time or cost is drawn as a warning."
+  (list :slow_secs drgnx-agent-panel-slow-seconds :dear_cost drgnx-agent-panel-expensive-cost
+        :open (vconcat (mapcar #'symbol-name drgnx-agent-panel--disclosure))
         :lens (vconcat (mapcar (lambda (p) (symbol-name (car p))) drgnx-agent-panel-presets))
         :lens_on (or (drgnx-agent-panel--preset-in-force) 0)
         :pins (vconcat (mapcar #'cdr drgnx-agent-panel--pins))
