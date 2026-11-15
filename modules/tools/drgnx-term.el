@@ -292,13 +292,22 @@ M-x, M-:, M-! and M-&.  As key vectors (M-x is [?\\e ?x]).")
                        (and cmd (memq (drgnx-cmd-scope cmd) '(app window))))))
               (plist-get drgnx-keys-last :bindings)))
 
+(defun drgnx-terminal--map-bindings ()
+  "Bindings (plists of `drgnx-keys-last') of the active stack's keys in the terminal's own keymap: the terminal's Find
+\(C-f), Paste (C-y in the Emacs profile) and the like.  The profile put them there on purpose, so they are drgnx's."
+  (seq-filter (lambda (b) (eq (cdr (drgnx-commands--keymap-spec (plist-get b :map))) 'drgnx-term-mode-map))
+              (plist-get drgnx-keys-last :bindings)))
+
 (defun drgnx-terminal-key-split (&optional reserved)
   "Where the active key profile's keys go in a terminal: (:to-drgnx KEYS :to-shell KEYS), key strings.
-Only global bindings of commands with scope app or window count.  A key whose first event is an ASCII control
+The profile's keys in the terminal's own keymap (`drgnx-terminal--map-bindings') reach drgnx whatever their first key
+is: the terminal's Paste on C-y no longer yanks in readline.  Of the other keys only global bindings of commands with
+scope app or window count.  A key whose first event is an ASCII control
 or Alt character the terminal sends to the shell goes to the shell (C-a, C-e, C-w, C-k, M-f as readline mean them),
 unless its first key is in `drgnx-terminal-skip-shell-keys'; every other key reaches drgnx (as do the RESERVED
 keys, by default `drgnx-term-reserved-keys')."
   (let ((reserved (or reserved drgnx-term-reserved-keys)) to-drgnx to-shell)
+    (dolist (b (drgnx-terminal--map-bindings)) (cl-pushnew (plist-get b :key) to-drgnx :test #'equal))
     (dolist (b (drgnx-terminal--bindings))
       (let* ((key (plist-get b :key)) (event (aref (key-parse key) 0)))
         (if (and (drgnx-terminal--shell-event-p event)
@@ -402,8 +411,8 @@ profile has reach drgnx (`drgnx-term-apply-keys'); the mouse goes to it while it
 
 (defun drgnx-term-apply-keys (&rest _)
   "The terminal's keymap follows the key profile: the first events of the keys that reach drgnx
-\(`drgnx-terminal-key-split') are no longer sent to the program; the others are again.  Runs at the module's setup
-and after `drgnx-keys-apply'."
+\(`drgnx-terminal-key-split', which lists the profile's keys in this map too: C-f Find, C-y Paste) are no longer sent
+to the program; the others are again.  Runs at the module's setup and after `drgnx-keys-apply'."
   (drgnx-term--fill-map drgnx-term-mode-map
                         (mapcar (lambda (k) (aref (key-parse k) 0))
                                 (plist-get (drgnx-terminal-key-split) :to-drgnx))))
