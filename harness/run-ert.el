@@ -831,6 +831,35 @@ names the run would run, in that order, to FILE and runs none."
   "Say SEED, the shuffle seed of this run, and how to run again with it."
   (message "drgnx: shuffle seed %s (the same order again: bin/drgnx test --shuffle=%s)" seed seed))
 
+;;;; The wait profile
+
+;; With DRGNX_TEST_WAIT_PROFILE set (the GUI tier's DRGNX_UI_PROFILE=1), the time a test spends inside `accept-process-output',
+;; `sleep-for' and `sit-for' (its settle waits and polls; nested calls once) is written beside its :seconds as :wait, so a
+;; tier's time reads as waiting against work.
+
+(defvar drgnx-run-ert--wait-total 0.0 "Seconds spent in the waiting primitives so far.")
+(defvar drgnx-run-ert--wait-depth 0 "How many waiting primitives are running: only the outermost counts.")
+(defvar drgnx-run-ert--wait-by-test nil "The (TEST . WAIT-SECONDS) pairs of the tests that ended, newest first.")
+
+(defun drgnx-run-ert--wait-around (fn &rest args)
+  (if (> drgnx-run-ert--wait-depth 0)
+      (apply fn args)
+    (let ((t0 (float-time)) (drgnx-run-ert--wait-depth (1+ drgnx-run-ert--wait-depth)))
+      (unwind-protect (apply fn args)
+        (cl-incf drgnx-run-ert--wait-total (- (float-time) t0))))))
+
+(defun drgnx-run-ert--wait-test-around (run test &rest args)
+  (let ((before drgnx-run-ert--wait-total))
+    (prog1 (apply run test args)
+      (push (cons (symbol-name (ert-test-name test)) (- drgnx-run-ert--wait-total before)) drgnx-run-ert--wait-by-test))))
+
+(defun drgnx-run-ert--wait-profile-on ()
+  "Advise the waiting primitives and `ert-run-test' when DRGNX_TEST_WAIT_PROFILE asks for the profile."
+  (when (drgnx-run-ert--env "DRGNX_TEST_WAIT_PROFILE")
+    (dolist (f '(accept-process-output sleep-for sit-for))
+      (advice-add f :around #'drgnx-run-ert--wait-around '((name . drgnx-run-ert-wait))))
+    (advice-add 'ert-run-test :around #'drgnx-run-ert--wait-test-around '((name . drgnx-run-ert-wait-test)))))
+
 (defun drgnx-run-ert (dir &optional results-file)
   "Load every *-test.el under DIR (or the files of the list DIR: a shard), run all tests, write a JSON
 summary to RESULTS-FILE.  Return t if every test passed."
@@ -840,6 +869,7 @@ summary to RESULTS-FILE.  Return t if every test passed."
     (ignore-errors (delete-file drgnx-run-ert--progress))
     (advice-add 'ert-run-test :around #'drgnx-run-ert--progress-around))
   (drgnx-run-ert--trampolines-see-real-primitives)
+  (drgnx-run-ert--wait-profile-on)
   (when-let* ((a (drgnx-run-ert--env "DRGNX_TEST_AUDIT")))
     (drgnx-run-ert--audit-install (and (not (equal a "1")) a)))
   (let* ((census (and (or (drgnx-run-ert--leaks-on-p) (drgnx-run-ert--file-leaks-p))
@@ -889,7 +919,9 @@ summary to RESULTS-FILE.  Return t if every test passed."
                  :expected (if expected t :false)
                  ;; where and how long: bin/drgnx check balances its shards with them
                  :file (or (ert-test-file-name test) :null)
-                 :seconds (or (ignore-errors (ert-test-result-duration result)) 0))
+                 :seconds (or (ignore-errors (ert-test-result-duration result)) 0)
+                 ;; with DRGNX_TEST_WAIT_PROFILE: the part of it spent waiting
+                 :wait (or (cdr (assoc name drgnx-run-ert--wait-by-test)) 0))
            tests)
      (when (ert-test-skipped-p result)
        (push (list :name name :reason (if (cdr-safe condition) (format "%s" (cadr condition)) "skipped")) skipped))

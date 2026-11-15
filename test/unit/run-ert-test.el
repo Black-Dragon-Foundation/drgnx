@@ -961,6 +961,29 @@ suite, with the per-file leak check on.  Return (EXIT RESULTS-PLIST OUTPUT)."
           (should (eql 0 (drgnx-run-ert-test--batch suite results "DRGNX_TEST_FILE_LEAKS"))))
       (delete-directory tmp t))))
 
+;;;; The wait profile (DRGNX_TEST_WAIT_PROFILE)
+
+(ert-deftest drgnx-run-ert/the-wait-profile-says-how-much-of-a-test-was-waiting ()
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-wait" t)))
+         (suite (expand-file-name "suite" tmp)) (results (expand-file-name "r.json" tmp)))
+    (unwind-protect
+        (progn
+          (drgnx-run-ert-test--suite
+           suite '(("wait-test.el" . "(ert-deftest wp/waits () (sleep-for 0.4) (accept-process-output nil 0.1))
+(ert-deftest wp/works () (let ((x 0)) (dotimes (i 3000000) (setq x (+ x i))) (should (> x 0))))")))
+          (should (eql 0 (drgnx-run-ert-test--batch suite results "DRGNX_TEST_WAIT_PROFILE=1")))
+          (let* ((tests (append (plist-get (drgnx-run-ert-test--json results) :tests) nil))
+                 (get (lambda (n) (seq-find (lambda (x) (equal (plist-get x :name) n)) tests))))
+            (should (>= (plist-get (funcall get "wp/waits") :wait) 0.45))
+            (should (< (plist-get (funcall get "wp/waits") :wait) (+ 0.1 (plist-get (funcall get "wp/waits") :seconds))))
+            (should (< (plist-get (funcall get "wp/works") :wait) 0.05)))
+          ;; without the variable no wait is counted
+          (should (eql 0 (drgnx-run-ert-test--batch suite results "DRGNX_TEST_WAIT_PROFILE")))
+          (should (= 0 (plist-get (seq-find (lambda (x) (equal (plist-get x :name) "wp/waits"))
+                                            (append (plist-get (drgnx-run-ert-test--json results) :tests) nil))
+                                  :wait))))
+      (delete-directory tmp t))))
+
 ;;;; The GUI tier's per-file sessions (harness/drgnx-ui.el), through a stand-in launcher
 
 (defconst drgnx-run-ert-test--ui-selector "^drgnx-ui-look-fonts/\\\\|^drgnx-ui-look-tabs/"

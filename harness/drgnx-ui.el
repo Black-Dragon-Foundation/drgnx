@@ -1920,6 +1920,7 @@ to know (a Lisp plist: :rc :run :report :lines).  Return 0: whether the file pas
                        (append (drgnx-ui--hub-env)
                                (list (concat "DRGNX_UI_TEST_FILE=" (expand-file-name file)))
                                (and leaks (list "DRGNX_TEST_FILE_LEAKS=1"))
+                               (and (equal (getenv "DRGNX_UI_PROFILE") "1") (list "DRGNX_TEST_WAIT_PROFILE=1"))
                                (and selector (list (concat "DRGNX_TEST_SELECTOR=" selector)))
                                (and (equal (getenv "DRGNX_TEST_EMPTY_OK") "1") (list "DRGNX_TEST_EMPTY_OK=1")))))
          (rc (nth 0 res)) (results (nth 1 res)) (run (nth 2 res))
@@ -1975,10 +1976,23 @@ list of (FILE OUT EXIT SECONDS), in the order of FILES.  A tier stopped meanwhil
       (dolist (r running) (drgnx-run-ert--end-process (car r) 10)))
     (mapcar (lambda (f) (assoc f done)) files)))
 
+(defun drgnx-ui--print-profile (profile)
+  "The per-row time profile (DRGNX_UI_PROFILE=1): the rows' total seconds, how much of it was waiting (`drgnx-run-ert' with
+DRGNX_TEST_WAIT_PROFILE), and the slowest rows."
+  (let* ((rows (sort (copy-sequence (car profile)) (lambda (a b) (> (plist-get a :seconds) (plist-get b :seconds)))))
+         (total (apply #'+ 0.0 (mapcar (lambda (r) (plist-get r :seconds)) rows)))
+         (wait (apply #'+ 0.0 (mapcar (lambda (r) (or (plist-get r :wait) 0)) rows))))
+    (princ (format "ui profile: %d rows, %.1fs in rows, %.1fs of it waiting (%.0f%%), %.1fs working\n" (length rows) total wait
+                   (if (> total 0) (* 100 (/ wait total)) 0) (- total wait)))
+    (dolist (r (seq-take rows 20))
+      (princ (format "ui profile row: %.2fs (waiting %.2fs) %s\n" (plist-get r :seconds) (or (plist-get r :wait) 0)
+                     (plist-get r :name))))))
+
 (defun drgnx-ui--run-ui-per-file (files selector)
   "Each of FILES in a session of its own, `drgnx-ui--test-jobs' at once; one merged report in the format of a single
 session's (\"ui ERT: P/T passed\", a FAIL line each, SKIP lines).  Return an exit code."
-  (let* ((out-dir (make-temp-file "drgnx-ui-files" t))
+  (let* ((out-dir (make-temp-file "drgnx-ui-files" t)) (t-start (float-time))
+         (profile (and (equal (getenv "DRGNX_UI_PROFILE") "1") (list nil)))
          (runs (drgnx-ui--run-file-sessions files (min (drgnx-ui--test-jobs) (length files)) out-dir))
          (total 0) (passed 0) (ok t) fails skips)
     (unwind-protect
@@ -1995,6 +2009,7 @@ session's (\"ui ERT: P/T passed\", a FAIL line each, SKIP lines).  Return an exi
               (if results
                   (progn
                     (cl-incf total (plist-get results :total)) (cl-incf passed (plist-get results :passed))
+                    (when profile (seq-doseq (x (plist-get results :tests)) (push x (car profile))))
                     (unless (eq (plist-get results :failed) 0) (setq ok nil))
                     (seq-doseq (x (plist-get results :failures))
                       (push (format "  FAIL %s: %s\n" (plist-get x :name) (drgnx-run-ert--printable (plist-get x :condition))) fails))
@@ -2012,6 +2027,9 @@ session's (\"ui ERT: P/T passed\", a FAIL line each, SKIP lines).  Return an exi
               (unless (eq (plist-get meta :rc) 0) (setq ok nil)))))
       (ignore-errors (delete-directory out-dir t)))
     (when (consp drgnx-ui--batch-totals) (setcar drgnx-ui--batch-totals total))
+    (princ (format "ui sessions: %d files, %d at once, %.1fs wall\n" (length files) (min (drgnx-ui--test-jobs) (length files))
+                   (- (float-time) t-start)))
+    (when profile (drgnx-ui--print-profile profile))
     (princ (format "ui ERT: %s/%s passed%s\n" passed total (if selector (format " (selector %s)" selector) "")))
     (mapc #'princ (nreverse fails)) (mapc #'princ (nreverse skips))
     (if ok 0 1)))
