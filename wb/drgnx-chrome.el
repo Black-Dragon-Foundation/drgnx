@@ -32,9 +32,12 @@
 ;; No `:height' in the tab faces: a relative 1.0 scales by one, and costs a font spec copy at every run of the tab line.
 (defface drgnx-chrome-tab '((t :inherit (shadow tab-line-tab-inactive) :box nil))
   "A tab in an editor's tab line: dimmed." :group 'drgnx)
-(defface drgnx-chrome-tab-current '((t :inherit (drgnx-text-muted tab-line-tab-current) :box nil))
+;; On a terminal frame the shown tabs are bold too: 8 colours would tell them by colour alone (the tty-frames state table).
+(defface drgnx-chrome-tab-current '((((type tty)) :inherit (drgnx-text-muted tab-line-tab-current) :box nil :weight bold)
+                                    (t :inherit (drgnx-text-muted tab-line-tab-current) :box nil))
   "The shown tab of an editor group that is not the active one: on the editor's colour, muted." :group 'drgnx)
-(defface drgnx-chrome-tab-active '((t :inherit tab-line-tab-current :box nil))
+(defface drgnx-chrome-tab-active '((((type tty)) :inherit tab-line-tab-current :box nil :weight bold)
+                                   (t :inherit tab-line-tab-current :box nil))
   "The shown tab of the active editor group: it joins the editor, in the body text's colour (the look, §3.8)."
   :group 'drgnx)
 (defface drgnx-chrome-tab-hover '((t :inherit tab-line-highlight))
