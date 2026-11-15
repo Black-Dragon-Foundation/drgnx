@@ -141,6 +141,13 @@ an error while the hub's rows are on their way: the step waits for them, as the 
                                      process-environment)))
       (should (eq (drgnx-look-scene--forced-theme) (cdr c))))))
 
+(ert-deftest drgnx-look-scenes/the-work-map-scenes-get-a-session-of-their-own ()
+  ;; their hub seeds the map's graph, which the other scenes' hub (the plan run's Flow agent) cannot share: a full
+  ;; run draws them in a second session (`drgnx-look-scenes-run' groups the scenes by :seed)
+  (should (equal (mapcar #'car (seq-filter (lambda (s) (equal (plist-get (cdr s) :seed) "map")) drgnx-look-scenes))
+                 '(work-space-dark work-space-light work-space-hc)))
+  (should-not (seq-find (lambda (s) (and (plist-get (cdr s) :seed) (plist-get (cdr s) :agent))) drgnx-look-scenes)))
+
 ;; The scenes that follow one another share a session: what a scene leaves is what the next one starts from.
 (ert-deftest drgnx-look-scenes/the-popup-scenes-are-closed-with-the-popups-own-key ()
   ;; the Replace All sheet and the Ask an Agent card end on Esc (the popup lane's key; C-g is the palette's): a

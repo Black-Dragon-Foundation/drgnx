@@ -49,6 +49,7 @@
 (declare-function diff-refine-hunk "diff-mode")
 (declare-function diff-hunk-next "diff-mode")
 (defvar drgnx-explorer-buffer-name)
+(defvar drgnx-start-buffer-name)
 
 ;; drgnx-gateway.el's lines 201-232 as the mockups show them (window-dark.html), the working copy; the committed copy
 ;; has the two lines the agent changed (215-217) as they were before
@@ -163,6 +164,11 @@ untracked, drgnx.lock.eld ignored."
 (defvar drgnx-look-scene--project nil "The scene's project directory (a git repository).")
 (defvar drgnx-look-scene--errors nil "The errors of the current step, newest first.")
 (defvar drgnx-look-scene--panel nil "The agent panel's buffer, once the mock agent ran.")
+(defvar drgnx-look-scene-seed "1"
+  "What the session's hub seeds (`RATATOSKR_SEED_SCENE', the hub's `orch::scene'), set by `drgnx look-scenes' from the
+scenes' :seed: \"1\", the plan run with the Flow's one agent (the mock agent's hub seeds it too), or \"map\", the Work
+map's graph of work-space-dark.html.  The two put different agents on the map, so they cannot share a hub, and the
+scenes of each are drawn in a session of their own.")
 
 (defvar drgnx-look-scene-limits
   '((window-dark "the agent panel opens as a tab of the editor group, not the right island (look step 8)"
@@ -396,6 +402,9 @@ from 201."
   (drgnx-look-scene--packages elpa)
   ;; $DRGNX_LOOK_THEME: the scenes that set no theme of their own (Magit, Org, …) draw in it too
   (when (drgnx-look-scene--forced-theme) (drgnx-look-scene--theme nil))
+  ;; the notebook scenes' kernel, before any scene starts the hub that runs it
+  (when-let* ((kernel (drgnx-look-scene--kernel-python)))
+    (drgnx-look-scene--try "kernel" (drgnx-look-scene--kernel-env kernel)))
   ;; the title row as on GNOME, the mockups' desktop, where `auto' is `drgnx': the container's headless mutter names
   ;; no desktop, so the frame is told it is GNOME's (the facts' :wm says so)
   (drgnx-look-scene--try "title"
@@ -462,6 +471,28 @@ from 201."
 send-run scenes' layout has none): a scene that focuses the editor starts here, or has no editor window to focus."
   (when (and (fboundp 'drgnx-layouts-current) (drgnx-layouts-current) (not (eq (drgnx-layouts-current) 'editor)))
     (drgnx-layouts-apply 'editor)))
+
+(defun drgnx-look-scene-begin ()
+  "Before each scene (`drgnx-look-scenes-run'): the editor layout, whatever the scene before left.  A scene in another
+layout (the Work map's) applies it itself; without this the scenes after it drew in its layout (the start page and the
+notebooks showed the Work map)."
+  (drgnx-look-scene--try "begin" (drgnx-look-scene--editor-layout))
+  ;; not `drgnx-look-scene--answer': the scene's own answer checks its views, once it has shown them
+  (prog1 (drgnx-uitest--json (list :errors (vconcat (nreverse drgnx-look-scene--errors))))
+    (setq drgnx-look-scene--errors nil)))
+
+(defun drgnx-look-scene--shown (what &rest buffers)
+  "An error under WHAT unless the frame is in the editor layout and a window of it shows each of BUFFERS (buffers or
+names): a scene drawn after another that left its own layout (the Work map's) must still show its own buffers."
+  (redisplay)
+  (when (and (fboundp 'drgnx-layouts-current) (drgnx-layouts-current) (not (eq (drgnx-layouts-current) 'editor)))
+    (push (format "%s: the frame is in the %s layout, not the editor's" what (drgnx-layouts-current))
+          drgnx-look-scene--errors))
+  (dolist (b buffers)
+    (unless (and (get-buffer b) (get-buffer-window b))
+      (push (format "%s: no window shows %s; the frame shows %S" what (if (bufferp b) (buffer-name b) b)
+                    (mapcar (lambda (w) (buffer-name (window-buffer w))) (window-list nil 'never)))
+            drgnx-look-scene--errors))))
 
 (defun drgnx-look-scene--editor ()
   "The editor on the gateway file, with the Explorer's Files section drawn: its rows come from the hub, so the scenes'
@@ -919,8 +950,7 @@ a map off the rows path or without a hub draws a placeholder, and a shot of that
 
 (defun drgnx-look-scene--work-selected (theme)
   "The Work map of work-space-*.html in THEME: the first agent selected, its chain lit and its detail in the side panel.
-Draw it without the other scenes (`DRGNX_LOOK_ONLY=work-space'): the hub then seeds the map's own graph
-(`drgnx-look-scene--seed')."
+Its session's hub seeds the map's own graph (`drgnx-look-scene-seed' \"map\", the scenes' :seed)."
   (drgnx-look-scene--theme theme)
   (drgnx-look-scene--try "work space"
     (when-let* ((map (drgnx-look-scene--work-map)))
@@ -931,7 +961,8 @@ Draw it without the other scenes (`DRGNX_LOOK_ONLY=work-space'): the hub then se
       (unless (drgnx-look-scene--until 15 "the map's seeded graph (the first agent, agent:a1)"
                                        (lambda () (with-current-buffer map
                                                     (member "agent:a1" (drgnx-look-scene--row-ids "agent:")))))
-        (error "The map has no seeded agent: is it the `map' seed (DRGNX_LOOK_ONLY=work-space)?"))
+        (error "The map has no seeded agent: is it the `map' seed (`drgnx-look-scene-seed' %S)?"
+               drgnx-look-scene-seed))
       ;; the title row's chips (`3 need you', `4 agents') count what the map's model holds, as the notice model and the
       ;; agents module would in a session that ran these agents
       (with-current-buffer map
@@ -1218,21 +1249,14 @@ editor, the Explorer's rows beside it."
       (redisplay))
     (or (funcall pred) (progn (push (format "%s: not within %d s" what secs) drgnx-look-scene--errors) nil))))
 
-(defun drgnx-look-scene--seed ()
-  "What the scenes' hub seeds (`RATATOSKR_SEED_SCENE`): `map', the Work map's graph of work-space-dark.html, when only
-the Work space's scene is drawn (`DRGNX_LOOK_ONLY'), else `1', the plan run with the Flow's one agent: the two seeds
-put different agents on the map, so they cannot share a hub."
-  (if (string-match-p "\\`work-space" (or (getenv "DRGNX_LOOK_ONLY") "")) "map" "1"))
-
 (defun drgnx-look-scene--hub ()
   "The scenes' hub, started once and connected.  A session starts no hub (DRGNX_NO_HUB_START): the scenes run the
 worktree's own ($DRGNX_RATATOSKR_BIN, a test-hooks build) in the foreground, as the perf workloads do, ended with the
-session, with one plan run seeded into its fresh store (RATATOSKR_SEED_SCENE, the hub's `orch::scene') for the Work
-space's scenes."
+session, seeded with `drgnx-look-scene-seed'."
   (unless (drgnx-hub-running-p)
     (let ((bin (getenv "DRGNX_RATATOSKR_BIN"))
           (process-environment (append (list "RATATOSKR_SUPERVISOR=none"
-                                             (concat "RATATOSKR_SEED_SCENE=" (drgnx-look-scene--seed)))
+                                             (concat "RATATOSKR_SEED_SCENE=" drgnx-look-scene-seed))
                                        process-environment)))
       (unless (and bin (file-executable-p bin)) (error "No ratatoskr binary (DRGNX_RATATOSKR_BIN)"))
       (make-process :name "ratatoskr" :noquery t :connection-type 'pipe
@@ -1838,6 +1862,7 @@ debugging-extras mockup's)."
   (drgnx-look-scene--try "start page"
     (drgnx-wb-focus-editor)
     (drgnx-start-show))
+  (drgnx-look-scene--shown "start page" drgnx-start-buffer-name)
   (drgnx-look-scene--answer))
 
 (defun drgnx-look-scene-start-page ()
@@ -1910,6 +1935,9 @@ would be (no kernel, no hub: the scene draws the buffer's own chrome)."
       (drgnx-notebook--select-at (point)))
     buffer))
 
+(defvar drgnx-look-scene--notebook-blocks nil
+  "The Glitnir blocks of the notebook scene's window, as the facts write them (:notebook :blocks).")
+
 (defun drgnx-look-scene--notebook (theme)
   "The notebook in THEME, in the editor, with the scenes' hub started so the sidebar has the
 Explorer's rows, not \"Waiting for the hub\"."
@@ -1918,16 +1946,19 @@ Explorer's rows, not \"Waiting for the hub\"."
   (drgnx-look-scene--try "notebook"
     (drgnx-wb-focus-editor)
     (drgnx-look-scene--show (drgnx-look-scene--notebook-buffer))
-    ;; what the card's window holds, for a look that does not match the blocks: kind, rows, spans, colours (a note, not an error)
+    ;; what the card's window holds, for a look that does not match the blocks: kind, rows, spans, colours (the facts'
+    ;; :notebook :blocks); none at all is an error: the cells are drawn without their cards
     (with-current-buffer "cache-experiments.ipynb"
       (drgnx-notebook--blocks-update)
       (redisplay)
-      (push (format "notebook blocks: %S"
-                    (mapcar (lambda (b) (cons (car b) (cons (marker-position (nth 1 b)) (cons (marker-position (nth 2 b))
-                                                                                              (cl-loop for (k v) on (nthcdr 3 b) by #'cddr
-                                                                                                       unless (eq k :overlay) append (list k v))))))
-                            (window-parameter (get-buffer-window "cache-experiments.ipynb" t) 'glitnir-blocks)))
-            drgnx-look-scene--errors)))
+      (setq drgnx-look-scene--notebook-blocks
+            (mapcar (lambda (b) (cons (car b) (cons (marker-position (nth 1 b)) (cons (marker-position (nth 2 b))
+                                                                                      (cl-loop for (k v) on (nthcdr 3 b) by #'cddr
+                                                                                               unless (eq k :overlay) append (list k v))))))
+                    (window-parameter (get-buffer-window "cache-experiments.ipynb" t) 'glitnir-blocks)))
+      (unless drgnx-look-scene--notebook-blocks
+        (push "notebook: the notebook's window has no Glitnir blocks (no cards)" drgnx-look-scene--errors))))
+  (drgnx-look-scene--shown "notebook" "cache-experiments.ipynb")
   (drgnx-look-scene--answer))
 
 (defun drgnx-look-scene--kernel-python ()
@@ -1935,20 +1966,25 @@ Explorer's rows, not \"Waiting for the hub\"."
 inherit, else the image's own path; nil without one."
   (seq-find #'file-executable-p (delq nil (list (getenv "DRGNX_NB_KERNEL_PYTHON") "/opt/nb-kernel/bin/python3"))))
 
+(defun drgnx-look-scene--kernel-env (kernel)
+  "A kernelspec for KERNEL (a python) in a folder `JUPYTER_PATH' names (the image has none), and a runtime folder short
+enough for a kernel's sockets, in the session's environment.  The hub reads them when it starts, so the setup makes
+them before any scene starts a hub (in a full run the agent scene's hub serves the notebook scenes)."
+  (let ((dir (expand-file-name "jupyter/kernels/python3" temporary-file-directory)))
+    (make-directory dir t)
+    (with-temp-file (expand-file-name "kernel.json" dir)
+      (insert (format "{\"argv\": [\"%s\", \"-m\", \"ipykernel_launcher\", \"-f\", \"{connection_file}\"], \"display_name\": \"Python 3 (ipykernel)\", \"language\": \"python\"}\n" kernel)))
+    (setenv "JUPYTER_PATH" (expand-file-name "jupyter" temporary-file-directory))
+    ;; a kernel's socket path must fit a unix socket's 108 bytes: the harness's runtime folder is too long
+    (make-directory "/tmp/nbrt" t)
+    (set-file-modes "/tmp/nbrt" #o700)
+    (setenv "XDG_RUNTIME_DIR" "/tmp/nbrt")))
+
 (defun drgnx-look-scene--notebook-file (&optional kernel)
   "A `.ipynb' the scene writes: the mockup's four cells.  With KERNEL (a python): three code cells to run, no outputs,
 and a kernelspec for it in a folder `JUPYTER_PATH' names (the image has none); else the cells a finished run left."
   (let ((file (expand-file-name "cache-experiments.ipynb" temporary-file-directory)))
-    (when kernel
-      (let ((dir (expand-file-name "jupyter/kernels/python3" temporary-file-directory)))
-        (make-directory dir t)
-        (with-temp-file (expand-file-name "kernel.json" dir)
-          (insert (format "{\"argv\": [\"%s\", \"-m\", \"ipykernel_launcher\", \"-f\", \"{connection_file}\"], \"display_name\": \"Python 3 (ipykernel)\", \"language\": \"python\"}\n" kernel)))
-        (setenv "JUPYTER_PATH" (expand-file-name "jupyter" temporary-file-directory))
-        ;; a kernel's socket path must fit a unix socket's 108 bytes: the harness's runtime folder is too long
-        (make-directory "/tmp/nbrt" t)
-        (set-file-modes "/tmp/nbrt" #o700)
-        (setenv "XDG_RUNTIME_DIR" "/tmp/nbrt")))
+    (when kernel (drgnx-look-scene--kernel-env kernel))
     (with-temp-file file
       (insert "{\"cells\": [\n"
               "{\"cell_type\": \"markdown\", \"id\": \"c0\", \"metadata\": {}, \"source\": [\"# Cache experiments\\n\", \"How the hit rate moves with the capacity.\"]},\n"
@@ -2030,12 +2066,14 @@ a finished run left."
                                                                (when (drgnx-view-p drgnx-view) (drgnx-view-draw-now drgnx-view))
                                                                (> (buffer-size) 0)))
                                                            views)))
+          (apply #'drgnx-look-scene--shown "notebook-views" views)
           (when (and kernel (not running))
             (with-current-buffer (cadr views) (drgnx-notebook-output-later))
             (drgnx-look-scene--until 12 "the output's window moves"
                                      (lambda () (with-current-buffer (cadr views)
                                                   (when (drgnx-view-p drgnx-view) (drgnx-view-draw-now drgnx-view))
-                                                  (string-search "lines above" (buffer-string)))))
+                                                  ;; the cut row's mark: a narrow pane drops its "N lines above"
+                                                  (string-search "▲" (buffer-string)))))
             ;; the window shows the rows from the top, the cut row above them first
             (when-let* ((w (get-buffer-window (cadr views) t)))
               (with-current-buffer (cadr views) (goto-char (point-min)))
@@ -2081,7 +2119,8 @@ chrome faces, frame metrics, windows, modules."
                                       :tails (length (seq-filter (lambda (o) (overlay-get o 'after-string)) (overlays-in (point-min) (point-max))))
                                       :cells (length drgnx-notebook--cells) :text-length (- (point-max) (point-min))
                                       :parsers (and (fboundp 'treesit-parser-list) (mapcar #'treesit-parser-language (treesit-parser-list)))
-                                      :font-lock font-lock-mode :undo (length buffer-undo-list))))
+                                      :font-lock font-lock-mode :undo (length buffer-undo-list)
+                                      :blocks drgnx-look-scene--notebook-blocks)))
                   ;; the Flow, where one is open: its first lines, with the text properties that hide or replace text
                   :work-flow (when-let* ((b (seq-find (lambda (b) (eq (buffer-local-value 'major-mode b)
                                                                       'drgnx-work-flow-mode))
