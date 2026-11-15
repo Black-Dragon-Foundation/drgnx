@@ -5,6 +5,7 @@
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (require 'drgnx-area)
 (require 'drgnx-panes)
+(defvar drgnx-view-patch-twin-of)       ; drgnx-view.el: in a view's twin, the view's own buffer
 
 (defvar drgnx-area-companions-test--parts nil
   "What the test tab's companion function returns for its main buffer: (ABOVE BELOW).")
@@ -124,6 +125,25 @@ deleted through the area's `delete-window', which hides the whole area)."
      (drgnx-wb-area-show 'right 'withparts main)
      (kill-buffer below)
      (should (equal (mapcar #'window-buffer (drgnx-area-companions-test--right-windows)) (list above main))))))
+
+(ert-deftest drgnx-area-companions/a-tab-left-on-a-twin-comes-back-with-its-view-buffer ()
+  "A tab left showing a hub view's twin in another display class: when the twin is gone (no window shows its class),
+the tab comes back with the view's own buffer, and its companions, not a placeholder."
+  (drgnx-area-companions-test--with
+   (let* ((main (drgnx-area-companions-test--buffer "*main*" 50)) (other (drgnx-area-companions-test--buffer "*other*" 5))
+          (below (drgnx-area-companions-test--buffer "*below*" 1))
+          (twin (with-current-buffer (drgnx-area-companions-test--buffer "*main* <tty>" 50)
+                  (setq-local drgnx-view-patch-twin-of main)
+                  (current-buffer))))
+     (unwind-protect
+         (progn
+           (setq drgnx-area-companions-test--parts (list nil below))
+           (drgnx-wb-area-show 'right 'withparts twin)
+           (drgnx-wb-area-show 'right 'plain other)
+           (kill-buffer twin)
+           (drgnx-wb-area-show 'right 'withparts)
+           (should (equal (mapcar #'window-buffer (drgnx-area-companions-test--right-windows)) (list main below))))
+       (when (buffer-live-p twin) (kill-buffer twin))))))
 
 (ert-deftest drgnx-area-companions/a-pane-kind-passes-its-companions-to-the-tab ()
   (drgnx-area-companions-test--with

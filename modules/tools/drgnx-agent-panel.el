@@ -498,11 +498,14 @@ commands on the step at point read; the hub draws its rows again itself)."
 
 (declare-function drgnx-agent-panel--composer-of "drgnx-agent-panel-composer")
 (declare-function drgnx-agent-panel--header-of "drgnx-agent-panel-header")
+(declare-function drgnx-agent-panel-header--for "drgnx-agent-panel-header" (header buffer))
 
 (defun drgnx-agent-panel--companions (buffer)
   "The area companions of panel BUFFER (`drgnx-pane-define-kind' :companions): (ABOVE BELOW), the header above and the
-composer below."
-  (list (drgnx-agent-panel--header-of buffer) (drgnx-agent-panel--composer-of buffer)))
+composer below.  BUFFER may be the transcript's twin in another display class: the header is then its twin of that
+class (`drgnx-agent-panel-header--for'); the composer, plain text, is the same buffer in every class."
+  (list (drgnx-agent-panel-header--for (drgnx-agent-panel--header-of buffer) buffer)
+        (drgnx-agent-panel--composer-of buffer)))
 
 (defun drgnx-agent-panel--setup ()
   (drgnx-command-define 'agents-panel :category "Agents" :title "Open the Agent Panel"
