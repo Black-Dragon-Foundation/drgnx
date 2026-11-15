@@ -43,9 +43,9 @@ string-pixel-width uses)")
  (:what "\\`feature \\+"
   :source "\\`\\(?:themes\\|test/fixtures\\)/"
   :why "a theme or a test fixture a test loads; a feature is never unloaded")
- (:what ""
+ (:what "\\`\\(?:feature\\|timer\\|hook\\|advice\\|global-map\\) "
   :source "/\\(?:childframe-elpa\\|pinned-elpa\\)/"
-  :why "a pinned child-frame or modal package loaded by the test that needs it: its hooks, timers, advice, keys and after-load forms come with the load")
+  :why "a pinned child-frame or modal package loaded by the test that needs it: its own hooks, timers and keys come with the load (a function variable it wraps, like the focus function, is not covered: it changes what the next file sees)")
  (:what "\\`\\(?:minor-mode-map\\|minor-mode\\|emulation-map\\|after-load\\) "
   :why "a library defining its minor mode and map, or an after-load form, when it loads")
  (:what "\\`timer idle [+-]#\\[nil ((if (buffer-live-p buffer)"

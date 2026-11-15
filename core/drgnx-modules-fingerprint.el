@@ -263,6 +263,17 @@ its printed text), and the number of frames."
         (push (drgnx-modules-fingerprint--item (list 'frame-param) (car p) (intern (format "%S" (cdr p)))) items)))
     items))
 
+(defun drgnx-modules-fingerprint--window-items ()
+  "Items for the selected window (and the frame's window count): the window itself, its parameters, and how many
+windows the frame has.  A test that leaves a clone of the window selected, or a window with a `quit-restore'
+parameter, moves where the next file's first window is."
+  (let ((w (selected-window)) (items nil))
+    (push (cons (list 'selected-window) w) items)
+    (push (cons (list 'window-count) (length (window-list nil 'nomini))) items)
+    (dolist (p (window-parameters w))
+      (push (drgnx-modules-fingerprint--item (list 'window-param) (car p) (intern (format "%S" (cdr p)))) items))
+    items))
+
 (defun drgnx-modules-fingerprint--session-items ()
   "What a GUI test file can change in the session besides hooks and timers: the default line formats, the global
 keymap (and the one in use), the minor mode maps, the selected frame's parameters."
@@ -272,7 +283,8 @@ keymap (and the one in use), the minor mode maps, the selected frame's parameter
                             (unless (eq (current-global-map) global-map)
                               (drgnx-modules-fingerprint--keymap-items 'global-map global-map)))
         :minor-mode-maps (drgnx-modules-fingerprint--alist-items 'minor-mode-map 'minor-mode-map-alist)
-        :frame (drgnx-modules-fingerprint--frame-items)))
+        :frame (drgnx-modules-fingerprint--frame-items)
+        :window (drgnx-modules-fingerprint--window-items)))
 
 (defun drgnx-modules-fingerprint--full-items ()
   "The `mapatoms' scan (`drgnx-modules-fingerprint--compile-scan' compiled it) and the hand-listed hooks it misses."
