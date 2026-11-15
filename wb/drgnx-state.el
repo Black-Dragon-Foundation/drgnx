@@ -159,11 +159,11 @@ observation.  Non-nil if ROLE was defined."
 
 (defun drgnx-state--kind (window role frame)
   "The pane kind WINDOW (of ROLE, on FRAME) shows, or nil.
-A dock window: its section.  An area: its front tab.  An editor window: its layouts pane, or the
-editor-home kind whose last buffer it shows."
+A dock window: its section.  An area: its front tab (an area tab's companion above or below shows none: the tab is
+its main window's).  An editor window: its layouts pane, or the editor-home kind whose last buffer it shows."
   (pcase (drgnx-state-role-chrome role)
     ('dock (window-parameter window 'drgnx-section))
-    ('area (drgnx-state--area-front role frame))
+    ('area (and (not (window-parameter window 'drgnx-area-part)) (drgnx-state--area-front role frame)))
     (_ (and (eq role 'editor)
             (or (window-parameter window 'drgnx-layouts-pane) (drgnx-state--editor-kind window frame))))))
 
