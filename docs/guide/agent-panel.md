@@ -54,7 +54,7 @@ or `allowed by your earlier yes · this chat` when the matrix would have asked a
 it. The hub writes the line when it decides, so the step shows the reason that applied then, even if you change the
 preset later.
 
-`i` on a chip (or anywhere, then pick one) opens its facts from the hub (`agents/explain`): the context breakdown with
+`i` (`K` in the Vim profile) on a chip (or anywhere, then pick one) opens its facts from the hub (`agents/explain`): the context breakdown with
 `[drop]` and `[pin]` only when the agent advertises them and `[What /compact keeps]` when it can say; the dearest
 steps and the cache hits; the mode, its lock and the row of the permissions matrix; what the agent waits for and the
 key that answers it; the MCP servers the hub gave the session with their tool counts. A fact the hub does not know is
@@ -102,14 +102,24 @@ answer at once, without asking the hub. With nothing at point, `TAB` opens or fo
 
 ## Steering
 
-Under the transcript are the notes waiting for the agent's turn to end, one row each, and the composer: a field ("Steer
-the agent…"; a click writes to the agent, as `s` does) and under it a bar with the model and mode chips and three
-buttons: **Fork** (**Fork the Chat**: a second agent from the chat's last step), the pause icon (stop after this step,
-as `p`) and Send, an arrow (as `s`).
+Under the transcript are the notes waiting for the agent's turn to end, one row each, and the composer: a buffer of its
+own where you write the message ("Steer the agent… (@ file, / command)" while it is empty), and under it a bar with the
+model and mode chips and three buttons: **Fork** (**Fork the Chat**: a second agent from the chat's last step), the
+pause icon (stop after this step, as `p`) and Send, an arrow (as `RET`). The bar takes no typing; the message is an
+ordinary text you can edit, move in and complete in. A draft stays until you send it.
 
-- `s` writes to the agent. While it works, the message is queued and goes in when the turn ends; **sending never cancels
-  the turn**. In the message, `@` completes a file of the agent's folder and `/` at the start completes one of its
-  commands.
+| | VS Code | Emacs | Vim |
+|---|---|---|---|
+| Write to the agent (from the transcript or the header) | `s` | `s` | `s`, `i` |
+| Send the message | `RET` | `RET` | `RET` |
+| Break the line | `S-RET` | `S-RET`, `C-j` | `S-RET` |
+| Back to the transcript | `Esc` | `C-c C-k` | `Esc` (in normal state) |
+
+- `RET` in the composer sends the message and empties it. While the agent works, the message is queued and goes in
+  when the turn ends; **sending never cancels the turn**. An empty message sends nothing. In the message, `@` completes
+  a file of the agent's folder and `/` at the start completes one of its commands, through `completion-at-point`.
+- In the Vim profile the composer starts in insert state; `Esc` goes to normal state, and `Esc` again back to the
+  transcript. There, `K` opens the chip at point (`i` writes to the agent).
 - `e` edits the queued note at point, `d` takes it out, until it is sent.
 - `p` stops the agent after its current step and holds its queue, `u` resumes it with a plain "continue". `x` stops
   the turn, after a confirmation line; it also ends after the current step.

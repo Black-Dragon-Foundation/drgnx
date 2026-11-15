@@ -1036,6 +1036,7 @@ The commands of modules that need no installed package are in it, the later stag
                               agents-panel-revert-here agents-panel-fork-here
                               agents-panel-chip agents-panel-revoke-always agents-panel-act
                               agents-panel-start agents-panel-move agents-panel-compact agents-panel-mode agents-panel-model
+                              agents-panel-compose agents-panel-newline agents-panel-back   ; the composer as an input buffer
                               agents-here-mark agents-here-huddle agents-huddle agents-huddle-send agents-huddle-open
                               work-huddle agents-view agents-open   ; part 3: the agent panel (its list) and H on a map overlap
                               ;; extra/debug needs no package now (the hub is its client), so it sets up here too
@@ -1078,6 +1079,26 @@ The commands of modules that need no installed package are in it, the later stag
         (should (eq 'drgnx-debug-view-mode-map
                     (plist-get (seq-find (lambda (b) (eq (plist-get b :id) 'debug-view-next)) (plist-get r :bindings))
                                :map)))))))
+
+(ert-deftest drgnx-keys/agent-composer-keys-in-every-profile ()
+  "The agent panel's composer, in its own map: RET sends, S-RET breaks the line (C-j too in Emacs), and a key goes
+back to the transcript; in the panel `s' (and Vim's `i') puts point in the composer."
+  (let ((drgnx-keys-test--later-stages t))
+    (pcase-dolist (`(,profile ,newline ,back ,compose)
+                   '((vscode ("S-<return>") ("<escape>") ("s")) (emacs ("S-<return>" "C-j") ("C-c C-k") ("s"))
+                     (vim ("S-<return>") ("<escape>") ("s" "i"))))
+      (let ((r (drgnx-keys-test--resolve `((,profile app editing window)) :platform 'linux)))
+        (cl-flet ((map-of (id) (plist-get (seq-find (lambda (b) (eq (plist-get b :id) id)) (plist-get r :bindings)) :map)))
+          (should (equal (list profile '("RET")) (list profile (drgnx-keys-test--keys r 'agents-panel-send))))
+          (should (equal (list profile newline) (list profile (drgnx-keys-test--keys r 'agents-panel-newline))))
+          (should (equal (list profile back) (list profile (drgnx-keys-test--keys r 'agents-panel-back))))
+          (should (equal (list profile compose) (list profile (drgnx-keys-test--keys r 'agents-panel-compose))))
+          (dolist (id '(agents-panel-send agents-panel-newline agents-panel-back))
+            (should (eq 'drgnx-agent-panel-composer-mode-map (map-of id))))
+          (should (eq 'drgnx-agent-panel-mode-map (map-of 'agents-panel-compose)))
+          (should-not (seq-find (lambda (c) (memq (plist-get c :map) '(drgnx-agent-panel-composer-mode-map
+                                                                       drgnx-agent-panel-mode-map)))
+                                (plist-get r :conflicts))))))))
 
 (ert-deftest drgnx-keys/views-took-their-keys ()
   ;; After M12a: VS Code's C-S-e / C-S-f / C-S-h / F2 and Vim's SPC s r / SPC c R belong to the new views.
