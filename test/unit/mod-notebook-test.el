@@ -780,7 +780,9 @@
       (should (string-prefix-p "stream · running\n" (funcall tail "a")))
       (should (memq 'drgnx-text-subtle (ensure-list (get-text-property 0 'face (funcall tail "a")))))
       (should (string-prefix-p " error\n" (funcall tail "c")))   ; the leading space is the pad (the last cell)
-      ;; 8 px of padding under the last row
+      ;; 8 px between the panel and the card's bottom edge: the panel's own pad (Glitnir moves the drawn rect in) over 8 px
+      ;; of room, a spacer row at the string's end, so the last text row stays inside the drawn panel
+      (should (= (plist-get (funcall inner "a") :pad-bottom) (drgnx-px 8)))
       (should (equal (get-text-property (- (length (funcall tail "a")) 2) 'display (funcall tail "a"))
                      `(space :width (1) :height (,(drgnx-px 8))))))))
 

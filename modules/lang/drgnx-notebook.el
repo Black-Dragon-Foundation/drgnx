@@ -564,7 +564,7 @@ runs' faces on it and a newline (the next row is the next cell's header).  SELEC
              (when (and at (< at n) (eq (aref s at) #xfffc))
                (setq s (concat (substring s 0 at) (drgnx-notebook--image-piece tail image) (substring s (1+ at)))))))
          (concat s (propertize "\n" 'face cell)
-                 ;; 8 px under the last row, inside the card
+                 ;; the room for the panel's bottom pad: 8 px of row, which the drawn panel then leaves outside itself
                  (propertize " " 'display `(space :width (1) :height (,(drgnx-px 8))) 'face cell) (propertize "\n" 'face cell))))
      "")))
 
@@ -808,6 +808,8 @@ output, the inner block under its hairline: the card's span inset by 8 px, a tin
           ;; the panel: a darker translucent step (the gap's colour; the error tint for a failed run), a border, rounded 6
           (push (append (list 'inner end end :x0 inset :x1 (max inset (- width inset)) :top 'drgnx-border-subtle
                               :ring 'drgnx-border-subtle :radius (drgnx-px 6)
+                              ;; the panel's drawn rect stands 8 px in from the card's bottom edge (and 0 at the top: its hairline)
+                              :pad-bottom (drgnx-px 8)
                               :fill (if (eq out 'error) (cons 'error 0.14) (cons 'drgnx-notebook-panel (if (eq (frame-parameter nil 'background-mode) 'dark) 0.6 0.4)))
                               :overlay (plist-get (drgnx-notebook--chrome-of (plist-get c :id)) :tail))
                         nil)
