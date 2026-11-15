@@ -15,7 +15,7 @@
          (t0 (float-time)))
     (sleep-for 1)
     (when (getenv "STUB_LOG")
-      (write-region (format "%s %.3f %.3f\n" (file-name-nondirectory file) t0 (float-time)) nil (getenv "STUB_LOG") t 'silent))
+      (let ((create-lockfiles nil)) (write-region (format "%s %.3f %.3f\n" (file-name-nondirectory file) t0 (float-time)) nil (getenv "STUB_LOG") t 'silent)))
     (with-temp-file results
       (insert (format "{\"total\":2,\"passed\":%d,\"failed\":%d,\"failures\":[%s],\"skipped\":[]}"
                       (if bad 1 2) (if bad 1 0)
