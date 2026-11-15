@@ -614,8 +614,10 @@ How it works:
   (±1 px) and carrying the area's tab row; the transcript (the panel's main buffer, `agent-panel/SID`) without
   `p:head`; and the composer (`below`), the area's bottom window, fitted. Before the checks and the shot they wait for
   the rows the hub settles on: round trips to the hub (a `ping` on the subscribed connection, answered after every line
-  sent before it) until one changes none of the three windows' texts (the hub's first fit of a row comes before the
-  editor's glyph widths, its refit one round trip later); one more round trip that changes them is an error, and so is
+  sent before it) until one changes none of the three windows' texts and every `view-glyphs` ask the session has seen
+  is answered (the hub's first fit of a row comes before the editor's glyph widths, its refit one round trip after the
+  answer; an answer sent later than the ask, after the ping, is not covered by the ping); one more round trip that
+  changes them is an error, and so is
   a hub that does not answer. The transcript's opening check: point at its end, and the end whole on its last line
   (under the end's row as redisplay drew it there is less space than the screen line before the start), or the whole
   transcript when it fits. `agent-panel-long` then checks, in the three windows:

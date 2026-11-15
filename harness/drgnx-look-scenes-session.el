@@ -839,15 +839,39 @@ sent for them came before the answer and has been read."
         (accept-process-output drgnx-hub--events 0.02)))
     done))
 
+(defvar drgnx-look-scene--asks-open 0
+  "The hub's `view-glyphs' asks this session has seen less its `view/glyphs' answers: the hub refits a row after the
+answer, so a round trip while one is open proves nothing settled.  A plain count, as an answer sent at once goes out
+from the event's handlers before or after the counting one, by their order.")
+
+(defun drgnx-look-scene--ask-seen (event _data)
+  "A `drgnx-hub-event-functions' handler: count a `view-glyphs' ask as open."
+  (when (equal event "view-glyphs") (setq drgnx-look-scene--asks-open (1+ drgnx-look-scene--asks-open))))
+
+(defun drgnx-look-scene--answer-sent (send method params)
+  "Around `drgnx-view-env-send-function' (SEND): a `view/glyphs' METHOD closes an open ask, whenever it is sent."
+  (when (equal method "view/glyphs")
+    (setq drgnx-look-scene--asks-open (1- drgnx-look-scene--asks-open)))
+  (funcall send method params))
+
+;; the whole session: the asks come from the panel's first fit, before any settle
+(add-hook 'drgnx-hub-event-functions #'drgnx-look-scene--ask-seen)
+(defvar drgnx-view-env-send-function)
+(with-eval-after-load 'drgnx-view-env
+  (add-function :around drgnx-view-env-send-function #'drgnx-look-scene--answer-sent))
+
 (defun drgnx-look-scene--hub-round (buffers)
   "One round trip to the hub (`drgnx-look-scene--hub-caught-up') and what it sent drawn in BUFFERS, Sjá views; non-nil
-when the round trip changed none of their texts, `no-answer' when the hub did not answer."
+when the round trip changed none of their texts and no ask of the hub's is still unanswered
+\(`drgnx-look-scene--asks-open': an answer sent later, on a timer, comes after the ping, and so does its refit),
+`no-answer' when the hub did not answer."
   (let ((ticks (mapcar #'buffer-chars-modified-tick buffers)))
     (if (not (drgnx-look-scene--hub-caught-up)) 'no-answer
       (accept-process-output nil 0.05)
       (dolist (b buffers) (when (drgnx-view-sja-p b) (drgnx-view-sja-draw-now b)))
       (redisplay t)
-      (equal ticks (mapcar #'buffer-chars-modified-tick buffers)))))
+      (and (<= drgnx-look-scene--asks-open 0)
+           (equal ticks (mapcar #'buffer-chars-modified-tick buffers))))))
 
 (defun drgnx-look-scene--panel-buffers (buffer)
   "The live buffers of the agent panel BUFFER's windows: the transcript, the header and the composer shown with it."
