@@ -1,6 +1,7 @@
 ;;; wb-area-companions-test.el --- batch tests: an area tab's companion windows above and below it -*- lexical-binding: t -*-
 ;; test-class: det
 (require 'ert)
+(require 'cl-lib)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-dir) nil t)
 (require 'drgnx-area)
@@ -178,7 +179,52 @@ the tab comes back with the view's own buffer, and its companions, not a placeho
        (drgnx-wb-area-fit-companions 'right)
        (let ((area (apply #'+ (mapcar #'window-pixel-height ws))))
          (should (<= (window-pixel-height (nth 2 ws)) (* 0.45 area)))
-         (should (> (window-pixel-height (nth 2 ws)) (* 0.3 area))))))))
+         (should (> (window-pixel-height (nth 2 ws)) (* 0.3 area)))
+         ;; at the cap it is fitted as asked: nothing to report
+         (should-not (window-parameter (nth 2 ws) 'drgnx-area-unfitted)))))))
+
+(defvar drgnx-view-sja-tail)            ; drgnx-view-sja.el: a view that opens at its tail
+
+(ert-deftest drgnx-area-companions/a-tail-view-left-at-its-end-comes-back-at-its-new-end ()
+  "A tab whose buffer is a tail view (`drgnx-view-sja-tail') left with its window's point at the end comes back with
+point at the end it has now, after lines came while it was hidden; one left elsewhere comes back where it was."
+  (drgnx-area-companions-test--with
+   (let ((main (drgnx-area-companions-test--buffer "*main*" 50)) (other (get-buffer-create "*other*")))
+     (with-current-buffer main (setq-local drgnx-view-sja-tail t))
+     (let ((w (drgnx-wb-area-show 'right 'withparts main)))
+       (set-window-point w (with-current-buffer main (point-max)))
+       (drgnx-wb-area-show 'right 'plain other)
+       (with-current-buffer main (goto-char (point-max)) (insert "more\nmore\n"))
+       (drgnx-wb-area-show 'right 'withparts)
+       (should (eq main (window-buffer w)))
+       (should (= (window-point w) (with-current-buffer main (point-max))))
+       ;; left on a line above the end: back on it
+       (set-window-point w 10)
+       (drgnx-wb-area-show 'right 'plain other)
+       (with-current-buffer main (goto-char (point-max)) (insert "more\n"))
+       (drgnx-wb-area-show 'right 'withparts)
+       (should (= (window-point w) 10))))))
+
+(ert-deftest drgnx-area-companions/a-fit-that-does-not-take-is-reported ()
+  "A companion whose fit changed nothing while its lines want another height gets the window parameter
+`drgnx-area-unfitted' (its height and the one it wanted); the next fit that takes clears it."
+  (drgnx-area-companions-test--with
+   (let ((main (drgnx-area-companions-test--buffer "*main*" 50))
+         (above (drgnx-area-companions-test--buffer "*above*" 2)) (below (drgnx-area-companions-test--buffer "*below*" 2)))
+     (setq drgnx-area-companions-test--parts (list above below))
+     (drgnx-wb-area-show 'right 'withparts main)
+     (let ((w (nth 2 (drgnx-area-companions-test--right-windows))))
+       (should-not (window-parameter w 'drgnx-area-unfitted))
+       (with-current-buffer below (dotimes (_ 3) (insert "more\n")))
+       ;; a resize Emacs refuses (as under a window's least height): the fit changes nothing
+       (cl-letf (((symbol-function 'window-resize-no-error) #'ignore))
+         (drgnx-wb-area-fit-companions 'right))
+       (let ((r (window-parameter w 'drgnx-area-unfitted)))
+         (should r)
+         (should (= (plist-get r :height) (window-pixel-height w)))
+         (should (> (plist-get r :want) (plist-get r :height))))
+       (drgnx-wb-area-fit-companions 'right)
+       (should-not (window-parameter w 'drgnx-area-unfitted))))))
 
 (provide 'wb-area-companions-test)
 ;;; wb-area-companions-test.el ends here

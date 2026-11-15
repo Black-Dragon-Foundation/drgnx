@@ -777,8 +777,8 @@ The transcript is left scrolled up: the picture is the scrolled panel."
 
 (defun drgnx-look-scene--panel-top (buffer)
   "An error unless the header window above BUFFER, the agent panel's transcript, holds the hub's header row (`p:head')
-and the transcript's window starts at the buffer's top or shows its tail: what the panel opened by its command path
-shows first."
+and the transcript's window, its point at the end, shows the end whole on its last line (or the whole transcript at
+its top, when it fits): what the panel opened by its command path shows first, once the header is fitted to its rows."
   (let* ((w (get-buffer-window buffer))
          (h (and w (car (seq-find (lambda (e) (eq (nth 1 e) 'above)) (drgnx-look-scene--area-windows w)))))
          (hb (and h (window-buffer h)))
@@ -791,13 +791,21 @@ shows first."
                     (and state (drgnx-view-env-classes (drgnx-view-patch-view state))))
             drgnx-look-scene--errors))
     (when w
-      ;; Emacs keeps the transcript's end in view (`scroll-conservatively'): its end at the bottom of the window, and,
-      ;; when the transcript fits, its top at the top
-      (let ((at (with-current-buffer buffer (pos-visible-in-window-p (point-max) w t)))
-            (top (= (window-start w) (with-current-buffer buffer (point-min)))))
-        (unless (or top (and at (> (cadr at) (- (window-body-height w t) (* 4 (frame-char-height))))))
-          (push (format "agent-panel: its end is not at the bottom of its window (start %d, end at %S)"
-                        (window-start w) at)
+      ;; the header's fit after its rows changed the transcript's height: the windows as they are drawn now
+      (redisplay t)
+      ;; the first rows leave point at the end (`drgnx-view-sja-tail'); Emacs scrolls by whole rows, so below the end's
+      ;; row there may be up to the first row's height.  A start at the top passes only when the end is shown whole,
+      ;; that is when the transcript fits
+      (let* ((end (with-current-buffer buffer (point-max)))
+             (at (pos-visible-in-window-p end w t))
+             (body (window-body-height w t)) (line (window-default-line-height w))
+             (why (cond ((/= (window-point w) end) (format "its point %d is not its end %d" (window-point w) end))
+                        ((or (not at) (nth 2 at)) "its end is not shown whole")
+                        ((and (> (window-start w) (with-current-buffer buffer (point-min)))
+                              (< (cadr at) (- body line (or (car (window-line-height 0 w)) line))))
+                         "its end is not at the bottom of its window"))))
+        (when why
+          (push (format "agent-panel: %s (start %d, end at %S, body %d)" why (window-start w) at body)
                 drgnx-look-scene--errors))))))
 
 (defun drgnx-look-scene--palette-commands ()
