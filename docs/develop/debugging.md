@@ -686,7 +686,9 @@ The panel's **Debug Console** tab. The hub makes the lines; the editor only inse
 
 - **Hub (`debug/console.rs`):** a session's `output` events (probe hits are taken out first, see Recorded runs) go
   into its `Console`: text split into lines (the end of an event with no newline waits for the rest, or for the
-  session's end), ANSI SGR made into face runs in characters (`drgnx-debug-console-red` …, bold, faint, italic,
+  session's end), ANSI SGR made into face runs in characters (`drgnx-debug-console-red` …, foregrounds: each
+  inherits its `ansi-color-*` face with the background reset to the default's, since that face's background is its
+  own colour; bold, faint, italic,
   underline; 256-colour's first 16; other escapes dropped) for `stdout` / `stderr` or an adapter with
   `supportsANSIStyling`, identical consecutive lines counted (`count`; one that continues the last line of the
   batch before says `more`), `group` start / end indenting the lines between (`depth`), the line that opens one naming it (`group`, numbered per

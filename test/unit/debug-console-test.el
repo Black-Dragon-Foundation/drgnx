@@ -34,6 +34,15 @@
   (with-current-buffer drgnx-debug-console-buffer-name
     (buffer-substring-no-properties (point-min) drgnx-debug-console--end)))
 
+(ert-deftest drgnx-debug-console/a-colour-is-the-texts-not-a-block ()
+  "The hub's SGR colours are foregrounds: each colour face takes its ANSI colour's foreground only, never the
+`ansi-color-*' face's background (the same colour), which would draw the text as a block of its own colour."
+  (require 'drgnx-debug-console)
+  (dolist (c '("black" "red" "green" "yellow" "blue" "magenta" "cyan" "white"))
+    (dolist (f (list (intern (format "drgnx-debug-console-%s" c)) (intern (format "drgnx-debug-console-bright-%s" c))))
+      (should (stringp (face-attribute f :foreground nil t)))
+      (should-not (stringp (face-attribute f :background nil t))))))
+
 (ert-deftest drgnx-debug-console/inserts-the-hubs-lines ()
   "Lines are inserted as they come: the hub's face runs, the category's face, the group's indent, the count, a
 logpoint's source, a structured value's chevron; a line that continues the last one adds to its count."

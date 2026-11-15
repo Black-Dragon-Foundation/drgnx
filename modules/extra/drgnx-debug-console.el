@@ -53,12 +53,15 @@ the lines already there."
 (defface drgnx-debug-console-faint '((t :inherit shadow)) "ANSI faint." :group 'drgnx-debug-console)
 (defface drgnx-debug-console-italic '((t :slant italic)) "ANSI italic." :group 'drgnx-debug-console)
 (defface drgnx-debug-console-underline '((t :underline t)) "ANSI underline." :group 'drgnx-debug-console)
+;; the hub's colours are foregrounds: an `ansi-color-*' face's background is its own colour, so it is reset to the
+;; default's (as the terminal's `drgnx-term-color-N'), or the text would be a block of its colour
 (dolist (c '("black" "red" "green" "yellow" "blue" "magenta" "cyan" "white"))
-  (custom-declare-face (intern (format "drgnx-debug-console-%s" c)) `((t :inherit ,(intern (format "ansi-color-%s" c))))
-                       (format "ANSI %s." c) :group 'drgnx-debug-console)
+  (custom-declare-face (intern (format "drgnx-debug-console-%s" c))
+                       `((t :inherit ,(intern (format "ansi-color-%s" c)) :background reset))
+                       (format "ANSI %s (a foreground)." c) :group 'drgnx-debug-console)
   (custom-declare-face (intern (format "drgnx-debug-console-bright-%s" c))
-                       `((t :inherit ,(intern (format "ansi-color-bright-%s" c))))
-                       (format "ANSI bright %s." c) :group 'drgnx-debug-console))
+                       `((t :inherit ,(intern (format "ansi-color-bright-%s" c)) :background reset))
+                       (format "ANSI bright %s (a foreground)." c) :group 'drgnx-debug-console))
 
 (defconst drgnx-debug-console-buffer-name "*Debug Console*")
 (defconst drgnx-debug-console-prompt "› ")
