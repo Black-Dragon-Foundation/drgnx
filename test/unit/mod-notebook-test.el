@@ -646,6 +646,17 @@
       (should (equal (plist-get (funcall plist "a") :outer) '(drgnx-border-subtle . 1.0)))
       (should-not (plist-get (funcall plist "b") :outer)))))
 
+(ert-deftest drgnx-notebook/a-card-keeps-its-text-off-the-ring-and-draws-again-when-its-output-grows ()
+  (nb-test--with-cards
+    ;; every row of a cell, its output included, starts after a pad: the ring is at the text area's edge
+    (let ((pad (overlay-get (plist-get (drgnx-notebook--chrome-of "a") :body) 'line-prefix)))
+      (should (equal (get-text-property 0 'display pad) `(space :width (,(drgnx-px 12))))))
+    ;; the output arrives: the window draws again, so the ring takes the rows now there
+    (let ((redraws 0))
+      (cl-letf (((symbol-function 'force-window-update) (lambda (&rest _) (cl-incf redraws))))
+        (drgnx-notebook--put-tail (nb-test--tail "one\ntwo\nthree" 2)))
+      (should (> redraws 0)))))
+
 (ert-deftest drgnx-notebook/the-focus-ring-is-the-selected-cells-in-the-focused-window-only ()
   (nb-test--with-cards
     (let* ((window (selected-window))
