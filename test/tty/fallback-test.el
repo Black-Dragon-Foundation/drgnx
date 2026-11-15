@@ -199,6 +199,8 @@ so no stage rebinds it; the module stages are over first all the same."
            (hinted '(memq 'vte (plist-get (drgnx-tty--read-report) :hinted))))
       (should (drgnx-tty-session-eval s 'kx-held-hint))
       (drgnx-tty-session-eval s drgnx-tty-keys-test--record)
+      ;; no module stage ends while F6 waits: one that did left the hint unsaid (red: a stage end forced there)
+      (drgnx-tty-session-wait-stages s)
       (drgnx-tty-session-send c (drgnx-tty-session-encode "<f6>" 'legacy))
       (drgnx-tty-session-wait-screen c "Ctrl\\+Shift\\+…")
       ;; F6 waits: the hint's timer is armed now, and runs while F6 still waits
