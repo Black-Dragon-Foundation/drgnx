@@ -614,6 +614,7 @@ Return PROBE's value; an error PROBE signalled (a failed `should') is signalled 
   "The resize row: GTK's draws of the root per `set-frame-size-and-position-pixelwise' on a shown chromed child.
 Task 35 (one move+resize) is built only when this is two.  Measured on Task 34's build (2026-10-24): 2 per call at
 scale 1 and at scale 2 (one call in eight took 4), so MP-23 is needed; the assertion is that the median is one or two."
+  :tags '(:timing)                ; the late draws of the compositor are counted over real time: the perf lane's row
   (drgnx-test-chrome--with-scratch
     (let* ((name " *chrome-resize*")
            (f (drgnx-test-chrome--pf name "resize me" :position '(200 . 150)))
@@ -1205,7 +1206,9 @@ with the no-popup picture taken before the read."
     (drgnx-test-chrome--settle)
     (unwind-protect
         (cl-flet ((note (what) (drgnx-test-wait-presented)
-                    (drgnx-test-pause 0.1 "no focus event may follow the call: the picture does not show the focus")
+                    ;; a second settle: a focus event that followed the call has been delivered and drawn when two more
+                    ;; presented frames are the same
+                    (drgnx-test-wait-presented)
                     (push (list what (eq (selected-frame) root) (buffer-name (window-buffer (selected-window)))
                                 (frame-focus-state root))
                           out)))

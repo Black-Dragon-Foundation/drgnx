@@ -238,6 +238,11 @@ once TEXT is on its screen."
                              (and caps (list (plist-get caps :id) (plist-get caps :version))))))
                      '(unknown nil))))))
 
+(defconst drgnx-tty-frames-test--repeating-timers
+  '(mapcar (lambda (tm) (format "%S" (timer--function tm)))
+           (seq-filter #'timer--repeat-delay (append timer-list timer-idle-list)))
+  "In the daemon: the functions of its repeating timers, printed: an error that repeats comes from one of them.")
+
 (ert-deftest drgnx-tty-frames/a-killed-terminal-leaves-the-daemon-well ()
   (drgnx-tty-session-with (s :daemon t :keys 'emacs)
     (let* ((ttys '(mapcar (lambda (f) (terminal-name (frame-terminal f))) (frame-list)))
@@ -245,6 +250,8 @@ once TEXT is on its screen."
            (c (drgnx-tty-session-client s))
            (tty (car (seq-difference (drgnx-tty-session-eval s ttys) before)))
            (problems (drgnx-tty-session-eval s 'drgnx-hooks-problems))
+           (repeating drgnx-tty-frames-test--repeating-timers)
+           (repeating-before (drgnx-tty-session-eval s repeating))
            (messages (drgnx-tty-session-eval s '(with-current-buffer "*Messages*" (point-max)))))
       (should tty)
       (drgnx-tty-session-wait-screen c "\\*scratch\\*")
@@ -262,8 +269,9 @@ once TEXT is on its screen."
       (let ((new (drgnx-tty-session-eval s `(with-current-buffer "*Messages*"
                                               (buffer-substring-no-properties (min ,messages (point-max)) (point-max))))))
         (should-not (string-match-p "[Ee]rror" new)))
-      ;; and keeps answering a while later (nothing errors in a loop)
-      (drgnx-test-pause 1 "nothing may error in a loop")
+      ;; and keeps answering: nothing errors in a loop, which only a repeating timer could do, and none was armed by the
+      ;; terminal's going (the daemon's timers are read at once, not after a while)
+      (should-not (cl-set-difference (drgnx-tty-session-eval s repeating) repeating-before :test #'equal))
       (should (eq (drgnx-tty-session-eval s t) t))
       (should (equal (drgnx-tty-session-eval s 'drgnx-hooks-problems) problems)))))
 
