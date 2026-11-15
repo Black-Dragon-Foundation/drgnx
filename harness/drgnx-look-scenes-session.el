@@ -180,7 +180,7 @@ branch gateway-queue, staged file and history come with the Magit adapter (look 
                    "the picture is a gradient the scene makes (a PPM): in use, images are the hub's PNG or JPEG, fetched from notebook/output")
     (notebook-light "see notebook-dark")
     (notebook-views-light "see notebook-views")
-    (notebook-views "the approved mockup (notebook-views.html): the three views are windows of the editor, not the mockup's cards; with the image's kernel the outline shows a finished, a running and a failed cell, the log has no entries (the kernel logged nothing) and a running cell's full output reads `no output` here (the hub's output view of a running cell, to the views agent)"
+    (notebook-views "the approved mockup (notebook-views.html): the three views are windows of the editor, not the mockup's cards; with the image's kernel the outline shows a finished, a running and a failed cell, the log has no entries (the kernel logged nothing) and a running cell's full output reads `no output` here (the hub's output view of a running cell, to the views agent); the output shown is a 2 500-line cell, moved half a window on, so the cut rows show"
                     "the notebook is a file the scene writes and the hub opens (no kernel: no running cell, no log entries), so the rows are the hub's own")
     (palette "the mockup's palette rows come from its own commands; the line lists the registry's")
     (explorer-focused-dark "no agent badges (C, R) in the Explorer: agent system part 3 (G9)")
@@ -932,6 +932,7 @@ editor, the Explorer's rows beside it."
 (declare-function drgnx-notebook-outline "drgnx-notebook")
 (declare-function drgnx-notebook-open-output "drgnx-notebook")
 (declare-function drgnx-notebook-run-cell "drgnx-notebook")
+(declare-function drgnx-notebook-output-later "drgnx-notebook")
 (declare-function drgnx-notebook-kernel-log "drgnx-notebook")
 (declare-function drgnx-view-env-update "drgnx-view-env")
 (defvar drgnx-notebook-view--id)
@@ -1665,7 +1666,8 @@ and a kernelspec for it in a folder `JUPYTER_PATH' names (the image has none); e
                   (concat
                    "{\"cell_type\": \"code\", \"id\": \"c1\", \"metadata\": {}, \"execution_count\": null, \"outputs\": [], \"source\": [\"hits = [i % 7 for i in range(10_000)]\\n\", \"print('done:', len(hits), 'samples')\"]},\n"
                    "{\"cell_type\": \"code\", \"id\": \"c2\", \"metadata\": {}, \"execution_count\": null, \"outputs\": [], \"source\": [\"import time\\n\", \"for cap in (16, 64, 256):\\n\", \"    print(cap, sum(h < 3 for h in hits) / cap, flush=True)\\n\", \"    time.sleep(60)\"]},\n"
-                   "{\"cell_type\": \"code\", \"id\": \"c3\", \"metadata\": {}, \"execution_count\": null, \"outputs\": [], \"source\": [\"plot(missing)\"]}\n")
+                   "{\"cell_type\": \"code\", \"id\": \"c3\", \"metadata\": {}, \"execution_count\": null, \"outputs\": [], \"source\": [\"plot(missing)\"]},\n"
+                   "{\"cell_type\": \"code\", \"id\": \"c4\", \"metadata\": {}, \"execution_count\": null, \"outputs\": [], \"source\": [\"for i in range(2500):\\n\", \"    print(f'epoch {i + 1}  loss {1 / (i + 1):.4f}')\"]}\n")
                 (concat
                  "{\"cell_type\": \"code\", \"id\": \"c1\", \"metadata\": {}, \"execution_count\": 1, \"outputs\": [{\"output_type\": \"stream\", \"name\": \"stdout\", \"text\": [\"done: 10000 samples\"]}], \"source\": [\"import numpy as np\\n\", \"rng = np.random.default_rng(7)\"]},\n"
                  "{\"cell_type\": \"code\", \"id\": \"c2\", \"metadata\": {}, \"execution_count\": null, \"outputs\": [], \"source\": [\"for cap in (16, 64, 256):\\n\", \"    print(cap)\"]},\n"
@@ -1709,6 +1711,7 @@ one fails and one keeps running; without it, the cells show what a finished run 
             (let ((ran (lambda (tails id) (let ((h (plist-get (gethash id tails) :head))) (and h (not (equal (plist-get h :state) "queued")) (string-match-p "\\[[0-9]+\\]" (or (plist-get h :text) "")))))))
               (drgnx-look-scene--run-cell buffer "c1" ran 7)
               (drgnx-look-scene--run-cell buffer "c3" ran 3)
+              (drgnx-look-scene--run-cell buffer "c4" ran 5)
               (drgnx-look-scene--run-cell buffer "c2" (lambda (tails id) (string-search "16" (or (plist-get (gethash id tails) :text) ""))) 3))
             (let ((end (+ (float-time) 1.5)))   ; the log's first entries and the output's second line
               (while (< (float-time) end) (accept-process-output nil 0.05) (redisplay))))
@@ -1716,9 +1719,13 @@ one fails and one keeps running; without it, the cells show what a finished run 
             (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id (if kernel "c2" "c3")) :head)))
             (drgnx-notebook--select-at (point))      ; no command ran: the hub is told which cell point is in
             (drgnx-notebook-outline)
+            ;; the output shown is the long one (2 500 lines), moved half a window on below: rows above and below
+            (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id (if kernel "c4" "c3")) :head)))
             (drgnx-notebook-open-output)
+            (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id (if kernel "c2" "c3")) :head)))
+            (drgnx-notebook--select-at (point))
             (drgnx-notebook-kernel-log))
-          (setq views (list (format "*Notebook outline: %s*" base) (format "*Notebook output: %s %s*" base (if kernel "c2" "c3"))
+          (setq views (list (format "*Notebook outline: %s*" base) (format "*Notebook output: %s %s*" base (if kernel "c4" "c3"))
                             (format "*Notebook log: %s*" base)))
           (drgnx-look-scene--until 30 "the views' buffers" (lambda () (seq-every-p #'get-buffer views)))
           (delete-other-windows)
@@ -1731,7 +1738,18 @@ one fails and one keeps running; without it, the cells show what a finished run 
                                                              (with-current-buffer name
                                                                (when (drgnx-view-p drgnx-view) (drgnx-view-draw-now drgnx-view))
                                                                (> (buffer-size) 0)))
-                                                           views)))))))
+                                                           views)))
+          (when kernel
+            (with-current-buffer (cadr views) (drgnx-notebook-output-later))
+            (drgnx-look-scene--until 12 "the output's window moves"
+                                     (lambda () (with-current-buffer (cadr views)
+                                                  (when (drgnx-view-p drgnx-view) (drgnx-view-draw-now drgnx-view))
+                                                  (string-search "lines above" (buffer-string)))))
+            ;; the window shows the rows from the top, the cut row above them first
+            (when-let* ((w (get-buffer-window (cadr views) t)))
+              (with-current-buffer (cadr views) (goto-char (point-min)))
+              (set-window-point w (point-min))
+              (set-window-start w (point-min))))))))
   (drgnx-look-scene--answer))
 
 (defun drgnx-look-scene-notebook-views-light () "The three notebook views, light." (drgnx-look-scene--notebook-views 'drgnx-light))
