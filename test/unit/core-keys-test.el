@@ -333,6 +333,22 @@ a key you bound from the keyboard stays: Emacs keeps those for the session."
      (should-not (gethash "C-o" drgnx-keys--yours))
      (should (stringp (cdr (gethash "C-s" drgnx-keys--yours)))))))
 
+(ert-deftest drgnx-keys/a-hook-writes-your-key-only-inside-drgnx-keys-mine ()
+  "A write from a hook function is no scope of yours: it is a package's, under the profile's key.  Inside
+`drgnx-keys-mine' it is yours, also while some other file loads."
+  (drgnx-keys-test--live
+   (drgnx-keys-use '((vscode app editing window)))
+   (let ((this-command nil) (load-file-name "/tmp/some-package.el"))
+     (keymap-global-set "C-o" #'ignore)                     ; the hook as it is: a package's
+     (should (eq (keymap-lookup (current-global-map) "C-o") #'find-file))
+     (should-not (gethash "C-o" drgnx-keys--yours))
+     (drgnx-keys-mine (keymap-global-set "C-o" #'ignore))   ; with the macro: yours
+     (should (eq (keymap-lookup (current-global-map) "C-o") #'ignore))
+     (should (gethash "C-o" drgnx-keys--yours))
+     (drgnx-keys-apply)
+     (should (eq (keymap-lookup (current-global-map) "C-o") #'ignore)))
+   (keymap-set global-map "C-o" #'open-line)))
+
 (ert-deftest drgnx-keys/emacs-code-that-reads-global-map-sees-the-composed-one ()
   "comint's C-d, message's TAB and the tutorial read the variable `global-map' as the global binding: under the
 composed map they run with it bound to the current global map, so the profile's keys are seen there."
@@ -340,8 +356,43 @@ composed map they run with it bound to the current global map, so the profile's 
    (drgnx-keys-use '((vscode app editing window)))
    (should (eq (lookup-key global-map (kbd "C-o")) #'open-line))
    (should (eq (drgnx-keys--with-live-global-map (lambda () (lookup-key global-map (kbd "C-o")))) #'find-file))
-   (dolist (f drgnx-keys--global-readers)
+   (dolist (f '(comint-delchar-or-maybe-eof comint-insert-input message-tab tutorial--find-changed-keys isearchb))
      (should (advice-member-p #'drgnx-keys--with-live-global-map f)))))
+
+(ert-deftest drgnx-keys/the-reader-advice-binds-global-map-only-while-the-composed-map-is-current ()
+  "Under another current global map (`read-key''s) the readers see `global-map' as it is."
+  (drgnx-keys-test--live
+   (drgnx-keys-use '((vscode app editing window)))
+   (let ((other (make-sparse-keymap)) (g (current-global-map)))
+     (unwind-protect
+         (progn (use-global-map other)
+                (should (eq (drgnx-keys--with-live-global-map (lambda () global-map)) (default-value 'global-map))))
+       (use-global-map g)))))
+
+(ert-deftest drgnx-keys/comint-c-d-away-from-the-prompt-runs-the-profiles-command ()
+  "A real call: `comint-delchar-or-maybe-eof' with no process falls back to the global binding of the key, which is
+the profile's (yours here), not `global-map''s `delete-char'."
+  (require 'comint)
+  (drgnx-keys-test--live
+   (drgnx-keys-use '((vscode app editing window)))
+   (let (ran)
+     (defalias 'drgnx-keys-test--c-d #'(lambda () (interactive) (setq ran t)))
+     (drgnx-keys-test--as-you (keymap-global-set "C-d" #'drgnx-keys-test--c-d))
+     (with-temp-buffer
+       (comint-mode)
+       (set--this-command-keys (kbd "C-d"))
+       (comint-delchar-or-maybe-eof))
+     (should ran))))
+
+(ert-deftest drgnx-keys/the-keys-core-owns-its-advices ()
+  "The seven advices (three that record yours, four+ readers) are all removed by the uninstall, and come back."
+  (let ((all (drgnx-keys--advices)))
+    (should (>= (length all) 8))
+    (unwind-protect
+        (progn (drgnx-keys--uninstall-redirect)
+               (pcase-dolist (`(,sym ,_ ,fn) all) (should-not (advice-member-p fn sym))))
+      (drgnx-keys--install-redirect))
+    (pcase-dolist (`(,sym ,_ ,fn) all) (should (advice-member-p fn sym)))))
 
 (ert-deftest drgnx-keys/macos-cmd-keys-beat-ns-win-and-menus-find-them ()
   "On macOS the profile's Cmd keys (s-) sit above `global-map', where ns-win binds its own; the menus' key text comes

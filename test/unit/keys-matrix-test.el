@@ -427,7 +427,12 @@ of yours."
         (maphash (lambda (k v) (push (cons k v) cells)) tally)
         (message "keys-matrix: %d of %d cases fail; failing cells (slot action how pkg): %S"
                  (length bad) (length cases) (sort cells (lambda (a b) (> (cdr a) (cdr b)))))
-        (ert-fail (list :failing (length bad) :of (length cases) :first (seq-take (nreverse bad) 15)))))))
+        ;; the count by slot, and the cells outside the foreign slot (those are the bugs no known task owns)
+        (let (by-slot)
+          (maphash (lambda (k v) (cl-incf (alist-get (car k) by-slot 0) v)) tally)
+          (ert-fail (list :failing (length bad) :of (length cases) :by-slot (sort by-slot (lambda (a b) (string< (car a) (car b))))
+                          :non-foreign (- (length bad) (or (alist-get 'foreign by-slot) 0))
+                          :first (seq-take (nreverse bad) 15))))))))
 
 ;;;; The tests
 

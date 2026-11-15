@@ -771,14 +771,24 @@ then, so the file rule cannot tell them apart: only a body you registered is you
   "Whether a write into the global map now is yours: from a Lisp file of yours while it loads, an after-load body
 you registered (not a file it loads in turn), emacsclient --eval, or a keyboard command (no file loading, no
 after-load body running)."
-  (cond (load-file-name
+  (cond (drgnx-keys--yours-body t)
+        (load-file-name
          (and (bound-and-true-p drgnx-settings-prov--loading)
               (fboundp 'drgnx-settings-prov--user-file-p)
               (drgnx-settings-prov--user-file-p load-file-name)))
-        (drgnx-keys--yours-body t)
         (drgnx-keys--after-load nil)
         (drgnx-keys--server-eval t)
         (t (and this-command t))))
+
+(defmacro drgnx-keys-mine (&rest body)
+  "Run BODY with its global key writes counted as yours.  A write your config makes later from a hook function or a
+timer is outside every scope drgnx can see, so it counts as a package's (below the profile's keys); wrap it in this
+macro, or bind the key at the top of `config.el'.  In `config.el' the keys it binds go with a reload of that file."
+  (declare (indent 0))
+  `(let ((drgnx-keys--yours-body t)
+         (drgnx-keys--yours-file ,(let ((f (or (macroexp-file-name) load-file-name)))
+                                    (and f (drgnx-keys--source-file f)))))
+     ,@body))
 
 (defun drgnx-keys--submap (map prefix)
   "MAP's prefix map at PREFIX (a vector), made when there is none; recorded in `drgnx-keys--paths'."
@@ -923,27 +933,50 @@ Not while the minibuffer reads or a keyboard macro runs or is recorded (a comman
     (use-global-map drgnx-keys--global-map)))
 
 (defconst drgnx-keys--global-readers
-  '(comint-delchar-or-maybe-eof comint-insert-input message-tab tutorial--find-changed-keys)
+  '(comint-delchar-or-maybe-eof comint-insert-input message-tab tutorial--find-changed-keys isearchb)
   "Emacs functions that read the variable `global-map' as \"the global binding\" (comint's C-d and mouse paste,
-message's TAB, the tutorial's changed keys).  drgnx composes the global map (your keys, the profile's, then
-`global-map'), so a key the profile binds would not be seen there: each runs with `global-map' bound to the map
-that is global now (`drgnx-keys--with-live-global-map').  Calc scans `global-map' for DEL keys once, at load.")
+message's TAB, the tutorial's changed keys, isearchb where an Emacs still has it).  drgnx composes the global map
+\(your keys, the profile's, then `global-map'), so a key the profile binds would not be seen there: each runs with
+`global-map' bound to the map that is global now (`drgnx-keys--with-live-global-map').  An advice on a function that is
+not defined (isearchb is not in every Emacs) waits for it.  Calc scans `global-map' for DEL keys once, at load: a
+known gap (the spec's decisions, T11).  The advice is part of the keys core: on for the session, removed by
+`drgnx-keys--uninstall-redirect' (`unload-feature').")
 
 (defun drgnx-keys--with-live-global-map (fn &rest args)
-  "Around advice: call FN (with ARGS) with `global-map' bound to `current-global-map', the composed map."
-  (let ((global-map (current-global-map))) (apply fn args)))
+  "Around advice: call FN (with ARGS) with `global-map' bound to `current-global-map', the composed map, while the
+composed map is the current one and Nidhogg's redirect is on.  Then a package that loads inside FN and writes
+`global-map' reaches the redirect, which sends the write to the real map.  Otherwise FN runs as it is."
+  (if (and (eq (current-global-map) drgnx-keys--global-map) (drgnx-keys-redirect-available-p)
+           (bound-and-true-p nidhogg-define-key-redirect-function))
+      (let ((global-map (current-global-map))) (apply fn args))
+    (apply fn args)))
 
 (defun drgnx-keys--install-redirect ()
   "Turn the redirect on, when the keys core loads: config.el and your Lisp files load before the first apply, and
 their global keys must already land in your map.  Without the redirect (an Emacs that is not Nidhogg) your
 bindings cannot be told from packages': the first apply says so as a problem (`drgnx-keys--install-global')."
   (drgnx-keys--refresh-paths)
-  (dolist (f drgnx-keys--global-readers) (advice-add f :around #'drgnx-keys--with-live-global-map))
-  (advice-add 'eval-after-load :filter-args #'drgnx-keys--after-load-yours)
-  (advice-add 'do-after-load-evaluation :around #'drgnx-keys--after-load-scope)
-  (advice-add 'server-eval-and-print :around #'drgnx-keys--server-eval-yours)
+  (pcase-dolist (`(,sym ,how ,fn) (drgnx-keys--advices)) (advice-add sym how fn))
   (when (drgnx-keys-redirect-available-p)
     (setq nidhogg-define-key-redirect-function #'drgnx-keys--redirect)))
+
+(defun drgnx-keys--advices ()
+  "Every advice the keys core puts on Emacs, (SYMBOL HOW FUNCTION): the three that record what is yours and the
+readers of `global-map'.  They are on for the session; `drgnx-keys--uninstall-redirect' takes them all off."
+  (append (list (list 'eval-after-load :filter-args #'drgnx-keys--after-load-yours)
+                (list 'do-after-load-evaluation :around #'drgnx-keys--after-load-scope)
+                (list 'server-eval-and-print :around #'drgnx-keys--server-eval-yours))
+          (mapcar (lambda (f) (list f :around #'drgnx-keys--with-live-global-map)) drgnx-keys--global-readers)))
+
+(defun drgnx-keys--uninstall-redirect ()
+  "The owner of `drgnx-keys--install-redirect': the redirect off and every advice of `drgnx-keys--advices' removed."
+  (pcase-dolist (`(,sym ,_how ,fn) (drgnx-keys--advices)) (advice-remove sym fn))
+  (when (drgnx-keys-redirect-available-p) (setq nidhogg-define-key-redirect-function nil)))
+
+(defun drgnx-keys-unload-function ()
+  "`unload-feature' hook: the redirect and the advices go with the keys core."
+  (drgnx-keys--uninstall-redirect)
+  nil)
 
 (defun drgnx-keys--install-global ()
   "Make the composed map the global map, with its guard, at every apply."

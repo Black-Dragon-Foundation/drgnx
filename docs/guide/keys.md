@@ -547,8 +547,28 @@ command's line as `yours (config.el)` or `yours (this session)`; they are read-o
 key cannot take theirs, Reset says it cannot remove a line of `config.el`): edit the file. The terminal fallback
 (Alt+Shift keys) and that page treat your keys as taken, like Emacs's own.
 
+Examples, all yours:
+
+```elisp
+;; config.el
+(keymap-global-set "C-c t" #'my-toggle)             ; a key of yours
+(keymap-global-set "C-o" #'ignore)                  ; over the profile's Open File
+(keymap-global-set "F9" nil)                        ; the key does nothing, whatever the profile binds
+(with-eval-after-load 'org (keymap-global-set "C-c o" #'org-capture))
+(use-package magit :bind ("C-c g" . magit-status))
+```
+
+and from the keyboard: `M-x global-set-key`, `M-:`, `kmacro-bind-to-key`, `emacsclient --eval`.
+
 What is not yours: keys a package binds when it loads, and keys bound later by a hook or a timer, even one you wrote
-(a hook runs outside your file and your command; bind such keys at the top of `config.el` instead). A package's
+(a hook runs outside your file and your command: the known gap). Wrap such a write in `drgnx-keys-mine`, or bind the
+key at the top of `config.el`:
+
+```elisp
+(add-hook 'my-mode-hook
+          (lambda () (drgnx-keys-mine (keymap-global-set "C-c m" #'my-mode-command))))
+```
+ A package's
 global key stays below the profile's. Two cases work as in any Emacs: a key a package (or a hook) binds under a
 prefix the profile owns, where Emacs binds a command (`C-k x` while Emacs's `C-k` is `kill-line`), fails with
 "starts with non-prefix key"; and a global `[remap]` that is not yours still turns the profile's command into its own.

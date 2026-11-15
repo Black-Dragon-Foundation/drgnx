@@ -820,6 +820,28 @@ monitors, panes, rules). The lint `drgnx-lint/echo-messages-only-fall` (`test/un
 remains is a command's reply, a line of a process with no notice model (the hub, the sandbox plumbing, the MCP
 bridge), or the last resort of the recorder itself.
 
+## The global map in layers (`drgnx-keys.el`)
+
+drgnx installs a composed global map (`use-global-map`): `drgnx-keys-user-map` (your keys), `drgnx-keys--profile-map`
+(the profile's, refilled by every apply), then `global-map`, which drgnx never writes. Nidhogg's
+`nidhogg-define-key-redirect-function` (`drgnx-keys--redirect`) sees every `define-key`, Lisp or C: a write that is
+yours (`drgnx-keys--yours-p`: your Lisp files while they load, an after-load body you registered, `drgnx-keys-mine`, a
+keyboard command, `M-:`, `emacsclient --eval`) goes to your map and is recorded in `drgnx-keys--yours` (key → definition
+and source file); any other write goes to `global-map`, and none lands in the composed map or in a profile prefix map.
+`drgnx-keys--paths` maps every layer's keymap to its key path for the redirect. A guard on `post-command-hook` puts the
+composed map back when a command left another one current, saying so once.
+
+`drgnx-keys-resolve` is pure. `:yours` is its top layer: a profile binding on a key of yours (or under a command of yours
+on a prefix) leaves `:bindings` for `:held` and the conflict says so; `global-map` is read live. Every global conflict has
+`:verdict`, the text `key-binding` must answer (`drgnx-keys--def-text`: a lambda is "a lambda"), which the matrix and
+`drgnx-keys/the-sheet-says-what-key-binding-answers` compare with the real lookup. A write of yours marks the record
+stale; `drgnx-keys-settle` applies before the sheet, the key labels or the tty table read it. A reload of a Lisp file calls
+`drgnx-keys-forget-source` first, so its keys go and come back as it binds them again; keys from the keyboard stay.
+Emacs functions that read the variable `global-map` (`drgnx-keys--global-readers`) run with it bound to the composed map.
+The tty fallback and the Keyboard Shortcuts editor take `drgnx-tty-fallback-global-map` (your map over `global-map`) as
+what is taken. The user guide is `docs/guide/keys.md`; the checks are `test/unit/core-keys-test.el`,
+`test/unit/keys-matrix-test.el` and `test/tty/keys-test.el`.
+
 ## Command registry (`drgnx-registry.el`)
 
 Every command is registered once, without keys:
