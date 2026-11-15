@@ -2228,8 +2228,9 @@ EOL, the body's px past the row's end."
        (if (< q eol) 0 (max 0 (- (window-body-width window t) (car (window-text-pixel-size window bol eol))))))))
 
 (defun drgnx-look-scene--cut-rows (window how)
-  "Each cut in the hub's rows in WINDOW's buffer: (KEY HOW BODY-PX PREFIX AFTER FREE ELLIPSIS-PX ROW-PARTS), PREFIX the
-row's text before the `…', AFTER its text after it, FREE the px free after it (`drgnx-look-scene--free-after')."
+  "Each cut in the hub's rows in WINDOW's buffer: (KEY HOW BODY-PX PREFIX AFTER FREE ELLIPSIS-PX ROW-PARTS FONTS),
+PREFIX the row's text before the `…', AFTER its text after it, FREE the px free after it
+\(`drgnx-look-scene--free-after'), FONTS the roles the hub measured the row in."
   (let ((out nil) (n 0))
     (with-current-buffer (window-buffer window)
       (save-excursion
@@ -2247,7 +2248,8 @@ row's text before the `…', AFTER its text after it, FREE the px free after it 
                               (buffer-substring-no-properties (point) eol)
                               (drgnx-look-scene--free-after window bol (point) eol)
                               (car (window-text-pixel-size window (1- (point)) (point)))
-                              (drgnx-look-scene--row-parts window bol eol))
+                              (drgnx-look-scene--row-parts window bol eol)
+                              (ignore-errors (plist-get (gethash key (drgnx-view-patch-rows drgnx-view-patch)) :fonts)))
                         out))))
             (goto-char (line-end-position))
             (forward-line 1)))))
@@ -2291,6 +2293,22 @@ Nil when the row changed otherwise, or is cut there at that width too.  Else CUT
   "Regexps of the buffer names whose windows a scene may show at a width the frame cannot change by 40 px (measured as
 drawn only); any other fed window that cannot be resized fails the width check.")
 
+(defvar drgnx-look-scene--asks (make-hash-table :test #'equal)
+  "VIEW → (EVENTS GLYPHS FACES MEASURES): what the hub asked this Emacs about VIEW's rows (`view-glyphs'), for the
+widths file (bounded by the views the scenes open).")
+
+(defun drgnx-look-scene--count-asks (event data)
+  "Count a `view-glyphs' EVENT's asks (DATA) under its view in `drgnx-look-scene--asks'."
+  (when (equal event "view-glyphs")
+    (let ((c (or (gethash (plist-get data :view) drgnx-look-scene--asks) (list 0 0 0 0))))
+      (puthash (plist-get data :view)
+               (list (1+ (nth 0 c)) (+ (nth 1 c) (length (plist-get data :ask)))
+                     (+ (nth 2 c) (length (plist-get data :faces))) (+ (nth 3 c) (length (plist-get data :measure))))
+               drgnx-look-scene--asks))))
+
+(with-eval-after-load 'drgnx-view-env
+  (advice-add 'drgnx-view-env-event :before #'drgnx-look-scene--count-asks))
+
 (defun drgnx-look-scene-widths (file)
   "No hub-fed view's row is wider than its window's body, and none is cut with `…' where its full text fits: every
 window of the visible frames that shows one, as the shot drew it, then narrower (by a third, at most 300 px) and
@@ -2331,14 +2349,18 @@ to resize a fed window, or name it in `drgnx-look-scene-widths-fixed')" view (bu
               (drgnx-look-scene--rows-settle buffer "back"))
             (when wide
               (let ((over (delq nil (mapcar (lambda (c) (drgnx-look-scene--over-cut c wide buffer)) cuts))))
-                (push (list view (buffer-name buffer) :cuts (length cuts) :over-cut (length over) (seq-take over 4))
+                (push (list view (buffer-name buffer) :cuts (length cuts) :over-cut (length over) (seq-take over 4)
+                            ;; what the hub measures with: the env's fonts, and what it asked of this Emacs
+                            :env-fonts (mapcar (lambda (c) (cons (car c) (plist-get (cdr c) :fonts)))
+                                               (drgnx-view-env--envs view))
+                            :asks (gethash view drgnx-look-scene--asks))
                       drgnx-look-scene--widths-log)
                 (when over
                   (push (format "widths: %s (%s): %d rows cut with … whose full text fits, e.g. %S"
                                 view (buffer-name buffer) (length over)
                                 (mapcar (lambda (o) (list (nth 0 o) (nth 1 o) (nth 2 o) (nth 3 o)
-                                                          (plist-get (nthcdr 8 o) :cut-off)
-                                                          (plist-get (nthcdr 8 o) :cut-off-px) (nth 5 o)))
+                                                          (plist-get (nthcdr 9 o) :cut-off)
+                                                          (plist-get (nthcdr 9 o) :cut-off-px) (nth 5 o)))
                                         (seq-take over 4)))
                         drgnx-look-scene--errors)))))))))
   (let ((print-length nil) (print-level nil))
