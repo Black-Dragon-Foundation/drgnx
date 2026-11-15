@@ -91,6 +91,13 @@ queueing events, which a daemon with a terminal client reads for the terminal la
 window is driven by calls, the terminal window by real keys."
   (drgnx-tty-session-eval gui `(with-selected-frame ,drgnx-tty-mixed-test--gui-frame ,form)))
 
+(defun drgnx-tty-mixed-test--in-tty (gui form)
+  "FORM's value in the daemon with the terminal frame selected and its window's buffer current.  A popup opened by a
+real key there is closed by a call: C-g typed into a terminal is Emacs's interrupt while the daemon is busy (a
+redisplay, a test's eval), a quit of whatever runs then, and never the key the popup's map would see."
+  (drgnx-tty-session-eval gui `(with-selected-frame ,drgnx-tty-mixed-test--tty-frame
+                                 (with-current-buffer (window-buffer (selected-window)) ,form))))
+
 (ert-deftest drgnx-tty-mixed/a-popup-stays-in-its-own-window ()
   ;; a transient in the graphical window never touches the terminal window, and the other way round
   (drgnx-tty-mixed-test--with (gui tty)
@@ -114,7 +121,7 @@ window is driven by calls, the terminal window by real keys."
         (should (eq (plist-get during :transient) 'tty))
         (should (equal (plist-get during :gui) (plist-get before :gui)))
         (should-not (equal (plist-get during :tty) (plist-get before :tty))))
-      (drgnx-tty-session-key tty "C-g" 'legacy)
+      (drgnx-tty-mixed-test--in-tty gui '(progn (transient--emergency-exit) t))
       (drgnx-tty-mixed-test--wait gui '(null (get-buffer-window " *transient*" t)))
       (should (equal (drgnx-tty-mixed-test--state gui) before)))))
 
@@ -148,7 +155,7 @@ window is driven by calls, the terminal window by real keys."
           (should (eq (drgnx-tty-session-eval gui parent-kind) 'tty))
           (should (drgnx-tty-session-eval gui '(eq (frame-parent (seq-find (lambda (f) (and (frame-parent f) (frame-visible-p f))) (frame-list)))
                                                    (seq-find (lambda (f) (and (not (display-graphic-p f)) (not (frame-parent f)) (frame-parameter f 'client))) (frame-list)))))
-          (drgnx-tty-session-key tty "C-g" 'legacy)
+          (drgnx-tty-mixed-test--in-tty gui '(progn (corfu-quit) t))
           (drgnx-tty-mixed-test--wait gui `(null ,visible-child) 10)
           ;; completion started in the graphical window
           (drgnx-tty-mixed-test--in-gui

@@ -1169,6 +1169,11 @@ dirs) and drive the session through `harness/drgnx-tty-session.el`:
   binds a key, or sends C-g, first waits for the daemon's stages: `drgnx-tty-session-wait-stages` (the GUI tier's
   `drgnx-test-wait-stages`) waits until no idle step is pending, then reaches the once-only stages still armed
   (first input, first file, first graphical frame). `drgnx-tty-session-key-barrier` does it before binding `<f9>`.
+- **C-g only when the row is about C-g:** C-g typed into a terminal is Emacs's interrupt whenever the daemon is not
+  waiting for input (a redisplay, a timer, the test's own eval): it quits whatever runs and never reaches a popup's
+  map as a key. A row that only needs a popup closed closes it by a call in that frame (the mixed rows:
+  `transient--emergency-exit`, `corfu-quit`). A row that tests C-g itself sends it after a barrier and judges it by
+  what ran (`kx-seen`), not by a screen a quit could leave as it was.
 - **Output:** the screen comes from `capture-pane` (`-screen`, `-find`, `-wait-screen`, `-quiet`; `-find-below` and
   `-wait-screen-below` look only under a heading's line, for a text shown in two places). The paste buffer
   shows what OSC 52 copied (`-clipboard`), and `-pane-flags` reports the pane's mouse and key modes. The inner Emacs's
