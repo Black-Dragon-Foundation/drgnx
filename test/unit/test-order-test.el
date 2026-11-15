@@ -127,6 +127,8 @@
            (r (drgnx-test-order-test--bin tmp suite "test")))
       (should (eql 0 (car r)))
       (should (string-match-p "^drgnx: 2 test files" (cdr r)))
+      ;; the run's time in hundredths (the timing lane reads it: a row of short tests is not 0 s)
+      (should (string-match-p "^drgnx: 2 test files.* unexpected ([0-9]+\\.[0-9][0-9] s)$" (cdr r)))
       (should (string-match-p "passed .*iso-only/a" (cdr r)))
       (should (string-match-p "passed .*iso-only/c" (cdr r)))
       (should-not (string-match-p "iso-only/b" (cdr r))))))

@@ -402,6 +402,7 @@ fails a `:timing` test no row holds). A sample runs only the files that hold the
 names one file or several split at blanks; `test/timing-lane.sh --files ROW` prints them: a file whose class line is
 `timing`, or one where a test of the row's prefix, `ert-deftest` or a test macro's, has a `:tags` line naming `:timing`),
 so a row's time is its own tests, not an Emacs start for each of the suite's files; a row no file holds gives no time.
+The time is the run's summary line (`drgnx: N test files, … (S s)`), which the runner prints in hundredths of a second.
 `drgnx-lint/the-timing-lane-loads-every-file-of-a-row` holds that reading to the class lint's and fails a row that holds
 no `:timing` test. The lane measures a fixed workload before and after (the calibration: a batch Emacs in the
 image the tests run in, `DRGNX_TEST_IMAGE`, never a host Emacs, which a CI runner does not have),

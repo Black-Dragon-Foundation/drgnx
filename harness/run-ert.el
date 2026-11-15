@@ -1264,7 +1264,8 @@ file passed."
                                               :failed (+ (plist-get summary :failed) (length more)))
                                    :failures (vconcat (plist-get summary :failures) more)))))
       (when seed (setq summary (append summary (list :seed seed))))
-      (message "\ndrgnx: %d test files, each in an Emacs of its own: %d tests, %d as expected, %d unexpected (%.0f s)"
+      ;; the time in hundredths: the timing lane (test/timing-lane.sh) reads it, and a row's run can take under a second
+      (message "\ndrgnx: %d test files, each in an Emacs of its own: %d tests, %d as expected, %d unexpected (%.2f s)"
                count (plist-get summary :total) (plist-get summary :passed) (plist-get summary :failed) (- (float-time) t0))
       (cl-loop for f across (plist-get summary :failures) do (message "   FAILED  %s" (plist-get f :name)))
       (drgnx-run-ert--say-skipped (append (plist-get summary :skipped) nil))
