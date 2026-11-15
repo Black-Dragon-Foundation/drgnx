@@ -1231,8 +1231,15 @@ with the no-popup picture taken before the read."
       (should (cl-every (lambda (n) (nth 1 n)) on)))))
 
 (defun drgnx-test-chrome--set-fullscreen (root state)
-  "Make ROOT's `fullscreen' parameter STATE (`fullboth' or nil) and wait until its size has settled."
-  (set-frame-parameter root 'fullscreen state)
+  "Make ROOT's `fullscreen' parameter STATE (`fullboth' or nil) and wait until its size has settled.
+A change of state waits for the compositor's answer, the new size, first: the parameter changes at once, the size only
+when the configure arrives, so five presented frames at the old size read as settled, and a `set-frame-size' sent then
+was undone by the late configure (the restored size)."
+  (let ((before (list (frame-pixel-width root) (frame-pixel-height root))))
+    (unless (eq state (frame-parameter root 'fullscreen))
+      (set-frame-parameter root 'fullscreen state)
+      (drgnx-test-chrome--wait-for
+       (lambda () (not (equal before (list (frame-pixel-width root) (frame-pixel-height root))))) 8)))
   (drgnx-test-chrome--wait-stable
    (lambda () (list (frame-pixel-width root) (frame-pixel-height root) (frame-parameter root 'fullscreen))) 8))
 
