@@ -142,6 +142,10 @@ skips is not a pass nobody sees.
   WHAT)` (`harness/run-ert.el`) instead of `skip-unless`. Without the primitive it skips; under
   `DRGNX_NIDHOGG_STRICT=1` it fails, `DRGNX_NIDHOGG_STRICT=1: this Emacs has no WHAT`. Set it for runs on Nidhogg's
   integration line, where a skip would hide a stale build; `bin/drgnx test --container` passes it into the container.
+  The runner adds one rule for Sjá: under `DRGNX_NIDHOGG_STRICT=1`, in an Emacs with no Sjá (`nidhogg-view--call` and
+  `nidhogg-views`), a test that skipped with a reason naming a Sjá primitive (`nidhogg-view-…`, such as
+  `skip-unless (fboundp 'nidhogg-view-rows)`) fails the run: `DRGNX_NIDHOGG_STRICT=1: skipped for Sjá, which this
+  Emacs has not: REASON`. In an Emacs with Sjá such a skip had another reason (no display) and stays a skip.
 
 ## A flake is a result (`DRGNX_TEST_RERUN`)
 
