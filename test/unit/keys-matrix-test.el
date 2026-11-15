@@ -91,11 +91,11 @@ its prefix runs nothing; a prefix of a profile key reads `prefix'."
      state
      (cond
       (prefix-cmd nil)
-      ;; yours in the buffer's mode map, a command (a nil there only removes that map's say on the key)
-      ((and y-pkg (cdr y-pkg)) (cdr y-pkg))
-      ;; an :everywhere key: yours anywhere first, else the profile's, in every buffer
-      ((and (eq place 'everywhere) y-global) (cdr y-global))
-      ((eq place 'everywhere) (nth 1 prof))
+      ;; yours in the buffer's mode map: a command, or nil (you unbound it there: nothing runs)
+      (y-pkg (cdr y-pkg))
+      ;; an :everywhere key, in every buffer, unless you bound the key yourself (then it steps aside: the mode maps,
+      ;; then your global binding, decide)
+      ((and (eq place 'everywhere) (not y-global)) (nth 1 prof))
       ;; the buffer's mode: the profile's :map key, unless you took it back; then the package's own
       ((and (eq buffer 'pkg) (eq place 'foreign) (not y-pkg)) (nth 1 prof))
       ((and (eq buffer 'pkg) (member key (plist-get state :pkg-mode))) 'keys-matrix-pkg-own)
@@ -133,8 +133,12 @@ its prefix runs nothing; a prefix of a profile key reads `prefix'."
 (defconst keys-matrix--pkgs '(none define-key current-global-map global-set-key mode-map))
 
 (defun keys-matrix--case (slot action how pkg)
-  "A case: SLOT, ACTION, HOW, PKG and a random order of its events."
-  (let* ((applies (1+ (keys-matrix--rand 3)))
+  "A case: SLOT, ACTION, HOW, PKG, the STYLE of your global writes (0 `keymap-global-set', 1 `global-set-key',
+2 `define-key' on `global-map') and a random order of its events.  A package never writes the chord: under C-k,
+which `global-map' binds to `kill-line', its `define-key' fails in any Emacs."
+  (when (and (eq slot 'chord) (memq pkg '(define-key current-global-map global-set-key))) (setq pkg 'none))
+  (let* ((style (keys-matrix--rand 3))
+         (applies (keys-matrix--rand 4))
          (events (append (list 'action) (and (or (not (eq pkg 'none)) (eq how 'after-load) (eq slot 'foreign)) '(pkg-load))
                          ;; an apply while another global map is current, as during `read-key'
                          (mapcar (lambda (_) (if (= 0 (keys-matrix--rand 4)) 'apply-swapped 'apply)) (make-list applies nil))
@@ -147,7 +151,7 @@ its prefix runs nothing; a prefix of a profile key reads `prefix'."
     ;; your write into the package's map needs the map: after its load (with-eval-after-load waits by itself)
     (when (and (eq slot 'foreign) (not (eq how 'after-load)) (memq 'pkg-load order))
       (setq order (cons 'pkg-load (remq 'pkg-load order))))
-    (list :slot slot :action action :how how :pkg pkg :order order)))
+    (list :slot slot :action action :how how :pkg pkg :style style :order order)))
 
 (defun keys-matrix--cases (n)
   (let (out)
@@ -160,12 +164,14 @@ its prefix runs nothing; a prefix of a profile key reads `prefix'."
 ;;;; Running a case
 
 (defvar keys-matrix--interactive-form nil "What the keyboard command `keys-matrix--do' evaluates.")
-(defun keys-matrix--do () "A command you run from the keyboard." (interactive) (eval keys-matrix--interactive-form t))
+(defvar keys-matrix--action-error nil "An error your action signalled where the command loop or a filter would swallow it.")
+(defun keys-matrix--do () "A command you run from the keyboard." (interactive)
+       (condition-case err (eval keys-matrix--interactive-form t) (error (setq keys-matrix--action-error err))))
 (defvar keys-matrix-trigger-map (let ((m (make-sparse-keymap))) (define-key m (kbd "<f35>") #'keys-matrix--do) m))
 (define-minor-mode keys-matrix-trigger-mode "The test's trigger key." :global t :keymap keys-matrix-trigger-map)
 (defvar keys-matrix-late-hook nil "A hook of yours that binds a key later, outside any of your scopes.")
 
-(defun keys-matrix--forms (slot action)
+(defun keys-matrix--forms (slot action &optional style)
   "The forms of your ACTION on SLOT's key, and the bindings they leave: (FORMS . WRITES), WRITES a list of
 \((MAP . KEY) . DEF) or ((MAP . KEY) . :remove), in order."
   (let* ((s (assq slot keys-matrix--slots)) (key (nth 1 s)) (cmd (nth 2 s))
@@ -174,7 +180,7 @@ its prefix runs nothing; a prefix of a profile key reads `prefix'."
          (set (lambda (k def)
                 (cond (pkgmap `(keymap-set keys-matrix-pkg-mode-map ,k #',def))
                       ((eq slot 'ctlx) `(define-key ctl-x-map ,(substring k 4) ,(and def `#',def)))
-                      (t (pcase (keys-matrix--rand 3)
+                      (t (pcase (or style 0)
                            (0 `(keymap-global-set ,k ,(and def `#',def)))
                            (1 `(global-set-key (kbd ,k) ,(and def `#',def)))
                            (_ `(define-key global-map (kbd ,k) ,(and def `#',def))))))))
@@ -194,14 +200,15 @@ its prefix runs nothing; a prefix of a profile key reads `prefix'."
                            (list (cons (cons map key) 'keys-matrix-yours) (cons (cons map key) :remove))))
       ('prefix-under (if chord (cons (list (funcall set "C-k x" 'keys-matrix-yours))
                                      (list (cons (cons 'global "C-k x") 'keys-matrix-yours)))
-                       (keys-matrix--forms slot 'bind-other)))
+                       (keys-matrix--forms slot 'bind-other style)))
       ('command-on-prefix (if chord (cons (list (funcall set "C-k" 'keys-matrix-yours))
                                           (list (cons (cons 'global "C-k") 'keys-matrix-yours)))
-                            (keys-matrix--forms slot 'bind-other))))))
+                            (keys-matrix--forms slot 'bind-other style))))))
 
 (defvar keys-matrix--dir nil "The case's temp folder (config.el is there).")
 
 (defun keys-matrix--run-action (how forms)
+  (setq keys-matrix--action-error nil)
   (pcase how
     ('config (let ((f (expand-file-name "config.el" keys-matrix--dir)))
                (with-temp-file f (insert ";;; -*- lexical-binding: t -*-\n") (dolist (x forms) (prin1 x (current-buffer)) (insert "\n")))
@@ -213,11 +220,29 @@ its prefix runs nothing; a prefix of a profile key reads `prefix'."
     ('interactive (setq keys-matrix--interactive-form (cons 'progn forms))
                   (execute-kbd-macro (kbd "<f35>")))
     ('eval (dolist (x forms)
-             (execute-kbd-macro (vconcat (kbd "M-:") (string-to-vector (prin1-to-string x)) (kbd "RET")))))
-    ('server (require 'server)                 ; emacsclient --eval: the server reads and evaluates it
-             (dolist (x forms) (server-eval-and-print (prin1-to-string x) nil)))
+             (execute-kbd-macro (vconcat (kbd "M-:")
+                                         (string-to-vector
+                                          (prin1-to-string `(condition-case err ,x (error (setq keys-matrix--action-error err)))))
+                                         (kbd "RET")))))
+    ;; emacsclient --eval: the server evaluates it in its process filter (no command, no file being loaded)
+    ('server (require 'server)
+             (let* ((done nil)
+                    (p (make-process :name "keys-matrix-client" :command '("cat") :connection-type 'pipe :noquery t
+                                     :filter (lambda (_p _s)
+                                               (condition-case err
+                                                   (dolist (x forms) (server-eval-and-print (prin1-to-string x) nil))
+                                                 (error (setq keys-matrix--action-error err)))
+                                               (setq done t)))))
+               (unwind-protect
+                   (progn (process-send-string p "go\n")
+                          (dotimes (_ 50) (unless done (accept-process-output p 0.2)))
+                          (unless done (error "The server filter never ran")))
+                 (delete-process p))))
     ('hook (setq keys-matrix-late-hook (list (lambda () (dolist (x forms) (eval x t)))))
-           (run-hooks 'keys-matrix-late-hook))))
+           (run-hooks 'keys-matrix-late-hook)))
+  (when-let* ((err keys-matrix--action-error))
+    (setq keys-matrix--action-error nil)
+    (signal (car err) (cdr err))))
 
 (defun keys-matrix--keys-of (c)
   "The keys case C checks."
@@ -225,6 +250,12 @@ its prefix runs nothing; a prefix of a profile key reads `prefix'."
     (append (list key)
             (and (eq (plist-get c :slot) 'chord)
                  (pcase (plist-get c :action) ('prefix-under '("C-k x")) ('command-on-prefix '("C-k")))))))
+
+(defun keys-matrix--expect-error-p (c writes)
+  "Whether case C's action must fail: a write that is not yours (a hook's) under C-k, which the profile makes a prefix
+but `global-map' binds to `kill-line', fails as it would in any Emacs; the write then never happened."
+  (and (eq (plist-get c :how) 'hook)
+       (seq-some (lambda (w) (and (eq (caar w) 'global) (string-prefix-p "C-k " (cdar w)))) writes)))
 
 (defun keys-matrix--state (c writes default)
   "The model's STATE (`keys-matrix--expect') once case C ran with your WRITES (in order)."
@@ -235,7 +266,7 @@ its prefix runs nothing; a prefix of a profile key reads `prefix'."
     ;; the package's global write and a hook's write are both "not yours": the later one stands
     (let ((pkg-writes (and (memq pkg '(define-key current-global-map global-set-key)) (not (eq slot 'foreign))
                            (list (cons key 'keys-matrix-pkg-glob))))
-          (hook-writes (and (not yours-p)
+          (hook-writes (and (not yours-p) (not (keys-matrix--expect-error-p c writes))
                             (delq nil (mapcar (lambda (w) (and (eq (caar w) 'global)
                                                                (cons (cdar w) (if (eq (cdr w) :remove) :remove (cdr w)))))
                                               writes)))))
@@ -265,7 +296,12 @@ its prefix runs nothing; a prefix of a profile key reads `prefix'."
       (cond ((numberp b) nil) ((keymapp b) 'prefix) (t b)))))
 
 (defun keys-matrix--sheet-lines (key)
-  (seq-filter (lambda (l) (string-prefix-p (concat key " ") l)) (drgnx-keys-conflict-lines)))
+  "The sheet's lines about KEY itself: not those of a longer key under it, nor a prefix group's line."
+  (let ((longer (seq-filter (lambda (k) (string-prefix-p (concat key " ") k)) keys-matrix--all-keys)))
+    (seq-filter (lambda (l) (and (string-prefix-p (concat key " ") l)
+                                 (not (seq-some (lambda (k) (string-prefix-p (concat k " ") l)) longer))
+                                 (not (string-match-p " keys over " l))))
+                (drgnx-keys-conflict-lines))))
 
 (defconst keys-matrix--all-keys
   (append '("C-o" "C-k C-r" "C-k x" "C-k" "C-j" "C-c C-p" "C-x g")
@@ -295,6 +331,7 @@ of yours."
         after-load-alist (seq-remove (lambda (e) (eq (car e) 'keys-matrix-pkg)) after-load-alist))
   ;; both maps afresh at the next load (`defvar' keeps a bound one: the derived mode's map would keep the old parent)
   (dolist (v '(keys-matrix-pkg-mode-map keys-matrix-pkg-child-mode-map)) (when (boundp v) (makunbound v)))
+  (when keys-matrix--dir (ignore-errors (delete-file (expand-file-name "config.el" keys-matrix--dir))))
   (setq keys-matrix-late-hook nil))
 
 (cl-defun keys-matrix--run (c)
@@ -303,7 +340,9 @@ of yours."
   (let ((after-reset (keys-matrix--snapshot)))
     (unless (equal after-reset keys-matrix--fresh)
       (cl-return-from keys-matrix--run (list :reset-differs after-reset :fresh keys-matrix--fresh))))
-  (let* ((fa (keys-matrix--forms (plist-get c :slot) (plist-get c :action)))
+  (let* ((fa (keys-matrix--forms (plist-get c :slot) (plist-get c :action) (plist-get c :style)))
+         (expect-error (keys-matrix--expect-error-p c (cdr fa)))
+         (action-failed nil)
          (default (plist-get keys-matrix--fresh :plain))
          (problems nil))
     (setq keys-matrix-pkg-global (and (memq (plist-get c :pkg) '(define-key current-global-map global-set-key))
@@ -315,7 +354,8 @@ of yours."
     (dolist (e (plist-get c :order))
       (condition-case err
           (pcase e
-            ('action (keys-matrix--run-action (plist-get c :how) (car fa)))
+            ('action (condition-case err (keys-matrix--run-action (plist-get c :how) (car fa))
+                       (error (if expect-error (setq action-failed t) (signal (car err) (cdr err))))))
             ('pkg-load (load keys-matrix--pkg-file nil t))
             ('apply (drgnx-keys-apply))
             ('apply-swapped (let ((g (current-global-map)))
@@ -325,6 +365,8 @@ of yours."
                        (when (file-exists-p f) (drgnx--load-user-config f))))
             ('switch (drgnx-keys-use '((mx-empty app editing window))) (drgnx-keys-use keys-matrix--stack)))
         (error (push (list :event e :error (error-message-string err)) problems))))
+    (when (and expect-error (memq 'action (plist-get c :order)) (not action-failed))
+      (push (list :action-should-fail (car fa)) problems))
     (unless (featurep 'keys-matrix-pkg) (load keys-matrix--pkg-file nil t))   ; the mode, to look in its buffers
     (let ((state (keys-matrix--state c (cdr fa) default)))
       (dolist (round '(after more-applies))
@@ -385,15 +427,18 @@ of yours."
    (keys-matrix--check (keys-matrix--cases 600))))
 
 (ert-deftest keys-matrix/every-global-cell ()
-  "Every slot × action × how, once each, with no package and the default order (action, then an apply)."
+  "Every slot × action × how, with no package and the default order (action, then an apply; for bind-other and
+unbind-nil also with no apply), the write styles in turn."
   (keys-matrix--with
    (let (cases)
      (dolist (slot (mapcar #'car keys-matrix--slots))
        (dolist (action keys-matrix--actions)
          (dolist (how keys-matrix--hows)
-           (push (list :slot slot :action action :how how :pkg (if (or (eq how 'after-load) (eq slot 'foreign)) 'mode-map 'none)
-                       :order (if (or (eq how 'after-load) (eq slot 'foreign)) '(pkg-load action apply) '(action apply)))
-                 cases))))
+           (dolist (applies (if (memq action '(bind-other unbind-nil)) '((apply) ()) '((apply))))
+             (push (list :slot slot :action action :how how :style (mod (length cases) 3)
+                         :pkg (if (or (eq how 'after-load) (eq slot 'foreign)) 'mode-map 'none)
+                         :order (append (and (or (eq how 'after-load) (eq slot 'foreign)) '(pkg-load)) '(action) applies))
+                   cases)))))
      (setq keys-matrix--seed 7)
      (keys-matrix--check (nreverse cases)))))
 
@@ -458,9 +503,9 @@ command loop would.)"
    (drgnx-keys-use keys-matrix--stack)
    (should (eq (keys-matrix--binding "C-o" 'plain) 'keys-matrix-cmd-a))
    (let ((last-kbd-macro "x") (kmacro-ring nil)
-         (unread-command-events (listify-key-sequence (kbd "C-o"))))
+         (unread-command-events (listify-key-sequence (kbd "C-o")))
+         (this-command 'kmacro-bind-to-key) (real-this-command 'kmacro-bind-to-key))
      (cl-letf (((symbol-function 'yes-or-no-p) #'always))
-       (setq this-command 'kmacro-bind-to-key real-this-command 'kmacro-bind-to-key)
        (call-interactively #'kmacro-bind-to-key)))
    (dolist (step '(nil apply switch))
      (pcase step
@@ -486,7 +531,9 @@ command loop would.)"
       ;; a profile :map key over the package's own key; yours there over both; your nil there gives the map back
       (should (eq 'keys-matrix-cmd-d (keys-matrix--expect "C-c C-p" 'pkg (st :pkg-mode '("C-c C-p")))))
       (should (eq 'keys-matrix-yours (keys-matrix--expect "C-c C-p" 'pkg (st :yours '(((pkg . "C-c C-p") . keys-matrix-yours))))))
-      (should (eq 'keys-matrix-pkg-own (keys-matrix--expect "C-c C-p" 'pkg (st :pkg-mode '("C-c C-p") :yours '(((pkg . "C-c C-p")))))))
+      (should (null (keys-matrix--expect "C-c C-p" 'pkg (st :pkg-mode '("C-c C-p") :yours '(((pkg . "C-c C-p")))))))
+      ;; your global binding of an :everywhere key: the :everywhere key steps aside, a mode map still wins over yours
+      (should (eq 'keys-matrix-pkg-own (keys-matrix--expect "C-j" 'pkg (st :pkg-mode '("C-j") :yours '(((global . "C-j") . keys-matrix-yours))))))
       (should (null (keys-matrix--expect "C-c C-p" 'plain (st))))
       ;; a prefix of a profile key is the profile's, over a command a package or hook put there
       (should (eq 'prefix (keys-matrix--expect "C-k" 'plain (st :pkg-global '(("C-k" . keys-matrix-hook-cmd))))))
