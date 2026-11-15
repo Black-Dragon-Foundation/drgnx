@@ -1512,6 +1512,13 @@ function and one rounding rule:
   at most PX (at 2 a 15 px pad is drawn as 14), and fills the pixels left over with a spacer of the row's whole height (a box adds to the text's height, not to a
   spacer's). Corner radii are not scaled by Nidhogg: they stay `drgnx-px`. Theme
   literals (`:line-width 1`) are logical already. `test/ui/look-box-widths-gui-test.el` reads the drawn widths.
+- A frame's `internal-border-width` and `child-frame-border-width` are the same: Nidhogg's shells take them in logical
+  pixels and draw them at the display scale (a third-party child frame, such as posframe's `:border-width 2`, draws
+  4 device px at 2). A width made in frame pixels (`drgnx-px`, `drgnx-px-line`: the palette's ring, a toast's pad, the
+  cards' edge) is given through `(drgnx-pixels-border-width PX &optional FRAME)` (`drgnx-pixels-box-width`'s
+  conversion); a literal (`(child-frame-border-width . 1)`) is logical already. The parameter gives back what was
+  set: code that sizes a frame by its border reads the drawn width, `frame-internal-border-width` (a child frame's
+  ring when it has one) or `frame-child-frame-border-width`. `test/ui/frame-borders-gui-test.el` reads them.
 - An image already sized in device pixels (the hub's row images, `drgnx-view-patch--image`) is made with `:scale 1`;
   without it Emacs applies `image-scaling-factor`, a guess from the font (1.6 at scale 2), on top.
 

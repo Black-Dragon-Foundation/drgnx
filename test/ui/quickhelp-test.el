@@ -184,7 +184,8 @@
               (should (<= (- n 24) c n))
               (should (> c (+ in 40))))
             (should (drgnx-uitest-darker-p snap none (+ r 3) (/ (+ tp b) 2)))
-            (let ((px (drgnx-uitest-pixel snap (/ (+ l r) 2) tp))
+            ;; the ring's middle row: a 2 device px ring (1 logical at 2) is drawn on the two rows under the edge
+            (let ((px (drgnx-uitest-pixel snap (/ (+ l r) 2) (+ tp (/ (frame-child-frame-border-width card) 2))))
                   (want (mapcar (lambda (c) (/ c 256)) (color-values border))))
               (should (equal (cdr px) want)))))
       (drgnx-quickhelp-hide)

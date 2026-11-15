@@ -183,7 +183,9 @@ two cards has their shadows in it, the margin none).  Pattern D."
            (r (drgnx-card-panels-ui-test--rect dock))
            (between (cons 255 (mapcar (lambda (v) (ash v -8))
                                       (color-values (face-foreground 'window-divider nil t))))))
-      (should (eql (frame-parameter nil 'internal-border-width) want))
+      ;; drawn that wide: Nidhogg takes the parameter in logical px, so it is never that times the scale again
+      (should (equal (list :edge (frame-internal-border-width) :scale (frame-scale-factor))
+                     (list :edge want :scale (frame-scale-factor))))
       (should (>= (nth 0 r) want))
       (should (>= (nth 1 r) want))
       (should (equal (drgnx-uitest-pixel snap 0 0) between))

@@ -156,14 +156,15 @@ and the probe runs from that minibuffer's `post-command-hook' once the last of t
 (declare-function drgnx-pixels-set-ui-scale "drgnx-pixels")
 (declare-function drgnx-pixels-scale "drgnx-pixels")
 (declare-function drgnx-px "drgnx-pixels")
+(declare-function drgnx-pixels-border-width "drgnx-pixels")
 (declare-function drgnx-px-line "drgnx-pixels")
 (declare-function drgnx-palette-frame--look "drgnx-palette-frame")
 
 (defun drgnx-palette-float-test--sizes-at (f root s footer)
   "The palette's frame F under ROOT is sized by the pixel rule at total scale S: its ring, its width and, with FOOTER
 \(the box shown and dressed), its footer.  A child frame's border is its `child-frame-border-width' (the ring), which
-the line rule sizes."
-  (should (= (frame-parameter f 'child-frame-border-width)
+the line rule sizes: drawn that wide (the parameter is in logical px on Nidhogg)."
+  (should (= (frame-child-frame-border-width f)
              (let ((w (or (alist-get 'child-frame-border-width (drgnx-palette-frame--look)) 0)))
                (if (> w 0) (drgnx-px-line w root s) 0))))
   (should (= (frame-text-width f) (min (drgnx-px 640 root s)
@@ -200,7 +201,7 @@ the box's sizes for a frame there are that monitor's."
         (let ((g (drgnx-test-frame-on-second-monitor "drgnx-palette-second")))
           (unwind-protect
               (let ((params (drgnx-palette-frame--params g)) (s2 (float (frame-scale-factor g))))
-                (should (= (alist-get 'internal-border-width params) (drgnx-px 8 g s2)))
+                (should (= (alist-get 'internal-border-width params) (drgnx-pixels-border-width (drgnx-px 8 g s2) g)))
                 (should-not (= (drgnx-px 8 g s2) (drgnx-palette-frame--px root 8))))
             (delete-frame g)))))))
 

@@ -172,9 +172,9 @@ thing waiting on you)."
     `((parent-frame . ,parent) (minibuffer . nil) (name . "drgnx-toast") (drgnx-notice-toast . t)
       (undecorated . t) (no-accept-focus . t) (no-focus-on-map . t) (no-other-frame . t) (skip-taskbar . t)
       (unsplittable . t) (no-special-glyphs . t) (desktop-dont-save . t)
-      (internal-border-width . ,(drgnx-notice-toast--px parent 10)) (border-width . 0)
+      (internal-border-width . ,(drgnx-pixels-border-width (drgnx-notice-toast--px parent 10) parent)) (border-width . 0)
       ;; a line: whole device pixels (`drgnx-px-line'), none when the chrome has no ring
-      (child-frame-border-width . ,(if (> ring 0) (drgnx-px-line ring parent) 0))
+      (child-frame-border-width . ,(if (> ring 0) (drgnx-pixels-border-width (drgnx-px-line ring parent) parent) 0))
       (menu-bar-lines . 0) (tool-bar-lines . 0) (tab-bar-lines . 0) (left-fringe . 0) (right-fringe . 0)
       (vertical-scroll-bars) (horizontal-scroll-bars) (cursor-type . nil) (visibility . nil)
       ,@(seq-remove (lambda (p) (memq (car p) '(child-frame-border-width transition))) chrome)
@@ -202,7 +202,7 @@ thing waiting on you)."
 
 (defun drgnx-notice-toast--anchor (parent)
   "(RIGHT . BOTTOM) of the toasts' corner in PARENT's pixels: inside the outer gap, above the status bar."
-  (let* ((gap (max (or (frame-parameter parent 'internal-border-width) 0) (drgnx-notice-toast--px parent 8)))
+  (let* ((gap (max (frame-internal-border-width parent) (drgnx-notice-toast--px parent 8)))
          (bottom (apply #'max 0 (mapcar (lambda (w) (- (nth 3 (window-pixel-edges w)) (window-mode-line-height w)))
                                         (seq-remove #'window-minibuffer-p (window-list parent 'no-minibuf))))))
     (cons (- (frame-pixel-width parent) gap) (- bottom gap))))

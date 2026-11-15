@@ -122,6 +122,13 @@ Elsewhere a frame pixel is a logical pixel, and PX is the width."
       (let ((n (max 1 (floor (+ (/ (abs px) s) 0.5 drgnx-pixels--epsilon)))))
         (if (< px 0) (- n) n)))))
 
+(defun drgnx-pixels-border-width (px &optional frame)
+  "PX frame pixels (a size from `drgnx-px' or `drgnx-px-line') as FRAME's `internal-border-width' or
+`child-frame-border-width', so the border is drawn PX pixels wide.  Nidhogg's shells take these widths in logical
+pixels, as they take a `:box' line width, so this is `drgnx-pixels-box-width'.  The parameter gives back what was set:
+read the drawn width with `frame-internal-border-width' or `frame-child-frame-border-width'."
+  (drgnx-pixels-box-width px frame))
+
 (defun drgnx-pixels-box-fit (px &optional frame)
   "The widest box line width, in FRAME's pixels, that FRAME draws and that is at most PX (0 or more): PX itself where
 every width can be drawn; on Nidhogg's shells only the scale's multiples, rounded, are (at 2, 15 is drawn as 14).  A

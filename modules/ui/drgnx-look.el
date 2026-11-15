@@ -416,8 +416,10 @@ colour on this frame (`drgnx-look--island-faces-set'), whatever the theme says."
                            (list (frame-parameter frame 'right-divider-width)
                                  (frame-parameter frame 'bottom-divider-width)
                                  (drgnx-look--edge-without frame))))
-    (dolist (p '(right-divider-width bottom-divider-width internal-border-width))
-      (unless (eql (frame-parameter frame p) gap) (set-frame-parameter frame p gap)))
+    ;; the edge is a border: Nidhogg takes it in logical px (`drgnx-pixels-border-width'); the dividers in frame px
+    (dolist (p `((right-divider-width . ,gap) (bottom-divider-width . ,gap)
+                 (internal-border-width . ,(drgnx-pixels-border-width gap frame))))
+      (unless (eql (frame-parameter frame (car p)) (cdr p)) (set-frame-parameter frame (car p) (cdr p))))
     (setq recolour (drgnx-look--island-faces-set frame))
     (dolist (w (window-list frame 'nomini))
       (if (drgnx-look--card-window-p w) (drgnx-look--card-set w) (drgnx-look--card-unset w)))

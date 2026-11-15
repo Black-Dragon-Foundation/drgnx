@@ -37,7 +37,7 @@
           (drgnx-test-wait-presented)
           (let* ((win (frame-root-window card))
                  (row (cdr (window-text-pixel-size win nil nil 10000 10000)))
-                 (pad (* 2 (frame-parameter card 'internal-border-width))))
+                 (pad (* 2 (frame-internal-border-width card))))
             (should (> row 0))
             (should (<= (frame-pixel-height card) (+ row pad)))))
       (when (frame-live-p card) (delete-frame card))
