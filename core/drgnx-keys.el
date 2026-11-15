@@ -631,13 +631,21 @@ was lifted, \"COMMAND (PREFIX)\", or nil."
     (define-key map (key-parse key) def)
     lifted))
 
+(defvar drgnx-keys--kept nil
+  "Bindings someone else made over drgnx's in a keymap other than the global map, which has no defaults to compare
+with (`drgnx-keys--defaults'): ((MAPSYM . KEY) . DEFINITION) each, found by `drgnx-keys--restore'.  The next applies
+leave KEY to its owner while it is still DEFINITION (`drgnx-keys--yours').")
+
 (defun drgnx-keys--restore ()
-  "Undo every binding drgnx made, newest first — except one someone else changed since."
+  "Undo every binding drgnx made, newest first — except one someone else changed since, which is theirs from then on
+\(`drgnx-keys--kept', `drgnx-keys--yours')."
   (pcase-dolist (`(,mapsym ,key ,prev ,ours) drgnx-keys--applied)
     (when (and (boundp mapsym) (keymapp (symbol-value mapsym)))
       (let* ((map (symbol-value mapsym)) (now (drgnx-keys--lookup map key)))
-        (when (if (eq ours :prefix) (or (null now) (equal now '(keymap))) (equal now ours))
-          (drgnx-keys--set map key prev)))))
+        (cond ((if (eq ours :prefix) (or (null now) (equal now '(keymap))) (equal now ours))
+               (drgnx-keys--set map key prev))
+              ((and now (not (eq ours :prefix)) (not (eq mapsym 'global-map)) (not (keymapp now)) (not (numberp now)))
+               (setf (alist-get (cons mapsym key) drgnx-keys--kept nil nil #'equal) now))))))
   (pcase-dolist (`(,aux ,key ,prev) drgnx-keys--evil-aux)
     (drgnx-keys--set aux key prev))
   (setq drgnx-keys--evil-aux nil)
@@ -743,6 +751,23 @@ after `drgnx-keys--restore', so drgnx's own bindings are gone."
       (let ((now (drgnx-keys--lookup (symbol-value sym) key)))
         (and now (not (equal now (drgnx-keys--lookup snap key))) now)))))
 
+(defun drgnx-keys--yours (spec key command)
+  "What you bound on KEY in the main keymap SPEC yourself, which the profile's COMMAND does not replace: its
+definition now, or nil.  Called after `drgnx-keys--restore', so drgnx's own bindings are gone.  In the global map,
+a command on KEY other than Emacs' default there (`drgnx-keys--defaults') and other than COMMAND: config.el's
+`keymap-global-set' loads after the modules' first stage, and every later stage ends with an apply.  In another
+keymap, a definition someone put over drgnx's and still there (`drgnx-keys--kept')."
+  (let ((sym (cdr (drgnx-commands--keymap-spec spec))))
+    (when (and (boundp sym) (keymapp (symbol-value sym)))
+      (let ((now (drgnx-keys--lookup (symbol-value sym) key)))
+        (when (and now (not (keymapp now)) (not (numberp now)) (not (eq now command)))
+          (if (eq sym 'global-map)
+              (and (not (equal now (drgnx-keys--lookup drgnx-keys--defaults key))) now)
+            ;; changed again since: still yours (unbound, KEY is the profile's again)
+            (when-let* ((cell (assoc (cons sym key) drgnx-keys--kept)))
+              (setcdr cell now)
+              now)))))))
+
 (declare-function evil-get-auxiliary-keymap "evil-common" (map state &optional create))
 (declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
 (declare-function drgnx-notice-clear "drgnx-notice" (source &optional id))
@@ -794,9 +819,11 @@ Never prompts: problems are collected in `drgnx-keys-last'.  Returns the resolut
             (let ((cmd (drgnx-commands-get (plist-get b :id))))
               ;; A key that beats the modal engine's in some states is bound in the engine's keymaps too (:also);
               ;; `drgnx-keys--restore' puts the engine's own key back on the next apply.  A key the user bound in
-              ;; such a keymap (config.el) is left alone and said.
+              ;; such a keymap (config.el), or in the main keymap (`drgnx-keys--yours'), is left alone and said.
               (dolist (map (cons (plist-get b :map) (plist-get b :also)))
-                (if-let* ((theirs (and (not (eq map (plist-get b :map))) (drgnx-keys--theirs map (plist-get b :key)))))
+                (if-let* ((theirs (if (eq map (plist-get b :map))
+                                      (drgnx-keys--yours map (plist-get b :key) (drgnx-cmd-command cmd))
+                                    (drgnx-keys--theirs map (plist-get b :key)))))
                     (setq r (plist-put r :conflicts
                                        (append (plist-get r :conflicts)
                                                (list (list :key (plist-get b :key)

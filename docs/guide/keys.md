@@ -527,6 +527,15 @@ line (`C-k … 12 keys over kill-line (C-k)`, then each key). Conflicts and prob
 `keys.eld`). A key in the keymap of a package that loads later is bound when it loads; what that finds (a key that
 cannot be bound, a prefix it replaces) joins the list and the report then.
 
+**Your own bindings always win.** A key you bind yourself in Lisp (`keymap-global-set` or `keymap-set` in
+`config.el`, at any time in a running Emacs) is yours, also when the profile claims it: drgnx applies the keys again
+whenever a group of modules starts (at idle, at the first file, at the first key you press) and every time it
+leaves your key alone. The sheet lists it as `F9 my-command (your own binding, kept) over Toggle Breakpoint
+(vscode)`. In the global map, a key is yours when it holds a command other than Emacs' own and other than the
+profile's; in a mode's keymap, when you changed it after drgnx bound it. Bind it back to Emacs' default (or unbind
+it in the mode's keymap) and the profile's key returns at the next apply. A key in `settings.el` (below) is the way
+to give a key to a drgnx command.
+
 With Vim keys the sheet shows leader keys plain (`SPC f f`) and a key that works in one state with it (`g d (normal state)`); the Leader Menu on `M-SPC` over Emacs' `cycle-spacing` is listed with the conflicts; which-key labels the leader keys and their prefixes (`SPC f` is `+File`); `drgnx doctor` (`modal`) warns when the engine is missing.
 
 ## Your keys in settings.el
