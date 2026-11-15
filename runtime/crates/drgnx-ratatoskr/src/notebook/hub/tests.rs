@@ -693,14 +693,7 @@ async fn a_pump_whose_editor_is_gone_stops_and_the_kernel_with_it() {
 async fn only_regular_notebook_files_ending_in_ipynb_are_opened() {
     let w = world("signal");
     let fifo = w.d.path().join("pipe.ipynb");
-    rustix::fs::mknodat(
-        rustix::fs::CWD,
-        &fifo,
-        rustix::fs::FileType::Fifo,
-        rustix::fs::Mode::from_raw_mode(0o600),
-        0,
-    )
-    .unwrap();
+    mkfifo(&fifo);
     let zero = w.d.path().join("zero.ipynb");
     std::os::unix::fs::symlink("/dev/zero", &zero).unwrap();
     // an open that waits or reads for ever would hang these: they are asked on a thread with a deadline
@@ -1145,4 +1138,12 @@ async fn opens_that_run_at_once_cannot_pass_the_limit_together() {
         hub.open(10, &path, None).await.is_ok(),
         "another connection has its own places"
     );
+}
+
+/// A FIFO at PATH (rustix has no mknodat on macOS).
+fn mkfifo(path: &std::path::Path) {
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+    // SAFETY: mkfifo(2) on a NUL-terminated path that lives through the call.
+    assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
 }

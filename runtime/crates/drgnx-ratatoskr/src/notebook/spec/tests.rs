@@ -352,14 +352,7 @@ fn a_kernelspec_writable_by_others_is_not_trusted_and_a_fifo_for_kernel_json_is_
     )
     .unwrap();
     fs::create_dir_all(d.join("fifo")).unwrap();
-    rustix::fs::mknodat(
-        rustix::fs::CWD,
-        d.join("fifo/kernel.json"),
-        rustix::fs::FileType::Fifo,
-        rustix::fs::Mode::from_raw_mode(0o600),
-        0,
-    )
-    .unwrap();
+    mkfifo(&d.join("fifo/kernel.json"));
     let names: Vec<_> = discover(&[d.to_path_buf()])
         .into_iter()
         .map(|s| s.name)
@@ -438,14 +431,7 @@ fn a_skipped_kernelspec_says_why() {
 fn kernel_json_is_opened_without_waiting_on_a_fifo_and_without_following_a_link() {
     let t = tempfile::tempdir().unwrap();
     let fifo = t.path().join("kernel.json");
-    rustix::fs::mknodat(
-        rustix::fs::CWD,
-        &fifo,
-        rustix::fs::FileType::Fifo,
-        rustix::fs::Mode::from_raw_mode(0o600),
-        0,
-    )
-    .unwrap();
+    mkfifo(&fifo);
     // an open that waits for a writer never comes back: the test would hang, so it asks from a thread and waits with a deadline
     let done = std::sync::Arc::new(std::sync::Mutex::new(None));
     let d2 = done.clone();
@@ -474,4 +460,12 @@ fn a_shared_primary_group_is_not_the_users_private_one() {
     );
     assert!(only_primary_of(passwd, 555, 1000), "nobody has it");
     assert!(only_primary_of("", 100, 1000));
+}
+
+/// A FIFO at PATH (rustix has no mknodat on macOS).
+fn mkfifo(path: &std::path::Path) {
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+    // SAFETY: mkfifo(2) on a NUL-terminated path that lives through the call.
+    assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
 }
