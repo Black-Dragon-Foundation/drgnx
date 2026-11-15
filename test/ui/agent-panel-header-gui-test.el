@@ -17,6 +17,8 @@
 (dolist (d '("core" "wb" "harness"))
   (add-to-list 'load-path (expand-file-name d drgnx-ui-panel-header--repo)))
 (require 'drgnx-keys)
+(defvar drgnx-hub--events)
+(declare-function drgnx-hub--call-on "drgnx-hub-client")
 (load (expand-file-name "test/fixtures/rows-demo-fixture" drgnx-ui-panel-header--repo) nil t)
 
 (defvar drgnx-panel-replay-prefix)
@@ -73,6 +75,21 @@ the right area, its header's rows in."
   "AREA's window that is its PART (`above', `below'), or nil."
   (seq-find (lambda (w) (and (eq area (window-parameter w 'drgnx-role)) (eq part (window-parameter w 'drgnx-area-part))))
             (window-list nil 'nomini)))
+
+(defun drgnx-ui-panel-header--rows-settle (buffer)
+  "Wait until the hub has nothing more for BUFFER's rows: a `ping' round trip on the subscribed connection (the hub
+handles a connection's lines in order, so the patches it sent before the answer have been read: a refit after the
+editor's answers to its glyph asks is one), the patches drawn, again until a round trip changes nothing (10 s at
+most)."
+  (let ((end (+ (float-time) 10)) (tick nil))
+    (while (and (not (eql tick (buffer-chars-modified-tick buffer))) (< (float-time) end))
+      (setq tick (buffer-chars-modified-tick buffer))
+      (let ((done nil))
+        (drgnx-hub--call-on drgnx-hub--events "ping" nil (lambda (&rest _) (setq done t)))
+        (drgnx-test-wait (lambda () done) :secs 3 :what "the hub's answer to a ping"))
+      (with-current-buffer buffer (drgnx-view-draw-now nil))
+      (drgnx-test-wait-presented))
+    (should (eql tick (buffer-chars-modified-tick buffer)))))
 
 (defun drgnx-ui-panel-header--settle (area)
   "Let redisplay, the size-change functions and the store's idle calls run until AREA's companions stop moving (at
@@ -223,11 +240,7 @@ taller than the cap and that is at the cap (another line would pass it), its fir
           ;; a lens segment: its preset's disclosure is the panel's.  The pill's click changed the strip, and the hub's
           ;; patch for it moves the header's text: the lens is found again once that patch is drawn
           (drgnx-ui-panel-header--settle area)
-          (let ((hb (window-buffer hw)) (tick nil) (end (+ (float-time) 5)))
-            (while (and (not (eql tick (buffer-chars-modified-tick hb))) (< (float-time) end))
-              (setq tick (buffer-chars-modified-tick hb))
-              (accept-process-output nil 0.3)
-              (drgnx-test-wait-presented)))
+          (drgnx-ui-panel-header--rows-settle (window-buffer hw))
           (setq lens (drgnx-ui-panel-header--target hw (lambda (a) (and (stringp a) (string-prefix-p "lens:" a)))))
           (should lens)
           (let* ((action (get-text-property (posn-point lens) 'drgnx-agent-panel-action (window-buffer hw)))
@@ -253,7 +266,8 @@ taller than the cap and that is at the cap (another line would pass it), its fir
                                           (and (not (equal class (drgnx-view-patch-class drgnx-view-patch)))
                                                (not (drgnx-view-patch-stale drgnx-view-patch)))))
                              :secs 20 :what "the header's rows at the bigger font")
-            (with-current-buffer hb (drgnx-view-draw-now nil))
+            ;; and the refit after the editor's answers for the new class's fonts
+            (drgnx-ui-panel-header--rows-settle hb)
             (drgnx-ui-panel-header--settle area)
             (should (> (with-current-buffer hb (count-lines (point-min) (point-max))) lines))
             (should (> (window-body-height hw t) h))
@@ -265,7 +279,7 @@ taller than the cap and that is at the cap (another line would pass it), its fir
       ;; back to one row of strip: the header shrinks to its rows again
       (drgnx-test-wait (lambda () (with-current-buffer hb (equal class (drgnx-view-patch-class drgnx-view-patch))))
                        :secs 20 :what "the header's rows at the font again")
-      (with-current-buffer hb (drgnx-view-draw-now nil))
+      (drgnx-ui-panel-header--rows-settle hb)
       (drgnx-ui-panel-header--settle area)
       (should (= lines (with-current-buffer hb (count-lines (point-min) (point-max)))))
       (should (drgnx-ui-panel-header--fitted-p hw)))))

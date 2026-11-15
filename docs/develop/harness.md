@@ -672,7 +672,9 @@ How it works:
   error naming the view, its buffer, its class, the width and an example. **No row cut where its full text fits:** a
   `…` at the drawn or narrow width is checked against the same row at the wide width; the text it cut off (measured
   in the buffer with its faces), less the `…`, plus the hub's 10 px slack, must not fit the px free after the `…`
-  (blanks, a stop's space, the body past the row's end). A window the frame cannot move 40 px is an error
+  (blanks, a stop's space, the body past the row's end). The drawn width is measured as the shot drew it, then
+  again after a round trip; when that changed the rows (the shot came before the hub's refit), the shot's cuts are
+  logged (`:changed-after-the-shot`) and the settled rows are checked instead. A window the frame cannot move 40 px is an error
   (`:not-resizable` in the log) unless its buffer is named in `drgnx-look-scene-widths-fixed`. What was measured goes
   to `NAME-sN-widths.eld`.
 
