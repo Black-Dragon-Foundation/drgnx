@@ -4,6 +4,7 @@
 ;; is whatever `emacs' is on PATH (31.1 or later: tty child frames).
 (require 'ert)
 (require 'seq)
+(require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-tty-session)
 
 ;;;; Helpers
@@ -148,8 +149,23 @@ Lisp file in the editor."
     (drgnx-tty-popups-test--with (s :size "100x30")
       (should (drgnx-tty-popups-test--corfu s dirs))
       (drgnx-tty-session-send s "(with-")
-      (drgnx-tty-session-wait s `(and ,drgnx-tty-popups-test--child-frames-of-selected t) 10)
+      ;; C-g is what this row is about, so it is sent only once the daemon waits for input: every typed key read,
+      ;; corfu's auto timer run, the popup drawn and read by tmux.  A C-g typed while Lisp runs is a quit, not a
+      ;; key; the row tells by what ran: corfu-quit, from C-g
+      (drgnx-tty-session-wait s `(and (not (input-pending-p))
+                                      (with-current-buffer "x.el" (equal (buffer-string) "(with-"))
+                                      (not (and (boundp 'corfu-auto--timer) (memq corfu-auto--timer timer-list)))
+                                      ,drgnx-tty-popups-test--child-frames-of-selected
+                                      t)
+                              10)
+      (drgnx-tty-session-pty-barrier s)
+      (drgnx-tty-session-eval s '(progn (defvar kx-seen nil) (setq kx-seen nil)
+                                        (add-hook 'pre-command-hook
+                                                  (lambda () (push (cons this-command (key-description (this-command-keys-vector)))
+                                                                   kx-seen)))
+                                        t))
       (drgnx-tty-popups-test--key s "C-g")
+      (drgnx-tty-session-wait s '(member '(corfu-quit . "C-g") kx-seen) 10)
       (drgnx-tty-session-wait s `(null ,drgnx-tty-popups-test--child-frames-of-selected) 10)
       (should (equal (drgnx-tty-session-eval s '(with-current-buffer "x.el" (buffer-string))) "(with-")))))
 
