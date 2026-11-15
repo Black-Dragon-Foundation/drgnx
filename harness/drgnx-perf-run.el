@@ -60,10 +60,10 @@ font-lock (`lisp--el-funcall-position-p', through `forward-sexp') scanned the re
 
 (defun drgnx-perf-run--debug-setup-form ()
   "The debug workloads' setup: the breakpoint column's files, `drgnx-hub-call' answered by a store in the session (its
-`debug/breakpoints' adds and removes by line, as the hub's), <f7> toggling (a key no profile claims), and the hover pool laid out as on a Nidhogg
-that lights a margin's mouse face (the feature provided where the Emacs lacks it: an advice on the gutter's own call
-would be bypassed by native code; the cost timed is the Lisp's, the C lights nothing until the pointer comes);
-`drgnx-perf--debug-stop' undoes it."
+`debug/breakpoints' adds and removes by line, as the hub's), <f7> toggling (a key no profile claims), and the hover
+pool laid out as on a Nidhogg that lights a margin's mouse face (the feature provided where the Emacs lacks it: an
+advice on the gutter's own call would be bypassed by native code; the cost timed is the Lisp's, the C lights nothing
+until the pointer comes); `drgnx-perf--debug-stop' undoes it."
   (format "(progn (dolist (m '(\"drgnx-debug-launch\" \"drgnx-debug-gutter\")) (load (expand-file-name (concat \"modules/extra/\" m) %S) nil t))
      (defvar drgnx-perf--debug-store nil) (defvar drgnx-perf--debug-version 0)
      (setq drgnx-perf--debug-store nil)   ; each row's own: no row inherits another's breakpoints
