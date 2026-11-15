@@ -2523,7 +2523,9 @@ with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an est
   slack), so it wins over the file's sum, which stands in until it comes. A char with no glyph, or a role with no
   font file (as `font-info` often has on macOS), measures as the role's average until then. The editor measures each
   in the asked class's buffer on the frame that shows it, keyed by the font its face resolves to there (a buffer's
-  remaps change it, and so does a frame of another scale or default font). Caches are bounded: 4096 chars per font and per set, 1024 measured strings.
+  remaps change it, and so does a frame of another scale or default font). Measuring on a frame other than the
+  selected one keeps every buffer's point (`drgnx-view-env--on-frame`): selecting that frame selects its selected
+  window, which would put its buffer's point at the window's. Caches are bounded: 4096 chars per font and per set, 1024 measured strings.
 - **The editor's measurement wins.** The fit guard reports a line it measured wider than the hub fitted it
   (`view/measured`); from then on that width is used for that string instead of the sum (least recently used out).
 - **The fit check row** (`test/ui/rows-fit-gui-test.el`, on the fixture view `rows-demo`, whose labels the hub
