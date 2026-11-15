@@ -105,6 +105,7 @@ drawn so, then grown, with ROWS (the Open rows arrived) or with its buffer as it
 error unless its header line is drawn where it belongs, as a full redraw draws it."
   (let* ((root (drgnx-uitest-root-frame))
          (config (with-selected-frame root (current-window-configuration)))
+         (first (frame-selected-window root))      ; the window that becomes the squeezed one
          (buf (get-buffer-create " *open-fit-squeezed*")))
     (unwind-protect
         (with-selected-frame root
@@ -151,6 +152,8 @@ error unless its header line is drawn where it belongs, as a full redraw draws i
               (drgnx-test-wait-presented)
               (should (drgnx-uitest-region-equal-p drawn (drgnx-uitest-snapshot root) rect :ignore-alpha t)))))
       (with-selected-frame root (set-window-configuration config))
+      ;; its lines are window parameters, which a window configuration does not give back
+      (dolist (p '(tab-line-format header-line-format mode-line-format)) (set-window-parameter first p nil))
       (kill-buffer buf))))
 
 (drgnx-look-gui-deftest drgnx-ui-look-open-fit/a-squeezed-window-draws-its-header-line-when-it-grows ()
