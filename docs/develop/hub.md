@@ -1315,7 +1315,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `agents/list` | user, agent, service | `{}` | `{sessions?: [Snapshot]}` | no |
 | `agents/move` | user | `{id: Id, profile: string}` | `{id: string, name: string}` | yes |
 | `agents/pair` | user | `{id: Id, on: boolean}` | `boolean` | no |
-| `agents/panel/look` | user | `{ledger_open?: boolean, lens?: [string], lens_on?: natnum, older?: boolean, open?: [string], pins?: [string], rows?: [[natnum, boolean]], view: string}` | `boolean` | no |
+| `agents/panel/look` | user | `{dear_cost?: number, ledger_open?: boolean, lens?: [string], lens_on?: natnum, older?: boolean, open?: [string], pins?: [string], rows?: [[natnum, boolean]], slow_secs?: number, view: string}` | `boolean` | no |
 | `agents/pause` | user | `{id: Id}` | `boolean` | yes |
 | `agents/permission` | user | `{id: Id, option?: string, request: RequestId}` | `boolean` | yes |
 | `agents/presence/get` | user | `{file: string}` | `{entries?: [PresenceEntry], file: string, rel?: string, repo?: string}` | no |
