@@ -1236,9 +1236,12 @@ only with `drgnx-statusbar--frame-in-batch')."
     (frame-char-height frame)))
 
 (defun drgnx-statusbar--frame-wanted-p (frame)
-  "Non-nil when FRAME gets the bar across it: a workbench frame (not a child, a minibuffer-only or the daemon's
-initial one) while the bar is across frames."
-  (and (drgnx-statusbar--frame-p) (frame-live-p frame) (drgnx-state-workbench-frame-p frame)))
+  "Non-nil when FRAME gets the bar across it: a graphic workbench frame (not a child, a minibuffer-only or the daemon's
+initial one) while the bar is across frames.  A terminal frame keeps one bar in each editor (as `editors' places it):
+Emacs draws no mode line in a one-line window, and a terminal has no row to spare for a taller one.  A batch
+Emacs's frame stands for a GUI one (`drgnx-statusbar--frame-in-batch')."
+  (and (drgnx-statusbar--frame-p) (frame-live-p frame) (or (display-graphic-p frame) noninteractive)
+       (drgnx-state-workbench-frame-p frame)))
 
 (defun drgnx-statusbar--frame-ensure (frame)
   "Give FRAME its bar window when it should have one, where it belongs (the root's last child, as wide as the root),
@@ -1303,11 +1306,13 @@ and only one; take it away when it should have none.  A window elsewhere that sh
     (window-preserve-size w nil t)))
 
 (defun drgnx-statusbar--frame-apply ()
-  "Every frame gets, keeps or loses its bar window, and the editors their mode line, as the place says."
+  "Every frame gets, keeps or loses its bar window, and the editors their mode line, as the place says (a terminal
+frame's editors keep the bar while it is across the GUI frames: `drgnx-statusbar--frame-wanted-p')."
   (setq drgnx-chrome-editor-mode-line
         (cond ((not drgnx-statusbar-mode) drgnx-chrome--mode-line)
               ((drgnx-statusbar--frame-p) 'none)
-              (t drgnx-statusbar--host)))
+              (t drgnx-statusbar--host))
+        drgnx-chrome-terminal-editor-mode-line (and (drgnx-statusbar--frame-p) (not noninteractive) drgnx-statusbar--host))
   (dolist (f (frame-list)) (drgnx-statusbar--frame-ensure f))
   (unless (drgnx-statusbar--frame-p)
     (when-let* ((b (get-buffer drgnx-statusbar--frame-buffer-name))) (kill-buffer b))))

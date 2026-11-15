@@ -607,6 +607,17 @@ that changed."
   "The mode line of an editor window: the buffer's own by default; the status bar (modules/ui/drgnx-statusbar.el)
 sets it to its own construct while it is on.  Re-apply the chrome after changing it.")
 
+(defvar drgnx-chrome-terminal-editor-mode-line nil
+  "The mode line of an editor window in a terminal frame, when non-nil; nil: `drgnx-chrome-editor-mode-line'.  The
+status bar sets it while its bar is across GUI frames: a terminal has no row for a window of the bar's own (Emacs
+draws no mode line in a one-line window), so its editors keep theirs.  Re-apply the chrome after changing it.")
+
+(defun drgnx-chrome--editor-mode-line (w)
+  "The mode line of editor window W: its frame's (`drgnx-chrome-terminal-editor-mode-line' in a terminal)."
+  (or (and drgnx-chrome-terminal-editor-mode-line (not (display-graphic-p (window-frame w)))
+           drgnx-chrome-terminal-editor-mode-line)
+      drgnx-chrome-editor-mode-line))
+
 (defvar drgnx-chrome-header-tail nil
   "A mode-line construct an editor window's header shows after its breadcrumb — set buffer-locally (sticky scroll's
 scopes: modules/editor/drgnx-sticky.el); re-apply the chrome after changing it.")
@@ -692,7 +703,7 @@ it, so without this the next redisplay may keep the old line (the window's text 
                                      (if (or tail providers)
                                          (delq nil (list (drgnx-chrome-breadcrumb w) providers tail))
                                        (drgnx-chrome-breadcrumb w)))))))
-     (drgnx-chrome--set w 'mode-line-format drgnx-chrome-editor-mode-line))
+     (drgnx-chrome--set w 'mode-line-format (drgnx-chrome--editor-mode-line w)))
     ((or 'dock 'area)
      ;; the sidebar island's header row (`drgnx-wb-island-refresh') on the dock's top window
      (drgnx-chrome--set w 'tab-line-format (or (window-parameter w 'drgnx-wb-island) 'none))
@@ -738,7 +749,7 @@ as a tab, if NOTE; BREADCRUMB is its frame's parameter `drgnx-chrome-breadcrumb'
          (eq (aref m 3) (window-parameter w 'tab-line-format))
          (eq (aref m 4) (window-parameter w 'header-line-format))
          (eq (aref m 5) (window-parameter w 'mode-line-format))
-         (eq (aref m 5) drgnx-chrome-editor-mode-line)
+         (eq (aref m 5) (drgnx-chrome--editor-mode-line w))
          (eql (aref m 7) rows))))
 
 (defun drgnx-chrome--memo-set (w note breadcrumb rows)
