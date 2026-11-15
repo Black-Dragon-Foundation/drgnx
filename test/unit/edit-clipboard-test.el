@@ -15,7 +15,7 @@ on a Mac the VS Code profile's copy, cut and paste are Cmd keys (`drgnx-editing/
             (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" dir) (concat "XDG_STATE_HOME=" dir "/state"))
                                          process-environment))
             (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-            (drgnx-keys--applied nil) (drgnx-keys--session-layers ,layers) (drgnx-keys-profiles nil)
+            (drgnx-keys--session-layers ,layers) (drgnx-keys-profiles nil)
             (drgnx-keys-problems nil) (drgnx-keys-last nil)
             (emulation-mode-map-alists emulation-mode-map-alists) (drgnx-editing-prefix-delay 0.05)
             (kill-ring nil) (kill-ring-yank-pointer nil) (interprogram-cut-function nil) (interprogram-paste-function nil))

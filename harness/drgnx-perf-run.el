@@ -60,10 +60,10 @@ font-lock (`lisp--el-funcall-position-p', through `forward-sexp') scanned the re
 
 (defun drgnx-perf-run--debug-setup-form ()
   "The debug workloads' setup: the breakpoint column's files, `drgnx-hub-call' answered by a store in the session (its
-`debug/breakpoints' adds and removes by line, as the hub's), F9 toggling, and the hover pool laid out as on a Nidhogg
-that lights a margin's mouse face (the feature provided where the Emacs lacks it: an advice on the gutter's own call
-would be bypassed by native code; the cost timed is the Lisp's, the C lights nothing until the pointer comes);
-`drgnx-perf--debug-stop' undoes it."
+`debug/breakpoints' adds and removes by line, as the hub's), <f7> toggling (a key no profile claims), and the hover
+pool laid out as on a Nidhogg that lights a margin's mouse face (the feature provided where the Emacs lacks it: an
+advice on the gutter's own call would be bypassed by native code; the cost timed is the Lisp's, the C lights nothing
+until the pointer comes); `drgnx-perf--debug-stop' undoes it."
   (format "(progn (dolist (m '(\"drgnx-debug-launch\" \"drgnx-debug-gutter\")) (load (expand-file-name (concat \"modules/extra/\" m) %S) nil t))
      (defvar drgnx-perf--debug-store nil) (defvar drgnx-perf--debug-version 0)
      (setq drgnx-perf--debug-store nil)   ; each row's own: no row inherits another's breakpoints
@@ -78,11 +78,11 @@ would be bypassed by native code; the cost timed is the Lisp's, the C lights not
      (defun drgnx-perf--debug-stop ()
        (advice-remove 'drgnx-hub-call #'drgnx-perf--debug-hub)
        (when drgnx-perf--debug-feature (setq features (delq 'glitnir-margin-mouse-face features)))
-       (global-unset-key (kbd \"<f9>\")) t)
+       (global-unset-key (kbd \"<f7>\")) t)
      (advice-add 'drgnx-hub-call :override #'drgnx-perf--debug-hub)
      (defvar drgnx-perf--debug-feature (not (featurep 'glitnir-margin-mouse-face)))
      (provide 'glitnir-margin-mouse-face)
-     (global-set-key (kbd \"<f9>\") #'drgnx-debug-gutter-toggle) t)"
+     (global-set-key (kbd \"<f7>\") #'drgnx-debug-gutter-toggle) t)"
           drgnx-ui-repo-dir))
 
 (defun drgnx-perf-run--debug-view-setup-form ()
@@ -2459,12 +2459,13 @@ a :measure without :actions each have :timeout seconds to answer (120)."
        :actions ,(append (funcall keys "<next>" 30) (funcall keys "<prior>" 30))
        :check "(and (= 200 (length (window-parameter nil 'glitnir--edges))) t)"   ; Nidhogg has the 200 edges resolved
        :teardown ,(concat "(progn (set-window-parameter nil 'glitnir-edges nil) " kill-fixture " (drgnx-perf--debug-stop) t)"))
-      ;; F9 on 20 lines in a row: each key a `debug/breakpoints' add, its answer and the column redrawn
+      ;; the breakpoint toggle on 20 lines in a row, on <f7> (a key no profile claims; F9 is the VS Code profile's,
+      ;; and a stage's keys apply sets it again): each key a `debug/breakpoints' add, its answer and the column redrawn
       (debug-breakpoint-click
        :setup ,(drgnx-perf-run--debug-setup-form)
        :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form)
                       " (setq drgnx-perf--debug-store nil) (drgnx-debug-gutter-mode 1) t)")
-       :actions ,(apply #'append (make-list 20 (list (list :keys "<f9>") (list :keys "<down>"))))
+       :actions ,(apply #'append (make-list 20 (list (list :keys "<f7>") (list :keys "<down>"))))
        :check "(= 20 (length drgnx-perf--debug-store))"
        :teardown ,(concat "(progn (drgnx-debug-gutter-mode -1) " kill-fixture " (drgnx-perf--debug-stop) t)"))
       ;; a step (spec §5): F10 is one `debug-frame' for the next line of the fixture, as the hub sends a step's stop to
@@ -2926,7 +2927,7 @@ under :compose (the compose probe)."
           :actions ,(make-list 10 (list :type "(car (cdr (list buff "))   ; 21 characters each: 210 in all
           :check "(with-current-buffer (window-buffer (selected-window)) (and (bound-and-true-p corfu-mode) (> (buffer-size) 200)))"
           :teardown ,(concat "(progn (global-corfu-mode -1) " drgnx-perf-run--popup-scratch-teardown " t)"))
-         ;; one key = one show, one move and one hide of a posframe (F9 is bound for the workload only)
+         ;; one key = one show, one move and one hide of a posframe (<f7>, a key no profile claims, is bound for the workload only)
          (popup-churn
           :setup ,(concat "(progn " drgnx-perf-run--popup-setup-form " (require 'posframe)
                            (defvar drgnx-perf--churn 0 \"Cycles done.\")
@@ -2936,11 +2937,11 @@ under :compose (the compose probe)."
                              (posframe-show \" *perf-churn*\" :string \"popup\" :position (1+ (point)) :border-width 1)
                              (posframe-hide \" *perf-churn*\")
                              (setq drgnx-perf--churn (1+ drgnx-perf--churn)))
-                           (global-set-key (kbd \"<f9>\") #'drgnx-perf--churn-step) t)")
+                           (global-set-key (kbd \"<f7>\") #'drgnx-perf--churn-step) t)")
           :each ,(concat "(progn " drgnx-perf-run--popup-scratch-form " (insert \"x\") (setq drgnx-perf--churn 0) t)")
-          :actions ,(funcall keys "<f9>" 200)
+          :actions ,(funcall keys "<f7>" 200)
           :check "(= drgnx-perf--churn 200)"
-          :teardown ,(concat "(progn (global-unset-key (kbd \"<f9>\")) (fmakunbound 'drgnx-perf--churn-step) (posframe-delete-all) "
+          :teardown ,(concat "(progn (global-unset-key (kbd \"<f7>\")) (fmakunbound 'drgnx-perf--churn-step) (posframe-delete-all) "
                              drgnx-perf-run--popup-scratch-teardown " t)"))
          ;; the fixture scrolls under an eldoc-box shown at point
          (scroll-under-popup

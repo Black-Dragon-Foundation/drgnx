@@ -1,7 +1,7 @@
 ;;; keys-modal-claims-test.el --- batch tests: Vim's key claims per state -*- lexical-binding: t -*-
 ;; test-class: det
 ;; The shipped profiles, no evil: the hand-listed claims of keys/vim.eld with their states, the leader and panel
-;; maps over other layers' keys, the snapshot of evil's maps when evil arrives.  The tests that need the real evil
+;; maps over other layers' keys, evil's own maps read live once evil arrives.  The tests that need the real evil
 ;; are in test/unit/isolated/keys-modal-claims-isolated.el, run in their own Emacs by the last test here.
 (require 'ert)
 (require 'drgnx)
@@ -57,21 +57,17 @@ registered as test commands of scope `window'.")
   (seq-filter (lambda (c) (and (equal (plist-get c :key) key) (or (null map) (eq (plist-get c :map) map))))
               (plist-get r :conflicts)))
 
-(ert-deftest drgnx-keys-claims/a-snapshot-without-evil-maps-is-quiet ()
-  ;; evil "arrives" with only its normal-state map: the snapshot holds that one, nothing fails.  Only the snapshot
-  ;; runs on this fake evil (not whatever else this process registered on evil's load).
-  (should drgnx-keys-modal--snapshot-registered)
-  (should (assq 'evil after-load-alist))
-  (let ((features features) (drgnx-keys-modal-snapshots nil)
-        (after-load-alist (list (list 'evil #'drgnx-keys-modal--snapshot-evil)))
-        (drgnx-keys-profiles nil)
-        (evil-normal-state-map (make-sparse-keymap)))
+(ert-deftest drgnx-keys-claims/evils-maps-are-read-live ()
+  ;; evil "arrives" with only its normal-state map: the engine maps are that one, nothing fails.  They are evil's maps
+  ;; themselves (drgnx never writes them), so a key bound there later is in the next resolution's claims.
+  (let ((features features) (drgnx-keys-profiles nil) (evil-normal-state-map (make-sparse-keymap)))
+    (drgnx-keys--ensure-profiles)
     (keymap-set evil-normal-state-map "C-r" #'ignore)
     (provide 'evil)
-    (should (equal (mapcar #'car drgnx-keys-modal-snapshots) '(evil-normal-state-map)))
-    ;; a copy: what drgnx binds in evil's map later does not change it
-    (keymap-set evil-normal-state-map "C-r" #'undo)
-    (should (eq (keymap-lookup (cdar drgnx-keys-modal-snapshots) "C-r") #'ignore))))
+    (let ((maps (drgnx-keys-modal-engine-maps 'evil drgnx-keys-profiles)))
+      (should (equal (mapcar #'car maps) '(evil-normal-state-map)))
+      (keymap-set evil-normal-state-map "C-r" #'undo)
+      (should (eq (keymap-lookup (cdar maps) "C-r") #'undo)))))
 
 (ert-deftest drgnx-keys-claims/mixed-stack-keeps-vscode-keys-outside-normal ()
   (drgnx-keys-claims-test--with r drgnx-keys-claims-test--mixed

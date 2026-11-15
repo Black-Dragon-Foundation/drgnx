@@ -482,7 +482,9 @@ would make an unbound key a prefix \(which-key shows the command)."
 (defun drgnx-surfaces-sheet-rows (&optional here)
   "Rows (CATEGORY KEY TITLE MOUSE DOC) for available entries, sorted by category then title.
 Uses registry keys only (no `where-is'), so the output is the same in every Emacs session, unless HERE: then
-each KEY is shown as the selected frame's terminal sends it (the F1 sheet)."
+each KEY is shown as the selected frame's terminal sends it (the F1 sheet).  A key of yours changed since the last
+apply is settled first (`drgnx-keys-settle'), so the sheet says what `key-binding' answers."
+  (when (fboundp 'drgnx-keys-settle) (drgnx-keys-settle))
   (sort (mapcar (lambda (c) (list (drgnx-cmd-category c) (drgnx-surfaces--sheet-key c (not here)) (drgnx-cmd-title c)
                                   (drgnx-surfaces--mouse-path c) (or (drgnx-cmd-doc c) "")))
                 (seq-filter #'drgnx-commands-available-p (drgnx-commands-all)))

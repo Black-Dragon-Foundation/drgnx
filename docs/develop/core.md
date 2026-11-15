@@ -820,6 +820,30 @@ monitors, panes, rules). The lint `drgnx-lint/echo-messages-only-fall` (`test/un
 remains is a command's reply, a line of a process with no notice model (the hub, the sandbox plumbing, the MCP
 bridge), or the last resort of the recorder itself.
 
+## The global map in layers (`drgnx-keys.el`)
+
+drgnx installs a composed global map (`use-global-map`): `drgnx-keys-user-map` (your keys), `drgnx-keys--profile-map`
+(the profile's, refilled by every apply), then `global-map`, which drgnx never writes. Nidhogg's
+`nidhogg-define-key-redirect-function` (`drgnx-keys--redirect`) sees every `define-key`, Lisp or C: a write that is
+yours (`drgnx-keys--yours-p`: your Lisp files while they load, an after-load body you registered, `drgnx-keys-mine`, a
+keyboard command, `M-:`, `emacsclient --eval`) goes to your map and is recorded in `drgnx-keys--yours` (key → definition
+and source file); any other write goes to `global-map`, and none lands in the composed map or in a profile prefix map.
+`drgnx-keys--paths` maps every layer's keymap to its key path for the redirect. A guard on `post-command-hook` puts the
+composed map back when a command left another one current, saying so once.
+
+`drgnx-keys-resolve` is pure. `:yours` is its top layer: a profile binding on a key of yours (or under a command of yours
+on a prefix) leaves `:bindings` for `:held` and the conflict says so; `global-map` is read live. Every global conflict has
+`:verdict`, the text `key-binding` must answer (`drgnx-keys--def-text`: a lambda is "a lambda"), which the matrix and
+`drgnx-keys/the-sheet-says-what-key-binding-answers` compare with the real lookup. A write of yours marks the record
+stale; `drgnx-keys-settle` applies before the sheet, the key labels or the tty table read it. When a Lisp file of yours has loaded
+again (`after-load-functions`, `drgnx-keys--loaded`), the keys it bound before and not in this load go; keys from the
+keyboard stay. A load whose file name (without directory and extension) is none of your files' names, as loaded or as
+true names (`drgnx-keys--source-names`), is passed by without asking the file system (a remote name, a package).
+Emacs functions that read the variable `global-map` (`drgnx-keys--global-readers`) run with it bound to the composed map.
+The tty fallback and the Keyboard Shortcuts editor take `drgnx-tty-fallback-global-map` (your map over `global-map`) as
+what is taken. The user guide is `docs/guide/keys.md`; the checks are `test/unit/core-keys-test.el`,
+`test/unit/keys-matrix-test.el` and `test/tty/keys-test.el`.
+
 ## Command registry (`drgnx-registry.el`)
 
 Every command is registered once, without keys:
@@ -2449,18 +2473,17 @@ for those layers, however often the keys are applied again (Toggle Modal Editing
   A modal profile's entries for commands outside its layer's scopes are **extras**: their keys in a `:maps` keymap
   are bound next to the command's own layer's keys, never replacing them. `drgnx-keys-after-apply-functions` (abnormal
   hook, the layers) runs at the end of every `drgnx-keys-apply`; the core adds `drgnx-modal-sync-engine` to it.
-- **Claims per state** (`drgnx-keys-modal-claims`). When `drgnx-keys-modal` loads it registers
-  `(eval-after-load 'evil …)`, which copies evil's state maps named in `:maps` into `drgnx-keys-modal-snapshots`
-  before any binding drgnx defers to evil's load (a map not defined is skipped). `drgnx-keys-resolve :snapshots`
-  (`drgnx-keys-apply` passes that variable) meets every other layer's `global-map` binding with what a snapshot binds
+- **Claims per state** (`drgnx-keys-modal-claims`). Once evil is loaded, `drgnx-keys-apply` reads evil's state maps
+  named in `:maps` live (`drgnx-keys-modal-engine-maps`; drgnx never writes them, a map not defined is skipped) and
+  passes them as `drgnx-keys-resolve :snapshots`, which meets every other layer's `global-map` binding with what a snapshot binds
   on its key (or a prefix of it, or keys under it), and every `global-map` or panel-map binding
   (`drgnx-keys-modal-panel-maps`) with the leader and panel maps' bindings of the resolution; without snapshots the
   `:claims` with STATES stand in, each on the engine maps whose states it covers. In a mixed stack there is no
   insert-state claim (Vim's insert keys are off there). The binding is kept; the conflict carries `:states` and
-  `:elsewhere t`. A binding of a higher rank gets `:also` (the engine maps), which `drgnx-keys-apply` binds through
-  `drgnx-keys--apply-binding` and records in `drgnx-cmd-bound`, so `drgnx-keys--restore` undoes it — unless the
-  engine map's key now differs from the snapshot and is not empty (`drgnx-keys--theirs`: the user's own binding, kept
-  and reported as a conflict); leader or panel keys it beats are dropped and each named among the losers. In panels the leader and panel maps always win (they are above the panel's own map).
+  `:elsewhere t`. A binding of a higher rank gets `:also` (the engine maps), which `drgnx-keys-apply` puts in the
+  profile map's auxiliary keymap for each map's state (`docs/develop/key-layers.md`, "evil's states") and records in
+  `drgnx-cmd-bound` — unless you bound the key for that state yourself (`<normal-state> C-p` in `drgnx-keys--yours`):
+  then yours wins and is reported as your own binding, kept; leader or panel keys it beats are dropped and each named among the losers. In panels the leader and panel maps always win (they are above the panel's own map).
 - **Commands.** `modal-leader` (Leader Menu) reads the leader's keys from any state: a transient map holding the
   leader's `SPC`, and `SPC` read again as if typed (`(no-record . 32)` in `unread-command-events`: in the command
   keys which-key reads, but not in a keyboard macro being recorded, which would replay `SPC SPC`), so which-key shows the `SPC` popup with the leader's labels (`+File`, the command titles).

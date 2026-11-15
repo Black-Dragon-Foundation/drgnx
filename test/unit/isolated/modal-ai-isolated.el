@@ -45,7 +45,7 @@ is a mock LLM (found running) answering `drgnx-modal-ai-test--answer'."
             (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
             (drgnx-modules--table nil) (drgnx-modules--report nil)
             (drgnx-modules--state nil) (drgnx-modal-engines nil) (drgnx-modal-running nil)
-            (drgnx-keys--applied nil) (drgnx-keys-profiles nil) (drgnx-keys-problems nil) (drgnx-keys-last nil)
+            (drgnx-keys-profiles nil) (drgnx-keys-problems nil) (drgnx-keys-last nil)
             (drgnx-keys--session-layers nil)
             (drgnx-ai-detected '((o :up t)))
             (drgnx-ai-providers nil) (drgnx-ai-roles nil)

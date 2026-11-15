@@ -211,6 +211,29 @@ helper left it (a configure answered after a paint would otherwise pass as the o
       (drgnx-test-wait-presented :frame frame :value size))
     was))
 
+(declare-function drgnx-timer-pending "drgnx-timer" ())
+(declare-function drgnx-hooks--first-input "drgnx-hooks" ())
+(declare-function drgnx-hooks--first-file "drgnx-hooks" ())
+(declare-function drgnx-hooks--gui-frame "drgnx-hooks" (&optional frame))
+
+(defun drgnx-test-wait-stages ()
+  "Return once this Emacs has ended its last module stage, for a GUI row that binds a key or sends C-g: no idle-stage
+step is left (`drgnx-modules-start'; one left fails the test, since a row's waits never let an idle timer run), and
+the once-only stages still armed (first input, first file, first graphical frame) are reached now through their own
+triggers, each ending with `drgnx-keys-apply'.  The GUI suite's session starts no modules and arms none, so there
+this only proves none can end mid-row.
+The tty tier's `drgnx-tty-session-wait-stages' is the same in a session."
+  (drgnx-test-wait (lambda () (not (and (fboundp 'drgnx-timer-pending)
+                                        (seq-find (lambda (k) (eq (car-safe (car k)) 'modules-idle-step))
+                                                  (drgnx-timer-pending)))))
+                   :secs 1 :what "the modules' idle stage over (no `modules-idle-step' timer left)")
+  (when (memq 'drgnx-hooks--first-input (default-value 'pre-command-hook)) (drgnx-hooks--first-input))
+  (when (memq 'drgnx-hooks--first-file (default-value 'find-file-hook)) (drgnx-hooks--first-file))
+  (when-let* (((memq 'drgnx-hooks--gui-frame (default-value 'after-make-frame-functions)))
+              (f (seq-find #'display-graphic-p (frame-list))))
+    (drgnx-hooks--gui-frame f))
+  t)
+
 (defun drgnx-test-buffer-list ()
   "`buffer-list' without the buffers native compilation creates (`drgnx-test-native-comp-buffer-names')."
   (cl-remove-if (lambda (b) (member (buffer-name b) drgnx-test-native-comp-buffer-names)) (buffer-list)))

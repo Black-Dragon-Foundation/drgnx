@@ -71,6 +71,16 @@
     (should (string-search "installer" (nth 2 r))))
   (should (plist-member (drgnx-doctor-facts) :history-hook)))
 
+(ert-deftest drgnx-doctor/keys-redirect ()
+  "The keys-redirect row: ok with Nidhogg's define-key redirect, a warning without it; and this Emacs (the test
+image's Nidhogg) has it."
+  (should-not (drgnx-doctor-check 'keys-redirect (drgnx-doctor-test--facts)))
+  (should (eq 'ok (drgnx-doctor-test--status 'keys-redirect (drgnx-doctor-test--facts :keys-redirect t))))
+  (let ((r (drgnx-doctor-check 'keys-redirect (drgnx-doctor-test--facts :keys-redirect nil))))
+    (should (eq 'warn (car r)))
+    (should (string-search "no define-key redirect" (nth 1 r))))
+  (should (eq t (plist-get (drgnx-doctor-facts) :keys-redirect))))
+
 (ert-deftest drgnx-doctor/pair-mode ()
   (should-not (drgnx-doctor-check 'pair-mode (drgnx-doctor-test--facts)))
   (should (eq 'ok (drgnx-doctor-test--status 'pair-mode (drgnx-doctor-test--facts :history-hook t))))

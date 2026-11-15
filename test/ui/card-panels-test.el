@@ -351,6 +351,7 @@ and the release, over the fringe that moved with the pointer, ends the drag: no 
 undefined', and no drag map is left to go on resizing with every later movement.  Needs Nidhogg's `mouse-drag-line'
 that takes the fringes' releases (drgnx keeps no workaround of its own)."
   (drgnx-card-panels-ui-test--with-explorer
+    (drgnx-test-wait-stages)              ; no module stage ends while the row's global binding stands
     (let ((was (lookup-key global-map [right-fringe down-mouse-1])))
       (unwind-protect
           (let* ((_ (define-key global-map [right-fringe down-mouse-1] #'drgnx-look-edge-drag))

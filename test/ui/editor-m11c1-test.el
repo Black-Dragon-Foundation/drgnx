@@ -75,7 +75,7 @@
            (drgnx-agents--sessions nil)
            (drgnx-agent-panel-list--last (make-hash-table :test #'eq :weakness 'key))
            (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
-           (drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-last nil)
+           (drgnx-keys--session-layers nil) (drgnx-keys-last nil)
            (drgnx-surfaces--usage nil) (drgnx-surfaces--usage-dirty nil)
            (drgnx-shortcuts-chord-wait 3.0)
            (display-buffer-alist nil) (display-buffer-overriding-action '(nil))

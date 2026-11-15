@@ -205,6 +205,7 @@
                    "é1\n2"))
     (drgnx-tty-session-key s "<up>")
     (should (eq (drgnx-tty-session-wait s '(with-current-buffer "*scratch*" (and (= (line-number-at-pos) 1) 1))) 1))
+    (drgnx-tty-session-wait-stages s)
     (drgnx-tty-session-key s "C-x")
     (drgnx-tty-session-key s "b")
     (should (string-prefix-p "Switch to buffer" (drgnx-tty-session-wait s '(minibuffer-prompt))))
@@ -215,5 +216,65 @@
     (drgnx-tty-session-eval s '(send-string-to-terminal (concat "\e]52;c;" (base64-encode-string "hello") "\a")))
     (drgnx-test-wait (lambda () (drgnx-tty-session-clipboard s)) :what "the OSC 52 copy in the paste buffer")
     (should (equal (drgnx-tty-session-clipboard s) "hello"))))
+
+(ert-deftest drgnx-tty-harness/stop-ends-what-still-writes-into-the-run ()
+  "A process the session's Emacs started and detached, as `ratatoskr ensure' starts the hub, that keeps writing into
+the run directory (its drgnx-data) is ended before the directory goes: the stop removes the directory whole and no
+writer is left.  Its command line names no part of the run directory, so only the session's environment tells; and
+it is no child of the session's Emacs (the shell that started it has exited), so Emacs does not end it as it exits."
+  (let* ((s (drgnx-tty-session-start))
+         (run (plist-get s :run))
+         (dir (expand-file-name "drgnx-data/kx-writer" run)))
+    (unwind-protect
+        (progn
+          (should (drgnx-tty-session-eval
+                   s '(progn (make-process :name "kx-writer" :noquery t :connection-type 'pipe
+                                           :command (list "sh" "-c"
+                                                          (concat "setsid sh -c 'd=$DRGNX_DATA_DIR/kx-writer; mkdir -p $d; "
+                                                                  ;; echo, not `:': a special builtin's failed
+                                                                  ;; redirection would end the shell once $d goes
+                                                                  "while :; do echo > $d/f 2>/dev/null; rm -f $d/f; done' "
+                                                                  "</dev/null >/dev/null 2>&1 &")))
+                             t)))
+          (drgnx-test-wait (lambda () (file-directory-p dir)) :what "the writer's directory")
+          (drgnx-tty-session-stop s)
+          (should-not (file-exists-p run))
+          (should-not (eq 0 (car (drgnx-ui--run "pgrep" "-u" (number-to-string (user-uid)) "-f" "--" "kx-writer; mkdir")))))
+      (drgnx-ui--run "pkill" "-KILL" "-u" (number-to-string (user-uid)) "-f" "--" "kx-writer; mkdir"))))
+
+(defun drgnx-tty-harness-test--hold (sess secs)
+  "Make SESS's Emacs run Lisp for SECS s without answering (a timer it runs at once: a busy stage step)."
+  (drgnx-tty-session-eval
+   sess `(progn (run-at-time 0 nil (lambda () (let ((end (+ (float-time) ,secs))) (while (< (float-time) end)))))
+                t)))
+
+(ert-deftest drgnx-tty-harness/stage-wait-outlasts-a-busy-emacs ()
+  "The stage wait waits for an Emacs that holds its answer longer than one look used to allow (5 s): a stage step
+can load a package that long."
+  (let ((s (drgnx-tty-session-start)))
+    (unwind-protect
+        (progn (drgnx-tty-session-wait-stages s)
+               (drgnx-tty-harness-test--hold s 7)
+               (should (drgnx-tty-session-wait-stages s)))
+      (drgnx-tty-session-stop s))))
+
+(ert-deftest drgnx-tty-harness/stage-wait-says-why-when-emacs-stays-silent ()
+  "An Emacs that does not answer before the stage wait's time is up fails it with the cause: that it stopped
+answering and what /proc says it does (here: running Lisp), not a bare timeout."
+  (let ((s (drgnx-tty-session-start)))
+    (unwind-protect
+        (progn (drgnx-tty-session-wait-stages s)
+               (drgnx-tty-harness-test--hold s 30)
+               (let ((msg (cadr (should-error (drgnx-tty-session-wait-stages s 3) :type 'drgnx-ui-error))))
+                 (should (string-search "its Emacs stopped answering" msg))
+                 (should (string-match-p "/proc: pid [0-9]+, state R" msg))))
+      (drgnx-tty-session-stop s))))
+
+(ert-deftest drgnx-tty-harness/stage-wait-at-session-start-in-a-loop ()
+  "The stage wait right after a session starts (where its 5 s looks once failed, 1 run in 30), ten sessions over."
+  (dotimes (_ 10)
+    (let ((s (drgnx-tty-session-start)))
+      (unwind-protect (should (drgnx-tty-session-wait-stages s))
+        (drgnx-tty-session-stop s)))))
 
 ;;; harness-test.el ends here

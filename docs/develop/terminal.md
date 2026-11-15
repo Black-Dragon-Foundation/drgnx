@@ -438,7 +438,10 @@ image) is drawn by the next Emacs pixel for pixel as before, the cursor's row as
   and the text a printable key types) and `term/text` (`drgnx-term-send-string`). `drgnx-term-mode-map` binds every
   raw key (control, meta, the named keys) to `drgnx-term-send-event`; `drgnx-term-apply-keys` takes out the keys the
   active profile keeps for drgnx (`drgnx-terminal-key-split`, with `drgnx-term-reserved-keys`), on every key-stack
-  change. `term/paste` sends the kill ring's newest entry (bracketed by the engine when the program asked).
+  change. The split lists the profile's keys in `drgnx-term-mode-map` itself too (`drgnx-terminal--map-bindings`: Find
+  on C-f, Paste on C-y in the Emacs profile), whatever their first key: they reach drgnx, not the program, and the key
+  sheet's "In the terminal" section names them. Those keys sit in the map's key layer (docs/develop/key-layers.md), so
+  the raw binding of their first event has to go, or it would shadow the layer. `term/paste` sends the kill ring's newest entry (bracketed by the engine when the program asked).
 - **Key repeats and releases** (Nidhogg only): a key read with `nidhogg-last-key-repeat` set goes as `action`
   `repeat`. While the selected window shows a terminal whose `term` says `key_events`, or a key pressed in one is
   held, `drgnx-term--key-gate` sets `nidhogg-key-events`, so releases arrive as `key-release` special events

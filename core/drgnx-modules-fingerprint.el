@@ -20,8 +20,6 @@
 (require 'timer)
 (require 'loadhist)
 
-(defvar drgnx-keys--applied)            ; drgnx-keys, when loaded
-
 (defvar drgnx-modules-fingerprint-hooks
   '(kill-buffer-hook kill-emacs-hook after-change-functions window-buffer-change-functions
                      window-size-change-functions window-selection-change-functions window-state-change-functions
@@ -314,6 +312,40 @@ keymap (and the one in use), the minor mode maps, the selected frame's parameter
     (when extra (setq scan (plist-put scan :all-hooks (nconc extra (plist-get scan :all-hooks)))))
     scan))
 
+(defvar drgnx-keys--yours)
+(defvar drgnx-keys--yours-in-maps)
+(defvar drgnx-keys--yours-everywhere)
+(defvar drgnx-keys-user-map)
+(defvar drgnx-keys--attached)
+(defvar drgnx-keys--foreign-on)
+(defvar drgnx-keys-last)
+
+(defun drgnx-modules-fingerprint--map-size (map)
+  "The bindings of keymap MAP, a nil one too, its sub-keymaps walked (an evil auxiliary keymap) and its parent left out."
+  (let ((n 0))
+    (map-keymap-internal
+     (lambda (_ev def) (setq n (+ n (if (and (consp def) (keymapp def)) (drgnx-modules-fingerprint--map-size def) 1))))
+     map)
+    n))
+
+(defun drgnx-modules-fingerprint--keys-items ()
+  "What drgnx-keys holds that a test can leave behind, once that library is loaded: ((keys NAME) . VALUE) for each
+that is not at rest.  The counts of your keys (global, in named maps, of `:everywhere' keys), the bindings of your
+map (its auxiliary keymaps too), the layers attached above drgnx's maps, the foreign layer when on, and a global map
+other than `global-map' while no profile is applied."
+  (when (featurep 'drgnx-keys)
+    (let (items)
+      (dolist (it (list (cons '(keys yours) (hash-table-count drgnx-keys--yours))
+                        (cons '(keys yours-in-maps) (hash-table-count drgnx-keys--yours-in-maps))
+                        (cons '(keys yours-everywhere) (length drgnx-keys--yours-everywhere))
+                        (cons '(keys user-map) (drgnx-modules-fingerprint--map-size drgnx-keys-user-map))
+                        (cons '(keys attached) (length drgnx-keys--attached))))
+        (unless (eql (cdr it) 0) (push it items)))
+      (when drgnx-keys--foreign-on (push (cons '(keys foreign-layer) 'on) items))
+      (unless (or drgnx-keys-last (eq (current-global-map) global-map))
+        (push (cons '(keys global-map) 'not-global-map) items))
+      items)))
+
 (defun drgnx-modules-fingerprint (&optional full)
   "A plist of the global state a module or a test can leave behind (see this file's commentary).
 Cheap: meant to run around every test.  With FULL, a `mapatoms' scan of every hook variable and every advised
@@ -345,7 +377,7 @@ function (about 12 ms): once per test file.  The diff of two full ones reads `:a
                  (drgnx-modules-fingerprint--alist-items 'frame-parameter 'default-frame-alist)
                  :global-minor-modes
                  (drgnx-modules-fingerprint--list-items 'minor-mode 'global-minor-modes)
-                 :keys-applied (and (boundp 'drgnx-keys--applied) (length drgnx-keys--applied))
+                 :keys (drgnx-modules-fingerprint--keys-items)
                  :registries regs)))
       (if full
           (append cheap (drgnx-modules-fingerprint--full-items) (drgnx-modules-fingerprint--session-items))
@@ -447,10 +479,6 @@ of the two fingerprints has (FULL against cheap) are skipped."
                          out
                          (pcase field
                            (:features (drgnx-modules-fingerprint--diff-features b a))
-                           (:keys-applied
-                            (unless (equal a b)
-                              (list (list :what (format "drgnx-keys--applied length %s -> %s" b a)
-                                          :source nil))))
                            (_ (drgnx-modules-fingerprint--diff-items b a)))))))
     out))
 

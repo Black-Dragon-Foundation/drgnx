@@ -23,6 +23,7 @@
 (declare-function vertico-mode "vertico")
 (declare-function marginalia-mode "marginalia")
 (declare-function global-corfu-mode "corfu")
+(declare-function corfu-quit "corfu")
 (declare-function drgnx-wb-row-box "drgnx-wb")
 (defvar vertico--index)
 
@@ -89,10 +90,22 @@ current row: subtle is under 4.5:1 on the selection.  Runs on the current row on
   "`vertico--format-candidate' (ORIG with CAND PREFIX SUFFIX INDEX START) drawn as a row (`drgnx-completion--row')."
   (drgnx-completion--row (funcall orig cand prefix suffix index start) (= index vertico--index)))
 
+(defun drgnx-completion--quit-hides-popup (data &rest _)
+  "`command-error-function' (before): a C-g that arrives as a quit hides corfu's popup, as Esc does in VS Code.
+C-g typed while Lisp runs (a timer, a redisplay) is a quit, not a key, so corfu's own C-g (`corfu-quit') never runs;
+DATA is the error, (quit) for one.  Added to the global value.  An error in corfu never replaces the one reported."
+  (when (and (eq (car-safe data) 'quit) (bound-and-true-p completion-in-region-mode) (fboundp 'corfu-quit))
+    (ignore-errors (corfu-quit))))
+
+(defun drgnx-completion--teardown ()
+  "extra/completion's teardown: the quit handler off `command-error-function', and the palette's frame deleted."
+  (remove-function (default-value 'command-error-function) #'drgnx-completion--quit-hides-popup)
+  (drgnx-palette-frame-delete))
+
 (drgnx-module-define 'extra/completion
                      :doc "Vertical minibuffer lists, any-order matching, completion popups as you type."
                      :stage 'idle :packages '(vertico orderless marginalia corfu)
-                     :teardown #'drgnx-palette-frame-delete
+                     :teardown #'drgnx-completion--teardown
                      :setup (lambda ()
                               (require 'vertico) (require 'orderless) (require 'marginalia) (require 'corfu)
                               (require 'vertico-multiform) (require 'vertico-buffer) (require 'drgnx-palette-frame)
@@ -122,7 +135,10 @@ current row: subtle is under 4.5:1 on the selection.  Runs on the current row on
                               (vertico-mode 1)
                               (vertico-multiform-mode 1)
                               (marginalia-mode 1)
-                              (global-corfu-mode 1)))
+                              (global-corfu-mode 1)
+                              ;; a C-g that comes as a quit hides the popup too (the teardown removes it)
+                              (add-function :before (default-value 'command-error-function)
+                                            #'drgnx-completion--quit-hides-popup)))
 
 (provide 'drgnx-completion)
 ;;; drgnx-completion.el ends here

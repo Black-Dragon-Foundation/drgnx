@@ -164,6 +164,7 @@ tab before b.txt replaces it.  Tabs are apart by a gap of spaces (wb/drgnx-chrom
   ;; terminal's event must reach Emacs as one, and the editor must stay as it was)
   (drgnx-tty-session-with (s :size "120x40")
     (drgnx-tty-mouse-test--project s)
+    (drgnx-tty-session-wait-stages s)
     (drgnx-tty-session-eval s '(progn (setq drgnx-tty-mouse-test--last nil)
                                       (define-key global-map [header-line down-mouse-1] #'ignore)
                                       (define-key global-map [header-line mouse-1]
@@ -202,6 +203,7 @@ tab before b.txt replaces it.  Tabs are apart by a gap of spaces (wb/drgnx-chrom
 (ert-deftest drgnx-tty-mouse/the-menu-bar-opens-the-tty-menu ()
   (drgnx-tty-session-with (s :size "120x40")
     (drgnx-tty-mouse-test--project s)
+    (drgnx-tty-session-wait-stages s)
     (drgnx-tty-session-eval s '(progn (defvar drgnx-tty-mouse-test--ran nil)
                                       (defun drgnx-tty-mouse-test--item () (interactive) (setq drgnx-tty-mouse-test--ran t))
                                       (define-key global-map [menu-bar file drgnx-test-item]

@@ -504,6 +504,7 @@ which runs `tmux'): for a caller that shows no check reading them, whose rows ar
            :native-available native
            :history-hook (and (fboundp 'nidhogg-history-track) (fboundp 'nidhogg-history-drain)
                               (fboundp 'nidhogg-history-pending-p) t)
+           :keys-redirect (boundp 'nidhogg-define-key-redirect-function)
            :native-compiles (if native (drgnx-doctor--native-compiles) "not built with native compilation")
            :treesit (and (fboundp 'treesit-available-p) (treesit-available-p))
            :view-model (fboundp 'nidhogg-view-push)
@@ -707,6 +708,15 @@ severity, the fix the first `:fix'."
                                 (if (plist-get f :history-hook)
                                     (list 'ok "the change hook is there" nil)
                                   (list 'warn "this Emacs has no Nidhogg change hook: the edit history stays off (no revert, no pair mode)"
+                                        drgnx-doctor-nidhogg-hint)))))
+
+(drgnx-doctor-define 'keys-redirect :group "Emacs"
+                     :doc "This Emacs has Nidhogg's define-key redirect, which tells your own key bindings from packages'"
+                     :check (lambda (f)
+                              (when (plist-member f :keys-redirect)
+                                (if (plist-get f :keys-redirect)
+                                    (list 'ok "the define-key redirect is there" nil)
+                                  (list 'warn "this Emacs has no define-key redirect: a key a package binds can take the place of one of yours, and yours can lose to the profile's"
                                         drgnx-doctor-nidhogg-hint)))))
 
 (drgnx-doctor-define 'pair-mode :group "Emacs"

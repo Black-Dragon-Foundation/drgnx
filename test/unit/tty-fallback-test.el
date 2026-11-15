@@ -69,7 +69,6 @@ binding are taken off afterwards."
           (process-environment (append (list (concat "XDG_STATE_HOME=" state) (concat "DRGNX_CONFIG_DIR=" cfg))
                                        process-environment))
           (real-frame-parameter (symbol-function 'frame-parameter))
-          (drgnx-keys--defaults tty-fallback-test--defaults)
           (drgnx-tty-fallback t) (drgnx-tty-fallback-hint t) (drgnx-tty-chord-prefix "<f6>")
           (drgnx-tty-fallback--cache nil)
           (drgnx-hooks-problems nil)
@@ -79,6 +78,7 @@ binding are taken off afterwards."
          (cl-letf (((symbol-function 'frame-parameter)
                     (lambda (f p) (if (eq p 'environment) ,env (funcall real-frame-parameter f p))))
                    ((symbol-function 'frame-terminal) (lambda (&optional _) tty-fallback-test--term))
+                   ((symbol-function 'drgnx-tty-fallback-global-map) (lambda () tty-fallback-test--defaults))
                    ((symbol-function 'terminal-name) (lambda (&optional term) (symbol-name term)))
                    ((symbol-function 'terminal-live-p) (lambda (_term) t))
                    ;; the editor tabs' close glyph (drgnx-face-glyph) asks the terminal for its coding system; a
@@ -231,12 +231,11 @@ binding are taken off afterwards."
   (let* ((dir (make-temp-file "drgnx-cfg" t))
          (process-environment (cons (concat "DRGNX_CONFIG_DIR=" dir) process-environment))
          (drgnx-keys-last (list :bindings (tty-fallback-test--bindings "VS Code")))
-         (drgnx-keys--defaults tty-fallback-test--defaults)
          (drgnx-settings-apply--entries nil)           ; a process that has not applied settings.el
          (drgnx-keys-tty-fallback nil)
          (drgnx-tty-fallback--cache nil))
     (unwind-protect
-        (progn
+        (cl-letf (((symbol-function 'drgnx-tty-fallback-global-map) (lambda () tty-fallback-test--defaults)))
           (with-temp-file (expand-file-name "settings.el" dir)
             (insert "(drgnx-settings\n :version 1\n (drgnx-keys-tty-fallback ((\"C-S-p\" . \"M-Z\"))))\n"))
           (should (equal (plist-get (tty-fallback-test--row (drgnx-tty-fallback-active-table) "C-S-p") :alt) "M-Z")))
@@ -435,7 +434,7 @@ binding are taken off afterwards."
   (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
         (ring-bell-function ring-bell-function) (use-dialog-box use-dialog-box)
         (use-short-answers use-short-answers) (inhibit-startup-screen inhibit-startup-screen)
-        (drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-profiles nil)
+        (drgnx-keys--session-layers nil) (drgnx-keys-profiles nil)
         (drgnx-keys-problems nil) (drgnx-keys-last nil))
     (drgnx--core-commands)
     (unwind-protect

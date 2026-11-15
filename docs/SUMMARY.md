@@ -76,6 +76,7 @@
 - [drgnx-px: the relay sidecar](develop/drgnx-px.md)
 - [Settings (contributors)](develop/settings.md)
 - [The hub and the gateway](develop/hub.md)
+- [Key layers](develop/key-layers.md)
 - [The terminal](develop/terminal.md)
 - [Extensions](develop/extensions.md)
 - [Live recordings](develop/recordings.md)

@@ -206,3 +206,17 @@ not with the error of reading a screen there is none of (which hid the timeout).
     (should (equal (drgnx-tty-session--session-bus "unix:path=/tmp/dbus-x" "drgnx-ui-1") "unix:path=/tmp/dbus-x"))
     (should-error (drgnx-tty-session--session-bus nil "drgnx-ui-1") :type 'drgnx-ui-error)
     (should-error (drgnx-tty-session--session-bus "unix:path=/run/user/1/bus" "drgnx-ui-1") :type 'drgnx-ui-error)))
+
+(ert-deftest drgnx-tty-session/the-settle-rule-waits-for-a-repeater-only-close-to-its-run ()
+  "`kx-unsettled' (the one settle rule): a one-shot timer due within 1 s is still to run; a repeating one only within
+0.25 s of its run (one that repeats every second is always due within 1 s)."
+  (eval drgnx-tty-session--unsettled-defun t)
+  (cl-flet ((tm (in repeat) (let ((tm (timer-create)))
+                              (timer-set-time tm (time-add nil in) repeat)
+                              (timer-set-function tm #'ignore)
+                              tm)))
+    (let ((timer-idle-list nil))
+      (let ((timer-list (list (tm 0.5 nil)))) (should (kx-unsettled)))
+      (let ((timer-list (list (tm 0.5 1)))) (should-not (kx-unsettled)))
+      (let ((timer-list (list (tm 0.1 1)))) (should (kx-unsettled)))
+      (let ((timer-list (list (tm 5 nil)))) (should-not (kx-unsettled))))))

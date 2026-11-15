@@ -223,8 +223,9 @@ and third-party hooks, by hand), `unload-feature-special-hooks` and every bound 
 or `-functions` (a `-hooks` name holds hook names, as `unload-feature-special-hooks` does: no hook) (found once per Emacs with one `apropos-internal`, about 10 ms, and again by every full
 scan, so a new drgnx hook needs no line anywhere), the `add-function` advice on
 `drgnx-modules-fingerprint-function-variables`, `global-mode-string`, `auto-mode-alist`, `major-mode-remap-alist`,
-`after-load-alist`, `emulation-mode-map-alists`, `default-frame-alist`, `global-minor-modes`, the length of
-`drgnx-keys--applied`, and the keys of every registry in `drgnx-modules-fingerprint-registries` (data: a branch that
+`after-load-alist`, `emulation-mode-map-alists`, `default-frame-alist`, `global-minor-modes`, what drgnx-keys holds of yours (the counts of your keys, the bindings of your map with its
+auxiliary keymaps, the layers attached, the foreign layer when on, a global map other than `global-map` with no profile
+applied: `keys yours +1`), and the keys of every registry in `drgnx-modules-fingerprint-registries` (data: a branch that
 adds a registry adds one symbol). With a non-nil argument it adds a `mapatoms` scan of every bound `*-hook`,
 `*-hooks`, `*-functions` and `*-function` variable (an alias is read once, under its base name; a value that is not a
 proper list is skipped) and every advised function (`advice-mapc`), which finds what the lists miss; a diff of two
@@ -278,7 +279,8 @@ Inside BODY, `drgnx-modules--table` holds only the selected modules and the modu
   module's teardown too. The product's after-teardown function re-applies the keys and menus from the registry; the
   helper puts what it changed back (the applied keys, the menu items, the which-key labels, `menu-bar-update-hook`,
   `context-menu-functions`, `context-menu-mode`, and the everywhere alist's place in `emulation-mode-map-alists`,
-  which the modal core keeps there even while it holds no key) before the `:strict` comparison, provided none of the keys or menus
+  which the modal core keeps there even while it holds no key, and your keys as drgnx-keys records them: its tables
+  of yours, the layers waiting for a parent and their hook, your map in place) before the `:strict` comparison, provided none of the keys or menus
   were applied before the helper ran (in a live session they were: then the re-application stays). A teardown problem (an undo that failed, named by its label) fails the test. A module that
   is `:teardown 'restart`, which stays on in a session, is unwound all the same (its cleanup stack, newest first):
   its record must be exact.
@@ -1192,7 +1194,9 @@ dirs) and drive the session through `harness/drgnx-tty-session.el`:
   `drgnx-tty-session-stop` and the sweep of sessions whose runner died kill it (its command line names the run
   directory).
 - **Cleanup:** `drgnx-tty-session-stop` asks Emacs to exit, kills the tmux server and anything still running from the
-  run directory, then removes the run and socket directories. `drgnx-tty-session-with` stops the session even when
+  run directory, then ends every process whose environment names the run (`DRGNX_UI_RUN`), such as the hub that
+  `ratatoskr ensure` detaches and that keeps writing into `drgnx-data`, and waits until they are gone (an error after
+  10 s). Only then does it remove the run and socket directories. `drgnx-tty-session-with` stops the session even when
   the test fails, and `kill-emacs-hook` stops any session a test left running. A runner killed with SIGKILL runs
   no hook, so two more things cover it. The server runs as `setsid timeout -s TERM -k 10 BUDGET tmux … -D` and ends
   after `$DRGNX_TTY_MAX_RUNTIME` seconds (default 1800) with everything in it. Each start also sweeps the sessions
@@ -1206,6 +1210,32 @@ dirs) and drive the session through `harness/drgnx-tty-session.el`:
   ESC, DEL, and the arrows, Home, End, PgUp, PgDn and F1–F12 with modifiers as xterm sends them. Text given as a
   multibyte string goes as UTF-8. Mouse input uses
   SGR reports on 1-based cells (`-click`, `-wheel`, `-drag`).
+- **Module stages first:** every module stage that ends applies the keys again (`drgnx-keys-apply`), so a row that
+  binds a key, or sends C-g, first waits for the daemon's stages: `drgnx-tty-session-wait-stages` (the GUI tier's
+  `drgnx-test-wait-stages`) waits until no idle step is pending, then reaches the once-only stages still armed
+  (first input, first file, first graphical frame). Each look waits for the daemon's answer as long as the wait's
+  time (30 s) leaves, since a step can hold the daemon for seconds; when the time runs out the error gives the
+  cause: the idle steps still pending, or that the daemon stopped answering, with its last answer and what /proc
+  says the process does (state, wait channel, CPU time). `drgnx-tty-session-key-barrier` does it before binding `<f7>`.
+  A row that binds a key of its own uses one no key profile claims (`<f7>`; never `<f9>`, VS Code's breakpoint key),
+  or a keymap of its own on `emulation-mode-map-alists`.
+- **C-g only when the row is about C-g:** C-g typed into a terminal is Emacs's interrupt whenever the daemon is not
+  waiting for input (a redisplay, a timer, the test's own eval): it quits whatever runs and never reaches a popup's
+  map as a key. A row that only needs a popup closed closes it by a call in that frame (the mixed rows:
+  `transient--emergency-exit`, `corfu-quit`). A row that tests C-g itself sends it after
+  `drgnx-tty-session-input-barrier` and judges it by what ran (`kx-seen`), not by a screen a quit could leave as it
+  was. Every eval leaves Lisp behind it (its connection's sentinel, a redisplay), so a C-g sent right after one can
+  land in it. The barrier's eval only arms a timer in the daemon, which waits until no server connection is left, no
+  native compilation runs and no timer is due within 1 s (a repeating one: within 0.25 s, since one that repeats every
+  second is always due within 1 s). So the quiet it promises is a margin, not a lock: at least 0.25 s before a
+  repeating timer runs (1 s before a one-shot), in which the C-g must reach the key reader after the title, which
+  tmux's round trip of milliseconds does with room to spare. The barrier stops JIT native compilation from taking more files, so it waits only
+  for the compilations already running (a cold eln cache would otherwise keep it busy for minutes); the rest of the
+  row runs without JIT compilation. It then writes a window title, and the barrier returns when tmux reports that
+  title. The stage wait keeps the same rule (`kx-unsettled`), on its idle steps; on a timeout both say what was still
+  to run, by timer function or drgnx timer key. Process output can still run Lisp in that moment, which no form sees coming: such a C-g is a
+  quit, and the row fails by name instead of passing. A row about a quit makes one on purpose: a timer that keeps
+  the daemon busy until `quit-flag` is set (`drgnx-tty-popups/completion-popup-goes-on-a-quit`).
 - **Output:** the screen comes from `capture-pane` (`-screen`, `-find`, `-wait-screen`, `-quiet`; `-find-below` and
   `-wait-screen-below` look only under a heading's line, for a text shown in two places). The paste buffer
   shows what OSC 52 copied (`-clipboard`), and `-pane-flags` reports the pane's mouse and key modes. The inner Emacs's
