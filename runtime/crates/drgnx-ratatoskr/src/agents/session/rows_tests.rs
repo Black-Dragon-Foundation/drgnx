@@ -198,10 +198,14 @@ fn a_steps_time_and_cost_are_measured_in_the_fonts_they_are_drawn_in() {
         right: &right,
     };
     group_rows(3, &stepped("completed"), &[], None, &cx);
-    let want: Vec<(String, String)> = [("15.0 s", "ui"), (" · ", "code-small"), ("$0.05", "code-small")]
-        .iter()
-        .map(|(t, r)| ((*t).to_owned(), (*r).to_owned()))
-        .collect();
+    let want: Vec<(String, String)> = [
+        ("15.0 s", "ui"),
+        (" · ", "code-small"),
+        ("$0.05", "code-small"),
+    ]
+    .iter()
+    .map(|(t, r)| ((*t).to_owned(), (*r).to_owned()))
+    .collect();
     assert_eq!(*seen.borrow(), want);
 }
 

@@ -586,7 +586,8 @@ back.  Each width is given the hub's rows for it before it is measured."
     (unwind-protect
         (dolist (delta '(0 300))
           (unless (zerop delta)
-            (window-resize w (min delta (window-max-delta w t nil nil nil nil t)) t nil t)
+            ;; IGNORE: the dock's side window preserves its width
+            (window-resize w (min delta (window-max-delta w t nil t nil nil t)) t t t)
             (redisplay t)
             (when (<= (window-body-width w t) from) (error "the panel's window could not be widened (%d px)" from)))
           (unless (drgnx-look-scene--until 10 (format "the panel's rows at %d px" (window-body-width w t))
@@ -597,7 +598,7 @@ back.  Each width is given the hub's rows for it before it is measured."
                            (drgnx-view-env--envs (drgnx-view-patch-view (buffer-local-value 'drgnx-view-patch buffer))))
                    (frame-char-height)
                    (seq-take (drgnx-look-scene--panel-wide-rows buffer w) 6))))
-      (window-resize w (- from (window-body-width w t)) t nil t)
+      (window-resize w (- from (window-body-width w t)) t t t)
       (redisplay t))))
 
 (defun drgnx-look-scene--panel-short (buffer)

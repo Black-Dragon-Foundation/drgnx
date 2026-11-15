@@ -2117,7 +2117,7 @@ foreground, before it the style's other attributes as one anonymous face, shared
   "The fit guard: one measure of TEXT's segment before its first stop of STOPS (none: nothing measured), with the
 row's faces and images on it (RENDER dresses TEXT first), so a proportional face measures as it is drawn.  When it runs
 past that stop's PX, the segment is fitted again (`drgnx-view-patch--fit-faced'), padded so later positions keep their
-place, and the measure reported (`view/measured').  Returns the new text, or nil when TEXT fits."
+place (the padding displayed as nothing), and the measure reported (`view/measured').  Returns the new text, or nil when TEXT fits."
   (when-let* ((stop (car stops)))
     (let* ((end (car stop)) (limit (cadr stop)) (seg (substring text 0 end))
            (w (funcall drgnx-view-patch-measure-function seg)))
@@ -2128,7 +2128,9 @@ place, and the measure reported (`view/measured').  Returns the new text, or nil
                  (list :view (drgnx-view-patch-view state) :class (drgnx-view-patch-class state)
                        :measured (list (list "ui" (substring-no-properties seg) w))))
         (let ((fit (drgnx-view-patch--fit-faced seg limit)))
-          (concat fit (make-string (max 0 (- end (length fit))) ?\s) (substring text end)))))))
+          ;; the padding draws nothing: drawn, it would end the segment past its stop, whose `:align-to' would then
+          ;; take no width and push the text after it past the window's edge
+          (concat fit (propertize (make-string (max 0 (- end (length fit))) ?\s) 'display "") (substring text end)))))))
 
 (defun drgnx-view-patch-render (key)
   "RENDER of `drgnx-view-rows': KEY's stored row as text, in the current (the view's) buffer.  The guard

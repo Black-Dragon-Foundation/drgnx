@@ -68,6 +68,9 @@ impl Default for Look {
     }
 }
 
+/// A text's parts as (text, font role), each measured in the font it is drawn in (`drgnx-view-env-roles`).
+pub type Parts<'p> = [(&'p str, &'p str)];
+
 /// What a group's rows read besides its entries.
 pub struct Cx<'a> {
     pub look: &'a Look,
@@ -76,9 +79,8 @@ pub struct Cx<'a> {
     pub always: &'a dyn Fn(&Entry) -> bool,
     /// The line the hub cached for how a tool entry was allowed (its permission request's decision), if it was.
     pub prov: &'a dyn Fn(&Entry) -> Option<String>,
-    /// The px a right-aligned text starts at: its parts as (text, font role), each measured in the font it is drawn in
-    /// (`drgnx-view-env-roles`).
-    pub right: &'a dyn Fn(&[(&str, &str)]) -> u32,
+    /// The px a right-aligned text of these [`Parts`] starts at.
+    pub right: &'a dyn Fn(&Parts<'_>) -> u32,
 }
 
 /// One group as the session hands it to the panel: its head's index and entry, the thoughts that fold under it, and

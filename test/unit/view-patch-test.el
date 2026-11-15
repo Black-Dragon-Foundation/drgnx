@@ -183,6 +183,22 @@ it takes `image-scaling-factor', a guess from the font: 1.6 at scale 2, and the 
       (let ((m (cdr (assoc "view/measured" drgnx-view-patch-test--sent))))
         (should (equal '(("ui" "abcdefgh" 80)) (plist-get m :measured)))))))
 
+(ert-deftest drgnx-view-patch/a-refit-segment-ends-before-its-stop-as-drawn ()
+  "The refit segment is padded to its old length so later positions keep their place, and the padding draws nothing: drawn
+spaces put the segment past its stop, whose `:align-to' then takes no width, and the text after it past the window's
+edge (the agent panel's step time, 4 px at s1)."
+  (drgnx-view-patch-test--with
+    ;; every character is 10 px, one displayed as nothing 0
+    (let ((drgnx-view-patch-measure-function
+           (lambda (s) (* 10 (cl-loop for i below (length s) count (not (equal "" (get-text-property i 'display s))))))))
+      (drgnx-view-apply-patch (drgnx-view-patch-test--patch
+                               (list (list :reset (list (drgnx-view-patch-test--row "a" "abcdefgh rest"
+                                                                                    :stops '((8 50))))))))
+      (drgnx-view-patch-test--draw)
+      (let ((text (buffer-substring (point-min) (point-max))))
+        (should (string-prefix-p "abcd…" text))
+        (should (<= (funcall drgnx-view-patch-measure-function (substring text 0 8)) 50))))))
+
 (defface drgnx-view-patch-test-narrow '((t)) "A test face: its characters measure 5 px, the others 10.")
 
 (ert-deftest drgnx-view-patch/a-segment-is-measured-in-its-faces ()
