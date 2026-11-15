@@ -137,6 +137,12 @@ of the scene, not of the run: the other scenes are still drawn."
                                                     (drgnx-ui-el (expand-file-name (format "%s-%s-facts.eld" name tag)
                                                                                    out))
                                                     name))))
+              ;; no hub-fed row wider than its window, as drawn, narrower and wider (after the shot: it resizes)
+              (setq errs (append errs (drgnx-look-scenes--call
+                                       sess (format "(drgnx-look-scene-widths %s)"
+                                                    (drgnx-ui-el (expand-file-name (format "%s-%s-widths.eld" name tag)
+                                                                                   out)))
+                                       180)))
               (when-let* ((k (plist-get plist :then))) (drgnx-ui-act sess (list :keys k)) (sleep-for 1))
               (push (cons name errs) errors))))
       (when sess (ignore-errors (drgnx-ui-stop (plist-get sess :name)))))
