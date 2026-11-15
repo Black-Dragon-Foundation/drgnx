@@ -266,6 +266,8 @@ DRGNX_LOOK_BT=1 its backtrace follows)."
 (declare-function drgnx-view-env-classes "drgnx-view-env")
 (declare-function drgnx-view-patch-view "drgnx-view")
 (declare-function drgnx-view-patch-version "drgnx-view")
+(declare-function drgnx-view-patch-sja "drgnx-view")
+(declare-function drgnx-view-sja-row-start "drgnx-view-sja")
 (defvar drgnx-view-patch)
 
 (defvar drgnx-look-scene-rows-wait 20
@@ -315,10 +317,22 @@ A hub-fed view shown without the hub's rows is one of the errors (`drgnx-look-sc
     (message nil)
     (when (fboundp 'drgnx-look-echo--status-clear) (drgnx-look-echo--status-clear))))
 
+(defun drgnx-look-scene--forced-theme ()
+  "The theme $DRGNX_LOOK_THEME names for every scene (`light', `dark', `hc' or a theme's name), or nil when unset."
+  (let ((v (getenv "DRGNX_LOOK_THEME")))
+    (pcase v
+      ((or 'nil "") nil)
+      ("light" 'drgnx-light)
+      ("dark" 'drgnx-dark)
+      ((or "hc" "high-contrast") 'drgnx-high-contrast)
+      (_ (intern v)))))
+
 (defun drgnx-look-scene--theme (theme)
+  "Load THEME alone, or the theme $DRGNX_LOOK_THEME names when it is set (`drgnx-look-scene--forced-theme'): every
+scene draws in it then, those named for another theme too."
   (drgnx-look-scene--try "theme"
     (mapc #'disable-theme custom-enabled-themes)
-    (load-theme theme t)
+    (load-theme (or (drgnx-look-scene--forced-theme) theme) t)
     (drgnx-look-scene--views-settle)))
 
 (defvar drgnx-view-patch--buffers)
@@ -384,6 +398,8 @@ window starting at line START."
 gateway-test.el (changed, not saved), drgnx-job.el (a preview) and Magit; the Explorer; drgnx-gateway.el at 216:34,
 from 201."
   (drgnx-look-scene--packages elpa)
+  ;; $DRGNX_LOOK_THEME: the scenes that set no theme of their own (Magit, Org, …) draw in it too
+  (when (drgnx-look-scene--forced-theme) (drgnx-look-scene--theme nil))
   ;; the title row as on GNOME, the mockups' desktop, where `auto' is `drgnx': the container's headless mutter names
   ;; no desktop, so the frame is told it is GNOME's (the facts' :wm says so)
   (drgnx-look-scene--try "title"
@@ -541,6 +557,11 @@ the picture is the scrolled panel."
           (error "The transcript fits the panel's window: draw this scene alone (DRGNX_LOOK_ONLY='^agent-panel-long$'), which gives the mock agent its long transcript"))))
     (drgnx-look-scene--try "panel resize" (drgnx-look-scene--panel-resize drgnx-look-scene--panel))
     (drgnx-look-scene--try "panel wheel" (drgnx-look-scene--panel-wheel drgnx-look-scene--panel))
+    ;; the three windows' checks (docks plan, Task 8); the header clicks leave the transcript scrolled up a page
+    (drgnx-look-scene--try "docks wheel" (drgnx-look-scene--panel-docks-wheel drgnx-look-scene--panel))
+    (drgnx-look-scene--try "docks resize" (drgnx-look-scene--panel-docks-resize drgnx-look-scene--panel))
+    (drgnx-look-scene--try "docks short" (drgnx-look-scene--panel-short drgnx-look-scene--panel))
+    (drgnx-look-scene--try "header clicks" (drgnx-look-scene--panel-header-clicks drgnx-look-scene--panel))
     (drgnx-look-scene--try "pinned clicks" (drgnx-look-scene--panel-clicks drgnx-look-scene--panel))))
 
 (defun drgnx-look-scene--panel-resize (buffer)
@@ -657,6 +678,227 @@ still be at the top, and each click must run its command."
           (unless (memq 'agents-panel-pin ran)
             (error "a mouse-1 click on the pin button through the event loop ran %S" ran)))))))
 
+;;;; The panel's three windows (the docks plan, 2026-11-15-agent-panel-docks.md, Task 8): a header window (hub view
+;;;; `agent-panel-top/SID', fitted, never scrolled), the transcript (`agent-panel/SID', the panel's main buffer) and the
+;;;; composer, the right area's bottom window.  The companions carry the window parameter `drgnx-area-part' (`above',
+;;;; `below'); the transcript is the main buffer.
+
+(defun drgnx-look-scene--has-row-p (buffer key)
+  "Whether BUFFER, a hub-fed view, holds the row KEY: drawn by Sjá, or in its Lisp rows."
+  (let ((s (buffer-local-value 'drgnx-view-patch buffer)))
+    (and s (if (drgnx-view-patch-sja s)
+               (and (drgnx-view-sja-row-start key buffer) t)
+             (let ((rows (drgnx-view-patch-rows s))) (and rows (gethash key rows) t))))))
+
+(defun drgnx-look-scene--area-windows (window)
+  "The windows of WINDOW's area (its `drgnx-role'), top to bottom: (WINDOW PART BUFFER-NAME) each."
+  (let ((role (window-parameter window 'drgnx-role)))
+    (mapcar (lambda (w) (list w (window-parameter w 'drgnx-area-part) (buffer-name (window-buffer w))))
+            (sort (seq-filter (lambda (w) (and role (eq (window-parameter w 'drgnx-role) role)))
+                              (window-list (window-frame window) 'nomini))
+                  (lambda (a b) (< (window-pixel-top a) (window-pixel-top b)))))))
+
+(defun drgnx-look-scene--docks (buffer)
+  "BUFFER's three panel windows (HEADER TRANSCRIPT COMPOSER), or an error naming what is missing."
+  (let* ((w (or (get-buffer-window buffer) (error "no window shows the panel")))
+         (area (drgnx-look-scene--area-windows w))
+         (part (lambda (p) (car (seq-find (lambda (e) (eq (nth 1 e) p)) area)))))
+    (unless (window-parameter w 'drgnx-role)
+      (error "the transcript's window is in no area (no `drgnx-role'): it is %S" (window-parameters w)))
+    (list (or (funcall part 'above)
+              (error "no header window (`drgnx-area-part' above) in the panel's area; its windows: %S"
+                     (mapcar #'cdr area)))
+          w
+          (or (funcall part 'below)
+              (error "no composer window (`drgnx-area-part' below) in the panel's area; its windows: %S"
+                     (mapcar #'cdr area))))))
+
+(defun drgnx-look-scene--fit-error (window what)
+  "Nil when WINDOW (WHAT: its name) is fitted to its buffer and starts at its top: its body's pixel height is its
+text's (±1 px), as `fit-window-to-buffer' measures it; else what differs."
+  (let* ((b (window-buffer window))
+         (text (cdr (window-text-pixel-size window (with-current-buffer b (point-min))
+                                            (with-current-buffer b (point-max)))))
+         (body (window-body-height window t)))
+    (cond ((/= (window-start window) (with-current-buffer b (point-min)))
+           (format "the %s window does not start at its top (start %d)" what (window-start window)))
+          ((/= (window-vscroll window t) 0)
+           (format "the %s window is scrolled by %d px" what (window-vscroll window t)))
+          ((> (abs (- body text)) 1)
+           (format "the %s window is not fitted: body %d px, its text %d px" what body text)))))
+
+(defun drgnx-look-scene--panel-three-windows (buffer)
+  "BUFFER, the panel's transcript, is the middle of three windows of its area: the header above it holds `p:head' of
+the hub's `agent-panel-top/' view, is fitted and carries the area's tab row; the transcript holds no `p:head'; the
+composer is the area's bottom window, fitted."
+  (redisplay t)
+  (pcase-let* ((`(,h ,w ,c) (drgnx-look-scene--docks buffer))
+               (hb (window-buffer h))
+               (hs (buffer-local-value 'drgnx-view-patch hb))
+               (area (drgnx-look-scene--area-windows w)))
+    (unless (and hs (string-prefix-p "agent-panel-top/" (drgnx-view-patch-view hs)))
+      (error "the header window shows %s, not the hub's view agent-panel-top/SID (its view %S)"
+             (buffer-name hb) (and hs (drgnx-view-patch-view hs))))
+    (drgnx-look-scene--until 10 (format "the header window's %s: its `p:head' row" (buffer-name hb))
+                             (lambda () (drgnx-look-scene--has-row-p hb "p:head")))
+    (when (drgnx-look-scene--has-row-p buffer "p:head")
+      (error "the transcript %s still holds `p:head': the header is in the header window only" (buffer-name buffer)))
+    (unless (and (< (window-pixel-top h) (window-pixel-top w)) (< (window-pixel-top w) (window-pixel-top c)))
+      (error "the windows are not header, transcript, composer from the top: %S" (mapcar #'cdr area)))
+    (unless (eq (car (car (last area))) c)
+      (error "the composer is not the area's bottom window: %S" (mapcar #'cdr area)))
+    (unless (and (window-parameter h 'header-line-format)
+                 (not (seq-find (lambda (e) (and (not (eq (car e) h)) (window-parameter (car e) 'header-line-format)))
+                                area)))
+      (error "the area's tab row is not on the header window alone: %S"
+             (mapcar (lambda (e) (cons (nth 1 e) (and (window-parameter (car e) 'header-line-format) t))) area)))
+    (when-let* ((e (or (drgnx-look-scene--fit-error h "header") (drgnx-look-scene--fit-error c "composer"))))
+      (error "%s" e))))
+
+(defun drgnx-look-scene--edges (window)
+  "WINDOW's pixel edges, start and vscroll: what must not change for a window that never moves."
+  (list (window-pixel-edges window) (window-start window) (window-vscroll window t)))
+
+(defun drgnx-look-scene--panel-docks-wheel (buffer)
+  "Wheel the transcript up and down over its window, with `pixel-scroll-precision-mode' on and off: the transcript
+moves each way, and the header window does not move (edges, start, vscroll)."
+  (pcase-let* ((`(,h ,w ,_) (drgnx-look-scene--docks buffer))
+               (was (bound-and-true-p pixel-scroll-precision-mode))
+               (header (drgnx-look-scene--edges h)))
+    (select-window w)
+    (unwind-protect
+        (dolist (precise '(nil t))
+          (pixel-scroll-precision-mode (if precise 1 -1))
+          (with-current-buffer buffer (goto-char (point-max)))
+          (set-window-point w (with-current-buffer buffer (point-max)))
+          (redisplay t)
+          (let* ((posn (posn-at-x-y 40 (/ (window-body-height w t) 2) w))
+                 (dist (lambda () (with-current-buffer buffer (- (point-max) (window-start w)))))
+                 (wheel (lambda (head n delta)
+                          (put head 'event-kind 'mouse-click)
+                          (drgnx-uitest-run (make-list n (if precise
+                                                             (list head posn 1 (cons 0 (if (eq head 'wheel-up) -1 1))
+                                                                   (cons 0.0 (float (- delta))))
+                                                           (list head posn))))
+                          (redisplay t)))
+                 (start (funcall dist))
+                 (still (lambda (how)
+                          (unless (equal (drgnx-look-scene--edges h) header)
+                            (error "wheel %s (pixel precision %S) moved the header window: %S, was %S"
+                                   how precise (drgnx-look-scene--edges h) header)))))
+            (funcall wheel 'wheel-up 6 -40)
+            (unless (> (funcall dist) start)
+              (error "wheel up (pixel precision %S) did not move the transcript (%d from the end, was %d)"
+                     precise (funcall dist) start))
+            (funcall still "up")
+            (let ((from (window-start w)))
+              (funcall wheel 'wheel-down 6 40)
+              (unless (> (window-start w) from)
+                (error "wheel down (pixel precision %S) did not move the transcript back (start %d, was %d)"
+                       precise (window-start w) from)))
+            (funcall still "down")))
+      (pixel-scroll-precision-mode (if was 1 -1)))))
+
+(defun drgnx-look-scene--header-targets (window)
+  "The first posn in WINDOW (the header window) over each kind of clickable part: an alist (KIND . POSN), KIND `pin',
+`lens' or `pill', from the drawn window (`posn-at-x-y'), reading the buffer's text (or a string, should one be shown)."
+  (let ((b (window-buffer window)) found)
+    (cl-loop for y from 2 below (window-body-height window t) by 3
+             do (cl-loop for x from 2 below (window-body-width window t) by 3
+                         do (let* ((p (posn-at-x-y x y window)) (str (posn-string p)) (pt (posn-point p))
+                                   (a (cond ((and (consp str) (stringp (car str)))
+                                             (get-text-property (cdr str) 'drgnx-agent-panel-action (car str)))
+                                            (pt (get-text-property pt 'drgnx-agent-panel-action b))))
+                                   (kind (cond ((equal a "pin") 'pin)
+                                               ((and (stringp a) (string-prefix-p "lens:" a)) 'lens)
+                                               ((and (stringp a) (string-prefix-p "type:" a)) 'pill))))
+                              (when (and kind (not (assq kind found))) (push (cons kind p) found)))))
+    found))
+
+(defun drgnx-look-scene--panel-header-clicks (buffer)
+  "Scroll the transcript up a page, then click the header window's pin button, a lens segment and a strip pill through
+the event loop, as a pointer's press and release arrive: each runs its command, and the header window does not move.
+The transcript is left scrolled up: the picture is the scrolled panel."
+  (pcase-let* ((`(,h ,w ,_) (drgnx-look-scene--docks buffer)))
+    (select-window w)
+    (set-window-point w (window-start w))
+    (let ((back (with-current-buffer buffer (- (point-max) (window-start w)))))
+      (scroll-down 15)
+      (redisplay t)
+      (unless (> (with-current-buffer buffer (- (point-max) (window-start w))) back)
+        (error "the transcript did not scroll up (start %d)" (window-start w))))
+    (let ((header (drgnx-look-scene--edges h)) (targets (drgnx-look-scene--header-targets h)))
+      (dolist (kind '(pin lens pill))
+        (unless (assq kind targets)
+          (error "no %s in the header window (found %S)" kind (mapcar #'car targets))))
+      (pcase-dolist (`(,kind . ,want) '((pin . agents-panel-pin) (lens . lens) (pill . type)))
+        (let (ran)
+          (cl-letf (((symbol-function 'drgnx-ui-kit-run) (lambda (id) (push id ran)))
+                    ((symbol-function 'drgnx-agent-panel-preset) (lambda (n) (push (list 'lens n) ran)))
+                    ((symbol-function 'drgnx-agent-panel-toggle-type) (lambda (ty) (push (list 'type ty) ran))))
+            (drgnx-uitest-run (drgnx-uitest-click-events (alist-get kind targets)))
+            (redisplay t))
+          (unless (seq-find (lambda (r) (or (eq r want) (eq (car-safe r) want))) ran)
+            (error "a click on the header's %s through the event loop ran %S, not %S" kind ran want))))
+      (unless (equal (drgnx-look-scene--edges h) header)
+        (error "the clicks moved the header window: %S, was %S" (drgnx-look-scene--edges h) header)))))
+
+(defun drgnx-look-scene--end-at-bottom-error (buffer window)
+  "Nil when BUFFER's WINDOW, point at its end, shows the end at its bottom (or the whole transcript, when it fits);
+else what it shows."
+  (let ((at (pos-visible-in-window-p (with-current-buffer buffer (point-max)) window t))
+        (body (window-body-height window t)) (line (window-default-line-height window)))
+    (cond ((or (not at) (nth 2 at))
+           (format "the transcript's end is not shown whole (body %d px, start %d, end at %S)"
+                   body (window-start window) at))
+          ((and (> (window-start window) (with-current-buffer buffer (point-min)))
+                (< (cadr at) (- body (* 2 line))))
+           (format "the transcript's end is at y %d, not at the bottom of its %d px body" (cadr at) body)))))
+
+(defun drgnx-look-scene--panel-docks-resize (buffer)
+  "Shrink the frame by 250 px and grow it back: after each the transcript, point at its end, shows its end at its
+bottom, and the header and composer windows are fitted."
+  (pcase-let* ((`(,h ,w ,c) (drgnx-look-scene--docks buffer))
+               (frame (window-frame w)) (height (frame-pixel-height frame)))
+    (select-window w)
+    (with-current-buffer buffer (goto-char (point-max)))
+    (set-window-point w (with-current-buffer buffer (point-max)))
+    (unwind-protect
+        (dolist (step (list (- height 250) height))
+          (set-frame-size frame (frame-pixel-width frame) step t)
+          (redisplay t) (accept-process-output nil 0.05) (redisplay t)
+          (when-let* ((e (or (drgnx-look-scene--end-at-bottom-error buffer w)
+                             (drgnx-look-scene--fit-error h "header") (drgnx-look-scene--fit-error c "composer"))))
+            (error "after the frame went to %d px: %s" step e)))
+      (set-frame-size frame (frame-pixel-width frame) height t)
+      (redisplay t))))
+
+(defun drgnx-look-scene--panel-short (buffer)
+  "The frame shrunk until the transcript's window is two lines tall (the area: the header, two lines and the composer):
+the transcript, point at its end, still shows its end, and the header still holds `p:head', fitted.  The frame goes
+back after."
+  (pcase-let* ((`(,h ,w ,_) (drgnx-look-scene--docks buffer))
+               (frame (window-frame w)) (height (frame-pixel-height frame))
+               (lines (* 2 (window-default-line-height w))))
+    (select-window w)
+    (with-current-buffer buffer (goto-char (point-max)))
+    (set-window-point w (with-current-buffer buffer (point-max)))
+    (unwind-protect
+        (progn
+          (set-frame-size frame (frame-pixel-width frame) (- height (- (window-body-height w t) lines)) t)
+          (redisplay t) (accept-process-output nil 0.05) (redisplay t)
+          (unless (<= (window-body-height w t) (+ lines (window-default-line-height w)))
+            (error "the transcript did not come down to two lines (body %d px, two lines %d px)"
+                   (window-body-height w t) lines))
+          (let ((pt (with-current-buffer buffer (point-max))))
+            (unless (pos-visible-in-window-p pt w)
+              (error "in a two-line transcript its end is not shown (start %d, end %d)" (window-start w) pt)))
+          (unless (drgnx-look-scene--has-row-p (window-buffer h) "p:head")
+            (error "the short area's header window has no `p:head'"))
+          (when-let* ((e (drgnx-look-scene--fit-error h "header"))) (error "in the short area: %s" e)))
+      (set-frame-size frame (frame-pixel-width frame) height t)
+      (redisplay t))))
+
 (defun drgnx-look-scene-agent-panel ()
   (drgnx-look-scene--theme 'drgnx-dark)
   (drgnx-look-scene--try "panel"
@@ -666,6 +908,7 @@ still be at the top, and each click must run its command."
       ;; an earlier scene put the editor back: the panel opens again where opening it puts it, the right island
       (drgnx-pane-show 'agent-panel :buffer drgnx-look-scene--panel :select t))
     (drgnx-look-scene--panel-top drgnx-look-scene--panel))
+  (drgnx-look-scene--try "three windows" (drgnx-look-scene--panel-three-windows drgnx-look-scene--panel))
   (drgnx-look-scene--answer))
 
 (defun drgnx-look-scene--panel-top (buffer)

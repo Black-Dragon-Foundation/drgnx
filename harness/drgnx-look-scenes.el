@@ -115,8 +115,8 @@ of the scene, not of the run: the other scenes are still drawn."
           (drgnx-look-scenes--call sess (format "(setenv \"DRGNX_LOOK_ONLY\" %s)"   ; which scenes: picks the hub's seed
                                                 (drgnx-ui-el (or (getenv "DRGNX_LOOK_ONLY") ""))))
           ;; "1": a scene's error carries its backtrace; the pack-built grammars the hub reads code with (inline values,
-          ;; outlines, symbol rows): the session starts with an environment of its own
-          (dolist (var '("DRGNX_LOOK_BT" "DRGNX_PACK_LOCK" "DRGNX_PACK_GRAMMARS"))
+          ;; outlines, symbol rows); the one theme every scene draws in: the session starts with an environment of its own
+          (dolist (var '("DRGNX_LOOK_BT" "DRGNX_PACK_LOCK" "DRGNX_PACK_GRAMMARS" "DRGNX_LOOK_THEME"))
             (when-let* ((v (getenv var)))
               (drgnx-look-scenes--call sess (format "(setenv %s %s)" (drgnx-ui-el var) (drgnx-ui-el v)))))
           (let ((errs (drgnx-look-scenes--call sess (format "(drgnx-look-scene-setup %s)" (drgnx-ui-el elpa)) 120)))
@@ -140,7 +140,8 @@ of the scene, not of the run: the other scenes are still drawn."
               (when-let* ((k (plist-get plist :then))) (drgnx-ui-act sess (list :keys k)) (sleep-for 1))
               (push (cons name errs) errors))))
       (when sess (ignore-errors (drgnx-ui-stop (plist-get sess :name)))))
-    (let ((res (list :shots (vconcat (nreverse shots))
+    (let ((res (list :theme (or (getenv "DRGNX_LOOK_THEME") "")
+                     :shots (vconcat (nreverse shots))
                      :errors (vconcat (delq nil (mapcar (lambda (e) (and (cdr e) (format "%s: %s" (car e)
                                                                                          (string-join (cdr e) "; "))))
                                                         (nreverse errors)))))))
