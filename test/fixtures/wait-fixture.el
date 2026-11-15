@@ -164,33 +164,51 @@ with Emacs's own call and virtual time keeps step with the real (`drgnx-test-wai
 
 (defun drgnx-test-frame-text-size (frame width height)
   "Give FRAME's text WIDTH x HEIGHT px (`set-frame-size' pixelwise) and wait until the compositor did: its text size is
-that, within a character.  A size that does not take fails the test (a fullscreen frame keeps its output's size: see
+that, within a character, and still is once it held over presented frames (`drgnx-test-wait-presented'): a configure
+that comes late (leaving fullscreen answered after the resize) would size the frame again under the row.  A size that
+does not take, or does not hold, fails the test (a fullscreen frame keeps its output's size: see
 `drgnx-test-frame-fullscreen'), so a row that resizes never passes on the size it had."
-  (set-frame-size frame width height t)
-  (drgnx-test-wait (lambda ()
-                     (redisplay t)
-                     (and (<= (abs (- (frame-text-width frame) width)) (frame-char-width frame))
-                          (<= (abs (- (frame-text-height frame) height)) (frame-char-height frame))))
-                   :secs 8
-                   :what (list "the frame's text size" (list width height) :has
-                               (list (frame-text-width frame) (frame-text-height frame))
-                               :fullscreen (frame-parameter frame 'fullscreen)
-                               ;; a height under the windows' minimum is one the frame cannot take
-                               :windows-min-height (window-min-size (frame-root-window frame) nil nil t))))
+  (let ((size (lambda () (list (frame-text-width frame) (frame-text-height frame))))
+        (near (lambda () (and (<= (abs (- (frame-text-width frame) width)) (frame-char-width frame))
+                              (<= (abs (- (frame-text-height frame) height)) (frame-char-height frame))))))
+    (set-frame-size frame width height t)
+    (drgnx-test-wait (lambda () (redisplay t) (funcall near))
+                     :secs 8
+                     :what (list "the frame's text size" (list width height) :has (funcall size)
+                                 :fullscreen (frame-parameter frame 'fullscreen)
+                                 ;; a height under the windows' minimum is one the frame cannot take
+                                 :windows-min-height (window-min-size (frame-root-window frame) nil nil t)))
+    (drgnx-test-wait-presented :frame frame :value size)
+    (unless (funcall near)
+      (ert-fail (list "the frame's text size did not hold" (list width height) :has (funcall size)
+                      :fullscreen (frame-parameter frame 'fullscreen))))))
+
+(defvar drgnx-test-frame-fullscreen-request (lambda (frame state) (set-frame-parameter frame 'fullscreen state))
+  "How `drgnx-test-frame-fullscreen' asks for a state: a function of FRAME and STATE.  A row that checks the helper
+itself binds it to a request answered late.")
+
+(defvar drgnx-test--fullscreen-sizes (make-hash-table :test #'eq :weakness 'key)
+  "Frame → its pixel size in fullscreen, taken when `drgnx-test-frame-fullscreen' left it: going back waits for it.")
 
 (defun drgnx-test-frame-fullscreen (frame state)
   "Make FRAME's `fullscreen' parameter STATE (nil, `fullboth') and wait until the compositor answered and the size
 settled; return the state it had.  The GUI sessions' root frame is fullscreen, which keeps its output's size: a row that
 resizes the frame leaves fullscreen first and puts the state back after.  The parameter changes at once, the size only
-when the compositor's configure arrives, in order with the paints: the wait is for the size to hold over presented
-frames (`drgnx-test-wait-presented').  It is not for the size to change: a frame with no tool bar or menu bar (the card
-rows' bare frame) leaves fullscreen maximized at the output's size, the size it had.  Whether a resize after it took is
-`drgnx-test-frame-text-size''s check."
-  (let ((was (frame-parameter frame 'fullscreen)))
+when the compositor's configure arrives.  Leaving: the wait is for the size to hold over presented frames
+\(`drgnx-test-wait-presented'), not for it to change: a frame with no tool bar or menu bar (the card rows' bare
+frame) leaves fullscreen maximized at the output's size, the size it had; whether a resize after it took, and held, is
+`drgnx-test-frame-text-size''s check.  Going back: the wait is for the size the frame had in fullscreen when this
+helper left it (a configure answered after a paint would otherwise pass as the old size), then for it to hold."
+  (let ((was (frame-parameter frame 'fullscreen))
+        (size (lambda () (list (frame-pixel-width frame) (frame-pixel-height frame)))))
     (unless (eq state was)
-      (set-frame-parameter frame 'fullscreen state)
-      (drgnx-test-wait-presented :frame frame
-                                 :value (lambda () (list (frame-pixel-width frame) (frame-pixel-height frame)))))
+      (when (and was (null state)) (puthash frame (funcall size) drgnx-test--fullscreen-sizes))
+      (funcall drgnx-test-frame-fullscreen-request frame state)
+      (when-let* ((full (and state (gethash frame drgnx-test--fullscreen-sizes))))
+        ;; each try a presented frame (a trip through the compositor), as `drgnx-test-wait-presented''s samples
+        (drgnx-test-wait (lambda () (ignore-errors (drgnx-uitest-snapshot frame)) (equal full (funcall size)))
+                         :secs 8 :what (list "the frame's size back in fullscreen" full :has (funcall size))))
+      (drgnx-test-wait-presented :frame frame :value size))
     was))
 
 (defun drgnx-test-buffer-list ()

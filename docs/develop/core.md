@@ -3680,8 +3680,11 @@ timer; when nothing can run and nothing is left to wait for it fails at once, wi
   that resizes leaves fullscreen first with `(drgnx-test-frame-fullscreen FRAME nil)` (it waits until the size holds
   over presented frames, not for it to change: a frame with no bars leaves fullscreen maximized at the size it had,
   and returns the state to put back), then resizes with `(drgnx-test-frame-text-size FRAME WIDTH HEIGHT)`,
-  which fails the test unless the text size took (within a character); its failure names the size the frame has, its
-  fullscreen state and its windows' least height, under which a compositor may drop the request entirely.
+  which fails the test unless the text size took (within a character) and still holds over presented frames (a late
+  configure would size the frame again under the row); its failure names the size the frame has, its fullscreen state
+  and its windows' least height, under which a compositor may drop the request entirely. Going back to fullscreen
+  waits for the size the frame had there when the helper left it. `test/ui/frame-size-helpers-gui-test.el` checks
+  both against a late answer.
 - **A window for what must not happen.** A test that asserts something does *not* happen (a second answer, a tick
   that starts nothing) lets processes and timers run with `(drgnx-test-pause SECS)` and then asserts. It is the only
   fixed real-time window in a test, and it can only miss a bug on a loaded machine, never fail a correct one. Not
