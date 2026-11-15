@@ -1,11 +1,11 @@
 //! The panel's row cache in every order of transcript changes, step facts and envs: an editor replays every patch and
 //! must end holding, for each class, exactly the rows a whole build of the transcript gives.
 
-use super::{Panels, Source, view_of};
+use super::{Panels, Source, hover, view_of};
 use crate::agents::session::rows::{self, Facts, GroupIn};
 use crate::view::{Key, Store, is_reset};
 use drgnx_rows::fit::FontSet;
-use drgnx_rows::{Op, Patch, Row};
+use drgnx_rows::{Op, Patch, Row, RowBuilder};
 use runstav::methods::agents::{Entry, EntryType};
 use runstav::methods::view::{Display, ViewEnv};
 use serde_json::{Map, Value, json};
@@ -517,5 +517,32 @@ fn an_appended_step_extends_the_model() {
         p.model_due(1, "v", 6, true, None),
         Some(0),
         "a full build: the whole"
+    );
+}
+
+// pattern: D
+#[test]
+fn a_clickable_part_gets_the_hover_face_by_name() {
+    let mut b = RowBuilder::new("p:head");
+    b.push("plain ", None);
+    let s = b.pos();
+    b.push("click", None);
+    let e = b.pos();
+    b.prop(s, e, "drgnx-agent-panel-action", json!("pin"));
+    let mut rows = vec![b.finish()];
+    hover(&mut rows);
+    assert!(
+        rows[0].props.iter().any(|(a, z, n, v)| (*a, *z) == (s, e)
+            && n == "mouse-face"
+            && *v == json!("drgnx-hover"))
+    );
+    // nothing else is a hover part
+    assert_eq!(
+        rows[0]
+            .props
+            .iter()
+            .filter(|(_, _, n, _)| n == "mouse-face")
+            .count(),
+        1
     );
 }

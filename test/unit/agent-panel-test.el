@@ -26,9 +26,11 @@
 (defvar drgnx-history--buffers)
 (declare-function drgnx-history--st-make "drgnx-history")
 (declare-function drgnx-agent-panel-reject "drgnx-agent-panel-cards")
-(declare-function drgnx-agent-panel--keep-top-windows "drgnx-agent-panel")
-(declare-function drgnx-agent-panel--restore-top-windows "drgnx-agent-panel")
-(defvar drgnx-agent-panel--top-windows)
+(declare-function drgnx-agent-panel--follow-tail "drgnx-agent-panel")
+(declare-function drgnx-agent-panel--tail-start "drgnx-agent-panel")
+(declare-function drgnx-agent-panel--wanted-keys "drgnx-agent-panel")
+(declare-function drgnx-agent-panel--own-row "drgnx-agent-panel")
+(declare-function drgnx-agent-panel--rows-p "drgnx-agent-panel")
 (declare-function drgnx-agent-panel-ledger "drgnx-agent-panel-cards")
 (declare-function drgnx-agent-panel-revert-here "drgnx-agent-panel")
 (declare-function drgnx-agent-panel-fork-here "drgnx-agent-panel")
@@ -584,36 +586,32 @@ and queues the take-it-back message: the panel keeps no diffs, so it asks `work/
       (should (string-match-p "tool-output +1000 tokens" text))
       (should (string-match-p "/compact would free 300 tokens" text)))))
 
-(ert-deftest drgnx-agent-panel/a-window-at-the-top-stays-there-when-the-hubs-top-rows-come-in ()
-  "A window keeps its start on its row, so the header, chips and strip that arrive above the first row (the panel opened
-before the hub's rows came) would leave it starting below them: a window that started at the first row starts at the top."
-  (drgnx-agent-panel-test--with
-    (with-current-buffer buf
-      (let ((inhibit-read-only t) (top "head\nchips\n"))
-        (erase-buffer)
-        (insert "card 0\ncard 1\n")
-        (set-window-buffer (selected-window) buf)
-        (set-window-start (selected-window) (point-min))
-        (drgnx-agent-panel--keep-top-windows)
-        ;; the rows arrive above, and the view's place restore leaves the window on the row it was on
-        (save-excursion (goto-char (point-min)) (insert top))
-        (set-window-start (selected-window) (+ (point-min) (length top)) t)
-        (drgnx-agent-panel--restore-top-windows '("p:head" "p:chips"))
-        (should (= (window-start (selected-window)) (point-min)))
-        (should-not drgnx-agent-panel--top-windows)))))
-
-(ert-deftest drgnx-agent-panel/a-scrolled-window-is-left-where-it-is ()
+(ert-deftest drgnx-agent-panel/the-panel-follows-its-tail-and-leaves-a-moved-point-alone ()
+  "The panel owns its scroll: a window whose point is at the panel's end starts where the end sits at its bottom, whatever
+came in above it; a window the user moved point in is left alone."
   (drgnx-agent-panel-test--with
     (with-current-buffer buf
       (let ((inhibit-read-only t))
         (erase-buffer)
-        (dotimes (i 60) (insert (format "card %d\n" i)))
+        (dotimes (i 200) (insert (format "row %d\n" i)))
         (set-window-buffer (selected-window) buf)
-        (set-window-start (selected-window) (+ (point-min) 40))
-        (drgnx-agent-panel--keep-top-windows)
-        (should-not drgnx-agent-panel--top-windows)
-        (drgnx-agent-panel--restore-top-windows '("p:head"))
-        (should (= (window-start (selected-window)) (+ (point-min) 40)))))))
+        (set-window-start (selected-window) (point-min))
+        (cl-letf (((symbol-function 'drgnx-agent-panel--tail-start) (lambda (_w) 500)))
+          (set-window-point (selected-window) (point-max))
+          (drgnx-agent-panel--follow-tail)
+          (should (= 500 (window-start (selected-window))))
+          (set-window-start (selected-window) 7)
+          (set-window-point (selected-window) 10)
+          (drgnx-agent-panel--follow-tail)
+          (should (= 7 (window-start (selected-window)))))))))
+
+(ert-deftest drgnx-agent-panel/a-panel-made-without-the-hub-says-so ()
+  "With the hub down the panel has no header, strip or cards: one quiet row says why."
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (should-not (drgnx-agent-panel--rows-p))
+      (should (member '(:nohub) (drgnx-agent-panel--wanted-keys)))
+      (should (string-search "hub is not running" (drgnx-agent-panel--own-row '(:nohub)))))))
 
 (provide 'agent-panel-test)
 ;;; agent-panel-test.el ends here

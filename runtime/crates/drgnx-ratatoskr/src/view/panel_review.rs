@@ -395,6 +395,12 @@ pub fn rows(i: &In) -> (Vec<Row>, Vec<(ImageId, String)>) {
             .enumerate()
             .map(|(n, q)| queue_row(i.env, n, q)),
     );
+    // one blank row between the transcript and the cards, as the mockup has it
+    if !out.is_empty() {
+        let mut gap = RowBuilder::new("c:gap");
+        gap.push(" ", None);
+        out.insert(0, gap.finish());
+    }
     (out, images)
 }
 

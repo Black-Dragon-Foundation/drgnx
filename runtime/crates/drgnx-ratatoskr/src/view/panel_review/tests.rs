@@ -64,6 +64,7 @@ fn a_hunk_is_a_header_over_numbered_lines_in_card_faces() {
         permissions: &[],
         queue: &[],
     });
+    let rows: Vec<Row> = rows.into_iter().filter(|r| r.key != "c:gap").collect();
     let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
     assert_eq!(
         keys,
@@ -132,6 +133,7 @@ fn a_request_is_a_ringed_line_over_allow_always_and_deny() {
         permissions: &p,
         queue: &[],
     });
+    let rows: Vec<Row> = rows.into_iter().filter(|r| r.key != "c:gap").collect();
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].key, "c:perm:7:0");
     assert!(text(&rows[0]).contains("Read the gateway's log?"));
@@ -164,6 +166,7 @@ fn a_narrow_panel_drops_the_label_before_the_buttons() {
         permissions: &[],
         queue: &[],
     });
+    let rows: Vec<Row> = rows.into_iter().filter(|r| r.key != "c:gap").collect();
     let head = text(&rows[0]);
     assert!(!head.contains("hunk 1 of"), "{head}");
     assert!(head.contains("Reject") && head.contains("Accept"));
@@ -182,6 +185,7 @@ fn a_queued_note_is_a_row_that_names_its_number() {
         permissions: &[],
         queue: &q,
     });
+    let rows: Vec<Row> = rows.into_iter().filter(|r| r.key != "c:gap").collect();
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[1].key, "c:q:1");
     assert!(text(&rows[1]).contains("queued 2  second"));

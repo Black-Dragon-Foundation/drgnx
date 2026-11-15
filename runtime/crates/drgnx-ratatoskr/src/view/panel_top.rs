@@ -35,6 +35,9 @@ pub struct Cx<'a> {
     /// When the session began running (seconds since the epoch), none when it is not; and now.
     pub busy_since: Option<f64>,
     pub now: f64,
+    /// How many files the session edited, and how many of its steps hold a checkpoint, when the hub knows.
+    pub files_edited: Option<usize>,
+    pub checkpoints: Option<usize>,
 }
 
 /// What the agent is doing, for the header: "Claude · running 6 min", "held by you", "Pair · editing your checkout".
@@ -76,7 +79,7 @@ pub fn rows(s: &Snapshot, cx: &Cx) -> (Vec<Row>, Vec<(ImageId, String)>) {
     let mut images = Vec::new();
     let head = header(s, cx, &mut images);
     let mut rows = vec![head];
-    if let Some(chips) = chips(s) {
+    if let Some(chips) = chips(s, cx) {
         rows.push(chips);
     }
     rows.extend(strip(cx));
@@ -337,8 +340,9 @@ fn strip(cx: &Cx) -> Vec<Row> {
 
 /// The chips the snapshot feeds (the context the agent has used, what the session cost, its mode); none when it
 /// feeds none.
-fn chips(s: &Snapshot) -> Option<Row> {
-    let mut list: Vec<(&str, String)> = Vec::new();
+fn chips(s: &Snapshot, cx: &Cx) -> Option<Row> {
+    // (what a click explains, or none; text)
+    let mut list: Vec<(Option<&str>, String)> = Vec::new();
     if let Some(u) = &s.usage {
         if let (Some(used), Some(size)) = (u.used, u.size)
             && size > 0.0
@@ -351,7 +355,7 @@ fn chips(s: &Snapshot) -> Option<Row> {
                 63..=87 => "◕",
                 _ => "●",
             };
-            list.push(("context", format!("{glyph} {p}%")));
+            list.push((Some("context"), format!("{glyph} {p}%")));
         }
         let amount = match &u.cost {
             Some(Value::Number(n)) => n.as_f64(),
@@ -359,7 +363,7 @@ fn chips(s: &Snapshot) -> Option<Row> {
             _ => None,
         };
         if let Some(c) = amount {
-            list.push(("cost", format!("${c:.2}")));
+            list.push((Some("cost"), format!("${c:.2}")));
         }
     }
     if let Some(m) = &s.mode {
@@ -368,8 +372,22 @@ fn chips(s: &Snapshot) -> Option<Row> {
             .and_then(|v| v.as_str().map(str::to_owned))
             .unwrap_or_default();
         if !text.is_empty() {
-            list.push(("mode", text));
+            list.push((Some("mode"), text));
         }
+    }
+    match s.enforced {
+        Some(true) => list.push((None, "sandboxed".to_owned())),
+        Some(false) => list.push((None, "not enforced".to_owned())),
+        None => {}
+    }
+    if let Some(n) = cx.files_edited.filter(|&n| n > 0) {
+        list.push((None, format!("{n} file{}", if n == 1 { "" } else { "s" })));
+    }
+    if let Some(n) = cx.checkpoints.filter(|&n| n > 0) {
+        list.push((
+            None,
+            format!("{n} checkpoint{}", if n == 1 { "" } else { "s" }),
+        ));
     }
     if list.is_empty() {
         return None;
@@ -383,7 +401,9 @@ fn chips(s: &Snapshot) -> Option<Row> {
         let start = b.pos();
         b.push(&format!(" {text} "), Some("drgnx-agent-panel-chip"));
         let end = b.pos();
-        b.prop(start, end, "drgnx-agent-panel-chip", json!(kind));
+        if let Some(kind) = kind {
+            b.prop(start, end, "drgnx-agent-panel-chip", json!(kind));
+        }
     }
     Some(b.finish())
 }
