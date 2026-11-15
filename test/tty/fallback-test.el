@@ -188,9 +188,9 @@ so no stage rebinds it; the module stages are over first all the same."
 
 (ert-deftest drgnx-tty-fallback/the-hint-waits-while-f6-waits ()
   ;; the hint's timer comes due while F6 waits for its key: the prompt stays, and the hint is said once the key is in.
-  ;; The order is the test's: the client's hint is held when its frame is set up, and armed only once F6 waits.
-  ;; Hints are held per frame: a keys apply (a module stage's end) sets every terminal's layer up again, which asks
-  ;; for each frame's hint again, so the last one held may be another client's.
+  ;; The order is the test's: the client's hint is held when its frame is set up, and armed only once F6 waits, by a
+  ;; module stage's end: its keys apply sets every terminal's layer up again, which asks for each frame's hint again.
+  ;; Hints are held per frame, so a stage that ends before F6 is seen holding another client's.
   (drgnx-tty-session-with (s :daemon t :keys 'vscode :size "120x28" :options '(("set" "-s" "extended-keys" "off")))
     (drgnx-tty-session-eval s '(progn (defvar kx-held-hints nil)
                                       (advice-add 'drgnx-tty-fallback--hint :override
@@ -203,10 +203,11 @@ so no stage rebinds it; the module stages are over first all the same."
       (drgnx-tty-session-eval s drgnx-tty-keys-test--record)
       (drgnx-tty-session-send c (drgnx-tty-session-encode "<f6>" 'legacy))
       (drgnx-tty-session-wait-screen c "Ctrl\\+Shift\\+…")
-      ;; F6 waits: the hint's timer is armed now, and runs while F6 still waits
-      (drgnx-tty-session-eval s `(progn (advice-remove 'drgnx-tty-fallback--hint 'kx-hold)
-                                        (apply #'drgnx-tty-fallback--hint (assq ,frame kx-held-hints))
-                                        (drgnx-timer-active-p (cons 'tty-fallback-hint ,frame))))
+      ;; F6 waits: the hold goes, then a module stage's end (its hook, which applies the keys) asks for every frame's
+      ;; hint again, the product's own call: the hint's timer is armed now, and runs while F6 still waits
+      (should (drgnx-tty-session-eval s `(progn (advice-remove 'drgnx-tty-fallback--hint 'kx-hold)
+                                                (run-hook-with-args 'drgnx-modules-after-stage-functions 'idle)
+                                                (drgnx-timer-active-p (cons 'tty-fallback-hint ,frame)))))
       (drgnx-tty-session-wait s `(not (drgnx-timer-active-p (cons 'tty-fallback-hint ,frame))))
       (should (equal "Ctrl+Shift+…" (drgnx-tty-session-eval s `(with-selected-frame ,frame (current-message)))))
       (should-not (drgnx-tty-session-eval s hinted))
