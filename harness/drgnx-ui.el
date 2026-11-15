@@ -160,6 +160,9 @@ EXIT is the symbol `timeout' when the process had to be killed."
 (declare-function drgnx-paths-recorded-emacs "drgnx-paths")
 (declare-function drgnx-emacs-program "drgnx-paths")
 (declare-function drgnx-run-ert--printable "run-ert")
+(declare-function drgnx-run-ert--end-process "run-ert")
+(declare-function drgnx-run-ert--files "run-ert")
+(declare-function drgnx-run-ert--file-selected-p "run-ert")
 (declare-function drgnx-run-ert-trampolines "run-ert")
 (declare-function drgnx-run-ert-trampolines-stayed-p "run-ert")
 

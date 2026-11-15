@@ -262,8 +262,9 @@ its printed text), and the number of frames."
     items))
 
 (defun drgnx-modules-fingerprint--window-items ()
-  "Items for the selected window's parameters, the frame's focus state and how many windows the frame has.  A test that leaves a clone of the window selected, or a window with a `quit-restore'
-parameter, moves where the next file's first window is."
+  "Items for the selected window's parameters, the frame's focus state and how many windows the frame has.  A test
+that leaves a clone of the window selected, or a window with a `quit-restore' parameter, moves where the next file's
+first window is."
   (let ((w (selected-window)) (items nil))
     ;; not the window object: the workbench rebuilds its windows, and a clone selected where the original was draws the same
     (push (cons (list 'selected-frame-focus) (intern (format "%S" (frame-focus-state)))) items)
@@ -321,7 +322,8 @@ keymap (and the one in use), the minor mode maps, the selected frame's parameter
 (defvar drgnx-keys-last)
 
 (defun drgnx-modules-fingerprint--map-size (map)
-  "The bindings of keymap MAP, a nil one too, its sub-keymaps walked (an evil auxiliary keymap) and its parent left out."
+  "The bindings of keymap MAP, a nil one too, its sub-keymaps walked (an evil auxiliary keymap) and its parent left
+out."
   (let ((n 0))
     (map-keymap-internal
      (lambda (_ev def) (setq n (+ n (if (and (consp def) (keymapp def)) (drgnx-modules-fingerprint--map-size def) 1))))
