@@ -2938,7 +2938,7 @@ in force, from 1, 0 none). A clickable part has the `drgnx-agent-panel-action` p
 `drgnx-agent-panel-chip` (`context`, `cost`, `mode`); the editor's `agents-panel-act` (a click) and `agents-panel-press`
 (a press keeps point) read them, and `agents-panel-drag` takes a drag from the pinned copy to it for a click (the copy's
 buffer position is the window start, which a followed tail moves between the press and the release, so Emacs makes the
-click a drag). The editor puts the rows whose key starts with `p:` above its own rows.
+click a drag; a copy is known by its first row's `drgnx-pinned` mark, since the same patch can copy the rows again). The editor puts the rows whose key starts with `p:` above its own rows.
 The panel owns its scroll (`drgnx-agent-panel--follow-tail`, after each draw of hub rows): a window whose point is at
 the panel's end shows the end (the composer) at its bottom, whatever came in above it, so a panel shorter than its window
 starts at its header and a taller one shows its last page; a window the user moved point in is left alone. The look

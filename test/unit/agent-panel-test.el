@@ -1169,8 +1169,16 @@ pressed; a drag from the copy into the transcript is the stock one."
       (cl-letf (((symbol-function 'drgnx-ui-kit-run) (lambda (id) (push id ran)))
                 ((symbol-function 'mouse-set-region) (lambda (_e) (push 'stock-drag ran))))
         (with-current-buffer buf
-          (should (eq (key-binding [drag-mouse-1]) 'drgnx-agent-panel-drag))
+          ;; the key profiles bind it (core-keys-test), applied by the keys module, not set up here
+          (should (drgnx-commands-get 'agents-panel-drag))
           (drgnx-agent-panel-drag (list 'drag-mouse-1 from to))
+          (should (equal ran '(agents-panel-pin)))
+          (setq ran nil)
+          ;; the patch that moved the start also copied the pinned rows again (the strip's clock): the press is on the
+          ;; old copy, the release on the new one
+          (setcdr drgnx-agent-panel--pin (copy-sequence copy))
+          (drgnx-agent-panel-drag
+           (list 'drag-mouse-1 from (list w 30 '(10 . 4) 0 (cons (cdr drgnx-agent-panel--pin) 2))))
           (should (equal ran '(agents-panel-pin)))
           (setq ran nil)
           (drgnx-agent-panel-drag (list 'drag-mouse-1 from (list w 40 '(10 . 200) 0 nil)))

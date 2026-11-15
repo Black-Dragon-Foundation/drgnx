@@ -91,11 +91,12 @@ the buffer's.  A string's position in the buffer is the window start, under the 
 (defvar drgnx-agent-panel--pin)
 
 (defun drgnx-agent-panel--on-pin-p (posn)
-  "Whether POSN is on the pinned copy (`drgnx-agent-panel--pin'), the string of the overlay over the window's first
-line."
-  (let ((str (posn-string posn)) (win (posn-window posn)))
-    (and (stringp (car-safe str)) (windowp win)
-         (eq (car str) (cdr (buffer-local-value 'drgnx-agent-panel--pin (window-buffer win)))))))
+  "Whether POSN is on a pinned copy (`drgnx-agent-panel--pin'), the string of the overlay over the window's first
+line.  The copy is known by its first row's `drgnx-pinned' mark, not by `eq' to the current copy: a patch between the
+press and the release can copy the rows again."
+  (let ((str (posn-string posn)))
+    (and (stringp (car-safe str)) (windowp (posn-window posn))
+         (eq 1 (get-text-property 0 'drgnx-pinned (car str))))))
 
 (defun drgnx-agent-panel-drag (event)
   "Drag EVENT: from the pinned copy to it, a click on the part pressed.  The copy's buffer position is the window
