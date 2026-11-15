@@ -131,6 +131,25 @@ frame's default is the code font)."
       (set-face-attribute 'fixed-pitch nil :family fixed)
       (kill-buffer b))))
 
+(ert-deftest drgnx-ui-rows-fit/a-bold-face-draws-in-the-buffer-s-remapped-family ()
+  "A face with a font of its own that takes its family from `default' (`bold') draws in the buffer's remapped
+`default' family: the answer to the hub's face ask names that family's file, not the frame's default's."
+  (skip-unless (display-graphic-p))
+  (should (drgnx-rows-fit-ui-test--install))
+  (require 'drgnx-view-env)
+  (let ((b (generate-new-buffer " *remapped*")) (font (face-attribute 'default :font (selected-frame))))
+    (unwind-protect
+        (progn
+          (set-face-attribute 'default (selected-frame) :font (font-spec :family "JetBrains Mono" :size 13))
+          (with-current-buffer b (face-remap-add-relative 'default :family "Inter"))
+          (set-window-buffer (selected-window) b)
+          (let ((a (drgnx-view-env-face "bold" b)))
+            (should (equal (list (plist-get a :role) (and (plist-get a :file) (string-match-p "Inter" (plist-get a :file))
+                                                          t))
+                           '("bold" t)))))
+      (set-face-attribute 'default (selected-frame) :font font)
+      (kill-buffer b))))
+
 ;;;; The fit check row and row heights: the fixture view `rows-demo' fed by a real hub (test/fixtures/rows-demo-fixture.el)
 
 (defconst drgnx-rows-fit-ui-test--labels

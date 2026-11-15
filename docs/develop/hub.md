@@ -2479,7 +2479,8 @@ with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an est
   `faces`; the editor answers with the role whose font the face resolves to in the view's buffer (`ui`, `text`,
   `caption`, `code`, `heading`, …: `drgnx-view-env-roles`; the role whose face draws a probe text as wide in that
   buffer, so a face that sets only colours draws in the buffer's remapped `default`, which `face-font` does not see),
-  or, for a face with a font of its own, that font's file,
+  or, for a face with a font of its own, that font's file (as it draws merged over the buffer's remapped `default`:
+  `bold` in the agent panel is the UI family's bold, not the frame's code font's),
   index, px, average and `wght` (the face's weight, for a variable font) under a role named after the face; and the
   ends of its box (`pad`: half what the box adds to the probe as drawn, so a frame that scales boxes is counted),
   which a run adds at each end. Until the answer comes a face
