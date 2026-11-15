@@ -113,13 +113,20 @@ frame's default is the code font)."
           (set-face-attribute 'fixed-pitch nil :family "JetBrains Mono")
           (with-current-buffer b (face-remap-add-relative 'default :family "Inter"))
           (set-window-buffer (selected-window) b)
-          (should (equal (plist-get (drgnx-view-env-face "shadow" b) :role) "ui"))
+          ;; the widths the answer compares, in the failure's message
+          (should (equal (list (plist-get (drgnx-view-env-face "shadow" b) :role)
+                               (mapcar (lambda (f) (string-pixel-width (propertize drgnx-view-env--probe 'face f) b))
+                                       '(shadow default fixed-pitch)))
+                         (list "ui" (let ((w (string-pixel-width (propertize drgnx-view-env--probe 'face 'default) b)))
+                                      (list w w (string-pixel-width (propertize drgnx-view-env--probe 'face 'fixed-pitch)
+                                                                    b))))))
           ;; a boxed face (a card's): its role without the box's ends, which come back as :pad
           (make-face 'drgnx-rows-fit-ui-test-boxed)
           (set-face-attribute 'drgnx-rows-fit-ui-test-boxed nil :box '(:line-width 2))
           (let ((a (drgnx-view-env-face "drgnx-rows-fit-ui-test-boxed" b)))
             (should (equal (plist-get a :role) "ui"))
-            (should (= (plist-get a :pad) 2))))
+            ;; 2 px, or more on a frame that scales boxes
+            (should (>= (plist-get a :pad) 2))))
       (set-face-attribute 'default (selected-frame) :font font)
       (set-face-attribute 'fixed-pitch nil :family fixed)
       (kill-buffer b))))

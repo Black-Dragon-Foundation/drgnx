@@ -2481,7 +2481,8 @@ with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an est
   buffer, so a face that sets only colours draws in the buffer's remapped `default`, which `face-font` does not see),
   or, for a face with a font of its own, that font's file,
   index, px, average and `wght` (the face's weight, for a variable font) under a role named after the face; and the
-  ends of its box (`pad`, a positive `:line-width`), which a run adds at each end. Until the answer comes a face
+  ends of its box (`pad`: half what the box adds to the probe as drawn, so a frame that scales boxes is counted),
+  which a run adds at each end. Until the answer comes a face
   measures as `ui`, and the rows are built again when it does.
 - **No row wider than its window.** The hub fits every row it publishes (`drgnx_rows::fit_row`, in `Store::publish`
   and `publish_splice`), whatever its builder did: each segment (the text before the first stop, between two stops,

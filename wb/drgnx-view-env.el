@@ -74,7 +74,8 @@ Pruned with its view.")
   "View id → t for the views that are in no window and still get the env of the selected window's class (git letters).")
 
 (defvar drgnx-view-env--glyphs (make-hash-table :test #'equal)
-  "(FONT-NAME . CHAR) → its advance in px, as the editor measured it for a `view-glyphs' ask (bounded:
+  "((FONT-NAME . REMAPS) . CHAR) → its advance in px, as the editor measured it for a `view-glyphs' ask, REMAPS the
+measuring buffer's `face-remapping-alist' (bounded:
 `drgnx-view-env-glyph-cache-max').")
 
 (defvar drgnx-view-env--hooked nil "Non-nil while the global hooks are on (the first view added them).")
@@ -423,16 +424,6 @@ another scale or default font draws the same buffer in another font), so BUFFER'
     (extra-bold . 800) (ultra-bold . 800) (heavy . 900) (black . 900) (ultra-heavy . 900))
   "A face's `:weight' as a font's `wght' axis value (a variable font draws its weights from one file).")
 
-(defun drgnx-view-env--box-pad (face frame)
-  "The pixels FACE's box adds at each end of a run in it on FRAME: its line width when positive (a negative one is
-drawn inside the text), else none."
-  (let* ((box (face-attribute face :box frame t))
-         (w (cond ((null box) 0) ((eq box 'unspecified) 0) ((eq box t) 1) ((numberp box) box)
-                  ((consp box) (let ((lw (plist-get box :line-width)))
-                                 (cond ((numberp lw) lw) ((consp lw) (car lw)) (t 1))))
-                  (t 0))))
-    (max 0 w)))
-
 (defconst drgnx-view-env--probe "Hamburgefonstiv 0123456789 WMmw.,"
   "The text a face's drawn width is compared on with each role's (`drgnx-view-env-face').")
 
@@ -452,11 +443,12 @@ name that is no face, or a terminal, draws in `ui'."
                (mine (drgnx-view-env--font face frame factor))
                ;; drawn in BUFFER, FACE merges over its remapped `default' (the agent panel's `drgnx-ui-text'), which
                ;; `face-font' does not see: a face that sets only colours draws in the buffer's `default', not the
-               ;; frame's.  A role whose face draws a probe as wide (FACE's box ends left out) is FACE's role.
-               (pad (drgnx-view-env--box-pad face frame))
+               ;; frame's.  A role whose face draws a probe as wide (FACE's box left out) is FACE's role.
                (probe (lambda (f) (with-selected-frame frame
                                     (string-pixel-width (propertize drgnx-view-env--probe 'face f) buffer))))
-               (drawn (- (funcall probe face) (* 2 pad)))
+               (drawn (funcall probe (list '(:box nil) face)))
+               ;; the box's ends as drawn (a negative line width is drawn inside the text; a scaled frame scales it)
+               (pad (max 0 (/ (- (funcall probe face) drawn) 2.0)))
                (role (or (cl-some (lambda (r) (and (= drawn (funcall probe (cdr r))) (symbol-name (car r))))
                                   drgnx-view-env-roles)
                          (and mine (cl-some (lambda (r)
@@ -489,7 +481,8 @@ buffer of the asked display class."
                  (font (or (ignore-errors (with-current-buffer class-buffer
                                             (face-font face (drgnx-view-env--frame class-buffer))))
                            (symbol-name face)))
-                 (key (cons font char))
+                 ;; with the buffer's remaps: `face-font' names the same font under a `text-scale' (a :height remap)
+                 (key (cons (cons font (buffer-local-value 'face-remapping-alist class-buffer)) char))
                  (px (or (gethash key drgnx-view-env--glyphs)
                          (progn (when (>= (hash-table-count drgnx-view-env--glyphs) drgnx-view-env-glyph-cache-max)
                                   (clrhash drgnx-view-env--glyphs))
