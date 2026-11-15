@@ -2942,10 +2942,13 @@ the panel's end shows the end (the composer) at its bottom, whatever came in abo
 starts at its header and a taller one shows its last page; a window the user moved point in is left alone. The look
 scenes check `p:head` and that the end is at the window's bottom (or the panel fits and starts at the top).
 
-The chips beyond the snapshot's usage and mode come from state the hub holds: `sandboxed` or `not enforced` from the
-session's `enforced`, `N files` from the ledger's edited files and `N checkpoints` from the steps' facts. The model, the
-MCP count and the restore level have no source in the hub (it never reads the model the agent reports, and passes the
-agent only its own coordination server), so no chip is drawn for them. Every clickable part (an action or a chip) carries
+The chips beyond the snapshot's usage and mode come from state the hub holds: the model (`Snapshot.model`: the one the
+agent reported in its `session/new` (or load, resume, fork) answer, `models.currentModelId`, which hermod keeps per
+session (`Conn::reported_model`) and each accepted `session/set_model` or `model` config option changes), `sandboxed` or
+`not enforced` from the session's `enforced`, `MCP N` from `Snapshot.mcp` (the names of the servers the hub gave the
+session at its start: `drgnx`, `drgnx-search` and `drgnx-plugins`; the agent's own servers are its business and are not
+counted), `N files` from the ledger's edited files and `N checkpoints` from the steps' facts. The model and MCP chips
+explain themselves on a click; the restore level has no source in the hub, so no chip is drawn for it. Every clickable part (an action or a chip) carries
 `mouse-face` `drgnx-hover`: the row names the face, and the editor's row dressing maps the name to the face symbol. A panel
 made while the hub is down draws its transcript itself and has one quiet row (`:nohub`) saying the header, strip and cards
 come from the hub.

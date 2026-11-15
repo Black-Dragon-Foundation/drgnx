@@ -110,6 +110,26 @@ async fn the_reported_mode_is_the_opening_answers() {
     assert_eq!(conn.reported_mode(&sid), None);
 }
 
+// [C] handshake: the model an answer that opens a session reports (`models.currentModelId`) is the session's, and a
+// `session/set_model` the agent accepted changes it; one it refused leaves it.
+#[tokio::test]
+async fn the_reported_model_is_the_opening_answers_and_follows_set_model() {
+    let new = r#"{"jsonrpc":"2.0","id":2,"result":{"sessionId":"s1","models":{"currentModelId":"opus","availableModels":[]}}}"#;
+    let set = r#"{"jsonrpc":"2.0","id":3,"result":{}}"#;
+    let refused = r#"{"jsonrpc":"2.0","id":4,"error":{"code":-32602,"message":"no such model"}}"#;
+    let script = format!(
+        "read a; printf '%s\\n' '{INIT}'; read b; printf '%s\\n' '{new}'; read c; printf '%s\\n' '{set}'; \
+         read d; printf '%s\\n' '{refused}'; cat >/dev/null"
+    );
+    let (conn, _rx) = start(&script, opts()).await;
+    let sid = open(&conn).await;
+    assert_eq!(conn.reported_model(&sid).as_deref(), Some("opus"));
+    conn.set_model(&sid, "sonnet").await.unwrap();
+    assert_eq!(conn.reported_model(&sid).as_deref(), Some("sonnet"));
+    assert!(conn.set_model(&sid, "nothing").await.is_err());
+    assert_eq!(conn.reported_model(&sid).as_deref(), Some("sonnet"));
+}
+
 #[tokio::test]
 async fn every_update_is_stamped_on_receipt() {
     let rest = format!(

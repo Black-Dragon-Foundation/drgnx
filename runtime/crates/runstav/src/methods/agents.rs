@@ -199,6 +199,18 @@ pub struct Snapshot {
     /// step and nothing of it is written until the wheel is given back.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub held_by: Option<String>,
+    /// The model it uses, as its agent reported it when the session opened and as each accepted switch changed it
+    /// (none: the agent reported none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// The MCP servers the hub gave it at its start: the coordination tools (`drgnx`), the search tool
+    /// (`drgnx-search`) and the plugins' abilities (`drgnx-plugins`).
+    #[serde(
+        default,
+        deserialize_with = "null_as_empty",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub mcp: Vec<String>,
 }
 
 /// The file (and the user's lines in it) a paired chat waits on.

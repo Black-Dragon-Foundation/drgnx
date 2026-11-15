@@ -113,6 +113,7 @@ The panel owns its scroll: after each draw of hub rows a window whose point is a
 end sits at its bottom (`drgnx-agent-panel--follow-tail`; the window itself says which lines still show the end, as its
 rows differ in height and a pixel measure of text is not its own).
 The chips for the sandbox, the files edited and the checkpoints are the hub's (from `enforced`, the ledger and the steps'
-facts); the model, the MCP count and the restore level have no source in the hub today. The hover face goes on every
+facts), and since the next slice the model (hermod keeps the model an agent reports and each accepted switch) and
+the MCP servers the hub gave the session (`Snapshot.model`, `Snapshot.mcp`); the restore level has no source in the hub. The hover face goes on every
 clickable part by the hub (`mouse-face` `drgnx-hover`, mapped to the face symbol by `drgnx-view-patch--dress`). A panel
 made without the hub has one quiet row saying where the header and cards come from.

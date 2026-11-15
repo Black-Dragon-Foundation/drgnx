@@ -1097,6 +1097,8 @@ pub struct Session {
     /// Which tool kinds its `before-tool` hooks see, as its lock made them at launch (and its adapter, when it offers
     /// `before-tool`).
     hooked: Option<runstav::methods::agents::Hooked>,
+    /// The MCP servers the hub gave it at `session/new` (their names: the coordination tools, the search tool, the plugins').
+    mcp_servers: Vec<String>,
     /// Its agent's `_drgnx/panel` extension: what it offers, its context breakdown.
     panel: panel::Panel,
     /// The agent panels' rows: each change of the transcript builds the rows of the groups it touched.
@@ -1187,6 +1189,7 @@ struct Launched {
     net: Option<super::net::SessionNet>,
     browser_why: Option<String>,
     hooked: Option<runstav::methods::agents::Hooked>,
+    mcp_servers: Vec<String>,
 }
 
 /// Where a path may be read or written: inside the session's directory; a brainstorm writes its document only, and a
@@ -2074,6 +2077,19 @@ pub(crate) async fn open_with(
     Ok((Started { id: sid, name }, level))
 }
 
+/// The names of the MCP servers MCP, as the agent sees them.
+fn mcp_names(mcp: &[hermod::McpServer]) -> Vec<String> {
+    mcp.iter()
+        .filter_map(|m| {
+            serde_json::to_value(m)
+                .ok()?
+                .get("name")?
+                .as_str()
+                .map(String::from)
+        })
+        .collect()
+}
+
 /// The `mcpServers` entry that gives the session SID the coordination tools (`job_start` among them): Ratatoskr's
 /// `mcp-bridge` to the session's own socket, minted here (or the one a closed session left).  None when the hub has no
 /// store yet (the unit tests): the session then has no tools.
@@ -2198,6 +2214,7 @@ async fn launch_steps(
         front.mcp.mark_project_chat(sid);
     }
     let mcp = bridge(front, profile, who_of(role, profile), sid, cwd, task, job).await;
+    let mcp_servers = mcp_names(&mcp);
     let prep = match prepare(front, profile, role, sid, cwd, job, module_env).await {
         Ok(p) => p,
         Err(e) => return Err(e),
@@ -2352,6 +2369,7 @@ async fn launch_steps(
             net,
             browser_why: prep.browser.why,
             hooked: prep.hooked,
+            mcp_servers,
         },
         rx,
     ))
@@ -2457,6 +2475,7 @@ fn assemble(
     let plugins_changed = front.mcp.plugins_flag(&i.id);
     let panel = panel::Panel::new(l.caps.as_ref());
     let hooked = l.hooked;
+    let mcp_servers = l.mcp_servers;
     let s = Arc::new(Session {
         id: i.id,
         started: i.started,
@@ -2521,6 +2540,7 @@ fn assemble(
         tool_hub: front.tool_hub.clone(),
         project: std::sync::OnceLock::new(),
         hooked,
+        mcp_servers,
         panel,
         panels: front.core.views.panels.clone(),
         history: front
@@ -4284,6 +4304,8 @@ impl Session {
             waiting: self.pair.waiting(&self.id),
             paired: self.pair.paired_now(&self.id),
             held_by: (st.wheel != Wheel::Free).then(|| "user".to_string()),
+            model: self.conn.reported_model(&self.acp),
+            mcp: self.mcp_servers.clone(),
         }
     }
 

@@ -343,6 +343,9 @@ fn strip(cx: &Cx) -> Vec<Row> {
 fn chips(s: &Snapshot, cx: &Cx) -> Option<Row> {
     // (what a click explains, or none; text)
     let mut list: Vec<(Option<&str>, String)> = Vec::new();
+    if let Some(m) = s.model.as_deref().filter(|m| !m.is_empty()) {
+        list.push((Some("model"), m.to_owned()));
+    }
     if let Some(u) = &s.usage {
         if let (Some(used), Some(size)) = (u.used, u.size)
             && size > 0.0
@@ -379,6 +382,9 @@ fn chips(s: &Snapshot, cx: &Cx) -> Option<Row> {
         Some(true) => list.push((None, "sandboxed".to_owned())),
         Some(false) => list.push((None, "not enforced".to_owned())),
         None => {}
+    }
+    if !s.mcp.is_empty() {
+        list.push((Some("mcp"), format!("MCP {}", s.mcp.len())));
     }
     if let Some(n) = cx.files_edited.filter(|&n| n > 0) {
         list.push((None, format!("{n} file{}", if n == 1 { "" } else { "s" })));
