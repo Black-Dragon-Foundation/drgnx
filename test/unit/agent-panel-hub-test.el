@@ -101,7 +101,7 @@ session.  The module's own setup is not used: the module fixture moves the confi
 (declare-function drgnx-agent-panel-send "drgnx-agent-panel-composer")
 (declare-function drgnx-agent-panel-edit-queued "drgnx-agent-panel-composer")
 (declare-function drgnx-agent-panel-drop-queued "drgnx-agent-panel-composer")
-(declare-function drgnx-agent-panel-composer--read "drgnx-agent-panel-composer")
+(declare-function drgnx-agent-panel--composer-of "drgnx-agent-panel-composer")
 (defvar drgnx-agent-panel--snap)
 
 (defun drgnx-agent-panel-hub-test--show (buf)
@@ -118,9 +118,10 @@ session.  The module's own setup is not used: the module fixture moves the confi
     v))
 
 (defun drgnx-agent-panel-hub-test--send (buf text)
-  (with-current-buffer buf
-    (cl-letf (((symbol-function 'drgnx-agent-panel-composer--read) (lambda (_) text)))
-      (drgnx-agent-panel-send))))
+  (with-current-buffer (drgnx-agent-panel--composer-of buf)
+    (goto-char (point-min))
+    (insert text)
+    (drgnx-agent-panel-send)))
 
 (defun drgnx-agent-panel-hub-test--queue (buf) (append (plist-get (buffer-local-value 'drgnx-agent-panel--snap buf) :queue) nil))
 

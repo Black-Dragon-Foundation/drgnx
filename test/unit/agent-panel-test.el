@@ -15,6 +15,7 @@
 
 (defvar drgnx-agent-panel--stats-render)
 (declare-function drgnx-agent-panel-composer--row "drgnx-agent-panel-composer")
+(declare-function drgnx-agent-panel--composer-of "drgnx-agent-panel-composer")
 (defvar drgnx-agent-panel--subscribed)
 (defvar drgnx-hub--events)
 (declare-function drgnx-agent-panel-buffer "drgnx-agent-panel")
@@ -251,15 +252,15 @@ unanswered, and panel \"s1\" as `buf'."
     (with-current-buffer buf
       (drgnx-agent-panel--take-snapshot (list :id "s1" :status "busy" :mode "queue"))
       (setq drgnx-agent-panel-test--calls nil)
-      (cl-letf (((symbol-function 'drgnx-agent-panel-composer--read) (lambda (_) " go on ")))
-        (drgnx-agent-panel-send))
+      (with-current-buffer (drgnx-agent-panel--composer-of buf) (insert " go on "))
+      (drgnx-agent-panel-send)
       ;; one send, and nothing that ends the turn
       (should (equal '(("agents/send" :id "s1" :text "go on")) (reverse drgnx-agent-panel-test--calls)))
       ;; a mode that would cancel is refused, nothing is sent
       (setq drgnx-agent-panel-test--calls nil)
       (drgnx-agent-panel--take-snapshot (list :id "s1" :status "busy" :mode "interrupt"))
-      (cl-letf (((symbol-function 'drgnx-agent-panel-composer--read) (lambda (_) "stop now")))
-        (should-error (drgnx-agent-panel-send) :type 'user-error))
+      (with-current-buffer (drgnx-agent-panel--composer-of buf) (insert "stop now"))
+      (should-error (drgnx-agent-panel-send) :type 'user-error)
       (should-not drgnx-agent-panel-test--calls))))
 
 (ert-deftest drgnx-agent-panel/a-queued-note-is-editable-until-sent ()

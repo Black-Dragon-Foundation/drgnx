@@ -4,10 +4,14 @@
 
 ;;; Commentary:
 ;; Under the transcript: the steering queue (the notes waiting for the turn to end, each editable until it is sent),
-;; and the composer.  `s' writes to the agent: a message sent while it works is queued, never a cancel.  `x' stops it
-;; (after a confirmation line), `p' stops it after its current step, `u' resumes it.  `@file' and `/command' complete
-;; in the composer from the session's folder and the snapshot's commands.  The Pair chip shows the snapshot's `paired'
-;; and `waiting' and runs `agents-pair' when that command exists; else it is not there.
+;; and the composer, an input buffer of its own (`drgnx-agent-panel--composer-of'): the message you write at its start,
+;; and under it a read-only bar of chips and buttons.  `s' in the panel puts point in it; RET sends (a message sent
+;; while the agent works is queued, never a cancel), S-RET breaks the line.  `x' stops the agent (after a confirmation
+;; line), `p' stops it after its current step, `u' resumes it.  `@file' and `/command' complete in the composer from the
+;; session's folder and the snapshot's commands.  The Pair chip shows the snapshot's `paired' and `waiting' and runs
+;; `agents-pair' when that command exists; else it is not there.
+;; The composer works on the panel's state through the state twin (`drgnx-agent-panel--companion-sync'), which the
+;; header uses too.
 ;; Loaded by tools/agent-panel (drgnx-agent-panel.el); defines no module.  See docs/guide/agent-panel.md.
 
 ;;; Code:
@@ -19,6 +23,10 @@
 (require 'drgnx-ui-kit)                 ; the bar's buttons
 (require 'drgnx-pixels)
 (require 'drgnx-icons)
+(require 'drgnx-modal)                  ; the composer starts in insert state
+
+(defvar drgnx-view-patch-twin-of)
+(declare-function drgnx-view-env--twin-copy "drgnx-view-env" (from prefixes))
 
 (defvar drgnx-agent-panel--session)
 (defvar drgnx-agent-panel--snap)
@@ -39,11 +47,6 @@
 (defun drgnx-agent-panel-composer-keys ()
   "The panel's own row under the transcript: the composer.  The queued notes are the hub's rows (`c:q:N')."
   (list (list :composer)))
-
-(defun drgnx-agent-panel-composer-redraw ()
-  "The snapshot changed: the composer is drawn again."
-  (when (drgnx-view-p drgnx-view)
-    (drgnx-view-dirty drgnx-view (list (list :composer)))))
 
 ;;;; Rows
 
@@ -81,11 +84,9 @@ of one face; a click writes to the agent."
     (require 'drgnx-history-revert)
     (drgnx-history-fork-here drgnx-agent-panel--session seq)))
 
-(defun drgnx-agent-panel-composer--row ()
-  "The composer (agent-panel.html `.composer'): the field's card, where a click writes to the agent, and under it the
-bar: the model and the mode as chips that switch them, Pair when it is a command, then Fork, the pause icon (stop after
-this step) and Send, an arrow, as buttons.
-The bar sits under the card, not in it: its chips and buttons have boxes of their own."
+(defun drgnx-agent-panel-composer--bar ()
+  "The composer's bar (agent-panel.html `.composer'): the model and the mode as chips that switch them, Pair when it is
+a command, then Fork, the pause icon (stop after this step) and Send, an arrow, as buttons.  It has no newline."
   (let* ((snap drgnx-agent-panel--snap) (model (plist-get snap :model)) (mode (plist-get snap :mode))
          (pair (drgnx-agent-panel-composer--pair-chip))
          (buttons (concat (drgnx-agent-panel-composer--click (concat " " (drgnx-look-icon 'git-fork) " Fork ")
@@ -97,22 +98,28 @@ The bar sits under the card, not in it: its chips and buttons have boxes of thei
                           " "
                           (drgnx-agent-panel-composer--click (concat " " (drgnx-look-icon 'arrow-up) " ")
                                                              #'drgnx-agent-panel-send 'drgnx-ui-button-primary
-                                                             "s: write to the agent; while it works it is queued")))
-         (bar (concat (if (stringp model)
-                          (concat (drgnx-agent-panel-composer--click (concat " " (drgnx-look-icon 'sparkle) " " model " ")
-                                                                     #'drgnx-agent-panel-switch-model
-                                                                     'drgnx-agent-panel-chip "Switch the model")
-                                  " ")
-                        "")
-                      (if mode
-                          (concat (drgnx-agent-panel-composer--click (format " %s ▾ " mode) #'drgnx-agent-panel-switch-mode
-                                                                     'drgnx-agent-panel-chip "Switch the mode")
-                                  " ")
-                        "")
-                      (or pair "")
-                      (propertize " " 'display `(space :align-to (- right (,(+ (string-pixel-width buttons) (drgnx-px 20))))))
-                      buttons)))
-    (concat (drgnx-agent-panel-composer--field) " " bar "\n")))
+                                                             "RET: send to the agent; while it works it is queued"))))
+    (concat (if (stringp model)
+                (concat (drgnx-agent-panel-composer--click (concat " " (drgnx-look-icon 'sparkle) " " model " ")
+                                                           #'drgnx-agent-panel-switch-model
+                                                           'drgnx-agent-panel-chip "Switch the model")
+                        " ")
+              "")
+            (if mode
+                (concat (drgnx-agent-panel-composer--click (format " %s ▾ " mode) #'drgnx-agent-panel-switch-mode
+                                                           'drgnx-agent-panel-chip "Switch the mode")
+                        " ")
+              "")
+            (if pair (concat (drgnx-agent-panel-composer--click pair #'drgnx-agent-panel-pair nil "C: pair with the agent") " ")
+              "")
+            (propertize " " 'display `(space :align-to (- right (,(+ (string-pixel-width buttons) (drgnx-px 20))))))
+            buttons)))
+
+(defun drgnx-agent-panel-composer--row ()
+  "The composer as a row of the transcript (until the transcript drops it): the field's card, where a click writes to
+the agent, and under it the bar (`drgnx-agent-panel-composer--bar').
+The bar sits under the card, not in it: its chips and buttons have boxes of their own."
+  (concat (drgnx-agent-panel-composer--field) " " (drgnx-agent-panel-composer--bar) "\n"))
 
 ;;;; Completion in the composer
 
@@ -140,14 +147,175 @@ The bar sits under the card, not in it: its chips and buttons have boxes of thei
             ((and (< beg end) (eq (char-after beg) ?/) (= beg (minibuffer-prompt-end)))
              (list (1+ beg) end names :exclusive 'no))))))
 
-(defun drgnx-agent-panel-composer--read (prompt)
-  "Read a message in the minibuffer with `@file' and `/command' completion."
-  (let ((names (drgnx-agent-panel-composer--command-names))
-        (files (drgnx-agent-panel-composer--files (plist-get drgnx-agent-panel--snap :cwd))))
-    (minibuffer-with-setup-hook
-        (lambda ()
-          (add-hook 'completion-at-point-functions (drgnx-agent-panel-composer--capf names files) nil t))
-      (read-string prompt))))
+(defun drgnx-agent-panel-composer--complete ()
+  "`completion-at-point-functions' of the composer: `--capf' over the session's commands and, for an `@' word, the
+files of its folder (looked through only then)."
+  (let ((beg (save-excursion (skip-chars-backward "^ \t\n") (point))))
+    (when (memq (char-after beg) '(?@ ?/))
+      (funcall (drgnx-agent-panel-composer--capf
+                (drgnx-agent-panel-composer--command-names)
+                (and (eq (char-after beg) ?@) (drgnx-agent-panel-composer--files (plist-get drgnx-agent-panel--snap :cwd))))))))
+
+;;;; The state twin: a companion buffer works on its panel's state
+
+;; The header and the composer are buffers of their own beside the panel's (the transcript's), which owns the state.
+;; Before each command in a companion the panel's `drgnx-agent-panel-' locals are copied in; after it, the ones the
+;; command changed go back.  The companion's own locals are named `drgnx-agent-companion-', so they never travel.
+
+(defvar-local drgnx-agent-companion--main nil "In a companion (the header, the composer): the panel's buffer.")
+(defvar-local drgnx-agent-companion--taken nil "In a companion: the state as copied in, ((SYMBOL . VALUE)...).")
+(defvar-local drgnx-agent-companion--composer nil "In a panel's buffer: its composer, once made.")
+
+(defun drgnx-agent-panel--companion-state ()
+  "The current buffer's `drgnx-agent-panel-' locals that travel between a panel and its companions: ((SYMBOL . VALUE)
+...), as `drgnx-view-env--twin-copy' copies them (no marker or overlay: those point into their own buffer)."
+  (let (out)
+    (dolist (b (buffer-local-variables))
+      (let ((sym (car-safe b)) (v (cdr-safe b)))
+        (when (and sym (symbolp sym) (string-prefix-p "drgnx-agent-panel-" (symbol-name sym))
+                   (not (or (markerp v) (overlayp v) (and (consp v) (or (markerp (car v)) (overlayp (car v)))))))
+          (push (cons sym v) out))))
+    out))
+
+(defun drgnx-agent-panel--companion-take ()
+  "`pre-command-hook' of a companion: the panel's state as it is now."
+  (when (buffer-live-p drgnx-agent-companion--main)
+    (drgnx-view-env--twin-copy drgnx-agent-companion--main '("drgnx-agent-panel-"))
+    (setq drgnx-agent-companion--taken (drgnx-agent-panel--companion-state))))
+
+(defun drgnx-agent-panel--companion-give ()
+  "`post-command-hook' of a companion: what the command changed of the state goes back to the panel (only that: a
+snapshot the panel took meanwhile is not overwritten by the older copy)."
+  (when (buffer-live-p drgnx-agent-companion--main)
+    (let (changed)
+      (dolist (c (drgnx-agent-panel--companion-state))
+        (unless (let ((was (assq (car c) drgnx-agent-companion--taken))) (and was (eq (cdr was) (cdr c))))
+          (push c changed)))
+      (setq drgnx-agent-companion--taken (drgnx-agent-panel--companion-state))
+      (when changed
+        (with-current-buffer drgnx-agent-companion--main
+          (dolist (c changed) (set (make-local-variable (car c)) (cdr c))))))))
+
+(defun drgnx-agent-panel--companion-sync (main)
+  "Make the current buffer a companion of MAIN, a panel's buffer: it works on MAIN's state, copied in before each
+command and given back after it.  The state is copied in at once."
+  (require 'drgnx-view-env)
+  (setq drgnx-agent-companion--main main)
+  (drgnx-agent-panel--companion-take)
+  (add-hook 'pre-command-hook #'drgnx-agent-panel--companion-take nil t)
+  (add-hook 'post-command-hook #'drgnx-agent-panel--companion-give nil t))
+
+(defun drgnx-agent-panel--main-of (buffer)
+  "The panel's buffer of BUFFER: BUFFER itself for a panel, the panel a companion or a display class's twin belongs
+to, or nil."
+  (with-current-buffer buffer
+    (cond ((buffer-live-p drgnx-agent-companion--main) drgnx-agent-companion--main)
+          ((and (boundp 'drgnx-view-patch-twin-of) (buffer-live-p drgnx-view-patch-twin-of)) drgnx-view-patch-twin-of)
+          ((derived-mode-p 'drgnx-agent-panel-mode) buffer))))
+
+;;;; The composer buffer
+
+(defconst drgnx-agent-panel-composer-placeholder "Steer the agent… (@ file, / command)"
+  "What an empty composer shows.")
+
+(defvar drgnx-agent-panel-composer-mode-map (make-sparse-keymap)
+  "Keys of the composer.  The key profiles bind them (`drgnx-command-define' with this map).")
+
+(defvar-local drgnx-agent-companion--placeholder nil "The composer's placeholder overlay.")
+
+(defvar drgnx-agent-panel-composer--button-map
+  (let ((m (make-sparse-keymap))) (define-key m [mouse-1] #'drgnx-agent-panel-composer--clicked) m)
+  "The keymap of the composer bar's buttons: a click runs the button's `drgnx-agent-composer-command'.")
+
+(define-derived-mode drgnx-agent-panel-composer-mode text-mode "Agent composer"
+  "The agent panel's composer: the message you write to the agent, and under it the bar of its chips and buttons."
+  (setq-local truncate-lines nil word-wrap t require-final-newline nil)
+  (face-remap-add-relative 'default 'drgnx-ui-text)
+  ;; only `@file' and `/command': text-mode's word completion wants a dictionary and knows neither
+  (setq-local completion-at-point-functions (list #'drgnx-agent-panel-composer--complete))
+  (add-hook 'after-change-functions #'drgnx-agent-panel-composer--changed nil t))
+
+(defun drgnx-agent-panel-composer--field-end ()
+  "Where the composer's field ends: the bar's start (the field's text carries no `field' property)."
+  (if (eq (get-text-property (point-min) 'field) 'drgnx-agent-composer-bar) (point-min)
+    (or (next-single-property-change (point-min) 'field) (point-max))))
+
+(defun drgnx-agent-panel-composer--field-text ()
+  "The message in the composer's field."
+  (buffer-substring-no-properties (point-min) (drgnx-agent-panel-composer--field-end)))
+
+(defun drgnx-agent-panel-composer--placehold ()
+  "The placeholder shows while the field is empty."
+  (overlay-put drgnx-agent-companion--placeholder 'before-string
+               (and (eq (get-text-property (point-min) 'field) 'drgnx-agent-composer-bar)   ; an empty field
+                    (let ((s (propertize drgnx-agent-panel-composer-placeholder 'face 'drgnx-agent-panel-subtle)))
+                      (put-text-property 0 1 'cursor t s)    ; the cursor at its start, not after it
+                      s))))
+
+(defun drgnx-agent-panel-composer--changed (&rest _)
+  "`after-change-functions' of the composer."
+  (when (overlayp drgnx-agent-companion--placeholder) (drgnx-agent-panel-composer--placehold)))
+
+(defun drgnx-agent-panel-composer--draw-bar ()
+  "Draw the composer's bar again from the panel's state, after the field.  The bar is read-only, takes no typing at
+its end, and is a field of its own (line moves stop at it); typing at the field's end, right before it, works."
+  (let ((inhibit-read-only t) (buffer-undo-list t) (inhibit-modification-hooks t)
+        (bar (concat "\n" (drgnx-agent-panel-composer--bar))) (i 0))
+    ;; each button's click runs its command through `--clicked', in this composer on the session's state
+    (while (< i (length bar))
+      (let ((next (next-single-property-change i 'keymap bar (length bar))) (map (get-text-property i 'keymap bar)))
+        (when (keymapp map)
+          (add-text-properties i next (list 'drgnx-agent-composer-command (lookup-key map [mouse-1])
+                                            'keymap drgnx-agent-panel-composer--button-map)
+                               bar))
+        (setq i next)))
+    (add-text-properties 0 (length bar) (list 'read-only t 'field 'drgnx-agent-composer-bar) bar)
+    (save-excursion
+      (delete-region (drgnx-agent-panel-composer--field-end) (point-max))
+      (goto-char (point-max))
+      (insert bar))))
+
+(defun drgnx-agent-panel-composer-redraw ()
+  "The snapshot changed: the composer is drawn again (the transcript's row, and the composer's buffer's bar)."
+  (when (drgnx-view-p drgnx-view)
+    (drgnx-view-dirty drgnx-view (list (list :composer))))
+  (when-let* ((c drgnx-agent-companion--composer) ((buffer-live-p c)))
+    (with-current-buffer c
+      (drgnx-agent-panel--companion-take)
+      (drgnx-agent-panel-composer--draw-bar))))
+
+(defun drgnx-agent-panel-composer--main-killed ()
+  "`kill-buffer-hook' of a panel's buffer: its composer goes with it."
+  (when (buffer-live-p drgnx-agent-companion--composer) (kill-buffer drgnx-agent-companion--composer)))
+
+(defun drgnx-agent-panel--composer-of (buffer)
+  "The composer of BUFFER's panel (BUFFER a panel, a companion or a twin), made when there is none; nil when BUFFER
+belongs to no panel.  What the area shows under the transcript."
+  (when-let* ((main (drgnx-agent-panel--main-of buffer)))
+    (with-current-buffer main
+      (if (buffer-live-p drgnx-agent-companion--composer) drgnx-agent-companion--composer
+        (let ((c (get-buffer-create (format "%s composer" (buffer-name main)))))
+          (setq drgnx-agent-companion--composer c)
+          (add-hook 'kill-buffer-hook #'drgnx-agent-panel-composer--main-killed nil t)
+          (with-current-buffer c
+            (drgnx-agent-panel-composer-mode)
+            (drgnx-agent-panel--companion-sync main)
+            (setq drgnx-agent-companion--placeholder (make-overlay (point-min) (point-min)))
+            (drgnx-agent-panel-composer--draw-bar)
+            (drgnx-agent-panel-composer--placehold)
+            (goto-char (point-min)))
+          c)))))
+
+(defun drgnx-agent-panel-composer--clicked (event)
+  "A click on a button of the composer's bar: its command, in the composer clicked, on the session's state (the click
+comes whatever buffer is current)."
+  (interactive "e")
+  (let* ((posn (event-start event)) (w (posn-window posn)) (pos (posn-point posn)))
+    (with-current-buffer (window-buffer w)
+      (when-let* ((cmd (and (integer-or-marker-p pos) (get-text-property pos 'drgnx-agent-composer-command))))
+        (drgnx-agent-panel--companion-take)
+        (unwind-protect (call-interactively cmd)
+          (drgnx-agent-panel--companion-give))))))
 
 ;;;; Commands
 
@@ -160,10 +328,38 @@ The bar sits under the card, not in it: its chips and buttons have boxes of thei
     (message (if busy "Agent: queued, it goes in after the current turn" "Agent: sent"))))
 
 (defun drgnx-agent-panel-send ()
-  "Write to the agent.  While it works the message is queued; it is not cancelled."
+  "Send the composer's message to the agent and empty the field.  While it works the message is queued; it is not
+cancelled.  An empty field sends nothing.  From the panel or its header it sends the composer's draft too."
   (interactive)
-  (let ((text (string-trim (drgnx-agent-panel-composer--read "To the agent: "))))
-    (unless (string-empty-p text) (drgnx-agent-panel-composer--send-text text))))
+  (when-let* ((c (drgnx-agent-panel--composer-of (current-buffer))))
+    (with-current-buffer c
+      (drgnx-agent-panel--companion-take)   ; the state as it is now, from wherever the command ran
+      (let ((text (string-trim (drgnx-agent-panel-composer--field-text))))
+        (unless (string-empty-p text)
+          (drgnx-agent-panel-composer--send-text text)
+          (delete-region (point-min) (drgnx-agent-panel-composer--field-end)))))))
+
+(defun drgnx-agent-panel-composer-newline ()
+  "Break the line in the composer's message; nothing is sent."
+  (interactive)
+  (insert "\n"))
+
+(defun drgnx-agent-panel-compose ()
+  "Write to the agent: point goes to the end of the composer's message, in the window under the panel."
+  (interactive)
+  (let* ((c (or (drgnx-agent-panel--composer-of (current-buffer)) (user-error "Not in an agent panel")))
+         (w (or (get-buffer-window c) (display-buffer c '(display-buffer-below-selected)))))
+    (select-window w)
+    (goto-char (drgnx-agent-panel-composer--field-end))))
+
+(defun drgnx-agent-panel-composer-back ()
+  "Back from the composer to its panel's transcript."
+  (interactive)
+  (when-let* ((main (drgnx-agent-panel--main-of (current-buffer)))
+              (w (or (get-buffer-window main)
+                     (seq-find (lambda (w) (eq main (drgnx-agent-panel--main-of (window-buffer w))))
+                               (delq (selected-window) (window-list))))))
+    (select-window w)))
 
 (defun drgnx-agent-panel-stop ()
   "Stop the agent, after a confirmation line: its turn ends after its current step."
@@ -302,8 +498,17 @@ When the lock allows none, say why (the hub's reason)."
         (drgnx-agent-panel-composer--send-text "/compact")))))
 
 (defun drgnx-agent-panel-composer-setup ()
-  (dolist (c '((agents-panel-send "Write to the Agent" drgnx-agent-panel-send
-                                  "A message to the agent; while it works it is queued, never a cancel")
+  (add-to-list 'drgnx-modal-input-modes 'drgnx-agent-panel-composer-mode)
+  (dolist (c '((agents-panel-send "Send to the Agent" drgnx-agent-panel-send
+                                  "Send the composer's message; while the agent works it is queued, never a cancel")
+               (agents-panel-newline "New Line in the Message" drgnx-agent-panel-composer-newline
+                                     "Break the line in the composer's message; nothing is sent")
+               (agents-panel-back "Back to the Transcript" drgnx-agent-panel-composer-back
+                                  "From the composer back to the panel's transcript")))
+    (drgnx-command-define (nth 0 c) :category "Agents" :title (nth 1 c) :command (nth 2 c)
+                          :map 'drgnx-agent-panel-composer-mode-map :doc (nth 3 c)))
+  (dolist (c '((agents-panel-compose "Write to the Agent" drgnx-agent-panel-compose
+                                     "Put point in the composer under the transcript")
                (agents-panel-stop "Stop the Agent" drgnx-agent-panel-stop
                                   "Stop the agent after a confirmation line; its turn stops after the current step")
                (agents-panel-pause "Stop the Agent After This Step" drgnx-agent-panel-pause
