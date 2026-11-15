@@ -683,7 +683,12 @@ How it works:
   error naming the view, its buffer, its class, the width and an example. **No row cut where its full text fits:** a
   `…` at the drawn or narrow width is checked against the same row at the wide width; the text it cut off (measured
   in the buffer with its faces), less the `…`, plus the hub's 10 px slack, must not fit the px free after the `…`
-  (blanks, a stop's space, the body past the row's end). The drawn width is measured as the shot drew it, then
+  (blanks, a stop's space, the body past the row's end). A blank in a block's face (a box or a background of its own:
+  a card's fill, a chip) ends the count: when the row ends in that block, only its end pad less the row's start pad in
+  that face counts (the block's own padding, kept on both sides), never the px past the block. When a text follows
+  on the row, the view's gap from it (10 logical px: a column's, a place's at the right edge) is not free. The `…` is measured
+  with its faces as the cut text is (`window-text-pixel-size` of a char past the body's edge gives the whole
+  line's). The drawn width is measured as the shot drew it, then
   again after a round trip; when that changed the rows (the shot came before the hub's refit), the shot's cuts are
   logged (`:changed-after-the-shot`) and the settled rows are checked instead. A window the frame cannot move 40 px is an error
   (`:not-resizable` in the log) unless its buffer is named in `drgnx-look-scene-widths-fixed`. What was measured goes

@@ -2322,20 +2322,56 @@ sizes ignored (a dock's side window keeps its width otherwise); the pixels it mo
 (defconst drgnx-look-scene-widths-slack 10
   "The px the hub keeps short of a segment's end (`drgnx_rows::fit::SLACK').")
 
+(defconst drgnx-look-scene-widths-gap 10
+  "The logical px a view keeps between a cut text and a text after it on its row (the Flow's column gap, the Run and
+Debug rows' two gaps before a frame's place).")
+
+(defun drgnx-look-scene--blank-p (q)
+  "Non-nil when the char at Q is a blank: a space, a tab or a stop's space."
+  (or (memq (char-after q) '(?\s ?\t)) (eq (car-safe (get-text-property q 'display)) 'space)))
+
+(defun drgnx-look-scene--filled-p (q frame)
+  "Non-nil when the char at Q is drawn in a face with a box or a background of its own on FRAME: part of a block (a
+card, a chip), whose width its row's layout sets, not the text's."
+  (let ((faces (get-text-property q 'face)) (bg (face-background 'default frame)))
+    (setq faces (if (or (not (listp faces)) (keywordp (car faces))) (list faces) faces))
+    (seq-some (lambda (f)
+                (if (and (consp f) (keywordp (car f)))
+                    (or (plist-get f :box) (plist-get f :background))
+                  (and f (facep f)
+                       (or (not (memq (face-attribute f :box frame t) '(nil unspecified)))
+                           (let ((b (face-attribute f :background frame t)))
+                             (and (stringp b) (not (equal b bg))))))))
+              faces)))
+
 (defun drgnx-look-scene--free-after (window bol pos eol)
   "The px free after POS on its row BOL..EOL in WINDOW: the blanks and stops' spaces from POS on, and, when they reach
-EOL, the body's px past the row's end."
-  (let ((q pos))
-    (while (and (< q eol) (or (memq (char-after q) '(?\s ?\t))
-                              (eq (car-safe (get-text-property q 'display)) 'space)))
-      (setq q (1+ q)))
-    (+ (if (> q pos) (car (window-text-pixel-size window pos q)) 0)
-       (if (< q eol) 0 (max 0 (- (window-body-width window t) (car (window-text-pixel-size window bol eol))))))))
+EOL, the body's px past the row's end.  A blank in a block's face (`drgnx-look-scene--filled-p': a card's fill or
+edge) ends the count: when the row ends in that block, its end pad less the row's start pad in the same face (the
+block's own padding, kept on both sides) counts, and the px past the block are not the text's."
+  (let ((q pos) (frame (window-frame window)) (block nil))
+    (while (and (< q eol) (drgnx-look-scene--blank-p q) (not block))
+      (if (drgnx-look-scene--filled-p q frame) (setq block q) (setq q (1+ q))))
+    (let ((free (if (> q pos) (car (window-text-pixel-size window pos q)) 0)))
+      (cond
+       ((not block)
+        (+ free (if (< q eol) 0
+                  (max 0 (- (window-body-width window t) (car (window-text-pixel-size window bol eol)))))))
+       (t
+        (let ((e block) (face (get-text-property block 'face)) (s bol))
+          (while (and (< e eol) (drgnx-look-scene--blank-p e) (equal (get-text-property e 'face) face))
+            (setq e (1+ e)))
+          (while (and (< s pos) (drgnx-look-scene--blank-p s) (equal (get-text-property s 'face) face))
+            (setq s (1+ s)))
+          (if (< e eol) free
+            (+ free (max 0 (- (car (window-text-pixel-size window block eol))
+                              (if (> s bol) (car (window-text-pixel-size window bol s)) 0)))))))))))
 
 (defun drgnx-look-scene--cut-rows (window how)
   "Each cut in the hub's rows in WINDOW's buffer: (KEY HOW BODY-PX PREFIX AFTER FREE ELLIPSIS-PX ROW-PARTS FONTS),
 PREFIX the row's text before the `…', AFTER its text after it, FREE the px free after it
-\(`drgnx-look-scene--free-after'), FONTS the roles the hub measured the row in."
+\(`drgnx-look-scene--free-after', less `drgnx-look-scene-widths-gap' when a text follows), FONTS the roles
+the hub measured the row in."
   (let ((out nil) (n 0))
     (with-current-buffer (window-buffer window)
       (save-excursion
@@ -2351,8 +2387,17 @@ PREFIX the row's text before the `…', AFTER its text after it, FREE the px fre
                   (push (list key how (window-body-width window t)
                               (buffer-substring-no-properties bol (1- (point)))
                               (buffer-substring-no-properties (point) eol)
-                              (drgnx-look-scene--free-after window bol (point) eol)
-                              (car (window-text-pixel-size window (1- (point)) (point)))
+                              ;; a text after the cut on the row keeps the hub's gap from it (a column's, a
+                              ;; place's at the right edge): not the cut text's room
+                              (let ((free (drgnx-look-scene--free-after window bol (point) eol)))
+                                (if (string-blank-p (buffer-substring-no-properties (point) eol)) free
+                                  (max 0 (- free (drgnx-px drgnx-look-scene-widths-gap (window-frame window))))))
+                              ;; with its faces, as the cut text is measured (`drgnx-look-scene--over-cut'):
+                              ;; `window-text-pixel-size' of a char past the body's edge gives the whole line's
+                              (string-pixel-width (let ((e (buffer-substring (1- (point)) (point))))
+                                                    (remove-text-properties 0 1 '(read-only nil front-sticky nil) e)
+                                                    e)
+                                                  (current-buffer))
                               (drgnx-look-scene--row-parts window bol eol)
                               (ignore-errors (plist-get (gethash key (drgnx-view-patch-rows drgnx-view-patch)) :fonts)))
                         out))))
