@@ -123,5 +123,45 @@ header line's height is known after the first redisplay; at most 5 rounds)."
       (drgnx-view-env-teardown)
       (drgnx-view-patch-teardown))))
 
+(defvar drgnx-ui-agent-panel-composer--fits 0 "Calls of `drgnx-wb-area-fit-companions' while counted.")
+
+(defun drgnx-ui-agent-panel-composer--count-fit (&rest _)
+  "Before `drgnx-wb-area-fit-companions': one more fit."
+  (setq drgnx-ui-agent-panel-composer--fits (1+ drgnx-ui-agent-panel-composer--fits)))
+
+(ert-deftest drgnx-ui-agent-panel-composer/typing-on-one-line-fits-the-docks-once-at-most ()
+  "Twenty characters typed on the composer's one line change neither its lines nor its height: the area's companions
+are fitted at most once (the first character takes the placeholder away), not once a keystroke."
+  (skip-unless (display-graphic-p))
+  (load (expand-file-name "test/fixtures/panel-replay-fixture" drgnx-ui-agent-panel-composer--repo) nil t)
+  (let* ((load-path (cons (expand-file-name "modules/tools" drgnx-ui-agent-panel-composer--repo) load-path))
+         (drgnx-view-patch--buffers (make-hash-table :test #'equal)) (drgnx-view-patch--hooked nil)
+         (drgnx-view-env--views (make-hash-table :test #'equal)) (drgnx-view-env--sent (make-hash-table :test #'equal))
+         (drgnx-view-env--glyphs (make-hash-table :test #'equal)) (drgnx-view-env--hooked nil)
+         (drgnx-panel-replay-prefix 3) (panel nil))
+    (unwind-protect
+        (save-window-excursion
+          (setq panel (drgnx-panel-replay-up (drgnx-rows-demo--bin)))
+          (drgnx-keys-use '((vscode app editing window)))   ; letters self-insert
+          (let* ((tw (get-buffer-window panel)) (area (window-parameter tw 'drgnx-role))
+                 (comp (drgnx-agent-panel--composer-of panel))
+                 (cw (progn (drgnx-ui-agent-panel-composer--settle area) (get-buffer-window comp)))
+                 (lines (with-current-buffer comp (count-lines (point-min) (point-max)))) (h (window-body-height cw t)))
+            (should (window-live-p cw))
+            (select-window cw)
+            (goto-char (drgnx-agent-panel-composer--field-end))
+            (setq drgnx-ui-agent-panel-composer--fits 0)
+            (advice-add 'drgnx-wb-area-fit-companions :before #'drgnx-ui-agent-panel-composer--count-fit)
+            (unwind-protect (drgnx-uitest-run (drgnx-uitest-key-events (mapconcat #'identity (make-list 20 "x") " ")))
+              (advice-remove 'drgnx-wb-area-fit-companions #'drgnx-ui-agent-panel-composer--count-fit))
+            (should (equal (make-string 20 ?x) (with-current-buffer comp (drgnx-agent-panel-composer--field-text))))
+            (should (= lines (with-current-buffer comp (count-lines (point-min) (point-max)))))
+            (should (= h (window-body-height cw t)))
+            (should (<= drgnx-ui-agent-panel-composer--fits 1))))
+      (drgnx-keys--restore)
+      (drgnx-panel-replay-down)
+      (drgnx-view-env-teardown)
+      (drgnx-view-patch-teardown))))
+
 (provide 'agent-panel-composer-gui-test)
 ;;; agent-panel-composer-gui-test.el ends here

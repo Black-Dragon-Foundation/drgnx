@@ -203,6 +203,9 @@ to, or nil."
   "Keys of the composer.  The key profiles bind them (`drgnx-command-define' with this map).")
 
 (defvar-local drgnx-agent-companion--placeholder nil "The composer's placeholder overlay.")
+(defvar-local drgnx-agent-companion--fit-heights nil
+  "In the composer: its text's pixel height in each area window that showed it when they were last fitted, an alist
+\((WINDOW . PX)...); only the windows that show it now are kept.")
 
 (defvar drgnx-agent-panel-composer--button-map
   (let ((m (make-sparse-keymap))) (define-key m [mouse-1] #'drgnx-agent-panel-composer--clicked) m)
@@ -234,10 +237,16 @@ to, or nil."
                       s))))
 
 (defun drgnx-agent-panel-composer--refit ()
-  "The composer's lines changed: each area window that shows it below a panel is fitted to them again."
-  (dolist (w (get-buffer-window-list (current-buffer) nil t))
-    (when-let* (((window-parameter w 'drgnx-area-part)) (area (window-parameter w 'drgnx-role)))
-      (drgnx-wb-area-fit-companions area (window-frame w)))))
+  "The composer's text changed: each area window that shows it below a panel, whose text height is not the one it was
+last fitted to (a line more or less, a wrap, a chip), is fitted again; a keystroke that changes no height fits nothing."
+  (let (heights)
+    (dolist (w (get-buffer-window-list (current-buffer) nil t))
+      (when-let* (((window-parameter w 'drgnx-area-part)) (area (window-parameter w 'drgnx-role)))
+        (let ((h (cdr (window-text-pixel-size w (point-min) (point-max)))))
+          (push (cons w h) heights)
+          (unless (eql h (alist-get w drgnx-agent-companion--fit-heights))
+            (drgnx-wb-area-fit-companions area (window-frame w))))))
+    (setq drgnx-agent-companion--fit-heights heights)))
 
 (defun drgnx-agent-panel-composer--changed (&rest _)
   "`after-change-functions' of the composer: the placeholder, and the window's fit."
