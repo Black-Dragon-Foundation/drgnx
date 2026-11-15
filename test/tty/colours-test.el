@@ -176,12 +176,16 @@ foreground and background are the same colour on this terminal, in the default t
                              (seq-filter (lambda (w) (string-match-p (concat "^" w " ") (buffer-string)))
                                          '("critical" "important" "minor")))))
                      '("critical" "important" "minor")))
-      ;; the tabs: the shown tab differs from the others in an attribute that is not a colour
-      (should (drgnx-tty-colours-test--in-client
-               s `(seq-some (lambda (a)
-                              (not (equal (face-attribute 'drgnx-chrome-tab a nil t)
-                                          (face-attribute 'drgnx-chrome-tab-current a nil t))))
-                            ',drgnx-tty-colours-test--attributes)))
+      ;; the tabs: each shown tab (of the active group and of another) differs from the others in an attribute that is
+      ;; not a colour
+      (should (equal (drgnx-tty-colours-test--in-client
+                      s `(mapcar (lambda (f)
+                                   (seq-some (lambda (a)
+                                               (not (equal (face-attribute 'drgnx-chrome-tab a nil t)
+                                                           (face-attribute f a nil t))))
+                                             ',drgnx-tty-colours-test--attributes))
+                                 '(drgnx-chrome-tab-current drgnx-chrome-tab-active)))
+                     '(t t)))
       ;; ignored files have no letter: their face differs from the default in an attribute that is not a colour
       (should (equal (drgnx-tty-colours-test--in-client
                       s `(mapcar (lambda (f)

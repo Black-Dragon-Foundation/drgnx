@@ -745,8 +745,8 @@ asked."
          :cue letter :doc "The status letter (M, A, U, D, C) at the row's edge in the Explorer; ignored files, which have none, are italic (an I on the Linux console)")
     (review :faces (drgnx-review-critical drgnx-review-important drgnx-review-minor)
             :cue word :doc "The severity word that starts a finding's line")
-    (tabs :faces (drgnx-chrome-tab drgnx-chrome-tab-current)
-          :cue attribute :doc "The shown tab differs from the others in weight or inverse video"))
+    (tabs :faces (drgnx-chrome-tab drgnx-chrome-tab-current drgnx-chrome-tab-active)
+          :cue attribute :doc "The shown tabs are bold on a terminal frame (a graphical one tells them by colour)"))
   "The faces that mark a state, by group, and the cue besides colour that tells the state on an 8-colour terminal:
 `letter', `word' and `label' are in the text on the screen; `attribute' is in the faces themselves.  :attribute-faces
 are the faces of a group that rely on an attribute because their state has no text.")

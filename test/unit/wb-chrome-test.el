@@ -239,12 +239,23 @@
     (dolist (f '(drgnx-chrome-tab drgnx-chrome-tab-current drgnx-chrome-tab-active))
       (should (eq (face-attribute f :height nil nil) 'unspecified))))
   ;; the look (design §4 tabs, §3.8 Current): the shown tab joins the editor in the body text's colour, no link colour,
-  ;; line or bold; the shown tab of another group is muted
+  ;; line or bold; the shown tab of another group is muted (the `t' clause: a graphical frame's; a batch frame is a
+  ;; terminal one, whose clause adds the weight)
   (dolist (f '(drgnx-chrome-tab-active drgnx-chrome-tab-current))
-    (should (memq (face-attribute f :overline nil nil) '(nil unspecified)))
-    (should (memq (face-attribute f :weight nil nil) '(normal unspecified)))
-    (should-not (memq 'link (ensure-list (face-attribute f :inherit nil nil)))))
+    (let ((gui (alist-get t (face-default-spec f))))
+      (should-not (plist-get gui :overline))
+      (should-not (plist-get gui :weight))
+      (should-not (memq 'link (ensure-list (plist-get gui :inherit))))))
   (should (memq 'drgnx-text-muted (ensure-list (face-attribute 'drgnx-chrome-tab-current :inherit nil nil)))))
+
+(ert-deftest drgnx-chrome/the-shown-tabs-are-bold-on-a-terminal ()
+  "On a terminal frame (8 colours tell the shown tab by its colour alone) the shown tabs are bold, and only that: the
+terminal clause is the graphical one plus `:weight bold'."
+  (dolist (f '(drgnx-chrome-tab-active drgnx-chrome-tab-current))
+    (let* ((spec (face-default-spec f))
+           (tty (seq-find (lambda (c) (equal (car c) '((type tty)))) spec)))
+      (should (equal (list f (cdr tty)) (list f (append (alist-get t spec) '(:weight bold)))))
+      (should (eq (face-attribute f :weight nil t) 'bold)))))        ; a batch frame is a terminal one
 
 (ert-deftest drgnx-chrome/the-breadcrumb-sits-on-the-editor ()
   "The look (design §4 editor): the breadcrumb row is part of the editor's surface, under the shown tab: the header is

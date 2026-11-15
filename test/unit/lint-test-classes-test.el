@@ -597,6 +597,36 @@ a test reaches by a call: a command a test binds to a key is named by `function'
                   (push (format "%s: %s" rel name) missing))))))))
     (should-not missing)))
 
+(ert-deftest drgnx-lint/the-timing-lane-loads-every-file-of-a-row ()
+  ;; a sample of a row loads only the files test/timing-lane.sh --files names (it reads them with awk: no Emacs on a
+  ;; CI runner's host): every file that holds a :timing test of the row, as this lint reads them, must be one of them.
+  ;; A row that holds no :timing test is stale: its samples would give no time, a red that tells nothing
+  (skip-unless (executable-find "bash"))
+  (let ((lane (expand-file-name "test/timing-lane.sh" drgnx-dir)) (by-row (make-hash-table :test #'equal))
+        (rows (with-temp-buffer
+                (insert-file-contents (expand-file-name "test/timing-rows.txt" drgnx-dir))
+                (cl-loop for line in (split-string (buffer-string) "\n" t)
+                         for name = (car (split-string (replace-regexp-in-string "#.*" "" line) " " t))
+                         when name collect name)))
+        missing)
+    (dolist (rel (drgnx-lint-classes--files))
+      (when (string-prefix-p "test/unit/" rel)
+        (let* ((file (expand-file-name rel drgnx-dir)) (file-class (drgnx-run-ert--file-class file)))
+          (dolist (test (cdr (drgnx-lint-classes--parse (drgnx-lint-classes--forms file))))
+            (when (eq (or (drgnx-lint-classes--own-class test) file-class) :timing)
+              (dolist (row rows)
+                (when (or (equal row "all") (string-prefix-p row (symbol-name (cadr test))))
+                  (cl-pushnew rel (gethash row by-row) :test #'equal))))))))
+    (maphash (lambda (row files)
+               (let ((lane-files (let ((default-directory (file-name-as-directory drgnx-dir)))
+                                   (process-lines "bash" lane "--files" row))))
+                 (dolist (f files)
+                   (unless (member f lane-files) (push (format "%s: %s" row f) missing)))))
+             by-row)
+    (dolist (row rows)
+      (unless (gethash row by-row) (push (format "%s: holds no :timing test" row) missing)))
+    (should-not missing)))
+
 (ert-deftest drgnx-lint/no-stale-exempt-rows ()
   ;; always on, in either merge order: a row whose file is gone, or a file that has both a row and a class line
   (let (stale classed)

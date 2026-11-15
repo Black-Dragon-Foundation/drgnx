@@ -398,7 +398,13 @@ Every tier sets `DRGNX_TEST_NO_TIMING=1`, so the tests tagged `:timing` (wall-cl
 the `timing` job of the tiers workflow (`tiers: timing`), which runs `test/timing-lane.sh`. It is report-only
 (the script reports and exits 0, so a red verdict never reddens the run; `CI gate` does not need it). The lane takes 20 samples of each row of `test/timing-rows.txt`
 (one row for each area's test-name prefix, so an area is judged on its own time; `drgnx-lint/every-timing-test-is-in-a-row`
-fails a `:timing` test no row holds), measures a fixed workload before and after (the calibration: a batch Emacs in the
+fails a `:timing` test no row holds). A sample runs only the files that hold the row's tests (`DRGNX_TEST_ONLY`, which
+names one file or several split at blanks; `test/timing-lane.sh --files ROW` prints them: a file whose class line is
+`timing`, or one where a test of the row's prefix, `ert-deftest` or a test macro's, has a `:tags` line naming `:timing`),
+so a row's time is its own tests, not an Emacs start for each of the suite's files; a row no file holds gives no time.
+The time is the run's summary line (`drgnx: N test files, … (S s)`), which the runner prints in hundredths of a second.
+`drgnx-lint/the-timing-lane-loads-every-file-of-a-row` holds that reading to the class lint's and fails a row that holds
+no `:timing` test. The lane measures a fixed workload before and after (the calibration: a batch Emacs in the
 image the tests run in, `DRGNX_TEST_IMAGE`, never a host Emacs, which a CI runner does not have),
 and passes `DRGNX_TEST_TIME_FACTOR` = calibration / the budgets' reference calibration (`# island-calibration` in the rows
 file) to the tests. A row is `void` when the two calibrations differ by over 25 % (retried once), `red` when its median

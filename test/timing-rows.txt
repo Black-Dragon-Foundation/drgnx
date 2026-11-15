@@ -5,32 +5,30 @@
 # times 1.25: what two calibrations of one run may differ before it is void).  A new :timing test whose name no row
 # starts with is in no row: drgnx-lint/every-timing-test-is-in-a-row fails then.
 # island-calibration 1
-# drgnx-explorer and drgnx-settings: one slot sample each on 2026-11-15 (a row is the whole run, 496 Emacs starts included: medians 110 s and 148 s, ratios 146 and 192), budgets 1.5 times that; the others are still placeholders
-drgnx-agent 100
-drgnx-ai 100
-drgnx-bin 100
-drgnx-bootstrap 100
-drgnx-check 100
-drgnx-chrome 100
-drgnx-explorer 220
-drgnx-file 100
-drgnx-history 100
-drgnx-lang 100
-drgnx-live 100
-drgnx-monitors 100
-drgnx-onboard 100
-drgnx-perf 100
-drgnx-platform 100
-drgnx-quickhelp 100
-drgnx-remote 100
-drgnx-run-ert 100
-drgnx-sandbox 100
-drgnx-search 100
-drgnx-ui-chrome 100
-drgnx-settings 290
-drgnx-shell 100
-drgnx-state 100
-drgnx-statusbar 100
-drgnx-test 100
-drgnx-timer 100
-drgnx-tty 100
+# Every row: one slot sample on 2026-11-15 of only the row's files (test/timing-lane.sh --files; calibration about 0.78), budget 1.5 times that ratio, rounded up to a tenth: a first reading, until a pinned host's 20 samples set them
+drgnx-agent 13.7
+drgnx-bin 15.2
+drgnx-bootstrap 1.9
+drgnx-check 2.9
+drgnx-chrome 1.1
+drgnx-explorer 2.6
+drgnx-file 0.9
+drgnx-history 1.0
+drgnx-lang 2.2
+drgnx-live 1.0
+drgnx-monitors 3.2
+drgnx-onboard 3.0
+drgnx-perf 1.4
+drgnx-platform 28.3
+drgnx-quickhelp 2.7
+drgnx-remote 2.2
+drgnx-run-ert 6.7
+drgnx-sandbox 19.0
+drgnx-search 1.1
+drgnx-settings 0.9
+drgnx-shell 2.0
+drgnx-state 0.9
+drgnx-statusbar 1.2
+drgnx-test 3.5
+drgnx-timer 2.0
+drgnx-tty 2.1
