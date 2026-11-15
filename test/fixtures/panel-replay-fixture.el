@@ -85,6 +85,17 @@
 (defun drgnx-panel-replay--entries ()
   (length (drgnx-agent-session-entries drgnx-panel-replay--mirror)))
 
+(defun drgnx-panel-replay--module-on ()
+  "Turn the module tools/agent-panel on for the workload, noting whether it ran before."
+  ;; the module is defined when its file loads (a module of an idle stage: its setup runs here, not at the first idle)
+  (require 'drgnx-agent-panel)
+  (setq drgnx-panel-replay--module (eq 'ok (plist-get (cdr (assq 'tools/agent-panel (drgnx-modules-report))) :status)))
+  (drgnx-modules-set-enabled 'tools/agent-panel t)
+  (drgnx-modules-run 'idle)
+  (let ((r (cdr (assq 'tools/agent-panel (drgnx-modules-report)))))
+    (unless (eq 'ok (plist-get r :status))
+      (error "The module tools/agent-panel is not running: %S" r))))
+
 (defun drgnx-panel-replay-up (bin)
   "Start a hub of BIN and the mock agent, wait for the prefix, open the panel on the session; the panel's buffer.
 The panel inserts the rows the hub builds."
@@ -95,14 +106,7 @@ The panel inserts the rows the hub builds."
   (let ((mock (and bin (expand-file-name "ratatoskr-mock" (file-name-directory bin)))))
     (unless (and mock (file-executable-p bin) (file-executable-p mock))
       (error "panel-replay needs DRGNX_RATATOSKR_BIN (a test-hooks ratatoskr) with ratatoskr-mock beside it"))
-    ;; the module is defined when its file loads (a module of an idle stage: its setup runs here, not at the first idle)
-    (require 'drgnx-agent-panel)
-    (setq drgnx-panel-replay--module (eq 'ok (plist-get (cdr (assq 'tools/agent-panel (drgnx-modules-report))) :status)))
-    (drgnx-modules-set-enabled 'tools/agent-panel t)
-    (drgnx-modules-run 'idle)
-    (let ((r (cdr (assq 'tools/agent-panel (drgnx-modules-report)))))
-      (unless (eq 'ok (plist-get r :status))
-        (error "The module tools/agent-panel is not running: %S" r)))
+    (drgnx-panel-replay--module-on)
     (setq drgnx-panel-replay--dir (make-temp-file "drgnx-panel-replay" t))
     (let* ((dir drgnx-panel-replay--dir) (project (or drgnx-panel-replay-project (expand-file-name "project" dir)))
            (config (expand-file-name "config" dir)) (script (expand-file-name "replay.txt" config)))
