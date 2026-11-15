@@ -587,6 +587,8 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--audit | --a
     # an --ab-env A/B runs two sessions side by side, so it gets two sessions' room (6g): at 3g the kernel's OOM killer
     # took one of them in every compile-flood A/B (each session peaks near 1.8 GB), and the harness lost it
     if [ -n "$abenv" ]; then mem="${DRGNX_TEST_GUI_MEMORY:-6g}"; fi
+    # the GUI tier starts one session per test file, DRGNX_TEST_JOBS at once (each peaks near 1.8 GB): room for all of them
+    if [ "$tier" = ui ] && [[ "${DRGNX_TEST_JOBS:-}" =~ ^[2-9]$|^[1-9][0-9]+$ ]]; then mem="${DRGNX_TEST_GUI_MEMORY:-$((DRGNX_TEST_JOBS * 2))g}"; fi
     # the synthetic day keeps a long session, more than a GUI test needs: DRGNX_TEST_DAY_MEMORY (default 6g, a desktop
     # size; a laptop sets 4g or less); the results name this host, not the container's id
     if [ "$tier" = day ]; then mem="${DRGNX_TEST_DAY_MEMORY:-6g}"; DRGNX_PERF_MACHINE="${DRGNX_PERF_MACHINE:-$(hostname 2>/dev/null || echo unknown)}"; fi

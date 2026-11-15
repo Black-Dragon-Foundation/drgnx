@@ -1889,9 +1889,143 @@ raise DRGNX_UI_TEST_TIMEOUT\n"
                 (seq-remove (lambda (e) (equal (cdr e) "passed")) ended) "")
      (format "  passed before the timeout: %d\n" (seq-count (lambda (e) (equal (cdr e) "passed")) ended)))))
 
+(defvar drgnx-ui-test-session-function #'drgnx-ui-run-ert-session
+  "The one function that starts a GUI test session and waits for it: (TESTS-DIR TIMEOUT CONFIG EXTRA-ENV) -> (RC RESULTS
+RUN), as `drgnx-ui-run-ert-session'.  Every per-file session starts through it, with the environment it is given
+\(EXTRA-ENV), so another launcher (a jail instead of the container's own compositor and Emacs) replaces this one value.")
+
+(defun drgnx-ui--test-jobs ()
+  "The number of per-file GUI sessions at once: DRGNX_TEST_JOBS (a whole number above 0), else 1."
+  (let ((n (string-to-number (or (getenv "DRGNX_TEST_JOBS") ""))))
+    (if (> n 0) n 1)))
+
+(defun drgnx-ui--session-test-files (dir selector)
+  "The test files of DIR (sorted) the run needs a session for: those that can hold a test SELECTOR (a string, read)
+picks, as `drgnx-run-ert' loads them."
+  (let ((sel (and selector (car (read-from-string selector)))))
+    (cl-remove-if-not (lambda (f) (drgnx-run-ert--file-selected-p f sel))
+                      (sort (drgnx-run-ert--files dir) #'string<))))
+
+(defun drgnx-ui-run-ui-file-session (file out)
+  "One test FILE of the GUI tier in a session of its own (`drgnx-ui-run-ert-session', the file named to the session
+as DRGNX_UI_TEST_FILE).  The session's results.json is copied to OUT, and OUT.meta says what the controller needs
+to know (a Lisp plist: :rc :run :report :lines).  Return 0: whether the file passed is in the results."
+  ;; another launcher (a jail): a Lisp file that sets `drgnx-ui-test-session-function'
+  (when-let* ((l (getenv "DRGNX_UI_LAUNCHER")) ((not (string-empty-p l)))) (load (expand-file-name l) nil t))
+  (let* ((timeout (string-to-number (or (getenv "DRGNX_UI_TEST_TIMEOUT") "110")))
+         (selector (let ((s (getenv "DRGNX_TEST_SELECTOR"))) (and s (not (string-empty-p s)) s)))
+         (leaks (not (equal (getenv "DRGNX_UI_LEAKS") "0")))   ; the leak check is hard: a file that leaves state behind fails
+         (res (funcall drgnx-ui-test-session-function
+                       (expand-file-name "test/ui" drgnx-ui-repo-dir) timeout nil
+                       (append (drgnx-ui--hub-env)
+                               (list (concat "DRGNX_UI_TEST_FILE=" (expand-file-name file)))
+                               (and leaks (list "DRGNX_TEST_FILE_LEAKS=1"))
+                               (and selector (list (concat "DRGNX_TEST_SELECTOR=" selector)))
+                               (and (equal (getenv "DRGNX_TEST_EMPTY_OK") "1") (list "DRGNX_TEST_EMPTY_OK=1")))))
+         (rc (nth 0 res)) (results (nth 1 res)) (run (nth 2 res))
+         (ok (and (eq rc 0) results (eq (plist-get results :failed) 0)))
+         (base (file-name-sans-extension (file-name-nondirectory file))))
+    (when results (copy-file (expand-file-name "results.json" run) out t))
+    (drgnx-ui--write (concat out ".meta")
+                     (prin1-to-string
+                      (list :rc rc :run run
+                            :report (and (not results) (eq rc 124)
+                                         (drgnx-ui--timeout-report (expand-file-name "results.json.progress" run) timeout))
+                            :lines (and (not results)
+                                        (drgnx-ui--harness-lines (expand-file-name "session.log" run))))))
+    (when ok (delete-directory run t))
+    ;; a container run's session log goes with the screenshots: the run's own directory dies with the container
+    (when-let* (((not ok)) (evid (getenv "DRGNX_UI_EVIDENCE")) ((file-directory-p evid))
+                (log (expand-file-name "session.log" run)) ((file-exists-p log)))
+      (ignore-errors (copy-file log (expand-file-name (format "session-%s.log" base) evid) t)))
+    0))
+
+(defun drgnx-ui--start-file-session (file out)
+  "Start the Emacs that runs FILE in a session of its own (`drgnx-ui-run-ui-file-session'); return its process."
+  (make-process
+   :name (format "drgnx-ui-file-%s" (file-name-nondirectory file))
+   :buffer (generate-new-buffer " *drgnx-ui-file*") :noquery t :connection-type 'pipe :coding 'utf-8-unix
+   :command (list (or (getenv "DRGNX_EMACS") (expand-file-name invocation-name invocation-directory))
+                  "--batch" "-Q" "--eval" "(setq load-prefer-newer t)"
+                  "-L" (directory-file-name drgnx-ui-harness-dir)
+                  "-L" (expand-file-name "core" drgnx-ui-repo-dir) "-L" (expand-file-name "wb" drgnx-ui-repo-dir)
+                  "-l" "drgnx-ui" "-f" "drgnx-ui-cli" "--" "test-ui-file" file out)
+   :sentinel (lambda (p _e) (unless (process-live-p p) (process-put p :done (float-time))))))
+
+(defun drgnx-ui--run-file-sessions (files jobs out-dir)
+  "Run each of FILES in a session of its own, JOBS at once, the results of file N in OUT-DIR/N.json.  Return the
+list of (FILE OUT EXIT SECONDS), in the order of FILES.  A tier stopped meanwhile ends the sessions' Emacsen."
+  (let ((pending (let ((i 0)) (mapcar (lambda (f) (list f (expand-file-name (format "%d.json" (cl-incf i)) out-dir))) files)))
+        (running nil) (done nil))
+    (unwind-protect
+        (while (or pending running)
+          (while (and pending (< (length running) jobs))
+            (pcase-let ((`(,f ,out) (pop pending)))
+              (push (list (drgnx-ui--start-file-session f out) f out (float-time)) running)))
+          (accept-process-output nil 0.2)
+          (dolist (r running)
+            (pcase-let ((`(,p ,f ,out ,t0) r))
+              (when (process-get p :done)
+                (while (accept-process-output p 0))
+                (push (list f out (process-exit-status p) (- (float-time) t0)) done)
+                (when-let* ((b (process-buffer p))) (when (buffer-live-p b) (kill-buffer b)))
+                (setq running (delq r running))))))
+      (dolist (r running) (drgnx-run-ert--end-process (car r) 10)))
+    (mapcar (lambda (f) (assoc f done)) files)))
+
+(defun drgnx-ui--run-ui-per-file (files selector)
+  "Each of FILES in a session of its own, `drgnx-ui--test-jobs' at once; one merged report in the format of a single
+session's (\"ui ERT: P/T passed\", a FAIL line each, SKIP lines).  Return an exit code."
+  (let* ((out-dir (make-temp-file "drgnx-ui-files" t))
+         (runs (drgnx-ui--run-file-sessions files (min (drgnx-ui--test-jobs) (length files)) out-dir))
+         (total 0) (passed 0) (ok t) fails skips)
+    (unwind-protect
+        (dolist (r runs)
+          (pcase-let* ((`(,f ,out ,exit ,secs) (or r (list nil nil nil 0)))
+                       (base (and f (file-name-nondirectory f)))
+                       (meta (and f (ignore-errors (car (read-from-string (with-temp-buffer (insert-file-contents (concat out ".meta")) (buffer-string)))))))
+                       (results (and f (file-readable-p out) (drgnx-ui--read-json out))))
+            (when f
+              (princ (format "ui file %s: %s in %.1fs\n" base
+                             (if results (format "%s/%s passed" (plist-get results :passed) (plist-get results :total))
+                               (format "no results (exit %s)" (or (plist-get meta :rc) exit)))
+                             secs))
+              (if results
+                  (progn
+                    (cl-incf total (plist-get results :total)) (cl-incf passed (plist-get results :passed))
+                    (unless (eq (plist-get results :failed) 0) (setq ok nil))
+                    (seq-doseq (x (plist-get results :failures))
+                      (push (format "  FAIL %s: %s\n" (plist-get x :name) (drgnx-run-ert--printable (plist-get x :condition))) fails))
+                    (seq-doseq (x (plist-get results :skipped)) (push (format "  SKIP %s\n" (plist-get x :name)) skips)))
+                (setq ok nil) (cl-incf total)
+                (push (concat (format "  FAIL file %s: no results (exit %s); log kept in %s\n" base (or (plist-get meta :rc) exit)
+                                      (plist-get meta :run))
+                              (plist-get meta :report)
+                              (mapconcat (lambda (l) (concat "  " l "\n")) (plist-get meta :lines) ""))
+                      fails))
+              (unless (eq (plist-get meta :rc) 0) (setq ok nil)))))
+      (ignore-errors (delete-directory out-dir t)))
+    (when (consp drgnx-ui--batch-totals) (setcar drgnx-ui--batch-totals total))
+    (princ (format "ui ERT: %s/%s passed%s\n" passed total (if selector (format " (selector %s)" selector) "")))
+    (mapc #'princ (nreverse fails)) (mapc #'princ (nreverse skips))
+    (if ok 0 1)))
+
 (defun drgnx-ui-run-ui-session-tests ()
-  "The GUI suite (test/ui) in a session — the first half of `drgnx test --ui', alone for bin/drgnx check (which
-runs the live suite in shards).  Return an exit code."
+  "The GUI suite (test/ui) — the first half of `drgnx test --ui', alone for bin/drgnx check (which runs the live suite in
+shards): one session per test file (`drgnx-ui-run-ui-file-session'), `drgnx-ui--test-jobs' at once, the reports merged.
+DRGNX_UI_ONE_SESSION=1 runs them all in one session as before.  Return an exit code."
+  (require 'drgnx-run-ert (expand-file-name "run-ert.el" drgnx-ui-harness-dir))
+  (let* ((selector (let ((s (getenv "DRGNX_TEST_SELECTOR"))) (and s (not (string-empty-p s)) s)))
+         (_ (when selector
+              (condition-case err (read-from-string selector)
+                (error (drgnx-ui--fail "DRGNX_TEST_SELECTOR %S is not an ERT selector: %s" selector (error-message-string err))))))
+         (files (and (not (equal (getenv "DRGNX_UI_ONE_SESSION") "1"))
+                     (drgnx-ui--session-test-files (expand-file-name "test/ui" drgnx-ui-repo-dir) selector))))
+    (if files (drgnx-ui--run-ui-per-file files selector) (drgnx-ui--run-ui-one-session))))
+
+(defun drgnx-ui--run-ui-one-session ()
+  "The GUI suite (test/ui) in one session, every file in it (a selector that picks no file, DRGNX_UI_ONE_SESSION=1).
+Return an exit code."
   (require 'drgnx-run-ert (expand-file-name "run-ert.el" drgnx-ui-harness-dir))
   (let* ((timeout (string-to-number (or (getenv "DRGNX_UI_TEST_TIMEOUT") "110")))
          (selector (let ((s (getenv "DRGNX_TEST_SELECTOR"))) (and s (not (string-empty-p s)) s)))
@@ -2058,6 +2192,7 @@ CONFIG (default drgnx) and print each scenario: green, red (known) with its trac
   mcp                                                 serve the drgnx-ui MCP tools on stdio
   test-ui                                             the --ui test tier
   test-ui-session                                     its test/ui half alone (bin/drgnx check)
+  test-ui-file FILE OUT                               one test file in a session of its own (the tier starts these)
 See docs/develop/harness.md.")
 
 (defconst drgnx-ui--boolean-flags '("--daemon") "CLI options that take no value.")
@@ -2122,6 +2257,7 @@ a boolean flag (`drgnx-ui--boolean-flags') becomes :name t."
        (drgnx-look-scenes-run (or name (drgnx-ui--fail "look-scenes needs OUT, a directory for the PNGs"))))
       ("test-ui" (drgnx-ui-run-ui-tests))
       ("test-ui-session" (drgnx-ui-run-ui-session-tests))
+      ("test-ui-file" (drgnx-ui-run-ui-file-session name (nth 1 pos)))
       ("test-scenario" (drgnx-ui-run-scenarios (plist-get opts :config) (plist-get opts :dir)))
       ("test-bench" (require 'drgnx-bench) (let ((drgnx-ui-session-tier 'bench)) (drgnx-bench-run)))
       ("test-perf" (require 'drgnx-perf-run)

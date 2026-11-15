@@ -301,6 +301,7 @@ keymap (and the one in use), the minor mode maps, the selected frame's parameter
         :minor-mode-maps (drgnx-modules-fingerprint--alist-items 'minor-mode-map 'minor-mode-map-alist)
         :frame (append (drgnx-modules-fingerprint--frame-items) (drgnx-modules-fingerprint--frame-list-items))
         :faces (drgnx-modules-fingerprint--face-items)
+        :themes (mapcar (lambda (th) (cons (list 'theme th) th)) custom-enabled-themes)
         :window (drgnx-modules-fingerprint--window-items)))
 
 (defun drgnx-modules-fingerprint--full-items ()

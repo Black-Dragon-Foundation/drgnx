@@ -937,6 +937,12 @@ suite, with the per-file leak check on.  Return (EXIT RESULTS-PLIST OUTPUT)."
     (should (string-match-p "face drgnx-file-leak-fixture-face"
                             (or (drgnx-run-ert-test--failure r "leak leaky-face-test.el") "")))))
 
+(ert-deftest drgnx-run-ert/a-file-that-changes-the-enabled-themes-fails-and-names-them ()
+  (pcase-let ((`(,exit ,r ,_log) (drgnx-run-ert-test--file-leak-run '("leaky-theme"))))
+    (should (eql 1 exit))
+    (should (string-match-p "theme file-leak-fixture-theme"
+                            (or (drgnx-run-ert-test--failure r "leak leaky-theme-test.el") "")))))
+
 (ert-deftest drgnx-run-ert/the-leak-check-is-per-file-not-per-run ()
   ;; a clean file beside a leaky one still passes: each file's own Emacs, one failure for the one that leaks
   (pcase-let ((`(,_exit ,r ,_log) (drgnx-run-ert-test--file-leak-run '("leaky-mode-line" "clean"))))
@@ -954,6 +960,56 @@ suite, with the per-file leak check on.  Return (EXIT RESULTS-PLIST OUTPUT)."
             (insert-file-contents (expand-file-name "file-leaks/leaky-mode-line.el" drgnx-run-ert-test--fixtures)))
           (should (eql 0 (drgnx-run-ert-test--batch suite results "DRGNX_TEST_FILE_LEAKS"))))
       (delete-directory tmp t))))
+
+;;;; The GUI tier's per-file sessions (harness/drgnx-ui.el), through a stand-in launcher
+
+(defconst drgnx-run-ert-test--ui-selector "^drgnx-ui-look-fonts/\\|^drgnx-ui-look-tabs/"
+  "Picks two files of test/ui (their names are in the files' index).")
+
+(defun drgnx-run-ert-test--ui-tier (jobs &rest env)
+  "Run the GUI tier's runner (test-ui-session) with the stub launcher, JOBS at once, ENV more.  Return (EXIT OUTPUT STUB-LOG)."
+  (let* ((harness (file-name-directory (locate-library "run-ert.el")))
+         (root (file-name-directory (directory-file-name harness)))
+         (log (make-temp-file "stub-log"))
+         (process-environment
+          (append (list (concat "DRGNX_UI_LAUNCHER=" (expand-file-name "test/fixtures/ui-launcher-stub.el" root))
+                        (concat "STUB_LOG=" log) (format "DRGNX_TEST_JOBS=%d" jobs)
+                        (concat "DRGNX_TEST_SELECTOR=\"" drgnx-run-ert-test--ui-selector "\"")
+                        "DRGNX_UI_ONE_SESSION" "STUB_FAIL")
+                  env process-environment))
+         (default-directory temporary-file-directory))
+    (unwind-protect
+        (with-temp-buffer
+          (let ((exit (call-process (expand-file-name invocation-name invocation-directory) nil t nil
+                                    "--batch" "-Q" "-L" harness "-L" (expand-file-name "core" root) "-L" (expand-file-name "wb" root)
+                                    "-l" "drgnx-ui" "-f" "drgnx-ui-cli" "--" "test-ui-session")))
+            (list exit (buffer-string) (with-temp-buffer (insert-file-contents log) (buffer-string)))))
+      (delete-file log))))
+
+(ert-deftest drgnx-run-ert/the-gui-tier-starts-one-session-per-file-and-merges ()
+  (pcase-let ((`(,exit ,out ,log) (drgnx-run-ert-test--ui-tier 1)))
+    (should (equal (list exit (and (string-match-p "^ui ERT: 4/4 passed" out) t)) '(0 t)))
+    (should (= 2 (length (split-string log "\n" t))))              ; two files, two sessions
+    (should (string-match-p "ui file look-fonts-gui-test.el: 2/2 passed" out))))
+
+(ert-deftest drgnx-run-ert/the-gui-tier-runs-its-sessions-at-once-with-jobs ()
+  (pcase-let ((`(,_exit ,_out ,log) (drgnx-run-ert-test--ui-tier 2)))
+    (let* ((rows (mapcar (lambda (l) (mapcar #'string-to-number (cdr (split-string l)))) (split-string log "\n" t)))
+           (a (car rows)) (b (cadr rows)))
+      (should (= 2 (length rows)))
+      (should (< (max (car a) (car b)) (min (cadr a) (cadr b)))))))     ; each started before the other ended
+
+(ert-deftest drgnx-run-ert/a-failing-file-fails-the-tier-and-is-named ()
+  (pcase-let ((`(,exit ,out ,_log) (drgnx-run-ert-test--ui-tier 2 "STUB_FAIL=look-tabs")))
+    (should (eql 1 exit))
+    (should (string-match-p "^ui ERT: 3/4 passed" out))
+    (should (string-match-p "^  FAIL stub/row: stub failure" out))))
+
+(ert-deftest drgnx-run-ert/the-gui-tier-asks-every-session-for-the-leak-check ()
+  ;; the stub fails a file whose session was not given DRGNX_TEST_FILE_LEAKS=1; DRGNX_UI_LEAKS=0 is the one way off
+  (pcase-let ((`(,exit ,out ,_log) (drgnx-run-ert-test--ui-tier 1 "DRGNX_UI_LEAKS=0")))
+    (should (eql 1 exit))
+    (should (string-match-p "no leak check asked" out))))
 
 ;;;; The leak census
 
