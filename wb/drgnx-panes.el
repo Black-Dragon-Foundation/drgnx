@@ -30,7 +30,7 @@
 
 (defvar drgnx-pane--kinds nil
   "Alist KIND → plist (:title :buffer :placeholder :home :size :view :slot :height :fill :on-show
-:on-focus :stack), in definition order.")
+:on-focus :stack :companions), in definition order.")
 
 (defconst drgnx-pane--homes '(left bottom right editor))
 
@@ -121,7 +121,8 @@ Kept out of frame parameters: a buffer object in one would make the saved frame 
     ((or 'bottom 'right)
      (drgnx-wb-define-tab (alist-get (plist-get spec :home) drgnx-pane--areas) kind
                           :title (plist-get spec :title)
-                          :placeholder (lambda () (drgnx-pane--buffer (drgnx-pane--spec kind) kind))))
+                          :placeholder (lambda () (drgnx-pane--buffer (drgnx-pane--spec kind) kind))
+                          :companions (plist-get spec :companions)))
     ('editor
      (when-let* ((matcher (drgnx-pane--editor-matcher spec)))
        (drgnx-wb-place matcher 'editor)))))
@@ -199,7 +200,8 @@ kind has no size of its own: nil, nothing noted."
       (drgnx-state-note-intent nil :sizes home px)
       (when-let* ((w (drgnx-pane--areas-window kind)))
         (let ((horizontal (not (eq home 'bottom)))
-              (windows (if (eq home 'left) (drgnx-wb--dock-windows) (list w)))
+              (windows (if (eq home 'left) (drgnx-wb--dock-windows)
+                         (cons w (drgnx-area--companion-windows (drgnx-pane--area kind)))))
               (window-resize-pixelwise t))      ; or the size is rounded to whole lines or columns
           (ignore-errors
             (window-resize (car windows)
@@ -277,7 +279,7 @@ module it belongs to was turned off, and on again, while the area stayed up."
 ;;;; The API
 
 (cl-defun drgnx-pane-define-kind (kind &key title buffer placeholder home size view slot height fill on-show
-                                       on-focus stack)
+                                       on-focus stack companions)
   "Define pane KIND (a symbol); re-defining replaces.  Returns KIND.
 HOME is `left', `bottom', `right' or `editor' (default `bottom').  TITLE is a string (a left kind's may be a
 function).  BUFFER: a function returning the kind's buffer, or a buffer, or a buffer name (made when
@@ -289,6 +291,8 @@ SLOT and HEIGHT: as `drgnx-wb-define-section's.
 FILL: a function of the window, as `drgnx-layouts-define-pane's filler.
 ON-SHOW and ON-FOCUS: functions of the window.
 STACK: the kind this one stacks with by default (the grid reads it).
+COMPANIONS: a function of the kind's buffer returning (ABOVE BELOW), the buffers shown above and below it in windows of
+their own (a `right' kind; `drgnx-wb-define-tab').
 Called from a module's setup, the definition records the module as the kind's owner (`drgnx-state-kind-owner')
 and its undo \"pane kind KIND\": KIND hidden `:by teardown' where it shows (its size, front tab and places
 are kept as intent), then the previous definition put back or `drgnx-pane-undefine-kind' — only while KIND is
@@ -296,7 +300,8 @@ still the one defined here.  Defining a new KIND that is in front in an area tha
   (let ((home (or home 'bottom)))
     (unless (memq home drgnx-pane--homes) (user-error "Bad pane home %s" home))
     (let ((spec (list :title title :buffer buffer :placeholder placeholder :home home :size size :view view
-                      :slot slot :height height :fill fill :on-show on-show :on-focus on-focus :stack stack))
+                      :slot slot :height height :fill fill :on-show on-show :on-focus on-focus :stack stack
+                      :companions companions))
           (old (drgnx-pane-kind kind)) (old-owner (drgnx-state-kind-owner kind)))
       (drgnx-pane--call :define kind spec old)         ; first: an error leaves the kinds as they were
       (if old (setf (alist-get kind drgnx-pane--kinds) spec)       ; a new kind goes last, a redefined one stays put
