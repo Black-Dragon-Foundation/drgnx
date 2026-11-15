@@ -80,6 +80,13 @@
   (when-let* ((choice (x-popup-menu event (list "Agent" (cons "" drgnx-agent-panel-header-menu)))))
     (drgnx-ui-kit-run choice)))
 
+(defun drgnx-agent-panel--prop-at (event prop)
+  "Property PROP of the text EVENT is on: in the string it is over (the pinned rows are an overlay's), else the
+buffer's."
+  (let* ((end (event-end event)) (pos (posn-point end)) (win (posn-window end)) (str (posn-string end)))
+    (or (and (stringp (car-safe str)) (get-text-property (cdr str) prop (car str)))
+        (and pos (windowp win) (get-text-property pos prop (window-buffer win))))))
+
 (defun drgnx-agent-panel-act (event)
   "Run the header, strip, chip or card part the click EVENT is on: the lens segment (`lens:N'), the pin or the ⋯ menu, a
 step type's pill (`type:NAME') or `make default', the ledger or a card's button (`card:*'): the
@@ -88,8 +95,8 @@ step type's pill (`type:NAME') or `make default', the ledger or a card's button 
   (let* ((end (event-end event)) (pos (posn-point end)) (win (posn-window end))
          (buf (and (windowp win) (window-buffer win))))
     (when (and pos buf)
-      (let ((action (get-text-property pos 'drgnx-agent-panel-action buf))
-            (chip (get-text-property pos 'drgnx-agent-panel-chip buf)))
+      (let ((action (drgnx-agent-panel--prop-at event 'drgnx-agent-panel-action))
+            (chip (drgnx-agent-panel--prop-at event 'drgnx-agent-panel-chip)))
         (with-current-buffer buf
           (cond ((and (stringp action) (string-prefix-p "lens:" action))
                  (drgnx-agent-panel-preset (string-to-number (substring action 5))))
@@ -115,8 +122,8 @@ anywhere else the press is the stock one."
   (interactive "e")
   (let* ((end (event-end event)) (pos (posn-point end)) (win (posn-window end))
          (buf (and (windowp win) (window-buffer win))))
-    (unless (and pos buf (or (get-text-property pos 'drgnx-agent-panel-action buf)
-                             (get-text-property pos 'drgnx-agent-panel-chip buf)))
+    (unless (and pos buf (or (drgnx-agent-panel--prop-at event 'drgnx-agent-panel-action)
+                             (drgnx-agent-panel--prop-at event 'drgnx-agent-panel-chip)))
       (mouse-drag-region event))))
 
 (defun drgnx-agent-panel--dot (status)

@@ -37,6 +37,7 @@
 (require 'text-property-search)          ; the moves look through the drawn rows
 
 (declare-function drgnx-hub--call-on "drgnx-hub-client")
+(declare-function nidhogg-view-rows "nidhogg-views" (h what &optional a b))
 (declare-function drgnx-view-env-register "drgnx-view-env")
 (declare-function drgnx-view-env-update "drgnx-view-env")
 (defvar drgnx-hub--events)
@@ -242,22 +243,82 @@ folds under it."
     (:rows-end "\n")
     (_ "\n")))
 
+;;;; The pinned rows
+
+(defvar-local drgnx-agent-panel--pin nil
+  "The panel's pinned rows: (END . STRING), END the position after the hub's leading rows that carry `drgnx-pinned'
+\(the header, chips and strip) and STRING a copy of them, or nil when the hub pinned none.")
+
+(defvar-local drgnx-agent-panel--pin-overlays nil "Each window's overlay that shows the pinned rows: ((WINDOW . OVERLAY) ...).")
+
+(defun drgnx-agent-panel--pinned-chars ()
+  "How many characters of the hub's rows, from their start, the hub pinned (Sjá's `pinned'): 0 when none."
+  (or (when-let* ((s drgnx-view-patch) ((drgnx-view-patch-sja s)) (h (drgnx-view-patch-handle s)))
+        (nidhogg-view-rows h 'pinned nil "drgnx-pinned"))
+      0))
+
+(defun drgnx-agent-panel--pin-update ()
+  "The hub's rows were patched: the pinned rows are copied again when they changed, and every window shows them."
+  (let* ((n (drgnx-agent-panel--pinned-chars))
+         (beg (if drgnx-view-patch (marker-position (drgnx-view-patch-beg drgnx-view-patch)) (point-min)))
+         (end (and (> n 0) (+ beg n)))
+         (string (and end (buffer-substring beg end))))
+    (unless (and (equal end (car drgnx-agent-panel--pin))
+                 (equal-including-properties string (cdr drgnx-agent-panel--pin)))
+      (setq drgnx-agent-panel--pin (and end (cons end string))))
+    (dolist (w (get-buffer-window-list (current-buffer) nil t))
+      (drgnx-agent-panel--pin-place w))))
+
+(defun drgnx-agent-panel--pin-overlay (window)
+  "WINDOW's overlay for the pinned rows, made when it has none."
+  (setq drgnx-agent-panel--pin-overlays
+        (seq-filter (lambda (c) (and (window-live-p (car c)) (overlay-buffer (cdr c)))) drgnx-agent-panel--pin-overlays))
+  (or (cdr (assq window drgnx-agent-panel--pin-overlays))
+      (let ((ov (make-overlay (point-min) (point-min) (current-buffer))))
+        (overlay-put ov 'window window)
+        (push (cons window ov) drgnx-agent-panel--pin-overlays)
+        ov)))
+
+(defun drgnx-agent-panel--pin-at (window start)
+  "Show the pinned rows at the top of WINDOW, over START, which is never before their end; START as it stands.  With no
+pinned rows the window's overlay is gone."
+  (if-let* ((pin drgnx-agent-panel--pin))
+      (let ((start (max start (car pin))) (ov (drgnx-agent-panel--pin-overlay window)))
+        (move-overlay ov start start)
+        (unless (equal (overlay-get ov 'before-string) (cdr pin)) (overlay-put ov 'before-string (cdr pin)))
+        start)
+    (when-let* ((c (assq window drgnx-agent-panel--pin-overlays)))
+      (delete-overlay (cdr c))
+      (setq drgnx-agent-panel--pin-overlays (delq c drgnx-agent-panel--pin-overlays)))
+    start))
+
+(defun drgnx-agent-panel--pin-place (window)
+  "WINDOW starts after the pinned rows, which show over its first line, and its point is not among them."
+  (let* ((start (window-start window)) (at (drgnx-agent-panel--pin-at window start)))
+    (unless (= at start) (set-window-start window at t))
+    (when (and drgnx-agent-panel--pin (< (window-point window) (car drgnx-agent-panel--pin)))
+      (set-window-point window (car drgnx-agent-panel--pin)))))
+
 (defun drgnx-agent-panel--patched (view keys)
   "PATCHED of the panel's view: the hub rows among KEYS get the inserter's last step (the stale shade, the classes), then
 the panel's scroll follows its tail."
   (when drgnx-view-patch
     (when-let* ((rows (seq-filter #'stringp keys)))
       (drgnx-view-patch--patched view rows)
+      (drgnx-agent-panel--pin-update)
       (drgnx-agent-panel--follow-tail))))
 
 (defun drgnx-agent-panel--tail-start (window)
   "Where WINDOW should start for the panel's end to sit at its bottom: the earliest line from which the end is still in
-view.  Lines are tried by the window itself (rows differ in height, and a pixel measure of text is not the window's)."
-  (let ((start (point-max)))
+view.  Lines are tried by the window itself (rows differ in height, and a pixel measure of text is not the window's);
+the pinned rows are shown over each try, and no try starts before their end."
+  (let ((start (point-max)) (floor (if drgnx-agent-panel--pin (car drgnx-agent-panel--pin) (point-min))))
     (save-excursion
-      (while (and (> start (point-min))
-                  (progn (goto-char start) (vertical-motion -1 window) (< (point) start))
-                  (progn (set-window-start window (point) t) (pos-visible-in-window-p (point-max) window)))
+      (while (and (> start floor)
+                  (progn (goto-char start) (vertical-motion -1 window) (and (< (point) start) (>= (point) floor)))
+                  (progn (set-window-start window (point) t)
+                         (drgnx-agent-panel--pin-at window (point))
+                         (pos-visible-in-window-p (point-max) window)))
         (setq start (point))))
     start))
 
@@ -268,7 +329,8 @@ last page.  A window the user moved point in is left alone."
   (dolist (w (get-buffer-window-list (current-buffer) nil t))
     (when (= (window-point w) (point-max))
       (drgnx-wb-with-owned-windows (list w)
-        (set-window-start w (drgnx-agent-panel--tail-start w) t)))))
+        (set-window-start w (drgnx-agent-panel--tail-start w) t)
+        (drgnx-agent-panel--pin-place w)))))
 
 (defun drgnx-agent-panel--sync (view)
   "SYNC of the panel's view: with the hub's rows, the models their patches named go to Sjá before they are drawn."
@@ -551,6 +613,9 @@ further back too."
 (defun drgnx-agent-panel--scrolled (window start)
   "The window scrolled to START: at the top of the transcript, the page before is asked for."
   (with-current-buffer (window-buffer window)
+    (when drgnx-agent-panel--pin
+      (setq start (drgnx-agent-panel--pin-at window start))
+      (drgnx-agent-panel--pin-place window))
     (let ((rows (drgnx-agent-panel--rows-p)))
       (when (and (or rows drgnx-agent-panel--more) (not drgnx-agent-panel--loading) (drgnx-view-p drgnx-view))
         (let ((more (drgnx-view-row-start drgnx-view (if rows "more" (list :more)))))
