@@ -29,7 +29,6 @@
 (defvar drgnx-agent-panel--session)
 (defvar drgnx-agent-panel--disclosure)
 (defvar drgnx-agent-panel--pins)
-(defvar drgnx-area--companion-most)
 (declare-function drgnx-panel-replay-up "panel-replay-fixture" (bin &optional old))
 (declare-function drgnx-panel-replay-down "panel-replay-fixture" ())
 (declare-function drgnx-rows-demo--bin "rows-demo-fixture" ())
@@ -120,13 +119,14 @@ most 5 rounds)."
 (defun drgnx-ui-panel-header--facts (w area)
   "W's fit in AREA as a plist, for `drgnx-ui-panel-header--fitted-or-capped-p' (and the failure's report): BODY and
 TEXT (`drgnx-ui-panel-header--fit'), its PIXEL height, its default LINE height, the CAP (the most of the area's
-height a companion is fitted to, `drgnx-area--companion-most') and whether its START is its buffer's start."
+height a companion is fitted to: the plan's 45%, not read from the product, so a wrong cap there fails) and whether its
+START is its buffer's start."
   (pcase-let ((`(,body ,text) (drgnx-ui-panel-header--fit w))
               (total (apply #'+ (mapcar #'window-pixel-height
                                         (seq-filter (lambda (x) (eq area (window-parameter x 'drgnx-role)))
                                                     (window-list (window-frame w) 'nomini))))))
     (list :body body :text text :pixel (window-pixel-height w) :line (window-default-line-height w)
-          :cap (* drgnx-area--companion-most total)
+          :cap (* 0.45 total)
           :start (= (window-start w) (with-current-buffer (window-buffer w) (point-min))))))
 
 (defun drgnx-ui-panel-header--fitted-or-capped-p (facts)
