@@ -427,8 +427,10 @@ the current buffer.  The sidebar shows one selected row (window-dark.html); the 
 buffer's window is the selected window, the inactive selection otherwise, and that only in the buffer that keeps it
 \(`drgnx-wb-selection-unfocused').  The fill covers the row's text, its tail (drawn again in the face) or, on a row
 with none, a stretch to the right edge.  Cheap: three overlays at most are touched.  A line marked `drgnx-row-inert'
-\(an empty state) is text, not a row: nothing is selected on it."
+\(an empty state) is text, not a row: nothing is selected on it; nor on the empty line after the last row (all a
+hub-fed view has before its first rows: the stretch would push its waiting line off the window)."
   (if (or (get-text-property (pos-bol) 'drgnx-row-inert)
+          (= (pos-bol) (point-max))
           (not (or drgnx-wb-selection-unfocused (drgnx-wb--focused-p))))
       (drgnx-wb--selection-off)
     (drgnx-wb--selection-on)))

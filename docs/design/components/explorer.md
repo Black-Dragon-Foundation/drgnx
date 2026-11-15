@@ -36,6 +36,8 @@ together); the ladder is `drgnx-hover`, `drgnx-selected-inactive`, `drgnx-select
 ## Rules
 
 - A selected row is a soft tint, inset at least 4 px from the card edge: never an edge-to-edge block.
+- Only a row is selected: an empty state, and the empty line after the last row (all a hub-fed list has before its
+  first rows, under its "Waiting for the hub…" line), take no tint.
 - An icon takes the colour of its text; never give an icon a colour of its own.
 - Long names end in an ellipsis and never push the end column; a thousand rows scroll without a layout shift.
 - The Explorer is beaten by nothing: any new list uses these rows, this ladder and these sizes.
