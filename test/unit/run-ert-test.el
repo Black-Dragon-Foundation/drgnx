@@ -1383,3 +1383,16 @@ this test are not passed on."
       (should (eq (car err) 'ert-test-failed))
       (should (string-search "nidhogg-no-such-primitive" (format "%S" (cdr err)))))
     (should-not (drgnx-test-require-nidhogg t "nidhogg-no-such-primitive"))))
+
+(ert-deftest drgnx-run-ert/a-skip-for-sja-fails-a-strict-run-without-sja ()
+  ;; a test that skips for a Sjá primitive (`nidhogg-view-…') is a failure in a strict run whose Emacs has no Sjá; with
+  ;; Sjá the skip had another reason (no display) and stays a skip, as does every skip of a run that is not strict
+  (let ((skipped '((:name "a" :reason "(skip-unless (and (display-graphic-p) (fboundp 'nidhogg-view-rows)))")
+                   (:name "b" :reason "(skip-unless (executable-find \"mutter\"))"))))
+    (let ((process-environment (cons "DRGNX_NIDHOGG_STRICT=1" process-environment)))
+      (let ((f (drgnx-run-ert--strict-sja-failures skipped nil)))
+        (should (equal (mapcar (lambda (x) (plist-get x :name)) f) '("a")))
+        (should (string-search "nidhogg-view-rows" (plist-get (car f) :condition))))
+      (should-not (drgnx-run-ert--strict-sja-failures skipped t)))
+    (let ((process-environment (cons "DRGNX_NIDHOGG_STRICT" process-environment)))
+      (should-not (drgnx-run-ert--strict-sja-failures skipped nil)))))
