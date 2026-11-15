@@ -1460,31 +1460,6 @@ THEN-RUN-ALL: run every code cell once it is up."
           (goto-char end))))
     (+ width 2)))
 
-(defun drgnx-notebook-view--fit-cut-rows (width)
-  "Make the cut rows (`N lines above   M-p earlier lines') fit WIDTH columns, the key chip whole: the text before
-the chip gives way first (` lines above'), then the label after it.  A row that fits shows all of it (the pane may
-have grown)."
-  (let ((inhibit-read-only t) (inhibit-modification-hooks t))
-    (save-excursion
-      (goto-char (point-min))
-      (while (not (eobp))
-        (let ((beg (point)) (end (line-end-position)))
-          (when (or (get-text-property beg 'drgnx-notebook-above) (get-text-property beg 'drgnx-notebook-below))
-            (remove-text-properties beg end '(invisible nil))
-            (when (> (- end beg) width)
-              (let* ((lead (and (string-match " lines \\(?:above\\|below\\)" (buffer-substring-no-properties beg end))
-                                (cons (+ beg (match-beginning 0)) (+ beg (match-end 0)))))
-                     (chip-end (let ((p beg) (found nil))
-                                 (while (and (< p end) (not found))
-                                   (let ((next (or (next-single-property-change p 'face nil end) end)))
-                                     (when (eq (get-text-property p 'face) 'drgnx-chip-quiet) (setq found next))
-                                     (setq p next)))
-                                 found)))
-                (when lead (put-text-property (car lead) (cdr lead) 'invisible t))
-                (when (and chip-end (> (- end beg (if lead (- (cdr lead) (car lead)) 0)) width))
-                  (put-text-property chip-end end 'invisible t))))))
-        (forward-line 1)))))
-
 (defun drgnx-notebook-view--refresh (&optional _view _keys)
   "Compute this view buffer's foot line, key hint and gutter from its rows (a draw just changed them)."
   (when (derived-mode-p 'drgnx-notebook-view-mode)
@@ -1507,10 +1482,8 @@ have grown)."
              (setq drgnx-notebook-view--header (drgnx-notebook-view--output-title)
                    drgnx-notebook-view--foot (format "lines %s–%s of %s" (drgnx-notebook--group (car lines)) (drgnx-notebook--group (cdr lines))
                                                      (drgnx-notebook--group (+ (cdr lines) below))))
-             ;; the gutter: the cell's own line numbers, blank on the cut rows; the cut rows fit the pane by the chip
-             (let ((gutter (drgnx-notebook-view--gutter)))
-               (when-let* ((w (car (get-buffer-window-list nil nil t))))
-                 (drgnx-notebook-view--fit-cut-rows (- (window-body-width w) gutter))))))))
+             ;; the gutter: the cell's own line numbers, blank on the cut rows (the hub fits the cut rows to the pane)
+             (drgnx-notebook-view--gutter)))))
       ('drgnx-notebook-log-mode
        (let ((entries (car (drgnx-notebook-view--rows-count 'drgnx-notebook-log)))
              (lost (drgnx-notebook-view--prop 'drgnx-notebook-lost)))

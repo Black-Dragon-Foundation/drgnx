@@ -884,31 +884,6 @@
               (should (= (length (funcall prefix 0)) (length (funcall prefix 1))))))
         (kill-buffer b)))))
 
-(ert-deftest drgnx-notebook/a-narrow-cut-row-keeps-its-key-chip-whole ()
-  (nb-test--with
-    (let ((b (nb-test--view-buffer 'drgnx-notebook-output-mode
-                                   `((,(concat "▲ 1240 lines above   " (propertize "M-p" 'face 'drgnx-chip-quiet) " earlier lines")
-                                      drgnx-notebook-above 1240)
-                                     ("epoch 41" drgnx-notebook-line 1241)))))
-      (unwind-protect
-          (with-current-buffer b
-            (let ((visible (lambda ()
-                             (goto-char (point-min))
-                             (let ((out "") (pos (point)))
-                               (while (< pos (line-end-position))
-                                 (unless (get-text-property pos 'invisible) (setq out (concat out (string (char-after pos)))))
-                                 (cl-incf pos))
-                               (string-trim out)))))
-              (drgnx-notebook-view--fit-cut-rows 60)       ; wide: all of it
-              (should (equal (funcall visible) "▲ 1240 lines above   M-p earlier lines"))
-              (drgnx-notebook-view--fit-cut-rows 30)       ; narrow: the text before the chip gives way first
-              (should (equal (funcall visible) "▲ 1240   M-p earlier lines"))
-              (drgnx-notebook-view--fit-cut-rows 14)       ; narrower: the label after it goes, the chip stays whole
-              (should (equal (funcall visible) "▲ 1240   M-p"))
-              (drgnx-notebook-view--fit-cut-rows 60)       ; the pane grows again: all of it
-              (should (equal (funcall visible) "▲ 1240 lines above   M-p earlier lines"))))
-        (kill-buffer b)))))
-
 (ert-deftest drgnx-notebook/the-logs-foot-counts-entries ()
   (nb-test--with
     (let ((b (nb-test--view-buffer 'drgnx-notebook-log-mode

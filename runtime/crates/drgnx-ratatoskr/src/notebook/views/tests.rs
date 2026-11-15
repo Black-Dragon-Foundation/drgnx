@@ -111,6 +111,9 @@ impl Stage for Recorder {
     fn window(&self, _: u64, _: &str) -> usize {
         self.from.load(std::sync::atomic::Ordering::SeqCst)
     }
+    fn columns(&self, _: u64, _: &str) -> usize {
+        0
+    }
     fn publish(&self, conn: u64, view: &str, rows: Vec<Row>) {
         self.marked.lock().unwrap().push(
             rows.iter()
@@ -293,7 +296,7 @@ fn lines(n: usize) -> CellRun {
 #[test]
 fn a_full_output_is_a_window_of_its_lines_with_rows_counting_what_lies_outside() {
     let run = lines(2500); // 2501 lines, the last empty
-    let rows = output_rows("c", &run, 0);
+    let rows = output_rows("c", &run, 0, 0);
     assert_eq!(rows.len(), OUTPUT_WINDOW + 1);
     assert_eq!(rows[0].key, "l:0");
     assert_eq!(rows[0].text, "line 0");
@@ -309,7 +312,7 @@ fn a_full_output_is_a_window_of_its_lines_with_rows_counting_what_lies_outside()
             (0, 6, "drgnx-notebook-line".to_string(), json!(1)),
         ]
     );
-    let rows = output_rows("c", &run, 1200);
+    let rows = output_rows("c", &run, 1200, 0);
     assert_eq!(rows[0].text, "▲ 1200 lines above   M-p earlier lines");
     assert_eq!(rows[1].key, "l:1200");
     assert_eq!(rows[1].text, "line 1200");
@@ -318,11 +321,11 @@ fn a_full_output_is_a_window_of_its_lines_with_rows_counting_what_lies_outside()
         "▼ 301 lines below   M-n later lines"
     );
     // a window past the end comes back to the last line
-    let rows = output_rows("c", &run, 1_000_000);
+    let rows = output_rows("c", &run, 1_000_000, 0);
     assert_eq!(rows.last().unwrap().key, "l:2500");
     assert_eq!(rows.len(), 2);
     // everything fits: no row counts anything
-    let rows = output_rows("c", &lines(3), 0);
+    let rows = output_rows("c", &lines(3), 0, 0);
     assert_eq!(
         rows.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(),
         ["l:0", "l:1", "l:2", "l:3"]
@@ -337,14 +340,14 @@ fn styled_text_carries_the_themes_terminal_roles_and_no_output_says_so() {
             json!({"name": "stdout", "text": "ok \x1b[1;31mbad\x1b[0m"}),
         )
     });
-    let r = &output_rows("c", &run, 0)[0];
+    let r = &output_rows("c", &run, 0, 0)[0];
     assert_eq!(r.text, "ok bad");
     assert!(
         r.runs
             .contains(&(3, 6, "drgnx-notebook-fg-red".to_string()))
     );
     assert!(r.runs.contains(&(3, 6, "bold".to_string())));
-    let none = output_rows("c", &run_with(|_| {}), 0);
+    let none = output_rows("c", &run_with(|_| {}), 0, 0);
     assert_eq!(none.len(), 1);
     assert_eq!(none[0].text, "no output");
 }
@@ -367,7 +370,7 @@ fn an_image_is_a_row_that_says_so_and_kernel_svg_is_never_in_a_row() {
             json!({"data": {"image/svg+xml": "<svg onload=evil()/>", "text/plain": "<Fig2>"}}),
         );
     });
-    let rows = output_rows("c", &run, 0);
+    let rows = output_rows("c", &run, 0, 0);
     assert_eq!(
         rows[0].text,
         "[image/png image, 10x20: save output as file]"
@@ -680,7 +683,7 @@ fn the_rows_that_count_what_is_left_out_carry_the_number_as_a_property() {
     let more = outline_rows(&cells, 2003, None).pop().unwrap();
     assert_eq!(more.text, "more: 2000 cells are not listed");
     assert_eq!(n(&more, "drgnx-notebook-more"), Some(json!(2000)));
-    let rows = output_rows("c", &lines(2500), 1200);
+    let rows = output_rows("c", &lines(2500), 1200, 0);
     assert_eq!(n(&rows[0], "drgnx-notebook-above"), Some(json!(1200)));
     assert_eq!(
         n(rows.last().unwrap(), "drgnx-notebook-below"),
@@ -693,7 +696,7 @@ fn the_rows_that_count_what_is_left_out_carry_the_number_as_a_property() {
 
 #[test]
 fn a_cut_row_is_a_tinted_row_with_the_key_that_moves_the_window() {
-    let rows = output_rows("c", &lines(2500), 1200);
+    let rows = output_rows("c", &lines(2500), 1200, 0);
     let (up, down) = (&rows[0], rows.last().unwrap());
     let len = up.text.chars().count() as u32;
     assert_eq!(
@@ -712,6 +715,27 @@ fn a_cut_row_is_a_tinted_row_with_the_key_that_moves_the_window() {
 }
 
 #[test]
+fn a_cut_row_fits_the_panes_columns_with_its_key_chip_whole() {
+    let text = |cols| output_rows("c", &lines(2500), 1200, cols)[0].text.clone();
+    // the gutter takes the last line's number (2 200, five columns) and two
+    assert_eq!(text(0), "▲ 1200 lines above   M-p earlier lines");
+    assert_eq!(text(80), "▲ 1200 lines above   M-p earlier lines");
+    // too narrow for the words before the chip: they give way first
+    assert_eq!(text(7 + 26), "▲ 1200   M-p earlier lines");
+    // narrower: the label after the chip goes, the chip stays whole
+    assert_eq!(text(7 + 12), "▲ 1200   M-p");
+    let rows = output_rows("c", &lines(2500), 1200, 7 + 12);
+    let up = &rows[0];
+    let key = up.text[..up.text.find("M-p").unwrap()].chars().count() as u32;
+    assert_eq!(faces_at(up, key, key + 3)[0], "drgnx-chip-quiet");
+    let len = up.text.chars().count() as u32;
+    assert_eq!(
+        faces_at(up, 0, len).last().copied(),
+        Some("drgnx-notebook-cut")
+    );
+}
+
+#[test]
 fn the_lines_of_an_error_output_are_error_rows_and_other_lines_are_not() {
     let run = run_with(|f| {
         f("stream", json!({"name": "stdout", "text": "fine\n"}));
@@ -720,7 +744,7 @@ fn the_lines_of_an_error_output_are_error_rows_and_other_lines_are_not() {
             json!({"ename": "ValueError", "evalue": "shapes", "traceback": ["Cell In[3], line 4", "", "ValueError: shapes"]}),
         );
     });
-    let rows = output_rows("c", &run, 0);
+    let rows = output_rows("c", &run, 0, 0);
     let is_err = |r: &Row| {
         r.runs
             .iter()

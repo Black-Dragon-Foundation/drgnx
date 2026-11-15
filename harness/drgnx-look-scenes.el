@@ -45,6 +45,7 @@
     (notebook-light :mockup notebook)
     (notebook-views :mockup notebook-views)
     (notebook-views-light :mockup notebook-views)
+    (notebook-views-running :mockup notebook-views)
     (highlights-dark)
     (highlights-light)
     (highlights-hc)
