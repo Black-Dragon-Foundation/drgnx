@@ -36,6 +36,18 @@
      (should-not (rassq 'lisp-indent (nth 4 during)))
      (should (equal (mapcar #'symbol-value vars) before)))))
 
+(ert-deftest drgnx-extras-teardown/completion-quit-hook-goes-with-the-module ()
+  ;; extra/completion's handler before `command-error-function' (a C-g that comes as a quit hides corfu's popup) is
+  ;; on its global value while the module runs, and off once it is torn down
+  (drgnx-extras-teardown-test--with-packages
+   (skip-unless (drgnx-extras-teardown-test--installed-p 'vertico 'orderless 'marginalia 'corfu))
+   (let ((on (lambda () (advice-function-member-p #'drgnx-completion--quit-hides-popup
+                                                  (default-value 'command-error-function))))
+         during)
+     (drgnx-test-with-modules '(extra/completion) (setq during (funcall on)))
+     (should during)
+     (should-not (funcall on)))))
+
 (ert-deftest drgnx-extras-teardown/modes-in-live-buffers-go-off ()
   (drgnx-extras-teardown-test--with-packages
    (skip-unless (drgnx-extras-teardown-test--installed-p 'keycast 'indent-bars))
