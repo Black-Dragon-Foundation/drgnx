@@ -51,8 +51,10 @@ it off there) `harness/run-ert.el` reads the full fingerprint (`core/drgnx-modul
 first test starts and again when the next file starts or the run ends. A file that left anything behind fails as one
 failure, `leak FILE-test.el`, naming each leftover (and the file that defined it): global hooks, advice, timers,
 processes, buffers, features, the default `mode-line-format`, `header-line-format` and `tab-line-format`, the global
-keymap (`current-global-map` and every binding in it), `minor-mode-map-alist`, and the selected frame's parameters and
-the number of frames. The allowlist is the census's (`test/leaks-allowed.eld`). It works in one Emacs or per file, in any
+keymap (`current-global-map` and every binding in it; a prefix bound to an autoloaded keymap, like `kmacro-keymap`, is
+one binding, not walked: the scan loads no library), `minor-mode-map-alist`, and the selected frame's parameters and
+the number of frames. The allowlist is the census's (`test/leaks-allowed.eld`); native compilation's `Compiling:`
+jobs are on it, any other process is named. It works in one Emacs or per file, in any
 launcher: it reads state, not how the session was started. The fixtures `test/fixtures/file-leaks/` and the rows
 `drgnx-run-ert/a-file-that-...` show it red (a file that leaks a mode-line entry, a key, a header line, a frame
 parameter) and green (a file that puts everything back).

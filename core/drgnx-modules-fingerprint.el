@@ -233,7 +233,9 @@ bytecomp, so a FULL fingerprint calls it before it reads anything (the load is n
     items))
 
 (defun drgnx-modules-fingerprint--keymap-items (kind map)
-  "Items for every binding in the keymap MAP, a prefix map's too: key (KIND \"C-x f\"), the binding as the object."
+  "Items for every binding in the keymap MAP, a prefix map's too: key (KIND \"C-x f\"), the binding as the object.
+A prefix bound to an autoloaded keymap (`kmacro-keymap', `2C-command') is one binding, its symbol: walking it would
+load its library, and the scan loads nothing."
   (let (items (seen nil))
     (cl-labels ((walk (m prefix depth)
                   (unless (or (memq m seen) (> depth 6))
@@ -241,7 +243,8 @@ bytecomp, so a FULL fingerprint calls it before it reads anything (the load is n
                     (map-keymap
                      (lambda (ev b)
                        (let ((keys (vconcat prefix (vector ev))))
-                         (if (and (keymapp b) (not (eq ev 'menu-bar)))
+                         (if (and (keymapp b) (not (eq ev 'menu-bar))
+                                  (not (and (symbolp b) (autoloadp (symbol-function b)))))
                              (walk b keys (1+ depth))
                            (push (drgnx-modules-fingerprint--item
                                   (list kind) (ignore-errors (key-description keys)) b)
