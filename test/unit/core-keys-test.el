@@ -365,6 +365,18 @@ remote name, say, is no business of the keys."
     (cl-letf (((symbol-function 'file-truename) (lambda (&rest _) (error "Asked for a truename"))))
       (drgnx-keys--loaded "/ssh:host.invalid:/no/such/file.el"))))
 
+(ert-deftest drgnx-keys/yours-a-load-of-a-file-not-yours-reads-no-file ()
+  "With keys of yours recorded, a load whose name is none of your files' (a remote name, a package's library) asks
+nothing of the file system; your keys stay."
+  (let ((drgnx-keys--yours (make-hash-table :test #'equal)) (drgnx-keys--yours-in-maps (make-hash-table :test #'equal))
+        (drgnx-keys--loading (make-hash-table :test #'equal)) (drgnx-keys--source-names (make-hash-table :test #'equal)))
+    (puthash "C-c z" (cons #'ignore "/tmp/kx-dir/kx-mine") drgnx-keys--yours)
+    (puthash "kx-mine" t drgnx-keys--source-names)
+    (cl-letf (((symbol-function 'file-truename) (lambda (&rest _) (error "Asked for a truename"))))
+      (drgnx-keys--loaded "/ssh:host.invalid:/no/such/other.el")
+      (drgnx-keys--loaded "/usr/share/emacs/lisp/other.elc"))
+    (should (gethash "C-c z" drgnx-keys--yours))))
+
 (ert-deftest drgnx-keys/yours-a-native-load-records-the-source ()
   "A file of yours loaded natively compiled (its .eln found for its .elc) records the source, so a reload of the .el
 forgets its keys."

@@ -692,6 +692,11 @@ loaded again, its entries that load did not write go (`drgnx-keys--loaded'); a c
   "Your keys in the maps a profile or settings `:map' names (`drgnx-keys--named-maps'): (MAPSYM . KEY) → (DEF .
 SOURCE), as in `drgnx-keys--yours'.  The write itself stays in the map; the foreign layer steps aside for the key.")
 
+(defvar drgnx-keys--own-items (make-hash-table :test #'eq)
+  "MAPSYM → the profile's items ((KEY . COMMAND) …) for drgnx's own keymap MAPSYM at the last apply, the keys of yours
+not yet left out: its layer is made again from them when one of yours there comes or goes.")
+(defvar drgnx-keys--attached)
+
 (defvar drgnx-keys--named-maps nil
   "The keymap symbols the last apply's profile and settings keys name, besides the global map and the modal engine's:
 drgnx's own maps and foreign ones.  Watched (`drgnx-keys--watch-named'): your writes into them are recorded.")
@@ -712,6 +717,11 @@ by identity.  The `:everywhere' entry steps aside wherever such a keymap is acti
 load's `load-file-name', an item a global key's text or (MAPSYM . KEY).  Only writes of the file's own load count
 \(not an after-load body of it that runs while another file loads); a load that fails takes its list with it
 \(`drgnx-keys--load-scope').")
+
+(defvar drgnx-keys--source-names (make-hash-table :test #'equal)
+  "The names, without directory and extension, of the files keys of yours came from, as loaded and as their true
+names (a link to your config file counts by both): a load whose name is none of them is no file of yours, and
+`drgnx-keys--loaded' asks the file system nothing for it.  It grows with your files only.")
 
 (defvar drgnx-keys--load-sources nil
   "Within a Lisp `load' (`drgnx-keys--load-scope'): the sources whose `drgnx-keys--loading' lists that load began.")
@@ -788,7 +798,12 @@ the load it began in runs; a file loaded inside it is judged by the file rule: a
 you registered, the registering file, unless a file loads inside the body (`load-file-name' moved on)."
   (let* ((body drgnx-keys--yours-body)
          (file (if (and body (eq load-file-name (cdr body))) (car body) load-file-name)))
-    (if (and file (not drgnx-keys--server-eval)) (file-name-sans-extension (file-truename file)) 'command)))
+    (if (and file (not drgnx-keys--server-eval))
+        (let ((true (file-name-sans-extension (file-truename file))))
+          (puthash (file-name-base file) t drgnx-keys--source-names)
+          (puthash (file-name-nondirectory true) t drgnx-keys--source-names)
+          true)
+      'command)))
 
 (defun drgnx-keys--note-load (src item)
   "Note ITEM (a global key's text, or (MAPSYM . KEY)) in the list of the load of SRC now running, when the write
@@ -972,9 +987,11 @@ wait (`sit-for', `accept-process-output')."
   "On `after-load-functions': FILE has loaded (whatever loaded it: the start, M-x load-file, a `load' in config.el).
 The keys it bound in an earlier load and not in this one leave your map, and the profile's key comes back on each.
 Keys you bound by command stay.  A load that fails midway does not get here, so nothing is forgotten then.  With no
-key of yours recorded there is nothing to forget, and the file system is not asked (a load of tramp for a remote name)."
-  (unless (and (hash-table-empty-p drgnx-keys--loading) (hash-table-empty-p drgnx-keys--yours)
-               (hash-table-empty-p drgnx-keys--yours-in-maps))
+key of yours recorded there is nothing to forget, and the file system is not asked (a load of tramp for a remote name);
+nor for a file whose name is none of your files' (`drgnx-keys--source-names')."
+  (unless (or (and (hash-table-empty-p drgnx-keys--loading) (hash-table-empty-p drgnx-keys--yours)
+                   (hash-table-empty-p drgnx-keys--yours-in-maps))
+              (not (gethash (file-name-base file) drgnx-keys--source-names)))
     (let* ((base (file-name-sans-extension (file-truename file)))
            (kept (cdr (gethash base drgnx-keys--loading))))
       (remhash base drgnx-keys--loading)
@@ -988,7 +1005,8 @@ key of yours recorded there is nothing to forget, and the file system is not ask
              drgnx-keys--yours-in-maps)
     (when in-maps
       (dolist (k in-maps) (remhash k drgnx-keys--yours-in-maps))
-      (drgnx-keys--fill-foreign drgnx-keys--foreign-last))
+      (drgnx-keys--fill-foreign drgnx-keys--foreign-last)
+      (drgnx-keys--refill-own))
     (maphash (lambda (k v) (when (and (equal (cdr v) base) (not (member k kept))) (push k gone))) drgnx-keys--yours)
     (when gone
       (let ((nidhogg-define-key-redirect-function nil))
@@ -1000,13 +1018,21 @@ key of yours recorded there is nothing to forget, and the file system is not ask
       (drgnx-keys--set-everywhere (append (plist-get drgnx-keys-last :bindings) (plist-get drgnx-keys-last :held))))))
 
 (defun drgnx-keys--take-in (sym text def remove)
-  "Your write of DEF (or a REMOVE) on KEY TEXT in keymap SYM, a map a profile names: record it, and make the foreign
-layer again, which steps aside for it (`drgnx-keys--yours-blocks-p')."
+  "Your write of DEF (or a REMOVE) on KEY TEXT in keymap SYM, a map a profile names: record it, and make the layer
+of SYM again (the foreign layer, or the parent layer of a drgnx map), which steps aside for it
+\(`drgnx-keys--yours-blocks-p').  A nil of yours in an evil auxiliary keymap hides nothing of the layer's below it,
+so the layer must leave the key out."
   (let ((src (drgnx-keys--source)))
     (drgnx-keys--note-load src (cons sym text))
     (if remove (remhash (cons sym text) drgnx-keys--yours-in-maps)
       (puthash (cons sym text) (cons def src) drgnx-keys--yours-in-maps))
-    (when (assq sym drgnx-keys--foreign-last) (drgnx-keys--fill-foreign drgnx-keys--foreign-last))))
+    (when (assq sym drgnx-keys--foreign-last) (drgnx-keys--fill-foreign drgnx-keys--foreign-last))
+    (when (assq sym drgnx-keys--attached) (drgnx-keys--fill-own sym (gethash sym drgnx-keys--own-items)))))
+
+(defun drgnx-keys--refill-own ()
+  "Make every attached layer of drgnx's own maps again: a key of yours in one came or went."
+  (dolist (entry (copy-sequence drgnx-keys--attached))
+    (drgnx-keys--fill-own (car entry) (gethash (car entry) drgnx-keys--own-items))))
 
 (defun drgnx-keys--take-everywhere (event map def remove)
   "Your write of DEF (or a REMOVE) on the `:everywhere' key EVENT in keymap MAP: record it; the entry steps aside
@@ -1015,13 +1041,19 @@ where MAP is active (`drgnx-keys--everywhere-filter')."
         (seq-remove (lambda (y) (and (eq (caar y) event) (eq (cdar y) map))) drgnx-keys--yours-everywhere))
   (unless remove (push (cons (cons event map) (cons def (drgnx-keys--source))) drgnx-keys--yours-everywhere)))
 
+(defun drgnx-keys--normal-motion (text)
+  "Key TEXT with a leading \"<motion-state> \" read as \"<normal-state> \" (`drgnx-keys--yours-blocks-p')."
+  (if (string-prefix-p "<motion-state> " text) (concat "<normal-state> " (substring text 15)) text))
+
 (defun drgnx-keys--yours-blocks-p (sym key)
   "Whether a key of yours in keymap SYM is KEY (a description), a prefix of it, or under it: the profile's KEY in
-SYM's layer steps aside."
+SYM's layer steps aside.  evil's normal and motion state count as one: normal state takes motion keys in, and the
+layer puts a mode map's key in both auxiliary keymaps."
+  (setq key (drgnx-keys--normal-motion key))
   (catch 'hit
     (maphash (lambda (k _)
                (when (and (eq (car k) sym)
-                          (let ((y (cdr k)))
+                          (let ((y (drgnx-keys--normal-motion (cdr k))))
                             (or (equal y key) (string-prefix-p (concat y " ") key) (string-prefix-p (concat key " ") y))))
                  (throw 'hit t)))
              drgnx-keys--yours-in-maps)
@@ -1142,6 +1174,7 @@ keys (they come back with the next apply), and the redirect stays on to record t
     (setq drgnx-keys--yours-everywhere nil)
     (clrhash drgnx-keys--loading)
     (drgnx-keys--fill-foreign drgnx-keys--foreign-last)
+    (drgnx-keys--refill-own)
     (drgnx-keys--mark-stale)
     (pcase-dolist (`(,k . ,d) drgnx-keys--profile-keys) (drgnx-keys--define drgnx-keys--profile-map (key-parse k) d))
     (drgnx-keys--set-everywhere (append (plist-get drgnx-keys-last :bindings) (plist-get drgnx-keys-last :held)))))
@@ -1416,16 +1449,20 @@ the parent on purpose (a parent's command on a prefix is not a clash to lift); a
       map)))
 
 (defun drgnx-keys--fill-own (sym items)
-  "Fill SYM's layer with ITEMS ((KEY . COMMAND) …) and insert it between the keymap and its parent: child → layer →
-old parent, or the parent the derived mode will take.  Called after the mode is defined (its map exists)."
+  "Fill SYM's layer with ITEMS ((KEY . COMMAND) …), less the keys of yours in SYM (`drgnx-keys--yours-blocks-p'), and
+insert it between the keymap and its parent: child → layer → old parent, or the parent the derived mode will take.
+Called after the mode is defined (its map exists).  ITEMS are kept, to make the layer again when a key of yours
+comes or goes (`drgnx-keys--own-items')."
   (let* ((child (symbol-value sym))
          (layer (or (gethash sym drgnx-keys--own-layers) (puthash sym (make-sparse-keymap) drgnx-keys--own-layers)))
          (nidhogg-define-key-redirect-function nil))
+    (puthash sym items drgnx-keys--own-items)
     (when-let* ((old (assq sym drgnx-keys--attached))) (drgnx-keys--detach old) (setq drgnx-keys--attached (delq old drgnx-keys--attached)))
     (drgnx-keys--empty layer)
     (dolist (item items)
-      (condition-case err (drgnx-keys--define layer (key-parse (car item)) (cdr item))
-        (error (drgnx-keys--problem (format "cannot bind %s in %s: %s" (car item) sym (error-message-string err)) nil))))
+      (unless (drgnx-keys--yours-blocks-p sym (key-description (key-parse (car item))))
+        (condition-case err (drgnx-keys--define layer (key-parse (car item)) (cdr item))
+          (error (drgnx-keys--problem (format "cannot bind %s in %s: %s" (car item) sym (error-message-string err)) nil)))))
     (let ((parent (or (keymap-parent child) (drgnx-keys--natural-parent sym))))
       (set-keymap-parent layer parent)
       (set-keymap-parent child layer)

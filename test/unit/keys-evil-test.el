@@ -155,6 +155,22 @@ map (in its layer's auxiliary keymap) still work beside yours, after an apply to
       (let ((nidhogg-define-key-redirect-function nil))
         (define-key drgnx-keys-test-evown-mode-map [normal-state] nil t)))))
 
+(ert-deftest drgnx-keys/evil-your-nil-in-a-drgnx-mode-map-hides-the-layers-key ()
+  "Your nil for normal state in a drgnx mode map (`evil-define-key' … nil) takes the profile's key for that mode off
+normal state, after an apply too: the key is evil's own there again."
+  (keys-ev--with ((ev-a "g d" :map drgnx-keys-test-evown-mode-map))
+    (unwind-protect
+        (progn
+          (keys-ev--as-you (evil-define-key* 'normal drgnx-keys-test-evown-mode-map (kbd "g d") nil))
+          (dotimes (_ 2)
+            (with-temp-buffer
+              (drgnx-keys-test-evown-mode)
+              (evil-local-mode 1) (evil-normal-state)
+              (should (eq (key-binding (kbd "g d")) #'evil-goto-definition)))
+            (drgnx-keys-apply)))
+      (let ((nidhogg-define-key-redirect-function nil))
+        (define-key drgnx-keys-test-evown-mode-map [normal-state] nil t)))))
+
 (ert-deftest drgnx-keys/evil-a-packages-write-stays-in-evils-map-below-the-profile ()
   "A package's write into evil's normal state map stays there, below the profile's key."
   (keys-ev--with ((ev-a "g d" :map (evil . evil-normal-state-map)))

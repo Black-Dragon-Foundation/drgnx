@@ -90,7 +90,11 @@ map last, all of them above evil's own state maps.
   evil's map, below the profile's key. Your key in a mode map's auxiliary keymap (`evil-define-key 'normal
   dired-mode-map …`) is a write into a watched map (its auxiliary keymap is watched as evil makes it): the foreign
   layer steps aside for it. In a drgnx map that auxiliary keymap sits in the map itself, its layer's below it: a
-  lookup of `[normal-state]` finds both and composes them, so the profile's keys for the mode stay beside yours.
+  lookup of `[normal-state]` finds both and composes them, so the profile's keys for the mode stay beside yours. A
+  composed nil hides nothing, so the layer of a drgnx map leaves out the profile's keys yours meet there
+  (`drgnx-keys--yours-blocks-p`, as the foreign layer does), and is made again from its kept items
+  (`drgnx-keys--own-items`) when one of yours comes or goes: your `nil` frees the key. Normal and motion state count
+  as one there (`drgnx-keys--normal-motion`): the layer has the key in both, and normal state takes motion keys in.
 - **The sheet** (`drgnx-keys-resolve` `:yours`) lists your global keys only; your evil keys are not there yet.
 - **A mode map's keys** for normal and motion state sit in auxiliary keymaps of the map's layer: of the parent layer
   for drgnx's own maps, of the foreign layer (`drgnx-keys--foreign-aux`, entries filtered as the layer's) for the

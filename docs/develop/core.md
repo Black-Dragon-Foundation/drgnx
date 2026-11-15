@@ -837,7 +837,8 @@ on a prefix) leaves `:bindings` for `:held` and the conflict says so; `global-ma
 `drgnx-keys/the-sheet-says-what-key-binding-answers` compare with the real lookup. A write of yours marks the record
 stale; `drgnx-keys-settle` applies before the sheet, the key labels or the tty table read it. When a Lisp file of yours has loaded
 again (`after-load-functions`, `drgnx-keys--loaded`), the keys it bound before and not in this load go; keys from the
-keyboard stay.
+keyboard stay. A load whose file name (without directory and extension) is none of your files' names, as loaded or as
+true names (`drgnx-keys--source-names`), is passed by without asking the file system (a remote name, a package).
 Emacs functions that read the variable `global-map` (`drgnx-keys--global-readers`) run with it bound to the composed map.
 The tty fallback and the Keyboard Shortcuts editor take `drgnx-tty-fallback-global-map` (your map over `global-map`) as
 what is taken. The user guide is `docs/guide/keys.md`; the checks are `test/unit/core-keys-test.el`,
