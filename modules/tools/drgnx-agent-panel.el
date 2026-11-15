@@ -133,6 +133,8 @@ to its top.  The hub gives at most 50."
   (load (expand-file-name "drgnx-agent-panel-cards" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (unless (featurep 'drgnx-agent-panel-composer)
   (load (expand-file-name "drgnx-agent-panel-composer" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(unless (featurep 'drgnx-agent-panel-header)
+  (load (expand-file-name "drgnx-agent-panel-header" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (unless (featurep 'drgnx-agent-panel-explain)
   (load (expand-file-name "drgnx-agent-panel-explain" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (unless (featurep 'drgnx-agent-panel-huddle)
@@ -484,10 +486,12 @@ commands on the step at point read; the hub draws its rows again itself)."
 ;;;; The module
 
 (declare-function drgnx-agent-panel--composer-of "drgnx-agent-panel-composer")
+(declare-function drgnx-agent-panel--header-of "drgnx-agent-panel-header")
 
 (defun drgnx-agent-panel--companions (buffer)
-  "The area companions of panel BUFFER (`drgnx-pane-define-kind' :companions): (ABOVE BELOW), the composer below."
-  (list nil (drgnx-agent-panel--composer-of buffer)))
+  "The area companions of panel BUFFER (`drgnx-pane-define-kind' :companions): (ABOVE BELOW), the header above and the
+composer below."
+  (list (drgnx-agent-panel--header-of buffer) (drgnx-agent-panel--composer-of buffer)))
 
 (defun drgnx-agent-panel--setup ()
   (drgnx-command-define 'agents-panel :category "Agents" :title "Open the Agent Panel"
