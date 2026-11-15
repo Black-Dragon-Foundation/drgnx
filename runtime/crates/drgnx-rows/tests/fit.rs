@@ -418,3 +418,26 @@ fn a_segment_is_asked_without_its_placeholders() {
     assert!(fitted(&mut row, 90, &s));
     assert!(row.text.ends_with('…'), "{}", row.text);
 }
+
+/// [D] A cluster of several chars (here a ZWJ sequence the font does not join) is measured by the editor in the faces
+/// over it, and its width then counts in the row's sum: the row is cut where the drawn text reaches its edge, not past
+/// it.
+#[test]
+fn a_joined_cluster_is_measured_by_the_editor() {
+    let s = tens();
+    let zwj = "\u{1F469}\u{200D}\u{1F4BB}";
+    let mut b = drgnx_rows::RowBuilder::new("r");
+    b.push(&format!("ab{zwj}cdefg"), None);
+    let mut row = b.finish();
+    // the sum (8 clusters, 80 px) fits 95 px: the cluster is asked, alone, in the row's faces
+    assert!(!fitted(&mut row, 95, &s));
+    let asks = s.take_measure_asks();
+    assert!(asks.iter().any(|a| a.1 == zwj), "{asks:?}");
+    // the editor drew it as three emoji, 30 px: 100 px of text in 95, so the row is cut before its end
+    s.measured("ui", zwj, 30.0);
+    let mut b = drgnx_rows::RowBuilder::new("r");
+    b.push(&format!("ab{zwj}cdefg"), None);
+    let mut row = b.finish();
+    assert!(fitted(&mut row, 95, &s));
+    assert!(row.text.ends_with('…'), "{}", row.text);
+}

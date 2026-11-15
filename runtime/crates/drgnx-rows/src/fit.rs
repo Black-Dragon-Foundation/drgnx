@@ -330,7 +330,8 @@ pub fn width(m: &dyn Measure, role: &str, text: &str) -> f32 {
 
 /// A grapheme cluster's width: its first char's advance. The marks, joiners and joined emoji after it are drawn into
 /// that glyph, while measured alone (the editor's answers when there is no font file, as on macOS) each has a width
-/// of its own; a cluster the font does not join draws wider, and the editor's fit guard measures that.
+/// of its own; a cluster the font does not join draws wider, so a row's fit asks the editor for the whole cluster
+/// ([`crate::fit_row`]).
 fn cluster(m: &dyn Measure, role: &str, g: &str) -> f32 {
     g.chars().next().map_or(0.0, |c| advance(m, role, c))
 }

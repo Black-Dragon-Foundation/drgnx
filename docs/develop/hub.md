@@ -2497,11 +2497,13 @@ with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an est
   then on. The text asked is the segment's without its images' and spaces' placeholders (their widths are known and
   added), its runs moved to match.
 
-- **Per grapheme cluster.** A cluster (a letter and its combining marks, an emoji ZWJ sequence, a flag) counts its
-  first char's advance, and a cut never splits one. The marks and joined chars after it are drawn into that glyph;
-  asked of the editor one by one (no font file, as on macOS) each had a width of its own, and the combining and ZWJ
-  labels were cut 21 to 35 px short. A cluster the font draws wider than its first char (an unjoined ZWJ sequence)
-  runs over, and the fit guard measures it.
+- **Per grapheme cluster.** A cut never splits a cluster (a letter and its combining marks, an emoji ZWJ sequence, a
+  flag). In a row, a cluster of several chars is asked of the editor whole (`view-glyphs`' `measure`: its roles key,
+  its text, the row's runs over it), and its answer is its width from then on; until it comes, the cluster counts its
+  first char's advance. Its chars' own advances would be wrong both ways: asked one by one (no font file, as on macOS)
+  each had a width of its own, and the combining and ZWJ labels were cut 21 to 35 px short; the first char's alone
+  ran 1 to 8 px over when the font did not join a ZWJ sequence. Outside rows (`fit::fit`, `fit::width_in`, a builder's
+  own placing) the first char's advance stands; the row's fit corrects it.
 
 - **Measured against Emacs.** `test/ui/rows-fit-gui-test.el` compares the sums (`test/fixtures/rows-fit-sums.eld`,
   written by `drgnx-rows`' `fit_sums`) with `string-pixel-width` for 40-char Latin, digit and punctuation strings in

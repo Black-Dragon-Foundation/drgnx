@@ -1,7 +1,7 @@
 ;;; rows-fit-gui-test.el --- GUI tests: the hub's fitted widths against the editor's (run by `drgnx test --ui') -*- lexical-binding: t -*-
 ;; test-class: det
-;; The hub fits labels from the font file's advances (drgnx-rows, skrifa); the editor lays them out with its own
-;; shaping and hinting.  These rows compare the two on the fixture fonts (test/fixtures/fonts), installed for this
+;; The hub fits labels from the editor's advances (the font file's, read with skrifa, until it answers; drgnx-rows);
+;; the editor lays them out with its own shaping and hinting.  These rows compare the two on the fixture fonts (test/fixtures/fonts), installed for this
 ;; session only.  The fit check and the row heights run on the fixture view `rows-demo', fed by the hub (a test-hooks
 ;; build from DRGNX_RATATOSKR_BIN; test/fixtures/rows-demo-fixture.el).  Runnable from a checkout on any GUI build
 ;; (Linux or macOS) with only the hub built: nothing here needs a Linux harness.
@@ -113,9 +113,10 @@ WIDTH the drawn segment's before its stop."
 
 (ert-deftest drgnx-ui-rows-fit/no-fitted-segment-overflows-its-stop ()
   "The fit check row: the hub fits each label (Latin, ligatures, ZWJ, combining, RTL) in Inter and JetBrains Mono at
-11-16 px to 80, 160 and 240 px from the font file Emacs uses; after the editor's fit guard no segment runs past its
-stop, and none is cut more than the slack and one glyph short (joined right-to-left text in a fallback font, whose
-per-char sum runs wide, is reported instead).  The guard's re-fits are reported."
+11-16 px to 80, 160 and 240 px, each char at the editor's advance and each cluster of several chars as the editor
+measured it; after the editor's fit guard no segment runs past its stop, and none is cut more than the slack and one
+glyph short (joined right-to-left text in a fallback font, whose per-char sum runs wide, is reported instead).  The
+guard's re-fits are reported."
   (skip-unless (display-graphic-p))
   (should (drgnx-rows-fit-ui-test--install))
   (let ((font (face-attribute 'default :font (selected-frame))) (refits 0) (rows 0) (gap 0) (latin-asked nil) (bad nil) (rtl-short nil))
@@ -141,7 +142,7 @@ per-char sum runs wide, is reported instead).  The guard's re-fits are reported.
                         (if (string-prefix-p "rtl/" key) (push (list key family px (- w width)) rtl-short)
                           (push (list :short family px key w width max-char) bad))))))
                 (setq refits (+ refits (drgnx-view-patch-refits (drgnx-rows-demo-state b))))
-                ;; the font file was read: no Latin letter was asked of the editor
+                ;; the editor's advances (hinted, at its size) win over the font file's: the Latin letters were asked
                 (maphash (lambda (k _) (when (memq (cdr k) (string-to-list "Thequickbrownfox")) (setq latin-asked t)))
                          drgnx-view-env--glyphs)
                 (kill-buffer b)))))
@@ -150,7 +151,7 @@ per-char sum runs wide, is reported instead).  The guard's re-fits are reported.
      (format "rows-fit check: %d rows, %d re-fit by the guard, largest cut gap %d px; shaped RTL cut short: %S"
              rows refits gap (nreverse rtl-short)))
     (should-not (nreverse bad))
-    (should-not latin-asked)))
+    (should latin-asked)))
 
 (ert-deftest drgnx-ui-rows-fit/row-heights-match-the-window ()
   "A row of two lines' height is drawn that tall: `window-line-height' of its line against `default-line-height'."

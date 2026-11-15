@@ -1,6 +1,7 @@
 //! A whole row fitted to its window (docs/develop/hub.md, "Fitting: no row wider than its window"): every segment of
 //! the row (the text before its first stop, between two stops, after the last) is measured as drawn, each char in the
-//! font of the face its top run names ([`crate::fit::Ink`], as the editor reported it), images at their picture's
+//! font of the face its top run names ([`crate::fit::Ink`], as the editor reported it), a cluster of several chars as
+//! the editor measured it whole, images at their picture's
 //! width, spaces at theirs, a boxed face's ends at its box's; a segment that runs past the next stop (the last: past
 //! the window's body) is cut with an ellipsis between grapheme clusters, to the stop less [`SLACK`]. The row then
 //! carries the role each run was measured in (`fonts`), so the editor's fit guard reports in the same role. A segment
@@ -78,6 +79,25 @@ fn widths(
         if i < n {
             w[i] = match room.tty {
                 Some((cell, table)) => (fit_tty::width(g, table) as u32 * cell) as f32,
+                // a cluster of several chars (joined emoji, marks) draws as the font joins it, which no advance tells:
+                // the editor measures it, and until it answers its first char's advance stands in
+                None if len > 1 => {
+                    let key = roles_key(at, inks, i, (i + len).min(n));
+                    m.measured(&key, g).unwrap_or_else(|| {
+                        let runs: Vec<(u32, u32, String)> = row
+                            .runs
+                            .iter()
+                            .filter(|r| (r.0 as usize) < i + len && (r.1 as usize) > i)
+                            .map(|r| {
+                                let s = (r.0 as usize).max(i) - i;
+                                let e = (r.1 as usize).min(i + len) - i;
+                                (s as u32, e as u32, r.2.clone())
+                            })
+                            .collect();
+                        m.measure_ask(&key, g, &runs);
+                        fit::advance(m, &inks[at[i]].role, chars[i])
+                    })
+                }
                 None => fit::advance(m, &inks[at[i]].role, chars[i]),
             };
         }
