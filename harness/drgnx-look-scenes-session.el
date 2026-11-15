@@ -1604,7 +1604,8 @@ notebook scene's picture output."
           :ascent 'center :max-height (if (fboundp 'drgnx-px) (drgnx-px 160) 160))))
 
 (defun drgnx-look--nb-parts (count language busy)
-  "The parts of a code cell's head as the hub sends them: the run (BUSY: stop) button, the COUNT chip (accent while BUSY), the LANGUAGE chip."
+  "The parts of a code cell's head as the hub sends them: the run (BUSY: stop) button,
+the COUNT chip (accent while BUSY), the LANGUAGE chip."
   (list (list :role "run" :text "" :action (if busy "stop" "run"))
         (list :role "count" :text count :chip (if busy "accent" "quiet"))
         (list :role "language" :text language :chip "quiet")))
@@ -1640,8 +1641,10 @@ would be (no kernel, no hub: the scene draws the buffer's own chrome)."
     buffer))
 
 (defun drgnx-look-scene--notebook (theme)
-  "The notebook in THEME, in the editor."
+  "The notebook in THEME, in the editor, with the scenes' hub started so the sidebar has the
+Explorer's rows, not \"Waiting for the hub\"."
   (drgnx-look-scene--theme theme)
+  (drgnx-look-scene--try "hub" (drgnx-look-scene--hub))
   (drgnx-look-scene--try "notebook"
     (drgnx-wb-focus-editor)
     (drgnx-look-scene--show (drgnx-look-scene--notebook-buffer)))

@@ -275,7 +275,8 @@ interrupts the kernel instead."
 (defconst drgnx-notebook--tools
   '((chevron-up notebook-move-up "Move cell up") (chevron-down notebook-move-down "Move cell down")
     (trash-2 notebook-delete-cell "Delete cell") (ellipsis notebook-cell-menu "More cell actions"))
-  "The selected cell's toolbar: (ICON COMMAND HELP), each COMMAND a registry command of the notebook (`drgnx-notebook--commands').")
+  "The selected cell's toolbar: (ICON COMMAND HELP), each COMMAND a registry command
+of the notebook (`drgnx-notebook--commands').")
 
 (defun drgnx-notebook-tool-at-mouse (event)
   "Run the registry command of the toolbar icon EVENT clicked, on the cell the icon is in."
@@ -332,7 +333,8 @@ the card's ring is its edge."
   "The hub's chip names of a head's parts, and the faces that draw them.")
 
 (defun drgnx-notebook--head-part (id part)
-  "The string of one PART of cell ID's head, as the hub sent it: the run (or stop) button, or a chip of the part's text."
+  "The string of one PART of cell ID's head, as the hub sent it:
+the run (or stop) button, or a chip of the part's text."
   (let ((role (plist-get part :role)))
     (if (equal role "run")
         (let ((stop (equal (plist-get part :action) "stop")))
@@ -344,9 +346,10 @@ the card's ring is its edge."
                               'drgnx-notebook-head)))))
 
 (defun drgnx-notebook--toolbar (id)
-  "The selected cell's toolbar, right-aligned: an icon for each of `drgnx-notebook--tools', each running its registry command."
+  "The selected cell's toolbar, right-aligned: an icon for each of `drgnx-notebook--tools',
+each running its registry command."
   (concat
-   (propertize " " 'display `(space :align-to (- right (,(drgnx-px 96)))) 'face 'drgnx-notebook-head)
+   (propertize " " 'display `(space :align-to (- right (,(drgnx-px 108)))) 'face 'drgnx-notebook-head)
    (mapconcat (lambda (tool)
                 (propertize (drgnx-notebook--icon (nth 0 tool) 'drgnx-notebook-tool)
                             'drgnx-notebook-tool (nth 1 tool) 'drgnx-notebook-tool-cell id 'keymap drgnx-notebook-tool-map
@@ -354,9 +357,10 @@ the card's ring is its edge."
               drgnx-notebook--tools (propertize " " 'face 'drgnx-notebook-head))))
 
 (defun drgnx-notebook--head-strip (id type)
-  "The header strip of cell ID: the hub's parts of its head (the run button, the count and the language as chips), then, on the
-selected cell, the toolbar.  Until the hub has sent a head (a new cell) it is the type alone.  Built when a head arrives or the
-selection moves, never while redisplay draws."
+  "The header strip of cell ID: the hub's parts of its head (the run button, the count and the
+language as chips), then, on the selected cell, the toolbar.  Until the hub has sent a head
+(a new cell) it is the type alone.  Built when a head arrives or the selection moves, never
+while redisplay draws."
   (let ((parts (plist-get (gethash id drgnx-notebook--heads) :parts)))
     (concat
      (mapconcat (lambda (part) (drgnx-notebook--head-part id part))
@@ -1200,8 +1204,8 @@ the hub skipped with :why (shown in the picker with its reason, and refused when
     (drgnx-notebook--run-ids (mapcar (lambda (x) (plist-get x :id)) (seq-filter (lambda (x) (eq (plist-get x :type) 'code)) (seq-drop drgnx-notebook--cells i))))))
 
 (defun drgnx-notebook-cell-menu ()
-  "Choose another action for this cell (the toolbar's more icon): copy, cut, paste, add above, split, merge, change type, clear
-outputs, run above or below."
+  "Choose another action for this cell (the toolbar's more icon): copy, cut, paste, add above,
+split, merge, change type, clear outputs, run above or below."
   (interactive)
   (let* ((ids '(notebook-copy-cell notebook-cut-cell notebook-paste-cell notebook-add-above notebook-split-cell notebook-merge-cell
                                    notebook-change-type notebook-clear-outputs notebook-run-above notebook-run-below))
