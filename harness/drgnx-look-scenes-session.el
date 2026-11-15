@@ -2091,6 +2091,7 @@ a finished run left."
 
 (declare-function drgnx-view-patch-class "drgnx-view")
 (declare-function drgnx-view-key-at "drgnx-view")
+(declare-function drgnx-view-env-face "drgnx-view-env")
 
 (defvar drgnx-look-scene--widths-log nil
   "What the current scene's width check measured, newest first: (VIEW BUFFER HOW BODY-PX ROWS WIDE) per window and

@@ -452,18 +452,18 @@ name that is no face, or a terminal, draws in `ui'."
                (mine (drgnx-view-env--font face frame factor))
                ;; drawn in BUFFER, FACE merges over its remapped `default' (the agent panel's `drgnx-ui-text'), which
                ;; `face-font' does not see: a face that sets only colours draws in the buffer's `default', not the
-               ;; frame's.  A role whose face draws a probe as wide is FACE's role.
+               ;; frame's.  A role whose face draws a probe as wide (FACE's box ends left out) is FACE's role.
+               (pad (drgnx-view-env--box-pad face frame))
                (probe (lambda (f) (with-selected-frame frame
                                     (string-pixel-width (propertize drgnx-view-env--probe 'face f) buffer))))
-               (drawn (funcall probe face))
+               (drawn (- (funcall probe face) (* 2 pad)))
                (role (or (cl-some (lambda (r) (and (= drawn (funcall probe (cdr r))) (symbol-name (car r))))
                                   drgnx-view-env-roles)
                          (and mine (cl-some (lambda (r)
                                               (let ((f (drgnx-view-env--font (cdr r) frame factor)))
                                                 (and f (equal (car (last f)) (car (last mine)))
                                                      (symbol-name (car r)))))
-                                            drgnx-view-env-roles))))
-               (pad (drgnx-view-env--box-pad face frame)))
+                                            drgnx-view-env-roles)))))
           (cond ((or role (null mine)) (list :face face-name :role (or role "ui") :pad pad))
                 (t (list :face face-name :role face-name :pad pad :file (nth 0 mine) :index (nth 1 mine)
                          :px (nth 2 mine) :avg (nth 5 mine)
