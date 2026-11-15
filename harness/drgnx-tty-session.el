@@ -648,6 +648,38 @@ title.  What \"nothing was sent to the terminal\" means is then settled, with no
                                                       sess "display" "-p" "-t" (plist-get sess :target) "#{pane_title}")))
                      :secs 20 :what "tmux has read the terminal output up to the barrier")))
 
+(defconst drgnx-tty-session--settle-defun
+  '(defun kx-settle (title)
+     "Write TITLE down the terminal once nothing is left to run: no server connection (the eval that armed this,
+its sentinel), no native compilation, no timer due within 1 s, no idle timer not yet run; else look again."
+     (let ((idle (float-time (or (current-idle-time) 0))))
+       (if (or (seq-some (lambda (p) (or (and (eq (process-filter p) #'server-process-filter)
+                                              (not (process-contact p :server)))
+                                         (string-prefix-p "Compiling" (process-name p))))
+                         (process-list))
+               (seq-some (lambda (tm) (< (float-time (time-subtract (timer--time tm) nil)) 1)) timer-list)
+               (seq-some (lambda (tm) (and (not (timer--triggered tm)) (< (- (float-time (timer--time tm)) idle) 1)))
+                         timer-idle-list))
+           (run-at-time 0.05 nil #'kx-settle title)
+         (send-string-to-terminal (format "\e]2;%s\a" title)))))
+  "A form, in the inner Emacs: `kx-settle', the daemon's half of `drgnx-tty-session-input-barrier'.")
+
+(defun drgnx-tty-session-input-barrier (sess)
+  "Return once SESS's Emacs is back waiting for input with nothing left to run, the test's own eval included.
+A C-g that arrives while Lisp runs is a quit, not a key, and every eval leaves Lisp behind it: its connection's
+sentinel and a redisplay.  So the eval only arms a timer; the timer looks until no server connection is left, no
+native compilation runs and no timer is due within 1 s (looking again every 50 ms), then writes a window title, and
+the wait ends when tmux reports it (as `drgnx-tty-session-pty-barrier', which this includes).  After the title only
+the return to the input wait is left.  Process output nothing here knows of (a hub) can still run Lisp."
+  (let ((title (format "kx-settled-%d" (cl-incf drgnx-tty-session--barriers))))
+    (when (plist-get sess :nested)
+      (drgnx-tty-session-inner-tmux sess "set" "-g" "set-titles" "on")
+      (drgnx-tty-session-inner-tmux sess "set" "-g" "set-titles-string" "#{pane_title}"))
+    (drgnx-tty-session-eval sess `(progn ,drgnx-tty-session--settle-defun (run-at-time 0 nil #'kx-settle ,title) t))
+    (drgnx-test-wait (lambda () (string-search title (drgnx-tty-session--tmux-ok
+                                                      sess "display" "-p" "-t" (plist-get sess :target) "#{pane_title}")))
+                     :secs 20 :what "the daemon settled, waiting for input")))
+
 (defun drgnx-tty-session-pane-flags (sess)
   "The mouse and key modes SESS's application asked of its pane: (:mouse-sgr N :mouse-any N :key-mode S)."
   (let ((out (string-trim (drgnx-tty-session--tmux-ok sess "display" "-p" "-t" (plist-get sess :target)
