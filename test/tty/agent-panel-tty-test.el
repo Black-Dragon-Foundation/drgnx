@@ -162,8 +162,8 @@ screen do not move."
 
 (ert-deftest drgnx-tty-agent-panel/a-gui-and-a-terminal-frame-each-get-their-class ()
   "One daemon, a graphical frame and an `emacsclient -t' frame, the panel open in both: each frame's header and
-transcript are views of the hub in its own class, neither stale; both show the one composer, so a draft typed in one
-is in the other."
+transcript are views of the hub in its own class, neither stale, and each header is the one of its transcript's class
+(`drgnx-agent-panel-header--for'); both show the one composer, so a draft typed in one is in the other."
   (skip-unless (executable-find "mutter"))
   (let ((bin (getenv "DRGNX_RATATOSKR_BIN")))
     (skip-unless (and bin (file-executable-p bin)))
@@ -209,6 +209,19 @@ is in the other."
                                      (should (string-prefix-p "tty" (plist-get b :class)))
                                      (should-not (equal (plist-get a :buffer) (plist-get b :buffer))))
                             (should (equal (plist-get a :buffer) (plist-get b :buffer))))))   ; the one composer
+            ;; each frame's header window holds the header of its transcript's class (`drgnx-agent-panel-header--for'):
+            ;; the terminal's the header's twin of its class, the graphical frame's its own
+            (dolist (f (list gui-frame tty-frame))
+              (should (equal
+                       '(t t)
+                       (drgnx-tty-session-eval
+                        gui `(let* ((parts (drgnx-tty-ap--area ,f))
+                                    (above (get-buffer (plist-get (nth 0 parts) :buffer)))
+                                    (main (get-buffer (plist-get (nth 1 parts) :buffer))))
+                               (list (eq above (drgnx-agent-panel-header--for
+                                                (drgnx-agent-panel--header-of drgnx-tty-ap--panel) main))
+                                     (equal (drgnx-view-patch-class (buffer-local-value 'drgnx-view-patch above))
+                                            (drgnx-view-patch-class (buffer-local-value 'drgnx-view-patch main)))))))))
             ;; a draft typed in the terminal's composer is in the graphical frame's
             (should (drgnx-tty-session-eval
                      gui `(with-selected-frame ,tty-frame
