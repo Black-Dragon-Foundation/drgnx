@@ -2960,6 +2960,9 @@ a `card:accept:PATH:I`, `card:reject:PATH:I`, `card:allow:ID`, `card:always:ID` 
 `drgnx-agent-panel-action`; every row of a card carries `drgnx-agent-panel-card` (`["diff", PATH, I]` or `["perm", ID]`),
 which the keys (`a`, `D`, `RET`, `A`) and the click dispatcher read at point to run the existing commands. The editor keeps
 no diffs: Accept and Reject ask `work/hunks` for the file first, for the review mark's hash.
+A note queued for the agent is a row there too (`c:q:N`, "queued N  text   (e edit · d drop)", with
+`drgnx-agent-panel-queued` N, which the edit and drop commands read at point); the composer's input row, the only row the
+editor still draws, comes after the hub's rows.
 
 The transcript of an agent session, as rows the panel only inserts (`runtime/crates/drgnx-ratatoskr/src/view/panel.rs`;
 the rows themselves are `agents/session/rows.rs`, pure).

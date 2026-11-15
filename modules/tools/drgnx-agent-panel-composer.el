@@ -37,23 +37,15 @@
   (append (plist-get drgnx-agent-panel--snap :queue) nil))
 
 (defun drgnx-agent-panel-composer-keys ()
-  "The rows under the transcript: a row for each queued note, then the composer."
-  (append (cl-loop for _ in (drgnx-agent-panel-composer--queue) for n from 0 collect (list :q n))
-          (list (list :composer))))
+  "The panel's own row under the transcript: the composer.  The queued notes are the hub's rows (`c:q:N')."
+  (list (list :composer)))
 
 (defun drgnx-agent-panel-composer-redraw ()
-  "The snapshot changed: the queued notes and the composer are drawn again."
+  "The snapshot changed: the composer is drawn again."
   (when (drgnx-view-p drgnx-view)
-    (drgnx-view-dirty drgnx-view
-                      (cons (list :composer)
-                            (seq-filter (lambda (k) (eq (car-safe k) :q)) (hash-table-keys drgnx-agent-panel--shown-keys))))))
+    (drgnx-view-dirty drgnx-view (list (list :composer)))))
 
 ;;;; Rows
-
-(defun drgnx-agent-panel-composer--queue-row (n)
-  (propertize (format "  ⏸ queued %d  %s   (e edit · d drop)\n" (1+ n)
-                      (drgnx-agent-panel--one-line (nth n (drgnx-agent-panel-composer--queue)) 60))
-              'face 'drgnx-agent-panel-subtle))
 
 (defun drgnx-agent-panel-composer--pair-chip ()
   "The Pair chip, or nil when `agents-pair' is not a command."
@@ -194,9 +186,10 @@ The bar sits under the card, not in it: its chips and buttons have boxes of thei
   (message "Agent: resumed"))
 
 (defun drgnx-agent-panel-composer--queue-index ()
-  (let ((key (and (drgnx-view-p drgnx-view) (drgnx-view-key-at))))
-    (unless (eq (car-safe key) :q) (user-error "Point is not on a queued note"))
-    (cadr key)))
+  "The number of the queued note at point (a hub row carries it as `drgnx-agent-panel-queued')."
+  (let ((n (get-text-property (point) 'drgnx-agent-panel-queued)))
+    (unless (integerp n) (user-error "Point is not on a queued note"))
+    n))
 
 (defun drgnx-agent-panel-edit-queued ()
   "Edit the queued note at point, until it is sent."

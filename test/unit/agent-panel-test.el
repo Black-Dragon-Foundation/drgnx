@@ -261,23 +261,26 @@ unanswered, and panel \"s1\" as `buf'."
       (should-not drgnx-agent-panel-test--calls))))
 
 (ert-deftest drgnx-agent-panel/a-queued-note-is-editable-until-sent ()
+  "The queued notes are the hub's rows (`c:q:N'); a row names its number, which the edit and drop commands read at point."
   (drgnx-agent-panel-test--with
     (with-current-buffer buf
       (drgnx-agent-panel--take-snapshot (list :id "s1" :status "busy" :queue (list "first" "second")))
-      (let ((text (drgnx-agent-panel-test--text buf)))
-        (should (string-match-p "queued 1  first" text))
-        (should (string-match-p "queued 2  second" text)))
-      (goto-char (drgnx-view-row-start drgnx-view '(:q 1)))
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (propertize "queued 1  first\n" 'drgnx-agent-panel-queued 0)
+                (propertize "queued 2  second\n" 'drgnx-agent-panel-queued 1)))
+      (goto-char (point-min))
+      (forward-line 1)
       (cl-letf (((symbol-function 'read-string) (lambda (_p &optional init &rest _) (concat init " edited"))))
         (drgnx-agent-panel-edit-queued))
       (should (equal '("agents/do" :id "s1" :op "requeue" :n 1 :text "second edited") (car drgnx-agent-panel-test--calls)))
       (drgnx-agent-panel-drop-queued)
       (should (equal '("agents/do" :id "s1" :op "unqueue" :n 1) (car drgnx-agent-panel-test--calls)))
-      ;; the hub's next snapshot is what the queue shows: the note is edited in place, the other is gone
-      (drgnx-agent-panel--take-snapshot (list :id "s1" :status "busy" :queue (list "second edited")))
-      (let ((text (drgnx-agent-panel-test--text buf)))
-        (should (string-match-p "queued 1  second edited" text))
-        (should-not (string-match-p "queued 2" text))))))
+      ;; not on a note: nothing to edit
+      (goto-char (point-max))
+      (let ((inhibit-read-only t)) (insert "plain"))
+      (goto-char (1- (point-max)))
+      (should-error (drgnx-agent-panel-drop-queued) :type 'user-error))))
 
 (ert-deftest drgnx-agent-panel/pair-chip-hidden-without-the-command ()
   (drgnx-agent-panel-test--with

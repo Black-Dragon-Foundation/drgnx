@@ -1,5 +1,6 @@
 //! The agent panel's cards under the transcript, built in the hub (offload step F1): a diff card for each hunk of each
-//! file the agent edited, and a permission card for each request the agent waits on.  A diff card is a header (the file's
+//! file the agent edited, a permission card for each request the agent waits on, and a row for each note queued for the
+//! agent (`c:q:N`, `drgnx-agent-panel-queued` N, which the editor's edit and drop commands read at point).  A diff card is a header (the file's
 //! icon and name, which hunk, Reject and Accept) over the hunk's numbered lines in the card faces; a permission card is
 //! one ringed line (what the agent asks) over Allow, Always and Deny.  The buttons carry `drgnx-agent-panel-action`
 //! (`card:accept:PATH:I`, `card:reject:PATH:I`, `card:allow:ID`, `card:always:ID`, `card:deny:ID`) for the editor's one
@@ -25,6 +26,8 @@ pub struct In<'a> {
     /// Each edited file's path and its unified diff against the base.
     pub diffs: &'a [(String, String)],
     pub permissions: &'a [Permission],
+    /// The notes waiting for the turn to end, oldest first.
+    pub queue: &'a [String],
 }
 
 /// One hunk of a unified diff: its `@@` line and its lines (a leading `+`, `-` or space).
@@ -351,7 +354,23 @@ fn perm_card(i: &In, images: &mut Vec<(ImageId, String)>, p: &Permission) -> Vec
     vec![head, b.finish()]
 }
 
-/// The cards: each hunk of each edited file, then each permission request.  The images the icons need go with them.
+/// Queued note N as one line: "  ⏸ queued 1  text   (e edit · d drop)".
+fn queue_row(n: usize, note: &str) -> Row {
+    let mut b = RowBuilder::new(format!("c:q:{n}"));
+    b.push(
+        &format!(
+            "  ⏸ queued {}  {}   (e edit · d drop)",
+            n + 1,
+            one_line(note, 60)
+        ),
+        Some("drgnx-agent-panel-subtle"),
+    );
+    let end = b.pos();
+    b.prop(0, end, "drgnx-agent-panel-queued", json!(n));
+    b.finish()
+}
+
+/// The cards: each hunk of each edited file, then each permission request, then each queued note.  The images the icons need go with them.
 pub fn rows(i: &In) -> (Vec<Row>, Vec<(ImageId, String)>) {
     let mut images = Vec::new();
     let mut out = Vec::new();
@@ -364,6 +383,7 @@ pub fn rows(i: &In) -> (Vec<Row>, Vec<(ImageId, String)>) {
     for p in i.permissions {
         out.extend(perm_card(i, &mut images, p));
     }
+    out.extend(i.queue.iter().enumerate().map(|(n, q)| queue_row(n, q)));
     (out, images)
 }
 

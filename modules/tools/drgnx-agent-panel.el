@@ -137,7 +137,6 @@ to its top.  The hub gives at most 50."
 (declare-function drgnx-agent-panel-composer-keys "drgnx-agent-panel-composer")
 (declare-function drgnx-agent-panel-composer-redraw "drgnx-agent-panel-composer")
 (declare-function drgnx-agent-panel-composer-setup "drgnx-agent-panel-composer")
-(declare-function drgnx-agent-panel-composer--queue-row "drgnx-agent-panel-composer")
 (declare-function drgnx-agent-panel-composer--row "drgnx-agent-panel-composer")
 
 (declare-function drgnx-agent-panel-cards-setup "drgnx-agent-panel-cards")
@@ -239,7 +238,6 @@ folds under it."
     (:more (propertize "  ↑ earlier steps load when you scroll up\n" 'face 'drgnx-agent-panel-subtle))
     (:e (drgnx-agent-panel--entry-row (cadr key)))
     (:b (drgnx-agent-panel--block-row (cadr key) (nth 2 key)))
-    (:q (drgnx-agent-panel-composer--queue-row (cadr key)))
     (:composer (drgnx-agent-panel-composer--row))
     (:rows-end "\n")
     (_ "\n")))
