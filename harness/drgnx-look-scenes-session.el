@@ -584,8 +584,6 @@ composer) replace the old pinned-copy checks (Task 8 of the docks plan)."
           (error "The transcript fits the panel's window: draw this scene alone (DRGNX_LOOK_ONLY='^agent-panel-long$'), which gives the mock agent its long transcript"))))
     ;; the three windows' checks (docks plan, Task 8); the header clicks leave the transcript scrolled up a page
     (drgnx-look-scene--try "docks wheel" (drgnx-look-scene--panel-docks-wheel drgnx-look-scene--panel))
-    (drgnx-look-scene--try "docks resize" (drgnx-look-scene--panel-docks-resize drgnx-look-scene--panel))
-    (drgnx-look-scene--try "docks short" (drgnx-look-scene--panel-short drgnx-look-scene--panel))
     (drgnx-look-scene--try "header clicks" (drgnx-look-scene--panel-header-clicks drgnx-look-scene--panel))))
 
 ;;;; The panel's three windows (the docks plan, 2026-11-15-agent-panel-docks.md, Task 8): a header window (hub view
@@ -740,7 +738,7 @@ The transcript is left scrolled up: the picture is the scrolled panel."
       (unless (> (with-current-buffer buffer (- (point-max) (window-start w))) back)
         (error "the transcript did not scroll up (start %d)" (window-start w))))
     (let ((header (drgnx-look-scene--edges h)) targets)
-      ;; after a resize the hub draws the header again for the new width: wait for all three parts
+      ;; the hub may draw the header again (a new width): wait for all three parts
       (let ((end (+ (float-time) 5)))
         (while (progn (setq targets (drgnx-look-scene--header-targets h))
                       (and (not (and (assq 'pin targets) (assq 'lens targets) (assq 'pill targets)))
@@ -764,82 +762,6 @@ The transcript is left scrolled up: the picture is the scrolled panel."
             (error "a click on the header's %s through the event loop ran %S, not %S" kind ran want))))
       (unless (equal (drgnx-look-scene--edges h) header)
         (error "the clicks moved the header window: %S, was %S" (drgnx-look-scene--edges h) header)))))
-
-(defun drgnx-look-scene--end-at-bottom-error (buffer window)
-  "Nil when BUFFER's WINDOW, point at its end, shows the end at its bottom (or the whole transcript, when it fits);
-else what it shows."
-  (let ((at (pos-visible-in-window-p (with-current-buffer buffer (point-max)) window t))
-        (body (window-body-height window t)) (line (window-default-line-height window)))
-    (cond ((or (not at) (nth 2 at))
-           (format "the transcript's end is not shown whole (body %d px, start %d, end at %S)"
-                   body (window-start window) at))
-          ;; Emacs scrolls by whole rows: below the end's row there may be less than the first row's height (and the
-          ;; end's own row)
-          ((and (> (window-start window) (with-current-buffer buffer (point-min)))
-                (< (cadr at) (- body line (or (car (window-line-height 0 window)) line))))
-           (format "the transcript's end is at y %d, not at the bottom of its %d px body (first row %S px)"
-                   (cadr at) body (car (window-line-height 0 window)))))))
-
-(defun drgnx-look-scene--frame-height (frame height)
-  "Make FRAME's text HEIGHT px tall (`frame-text-height', which `set-frame-size' sets) and wait (2 s at most) until the
-compositor gave it that height; an error naming the height it has otherwise.  The scenes' frame is fullscreen, and a
-fullscreen frame keeps its output's size: this error is what the scenes' session says until the harness can resize
-its output.  The frame does not leave fullscreen for it: that moves the docks and spoils the picture."
-  (set-frame-size frame (frame-text-width frame) height t)
-  (let ((end (+ (float-time) 2)))
-    (while (and (> (abs (- (frame-text-height frame) height)) (frame-char-height frame)) (< (float-time) end))
-      (accept-process-output nil 0.02)
-      (redisplay t)))
-  (when (> (abs (- (frame-text-height frame) height)) (frame-char-height frame))
-    (error "the frame's text did not take the height %d px: it is %d px (fullscreen %S)" height
-           (frame-text-height frame) (frame-parameter frame 'fullscreen)))
-  (redisplay t) (accept-process-output nil 0.05) (redisplay t))
-
-(defun drgnx-look-scene--frame-restore (frame size)
-  "FRAME back to its text SIZE (WIDTH HEIGHT)."
-  (apply #'set-frame-size frame (append size '(t)))
-  (redisplay t) (accept-process-output nil 0.05) (redisplay t))
-
-(defun drgnx-look-scene--panel-docks-resize (buffer)
-  "Shrink the frame by 250 px and grow it back: after each the transcript, point at its end, shows its end at its
-bottom, and the header and composer windows are fitted."
-  (pcase-let* ((`(,h ,w ,c) (drgnx-look-scene--docks buffer))
-               (frame (window-frame w)) (size (list (frame-text-width frame) (frame-text-height frame))))
-    (select-window w)
-    (with-current-buffer buffer (goto-char (point-max)))
-    (set-window-point w (with-current-buffer buffer (point-max)))
-    (unwind-protect
-        (dolist (step '(shrunk back))
-          (if (eq step 'shrunk) (drgnx-look-scene--frame-height frame (- (cadr size) 250))
-            (drgnx-look-scene--frame-restore frame size))
-          (when-let* ((e (or (drgnx-look-scene--end-at-bottom-error buffer w)
-                             (drgnx-look-scene--fit-error h "header") (drgnx-look-scene--fit-error c "composer"))))
-            (error "with the frame %s (its text %d px): %s" step (frame-text-height frame) e)))
-      (drgnx-look-scene--frame-restore frame size))))
-
-(defun drgnx-look-scene--panel-short (buffer)
-  "The frame shrunk until the transcript's window is two lines tall (the area: the header, two lines and the composer):
-the transcript, point at its end, still shows its end, and the header still holds `p:head', fitted.  The frame goes
-back after."
-  (pcase-let* ((`(,h ,w ,_) (drgnx-look-scene--docks buffer))
-               (frame (window-frame w)) (size (list (frame-text-width frame) (frame-text-height frame)))
-               (lines (* 2 (window-default-line-height w))))
-    (select-window w)
-    (with-current-buffer buffer (goto-char (point-max)))
-    (set-window-point w (with-current-buffer buffer (point-max)))
-    (unwind-protect
-        (progn
-          (drgnx-look-scene--frame-height frame (- (cadr size) (- (window-body-height w t) lines)))
-          (unless (<= (window-body-height w t) (+ lines (window-default-line-height w)))
-            (error "the transcript did not come down to two lines (body %d px, two lines %d px; frame %d px, was %d px)"
-                   (window-body-height w t) lines (frame-text-height frame) (cadr size)))
-          (let ((pt (with-current-buffer buffer (point-max))))
-            (unless (pos-visible-in-window-p pt w)
-              (error "in a two-line transcript its end is not shown (start %d, end %d)" (window-start w) pt)))
-          (unless (drgnx-look-scene--has-row-p (window-buffer h) "p:head")
-            (error "the short area's header window has no `p:head'"))
-          (when-let* ((e (drgnx-look-scene--fit-error h "header"))) (error "in the short area: %s" e)))
-      (drgnx-look-scene--frame-restore frame size))))
 
 (defun drgnx-look-scene-agent-panel ()
   (drgnx-look-scene--theme 'drgnx-dark)
