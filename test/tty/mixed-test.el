@@ -69,7 +69,10 @@ frame and an `emacsclient -t' client of one daemon.  Both are stopped afterwards
   "A one-key transient on <f9> in the daemon."
   (should (drgnx-tty-session-eval
            gui '(progn (require 'transient)
-                       (transient-define-prefix drgnx-tty-mixed-tr () [("a" "Do A" ignore)])
+                       ;; the graphical window is driven by calls, so its focus reaches the daemon as a `switch-frame'
+                       ;; after the call, which a menu would take for the user's command and close on: it stays
+                       (transient-define-prefix drgnx-tty-mixed-tr () :transient-non-suffix #'transient--do-stay
+                                                [("a" "Do A" ignore)])
                        (keymap-global-set "<f9>" #'drgnx-tty-mixed-tr)
                        (eq (key-binding (kbd "<f9>")) 'drgnx-tty-mixed-tr)))))
 

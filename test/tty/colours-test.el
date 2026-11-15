@@ -77,8 +77,14 @@
 
 ;;;; No face is invisible
 
+(defconst drgnx-tty-colours-test--not-text
+  "\\`drgnx-\\(?:term-color-[0-9]+\\|term-cursor\\|debug-console-\\(?:bright-\\)?\\(?:black\\|red\\|green\\|yellow\\|blue\\|magenta\\|cyan\\|white\\)\\|work-seg-[a-z]+\\)\\'"
+  "The drgnx faces the check leaves out: a program's own colours (a terminal's palette, its cursor, a debuggee's SGR
+colours: foregrounds on the terminal's background, which a program may make the same, as in any terminal) and fills
+drawn as spaces (the Timeline's segments), whose colour is the block.")
+
 (defconst drgnx-tty-colours-test--invisible
-  '(let ((resolve (lambda (face attr)
+  `(let ((resolve (lambda (face attr)
                     (let ((c (face-attribute face attr nil t)))
                       (if (and (stringp c) (not (string-prefix-p "unspecified" c))) c
                         (let ((d (face-attribute 'default attr nil)))
@@ -91,7 +97,8 @@
        (mapc #'disable-theme custom-enabled-themes)
        (when theme (load-theme theme t))
        (dolist (f (face-list))
-         (when (string-prefix-p "drgnx-" (symbol-name f))
+         (when (and (string-prefix-p "drgnx-" (symbol-name f))
+                    (not (string-match-p ,drgnx-tty-colours-test--not-text (symbol-name f))))
            (cl-incf seen)
            (let* ((fg (funcall resolve f :foreground)) (bg (funcall resolve f :background))
                   (afg (car (tty-color-approximate (tty-color-values fg))))
@@ -99,7 +106,8 @@
              (when (equal afg abg) (push (list theme f fg bg afg) bad))))))
      (mapc #'disable-theme custom-enabled-themes)
      (list seen (nreverse bad)))
-  "A form, in the inner daemon, in a terminal frame: how many drgnx faces it looked at, and those whose
+  "A form, in the inner daemon, in a terminal frame: how many drgnx faces it looked at (all but
+`drgnx-tty-colours-test--not-text'), and those whose
 foreground and background are the same colour on this terminal, in the default theme and in modus-vivendi.")
 
 (ert-deftest drgnx-tty-colours/no-face-is-invisible ()
@@ -133,6 +141,7 @@ foreground and background are the same colour on this terminal, in the default t
       (with-temp-file (expand-file-name "new.txt" dir) (insert "x\n"))
       (call-process "git" nil nil nil "add" "new.txt")
       (with-temp-file (expand-file-name "loose.txt" dir) (insert "y\n")))
+    (drgnx-tty-session-hub sess)                  ; the Explorer's rows (and their git letters) are the hub's
     (drgnx-tty-session-eval sess `(progn (drgnx-explorer-set-roots (list ,dir)) (drgnx-wb-show-sidebar) t))
     dir))
 
@@ -147,7 +156,7 @@ foreground and background are the same colour on this terminal, in the default t
       (drgnx-tty-session-wait-screen c "\\*scratch\\* ×" 20)
       ;; the table is there and names the four groups
       (should (equal (drgnx-tty-colours-test--in-client s '(mapcar #'car drgnx-tty-frames-state-faces))
-                     '(git review tabs work)))
+                     '(git review tabs)))
       ;; git: the letter sits in the row, M for a changed file, A for an added one, U for an untracked one
       (drgnx-tty-colours-test--in-client s '(progn (drgnx-wb-show-sidebar) t))
       (drgnx-tty-colours-test--git-fixture s)
