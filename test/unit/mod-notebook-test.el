@@ -743,6 +743,16 @@
       ;; a cell with no output has none
       (should-not (funcall inner "b")))))
 
+(ert-deftest drgnx-notebook/the-ring-names-the-output-overlay-so-the-add-row-falls-between-cards ()
+  (nb-test--with-cards
+    (drgnx-notebook--event "notebook-tail" (nb-test--tail "out"))
+    (drgnx-notebook--blocks-update)
+    (let* ((blocks (window-parameter (selected-window) 'glitnir-blocks))
+           (ring (seq-find (lambda (b) (and (eq (car b) 'ring)
+                                            (= (nth 1 b) (plist-get (drgnx-notebook--cell-by-id "a") :head))))
+                           blocks)))
+      (should (eq (plist-get (nthcdr 3 ring) :overlay) (plist-get (drgnx-notebook--chrome-of "a") :tail))))))
+
 (ert-deftest drgnx-notebook/the-header-row-is-26-px-and-its-chips-are-boxed ()
   (nb-test--with
     (let ((s (drgnx-notebook--head-strip "a" 'code)))

@@ -767,6 +767,8 @@ output, the inner block under its hairline: the card's span inset by 8 px, a tin
                     :radius radius
                     :ring (cond ((not selected) 'drgnx-border-subtle) (focused 'drgnx-focus-line) (t 'drgnx-border-strong))
                     :beneath 'default :gap gap :shadow (car shadow) :shadow-ring (cdr shadow)
+                    ;; the card ends with the output's string: the add row (its own overlay) falls between cards
+                    :overlay (plist-get (drgnx-notebook--chrome-of (plist-get c :id)) :tail)
                     :outer (and selected focused (cons 'drgnx-border-subtle 1.0)))
               keys)
         (when out
