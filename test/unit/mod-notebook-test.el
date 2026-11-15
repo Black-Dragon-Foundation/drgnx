@@ -770,13 +770,16 @@
       (should (memq 'drgnx-ui-caption (ensure-list (get-text-property 0 'face (funcall tail "a")))))
       (should-not (memq 'drgnx-code-small (ensure-list (get-text-property 0 'face (funcall tail "a")))))
       ;; the last cell's rows have no buffer text after them to take the card's pad from: the string carries it
-      (should (get-text-property 0 'line-prefix (funcall tail "c")))
+      (should (get-text-property 1 'line-prefix (funcall tail "c")))
+      ;; and its first row, which reads the pad from the buffer position after it (none at the buffer's end), has its own
+      (should (equal (get-text-property 0 'display (funcall tail "c")) `(space :width (,(drgnx-px 12)))))
+      (should-not (eq 'space (car-safe (get-text-property 0 'display (funcall tail "a")))))
       (should (eq (plist-get (funcall inner "a") :ring) 'drgnx-border-subtle))
       (should (= (plist-get (funcall inner "a") :radius) (drgnx-px 6)))
       ;; the first row is the label in the subtle face: the stream, and the run's state
       (should (string-prefix-p "stream · running\n" (funcall tail "a")))
       (should (memq 'drgnx-text-subtle (ensure-list (get-text-property 0 'face (funcall tail "a")))))
-      (should (string-prefix-p "error\n" (funcall tail "c")))
+      (should (string-prefix-p " error\n" (funcall tail "c")))   ; the leading space is the pad (the last cell)
       ;; 8 px of padding under the last row
       (should (equal (get-text-property (- (length (funcall tail "a")) 2) 'display (funcall tail "a"))
                      `(space :width (1) :height (,(drgnx-px 8))))))))

@@ -408,7 +408,8 @@ within three lines of the word icon."
     ("lens-bar" work-space-dark work-space-light 0 42 1090 80)
     ("detail-island" work-space-dark work-space-light 1092 42 348 430)
     ("trail" work-space-dark work-space-light 0 614 1090 200)
-    ("empty-states" start-page start-page-light 262 80 1172 560))
+    ("empty-states" start-page start-page-light 262 80 1172 560)
+    ("notebook-cell" notebook-dark notebook-light 262 120 1172 420))
   "The component pages' pictures: (NAME DARK-SCENE LIGHT-SCENE X Y WIDTH HEIGHT).  The look scenes (`drgnx-look-scenes')
 draw each scene at scale 1 (1440x900 logical pixels); the box cut from the picture is docs/design/img/NAME-dark.png and
 NAME-light.png.  Scenes that need the Work space run on their own
