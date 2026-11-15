@@ -231,7 +231,9 @@ it is no child of the session's Emacs (the shell that started it has exited), so
                    s '(progn (make-process :name "kx-writer" :noquery t :connection-type 'pipe
                                            :command (list "sh" "-c"
                                                           (concat "setsid sh -c 'd=$DRGNX_DATA_DIR/kx-writer; mkdir -p $d; "
-                                                                  "while :; do : > $d/f; rm -f $d/f; done' "
+                                                                  ;; echo, not `:': a special builtin's failed
+                                                                  ;; redirection would end the shell once $d goes
+                                                                  "while :; do echo > $d/f 2>/dev/null; rm -f $d/f; done' "
                                                                   "</dev/null >/dev/null 2>&1 &")))
                              t)))
           (drgnx-test-wait (lambda () (file-directory-p dir)) :what "the writer's directory")
