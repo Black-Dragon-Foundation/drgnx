@@ -6,7 +6,7 @@ installed on your machine (the kernelspecs Jupyter would list); the kernel runs 
 
 ## What you see
 
-- **A header strip** on each cell: a run button, then what the hub says of the cell (`[3]  python` after a run, `[*]  python` while it runs, `[ ]  python` before; the cell's type for a markdown or new cell).
+- **A header strip** on each cell: a run button (a stop button while the cell runs), then the count (`[3]` after a run, `[*]` while it runs, `[ ]` before) and the language, each in a chip; a markdown or raw cell shows its type. On the selected cell a toolbar at the right edge has icons to move the cell up or down, delete it, and a **more** icon that offers copy, cut, paste, split, merge, change type, clear outputs and the run commands; each is also a command (Cell Menu… for the last).
 - **The source** is ordinary text. Undo, search and replace, multiple cursors, completion and every other Emacs command
   work across cells.
 - **The output** sits under the cell: text, streams, errors and static images. Output from the file, not from a run in

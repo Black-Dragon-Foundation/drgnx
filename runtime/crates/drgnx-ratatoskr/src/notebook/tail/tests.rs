@@ -212,19 +212,6 @@ fn a_tail_has_the_execution_count_and_a_head_shows_the_prompt_the_kind_and_the_s
     assert_eq!(build("c", &run, 1).execution_count, Some(7));
     let h = head(Kind::Code, "python", Some(7), "idle");
     assert_eq!(h.text, "[7]  python");
-    assert_eq!(h.runs.len(), 2);
-    assert_eq!(
-        h.runs[0],
-        Run {
-            start: 0,
-            end: 3,
-            style: Style {
-                bold: true,
-                ..Style::default()
-            }
-        }
-    );
-    assert_eq!(h.runs[1].start, 5);
     assert_eq!(head(Kind::Code, "python", None, "idle").text, "[ ]  python");
     assert_eq!(
         head(Kind::Code, "python", Some(7), "running").text,
@@ -247,12 +234,72 @@ fn a_tail_has_the_execution_count_and_a_head_shows_the_prompt_the_kind_and_the_s
     );
 }
 
+/// The parts of a head as (role, text, chip, action).
+fn parts(h: &Head) -> Vec<(&str, &str, &str, &str)> {
+    h.parts
+        .iter()
+        .map(|p| (p.role, p.text.as_str(), p.chip, p.action))
+        .collect()
+}
+
+#[test]
+fn a_heads_parts_are_the_run_button_the_count_chip_and_the_language_chip_each_named() {
+    use hrafn::notebook::Kind;
+    assert_eq!(
+        parts(&head(Kind::Code, "python", Some(7), "idle")),
+        [
+            ("run", "", "", "run"),
+            ("count", "[7]", "quiet", ""),
+            ("language", "python", "quiet", "")
+        ]
+    );
+    // a queued or running cell has a stop button and an accent count
+    for state in ["queued", "running"] {
+        assert_eq!(
+            parts(&head(Kind::Code, "python", Some(7), state)),
+            [
+                ("run", "", "", "stop"),
+                ("count", "[*]", "accent", ""),
+                ("language", "python", "quiet", "")
+            ],
+            "{state}"
+        );
+    }
+    assert_eq!(
+        parts(&head(Kind::Code, "", None, "idle"))[1..],
+        [
+            ("count", "[ ]", "quiet", ""),
+            ("language", "code", "quiet", "")
+        ]
+    );
+    // markdown and raw cells have their kind only
+    assert_eq!(
+        parts(&head(Kind::Markdown, "python", None, "idle")),
+        [("kind", "markdown", "quiet", "")]
+    );
+    assert_eq!(
+        parts(&head(Kind::Raw, "x", None, "idle")),
+        [("kind", "raw", "quiet", "")]
+    );
+    // a language from a file carries no controls or direction marks, and is short
+    assert_eq!(
+        parts(&head(Kind::Code, "py\u{202e}\x1b", None, "idle"))[2].1,
+        "py"
+    );
+    assert_eq!(
+        parts(&head(Kind::Code, &"p".repeat(10_000), None, "idle"))[2]
+            .1
+            .chars()
+            .count(),
+        64
+    );
+}
+
 #[test]
 fn a_head_chip_is_short_and_a_tail_carries_a_bounded_number_of_runs() {
     use hrafn::notebook::Kind;
     let h = head(Kind::Code, &"p".repeat(10_000), None, "idle");
     assert_eq!(h.text.chars().count(), "[ ]  ".chars().count() + 64);
-    assert_eq!(h.runs[1].end - h.runs[1].start, 64);
     // every other character coloured: rows of hundreds of runs are cut to MAX_RUNS
     let line: String = (0..1000)
         .map(|i| if i % 2 == 0 { "\x1b[31ma\x1b[0m" } else { "b" })

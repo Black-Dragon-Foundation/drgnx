@@ -165,12 +165,24 @@ fn style_json(r: &Run) -> Value {
            "bold": s.bold, "italic": s.italic, "underline": s.underline, "inverse": s.inverse})
 }
 
+/// A part of a head as the editor gets it (a chip or an action only when it has one).
+fn part_json(p: &tail::HeadPart) -> Value {
+    let mut v = json!({"role": p.role, "text": p.text});
+    if !p.chip.is_empty() {
+        v["chip"] = json!(p.chip);
+    }
+    if !p.action.is_empty() {
+        v["action"] = json!(p.action);
+    }
+    v
+}
+
 /// A tail as the editor gets it.
 pub fn tail_json(id: &str, t: &Tail, stale: bool, head: &Head) -> Value {
     json!({
         "id": id, "cell": t.cell, "text": t.text, "version": t.version, "stale": stale,
         "execution_count": t.execution_count,
-        "head": {"text": head.text, "state": head.state, "runs": head.runs.iter().map(style_json).collect::<Vec<_>>()},
+        "head": {"text": head.text, "state": head.state, "parts": head.parts.iter().map(part_json).collect::<Vec<_>>()},
         "runs": t.runs.iter().map(style_json).collect::<Vec<_>>(),
         "images": t.images.iter().map(|i| json!({"at": i.at, "output": i.output, "mime": i.mime,
                                                   "width": i.width, "height": i.height})).collect::<Vec<_>>(),

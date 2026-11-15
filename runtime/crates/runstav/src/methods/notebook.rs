@@ -125,12 +125,24 @@ pub struct NotebookImage {
     pub height: u32,
 }
 
-/// A cell's head: its prompt and kind, and STATE (`idle`, `queued`, `running`).
+/// One part of a cell's head: ROLE `run` (the run button; ACTION `run` or `stop`), `count` (`[3]`), `language` or `kind`; TEXT what it
+/// says, CHIP the chip it is in (`quiet` or `accent`), for the editor to draw with its chip faces.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct NotebookHeadPart {
+    pub role: String,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chip: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+}
+
+/// A cell's head: its parts (run button, count, language or kind), the same as plain TEXT, and STATE (`idle`, `queued`, `running`).
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct NotebookHead {
     pub text: String,
     pub state: String,
-    pub runs: Vec<NotebookRun>,
+    pub parts: Vec<NotebookHeadPart>,
 }
 
 /// What goes after a cell (the `notebook-tail` event's data, and `notebook/tail`'s answer): TEXT with its RUNS and IMAGES, at most 20 rows

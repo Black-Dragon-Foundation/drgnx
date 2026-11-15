@@ -22,7 +22,9 @@
         :cells ((:id "a" :type "code" :source "x = 1\nx" :execution_count 3)
                 (:id "b" :type "markdown" :source "# Title")
                 (:id "c" :type "code" :source "print(2)"))
-        :tails ((:cell "a" :version 1 :text "2" :stale t :head (:text "[3]  python" :state "idle" :runs nil)
+        :tails ((:cell "a" :version 1 :text "2" :stale t :head (:text "[3]  python" :state "idle"
+                                                                      :parts ((:role "run" :text "" :action "run") (:role "count" :text "[3]" :chip "quiet")
+                                                                              (:role "language" :text "python" :chip "quiet")))
                        :runs nil :images nil :more_lines 0)))
   "What `notebook/open' answers: the cells, and each code cell's tail with the head the hub built.")
 
@@ -222,23 +224,76 @@
       (should (equal (delete "notebook/focus" (delete "notebook/tail" (mapcar #'car (reverse nb-test--calls))))
                      '("notebook/sync" "notebook/execute" "notebook/start" "notebook/sync" "notebook/execute"))))))
 
-(ert-deftest drgnx-notebook/the-head-is-the-hubs-and-comes-with-a-tail ()
+(defun nb-test--head (id)
+  "The header strip of cell ID as the buffer holds it."
+  (overlay-get (plist-get (drgnx-notebook--chrome-of id) :head) 'before-string))
+
+(defun nb-test--faces-at (string text)
+  "The faces (a flat list) on the first occurrence of TEXT in STRING."
+  (ensure-list (get-text-property (string-search text string) 'face string)))
+
+(ert-deftest drgnx-notebook/the-head-is-the-hubs-parts-drawn-as-a-run-button-and-chips ()
   (nb-test--with
-    (let ((head (lambda (id) (overlay-get (plist-get (drgnx-notebook--chrome-of id) :head) 'before-string))))
-      ;; the hub's text after the run button; the Lisp strip has no prompt or chips of its own
-      (should (string-search "[3]  python" (funcall head "a")))
-      (should-not (string-search " code " (funcall head "a")))
-      ;; a cell with no head from the hub yet shows its type
-      (should (string-search "markdown" (funcall head "b")))
-      (should (string-search "markdown" (funcall head "b")))
-      ;; a tail brings a new head, its runs' faces on it
-      (drgnx-notebook--event "notebook-tail"
-                             (append (list :cell "c" :head (list :text "[*]  python" :state "running"
-                                                                 :runs (list (list :start 0 :end 3 :fg 3 :bold t))))
-                                     (nb-test--tail "7")))
-      (let ((s (funcall head "c")))
-        (should (string-search "[*]  python" s))
-        (should (memq 'drgnx-notebook-fg-yellow (ensure-list (get-text-property (string-search "[*]" s) 'face s))))))))
+    (let ((s (nb-test--head "a")))
+      ;; the run button first, a play icon that runs; then the count and the language as chips of the look
+      (should (equal (get-text-property 0 'drgnx-notebook-run s) "a"))
+      (should (equal (get-text-property 0 'drgnx-notebook-action s) "run"))
+      (should (< 0 (string-search "[3]" s) (string-search "python" s)))
+      (should (memq 'drgnx-chip-quiet (nb-test--faces-at s "[3]")))
+      (should (memq 'drgnx-chip-quiet (nb-test--faces-at s "python")))
+      ;; the Lisp draws what it is told: no colour roles, no text of its own for the prompt
+      (should-not (string-search "[3]  python" s)))
+    ;; a cell with no head from the hub yet shows its type as a chip
+    (should (memq 'drgnx-chip-quiet (nb-test--faces-at (nb-test--head "b") "markdown")))
+    ;; a tail brings a new head: running is a stop button and an accent count
+    (drgnx-notebook--event "notebook-tail"
+                           (append (list :cell "c" :head (list :text "[*]  python" :state "running"
+                                                               :parts (list (list :role "run" :text "" :action "stop")
+                                                                            (list :role "count" :text "[*]" :chip "accent")
+                                                                            (list :role "language" :text "python" :chip "quiet"))))
+                                   (nb-test--tail "7")))
+    (let ((s (nb-test--head "c")))
+      (should (equal (get-text-property 0 'drgnx-notebook-action s) "stop"))
+      (should (memq 'drgnx-chip-accent (nb-test--faces-at s "[*]")))
+      (should (memq 'drgnx-chip-quiet (nb-test--faces-at s "python"))))))
+
+(ert-deftest drgnx-notebook/the-selected-cell-has-a-right-aligned-toolbar-of-registry-commands ()
+  (nb-test--with
+    (let ((tools (lambda (id)
+                   (let ((s (nb-test--head id)) (i 0) found)
+                     (while (< i (length s))
+                       (when-let* ((c (get-text-property i 'drgnx-notebook-tool s))) (unless (memq c found) (push c found)))
+                       (setq i (1+ i)))
+                     (nreverse found)))))
+      ;; the cell the buffer opens in is the selected one; another has none
+      (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id "c") :head)))
+      (drgnx-notebook--select-at (point))
+      (should-not (funcall tools "a"))
+      (should (equal (funcall tools "c") '(notebook-move-up notebook-move-down notebook-delete-cell notebook-cell-menu)))
+      (dolist (id (funcall tools "c")) (should (drgnx-commands-get id)))
+      ;; right-aligned: the space before the icons aligns to the right edge
+      (let ((s (nb-test--head "c")))
+        (should (cl-some (lambda (i) (let ((d (get-text-property i 'display s))) (and (consp d) (eq (car d) 'space) (plist-get (cdr d) :align-to))))
+                         (number-sequence 0 (1- (length s))))))
+      ;; the toolbar goes with the selection
+      (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id "a") :head)))
+      (drgnx-notebook--select-at (point))
+      (should-not (funcall tools "c"))
+      (should (funcall tools "a")))))
+
+(ert-deftest drgnx-notebook/a-toolbar-click-runs-the-registry-command-on-its-cell ()
+  (nb-test--with
+    (goto-char (1+ (plist-get (drgnx-notebook--cell-by-id "b") :head)))
+    (drgnx-notebook--select-at (point))
+    (let* ((s (nb-test--head "b")) (at (text-property-any 0 (length s) 'drgnx-notebook-tool 'notebook-move-down s)) ran)
+      (should at)
+      (should (eq (get-text-property at 'keymap s) drgnx-notebook-tool-map))
+      (goto-char (point-min))
+      (cl-letf (((symbol-function 'posn-string) (lambda (_) (cons s at)))
+                ((symbol-function 'event-end) #'identity)
+                ((symbol-function 'drgnx-notebook-move-cell-down) (lambda () (interactive) (setq ran (point)))))
+        (drgnx-notebook-tool-at-mouse 'event))
+      (should (= ran (1+ (plist-get (drgnx-notebook--cell-by-id "b") :head)))))))
 
 (ert-deftest drgnx-notebook/status-events-feed-the-status-bar ()
   (nb-test--with
@@ -269,7 +324,7 @@
                                     notebook-restart notebook-restart-run-all notebook-add-below notebook-add-above notebook-cut-cell notebook-copy-cell
                                     notebook-paste-cell notebook-delete-cell notebook-move-up notebook-move-down notebook-split-cell notebook-merge-cell
                                     notebook-change-type notebook-clear-outputs notebook-select-kernel notebook-open-output notebook-copy-output
-                                    notebook-toggle-outputs notebook-outline notebook-kernel-log))
+                                    notebook-toggle-outputs notebook-outline notebook-kernel-log notebook-cell-menu))
       (should (drgnx-commands-get id)))))
 
 (ert-deftest drgnx-notebook/a-hub-that-says-no-leaves-the-file-as-text ()

@@ -1603,6 +1603,12 @@ notebook scene's picture output."
     (list 'image :type 'pbm :data (concat (format "P6\n%d %d\n255\n" width height) (apply #'concat (nreverse rows)))
           :ascent 'center :max-height (if (fboundp 'drgnx-px) (drgnx-px 160) 160))))
 
+(defun drgnx-look--nb-parts (count language busy)
+  "The parts of a code cell's head as the hub sends them: the run (BUSY: stop) button, the COUNT chip (accent while BUSY), the LANGUAGE chip."
+  (list (list :role "run" :text "" :action (if busy "stop" "run"))
+        (list :role "count" :text count :chip (if busy "accent" "quiet"))
+        (list :role "language" :text language :chip "quiet")))
+
 (defun drgnx-look-scene--notebook-buffer ()
   "A notebook buffer, `cache-experiments.ipynb', with the mockup's four cells and their outputs put as the hub's tails
 would be (no kernel, no hub: the scene draws the buffer's own chrome)."
@@ -1622,10 +1628,10 @@ would be (no kernel, no hub: the scene draws the buffer's own chrome)."
                           (list :id "c2" :type "code"
                                 :source "for cap in (16, 64, 256):\n    print(cap, (hits < cap / 256).mean())")
                           (list :id "c3" :type "code" :source "plot(missing)"))
-             :tails (list (list :cell "c1" :version 1 :text "done: 10000 samples" :head (list :text "[1]  python" :state "idle"))
-                          (list :cell "c2" :version 1 :head (list :text "[*]  python" :state "running") :text (concat "16 0.0612\n64 0.2487\n" (string #xfffc))
+             :tails (list (list :cell "c1" :version 1 :text "done: 10000 samples" :head (list :text "[1]  python" :state "idle" :parts (drgnx-look--nb-parts "[1]" "python" nil)))
+                          (list :cell "c2" :version 1 :head (list :text "[*]  python" :state "running" :parts (drgnx-look--nb-parts "[*]" "python" t)) :text (concat "16 0.0612\n64 0.2487\n" (string #xfffc))
                                 :images (list (list :at 20 :output 1 :mime "image/png" :width 640 :height 360)))
-                          (list :cell "c3" :version 1 :head (list :text "[3]  python" :state "idle")
+                          (list :cell "c3" :version 1 :head (list :text "[3]  python" :state "idle" :parts (drgnx-look--nb-parts "[3]" "python" nil))
                                 :text "NameError: name 'missing' is not defined\n  Cell In[3], line 1"
                                 :runs (list (list :start 0 :end 9 :fg 1 :bold t))))))
       (drgnx-notebook--status (list :state "busy" :cell "c2" :queue 0))

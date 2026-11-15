@@ -56,6 +56,8 @@
   "The execution count of a code cell: [3], [*] while it runs." :group 'drgnx-notebook)
 (defface drgnx-notebook-run-button '((t :inherit drgnx-control))
   "A cell's run button." :group 'drgnx-notebook)
+(defface drgnx-notebook-tool '((t :inherit drgnx-control))
+  "An icon of the selected cell's toolbar." :group 'drgnx-notebook)
 (defface drgnx-notebook-chip '((t :inherit drgnx-chip-quiet))
   "A cell's type, and the kernel's state, in its header." :group 'drgnx-notebook)
 (defface drgnx-notebook-output '((t :inherit (drgnx-code-small) :extend t))
@@ -245,6 +247,8 @@ repeated id is re-minted (a second cell with an id the buffer already has gets a
   "The icon NAME in FACE as a string (the character when no icon draws)."
   (if (fboundp 'drgnx-look-icon) (drgnx-look-icon name face) (propertize "▶" 'face face)))
 
+(defvar drgnx-notebook--commands)
+
 (defvar drgnx-notebook-run-map
   (let ((m (make-sparse-keymap)))
     (define-key m [mouse-1] #'drgnx-notebook-run-cell-at-mouse)
@@ -252,11 +256,38 @@ repeated id is re-minted (a second cell with an id the buffer already has gets a
   "The keymap of a cell's run button.")
 
 (defun drgnx-notebook-run-cell-at-mouse (event)
-  "Run the cell whose run button EVENT clicked."
+  "Run the cell whose run button EVENT clicked; a stop button (the hub's action, while the cell is queued or running)
+interrupts the kernel instead."
   (interactive "e")
   (let* ((ps (posn-string (event-end event)))
          (id (and ps (get-text-property (cdr ps) 'drgnx-notebook-run (car ps)))))
-    (when id (drgnx-notebook--run-ids (list id)))))
+    (when id
+      (if (equal (get-text-property (cdr ps) 'drgnx-notebook-action (car ps)) "stop")
+          (drgnx-notebook-interrupt)
+        (drgnx-notebook--run-ids (list id))))))
+
+(defvar drgnx-notebook-tool-map
+  (let ((m (make-sparse-keymap)))
+    (define-key m [mouse-1] #'drgnx-notebook-tool-at-mouse)
+    m)
+  "The keymap of the selected cell's toolbar icons.")
+
+(defconst drgnx-notebook--tools
+  '((chevron-up notebook-move-up "Move cell up") (chevron-down notebook-move-down "Move cell down")
+    (trash-2 notebook-delete-cell "Delete cell") (ellipsis notebook-cell-menu "More cell actions"))
+  "The selected cell's toolbar: (ICON COMMAND HELP), each COMMAND a registry command of the notebook (`drgnx-notebook--commands').")
+
+(defun drgnx-notebook-tool-at-mouse (event)
+  "Run the registry command of the toolbar icon EVENT clicked, on the cell the icon is in."
+  (interactive "e")
+  (let* ((ps (posn-string (event-end event)))
+         (command (and ps (get-text-property (cdr ps) 'drgnx-notebook-tool (car ps))))
+         (id (and ps (get-text-property (cdr ps) 'drgnx-notebook-tool-cell (car ps))))
+         (cell (and id (drgnx-notebook--cell-by-id id)))
+         (fn (and command (nth 2 (assq command drgnx-notebook--commands)))))
+    (when (and cell fn)
+      (goto-char (1+ (plist-get cell :head)))
+      (call-interactively fn))))
 
 (defvar drgnx-notebook-add-map
   (let ((m (make-sparse-keymap)))
@@ -297,19 +328,42 @@ the card's ring is its edge."
     (when (drgnx-notebook--cards-p) (add-face-text-property 0 (length s) '(:overline nil) nil s))
     s))
 
+(defconst drgnx-notebook--chip-faces '(("quiet" . drgnx-chip-quiet) ("accent" . drgnx-chip-accent))
+  "The hub's chip names of a head's parts, and the faces that draw them.")
+
+(defun drgnx-notebook--head-part (id part)
+  "The string of one PART of cell ID's head, as the hub sent it: the run (or stop) button, or a chip of the part's text."
+  (let ((role (plist-get part :role)))
+    (if (equal role "run")
+        (let ((stop (equal (plist-get part :action) "stop")))
+          (propertize (drgnx-notebook--icon (if stop 'square 'play) 'drgnx-notebook-run-button)
+                      'drgnx-notebook-run id 'drgnx-notebook-action (plist-get part :action) 'keymap drgnx-notebook-run-map
+                      'mouse-face 'drgnx-hover 'help-echo (if stop "Stop the kernel's run" "Run this cell")))
+      (propertize (concat " " (plist-get part :text) " ")
+                  'face (list (or (cdr (assoc (plist-get part :chip) drgnx-notebook--chip-faces)) 'drgnx-chip-quiet)
+                              'drgnx-notebook-head)))))
+
+(defun drgnx-notebook--toolbar (id)
+  "The selected cell's toolbar, right-aligned: an icon for each of `drgnx-notebook--tools', each running its registry command."
+  (concat
+   (propertize " " 'display `(space :align-to (- right (,(drgnx-px 96)))) 'face 'drgnx-notebook-head)
+   (mapconcat (lambda (tool)
+                (propertize (drgnx-notebook--icon (nth 0 tool) 'drgnx-notebook-tool)
+                            'drgnx-notebook-tool (nth 1 tool) 'drgnx-notebook-tool-cell id 'keymap drgnx-notebook-tool-map
+                            'mouse-face 'drgnx-hover 'help-echo (nth 2 tool)))
+              drgnx-notebook--tools (propertize " " 'face 'drgnx-notebook-head))))
+
 (defun drgnx-notebook--head-strip (id type)
-  "The header strip of cell ID: the run button (the editor's) and the head the hub built (`[3]  python'), else the type
-until the hub has sent a head (a new cell, a markdown cell).  Built when a head arrives, never while redisplay draws."
-  (let ((head (gethash id drgnx-notebook--heads)))
+  "The header strip of cell ID: the hub's parts of its head (the run button, the count and the language as chips), then, on the
+selected cell, the toolbar.  Until the hub has sent a head (a new cell) it is the type alone.  Built when a head arrives or the
+selection moves, never while redisplay draws."
+  (let ((parts (plist-get (gethash id drgnx-notebook--heads) :parts)))
     (concat
-     (if (eq type 'code)
-         (concat (propertize (drgnx-notebook--icon 'play 'drgnx-notebook-run-button)
-                             'drgnx-notebook-run id 'keymap drgnx-notebook-run-map 'mouse-face 'drgnx-hover
-                             'help-echo "Run this cell")
-                 " ")
-       "")
-     (drgnx-notebook--styled (or (plist-get head :text) (symbol-name type)) (plist-get head :runs) 'drgnx-notebook-head)
-     (propertize " " 'face 'drgnx-notebook-head))))
+     (mapconcat (lambda (part) (drgnx-notebook--head-part id part))
+                (or parts (list (list :role "kind" :text (symbol-name type) :chip "quiet")))
+                (propertize " " 'face 'drgnx-notebook-head))
+     (propertize " " 'face 'drgnx-notebook-head)
+     (if (equal id drgnx-notebook--selected-id) (drgnx-notebook--toolbar id) ""))))
 
 (defun drgnx-notebook--card-pad ()
   "The card's left padding, as a `line-prefix' of every row of a cell (the head, its text, the output): the ring is
@@ -418,7 +472,7 @@ and the cell it left goes back (their strings are built again from their last ta
          (new (and c (plist-get c :id))))
     (setq drgnx-notebook--selected-id new)
     (unless (equal old new)
-      (dolist (id (delq nil (list old new))) (drgnx-notebook--refresh-tail id))
+      (dolist (id (delq nil (list old new))) (drgnx-notebook--refresh-tail id) (drgnx-notebook--refresh-head id))
       (drgnx-notebook--blocks-update)
       (drgnx-notebook--focus new)
       (when (fboundp 'drgnx-statusbar-refresh) (drgnx-statusbar-refresh t)))
@@ -1145,6 +1199,16 @@ the hub skipped with :why (shown in the picker with its reason, and refused when
   (let* ((c (drgnx-notebook--current)) (i (seq-position drgnx-notebook--cells c #'eq)))
     (drgnx-notebook--run-ids (mapcar (lambda (x) (plist-get x :id)) (seq-filter (lambda (x) (eq (plist-get x :type) 'code)) (seq-drop drgnx-notebook--cells i))))))
 
+(defun drgnx-notebook-cell-menu ()
+  "Choose another action for this cell (the toolbar's more icon): copy, cut, paste, add above, split, merge, change type, clear
+outputs, run above or below."
+  (interactive)
+  (let* ((ids '(notebook-copy-cell notebook-cut-cell notebook-paste-cell notebook-add-above notebook-split-cell notebook-merge-cell
+                                   notebook-change-type notebook-clear-outputs notebook-run-above notebook-run-below))
+         (items (mapcar (lambda (id) (cons (nth 1 (assq id drgnx-notebook--commands)) id)) ids))
+         (pick (completing-read "Cell: " items nil t)))
+    (call-interactively (nth 2 (assq (cdr (assoc pick items)) drgnx-notebook--commands)))))
+
 (defun drgnx-notebook-interrupt ()
   "Interrupt the running cell."
   (interactive)
@@ -1584,6 +1648,7 @@ THEN-RUN-ALL: run every code cell once it is up."
     (notebook-delete-cell "Delete Cell" drgnx-notebook-delete-cell)
     (notebook-move-up "Move Cell Up" drgnx-notebook-move-cell-up)
     (notebook-move-down "Move Cell Down" drgnx-notebook-move-cell-down)
+    (notebook-cell-menu "Cell Menu…" drgnx-notebook-cell-menu)
     (notebook-split-cell "Split Cell" drgnx-notebook-split-cell)
     (notebook-merge-cell "Merge Cell With the Next" drgnx-notebook-merge-cell-below)
     (notebook-change-type "Change Cell Type…" drgnx-notebook-change-cell-type)

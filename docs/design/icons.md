@@ -22,7 +22,7 @@ drgnx's icons are [Lucide](https://lucide.dev) line icons (a few are Feather's),
 | `arrow-up-from-dot` | - |
 | `bell` | `core/drgnx-notice-toast.el`, `core/drgnx-palette.el` |
 | `blocks` | - |
-| `bot` | `core/drgnx-palette.el`, `modules/tools/drgnx-agent-panel-steps.el`, `modules/tools/drgnx-search-handoff.el` |
+| `bot` | `core/drgnx-palette.el`, `modules/tools/drgnx-search-handoff.el` |
 | `braces` | `modules/extra/drgnx-debug-memory.el` |
 | `brain` | - |
 | `bug` | `modules/extra/drgnx-debug-toolbar.el` |
@@ -39,11 +39,11 @@ drgnx's icons are [Lucide](https://lucide.dev) line icons (a few are Feather's),
 | `clock` | - |
 | `copy` | `modules/extra/drgnx-debug-share.el` |
 | `diamond` | `core/drgnx-agent-identity.el` |
-| `ellipsis` | `modules/tools/drgnx-agent-panel-steps.el`, `modules/tools/drgnx-work-map.el` |
+| `ellipsis` | `modules/tools/drgnx-work-map.el` |
 | `eye` | `core/drgnx-palette.el` |
 | `file` | `core/drgnx-icons.el`, `core/drgnx-palette.el`, `modules/tools/drgnx-replace.el`, `wb/drgnx-wb.el` |
 | `file-archive` | file kind: 0 names, 15 extensions |
-| `file-code` | file kind: 27 names, 114 extensions, `core/drgnx-palette.el`, `modules/tools/drgnx-agent-panel-cards.el` |
+| `file-code` | file kind: 27 names, 114 extensions, `core/drgnx-palette.el` |
 | `file-cog` | file kind: 25 names, 32 extensions |
 | `file-image` | file kind: 0 names, 22 extensions |
 | `file-text` | file kind: 14 names, 22 extensions |
@@ -77,7 +77,7 @@ drgnx's icons are [Lucide](https://lucide.dev) line icons (a few are Feather's),
 | `panel-right` | `core/drgnx-palette.el` |
 | `pause` | `modules/tools/drgnx-agent-panel-composer.el` |
 | `pencil` | `core/drgnx-palette.el` |
-| `pin` | `modules/tools/drgnx-agent-panel-steps.el` |
+| `pin` | - |
 | `play` | `core/drgnx-palette.el`, `modules/extra/drgnx-debug-toolbar.el`, `modules/extra/drgnx-debug-view.el`, `modules/lang/drgnx-notebook.el` |
 | `plug` | - |
 | `plus` | - |
@@ -90,9 +90,9 @@ drgnx's icons are [Lucide](https://lucide.dev) line icons (a few are Feather's),
 | `send` | - |
 | `server` | `modules/tools/drgnx-term.el` |
 | `settings` | `core/drgnx-palette.el` |
-| `shield` | `modules/tools/drgnx-agent-panel-cards.el`, `modules/ui/drgnx-statusbar.el` |
+| `shield` | `modules/ui/drgnx-statusbar.el` |
 | `sparkle` | `modules/tools/drgnx-agent-panel-composer.el` |
-| `square` | `core/drgnx-agent-identity.el`, `modules/tools/drgnx-replace.el`, `modules/ui/drgnx-topline.el` |
+| `square` | `core/drgnx-agent-identity.el`, `modules/lang/drgnx-notebook.el`, `modules/tools/drgnx-replace.el`, `modules/ui/drgnx-topline.el` |
 | `square-function` | - |
 | `star` | - |
 | `tag` | - |
