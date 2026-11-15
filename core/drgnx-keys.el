@@ -598,10 +598,6 @@ stay Vim's in normal and visual state, as in VSCodeVim; VS Code's keys still wor
 adds `drgnx-modal-sync-engine' so a runtime switch starts and stops the engine.  An error in one is said in
 *Messages* and does not stop the others.")
 
-(defvar drgnx-keys--defaults global-map
-  "Emacs's and the packages' global bindings: `global-map' itself, read live.  drgnx never writes it: the profile's
-keys and yours are layers of their own above it (`drgnx-keys--global-map').")
-
 (defvar drgnx-keys--applied nil "What drgnx bound, newest first: (MAPSYM KEY PREVIOUS OURS).")
 (defvar drgnx-keys--evil-aux nil
   "What drgnx bound in evil's auxiliary keymaps (a mode map's keys in normal and motion state), newest first:

@@ -308,6 +308,57 @@ as \"a lambda\", never its body."
        (dolist (k '("C-o" "C-s" "C-S-p" "C-k C-r"))
          (should (= 1 (length (seq-filter (lambda (l) (string-prefix-p (concat k " ") l)) lines)))))))))
 
+;;; T11: reloads, readers
+
+(ert-deftest drgnx-keys/a-config-reload-clears-only-config-entries ()
+  "Reloading config.el forgets the keys it bound (the profile's come back on them, then it binds what it still says);
+a key you bound from the keyboard stays: Emacs keeps those for the session."
+  (drgnx-keys-test--live
+   (let ((file (expand-file-name "config.el" (drgnx-user-dir))))
+     (make-directory (drgnx-user-dir) t)
+     (drgnx-keys-use '((vscode app editing window)))
+     (with-temp-file file (insert ";;; -*- lexical-binding: t -*-\n(keymap-global-set \"C-o\" #'ignore)\n(keymap-global-set \"C-s\" #'ignore)\n"))
+     (drgnx--load-user-config file)
+     (drgnx-keys-test--as-you (keymap-global-set "C-c y" #'ignore))
+     (should (eq (keymap-lookup (current-global-map) "C-o") #'ignore))
+     ;; the file now binds only C-s
+     (with-temp-file file (insert ";;; -*- lexical-binding: t -*-\n(keymap-global-set \"C-s\" #'ignore)\n"))
+     (drgnx--load-user-config file)
+     (should (eq (keymap-lookup (current-global-map) "C-o") #'find-file))   ; its line is gone: the profile's key
+     (should (eq (keymap-lookup (current-global-map) "C-s") #'ignore))
+     (should (eq (keymap-lookup (current-global-map) "C-c y") #'ignore))     ; interactive: stays
+     (drgnx-keys-apply)
+     (should (eq (keymap-lookup (current-global-map) "C-o") #'find-file))
+     (should (eq (keymap-lookup (current-global-map) "C-c y") #'ignore))
+     (should-not (gethash "C-o" drgnx-keys--yours))
+     (should (stringp (cdr (gethash "C-s" drgnx-keys--yours)))))))
+
+(ert-deftest drgnx-keys/emacs-code-that-reads-global-map-sees-the-composed-one ()
+  "comint's C-d, message's TAB and the tutorial read the variable `global-map' as the global binding: under the
+composed map they run with it bound to the current global map, so the profile's keys are seen there."
+  (drgnx-keys-test--live
+   (drgnx-keys-use '((vscode app editing window)))
+   (should (eq (lookup-key global-map (kbd "C-o")) #'open-line))
+   (should (eq (drgnx-keys--with-live-global-map (lambda () (lookup-key global-map (kbd "C-o")))) #'find-file))
+   (dolist (f drgnx-keys--global-readers)
+     (should (advice-member-p #'drgnx-keys--with-live-global-map f)))))
+
+(ert-deftest drgnx-keys/macos-cmd-keys-beat-ns-win-and-menus-find-them ()
+  "On macOS the profile's Cmd keys (s-) sit above `global-map', where ns-win binds its own; the menus' key text comes
+from `where-is-internal' over the active maps (keyboard.c's menu items), which see the composed global map."
+  (drgnx-keys-test--live
+   (cl-letf (((symbol-function 'drgnx-platform) (lambda () 'macos)))
+     (drgnx-keys-use '((vscode app editing window)))
+     (let ((n 0))
+       (dolist (b (plist-get drgnx-keys-last :bindings))
+         (when (and (string-prefix-p "s-" (plist-get b :key)) (null (plist-get b :map)))
+           (let ((cmd (drgnx-cmd-command (drgnx-commands-get (plist-get b :id)))))
+             (cl-incf n)
+             (should (eq (keymap-lookup (current-global-map) (plist-get b :key)) cmd))
+             (when (symbolp cmd)
+               (should (member (plist-get b :key) (mapcar #'key-description (where-is-internal cmd nil))))))))
+       (should (> n 5))))))
+
 (ert-deftest drgnx-keys/your-own-binding-before-the-first-apply-is-kept ()
   "A key the profile claims that you bound in the global map before drgnx applied any keys is kept as well."
   (drgnx-keys-test--live

@@ -76,6 +76,9 @@
 the start.  Provenance records which of its forms sets what (`drgnx-settings-prov-with-load'); the Lisp files page
 hears the time, the error and the parent (`drgnx-settings-lisp-page-note-load')."
   (let ((file (or file (drgnx-user-config-file))))
+    ;; a reload starts from nothing: the global keys this file bound go (its keys come back as it binds them again);
+    ;; keys you bound from the keyboard, M-: or emacsclient stay
+    (when (and (fboundp 'drgnx-keys-forget-source) (file-exists-p file)) (drgnx-keys-forget-source file))
     (drgnx-settings-prov-with-load file
       (when (and (file-exists-p file) (drgnx-user-lisp-on-p file))   ; the file's switch (Settings: Lisp Files, bisect)
         (let ((start (float-time)) (parent (drgnx-user-lisp-parent)) msg)

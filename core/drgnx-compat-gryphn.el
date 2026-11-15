@@ -54,7 +54,7 @@ id used.  NATIVE commands (Emacs keys gryphn only documents) are skipped."
       (dolist (profile '(vscode emacs))
         (unless (or (drgnx-compat-gryphn--takes-p profile id key)
                     (and (eq profile 'emacs) (not map)
-                         (commandp (ignore-errors (lookup-key drgnx-keys--defaults (key-parse key))))))
+                         (commandp (ignore-errors (lookup-key global-map (key-parse key))))))
           (drgnx-keys-define profile (list (if map (list id key :map map) (list id key))))))
       (unless (assq id (plist-get (alist-get 'vim drgnx-keys-profiles) :bind))
         (drgnx-keys-define 'vim (list (list id :none "the palette"))))))

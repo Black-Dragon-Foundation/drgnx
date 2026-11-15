@@ -203,6 +203,29 @@ the usage counts go there, never the user's), no usage counted, and every bindin
     ;; point stays on the row it was on
     (should (eq (get-text-property (point) 'drgnx-shortcuts-id) 'sc-b))))
 
+(ert-deftest drgnx-shortcuts/your-own-keys-show-and-are-read-only ()
+  "A key of yours (config.el, M-:) is shown as yours; Change refuses it, a new key cannot take it, Reset keeps it."
+  (drgnx-shortcuts-test--with
+    (unwind-protect
+        (progn
+          (let ((this-command 'eval-expression))
+            (keymap-global-set "C-c 9" #'drgnx-shortcuts-test-sc-d))
+          (drgnx-keys-apply)
+          (drgnx-shortcuts)
+          (should (equal (plist-get (drgnx-shortcuts-test--row 'sc-d) :yours) '(("C-c 9" . command))))
+          (should (string-match-p (concat "Delta +C-c 9 +" (regexp-quote "yours (this session)")) (drgnx-shortcuts-test--line 'sc-d)))
+          (drgnx-shortcuts-test--goto 'sc-d)
+          (should-error (drgnx-shortcuts-change) :type 'user-error)
+          ;; another command cannot take the key from here
+          (drgnx-shortcuts-test--goto 'sc-g)
+          (let ((unread-command-events (list ?\C-c ?9)))
+            (let ((err (should-error (drgnx-shortcuts-change) :type 'user-error)))
+              (should (string-search "your own key" (cadr err)))))
+          (drgnx-shortcuts-test--goto 'sc-d)
+          (drgnx-shortcuts-reset)
+          (should (eq (keymap-lookup (current-global-map) "C-c 9") #'drgnx-shortcuts-test-sc-d)))
+      (drgnx-keys-forget-yours))))
+
 (ert-deftest drgnx-shortcuts/record-cancels-and-prefixes ()
   (drgnx-shortcuts-test--with
     (drgnx-shortcuts)
