@@ -18,6 +18,8 @@
 ;; - Each window's start and point are turned into (ROW . OFFSET) before the batch and back after it, so the windows
 ;;   stay on their rows; a window whose point was at the region's end follows the tail (one of rows already drawn:
 ;;   at the first rows, point stays at the region's start, unless the view opens at its tail, `drgnx-view-sja-tail').
+;; - In a view that opens at its tail, a window that grows with its point at the end gets the end's row back on its
+;;   last line (`drgnx-view-sja--tail-grown', a size change only): the one rule that moves a start besides the draw.
 ;; - The read-only text, the region markers (the end's insertion type t), the stops and images, the faces of styles
 ;;   (an LRU shared with the Lisp inserter's) are as `drgnx-view-patch-render' draws them.
 ;; - A view's own text properties go on through `drgnx-view-sja-prop-functions' (a terminal's links and images) and
@@ -86,8 +88,24 @@ epoch is held until a reset (else applied: a terminal's faces repaint in place).
       (setq-local bidi-paragraph-direction 'left-to-right)
       (puthash (cons view class) (current-buffer) drgnx-view-patch--buffers)
       (add-hook 'kill-buffer-hook #'drgnx-view-patch--killed nil t)
+      (add-hook 'window-size-change-functions #'drgnx-view-sja--tail-grown nil t)
       (drgnx-view-patch--hooks)
       s)))
+
+(defun drgnx-view-sja--tail-grown (w)
+  "`window-size-change-functions' of a buffer held in Sjá: in a view that opens at its tail (`drgnx-view-sja-tail'),
+a window W that grew, its point at the region's end, its start past the buffer's top and a line or more of space under
+the end's row, gets the end's row on its last line.  Emacs scrolls a window whose point leaves it, but keeps the start
+of one that grows (the agent panel's transcript when its header or composer shrinks, the frame grows or the panel
+opens).  A window scrolled back, one that shrank and one showing the buffer's top are left as they are."
+  (with-current-buffer (window-buffer w)
+    (when-let* ((s (and drgnx-view-sja-tail drgnx-view-patch)) (end (drgnx-view-patch-end s))
+                ((> (window-pixel-height w) (window-old-pixel-height w)))
+                ((= (window-point w) end))
+                ((> (window-start w) (point-min)))
+                (at (pos-visible-in-window-p end w t))
+                ((<= (+ (cadr at) (* 2 (window-default-line-height w))) (window-body-height w t))))
+      (with-selected-window w (save-excursion (goto-char end) (recenter -1))))))
 
 (defun drgnx-view-sja--release (s)
   "S's instance in Sjá closed, its draw timer and markers gone."

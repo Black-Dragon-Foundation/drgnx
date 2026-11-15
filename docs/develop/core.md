@@ -3109,8 +3109,11 @@ area's role (`right`), with the window parameter `drgnx-area-part` `above` or `b
 kind's pane), no mode line and width preserved. The area's tab row (`drgnx-area--tab-row`, so `none` in the lone right
 area while its tab is the only one with content) goes on the topmost window (`drgnx-area--top-window`); the main window
 under a companion has none. Each companion is fitted to its lines and its
-header line, pixelwise (`fit-window-to-buffer`), at most 45% of the area's height in whole lines, and its height is
-then preserved, so a frame resize goes to the main window. It is fitted again when its size changes
+header line, pixelwise (`fit-window-to-buffer`), at most 45% of the area's height in whole lines and never under the
+window's least height rounded up to whole lines (an empty companion, such as a header before its rows, would ask for
+one line, under its least height, and Emacs refuses such a resize whole), and its height is then preserved, so a frame
+resize goes to the main window. A fit that does not take (the height unchanged while the lines want another) is
+recorded in the window parameter `drgnx-area-unfitted` as `(:height H :want WANT)`; the next fit that takes clears it. It is fitted again when its size changes
 (`window-size-change-functions` in its buffer) and when its owner calls `(drgnx-wb-area-fit-companions AREA
 &optional FRAME)` after its lines changed. FN runs whenever the area shows the tab's buffer (show, tab switch,
 `drgnx-wb-area-put-buffer`); a placeholder has no companions, and an area at the bottom has none. A tab switch to a
@@ -3120,7 +3123,9 @@ all three widths preserved. FN also gets a hub view's twin in another display cl
 a terminal frame beside a graphical one) when the env's routing put it in the area's window; FN returns that class's
 companions (the agent panel: its header's twin of the class). A tab left on a twin remembers the view's own buffer too,
 so once the twin is gone (no window shows its class) the tab comes back with the view's buffer and its companions,
-not a placeholder. Test: `test/unit/wb-area-companions-test.el`, `test/ui/area-companions-gui-test.el`.
+not a placeholder. A tab left on a view that opens at its tail (`drgnx-view-sja-tail`, the agent panel's transcript)
+with its window's point at the end remembers the point as `end` and comes back at the end the buffer has then, so it
+follows the rows again. Test: `test/unit/wb-area-companions-test.el`, `test/ui/area-companions-gui-test.el`.
 
 **Ownership.** `drgnx-pane-define-kind` records the module whose setup runs as the kind's owner
 (`(drgnx-state-kind-owner KIND)`; nil for a kind defined at load, which is core's and stays until restart) and, in a
