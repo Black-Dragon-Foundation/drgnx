@@ -1991,6 +1991,20 @@ DRGNX_TEST_WAIT_PROFILE), and the slowest rows."
       (princ (format "ui profile row: %.2fs (waiting %.2fs) %s\n" (plist-get r :seconds) (or (plist-get r :wait) 0)
                      (plist-get r :name))))))
 
+(defconst drgnx-ui--fail-condition-max 2000
+  "The characters of a failure's condition a FAIL line keeps: a condition can hold a whole screen or buffer (megabytes),
+and builder-run does not bring back a log over 5 MB.")
+
+(defun drgnx-ui--fail-line (name condition)
+  "The report's FAIL line for test NAME and the text of its CONDITION, cut to `drgnx-ui--fail-condition-max'
+characters (saying how many were left out) and made printable (`drgnx-run-ert--printable')."
+  (let ((over (- (length condition) drgnx-ui--fail-condition-max)))
+    (format "  FAIL %s: %s\n" name
+            (drgnx-run-ert--printable
+             (if (> over 0)
+                 (format "%s… (%d more characters)" (substring condition 0 drgnx-ui--fail-condition-max) over)
+               condition)))))
+
 (defun drgnx-ui--run-ui-per-file (files selector)
   "Each of FILES in a session of its own, `drgnx-ui--test-jobs' at once; one merged report in the format of a single
 session's (\"ui ERT: P/T passed\", a FAIL line each, SKIP lines).  Return an exit code."
@@ -2015,7 +2029,7 @@ session's (\"ui ERT: P/T passed\", a FAIL line each, SKIP lines).  Return an exi
                     (when profile (seq-doseq (x (plist-get results :tests)) (push x (car profile))))
                     (unless (eq (plist-get results :failed) 0) (setq ok nil))
                     (seq-doseq (x (plist-get results :failures))
-                      (push (format "  FAIL %s: %s\n" (plist-get x :name) (drgnx-run-ert--printable (plist-get x :condition))) fails))
+                      (push (drgnx-ui--fail-line (plist-get x :name) (plist-get x :condition)) fails))
                     (seq-doseq (x (plist-get results :skipped)) (push (format "  SKIP %s\n" (plist-get x :name)) skips)))
                 (setq ok nil) (cl-incf total)
                 (push (concat (format "  FAIL file %s: no results (exit %s); log kept in %s\n" base (or (plist-get meta :rc) exit)
@@ -2076,7 +2090,7 @@ Return an exit code."
           (princ (format "ui ERT: %s/%s passed%s\n" (plist-get results :passed) (plist-get results :total)
                          (if selector (format " (selector %s)" selector) "")))
           (seq-doseq (f (plist-get results :failures))
-            (princ (format "  FAIL %s: %s\n" (plist-get f :name) (drgnx-run-ert--printable (plist-get f :condition)))))
+            (princ (drgnx-ui--fail-line (plist-get f :name) (plist-get f :condition))))
           (seq-doseq (s (plist-get results :skipped))
             (princ (format "  SKIP %s\n" (plist-get s :name)))))
       (princ (format "ui ERT: no results (exit %s); log kept in %s\n" rc run))

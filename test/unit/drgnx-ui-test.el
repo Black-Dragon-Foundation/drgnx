@@ -1192,3 +1192,13 @@ In a session per file (the default, through `drgnx-ui-test-session-function') an
                                                  (list "TIMEOUT.*DRGNX_UI_TEST_TIMEOUT" "a/three was running"
                                                        "FAILED a/two" "passed before the timeout: 1"))))))))
         (delete-directory run t)))))
+
+(ert-deftest drgnx-ui/a-fail-line-keeps-the-condition-short ()
+  ;; a condition of megabytes (a screen dump, a whole buffer) is cut to its first 2,000 characters, saying how much
+  ;; was left out: the batch's log stays small enough for builder-run to bring back
+  (let ((line (drgnx-ui--fail-line "a/big" (concat "(error \"" (make-string 20000 ?x) "\")"))))
+    (should (string-prefix-p "  FAIL a/big: (error \"xxx" line))
+    (should (< (length line) 2200))
+    (should (string-match-p "18010 more characters" line))
+    (should (string-suffix-p "\n" line)))
+  (should (equal (drgnx-ui--fail-line "a/small" "(error \"b\x01\")") "  FAIL a/small: (error \"b\\x01\")\n")))

@@ -42,6 +42,10 @@ font and the parameters that move pixels, the selected window's buffer and its p
 and mode lines). A failure names what differs, and the row that left it puts it back in its own unwind. Rows are never
 reordered or rerun to pass.
 
+The GUI tier's report gives a FAIL line per failed row with its condition cut to 2,000 characters, saying how many were
+left out (`drgnx-ui--fail-line`): a condition can hold a whole screen, and a log over 5 MB does not come back from the
+desktop.
+
 **The leak check after each file.** With `DRGNX_TEST_FILE_LEAKS=1` (the GUI tier's session sets it; `DRGNX_UI_LEAKS=0` turns
 it off there) `harness/run-ert.el` reads the full fingerprint (`core/drgnx-modules-fingerprint.el`) when a test file's
 first test starts and again when the next file starts or the run ends. A file that left anything behind fails as one
