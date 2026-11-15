@@ -118,6 +118,9 @@ the transcript's."
 (ert-deftest drgnx-tty-agent-panel/the-composer-sends-with-ret ()
   "`s' in the transcript puts point in the composer; typed text and RET go to the agent, and the field empties."
   (drgnx-tty-agent-panel-test--with (s)
+    ;; the fixture's up ends with the module's keys applied, as turning a module on does
+    (should (eq 'drgnx-agent-panel-compose
+                (drgnx-tty-session-eval s '(with-current-buffer drgnx-tty-ap--panel (key-binding "s")))))
     (should (drgnx-tty-session-eval
              s '(let ((w (get-buffer-window drgnx-tty-ap--panel))) (and w (select-window w) t))))
     (drgnx-tty-session-key s "s" 'legacy)

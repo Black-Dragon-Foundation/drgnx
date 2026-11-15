@@ -92,14 +92,17 @@
 
 (defun drgnx-panel-replay--module-on ()
   "Turn the module tools/agent-panel on for the workload, noting whether it ran before: only its setup runs, once (not
-its whole stage's, which would set up again a module that runs already), and `drgnx-panel-replay-down' tears down
-what it set up."
+its whole stage's, which would set up again a module that runs already), then the keys and menus follow as after
+`drgnx-modules-turn-on'; `drgnx-panel-replay-down' tears down what it set up."
   ;; the module is defined when its file loads (a module of an idle stage: its setup runs here, not at the first idle)
   (require 'drgnx-agent-panel)
   (setq drgnx-panel-replay--module (drgnx-module-running-p 'tools/agent-panel))
   (drgnx-modules-set-enabled 'tools/agent-panel t)
   (unless drgnx-panel-replay--module
-    (drgnx-modules--run-one 'tools/agent-panel (cdr (assq 'tools/agent-panel drgnx-modules--table)) 'idle))
+    ;; and then what `drgnx-modules-turn-on' runs after a setup: keys and menus follow the registry, so the panel's
+    ;; commands have their keys (`s' composes); without it no stage ends and they had none
+    (when (drgnx-modules--run-one 'tools/agent-panel (cdr (assq 'tools/agent-panel drgnx-modules--table)) 'idle)
+      (run-hooks 'drgnx-modules-after-teardown-functions)))
   (let ((r (cdr (assq 'tools/agent-panel (drgnx-modules-report)))))
     (unless (eq 'ok (plist-get r :status))
       (error "The module tools/agent-panel is not running: %S" r))))
