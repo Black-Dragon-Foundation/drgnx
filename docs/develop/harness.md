@@ -198,6 +198,10 @@ A GUI run's ERT suite executes inside the session (`DRGNX_UI_TEST` names the sui
 summary to `DRGNX_UI_RESULTS` and exits. mutter turns any nonzero Emacs exit code into `1`, so the runner
 trusts the summary, not the code. The run is killed (whole process group) after `DRGNX_UI_TEST_TIMEOUT`
 seconds (default 110; `bin/drgnx check` gives its `ui` job 300) and never leaves mutter, dbus or Emacs processes behind.
+A killed run has no summary: the suite also notes each test's start and end in `DRGNX_UI_RESULTS.progress` as it
+goes, and the tier prints `TIMEOUT`, the tests that ended (each failure by name), how many passed and the test that was
+running when the session was killed. `drgnx-tty-session-wait` also waits on a graphical session (one row drives both);
+its timeout shows the last screen of a terminal session and says a graphical one has none.
 
 ### The fingerprint
 

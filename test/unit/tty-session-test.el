@@ -1,7 +1,22 @@
 ;;; tty-session-test.el --- batch tests: the tty harness's key, mouse and screen helpers -*- lexical-binding: t -*-
 ;; test-class: det
 (require 'ert)
+(require 'cl-lib)
 (require 'drgnx-tty-session)
+
+(ert-deftest drgnx-tty-session/a-wait-on-a-graphical-session-times-out-as-a-timeout ()
+  "`drgnx-tty-session-wait' on a session with no terminal (no tmux pane, no kitty: a `drgnx-ui-start' session):
+a form that turns true is its value; one that stays nil fails as the timeout it is, saying the session has no screen,
+not with the error of reading a screen there is none of (which hid the timeout)."
+  (let* ((answer "nil") (sess (list :name "drgnx-ui-9" :socket "/nonexistent")))
+    (cl-letf (((symbol-function 'drgnx-ui-call) (lambda (&rest _) (vector answer)))
+              ((symbol-function 'drgnx-tty-session--tmux-ok) (lambda (&rest _) (error "No tmux pane to read"))))
+      (let ((err (should-error (drgnx-tty-session-wait sess '(ignore) 0.2))))
+        (should (equal (list t t)
+                       (list (and (string-match-p "stayed nil for 0.2s" (format "%S" err)) t)
+                             (and (string-match-p "a graphical session" (format "%S" err)) t)))))
+      (setq answer "42")
+      (should (equal 42 (drgnx-tty-session-wait sess '(ignore) 0.2))))))
 
 (ert-deftest drgnx-tty-session/encodes-keys ()
   (should (equal (drgnx-tty-session-encode "C-S-p" 'kkp) "\e[112;6u"))

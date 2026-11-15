@@ -1135,3 +1135,20 @@ wrong-number-of-arguments (19 rows of this file, once a row loaded the kit)."
   ;; the native shell: the exact scale, and the monitor's mode
   (should (drgnx-uitest-scale-ready-p 1.25 "2880x1800" 1.25 '(0 0 2880 1800)))
   (should-not (drgnx-uitest-scale-ready-p 1.25 "2880x1800" 1.25 '(0 0 2304 1440))))
+
+(ert-deftest drgnx-ui/a-session-killed-at-its-deadline-says-why-and-how-far-it-got ()
+  "A GUI session killed at DRGNX_UI_TEST_TIMEOUT (exit 124) writes no results; the tier says the cause, the tests
+that ended (a failure by name) and the one running, from the session's progress file, never a bare \"no results\"."
+  (let* ((run (make-temp-file "drgnx-ui-run" t)) (process-environment (cons "DRGNX_UI_EVIDENCE" process-environment)))
+    (unwind-protect
+        (progn
+          (write-region "start a/one\nend a/one passed\nstart a/two\nend a/two failed\nstart a/three\n" nil
+                        (expand-file-name "results.json.progress" run))
+          (let ((out (with-output-to-string
+                       (cl-letf (((symbol-function 'drgnx-ui-run-ert-session) (lambda (&rest _) (list 124 nil run))))
+                         (drgnx-ui-run-ui-session-tests)))))
+            (should (equal (list t t t t)
+                           (mapcar (lambda (re) (and (string-match-p re out) t))
+                                   (list "TIMEOUT.*DRGNX_UI_TEST_TIMEOUT" "a/three was running" "FAILED a/two"
+                                         "passed before the timeout: 1"))))))
+      (delete-directory run t))))

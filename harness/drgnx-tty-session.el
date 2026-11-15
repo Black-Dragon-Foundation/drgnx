@@ -471,12 +471,16 @@ text; an unreadable value comes back as its printed text."
 
 (defun drgnx-tty-session-wait (sess form &optional timeout)
   "FORM's value once it is non-nil in SESS's Emacs (polled every 50 ms for TIMEOUT s, default 5);
-else signal with the last screen."
+else signal that it timed out, with the last screen of a terminal session.  A graphical session (`drgnx-ui-start':
+no tmux pane, no kitty) has no screen to read: its timeout says so instead of failing on the reading, which hid it."
   (let ((deadline (+ (float-time) (or timeout 5))) v)
     (while (not (setq v (drgnx-tty-session-eval sess form 5)))
       (when (> (float-time) deadline)
-        (drgnx-ui--fail "%s: %S stayed nil for %ss; the screen:\n%s"
-                        (plist-get sess :name) form (or timeout 5) (drgnx-tty-session-screen sess)))
+        (drgnx-ui--fail "%s: %S stayed nil for %ss; %s"
+                        (plist-get sess :name) form (or timeout 5)
+                        (if (or (plist-get sess :kitty) (plist-get sess :target))
+                            (concat "the screen:\n" (drgnx-tty-session-screen sess))
+                          "a graphical session (no terminal screen to show)")))
       (sleep-for 0.05))
     v))
 

@@ -52,6 +52,18 @@ guard wraps it, so the hook's printed form is searched)."
       (should (drgnx-module-running-p 'tools/agent-panel))
       (should (drgnx-panel-replay-test--hooked-p)))))
 
+(ert-deftest drgnx-panel-replay/the-up-runs-the-stages-after-hook-for-the-module-it-turned-on ()
+  "A module the up sets up itself gets what its idle stage gives it after: `drgnx-modules-after-stage-functions'
+\(drgnx's applies the keys).  Without it, a terminal session whose idle stage had not come had no `s' in the panel."
+  (drgnx-test-with-modules nil
+    (let ((drgnx-agents--sessions nil) (stages nil))
+      (drgnx-test-modules--load '(tools/agent-panel))
+      (unwind-protect
+          (let ((drgnx-modules-after-stage-functions (list (lambda (stage) (push stage stages)))))
+            (drgnx-panel-replay--module-on)
+            (should (equal '(idle) stages)))
+        (drgnx-panel-replay-down)))))
+
 (ert-deftest drgnx-panel-replay/a-down-after-an-up-that-never-started-keeps-the-rows-error ()
   "A row whose setup fails before the up loads the agents (its frame step, say) runs the down in its unwind: the down
 must not fail on the agents' unbound list, or its error replaces the row's own.  A child Emacs: the agents unloaded."

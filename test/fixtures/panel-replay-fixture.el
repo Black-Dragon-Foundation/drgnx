@@ -103,7 +103,10 @@ what it set up."
         drgnx-panel-replay--module-set t)
   (drgnx-modules-set-enabled 'tools/agent-panel t)
   (unless drgnx-panel-replay--module
-    (drgnx-modules--run-one 'tools/agent-panel (cdr (assq 'tools/agent-panel drgnx-modules--table)) 'idle))
+    (drgnx-modules--run-one 'tools/agent-panel (cdr (assq 'tools/agent-panel drgnx-modules--table)) 'idle)
+    ;; as the idle stage does after its modules ran: the keys (the profile's `s', RET) and menus follow the commands
+    ;; the setup defined; without it a session whose idle stage had not come had none of the panel's keys
+    (run-hook-with-args 'drgnx-modules-after-stage-functions 'idle))
   (let ((r (cdr (assq 'tools/agent-panel (drgnx-modules-report)))))
     (unless (eq 'ok (plist-get r :status))
       (error "The module tools/agent-panel is not running: %S" r))))

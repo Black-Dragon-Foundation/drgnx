@@ -46,6 +46,24 @@ characters: a backtrace's frames print whole forms, which would push its error l
             (should (equal (plist-get (aref (plist-get r :failures) 0) :name) "drgnx-fixture/fails"))))
       (delete-directory tmp t))))
 
+(ert-deftest drgnx-run-ert/a-run-notes-each-tests-start-and-end-beside-its-results ()
+  "One Emacs's run (a GUI session's) writes RESULTS.progress as it goes: each test's start, then its end and result,
+so a run killed at its deadline, which writes no results, still says how far it got and which test was running."
+  (let* ((tmp (make-temp-file "drgnx-ert" t)) (results (expand-file-name "results.json" tmp))
+         (fixture (expand-file-name "ert-mixed" drgnx-run-ert-test--fixtures)))
+    (unwind-protect
+        (progn
+          (drgnx-run-ert-test--batch fixture results "DRGNX_TEST_ONE_PROCESS=1")
+          (let ((lines (and (file-exists-p (concat results ".progress"))
+                            (with-temp-buffer (insert-file-contents (concat results ".progress"))
+                                              (split-string (buffer-string) "\n" t)))))
+            ;; each test's end straight after its start, in whatever order the run took them
+            (should (member lines '(("start drgnx-fixture/fails" "end drgnx-fixture/fails failed"
+                                     "start drgnx-fixture/passes" "end drgnx-fixture/passes passed")
+                                    ("start drgnx-fixture/passes" "end drgnx-fixture/passes passed"
+                                     "start drgnx-fixture/fails" "end drgnx-fixture/fails failed"))))))
+      (delete-directory tmp t))))
+
 (ert-deftest drgnx-run-ert/suite-that-fails-to-load-is-a-failure ()
   (let* ((tmp (make-temp-file "drgnx-ert" t)) (results (expand-file-name "results.json" tmp)))
     (unwind-protect

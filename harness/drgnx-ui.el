@@ -1865,6 +1865,30 @@ else the checkout's debug build when there is one."
                    (and (file-executable-p b) b)))))
     (cons "DRGNX_TEST_HUB_REQUIRED=1" (and bin (list (concat "DRGNX_RATATOSKR_BIN=" bin))))))
 
+(defun drgnx-ui--timeout-report (progress timeout)
+  "What a session killed at its TIMEOUT s ran, from its PROGRESS file (`drgnx-run-ert--progress'): the cause, the
+tests that ended and how, and the one running when it was killed.  Never empty: a run that never reached a test says
+that too."
+  (let ((lines (and (file-readable-p progress)
+                    (with-temp-buffer (insert-file-contents progress) (split-string (buffer-string) "\n" t))))
+        (ended nil) (running nil))
+    (dolist (l lines)
+      (cond ((string-match "\\`start \\(.*\\)\\'" l) (setq running (match-string 1 l)))
+            ((string-match "\\`end \\(.*\\) \\([a-z]+\\)\\'" l)
+             (push (cons (match-string 1 l) (match-string 2 l)) ended)
+             (setq running nil))))
+    (setq ended (nreverse ended))
+    (concat
+     (format "  TIMEOUT: the session was killed at %s s (DRGNX_UI_TEST_TIMEOUT): %d test%s ended%s; select fewer rows or \
+raise DRGNX_UI_TEST_TIMEOUT\n"
+             timeout (length ended) (if (= (length ended) 1) "" "s")
+             (cond (running (format ", %s was running" running))
+                   (lines "")
+                   (t ", none started (the session did not reach its tests)")))
+     (mapconcat (lambda (e) (format "  %s %s\n" (upcase (cdr e)) (car e)))
+                (seq-remove (lambda (e) (equal (cdr e) "passed")) ended) "")
+     (format "  passed before the timeout: %d\n" (seq-count (lambda (e) (equal (cdr e) "passed")) ended)))))
+
 (defun drgnx-ui-run-ui-session-tests ()
   "The GUI suite (test/ui) in a session — the first half of `drgnx test --ui', alone for bin/drgnx check (which
 runs the live suite in shards).  Return an exit code."
@@ -1893,6 +1917,7 @@ runs the live suite in shards).  Return an exit code."
           (seq-doseq (s (plist-get results :skipped))
             (princ (format "  SKIP %s\n" (plist-get s :name)))))
       (princ (format "ui ERT: no results (exit %s); log kept in %s\n" rc run))
+      (when (eq rc 124) (princ (drgnx-ui--timeout-report (expand-file-name "results.json.progress" run) timeout)))
       ;; what the harness wrote to the session's log (a scale gdctl could not set): in a container, the log goes with it
       (dolist (l (drgnx-ui--harness-lines (expand-file-name "session.log" run))) (princ (concat "  " l "\n"))))
     (when ok (delete-directory run t))

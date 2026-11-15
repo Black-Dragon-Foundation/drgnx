@@ -25,6 +25,25 @@ watches): while one waits in the input queue, Emacs runs no process sentinel —
 their processes end.  The runner calls this after every test."
   (dotimes (_ 2) (read-event nil nil 0.002)))     ; 0 reads nothing: the event must be fetched first
 
+(defvar drgnx-run-ert--progress nil
+  "The file each test's start and end go to while `drgnx-run-ert' runs with a results file (RESULTS.progress): a run
+killed at its deadline leaves no results, and its runner reads this instead, to say how far it got and which test ran.")
+
+(defun drgnx-run-ert--progress-note (line)
+  "Append LINE to `drgnx-run-ert--progress', when there is one."
+  (when drgnx-run-ert--progress
+    (let ((coding-system-for-write 'utf-8-unix))
+      (write-region (concat line "\n") nil drgnx-run-ert--progress t 'silent))))
+
+(defun drgnx-run-ert--progress-around (run test &rest args)
+  "`ert-run-test' advice: note TEST's start, run it (RUN), note how it ended."
+  (drgnx-run-ert--progress-note (format "start %s" (ert-test-name test)))
+  (prog1 (apply run test args)
+    (let ((r (ert-test-most-recent-result test)))
+      (drgnx-run-ert--progress-note
+       (format "end %s %s" (ert-test-name test)
+               (cond ((ert-test-passed-p r) "passed") ((ert-test-skipped-p r) "skipped") (t "failed")))))))
+
 (defvar drgnx-run-ert--self)
 
 (defun drgnx-run-ert--off-files ()
@@ -789,6 +808,10 @@ names the run would run, in that order, to FILE and runs none."
   "Load every *-test.el under DIR (or the files of the list DIR: a shard), run all tests, write a JSON
 summary to RESULTS-FILE.  Return t if every test passed."
   (advice-add 'ert-run-test :after (lambda (&rest _) (drgnx-run-ert-drain-events)) '((name . drgnx-run-ert-drain)))
+  (setq drgnx-run-ert--progress (and results-file (concat results-file ".progress")))
+  (when drgnx-run-ert--progress
+    (ignore-errors (delete-file drgnx-run-ert--progress))
+    (advice-add 'ert-run-test :around #'drgnx-run-ert--progress-around))
   (drgnx-run-ert--trampolines-see-real-primitives)
   (when-let* ((a (drgnx-run-ert--env "DRGNX_TEST_AUDIT")))
     (drgnx-run-ert--audit-install (and (not (equal a "1")) a)))
@@ -896,6 +919,8 @@ summary to RESULTS-FILE.  Return t if every test passed."
                    (and seed (list :seed seed))))
           'utf-8)
          nil results-file nil 'silent)))
+    (advice-remove 'ert-run-test #'drgnx-run-ert--progress-around)
+    (setq drgnx-run-ert--progress nil)
     (null failures)))
 
 ;;;; One Emacs per test file
