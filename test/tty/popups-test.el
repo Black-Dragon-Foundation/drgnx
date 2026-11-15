@@ -172,12 +172,13 @@ pending, corfu's auto timer run, and no other timer due within 1 s.")
       (should (drgnx-tty-popups-test--corfu s dirs))
       (drgnx-tty-session-send s "(with-")
       ;; C-g is what this row is about, so it is sent only once the daemon waits for input: every typed key read,
-      ;; corfu's auto timer run, the popup drawn and read by tmux, no timer due within 1 s.  A C-g typed while Lisp
-      ;; runs is a quit, not a key (process output, which no form here sees coming, can still run Lisp then); the
-      ;; row tells by what ran: corfu-quit, from C-g
+      ;; corfu's auto timer run, the popup drawn and read by tmux, no timer due within 1 s, and the test's own last
+      ;; eval done with (its connection's sentinel, its redisplay: `drgnx-tty-session-input-barrier').  A C-g typed
+      ;; while Lisp runs is a quit, not a key (process output, which no form here sees coming, can still run Lisp
+      ;; then); the row tells by what ran: corfu-quit, from C-g
       (drgnx-tty-session-wait s drgnx-tty-popups-test--popup-up-and-quiet 10)
-      (drgnx-tty-session-pty-barrier s)
       (drgnx-tty-session-eval s drgnx-tty-popups-test--record)
+      (drgnx-tty-session-input-barrier s)
       (drgnx-tty-popups-test--key s "C-g")
       (drgnx-tty-session-wait s '(member '(corfu-quit . "C-g") kx-seen) 10)
       (drgnx-tty-session-wait s `(null ,drgnx-tty-popups-test--child-frames-of-selected) 10)
