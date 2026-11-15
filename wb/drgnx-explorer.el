@@ -429,10 +429,11 @@ faces come later, from jit-lock, for the rows on screen."
                                                 default-directory)))))
 
 (defun drgnx-explorer--render ()
-  "Render every root from scratch, keeping the row at point by its path; on the rows path, ask the hub again.  The
-roots decide the path (`drgnx-explorer--use-path')."
+  "Render every root from scratch, keeping the row at point by its path; on the rows path, ask the hub again, the
+roots' git status with it (the hub marks the rows from the statuses read on the subscribed connection: new roots have
+none yet).  The roots decide the path (`drgnx-explorer--use-path')."
   (cond ((when-let* ((b (get-buffer drgnx-explorer-buffer-name))) (with-current-buffer b (drgnx-explorer--use-path))))
-        ((drgnx-explorer--rows-p) (drgnx-explorer--subscribe))
+        ((drgnx-explorer--rows-p) (drgnx-explorer--rows-subscribe))
         (t (drgnx-explorer--render-old))))
 
 (defun drgnx-explorer--insert-root (path)

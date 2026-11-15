@@ -1699,6 +1699,9 @@ letters are the rows of a hub-fed view in a hidden buffer (`drgnx-git--letters`,
 recently refreshed dropped); `drgnx-git-status`, `drgnx-git-branch` and `drgnx-git-unread-p` read those rows and
 `drgnx-git-changed-functions` run after each patch.  The buffer has no window, so its env is the selected window's class
 (`drgnx-view-env-register` HEADLESS).  `drgnx-git-shown-functions` name the folders that get a mark row (the Explorer's).
+The hub-fed Explorer marks its rows from the statuses read on the subscribed connection, so every subscribe asks for
+its roots' letters too (`drgnx-explorer--rows-subscribe`): at attach, when the hub is up again, and when the roots
+change (Open Folder, `drgnx open`).
 
 With Nidhogg's framing on (`nidhogg-workers-framing`), the status process is framed as `records` split at NUL
 (`drgnx-git--frame`) and its batches are read as they arrive (`drgnx-git--batch`) into an accumulator on the process
