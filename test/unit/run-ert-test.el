@@ -972,11 +972,11 @@ suite, with the per-file leak check on.  Return (EXIT RESULTS-PLIST OUTPUT)."
          (root (file-name-directory (directory-file-name harness)))
          (log (make-temp-file "stub-log"))
          (process-environment
-          (append (list (concat "DRGNX_UI_LAUNCHER=" (expand-file-name "test/fixtures/ui-launcher-stub.el" root))
-                        (concat "STUB_LOG=" log) (format "DRGNX_TEST_JOBS=%d" jobs)
-                        (concat "DRGNX_TEST_SELECTOR=\"" drgnx-run-ert-test--ui-selector "\"")
-                        "DRGNX_UI_ONE_SESSION" "STUB_FAIL")
-                  env process-environment))
+          (append env (list (concat "DRGNX_UI_LAUNCHER=" (expand-file-name "test/fixtures/ui-launcher-stub.el" root))
+                            (concat "STUB_LOG=" log) (format "DRGNX_TEST_JOBS=%d" jobs)
+                            (concat "DRGNX_TEST_SELECTOR=\"" drgnx-run-ert-test--ui-selector "\"")
+                            "DRGNX_UI_ONE_SESSION" "STUB_FAIL")
+                  process-environment))
          (default-directory temporary-file-directory))
     (unwind-protect
         (with-temp-buffer
