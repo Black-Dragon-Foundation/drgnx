@@ -2326,6 +2326,13 @@ resized again.  What was measured goes to FILE."
              (key (list (buffer-name buffer) (buffer-chars-modified-tick buffer) (window-body-width w t)))
              (view (drgnx-view-patch-view (buffer-local-value 'drgnx-view-patch buffer)))
              (cuts (drgnx-look-scene--cut-rows w "as drawn")))
+        ;; the same width once a round trip to the hub drew what it still had for it: a row cut only "as drawn" was
+        ;; a fit the hub had already replaced when the shot was taken
+        (drgnx-look-scene--rows-settle buffer "settled")
+        (unless (= (nth 1 key) (buffer-chars-modified-tick buffer))
+          (push (list view (buffer-name buffer) :changed-after-the-shot) drgnx-look-scene--widths-log)
+          (drgnx-look-scene--widths-check w "settled")
+          (setq cuts (append cuts (drgnx-look-scene--cut-rows w "settled"))))
         (unless (gethash key drgnx-look-scene--widths-seen)
           (puthash key t drgnx-look-scene--widths-seen)
           (let ((moved 0) (wide nil))
