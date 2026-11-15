@@ -28,12 +28,31 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
-/// The view name of session SID's panel.
+/// The view name of session SID's panel: what its transcript window shows (the cards, the transcript, the review
+/// cards).
 pub fn view_of(sid: &str) -> String {
     format!("{PREFIX}{sid}")
 }
 
+/// The view name of session SID's panel top: what its header window shows (the header, the chips, the strip).
+pub fn view_of_top(sid: &str) -> String {
+    format!("{PREFIX_TOP}{sid}")
+}
+
 const PREFIX: &str = "agent-panel/";
+const PREFIX_TOP: &str = "agent-panel-top/";
+
+/// Whether VIEW is a panel's top view.
+pub fn is_top(view: &str) -> bool {
+    view.starts_with(PREFIX_TOP)
+}
+
+/// The view whose look (`agents/panel/look`) VIEW's rows read: a panel's top view reads its transcript view's, the one
+/// the editor sends.
+pub fn look_view(view: &str) -> String {
+    view.strip_prefix(PREFIX_TOP)
+        .map_or_else(|| view.to_owned(), view_of)
+}
 
 /// The entries a panel's rows start with: the last this many, and as many again each time the editor asks for older.
 pub const WINDOW: usize = 200;
@@ -341,9 +360,10 @@ impl Panels {
         }
     }
 
-    /// `agents/panel/look`: CONN's choices for VIEW, and its rows built again.
+    /// `agents/panel/look`: CONN's choices for VIEW (a top view's are its transcript view's), and its panel's rows
+    /// built again.
     pub fn look(&self, f: &Front, conn: u64, p: PanelLook) -> bool {
-        let view = p.view.into_inner();
+        let view = look_view(&p.view.into_inner());
         let Some(sid) = view.strip_prefix(PREFIX) else {
             return false;
         };
@@ -388,14 +408,15 @@ impl Panels {
         self.changed_in(f, sid, conn, None);
     }
 
-    /// Session S's entries DIRTY changed (its `emit`): its panels build those groups again.
+    /// Session S's entries DIRTY changed (its `emit`): its panels build those groups again, and their tops (the
+    /// snapshot they draw may have changed with them).
     pub fn changed(&self, s: &Session, dirty: &BTreeSet<usize>) {
         let Some(f) = self.front() else { return };
         let view = view_of(&s.id);
-        if f.core.views.keys_of(&view).is_empty() {
-            return;
+        if !f.core.views.keys_of(&view).is_empty() {
+            self.build_keys(&f, s, &view, None, Some(dirty));
         }
-        self.build_keys(&f, s, &view, None, Some(dirty));
+        self.build_top(&f, s, None);
     }
 
     fn changed_in(&self, f: &Front, sid: &str, conn: Option<u64>, dirty: Option<&BTreeSet<usize>>) {
@@ -404,6 +425,21 @@ impl Panels {
         };
         let view = view_of(sid);
         self.build_keys(f, &s, &view, conn, dirty);
+        self.build_top(f, &s, conn);
+    }
+
+    /// Session S's top views (only CONN's, when given): the header, chips and strip, built whole each time (a few rows;
+    /// the store sends what changed).  They have no model.
+    fn build_top(&self, f: &Front, s: &Session, conn: Option<u64>) {
+        let _building = lock(&self.building);
+        let view = view_of_top(&s.id);
+        for key in f.core.views.keys_of(&view) {
+            if conn.is_none_or(|c| c == key.0) {
+                f.core.views.publish_built(f, &key, |env, fonts| {
+                    self.rows_for(s, &key, env, fonts, None)
+                });
+            }
+        }
     }
 
     fn build_keys(
@@ -556,8 +592,10 @@ impl Panels {
                 None
             }
         };
+        // a top view reads the look its transcript view was sent
+        let look_key = (key.0, look_view(&key.1));
         let (lens, open) = lock(&self.chosen)
-            .get(&(key.0, key.1.clone()))
+            .get(&look_key)
             .map(|c| (c.lens.clone(), c.look.open.clone()))
             .unwrap_or_default();
         // the chips the snapshot does not carry: the files edited (the ledger's) and the steps holding a checkpoint
@@ -575,19 +613,25 @@ impl Panels {
         let checkpoints = lock(&self.facts)
             .get(&s.id)
             .map(|(_, map)| map.values().filter(|f| f.revertible && !f.undone).count());
-        let (mut rows, mut images) = panel_top::rows(
-            &snapshot,
-            &panel_top::Cx {
-                env,
-                fonts,
-                lens: &lens,
-                open: &open,
-                busy_since,
-                now,
-                files_edited,
-                checkpoints,
-            },
-        );
+        // the top view (the header window) is the header, the chips and the strip; the transcript view is the rest
+        if is_top(&key.1) {
+            let (mut rows, images) = panel_top::rows(
+                &snapshot,
+                &panel_top::Cx {
+                    env,
+                    fonts,
+                    lens: &lens,
+                    open: &open,
+                    busy_since,
+                    now,
+                    files_edited,
+                    checkpoints,
+                },
+            );
+            hover(&mut rows);
+            return (rows, images);
+        }
+        let (mut rows, mut images) = (Vec::new(), Vec::new());
         let (cards, plan, finished) = {
             let chosen = lock(&self.chosen);
             let c = chosen.get(&(key.0, key.1.clone())).map(|c| c.cards.clone());
@@ -726,9 +770,10 @@ impl Panels {
     }
 }
 
-/// Whether VIEW is an agent panel's, and then its session.
+/// Whether VIEW is an agent panel's (its transcript view or its top view), and then its session.
 pub fn session_of(view: &str) -> Option<&str> {
     view.strip_prefix(PREFIX)
+        .or_else(|| view.strip_prefix(PREFIX_TOP))
 }
 
 /// `agents/panel/look`.

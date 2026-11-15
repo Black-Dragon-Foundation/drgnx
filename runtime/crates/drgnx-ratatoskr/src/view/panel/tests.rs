@@ -522,6 +522,20 @@ fn an_appended_step_extends_the_model() {
 
 // pattern: D
 #[test]
+fn the_top_view_and_the_transcript_view_name_one_session_and_one_look() {
+    // the panel's header window shows agent-panel-top/S (header, chips, strip), its transcript window agent-panel/S;
+    // both are the session's, and the top view reads the look the editor sends for the transcript view
+    assert_eq!(super::session_of("agent-panel-top/s1"), Some("s1"));
+    assert_eq!(super::session_of("agent-panel/s1"), Some("s1"));
+    assert_eq!(super::session_of("agent-panels/s1"), None);
+    assert!(super::is_top("agent-panel-top/s1"));
+    assert!(!super::is_top("agent-panel/s1"));
+    assert_eq!(super::view_of_top("s1"), "agent-panel-top/s1");
+    assert_eq!(super::look_view("agent-panel-top/s1"), "agent-panel/s1");
+    assert_eq!(super::look_view("agent-panel/s1"), "agent-panel/s1");
+}
+
+#[test]
 fn a_clickable_part_gets_the_hover_face_by_name() {
     let mut b = RowBuilder::new("p:head");
     b.push("plain ", None);
