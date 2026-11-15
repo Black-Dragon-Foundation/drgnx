@@ -321,6 +321,17 @@ still shows its end, and the header still holds `p:head', fitted."
                  (list what (= (window-point window) (with-current-buffer panel (point-max)))
                        (drgnx-panel-docks-ui-test--end-error panel window)))))
 
+(defun drgnx-panel-docks-ui-test--steps (panel n what)
+  "Wait for N steps appended to PANEL, a new last row each (the row count may stay: the transcript keeps a page of
+rows), drawing them as they come."
+  (let ((last (lambda () (with-current-buffer panel
+                           (save-excursion (goto-char (point-max)) (skip-chars-backward "\n") (drgnx-view-key-at (point)))))))
+    (dotimes (i n)
+      (let ((was (funcall last)))
+        (drgnx-test-wait (lambda () (with-current-buffer panel (drgnx-view-draw-now nil)) (not (equal was (funcall last))))
+                         :secs 30 :what (list what (1+ i)))))
+    (redisplay t)))
+
 (ert-deftest drgnx-ui-panel-docks/the-panel-opens-at-its-end ()
   "A panel opened in the right area by its command path with a transcript longer than its window opens at its end,
 the end on the transcript's last line, after the header's rows came and the header was fitted.  No one moves its point
@@ -341,7 +352,7 @@ meanwhile (its status) must not leave space under the end."
     (should (drgnx-panel-docks-ui-test--long-p panel tw))
     (drgnx-panel-docks-ui-test--stream)
     (dotimes (i 10)
-      (drgnx-panel-docks-ui-test--appended panel 1 (format "appended row %d" (1+ i)))
+      (drgnx-panel-docks-ui-test--steps panel 1 (list :append (1+ i)))
       (drgnx-panel-docks-ui-test--settle-area)
       (drgnx-panel-docks-ui-test--at-end panel tw (list :after-append (1+ i))))))
 
@@ -351,7 +362,7 @@ meanwhile (its status) must not leave space under the end."
   "A five-line draft grows the composer and shrinks the transcript (Emacs scrolls: point would leave it); the send
 empties the draft, the composer shrinks back and the transcript grows: its end stays on its last line.  The hub's send
 is recorded, not made (the mock's script has no third turn)."
-  (drgnx-panel-docks-ui-test--in-area (panel _hw tw cw) 20
+  (drgnx-panel-docks-ui-test--in-area (panel _hw tw cw) 40
     (should (drgnx-panel-docks-ui-test--long-p panel tw))
     (let ((comp (window-buffer cw)) (h (window-pixel-height cw)) (sent nil))
       (with-current-buffer comp (goto-char (point-min)) (insert "one\ntwo\nthree\nfour\nfive"))
@@ -368,7 +379,7 @@ is recorded, not made (the mock's script has no third turn)."
 (ert-deftest drgnx-ui-panel-docks/the-end-stays-when-the-header-strip-unwraps ()
   "A bigger font in the header wraps its strip: the header grows, the transcript shrinks; back to the font, the strip
 unwraps, the header shrinks and the transcript grows: its end stays on its last line."
-  (drgnx-panel-docks-ui-test--in-area (panel hw tw _cw) 20
+  (drgnx-panel-docks-ui-test--in-area (panel hw tw _cw) 40
     (should (drgnx-panel-docks-ui-test--long-p panel tw))
     (let* ((hb (window-buffer hw)) (h (window-pixel-height hw))
            (class (with-current-buffer hb (drgnx-view-patch-class drgnx-view-patch)))
@@ -400,7 +411,7 @@ unwraps, the header shrinks and the transcript grows: its end stays on its last 
   "The transcript at its end, the right area switched to another tab while the agent appends 5 steps, and back: the
 transcript's point is the new end and the end is on its last line (Acceptance 2: at its end it follows).  Red first:
 the tab came back on the old end's position, which no longer follows."
-  (drgnx-panel-docks-ui-test--in-area (panel _hw tw _cw) 20
+  (drgnx-panel-docks-ui-test--in-area (panel _hw tw _cw) 40
     (let ((other (get-buffer-create "*drgnx panel-docks other*")))
       (unwind-protect
           (progn
@@ -411,7 +422,7 @@ the tab came back on the old end's position, which no longer follows."
             (should-not (get-buffer-window panel))
             (let ((was (with-current-buffer panel (point-max))))
               (drgnx-panel-docks-ui-test--stream)
-              (drgnx-panel-docks-ui-test--appended panel 5 "5 steps appended while the panel is hidden")
+              (drgnx-panel-docks-ui-test--steps panel 5 "a step appended while the panel is hidden")
               (should (> (with-current-buffer panel (point-max)) was)))
             (drgnx-pane-show 'agent-panel)
             (drgnx-panel-docks-ui-test--settle-area)
