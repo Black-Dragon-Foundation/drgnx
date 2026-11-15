@@ -36,4 +36,30 @@ string-pixel-width uses)")
   :why "the logs byte and native compilation, and warnings, write to")
  (:what "\\`drgnx-keys--applied length nil -> 0\\'"
   :why "the variable became bound because the library loaded: a load, not a change")
+ ;; The GUI tier's per-file check (DRGNX_TEST_FILE_LEAKS) reads more than the census does; what follows is what loading a
+ ;; library or a fixture does, which is no leak: a feature is never unloaded.
+ (:what "\\`registry [^ ]+ \\+"
+  :why "a library registering its commands, view types, subscribers or fillers when it loads; a feature is never unloaded, so its registry rows stay")
+ (:what "\\`feature \\+"
+  :source "\\`\\(?:themes\\|test/fixtures\\)/"
+  :why "a theme or a test fixture a test loads; a feature is never unloaded")
+ (:what ""
+  :source "/\\(?:childframe-elpa\\|pinned-elpa\\)/"
+  :why "a pinned child-frame or modal package loaded by the test that needs it: its hooks, timers, advice, keys and after-load forms come with the load")
+ (:what "\\`\\(?:minor-mode-map\\|minor-mode\\|emulation-map\\|after-load\\) "
+  :why "a library defining its minor mode and map, or an after-load form, when it loads")
+ (:what "\\`timer idle [+-]#\\[nil ((if (buffer-live-p buffer)"
+  :why "the one-shot idle timer that kills a buffer a library displayed: one fired and another is pending, a rolling pair")
+ (:what "\\`timer [+-]surfaces-usage "
+  :why "the layer's idle flush of the usage counters: re-armed by every use, a rolling pair")
+ (:what "\\`hook pre-command-hook [+-]clear-transient-map\\'"
+  :why "Emacs's own transient map: set by a key the test sent, gone with the next command")
+ (:what "\\`global-map [^ ]+ [^ ]* ?\\+nil\\'"
+  :why "a key set to nil: no binding, only the entry; a prefix map created on the way stays")
+ (:what "\\`buffer "
+  :why "buffers are closed by the harness's cleanup between files (ert-kill-all-test-buffers); a hidden work buffer is no state")
+ (:what "\\`frame-param drgnx-\\(?:wb-\\|intent-by\\|layouts-\\|look-\\|frame-role\\|monitor\\|platform-wm\\|work-space-shown\\)"
+  :why "the workbench's own layout and look bookkeeping in the frame parameters: every file that opens a panel sets it; the look rows' drgnx-look-gui-check-clean reads what moves pixels")
+ (:what "\\`frame-param \\(?:glitnir--cards\\|session-name\\) "
+  :why "the renderer's and the session's own bookkeeping")
 )
