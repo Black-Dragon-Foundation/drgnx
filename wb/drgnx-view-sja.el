@@ -17,7 +17,7 @@
 ;;   is drawn whole too, so a stray edit cannot leave the rows wrong for long.
 ;; - Each window's start and point are turned into (ROW . OFFSET) before the batch and back after it, so the windows
 ;;   stay on their rows; a window whose point was at the region's end follows the tail (one of rows already drawn:
-;;   at the first rows, point stays at the region's start).
+;;   at the first rows, point stays at the region's start, unless the view opens at its tail, `drgnx-view-sja-tail').
 ;; - The read-only text, the region markers (the end's insertion type t), the stops and images, the faces of styles
 ;;   (an LRU shared with the Lisp inserter's) are as `drgnx-view-patch-render' draws them.
 ;; - A view's own text properties go on through `drgnx-view-sja-prop-functions' (a terminal's links and images) and
@@ -36,6 +36,11 @@
 (defvar-local drgnx-view-sja-prop-functions nil
   "Alist (PROP . FN) of a view held in Sjá: after a draw put PROP on FROM..TO of a STRING it inserts, FN is called
 with (FROM TO VALUE STRING) and may put more properties on it (a terminal's link: its keymap and help).")
+
+(defvar-local drgnx-view-sja-tail nil
+  "Non-nil in a view held in Sjá that opens at its tail (the agent panel's transcript): its empty region counts as at
+its end, so the first rows leave the buffer's point and its windows' points at the end, and they follow the rows after.
+Else the first rows leave them at the region's start (a list or a map opens at its top).")
 
 (defvar-local drgnx-view-sja-stop-function nil
   "Called with (STRING LO POS) for each stop a draw puts at POS of STRING (LO: where the text since the last stop
@@ -262,7 +267,8 @@ its place), else BEG."
              lo hi drawn)
         (save-restriction
           (widen)
-          (let* ((tail (< beg end))             ; an empty region has no tail to follow: point stays at its start
+          ;; an empty region has no tail to follow (point stays at its start), unless the view opens at its tail
+          (let* ((tail (or (< beg end) drgnx-view-sja-tail))
                  (wins (mapcar (lambda (w) (list w (drgnx-view-sja--place h beg end (window-start w))
                                                  (drgnx-view-sja--place h beg end (window-point w))
                                                  (and tail (= (window-point w) end))

@@ -26,6 +26,7 @@
 (require 'subr-x)
 (require 'drgnx-modules)
 (require 'drgnx-view)
+(defvar drgnx-view-sja-tail)                  ; drgnx-view-sja, loaded when Sjá holds the rows
 (require 'drgnx-hub-client)
 (require 'drgnx-panes)                   ; the right island the panel opens in
 (require 'drgnx-view-nav)                ; the moves between steps of a kind, through the replica
@@ -387,6 +388,8 @@ signal when no hub serves)."
   ;; Emacs keeps the end in view: a window whose point is at the end (Sjá keeps it there through a draw) scrolls by
   ;; as little as the appended rows need, never recentring
   (setq-local scroll-conservatively 101 scroll-margin 0)
+  ;; it opens at its end: its first rows leave point there (Sjá's draw), so it opens on the latest step
+  (setq-local drgnx-view-sja-tail t)
   (add-hook 'window-scroll-functions #'drgnx-agent-panel--scrolled nil t)
   (add-hook 'kill-buffer-hook #'drgnx-agent-panel--killed nil t))
 

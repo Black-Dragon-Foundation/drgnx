@@ -2958,6 +2958,8 @@ lines and never scroll; the transcript scrolls between them as any Emacs buffer 
 (`drgnx-view-patch-attach` with `:sja t`, the generic twin `drgnx-view-env-twin`), its buffer sets
 `scroll-conservatively` 101 and `scroll-margin` 0, so a window whose point is at the end keeps the end in view as rows
 come in, and a window scrolled back stays on its row (Sjá keeps its start and point by row across patches and resets).
+It opens at its end: it sets `drgnx-view-sja-tail`, so Sjá's draw counts its empty region as at its end and the first
+rows leave point there (a Sjá view otherwise opens on its first rows), whether a window showed it before them or after.
 No panel code follows the tail, copies rows or handles the wheel. Scrolling the transcript to its top loads the page
 before (the `--scrolled` hook). Until the first patch of the transcript view, a panel shows a waiting line (an overlay,
 "Waiting for the hub to send the agent's steps…"); with the hub down it stays, and the panel draws no rows of its own.

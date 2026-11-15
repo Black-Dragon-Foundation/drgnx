@@ -113,6 +113,17 @@ window's), so none of them is here."
         (should (= (window-point w) (with-current-buffer panel (point-max))))
         (should (pos-visible-in-window-p (with-current-buffer panel (point-max)) w))))))
 
+(ert-deftest drgnx-ui-panel-docks/the-panel-opens-at-its-end ()
+  "A panel shown with a transcript longer than its window opens at its end, with no one moving its point: the first
+rows leave point at the end (`drgnx-view-sja-tail').  Red first: it opened on its first rows (the long scene's
+l-dark-s2-a, window start 55)."
+  (drgnx-panel-docks-ui-test--with panel 40
+    (let ((w (selected-window)))
+      (should (> (drgnx-panel-docks-ui-test--rows panel) (window-body-height w)))
+      (should (= (window-point w) (with-current-buffer panel (point-max))))
+      (should (pos-visible-in-window-p (with-current-buffer panel (point-max)) w))
+      (should (> (window-start w) (with-current-buffer panel (point-min)))))))
+
 (ert-deftest drgnx-ui-panel-docks/a-window-scrolled-back-stays-on-its-row ()
   "A window scrolled up a page stays on the row at its start while steps are appended, and through a reset of the
 rows (the text scale: a new display class)."
