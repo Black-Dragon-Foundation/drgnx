@@ -311,6 +311,11 @@ until the hub has sent a head (a new cell, a markdown cell).  Built when a head 
      (drgnx-notebook--styled (or (plist-get head :text) (symbol-name type)) (plist-get head :runs) 'drgnx-notebook-head)
      (propertize " " 'face 'drgnx-notebook-head))))
 
+(defun drgnx-notebook--card-pad ()
+  "The card's left padding, as a `line-prefix' of every row of a cell (the head, its text, the output): the ring is
+drawn at the text area's left edge, so the text keeps its distance from it (the mockup's 12 px)."
+  (propertize " " 'display `(space :width (,(drgnx-px 12)))))
+
 (defun drgnx-notebook--chrome-of (id) (gethash id drgnx-notebook--chrome))
 
 (defun drgnx-notebook--overlay (beg end kind id)
@@ -526,7 +531,14 @@ and the add-cell row follows."
       (puthash id tail drgnx-notebook--last-tails)
       (drgnx-notebook--want-images tail)
       (when-let* ((head (plist-get tail :head))) (puthash id head drgnx-notebook--heads) (drgnx-notebook--refresh-head id))
-      (overlay-put ov 'after-string (drgnx-notebook--tail-string tail (equal id drgnx-notebook--selected-id))))))
+      (overlay-put ov 'after-string (drgnx-notebook--tail-string tail (equal id drgnx-notebook--selected-id)))
+      (drgnx-notebook--cards-redraw))))
+
+(defun drgnx-notebook--cards-redraw ()
+  "The rows of a card changed (its output grew): the windows showing the notebook draw again, so each ring is sized to
+the rows now there."
+  (when (drgnx-notebook--cards-p)
+    (dolist (w (get-buffer-window-list nil nil t)) (force-window-update w))))
 
 (defun drgnx-notebook--refresh-tail (id)
   "Build cell ID's output string again from its last tail (or none): the selection moved onto or off the cell."
@@ -689,8 +701,11 @@ whether the focus ring has the border step outside it, then the shadow and the g
 (defun drgnx-notebook--blocks-update ()
   "Give the windows showing this buffer their cards (and the fringes that inset them), when they changed."
   (when (drgnx-notebook--cards-p)
-    (let ((inset (drgnx-px drgnx-notebook--card-inset)))
+    (let ((inset (drgnx-px drgnx-notebook--card-inset)) (pad (drgnx-notebook--card-pad)))
       (setq-local left-fringe-width inset right-fringe-width inset)
+      (dolist (c drgnx-notebook--cells)
+        (when-let* ((body (plist-get (drgnx-notebook--chrome-of (plist-get c :id)) :body)))
+          (unless (equal-including-properties (overlay-get body 'line-prefix) pad) (overlay-put body 'line-prefix pad))))
       (dolist (w (get-buffer-window-list nil nil t))
         (unless (equal (window-fringes w) (list inset inset nil nil))
           (set-window-fringes w inset inset))
