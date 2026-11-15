@@ -660,10 +660,18 @@ impl Panels {
             cache.groups.clear();
         }
         cache.sig = sig;
-        let right = |text: &str| -> u32 {
+        let right = |parts: &[(&str, &str)]| -> u32 {
             let w = match env.display {
-                Display::Gui => fit::width(fonts, "ui", text).ceil() as u32,
-                Display::Tty => text.chars().count() as u32 * env.cell.0.max(1),
+                Display::Gui => parts
+                    .iter()
+                    .map(|(text, role)| fit::width(fonts, role, text))
+                    .sum::<f32>()
+                    .ceil() as u32,
+                Display::Tty => parts
+                    .iter()
+                    .map(|(text, _)| text.chars().count() as u32)
+                    .sum::<u32>()
+                    * env.cell.0.max(1),
             };
             env.width_px.saturating_sub(w + env.cell.0.max(1))
         };

@@ -41,6 +41,8 @@
 (declare-function magit-status-setup-buffer "magit-status")
 (defvar drgnx-panel-replay-prefix)
 (defvar drgnx-agent-panel--pin)
+(defvar drgnx-agent-panel--pin-overlays)
+(declare-function drgnx-view-env--envs "drgnx-view-env")
 (defvar drgnx-panel-replay-project)
 (defvar package-directory-list)
 (defvar magit-save-repository-buffers)
@@ -540,6 +542,7 @@ the picture is the scrolled panel."
                                     (or (car-safe drgnx-agent-panel--pin) (point-min))))
           (error "The transcript fits the panel's window: draw this scene alone (DRGNX_LOOK_ONLY='^agent-panel-long$'), which gives the mock agent its long transcript"))))
     (drgnx-look-scene--try "panel resize" (drgnx-look-scene--panel-resize drgnx-look-scene--panel))
+    (drgnx-look-scene--try "panel short" (drgnx-look-scene--panel-short drgnx-look-scene--panel))
     (drgnx-look-scene--try "panel wheel" (drgnx-look-scene--panel-wheel drgnx-look-scene--panel))
     (drgnx-look-scene--try "pinned clicks" (drgnx-look-scene--panel-clicks drgnx-look-scene--panel))))
 
@@ -561,6 +564,78 @@ end shows the end whole."
         (error "after the frame went to %d px the panel's end is not shown (window body %d px, start %d, end at %S)"
                step (window-body-height w t) (window-start w)
                (with-current-buffer buffer (pos-visible-in-window-p (point-max) w t)))))))
+
+(defun drgnx-look-scene--panel-wide-rows (buffer window)
+  "BUFFER's lines wider than WINDOW's body as drawn: a list of (PX . TEXT), TEXT the line's first 60 characters."
+  (let ((body (window-body-width window t)) wide)
+    (with-current-buffer buffer
+      (save-excursion
+        (goto-char (point-min))
+        (while (not (eobp))
+          (let* ((bol (point)) (eol (line-end-position))
+                 (px (car (window-text-pixel-size window bol eol))))
+            (when (> px body) (push (cons px (buffer-substring-no-properties bol (min eol (+ bol 60)))) wide)))
+          (forward-line 1))))
+    (nreverse wide)))
+
+(defun drgnx-look-scene--panel-rows-fit (buffer)
+  "No row of BUFFER, the agent panel, is wider than its window's body: at the window's width, then 300 px wider, then
+back.  Each width is given the hub's rows for it before it is measured."
+  (let* ((w (get-buffer-window buffer)) (from (and w (window-body-width w t))))
+    (unless w (error "no window shows the panel"))
+    (unwind-protect
+        (dolist (delta '(0 300))
+          (unless (zerop delta)
+            (window-resize w (min delta (window-max-delta w t nil nil nil nil t)) t nil t)
+            (redisplay t)
+            (when (<= (window-body-width w t) from) (error "the panel's window could not be widened (%d px)" from)))
+          (unless (drgnx-look-scene--until 10 (format "the panel's rows at %d px" (window-body-width w t))
+                                           (lambda () (null (drgnx-look-scene--panel-wide-rows buffer w))))
+            (error "rows wider than the panel's body (%d px, env width %S, char height %S): %S"
+                   (window-body-width w t)
+                   (mapcar (lambda (c) (plist-get (cdr c) :width_px))
+                           (drgnx-view-env--envs (drgnx-view-patch-view (buffer-local-value 'drgnx-view-patch buffer))))
+                   (frame-char-height)
+                   (seq-take (drgnx-look-scene--panel-wide-rows buffer w) 6))))
+      (window-resize w (- from (window-body-width w t)) t nil t)
+      (redisplay t))))
+
+(defun drgnx-look-scene--panel-short (buffer)
+  "Show a side window under BUFFER's (a side window) and make BUFFER's as tall as the pinned rows alone (no room for the
+composer under them), then delete the new window: short, the window at the panel's end keeps point there and shows the
+end; grown, the pinned rows are at its top again.  (The frame cannot be made that short: its other windows hold it.)"
+  (let* ((w (get-buffer-window buffer)) below)
+    (unless w (error "no window shows the panel"))
+    (select-window w)
+    (with-current-buffer buffer (goto-char (point-max)) (set-window-point w (point-max)))
+    (let ((pinned (with-current-buffer buffer
+                    (cdr (window-text-pixel-size w (point-min) (car drgnx-agent-panel--pin))))))
+      (unwind-protect
+          (progn
+            ;; the panel is a side window: a second one in its side, under it, takes the rest of the height
+            (setq below (display-buffer-in-side-window
+                         (get-buffer-create " *panel short*")
+                         `((side . ,(or (window-parameter w 'window-side) 'right))
+                           (slot . ,(1+ (or (window-parameter w 'window-slot) 0))))))
+            (unless (and below (not (eq below w))) (error "no side window could be shown under the panel"))
+            (window-resize w (- (+ pinned (- (window-pixel-height w) (window-body-height w t))) (window-pixel-height w))
+                           nil nil t)
+            (redisplay t)
+            (drgnx-signal--flush)
+            (redisplay t)
+            (unless (<= (window-body-height w t) (+ pinned (frame-char-height)))
+              (error "the panel's window did not shrink to its pinned rows (%d px, pinned %d px)" (window-body-height w t) pinned))
+            (with-current-buffer buffer
+              (unless (and (= (window-point w) (point-max)) (pos-visible-in-window-p (point-max) w))
+                (error "a panel window as short as its pinned rows (%d px, pinned %d px) left its end: point %d of %d, start %d, overlay %S"
+                       (window-body-height w t) pinned (window-point w) (point-max) (window-start w)
+                       (and (assq w drgnx-agent-panel--pin-overlays) t)))))
+        (when (window-live-p below) (delete-window below))
+        (redisplay t)
+        (drgnx-signal--flush)
+        (redisplay t))
+      (unless (drgnx-look-scene--panel-top-shown-p w)
+        (error "grown back, the panel's pinned rows are not at its top (start %d, point %d)" (window-start w) (window-point w))))))
 
 (defun drgnx-look-scene--panel-top-shown-p (window)
   "Whether WINDOW's top rows are the pinned copy, whole: the pin button is over its first pixels."
@@ -666,6 +741,7 @@ still be at the top, and each click must run its command."
       ;; an earlier scene put the editor back: the panel opens again where opening it puts it, the right island
       (drgnx-pane-show 'agent-panel :buffer drgnx-look-scene--panel :select t))
     (drgnx-look-scene--panel-top drgnx-look-scene--panel))
+  (drgnx-look-scene--try "panel rows fit" (drgnx-look-scene--panel-rows-fit drgnx-look-scene--panel))
   (drgnx-look-scene--answer))
 
 (defun drgnx-look-scene--panel-top (buffer)

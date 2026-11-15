@@ -76,8 +76,9 @@ pub struct Cx<'a> {
     pub always: &'a dyn Fn(&Entry) -> bool,
     /// The line the hub cached for how a tool entry was allowed (its permission request's decision), if it was.
     pub prov: &'a dyn Fn(&Entry) -> Option<String>,
-    /// The px a right-aligned text starts at.
-    pub right: &'a dyn Fn(&str) -> u32,
+    /// The px a right-aligned text starts at: its parts as (text, font role), each measured in the font it is drawn in
+    /// (`drgnx-view-env-roles`).
+    pub right: &'a dyn Fn(&[(&str, &str)]) -> u32,
 }
 
 /// One group as the session hands it to the panel: its head's index and entry, the thoughts that fold under it, and
@@ -409,8 +410,23 @@ fn tool_rows(idx: usize, e: &Entry, thoughts: &[&Entry], cx: &Cx) -> Vec<Row> {
             ));
         }
         if !parts.is_empty() {
-            let meta: Vec<&str> = parts.iter().map(|(t, _)| t.as_str()).collect();
-            l.b.stop((cx.right)(&meta.join(" · ")));
+            // the time and cost face is `drgnx-code-small` (role `code-small`); the warning face sets no font, so it
+            // is the panel's own (`ui`)
+            let role = |f: &str| {
+                if f == "drgnx-agent-panel-code" {
+                    "code-small"
+                } else {
+                    "ui"
+                }
+            };
+            let mut meta: Vec<(&str, &str)> = Vec::new();
+            for (n, (t, f)) in parts.iter().enumerate() {
+                if n > 0 {
+                    meta.push((" · ", "code-small"));
+                }
+                meta.push((t.as_str(), role(f)));
+            }
+            l.b.stop((cx.right)(&meta));
             for (n, (t, f)) in parts.iter().enumerate() {
                 if n > 0 {
                     l.push(" · ", Some("drgnx-agent-panel-code"));

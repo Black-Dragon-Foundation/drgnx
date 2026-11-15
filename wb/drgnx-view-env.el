@@ -45,7 +45,7 @@
   "Seconds of idleness after a width change before its env is sent.")
 
 (defconst drgnx-view-env-roles '((ui . default) (text . drgnx-ui-text) (code . fixed-pitch) (card . variable-pitch)
-                                 (caption . drgnx-ui-caption))
+                                 (caption . drgnx-ui-caption) (code-small . drgnx-code-small))
   "The font roles a view's rows use, and the face each is read from in the view's buffer.")
 
 (defconst drgnx-view-env-palette-roles
