@@ -745,16 +745,6 @@ at once, or give it back to them."
       (when (lookup-key drgnx-keys--profile-map k) (ignore-errors (define-key drgnx-keys--profile-map k nil t))))
     (drgnx-keys--set-everywhere (plist-get drgnx-keys-last :bindings))))
 
-(defun drgnx-keys--yours-at-p (key)
-  "Whether the global KEY (a description) is yours: bound or unbound by you, or under a command of yours on one of
-its prefixes (which makes it unreachable)."
-  (or (gethash key drgnx-keys--yours)
-      (let ((events (key-parse key)) found)
-        (dotimes (i (1- (length events)))
-          (unless found
-            (setq found (car (gethash (key-description (seq-take events (1+ i))) drgnx-keys--yours)))))
-        found)))
-
 (defconst drgnx-keys--chrome-events
   '(menu-bar tool-bar tab-bar tab-line mode-line header-line left-fringe right-fringe left-margin right-margin
              vertical-line vertical-scroll-bar horizontal-scroll-bar)
@@ -918,7 +908,8 @@ emptied and leaves the list, so a profile switch leaves nothing behind."
   (setq drgnx-keys--everywhere-on nil)
   (dolist (b bindings)
     (when-let* (((plist-get b :everywhere))
-                ((not (drgnx-keys--yours-at-p (plist-get b :key))))   ; a key of yours: it steps aside
+                ;; a key of yours: it steps aside (one stroke, so no prefix of yours is over it)
+                ((not (gethash (plist-get b :key) drgnx-keys--yours)))
                 (cmd (drgnx-commands-get (plist-get b :id))))
       (define-key drgnx-keys--everywhere-map (key-parse (plist-get b :key))
                   `(menu-item "" ,(drgnx-cmd-command cmd) :filter drgnx-keys--everywhere-filter))

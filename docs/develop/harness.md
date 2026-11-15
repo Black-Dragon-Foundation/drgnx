@@ -1170,7 +1170,10 @@ dirs) and drive the session through `harness/drgnx-tty-session.el`:
 - **Module stages first:** every module stage that ends applies the keys again (`drgnx-keys-apply`), so a row that
   binds a key, or sends C-g, first waits for the daemon's stages: `drgnx-tty-session-wait-stages` (the GUI tier's
   `drgnx-test-wait-stages`) waits until no idle step is pending, then reaches the once-only stages still armed
-  (first input, first file, first graphical frame). `drgnx-tty-session-key-barrier` does it before binding `<f7>`.
+  (first input, first file, first graphical frame). Each look waits for the daemon's answer as long as the wait's
+  time (30 s) leaves, since a step can hold the daemon for seconds; when the time runs out the error gives the
+  cause: the idle steps still pending, or that the daemon stopped answering, with its last answer and what /proc
+  says the process does (state, wait channel, CPU time). `drgnx-tty-session-key-barrier` does it before binding `<f7>`.
   A row that binds a key of its own uses one no key profile claims (`<f7>`; never `<f9>`, VS Code's breakpoint key),
   or a keymap of its own on `emulation-mode-map-alists`.
 - **C-g only when the row is about C-g:** C-g typed into a terminal is Emacs's interrupt whenever the daemon is not
@@ -1180,8 +1183,12 @@ dirs) and drive the session through `harness/drgnx-tty-session.el`:
   `drgnx-tty-session-input-barrier` and judges it by what ran (`kx-seen`), not by a screen a quit could leave as it
   was. Every eval leaves Lisp behind it (its connection's sentinel, a redisplay), so a C-g sent right after one can
   land in it. The barrier's eval only arms a timer in the daemon, which waits until no server connection is left, no
-  native compilation runs and no timer is due within 1 s. It then writes a window title, and the barrier returns
-  when tmux reports that title. Process output can still run Lisp in that moment, which no form sees coming: such a C-g is a
+  native compilation runs and no timer is due within 1 s (a repeating one: within 0.25 s, since one that repeats every
+  second is always due within 1 s). The barrier stops JIT native compilation from taking more files, so it waits only
+  for the compilations already running (a cold eln cache would otherwise keep it busy for minutes); the rest of the
+  row runs without JIT compilation. It then writes a window title, and the barrier returns when tmux reports that
+  title. The stage wait keeps the same rule (`kx-unsettled`), on its idle steps; on a timeout both say what was still
+  to run, by timer function or drgnx timer key. Process output can still run Lisp in that moment, which no form sees coming: such a C-g is a
   quit, and the row fails by name instead of passing. A row about a quit makes one on purpose: a timer that keeps
   the daemon busy until `quit-flag` is set (`drgnx-tty-popups/completion-popup-goes-on-a-quit`).
 - **Output:** the screen comes from `capture-pane` (`-screen`, `-find`, `-wait-screen`, `-quiet`; `-find-below` and

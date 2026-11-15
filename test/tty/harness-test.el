@@ -242,4 +242,39 @@ it is no child of the session's Emacs (the shell that started it has exited), so
           (should-not (eq 0 (car (drgnx-ui--run "pgrep" "-u" (number-to-string (user-uid)) "-f" "--" "kx-writer; mkdir")))))
       (drgnx-ui--run "pkill" "-KILL" "-u" (number-to-string (user-uid)) "-f" "--" "kx-writer; mkdir"))))
 
+(defun drgnx-tty-harness-test--hold (sess secs)
+  "Make SESS's Emacs run Lisp for SECS s without answering (a timer it runs at once: a busy stage step)."
+  (drgnx-tty-session-eval
+   sess `(progn (run-at-time 0 nil (lambda () (let ((end (+ (float-time) ,secs))) (while (< (float-time) end)))))
+                t)))
+
+(ert-deftest drgnx-tty-harness/stage-wait-outlasts-a-busy-emacs ()
+  "The stage wait waits for an Emacs that holds its answer longer than one look used to allow (5 s): a stage step
+can load a package that long."
+  (let ((s (drgnx-tty-session-start)))
+    (unwind-protect
+        (progn (drgnx-tty-session-wait-stages s)
+               (drgnx-tty-harness-test--hold s 7)
+               (should (drgnx-tty-session-wait-stages s)))
+      (drgnx-tty-session-stop s))))
+
+(ert-deftest drgnx-tty-harness/stage-wait-says-why-when-emacs-stays-silent ()
+  "An Emacs that does not answer before the stage wait's time is up fails it with the cause: that it stopped
+answering and what /proc says it does (here: running Lisp), not a bare timeout."
+  (let ((s (drgnx-tty-session-start)))
+    (unwind-protect
+        (progn (drgnx-tty-session-wait-stages s)
+               (drgnx-tty-harness-test--hold s 30)
+               (let ((msg (cadr (should-error (drgnx-tty-session-wait-stages s 3) :type 'drgnx-ui-error))))
+                 (should (string-search "its Emacs stopped answering" msg))
+                 (should (string-match-p "/proc: pid [0-9]+, state R" msg))))
+      (drgnx-tty-session-stop s))))
+
+(ert-deftest drgnx-tty-harness/stage-wait-at-session-start-in-a-loop ()
+  "The stage wait right after a session starts (where its 5 s looks once failed, 1 run in 30), ten sessions over."
+  (dotimes (_ 10)
+    (let ((s (drgnx-tty-session-start)))
+      (unwind-protect (should (drgnx-tty-session-wait-stages s))
+        (drgnx-tty-session-stop s)))))
+
 ;;; harness-test.el ends here

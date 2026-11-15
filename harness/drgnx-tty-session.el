@@ -590,13 +590,6 @@ screen.  A text in two places (a file in the Open section and in the Files secti
   (let ((r (drgnx-tty-session-tmux sess "show-buffer")))
     (and (eq (car r) 0) (cdr r))))
 
-(defconst drgnx-tty-session-stages-pending-form
-  '(and (fboundp 'drgnx-timer-pending)
-        (seq-find (lambda (k) (eq (car-safe (car k)) 'modules-idle-step)) (drgnx-timer-pending))
-        t)
-  "Non-nil while the modules' idle stage still has steps to run (`drgnx-modules-start': one idle timer each, the last
-ends the stage and applies the keys).")
-
 (defconst drgnx-tty-session-stages-reach-form
   '(progn (when (memq 'drgnx-hooks--first-input (default-value 'pre-command-hook)) (drgnx-hooks--first-input))
           (when (memq 'drgnx-hooks--first-file (default-value 'find-file-hook)) (drgnx-hooks--first-file))
@@ -608,13 +601,90 @@ ends the stage and applies the keys).")
 through their own triggers: each runs its modules and, when one ran, applies the keys now
 \(`drgnx-modules-after-stage-functions'), not in the middle of a row.  An Emacs that armed none is left as it is.")
 
+(defconst drgnx-tty-session--unsettled-defun
+  '(defun kx-unsettled (&optional stages-only)
+     "What is still to run in this Emacs, as texts (nil: nothing).  The modules' idle-stage steps; unless STAGES-ONLY
+also a server connection (an eval's, its sentinel), a native compilation, a timer due within 1 s, an idle timer due
+within 1 s of this idle period and not run yet.  A repeating timer counts only within 0.25 s of its run: one that
+repeats every second is always due within 1 s, so waiting cannot outlast it, and its run is short.  Each text names
+the timer's function (a drgnx layer timer: its key) and its repeat."
+     (let ((idle (float-time (or (current-idle-time) 0))) why)
+       (cl-flet ((fn (tm) (truncate-string-to-width
+                           (if (and (eq (timer--function tm) 'drgnx-timer--fire) (fboundp 'drgnx-timer--entry-key))
+                               (format "drgnx-timer %S" (drgnx-timer--entry-key (car (timer--args tm))))
+                             (format "%S" (timer--function tm)))
+                           100 nil nil t))
+                 (near (tm in) (< in (if (timer--repeat-delay tm) 0.25 1))))
+         (when (fboundp 'drgnx-timer-pending)
+           (dolist (k (drgnx-timer-pending))
+             (when (eq (car-safe (car k)) 'modules-idle-step) (push (format "idle-stage step %S" (car k)) why))))
+         (unless stages-only
+           (dolist (p (process-list))
+             (cond ((and (eq (process-filter p) #'server-process-filter) (not (process-contact p :server)))
+                    (push "an emacsclient connection" why))
+                   ((string-prefix-p "Compiling" (process-name p)) (push (process-name p) why))))
+           (dolist (tm timer-list)
+             (let ((in (float-time (time-subtract (timer--time tm) nil))))
+               (when (near tm in)
+                 (push (format "timer %s due in %.2f s (repeat %S)" (fn tm) in (timer--repeat-delay tm)) why))))
+           (dolist (tm timer-idle-list)
+             (let ((in (- (float-time (timer--time tm)) idle)))
+               (when (and (not (timer--triggered tm)) (near tm in))
+                 (push (format "idle timer %s due %.2f s after now (idle %.2f s, repeat %S)"
+                               (fn tm) in idle (timer--repeat-delay tm))
+                       why))))))
+       (nreverse why)))
+  "A form, in the inner Emacs: `kx-unsettled', the one rule of what is left to run, for the stage wait (its
+idle-stage steps) and the input barrier (all of it).")
+
+(defun drgnx-tty-session--process-state (sess)
+  "What /proc says SESS's Emacs is doing: its pid, state, the kernel function it waits in and the CPU time it used
+\(at 100 ticks a second); or that no Emacs is left in its run."
+  (cl-flet ((slurp (f) (ignore-errors (with-temp-buffer (insert-file-contents f) (string-trim (buffer-string))))))
+    (let ((pid (seq-find (lambda (p) (string-match-p "emacs" (or (slurp (format "/proc/%d/comm" p)) "")))
+                         (drgnx-tty-session--run-pids (plist-get sess :run)))))
+      (if (not pid) "no Emacs process is left in its run (it exited)"
+        (let* ((stat (or (slurp (format "/proc/%d/stat" pid)) ""))
+               (fields (split-string (substring stat (min (length stat) (1+ (or (cl-position ?\) stat :from-end t) -1))))
+                                     " " t)))
+          (format "pid %d, state %s, waiting in %s, %.1f s of CPU" pid (or (nth 0 fields) "?")
+                  (or (slurp (format "/proc/%d/wchan" pid)) "?")
+                  (/ (+ (string-to-number (or (nth 11 fields) "0")) (string-to-number (or (nth 12 fields) "0"))) 100.0)))))))
+
+(defun drgnx-tty-session--silent-cause (sess last)
+  "The cause when SESS's Emacs does not answer: since when (LAST: (TIME . ANSWER), or nil) and what /proc says."
+  (format "its Emacs stopped answering%s; /proc: %s"
+          (if last (format " %.1f s ago (its last answer: %S)" (- (float-time) (car last)) (cdr last))
+            " (it never answered)")
+          (drgnx-tty-session--process-state sess)))
+
+(defun drgnx-tty-session--settle-fail (sess what limit cause)
+  "Signal that WHAT did not happen in SESS within LIMIT s, with CAUSE and the screen."
+  (drgnx-ui--fail "%s: %s not within %ss: %s; the screen:\n%s"
+                  (plist-get sess :name) what limit cause (drgnx-tty-session-screen sess)))
+
 (defun drgnx-tty-session-wait-stages (sess &optional timeout)
   "Return once SESS's Emacs (a tty session or a `drgnx-ui' daemon) has ended its last module stage: its idle stage's
 steps all ran (TIMEOUT s, default 30, else signal) and the once-only stages left are reached now.  Every stage ends
 with `drgnx-keys-apply', which rebinds the profile's keys: a row that binds a key or sends C-g calls this first, so no
-stage ends while it runs.  Cheap once done."
-  (drgnx-tty-session-wait sess `(not ,drgnx-tty-session-stages-pending-form) (or timeout 30))
-  (drgnx-tty-session-eval sess drgnx-tty-session-stages-reach-form))
+stage ends while it runs.  Cheap once done.
+A step can hold the Emacs for seconds (a package's load), so each look waits for an answer as long as TIMEOUT
+leaves, not a fixed 5 s.  When TIMEOUT runs out the error gives the cause: the steps still to run
+\(`kx-unsettled', the rule the input barrier keeps too), or that the Emacs stopped answering and what /proc says."
+  (let* ((limit (or timeout 30)) (deadline (+ (float-time) limit)) (what "its module stages ended") last)
+    (while (let ((left (- deadline (float-time))))
+             (when (<= left 0)
+               (drgnx-tty-session--settle-fail sess what limit (format "still to run: %s" (string-join (cdr last) "; "))))
+             (let ((why (condition-case err
+                            (drgnx-tty-session-eval sess `(progn ,drgnx-tty-session--unsettled-defun (kx-unsettled t))
+                                                    (max 1 left))
+                          (drgnx-ui-error
+                           (if (string-search ": no answer in " (error-message-string err))
+                               (drgnx-tty-session--settle-fail sess what limit (drgnx-tty-session--silent-cause sess last))
+                             (signal (car err) (cdr err)))))))
+               (setq last (cons (float-time) why))
+               (when why (sleep-for 0.05) t))))
+    (drgnx-tty-session-eval sess drgnx-tty-session-stages-reach-form)))
 
 (defun drgnx-tty-session-key-barrier (sess &optional target)
   "Wait until SESS's Emacs has read and run every key sent to TARGET (a session or a client; default SESS) before this
@@ -650,35 +720,43 @@ title.  What \"nothing was sent to the terminal\" means is then settled, with no
 
 (defconst drgnx-tty-session--settle-defun
   '(defun kx-settle (title)
-     "Write TITLE down the terminal once nothing is left to run: no server connection (the eval that armed this,
-its sentinel), no native compilation, no timer due within 1 s, no idle timer not yet run; else look again."
-     (let ((idle (float-time (or (current-idle-time) 0))))
-       (if (or (seq-some (lambda (p) (or (and (eq (process-filter p) #'server-process-filter)
-                                              (not (process-contact p :server)))
-                                         (string-prefix-p "Compiling" (process-name p))))
-                         (process-list))
-               (seq-some (lambda (tm) (< (float-time (time-subtract (timer--time tm) nil)) 1)) timer-list)
-               (seq-some (lambda (tm) (and (not (timer--triggered tm)) (< (- (float-time (timer--time tm)) idle) 1)))
-                         timer-idle-list))
-           (run-at-time 0.05 nil #'kx-settle title)
-         (send-string-to-terminal (format "\e]2;%s\a" title)))))
+     "Write TITLE down the terminal once nothing is left to run (`kx-unsettled'); else note what is in
+`kx-settle-why' and look again in 50 ms."
+     (if (setq kx-settle-why (kx-unsettled))
+         (run-at-time 0.05 nil #'kx-settle title)
+       (send-string-to-terminal (format "\e]2;%s\a" title))))
   "A form, in the inner Emacs: `kx-settle', the daemon's half of `drgnx-tty-session-input-barrier'.")
 
 (defun drgnx-tty-session-input-barrier (sess)
   "Return once SESS's Emacs is back waiting for input with nothing left to run, the test's own eval included.
 A C-g that arrives while Lisp runs is a quit, not a key, and every eval leaves Lisp behind it: its connection's
-sentinel and a redisplay.  So the eval only arms a timer; the timer looks until no server connection is left, no
-native compilation runs and no timer is due within 1 s (looking again every 50 ms), then writes a window title, and
-the wait ends when tmux reports it (as `drgnx-tty-session-pty-barrier', which this includes).  After the title only
-the return to the input wait is left.  Process output nothing here knows of (a hub) can still run Lisp."
-  (let ((title (format "kx-settled-%d" (cl-incf drgnx-tty-session--barriers))))
+sentinel and a redisplay.  So the eval only arms a timer; the timer looks until nothing is left to run
+\(`kx-unsettled', the rule the stage wait keeps too: looking again every 50 ms), then writes a window title, and the
+wait ends when tmux reports it (as `drgnx-tty-session-pty-barrier', which this includes).  After the title only the
+return to the input wait is left.  Process output nothing here knows of (a hub) can still run Lisp.  When 20 s pass
+the error says what was still to run, or that the Emacs stopped answering.
+Native compilation of what the session loaded (JIT, into a cold eln cache) would run Lisp for minutes as each file
+ends: the barrier stops it from taking more files and waits only for the compilations already running.  The rest of
+the row runs without JIT compilation."
+  (let ((title (format "kx-settled-%d" (cl-incf drgnx-tty-session--barriers))) (what "the daemon settled, waiting for input"))
     (when (plist-get sess :nested)
       (drgnx-tty-session-inner-tmux sess "set" "-g" "set-titles" "on")
       (drgnx-tty-session-inner-tmux sess "set" "-g" "set-titles-string" "#{pane_title}"))
-    (drgnx-tty-session-eval sess `(progn ,drgnx-tty-session--settle-defun (run-at-time 0 nil #'kx-settle ,title) t))
-    (drgnx-test-wait (lambda () (string-search title (drgnx-tty-session--tmux-ok
-                                                      sess "display" "-p" "-t" (plist-get sess :target) "#{pane_title}")))
-                     :secs 20 :what "the daemon settled, waiting for input")))
+    (drgnx-tty-session-eval sess `(progn (defvar kx-settle-why nil)
+                                         (defvar comp-files-queue)
+                                         (when (boundp 'native-comp-jit-compilation)
+                                           (setq native-comp-jit-compilation nil comp-files-queue nil))
+                                         ,drgnx-tty-session--unsettled-defun
+                                         ,drgnx-tty-session--settle-defun (run-at-time 0 nil #'kx-settle ,title) t))
+    (condition-case nil
+        (drgnx-test-wait (lambda () (string-search title (drgnx-tty-session--tmux-ok
+                                                          sess "display" "-p" "-t" (plist-get sess :target) "#{pane_title}")))
+                         :secs 20 :what what)
+      (ert-test-failed
+       (drgnx-tty-session--settle-fail
+        sess what 20 (condition-case nil
+                         (format "still to run: %s" (string-join (drgnx-tty-session-eval sess 'kx-settle-why 5) "; "))
+                       (drgnx-ui-error (drgnx-tty-session--silent-cause sess nil))))))))
 
 (defun drgnx-tty-session-pane-flags (sess)
   "The mouse and key modes SESS's application asked of its pane: (:mouse-sgr N :mouse-any N :key-mode S)."
