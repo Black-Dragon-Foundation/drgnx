@@ -1,5 +1,6 @@
 ;;; area-companions-gui-test.el --- GUI tests: an area tab's companions are fitted to their lines (run by `drgnx test --ui') -*- lexical-binding: t -*-
 ;; test-class: cond
+;; test-pattern: handshake
 
 ;; The right dock with a tab whose companions hold a few lines over and under an empty main buffer, on the root frame
 ;; with the store on.  Run at each scale (s1, s2): each companion's body is its lines' pixel height, through a frame
@@ -51,13 +52,21 @@ header line's height is known after the first redisplay; at most 5 rounds)."
                                      (with-current-buffer (window-buffer w) (point-max))))))
 
 (defun drgnx-ui-area-companions--layout ()
-  "The selected frame's windows: (BUFFER EDGES SIDE) each, in order."
-  (mapcar (lambda (w) (list (window-buffer w) (window-pixel-edges w) (window-parameter w 'window-side)))
-          (window-list nil 'nomini (frame-first-window))))
+  "The selected frame's text size and its windows, in order: (BUFFER LEFT TOP WIDTH SIDE) each, and the bottom edge
+of the lowest plus the echo area's height.  The echo area alone may change between two layouts (a two-line message an
+earlier row left shrinks to one), so the heights are compared through their sum."
+  (let ((ws (window-list nil 'nomini (frame-first-window))))
+    (list (frame-text-width) (frame-text-height)
+          (+ (apply #'max (mapcar (lambda (w) (nth 3 (window-pixel-edges w))) ws))
+             (window-pixel-height (minibuffer-window)))
+          (mapcar (lambda (w) (pcase-let ((`(,l ,top ,r ,_) (window-pixel-edges w)))
+                                (list (window-buffer w) l top (- r l) (window-parameter w 'window-side))))
+                  ws))))
 
 (ert-deftest drgnx-ui-area-companions/fitted-through-a-resize-and-a-new-line ()
   (let* ((root (drgnx-uitest-root-frame))
-         (size (list (frame-pixel-width root) (frame-pixel-height root)))
+         ;; the text size, which `set-frame-size' sets: the outer one would give the frame its bars' pixels back
+         (size (list (frame-text-width root) (frame-text-height root)))
          (config (with-selected-frame root (current-window-configuration)))
          (saved (mapcar (lambda (p) (cons p (frame-parameter root p))) '(drgnx-wb-areas drgnx-wb-right-px)))
          (main (get-buffer-create "*companions main*"))
