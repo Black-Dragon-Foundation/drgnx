@@ -425,6 +425,28 @@ unwraps, the header shrinks and the transcript grows: its end stays on its last 
       (should (< (abs (- (window-pixel-height hw) h)) 2))
       (drgnx-panel-docks-ui-test--at-end panel tw :unwrapped))))
 
+(ert-deftest drgnx-ui-panel-docks/a-start-that-leaves-space-under-the-end-is-pinned-with-no-resize ()
+  "A transcript whose start is moved on with its point at its end, no window resized, gets the end's row back on its
+last line at the next redisplay (the space Emacs leaves when it scrolls past rows taller than a line).  Its point
+moved off the end, the start it is given stays."
+  (drgnx-panel-docks-ui-test--in-area (panel _hw tw _cw) 40
+    (should (drgnx-panel-docks-ui-test--long-p panel tw))
+    (drgnx-panel-docks-ui-test--at-end panel tw :before)
+    (let ((h (window-pixel-height tw))
+          (later (with-selected-window tw (save-excursion (goto-char (window-start)) (vertical-motion 4) (point)))))
+      (set-window-start tw later t)
+      (redisplay t)
+      (should (= h (window-pixel-height tw)))
+      (drgnx-panel-docks-ui-test--at-end panel tw :start-moved-on)
+      ;; point off the end: the start set is kept, space under the end or not
+      (with-selected-window tw (goto-char (window-start)) (forward-line 1))
+      (let ((start (window-start tw)))
+        (redisplay t)
+        (setq later (with-selected-window tw (save-excursion (goto-char start) (vertical-motion 4) (point))))
+        (set-window-start tw later)
+        (redisplay t)
+        (should (= later (window-start tw)))))))
+
 (declare-function drgnx-pane-show "drgnx-panes" (kind &rest args))
 (declare-function drgnx-wb-define-tab "drgnx-area" (area tab &rest keys))
 (declare-function drgnx-wb-undefine-tab "drgnx-area" (area tab))
