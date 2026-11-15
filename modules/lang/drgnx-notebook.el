@@ -343,12 +343,10 @@ the run (or stop) button, or a chip of the part's text."
           (propertize (drgnx-notebook--icon (if stop 'square 'play) 'drgnx-notebook-run-button)
                       'drgnx-notebook-run id 'drgnx-notebook-action (plist-get part :action) 'keymap drgnx-notebook-run-map
                       'mouse-face 'drgnx-hover 'help-echo (if stop "Stop the kernel's run" "Run this cell")))
-      (let ((face (list (or (cdr (assoc (plist-get part :chip) drgnx-notebook--chip-faces)) 'drgnx-chip-quiet)
-                        'drgnx-notebook-head)))
-        ;; the mockup's chip: 6 px padding either side, the type a size under the row's
-        (concat (propertize " " 'face face 'display `(space :width (,(drgnx-px 6))))
-                (propertize (plist-get part :text) 'face (append face '(drgnx-notebook-chip-type)))
-                (propertize " " 'face face 'display `(space :width (,(drgnx-px 6)))))))))
+      ;; the mockup's chip: the decor chip's box (rounded 4, 2 px above and below), the tint over it, one run
+      (propertize (concat " " (plist-get part :text) " ")
+                  'face (list (or (cdr (assoc (plist-get part :chip) drgnx-notebook--chip-faces)) 'drgnx-chip-quiet)
+                              'drgnx-chip 'drgnx-notebook-chip-type 'drgnx-notebook-head)))))
 
 (defun drgnx-notebook--toolbar (id)
   "The selected cell's toolbar, right-aligned: an icon for each of `drgnx-notebook--tools',
@@ -368,6 +366,8 @@ language as chips), then, on the selected cell, the toolbar.  Until the hub has 
 while redisplay draws."
   (let ((parts (plist-get (gethash id drgnx-notebook--heads) :parts)))
     (concat
+     ;; the row is the mockup's 26 px: a spacer, so the toolbar's icons stay clear of the ring's edge
+     (propertize " " 'display `(space :width (1) :height (,(drgnx-px 26)) :ascent 70) 'face 'drgnx-notebook-head)
      (mapconcat (lambda (part) (drgnx-notebook--head-part id part))
                 (or parts (list (list :role "kind" :text (symbol-name type) :chip "quiet")))
                 (propertize " " 'face 'drgnx-notebook-head))
@@ -771,7 +771,8 @@ output, the inner block under its hairline: the card's span inset by 8 px, a tin
               keys)
         (when out
           ;; START = END: the rows of the after-string at the cell's end, the output
-          (push (append (list 'inner end end :x0 inset :x1 (max inset (- width inset)) :top 'drgnx-border-subtle)
+          (push (append (list 'inner end end :x0 inset :x1 (max inset (- width inset)) :top 'drgnx-border-subtle
+                              :overlay (plist-get (drgnx-notebook--chrome-of (plist-get c :id)) :tail))
                         (and (eq out 'error) (list :radius (drgnx-px 6) :fill (cons 'error 0.14))))
                 keys))))
     (nreverse keys)))
