@@ -116,6 +116,18 @@ nil on a terminal or when FACE has no font."
       (list (aref info 12) 0 (funcall s (aref info 2)) (funcall s (aref info 8)) (funcall s (aref info 9))
             (funcall s (aref info 11)) (funcall s (aref info 10)) (aref info 0)))))
 
+(defun drgnx-view-env--drawn-font (face buffer window)
+  "FACE's font as it draws in BUFFER in WINDOW's frame, as `drgnx-view-env--font' gives it: FACE merged over BUFFER's
+remapped `default' (its family, its `text-scale' height), which `face-font' does not see; nil on a terminal."
+  (when-let* (((display-graphic-p (window-frame window)))
+              (remap (cdr (assq 'default (buffer-local-value 'face-remapping-alist buffer))))
+              (specs (if (and (consp remap) (not (keywordp (car remap)))) remap (list remap)))
+              (font (with-current-buffer buffer
+                      (ignore-errors (font-at 0 window (propertize "x" 'face (cons face specs))))))
+              (q (query-font font)))
+    ;; `query-font': [NAME FILENAME PIXEL-SIZE SIZE ASCENT DESCENT SPACE-WIDTH AVERAGE-WIDTH CAPABILITY]
+    (list (aref q 1) 0 (aref q 2) (aref q 4) (aref q 5) (aref q 7) (aref q 6) (aref q 0))))
+
 (defun drgnx-view-env--window-facts (window &optional buffer)
   "The facts of the display class WINDOW shows BUFFER in (default: its buffer; a twin is measured as its view's
 buffer): a plist :display :scale :fonts :cell.  FONTS is a list of (ROLE FILE INDEX PX ASCENT DESCENT AVG SPACE NAME),
@@ -440,7 +452,8 @@ name that is no face, or a terminal, draws in `ui'."
         (list :face face-name :role "ui")
       (with-current-buffer buffer
         (let* ((factor (drgnx-view-env--scale-factor buffer))
-               (mine (drgnx-view-env--font face frame factor))
+               ;; a face with a font of its own (`bold') takes its family from the remapped `default' too
+               (mine (or (drgnx-view-env--drawn-font face buffer window) (drgnx-view-env--font face frame factor)))
                ;; drawn in BUFFER, FACE merges over its remapped `default' (the agent panel's `drgnx-ui-text'), which
                ;; `face-font' does not see: a face that sets only colours draws in the buffer's `default', not the
                ;; frame's.  A role whose face draws a probe as wide (FACE's box left out) is FACE's role.
