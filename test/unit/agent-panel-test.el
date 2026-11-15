@@ -993,3 +993,63 @@ and the presets' names it lays the lens out of."
         (should (equal (append (plist-get params :lens) nil) (mapcar (lambda (p) (symbol-name (car p))) drgnx-agent-panel-presets))))
       (drgnx-agent-panel-preset 3)
       (should (= 3 (plist-get (drgnx-agent-panel--look-params) :lens_on))))))
+
+;;;; The pinned rows: the header, chips and strip stay at the window top
+
+(declare-function drgnx-agent-panel--pin-update "drgnx-agent-panel")
+(declare-function drgnx-agent-panel--pin-at "drgnx-agent-panel")
+(declare-function drgnx-agent-panel--pin-place "drgnx-agent-panel")
+(declare-function drgnx-agent-panel--tail-start "drgnx-agent-panel")
+(declare-function drgnx-agent-panel-act "drgnx-agent-steps")
+(defvar drgnx-agent-panel--pin)
+
+(defmacro drgnx-agent-panel-test--pinned (&rest body)
+  "BODY in panel s1, shown in the selected window, its text two pinned rows (the hub's `drgnx-pinned') then ten more."
+  (declare (indent 0))
+  `(drgnx-agent-panel-test--with
+     (with-current-buffer buf
+       (let ((inhibit-read-only t))
+         (erase-buffer)
+         (insert (propertize "HEAD row" 'drgnx-agent-panel-action "pin" 'drgnx-pinned 1) "\n" (propertize "chips" 'drgnx-pinned 1) "\n")
+         (dotimes (i 10) (insert (format "step %d\n" i))))
+       (set-window-buffer (selected-window) buf)
+       ,@body)))
+
+(ert-deftest drgnx-agent-panel/the-pinned-rows-show-over-the-window-start-and-it-never-starts-before-them ()
+  (drgnx-agent-panel-test--pinned
+    (let ((w (selected-window)))
+      (set-window-start w (point-min))
+      (drgnx-agent-panel--pin-update)
+      (should (equal (cons 16 (buffer-substring 1 16)) (cons (car drgnx-agent-panel--pin) (cdr drgnx-agent-panel--pin))))
+      ;; the window starts after the pinned rows and the overlay over its first line carries them
+      (should (= 16 (window-start w)))
+      (let ((ov (cdr (assq w drgnx-agent-panel--pin-overlays))))
+        (should (= 16 (overlay-start ov)))
+        (should (equal (overlay-get ov 'before-string) (cdr drgnx-agent-panel--pin)))
+        (should (eq w (overlay-get ov 'window))))
+      ;; a scroll to a later line moves the overlay with it
+      (set-window-start w 30)
+      (drgnx-agent-panel--pin-place w)
+      (should (= 30 (overlay-start (cdr (assq w drgnx-agent-panel--pin-overlays)))))
+      ;; and the tail's start is never inside the pinned rows
+      (should (>= (drgnx-agent-panel--tail-start w) 16)))))
+
+(ert-deftest drgnx-agent-panel/no-pinned-rows-no-overlay ()
+  (drgnx-agent-panel-test--pinned
+    (progn
+      (drgnx-agent-panel--pin-update)
+      (should drgnx-agent-panel--pin-overlays)
+      (let ((inhibit-read-only t)) (remove-text-properties (point-min) (point-max) '(drgnx-pinned nil)))
+      (drgnx-agent-panel--pin-update)
+      (should-not drgnx-agent-panel--pin)
+      (should-not drgnx-agent-panel--pin-overlays))))
+
+(ert-deftest drgnx-agent-panel/a-click-on-the-pinned-copy-runs-its-action ()
+  "The pinned rows are an overlay's string: the click's action is read from that string, not from the buffer under it."
+  (drgnx-agent-panel-test--pinned
+    (drgnx-agent-panel--pin-update)
+    (let* ((w (selected-window)) (ran nil)
+           (event (list 'mouse-1 (list w 20 '(0 . 0) 0 (cons (cdr drgnx-agent-panel--pin) 2)))))
+      (cl-letf (((symbol-function 'drgnx-ui-kit-run) (lambda (id) (setq ran id))))
+        (with-current-buffer buf (drgnx-agent-panel-act event)))
+      (should (eq ran 'agents-panel-pin)))))

@@ -29,6 +29,7 @@
 (declare-function drgnx-statusbar-note-tests "drgnx-statusbar")
 (declare-function magit-status-setup-buffer "magit-status")
 (defvar drgnx-panel-replay-prefix)
+(defvar drgnx-agent-panel--pin)
 (defvar drgnx-panel-replay-project)
 (defvar package-directory-list)
 (defvar magit-save-repository-buffers)
@@ -408,13 +409,16 @@ from 201."
    (t
     (drgnx-look-scene--try "agent"
       (load (expand-file-name "test/fixtures/panel-replay-fixture" (bound-and-true-p drgnx-dir)) nil t)
-      (setq drgnx-panel-replay-prefix 3)
+      ;; the `agent-panel-long' scene runs alone with a transcript that overflows the panel (the pinned header's)
+      (setq drgnx-panel-replay-prefix (if (string-match-p "agent-panel-long" (or (getenv "DRGNX_LOOK_ONLY") "")) 20 3))
       (defalias 'drgnx-panel-replay-program
         (lambda ()
           ;; the mockup's figures: a slow run (past `drgnx-agent-panel-slow-seconds'), a quick one, then a read
           ;; that asks and stays open, so the permission card shows.  The replay session is a chat: the matrix
           ;; answers a chat's edit or run Never (no card), and asks for its reads
-          (concat "tool:read core/drgnx-gateway.el\\nsay Reading the gateway: replies to a closed client are lost.\\n"
+          (concat (mapconcat (lambda (i) (format "tool:run echo step %d\\nsay Step %d finished.\\n" i i))
+                             (number-sequence 1 (- drgnx-panel-replay-prefix 3)) "")
+                  "tool:read core/drgnx-gateway.el\\nsay Reading the gateway: replies to a closed client are lost.\\n"
                   "tool:run sleep 11; echo 1 of 14 failed\\nsay 1 of 14 failed: gateway/reply-after-close.\\n"
                   "tool:edit test/unit/gateway-test.el\\nsay Queue the reply when the client went away.\\n"
                   "tool:run sleep 2; echo 9 of 14 passed\\n"
@@ -514,6 +518,11 @@ counted from the hub), the file's problems (`drgnx-look-scene--problems') and it
     (drgnx-look-scene--until 15 "the status bar's job (the seeded run)" (lambda () (eql drgnx-jobs--running 1))))
   (drgnx-look-scene--answer))
 
+(defun drgnx-look-scene-agent-panel-long ()
+  "The agent panel with a transcript longer than its window: the header, chips and strip stay at the top, the composer
+at the bottom."
+  (drgnx-look-scene-agent-panel))
+
 (defun drgnx-look-scene-agent-panel ()
   (drgnx-look-scene--theme 'drgnx-dark)
   (drgnx-look-scene--try "panel"
@@ -541,10 +550,10 @@ top or shows its tail: what the panel opened by its command path shows first."
       ;; the panel owns its scroll: its end (the composer) at the bottom of the window, and, when the panel fits,
       ;; its top (the header) at the top
       (let ((at (with-current-buffer buffer (pos-visible-in-window-p (point-max) w t)))
-            (top (= (window-start w) (with-current-buffer buffer (point-min)))))
+            (top (= (window-start w) (with-current-buffer buffer (or (car-safe drgnx-agent-panel--pin) (point-min))))))
         (unless (or top (and at (> (cadr at) (- (window-body-height w t) (* 4 (frame-char-height))))))
-          (push (format "agent-panel: its end is not at the bottom of its window (start %d, end at %S)"
-                        (window-start w) at)
+          (push (format "agent-panel: its end is not at the bottom of its window (start %d, end at %S, pin end %S)"
+                        (window-start w) at (with-current-buffer buffer (car-safe drgnx-agent-panel--pin)))
                 drgnx-look-scene--errors))))))
 
 (defun drgnx-look-scene--palette-commands ()

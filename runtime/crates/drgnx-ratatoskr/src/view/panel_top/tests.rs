@@ -319,3 +319,19 @@ fn the_chips_say_the_model_and_the_mcp_servers_and_both_explain_themselves() {
     // the model comes first, as the mockup has it
     assert!(chips.text.find("opus") < chips.text.find("MCP"));
 }
+
+// pattern: D
+#[test]
+fn every_top_row_is_pinned_so_the_editor_keeps_them_at_the_window_top() {
+    // a wide panel (one strip row) and a narrow one (the strip wraps): each row carries `drgnx-pinned` over its whole text
+    for width in [900, 300] {
+        let rows = build(&snap(json!({})), width, None).0;
+        assert!(rows.len() >= 2, "{} rows", rows.len());
+        for r in &rows {
+            let pinned = props(r, "drgnx-pinned");
+            assert_eq!(pinned.len(), 1, "{}: {:?}", r.key, r.props);
+            assert_eq!(pinned[0].0, &json!(1));
+            assert_eq!(pinned[0].1, r.text, "{}", r.key);
+        }
+    }
+}
