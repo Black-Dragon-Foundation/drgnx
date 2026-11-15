@@ -99,5 +99,60 @@ that fit in 0.3 of the frame, and growing or shrinking the frame by one pixel le
       (dolist (b (list drgnx-buffers-buffer-name drgnx-explorer-buffer-name)) (when (get-buffer b) (kill-buffer b)))
       (delete-directory dir t))))
 
+(drgnx-look-gui-deftest drgnx-ui-look-open-fit/a-squeezed-window-draws-its-header-line-when-it-grows ()
+  "A dock window squeezed below its tab line (the island header, taller once its font is measured) and header line,
+drawn so, then grown (the Open rows arrived): its header line is drawn where it belongs, as a full redraw draws it.
+The notebook scene kept the pixels of the Explorer's header line there, half covered by the Open rows: the squeezed
+window drew its header past its bottom, the window below drew over it, and growing changed neither the row's glyphs
+nor its place, so it was not drawn again."
+  (let* ((root (drgnx-uitest-root-frame))
+         (config (with-selected-frame root (current-window-configuration)))
+         (buf (get-buffer-create " *open-fit-squeezed*")))
+    (unwind-protect
+        (with-selected-frame root
+          (delete-other-windows)
+          (let ((top (selected-window)) (below (split-window nil 8))
+                (window-resize-pixelwise t) (window-min-height 1))
+            (with-current-buffer buf (erase-buffer) (setq-local cursor-type nil))
+            (set-window-buffer top buf)
+            (set-window-parameter top 'tab-line-format " island")
+            (set-window-parameter top 'header-line-format " Open")
+            (set-window-parameter top 'mode-line-format 'none)
+            (set-window-parameter below 'header-line-format " Files")
+            (drgnx-test-wait-presented)
+            ;; fitted to its chrome while its island header was short, then the header grows: squeezed
+            (adjust-window-trailing-edge top (- (window-min-size top nil nil t) (window-pixel-height top)) nil t)
+            (drgnx-test-wait-presented)
+            ;; its tab line all but its height: the header line drawn past its bottom, its upper part inside
+            (set-window-parameter top 'tab-line-format
+                                  (concat " island" (propertize " " 'display `(space :width (10)
+                                                                                     :height (,(- (window-pixel-height top) 7))))))
+            (with-current-buffer buf (force-mode-line-update))
+            (drgnx-test-wait-presented)
+            (should (< (window-tab-line-height top) (window-pixel-height top)
+                       (+ (window-tab-line-height top) (window-header-line-height top))))
+            ;; the window below drawn after it, over the part of its header line past its bottom
+            (set-window-parameter below 'header-line-format " Files ")
+            (with-current-buffer (window-buffer below) (force-mode-line-update))
+            (drgnx-test-wait-presented)
+            ;; the rows arrive and the section grows to them
+            (with-current-buffer buf (insert "one\ntwo\nthree"))
+            (set-window-point top 1)
+            (adjust-window-trailing-edge top (+ (- (+ (window-tab-line-height top) (window-header-line-height top))
+                                                   (window-pixel-height top))
+                                                (* 3 (default-line-height)))
+                                         nil t)
+            (drgnx-test-wait-presented)
+            (let* ((s (drgnx-uitest-device-scale root))
+                   (rect (mapcar (lambda (v) (round (* v s)))
+                                 (list 0 0 (nth 2 (window-pixel-edges top))
+                                       (+ (window-tab-line-height top) (window-header-line-height top)))))
+                   (drawn (drgnx-uitest-snapshot root)))
+              (redraw-frame root)
+              (drgnx-test-wait-presented)
+              (should (drgnx-uitest-region-equal-p drawn (drgnx-uitest-snapshot root) rect :ignore-alpha t)))))
+      (with-selected-frame root (set-window-configuration config))
+      (kill-buffer buf))))
+
 (provide 'look-open-fit-gui-test)
 ;;; look-open-fit-gui-test.el ends here

@@ -2311,6 +2311,13 @@ A dock section is as tall as its rows (`drgnx-wb--fit-window`, `window-resize` o
 all put in the buffer) or the inserter's, and no line of the buffer is counted for a view. A buffer that is not a view
 keeps `count-lines`.
 
+A section fitted while its island header was still short (the title font not yet measured) is squeezed below its tab
+and header lines once the header grows: its header line is drawn past its bottom and the section below draws over
+that part. When the section grows to its rows, Nidhogg draws its tab and header lines again (stock Emacs keeps the old
+pixels, since the rows' glyphs and places did not change: the notebook scene showed the Explorer's "Files" half
+covered by the Open rows). `drgnx-ui-look-open-fit/a-squeezed-window-draws-its-header-line-when-it-grows` checks it
+against a full redraw.
+
 There are two recorded exceptions:
 
 - **Generic `completing-read` through Vertico** keeps `drgnx-completion--format-candidate`, which dresses each
