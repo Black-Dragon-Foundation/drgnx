@@ -165,10 +165,20 @@ be asked, `@' for one."
                                                                      (drgnx-px (+ 6 drgnx-palette-row-padding)))))))
             s)))
 
-(defun drgnx-palette-frame--footer ()
-  "The footer's keys (palette.html `.foot'): move, run, preview, close."
+(defun drgnx-palette-frame--footer (&optional pad leftover frame)
+  "The footer's keys (palette.html `.foot'): move, run, preview, close.  LEFTOVER pixels (more than 0: the PAD the box
+draws above and below the keys on FRAME falls short of the footer's height) go to its lead, a spacer of the footer's
+whole height (the box adds to the text's height, not to a spacer's) whose ascent takes half of them, so the keys stay
+in the middle."
   (let ((gap (propertize "   " 'face 'drgnx-text-subtle)))
-    (concat (drgnx-palette-frame--lead)
+    (concat (if-let* (((and pad leftover (> leftover 0)))
+                      (extent (drgnx-pixels-font-extent 'drgnx-palette-footer frame))
+                      (height (+ (car extent) (cdr extent) pad pad leftover)))
+                (propertize " " 'display `(space :width (,(drgnx-px (+ 6 drgnx-palette-row-padding)))
+                                                 :height (,height)
+                                                 :ascent ,(min 100 (ceiling (* 100.0 (+ (car extent) pad (/ leftover 2)))
+                                                                            height))))
+              (drgnx-palette-frame--lead))
             (drgnx-palette-keycap "↑") " " (drgnx-palette-keycap "↓") (propertize " move" 'face 'drgnx-text-subtle) gap
             (drgnx-palette-keycap "↵") (propertize " run" 'face 'drgnx-text-subtle) gap
             (drgnx-palette-keycap "Tab") (propertize " preview" 'face 'drgnx-text-subtle) gap
@@ -189,17 +199,21 @@ echo area keeps the minibuffer as it is."
     (kill-local-variable 'line-prefix)
     (overlay-put prompt 'before-string
                  (concat (drgnx-palette-frame--lead) (drgnx-look-icon 'search 'drgnx-text-subtle) " "))
-    (set-window-parameter win 'mode-line-format (drgnx-palette-frame--footer))
     (add-hook 'pre-redisplay-functions #'drgnx-palette-frame--keep-count 90 t)
     (let* ((cookies (list (face-remap-add-relative 'mode-line 'drgnx-palette-footer)
                           (face-remap-add-relative 'mode-line-inactive 'drgnx-palette-footer)))
            ;; the footer is `drgnx-palette-frame-footer-px' high, its keys in the middle (palette.html `.foot'): its
            ;; font's height and a pad above and below (measured from the face: the window's mode line height is the
-           ;; last redisplay's)
+           ;; last redisplay's).  The pad is a width the box draws (`drgnx-pixels-box-fit'); the pixels it leaves go
+           ;; to the footer's lead.
+           (frame (window-frame win))
+           (want (drgnx-px drgnx-palette-frame-footer-px))
            (text (window-font-height win 'drgnx-palette-footer))
-           (pad (max 0 (/ (- (drgnx-px drgnx-palette-frame-footer-px) text) 2)))
-           (box `(:box (:line-width (0 . ,pad) :style flat-button))))
-      (setq-local drgnx-palette-frame--footer-height (+ text pad pad))
+           (pad (drgnx-pixels-box-fit (max 0 (/ (- want text) 2)) frame))
+           (leftover (max 0 (- want text pad pad)))
+           (box `(:box (:line-width (0 . ,(drgnx-pixels-box-width pad frame)) :style flat-button))))
+      (set-window-parameter win 'mode-line-format (drgnx-palette-frame--footer pad leftover frame))
+      (setq-local drgnx-palette-frame--footer-height (+ text pad pad leftover))
       (setq drgnx-palette-frame--dressing
             (cons prompt (cons (drgnx-palette-frame--hint)
                                (append (list (face-remap-add-relative 'mode-line box)

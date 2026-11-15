@@ -451,13 +451,14 @@ the bar would be drawn smaller than it was measured."
 
 (defun drgnx-statusbar--row (w)
   "(HEIGHT TEXT BOX LEFTOVER) for window W's bar, in device pixels: the row's HEIGHT (`status-bar' at the frame's
-scale), the TEXT height of the bar's font, the BOX width above and below the text that makes up the difference, and
-the LEFTOVER pixel (0 or 1) an odd difference leaves."
+scale), the TEXT height of the bar's font, the BOX width drawn above and below the text that makes up the
+difference, and the LEFTOVER pixels it leaves: 1 when the difference is odd, more where the scale cannot draw the
+box's exact width (`drgnx-pixels-box-fit': the widest it draws that fits)."
   (let* ((frame (window-frame w))
          (height (drgnx-statusbar--row-height frame))
          ;; the font's height, read once per font: `window-font-height' made a new `font-info' vector at every build
          (text (or (car (drgnx-pixels-font-metrics drgnx-statusbar--bar-face frame)) (frame-char-height frame)))
-         (box (max 0 (/ (- height text) 2))))
+         (box (drgnx-pixels-box-fit (max 0 (/ (- height text) 2)) frame)))
     (list height text box (max 0 (- height text (* 2 box))))))
 
 (defun drgnx-statusbar--row-face (w)
@@ -465,7 +466,8 @@ the LEFTOVER pixel (0 or 1) an odd difference leaves."
 `status-bar' high (24 logical pixels at the comfortable density, at the frame's scale).  A flat box is drawn in the
 face's own background, so no colour is named."
   ;; the box first: the mode line's own box, which `drgnx-statusbar' inherits, would win otherwise
-  (list (list :box (list :line-width (cons 0 (nth 2 (drgnx-statusbar--row w))) :style 'flat-button))
+  (list (list :box (list :line-width (cons 0 (drgnx-pixels-box-width (nth 2 (drgnx-statusbar--row w)) (window-frame w)))
+                         :style 'flat-button))
         drgnx-statusbar--bar-face))
 
 (defun drgnx-statusbar--lead (w pad)

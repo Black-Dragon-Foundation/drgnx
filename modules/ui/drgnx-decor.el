@@ -101,12 +101,15 @@ buttons are not here: their ring and radius are `drgnx-control''s, from the them
                ;; the Search view's preview and sheet: a diff line's rounded tint and its words'
                drgnx-replace-preview-del drgnx-replace-preview-add drgnx-replace-preview-word-old
                drgnx-replace-preview-word-new)
-  "The faces whose `:box' is in logical pixels: on each frame its line width goes through `drgnx-px-line' and its
-corner radius through `drgnx-px'.")
+  "The faces whose `:box' is in logical pixels: on each frame its line width goes through `drgnx-px-line' (then
+`drgnx-pixels-box-width', which gives Nidhogg's shells the width back in the logical pixels they scale themselves)
+and its corner radius through `drgnx-px'.")
 
 (defun drgnx-decor--scale-width (w frame)
-  "A box line width W (logical, negative drawn inside) in FRAME's pixels."
-  (if (and (numberp w) (/= w 0)) (* (if (< w 0) -1 1) (drgnx-px-line (abs w) frame)) w))
+  "A box line width W (logical, negative drawn inside) as FRAME's `:box' width: drawn `drgnx-px-line' wide."
+  (if (and (numberp w) (/= w 0))
+      (drgnx-pixels-box-width (* (if (< w 0) -1 1) (drgnx-px-line (abs w) frame)) frame)
+    w))
 
 (defun drgnx-decor-scale-box (box frame)
   "The `:box' value BOX, in logical pixels, in FRAME's own pixels."

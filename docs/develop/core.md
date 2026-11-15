@@ -1504,6 +1504,14 @@ function and one rounding rule:
   `drgnx-pixels/the-scale-conses-nothing` holds.
 - A size made of parts adds the rounded parts (`(+ (drgnx-px 26) (drgnx-px 6))`), never `drgnx-px` of the sum, so a
   row and its gap add up to what is drawn.
+- A face's `:box` line widths are the exception: Nidhogg's shells take them in logical pixels and draw them at the
+  display scale themselves (as NS takes points), so a width made in frame pixels doubles at scale 2 if given as it is.
+  Every computed `:box` width goes through `(drgnx-pixels-box-width PX &optional FRAME)`, which divides by the scale
+  there (half up, at least 1, sign kept) and returns PX elsewhere. A box that makes up an exact height (the status
+  bar's row, the palette's footer) takes `(drgnx-pixels-box-fit PX FRAME)`, the widest width the scale draws that is
+  at most PX (at 2 a 15 px pad is drawn as 14), and fills the pixels left over with a spacer of the row's whole height (a box adds to the text's height, not to a
+  spacer's). Corner radii are not scaled by Nidhogg: they stay `drgnx-px`. Theme
+  literals (`:line-width 1`) are logical already. `test/ui/look-box-widths-gui-test.el` reads the drawn widths.
 - An image already sized in device pixels (the hub's row images, `drgnx-view-patch--image`) is made with `:scale 1`;
   without it Emacs applies `image-scaling-factor`, a guess from the font (1.6 at scale 2), on top.
 

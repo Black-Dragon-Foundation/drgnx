@@ -7,6 +7,9 @@
 ;; native shells, at any scale) with one rounding rule, half up, and `drgnx-px-line' does it for lines, which stay
 ;; whole and at least one pixel.  Every size the look draws goes through them, never its own `frame-scale-factor'.
 ;;
+;; A face's `:box' line widths are the exception: Nidhogg's shells take them in logical pixels and draw them at the
+;; display scale (as NS takes points), so a box width made in frame pixels goes through `drgnx-pixels-box-width'.
+;;
 ;; The bars and the tab rows are laid out in pixels, not columns.  `drgnx-look-pixel-width' is the one function that
 ;; measures a string in a face.  It runs only when a row's memo changes, never from an `:eval' on its own: callers
 ;; keep the result in their memo, keyed on `drgnx-pixels-generation' (which the font roles bump) and on the frame's
@@ -106,6 +109,37 @@ a wider one is `drgnx-px'.  SCALE, when given, replaces FRAME's."
     (cond ((<= width 1) (max 1 (floor (+ s drgnx-pixels--epsilon))))
           ((< width 2) (max 1 (floor (+ (* width s) drgnx-pixels--epsilon))))
           (t (drgnx-px width frame s)))))
+
+(defun drgnx-pixels-box-width (px &optional frame)
+  "PX frame pixels (a size from `drgnx-px', `drgnx-px-line' or a measure) as a face's `:box' line width on FRAME, so
+the box is drawn PX pixels wide.  Nidhogg's shells take a box's line widths in logical pixels and draw them at the
+display scale: there PX is divided by it, rounded half up and at least 1 (to the nearest width the scale can draw,
+a fractional scale cannot draw every one).  The sign stays (negative: drawn inside the glyphs) and 0 stays 0.
+Elsewhere a frame pixel is a logical pixel, and PX is the width."
+  (let ((s (drgnx-pixels--box-scale frame)))
+    (if (or (= px 0) (= s 1.0))
+        px
+      (let ((n (max 1 (floor (+ (/ (abs px) s) 0.5 drgnx-pixels--epsilon)))))
+        (if (< px 0) (- n) n)))))
+
+(defun drgnx-pixels-box-fit (px &optional frame)
+  "The widest box line width, in FRAME's pixels, that FRAME draws and that is at most PX (0 or more): PX itself where
+every width can be drawn; on Nidhogg's shells only the scale's multiples, rounded, are (at 2, 15 is drawn as 14).  A
+box that makes up an exact height takes this width, given as `:box' through `drgnx-pixels-box-width', and fills the
+pixels it leaves another way."
+  (let ((d (drgnx-pixels--box-drawn px frame)))
+    (while (and (> d px) (> px 0))
+      (setq px (1- px) d (drgnx-pixels--box-drawn px frame)))
+    (if (> d px) 0 d)))
+
+(defun drgnx-pixels--box-drawn (px frame)
+  "The frame pixels a box of `drgnx-pixels-box-width' PX (0 or more) is drawn at on FRAME."
+  (let ((s (drgnx-pixels--box-scale frame)) (w (drgnx-pixels-box-width px frame)))
+    (if (or (= w 0) (= s 1.0)) w (max 1 (floor (+ (* w s) 0.5 drgnx-pixels--epsilon))))))
+
+(defun drgnx-pixels--box-scale (frame)
+  "The scale FRAME's shell draws a box's line widths at: the display scale on Nidhogg's shells, 1 elsewhere."
+  (if (and (drgnx-pixels-device-p) (fboundp 'frame-scale-factor)) (float (frame-scale-factor frame)) 1.0))
 
 (defvar drgnx-pixels--fonts (make-hash-table :test #'eq :weakness 'key)
   "A font's name (the string `face-font' gives: the font's own, the same string while a face shows that font) →
