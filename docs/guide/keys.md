@@ -540,8 +540,8 @@ so a key of yours (or a key under a command of yours, `C-k x` when `C-k` is your
 shown winning while yours wins. A lambda or closure is printed as `a lambda`, never its body. A key a minor mode's map
 takes over in a buffer (tab-bar-mode's `C-<tab>`) is not covered yet.
 
-**Reloading `config.el`** forgets the keys that file bound (the profile's keys come back on them) and then binds what
-it says now, so a line you deleted stops working. Keys you bound from the keyboard, `M-:` or `emacsclient --eval` stay
+**Reloading** a file of yours (`config.el` or another Lisp file) forgets the keys it no longer binds (the profile's
+keys come back on them) and binds what it says now, so a line you deleted stops working. Keys you bound from the keyboard, `M-:` or `emacsclient --eval` stay
 for the session, as in any Emacs; they are never written to a file. **Keyboard Shortcuts** lists your keys on their
 command's line as `yours (config.el)` or `yours (this session)`; they are read-only there (Change refuses them, a new
 key cannot take theirs, Reset says it cannot remove a line of `config.el`): edit the file. The terminal fallback
