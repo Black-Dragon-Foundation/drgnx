@@ -1229,6 +1229,54 @@ fn button(b: &mut RowBuilder, label: &str, key: &str, primary: bool) {
         .push(" ", Some(face));
 }
 
+/// [`button`]'s width in device px, as M measures its faces.
+fn button_px(m: &dyn Measure, label: &str, key: &str, primary: bool) -> u32 {
+    let (face, kface) = if primary {
+        (BUTTON_PRI, KEY_PRI)
+    } else {
+        (BUTTON, BUTTON_KEY)
+    };
+    text_px(m, face, &format!(" {label} "))
+        + text_px(m, kface, &format!(" {key} "))
+        + text_px(m, face, " ")
+}
+
+/// The rows of buttons (label, key, primary) keyed KEY, KEY:2, …: side by side, a gap between, as many to a row as
+/// ENV's width holds (a narrow tile drew two buttons 3 px past its edge).
+fn buttons(key: &str, list: &[(&str, &str, bool)], env: &ViewEnv, fonts: &dyn Measure) -> Vec<Row> {
+    let gap = text_px(fonts, LABEL, " ");
+    let mut rows = Vec::new();
+    let mut row: Option<(RowBuilder, u32)> = None;
+    for &(label, k, primary) in list {
+        let w = button_px(fonts, label, k, primary);
+        match &mut row {
+            // the slack a fit keeps: the sum may run a few px short of what the editor draws
+            Some((b, x)) if *x + gap + w + drgnx_rows::fit::SLACK as u32 <= env.width_px => {
+                b.push(" ", None);
+                button(b, label, k, primary);
+                *x += gap + w;
+            }
+            _ => {
+                if let Some((b, _)) = row.take() {
+                    rows.push(b.finish());
+                }
+                let mut b = RowBuilder::new(if rows.is_empty() {
+                    key.to_owned()
+                } else {
+                    format!("{key}:{}", rows.len() + 1)
+                });
+                strut(&mut b, env, ACT_ROW);
+                button(&mut b, label, k, primary);
+                row = Some((b, w));
+            }
+        }
+    }
+    if let Some((b, _)) = row {
+        rows.push(b.finish());
+    }
+    rows
+}
+
 /// What clears a hold of GATE (a column of [`GATES`]).
 fn clears(gate: &str) -> &'static str {
     match gate {
@@ -1542,21 +1590,19 @@ pub(crate) fn detail_tile(
         } else {
             "Check again"
         };
-        let mut act = RowBuilder::new("d:act");
-        strut(&mut act, env, ACT_ROW);
-        button(&mut act, first, "r", true);
-        act.push(" ", None);
-        button(&mut act, "Tell the agent", "s", false);
-        out.push(act.finish());
+        out.extend(buttons(
+            "d:act",
+            &[(first, "r", true), ("Tell the agent", "s", false)],
+            env,
+            fonts,
+        ));
     }
-    let mut act = RowBuilder::new("d:act2");
-    strut(&mut act, env, ACT_ROW);
-    if t.card.is_some() {
-        button(&mut act, "Waive once", "w", false);
-        act.push(" ", None);
-    }
-    button(&mut act, "Evidence", "e", false);
-    out.push(act.finish());
+    let waive: &[(&str, &str, bool)] = if t.card.is_some() {
+        &[("Waive once", "w", false), ("Evidence", "e", false)]
+    } else {
+        &[("Evidence", "e", false)]
+    };
+    out.extend(buttons("d:act2", waive, env, fonts));
     if t.card.is_some() {
         for (i, l) in wrap(
             fonts,
@@ -2574,6 +2620,39 @@ mod tests {
         let none = detail_tile(&f, "task:J#99", &tile, &fonts()).0;
         assert_eq!(none.len(), 2);
         assert!(none[1].text.contains("Select a task"));
+    }
+
+    /// [D] A tile too narrow for two buttons side by side puts the second on a row of its own (a 212 px tile drew
+    /// "Run the red" and "Tell the agent" 3 px past its edge); wide enough, they share one.
+    #[test]
+    fn the_detail_tile_s_buttons_wrap_to_its_width() {
+        let f = flow();
+        let m = fonts();
+        let one = button_px(&m, "Run the red", "r", true);
+        let two = button_px(&m, "Tell the agent", "s", false);
+        let gap = text_px(&m, LABEL, " ");
+        let keys = |w: u32| {
+            let mut tile = env(1.0);
+            tile.width_px = w;
+            detail_tile(&f, "task:J#5", &tile, &m)
+                .0
+                .into_iter()
+                .filter(|r| r.key.starts_with("d:act"))
+                .map(|r| r.key)
+                .collect::<Vec<_>>()
+        };
+        let roomy = one + gap + two + drgnx_rows::fit::SLACK as u32;
+        assert_eq!(keys(roomy).first().map(String::as_str), Some("d:act"));
+        assert!(
+            !keys(roomy).contains(&"d:act:2".to_owned()),
+            "{:?}",
+            keys(roomy)
+        );
+        let tight = keys(roomy - 3);
+        assert!(
+            tight.starts_with(&["d:act".to_owned(), "d:act:2".to_owned()]),
+            "{tight:?}"
+        );
     }
 
     /// [D] hub-orchestration.html's detail head: "Sonnet · search-quick" (the model, then the agent's session), and
