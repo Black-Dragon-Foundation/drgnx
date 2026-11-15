@@ -109,6 +109,39 @@ decision."
       (should (= (point) (point-min)))
       (should (= (window-point (selected-window)) (point-min))))))
 
+;; Red first for the agent panel opening on its first rows (docks plan Task 8, l-dark-s2-a start 55): a view that opens
+;; at its tail (`drgnx-view-sja-tail') counts its empty region as at its end, in both orders a panel meets: a window
+;; showing it before the first rows, and a window that shows it after.
+(ert-deftest rows-sja/a-tail-view-opens-at-its-end-when-a-window-shows-it-first ()
+  (view-sja-test--with
+    (setq-local drgnx-view-sja-tail t)
+    (save-window-excursion
+      (delete-other-windows)
+      (set-window-buffer (selected-window) buf)
+      (view-sja-test--reset view '("a" "b" "c"))
+      (drgnx-view-sja-draw-now)
+      (should (= (point) (point-max)))
+      (should (= (window-point (selected-window)) (point-max)))
+      ;; and it follows the rows that come after
+      (view-sja-test--push view (list (list :insert "c" (list (view-sja-test--row "d" "row d")))) :base 1 :version 2)
+      (drgnx-view-sja-draw-now)
+      (should (= (window-point (selected-window)) (point-max))))))
+
+(ert-deftest rows-sja/a-tail-view-opens-at-its-end-when-a-window-shows-it-after ()
+  (view-sja-test--with
+    (setq-local drgnx-view-sja-tail t)
+    (view-sja-test--reset view '("a" "b" "c"))
+    (drgnx-view-sja-draw-now)
+    (should (= (point) (point-max)))
+    (save-window-excursion
+      (delete-other-windows)
+      (set-window-buffer (selected-window) buf)
+      (should (= (window-point (selected-window)) (point-max)))
+      ;; a row put above the first ones (a card, an older page) leaves the window at the end, not on its old first row
+      (view-sja-test--push view (list (list :insert nil (list (view-sja-test--row "top" "a new top")))) :base 1 :version 2)
+      (drgnx-view-sja-draw-now)
+      (should (= (window-point (selected-window)) (point-max))))))
+
 (ert-deftest rows-sja/read-only-region ()
   ;; the rows are read-only text in a buffer that is not
   (view-sja-test--with

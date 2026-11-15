@@ -79,6 +79,17 @@ unanswered, and panel \"s1\" as `buf'."
   "The step types the panel tells the hub are open (`agents/panel/look' `open'), sorted."
   (sort (append (plist-get (drgnx-agent-panel--look-params) :open) nil) #'string<))
 
+(defvar drgnx-view-sja-tail)
+
+(ert-deftest drgnx-agent-panel/the-transcript-opens-at-its-end ()
+  "The transcript is a view that opens at its tail (`drgnx-view-sja-tail'): its first rows leave point at the end,
+where Emacs keeps the latest step in view.  Red first: the panel opened on its first rows (docks plan Task 8,
+agent-panel-long l-dark-s2-a: window start 55, the end off the window)."
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (should (local-variable-p 'drgnx-view-sja-tail))
+      (should drgnx-view-sja-tail))))
+
 (ert-deftest drgnx-agent-panel/presets-switch-disclosure ()
   "A preset is the step types open in the chat, which the hub hears; a hand fold goes back under the toggles."
   (drgnx-agent-panel-test--with
