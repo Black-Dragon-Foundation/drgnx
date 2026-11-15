@@ -174,7 +174,7 @@ fn diff_header(
         "drgnx-text-muted",
     );
     b.push(" ", None);
-    let actions = "Reject  Accept";
+    let actions = " Reject   Accept ";
     let actions_w = text_width(i, actions);
     // what is left for the name and the label: the icon, then the buttons and 20 px of margin
     let room = i64::from(env.width_px)
@@ -205,7 +205,7 @@ fn diff_header(
             .max(1),
     );
     let r = b.pos();
-    b.push("Reject", Some("drgnx-text-muted"));
+    b.push(" Reject ", Some("drgnx-ui-button"));
     let r_end = b.pos();
     b.prop(
         r,
@@ -214,9 +214,9 @@ fn diff_header(
         json!(format!("card:reject:{path}:{n}")),
     );
     b.prop(r, r_end, "help-echo", json!("D: take the change back"));
-    b.push("  ", None);
+    b.push(" ", None);
     let a = b.pos();
-    b.push("Accept", Some("drgnx-accent"));
+    b.push(" Accept ", Some("drgnx-ui-button"));
     let a_end = b.pos();
     b.prop(
         a,
@@ -278,10 +278,14 @@ fn diff_card(
             Some(' ') => (" ", &l[1..], "drgnx-agent-panel-context"),
             _ => (" ", l.as_str(), "drgnx-agent-panel-context"),
         };
-        let text = format!("{num:4} {sign}{}", cut(rest, cols));
         let mut b = RowBuilder::new(format!("c:diff:{path}:{n}:{k}"));
         b.push(" ", None);
-        b.push(&text, Some(face));
+        // the line number in the muted colour, the line's tint under it
+        let gutter = b.pos();
+        b.push(&format!("{num:4} "), Some("drgnx-text-muted"));
+        let gutter_end = b.pos();
+        b.face(gutter, gutter_end, face);
+        b.push(&format!("{sign}{}", cut(rest, cols)), Some(face));
         b.stop(env.width_px.saturating_sub(px(env, 12.0)));
         let end = b.pos();
         b.face(0, end, shape(count, k));
@@ -355,17 +359,19 @@ fn perm_card(i: &In, images: &mut Vec<(ImageId, String)>, p: &Permission) -> Vec
 }
 
 /// Queued note N as one line: "  ⏸ queued 1  text   (e edit · d drop)".
-fn queue_row(n: usize, note: &str) -> Row {
+fn queue_row(env: &ViewEnv, n: usize, note: &str) -> Row {
     let mut b = RowBuilder::new(format!("c:q:{n}"));
     b.push(
         &format!(
-            "  ⏸ queued {}  {}   (e edit · d drop)",
+            " ⏸ queued {}  {}   (e edit · d drop)",
             n + 1,
             one_line(note, 60)
         ),
         Some("drgnx-agent-panel-subtle"),
     );
+    b.stop(env.width_px.saturating_sub(px(env, 12.0)));
     let end = b.pos();
+    b.face(0, end, "drgnx-card-single");
     b.prop(0, end, "drgnx-agent-panel-queued", json!(n));
     b.finish()
 }
@@ -383,7 +389,12 @@ pub fn rows(i: &In) -> (Vec<Row>, Vec<(ImageId, String)>) {
     for p in i.permissions {
         out.extend(perm_card(i, &mut images, p));
     }
-    out.extend(i.queue.iter().enumerate().map(|(n, q)| queue_row(n, q)));
+    out.extend(
+        i.queue
+            .iter()
+            .enumerate()
+            .map(|(n, q)| queue_row(i.env, n, q)),
+    );
     (out, images)
 }
 

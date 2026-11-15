@@ -589,15 +589,15 @@ and queues the take-it-back message: the panel keeps no diffs, so it asks `work/
 before the hub's rows came) would leave it starting below them: a window that started at the first row starts at the top."
   (drgnx-agent-panel-test--with
     (with-current-buffer buf
-      (let ((inhibit-read-only t))
+      (let ((inhibit-read-only t) (top "head\nchips\n"))
         (erase-buffer)
-        (dotimes (i 60) (insert (format "card %d\n" i)))
+        (insert "card 0\ncard 1\n")
         (set-window-buffer (selected-window) buf)
         (set-window-start (selected-window) (point-min))
         (drgnx-agent-panel--keep-top-windows)
         ;; the rows arrive above, and the view's place restore leaves the window on the row it was on
-        (save-excursion (goto-char (point-min)) (insert "head\nchips\nstrip\n"))
-        (set-window-start (selected-window) (+ (point-min) (length "head\nchips\nstrip\n")) t)
+        (save-excursion (goto-char (point-min)) (insert top))
+        (set-window-start (selected-window) (+ (point-min) (length top)) t)
         (drgnx-agent-panel--restore-top-windows '("p:head" "p:chips"))
         (should (= (window-start (selected-window)) (point-min)))
         (should-not drgnx-agent-panel--top-windows)))))

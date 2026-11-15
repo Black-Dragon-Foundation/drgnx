@@ -257,8 +257,10 @@ come in above it, and a window keeps its start on its row, so it would start bel
         (seq-filter (lambda (w) (= (window-start w) (point-min))) (get-buffer-window-list (current-buffer) nil t))))
 
 (defun drgnx-agent-panel--restore-top-windows (keys)
-  "The top rows among KEYS were drawn: the windows noted by `drgnx-agent-panel--keep-top-windows' start at the top."
-  (when (and drgnx-agent-panel--top-windows (seq-some (lambda (k) (string-prefix-p "p:" k)) keys))
+  "Rows were drawn (KEYS): the windows noted by `drgnx-agent-panel--keep-top-windows' start at the top again, wherever
+the insertion left them.  (A panel that holds more than its window does is left to the redisplay, which keeps point, at
+the tail, in view.)"
+  (when (and drgnx-agent-panel--top-windows keys)
     (drgnx-wb-with-owned-windows drgnx-agent-panel--top-windows
       (dolist (w drgnx-agent-panel--top-windows)
         (when (and (window-live-p w) (eq (window-buffer w) (current-buffer)))
