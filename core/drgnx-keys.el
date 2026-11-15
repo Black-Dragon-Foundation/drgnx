@@ -972,15 +972,35 @@ A stale GENERATION never runs; an error is a problem."
 
 ;;;;; Parent layers for drgnx's own maps
 
+(defun drgnx-keys--natural-parent-name (sym)
+  "The variable `define-derived-mode' takes the parent of keymap SYM from, when SYM is a derived mode's map: the
+parent mode's map, `PARENT-map'.  (A parent that installs another map than `PARENT-map' with `use-local-map' is not
+found: derived.el reads `current-local-map' after the parent ran.)  Else nil."
+  (let ((name (symbol-name sym)))
+    (when (string-suffix-p "-map" name)
+      (when-let* ((parent (get (intern (string-remove-suffix "-map" name)) 'derived-mode-parent)))
+        (intern (format "%s-map" parent))))))
+
 (defun drgnx-keys--natural-parent (sym)
   "The parent `define-derived-mode' gives keymap SYM when its mode first runs, when SYM is a derived mode's map and
 has none yet (derived.el sets one only `unless (keymap-parent map)'): the parent mode's map, else nil."
-  (let ((name (symbol-name sym)))
-    (when (string-suffix-p "-map" name)
-      (when-let* ((parent (get (intern (string-remove-suffix "-map" name)) 'derived-mode-parent))
-                  (pmap (intern (format "%s-map" parent)))
-                  ((boundp pmap)) ((keymapp (symbol-value pmap))))
-        (symbol-value pmap)))))
+  (when-let* ((pmap (drgnx-keys--natural-parent-name sym)) ((boundp pmap)) ((keymapp (symbol-value pmap))))
+    (symbol-value pmap)))
+
+(defvar drgnx-keys--pending-parents nil
+  "Layers (MAPSYM) that have no parent yet because the parent mode's map was not loaded at the apply.")
+
+(defun drgnx-keys--complete-parents (&rest _)
+  "On `after-load-functions' while a layer waits for its parent mode's map: give each layer the parent
+`define-derived-mode' will take, once that map exists.  The mode's first run would otherwise see the layer as its
+parent and never set the real one."
+  (dolist (sym drgnx-keys--pending-parents)
+    (let ((entry (assq sym drgnx-keys--attached)))
+      (if (null entry) (setq drgnx-keys--pending-parents (delq sym drgnx-keys--pending-parents))
+        (when-let* (((null (keymap-parent (cddr entry)))) (parent (drgnx-keys--natural-parent sym)))
+          (set-keymap-parent (cddr entry) parent)
+          (setq drgnx-keys--pending-parents (delq sym drgnx-keys--pending-parents))))))
+  (unless drgnx-keys--pending-parents (remove-hook 'after-load-functions #'drgnx-keys--complete-parents)))
 
 (defun drgnx-keys-own-layer (sym)
   "The profile's layer of drgnx's own keymap SYM while it is inserted above the map, else nil."
@@ -1000,7 +1020,8 @@ child's parent meanwhile (the layer is then left out of the chain until the next
 (defun drgnx-keys--detach-all ()
   "Take every layer out of its child's chain."
   (mapc #'drgnx-keys--detach drgnx-keys--attached)
-  (setq drgnx-keys--attached nil))
+  (setq drgnx-keys--attached nil drgnx-keys--pending-parents nil)
+  (remove-hook 'after-load-functions #'drgnx-keys--complete-parents))
 
 (defun drgnx-keys--resolver-map (sym)
   "Keymap SYM as the resolver reads it: drgnx's own maps without their parents, because the profile's layer sits above
@@ -1021,9 +1042,13 @@ old parent, or the parent the derived mode will take.  Called after the mode is 
     (dolist (item items)
       (condition-case err (define-key layer (key-parse (car item)) (cdr item))
         (error (drgnx-keys--problem (format "cannot bind %s in %s: %s" (car item) sym (error-message-string err)) nil))))
-    (set-keymap-parent layer (or (keymap-parent child) (drgnx-keys--natural-parent sym)))
-    (set-keymap-parent child layer)
-    (push (cons sym (cons child layer)) drgnx-keys--attached)))
+    (let ((parent (or (keymap-parent child) (drgnx-keys--natural-parent sym))))
+      (set-keymap-parent layer parent)
+      (set-keymap-parent child layer)
+      (push (cons sym (cons child layer)) drgnx-keys--attached)
+      (when (and (null parent) (drgnx-keys--natural-parent-name sym))   ; the parent mode's library is not loaded yet
+        (cl-pushnew sym drgnx-keys--pending-parents)
+        (add-hook 'after-load-functions #'drgnx-keys--complete-parents)))))
 
 (defun drgnx-keys--layer-keys (map &optional prefix)
   "The key vectors MAP binds to a command, prefix maps walked."

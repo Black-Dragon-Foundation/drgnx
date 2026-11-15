@@ -39,6 +39,7 @@ applied on Linux; `lay-empty' is a profile with no keys.  Undone after."
                 (drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-problems nil) (drgnx-keys-last nil))
            (set-keymap-parent drgnx-keys-test-lder-mode-map nil)
            (set-keymap-parent drgnx-keys-test-lbase-mode-map nil)
+           (set-keymap-parent drgnx-keys-test-llate-mode-map nil)
            (drgnx-command-define 'lay-a :title "A" :category "Test" :command #'keys-lay-a :doc "t")
            (drgnx-command-define 'lay-b :title "B" :category "Test" :command #'keys-lay-b :doc "t")
            (unwind-protect (progn (drgnx-keys-use '((lay app editing window))) ,@body)
@@ -97,6 +98,29 @@ key and the parent's profile key too, and the child map holds none of the profil
         (drgnx-keys-test-lbase-mode)
         (should (eq (key-binding (kbd "C-c y a")) #'keys-lay-a))
         (should (eq (key-binding (kbd "q")) #'keys-lay-b))))))
+
+;; A mode derived from one whose map is not loaded when the keys are applied.
+(define-derived-mode keys-lay-lp-mode fundamental-mode "LP")
+(define-derived-mode drgnx-keys-test-llate-mode keys-lay-lp-mode "LL")
+
+(ert-deftest drgnx-keys/layers-a-parent-modes-map-that-loads-later-becomes-the-parent ()
+  "The parent mode's library is not loaded at the apply: the layer has no parent yet, the mode's first run would see
+the layer as its parent and never take the real one.  When the library loads, the layer gets it."
+  (let ((file (make-temp-file "keys-lay-lp" nil ".el")) (old (and (boundp 'keys-lay-lp-mode-map) keys-lay-lp-mode-map)))
+    (makunbound 'keys-lay-lp-mode-map)
+    (unwind-protect
+        (keys-lay--with ((lay-a "C-c y a" :map drgnx-keys-test-llate-mode-map))
+          (should-not (keymap-parent (keymap-parent drgnx-keys-test-llate-mode-map)))
+          (with-temp-file file
+            (insert ";;; -*- lexical-binding: t -*-\n(defvar keys-lay-lp-mode-map (let ((m (make-sparse-keymap))) (define-key m \"w\" #'keys-lay-z) m))\n"))
+          (load file nil t)
+          (with-temp-buffer
+            (drgnx-keys-test-llate-mode)
+            (should (eq (key-binding (kbd "C-c y a")) #'keys-lay-a))
+            (should (eq (key-binding (kbd "w")) #'keys-lay-z)))
+          (should-not (memq 'drgnx-keys--complete-parents after-load-functions)))
+      (delete-file file)
+      (setq keys-lay-lp-mode-map old))))
 
 (ert-deftest drgnx-keys/layers-lint-finds-a-profile-key-in-a-child-map ()
   "A profile key that also sits in the drgnx map itself is reported; none does after a plain apply."

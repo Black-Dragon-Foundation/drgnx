@@ -22,7 +22,10 @@ map's old parent.
   `unless (keymap-parent map)` (derived.el). A layer put on a map before the mode ran would be that parent, and the
   derived mode would never get its parent mode's map. A map with no parent therefore gets the parent mode's map
   (`drgnx-keys--natural-parent`: `PARENT-mode-map` of the mode `get`ting `derived-mode-parent`) as its layer's parent.
-  A derived chain reads child → child layer → parent map → parent layer.
+  A derived chain reads child → child layer → parent map → parent layer. When the parent mode's map is not loaded at
+  the apply, the layer waits without a parent and `drgnx-keys--complete-parents` (on `after-load-functions`, only
+  while a layer waits) gives it the parent once the library loads. A parent that installs another map than
+  `PARENT-map` with `use-local-map` is not found (derived.el reads `current-local-map`).
 - **Checked at every apply.** `drgnx-keys--restore` (the start of every apply) takes each layer out again and empties it
   (`drgnx-keys--detach-all`). When someone called `set-keymap-parent` on the map meanwhile, that parent is kept, the layer
   goes above it at this apply, and a problem says so ("its parent was replaced…").
