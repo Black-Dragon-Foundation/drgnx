@@ -1903,6 +1903,8 @@ runs the live suite in shards).  Return an exit code."
          ;; a narrowed run stays narrow in the session too
          (res (drgnx-ui-run-ert-session (expand-file-name "test/ui" drgnx-ui-repo-dir) timeout nil
                                         (append (drgnx-ui--hub-env)
+                                                ;; each test file must leave the session as it found it (run-ert.el's per-file leak check)
+                                                (unless (equal (getenv "DRGNX_UI_LEAKS") "0") (list "DRGNX_TEST_FILE_LEAKS=1"))
                                                 (and selector (list (concat "DRGNX_TEST_SELECTOR=" selector)))
                                                 (and (equal (getenv "DRGNX_TEST_EMPTY_OK") "1") (list "DRGNX_TEST_EMPTY_OK=1")))))
          (rc (nth 0 res)) (results (nth 1 res)) (run (nth 2 res))

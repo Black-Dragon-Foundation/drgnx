@@ -91,6 +91,12 @@ The files test/class-exempt.eld turns off are left out (`drgnx-run-ert--off-file
   "Whether DRGNX_TEST_LEAKS asks for the census."
   (let ((s (getenv "DRGNX_TEST_LEAKS"))) (and s (not (string-empty-p s)))))
 
+(defun drgnx-run-ert--file-leaks-p ()
+  "Whether DRGNX_TEST_FILE_LEAKS asks for the per-file leak check: a test file that leaves global state behind
+\(a hook, a timer, advice, the default mode lines, the global keymap, a frame parameter, …) fails, the leftover named.
+The GUI tier's per-file sessions set it.  Only the per-file scan runs, not the per-test one."
+  (let ((s (getenv "DRGNX_TEST_FILE_LEAKS"))) (and s (not (string-empty-p s)) (not (equal s "0")))))
+
 (defun drgnx-run-ert--leaks-allowed-file ()
   "The allowlist: DRGNX_TEST_LEAKS_ALLOWED (a file), else test/leaks-allowed.eld of this checkout."
   (let ((given (getenv "DRGNX_TEST_LEAKS_ALLOWED")))
@@ -167,7 +173,12 @@ it never ends a run."
 the test left pending is cancelled, so it cannot fire inside the next test; a layer timer (core/drgnx-timer.el) by
 its key, so the layer forgets it too.  An error in the census is a line of the report
 \(`drgnx-run-ert--census-guard'), never an error of the test run."
-  (if drgnx-run-ert--census-busy
+  (if (or drgnx-run-ert--census-busy
+          ;; the per-file check alone: only the file's start is taken here, its end is read by `census-finish'
+          (and (not (drgnx-run-ert--leaks-on-p))
+               (progn (drgnx-run-ert--census-guard (symbol-name (ert-test-name test)) (ert-test-file-name test)
+                                                   (lambda () (drgnx-run-ert--census-enter-file (ert-test-file-name test))))
+                      t)))
       (apply run test args)
     (let* ((file (ert-test-file-name test)) (name (symbol-name (ert-test-name test)))
            (drgnx-run-ert--census-busy t) before)
@@ -200,6 +211,22 @@ its key, so the layer forgets it too.  An error in the census is a line of the r
   (drgnx-run-ert--census-leave-file)
   (advice-remove 'ert-run-test #'drgnx-run-ert-census)
   (nreverse (prog1 drgnx-run-ert--leaks (setq drgnx-run-ert--leaks nil))))
+
+(defun drgnx-run-ert--leak-failures (leaks)
+  "One failure per test file of LEAKS (plists): \"leak FILE\", with each leftover the file's tests left behind."
+  (let (files out)
+    (dolist (l leaks) (cl-pushnew (plist-get l :file) files :test #'equal))
+    (dolist (f (nreverse files))
+      (let ((mine (seq-filter (lambda (l) (equal (plist-get l :file) f)) leaks)))
+        (push (list :name (format "leak %s" (if (stringp f) (file-name-nondirectory f) "?"))
+                    :condition (concat "the file left global state behind (fix the test's or the module's teardown):\n"
+                                       (mapconcat (lambda (l)
+                                                    (let ((src (plist-get l :source)))
+                                                      (format "    %s%s" (plist-get l :what)
+                                                              (if (stringp src) (format "  [%s]" src) ""))))
+                                                  mine "\n")))
+              out)))
+    (nreverse out)))
 
 (defun drgnx-run-ert-leaks-report (leaks)
   "LEAKS (plists, or the vector of them) as text: \"Leaks (N)\" and a line each (test, file, what, source); \"\" for none."
@@ -815,7 +842,8 @@ summary to RESULTS-FILE.  Return t if every test passed."
   (drgnx-run-ert--trampolines-see-real-primitives)
   (when-let* ((a (drgnx-run-ert--env "DRGNX_TEST_AUDIT")))
     (drgnx-run-ert--audit-install (and (not (equal a "1")) a)))
-  (let* ((census (and (drgnx-run-ert--leaks-on-p) (progn (drgnx-run-ert--census-start) t)))
+  (let* ((census (and (or (drgnx-run-ert--leaks-on-p) (drgnx-run-ert--file-leaks-p))
+                      (progn (drgnx-run-ert--census-start) t)))
          ;; the RAW selector, for the file filter: `drgnx-run-ert--selector' needs the files loaded, and with a
          ;; shuffle it is a `(member …)', not a string (which would load every file)
          (selector (let ((s (getenv "DRGNX_TEST_SELECTOR"))) (and s (not (string-empty-p s)) (car (read-from-string s)))))
@@ -844,6 +872,7 @@ summary to RESULTS-FILE.  Return t if every test passed."
                        (zerop (+ (ert-stats-total stats) (length load-failures)))
                        (list (drgnx-run-ert--matched-nothing selector)))))
          (leaks (and census (drgnx-run-ert--census-finish)))
+         (load-failures (append load-failures (and (drgnx-run-ert--file-leaks-p) (drgnx-run-ert--leak-failures leaks))))
          (tests nil) (known-red nil) (failures nil) (skipped nil))
     (cl-loop
      for test across (ert--stats-tests stats)

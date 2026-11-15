@@ -42,6 +42,17 @@ font and the parameters that move pixels, the selected window and its parameters
 and mode lines). A failure names what differs, and the row that left it puts it back in its own unwind. Rows are never
 reordered or rerun to pass.
 
+**The leak check after each file.** With `DRGNX_TEST_FILE_LEAKS=1` (the GUI tier's session sets it; `DRGNX_UI_LEAKS=0` turns
+it off there) `harness/run-ert.el` reads the full fingerprint (`core/drgnx-modules-fingerprint.el`) when a test file's
+first test starts and again when the next file starts or the run ends. A file that left anything behind fails as one
+failure, `leak FILE-test.el`, naming each leftover (and the file that defined it): global hooks, advice, timers,
+processes, buffers, features, the default `mode-line-format`, `header-line-format` and `tab-line-format`, the global
+keymap (`current-global-map` and every binding in it), `minor-mode-map-alist`, and the selected frame's parameters and
+the number of frames. The allowlist is the census's (`test/leaks-allowed.eld`). It works in one Emacs or per file, in any
+launcher: it reads state, not how the session was started. The fixtures `test/fixtures/file-leaks/` and the rows
+`drgnx-run-ert/a-file-that-...` show it red (a file that leaks a mode-line entry, a key, a header line, a frame
+parameter) and green (a file that puts everything back).
+
 `bin/drgnx test` and each unit shard of `bin/drgnx check` run every test file in a batch Emacs of its own, as Emacs's
 own `make check` does: a hook, timer, advice, feature or variable a file leaves behind never reaches the next file,
 so a test cannot pass or fail because of the file that happened to run before it. Within a file, ERT still runs the

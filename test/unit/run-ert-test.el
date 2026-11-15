@@ -882,6 +882,73 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
                                   (plist-get (aref (plist-get (drgnx-run-ert-test--json results) :failures) 0) :condition))))
       (delete-directory tmp t))))
 
+;;;; The per-file leak check (DRGNX_TEST_FILE_LEAKS: the GUI tier's per-file sessions set it)
+
+(defun drgnx-run-ert-test--file-leak-run (fixtures)
+  "Run the fixture files FIXTURES (names under test/fixtures/file-leaks/, without .el), each as NAME-test.el of a
+suite, with the per-file leak check on.  Return (EXIT RESULTS-PLIST OUTPUT)."
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-fleak" t)))
+         (suite (expand-file-name "suite" tmp)) (results (expand-file-name "r.json" tmp)))
+    (unwind-protect
+        (progn
+          (make-directory suite t)
+          (dolist (f fixtures)
+            (with-temp-file (expand-file-name (concat f "-test.el") suite)
+              (insert "(require 'ert)\n")
+              (insert-file-contents (expand-file-name (concat "file-leaks/" f ".el") drgnx-run-ert-test--fixtures))
+              (goto-char (point-max))))
+          (let ((exit (drgnx-run-ert-test--batch suite results "DRGNX_TEST_FILE_LEAKS=1")))
+            (list exit (and (file-exists-p results) (drgnx-run-ert-test--json results))
+                  (drgnx-run-ert-test--log results))))
+      (delete-directory tmp t))))
+
+(defun drgnx-run-ert-test--failure (results name)
+  "The condition text of the failure of RESULTS (a plist) named NAME, or nil."
+  (let ((f (seq-find (lambda (f) (equal (plist-get f :name) name)) (plist-get results :failures))))
+    (and f (plist-get f :condition))))
+
+(ert-deftest drgnx-run-ert/a-file-that-leaves-a-mode-line-entry-fails-and-names-it ()
+  (pcase-let ((`(,exit ,r ,log) (drgnx-run-ert-test--file-leak-run '("leaky-mode-line"))))
+    (should (eql 1 exit))
+    ;; the test itself passed; the file fails, as one failure named after it
+    (let ((why (drgnx-run-ert-test--failure r "leak leaky-mode-line-test.el")))
+      (should why)
+      (should (string-match-p "line-format mode-line-format \\+\" LEAKED-ENTRY" why)))
+    (should (string-match-p "LEAKED-ENTRY" log))))
+
+(ert-deftest drgnx-run-ert/a-file-that-leaves-a-key-a-header-line-and-a-frame-parameter-fails-and-names-them ()
+  (pcase-let ((`(,exit ,r ,_log) (drgnx-run-ert-test--file-leak-run '("leaky-key"))))
+    (should (eql 1 exit))
+    (let ((why (drgnx-run-ert-test--failure r "leak leaky-key-test.el")))
+      (should why)
+      (should (string-match-p "global-map C-c C-x C-l" why))
+      (should (string-match-p "header-line-format" why))
+      (should (string-match-p "frame-param file-leak-fixture-parameter" why)))))
+
+(ert-deftest drgnx-run-ert/a-file-that-puts-its-state-back-passes-the-leak-check ()
+  (pcase-let ((`(,exit ,r ,log) (drgnx-run-ert-test--file-leak-run '("clean"))))
+    (should (equal (list (plist-get r :failures) log) (list [] log)))
+    (should (eql 0 (or exit -1)))
+    (should-not (string-match-p "left global state behind" log))))
+
+(ert-deftest drgnx-run-ert/the-leak-check-is-per-file-not-per-run ()
+  ;; a clean file beside a leaky one still passes: each file's own Emacs, one failure for the one that leaks
+  (pcase-let ((`(,_exit ,r ,_log) (drgnx-run-ert-test--file-leak-run '("leaky-mode-line" "clean"))))
+    (should (drgnx-run-ert-test--failure r "leak leaky-mode-line-test.el"))
+    (should-not (drgnx-run-ert-test--failure r "leak clean-test.el"))))
+
+(ert-deftest drgnx-run-ert/no-leak-check-without-the-variable ()
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-fleak" t)))
+         (suite (expand-file-name "suite" tmp)) (results (expand-file-name "r.json" tmp)))
+    (unwind-protect
+        (progn
+          (make-directory suite t)
+          (with-temp-file (expand-file-name "leaky-mode-line-test.el" suite)
+            (insert "(require 'ert)\n")
+            (insert-file-contents (expand-file-name "file-leaks/leaky-mode-line.el" drgnx-run-ert-test--fixtures)))
+          (should (eql 0 (drgnx-run-ert-test--batch suite results "DRGNX_TEST_FILE_LEAKS"))))
+      (delete-directory tmp t))))
+
 ;;;; The leak census
 
 (defconst drgnx-run-ert-test--leaky
@@ -957,7 +1024,7 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
           (let ((r (drgnx-run-ert-test--census suite results)))
             (should (eql 0 (car r)))
             ;; the report's heading, case and all: the run's own dir is drgnx-leakXXXXXX (macOS CI: drgnx-leakSrSTb2)
-            (should-not (let ((case-fold-search nil)) (string-match-p "^Leaks (" (cdr r))))
+            (should (equal "" (let ((case-fold-search nil)) (or (and (string-match "^Leaks (.*\\(\n.*\\)\\{0,12\\}" (cdr r)) (match-string 0 (cdr r))) ""))))
             (should (equal (plist-get (drgnx-run-ert-test--json results) :leaks) []))))
       (delete-directory tmp t))))
 

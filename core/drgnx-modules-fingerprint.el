@@ -217,6 +217,63 @@ bytecomp, so a FULL fingerprint calls it before it reads anything (the load is n
       (let ((byte-compile-warnings nil) (inhibit-message t))
         (byte-compile 'drgnx-modules-fingerprint--scan)))))
 
+(defvar drgnx-modules-fingerprint-frame-parameters-ignored
+  '(buffer-list buried-buffer-list name title window-id outer-window-id parent-id minibuffer icon-name explicit-name
+                last-focus-update)
+  "Frame parameters the session fingerprint leaves out: they change with what is shown, not with what a test leaves.")
+
+(defun drgnx-modules-fingerprint--line-format-items ()
+  "Items for the default `mode-line-format', `header-line-format' and `tab-line-format': each element of a list value
+\(the whole value otherwise), so an entry a mode put in the default and did not take out shows as one line."
+  (let (items)
+    (dolist (var '(mode-line-format header-line-format tab-line-format))
+      (when (default-boundp var)
+        (let ((v (default-value var)) (key (list 'line-format var)))
+          (if (and (consp v) (proper-list-p v))
+              (dolist (e v) (push (cons key e) items))
+            (push (cons key v) items)))))
+    items))
+
+(defun drgnx-modules-fingerprint--keymap-items (kind map)
+  "Items for every binding in the keymap MAP, a prefix map's too: key (KIND \"C-x f\"), the binding as the object."
+  (let (items (seen nil))
+    (cl-labels ((walk (m prefix depth)
+                  (unless (or (memq m seen) (> depth 6))
+                    (push m seen)
+                    (map-keymap
+                     (lambda (ev b)
+                       (let ((keys (vconcat prefix (vector ev))))
+                         (if (and (keymapp b) (not (eq ev 'menu-bar)))
+                             (walk b keys (1+ depth))
+                           (push (drgnx-modules-fingerprint--item
+                                  (list kind) (ignore-errors (key-description keys)) b)
+                                 items))))
+                     m))))
+      (walk map [] 0))
+    items))
+
+(defun drgnx-modules-fingerprint--frame-items ()
+  "Items for the selected frame's parameters (a changed value shows as the old one gone and the new one there, by
+its printed text), and the number of frames."
+  (let ((items (list (cons (list 'frame-count) (length (frame-list))))))
+    (dolist (p (frame-parameters (selected-frame)))
+      (unless (or (memq (car p) drgnx-modules-fingerprint-frame-parameters-ignored)
+                  ;; a terminal frame's size is the terminal's (it changes with the first message): only a graphic frame's is read
+                  (and (memq (car p) '(height width left top)) (not (display-graphic-p))))
+        (push (drgnx-modules-fingerprint--item (list 'frame-param) (car p) (intern (format "%S" (cdr p)))) items)))
+    items))
+
+(defun drgnx-modules-fingerprint--session-items ()
+  "What a GUI test file can change in the session besides hooks and timers: the default line formats, the global
+keymap (and the one in use), the minor mode maps, the selected frame's parameters."
+  (list :line-formats (drgnx-modules-fingerprint--line-format-items)
+        :global-map (append (list (cons (list 'current-global-map) (current-global-map)))
+                            (drgnx-modules-fingerprint--keymap-items 'global-map (current-global-map))
+                            (unless (eq (current-global-map) global-map)
+                              (drgnx-modules-fingerprint--keymap-items 'global-map global-map)))
+        :minor-mode-maps (drgnx-modules-fingerprint--alist-items 'minor-mode-map 'minor-mode-map-alist)
+        :frame (drgnx-modules-fingerprint--frame-items)))
+
 (defun drgnx-modules-fingerprint--full-items ()
   "The `mapatoms' scan (`drgnx-modules-fingerprint--compile-scan' compiled it) and the hand-listed hooks it misses."
   (let* ((scan (drgnx-modules-fingerprint--scan)) (extra nil))
@@ -260,7 +317,9 @@ function (about 12 ms): once per test file.  The diff of two full ones reads `:a
                  (drgnx-modules-fingerprint--list-items 'minor-mode 'global-minor-modes)
                  :keys-applied (and (boundp 'drgnx-keys--applied) (length drgnx-keys--applied))
                  :registries regs)))
-      (if full (append cheap (drgnx-modules-fingerprint--full-items)) cheap))))
+      (if full
+          (append cheap (drgnx-modules-fingerprint--full-items) (drgnx-modules-fingerprint--session-items))
+        cheap))))
 
 ;;;; The diff
 
@@ -280,7 +339,7 @@ function (about 12 ms): once per test file.  The diff of two full ones reads `:a
          (fn (pcase kind
                ('timer (and (timerp obj) (let ((d (and (fboundp 'drgnx-timer-describe) (drgnx-timer-describe obj))))
                                            (if d (plist-get d :fn) (timer--function obj)))))
-               ((or 'hook 'advice 'function-variable 'registry) obj)
+               ((or 'hook 'advice 'function-variable 'registry 'global-map) obj)
                (_ nil))))
     (drgnx-modules-fingerprint--normalize-file
      (cond
