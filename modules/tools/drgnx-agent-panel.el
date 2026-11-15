@@ -279,11 +279,12 @@ folds under it."
         (push (cons window ov) drgnx-agent-panel--pin-overlays)
         ov)))
 
-(defun drgnx-agent-panel--pin-at (window start)
-  "Show the pinned rows at the top of WINDOW, over START, which is never before their end; START as it stands.  With no
-pinned rows the window's overlay is gone."
+(defun drgnx-agent-panel--pin-at (window start &optional away)
+  "Show the pinned rows at the top of WINDOW, over START, which is never before their end; START as it stands.  With
+AWAY the rows are taken off the window (the overlay goes to the buffer's start) and START is as given.  With no pinned
+rows the window's overlay is gone."
   (if-let* ((pin drgnx-agent-panel--pin))
-      (let ((start (max start (car pin))) (ov (drgnx-agent-panel--pin-overlay window)))
+      (let ((start (if away start (max start (car pin)))) (ov (drgnx-agent-panel--pin-overlay window)))
         (move-overlay ov start start)
         (unless (equal (overlay-get ov 'before-string) (cdr pin)) (overlay-put ov 'before-string (cdr pin)))
         start)
@@ -315,7 +316,10 @@ the pinned rows are shown over each try, and no try starts before their end."
   (let ((start (point-max)) (floor (if drgnx-agent-panel--pin (car drgnx-agent-panel--pin) (point-min))))
     (save-excursion
       (while (and (> start floor)
-                  (progn (goto-char start) (vertical-motion -1 window) (and (< (point) start) (>= (point) floor)))
+                  ;; the pinned rows are not over START while it moves up a line: the overlay's lines would be the
+                  ;; line above it, at the same position
+                  (progn (when drgnx-agent-panel--pin (drgnx-agent-panel--pin-at window (point-min) t))
+                         (goto-char start) (vertical-motion -1 window) (and (< (point) start) (>= (point) floor)))
                   (progn (set-window-start window (point) t)
                          (drgnx-agent-panel--pin-at window (point))
                          (pos-visible-in-window-p (point-max) window)))

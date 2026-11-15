@@ -410,13 +410,15 @@ from 201."
     (drgnx-look-scene--try "agent"
       (load (expand-file-name "test/fixtures/panel-replay-fixture" (bound-and-true-p drgnx-dir)) nil t)
       ;; the `agent-panel-long' scene runs alone with a transcript that overflows the panel (the pinned header's)
-      (setq drgnx-panel-replay-prefix (if (string-match-p "agent-panel-long" (or (getenv "DRGNX_LOOK_ONLY") "")) 40 3))
+      (setq drgnx-panel-replay-prefix (if (string-match-p "agent-panel-long" (or (getenv "DRGNX_LOOK_ONLY") "")) 20 3))
       (defalias 'drgnx-panel-replay-program
         (lambda ()
           ;; the mockup's figures: a slow run (past `drgnx-agent-panel-slow-seconds'), a quick one, then a read
           ;; that asks and stays open, so the permission card shows.  The replay session is a chat: the matrix
           ;; answers a chat's edit or run Never (no card), and asks for its reads
-          (concat "tool:read core/drgnx-gateway.el\\nsay Reading the gateway: replies to a closed client are lost.\\n"
+          (concat (mapconcat (lambda (i) (format "tool:run echo step %d\\nsay Step %d finished.\\n" i i))
+                             (number-sequence 1 (- drgnx-panel-replay-prefix 3)) "")
+                  "tool:read core/drgnx-gateway.el\\nsay Reading the gateway: replies to a closed client are lost.\\n"
                   "tool:run sleep 11; echo 1 of 14 failed\\nsay 1 of 14 failed: gateway/reply-after-close.\\n"
                   "tool:edit test/unit/gateway-test.el\\nsay Queue the reply when the client went away.\\n"
                   "tool:run sleep 2; echo 9 of 14 passed\\n"
