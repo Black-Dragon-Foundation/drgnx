@@ -84,4 +84,6 @@ string-pixel-width uses)")
  (:what "\\`\\(?:hook\\|function-variable\\) "
   :source "\\`\\(?:core/drgnx-surfaces\\|wb/drgnx-\\(?:wb\\|explorer\\|popup\\)\\|modules/tools/drgnx-replace\\)\\.el\\'"
   :why "the workbench, surfaces and replace libraries wiring their hooks when first used in a session; each GUI test file has a session of its own, so it reaches no other file")
+ (:what "\\`process [+-]Compiling: "
+  :why "native compilation's own asynchronous jobs (comp-run-async-workers), started by a library's load and ended when they finish: Emacs's, not a test's")
 )

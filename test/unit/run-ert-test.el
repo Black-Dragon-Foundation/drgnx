@@ -1069,6 +1069,17 @@ suite, with the per-file leak check on.  Return (EXIT RESULTS-PLIST OUTPUT)."
   "A leaks-allowed file in DIR holding TEXT (default: nothing allowed)."
   (let ((f (expand-file-name "allowed.eld" dir))) (with-temp-file f (insert (or text "()"))) f))
 
+(ert-deftest drgnx-run-ert/a-native-compilation-job-is-no-leak-another-process-is ()
+  ;; the checked-in allowlist: native compilation's async jobs come and go with a library's load; any other
+  ;; process a file leaves is still named
+  (let ((drgnx-run-ert--leaks-allowed
+         (drgnx-run-ert--read-allowed (expand-file-name "../leaks-allowed.eld" drgnx-run-ert-test--fixtures))))
+    (should drgnx-run-ert--leaks-allowed)
+    (should (drgnx-run-ert--leak-allowed-p "process +Compiling: /src/core/drgnx-faces.el" nil))
+    (should (drgnx-run-ert--leak-allowed-p "process -Compiling: /src/harness/drgnx-uitest.el" nil))
+    (should-not (drgnx-run-ert--leak-allowed-p "process +ratatoskr" nil))
+    (should-not (drgnx-run-ert--leak-allowed-p "process +Compiling-something" nil))))
+
 (ert-deftest drgnx-run-ert/leaks-name-the-test-and-the-source ()
   (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-leak" t)))
          (suite (expand-file-name "suite" tmp)) (results (expand-file-name "r.json" tmp)))
