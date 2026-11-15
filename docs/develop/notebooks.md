@@ -64,7 +64,8 @@ cell}`, `/output {id, cell}`, `/close`; it listens to `notebook-tail`, `notebook
 
 The header strip is a `before-string` on the head boundary (an `after-string` of a one-character head would land on the source's
 first row, so the strip would have no row of its own); the output is an `after-string` on the tail boundary, ending in the newline
-Lisp adds. The Lisp header is a stopgap: the hub is to build the head as it builds the tail, and the Lisp builder goes when it does.
+Lisp adds. The hub builds the head as it builds the tail, as **parts**, and the editor draws each as the part it is (below); it decides
+nothing about a head.
 
 **Tree-sitter** (`drgnx-notebook--sync-parsers`): one parser per language for the buffer, its included ranges the union of the
 cells of that language (the notebook's language for code cells, `markdown` for markdown cells); the same rescan that finds the
@@ -148,8 +149,7 @@ from that race. The HMAC key signs every message either way. The heartbeat chann
 The hub sends the editor that opened a notebook these events, only for what changed:
 
 - `notebook-tail`: a cell's tail, built whole (text, style runs as terminal face roles, images, `more_lines`, `version`, `stale`,
-  `execution_count`) with the cell's head (`[n]`/`[ ]`/`[*]` and the kind, `state` `idle`, `queued` or `running`); at most 20 a
-  second per cell. The editor only puts the strings.
+  `execution_count`) with the cell's head (below; `state` `idle`, `queued` or `running`); at most 20 a second per cell. The editor only puts what it is sent.
 - `notebook-status`: `state` (`starting`, `idle`, `busy`, `dead`), the running `cell` and the length of the `queue`.
 - `notebook-log`: `{id, seq}`, the kernel logged something that answers no cell (below); one is kept, the newest, until delivered.
 - `notebook-input-request`: a kernel's question (`cell`, `request`, `prompt`, `password`); answer it with `notebook/input`.
@@ -159,9 +159,16 @@ cells queued behind it (shown "aborted"), an interrupt or a restart cancels them
 the limits in the output model: 64 outputs and 1 MiB of text per cell, 16 MiB of images, a message of more than 16 MiB is a note, a flood
 (64 MiB unread, or 1000 messages that do not verify in 10 s) kills the kernel.
 
-**The real shapes (T11b routed).** The header is the hub's: each tail carries a `head` (`text`, `state`, `runs`); the editor draws the
-run button (and the add-cell buttons under the selected cell) and puts the hub's text after it, a cell with no head yet (new,
-markdown) showing its type. `notebook/restart` is the hub's. The picker for `notebook/kernels` lists the skipped kernelspecs with
+**The head.** Each tail carries a `head`: `text` (the plain `[3]  python`, for titles), `state` and `parts`, each `{role, text, chip?,
+action?}`: a code cell's are `run` (the button: `action` `run`, or `stop` while the cell is queued or running; no text), `count`
+(`[3]`, `[ ]`, or `[*]` while queued or running) and `language` (the kernelspec's or `code`, at most 64 characters); a markdown or raw
+cell's is `kind`. `chip` says which chip the text is in, `quiet`, or `accent` for the count while the cell is queued or running. The
+editor draws the button with the icon `play` (`square` for `stop`; a click runs the cell or interrupts the kernel) and each chip with
+`drgnx-chip-quiet` or `drgnx-chip-accent`, in that order, and a cell with no head yet (new) shows its type as a quiet chip. On the
+**selected cell** the editor adds a right-aligned toolbar of icons, each a registry command (`drgnx-notebook--tools`): `chevron-up`
+Move Cell Up, `chevron-down` Move Cell Down, `trash-2` Delete Cell and `ellipsis` Cell Menu (a choice of copy, cut, paste, add
+above, split, merge, change type, clear outputs, run above or below); the header is built again when the selection moves.
+The add-cell buttons are under the selected cell's output. `notebook/restart` is the hub's. The picker for `notebook/kernels` lists the skipped kernelspecs with
 their reasons and refuses one. The notebook ids are the hub's to make (never parsed or built here), every method is checked against the
 buffer's connection, and a notebook ends with that connection.
 

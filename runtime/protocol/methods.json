@@ -28128,11 +28128,11 @@
             "type": "object"
           },
           "NotebookHead": {
-            "description": "A cell's head: its prompt and kind, and STATE (`idle`, `queued`, `running`).",
+            "description": "A cell's head: its parts (run button, count, language or kind), the same as plain TEXT, and STATE (`idle`, `queued`, `running`).",
             "properties": {
-              "runs": {
+              "parts": {
                 "items": {
-                  "$ref": "#/$defs/NotebookRun"
+                  "$ref": "#/$defs/NotebookHeadPart"
                 },
                 "type": "array"
               },
@@ -28146,7 +28146,35 @@
             "required": [
               "text",
               "state",
-              "runs"
+              "parts"
+            ],
+            "type": "object"
+          },
+          "NotebookHeadPart": {
+            "description": "One part of a cell's head: ROLE `run` (the run button; ACTION `run` or `stop`), `count` (`[3]`), `language` or `kind`; TEXT what it\nsays, CHIP the chip it is in (`quiet` or `accent`), for the editor to draw with its chip faces.",
+            "properties": {
+              "action": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "chip": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "role": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "role",
+              "text"
             ],
             "type": "object"
           },
@@ -28666,11 +28694,11 @@
       "result": {
         "$defs": {
           "NotebookHead": {
-            "description": "A cell's head: its prompt and kind, and STATE (`idle`, `queued`, `running`).",
+            "description": "A cell's head: its parts (run button, count, language or kind), the same as plain TEXT, and STATE (`idle`, `queued`, `running`).",
             "properties": {
-              "runs": {
+              "parts": {
                 "items": {
-                  "$ref": "#/$defs/NotebookRun"
+                  "$ref": "#/$defs/NotebookHeadPart"
                 },
                 "type": "array"
               },
@@ -28684,7 +28712,35 @@
             "required": [
               "text",
               "state",
-              "runs"
+              "parts"
+            ],
+            "type": "object"
+          },
+          "NotebookHeadPart": {
+            "description": "One part of a cell's head: ROLE `run` (the run button; ACTION `run` or `stop`), `count` (`[3]`), `language` or `kind`; TEXT what it\nsays, CHIP the chip it is in (`quiet` or `accent`), for the editor to draw with its chip faces.",
+            "properties": {
+              "action": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "chip": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "role": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "role",
+              "text"
             ],
             "type": "object"
           },

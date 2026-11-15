@@ -328,8 +328,12 @@ async fn a_notebook_opens_with_its_files_outputs_as_stale_tails_and_a_bad_file_i
         ("a", "idle", true)
     );
     assert_eq!(
-        serde_json::to_value(&typed).unwrap()["head"]["runs"],
-        a["head"]["runs"]
+        serde_json::to_value(&typed).unwrap()["head"]["parts"],
+        a["head"]["parts"]
+    );
+    assert_eq!(
+        a["head"]["parts"][0],
+        json!({"role": "run", "text": "", "action": "run"})
     );
     assert_eq!(
         w.hub
@@ -525,9 +529,10 @@ async fn a_tail_carries_the_execution_count_and_a_head_that_follows_the_cell_thr
     });
     assert_eq!(running["head"]["text"], "[*]  fake");
     assert_eq!(
-        running["head"]["runs"][0],
-        json!({"start": 0, "end": 3, "fg": null, "bg": null, "bold": true,
-                                                    "italic": false, "underline": false, "inverse": false})
+        running["head"]["parts"],
+        json!([{"role": "run", "text": "", "action": "stop"},
+               {"role": "count", "text": "[*]", "chip": "accent"},
+               {"role": "language", "text": "fake", "chip": "quiet"}])
     );
     w.hub.close(7, &id).await;
 

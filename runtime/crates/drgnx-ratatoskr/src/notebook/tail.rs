@@ -39,12 +39,25 @@ pub struct Tail {
     pub execution_count: Option<i64>,
 }
 
-/// The string at a cell's head: its prompt (`[n]`, `[ ]`, `[*]` while queued or running) and what kind of cell it is; the chrome around
-/// it (buttons, toolbar) is the editor's to place. STATE is `idle`, `queued` or `running`.
+/// One part of a cell's head, for the editor to draw as the part it is: ROLE `run` (the run button: ACTION `run` or `stop`), `count`
+/// (`[3]`, `[ ]`, `[*]`), `language` or `kind` (a markdown or raw cell's type); TEXT is what it says (none for the button); CHIP is
+/// the chip it is in, `quiet` or `accent` (none for the button). The editor draws what it is told, with its chip faces; it decides
+/// nothing about a head.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HeadPart {
+    pub role: &'static str,
+    pub text: String,
+    pub chip: &'static str,
+    pub action: &'static str,
+}
+
+/// The head of a cell: its run button, its prompt (`[n]`, `[ ]`, `[*]` while queued or running) and what kind of cell it is, as parts
+/// (and TEXT, the same as plain text: `[3]  python`); the toolbar of the selected cell is the editor's. STATE is `idle`, `queued` or
+/// `running`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Head {
     pub text: String,
-    pub runs: Vec<Run>,
+    pub parts: Vec<HeadPart>,
     pub state: &'static str,
 }
 
@@ -55,6 +68,12 @@ pub fn head(
     state: &'static str,
 ) -> Head {
     use hrafn::notebook::Kind;
+    let part = |role, text: &str, chip| HeadPart {
+        role,
+        text: text.to_string(),
+        chip,
+        action: "",
+    };
     let (prompt, chip) = match kind {
         Kind::Code => (
             match (state, count) {
@@ -63,43 +82,36 @@ pub fn head(
                 _ => "[ ]".to_string(),
             },
             if language.is_empty() {
-                "code"
+                "code".to_string()
             } else {
-                language
+                clean(language).chars().take(64).collect()
             },
         ),
-        Kind::Markdown => (String::new(), "markdown"),
-        Kind::Raw => (String::new(), "raw"),
+        Kind::Markdown => (String::new(), "markdown".to_string()),
+        Kind::Raw => (String::new(), "raw".to_string()),
     };
-    let strong = Style {
-        bold: true,
-        ..Style::default()
-    };
-    // role 8 is the terminal's bright black: the dim one
-    let dim = Style {
-        fg: Some(8),
-        ..Style::default()
-    };
-    let mut runs = Vec::new();
-    let mut text = String::new();
-    if !prompt.is_empty() {
-        runs.push(Run {
-            start: 0,
-            end: prompt.chars().count(),
-            style: strong,
-        });
-        text.push_str(&prompt);
-        text.push_str("  ");
+    if kind != Kind::Code {
+        return Head {
+            text: chip.clone(),
+            parts: vec![part("kind", &chip, "quiet")],
+            state,
+        };
     }
-    let start = text.chars().count();
-    let chip: String = clean(chip).chars().take(64).collect();
-    text.push_str(&chip);
-    runs.push(Run {
-        start,
-        end: start + chip.chars().count(),
-        style: dim,
-    });
-    Head { text, runs, state }
+    let busy = matches!(state, "queued" | "running");
+    Head {
+        text: format!("{prompt}  {chip}"),
+        parts: vec![
+            HeadPart {
+                role: "run",
+                text: String::new(),
+                chip: "",
+                action: if busy { "stop" } else { "run" },
+            },
+            part("count", &prompt, if busy { "accent" } else { "quiet" }),
+            part("language", &chip, "quiet"),
+        ],
+        state,
+    }
 }
 
 /// A line of the tail with its styled runs (offsets within the line, in characters).
