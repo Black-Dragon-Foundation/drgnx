@@ -96,6 +96,7 @@
               (agents-panel-chip "i")
               (agents-panel-act "<mouse-1>")
               (agents-panel-press "<down-mouse-1>")
+              (agents-panel-drag "<drag-mouse-1>")
               (agents-panel-start :none "in the palette")
               (agents-panel-move "m")
               (agents-panel-compact "c")

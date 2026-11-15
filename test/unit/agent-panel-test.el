@@ -1154,3 +1154,24 @@ no hub patch: a panel window at the panel's end follows its tail again; one the 
           (set-window-point w (point-min))
           (run-hooks 'drgnx-look-fonts-applied-hook)
           (should (= 1 tails)))))))
+
+(declare-function drgnx-agent-panel-drag "drgnx-agent-panel-steps")
+
+(ert-deftest drgnx-agent-panel/a-click-on-the-pinned-copy-that-emacs-made-a-drag-is-a-click ()
+  "A patch moved the window start under the copy between the press and the release (a window following the tail): the
+release's buffer position is not the press's, so Emacs makes the click a drag.  On the copy it is a click on the part
+pressed; a drag from the copy into the transcript is the stock one."
+  (drgnx-agent-panel-test--pinned
+    (drgnx-agent-panel--pin-update)
+    (let* ((w (selected-window)) (ran nil) (copy (cdr drgnx-agent-panel--pin))
+           (from (list w 16 '(10 . 4) 0 (cons copy 2)))
+           (to (list w 30 '(10 . 4) 0 (cons copy 2))))
+      (cl-letf (((symbol-function 'drgnx-ui-kit-run) (lambda (id) (push id ran)))
+                ((symbol-function 'mouse-set-region) (lambda (_e) (push 'stock-drag ran))))
+        (with-current-buffer buf
+          (should (eq (key-binding [drag-mouse-1]) 'drgnx-agent-panel-drag))
+          (drgnx-agent-panel-drag (list 'drag-mouse-1 from to))
+          (should (equal ran '(agents-panel-pin)))
+          (setq ran nil)
+          (drgnx-agent-panel-drag (list 'drag-mouse-1 from (list w 40 '(10 . 200) 0 nil)))
+          (should (equal ran '(stock-drag))))))))

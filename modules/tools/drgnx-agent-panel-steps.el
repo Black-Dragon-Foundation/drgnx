@@ -90,12 +90,21 @@ the buffer's.  A string's position in the buffer is the window start, under the 
 
 (defvar drgnx-agent-panel--pin)
 
-(defun drgnx-agent-panel--on-pin-p (event)
-  "Whether EVENT is on the pinned copy (`drgnx-agent-panel--pin'), the string of the overlay over the window's first
+(defun drgnx-agent-panel--on-pin-p (posn)
+  "Whether POSN is on the pinned copy (`drgnx-agent-panel--pin'), the string of the overlay over the window's first
 line."
-  (let ((str (posn-string (event-end event))) (win (posn-window (event-end event))))
+  (let ((str (posn-string posn)) (win (posn-window posn)))
     (and (stringp (car-safe str)) (windowp win)
          (eq (car str) (cdr (buffer-local-value 'drgnx-agent-panel--pin (window-buffer win)))))))
+
+(defun drgnx-agent-panel-drag (event)
+  "Drag EVENT: from the pinned copy to it, a click on the part pressed.  The copy's buffer position is the window
+start, and a patch that moves the start between the press and the release (a window following the tail) makes Emacs
+take the click for a drag.  Any other drag is the stock one (`mouse-set-region')."
+  (interactive "e")
+  (if (and (drgnx-agent-panel--on-pin-p (event-start event)) (drgnx-agent-panel--on-pin-p (event-end event)))
+      (drgnx-agent-panel-act (list 'mouse-1 (event-start event)))
+    (mouse-set-region event)))
 
 (defun drgnx-agent-panel-act (event)
   "Run the header, strip, chip or card part the click EVENT is on: the lens segment (`lens:N'), the pin or the ⋯ menu, a
@@ -133,7 +142,7 @@ panel's end would stop following it); anywhere else the press is the stock one."
   (interactive "e")
   (let* ((end (event-end event)) (pos (posn-point end)) (win (posn-window end))
          (buf (and (windowp win) (window-buffer win))))
-    (unless (and pos buf (or (drgnx-agent-panel--on-pin-p event)
+    (unless (and pos buf (or (drgnx-agent-panel--on-pin-p end)
                              (drgnx-agent-panel--prop-at event 'drgnx-agent-panel-action)
                              (drgnx-agent-panel--prop-at event 'drgnx-agent-panel-chip)))
       (mouse-drag-region event))))
@@ -275,6 +284,9 @@ else when the chat's toggle for its type is on."
   (drgnx-command-define 'agents-panel-press :category "Agents" :title "Panel Header: Press"
                         :command #'drgnx-agent-panel-press :map 'drgnx-agent-panel-mode-map
                         :doc "A press on the header or a chip leaves point where it is; anywhere else it is the stock press")
+  (drgnx-command-define 'agents-panel-drag :category "Agents" :title "Panel Header: Drag"
+                        :command #'drgnx-agent-panel-drag :map 'drgnx-agent-panel-mode-map
+                        :doc "A click on the pinned header that the transcript's scroll made a drag is still a click; any other drag is the stock one")
   (drgnx-command-define 'agents-panel-preset-1 :category "Agents" :title "Panel View: Watch"
                         :command #'drgnx-agent-panel-preset-1 :map 'drgnx-agent-panel-mode-map
                         :doc "Steps as titles only")

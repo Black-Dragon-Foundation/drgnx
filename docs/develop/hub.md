@@ -2936,7 +2936,9 @@ the mode). They are built again from the session's snapshot at each `emit`, also
 only what changed. The lens is the editor's: `agents/panel/look` carries `lens` (the presets' names) and `lens_on` (the one
 in force, from 1, 0 none). A clickable part has the `drgnx-agent-panel-action` property (`lens:N`, `pin`, `more`) or
 `drgnx-agent-panel-chip` (`context`, `cost`, `mode`); the editor's `agents-panel-act` (a click) and `agents-panel-press`
-(a press keeps point) read them. The editor puts the rows whose key starts with `p:` above its own rows.
+(a press keeps point) read them, and `agents-panel-drag` takes a drag from the pinned copy to it for a click (the copy's
+buffer position is the window start, which a followed tail moves between the press and the release, so Emacs makes the
+click a drag). The editor puts the rows whose key starts with `p:` above its own rows.
 The panel owns its scroll (`drgnx-agent-panel--follow-tail`, after each draw of hub rows): a window whose point is at
 the panel's end shows the end (the composer) at its bottom, whatever came in above it, so a panel shorter than its window
 starts at its header and a taller one shows its last page; a window the user moved point in is left alone. The look
@@ -2953,7 +2955,9 @@ overlay's string only (`drgnx-agent-panel--prop-at`: the click's buffer position
 and a press anywhere on it leaves point alone, as on a header line. The tail is followed after each patch, when the
 store says the window changed size (`pane-resized`) and when the fonts were written again
 (`drgnx-look-fonts-applied-hook`: a theme or font change makes the rows taller with no patch). The end counts as shown
-only with its whole row. The wheel scrolls by lines in a panel (`pixel-scroll-precision-mode`'s pixels would go into the
+only with its whole row. A reset of the hub's rows (the panel's width or the theme changed) removes every row and
+inserts the new ones, which would put the start and point of a window the user scrolled back below them: the panel keeps
+those by row key (`drgnx-view-save-places`) and puts them back when the reset is drawn. The wheel scrolls by lines in a panel (`pixel-scroll-precision-mode`'s pixels would go into the
 first line's vscroll and carry the copy out of the window), and a wheel down adds the copy's lines, which `scroll-up`
 counts as the window's first. A header line cannot do this: Emacs draws it as one glyph row. The panel's rows are drawn
 by Lisp, so no Sjá store holds them.
