@@ -92,7 +92,10 @@ header line's height is known after the first redisplay; at most 5 rounds)."
               (goto-char (point-min))
               (insert (mapconcat (lambda (i) (format "line %d" i)) (number-sequence 1 80) "\n") "\n"))
             (drgnx-ui-agent-panel-composer--settle area)
-            (let ((total (+ (window-pixel-height tw) (window-pixel-height cw))))
+            ;; the area: its main window and its companions (the header above, the composer)
+            (let ((total (apply #'+ (mapcar #'window-pixel-height
+                                            (seq-filter (lambda (w) (eq area (window-parameter w 'drgnx-role)))
+                                                        (window-list nil 'nomini))))))
               (should (<= (window-pixel-height cw) (* 0.45 total)))
               (should (> (window-pixel-height cw) (* 0.3 total))))
             (with-current-buffer comp (delete-region (point-min) (drgnx-agent-panel-composer--field-end)) (insert "half"))
