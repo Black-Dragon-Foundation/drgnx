@@ -2950,7 +2950,17 @@ are per-(connection, view) user state in the hub's `Chosen`; the editor sends `p
 session; the ledger's files and a paired chat's hunks the hub reads itself (`work/files`, `history/op/hunks`) when the
 count of finished edits changes. A card's buttons are `card:*` values of `drgnx-agent-panel-action`, which the editor's
 click dispatcher (`drgnx-agent-panel-act`) answers by calling the existing command. The hub orders every row of the
-panel; the editor inserts them in that order.
+panel; the editor inserts them in that order, with no key prefix or special case.
+
+The cards under the transcript are the hub's too (`view/panel_review.rs`): a diff card for each hunk of each file the
+agent edited (`c:diff:PATH:I:h` the header with the file's icon, name, which lines and hunk, Reject and Accept; then
+`c:diff:PATH:I:N` the numbered lines in the added, removed and context faces, 30 at most) and a permission card for each
+request in the snapshot (`c:perm:ID:0` the ringed line, `c:perm:ID:1` Allow, Always and Deny). The hub reads each file's
+diff (`work/hunks`, 20 files at most) when the count of finished edits changes, as it does the ledger's files. A button is
+a `card:accept:PATH:I`, `card:reject:PATH:I`, `card:allow:ID`, `card:always:ID` or `card:deny:ID` value of
+`drgnx-agent-panel-action`; every row of a card carries `drgnx-agent-panel-card` (`["diff", PATH, I]` or `["perm", ID]`),
+which the keys (`a`, `D`, `RET`, `A`) and the click dispatcher read at point to run the existing commands. The editor keeps
+no diffs: Accept and Reject ask `work/hunks` for the file first, for the review mark's hash.
 
 The transcript of an agent session, as rows the panel only inserts (`runtime/crates/drgnx-ratatoskr/src/view/panel.rs`;
 the rows themselves are `agents/session/rows.rs`, pure).

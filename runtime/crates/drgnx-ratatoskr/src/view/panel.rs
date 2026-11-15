@@ -11,6 +11,7 @@
 
 use super::model::Doc;
 use super::panel_cards::{self, FileEdit};
+use super::panel_review;
 use super::panel_top;
 use super::{Key, lock};
 use crate::agents::session::Session;
@@ -162,6 +163,8 @@ struct Edited {
     count: Option<usize>,
     files: Vec<FileEdit>,
     paired: Vec<runstav::methods::history::OpHunk>,
+    /// Each edited file's path and its unified diff against the base (a worktree chat), for the diff cards.
+    diffs: Vec<(String, String)>,
 }
 
 /// The panels' state: the looks, the caches and the steps' facts.
@@ -307,6 +310,14 @@ impl Panels {
                         minus: e.minus,
                     })
                     .collect();
+                for file in edited.files.iter().take(panel_review::MAX_FILES) {
+                    if let Ok(p) =
+                        serde_json::from_value(json!({"session": sid, "path": file.path}))
+                        && let Ok(h) = crate::work::edits::hunks(&f, &hub, p).await
+                    {
+                        edited.diffs.push((file.path.clone(), h.diff));
+                    }
+                }
             }
             lock(&me.edited).insert(sid.clone(), edited);
             // the rows alone: no entry changed, so no model is made again; none while a connection's first build of
@@ -549,7 +560,7 @@ impl Panels {
             .get(&(key.0, key.1.clone()))
             .map(|c| (c.lens.clone(), c.look.open.clone()))
             .unwrap_or_default();
-        let (mut rows, images) = panel_top::rows(
+        let (mut rows, mut images) = panel_top::rows(
             &snapshot,
             &panel_top::Cx {
                 env,
@@ -581,6 +592,20 @@ impl Panels {
             }));
         }
         rows.extend(self.rows_of(&src, key, env, fonts, dirty));
+        // the cards under the transcript: each edited file's hunks, then the requests the agent waits on
+        let (cards, card_images) = {
+            let edited = lock(&self.edited);
+            let none = Edited::default();
+            let e = edited.get(&s.id).unwrap_or(&none);
+            panel_review::rows(&panel_review::In {
+                env,
+                fonts,
+                diffs: &e.diffs,
+                permissions: &snapshot.permissions,
+            })
+        };
+        rows.extend(cards);
+        images.extend(card_images);
         (rows, images)
     }
 

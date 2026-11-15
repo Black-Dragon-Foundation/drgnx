@@ -140,13 +140,7 @@ to its top.  The hub gives at most 50."
 (declare-function drgnx-agent-panel-composer--queue-row "drgnx-agent-panel-composer")
 (declare-function drgnx-agent-panel-composer--row "drgnx-agent-panel-composer")
 
-(declare-function drgnx-agent-panel-cards-keys "drgnx-agent-panel-cards")
-(declare-function drgnx-agent-panel-cards-redraw "drgnx-agent-panel-cards")
 (declare-function drgnx-agent-panel-cards-setup "drgnx-agent-panel-cards")
-(declare-function drgnx-agent-panel-cards-load "drgnx-agent-panel-cards")
-(declare-function drgnx-agent-panel-cards-note-entries "drgnx-agent-panel-cards")
-(declare-function drgnx-agent-panel-cards--diff-row "drgnx-agent-panel-cards")
-(declare-function drgnx-agent-panel-cards--perm-row "drgnx-agent-panel-cards")
 
 (unless (featurep 'drgnx-agent-panel-cards)
   (load (expand-file-name "drgnx-agent-panel-cards" (file-name-directory (or load-file-name buffer-file-name))) nil t))
@@ -245,8 +239,6 @@ folds under it."
     (:more (propertize "  ↑ earlier steps load when you scroll up\n" 'face 'drgnx-agent-panel-subtle))
     (:e (drgnx-agent-panel--entry-row (cadr key)))
     (:b (drgnx-agent-panel--block-row (cadr key) (nth 2 key)))
-    (:diff (drgnx-agent-panel-cards--diff-row (cadr key) (nth 2 key)))
-    (:perm (drgnx-agent-panel-cards--perm-row (cadr key)))
     (:q (drgnx-agent-panel-composer--queue-row (cadr key)))
     (:composer (drgnx-agent-panel-composer--row))
     (:rows-end "\n")
@@ -290,23 +282,11 @@ come in above it, and a window keeps its start on its row, so it would start bel
   "Whether this panel's transcript is the hub's rows (it is not when the panel was made while the hub was down)."
   (and drgnx-view-patch t))
 
-(defun drgnx-agent-panel--top-row-p (row)
-  "Whether the hub's ROW (a plist) is one of the panel's top rows: its key starts with `p:' (the header, the chips
-and the strip)."
-  (let ((key (plist-get row :key))) (and (stringp key) (string-prefix-p "p:" key))))
-
-(defun drgnx-agent-panel--insert-ops (rows)
-  "The insert ops that put the hub's ROWS (plists) in: the panel's top rows (the header, the chips, the strip and the
-cards above the transcript) at the very top, the others after the last of them."
-  (let ((top (seq-filter #'drgnx-agent-panel--top-row-p rows))
-        (rest (seq-remove #'drgnx-agent-panel--top-row-p rows)))
-    (append (and top (list (list :insert (list :after nil :rows top))))
-            (and rest (list (list :insert (list :after (plist-get (car (last top)) :key) :rows rest)))))))
-
 (defun drgnx-agent-panel--apply-rows (state view patch)
   "`drgnx-view-patch-apply-function' of a panel: PATCH applied as `drgnx-view-patch--apply-ops' does, with its rows
 placed above `(:rows-end)' (the panel's own rows below the transcript): a reset removes the hub rows there were and
-inserts its own at the top, an insert after no row goes there too."
+inserts its own at the top, in the order the hub gave them (the header, the cards above and below the transcript and the
+transcript itself: no row is placed by its key)."
   (let (ops)
     (dolist (op (plist-get patch :ops))
       (cond
@@ -315,9 +295,7 @@ inserts its own at the top, an insert after no row goes there too."
           (clrhash (drgnx-view-patch-images state))
           (clrhash (drgnx-view-patch-ids state))
           (when old (push (list :remove old) ops))
-          (dolist (o (drgnx-agent-panel--insert-ops (plist-get op :reset))) (push o ops))))
-       ((and (plist-member op :insert) (null (plist-get (plist-get op :insert) :after)))
-        (dolist (o (drgnx-agent-panel--insert-ops (plist-get (plist-get op :insert) :rows))) (push o ops)))
+          (when (plist-get op :reset) (push (list :insert (list :after nil :rows (plist-get op :reset))) ops))))
        (t (push op ops))))
     (with-current-buffer (drgnx-view--buffer view)
       (when (seq-some (lambda (o) (or (plist-member o :reset) (plist-member o :insert))) ops)
@@ -450,7 +428,6 @@ OLD's, and an event with neither keeps OLD's.  The result has no `patch'."
             (append (and drgnx-agent-panel--more drgnx-agent-panel--loaded (list (list :more)))
                     (let ((idxs (sort (hash-table-keys drgnx-agent-panel--entries) #'<)))
                       (mapcan #'drgnx-agent-panel--row-keys (seq-filter #'drgnx-agent-panel--row-p idxs)))))
-          (drgnx-agent-panel-cards-keys)
           (drgnx-agent-panel-composer-keys)))
 
 (defun drgnx-agent-panel--reconcile ()
@@ -479,8 +456,7 @@ OLD's, and an event with neither keeps OLD's.  The result has no `patch'."
 chips are the hub's rows, which it builds from its own snapshot."
   (setq drgnx-agent-panel--snap snap)
   (drgnx-agent-panel--reconcile)
-  (drgnx-agent-panel-composer-redraw)
-  (drgnx-agent-panel-cards-redraw))
+  (drgnx-agent-panel-composer-redraw))
 
 (defun drgnx-agent-panel--take-entries (pairs &optional from-slice)
   "PAIRS, (INDEX ENTRY) as the hub sends them, are in the transcript: a new entry is appended, a changed one patched.
@@ -490,21 +466,15 @@ are only kept (`drgnx-agent-panel--keep-entries')."
     (drgnx-agent-panel--take-entries-old pairs from-slice)))
 
 (defun drgnx-agent-panel--keep-entries (pairs from-slice)
-  "PAIRS are kept for the cards, the pins and the step at point; the hub draws them.  The rows above the transcript
-change only with a plan or a finished edit."
-  (let (touched cards)
+  "PAIRS are kept for the pins and the step at point; the hub draws them, and the cards with them."
+  (let (touched)
     (seq-doseq (pair pairs)
       (let ((idx (elt pair 0)) (e (elt pair 1)))
         (unless (and from-slice (gethash idx drgnx-agent-panel--live))
           (unless from-slice (puthash idx t drgnx-agent-panel--live))
           (puthash idx e drgnx-agent-panel--entries)
-          (push idx touched)
-          (when (or (eq (drgnx-agent-panel--type e) 'plan)
-                    (and (equal (plist-get e :kind) "edit") (equal (plist-get e :status) "completed")))
-            (setq cards t)))))
-    (when touched
-      (when cards (drgnx-agent-panel--reconcile))
-      (drgnx-agent-panel-cards-note-entries (current-buffer) touched from-slice))))
+          (push idx touched))))
+    touched))
 
 (defun drgnx-agent-panel--take-entries-old (pairs from-slice)
   "`drgnx-agent-panel--take-entries' of a panel made while the hub is down: every row drawn here."
@@ -531,7 +501,7 @@ change only with a plan or a finished edit."
             (cl-pushnew (list :e idx) keys :test #'equal)))
         (when (drgnx-view-p drgnx-view)
           (drgnx-view-dirty drgnx-view (seq-filter (lambda (k) (gethash k drgnx-agent-panel--shown-keys)) keys))))
-      (drgnx-agent-panel-cards-note-entries (current-buffer) touched from-slice))))
+      touched)))
 
 (defun drgnx-agent-panel--take-steps (steps)
   (dolist (s steps)
@@ -564,8 +534,7 @@ change only with a plan or a finished edit."
                (setq drgnx-agent-panel--more (and first (>= (length steps) n)))
                (if (null first)
                    (progn (setq drgnx-agent-panel--loading nil drgnx-agent-panel--loaded t drgnx-agent-panel--more nil)
-                          (drgnx-agent-panel--reconcile)
-                          (unless older (drgnx-agent-panel-cards-load buf)))
+                          (drgnx-agent-panel--reconcile))
                  (drgnx-agent-panel--ask
                   "agents/slice" (list :id id :from_step (plist-get first :seq) :n n)
                   (lambda (r2 err2)
@@ -574,8 +543,7 @@ change only with a plan or a finished edit."
                         (setq drgnx-agent-panel--loading nil drgnx-agent-panel--loaded t)
                         (drgnx-agent-panel--take-steps (append (if err2 steps (or (plist-get r2 :steps) steps)) nil))
                         (unless err2 (drgnx-agent-panel--take-entries (plist-get r2 :entries) t))
-                        (drgnx-agent-panel--reconcile)
-                        (unless older (drgnx-agent-panel-cards-load buf)))))))))))))))
+                        (drgnx-agent-panel--reconcile))))))))))))))
 
 (defun drgnx-agent-panel-older ()
   "Load the page of steps before the first one shown, when the hub has one; with the hub's rows, they go one window
