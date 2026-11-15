@@ -1315,7 +1315,7 @@ The `notebook/*` methods and the events they come with (`notebook-tail`, `notebo
 | `agents/list` | user, agent, service | `{}` | `{sessions?: [Snapshot]}` | no |
 | `agents/move` | user | `{id: Id, profile: string}` | `{id: string, name: string}` | yes |
 | `agents/pair` | user | `{id: Id, on: boolean}` | `boolean` | no |
-| `agents/panel/look` | user | `{ledger_open?: boolean, lens?: [string], lens_on?: natnum, older?: boolean, open?: [string], pins?: [string], rows?: [[natnum, boolean]], view: string}` | `boolean` | no |
+| `agents/panel/look` | user | `{dear_cost?: number, ledger_open?: boolean, lens?: [string], lens_on?: natnum, older?: boolean, open?: [string], pins?: [string], rows?: [[natnum, boolean]], slow_secs?: number, view: string}` | `boolean` | no |
 | `agents/pause` | user | `{id: Id}` | `boolean` | yes |
 | `agents/permission` | user | `{id: Id, option?: string, request: RequestId}` | `boolean` | yes |
 | `agents/presence/get` | user | `{file: string}` | `{entries?: [PresenceEntry], file: string, rel?: string, repo?: string}` | no |
@@ -2928,6 +2928,10 @@ The Outline section's rows: the definitions of the file in the editor, built by 
 
 ### The agent panel's rows
 
+**The thresholds.** A step's time and cost are drawn in `drgnx-agent-panel-warn` over the editor's
+`drgnx-agent-panel-slow-seconds` and `drgnx-agent-panel-expensive-cost`: every `agents/panel/look` carries them
+(`slow_secs`, `dear_cost`; one not given keeps the one before, 10 s and 0.5 until the first), and setting either option
+sends every open panel's look again, so the rows are built again at once.
 
 **The header and the chips (offload step F1).** The panel's first rows are the hub's too (`view/panel_top.rs`): `p:head`
 (the agent's Lucide icon and name, what it is doing cut to the room the lens leaves, a stop, then the lens of presets and

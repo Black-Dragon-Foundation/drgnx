@@ -26,7 +26,7 @@ and composer with it.
 - **Steps:** a tool call is one line: a dot for its state, its title (a shell step: "Shell" and its command in the
   code font), its result after `·`, and its time and cost on the
   right in the code font. A slow step (over `drgnx-agent-panel-slow-seconds`) or an expensive one (over
-  `drgnx-agent-panel-expensive-cost`) shows that figure in the warning colour. The agent's thinking is folded under the
+  `drgnx-agent-panel-expensive-cost`) shows that figure in the warning colour; set either with `setopt` or Customize and open panels draw again at once. The agent's thinking is folded under the
   step it belongs to; `TAB` opens or folds it, with the step's detail.
 - **Fonts:** the panel's text is in the UI font; a tool's output, the diffs (in the steps and on the cards) and code in
   a message are in the code font.
