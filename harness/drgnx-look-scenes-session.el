@@ -16,6 +16,7 @@
 (declare-function drgnx-pkg-jit-guard "drgnx-pkg-activate")
 (declare-function drgnx-panel-replay--wait "panel-replay-fixture")
 (declare-function drgnx-agent-panel-act "drgnx-agent-panel-steps")
+(declare-function drgnx-signal--flush "drgnx-signal")
 (declare-function drgnx-agent-panel--end-shown-p "drgnx-agent-panel")
 (declare-function drgnx-uitest-run "drgnx-uitest")
 (declare-function drgnx-uitest-click-events "drgnx-uitest")
@@ -547,6 +548,7 @@ end shows the end whole."
     (dolist (step (list (- h 250) h))
       (set-frame-size frame (frame-pixel-width frame) step t)
       (redisplay t)
+      (drgnx-signal--flush)             ; the bus's idle flush, as at a pause in typing: the store tells the panel
       (unless (with-current-buffer buffer
                 (and (drgnx-agent-panel--end-shown-p w)
                      ;; at the window's bottom, not centred where redisplay puts a point it had to find

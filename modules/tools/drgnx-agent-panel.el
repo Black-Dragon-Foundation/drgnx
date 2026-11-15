@@ -37,6 +37,7 @@
 (require 'text-property-search)          ; the moves look through the drawn rows
 
 (defvar mwheel-scroll-up-function)
+(declare-function drgnx-state-subscribe "drgnx-state")
 (declare-function drgnx-hub--call-on "drgnx-hub-client")
 (declare-function drgnx-view-env-register "drgnx-view-env")
 (declare-function drgnx-view-env-update "drgnx-view-env")
@@ -367,11 +368,12 @@ last page.  A window the user moved point in is left alone."
   (dolist (w (get-buffer-window-list (current-buffer) nil t))
     (drgnx-agent-panel--follow-window w)))
 
-(defun drgnx-agent-panel--resized (window)
-  "`window-size-change-functions' (buffer-local, so it gets the window showing the buffer, once for each change of its
-size, of its buffer or when it is new): a window at the panel's end shows the end at its bottom again at once, not
-at the next hub patch."
-  (drgnx-agent-panel--follow-window window))
+(defun drgnx-agent-panel--pane-resized (data)
+  "The store's `pane-resized' (idle lane, subscribed in the module's setup): a panel window that changed size shows
+the end at its bottom again at once, not at the next hub patch.  A window the user scrolled away from stays."
+  (when-let* ((w (plist-get data :window)) ((window-live-p w))
+              (b (window-buffer w)) ((eq (buffer-local-value 'major-mode b) 'drgnx-agent-panel-mode)))
+    (with-current-buffer b (drgnx-agent-panel--follow-window w))))
 
 (defun drgnx-agent-panel--sync (view)
   "SYNC of the panel's view: with the hub's rows, the models their patches named go to Sjá before they are drawn."
@@ -697,7 +699,6 @@ signal when no hub serves)."
   (add-hook 'window-scroll-functions #'drgnx-agent-panel--scrolled nil t)
   (setq-local mwheel-scroll-up-function #'drgnx-agent-panel--scroll-up)
   (setq-local minor-mode-overriding-map-alist (list (cons 'pixel-scroll-precision-mode drgnx-agent-panel--wheel-map)))
-  (add-hook 'window-size-change-functions #'drgnx-agent-panel--resized nil t)
   (add-hook 'kill-buffer-hook #'drgnx-agent-panel--killed nil t))
 
 (defun drgnx-agent-panel--killed ()
@@ -828,6 +829,7 @@ stays in it.  Every fifth update opens a new block, the others grow the last one
 ;;;; The module
 
 (defun drgnx-agent-panel--setup ()
+  (drgnx-state-subscribe 'pane-resized #'drgnx-agent-panel--pane-resized)
   (drgnx-command-define 'agents-panel :category "Agents" :title "Open the Agent Panel"
                         :command #'drgnx-agent-panel-open
                         :doc "One agent session's steps, live, in the right dock")
