@@ -544,7 +544,10 @@ and the cell it left goes back (their strings are built again from their last ta
 it to take the `line-prefix' of the cell's body from."
   (let ((s (drgnx-notebook--tail-string-1 tail selected)))
     (when (and (> (length s) 0) (drgnx-notebook--cards-p))
-      (add-text-properties 0 (length s) (list 'line-prefix (drgnx-notebook--card-pad)) s))
+      (add-text-properties 0 (length s) (list 'line-prefix (drgnx-notebook--card-pad)) s)
+      ;; the last cell's output is at the buffer's end: no text after it to give its first row the pad
+      (when-let* ((c (drgnx-notebook--cell-by-id (plist-get tail :cell))) ((>= (1+ (plist-get c :tail)) (point-max))))
+        (setq s (concat (propertize " " 'display `(space :width (,(drgnx-px 12)))) s))))
     s))
 
 (defun drgnx-notebook--tail-string-1 (tail &optional selected)
