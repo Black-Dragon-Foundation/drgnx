@@ -563,9 +563,12 @@ paths no WM serves."
   (expand-file-name "../../bin/drgnx" (file-name-directory (or load-file-name buffer-file-name))))
 
 (defun drgnx-ui-compositor-test--bin-call (dir env &rest args)
-  "Run bin/drgnx with ARGS in DIR, HOME and config there, ENV on top; return (EXIT . OUTPUT)."
+  "Run bin/drgnx with ARGS in DIR, HOME and config there, ENV on top; return (EXIT . OUTPUT).  The GUI tiers' test
+hub is not built (DRGNX_TEST_HUB_BUILD=0, no DRGNX_RATATOSKR_BIN): these rows read what bin/drgnx hands the container
+or the session, and a checkout with no cargo, or a run without CI's hub binary, made every one exit 1."
   (let ((process-environment (append env (list (concat "HOME=" dir) (concat "DRGNX_CONFIG_DIR=" dir "/config")
-                                               "DRGNX_EMACS" "DRGNX_UI_COMPOSITOR" "DRGNX_TEST_SELECTOR")
+                                               "DRGNX_EMACS" "DRGNX_UI_COMPOSITOR" "DRGNX_TEST_SELECTOR"
+                                               "DRGNX_TEST_HUB_BUILD=0" "DRGNX_RATATOSKR_BIN")
                                      process-environment))
         (default-directory (file-name-as-directory dir)))
     (with-temp-buffer (cons (apply #'call-process drgnx-ui-compositor-test--bin nil t nil args) (buffer-string)))))
