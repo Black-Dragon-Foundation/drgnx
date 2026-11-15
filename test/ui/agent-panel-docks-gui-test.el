@@ -206,17 +206,17 @@ smaller than its fullscreen size each way, with point at the transcript's end.  
                (drgnx-test-frame-text-size root (- (car size) 100) (- (cadr size) 100))
                (delete-other-windows)
                (setq ,panel (drgnx-panel-replay-up (drgnx-rows-demo--bin)))
-               (drgnx-panel-docks-ui-test--settle ,panel)
                (let* ((,tw (get-buffer-window ,panel)) (area (window-parameter ,tw 'drgnx-role)) ,hw ,cw)
                  (should area)
+                 ;; the editor's window selected before any settle: the settle's C-l recenters it, never the
+                 ;; transcript (a recentred transcript has its end mid-window with point still in view)
+                 (select-window (or (seq-find (lambda (w) (not (window-parameter w 'drgnx-role))) (window-list nil 'nomini))
+                                    (error "No editor window beside the panel")))
+                 (drgnx-panel-docks-ui-test--settle ,panel)
                  (drgnx-panel-docks-ui-test--settle-area)
                  (setq ,hw (drgnx-panel-docks-ui-test--part area 'above) ,cw (drgnx-panel-docks-ui-test--part area 'below))
                  (should (window-live-p ,hw))
                  (should (window-live-p ,cw))
-                 ;; the editor's window selected: the settle's C-l recenters it, not the transcript, whose window point
-                 ;; stays at its end
-                 (select-window (or (seq-find (lambda (w) (not (window-parameter w 'drgnx-role))) (window-list nil 'nomini))
-                                    ,tw))
                  (with-current-buffer ,panel (goto-char (point-max)))
                  (set-window-point ,tw (with-current-buffer ,panel (point-max)))
                  (drgnx-panel-docks-ui-test--settle-area)
@@ -259,17 +259,24 @@ most 5 rounds)."
     (and (plist-get f :start-at-top) (= 0 (plist-get f :vscroll))
          (<= (abs (- (plist-get f :body) (plist-get f :text))) 1))))
 
+(defun drgnx-panel-docks-ui-test--above-start (window)
+  "The pixel height of the screen line before WINDOW's start: what one more row at its top would take."
+  (let* ((start (window-start window))
+         (prev (with-selected-window window (save-excursion (goto-char start) (vertical-motion -1) (point)))))
+    (if (< prev start) (cdr (window-text-pixel-size window prev start)) 0)))
+
 (defun drgnx-panel-docks-ui-test--end-error (panel window)
   "Nil when WINDOW, point at PANEL's end, shows the end whole at its bottom (or the whole transcript, when it fits);
-else where the end is.  Emacs scrolls by whole rows: below the end's row there may be up to the first row's height
-\(and the end's own row)."
-  (let ((at (pos-visible-in-window-p (with-current-buffer panel (point-max)) window t))
-        (body (window-body-height window t)) (line (window-default-line-height window)))
+else where the end is.  Emacs scrolls by whole rows: under the end's row (a line) there is less space than the screen
+line before the start would take, else the window could show one more row and has blank space."
+  (let* ((at (pos-visible-in-window-p (with-current-buffer panel (point-max)) window t))
+         (body (window-body-height window t)) (line (window-default-line-height window))
+         (above (and at (> (window-start window) (with-current-buffer panel (point-min)))
+                     (drgnx-panel-docks-ui-test--above-start window))))
     (cond ((or (not at) (nth 2 at))
            (list :end-not-shown-whole :at at :body body :start (window-start window)))
-          ((and (> (window-start window) (with-current-buffer panel (point-min)))
-                (< (cadr at) (- body line (or (car (window-line-height 0 window)) line))))
-           (list :end-not-at-bottom :y (cadr at) :body body :line line :start (window-start window)
+          ((and above (>= (- body (+ (cadr at) line)) above))
+           (list :end-not-at-bottom :y (cadr at) :body body :line line :above above :start (window-start window)
                  :point (window-point window) :max (with-current-buffer panel (point-max)))))))
 
 (ert-deftest drgnx-ui-panel-docks/through-a-resize-the-end-stays-and-the-docks-fit ()
@@ -322,15 +329,13 @@ still shows its end, and the header still holds `p:head', fitted."
                        (drgnx-panel-docks-ui-test--end-error panel window)))))
 
 (defun drgnx-panel-docks-ui-test--steps (panel n what)
-  "Wait for N steps appended to PANEL, a new last row each (the row count may stay: the transcript keeps a page of
-rows), drawing them as they come."
-  (let ((last (lambda () (with-current-buffer panel
-                           (save-excursion (goto-char (point-max)) (skip-chars-backward "\n") (drgnx-view-key-at (point)))))))
-    (dotimes (i n)
-      (let ((was (funcall last)))
-        (drgnx-test-wait (lambda () (with-current-buffer panel (drgnx-view-draw-now nil)) (not (equal was (funcall last))))
-                         :secs 30 :what (list what (1+ i)))))
-    (redisplay t)))
+  "Wait for N appends to PANEL drawn one after another, each a longer buffer (a new row or a longer last one: the row
+count and the last row's key may stay, the hub groups reads), drawing them as they come."
+  (dotimes (i n)
+    (let ((was (with-current-buffer panel (point-max))))
+      (drgnx-test-wait (lambda () (with-current-buffer panel (drgnx-view-draw-now nil) (> (point-max) was)))
+                       :secs 30 :what (list what (1+ i)))))
+  (redisplay t))
 
 (ert-deftest drgnx-ui-panel-docks/the-panel-opens-at-its-end ()
   "A panel opened in the right area by its command path with a transcript longer than its window opens at its end,

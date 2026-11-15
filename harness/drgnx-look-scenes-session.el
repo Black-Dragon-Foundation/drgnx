@@ -793,19 +793,21 @@ its top, when it fits): what the panel opened by its command path shows first, o
     (when w
       ;; the header's fit after its rows changed the transcript's height: the windows as they are drawn now
       (redisplay t)
-      ;; the first rows leave point at the end (`drgnx-view-sja-tail'); Emacs scrolls by whole rows, so below the end's
-      ;; row there may be up to the first row's height.  A start at the top passes only when the end is shown whole,
-      ;; that is when the transcript fits
+      ;; the first rows leave point at the end (`drgnx-view-sja-tail'); Emacs scrolls by whole rows, so under the end's
+      ;; row there is less space than the screen line before the start would take.  A start at the top passes only
+      ;; when the end is shown whole, that is when the transcript fits
       (let* ((end (with-current-buffer buffer (point-max)))
              (at (pos-visible-in-window-p end w t))
-             (body (window-body-height w t)) (line (window-default-line-height w))
+             (body (window-body-height w t)) (line (window-default-line-height w)) (start (window-start w))
+             (above (and at (> start (with-current-buffer buffer (point-min)))
+                         (let ((prev (with-selected-window w (save-excursion (goto-char start) (vertical-motion -1) (point)))))
+                           (if (< prev start) (cdr (window-text-pixel-size w prev start)) 0))))
              (why (cond ((/= (window-point w) end) (format "its point %d is not its end %d" (window-point w) end))
                         ((or (not at) (nth 2 at)) "its end is not shown whole")
-                        ((and (> (window-start w) (with-current-buffer buffer (point-min)))
-                              (< (cadr at) (- body line (or (car (window-line-height 0 w)) line))))
-                         "its end is not at the bottom of its window"))))
+                        ((and above (>= (- body (+ (cadr at) line)) above))
+                         (format "its end is not at the bottom of its window (a row of %d px more would fit)" above)))))
         (when why
-          (push (format "agent-panel: %s (start %d, end at %S, body %d)" why (window-start w) at body)
+          (push (format "agent-panel: %s (start %d, end at %S, body %d)" why start at body)
                 drgnx-look-scene--errors))))))
 
 (defun drgnx-look-scene--palette-commands ()
