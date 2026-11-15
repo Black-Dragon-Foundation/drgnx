@@ -265,23 +265,31 @@ most 5 rounds)."
          (prev (with-selected-window window (save-excursion (goto-char start) (vertical-motion -1) (point)))))
     (if (< prev start) (cdr (window-text-pixel-size window prev start)) 0)))
 
+(defun drgnx-panel-docks-ui-test--row-bottom (window y)
+  "The bottom edge, in pixels from the top of WINDOW's text, of the screen line redisplay drew at Y in WINDOW (its
+height as drawn: a card or an image counted); Y and a default line when redisplay's rows don't tell."
+  (let ((n 0) r bottom)
+    (while (and (not bottom) (setq r (window-line-height n window)))
+      (when (and (<= (nth 2 r) y) (< y (+ (nth 2 r) (car r)))) (setq bottom (+ (nth 2 r) (car r))))
+      (setq n (1+ n)))
+    (or bottom (+ y (window-default-line-height window)))))
+
 (defun drgnx-panel-docks-ui-test--end-error (panel window)
   "Nil when WINDOW, point at PANEL's end, shows the end whole at its bottom (or the whole transcript, when it fits);
-else where the end is.  Emacs scrolls by whole rows: under the end's row (the bottom of the window's last text line as
-redisplay drew it, a card or image included) there is less space than the screen line before the start would take,
-else the window could show one more row and has blank space."
+else where the end is.  Emacs scrolls by whole rows: under the end's row (its bottom as redisplay drew it, a card or
+an image included) there is less space than the screen line before the start would take, else the window could show
+one more row and has blank space."
   (redisplay t)
   (let* ((end (with-current-buffer panel (point-max)))
          (at (pos-visible-in-window-p end window t))
          (body (window-body-height window t))
-         (last (window-line-height -1 window))
-         (bottom (if last (+ (nth 2 last) (car last)) (+ (or (cadr at) 0) (window-default-line-height window))))
+         (bottom (and at (drgnx-panel-docks-ui-test--row-bottom window (cadr at))))
          (above (and at (> (window-start window) (with-current-buffer panel (point-min)))
                      (drgnx-panel-docks-ui-test--above-start window))))
     (cond ((or (not at) (nth 2 at))
            (list :end-not-shown-whole :at at :body body :start (window-start window)))
           ((and above (>= (- body bottom) above))
-           (list :end-not-at-bottom :y (cadr at) :bottom bottom :last last :body body :above above
+           (list :end-not-at-bottom :y (cadr at) :bottom bottom :body body :above above
                  :start (window-start window)
                  :point (window-point window) :max end)))))
 
@@ -335,11 +343,14 @@ still shows its end, and the header still holds `p:head', fitted."
                        (drgnx-panel-docks-ui-test--end-error panel window)))))
 
 (defun drgnx-panel-docks-ui-test--steps (panel n what)
-  "Wait for N appends to PANEL drawn one after another, each a longer buffer (a new row or a longer last one: the row
-count and the last row's key may stay, the hub groups reads), drawing them as they come."
+  "Wait for N draws of PANEL that changed its text, one after another, drawing them as they come: the agent's steps.
+Neither the row count nor the buffer's size need grow (the transcript keeps a page of rows: a new one can drop the
+oldest; the hub groups reads into one row)."
   (dotimes (i n)
-    (let ((was (with-current-buffer panel (point-max))))
-      (drgnx-test-wait (lambda () (with-current-buffer panel (drgnx-view-draw-now nil) (> (point-max) was)))
+    (let ((was (with-current-buffer panel (buffer-chars-modified-tick))))
+      (drgnx-test-wait (lambda () (with-current-buffer panel
+                                    (drgnx-view-draw-now nil)
+                                    (/= was (buffer-chars-modified-tick))))
                        :secs 30 :what (list what (1+ i)))))
   (redisplay t))
 
@@ -434,7 +445,8 @@ the tab came back on the old end's position, which no longer follows."
             (let ((was (with-current-buffer panel (point-max))))
               (drgnx-panel-docks-ui-test--stream)
               (drgnx-panel-docks-ui-test--steps panel 5 "a step appended while the panel is hidden")
-              (should (> (with-current-buffer panel (point-max)) was)))
+              ;; the end moved: the point the tab left at the old end is no longer the end
+              (should (/= (with-current-buffer panel (point-max)) was)))
             (drgnx-pane-show 'agent-panel)
             (drgnx-panel-docks-ui-test--settle-area)
             (let ((tw2 (get-buffer-window panel)))
