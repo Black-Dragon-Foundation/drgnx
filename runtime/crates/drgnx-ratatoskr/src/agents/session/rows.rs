@@ -68,7 +68,7 @@ impl Default for Look {
     }
 }
 
-/// A text's parts as (text, font role), each measured in the font it is drawn in (`drgnx-view-env-roles`).
+/// A text's parts as (text, face), each measured in the font its face draws in (`drgnx_rows::fit::width_in`).
 pub type Parts<'p> = [(&'p str, &'p str)];
 
 /// What a group's rows read besides its entries.
@@ -412,21 +412,13 @@ fn tool_rows(idx: usize, e: &Entry, thoughts: &[&Entry], cx: &Cx) -> Vec<Row> {
             ));
         }
         if !parts.is_empty() {
-            // the time and cost face is `drgnx-code-small` (role `code-small`); the warning face sets no font, so it
-            // is the panel's own (`ui`)
-            let role = |f: &str| {
-                if f == "drgnx-agent-panel-code" {
-                    "code-small"
-                } else {
-                    "ui"
-                }
-            };
+            // each part is measured in the font its face draws in, as the editor reports it
             let mut meta: Vec<(&str, &str)> = Vec::new();
             for (n, (t, f)) in parts.iter().enumerate() {
                 if n > 0 {
-                    meta.push((" · ", "code-small"));
+                    meta.push((" · ", "drgnx-agent-panel-code"));
                 }
-                meta.push((t.as_str(), role(f)));
+                meta.push((t.as_str(), f));
             }
             l.b.stop((cx.right)(&meta));
             for (n, (t, f)) in parts.iter().enumerate() {

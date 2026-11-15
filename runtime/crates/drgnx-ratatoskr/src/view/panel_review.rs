@@ -74,9 +74,10 @@ fn px(env: &ViewEnv, v: f32) -> u32 {
     (f64::from(v) * f64::from(scale) + 0.5 + 1e-9).floor() as u32
 }
 
-fn text_width(i: &In, text: &str) -> u32 {
+/// TEXT's width drawn in FACE (none: the panel's default), in the font the editor says FACE draws in.
+fn text_width(i: &In, face: Option<&str>, text: &str) -> u32 {
     match i.env.display {
-        Display::Gui => fit::width(i.fonts, "ui", text).ceil() as u32,
+        Display::Gui => fit::width_in(i.fonts, face, text).ceil() as u32,
         Display::Tty => text.chars().count() as u32 * i.env.cell.0.max(1),
     }
 }
@@ -174,28 +175,32 @@ fn diff_header(
         "drgnx-text-muted",
     );
     b.push(" ", None);
-    let actions = " Reject   Accept ";
-    let actions_w = text_width(i, actions);
+    let button = Some("drgnx-ui-button");
+    let actions_w = text_width(i, button, " Reject ")
+        + text_width(i, None, " ")
+        + text_width(i, button, " Accept ");
     // what is left for the name and the label: the icon, then the buttons and 20 px of margin
     let room = i64::from(env.width_px)
         - i64::from(icon_px)
-        - i64::from(text_width(i, "   "))
+        - i64::from(text_width(i, None, "   "))
         - i64::from(actions_w)
         - i64::from(px(env, 20.0));
     let name = one_line(path, 50);
-    let (name, label) =
-        if env.width_px == 0 || i64::from(text_width(i, &format!("{name} {label}"))) <= room {
-            (name, label)
-        } else if room > 0 {
-            let name = if i64::from(text_width(i, &name)) <= room {
-                name
-            } else {
-                fit::fit(i.fonts, "ui", &name, room as f32)
-            };
-            (name, String::new())
+    let both = text_width(i, Some("bold"), &name)
+        + text_width(i, None, " ")
+        + text_width(i, Some("drgnx-agent-panel-subtle"), &label);
+    let (name, label) = if env.width_px == 0 || i64::from(both) <= room {
+        (name, label)
+    } else if room > 0 {
+        let name = if i64::from(text_width(i, Some("bold"), &name)) <= room {
+            name
         } else {
-            (String::new(), String::new())
+            fit::fit_in(i.fonts, Some("bold"), &name, room as f32)
         };
+        (name, String::new())
+    } else {
+        (String::new(), String::new())
+    };
     b.push(&name, Some("bold"));
     b.push(" ", None);
     b.push(&label, Some("drgnx-agent-panel-subtle"));

@@ -17,6 +17,7 @@ fn env(width: u32) -> ViewEnv {
         reduced_motion: false,
         attach: false,
         rows_in_sja: false,
+        headless: false,
     }
 }
 

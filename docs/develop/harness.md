@@ -637,6 +637,13 @@ How it works:
   category's multiform entry, the display action, the frame), and `:limits`, what the line cannot show of that mockup yet (`drgnx-look-scene-limits`). A limit is
   written down, never hidden by changing the scene. It also writes `scenes-sN.eld`, with the shots and each scene's
   errors.
+- **No hub-fed row wider than its window** (`drgnx-look-scene-widths`, after each scene's shot): every window of a
+  visible frame whose buffer holds a hub-fed view is measured as drawn, then narrower (by a third of its body, at
+  most 300 px) and wider (300 px), and put back. At each width the env goes out at once and the rows settle (their
+  buffer changed, then 0.3 s quiet, 3 s at most); each row (a line starting at a row key) is measured with
+  `window-text-pixel-size`, and one wider than the body is an error naming the view, its buffer, its class, the width
+  and an example. A window that cannot move 40 px says so (`:not-resizable`). What was measured goes to
+  `NAME-sN-widths.eld`.
 
 What it reads from the environment:
 - `DRGNX_LOOK_ELPA`: a package directory to activate (Magit, Vertico, …). A session has no packages of its
@@ -645,7 +652,7 @@ What it reads from the environment:
   and the Work space scenes. Without it, those scenes record what is missing.
 - `DRGNX_LOOK_ONLY`: a regexp; only the scenes whose names match it run (`^search-`).
 
-Nothing in the command asserts a pixel. **A look change is done only when its scene sits beside its mockup at scales 1
+Apart from the widths check, nothing in the command asserts a pixel. **A look change is done only when its scene sits beside its mockup at scales 1
 and 2, someone has looked at both, and the remaining differences are written down.** `test/unit/look-scenes-test.el`
 checks that every mockup has a scene and that the project is set up correctly.
 

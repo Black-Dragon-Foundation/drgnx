@@ -103,9 +103,10 @@ fn px(env: &ViewEnv, v: f32) -> u32 {
     (f64::from(v) * f64::from(scale) + 0.5 + 1e-9).floor() as u32
 }
 
-fn text_width(cx: &Cx, text: &str) -> u32 {
+/// TEXT's width drawn in FACE (none: the panel's default), in the font the editor says FACE draws in.
+fn text_width(cx: &Cx, face: Option<&str>, text: &str) -> u32 {
     match cx.env.display {
-        Display::Gui => fit::width(cx.fonts, "ui", text).ceil() as u32,
+        Display::Gui => fit::width_in(cx.fonts, face, text).ceil() as u32,
         Display::Tty => text.chars().count() as u32 * cx.env.cell.0.max(1),
     }
 }
@@ -150,7 +151,12 @@ fn header(s: &Snapshot, cx: &Cx, images: &mut Vec<(ImageId, String)>) -> Row {
     // the buttons and the lens, laid from the right edge: their width first, so the status takes what is left
     let mut lens_w = 0;
     for (n, p) in cx.lens.names.iter().enumerate() {
-        let name_w = text_width(cx, p);
+        let face = if cx.lens.on == n as u32 + 1 {
+            "drgnx-agent-panel-lens-on"
+        } else {
+            "drgnx-agent-panel-lens"
+        };
+        let name_w = text_width(cx, Some(face), p);
         lens_w += if gui {
             p8 * 2 + name_w
         } else {
@@ -173,7 +179,9 @@ fn header(s: &Snapshot, cx: &Cx, images: &mut Vec<(ImageId, String)>) -> Row {
     b.push(name, Some("drgnx-agent-panel-title"));
     let end = b.pos();
     b.prop(t, end, "drgnx-work-id", json!("p:head"));
-    let head_w = text_width(cx, &format!(" {name}")) + if gui { icon_px + p4 } else { 2 * cell };
+    let head_w = text_width(cx, None, " ")
+        + text_width(cx, Some("drgnx-agent-panel-title"), name)
+        + if gui { icon_px + p4 } else { 2 * cell };
 
     // what the agent does, cut to the room: 12 px before the right part, which sits 8 px from the edge
     let status = format!(" · {}", status_line(s, cx.busy_since, cx.now));
@@ -185,7 +193,12 @@ fn header(s: &Snapshot, cx: &Cx, images: &mut Vec<(ImageId, String)>) -> Row {
         String::new()
     } else {
         match env.display {
-            Display::Gui => fit::fit(cx.fonts, "ui", &status, room as f32),
+            Display::Gui => fit::fit_in(
+                cx.fonts,
+                Some("drgnx-agent-panel-subtle"),
+                &status,
+                room as f32,
+            ),
             Display::Tty => status.chars().take((room as u32 / cell) as usize).collect(),
         }
     };
@@ -272,9 +285,9 @@ fn strip(cx: &Cx) -> Vec<Row> {
     let cell = env.cell.0.max(1);
     let open = " Open: ";
     let default = "make default";
-    let width = |t: &str| text_width(cx, t);
+    let width = |face: &str, t: &str| text_width(cx, Some(face), t);
     let room = i64::from(env.width_px) - i64::from(px(env, 12.0));
-    let indent_px = width(open);
+    let indent_px = width("drgnx-agent-panel-subtle", open);
     // the parts, each a (text, face, action)
     let mut parts: Vec<(String, &str, String)> = STEP_TYPES
         .iter()
@@ -294,7 +307,7 @@ fn strip(cx: &Cx) -> Vec<Row> {
     let mut lines: Vec<Vec<(String, &str, String)>> = vec![Vec::new()];
     let mut line_w = i64::from(indent_px);
     for part in parts {
-        let w = i64::from(width(&part.0)) + i64::from(width(" "));
+        let w = i64::from(width(part.1, &part.0)) + i64::from(text_width(cx, None, " "));
         let first = lines.last().is_some_and(Vec::is_empty);
         if !first && env.width_px > 0 && line_w + w > room {
             lines.push(Vec::new());
@@ -323,7 +336,9 @@ fn strip(cx: &Cx) -> Vec<Row> {
         for (i, (text, face, action)) in l.iter().enumerate() {
             if action == "default" {
                 // at the right end of the line it fits on
-                let stop = env.width_px.saturating_sub(width(text) + px(env, 12.0));
+                let stop = env
+                    .width_px
+                    .saturating_sub(width(face, text) + px(env, 12.0));
                 if env.width_px > 0 {
                     b.stop(stop);
                 } else {

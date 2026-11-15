@@ -29,24 +29,19 @@ impl<'a> Room<'a> {
         }
     }
 
-    /// TEXT's width in px, in the row's font.
-    fn width_of(&self, text: &str) -> u32 {
-        self.width_in("ui", text)
-    }
-
-    /// TEXT's width in px in font ROLE (`caption`: the small UI font of a place at the right edge).
-    fn width_in(&self, role: &str, text: &str) -> u32 {
+    /// TEXT's width in px drawn in FACE (none: the view's default), in the font the editor says FACE draws in.
+    fn width_in(&self, face: Option<&str>, text: &str) -> u32 {
         match self.cell {
             Some(c) => text.chars().count() as u32 * c,
-            None => fit::width(self.fonts, role, text).ceil() as u32,
+            None => fit::width_in(self.fonts, face, text).ceil() as u32,
         }
     }
 
-    /// TEXT cut with `…` to PX.
-    fn fit(&self, text: &str, px: u32) -> String {
+    /// TEXT drawn in FACE cut with `…` to PX.
+    fn fit(&self, face: Option<&str>, text: &str, px: u32) -> String {
         match self.cell {
             Some(c) => drgnx_rows::fit_tty::fit(text, (px / c) as usize, &[]),
-            None => fit::fit(self.fonts, "ui", text, px as f32),
+            None => fit::fit_in(self.fonts, face, text, px as f32),
         }
     }
 
@@ -55,6 +50,9 @@ impl<'a> Room<'a> {
         self.cell.unwrap_or(8)
     }
 }
+
+/// The face of a frame's place and a breakpoint's line at the right edge.
+const PLACE: &str = "drgnx-debug-view-place";
 
 /// Where the row's text has got to, px: spaces and images count their size, text its measure.
 struct Pen<'r, 'a> {
@@ -65,14 +63,15 @@ struct Pen<'r, 'a> {
 
 impl Pen<'_, '_> {
     fn push(&mut self, text: &str, face: Option<&str>) -> &mut Self {
-        self.x += self.room.width_of(text);
+        self.x += self.room.width_in(face, text);
         self.b.push(text, face);
         self
     }
 
-    /// RIGHT (in FACE, whose font is ROLE's) against the right edge; after a gap when the row has no room for that.
-    fn right(&mut self, right: &str, face: &str, role: &str) {
-        let w = self.room.width_in(role, right);
+    /// RIGHT (in FACE) against the right edge; after a gap when the row has no room for that (the hub's row fit then
+    /// cuts it at the edge).
+    fn right(&mut self, right: &str, face: &str) {
+        let w = self.room.width_in(Some(face), right);
         let at = self.room.width.saturating_sub(w + self.room.pad());
         if at >= self.x + self.room.pad() {
             self.b.stop(at);
@@ -184,7 +183,7 @@ fn line_row(l: &Line, look: &RowLook, room: &Room, images: &mut BTreeMap<ImageId
                     value_face(v)
                 };
                 p.push(": ", None);
-                let fitted = room.fit(&one_line(v), p.left(0));
+                let fitted = room.fit(Some(face), &one_line(v), p.left(0));
                 p.push(&fitted, Some(face));
             }
             if l.capped {
@@ -204,7 +203,7 @@ fn line_row(l: &Line, look: &RowLook, room: &Room, images: &mut BTreeMap<ImageId
             // `file:line[:col]`: the file here, the line at the right edge
             let (file, place) = l.label.split_once(':').unwrap_or((&l.label, ""));
             p.push(file, None);
-            let reserve = room.width_in("caption", place) + room.pad();
+            let reserve = room.width_in(Some(PLACE), place) + room.pad();
             if let Some(d) = &l.detail {
                 let d = if l.mark == Some("log") {
                     format!("\"{}\"", one_line(d))
@@ -217,11 +216,11 @@ fn line_row(l: &Line, look: &RowLook, room: &Room, images: &mut BTreeMap<ImageId
                     "drgnx-debug-view-condition"
                 };
                 p.push("  ", None);
-                let fitted = room.fit(&d, p.left(reserve));
+                let fitted = room.fit(Some(face), &d, p.left(reserve));
                 p.push(&fitted, Some(face));
             }
             if !place.is_empty() {
-                p.right(place, "drgnx-debug-view-place", "caption");
+                p.right(place, PLACE);
             }
         }
         "frame" => {
@@ -233,11 +232,11 @@ fn line_row(l: &Line, look: &RowLook, room: &Room, images: &mut BTreeMap<ImageId
             let reserve = l
                 .detail
                 .as_deref()
-                .map_or(0, |d| room.width_in("caption", d) + room.pad());
-            let fitted = room.fit(&l.label, p.left(reserve));
+                .map_or(0, |d| room.width_in(Some(PLACE), d) + room.pad());
+            let fitted = room.fit(face, &l.label, p.left(reserve));
             p.push(&fitted, face);
             if let Some(d) = &l.detail {
-                p.right(&one_line(d), "drgnx-debug-view-place", "caption");
+                p.right(&one_line(d), PLACE);
             }
         }
         "more" => {
@@ -258,7 +257,7 @@ fn line_row(l: &Line, look: &RowLook, room: &Room, images: &mut BTreeMap<ImageId
             } else {
                 "drgnx-debug-view-chip"
             };
-            p.right(&format!(" {c} "), face, "caption");
+            p.right(&format!(" {c} "), face);
         }
         if let Some(d) = &l.detail {
             p.push("  ", None)

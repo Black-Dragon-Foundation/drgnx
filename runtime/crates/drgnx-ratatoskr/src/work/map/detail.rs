@@ -362,8 +362,9 @@ fn text_lines(m: &Model, it: &Item) -> Vec<Line> {
     out.into_iter().map(|(s, t)| (s, t, None)).collect()
 }
 
-/// The UI font role the Detail text is measured in.
-const ROLE: &str = "text";
+/// The face that gives the Detail's text its font (`drgnx-ui-text` under it): wrapped text is measured in the font the
+/// editor says it draws in.
+const PANE: &str = "drgnx-work-pane";
 
 /// TEXT wrapped by word into lines of at most ROOM px, none cut and no continuation glyph (the mockup's subtitle
 /// is two lines at the tile's width).
@@ -382,7 +383,9 @@ fn wrap(text: &str, room: f32, m: &dyn Measure) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     for word in &words {
         match lines.last_mut() {
-            Some(last) if fit::width(m, ROLE, &format!("{last} {word}")) <= room - fit::SLACK => {
+            Some(last)
+                if fit::width_in(m, Some(PANE), &format!("{last} {word}")) <= room - fit::SLACK =>
+            {
                 last.push(' ');
                 last.push_str(word);
             }
@@ -452,7 +455,8 @@ pub(crate) fn rows(lines: &[Line], scale: f32, width_px: u32, m: &dyn Measure) -
                     b.push(" ", None)
                         .push(parts.get(1).unwrap_or(&""), Some("drgnx-ui-heading"));
                     if let Some(chip) = parts.get(2).filter(|c| !c.is_empty()) {
-                        let width = (chip.chars().count() as f32 * 7.0 + 28.0) * scale;
+                        let width =
+                            fit::width_in(m, Some("drgnx-chip"), &format!(" {chip} ")).ceil();
                         b.stop(width_px.saturating_sub(width as u32 + pad));
                         let from = b.pos();
                         b.push(&format!(" {chip} "), None);

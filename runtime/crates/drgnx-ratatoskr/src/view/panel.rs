@@ -664,7 +664,7 @@ impl Panels {
             let w = match env.display {
                 Display::Gui => parts
                     .iter()
-                    .map(|(text, role)| fit::width(fonts, role, text))
+                    .map(|(text, face)| fit::width_in(fonts, Some(face), text))
                     .sum::<f32>()
                     .ceil() as u32,
                 Display::Tty => {

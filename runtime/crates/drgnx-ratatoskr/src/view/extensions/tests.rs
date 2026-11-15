@@ -133,6 +133,7 @@ fn extensions_kinds_are_lucide_icons_on_a_graphical_display() {
         reduced_motion: false,
         attach: false,
         rows_in_sja: false,
+        headless: false,
     };
     assert_eq!(Look::of(&env(Display::Gui, 1.25)).gui, Some((20, 8)));
     assert_eq!(Look::of(&env(Display::Tty, 1.0)), Look::TTY);

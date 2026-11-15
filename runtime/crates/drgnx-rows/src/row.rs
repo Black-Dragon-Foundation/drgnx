@@ -74,6 +74,11 @@ pub struct Row {
     pub spaces: Vec<(u32, u32, u32)>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height: Option<RowHeight>,
+    /// `[start, end, role]`: the font role the text over `[start, end)` is drawn and measured in, where it is not the
+    /// buffer's default (`ui`): each run's face's, as the editor reported it. Set by the hub when it fits the row to
+    /// its window ([`crate::fit_row`]); a builder never sets it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fonts: Vec<(u32, u32, String)>,
 }
 
 #[cfg(feature = "schema")]

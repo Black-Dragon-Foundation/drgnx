@@ -168,8 +168,8 @@ fn undone_steps_are_marked() {
 
 #[test]
 fn a_steps_time_and_cost_are_measured_in_the_fonts_they_are_drawn_in() {
-    // a slow step that cost little: the time in the warning face (no font of its own: the panel's `ui`), the separator
-    // and the cost in the code face (`drgnx-code-small`)
+    // a slow step that cost little: the time in the warning face, the separator and the cost in the code face, each
+    // part named by the face it is drawn in (the hub measures it in that face's font, as the editor reports it)
     let facts = BTreeMap::from([(
         7,
         Facts {
@@ -199,9 +199,9 @@ fn a_steps_time_and_cost_are_measured_in_the_fonts_they_are_drawn_in() {
     };
     group_rows(3, &stepped("completed"), &[], None, &cx);
     let want: Vec<(String, String)> = [
-        ("15.0 s", "ui"),
-        (" · ", "code-small"),
-        ("$0.05", "code-small"),
+        ("15.0 s", "drgnx-agent-panel-warn"),
+        (" · ", "drgnx-agent-panel-code"),
+        ("$0.05", "drgnx-agent-panel-code"),
     ]
     .iter()
     .map(|(t, r)| ((*t).to_owned(), (*r).to_owned()))

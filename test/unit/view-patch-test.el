@@ -183,6 +183,24 @@ it takes `image-scaling-factor', a guess from the font: 1.6 at scale 2, and the 
       (let ((m (cdr (assoc "view/measured" drgnx-view-patch-test--sent))))
         (should (equal '(("ui" "abcdefgh" 80)) (plist-get m :measured)))))))
 
+(ert-deftest drgnx-view-patch/a-refit-is-reported-in-the-roles-the-hub-measured ()
+  "The hub names the roles it measured a row's text in (`fonts'); the guard reports its measure under the same key, the
+roles of the segment's chars in the order they first appear (`drgnx_rows::fit_row::roles_key')."
+  (should (equal "ui" (drgnx-view-patch--roles-key nil 8)))
+  (should (equal "ui+code" (drgnx-view-patch--roles-key '((2 4 "code")) 8)))
+  (should (equal "code+ui" (drgnx-view-patch--roles-key '((0 4 "code")) 8)))
+  (should (equal "code" (drgnx-view-patch--roles-key '((0 4 "code")) 4)))
+  (should (equal "ui+code+heading" (drgnx-view-patch--roles-key '((1 2 "code") (3 9 "heading")) 8)))
+  (drgnx-view-patch-test--with
+    (let ((drgnx-view-patch-measure-function (lambda (s) (* 10 (length s)))))
+      (drgnx-view-apply-patch (drgnx-view-patch-test--patch
+                               (list (list :reset (list (drgnx-view-patch-test--row "a" "abcdefgh rest"
+                                                                                    :stops '((8 50))
+                                                                                    :fonts '((0 3 "code"))))))))
+      (should (string-prefix-p "abcd…" (drgnx-view-patch-test--draw)))
+      (let ((m (cdr (assoc "view/measured" drgnx-view-patch-test--sent))))
+        (should (equal '(("code+ui" "abcdefgh" 80)) (plist-get m :measured)))))))
+
 (ert-deftest drgnx-view-patch/a-refit-segment-ends-before-its-stop-as-drawn ()
   "The refit segment is padded to its old length so later positions keep their place, and the padding draws nothing: drawn
 spaces put the segment past its stop, whose `:align-to' then takes no width, and the text after it past the window's

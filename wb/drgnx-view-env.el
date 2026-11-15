@@ -249,7 +249,9 @@ their facts (`drgnx-view-env--window-classes'), read again when not given."
                                   :palette (drgnx-view-env--palette)
                                   :tty_widths (let ((t-w (drgnx-view-env--tty-widths))) (if (eq t-w :none) nil t-w))
                                   :tz (format-time-string "%z")
-                                  :reduced_motion (if (eq (bound-and-true-p drgnx-look-motion) 'reduced) t :false)))
+                                  :reduced_motion (if (eq (bound-and-true-p drgnx-look-motion) 'reduced) t :false)
+                                  ;; rows only read, never drawn: the hub fits them to no window
+                                  :headless (if (gethash view drgnx-view-env--headless) t :false)))
                 classes))))
     (nreverse classes)))
 
@@ -307,7 +309,7 @@ down (the reconnect sends again)."
   (when (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events))
     ;; lists go out as arrays, and nil as null: an empty list must be an empty array
     (let ((p (copy-sequence params)))
-      (dolist (k '(:fonts :palette :tty_widths :glyphs))
+      (dolist (k '(:fonts :palette :tty_widths :glyphs :faces :measured))
         (when (plist-member p k) (setq p (plist-put p k (vconcat (plist-get p k))))))
       (drgnx-hub--call-on drgnx-hub--events method p #'ignore))
     t))
@@ -409,24 +411,90 @@ nothing runs inside a follow); the widths as on a resize."
   (with-current-buffer buffer
     (string-pixel-width (propertize (string char) 'face face))))
 
+(defconst drgnx-view-env--weights
+  '((thin . 100) (ultra-light . 200) (extra-light . 200) (light . 300) (semi-light . 350) (demi-light . 350)
+    (normal . 400) (regular . 400) (book . 400) (medium . 500) (semi-bold . 600) (demi-bold . 600) (bold . 700)
+    (extra-bold . 800) (ultra-bold . 800) (heavy . 900) (black . 900) (ultra-heavy . 900))
+  "A face's `:weight' as a font's `wght' axis value (a variable font draws its weights from one file).")
+
+(defun drgnx-view-env--box-pad (face frame)
+  "The pixels FACE's box adds at each end of a run in it on FRAME: its line width when positive (a negative one is
+drawn inside the text), else none."
+  (let* ((box (face-attribute face :box frame t))
+         (w (cond ((null box) 0) ((eq box 'unspecified) 0) ((eq box t) 1) ((numberp box) box)
+                  ((consp box) (let ((lw (plist-get box :line-width)))
+                                 (cond ((numberp lw) lw) ((consp lw) (car lw)) (t 1))))
+                  (t 0))))
+    (max 0 w)))
+
+(defun drgnx-view-env-face (face-name buffer)
+  "How the face FACE-NAME (a string the hub's rows name) draws in BUFFER, a hub-fed view's, on the frame of a window
+that shows it: a plist for `view/glyphs' faces, :role the role whose font it is (`drgnx-view-env-roles', read in
+BUFFER as the env's are), else FACE-NAME itself with its font's :file :px :avg and :wght; :pad its box's ends.  A
+name that is no face, or a terminal, draws in `ui'."
+  (let* ((face (intern-soft face-name))
+         (window (or (get-buffer-window buffer t) (selected-window)))
+         (frame (window-frame window)))
+    (if (not (and face (facep face) (display-graphic-p frame)))
+        (list :face face-name :role "ui")
+      (with-current-buffer buffer
+        (let* ((factor (drgnx-view-env--scale-factor buffer))
+               (mine (drgnx-view-env--font face frame factor))
+               (role (and mine (cl-some (lambda (r)
+                                          (let ((f (drgnx-view-env--font (cdr r) frame factor)))
+                                            (and f (equal (car (last f)) (car (last mine))) (symbol-name (car r)))))
+                                        drgnx-view-env-roles)))
+               (pad (drgnx-view-env--box-pad face frame)))
+          (cond ((or role (null mine)) (list :face face-name :role (or role "ui") :pad pad))
+                (t (list :face face-name :role face-name :pad pad :file (nth 0 mine) :index (nth 1 mine)
+                         :px (nth 2 mine) :avg (nth 5 mine)
+                         :wght (alist-get (face-attribute face :weight frame t) drgnx-view-env--weights 400)))))))))
+
 (defun drgnx-view-env-event (event data)
   "A `drgnx-hub-event-functions' handler: `view-glyphs' asks for advances, answered with `view/glyphs' from the
-cache, each (font, char) measured once."
+cache, each (font, char) measured once, and how the faces it names draw (`drgnx-view-env-face'), read in the
+buffer of the asked display class."
   (when (equal event "view-glyphs")
-    (let* ((view (plist-get data :view)) (buffer (car (gethash view drgnx-view-env--views))) (out nil))
+    (let* ((view (plist-get data :view)) (buffer (car (gethash view drgnx-view-env--views))) (out nil)
+           (class-buffer (or (cdr (assoc (plist-get data :class) (drgnx-view-env--twins view))) buffer)))
+      (unless (buffer-live-p class-buffer) (setq class-buffer buffer))
       (when (buffer-live-p buffer)
         (dolist (a (plist-get data :ask))
           (let* ((role (nth 0 a)) (char (string-to-char (nth 1 a)))
-                 (face (or (alist-get (intern-soft role) drgnx-view-env-roles) 'default))
-                 (font (or (ignore-errors (face-font face)) (symbol-name face)))
+                 ;; a role of a face's own is that face
+                 (face (or (alist-get (intern-soft role) drgnx-view-env-roles)
+                           (let ((f (intern-soft role))) (and f (facep f) f))
+                           'default))
+                 ;; the font the face resolves to in the class's buffer (its remaps: the agent panel's `default' is
+                 ;; `drgnx-ui-text', the Flow's the code font), which is what the cache is keyed by
+                 (font (or (ignore-errors (with-current-buffer class-buffer (face-font face))) (symbol-name face)))
                  (key (cons font char))
                  (px (or (gethash key drgnx-view-env--glyphs)
                          (progn (when (>= (hash-table-count drgnx-view-env--glyphs) drgnx-view-env-glyph-cache-max)
                                   (clrhash drgnx-view-env--glyphs))
-                                (puthash key (drgnx-view-env--measure buffer face char) drgnx-view-env--glyphs)))))
+                                (puthash key (drgnx-view-env--measure class-buffer face char)
+                                         drgnx-view-env--glyphs)))))
             (push (list role (nth 1 a) px) out)))
         (funcall drgnx-view-env-send-function "view/glyphs"
-                 (list :view view :class (plist-get data :class) :glyphs (nreverse out)))))))
+                 (list :view view :class (plist-get data :class) :glyphs (nreverse out)
+                       :faces (mapcar (lambda (f) (drgnx-view-env-face f class-buffer)) (plist-get data :faces))))
+        (when-let* ((measure (plist-get data :measure)))
+          (funcall drgnx-view-env-send-function "view/measured"
+                   (list :view view :class (plist-get data :class)
+                         :measured (mapcar (lambda (m)
+                                             (vector (nth 0 m) (nth 1 m)
+                                                     (drgnx-view-env-measure (nth 1 m) (nth 2 m) class-buffer)))
+                                           measure))))))))
+
+(defun drgnx-view-env-measure (text runs buffer)
+  "TEXT's width in px as BUFFER draws it in RUNS, ([START END FACE] ...) over its chars, an earlier run above a later
+one (the hub's `view-glyphs' `measure': a row segment whose sum came too close to its end to decide)."
+  (let ((s (copy-sequence text)))
+    (dolist (r (reverse runs))
+      (let ((face (intern-soft (nth 2 r))))
+        (when (and face (<= 0 (nth 0 r) (nth 1 r) (length s)))
+          (add-face-text-property (nth 0 r) (nth 1 r) face nil s))))
+    (string-pixel-width s buffer)))
 
 (defun drgnx-view-env--hook (on)
   "Add the global hooks (ON) or remove them."

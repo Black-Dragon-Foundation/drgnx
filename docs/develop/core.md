@@ -2108,7 +2108,8 @@ most `drgnx-view-patch-paused-max` (256), and applied in order on resume; past t
   font), face remaps and images at their picture's width. A segment wider than the stop is cut again by the same
   measure (`drgnx-view-patch--fit-faced`, padded, so later positions keep their place, with padding displayed as
   nothing: drawn spaces would end the segment past its stop, whose `:align-to` then takes no width), dressed again and reported by
-  `view/measured`, after which the hub fits that string by the editor's width. A row that fits costs one measure.
+  `view/measured` under the roles the hub measured the segment in (the row's `fonts`, joined as
+  `drgnx-view-patch--roles-key` does), after which the hub fits that string by the editor's width. A row that fits costs one measure.
 - **The stale shade** is the view's own state, put back by PATCHED after every draw; the classes (selected, match,
   lit, dim) come from the model, on each node's span ("Keys through the model" below).
 - A view moved onto hub-built rows has no Lisp path left to fall back to (render offload Task 34 removed the switch,

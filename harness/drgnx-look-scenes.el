@@ -5,8 +5,8 @@
 ;;; Commentary:
 ;; `drgnx ui look-scenes OUT' starts a session with the drgnx configuration at the mockups' 1440x900 logical pixels
 ;; (times $DRGNX_UI_SCALE), sets up the mockups' git project and files in it, and takes one screenshot per scene into OUT, named after the approved
-;; mockup it is compared with (`drgnx-look-scenes'), plus the scene's facts (NAME-facts.eld).  No pixel is asserted:
-;; a look task is done only when its scene has been put beside its mockup at scales 1 and 2 and looked at
+;; mockup it is compared with (`drgnx-look-scenes'), plus the scene's facts (NAME-facts.eld).  One pixel rule is
+;; asserted, no hub-fed row wider than its window (NAME-widths.eld); beyond it a look task is done only when its scene has been put beside its mockup at scales 1 and 2 and looked at
 ;; (docs/develop/harness.md, "Look scenes").  Packages come from $DRGNX_LOOK_ELPA (a package directory), the mock
 ;; agent from $DRGNX_RATATOSKR_BIN (a test-hooks ratatoskr); without them those scenes say what is missing.
 

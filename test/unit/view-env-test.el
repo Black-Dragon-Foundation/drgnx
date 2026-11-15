@@ -270,6 +270,48 @@ went with every flip (the look scenes' empty Files)."
           (should (= 2 (length answers)))
           (should (equal '(("ui" "→" 9) ("ui" "✓" 9)) (plist-get (cdar answers) :glyphs))))))))
 
+(ert-deftest drgnx-view-env/a-faces-ask-is-answered-with-how-each-face-draws ()
+  "The hub asks how the faces its rows name draw (it fits each row to its window in their fonts): every face asked is
+answered, in the asked order; a name that is no face draws in `ui', as does any face on a terminal (a batch frame)."
+  (drgnx-view-env-test--with
+    (drgnx-view-env-register "v" buf)
+    (drgnx-view-env-event "view-glyphs" (list :view "v" :class "c" :ask nil
+                                              :faces '("bold" "drgnx-view-env-test-no-such-face")))
+    (let ((answer (cdar (cl-remove-if-not (lambda (s) (equal (car s) "view/glyphs")) drgnx-view-env-test--sent))))
+      (should (equal '((:face "bold" :role "ui") (:face "drgnx-view-env-test-no-such-face" :role "ui"))
+                     (plist-get answer :faces))))))
+
+(ert-deftest drgnx-view-env/a-measure-ask-is-answered-as-drawn ()
+  "A row segment whose sum came too close to its end is measured as the view's buffer draws it, in its runs' faces (an
+earlier run above a later one), and reported under the hub's key (`view/measured')."
+  (drgnx-view-env-test--with
+    (drgnx-view-env-register "v" buf)
+    (let ((seen nil))
+      (cl-letf (((symbol-function 'string-pixel-width)
+                 (lambda (s &optional _b) (push s seen) (* 10 (length s)))))
+        (drgnx-view-env-event "view-glyphs" (list :view "v" :class "c" :ask nil
+                                                  :measure '(("ui+bold" "abcde" ((0 3 "bold") (0 5 "italic")))))))
+      (should (equal '(bold italic) (get-text-property 0 'face (car seen))))
+      (should (eq 'italic (get-text-property 4 'face (car seen))))
+      (let ((m (cdar (cl-remove-if-not (lambda (s) (equal (car s) "view/measured")) drgnx-view-env-test--sent))))
+        (should (equal '(["ui+bold" "abcde" 50]) (plist-get m :measured)))))))
+
+(ert-deftest drgnx-view-env/a-headless-views-env-says-so ()
+  "A view that is only read (git letters) gets the selected window's env marked headless: the hub fits its rows to no
+window."
+  (let ((drgnx-view-env--headless (make-hash-table :test #'equal))
+        (read (generate-new-buffer " *view-env-test-headless*")))
+    (unwind-protect
+        (drgnx-view-env-test--with
+          (drgnx-view-env-register "shown" buf)
+          (drgnx-view-env-register "read" read nil t)
+          (let ((envs (drgnx-view-env-test--envs)))
+            (should (eq :false (plist-get (cl-find "shown" envs :key (lambda (e) (plist-get e :view)) :test #'equal)
+                                          :headless)))
+            (should (eq t (plist-get (cl-find "read" envs :key (lambda (e) (plist-get e :view)) :test #'equal)
+                                     :headless)))))
+      (kill-buffer read))))
+
 (ert-deftest drgnx-view-env/teardown-leaves-no-hooks ()
   (drgnx-view-env-test--with
     (drgnx-view-env-register "v" buf)

@@ -2029,10 +2029,27 @@ is not resized again (bounded by the scenes: one entry per view per scene at mos
   (cl-remove-if-not (lambda (w) (and (boundp 'drgnx-view-patch) (buffer-local-value 'drgnx-view-patch (window-buffer w))))
                     (cl-mapcan (lambda (f) (and (eq (frame-visible-p f) t) (window-list f 'never))) (frame-list))))
 
+(defun drgnx-look-scene--row-parts (window bol eol)
+  "The parts of the row BOL..EOL in WINDOW's buffer as drawn, for the log of a row wider than its window: ((TEXT FACE
+PX HOW) ...), one per stretch of one face, PX its width in WINDOW and HOW the face's answer to the hub
+\(`drgnx-view-env-face'), so a wrong guess shows where it is."
+  (let ((pos bol) parts)
+    (while (< pos eol)
+      (let* ((next (min eol (next-single-property-change pos 'face nil eol)))
+             (face (get-text-property pos 'face))
+             (top (if (consp face) (car face) face)))
+        (push (list (buffer-substring-no-properties pos next) face
+                    (car (window-text-pixel-size window pos next))
+                    (and (symbolp top) top (drgnx-view-env-face (symbol-name top) (current-buffer))))
+              parts)
+        (setq pos next)))
+    (nreverse parts)))
+
 (defun drgnx-look-scene--wide-rows (window)
   "The hub's rows in WINDOW's buffer (lines that start a row with a string key: a Lisp-drawn line, such as the agent
-panel's composer, is not one) drawn wider than WINDOW's body: ((PX LINE TEXT) ...), TEXT the row's first 60
-characters, LINE its line number.  The number of rows measured is in `drgnx-look-scene--rows-measured'."
+panel's composer, is not one) drawn wider than WINDOW's body: ((PX LINE TEXT PARTS FONTS) ...), TEXT the row's
+first 60 characters, LINE its line number, PARTS its stretches as drawn (`drgnx-look-scene--row-parts') and FONTS the
+roles the hub measured it in.  The number of rows measured is in `drgnx-look-scene--rows-measured'."
   (let ((body (window-body-width window t)) (n 0) (rows 0) wide)
     (with-current-buffer (window-buffer window)
       (save-excursion
@@ -2046,7 +2063,13 @@ characters, LINE its line number.  The number of rows measured is in `drgnx-look
                 (setq rows (1+ rows))
                 (let ((px (car (window-text-pixel-size window bol eol))))
                   (when (> px body)
-                    (push (list px n (buffer-substring-no-properties bol (min eol (+ bol 60)))) wide)))))
+                    (push (list px n (buffer-substring-no-properties bol (min eol (+ bol 60)))
+                                (drgnx-look-scene--row-parts window bol eol)
+                                ;; the roles the hub measured the row in
+                                (ignore-errors
+                                  (plist-get (gethash (drgnx-view-key-at bol) (drgnx-view-patch-rows drgnx-view-patch))
+                                             :fonts)))
+                          wide)))))
             (forward-line 1)))))
     (setq drgnx-look-scene--rows-measured rows)
     (nreverse wide)))
