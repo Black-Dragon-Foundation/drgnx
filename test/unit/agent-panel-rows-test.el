@@ -229,4 +229,34 @@ transcript (`:hub', its entries complete) again."
                                    '("one" "two!")))
                        (format "the blocks are %S" (plist-get (nth 1 m) :blocks)))))))))
 
+(ert-deftest drgnx-agent-panel-rows/a-reset-keeps-a-window-scrolled-back-on-its-row ()
+  "The hub draws every row again (a reset: the panel's width or the theme changed): a window the user scrolled back
+keeps its start and point on the rows they were on, not after the hub's rows (the long look scene's wheel lost its
+place when the reset of the frame's resize came in during it)."
+  (drgnx-agent-panel-rows-test--with t
+    (let* ((buf (drgnx-agent-panel-rows-test--fresh))
+           (keys (mapcar (lambda (i) (format "e:%d" i)) (number-sequence 0 59)))
+           (row-start (lambda (key) (save-excursion (goto-char (point-min))
+                                                    (while (and (not (eobp)) (not (equal (drgnx-view-key-at) key)))
+                                                      (forward-line 1))
+                                                    (point)))))
+      (unwind-protect
+          (with-current-buffer buf
+            (drgnx-view-apply-patch (plist-put (cadr (drgnx-agent-panel-rows-test--reset 7 keys))
+                                               :class (drgnx-view-patch-class drgnx-view-patch)))
+            (drgnx-view-draw-now drgnx-view)
+            (let ((w (selected-window)))
+              (set-window-buffer w buf)
+              (set-window-start w (funcall row-start "e:20"))
+              (set-window-point w (funcall row-start "e:22"))
+              (drgnx-view-apply-patch (plist-put (plist-put (plist-put (cadr (drgnx-agent-panel-rows-test--reset 7 keys))
+                                                                       :class (drgnx-view-patch-class drgnx-view-patch))
+                                                            :base 1)
+                                                 :version 2))
+              (drgnx-view-draw-now drgnx-view)
+              (should (equal (list (save-excursion (goto-char (window-start w)) (drgnx-view-key-at))
+                                   (save-excursion (goto-char (window-point w)) (drgnx-view-key-at)))
+                             '("e:20" "e:22")))))
+        (kill-buffer buf)))))
+
 ;;; agent-panel-rows-test.el ends here

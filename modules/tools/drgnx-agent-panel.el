@@ -251,6 +251,10 @@ folds under it."
 \(the header, chips and strip) and STRING a copy of them, or nil when the hub pinned none.  The panel's rows are drawn by
 Lisp (no Sjá store holds them), so the mark is read from the drawn text.")
 
+(defvar-local drgnx-agent-panel--reset-places nil
+  "The point and the places of the windows not at the panel's end, kept by row key across a reset of the hub's rows
+until it is drawn (`drgnx-view-save-places'), or nil.")
+
 (defvar-local drgnx-agent-panel--pin-overlays nil "Each window's overlay that shows the pinned rows: ((WINDOW . OVERLAY) ...).")
 
 (defun drgnx-agent-panel--pinned-end ()
@@ -311,6 +315,10 @@ the panel's scroll follows its tail."
   (when drgnx-view-patch
     (when-let* ((rows (seq-filter #'stringp keys)))
       (drgnx-view-patch--patched view rows)
+      (when-let* ((kept drgnx-agent-panel--reset-places))
+        (setq drgnx-agent-panel--reset-places nil)
+        (drgnx-view-restore-places (cdr kept) (lambda (key) (drgnx-view-row-start view key)))
+        (when (car kept) (goto-char (point-max))))   ; point at the end stays there: its windows follow the tail
       (drgnx-agent-panel--pin-update)
       (drgnx-agent-panel--follow-tail))))
 
@@ -406,6 +414,14 @@ transcript itself: no row is placed by its key)."
     (dolist (op (plist-get patch :ops))
       (cond
        ((plist-member op :reset)
+        ;; the reset's rows replace every hub row: a window the user scrolled back would go below them (its start and
+        ;; point were on rows the removal took), so its places are kept by row key for the draw (`--patched')
+        (unless drgnx-agent-panel--reset-places
+          (setq drgnx-agent-panel--reset-places
+                (let ((places (drgnx-view-save-places #'drgnx-view-key-at)))
+                  (cons (= (point) (point-max))   ; (AT-END POINT-PLACE (WINDOW START-PLACE POINT-PLACE)...)
+                        (cons (car places)
+                              (seq-remove (lambda (e) (= (window-point (car e)) (point-max))) (cdr places)))))))
         (let ((old (hash-table-keys (drgnx-view-patch-rows state))))
           (clrhash (drgnx-view-patch-images state))
           (clrhash (drgnx-view-patch-ids state))
