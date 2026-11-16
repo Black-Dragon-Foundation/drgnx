@@ -3437,8 +3437,11 @@ and a draw made twice the objects; a fresh clone and a synced copy have no .elc)
             (if-let* ((why (and (drgnx-env-container) (drgnx-perf-run--container-skip (car w)))))
                 (princ (format "perf: %s skipped in the container — %s\n" (car w) why))
               (message "perf: %s…" (car w))
-              (let* ((cal (drgnx-perf-run--call sess "(drgnx-perf-calibrate)"))
+              ;; The calibration is inside: a session that went away is this workload's ERROR, and the results so far
+              ;; are still written.
+              (let* (cal
                      (r (condition-case err (let ((drgnx-perf-run--profile (drgnx-perf-run--profile-file (car w))))
+                                              (setq cal (drgnx-perf-run--call sess "(drgnx-perf-calibrate)"))
                                               (drgnx-perf-run-workload sess (cdr w) audit))
                           (error (list :error (error-message-string err))))))
                 (push (cons (car w) (if (plist-get r :error) r (plist-put r :calibration cal))) results))
