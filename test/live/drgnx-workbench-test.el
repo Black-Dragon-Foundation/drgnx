@@ -183,3 +183,47 @@ starts none by itself (DRGNX_NO_HUB_START), and the Outline's rows are the hub's
             (should (eq :false (plist-get after :selected)))))
       (drgnx-ui-stop (plist-get s :name))
       (delete-directory root t))))
+
+(ert-deftest drgnx-live/a-file-clicked-in-the-explorer-opens-while-the-work-map-fills-the-editor ()
+  ;; A daily install: with the Work space's map in the editor area, a click on a file in the Explorer did not open it
+  ;; ("stuck on the work folder"), and *Messages* said "Text is read-only".  A real click on the file's row must show
+  ;; the file in an editor window, with no read-only error.
+  (let* ((root (make-temp-file "drgnx-wb" t))
+         (project (file-name-as-directory (expand-file-name "project" root)))
+         (process-environment (cons (concat "DRGNX_UI_STATE=" root) process-environment))
+         (s (progn (make-directory (expand-file-name ".git" project) t)
+                   (write-region "first\n" nil (expand-file-name "alpha.txt" project) nil 'silent)
+                   (write-region "second\n" nil (expand-file-name "beta.txt" project) nil 'silent)
+                   (drgnx-ui-start "drgnx" (drgnx-ui-size-at-scale "1400x850") 30)))
+         (sess (drgnx-ui-own-session (plist-get s :name)))
+         (probe "(drgnx-uitest--json
+                   (list :shown (if (seq-find (lambda (w) (equal (buffer-name (window-buffer w)) \"beta.txt\"))
+                                              (window-list nil 'nomini))
+                                    t :false)
+                         :editor (buffer-name (window-buffer (drgnx-wb-editor-window)))
+                         :windows (format \"%S\" (mapcar (lambda (w) (list (buffer-name (window-buffer w))
+                                                                           (window-parameter w 'drgnx-role)
+                                                                           (window-dedicated-p w)))
+                                                         (window-list nil 'nomini)))
+                         :messages (with-current-buffer \"*Messages*\"
+                                     (if (string-match-p \"read-only\" (buffer-string)) (buffer-string) \"\"))))"))
+    (unwind-protect
+        (progn
+          (drgnx-live-wb--hub sess)
+          (drgnx-ui-call sess (format "(progn (find-file %S) (drgnx-explorer-set-roots (list %S)) (drgnx-wb-show-sidebar)
+                                             (drgnx-wb-focus-editor) (drgnx-work-space-open)
+                                             (drgnx-uitest--json (list :ok t)))"
+                                      (expand-file-name "alpha.txt" project) project))
+          (drgnx-ui-measure sess nil)
+          (drgnx-live-wb--until sess "(with-current-buffer (window-buffer (drgnx-wb-editor-window)) (derived-mode-p 'drgnx-work-map-mode))" "the Work map in the editor")
+          (drgnx-ui-measure sess (list (list :buffer " *drgnx explorer*" :text "beta.txt")))
+          (let ((after (drgnx-ui-call sess probe)) (deadline (+ (float-time) 10)))
+            (while (and (not (eq t (plist-get after :shown))) (< (float-time) deadline))
+              (drgnx-ui--poll-pause 0.1)
+              (setq after (drgnx-ui-call sess probe)))
+            (ert-info ((format "editor %s; windows %s; messages %s" (plist-get after :editor) (plist-get after :windows)
+                               (plist-get after :messages)))
+              (should (eq t (plist-get after :shown)))
+              (should (equal "" (plist-get after :messages))))))
+      (drgnx-ui-stop (plist-get s :name))
+      (delete-directory root t))))
