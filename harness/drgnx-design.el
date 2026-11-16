@@ -8,7 +8,11 @@
 ;;   tokens.md, tokens.css                           from themes/drgnx-tokens.eld and the faces the theme generator makes
 ;;                                                   (which faces use which token);
 ;;   type.md                                         from the font roles, the type faces and the density table;
-;;   icons.md, img/icons-VARIANT.svg                 from etc/icons, files.eld and the Lisp that names the icons.
+;;   icons.md, img/icons-VARIANT.svg                 from etc/icons, files.eld and the Lisp that names the icons;
+;; and code, beside the pages (`drgnx-design-code-makers', paths relative to the checkout):
+;;   runtime/crates/drgnx-rows/src/faces.rs          `FaceId': every defface, the kit's faces, the patch faces;
+;;   runtime/crates/drgnx-rows/src/kit_gen.rs        the kit's components as tables (etc/ui/components.eld);
+;;   etc/ui/faces.eld                                the same face list, for Lisp.
 ;; `drgnx design' writes them (`drgnx-design-regenerate'); `drgnx design --check' lists the stale ones and exits 1
 ;; (`drgnx-design-stale'; test/unit/design-test.el runs the same comparison in the unit suite).  No colour literal
 ;; lives here: every colour on a page is read from the token table.  See docs/develop/design-system.md.
@@ -23,6 +27,7 @@
 (require 'drgnx-faces)
 (require 'drgnx-type-faces)
 (require 'drgnx-icons)
+(require 'drgnx-ui-kit)
 (add-to-list 'load-path (expand-file-name "wb" drgnx-dir))   ; the density module needs drgnx-state
 (require 'drgnx-look-density (expand-file-name "modules/ui/drgnx-look-density" drgnx-dir))
 ;; themes/ is not built with the rest (a build copies core, wb, modules, harness and settings), so the generator is
@@ -408,6 +413,264 @@ within three lines of the word icon."
           (push (car page) written))))
     (nreverse written)))
 
+;;;; Generated code: drgnx-rows' FaceId and kit tables, and etc/ui/faces.eld
+
+;; Rust names faces through a generated enum, so a renamed or removed face is a compile error, and the hub expands
+;; the kit's components from tables generated from etc/ui/components.eld, so `cargo build' never needs Emacs.
+
+(defconst drgnx-design--patch-faces '(default bold italic shadow error warning success link highlight)
+  "The standard faces a view patch may name (`drgnx-view-patch-faces').")
+
+(defconst drgnx-design--face-dirs '("core" "wb" "modules") "Where the faces FaceId lists are defined.")
+
+(defun drgnx-design--defface-names (&optional root)
+  "Every face a `(defface NAME' form names in core/, wb/ and modules/ under ROOT (default the checkout), read as
+text (nothing is loaded): files in name order, forms in file order.  Faces made by a loop are not seen."
+  (let ((names nil) (root (or root drgnx-dir)))
+    (dolist (dir drgnx-design--face-dirs)
+      (dolist (file (sort (directory-files-recursively (expand-file-name dir root) "\\.el\\'") #'string<))
+        (with-temp-buffer
+          (insert-file-contents file)
+          (while (re-search-forward "^[ \t]*(defface[ \t\n]+\\([a-z][a-z0-9-]*\\)[ \t\n]" nil t)
+            (push (intern (match-string 1)) names)))))
+    (nreverse names)))
+
+(defun drgnx-design-face-names (&optional root)
+  "The faces FaceId and etc/ui/faces.eld list: the patch faces, every defface under ROOT, the kit's faces; no repeats."
+  (delete-dups (append drgnx-design--patch-faces (drgnx-design--defface-names root)
+                       (mapcar #'car (drgnx-ui-kit-face-bindings)))))
+
+(defun drgnx-design--camel (name)
+  "NAME (a symbol or string) in UpperCamelCase, without a leading `drgnx-': `drgnx-text-muted' → \"TextMuted\"."
+  (let ((s (if (symbolp name) (symbol-name name) name)))
+    (mapconcat #'capitalize (split-string (string-remove-prefix "drgnx-" s) "-") "")))
+
+(defun drgnx-design--snake (name)
+  "NAME without a leading `drgnx-', in SCREAMING_SNAKE_CASE: `drgnx-work-who' → \"WORK_WHO\"."
+  (upcase (string-replace "-" "_" (string-remove-prefix "drgnx-" name))))
+
+(defun drgnx-design--families (faces)
+  "((PREFIX . FACES)...): the numbered families among FACES, NAME-K for every K from 0 or 1 up to N, at least two."
+  (let ((by (make-hash-table :test #'equal)) (out nil))
+    (dolist (f faces)
+      (when (string-match "\\`\\(.*\\)-\\([0-9]+\\)\\'" (symbol-name f))
+        (push (cons (string-to-number (match-string 2 (symbol-name f))) f)
+              (gethash (match-string 1 (symbol-name f)) by))))
+    (maphash (lambda (prefix members)
+               (let* ((members (sort members (lambda (a b) (< (car a) (car b)))))
+                      (start (caar members)))
+                 (when (and (memq start '(0 1)) (>= (length members) 2)
+                            (cl-loop for m in members for k from start always (= (car m) k)))
+                   (push (cons prefix (mapcar #'cdr members)) out))))
+             by)
+    (sort out (lambda (a b) (string< (car a) (car b))))))
+
+(defconst drgnx-design--rust-notice
+  "// Generated by `bin/drgnx design` from %s. Do not edit; change the source and regenerate.\n"
+  "The line every generated Rust file starts with.")
+
+(defun drgnx-design--faces-rs (&optional root)
+  "runtime/crates/drgnx-rows/src/faces.rs: `FaceId', one variant per face of `drgnx-design-face-names'."
+  (let* ((faces (drgnx-design-face-names root)) (n (length faces)))
+    (concat
+     (format drgnx-design--rust-notice "every defface in core/, wb/ and modules/, etc/ui/components.eld and the patch faces")
+     "//! Every face drgnx defines, by name: a renamed or removed face is a compile error where Rust names it.\n"
+     "//! Rows still carry face names as strings (`FaceId::TextMuted.name()`); the generator is `harness/drgnx-design.el`\n"
+     "//! (`docs/develop/design-system.md`). Numbered families (`drgnx-agent-1`...) are arrays indexed by the number\n"
+     "//! less the first (`AGENT[0]` is `drgnx-agent-1`, `TERM_COLOR[0]` is `drgnx-term-color-0`).\n\n"
+     "/// A face drgnx defines, or one of the standard faces a view patch may name.\n"
+     "#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]\n#[non_exhaustive]\npub enum FaceId {\n"
+     (mapconcat (lambda (f) (format "    /// `%s`\n    %s," f (drgnx-design--camel f))) faces "\n")
+     "\n}\n\nimpl FaceId {\n"
+     (format "    /// Every face, in this file's order.\n    pub const ALL: [FaceId; %d] = [\n%s\n    ];\n\n" n
+             (mapconcat (lambda (f) (format "        FaceId::%s," (drgnx-design--camel f))) faces "\n"))
+     "    /// The face's Emacs name.\n    pub const fn name(self) -> &'static str {\n        match self {\n"
+     (mapconcat (lambda (f) (format "            FaceId::%s => \"%s\"," (drgnx-design--camel f) f)) faces "\n")
+     "\n        }\n    }\n\n"
+     "    /// The face named NAME, if drgnx defines it.\n    pub fn from_name(name: &str) -> Option<FaceId> {\n"
+     "        Some(match name {\n"
+     (mapconcat (lambda (f) (format "            \"%s\" => FaceId::%s," f (drgnx-design--camel f))) faces "\n")
+     "\n            _ => return None,\n        })\n    }\n}\n"
+     (mapconcat (lambda (family)
+                  (format "\n/// `%s-K`, by K.\npub const %s: [FaceId; %d] = [%s];\n" (car family)
+                          (drgnx-design--snake (car family)) (length (cdr family))
+                          (mapconcat (lambda (f) (format "FaceId::%s" (drgnx-design--camel f))) (cdr family) ", ")))
+                (drgnx-design--families faces) ""))))
+
+(defun drgnx-design--faces-eld (&optional root)
+  "etc/ui/faces.eld: the faces of `drgnx-design-face-names', for Lisp."
+  (concat ";;; faces.eld --- every face drgnx defines  -*- mode: lisp-data -*-\n"
+          (format ";; %s" (format (string-remove-prefix "// " drgnx-design--rust-notice)
+                                  "every defface in core/, wb/ and modules/, etc/ui/components.eld and the patch faces"))
+          "(\n"
+          (mapconcat (lambda (f) (format " %s" f)) (drgnx-design-face-names root) "\n")
+          ")\n"))
+
+;;; The kit's tables
+
+(defun drgnx-design--axes (entry)
+  "ENTRY's variant axes, ((AXIS VALUE...)...), and the index of each axis's default."
+  (let ((axes (plist-get entry :variants)) (defaults (plist-get entry :defaults)))
+    (cons axes (mapcar (lambda (axis) (or (cl-position (plist-get defaults (car axis)) (cdr axis)) 0)) axes))))
+
+(defun drgnx-design--combos (axes)
+  "Every combination of AXES' values, ((AXIS . VALUE)...) each, the last axis varying fastest."
+  (if (null axes) (list nil)
+    (cl-loop for v in (cdar axes)
+             append (mapcar (lambda (rest) (cons (cons (caar axes) v) rest)) (drgnx-design--combos (cdr axes))))))
+
+(defconst drgnx-design--densities '(compact comfortable roomy) "The densities, in the kit tables' order.")
+
+(defun drgnx-design--resolve (value chosen density)
+  "A geometry or label VALUE for CHOSEN ((AXIS . VALUE)...) at DENSITY."
+  (pcase value
+    (`(:by ,axis . ,cases) (drgnx-design--resolve (cadr (assq (alist-get axis chosen) cases)) chosen density))
+    (`(density ,key) (drgnx-look-density-value key density))
+    (_ value)))
+
+(defun drgnx-design--rust-str (s) (if s (format "Some(%S)" s) "None"))
+
+(defun drgnx-design--geom-rs (entry chosen density)
+  "One `Geom' literal for ENTRY at CHOSEN and DENSITY."
+  (let* ((g (plist-get entry :geometry)) (tty (plist-get entry :tty))
+         (get (lambda (key) (drgnx-design--resolve (plist-get g key) chosen density)))
+         (pad (or (funcall get :pad) '(0 . 0)))
+         (glyph (drgnx-design--resolve (plist-get tty :glyph) chosen density)))
+    (format "Geom { height: %d, pad: (%d, %d), gap: %d, boxed: %s, radius: %d, hit: %d, indent: %d, tty_pad: %d, glyph: %s }"
+            (or (funcall get :height) 0) (car pad) (cdr pad) (or (funcall get :gap) 0)
+            (if (funcall get :box) "true" "false") (or (funcall get :radius) 0) (or (funcall get :hit) 0)
+            (or (funcall get :indent) 0) (or (plist-get tty :pad) 0)
+            (drgnx-design--rust-str (and glyph (symbol-name glyph))))))
+
+(defun drgnx-design--kit-face (id entry chosen)
+  "The kit face of component ID (ENTRY) at CHOSEN ((AXIS . VALUE)...): of the bindings whose values CHOSEN all has and
+that have a face of their own, the one naming the most values; else the component's own face; else `default'."
+  (let* ((made (mapcar #'car (drgnx-ui-kit-face-bindings `((components (,id ,@entry))))))
+         (values (mapcar #'cdr chosen)) (best nil) (best-n 0))
+    (dolist (b (plist-get entry :bind))
+      (let ((face (intern (mapconcat #'symbol-name (cons (intern (format "drgnx-kit-%s" id)) (car b)) "-"))))
+        (when (and (car b) (memq face made) (cl-every (lambda (v) (memq v values)) (car b))
+                   (> (length (car b)) best-n))
+          (setq best face best-n (length (car b))))))
+    (or best (car (memq (intern (format "drgnx-kit-%s" id)) made)) 'default)))
+
+(defun drgnx-design--kit-gen-rs ()
+  "runtime/crates/drgnx-rows/src/kit_gen.rs: the components' ids, states, geometry, labels and faces."
+  (let* ((table (drgnx-ui-kit-components)) (components (alist-get 'components table))
+         (states (cl-remove-if-not (lambda (s) (plist-get (cdr s) :face)) (alist-get 'state-table table))))
+    (concat
+     (format drgnx-design--rust-notice "etc/ui/components.eld")
+     "//! The kit's components as tables: what `kit` expands rows from (`docs/develop/hub.md`, \"The kit\").\n"
+     "//! A variant slice names variant values (`&[\"tree\"]`) and, optionally, a density (`\"compact\"`,\n"
+     "//! `\"comfortable\"`, the default, or `\"roomy\"`); an axis it leaves out takes the component's default.\n\n"
+     "use crate::faces::FaceId;\n\n"
+     "/// A component of the kit.\n#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]\n#[non_exhaustive]\npub enum CompId {\n"
+     (mapconcat (lambda (c) (format "    /// `%s`\n    %s," (car c) (drgnx-design--camel (car c)))) components "\n")
+     "\n}\n\n"
+     "/// A state of the state table.\n#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]\npub enum State {\n"
+     (mapconcat (lambda (s) (format "    /// `%s`\n    %s," s (drgnx-design--camel s))) drgnx-ui-kit-states "\n")
+     "\n}\n\n"
+     (format "/// Each state but rest, with the semantic face that draws it.\npub const STATES: [(State, FaceId); %d] = [\n%s\n];\n\n"
+             (length states)
+             (mapconcat (lambda (s) (format "    (State::%s, FaceId::%s)," (drgnx-design--camel (car s))
+                                            (drgnx-design--camel (plist-get (cdr s) :face))))
+                        states "\n"))
+     "/// A component's geometry, in logical px (the tty padding in characters).\n"
+     "#[derive(Clone, Copy, Debug, PartialEq, Eq)]\npub struct Geom {\n"
+     "    /// The height of the component's line.\n    pub height: u16,\n"
+     "    /// Padding at the start and the end.\n    pub pad: (u16, u16),\n"
+     "    /// The gap between its parts.\n    pub gap: u16,\n"
+     "    /// Whether it has a box (an edge).\n    pub boxed: bool,\n"
+     "    /// Its corner radius.\n    pub radius: u16,\n"
+     "    /// Action-carrying padding at each side.\n    pub hit: u16,\n"
+     "    /// The indent of one level (tree rows).\n    pub indent: u16,\n"
+     "    /// Padding on a terminal, in characters.\n    pub tty_pad: u8,\n"
+     "    /// The glyph a terminal draws, by its name in `drgnx-face-glyphs`.\n    pub glyph: Option<&'static str>,\n}\n\n"
+     "const DENSITIES: [&str; 3] = [\"compact\", \"comfortable\", \"roomy\"];\n\n"
+     "/// The index of VARIANT's combination of AXES (each axis's DEFAULTS where VARIANT names none of its values),\n"
+     "/// the last axis varying fastest, and the density's index.\n"
+     "fn index(axes: &[&[&str]], defaults: &[usize], variant: &[&str]) -> (usize, usize) {\n"
+     "    let mut i = 0;\n"
+     "    for (axis, default) in axes.iter().zip(defaults) {\n"
+     "        let k = axis.iter().position(|v| variant.contains(v)).unwrap_or(*default);\n"
+     "        i = i * axis.len() + k;\n"
+     "    }\n"
+     "    let d = DENSITIES.iter().position(|d| variant.contains(d)).unwrap_or(1);\n"
+     "    (i, d)\n}\n\n"
+     (mapconcat
+      (lambda (c)
+        (let* ((id (car c)) (entry (cdr c)) (ax (drgnx-design--axes entry)) (axes (car ax))
+               (combos (drgnx-design--combos axes)) (k (drgnx-design--snake (symbol-name id))))
+          (concat
+           (format "const %s_AXES: &[&[&str]] = &[%s];\n" k
+                   (mapconcat (lambda (a) (format "&[%s]" (mapconcat (lambda (v) (format "%S" (symbol-name v))) (cdr a) ", ")))
+                              axes ", "))
+           (format "const %s_DEFAULTS: &[usize] = &[%s];\n" k (mapconcat #'number-to-string (cdr ax) ", "))
+           (format "const %s_GEOM: [[Geom; 3]; %d] = [\n%s\n];\n" k (length combos)
+                   (mapconcat (lambda (chosen)
+                                (format "    [\n%s\n    ],"
+                                        (mapconcat (lambda (d) (format "        %s," (drgnx-design--geom-rs entry chosen d)))
+                                                   drgnx-design--densities "\n")))
+                              combos "\n"))
+           (format "const %s_LABEL: [Option<&str>; %d] = [%s];\n" k (length combos)
+                   (mapconcat (lambda (chosen) (drgnx-design--rust-str
+                                                (drgnx-design--resolve (plist-get entry :label) chosen nil)))
+                              combos ", "))
+           (format "const %s_FACE: [FaceId; %d] = [%s];\n\n" k (length combos)
+                   (mapconcat (lambda (chosen) (format "FaceId::%s" (drgnx-design--camel (drgnx-design--kit-face id entry chosen))))
+                              combos ", ")))))
+      components "")
+     "/// Component ID's geometry for VARIANT.\npub fn geom(id: CompId, variant: &[&str]) -> Geom {\n    match id {\n"
+     (mapconcat (lambda (c) (let ((k (drgnx-design--snake (symbol-name (car c)))))
+                              (format "        CompId::%s => {\n            let (i, d) = index(%s_AXES, %s_DEFAULTS, variant);\n            %s_GEOM[i][d]\n        }"
+                                      (drgnx-design--camel (car c)) k k k)))
+                components "\n")
+     "\n    }\n}\n\n"
+     "/// The word a screen reader speaks for component ID in VARIANT, if it has one.\n"
+     "pub fn label(id: CompId, variant: &[&str]) -> Option<&'static str> {\n    match id {\n"
+     (mapconcat (lambda (c) (let ((k (drgnx-design--snake (symbol-name (car c)))))
+                              (format "        CompId::%s => %s_LABEL[index(%s_AXES, %s_DEFAULTS, variant).0],"
+                                      (drgnx-design--camel (car c)) k k k)))
+                components "\n")
+     "\n    }\n}\n\n"
+     "/// The face of component ID in VARIANT: its kit face, or `default` when it has none.\n"
+     "pub fn face(id: CompId, variant: &[&str]) -> FaceId {\n    match id {\n"
+     (mapconcat (lambda (c) (let ((k (drgnx-design--snake (symbol-name (car c)))))
+                              (format "        CompId::%s => %s_FACE[index(%s_AXES, %s_DEFAULTS, variant).0],"
+                                      (drgnx-design--camel (car c)) k k k)))
+                components "\n")
+     "\n    }\n}\n")))
+
+(defun drgnx-design--code-files ()
+  "faces.rs, kit_gen.rs and faces.eld."
+  (list (cons "runtime/crates/drgnx-rows/src/faces.rs" (drgnx-design--faces-rs))
+        (cons "runtime/crates/drgnx-rows/src/kit_gen.rs" (drgnx-design--kit-gen-rs))
+        (cons "etc/ui/faces.eld" (drgnx-design--faces-eld))))
+
+(defvar drgnx-design-code-makers '(drgnx-design--code-files)
+  "Functions that return generated code as ((PATH . TEXT)…), PATH relative to the checkout.")
+
+(defun drgnx-design-code ()
+  "Every generated code file: ((PATH . TEXT)…), PATH relative to the checkout."
+  (apply #'append (mapcar #'funcall drgnx-design-code-makers)))
+
+(defun drgnx-design-code-stale (&optional root)
+  "The generated code files (paths relative to ROOT, default the checkout) whose file is missing or differs."
+  (let ((root (or root drgnx-dir)))
+    (mapcar #'car (seq-remove (lambda (f) (equal (cdr f) (drgnx-design--read (expand-file-name (car f) root))))
+                              (drgnx-design-code)))))
+
+(defun drgnx-design-code-regenerate (&optional root)
+  "Write every generated code file under ROOT (default the checkout); the paths written, relative to ROOT."
+  (let ((root (or root drgnx-dir)) (written nil))
+    (dolist (f (drgnx-design-code))
+      (let ((file (expand-file-name (car f) root)))
+        (unless (equal (cdr f) (drgnx-design--read file))
+          (make-directory (file-name-directory file) t)
+          (drgnx-file-write-text file (cdr f))
+          (push (car f) written))))
+    (nreverse written)))
+
 ;;;; Screenshots
 
 (defconst drgnx-design-shots
@@ -459,11 +722,13 @@ each of DIRS in turn.  The paths written."
 are stale; with --shots cut the component pictures from the look scenes'
 output.  Exit code: 0 done (or current), 1 with --check when a page is stale, 2 for an unknown argument."
   (cond ((equal args '("--check"))
-         (let ((stale (drgnx-design-stale)))
-           (dolist (p stale) (princ (format "stale: %s%s\n" drgnx-design-dir p)))
+         (let ((stale (append (mapcar (lambda (p) (concat drgnx-design-dir p)) (drgnx-design-stale))
+                              (drgnx-design-code-stale))))
+           (dolist (p stale) (princ (format "stale: %s\n" p)))
            (if stale (progn (princ "run: bin/drgnx design\n") 1) 0)))
         ((null args)
          (dolist (p (drgnx-design-regenerate)) (princ (format "wrote %s%s\n" drgnx-design-dir p)))
+         (dolist (p (drgnx-design-code-regenerate)) (princ (format "wrote %s\n" p)))
          0)
         ((and (equal (car args) "--shots") (cdr args))
          (dolist (p (drgnx-design-cut-shots (mapcar #'expand-file-name (cdr args)))) (princ (format "wrote %s\n" p)))

@@ -29,10 +29,26 @@ Under a third-party theme `drgnx-look-derive` solves the colours the theme does 
 the theme's own (a `shadow` too faint for muted text), it clamps it to the bar and says so in one notice of the `look`
 source, which the next run updates or clears, never a second one and never a prompt.
 
+## Generated code
+
+`bin/drgnx design` also writes code, beside the pages (`drgnx-design-code-makers`, paths relative to the checkout), so
+`cargo build` never needs Emacs:
+
+| File | Made from |
+|---|---|
+| `runtime/crates/drgnx-rows/src/faces.rs` | `FaceId`: every `(defface NAME` in `core/`, `wb/` and `modules/` (read as text: a face a loop defines is not seen), the kit's faces and the faces a view patch may name. A variant is the name without `drgnx-` in UpperCamelCase (`drgnx-text-muted` is `TextMuted`); `name()` and `from_name()` go between the two; a numbered family (`NAME-1`… or `NAME-0`…, two or more) is also an array (`AGENT`, `WORK_WHO`, `TERM_COLOR`), indexed by the number less the first |
+| `runtime/crates/drgnx-rows/src/kit_gen.rs` | `etc/ui/components.eld`: `CompId`, `State`, `STATES` (each state but rest with its semantic face) and per component `geom(id, variant)`, `label(id, variant)` and `face(id, variant)`; a variant slice names variant values and, optionally, a density (`"compact"`, `"comfortable"`, the default, `"roomy"`) |
+| `etc/ui/faces.eld` | the same face list, for Lisp |
+
+Both Rust files are `#[rustfmt::skip]` in `lib.rs`: their layout is the generator's. `bin/drgnx design --check` lists a
+stale code file as it does a stale page, and `drgnx-design/code-files-are-current` fails the unit suite; the Rust test
+`runtime/crates/drgnx-rows/tests/faces.rs` checks every face's name reads back and the kit tables answer. The check
+runner's `cargo` stage runs `drgnx-rows`' clippy and tests.
+
 ## Regenerating
 
 ```sh
-bin/drgnx design            # write the generated pages
+bin/drgnx design            # write the generated pages and code
 bin/drgnx design --check    # list the stale ones, exit 1 when there is any
 bin/drgnx design --shots SCENES-DIR...   # cut the component pictures from look-scene output
 ```

@@ -188,6 +188,38 @@
     (should (string-match-p "^| <span[^|]*</span> | `sel` | [^|]* | [^|]* | semantic |" section))
     (should (string-match-p "^| <span[^|]*</span> | `button-edge` | [^|]* | [^|]* | component |" section))))
 
+;;; Generated code: FaceId, the kit tables, faces.eld
+
+(ert-deftest drgnx-design/code-files-are-current ()
+  ;; a face, a component or the generator changed without `bin/drgnx design' fails here (and `--check' exits 1)
+  (let ((code (drgnx-design-code)))
+    (dolist (path '("runtime/crates/drgnx-rows/src/faces.rs" "runtime/crates/drgnx-rows/src/kit_gen.rs"
+                    "etc/ui/faces.eld"))
+      (should (assoc path code)))
+    (should-not (when-let* ((stale (drgnx-design-code-stale)))
+                  (ert-fail (format "stale generated code: %s; run bin/drgnx design" (string-join stale ", ")))))))
+
+(ert-deftest drgnx-design/face-enum-covers-every-defface ()
+  (let ((root (make-temp-file "drgnx-design-faces" t)))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name "modules/x" root) t)
+          (make-directory (expand-file-name "core" root) t)
+          (make-directory (expand-file-name "wb" root) t)
+          (with-temp-file (expand-file-name "modules/x/probe.el" root)
+            (insert "(defface drgnx-zz-probe '((t :inherit shadow)) \"A probe.\")\n"
+                    "(defface drgnx-zz-fam-1 nil \"One.\")\n(defface drgnx-zz-fam-2 nil \"Two.\")\n"
+                    ";; (defface drgnx-zz-commented nil \"\")\n"))
+          (let ((rs (drgnx-design--faces-rs root)))
+            (should (string-search "    ZzProbe,\n" rs))
+            (should (string-search "FaceId::ZzProbe => \"drgnx-zz-probe\"," rs))
+            (should (string-search "\"drgnx-zz-probe\" => FaceId::ZzProbe," rs))
+            (should (string-search "pub const ZZ_FAM: [FaceId; 2] = [FaceId::ZzFam1, FaceId::ZzFam2];" rs))
+            (should-not (string-search "ZzCommented" rs))
+            ;; the patch faces are there whatever the tree holds
+            (should (string-search "FaceId::Bold => \"bold\"," rs))))
+      (delete-directory root t))))
+
 (defvar drgnx-theme--box-fit)
 (defvar drgnx-theme--box-fit-pad)
 
