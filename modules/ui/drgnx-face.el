@@ -581,28 +581,40 @@ display specs (an image, a pixel space) Emacs does not draw."
 ;;;; Line wrap
 
 (defvar drgnx-face--wrap-saved nil
-  "(WORD-WRAP TRUNCATE-LINES TRUNCATE-PARTIAL-WIDTH-WINDOWS) the defaults this module replaced, to give back.")
+  "(WORD-WRAP TRUNCATE-LINES TRUNCATE-PARTIAL-WIDTH-WINDOWS FRINGE-INDICATOR-ALIST) the defaults this module replaced,
+to give back.")
+
+(defun drgnx-face--no-continuation-arrows (alist)
+  "ALIST (a `fringe-indicator-alist') with no arrow for a wrapped line in either fringe (VS Code draws none: audit G4)."
+  (cons '(continuation nil nil) (assq-delete-all 'continuation (copy-alist alist))))
 
 (defun drgnx-face--apply-line-wrap ()
   "The setting into the default values of `word-wrap', `truncate-lines' and `truncate-partial-width-windows': one
 policy for every window, narrow ones included (Emacs cuts below 50 columns, and wraps in the middle of a word above).
-nil gives back what it replaced."
+Lines wrapped at a word show no continuation arrows in the fringes (`fringe-indicator-alist').  nil gives back what
+it replaced."
   (when (and drgnx-face-line-wrap (not drgnx-face--wrap-saved))
     (setq drgnx-face--wrap-saved (list (default-value 'word-wrap) (default-value 'truncate-lines)
-                                       (default-value 'truncate-partial-width-windows))))
+                                       (default-value 'truncate-partial-width-windows)
+                                       (default-value 'fringe-indicator-alist))))
   (pcase drgnx-face-line-wrap
-    ('word (setq-default word-wrap t truncate-lines nil truncate-partial-width-windows nil))
-    ('truncate (setq-default truncate-lines t truncate-partial-width-windows nil))
+    ('word (setq-default word-wrap t truncate-lines nil truncate-partial-width-windows nil
+                         fringe-indicator-alist (drgnx-face--no-continuation-arrows (nth 3 drgnx-face--wrap-saved))))
+    ('truncate (setq-default truncate-lines t truncate-partial-width-windows nil
+                             fringe-indicator-alist (nth 3 drgnx-face--wrap-saved)))
     (_ (when drgnx-face--wrap-saved
          (setq-default word-wrap (nth 0 drgnx-face--wrap-saved) truncate-lines (nth 1 drgnx-face--wrap-saved)
-                       truncate-partial-width-windows (nth 2 drgnx-face--wrap-saved))
+                       truncate-partial-width-windows (nth 2 drgnx-face--wrap-saved)
+                       fringe-indicator-alist (nth 3 drgnx-face--wrap-saved))
          (setq drgnx-face--wrap-saved nil)))))
 
 (defun drgnx-face-toggle-wrap ()
   "Wrap long lines at a word or cut them at the window's edge, in this buffer only."
   (interactive)
   (setq-local truncate-lines (not truncate-lines))
-  (unless truncate-lines (setq-local word-wrap t))
+  (unless truncate-lines
+    (setq-local word-wrap t)
+    (setq-local fringe-indicator-alist (drgnx-face--no-continuation-arrows (default-value 'fringe-indicator-alist))))
   (force-mode-line-update)
   (message "Word wrap %s" (if truncate-lines "off" "on")))
 

@@ -6,6 +6,11 @@ windows: the header at the top (who it is and what it is doing, a row of chips, 
 the Agent Panel** (`C-k p` in the VS Code profile, `SPC a p` in Vim).
 There is one tab for each open agent.
 
+With no agent running, the panel opens as a **new chat** (also **Agents: New Chat**), as VS Code's chat does: an empty
+input with "Ask an agent about this project…" in it and the default profile named in its header. Return sends (Shift+Return
+breaks the line): an agent of the default profile starts in this project with your words, and its panel takes the chat's place.
+Nothing starts until you send.
+
 Turn it off with the module `tools/agent-panel` (see [modules](modules.md)); every panel goes with it.
 
 ## What you see

@@ -70,7 +70,7 @@ preview: the scratch buffer) is in italics."
         (switch-to-buffer (get-scratch-buffer-create))
         (drgnx-chrome-apply nil t)
         (setq tabs (window-parameter (selected-window) 'tab-line-format))
-        (let ((face (get-text-property (string-search "scratch" tabs) 'face tabs)))
+        (let ((face (get-text-property (string-search "Scratch" tabs) 'face tabs)))
           (should (memq 'drgnx-chrome-tab-preview (ensure-list face)))
           (should (eq 'italic (face-attribute 'drgnx-chrome-tab-preview :slant nil nil))))))))
 

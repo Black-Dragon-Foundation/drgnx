@@ -10,19 +10,24 @@
 ;; the patch rules (`drgnx-view-patch--accept': its base is behind the version).  The rows are kept as a list of keys
 ;; here, not in a view buffer: vertico does the moving.  Nothing is matched or ranked in Lisp.
 ;;
-;; Without the hub, or on a remote folder, Quick Open is `project-find-file'.  As in VS Code, `>' typed first leaves
-;; the files for the command palette, with what follows it typed already.  See docs/guide/modules.md ("Quick Open").
+;; Without the hub the project's files (`project-files') are listed here and matched by the completion styles; on a
+;; remote folder Quick Open is `project-find-file'.  Either list is the palette's files mode (category `drgnx-file'):
+;; it floats in the palette's frame and draws a row as the palette does, an icon, the name, the folder.  As in VS Code,
+;; `>' typed first leaves the files for the command palette, with what follows it typed already.  See
+;; docs/guide/modules.md ("Quick Open").
 
 ;;; Code:
 (require 'cl-lib)
 (require 'subr-x)
 (require 'drgnx-view)
+(require 'drgnx-icons)                  ; `drgnx-look-icon'
+(require 'drgnx-faces)                  ; `drgnx-text-subtle'
 
 (defvar drgnx-hub--events)
 (declare-function drgnx-hub--call-on "drgnx-hub-client")
 (declare-function drgnx-view-env-register "drgnx-view-env")
 (declare-function drgnx-view-env-unregister "drgnx-view-env")
-(declare-function drgnx-palette "drgnx-palette")
+(require 'drgnx-palette)                ; `drgnx-palette-preview', the files mode's Tab
 
 ;;;; The shell: the minibuffer, vertico
 
@@ -33,6 +38,7 @@
 (declare-function project-current "project")
 (declare-function project-root "project")
 (declare-function project-find-file "project")
+(declare-function project-files "project")
 
 (defun drgnx-quick-open--style-all (string table pred _point)
   "A completion style that keeps what the table gives: the hub has matched and ranked the candidates already, and the
@@ -66,6 +72,26 @@ user's styles (prefix, orderless) would filter them again by another rule."
       (progn (unless (fboundp 'drgnx-palette) (require 'drgnx-palette))
              (drgnx-palette drgnx-quick-open--commands))
     (find-file (expand-file-name choice root))))
+
+(defvar-keymap drgnx-quick-open-minibuffer-map
+  :doc "Quick Open's own keys over the completion UI's: Tab shows the current row's file without leaving the list, as
+the palette's footer says."
+  "TAB" #'drgnx-palette-preview)
+
+(defun drgnx-quick-open--keys ()
+  "On Quick Open's `minibuffer-setup-hook', after the completion UI's: its keys over the UI's."
+  (use-local-map (make-composed-keymap drgnx-quick-open-minibuffer-map (current-local-map))))
+
+(defmacro drgnx-quick-open--reading (root &rest body)
+  "BODY, a read of ROOT's files, with Tab's preview (`drgnx-palette-preview') on; the window it previewed in is put
+back unless the file it shows was chosen.  BODY's value is the choice."
+  (declare (indent 1))
+  `(let ((drgnx-palette--file-root ,root) (choice nil))
+     (unwind-protect
+         (setq choice (minibuffer-with-setup-hook (:append #'drgnx-quick-open--keys) ,@body))
+       (drgnx-palette--preview-end (and (stringp choice) (not drgnx-quick-open--commands)
+                                        (expand-file-name choice ,root))))
+     choice))
 
 (defun drgnx-quick-open--root ()
   (require 'project)
@@ -158,11 +184,26 @@ patch.  MORE is a plist of further `search/files' params (the Explorer's Find: `
 
 (defvar drgnx-quick-open--current nil "The hub-ranked list while Quick Open reads.")
 
+(defun drgnx-quick-open--affix (cands)
+  "The rows of Quick Open's CANDS (paths relative to the root) as the palette draws a file (audit P1): the file icon and
+the file's name (its matched letters kept), then its folder in the subtle colour."
+  (mapcar (lambda (c)
+            (let ((dir (file-name-directory c)))
+              (list (concat (drgnx-look-icon 'file 'drgnx-text-muted) " " (substring c (length (or dir ""))))
+                    ""
+                    (concat "  " (propertize (directory-file-name (or dir "./")) 'face 'drgnx-text-subtle)))))
+          cands))
+
+(defconst drgnx-quick-open--metadata
+  '(metadata (category . drgnx-file) (display-sort-function . identity) (cycle-sort-function . identity)
+             (affixation-function . drgnx-quick-open--affix))
+  "Quick Open's completion metadata: category `drgnx-file', which floats in the palette's frame as the palette
+\(`drgnx-palette-frame-multiform'), and rows drawn as the palette's (`drgnx-quick-open--affix'), in the given order.")
+
 (defun drgnx-quick-open--rows-table (string pred action)
   "The completion table of the hub path: the hub's rows, in its order."
   (let ((names (and drgnx-quick-open--current (drgnx-quick-open--rows-candidates drgnx-quick-open--current))))
-    (cond ((eq action 'metadata)
-           '(metadata (category . project-file) (display-sort-function . identity) (cycle-sort-function . identity)))
+    (cond ((eq action 'metadata) drgnx-quick-open--metadata)
           ((eq action t) (copy-sequence names))
           ((null action) (try-completion string names pred))
           ((eq action 'lambda) (test-completion string names pred)))))
@@ -207,22 +248,52 @@ patch.  MORE is a plist of further `search/files' params (the Explorer's Find: `
                         (let ((completion-styles-alist (cons drgnx-quick-open--style completion-styles-alist))
                               (completion-styles '(drgnx-quick-open))
                               (completion-category-overrides nil) (completion-category-defaults nil))
-                          (minibuffer-with-setup-hook #'drgnx-quick-open--rows-setup
-                            (completing-read "Quick Open: " #'drgnx-quick-open--rows-table nil t))))))
+                          (drgnx-quick-open--reading root
+                            (minibuffer-with-setup-hook #'drgnx-quick-open--rows-setup
+                              (completing-read "Quick Open: " #'drgnx-quick-open--rows-table nil t)))))))
           (drgnx-quick-open--then choice root))
       (remove-hook 'drgnx-hub-event-functions #'drgnx-quick-open--rows-event)
       (drgnx-view-env-unregister view)
       (funcall drgnx-quick-open-send-function "view/close" (list :view view)))))
 
+(defun drgnx-quick-open--local-table (files)
+  "The completion table of the local path: FILES (relative names), matched by the user's completion styles."
+  (lambda (string pred action)
+    (if (eq action 'metadata)
+        '(metadata (category . drgnx-file) (affixation-function . drgnx-quick-open--affix))
+      (complete-with-action action files string pred))))
+
+(defun drgnx-quick-open--local-setup ()
+  "The local path's minibuffer: `>' first turns it into the command palette."
+  (add-hook 'after-change-functions #'drgnx-quick-open--command-mode -10 t))
+
+(defun drgnx-quick-open--read-local (root)
+  "Quick Open of the local ROOT without the hub: its project's files (`project-files'), the same rows and float."
+  (let* ((pr (project-current nil root))
+         (files (mapcar (lambda (f) (file-relative-name f root)) (and pr (project-files pr))))
+         (drgnx-quick-open--commands nil)
+         ;; a word typed matches inside a path (`alpha' finds core/alpha.el), as VS Code's: the styles that only match
+         ;; at the start (Emacs's default) get `substring' first; orderless, or the user's own entry, is left alone
+         (completion-category-defaults
+          (if (or (memq 'orderless completion-styles) (assq 'drgnx-file completion-category-overrides))
+              completion-category-defaults
+            (cons '(drgnx-file (styles substring partial-completion basic)) completion-category-defaults)))
+         (choice (catch 'drgnx-quick-open--commands
+                   (drgnx-quick-open--reading root
+                     (minibuffer-with-setup-hook #'drgnx-quick-open--local-setup
+                       (completing-read "Quick Open: " (drgnx-quick-open--local-table files) nil t))))))
+    (drgnx-quick-open--then choice root)))
+
 ;;;###autoload
 (defun drgnx-quick-open ()
   "Open a file of the project by name: the hub ranks the project's files as you type.
-Without the hub (or on a remote folder) this is `project-find-file'."
+Without the hub the project's files are listed here; on a remote folder this is `project-find-file'.  The list is the
+palette's, in its files mode (VS Code's Ctrl+P): `>' typed first turns it into the command palette."
   (interactive)
   (let ((root (drgnx-quick-open--root)))
-    (if (drgnx-quick-open--hub-p root)
-        (drgnx-quick-open--read-rows root)
-      (call-interactively #'project-find-file))))
+    (cond ((drgnx-quick-open--hub-p root) (drgnx-quick-open--read-rows root))
+          ((file-remote-p root) (call-interactively #'project-find-file))
+          (t (drgnx-quick-open--read-local root)))))
 
 (provide 'drgnx-quick-open)
 ;;; drgnx-quick-open.el ends here

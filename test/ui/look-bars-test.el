@@ -303,6 +303,46 @@ real press with its item: NH-TITLE-CLICK-1); the .6 tarball predates it."
       (drgnx-topline--off)
       (kill-buffer buf))))
 
+(defun drgnx-ui-look-bars--quick-open ()
+  "Quick Open's stand-in while the search box's click is checked."
+  (interactive))
+
+(drgnx-look-gui-deftest drgnx-ui-look-bars/title-row-search-box-takes-a-real-click ()
+  "Audit P4: a real pointer click on the title row's search box (\"Search files, commands, symbols\") opens Quick
+Open, the command the box carries, as Minimise's click runs its command (the row above)."
+  (skip-unless (display-graphic-p))
+  (skip-unless (drgnx-uitest-pointer-available-p))
+  (drgnx-uitest-bare-frame)
+  (let* ((buf (get-buffer-create "*look-bars-search*")) (frame (selected-frame)) (ran nil)
+         (was drgnx-face-title-bar) (had (drgnx-commands-get 'go-quick-open)))
+    ;; the box carries Quick Open's command (tools/search's); the session may not have the module on
+    (unless had (drgnx-command-define 'go-quick-open :title "Quick Open" :category "Go"
+                                      :command #'drgnx-ui-look-bars--quick-open))
+    (switch-to-buffer buf)
+    (unwind-protect
+        (cl-letf (((symbol-function (drgnx-cmd-command (drgnx-commands-get 'go-quick-open)))
+                   (lambda () (interactive) (setq ran t)))
+                  ((symbol-function 'drgnx-face--drawn-wanted-p) (lambda (_f) (eq drgnx-face-title-bar 'drgnx))))
+          (setq drgnx-face-title-bar 'drgnx)
+          (drgnx-face--apply-title frame)
+          (drgnx-topline-setup)
+          (drgnx-test-wait-presented)
+          (let* ((items (drgnx-topline--line)) (keys (mapcar #'car items))
+                 (measure (drgnx-statusbar--measure-fn nil 'tab-bar))
+                 (pos (cl-position 'drgnx-topline-search keys))
+                 (before (and pos (drgnx-topline--width (seq-take items pos) measure)))
+                 (x (and pos (+ before (round (* (drgnx-pixels-scale frame) 60)))))   ; on the placeholder's start
+                 (y (/ (tab-bar-height frame t) 2)))
+            (should pos)
+            (let ((got (drgnx-uitest-pointer-click x y (lambda () ran))))
+              (ert-info ((format "keys %S" drgnx-uitest-pointer-keys))
+                (should (eq t got))))))
+      (unless had (drgnx-command-undefine 'go-quick-open))
+      (setq drgnx-face-title-bar was)
+      (cl-letf (((symbol-function 'drgnx-face--drawn-wanted-p) #'ignore)) (drgnx-face--apply-title frame))
+      (drgnx-topline--off)
+      (kill-buffer buf))))
+
 (drgnx-look-gui-deftest drgnx-ui-look-bars/title-row-images-are-whole-pixels ()
   "The title row's images (the mark, the branch chip, the search box, the window controls) take as many of the frame's
 pixels as the row counts for them, at any scale: at 1.25 a 26 px control is 33 wide, not 32.5 drawn and 32 counted,

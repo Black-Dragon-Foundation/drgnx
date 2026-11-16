@@ -400,6 +400,17 @@ on a graphical frame too, and nothing in it is a display spec."
       (should-not (default-value 'truncate-lines))
       (should (eql (default-value 'truncate-partial-width-windows) 50)))))
 
+(ert-deftest drgnx-face/wrapped-lines-have-no-fringe-arrows ()
+  "Audit G4: a line wrapped at a word showed Emacs's continuation arrows in both fringes; VS Code draws none.  The
+module turned off gives Emacs's arrows back."
+  (let ((word-wrap nil) (truncate-lines nil) (truncate-partial-width-windows 50)
+        (fringe-indicator-alist (default-value 'fringe-indicator-alist)))
+    (should (cdr (assq 'continuation fringe-indicator-alist)))   ; the premise: Emacs's arrows
+    (drgnx-face-test--with
+      (should (equal (assq 'continuation (default-value 'fringe-indicator-alist)) '(continuation nil nil)))
+      (should (assq 'truncation (default-value 'fringe-indicator-alist))))   ; the rest is kept
+    (should (cdr (assq 'continuation (default-value 'fringe-indicator-alist))))))
+
 (ert-deftest drgnx-face/toggle-word-wrap-flips-one-buffer ()
   (drgnx-face-test--with
     (should (drgnx-commands-get 'face-toggle-wrap))

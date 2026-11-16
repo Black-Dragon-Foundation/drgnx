@@ -259,7 +259,7 @@ the entry is back.
 |---|---|
 | `editor` | files, dired, unmatched buffers (logged) |
 | `current` | the selected window, unless it is a dock (then the editor) |
-| `panel` Problems | flymake / flycheck lists |
+| `panel` Problems | the Problems view (`drgnx-problems-mode`), flymake / flycheck lists |
 | `panel` Output | `*Messages*`, `*Warnings*`, `*Backtrace*`, ert results |
 | `panel` Results | compilation, grep, occur, xref |
 | `panel` Terminal | New Terminal (your shell in drgnx's own terminal; eshell for a remote folder and on Windows), New Eshell, shell, eshell, term, vterm, ielm, other comint buffers |
@@ -297,7 +297,9 @@ Customize `drgnx-chrome-tab*`, `header-line` and `drgnx-wb-bar` to change them.
 surface, six pixels in from the card's edge, with a hairline (the `drgnx-border-subtle` face) along its bottom; tabs
 are two pixels apart (a terminal separates them with a space). The shown tab is lifted four pixels off the row's top
 and is on the `editor` colour with no hairline under it, so it joins the text below; it has its file's icon before
-the name. A tab that is not shown has no close mark you can see until the pointer is on the tab: the × (a 14-pixel
+the name. A file's tab is its file's name; a special page's is its name in words, never an Emacs buffer name:
+**Welcome** (the start page), **Settings**, **Keyboard Shortcuts**, **Extensions** (a buffer `*drgnx NAME*` reads
+as `Name`; a buffer may set its own in `drgnx-chrome-tab-title`). A tab that is not shown has no close mark you can see until the pointer is on the tab: the × (a 14-pixel
 icon in an 18-pixel slot) is drawn in the row's own colour and the tab's hover colour brings it out (no Lisp runs
 while the pointer moves). The × of the shown tab is always there, and so is every × on a terminal. A modified file
 shows a dimmed dot in the ×'s place (after its name on a terminal). A tab that is only there while it is shown is in

@@ -154,14 +154,25 @@ the palette's frame shows it, whichever of the two ran first)."
   "The room before the input row's icon and the footer: a row's inset and padding."
   (propertize " " 'display `(space :width (,(drgnx-px (+ 6 drgnx-palette-row-padding))))))
 
+(defun drgnx-palette-frame--files-p ()
+  "Non-nil in a minibuffer that reads files for the palette's frame: Quick Open (category `drgnx-file')."
+  (and (minibufferp)
+       (eq (completion-metadata-get (completion-metadata "" minibuffer-completion-table minibuffer-completion-predicate)
+                                    'category)
+           'drgnx-file)))
+
 (defun drgnx-palette-frame--hint ()
   "The input row's hint at the right edge: what the palette searches, `#' for a code question and, when an agent can
 be asked, `@' for one."
-  (let ((s (concat (propertize "Commands · " 'face 'drgnx-text-subtle) (drgnx-palette-keycap "#")
-                   (propertize " code" 'face 'drgnx-text-subtle)
-                   (when (and (fboundp 'drgnx-palette--ask-command) (drgnx-palette--ask-command))
-                     (concat (propertize " · " 'face 'drgnx-text-subtle) (drgnx-palette-keycap "@")
-                             (propertize " agents" 'face 'drgnx-text-subtle))))))
+  (let ((s (if (drgnx-palette-frame--files-p)
+               ;; Quick Open, the palette's files mode
+               (concat (propertize "Files · " 'face 'drgnx-text-subtle) (drgnx-palette-keycap ">")
+                       (propertize " commands" 'face 'drgnx-text-subtle))
+             (concat (propertize "Commands · " 'face 'drgnx-text-subtle) (drgnx-palette-keycap "#")
+                     (propertize " code" 'face 'drgnx-text-subtle)
+                     (when (and (fboundp 'drgnx-palette--ask-command) (drgnx-palette--ask-command))
+                       (concat (propertize " · " 'face 'drgnx-text-subtle) (drgnx-palette-keycap "@")
+                               (propertize " agents" 'face 'drgnx-text-subtle)))))))
     (concat (propertize " " 'display `(space :align-to (- right (,(+ (string-pixel-width s (current-buffer))
                                                                      (drgnx-px (+ 6 drgnx-palette-row-padding)))))))
             s)))

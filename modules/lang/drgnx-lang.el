@@ -14,6 +14,7 @@
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-large-file)
+(require 'drgnx-problems (expand-file-name "drgnx-problems" (file-name-directory (macroexp-file-name))))
 (defvar eglot-server-programs)
 (defvar warning-minimum-level)
 (defvar eglot--servers-by-project)
@@ -409,6 +410,8 @@ server's log is shown; running a second time turns it off again."
                      :setup
                      (lambda ()
                        (add-hook 'prog-mode-hook #'drgnx-lang--maybe-eglot)
+                       ;; the Problems view follows Flymake's own listings (audit D1)
+                       (advice-add 'flymake--update-diagnostics-listings :after #'drgnx-problems-follow)
                        ;; The options are set once their library is loaded: set before, the undo would leave them unbound
                        (eval-after-load 'eglot
                          (drgnx-modules-with-owner
@@ -425,7 +428,7 @@ server's log is shown; running a second time turns it off again."
                                         (code-rename "Rename Symbol" drgnx-lang-rename "Rename the symbol everywhere (language server)")
                                         (code-hover "Show Hover" drgnx-lang-hover "The symbol's documentation, in the panel")
                                         (code-quick-fix "Quick Fix" drgnx-lang-quick-fix "The language server's fixes and actions here")
-                                        (code-problems "Problems" flymake-show-project-diagnostics "Errors and warnings of the project (in the panel)")
+                                        (code-problems "Problems" drgnx-problems-show "Errors and warnings of the project (in the panel)")
                                         (code-next-problem "Next Problem" flymake-goto-next-error "Jump to the next error or warning in this file")
                                         (code-previous-problem "Previous Problem" flymake-goto-prev-error "Jump to the previous error or warning in this file")
                                         (code-format "Format Document" drgnx-lang-format "Format with the language server (else re-indent)")
